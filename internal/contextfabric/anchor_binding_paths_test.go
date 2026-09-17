@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -82,8 +83,11 @@ func TestAnchorBindingDecideReadsTheSavedDocumentAndTheReading(t *testing.T) {
 	named := QuestionFrame{SubjectExpression: SubjectExpression{Kind: SubjectExpressionNamed, Named: &NamedSubjectExpression{Terms: []string{"a"}, ExpectedKind: ptrTo(SubjectProject)}}}
 	tracker := &anchorBindingTracker{parent: anchorBindingParent{Status: AnchorBindingParentNoReference}, epoch: 3}
 	tracker.observeReading(QuestionFamilyOutcome{Frame: &named, WinningSample: FamilySample{ScopeAnchorKind: SubjectRepository}}, []SubjectHint{{Kind: SubjectTeam, ID: "team:z"}, {Kind: SubjectProject, ID: "project:a"}})
-	if tracker.namedKind != SubjectProject || tracker.modelAnchorKind != SubjectRepository {
-		t.Fatalf("reading kinds = %s/%s", tracker.namedKind, tracker.modelAnchorKind)
+	if tracker.modelAnchorKind != SubjectRepository {
+		t.Fatalf("model anchor kind = %s", tracker.modelAnchorKind)
+	}
+	if _, line := tracker.decide(BudgetAssertDecisive, InvestigationResult{ResultID: "result_named"}, nil); line.NamedExpectedKind != SubjectProject || line.FrameExpressionKind != SubjectExpressionNamed {
+		t.Fatalf("named reading: line kind %s frame %s", line.NamedExpectedKind, line.FrameExpressionKind)
 	}
 	tracker.frame = frame
 	tracker.observeResolution(AnchorBindingEvaluationResolved, resolution, bases)
@@ -93,7 +97,7 @@ func TestAnchorBindingDecideReadsTheSavedDocumentAndTheReading(t *testing.T) {
 	if binding.State != AnchorBindingBound || binding.CanonicalID != bindAlpha.ID || binding.GraphEpoch != 3 || binding.OriginResultID != "result_kept" {
 		t.Fatalf("kept: binding = %+v", binding)
 	}
-	if !reflect.DeepEqual(line.CallerHintIDs, []string{"project:project:a", "team:team:z"}) || line.NamedExpectedKind != SubjectProject || line.ModelAnchorKind != SubjectRepository {
+	if !reflect.DeepEqual(line.CallerHintIDs, []string{"project:project:a", "team:team:z"}) || line.NamedExpectedKind != "" || line.ModelAnchorKind != SubjectRepository {
 		t.Fatalf("kept: line = %+v", line)
 	}
 	if line.Agreement != AnchorBindingNotEvaluated || line.DisagreementField != AnchorBindingFieldNone {
@@ -183,40 +187,51 @@ func (g storedReuseGate) FindReusable(context.Context, storage.Principal, ReuseK
 	return g.stored, true, "", nil
 }
 
-// TestAReuseServeReportsTheStoredBinding: the line reports the stored row's
-// own binding, never a decision of its own, and nothing is saved.
-func TestAReuseServeReportsTheStoredBinding(t *testing.T) {
+// TestAReuseServeDecidesFromThisRequestAndTheReplayedProof: a reuse serve is
+// decided like a resolved turn over the replayed row's resolution, with this
+// request's own hints; a hint the replayed row never committed contests the
+// anchor instead of being ignored, and the line shows the hints.
+func TestAReuseServeDecidesFromThisRequestAndTheReplayedProof(t *testing.T) {
 	project, candidate := reusableCandidate()
-	stored := heldBinding(AnchorBindingBound, anchorRef{Kind: project.Kind, ID: project.CanonicalID})
-	state := BuildSemanticState(SemanticStateInput{
-		Outcome:         QuestionFamilyOutcome{Family: QuestionFamilyUnclassified, Source: QuestionFamilySourceNone},
-		FamilyVersion:   QuestionFamilyTableVersion,
-		RequestIdentity: SemanticRequestIdentityOf(validInvestigationRequest(), ""),
-	})
-	state.AnchorBinding = &stored
+	candidate.SubjectResolution.Candidates = []SubjectCandidate{{
+		ReceiptID: "receipt_reuse", Subject: project, State: ResolutionCommitted,
+		MatchedTerms: []string{"a"}, MatchReasons: []string{"matched"}, Confidence: 1, EvidenceRefIDs: []string{},
+	}}
+	held := anchorRef{Kind: project.Kind, ID: project.CanonicalID}
+	other := SubjectHint{Kind: project.Kind, ID: "project_other", Label: "Other", Source: "ask-dev"}
 	framed := BuildSemanticState(SemanticStateInput{
 		Outcome:         QuestionFamilyOutcome{Family: QuestionFamilyScopedCohortStatus, Source: QuestionFamilySourceModel, Frame: countingFrame(SubjectTeam), Gate: FrameGate{Outcome: FrameGatePassed}},
 		EmittedShape:    ShapeOpen,
 		FamilyVersion:   QuestionFamilyTableVersion,
 		RequestIdentity: SemanticRequestIdentityOf(validInvestigationRequest(), ""),
 	})
+	unframed := BuildSemanticState(SemanticStateInput{
+		Outcome:         QuestionFamilyOutcome{Family: QuestionFamilyUnclassified, Source: QuestionFamilySourceNone},
+		FamilyVersion:   QuestionFamilyTableVersion,
+		RequestIdentity: SemanticRequestIdentityOf(validInvestigationRequest(), ""),
+	})
 	if !framed.FramePresent {
 		t.Fatalf("fixture defect: the framed row carries no frame")
 	}
+	proven := func(proof AnchorBindingProof, reason AnchorBindingReason) AnchorBinding {
+		return AnchorBinding{State: AnchorBindingBound, Kind: held.Kind, CanonicalID: held.ID, Proof: proof, Reason: reason, OriginResultID: candidate.ResultID}
+	}
+	contested := proven(AnchorBindingProofIdentityProven, AnchorBindingReasonAmbiguousProof)
+	contested.State, contested.ContenderKind, contested.ContenderID = AnchorBindingContested, other.Kind, other.ID
 	for _, tc := range []struct {
-		name    string
-		base    *PersistedSemanticState
-		binding *AnchorBinding
-		want    AnchorBinding
+		name       string
+		row        *PersistedSemanticState
+		hints      []SubjectHint
+		want       AnchorBinding
+		wantProven []string
 	}{
-		{"stored binding", state, &stored, func() AnchorBinding { b := stored; b.Reason = AnchorBindingReasonReusedStored; return b }()},
-		{"stored binding beside a frame", framed, &stored, func() AnchorBinding { b := stored; b.Reason = AnchorBindingReasonReusedStored; return b }()},
-		{"no stored binding", state, nil, AnchorBinding{State: AnchorBindingUnbound, Proof: AnchorBindingProofNone, Reason: AnchorBindingReasonReusedStored}},
-		{"invalid stored binding", state, &AnchorBinding{State: "unknown_state"}, AnchorBinding{State: AnchorBindingUnbound, Proof: AnchorBindingProofNone, Reason: AnchorBindingReasonReusedStored}},
+		{"replayed proof, no hints", framed, nil, proven(AnchorBindingProofIdentityProven, AnchorBindingReasonIdentityProven), []string{"project:project_ask_dev"}},
+		{"a hint naming the replayed anchor", framed, []SubjectHint{{Kind: held.Kind, ID: held.ID, Label: "Ask Dev", Source: "ask-dev"}}, proven(AnchorBindingProofCallerHint, AnchorBindingReasonCallerHint), []string{"project:project_ask_dev"}},
+		{"a hint naming another identity of the anchor kind", framed, []SubjectHint{other}, contested, []string{"project:project_ask_dev"}},
+		{"a hint of another kind", framed, []SubjectHint{{Kind: SubjectTeam, ID: "team_x", Label: "Team X", Source: "ask-dev"}}, proven(AnchorBindingProofIdentityProven, AnchorBindingReasonIdentityProven), []string{"project:project_ask_dev"}},
+		{"a row with no counting frame proves nothing", unframed, []SubjectHint{other}, AnchorBinding{State: AnchorBindingUnbound, Proof: AnchorBindingProofNone, Reason: AnchorBindingReasonNoProof}, []string{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			rowState := cloneSemanticState(tc.base)
-			rowState.AnchorBinding = tc.binding
 			telemetry := &recordingTelemetry{}
 			engine, err := NewEngine(EngineDependencies{
 				Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
@@ -230,13 +245,15 @@ func TestAReuseServeReportsTheStoredBinding(t *testing.T) {
 					return InvestigationResult{}, nil
 				}),
 				Results:   &resultStoreStub{},
-				ReuseGate: storedReuseGate{stored: StoredInvestigationResult{Result: candidate, SemanticState: rowState, SemanticStateRead: SemanticStateReadAvailable}},
+				ReuseGate: storedReuseGate{stored: StoredInvestigationResult{Result: candidate, SemanticState: cloneSemanticState(tc.row), SemanticStateRead: SemanticStateReadAvailable}},
 				Telemetry: telemetry,
 			}, EngineOptions{ServiceVersion: "acr-test", Now: func() time.Time { return time.Unix(200, 0).UTC() }, NewResultID: func() string { return "result_fresh_00001" }})
 			if err != nil {
 				t.Fatalf("NewEngine: %v", err)
 			}
-			result := mustInvestigate(t, engine, reusePrincipal(), validInvestigationRequest())
+			request := validInvestigationRequest()
+			request.RequestedScope.SubjectHints = tc.hints
+			result := mustInvestigate(t, engine, reusePrincipal(), request)
 			if !result.Reused {
 				t.Fatalf("premise: not a reuse hit")
 			}
@@ -244,8 +261,14 @@ func TestAReuseServeReportsTheStoredBinding(t *testing.T) {
 				t.Fatalf("lines=%d saves=%d", len(telemetry.anchorBindingTransitions), len(telemetry.semanticStatePersistences))
 			}
 			line := telemetry.anchorBindingTransitions[0]
-			if !reflect.DeepEqual(line.To, tc.want) || line.Persisted != AnchorBindingNotSaved || line.Site != BudgetAssertReuse || line.ResultID != candidate.ResultID {
+			if !reflect.DeepEqual(line.To, tc.want) || line.Persisted != AnchorBindingNotSaved || line.Site != BudgetAssertReuse || line.Evaluation != AnchorBindingEvaluationReused || line.ResultID != candidate.ResultID {
 				t.Fatalf("line = %+v, want to=%+v not_saved at reuse", line, tc.want)
+			}
+			if !reflect.DeepEqual(line.CallerHintIDs, hintIDs(tc.hints)) || !reflect.DeepEqual(line.ProvenAnchorIDs, tc.wantProven) {
+				t.Fatalf("line hints=%v proven=%v, want hints=%v proven=%v", line.CallerHintIDs, line.ProvenAnchorIDs, hintIDs(tc.hints), tc.wantProven)
+			}
+			if !reflect.DeepEqual(line.CommittedSubjects, []string{"project:project_ask_dev=authoritative_identity"}) {
+				t.Fatalf("committed subjects = %v", line.CommittedSubjects)
 			}
 		})
 	}
@@ -352,5 +375,87 @@ func TestAnchorBindingLineWritesAbsentListsAsEmptyLists(t *testing.T) {
 	}
 	if checked != 2 {
 		t.Fatalf("found %d list keys, want 2", checked)
+	}
+}
+
+// TestEveryBinderInputIsOnTheTransitionLine: each field bindAnchor reads, and
+// each field of the binding it starts from, is written under a named key;
+// a field added without one fails here.
+func TestEveryBinderInputIsOnTheTransitionLine(t *testing.T) {
+	inputKeys := map[string][]string{
+		"From":            {"from_state", "from_kind", "from_id", "from_proof", "from_reason", "from_origin_result_id", "from_graph_epoch", "from_contender_kind", "from_contender_id", "parent_binding", "parent_graph_epoch", "carry_checks"},
+		"Evaluation":      {"evaluation"},
+		"Frame":           {"frame_expression_kind", "anchor_term_count", "named_expected_kind"},
+		"ModelAnchorKind": {"model_anchor_kind"},
+		"Receipt":         {"receipt_anchor_kind", "receipt_anchor_id"},
+		"CallerHints":     {"caller_hint_ids"},
+		"Resolution":      {"committed_subjects", "proven_anchor_ids"},
+		"Bases":           {"committed_subjects"},
+		"ResultID":        {"result_id"},
+		"GraphEpoch":      {"graph_epoch"},
+	}
+	bindingKeys := map[string]string{
+		"State": "from_state", "Kind": "from_kind", "CanonicalID": "from_id", "Proof": "from_proof", "Reason": "from_reason",
+		"OriginResultID": "from_origin_result_id", "GraphEpoch": "from_graph_epoch", "ContenderKind": "from_contender_kind", "ContenderID": "from_contender_id",
+	}
+	args := AnchorBindingTransitionLogArgs(AnchorBindingTransitionEvent{}, "org_x")
+	written := map[string]bool{}
+	for i := 0; i+1 < len(args); i += 2 {
+		written[args[i].(string)] = true
+	}
+	inputType := reflect.TypeOf(anchorBindingInput{})
+	for i := 0; i < inputType.NumField(); i++ {
+		name := inputType.Field(i).Name
+		keys, ok := inputKeys[name]
+		if !ok {
+			t.Errorf("binder input %s has no line key", name)
+		}
+		for _, key := range keys {
+			if !written[key] {
+				t.Errorf("binder input %s: key %s is not written", name, key)
+			}
+		}
+	}
+	bindingType := reflect.TypeOf(AnchorBinding{})
+	for i := 0; i < bindingType.NumField(); i++ {
+		name := bindingType.Field(i).Name
+		key, ok := bindingKeys[name]
+		if !ok || !written[key] {
+			t.Errorf("binding field %s is not written as a from_ key", name)
+		}
+		if to := strings.Replace(key, "from_", "to_", 1); name == "GraphEpoch" && !written[to] {
+			t.Errorf("the decided binding's graph epoch is not written")
+		}
+	}
+}
+
+// TestAnchorBindingLineCarriesEveryEpochTheDecisionRead: the turn's epoch,
+// the parent row's binding epoch and the decided binding's epoch are all on
+// the line, with distinct values.
+func TestAnchorBindingLineCarriesEveryEpochTheDecisionRead(t *testing.T) {
+	stale := heldBinding(AnchorBindingBound, bindAlpha)
+	stale.GraphEpoch = 5
+	resolution, bases := proofOf(CommitBasisAuthoritativeIdentity, bindBeta)
+	tracker := &anchorBindingTracker{parent: anchorBindingParentOf("result_bind_parent", &stale, 9), epoch: 9, frame: countingFrame(SubjectTeam)}
+	tracker.observeResolution(AnchorBindingEvaluationResolved, resolution, bases)
+	result := InvestigationResult{ResultID: "result_epochs", SubjectResolution: SubjectResolution{Committed: resolution.Committed}}
+	to, line := tracker.decide(BudgetAssertDecisive, result, nil)
+	if line.ParentBinding != AnchorBindingParentStaleGraphEpoch || line.ParentGraphEpoch != 5 || line.GraphEpoch != 9 || to.GraphEpoch != 9 || line.From.GraphEpoch != 0 {
+		t.Fatalf("epochs: parent %s/%d turn %d decided %d from %d", line.ParentBinding, line.ParentGraphEpoch, line.GraphEpoch, to.GraphEpoch, line.From.GraphEpoch)
+	}
+	fields := map[string]any{}
+	args := AnchorBindingTransitionLogArgs(line, "org_x")
+	for i := 0; i+1 < len(args); i += 2 {
+		fields[args[i].(string)] = args[i+1]
+	}
+	if fields["parent_graph_epoch"] != int64(5) || fields["graph_epoch"] != int64(9) || fields["to_graph_epoch"] != int64(9) || fields["from_graph_epoch"] != int64(0) {
+		t.Fatalf("written epochs = %v/%v/%v/%v", fields["parent_graph_epoch"], fields["graph_epoch"], fields["to_graph_epoch"], fields["from_graph_epoch"])
+	}
+	if got := fields["committed_subjects"]; !reflect.DeepEqual(got, []string{"repository:repository:bind-beta=authoritative_identity"}) {
+		t.Fatalf("committed_subjects = %v", got)
+	}
+	absent := &anchorBindingTracker{parent: anchorBindingParent{Status: AnchorBindingParentAbsent, StoredEpoch: 4}}
+	if _, line := absent.decide(BudgetAssertDecisive, InvestigationResult{}, nil); line.ParentGraphEpoch != -1 {
+		t.Fatalf("a parent with no stored binding wrote epoch %d", line.ParentGraphEpoch)
 	}
 }

@@ -152,6 +152,24 @@ func bindTransitionTable() []bindCase {
 			want: kept(contested, AnchorBindingBound, AnchorBindingReasonCarriedReconfirmed), wantEffective: SubjectRepository, wantProven: []anchorRef{bindAlpha}},
 		{name: "carried contested, resolution silent", from: contested, evaluation: AnchorBindingEvaluationResolved, basis: id,
 			want: kept(contested, AnchorBindingContested, AnchorBindingReasonCarriedSilent), wantEffective: SubjectRepository},
+		{name: "reused, the replayed row re-proves the carried identity", from: bound, evaluation: AnchorBindingEvaluationReused, basis: id, proven: []anchorRef{bindAlpha},
+			want: kept(bound, AnchorBindingBound, AnchorBindingReasonCarriedReconfirmed), wantEffective: SubjectRepository, wantProven: []anchorRef{bindAlpha}},
+		{name: "reused, the replayed row proves a distinct identity", from: bound, evaluation: AnchorBindingEvaluationReused, basis: id, proven: []anchorRef{bindBeta},
+			want: contestedAfter(bindBeta, AnchorBindingReasonContestedByResolution), wantEffective: SubjectRepository, wantProven: []anchorRef{bindBeta}},
+		{name: "reused, the replayed row proves nothing", from: bound, evaluation: AnchorBindingEvaluationReused, basis: id,
+			want: kept(bound, AnchorBindingBound, AnchorBindingReasonCarriedSilent), wantEffective: SubjectRepository},
+		{name: "reused, an unproven hint names another identity of the carried kind", from: bound, evaluation: AnchorBindingEvaluationReused, basis: id, proven: []anchorRef{bindAlpha}, hints: []anchorRef{bindGamma},
+			want: contestedAfter(bindGamma, AnchorBindingReasonAmbiguousProof), wantEffective: SubjectRepository, wantProven: []anchorRef{bindAlpha}},
+		{name: "reused, a hint the replayed row proved replaces the carried identity", from: bound, evaluation: AnchorBindingEvaluationReused, basis: CommitBasisCallerCanonicalID, proven: []anchorRef{bindBeta}, hints: []anchorRef{bindBeta},
+			want: fresh(AnchorBindingBound, bindBeta, AnchorBindingProofCallerHint, AnchorBindingReasonReplacedByCaller), wantEffective: SubjectRepository, wantProven: []anchorRef{bindBeta}},
+		{name: "reused, nothing carried, an unproven hint contests the replayed anchor", from: unboundFrom, evaluation: AnchorBindingEvaluationReused, basis: id, proven: []anchorRef{bindAlpha}, hints: []anchorRef{bindBeta},
+			want: func() AnchorBinding {
+				b := fresh(AnchorBindingContested, bindAlpha, AnchorBindingProofIdentityProven, AnchorBindingReasonAmbiguousProof)
+				b.ContenderKind, b.ContenderID = bindBeta.Kind, bindBeta.ID
+				return b
+			}(), wantProven: []anchorRef{bindAlpha}},
+		{name: "reused, a pending carry, the replayed row re-proves it", from: pending, evaluation: AnchorBindingEvaluationReused, basis: id, proven: []anchorRef{bindAlpha},
+			want: kept(pending, AnchorBindingBound, AnchorBindingReasonWindowConfirmed), wantEffective: SubjectRepository, wantProven: []anchorRef{bindAlpha}},
 		{name: "carried kind outranks a conflicting model kind", from: bound, evaluation: AnchorBindingEvaluationResolved, modelKind: SubjectProject, basis: CommitBasisCallerCanonicalID, proven: []anchorRef{bindAlpha},
 			want: kept(bound, AnchorBindingBound, AnchorBindingReasonCarriedReconfirmed), wantEffective: SubjectRepository, wantProven: []anchorRef{bindAlpha}},
 	}
@@ -196,7 +214,7 @@ func TestBindAnchorTransitionTable(t *testing.T) {
 		}
 	}
 	for _, reason := range anchorBindingReasons() {
-		if reason == AnchorBindingReasonReusedStored || reason == AnchorBindingReasonUnrecorded {
+		if reason == AnchorBindingReasonUnrecorded {
 			continue
 		}
 		if !reasons[reason] {
@@ -250,7 +268,7 @@ func TestValidateAnchorBindingInputDomain(t *testing.T) {
 		{"reason empty", with(held, func(b *AnchorBinding) { b.Reason = "" }), false},
 		{"reason out of vocabulary", with(held, func(b *AnchorBinding) { b.Reason = "unknown_reason" }), false},
 		{"reason unrecorded is not persistable", with(held, func(b *AnchorBinding) { b.Reason = AnchorBindingReasonUnrecorded }), false},
-		{"reason reused_stored is a vocabulary member", with(held, func(b *AnchorBinding) { b.Reason = AnchorBindingReasonReusedStored }), true},
+		{"reason reused_stored is not a vocabulary member", with(held, func(b *AnchorBinding) { b.Reason = "reused_stored" }), false},
 		{"held kind empty", with(held, func(b *AnchorBinding) { b.Kind = "" }), false},
 		{"held kind out of vocabulary", with(held, func(b *AnchorBinding) { b.Kind = "Repository" }), false},
 		{"held id empty", with(held, func(b *AnchorBinding) { b.CanonicalID = "" }), false},

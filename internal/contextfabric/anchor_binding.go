@@ -117,9 +117,6 @@ const (
 	// AnchorBindingReasonWindowConfirmed: a pending anchor reached a turn
 	// that passed the window gate.
 	AnchorBindingReasonWindowConfirmed AnchorBindingReason = "window_confirmed"
-	// AnchorBindingReasonReusedStored: a reuse hit served a stored row; the
-	// binding reported is the stored row's own.
-	AnchorBindingReasonReusedStored AnchorBindingReason = "reused_stored"
 	// AnchorBindingReasonUnrecorded: a Save reached persistence with no
 	// binding decision attached. Never expected; the parity test fails on it.
 	AnchorBindingReasonUnrecorded AnchorBindingReason = "unrecorded"
@@ -131,7 +128,7 @@ func anchorBindingReasons() []AnchorBindingReason {
 		AnchorBindingReasonCallerHint, AnchorBindingReasonCarriedReconfirmed, AnchorBindingReasonCarriedSilent,
 		AnchorBindingReasonCarriedNotEvaluated, AnchorBindingReasonReplacedByCaller, AnchorBindingReasonContestedByResolution,
 		AnchorBindingReasonAmbiguousProof, AnchorBindingReasonPendingWindowConfirmation, AnchorBindingReasonWindowConfirmed,
-		AnchorBindingReasonReusedStored, AnchorBindingReasonUnrecorded,
+		AnchorBindingReasonUnrecorded,
 	}
 }
 
@@ -330,6 +327,17 @@ const (
 	AnchorBindingCarryChecksNotEvaluated AnchorBindingCarryChecks = "not_evaluated"
 )
 
+// storedEpoch is the parent binding's graph epoch for the line, -1 when the
+// parent carries no binding that was read.
+func (p anchorBindingParent) storedEpoch() int64 {
+	switch p.Status {
+	case AnchorBindingParentInvalid, AnchorBindingParentStaleGraphEpoch, AnchorBindingParentPresent:
+		return p.StoredEpoch
+	default:
+		return -1
+	}
+}
+
 func (p anchorBindingParent) carryChecks() AnchorBindingCarryChecks {
 	if p.Status == AnchorBindingParentPresent {
 		return AnchorBindingCarryChecksNotEvaluated
@@ -352,10 +360,10 @@ func AnchorBindingTransitionLineVocabulary(key string) []string {
 	case "from_state", "to_state":
 		states := anchorBindingStates()
 		return strs(len(states), func(i int) string { return string(states[i]) })
-	case "proof":
+	case "proof", "from_proof":
 		proofs := anchorBindingProofs()
 		return strs(len(proofs), func(i int) string { return string(proofs[i]) })
-	case "reason":
+	case "reason", "from_reason":
 		reasons := anchorBindingReasons()
 		return strs(len(reasons), func(i int) string { return string(reasons[i]) })
 	case "parent_binding":
@@ -405,8 +413,9 @@ type anchorBindingInput struct {
 	// the engine's own carry hint excluded.
 	CallerHints []SubjectHint
 	// Resolution and Bases are the proof: the decisive resolution restricted
-	// to what the saved document still commits, or the offers-only
-	// resolution on a window-gated turn.
+	// to what the saved document still commits, the offers-only resolution
+	// on a window-gated turn, or the replayed row's resolution on a reuse
+	// serve.
 	Resolution SubjectResolution
 	Bases      CommitBasisSet
 	// ResultID and GraphEpoch stamp an identity this turn proves.
@@ -422,6 +431,27 @@ type anchorBindingProposal struct {
 
 // bindAnchor is the one binder. PURE.
 func bindAnchor(in anchorBindingInput) (AnchorBinding, anchorBindingProposal) {
+	to, proposal := bindAnchorOnProof(in)
+	if in.Evaluation != AnchorBindingEvaluationReused || !to.active() || to.State == AnchorBindingContested {
+		return to, proposal
+	}
+	// A reuse serve runs no resolution, so a caller hint the replayed row
+	// never committed is unproven: one of the held kind naming another
+	// identity contests the held anchor. It never replaces it.
+	for _, hint := range in.CallerHints {
+		ref := anchorRef{Kind: hint.Kind, ID: hint.ID}
+		if ref.Kind != to.Kind || ref.ID == to.CanonicalID || memberOf(proposal.Proven, ref) {
+			continue
+		}
+		to.State, to.Reason, to.ContenderKind, to.ContenderID = AnchorBindingContested, AnchorBindingReasonAmbiguousProof, ref.Kind, ref.ID
+		return to, proposal
+	}
+	return to, proposal
+}
+
+// bindAnchorOnProof decides from the proof alone. A reuse serve is decided
+// exactly as a resolved turn over the replayed row's resolution.
+func bindAnchorOnProof(in anchorBindingInput) (AnchorBinding, anchorBindingProposal) {
 	from := in.From
 	carried := from.active()
 	var proposal anchorBindingProposal
@@ -433,7 +463,7 @@ func bindAnchor(in anchorBindingInput) (AnchorBinding, anchorBindingProposal) {
 	default:
 		proposal.EffectiveKind = ScopeAnchorRetrievalKind(in.Frame, in.ModelAnchorKind)
 	}
-	if in.Evaluation == AnchorBindingEvaluationResolved || in.Evaluation == AnchorBindingEvaluationWindowGated {
+	if in.Evaluation != AnchorBindingEvaluationNotResolved {
 		proposal.Proven = provenAnchors(in.Frame, proposal.EffectiveKind, in.Resolution, in.Bases)
 	}
 	fresh := func(ref anchorRef, proof AnchorBindingProof, reason AnchorBindingReason) AnchorBinding {
@@ -480,7 +510,7 @@ func bindAnchor(in anchorBindingInput) (AnchorBinding, anchorBindingProposal) {
 		default:
 			return unbound(AnchorBindingReasonAmbiguousProof), proposal
 		}
-	case AnchorBindingEvaluationResolved:
+	case AnchorBindingEvaluationResolved, AnchorBindingEvaluationReused:
 	default:
 		if carried {
 			return keep(from.State, AnchorBindingReasonCarriedNotEvaluated), proposal
@@ -569,6 +599,9 @@ type anchorBindingParent struct {
 	ResultID string
 	Status   AnchorBindingParentStatus
 	Binding  AnchorBinding
+	// StoredEpoch is the graph epoch of the binding the parent row carries;
+	// read only when Status is invalid, stale_graph_epoch or present.
+	StoredEpoch int64
 }
 
 // from is the binding a transition starts from: the parent's when present,
@@ -601,12 +634,12 @@ func anchorBindingParentOf(parent string, binding *AnchorBinding, epoch int64) a
 		return anchorBindingParent{ResultID: parent, Status: AnchorBindingParentAbsent}
 	}
 	if ValidateAnchorBinding(*binding) != nil {
-		return anchorBindingParent{ResultID: parent, Status: AnchorBindingParentInvalid}
+		return anchorBindingParent{ResultID: parent, Status: AnchorBindingParentInvalid, StoredEpoch: binding.GraphEpoch}
 	}
 	if binding.GraphEpoch != epoch {
-		return anchorBindingParent{ResultID: parent, Status: AnchorBindingParentStaleGraphEpoch}
+		return anchorBindingParent{ResultID: parent, Status: AnchorBindingParentStaleGraphEpoch, StoredEpoch: binding.GraphEpoch}
 	}
-	return anchorBindingParent{ResultID: parent, Status: AnchorBindingParentPresent, Binding: *binding}
+	return anchorBindingParent{ResultID: parent, Status: AnchorBindingParentPresent, Binding: *binding, StoredEpoch: binding.GraphEpoch}
 }
 
 // anchorBindingTracker collects, across one Investigate call, the inputs the
@@ -619,7 +652,6 @@ type anchorBindingTracker struct {
 	evaluation      AnchorBindingEvaluation
 	frame           *QuestionFrame
 	modelAnchorKind SubjectKind
-	namedKind       SubjectKind
 	readingSeen     bool
 	receipt         *confirmedStructureMember
 	callerHints     []SubjectHint
@@ -634,9 +666,10 @@ func (e *Engine) newAnchorBindingTracker(ctx context.Context, request Investigat
 		return nil
 	}
 	return &anchorBindingTracker{
-		parent:     readAnchorBindingParent(ctx, request, binding.Epoch),
-		epoch:      binding.Epoch,
-		evaluation: AnchorBindingEvaluationNotResolved,
+		parent:      readAnchorBindingParent(ctx, request, binding.Epoch),
+		epoch:       binding.Epoch,
+		evaluation:  AnchorBindingEvaluationNotResolved,
+		callerHints: append([]SubjectHint(nil), request.RequestedScope.SubjectHints...),
 	}
 }
 
@@ -660,10 +693,6 @@ func (t *anchorBindingTracker) observeReading(outcome QuestionFamilyOutcome, cal
 	t.readingSeen = true
 	t.frame = outcome.Frame
 	t.modelAnchorKind = outcome.WinningSample.ScopeAnchorKind
-	t.namedKind = ""
-	if outcome.Frame != nil && outcome.Frame.SubjectExpression.Named != nil && outcome.Frame.SubjectExpression.Named.ExpectedKind != nil {
-		t.namedKind = *outcome.Frame.SubjectExpression.Named.ExpectedKind
-	}
 	t.callerHints = append([]SubjectHint(nil), callerHints...)
 }
 
@@ -692,13 +721,20 @@ type AnchorBindingTransitionEvent struct {
 	ParentBinding  AnchorBindingParentStatus
 	CarryChecks    AnchorBindingCarryChecks
 	From           AnchorBinding
+	// ParentGraphEpoch is the parent binding's graph epoch, -1 when none was
+	// read; GraphEpoch is this turn's.
+	ParentGraphEpoch int64
+	GraphEpoch       int64
 	// Proposal.
-	ModelAnchorKind   SubjectKind
-	NamedExpectedKind SubjectKind
-	ReceiptAnchor     anchorRef
-	CallerHintIDs     []string
-	ProvenAnchorIDs   []string
-	EffectiveKind     SubjectKind
+	FrameExpressionKind SubjectExpressionKind
+	AnchorTermCount     int
+	CommittedSubjects   []string
+	ModelAnchorKind     SubjectKind
+	NamedExpectedKind   SubjectKind
+	ReceiptAnchor       anchorRef
+	CallerHintIDs       []string
+	ProvenAnchorIDs     []string
+	EffectiveKind       SubjectKind
 	// Decision.
 	To AnchorBinding
 	// Post-decision.
@@ -725,16 +761,7 @@ func (t *anchorBindingTracker) decide(site BudgetAssertStage, result Investigati
 		in.Resolution = t.resolution
 	}
 	to, proposal := bindAnchor(in)
-	event := AnchorBindingTransitionEvent{
-		ResultID: result.ResultID, ParentResultID: t.parent.ResultID, Site: site,
-		Evaluation: t.evaluation, ParentBinding: t.parent.Status, CarryChecks: t.parent.carryChecks(), From: in.From,
-		ModelAnchorKind: t.modelAnchorKind, NamedExpectedKind: t.namedKind,
-		CallerHintIDs: hintIDs(t.callerHints), ProvenAnchorIDs: refIDs(proposal.Proven),
-		EffectiveKind: proposal.EffectiveKind, To: to, ServedCount: "not_evaluated",
-	}
-	if t.receipt != nil {
-		event.ReceiptAnchor = anchorRef{Kind: t.receipt.AppliedKind, ID: t.receipt.AppliedValue}
-	}
+	event := t.lineFor(site, result, in, proposal, to)
 	if state == nil {
 		event.Agreement, event.DisagreementField = AnchorBindingNotEvaluated, AnchorBindingFieldNone
 		return to, event
@@ -760,6 +787,47 @@ func (t *anchorBindingTracker) decide(site BudgetAssertStage, result Investigati
 		event.Agreement, event.DisagreementField = AnchorBindingAgree, AnchorBindingFieldNone
 	}
 	return to, event
+}
+
+// lineFor is the transition line's pre-entry, proposal and decision: every
+// input the binder read, as it read it.
+func (t *anchorBindingTracker) lineFor(site BudgetAssertStage, result InvestigationResult, in anchorBindingInput, proposal anchorBindingProposal, to AnchorBinding) AnchorBindingTransitionEvent {
+	event := AnchorBindingTransitionEvent{
+		ResultID: result.ResultID, ParentResultID: t.parent.ResultID, Site: site,
+		Evaluation: in.Evaluation, ParentBinding: t.parent.Status, CarryChecks: t.parent.carryChecks(), From: in.From,
+		ParentGraphEpoch: t.parent.storedEpoch(), GraphEpoch: in.GraphEpoch,
+		CommittedSubjects: committedSubjectIDs(in.Resolution, in.Bases),
+		ModelAnchorKind:   in.ModelAnchorKind, NamedExpectedKind: namedKindOf(in.Frame),
+		CallerHintIDs: hintIDs(in.CallerHints), ProvenAnchorIDs: refIDs(proposal.Proven),
+		EffectiveKind: proposal.EffectiveKind, To: to, ServedCount: "not_evaluated",
+	}
+	if in.Frame != nil {
+		event.FrameExpressionKind = in.Frame.SubjectExpression.Kind
+		if in.Frame.SubjectExpression.Scoped != nil {
+			event.AnchorTermCount = len(in.Frame.SubjectExpression.Scoped.AnchorTerms)
+		}
+	}
+	if in.Receipt != nil {
+		event.ReceiptAnchor = anchorRef{Kind: in.Receipt.AppliedKind, ID: in.Receipt.AppliedValue}
+	}
+	return event
+}
+
+func namedKindOf(frame *QuestionFrame) SubjectKind {
+	if frame != nil && frame.SubjectExpression.Named != nil && frame.SubjectExpression.Named.ExpectedKind != nil {
+		return *frame.SubjectExpression.Named.ExpectedKind
+	}
+	return ""
+}
+
+// committedSubjectIDs is every committed subject the binder weighed, as
+// "<kind>:<canonical id>=<commit basis>", in commit order.
+func committedSubjectIDs(resolution SubjectResolution, bases CommitBasisSet) []string {
+	out := make([]string, 0, len(resolution.Committed))
+	for _, subject := range resolution.Committed {
+		out = append(out, string(subject.Kind)+":"+subject.CanonicalID+"="+string(bases.For(subject)))
+	}
+	return out
 }
 
 // servedResolutionProof restricts the decisive resolution's commits to the
@@ -846,27 +914,25 @@ func unrecordedAnchorBindingEvent(site BudgetAssertStage, result InvestigationRe
 	return AnchorBindingTransitionEvent{
 		ResultID: result.ResultID, Site: site, Evaluation: AnchorBindingEvaluationNotResolved,
 		ParentBinding: AnchorBindingParentNoReference, CarryChecks: AnchorBindingCarryChecksNotApplicable, From: none, To: none,
-		CallerHintIDs: []string{}, ProvenAnchorIDs: []string{},
+		ParentGraphEpoch: -1, CommittedSubjects: []string{}, CallerHintIDs: []string{}, ProvenAnchorIDs: []string{},
 		Agreement: AnchorBindingNotEvaluated, DisagreementField: AnchorBindingFieldNone, ServedCount: "not_evaluated",
 	}
 }
 
-// reuseAnchorBindingEvent is the line a reuse serve emits: the stored row's
-// binding, nothing saved, nothing compared.
-func (t *anchorBindingTracker) reuseEvent(result InvestigationResult, stored *AnchorBinding) AnchorBindingTransitionEvent {
-	to := AnchorBinding{State: AnchorBindingUnbound, Proof: AnchorBindingProofNone, Reason: AnchorBindingReasonReusedStored, GraphEpoch: t.epoch}
-	if stored != nil && ValidateAnchorBinding(*stored) == nil {
-		to = *stored
-		to.Reason = AnchorBindingReasonReusedStored
+// reuseEvent decides and describes a reuse serve: the replayed row's reading
+// and resolution stand in for this turn's, nothing is saved, and nothing
+// served is compared.
+func (t *anchorBindingTracker) reuseEvent(result InvestigationResult, reading storedCountReading) AnchorBindingTransitionEvent {
+	in := anchorBindingInput{
+		From: t.parent.from(), Evaluation: AnchorBindingEvaluationReused, Frame: reading.Frame, ModelAnchorKind: reading.AnchorKind,
+		Receipt: t.receipt, CallerHints: t.callerHints,
+		Resolution: result.SubjectResolution, Bases: CommitBasisSetFromDigests(result.SubjectResolution.CommitDecisionDigests),
+		ResultID: result.ResultID, GraphEpoch: t.epoch,
 	}
-	return AnchorBindingTransitionEvent{
-		ResultID: result.ResultID, ParentResultID: t.parent.ResultID, Site: BudgetAssertReuse,
-		Evaluation: AnchorBindingEvaluationReused, ParentBinding: t.parent.Status, CarryChecks: t.parent.carryChecks(), From: t.parent.from(),
-		ModelAnchorKind: t.modelAnchorKind, NamedExpectedKind: t.namedKind,
-		CallerHintIDs: hintIDs(t.callerHints), ProvenAnchorIDs: []string{},
-		To: to, Persisted: AnchorBindingNotSaved,
-		Agreement: AnchorBindingNotEvaluated, DisagreementField: AnchorBindingFieldNone, ServedCount: "not_evaluated",
-	}
+	to, proposal := bindAnchor(in)
+	event := t.lineFor(BudgetAssertReuse, result, in, proposal, to)
+	event.Persisted, event.Agreement, event.DisagreementField = AnchorBindingNotSaved, AnchorBindingNotEvaluated, AnchorBindingFieldNone
+	return event
 }
 
 func (e *Engine) recordAnchorBindingTransition(ctx context.Context, principal storage.Principal, event AnchorBindingTransitionEvent) {
@@ -892,7 +958,18 @@ func AnchorBindingTransitionLogArgs(event AnchorBindingTransitionEvent, orgID st
 		"from_state", SanitizeLogAttr(closed("from_state", string(event.From.State))),
 		"from_kind", SanitizeLogAttr(string(event.From.Kind)),
 		"from_id", SanitizeLogAttr(event.From.CanonicalID),
+		"from_proof", SanitizeLogAttr(closed("from_proof", string(event.From.Proof))),
+		"from_reason", SanitizeLogAttr(closed("from_reason", string(event.From.Reason))),
+		"from_origin_result_id", SanitizeLogAttr(event.From.OriginResultID),
+		"from_graph_epoch", event.From.GraphEpoch,
+		"from_contender_kind", SanitizeLogAttr(string(event.From.ContenderKind)),
+		"from_contender_id", SanitizeLogAttr(event.From.ContenderID),
+		"parent_graph_epoch", event.ParentGraphEpoch,
+		"graph_epoch", event.GraphEpoch,
 		// PROPOSAL: what the binder read.
+		"frame_expression_kind", SanitizeLogAttr(string(event.FrameExpressionKind)),
+		"anchor_term_count", event.AnchorTermCount,
+		"committed_subjects", SanitizeLogStrings(nonNilStrings(event.CommittedSubjects)),
 		"model_anchor_kind", SanitizeLogAttr(string(event.ModelAnchorKind)),
 		"named_expected_kind", SanitizeLogAttr(string(event.NamedExpectedKind)),
 		"receipt_anchor_kind", SanitizeLogAttr(string(event.ReceiptAnchor.Kind)),
@@ -907,6 +984,7 @@ func AnchorBindingTransitionLogArgs(event AnchorBindingTransitionEvent, orgID st
 		"proof", SanitizeLogAttr(closed("proof", string(event.To.Proof))),
 		"reason", SanitizeLogAttr(closed("reason", string(event.To.Reason))),
 		"origin_result_id", SanitizeLogAttr(event.To.OriginResultID),
+		"to_graph_epoch", event.To.GraphEpoch,
 		"contender_kind", SanitizeLogAttr(string(event.To.ContenderKind)),
 		"contender_id", SanitizeLogAttr(event.To.ContenderID),
 		// POST-DECISION: its fate and the served decision it is compared to.

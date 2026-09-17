@@ -327,25 +327,18 @@ func NormalizeRetrievalTerm(term string) string {
 type storedCountReading struct {
 	Frame      *QuestionFrame
 	AnchorKind SubjectKind
-	// AnchorBinding is the shadow anchor binding persisted beside the row,
-	// nil when there is none. The count decision never reads it.
-	AnchorBinding *AnchorBinding
 }
 
 // storedCountReadingOf is the reading persisted beside a stored row, or the
 // zero reading when it is not available -- absent, unreadable, or carrying no
 // frame. A zero reading is an absence the decision refuses to count over.
 func storedCountReadingOf(stored StoredInvestigationResult) storedCountReading {
-	if stored.SemanticStateRead != SemanticStateReadAvailable || stored.SemanticState == nil {
+	if stored.SemanticStateRead != SemanticStateReadAvailable || stored.SemanticState == nil || !stored.SemanticState.FramePresent {
 		return storedCountReading{}
 	}
-	if !stored.SemanticState.FramePresent {
-		return storedCountReading{AnchorBinding: stored.SemanticState.AnchorBinding}
-	}
 	return storedCountReading{
-		Frame:         stored.SemanticState.Frame,
-		AnchorKind:    stored.SemanticState.ScopeAnchor.Kind,
-		AnchorBinding: stored.SemanticState.AnchorBinding,
+		Frame:      stored.SemanticState.Frame,
+		AnchorKind: stored.SemanticState.ScopeAnchor.Kind,
 	}
 }
 

@@ -1593,6 +1593,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// follow-up confirming structure via receipt can never be served a
 	// cached answer generated under unconfirmed inference instead.
 	structureCanon := e.canonicalizeStructure(ctx, principal, request, binding)
+	// Observed before the structure veto below: that exit's capture records
+	// the same confirmed members.
+	anchorShadow.observeReceipt(structureCanon.Confirmed)
 	if structureCanon.Veto != structureVetoNone {
 		continuation = continuation.withReason(ContinuationReasonStructureVeto)
 		// This turn short-circuits above tryReuse and Interpret -- no subject
@@ -1661,7 +1664,6 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// never in structureCanon.Confirmed.
 	confirmedThisTurn := mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember)
 	appliedNeeds = appliedNeedLedgerEntries(remembered, confirmedThisTurn, request)
-	anchorShadow.observeReceipt(structureCanon.Confirmed)
 	// The OUTGOING ledger for whatever result this turn saves: this turn's
 	// own confirmations over whatever remembered still admits. Computed once
 	// so every captureAcceptedReading call site from here on agrees; the
@@ -1890,7 +1892,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				return InvestigationResult{}, reuseBudgetErr
 			}
 			if anchorShadow != nil {
-				e.recordAnchorBindingTransition(ctx, principal, anchorShadow.reuseEvent(reused, reusedReading.AnchorBinding))
+				e.recordAnchorBindingTransition(ctx, principal, anchorShadow.reuseEvent(reused, reusedReading))
 			}
 			cover.answered = true
 			return reused, nil
@@ -2207,6 +2209,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			}),
 		})
 		familyOutcome = e.applyAndRecordContinuation(ctx, principal, familyOutcome, continuation, accepted)
+		anchorShadow.observeReading(familyOutcome, graphRequest.RequestedScope.SubjectHints)
 		// A WITHHELD CONTINUATION ENDS THE TURN HERE, above the planning stage
 		// and above every retrieval: the carrier could not be established, and
 		// answering under the fresh reading would serve a reading the caller
@@ -2275,6 +2278,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		driftRefusedParent = carryParentSeed(request)
 	}
 	familyOutcome = e.applyAndRecordCarry(ctx, principal, familyOutcome, planCarry)
+	anchorShadow.observeReading(familyOutcome, graphRequest.RequestedScope.SubjectHints)
 	tupleFamilyDefinition, tupleFamilyKnown := LookupQuestionFamily(familyOutcome.Family)
 	familyAllowsWorkItemTuple := tupleFamilyKnown && tupleFamilyDefinition.allowsWorkItemTuple
 	familyOutcome.Gate = tightenWorkItemTupleFrameGate(familyOutcome.Gate, familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext)

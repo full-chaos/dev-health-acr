@@ -2533,6 +2533,28 @@ var AnchorBindingTransition = Event{
 		// free canonical ids, empty when absent.
 		{Key: "from_kind", Type: FieldString, Presence: PresenceRequired},
 		{Key: "from_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "from_proof", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("from_proof")},
+		{Key: "from_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("from_reason")},
+		{Key: "from_origin_result_id", Type: FieldString, Presence: PresenceRequired},
+		// The parent binding's own graph epoch, 0 when unbound.
+		{Key: "from_graph_epoch", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "from_contender_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "from_contender_id", Type: FieldString, Presence: PresenceRequired},
+		// The graph epoch of the binding the parent row carries, -1 when no
+		// stored binding was read; the stale-parent check compares it with
+		// graph_epoch.
+		{Key: "parent_graph_epoch", Type: FieldInt, Presence: PresenceRequired},
+		// This turn's graph epoch: the epoch an identity it proves stands on.
+		{Key: "graph_epoch", Type: FieldInt, Presence: PresenceRequired},
+		// Open: a SubjectExpressionKind token, empty with no frame. Only a
+		// children_of_scope frame can bind an anchor.
+		{Key: "frame_expression_kind", Type: FieldString, Presence: PresenceRequired},
+		// How many anchor terms the frame names; the terms are corpus text and
+		// are never published.
+		{Key: "anchor_term_count", Type: FieldInt, Presence: PresenceRequired},
+		// Open: "<kind>:<canonical id>=<commit basis>" for every committed
+		// subject the binder weighed, empty when none.
+		{Key: "committed_subjects", Type: FieldStringSlice, Presence: PresenceRequired},
 		{Key: "model_anchor_kind", Type: FieldString, Presence: PresenceRequired},
 		{Key: "named_expected_kind", Type: FieldString, Presence: PresenceRequired},
 		{Key: "receipt_anchor_kind", Type: FieldString, Presence: PresenceRequired},
@@ -2547,6 +2569,7 @@ var AnchorBindingTransition = Event{
 		{Key: "proof", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("proof")},
 		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("reason")},
 		{Key: "origin_result_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "to_graph_epoch", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "contender_kind", Type: FieldString, Presence: PresenceRequired},
 		{Key: "contender_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "persisted", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("persisted")},

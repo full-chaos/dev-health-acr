@@ -111,7 +111,7 @@ func anchorVocabularyScenarios() []anchorSiteScenario {
 	follow := func(id string, seed func(*staticResultStore)) anchorProbeStep {
 		return anchorProbeStep{request: followUp(id, "", nil), seed: seed, response: emptyProbeResponse()}
 	}
-	return []anchorSiteScenario{
+	scenarios := []anchorSiteScenario{
 		{name: "caller hint", run: anchorProbeScenario(anchorProbeStep{request: withMutate("request_vocab_hint", alphaHint), response: needTurnResponse{
 			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{probeAlpha}}, bases: provenCommitBases(probeAlpha)}})},
 		{name: "replaced by caller", run: anchorProbeScenario(first, anchorProbeStep{request: followUp("request_vocab_replace", "", betaHint), response: needTurnResponse{
@@ -160,6 +160,28 @@ func anchorVocabularyScenarios() []anchorSiteScenario {
 			return h.turn(request, committingNeedResponse()).result
 		}},
 	}
+	// The parent row's binding under every persistable reason and every held
+	// proof, so the pre-entry keys reach each member through the real read.
+	for _, reason := range anchorBindingReasons() {
+		if reason == AnchorBindingReasonUnrecorded {
+			continue
+		}
+		reason := reason
+		scenarios = append(scenarios, anchorSiteScenario{name: "parent reason " + string(reason), run: anchorProbeScenario(first, follow("request_vocab_from_"+string(reason), mutateStoredBindings(func(s *PersistedSemanticState) {
+			if s.AnchorBinding != nil {
+				s.AnchorBinding.Reason = reason
+			}
+		})))})
+	}
+	for _, proof := range []AnchorBindingProof{AnchorBindingProofCallerReceipt, AnchorBindingProofCallerHint} {
+		proof := proof
+		scenarios = append(scenarios, anchorSiteScenario{name: "parent proof " + string(proof), run: anchorProbeScenario(first, follow("request_vocab_proof_"+string(proof), mutateStoredBindings(func(s *PersistedSemanticState) {
+			if s.AnchorBinding != nil {
+				s.AnchorBinding.Proof = proof
+			}
+		})))})
+	}
+	return scenarios
 }
 
 // anchorStoreErrorDriver runs one decisive turn against a store whose Save

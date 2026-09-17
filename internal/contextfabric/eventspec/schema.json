@@ -101,6 +101,84 @@
         "presence": "required"
       },
       {
+        "key": "from_proof",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "caller_receipt",
+          "caller_hint",
+          "identity_proven",
+          "undeclared"
+        ]
+      },
+      {
+        "key": "from_reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "no_proof",
+          "identity_proven",
+          "caller_receipt",
+          "caller_hint",
+          "carried_reconfirmed",
+          "carried_silent",
+          "carried_not_evaluated",
+          "replaced_by_caller",
+          "contested_by_resolution",
+          "ambiguous_proof",
+          "pending_window_confirmation",
+          "window_confirmed",
+          "unrecorded",
+          "undeclared"
+        ]
+      },
+      {
+        "key": "from_origin_result_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "from_graph_epoch",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "from_contender_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "from_contender_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "parent_graph_epoch",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "graph_epoch",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "frame_expression_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "anchor_term_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "committed_subjects",
+        "type": "string_slice",
+        "presence": "required"
+      },
+      {
         "key": "model_anchor_kind",
         "type": "string",
         "presence": "required"
@@ -186,7 +264,6 @@
           "ambiguous_proof",
           "pending_window_confirmation",
           "window_confirmed",
-          "reused_stored",
           "unrecorded",
           "undeclared"
         ]
@@ -194,6 +271,11 @@
       {
         "key": "origin_result_id",
         "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "to_graph_epoch",
+        "type": "int",
         "presence": "required"
       },
       {
