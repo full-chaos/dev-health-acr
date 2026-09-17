@@ -155,12 +155,15 @@ def canonical_field_types(entry_path, root_node_name):
     from artefact samples, keyed by the identical dotted node names walk() produces, so the
     two merge field for field in main().
 
-    Only scalar leaf `type` declarations are emitted -- array/object SHAPE stays entirely
-    sample-derived; walk()'s own measurement already proves that shape from real traffic,
-    and re-deriving it here would be a second, independently-fallible walker for no field
-    this defect touches. The canonical schema is still walked THROUGH every array/object
-    property to reach the scalars nested inside it (cohort.members[].drivers[].value is
-    four levels down), it is just never asked to assert the array/object's own shape.
+    Scalar leaf `type` declarations are emitted for every field the schema settles. An
+    array-of-objects or nested-object field is also emitted, but only its LINK to the child
+    node the walk recurses into (`items`/`element_node` or `node`, the identical keys an
+    observed field carries) -- never the child's own key set or element counts, which stay
+    entirely sample-derived. Wiring the link is what keeps every child node this walk
+    reaches attached to the tree main() emits: an unwired child is a node no validator can
+    reach from the root, however precisely its own fields are typed. The canonical schema is
+    walked THROUGH every array/object property to reach the scalars nested inside it
+    (cohort.members[].drivers[].value is four levels down).
     """
     entry_path = Path(entry_path)
     root_key = str(entry_path.resolve())
@@ -191,9 +194,18 @@ def canonical_field_types(entry_path, root_node_name):
                     item_resolved, item_doc, item_base = _resolve_json_schema_ref(
                         items["$ref"], sub_base, sub_doc, file_cache)
                 if isinstance(item_resolved.get("properties"), dict):
-                    walk_schema(item_resolved, item_doc, item_base, f"{node_name}.{key}[]")
+                    child = f"{node_name}.{key}[]"
+                    # The parent key is wired to its child exactly as an observed
+                    # array-of-objects field is wired -- setdefault-merged in main(), so a
+                    # sample-derived link this same field already carries always wins.
+                    out[node_name][key] = {"type": "array", "items": "object",
+                                           "element_node": child}
+                    walk_schema(item_resolved, item_doc, item_base, child)
             elif t == "object":
-                walk_schema(resolved, sub_doc, sub_base, f"{node_name}.{key}")
+                if isinstance(resolved.get("properties"), dict):
+                    child = f"{node_name}.{key}"
+                    out[node_name][key] = {"type": "object", "node": child}
+                    walk_schema(resolved, sub_doc, sub_base, child)
             elif t:
                 field = {"type": t}
                 if nullable:
@@ -351,6 +363,22 @@ def main():
                     entry["minimum"] = decl["minimum"]
                 if "maximum" in decl:
                     entry["maximum"] = decl["maximum"]
+                # Additive only, like every other canonical override here: a field the
+                # contract admits null on gains that admission if sampling never granted
+                # it (fact_scope_census[].authorized_population_count, absent from every
+                # sample the schema was generated from); a field sampling already saw
+                # null on keeps that, whatever the contract's own type list says.
+                if decl.get("nullable") and not entry.get("nullable"):
+                    entry["nullable"] = True
+                # A container field's own LINK to its child node is wired only where no
+                # sample ever wired one -- setdefault, never overwrite, so an observed
+                # field's own element_node/node keeps governing its own shape.
+                if decl["type"] == "array":
+                    entry.setdefault("items", decl.get("items", "object"))
+                    if decl.get("element_node"):
+                        entry.setdefault("element_node", decl["element_node"])
+                elif decl["type"] == "object" and decl.get("node"):
+                    entry.setdefault("node", decl["node"])
                 entry.pop("unmeasured", None)
                 unchecked = [u for u in unchecked if not u.startswith(f"{node}.{key} ")]
 

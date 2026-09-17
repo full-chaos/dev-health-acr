@@ -95,6 +95,10 @@ BASE = os.environ.get("CORPUS_BASE")
 EXPECTED_BUILD = os.environ.get("CORPUS_EXPECTED_BUILD")
 OUTDIR = Path(__file__).parent / "replicate"
 OUTDIR.mkdir(exist_ok=True)
+# Every attempt-artefact discovery walk in this package globs `replicate/*.json` (or
+# `*-t*-a*.json`) by SUFFIX, so a sibling ending in `.json` reads as one more attempt file
+# to those walks. This suffix ends in neither, on purpose -- see persist_raw_response.
+RAW_RESPONSE_SUFFIX = ".raw-response.bin"
 MAX_TURNS = 5
 MAX_ATTEMPTS_PER_TURN = 5
 SERVED_STATUSES = {"complete", "partial", "degraded", "answered"}
@@ -217,19 +221,23 @@ def validate_live_payload(status, payload):
     return payload
 
 
-def raw_payload_to_persist_on_failure(payload, validated):
-    """The raw decoded payload to persist alongside a failed live validation (CHAOS-5826),
-    or None when there is nothing to persist.
+def raw_payload_to_persist_on_failure(raw_bytes, payload, validated):
+    """The raw WIRE BYTES to persist alongside a failed live validation (CHAOS-5826), or
+    None when there is nothing to persist.
 
     `validate_live_payload` returns the SAME object back on success and a brand new
     `{"failure": ...}` dict on failure -- so identity, not a field on either side, is the
     only test that cannot be fooled by a genuine acr-side failure body that happens to
     carry a `code` matching ours. `payload=None` (nothing decoded at all) also persists
-    nothing; there is no raw body to save.
+    nothing; there is no raw body to save. The bytes returned are exactly what the
+    transport read off the socket, decoded by nothing downstream of this call -- the
+    caller re-serializing `payload` would drop whatever the decode step itself discards
+    (exact float formatting, non-ASCII bytes), which is the one property a later
+    re-score of the raw body depends on.
     """
     if payload is None or validated is payload:
         return None
-    return payload
+    return raw_bytes
 
 
 def post(body):
@@ -256,11 +264,12 @@ def post(body):
        controls what is INSIDE the response body, not the envelope the harness writes
        around it.
 
-    A FIFTH return value, `raw_payload_to_persist`, is non-None exactly when
-    `validate_live_payload` replaced a decoded body with a failure envelope -- see
-    `raw_payload_to_persist_on_failure`'s own doc comment. `run_replicate` writes it
-    beside the attempt artefact so a later validator fix can re-score the row without a
-    re-run; it never changes what `response` itself holds.
+    A FIFTH return value, `raw_payload_to_persist`, is the exact wire BYTES this call read
+    off the socket, non-None exactly when `validate_live_payload` replaced the decoded body
+    with a failure envelope -- see `raw_payload_to_persist_on_failure`'s own doc comment.
+    `run_replicate` writes those bytes, unparsed and unre-serialized, beside the attempt
+    artefact so a later validator fix can re-score the row without a re-run; it never
+    changes what `response` itself holds.
     """
     # CHAOS-5562: refuse before the first byte goes anywhere near a socket.
     require_base()
@@ -309,7 +318,7 @@ def post(body):
     _report_first_response(status, payload)
     validated = validate_live_payload(status, payload)
     return (status, validated, time.time() - t0, False,
-            raw_payload_to_persist_on_failure(payload, validated))
+            raw_payload_to_persist_on_failure(raw, payload, validated))
 
 
 def is_retryable(status, payload):
@@ -430,19 +439,25 @@ def update_memory_and_build_receipts(prev_result, memory, want_kind, anchor_kind
     return out, set(sn.get("missing") or []), wrong_kind, wrong_subject, subject_kind_mismatch
 
 
-def persist_raw_response(fname, raw_payload):
-    """Writes `raw_payload` beside `fname` as `<fname>.raw-response.json`, or removes
-    any stale one, when `raw_payload` is None -- so a re-run over the same filenames
-    (a retry, a re-collected turn) never leaves a raw-response file next to an attempt
-    artefact whose own `response` field records something else. Only ever touches that
-    sibling file; the artefact `fname` itself, and what it writes into `response`, are
-    unaffected."""
-    sibling = fname.with_name(fname.name + ".raw-response.json")
-    if raw_payload is None:
+def persist_raw_response(fname, raw_bytes):
+    """Writes `raw_bytes` beside `fname` as `<fname>{RAW_RESPONSE_SUFFIX}`, byte for byte,
+    or removes any stale one, when `raw_bytes` is None -- so a re-run over the same
+    filenames (a retry, a re-collected turn) never leaves a raw-response file next to an
+    attempt artefact whose own `response` field records something else. Only ever touches
+    that sibling file; the artefact `fname` itself, and what it writes into `response`,
+    are unaffected.
+
+    The suffix is neither parsed nor re-serialized here on purpose: this file is a
+    sibling of an INSTRUMENT artefact, and an instrument sidecar sharing the instrument's
+    own discovery pattern is how it gets sampled as one. Writing the exact bytes this call
+    received, under a name no `replicate/*.json`-shaped glob matches, is what keeps this
+    file inert to every reader that walks the artefact tree for attempts."""
+    sibling = fname.with_name(fname.name + RAW_RESPONSE_SUFFIX)
+    if raw_bytes is None:
         sibling.unlink(missing_ok=True)
         return
-    with open(sibling, "w") as f:
-        json.dump(raw_payload, f, indent=2)
+    with open(sibling, "wb") as f:
+        f.write(raw_bytes)
 
 
 def run_replicate(qid, question, rep, warn=print):

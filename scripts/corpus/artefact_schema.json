@@ -66,7 +66,9 @@
   "attempt.response.result.answer_plan.narrowing[].groups None->'bool'",
   "attempt.response.result.claimed_facts[].table.order_by None->'string'",
   "attempt.response.result.claimed_facts[].time_series_table.order_by None->'string'",
+  "attempt.response.result.cohort.exclusions None->'array'",
   "attempt.response.result.cohort.exclusions[].reason None->'string'",
+  "attempt.response.result.cohort.exclusions[].subject None->'object'",
   "attempt.response.result.cohort.exclusions[].subject.canonical_id None->'string'",
   "attempt.response.result.cohort.exclusions[].subject.kind None->'string'",
   "attempt.response.result.cohort.exclusions[].subject.label None->'string'",
@@ -81,6 +83,7 @@
   "attempt.response.result.confirmed_structure[].prior_version_id None->'string'",
   "attempt.response.result.conflicts[].finding_id None->'string'",
   "attempt.response.result.conflicts[].kind None->'string'",
+  "attempt.response.result.conflicts[].subjects None->'array'",
   "attempt.response.result.conflicts[].subjects[].canonical_id None->'string'",
   "attempt.response.result.conflicts[].subjects[].kind None->'string'",
   "attempt.response.result.conflicts[].subjects[].label None->'string'",
@@ -89,6 +92,7 @@
   "attempt.response.result.coverage.details[].kind None->'string'",
   "attempt.response.result.coverage.details[].served None->'int'",
   "attempt.response.result.coverage.sources[].watermark None->'string'",
+  "attempt.response.result.fact_scope_census None->'array'",
   "attempt.response.result.fact_scope_census[].admitted_count None->'int'",
   "attempt.response.result.fact_scope_census[].authorized_population_count None->'int'",
   "attempt.response.result.fact_scope_census[].axis None->'string'",
@@ -100,22 +104,27 @@
   "attempt.response.result.fact_scope_census[].requirement_kind None->'string'",
   "attempt.response.result.fact_scope_census[].target_limit None->'int'",
   "attempt.response.result.fact_scope_census[].truncated None->'bool'",
+  "attempt.response.result.interpretation.fact_requirements[].subjects None->'array'",
   "attempt.response.result.interpretation.fact_requirements[].subjects[].canonical_id None->'string'",
   "attempt.response.result.interpretation.fact_requirements[].subjects[].kind None->'string'",
   "attempt.response.result.interpretation.fact_requirements[].subjects[].label None->'string'",
   "attempt.response.result.interpretation.requested_judgment_kind None->'string'",
   "attempt.response.result.interpretation.time_context.as_of None->'string'",
+  "attempt.response.result.interpretation.time_context.evidence_window None->'object'",
   "attempt.response.result.interpretation.time_context.evidence_window.end None->'string'",
   "attempt.response.result.interpretation.time_context.evidence_window.relative_id None->'string'",
   "attempt.response.result.interpretation.time_context.evidence_window.start None->'string'",
   "attempt.response.result.interpretation.window_class None->'string'",
   "attempt.response.result.interpretation.window_confidence None->'string'",
   "attempt.response.result.limitations_displaced None->'int'",
+  "attempt.response.result.semantic_reading None->'object'",
   "attempt.response.result.semantic_reading.reason None->'string'",
   "attempt.response.result.semantic_reading.status None->'string'",
+  "attempt.response.result.structure_needs.accepted_grammars None->'array'",
   "attempt.response.result.structure_needs.accepted_grammars[].kind None->'string'",
   "attempt.response.result.structure_needs.accepted_grammars[].member None->'string'",
   "attempt.response.result.structure_needs.accepted_grammars[].pattern_id None->'string'",
+  "attempt.response.result.structure_needs.anchor_options None->'array'",
   "attempt.response.result.structure_needs.anchor_options[].canonical_id None->'string'",
   "attempt.response.result.structure_needs.anchor_options[].kind None->'string'",
   "attempt.response.result.structure_needs.anchor_options[].label None->'string'",
@@ -407,7 +416,8 @@
     "node_visits": 1011,
     "observed": {
      "object": 1011
-    }
+    },
+    "canonical_type": true
    },
    "claimed_facts": {
     "type": "array",
@@ -416,7 +426,8 @@
      "object": 579
     },
     "items": "object",
-    "element_node": "attempt.response.result.claimed_facts[]"
+    "element_node": "attempt.response.result.claimed_facts[]",
+    "canonical_type": true
    },
    "cohort": {
     "type": "object",
@@ -424,7 +435,8 @@
     "node_visits": 1011,
     "observed": {
      "object": 87
-    }
+    },
+    "canonical_type": true
    },
    "completeness": {
     "type": "object",
@@ -432,7 +444,8 @@
     "node_visits": 1011,
     "observed": {
      "object": 1011
-    }
+    },
+    "canonical_type": true
    },
    "confirmed_structure": {
     "type": "array",
@@ -441,14 +454,18 @@
      "object": 503
     },
     "items": "object",
-    "element_node": "attempt.response.result.confirmed_structure[]"
+    "element_node": "attempt.response.result.confirmed_structure[]",
+    "canonical_type": true
    },
    "conflicts": {
     "type": "array",
     "node_visits": 1011,
     "observed": {
      "array": 1011
-    }
+    },
+    "canonical_type": true,
+    "items": "object",
+    "element_node": "attempt.response.result.conflicts[]"
    },
    "coverage": {
     "type": "object",
@@ -456,7 +473,8 @@
     "node_visits": 1011,
     "observed": {
      "object": 1011
-    }
+    },
+    "canonical_type": true
    },
    "current_state": {
     "type": "string",
@@ -489,7 +507,8 @@
      "object": 480
     },
     "items": "object",
-    "element_node": "attempt.response.result.drivers[]"
+    "element_node": "attempt.response.result.drivers[]",
+    "canonical_type": true
    },
    "effective_evidence_window": {
     "type": "object",
@@ -497,7 +516,8 @@
     "node_visits": 1011,
     "observed": {
      "object": 747
-    }
+    },
+    "canonical_type": true
    },
    "evidence_ref_ids": {
     "type": "array",
@@ -515,6 +535,12 @@
      "object": 394
     }
    },
+   "fact_scope_census": {
+    "type": "array",
+    "canonical_type": true,
+    "items": "object",
+    "element_node": "attempt.response.result.fact_scope_census[]"
+   },
    "generated_at": {
     "type": "string",
     "node_visits": 1011,
@@ -529,7 +555,8 @@
     "node_visits": 1011,
     "observed": {
      "object": 1011
-    }
+    },
+    "canonical_type": true
    },
    "limitations": {
     "type": "array",
@@ -552,7 +579,8 @@
      "object": 3309
     },
     "items": "object",
-    "element_node": "attempt.response.result.paths[]"
+    "element_node": "attempt.response.result.paths[]",
+    "canonical_type": true
    },
    "question": {
     "type": "string",
@@ -569,7 +597,8 @@
      "object": 15
     },
     "items": "object",
-    "element_node": "attempt.response.result.readiness_gaps[]"
+    "element_node": "attempt.response.result.readiness_gaps[]",
+    "canonical_type": true
    },
    "refusal_basis": {
     "type": "string",
@@ -586,7 +615,8 @@
      "object": 20
     },
     "items": "object",
-    "element_node": "attempt.response.result.remaining_work[]"
+    "element_node": "attempt.response.result.remaining_work[]",
+    "canonical_type": true
    },
    "render_shapes": {
     "type": "array",
@@ -595,7 +625,8 @@
      "object": 157
     },
     "items": "object",
-    "element_node": "attempt.response.result.render_shapes[]"
+    "element_node": "attempt.response.result.render_shapes[]",
+    "canonical_type": true
    },
    "request_id": {
     "type": "string",
@@ -628,6 +659,11 @@
      "string": 1011
     }
    },
+   "semantic_reading": {
+    "type": "object",
+    "canonical_type": true,
+    "node": "attempt.response.result.semantic_reading"
+   },
    "status": {
     "type": "string",
     "node_visits": 1011,
@@ -650,7 +686,8 @@
     "node_visits": 1011,
     "observed": {
      "object": 580
-    }
+    },
+    "canonical_type": true
    },
    "structure_offer_snapshot": {
     "type": "array",
@@ -659,7 +696,8 @@
      "object": 483
     },
     "items": "object",
-    "element_node": "attempt.response.result.structure_offer_snapshot[]"
+    "element_node": "attempt.response.result.structure_offer_snapshot[]",
+    "canonical_type": true
    },
    "subject_resolution": {
     "type": "object",
@@ -667,7 +705,8 @@
     "node_visits": 1011,
     "observed": {
      "object": 1011
-    }
+    },
+    "canonical_type": true
    },
    "temporal": {
     "type": "object",
@@ -675,7 +714,8 @@
     "node_visits": 1011,
     "observed": {
      "object": 20
-    }
+    },
+    "canonical_type": true
    },
    "versions": {
     "type": "object",
@@ -683,7 +723,8 @@
     "node_visits": 1011,
     "observed": {
      "object": 1011
-    }
+    },
+    "canonical_type": true
    },
    "warnings": {
     "type": "array",
@@ -699,7 +740,8 @@
     "node_visits": 1011,
     "observed": {
      "object": 383
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.answer_plan": {
@@ -717,7 +759,8 @@
     "node_visits": 1011,
     "observed": {
      "object": 1011
-    }
+    },
+    "canonical_type": true
    },
    "fact_kinds": {
     "type": "array",
@@ -774,7 +817,8 @@
      "object": 578
     },
     "items": "object",
-    "element_node": "attempt.response.result.answer_plan.narrowing[]"
+    "element_node": "attempt.response.result.answer_plan.narrowing[]",
+    "canonical_type": true
    },
    "render_kinds": {
     "type": "array",
@@ -807,7 +851,8 @@
      "object": 2235
     },
     "items": "object",
-    "element_node": "attempt.response.result.answer_plan.requirements[]"
+    "element_node": "attempt.response.result.answer_plan.requirements[]",
+    "canonical_type": true
    }
   },
   "attempt.response.result.answer_plan.budget": {
@@ -1042,7 +1087,8 @@
      "object": 1219
     },
     "items": "object",
-    "element_node": "attempt.response.result.claimed_facts[].rows[]"
+    "element_node": "attempt.response.result.claimed_facts[].rows[]",
+    "canonical_type": true
    },
    "subject": {
     "type": "object",
@@ -1050,7 +1096,8 @@
     "node_visits": 579,
     "observed": {
      "object": 579
-    }
+    },
+    "canonical_type": true
    },
    "table": {
     "type": "object",
@@ -1058,7 +1105,8 @@
     "node_visits": 579,
     "observed": {
      "object": 401
-    }
+    },
+    "canonical_type": true
    },
    "time_series_rows": {
     "type": "array",
@@ -1067,7 +1115,8 @@
      "object": 8747
     },
     "items": "object",
-    "element_node": "attempt.response.result.claimed_facts[].time_series_rows[]"
+    "element_node": "attempt.response.result.claimed_facts[].time_series_rows[]",
+    "canonical_type": true
    },
    "time_series_table": {
     "type": "object",
@@ -1075,7 +1124,8 @@
     "node_visits": 579,
     "observed": {
      "object": 302
-    }
+    },
+    "canonical_type": true
    },
    "value": {
     "type": "object",
@@ -1083,7 +1133,8 @@
     "node_visits": 579,
     "observed": {
      "object": 579
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.claimed_facts[].rows[]": {
@@ -2162,6 +2213,12 @@
     },
     "canonical_type": true
    },
+   "exclusions": {
+    "type": "array",
+    "canonical_type": true,
+    "items": "object",
+    "element_node": "attempt.response.result.cohort.exclusions[]"
+   },
    "groups": {
     "type": "array",
     "node_visits": 87,
@@ -2169,7 +2226,8 @@
      "object": 208
     },
     "items": "object",
-    "element_node": "attempt.response.result.cohort.groups[]"
+    "element_node": "attempt.response.result.cohort.groups[]",
+    "canonical_type": true
    },
    "judgment_mismatch": {
     "type": "bool",
@@ -2190,7 +2248,8 @@
      "object": 692
     },
     "items": "object",
-    "element_node": "attempt.response.result.cohort.members[]"
+    "element_node": "attempt.response.result.cohort.members[]",
+    "canonical_type": true
    },
    "rationale": {
     "type": "string",
@@ -2217,6 +2276,11 @@
    "reason": {
     "type": "string",
     "canonical_type": true
+   },
+   "subject": {
+    "type": "object",
+    "canonical_type": true,
+    "node": "attempt.response.result.cohort.exclusions[].subject"
    }
   },
   "attempt.response.result.cohort.exclusions[].subject": {
@@ -2256,7 +2320,8 @@
     "node_visits": 208,
     "observed": {
      "object": 208
-    }
+    },
+    "canonical_type": true
    },
    "total": {
     "type": "int",
@@ -2327,7 +2392,8 @@
      "object": 136
     },
     "items": "object",
-    "element_node": "attempt.response.result.cohort.members[].drivers[]"
+    "element_node": "attempt.response.result.cohort.members[].drivers[]",
+    "canonical_type": true
    },
    "evidence_ref_ids": {
     "type": "array",
@@ -2402,7 +2468,8 @@
     "node_visits": 692,
     "observed": {
      "object": 692
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.cohort.members[].drivers[]": {
@@ -2521,7 +2588,8 @@
      "object": 2560
     },
     "items": "object",
-    "element_node": "attempt.response.result.completeness.outcomes[]"
+    "element_node": "attempt.response.result.completeness.outcomes[]",
+    "canonical_type": true
    },
    "refusal_basis": {
     "type": "string",
@@ -2634,7 +2702,8 @@
      "object": 228
     },
     "items": "object",
-    "element_node": "attempt.response.result.completeness.outcomes[].refinements[]"
+    "element_node": "attempt.response.result.completeness.outcomes[].refinements[]",
+    "canonical_type": true
    },
    "requirement": {
     "type": "string",
@@ -2793,6 +2862,12 @@
     "type": "string",
     "canonical_type": true
    },
+   "subjects": {
+    "type": "array",
+    "canonical_type": true,
+    "items": "object",
+    "element_node": "attempt.response.result.conflicts[].subjects[]"
+   },
    "summary": {
     "type": "string",
     "canonical_type": true
@@ -2828,7 +2903,8 @@
      "object": 713
     },
     "items": "object",
-    "element_node": "attempt.response.result.coverage.details[]"
+    "element_node": "attempt.response.result.coverage.details[]",
+    "canonical_type": true
    },
    "partial": {
     "type": "bool",
@@ -2845,7 +2921,8 @@
      "object": 1729
     },
     "items": "object",
-    "element_node": "attempt.response.result.coverage.sources[]"
+    "element_node": "attempt.response.result.coverage.sources[]",
+    "canonical_type": true
    }
   },
   "attempt.response.result.coverage.details[]": {
@@ -3063,7 +3140,8 @@
      "object": 664
     },
     "items": "object",
-    "element_node": "attempt.response.result.drivers[].affected_subjects[]"
+    "element_node": "attempt.response.result.drivers[].affected_subjects[]",
+    "canonical_type": true
    },
    "category": {
     "type": "string",
@@ -6858,7 +6936,8 @@
    "authorized_population_count": {
     "type": "int",
     "canonical_type": true,
-    "minimum": 0
+    "minimum": 0,
+    "nullable": true
    },
    "axis": {
     "type": "string",
@@ -6930,7 +7009,8 @@
      "object": 2964
     },
     "items": "object",
-    "element_node": "attempt.response.result.interpretation.fact_requirements[]"
+    "element_node": "attempt.response.result.interpretation.fact_requirements[]",
+    "canonical_type": true
    },
    "requested_judgment": {
     "type": "string",
@@ -6966,7 +7046,8 @@
     "node_visits": 1011,
     "observed": {
      "object": 1011
-    }
+    },
+    "canonical_type": true
    },
    "window_class": {
     "type": "string",
@@ -6985,6 +7066,12 @@
      "string": 2964
     },
     "canonical_type": true
+   },
+   "subjects": {
+    "type": "array",
+    "canonical_type": true,
+    "items": "object",
+    "element_node": "attempt.response.result.interpretation.fact_requirements[].subjects[]"
    }
   },
   "attempt.response.result.interpretation.fact_requirements[].subjects[]": {
@@ -7022,6 +7109,11 @@
     },
     "canonical_type": true
    },
+   "evidence_window": {
+    "type": "object",
+    "canonical_type": true,
+    "node": "attempt.response.result.interpretation.time_context.evidence_window"
+   },
    "start": {
     "type": "string",
     "node_visits": 1011,
@@ -7053,7 +7145,8 @@
      "object": 3309
     },
     "items": "object",
-    "element_node": "attempt.response.result.paths[].edges[]"
+    "element_node": "attempt.response.result.paths[].edges[]",
+    "canonical_type": true
    },
    "evidence_ref_ids": {
     "type": "array",
@@ -7070,7 +7163,8 @@
      "object": 6618
     },
     "items": "object",
-    "element_node": "attempt.response.result.paths[].nodes[]"
+    "element_node": "attempt.response.result.paths[].nodes[]",
+    "canonical_type": true
    },
    "path_id": {
     "type": "string",
@@ -7128,7 +7222,8 @@
     "node_visits": 3309,
     "observed": {
      "object": 3309
-    }
+    },
+    "canonical_type": true
    },
    "observed_at": {
     "type": "string",
@@ -7144,7 +7239,8 @@
     "node_visits": 3309,
     "observed": {
      "object": 3309
-    }
+    },
+    "canonical_type": true
    },
    "type": {
     "type": "string",
@@ -7289,7 +7385,8 @@
      "object": 27
     },
     "items": "object",
-    "element_node": "attempt.response.result.readiness_gaps[].subjects[]"
+    "element_node": "attempt.response.result.readiness_gaps[].subjects[]",
+    "canonical_type": true
    },
    "summary": {
     "type": "string",
@@ -7366,7 +7463,8 @@
      "object": 20
     },
     "items": "object",
-    "element_node": "attempt.response.result.remaining_work[].subjects[]"
+    "element_node": "attempt.response.result.remaining_work[].subjects[]",
+    "canonical_type": true
    },
    "summary": {
     "type": "string",
@@ -7451,7 +7549,8 @@
      "object": 250
     },
     "items": "object",
-    "element_node": "attempt.response.result.render_shapes[].series[]"
+    "element_node": "attempt.response.result.render_shapes[].series[]",
+    "canonical_type": true
    },
    "shape_id": {
     "type": "string",
@@ -7502,7 +7601,8 @@
      "object": 2000
     },
     "items": "object",
-    "element_node": "attempt.response.result.render_shapes[].series[].points[]"
+    "element_node": "attempt.response.result.render_shapes[].series[].points[]",
+    "canonical_type": true
    }
   },
   "attempt.response.result.render_shapes[].series[].points[]": {
@@ -7520,7 +7620,8 @@
     "node_visits": 2000,
     "observed": {
      "object": 2000
-    }
+    },
+    "canonical_type": true
    },
    "value": {
     "type": "number",
@@ -7594,6 +7695,18 @@
    }
   },
   "attempt.response.result.structure_needs": {
+   "accepted_grammars": {
+    "type": "array",
+    "canonical_type": true,
+    "items": "object",
+    "element_node": "attempt.response.result.structure_needs.accepted_grammars[]"
+   },
+   "anchor_options": {
+    "type": "array",
+    "canonical_type": true,
+    "items": "object",
+    "element_node": "attempt.response.result.structure_needs.anchor_options[]"
+   },
    "candidate_options": {
     "type": "array",
     "node_visits": 580,
@@ -7601,7 +7714,8 @@
      "object": 1303
     },
     "items": "object",
-    "element_node": "attempt.response.result.structure_needs.candidate_options[]"
+    "element_node": "attempt.response.result.structure_needs.candidate_options[]",
+    "canonical_type": true
    },
    "handle_options": {
     "type": "array",
@@ -7610,7 +7724,8 @@
      "object": 2682
     },
     "items": "object",
-    "element_node": "attempt.response.result.structure_needs.handle_options[]"
+    "element_node": "attempt.response.result.structure_needs.handle_options[]",
+    "canonical_type": true
    },
    "kind_options": {
     "type": "array",
@@ -7619,7 +7734,8 @@
      "object": 741
     },
     "items": "object",
-    "element_node": "attempt.response.result.structure_needs.kind_options[]"
+    "element_node": "attempt.response.result.structure_needs.kind_options[]",
+    "canonical_type": true
    },
    "missing": {
     "type": "array",
@@ -7636,7 +7752,8 @@
      "object": 337
     },
     "items": "object",
-    "element_node": "attempt.response.result.structure_needs.window_expand_options[]"
+    "element_node": "attempt.response.result.structure_needs.window_expand_options[]",
+    "canonical_type": true
    },
    "window_options": {
     "type": "array",
@@ -7645,7 +7762,8 @@
      "object": 1532
     },
     "items": "object",
-    "element_node": "attempt.response.result.structure_needs.window_options[]"
+    "element_node": "attempt.response.result.structure_needs.window_options[]",
+    "canonical_type": true
    }
   },
   "attempt.response.result.structure_needs.accepted_grammars[]": {
@@ -8071,7 +8189,8 @@
      "object": 2070
     },
     "items": "object",
-    "element_node": "attempt.response.result.subject_resolution.candidates[]"
+    "element_node": "attempt.response.result.subject_resolution.candidates[]",
+    "canonical_type": true
    },
    "clarification_prompt": {
     "type": "string",
@@ -8088,7 +8207,8 @@
      "object": 64
     },
     "items": "object",
-    "element_node": "attempt.response.result.subject_resolution.commit_decision_digests[]"
+    "element_node": "attempt.response.result.subject_resolution.commit_decision_digests[]",
+    "canonical_type": true
    },
    "committed": {
     "type": "array",
@@ -8097,7 +8217,8 @@
      "object": 64
     },
     "items": "object",
-    "element_node": "attempt.response.result.subject_resolution.committed[]"
+    "element_node": "attempt.response.result.subject_resolution.committed[]",
+    "canonical_type": true
    },
    "graph_not_projected": {
     "type": "bool",
@@ -8110,7 +8231,8 @@
      "object": 71
     },
     "items": "object",
-    "element_node": "attempt.response.result.subject_resolution.prior_subject_receipt_dispositions[]"
+    "element_node": "attempt.response.result.subject_resolution.prior_subject_receipt_dispositions[]",
+    "canonical_type": true
    },
    "retrieval_degraded": {
     "type": "bool",
@@ -8188,7 +8310,8 @@
     "node_visits": 2070,
     "observed": {
      "object": 2070
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.subject_resolution.candidates[].subject": {
@@ -8271,7 +8394,8 @@
     "node_visits": 64,
     "observed": {
      "object": 64
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.subject_resolution.commit_decision_digests[].subject": {
@@ -8521,7 +8645,8 @@
      "object": 1532
     },
     "items": "object",
-    "element_node": "attempt.response.result.window_clarification.options[]"
+    "element_node": "attempt.response.result.window_clarification.options[]",
+    "canonical_type": true
    }
   },
   "attempt.response.result.window_clarification.options[]": {
