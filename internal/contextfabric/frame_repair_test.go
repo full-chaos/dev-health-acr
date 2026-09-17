@@ -706,6 +706,21 @@ func TestTheCompareGroupedRepairRunsAtMostOnce(t *testing.T) {
 	}
 }
 
+// TestCompareGroupedRepairDecisionIsInTheClosedVocabulary holds that this
+// repair's own decline decision is a member of the closed vocabulary array,
+// not only a constant a call site names: a constant dropped from the
+// enumerated array would still compile and still log a value, invisibly
+// leaving it out of every consumer that walks the vocabulary rather than
+// naming the constant directly.
+func TestCompareGroupedRepairDecisionIsInTheClosedVocabulary(t *testing.T) {
+	for _, member := range FrameRepairDecisionVocabulary() {
+		if member == FrameRepairDeclinedNotGroupedCohort {
+			return
+		}
+	}
+	t.Fatalf("%q is not a member of FrameRepairDecisionVocabulary()", FrameRepairDeclinedNotGroupedCohort)
+}
+
 // TestEveryFrameRepairDecisionHasAnExecutedDriver holds, over the WHOLE
 // closed vocabulary and both repairs together, what
 // TestTheCountKindRepairIsBounded and TestTheCompareGroupedRepairIsBounded
