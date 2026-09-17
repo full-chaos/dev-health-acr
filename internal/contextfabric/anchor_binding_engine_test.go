@@ -446,6 +446,9 @@ func anchorProbeScenario(steps ...anchorProbeStep) func(*testing.T, EngineTeleme
 func lastLineHas(field string, want func(AnchorBindingTransitionEvent) bool) func(*testing.T, anchorSiteOutcome) {
 	return func(t *testing.T, on anchorSiteOutcome) {
 		t.Helper()
+		if len(on.transitions) == 0 {
+			t.Fatalf("no transition line to check %s on", field)
+		}
 		if line := on.transitions[len(on.transitions)-1]; !want(line) {
 			t.Fatalf("last line %s check failed: %+v", field, line)
 		}
@@ -697,6 +700,9 @@ func TestAnchorBindingShadowParityAtEverySaveSite(t *testing.T) {
 			}
 			if len(on.transitions) != wantLines {
 				t.Fatalf("the shadow-on arm emitted %d transition lines for %d saves", len(on.transitions), on.saves)
+			}
+			if len(on.transitions) == 0 {
+				t.Fatalf("the shadow-on arm emitted no transition line")
 			}
 			last := on.transitions[len(on.transitions)-1]
 			if last.Site != scenario.site || last.Evaluation != scenario.reach {

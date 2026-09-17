@@ -41,7 +41,7 @@ func TestShadowBindingBindsARedeemedAnchorReceipt(t *testing.T) {
 	line := lines[1]
 	want := AnchorBinding{State: AnchorBindingBound, Kind: SubjectRepository, CanonicalID: "repository:need-r2", Proof: AnchorBindingProofCallerReceipt,
 		Reason: AnchorBindingReasonCallerReceipt, OriginResultID: two.result.ResultID}
-	if !reflect.DeepEqual(line.To, want) || two.saved == nil || !reflect.DeepEqual(*two.saved.AnchorBinding, want) {
+	if !reflect.DeepEqual(line.To, want) || two.saved == nil || two.saved.AnchorBinding == nil || !reflect.DeepEqual(*two.saved.AnchorBinding, want) {
 		t.Fatalf("binding = %+v (persisted %+v), want %+v", line.To, two.saved, want)
 	}
 	if line.ReceiptAnchor != (anchorRef{Kind: SubjectRepository, ID: "repository:need-r2"}) || line.EffectiveKind != SubjectRepository {
