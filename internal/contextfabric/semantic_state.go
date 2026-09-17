@@ -171,7 +171,18 @@ type PersistedSemanticState struct {
 	// TestSemanticState_EverySnapshotKeyIsComparedOrExemptByName's own exempt
 	// entry for why.
 	ConfirmedNeeds []ConfirmedNeedEntry `json:"confirmed_needs,omitempty"`
+
+	// Extensions carries additive members no served path reads -- shadow and
+	// telemetry state -- so a binary that predates a member still decodes a
+	// row that carries it. Each member is raw JSON, kept as written and never
+	// interpreted by this codec; only the member's own reader decodes it.
+	// Omitted when empty, bounded by the snapshot's encoded-size cap, and
+	// never part of the continuation comparison.
+	Extensions SemanticStateExtensions `json:"extensions,omitempty"`
 }
+
+// SemanticStateExtensions maps a member name to its raw JSON value.
+type SemanticStateExtensions map[string]json.RawMessage
 
 // ConfirmedNeedEntry is one structure need's remembered confirmation
 // (CHAOS-5639): the value a receipt confirmed for one StructureNeedKind

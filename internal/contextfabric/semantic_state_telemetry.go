@@ -14,6 +14,7 @@ package contextfabric
 import (
 	"context"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -132,7 +133,21 @@ func semanticStateLogGroup(key string, state *PersistedSemanticState) slog.Attr 
 		// content, scope or option value reaches the line through it.
 		slog.String("request_identity_version", SanitizeLogAttr(state.RequestIdentity.Version)),
 		slog.String("request_identity_digest", SanitizeLogAttr(state.RequestIdentity.Digest)),
+		// The extension members the snapshot carries, by name only: their
+		// values are read and published by their own readers.
+		slog.Any("extension_members", SanitizeLogStrings(semanticStateExtensionMembers(state.Extensions))),
 	)
+}
+
+// semanticStateExtensionMembers is the sorted member names, empty (never nil)
+// when there are none.
+func semanticStateExtensionMembers(extensions SemanticStateExtensions) []string {
+	out := make([]string, 0, len(extensions))
+	for name := range extensions {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func semanticMemberQualifierToken(value MemberQualifier) string {

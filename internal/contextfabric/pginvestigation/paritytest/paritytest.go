@@ -902,12 +902,15 @@ func RunSemanticStateReadSuite(t *testing.T, newStore func(t *testing.T) (contex
 		t.Fatalf("marshal oversized: %v", err)
 	}
 	missingKey := bytes.Replace(canonical, []byte(`"narrowing_basis":"",`), nil, 1)
+	// A member a later build writes that this one knows nothing about.
+	extended := bytes.Replace(reordered, []byte(`{`), []byte(`{"extensions":{"member_from_a_later_build":{"state":"bound","epoch":7}},`), 1)
 	for _, tc := range []struct {
 		name   string
 		column []byte
 		want   contextfabric.SemanticStateReadStatus
 	}{
 		{"canonical, keys reordered", reordered, contextfabric.SemanticStateReadAvailable},
+		{"canonical with an unknown extension member", extended, contextfabric.SemanticStateReadAvailable},
 		{"an unsupported format", []byte(`{"format_version":"semantic-state.v9","anything":true}`), contextfabric.SemanticStateReadUnsupportedVersion},
 		{"a malformed document", []byte(`{"format_version":"semantic-state.v1","family":"not-a-family"}`), contextfabric.SemanticStateReadMalformed},
 		{"a canonical document missing one key", missingKey, contextfabric.SemanticStateReadMalformed},
@@ -935,8 +938,16 @@ func RunSemanticStateReadSuite(t *testing.T, newStore func(t *testing.T) (contex
 			if (stored.SemanticState != nil) != (tc.want == contextfabric.SemanticStateReadAvailable) {
 				t.Fatalf("snapshot present=%v beside status %s", stored.SemanticState != nil, stored.SemanticStateRead)
 			}
-			if tc.want == contextfabric.SemanticStateReadAvailable && !contextfabric.SemanticStatesEqual(stored.SemanticState, canonicalState) {
-				t.Fatalf("the reordered document did not decode to the canonical snapshot")
+			if tc.want == contextfabric.SemanticStateReadAvailable {
+				reading := *stored.SemanticState
+				members := len(reading.Extensions)
+				reading.Extensions = nil
+				if !contextfabric.SemanticStatesEqual(&reading, canonicalState) {
+					t.Fatalf("the document did not decode to the canonical snapshot")
+				}
+				if wantMembers := bytes.Count(tc.column, []byte(`"member_from_a_later_build"`)); members != wantMembers {
+					t.Fatalf("extension members = %d, want %d", members, wantMembers)
+				}
 			}
 			// And a replay of the row against an unreadable snapshot is a
 			// conflict, never an idempotent success.

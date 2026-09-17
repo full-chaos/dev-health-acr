@@ -2215,6 +2215,12 @@
             "type": "string",
             "presence": "conditional",
             "applicability": "written when present=true; a hash, never the inputs it was taken over"
+          },
+          {
+            "key": "extension_members",
+            "type": "string_slice",
+            "presence": "conditional",
+            "applicability": "written when present=true; the names of the snapshot's extension members, sorted, empty when none; never their values"
           }
         ]
       },
@@ -2904,6 +2910,12 @@
             "type": "string",
             "presence": "conditional",
             "applicability": "written when present=true; a hash, never the inputs it was taken over"
+          },
+          {
+            "key": "extension_members",
+            "type": "string_slice",
+            "presence": "conditional",
+            "applicability": "written when present=true; the names of the snapshot's extension members, sorted, empty when none; never their values"
           }
         ]
       },
@@ -3108,6 +3120,12 @@
             "type": "string",
             "presence": "conditional",
             "applicability": "written when present=true; a hash, never the inputs it was taken over"
+          },
+          {
+            "key": "extension_members",
+            "type": "string_slice",
+            "presence": "conditional",
+            "applicability": "written when present=true; the names of the snapshot's extension members, sorted, empty when none; never their values"
           }
         ]
       },
