@@ -905,11 +905,13 @@ var AnchorPool = Event{
 			// CHAOS-5825: WHY anchor_pool_kind_scope is "none" -- distinct
 			// upstream defects (no receipt kind and nothing carried, vs. a
 			// carried anchor the confirmed-kind gate withheld, vs. a carried
-			// anchor ScopeAnchorRetrievalKind itself refused) render
+			// anchor ScopeAnchorRetrievalKind itself refused, vs. the
+			// decision never running on this exit at all) render
 			// identically on scope/source alone. "not_applicable" when a
-			// scope WAS admitted.
+			// scope WAS admitted; "not_evaluated" for an exit before the
+			// decision ran, never a claim its inputs were proven empty.
 			Key: "anchor_pool_kind_scope_none_reason", Type: FieldString, Presence: PresenceRequired,
-			ClosedVocabulary: []string{"not_applicable", "no_receipt_kind_no_confirmed_anchor", "confirmed_anchor_no_confirmed_kind", "confirmed_anchor_kind_rejected"},
+			ClosedVocabulary: []string{"not_applicable", "no_receipt_kind_no_confirmed_anchor", "confirmed_anchor_no_confirmed_kind", "confirmed_anchor_kind_rejected", "not_evaluated"},
 		},
 		{
 			Key: "member_kind_confirmed", Type: FieldString, Presence: PresenceRequired,

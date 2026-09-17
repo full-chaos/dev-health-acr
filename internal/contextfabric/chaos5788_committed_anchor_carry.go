@@ -75,15 +75,19 @@ func provenanceForConfirmedNeedBasis(basis ConfirmedNeedBasis) contractsv1.Conte
 // identity-proven commit apart from one that never had a chance to find
 // one.
 //
-// SCOPED TO THE CHAOS-4234 GATE ONLY: the class-default window gate
-// (WindowCanonicalizationGatedClassDefault, engine.go) runs its subject
-// resolution offers-only and discards every commit-bearing output --
-// resolution, commit bases, commit digests -- unconditionally
-// (chaos4234_offers_only.go's own doc comment), so there is nothing
-// engineCommittedAnchorForCapture could safely be handed even if it ran on
-// that path. Every OTHER early exit still renders the unnamed empty value;
-// naming those too is a class-level change with its own scope to state,
-// never a per-exit addition made in passing.
+// NAMED FOR EVERY EXIT BETWEEN THE LEDGER'S OWN RESOLUTION AND THE CAPTURE
+// CHECK: the class-default window gate, a frame-gate refusal, a
+// graph-not-projected degrade, and a hard subject-resolution error each end
+// the turn before engineCommittedAnchorForCapture ever runs, and each does
+// so for a DIFFERENT reason a reader needs told apart -- a gate that will
+// never resolve a subject at all reads nothing like a resolution that tried
+// and errored. Every exit BEFORE the per-need ledger's own ONE resolution
+// point (resolveConfirmedNeedLedger, earlier in Investigate: window veto,
+// structure veto, interpretation failure, continuation refusal, a reuse
+// hit) still renders the unnamed NotApplicable default -- those exits never
+// reach a subject resolution attempt of any kind, a qualitatively different
+// state from "attempted and stopped," and naming them is its own,
+// separately-scoped change.
 type CaptureSkipReason string
 
 const (
@@ -102,6 +106,21 @@ const (
 	// saying so rather than leaving capture_decision silently
 	// empty.
 	CaptureSkipReasonWindowConfirmationGatedDiscard CaptureSkipReason = "window_confirmation_gated_discard"
+	// CaptureSkipReasonFrameGateRefused: the frame gate refused this turn
+	// (familyOutcome.Gate.Refuses()) before subject resolution ever ran --
+	// there is no resolution outcome of any kind for the capture check to
+	// read.
+	CaptureSkipReasonFrameGateRefused CaptureSkipReason = "frame_gate_refused"
+	// CaptureSkipReasonGraphNotProjected: this turn's own subject resolution
+	// queried a graph key that has never been created (ErrGraphNotProjected)
+	// and degraded to a clean empty terminal -- a confirmed absence of any
+	// graph to resolve against, not an unresolved anchor.
+	CaptureSkipReasonGraphNotProjected CaptureSkipReason = "graph_not_projected"
+	// CaptureSkipReasonResolutionError: subject resolution returned an error
+	// other than ErrGraphNotProjected (StageSubjectResolution) -- the
+	// resolution never completed, so there is no (frame, resolution,
+	// commitBases) triple for the capture check to read.
+	CaptureSkipReasonResolutionError CaptureSkipReason = "resolution_error"
 )
 
 // engineCommittedAnchorForCapture decides whether THIS turn's own resolution

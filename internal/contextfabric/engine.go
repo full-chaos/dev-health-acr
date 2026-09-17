@@ -2624,6 +2624,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// error -- a question whose frame the server will not act on is a real
 	// product outcome the caller must be able to read, not a 5xx.
 	if familyOutcome.Gate.Refuses() {
+		captureSkipReasonForTelemetry = CaptureSkipReasonFrameGateRefused
 		// Candidates/Committed non-nil empty for the same reason the
 		// branch below spells out: v1 bounds reject a nil array, and
 		// "resolved to zero" must stay distinguishable from "never
@@ -2687,6 +2688,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// is safe to degrade (a confirmed, unambiguous "no such graph
 		// key" classification, never a generic dependency failure).
 		if errors.Is(err, ErrGraphNotProjected) {
+			captureSkipReasonForTelemetry = CaptureSkipReasonGraphNotProjected
 			// Candidates/Committed must be non-nil empty slices, never a
 			// bare nil: ContextFabricSubjectResolution.Validate rejects a
 			// nil array as violating v1 bounds (it cannot tell "resolved
@@ -2723,6 +2725,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// binding above already succeeded, so this is the distinct
 		// commit-gate/subject-matching failure population StageGraphBinding
 		// deliberately does not cover.
+		captureSkipReasonForTelemetry = CaptureSkipReasonResolutionError
 		return InvestigationResult{}, stageError(StageSubjectResolution, fmt.Errorf("resolve subjects: %w", err))
 	}
 	// CHAOS-5788: whether THIS turn's own resolution just bound a committed

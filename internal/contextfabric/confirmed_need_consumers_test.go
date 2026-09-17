@@ -1293,6 +1293,39 @@ func TestRecordConfirmedNeedLedger_EmittedLines(t *testing.T) {
 	}
 }
 
+// TestRecordConfirmedNeedLedger_CaptureSkipReasonEmittedLines drives EVERY
+// declared CaptureSkipReason value through the real production logger (not
+// the event struct) -- a mutation dropping the emitter's own
+// capture_skip_reason key from telemetry.go's arg list is caught here, on
+// the ACTUAL JSON line, the same class of gap a struct-only assertion
+// cannot close.
+func TestRecordConfirmedNeedLedger_CaptureSkipReasonEmittedLines(t *testing.T) {
+	t.Parallel()
+	for _, reason := range []CaptureSkipReason{
+		CaptureSkipReasonNotApplicable,
+		CaptureSkipReasonWindowConfirmationGatedDiscard,
+		CaptureSkipReasonFrameGateRefused,
+		CaptureSkipReasonGraphNotProjected,
+		CaptureSkipReasonResolutionError,
+	} {
+		t.Run(string(reason), func(t *testing.T) {
+			t.Parallel()
+			var buf bytes.Buffer
+			telemetry := NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+			engine := mustReuseTestEngine(t, EngineDependencies{Results: &staticResultStore{results: map[string]InvestigationResult{}}, Telemetry: telemetry})
+			ledger := confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerMissNoReference, SourceResultID: ""}
+			engine.recordConfirmedNeedLedger(context.Background(), acceptancePrincipal(), ledger, nil, "", reason, ConfirmedAnchorAgreementNotApplicable, "")
+			var rec map[string]any
+			if err := json.Unmarshal(bytes.TrimRight(buf.Bytes(), "\n"), &rec); err != nil {
+				t.Fatalf("captured line is not JSON: %v -- line: %s", err, buf.String())
+			}
+			if got, _ := rec["capture_skip_reason"].(string); got != string(reason) {
+				t.Errorf("capture_skip_reason = %q, want %q -- the emitted line, not the event struct", got, reason)
+			}
+		})
+	}
+}
+
 func TestConfirmedNeedVocabularies(t *testing.T) {
 	t.Parallel()
 	for _, reason := range confirmedNeedMemberDropReasons() {

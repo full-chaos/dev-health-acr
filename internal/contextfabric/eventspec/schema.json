@@ -2641,7 +2641,8 @@
           "not_applicable",
           "no_receipt_kind_no_confirmed_anchor",
           "confirmed_anchor_no_confirmed_kind",
-          "confirmed_anchor_kind_rejected"
+          "confirmed_anchor_kind_rejected",
+          "not_evaluated"
         ]
       },
       {

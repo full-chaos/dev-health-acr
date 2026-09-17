@@ -2119,9 +2119,16 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 					// decided no anchor kind, admitted no scope, and reserved
 					// nothing -- the exact reading orNone/nonNil already give
 					// decisionSummaryBuffer's own never-fired case below.
+					// NoneReason is "not_evaluated", never
+					// NoReceiptNoConfirmedAnchor: this fallback covers EVERY
+					// early exit of resolveSubjects, including an
+					// organization-validation error, a cancelled context, or
+					// a caller-hint short circuit -- none of which prove the
+					// receipt and confirmed anchor were actually empty, only
+					// that the decision never ran to look.
 					DecisionAnchorPoolKindScope:           anchorPoolKindScopeNone,
 					DecisionAnchorPoolKindScopeSource:     anchorPoolKindScopeNone,
-					DecisionAnchorPoolKindScopeNoneReason: anchorPoolKindScopeNoneReasonNoReceiptNoConfirmedAnchor,
+					DecisionAnchorPoolKindScopeNoneReason: anchorPoolKindScopeNoneReasonNotEvaluated,
 					DecisionMemberKindConfirmed:           confirmedMemberKindToken(confirmedKind),
 					DecisionReservedKinds:                 []string{},
 					DecisionFilterKinds:                   []string{},

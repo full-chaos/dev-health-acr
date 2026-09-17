@@ -67,6 +67,16 @@ const (
 	// refused the confirmed anchor's own kind (e.g. it equals the frame's
 	// member kind, or the frame is not children_of_scope).
 	anchorPoolKindScopeNoneReasonConfirmedAnchorKindRejected = "confirmed_anchor_kind_rejected"
+	// anchorPoolKindScopeNoneReasonNotEvaluated: decideAnchorPoolKindScope
+	// never ran for this request at all -- the call it would have decided
+	// for exited earlier (an error, a cancelled context, a caller-hint
+	// short circuit) -- so there is no receipt/confirmed-anchor reading to
+	// report on either side. Distinct from
+	// NoReceiptNoConfirmedAnchor, which means the decision DID run and
+	// found both inputs genuinely empty: this call's own inputs are
+	// unknown here, not proven empty, and a caller reporting them as
+	// "empty" would be inventing an answer the exit never computed.
+	anchorPoolKindScopeNoneReasonNotEvaluated = "not_evaluated"
 )
 
 // decideAnchorPoolKindScope prefers the receipt and falls back to the

@@ -330,6 +330,38 @@ func TestTheAnchorPoolTraceLineCarriesTheRealNoneReason(t *testing.T) {
 	}
 }
 
+// TestTheAnchorPoolFallbackNamesNotEvaluatedOnAnEarlyExit drives the
+// PRODUCTION entry point (ResolveSubjectsWithCommitBasis) into an error exit
+// that happens BEFORE decideAnchorPoolKindScope ever runs -- with a receipt
+// anchor kind AND a confirmed anchor both supplied, so a fallback that
+// claimed "no_receipt_kind_no_confirmed_anchor" would be lying about inputs
+// it never actually read. The fallback's own NoneReason must say the
+// decision never ran, not invent a reading of inputs it never looked at.
+func TestTheAnchorPoolFallbackNamesNotEvaluatedOnAnEarlyExit(t *testing.T) {
+	t.Parallel()
+	req := testRequest()
+	req.Options.MaxSubjectCandidates = 20
+	capture := &anchorScopeCapture{}
+	deps := anchorRowBackend("chaos").deps()
+	deps.ResolutionTracer = capture
+	_, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+		storage.Principal{OrgID: ""}, req, testInterpreted("chaos"), deps,
+		confirmedProject(),
+		&contextfabric.ConfirmedAnchorSelection{Kind: contextfabric.SubjectTeam, CanonicalID: "team.v2:github:chaos"},
+		scopedProjectsFrame("chaos"), contextfabric.SubjectTeam)
+	if err == nil {
+		t.Fatal("ResolveSubjectsWithCommitBasis() error = nil, want the organization-required error this fixture is built to trigger")
+	}
+	if len(capture.anchorPool) == 0 {
+		t.Fatal("no anchor_pool summary was emitted on the error exit -- ExactlyOnePerRequest must still fire")
+	}
+	last := capture.anchorPool[len(capture.anchorPool)-1]
+	if last.DecisionAnchorPoolKindScopeNoneReason != anchorPoolKindScopeNoneReasonNotEvaluated {
+		t.Fatalf("DecisionAnchorPoolKindScopeNoneReason = %q, want %q -- both a receipt anchor kind and a confirmed anchor were supplied, so a reason claiming neither existed is false, not just imprecise",
+			last.DecisionAnchorPoolKindScopeNoneReason, anchorPoolKindScopeNoneReasonNotEvaluated)
+	}
+}
+
 // TestTheAnchorPoolLineNamesWhyTheScopeIsNone (CHAOS-5825) drives every
 // distinct way decideAnchorPoolKindScope ends "none" and pins its own
 // NoneReason for each: scope=none/source=none alone cannot tell "the model
