@@ -33,8 +33,24 @@ type ContextFabricCoverageDetailCode string
 const (
 	// ContextFabricCoverageDetailFactUnconfigured: no provider is
 	// registered for a planned fact kind (fact_registry.go's
-	// "canonical fact capability is not configured" branch).
+	// "canonical fact capability is not configured" branch) -- a RUNTIME
+	// registry gap, discovered while reading. It does NOT name a
+	// requirement the plan already knew it could never serve; those two
+	// planning-time reasons have their own codes immediately below.
 	ContextFabricCoverageDetailFactUnconfigured ContextFabricCoverageDetailCode = "fact_unconfigured"
+	// ContextFabricCoverageDetailFactNoDeclaringProducer: at PLANNING time,
+	// capabilities reach the requirement's subject kind, but none declares
+	// the obligation for it -- a DECLARATION change could serve the cell
+	// (mirrors the domain's RequirementReasonNoDeclaringProducer).
+	ContextFabricCoverageDetailFactNoDeclaringProducer ContextFabricCoverageDetailCode = "fact_no_declaring_producer"
+	// ContextFabricCoverageDetailFactTableShapeUndeclared: at PLANNING
+	// time, a capability declares the obligation for the subject kind, but
+	// not the table shape the obligation demands -- a QUERY change could
+	// serve the cell (mirrors the domain's RequirementReasonTableShapeUndeclared).
+	// A reader who sees this code apart from FactNoDeclaringProducer knows
+	// which of the two remedies applies; folding them into one code was
+	// the gap this pair closes.
+	ContextFabricCoverageDetailFactTableShapeUndeclared ContextFabricCoverageDetailCode = "fact_table_shape_undeclared"
 	// ContextFabricCoverageDetailFactScopeUnexpanded: a CHAOS-4099 scope
 	// gap — the requirement's facts were not directly reachable and scope
 	// expansion did not reach them (fact_planner.go's unexpandedReason).
@@ -245,6 +261,8 @@ const (
 // order — same unexported-array discipline as contextFabricFactKinds.
 var contextFabricCoverageDetailCodes = [...]ContextFabricCoverageDetailCode{
 	ContextFabricCoverageDetailFactUnconfigured,
+	ContextFabricCoverageDetailFactNoDeclaringProducer,
+	ContextFabricCoverageDetailFactTableShapeUndeclared,
 	ContextFabricCoverageDetailFactScopeUnexpanded,
 	ContextFabricCoverageDetailFactReadFailed,
 	ContextFabricCoverageDetailFactProviderReported,
@@ -484,6 +502,16 @@ type coverageDetailFieldRule struct {
 
 var coverageDetailFieldRules = map[ContextFabricCoverageDetailCode]coverageDetailFieldRule{
 	ContextFabricCoverageDetailFactUnconfigured: {
+		requireFactKind: true, allowFactKind: true, allowSourceState: true,
+	},
+	// Both planning-time codes carry exactly what FactUnconfigured does:
+	// which fact kind, and (when a source spoke) its state. Neither is a
+	// scope, narrowing or count fact -- the plan decided this before any
+	// read ran.
+	ContextFabricCoverageDetailFactNoDeclaringProducer: {
+		requireFactKind: true, allowFactKind: true, allowSourceState: true,
+	},
+	ContextFabricCoverageDetailFactTableShapeUndeclared: {
 		requireFactKind: true, allowFactKind: true, allowSourceState: true,
 	},
 	ContextFabricCoverageDetailFactScopeUnexpanded: {

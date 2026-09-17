@@ -89,7 +89,7 @@ func TestStateMemberRequirementKeepsHealthIndependent(t *testing.T) {
 					}
 					if row.Requirement == "health/member/"+string(tc.kind) {
 						healthRows++
-						if row.Outcome != v1.ContextFabricRequirementUnavailable || row.Stage != v1.ContextFabricOutcomeStagePlanning || row.CauseCoverage != v1.ContextFabricCoverageDetailFactUnconfigured {
+						if row.Outcome != v1.ContextFabricRequirementUnavailable || row.Stage != v1.ContextFabricOutcomeStagePlanning || row.CauseCoverage != v1.ContextFabricCoverageDetailFactNoDeclaringProducer {
 							t.Errorf("required health=%+v", row)
 						}
 					}

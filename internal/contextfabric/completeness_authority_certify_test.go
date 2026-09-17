@@ -206,6 +206,21 @@ func TestEveryClosedValueOnTheCompletenessAuthorityLineCertifies(t *testing.T) {
 		"direction": func(e *contextfabric.CompletenessAuthorityObservation, v string) {
 			e.Direction = contextfabric.CompletenessAuthorityDirection(v)
 		},
+		"deciding_stage": func(e *contextfabric.CompletenessAuthorityObservation, v string) {
+			e.DecidingStage = contractsv1.ContextFabricOutcomeStage(v)
+		},
+		"deciding_outcome": func(e *contextfabric.CompletenessAuthorityObservation, v string) {
+			e.DecidingOutcome = contractsv1.ContextFabricPlanRequirementOutcome(v)
+		},
+		"deciding_cause_overrun": func(e *contextfabric.CompletenessAuthorityObservation, v string) {
+			e.DecidingCauseOverrun = contractsv1.ContextFabricBudgetOverrun(v)
+		},
+		"deciding_cause_coverage": func(e *contextfabric.CompletenessAuthorityObservation, v string) {
+			e.DecidingCauseCoverage = contractsv1.ContextFabricCoverageDetailCode(v)
+		},
+		"deciding_cause_narrowing": func(e *contextfabric.CompletenessAuthorityObservation, v string) {
+			e.DecidingCauseNarrowing = contractsv1.ContextFabricNarrowingBasis(v)
+		},
 	}
 	closed := 0
 	for _, field := range eventspec.CompletenessAuthority.Fields {

@@ -206,6 +206,232 @@
         "presence": "required"
       },
       {
+        "key": "deciding_requirement",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "deciding_stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "planning",
+          "assembled_result",
+          "projection",
+          "reuse"
+        ]
+      },
+      {
+        "key": "deciding_outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "satisfied",
+          "narrowed",
+          "unavailable",
+          "not_applicable",
+          "not_attempted"
+        ]
+      },
+      {
+        "key": "deciding_cause_overrun",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "fits",
+          "items",
+          "bytes"
+        ]
+      },
+      {
+        "key": "deciding_cause_coverage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "fact_unconfigured",
+          "fact_no_declaring_producer",
+          "fact_table_shape_undeclared",
+          "fact_scope_unexpanded",
+          "fact_read_failed",
+          "fact_provider_reported",
+          "fact_pruned",
+          "fact_narrowed",
+          "graph_endpoint_lookup_failed",
+          "graph_exact_name_candidates_truncated",
+          "graph_cohort_denied_by_authorization",
+          "graph_unknown_relationship_type",
+          "graph_validity_unbounded",
+          "reuse_auxiliary_refs_stripped",
+          "answer_terminated_before_attempt",
+          "population_truncated",
+          "read_population_unverified",
+          "requirement_read_not_planned",
+          "fact_read_origin_state",
+          "kind_census_truncated"
+        ]
+      },
+      {
+        "key": "deciding_cause_narrowing",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "canonical_id_lexical",
+          "largest_group_round_robin",
+          "attention_rank",
+          "overlap_aware_set_cover"
+        ]
+      },
+      {
+        "key": "deciding_read_evaluation_gap",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "outcome_rows_total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "outcome_rows_satisfied",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "outcome_rows_narrowed",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "outcome_rows_unavailable",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "outcome_rows_not_applicable",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "outcome_rows_not_attempted",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "claimed_facts_identity",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "claimed_facts_membership",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "claimed_facts_status",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "claimed_facts_actual_completion",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "claimed_facts_work",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "claimed_facts_blockers",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "claimed_facts_required_children",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "claimed_facts_pull_requests",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "claimed_facts_reviews",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "claimed_facts_continuous_integration",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "claimed_facts_deployments",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "claimed_facts_incidents",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "claimed_facts_metrics",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "claimed_facts_health",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "claimed_facts_workload",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "claimed_facts_investment",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "claimed_facts_readiness",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "claimed_facts_operational_deficiencies",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "claimed_facts_source_health",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "claimed_facts_evidence",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "claimed_facts_flow",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "claimed_facts_landscape",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "request_id",
         "type": "string",
         "presence": "required"

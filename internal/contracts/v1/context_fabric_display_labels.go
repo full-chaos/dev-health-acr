@@ -232,6 +232,10 @@ func ComposeCoverageDetailLabel(d ContextFabricCoverageDetail) string {
 	switch d.Code {
 	case ContextFabricCoverageDetailFactUnconfigured:
 		label = "No source is configured for " + kind + " facts"
+	case ContextFabricCoverageDetailFactNoDeclaringProducer:
+		label = "No source declares " + kind + " facts for this subject"
+	case ContextFabricCoverageDetailFactTableShapeUndeclared:
+		label = "The source for " + kind + " facts does not declare the shape this needs"
 	case ContextFabricCoverageDetailFactScopeUnexpanded:
 		label = kindClause(kind) + " facts were not reachable from this question's subject"
 	case ContextFabricCoverageDetailFactReadFailed:

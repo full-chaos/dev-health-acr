@@ -22,6 +22,10 @@ func validDetailForCode(code ContextFabricCoverageDetailCode) ContextFabricCover
 	switch code {
 	case ContextFabricCoverageDetailFactUnconfigured:
 		d.Source, d.FactKind, d.SourceState = "canonical_fact:blockers", ContextFabricFactBlockers, ContextFabricSourceUnconfigured
+	case ContextFabricCoverageDetailFactNoDeclaringProducer:
+		d.Source, d.FactKind, d.SourceState = "canonical_fact:blockers", ContextFabricFactBlockers, ContextFabricSourceUnconfigured
+	case ContextFabricCoverageDetailFactTableShapeUndeclared:
+		d.Source, d.FactKind, d.SourceState = "canonical_fact:blockers", ContextFabricFactBlockers, ContextFabricSourceUnconfigured
 	case ContextFabricCoverageDetailFactScopeUnexpanded:
 		d.Source, d.FactKind, d.SourceState = "canonical_fact:blockers", ContextFabricFactBlockers, ContextFabricSourceUnconfigured
 		d.ScopeOutcome, d.OriginKind, d.Policy, d.Basis = "policy_unavailable", ContextFabricSubjectTeam, "none", "activity_proxy"

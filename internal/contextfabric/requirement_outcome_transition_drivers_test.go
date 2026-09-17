@@ -11,7 +11,7 @@ package contextfabric
 // derivation reason the seed carries is decided by the registry the engine is
 // given: none supporting teams (subject_kind_unsupported, wire `fact_pruned`)
 // or one supporting teams without declaring `state` (no_declaring_producer,
-// wire `fact_unconfigured`).
+// wire `fact_no_declaring_producer`).
 
 import (
 	"bytes"
@@ -161,8 +161,7 @@ func assertTransitionSetIsNumbered(t *testing.T, events []RequirementOutcomeTran
 
 // TestAnUnservableStateNarrowedAtAssemblyNamesItsDerivationReason drives both
 // derivation reasons a `state` seed can carry to the same assembled narrowing,
-// and pins that the line names each reason where the wire code names two
-// different collapsed codes.
+// and pins that the line names each reason with its own distinct wire code.
 func TestAnUnservableStateNarrowedAtAssemblyNamesItsDerivationReason(t *testing.T) {
 	t.Parallel()
 	for _, cell := range []struct {
@@ -172,7 +171,7 @@ func TestAnUnservableStateNarrowedAtAssemblyNamesItsDerivationReason(t *testing.
 		seedCode contractsv1.ContextFabricCoverageDetailCode
 	}{
 		{"no producer reaches teams", registryDeriver{}, RequirementReasonSubjectKindUnsupported, contractsv1.ContextFabricCoverageDetailFactPruned},
-		{"teams reached, state undeclared", registryDeriver{capabilities: teamStatusWithoutStateCapabilities()}, RequirementReasonNoDeclaringProducer, contractsv1.ContextFabricCoverageDetailFactUnconfigured},
+		{"teams reached, state undeclared", registryDeriver{capabilities: teamStatusWithoutStateCapabilities()}, RequirementReasonNoDeclaringProducer, contractsv1.ContextFabricCoverageDetailFactNoDeclaringProducer},
 	} {
 		cell := cell
 		t.Run(cell.name, func(t *testing.T) {
