@@ -248,13 +248,17 @@ func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal stor
 	}
 
 	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
-		rowCount, projectRejected, scanErr := p.readProjectActualCompletion(ctx, orgID, projectSubjects, &facts, timeBound, scope, settings, budget)
+		rowCount, servedCount, projectRejected, scanErr := p.readProjectActualCompletion(ctx, orgID, projectSubjects, &facts, timeBound, scope, settings, budget)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query project actual completion", scanErr)
 		}
 		rejected += projectRejected
 		budget.observe(rowCount)
-		totalRows += rowCount
+		// totalRows drives retentionState (an AVAILABILITY signal), so it
+		// takes servedCount, not rowCount -- see readProjectActualCompletion's
+		// doc comment for why an all-cancelled project must not read as
+		// State=available with zero facts.
+		totalRows += servedCount
 	}
 
 	state, retentionReason := timeBound.retentionState(totalRows)
@@ -281,9 +285,9 @@ func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal stor
 // once a source signal exists, is an additive countIf column plus
 // flipping this constant, not a reshape.
 //
-// workItemUnknownStatus is NOT excluded (chris/team-lead: counted in the
-// denominator, only disclosed) -- it is a distinct, disclosed count, never
-// folded into cancelled_count or silently dropped.
+// workItemUnknownStatus is NOT excluded -- it counts in the denominator,
+// same as any other non-cancelled status. It is a distinct, disclosed
+// count, never folded into cancelled_count and never silently dropped.
 const (
 	workItemCancelledStatus = "canceled"
 	workItemUnknownStatus   = "unknown"
@@ -315,13 +319,23 @@ const (
 // A project with zero matching work items gets NO ROW from the GROUP BY,
 // never a row with a zero count; a project whose work items are ALL
 // cancelled gets a row with countedWorkItems == 0 and is likewise not
-// emitted as a fact below. Either way the caller's existing empty-result
-// state machinery (retentionState) reports it honestly as no_data, so this
+// emitted as a fact below. Either way the caller's empty-result state
+// machinery (retentionState) reports it honestly as no_data, so this
 // producer never defaults a project's completion to 0% or 100%.
-func (p *ActualCompletionProvider) readProjectActualCompletion(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, scope readers.AuthorizationScope, settings readers.Settings, budget *factBudget) (rowCount int, rejected int, err error) {
+//
+// rowCount and servedCount are DELIBERATELY two different numbers: rowCount
+// is every row ClickHouse returned that matched a requested subject (feeds
+// budget.observe, a TRUNCATION signal -- the source DID answer for that
+// project), while servedCount is only the rows that actually became a fact
+// (feeds the caller's retentionState, an AVAILABILITY signal). An
+// all-cancelled project is counted in rowCount (ClickHouse answered) but
+// NOT in servedCount (nothing servable came of it) -- collapsing the two
+// would report State=available for a project this producer served no fact
+// for, which is exactly the false-positive chris's ruling forbids.
+func (p *ActualCompletionProvider) readProjectActualCompletion(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, scope readers.AuthorizationScope, settings readers.Settings, budget *factBudget) (rowCount, servedCount, rejected int, err error) {
 	ids, bySubject, rejected := v2Index(subjects, identity.KindProject)
 	if len(ids) == 0 {
-		return 0, rejected, nil
+		return 0, 0, rejected, nil
 	}
 	completedExpr := "isNotNull(w.completed_at)"
 	if timeBound.active {
@@ -340,15 +354,15 @@ func (p *ActualCompletionProvider) readProjectActualCompletion(ctx context.Conte
 		}
 		rowCount++
 		// countedWorkItems is the ratio's true denominator (chris: cancelled
-		// never counts, in EITHER direction; unknown-status items DO count,
-		// per team-lead's RISK-NOTES instruction -- only disclosed, never
-		// excluded). A project whose members are all cancelled is not "0%
-		// complete" -- it has nothing left to count, so it is treated
-		// exactly like zero members: no fact.
+		// never counts, in EITHER direction; unknown-status items DO count
+		// -- disclosed separately, never excluded). A project whose members
+		// are all cancelled is not "0% complete" -- it has nothing left to
+		// count, so it is treated exactly like zero members: no fact.
 		countedWorkItems := workItemCount - cancelledCount
 		if countedWorkItems == 0 {
 			return nil
 		}
+		servedCount++
 		if !budget.admit() {
 			return nil
 		}
@@ -370,9 +384,9 @@ func (p *ActualCompletionProvider) readProjectActualCompletion(ctx context.Conte
 		return nil
 	}, timeBound.bindings()...)
 	if scanErr != nil {
-		return 0, rejected, scanErr
+		return 0, 0, rejected, scanErr
 	}
-	return rowCount, rejected, nil
+	return rowCount, servedCount, rejected, nil
 }
 
 // workItemProjectCompletionStatement is the project-grain counterpart to
