@@ -1,6 +1,6 @@
 {
  "_generated_by": "scripts/corpus/measure_schema.py",
- "_why": "Derive the artefact boundary schema FROM THE ARTEFACTS. CHAOS-5430.\n\nThe hand-written schema was an approximation of the data, and three separate review rounds\nfound the same defect in it: the boundary stopped one level above the code that read across\nit (r5 nested result data, r9 array elements and the live body, r10 nested live shapes and\ncommitted element fields). Each round pushed it one level deeper by hand and the next round\nfound the next level. Patching a predicate could not end that, because the defect was never\nin a predicate -- it was that a human decided which paths existed.\n\nSo the schema is no longer written. It is MEASURED: every path, at every depth, in every\nartefact, with the types that actually occur there. A path the engine emits cannot be\nmissing from the boundary, because the boundary is a report about what the engine emits.\n\nNULLABILITY IS PART OF THE MEASUREMENT, and it is the reason this can be strict without\nbreaking scoring. `committed[].kind` occurs as a string and, in a malformed artefact, as\nnull. Typing it \"string\" rejects the artefact, and the row then scores agree_weak through\nthe unreadable-artefact cap instead of the disagree it earns as a subject substitution --\ndoubt making a failed row look BETTER. Typing it \"string, nullable\" rejects `kind: []` and\n`kind: 1` while letting an explicit null through to substitution scoring, which is what\nthat row needs. Round 10's reviewer supplied that resolution.\n\n`number` vs `int` is measured too, and bool is never either: Python's bool is an int\nsubclass, so a JSON `true` passes an `int` check and a `number` check unless both are\nguarded. The guard belongs here, where the type is decided, not at each call site.",
+ "_why": "Derive the artefact boundary schema FROM THE ARTEFACTS. CHAOS-5430.\n\nThe hand-written schema was an approximation of the data, and three separate review rounds\nfound the same defect in it: the boundary stopped one level above the code that read across\nit (r5 nested result data, r9 array elements and the live body, r10 nested live shapes and\ncommitted element fields). Each round pushed it one level deeper by hand and the next round\nfound the next level. Patching a predicate could not end that, because the defect was never\nin a predicate -- it was that a human decided which paths existed.\n\nSo the schema is no longer written. It is MEASURED: every path, at every depth, in every\nartefact, with the types that actually occur there. A path the engine emits cannot be\nmissing from the boundary, because the boundary is a report about what the engine emits.\n\nNULLABILITY IS PART OF THE MEASUREMENT, and it is the reason this can be strict without\nbreaking scoring. `committed[].kind` occurs as a string and, in a malformed artefact, as\nnull. Typing it \"string\" rejects the artefact, and the row then scores agree_weak through\nthe unreadable-artefact cap instead of the disagree it earns as a subject substitution --\ndoubt making a failed row look BETTER. Typing it \"string, nullable\" rejects `kind: []` and\n`kind: 1` while letting an explicit null through to substitution scoring, which is what\nthat row needs. Round 10's reviewer supplied that resolution.\n\n`number` vs `int` is measured too, and bool is never either: Python's bool is an int\nsubclass, so a JSON `true` passes an `int` check and a `number` check unless both are\nguarded. The guard belongs here, where the type is decided, not at each call site.\n\nCHAOS-5826: sampling alone can UNDER-type a field the canonical contract already settles.\n`cohort.members[].drivers[].value` is a genuine 0..1 ratio by design (declared `number` in\ncontracts/jsonschema/v1, enforced 0..1 by acr's own write-path validator) -- every artefact\nthis file had samples from at generation time happened to carry a whole-number value there,\nso pure observation locked it to `int`, and a later contractually-valid fraction then reads\nas a boundary violation instead of the served answer it is. `canonical_field_types` below\nwalks the canonical schema itself for exactly the fields it declares, and `main` lets that\nwalk override a sample-inferred type wherever the two disagree -- sampling stays the only\nauthority for a field the canonical schema leaves open (oneOf, or not in the contract).",
  "_artefacts_measured": 1063,
  "_roots": [
   "/home/ubuntu/.cache/acr-kiac-askdev/proofs/2026-09-06-corpus-5293/seq-arm2",
@@ -30,6 +30,10 @@
   "schema_null_policy.json",
   "--declared-paths",
   "schema_declared_paths.json",
+  "--canonical-entry",
+  "../../contracts/jsonschema/v1/context_fabric_investigation_result.v2.schema.json",
+  "--canonical-node-prefix",
+  "attempt.response.result",
   "--consumers",
   "subject_identity.py",
   "engine_failures.py",
@@ -58,6 +62,81 @@
   "attempt.response.request_id"
  ],
  "_declared_required": [],
+ "_canonical_type_overrides": [
+  "attempt.response.result.answer_plan.narrowing[].groups None->'bool'",
+  "attempt.response.result.claimed_facts[].table.order_by None->'string'",
+  "attempt.response.result.claimed_facts[].time_series_table.order_by None->'string'",
+  "attempt.response.result.cohort.exclusions[].reason None->'string'",
+  "attempt.response.result.cohort.exclusions[].subject.canonical_id None->'string'",
+  "attempt.response.result.cohort.exclusions[].subject.kind None->'string'",
+  "attempt.response.result.cohort.exclusions[].subject.label None->'string'",
+  "attempt.response.result.cohort.judgment_mismatch None->'bool'",
+  "attempt.response.result.cohort.members[].drivers[].value 'int'->'number'",
+  "attempt.response.result.cohort.members[].drivers[].weight 'int'->'number'",
+  "attempt.response.result.cohort.members[].score 'int'->'number'",
+  "attempt.response.result.cohort.score_meaning None->'string'",
+  "attempt.response.result.completeness.outcomes[].cause_narrowing None->'string'",
+  "attempt.response.result.completeness.outcomes[].refinements[].basis None->'string'",
+  "attempt.response.result.confirmed_structure[].prior_entry_id None->'string'",
+  "attempt.response.result.confirmed_structure[].prior_version_id None->'string'",
+  "attempt.response.result.conflicts[].finding_id None->'string'",
+  "attempt.response.result.conflicts[].kind None->'string'",
+  "attempt.response.result.conflicts[].subjects[].canonical_id None->'string'",
+  "attempt.response.result.conflicts[].subjects[].kind None->'string'",
+  "attempt.response.result.conflicts[].subjects[].label None->'string'",
+  "attempt.response.result.conflicts[].summary None->'string'",
+  "attempt.response.result.coverage.details[].declared None->'int'",
+  "attempt.response.result.coverage.details[].kind None->'string'",
+  "attempt.response.result.coverage.details[].served None->'int'",
+  "attempt.response.result.coverage.sources[].watermark None->'string'",
+  "attempt.response.result.fact_scope_census[].admitted_count None->'int'",
+  "attempt.response.result.fact_scope_census[].authorized_population_count None->'int'",
+  "attempt.response.result.fact_scope_census[].axis None->'string'",
+  "attempt.response.result.fact_scope_census[].basis None->'string'",
+  "attempt.response.result.fact_scope_census[].origin_kind None->'string'",
+  "attempt.response.result.fact_scope_census[].outcome None->'string'",
+  "attempt.response.result.fact_scope_census[].policy None->'string'",
+  "attempt.response.result.fact_scope_census[].population_measured None->'bool'",
+  "attempt.response.result.fact_scope_census[].requirement_kind None->'string'",
+  "attempt.response.result.fact_scope_census[].target_limit None->'int'",
+  "attempt.response.result.fact_scope_census[].truncated None->'bool'",
+  "attempt.response.result.interpretation.fact_requirements[].subjects[].canonical_id None->'string'",
+  "attempt.response.result.interpretation.fact_requirements[].subjects[].kind None->'string'",
+  "attempt.response.result.interpretation.fact_requirements[].subjects[].label None->'string'",
+  "attempt.response.result.interpretation.requested_judgment_kind None->'string'",
+  "attempt.response.result.interpretation.time_context.as_of None->'string'",
+  "attempt.response.result.interpretation.time_context.evidence_window.end None->'string'",
+  "attempt.response.result.interpretation.time_context.evidence_window.relative_id None->'string'",
+  "attempt.response.result.interpretation.time_context.evidence_window.start None->'string'",
+  "attempt.response.result.interpretation.window_class None->'string'",
+  "attempt.response.result.interpretation.window_confidence None->'string'",
+  "attempt.response.result.limitations_displaced None->'int'",
+  "attempt.response.result.semantic_reading.reason None->'string'",
+  "attempt.response.result.semantic_reading.status None->'string'",
+  "attempt.response.result.structure_needs.accepted_grammars[].kind None->'string'",
+  "attempt.response.result.structure_needs.accepted_grammars[].member None->'string'",
+  "attempt.response.result.structure_needs.accepted_grammars[].pattern_id None->'string'",
+  "attempt.response.result.structure_needs.anchor_options[].canonical_id None->'string'",
+  "attempt.response.result.structure_needs.anchor_options[].kind None->'string'",
+  "attempt.response.result.structure_needs.anchor_options[].label None->'string'",
+  "attempt.response.result.structure_needs.anchor_options[].matched_term_hash None->'string'",
+  "attempt.response.result.structure_needs.anchor_options[].offer_source None->'string'",
+  "attempt.response.result.structure_needs.anchor_options[].option_id None->'string'",
+  "attempt.response.result.structure_needs.anchor_options[].phrasing None->'string'",
+  "attempt.response.result.structure_needs.anchor_options[].prior_entry_id None->'string'",
+  "attempt.response.result.structure_needs.anchor_options[].prior_version_id None->'string'",
+  "attempt.response.result.structure_needs.anchor_options[].receipt_id None->'string'",
+  "attempt.response.result.structure_needs.candidate_options[].prior_entry_id None->'string'",
+  "attempt.response.result.structure_needs.candidate_options[].prior_version_id None->'string'",
+  "attempt.response.result.structure_needs.handle_options[].prior_entry_id None->'string'",
+  "attempt.response.result.structure_needs.handle_options[].prior_version_id None->'string'",
+  "attempt.response.result.structure_needs.kind_options[].prior_entry_id None->'string'",
+  "attempt.response.result.structure_needs.kind_options[].prior_version_id None->'string'",
+  "attempt.response.result.structure_offer_snapshot[].prior_entry_id None->'string'",
+  "attempt.response.result.structure_offer_snapshot[].prior_version_id None->'string'",
+  "attempt.response.result.subject_resolution.graph_not_projected None->'bool'",
+  "attempt.response.result.versions.backend_version None->'string'"
+ ],
  "_null_policy_applied": [
   {
    "path": "attempt.response.result.subject_resolution.candidates[].subject.canonical_id",
@@ -384,21 +463,24 @@
     "node_visits": 1011,
     "observed": {
      "string": 1011
-    }
+    },
+    "canonical_type": true
    },
    "deterministic_answer": {
     "type": "string",
     "node_visits": 1011,
     "observed": {
      "string": 1011
-    }
+    },
+    "canonical_type": true
    },
    "direct_judgment": {
     "type": "string",
     "node_visits": 1011,
     "observed": {
      "string": 1011
-    }
+    },
+    "canonical_type": true
    },
    "drivers": {
     "type": "array",
@@ -438,7 +520,8 @@
     "node_visits": 1011,
     "observed": {
      "string": 1011
-    }
+    },
+    "canonical_type": true
    },
    "interpretation": {
     "type": "object",
@@ -456,6 +539,12 @@
     },
     "items": "string"
    },
+   "limitations_displaced": {
+    "type": "int",
+    "canonical_type": true,
+    "minimum": 0,
+    "maximum": 100
+   },
    "paths": {
     "type": "array",
     "node_visits": 1011,
@@ -470,7 +559,8 @@
     "node_visits": 1011,
     "observed": {
      "string": 1011
-    }
+    },
+    "canonical_type": true
    },
    "readiness_gaps": {
     "type": "array",
@@ -486,7 +576,8 @@
     "node_visits": 1011,
     "observed": {
      "string": 25
-    }
+    },
+    "canonical_type": true
    },
    "remaining_work": {
     "type": "array",
@@ -511,21 +602,24 @@
     "node_visits": 1011,
     "observed": {
      "string": 1011
-    }
+    },
+    "canonical_type": true
    },
    "result_id": {
     "type": "string",
     "node_visits": 1011,
     "observed": {
      "string": 1011
-    }
+    },
+    "canonical_type": true
    },
    "reused": {
     "type": "bool",
     "node_visits": 1011,
     "observed": {
      "bool": 1011
-    }
+    },
+    "canonical_type": true
    },
    "schema_version": {
     "type": "string",
@@ -539,7 +633,8 @@
     "node_visits": 1011,
     "observed": {
      "string": 1011
-    }
+    },
+    "canonical_type": true
    },
    "strongest_pressures": {
     "type": "array",
@@ -637,35 +732,40 @@
     "node_visits": 1011,
     "observed": {
      "string": 1011
-    }
+    },
+    "canonical_type": true
    },
    "family_source": {
     "type": "string",
     "node_visits": 1011,
     "observed": {
      "string": 1011
-    }
+    },
+    "canonical_type": true
    },
    "family_version": {
     "type": "string",
     "node_visits": 1011,
     "observed": {
      "string": 1011
-    }
+    },
+    "canonical_type": true
    },
    "group_kind": {
     "type": "string",
     "node_visits": 1011,
     "observed": {
      "string": 195
-    }
+    },
+    "canonical_type": true
    },
    "member_kind": {
     "type": "string",
     "node_visits": 1011,
     "observed": {
      "string": 87
-    }
+    },
+    "canonical_type": true
    },
    "narrowing": {
     "type": "array",
@@ -689,14 +789,16 @@
     "node_visits": 1011,
     "observed": {
      "bool": 1011
-    }
+    },
+    "canonical_type": true
    },
    "require_ranking": {
     "type": "bool",
     "node_visits": 1011,
     "observed": {
      "bool": 1011
-    }
+    },
+    "canonical_type": true
    },
    "requirements": {
     "type": "array",
@@ -714,35 +816,44 @@
     "node_visits": 1011,
     "observed": {
      "int": 1011
-    }
+    },
+    "canonical_type": true,
+    "minimum": 0
    },
    "max_members": {
     "type": "int",
     "node_visits": 1011,
     "observed": {
      "int": 1011
-    }
+    },
+    "canonical_type": true,
+    "minimum": 0
    },
    "max_serialized_bytes": {
     "type": "int",
     "node_visits": 1011,
     "observed": {
      "int": 1011
-    }
+    },
+    "canonical_type": true,
+    "minimum": 0
    },
    "narrowing_basis": {
     "type": "string",
     "node_visits": 1011,
     "observed": {
      "string": 1011
-    }
+    },
+    "canonical_type": true
    },
    "synthesis_headroom": {
     "type": "int",
     "node_visits": 1011,
     "observed": {
      "int": 1011
-    }
+    },
+    "canonical_type": true,
+    "minimum": 0
    }
   },
   "attempt.response.result.answer_plan.narrowing[]": {
@@ -751,35 +862,46 @@
     "node_visits": 578,
     "observed": {
      "int": 578
-    }
+    },
+    "canonical_type": true,
+    "minimum": 0
    },
    "basis": {
     "type": "string",
     "node_visits": 578,
     "observed": {
      "string": 578
-    }
+    },
+    "canonical_type": true
    },
    "before": {
     "type": "int",
     "node_visits": 578,
     "observed": {
      "int": 578
-    }
+    },
+    "canonical_type": true,
+    "minimum": 0
+   },
+   "groups": {
+    "type": "bool",
+    "canonical_type": true
    },
    "overrun": {
     "type": "string",
     "node_visits": 578,
     "observed": {
      "string": 1
-    }
+    },
+    "canonical_type": true
    },
    "stage": {
     "type": "string",
     "node_visits": 578,
     "observed": {
      "string": 578
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.answer_plan.requirements[]": {
@@ -796,7 +918,8 @@
     "node_visits": 2235,
     "observed": {
      "string": 121
-    }
+    },
+    "canonical_type": true
    },
    "input_fact_kinds": {
     "type": "array",
@@ -811,70 +934,80 @@
     "node_visits": 2235,
     "observed": {
      "string": 2235
-    }
+    },
+    "canonical_type": true
    },
    "obligation": {
     "type": "string",
     "node_visits": 2235,
     "observed": {
      "string": 2235
-    }
+    },
+    "canonical_type": true
    },
    "quantifier": {
     "type": "string",
     "node_visits": 2235,
     "observed": {
      "string": 2235
-    }
+    },
+    "canonical_type": true
    },
    "requirement": {
     "type": "string",
     "node_visits": 2235,
     "observed": {
      "string": 2235
-    }
+    },
+    "canonical_type": true
    },
    "role": {
     "type": "string",
     "node_visits": 2235,
     "observed": {
      "string": 2235
-    }
+    },
+    "canonical_type": true
    },
    "scope": {
     "type": "string",
     "node_visits": 2235,
     "observed": {
      "string": 2235
-    }
+    },
+    "canonical_type": true
    },
    "step": {
     "type": "string",
     "node_visits": 2235,
     "observed": {
      "string": 121
-    }
+    },
+    "canonical_type": true
    },
    "step_execution": {
     "type": "string",
     "node_visits": 2235,
     "observed": {
      "string": 121
-    }
+    },
+    "canonical_type": true
    },
    "subject": {
     "type": "string",
     "node_visits": 2235,
     "observed": {
      "string": 2235
-    }
+    },
+    "canonical_type": true
    },
    "unavailable": {
     "type": "string",
     "node_visits": 2235,
     "observed": {
      "string": 831
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.claimed_facts[]": {
@@ -883,21 +1016,24 @@
     "node_visits": 579,
     "observed": {
      "string": 579
-    }
+    },
+    "canonical_type": true
    },
    "field": {
     "type": "string",
     "node_visits": 579,
     "observed": {
      "string": 579
-    }
+    },
+    "canonical_type": true
    },
    "kind": {
     "type": "string",
     "node_visits": 579,
     "observed": {
      "string": 579
-    }
+    },
+    "canonical_type": true
    },
    "rows": {
     "type": "array",
@@ -1617,21 +1753,24 @@
     "node_visits": 579,
     "observed": {
      "string": 579
-    }
+    },
+    "canonical_type": true
    },
    "kind": {
     "type": "string",
     "node_visits": 579,
     "observed": {
      "string": 579
-    }
+    },
+    "canonical_type": true
    },
    "label": {
     "type": "string",
     "node_visits": 579,
     "observed": {
      "string": 579
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.claimed_facts[].table": {
@@ -1640,7 +1779,8 @@
     "node_visits": 401,
     "observed": {
      "string": 401
-    }
+    },
+    "canonical_type": true
    },
    "key": {
     "type": "array",
@@ -1666,12 +1806,17 @@
     },
     "items": "string"
    },
+   "order_by": {
+    "type": "string",
+    "canonical_type": true
+   },
    "shape": {
     "type": "string",
     "node_visits": 401,
     "observed": {
      "string": 401
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.claimed_facts[].time_series_rows[]": {
@@ -1933,7 +2078,8 @@
     "node_visits": 302,
     "observed": {
      "string": 302
-    }
+    },
+    "canonical_type": true
    },
    "key": {
     "type": "array",
@@ -1959,12 +2105,17 @@
     },
     "items": "string"
    },
+   "order_by": {
+    "type": "string",
+    "canonical_type": true
+   },
    "shape": {
     "type": "string",
     "node_visits": 302,
     "observed": {
      "string": 302
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.claimed_facts[].value": {
@@ -1973,14 +2124,16 @@
     "node_visits": 579,
     "observed": {
      "bool": 15
-    }
+    },
+    "canonical_type": true
    },
    "integer": {
     "type": "int",
     "node_visits": 579,
     "observed": {
      "int": 284
-    }
+    },
+    "canonical_type": true
    },
    "number": {
     "type": "number",
@@ -1988,14 +2141,16 @@
     "observed": {
      "int": 147,
      "number": 15
-    }
+    },
+    "canonical_type": true
    },
    "string": {
     "type": "string",
     "node_visits": 579,
     "observed": {
      "string": 118
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.cohort": {
@@ -2004,7 +2159,8 @@
     "node_visits": 87,
     "observed": {
      "bool": 87
-    }
+    },
+    "canonical_type": true
    },
    "groups": {
     "type": "array",
@@ -2015,12 +2171,17 @@
     "items": "object",
     "element_node": "attempt.response.result.cohort.groups[]"
    },
+   "judgment_mismatch": {
+    "type": "bool",
+    "canonical_type": true
+   },
    "kind": {
     "type": "string",
     "node_visits": 87,
     "observed": {
      "string": 87
-    }
+    },
+    "canonical_type": true
    },
    "members": {
     "type": "array",
@@ -2036,14 +2197,40 @@
     "node_visits": 87,
     "observed": {
      "string": 87
-    }
+    },
+    "canonical_type": true
+   },
+   "score_meaning": {
+    "type": "string",
+    "canonical_type": true
    },
    "truncated": {
     "type": "bool",
     "node_visits": 87,
     "observed": {
      "bool": 87
-    }
+    },
+    "canonical_type": true
+   }
+  },
+  "attempt.response.result.cohort.exclusions[]": {
+   "reason": {
+    "type": "string",
+    "canonical_type": true
+   }
+  },
+  "attempt.response.result.cohort.exclusions[].subject": {
+   "canonical_id": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "kind": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "label": {
+    "type": "string",
+    "canonical_type": true
    }
   },
   "attempt.response.result.cohort.groups[]": {
@@ -2052,7 +2239,8 @@
     "node_visits": 208,
     "observed": {
      "bool": 208
-    }
+    },
+    "canonical_type": true
    },
    "member_canonical_ids": {
     "type": "array",
@@ -2075,14 +2263,17 @@
     "node_visits": 208,
     "observed": {
      "int": 208
-    }
+    },
+    "canonical_type": true,
+    "minimum": 0
    },
    "truncated": {
     "type": "bool",
     "node_visits": 208,
     "observed": {
      "bool": 208
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.cohort.groups[].subject": {
@@ -2091,21 +2282,24 @@
     "node_visits": 208,
     "observed": {
      "string": 208
-    }
+    },
+    "canonical_type": true
    },
    "kind": {
     "type": "string",
     "node_visits": 208,
     "observed": {
      "string": 208
-    }
+    },
+    "canonical_type": true
    },
    "label": {
     "type": "string",
     "node_visits": 208,
     "observed": {
      "string": 208
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.cohort.members[]": {
@@ -2114,14 +2308,17 @@
     "node_visits": 692,
     "observed": {
      "int": 692
-    }
+    },
+    "canonical_type": true,
+    "minimum": 1
    },
    "data_completeness": {
     "type": "string",
     "node_visits": 692,
     "observed": {
      "string": 692
-    }
+    },
+    "canonical_type": true
    },
    "drivers": {
     "type": "array",
@@ -2161,14 +2358,17 @@
     "node_visits": 692,
     "observed": {
      "string": 692
-    }
+    },
+    "canonical_type": true
    },
    "rank": {
     "type": "int",
     "node_visits": 692,
     "observed": {
      "int": 692
-    }
+    },
+    "canonical_type": true,
+    "minimum": 1
    },
    "ranking_basis": {
     "type": "array",
@@ -2183,14 +2383,18 @@
     "node_visits": 692,
     "observed": {
      "bool": 692
-    }
+    },
+    "canonical_type": true
    },
    "score": {
-    "type": "int",
+    "type": "number",
     "node_visits": 692,
     "observed": {
      "int": 34
-    }
+    },
+    "canonical_type": true,
+    "minimum": 0,
+    "maximum": 100
    },
    "subject": {
     "type": "object",
@@ -2207,21 +2411,26 @@
     "node_visits": 136,
     "observed": {
      "number": 34
-    }
+    },
+    "canonical_type": true,
+    "minimum": 0,
+    "maximum": 1
    },
    "concentration_method": {
     "type": "string",
     "node_visits": 136,
     "observed": {
      "string": 34
-    }
+    },
+    "canonical_type": true
    },
    "signal": {
     "type": "string",
     "node_visits": 136,
     "observed": {
      "string": 136
-    }
+    },
+    "canonical_type": true
    },
    "source_claimed_fact_ids": {
     "type": "array",
@@ -2232,18 +2441,23 @@
     "items": "string"
    },
    "value": {
-    "type": "int",
+    "type": "number",
     "node_visits": 136,
     "observed": {
      "int": 136
-    }
+    },
+    "canonical_type": true,
+    "minimum": 0,
+    "maximum": 1
    },
    "weight": {
-    "type": "int",
+    "type": "number",
     "node_visits": 136,
     "observed": {
      "int": 136
-    }
+    },
+    "canonical_type": true,
+    "minimum": 0
    },
    "weight_contributed": {
     "type": "number",
@@ -2251,14 +2465,17 @@
     "observed": {
      "int": 68,
      "number": 68
-    }
+    },
+    "canonical_type": true,
+    "minimum": 0
    },
    "window": {
     "type": "string",
     "node_visits": 136,
     "observed": {
      "string": 136
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.cohort.members[].subject": {
@@ -2267,21 +2484,24 @@
     "node_visits": 692,
     "observed": {
      "string": 692
-    }
+    },
+    "canonical_type": true
    },
    "kind": {
     "type": "string",
     "node_visits": 692,
     "observed": {
      "string": 692
-    }
+    },
+    "canonical_type": true
    },
    "label": {
     "type": "string",
     "node_visits": 692,
     "observed": {
      "string": 692
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.completeness": {
@@ -2290,7 +2510,9 @@
     "node_visits": 1011,
     "observed": {
      "int": 1011
-    }
+    },
+    "canonical_type": true,
+    "minimum": 0
    },
    "outcomes": {
     "type": "array",
@@ -2306,35 +2528,41 @@
     "node_visits": 1011,
     "observed": {
      "string": 25
-    }
+    },
+    "canonical_type": true
    },
    "rows_count": {
     "type": "int",
     "node_visits": 1011,
     "observed": {
      "int": 1011
-    }
+    },
+    "canonical_type": true,
+    "minimum": 0
    },
    "state": {
     "type": "string",
     "node_visits": 1011,
     "observed": {
      "string": 1011
-    }
+    },
+    "canonical_type": true
    },
    "terminal_reason": {
     "type": "string",
     "node_visits": 1011,
     "observed": {
      "string": 1011
-    }
+    },
+    "canonical_type": true
    },
    "terminal_status": {
     "type": "string",
     "node_visits": 1011,
     "observed": {
      "string": 1011
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.completeness.outcomes[]": {
@@ -2343,49 +2571,61 @@
     "node_visits": 2560,
     "observed": {
      "string": 2180
-    }
+    },
+    "canonical_type": true
+   },
+   "cause_narrowing": {
+    "type": "string",
+    "canonical_type": true
    },
    "cause_observed": {
     "type": "bool",
     "node_visits": 2560,
     "observed": {
      "bool": 2560
-    }
+    },
+    "canonical_type": true
    },
    "cause_overrun": {
     "type": "string",
     "node_visits": 2560,
     "observed": {
      "string": 1
-    }
+    },
+    "canonical_type": true
    },
    "declared": {
     "type": "int",
     "node_visits": 2560,
     "observed": {
      "int": 2560
-    }
+    },
+    "canonical_type": true,
+    "minimum": 0
    },
    "impact": {
     "type": "string",
     "node_visits": 2560,
     "observed": {
      "string": 2560
-    }
+    },
+    "canonical_type": true
    },
    "obligation": {
     "type": "string",
     "node_visits": 2560,
     "observed": {
      "string": 2560
-    }
+    },
+    "canonical_type": true
    },
    "outcome": {
     "type": "string",
     "node_visits": 2560,
     "observed": {
      "string": 2560
-    }
+    },
+    "canonical_type": true
    },
    "refinements": {
     "type": "array",
@@ -2401,21 +2641,25 @@
     "node_visits": 2560,
     "observed": {
      "string": 2560
-    }
+    },
+    "canonical_type": true
    },
    "served": {
     "type": "int",
     "node_visits": 2560,
     "observed": {
      "int": 2560
-    }
+    },
+    "canonical_type": true,
+    "minimum": 0
    },
    "stage": {
     "type": "string",
     "node_visits": 2560,
     "observed": {
      "string": 2560
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.completeness.outcomes[].refinements[]": {
@@ -2424,35 +2668,46 @@
     "node_visits": 228,
     "observed": {
      "int": 228
-    }
+    },
+    "canonical_type": true,
+    "minimum": 0
+   },
+   "basis": {
+    "type": "string",
+    "canonical_type": true
    },
    "before": {
     "type": "int",
     "node_visits": 228,
     "observed": {
      "int": 228
-    }
+    },
+    "canonical_type": true,
+    "minimum": 0
    },
    "coverage": {
     "type": "string",
     "node_visits": 228,
     "observed": {
      "string": 227
-    }
+    },
+    "canonical_type": true
    },
    "overrun": {
     "type": "string",
     "node_visits": 228,
     "observed": {
      "string": 1
-    }
+    },
+    "canonical_type": true
    },
    "stage": {
     "type": "string",
     "node_visits": 228,
     "observed": {
      "string": 228
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.confirmed_structure[]": {
@@ -2461,56 +2716,100 @@
     "node_visits": 503,
     "observed": {
      "string": 503
-    }
+    },
+    "canonical_type": true
    },
    "disposition": {
     "type": "string",
     "node_visits": 503,
     "observed": {
      "string": 503
-    }
+    },
+    "canonical_type": true
    },
    "member": {
     "type": "string",
     "node_visits": 503,
     "observed": {
      "string": 503
-    }
+    },
+    "canonical_type": true
    },
    "offer_source": {
     "type": "string",
     "node_visits": 503,
     "observed": {
      "string": 418
-    }
+    },
+    "canonical_type": true
+   },
+   "prior_entry_id": {
+    "type": "string",
+    "canonical_type": true
    },
    "prior_result_id": {
     "type": "string",
     "node_visits": 503,
     "observed": {
      "string": 503
-    }
+    },
+    "canonical_type": true
+   },
+   "prior_version_id": {
+    "type": "string",
+    "canonical_type": true
    },
    "provenance": {
     "type": "string",
     "node_visits": 503,
     "observed": {
      "string": 503
-    }
+    },
+    "canonical_type": true
    },
    "receipt_id": {
     "type": "string",
     "node_visits": 503,
     "observed": {
      "string": 418
-    }
+    },
+    "canonical_type": true
    },
    "source": {
     "type": "string",
     "node_visits": 503,
     "observed": {
      "string": 503
-    }
+    },
+    "canonical_type": true
+   }
+  },
+  "attempt.response.result.conflicts[]": {
+   "finding_id": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "kind": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "summary": {
+    "type": "string",
+    "canonical_type": true
+   }
+  },
+  "attempt.response.result.conflicts[].subjects[]": {
+   "canonical_id": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "kind": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "label": {
+    "type": "string",
+    "canonical_type": true
    }
   },
   "attempt.response.result.coverage": {
@@ -2536,7 +2835,8 @@
     "node_visits": 1011,
     "observed": {
      "bool": 1011
-    }
+    },
+    "canonical_type": true
    },
    "sources": {
     "type": "array",
@@ -2554,91 +2854,119 @@
     "node_visits": 713,
     "observed": {
      "string": 261
-    }
+    },
+    "canonical_type": true
    },
    "code": {
     "type": "string",
     "node_visits": 713,
     "observed": {
      "string": 713
-    }
+    },
+    "canonical_type": true
    },
    "count": {
     "type": "int",
     "node_visits": 713,
     "observed": {
      "int": 18
-    }
+    },
+    "canonical_type": true,
+    "minimum": 0
+   },
+   "declared": {
+    "type": "int",
+    "canonical_type": true,
+    "minimum": 0
    },
    "degrading": {
     "type": "bool",
     "node_visits": 713,
     "observed": {
      "bool": 713
-    }
+    },
+    "canonical_type": true
    },
    "detail_id": {
     "type": "string",
     "node_visits": 713,
     "observed": {
      "string": 713
-    }
+    },
+    "canonical_type": true
    },
    "fact_kind": {
     "type": "string",
     "node_visits": 713,
     "observed": {
      "string": 700
-    }
+    },
+    "canonical_type": true
+   },
+   "kind": {
+    "type": "string",
+    "canonical_type": true
    },
    "label": {
     "type": "string",
     "node_visits": 713,
     "observed": {
      "string": 713
-    }
+    },
+    "canonical_type": true
    },
    "narrowed": {
     "type": "bool",
     "node_visits": 713,
     "observed": {
      "bool": 5
-    }
+    },
+    "canonical_type": true
    },
    "origin_kind": {
     "type": "string",
     "node_visits": 713,
     "observed": {
      "string": 261
-    }
+    },
+    "canonical_type": true
    },
    "phrasing": {
     "type": "string",
     "node_visits": 713,
     "observed": {
      "string": 141
-    }
+    },
+    "canonical_type": true
    },
    "policy": {
     "type": "string",
     "node_visits": 713,
     "observed": {
      "string": 261
-    }
+    },
+    "canonical_type": true
    },
    "raw": {
     "type": "string",
     "node_visits": 713,
     "observed": {
      "string": 713
-    }
+    },
+    "canonical_type": true
    },
    "scope_outcome": {
     "type": "string",
     "node_visits": 713,
     "observed": {
      "string": 261
-    }
+    },
+    "canonical_type": true
+   },
+   "served": {
+    "type": "int",
+    "canonical_type": true,
+    "minimum": 0
    },
    "skipped_kinds": {
     "type": "array",
@@ -2653,14 +2981,16 @@
     "node_visits": 713,
     "observed": {
      "string": 713
-    }
+    },
+    "canonical_type": true
    },
    "source_state": {
     "type": "string",
     "node_visits": 713,
     "observed": {
      "string": 700
-    }
+    },
+    "canonical_type": true
    },
    "supported_kinds": {
     "type": "array",
@@ -2677,42 +3007,52 @@
     "node_visits": 1729,
     "observed": {
      "string": 1729
-    }
+    },
+    "canonical_type": true
    },
    "observed_at": {
     "type": "string",
     "node_visits": 1729,
     "observed": {
      "string": 590
-    }
+    },
+    "canonical_type": true
    },
    "reason": {
     "type": "string",
     "node_visits": 1729,
     "observed": {
      "string": 713
-    }
+    },
+    "canonical_type": true
    },
    "source": {
     "type": "string",
     "node_visits": 1729,
     "observed": {
      "string": 1729
-    }
+    },
+    "canonical_type": true
    },
    "state": {
     "type": "string",
     "node_visits": 1729,
     "observed": {
      "string": 1729
-    }
+    },
+    "canonical_type": true
    },
    "state_label": {
     "type": "string",
     "node_visits": 1729,
     "observed": {
      "string": 1729
-    }
+    },
+    "canonical_type": true
+   },
+   "watermark": {
+    "type": "string",
+    "canonical_type": true
    }
   },
   "attempt.response.result.drivers[]": {
@@ -2730,7 +3070,8 @@
     "node_visits": 480,
     "observed": {
      "string": 480
-    }
+    },
+    "canonical_type": true
    },
    "claimed_fact_ids": {
     "type": "array",
@@ -2746,35 +3087,42 @@
     "observed": {
      "number": 330,
      "int": 150
-    }
+    },
+    "canonical_type": true,
+    "minimum": 0,
+    "maximum": 1
    },
    "current": {
     "type": "bool",
     "node_visits": 480,
     "observed": {
      "bool": 480
-    }
+    },
+    "canonical_type": true
    },
    "derivation": {
     "type": "string",
     "node_visits": 480,
     "observed": {
      "string": 480
-    }
+    },
+    "canonical_type": true
    },
    "driver_id": {
     "type": "string",
     "node_visits": 480,
     "observed": {
      "string": 480
-    }
+    },
+    "canonical_type": true
    },
    "epistemic_status": {
     "type": "string",
     "node_visits": 480,
     "observed": {
      "string": 480
-    }
+    },
+    "canonical_type": true
    },
    "evidence_ref_ids": {
     "type": "array",
@@ -2797,28 +3145,32 @@
     "node_visits": 480,
     "observed": {
      "string": 17
-    }
+    },
+    "canonical_type": true
    },
    "standing": {
     "type": "string",
     "node_visits": 480,
     "observed": {
      "string": 480
-    }
+    },
+    "canonical_type": true
    },
    "summary": {
     "type": "string",
     "node_visits": 480,
     "observed": {
      "string": 480
-    }
+    },
+    "canonical_type": true
    },
    "title": {
     "type": "string",
     "node_visits": 480,
     "observed": {
      "string": 480
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.drivers[].affected_subjects[]": {
@@ -2827,21 +3179,24 @@
     "node_visits": 664,
     "observed": {
      "string": 664
-    }
+    },
+    "canonical_type": true
    },
    "kind": {
     "type": "string",
     "node_visits": 664,
     "observed": {
      "string": 664
-    }
+    },
+    "canonical_type": true
    },
    "label": {
     "type": "string",
     "node_visits": 664,
     "observed": {
      "string": 664
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.effective_evidence_window": {
@@ -2850,42 +3205,48 @@
     "node_visits": 747,
     "observed": {
      "string": 383
-    }
+    },
+    "canonical_type": true
    },
    "end": {
     "type": "string",
     "node_visits": 747,
     "observed": {
      "string": 747
-    }
+    },
+    "canonical_type": true
    },
    "provenance": {
     "type": "string",
     "node_visits": 747,
     "observed": {
      "string": 747
-    }
+    },
+    "canonical_type": true
    },
    "relative_id": {
     "type": "string",
     "node_visits": 747,
     "observed": {
      "string": 747
-    }
+    },
+    "canonical_type": true
    },
    "start": {
     "type": "string",
     "node_visits": 747,
     "observed": {
      "string": 747
-    }
+    },
+    "canonical_type": true
    },
    "window_class": {
     "type": "string",
     "node_visits": 747,
     "observed": {
      "string": 383
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.evidence_ref_labels": {
@@ -6488,20 +6849,71 @@
     }
    }
   },
+  "attempt.response.result.fact_scope_census[]": {
+   "admitted_count": {
+    "type": "int",
+    "canonical_type": true,
+    "minimum": 0
+   },
+   "authorized_population_count": {
+    "type": "int",
+    "canonical_type": true,
+    "minimum": 0
+   },
+   "axis": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "basis": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "origin_kind": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "outcome": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "policy": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "population_measured": {
+    "type": "bool",
+    "canonical_type": true
+   },
+   "requirement_kind": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "target_limit": {
+    "type": "int",
+    "canonical_type": true,
+    "minimum": 0
+   },
+   "truncated": {
+    "type": "bool",
+    "canonical_type": true
+   }
+  },
   "attempt.response.result.interpretation": {
    "clarification_needed": {
     "type": "bool",
     "node_visits": 1011,
     "observed": {
      "bool": 1011
-    }
+    },
+    "canonical_type": true
    },
    "clarification_reason": {
     "type": "string",
     "node_visits": 1011,
     "observed": {
      "string": 32
-    }
+    },
+    "canonical_type": true
    },
    "comparison_terms": {
     "type": "array",
@@ -6525,14 +6937,20 @@
     "node_visits": 1011,
     "observed": {
      "string": 1011
-    }
+    },
+    "canonical_type": true
+   },
+   "requested_judgment_kind": {
+    "type": "string",
+    "canonical_type": true
    },
    "shape": {
     "type": "string",
     "node_visits": 1011,
     "observed": {
      "string": 1011
-    }
+    },
+    "canonical_type": true
    },
    "subject_terms": {
     "type": "array",
@@ -6549,6 +6967,14 @@
     "observed": {
      "object": 1011
     }
+   },
+   "window_class": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "window_confidence": {
+    "type": "string",
+    "canonical_type": true
    }
   },
   "attempt.response.result.interpretation.fact_requirements[]": {
@@ -6557,30 +6983,66 @@
     "node_visits": 2964,
     "observed": {
      "string": 2964
-    }
+    },
+    "canonical_type": true
+   }
+  },
+  "attempt.response.result.interpretation.fact_requirements[].subjects[]": {
+   "canonical_id": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "kind": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "label": {
+    "type": "string",
+    "canonical_type": true
    }
   },
   "attempt.response.result.interpretation.time_context": {
+   "as_of": {
+    "type": "string",
+    "canonical_type": true
+   },
    "axis": {
     "type": "string",
     "node_visits": 1011,
     "observed": {
      "string": 1011
-    }
+    },
+    "canonical_type": true
    },
    "end": {
     "type": "string",
     "node_visits": 1011,
     "observed": {
      "string": 20
-    }
+    },
+    "canonical_type": true
    },
    "start": {
     "type": "string",
     "node_visits": 1011,
     "observed": {
      "string": 20
-    }
+    },
+    "canonical_type": true
+   }
+  },
+  "attempt.response.result.interpretation.time_context.evidence_window": {
+   "end": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "relative_id": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "start": {
+    "type": "string",
+    "canonical_type": true
    }
   },
   "attempt.response.result.paths[]": {
@@ -6615,21 +7077,24 @@
     "node_visits": 3309,
     "observed": {
      "string": 3309
-    }
+    },
+    "canonical_type": true
    },
    "truncated": {
     "type": "bool",
     "node_visits": 3309,
     "observed": {
      "bool": 3309
-    }
+    },
+    "canonical_type": true
    },
    "why_relevant": {
     "type": "string",
     "node_visits": 3309,
     "observed": {
      "string": 3309
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.paths[].edges[]": {
@@ -6638,14 +7103,16 @@
     "node_visits": 3309,
     "observed": {
      "string": 3309
-    }
+    },
+    "canonical_type": true
    },
    "epistemic_status": {
     "type": "string",
     "node_visits": 3309,
     "observed": {
      "string": 3309
-    }
+    },
+    "canonical_type": true
    },
    "evidence_ref_ids": {
     "type": "array",
@@ -6668,7 +7135,8 @@
     "node_visits": 3309,
     "observed": {
      "string": 3309
-    }
+    },
+    "canonical_type": true
    },
    "to": {
     "type": "object",
@@ -6683,21 +7151,24 @@
     "node_visits": 3309,
     "observed": {
      "string": 3309
-    }
+    },
+    "canonical_type": true
    },
    "valid_from": {
     "type": "string",
     "node_visits": 3309,
     "observed": {
      "string": 3279
-    }
+    },
+    "canonical_type": true
    },
    "valid_to": {
     "type": "string",
     "node_visits": 3309,
     "observed": {
      "string": 2225
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.paths[].edges[].from": {
@@ -6706,21 +7177,24 @@
     "node_visits": 3309,
     "observed": {
      "string": 3309
-    }
+    },
+    "canonical_type": true
    },
    "kind": {
     "type": "string",
     "node_visits": 3309,
     "observed": {
      "string": 3309
-    }
+    },
+    "canonical_type": true
    },
    "label": {
     "type": "string",
     "node_visits": 3309,
     "observed": {
      "string": 3309
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.paths[].edges[].to": {
@@ -6729,21 +7203,24 @@
     "node_visits": 3309,
     "observed": {
      "string": 3309
-    }
+    },
+    "canonical_type": true
    },
    "kind": {
     "type": "string",
     "node_visits": 3309,
     "observed": {
      "string": 3309
-    }
+    },
+    "canonical_type": true
    },
    "label": {
     "type": "string",
     "node_visits": 3309,
     "observed": {
      "string": 3309
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.paths[].nodes[]": {
@@ -6752,21 +7229,24 @@
     "node_visits": 6618,
     "observed": {
      "string": 6618
-    }
+    },
+    "canonical_type": true
    },
    "kind": {
     "type": "string",
     "node_visits": 6618,
     "observed": {
      "string": 6618
-    }
+    },
+    "canonical_type": true
    },
    "label": {
     "type": "string",
     "node_visits": 6618,
     "observed": {
      "string": 6618
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.readiness_gaps[]": {
@@ -6791,14 +7271,16 @@
     "node_visits": 15,
     "observed": {
      "string": 15
-    }
+    },
+    "canonical_type": true
    },
    "kind": {
     "type": "string",
     "node_visits": 15,
     "observed": {
      "string": 15
-    }
+    },
+    "canonical_type": true
    },
    "subjects": {
     "type": "array",
@@ -6814,7 +7296,8 @@
     "node_visits": 15,
     "observed": {
      "string": 15
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.readiness_gaps[].subjects[]": {
@@ -6823,21 +7306,24 @@
     "node_visits": 27,
     "observed": {
      "string": 27
-    }
+    },
+    "canonical_type": true
    },
    "kind": {
     "type": "string",
     "node_visits": 27,
     "observed": {
      "string": 27
-    }
+    },
+    "canonical_type": true
    },
    "label": {
     "type": "string",
     "node_visits": 27,
     "observed": {
      "string": 27
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.remaining_work[]": {
@@ -6862,14 +7348,16 @@
     "node_visits": 20,
     "observed": {
      "string": 20
-    }
+    },
+    "canonical_type": true
    },
    "kind": {
     "type": "string",
     "node_visits": 20,
     "observed": {
      "string": 20
-    }
+    },
+    "canonical_type": true
    },
    "subjects": {
     "type": "array",
@@ -6885,7 +7373,8 @@
     "node_visits": 20,
     "observed": {
      "string": 20
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.remaining_work[].subjects[]": {
@@ -6894,21 +7383,24 @@
     "node_visits": 20,
     "observed": {
      "string": 20
-    }
+    },
+    "canonical_type": true
    },
    "kind": {
     "type": "string",
     "node_visits": 20,
     "observed": {
      "string": 20
-    }
+    },
+    "canonical_type": true
    },
    "label": {
     "type": "string",
     "node_visits": 20,
     "observed": {
      "string": 20
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.render_shapes[]": {
@@ -6917,35 +7409,40 @@
     "node_visits": 157,
     "observed": {
      "string": 157
-    }
+    },
+    "canonical_type": true
    },
    "axis_label": {
     "type": "string",
     "node_visits": 157,
     "observed": {
      "string": 157
-    }
+    },
+    "canonical_type": true
    },
    "kind": {
     "type": "string",
     "node_visits": 157,
     "observed": {
      "string": 157
-    }
+    },
+    "canonical_type": true
    },
    "presentation": {
     "type": "string",
     "node_visits": 157,
     "observed": {
      "string": 157
-    }
+    },
+    "canonical_type": true
    },
    "selected_by": {
     "type": "string",
     "node_visits": 157,
     "observed": {
      "string": 157
-    }
+    },
+    "canonical_type": true
    },
    "series": {
     "type": "array",
@@ -6961,21 +7458,24 @@
     "node_visits": 157,
     "observed": {
      "string": 157
-    }
+    },
+    "canonical_type": true
    },
    "title": {
     "type": "string",
     "node_visits": 157,
     "observed": {
      "string": 157
-    }
+    },
+    "canonical_type": true
    },
    "value_label": {
     "type": "string",
     "node_visits": 157,
     "observed": {
      "string": 157
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.render_shapes[].series[]": {
@@ -6984,14 +7484,16 @@
     "node_visits": 250,
     "observed": {
      "string": 250
-    }
+    },
+    "canonical_type": true
    },
    "label": {
     "type": "string",
     "node_visits": 250,
     "observed": {
      "string": 250
-    }
+    },
+    "canonical_type": true
    },
    "points": {
     "type": "array",
@@ -7009,7 +7511,8 @@
     "node_visits": 2000,
     "observed": {
      "string": 2000
-    }
+    },
+    "canonical_type": true
    },
    "source": {
     "type": "object",
@@ -7025,7 +7528,8 @@
     "observed": {
      "int": 1843,
      "number": 157
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.render_shapes[].series[].points[].source": {
@@ -7034,42 +7538,59 @@
     "node_visits": 2000,
     "observed": {
      "string": 1845
-    }
+    },
+    "canonical_type": true
    },
    "field": {
     "type": "string",
     "node_visits": 2000,
     "observed": {
      "string": 1845
-    }
+    },
+    "canonical_type": true
    },
    "kind": {
     "type": "string",
     "node_visits": 2000,
     "observed": {
      "string": 2000
-    }
+    },
+    "canonical_type": true
    },
    "row_index": {
     "type": "int",
     "node_visits": 2000,
     "observed": {
      "int": 1845
-    }
+    },
+    "canonical_type": true,
+    "minimum": 0
    },
    "signal": {
     "type": "string",
     "node_visits": 2000,
     "observed": {
      "string": 124
-    }
+    },
+    "canonical_type": true
    },
    "subject_canonical_id": {
     "type": "string",
     "node_visits": 2000,
     "observed": {
      "string": 155
-    }
+    },
+    "canonical_type": true
+   }
+  },
+  "attempt.response.result.semantic_reading": {
+   "reason": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "status": {
+    "type": "string",
+    "canonical_type": true
    }
   },
   "attempt.response.result.structure_needs": {
@@ -7127,55 +7648,126 @@
     "element_node": "attempt.response.result.structure_needs.window_options[]"
    }
   },
+  "attempt.response.result.structure_needs.accepted_grammars[]": {
+   "kind": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "member": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "pattern_id": {
+    "type": "string",
+    "canonical_type": true
+   }
+  },
+  "attempt.response.result.structure_needs.anchor_options[]": {
+   "canonical_id": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "kind": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "label": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "matched_term_hash": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "offer_source": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "option_id": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "phrasing": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "prior_entry_id": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "prior_version_id": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "receipt_id": {
+    "type": "string",
+    "canonical_type": true
+   }
+  },
   "attempt.response.result.structure_needs.candidate_options[]": {
    "canonical_id": {
     "type": "string",
     "node_visits": 1303,
     "observed": {
      "string": 1303
-    }
+    },
+    "canonical_type": true
    },
    "kind": {
     "type": "string",
     "node_visits": 1303,
     "observed": {
      "string": 1303
-    }
+    },
+    "canonical_type": true
    },
    "label": {
     "type": "string",
     "node_visits": 1303,
     "observed": {
      "string": 1303
-    }
+    },
+    "canonical_type": true
    },
    "offer_source": {
     "type": "string",
     "node_visits": 1303,
     "observed": {
      "string": 1303
-    }
+    },
+    "canonical_type": true
    },
    "option_id": {
     "type": "string",
     "node_visits": 1303,
     "observed": {
      "string": 1303
-    }
+    },
+    "canonical_type": true
    },
    "phrasing": {
     "type": "string",
     "node_visits": 1303,
     "observed": {
      "string": 169
-    }
+    },
+    "canonical_type": true
+   },
+   "prior_entry_id": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "prior_version_id": {
+    "type": "string",
+    "canonical_type": true
    },
    "receipt_id": {
     "type": "string",
     "node_visits": 1303,
     "observed": {
      "string": 1303
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.structure_needs.handle_options[]": {
@@ -7184,63 +7776,80 @@
     "node_visits": 2682,
     "observed": {
      "string": 2682
-    }
+    },
+    "canonical_type": true
    },
    "label": {
     "type": "string",
     "node_visits": 2682,
     "observed": {
      "string": 2682
-    }
+    },
+    "canonical_type": true
    },
    "offer_source": {
     "type": "string",
     "node_visits": 2682,
     "observed": {
      "string": 2682
-    }
+    },
+    "canonical_type": true
    },
    "option_id": {
     "type": "string",
     "node_visits": 2682,
     "observed": {
      "string": 2682
-    }
+    },
+    "canonical_type": true
    },
    "pattern_id": {
     "type": "string",
     "node_visits": 2682,
     "observed": {
      "string": 2682
-    }
+    },
+    "canonical_type": true
    },
    "phrasing": {
     "type": "string",
     "node_visits": 2682,
     "observed": {
      "string": 156
-    }
+    },
+    "canonical_type": true
+   },
+   "prior_entry_id": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "prior_version_id": {
+    "type": "string",
+    "canonical_type": true
    },
    "receipt_id": {
     "type": "string",
     "node_visits": 2682,
     "observed": {
      "string": 2682
-    }
+    },
+    "canonical_type": true
    },
    "source_column": {
     "type": "string",
     "node_visits": 2682,
     "observed": {
      "string": 2682
-    }
+    },
+    "canonical_type": true
    },
    "value": {
     "type": "string",
     "node_visits": 2682,
     "observed": {
      "string": 2682
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.structure_needs.kind_options[]": {
@@ -7249,35 +7858,48 @@
     "node_visits": 741,
     "observed": {
      "string": 741
-    }
+    },
+    "canonical_type": true
    },
    "label": {
     "type": "string",
     "node_visits": 741,
     "observed": {
      "string": 741
-    }
+    },
+    "canonical_type": true
    },
    "offer_source": {
     "type": "string",
     "node_visits": 741,
     "observed": {
      "string": 741
-    }
+    },
+    "canonical_type": true
    },
    "option_id": {
     "type": "string",
     "node_visits": 741,
     "observed": {
      "string": 741
-    }
+    },
+    "canonical_type": true
    },
    "phrasing": {
     "type": "string",
     "node_visits": 741,
     "observed": {
      "string": 125
-    }
+    },
+    "canonical_type": true
+   },
+   "prior_entry_id": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "prior_version_id": {
+    "type": "string",
+    "canonical_type": true
    },
    "receipt_id": {
     "type": "string",
@@ -7285,6 +7907,7 @@
     "observed": {
      "string": 741
     },
+    "canonical_type": true,
     "required": true
    }
   },
@@ -7294,49 +7917,56 @@
     "node_visits": 337,
     "observed": {
      "string": 186
-    }
+    },
+    "canonical_type": true
    },
    "candidate_label": {
     "type": "string",
     "node_visits": 337,
     "observed": {
      "string": 186
-    }
+    },
+    "canonical_type": true
    },
    "label": {
     "type": "string",
     "node_visits": 337,
     "observed": {
      "string": 337
-    }
+    },
+    "canonical_type": true
    },
    "option_id": {
     "type": "string",
     "node_visits": 337,
     "observed": {
      "string": 337
-    }
+    },
+    "canonical_type": true
    },
    "receipt_id": {
     "type": "string",
     "node_visits": 337,
     "observed": {
      "string": 337
-    }
+    },
+    "canonical_type": true
    },
    "relative_id": {
     "type": "string",
     "node_visits": 337,
     "observed": {
      "string": 337
-    }
+    },
+    "canonical_type": true
    },
    "window_class": {
     "type": "string",
     "node_visits": 337,
     "observed": {
      "string": 337
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.structure_needs.window_options[]": {
@@ -7345,21 +7975,24 @@
     "node_visits": 1532,
     "observed": {
      "string": 1149
-    }
+    },
+    "canonical_type": true
    },
    "label": {
     "type": "string",
     "node_visits": 1532,
     "observed": {
      "string": 1532
-    }
+    },
+    "canonical_type": true
    },
    "option_id": {
     "type": "string",
     "node_visits": 1532,
     "observed": {
      "string": 1532
-    }
+    },
+    "canonical_type": true
    },
    "receipt_id": {
     "type": "string",
@@ -7367,6 +8000,7 @@
     "observed": {
      "string": 1532
     },
+    "canonical_type": true,
     "required": true
    },
    "relative_id": {
@@ -7374,14 +8008,16 @@
     "node_visits": 1532,
     "observed": {
      "string": 1532
-    }
+    },
+    "canonical_type": true
    },
    "start": {
     "type": "string",
     "node_visits": 1532,
     "observed": {
      "string": 1149
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.structure_offer_snapshot[]": {
@@ -7390,28 +8026,41 @@
     "node_visits": 483,
     "observed": {
      "string": 483
-    }
+    },
+    "canonical_type": true
    },
    "offer_id": {
     "type": "string",
     "node_visits": 483,
     "observed": {
      "string": 483
-    }
+    },
+    "canonical_type": true
    },
    "offer_source": {
     "type": "string",
     "node_visits": 483,
     "observed": {
      "string": 483
-    }
+    },
+    "canonical_type": true
+   },
+   "prior_entry_id": {
+    "type": "string",
+    "canonical_type": true
+   },
+   "prior_version_id": {
+    "type": "string",
+    "canonical_type": true
    },
    "rank": {
     "type": "int",
     "node_visits": 483,
     "observed": {
      "int": 483
-    }
+    },
+    "canonical_type": true,
+    "minimum": 0
    }
   },
   "attempt.response.result.subject_resolution": {
@@ -7429,7 +8078,8 @@
     "node_visits": 1011,
     "observed": {
      "string": 795
-    }
+    },
+    "canonical_type": true
    },
    "commit_decision_digests": {
     "type": "array",
@@ -7449,6 +8099,10 @@
     "items": "object",
     "element_node": "attempt.response.result.subject_resolution.committed[]"
    },
+   "graph_not_projected": {
+    "type": "bool",
+    "canonical_type": true
+   },
    "prior_subject_receipt_dispositions": {
     "type": "array",
     "node_visits": 1011,
@@ -7463,7 +8117,8 @@
     "node_visits": 1011,
     "observed": {
      "bool": 14
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.subject_resolution.candidates[]": {
@@ -7473,7 +8128,10 @@
     "observed": {
      "number": 1896,
      "int": 174
-    }
+    },
+    "canonical_type": true,
+    "minimum": 0,
+    "maximum": 1
    },
    "evidence_ref_ids": {
     "type": "array",
@@ -7513,6 +8171,7 @@
     "observed": {
      "string": 2070
     },
+    "canonical_type": true,
     "required": true
    },
    "state": {
@@ -7520,7 +8179,8 @@
     "node_visits": 2070,
     "observed": {
      "string": 2070
-    }
+    },
+    "canonical_type": true
    },
    "subject": {
     "type": "object",
@@ -7542,7 +8202,8 @@
     "node_visits": 2070,
     "observed": {
      "string": 2070
-    }
+    },
+    "canonical_type": true
    },
    "kind": {
     "type": "string",
@@ -7554,7 +8215,8 @@
     "node_visits": 2070,
     "observed": {
      "string": 2070
-    }
+    },
+    "canonical_type": true
    },
    "label": {
     "type": "string",
@@ -7566,7 +8228,8 @@
     "node_visits": 2070,
     "observed": {
      "string": 2070
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.subject_resolution.commit_decision_digests[]": {
@@ -7575,28 +8238,32 @@
     "node_visits": 64,
     "observed": {
      "bool": 60
-    }
+    },
+    "canonical_type": true
    },
    "commit_gate": {
     "type": "string",
     "node_visits": 64,
     "observed": {
      "string": 64
-    }
+    },
+    "canonical_type": true
    },
    "identity_proven": {
     "type": "bool",
     "node_visits": 64,
     "observed": {
      "bool": 54
-    }
+    },
+    "canonical_type": true
    },
    "search_truncated": {
     "type": "bool",
     "node_visits": 64,
     "observed": {
      "bool": 57
-    }
+    },
+    "canonical_type": true
    },
    "subject": {
     "type": "object",
@@ -7613,21 +8280,24 @@
     "node_visits": 64,
     "observed": {
      "string": 64
-    }
+    },
+    "canonical_type": true
    },
    "kind": {
     "type": "string",
     "node_visits": 64,
     "observed": {
      "string": 64
-    }
+    },
+    "canonical_type": true
    },
    "label": {
     "type": "string",
     "node_visits": 64,
     "observed": {
      "string": 64
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.subject_resolution.committed[]": {
@@ -7637,7 +8307,8 @@
     "node_visits": 64,
     "observed": {
      "string": 64
-    }
+    },
+    "canonical_type": true
    },
    "kind": {
     "type": "string",
@@ -7645,7 +8316,8 @@
     "node_visits": 64,
     "observed": {
      "string": 64
-    }
+    },
+    "canonical_type": true
    },
    "label": {
     "type": "string",
@@ -7653,7 +8325,8 @@
     "node_visits": 64,
     "observed": {
      "string": 64
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.subject_resolution.prior_subject_receipt_dispositions[]": {
@@ -7662,21 +8335,24 @@
     "node_visits": 71,
     "observed": {
      "string": 71
-    }
+    },
+    "canonical_type": true
    },
    "prior_result_id": {
     "type": "string",
     "node_visits": 71,
     "observed": {
      "string": 71
-    }
+    },
+    "canonical_type": true
    },
    "receipt_id": {
     "type": "string",
     "node_visits": 71,
     "observed": {
      "string": 71
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.temporal": {
@@ -7685,7 +8361,8 @@
     "node_visits": 20,
     "observed": {
      "bool": 20
-    }
+    },
+    "canonical_type": true
    },
    "effective": {
     "type": "object",
@@ -7700,7 +8377,8 @@
     "node_visits": 20,
     "observed": {
      "string": 20
-    }
+    },
+    "canonical_type": true
    },
    "requested": {
     "type": "object",
@@ -7763,63 +8441,76 @@
     "node_visits": 1011,
     "observed": {
      "string": 1011
-    }
+    },
+    "canonical_type": true
+   },
+   "backend_version": {
+    "type": "string",
+    "canonical_type": true
    },
    "canonical_service_version": {
     "type": "string",
     "node_visits": 1011,
     "observed": {
      "string": 1011
-    }
+    },
+    "canonical_type": true
    },
    "contract_version": {
     "type": "string",
     "node_visits": 1011,
     "observed": {
      "string": 1011
-    }
+    },
+    "canonical_type": true
    },
    "interpretation_version": {
     "type": "string",
     "node_visits": 1011,
     "observed": {
      "string": 1011
-    }
+    },
+    "canonical_type": true
    },
    "model_identity": {
     "type": "string",
     "node_visits": 1011,
     "observed": {
      "string": 1011
-    }
+    },
+    "canonical_type": true
    },
    "projection_version": {
     "type": "string",
     "node_visits": 1011,
     "observed": {
      "string": 1011
-    }
+    },
+    "canonical_type": true
    },
    "query_version": {
     "type": "string",
     "node_visits": 1011,
     "observed": {
      "string": 1011
-    }
+    },
+    "canonical_type": true
    },
    "service_version": {
     "type": "string",
     "node_visits": 1011,
     "observed": {
      "string": 1011
-    }
+    },
+    "canonical_type": true
    },
    "synthesis_version": {
     "type": "string",
     "node_visits": 1011,
     "observed": {
      "string": 1011
-    }
+    },
+    "canonical_type": true
    }
   },
   "attempt.response.result.window_clarification": {
@@ -7839,42 +8530,48 @@
     "node_visits": 1532,
     "observed": {
      "string": 1149
-    }
+    },
+    "canonical_type": true
    },
    "label": {
     "type": "string",
     "node_visits": 1532,
     "observed": {
      "string": 1532
-    }
+    },
+    "canonical_type": true
    },
    "option_id": {
     "type": "string",
     "node_visits": 1532,
     "observed": {
      "string": 1532
-    }
+    },
+    "canonical_type": true
    },
    "receipt_id": {
     "type": "string",
     "node_visits": 1532,
     "observed": {
      "string": 1532
-    }
+    },
+    "canonical_type": true
    },
    "relative_id": {
     "type": "string",
     "node_visits": 1532,
     "observed": {
      "string": 1532
-    }
+    },
+    "canonical_type": true
    },
    "start": {
     "type": "string",
     "node_visits": 1532,
     "observed": {
      "string": 1149
-    }
+    },
+    "canonical_type": true
    }
   }
  }
