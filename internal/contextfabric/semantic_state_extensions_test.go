@@ -335,14 +335,16 @@ func TestSemanticStateExtensionsNeverDecideAContinuation(t *testing.T) {
 // UTF-8 makes the census unavailable while the reading stays available.
 func TestAStoredCensusOutsideItsDomainNeverErasesTheReading(t *testing.T) {
 	fixture := semanticFixture(t)
-	valid := `{"version":"` + WorkItemTupleCensusVersion + `","state":"measured","value":1,"retained":1,"requested_repository_scope":[],"authorization_digest":"d"}`
+	digest := strings.Repeat("ab", 32)
+	valid := `{"version":"` + WorkItemTupleCensusVersion + `","state":"exact","value":1,"retained":1,"requested_repository_scope":["repo"],"authorization_digest":"` + digest + `"}`
 	for _, cell := range []struct {
 		name       string
 		census     string
 		wantCensus WorkItemTupleCensusReadStatus
 	}{
+		{"a valid census", valid, WorkItemTupleCensusReadAvailable},
 		{"a census beyond float64 range", strings.Replace(valid, `"value":1`, `"value":1e400`, 1), WorkItemTupleCensusReadMalformed},
-		{"a census with invalid UTF-8", strings.Replace(valid, `"d"`, "\"d\xff\"", 1), WorkItemTupleCensusReadMalformed},
+		{"a census with invalid UTF-8", strings.Replace(valid, `["repo"]`, "[\"re\xffpo\"]", 1), WorkItemTupleCensusReadMalformed},
 		{"a census of a later version", strings.Replace(valid, WorkItemTupleCensusVersion, "work-item-census.v9", 1), WorkItemTupleCensusReadUnsupportedVersion},
 	} {
 		t.Run(cell.name, func(t *testing.T) {
