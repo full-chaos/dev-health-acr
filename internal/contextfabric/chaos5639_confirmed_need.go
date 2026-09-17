@@ -148,6 +148,10 @@ const (
 	// identity, at the SAME graph epoch. The ledger's entries are available
 	// to this turn.
 	ConfirmedNeedLedgerHit ConfirmedNeedLedgerOutcome = "hit"
+	// ConfirmedNeedLedgerOutcomeUndeclared is the closed, disclosure-safe
+	// stand-in a telemetry emitter renders in place of a value outside this
+	// vocabulary. See closedConfirmedNeedLedgerOutcome.
+	ConfirmedNeedLedgerOutcomeUndeclared ConfirmedNeedLedgerOutcome = "undeclared"
 )
 
 func confirmedNeedLedgerOutcomes() []ConfirmedNeedLedgerOutcome {
@@ -156,7 +160,7 @@ func confirmedNeedLedgerOutcomes() []ConfirmedNeedLedgerOutcome {
 		ConfirmedNeedLedgerMissEmpty, ConfirmedNeedLedgerDroppedQuestionIndeterminate,
 		ConfirmedNeedLedgerDroppedQuestionChanged, ConfirmedNeedLedgerDroppedIdentityIncomparable,
 		ConfirmedNeedLedgerDroppedIdentityChanged, ConfirmedNeedLedgerDroppedStaleGraphEpoch,
-		ConfirmedNeedLedgerHit,
+		ConfirmedNeedLedgerHit, ConfirmedNeedLedgerOutcomeUndeclared,
 	}
 }
 
@@ -168,6 +172,20 @@ func ValidConfirmedNeedLedgerOutcome(value ConfirmedNeedLedgerOutcome) bool {
 		}
 	}
 	return false
+}
+
+// closedConfirmedNeedLedgerOutcome is the disclosure-safe form of a
+// ConfirmedNeedLedgerOutcome for a telemetry emitter: a value
+// ValidConfirmedNeedLedgerOutcome does not recognize (the zero value
+// included -- this axis has no "nothing decided yet" member, every emission
+// follows a real resolveConfirmedNeedLedger call) is never logged raw. The
+// raw token still reaches the line, through the emitter's own companion
+// "_raw" key.
+func closedConfirmedNeedLedgerOutcome(outcome ConfirmedNeedLedgerOutcome) ConfirmedNeedLedgerOutcome {
+	if ValidConfirmedNeedLedgerOutcome(outcome) {
+		return outcome
+	}
+	return ConfirmedNeedLedgerOutcomeUndeclared
 }
 
 // ConfirmedNeedMemberDropReason is the closed vocabulary for why ONE member of
@@ -186,10 +204,14 @@ const (
 	// binding (no longer visible, no longer authorized, no longer resolving,
 	// or not checkable against the live graph).
 	ConfirmedNeedMemberDropReverifyNotConfirmed ConfirmedNeedMemberDropReason = "reverify_not_confirmed"
+	// ConfirmedNeedMemberDropReasonUndeclared is the closed, disclosure-safe
+	// stand-in a telemetry emitter renders in place of a value outside this
+	// vocabulary. See closedConfirmedNeedMemberDropReason.
+	ConfirmedNeedMemberDropReasonUndeclared ConfirmedNeedMemberDropReason = "undeclared"
 )
 
 func confirmedNeedMemberDropReasons() []ConfirmedNeedMemberDropReason {
-	return []ConfirmedNeedMemberDropReason{ConfirmedNeedMemberDropReverifyUnavailable, ConfirmedNeedMemberDropReverifyNotConfirmed}
+	return []ConfirmedNeedMemberDropReason{ConfirmedNeedMemberDropReverifyUnavailable, ConfirmedNeedMemberDropReverifyNotConfirmed, ConfirmedNeedMemberDropReasonUndeclared}
 }
 
 // ValidConfirmedNeedMemberDropReason reports membership.
@@ -711,8 +733,42 @@ func observableAppliedNeedMembers(appliedMembers []contractsv1.ContextFabricStru
 }
 
 // observableConfirmedNeedDrops renders dropped for the log line as
-// member:reason pairs in ledger order, or "none".
+// member:reason pairs in ledger order, or "none". Each reason is closed
+// through closedConfirmedNeedMemberDropReason -- a value
+// ValidConfirmedNeedMemberDropReason does not recognize never reaches this
+// disclosure-safe rendering raw; see observableConfirmedNeedDropsRaw for the
+// companion "_raw" key that still discloses the actual token.
 func observableConfirmedNeedDrops(dropped []ConfirmedNeedMemberDrop) string {
+	if len(dropped) == 0 {
+		return "none"
+	}
+	rendered := ""
+	for index, drop := range dropped {
+		if index > 0 {
+			rendered += ","
+		}
+		rendered += string(drop.Member) + ":" + string(closedConfirmedNeedMemberDropReason(drop.Reason))
+	}
+	return rendered
+}
+
+// closedConfirmedNeedMemberDropReason is the disclosure-safe form of a
+// ConfirmedNeedMemberDropReason for a telemetry emitter: a value
+// ValidConfirmedNeedMemberDropReason does not recognize is never logged raw
+// -- it renders as ConfirmedNeedMemberDropReasonUndeclared instead.
+func closedConfirmedNeedMemberDropReason(reason ConfirmedNeedMemberDropReason) ConfirmedNeedMemberDropReason {
+	if ValidConfirmedNeedMemberDropReason(reason) {
+		return reason
+	}
+	return ConfirmedNeedMemberDropReasonUndeclared
+}
+
+// observableConfirmedNeedDropsRaw is observableConfirmedNeedDrops' own
+// companion: the IDENTICAL member:reason rendering, but with each reason
+// verbatim rather than closed -- the diagnostic counterpart that keeps an
+// out-of-vocabulary token visible on the line instead of only its safe
+// "undeclared" stand-in.
+func observableConfirmedNeedDropsRaw(dropped []ConfirmedNeedMemberDrop) string {
 	if len(dropped) == 0 {
 		return "none"
 	}

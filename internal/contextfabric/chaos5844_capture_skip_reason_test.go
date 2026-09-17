@@ -31,11 +31,11 @@ func jsonLedgerTelemetry() (EngineTelemetry, *bytes.Buffer) {
 	return NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))), &buf
 }
 
-// assertCaptureSkipReasonJSON reads every captured line, keeps the LAST one
-// whose msg is the confirmed-need ledger line (a multi-turn fixture emits one
-// per turn; the turn under test is always the last), and asserts its
-// capture_skip_reason at production Info level.
-func assertCaptureSkipReasonJSON(t *testing.T, buf *bytes.Buffer, want CaptureSkipReason) {
+// lastConfirmedNeedLedgerJSONLine reads every captured line and keeps the
+// LAST one whose msg is the confirmed-need ledger line (a multi-turn fixture
+// emits one per turn; the turn under test is always the last), asserting Info
+// level on the way.
+func lastConfirmedNeedLedgerJSONLine(t *testing.T, buf *bytes.Buffer) map[string]any {
 	t.Helper()
 	var line map[string]any
 	found := false
@@ -57,6 +57,14 @@ func assertCaptureSkipReasonJSON(t *testing.T, buf *bytes.Buffer, want CaptureSk
 	if level, _ := line["level"].(string); level != "INFO" {
 		t.Fatalf("level = %q, want INFO -- the reason must survive the production log level", level)
 	}
+	return line
+}
+
+// assertCaptureSkipReasonJSON asserts capture_skip_reason on the last
+// captured confirmed-need ledger line.
+func assertCaptureSkipReasonJSON(t *testing.T, buf *bytes.Buffer, want CaptureSkipReason) {
+	t.Helper()
+	line := lastConfirmedNeedLedgerJSONLine(t, buf)
 	if got, _ := line["capture_skip_reason"].(string); got != string(want) {
 		t.Errorf("capture_skip_reason = %q, want %q -- the emitted production JSON line", got, want)
 	}
@@ -333,4 +341,112 @@ func TestCaptureSkipReasonReuseValidationError(t *testing.T) {
 		t.Fatal("Investigate() error = nil, want the stored coverage validation error")
 	}
 	assertCaptureSkipReasonJSON(t, buf, CaptureSkipReasonReuseValidationError)
+}
+
+// The four tests below prove the fail-closed emission guard on every closed-
+// vocabulary field of the confirmed-need ledger line that carries a
+// hand-maintained membership check: a value its own Valid* function does not
+// recognize never reaches the line raw -- it renders as that vocabulary's own
+// declared "undeclared" member, with the actual out-of-band token still
+// disclosed through a companion "_raw" key. Each constructs the SAME shape a
+// programmer error would (an exit or a producer assigning a value never added
+// to the enumerator function), never through the closed helper itself, so a
+// regression in the helper's own wiring -- not just its logic -- would be
+// caught.
+
+// TestClosedCaptureSkipReasonFailsClosedOnAnUndeclaredValue.
+func TestClosedCaptureSkipReasonFailsClosedOnAnUndeclaredValue(t *testing.T) {
+	t.Parallel()
+	const undeclared CaptureSkipReason = "review_probe_undeclared"
+	if ValidCaptureSkipReason(undeclared) {
+		t.Fatalf("fixture defect: %q must not be a declared member", undeclared)
+	}
+	if got := closedCaptureSkipReason(undeclared); got != CaptureSkipReasonUndeclared {
+		t.Fatalf("closedCaptureSkipReason(%q) = %q, want %q", undeclared, got, CaptureSkipReasonUndeclared)
+	}
+	telemetry, buf := jsonLedgerTelemetry()
+	engine := mustReuseTestEngine(t, EngineDependencies{Results: &staticResultStore{results: map[string]InvestigationResult{}}, Telemetry: telemetry})
+	engine.recordConfirmedNeedLedger(context.Background(), acceptancePrincipal(), confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerMissNoReference}, nil, "", undeclared, ConfirmedAnchorAgreementNotApplicable, "")
+	line := lastConfirmedNeedLedgerJSONLine(t, buf)
+	if got, _ := line["capture_skip_reason"].(string); got != string(CaptureSkipReasonUndeclared) {
+		t.Errorf("capture_skip_reason = %q, want %q -- the undeclared value must never reach the line raw", got, CaptureSkipReasonUndeclared)
+	}
+	if got, _ := line["capture_skip_reason_raw"].(string); got != string(undeclared) {
+		t.Errorf("capture_skip_reason_raw = %q, want the actual token %q -- the diagnostic key must still disclose it", got, undeclared)
+	}
+}
+
+// TestClosedConfirmedNeedLedgerOutcomeFailsClosedOnAnUndeclaredValue.
+func TestClosedConfirmedNeedLedgerOutcomeFailsClosedOnAnUndeclaredValue(t *testing.T) {
+	t.Parallel()
+	const undeclared ConfirmedNeedLedgerOutcome = "review_probe_undeclared"
+	if ValidConfirmedNeedLedgerOutcome(undeclared) {
+		t.Fatalf("fixture defect: %q must not be a declared member", undeclared)
+	}
+	if got := closedConfirmedNeedLedgerOutcome(undeclared); got != ConfirmedNeedLedgerOutcomeUndeclared {
+		t.Fatalf("closedConfirmedNeedLedgerOutcome(%q) = %q, want %q", undeclared, got, ConfirmedNeedLedgerOutcomeUndeclared)
+	}
+	telemetry, buf := jsonLedgerTelemetry()
+	engine := mustReuseTestEngine(t, EngineDependencies{Results: &staticResultStore{results: map[string]InvestigationResult{}}, Telemetry: telemetry})
+	engine.recordConfirmedNeedLedger(context.Background(), acceptancePrincipal(), confirmedNeedLedgerResult{Outcome: undeclared}, nil, "", CaptureSkipReasonNotApplicable, ConfirmedAnchorAgreementNotApplicable, "")
+	line := lastConfirmedNeedLedgerJSONLine(t, buf)
+	if got, _ := line["outcome"].(string); got != string(ConfirmedNeedLedgerOutcomeUndeclared) {
+		t.Errorf("outcome = %q, want %q -- the undeclared value must never reach the line raw", got, ConfirmedNeedLedgerOutcomeUndeclared)
+	}
+	if got, _ := line["outcome_raw"].(string); got != string(undeclared) {
+		t.Errorf("outcome_raw = %q, want the actual token %q -- the diagnostic key must still disclose it", got, undeclared)
+	}
+}
+
+// TestClosedConfirmedNeedBasisFailsClosedOnAnUndeclaredValue.
+func TestClosedConfirmedNeedBasisFailsClosedOnAnUndeclaredValue(t *testing.T) {
+	t.Parallel()
+	const undeclared ConfirmedNeedBasis = "review_probe_undeclared"
+	if ValidConfirmedNeedBasis(undeclared) {
+		t.Fatalf("fixture defect: %q must not be a declared member", undeclared)
+	}
+	if got := closedConfirmedNeedBasis(undeclared); got != ConfirmedNeedBasisUndeclared {
+		t.Fatalf("closedConfirmedNeedBasis(%q) = %q, want %q", undeclared, got, ConfirmedNeedBasisUndeclared)
+	}
+	telemetry, buf := jsonLedgerTelemetry()
+	engine := mustReuseTestEngine(t, EngineDependencies{Results: &staticResultStore{results: map[string]InvestigationResult{}}, Telemetry: telemetry})
+	applied := map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember{
+		contractsv1.ContextFabricStructureNeedSubjectAnchor: {Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: SubjectRepository, AppliedValue: "repository:probe", Basis: undeclared},
+	}
+	engine.recordConfirmedNeedLedger(context.Background(), acceptancePrincipal(), confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerHit}, applied, "", CaptureSkipReasonNotApplicable, ConfirmedAnchorAgreementNotApplicable, "")
+	line := lastConfirmedNeedLedgerJSONLine(t, buf)
+	if got, _ := line["applied_anchor_basis"].(string); got != string(ConfirmedNeedBasisUndeclared) {
+		t.Errorf("applied_anchor_basis = %q, want %q -- the undeclared value must never reach the line raw", got, ConfirmedNeedBasisUndeclared)
+	}
+	if got, _ := line["applied_anchor_basis_raw"].(string); got != string(undeclared) {
+		t.Errorf("applied_anchor_basis_raw = %q, want the actual token %q -- the diagnostic key must still disclose it", got, undeclared)
+	}
+}
+
+// TestClosedConfirmedNeedMemberDropReasonFailsClosedOnAnUndeclaredValue.
+func TestClosedConfirmedNeedMemberDropReasonFailsClosedOnAnUndeclaredValue(t *testing.T) {
+	t.Parallel()
+	const undeclared ConfirmedNeedMemberDropReason = "review_probe_undeclared"
+	if ValidConfirmedNeedMemberDropReason(undeclared) {
+		t.Fatalf("fixture defect: %q must not be a declared member", undeclared)
+	}
+	if got := closedConfirmedNeedMemberDropReason(undeclared); got != ConfirmedNeedMemberDropReasonUndeclared {
+		t.Fatalf("closedConfirmedNeedMemberDropReason(%q) = %q, want %q", undeclared, got, ConfirmedNeedMemberDropReasonUndeclared)
+	}
+	telemetry, buf := jsonLedgerTelemetry()
+	engine := mustReuseTestEngine(t, EngineDependencies{Results: &staticResultStore{results: map[string]InvestigationResult{}}, Telemetry: telemetry})
+	ledger := confirmedNeedLedgerResult{
+		Outcome: ConfirmedNeedLedgerHit,
+		Dropped: []ConfirmedNeedMemberDrop{{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, Reason: undeclared}},
+	}
+	engine.recordConfirmedNeedLedger(context.Background(), acceptancePrincipal(), ledger, nil, "", CaptureSkipReasonNotApplicable, ConfirmedAnchorAgreementNotApplicable, "")
+	line := lastConfirmedNeedLedgerJSONLine(t, buf)
+	wantClosed := "subject_anchor:" + string(ConfirmedNeedMemberDropReasonUndeclared)
+	wantRaw := "subject_anchor:" + string(undeclared)
+	if got, _ := line["dropped_members"].(string); got != wantClosed {
+		t.Errorf("dropped_members = %q, want %q -- the undeclared value must never reach the line raw", got, wantClosed)
+	}
+	if got, _ := line["dropped_members_raw"].(string); got != wantRaw {
+		t.Errorf("dropped_members_raw = %q, want %q -- the diagnostic key must still disclose it", got, wantRaw)
+	}
 }

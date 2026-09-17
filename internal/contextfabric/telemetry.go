@@ -415,24 +415,39 @@ func (t SlogEngineTelemetry) RecordKindCarry(ctx context.Context, principal stor
 // this axis does not yet name), and one closed-vocabulary value per named
 // exit otherwise -- see captureSkipReasons() and CaptureSkipReason's own doc
 // comment for the full set and what each one names.
+//
+// FOUR of this line's fields draw from a closed vocabulary a hand-written
+// membership function checks (outcome, applied_anchor_basis, dropped_members'
+// own per-drop reason, capture_skip_reason): each is passed through its own
+// closed* wrapper before it reaches this emitter, so a value that function
+// does not recognize renders as that vocabulary's own declared "undeclared"
+// member instead of escaping onto the line unexamined. Each also carries a
+// companion "_raw" key with the UNFILTERED token, so the safe rendering never
+// costs the line its own diagnostic value -- an operator who sees
+// `outcome=undeclared outcome_raw=some_typo` can still read what actually
+// happened.
 func (t SlogEngineTelemetry) RecordConfirmedNeedLedger(ctx context.Context, principal storage.Principal, event ConfirmedNeedLedgerEvent) {
 	args := append([]any{
-		"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(event.Outcome)),
+		"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(closedConfirmedNeedLedgerOutcome(event.Outcome))),
+		"outcome_raw", SanitizeLogAttr(string(event.Outcome)),
 		"source_result_id", SanitizeLogAttr(event.SourceResultID),
 		"applied_members", SanitizeLogAttr(observableAppliedNeedMembers(event.AppliedMembers)),
 		"applied_expected_kind", SanitizeLogAttr(string(event.AppliedExpectedKind)),
 		"applied_anchor_kind", SanitizeLogAttr(string(event.AppliedAnchorKind)),
 		"applied_anchor_value_hash", SanitizeLogAttr(event.AppliedAnchorValueHash),
-		"applied_anchor_basis", SanitizeLogAttr(string(event.AppliedAnchorBasis)),
+		"applied_anchor_basis", SanitizeLogAttr(string(closedConfirmedNeedBasis(event.AppliedAnchorBasis))),
+		"applied_anchor_basis_raw", SanitizeLogAttr(string(event.AppliedAnchorBasis)),
 		"applied_candidate_kind", SanitizeLogAttr(string(event.AppliedCandidateKind)),
 		"applied_candidate_value_hash", SanitizeLogAttr(event.AppliedCandidateValueHash),
 		"applied_handle_kind", SanitizeLogAttr(string(event.AppliedHandleKind)),
 		"applied_handle_value_hash", SanitizeLogAttr(event.AppliedHandleValueHash),
 		"dropped_members", SanitizeLogAttr(observableConfirmedNeedDrops(event.Dropped)),
+		"dropped_members_raw", SanitizeLogAttr(observableConfirmedNeedDropsRaw(event.Dropped)),
 		"anchor_agreement", SanitizeLogAttr(string(event.AnchorAgreement)),
 		"anchor_disposition", SanitizeLogAttr(string(event.AnchorDisposition)),
 		"capture_decision", SanitizeLogAttr(string(event.CaptureDecision)),
-		"capture_skip_reason", SanitizeLogAttr(noneWhenEmpty(string(event.CaptureSkipReason))),
+		"capture_skip_reason", SanitizeLogAttr(noneWhenEmpty(string(closedCaptureSkipReason(event.CaptureSkipReason)))),
+		"capture_skip_reason_raw", SanitizeLogAttr(noneWhenEmpty(string(event.CaptureSkipReason))),
 	}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric confirmed need ledger", args...)
 }
