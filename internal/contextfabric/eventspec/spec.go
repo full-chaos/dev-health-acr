@@ -2465,6 +2465,8 @@ var (
 	subjectSubstitutionOutcomeTokens      = arrayTokens(subjectSubstitutionOutcomeArr[:])
 	subjectSubstitutionOriginArr          = contextfabric.SubjectSubstitutionOriginVocabulary()
 	subjectSubstitutionOriginTokens       = arrayTokens(subjectSubstitutionOriginArr[:])
+	subjectSubstitutionRememberedArr      = contextfabric.SubjectSubstitutionRememberedCheckVocabulary()
+	subjectSubstitutionRememberedTokens   = arrayTokens(subjectSubstitutionRememberedArr[:])
 )
 
 // ConfirmedNeedLedger is the per-need confirmation ledger's own trace: the
@@ -2540,6 +2542,18 @@ var ConfirmedNeedLedger = Event{
 		// substitution_origin is prior_receipt.
 		{Key: "substitution_origin_result_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "substitution_origin_receipt_id", Type: FieldString, Presence: PresenceRequired},
+		// Open: the result whose subject the parent identity is -- the named
+		// parent, or the result a clarification the guard issued speaks for
+		// -- and the result the origin receipt's issuer was issued for when
+		// the guard issued it. Empty when that side has none.
+		{Key: "substitution_parent_result_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "substitution_origin_issued_for", Type: FieldString, Presence: PresenceRequired},
+		// The remembered subject's re-read: what it found (closed), the
+		// verifier's own reason and the context error (open, empty when
+		// there is none). Every way the offer is withheld is named here.
+		{Key: "substitution_remembered_check", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: subjectSubstitutionRememberedTokens},
+		{Key: "substitution_remembered_reason", Type: FieldString, Presence: PresenceRequired},
+		{Key: "substitution_remembered_context_error", Type: FieldString, Presence: PresenceRequired},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }

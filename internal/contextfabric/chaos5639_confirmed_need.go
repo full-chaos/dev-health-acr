@@ -280,7 +280,7 @@ func (e *Engine) resolveConfirmedNeedLedger(ctx context.Context, principal stora
 	// unreadable snapshot must never cost the guard the parent it compares
 	// against.
 	evidence.Loaded = true
-	evidence.Subject = parentCommittedIdentityOf(stored)
+	evidence = parentIdentityOf(evidence, stored, parent)
 	// UNLOADABLE (malformed/oversized/unsupported/unreported) is a DIFFERENT
 	// fact than EMPTY (a clean read that simply has no ledger): an operator
 	// who can only see "empty" for both cannot tell a live storage/decode
@@ -864,6 +864,21 @@ type ConfirmedNeedLedgerEvent struct {
 	// by some other result's receipt names that result.
 	SubstitutionOriginResultID  string
 	SubstitutionOriginReceiptID string
+	// SubstitutionParentResultID is the result whose subject the parent
+	// identity is: the named parent, or the result a clarification this
+	// guard issued speaks for. Empty when the named parent did not read.
+	// SubstitutionOriginIssuedFor is the result the origin receipt's issuing
+	// result was issued for, when this guard issued it. Together they name
+	// the exchange a redeemed choice answers.
+	SubstitutionParentResultID  string
+	SubstitutionOriginIssuedFor string
+	// SubstitutionRememberedCheck, SubstitutionRememberedReason and
+	// SubstitutionRememberedContextError are the remembered subject's re-read:
+	// what it found, the verifier's own reason, and the context error when
+	// the turn's context was done. Never dropped.
+	SubstitutionRememberedCheck        SubjectSubstitutionRememberedCheck
+	SubstitutionRememberedReason       CandidateVerificationReason
+	SubstitutionRememberedContextError string
 }
 
 // confirmedNeedLedgerEventOf builds the event from the admission result and
@@ -878,13 +893,18 @@ func confirmedNeedLedgerEventOf(ledger confirmedNeedLedgerResult, applied map[co
 		AppliedMembers: appliedNeedLedgerMembers(applied), Dropped: ledger.Dropped,
 		CaptureDecision: captureDecision, CaptureSkipReason: captureSkipReason,
 		AnchorAgreement: anchorAgreement, AnchorDisposition: anchorDisposition,
-		SubstitutionGuard:           substitution.Outcome,
-		SubstitutionOrigin:          substitution.Origin,
-		SubstitutionParentKind:      substitution.Parent.Kind,
-		SubstitutionParentID:        substitution.Parent.CanonicalID,
-		SubstitutionCommittedIDs:    committedIDs(substitution.Committed),
-		SubstitutionOriginResultID:  substitution.OriginReceiptResultID,
-		SubstitutionOriginReceiptID: substitution.OriginReceiptID,
+		SubstitutionGuard:                  substitution.Outcome,
+		SubstitutionOrigin:                 substitution.Origin,
+		SubstitutionParentKind:             substitution.Parent.Kind,
+		SubstitutionParentID:               substitution.Parent.CanonicalID,
+		SubstitutionCommittedIDs:           committedIDs(substitution.Committed),
+		SubstitutionOriginResultID:         substitution.OriginReceiptResultID,
+		SubstitutionOriginReceiptID:        substitution.OriginReceiptID,
+		SubstitutionParentResultID:         substitution.ParentResultID,
+		SubstitutionOriginIssuedFor:        substitution.OriginIssuedFor,
+		SubstitutionRememberedCheck:        substitution.Remembered.Check,
+		SubstitutionRememberedReason:       substitution.Remembered.Reason,
+		SubstitutionRememberedContextError: substitution.Remembered.ContextError,
 	}
 	if entry, ok := applied[contractsv1.ContextFabricStructureNeedExpectedKind]; ok {
 		event.AppliedExpectedKind = contractsv1.ContextFabricSubjectKind(entry.AppliedValue)

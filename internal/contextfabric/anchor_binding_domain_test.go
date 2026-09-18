@@ -524,9 +524,8 @@ func jsonStringOfLength(t *testing.T, n int) json.RawMessage {
 }
 
 // TestAGuardDecisionThatChangesTheBindingDiffersInAnInputKey is the
-// completeness pair for the one binder input that is not an
-// anchorBindingInput field: the subject-substitution guard's decision, which
-// the tracker reads to choose the proof. Two turns identical in everything
+// completeness pair for the subject-substitution guard's decision, which
+// both chooses the proof and decides the binding. Two turns identical in everything
 // else -- the same parent binding, the same decisive resolution proving beta,
 // the same saved document committing nothing -- differ only in whether the
 // guard fired. They decide differently, and the line names why in an INPUT

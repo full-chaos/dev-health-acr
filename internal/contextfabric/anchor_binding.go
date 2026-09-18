@@ -435,6 +435,11 @@ type anchorBindingInput struct {
 	// ResultID and GraphEpoch stamp an identity this turn proves.
 	ResultID   string
 	GraphEpoch int64
+	// SubstitutionGuard is the subject-substitution guard's decision. When
+	// it FIRED, Resolution is the resolution the guard withheld, every
+	// identity it commits is one the turn did not serve, and no path of the
+	// binder may bind it (withheldAnchorBinding).
+	SubstitutionGuard SubjectSubstitutionOutcome
 }
 
 // anchorBindingProposal is what the binder measured before deciding.
@@ -450,6 +455,9 @@ type anchorBindingProposal struct {
 // bindAnchor is the one binder. PURE.
 func bindAnchor(in anchorBindingInput) (AnchorBinding, anchorBindingProposal) {
 	to, proposal := bindAnchorOnProof(in)
+	if in.SubstitutionGuard.Fired() {
+		return withheldAnchorBinding(in), proposal
+	}
 	if in.Evaluation != AnchorBindingEvaluationReused || !to.active() || to.State == AnchorBindingContested {
 		return to, proposal
 	}
@@ -617,6 +625,39 @@ func bindAnchorOnProof(in anchorBindingInput) (AnchorBinding, anchorBindingPropo
 	default:
 		return keep(from.State, AnchorBindingReasonCarriedSilent), proposal
 	}
+}
+
+// withheldAnchorBinding is the binding of a turn the subject-substitution
+// guard fired on.
+//
+// A SUBJECT THE GUARD WITHHELD IS NEVER BOUND, on any path: not by proof,
+// not by a caller hint, not by a redeemed receipt, and not when the parent
+// carries no binding of its own. The turn served no subject, so the binding
+// asserts none it did not serve. A withheld identity is a contender only:
+// it contests the parent's binding when there is one to contest, and
+// otherwise the binding stays unbound on ambiguous proof -- the same
+// ambiguity the guard's own terminal reports. The withheld identity stays
+// on the line (proven_anchor_ids, substitution_guard) either way.
+func withheldAnchorBinding(in anchorBindingInput) AnchorBinding {
+	from := in.From
+	withheld := map[anchorRef]bool{}
+	for _, subject := range in.Resolution.Committed {
+		withheld[anchorRef{Kind: subject.Kind, ID: subject.CanonicalID}] = true
+	}
+	held := anchorRef{Kind: from.Kind, ID: from.CanonicalID}
+	if from.active() && !withheld[held] {
+		for _, subject := range in.Resolution.Committed {
+			ref := anchorRef{Kind: subject.Kind, ID: subject.CanonicalID}
+			if !ref.identifies() {
+				continue
+			}
+			contested := from
+			contested.State, contested.Reason = AnchorBindingContested, AnchorBindingReasonContestedByResolution
+			contested.ContenderKind, contested.ContenderID = ref.Kind, ref.ID
+			return contested
+		}
+	}
+	return AnchorBinding{State: AnchorBindingUnbound, Proof: AnchorBindingProofNone, Reason: AnchorBindingReasonAmbiguousProof, GraphEpoch: in.GraphEpoch}
 }
 
 // receiptAnchorRef is the identity a redeemed subject_anchor receipt names,
@@ -890,9 +931,10 @@ func (t *anchorBindingTracker) decide(site BudgetAssertStage, result Investigati
 		From: t.parent.from(), Evaluation: t.evaluation, Frame: t.frame, ModelAnchorKind: t.modelAnchorKind,
 		Receipt: t.receipt, CallerHints: t.callerHints, Bases: t.bases,
 		ResultID: result.ResultID, GraphEpoch: t.epoch,
+		SubstitutionGuard: t.substitution,
 	}
 	switch {
-	case t.evaluation == AnchorBindingEvaluationResolved && t.substitution.Fired():
+	case t.substitution.Fired():
 		// The guard withheld what the engine proved. The proof is the
 		// decisive resolution itself: restricting it to the saved document,
 		// which commits nothing, would read a contested turn as silence.

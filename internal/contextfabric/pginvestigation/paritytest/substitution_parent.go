@@ -71,29 +71,44 @@ func (substitutionSynth) Synthesize(context.Context, storage.Principal, contextf
 	return result("result-substitution-synth", "how is the substitute doing?"), nil
 }
 
-// SubstitutionParentCell is one executed cell and what it produced.
+// SubstitutionParentCell is one executed cell and what it produced,
+// including the shadow binder's decision for the follow-up.
 type SubstitutionParentCell struct {
 	Name, Guard, ParentID, Status string
 	Committed                     int
+	// Bindings are the follow-up's anchor-binding transition lines:
+	// to_state, to_id, reason and contender_id, one entry per line.
+	Bindings []SubstitutionParentBinding
+}
+
+// SubstitutionParentBinding is one anchor-binding transition decision.
+type SubstitutionParentBinding struct {
+	State, ID, Reason, ContenderID string
 }
 
 // RunSubstitutionParentReadSuite runs the whole parent-read domain against one
 // store: parent payload {readable, unreadable} × snapshot {available,
-// malformed, absent} × parent identity {one, none}. A readable payload
-// decides by its served subject whatever the snapshot is; only an unreadable
-// payload reads parent_unreadable.
+// available with the parent's anchor binding, malformed, absent} × parent
+// identity {one, none}. A readable payload decides by its served subject
+// whatever the snapshot is; only an unreadable payload reads
+// parent_unreadable. On every cell the guard fires on, the shadow binder
+// never binds the withheld subject: it contests the parent's binding when
+// the snapshot carries one, and stays unbound on ambiguous proof otherwise.
 func RunSubstitutionParentReadSuite(t *testing.T, newStore func(t *testing.T) (contextfabric.InvestigationResultStore, SemanticSeed)) []SubstitutionParentCell {
 	t.Helper()
 	encoded := snapshotAvailableFixture(t)
 	snapshots := []struct {
 		name  string
-		bytes []byte
+		bytes func(parentID string) []byte
 	}{
-		{"snapshot_available", encoded},
+		{"snapshot_available", func(string) []byte { return encoded }},
+		{"snapshot_bound", func(parentID string) []byte { return snapshotBoundFixture(t, parentID) }},
 		// Valid JSON in a document this build refuses: a jsonb column accepts
 		// it, and the store reads it back malformed.
-		{"snapshot_malformed", []byte(`{"format_version":"semantic-state.v1","family":"not-a-family"}`)},
-		{"snapshot_absent", nil},
+		{"snapshot_malformed", func(string) []byte {
+			return []byte(`{"format_version":"semantic-state.v1","family":"not-a-family"}`)
+		}},
+		{"snapshot_absent", func(string) []byte { return nil }},
 	}
 	var cells []SubstitutionParentCell
 	for _, identity := range []string{"one_identity", "no_identity"} {
@@ -104,7 +119,7 @@ func RunSubstitutionParentReadSuite(t *testing.T, newStore func(t *testing.T) (c
 					payload = "payload_unreadable"
 				}
 				name := payload + "/" + snapshot.name + "/" + identity
-				cell := runSubstitutionParentCell(t, newStore, name, identity == "one_identity", payloadReadable, snapshot.bytes)
+				cell := runSubstitutionParentCell(t, newStore, name, identity == "one_identity", payloadReadable, snapshot.bytes(substitutionParentID(name)))
 				cells = append(cells, cell)
 				want := "clarified_subject_changed"
 				switch {
@@ -120,6 +135,9 @@ func RunSubstitutionParentReadSuite(t *testing.T, newStore func(t *testing.T) (c
 				if want == "clarified_subject_changed" && (cell.Committed != 0 || cell.Status != string(contextfabric.InvestigationClarificationRequired)) {
 					t.Errorf("%s: served %d committed with status %q; a readable parent's subject is never substituted", name, cell.Committed, cell.Status)
 				}
+				if want == "clarified_subject_changed" {
+					assertWithheldNeverBound(t, name, cell, snapshot.name == "snapshot_bound")
+				}
 			}
 		}
 	}
@@ -129,7 +147,7 @@ func RunSubstitutionParentReadSuite(t *testing.T, newStore func(t *testing.T) (c
 func runSubstitutionParentCell(t *testing.T, newStore func(t *testing.T) (contextfabric.InvestigationResultStore, SemanticSeed), name string, oneIdentity, payloadReadable bool, snapshot []byte) SubstitutionParentCell {
 	t.Helper()
 	store, seed := newStore(t)
-	parentID := "result-substitution-parent-" + sanitizeCellName(name)
+	parentID := substitutionParentID(name)
 	parent := result(parentID, "how is the parent project doing?")
 	if !oneIdentity {
 		parent.SubjectResolution.Committed = []contextfabric.SubjectRef{}
@@ -157,7 +175,7 @@ func runSubstitutionParentCell(t *testing.T, newStore func(t *testing.T) (contex
 		switch {
 		case snapshot == nil:
 			want = contextfabric.SemanticStateReadAbsent
-		case !bytes.Equal(snapshot, snapshotAvailableFixture(t)):
+		case !bytes.Equal(snapshot, snapshotAvailableFixture(t)) && !bytes.Equal(snapshot, snapshotBoundFixture(t, parentID)):
 			want = contextfabric.SemanticStateReadMalformed
 		}
 		if stored.SemanticStateRead != want {
@@ -202,7 +220,19 @@ func runSubstitutionParentCell(t *testing.T, newStore func(t *testing.T) (contex
 	scanner.Buffer(make([]byte, 0, 1<<16), 1<<22)
 	for scanner.Scan() {
 		var line map[string]any
-		if json.Unmarshal(scanner.Bytes(), &line) != nil || line["msg"] != "context fabric confirmed need ledger" {
+		if json.Unmarshal(scanner.Bytes(), &line) != nil {
+			continue
+		}
+		if line["msg"] == contextfabric.AnchorBindingTransitionLogMessage {
+			var binding SubstitutionParentBinding
+			binding.State, _ = line["to_state"].(string)
+			binding.ID, _ = line["to_id"].(string)
+			binding.Reason, _ = line["reason"].(string)
+			binding.ContenderID, _ = line["contender_id"].(string)
+			cell.Bindings = append(cell.Bindings, binding)
+			continue
+		}
+		if line["msg"] != "context fabric confirmed need ledger" {
 			continue
 		}
 		cell.Guard, _ = line["substitution_guard"].(string)
@@ -212,6 +242,52 @@ func runSubstitutionParentCell(t *testing.T, newStore func(t *testing.T) (contex
 		t.Fatalf("%s: no confirmed-need-ledger line was emitted", name)
 	}
 	return cell
+}
+
+// assertWithheldNeverBound is the binder half of a fired cell: every
+// transition line keeps the withheld subject a contender only.
+func assertWithheldNeverBound(t *testing.T, name string, cell SubstitutionParentCell, parentBound bool) {
+	t.Helper()
+	if len(cell.Bindings) == 0 {
+		t.Errorf("%s: no anchor-binding transition line was emitted", name)
+	}
+	for _, binding := range cell.Bindings {
+		if binding.ID == substitutionFollowUpSubject.CanonicalID {
+			t.Errorf("%s: the shadow binder bound the withheld subject: %+v", name, binding)
+		}
+		switch {
+		case parentBound && (binding.State != "contested" || binding.ContenderID != substitutionFollowUpSubject.CanonicalID):
+			t.Errorf("%s: binding = %+v, want the parent's binding contested by the withheld subject", name, binding)
+		case !parentBound && (binding.State != "unbound" || binding.Reason != "ambiguous_proof"):
+			t.Errorf("%s: binding = %+v, want unbound on ambiguous proof", name, binding)
+		}
+	}
+}
+
+// substitutionParentID is the parent result id a cell plants.
+func substitutionParentID(name string) string {
+	return "result-substitution-parent-" + sanitizeCellName(name)
+}
+
+// snapshotBoundFixture is the readable snapshot carrying the parent's own
+// anchor binding: bound to the project the parent committed, at the graph
+// epoch the follow-up resolves.
+func snapshotBoundFixture(t *testing.T, parentID string) []byte {
+	t.Helper()
+	state := SemanticStateFixture(contextfabric.SubjectTeam, contextfabric.SubjectRepository)
+	binding, err := json.Marshal(map[string]any{
+		"state": "bound", "kind": string(contextfabric.SubjectProject), "canonical_id": "project-" + parentID,
+		"proof": "identity_proven", "reason": "identity_proven", "origin_result_id": parentID, "graph_epoch": 0,
+	})
+	if err != nil {
+		t.Fatalf("encode binding fixture: %v", err)
+	}
+	state.Extensions = contextfabric.SemanticStateExtensions{"anchor_binding": binding}
+	encoded, err := contextfabric.EncodeSemanticState(state)
+	if err != nil {
+		t.Fatalf("encode bound snapshot fixture: %v", err)
+	}
+	return encoded
 }
 
 // sanitizeCellName makes a cell name safe inside a result id.

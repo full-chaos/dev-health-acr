@@ -511,8 +511,8 @@ func TestSubstitutionGuardWithholdsTheOfferOnACancelledContext(t *testing.T) {
 	h := newNeedTurnHarness(t, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if h.engine.rememberedSubjectReadable(ctx, acceptancePrincipal(), needTurnRequest("request_5917_cancelled", true), ResolvedGraphBinding{GraphKey: "need-turn-key"}, substitutionRepoOne) {
-		t.Fatal("rememberedSubjectReadable() = true on a cancelled context, want false")
+	if got := h.engine.rememberedSubjectReadable(ctx, acceptancePrincipal(), needTurnRequest("request_5917_cancelled", true), ResolvedGraphBinding{GraphKey: "need-turn-key"}, substitutionRepoOne); got.readable() || got.Check != SubjectSubstitutionRememberedCancelledBefore || got.ContextError != context.Canceled.Error() {
+		t.Fatalf("rememberedSubjectReadable() = %+v on a cancelled context, want cancelled_before_check carrying the context error", got)
 	}
 	if len(h.candidates) != 0 {
 		t.Errorf("candidate verifier calls = %d on a cancelled context, want 0", len(h.candidates))
@@ -536,10 +536,15 @@ func TestSubstitutionGuardEmitsEveryFieldAtProductionInfo(t *testing.T) {
 	}
 	line := lastLedgerJSONLine(t, buf)
 	want := map[string]string{
-		"substitution_guard":       string(SubjectSubstitutionClarified),
-		"substitution_origin":      string(SubjectSubstitutionOriginResolver),
-		"substitution_parent_kind": string(substitutionRepoOne.Kind),
-		"substitution_parent_id":   substitutionRepoOne.CanonicalID,
+		"substitution_guard":                    string(SubjectSubstitutionClarified),
+		"substitution_origin":                   string(SubjectSubstitutionOriginResolver),
+		"substitution_parent_kind":              string(substitutionRepoOne.Kind),
+		"substitution_parent_id":                substitutionRepoOne.CanonicalID,
+		"substitution_parent_result_id":         one.result.ResultID,
+		"substitution_origin_issued_for":        "",
+		"substitution_remembered_check":         string(SubjectSubstitutionRememberedReadable),
+		"substitution_remembered_reason":        string(CandidateVerificationValid),
+		"substitution_remembered_context_error": "",
 	}
 	for key, value := range want {
 		got, ok := line[key]
@@ -614,6 +619,10 @@ func TestDecideSubjectSubstitutionOverTheWholeInputSpace(t *testing.T) {
 		{"redeemed choice beats clarification", subjectSubstitutionInput{Parent: held, Committed: []SubjectRef{substitutionRepoTwo}, RedeemedChoice: true, AllowClarification: true, RememberedAvailable: true}, SubjectSubstitutionRedeemedChoice, false},
 		{"redeemed choice beats refusal", subjectSubstitutionInput{Parent: held, Committed: []SubjectRef{substitutionRepoTwo}, RedeemedChoice: true}, SubjectSubstitutionRedeemedChoice, false},
 		{"same identity is never a subject change", subjectSubstitutionInput{Parent: held, Committed: []SubjectRef{substitutionRepoOne}, RedeemedChoice: true, AllowClarification: true}, SubjectSubstitutionSameSubject, false},
+		{"guard-issued parent, remembered unlisted", subjectSubstitutionInput{Parent: parentAnchorEvidence{Referenced: true, Loaded: true, GuardIssued: true}, Committed: []SubjectRef{substitutionRepoTwo}, AllowClarification: true, RememberedAvailable: true}, SubjectSubstitutionClarifiedRememberedUnavailable, true},
+		{"guard-issued parent, remembered unlisted, caller cannot be asked", subjectSubstitutionInput{Parent: parentAnchorEvidence{Referenced: true, Loaded: true, GuardIssued: true}, Committed: []SubjectRef{substitutionRepoTwo}}, SubjectSubstitutionRefusedRememberedUnavailable, true},
+		{"guard-issued parent, remembered unlisted, redeemed choice", subjectSubstitutionInput{Parent: parentAnchorEvidence{Referenced: true, Loaded: true, GuardIssued: true}, Committed: []SubjectRef{substitutionRepoTwo}, RedeemedChoice: true}, SubjectSubstitutionRedeemedChoice, false},
+		{"guard-issued parent, remembered unlisted, commits nothing", subjectSubstitutionInput{Parent: parentAnchorEvidence{Referenced: true, Loaded: true, GuardIssued: true}, AllowClarification: true}, SubjectSubstitutionNoCommittedSubject, false},
 		{"a redeemed choice never licenses a set of several", subjectSubstitutionInput{Parent: held, Committed: []SubjectRef{substitutionRepoTwo, substitutionOtherKind}, RedeemedChoice: true, AllowClarification: true, RememberedAvailable: true}, SubjectSubstitutionClarified, true},
 	}
 	for _, tc := range cases {
@@ -690,22 +699,22 @@ func TestSubjectSubstitutionOriginOfReadsReceiptsBeforeCallerHints(t *testing.T)
 			Basis: ConfirmedNeedBasisEngineCommitted,
 		},
 	}
-	got := subjectOriginOf(substitutionRepoTwo, "result_parent_0001", redeemed, []SubjectHint{hint}, carried)
+	got := subjectOriginOf(substitutionRepoTwo, parentReceiptIssuers{named: "result_parent_0001"}, redeemed, []SubjectHint{hint}, carried)
 	if got.Origin != SubjectSubstitutionOriginPriorReceipt || got.ReceiptResultID != "result_other_0002" || got.ReceiptID != redeemed[0].receipt.ReceiptID {
 		t.Errorf("origin = %+v, want the redeemed receipt of result_other_0002", got)
 	}
-	if got := subjectOriginOf(substitutionRepoTwo, "", nil, []SubjectHint{hint}, carried); got.Origin != SubjectSubstitutionOriginCallerHint || got.ReceiptResultID != "" {
+	if got := subjectOriginOf(substitutionRepoTwo, parentReceiptIssuers{named: ""}, nil, []SubjectHint{hint}, carried); got.Origin != SubjectSubstitutionOriginCallerHint || got.ReceiptResultID != "" {
 		t.Errorf("origin = %+v, want %q with no receipt", got, SubjectSubstitutionOriginCallerHint)
 	}
-	if got := subjectOriginOf(substitutionRepoTwo, "", nil, nil, carried); got.Origin != SubjectSubstitutionOriginEngineCarry {
+	if got := subjectOriginOf(substitutionRepoTwo, parentReceiptIssuers{named: ""}, nil, nil, carried); got.Origin != SubjectSubstitutionOriginEngineCarry {
 		t.Errorf("origin = %+v, want %q", got, SubjectSubstitutionOriginEngineCarry)
 	}
-	if got := subjectOriginOf(substitutionRepoTwo, "", nil, nil, nil); got.Origin != SubjectSubstitutionOriginResolver {
+	if got := subjectOriginOf(substitutionRepoTwo, parentReceiptIssuers{named: ""}, nil, nil, nil); got.Origin != SubjectSubstitutionOriginResolver {
 		t.Errorf("origin = %+v, want %q", got, SubjectSubstitutionOriginResolver)
 	}
 	dropped := []priorSubjectReceiptOutcome{redeemedOutcome("result_other_0002", substitutionRepoTwo)}
 	dropped[0].droppedByHintBudget = true
-	if got := subjectOriginOf(substitutionRepoTwo, "", dropped, nil, nil); got.Origin != SubjectSubstitutionOriginResolver {
+	if got := subjectOriginOf(substitutionRepoTwo, parentReceiptIssuers{named: ""}, dropped, nil, nil); got.Origin != SubjectSubstitutionOriginResolver {
 		t.Errorf("origin for a budget-dropped redemption = %+v, want %q", got, SubjectSubstitutionOriginResolver)
 	}
 	other := SubjectHint{Kind: substitutionRepoOne.Kind, ID: substitutionRepoOne.CanonicalID, Label: substitutionRepoOne.Label, Source: "caller"}
@@ -715,7 +724,7 @@ func TestSubjectSubstitutionOriginOfReadsReceiptsBeforeCallerHints(t *testing.T)
 			AppliedKind: substitutionRepoOne.Kind, AppliedValue: substitutionRepoOne.CanonicalID,
 		},
 	}
-	if got := subjectOriginOf(substitutionRepoTwo, "", []priorSubjectReceiptOutcome{redeemedOutcome("r", substitutionRepoOne)}, []SubjectHint{other}, otherCarried); got.Origin != SubjectSubstitutionOriginResolver {
+	if got := subjectOriginOf(substitutionRepoTwo, parentReceiptIssuers{named: ""}, []priorSubjectReceiptOutcome{redeemedOutcome("r", substitutionRepoOne)}, []SubjectHint{other}, otherCarried); got.Origin != SubjectSubstitutionOriginResolver {
 		t.Errorf("origin for channels naming another subject = %+v, want %q", got, SubjectSubstitutionOriginResolver)
 	}
 }
@@ -728,11 +737,11 @@ func TestSubjectOriginOfNamesTheParentsReceiptWhenSeveralCarriedTheSubject(t *te
 		redeemedOutcome("result_other_0002", substitutionRepoTwo),
 		redeemedOutcome("result_parent_0001", substitutionRepoTwo),
 	}
-	got := subjectOriginOf(substitutionRepoTwo, "result_parent_0001", outcomes, nil, nil)
+	got := subjectOriginOf(substitutionRepoTwo, parentReceiptIssuers{named: "result_parent_0001"}, outcomes, nil, nil)
 	if got.ReceiptResultID != "result_parent_0001" {
 		t.Errorf("origin receipt result = %q, want the named parent's", got.ReceiptResultID)
 	}
-	got = subjectOriginOf(substitutionRepoTwo, "result_elsewhere", outcomes, nil, nil)
+	got = subjectOriginOf(substitutionRepoTwo, parentReceiptIssuers{named: "result_elsewhere"}, outcomes, nil, nil)
 	if got.ReceiptResultID != "result_other_0002" {
 		t.Errorf("with no parent receipt, origin receipt result = %q, want the first redemption's", got.ReceiptResultID)
 	}
@@ -978,8 +987,8 @@ func TestSubstitutionGuardWithholdsWhenTheReReadIsCancelledMidCall(t *testing.T)
 		cancel()
 		return true, CandidateVerificationValid
 	}
-	if h.engine.rememberedSubjectReadable(ctx, acceptancePrincipal(), needTurnRequest("request_5917_midcall", true), ResolvedGraphBinding{GraphKey: "need-turn-key"}, substitutionRepoOne) {
-		t.Fatal("rememberedSubjectReadable() = true although the context died during the read, want false")
+	if got := h.engine.rememberedSubjectReadable(ctx, acceptancePrincipal(), needTurnRequest("request_5917_midcall", true), ResolvedGraphBinding{GraphKey: "need-turn-key"}, substitutionRepoOne); got.readable() || got.Check != SubjectSubstitutionRememberedCancelledDuring || got.Reason != CandidateVerificationValid || got.ContextError != context.Canceled.Error() {
+		t.Fatalf("rememberedSubjectReadable() = %+v although the context died during the read, want cancelled_during_check carrying the verifier reason and the context error", got)
 	}
 }
 
@@ -997,8 +1006,8 @@ func TestSubstitutionGuardWithholdsOnANonValidVerificationReason(t *testing.T) {
 			h.engine.candidateVerifier = func(context.Context, storage.Principal, RequestedScope, ResolvedGraphBinding, contractsv1.ContextFabricSubjectKind, string) (bool, CandidateVerificationReason) {
 				return true, reason
 			}
-			if h.engine.rememberedSubjectReadable(context.Background(), acceptancePrincipal(), needTurnRequest("request_5917_reason_"+string(reason), true), ResolvedGraphBinding{GraphKey: "need-turn-key"}, substitutionRepoOne) {
-				t.Fatalf("rememberedSubjectReadable() = true for reason %q, want false", reason)
+			if got := h.engine.rememberedSubjectReadable(context.Background(), acceptancePrincipal(), needTurnRequest("request_5917_reason_"+string(reason), true), ResolvedGraphBinding{GraphKey: "need-turn-key"}, substitutionRepoOne); got.readable() || got.Check != SubjectSubstitutionRememberedRefused || got.Reason != reason || got.ContextError != "" {
+				t.Fatalf("rememberedSubjectReadable() = %+v for reason %q, want refused carrying that reason", got, reason)
 			}
 		})
 	}
@@ -1284,7 +1293,7 @@ func TestSubjectSubstitutionRedeemedChoiceIsOnePredicateOverOneReceipt(t *testin
 	for rname, outcomes := range receipts {
 		for cname, committed := range commits {
 			cell := rname + "/" + cname
-			got := subjectSubstitutionRedeemedChoice(committed, parent, outcomes)
+			got := subjectSubstitutionRedeemedChoice(committed, parentReceiptIssuers{named: parent}, outcomes)
 			if got != want[cell] {
 				t.Errorf("%s: redeemed choice = %t, want %t", cell, got, want[cell])
 			}
@@ -1299,21 +1308,21 @@ func TestSubjectSubstitutionRedeemedChoiceRefusesWhatNeverReachedResolution(t *t
 	t.Parallel()
 	x := []SubjectRef{substitutionRepoTwo}
 	unnamed := redeemedOutcome("", substitutionRepoTwo)
-	if subjectSubstitutionRedeemedChoice(x, "", []priorSubjectReceiptOutcome{unnamed}) {
+	if subjectSubstitutionRedeemedChoice(x, parentReceiptIssuers{named: ""}, []priorSubjectReceiptOutcome{unnamed}) {
 		t.Error("an unnamed parent and an unnamed receipt must not match each other")
 	}
 	noHint := redeemedOutcome("result_parent_0001", substitutionRepoTwo)
 	noHint.hasHint = false
-	if subjectSubstitutionRedeemedChoice(x, "result_parent_0001", []priorSubjectReceiptOutcome{noHint}) {
+	if subjectSubstitutionRedeemedChoice(x, parentReceiptIssuers{named: "result_parent_0001"}, []priorSubjectReceiptOutcome{noHint}) {
 		t.Error("a receipt whose redemption produced no hint chose nothing")
 	}
 	dropped := redeemedOutcome("result_parent_0001", substitutionRepoTwo)
 	dropped.droppedByHintBudget = true
-	if subjectSubstitutionRedeemedChoice(x, "result_parent_0001", []priorSubjectReceiptOutcome{dropped}) {
+	if subjectSubstitutionRedeemedChoice(x, parentReceiptIssuers{named: "result_parent_0001"}, []priorSubjectReceiptOutcome{dropped}) {
 		t.Error("a hint the budget dropped never reached resolution")
 	}
 	padded := redeemedOutcome(" result_parent_0001 ", substitutionRepoTwo)
-	if !subjectSubstitutionRedeemedChoice(x, "result_parent_0001", []priorSubjectReceiptOutcome{padded}) {
+	if !subjectSubstitutionRedeemedChoice(x, parentReceiptIssuers{named: "result_parent_0001"}, []priorSubjectReceiptOutcome{padded}) {
 		t.Error("the issuer is compared as resolvePriorSubjectHints loads it: trimmed")
 	}
 }
@@ -1326,13 +1335,13 @@ func TestSubjectSubstitutionOriginOfDescribesTheSubstitutingSubject(t *testing.T
 	hint := SubjectHint{Kind: substitutionRepoTwo.Kind, ID: substitutionRepoTwo.CanonicalID, Label: substitutionRepoTwo.Label, Source: "caller"}
 	parentRedeemed := []priorSubjectReceiptOutcome{redeemedOutcome("result_parent_0001", substitutionRepoOne)}
 	both := []SubjectRef{substitutionRepoOne, substitutionRepoTwo}
-	if got := subjectSubstitutionOriginOf(both, substitutionRepoOne, "result_parent_0001", parentRedeemed, []SubjectHint{hint}, nil); got.Origin != SubjectSubstitutionOriginCallerHint {
+	if got := subjectSubstitutionOriginOf(both, substitutionRepoOne, parentReceiptIssuers{named: "result_parent_0001"}, parentRedeemed, []SubjectHint{hint}, nil); got.Origin != SubjectSubstitutionOriginCallerHint {
 		t.Errorf("origin = %+v, want the substituting subject's %q", got, SubjectSubstitutionOriginCallerHint)
 	}
-	if got := subjectSubstitutionOriginOf([]SubjectRef{substitutionRepoOne}, substitutionRepoOne, "result_parent_0001", parentRedeemed, nil, nil); got.Origin != SubjectSubstitutionOriginPriorReceipt {
+	if got := subjectSubstitutionOriginOf([]SubjectRef{substitutionRepoOne}, substitutionRepoOne, parentReceiptIssuers{named: "result_parent_0001"}, parentRedeemed, nil, nil); got.Origin != SubjectSubstitutionOriginPriorReceipt {
 		t.Errorf("origin for the parent alone = %+v, want %q", got, SubjectSubstitutionOriginPriorReceipt)
 	}
-	if got := subjectSubstitutionOriginOf(nil, substitutionRepoOne, "", nil, nil, nil); got.Origin != SubjectSubstitutionOriginNotApplicable {
+	if got := subjectSubstitutionOriginOf(nil, substitutionRepoOne, parentReceiptIssuers{named: ""}, nil, nil, nil); got.Origin != SubjectSubstitutionOriginNotApplicable {
 		t.Errorf("origin for nothing committed = %+v, want %q", got, SubjectSubstitutionOriginNotApplicable)
 	}
 }

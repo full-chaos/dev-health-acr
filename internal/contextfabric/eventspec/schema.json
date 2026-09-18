@@ -1215,6 +1215,39 @@
         "presence": "required"
       },
       {
+        "key": "substitution_parent_result_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "substitution_origin_issued_for",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "substitution_remembered_check",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_checked",
+          "readable",
+          "verifier_unwired",
+          "cancelled_before_check",
+          "cancelled_during_check",
+          "refused"
+        ]
+      },
+      {
+        "key": "substitution_remembered_reason",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "substitution_remembered_context_error",
+        "type": "string",
+        "presence": "required"
+      },
+      {
         "key": "request_id",
         "type": "string",
         "presence": "conditional",

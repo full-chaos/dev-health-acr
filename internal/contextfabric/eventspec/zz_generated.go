@@ -607,31 +607,36 @@ func (f CompletenessAuthorityFields) SlogArgs() []any {
 // ConfirmedNeedLedgerFields is contextfabric.confirmed_need_ledger's generated typed construction interface
 // (CHAOS-5516): one Go field per Field ConfirmedNeedLedger.Fields declares in spec.go.
 type ConfirmedNeedLedgerFields struct {
-	OrgID                       string
-	Outcome                     string
-	SourceResultID              string
-	AppliedMembers              string
-	AppliedExpectedKind         string
-	AppliedAnchorKind           string
-	AppliedAnchorValueHash      string
-	AppliedAnchorBasis          string
-	AppliedCandidateKind        string
-	AppliedCandidateValueHash   string
-	AppliedHandleKind           string
-	AppliedHandleValueHash      string
-	DroppedMembers              string
-	AnchorAgreement             string
-	AnchorDisposition           string
-	CaptureDecision             string
-	CaptureSkipReason           string
-	SubstitutionGuard           string
-	SubstitutionOrigin          string
-	SubstitutionParentKind      string
-	SubstitutionParentID        string
-	SubstitutionCommittedIDs    []string
-	SubstitutionOriginResultID  string
-	SubstitutionOriginReceiptID string
-	RequestID                   string
+	OrgID                              string
+	Outcome                            string
+	SourceResultID                     string
+	AppliedMembers                     string
+	AppliedExpectedKind                string
+	AppliedAnchorKind                  string
+	AppliedAnchorValueHash             string
+	AppliedAnchorBasis                 string
+	AppliedCandidateKind               string
+	AppliedCandidateValueHash          string
+	AppliedHandleKind                  string
+	AppliedHandleValueHash             string
+	DroppedMembers                     string
+	AnchorAgreement                    string
+	AnchorDisposition                  string
+	CaptureDecision                    string
+	CaptureSkipReason                  string
+	SubstitutionGuard                  string
+	SubstitutionOrigin                 string
+	SubstitutionParentKind             string
+	SubstitutionParentID               string
+	SubstitutionCommittedIDs           []string
+	SubstitutionOriginResultID         string
+	SubstitutionOriginReceiptID        string
+	SubstitutionParentResultID         string
+	SubstitutionOriginIssuedFor        string
+	SubstitutionRememberedCheck        string
+	SubstitutionRememberedReason       string
+	SubstitutionRememberedContextError string
+	RequestID                          string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every ConfirmedNeedLedgerFields uniformly, set ONLY by NewConfirmedNeedLedgerFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -645,38 +650,43 @@ type ConfirmedNeedLedgerFields struct {
 
 // NewConfirmedNeedLedgerFields is the generated constructor for ConfirmedNeedLedgerFields -- every
 // field ConfirmedNeedLedger.Fields declares is a required parameter.
-func NewConfirmedNeedLedgerFields(orgID string, outcome string, sourceResultID string, appliedMembers string, appliedExpectedKind string, appliedAnchorKind string, appliedAnchorValueHash string, appliedAnchorBasis string, appliedCandidateKind string, appliedCandidateValueHash string, appliedHandleKind string, appliedHandleValueHash string, droppedMembers string, anchorAgreement string, anchorDisposition string, captureDecision string, captureSkipReason string, substitutionGuard string, substitutionOrigin string, substitutionParentKind string, substitutionParentID string, substitutionCommittedIDs []string, substitutionOriginResultID string, substitutionOriginReceiptID string, requestID string) ConfirmedNeedLedgerFields {
+func NewConfirmedNeedLedgerFields(orgID string, outcome string, sourceResultID string, appliedMembers string, appliedExpectedKind string, appliedAnchorKind string, appliedAnchorValueHash string, appliedAnchorBasis string, appliedCandidateKind string, appliedCandidateValueHash string, appliedHandleKind string, appliedHandleValueHash string, droppedMembers string, anchorAgreement string, anchorDisposition string, captureDecision string, captureSkipReason string, substitutionGuard string, substitutionOrigin string, substitutionParentKind string, substitutionParentID string, substitutionCommittedIDs []string, substitutionOriginResultID string, substitutionOriginReceiptID string, substitutionParentResultID string, substitutionOriginIssuedFor string, substitutionRememberedCheck string, substitutionRememberedReason string, substitutionRememberedContextError string, requestID string) ConfirmedNeedLedgerFields {
 	valid := true
 	if substitutionCommittedIDs == nil {
 		valid = false
 	}
 	return ConfirmedNeedLedgerFields{
-		OrgID:                       orgID,
-		Outcome:                     outcome,
-		SourceResultID:              sourceResultID,
-		AppliedMembers:              appliedMembers,
-		AppliedExpectedKind:         appliedExpectedKind,
-		AppliedAnchorKind:           appliedAnchorKind,
-		AppliedAnchorValueHash:      appliedAnchorValueHash,
-		AppliedAnchorBasis:          appliedAnchorBasis,
-		AppliedCandidateKind:        appliedCandidateKind,
-		AppliedCandidateValueHash:   appliedCandidateValueHash,
-		AppliedHandleKind:           appliedHandleKind,
-		AppliedHandleValueHash:      appliedHandleValueHash,
-		DroppedMembers:              droppedMembers,
-		AnchorAgreement:             anchorAgreement,
-		AnchorDisposition:           anchorDisposition,
-		CaptureDecision:             captureDecision,
-		CaptureSkipReason:           captureSkipReason,
-		SubstitutionGuard:           substitutionGuard,
-		SubstitutionOrigin:          substitutionOrigin,
-		SubstitutionParentKind:      substitutionParentKind,
-		SubstitutionParentID:        substitutionParentID,
-		SubstitutionCommittedIDs:    substitutionCommittedIDs,
-		SubstitutionOriginResultID:  substitutionOriginResultID,
-		SubstitutionOriginReceiptID: substitutionOriginReceiptID,
-		RequestID:                   requestID,
-		constructed:                 valid,
+		OrgID:                              orgID,
+		Outcome:                            outcome,
+		SourceResultID:                     sourceResultID,
+		AppliedMembers:                     appliedMembers,
+		AppliedExpectedKind:                appliedExpectedKind,
+		AppliedAnchorKind:                  appliedAnchorKind,
+		AppliedAnchorValueHash:             appliedAnchorValueHash,
+		AppliedAnchorBasis:                 appliedAnchorBasis,
+		AppliedCandidateKind:               appliedCandidateKind,
+		AppliedCandidateValueHash:          appliedCandidateValueHash,
+		AppliedHandleKind:                  appliedHandleKind,
+		AppliedHandleValueHash:             appliedHandleValueHash,
+		DroppedMembers:                     droppedMembers,
+		AnchorAgreement:                    anchorAgreement,
+		AnchorDisposition:                  anchorDisposition,
+		CaptureDecision:                    captureDecision,
+		CaptureSkipReason:                  captureSkipReason,
+		SubstitutionGuard:                  substitutionGuard,
+		SubstitutionOrigin:                 substitutionOrigin,
+		SubstitutionParentKind:             substitutionParentKind,
+		SubstitutionParentID:               substitutionParentID,
+		SubstitutionCommittedIDs:           substitutionCommittedIDs,
+		SubstitutionOriginResultID:         substitutionOriginResultID,
+		SubstitutionOriginReceiptID:        substitutionOriginReceiptID,
+		SubstitutionParentResultID:         substitutionParentResultID,
+		SubstitutionOriginIssuedFor:        substitutionOriginIssuedFor,
+		SubstitutionRememberedCheck:        substitutionRememberedCheck,
+		SubstitutionRememberedReason:       substitutionRememberedReason,
+		SubstitutionRememberedContextError: substitutionRememberedContextError,
+		RequestID:                          requestID,
+		constructed:                        valid,
 	}
 }
 
@@ -717,6 +727,11 @@ func (f ConfirmedNeedLedgerFields) SlogArgs() []any {
 		"substitution_committed_ids", contextfabric.SanitizeLogStrings(f.SubstitutionCommittedIDs),
 		"substitution_origin_result_id", contextfabric.SanitizeLogAttr(f.SubstitutionOriginResultID),
 		"substitution_origin_receipt_id", contextfabric.SanitizeLogAttr(f.SubstitutionOriginReceiptID),
+		"substitution_parent_result_id", contextfabric.SanitizeLogAttr(f.SubstitutionParentResultID),
+		"substitution_origin_issued_for", contextfabric.SanitizeLogAttr(f.SubstitutionOriginIssuedFor),
+		"substitution_remembered_check", contextfabric.SanitizeLogAttr(f.SubstitutionRememberedCheck),
+		"substitution_remembered_reason", contextfabric.SanitizeLogAttr(f.SubstitutionRememberedReason),
+		"substitution_remembered_context_error", contextfabric.SanitizeLogAttr(f.SubstitutionRememberedContextError),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }

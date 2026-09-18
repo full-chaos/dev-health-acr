@@ -47,13 +47,27 @@ import (
 //
 // THE ONE PERMITTED SUBSTITUTION is a choice the user actually made: this
 // turn commits exactly one identity, and ONE prior-subject receipt redeemed
-// this turn was both issued by the very parent this turn names and redeemed
-// for that identity. That is the redemption of an offer the engine
-// itself raised -- the clarification below being answered -- so treating it
-// as a substitution would make every clarification this guard raises
-// unanswerable, which is the failure class chaos5637_answerable_clarification.go
-// exists to end. A receipt from any OTHER result is not that: it says
+// this turn was both issued by the parent this turn continues and redeemed
+// for that identity. A receipt from any OTHER result is not that: it says
 // nothing about the exchange this turn continues.
+//
+// A CLARIFICATION THIS GUARD ISSUED SPEAKS FOR ITS PARENT. The guard's own
+// clarification C is a result of its own, minted while continuing parent P,
+// and its offers are C's receipts. C carries P's identity forward in its
+// own payload -- the remembered subject it lists first -- so the identity a
+// turn naming C is compared against is P's (parentIdentityOf), never
+// "none", and C's receipts ARE P's receipts (parentReceiptIssuers). So
+// answering C serves the choice the same way whichever of the two the
+// caller names -- P, the answer it was reading, or C, the question it is
+// answering -- and a choice redeemed from any other result still
+// clarifies. Treating that answer as a substitution would make every
+// clarification this guard raises unanswerable, which is the failure class
+// chaos5637_answerable_clarification.go exists to end. The link from C to P
+// is the remembered offer's receipt, minted from P's id
+// (subjectSubstitutionIssuedFor); a C that listed no remembered subject
+// carries no such link, so a turn naming it that commits a subject without
+// redeeming C's own offer clarifies again, with the remembered subject
+// unavailable.
 //
 // CONSERVATIVE ON ABSENCE. No parent reference, a parent that does not read
 // cleanly, a parent that committed no anchor, or a turn that commits nothing
@@ -247,6 +261,78 @@ func ValidSubjectSubstitutionOrigin(value SubjectSubstitutionOrigin) bool {
 	return false
 }
 
+// SubjectSubstitutionRememberedCheck is what the re-read of the remembered
+// subject found (rememberedSubjectReadable). Every way the re-read can
+// withhold the offer is its own member, so the line says WHY the
+// remembered subject was not listed and never drops the verifier's answer.
+type SubjectSubstitutionRememberedCheck string
+
+const (
+	// SubjectSubstitutionRememberedNotChecked: the re-read was not asked --
+	// the guard was not about to fire, or the parent's identity was not held.
+	SubjectSubstitutionRememberedNotChecked SubjectSubstitutionRememberedCheck = "not_checked"
+	// SubjectSubstitutionRememberedReadable: the verifier proved the subject
+	// valid at this turn's binding for this principal.
+	SubjectSubstitutionRememberedReadable SubjectSubstitutionRememberedCheck = "readable"
+	// SubjectSubstitutionRememberedVerifierUnwired: this deployment wires no
+	// verifier, so nothing can prove the subject.
+	SubjectSubstitutionRememberedVerifierUnwired SubjectSubstitutionRememberedCheck = "verifier_unwired"
+	// SubjectSubstitutionRememberedCancelledBefore: the turn's context was
+	// done before the verifier was asked.
+	SubjectSubstitutionRememberedCancelledBefore SubjectSubstitutionRememberedCheck = "cancelled_before_check"
+	// SubjectSubstitutionRememberedCancelledDuring: the turn's context was
+	// done when the verifier returned, so its answer is not trusted.
+	SubjectSubstitutionRememberedCancelledDuring SubjectSubstitutionRememberedCheck = "cancelled_during_check"
+	// SubjectSubstitutionRememberedRefused: the verifier answered, and the
+	// answer was not "valid"; substitution_remembered_reason carries it.
+	SubjectSubstitutionRememberedRefused SubjectSubstitutionRememberedCheck = "refused"
+)
+
+// subjectSubstitutionRememberedChecks is the closed vocabulary in declared order.
+var subjectSubstitutionRememberedChecks = [...]SubjectSubstitutionRememberedCheck{
+	SubjectSubstitutionRememberedNotChecked,
+	SubjectSubstitutionRememberedReadable,
+	SubjectSubstitutionRememberedVerifierUnwired,
+	SubjectSubstitutionRememberedCancelledBefore,
+	SubjectSubstitutionRememberedCancelledDuring,
+	SubjectSubstitutionRememberedRefused,
+}
+
+// SubjectSubstitutionRememberedCheckCount is the closed vocabulary's size.
+const SubjectSubstitutionRememberedCheckCount = len(subjectSubstitutionRememberedChecks)
+
+// SubjectSubstitutionRememberedCheckVocabulary returns the closed vocabulary
+// in declared order, for the telemetry specification to read.
+func SubjectSubstitutionRememberedCheckVocabulary() [SubjectSubstitutionRememberedCheckCount]SubjectSubstitutionRememberedCheck {
+	return subjectSubstitutionRememberedChecks
+}
+
+// ValidSubjectSubstitutionRememberedCheck reports membership in the closed
+// vocabulary.
+func ValidSubjectSubstitutionRememberedCheck(value SubjectSubstitutionRememberedCheck) bool {
+	for _, member := range subjectSubstitutionRememberedChecks {
+		if member == value {
+			return true
+		}
+	}
+	return false
+}
+
+// rememberedSubjectCheck is the re-read's whole answer: the class, the
+// verifier's own reason when it answered, and the context error when the
+// turn's context was done. Nothing the verifier or the context said is
+// dropped: the ledger line carries all three.
+type rememberedSubjectCheck struct {
+	Check        SubjectSubstitutionRememberedCheck
+	Reason       CandidateVerificationReason
+	ContextError string
+}
+
+// readable reports whether the remembered subject may be listed.
+func (c rememberedSubjectCheck) readable() bool {
+	return c.Check == SubjectSubstitutionRememberedReadable
+}
+
 // parentAnchorEvidence is what the named parent asserted, retained for
 // comparison EVEN WHEN the per-need ledger refused to admit it. Those are
 // two different questions: admission asks whether the parent's remembered
@@ -267,6 +353,16 @@ type parentAnchorEvidence struct {
 	// It carries the label the parent served, so an offer built from it reads
 	// the way the caller already saw it.
 	Subject SubjectRef
+	// ResultID is the result whose subject Subject is: the named parent, or,
+	// when the named parent is a clarification this guard issued, the result
+	// it was proven to continue ("" when no receipt proves one).
+	ResultID string
+	// GuardIssued is true when the named parent is a clarification this
+	// guard issued. Such a parent speaks for the result it continued, so it
+	// is never read as asserting no identity; IssuedFor names that result
+	// when the remembered offer's receipt proves it.
+	GuardIssued bool
+	IssuedFor   string
 }
 
 // held reports whether the parent asserted an identity for this turn to
@@ -313,6 +409,120 @@ func parentCommittedIdentityOf(stored StoredInvestigationResult) SubjectRef {
 	return SubjectRef{}
 }
 
+// subjectSubstitutionIssued reports whether a stored result is a
+// clarification THIS guard issued, from its payload alone: it commits
+// nothing and its prompt is one the guard issues. Every field is
+// server-written, so no caller input can make a result read as
+// guard-issued. Each prompt the guard has ever issued stays in this switch,
+// so a stored clarification keeps speaking for its parent.
+func subjectSubstitutionIssued(stored StoredInvestigationResult) bool {
+	resolution := stored.Result.SubjectResolution
+	if len(resolution.Committed) != 0 {
+		return false
+	}
+	switch resolution.ClarificationPrompt {
+	case subjectSubstitutionClarificationPrompt, subjectSubstitutionRememberedUnavailablePrompt:
+		return true
+	default:
+		return false
+	}
+}
+
+// guardIssuedRememberedOf is the remembered subject a guard-issued
+// clarification lists first, the zero SubjectRef when it lists none. The
+// guard lists it first, under its own receipt prefix, only beside the
+// listing prompt.
+func guardIssuedRememberedOf(stored StoredInvestigationResult) SubjectRef {
+	resolution := stored.Result.SubjectResolution
+	if !subjectSubstitutionIssued(stored) || resolution.ClarificationPrompt != subjectSubstitutionClarificationPrompt || len(resolution.Candidates) == 0 {
+		return SubjectRef{}
+	}
+	first := resolution.Candidates[0]
+	if !strings.HasPrefix(first.ReceiptID, subjectSubstitutionReceiptPrefix) {
+		return SubjectRef{}
+	}
+	return first.Subject
+}
+
+// subjectSubstitutionIssuedFor reports whether stored is a clarification
+// this guard issued while continuing resultID. THE PROOF IS THE RECEIPT:
+// the remembered offer's receipt id is minted from the continued result's
+// id and the remembered subject (subjectSubstitutionReceiptID), so it
+// verifies against exactly one result. Stored ancestry is never the proof:
+// a result's recorded parent is withheld on question drift and can then
+// name some other result a receipt came from. A clarification that listed
+// no remembered subject carries no such proof and is issued for no result
+// this check can name.
+func subjectSubstitutionIssuedFor(stored StoredInvestigationResult, resultID string) bool {
+	remembered := guardIssuedRememberedOf(stored)
+	if remembered.CanonicalID == "" {
+		return false
+	}
+	return stored.Result.SubjectResolution.Candidates[0].ReceiptID == subjectSubstitutionReceiptID(resultID, remembered)
+}
+
+// parentIdentityOf fills the identity half of the parent evidence from the
+// named parent's stored payload, with no further store read. A
+// clarification this guard issued speaks for the result it continued: the
+// remembered subject it lists is that result's subject, and the result
+// itself is named when its receipt proves which one it was. One that listed
+// none is still guard-issued, so the decision reads it as "remembered
+// subject unavailable", never as "no identity".
+func parentIdentityOf(evidence parentAnchorEvidence, stored StoredInvestigationResult, named string) parentAnchorEvidence {
+	evidence.Subject, evidence.ResultID = parentCommittedIdentityOf(stored), named
+	if !subjectSubstitutionIssued(stored) {
+		return evidence
+	}
+	evidence.GuardIssued, evidence.ResultID = true, ""
+	evidence.Subject = guardIssuedRememberedOf(stored)
+	if subjectSubstitutionIssuedFor(stored, stored.ParentResultID) {
+		evidence.IssuedFor, evidence.ResultID = stored.ParentResultID, stored.ParentResultID
+	}
+	return evidence
+}
+
+// parentReceiptIssuers decides which results' receipts are the parent's own
+// offer: the named parent's, the result a guard-issued named parent was
+// proven to continue, and a clarification this guard issued while
+// continuing the named parent. loaded is the set of issuing results this
+// turn already read.
+type parentReceiptIssuers struct {
+	named     string
+	issuedFor string
+	loaded    map[string]StoredInvestigationResult
+}
+
+// issues reports whether resultID's receipts are the parent's own offer.
+func (p parentReceiptIssuers) issues(resultID string) bool {
+	id := strings.TrimSpace(resultID)
+	if id == "" || p.named == "" {
+		return false
+	}
+	if id == p.named || id == p.issuedFor {
+		return true
+	}
+	stored, ok := p.loaded[id]
+	return ok && subjectSubstitutionIssuedFor(stored, p.named)
+}
+
+// issuedForOf names, for the line, the result resultID was proven to be a
+// guard clarification of: the named parent when its receipt verifies
+// against it, else the result its stored ancestry names when it verifies
+// against that, else "".
+func (p parentReceiptIssuers) issuedForOf(resultID string) string {
+	stored, ok := p.loaded[strings.TrimSpace(resultID)]
+	if !ok {
+		return ""
+	}
+	if subjectSubstitutionIssuedFor(stored, p.named) {
+		return p.named
+	}
+	if subjectSubstitutionIssuedFor(stored, stored.ParentResultID) {
+		return stored.ParentResultID
+	}
+	return ""
+}
+
 // subjectSubstitutionInput is everything the decision reads. All of it is
 // already computed by the turn that calls it; nothing here re-derives a
 // signal another authority owns.
@@ -328,7 +538,7 @@ type subjectSubstitutionInput struct {
 	OriginReceiptResultID string
 	OriginReceiptID       string
 	// RedeemedChoice is true when this turn commits exactly one identity and
-	// ONE receipt redeemed this turn was issued by the NAMED PARENT and
+	// ONE receipt redeemed this turn was issued by the PARENT and
 	// redeemed for that identity (subjectSubstitutionRedeemedChoice). One
 	// predicate over one receipt: a parent receipt for one subject beside
 	// another result's receipt for the committed one is not a choice of it.
@@ -344,6 +554,12 @@ type subjectSubstitutionInput struct {
 	// question is still shown the two identities, and is never shown one it
 	// cannot see.
 	RememberedAvailable bool
+	// Remembered is the re-read's whole answer, reported on the line; it is
+	// never consulted beyond RememberedAvailable.
+	Remembered rememberedSubjectCheck
+	// OriginIssuedFor is the result the origin receipt's issuing result was
+	// issued for, when this guard issued it; reported, never consulted.
+	OriginIssuedFor string
 }
 
 // subjectSubstitutionDecision is the guard's whole output: the outcome, the
@@ -363,6 +579,13 @@ type subjectSubstitutionDecision struct {
 	// to the caller on a firing branch. One authority for that, read by the
 	// served shape and implied by the outcome, so the two cannot disagree.
 	RememberedListed bool
+	// ParentResultID is the result whose subject Parent is (the named parent,
+	// or the result a guard-issued named parent speaks for); OriginIssuedFor
+	// is the result the origin receipt's issuer was issued for.
+	ParentResultID  string
+	OriginIssuedFor string
+	// Remembered is the re-read's whole answer.
+	Remembered rememberedSubjectCheck
 }
 
 // sameSubjectIdentity is the ONE identity comparison this guard makes: kind
@@ -376,11 +599,17 @@ func sameSubjectIdentity(a, b SubjectRef) bool {
 // order. PURE: reads its argument and mutates nothing, so the engine's
 // control flow and the test table read the identical function.
 func decideSubjectSubstitution(in subjectSubstitutionInput) subjectSubstitutionDecision {
-	decision := subjectSubstitutionDecision{Origin: SubjectSubstitutionOriginNotApplicable, Committed: in.Committed}
+	decision := subjectSubstitutionDecision{Origin: SubjectSubstitutionOriginNotApplicable, Committed: in.Committed, Remembered: in.Remembered}
+	if !ValidSubjectSubstitutionRememberedCheck(decision.Remembered.Check) {
+		decision.Remembered = rememberedSubjectCheck{Check: SubjectSubstitutionRememberedNotChecked}
+	}
+	if in.Parent.Loaded {
+		decision.ParentResultID = in.Parent.ResultID
+	}
 	if len(in.Committed) > 0 {
 		decision.Origin = in.Origin
 		if in.Origin == SubjectSubstitutionOriginPriorReceipt {
-			decision.OriginReceiptResultID, decision.OriginReceiptID = in.OriginReceiptResultID, in.OriginReceiptID
+			decision.OriginReceiptResultID, decision.OriginReceiptID, decision.OriginIssuedFor = in.OriginReceiptResultID, in.OriginReceiptID, in.OriginIssuedFor
 		}
 	}
 	if !ValidSubjectSubstitutionOrigin(decision.Origin) {
@@ -396,7 +625,7 @@ func decideSubjectSubstitution(in subjectSubstitutionInput) subjectSubstitutionD
 	case !in.Parent.Loaded:
 		decision.Outcome = SubjectSubstitutionParentUnreadable
 		return decision
-	case !in.Parent.held():
+	case !in.Parent.held() && !in.Parent.GuardIssued:
 		decision.Outcome = SubjectSubstitutionParentNoIdentity
 		return decision
 	}
@@ -416,13 +645,15 @@ func decideSubjectSubstitution(in subjectSubstitutionInput) subjectSubstitutionD
 	// Both firing branches list the two identities, remembered first, and
 	// both withhold the remembered one when it fails its re-read. They
 	// differ only in whether this caller can be asked to pick.
-	decision.RememberedListed = in.RememberedAvailable
+	// A guard-issued parent that listed no remembered subject holds no
+	// identity to list, whatever the re-read input says.
+	decision.RememberedListed = in.RememberedAvailable && in.Parent.held()
 	switch {
-	case !in.AllowClarification && in.RememberedAvailable:
+	case !in.AllowClarification && decision.RememberedListed:
 		decision.Outcome = SubjectSubstitutionRefused
 	case !in.AllowClarification:
 		decision.Outcome = SubjectSubstitutionRefusedRememberedUnavailable
-	case in.RememberedAvailable:
+	case decision.RememberedListed:
 		decision.Outcome = SubjectSubstitutionClarified
 	default:
 		decision.Outcome = SubjectSubstitutionClarifiedRememberedUnavailable
@@ -441,19 +672,23 @@ func decideSubjectSubstitution(in subjectSubstitutionInput) subjectSubstitutionD
 // served -- the guard has already decided not to serve it before this is
 // asked. The context error is checked rather than swallowed: a cancelled
 // turn withholds the offer instead of reporting a subject it never managed
-// to check.
-func (e *Engine) rememberedSubjectReadable(ctx context.Context, principal storage.Principal, request InvestigationRequest, binding ResolvedGraphBinding, subject SubjectRef) bool {
+// to check. Whatever it found -- its class, the verifier's own reason and
+// the context error -- is returned whole and published on the ledger line.
+func (e *Engine) rememberedSubjectReadable(ctx context.Context, principal storage.Principal, request InvestigationRequest, binding ResolvedGraphBinding, subject SubjectRef) rememberedSubjectCheck {
 	if e.candidateVerifier == nil || subject.Kind == "" || subject.CanonicalID == "" {
-		return false
+		return rememberedSubjectCheck{Check: SubjectSubstitutionRememberedVerifierUnwired}
 	}
-	if ctx.Err() != nil {
-		return false
+	if err := ctx.Err(); err != nil {
+		return rememberedSubjectCheck{Check: SubjectSubstitutionRememberedCancelledBefore, ContextError: err.Error()}
 	}
 	ok, reason := e.candidateVerifier(ctx, principal, request.RequestedScope, binding, subject.Kind, subject.CanonicalID)
-	if ctx.Err() != nil {
-		return false
+	if err := ctx.Err(); err != nil {
+		return rememberedSubjectCheck{Check: SubjectSubstitutionRememberedCancelledDuring, Reason: reason, ContextError: err.Error()}
 	}
-	return ok && reason == CandidateVerificationValid
+	if !ok || reason != CandidateVerificationValid {
+		return rememberedSubjectCheck{Check: SubjectSubstitutionRememberedRefused, Reason: reason}
+	}
+	return rememberedSubjectCheck{Check: SubjectSubstitutionRememberedReadable, Reason: reason}
 }
 
 // substitutionOriginFact is the channel that carried a subject into
@@ -467,6 +702,9 @@ type substitutionOriginFact struct {
 	// the subject; both empty unless Origin is prior_receipt.
 	ReceiptResultID string
 	ReceiptID       string
+	// IssuedFor is the result the issuing result was issued for when this
+	// guard issued it; empty otherwise.
+	IssuedFor string
 }
 
 // subjectSubstitutionOriginOf names what carried this turn's committed set
@@ -485,7 +723,7 @@ type substitutionOriginFact struct {
 // every redemption as a caller hint. The engine's own carried anchor is read
 // LAST of the three named channels, so a caller channel that also names the
 // identity is reported as the caller's.
-func subjectSubstitutionOriginOf(committed []SubjectRef, parent SubjectRef, parentResultID string, outcomes []priorSubjectReceiptOutcome, requestHints []SubjectHint, carried map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember) substitutionOriginFact {
+func subjectSubstitutionOriginOf(committed []SubjectRef, parent SubjectRef, issuers parentReceiptIssuers, outcomes []priorSubjectReceiptOutcome, requestHints []SubjectHint, carried map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember) substitutionOriginFact {
 	if len(committed) == 0 {
 		return substitutionOriginFact{Origin: SubjectSubstitutionOriginNotApplicable}
 	}
@@ -496,21 +734,23 @@ func subjectSubstitutionOriginOf(committed []SubjectRef, parent SubjectRef, pare
 			break
 		}
 	}
-	return subjectOriginOf(subject, parentResultID, outcomes, requestHints, carried)
+	return subjectOriginOf(subject, issuers, outcomes, requestHints, carried)
 }
 
 // subjectOriginOf names the channel that carried ONE subject into
-// resolution. When several redeemed receipts carried it, the one the named
-// parent issued is the one reported: that is the receipt a redeemed choice
-// stands on, so the line names the same receipt the decision read.
-func subjectOriginOf(subject SubjectRef, parentResultID string, outcomes []priorSubjectReceiptOutcome, requestHints []SubjectHint, carried map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember) substitutionOriginFact {
+// resolution. When several redeemed receipts carried it, one the parent
+// issued (parentReceiptIssuers) is the one reported: that is the receipt a
+// redeemed choice stands on, so the line names the same receipt the
+// decision read, the result that issued it, and the result that result was
+// issued for when this guard issued it.
+func subjectOriginOf(subject SubjectRef, issuers parentReceiptIssuers, outcomes []priorSubjectReceiptOutcome, requestHints []SubjectHint, carried map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember) substitutionOriginFact {
 	var redeemed *priorSubjectReceiptOutcome
 	for i := range outcomes {
 		outcome := &outcomes[i]
 		if !outcome.hasHint || outcome.droppedByHintBudget || outcome.hint.Kind != subject.Kind || outcome.hint.ID != subject.CanonicalID {
 			continue
 		}
-		if redeemed == nil || (parentResultID != "" && strings.TrimSpace(outcome.receipt.ResultID) == parentResultID) {
+		if redeemed == nil || (!issuers.issues(redeemed.receipt.ResultID) && issuers.issues(outcome.receipt.ResultID)) {
 			redeemed = outcome
 		}
 	}
@@ -519,6 +759,7 @@ func subjectOriginOf(subject SubjectRef, parentResultID string, outcomes []prior
 			Origin:          SubjectSubstitutionOriginPriorReceipt,
 			ReceiptResultID: strings.TrimSpace(redeemed.receipt.ResultID),
 			ReceiptID:       strings.TrimSpace(redeemed.receipt.ReceiptID),
+			IssuedFor:       issuers.issuedForOf(redeemed.receipt.ResultID),
 		}
 	}
 	for _, hint := range requestHints {
@@ -534,9 +775,9 @@ func subjectOriginOf(subject SubjectRef, parentResultID string, outcomes []prior
 }
 
 // subjectSubstitutionRedeemedChoice reports whether this turn's commit is a
-// choice the caller made from the NAMED PARENT's own offer: exactly one
-// identity is committed, and ONE receipt redeemed this turn was both issued
-// by the named parent and redeemed for that identity.
+// choice the caller made from the parent's own offer: exactly one identity
+// is committed, and ONE receipt redeemed this turn was both issued by the
+// parent (parentReceiptIssuers) and redeemed for that identity.
 //
 // ONE PREDICATE OVER ONE RECEIPT. The issuer and the identity are read off
 // the same outcome (the receipt and the hint its redemption produced), never
@@ -544,15 +785,16 @@ func subjectOriginOf(subject SubjectRef, parentResultID string, outcomes []prior
 // another result's receipt for a second would satisfy both halves and
 // license the second -- a subject the parent never offered.
 //
-// The issuer constraint: only the result this turn continues can have
-// offered the choice this turn is answering, and a redemption resolves only
-// against the result that issued the receipt, so a hint for the committed
-// identity from a receipt the parent issued proves the parent offered it.
+// The issuer constraint: only the parent this turn continues -- or a
+// clarification this guard issued on its behalf -- can have offered the
+// choice this turn is answering, and a redemption resolves only against the
+// result that issued the receipt, so a hint for the committed identity from
+// a receipt the parent issued proves the parent offered it.
 // The identity constraint: a receipt redeemed for one subject is not a
 // choice of another. A redemption the hint budget dropped never reached
 // resolution and chose nothing.
-func subjectSubstitutionRedeemedChoice(committed []SubjectRef, parentResultID string, outcomes []priorSubjectReceiptOutcome) bool {
-	if len(committed) != 1 || parentResultID == "" {
+func subjectSubstitutionRedeemedChoice(committed []SubjectRef, issuers parentReceiptIssuers, outcomes []priorSubjectReceiptOutcome) bool {
+	if len(committed) != 1 {
 		return false
 	}
 	chosen := committed[0]
@@ -560,7 +802,7 @@ func subjectSubstitutionRedeemedChoice(committed []SubjectRef, parentResultID st
 		if !outcome.hasHint || outcome.droppedByHintBudget {
 			continue
 		}
-		if strings.TrimSpace(outcome.receipt.ResultID) != parentResultID {
+		if !issuers.issues(outcome.receipt.ResultID) {
 			continue
 		}
 		if outcome.hint.Kind == chosen.Kind && outcome.hint.ID == chosen.CanonicalID {
@@ -595,6 +837,9 @@ func subjectSubstitutionPromptFor(rememberedListed bool) string {
 	return subjectSubstitutionClarificationPrompt
 }
 
+// subjectSubstitutionReceiptPrefix marks the remembered offer's receipt.
+const subjectSubstitutionReceiptPrefix = "subr_"
+
 // subjectSubstitutionReceiptID is the offer id the remembered subject's own
 // candidate carries, so the caller can redeem it exactly like any other
 // subject candidate (resolvePriorSubjectHints matches on this id against the
@@ -604,7 +849,7 @@ func subjectSubstitutionPromptFor(rememberedListed bool) string {
 // and two different subjects can never collide.
 func subjectSubstitutionReceiptID(parentResultID string, subject SubjectRef) string {
 	sum := sha256.Sum256([]byte("context-fabric-remembered-subject\x00" + parentResultID + "\x00" + SubjectMapKey(subject)))
-	return "subr_" + hex.EncodeToString(sum[:])[:24]
+	return subjectSubstitutionReceiptPrefix + hex.EncodeToString(sum[:])[:24]
 }
 
 // subjectSubstitutionResolution is the resolution a guarded turn serves its

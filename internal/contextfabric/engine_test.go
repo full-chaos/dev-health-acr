@@ -170,6 +170,9 @@ type staticResultStore struct {
 	// noCarrierStates so the harness never overwrites it with a fresh
 	// carrier.
 	legacyStates map[string][]byte
+	// parents, when set for a result id, is the ancestry Get reports for it
+	// (StoredInvestigationResult.ParentResultID). Unset ids report none.
+	parents map[string]string
 }
 
 func (s *staticResultStore) Save(_ context.Context, _ storage.Principal, result InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, _ string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities, _ int64, _ string, semantic SemanticStateWrite) error {
@@ -192,7 +195,7 @@ func (s *staticResultStore) Get(_ context.Context, _ storage.Principal, resultID
 		zero := int64(0)
 		epoch = &zero
 	}
-	stored := StoredInvestigationResult{Result: result, GraphEpoch: epoch, SemanticStateRead: SemanticStateReadAbsent}
+	stored := StoredInvestigationResult{Result: result, GraphEpoch: epoch, SemanticStateRead: SemanticStateReadAbsent, ParentResultID: s.parents[resultID]}
 	if raw, ok := s.legacyStates[resultID]; ok {
 		decoded, status := DecodeSemanticState(raw)
 		stored.SemanticState, stored.SemanticStateRead = decoded, status

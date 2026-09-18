@@ -1529,8 +1529,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// that ends the turn before it says exactly that rather than reading as
 	// a guard that ran and found nothing (chaos5917_subject_substitution.go).
 	substitutionForTelemetry := subjectSubstitutionDecision{
-		Outcome: SubjectSubstitutionNotEvaluated,
-		Origin:  SubjectSubstitutionOriginNotApplicable,
+		Outcome:    SubjectSubstitutionNotEvaluated,
+		Origin:     SubjectSubstitutionOriginNotApplicable,
+		Remembered: rememberedSubjectCheck{Check: SubjectSubstitutionRememberedNotChecked},
 	}
 	defer func() {
 		e.recordConfirmedNeedLedger(ctx, principal, confirmedNeedLedger, appliedNeeds, captureDecisionForTelemetry, captureSkipReasonForTelemetry, anchorAgreementForTelemetry, anchorDispositionForTelemetry, substitutionForTelemetry)
@@ -2876,9 +2877,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		AllowClarification: request.Options.AllowClarification,
 	}
 	if len(substitutionCommitted) > 0 {
-		origin := subjectSubstitutionOriginOf(substitutionCommitted, substitutionInput.Parent.Subject, carryParentSeed(request), priorOutcomes, request.RequestedScope.SubjectHints, appliedNeeds)
-		substitutionInput.Origin, substitutionInput.OriginReceiptResultID, substitutionInput.OriginReceiptID = origin.Origin, origin.ReceiptResultID, origin.ReceiptID
-		substitutionInput.RedeemedChoice = subjectSubstitutionRedeemedChoice(substitutionCommitted, carryParentSeed(request), priorOutcomes)
+		issuers := parentReceiptIssuers{named: carryParentSeed(request), issuedFor: substitutionInput.Parent.IssuedFor, loaded: priorLoadedResults}
+		origin := subjectSubstitutionOriginOf(substitutionCommitted, substitutionInput.Parent.Subject, issuers, priorOutcomes, request.RequestedScope.SubjectHints, appliedNeeds)
+		substitutionInput.Origin, substitutionInput.OriginReceiptResultID, substitutionInput.OriginReceiptID, substitutionInput.OriginIssuedFor = origin.Origin, origin.ReceiptResultID, origin.ReceiptID, origin.IssuedFor
+		substitutionInput.RedeemedChoice = subjectSubstitutionRedeemedChoice(substitutionCommitted, issuers, priorOutcomes)
 		// The re-read costs a keyed graph call, so it is asked only when its
 		// answer can change what this turn hands back: the identities already
 		// differ and the caller did not pick this one, so the guard is about
@@ -2886,7 +2888,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// BOTH firing branches -- a caller that cannot be asked a question is
 		// shown the two identities too, and is never shown one it cannot see.
 		if substitutionInput.Parent.held() && !committedIsExactly(substitutionCommitted, substitutionInput.Parent.Subject) && !substitutionInput.RedeemedChoice {
-			substitutionInput.RememberedAvailable = e.rememberedSubjectReadable(ctx, principal, request, binding, substitutionInput.Parent.Subject)
+			substitutionInput.Remembered = e.rememberedSubjectReadable(ctx, principal, request, binding, substitutionInput.Parent.Subject)
+			substitutionInput.RememberedAvailable = substitutionInput.Remembered.readable()
 		}
 	}
 	substitutionForTelemetry = decideSubjectSubstitution(substitutionInput)
