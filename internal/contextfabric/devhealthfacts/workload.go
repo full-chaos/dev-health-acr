@@ -2,6 +2,8 @@ package devhealthfacts
 
 import (
 	"context"
+	"strconv"
+	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
@@ -355,6 +357,130 @@ func (p *WorkloadProvider) readTeamWorkload(ctx context.Context, orgID string, s
 	return rowCount, rejected, nil
 }
 
+// workloadP50WinnerDelimiter separates the (p50_days, team_key,
+// work_scope_id, insufficient_history, high_variance) fields
+// queryProjectWorkloadP50Max's own argMax packs into one string column -- a
+// delimiter rather than five independent argMax calls, for the identical
+// reason health.go's own healthSeverityWinnerDelimiter doc comment gives:
+// several aggregates keyed by the same ORDER expression have no guarantee
+// of resolving a tie to the SAME underlying row. \x1f (unit separator)
+// never appears in a team id, a work_scope_id, or a stringified
+// boolean/int.
+const workloadP50WinnerDelimiter = "\x1f"
+
+// workloadP50BasisTeamBreakdown and workloadP50UnavailableReasonNoKnownP50
+// are the project workload p50 promotion's two disclosed, closed-vocabulary
+// values -- mirrors health.go's healthSeverityBasisTeamAndRepoBreakdown /
+// healthSeverityUnavailableReasonNoKnownBand idiom exactly. A served
+// project FactWorkload carries exactly one of:
+// {forecast_p50_days + p50_basis == workloadP50BasisTeamBreakdown} or
+// {p50_unavailable_reason == workloadP50UnavailableReasonNoKnownP50}, never
+// both, never neither -- independent of whether team_breakdown itself is
+// present (a project's winning row can come from beyond team_breakdown's
+// own row-level scan; see queryProjectWorkloadP50Max's own doc comment).
+const (
+	workloadP50BasisTeamBreakdown          = "worst_of_team_breakdown"
+	workloadP50UnavailableReasonNoKnownP50 = "no_known_forecast_p50_days"
+)
+
+// workloadP50MaxRow is one project's result from
+// queryProjectWorkloadP50Max: how many of its reachable team_breakdown rows
+// carry a known forecast_p50_days, how many rows are reachable in total,
+// and -- when at least one is known -- which single row produced the
+// winning (worst/longest) p50_days, so the caller can promote its
+// insufficient_history/high_variance flags and cite it as evidence even
+// when that row never reached the row-level breakdown scan's shared
+// budget.
+type workloadP50MaxRow struct {
+	knownRowCount, totalRowCount int64
+	winnerP50Days                int64
+	winnerTeamKey, winnerScopeID string
+	winnerInsufficientHistory    bool
+	winnerHighVariance           bool
+}
+
+// queryProjectWorkloadP50Max computes, per project, the WORST (longest)
+// forecast_p50_days across the SAME latest-row-per-(team,work_scope)
+// population readProjectWorkload's own team_breakdown draws from --
+// readers.ReadProjectWorkload's identical ProjectIdentityJoinSQL/
+// ProjectIdentityMatchSQL join over capacity_forecasts FINAL, row_number()
+// deduped per (team_id, work_scope_id) on (computed_at DESC, forecast_id
+// DESC) -- but as ONE server-side aggregate, GROUPed BY project, rather
+// than a Go-side fold over the row-level scan.
+//
+// This is the PROJECT POPULATION SOURCE, not merely a p50 lookup -- exactly
+// health.go's queryProjectHealthSeverityMax's own doc comment explains for
+// severity: readProjectWorkload's row-level breakdown scan shares ONE
+// readers.DefaultRowLimit budget across EVERY project a caller requests in
+// one call, so a project sorting late enough to sit past that shared cap
+// can be ABSENT from the row-level scan entirely, not merely missing its
+// worst row. This query has no such shared budget (its own probe counts
+// DISTINCT PROJECTS, never contributing rows), so every project it returns
+// is emitted by the caller regardless of whether the row-level scan
+// reached it at all -- see readProjectWorkload's own doc comment at the
+// call site.
+//
+// It is also the EVIDENCE SOURCE for the promoted value: knownRowCount,
+// totalRowCount and the winning (team_key, work_scope_id,
+// insufficient_history, high_variance) travel WITH the p50, so a project
+// whose winning row never reached the row-level scan still gets a citable
+// evidence ref for the team that actually produced its p50
+// (readProjectWorkload appends it directly from this result, never only
+// from rows the display scan happened to carry).
+//
+// p50_days is Nullable(UInt16) (DESCRIBE TABLE capacity_forecasts, real
+// ClickHouse) -- non-negative by column type -- so ifNull(p50_days, -1) is
+// an unambiguous "no reading" sentinel that can never win an argMax against
+// a real reading, mirroring health.go's identical ifNull(-1) sentinel
+// discipline for a different, but equally non-negative-by-type, column.
+// knownRowCount = countIf(isNotNull(p50_days)) and totalRowCount = count()
+// let the caller distinguish "reachable rows exist, none carries a p50"
+// (serves p50_unavailable_reason) from "no reachable rows at all" (this
+// project never appears in the result, and readProjectWorkload serves no
+// fact for it).
+func (p *WorkloadProvider) queryProjectWorkloadP50Max(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byProject map[string]workloadP50MaxRow, order []string, rowCount int, err error) {
+	statement := withRowProbeLimit(`SELECT project_key, countIf(isNotNull(p50_days)), count(), argMax(concat(toString(ifNull(p50_days, -1)), '` + workloadP50WinnerDelimiter + `', team_key, '` + workloadP50WinnerDelimiter + `', work_scope_id, '` + workloadP50WinnerDelimiter + `', toString(insufficient_history), '` + workloadP50WinnerDelimiter + `', toString(high_variance)), tuple(ifNull(p50_days, -1), cityHash64(tuple(team_key, work_scope_id, ifNull(p50_days, -1)))))
+FROM (
+	SELECT concat(p.provider, ':', p.id) AS project_key, cf.team_key AS team_key, cf.work_scope_id AS work_scope_id, cf.p50_days AS p50_days, cf.insufficient_history AS insufficient_history, cf.high_variance AS high_variance
+	FROM ` + projectIdentityJoinSQL() + `
+	INNER JOIN (
+		SELECT ifNull(team_id, '') AS team_key, work_scope_id, p50_days, insufficient_history, high_variance,
+			row_number() OVER (PARTITION BY team_id, work_scope_id ORDER BY computed_at DESC, forecast_id DESC) AS rn
+		FROM capacity_forecasts FINAL
+		WHERE org_id = {org_id:String}` + timeBound.timestampPredicate("computed_at") + `
+	) AS cf ON ` + projectIdentityMatchSQL("cf", "work_scope_id") + ` AND cf.rn = 1
+)
+GROUP BY project_key
+ORDER BY project_key`)
+	byProject = make(map[string]workloadP50MaxRow)
+	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		rowCount++
+		var projectKey, winner string
+		var known, total uint64
+		if err := row.Scan(&projectKey, &known, &total, &winner); err != nil {
+			return err
+		}
+		result := workloadP50MaxRow{knownRowCount: int64(known), totalRowCount: int64(total)}
+		if known > 0 {
+			if parts := strings.SplitN(winner, workloadP50WinnerDelimiter, 5); len(parts) == 5 {
+				if p50, parseErr := strconv.ParseInt(parts[0], 10, 64); parseErr == nil {
+					result.winnerP50Days = p50
+				}
+				result.winnerTeamKey = parts[1]
+				result.winnerScopeID = parts[2]
+				result.winnerInsufficientHistory = parts[3] == "1"
+				result.winnerHighVariance = parts[4] == "1"
+			}
+		}
+		if _, seen := byProject[projectKey]; !seen {
+			order = append(order, projectKey)
+		}
+		byProject[projectKey] = result
+		return nil
+	}, timeBound.bindings()...)
+	return byProject, order, rowCount, scanErr
+}
+
 // readProjectWorkload rolls FactWorkload up for a project through
 // projects -> team_project_ownership -> capacity_forecasts: every team
 // owning the project contributes its own latest per-scope forecast,
@@ -364,6 +490,14 @@ func (p *WorkloadProvider) readTeamWorkload(ctx context.Context, orgID string, s
 // readers.ReadProjectWorkload; this adapter does the Go-side
 // grouping/breakdown-table construction the reader deliberately leaves to
 // its caller.
+//
+// This also promotes the WORST (longest) forecast_p50_days across this same
+// population to a top-level scalar, via queryProjectWorkloadP50Max --
+// workloadWorstDays (cohort_ranking.go) already reads
+// fact.Fields["forecast_p50_days"] off ANY FactWorkload fact regardless of
+// subject kind, and project cohorts ARE constructed in production: the
+// project rollup carried the row-level values in team_breakdown but never
+// promoted the worst one to where the ranking signal reads.
 func (p *WorkloadProvider) readProjectWorkload(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rowCount int, rejected int, breakdownTruncated bool, err error) {
 	ids, bySubject, rejected := v2Index(subjects, identity.KindProject)
 	if len(ids) == 0 {
@@ -396,20 +530,44 @@ func (p *WorkloadProvider) readProjectWorkload(ctx context.Context, orgID string
 	if dailySeriesRowCount > rowCount {
 		rowCount = dailySeriesRowCount
 	}
+	// p50ByProject/p50Order are read from queryProjectWorkloadP50Max's OWN
+	// server-side aggregate, never derived from the row-level byProject scan
+	// below: that scan's own readers.DefaultRowLimit cap is shared across
+	// EVERY requested project's breakdown rows combined, so a project
+	// sitting near the boundary of that shared budget can be ABSENT from
+	// byProject/projectOrder entirely -- see queryProjectWorkloadP50Max's own
+	// doc comment. p50Order drives EMISSION below, never a row-scan-derived
+	// order.
+	p50ByProject, p50Order, p50RowCount, p50Err := p.queryProjectWorkloadP50Max(ctx, orgID, ids, timeBound)
+	if p50Err != nil {
+		return 0, rejected, false, p50Err
+	}
+	if p50RowCount >= maxFactRowsProbe {
+		breakdownTruncated = true
+	}
+	if p50RowCount > rowCount {
+		rowCount = p50RowCount
+	}
 	byProject := make(map[string][]readers.WorkloadProjectRow)
-	var projectOrder []string
 	for _, r := range scanned {
 		if _, ok := bySubject[r.ProjectSubjectKey]; !ok {
 			continue
 		}
-		if _, seen := byProject[r.ProjectSubjectKey]; !seen {
-			projectOrder = append(projectOrder, r.ProjectSubjectKey)
-		}
 		byProject[r.ProjectSubjectKey] = append(byProject[r.ProjectSubjectKey], r)
 	}
-	for _, projectKey := range projectOrder {
+	// p50Order lists every project queryProjectWorkloadP50Max proved
+	// reachable through the SAME identity join, regardless of whether the
+	// shared, row-capped scan above happened to reach it too. A project
+	// present in the aggregate but absent from byProject (rows is then nil)
+	// is still a REAL project this org's data reaches -- it is emitted with
+	// an honestly empty/partial team_breakdown, never silently dropped
+	// because the shared scan ran out of room before reaching it.
+	for _, projectKey := range p50Order {
+		subject, ok := bySubject[projectKey]
+		if !ok {
+			continue
+		}
 		rows := byProject[projectKey]
-		subject := bySubject[projectKey]
 		seenTeamScope := make(map[string]bool, len(rows))
 		seenTeams := make(map[string]bool, len(rows))
 		teamRows := make([]contextfabric.FactValueRow, 0, len(rows))
@@ -454,15 +612,23 @@ func (p *WorkloadProvider) readProjectWorkload(ctx context.Context, orgID string
 			}
 			teamRows = append(teamRows, contextfabric.FactValueRow{Fields: rowFields})
 		}
-		if len(teamRows) == 0 {
-			continue
-		}
 		var omitted int
 		teamRows, omitted = capFactValueRows(teamRows)
 		breakdownTruncated = breakdownTruncated || omitted > 0
+		p50Row := p50ByProject[projectKey]
 		fields := map[string]contextfabric.FactValue{
 			"rollup_basis": contextfabric.StringFactValue("project_work_scope_breakdown"),
 			"team_count":   contextfabric.IntegerFactValue(int64(len(seenTeams))),
+			// team_breakdown_rows_shown/_total disclose, PER PROJECT, exactly
+			// what the row-level scan's shared budget left visible versus how
+			// many rows are truly reachable (rows_total comes from the p50
+			// aggregate's own uncapped count, so it can never be narrowed by
+			// the shared cap) -- a project can carry a promoted
+			// forecast_p50_days with rows_shown=0 when its own rows never
+			// reached the shared scan at all. Mirrors health.go's
+			// risk_breakdown_rows_shown/_total exactly.
+			"team_breakdown_rows_shown": contextfabric.IntegerFactValue(int64(len(teamRows))),
+			"team_breakdown_rows_total": contextfabric.IntegerFactValue(p50Row.totalRowCount),
 			// CHAOS-4645 (fixing the CHAOS-4633 F3 debt this file's own doc
 			// comment used to flag here): basis is CONSTANT
 			// "capacity_forecast" across every row of team_breakdown, so it
@@ -476,12 +642,20 @@ func (p *WorkloadProvider) readProjectWorkload(ctx context.Context, orgID string
 			// consumer reading team_breakdown row Fields["basis"] must now
 			// read fact.Fields["basis"] instead.
 			"basis": contextfabric.StringFactValue("capacity_forecast"),
+		}
+		// FactTable.Validate refuses a table with zero rows, so
+		// team_breakdown is present only when the shared scan actually
+		// reached at least one of this project's rows -- its absence is
+		// itself part of the team_breakdown_rows_shown=0 disclosure above,
+		// never silently substituted with an empty table. Mirrors
+		// health.go's identical risk_breakdown guard.
+		if len(teamRows) > 0 {
 			// CHAOS-4633 P1: Key = [team_id, team_name, work_scope_id,
 			// computed_at] -- team_id alone does not guarantee distinctness
 			// (a team can contribute more than one work_scope_id row), so
 			// work_scope_id is part of the declared identity, not a
 			// measure.
-			"team_breakdown": contextfabric.TableFactValue(contextfabric.FactTable{
+			fields["team_breakdown"] = contextfabric.TableFactValue(contextfabric.FactTable{
 				Shape: contextfabric.FactTableBreakdown,
 				Key:   []string{"team_id", "team_name", "work_scope_id", "computed_at"},
 				// insufficient_history/high_variance are BooleanFactValue
@@ -495,7 +669,39 @@ func (p *WorkloadProvider) readProjectWorkload(ctx context.Context, orgID string
 				Observations: []string{"insufficient_history", "high_variance"},
 				Grain:        timeBound.effectiveGrain(grainExact),
 				Rows:         teamRows,
-			}),
+			})
+		}
+		// CHAOS-5931: forecast_p50_days promotes the WORST (longest) p50
+		// across this project's own reachable team_breakdown population --
+		// a data gap (no p50 recorded) contributes no evidence either way,
+		// so it can never win the max against a real reading, and it can
+		// never stand in as a false "0 days" when it is the only reading a
+		// project's population carries. Read from
+		// queryProjectWorkloadP50Max's own server-side aggregate, never
+		// from the teamRows loop above, so the value -- and its evidence --
+		// are immune to the row-level scan's shared budget. A project with
+		// at least one known p50 discloses which population produced it
+		// (p50_basis) and carries the winning row's own
+		// insufficient_history/high_variance flags (never a different row's
+		// flags, and never dropped); a project whose reachable rows are ALL
+		// null (0 reachable rows at all means this project never appears in
+		// p50Order, so this branch is never reached for it) discloses that
+		// forecast_p50_days is undetermined for a named reason, never a
+		// fabricated 0.
+		if p50Row.knownRowCount > 0 {
+			fields["forecast_p50_days"] = contextfabric.IntegerFactValue(p50Row.winnerP50Days)
+			fields["p50_basis"] = contextfabric.StringFactValue(workloadP50BasisTeamBreakdown)
+			fields["insufficient_history"] = contextfabric.BooleanFactValue(p50Row.winnerInsufficientHistory)
+			fields["high_variance"] = contextfabric.BooleanFactValue(p50Row.winnerHighVariance)
+			// An unattributed winning row (team_key == "") is not a team --
+			// it must not mint an evidence ref, the same "missing is not a
+			// team whose name is blank" rule the per-row loop above already
+			// applies.
+			if p50Row.winnerTeamKey != "" && !dedupeTeamRow(seenTeams, p50Row.winnerTeamKey) {
+				evidenceRefIDs = append(evidenceRefIDs, evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, p50Row.winnerTeamKey))
+			}
+		} else {
+			fields["p50_unavailable_reason"] = contextfabric.StringFactValue(workloadP50UnavailableReasonNoKnownP50)
 		}
 		// codex CHAOS-4645 round-1 P3: see readTeamWorkload's identical note.
 		if dailyTable, ok, dailyOmitted := workloadDailyTable(dailyByProject[projectKey], timeBound.effectiveGrain(grainDaily)); ok {
