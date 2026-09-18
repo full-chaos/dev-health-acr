@@ -443,3 +443,47 @@ func TestActualCompletionSharedBudgetNoBranchStarvesTheOther(t *testing.T) {
 func fmtSharedBudgetCase(wi, pj int, order string) string {
 	return "wi=" + strconvItoa(wi) + "/pj=" + strconvItoa(pj) + "/" + order
 }
+
+// --- Class A: a served row must satisfy its own population partition ---
+
+// TestActualCompletionProjectRollup_PartitionInvariantViolation_NoFactServed
+// forces a row that could never come out of the shipped statement (every
+// count there is a plain countIf over ONE GROUP BY, so the arithmetic holds
+// by construction) but that a canned fixture can still hand the scan --
+// exactly the shape a future edit to the statement could introduce by
+// accident. Each case isolates ONE of the two guards: the first fails
+// closed before countedWorkItems is even computed (cancelled/unknown
+// exceeding the total), the second after (completed/unknown exceeding the
+// counted subset) -- a served fact must never come out of either.
+func TestActualCompletionProjectRollup_PartitionInvariantViolation_NoFactServed(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		row  []any
+	}{
+		// cancelled_count (5) exceeds work_item_count (3): impossible from
+		// a real countIf, caught before countedWorkItems is computed.
+		{"cancelled_exceeds_total", completionRollupRow("linear", "proj-1", 3, 5, 0, 0)},
+		// completed_count (10) exceeds counted_work_items (5-1=4): caught
+		// after countedWorkItems is computed, with cancelled_count itself
+		// well-formed.
+		{"completed_exceeds_counted", completionRollupRow("linear", "proj-1", 5, 1, 0, 10)},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			client := &fakeClient{tables: []fakeTable{{match: completionRollupQueryMatch, rows: [][]any{tc.row}}}}
+			result := readProjectCompletion(t, client, projectSubject("linear", "proj-1"))
+			if len(result.Facts) != 0 {
+				t.Fatalf("facts = %#v, want none -- a row that violates its own partition invariant must never be served", result.Facts)
+			}
+			if !result.Truncated {
+				t.Fatal("Truncated = false, want true -- the withheld row is a disclosed omission, not a silent drop")
+			}
+			if !strings.Contains(result.Reason, "project_completion_partition_invalid") {
+				t.Fatalf("reason = %q, want it to name the partition-invariant violation", result.Reason)
+			}
+		})
+	}
+}

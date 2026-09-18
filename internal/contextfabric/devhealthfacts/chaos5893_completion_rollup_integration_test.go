@@ -107,7 +107,7 @@ func TestActualCompletionProjectRollupStatusMatrixAgainstRealClickHouse(t *testi
 		{"WI-TODO-OPEN", "todo", nil},
 		{"WI-INPROGRESS-OPEN", "in_progress", nil},
 		{"WI-DONE-COMPLETED", "done", &at},
-		{"WI-DONE-OPEN", "done", nil}, // done but no completed_at: not counted as completed
+		{"WI-DONE-OPEN", "done", nil},              // done but no completed_at: not counted as completed
 		{"WI-CANCELED-COMPLETED", "canceled", &at}, // codex r1 P1 repro
 		{"WI-CANCELED-OPEN", "canceled", nil},
 		{"WI-UNKNOWN-COMPLETED", "unknown", &at},
