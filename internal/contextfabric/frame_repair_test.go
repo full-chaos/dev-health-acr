@@ -1024,12 +1024,19 @@ func rankingRepairCells() []rankingRepairCell {
 	}
 	return []rankingRepairCell{
 		{
+			// accepted_judgment stays "none": unlike the grouped sibling,
+			// this repair invents no goal, so the model's own free text
+			// (untouched, carried on the interpretation itself, not on
+			// this event) already describes the surviving Goals and a
+			// generic substitute would only discard it -- see this
+			// repair's own doc comment and
+			// TestTheRankingRepairPreservesTheModelsOwnJudgment below.
 			cell:                 "compare with rank_or_survey over a discovered cohort drops compare",
 			receipt:              func(*ModelExecutionReceipt) {},
 			frame:                compareOverDiscoveredCohort,
 			wantOutcome:          FrameValidationOutcomeRepaired,
 			wantGoals:            []InvestigationGoal{GoalRankOrSurvey},
-			wantAcceptedJudgment: "a ranking or survey",
+			wantAcceptedJudgment: "",
 			wantLine:             rankingAppliedLine(),
 		},
 		{
@@ -1043,7 +1050,7 @@ func rankingRepairCells() []rankingRepairCell {
 			}),
 			wantOutcome:          FrameValidationOutcomeRepaired,
 			wantGoals:            []InvestigationGoal{GoalAssessState, GoalRankOrSurvey},
-			wantAcceptedJudgment: "the current state and a ranking or survey",
+			wantAcceptedJudgment: "",
 			wantLine:             rankingAppliedLine(),
 		},
 		{
@@ -1263,11 +1270,18 @@ func TestCompareRankingRepairDecisionsAreInTheClosedVocabulary(t *testing.T) {
 	}
 }
 
+// rankingSyntheticJudgment is a distinctive, synthetic (non-corpus)
+// RequestedJudgment string: specific enough that a generic closed-phrase
+// substitute could never produce it by composition, so a test asserting it
+// reached synthesis unchanged cannot pass by accident.
+const rankingSyntheticJudgment = "rank the fixture subjects by a stated criterion"
+
 // newRankingRepairEngine drives the production engine over the misread
 // compare-ranking proposal, with a synthesizer SPY -- the same shape
-// newCompareRepairEngine uses for the grouped sibling, proving the
-// RequestedJudgment carry (already generic in model_runtime.go) reaches
-// synthesis for THIS repair too, not only the one PR575 added it for.
+// newCompareRepairEngine uses for the grouped sibling, proving this
+// repair's own carry behavior (deliberately NOT populating
+// RequestedJudgment -- see repairCompareRankingCollapse's own doc comment)
+// leaves the model's own free text to reach synthesis untouched.
 func newRankingRepairEngine(t *testing.T) (*Engine, *[]SynthesisInput) {
 	t.Helper()
 	logs := captureEngineLogger(t)
@@ -1285,7 +1299,7 @@ func newRankingRepairEngine(t *testing.T) (*Engine, *[]SynthesisInput) {
 	}}
 	captured := make([]SynthesisInput, 0, 1)
 	interpretation := repairInterpretation([]string{repairAnchorTerm})
-	interpretation.RequestedJudgment = "compare"
+	interpretation.RequestedJudgment = rankingSyntheticJudgment
 	engine, err := NewEngine(EngineDependencies{
 		Interpreter: RuntimeQuestionInterpreter{
 			Runtime:        fakeModelRuntime{interpreted: interpretation, receipt: receipt},
@@ -1328,11 +1342,18 @@ func newRankingRepairEngine(t *testing.T) (*Engine, *[]SynthesisInput) {
 	return engine, &captured
 }
 
-// TestTheRepairedRankingJudgmentReachesSynthesis drives Engine.Investigate
-// over the production interpreter: synthesis receives
-// Interpretation.RequestedJudgment stating the ACCEPTED shape (a ranking or
-// survey), never the model's pre-repair "compare".
-func TestTheRepairedRankingJudgmentReachesSynthesis(t *testing.T) {
+// TestTheRankingRepairPreservesTheModelsOwnJudgment drives Engine.Investigate
+// over the production interpreter: synthesis receives the model's OWN
+// RequestedJudgment text unchanged, never a generic closed-phrase
+// substitute -- proven with a distinctive synthetic value a substitute could
+// never construct by composition (goalJudgmentPhrase has no fragment able to
+// spell it). An unconditional overwrite with requestedJudgmentForGoals's
+// generic phrase would discard a real, specific ranking criterion (e.g. a
+// stated "rank teams by deployment stability") for a bland "a ranking or
+// survey" even when the model's own text already correctly described the
+// surviving Goals -- because, unlike the grouped-cohort
+// sibling, this repair invents no goal the model did not already state.
+func TestTheRankingRepairPreservesTheModelsOwnJudgment(t *testing.T) {
 	engine, captured := newRankingRepairEngine(t)
 	request := validInvestigationRequestWithConfirmedWindow()
 	request.RequestID = "request_ranking_repair_01"
@@ -1348,9 +1369,8 @@ func TestTheRepairedRankingJudgmentReachesSynthesis(t *testing.T) {
 		t.Fatalf("synthesizer calls = %d, want exactly 1", len(*captured))
 	}
 	got := (*captured)[0].Interpretation.RequestedJudgment
-	want := "a ranking or survey"
-	if got != want {
-		t.Fatalf("SynthesisInput.Interpretation.RequestedJudgment = %q, want %q (the fixture's own pre-repair value was %q)", got, want, "compare")
+	if got != rankingSyntheticJudgment {
+		t.Fatalf("SynthesisInput.Interpretation.RequestedJudgment = %q, want the model's own unmodified %q", got, rankingSyntheticJudgment)
 	}
 }
 
@@ -1765,7 +1785,7 @@ func repairTableFixtures() []repairTableFixture {
 			frame:           compareOverDiscoveredCohort(),
 			shape:           ShapeSingleSubject,
 			terms:           []string{repairAnchorTerm},
-			zeroCarryFields: map[string]bool{"ScopeAnchorKind": true},
+			zeroCarryFields: map[string]bool{"ScopeAnchorKind": true, "RequestedJudgment": true},
 		},
 	}
 }

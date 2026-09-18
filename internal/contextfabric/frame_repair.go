@@ -543,13 +543,22 @@ func repairCompareGroupedCollapse(receipt ModelExecutionReceipt, proposed Questi
 //     ran.
 //   - At most frameRepairBound attempts.
 //
-// CARRY: like the grouped sibling, this repair never touches
-// SubjectExpression, and discovered_kind has no scope anchor either
-// (scope_anchor_kind.go admits only children_of_scope) -- its Carry stays
-// the zero value except RequestedJudgment, exactly what a direct proposal
-// of this same shape would also carry. See FrameRepairCarry's own doc
-// comment and this repair's fixture in repairTableFixtures
-// (frame_repair_test.go).
+// CARRY: this repair never touches SubjectExpression, so ScopeAnchorKind
+// stays the zero value (discovered_kind has no scope anchor either --
+// scope_anchor_kind.go admits only children_of_scope). RequestedJudgment
+// ALSO stays the zero value, and that is the one point this repair departs
+// from its grouped-cohort sibling: replaceCompareGoal (the sibling's own
+// transform) INVENTS a companion goal the proposal never stated, so the
+// model's own free text cannot describe a shape it never proposed and a
+// substitute is the only honest value. dropCompareGoal invents nothing --
+// it only ever REMOVES compare, so the surviving Goals (rank_or_survey and
+// anything else the proposal already carried) are exactly what the model
+// already described in its own words. Composing a generic substitute here
+// would DISCARD real information a correctly-worded free-text judgment
+// already carries (e.g. "rank teams by deployment stability" collapsing to
+// the closed phrase "a ranking or survey") for a proposal this repair never
+// asked the model to reconsider. See FrameRepairCarry's own doc comment and
+// this repair's fixture in repairTableFixtures (frame_repair_test.go).
 func repairCompareRankingCollapse(receipt ModelExecutionReceipt, proposed QuestionFrame, emittedShape InvestigationShape, subjectTerms []string, result FrameValidationResult) FrameValidationResult {
 	if result.Failure.Invariant != FrameInvariantI7 || proposed.SubjectExpression.Kind != SubjectExpressionDiscoveredKind {
 		// Not an I7 failure, or not this repair's cohort shape. A
@@ -592,10 +601,13 @@ func repairCompareRankingCollapse(receipt ModelExecutionReceipt, proposed Questi
 		return FrameValidationResult{Outcome: revalidated.Outcome, Failure: revalidated.Failure, Repair: considered}
 	}
 	considered.Decision = FrameRepairApplied
-	// Derived from the NORMALIZED accepted Goals, the same value the
-	// frame-validation line's own accepted_judgment field reports -- see
-	// repairCompareGroupedCollapse's identical carry line above.
-	considered.Carry.RequestedJudgment = requestedJudgmentForGoals(revalidated.Frame.Goals)
+	// RequestedJudgment is left at its zero value deliberately -- see this
+	// function's own doc comment above (the CARRY paragraph). Unlike the
+	// grouped-cohort sibling, this repair invents no goal the model did not
+	// already state, so the model's own free text (read straight off the
+	// SAME interpretation by chaos4636_synthesis_assembly.go, untouched by
+	// this repair) already describes the surviving Goals and a generic
+	// substitute would only discard real information.
 	return FrameValidationResult{Frame: revalidated.Frame, Outcome: FrameValidationOutcomeRepaired, Repair: considered}
 }
 
