@@ -33,13 +33,25 @@ func chaos5931WorkloadRow(provider, projectID, teamID, teamName, workScopeID str
 	}
 }
 
+// chaos5931UnattributedWorkloadRow is chaos5931WorkloadRow's HasTeam=0
+// counterpart: the source's own team_id was NULL, so the row carries real
+// coverage but no contributing team to cite as evidence for it.
+func chaos5931UnattributedWorkloadRow(provider, projectID, workScopeID string, throughputMean, throughputStddev float64, hasP50 bool, p50Days int64, insufficientHistory, highVariance bool, backlogSize int64) []any {
+	return []any{
+		provider + ":" + projectID, uint8(0), "", "", workScopeID,
+		throughputMean, throughputStddev,
+		chaos5931Uint8(hasP50), p50Days, chaos5931Uint8(insufficientHistory), chaos5931Uint8(highVariance),
+		backlogSize, "2026-07-27 04:00:00",
+	}
+}
+
 // TestChaos5931SingleTeamPromotesWorstP50 is the basic happy path: one
 // team_breakdown row, its own p50_days promoted verbatim with the winning
 // row's own flags.
 func TestChaos5931SingleTeamPromotesWorstP50(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: workloadP50MaxMatch, rows: [][]any{workloadP50MaxRow("linear", "proj-1", 1, 1, 14, "team-1", "scope-a", false, true)}},
+		{match: workloadP50MaxMatch, rows: [][]any{workloadP50MaxRow("linear", "proj-1", 1, 0, 0, 14, "team-1", "scope-a", false, true)}},
 		{match: workloadBaseQueryMatch, rows: [][]any{
 			chaos5931WorkloadRow("linear", "proj-1", "team-1", "Team One", "scope-a", 3.2, 0.8, true, 14, false, true, 120),
 		}},
@@ -87,7 +99,7 @@ func TestChaos5931SingleTeamPromotesWorstP50(t *testing.T) {
 func TestChaos5931MultiTeamMaxWinsFlagsFromWinnerOnly(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: workloadP50MaxMatch, rows: [][]any{workloadP50MaxRow("linear", "proj-1", 2, 2, 40, "team-2", "scope-b", false, true)}},
+		{match: workloadP50MaxMatch, rows: [][]any{workloadP50MaxRow("linear", "proj-1", 2, 0, 0, 40, "team-2", "scope-b", false, true)}},
 		{match: workloadBaseQueryMatch, rows: [][]any{
 			chaos5931WorkloadRow("linear", "proj-1", "team-1", "Team One", "scope-a", 3.2, 0.8, true, 5, true, false, 120),
 			chaos5931WorkloadRow("linear", "proj-1", "team-2", "Team Two", "scope-b", 9.0, 2.1, true, 40, false, true, 40),
@@ -122,7 +134,7 @@ func TestChaos5931MultiTeamMaxWinsFlagsFromWinnerOnly(t *testing.T) {
 func TestChaos5931TieAtMaxReportsOneValue(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: workloadP50MaxMatch, rows: [][]any{workloadP50MaxRow("linear", "proj-1", 2, 2, 40, "team-1", "scope-a", false, false)}},
+		{match: workloadP50MaxMatch, rows: [][]any{workloadP50MaxRow("linear", "proj-1", 2, 0, 0, 40, "team-1", "scope-a", false, false)}},
 		{match: workloadBaseQueryMatch, rows: [][]any{
 			chaos5931WorkloadRow("linear", "proj-1", "team-1", "Team One", "scope-a", 3.2, 0.8, true, 40, false, false, 120),
 			chaos5931WorkloadRow("linear", "proj-1", "team-2", "Team Two", "scope-b", 9.0, 2.1, true, 40, false, false, 40),
@@ -148,7 +160,7 @@ func TestChaos5931TieAtMaxReportsOneValue(t *testing.T) {
 func TestChaos5931NullP50AmongOthersExcludedFromMax(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: workloadP50MaxMatch, rows: [][]any{workloadP50MaxRow("linear", "proj-1", 1, 2, 20, "team-2", "scope-b", false, false)}},
+		{match: workloadP50MaxMatch, rows: [][]any{workloadP50MaxRow("linear", "proj-1", 1, 0, 1, 20, "team-2", "scope-b", false, false)}},
 		{match: workloadBaseQueryMatch, rows: [][]any{
 			chaos5931WorkloadRow("linear", "proj-1", "team-1", "Team One", "scope-a", 3.2, 0.8, false, 0, false, false, 120),
 			chaos5931WorkloadRow("linear", "proj-1", "team-2", "Team Two", "scope-b", 9.0, 2.1, true, 20, false, false, 40),
@@ -183,7 +195,7 @@ func TestChaos5931NullP50AmongOthersExcludedFromMax(t *testing.T) {
 func TestChaos5931AllNullP50DisclosesReasonNoFabricatedZero(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: workloadP50MaxMatch, rows: [][]any{workloadP50MaxRow("linear", "proj-1", 0, 2, 0, "", "", false, false)}},
+		{match: workloadP50MaxMatch, rows: [][]any{workloadP50MaxRow("linear", "proj-1", 0, 0, 2, 0, "", "", false, false)}},
 		{match: workloadBaseQueryMatch, rows: [][]any{
 			chaos5931WorkloadRow("linear", "proj-1", "team-1", "Team One", "scope-a", 3.2, 0.8, false, 0, false, false, 120),
 			chaos5931WorkloadRow("linear", "proj-1", "team-2", "Team Two", "scope-b", 9.0, 2.1, false, 0, false, false, 40),
@@ -229,8 +241,8 @@ func TestChaos5931ProjectPresentOnlyInAggregateStillServed(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
 		{match: workloadP50MaxMatch, rows: [][]any{
-			workloadP50MaxRow("linear", "proj-shown", 1, 1, 5, "team-shown", "scope-shown", false, false),
-			workloadP50MaxRow("linear", "proj-late", 1, 1, 90, "team-late", "scope-late", true, false),
+			workloadP50MaxRow("linear", "proj-shown", 1, 0, 0, 5, "team-shown", "scope-shown", false, false),
+			workloadP50MaxRow("linear", "proj-late", 1, 0, 0, 90, "team-late", "scope-late", true, false),
 		}},
 		// Only proj-shown has a row-level breakdown row; proj-late has none,
 		// simulating a project the shared scan never reached.
@@ -293,7 +305,7 @@ func TestChaos5931ProjectPresentOnlyInAggregateStillServed(t *testing.T) {
 func TestChaos5931MixedRootRequestNeitherRootSuppressed(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: workloadP50MaxMatch, rows: [][]any{workloadP50MaxRow("linear", "proj-1", 1, 1, 7, "team-p", "scope-p", false, false)}},
+		{match: workloadP50MaxMatch, rows: [][]any{workloadP50MaxRow("linear", "proj-1", 1, 0, 0, 7, "team-p", "scope-p", false, false)}},
 		{match: workloadProjectRollupMatch, rows: [][]any{
 			chaos5931WorkloadRow("linear", "proj-1", "team-p", "Team P", "scope-p", 1.5, 0.2, true, 7, false, false, 10),
 		}},
@@ -332,5 +344,81 @@ func TestChaos5931MixedRootRequestNeitherRootSuppressed(t *testing.T) {
 	}
 	if got := projectFact.Fields["p50_basis"].String; got == nil || *got != "worst_of_team_breakdown" {
 		t.Fatalf("project p50_basis = %#v, want worst_of_team_breakdown", projectFact.Fields["p50_basis"])
+	}
+}
+
+// TestChaos5931UnattributedForecastNeverWinsOrCountsAsKnown pins the
+// team-derived contract directly: an unattributed row (no contributing
+// team) with a LARGER p50 than every attributed row must neither win the
+// promotion nor be counted as known -- it has no citable evidence, and
+// crediting it would award ranking points for a reading nobody can
+// attribute to a team.
+func TestChaos5931UnattributedForecastNeverWinsOrCountsAsKnown(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{
+		{match: workloadP50MaxMatch, rows: [][]any{workloadP50MaxRow("linear", "proj-1", 1, 1, 0, 10, "team-1", "scope-a", false, false)}},
+		{match: workloadBaseQueryMatch, rows: [][]any{
+			chaos5931UnattributedWorkloadRow("linear", "proj-1", "scope-unattributed", 1.0, 0.1, true, 999, false, false, 4),
+			chaos5931WorkloadRow("linear", "proj-1", "team-1", "Team One", "scope-a", 3.2, 0.8, true, 10, false, false, 120),
+		}},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactWorkload)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactWorkload, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	fact := result.Facts[0]
+	if got := fact.Fields["forecast_p50_days"].Integer; got == nil || *got != 10 {
+		t.Fatalf("forecast_p50_days = %#v, want 10 (team-1's own reading -- the unattributed row's 999 must never win)", fact.Fields["forecast_p50_days"])
+	}
+	if got := fact.Fields["p50_known_count"].Integer; got == nil || *got != 1 {
+		t.Fatalf("p50_known_count = %#v, want 1 (the unattributed row is never counted as known)", fact.Fields["p50_known_count"])
+	}
+	if got := fact.Fields["p50_excluded_unattributed_count"].Integer; got == nil || *got != 1 {
+		t.Fatalf("p50_excluded_unattributed_count = %#v, want 1", fact.Fields["p50_excluded_unattributed_count"])
+	}
+	for _, ref := range fact.EvidenceRefIDs {
+		if strings.Contains(ref, "scope-unattributed") {
+			t.Fatalf("evidence_ref_ids = %#v, want no ref for the unattributed row's own scope", fact.EvidenceRefIDs)
+		}
+	}
+}
+
+// TestChaos5931AllUnattributedDisclosesReasonNotFabricatedValue covers the
+// "only unattributed" cell: every reachable row carries a REAL p50 but none
+// has a contributing team, so the project must disclose the unavailable
+// reason, never fabricate a value off a reading nobody can attribute.
+func TestChaos5931AllUnattributedDisclosesReasonNotFabricatedValue(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{
+		{match: workloadP50MaxMatch, rows: [][]any{workloadP50MaxRow("linear", "proj-1", 0, 2, 0, 0, "", "", false, false)}},
+		{match: workloadBaseQueryMatch, rows: [][]any{
+			chaos5931UnattributedWorkloadRow("linear", "proj-1", "scope-a", 1.0, 0.1, true, 30, false, false, 4),
+			chaos5931UnattributedWorkloadRow("linear", "proj-1", "scope-b", 1.0, 0.1, true, 60, false, false, 4),
+		}},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactWorkload)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactWorkload, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	fact := result.Facts[0]
+	if _, ok := fact.Fields["forecast_p50_days"]; ok {
+		t.Fatalf("fields = %#v, want forecast_p50_days absent -- both readings are real but neither has a contributing team", fact.Fields)
+	}
+	if got := fact.Fields["p50_unavailable_reason"].String; got == nil || *got != "no_known_forecast_p50_days" {
+		t.Fatalf("p50_unavailable_reason = %#v", fact.Fields["p50_unavailable_reason"])
+	}
+	if got := fact.Fields["p50_excluded_unattributed_count"].Integer; got == nil || *got != 2 {
+		t.Fatalf("p50_excluded_unattributed_count = %#v, want 2", fact.Fields["p50_excluded_unattributed_count"])
+	}
+	if got := fact.Fields["team_breakdown_rows_total"].Integer; got == nil || *got != 2 {
+		t.Fatalf("team_breakdown_rows_total = %#v, want 2 (both real, unattributed rows still disclosed)", fact.Fields["team_breakdown_rows_total"])
 	}
 }
