@@ -2,6 +2,7 @@ package devhealthfacts
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -10,6 +11,57 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
+
+// healthSeverityFreshnessWindowDays bounds how many days a scope's most
+// recent KNOWN compounding-risk band may trail the request's own as-of
+// instant before a band-reading query treats it as stale rather than
+// current (CHAOS-5952). compounding_risk_daily's writer records severity
+// as the closed value 'unknown' on any day it lacks enough first-reviewed
+// PRs to compute review_latency_p90h; a scope with a real known band a few
+// days earlier must still be served that band, disclosed with the day it
+// is FROM, rather than the caller reading a blank "unknown" that a
+// slightly wider window would have resolved. One named constant, so every
+// consumer (a single scope's own latest row, a project's risk_breakdown
+// rows, and the project-level severity aggregate) applies the identical
+// window and discloses the identical number via
+// severity_freshness_window_days, never a second, undisclosed copy.
+const healthSeverityFreshnessWindowDays = 14
+
+// freshnessAsOfDateSQL renders the DATE this request's freshness window
+// measures against: the requested historical instant when one was named,
+// or ClickHouse's own current instant when the axis is current. Mirrors
+// ownershipValidityPredicate's identical active/inactive branch (shared.go)
+// -- the freshness window trails the REQUEST's own reference instant, a
+// historical as-of bound included, never a second, independently taken
+// instant.
+func freshnessAsOfDateSQL(timeBound factTimeBound) string {
+	if timeBound.active {
+		return "toDate({" + boundEndParam + ":DateTime64(6,'UTC')})"
+	}
+	return "toDate(now64(3))"
+}
+
+// freshnessIsKnownSQL is TRUE for any row whose severity is a real band --
+// anything but the closed 'unknown' value. columnExpr is an internal Go
+// string (a column or aliased-column reference, never caller data), so
+// inlining it is the same safe pattern withRowLimit's own doc comment
+// already establishes for this package's other internal literals.
+func freshnessIsKnownSQL(columnExpr string) string {
+	return "(" + columnExpr + " != 'unknown')"
+}
+
+// freshnessIsFreshSQL is TRUE for a row whose own day sits within
+// healthSeverityFreshnessWindowDays of freshnessAsOfDateSQL, inclusive of
+// the boundary day itself, and never after it (as-of honesty: a row dated
+// after the request's own reference instant cannot back an answer for
+// that instant). It says nothing about whether the row's severity is
+// known -- callers combine it with freshnessIsKnownSQL, because a stale
+// KNOWN row and a fresh UNKNOWN row are different disclosed outcomes (see
+// healthSeverityUnavailableReasonStaleBeyondWindow).
+func freshnessIsFreshSQL(dayColumnExpr string, timeBound factTimeBound) string {
+	asOf := freshnessAsOfDateSQL(timeBound)
+	return "(" + dayColumnExpr + " <= " + asOf + " AND " + dayColumnExpr + " >= (" + asOf + " - " + strconv.Itoa(healthSeverityFreshnessWindowDays) + "))"
+}
 
 // HealthProvider implements contextfabric.FactProvider for FactHealth from
 // compounding_risk_daily -- the one canonical, precomputed-by-Ops risk/health
@@ -327,25 +379,27 @@ func (p *HealthProvider) readScope(ctx context.Context, orgID, scope string, ids
 	// "same tied inputs must always hash to the same value" property this
 	// tiebreak exists to guarantee, now violated for every column beyond
 	// the original two.
-	statement := withRowLimit(`SELECT scope_id, toString(severity), toUInt8(isNotNull(compounding_risk)), toFloat64(ifNull(compounding_risk, 0)), toString(computed_at),
+	statement := withRowLimit(`SELECT scope_id, toString(severity), toUInt8(isNotNull(compounding_risk)), toFloat64(ifNull(compounding_risk, 0)), toString(computed_at), toString(day),
+	toUInt8(` + freshnessIsKnownSQL("severity") + `),
+	toUInt8(` + freshnessIsKnownSQL("severity") + ` AND ` + freshnessIsFreshSQL("day", timeBound) + `),
 	toUInt8(isNotNull(churn_norm)), toFloat64(ifNull(churn_norm, 0)), toFloat64(w_churn),
 	toUInt8(isNotNull(complexity_norm)), toFloat64(ifNull(complexity_norm, 0)), toFloat64(w_complexity),
 	toUInt8(isNotNull(ownership_norm)), toFloat64(ifNull(ownership_norm, 0)), toFloat64(w_ownership),
 	toUInt8(isNotNull(review_norm)), toFloat64(ifNull(review_norm, 0)), toFloat64(w_review)
 FROM (
-	SELECT scope_id, severity, compounding_risk, computed_at, churn_norm, complexity_norm, ownership_norm, review_norm, w_churn, w_complexity, w_ownership, w_review,
-		row_number() OVER (PARTITION BY scope_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(severity, ifNull(compounding_risk, -1), ifNull(churn_norm, -1), ifNull(complexity_norm, -1), ifNull(ownership_norm, -1), ifNull(review_norm, -1), w_churn, w_complexity, w_ownership, w_review)) DESC) AS rn
+	SELECT scope_id, severity, compounding_risk, computed_at, day, churn_norm, complexity_norm, ownership_norm, review_norm, w_churn, w_complexity, w_ownership, w_review,
+		row_number() OVER (PARTITION BY scope_id ORDER BY (severity != 'unknown') DESC, day DESC, computed_at DESC, cityHash64(tuple(severity, ifNull(compounding_risk, -1), ifNull(churn_norm, -1), ifNull(complexity_norm, -1), ifNull(ownership_norm, -1), ifNull(review_norm, -1), w_churn, w_complexity, w_ownership, w_review)) DESC) AS rn
 	FROM compounding_risk_daily
 	WHERE org_id = {org_id:String} AND scope = '` + scope + `' AND scope_id IN {ids:Array(String)}` + timeBound.dayPredicate("day") + `
 )
 WHERE rn = 1`)
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
-		var scopeID, severity, computedAt string
-		var hasRisk uint8
+		var scopeID, severity, computedAt, day string
+		var hasRisk, isKnownFlag, isFreshFlag uint8
 		var risk float64
 		values := make([]riskRuleValue, len(riskRuleComponents))
-		scanArgs := []any{&scopeID, &severity, &hasRisk, &risk, &computedAt}
+		scanArgs := []any{&scopeID, &severity, &hasRisk, &risk, &computedAt, &day, &isKnownFlag, &isFreshFlag}
 		hasNormFlags := make([]uint8, len(riskRuleComponents))
 		for i := range riskRuleComponents {
 			scanArgs = append(scanArgs, &hasNormFlags[i], &values[i].norm, &values[i].weight)
@@ -361,11 +415,30 @@ WHERE rn = 1`)
 			return nil
 		}
 		fields := map[string]contextfabric.FactValue{
-			"severity":    stringOrNull(severity),
-			"computed_at": contextfabric.StringFactValue(computedAt),
+			"computed_at":                    contextfabric.StringFactValue(computedAt),
+			"severity_freshness_window_days": contextfabric.IntegerFactValue(healthSeverityFreshnessWindowDays),
 		}
 		if hasRisk != 0 {
 			fields["compounding_risk"] = contextfabric.NumberFactValue(risk)
+		}
+		// CHAOS-5952: this scope's OWN latest-known-within-window row backs
+		// severity -- never the literal latest row regardless of band, and
+		// never a DIFFERENT physical row than compounding_risk/risk_rules
+		// above (same rn=1 pick, this file's own package doc comment on the
+		// tiebreak hash already governs why only one row may back every
+		// field of one fact). A known band outside the window is served
+		// exactly like one that was never recorded: unknown, with a reason
+		// that says which.
+		if isFreshFlag != 0 {
+			fields["severity"] = contextfabric.StringFactValue(severity)
+			fields["severity_as_of"] = contextfabric.StringFactValue(day)
+		} else {
+			fields["severity"] = contextfabric.StringFactValue("unknown")
+			if isKnownFlag != 0 {
+				fields["severity_unavailable_reason"] = contextfabric.StringFactValue(healthSeverityUnavailableReasonStaleBeyondWindow)
+			} else {
+				fields["severity_unavailable_reason"] = contextfabric.StringFactValue(healthSeverityUnavailableReasonNoKnownBand)
+			}
 		}
 		ruleRows := make([]contextfabric.FactValueRow, 0, len(riskRuleComponents))
 		for i, component := range riskRuleComponents {
@@ -426,14 +499,23 @@ WHERE rn = 1`)
 	return rowCount, dailyOmitted, scanErr
 }
 
-// compoundingRiskLatestSubquery returns the row_number()-deduplicated latest
-// row per scope_id for one compounding_risk_daily scope ('repo' or 'team'),
-// mirroring readScope's own statement exactly (scope is an internal Go
-// string literal, never caller-supplied, so it is safe to inline the same
-// way readScope's own `scope` parameter already is).
+// compoundingRiskLatestSubquery returns the row_number()-deduplicated
+// per-scope_id pick for one compounding_risk_daily scope ('repo' or
+// 'team'), mirroring readScope's own statement exactly (scope is an
+// internal Go string literal, never caller-supplied, so it is safe to
+// inline the same way readScope's own `scope` parameter already is). The
+// pick prefers a KNOWN severity over the day it fell on (CHAOS-5952: a
+// day with no known band contributes no evidence either way, so it can
+// never outrank a real reading), and among rows sharing that same
+// known-ness, the latest day wins. Every consumer of this subquery --
+// readProjectHealth's risk_breakdown rows and
+// queryProjectHealthSeverityMax's aggregate alike -- applies
+// freshnessIsFreshSQL to the SAME `day` column this pick exposes, so the
+// breakdown and the aggregate can never disagree about which rows count
+// as current.
 func compoundingRiskLatestSubquery(scope string, timeBound factTimeBound) string {
-	return `SELECT scope_id, severity, compounding_risk, computed_at,
-		row_number() OVER (PARTITION BY scope_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(severity, ifNull(compounding_risk, -1))) DESC) AS rn
+	return `SELECT scope_id, severity, compounding_risk, computed_at, day,
+		row_number() OVER (PARTITION BY scope_id ORDER BY (severity != 'unknown') DESC, day DESC, computed_at DESC, cityHash64(tuple(severity, ifNull(compounding_risk, -1))) DESC) AS rn
 	FROM compounding_risk_daily
 	WHERE org_id = {org_id:String} AND scope = '` + scope + `'` + timeBound.dayPredicate("day")
 }
@@ -456,9 +538,15 @@ func compoundingRiskDailySubquery(scope string, timeBound factTimeBound) string 
 // grouping. scope is 'team' or 'repo' -- see readProjectHealth's doc
 // comment for the two-layer chain.
 type healthRollupRow struct {
-	scope, scopeID, scopeName, severity, computedAt string
-	hasRisk                                         bool
-	risk                                            float64
+	scope, scopeID, scopeName, severity, computedAt, day string
+	// isKnown/isFresh are CHAOS-5952's freshness classification of THIS
+	// row's own severity (see freshnessIsKnownSQL/freshnessIsFreshSQL):
+	// isKnown is true for any real band, isFresh additionally requires day
+	// to sit within healthSeverityFreshnessWindowDays of the request's
+	// as-of instant. A row can be known but not fresh (a stale real band);
+	// it can never be fresh but not known.
+	hasRisk, isKnown, isFresh bool
+	risk                      float64
 }
 
 // healthSeverityBasisTeamAndRepoBreakdown and
@@ -475,6 +563,17 @@ type healthRollupRow struct {
 const (
 	healthSeverityBasisTeamAndRepoBreakdown    = "worst_of_team_and_repo_breakdown"
 	healthSeverityUnavailableReasonNoKnownBand = "no_known_severity_breakdown_rows"
+	// healthSeverityUnavailableReasonStaleBeyondWindow (CHAOS-5952) is the
+	// one closed value the severity_unavailable_reason alphabet gains
+	// beside healthSeverityUnavailableReasonNoKnownBand: a scope (or, at
+	// project scope, every one of a project's reachable scopes) DID record
+	// a known band at some point, but the most recent one falls outside
+	// healthSeverityFreshnessWindowDays of the request's as-of instant.
+	// Distinct from healthSeverityUnavailableReasonNoKnownBand (which means
+	// no known band was ever recorded at all) so a reader can tell "this
+	// scope has simply never had a real reading" apart from "this scope's
+	// last real reading is too old to trust".
+	healthSeverityUnavailableReasonStaleBeyondWindow = "known_severity_stale_beyond_freshness_window"
 )
 
 // healthSeverityWinnerDelimiter separates the (scope, scope_id, severity)
@@ -489,13 +588,17 @@ const healthSeverityWinnerDelimiter = "\x1f"
 
 // healthSeverityMaxRow is one project's result from
 // queryProjectHealthSeverityMax: how many of its reachable team+repo rows
-// carry a known band, how many rows are reachable in total, and -- when at
-// least one is known -- which single scope produced the winning (worst)
-// band, so the caller can cite it as evidence even when that scope's own
-// row never reached the row-level breakdown scan's shared budget.
+// carry a KNOWN AND FRESH band (knownRowCount, CHAOS-5952), how many carry
+// a known band at all regardless of freshness (everKnownRowCount -- lets
+// the caller tell "never known" apart from "known but stale" when
+// knownRowCount is zero), how many rows are reachable in total, and --
+// when at least one is known and fresh -- which single scope and day
+// produced the winning (worst) band, so the caller can cite it as
+// evidence even when that scope's own row never reached the row-level
+// breakdown scan's shared budget.
 type healthSeverityMaxRow struct {
-	knownRowCount, totalRowCount               int64
-	winnerScope, winnerScopeID, winnerSeverity string
+	knownRowCount, everKnownRowCount, totalRowCount       int64
+	winnerScope, winnerScopeID, winnerSeverity, winnerDay string
 }
 
 // readProjectHealth rolls FactHealth up for a project two ways at once (see
@@ -524,16 +627,16 @@ func (p *HealthProvider) readProjectHealth(ctx context.Context, orgID string, su
 	// the fake-client tests could see it, because a fake client returns
 	// canned rows regardless of the statement. Exactly the blind spot this
 	// whole ticket has been about.
-	statement := withRowLimit(`SELECT project_key, scope, scope_id, scope_name, severity, has_risk, risk, computed_at
+	statement := withRowLimit(`SELECT project_key, scope, scope_id, scope_name, severity, has_risk, risk, computed_at, day, is_known, is_fresh
 FROM (
-	SELECT concat(p.provider, ':', p.id) AS project_key, 'team' AS scope, p.team_id AS scope_id, ifNull(t.name, '') AS scope_name, toString(cr.severity) AS severity, toUInt8(isNotNull(cr.compounding_risk)) AS has_risk, toFloat64(ifNull(cr.compounding_risk, 0)) AS risk, toString(cr.computed_at) AS computed_at
+	SELECT concat(p.provider, ':', p.id) AS project_key, 'team' AS scope, p.team_id AS scope_id, ifNull(t.name, '') AS scope_name, toString(cr.severity) AS severity, toUInt8(isNotNull(cr.compounding_risk)) AS has_risk, toFloat64(ifNull(cr.compounding_risk, 0)) AS risk, toString(cr.computed_at) AS computed_at, toString(cr.day) AS day, toUInt8(` + freshnessIsKnownSQL("cr.severity") + `) AS is_known, toUInt8(` + freshnessIsKnownSQL("cr.severity") + ` AND ` + freshnessIsFreshSQL("cr.day", timeBound) + `) AS is_fresh
 	FROM ` + projectOwnershipJoinSQL(ownershipPredicate) + `
 	INNER JOIN (` + compoundingRiskLatestSubquery("team", timeBound) + `) AS cr ON cr.scope_id = p.team_id AND cr.rn = 1
 	LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = p.team_id
 
 	UNION ALL
 
-	SELECT concat(p.provider, ':', p.id) AS project_key, 'repo' AS scope, tro.repo_key AS scope_id, tro.repo_full_name AS scope_name, toString(cr.severity) AS severity, toUInt8(isNotNull(cr.compounding_risk)) AS has_risk, toFloat64(ifNull(cr.compounding_risk, 0)) AS risk, toString(cr.computed_at) AS computed_at
+	SELECT concat(p.provider, ':', p.id) AS project_key, 'repo' AS scope, tro.repo_key AS scope_id, tro.repo_full_name AS scope_name, toString(cr.severity) AS severity, toUInt8(isNotNull(cr.compounding_risk)) AS has_risk, toFloat64(ifNull(cr.compounding_risk, 0)) AS risk, toString(cr.computed_at) AS computed_at, toString(cr.day) AS day, toUInt8(` + freshnessIsKnownSQL("cr.severity") + `) AS is_known, toUInt8(` + freshnessIsKnownSQL("cr.severity") + ` AND ` + freshnessIsFreshSQL("cr.day", timeBound) + `) AS is_fresh
 	FROM ` + projectOwnershipJoinSQL(ownershipPredicate) + `
 	INNER JOIN (
 		SELECT team_id, toString(repo_id) AS repo_key, repo_full_name
@@ -551,18 +654,18 @@ ORDER BY project_key, scope, scope_id`)
 	byProject := make(map[string][]healthRollupRow)
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
-		var projectSubjectKey, scope, scopeID, scopeName, severity, computedAt string
-		var hasRisk uint8
+		var projectSubjectKey, scope, scopeID, scopeName, severity, computedAt, day string
+		var hasRisk, isKnownFlag, isFreshFlag uint8
 		var risk float64
-		if err := row.Scan(&projectSubjectKey, &scope, &scopeID, &scopeName, &severity, &hasRisk, &risk, &computedAt); err != nil {
+		if err := row.Scan(&projectSubjectKey, &scope, &scopeID, &scopeName, &severity, &hasRisk, &risk, &computedAt, &day, &isKnownFlag, &isFreshFlag); err != nil {
 			return err
 		}
 		if _, ok := bySubject[projectSubjectKey]; !ok {
 			return nil
 		}
 		byProject[projectSubjectKey] = append(byProject[projectSubjectKey], healthRollupRow{
-			scope: scope, scopeID: scopeID, scopeName: scopeName, severity: severity, computedAt: computedAt,
-			hasRisk: hasRisk != 0, risk: risk,
+			scope: scope, scopeID: scopeID, scopeName: scopeName, severity: severity, computedAt: computedAt, day: day,
+			hasRisk: hasRisk != 0, isKnown: isKnownFlag != 0, isFresh: isFreshFlag != 0, risk: risk,
 		})
 		return nil
 	}, timeBound.bindings()...)
@@ -666,11 +769,25 @@ ORDER BY project_key, scope, scope_id`)
 				"scope":       contextfabric.StringFactValue(r.scope),
 				"scope_id":    contextfabric.StringFactValue(r.scopeID),
 				"scope_name":  stringOrNull(r.scopeName),
-				"severity":    stringOrNull(r.severity),
 				"computed_at": contextfabric.StringFactValue(r.computedAt),
 			}
 			if r.hasRisk {
 				rowFields["compounding_risk"] = contextfabric.NumberFactValue(r.risk)
+			}
+			// CHAOS-5952: this row's own severity is served the same way
+			// readScope serves a repo/team scope's -- a known band inside
+			// the freshness window, or unknown with a reason, never the
+			// literal latest day's band regardless of staleness.
+			if r.isFresh {
+				rowFields["severity"] = contextfabric.StringFactValue(r.severity)
+				rowFields["severity_as_of"] = contextfabric.StringFactValue(r.day)
+			} else {
+				rowFields["severity"] = contextfabric.StringFactValue("unknown")
+				if r.isKnown {
+					rowFields["severity_unavailable_reason"] = contextfabric.StringFactValue(healthSeverityUnavailableReasonStaleBeyondWindow)
+				} else {
+					rowFields["severity_unavailable_reason"] = contextfabric.StringFactValue(healthSeverityUnavailableReasonNoKnownBand)
+				}
 			}
 			riskRows = append(riskRows, contextfabric.FactValueRow{Fields: rowFields})
 		}
@@ -691,8 +808,9 @@ ORDER BY project_key, scope, scope_id`)
 			// by either cap) -- a project can carry a known severity with
 			// rows_shown=0 when its own rows never reached the shared
 			// scan at all.
-			"risk_breakdown_rows_shown": contextfabric.IntegerFactValue(int64(len(riskRows))),
-			"risk_breakdown_rows_total": contextfabric.IntegerFactValue(sev.totalRowCount),
+			"risk_breakdown_rows_shown":      contextfabric.IntegerFactValue(int64(len(riskRows))),
+			"risk_breakdown_rows_total":      contextfabric.IntegerFactValue(sev.totalRowCount),
+			"severity_freshness_window_days": contextfabric.IntegerFactValue(healthSeverityFreshnessWindowDays),
 		}
 		// Key = [scope, scope_id, scope_name, severity, computed_at] --
 		// dedupeKey above already partitions on (scope,
@@ -708,8 +826,16 @@ ORDER BY project_key, scope, scope_id`)
 				Shape:    contextfabric.FactTableBreakdown,
 				Key:      []string{"scope", "scope_id", "scope_name", "severity", "computed_at"},
 				Measures: []string{"compounding_risk"},
-				Grain:    timeBound.effectiveGrain(grainDaily),
-				Rows:     riskRows,
+				// severity_as_of/severity_unavailable_reason (CHAOS-5952) are
+				// per-row disclosures of THIS row's own freshness pick, never
+				// a value constant across the whole table -- Observations,
+				// not a sibling scalar on the fact (contrast
+				// severity_freshness_window_days above, which IS constant
+				// across every row and belongs on the fact, per
+				// FactTable.Validate's own rule).
+				Observations: []string{"severity_as_of", "severity_unavailable_reason"},
+				Grain:        timeBound.effectiveGrain(grainDaily),
+				Rows:         riskRows,
 			})
 		}
 		// severity promotes the WORST band across this project's own
@@ -733,6 +859,7 @@ ORDER BY project_key, scope, scope_id`)
 		if sev.knownRowCount > 0 {
 			fields["severity"] = contextfabric.StringFactValue(sev.winnerSeverity)
 			fields["severity_basis"] = contextfabric.StringFactValue(healthSeverityBasisTeamAndRepoBreakdown)
+			fields["severity_as_of"] = contextfabric.StringFactValue(sev.winnerDay)
 			winnerKey := sev.winnerScope + "\x00" + sev.winnerScopeID
 			if !seenScopeEntries[winnerKey] {
 				switch sev.winnerScope {
@@ -742,6 +869,12 @@ ORDER BY project_key, scope, scope_id`)
 					evidenceRefIDs = append(evidenceRefIDs, evidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, sev.winnerScopeID))
 				}
 			}
+		} else if sev.everKnownRowCount > 0 {
+			// CHAOS-5952: this project's reachable rows DID carry a known
+			// band at some point, but none of them falls inside
+			// healthSeverityFreshnessWindowDays of the request's as-of
+			// instant -- distinct from never having carried one at all.
+			fields["severity_unavailable_reason"] = contextfabric.StringFactValue(healthSeverityUnavailableReasonStaleBeyondWindow)
 		} else {
 			fields["severity_unavailable_reason"] = contextfabric.StringFactValue(healthSeverityUnavailableReasonNoKnownBand)
 		}
@@ -877,33 +1010,55 @@ ORDER BY project_key, day DESC`)
 // healthRiskSignal already reads off the served field: "unknown" (or any
 // value outside {low, elevated, high}) maps to band 0 and can never win
 // max(band) against a real reading, so it can never surface as a false
-// "low". knownRowCount = countIf(band > 0) and totalRowCount = count()
-// let the caller distinguish "reachable rows exist, none is known" (serves
-// severity_unavailable_reason) from "no reachable rows at all" (this
-// project never appears in the result, and readProjectHealth serves no
-// fact for it). The winning (scope, scope_id, severity) triple is packed
-// into ONE argMax'd string (healthSeverityWinnerDelimiter-joined) rather
-// than three independent argMax calls, because three aggregates keyed by
-// the same ORDER expression have no guarantee of resolving a tie to the
-// SAME underlying row (this file's own package doc comment already
-// documents this exact failure mode for severity vs compounding_risk); a
-// tie here can only occur between rows sharing the IDENTICAL packed
-// string (band is a pure function of severity, and the packed string
-// includes it), so which physical row argMax picks among a tie is
-// immaterial to the value returned.
+// "low". knownRowCount = countIf(band > 0), everKnownRowCount =
+// countIf(raw_band > 0), and totalRowCount = count() let the caller
+// distinguish three populations: a known band inside the freshness window
+// (serves severity), a known band that exists but is entirely stale
+// (serves severity_unavailable_reason's
+// healthSeverityUnavailableReasonStaleBeyondWindow), and reachable rows
+// that were never known at all (healthSeverityUnavailableReasonNoKnownBand)
+// -- versus no reachable rows at all (this project never appears in the
+// result, and readProjectHealth serves no fact for it). The winning
+// (scope, scope_id, severity, day) quadruple is packed into ONE argMax'd
+// string (healthSeverityWinnerDelimiter-joined) rather than four
+// independent argMax calls, because four aggregates keyed by the same
+// ORDER expression have no guarantee of resolving a tie to the SAME
+// underlying row (this file's own package doc comment already documents
+// this exact failure mode for severity vs compounding_risk); a tie here
+// can only occur between rows sharing the IDENTICAL packed string (band is
+// a pure function of severity and day, and the packed string includes
+// both), so which physical row argMax picks among a tie is immaterial to
+// the value returned.
 func (p *HealthProvider) queryProjectHealthSeverityMax(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byProject map[string]healthSeverityMaxRow, order []string, rowCount int, err error) {
 	ownershipPredicate := ownershipValidityPredicate(timeBound)
-	statement := withRowProbeLimit(`SELECT project_key, countIf(band > 0), count(), argMax(concat(scope, '` + healthSeverityWinnerDelimiter + `', scope_id, '` + healthSeverityWinnerDelimiter + `', severity), band)
+	// CHAOS-5952: band is computed off the SAME freshnessIsKnownSQL/
+	// freshnessIsFreshSQL fragments readScope and readProjectHealth's own
+	// risk_breakdown scan apply to this exact per-scope pick (see
+	// compoundingRiskLatestSubquery's own doc comment) -- never a second,
+	// independently-derived freshness rule that could disagree with the
+	// breakdown about which rows are current. rawBand ignores freshness
+	// entirely, so countIf(raw_band > 0) answers "did this project ever
+	// reach a known band at all", distinct from countIf(band > 0)'s "does
+	// it have one WITHIN the window today" -- the two together are what
+	// let the caller tell a project that never had a known band apart from
+	// one whose only known bands are all now stale.
+	statement := withRowProbeLimit(`SELECT project_key,
+	countIf(band > 0),
+	countIf(raw_band > 0),
+	count(),
+	argMax(concat(scope, '` + healthSeverityWinnerDelimiter + `', scope_id, '` + healthSeverityWinnerDelimiter + `', severity, '` + healthSeverityWinnerDelimiter + `', day), band)
 FROM (
-	SELECT project_key, scope, scope_id, severity, multiIf(severity = 'high', 3, severity = 'elevated', 2, severity = 'low', 1, 0) AS band
+	SELECT project_key, scope, scope_id, severity, day,
+		multiIf(severity = 'high' AND ` + freshnessIsFreshSQL("day", timeBound) + `, 3, severity = 'elevated' AND ` + freshnessIsFreshSQL("day", timeBound) + `, 2, severity = 'low' AND ` + freshnessIsFreshSQL("day", timeBound) + `, 1, 0) AS band,
+		multiIf(severity = 'high', 3, severity = 'elevated', 2, severity = 'low', 1, 0) AS raw_band
 	FROM (
-		SELECT concat(p.provider, ':', p.id) AS project_key, 'team' AS scope, p.team_id AS scope_id, cr.severity AS severity
+		SELECT concat(p.provider, ':', p.id) AS project_key, 'team' AS scope, p.team_id AS scope_id, cr.severity AS severity, cr.day AS day
 		FROM ` + projectOwnershipJoinSQL(ownershipPredicate) + `
 		INNER JOIN (` + compoundingRiskLatestSubquery("team", timeBound) + `) AS cr ON cr.scope_id = p.team_id AND cr.rn = 1
 
 		UNION ALL
 
-		SELECT concat(p.provider, ':', p.id) AS project_key, 'repo' AS scope, tro.repo_key AS scope_id, cr.severity AS severity
+		SELECT concat(p.provider, ':', p.id) AS project_key, 'repo' AS scope, tro.repo_key AS scope_id, cr.severity AS severity, cr.day AS day
 		FROM ` + projectOwnershipJoinSQL(ownershipPredicate) + `
 		INNER JOIN (
 			SELECT team_id, toString(repo_id) AS repo_key
@@ -920,14 +1075,14 @@ ORDER BY project_key`)
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
 		var projectKey, winner string
-		var known, total uint64
-		if err := row.Scan(&projectKey, &known, &total, &winner); err != nil {
+		var known, everKnown, total uint64
+		if err := row.Scan(&projectKey, &known, &everKnown, &total, &winner); err != nil {
 			return err
 		}
-		result := healthSeverityMaxRow{knownRowCount: int64(known), totalRowCount: int64(total)}
+		result := healthSeverityMaxRow{knownRowCount: int64(known), everKnownRowCount: int64(everKnown), totalRowCount: int64(total)}
 		if known > 0 {
-			if parts := strings.SplitN(winner, healthSeverityWinnerDelimiter, 3); len(parts) == 3 {
-				result.winnerScope, result.winnerScopeID, result.winnerSeverity = parts[0], parts[1], parts[2]
+			if parts := strings.SplitN(winner, healthSeverityWinnerDelimiter, 4); len(parts) == 4 {
+				result.winnerScope, result.winnerScopeID, result.winnerSeverity, result.winnerDay = parts[0], parts[1], parts[2], parts[3]
 			}
 		}
 		if _, seen := byProject[projectKey]; !seen {

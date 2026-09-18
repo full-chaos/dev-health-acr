@@ -94,7 +94,16 @@ import (
 // same over-invalidation rationale as every prior bump: a candidate saved
 // under v8 never ran this aggregate and must not be served as though it
 // carried the promoted value.
-const QueryVersion = "devhealthfacts.clickhouse.v9"
+//
+// v9 -> v10: FactHealth's repo/team scalar, project risk_breakdown rows,
+// and project-level severity aggregate all change which physical row
+// backs a served band -- the latest KNOWN row within a freshness window,
+// rather than the literal latest row regardless of band -- and gain new
+// disclosed fields (severity_as_of, severity_freshness_window_days, a
+// widened severity_unavailable_reason alphabet). A candidate saved under
+// v9 never applied the freshness window and must not be served as though
+// it had.
+const QueryVersion = "devhealthfacts.clickhouse.v10"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
