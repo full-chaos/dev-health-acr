@@ -173,42 +173,71 @@ check_container_oci_scan_same_job() {
 # the exact failure mode test-shard-closure.sh's runtime proof does not
 # catch (it proves the union is total; it can't tell a genuinely-run job
 # apart from an isolation list edited to match one that no longer exists).
+## CHAOS-5977: the isolated set can be split across MORE than one job --
+# race-devhealthschema runs `isolated-shared` (devhealthschema,
+# internal/contextfabric) and race-devhealthfacts runs `isolated-dedicated`
+# (devhealthfacts), because devhealthfacts is HEAVY and cannot safely share a
+# `go test` invocation with another isolated package (see
+# dedicated_isolated_packages in test-shard.sh). A single "first job wins"
+# scan cannot prove total coverage across a split set -- it would stop
+# looking the moment ONE matching job is found, even if that job covers only
+# part of the isolated set. This unions every matching job's ACTUAL package
+# selection
+# (by really invoking the subcommand each job's own line calls, the same
+# discipline test-shard-closure.sh uses for the round-robin shards) and
+# requires the union to equal `test-shard.sh isolated` exactly.
 check_isolated_devhealthschema_job() {
-  local file="$1" isolated job found_job="" block
+  local file="$1" isolated job block subcmd
+  local -a matched_jobs=()
+  local found_any=0
   isolated="$("$repo_root/scripts/ci/test-shard.sh" isolated)"
   if [ -z "$isolated" ]; then
     printf 'scripts/ci/test-shard.sh isolated printed nothing\n' >&2
     return 1
   fi
 
+  local union_file
+  union_file="$(mktemp)"
+
   while IFS= read -r job; do
     block="$(job_block "$file" "$job")"
-    if grep -qF 'test-shard.sh isolated' <<<"$block"; then
-      found_job="$job"
-      break
+    subcmd="$(grep -oE 'test-shard\.sh[[:space:]]+isolated(-[a-z]+)?' <<<"$block" | head -n1 | awk '{print $2}' || true)"
+    if [ -z "$subcmd" ]; then
+      continue
     fi
+    found_any=1
+    matched_jobs+=("$job")
+
+    if ! grep -qE 'GOTEST_TIMEOUT=|-timeout[= ]' <<<"$block"; then
+      printf 'job "%s" runs the isolated package(s) without its own explicit timeout override\n' \
+        "$job" >&2
+      rm -f "$union_file"
+      return 1
+    fi
+
+    "$repo_root/scripts/ci/test-shard.sh" "$subcmd" | tr ' ' '\n' >>"$union_file"
   done < <(list_jobs "$file")
 
-  if [ -z "$found_job" ]; then
+  if [ "$found_any" -eq 0 ]; then
+    rm -f "$union_file"
     printf 'no job in %s invokes "scripts/ci/test-shard.sh isolated" to run the isolated package(s): %s\n' \
       "$file" "$isolated" >&2
     return 1
   fi
 
-  block="$(job_block "$file" "$found_job")"
-  grep -qE 'GOTEST_TIMEOUT=|-timeout[= ]' <<<"$block" || {
-    printf 'job "%s" runs the isolated package(s) without its own explicit timeout override\n' \
-      "$found_job" >&2
+  local missing
+  missing="$(comm -23 \
+    <(printf '%s\n' "$isolated" | tr ' ' '\n' | grep -v '^$' | LC_ALL=C sort -u) \
+    <(grep -v '^$' "$union_file" | LC_ALL=C sort -u))"
+  rm -f "$union_file"
+  if [ -n "$missing" ]; then
+    printf 'these isolated package(s) are covered by no job in %s: %s\n' \
+      "$file" "$(printf '%s' "$missing" | tr '\n' ' ')" >&2
     return 1
-  }
+  fi
 
-  # Name the job this resolved to. The scan takes the FIRST job in file order
-  # that invokes the isolated form, so which job that is, is load-bearing and
-  # invisible otherwise: the `unit` matrix sits above race-devhealthschema in
-  # this file, and a unit job that reached for the isolated form directly
-  # (rather than test-shard.sh's --with-isolated) would capture this check and
-  # move the timeout requirement onto a job that has, and needs, no -timeout.
-  printf 'isolated package(s) run in job "%s": %s\n' "$found_job" "$isolated"
+  printf 'isolated package(s) run across job(s) %s: %s\n' \
+    "$(printf '%s,' "${matched_jobs[@]}" | sed 's/,$//')" "$isolated"
 }
 
 # A main push whose run gets cancelled leaves that commit with NO terminal
@@ -511,6 +540,31 @@ check_race_runner_uses_variable() {
   return "$status"
 }
 
+# A job whose OWN env: sets TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX
+# pulls a mirrored image, so it must not be able to start before
+# mirror-preflight's "Verify every mirrored image is resolvable before any
+# job pulls one" step has run -- every other image-pulling job (race, unit,
+# build, container-*) already declares `needs: mirror-preflight`, and a new
+# job that copies the env without the needs would race that preflight
+# instead of waiting on it. Checked generically over every job, not a hand
+# list of job names, so a future job with this env and no needs is caught
+# the same way this one was.
+check_testcontainers_needs_mirror_preflight() {
+  local file="$1" job block status=0
+  while IFS= read -r job; do
+    [ "$job" = "mirror-preflight" ] && continue
+    block="$(job_block "$file" "$job")"
+    grep -qF 'TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX' <<<"$block" || continue
+    if ! grep -qE '^ {4}needs: *mirror-preflight *$' <<<"$block" \
+       && ! grep -qE '^ {6}- *mirror-preflight *$' <<<"$block"; then
+      printf 'job "%s" sets TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX but does not declare "needs: mirror-preflight" -- it could start and pull a mirrored image before mirror-preflight confirms every mirrored image is resolvable\n' \
+        "$job" >&2
+      status=1
+    fi
+  done < <(list_jobs "$file")
+  return "$status"
+}
+
 run_all_checks() {
   local file="$1"
   check_verify_job_exists "$file"
@@ -527,6 +581,7 @@ run_all_checks() {
   check_pin_requires_full_sha "$file"
   check_pin_binds_checkout_ref "$file"
   check_race_runner_uses_variable "$file"
+  check_testcontainers_needs_mirror_preflight "$file"
 }
 
 # ---- positive run -------------------------------------------------------
@@ -795,6 +850,19 @@ race_runner_wrong_var="$tmpdir/race-runner-wrong-var.yml"
 sed 's/vars\.CI_RACE_RUNNER/vars.CI_RUNNER_RACE/g' "$workflow" > "$race_runner_wrong_var"
 assert_check_fails 'renamed the CI_RACE_RUNNER variable in the runs-on expression' \
   check_race_runner_uses_variable "$race_runner_wrong_var"
+
+# (v) drop race-devhealthfacts's `needs: mirror-preflight` while leaving its
+# TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX env in place -- the exact shape that
+# lets a job pull a mirrored image before the preflight confirms it resolves.
+dedicated_job_missing_needs="$tmpdir/dedicated-job-missing-needs.yml"
+awk '
+  /^  race-devhealthfacts:$/ { in_job=1 }
+  in_job && /^  [A-Za-z0-9_-]+:/ && !/^  race-devhealthfacts:$/ { in_job=0 }
+  in_job && /^ {4}needs: *mirror-preflight *$/ { next }
+  { print }
+' "$workflow" > "$dedicated_job_missing_needs"
+assert_check_fails 'dropped race-devhealthfacts'"'"'s needs: mirror-preflight while keeping its TESTCONTAINERS env' \
+  check_testcontainers_needs_mirror_preflight "$dedicated_job_missing_needs"
 
 printf 'PASS: all negative controls correctly failed their check\n'
 
