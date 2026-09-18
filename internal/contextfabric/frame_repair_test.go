@@ -1108,7 +1108,7 @@ func rankingRepairCells() []rankingRepairCell {
 		},
 		{
 			// grouped_members is the SIBLING repair's own shape
-			// (repairCompareGroupedCollapse, CHAOS-5839): it applies and
+			// (repairCompareGroupedCollapse): it applies and
 			// adds explain_change (its own unconditional companion goal),
 			// resolved before this repair runs, so this repair's guard
 			// (which only proceeds while Failure.Invariant holds i7)

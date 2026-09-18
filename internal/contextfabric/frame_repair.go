@@ -505,7 +505,7 @@ func repairCompareGroupedCollapse(receipt ModelExecutionReceipt, proposed Questi
 // a discovered cohort ALONGSIDE rank_or_survey names no explicit operand
 // set either -- the same proposal's own rank_or_survey goal already says
 // the question is a ranking, not a comparison. The sibling
-// repairCompareGroupedCollapse (CHAOS-5839) answers this same invariant for
+// repairCompareGroupedCollapse answers this same invariant for
 // grouped_members; this answers it for discovered_kind (CHAOS-6003), the
 // shape corpus row cv-c4-discovered-rank-both-ends's traces show.
 //
