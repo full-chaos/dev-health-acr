@@ -123,13 +123,12 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		omittedUnrepresentableCount += omitted
 		rejectedCount += rejected
 		truncated = truncated || rowCount >= maxFactRowsPerQuery || breakdownTruncated
-		// CHAOS-5930: the canonical theme-mix roll-up, a deliberately
-		// SEPARATE call from readProjectInvestment above -- see
-		// readProjectThemeMix's own doc comment for why this is a new join,
-		// not a reuse of the legacy investment_metrics_daily path. It shares
-		// projectSubjects with readProjectInvestment above, so only that
-		// call's own rejectedCount is folded in (CHAOS-5026) -- counting it
-		// twice here would double it.
+		// The canonical theme-mix roll-up is a deliberately SEPARATE call
+		// from readProjectInvestment above -- see readProjectThemeMix's own
+		// doc comment for why this is a new join, not a reuse of the legacy
+		// investment_metrics_daily path. It shares projectSubjects with
+		// readProjectInvestment above, so only that call's own rejectedCount
+		// is folded in -- counting it twice here would double it.
 		themeRowCount, themeScanErr := p.readProjectThemeMix(ctx, orgID, projectSubjects, &facts, timeBound)
 		if themeScanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query project theme mix", themeScanErr)
@@ -544,11 +543,11 @@ func themeInvestmentRangePredicate(b factTimeBound, fromColumn, toColumn string)
 // theme_quality_bugfix fields up for a PROJECT (CHAOS-5930): the top-level
 // scalar cohort_ranking.go's investmentMixSignal reads
 // (theme_feature_delivery, subject-kind-blind) off ANY FactInvestment fact,
-// but which no project-scope producer promoted before this ticket.
+// promoted here for project subjects.
 //
-// Population/join (chris's ruling: a team-weighted roll-up via the
-// project's owning teams' repositories, into work_unit_investments):
-// projects -> team_project_ownership (the project's owning teams,
+// Population/join: a team-weighted roll-up via the project's owning teams'
+// repositories, into work_unit_investments -- projects ->
+// team_project_ownership (the project's owning teams,
 // deduplicated the same way readProjectHealth/readProjectInvestment already
 // dedupe a team owning a project through more than one ownership `source`
 // row) -> team_repo_ownership (those teams' owned repos, deduplicated per
@@ -562,10 +561,9 @@ func themeInvestmentRangePredicate(b factTimeBound, fromColumn, toColumn string)
 // must decide which single team a work unit belongs to. A project's
 // roll-up asks a narrower, repo-membership question instead -- "is this
 // work unit's own repo one this project's owning teams own" -- answerable
-// directly off work_unit_investments.repo_id (added to
-// devhealthschema's declared read set by this ticket; live-schema
-// re-verified against the trial ClickHouse, acr-trial-data/dh_0906,
-// 2026-09-18), without parsing structural_evidence_json or the
+// directly off work_unit_investments.repo_id (declared in devhealthschema's
+// read set; live-schema verified against the trial ClickHouse,
+// acr-trial-data/dh_0906), without parsing structural_evidence_json or the
 // team-attribution vote at all. A work unit whose repo_id IS NULL is
 // invisible to this roll-up -- disclosed by omission (work_unit_count
 // counts only what was reachable), never fabricated into a share.
@@ -574,9 +572,9 @@ func themeInvestmentRangePredicate(b factTimeBound, fromColumn, toColumn string)
 // exactly one repo_id, and project_repo below is already deduplicated to
 // one row per (project, repo), so the join cannot fan a work unit out more
 // than once for the same project. A repo (or team) belonging to more than
-// one project legitimately contributes to EACH project's own roll-up --
-// team_project_ownership.md's coverage-filter-not-weight rule -- and a
-// work unit is never double-attributed WITHIN one project's own total.
+// one project legitimately contributes to EACH project's own roll-up -- a
+// shared repo or team is a coverage filter, never a weight -- and a work
+// unit is never double-attributed WITHIN one project's own total.
 //
 // A project with zero attributed work units, or whose attributed work
 // units sum to zero effort across the five canonical themes, gets NO theme
@@ -587,8 +585,8 @@ func themeInvestmentRangePredicate(b factTimeBound, fromColumn, toColumn string)
 // Fields MERGE onto an existing FactInvestment fact for the project
 // (readProjectInvestment's own legacy team_breakdown fact, appended BEFORE
 // this call in ReadFacts) when one exists, for the SAME reason
-// readTeamThemeMix merges onto readTeamInvestment's fact: CHAOS-4355 sends
-// every canonical fact's fields to the model unfiltered, and synthesis's
+// readTeamThemeMix merges onto readTeamInvestment's fact: every canonical
+// fact's fields go to the model unfiltered, and synthesis's
 // lookupCanonicalFact resolves a claim to the FIRST fact matching (Kind,
 // Subject) in the fact list -- a standalone fact appended after the legacy
 // one would be shadowed whenever a claim cites a theme_* field. A project
@@ -795,7 +793,7 @@ ORDER BY project_key`)
 		fields[contextfabric.FactFieldThemeQualityBugfix] = contextfabric.NumberFactValue(bugfixWeighted / currentTotal)
 		// rollup_basis names both hops (owning teams, then their owned
 		// repos) so a synthesizer never presents this as a project-native
-		// attribution the way CHAOS-5935's later ticket would compute.
+		// attribution computed directly from the project's own work items.
 		fields["rollup_basis"] = contextfabric.StringFactValue("team_project_ownership_via_owned_repos_work_unit_investments")
 		fields["team_count"] = contextfabric.IntegerFactValue(int64(teamCount))
 		fields["repo_count"] = contextfabric.IntegerFactValue(int64(repoCount))
@@ -814,7 +812,7 @@ ORDER BY project_key`)
 		// counted share. A work unit reachable by neither path (evidence
 		// vote assigns it to a DIFFERENT team than any repo-ownership match,
 		// a rarer disagreement between the two attribution mechanisms) is
-		// outside this ticket's disclosed partition; not claimed as counted
+		// outside this roll-up's disclosed partition; not claimed as counted
 		// or excluded.
 		fields["work_units_without_repo_link"] = contextfabric.IntegerFactValue(int64(excludedNoRepoLink))
 		// population_window states, in the fact's own structure, which axis

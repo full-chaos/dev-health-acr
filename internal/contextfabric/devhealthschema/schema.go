@@ -423,13 +423,12 @@ var ProductionColumns = map[string][]Column{
 	// never investment_metrics_daily, the deprecated legacy rule set.
 	// Read from dev-health-clickhouse-1 (database `default`) on
 	// 2026-08-28, matching the same freshness convention as every other
-	// entry above. repo_id/4 (Nullable(UUID)) is now READ (CHAOS-5930's
-	// project theme-mix roll-up joins it directly to
-	// team_repo_ownership.repo_id, sidestepping the evidence-JSON/
-	// work-item-attribution path readTeamThemeMix uses for the team
-	// subject) -- re-verified live against the trial ClickHouse
-	// (acr-trial-data, db dh_0906, system.columns) 2026-09-18. Remaining
-	// unread production columns (provider/5, effort_metric/6,
+	// entry above. repo_id/4 (Nullable(UUID)) is read here: the project
+	// theme-mix roll-up joins it directly to team_repo_ownership.repo_id,
+	// sidestepping the evidence-JSON/work-item-attribution path
+	// readTeamThemeMix uses for the team subject -- verified live against
+	// the trial ClickHouse (acr-trial-data, db dh_0906, system.columns).
+	// Remaining unread production columns (provider/5, effort_metric/6,
 	// evidence_quality/11, evidence_quality_band/12,
 	// categorization_status/13, categorization_errors_json/14,
 	// categorization_model_version/15, categorization_input_hash/16,

@@ -285,8 +285,8 @@ func TestProjectThemeMixAgainstRealClickHouse(t *testing.T) {
 		seedRepo("repo-cov", orgID)
 		seedRepoOwnership(orgID, "team-cov", "repo-cov")
 		// Counted: a normal repo-linked work unit, so this project also
-		// serves theme shares (the field this test cares about rides on the
-		// same fact, per the ruling -- not a bare coverage-only row).
+		// serves theme shares -- the field this test cares about rides on
+		// the same fact, not a bare coverage-only row.
 		seedWorkUnit("wu-cov-counted", orgID, "repo-cov", 10, map[string]float64{"feature_delivery": 1.0})
 		// Excluded: repo_id IS NULL on the work_unit_investments row itself,
 		// but its OWN structural evidence (a PR against repo-cov) still
