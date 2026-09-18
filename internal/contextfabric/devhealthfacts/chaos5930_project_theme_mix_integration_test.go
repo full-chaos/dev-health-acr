@@ -15,6 +15,7 @@ import (
 	"context"
 	"crypto/md5"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -151,6 +152,32 @@ func TestProjectThemeMixAgainstRealClickHouse(t *testing.T) {
 			`INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, team_id, team_name, source, is_primary, confidence, computed_at) VALUES (?,?,?,?,?,?,?,?,?)`,
 			orgID, repoUUID(repoLabel), workItemID, teamID, "Team", "linked_issue", uint8(1), "high", at); err != nil {
 			t.Fatalf("seed work_item_team_attributions for %s: %v", workItemID, err)
+		}
+	}
+	// seedWorkUnitNullRepoVotes seeds a repo_id-NULL work unit whose evidence
+	// mixes matched PR refs (each resolvable to a repo, hence votable once a
+	// work_item_team_attributions row exists for it) with UNMATCHED refs
+	// (plain strings, never a "<uuid>#pr<n>" shape, so evidence_resolved
+	// carries them through unresolved and wita can never match them) -- the
+	// exact shape the votes CTE's cnt predicate must discriminate.
+	seedWorkUnitNullRepoVotes := func(id, orgID string, prRepoLabels []string, prNumbers []int, unmatchedCount int) {
+		t.Helper()
+		if len(prRepoLabels) != len(prNumbers) {
+			t.Fatalf("seedWorkUnitNullRepoVotes %s: mismatched pr slices", id)
+		}
+		prs := make([]string, 0, len(prRepoLabels))
+		for i, label := range prRepoLabels {
+			prs = append(prs, fmt.Sprintf(`"%s#pr%d"`, repoUUID(label), prNumbers[i]))
+		}
+		issues := make([]string, 0, unmatchedCount)
+		for i := 0; i < unmatchedCount; i++ {
+			issues = append(issues, fmt.Sprintf(`"UNMATCHED-%s-%d"`, id, i))
+		}
+		evidence := fmt.Sprintf(`{"issues":[%s],"prs":[%s]}`, strings.Join(issues, ","), strings.Join(prs, ","))
+		if err := direct.Exec(ctx,
+			`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?)`,
+			id, at, at, 10.0, map[string]float64{"feature_delivery": 1.0}, map[string]float64{}, evidence, at, orgID); err != nil {
+			t.Fatalf("seed vote-shaped work_unit_investments %s: %v", id, err)
 		}
 	}
 
@@ -551,5 +578,118 @@ func TestProjectThemeMixAgainstRealClickHouse(t *testing.T) {
 		if !result.Truncated {
 			t.Fatalf("Truncated = false for %d requested projects (cap %d), want true -- the LIMIT+1 probe row must be detected and disclosed", len(subjects), exactLimit)
 		}
+	})
+
+	// evidence_vote_attribution_partition_identity proves the votes CTE's
+	// cnt predicate genuinely discriminates matched from unmatched evidence
+	// -- an unmatched-evidence bucket that wins the argMax vote silently
+	// drops the work unit from EITHER partition class (counted or
+	// work_units_without_repo_link), breaking the disclosed population
+	// identity. Every subtest here uses a repo_id-NULL work unit (only the
+	// evidence-vote path can attribute one at all), one owning team per
+	// project so the winning vote (if any) is unambiguous, and asserts
+	// work_units_without_repo_link directly rather than inferring it.
+	t.Run("evidence_vote_attribution_partition_identity", func(t *testing.T) {
+		setupTeamProject := func(t *testing.T, orgID, projectID, teamID string) {
+			t.Helper()
+			seedProject(projectID, orgID)
+			seedTeam(teamID, orgID, "Team "+teamID)
+			seedProjectOwnership(orgID, teamID, projectID)
+		}
+
+		t.Run("one_matched_plus_n_unmatched_attributes_to_the_real_team", func(t *testing.T) {
+			const orgID = "org-vote-1m3u"
+			setupTeamProject(t, orgID, "proj-1m3u", "team-1m3u")
+			seedRepo("repo-1m3u", orgID)
+			seedRepoOwnership(orgID, "team-1m3u", "repo-1m3u")
+			// A counted work unit rides alongside the vote-shaped one so the
+			// project serves a fact at all (a project with ZERO counted
+			// work is a separate, already-flagged scope boundary -- see
+			// this producer's own doc comment -- not what this subtest is
+			// about).
+			seedWorkUnit("wu-1m3u-counted", orgID, "repo-1m3u", 10, map[string]float64{"feature_delivery": 1.0})
+			seedWorkUnitNullRepoVotes("wu-1m3u", orgID, []string{"repo-1m3u"}, []int{1}, 3)
+			seedWorkItemTeamAttribution(orgID, "repo-1m3u", 1, "team-1m3u")
+
+			fact := readInvestmentFact(t, providers, orgID, projectSubject("linear", "proj-1m3u"))
+			if fact == nil {
+				t.Fatal("facts = none, want the work unit attributed to team-1m3u and disclosed as excluded (no repo link)")
+			}
+			if got := factInt(t, *fact, "work_units_without_repo_link"); got != 1 {
+				t.Errorf("work_units_without_repo_link = %d, want 1 -- 1 real vote must outweigh 3 unmatched-evidence rows, never the reverse", got)
+			}
+		})
+
+		t.Run("n_matched_plus_one_unmatched_still_attributes_to_the_real_team", func(t *testing.T) {
+			const orgID = "org-vote-2m1u"
+			setupTeamProject(t, orgID, "proj-2m1u", "team-2m1u")
+			seedRepo("repo-2m1u", orgID)
+			seedRepoOwnership(orgID, "team-2m1u", "repo-2m1u")
+			seedWorkUnit("wu-2m1u-counted", orgID, "repo-2m1u", 10, map[string]float64{"feature_delivery": 1.0})
+			seedWorkUnitNullRepoVotes("wu-2m1u", orgID, []string{"repo-2m1u", "repo-2m1u"}, []int{1, 2}, 1)
+			seedWorkItemTeamAttribution(orgID, "repo-2m1u", 1, "team-2m1u")
+			seedWorkItemTeamAttribution(orgID, "repo-2m1u", 2, "team-2m1u")
+
+			fact := readInvestmentFact(t, providers, orgID, projectSubject("linear", "proj-2m1u"))
+			if fact == nil {
+				t.Fatal("facts = none, want the work unit attributed to team-2m1u and disclosed as excluded (no repo link)")
+			}
+			if got := factInt(t, *fact, "work_units_without_repo_link"); got != 1 {
+				t.Errorf("work_units_without_repo_link = %d, want 1", got)
+			}
+		})
+
+		t.Run("all_unmatched_is_reachable_by_neither_partition_class", func(t *testing.T) {
+			const orgID = "org-vote-0m3u"
+			setupTeamProject(t, orgID, "proj-0m3u", "team-0m3u")
+			seedRepo("repo-0m3u", orgID)
+			seedRepoOwnership(orgID, "team-0m3u", "repo-0m3u")
+			seedWorkUnitNullRepoVotes("wu-0m3u", orgID, nil, nil, 3)
+
+			fact := readInvestmentFact(t, providers, orgID, projectSubject("linear", "proj-0m3u"))
+			if fact != nil {
+				t.Fatalf("facts = %#v, want none -- a work unit with zero matched evidence is reachable by neither the counted nor the excluded partition, never fabricated into either", fact)
+			}
+		})
+
+		t.Run("tie_between_two_real_teams_breaks_deterministically_and_excludes_the_unmatched_bucket", func(t *testing.T) {
+			const orgID = "org-vote-tie"
+			setupTeamProject(t, orgID, "proj-tie-a", "team-tie-a")
+			setupTeamProject(t, orgID, "proj-tie-b", "team-tie-b")
+			seedRepo("repo-tie-a", orgID)
+			seedRepo("repo-tie-b", orgID)
+			seedRepoOwnership(orgID, "team-tie-a", "repo-tie-a")
+			seedRepoOwnership(orgID, "team-tie-b", "repo-tie-b")
+			// One vote for team-tie-a, one for team-tie-b (a genuine 1-1 tie
+			// between two REAL teams), plus 3 unmatched refs -- under the
+			// bug the unmatched bucket (cnt=3) would beat BOTH real votes
+			// and the work unit would attribute to neither project at all.
+			seedWorkUnit("wu-tie-a-counted", orgID, "repo-tie-a", 10, map[string]float64{"feature_delivery": 1.0})
+			seedWorkUnit("wu-tie-b-counted", orgID, "repo-tie-b", 10, map[string]float64{"feature_delivery": 1.0})
+			seedWorkUnitNullRepoVotes("wu-tie", orgID, []string{"repo-tie-a", "repo-tie-b"}, []int{1, 1}, 3)
+			seedWorkItemTeamAttribution(orgID, "repo-tie-a", 1, "team-tie-a")
+			seedWorkItemTeamAttribution(orgID, "repo-tie-b", 1, "team-tie-b")
+
+			factA := readInvestmentFact(t, providers, orgID, projectSubject("linear", "proj-tie-a"))
+			factB := readInvestmentFact(t, providers, orgID, projectSubject("linear", "proj-tie-b"))
+			// Both projects serve a fact (each has its own counted work
+			// unit), but argMax(vote_team_id, (cnt, vote_team_id)) breaks
+			// the equal-cnt tie by the LARGER vote_team_id string --
+			// "team-tie-b" > "team-tie-a" -- so only team-tie-b's project
+			// sees the vote-shaped work unit disclosed as excluded; never
+			// both, never neither.
+			if factA == nil {
+				t.Fatal("facts = none for proj-tie-a, want its own counted work unit served")
+			}
+			if factB == nil {
+				t.Fatal("facts = none for proj-tie-b, want the tie-broken attribution disclosed as excluded (no repo link)")
+			}
+			if got := factInt(t, *factA, "work_units_without_repo_link"); got != 0 {
+				t.Errorf("proj-tie-a work_units_without_repo_link = %d, want 0 -- the tie breaks to team-tie-b, never both projects", got)
+			}
+			if got := factInt(t, *factB, "work_units_without_repo_link"); got != 1 {
+				t.Errorf("proj-tie-b work_units_without_repo_link = %d, want 1", got)
+			}
+		})
 	})
 }

@@ -520,6 +520,20 @@ func (p *InvestmentProvider) readProjectInvestment(ctx context.Context, orgID st
 	return rowCount, omittedUnrepresentableCount, rejected, breakdownTruncated, nil
 }
 
+// evidenceVoteAttributedPredicate is the ONE "does this evidence-vote row
+// carry a real team attribution" check for a nullable/empty-able join key --
+// a LEFT JOIN miss against wita leaves t.team_id NULL, and this expression
+// must stay NULL (not fall back to a concrete value) for that row, or an
+// unmatched row reads as attributed. nullIf(t.team_id, ”) alone has this
+// property: NULL stays NULL, an empty-string team_id also collapses to
+// NULL, and only a real, non-empty team_id survives to compare NOT NULL.
+// readTeamThemeMix's own analogous check (investment_theme.go's cnt
+// expression) has this same no-fallback shape; this is the one definition
+// for this producer's evidence vote, so a second call site reuses it
+// rather than re-deriving an equivalent-looking expression that quietly
+// adds a fallback and stops discriminating.
+const evidenceVoteAttributedPredicate = "nullIf(t.team_id, '') IS NOT NULL"
+
 // themeInvestmentRangePredicate mirrors dev-health-go's
 // readers.TimeBound.rangePredicate (investment_theme.go, unexported there):
 // a work_unit_investments row is included whenever any part of its own
@@ -712,7 +726,7 @@ votes AS (
 	FROM (
 		SELECT evidence_resolved.work_unit_id AS work_unit_id,
 			ifNull(nullIf(t.team_id, ''), '') AS vote_team_id,
-			uniqExactIf(evidence_resolved.resolved_wi_id, ifNull(nullIf(t.team_id, ''), '') IS NOT NULL) AS cnt
+			uniqExactIf(evidence_resolved.resolved_wi_id, ` + evidenceVoteAttributedPredicate + `) AS cnt
 		FROM evidence_resolved
 		LEFT JOIN wita AS t ON t.work_item_id = evidence_resolved.resolved_wi_id
 		GROUP BY work_unit_id, vote_team_id
@@ -755,7 +769,28 @@ GROUP BY pp.project_key
 )
 ORDER BY project_key`)
 
-	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+	// readers.QueryOrgScopedNamed, never p.facts.query: this is genuinely
+	// raw SQL (not a readers.ReadXxx call), but it must still report
+	// through the SAME readers.Instrumentation hook NewInstrumentedProviders
+	// wires into ctx (instrumentation.go's own doc comment) -- p.facts.query
+	// is devhealthfacts's own acr-side mirror of this exact function,
+	// deliberately without the readers-package instrumentation piece, so
+	// using it here would silently drop this read out of the slog/span/
+	// counter coverage every other reader-backed read in this package
+	// carries (readRepositoryMetricsSeries's identical raw-SQL shape
+	// already makes this same choice, for the same reason).
+	// contextpacket.ClickHouseQueryClient and readers.QueryClient share the
+	// identical underlying method signature (both alias dev-health-go/
+	// clickhouse's own Binding/RowScanner types), so p.facts.client
+	// satisfies readers.QueryClient directly, no adapter needed.
+	// "ReadProjectThemeMix" names the reader for attribution -- distinct
+	// from "ReadTeamThemeMix" (dev-health-go's own reader for the team
+	// subject), never conflated with that reader's own instrumentation.
+	extraBindings := make([]readers.Binding, 0, 2)
+	for _, b := range timeBound.bindings() {
+		extraBindings = append(extraBindings, readers.Binding{Name: b.Name, Value: b.Value})
+	}
+	scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadProjectThemeMix", statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
 		var projectKey string
 		var featureDelivery, operational, maintenance, quality, risk, bugfixWeighted float64
@@ -851,7 +886,7 @@ ORDER BY project_key`)
 			})
 		}
 		return nil
-	}, timeBound.bindings()...)
+	}, extraBindings...)
 	if scanErr != nil {
 		return rowCount, scanErr
 	}
