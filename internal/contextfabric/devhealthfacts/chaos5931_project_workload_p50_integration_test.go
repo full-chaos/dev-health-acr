@@ -382,7 +382,12 @@ func TestCHAOS5931ProjectWorkloadP50AgainstRealClickHouse(t *testing.T) {
 		const orgID = "org-workload-p50-partition"
 		seedProject("proj-partition", orgID, "linear", "PARTITION1")
 		seedForecast(orgID, "f-partition-known", "team-a", "proj-partition", p50(15), 0, 0, ts(2026, 8, 12, 6, 0, 0))
-		seedForecastUnattributed(orgID, "f-partition-unattr", "proj-partition", p50(500), 0, 0, ts(2026, 8, 12, 6, 0, 0))
+		// The unattributed row ALSO carries a NULL p50: an excludedNullP50
+		// countIf that drops its own team_key guard would count this SAME
+		// row a second time (it is unattributed, not merely null-p50), so
+		// only a fixture where the two exclusion reasons can genuinely
+		// overlap on one row proves the partition is not double-counting.
+		seedForecastUnattributed(orgID, "f-partition-unattr", "proj-partition", nil, 0, 0, ts(2026, 8, 12, 6, 0, 0))
 		seedForecast(orgID, "f-partition-nullp50", "team-b", "proj-partition", nil, 0, 0, ts(2026, 8, 12, 6, 0, 0))
 		fact := readWorkloadFact(orgID, "linear", "proj-partition", contextfabric.FactQuery{})
 		if fact == nil {

@@ -221,18 +221,26 @@ func TestWorkloadProviderRowForUnrequestedTeamNeverAppears(t *testing.T) {
 const workloadProjectRollupMatch = "ifNull(t.name, '')"
 
 // workloadP50MaxMatch distinguishes queryProjectWorkloadP50Max's own
-// server-side worst-p50 aggregate ("countIf(isNotNull(p50_days))", a plain
-// GROUP BY with no `teams` join and no per-day bucketing) from every other
-// workload query in this file. It must be registered BEFORE
-// workloadBaseQueryMatch's own fakeTable entry in any project-scope test:
-// queryProjectWorkloadP50Max's own inner row_number() partition reuses the
-// identical "work_scope_id ORDER BY computed_at DESC, forecast_id DESC"
-// substring workloadBaseQueryMatch matches on, so fakeClient's first-match
-// order is what keeps the two queries answered separately (mirrors
-// health.go's healthProjectRollupMatch/healthSeverityMaxMatch split, one
-// level further: there the two substrings are mutually exclusive, so order
-// did not matter; here it does).
-const workloadP50MaxMatch = "countIf(team_key != '' AND isNotNull(p50_days))"
+// server-side worst-p50 aggregate from every other workload query in this
+// file. It anchors on the outer aggregate's own GROUP BY/ORDER BY pair
+// ("GROUP BY project_key" followed by "ORDER BY project_key", the
+// aggregate's trailing clause naming the SAME column both times) rather
+// than any part of its SELECT list, DELIBERATELY: a kill-proof mutant that
+// rewrites a countIf/argMax/tuple clause in the SELECT list must never
+// also change which canned fixture answers the query, or the mutant panics
+// on a type-mismatched Scan (a wrongly-shaped fixture from a fallthrough
+// match) instead of producing the observable, named test failure the kill
+// proof needs -- exactly the failure this anchor was moved here to stop.
+// It must still be registered BEFORE workloadBaseQueryMatch's own
+// fakeTable entry in any project-scope test: queryProjectWorkloadP50Max's
+// own inner row_number() partition reuses the identical "work_scope_id
+// ORDER BY computed_at DESC, forecast_id DESC" substring
+// workloadBaseQueryMatch matches on, so fakeClient's first-match order is
+// what keeps the two queries answered separately (mirrors health.go's
+// healthProjectRollupMatch/healthSeverityMaxMatch split, one level
+// further: there the two substrings are mutually exclusive, so order did
+// not matter; here it does).
+const workloadP50MaxMatch = "GROUP BY project_key\nORDER BY project_key"
 
 // workloadP50MaxRow shapes one queryProjectWorkloadP50Max output row:
 // (project_key, known, excluded_unattributed, excluded_null_p50, total,
