@@ -716,3 +716,58 @@ func TestSubstitutionGuardPublishesACancelledReReadOnTheLine(t *testing.T) {
 		}
 	}
 }
+
+// TestSubstitutionGuardReportsNoParentWhenOnlyAClarificationsReceiptIsRedeemed:
+// a turn that names no parent redeems a receipt the guard's own
+// clarification issued. With no named parent there is no parent whose
+// offer a receipt could be, so the decision stops at no_parent_reference
+// and never reports a redeemed choice, exactly as any turn with no parent
+// reference serves.
+func TestSubstitutionGuardReportsNoParentWhenOnlyAClarificationsReceiptIsRedeemed(t *testing.T) {
+	t.Parallel()
+	h := newNeedTurnHarness(t, nil)
+	parent, clarification, chosen := guardIssuedClarification(t, h, "request_5917_unnamed")
+	request := needTurnRequest("request_5917_unnamed_three", true)
+	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: clarification.result.ResultID, ReceiptID: chosen}}
+	outcome := h.turn(request, substitutionResponse(substitutionRepoTwo, "request_5917_unnamed_served"))
+	event := lastSubstitution(t, outcome)
+	if event.SubstitutionGuard != SubjectSubstitutionNoParentReference {
+		t.Fatalf("guard = %q, want %q", event.SubstitutionGuard, SubjectSubstitutionNoParentReference)
+	}
+	if event.SubstitutionParentResultID != "" {
+		t.Errorf("parent result = %q, want none with no named parent", event.SubstitutionParentResultID)
+	}
+	// Reported, never consulted: the receipt's issuer is proven by its
+	// recorded ancestry to continue the parent, and the line says so.
+	if event.SubstitutionOriginIssuedFor != parent.result.ResultID {
+		t.Errorf("issued for = %q, want %q", event.SubstitutionOriginIssuedFor, parent.result.ResultID)
+	}
+}
+
+// TestSubstitutionGuardFailsClosedOnANonListingClarificationCarryingARememberedOffer
+// plants the one row the guard never writes: a clarification whose prompt
+// says the remembered subject was not listed, yet whose first offer is a
+// remembered offer minted for the parent. The prompt decides: the row
+// holds no remembered subject, so a turn naming it that commits a subject
+// clarifies with the remembered subject unavailable, and the substitute is
+// never served.
+func TestSubstitutionGuardFailsClosedOnANonListingClarificationCarryingARememberedOffer(t *testing.T) {
+	t.Parallel()
+	h := newNeedTurnHarness(t, nil)
+	parent, clarification, _ := guardIssuedClarification(t, h, "request_5917_planted")
+	planted := clarification.result
+	planted.SubjectResolution.ClarificationPrompt = subjectSubstitutionRememberedUnavailablePrompt
+	if first := planted.SubjectResolution.Candidates[0]; first.ReceiptID != subjectSubstitutionReceiptID(parent.result.ResultID, substitutionRepoOne) {
+		t.Fatalf("premise: first offer %q is not the parent's remembered offer", first.ReceiptID)
+	}
+	h.store.results[planted.ResultID] = planted
+	for _, committed := range []SubjectRef{substitutionRepoTwo, {Kind: SubjectRepository, CanonicalID: "repository:gamma-service", Label: "gamma-service"}} {
+		outcome := answerTurn(h, "request_5917_planted_"+committed.Label[:4], planted.ResultID, nil, substitutionResponse(committed, "request_5917_planted_served"))
+		if outcome.result.Status != InvestigationClarificationRequired {
+			t.Fatalf("%s: status = %q, want %q", committed.CanonicalID, outcome.result.Status, InvestigationClarificationRequired)
+		}
+		assertServedNothing(t, outcome.result)
+		event := lastSubstitution(t, outcome)
+		assertGuard(t, event, SubjectSubstitutionClarifiedRememberedUnavailable, SubjectSubstitutionOriginResolver, SubjectRef{}, committed)
+	}
+}

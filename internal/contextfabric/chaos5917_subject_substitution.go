@@ -430,11 +430,12 @@ func subjectSubstitutionIssued(stored StoredInvestigationResult) bool {
 
 // guardIssuedRememberedOf is the remembered subject a guard-issued
 // clarification lists first, the zero SubjectRef when it lists none. The
-// guard lists it first, under its own receipt prefix, and a clarification
-// that lists none carries no offer under that prefix.
+// guard lists it first, under its own receipt prefix, beside the listing
+// prompt. The prompt decides: a clarification whose prompt says the
+// remembered subject was not listed holds none, whatever its offers are.
 func guardIssuedRememberedOf(stored StoredInvestigationResult) SubjectRef {
 	resolution := stored.Result.SubjectResolution
-	if !subjectSubstitutionIssued(stored) || len(resolution.Candidates) == 0 {
+	if !subjectSubstitutionIssued(stored) || resolution.ClarificationPrompt != subjectSubstitutionClarificationPrompt || len(resolution.Candidates) == 0 {
 		return SubjectRef{}
 	}
 	first := resolution.Candidates[0]
