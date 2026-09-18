@@ -1195,6 +1195,7 @@ func (t *anchorBindingTracker) reuseEvent(result InvestigationResult, reading st
 		Receipt: t.receipt, CallerHints: t.callerHints,
 		Resolution: result.SubjectResolution, Bases: CommitBasisSetFromDigests(result.SubjectResolution.CommitDecisionDigests),
 		ResultID: result.ResultID, GraphEpoch: t.epoch,
+		SubstitutionGuard: t.substitution,
 	}
 	to, proposal := bindAnchor(in)
 	event := t.lineFor(BudgetAssertReuse, result, in, proposal, to)

@@ -771,3 +771,64 @@ func TestSubstitutionGuardFailsClosedOnANonListingClarificationCarryingARemember
 		assertGuard(t, event, SubjectSubstitutionClarifiedRememberedUnavailable, SubjectSubstitutionOriginResolver, SubjectRef{}, committed)
 	}
 }
+
+// TestTheReuseServeTakesTheGuardDecisionAtItsOwnProducer pins the guard
+// decision at the SECOND binder path in production. bindAnchor refuses a
+// withheld subject for every caller, but only a caller that passes the
+// decision gets that refusal, and the reuse serve builds its own input:
+// reuseEvent, not decide. The engine reaches the reuse exit above the guard
+// today, so the decision is not_evaluated there by construction -- which is
+// exactly why an input the path never fills reads as "the guard never
+// fired" rather than as "the guard was never asked". The tracker is driven
+// with the decision set, so the path is measured on the state the ordering
+// currently prevents rather than on the ordering.
+func TestTheReuseServeTakesTheGuardDecisionAtItsOwnProducer(t *testing.T) {
+	t.Parallel()
+	proven, _ := proofOf(CommitBasisAuthoritativeIdentity, bindBeta)
+	// A reuse serve reads its bases off the replayed row's digests, the way
+	// the production path does, not off a basis set handed to it.
+	proven.CommitDecisionDigests = []contractsv1.ContextFabricCommitDecisionDigest{
+		{Subject: SubjectRef{Kind: bindBeta.Kind, CanonicalID: bindBeta.ID, Label: "beta"}, CommitGate: "identity_fast_path", IdentityProven: true},
+	}
+	reading := storedCountReading{Frame: countingFrame(SubjectTeam), AnchorKind: SubjectRepository}
+	result := InvestigationResult{ResultID: "result_reuse_withheld", SubjectResolution: proven}
+	newTracker := func(from AnchorBinding) *anchorBindingTracker {
+		return &anchorBindingTracker{
+			parent:      anchorBindingParent{ResultID: "result_bind_parent", Status: AnchorBindingParentPresent, Binding: from},
+			epoch:       7,
+			evaluation:  AnchorBindingEvaluationNotResolved,
+			callerHints: []SubjectHint{{Kind: bindBeta.Kind, ID: bindBeta.ID, Label: "beta", Source: "caller"}},
+		}
+	}
+	// With no binding to contest, the reuse serve BINDS the replayed proof,
+	// so the two decisions differ in the one field the guard governs.
+	open := newTracker(unboundFrom).reuseEvent(result, reading)
+	if open.To.State != AnchorBindingBound || open.To.CanonicalID != bindBeta.ID {
+		t.Fatalf("premise: the unguarded reuse serve decided %+v, want it bound to the substitute", open.To)
+	}
+	if open.SubstitutionGuard != SubjectSubstitutionNotEvaluated {
+		t.Fatalf("premise: an unguarded reuse line reports %q, want %q", open.SubstitutionGuard, SubjectSubstitutionNotEvaluated)
+	}
+	withheld := newTracker(unboundFrom)
+	withheld.observeSubstitutionGuard(SubjectSubstitutionClarified)
+	event := withheld.reuseEvent(result, reading)
+	if event.To.CanonicalID == bindBeta.ID {
+		t.Fatalf("to = %+v: the reuse serve bound the subject the guard withheld", event.To)
+	}
+	if event.To.State != AnchorBindingUnbound || event.To.Reason != AnchorBindingReasonAmbiguousProof {
+		t.Fatalf("to = %+v: want unbound on ambiguous proof", event.To)
+	}
+	if event.SubstitutionGuard != SubjectSubstitutionClarified {
+		t.Fatalf("substitution_guard = %q, want %q", event.SubstitutionGuard, SubjectSubstitutionClarified)
+	}
+	// A parent binding turns the same withheld identity into a contender.
+	held := newTracker(heldBinding(AnchorBindingBound, bindAlpha))
+	held.observeSubstitutionGuard(SubjectSubstitutionClarified)
+	contested := held.reuseEvent(result, reading).To
+	if contested.CanonicalID == bindBeta.ID {
+		t.Fatalf("to = %+v: the reuse serve bound the subject the guard withheld", contested)
+	}
+	if contested.State != AnchorBindingContested || contested.CanonicalID != bindAlpha.ID || contested.ContenderID != bindBeta.ID {
+		t.Fatalf("to = %+v: want the parent's anchor contested by the withheld subject", contested)
+	}
+}
