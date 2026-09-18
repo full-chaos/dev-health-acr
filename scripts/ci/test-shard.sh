@@ -106,6 +106,35 @@ all_packages=()
 isolated_packages=(
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
   "github.com/full-chaos/dev-health-acr/internal/contextfabric"
+  "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+)
+
+# CHAOS-5977: dedicated_isolated_packages is a SUBSET of isolated_packages
+# above (checked in main(), see assert_dedicated_subset_of_isolated) naming
+# the isolated package(s) that must run ALONE -- never sharing a `go test`
+# invocation with another isolated package. race-devhealthschema in ci.yml
+# already runs its two isolated_packages entries (devhealthschema,
+# internal/contextfabric) TOGETHER in one combined invocation
+# (`test-shard.sh isolated-shared`, below); that is fine because neither one
+# is HEAVY (see is_heavy_package). devhealthfacts is HEAVY -- it keeps one
+# real ClickHouse testcontainer alive for its whole run (the CHAOS-5270
+# pattern) -- so folding it into that same combined call would recreate,
+# inside the isolated bucket, exactly the resource-contention pattern
+# CHAOS-5653 fixed for the round-robin shards. It gets its own CI job
+# instead (race-devhealthfacts), selected by `test-shard.sh
+# isolated-dedicated` rather than the combined `isolated-shared` listing.
+# This is a -race cost and -race contention decision only, same as
+# isolated_packages itself: the non-race `unit` matrix still covers this
+# package via `--with-isolated`, which does not consult this list.
+#
+# Measured cost that forced the isolation: 377.7s wall on a hosted runner at
+# main 9f8eb2e4 (PR #585 run 35334211413, "race (shard 1 of 4)"), then a
+# `panic: test timed out after 7m0s` at PR #586 tip 44be355c (run
+# 35353894690, job 105628526270) against the shared 420s race-matrix budget
+# -- its own dedicated job gives it a 20-minute budget instead (see
+# race-devhealthfacts in ci.yml).
+dedicated_isolated_packages=(
+  "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 )
 
 # heavy_exceptions names a package HEAVY (see is_heavy_package below) despite
@@ -134,6 +163,12 @@ usage() {
   printf '  --with-isolated  shard over the whole package list, isolated included\n' >&2
   printf 'usage: %s isolated\n' "${0##*/}" >&2
   printf '  prints the packages excluded from round-robin sharding\n' >&2
+  printf 'usage: %s isolated-shared\n' "${0##*/}" >&2
+  printf '  prints isolated_packages minus dedicated_isolated_packages -- the\n' >&2
+  printf '  packages that share one combined "isolated" job/invocation\n' >&2
+  printf 'usage: %s isolated-dedicated\n' "${0##*/}" >&2
+  printf '  prints dedicated_isolated_packages -- isolated package(s) that run\n' >&2
+  printf '  alone, in their own dedicated job\n' >&2
   printf 'usage: %s heavy\n' "${0##*/}" >&2
   printf '  prints the packages round-robin gives their own shard (see is_heavy_package)\n' >&2
 }
@@ -226,6 +261,34 @@ is_isolated() {
   return 1
 }
 
+# True iff pkg is in dedicated_isolated_packages -- an isolated package that
+# must run alone rather than sharing a combined "isolated-shared" invocation
+# with another isolated package. See dedicated_isolated_packages' own comment
+# for why.
+is_dedicated() {
+  local pkg="$1" candidate
+  for candidate in "${dedicated_isolated_packages[@]}"; do
+    [ "$pkg" = "$candidate" ] && return 0
+  done
+  return 1
+}
+
+# Every entry of dedicated_isolated_packages must also be an entry of
+# isolated_packages -- a dedicated package that round-robin still shards
+# (because someone added it here but forgot isolated_packages) would silently
+# keep contending for a shard while nothing ever selects it via
+# isolated-dedicated, defeating the whole point of listing it here.
+assert_dedicated_subset_of_isolated() {
+  local entry
+  for entry in "${dedicated_isolated_packages[@]}"; do
+    if ! is_isolated "$entry"; then
+      printf '%s: dedicated_isolated_packages entry is not also in isolated_packages: %s\n' \
+        "${0##*/}" "$entry" >&2
+      exit 1
+    fi
+  done
+}
+
 is_heavy_exception() {
   local pkg="$1" candidate
   for candidate in "${heavy_exceptions[@]}"; do
@@ -290,6 +353,30 @@ main() {
     return 0
   fi
 
+  # isolated_packages minus dedicated_isolated_packages -- the
+  # isolated package(s) meant to share ONE combined job/invocation
+  # (race-devhealthschema in ci.yml).
+  if [ "$#" -eq 1 ] && [ "$1" = "isolated-shared" ]; then
+    assert_dedicated_subset_of_isolated
+    local -a shared=()
+    local candidate
+    for candidate in "${isolated_packages[@]}"; do
+      is_dedicated "$candidate" && continue
+      shared+=("$candidate")
+    done
+    printf '%s\n' "${shared[*]}"
+    return 0
+  fi
+
+  # dedicated_isolated_packages verbatim -- the isolated
+  # package(s) that run alone, in their own dedicated job
+  # (race-devhealthfacts in ci.yml).
+  if [ "$#" -eq 1 ] && [ "$1" = "isolated-dedicated" ]; then
+    assert_dedicated_subset_of_isolated
+    printf '%s\n' "${dedicated_isolated_packages[*]}"
+    return 0
+  fi
+
   if [ "$#" -eq 1 ] && [ "$1" = "heavy" ]; then
     compute_all_packages
     assert_hand_list_exists heavy_exceptions heavy_exceptions
@@ -340,6 +427,12 @@ main() {
   # dedicated CI job also tested nothing, dropping the package from CI
   # coverage entirely without either side raising an error.
   assert_hand_list_exists isolated_packages isolated_packages
+
+  # every dedicated_isolated_packages entry must also be an
+  # isolated_packages entry (see assert_dedicated_subset_of_isolated) -- a
+  # dedicated package missing from isolated_packages would still round-robin
+  # into a shard here while its own CI job also claims it.
+  assert_dedicated_subset_of_isolated
 
   # CHAOS-5653: same discipline as isolated_packages, for heavy_exceptions --
   # a renamed or removed package left there would silently stop being
