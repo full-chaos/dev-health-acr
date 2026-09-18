@@ -158,6 +158,9 @@ func TestWorkloadProviderNoPersonLevelFields(t *testing.T) {
 		"basis": true, "work_scope_id": true, "throughput_mean": true, "throughput_stddev": true, "insufficient_history": true,
 		"high_variance": true, "backlog_size": true, "computed_at": true, "forecast_p50_days": true,
 		"daily_workload": true, "daily_workload_omitted_count": true,
+		// CHAOS-5931: project-scope promotion disclosure fields.
+		"p50_basis": true, "p50_unavailable_reason": true,
+		"team_breakdown_rows_shown": true, "team_breakdown_rows_total": true,
 	}
 	for _, fact := range result.Facts {
 		for field := range fact.Fields {
@@ -206,6 +209,51 @@ func TestWorkloadProviderRowForUnrequestedTeamNeverAppears(t *testing.T) {
 	}
 }
 
+// workloadProjectRollupMatch distinguishes readers.ReadProjectWorkload's own
+// row-level project scan ("ifNull(t.name, ”)", the LEFT JOIN teams alias
+// unique to that query) from readers.ReadTeamWorkload's team-scope scan,
+// which joins no `teams` table at all -- needed only when a single test
+// mixes a team root and a project root in ONE ReadFacts call and both roots'
+// row-level scans would otherwise fall to the same generic
+// workloadBaseQueryMatch substring. Mirrors health.go's
+// healthProjectRollupMatch idiom exactly.
+const workloadProjectRollupMatch = "ifNull(t.name, '')"
+
+// workloadP50MaxMatch distinguishes queryProjectWorkloadP50Max's own
+// server-side worst-p50 aggregate ("countIf(isNotNull(p50_days))", a plain
+// GROUP BY with no `teams` join and no per-day bucketing) from every other
+// workload query in this file. It must be registered BEFORE
+// workloadBaseQueryMatch's own fakeTable entry in any project-scope test:
+// queryProjectWorkloadP50Max's own inner row_number() partition reuses the
+// identical "work_scope_id ORDER BY computed_at DESC, forecast_id DESC"
+// substring workloadBaseQueryMatch matches on, so fakeClient's first-match
+// order is what keeps the two queries answered separately (mirrors
+// health.go's healthProjectRollupMatch/healthSeverityMaxMatch split, one
+// level further: there the two substrings are mutually exclusive, so order
+// did not matter; here it does).
+const workloadP50MaxMatch = "countIf(isNotNull(p50_days))"
+
+// workloadP50MaxRow shapes one queryProjectWorkloadP50Max output row:
+// (project_key, known_row_count, total_row_count, packed winner). The
+// packed winner joins p50_days, team_key, work_scope_id,
+// insufficient_history and high_variance with the real query's own
+// argMax(concat(...)) delimiter ("\x1f"); it is empty when knownRowCount is
+// 0 -- no known p50 to attribute to any one row.
+func workloadP50MaxRow(provider, projectID string, knownRowCount, totalRowCount int, winnerP50Days int64, winnerTeamKey, winnerWorkScopeID string, winnerInsufficientHistory, winnerHighVariance bool) []any {
+	winner := ""
+	if knownRowCount > 0 {
+		winner = strconv.FormatInt(winnerP50Days, 10) + "\x1f" + winnerTeamKey + "\x1f" + winnerWorkScopeID + "\x1f" + workloadBoolDigit(winnerInsufficientHistory) + "\x1f" + workloadBoolDigit(winnerHighVariance)
+	}
+	return []any{provider + ":" + projectID, uint64(knownRowCount), uint64(totalRowCount), winner}
+}
+
+func workloadBoolDigit(b bool) string {
+	if b {
+		return "1"
+	}
+	return "0"
+}
+
 // workloadProjectRollupRow shapes one row of the project rollup join output:
 // (project_key, team_id, team_name, work_scope_id, throughput_mean,
 // throughput_stddev, hasP50, p50_days, insufficient_history, high_variance,
@@ -222,10 +270,13 @@ func workloadProjectRollupRow(provider, projectID, teamID, teamName, workScopeID
 // survives verbatim in the renderable team_breakdown table.
 func TestWorkloadProviderProjectRollupBreaksDownByTeamNeverAverages(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: workloadBaseQueryMatch, rows: [][]any{
-		workloadProjectRollupRow("linear", "proj-1", "team-1", "Team One", "scope-a", 3.2, 0.8, 120, 1),
-		workloadProjectRollupRow("linear", "proj-1", "team-2", "Team Two", "scope-b", 9.0, 2.1, 40, 0),
-	}}}}
+	client := &fakeClient{tables: []fakeTable{
+		{match: workloadP50MaxMatch, rows: [][]any{workloadP50MaxRow("linear", "proj-1", 0, 2, 0, "", "", false, false)}},
+		{match: workloadBaseQueryMatch, rows: [][]any{
+			workloadProjectRollupRow("linear", "proj-1", "team-1", "Team One", "scope-a", 3.2, 0.8, 120, 1),
+			workloadProjectRollupRow("linear", "proj-1", "team-2", "Team Two", "scope-b", 9.0, 2.1, 40, 0),
+		}},
+	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactWorkload)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -378,6 +429,7 @@ func TestWorkloadProviderTeamReadsDailyWorkloadSeries(t *testing.T) {
 func TestWorkloadProviderProjectReadsDailyWorkloadSeries(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
+		{match: workloadP50MaxMatch, rows: [][]any{workloadP50MaxRow("linear", "proj-1", 0, 1, 0, "", "", false, false)}},
 		{match: workloadBaseQueryMatch, rows: [][]any{
 			workloadProjectRollupRow("linear", "proj-1", "team-1", "Team One", "scope-a", 3.2, 0.8, 120, 1),
 		}},
@@ -439,9 +491,12 @@ func TestWorkloadProviderProjectReadsDailyWorkloadSeries(t *testing.T) {
 // column and part of team_breakdown's declared Key.
 func TestWorkloadProviderProjectRollupBasisIsFactLevelScalar(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: workloadBaseQueryMatch, rows: [][]any{
-		workloadProjectRollupRow("linear", "proj-1", "team-1", "Team One", "scope-a", 3.2, 0.8, 120, 1),
-	}}}}
+	client := &fakeClient{tables: []fakeTable{
+		{match: workloadP50MaxMatch, rows: [][]any{workloadP50MaxRow("linear", "proj-1", 0, 1, 0, "", "", false, false)}},
+		{match: workloadBaseQueryMatch, rows: [][]any{
+			workloadProjectRollupRow("linear", "proj-1", "team-1", "Team One", "scope-a", 3.2, 0.8, 120, 1),
+		}},
+	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactWorkload)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
