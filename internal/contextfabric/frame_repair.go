@@ -67,7 +67,7 @@ import (
 // operand set either -- the same proposal's own rank_or_survey goal already
 // says the question is a ranking, not a comparison. See
 // repairCompareRankingCollapse's own doc comment below for its bound. Two
-// repairs now answer I7, one per cohort shape the traces show a misread
+// Two repairs answer I7, one per cohort shape the traces show a misread
 // for (grouped_members, discovered_kind); neither ever reaches a proposal
 // the other already resolved, since a subject expression has exactly one
 // Kind (invariant I1).
@@ -524,7 +524,7 @@ func repairCompareGroupedCollapse(receipt ModelExecutionReceipt, proposed Questi
 //     reason (a subject expression has exactly one Kind, invariant I1): by
 //     the time a grouped_members proposal reaches this function it has
 //     already been repaired or refused under a DIFFERENT invariant, so
-//     Failure.Invariant is no longer i7.
+//     Failure.Invariant holds that invariant, not i7.
 //   - Only when the proposal ALSO states rank_or_survey. A proposal whose
 //     only goal-shaped signal is compare has no ranking reading to fall
 //     back to and is refused exactly as before -- an explicit comparison
@@ -556,7 +556,7 @@ func repairCompareRankingCollapse(receipt ModelExecutionReceipt, proposed Questi
 		// non-discovered_kind I7 failure (named_subject, children_of_scope,
 		// organization_scope, or grouped_members already resolved by the
 		// sibling repair above) already carries whatever decision the
-		// earlier repairs in frameRepairTable recorded for it; this repair
+		// preceding repairs in frameRepairTable recorded for it; this repair
 		// adds nothing to it. Only the very first repair in the table
 		// (never applicable to an I7 failure) can still find Decision unset
 		// here.

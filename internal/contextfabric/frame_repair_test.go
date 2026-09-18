@@ -1012,8 +1012,8 @@ func rankingAppliedLine() map[string]any {
 // rankingRepairCells is the I7-over-discovered_kind bound's own domain
 // table: the whole cell set the invariant names -- goal sets (rank_or_survey
 // present/absent) x cohort kinds (discovered_kind and every sibling kind
-// this repair does NOT own) x the two controls a shared table needs (an
-// earlier invariant failing first, and a proposal I7 never touches).
+// this repair does NOT own) x the two controls a shared table needs (a
+// preceding invariant failing first, and a proposal I7 never touches).
 func rankingRepairCells() []rankingRepairCell {
 	withFrame := func(mutate func(*QuestionFrame)) func() QuestionFrame {
 		return func() QuestionFrame {
@@ -1111,7 +1111,7 @@ func rankingRepairCells() []rankingRepairCell {
 			// (repairCompareGroupedCollapse, CHAOS-5839): it applies and
 			// adds explain_change (its own unconditional companion goal),
 			// resolved before this repair runs, so this repair's guard
-			// (Failure.Invariant no longer i7 once a repair has applied)
+			// (which only proceeds while Failure.Invariant holds i7)
 			// never touches the outcome the sibling already settled.
 			cell:    "grouped_members is the sibling repair's shape, resolved before this one runs",
 			receipt: func(r *ModelExecutionReceipt) { r.GroupKind = SubjectTeam; r.RequestedSubjectKind = SubjectProject },
@@ -1159,7 +1159,7 @@ func rankingRepairCells() []rankingRepairCell {
 			},
 		},
 		{
-			cell:    "an earlier A1 invariant (I15, empty goals) fails first",
+			cell:    "a preceding A1 invariant (I15, empty goals) fails first",
 			receipt: func(*ModelExecutionReceipt) {},
 			frame: withFrame(func(frame *QuestionFrame) {
 				frame.Goals = []InvestigationGoal{}
