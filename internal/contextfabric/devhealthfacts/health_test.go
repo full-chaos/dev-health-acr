@@ -73,6 +73,20 @@ func healthProjectDailySeriesRow(projectKey, day string, hasRisk uint8, risk flo
 	return []any{projectKey, day, hasRisk, risk, severity}
 }
 
+// healthSeverityMaxMatch distinguishes queryProjectHealthSeverityMax's own
+// server-side worst-band aggregate ("argMax(severity, band)", a plain
+// GROUP BY with no row_number()/PARTITION BY at all and no `teams` join)
+// from every other query in this file -- healthDailySeriesMatch's
+// PARTITION BY signature and healthProjectRollupMatch's teams-alias join
+// never appear in it.
+const healthSeverityMaxMatch = "argMax(severity, band)"
+
+// healthSeverityMaxRow shapes one queryProjectHealthSeverityMax output row:
+// (project_key, severity).
+func healthSeverityMaxRow(provider, projectID, severity string) []any {
+	return []any{provider + ":" + projectID, severity}
+}
+
 func TestHealthProviderRepoScopeHappyPath(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{{match: "FROM compounding_risk_daily", rows: [][]any{healthRow("repo-1")}}}}
@@ -285,10 +299,13 @@ func healthProjectRollupRow(provider, projectID, scope, scopeID, scopeName, seve
 // into one project-level score.
 func TestHealthProviderProjectRollupBreaksDownByTeamAndRepoNeverSums(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: healthProjectRollupMatch, rows: [][]any{
-		healthProjectRollupRow("linear", "proj-1", "team", "team-1", "Team One", "elevated", 0.55),
-		healthProjectRollupRow("linear", "proj-1", "repo", "repo-1", "full.chaos/svc", "high", 0.81),
-	}}}}
+	client := &fakeClient{tables: []fakeTable{
+		{match: healthProjectRollupMatch, rows: [][]any{
+			healthProjectRollupRow("linear", "proj-1", "team", "team-1", "Team One", "elevated", 0.55),
+			healthProjectRollupRow("linear", "proj-1", "repo", "repo-1", "full.chaos/svc", "high", 0.81),
+		}},
+		{match: healthSeverityMaxMatch, rows: [][]any{healthSeverityMaxRow("linear", "proj-1", "high")}},
+	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactHealth)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -313,6 +330,15 @@ func TestHealthProviderProjectRollupBreaksDownByTeamAndRepoNeverSums(t *testing.
 	if _, hasTop := fact.Fields["compounding_risk"]; hasTop {
 		t.Fatalf("fields = %#v, want no project-level compounding_risk", fact.Fields)
 	}
+	// The team row is "elevated", the repo row is "high" -- severity
+	// promotes the worst band across both, disclosing which combined
+	// population produced it.
+	if got := fact.Fields["severity"].String; got == nil || *got != "high" {
+		t.Fatalf("severity = %#v, want high (the worst band across team+repo)", fact.Fields["severity"])
+	}
+	if got := fact.Fields["severity_basis"].String; got == nil || *got != "worst_of_team_and_repo_breakdown" {
+		t.Fatalf("severity_basis = %#v", fact.Fields["severity_basis"])
+	}
 	rows := fact.Fields["risk_breakdown"].Rows
 	if len(rows) != 2 {
 		t.Fatalf("risk_breakdown rows = %#v, want 2", rows)
@@ -325,6 +351,155 @@ func TestHealthProviderProjectRollupBreaksDownByTeamAndRepoNeverSums(t *testing.
 	}
 	if len(fact.EvidenceRefIDs) != 3 {
 		t.Fatalf("evidence_ref_ids = %#v, want project + 1 team + 1 repo", fact.EvidenceRefIDs)
+	}
+}
+
+// TestHealthProviderProjectRollupAllUnknownSeverityDisclosesReason covers
+// the "only unknown" cell: a project whose breakdown rows all report
+// "unknown" still gets a fact (rollup_basis/team_count/risk_breakdown
+// stay honest disclosures of what WAS read), but severity/severity_basis
+// are absent -- never a defaulted "low" -- and severity_unavailable_reason
+// names why.
+func TestHealthProviderProjectRollupAllUnknownSeverityDisclosesReason(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{
+		{match: healthProjectRollupMatch, rows: [][]any{
+			healthProjectRollupRow("linear", "proj-1", "team", "team-1", "Team One", "unknown", 0.10),
+			healthProjectRollupRow("linear", "proj-1", "repo", "repo-1", "full.chaos/svc", "unknown", 0.20),
+		}},
+		// The server-side aggregate's own HAVING max(band) > 0 excludes an
+		// all-unknown project, so it never appears in this query's output.
+		{match: healthSeverityMaxMatch, rows: nil},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactHealth)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactHealth, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(result.Facts) != 1 {
+		t.Fatalf("facts = %#v, want 1 (the breakdown is real, only its severity is undetermined)", result.Facts)
+	}
+	fact := result.Facts[0]
+	if _, ok := fact.Fields["severity"]; ok {
+		t.Fatalf("fields = %#v, want severity absent when every breakdown row is unknown", fact.Fields)
+	}
+	if _, ok := fact.Fields["severity_basis"]; ok {
+		t.Fatalf("fields = %#v, want severity_basis absent when severity is undetermined", fact.Fields)
+	}
+	if got := fact.Fields["severity_unavailable_reason"].String; got == nil || *got != "no_known_severity_breakdown_rows" {
+		t.Fatalf("severity_unavailable_reason = %#v", fact.Fields["severity_unavailable_reason"])
+	}
+	if len(fact.Fields["risk_breakdown"].Rows) != 2 {
+		t.Fatalf("risk_breakdown rows = %#v, want 2 (both unknown rows still disclosed)", fact.Fields["risk_breakdown"].Rows)
+	}
+}
+
+// TestHealthProviderProjectRollupExcludesUnknownFromWorstBand pins the
+// exclusion half of the rule separately from the all-unknown case above: a
+// mix of one unknown row and one known row must promote the KNOWN band,
+// never let the unknown row win or suppress the known reading.
+func TestHealthProviderProjectRollupExcludesUnknownFromWorstBand(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{
+		{match: healthProjectRollupMatch, rows: [][]any{
+			healthProjectRollupRow("linear", "proj-1", "team", "team-1", "Team One", "unknown", 0.10),
+			healthProjectRollupRow("linear", "proj-1", "repo", "repo-1", "full.chaos/svc", "low", 0.05),
+		}},
+		{match: healthSeverityMaxMatch, rows: [][]any{healthSeverityMaxRow("linear", "proj-1", "low")}},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactHealth)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactHealth, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	fact := result.Facts[0]
+	if got := fact.Fields["severity"].String; got == nil || *got != "low" {
+		t.Fatalf("severity = %#v, want low (the unknown row must not win or suppress the known reading)", fact.Fields["severity"])
+	}
+}
+
+// TestHealthProviderProjectRollupTieAtHighReportsOneValue pins the ties-at-
+// high cell: two rows both reporting "high" must still promote a single
+// "high" value, never a duplicated or malformed one.
+func TestHealthProviderProjectRollupTieAtHighReportsOneValue(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{
+		{match: healthProjectRollupMatch, rows: [][]any{
+			healthProjectRollupRow("linear", "proj-1", "team", "team-1", "Team One", "high", 0.90),
+			healthProjectRollupRow("linear", "proj-1", "repo", "repo-1", "full.chaos/svc", "high", 0.95),
+		}},
+		{match: healthSeverityMaxMatch, rows: [][]any{healthSeverityMaxRow("linear", "proj-1", "high")}},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactHealth)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactHealth, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	fact := result.Facts[0]
+	if got := fact.Fields["severity"].String; got == nil || *got != "high" {
+		t.Fatalf("severity = %#v, want high", fact.Fields["severity"])
+	}
+}
+
+// TestHealthProviderMixedRootSubjectsProjectSeverityNeverLeaksIntoRepo is
+// the mixed-root case: a repository subject and a project subject
+// requested in ONE ReadFacts call must each roll up independently -- the
+// repository's own scalar severity (readScope's rn=1-per-scope_id read)
+// stays exactly what it always was, unaffected by the project rollup's
+// worst-band computation running in the same call.
+func TestHealthProviderMixedRootSubjectsProjectSeverityNeverLeaksIntoRepo(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{
+		// healthScalarMatch ("ifNull(churn_norm") is unique to readScope's
+		// own statement -- unlike a bare "scope = 'repo'" substring, it
+		// never also matches readProjectHealth's repo-layer subquery
+		// (compoundingRiskLatestSubquery("repo", ...), which selects no
+		// risk_rules columns at all).
+		{match: healthScalarMatch, rows: [][]any{healthRow("repo-1")}},
+		{match: healthProjectRollupMatch, rows: [][]any{
+			healthProjectRollupRow("linear", "proj-1", "team", "team-1", "Team One", "low", 0.05),
+		}},
+		{match: healthSeverityMaxMatch, rows: [][]any{healthSeverityMaxRow("linear", "proj-1", "low")}},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactHealth)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactHealth, Subjects: []contextfabric.SubjectRef{repoSubject("repo-1"), projectSubject("linear", "proj-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(result.Facts) != 2 {
+		t.Fatalf("facts = %#v, want 2 (both roots served in the same call, neither skipped)", result.Facts)
+	}
+	var repoFact, projectFact *contextfabric.CanonicalFact
+	for i := range result.Facts {
+		switch result.Facts[i].Subject.Kind {
+		case contextfabric.SubjectRepository:
+			repoFact = &result.Facts[i]
+		case contextfabric.SubjectProject:
+			projectFact = &result.Facts[i]
+		}
+	}
+	if repoFact == nil || projectFact == nil {
+		t.Fatalf("facts = %#v, want one repository fact and one project fact", result.Facts)
+	}
+	// healthRow's own scalar severity ("elevated") is untouched by the
+	// project rollup's worst-band computation running in the same call.
+	if got := repoFact.Fields["severity"].String; got == nil || *got != "elevated" {
+		t.Fatalf("repository severity = %#v, want elevated (readScope's own scalar, unaffected)", repoFact.Fields["severity"])
+	}
+	if got := projectFact.Fields["severity"].String; got == nil || *got != "low" {
+		t.Fatalf("project severity = %#v, want low (the worst -- and only -- band in its own breakdown)", projectFact.Fields["severity"])
 	}
 }
 
@@ -493,6 +668,7 @@ func TestHealthProviderProjectReadsDailyHealthSeries(t *testing.T) {
 		{match: healthDailySeriesMatch, rows: [][]any{
 			healthProjectDailySeriesRow("linear:proj-1", "2026-02-21", uint8(1), 0.71, "high"),
 		}},
+		{match: healthSeverityMaxMatch, rows: [][]any{healthSeverityMaxRow("linear", "proj-1", "elevated")}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactHealth)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
@@ -559,14 +735,18 @@ func TestHealthProviderProjectReadsDailyHealthSeries(t *testing.T) {
 	if fact.Fields["compounding_risk"].Number == nil || *fact.Fields["compounding_risk"].Number != 0.71 {
 		t.Fatalf("compounding_risk = %#v, want a scalar sibling matching the declared measure (0.71)", fact.Fields["compounding_risk"])
 	}
-	// codex round 1 (this ticket): the freshest day's OTHER field,
-	// "severity", must NOT be copied to the top level -- it is CHAOS-4680's
-	// Observation, not this table's declared Measure, and healthRiskSignal
-	// (cohort_ranking.go) reads fields["severity"] off ANY FactHealth fact
-	// regardless of subject kind. Copying it would silently start feeding
-	// project cohorts into health-risk ranking, an untested behavior change
-	// this ticket does not intend.
-	if _, ok := fact.Fields["severity"]; ok {
-		t.Fatalf("fact.Fields[\"severity\"] = %#v, want severity NOT copied to the top level (it is an Observation, not the declared Measure, and would leak into healthRiskSignal's subject-kind-blind read)", fact.Fields["severity"])
+	// fact.Fields["severity"] is the worst-band severity across the
+	// project's own risk_breakdown rows (here, the single team-1 row:
+	// "elevated"), computed independently of daily_health's freshest-day
+	// scope -- the two draw from different populations (every breakdown
+	// row accumulated across all owning teams+repos, vs. one specific
+	// day's own winning scope) and must not be conflated: the daily
+	// series' freshest day reports "high" above, while the promoted
+	// severity here stays "elevated".
+	if got := fact.Fields["severity"].String; got == nil || *got != "elevated" {
+		t.Fatalf("severity = %#v, want elevated (the risk_breakdown row's own band, independent of daily_health's freshest day)", fact.Fields["severity"])
+	}
+	if got := fact.Fields["severity_basis"].String; got == nil || *got != "worst_of_team_and_repo_breakdown" {
+		t.Fatalf("severity_basis = %#v", fact.Fields["severity_basis"])
 	}
 }
