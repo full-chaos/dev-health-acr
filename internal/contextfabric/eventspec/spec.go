@@ -2516,11 +2516,12 @@ var ConfirmedNeedLedger = Event{
 		{Key: "capture_decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, contextfabric.CountPopulationScopeDecisionVocabulary()...)},
 		{Key: "capture_skip_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: captureSkipReasonTokens},
 		// The subject-substitution guard's own four-part disclosure: what it
-		// decided, what produced this turn's subject, and both identities in
-		// the same hashed form every other value on this line carries. The
-		// four together are what let the decision be rebuilt from this line
-		// alone -- the parent's identity, this turn's identity, the evidence
-		// class, and the verdict.
+		// decided, what produced this turn's subject, and both identities as
+		// kind plus canonical id -- the identity reference the anchor-binding
+		// transition line uses, so the two lines join. The four together are
+		// what let the decision be rebuilt from this line alone -- the
+		// parent's identity, this turn's identity, the evidence class, and the
+		// verdict. Identities only; a question's terms never reach this line.
 		{Key: "substitution_guard", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: subjectSubstitutionOutcomeTokens},
 		// The producer domain, exactly: which channel carried this turn's
 		// committed subject into resolution -- a hint redeemed from a
@@ -2529,11 +2530,11 @@ var ConfirmedNeedLedger = Event{
 		// "not_applicable" is the turn that committed no subject at all.
 		{Key: "substitution_origin", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: subjectSubstitutionOriginTokens},
 		{Key: "substitution_parent_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, contextFabricSubjectKindTokens...)},
-		// Open: confirmedNeedValueHash's own SHA-256/6-byte hex digest, empty
-		// when that side holds no identity.
-		{Key: "substitution_parent_value_hash", Type: FieldString, Presence: PresenceRequired},
+		// Open: a free canonical id, empty when that side holds no identity.
+		{Key: "substitution_parent_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "substitution_committed_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, contextFabricSubjectKindTokens...)},
-		{Key: "substitution_committed_value_hash", Type: FieldString, Presence: PresenceRequired},
+		// Open: a free canonical id, empty when this turn committed none.
+		{Key: "substitution_committed_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }

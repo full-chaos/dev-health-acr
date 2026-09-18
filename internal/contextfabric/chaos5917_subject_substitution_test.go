@@ -80,11 +80,11 @@ func assertGuard(t *testing.T, event ConfirmedNeedLedgerEvent, wantOutcome Subje
 	if event.SubstitutionOrigin != wantOrigin {
 		t.Errorf("substitution_origin = %q, want %q", event.SubstitutionOrigin, wantOrigin)
 	}
-	if event.SubstitutionParentKind != wantParent.Kind || event.SubstitutionParentValueHash != confirmedNeedValueHash(wantParent.CanonicalID) {
-		t.Errorf("parent identity = (%q,%q), want (%q,%q)", event.SubstitutionParentKind, event.SubstitutionParentValueHash, wantParent.Kind, confirmedNeedValueHash(wantParent.CanonicalID))
+	if event.SubstitutionParentKind != wantParent.Kind || event.SubstitutionParentID != wantParent.CanonicalID {
+		t.Errorf("parent identity = (%q,%q), want (%q,%q)", event.SubstitutionParentKind, event.SubstitutionParentID, wantParent.Kind, wantParent.CanonicalID)
 	}
-	if event.SubstitutionCommittedKind != wantCommitted.Kind || event.SubstitutionCommittedValueHash != confirmedNeedValueHash(wantCommitted.CanonicalID) {
-		t.Errorf("committed identity = (%q,%q), want (%q,%q)", event.SubstitutionCommittedKind, event.SubstitutionCommittedValueHash, wantCommitted.Kind, confirmedNeedValueHash(wantCommitted.CanonicalID))
+	if event.SubstitutionCommittedKind != wantCommitted.Kind || event.SubstitutionCommittedID != wantCommitted.CanonicalID {
+		t.Errorf("committed identity = (%q,%q), want (%q,%q)", event.SubstitutionCommittedKind, event.SubstitutionCommittedID, wantCommitted.Kind, wantCommitted.CanonicalID)
 	}
 }
 
@@ -446,12 +446,12 @@ func TestSubstitutionGuardEmitsEveryFieldAtProductionInfo(t *testing.T) {
 	}
 	line := lastLedgerJSONLine(t, buf)
 	want := map[string]string{
-		"substitution_guard":                string(SubjectSubstitutionClarified),
-		"substitution_origin":               string(SubjectSubstitutionOriginResolver),
-		"substitution_parent_kind":          string(substitutionRepoOne.Kind),
-		"substitution_parent_value_hash":    confirmedNeedValueHash(substitutionRepoOne.CanonicalID),
-		"substitution_committed_kind":       string(substitutionRepoTwo.Kind),
-		"substitution_committed_value_hash": confirmedNeedValueHash(substitutionRepoTwo.CanonicalID),
+		"substitution_guard":          string(SubjectSubstitutionClarified),
+		"substitution_origin":         string(SubjectSubstitutionOriginResolver),
+		"substitution_parent_kind":    string(substitutionRepoOne.Kind),
+		"substitution_parent_id":      substitutionRepoOne.CanonicalID,
+		"substitution_committed_kind": string(substitutionRepoTwo.Kind),
+		"substitution_committed_id":   substitutionRepoTwo.CanonicalID,
 	}
 	for key, value := range want {
 		got, ok := line[key]
@@ -463,8 +463,8 @@ func TestSubstitutionGuardEmitsEveryFieldAtProductionInfo(t *testing.T) {
 			t.Errorf("%s = %v, want %q", key, got, value)
 		}
 	}
-	if want["substitution_parent_value_hash"] == want["substitution_committed_value_hash"] {
-		t.Fatal("fixture defect: the two hashed identities coincide, so neither is pinned")
+	if want["substitution_parent_id"] == want["substitution_committed_id"] {
+		t.Fatal("fixture defect: the two identities coincide, so neither is pinned")
 	}
 }
 
@@ -983,6 +983,57 @@ func TestSubstitutionGuardOffersTheParentsOwnLabel(t *testing.T) {
 	lines := telemetry.confirmedNeedLedgers[mark:]
 	if len(lines) != 1 || lines[0].SubstitutionGuard != SubjectSubstitutionClarified {
 		t.Fatalf("ledger lines = %+v, want one clarified line", lines)
+	}
+}
+
+// TestSubstitutionGuardLeavesTheShadowBinderOnItsServedDocument pins the
+// guard's one effect on the shadow anchor binder: the binder reads the
+// subjects the saved document still commits (servedResolutionProof), so a
+// guarded turn -- which commits none -- never records a binding to the
+// substitute it declined to serve. A same-subject continuation reaches the
+// binder exactly as resolution returned it.
+func TestSubstitutionGuardLeavesTheShadowBinderOnItsServedDocument(t *testing.T) {
+	t.Parallel()
+	e, g, store, telemetry := buildCommittedAnchorEngineWithTelemetry(t)
+	e.candidateVerifier = func(context.Context, storage.Principal, RequestedScope, ResolvedGraphBinding, contractsv1.ContextFabricSubjectKind, string) (bool, CandidateVerificationReason) {
+		return true, CandidateVerificationValid
+	}
+	parent, _ := committedAnchorTurn(t, e, g, store, needTurnRequest("request_5917_shadow_one", true), reviewCarryIdentityResponse(committedAnchorRepo))
+	parentMark := len(telemetry.anchorBindingTransitions)
+
+	guarded := continuingNeedTurn(needTurnRequest("request_5917_shadow_two", true), parent.ResultID)
+	guarded.Question = "And how does the second one compare over the same period?"
+	child, _ := committedAnchorTurn(t, e, g, store, guarded, reviewCarryIdentityResponse(committedAnchorRepoOther))
+	if child.Status != InvestigationClarificationRequired {
+		t.Fatalf("status = %q, want the guard to fire", child.Status)
+	}
+	guardedLines := telemetry.anchorBindingTransitions[parentMark:]
+	if len(guardedLines) == 0 {
+		t.Fatal("the shadow binder emitted no transition for the guarded turn")
+	}
+	for _, line := range guardedLines {
+		if line.To.CanonicalID == committedAnchorRepoOther.CanonicalID {
+			t.Errorf("the shadow binder recorded the substitute %q on a turn that did not serve it: %+v", committedAnchorRepoOther.CanonicalID, line.To)
+		}
+	}
+
+	sameMark := len(telemetry.anchorBindingTransitions)
+	same := continuingNeedTurn(needTurnRequest("request_5917_shadow_three", true), parent.ResultID)
+	committedAnchorTurn(t, e, g, store, same, reviewCarryIdentityResponse(committedAnchorRepo))
+	sameLines := telemetry.anchorBindingTransitions[sameMark:]
+	if len(sameLines) == 0 {
+		t.Fatal("the shadow binder emitted no transition for the same-subject turn")
+	}
+	weighed := false
+	for _, line := range sameLines {
+		for _, committed := range line.CommittedSubjects {
+			if committed == string(committedAnchorRepo.Kind)+":"+committedAnchorRepo.CanonicalID+"="+string(CommitBasisAuthoritativeIdentity) {
+				weighed = true
+			}
+		}
+	}
+	if !weighed {
+		t.Errorf("the shadow binder did not weigh the same-subject commit: %+v", sameLines)
 	}
 }
 

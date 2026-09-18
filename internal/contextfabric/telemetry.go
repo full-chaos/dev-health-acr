@@ -436,9 +436,9 @@ func (t SlogEngineTelemetry) RecordConfirmedNeedLedger(ctx context.Context, prin
 		"substitution_guard", SanitizeLogAttr(string(event.SubstitutionGuard)),
 		"substitution_origin", SanitizeLogAttr(string(event.SubstitutionOrigin)),
 		"substitution_parent_kind", SanitizeLogAttr(string(event.SubstitutionParentKind)),
-		"substitution_parent_value_hash", SanitizeLogAttr(event.SubstitutionParentValueHash),
+		"substitution_parent_id", SanitizeLogAttr(event.SubstitutionParentID),
 		"substitution_committed_kind", SanitizeLogAttr(string(event.SubstitutionCommittedKind)),
-		"substitution_committed_value_hash", SanitizeLogAttr(event.SubstitutionCommittedValueHash),
+		"substitution_committed_id", SanitizeLogAttr(event.SubstitutionCommittedID),
 	}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric confirmed need ledger", args...)
 }

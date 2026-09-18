@@ -838,17 +838,18 @@ type ConfirmedNeedLedgerEvent struct {
 	// the question's terms. Reported so the three populations stay countable
 	// apart; the guard's decision never reads it.
 	SubstitutionOrigin SubjectSubstitutionOrigin
-	// SubstitutionParentKind/SubstitutionParentValueHash are the identity the
-	// NAMED PARENT committed, and SubstitutionCommittedKind/
-	// SubstitutionCommittedValueHash the identity THIS turn committed -- both
-	// hashed by confirmedNeedValueHash, exactly like every other value on
-	// this line, and both empty when that side holds none. The two pairs plus
-	// SubstitutionGuard and SubstitutionOrigin are what let the decision be
-	// rebuilt from this line alone.
-	SubstitutionParentKind         contractsv1.ContextFabricSubjectKind
-	SubstitutionParentValueHash    string
-	SubstitutionCommittedKind      contractsv1.ContextFabricSubjectKind
-	SubstitutionCommittedValueHash string
+	// SubstitutionParentKind/SubstitutionParentID are the identity the NAMED
+	// PARENT committed, and SubstitutionCommittedKind/SubstitutionCommittedID
+	// the identity THIS turn committed -- kind plus canonical id, the same
+	// identity reference the anchor-binding transition line publishes
+	// (from_id/to_id), so the two lines join on it. Identities only: a
+	// question's terms never reach this line. Both empty when that side holds
+	// none. The two pairs plus SubstitutionGuard and SubstitutionOrigin are
+	// what let the decision be rebuilt from this line alone.
+	SubstitutionParentKind    contractsv1.ContextFabricSubjectKind
+	SubstitutionParentID      string
+	SubstitutionCommittedKind contractsv1.ContextFabricSubjectKind
+	SubstitutionCommittedID   string
 }
 
 // confirmedNeedLedgerEventOf builds the event from the admission result and
@@ -863,12 +864,12 @@ func confirmedNeedLedgerEventOf(ledger confirmedNeedLedgerResult, applied map[co
 		AppliedMembers: appliedNeedLedgerMembers(applied), Dropped: ledger.Dropped,
 		CaptureDecision: captureDecision, CaptureSkipReason: captureSkipReason,
 		AnchorAgreement: anchorAgreement, AnchorDisposition: anchorDisposition,
-		SubstitutionGuard:              substitution.Outcome,
-		SubstitutionOrigin:             substitution.Origin,
-		SubstitutionParentKind:         substitution.Parent.Kind,
-		SubstitutionParentValueHash:    confirmedNeedValueHash(substitution.Parent.CanonicalID),
-		SubstitutionCommittedKind:      substitution.Substituted.Kind,
-		SubstitutionCommittedValueHash: confirmedNeedValueHash(substitution.Substituted.CanonicalID),
+		SubstitutionGuard:         substitution.Outcome,
+		SubstitutionOrigin:        substitution.Origin,
+		SubstitutionParentKind:    substitution.Parent.Kind,
+		SubstitutionParentID:      substitution.Parent.CanonicalID,
+		SubstitutionCommittedKind: substitution.Substituted.Kind,
+		SubstitutionCommittedID:   substitution.Substituted.CanonicalID,
 	}
 	if entry, ok := applied[contractsv1.ContextFabricStructureNeedExpectedKind]; ok {
 		event.AppliedExpectedKind = contractsv1.ContextFabricSubjectKind(entry.AppliedValue)
