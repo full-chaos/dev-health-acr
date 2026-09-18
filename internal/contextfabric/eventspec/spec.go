@@ -2532,9 +2532,14 @@ var ConfirmedNeedLedger = Event{
 		{Key: "substitution_parent_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, contextFabricSubjectKindTokens...)},
 		// Open: a free canonical id, empty when that side holds no identity.
 		{Key: "substitution_parent_id", Type: FieldString, Presence: PresenceRequired},
-		{Key: "substitution_committed_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, contextFabricSubjectKindTokens...)},
-		// Open: a free canonical id, empty when this turn committed none.
-		{Key: "substitution_committed_id", Type: FieldString, Presence: PresenceRequired},
+		// Open: every subject this turn committed, "<kind>:<canonical id>" in
+		// commit order, empty when it committed none.
+		{Key: "substitution_committed_ids", Type: FieldStringSlice, Presence: PresenceRequired},
+		// Open: the result that issued, and the id of, the redeemed receipt
+		// that carried the origin's subject; both empty unless
+		// substitution_origin is prior_receipt.
+		{Key: "substitution_origin_result_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "substitution_origin_receipt_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }

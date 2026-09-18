@@ -229,8 +229,9 @@ type confirmedNeedLedgerResult struct {
 	Entries        []confirmedStructureMember
 	Dropped        []ConfirmedNeedMemberDrop
 	SourceResultID string
-	// Parent is what the named parent ASSERTED, retained on every outcome
-	// -- admitted or refused. Admission decides whether the parent's
+	// Parent is what the named parent SERVED, read from its stored result
+	// payload and retained on every outcome -- admitted or refused, and
+	// whether or not its semantic snapshot read. Admission decides whether the parent's
 	// remembered members may be applied to this turn; the substitution guard
 	// (chaos5917_subject_substitution.go) asks the different question of
 	// whether this turn is about to answer about a different subject than
@@ -272,6 +273,14 @@ func (e *Engine) resolveConfirmedNeedLedger(ctx context.Context, principal stora
 	if err != nil {
 		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerMissUnloadable, Parent: evidence}
 	}
+	// The stored RESULT PAYLOAD read, so the identity the parent served is
+	// readable from here on, whatever happens to its semantic snapshot below.
+	// A store returns a valid payload beside an unavailable snapshot; the
+	// ledger needs the snapshot, the substitution guard does not, and an
+	// unreadable snapshot must never cost the guard the parent it compares
+	// against.
+	evidence.Loaded = true
+	evidence.Subject = parentCommittedIdentityOf(stored)
 	// UNLOADABLE (malformed/oversized/unsupported/unreported) is a DIFFERENT
 	// fact than EMPTY (a clean read that simply has no ledger): an operator
 	// who can only see "empty" for both cannot tell a live storage/decode
@@ -280,10 +289,6 @@ func (e *Engine) resolveConfirmedNeedLedger(ctx context.Context, principal stora
 	if stored.SemanticStateRead != SemanticStateReadAvailable {
 		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerMissUnloadable, Parent: evidence}
 	}
-	// The read was clean, so whatever identity the parent asserted is
-	// readable from here on -- including on the refusal paths below.
-	evidence.Loaded = true
-	evidence.Subject = parentCommittedAnchorOf(stored)
 	if stored.SemanticState == nil || len(stored.SemanticState.ConfirmedNeeds) == 0 {
 		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerMissEmpty, Parent: evidence}
 	}
@@ -838,18 +843,27 @@ type ConfirmedNeedLedgerEvent struct {
 	// the question's terms. Reported so the three populations stay countable
 	// apart; the guard's decision never reads it.
 	SubstitutionOrigin SubjectSubstitutionOrigin
-	// SubstitutionParentKind/SubstitutionParentID are the identity the NAMED
-	// PARENT committed, and SubstitutionCommittedKind/SubstitutionCommittedID
-	// the identity THIS turn committed -- kind plus canonical id, the same
-	// identity reference the anchor-binding transition line publishes
-	// (from_id/to_id), so the two lines join on it. Identities only: a
-	// question's terms never reach this line. Both empty when that side holds
-	// none. The two pairs plus SubstitutionGuard and SubstitutionOrigin are
-	// what let the decision be rebuilt from this line alone.
-	SubstitutionParentKind    contractsv1.ContextFabricSubjectKind
-	SubstitutionParentID      string
-	SubstitutionCommittedKind contractsv1.ContextFabricSubjectKind
-	SubstitutionCommittedID   string
+	// SubstitutionParentKind/SubstitutionParentID are the one identity the
+	// NAMED PARENT asserted, empty when it asserted none, and
+	// SubstitutionCommittedIDs is EVERY subject this turn committed, as
+	// "<kind>:<canonical id>" in commit order and empty when it committed
+	// none -- the same identity reference the anchor-binding transition line
+	// publishes, so the two lines join on it. The committed list is the set
+	// the turn is about to serve, never a summary of it: a line cannot say
+	// "nothing committed" beside a turn that serves facts. Identities only; a
+	// question's terms never reach this line. These plus SubstitutionGuard
+	// and SubstitutionOrigin are what let the decision be rebuilt from this
+	// line alone.
+	SubstitutionParentKind   contractsv1.ContextFabricSubjectKind
+	SubstitutionParentID     string
+	SubstitutionCommittedIDs []string
+	// SubstitutionOriginResultID/SubstitutionOriginReceiptID name the
+	// redeemed receipt that carried the origin's subject, and the result that
+	// issued it -- empty unless SubstitutionOrigin is prior_receipt. A choice
+	// redeemed from the named parent names the parent here; a subject carried
+	// by some other result's receipt names that result.
+	SubstitutionOriginResultID  string
+	SubstitutionOriginReceiptID string
 }
 
 // confirmedNeedLedgerEventOf builds the event from the admission result and
@@ -864,12 +878,13 @@ func confirmedNeedLedgerEventOf(ledger confirmedNeedLedgerResult, applied map[co
 		AppliedMembers: appliedNeedLedgerMembers(applied), Dropped: ledger.Dropped,
 		CaptureDecision: captureDecision, CaptureSkipReason: captureSkipReason,
 		AnchorAgreement: anchorAgreement, AnchorDisposition: anchorDisposition,
-		SubstitutionGuard:         substitution.Outcome,
-		SubstitutionOrigin:        substitution.Origin,
-		SubstitutionParentKind:    substitution.Parent.Kind,
-		SubstitutionParentID:      substitution.Parent.CanonicalID,
-		SubstitutionCommittedKind: substitution.Substituted.Kind,
-		SubstitutionCommittedID:   substitution.Substituted.CanonicalID,
+		SubstitutionGuard:           substitution.Outcome,
+		SubstitutionOrigin:          substitution.Origin,
+		SubstitutionParentKind:      substitution.Parent.Kind,
+		SubstitutionParentID:        substitution.Parent.CanonicalID,
+		SubstitutionCommittedIDs:    committedIDs(substitution.Committed),
+		SubstitutionOriginResultID:  substitution.OriginReceiptResultID,
+		SubstitutionOriginReceiptID: substitution.OriginReceiptID,
 	}
 	if entry, ok := applied[contractsv1.ContextFabricStructureNeedExpectedKind]; ok {
 		event.AppliedExpectedKind = contractsv1.ContextFabricSubjectKind(entry.AppliedValue)

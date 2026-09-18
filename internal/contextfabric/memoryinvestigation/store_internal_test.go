@@ -170,3 +170,18 @@ func TestStore_semanticStateIsNeverAliased(t *testing.T) {
 		t.Fatalf("a caller's mutation reached the stored snapshot")
 	}
 }
+
+// TestStore_substitutionParentRead runs the SHARED parent-read domain for the
+// subject-substitution guard through the real engine, seeding the parent row
+// and its raw snapshot directly.
+func TestStore_substitutionParentRead(t *testing.T) {
+	paritytest.RunSubstitutionParentReadSuite(t, func(t *testing.T) (contextfabric.InvestigationResultStore, paritytest.SemanticSeed) {
+		store := NewStore()
+		return store, func(t *testing.T, orgID, resultID string, payload, semanticState []byte) {
+			t.Helper()
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			store.results[resultID] = entry{orgID: orgID, payload: payload, semanticState: semanticState}
+		}
+	})
+}

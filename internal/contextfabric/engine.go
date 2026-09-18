@@ -2868,24 +2868,24 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// cancelled context all read the same way -- the offer is withheld and
 	// the turn refuses to serve the substitute, which is the fail-closed
 	// direction.
-	substitutionCommitted, substitutionHaveCommitted := committedSubjectIdentityOf(committedAnchorForCapture, haveCommittedAnchorForCapture, resolution)
+	substitutionCommitted := append([]SubjectRef(nil), resolution.Committed...)
 	substitutionInput := subjectSubstitutionInput{
 		Parent:             confirmedNeedLedger.Parent,
 		Committed:          substitutionCommitted,
-		HaveCommitted:      substitutionHaveCommitted,
 		Origin:             SubjectSubstitutionOriginNotApplicable,
 		AllowClarification: request.Options.AllowClarification,
 	}
-	if substitutionHaveCommitted {
-		substitutionInput.Origin = subjectSubstitutionOriginOf(substitutionCommitted, priorHints, request.RequestedScope.SubjectHints, appliedNeeds)
-		substitutionInput.RedeemedChoice = subjectSubstitutionRedeemedChoice(substitutionCommitted, carryParentSeed(request), priorValidatedReceipts, priorHints)
+	if len(substitutionCommitted) > 0 {
+		origin := subjectSubstitutionOriginOf(substitutionCommitted, substitutionInput.Parent.Subject, carryParentSeed(request), priorOutcomes, request.RequestedScope.SubjectHints, appliedNeeds)
+		substitutionInput.Origin, substitutionInput.OriginReceiptResultID, substitutionInput.OriginReceiptID = origin.Origin, origin.ReceiptResultID, origin.ReceiptID
+		substitutionInput.RedeemedChoice = subjectSubstitutionRedeemedChoice(substitutionCommitted, carryParentSeed(request), priorOutcomes)
 		// The re-read costs a keyed graph call, so it is asked only when its
 		// answer can change what this turn hands back: the identities already
 		// differ and the caller did not pick this one, so the guard is about
 		// to fire and the remembered subject is about to be listed. Asked on
 		// BOTH firing branches -- a caller that cannot be asked a question is
 		// shown the two identities too, and is never shown one it cannot see.
-		if substitutionInput.Parent.held() && !sameSubjectIdentity(substitutionInput.Parent.Subject, substitutionCommitted) && !substitutionInput.RedeemedChoice {
+		if substitutionInput.Parent.held() && !committedIsExactly(substitutionCommitted, substitutionInput.Parent.Subject) && !substitutionInput.RedeemedChoice {
 			substitutionInput.RememberedAvailable = e.rememberedSubjectReadable(ctx, principal, request, binding, substitutionInput.Parent.Subject)
 		}
 	}

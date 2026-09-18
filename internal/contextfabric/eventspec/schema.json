@@ -1200,30 +1200,17 @@
         "presence": "required"
       },
       {
-        "key": "substitution_committed_kind",
-        "type": "string",
-        "presence": "required",
-        "closed_vocabulary": [
-          "",
-          "organization",
-          "team",
-          "project",
-          "repository",
-          "work_item",
-          "pull_request",
-          "deployment",
-          "incident",
-          "document",
-          "decision",
-          "episode",
-          "metric",
-          "pull_request_review",
-          "ci_pipeline_run",
-          "work_item_ref"
-        ]
+        "key": "substitution_committed_ids",
+        "type": "string_slice",
+        "presence": "required"
       },
       {
-        "key": "substitution_committed_id",
+        "key": "substitution_origin_result_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "substitution_origin_receipt_id",
         "type": "string",
         "presence": "required"
       },

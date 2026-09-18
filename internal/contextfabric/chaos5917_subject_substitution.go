@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -26,19 +27,28 @@ import (
 // about the first repository. Nothing in the served document, and nothing in
 // the ledger's own drop reason, says the subject moved.
 //
-// ORIGIN-BLIND, DELIBERATELY. The comparison is between the parent's
-// committed subject identity and THIS turn's committed subject identity. It
-// does not ask what produced this turn's identity -- a caller hint, a prior
-// receipt, or the question's own words all reach the same commit and all
-// substitute the same way. Origin is REPORTED (SubjectSubstitutionOrigin,
+// THE COMPARISON IS OVER THE COMMITTED SET. The parent asserted one
+// identity; this turn is about to serve every subject its resolution
+// committed. Anything other than exactly that one identity -- another
+// subject, a cohort of others, or a cohort that adds others beside the
+// parent's -- answers about something the parent did not, and is a
+// substitution. A single-subject comparison would let a turn that commits
+// two subjects through untouched, which is the same silent change by
+// another shape.
+//
+// ORIGIN-BLIND, DELIBERATELY. The comparison does not ask what produced
+// this turn's commits -- a caller hint, a prior receipt, the engine's own
+// carried anchor or the question's own words all reach the same commit and
+// all substitute the same way. Origin is REPORTED (SubjectSubstitutionOrigin,
 // on the ledger line) so the three populations stay countable apart, and it
 // is never an input to the decision. Keying the guard on origin was the
 // shape this defect already defeated once: the resolver-origin case is
 // exactly the one a hint-shaped predicate does not see.
 //
-// THE ONE PERMITTED SUBSTITUTION is a choice the user actually made: a
-// prior-subject receipt, redeemed this turn, that was minted by the very
-// parent this turn names. That is the redemption of an offer the engine
+// THE ONE PERMITTED SUBSTITUTION is a choice the user actually made: this
+// turn commits exactly one identity, and ONE prior-subject receipt redeemed
+// this turn was both issued by the very parent this turn names and redeemed
+// for that identity. That is the redemption of an offer the engine
 // itself raised -- the clarification below being answered -- so treating it
 // as a substitution would make every clarification this guard raises
 // unanswerable, which is the failure class chaos5637_answerable_clarification.go
@@ -69,13 +79,15 @@ const (
 	// there is no parent-committed subject it could contradict.
 	SubjectSubstitutionNoParentReference SubjectSubstitutionOutcome = "no_parent_reference"
 	// SubjectSubstitutionParentUnreadable: this turn names a parent whose
-	// stored semantic state did not read cleanly. A DIFFERENT fact from a
-	// parent that read cleanly and held no subject -- an operator who can
-	// only see "nothing to compare" cannot tell a storage or decode defect
-	// apart from an ordinary first turn.
+	// stored result payload could not be read at all. A parent whose payload
+	// read but whose semantic snapshot did not is NOT this: its served
+	// subjects are compared exactly as they would be with the snapshot. A
+	// DIFFERENT fact from a parent that read and held no subject -- an
+	// operator who can only see "nothing to compare" cannot tell a storage
+	// defect apart from an ordinary first turn.
 	SubjectSubstitutionParentUnreadable SubjectSubstitutionOutcome = "parent_unreadable"
-	// SubjectSubstitutionParentNoIdentity: the named parent read cleanly and
-	// committed no subject as its own scope anchor, so it asserted no
+	// SubjectSubstitutionParentNoIdentity: the named parent's payload read
+	// and served no single subject -- none, or several -- so it asserted no
 	// identity for this turn to contradict.
 	SubjectSubstitutionParentNoIdentity SubjectSubstitutionOutcome = "parent_no_identity"
 	// SubjectSubstitutionNoCommittedSubject: the parent held an identity and
@@ -246,13 +258,14 @@ func ValidSubjectSubstitutionOrigin(value SubjectSubstitutionOrigin) bool {
 type parentAnchorEvidence struct {
 	// Referenced is true when the request named a parent at all.
 	Referenced bool
-	// Loaded is true when that parent's stored semantic state read cleanly.
-	// False with Referenced true means unreadable, never "absent".
+	// Loaded is true when that parent's stored result PAYLOAD read, whatever
+	// its semantic snapshot did. False with Referenced true means the payload
+	// is unreadable, never "absent".
 	Loaded bool
-	// Subject is the anchor the parent committed, or the zero SubjectRef
-	// when it committed none. Label is filled from the parent's own served
-	// resolution where it has one, so an offer built from this evidence
-	// carries the label the caller already saw.
+	// Subject is the one subject the parent's payload committed, or the zero
+	// SubjectRef when it committed none or several (parentCommittedIdentityOf).
+	// It carries the label the parent served, so an offer built from it reads
+	// the way the caller already saw it.
 	Subject SubjectRef
 }
 
@@ -262,71 +275,39 @@ func (p parentAnchorEvidence) held() bool {
 	return p.Loaded && p.Subject.Kind != "" && p.Subject.CanonicalID != ""
 }
 
-// committedSubjectIdentityOf is "the subject THIS turn is about to answer
-// about", from ONE derivation both sides of the comparison use.
-//
-// anchor/haveAnchor are the capture gate's own already-computed decision
-// (engineCommittedAnchorForCapture), never re-derived here: the guard and the
-// capture gate must never be able to disagree about which committed subject
-// the frame's anchor names. Its label is read back off resolution.Committed,
-// where the served document already carries it.
-//
-// THE SOLE-COMMITTED FALLBACK sweeps the sibling shape. A frame with no
-// scope anchor at all -- a question about one named subject -- commits that
-// subject and binds no anchor, so an anchor-only comparison would leave
-// exactly the same silent substitution open for it. One committed subject IS
-// unambiguously what that turn is about. Two or more is not, and reports no
-// identity rather than picking one by slice order.
-func committedSubjectIdentityOf(anchor confirmedStructureMember, haveAnchor bool, resolution SubjectResolution) (SubjectRef, bool) {
-	if haveAnchor {
-		for _, subject := range resolution.Committed {
-			if subject.Kind == anchor.AppliedKind && subject.CanonicalID == anchor.AppliedValue {
-				return subject, true
-			}
-		}
-		// The anchor bound but its subject is not on the committed list the
-		// document carries: report no identity rather than a subject nothing
-		// serves.
-		return SubjectRef{}, false
-	}
-	if len(resolution.Committed) == 1 {
-		return resolution.Committed[0], true
-	}
-	return SubjectRef{}, false
+// committedIsExactly reports whether committed is exactly the one identity
+// subject -- one element, equal to it. The one statement of "this turn is
+// about the parent's subject and nothing else".
+func committedIsExactly(committed []SubjectRef, subject SubjectRef) bool {
+	return len(committed) == 1 && sameSubjectIdentity(committed[0], subject)
 }
 
-// parentCommittedAnchorOf is committedSubjectIdentityOf's own reading of a
-// STORED parent, taken from what that turn itself recorded rather than from
-// a re-decision over its stored document.
-//
-// Its anchor is the subject_anchor entry the parent's own capture gate wrote
-// into its ledger -- the parent's record of the anchor IT bound -- and its
-// label comes from the parent's own served resolution, so an offer built
-// from this evidence carries the label the caller already read. The same
-// sole-committed fallback applies, and for the same reason.
-func parentCommittedAnchorOf(stored StoredInvestigationResult) SubjectRef {
-	committed := stored.Result.SubjectResolution.Committed
-	if stored.SemanticState != nil {
-		for _, entry := range stored.SemanticState.ConfirmedNeeds {
-			if entry.Member != contractsv1.ContextFabricStructureNeedSubjectAnchor {
-				continue
-			}
-			if entry.AppliedKind == "" || entry.AppliedValue == "" {
-				break
-			}
-			for _, subject := range committed {
-				if subject.Kind == entry.AppliedKind && subject.CanonicalID == entry.AppliedValue {
-					return subject
-				}
-			}
-			// The parent recorded an anchor its own served document does not
-			// list. Its label is the one thing missing, and the canonical id
-			// stands in for it -- the identity is what the comparison needs,
-			// and Label carries a v1 non-empty bound.
-			return SubjectRef{Kind: entry.AppliedKind, CanonicalID: entry.AppliedValue, Label: entry.AppliedValue}
-		}
+// committedIDs renders committed as "<kind>:<canonical id>" in commit order --
+// the identity reference the anchor-binding transition line uses, so the two
+// lines join on it. Never nil, so the line always carries a list.
+func committedIDs(committed []SubjectRef) []string {
+	out := make([]string, 0, len(committed))
+	for _, subject := range committed {
+		out = append(out, string(subject.Kind)+":"+subject.CanonicalID)
 	}
-	if len(committed) == 1 {
+	return out
+}
+
+// parentCommittedIdentityOf is the one identity a STORED parent served:
+// the one subject its stored result payload committed, or none when it
+// committed none or several.
+//
+// THE PAYLOAD, NEVER THE SNAPSHOT. The parent's served document is what the
+// person read, and a store returns it intact beside a semantic snapshot that
+// is absent or malformed. Reading the identity off the snapshot would make
+// the guard's comparison depend on whether a supplementary record decoded,
+// and an unreadable snapshot would then silently remove the parent the guard
+// compares against. From the payload alone, one parent yields one answer.
+//
+// Several committed subjects assert no single identity, and report none
+// rather than one picked by slice order.
+func parentCommittedIdentityOf(stored StoredInvestigationResult) SubjectRef {
+	if committed := stored.Result.SubjectResolution.Committed; len(committed) == 1 {
 		return committed[0]
 	}
 	return SubjectRef{}
@@ -337,19 +318,20 @@ func parentCommittedAnchorOf(stored StoredInvestigationResult) SubjectRef {
 // signal another authority owns.
 type subjectSubstitutionInput struct {
 	Parent parentAnchorEvidence
-	// Committed is the subject THIS turn's own resolution bound to the
-	// frame's anchor (engineCommittedAnchorForCapture's own member), and
-	// HaveCommitted whether it bound one at all.
-	Committed     SubjectRef
-	HaveCommitted bool
+	// Committed is EVERY subject this turn's resolution committed, in commit
+	// order -- the set this turn is about to serve.
+	Committed []SubjectRef
 	// Origin is reported, never consulted. See the type's doc comment.
 	Origin SubjectSubstitutionOrigin
-	// RedeemedChoice is true when THIS SUBJECT'S OWN identity is the one the
-	// caller redeemed this turn, from a prior-subject receipt minted by the
-	// NAMED PARENT. It keys on identity equality with the redeemed choice,
-	// never on "a receipt is present": a turn that redeems a receipt for one
-	// subject and commits another has not been told to change to the one it
-	// committed.
+	// OriginReceiptResultID/OriginReceiptID name the redeemed receipt that
+	// carried the origin's subject; reported, never consulted.
+	OriginReceiptResultID string
+	OriginReceiptID       string
+	// RedeemedChoice is true when this turn commits exactly one identity and
+	// ONE receipt redeemed this turn was issued by the NAMED PARENT and
+	// redeemed for that identity (subjectSubstitutionRedeemedChoice). One
+	// predicate over one receipt: a parent receipt for one subject beside
+	// another result's receipt for the committed one is not a choice of it.
 	RedeemedChoice bool
 	// AllowClarification is the caller's own option: false means this caller
 	// cannot answer a question, so a substitution ends the turn with the
@@ -365,15 +347,18 @@ type subjectSubstitutionInput struct {
 }
 
 // subjectSubstitutionDecision is the guard's whole output: the outcome, the
-// origin it observed, and both identities in the hashed form the ledger line
-// publishes.
+// origin it observed, the parent's identity and the set this turn committed.
 type subjectSubstitutionDecision struct {
 	Outcome SubjectSubstitutionOutcome
 	Origin  SubjectSubstitutionOrigin
-	// Parent/Substituted carry the raw subjects for the offer this turn may
-	// compose; the ledger line publishes only their kind and a value hash.
-	Parent      SubjectRef
-	Substituted SubjectRef
+	// Parent is the identity the named parent asserted; Committed is every
+	// subject this turn committed. The ledger line publishes both.
+	Parent    SubjectRef
+	Committed []SubjectRef
+	// OriginReceiptResultID/OriginReceiptID name the redeemed receipt that
+	// carried the origin's subject, empty unless Origin is prior_receipt.
+	OriginReceiptResultID string
+	OriginReceiptID       string
 	// RememberedListed is whether the remembered subject may be listed back
 	// to the caller on a firing branch. One authority for that, read by the
 	// served shape and implied by the outcome, so the two cannot disagree.
@@ -391,10 +376,12 @@ func sameSubjectIdentity(a, b SubjectRef) bool {
 // order. PURE: reads its argument and mutates nothing, so the engine's
 // control flow and the test table read the identical function.
 func decideSubjectSubstitution(in subjectSubstitutionInput) subjectSubstitutionDecision {
-	decision := subjectSubstitutionDecision{Origin: SubjectSubstitutionOriginNotApplicable}
-	if in.HaveCommitted {
+	decision := subjectSubstitutionDecision{Origin: SubjectSubstitutionOriginNotApplicable, Committed: in.Committed}
+	if len(in.Committed) > 0 {
 		decision.Origin = in.Origin
-		decision.Substituted = in.Committed
+		if in.Origin == SubjectSubstitutionOriginPriorReceipt {
+			decision.OriginReceiptResultID, decision.OriginReceiptID = in.OriginReceiptResultID, in.OriginReceiptID
+		}
 	}
 	if !ValidSubjectSubstitutionOrigin(decision.Origin) {
 		// An origin nothing recorded reads as the resolver's, the strict
@@ -414,15 +401,15 @@ func decideSubjectSubstitution(in subjectSubstitutionInput) subjectSubstitutionD
 		return decision
 	}
 	decision.Parent = in.Parent.Subject
-	if !in.HaveCommitted {
+	if len(in.Committed) == 0 {
 		decision.Outcome = SubjectSubstitutionNoCommittedSubject
 		return decision
 	}
-	if sameSubjectIdentity(in.Committed, in.Parent.Subject) {
+	if committedIsExactly(in.Committed, in.Parent.Subject) {
 		decision.Outcome = SubjectSubstitutionSameSubject
 		return decision
 	}
-	if in.RedeemedChoice {
+	if in.RedeemedChoice && len(in.Committed) == 1 {
 		decision.Outcome = SubjectSubstitutionRedeemedChoice
 		return decision
 	}
@@ -469,69 +456,114 @@ func (e *Engine) rememberedSubjectReadable(ctx context.Context, principal storag
 	return ok && reason == CandidateVerificationValid
 }
 
-// subjectSubstitutionOriginOf names what produced subject, from the SAME two
-// caller-sourced channels resolution itself reads: the hints this turn
-// redeemed from prior-subject receipts, and the hints the caller's own
-// request carried. Anything else is the resolver's own reach from the
-// question's terms.
+// substitutionOriginFact is the channel that carried a subject into
+// resolution and, when that channel is a redeemed receipt, WHICH receipt and
+// which result issued it -- so a reader of the line tells a choice redeemed
+// from the parent's own offer apart from one redeemed from some other result
+// without reopening the request.
+type substitutionOriginFact struct {
+	Origin SubjectSubstitutionOrigin
+	// ReceiptResultID and ReceiptID name the redeemed receipt that carried
+	// the subject; both empty unless Origin is prior_receipt.
+	ReceiptResultID string
+	ReceiptID       string
+}
+
+// subjectSubstitutionOriginOf names what carried this turn's committed set
+// into resolution, from the SAME channels resolution itself reads: the
+// receipts this turn redeemed, the hints the caller's own request carried,
+// and the engine's own carried anchor. Anything else is the resolver's own
+// reach over the question.
 //
-// Receipt-sourced hints are tested FIRST and independently of the caller's
-// list, because resolvePriorSubjectHints appends its redemptions into the
-// same slice the caller's own hints travel in: asking the joined list alone
-// would report every redemption as a caller hint. The engine's own carried
-// anchor is tested LAST of the three named channels, so a caller channel
-// that also names the identity is reported as the caller's.
-func subjectSubstitutionOriginOf(subject SubjectRef, receiptHints, requestHints []SubjectHint, carried map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember) SubjectSubstitutionOrigin {
-	for _, hint := range receiptHints {
-		if hint.Kind == subject.Kind && hint.ID == subject.CanonicalID {
-			return SubjectSubstitutionOriginPriorReceipt
+// The subject it describes is the first committed identity that is not the
+// parent's -- the one that substitutes -- or, when every commit is the
+// parent's, the first commit.
+//
+// Redeemed receipts are read FIRST and from their own outcomes, because
+// resolvePriorSubjectHints appends its redemptions into the same slice the
+// caller's own hints travel in: asking the joined list alone would report
+// every redemption as a caller hint. The engine's own carried anchor is read
+// LAST of the three named channels, so a caller channel that also names the
+// identity is reported as the caller's.
+func subjectSubstitutionOriginOf(committed []SubjectRef, parent SubjectRef, parentResultID string, outcomes []priorSubjectReceiptOutcome, requestHints []SubjectHint, carried map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember) substitutionOriginFact {
+	if len(committed) == 0 {
+		return substitutionOriginFact{Origin: SubjectSubstitutionOriginNotApplicable}
+	}
+	subject := committed[0]
+	for _, candidate := range committed {
+		if !sameSubjectIdentity(candidate, parent) {
+			subject = candidate
+			break
+		}
+	}
+	return subjectOriginOf(subject, parentResultID, outcomes, requestHints, carried)
+}
+
+// subjectOriginOf names the channel that carried ONE subject into
+// resolution. When several redeemed receipts carried it, the one the named
+// parent issued is the one reported: that is the receipt a redeemed choice
+// stands on, so the line names the same receipt the decision read.
+func subjectOriginOf(subject SubjectRef, parentResultID string, outcomes []priorSubjectReceiptOutcome, requestHints []SubjectHint, carried map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember) substitutionOriginFact {
+	var redeemed *priorSubjectReceiptOutcome
+	for i := range outcomes {
+		outcome := &outcomes[i]
+		if !outcome.hasHint || outcome.droppedByHintBudget || outcome.hint.Kind != subject.Kind || outcome.hint.ID != subject.CanonicalID {
+			continue
+		}
+		if redeemed == nil || (parentResultID != "" && strings.TrimSpace(outcome.receipt.ResultID) == parentResultID) {
+			redeemed = outcome
+		}
+	}
+	if redeemed != nil {
+		return substitutionOriginFact{
+			Origin:          SubjectSubstitutionOriginPriorReceipt,
+			ReceiptResultID: strings.TrimSpace(redeemed.receipt.ResultID),
+			ReceiptID:       strings.TrimSpace(redeemed.receipt.ReceiptID),
 		}
 	}
 	for _, hint := range requestHints {
 		if hint.Kind == subject.Kind && hint.ID == subject.CanonicalID {
-			return SubjectSubstitutionOriginCallerHint
+			return substitutionOriginFact{Origin: SubjectSubstitutionOriginCallerHint}
 		}
 	}
 	if entry, ok := carried[contractsv1.ContextFabricStructureNeedSubjectAnchor]; ok &&
 		entry.AppliedKind == subject.Kind && entry.AppliedValue == subject.CanonicalID {
-		return SubjectSubstitutionOriginEngineCarry
+		return substitutionOriginFact{Origin: SubjectSubstitutionOriginEngineCarry}
 	}
-	return SubjectSubstitutionOriginResolver
+	return substitutionOriginFact{Origin: SubjectSubstitutionOriginResolver}
 }
 
-// subjectSubstitutionRedeemedChoice reports whether SUBJECT ITSELF is what
-// the caller redeemed this turn, from a prior-subject receipt the NAMED
-// PARENT minted.
+// subjectSubstitutionRedeemedChoice reports whether this turn's commit is a
+// choice the caller made from the NAMED PARENT's own offer: exactly one
+// identity is committed, and ONE receipt redeemed this turn was both issued
+// by the named parent and redeemed for that identity.
 //
-// TWO CONSTRAINTS, BOTH LOAD BEARING.
+// ONE PREDICATE OVER ONE RECEIPT. The issuer and the identity are read off
+// the same outcome (the receipt and the hint its redemption produced), never
+// checked apart. Checked apart, a parent receipt for one subject beside
+// another result's receipt for a second would satisfy both halves and
+// license the second -- a subject the parent never offered.
 //
-// The parent constraint: a receipt names the result that issued it, and only
-// the result this turn continues can have offered the choice this turn is
-// answering. A receipt carried over from some older result is a hint like
-// any other -- it does not say the user was asked anything about THIS
-// exchange, so it cannot license replacing the subject the exchange is about.
-//
-// The identity constraint: the redemption must have produced a hint for THIS
-// subject. A turn that redeems a receipt for one subject and commits a
-// different one was told to change to the first, not to the second, so the
-// presence of a receipt alone never licenses the commit -- only equality
-// with what was actually chosen does.
-func subjectSubstitutionRedeemedChoice(subject SubjectRef, parentResultID string, validated []BoundSubjectReceipt, receiptHints []SubjectHint) bool {
-	if parentResultID == "" || len(validated) == 0 {
+// The issuer constraint: only the result this turn continues can have
+// offered the choice this turn is answering, and a redemption resolves only
+// against the result that issued the receipt, so a hint for the committed
+// identity from a receipt the parent issued proves the parent offered it.
+// The identity constraint: a receipt redeemed for one subject is not a
+// choice of another. A redemption the hint budget dropped never reached
+// resolution and chose nothing.
+func subjectSubstitutionRedeemedChoice(committed []SubjectRef, parentResultID string, outcomes []priorSubjectReceiptOutcome) bool {
+	if len(committed) != 1 || parentResultID == "" {
 		return false
 	}
-	named := false
-	for _, receipt := range validated {
-		if receipt.ResultID == parentResultID {
-			named = true
-			break
+	chosen := committed[0]
+	for _, outcome := range outcomes {
+		if !outcome.hasHint || outcome.droppedByHintBudget {
+			continue
 		}
-	}
-	if !named {
-		return false
-	}
-	for _, hint := range receiptHints {
-		if hint.Kind == subject.Kind && hint.ID == subject.CanonicalID {
+		if strings.TrimSpace(outcome.receipt.ResultID) != parentResultID {
+			continue
+		}
+		if outcome.hint.Kind == chosen.Kind && outcome.hint.ID == chosen.CanonicalID {
 			return true
 		}
 	}
