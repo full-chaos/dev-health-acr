@@ -170,28 +170,41 @@ func TestCHAOS5952HealthFreshnessWindowAgainstRealClickHouse(t *testing.T) {
 		}
 	})
 
+	// seedMinimalProject wires one project to one team (native ownership)
+	// and, when repoID is non-empty, that team to one repo -- the minimal
+	// ownership chain readProjectHealth/queryProjectHealthSeverityMax both
+	// walk, shared by every project-scope subtest below.
+	seedMinimalProject := func(orgID, projectID, projectKey, teamID, repoID string) {
+		t.Helper()
+		epoch := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		if err := direct.Exec(ctx, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+			projectID, orgID, "linear", projectKey, "Project", uint8(1), "active", "", epoch); err != nil {
+			t.Fatalf("seed projects row: %v", err)
+		}
+		if err := direct.Exec(ctx, `INSERT INTO teams (id, name, description, updated_at, org_id, provider, project_keys, is_active) VALUES (?, ?, NULL, ?, ?, ?, [], ?)`,
+			teamID, teamID, epoch, orgID, "linear", uint8(1)); err != nil {
+			t.Fatalf("seed teams row: %v", err)
+		}
+		if err := direct.Exec(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+			orgID, "linear", teamID, "irrelevant", projectKey, "native", epoch, nil, epoch); err != nil {
+			t.Fatalf("seed team_project_ownership: %v", err)
+		}
+		if repoID == "" {
+			return
+		}
+		if err := direct.Exec(ctx, `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			orgID, "github", teamID, repoID, "acme/"+teamID, "exact", "native", uint8(1), uint16(1), int32(1), epoch, nil, epoch); err != nil {
+			t.Fatalf("seed team_repo_ownership: %v", err)
+		}
+	}
+
 	// Project rollup: the team's own band is fresh, the repo's own band is
 	// known but stale -- the promoted severity is the worst band among the
 	// FRESH rows only, executed against a real server.
 	t.Run("project_rollup_mixed_fresh_and_stale_worst_fresh_band_wins", func(t *testing.T) {
 		const orgID = "org-5952-project-mixed"
 		repoID := "10000000-0000-0000-0000-000000000007"
-		if err := direct.Exec(ctx, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
-			"proj-5952-mixed", orgID, "linear", "MIXED1", "Project", uint8(1), "active", "", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil {
-			t.Fatalf("seed projects row: %v", err)
-		}
-		if err := direct.Exec(ctx, `INSERT INTO teams (id, name, description, updated_at, org_id, provider, project_keys, is_active) VALUES (?, ?, NULL, ?, ?, ?, [], ?)`,
-			"team-5952-mixed", "Team Mixed", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), orgID, "linear", uint8(1)); err != nil {
-			t.Fatalf("seed teams row: %v", err)
-		}
-		if err := direct.Exec(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
-			orgID, "linear", "team-5952-mixed", "irrelevant", "MIXED1", "native", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), nil, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil {
-			t.Fatalf("seed team_project_ownership: %v", err)
-		}
-		if err := direct.Exec(ctx, `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			orgID, "github", "team-5952-mixed", repoID, "acme/mixed", "exact", "native", uint8(1), uint16(1), int32(1), time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), nil, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil {
-			t.Fatalf("seed team_repo_ownership: %v", err)
-		}
+		seedMinimalProject(orgID, "proj-5952-mixed", "MIXED1", "team-5952-mixed", repoID)
 		fresh := recentHealthDay(1)
 		stale := recentHealthDay(30)
 		seedRisk(orgID, "team", "team-5952-mixed", "elevated", 0.55, fresh, fresh.Add(6*time.Hour))
@@ -214,6 +227,61 @@ func TestCHAOS5952HealthFreshnessWindowAgainstRealClickHouse(t *testing.T) {
 					t.Fatalf("repo row severity = %#v, want unknown (its own band is stale)", row.Fields["severity"])
 				}
 			}
+		}
+	})
+
+	// The project-scope counterpart of the repo-scope "latest day unknown,
+	// known band 3 days earlier wins" case above: a team's own latest-day
+	// row is unknown, but a real band was known a few days earlier --
+	// row_number()'s known-row preference must pick that earlier row for
+	// BOTH the risk_breakdown row AND the promoted project severity, never
+	// the literal latest (unknown) day.
+	t.Run("project_rollup_latest_day_unknown_known_band_earlier_wins", func(t *testing.T) {
+		const orgID = "org-5952-project-recent-known"
+		seedMinimalProject(orgID, "proj-5952-recent", "RECENT1", "team-5952-recent", "")
+		known := recentHealthDay(3)
+		latest := recentHealthDay(0)
+		seedRisk(orgID, "team", "team-5952-recent", "high", 0.70, known, known.Add(6*time.Hour))
+		seedRisk(orgID, "team", "team-5952-recent", "unknown", 0, latest, latest.Add(6*time.Hour))
+		fact := readHealth(orgID, projectSubject("linear", "proj-5952-recent"), contextfabric.FactQuery{})
+		if fact == nil {
+			t.Fatal("facts = none, want a served project roll-up")
+		}
+		if got := fact.Fields["severity"].String; got == nil || *got != "high" {
+			t.Fatalf("severity = %#v, want high (the known band 3 days earlier, not the literal latest unknown day)", fact.Fields["severity"])
+		}
+		if got := fact.Fields["severity_as_of"].String; got == nil || *got != known.Format("2006-01-02") {
+			t.Fatalf("severity_as_of = %#v, want %s", fact.Fields["severity_as_of"], known.Format("2006-01-02"))
+		}
+		rows := fact.Fields["risk_breakdown"].Rows
+		if len(rows) != 1 {
+			t.Fatalf("risk_breakdown rows = %#v, want 1", rows)
+		}
+		if got := rows[0].Fields["severity"].String; got == nil || *got != "high" {
+			t.Fatalf("risk_breakdown row severity = %#v, want high (the same known-preferring pick the aggregate used)", rows[0].Fields["severity"])
+		}
+	})
+
+	// The everKnownRowCount split, proven against the REAL aggregate SQL
+	// rather than a canned row: a project's ONLY reachable row carries a
+	// real band, but it is stale -- severity must be absent with the STALE
+	// reason, never the never-known one, which only holds if
+	// countIf(raw_band > 0) is genuinely computed without the freshness
+	// filter countIf(band > 0) applies.
+	t.Run("project_rollup_known_band_stale_discloses_stale_reason_not_never_known", func(t *testing.T) {
+		const orgID = "org-5952-project-stale-only"
+		seedMinimalProject(orgID, "proj-5952-stale", "STALE1", "team-5952-stale", "")
+		stale := recentHealthDay(30)
+		seedRisk(orgID, "team", "team-5952-stale", "elevated", 0.55, stale, stale.Add(6*time.Hour))
+		fact := readHealth(orgID, projectSubject("linear", "proj-5952-stale"), contextfabric.FactQuery{})
+		if fact == nil {
+			t.Fatal("facts = none, want a served project roll-up (the breakdown row is real)")
+		}
+		if _, ok := fact.Fields["severity"]; ok {
+			t.Fatalf("fields = %#v, want severity absent", fact.Fields)
+		}
+		if got := fact.Fields["severity_unavailable_reason"].String; got == nil || *got != "known_severity_stale_beyond_freshness_window" {
+			t.Fatalf("severity_unavailable_reason = %#v, want known_severity_stale_beyond_freshness_window (a real band existed, only stale -- never never-known)", fact.Fields["severity_unavailable_reason"])
 		}
 	})
 }
