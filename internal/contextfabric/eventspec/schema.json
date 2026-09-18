@@ -1782,7 +1782,8 @@
           "declined_terms_diverge",
           "declined_hint_unservable",
           "declined_bound_reached",
-          "declined_not_grouped_cohort"
+          "declined_not_grouped_cohort",
+          "declined_not_ranking_goal"
         ]
       },
       {
@@ -1792,7 +1793,8 @@
         "closed_vocabulary": [
           "none",
           "count_kind_collapse",
-          "compare_grouped_collapse"
+          "compare_grouped_collapse",
+          "compare_ranking_collapse"
         ]
       },
       {

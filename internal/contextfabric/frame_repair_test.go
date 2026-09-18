@@ -951,6 +951,409 @@ func TestRequestedJudgmentForGoalsComposesEveryAcceptedGoal(t *testing.T) {
 	}
 }
 
+// THE BOUNDED I7 REPAIR FOR DISCOVERED_KIND, EXECUTED (CHAOS-6003).
+// rankingReceipt/compareOverDiscoveredCohort are the misread turn's
+// fixtures: a compare goal paired with rank_or_survey over a discovered
+// cohort (member team), the shape corpus row
+// cv-c4-discovered-rank-both-ends's traces show -- no question text is
+// carried, only its columns (family discovered_cohort_ranking, variant
+// discovered_kind, member_kind team).
+
+// rankingReceipt is the misread turn's receipt. Neither this repair's own
+// guard nor I7 itself reads a group/member hint, so this is the plain
+// fixture with no field overridden.
+func rankingReceipt() ModelExecutionReceipt {
+	return validModelReceiptFixture(ModelOperationInterpret)
+}
+
+// compareOverDiscoveredCohort is the misread proposal: a compare goal
+// paired with rank_or_survey over a discovered cohort.
+func compareOverDiscoveredCohort() QuestionFrame {
+	return QuestionFrame{
+		Goals:             []InvestigationGoal{GoalCompare, GoalRankOrSurvey},
+		SubjectExpression: discoveredExpression(SubjectTeam),
+		Temporal:          TemporalIntentCurrent,
+	}
+}
+
+type rankingRepairCell struct {
+	cell        string
+	receipt     func(*ModelExecutionReceipt)
+	frame       func() QuestionFrame
+	wantOutcome FrameValidationOutcome
+	// wantGoals is the carried frame's goal set, nil when the turn carries
+	// no frame.
+	wantGoals []InvestigationGoal
+	// wantAcceptedJudgment is the frame-validation line's own
+	// accepted_judgment value, checked only when wantGoals is non-nil. ""
+	// means the line must say `none` -- no repair populated it.
+	wantAcceptedJudgment string
+	wantLine             map[string]any
+}
+
+func rankingRefusedI7Line(decision string) map[string]any {
+	return map[string]any{
+		"outcome": "refused_invalid", "failed_invariant": "i7", "failure_detail": "compare_requires_explicit_set",
+		"frame_gate": "rejected:i7", "repair_decision": decision, "repair": "compare_ranking_collapse", "repair_invariant": "i7",
+		"repair_kind_before": "discovered_kind", "repair_kind_after": "none", "repair_member_kind": "none",
+		"repair_terms_match": "not_evaluated", "repair_attempts": float64(0),
+	}
+}
+
+func rankingAppliedLine() map[string]any {
+	return map[string]any{
+		"outcome": "repaired", "failed_invariant": "", "frame_gate": "passed", "repair_decision": "applied",
+		"repair": "compare_ranking_collapse", "repair_invariant": "i7",
+		"repair_kind_before": "discovered_kind", "repair_kind_after": "discovered_kind",
+		"repair_member_kind": "none", "repair_terms_match": "not_evaluated", "repair_attempts": float64(1),
+	}
+}
+
+// rankingRepairCells is the I7-over-discovered_kind bound's own domain
+// table: the whole cell set the invariant names -- goal sets (rank_or_survey
+// present/absent) x cohort kinds (discovered_kind and every sibling kind
+// this repair does NOT own) x the two controls a shared table needs (an
+// earlier invariant failing first, and a proposal I7 never touches).
+func rankingRepairCells() []rankingRepairCell {
+	withFrame := func(mutate func(*QuestionFrame)) func() QuestionFrame {
+		return func() QuestionFrame {
+			frame := compareOverDiscoveredCohort()
+			mutate(&frame)
+			return frame
+		}
+	}
+	return []rankingRepairCell{
+		{
+			cell:                 "compare with rank_or_survey over a discovered cohort drops compare",
+			receipt:              func(*ModelExecutionReceipt) {},
+			frame:                compareOverDiscoveredCohort,
+			wantOutcome:          FrameValidationOutcomeRepaired,
+			wantGoals:            []InvestigationGoal{GoalRankOrSurvey},
+			wantAcceptedJudgment: "a ranking or survey",
+			wantLine:             rankingAppliedLine(),
+		},
+		{
+			// A co-occurring goal outside {compare, rank_or_survey} is kept,
+			// unchanged, never dropped and never used to invent a second
+			// companion goal the grouped sibling would add.
+			cell:    "a third co-occurring goal is kept unchanged",
+			receipt: func(*ModelExecutionReceipt) {},
+			frame: withFrame(func(frame *QuestionFrame) {
+				frame.Goals = []InvestigationGoal{GoalCompare, GoalRankOrSurvey, GoalAssessState}
+			}),
+			wantOutcome:          FrameValidationOutcomeRepaired,
+			wantGoals:            []InvestigationGoal{GoalAssessState, GoalRankOrSurvey},
+			wantAcceptedJudgment: "the current state and a ranking or survey",
+			wantLine:             rankingAppliedLine(),
+		},
+		{
+			// THE INVARIANT'S OWN NEGATIVE: compare with NO rank_or_survey
+			// has no ranking reading to fall back to. Never repaired into a
+			// ranking nobody asked for -- stays a rejection.
+			cell:    "compare alone, with no rank_or_survey, is declined and stays refused",
+			receipt: func(*ModelExecutionReceipt) {},
+			frame: withFrame(func(frame *QuestionFrame) {
+				frame.Goals = []InvestigationGoal{GoalCompare}
+			}),
+			wantOutcome: FrameValidationOutcomeRefusedInvalid,
+			wantLine:    rankingRefusedI7Line("declined_not_ranking_goal"),
+		},
+		{
+			// compare with rank_or_survey over children_of_scope: not this
+			// repair's cohort shape. repairCompareGroupedCollapse (which
+			// runs first in frameRepairTable) already declined it as
+			// declined_not_grouped_cohort; this repair passes that decision
+			// through rather than recording a second, competing decline.
+			cell:    "compare with rank_or_survey over a scoped cohort has no evidenced reading and is declined",
+			receipt: func(*ModelExecutionReceipt) {},
+			frame: withFrame(func(frame *QuestionFrame) {
+				frame.SubjectExpression = scopedExpression(SubjectTeam)
+			}),
+			wantOutcome: FrameValidationOutcomeRefusedInvalid,
+			wantLine: func() map[string]any {
+				line := compareRefusedI7Line("declined_not_grouped_cohort")
+				line["repair_kind_before"] = "children_of_scope"
+				return line
+			}(),
+		},
+		{
+			// compare with rank_or_survey over a named subject: same class
+			// of pass-through.
+			cell:    "compare with rank_or_survey over a named subject has no evidenced reading and is declined",
+			receipt: func(*ModelExecutionReceipt) {},
+			frame: withFrame(func(frame *QuestionFrame) {
+				frame.SubjectExpression = SubjectExpression{Kind: SubjectExpressionNamed, Named: &NamedSubjectExpression{Terms: []string{repairAnchorTerm}}}
+			}),
+			wantOutcome: FrameValidationOutcomeRefusedInvalid,
+			wantLine: func() map[string]any {
+				line := compareRefusedI7Line("declined_not_grouped_cohort")
+				line["repair_kind_before"] = "named_subject"
+				return line
+			}(),
+		},
+		{
+			// compare with rank_or_survey over organization_scope: same
+			// class of pass-through.
+			cell:    "compare with rank_or_survey over organization scope has no evidenced reading and is declined",
+			receipt: func(*ModelExecutionReceipt) {},
+			frame: withFrame(func(frame *QuestionFrame) {
+				frame.SubjectExpression = SubjectExpression{Kind: SubjectExpressionOrganizationScope, Org: &OrganizationScopeExpression{}}
+			}),
+			wantOutcome: FrameValidationOutcomeRefusedInvalid,
+			wantLine: func() map[string]any {
+				line := compareRefusedI7Line("declined_not_grouped_cohort")
+				line["repair_kind_before"] = "organization_scope"
+				return line
+			}(),
+		},
+		{
+			// grouped_members is the SIBLING repair's own shape
+			// (repairCompareGroupedCollapse, CHAOS-5839): it applies and
+			// adds explain_change (its own unconditional companion goal),
+			// resolved before this repair runs, so this repair's guard
+			// (Failure.Invariant no longer i7 once a repair has applied)
+			// never touches the outcome the sibling already settled.
+			cell:    "grouped_members is the sibling repair's shape, resolved before this one runs",
+			receipt: func(r *ModelExecutionReceipt) { r.GroupKind = SubjectTeam; r.RequestedSubjectKind = SubjectProject },
+			frame: withFrame(func(frame *QuestionFrame) {
+				frame.SubjectExpression = groupedExpression(SubjectProject, SubjectTeam)
+				frame.Temporal = TemporalIntentPeriodComparison
+			}),
+			wantOutcome:          FrameValidationOutcomeRepaired,
+			wantGoals:            []InvestigationGoal{GoalAssessState, GoalRankOrSurvey, GoalExplainChange},
+			wantAcceptedJudgment: "the current state and a ranking or survey and an explanation of the change",
+			wantLine:             compareAppliedLine(),
+		},
+		{
+			// An explicit comparison set is NEVER repaired away: I7 itself
+			// never fails for explicit_set, so neither I7 repair is ever
+			// invoked.
+			cell:    "control: an explicit comparison set never fails I7, whatever else the proposal states",
+			receipt: func(*ModelExecutionReceipt) {},
+			frame: withFrame(func(frame *QuestionFrame) {
+				frame.SubjectExpression = SubjectExpression{Kind: SubjectExpressionExplicitSet, Explicit: &ExplicitSetExpression{Operands: []SubjectOperand{
+					{Kind: SubjectOperandNamed, Named: &NamedSubjectExpression{Terms: []string{"operand-a"}}},
+					{Kind: SubjectOperandNamed, Named: &NamedSubjectExpression{Terms: []string{"operand-b"}}},
+				}}}
+			}),
+			wantOutcome: FrameValidationOutcomeValid,
+			wantGoals:   []InvestigationGoal{GoalCompare, GoalRankOrSurvey},
+			wantLine:    notApplicableLine("valid", "", "passed"),
+		},
+		{
+			// The repaired frame (goals: rank_or_survey, describe_trend)
+			// still fails I8 without a trend-compatible temporal -- refused
+			// with the invariant the repair could not clear, never relaxed
+			// to serve it anyway.
+			cell:    "the repaired frame still fails I8 without a trend-compatible temporal",
+			receipt: func(*ModelExecutionReceipt) {},
+			frame: withFrame(func(frame *QuestionFrame) {
+				frame.Goals = []InvestigationGoal{GoalCompare, GoalRankOrSurvey, GoalDescribeTrend}
+			}),
+			wantOutcome: FrameValidationOutcomeRefusedInvalid,
+			wantLine: map[string]any{
+				"outcome": "refused_invalid", "failed_invariant": "i8", "failure_detail": "trend_requires_non_current_temporal",
+				"frame_gate": "rejected:i8", "repair_decision": "refused_after_repair", "repair_invariant": "i7",
+				"repair_kind_before": "discovered_kind", "repair_kind_after": "discovered_kind",
+				"repair_member_kind": "none", "repair_terms_match": "not_evaluated", "repair_attempts": float64(1),
+			},
+		},
+		{
+			cell:    "an earlier A1 invariant (I15, empty goals) fails first",
+			receipt: func(*ModelExecutionReceipt) {},
+			frame: withFrame(func(frame *QuestionFrame) {
+				frame.Goals = []InvestigationGoal{}
+			}),
+			wantOutcome: FrameValidationOutcomeRefusedInvalid,
+			wantLine:    notApplicableLine("refused_invalid", "i15", "rejected:i15"),
+		},
+		{
+			cell:    "control: rank_or_survey alone never fails I7",
+			receipt: func(*ModelExecutionReceipt) {},
+			frame: withFrame(func(frame *QuestionFrame) {
+				frame.Goals = []InvestigationGoal{GoalRankOrSurvey}
+			}),
+			wantOutcome: FrameValidationOutcomeValid,
+			wantGoals:   []InvestigationGoal{GoalRankOrSurvey},
+			wantLine:    notApplicableLine("valid", "", "passed"),
+		},
+	}
+}
+
+// TestTheCompareRankingRepairIsBounded executes every clause of the I7
+// bound (discovered_kind, CHAOS-6003) through the production interpreter.
+func TestTheCompareRankingRepairIsBounded(t *testing.T) {
+	for _, testCase := range rankingRepairCells() {
+		t.Run(testCase.cell, func(t *testing.T) {
+			receipt := rankingReceipt()
+			testCase.receipt(&receipt)
+			run := interpretForRepair(t, receipt, testCase.frame(), []string{repairAnchorTerm})
+
+			if run.receipt.FrameOutcome != testCase.wantOutcome {
+				t.Errorf("receipt frame outcome = %q, want %q", run.receipt.FrameOutcome, testCase.wantOutcome)
+			}
+			switch {
+			case testCase.wantGoals == nil && run.outcome.Frame != nil:
+				t.Errorf("the turn carries a %v frame, want none", run.outcome.Frame.Goals)
+			case testCase.wantGoals != nil && run.outcome.Frame == nil:
+				t.Errorf("the turn carries no frame, want goals %v (gate %s)", testCase.wantGoals, run.outcome.Gate.Observable())
+			case testCase.wantGoals != nil && !reflect.DeepEqual(run.outcome.Frame.Goals, testCase.wantGoals):
+				t.Errorf("carried frame goals = %v, want %v", run.outcome.Frame.Goals, testCase.wantGoals)
+			}
+			if testCase.wantGoals == nil && !run.outcome.Gate.Refuses() {
+				t.Errorf("gate %s does not refuse a turn that carries no frame", run.outcome.Gate.Observable())
+			}
+			if testCase.wantGoals != nil && run.outcome.Gate.Refuses() {
+				t.Errorf("gate %s refuses a turn that carries a frame", run.outcome.Gate.Observable())
+			}
+			assertRepairLine(t, run.line, testCase.wantLine)
+			assertGoalsLogValue(t, run.line, "accepted_goals", testCase.wantGoals)
+			assertRepairLine(t, run.line, map[string]any{"accepted_judgment": noneWhenEmpty(testCase.wantAcceptedJudgment)})
+		})
+	}
+}
+
+// rankingRepairAtTheBound calls the production repair step on the
+// compare-ranking proposal's own refused result, carrying `attempts` prior
+// attempts.
+func rankingRepairAtTheBound(t *testing.T, attempts int) FrameValidationResult {
+	t.Helper()
+	receipt := rankingReceipt()
+	proposal := compareOverDiscoveredCohort()
+	refused := validateAgainstInterpretation(receipt, proposal, ShapeSingleSubject)
+	if refused.Outcome != FrameValidationOutcomeRefusedInvalid || refused.Failure.Invariant != FrameInvariantI7 {
+		t.Fatalf("fixture defect: the compare-ranking proposal validated to %q/%q without repair", refused.Outcome, refused.Failure.Invariant)
+	}
+	refused.Repair.Attempts = attempts
+	return repairCompareRankingCollapse(receipt, proposal, ShapeSingleSubject, nil, refused)
+}
+
+// TestTheCompareRankingRepairRunsAtMostOnce holds the bound on attempts, the
+// same shape held for the I9 and grouped-I7 repairs.
+func TestTheCompareRankingRepairRunsAtMostOnce(t *testing.T) {
+	t.Parallel()
+	fresh := rankingRepairAtTheBound(t, 0)
+	if fresh.Outcome != FrameValidationOutcomeRepaired || fresh.Repair.Decision != FrameRepairApplied || fresh.Repair.Attempts != 1 {
+		t.Fatalf("control: fresh result outcome/decision/attempts = %q/%q/%d, want repaired/applied/1", fresh.Outcome, fresh.Repair.Decision, fresh.Repair.Attempts)
+	}
+	exhausted := rankingRepairAtTheBound(t, frameRepairBound)
+	if exhausted.Outcome != FrameValidationOutcomeRefusedInvalid || exhausted.Failure.Invariant != FrameInvariantI7 {
+		t.Fatalf("a result at the bound was repaired again: outcome %q invariant %q", exhausted.Outcome, exhausted.Failure.Invariant)
+	}
+	if exhausted.Repair.Decision != FrameRepairDeclinedBoundReached || exhausted.Repair.Attempts != frameRepairBound || exhausted.Repair.KindAfter != "" {
+		t.Fatalf("repair at the bound = %+v, want declined_bound_reached with %d attempts and no repaired kind", exhausted.Repair, frameRepairBound)
+	}
+}
+
+// TestCompareRankingRepairDecisionsAreInTheClosedVocabulary holds that this
+// repair's own decline decisions are members of the closed vocabulary
+// array, not only constants a call site names.
+func TestCompareRankingRepairDecisionsAreInTheClosedVocabulary(t *testing.T) {
+	for _, want := range []FrameRepairDecision{FrameRepairDeclinedNotRankingGoal} {
+		found := false
+		for _, member := range FrameRepairDecisionVocabulary() {
+			if member == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("%q is not a member of FrameRepairDecisionVocabulary()", want)
+		}
+	}
+}
+
+// newRankingRepairEngine drives the production engine over the misread
+// compare-ranking proposal, with a synthesizer SPY -- the same shape
+// newCompareRepairEngine uses for the grouped sibling, proving the
+// RequestedJudgment carry (already generic in model_runtime.go) reaches
+// synthesis for THIS repair too, not only the one PR575 added it for.
+func newRankingRepairEngine(t *testing.T) (*Engine, *[]SynthesisInput) {
+	t.Helper()
+	logs := captureEngineLogger(t)
+	receipt := rankingReceipt()
+	proposal := compareOverDiscoveredCohort()
+	receipt.QuestionFrame = &proposal
+	store := &staticResultStore{results: map[string]InvestigationResult{}}
+	graph := &retrievalRecordingGraph{graphReaderStub: graphReaderStub{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+		context: GraphContext{
+			Cohort: countingCohort(SubjectTeam, 2), Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
+			FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
+			Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		},
+	}}
+	captured := make([]SynthesisInput, 0, 1)
+	interpretation := repairInterpretation([]string{repairAnchorTerm})
+	interpretation.RequestedJudgment = "compare"
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: RuntimeQuestionInterpreter{
+			Runtime:        fakeModelRuntime{interpreted: interpretation, receipt: receipt},
+			Sink:           &fakeReceiptSink{},
+			FrameTelemetry: logs.telemetry,
+			Requirements:   registryDeriver{},
+		},
+		Graph: graph,
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{
+				Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{},
+			}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(_ context.Context, _ storage.Principal, input SynthesisInput) (InvestigationResult, error) {
+			captured = append(captured, input)
+			return InvestigationResult{
+				Status: InvestigationComplete, DirectJudgment: "Ranked.", CurrentState: "Nominal.",
+				StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{},
+				Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{},
+				ClaimedFacts: []ClaimedFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				DeterministicAnswer: "Ranked.", Warnings: []string{},
+				Versions: VersionSet{
+					Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1",
+					InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1",
+				},
+			}, nil
+		}),
+		Results:      store,
+		Telemetry:    &recordingTelemetry{},
+		Requirements: registryDeriver{},
+	}, EngineOptions{
+		ServiceVersion: "acr-test",
+		Now:            func() time.Time { return time.Unix(600, 0).UTC() },
+		NewResultID:    func() string { return "result_ranking_repair_01" },
+	})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+	return engine, &captured
+}
+
+// TestTheRepairedRankingJudgmentReachesSynthesis drives Engine.Investigate
+// over the production interpreter: synthesis receives
+// Interpretation.RequestedJudgment stating the ACCEPTED shape (a ranking or
+// survey), never the model's pre-repair "compare".
+func TestTheRepairedRankingJudgmentReachesSynthesis(t *testing.T) {
+	engine, captured := newRankingRepairEngine(t)
+	request := validInvestigationRequestWithConfirmedWindow()
+	request.RequestID = "request_ranking_repair_01"
+
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_repair"}, request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Status != InvestigationComplete {
+		t.Fatalf("status = %q (basis %q, limitations %#v), want complete: the repaired turn was not served", result.Status, result.RefusalBasis, result.Limitations)
+	}
+	if len(*captured) != 1 {
+		t.Fatalf("synthesizer calls = %d, want exactly 1", len(*captured))
+	}
+	got := (*captured)[0].Interpretation.RequestedJudgment
+	want := "a ranking or survey"
+	if got != want {
+		t.Fatalf("SynthesisInput.Interpretation.RequestedJudgment = %q, want %q (the fixture's own pre-repair value was %q)", got, want, "compare")
+	}
+}
+
 // TestEveryFrameRepairDecisionHasAnExecutedDriver holds, over the WHOLE
 // closed vocabulary and both repairs together, what
 // TestTheCountKindRepairIsBounded and TestTheCompareGroupedRepairIsBounded
@@ -979,6 +1382,15 @@ func TestEveryFrameRepairDecisionHasAnExecutedDriver(t *testing.T) {
 	}
 	for _, attempts := range []int{0, frameRepairBound} {
 		produced[compareRepairAtTheBound(t, attempts).Repair.Decision] = true
+	}
+	for _, testCase := range rankingRepairCells() {
+		receipt := rankingReceipt()
+		testCase.receipt(&receipt)
+		run := interpretForRepair(t, receipt, testCase.frame(), []string{repairAnchorTerm})
+		produced[FrameRepairDecision(run.line["repair_decision"].(string))] = true
+	}
+	for _, attempts := range []int{0, frameRepairBound} {
+		produced[rankingRepairAtTheBound(t, attempts).Repair.Decision] = true
 	}
 	for _, member := range FrameRepairDecisionVocabulary() {
 		if !produced[member] {
@@ -1343,6 +1755,14 @@ func repairTableFixtures() []repairTableFixture {
 			name:            "compare_grouped_collapse",
 			receipt:         compareGroupedReceipt(),
 			frame:           compareOverGroupedCohort(),
+			shape:           ShapeSingleSubject,
+			terms:           []string{repairAnchorTerm},
+			zeroCarryFields: map[string]bool{"ScopeAnchorKind": true},
+		},
+		{
+			name:            "compare_ranking_collapse",
+			receipt:         rankingReceipt(),
+			frame:           compareOverDiscoveredCohort(),
 			shape:           ShapeSingleSubject,
 			terms:           []string{repairAnchorTerm},
 			zeroCarryFields: map[string]bool{"ScopeAnchorKind": true},
