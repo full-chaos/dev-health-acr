@@ -477,10 +477,11 @@ func bindAnchorOnProof(in anchorBindingInput) (AnchorBinding, anchorBindingPropo
 	carried := from.active()
 	var proposal anchorBindingProposal
 	switch {
-	// A receipt that states no kind decides no kind: the effective kind falls
-	// back to the carry, then to the reading, rather than becoming the empty
-	// kind that admits every committed subject.
-	case in.Receipt != nil && in.Receipt.AppliedKind != "":
+	// The receipt is always a redeemed subject_anchor (observeReceipt keeps no
+	// other member), and every option validator refuses an offer with no kind,
+	// so AppliedKind is never empty here. Guarding it again would be a second
+	// copy of that decision with no reachable input.
+	case in.Receipt != nil:
 		proposal.EffectiveKind = in.Receipt.AppliedKind
 	case carried:
 		proposal.EffectiveKind = from.Kind
@@ -550,11 +551,13 @@ func bindAnchorOnProof(in anchorBindingInput) (AnchorBinding, anchorBindingPropo
 		return unbound(AnchorBindingReasonNoProof), proposal
 	}
 
+	// Every lookup in this set is by a PROVED ref, and provenAnchors admits
+	// only identifying ones, so a hint that names no identity can never be
+	// found here. Filtering it out again would be a second copy of that one
+	// decision.
 	caller := map[anchorRef]bool{}
 	for _, hint := range in.CallerHints {
-		if ref := (anchorRef{Kind: hint.Kind, ID: hint.ID}); ref.identifies() {
-			caller[ref] = true
-		}
+		caller[anchorRef{Kind: hint.Kind, ID: hint.ID}] = true
 	}
 	if !carried {
 		switch len(proposal.Proven) {

@@ -54,6 +54,12 @@ func TestTheBinderDecidesAPersistableBindingForEveryAdmittedHint(t *testing.T) {
 		{"nothing proven", nil},
 		{"the held identity proven", []anchorRef{bindAlpha}},
 		{"another identity proven", []anchorRef{bindGamma}},
+		// A committed subject that names no identity is no proof either: the
+		// binder would otherwise bind an anchor with no id, or no kind, and
+		// its own validator refuses both.
+		{"a committed subject with no canonical id", []anchorRef{{Kind: SubjectRepository}}},
+		{"a committed subject with no kind", []anchorRef{{ID: "repository:bind-no-kind"}}},
+		{"one identity and one subject with no canonical id", []anchorRef{bindAlpha, {Kind: SubjectRepository}}},
 	}
 
 	cells := 0
@@ -78,6 +84,14 @@ func TestTheBinderDecidesAPersistableBindingForEveryAdmittedHint(t *testing.T) {
 					if err := ValidateAnchorBinding(to); err != nil {
 						t.Errorf("%s: the binder decided a binding its own validator refuses: %v (to=%+v)", name, err, to)
 						continue
+					}
+					// Nothing that names no identity may reach the decision,
+					// whichever field it would have landed in.
+					if (to.Kind == "") != (to.CanonicalID == "") {
+						t.Errorf("%s: a half-named anchor: kind=%q id=%q", name, to.Kind, to.CanonicalID)
+					}
+					if (to.ContenderKind == "") != (to.ContenderID == "") {
+						t.Errorf("%s: a half-named contender: kind=%q id=%q", name, to.ContenderKind, to.ContenderID)
 					}
 					if shape.hint.ID != "" {
 						continue
@@ -333,6 +347,19 @@ func TestTheLineNamesTheMemberKindAndTheAnchorTermMatch(t *testing.T) {
 	if !strings.Contains(line["committed_subjects"], bindAlpha.ID) {
 		t.Errorf("the subject is still committed and must still be listed: %q", line["committed_subjects"])
 	}
+
+	// One subject committed twice is ONE matched identity: the key is a set of
+	// identities, so an operator reading it counts anchors, not commits.
+	twice, twiceBases := proofOf(CommitBasisAuthoritativeIdentity, bindAlpha, bindAlpha)
+	if len(twice.Committed) != 2 {
+		t.Fatalf("fixture defect: %d committed", len(twice.Committed))
+	}
+	repeated := in
+	repeated.Resolution, repeated.Bases = twice, twiceBases
+	line = anchorBindingLineValues(t, repeated)
+	if got, want := line["anchor_term_matched_ids"], "["+string(bindAlpha.Kind)+":"+bindAlpha.ID+"]"; got != want {
+		t.Errorf("the same subject committed twice: anchor_term_matched_ids = %q, want %q", got, want)
+	}
 }
 
 // TestARequestCarriesOneLinePerSavedResultAndSite is the declared
@@ -467,6 +494,15 @@ func TestARowNearTheCapDropsTheMemberAndNeverTheCapture(t *testing.T) {
 	attached, attachedEvent := capture.withAnchorShadow(tracker()).attachAnchorBinding(BudgetAssertDecisive, InvestigationResult{ResultID: "result_near_cap_control"})
 	if attachedEvent.Persisted != "" || bindingMember(attached.Write.State) == nil || attached.EncodedBytes <= len(roomy) {
 		t.Fatalf("control: persisted=%q bytes=%d (base %d), want the member attached", attachedEvent.Persisted, attached.EncodedBytes, len(roomy))
+	}
+	// The capture's own byte count is what the cap is measured against, so it
+	// is the encoded length of the row that will be written, exactly.
+	writtenBytes, err := EncodeSemanticState(attached.Write.State)
+	if err != nil {
+		t.Fatalf("control: the attached row must encode: %v", err)
+	}
+	if attached.EncodedBytes != len(writtenBytes) {
+		t.Fatalf("control: the capture reports %d bytes for a row that encodes to %d -- the cap would be measured against the wrong number", attached.EncodedBytes, len(writtenBytes))
 	}
 	t.Logf("control: %d bytes of %d with the member attached", attached.EncodedBytes, SemanticStateMaxEncodedBytes)
 }
