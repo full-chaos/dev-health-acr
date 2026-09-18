@@ -602,7 +602,7 @@ func TestRecordConfirmedNeedLedger_ForwardsSourceAndAppliedKinds(t *testing.T) {
 		contractsv1.ContextFabricStructureNeedSubjectAnchor: {Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: contractsv1.ContextFabricSubjectProject, AppliedValue: "p"},
 	}
 	ledger := confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerHit, SourceResultID: "result_parent"}
-	engine.recordConfirmedNeedLedger(context.Background(), acceptancePrincipal(), ledger, applied, CountPopulationScopeAnchorCommitted, CaptureSkipReasonNotApplicable, ConfirmedAnchorAgreementAgree, contractsv1.ContextFabricStructureDispositionApplied)
+	engine.recordConfirmedNeedLedger(context.Background(), acceptancePrincipal(), ledger, applied, CountPopulationScopeAnchorCommitted, CaptureSkipReasonNotApplicable, ConfirmedAnchorAgreementAgree, contractsv1.ContextFabricStructureDispositionApplied, subjectSubstitutionDecision{Outcome: SubjectSubstitutionNotEvaluated, Origin: SubjectSubstitutionOriginNotApplicable})
 
 	if len(telemetry.confirmedNeedLedgers) != 1 {
 		t.Fatalf("confirmedNeedLedgers = %#v, want exactly one record", telemetry.confirmedNeedLedgers)

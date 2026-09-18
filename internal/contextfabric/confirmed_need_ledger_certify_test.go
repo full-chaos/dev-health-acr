@@ -57,17 +57,23 @@ func recordConfirmedNeedLedgerJSON(requestID string, event contextfabric.Confirm
 // fire on an early exit).
 func baseConfirmedNeedLedgerEvent() contextfabric.ConfirmedNeedLedgerEvent {
 	return contextfabric.ConfirmedNeedLedgerEvent{
-		Outcome:                contextfabric.ConfirmedNeedLedgerHit,
-		SourceResultID:         "result_parent_1",
-		AppliedMembers:         []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor},
-		AppliedAnchorKind:      contractsv1.ContextFabricSubjectRepository,
-		AppliedAnchorValueHash: "abc123",
-		AppliedAnchorBasis:     contextfabric.ConfirmedNeedBasisEngineCommitted,
-		Dropped:                nil,
-		AnchorAgreement:        contextfabric.ConfirmedAnchorAgreementAgree,
-		AnchorDisposition:      contractsv1.ContextFabricStructureDispositionApplied,
-		CaptureDecision:        contextfabric.CountPopulationScopeAnchorCommitted,
-		CaptureSkipReason:      contextfabric.CaptureSkipReasonNotApplicable,
+		Outcome:                        contextfabric.ConfirmedNeedLedgerHit,
+		SourceResultID:                 "result_parent_1",
+		AppliedMembers:                 []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor},
+		AppliedAnchorKind:              contractsv1.ContextFabricSubjectRepository,
+		AppliedAnchorValueHash:         "abc123",
+		AppliedAnchorBasis:             contextfabric.ConfirmedNeedBasisEngineCommitted,
+		Dropped:                        nil,
+		AnchorAgreement:                contextfabric.ConfirmedAnchorAgreementAgree,
+		AnchorDisposition:              contractsv1.ContextFabricStructureDispositionApplied,
+		CaptureDecision:                contextfabric.CountPopulationScopeAnchorCommitted,
+		CaptureSkipReason:              contextfabric.CaptureSkipReasonNotApplicable,
+		SubstitutionGuard:              contextfabric.SubjectSubstitutionSameSubject,
+		SubstitutionOrigin:             contextfabric.SubjectSubstitutionOriginResolver,
+		SubstitutionParentKind:         contractsv1.ContextFabricSubjectRepository,
+		SubstitutionParentValueHash:    "abc123",
+		SubstitutionCommittedKind:      contractsv1.ContextFabricSubjectRepository,
+		SubstitutionCommittedValueHash: "abc123",
 	}
 }
 
@@ -148,6 +154,18 @@ func TestEveryClosedValueOnTheConfirmedNeedLedgerLineCertifies(t *testing.T) {
 		},
 		"capture_skip_reason": func(e *contextfabric.ConfirmedNeedLedgerEvent, v string) {
 			e.CaptureSkipReason = contextfabric.CaptureSkipReason(v)
+		},
+		"substitution_guard": func(e *contextfabric.ConfirmedNeedLedgerEvent, v string) {
+			e.SubstitutionGuard = contextfabric.SubjectSubstitutionOutcome(v)
+		},
+		"substitution_origin": func(e *contextfabric.ConfirmedNeedLedgerEvent, v string) {
+			e.SubstitutionOrigin = contextfabric.SubjectSubstitutionOrigin(v)
+		},
+		"substitution_parent_kind": func(e *contextfabric.ConfirmedNeedLedgerEvent, v string) {
+			e.SubstitutionParentKind = contractsv1.ContextFabricSubjectKind(v)
+		},
+		"substitution_committed_kind": func(e *contextfabric.ConfirmedNeedLedgerEvent, v string) {
+			e.SubstitutionCommittedKind = contractsv1.ContextFabricSubjectKind(v)
 		},
 	}
 

@@ -1245,7 +1245,7 @@ func TestRecordConfirmedNeedLedger_EmittedLines(t *testing.T) {
 		Outcome: ConfirmedNeedLedgerHit, SourceResultID: "result_need_parent_line",
 		Dropped: []ConfirmedNeedMemberDrop{{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, Reason: ConfirmedNeedMemberDropReverifyNotConfirmed}},
 	}
-	engine.recordConfirmedNeedLedger(context.Background(), acceptancePrincipal(), ledger, applied, CountPopulationScopeAnchorUnresolved, CaptureSkipReasonNotApplicable, ConfirmedAnchorAgreementNotApplicable, contractsv1.ContextFabricStructureDispositionVetoedConflict)
+	engine.recordConfirmedNeedLedger(context.Background(), acceptancePrincipal(), ledger, applied, CountPopulationScopeAnchorUnresolved, CaptureSkipReasonNotApplicable, ConfirmedAnchorAgreementNotApplicable, contractsv1.ContextFabricStructureDispositionVetoedConflict, subjectSubstitutionDecision{Outcome: SubjectSubstitutionNotEvaluated, Origin: SubjectSubstitutionOriginNotApplicable})
 	engine.recordConfirmedNeedLedgerWindow(context.Background(), acceptancePrincipal(), ledgerWindowApplication{Present: true, Decision: ConfirmedNeedLedgerWindowApplied, AppliedValue: windowAbsoluteAppliedValuePrefix + "1:2", SourceResultID: "result_need_window_line"})
 	engine.recordConfirmedNeedLedgerWindow(context.Background(), acceptancePrincipal(), ledgerWindowApplication{})
 
@@ -1311,7 +1311,7 @@ func TestRecordConfirmedNeedLedger_CaptureSkipReasonEmittedLines(t *testing.T) {
 			telemetry := NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
 			engine := mustReuseTestEngine(t, EngineDependencies{Results: &staticResultStore{results: map[string]InvestigationResult{}}, Telemetry: telemetry})
 			ledger := confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerMissNoReference, SourceResultID: ""}
-			engine.recordConfirmedNeedLedger(context.Background(), acceptancePrincipal(), ledger, nil, "", reason, ConfirmedAnchorAgreementNotApplicable, "")
+			engine.recordConfirmedNeedLedger(context.Background(), acceptancePrincipal(), ledger, nil, "", reason, ConfirmedAnchorAgreementNotApplicable, "", subjectSubstitutionDecision{Outcome: SubjectSubstitutionNotEvaluated, Origin: SubjectSubstitutionOriginNotApplicable})
 			var rec map[string]any
 			if err := json.Unmarshal(bytes.TrimRight(buf.Bytes(), "\n"), &rec); err != nil {
 				t.Fatalf("captured line is not JSON: %v -- line: %s", err, buf.String())

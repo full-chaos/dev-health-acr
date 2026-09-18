@@ -2461,6 +2461,10 @@ var (
 	contextFabricStructureDispositionArr  = contractsv1.ContextFabricStructureDispositionVocabulary()
 	contextFabricStructureDispositionToks = arrayTokens(contextFabricStructureDispositionArr[:])
 	captureSkipReasonTokens               = arrayTokens(contextfabric.CaptureSkipReasonVocabulary())
+	subjectSubstitutionOutcomeArr         = contextfabric.SubjectSubstitutionOutcomeVocabulary()
+	subjectSubstitutionOutcomeTokens      = arrayTokens(subjectSubstitutionOutcomeArr[:])
+	subjectSubstitutionOriginArr          = contextfabric.SubjectSubstitutionOriginVocabulary()
+	subjectSubstitutionOriginTokens       = arrayTokens(subjectSubstitutionOriginArr[:])
 )
 
 // ConfirmedNeedLedger is the per-need confirmation ledger's own trace: the
@@ -2511,6 +2515,25 @@ var ConfirmedNeedLedger = Event{
 		{Key: "anchor_disposition", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, contextFabricStructureDispositionToks...)},
 		{Key: "capture_decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, contextfabric.CountPopulationScopeDecisionVocabulary()...)},
 		{Key: "capture_skip_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: captureSkipReasonTokens},
+		// The subject-substitution guard's own four-part disclosure: what it
+		// decided, what produced this turn's subject, and both identities in
+		// the same hashed form every other value on this line carries. The
+		// four together are what let the decision be rebuilt from this line
+		// alone -- the parent's identity, this turn's identity, the evidence
+		// class, and the verdict.
+		{Key: "substitution_guard", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: subjectSubstitutionOutcomeTokens},
+		// The producer domain, exactly: which channel carried this turn's
+		// committed subject into resolution -- a hint redeemed from a
+		// prior-subject receipt, a hint the caller's own request carried, or
+		// neither, which leaves resolution's own reach over the question.
+		// "not_applicable" is the turn that committed no subject at all.
+		{Key: "substitution_origin", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: subjectSubstitutionOriginTokens},
+		{Key: "substitution_parent_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, contextFabricSubjectKindTokens...)},
+		// Open: confirmedNeedValueHash's own SHA-256/6-byte hex digest, empty
+		// when that side holds no identity.
+		{Key: "substitution_parent_value_hash", Type: FieldString, Presence: PresenceRequired},
+		{Key: "substitution_committed_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, contextFabricSubjectKindTokens...)},
+		{Key: "substitution_committed_value_hash", Type: FieldString, Presence: PresenceRequired},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }

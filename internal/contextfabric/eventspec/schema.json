@@ -1123,6 +1123,92 @@
         ]
       },
       {
+        "key": "substitution_guard",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_evaluated",
+          "no_parent_reference",
+          "parent_unreadable",
+          "parent_no_identity",
+          "no_committed_subject",
+          "same_subject",
+          "redeemed_choice",
+          "clarified_subject_changed",
+          "clarified_remembered_unavailable",
+          "refused_subject_changed",
+          "refused_remembered_unavailable"
+        ]
+      },
+      {
+        "key": "substitution_origin",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_applicable",
+          "prior_receipt",
+          "caller_hint",
+          "engine_carry",
+          "resolver"
+        ]
+      },
+      {
+        "key": "substitution_parent_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "substitution_parent_value_hash",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "substitution_committed_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "substitution_committed_value_hash",
+        "type": "string",
+        "presence": "required"
+      },
+      {
         "key": "request_id",
         "type": "string",
         "presence": "conditional",
