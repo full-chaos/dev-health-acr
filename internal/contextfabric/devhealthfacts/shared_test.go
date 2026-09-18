@@ -382,3 +382,22 @@ func TestCurrentAxisWithNoRowsIsNoDataNotAvailable(t *testing.T) {
 		})
 	}
 }
+
+// TestQueryVersionMovedPastTheHealthFreshnessWindowBump pins the CURRENT
+// query version away from the specific prior literal a period-delta
+// comparison must never be served under -- a candidate saved under that
+// prior version never issued the second as-of read the comparison depends
+// on. Every other test in this package reads the exported constant rather
+// than a re-spelled literal, which is correct for NOT hardcoding an
+// arbitrary string, but it also means a mutation reverting the bump would
+// pass every one of them: they would simply compare the (reverted)
+// constant against itself. This test is what would fail: the version must
+// have moved past the specific string it was before this comparison
+// shipped.
+func TestQueryVersionMovedPastTheHealthFreshnessWindowBump(t *testing.T) {
+	t.Parallel()
+	const versionBeforeThisComparisonShipped = "devhealthfacts.clickhouse.v10"
+	if devhealthfacts.QueryVersion == versionBeforeThisComparisonShipped {
+		t.Fatalf("QueryVersion = %q, want it moved past %q -- a stored candidate saved under that version never issued the second as-of read a period-delta comparison depends on and must not be served as though it had", devhealthfacts.QueryVersion, versionBeforeThisComparisonShipped)
+	}
+}

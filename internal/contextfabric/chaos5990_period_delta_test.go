@@ -244,6 +244,15 @@ func TestApplyPeriodDelta_IssuesGenuineSecondReadAndClassifiesTransition(t *test
 	if !event.PriorReadIssued {
 		t.Error("event.PriorReadIssued = false, want true -- a read genuinely ran")
 	}
+	wantComposed := statusCategoryFactKindComposition[SubjectTeam]
+	if len(event.ComposedKinds) != len(wantComposed) {
+		t.Fatalf("event.ComposedKinds = %v, want %v", event.ComposedKinds, wantComposed)
+	}
+	for i, kind := range wantComposed {
+		if event.ComposedKinds[i] != kind {
+			t.Errorf("event.ComposedKinds[%d] = %q, want %q", i, event.ComposedKinds[i], kind)
+		}
+	}
 	if event.TransitionCounts[PeriodDeltaTransitionImproved] != 1 {
 		t.Errorf("event.TransitionCounts[improved] = %d, want 1", event.TransitionCounts[PeriodDeltaTransitionImproved])
 	}
