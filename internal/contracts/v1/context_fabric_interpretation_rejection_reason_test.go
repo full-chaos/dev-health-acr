@@ -600,7 +600,7 @@ func TestRejectedFactRequirementKind(t *testing.T) {
 		}
 	})
 
-	t.Run("an earlier requirement rejects on a DIFFERENT clause first", func(t *testing.T) {
+	t.Run("the FIRST requirement rejects on a DIFFERENT clause than the SECOND one's kind", func(t *testing.T) {
 		// The soundness case that matters most: entry 0 fails on its
 		// PARAMETERS, so validate()'s own fact_requirements loop rejects q
 		// on ContextFabricInterpretationRejectionFactRequirementParameterInvalid

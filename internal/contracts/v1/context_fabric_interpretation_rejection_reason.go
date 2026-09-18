@@ -250,8 +250,8 @@ func DiagnoseContextFabricInterpretedQuestionRejection(q ContextFabricInterprete
 // is model output by construction, so it is returned here as its own named
 // function -- explicit at every call site that it is choosing to carry raw
 // text -- rather than folded into DiagnoseContextFabricInterpretedQuestionRejection's
-// own signature, whose entire contract up to now has been "every return is
-// a fixed constant, safe to log". A caller logging this value MUST
+// own signature, whose entire contract is "every return is a fixed
+// constant, safe to log". A caller logging this value MUST
 // sanitize/bound it itself (see contextfabric.SanitizeLogAttr); this
 // function makes no safety claim about the string it returns.
 //
@@ -268,9 +268,9 @@ func RejectedFactRequirementKind(q ContextFabricInterpretedQuestion) (string, bo
 	// DiagnoseContextFabricInterpretedQuestionRejection's own fact_requirements
 	// loop performs (statement 3) -- not an independent scan for "any
 	// invalid kind", which could name a LATER requirement than the one that
-	// actually caused the rejection (CHAOS-3784 round-4's soundness rule,
-	// applied here identically to a VALUE rather than a reason: it must be
-	// sound before it is complete).
+	// actually caused the rejection. A value must be sound before it is
+	// complete, the same discipline this file's reason diagnosis already
+	// applies to itself.
 	bounds := contextFabricWriteBounds
 	for _, requirement := range q.FactRequirements {
 		if requirement.validate(bounds) != nil {

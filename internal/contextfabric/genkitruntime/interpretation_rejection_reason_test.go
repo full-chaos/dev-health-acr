@@ -217,8 +217,7 @@ func TestInterpretDecisionLineSanitizesRejectedFactKind(t *testing.T) {
 	const marker = "MARKER_KIND_5a9c1e"
 	output := validInterpretationOutput()
 	// CRLF plus the marker: if SanitizeLogAttr were skipped, the raw value
-	// would split this JSON log line in two (go/log-injection, CWE-117) --
-	// the same attack shape CHAOS-5544 exists to close everywhere else.
+	// would split this JSON log line in two (go/log-injection, CWE-117).
 	output.FactRequirements = []factRequirementOutput{{Kind: marker + "\r\ninjected"}}
 
 	fields, receipt := interpretDecisionLine(t, output)

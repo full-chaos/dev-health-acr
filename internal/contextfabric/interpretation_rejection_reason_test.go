@@ -452,9 +452,9 @@ func TestInterpretationRejectedFactKindOfIsAbsentForEveryOtherRejection(t *testi
 // TestNewInterpretationRejectionLeavesRejectedFactKindEmpty pins the two
 // fact_registry.go NewInterpretationRejection callers' own contract: they
 // reject for ContextFabricInterpretationRejectionFactCapabilityParameterNotAllowed,
-// a DIFFERENT reason, and never set RejectedFactKind -- so a value from an
-// earlier call on the same *InterpretationRejection type can never leak
-// across an unrelated rejection.
+// a DIFFERENT reason, and never set RejectedFactKind -- so a value set on
+// one *InterpretationRejection instance can never leak across an unrelated
+// rejection built via a different construction path.
 func TestNewInterpretationRejectionLeavesRejectedFactKindEmpty(t *testing.T) {
 	t.Parallel()
 	err := NewInterpretationRejection(
