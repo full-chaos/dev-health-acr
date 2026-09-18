@@ -430,11 +430,11 @@ func subjectSubstitutionIssued(stored StoredInvestigationResult) bool {
 
 // guardIssuedRememberedOf is the remembered subject a guard-issued
 // clarification lists first, the zero SubjectRef when it lists none. The
-// guard lists it first, under its own receipt prefix, only beside the
-// listing prompt.
+// guard lists it first, under its own receipt prefix, and a clarification
+// that lists none carries no offer under that prefix.
 func guardIssuedRememberedOf(stored StoredInvestigationResult) SubjectRef {
 	resolution := stored.Result.SubjectResolution
-	if !subjectSubstitutionIssued(stored) || resolution.ClarificationPrompt != subjectSubstitutionClarificationPrompt || len(resolution.Candidates) == 0 {
+	if !subjectSubstitutionIssued(stored) || len(resolution.Candidates) == 0 {
 		return SubjectRef{}
 	}
 	first := resolution.Candidates[0]
@@ -495,7 +495,7 @@ type parentReceiptIssuers struct {
 // issues reports whether resultID's receipts are the parent's own offer.
 func (p parentReceiptIssuers) issues(resultID string) bool {
 	id := strings.TrimSpace(resultID)
-	if id == "" || p.named == "" {
+	if id == "" {
 		return false
 	}
 	if id == p.named || id == p.issuedFor {

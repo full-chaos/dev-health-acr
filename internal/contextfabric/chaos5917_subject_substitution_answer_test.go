@@ -650,3 +650,69 @@ func TestSubstitutionGuardServesTheParentsOwnOfferRedeemedWhileNamingItsClarific
 		t.Errorf("origin result = %q parent result = %q, want both %q", event.SubstitutionOriginResultID, event.SubstitutionParentResultID, parent.result.ResultID)
 	}
 }
+
+// TestSubstitutionGuardPublishesTheClarificationLinkOnTheLine reads, off the
+// production JSON line, the receipt that answered the guard's
+// clarification, the clarification that issued it, and the parent it
+// continued.
+func TestSubstitutionGuardPublishesTheClarificationLinkOnTheLine(t *testing.T) {
+	t.Parallel()
+	h := newNeedTurnHarness(t, nil)
+	parent, clarification, chosen := guardIssuedClarification(t, h, "request_5917_link_line")
+	buf := swapToJSONLedgerTelemetry(h)
+	request := continuingNeedTurn(needTurnRequest("request_5917_link_line_three", true), parent.result.ResultID)
+	request.Question = "And how does the second one compare over the same period?"
+	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: clarification.result.ResultID, ReceiptID: chosen}}
+	h.graph.response = substitutionResponse(substitutionRepoTwo, "request_5917_link_line_served")
+	if _, err := h.engine.Investigate(context.Background(), acceptancePrincipal(), request); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	line := lastLedgerJSONLine(t, buf)
+	want := map[string]string{
+		"substitution_guard":             string(SubjectSubstitutionRedeemedChoice),
+		"substitution_origin_result_id":  clarification.result.ResultID,
+		"substitution_origin_receipt_id": chosen,
+		"substitution_origin_issued_for": parent.result.ResultID,
+		"substitution_parent_result_id":  parent.result.ResultID,
+	}
+	for key, value := range want {
+		if got, ok := line[key]; !ok || got != value {
+			t.Errorf("%s = %v (present=%t), want %q", key, got, ok, value)
+		}
+	}
+}
+
+// TestSubstitutionGuardPublishesACancelledReReadOnTheLine: a context that
+// dies while the remembered subject is re-read withholds the offer, and the
+// production line carries the class, the verifier's own reason and the
+// context error.
+func TestSubstitutionGuardPublishesACancelledReReadOnTheLine(t *testing.T) {
+	t.Parallel()
+	h := newNeedTurnHarness(t, nil)
+	one := h.turn(needTurnRequest("request_5917_cancel_line_one", true), substitutionResponse(substitutionRepoOne, "receipt_5917_cancel_line_one"))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.engine.candidateVerifier = func(context.Context, storage.Principal, RequestedScope, ResolvedGraphBinding, contractsv1.ContextFabricSubjectKind, string) (bool, CandidateVerificationReason) {
+		cancel()
+		return true, CandidateVerificationValid
+	}
+	buf := swapToJSONLedgerTelemetry(h)
+	request := continuingNeedTurn(needTurnRequest("request_5917_cancel_line_two", true), one.result.ResultID)
+	request.Question = "And how does the second one compare over the same period?"
+	h.graph.response = substitutionResponse(substitutionRepoTwo, "receipt_5917_cancel_line_two")
+	served, _ := h.engine.Investigate(ctx, acceptancePrincipal(), request)
+	if len(served.SubjectResolution.Committed) != 0 {
+		t.Errorf("committed = %+v, want the substitute never served", served.SubjectResolution.Committed)
+	}
+	line := lastLedgerJSONLine(t, buf)
+	want := map[string]string{
+		"substitution_remembered_check":         string(SubjectSubstitutionRememberedCancelledDuring),
+		"substitution_remembered_reason":        string(CandidateVerificationValid),
+		"substitution_remembered_context_error": context.Canceled.Error(),
+	}
+	for key, value := range want {
+		if got, ok := line[key]; !ok || got != value {
+			t.Errorf("%s = %v (present=%t), want %q", key, got, ok, value)
+		}
+	}
+}
