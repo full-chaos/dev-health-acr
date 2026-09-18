@@ -230,6 +230,32 @@ func TestCHAOS5952HealthFreshnessWindowAgainstRealClickHouse(t *testing.T) {
 		}
 	})
 
+	// Two contributing scopes (team, repo) can tie on BAND -- both fresh
+	// "high" -- while their days differ. argMax's ORDER key must break
+	// that tie by day, not leave it to whichever physical row ClickHouse
+	// happens to pick: the promoted severity_as_of must be the LATEST of
+	// the two tied contributing days, matching the risk_breakdown row that
+	// actually carries that later day, never the earlier one.
+	t.Run("project_rollup_same_band_tie_picks_latest_contributing_day", func(t *testing.T) {
+		const orgID = "org-5952-project-tie"
+		repoID := "10000000-0000-0000-0000-000000000009"
+		seedMinimalProject(orgID, "proj-5952-tie", "TIE1", "team-5952-tie", repoID)
+		older := recentHealthDay(9)
+		newer := recentHealthDay(1)
+		seedRisk(orgID, "team", "team-5952-tie", "high", 0.80, older, older.Add(6*time.Hour))
+		seedRisk(orgID, "repo", repoID, "high", 0.85, newer, newer.Add(6*time.Hour))
+		fact := readHealth(orgID, projectSubject("linear", "proj-5952-tie"), contextfabric.FactQuery{})
+		if fact == nil {
+			t.Fatal("facts = none, want a served project roll-up")
+		}
+		if got := fact.Fields["severity"].String; got == nil || *got != "high" {
+			t.Fatalf("severity = %#v, want high (both contributing rows agree)", fact.Fields["severity"])
+		}
+		if got := fact.Fields["severity_as_of"].String; got == nil || *got != newer.Format("2006-01-02") {
+			t.Fatalf("severity_as_of = %#v, want %s (the LATER of the two tied-band contributing days, not the earlier one)", fact.Fields["severity_as_of"], newer.Format("2006-01-02"))
+		}
+	})
+
 	// The project-scope counterpart of the repo-scope "latest day unknown,
 	// known band 3 days earlier wins" case above: a team's own latest-day
 	// row is unknown, but a real band was known a few days earlier --

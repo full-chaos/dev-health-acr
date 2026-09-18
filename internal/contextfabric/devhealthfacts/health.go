@@ -1024,11 +1024,15 @@ ORDER BY project_key, day DESC`)
 // independent argMax calls, because four aggregates keyed by the same
 // ORDER expression have no guarantee of resolving a tie to the SAME
 // underlying row (this file's own package doc comment already documents
-// this exact failure mode for severity vs compounding_risk); a tie here
-// can only occur between rows sharing the IDENTICAL packed string (band is
-// a pure function of severity and day, and the packed string includes
-// both), so which physical row argMax picks among a tie is immaterial to
-// the value returned.
+// this exact failure mode for severity vs compounding_risk). band is a
+// function of severity alone (freshness only gates whether it counts at
+// all), so two DIFFERENT rows -- a team's fresh "high" and a repo's fresh
+// "high" on a different day -- routinely tie on band while their packed
+// strings differ; the ORDER key is therefore the tuple (band, day,
+// cityHash64(...)) so the tie resolves to the LATEST contributing day
+// first, and only falls to the hash for a genuine same-day tie, matching
+// this file's and workload.go's existing tuple-argMax convention for
+// deterministic tie-break.
 func (p *HealthProvider) queryProjectHealthSeverityMax(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byProject map[string]healthSeverityMaxRow, order []string, rowCount int, err error) {
 	ownershipPredicate := ownershipValidityPredicate(timeBound)
 	// CHAOS-5952: band is computed off the SAME freshnessIsKnownSQL/
@@ -1046,7 +1050,8 @@ func (p *HealthProvider) queryProjectHealthSeverityMax(ctx context.Context, orgI
 	countIf(band > 0),
 	countIf(raw_band > 0),
 	count(),
-	argMax(concat(scope, '` + healthSeverityWinnerDelimiter + `', scope_id, '` + healthSeverityWinnerDelimiter + `', severity, '` + healthSeverityWinnerDelimiter + `', day), band)
+	argMax(concat(scope, '` + healthSeverityWinnerDelimiter + `', scope_id, '` + healthSeverityWinnerDelimiter + `', severity, '` + healthSeverityWinnerDelimiter + `', day),
+		tuple(band, day, cityHash64(tuple(scope, scope_id, severity, day))))
 FROM (
 	SELECT project_key, scope, scope_id, severity, day,
 		multiIf(severity = 'high' AND ` + freshnessIsFreshSQL("day", timeBound) + `, 3, severity = 'elevated' AND ` + freshnessIsFreshSQL("day", timeBound) + `, 2, severity = 'low' AND ` + freshnessIsFreshSQL("day", timeBound) + `, 1, 0) AS band,
