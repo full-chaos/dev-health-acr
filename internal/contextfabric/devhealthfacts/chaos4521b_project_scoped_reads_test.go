@@ -339,8 +339,9 @@ func TestChaos4521b_AnUnattributedRowIsKeptButNotCountedAsATeam(t *testing.T) {
 			},
 			// Neither seeded row carries a p50 (HasP50Days=0 in both), so
 			// the aggregate honestly reports no known p50 across the same 2
-			// reachable rows.
-			extraTables: []fakeTable{{match: workloadP50MaxMatch, rows: [][]any{workloadP50MaxRow("linear", "proj-1", 0, 2, 0, "", "", false, false)}}},
+			// reachable rows -- one excluded for having no contributing
+			// team at all, the other for having a team but no p50.
+			extraTables: []fakeTable{{match: workloadP50MaxMatch, rows: [][]any{workloadP50MaxRow("linear", "proj-1", 0, 1, 1, 0, "", "", false, false)}}},
 		},
 	}
 	for _, testCase := range cases {

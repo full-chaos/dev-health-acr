@@ -161,6 +161,7 @@ func TestWorkloadProviderNoPersonLevelFields(t *testing.T) {
 		// CHAOS-5931: project-scope promotion disclosure fields.
 		"p50_basis": true, "p50_unavailable_reason": true,
 		"team_breakdown_rows_shown": true, "team_breakdown_rows_total": true,
+		"p50_known_count": true, "p50_excluded_unattributed_count": true, "p50_excluded_null_p50_count": true,
 	}
 	for _, fact := range result.Facts {
 		for field := range fact.Fields {
@@ -231,20 +232,26 @@ const workloadProjectRollupMatch = "ifNull(t.name, '')"
 // health.go's healthProjectRollupMatch/healthSeverityMaxMatch split, one
 // level further: there the two substrings are mutually exclusive, so order
 // did not matter; here it does).
-const workloadP50MaxMatch = "countIf(isNotNull(p50_days))"
+const workloadP50MaxMatch = "countIf(team_key != '' AND isNotNull(p50_days))"
 
 // workloadP50MaxRow shapes one queryProjectWorkloadP50Max output row:
-// (project_key, known_row_count, total_row_count, packed winner). The
-// packed winner joins p50_days, team_key, work_scope_id,
-// insufficient_history and high_variance with the real query's own
-// argMax(concat(...)) delimiter ("\x1f"); it is empty when knownRowCount is
-// 0 -- no known p50 to attribute to any one row.
-func workloadP50MaxRow(provider, projectID string, knownRowCount, totalRowCount int, winnerP50Days int64, winnerTeamKey, winnerWorkScopeID string, winnerInsufficientHistory, winnerHighVariance bool) []any {
+// (project_key, known, excluded_unattributed, excluded_null_p50, total,
+// packed winner). totalRowCount is computed AS THE SUM of the three
+// partition counts, never passed independently -- a test fixture cannot
+// express a dishonest partition (that is what the WL5931_rows_total_dishonest
+// / WL5931_partition_sum_dishonest needles exist to catch, IN the
+// production SQL, not in a test's own canned arithmetic). The packed
+// winner joins p50_days, team_key, work_scope_id, insufficient_history and
+// high_variance with the real query's own argMax(concat(...)) delimiter
+// ("\x1f"); it is empty when known is 0 -- no known, attributed p50 to
+// attribute to any one row.
+func workloadP50MaxRow(provider, projectID string, known, excludedUnattributed, excludedNullP50 int, winnerP50Days int64, winnerTeamKey, winnerWorkScopeID string, winnerInsufficientHistory, winnerHighVariance bool) []any {
 	winner := ""
-	if knownRowCount > 0 {
+	if known > 0 {
 		winner = strconv.FormatInt(winnerP50Days, 10) + "\x1f" + winnerTeamKey + "\x1f" + winnerWorkScopeID + "\x1f" + workloadBoolDigit(winnerInsufficientHistory) + "\x1f" + workloadBoolDigit(winnerHighVariance)
 	}
-	return []any{provider + ":" + projectID, uint64(knownRowCount), uint64(totalRowCount), winner}
+	total := known + excludedUnattributed + excludedNullP50
+	return []any{provider + ":" + projectID, uint64(known), uint64(excludedUnattributed), uint64(excludedNullP50), uint64(total), winner}
 }
 
 func workloadBoolDigit(b bool) string {
@@ -271,7 +278,7 @@ func workloadProjectRollupRow(provider, projectID, teamID, teamName, workScopeID
 func TestWorkloadProviderProjectRollupBreaksDownByTeamNeverAverages(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: workloadP50MaxMatch, rows: [][]any{workloadP50MaxRow("linear", "proj-1", 0, 2, 0, "", "", false, false)}},
+		{match: workloadP50MaxMatch, rows: [][]any{workloadP50MaxRow("linear", "proj-1", 0, 0, 2, 0, "", "", false, false)}},
 		{match: workloadBaseQueryMatch, rows: [][]any{
 			workloadProjectRollupRow("linear", "proj-1", "team-1", "Team One", "scope-a", 3.2, 0.8, 120, 1),
 			workloadProjectRollupRow("linear", "proj-1", "team-2", "Team Two", "scope-b", 9.0, 2.1, 40, 0),
@@ -429,7 +436,7 @@ func TestWorkloadProviderTeamReadsDailyWorkloadSeries(t *testing.T) {
 func TestWorkloadProviderProjectReadsDailyWorkloadSeries(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: workloadP50MaxMatch, rows: [][]any{workloadP50MaxRow("linear", "proj-1", 0, 1, 0, "", "", false, false)}},
+		{match: workloadP50MaxMatch, rows: [][]any{workloadP50MaxRow("linear", "proj-1", 0, 0, 1, 0, "", "", false, false)}},
 		{match: workloadBaseQueryMatch, rows: [][]any{
 			workloadProjectRollupRow("linear", "proj-1", "team-1", "Team One", "scope-a", 3.2, 0.8, 120, 1),
 		}},
@@ -492,7 +499,7 @@ func TestWorkloadProviderProjectReadsDailyWorkloadSeries(t *testing.T) {
 func TestWorkloadProviderProjectRollupBasisIsFactLevelScalar(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: workloadP50MaxMatch, rows: [][]any{workloadP50MaxRow("linear", "proj-1", 0, 1, 0, "", "", false, false)}},
+		{match: workloadP50MaxMatch, rows: [][]any{workloadP50MaxRow("linear", "proj-1", 0, 0, 1, 0, "", "", false, false)}},
 		{match: workloadBaseQueryMatch, rows: [][]any{
 			workloadProjectRollupRow("linear", "proj-1", "team-1", "Team One", "scope-a", 3.2, 0.8, 120, 1),
 		}},
