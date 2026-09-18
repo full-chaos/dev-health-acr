@@ -1583,13 +1583,35 @@ func (r *FactReadScopeResolver) Resolve(
 		if len(roots) == 0 {
 			roots = input.Roots
 		}
-		supported, _ := partitionBySupportedSubjectKind(roots, capability.SupportedSubjectKinds)
-		if len(supported) > 0 {
-			// At least one root is directly readable. Expansion is not
-			// needed, and adding derived subjects here would silently widen
-			// a requirement the caller scoped -- mixed direct+derived roots
-			// are stage 2's explicit case, gated on the same policy switch.
+		supported, unsupportedKinds := partitionBySupportedSubjectKind(roots, capability.SupportedSubjectKinds)
+		if len(unsupportedKinds) == 0 {
+			// EVERY root is directly readable. Expansion is not needed, and
+			// adding derived subjects here would silently widen a
+			// requirement the caller scoped -- mixed direct+derived roots
+			// for the SAME origin kind are stage 2's explicit case, gated
+			// on the same policy switch.
 			continue
+		}
+		// A root of a kind the capability answers directly must never
+		// suppress the decision for a SEPARATE, unsupported root in the
+		// same requirement -- a mixed {project,
+		// team} request against a capability that supports project
+		// directly but reaches team only through expansion still owes the
+		// team root its own expansion decision, disclosed gap included, the
+		// exact false "this could not be reached" the resolver's own
+		// package comment (line 12 above) exists to remove. Filtering
+		// roots to only the UNSUPPORTED kinds keeps every already-correct
+		// decision (single-kind requests, and the "every root already
+		// supported" short-circuit above) while resolving what a wider
+		// capability's direct answer does NOT already cover.
+		if len(supported) > 0 {
+			unsupportedRoots := make([]SubjectRef, 0, len(roots)-len(supported))
+			for _, root := range roots {
+				if !supportsSubjectKind(capability.SupportedSubjectKinds, root.Kind) {
+					unsupportedRoots = append(unsupportedRoots, root)
+				}
+			}
+			roots = unsupportedRoots
 		}
 		r.resolveRequirement(ctx, principal, &scope, requirement.Kind, roots, input.TimeContext)
 	}

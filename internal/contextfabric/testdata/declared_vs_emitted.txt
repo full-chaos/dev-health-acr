@@ -6,7 +6,7 @@
 # fields is a REVIEW question, not an automatic failure -- sufficiency
 # is a semantic judgement. What this artifact removes is the case
 # where nobody can see the pair at all.
-actual_completion	declares=work_item:[completion]	emits=[completed completed_at]
+actual_completion	declares=project:[completion],work_item:[completion]	emits=[archived_items cancelled_count completed completed_at completed_count completion_ratio counted_work_items member_kind rollup_basis unknown_status_count work_item_count]
 blockers	declares=work_item:[remaining_work]	emits=[blocked_by_work_item_id]
 continuous_integration	declares=ci_pipeline_run:[principal_drivers],repository:[principal_drivers]	emits=[avg_duration_minutes avg_queue_minutes day p90_duration_minutes pipelines_count status success_rate]
 deployments	declares=deployment:[principal_drivers],repository:[principal_drivers readiness]	emits=[day deploy_time_p50_hours deployments_count environment failed_deployments_count lead_time_p50_hours status]

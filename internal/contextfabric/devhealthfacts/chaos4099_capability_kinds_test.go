@@ -97,17 +97,26 @@ func TestChaos4099_RealProviderSubjectKindsStayUnwidened(t *testing.T) {
 // FactFlow and FactLandscape are ALSO excluded (CHAOS-4364, same reasoning):
 // flow.go/landscape.go both roll up to project via a real
 // team_project_ownership join.
+//
+// FactActualCompletion is ALSO excluded (CHAOS-5893): it answers for a
+// project directly, by a real work_items->projects join keyed on project
+// identity (never a team_project_ownership hop -- work_items carries its
+// own project_id/project_key columns), aggregating the same completed_at
+// definition the work-item grain uses into a disclosed rollup_basis/
+// work_item_count/completed_count -- see workitems.go's
+// readProjectActualCompletion doc comment.
 func TestChaos4099_NoCanonicalFactCapabilityAnswersForAProject(t *testing.T) {
 	t.Parallel()
 
 	realProjectJoinKinds := map[contextfabric.FactKind]bool{
-		contextfabric.FactMetrics:    true,
-		contextfabric.FactHealth:     true,
-		contextfabric.FactWorkload:   true,
-		contextfabric.FactInvestment: true,
-		contextfabric.FactReadiness:  true,
-		contextfabric.FactFlow:       true,
-		contextfabric.FactLandscape:  true,
+		contextfabric.FactMetrics:          true,
+		contextfabric.FactHealth:           true,
+		contextfabric.FactWorkload:         true,
+		contextfabric.FactInvestment:       true,
+		contextfabric.FactReadiness:        true,
+		contextfabric.FactFlow:             true,
+		contextfabric.FactLandscape:        true,
+		contextfabric.FactActualCompletion: true,
 	}
 	for _, provider := range allProvidersForKindAudit() {
 		capability := provider.Capability()
