@@ -423,16 +423,22 @@ var ProductionColumns = map[string][]Column{
 	// never investment_metrics_daily, the deprecated legacy rule set.
 	// Read from dev-health-clickhouse-1 (database `default`) on
 	// 2026-08-28, matching the same freshness convention as every other
-	// entry above. Unread production columns (repo_id/4, provider/5,
-	// effort_metric/6, evidence_quality/11, evidence_quality_band/12,
+	// entry above. repo_id/4 (Nullable(UUID)) is read here: the project
+	// theme-mix roll-up joins it directly to team_repo_ownership.repo_id,
+	// sidestepping the evidence-JSON/work-item-attribution path
+	// readTeamThemeMix uses for the team subject -- verified live against
+	// the trial ClickHouse (acr-trial-data, db dh_0906, system.columns).
+	// Remaining unread production columns (provider/5, effort_metric/6,
+	// evidence_quality/11, evidence_quality_band/12,
 	// categorization_status/13, categorization_errors_json/14,
 	// categorization_model_version/15, categorization_input_hash/16,
 	// categorization_run_id/17, work_unit_type/19, work_unit_name/20)
-	// omitted, matching this package's own documented scope rule.
+	// stay omitted, matching this package's own documented scope rule.
 	"work_unit_investments": {
 		{Name: "work_unit_id", Type: "String"},
 		{Name: "from_ts", Type: "DateTime64(3, 'UTC')"},
 		{Name: "to_ts", Type: "DateTime64(3, 'UTC')"},
+		{Name: "repo_id", Type: "Nullable(UUID)"},
 		{Name: "effort_value", Type: "Float64"},
 		{Name: "theme_distribution_json", Type: "Map(String, Float64)"},
 		{Name: "subcategory_distribution_json", Type: "Map(String, Float64)"},
