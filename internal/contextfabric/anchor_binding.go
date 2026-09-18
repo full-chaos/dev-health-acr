@@ -737,11 +737,11 @@ type anchorBindingTracker struct {
 	servedCount     *CountPopulationScope
 	// substitution is the subject-substitution guard's decision for this
 	// turn; empty until the guard runs, which substitutionGuard reads as
-	// not_evaluated. A guard that FIRED withheld a
-	// commit the engine proved: the saved document commits nothing, and the
-	// binder reads the proof as the engine made it rather than as the
-	// document kept it, so the withheld identity reaches it as a contender
-	// and is never read as silence.
+	// not_evaluated. A guard that FIRED withheld a commit the engine proved:
+	// the saved document commits nothing, and the binder reads the proof as
+	// the engine made it rather than as the document kept it, so the
+	// withheld identity reaches it as a contender and is never read as
+	// silence.
 	substitution SubjectSubstitutionOutcome
 }
 
@@ -751,8 +751,8 @@ func (e *Engine) newAnchorBindingTracker(ctx context.Context, request Investigat
 		return nil
 	}
 	return &anchorBindingTracker{
-		parent:       readAnchorBindingParent(ctx, request, binding.Epoch),
-		epoch:        binding.Epoch,
+		parent:      readAnchorBindingParent(ctx, request, binding.Epoch),
+		epoch:       binding.Epoch,
 		evaluation:  AnchorBindingEvaluationNotResolved,
 		callerHints: append([]SubjectHint(nil), request.RequestedScope.SubjectHints...),
 	}
