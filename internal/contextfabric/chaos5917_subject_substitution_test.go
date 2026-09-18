@@ -614,6 +614,7 @@ func TestDecideSubjectSubstitutionOverTheWholeInputSpace(t *testing.T) {
 		{"redeemed choice beats clarification", subjectSubstitutionInput{Parent: held, Committed: []SubjectRef{substitutionRepoTwo}, RedeemedChoice: true, AllowClarification: true, RememberedAvailable: true}, SubjectSubstitutionRedeemedChoice, false},
 		{"redeemed choice beats refusal", subjectSubstitutionInput{Parent: held, Committed: []SubjectRef{substitutionRepoTwo}, RedeemedChoice: true}, SubjectSubstitutionRedeemedChoice, false},
 		{"same identity is never a subject change", subjectSubstitutionInput{Parent: held, Committed: []SubjectRef{substitutionRepoOne}, RedeemedChoice: true, AllowClarification: true}, SubjectSubstitutionSameSubject, false},
+		{"a redeemed choice never licenses a set of several", subjectSubstitutionInput{Parent: held, Committed: []SubjectRef{substitutionRepoTwo, substitutionOtherKind}, RedeemedChoice: true, AllowClarification: true, RememberedAvailable: true}, SubjectSubstitutionClarified, true},
 	}
 	for _, tc := range cases {
 		tc := tc
