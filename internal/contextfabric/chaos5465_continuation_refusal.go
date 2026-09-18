@@ -106,6 +106,7 @@ func (e *Engine) continuationRefusalResult(
 	// every sibling terminal and a later reordering cannot silently drop a plan
 	// that by then exists.
 	plan *AnswerPlan, ancestryParent string,
+	anchorShadow *anchorBindingTracker,
 ) (InvestigationResult, error) {
 	limitation := contractsv1.ContextFabricContinuationContextUnverifiableLimitation
 	emptyCoverage := Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}
@@ -165,7 +166,7 @@ func (e *Engine) continuationRefusalResult(
 		// snapshots, exactly like the interpreted-time-bound refusal: a
 		// refusal must never become reusable, and nil snapshots are the
 		// store's fail-closed "never reusable" reading.
-		if err := e.saveResult(ctx, principal, BudgetAssertContinuationRefusal, result, nil, nil, TimeAxisKeyFor(request.TimeContext), binding.Epoch, ancestryParent, absentSemanticState(SemanticStateAbsenceContinuationRefused)); err != nil {
+		if err := e.saveResult(ctx, principal, BudgetAssertContinuationRefusal, result, nil, nil, TimeAxisKeyFor(request.TimeContext), binding.Epoch, ancestryParent, absentSemanticState(SemanticStateAbsenceContinuationRefused).withAnchorShadow(anchorShadow)); err != nil {
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}
 	}

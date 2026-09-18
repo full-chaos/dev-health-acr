@@ -951,6 +951,38 @@ func RunSemanticStateExtensionReplaySuite(t *testing.T, newStore func(t *testing
 			}
 		}
 	})
+	t.Run("a second save differing only in a shadow member replays", func(t *testing.T) {
+		store := newStore(t)
+		row := result("result-extension-shadow-replay", "does a shadow member decide a save?")
+		shadow := func(id string) *contextfabric.PersistedSemanticState {
+			state := SemanticStateFixture(contextfabric.SubjectTeam, contextfabric.SubjectRepository)
+			raw, err := json.Marshal(contextfabric.AnchorBinding{State: "bound", Kind: contextfabric.SubjectRepository, CanonicalID: id, Proof: "identity_proven", Reason: "identity_proven", OriginResultID: row.ResultID})
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			state.Extensions = contextfabric.SemanticStateExtensions{"anchor_binding": raw}
+			return state
+		}
+		if err := save(store, row, shadow("repository:first")); err != nil {
+			t.Fatalf("first save: %v", err)
+		}
+		for _, second := range []struct {
+			name  string
+			state *contextfabric.PersistedSemanticState
+		}{
+			{"the same binding", shadow("repository:first")},
+			{"a different binding", shadow("repository:second")},
+			{"no binding at all", SemanticStateFixture(contextfabric.SubjectTeam, contextfabric.SubjectRepository)},
+		} {
+			err := save(store, row, second.state)
+			stored, getErr := store.Get(context.Background(), orgA, row.ResultID)
+			t.Logf("second save %-22s err=%v stored_member=%s", second.name, err, stored.SemanticState.Extensions["anchor_binding"])
+			if err != nil || getErr != nil {
+				t.Fatalf("%s: a shadow member decided the save: err=%v get=%v", second.name, err, getErr)
+			}
+		}
+	})
+
 	// Every shape a store would reject or re-render into a different value
 	// is refused by the writer, with the snapshot's own error, before any
 	// row exists -- never as a driver error.

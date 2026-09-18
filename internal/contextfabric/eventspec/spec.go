@@ -75,6 +75,18 @@ const (
 	// MultiplicityZeroOrOnePerPass now REQUIRE a declared "pass" field
 	// (enforced by the same consistency check), and this one requires the
 	// opposite.
+	//
+	// THE SCOPE IS THE EVENT'S OWN Attribution, NOT THE WORD "REQUEST".
+	// certify.Certify gathers the lines of one ATTEMPT -- every declared
+	// Attribution field -- and refuses more than one line in that attempt.
+	// An event attributed by "request_id" alone therefore does mean one line
+	// per call; an event whose Attribution is compound means one line per
+	// compound scope, and a call that runs that scope twice legitimately
+	// carries two lines. AnswerDisplay ("request_id", "surface") and
+	// AnchorBindingTransition ("org_id", "result_id", "site") are the
+	// compound cases: each of their extra Attribution fields is the
+	// discriminator a reader joins on, and each is a required field with a
+	// closed vocabulary where one is enumerable.
 	MultiplicityExactlyOnePerRequest Multiplicity = "exactly_one_per_request"
 	// MultiplicityZeroOrOnePerRequest (CHAOS-5517): the request-scoped
 	// sibling of MultiplicityZeroOrOnePerPass -- a line produced at most
@@ -2383,6 +2395,7 @@ var All = []Event{
 	FrameValidation,
 	ConfirmedNeedLedger,
 	CohortKindFulltext,
+	AnchorBindingTransition,
 }
 
 // CountPopulationScope (CHAOS-5775) is the Info line for whether a served
@@ -2500,4 +2513,100 @@ var ConfirmedNeedLedger = Event{
 		{Key: "capture_skip_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: captureSkipReasonTokens},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
+}
+
+// AnchorBindingTransition is the Info line for one shadow anchor binding
+// decision: the binding the turn started from, what the binder read, the
+// binding it decided with its reason, and how that compares with the anchor
+// the served state carries. Built by contextfabric.AnchorBindingTransitionLogArgs,
+// emitted once per Save from the engine's single save site and once per reuse
+// serve.
+var AnchorBindingTransition = Event{
+	ID:                 "contextfabric.anchor_binding_transition",
+	Msg:                contextfabric.AnchorBindingTransitionLogMessage,
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityExactlyOnePerRequest,
+	Attribution:        []string{"org_id", "result_id", "site"},
+	BoundedAggregation: "exactly one line per attempt, and this event's attempt is its whole Attribution -- (org_id, result_id, site) -- because each Save and each reuse serve decides its own binding and emits its own line while the shadow runs. site is the discriminator a reader joins on: decisive is the one the request's answer is served from, and a request whose decisive Save loses a structure claim saves a second result at the structure_veto site, so one request carries as many lines as it saved results, never two for one result at one site.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "result_id", Type: FieldString, Presence: PresenceRequired},
+		// Open: the parent the request names, empty when it names none.
+		{Key: "parent_result_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "site", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("site")},
+		{Key: "evaluation", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("evaluation")},
+		{Key: "parent_binding", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("parent_binding")},
+		// not_evaluated whenever a parent binding was used: the shadow carries
+		// on the parent reference without same-question admission or live
+		// re-authorization.
+		{Key: "carry_checks", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("carry_checks")},
+		{Key: "from_state", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("from_state")},
+		// Open: subject-kind tokens drawn from contextfabric.SubjectKind and
+		// free canonical ids, empty when absent.
+		{Key: "from_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "from_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "from_proof", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("from_proof")},
+		{Key: "from_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("from_reason")},
+		{Key: "from_origin_result_id", Type: FieldString, Presence: PresenceRequired},
+		// The parent binding's own graph epoch, 0 when unbound.
+		{Key: "from_graph_epoch", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "from_contender_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "from_contender_id", Type: FieldString, Presence: PresenceRequired},
+		// The graph epoch of the binding the parent row carries, -1 when no
+		// stored binding was read; the stale-parent check compares it with
+		// graph_epoch.
+		{Key: "parent_graph_epoch", Type: FieldInt, Presence: PresenceRequired},
+		// This turn's graph epoch: the epoch an identity it proves stands on.
+		{Key: "graph_epoch", Type: FieldInt, Presence: PresenceRequired},
+		// Open: a SubjectExpressionKind token, empty with no frame. Only a
+		// children_of_scope frame can bind an anchor.
+		{Key: "frame_expression_kind", Type: FieldString, Presence: PresenceRequired},
+		// Open: the SubjectKind the reading counts, empty when the frame names
+		// none. A committed subject of that kind is the population being
+		// counted and is never admitted as the anchor, so it decides
+		// admission and two turns that differ only here differ here.
+		{Key: "frame_member_kind", Type: FieldString, Presence: PresenceRequired},
+		// How many anchor terms the frame names; the terms are corpus text and
+		// are never published.
+		{Key: "anchor_term_count", Type: FieldInt, Presence: PresenceRequired},
+		// Open: "<kind>:<canonical id>" for every committed subject one of
+		// whose own candidates matched a stated anchor term, empty when none.
+		// The match, not the term, is what admits an identity-proven commit.
+		{Key: "anchor_term_matched_ids", Type: FieldStringSlice, Presence: PresenceRequired},
+		// Open: "<kind>:<canonical id>=<commit basis>" for every committed
+		// subject the binder weighed, empty when none.
+		{Key: "committed_subjects", Type: FieldStringSlice, Presence: PresenceRequired},
+		{Key: "model_anchor_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "named_expected_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "receipt_anchor_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "receipt_anchor_id", Type: FieldString, Presence: PresenceRequired},
+		// Open: "<kind>:<canonical id>" tokens, empty lists when none.
+		{Key: "caller_hint_ids", Type: FieldStringSlice, Presence: PresenceRequired},
+		{Key: "proven_anchor_ids", Type: FieldStringSlice, Presence: PresenceRequired},
+		{Key: "effective_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "to_state", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("to_state")},
+		{Key: "to_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "to_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "proof", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("proof")},
+		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("reason")},
+		{Key: "origin_result_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "to_graph_epoch", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "contender_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "contender_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "persisted", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("persisted")},
+		{Key: "shadow_agreement", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("shadow_agreement")},
+		{Key: "disagreement_field", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("disagreement_field")},
+		{Key: "served_anchor_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "served_anchor_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "served_count_decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("served_count_decision")},
+		{Key: "served_count_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "served_count_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// anchorBindingVocabulary is the producer's closed vocabulary for key plus
+// the emitter's fail-closed token for a value outside it.
+func anchorBindingVocabulary(key string) []string {
+	return append(contextfabric.AnchorBindingTransitionLineVocabulary(key), contextfabric.AnchorBindingUndeclaredToken)
 }

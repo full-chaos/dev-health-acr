@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -521,7 +522,8 @@ type recordingTelemetry struct {
 	planCarryOutcomes []planCarryOutcomeRecord
 	// confirmedNeedLedgers (CHAOS-5639) mirrors the SAME list-not-count
 	// discipline.
-	confirmedNeedLedgers []ConfirmedNeedLedgerEvent
+	confirmedNeedLedgers     []ConfirmedNeedLedgerEvent
+	anchorBindingTransitions []AnchorBindingTransitionEvent
 	// confirmedNeedLedgerWindows (CHAOS-5734) mirrors the SAME list-not-count
 	// discipline.
 	confirmedNeedLedgerWindows []confirmedNeedLedgerWindowRecord
@@ -736,6 +738,21 @@ func (r *recordingTelemetry) RecordKindCarry(_ context.Context, _ storage.Princi
 
 func (r *recordingTelemetry) RecordStructureNeedsDisclosed(_ context.Context, _ storage.Principal, member contractsv1.ContextFabricStructureNeedKind) {
 	r.structureNeedsDisclosed = append(r.structureNeedsDisclosed, member)
+}
+
+func (r *recordingTelemetry) RecordAnchorBindingTransition(_ context.Context, _ storage.Principal, event AnchorBindingTransitionEvent) {
+	// Every engine test that records telemetry doubles as a sweep: a Save an
+	// Investigate exit makes with no binding decision is recorded here and
+	// fails the package run in TestMain, naming the test that made it. It
+	// never stops the test binary, so every other test still runs and
+	// reports. A direct saveResult call from a unit test has no turn to
+	// decide from.
+	if event.To.Reason == AnchorBindingReasonUnrecorded {
+		if test, ok := investigateCaller(); ok {
+			recordUnrecordedInvestigateSave(test, event.Site)
+		}
+	}
+	r.anchorBindingTransitions = append(r.anchorBindingTransitions, event)
 }
 
 func (r *recordingTelemetry) RecordConfirmedNeedLedger(_ context.Context, _ storage.Principal, event ConfirmedNeedLedgerEvent) {
@@ -2274,4 +2291,44 @@ func (r *recordingTelemetry) RecordWorkItemTupleAdmission(_ context.Context, _ s
 
 func (r *recordingTelemetry) RecordRetainedRankingAccounting(_ context.Context, _ storage.Principal, event RetainedRankingAccountingEvent) {
 	r.retainedRankingAccounting = append(r.retainedRankingAccounting, event)
+}
+
+// investigateCaller reports whether Engine.Investigate is on the stack and,
+// when it is, the outermost test function that called it.
+func investigateCaller() (string, bool) {
+	pcs := make([]uintptr, 256)
+	frames := runtime.CallersFrames(pcs[:runtime.Callers(2, pcs)])
+	investigate, test := false, "unknown test"
+	for {
+		frame, more := frames.Next()
+		if strings.HasSuffix(frame.Function, ".(*Engine).Investigate") {
+			investigate = true
+		}
+		if i := strings.Index(frame.Function, "contextfabric.Test"); i >= 0 {
+			test = frame.Function[i+len("contextfabric."):]
+		}
+		if !more {
+			return test, investigate
+		}
+	}
+}
+
+var unrecordedInvestigateSaves struct {
+	sync.Mutex
+	entries []string
+}
+
+func recordUnrecordedInvestigateSave(test string, site BudgetAssertStage) {
+	unrecordedInvestigateSaves.Lock()
+	defer unrecordedInvestigateSaves.Unlock()
+	unrecordedInvestigateSaves.entries = append(unrecordedInvestigateSaves.entries, fmt.Sprintf("%s: an Investigate Save at site %q carried no binding decision", test, site))
+}
+
+// takeUnrecordedInvestigateSaves returns and clears the recorded entries.
+func takeUnrecordedInvestigateSaves() []string {
+	unrecordedInvestigateSaves.Lock()
+	defer unrecordedInvestigateSaves.Unlock()
+	out := unrecordedInvestigateSaves.entries
+	unrecordedInvestigateSaves.entries = nil
+	return out
 }

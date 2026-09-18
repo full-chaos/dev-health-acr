@@ -106,6 +106,11 @@ func (e *Engine) saveResult(
 	watermark SourceWatermarkSnapshot, epoch RebuildEpoch, timeAxisKey string, graphEpoch int64, parentResultID string,
 	capture semanticStateCapture,
 ) error {
+	capture, anchorEvent := capture.attachAnchorBinding(site, result)
+	if anchorEvent == nil && !e.anchorBindingShadowDisabled {
+		unrecorded := unrecordedAnchorBindingEvent(site, result)
+		anchorEvent = &unrecorded
+	}
 	var err error
 	if workItemTupleSemanticState(capture.Write.State) && !workItemTuplePreMembershipTerminal(site, result, capture.Write.State) {
 		if payloadErr := ValidateWorkItemTuplePayload(result, principal); payloadErr != nil {
@@ -127,6 +132,12 @@ func (e *Engine) saveResult(
 			Bound:          capture.Bound,
 			State:          capture.Write.State,
 		})
+	}
+	if anchorEvent != nil {
+		if anchorEvent.Persisted == "" {
+			anchorEvent.Persisted = AnchorBindingPersistence(classifySemanticStatePersistence(err))
+		}
+		e.recordAnchorBindingTransition(ctx, principal, *anchorEvent)
 	}
 	return err
 }

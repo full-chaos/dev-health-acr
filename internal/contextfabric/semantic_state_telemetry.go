@@ -220,3 +220,10 @@ func (t SlogEngineTelemetry) RecordSemanticStatePersistence(ctx context.Context,
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric semantic state persistence", args...)
 }
+
+// RecordAnchorBindingTransition logs one shadow anchor binding decision at
+// Info, through AnchorBindingTransitionLogArgs.
+func (t SlogEngineTelemetry) RecordAnchorBindingTransition(ctx context.Context, principal storage.Principal, event AnchorBindingTransitionEvent) {
+	args := append(AnchorBindingTransitionLogArgs(event, principal.OrgID), requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, AnchorBindingTransitionLogMessage, args...)
+}

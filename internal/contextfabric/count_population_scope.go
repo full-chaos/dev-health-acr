@@ -295,6 +295,18 @@ func anchorBound(frame *QuestionFrame, anchorKind SubjectKind, subject SubjectRe
 	if !basis.IdentityProven() {
 		return false
 	}
+	return anchorTermMatched(frame, subject, resolution)
+}
+
+// anchorTermMatched reports whether one of the subject's own candidates
+// matched a term the frame states as an anchor term. It is the second half of
+// an identity-proven commit's admission, and the shadow binding's line
+// publishes which subjects it admits, so the one comparison lives here and is
+// read from both places rather than written twice.
+func anchorTermMatched(frame *QuestionFrame, subject SubjectRef, resolution SubjectResolution) bool {
+	if frame == nil || frame.SubjectExpression.Scoped == nil {
+		return false
+	}
 	terms := make(map[string]struct{}, len(frame.SubjectExpression.Scoped.AnchorTerms))
 	for _, term := range frame.SubjectExpression.Scoped.AnchorTerms {
 		if normalized := NormalizeRetrievalTerm(term); normalized != "" {

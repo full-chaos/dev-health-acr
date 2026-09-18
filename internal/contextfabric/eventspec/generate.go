@@ -186,6 +186,8 @@ func goVarName(e Event) string {
 		return "ConfirmedNeedLedger"
 	case CohortKindFulltext.ID:
 		return "CohortKindFulltext"
+	case AnchorBindingTransition.ID:
+		return "AnchorBindingTransition"
 	default:
 		panic("eventspec: goVarName has no mapping for " + e.ID + " -- add one before regenerating")
 	}
