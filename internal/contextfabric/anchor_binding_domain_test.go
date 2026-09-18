@@ -211,7 +211,8 @@ func TestTwoTurnsWithEqualLineInputsDecideTheSameBinding(t *testing.T) {
 	statistical, statisticalBases := proofOf(CommitBasisStatistical, bindAlpha)
 
 	// The same proof with the candidate's matched terms changed to a term the
-	// frame never names: the identity-proven commit is no longer admitted.
+	// frame never names: a commit whose matched terms the frame never names is
+	// not admitted.
 	unmatched, unmatchedBases := proofOf(CommitBasisAuthoritativeIdentity, bindAlpha)
 	unmatched.Candidates[0].MatchedTerms = []string{"not-an-anchor-term"}
 
