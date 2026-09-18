@@ -133,6 +133,11 @@ var (
 		"frame_expression_kind", "frame_member_kind", "anchor_term_count", "anchor_term_matched_ids",
 		"committed_subjects", "model_anchor_kind", "named_expected_kind",
 		"receipt_anchor_kind", "receipt_anchor_id", "caller_hint_ids",
+		// The subject-substitution guard's decision is what the tracker read
+		// to choose the proof: a fired guard hands the binder the decisive
+		// resolution, and the withheld commit then appears under
+		// committed_subjects.
+		"substitution_guard",
 	}
 	anchorBindingLineOutputKeys = []string{
 		"proven_anchor_ids", "effective_kind",
