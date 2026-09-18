@@ -317,6 +317,13 @@ func TestHealthProviderProjectRollupBreaksDownByTeamAndRepoNeverSums(t *testing.
 	if len(result.Facts) != 1 {
 		t.Fatalf("facts = %#v, want 1", result.Facts)
 	}
+	// A project FactHealth serves severity/severity_basis fields an older
+	// QueryVersion never computed -- a stored answer-reuse candidate from
+	// that older version must miss and re-run rather than be served as
+	// though it carried these fields.
+	if result.Version != "devhealthfacts.clickhouse.v7" {
+		t.Fatalf("Version = %q, want devhealthfacts.clickhouse.v7", result.Version)
+	}
 	fact := result.Facts[0]
 	if fact.Fields["rollup_basis"].String == nil || *fact.Fields["rollup_basis"].String != "team_project_ownership_and_team_repo_ownership" {
 		t.Fatalf("rollup_basis = %#v", fact.Fields["rollup_basis"])
