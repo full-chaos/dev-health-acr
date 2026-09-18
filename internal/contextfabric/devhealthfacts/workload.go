@@ -384,19 +384,31 @@ const (
 )
 
 // workloadP50MaxRow is one project's result from
-// queryProjectWorkloadP50Max: how many of its reachable team_breakdown rows
-// carry a known forecast_p50_days, how many rows are reachable in total,
-// and -- when at least one is known -- which single row produced the
-// winning (worst/longest) p50_days, so the caller can promote its
-// insufficient_history/high_variance flags and cite it as evidence even
-// when that row never reached the row-level breakdown scan's shared
-// budget.
+// queryProjectWorkloadP50Max: a THREE-WAY partition of every reachable
+// team_breakdown row -- knownRowCount (a real contributing TEAM with a
+// recorded p50), excludedUnattributedCount (no contributing team at all --
+// see the type's own doc note below) and excludedNullP50Count (a real team,
+// no recorded p50) -- that always sums to totalRowCount, plus, when
+// knownRowCount > 0, which single row produced the winning (worst/longest)
+// p50_days, so the caller can promote its insufficient_history/
+// high_variance flags and cite it as evidence even when that row never
+// reached the row-level breakdown scan's shared budget.
+//
+// The promoted signal is TEAM-DERIVED: a row with no contributing team
+// (capacity_forecasts.team_id NULL, coalesced to "" as team_key) can never
+// be counted as known and can never win the max, however long its own
+// p50_days is -- there is no team to cite as the evidence for it, and
+// crediting cohort ranking off an uncitable reading is the exact defect
+// this partition exists to close. Such a row still contributes real
+// coverage to team_breakdown's own display (CHAOS-4521b's "kept but not
+// counted" rule, unchanged there); it is only ever excluded from THIS
+// producer's team-derived scalar.
 type workloadP50MaxRow struct {
-	knownRowCount, totalRowCount int64
-	winnerP50Days                int64
-	winnerTeamKey, winnerScopeID string
-	winnerInsufficientHistory    bool
-	winnerHighVariance           bool
+	knownRowCount, excludedUnattributedCount, excludedNullP50Count, totalRowCount int64
+	winnerP50Days                                                                 int64
+	winnerTeamKey, winnerScopeID                                                  string
+	winnerInsufficientHistory                                                     bool
+	winnerHighVariance                                                            bool
 }
 
 // queryProjectWorkloadP50Max computes, per project, the WORST (longest)
@@ -430,16 +442,35 @@ type workloadP50MaxRow struct {
 //
 // p50_days is Nullable(UInt16) (DESCRIBE TABLE capacity_forecasts, real
 // ClickHouse) -- non-negative by column type -- so ifNull(p50_days, -1) is
-// an unambiguous "no reading" sentinel that can never win an argMax against
-// a real reading, mirroring health.go's identical ifNull(-1) sentinel
-// discipline for a different, but equally non-negative-by-type, column.
-// knownRowCount = countIf(isNotNull(p50_days)) and totalRowCount = count()
-// let the caller distinguish "reachable rows exist, none carries a p50"
-// (serves p50_unavailable_reason) from "no reachable rows at all" (this
-// project never appears in the result, and readProjectWorkload serves no
-// fact for it).
+// an unambiguous "no reading" sentinel, mirroring health.go's identical
+// ifNull(-1) sentinel discipline for a different, but equally
+// non-negative-by-type, column. It alone is NOT enough to keep an
+// unattributed row from winning, though: an unattributed row can carry a
+// perfectly real, large p50_days, so the ORDER key argMax ranks by is a
+// TUPLE whose first element is 1 only for an ATTRIBUTED, KNOWN row
+// (team_key != ” AND p50_days IS NOT NULL) and 0 otherwise -- an
+// unattributed or NULL-p50 row can never outrank an attributed, known one,
+// however large its own p50_days, because ClickHouse compares tuples
+// lexicographically and that leading element dominates.
+//
+// knownRowCount = countIf(team_key != ” AND isNotNull(p50_days)),
+// excludedUnattributedCount = countIf(team_key = ”) and
+// excludedNullP50Count = countIf(team_key != ” AND isNull(p50_days)) are a
+// TOTAL PARTITION of every reachable row -- they always sum to
+// totalRowCount = count(), so the caller can distinguish "a real team's
+// forecast is known" from "reachable rows exist, but none is an attributed
+// known reading" (serves p50_unavailable_reason, whether that is because
+// every row is unattributed, every row's p50 is NULL, or some mix of the
+// two) from "no reachable rows at all" (this project never appears in the
+// result, and readProjectWorkload serves no fact for it).
 func (p *WorkloadProvider) queryProjectWorkloadP50Max(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byProject map[string]workloadP50MaxRow, order []string, rowCount int, err error) {
-	statement := withRowProbeLimit(`SELECT project_key, countIf(isNotNull(p50_days)), count(), argMax(concat(toString(ifNull(p50_days, -1)), '` + workloadP50WinnerDelimiter + `', team_key, '` + workloadP50WinnerDelimiter + `', work_scope_id, '` + workloadP50WinnerDelimiter + `', toString(insufficient_history), '` + workloadP50WinnerDelimiter + `', toString(high_variance)), tuple(ifNull(p50_days, -1), cityHash64(tuple(team_key, work_scope_id, ifNull(p50_days, -1)))))
+	statement := withRowProbeLimit(`SELECT project_key,
+	countIf(team_key != '' AND isNotNull(p50_days)),
+	countIf(team_key = ''),
+	countIf(team_key != '' AND isNull(p50_days)),
+	count(),
+	argMax(concat(toString(ifNull(p50_days, -1)), '` + workloadP50WinnerDelimiter + `', team_key, '` + workloadP50WinnerDelimiter + `', work_scope_id, '` + workloadP50WinnerDelimiter + `', toString(insufficient_history), '` + workloadP50WinnerDelimiter + `', toString(high_variance)),
+		tuple(multiIf(team_key != '' AND isNotNull(p50_days), 1, 0), ifNull(p50_days, -1), cityHash64(tuple(team_key, work_scope_id, ifNull(p50_days, -1)))))
 FROM (
 	SELECT concat(p.provider, ':', p.id) AS project_key, cf.team_key AS team_key, cf.work_scope_id AS work_scope_id, cf.p50_days AS p50_days, cf.insufficient_history AS insufficient_history, cf.high_variance AS high_variance
 	FROM ` + projectIdentityJoinSQL() + `
@@ -456,11 +487,16 @@ ORDER BY project_key`)
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
 		var projectKey, winner string
-		var known, total uint64
-		if err := row.Scan(&projectKey, &known, &total, &winner); err != nil {
+		var known, excludedUnattributed, excludedNullP50, total uint64
+		if err := row.Scan(&projectKey, &known, &excludedUnattributed, &excludedNullP50, &total, &winner); err != nil {
 			return err
 		}
-		result := workloadP50MaxRow{knownRowCount: int64(known), totalRowCount: int64(total)}
+		result := workloadP50MaxRow{
+			knownRowCount:             int64(known),
+			excludedUnattributedCount: int64(excludedUnattributed),
+			excludedNullP50Count:      int64(excludedNullP50),
+			totalRowCount:             int64(total),
+		}
 		if known > 0 {
 			if parts := strings.SplitN(winner, workloadP50WinnerDelimiter, 5); len(parts) == 5 {
 				if p50, parseErr := strconv.ParseInt(parts[0], 10, 64); parseErr == nil {
@@ -629,6 +665,16 @@ func (p *WorkloadProvider) readProjectWorkload(ctx context.Context, orgID string
 			// risk_breakdown_rows_shown/_total exactly.
 			"team_breakdown_rows_shown": contextfabric.IntegerFactValue(int64(len(teamRows))),
 			"team_breakdown_rows_total": contextfabric.IntegerFactValue(p50Row.totalRowCount),
+			// p50_known_count + p50_excluded_unattributed_count +
+			// p50_excluded_null_p50_count always sums to
+			// team_breakdown_rows_total -- a total partition of every
+			// reachable row into "a real team's forecast is known",
+			// "no contributing team at all" and "a real team, no recorded
+			// p50", so a caller can tell why forecast_p50_days is absent
+			// rather than only that it is.
+			"p50_known_count":                 contextfabric.IntegerFactValue(p50Row.knownRowCount),
+			"p50_excluded_unattributed_count": contextfabric.IntegerFactValue(p50Row.excludedUnattributedCount),
+			"p50_excluded_null_p50_count":     contextfabric.IntegerFactValue(p50Row.excludedNullP50Count),
 			// CHAOS-4645 (fixing the CHAOS-4633 F3 debt this file's own doc
 			// comment used to flag here): basis is CONSTANT
 			// "capacity_forecast" across every row of team_breakdown, so it
@@ -671,32 +717,38 @@ func (p *WorkloadProvider) readProjectWorkload(ctx context.Context, orgID string
 				Rows:         teamRows,
 			})
 		}
-		// CHAOS-5931: forecast_p50_days promotes the WORST (longest) p50
-		// across this project's own reachable team_breakdown population --
-		// a data gap (no p50 recorded) contributes no evidence either way,
-		// so it can never win the max against a real reading, and it can
-		// never stand in as a false "0 days" when it is the only reading a
-		// project's population carries. Read from
+		// forecast_p50_days promotes the WORST (longest) p50 across this
+		// project's own reachable, ATTRIBUTED team_breakdown population --
+		// a data gap (no p50 recorded) or an unattributed row (no
+		// contributing team to cite as evidence) contributes no evidence
+		// either way, so neither can win the max against a real, cited
+		// reading, and neither can stand in as a false "0 days" when it is
+		// the only reading a project's population carries. Read from
 		// queryProjectWorkloadP50Max's own server-side aggregate, never
 		// from the teamRows loop above, so the value -- and its evidence --
 		// are immune to the row-level scan's shared budget. A project with
-		// at least one known p50 discloses which population produced it
-		// (p50_basis) and carries the winning row's own
-		// insufficient_history/high_variance flags (never a different row's
-		// flags, and never dropped); a project whose reachable rows are ALL
-		// null (0 reachable rows at all means this project never appears in
-		// p50Order, so this branch is never reached for it) discloses that
-		// forecast_p50_days is undetermined for a named reason, never a
-		// fabricated 0.
+		// at least one known, attributed p50 discloses which population
+		// produced it (p50_basis) and carries the winning row's own
+		// insufficient_history/high_variance flags (never a different
+		// row's flags, and never dropped); a project whose reachable rows
+		// carry no attributed, known reading -- whether because none has a
+		// contributing team, none has a recorded p50, or some mix of the
+		// two (0 reachable rows at all means this project never appears in
+		// p50Order, so this branch is never reached for it) -- discloses
+		// that forecast_p50_days is undetermined for a named reason, never
+		// a fabricated 0.
 		if p50Row.knownRowCount > 0 {
 			fields["forecast_p50_days"] = contextfabric.IntegerFactValue(p50Row.winnerP50Days)
 			fields["p50_basis"] = contextfabric.StringFactValue(workloadP50BasisTeamBreakdown)
 			fields["insufficient_history"] = contextfabric.BooleanFactValue(p50Row.winnerInsufficientHistory)
 			fields["high_variance"] = contextfabric.BooleanFactValue(p50Row.winnerHighVariance)
-			// An unattributed winning row (team_key == "") is not a team --
-			// it must not mint an evidence ref, the same "missing is not a
-			// team whose name is blank" rule the per-row loop above already
-			// applies.
+			// knownRowCount > 0 guarantees the winner is an attributed row
+			// (queryProjectWorkloadP50Max's own ORDER key ranks an
+			// unattributed row behind every attributed, known one), so
+			// winnerTeamKey is never empty here; the guard stays as
+			// defense against a future change to that ordering, mirroring
+			// the per-row loop's own "missing is not a team whose name is
+			// blank" rule.
 			if p50Row.winnerTeamKey != "" && !dedupeTeamRow(seenTeams, p50Row.winnerTeamKey) {
 				evidenceRefIDs = append(evidenceRefIDs, evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, p50Row.winnerTeamKey))
 			}
