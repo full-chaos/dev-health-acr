@@ -133,6 +133,12 @@ func TestInterpretDecisionLineNamesTheRuleThatRejectedTheInterpretation(t *testi
 				if !present || gotFactKind != testCase.wantFactKind {
 					t.Fatalf("rejected_fact_kind = (%v, present=%t), want (%q, true)", gotFactKind, present, testCase.wantFactKind)
 				}
+				// The join key an operator rebuilds the decision graph on:
+				// rejected_fact_kind is worthless without the request id on
+				// the SAME line.
+				if got := fields["request_id"]; got != "request_12345678" {
+					t.Fatalf("request_id = %v, want %q on the same line as rejected_fact_kind", got, "request_12345678")
+				}
 			} else if present {
 				t.Fatalf("rejected_fact_kind = %v, want the field absent -- this rejection's rule was %q, not fact_requirement_kind_invalid", gotFactKind, testCase.want)
 			}
@@ -341,4 +347,60 @@ func TestFallbackSemanticRejectionCarriesItsReasonToTheOuterArtifacts(t *testing
 			t.Fatal("no interpret decision line was emitted")
 		})
 	}
+}
+
+// TestFallbackFactKindRejectionCarriesItsRawValueToTheOuterArtifacts closes
+// the fallback-leg gap on the same path
+// TestFallbackSemanticRejectionCarriesItsReasonToTheOuterArtifacts covers for
+// rejection_reason: when the PRIMARY produced invalid output and the
+// FALLBACK also rejects -- for fact_requirement_kind_invalid specifically --
+// the fallback's own raw kind value must reach the decision line, not stay
+// silent because it came from the fallback leg rather than the primary's own
+// ClassifyInterpretationRejection call.
+func TestFallbackFactKindRejectionCarriesItsRawValueToTheOuterArtifacts(t *testing.T) {
+	t.Parallel()
+	fallbackRejected := contextfabric.NewInterpretationRejection(
+		contractsv1.ContextFabricInterpretationRejectionFactRequirementKindInvalid,
+		fmt.Errorf("%w: %w: fact requirement kind invalid", contextfabric.ErrInterpretationRejected, contextfabric.ErrModelOutput),
+	)
+	rejection, ok := fallbackRejected.(*contextfabric.InterpretationRejection)
+	if !ok {
+		t.Fatalf("NewInterpretationRejection() did not return *InterpretationRejection: %#v", fallbackRejected)
+	}
+	rejection.RejectedFactKind = "fallback_bad_kind"
+
+	primary := validInterpretationOutput()
+	primary.Shape = "not_a_real_shape"
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	runtime := mustRuntime(t, &generatorStub{interpretation: primary}, Config{
+		Logger:   logger,
+		Fallback: erroringFallbackRuntime{err: fallbackRejected},
+	})
+
+	_, receipt, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest())
+	if err == nil {
+		t.Fatal("InterpretQuestion() = nil error, want the fallback's rejection")
+	}
+	if got := contextfabric.InterpretationRejectionReasonOf(err); got != contractsv1.ContextFabricInterpretationRejectionFactRequirementKindInvalid {
+		t.Fatalf("the RETURNED error's reason = %q, want %q -- fixture is wrong", got, contractsv1.ContextFabricInterpretationRejectionFactRequirementKindInvalid)
+	}
+	if receipt.InterpretationRejectionReason != contractsv1.ContextFabricInterpretationRejectionFactRequirementKindInvalid {
+		t.Fatalf("receipt.InterpretationRejectionReason = %q, want %q", receipt.InterpretationRejectionReason, contractsv1.ContextFabricInterpretationRejectionFactRequirementKindInvalid)
+	}
+	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+		fields := map[string]any{}
+		if json.Unmarshal(line, &fields) != nil {
+			continue
+		}
+		if fields["operation"] != string(contextfabric.ModelOperationInterpret) {
+			continue
+		}
+		if got := fields["rejected_fact_kind"]; got != "fallback_bad_kind" {
+			t.Fatalf("decision line rejected_fact_kind = %v, want %q -- the fallback leg's own raw value must not stay silent", got, "fallback_bad_kind")
+		}
+		return
+	}
+	t.Fatal("no interpret decision line was emitted")
 }
