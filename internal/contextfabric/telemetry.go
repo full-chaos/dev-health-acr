@@ -890,6 +890,34 @@ func (t SlogEngineTelemetry) RecordCategoryFactComposition(ctx context.Context, 
 	t.logger.InfoContext(ctx, "context fabric status category fact composition", args...)
 }
 
+// RecordPeriodDeltaComposition implements EngineTelemetry (CHAOS-5990) --
+// the operator-visible record of a period-delta comparison decision.
+// Content-safe: closed enums/enum-slices, a bool and a fixed-vocabulary
+// count map, nothing else. Info level, mirroring
+// RecordCategoryFactComposition's own reasoning: this is the system
+// working (a period_delta obligation that would otherwise have degraded
+// on a single-snapshot read carries a real two-point comparison instead).
+func (t SlogEngineTelemetry) RecordPeriodDeltaComposition(ctx context.Context, principal storage.Principal, event PeriodDeltaCompositionEvent) {
+	composedKinds := make([]string, 0, len(event.ComposedKinds))
+	for _, kind := range event.ComposedKinds {
+		composedKinds = append(composedKinds, string(kind))
+	}
+	transitionCounts := make(map[string]int, len(event.TransitionCounts))
+	for transition, count := range event.TransitionCounts {
+		transitionCounts[string(transition)] = count
+	}
+	args := append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"requirement_kind", SanitizeLogAttr(string(event.RequirementKind)),
+		"subject_kind", SanitizeLogAttr(string(event.SubjectKind)),
+		"grain", SanitizeLogAttr(string(event.Grain)),
+		"composed_kinds", SanitizeLogStrings(composedKinds),
+		"prior_read_issued", event.PriorReadIssued,
+		"transition_counts", transitionCounts,
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric period delta composition", args...)
+}
+
 // RecordRenderShapeSelection implements EngineTelemetry (CHAOS-4415) -- see
 // that method's doc comment for what it reports and why it fires even when
 // nothing was selected.

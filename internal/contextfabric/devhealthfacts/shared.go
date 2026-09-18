@@ -103,7 +103,14 @@ import (
 // widened severity_unavailable_reason alphabet). A candidate saved under
 // v9 never applied the freshness window and must not be served as though
 // it had.
-const QueryVersion = "devhealthfacts.clickhouse.v10"
+//
+// v10 -> v11 (CHAOS-5990): a team/project FactHealth fact gains additive
+// period_delta_* fields (period_delta_transition, period_delta_window_days,
+// period_delta_prior_band, period_delta_prior_as_of) whenever the frame
+// derives ObligationPeriodDelta -- see chaos5990_period_delta.go. A
+// candidate saved under v10 never issued the second as-of read and must
+// not be served as though its period_delta fields were computed.
+const QueryVersion = "devhealthfacts.clickhouse.v11"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

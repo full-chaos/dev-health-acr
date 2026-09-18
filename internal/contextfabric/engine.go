@@ -513,6 +513,16 @@ type EngineTelemetry interface {
 	// implementation is the CHAOS-4085/CHAOS-4089 failure mode this repo
 	// keeps re-learning. Content-safe: three closed enums/enum-slices only.
 	RecordCategoryFactComposition(ctx context.Context, principal storage.Principal, event CategoryFactCompositionEvent)
+	// RecordPeriodDeltaComposition (CHAOS-5990) reports ONE period-delta
+	// comparison decision: the CHAOS-4347 composed team/project fact set
+	// was diffed against a second, distinct as-of read taken
+	// PeriodDeltaWindowDays before it (chaos5990_period_delta.go). Declared
+	// on THIS interface for the same reason RecordCategoryFactComposition
+	// is: a decision branch whose telemetry sink can be omitted by a
+	// compiling implementation is the CHAOS-4085/CHAOS-4089 failure mode
+	// this repo keeps re-learning. Content-safe: closed enums, an
+	// enum-slice, a bool, and a fixed-vocabulary count map only.
+	RecordPeriodDeltaComposition(ctx context.Context, principal storage.Principal, event PeriodDeltaCompositionEvent)
 	// RecordPriorSubjectReceiptSkipReason (CHAOS-3888) reports the SAME
 	// aggregate this call's RecordPriorSubjectReceiptsSkipped already
 	// reported, split by WHY each receipt in it was skipped -- a closed
@@ -3227,6 +3237,16 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			return InvestigationResult{}, stageError(StageFactRead, fmt.Errorf("read canonical facts: %w", err))
 		}
 
+	}
+
+	// Enrich the CHAOS-4347 composed team/project facts just read with a
+	// genuine two-as-of period-delta comparison, when the frame demands it
+	// (chaos5990_period_delta.go). workItemTuple never composes
+	// status-category requirements (workItemTupleFactRequirements is a
+	// different, fixed plan), so period-delta has nothing to enrich on
+	// that path.
+	if !workItemTuple && familyOutcome.Frame != nil {
+		e.applyPeriodDelta(ctx, principal, *familyOutcome.Frame, subjects, facts.Facts, periodDeltaCurrentAsOf(clampedInterpretedTime, e.now()))
 	}
 
 	if workItemTuple {
