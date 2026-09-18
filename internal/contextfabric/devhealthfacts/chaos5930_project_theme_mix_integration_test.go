@@ -16,6 +16,7 @@ import (
 	"crypto/md5"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -692,4 +693,90 @@ func TestProjectThemeMixAgainstRealClickHouse(t *testing.T) {
 			}
 		})
 	})
+}
+
+// recordingInstrumentation is a minimal readers.Instrumentation that
+// records every reader name StartQuery is called with, so a test can
+// assert a given read actually went through the reader-level query helper
+// (and its instrumentation hook) rather than a direct, uninstrumented
+// client call.
+type recordingInstrumentation struct {
+	mu      sync.Mutex
+	readers []string
+}
+
+func (r *recordingInstrumentation) StartQuery(ctx context.Context, reader string, orgScoped bool) (context.Context, func(error)) {
+	r.mu.Lock()
+	r.readers = append(r.readers, reader)
+	r.mu.Unlock()
+	return ctx, func(error) {}
+}
+
+func (r *recordingInstrumentation) sawReader(name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, got := range r.readers {
+		if got == name {
+			return true
+		}
+	}
+	return false
+}
+
+// TestProjectThemeMixReportsThroughReaderInstrumentation proves the project
+// theme-mix read goes through the SAME reader-level instrumentation hook
+// (readers.QueryOrgScopedNamed) every other reader-backed read in this
+// package carries, named distinctly from the team subject's own reader --
+// a direct, uninstrumented client call would silently drop this read out
+// of that coverage without failing anything else.
+func TestProjectThemeMixReportsThroughReaderInstrumentation(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	createCHAOS5930Tables(t, ctx, direct)
+	rec := &recordingInstrumentation{}
+	providers := devhealthfacts.NewInstrumentedProviders(query, rec)
+	at := ts(2026, 9, 18, 0, 0, 0)
+
+	const orgID = "org-instrumentation"
+	if err := direct.Exec(ctx, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+		"proj-instr", orgID, "linear", nil, "Project instr", uint8(1), "active", "", at); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	if err := direct.Exec(ctx, `INSERT INTO teams (id, name, description, updated_at, org_id, provider, project_keys, is_active) VALUES (?, ?, NULL, ?, ?, ?, [], ?)`,
+		"team-instr", "Team Instr", at, orgID, "linear", uint8(1)); err != nil {
+		t.Fatalf("seed team: %v", err)
+	}
+	if err := direct.Exec(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+		orgID, "linear", "team-instr", "proj-instr", nil, "native", at, nil, at); err != nil {
+		t.Fatalf("seed team_project_ownership: %v", err)
+	}
+	repoID := repoUUID("repo-instr")
+	if err := direct.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`,
+		repoID, orgID, "acme/repo-instr", "github", at); err != nil {
+		t.Fatalf("seed repo: %v", err)
+	}
+	if err := direct.Exec(ctx, `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		orgID, "linear", "team-instr", repoID, "acme/repo-instr", "exact", "native", uint8(1), uint16(100), int32(0), at, nil, at); err != nil {
+		t.Fatalf("seed team_repo_ownership: %v", err)
+	}
+	if err := direct.Exec(ctx,
+		`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		"wu-instr", at, at, repoID, 10.0, map[string]float64{"feature_delivery": 1.0}, map[string]float64{}, "{}", at, orgID); err != nil {
+		t.Fatalf("seed work_unit_investments: %v", err)
+	}
+
+	provider := findProvider(t, providers, contextfabric.FactInvestment)
+	if _, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-instr")},
+	}); err != nil {
+		t.Fatalf("ReadFacts: %v", err)
+	}
+
+	if !rec.sawReader("ReadProjectThemeMix") {
+		t.Errorf("readers = %v, want \"ReadProjectThemeMix\" -- the project theme-mix read must go through the reader-level instrumentation hook, not a direct, uninstrumented client call", rec.readers)
+	}
+	if !rec.sawReader("ReadProjectInvestment") {
+		t.Errorf("readers = %v, want \"ReadProjectInvestment\" too (the legacy breakdown read already goes through it)", rec.readers)
+	}
 }
