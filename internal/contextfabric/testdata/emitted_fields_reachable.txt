@@ -362,17 +362,17 @@ FactWork
   fields             title
 
 FactWorkload
-  reached_funcs      36
+  reached_funcs      38
   dynamic_key_sites  1
-  leaked_call_sites  7
-    leak interface_method     6
+  leaked_call_sites  8
+    leak interface_method     7
     leak external_func_value  1
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            55
+    calls followed            64
     calls accounted           13
-    calls not_a_call          4
-    calls excluded_by_design  102
-    calls leaked              7
-  fields             backlog_size basis computed_at daily_workload daily_workload_omitted_count day forecast_p50_days high_variance insufficient_history rollup_basis team_breakdown team_count team_id team_name throughput_mean throughput_stddev work_scope_id
+    calls not_a_call          7
+    calls excluded_by_design  116
+    calls leaked              8
+  fields             backlog_size basis computed_at daily_workload daily_workload_omitted_count day forecast_p50_days high_variance insufficient_history p50_basis p50_unavailable_reason rollup_basis team_breakdown team_breakdown_rows_shown team_breakdown_rows_total team_count team_id team_name throughput_mean throughput_stddev work_scope_id
