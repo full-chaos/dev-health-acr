@@ -44,8 +44,24 @@ const (
 type WorkItemMembershipUnmeasuredReason string
 
 const (
-	WorkItemMembershipUnmeasuredNone                   WorkItemMembershipUnmeasuredReason = ""
-	WorkItemMembershipUnmeasuredS1Error                WorkItemMembershipUnmeasuredReason = "s1_error"
+	WorkItemMembershipUnmeasuredNone WorkItemMembershipUnmeasuredReason = ""
+	// WorkItemMembershipUnmeasuredS1Error is the residual backend-error
+	// reason: the S1 statement failed for a cause that is neither a query
+	// resource budget (see WorkItemMembershipUnmeasuredReadLimitExceeded)
+	// nor context cancellation (see WorkItemMembershipUnmeasuredCancelled).
+	// It never carries the underlying error's own text.
+	WorkItemMembershipUnmeasuredS1Error WorkItemMembershipUnmeasuredReason = "s1_error"
+	// WorkItemMembershipUnmeasuredReadLimitExceeded (CHAOS-5991): the S1
+	// statement's own query-resource budget (MaxRowsToRead/MaxMemoryUsage)
+	// was exceeded before the statement could finish -- distinguished from
+	// the generic s1_error so an operator can tell "the census outgrew its
+	// own bound" from any other backend fault without reading the swallowed
+	// ClickHouse exception text, which this vocabulary never carries.
+	WorkItemMembershipUnmeasuredReadLimitExceeded WorkItemMembershipUnmeasuredReason = "read_limit_exceeded"
+	// WorkItemMembershipUnmeasuredCancelled: the request's own
+	// context ended (cancelled or its deadline expired) while S1 was in
+	// flight -- a caller-side/deadline story, not a backend fault.
+	WorkItemMembershipUnmeasuredCancelled              WorkItemMembershipUnmeasuredReason = "cancelled"
 	WorkItemMembershipUnmeasuredExcludedProvider       WorkItemMembershipUnmeasuredReason = "excluded_provider"
 	WorkItemMembershipUnmeasuredZeroAuthorizedOverflow WorkItemMembershipUnmeasuredReason = "zero_authorized_overflow"
 	WorkItemMembershipUnmeasuredIdentityOmitted        WorkItemMembershipUnmeasuredReason = "identity_omitted"
@@ -259,6 +275,8 @@ func sanitizeWorkItemMembershipReason(reason WorkItemMembershipUnmeasuredReason)
 	switch reason {
 	case WorkItemMembershipUnmeasuredNone,
 		WorkItemMembershipUnmeasuredS1Error,
+		WorkItemMembershipUnmeasuredReadLimitExceeded,
+		WorkItemMembershipUnmeasuredCancelled,
 		WorkItemMembershipUnmeasuredExcludedProvider,
 		WorkItemMembershipUnmeasuredZeroAuthorizedOverflow,
 		WorkItemMembershipUnmeasuredIdentityOmitted:
