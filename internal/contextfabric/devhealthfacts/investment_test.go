@@ -144,7 +144,7 @@ func investmentProjectRollupRow(provider, projectID, teamID, teamName, area, str
 // verbatim in the renderable team_breakdown table.
 func TestInvestmentProviderProjectRollupBreaksDownByTeamNeverSums(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM team_project_ownership", rows: [][]any{
+	client := &fakeClient{tables: []fakeTable{{match: "FROM investment_metrics_daily", rows: [][]any{
 		investmentProjectRollupRow("linear", "proj-1", "team-1", "Team One", "product", "growth", 30, 12, 4, 850, 18.5),
 		investmentProjectRollupRow("linear", "proj-1", "team-2", "Team Two", "quality", "", 10, 5, 2, 100, 4.0),
 	}}}}
@@ -188,7 +188,7 @@ func TestInvestmentProviderProjectRollupBreaksDownByTeamNeverSums(t *testing.T) 
 // metrics.go's identical guard for the investment project path.
 func TestInvestmentProviderProjectRollupNoOwningTeamsHasNoFactEntry(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM team_project_ownership", rows: nil}}}
+	client := &fakeClient{tables: []fakeTable{{match: "FROM investment_metrics_daily", rows: nil}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -214,7 +214,7 @@ func TestInvestmentProviderProjectRollupCapsBreakdownAt64Rows(t *testing.T) {
 	for i := 0; i < rowsOverCap; i++ {
 		rows[i] = investmentProjectRollupRow("linear", "proj-1", "team-"+strconv.Itoa(i), "Team", "product", "growth", 1, 1, 0, 0, 0)
 	}
-	client := &fakeClient{tables: []fakeTable{{match: "FROM team_project_ownership", rows: rows}}}
+	client := &fakeClient{tables: []fakeTable{{match: "FROM investment_metrics_daily", rows: rows}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},

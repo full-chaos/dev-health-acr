@@ -17,12 +17,17 @@ import (
 // rollups read, rendered from the shared production declaration
 // (devhealthschema) -- including team_repo_ownership, which codex round-1
 // P2 found undeclared there (this table's first reader in this package).
+// work_unit_investments and repos are CHAOS-5930's addition: the SAME
+// InvestmentProvider.ReadFacts project branch this suite already drives now
+// always also calls readProjectThemeMix, so a project-subject investment
+// read here needs both tables present regardless of whether a given
+// subtest seeds any rows into them.
 func createCHAOS4363Tables(t *testing.T, ctx context.Context, connection clickhousedriver.Conn) {
 	t.Helper()
 	for _, statement := range devhealthschema.DDL(
 		"projects", "team_project_ownership", "team_repo_ownership", "teams",
 		"investment_metrics_daily", "capacity_forecasts", "estimate_coverage_metrics_daily",
-		"compounding_risk_daily",
+		"compounding_risk_daily", "work_unit_investments", "repos", "work_item_team_attributions",
 	) {
 		if err := connection.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
