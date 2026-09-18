@@ -527,11 +527,11 @@ func (p *InvestmentProvider) readProjectInvestment(ctx context.Context, orgID st
 // unmatched row reads as attributed. nullIf(t.team_id, ”) alone has this
 // property: NULL stays NULL, an empty-string team_id also collapses to
 // NULL, and only a real, non-empty team_id survives to compare NOT NULL.
-// readTeamThemeMix's own analogous check (investment_theme.go's cnt
-// expression) has this same no-fallback shape; this is the one definition
-// for this producer's evidence vote, so a second call site reuses it
-// rather than re-deriving an equivalent-looking expression that quietly
-// adds a fallback and stops discriminating.
+// readers.ReadTeamThemeMix's own analogous count expression has this same
+// no-fallback shape; this is the one definition for this producer's
+// evidence vote, so a second call site reuses it rather than re-deriving
+// an equivalent-looking expression that quietly adds a fallback and stops
+// discriminating.
 const evidenceVoteAttributedPredicate = "nullIf(t.team_id, '') IS NOT NULL"
 
 // themeInvestmentRangePredicate mirrors dev-health-go's

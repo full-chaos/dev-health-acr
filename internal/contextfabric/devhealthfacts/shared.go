@@ -76,7 +76,15 @@ import (
 // field) it never served before -- no new query, but a candidate saved
 // under v6 never computed this value and must not be served as though it
 // carried it.
-const QueryVersion = "devhealthfacts.clickhouse.v7"
+//
+// v7 -> v8: FactInvestment's project rollup gains a top-level
+// "theme_feature_delivery"/"theme_operational"/"theme_maintenance"/
+// "theme_quality"/"theme_risk"/"theme_quality_bugfix" share, disclosed via
+// new "rollup_basis"/"team_count"/"repo_count"/"work_unit_count"/
+// "work_units_without_repo_link"/"population_window" fields, from a new
+// query a candidate saved under v7 never ran -- same over-invalidation
+// rationale as every prior bump.
+const QueryVersion = "devhealthfacts.clickhouse.v8"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
