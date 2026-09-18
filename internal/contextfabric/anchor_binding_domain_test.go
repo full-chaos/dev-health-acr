@@ -522,3 +522,63 @@ func jsonStringOfLength(t *testing.T, n int) json.RawMessage {
 	}
 	return json.RawMessage(`"` + strings.Repeat("x", n-2) + `"`)
 }
+
+// TestAGuardDecisionThatChangesTheBindingDiffersInAnInputKey is the
+// completeness pair for the one binder input that is not an
+// anchorBindingInput field: the subject-substitution guard's decision, which
+// the tracker reads to choose the proof. Two turns identical in everything
+// else -- the same parent binding, the same decisive resolution proving beta,
+// the same saved document committing nothing -- differ only in whether the
+// guard fired. They decide differently, and the line names why in an INPUT
+// key: substitution_guard itself, and the proof it chose under
+// committed_subjects.
+func TestAGuardDecisionThatChangesTheBindingDiffersInAnInputKey(t *testing.T) {
+	provenBeta, betaBases := proofOf(CommitBasisAuthoritativeIdentity, bindBeta)
+	tracker := func(guard SubjectSubstitutionOutcome) *anchorBindingTracker {
+		return &anchorBindingTracker{
+			parent:     anchorBindingParent{ResultID: "result_parent", Status: AnchorBindingParentPresent, Binding: heldBinding(AnchorBindingBound, bindAlpha)},
+			epoch:      7,
+			evaluation: AnchorBindingEvaluationResolved,
+			frame:      countingFrame(SubjectTeam),
+			resolution: provenBeta, bases: betaBases,
+			substitution: guard,
+		}
+	}
+	// The guarded document: nothing committed, as the guard's exit saves it.
+	saved := InvestigationResult{ResultID: "result_guarded", SubjectResolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}}
+	lineOf := func(event AnchorBindingTransitionEvent) map[string]string {
+		args := AnchorBindingTransitionLogArgs(event, "org_guard_pair")
+		out := map[string]string{}
+		for i := 0; i+1 < len(args); i += 2 {
+			out[args[i].(string)] = fmt.Sprint(args[i+1])
+		}
+		return out
+	}
+	firedTo, firedEvent := tracker(SubjectSubstitutionClarified).decide(BudgetAssertSubjectlessTerminal, saved, nil)
+	quietTo, quietEvent := tracker(SubjectSubstitutionNotEvaluated).decide(BudgetAssertSubjectlessTerminal, saved, nil)
+	if firedTo == quietTo {
+		t.Fatalf("premise: the guard decision changed nothing (%+v)", firedTo)
+	}
+	if firedTo.State != AnchorBindingContested || firedTo.Reason != AnchorBindingReasonContestedByResolution || firedTo.ContenderID != bindBeta.ID {
+		t.Fatalf("fired guard binding = %+v, want alpha contested by beta", firedTo)
+	}
+	if quietTo.Reason != AnchorBindingReasonCarriedSilent {
+		t.Fatalf("unfired guard binding = %+v, want the served document read as silence", quietTo)
+	}
+	inputKeys := map[string]bool{}
+	for _, key := range anchorBindingLineInputKeys {
+		inputKeys[key] = true
+	}
+	fired, quiet := lineOf(firedEvent), lineOf(quietEvent)
+	var differingInputs []string
+	for key, value := range fired {
+		if quiet[key] != value && inputKeys[key] {
+			differingInputs = append(differingInputs, key)
+		}
+	}
+	sort.Strings(differingInputs)
+	if !containsString(differingInputs, "substitution_guard") || !containsString(differingInputs, "committed_subjects") {
+		t.Fatalf("differing input keys = %v, want substitution_guard and committed_subjects", differingInputs)
+	}
+	t.Logf("guard fired vs not: %s/%s -> %s/%s; differing input keys %v", firedTo.State, firedTo.Reason, quietTo.State, quietTo.Reason, differingInputs)
+}
