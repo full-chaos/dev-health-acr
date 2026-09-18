@@ -9,7 +9,7 @@
       "result_id",
       "site"
     ],
-    "bounded_aggregation": "exactly one line per (result, site): each Save and each reuse serve emits one while the shadow runs. A request whose decisive Save loses a structure claim saves again at the structure_veto site, so one request can carry two lines, never two for one result at one site.",
+    "bounded_aggregation": "exactly one line per attempt, and this event's attempt is its whole Attribution -- (org_id, result_id, site) -- because each Save and each reuse serve decides its own binding and emits its own line while the shadow runs. site is the discriminator a reader joins on: decisive is the one the request's answer is served from, and a request whose decisive Save loses a structure claim saves a second result at the structure_veto site, so one request carries as many lines as it saved results, never two for one result at one site.",
     "fields": [
       {
         "key": "org_id",
@@ -169,8 +169,18 @@
         "presence": "required"
       },
       {
+        "key": "frame_member_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
         "key": "anchor_term_count",
         "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "anchor_term_matched_ids",
+        "type": "string_slice",
         "presence": "required"
       },
       {

@@ -231,6 +231,14 @@ type anchorRef struct {
 
 func (r anchorRef) none() bool { return r.ID == "" }
 
+// identifies reports whether the ref names one identity. Only an identifying
+// ref may be bound or contested: the public request contracts admit a subject
+// hint that carries a label and no canonical id, and a binding whose anchor or
+// contender has no id is one ValidateAnchorBinding refuses. Every ref the
+// binder can decide with is filtered here, so the binder's output is valid by
+// construction for every input those contracts admit.
+func (r anchorRef) identifies() bool { return r.Kind != "" && r.ID != "" }
+
 // AnchorBindingParentStatus is the closed status of the parent's binding.
 type AnchorBindingParentStatus string
 
@@ -450,7 +458,10 @@ func bindAnchor(in anchorBindingInput) (AnchorBinding, anchorBindingProposal) {
 	// naming another identity is unproven by construction.
 	for _, hint := range in.CallerHints {
 		ref := anchorRef{Kind: hint.Kind, ID: hint.ID}
-		if ref.Kind != to.Kind || ref.ID == to.CanonicalID {
+		// A hint that names no identity proves nothing and contests nothing.
+		// It stays an unproved hint, recorded on the line under
+		// caller_hint_ids, and never becomes a contender with no id.
+		if !ref.identifies() || ref.Kind != to.Kind || ref.ID == to.CanonicalID {
 			continue
 		}
 		to.State, to.Reason, to.ContenderKind, to.ContenderID = AnchorBindingContested, AnchorBindingReasonAmbiguousProof, ref.Kind, ref.ID
@@ -466,7 +477,10 @@ func bindAnchorOnProof(in anchorBindingInput) (AnchorBinding, anchorBindingPropo
 	carried := from.active()
 	var proposal anchorBindingProposal
 	switch {
-	case in.Receipt != nil:
+	// A receipt that states no kind decides no kind: the effective kind falls
+	// back to the carry, then to the reading, rather than becoming the empty
+	// kind that admits every committed subject.
+	case in.Receipt != nil && in.Receipt.AppliedKind != "":
 		proposal.EffectiveKind = in.Receipt.AppliedKind
 	case carried:
 		proposal.EffectiveKind = from.Kind
@@ -501,8 +515,8 @@ func bindAnchorOnProof(in anchorBindingInput) (AnchorBinding, anchorBindingPropo
 		return kept
 	}
 
-	if in.Receipt != nil && in.Receipt.AppliedValue != "" {
-		ref := anchorRef{Kind: in.Receipt.AppliedKind, ID: in.Receipt.AppliedValue}
+	if receiptRef := receiptAnchorRef(in.Receipt); receiptRef.identifies() {
+		ref := receiptRef
 		reason := AnchorBindingReasonCallerReceipt
 		if carried && (from.Kind != ref.Kind || from.CanonicalID != ref.ID) {
 			reason = AnchorBindingReasonReplacedByCaller
@@ -538,7 +552,9 @@ func bindAnchorOnProof(in anchorBindingInput) (AnchorBinding, anchorBindingPropo
 
 	caller := map[anchorRef]bool{}
 	for _, hint := range in.CallerHints {
-		caller[anchorRef{Kind: hint.Kind, ID: hint.ID}] = true
+		if ref := (anchorRef{Kind: hint.Kind, ID: hint.ID}); ref.identifies() {
+			caller[ref] = true
+		}
 	}
 	if !carried {
 		switch len(proposal.Proven) {
@@ -597,6 +613,15 @@ func bindAnchorOnProof(in anchorBindingInput) (AnchorBinding, anchorBindingPropo
 	}
 }
 
+// receiptAnchorRef is the identity a redeemed subject_anchor receipt names,
+// the zero ref when there is no receipt or it names none.
+func receiptAnchorRef(receipt *confirmedStructureMember) anchorRef {
+	if receipt == nil {
+		return anchorRef{}
+	}
+	return anchorRef{Kind: receipt.AppliedKind, ID: receipt.AppliedValue}
+}
+
 // firstOther is the first proved or contradicting identity that is not held.
 func firstOther(proposal anchorBindingProposal, held anchorRef) (anchorRef, bool) {
 	for _, ref := range append(append([]anchorRef{}, proposal.Proven...), proposal.Contradicting...) {
@@ -627,7 +652,7 @@ func provenAnchors(frame *QuestionFrame, kind SubjectKind, resolution SubjectRes
 			continue
 		}
 		ref := anchorRef{Kind: subject.Kind, ID: subject.CanonicalID}
-		if seen[ref] {
+		if !ref.identifies() || seen[ref] {
 			continue
 		}
 		seen[ref] = true
@@ -787,14 +812,23 @@ type AnchorBindingTransitionEvent struct {
 	GraphEpoch       int64
 	// Proposal.
 	FrameExpressionKind SubjectExpressionKind
-	AnchorTermCount     int
-	CommittedSubjects   []string
-	ModelAnchorKind     SubjectKind
-	NamedExpectedKind   SubjectKind
-	ReceiptAnchor       anchorRef
-	CallerHintIDs       []string
-	ProvenAnchorIDs     []string
-	EffectiveKind       SubjectKind
+	// FrameMemberKind is the kind the reading counts. A committed subject of
+	// that kind is the population being counted, never the anchor, so it
+	// decides admission and belongs on the line.
+	FrameMemberKind SubjectKind
+	AnchorTermCount int
+	// AnchorTermMatchedIDs are the committed subjects one of whose own
+	// candidates matched a stated anchor term, "<kind>:<canonical id>" in
+	// commit order. The terms themselves are never published: the match is
+	// what decides an identity-proven commit's admission.
+	AnchorTermMatchedIDs []string
+	CommittedSubjects    []string
+	ModelAnchorKind      SubjectKind
+	NamedExpectedKind    SubjectKind
+	ReceiptAnchor        anchorRef
+	CallerHintIDs        []string
+	ProvenAnchorIDs      []string
+	EffectiveKind        SubjectKind
 	// Decision.
 	To AnchorBinding
 	// Post-decision.
@@ -862,21 +896,38 @@ func (t *anchorBindingTracker) lineFor(site BudgetAssertStage, result Investigat
 		ResultID: result.ResultID, ParentResultID: t.parent.ResultID, Site: site,
 		Evaluation: in.Evaluation, ParentBinding: t.parent.Status, CarryChecks: t.parent.carryChecks(), From: in.From,
 		ParentGraphEpoch: t.parent.storedEpoch(), GraphEpoch: in.GraphEpoch,
-		CommittedSubjects: committedSubjectIDs(in.Resolution, in.Bases),
-		ModelAnchorKind:   in.ModelAnchorKind, NamedExpectedKind: namedKindOf(in.Frame),
+		CommittedSubjects:    committedSubjectIDs(in.Resolution, in.Bases),
+		AnchorTermMatchedIDs: anchorTermMatchedIDs(in.Frame, in.Resolution),
+		ModelAnchorKind:      in.ModelAnchorKind, NamedExpectedKind: namedKindOf(in.Frame),
 		CallerHintIDs: hintIDs(in.CallerHints), ProvenAnchorIDs: refIDs(proposal.Proven),
 		EffectiveKind: proposal.EffectiveKind, To: to, ServedCount: "not_evaluated",
 	}
 	if in.Frame != nil {
 		event.FrameExpressionKind = in.Frame.SubjectExpression.Kind
+		event.FrameMemberKind, _ = in.Frame.SubjectExpression.MemberKind()
 		if in.Frame.SubjectExpression.Scoped != nil {
 			event.AnchorTermCount = len(in.Frame.SubjectExpression.Scoped.AnchorTerms)
 		}
 	}
-	if in.Receipt != nil {
-		event.ReceiptAnchor = anchorRef{Kind: in.Receipt.AppliedKind, ID: in.Receipt.AppliedValue}
-	}
+	event.ReceiptAnchor = receiptAnchorRef(in.Receipt)
 	return event
+}
+
+// anchorTermMatchedIDs is every committed subject whose own candidates matched
+// a stated anchor term, as "<kind>:<canonical id>", in commit order and
+// without duplicates.
+func anchorTermMatchedIDs(frame *QuestionFrame, resolution SubjectResolution) []string {
+	seen := map[anchorRef]bool{}
+	out := make([]string, 0, len(resolution.Committed))
+	for _, subject := range resolution.Committed {
+		ref := anchorRef{Kind: subject.Kind, ID: subject.CanonicalID}
+		if seen[ref] || !anchorTermMatched(frame, subject, resolution) {
+			continue
+		}
+		seen[ref] = true
+		out = append(out, string(subject.Kind)+":"+subject.CanonicalID)
+	}
+	return out
 }
 
 func namedKindOf(frame *QuestionFrame) SubjectKind {
@@ -1098,7 +1149,9 @@ func AnchorBindingTransitionLogArgs(event AnchorBindingTransitionEvent, orgID st
 		"graph_epoch", event.GraphEpoch,
 		// PROPOSAL: what the binder read.
 		"frame_expression_kind", SanitizeLogAttr(string(event.FrameExpressionKind)),
+		"frame_member_kind", SanitizeLogAttr(string(event.FrameMemberKind)),
 		"anchor_term_count", event.AnchorTermCount,
+		"anchor_term_matched_ids", SanitizeLogStrings(nonNilStrings(event.AnchorTermMatchedIDs)),
 		"committed_subjects", SanitizeLogStrings(nonNilStrings(event.CommittedSubjects)),
 		"model_anchor_kind", SanitizeLogAttr(string(event.ModelAnchorKind)),
 		"named_expected_kind", SanitizeLogAttr(string(event.NamedExpectedKind)),

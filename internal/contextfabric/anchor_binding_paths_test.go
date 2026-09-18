@@ -387,18 +387,37 @@ func TestAnchorBindingLineWritesAbsentListsAsEmptyLists(t *testing.T) {
 // TestEveryBinderInputIsOnTheTransitionLine: each field bindAnchor reads, and
 // each field of the binding it starts from, is written under a named key;
 // a field added without one fails here.
+//
+// This is the STRUCTURAL half only, and it is weaker than it looks: a map
+// written by hand can name a key that is really an output (it named
+// proven_anchor_ids as Resolution's key while the frame's member kind and the
+// anchor-term match had no key at all, and passed). Every key named here is
+// therefore asserted to be a declared INPUT key, and the behavioural proof --
+// two turns that decide differently always differ in an input key -- is
+// TestTwoTurnsWithEqualLineInputsDecideTheSameBinding.
 func TestEveryBinderInputIsOnTheTransitionLine(t *testing.T) {
 	inputKeys := map[string][]string{
 		"From":            {"from_state", "from_kind", "from_id", "from_proof", "from_reason", "from_origin_result_id", "from_graph_epoch", "from_contender_kind", "from_contender_id", "parent_binding", "parent_graph_epoch", "carry_checks"},
 		"Evaluation":      {"evaluation"},
-		"Frame":           {"frame_expression_kind", "anchor_term_count", "named_expected_kind"},
+		"Frame":           {"frame_expression_kind", "frame_member_kind", "anchor_term_count", "anchor_term_matched_ids", "named_expected_kind"},
 		"ModelAnchorKind": {"model_anchor_kind"},
 		"Receipt":         {"receipt_anchor_kind", "receipt_anchor_id"},
 		"CallerHints":     {"caller_hint_ids"},
-		"Resolution":      {"committed_subjects", "proven_anchor_ids"},
+		"Resolution":      {"committed_subjects", "anchor_term_matched_ids"},
 		"Bases":           {"committed_subjects"},
 		"ResultID":        {"result_id"},
 		"GraphEpoch":      {"graph_epoch"},
+	}
+	declaredInput := map[string]bool{}
+	for _, key := range anchorBindingLineInputKeys {
+		declaredInput[key] = true
+	}
+	for name, keys := range inputKeys {
+		for _, key := range keys {
+			if !declaredInput[key] {
+				t.Errorf("binder input %s is mapped to %q, which is not a declared INPUT key of the line", name, key)
+			}
+		}
 	}
 	bindingKeys := map[string]string{
 		"State": "from_state", "Kind": "from_kind", "CanonicalID": "from_id", "Proof": "from_proof", "Reason": "from_reason",

@@ -75,6 +75,18 @@ const (
 	// MultiplicityZeroOrOnePerPass now REQUIRE a declared "pass" field
 	// (enforced by the same consistency check), and this one requires the
 	// opposite.
+	//
+	// THE SCOPE IS THE EVENT'S OWN Attribution, NOT THE WORD "REQUEST".
+	// certify.Certify gathers the lines of one ATTEMPT -- every declared
+	// Attribution field -- and refuses more than one line in that attempt.
+	// An event attributed by "request_id" alone therefore does mean one line
+	// per call; an event whose Attribution is compound means one line per
+	// compound scope, and a call that runs that scope twice legitimately
+	// carries two lines. AnswerDisplay ("request_id", "surface") and
+	// AnchorBindingTransition ("org_id", "result_id", "site") are the
+	// compound cases: each of their extra Attribution fields is the
+	// discriminator a reader joins on, and each is a required field with a
+	// closed vocabulary where one is enumerable.
 	MultiplicityExactlyOnePerRequest Multiplicity = "exactly_one_per_request"
 	// MultiplicityZeroOrOnePerRequest (CHAOS-5517): the request-scoped
 	// sibling of MultiplicityZeroOrOnePerPass -- a line produced at most
@@ -2515,7 +2527,7 @@ var AnchorBindingTransition = Event{
 	Level:              LevelInfo,
 	Multiplicity:       MultiplicityExactlyOnePerRequest,
 	Attribution:        []string{"org_id", "result_id", "site"},
-	BoundedAggregation: "exactly one line per (result, site): each Save and each reuse serve emits one while the shadow runs. A request whose decisive Save loses a structure claim saves again at the structure_veto site, so one request can carry two lines, never two for one result at one site.",
+	BoundedAggregation: "exactly one line per attempt, and this event's attempt is its whole Attribution -- (org_id, result_id, site) -- because each Save and each reuse serve decides its own binding and emits its own line while the shadow runs. site is the discriminator a reader joins on: decisive is the one the request's answer is served from, and a request whose decisive Save loses a structure claim saves a second result at the structure_veto site, so one request carries as many lines as it saved results, never two for one result at one site.",
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "result_id", Type: FieldString, Presence: PresenceRequired},
@@ -2549,9 +2561,18 @@ var AnchorBindingTransition = Event{
 		// Open: a SubjectExpressionKind token, empty with no frame. Only a
 		// children_of_scope frame can bind an anchor.
 		{Key: "frame_expression_kind", Type: FieldString, Presence: PresenceRequired},
+		// Open: the SubjectKind the reading counts, empty when the frame names
+		// none. A committed subject of that kind is the population being
+		// counted and is never admitted as the anchor, so it decides
+		// admission and two turns that differ only here differ here.
+		{Key: "frame_member_kind", Type: FieldString, Presence: PresenceRequired},
 		// How many anchor terms the frame names; the terms are corpus text and
 		// are never published.
 		{Key: "anchor_term_count", Type: FieldInt, Presence: PresenceRequired},
+		// Open: "<kind>:<canonical id>" for every committed subject one of
+		// whose own candidates matched a stated anchor term, empty when none.
+		// The match, not the term, is what admits an identity-proven commit.
+		{Key: "anchor_term_matched_ids", Type: FieldStringSlice, Presence: PresenceRequired},
 		// Open: "<kind>:<canonical id>=<commit basis>" for every committed
 		// subject the binder weighed, empty when none.
 		{Key: "committed_subjects", Type: FieldStringSlice, Presence: PresenceRequired},

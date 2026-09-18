@@ -710,6 +710,21 @@ func TestAnchorBindingShadowParityAtEverySaveSite(t *testing.T) {
 			if last.Site != scenario.site || last.Evaluation != scenario.reach {
 				t.Fatalf("last line site/evaluation = %s/%s, want %s/%s", last.Site, last.Evaluation, scenario.site, scenario.reach)
 			}
+			// THE DECLARED MULTIPLICITY, COUNTED ON EVERY SAVE-SITE PATH.
+			// eventspec declares exactly one line per ATTEMPT, and this
+			// event's attempt is its whole Attribution: (org_id, result_id,
+			// site). One request carries as many lines as it saved results --
+			// a decisive Save that loses a structure claim saves a second
+			// result at the structure_veto site -- and never two lines for
+			// one result at one site.
+			attempts := map[string]bool{}
+			for _, line := range on.transitions {
+				key := line.ResultID + "\x00" + string(line.Site)
+				if attempts[key] {
+					t.Fatalf("two lines for one (result_id, site): %q / %s -- the declared multiplicity is exactly one per attempt", line.ResultID, line.Site)
+				}
+				attempts[key] = true
+			}
 			for _, line := range on.transitions {
 				if line.To.Reason == AnchorBindingReasonUnrecorded {
 					t.Fatalf("a Save reached persistence with no binding decision: %+v", line)
