@@ -84,7 +84,17 @@ import (
 // "work_units_without_repo_link"/"population_window" fields, from a new
 // query a candidate saved under v7 never ran -- same over-invalidation
 // rationale as every prior bump.
-const QueryVersion = "devhealthfacts.clickhouse.v8"
+//
+// v8 -> v9: FactWorkload's project rollup gains a top-level
+// "forecast_p50_days" (the worst/longest p50 across the project's own
+// team_breakdown population that carries a contributing team, disclosed
+// via new "p50_basis"/"p50_unavailable_reason"/"p50_known_count"/
+// "p50_excluded_unattributed_count"/"p50_excluded_null_p50_count" fields,
+// backed by a new server-side aggregate query) it never served before --
+// same over-invalidation rationale as every prior bump: a candidate saved
+// under v8 never ran this aggregate and must not be served as though it
+// carried the promoted value.
+const QueryVersion = "devhealthfacts.clickhouse.v9"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
