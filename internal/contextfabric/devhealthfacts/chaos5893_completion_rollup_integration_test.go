@@ -1,7 +1,6 @@
 package devhealthfacts_test
 
-// CHAOS-5893 round 1 (codex xhigh, "text-presence asserts on SQL do not
-// count" -- P3): the roll-up's own unit tests use fakeClient, which returns
+// CHAOS-5893: the roll-up's own unit tests use fakeClient, which returns
 // pre-aggregated canned rows selected by a SQL text marker regardless of
 // the statement's WHERE clause -- a predicate defect is invisible there by
 // construction. These tests EXECUTE workItemProjectCompletionStatement
@@ -108,7 +107,7 @@ func TestActualCompletionProjectRollupStatusMatrixAgainstRealClickHouse(t *testi
 		{"WI-INPROGRESS-OPEN", "in_progress", nil},
 		{"WI-DONE-COMPLETED", "done", &at},
 		{"WI-DONE-OPEN", "done", nil},              // done but no completed_at: not counted as completed
-		{"WI-CANCELED-COMPLETED", "canceled", &at}, // codex r1 P1 repro
+		{"WI-CANCELED-COMPLETED", "canceled", &at}, // cancelled with a completed_at: must not inflate completed_count
 		{"WI-CANCELED-OPEN", "canceled", nil},
 		{"WI-UNKNOWN-COMPLETED", "unknown", &at},
 		{"WI-UNKNOWN-OPEN", "unknown", nil},
@@ -157,7 +156,7 @@ func TestActualCompletionProjectRollupStatusMatrixAgainstRealClickHouse(t *testi
 		t.Errorf("completion_ratio = %v, want %v", got, 2.0/7.0)
 	}
 	if got := factInt(t, *fact, "completed_count"); got > factInt(t, *fact, "counted_work_items") {
-		t.Errorf("completed_count = %d exceeds counted_work_items = %d -- class A partition invariant violated", got, factInt(t, *fact, "counted_work_items"))
+		t.Errorf("completed_count = %d exceeds counted_work_items = %d -- the population partition invariant is violated", got, factInt(t, *fact, "counted_work_items"))
 	}
 }
 
@@ -297,13 +296,13 @@ func TestActualCompletionProjectRollupAuthorizationAgainstRealClickHouse(t *test
 	}
 }
 
-// TestActualCompletionProjectRollupLimitProbeAgainstRealClickHouse is class
-// C: the exact-limit and limit+1 boundary EXECUTED, not asserted from a
+// TestActualCompletionProjectRollupLimitProbeAgainstRealClickHouse
+// executes the exact-limit and limit+1 boundary, not asserted from a
 // canned row count. maxFactRowsPerQuery projects (each with one completed
 // work item) must serve all of them with Truncated=false; one more must
-// serve only maxFactRowsPerQuery of them with Truncated=true -- codex r1
-// P1's exact reproduction (a LIMIT 200 read cannot tell "exactly 200" from
-// "201 and the probe row was cut").
+// serve only maxFactRowsPerQuery of them with Truncated=true -- a LIMIT
+// 200 read alone cannot tell "exactly 200" from "201 and the probe row
+// was cut".
 //
 // A dedicated container, not the shared package fixture: the shared
 // fixture's default database accumulates rows from every other test in

@@ -200,8 +200,8 @@ func TestActualCompletionProjectRollup_UnrequestedProjectRowNeverAppears(t *test
 }
 
 // TestActualCompletionProjectRollup_WindowActiveRefusesRatherThanMisreportHistory
-// is class E (codex r1 P2, source-traced): the roll-up's cancelled/unknown
-// exclusion reads CURRENT w.status, a column with no recorded history, so
+// pins that the roll-up's cancelled/unknown exclusion reads CURRENT
+// w.status, a column with no recorded history, so
 // an as-of query cannot honestly compute "the roll-up as of T" -- it would
 // silently substitute today's status for the requested instant's. The
 // project branch refuses the whole non-current axis rather than serve that,
@@ -303,7 +303,7 @@ func assertNumber(t *testing.T, fact contextfabric.CanonicalFact, field string, 
 	}
 }
 
-// --- Class F (scan-583): no branch starves another on the shared budget ---
+// --- No branch starves another on the shared budget ---
 
 // countFactsByKind counts the facts whose Subject is of kind.
 func countFactsByKind(facts []contextfabric.CanonicalFact, kind contextfabric.SubjectKind) int {
@@ -355,13 +355,12 @@ func strconvItoa(i int) string {
 	return string(buf[pos:])
 }
 
-// TestActualCompletionSharedBudgetNoBranchStarvesTheOther is class F
-// (scan-583 finding): the work-item and project branches share ONE
-// 200-row factBudget. Reading the work-item branch first let a large
-// work-item request silently exhaust the shared cap before the project
-// branch ever ran -- 200 work-item subjects alongside a single project
-// subject served all 200 work items, Truncated=true, and dropped the
-// project's own roll-up fact with nothing naming which kind was cut.
+// TestActualCompletionSharedBudgetNoBranchStarvesTheOther pins that the
+// work-item and project branches, sharing ONE 200-row factBudget, never
+// let one branch's own admissions come at the other's expense: the
+// project branch runs first, and a shortfall on either branch names the
+// kind it fell on rather than folding into an undifferentiated Truncated
+// flag.
 //
 // This executes the full {0, 1, budget-1, budget, budget+1} work-item x
 // {0, 1, many} project cross, in BOTH caller-supplied subject orders, and

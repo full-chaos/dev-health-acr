@@ -1592,9 +1592,9 @@ func (r *FactReadScopeResolver) Resolve(
 			// on the same policy switch.
 			continue
 		}
-		// codex r1 P1 (CHAOS-5893 round): a root of a kind the capability
-		// answers directly must never suppress the decision for a SEPARATE,
-		// unsupported root in the same requirement -- a mixed {project,
+		// A root of a kind the capability answers directly must never
+		// suppress the decision for a SEPARATE, unsupported root in the
+		// same requirement -- a mixed {project,
 		// team} request against a capability that supports project
 		// directly but reaches team only through expansion still owes the
 		// team root its own expansion decision, disclosed gap included, the

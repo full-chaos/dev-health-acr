@@ -213,34 +213,29 @@ func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal stor
 	totalRows := 0
 	historicalProjectRejected := 0
 	integrityViolations := 0
-	// workItemBudgetDropped/projectBudgetDropped (scan-583, class F): a
-	// per-branch delta over budget's own admit-refusal counter, so a
-	// shortfall is attributable to the KIND whose subjects were not read,
-	// never folded into one undifferentiated Truncated flag. See
-	// applySharedBudgetOmission below.
+	// workItemBudgetDropped/projectBudgetDropped is a per-branch delta over
+	// budget's own admit-refusal counter, so a shortfall is attributable to
+	// the KIND whose subjects were not read, never folded into one
+	// undifferentiated Truncated flag. See applySharedBudgetOmission below.
 	workItemBudgetDropped := 0
 	projectBudgetDropped := 0
 
-	// THE PROJECT BRANCH RUNS FIRST (scan-583, class F: "no branch starves
-	// another"). It reads at most one row per REQUESTED project -- bounded
-	// by the caller's own project count, ordinarily small -- while the
-	// work-item branch below can be asked about up to maxFactRowsProbe
-	// individual work items. Sharing one 200-row budget with the work-item
-	// branch reading FIRST let a large work-item request silently exhaust
-	// it before the project branch ever got a slot: 200 work-item subjects
-	// alongside a single project subject served the 200 work items,
-	// Truncated=true, and dropped the project's own roll-up fact with no
-	// disclosure naming which kind was cut. Reading the bounded, cheap
-	// branch first means the project root's own answer is never starved by
-	// a sibling branch spending the shared budget before it runs.
+	// THE PROJECT BRANCH RUNS FIRST. It reads at most one row per
+	// REQUESTED project -- bounded by the caller's own project count,
+	// ordinarily small -- while the work-item branch below can be asked
+	// about up to maxFactRowsProbe individual work items. Reading the
+	// bounded, cheap branch first means the project root's own answer is
+	// never starved by a sibling branch spending the shared budget before
+	// it runs, and a shortfall on either branch's own admissions is
+	// attributed to that branch's own kind rather than left undisclosed.
 	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
 		if timeBound.active {
-			// Class E (codex r1 P2, source-traced): the roll-up's
-			// cancelled/unknown exclusion reads CURRENT w.status, which has
-			// no recorded history -- the same limitation Tier C providers
-			// refuse outright (timebound.go's noHistoryUnsupportedReason).
-			// Running the as-of completed_at predicate anyway and labeling
-			// the result historical would misreport today's status as the
+			// The roll-up's cancelled/unknown exclusion reads CURRENT
+			// w.status, which has no recorded history -- the same
+			// limitation Tier C providers refuse outright
+			// (timebound.go's noHistoryUnsupportedReason). Running the
+			// as-of completed_at predicate anyway and labeling the
+			// result historical would misreport today's status as the
 			// status at the requested instant, so the project branch is
 			// refused wholesale on any non-current axis instead. The
 			// work-item branch below is unaffected: it never reads status.
@@ -310,11 +305,11 @@ func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal stor
 
 // applySharedBudgetOmission discloses that count subjects of kind's OWN
 // requested set were not read because the work-item and project branches
-// share one factBudget (scan-583, class F): a branch that runs after the
-// other has already spent the shared cap can be left with fewer admissions
-// than its own requested subject count, and that shortfall must name the
-// KIND it fell on rather than fold into the undifferentiated Truncated flag
-// every other omission on this budget already sets.
+// share one factBudget: a branch that runs after the other has spent the
+// shared cap can be left with fewer admissions than its own requested
+// subject count, and that shortfall names the KIND it fell on rather than
+// folding into the undifferentiated Truncated flag every other omission on
+// this budget already sets.
 func applySharedBudgetOmission(result *contextfabric.FactProviderResult, kind string, count int) {
 	if count <= 0 {
 		return
@@ -422,14 +417,13 @@ func (p *ActualCompletionProvider) readProjectActualCompletion(ctx context.Conte
 			return nil
 		}
 		rowCount++
-		// ONE POPULATION PARTITION (class A, codex r1 ruling): every count
-		// below is defined over the SAME work_item_count, and a served row
-		// must satisfy the arithmetic its own fields claim -- counted +
-		// cancelled == total, and completed/unknown are both subsets of
-		// counted. The shipped statement cannot violate this (every count is
-		// a plain countIf over one GROUP BY), so a violation here means a
-		// future edit broke that invariant; fail CLOSED (no fact, disclosed
-		// reason) rather than serve a ratio the row's own numbers disprove.
+		// ONE POPULATION PARTITION: every count below is defined over the
+		// SAME work_item_count, and a served row must satisfy the
+		// arithmetic its own fields claim -- counted + cancelled == total,
+		// and completed/unknown are both subsets of counted. The shipped
+		// statement cannot violate this (every count is a plain countIf
+		// over one GROUP BY); fail CLOSED (no fact, disclosed reason)
+		// rather than serve a ratio the row's own numbers disprove.
 		if cancelledCount > workItemCount || unknownStatusCount > workItemCount {
 			integrityViolations++
 			return nil
@@ -484,11 +478,11 @@ func (p *ActualCompletionProvider) readProjectActualCompletion(ctx context.Conte
 // applies, so a project's roll-up never counts a work item the requesting
 // principal could not otherwise see.
 //
-// The completed countIf is guarded with `AND w.status != 'canceled'`
-// (codex r1 P1): completed_count must be a SUBSET of counted_work_items,
-// and counted_work_items already excludes cancelled items, so a cancelled
-// item that also carries a completed_at can never inflate the numerator
-// past the denominator.
+// The completed countIf is guarded with `AND w.status != 'canceled'`:
+// completed_count must be a SUBSET of counted_work_items, and
+// counted_work_items excludes cancelled items, so a cancelled item that
+// also carries a completed_at can never inflate the numerator past the
+// denominator.
 //
 // CURRENT AXIS ONLY -- see readProjectActualCompletion's own doc comment
 // for why this never takes an as-of predicate. LIMIT+1 (withRowProbeLimit,

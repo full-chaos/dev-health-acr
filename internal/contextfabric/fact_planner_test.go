@@ -466,9 +466,9 @@ func TestReadFactsPruningIsNotADegradation(t *testing.T) {
 // names must be unique, so the narrowing has to ride on the capability's own
 // observation rather than getting an entry of its own.
 //
-// The narrowed-out team subject is not merely dropped, either (codex r1 P1,
-// CHAOS-5893 round): FactMetrics carries a REAL, enabled team-origin
-// expansion policy in the production scope table
+// The narrowed-out team subject is not merely dropped, either: FactMetrics
+// carries a REAL, enabled team-origin expansion policy in the production
+// scope table
 // (team_primary_attribution_repository_v1), so the resolver independently
 // decides that root too, unaffected by the repository root's own live
 // direct answer -- Coverage.Partial is true because a real, enabled policy
