@@ -301,6 +301,14 @@ func TestChaos4521b_AnUnattributedRowIsKeptButNotCountedAsATeam(t *testing.T) {
 		kind        contextfabric.FactKind
 		sourceTable string
 		rows        [][]any
+		// extraTables covers a producer that issues a THIRD query beyond
+		// sourceTable -- CHAOS-5931 added queryProjectWorkloadP50Max, an
+		// uncapped population-source aggregate over the same rows -- so a
+		// fakeClient seeded with only sourceTable would feed this case's
+		// row-level fixture into the aggregate's fewer-column scan too,
+		// panicking on a type assertion (workloadP50MaxMatch's own doc
+		// comment explains why order matters here).
+		extraTables []fakeTable
 	}{
 		{
 			// CHAOS-4645: narrowed from the broad "FROM
@@ -329,12 +337,19 @@ func TestChaos4521b_AnUnattributedRowIsKeptButNotCountedAsATeam(t *testing.T) {
 				{"linear:proj-1", uint8(0), "", "", "scope-a", float64(1.0), float64(0.1), uint8(0), int64(0), uint8(0), uint8(0), int64(4), "2026-07-27 04:00:00"},
 				{"linear:proj-1", uint8(1), "team-1", "Team One", "scope-b", float64(3.2), float64(0.8), uint8(0), int64(0), uint8(0), uint8(1), int64(120), "2026-07-27 04:00:00"},
 			},
+			// Neither seeded row carries a p50 (HasP50Days=0 in both), so
+			// the aggregate honestly reports no known p50 across the same 2
+			// reachable rows -- one excluded for having no contributing
+			// team at all, the other for having a team but no p50.
+			extraTables: []fakeTable{{match: workloadP50MaxMatch, rows: [][]any{workloadP50MaxRow("linear", "proj-1", 0, 1, 1, 0, "", "", false, false)}}},
 		},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			client := &fakeClient{tables: []fakeTable{{match: testCase.sourceTable, rows: testCase.rows}}}
+			tables := append([]fakeTable{}, testCase.extraTables...)
+			tables = append(tables, fakeTable{match: testCase.sourceTable, rows: testCase.rows})
+			client := &fakeClient{tables: tables}
 			provider := findProvider(t, devhealthfacts.NewProviders(client), testCase.kind)
 			result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 				Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
