@@ -465,3 +465,24 @@ func TestNewInterpretationRejectionLeavesRejectedFactKindEmpty(t *testing.T) {
 		t.Fatalf("InterpretationRejectedFactKindOf() = (%q, %t), want (\"\", false) -- NewInterpretationRejection alone never sets RejectedFactKind", kind, ok)
 	}
 }
+
+// TestInterpretationRejectedFactKindOfEnforcesReasonIndependentlyOfEmptiness
+// pins the REASON gate on its own, separate from the emptiness gate
+// TestInterpretationRejectedFactKindOfIsAbsentForEveryOtherRejection already
+// covers. A hand-built *InterpretationRejection here carries a NON-EMPTY
+// RejectedFactKind under an UNRELATED Reason -- a shape no production caller
+// builds (ClassifyInterpretationRejection only ever sets the field alongside
+// the matching reason), but the one shape that proves the reason check runs
+// at all rather than the function merely happening to see an empty string on
+// every other reason in practice.
+func TestInterpretationRejectedFactKindOfEnforcesReasonIndependentlyOfEmptiness(t *testing.T) {
+	t.Parallel()
+	mismatched := &InterpretationRejection{
+		Reason:           contractsv1.ContextFabricInterpretationRejectionShapeInvalid,
+		RejectedFactKind: "should_never_surface",
+		err:              errors.New("boom"),
+	}
+	if kind, ok := InterpretationRejectedFactKindOf(mismatched); ok || kind != "" {
+		t.Fatalf("InterpretationRejectedFactKindOf() = (%q, %t), want (\"\", false) -- Reason is shape_invalid, not fact_requirement_kind_invalid", kind, ok)
+	}
+}
