@@ -60,6 +60,16 @@ func TestCHAOS5931ProjectWorkloadP50AgainstRealClickHouse(t *testing.T) {
 			t.Fatalf("seed capacity_forecasts row %s: %v", forecastID, err)
 		}
 	}
+	// seedForecastUnattributed is seedForecast's team_id-NULL counterpart:
+	// the source's own team_id was NULL, so the row carries real coverage
+	// but no contributing team to cite as evidence for it.
+	seedForecastUnattributed := func(orgID, forecastID, workScopeID string, p50 *uint16, insufficientHistory, highVariance uint8, computedAt time.Time) {
+		t.Helper()
+		if err := direct.Exec(ctx, `INSERT INTO capacity_forecasts (forecast_id, computed_at, work_scope_id, backlog_size, p50_days, throughput_mean, throughput_stddev, insufficient_history, high_variance, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			forecastID, computedAt, workScopeID, uint32(12), p50, 3.2, 0.8, insufficientHistory, highVariance, orgID); err != nil {
+			t.Fatalf("seed unattributed capacity_forecasts row %s: %v", forecastID, err)
+		}
+	}
 	p50 := func(days uint16) *uint16 { return &days }
 	readWorkloadFact := func(orgID, provider, projectID string, query contextfabric.FactQuery) *contextfabric.CanonicalFact {
 		t.Helper()
@@ -311,6 +321,152 @@ func TestCHAOS5931ProjectWorkloadP50AgainstRealClickHouse(t *testing.T) {
 		}
 		if !foundTeamZZZLateRef {
 			t.Fatalf("evidence_ref_ids = %#v, want a ref citing team-zzz-late -- the scope that produced the promoted p50, even though the row-level scan never reached it", late.EvidenceRefIDs)
+		}
+	})
+
+	// The promoted signal is TEAM-DERIVED: a row with no contributing team
+	// must never win the max, however large its own p50_days, and must
+	// never be counted as known -- there is no team to cite as evidence
+	// for it.
+	t.Run("workload_project_rollup_unattributed_forecast_excluded_from_max", func(t *testing.T) {
+		const orgID = "org-workload-p50-unattributed"
+		seedProject("proj-unattr", orgID, "linear", "UNATTR1")
+		seedForecastUnattributed(orgID, "f-unattr-1", "proj-unattr", p50(999), 0, 0, ts(2026, 8, 12, 6, 0, 0))
+		seedForecast(orgID, "f-unattr-2", "team-a", "proj-unattr", p50(10), 0, 0, ts(2026, 8, 12, 6, 0, 0))
+		fact := readWorkloadFact(orgID, "linear", "proj-unattr", contextfabric.FactQuery{})
+		if fact == nil {
+			t.Fatal("facts = none, want a served roll-up")
+		}
+		if got := fact.Fields["forecast_p50_days"].Integer; got == nil || *got != 10 {
+			t.Fatalf("forecast_p50_days = %#v, want 10 (team-a's own reading -- the unattributed row's 999 must never win)", fact.Fields["forecast_p50_days"])
+		}
+		if got := fact.Fields["p50_known_count"].Integer; got == nil || *got != 1 {
+			t.Fatalf("p50_known_count = %#v, want 1", fact.Fields["p50_known_count"])
+		}
+		if got := fact.Fields["p50_excluded_unattributed_count"].Integer; got == nil || *got != 1 {
+			t.Fatalf("p50_excluded_unattributed_count = %#v, want 1", fact.Fields["p50_excluded_unattributed_count"])
+		}
+	})
+
+	t.Run("workload_project_rollup_all_unattributed_discloses_reason", func(t *testing.T) {
+		const orgID = "org-workload-p50-all-unattributed"
+		seedProject("proj-allunattr", orgID, "linear", "ALLUNATTR1")
+		// A SECOND unattributed row for the SAME project would collide
+		// under the base read's own row_number() dedup -- team_id NULL and
+		// work_scope_id fixed to the project's own identity give both rows
+		// the IDENTICAL partition key, so only the latest survives; a
+		// project can only ever carry ONE unattributed row post-dedup, and
+		// that is what real capacity_forecasts data can produce. One real,
+		// unattributed row is sufficient to pin "the only reachable row
+		// carries no contributing team".
+		seedForecastUnattributed(orgID, "f-allunattr-1", "proj-allunattr", p50(30), 0, 0, ts(2026, 8, 12, 6, 0, 0))
+		fact := readWorkloadFact(orgID, "linear", "proj-allunattr", contextfabric.FactQuery{})
+		if fact == nil {
+			t.Fatal("facts = none, want a served roll-up (the breakdown itself is real)")
+		}
+		if _, ok := fact.Fields["forecast_p50_days"]; ok {
+			t.Fatalf("fields = %#v, want forecast_p50_days absent -- the reading is real but has no contributing team", fact.Fields)
+		}
+		if got := fact.Fields["p50_unavailable_reason"].String; got == nil || *got != "no_known_forecast_p50_days" {
+			t.Fatalf("p50_unavailable_reason = %#v", fact.Fields["p50_unavailable_reason"])
+		}
+		if got := fact.Fields["p50_excluded_unattributed_count"].Integer; got == nil || *got != 1 {
+			t.Fatalf("p50_excluded_unattributed_count = %#v, want 1", fact.Fields["p50_excluded_unattributed_count"])
+		}
+	})
+
+	// The three-way population partition must always sum to the total: a
+	// mix of a known reading, an unattributed reading and a null-p50
+	// reading in ONE project.
+	t.Run("workload_project_rollup_partition_counts_sum_to_total", func(t *testing.T) {
+		const orgID = "org-workload-p50-partition"
+		seedProject("proj-partition", orgID, "linear", "PARTITION1")
+		seedForecast(orgID, "f-partition-known", "team-a", "proj-partition", p50(15), 0, 0, ts(2026, 8, 12, 6, 0, 0))
+		seedForecastUnattributed(orgID, "f-partition-unattr", "proj-partition", p50(500), 0, 0, ts(2026, 8, 12, 6, 0, 0))
+		seedForecast(orgID, "f-partition-nullp50", "team-b", "proj-partition", nil, 0, 0, ts(2026, 8, 12, 6, 0, 0))
+		fact := readWorkloadFact(orgID, "linear", "proj-partition", contextfabric.FactQuery{})
+		if fact == nil {
+			t.Fatal("facts = none, want a served roll-up")
+		}
+		known := fact.Fields["p50_known_count"].Integer
+		unattr := fact.Fields["p50_excluded_unattributed_count"].Integer
+		nullP50 := fact.Fields["p50_excluded_null_p50_count"].Integer
+		total := fact.Fields["team_breakdown_rows_total"].Integer
+		if known == nil || unattr == nil || nullP50 == nil || total == nil {
+			t.Fatalf("partition fields = known:%v unattributed:%v null_p50:%v total:%v, want all present", known, unattr, nullP50, total)
+		}
+		if *known != 1 || *unattr != 1 || *nullP50 != 1 {
+			t.Fatalf("partition = known:%d unattributed:%d null_p50:%d, want 1/1/1", *known, *unattr, *nullP50)
+		}
+		if *known+*unattr+*nullP50 != *total {
+			t.Fatalf("partition does not sum to the total: known:%d + unattributed:%d + null_p50:%d = %d, want %d", *known, *unattr, *nullP50, *known+*unattr+*nullP50, *total)
+		}
+		if got := fact.Fields["forecast_p50_days"].Integer; got == nil || *got != 15 {
+			t.Fatalf("forecast_p50_days = %#v, want 15 (the only known, attributed reading)", fact.Fields["forecast_p50_days"])
+		}
+	})
+
+	// The winner-selection comparator must rank by (attributed-known,
+	// p50_days, hash) in that order -- a mutant that ranks by hash before
+	// p50_days would pick the WRONG winner whenever a smaller-p50 row's own
+	// hash exceeds the true winner's. A fake client cannot prove this (it
+	// only matches SQL text and returns canned rows); this computes the
+	// real server's own cityHash64 for a set of candidate rows FIRST, picks
+	// one whose hash provably exceeds the true winner's while carrying a
+	// SMALLER p50, and only then seeds and asserts -- so the adversarial
+	// condition is verified to hold before it is relied on, never assumed.
+	t.Run("workload_project_rollup_winner_selection_survives_adversarial_hash_order", func(t *testing.T) {
+		const orgID = "org-workload-p50-hash-adversarial"
+		const workScopeID = "proj-hash-adv"
+		const winnerTeam = "team-hash-adv-winner"
+		const winnerP50 = 50
+
+		var winnerHash uint64
+		if err := direct.QueryRow(ctx, `SELECT cityHash64(tuple(?, ?, toInt64(?)))`, winnerTeam, workScopeID, uint64(winnerP50)).Scan(&winnerHash); err != nil {
+			t.Fatalf("compute winner hash: %v", err)
+		}
+
+		var decoyTeam string
+		var decoyHash uint64
+		rows, err := direct.Query(ctx, `SELECT team_key, cityHash64(tuple(team_key, ?, toInt64(10))) AS h
+FROM (SELECT arrayJoin(arrayMap(x -> concat('team-hash-adv-decoy-', toString(x)), range(200))) AS team_key)
+ORDER BY h DESC`, workScopeID)
+		if err != nil {
+			t.Fatalf("query candidate decoy hashes: %v", err)
+		}
+		found := false
+		for rows.Next() {
+			var team string
+			var h uint64
+			if err := rows.Scan(&team, &h); err != nil {
+				rows.Close()
+				t.Fatalf("scan candidate decoy hash: %v", err)
+			}
+			if h > winnerHash {
+				decoyTeam, decoyHash = team, h
+				found = true
+				break
+			}
+		}
+		rows.Close()
+		if !found {
+			t.Fatal("fixture defect: no candidate decoy team's hash exceeds the winner's own hash among 200 candidates -- widen the candidate pool")
+		}
+		t.Logf("adversarial fixture: winner hash=%d (p50=%d), decoy hash=%d (p50=10, team=%s)", winnerHash, winnerP50, decoyHash, decoyTeam)
+
+		seedProject("proj-hash-adv", orgID, "linear", "HASHADV1")
+		seedForecast(orgID, "f-hash-adv-winner", winnerTeam, workScopeID, p50(winnerP50), 0, 0, ts(2026, 8, 12, 6, 0, 0))
+		seedForecast(orgID, "f-hash-adv-decoy", decoyTeam, workScopeID, p50(10), 0, 0, ts(2026, 8, 12, 6, 0, 0))
+		fact := readWorkloadFact(orgID, "linear", "proj-hash-adv", contextfabric.FactQuery{})
+		if fact == nil {
+			t.Fatal("facts = none, want a served roll-up")
+		}
+		// A hash-first comparator would rank the decoy (the larger hash)
+		// above the winner and promote its own p50 (10) instead of the
+		// true worst case (50) -- this is the exact mutation class a
+		// SQL-text-matching fake client cannot see.
+		if got := fact.Fields["forecast_p50_days"].Integer; got == nil || *got != winnerP50 {
+			t.Fatalf("forecast_p50_days = %#v, want %d (the true worst p50 -- a comparator ranking by hash before p50 would instead promote the decoy's 10)", fact.Fields["forecast_p50_days"], winnerP50)
 		}
 	})
 }
