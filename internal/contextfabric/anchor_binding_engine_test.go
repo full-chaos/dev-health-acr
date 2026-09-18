@@ -275,8 +275,15 @@ func TestShadowBindingNeverBindsAnAliasThatWinsOnAFollowUp(t *testing.T) {
 		{request: followUp("request_probe_alias_two", "And how many teams contribute to it?", nil), response: identityProvenResponse(probeBeta)},
 	})
 	two := turns[1]
-	if got := servedLedgerAnchor(two); got.ID != probeBeta.CanonicalID {
-		t.Fatalf("premise: the served follow-up ledger holds %+v; the reproduced seam captures beta", got)
+	// The follow-up names the parent and its own text resolves to beta. The
+	// subject-substitution guard withholds beta -- the turn clarifies and
+	// serves no subject -- so the served ledger captures nothing, and the
+	// binder still sees the proof the engine made.
+	if two.result.Status != InvestigationClarificationRequired || len(two.result.SubjectResolution.Committed) != 0 {
+		t.Fatalf("premise: the follow-up served %q with %d committed; the guard withholds beta", two.result.Status, len(two.result.SubjectResolution.Committed))
+	}
+	if got := servedLedgerAnchor(two); !got.none() {
+		t.Fatalf("premise: the served follow-up ledger holds %+v; a withheld subject is never captured", got)
 	}
 	binding := *bindingMember(two.saved)
 	want := AnchorBinding{
@@ -287,8 +294,12 @@ func TestShadowBindingNeverBindsAnAliasThatWinsOnAFollowUp(t *testing.T) {
 	if !reflect.DeepEqual(binding, want) {
 		t.Fatalf("follow-up binding = %+v, want %+v", binding, want)
 	}
-	if line := two.transitions[0]; line.Agreement != AnchorBindingDisagree || line.DisagreementField != AnchorBindingFieldCarriedAnchor || !reflect.DeepEqual(line.ProvenAnchorIDs, []string{"repository:" + probeBeta.CanonicalID}) {
-		t.Fatalf("follow-up line = %+v, want a carried_anchor disagreement proving beta", line)
+	// Nothing is served on the guarded turn, so the binder's held anchor and
+	// the served document agree that neither carries beta forward; the line
+	// still proves beta, and names the guard that withheld it.
+	if line := two.transitions[0]; line.Agreement != AnchorBindingAgree || line.DisagreementField != AnchorBindingFieldNone ||
+		!reflect.DeepEqual(line.ProvenAnchorIDs, []string{"repository:" + probeBeta.CanonicalID}) || !line.SubstitutionGuard.Fired() {
+		t.Fatalf("follow-up line = %+v, want an agreement over a withheld beta that the line still proves", line)
 	}
 }
 
@@ -648,7 +659,10 @@ func anchorSiteScenarios() []anchorSiteScenario {
 			}},
 		{name: "decisive_identity_proven", site: BudgetAssertDecisive, reach: AnchorBindingEvaluationResolved, zero: heldZero,
 			run: anchorProbeScenario(anchorProbeStep{request: firstTurnRequest("request_site_decisive", true), response: identityProvenResponse(probeAlpha)})},
-		{name: "decisive_contested", site: BudgetAssertDecisive, reach: AnchorBindingEvaluationResolved, zero: map[string]bool{"GraphEpoch": true},
+		// A follow-up whose own resolution commits a different subject is
+		// withheld by the subject-substitution guard and saved at the
+		// subjectless terminal, where the binder records the contest.
+		{name: "guarded_contested", site: BudgetAssertSubjectlessTerminal, reach: AnchorBindingEvaluationResolved, zero: map[string]bool{"GraphEpoch": true},
 			run: anchorProbeScenario(
 				anchorProbeStep{request: firstTurnRequest("request_site_contest_one", true), response: identityProvenResponse(probeAlpha)},
 				anchorProbeStep{request: followUp("request_site_contest_two", "And how many teams contribute to it?", nil), response: identityProvenResponse(probeBeta)},

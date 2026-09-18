@@ -1524,8 +1524,17 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// CaptureSkipReason's own doc comment for the scope of what this axis
 	// names and what it leaves at this same default.
 	captureSkipReasonForTelemetry := CaptureSkipReasonNotApplicable
+	// The substitution guard's own decision, published on this same line.
+	// NotEvaluated until the guard's decision point is reached, so an exit
+	// that ends the turn before it says exactly that rather than reading as
+	// a guard that ran and found nothing (chaos5917_subject_substitution.go).
+	substitutionForTelemetry := subjectSubstitutionDecision{
+		Outcome:    SubjectSubstitutionNotEvaluated,
+		Origin:     SubjectSubstitutionOriginNotApplicable,
+		Remembered: rememberedSubjectCheck{Check: SubjectSubstitutionRememberedNotChecked},
+	}
 	defer func() {
-		e.recordConfirmedNeedLedger(ctx, principal, confirmedNeedLedger, appliedNeeds, captureDecisionForTelemetry, captureSkipReasonForTelemetry, anchorAgreementForTelemetry, anchorDispositionForTelemetry)
+		e.recordConfirmedNeedLedger(ctx, principal, confirmedNeedLedger, appliedNeeds, captureDecisionForTelemetry, captureSkipReasonForTelemetry, anchorAgreementForTelemetry, anchorDispositionForTelemetry, substitutionForTelemetry)
 	}()
 	windowCanon := e.canonicalizeEvidenceWindow(carryCtx, principal, request)
 	// CHAOS-5734: the confirmed-need ledger's window consumer, decided HERE,
@@ -2844,6 +2853,59 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// structure.go), so a prior-sourced offer's id is minted through the
 	// exact same path an engine-derived one's is.
 	structureMaterial = e.consultPriorStructureOffers(ctx, principal, priorEntries, structureMaterial)
+	// The subject-substitution guard (chaos5917_subject_substitution.go), at the one point where
+	// BOTH identities are final -- this turn's resolution has committed, and
+	// the parent's own committed subject is already in hand from the SAME
+	// memoized load the per-need ledger read above (no second store round
+	// trip). Above the fact read, above synthesis, above every save: a turn
+	// that would answer about a different subject than the parent it names
+	// must not spend a fact read on it, let alone serve it.
+	//
+	// The remembered subject is re-read and re-authorized before it can be
+	// OFFERED (never before it can be served -- nothing is served here): the
+	// same keyed (kind, canonical_id) existence-and-authorization check a
+	// candr_ redemption passes. A verifier this deployment does not wire, a
+	// subject that does not exist or is not visible to this principal, and a
+	// cancelled context all read the same way -- the offer is withheld and
+	// the turn refuses to serve the substitute, which is the fail-closed
+	// direction.
+	substitutionCommitted := append([]SubjectRef(nil), resolution.Committed...)
+	substitutionInput := subjectSubstitutionInput{
+		Parent:             confirmedNeedLedger.Parent,
+		Committed:          substitutionCommitted,
+		Origin:             SubjectSubstitutionOriginNotApplicable,
+		AllowClarification: request.Options.AllowClarification,
+	}
+	if len(substitutionCommitted) > 0 {
+		issuers := parentReceiptIssuers{named: carryParentSeed(request), issuedFor: substitutionInput.Parent.IssuedFor, loaded: priorLoadedResults}
+		origin := subjectSubstitutionOriginOf(substitutionCommitted, substitutionInput.Parent.Subject, issuers, priorOutcomes, request.RequestedScope.SubjectHints, appliedNeeds)
+		substitutionInput.Origin, substitutionInput.OriginReceiptResultID, substitutionInput.OriginReceiptID, substitutionInput.OriginIssuedFor = origin.Origin, origin.ReceiptResultID, origin.ReceiptID, origin.IssuedFor
+		substitutionInput.RedeemedChoice = subjectSubstitutionRedeemedChoice(substitutionCommitted, issuers, priorOutcomes)
+		// The re-read costs a keyed graph call, so it is asked only when its
+		// answer can change what this turn hands back: the identities already
+		// differ and the caller did not pick this one, so the guard is about
+		// to fire and the remembered subject is about to be listed. Asked on
+		// BOTH firing branches -- a caller that cannot be asked a question is
+		// shown the two identities too, and is never shown one it cannot see.
+		if substitutionInput.Parent.held() && !committedIsExactly(substitutionCommitted, substitutionInput.Parent.Subject) && !substitutionInput.RedeemedChoice {
+			substitutionInput.Remembered = e.rememberedSubjectReadable(ctx, principal, request, binding, substitutionInput.Parent.Subject)
+			substitutionInput.RememberedAvailable = substitutionInput.Remembered.readable()
+		}
+	}
+	substitutionForTelemetry = decideSubjectSubstitution(substitutionInput)
+	anchorShadow.observeSubstitutionGuard(substitutionForTelemetry.Outcome)
+	if substitutionForTelemetry.Outcome.Fired() {
+		resolution = subjectSubstitutionResolution(resolution, substitutionForTelemetry, carryParentSeed(request))
+		if len(request.PriorSubjectReceipts) > 0 {
+			// Composed against the GUARDED resolution, the one this turn
+			// actually serves: a receipt is reported applied only against the
+			// resolution the caller receives, never against the commit the
+			// guard just withdrew.
+			resolution.PriorSubjectReceiptDispositions = composePriorSubjectReceiptDispositions(priorOutcomes, resolution)
+			e.recordPriorSubjectReceiptSkips(ctx, principal, resolution.PriorSubjectReceiptDispositions, priorHintsStaleGraphEpochDelta)
+		}
+		return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntriesForServed, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, postVetoLedgerBase).withAnchorShadow(anchorShadow))
+	}
 	if len(request.PriorSubjectReceipts) > 0 {
 		// CHAOS-3478/CHAOS-3813: attached to `resolution` itself (not a
 		// copy) so it survives unchanged through every later assignment

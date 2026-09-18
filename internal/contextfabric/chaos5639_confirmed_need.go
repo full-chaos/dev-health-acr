@@ -229,6 +229,16 @@ type confirmedNeedLedgerResult struct {
 	Entries        []confirmedStructureMember
 	Dropped        []ConfirmedNeedMemberDrop
 	SourceResultID string
+	// Parent is what the named parent SERVED, read from its stored result
+	// payload and retained on every outcome -- admitted or refused, and
+	// whether or not its semantic snapshot read. Admission decides whether the parent's
+	// remembered members may be applied to this turn; the substitution guard
+	// (chaos5917_subject_substitution.go) asks the different question of
+	// whether this turn is about to answer about a different subject than
+	// the parent did, and a ledger dropped for a changed question is exactly
+	// the case it exists for. Populating this only on a hit would lose the
+	// evidence precisely where it is needed.
+	Parent parentAnchorEvidence
 }
 
 // resolveConfirmedNeedLedger is the need-gate admission. It reads the ONE
@@ -251,23 +261,36 @@ func (e *Engine) resolveConfirmedNeedLedger(ctx context.Context, principal stora
 	if parent == "" {
 		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerMissNoReference}
 	}
+	// Referenced from here down: the request named a parent, whatever
+	// happens to the read below. The guard tells "named nothing" apart from
+	// "named something unreadable", so the flag is set before the read, not
+	// after it succeeds.
+	evidence := parentAnchorEvidence{Referenced: true}
 	if e.results == nil {
-		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerMissUnloadable}
+		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerMissUnloadable, Parent: evidence}
 	}
 	stored, err := carryLoadResult(ctx, e.results, principal, parent)
 	if err != nil {
-		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerMissUnloadable}
+		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerMissUnloadable, Parent: evidence}
 	}
+	// The stored RESULT PAYLOAD read, so the identity the parent served is
+	// readable from here on, whatever happens to its semantic snapshot below.
+	// A store returns a valid payload beside an unavailable snapshot; the
+	// ledger needs the snapshot, the substitution guard does not, and an
+	// unreadable snapshot must never cost the guard the parent it compares
+	// against.
+	evidence.Loaded = true
+	evidence = parentIdentityOf(evidence, stored, parent)
 	// UNLOADABLE (malformed/oversized/unsupported/unreported) is a DIFFERENT
 	// fact than EMPTY (a clean read that simply has no ledger): an operator
 	// who can only see "empty" for both cannot tell a live storage/decode
 	// defect apart from the ordinary "nothing confirmed yet" case. Only a
 	// clean, available read falls through to the empty check below.
 	if stored.SemanticStateRead != SemanticStateReadAvailable {
-		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerMissUnloadable}
+		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerMissUnloadable, Parent: evidence}
 	}
 	if stored.SemanticState == nil || len(stored.SemanticState.ConfirmedNeeds) == 0 {
-		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerMissEmpty}
+		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerMissEmpty, Parent: evidence}
 	}
 	// CHAOS-3898 §2.2 ingress taint gate -- IDENTICAL check walkCarriedKind
 	// applies to the legacy chain walk (structure_axis_carry.go). A rebuild
@@ -275,7 +298,7 @@ func (e *Engine) resolveConfirmedNeedLedger(ctx context.Context, principal stora
 	// denotes, so a carrier from another epoch is refused outright rather
 	// than trusted partially.
 	if stored.GraphEpoch == nil || *stored.GraphEpoch != binding.Epoch {
-		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerDroppedStaleGraphEpoch}
+		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerDroppedStaleGraphEpoch, Parent: evidence}
 	}
 	// THE SAME-QUESTION CONTAINMENT: the digest below never covers
 	// request.Question, so equal digests prove nothing about whether this is
@@ -288,19 +311,19 @@ func (e *Engine) resolveConfirmedNeedLedger(ctx context.Context, principal stora
 	switch e.carryOriginSameQuestionVerdict(ctx, principal, request, parent) {
 	case carryOriginSameQuestion:
 	case carryOriginIndeterminateQuestion:
-		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerDroppedQuestionIndeterminate}
+		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerDroppedQuestionIndeterminate, Parent: evidence}
 	case carryOriginDrifted:
-		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerDroppedQuestionChanged}
+		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerDroppedQuestionChanged, Parent: evidence}
 	default: // carryOriginUnverifiable
-		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerMissUnloadable}
+		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerMissUnloadable, Parent: evidence}
 	}
 	identity := SemanticRequestIdentityOf(request, stored.Result.Question)
 	carried := stored.SemanticState.RequestIdentity
 	if !identity.Comparable() || !carried.Comparable() {
-		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerDroppedIdentityIncomparable}
+		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerDroppedIdentityIncomparable, Parent: evidence}
 	}
 	if !identity.Equal(carried) {
-		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerDroppedIdentityChanged}
+		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerDroppedIdentityChanged, Parent: evidence}
 	}
 	entries := make([]confirmedStructureMember, 0, len(stored.SemanticState.ConfirmedNeeds))
 	var dropped []ConfirmedNeedMemberDrop
@@ -316,7 +339,7 @@ func (e *Engine) resolveConfirmedNeedLedger(ctx context.Context, principal stora
 			Basis: entry.Basis,
 		})
 	}
-	return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerHit, Entries: entries, Dropped: dropped, SourceResultID: parent}
+	return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerHit, Entries: entries, Dropped: dropped, SourceResultID: parent, Parent: evidence}
 }
 
 // reverifyRememberedNeed replays, for ONE remembered member, the redemption-time
@@ -808,6 +831,54 @@ type ConfirmedNeedLedgerEvent struct {
 	// comment. NotApplicable when CaptureDecision carries a real decision,
 	// or the turn ended on an exit this axis does not yet name.
 	CaptureSkipReason CaptureSkipReason
+	// SubstitutionGuard is the subject-substitution guard's own decision for
+	// this turn (chaos5917_subject_substitution.go): whether this turn was
+	// about to answer about a subject the parent it names never committed,
+	// and what the caller was handed instead. "not_evaluated" means the turn
+	// ended before the guard's decision point, which is a different fact
+	// from every state the guard actually reached.
+	SubstitutionGuard SubjectSubstitutionOutcome
+	// SubstitutionOrigin names what produced THIS turn's committed subject --
+	// a prior receipt, the caller's own hint, or the resolver's reach from
+	// the question's terms. Reported so the three populations stay countable
+	// apart; the guard's decision never reads it.
+	SubstitutionOrigin SubjectSubstitutionOrigin
+	// SubstitutionParentKind/SubstitutionParentID are the one identity the
+	// NAMED PARENT asserted, empty when it asserted none, and
+	// SubstitutionCommittedIDs is EVERY subject this turn committed, as
+	// "<kind>:<canonical id>" in commit order and empty when it committed
+	// none -- the same identity reference the anchor-binding transition line
+	// publishes, so the two lines join on it. The committed list is the set
+	// the turn is about to serve, never a summary of it: a line cannot say
+	// "nothing committed" beside a turn that serves facts. Identities only; a
+	// question's terms never reach this line. These plus SubstitutionGuard
+	// and SubstitutionOrigin are what let the decision be rebuilt from this
+	// line alone.
+	SubstitutionParentKind   contractsv1.ContextFabricSubjectKind
+	SubstitutionParentID     string
+	SubstitutionCommittedIDs []string
+	// SubstitutionOriginResultID/SubstitutionOriginReceiptID name the
+	// redeemed receipt that carried the origin's subject, and the result that
+	// issued it -- empty unless SubstitutionOrigin is prior_receipt. A choice
+	// redeemed from the named parent names the parent here; a subject carried
+	// by some other result's receipt names that result.
+	SubstitutionOriginResultID  string
+	SubstitutionOriginReceiptID string
+	// SubstitutionParentResultID is the result whose subject the parent
+	// identity is: the named parent, or the result a clarification this
+	// guard issued speaks for. Empty when the named parent did not read.
+	// SubstitutionOriginIssuedFor is the result the origin receipt's issuing
+	// result was issued for, when this guard issued it. Together they name
+	// the exchange a redeemed choice answers.
+	SubstitutionParentResultID  string
+	SubstitutionOriginIssuedFor string
+	// SubstitutionRememberedCheck, SubstitutionRememberedReason and
+	// SubstitutionRememberedContextError are the remembered subject's re-read:
+	// what it found, the verifier's own reason, and the context error when
+	// the turn's context was done. Never dropped.
+	SubstitutionRememberedCheck        SubjectSubstitutionRememberedCheck
+	SubstitutionRememberedReason       CandidateVerificationReason
+	SubstitutionRememberedContextError string
 }
 
 // confirmedNeedLedgerEventOf builds the event from the admission result and
@@ -816,12 +887,24 @@ type ConfirmedNeedLedgerEvent struct {
 // facts appliedNeedLedgerEntries' own pre-resolution map cannot carry --
 // captured from the SAME (frame, resolution) pair this turn's own capture
 // gate and carry-agreement check already computed, never re-derived here.
-func confirmedNeedLedgerEventOf(ledger confirmedNeedLedgerResult, applied map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember, captureDecision CountPopulationScopeDecision, captureSkipReason CaptureSkipReason, anchorAgreement ConfirmedAnchorAgreement, anchorDisposition contractsv1.ContextFabricStructureDisposition) ConfirmedNeedLedgerEvent {
+func confirmedNeedLedgerEventOf(ledger confirmedNeedLedgerResult, applied map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember, captureDecision CountPopulationScopeDecision, captureSkipReason CaptureSkipReason, anchorAgreement ConfirmedAnchorAgreement, anchorDisposition contractsv1.ContextFabricStructureDisposition, substitution subjectSubstitutionDecision) ConfirmedNeedLedgerEvent {
 	event := ConfirmedNeedLedgerEvent{
 		Outcome: ledger.Outcome, SourceResultID: ledger.SourceResultID,
 		AppliedMembers: appliedNeedLedgerMembers(applied), Dropped: ledger.Dropped,
 		CaptureDecision: captureDecision, CaptureSkipReason: captureSkipReason,
 		AnchorAgreement: anchorAgreement, AnchorDisposition: anchorDisposition,
+		SubstitutionGuard:                  substitution.Outcome,
+		SubstitutionOrigin:                 substitution.Origin,
+		SubstitutionParentKind:             substitution.Parent.Kind,
+		SubstitutionParentID:               substitution.Parent.CanonicalID,
+		SubstitutionCommittedIDs:           committedIDs(substitution.Committed),
+		SubstitutionOriginResultID:         substitution.OriginReceiptResultID,
+		SubstitutionOriginReceiptID:        substitution.OriginReceiptID,
+		SubstitutionParentResultID:         substitution.ParentResultID,
+		SubstitutionOriginIssuedFor:        substitution.OriginIssuedFor,
+		SubstitutionRememberedCheck:        substitution.Remembered.Check,
+		SubstitutionRememberedReason:       substitution.Remembered.Reason,
+		SubstitutionRememberedContextError: substitution.Remembered.ContextError,
 	}
 	if entry, ok := applied[contractsv1.ContextFabricStructureNeedExpectedKind]; ok {
 		event.AppliedExpectedKind = contractsv1.ContextFabricSubjectKind(entry.AppliedValue)
@@ -849,9 +932,9 @@ func confirmedNeedLedgerEventOf(ledger confirmedNeedLedgerResult, applied map[co
 // hashed value, and each member dropped at reverify with its reason -- "a
 // drop reported without both sides is a decision an operator cannot check"
 // applies here exactly as it does to RecordKindCarry.
-func (e *Engine) recordConfirmedNeedLedger(ctx context.Context, principal storage.Principal, ledger confirmedNeedLedgerResult, applied map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember, captureDecision CountPopulationScopeDecision, captureSkipReason CaptureSkipReason, anchorAgreement ConfirmedAnchorAgreement, anchorDisposition contractsv1.ContextFabricStructureDisposition) {
+func (e *Engine) recordConfirmedNeedLedger(ctx context.Context, principal storage.Principal, ledger confirmedNeedLedgerResult, applied map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember, captureDecision CountPopulationScopeDecision, captureSkipReason CaptureSkipReason, anchorAgreement ConfirmedAnchorAgreement, anchorDisposition contractsv1.ContextFabricStructureDisposition, substitution subjectSubstitutionDecision) {
 	if e.telemetry == nil {
 		return
 	}
-	e.telemetry.RecordConfirmedNeedLedger(ctx, principal, confirmedNeedLedgerEventOf(ledger, applied, captureDecision, captureSkipReason, anchorAgreement, anchorDisposition))
+	e.telemetry.RecordConfirmedNeedLedger(ctx, principal, confirmedNeedLedgerEventOf(ledger, applied, captureDecision, captureSkipReason, anchorAgreement, anchorDisposition, substitution))
 }

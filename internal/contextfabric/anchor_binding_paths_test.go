@@ -397,16 +397,17 @@ func TestAnchorBindingLineWritesAbsentListsAsEmptyLists(t *testing.T) {
 // TestTwoTurnsWithEqualLineInputsDecideTheSameBinding.
 func TestEveryBinderInputIsOnTheTransitionLine(t *testing.T) {
 	inputKeys := map[string][]string{
-		"From":            {"from_state", "from_kind", "from_id", "from_proof", "from_reason", "from_origin_result_id", "from_graph_epoch", "from_contender_kind", "from_contender_id", "parent_binding", "parent_graph_epoch", "carry_checks"},
-		"Evaluation":      {"evaluation"},
-		"Frame":           {"frame_expression_kind", "frame_member_kind", "anchor_term_count", "anchor_term_matched_ids", "named_expected_kind"},
-		"ModelAnchorKind": {"model_anchor_kind"},
-		"Receipt":         {"receipt_anchor_kind", "receipt_anchor_id"},
-		"CallerHints":     {"caller_hint_ids"},
-		"Resolution":      {"committed_subjects", "anchor_term_matched_ids"},
-		"Bases":           {"committed_subjects"},
-		"ResultID":        {"result_id"},
-		"GraphEpoch":      {"graph_epoch"},
+		"From":              {"from_state", "from_kind", "from_id", "from_proof", "from_reason", "from_origin_result_id", "from_graph_epoch", "from_contender_kind", "from_contender_id", "parent_binding", "parent_graph_epoch", "carry_checks"},
+		"Evaluation":        {"evaluation"},
+		"Frame":             {"frame_expression_kind", "frame_member_kind", "anchor_term_count", "anchor_term_matched_ids", "named_expected_kind"},
+		"ModelAnchorKind":   {"model_anchor_kind"},
+		"Receipt":           {"receipt_anchor_kind", "receipt_anchor_id"},
+		"CallerHints":       {"caller_hint_ids"},
+		"Resolution":        {"committed_subjects", "anchor_term_matched_ids"},
+		"Bases":             {"committed_subjects"},
+		"ResultID":          {"result_id"},
+		"GraphEpoch":        {"graph_epoch"},
+		"SubstitutionGuard": {"substitution_guard"},
 	}
 	declaredInput := map[string]bool{}
 	for _, key := range anchorBindingLineInputKeys {

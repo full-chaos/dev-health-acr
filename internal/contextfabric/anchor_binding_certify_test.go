@@ -47,13 +47,17 @@ func TestTheAnchorBindingTransitionLineCertifiesAgainstItsSpecification(t *testi
 			"shadow_agreement": "disagree", "disagreement_field": "carried_anchor", "served_anchor_id": "",
 			"served_count_decision": "not_evaluated", "served_count_id": "",
 		}},
+		// The subject-substitution guard withholds beta, so the turn is saved
+		// at the subjectless terminal and serves no anchor; the binder still
+		// records the contest the engine proved, and names the guard beside it.
 		{"follow-up alias contested", map[string]any{
-			"result_id": "result_5788_0002", "site": "decisive", "carry_checks": "not_evaluated",
+			"result_id": "result_5788_0002", "site": "subjectless_terminal", "carry_checks": "not_evaluated",
 			"parent_binding": "present", "proven_anchor_ids": []any{"repository:repository:probe-beta"},
 			"to_state": "contested", "to_id": "repository:probe-alpha", "reason": "contested_by_resolution",
 			"contender_kind": "repository", "contender_id": "repository:probe-beta",
-			"shadow_agreement": "disagree", "disagreement_field": "carried_anchor",
-			"served_anchor_id": "repository:probe-beta", "served_count_id": "repository:probe-beta",
+			"shadow_agreement": "agree", "disagreement_field": "none",
+			"served_anchor_id": "", "served_count_decision": "not_evaluated", "served_count_id": "",
+			"substitution_guard": "clarified_remembered_unavailable",
 		}},
 		{"model kind conflict", map[string]any{
 			"result_id": "result_5788_0002", "site": "decisive", "carry_checks": "not_evaluated",

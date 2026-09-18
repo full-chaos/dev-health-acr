@@ -2461,6 +2461,12 @@ var (
 	contextFabricStructureDispositionArr  = contractsv1.ContextFabricStructureDispositionVocabulary()
 	contextFabricStructureDispositionToks = arrayTokens(contextFabricStructureDispositionArr[:])
 	captureSkipReasonTokens               = arrayTokens(contextfabric.CaptureSkipReasonVocabulary())
+	subjectSubstitutionOutcomeArr         = contextfabric.SubjectSubstitutionOutcomeVocabulary()
+	subjectSubstitutionOutcomeTokens      = arrayTokens(subjectSubstitutionOutcomeArr[:])
+	subjectSubstitutionOriginArr          = contextfabric.SubjectSubstitutionOriginVocabulary()
+	subjectSubstitutionOriginTokens       = arrayTokens(subjectSubstitutionOriginArr[:])
+	subjectSubstitutionRememberedArr      = contextfabric.SubjectSubstitutionRememberedCheckVocabulary()
+	subjectSubstitutionRememberedTokens   = arrayTokens(subjectSubstitutionRememberedArr[:])
 )
 
 // ConfirmedNeedLedger is the per-need confirmation ledger's own trace: the
@@ -2511,6 +2517,43 @@ var ConfirmedNeedLedger = Event{
 		{Key: "anchor_disposition", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, contextFabricStructureDispositionToks...)},
 		{Key: "capture_decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, contextfabric.CountPopulationScopeDecisionVocabulary()...)},
 		{Key: "capture_skip_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: captureSkipReasonTokens},
+		// The subject-substitution guard's own four-part disclosure: what it
+		// decided, what produced this turn's subject, and both identities as
+		// kind plus canonical id -- the identity reference the anchor-binding
+		// transition line uses, so the two lines join. The four together are
+		// what let the decision be rebuilt from this line alone -- the
+		// parent's identity, this turn's identity, the evidence class, and the
+		// verdict. Identities only; a question's terms never reach this line.
+		{Key: "substitution_guard", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: subjectSubstitutionOutcomeTokens},
+		// The producer domain, exactly: which channel carried this turn's
+		// committed subject into resolution -- a hint redeemed from a
+		// prior-subject receipt, a hint the caller's own request carried, or
+		// neither, which leaves resolution's own reach over the question.
+		// "not_applicable" is the turn that committed no subject at all.
+		{Key: "substitution_origin", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: subjectSubstitutionOriginTokens},
+		{Key: "substitution_parent_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, contextFabricSubjectKindTokens...)},
+		// Open: a free canonical id, empty when that side holds no identity.
+		{Key: "substitution_parent_id", Type: FieldString, Presence: PresenceRequired},
+		// Open: every subject this turn committed, "<kind>:<canonical id>" in
+		// commit order, empty when it committed none.
+		{Key: "substitution_committed_ids", Type: FieldStringSlice, Presence: PresenceRequired},
+		// Open: the result that issued, and the id of, the redeemed receipt
+		// that carried the origin's subject; both empty unless
+		// substitution_origin is prior_receipt.
+		{Key: "substitution_origin_result_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "substitution_origin_receipt_id", Type: FieldString, Presence: PresenceRequired},
+		// Open: the result whose subject the parent identity is -- the named
+		// parent, or the result a clarification the guard issued speaks for
+		// -- and the result the origin receipt's issuer was issued for when
+		// the guard issued it. Empty when that side has none.
+		{Key: "substitution_parent_result_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "substitution_origin_issued_for", Type: FieldString, Presence: PresenceRequired},
+		// The remembered subject's re-read: what it found (closed), the
+		// verifier's own reason and the context error (open, empty when
+		// there is none). Every way the offer is withheld is named here.
+		{Key: "substitution_remembered_check", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: subjectSubstitutionRememberedTokens},
+		{Key: "substitution_remembered_reason", Type: FieldString, Presence: PresenceRequired},
+		{Key: "substitution_remembered_context_error", Type: FieldString, Presence: PresenceRequired},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }
@@ -2601,6 +2644,10 @@ var AnchorBindingTransition = Event{
 		{Key: "served_count_decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("served_count_decision")},
 		{Key: "served_count_kind", Type: FieldString, Presence: PresenceRequired},
 		{Key: "served_count_id", Type: FieldString, Presence: PresenceRequired},
+		// The subject-substitution guard's decision for the turn: a contender
+		// on a line whose guard fired is one the guard WITHHELD, never one the
+		// turn failed to prove. not_evaluated on an exit above the guard.
+		{Key: "substitution_guard", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("substitution_guard")},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }
