@@ -590,6 +590,9 @@ func lastLedgerJSONLine(t *testing.T, buf *bytes.Buffer) map[string]any {
 	if found == nil {
 		t.Fatal("no confirmed-need-ledger line was emitted at production Info level")
 	}
+	if found["level"] != "INFO" {
+		t.Fatalf("confirmed-need-ledger line level = %v, want INFO", found["level"])
+	}
 	return found
 }
 
