@@ -540,12 +540,16 @@ jobs:
   #
   # Same CI_RACE_RUNNER contract as the `race` job above. Unlike
   # race-devhealthschema, this suite is testcontainers-backed (real
-  # ClickHouse), so it needs the same GHCR login + TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX
-  # mirror redirect as the `race` job uses -- devhealthfacts has no
+  # ClickHouse), so it needs the same GHCR login and mirror-registry redirect
+  # env (see below) as the `race` job uses -- devhealthfacts has no
   # psql/pg_isready dependency, so the Postgres-client install step the
   # `race` job carries is not needed here.
   race-devhealthfacts:
     name: race (devhealthfacts, isolated scope)
+    # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
+    # same as the `race` job above -- needs mirror-preflight so it cannot
+    # start before every mirrored image is confirmed resolvable.
+    needs: mirror-preflight
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}

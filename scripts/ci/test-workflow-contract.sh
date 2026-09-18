@@ -540,6 +540,31 @@ check_race_runner_uses_variable() {
   return "$status"
 }
 
+# A job whose OWN env: sets TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX
+# pulls a mirrored image, so it must not be able to start before
+# mirror-preflight's "Verify every mirrored image is resolvable before any
+# job pulls one" step has run -- every other image-pulling job (race, unit,
+# build, container-*) already declares `needs: mirror-preflight`, and a new
+# job that copies the env without the needs would race that preflight
+# instead of waiting on it. Checked generically over every job, not a hand
+# list of job names, so a future job with this env and no needs is caught
+# the same way this one was.
+check_testcontainers_needs_mirror_preflight() {
+  local file="$1" job block status=0
+  while IFS= read -r job; do
+    [ "$job" = "mirror-preflight" ] && continue
+    block="$(job_block "$file" "$job")"
+    grep -qF 'TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX' <<<"$block" || continue
+    if ! grep -qE '^ {4}needs: *mirror-preflight *$' <<<"$block" \
+       && ! grep -qE '^ {6}- *mirror-preflight *$' <<<"$block"; then
+      printf 'job "%s" sets TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX but does not declare "needs: mirror-preflight" -- it could start and pull a mirrored image before mirror-preflight confirms every mirrored image is resolvable\n' \
+        "$job" >&2
+      status=1
+    fi
+  done < <(list_jobs "$file")
+  return "$status"
+}
+
 run_all_checks() {
   local file="$1"
   check_verify_job_exists "$file"
@@ -556,6 +581,7 @@ run_all_checks() {
   check_pin_requires_full_sha "$file"
   check_pin_binds_checkout_ref "$file"
   check_race_runner_uses_variable "$file"
+  check_testcontainers_needs_mirror_preflight "$file"
 }
 
 # ---- positive run -------------------------------------------------------
@@ -824,6 +850,19 @@ race_runner_wrong_var="$tmpdir/race-runner-wrong-var.yml"
 sed 's/vars\.CI_RACE_RUNNER/vars.CI_RUNNER_RACE/g' "$workflow" > "$race_runner_wrong_var"
 assert_check_fails 'renamed the CI_RACE_RUNNER variable in the runs-on expression' \
   check_race_runner_uses_variable "$race_runner_wrong_var"
+
+# (v) drop race-devhealthfacts's `needs: mirror-preflight` while leaving its
+# TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX env in place -- the exact shape that
+# lets a job pull a mirrored image before the preflight confirms it resolves.
+dedicated_job_missing_needs="$tmpdir/dedicated-job-missing-needs.yml"
+awk '
+  /^  race-devhealthfacts:$/ { in_job=1 }
+  in_job && /^  [A-Za-z0-9_-]+:/ && !/^  race-devhealthfacts:$/ { in_job=0 }
+  in_job && /^ {4}needs: *mirror-preflight *$/ { next }
+  { print }
+' "$workflow" > "$dedicated_job_missing_needs"
+assert_check_fails 'dropped race-devhealthfacts'"'"'s needs: mirror-preflight while keeping its TESTCONTAINERS env' \
+  check_testcontainers_needs_mirror_preflight "$dedicated_job_missing_needs"
 
 printf 'PASS: all negative controls correctly failed their check\n'
 
