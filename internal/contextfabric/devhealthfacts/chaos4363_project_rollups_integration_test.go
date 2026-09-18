@@ -2,6 +2,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -438,6 +439,79 @@ func TestCHAOS4363ProjectRollupsAgainstRealClickHouse(t *testing.T) {
 		}
 		if got := fact.Fields["severity"].String; got == nil || *got != "high" {
 			t.Fatalf("severity = %#v, want high (the true worst band, even though its own row sits past both the row-level scan's shared budget and the display cap)", fact.Fields["severity"])
+		}
+	})
+
+	// A project can be ABSENT from the row-level breakdown scan entirely
+	// (not merely missing its worst row) while a DIFFERENT project's own
+	// rows exhaust the shared budget first -- proving population must come
+	// from the uncapped severity aggregate, never from which projects the
+	// row-level scan happened to reach. Both projects are requested in ONE
+	// call; the early-sorting project owns enough repos to exhaust the
+	// shared 200-row budget by itself, and the late-sorting project's own
+	// single row never reaches the scan at all.
+	t.Run("health_project_rollup_late_project_served_from_the_aggregate_with_evidence", func(t *testing.T) {
+		const orgID = "org-health-severity-late-project"
+		seedProject("proj-aaa-cap", orgID, "linear", "AAACAP1")
+		seedTeam("team-aaa-cap", orgID, "Team AAA Cap")
+		seedOwnership(orgID, "linear", "team-aaa-cap", "AAACAP1")
+		const repoCount = 210
+		for i := 0; i < repoCount; i++ {
+			repoID := "66666666-6666-6666-6666-" + paddedIndex(i) + "00000000"
+			seedRepoOwnership(orgID, "team-aaa-cap", repoID, "acme/late-"+paddedIndex(i))
+			seedRisk(orgID, "repo", repoID, "low", 0.10, date(2026, 8, 12))
+		}
+		seedProject("proj-zzz-late", orgID, "linear", "ZZZLATE1")
+		seedTeam("team-zzz-late", orgID, "Team ZZZ Late")
+		seedOwnership(orgID, "linear", "team-zzz-late", "ZZZLATE1")
+		seedRisk(orgID, "team", "team-zzz-late", "high", 0.90, date(2026, 8, 12))
+
+		healthProvider := findProvider(t, providers, contextfabric.FactHealth)
+		result, err := healthProvider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
+			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Kind: contextfabric.FactHealth, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-aaa-cap"), projectSubject("linear", "proj-zzz-late")},
+		})
+		if err != nil {
+			t.Fatalf("ReadFacts: %v", err)
+		}
+		if !result.Truncated {
+			t.Fatal("Truncated = false, want true -- proj-aaa-cap's own 210 rows must exhaust the shared budget")
+		}
+		if len(result.Facts) != 2 {
+			t.Fatalf("facts = %d, want 2 -- proj-zzz-late must be served even though its row never reached the shared row-level scan", len(result.Facts))
+		}
+		var late *contextfabric.CanonicalFact
+		for i := range result.Facts {
+			if result.Facts[i].Subject.CanonicalID == projectSubject("linear", "proj-zzz-late").CanonicalID {
+				late = &result.Facts[i]
+			}
+		}
+		if late == nil {
+			t.Fatalf("facts = %#v, want proj-zzz-late present", result.Facts)
+		}
+		if got := late.Fields["severity"].String; got == nil || *got != "high" {
+			t.Fatalf("proj-zzz-late severity = %#v, want high (from the aggregate, independent of the row-level scan)", late.Fields["severity"])
+		}
+		if got := late.Fields["severity_basis"].String; got == nil || *got != "worst_of_team_and_repo_breakdown" {
+			t.Fatalf("severity_basis = %#v", late.Fields["severity_basis"])
+		}
+		if _, ok := late.Fields["risk_breakdown"]; ok {
+			t.Fatalf("fields = %#v, want risk_breakdown absent -- the shared scan never reached this project's own row", late.Fields)
+		}
+		if got := late.Fields["risk_breakdown_rows_shown"].Integer; got == nil || *got != 0 {
+			t.Fatalf("risk_breakdown_rows_shown = %#v, want 0", late.Fields["risk_breakdown_rows_shown"])
+		}
+		if got := late.Fields["risk_breakdown_rows_total"].Integer; got == nil || *got != 1 {
+			t.Fatalf("risk_breakdown_rows_total = %#v, want 1 (the aggregate's own uncapped count)", late.Fields["risk_breakdown_rows_total"])
+		}
+		foundTeamZZZLateRef := false
+		for _, ref := range late.EvidenceRefIDs {
+			if strings.Contains(ref, "team-zzz-late") {
+				foundTeamZZZLateRef = true
+			}
+		}
+		if !foundTeamZZZLateRef {
+			t.Fatalf("evidence_ref_ids = %#v, want a ref citing team-zzz-late -- the scope that produced the promoted severity, even though the row-level scan never reached it", late.EvidenceRefIDs)
 		}
 	})
 }

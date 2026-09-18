@@ -74,17 +74,25 @@ func healthProjectDailySeriesRow(projectKey, day string, hasRisk uint8, risk flo
 }
 
 // healthSeverityMaxMatch distinguishes queryProjectHealthSeverityMax's own
-// server-side worst-band aggregate ("argMax(severity, band)", a plain
-// GROUP BY with no row_number()/PARTITION BY at all and no `teams` join)
-// from every other query in this file -- healthDailySeriesMatch's
-// PARTITION BY signature and healthProjectRollupMatch's teams-alias join
-// never appear in it.
-const healthSeverityMaxMatch = "argMax(severity, band)"
+// server-side worst-band aggregate ("countIf(band > 0)", a plain GROUP BY
+// with no row_number()/PARTITION BY at all and no `teams` join) from every
+// other query in this file -- healthDailySeriesMatch's PARTITION BY
+// signature and healthProjectRollupMatch's teams-alias join never appear
+// in it.
+const healthSeverityMaxMatch = "countIf(band > 0)"
 
 // healthSeverityMaxRow shapes one queryProjectHealthSeverityMax output row:
-// (project_key, severity).
-func healthSeverityMaxRow(provider, projectID, severity string) []any {
-	return []any{provider + ":" + projectID, severity}
+// (project_key, known_row_count, total_row_count, packed winner). The
+// packed winner joins scope, scope_id and severity with
+// healthSeverityWinnerDelimiter, matching the real query's argMax(concat(...));
+// it is empty when knownRowCount is 0 -- no known band to attribute to any
+// one scope.
+func healthSeverityMaxRow(provider, projectID string, knownRowCount, totalRowCount int, winnerScope, winnerScopeID, winnerSeverity string) []any {
+	winner := ""
+	if knownRowCount > 0 {
+		winner = winnerScope + "\x1f" + winnerScopeID + "\x1f" + winnerSeverity
+	}
+	return []any{provider + ":" + projectID, uint64(knownRowCount), uint64(totalRowCount), winner}
 }
 
 func TestHealthProviderRepoScopeHappyPath(t *testing.T) {
@@ -304,7 +312,7 @@ func TestHealthProviderProjectRollupBreaksDownByTeamAndRepoNeverSums(t *testing.
 			healthProjectRollupRow("linear", "proj-1", "team", "team-1", "Team One", "elevated", 0.55),
 			healthProjectRollupRow("linear", "proj-1", "repo", "repo-1", "full.chaos/svc", "high", 0.81),
 		}},
-		{match: healthSeverityMaxMatch, rows: [][]any{healthSeverityMaxRow("linear", "proj-1", "high")}},
+		{match: healthSeverityMaxMatch, rows: [][]any{healthSeverityMaxRow("linear", "proj-1", 2, 2, "repo", "repo-1", "high")}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactHealth)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
@@ -374,9 +382,11 @@ func TestHealthProviderProjectRollupAllUnknownSeverityDisclosesReason(t *testing
 			healthProjectRollupRow("linear", "proj-1", "team", "team-1", "Team One", "unknown", 0.10),
 			healthProjectRollupRow("linear", "proj-1", "repo", "repo-1", "full.chaos/svc", "unknown", 0.20),
 		}},
-		// The server-side aggregate's own HAVING max(band) > 0 excludes an
-		// all-unknown project, so it never appears in this query's output.
-		{match: healthSeverityMaxMatch, rows: nil},
+		// Population comes from THIS aggregate, never from the row-level
+		// scan above -- an all-unknown project still appears here (with
+		// knownRowCount=0), or it would be silently dropped instead of
+		// disclosed.
+		{match: healthSeverityMaxMatch, rows: [][]any{healthSeverityMaxRow("linear", "proj-1", 0, 2, "", "", "")}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactHealth)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
@@ -415,7 +425,7 @@ func TestHealthProviderProjectRollupExcludesUnknownFromWorstBand(t *testing.T) {
 			healthProjectRollupRow("linear", "proj-1", "team", "team-1", "Team One", "unknown", 0.10),
 			healthProjectRollupRow("linear", "proj-1", "repo", "repo-1", "full.chaos/svc", "low", 0.05),
 		}},
-		{match: healthSeverityMaxMatch, rows: [][]any{healthSeverityMaxRow("linear", "proj-1", "low")}},
+		{match: healthSeverityMaxMatch, rows: [][]any{healthSeverityMaxRow("linear", "proj-1", 1, 2, "repo", "repo-1", "low")}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactHealth)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
@@ -441,7 +451,7 @@ func TestHealthProviderProjectRollupTieAtHighReportsOneValue(t *testing.T) {
 			healthProjectRollupRow("linear", "proj-1", "team", "team-1", "Team One", "high", 0.90),
 			healthProjectRollupRow("linear", "proj-1", "repo", "repo-1", "full.chaos/svc", "high", 0.95),
 		}},
-		{match: healthSeverityMaxMatch, rows: [][]any{healthSeverityMaxRow("linear", "proj-1", "high")}},
+		{match: healthSeverityMaxMatch, rows: [][]any{healthSeverityMaxRow("linear", "proj-1", 2, 2, "team", "team-1", "high")}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactHealth)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
@@ -475,7 +485,7 @@ func TestHealthProviderMixedRootSubjectsProjectSeverityNeverLeaksIntoRepo(t *tes
 		{match: healthProjectRollupMatch, rows: [][]any{
 			healthProjectRollupRow("linear", "proj-1", "team", "team-1", "Team One", "low", 0.05),
 		}},
-		{match: healthSeverityMaxMatch, rows: [][]any{healthSeverityMaxRow("linear", "proj-1", "low")}},
+		{match: healthSeverityMaxMatch, rows: [][]any{healthSeverityMaxRow("linear", "proj-1", 1, 1, "team", "team-1", "low")}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactHealth)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
@@ -507,6 +517,72 @@ func TestHealthProviderMixedRootSubjectsProjectSeverityNeverLeaksIntoRepo(t *tes
 	}
 	if got := projectFact.Fields["severity"].String; got == nil || *got != "low" {
 		t.Fatalf("project severity = %#v, want low (the worst -- and only -- band in its own breakdown)", projectFact.Fields["severity"])
+	}
+}
+
+// TestHealthProviderProjectPresentOnlyInAggregateStillServed pins the
+// population-source fix directly: two projects are requested together, but
+// the row-level breakdown scan (the fake client's canned response) answers
+// for only ONE of them -- as the shared, row-capped real scan would for a
+// project sitting past its budget. The severity aggregate answers for
+// BOTH. The project absent from the row-level scan must still be served,
+// with an empty breakdown (never a fabricated one), an honest rows_shown=0
+// vs rows_total disclosure, and a citable evidence ref for the winning
+// scope the aggregate names -- never omitted, and never claiming a
+// severity with nothing to cite for it.
+func TestHealthProviderProjectPresentOnlyInAggregateStillServed(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{
+		// Only proj-shown has a row-level breakdown row; proj-late has
+		// none, simulating a project the shared scan never reached.
+		{match: healthProjectRollupMatch, rows: [][]any{
+			healthProjectRollupRow("linear", "proj-shown", "team", "team-shown", "Team Shown", "low", 0.05),
+		}},
+		{match: healthSeverityMaxMatch, rows: [][]any{
+			healthSeverityMaxRow("linear", "proj-shown", 1, 1, "team", "team-shown", "low"),
+			healthSeverityMaxRow("linear", "proj-late", 1, 1, "team", "team-late", "high"),
+		}},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactHealth)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactHealth, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-shown"), projectSubject("linear", "proj-late")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(result.Facts) != 2 {
+		t.Fatalf("facts = %#v, want 2 -- proj-late must be served even though the row-level scan never reached it", result.Facts)
+	}
+	var late *contextfabric.CanonicalFact
+	for i := range result.Facts {
+		if result.Facts[i].Subject.CanonicalID == projectSubject("linear", "proj-late").CanonicalID {
+			late = &result.Facts[i]
+		}
+	}
+	if late == nil {
+		t.Fatalf("facts = %#v, want proj-late present", result.Facts)
+	}
+	if got := late.Fields["severity"].String; got == nil || *got != "high" {
+		t.Fatalf("proj-late severity = %#v, want high (from the aggregate, independent of the row-level scan)", late.Fields["severity"])
+	}
+	if _, ok := late.Fields["risk_breakdown"]; ok {
+		t.Fatalf("fields = %#v, want risk_breakdown absent -- the row-level scan produced zero rows for this project, and a FactTable cannot declare zero rows", late.Fields)
+	}
+	if got := late.Fields["risk_breakdown_rows_shown"].Integer; got == nil || *got != 0 {
+		t.Fatalf("risk_breakdown_rows_shown = %#v, want 0", late.Fields["risk_breakdown_rows_shown"])
+	}
+	if got := late.Fields["risk_breakdown_rows_total"].Integer; got == nil || *got != 1 {
+		t.Fatalf("risk_breakdown_rows_total = %#v, want 1 (the aggregate's own uncapped count)", late.Fields["risk_breakdown_rows_total"])
+	}
+	foundTeamLateRef := false
+	for _, ref := range late.EvidenceRefIDs {
+		if strings.Contains(ref, "team-late") {
+			foundTeamLateRef = true
+		}
+	}
+	if !foundTeamLateRef {
+		t.Fatalf("evidence_ref_ids = %#v, want a ref citing team-late -- the scope that produced the promoted severity", late.EvidenceRefIDs)
 	}
 }
 
@@ -675,7 +751,7 @@ func TestHealthProviderProjectReadsDailyHealthSeries(t *testing.T) {
 		{match: healthDailySeriesMatch, rows: [][]any{
 			healthProjectDailySeriesRow("linear:proj-1", "2026-02-21", uint8(1), 0.71, "high"),
 		}},
-		{match: healthSeverityMaxMatch, rows: [][]any{healthSeverityMaxRow("linear", "proj-1", "elevated")}},
+		{match: healthSeverityMaxMatch, rows: [][]any{healthSeverityMaxRow("linear", "proj-1", 1, 1, "team", "team-1", "elevated")}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactHealth)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{

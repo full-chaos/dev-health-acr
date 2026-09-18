@@ -130,12 +130,12 @@ FactHealth
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            87
+    calls followed            89
     calls accounted           13
-    calls not_a_call          5
-    calls excluded_by_design  110
+    calls not_a_call          8
+    calls excluded_by_design  117
     calls leaked              10
-  fields             compounding_risk computed_at daily_health daily_health_omitted_count day norm_value repo_count risk_breakdown risk_rules rollup_basis scope scope_id scope_name severity severity_basis severity_unavailable_reason signal team_count weight weighted_contribution
+  fields             compounding_risk computed_at daily_health daily_health_omitted_count day norm_value repo_count risk_breakdown risk_breakdown_rows_shown risk_breakdown_rows_total risk_rules rollup_basis scope scope_id scope_name severity severity_basis severity_unavailable_reason signal team_count weight weighted_contribution
 
 FactIdentity
   reached_funcs      24
