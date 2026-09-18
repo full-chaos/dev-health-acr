@@ -188,11 +188,11 @@ func TestCHAOS4363ProjectRollupsAgainstRealClickHouse(t *testing.T) {
 			t.Fatalf("seed team_repo_ownership: %v", err)
 		}
 		if err := direct.Exec(ctx, `INSERT INTO compounding_risk_daily (org_id, day, scope, scope_id, compounding_risk, severity, computed_at) VALUES (?,?,?,?,?,?,?)`,
-			orgID, date(2026, 8, 12), "team", "team-health-a", 0.55, "elevated", ts(2026, 8, 12, 6, 0, 0)); err != nil {
+			orgID, recentHealthDay(1), "team", "team-health-a", 0.55, "elevated", ts(2026, 8, 12, 6, 0, 0)); err != nil {
 			t.Fatalf("seed team-scope compounding_risk_daily row: %v", err)
 		}
 		if err := direct.Exec(ctx, `INSERT INTO compounding_risk_daily (org_id, day, scope, scope_id, compounding_risk, severity, computed_at) VALUES (?,?,?,?,?,?,?)`,
-			orgID, date(2026, 8, 12), "repo", repoID, 0.81, "high", ts(2026, 8, 12, 6, 0, 0)); err != nil {
+			orgID, recentHealthDay(1), "repo", repoID, 0.81, "high", ts(2026, 8, 12, 6, 0, 0)); err != nil {
 			t.Fatalf("seed repo-scope compounding_risk_daily row: %v", err)
 		}
 		provider := findProvider(t, providers, contextfabric.FactHealth)
@@ -324,8 +324,8 @@ func TestCHAOS4363ProjectRollupsAgainstRealClickHouse(t *testing.T) {
 			t.Fatalf("seed team_project_ownership rows: %v", err)
 		}
 		seedRepoOwnership(orgID, "team-shared-x", repoID, "acme/shared-only-a")
-		seedRisk(orgID, "team", "team-shared-x", "high", 0.70, date(2026, 8, 12))
-		seedRisk(orgID, "repo", repoID, "low", 0.05, date(2026, 8, 12))
+		seedRisk(orgID, "team", "team-shared-x", "high", 0.70, recentHealthDay(1))
+		seedRisk(orgID, "repo", repoID, "low", 0.05, recentHealthDay(1))
 		// SHARED-A only reaches team-shared-x THROUGH team_project_ownership
 		// too, but repoID is owned by team-shared-x, which owns BOTH
 		// projects -- so the repo row is reachable from either project's own
@@ -355,7 +355,7 @@ func TestCHAOS4363ProjectRollupsAgainstRealClickHouse(t *testing.T) {
 			orgID, "linear", "team-dup-a", "irrelevant", "DUP1", "provider_access", ts(2026, 1, 1, 0, 0, 0), nil, ts(2026, 1, 1, 0, 0, 0)); err != nil {
 			t.Fatalf("seed second team_project_ownership source row: %v", err)
 		}
-		seedRisk(orgID, "team", "team-dup-a", "high", 0.75, date(2026, 8, 12))
+		seedRisk(orgID, "team", "team-dup-a", "high", 0.75, recentHealthDay(1))
 		fact := readHealthFact(orgID, "linear", "proj-dup", contextfabric.FactQuery{})
 		if fact == nil {
 			t.Fatal("facts = none, want a served roll-up")
@@ -421,7 +421,7 @@ func TestCHAOS4363ProjectRollupsAgainstRealClickHouse(t *testing.T) {
 			if i == repoCount-1 {
 				severity = "high"
 			}
-			seedRisk(orgID, "repo", repoID, severity, 0.10, date(2026, 8, 12))
+			seedRisk(orgID, "repo", repoID, severity, 0.10, recentHealthDay(1))
 		}
 		healthProvider := findProvider(t, providers, contextfabric.FactHealth)
 		result, err := healthProvider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
@@ -464,12 +464,12 @@ func TestCHAOS4363ProjectRollupsAgainstRealClickHouse(t *testing.T) {
 		for i := 0; i < repoCount; i++ {
 			repoID := "66666666-6666-6666-6666-" + paddedIndex(i) + "00000000"
 			seedRepoOwnership(orgID, "team-aaa-cap", repoID, "acme/late-"+paddedIndex(i))
-			seedRisk(orgID, "repo", repoID, "low", 0.10, date(2026, 8, 12))
+			seedRisk(orgID, "repo", repoID, "low", 0.10, recentHealthDay(1))
 		}
 		seedProject("proj-zzz-late", orgID, "linear", "ZZZLATE1")
 		seedTeam("team-zzz-late", orgID, "Team ZZZ Late")
 		seedOwnership(orgID, "linear", "team-zzz-late", "ZZZLATE1")
-		seedRisk(orgID, "team", "team-zzz-late", "high", 0.90, date(2026, 8, 12))
+		seedRisk(orgID, "team", "team-zzz-late", "high", 0.90, recentHealthDay(1))
 
 		healthProvider := findProvider(t, providers, contextfabric.FactHealth)
 		result, err := healthProvider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{

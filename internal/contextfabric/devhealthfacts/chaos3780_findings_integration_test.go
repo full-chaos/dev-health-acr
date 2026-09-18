@@ -312,11 +312,11 @@ func TestCHAOS3780FindingsAgainstRealClickHouse(t *testing.T) {
 		const orgID = "org-f2-health"
 		repoID := "55555555-5555-5555-5555-555555555555"
 		if err := direct.Exec(ctx, `INSERT INTO compounding_risk_daily (org_id, scope, scope_id, day, severity, compounding_risk, computed_at) VALUES (?,?,?,?,?,?,?)`,
-			orgID, "repo", repoID, date(2026, 8, 12), "low", 0.1, ts(2026, 8, 12, 10, 0, 0)); err != nil {
+			orgID, "repo", repoID, recentHealthDay(1), "low", 0.1, ts(2026, 8, 12, 10, 0, 0)); err != nil {
 			t.Fatalf("seed stale health row: %v", err)
 		}
 		if err := direct.Exec(ctx, `INSERT INTO compounding_risk_daily (org_id, scope, scope_id, day, severity, compounding_risk, computed_at) VALUES (?,?,?,?,?,?,?)`,
-			orgID, "repo", repoID, date(2026, 8, 12), "high", 0.95, ts(2026, 8, 12, 22, 0, 0)); err != nil {
+			orgID, "repo", repoID, recentHealthDay(1), "high", 0.95, ts(2026, 8, 12, 22, 0, 0)); err != nil {
 			t.Fatalf("seed fresh health row: %v", err)
 		}
 		provider := findProvider(t, providers, contextfabric.FactHealth)
@@ -372,11 +372,11 @@ func TestCHAOS3780FindingsAgainstRealClickHouse(t *testing.T) {
 		for i := 0; i < repoCount; i++ {
 			repoID := "77777777-7777-7777-7777-" + padHex(i)
 			if err := direct.Exec(ctx, `INSERT INTO compounding_risk_daily (org_id, scope, scope_id, day, severity, compounding_risk, computed_at) VALUES (?,?,?,?,?,?,?)`,
-				orgID, "repo", repoID, date(2026, 8, 12), "low", 0.2, tiedAt); err != nil {
+				orgID, "repo", repoID, recentHealthDay(1), "low", 0.2, tiedAt); err != nil {
 				t.Fatalf("seed tied row A for repo %d: %v", i, err)
 			}
 			if err := direct.Exec(ctx, `INSERT INTO compounding_risk_daily (org_id, scope, scope_id, day, severity, compounding_risk, computed_at) VALUES (?,?,?,?,?,?,?)`,
-				orgID, "repo", repoID, date(2026, 8, 12), "elevated", 0.6, tiedAt); err != nil {
+				orgID, "repo", repoID, recentHealthDay(1), "elevated", 0.6, tiedAt); err != nil {
 				t.Fatalf("seed tied row B for repo %d: %v", i, err)
 			}
 			subjects = append(subjects, repoSubject(repoID))
