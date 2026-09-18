@@ -69,7 +69,14 @@ import (
 // exist under v5 -- the same over-invalidation rationale as every prior
 // bump: a candidate saved before this change never ran the new project
 // query, so it must not be served as though it had.
-const QueryVersion = "devhealthfacts.clickhouse.v6"
+//
+// v6 -> v7: FactHealth's project rollup gains a top-level
+// "severity" (the worst band across the project's own risk_breakdown rows,
+// disclosed via a new "severity_basis"/"severity_unavailable_reason"
+// field) it never served before -- no new query, but a candidate saved
+// under v6 never computed this value and must not be served as though it
+// carried it.
+const QueryVersion = "devhealthfacts.clickhouse.v7"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

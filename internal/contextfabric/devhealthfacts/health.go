@@ -2,6 +2,7 @@ package devhealthfacts
 
 import (
 	"context"
+	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
@@ -460,6 +461,43 @@ type healthRollupRow struct {
 	risk                                            float64
 }
 
+// healthSeverityBasisTeamAndRepoBreakdown and
+// healthSeverityUnavailableReasonNoKnownBand are the project health
+// severity promotion's two disclosed, closed-vocabulary values -- each a
+// single fixed literal, the same "one canonical string, declared once"
+// idiom this package's own rollup_basis fields and timebound.go's reason
+// constants already use. A served project FactHealth carries exactly one
+// of: {severity + severity_basis == healthSeverityBasisTeamAndRepoBreakdown}
+// or {severity_unavailable_reason == healthSeverityUnavailableReasonNoKnownBand},
+// never both, never neither -- independent of whether risk_breakdown itself
+// is present (a project's KNOWN band can come from a scope outside the
+// rendered breakdown; see queryProjectHealthSeverityMax's own doc comment).
+const (
+	healthSeverityBasisTeamAndRepoBreakdown    = "worst_of_team_and_repo_breakdown"
+	healthSeverityUnavailableReasonNoKnownBand = "no_known_severity_breakdown_rows"
+)
+
+// healthSeverityWinnerDelimiter separates the (scope, scope_id, severity)
+// triple queryProjectHealthSeverityMax's own argMax packs into one string
+// column -- a delimiter rather than three independent argMax calls, because
+// three independent aggregates keyed by the same ORDER expression have no
+// guarantee of resolving a tie to the SAME underlying row (this file's own
+// package doc comment already documents this exact failure mode for
+// severity vs compounding_risk). \x1f (unit separator) never appears in a
+// provider name, a UUID, or the closed severity vocabulary.
+const healthSeverityWinnerDelimiter = "\x1f"
+
+// healthSeverityMaxRow is one project's result from
+// queryProjectHealthSeverityMax: how many of its reachable team+repo rows
+// carry a known band, how many rows are reachable in total, and -- when at
+// least one is known -- which single scope produced the winning (worst)
+// band, so the caller can cite it as evidence even when that scope's own
+// row never reached the row-level breakdown scan's shared budget.
+type healthSeverityMaxRow struct {
+	knownRowCount, totalRowCount               int64
+	winnerScope, winnerScopeID, winnerSeverity string
+}
+
 // readProjectHealth rolls FactHealth up for a project two ways at once (see
 // the package doc comment): a team layer via team_project_ownership and a
 // repo layer one hop further via team_repo_ownership, both landing in one
@@ -506,8 +544,11 @@ FROM (
 	INNER JOIN (` + compoundingRiskLatestSubquery("repo", timeBound) + `) AS cr ON cr.scope_id = tro.repo_key AND cr.rn = 1
 )
 ORDER BY project_key, scope, scope_id`)
+	// byProject carries WHATEVER the shared, row-capped scan reached for
+	// each project -- never the project population itself (that is
+	// severityOrder, from the uncapped aggregate below); no iteration
+	// order is kept here because nothing iterates this map by itself.
 	byProject := make(map[string][]healthRollupRow)
-	var projectOrder []string
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
 		var projectSubjectKey, scope, scopeID, scopeName, severity, computedAt string
@@ -518,9 +559,6 @@ ORDER BY project_key, scope, scope_id`)
 		}
 		if _, ok := bySubject[projectSubjectKey]; !ok {
 			return nil
-		}
-		if _, seen := byProject[projectSubjectKey]; !seen {
-			projectOrder = append(projectOrder, projectSubjectKey)
 		}
 		byProject[projectSubjectKey] = append(byProject[projectSubjectKey], healthRollupRow{
 			scope: scope, scopeID: scopeID, scopeName: scopeName, severity: severity, computedAt: computedAt,
@@ -538,23 +576,19 @@ ORDER BY project_key, scope, scope_id`)
 	// this is a genuinely SEPARATE field (daily_health) on the SAME fact, so
 	// it cannot move what healthRiskSignal reads.
 	//
-	// CHAOS-4681 note: unlike the team subject, this PROJECT rollup's
-	// top-level Fields did not carry "compounding_risk" before this ticket,
-	// so healthRiskSignal never saw a project-subject FactHealth fact carry
-	// a usable severity either. Below, the freshest daily_health day's
-	// declared Measure (compounding_risk only, NOT severity) is now copied
-	// in under its own field name. healthRiskSignal is subject-kind-blind
-	// and project cohorts ARE constructed in production (graphrank's
-	// DiscoveredCohort, for a frame whose subject expression declares
-	// member_kind "project"; before CHAOS-4736 the same cohorts arrived
-	// through a keyword match on a "project"/"initiative" question, which
-	// is the mechanism this comment used to cite) -- corrected from an
-	// earlier, incorrect claim to the contrary (codex round 1 finding).
-	// Deliberately
-	// copying only compounding_risk, never severity, keeps RankCohort
-	// behavior unaffected for now; a project cohort's health-risk signal
-	// stays unavailable exactly as before, until that generalization is
-	// itself reviewed and tested on its own.
+	// This project rollup's top-level Fields carries "compounding_risk"
+	// (the freshest daily_health day's declared Measure, copied in under
+	// its own field name below) alongside a SEPARATE top-level "severity"
+	// (the worst band across this project's own risk_breakdown rows,
+	// read from queryProjectHealthSeverityMax below, independent of which
+	// day daily_health's freshest row belongs to). healthRiskSignal
+	// (cohort_ranking.go) reads fields["severity"] off ANY FactHealth fact
+	// regardless of subject kind, and project cohorts ARE constructed in
+	// production (graphrank's DiscoveredCohort, for a frame whose subject
+	// expression declares member_kind "project"), so a project cohort's
+	// health-risk signal scores from the same worst-case-governs
+	// doctrine every other signal in that file already documents
+	// (workloadWorstDays, readinessGapSignal, deficiencySeveritySignal).
 	dailyByProject, seriesErr := p.queryProjectHealthDailySeries(ctx, orgID, ids, timeBound)
 	if seriesErr != nil {
 		return rowCount, rejected, false, seriesErr
@@ -569,14 +603,49 @@ ORDER BY project_key, scope, scope_id`)
 	if dailySeriesRowCount > rowCount {
 		rowCount = dailySeriesRowCount
 	}
-	for _, projectKey := range projectOrder {
+	// severityByProject/severityOrder are read from queryProjectHealthSeverityMax's
+	// OWN server-side aggregate, never derived from the row-level
+	// byProject/riskRows scan above: that scan's own withRowLimit cap is
+	// shared across EVERY requested project's breakdown rows combined, so
+	// a project sitting near the boundary of that shared budget can be
+	// ABSENT from byProject/projectOrder entirely, not merely missing its
+	// worst row. The severity aggregate below GROUPs BY project
+	// server-side, so its answer for one project -- INCLUDING WHETHER THE
+	// PROJECT APPEARS AT ALL -- is correct regardless of how many rows any
+	// OTHER requested project contributes to the shared budget; only ITS
+	// OWN project-count probe (not a row-count one) can truncate it,
+	// folded into rowCount/breakdownTruncated the same way
+	// dailySeriesRowCount is above.
+	severityByProject, severityOrder, severityRowCount, severityErr := p.queryProjectHealthSeverityMax(ctx, orgID, ids, timeBound)
+	if severityErr != nil {
+		return rowCount, rejected, false, severityErr
+	}
+	if severityRowCount >= maxFactRowsProbe {
+		breakdownTruncated = true
+	}
+	if severityRowCount > rowCount {
+		rowCount = severityRowCount
+	}
+	// severityOrder drives EMISSION, never projectOrder: projectOrder only
+	// lists projects the shared, row-capped scan happened to reach, while
+	// severityOrder lists every project the uncapped, per-project aggregate
+	// proved reachable through the SAME ownership join. A project present
+	// in the aggregate but absent from byProject (rows is then nil) is
+	// still a REAL project this org's ownership data reaches -- it is
+	// emitted with an honestly empty/partial breakdown, never silently
+	// dropped because the shared scan ran out of room before reaching it.
+	for _, projectKey := range severityOrder {
+		subject, ok := bySubject[projectKey]
+		if !ok {
+			continue
+		}
+		sev := severityByProject[projectKey]
 		rows := byProject[projectKey]
-		subject := bySubject[projectKey]
 		seenScopeEntries := make(map[string]bool, len(rows))
 		seenTeams := make(map[string]bool, len(rows))
 		seenRepos := make(map[string]bool, len(rows))
 		riskRows := make([]contextfabric.FactValueRow, 0, len(rows))
-		evidenceRefIDs := make([]string, 0, len(rows)+1)
+		evidenceRefIDs := make([]string, 0, len(rows)+2)
 		evidenceRefIDs = append(evidenceRefIDs, evidenceRefID(contractsv1.ContextFabricEvidenceEntityProject, projectKey))
 		for _, r := range rows {
 			dedupeKey := r.scope + "\x00" + r.scopeID
@@ -605,9 +674,6 @@ ORDER BY project_key, scope, scope_id`)
 			}
 			riskRows = append(riskRows, contextfabric.FactValueRow{Fields: rowFields})
 		}
-		if len(riskRows) == 0 {
-			continue
-		}
 		var omitted int
 		riskRows, omitted = capFactValueRows(riskRows)
 		breakdownTruncated = breakdownTruncated || omitted > 0
@@ -617,18 +683,67 @@ ORDER BY project_key, scope, scope_id`)
 			"rollup_basis": contextfabric.StringFactValue("team_project_ownership_and_team_repo_ownership"),
 			"team_count":   contextfabric.IntegerFactValue(int64(len(seenTeams))),
 			"repo_count":   contextfabric.IntegerFactValue(int64(len(seenRepos))),
-			// CHAOS-4633 P1: Key = [scope, scope_id, scope_name,
-			// severity, computed_at] -- dedupeKey above already
-			// partitions on (scope, scope_id), so those two alone
-			// guarantee distinctness; scope_name/severity/computed_at
-			// ride along as declared identity columns, not measures.
-			"risk_breakdown": contextfabric.TableFactValue(contextfabric.FactTable{
+			// risk_breakdown_rows_shown/_total disclose, PER PROJECT,
+			// exactly what the row-level scan's shared budget and the
+			// display cap together left visible versus how many rows are
+			// truly reachable (rows_total comes from the severity
+			// aggregate's own uncapped count, so it can never be narrowed
+			// by either cap) -- a project can carry a known severity with
+			// rows_shown=0 when its own rows never reached the shared
+			// scan at all.
+			"risk_breakdown_rows_shown": contextfabric.IntegerFactValue(int64(len(riskRows))),
+			"risk_breakdown_rows_total": contextfabric.IntegerFactValue(sev.totalRowCount),
+		}
+		// Key = [scope, scope_id, scope_name, severity, computed_at] --
+		// dedupeKey above already partitions on (scope,
+		// scope_id), so those two alone guarantee distinctness;
+		// scope_name/severity/computed_at ride along as declared identity
+		// columns, not measures. FactTable.Validate refuses a table with
+		// zero rows, so risk_breakdown is present only when the shared
+		// scan actually reached at least one of this project's rows --
+		// its absence is itself part of the rows_shown=0 disclosure above,
+		// never silently substituted with an empty table.
+		if len(riskRows) > 0 {
+			fields["risk_breakdown"] = contextfabric.TableFactValue(contextfabric.FactTable{
 				Shape:    contextfabric.FactTableBreakdown,
 				Key:      []string{"scope", "scope_id", "scope_name", "severity", "computed_at"},
 				Measures: []string{"compounding_risk"},
 				Grain:    timeBound.effectiveGrain(grainDaily),
 				Rows:     riskRows,
-			}),
+			})
+		}
+		// severity promotes the WORST band across this project's own
+		// reachable team+repo rows, excluding "unknown" -- a data gap
+		// contributes no evidence either way, so it can never win the max
+		// against a real reading, and it can never stand in as a false
+		// "low" when it is the only reading a project's population
+		// carries. Read from queryProjectHealthSeverityMax's own
+		// server-side aggregate, never from the riskRows loop above, so
+		// the value -- and its evidence -- are immune to the row-level
+		// scan's shared budget. A project with at least one known band
+		// discloses which combined population produced it (severity_basis)
+		// and cites the WINNING scope directly from the aggregate, even
+		// when that scope's own row never reached the shared scan above
+		// (a promoted severity with no evidence for the scope that
+		// produced it is an unverifiable claim); a project whose reachable
+		// rows are ALL unknown (0 reachable rows at all means this project
+		// never appears in severityOrder, so this branch is never reached
+		// for it) discloses that severity is undetermined for a named
+		// reason, never a defaulted "low".
+		if sev.knownRowCount > 0 {
+			fields["severity"] = contextfabric.StringFactValue(sev.winnerSeverity)
+			fields["severity_basis"] = contextfabric.StringFactValue(healthSeverityBasisTeamAndRepoBreakdown)
+			winnerKey := sev.winnerScope + "\x00" + sev.winnerScopeID
+			if !seenScopeEntries[winnerKey] {
+				switch sev.winnerScope {
+				case "team":
+					evidenceRefIDs = append(evidenceRefIDs, evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, sev.winnerScopeID))
+				case "repo":
+					evidenceRefIDs = append(evidenceRefIDs, evidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, sev.winnerScopeID))
+				}
+			}
+		} else {
+			fields["severity_unavailable_reason"] = contextfabric.StringFactValue(healthSeverityUnavailableReasonNoKnownBand)
 		}
 		if dailyTable, ok, dailyOmitted := healthDailyTable(dailyByProject[projectKey], timeBound.effectiveGrain(grainDaily)); ok {
 			fields["daily_health"] = dailyTable
@@ -645,19 +760,14 @@ ORDER BY project_key, scope, scope_id`)
 			// UNLIKE metrics.go's readRepositoryMetrics idiom (which copies
 			// the whole freshest-day row), this copies ONLY the declared
 			// Measure, not the whole row: the row's other field, "severity"
-			// (CHAOS-4680's Observation, not a Measure), is exactly the
-			// field name healthRiskSignal (cohort_ranking.go) reads off ANY
-			// FactHealth fact regardless of subject kind, and project
-			// cohorts ARE constructed in production (graphrank's
-			// DiscoveredCohort, for a frame declaring member_kind
-			// "project"; before CHAOS-4736 the same cohorts arrived through
-			// a keyword match on a "project"/"initiative" question -- codex
-			// round 1 finding, confirmed). Copying severity here would
-			// silently start
-			// feeding project cohorts into health-risk ranking, a real
-			// behavior change this ticket never reviewed or tested. Copying
-			// only the declared Measure satisfies this ticket's actual
-			// scope (a scalar sibling for the declared measure) without it.
+			// (a per-day categorical observation, not a Measure), names one specific
+			// day's single winning scope, a narrower population than the
+			// worst-of-team-and-repo-breakdown population fields["severity"]
+			// above already discloses. Overwriting the promoted worst-band
+			// value with one day's single scope here would silently swap
+			// its disclosed basis for a different, undisclosed one -- the
+			// promoted severity keeps coming from the breakdown-wide max
+			// computed from the breakdown-wide max above, never from this table.
 			if risk, ok := dailyByProject[projectKey][0].toFactValueRow().Fields["compounding_risk"]; ok {
 				fields["compounding_risk"] = risk
 			}
@@ -735,4 +845,96 @@ ORDER BY project_key, day DESC`)
 		return nil
 	}, timeBound.bindings()...)
 	return byProject, scanErr
+}
+
+// queryProjectHealthSeverityMax computes, per project, the worst
+// (low < elevated < high) severity band across the SAME latest-row-per-
+// scope population readProjectHealth's own risk_breakdown draws from
+// (compoundingRiskLatestSubquery over both the team layer and the
+// team_repo_ownership repo layer) -- but as ONE server-side aggregate,
+// GROUPed BY project, rather than a Go-side fold over the row-level scan.
+//
+// This is the PROJECT POPULATION SOURCE, not merely a severity lookup:
+// readProjectHealth's row-level breakdown scan shares ONE withRowLimit
+// budget across EVERY project a caller requests in one call, ordered by
+// (project_key, scope, scope_id) -- a project sorting late enough to sit
+// past that shared cap can be ABSENT from the row-level scan entirely, not
+// merely missing its worst row. This query has no such shared budget (its
+// own probe counts DISTINCT PROJECTS, never contributing rows), so every
+// project it returns is emitted by the caller regardless of whether the
+// row-level scan reached it at all -- see readProjectHealth's own doc
+// comment at the call site.
+//
+// It is also the EVIDENCE SOURCE for the promoted value: knownRowCount,
+// totalRowCount and the winning (scope, scope_id) travel WITH the severity,
+// so a project whose winning row never reached the row-level scan still
+// gets a citable evidence ref for the scope that actually produced its
+// severity (readProjectHealth appends it directly from this result, never
+// only from rows the display scan happened to carry).
+//
+// The severity->band mapping is the SQL expression of the same
+// low < elevated < high < (unknown excluded) ordinal cohort_ranking.go's
+// healthRiskSignal already reads off the served field: "unknown" (or any
+// value outside {low, elevated, high}) maps to band 0 and can never win
+// max(band) against a real reading, so it can never surface as a false
+// "low". knownRowCount = countIf(band > 0) and totalRowCount = count()
+// let the caller distinguish "reachable rows exist, none is known" (serves
+// severity_unavailable_reason) from "no reachable rows at all" (this
+// project never appears in the result, and readProjectHealth serves no
+// fact for it). The winning (scope, scope_id, severity) triple is packed
+// into ONE argMax'd string (healthSeverityWinnerDelimiter-joined) rather
+// than three independent argMax calls, because three aggregates keyed by
+// the same ORDER expression have no guarantee of resolving a tie to the
+// SAME underlying row (this file's own package doc comment already
+// documents this exact failure mode for severity vs compounding_risk); a
+// tie here can only occur between rows sharing the IDENTICAL packed
+// string (band is a pure function of severity, and the packed string
+// includes it), so which physical row argMax picks among a tie is
+// immaterial to the value returned.
+func (p *HealthProvider) queryProjectHealthSeverityMax(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byProject map[string]healthSeverityMaxRow, order []string, rowCount int, err error) {
+	ownershipPredicate := ownershipValidityPredicate(timeBound)
+	statement := withRowProbeLimit(`SELECT project_key, countIf(band > 0), count(), argMax(concat(scope, '` + healthSeverityWinnerDelimiter + `', scope_id, '` + healthSeverityWinnerDelimiter + `', severity), band)
+FROM (
+	SELECT project_key, scope, scope_id, severity, multiIf(severity = 'high', 3, severity = 'elevated', 2, severity = 'low', 1, 0) AS band
+	FROM (
+		SELECT concat(p.provider, ':', p.id) AS project_key, 'team' AS scope, p.team_id AS scope_id, cr.severity AS severity
+		FROM ` + projectOwnershipJoinSQL(ownershipPredicate) + `
+		INNER JOIN (` + compoundingRiskLatestSubquery("team", timeBound) + `) AS cr ON cr.scope_id = p.team_id AND cr.rn = 1
+
+		UNION ALL
+
+		SELECT concat(p.provider, ':', p.id) AS project_key, 'repo' AS scope, tro.repo_key AS scope_id, cr.severity AS severity
+		FROM ` + projectOwnershipJoinSQL(ownershipPredicate) + `
+		INNER JOIN (
+			SELECT team_id, toString(repo_id) AS repo_key
+			FROM team_repo_ownership FINAL
+			WHERE org_id = {org_id:String} AND repo_id IS NOT NULL` + ownershipPredicate + `
+			GROUP BY team_id, repo_key
+		) AS tro ON tro.team_id = p.team_id
+		INNER JOIN (` + compoundingRiskLatestSubquery("repo", timeBound) + `) AS cr ON cr.scope_id = tro.repo_key AND cr.rn = 1
+	)
+)
+GROUP BY project_key
+ORDER BY project_key`)
+	byProject = make(map[string]healthSeverityMaxRow)
+	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		rowCount++
+		var projectKey, winner string
+		var known, total uint64
+		if err := row.Scan(&projectKey, &known, &total, &winner); err != nil {
+			return err
+		}
+		result := healthSeverityMaxRow{knownRowCount: int64(known), totalRowCount: int64(total)}
+		if known > 0 {
+			if parts := strings.SplitN(winner, healthSeverityWinnerDelimiter, 3); len(parts) == 3 {
+				result.winnerScope, result.winnerScopeID, result.winnerSeverity = parts[0], parts[1], parts[2]
+			}
+		}
+		if _, seen := byProject[projectKey]; !seen {
+			order = append(order, projectKey)
+		}
+		byProject[projectKey] = result
+		return nil
+	}, timeBound.bindings()...)
+	return byProject, order, rowCount, scanErr
 }
