@@ -6,11 +6,24 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
+
+// recentHealthDay returns a date daysAgo before the real wall clock,
+// truncated to midnight UTC. A TemporalCurrent-axis integration test seeds
+// compounding_risk_daily rows dated relative to the instant it actually
+// runs, never a fixed calendar literal -- a fixed literal drifts out of
+// CHAOS-5952's freshness window the moment the suite runs more than
+// healthSeverityFreshnessWindowDays after it was written, which would
+// serve "unknown" for a scenario the test believes seeds a known band.
+func recentHealthDay(daysAgo int) time.Time {
+	now := time.Now().UTC()
+	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -daysAgo)
+}
 
 func teamSubject(id string) contextfabric.SubjectRef {
 	return contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:" + id, Label: id}
@@ -20,18 +33,41 @@ func organizationSubject(id string) contextfabric.SubjectRef {
 	return contextfabric.SubjectRef{Kind: contextfabric.SubjectOrganization, CanonicalID: "organization:" + id, Label: id}
 }
 
-// healthRow shapes readScope's own widened SELECT (CHAOS-4418): scope_id,
-// severity, has_risk, compounding_risk, computed_at, then one
+// healthRow shapes readScope's own widened SELECT (CHAOS-4418, extended by
+// CHAOS-5952 with day/is_known/is_fresh): scope_id, severity, has_risk,
+// compounding_risk, computed_at, day, is_known, is_fresh, then one
 // (has_norm, norm, weight) triple per riskRuleComponents entry in that
-// list's own order (churn, complexity, ownership, review).
+// list's own order (churn, complexity, ownership, review). The canned row
+// defaults to a KNOWN, FRESH "elevated" band -- a test exercising a
+// specific freshness outcome uses healthRowFreshness directly.
 func healthRow(scopeID string) []any {
+	return healthRowFreshness(scopeID, "elevated", "2026-02-21", true, true)
+}
+
+// healthRowFreshness is healthRow's general form: severity/day are the
+// row's own scanned values, isKnown/isFresh are the freshness flags a real
+// query would compute alongside them (CHAOS-5952's
+// freshnessIsKnownSQL/freshnessIsFreshSQL). The fake client below replays
+// canned rows rather than evaluating SQL, so a test exercising a specific
+// freshness outcome sets these explicitly rather than relying on any date
+// arithmetic happening here -- the real-ClickHouse suite
+// (chaos5952_health_freshness_window_integration_test.go) is what proves
+// the SQL itself computes them correctly off a real day column.
+func healthRowFreshness(scopeID, severity, day string, isKnown, isFresh bool) []any {
 	return []any{
-		scopeID, "elevated", uint8(1), float64(0.62), "2026-02-21 00:00:00",
+		scopeID, severity, uint8(1), float64(0.62), "2026-02-21 00:00:00", day, boolToUint8(isKnown), boolToUint8(isFresh),
 		uint8(1), float64(0.3), float64(0.4), // churn
 		uint8(1), float64(0.2), float64(0.3), // complexity
 		uint8(1), float64(0.5), float64(0.2), // ownership
 		uint8(1), float64(0.1), float64(0.1), // review
 	}
+}
+
+func boolToUint8(b bool) uint8 {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // healthScalarMatch distinguishes readScope's own OLD rn=1-per-scope_id
@@ -86,13 +122,24 @@ const healthSeverityMaxMatch = "countIf(band > 0)"
 // packed winner joins scope, scope_id and severity with
 // healthSeverityWinnerDelimiter, matching the real query's argMax(concat(...));
 // it is empty when knownRowCount is 0 -- no known band to attribute to any
-// one scope.
+// one scope. everKnownRowCount defaults to knownRowCount -- every existing
+// caller's scenario is either "known" (also ever-known) or "never known"
+// (also never ever-known); a test exercising the CHAOS-5952 "known but now
+// stale" middle case uses healthSeverityMaxRowFreshness directly.
 func healthSeverityMaxRow(provider, projectID string, knownRowCount, totalRowCount int, winnerScope, winnerScopeID, winnerSeverity string) []any {
+	return healthSeverityMaxRowFreshness(provider, projectID, knownRowCount, knownRowCount, totalRowCount, winnerScope, winnerScopeID, winnerSeverity, "2026-02-21")
+}
+
+// healthSeverityMaxRowFreshness is healthSeverityMaxRow's general form:
+// everKnownRowCount and winnerDay are CHAOS-5952 additions (see
+// healthSeverityMaxRow's own doc comment for why everKnownRowCount is a
+// separate parameter from knownRowCount).
+func healthSeverityMaxRowFreshness(provider, projectID string, knownRowCount, everKnownRowCount, totalRowCount int, winnerScope, winnerScopeID, winnerSeverity, winnerDay string) []any {
 	winner := ""
 	if knownRowCount > 0 {
-		winner = winnerScope + "\x1f" + winnerScopeID + "\x1f" + winnerSeverity
+		winner = winnerScope + "\x1f" + winnerScopeID + "\x1f" + winnerSeverity + "\x1f" + winnerDay
 	}
-	return []any{provider + ":" + projectID, uint64(knownRowCount), uint64(totalRowCount), winner}
+	return []any{provider + ":" + projectID, uint64(knownRowCount), uint64(everKnownRowCount), uint64(totalRowCount), winner}
 }
 
 func TestHealthProviderRepoScopeHappyPath(t *testing.T) {
@@ -197,7 +244,7 @@ func TestHealthProviderNoRiskScoreOmitsField(t *testing.T) {
 func TestHealthProviderUnrecordedNormIsNullNotZero(t *testing.T) {
 	t.Parallel()
 	row := healthRow("repo-1")
-	row[5], row[6] = uint8(0), float64(0) // churn_norm unrecorded
+	row[8], row[9] = uint8(0), float64(0) // churn_norm unrecorded
 	client := &fakeClient{tables: []fakeTable{{match: "FROM compounding_risk_daily", rows: [][]any{row}}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactHealth)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
@@ -292,12 +339,24 @@ func TestHealthProviderRowForUnrequestedRepositoryNeverAppears(t *testing.T) {
 	}
 }
 
-// healthProjectRollupRow shapes one row of the project rollup UNION output:
-// (project_key, scope, scope_id, scope_name, severity, hasRisk, risk,
-// computed_at) -- the SAME 8-column shape both the team and repo UNION
-// branches select, so one canned row list stands in for either or both.
+// healthProjectRollupRow shapes one row of the project rollup UNION output
+// (CHAOS-4363, widened by CHAOS-5952 with day/is_known/is_fresh):
+// project_key, scope, scope_id, scope_name, severity, hasRisk, risk,
+// computed_at, day, is_known, is_fresh -- the SAME shape both the team and
+// repo UNION branches select, so one canned row list stands in for either
+// or both. is_known/is_fresh default to matching severity != "unknown",
+// mirroring the semantics every existing caller already relied on before
+// freshness existed as a separate concept.
 func healthProjectRollupRow(provider, projectID, scope, scopeID, scopeName, severity string, risk float64) []any {
-	return []any{provider + ":" + projectID, scope, scopeID, scopeName, severity, uint8(1), risk, "2026-02-21 00:00:00"}
+	known := severity != "unknown"
+	return healthProjectRollupRowFreshness(provider, projectID, scope, scopeID, scopeName, severity, risk, "2026-02-21", known, known)
+}
+
+// healthProjectRollupRowFreshness is healthProjectRollupRow's general form
+// for a test exercising a specific freshness outcome (a known band outside
+// the window, for instance, where isKnown is true but isFresh is false).
+func healthProjectRollupRowFreshness(provider, projectID, scope, scopeID, scopeName, severity string, risk float64, day string, isKnown, isFresh bool) []any {
+	return []any{provider + ":" + projectID, scope, scopeID, scopeName, severity, uint8(1), risk, "2026-02-21 00:00:00", day, boolToUint8(isKnown), boolToUint8(isFresh)}
 }
 
 // TestHealthProviderProjectRollupBreaksDownByTeamAndRepoNeverSums pins
@@ -329,8 +388,8 @@ func TestHealthProviderProjectRollupBreaksDownByTeamAndRepoNeverSums(t *testing.
 	// QueryVersion never computed -- a stored answer-reuse candidate from
 	// that older version must miss and re-run rather than be served as
 	// though it carried these fields.
-	if result.Version != "devhealthfacts.clickhouse.v9" {
-		t.Fatalf("Version = %q, want devhealthfacts.clickhouse.v9", result.Version)
+	if result.Version != "devhealthfacts.clickhouse.v10" {
+		t.Fatalf("Version = %q, want devhealthfacts.clickhouse.v10", result.Version)
 	}
 	fact := result.Facts[0]
 	if fact.Fields["rollup_basis"].String == nil || *fact.Fields["rollup_basis"].String != "team_project_ownership_and_team_repo_ownership" {
