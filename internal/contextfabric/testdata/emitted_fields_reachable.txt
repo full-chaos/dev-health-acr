@@ -170,19 +170,19 @@ FactIncidents
   fields             severity status
 
 FactInvestment
-  reached_funcs      35
+  reached_funcs      34
   dynamic_key_sites  5
-  leaked_call_sites  6
-    leak interface_method     5
-    leak external_func_value  1
+  leaked_call_sites  1
+    leak interface_method     1
+    leak external_func_value  0
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            56
+    calls followed            55
     calls accounted           15
     calls not_a_call          7
-    calls excluded_by_design  113
-    calls leaked              6
+    calls excluded_by_design  114
+    calls leaked              1
   fields             churn_loc cycle_p50_hours day delivery_units investment_area population_window project_stream prs_merged repo_count rollup_basis team_breakdown team_count team_id team_name theme_quality_bugfix work_items_completed work_unit_count work_units_without_repo_link
 
 FactLandscape
