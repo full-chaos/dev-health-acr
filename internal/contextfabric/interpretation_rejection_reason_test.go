@@ -378,3 +378,90 @@ func TestInterpretationRejectionReasonOfReturnsTheTableConstant(t *testing.T) {
 		t.Fatalf("InterpretationRejectionReasonOf() = %q for a hand-built non-member, want %q", got, InterpretationRejectionUnclassified)
 	}
 }
+
+// factKindRejectedQuestion is an interpretation Validate() refuses
+// specifically on ContextFabricInterpretationRejectionFactRequirementKindInvalid
+// -- an out-of-vocabulary fact_requirements[].kind, the model-authored
+// string CHAOS-5986 (telemetry half) exists to surface.
+func factKindRejectedQuestion(kind string) InterpretedQuestion {
+	q := rejectedQuestion()
+	q.ClarificationNeeded = false
+	q.FactRequirements = []FactRequirement{{Kind: contractsv1.ContextFabricFactKind(kind)}}
+	return q
+}
+
+// TestClassifyInterpretationRejectionCarriesTheRejectedFactKind is CHAOS-5986's
+// real producer for the ClassifyInterpretationRejection <-> RejectedFactKind
+// seam: it drives the actual engine classification function against a
+// question carrying a genuinely out-of-vocabulary kind, not a struct literal
+// standing in for one.
+func TestClassifyInterpretationRejectionCarriesTheRejectedFactKind(t *testing.T) {
+	t.Parallel()
+	q := factKindRejectedQuestion("not_a_fact_kind")
+	err := ClassifyInterpretationRejection(q, errors.New("fact requirement violates v1 bounds"))
+
+	if got := InterpretationRejectionReasonOf(err); got != contractsv1.ContextFabricInterpretationRejectionFactRequirementKindInvalid {
+		t.Fatalf("InterpretationRejectionReasonOf() = %q, want %q -- fixture is wrong", got, contractsv1.ContextFabricInterpretationRejectionFactRequirementKindInvalid)
+	}
+	kind, ok := InterpretationRejectedFactKindOf(err)
+	if !ok {
+		t.Fatalf("InterpretationRejectedFactKindOf() ok = false, want true -- q was rejected for exactly this reason")
+	}
+	if kind != "not_a_fact_kind" {
+		t.Fatalf("InterpretationRejectedFactKindOf() = %q, want %q", kind, "not_a_fact_kind")
+	}
+
+	var rejection *InterpretationRejection
+	if !errors.As(err, &rejection) {
+		t.Fatalf("errors.As(err, &InterpretationRejection{}) = false")
+	}
+	if rejection.RejectedFactKind != "not_a_fact_kind" {
+		t.Fatalf("rejection.RejectedFactKind = %q, want %q -- the struct field itself must carry the value, not only the reader", rejection.RejectedFactKind, "not_a_fact_kind")
+	}
+}
+
+// TestInterpretationRejectedFactKindOfIsAbsentForEveryOtherRejection pins the
+// "ONLY for fact_requirement_kind_invalid" scope: every other rejection
+// reason -- including ones ClassifyInterpretationRejection itself classifies
+// -- must leave the field unreadable, never a stale or unrelated value.
+func TestInterpretationRejectedFactKindOfIsAbsentForEveryOtherRejection(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		name string
+		err  error
+	}{
+		{
+			name: "a rejection for an unrelated clause (clarification_reason_missing)",
+			err:  ClassifyInterpretationRejection(rejectedQuestion(), errors.New("clarification_needed requires a reason")),
+		},
+		{name: "a plain error carrying no rejection", err: errors.New("something else")},
+		{name: "a nil error", err: nil},
+		{
+			name: "a hand-built rejection whose Reason is kind-invalid but RejectedFactKind was never set",
+			err:  &InterpretationRejection{Reason: contractsv1.ContextFabricInterpretationRejectionFactRequirementKindInvalid, err: errors.New("boom")},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if kind, ok := InterpretationRejectedFactKindOf(testCase.err); ok || kind != "" {
+				t.Fatalf("InterpretationRejectedFactKindOf() = (%q, %t), want (\"\", false)", kind, ok)
+			}
+		})
+	}
+}
+
+// TestNewInterpretationRejectionLeavesRejectedFactKindEmpty pins the two
+// fact_registry.go NewInterpretationRejection callers' own contract: they
+// reject for ContextFabricInterpretationRejectionFactCapabilityParameterNotAllowed,
+// a DIFFERENT reason, and never set RejectedFactKind -- so a value from an
+// earlier call on the same *InterpretationRejection type can never leak
+// across an unrelated rejection.
+func TestNewInterpretationRejectionLeavesRejectedFactKindEmpty(t *testing.T) {
+	t.Parallel()
+	err := NewInterpretationRejection(
+		contractsv1.ContextFabricInterpretationRejectionFactCapabilityParameterNotAllowed,
+		errors.New("boom"),
+	)
+	if kind, ok := InterpretationRejectedFactKindOf(err); ok || kind != "" {
+		t.Fatalf("InterpretationRejectedFactKindOf() = (%q, %t), want (\"\", false) -- NewInterpretationRejection alone never sets RejectedFactKind", kind, ok)
+	}
+}

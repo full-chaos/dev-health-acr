@@ -916,6 +916,15 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 		// SynthesizeAnswer's own rejectionReason variable one function
 		// down; see it for the CHAOS-4522 precedent this completes.
 		rejectionReason string
+		// rejectedFactKind (CHAOS-5986, telemetry half) is the raw,
+		// out-of-vocabulary fact_requirements[].kind value the model
+		// proposed, set ALONGSIDE rejectionReason at the same three
+		// rejecting returns below, ONLY when rejectionReason is
+		// fact_requirement_kind_invalid. Empty on every other path,
+		// including every other rejection reason -- logInterpretDecision
+		// appends the field only when it is non-empty, matching
+		// rejectionReason's own append-only-when-non-empty rule.
+		rejectedFactKind string
 		// CHAOS-5380: hoisted into the SAME var block as receipt, for the
 		// same reason -- the deferred decision line reads them after the
 		// return values are computed, so a `:=` at the withRetry call
@@ -942,7 +951,7 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 		primaryProvider, primaryModel, primaryModelVersion string
 	)
 	defer func() {
-		r.logInterpretDecision(ctx, principal.OrgID, request.RequestID, receipt, primaryFailureClassification, axisSource, decodingSeed, sample, rejectionReason, attemptOutcomes, fallbackAttempts, primaryProvider, primaryModel, primaryModelVersion)
+		r.logInterpretDecision(ctx, principal.OrgID, request.RequestID, receipt, primaryFailureClassification, axisSource, decodingSeed, sample, rejectionReason, rejectedFactKind, attemptOutcomes, fallbackAttempts, primaryProvider, primaryModel, primaryModelVersion)
 	}()
 
 	if err := request.Validate(); err != nil {
@@ -1051,6 +1060,11 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 			if reason := contextfabric.InterpretationRejectionReasonOf(fallbackErr); reason != contextfabric.InterpretationRejectionUnclassified {
 				rejectionReason = string(reason)
 				receipt.InterpretationRejectionReason = reason
+				// CHAOS-5986: the fallback's own rejected kind, when its
+				// rejection reason is fact_requirement_kind_invalid.
+				if kind, ok := contextfabric.InterpretationRejectedFactKindOf(fallbackErr); ok {
+					rejectedFactKind = kind
+				}
 			}
 			return contextfabric.InterpretedQuestion{}, receipt, fallbackErr
 		}
@@ -1106,6 +1120,11 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 			if reason := contextfabric.InterpretationRejectionReasonOf(fallbackErr); reason != contextfabric.InterpretationRejectionUnclassified {
 				rejectionReason = string(reason)
 				receipt.InterpretationRejectionReason = reason
+				// CHAOS-5986: the fallback's own rejected kind, when its
+				// rejection reason is fact_requirement_kind_invalid.
+				if kind, ok := contextfabric.InterpretationRejectedFactKindOf(fallbackErr); ok {
+					rejectedFactKind = kind
+				}
 			}
 			return contextfabric.InterpretedQuestion{}, receipt, fallbackErr
 		}
@@ -1127,6 +1146,15 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 		reason := contextfabric.InterpretationRejectionReasonOf(rejection)
 		rejectionReason = string(reason)
 		receipt.InterpretationRejectionReason = reason
+		// CHAOS-5986 (telemetry half): the raw fact_requirements[].kind
+		// value the model proposed, when THIS rejection's own reason is
+		// fact_requirement_kind_invalid. Read off the classified error --
+		// the same "one derivation, one source of truth" rule the reason
+		// read two lines up already follows -- never re-derived from
+		// `interpreted` here.
+		if kind, ok := contextfabric.InterpretationRejectedFactKindOf(rejection); ok {
+			rejectedFactKind = kind
+		}
 		return contextfabric.InterpretedQuestion{}, receipt, rejection
 	}
 	outputBytes, _ := json.Marshal(output)
@@ -2474,7 +2502,7 @@ func decisionOrgIDHash(orgID string) string {
 // strings.NewReplacer pass changes CodeQL's read of the finding above is
 // verified per-PR, not assumed from this comment.
 
-func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification, axisSource string, decodingSeed int64, sample int, rejectionReason string, attemptOutcomes []attemptOutcome, fallbackAttempts int, primaryProvider, primaryModel, primaryModelVersion string) {
+func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification, axisSource string, decodingSeed int64, sample int, rejectionReason, rejectedFactKind string, attemptOutcomes []attemptOutcome, fallbackAttempts int, primaryProvider, primaryModel, primaryModelVersion string) {
 	fields := []any{
 		"request_id", contextfabric.SanitizeLogAttr(requestID),
 		"org_id_hash", contextfabric.SanitizeLogAttr(decisionOrgIDHash(orgID)),
@@ -2543,6 +2571,24 @@ func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID str
 	// that this whole line stays corpus-free.
 	if rejectionReason != "" {
 		fields = append(fields, "rejection_reason", contextfabric.SanitizeLogAttr(rejectionReason))
+	}
+	// CHAOS-5986 (telemetry half). Appended only alongside rejection_reason
+	// above, and only when THIS rejection's rule was
+	// fact_requirement_kind_invalid -- every other rejection leaves it
+	// absent, same append-only-when-non-empty rule rejection_reason
+	// itself follows.
+	//
+	// UNLIKE every other field on this line, the value is genuinely
+	// model-authored text, by design (CHAOS-5986's whole point: an
+	// operator diagnosing a yardstick abort needs to see the out-of-
+	// vocabulary kind the model actually proposed, not only that one was
+	// rejected). SanitizeLogAttr is therefore doing real work here, not a
+	// defensive formality: it is the ONLY thing standing between this
+	// field and an unbounded, unescaped model string reaching a log line
+	// (go/log-injection, CWE-117) -- see its own doc comment for the
+	// newline-stripping/printable-ASCII/256-rune bound this relies on.
+	if rejectedFactKind != "" {
+		fields = append(fields, "rejected_fact_kind", contextfabric.SanitizeLogAttr(rejectedFactKind))
 	}
 	r.config.Logger.InfoContext(ctx, decisionEventMessage, fields...)
 }

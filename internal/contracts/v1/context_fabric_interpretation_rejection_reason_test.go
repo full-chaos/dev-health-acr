@@ -557,3 +557,92 @@ func TestDiagnoseContextFabricInterpretedQuestionRejectionOrdersWithinASingleFie
 		})
 	}
 }
+
+// TestRejectedFactRequirementKind is CHAOS-5986's (telemetry half) real
+// producer: it drives RejectedFactRequirementKind against real
+// ContextFabricInterpretedQuestion values, not a struct literal standing in
+// for one, and covers both what makes the function fire and -- just as
+// load-bearing -- what makes it correctly refuse to name a value.
+func TestRejectedFactRequirementKind(t *testing.T) {
+	t.Run("the single out-of-vocabulary requirement", func(t *testing.T) {
+		q := validDiagnosisInterpretedQuestion()
+		q.FactRequirements = []ContextFabricFactRequirement{{Kind: "not_a_fact_kind"}}
+		if err := q.Validate(); err == nil {
+			t.Fatalf("Validate() = nil -- the case is vacuous")
+		}
+		kind, ok := RejectedFactRequirementKind(q)
+		if !ok {
+			t.Fatalf("ok = false, want true -- the question was rejected for exactly this reason")
+		}
+		if kind != "not_a_fact_kind" {
+			t.Fatalf("kind = %q, want %q", kind, "not_a_fact_kind")
+		}
+	})
+
+	t.Run("the offending requirement is not the first one", func(t *testing.T) {
+		// Soundness, not merely presence: a scan for "any invalid kind" in
+		// the slice would still pass this case by accident (there is only
+		// one invalid kind here). What this actually proves is that the
+		// function reports the SAME requirement
+		// DiagnoseContextFabricInterpretedQuestionRejection's own mirror
+		// stopped at -- the first one requirement.validate() rejects --
+		// rather than independently re-scanning for a bad kind anywhere in
+		// the slice.
+		q := validDiagnosisInterpretedQuestion()
+		q.FactRequirements = []ContextFabricFactRequirement{
+			{Kind: ContextFabricFactStatus},
+			{Kind: ContextFabricFactHealth},
+			{Kind: "second_bad_kind"},
+		}
+		kind, ok := RejectedFactRequirementKind(q)
+		if !ok || kind != "second_bad_kind" {
+			t.Fatalf("(kind, ok) = (%q, %t), want (%q, true)", kind, ok, "second_bad_kind")
+		}
+	})
+
+	t.Run("an earlier requirement rejects on a DIFFERENT clause first", func(t *testing.T) {
+		// The soundness case that matters most: entry 0 fails on its
+		// PARAMETERS, so validate()'s own fact_requirements loop rejects q
+		// on ContextFabricInterpretationRejectionFactRequirementParameterInvalid
+		// -- never reaching entry 1's bad kind at all. A function that
+		// scanned the slice independently for "any invalid kind" would
+		// wrongly report entry 1's kind for a rejection that was never
+		// about kind. RejectedFactRequirementKind must refuse instead.
+		q := validDiagnosisInterpretedQuestion()
+		q.FactRequirements = []ContextFabricFactRequirement{
+			{Kind: ContextFabricFactStatus, Parameters: map[string]string{" untrimmed": "value"}},
+			{Kind: "unreachable_bad_kind"},
+		}
+		if err := q.Validate(); err == nil {
+			t.Fatalf("Validate() = nil -- the case is vacuous")
+		}
+		reason, ok := DiagnoseContextFabricInterpretedQuestionRejection(q)
+		if !ok || reason != ContextFabricInterpretationRejectionFactRequirementParameterInvalid {
+			t.Fatalf("fixture is wrong: reason = (%q, ok=%t), want (%q, true)", reason, ok, ContextFabricInterpretationRejectionFactRequirementParameterInvalid)
+		}
+		if kind, ok := RejectedFactRequirementKind(q); ok || kind != "" {
+			t.Fatalf("(kind, ok) = (%q, %t), want (\"\", false) -- q was not rejected for an invalid kind", kind, ok)
+		}
+	})
+
+	t.Run("rejected for an unrelated clause entirely", func(t *testing.T) {
+		q := validDiagnosisInterpretedQuestion()
+		q.Shape = "not_a_real_shape"
+		if err := q.Validate(); err == nil {
+			t.Fatalf("Validate() = nil -- the case is vacuous")
+		}
+		if kind, ok := RejectedFactRequirementKind(q); ok || kind != "" {
+			t.Fatalf("(kind, ok) = (%q, %t), want (\"\", false)", kind, ok)
+		}
+	})
+
+	t.Run("a valid question", func(t *testing.T) {
+		q := validDiagnosisInterpretedQuestion()
+		if err := q.Validate(); err != nil {
+			t.Fatalf("fixture is not valid: %v", err)
+		}
+		if kind, ok := RejectedFactRequirementKind(q); ok || kind != "" {
+			t.Fatalf("(kind, ok) = (%q, %t), want (\"\", false) -- q was never rejected", kind, ok)
+		}
+	})
+}

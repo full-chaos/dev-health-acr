@@ -47,7 +47,25 @@ func ClassifyInterpretationRejection(question InterpretedQuestion, cause error) 
 	// the reason is Unclassified, which is the correct thing to report --
 	// never a fabricated clause name.
 	reason, _ := contractsv1.DiagnoseContextFabricInterpretedQuestionRejection(question)
-	return NewInterpretationRejection(reason, classified)
+	rejected := NewInterpretationRejection(reason, classified)
+	// CHAOS-5986 (telemetry half): when the rule that rejected question was
+	// specifically an out-of-vocabulary fact_requirements[].kind, attach the
+	// raw value the model proposed so an operator can see it BY VALUE, not
+	// only that the request was rejected. contractsv1.RejectedFactRequirementKind
+	// itself checks the reason again (its own soundness contract), so this
+	// call is safe to attempt unconditionally rather than gating on reason
+	// here too -- a second, drifting gate would be the exact coupling this
+	// package's other diagnosis mirrors exist to avoid.
+	//
+	// The type assertion is safe without errors.As: NewInterpretationRejection
+	// above always returns *InterpretationRejection directly (never wrapped
+	// further), in this same package.
+	if kind, ok := contractsv1.RejectedFactRequirementKind(question); ok {
+		if ir, ok := rejected.(*InterpretationRejection); ok {
+			ir.RejectedFactKind = kind
+		}
+	}
+	return rejected
 }
 
 // ClassifySynthesisRejection is ClassifyInterpretationRejection's
