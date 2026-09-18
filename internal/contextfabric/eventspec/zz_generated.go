@@ -123,6 +123,7 @@ type AnchorBindingTransitionFields struct {
 	ServedCountDecision  string
 	ServedCountKind      string
 	ServedCountID        string
+	SubstitutionGuard    string
 	RequestID            string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every AnchorBindingTransitionFields uniformly, set ONLY by NewAnchorBindingTransitionFields below. A caller
@@ -137,7 +138,7 @@ type AnchorBindingTransitionFields struct {
 
 // NewAnchorBindingTransitionFields is the generated constructor for AnchorBindingTransitionFields -- every
 // field AnchorBindingTransition.Fields declares is a required parameter.
-func NewAnchorBindingTransitionFields(orgID string, resultID string, parentResultID string, site string, evaluation string, parentBinding string, carryChecks string, fromState string, fromKind string, fromID string, fromProof string, fromReason string, fromOriginResultID string, fromGraphEpoch int, fromContenderKind string, fromContenderID string, parentGraphEpoch int, graphEpoch int, frameExpressionKind string, frameMemberKind string, anchorTermCount int, anchorTermMatchedIDs []string, committedSubjects []string, modelAnchorKind string, namedExpectedKind string, receiptAnchorKind string, receiptAnchorID string, callerHintIDs []string, provenAnchorIDs []string, effectiveKind string, toState string, toKind string, toID string, proof string, reason string, originResultID string, toGraphEpoch int, contenderKind string, contenderID string, persisted string, shadowAgreement string, disagreementField string, servedAnchorKind string, servedAnchorID string, servedCountDecision string, servedCountKind string, servedCountID string, requestID string) AnchorBindingTransitionFields {
+func NewAnchorBindingTransitionFields(orgID string, resultID string, parentResultID string, site string, evaluation string, parentBinding string, carryChecks string, fromState string, fromKind string, fromID string, fromProof string, fromReason string, fromOriginResultID string, fromGraphEpoch int, fromContenderKind string, fromContenderID string, parentGraphEpoch int, graphEpoch int, frameExpressionKind string, frameMemberKind string, anchorTermCount int, anchorTermMatchedIDs []string, committedSubjects []string, modelAnchorKind string, namedExpectedKind string, receiptAnchorKind string, receiptAnchorID string, callerHintIDs []string, provenAnchorIDs []string, effectiveKind string, toState string, toKind string, toID string, proof string, reason string, originResultID string, toGraphEpoch int, contenderKind string, contenderID string, persisted string, shadowAgreement string, disagreementField string, servedAnchorKind string, servedAnchorID string, servedCountDecision string, servedCountKind string, servedCountID string, substitutionGuard string, requestID string) AnchorBindingTransitionFields {
 	valid := true
 	if anchorTermMatchedIDs == nil {
 		valid = false
@@ -199,6 +200,7 @@ func NewAnchorBindingTransitionFields(orgID string, resultID string, parentResul
 		ServedCountDecision:  servedCountDecision,
 		ServedCountKind:      servedCountKind,
 		ServedCountID:        servedCountID,
+		SubstitutionGuard:    substitutionGuard,
 		RequestID:            requestID,
 		constructed:          valid,
 	}
@@ -264,6 +266,7 @@ func (f AnchorBindingTransitionFields) SlogArgs() []any {
 		"served_count_decision", contextfabric.SanitizeLogAttr(f.ServedCountDecision),
 		"served_count_kind", contextfabric.SanitizeLogAttr(f.ServedCountKind),
 		"served_count_id", contextfabric.SanitizeLogAttr(f.ServedCountID),
+		"substitution_guard", contextfabric.SanitizeLogAttr(f.SubstitutionGuard),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }

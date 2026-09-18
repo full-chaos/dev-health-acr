@@ -2625,6 +2625,10 @@ var AnchorBindingTransition = Event{
 		{Key: "served_count_decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("served_count_decision")},
 		{Key: "served_count_kind", Type: FieldString, Presence: PresenceRequired},
 		{Key: "served_count_id", Type: FieldString, Presence: PresenceRequired},
+		// The subject-substitution guard's decision for the turn: a contender
+		// on a line whose guard fired is one the guard WITHHELD, never one the
+		// turn failed to prove. not_evaluated on an exit above the guard.
+		{Key: "substitution_guard", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("substitution_guard")},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }

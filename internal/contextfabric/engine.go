@@ -2890,6 +2890,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		}
 	}
 	substitutionForTelemetry = decideSubjectSubstitution(substitutionInput)
+	anchorShadow.observeSubstitutionGuard(substitutionForTelemetry.Outcome)
 	if substitutionForTelemetry.Outcome.Fired() {
 		resolution = subjectSubstitutionResolution(resolution, substitutionForTelemetry, carryParentSeed(request))
 		if len(request.PriorSubjectReceipts) > 0 {

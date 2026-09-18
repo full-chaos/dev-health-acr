@@ -156,6 +156,16 @@ func anchorVocabularyScenarios() []anchorSiteScenario {
 			return h.turn(request, committingNeedResponse()).result
 		}},
 	}
+	// The subject-substitution guard's firing and redeemed outcomes, through
+	// the real engine, so the line's substitution_guard key reaches each one.
+	scenarios = append(scenarios,
+		anchorSiteScenario{name: "guard clarified", run: guardedProbeScenario(true, true, nil)},
+		anchorSiteScenario{name: "guard refused", run: guardedProbeScenario(true, false, nil)},
+		anchorSiteScenario{name: "guard refused remembered unavailable", run: guardedProbeScenario(false, false, nil)},
+		anchorSiteScenario{name: "guard redeemed choice", run: guardedProbeScenario(false, true, func(first InvestigationResult, r *InvestigationRequest) {
+			r.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: first.ResultID, ReceiptID: "receipt_probe_beta_offer"}}
+		})},
+	)
 	// The parent row's binding under every persistable reason and every held
 	// proof, so the pre-entry keys reach each member through the real read.
 	for _, reason := range anchorBindingReasons() {
@@ -224,4 +234,37 @@ func RunAnchorBindingVocabularyForTest(t *testing.T) []AnchorBindingVocabularyLo
 	tracker := &anchorBindingTracker{parent: anchorBindingParent{ResultID: "result_vocab_parent", Status: AnchorBindingParentPresent, Binding: huge}, evaluation: AnchorBindingEvaluationNotResolved, epoch: 7}
 	_ = engine.saveResult(context.Background(), acceptancePrincipal(), BudgetAssertDecisive, InvestigationResult{ResultID: "result_vocab_unencodable"}, nil, nil, "", 0, "", semanticStateCapture{Write: SemanticStateOf(state)}.withAnchorShadow(tracker))
 	return append(out, AnchorBindingVocabularyLog{Name: "direct saves", Log: direct.Bytes()})
+}
+
+// guardedProbeScenario is the follow-up substitution the guard decides on:
+// turn one commits alpha and offers beta; turn two names it and commits
+// beta. verified wires a candidate verifier that re-reads alpha as valid,
+// clarify is the follow-up's AllowClarification, and redeem, when set,
+// edits the follow-up to redeem the parent's own offer.
+func guardedProbeScenario(verified, clarify bool, redeem func(InvestigationResult, *InvestigationRequest)) func(*testing.T, EngineTelemetry, *recordingTelemetry, bool) InvestigationResult {
+	return func(t *testing.T, sink EngineTelemetry, rec *recordingTelemetry, off bool) InvestigationResult {
+		rig := newAnchorProbeRig(t, off)
+		rig.telemetry = rec
+		rig.engine.telemetry = sink
+		if verified {
+			rig.engine.candidateVerifier = func(context.Context, storage.Principal, RequestedScope, ResolvedGraphBinding, contractsv1.ContextFabricSubjectKind, string) (bool, CandidateVerificationReason) {
+				return true, CandidateVerificationValid
+			}
+		}
+		offering := identityProvenResponse(probeAlpha)
+		offering.resolution.Candidates = append(offering.resolution.Candidates, SubjectCandidate{
+			ReceiptID: "receipt_probe_beta_offer", Subject: probeBeta, State: ResolutionAmbiguous,
+			MatchedTerms: []string{"a"}, MatchReasons: []string{"matched"}, Confidence: 0.4, EvidenceRefIDs: []string{},
+		})
+		rig.interpreter.read("", false)
+		one := rig.turn(t, needTurnRequest("request_vocab_guard_one", true), offering)
+		follow := continuingNeedTurn(needTurnRequest("request_vocab_guard_two", true), one.result.ResultID)
+		follow.Question = "And how many teams contribute to it?"
+		follow.Options.AllowClarification = clarify
+		if redeem != nil {
+			redeem(one.result, &follow)
+		}
+		rig.interpreter.read("", false)
+		return rig.turn(t, follow, identityProvenResponse(probeBeta)).result
+	}
 }

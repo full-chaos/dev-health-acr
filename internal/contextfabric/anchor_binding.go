@@ -399,6 +399,9 @@ func AnchorBindingTransitionLineVocabulary(key string) []string {
 			out = append(out, string(stage))
 		}
 		return out
+	case "substitution_guard":
+		outcomes := SubjectSubstitutionOutcomeVocabulary()
+		return strs(len(outcomes), func(i int) string { return string(outcomes[i]) })
 	case "served_count_decision":
 		// Only a children_of_scope count is compared, so the organization and
 		// frame-absent decisions never reach the line.
@@ -732,6 +735,14 @@ type anchorBindingTracker struct {
 	resolution      SubjectResolution
 	bases           CommitBasisSet
 	servedCount     *CountPopulationScope
+	// substitution is the subject-substitution guard's decision for this
+	// turn; empty until the guard runs, which substitutionGuard reads as
+	// not_evaluated. A guard that FIRED withheld a
+	// commit the engine proved: the saved document commits nothing, and the
+	// binder reads the proof as the engine made it rather than as the
+	// document kept it, so the withheld identity reaches it as a contender
+	// and is never read as silence.
+	substitution SubjectSubstitutionOutcome
 }
 
 // newAnchorBindingTracker returns nil when the shadow is off.
@@ -740,8 +751,8 @@ func (e *Engine) newAnchorBindingTracker(ctx context.Context, request Investigat
 		return nil
 	}
 	return &anchorBindingTracker{
-		parent:      readAnchorBindingParent(ctx, request, binding.Epoch),
-		epoch:       binding.Epoch,
+		parent:       readAnchorBindingParent(ctx, request, binding.Epoch),
+		epoch:        binding.Epoch,
 		evaluation:  AnchorBindingEvaluationNotResolved,
 		callerHints: append([]SubjectHint(nil), request.RequestedScope.SubjectHints...),
 	}
@@ -793,6 +804,25 @@ func (t *anchorBindingTracker) observeResolution(evaluation AnchorBindingEvaluat
 	t.bases = bases
 }
 
+// observeSubstitutionGuard records the subject-substitution guard's decision
+// (chaos5917_subject_substitution.go) for this turn.
+func (t *anchorBindingTracker) observeSubstitutionGuard(outcome SubjectSubstitutionOutcome) {
+	if t == nil {
+		return
+	}
+	t.substitution = outcome
+}
+
+// substitutionGuard is the guard's decision as the line publishes it: a
+// tracker the guard never reached holds no decision, which is exactly what
+// not_evaluated states.
+func (t *anchorBindingTracker) substitutionGuard() SubjectSubstitutionOutcome {
+	if t.substitution == "" {
+		return SubjectSubstitutionNotEvaluated
+	}
+	return t.substitution
+}
+
 func (t *anchorBindingTracker) observeServedCount(scope CountPopulationScope) {
 	if t == nil {
 		return
@@ -841,6 +871,10 @@ type AnchorBindingTransitionEvent struct {
 	ServedAnchor      anchorRef
 	ServedCount       string
 	ServedCountAnchor anchorRef
+	// SubstitutionGuard is the subject-substitution guard's decision for the
+	// turn, so a reader tells a contender the guard WITHHELD from one the
+	// turn never proved.
+	SubstitutionGuard SubjectSubstitutionOutcome
 }
 
 // decide runs the binder for one Save and returns the binding and the line
@@ -857,14 +891,20 @@ func (t *anchorBindingTracker) decide(site BudgetAssertStage, result Investigati
 		Receipt: t.receipt, CallerHints: t.callerHints, Bases: t.bases,
 		ResultID: result.ResultID, GraphEpoch: t.epoch,
 	}
-	switch t.evaluation {
-	case AnchorBindingEvaluationResolved:
+	switch {
+	case t.evaluation == AnchorBindingEvaluationResolved && t.substitution.Fired():
+		// The guard withheld what the engine proved. The proof is the
+		// decisive resolution itself: restricting it to the saved document,
+		// which commits nothing, would read a contested turn as silence.
+		in.Resolution = t.resolution
+	case t.evaluation == AnchorBindingEvaluationResolved:
 		in.Resolution = servedResolutionProof(t.resolution, result.SubjectResolution)
-	case AnchorBindingEvaluationWindowGated:
+	case t.evaluation == AnchorBindingEvaluationWindowGated:
 		in.Resolution = t.resolution
 	}
 	to, proposal := bindAnchor(in)
 	event := t.lineFor(site, result, in, proposal, to)
+	event.SubstitutionGuard = t.substitutionGuard()
 	if state == nil {
 		event.Agreement, event.DisagreementField = AnchorBindingNotEvaluated, AnchorBindingFieldNone
 		return to, event
@@ -1100,6 +1140,7 @@ func unrecordedAnchorBindingEvent(site BudgetAssertStage, result InvestigationRe
 		ParentBinding: AnchorBindingParentNoReference, CarryChecks: AnchorBindingCarryChecksNotApplicable, From: none, To: none,
 		ParentGraphEpoch: -1, CommittedSubjects: []string{}, CallerHintIDs: []string{}, ProvenAnchorIDs: []string{},
 		Agreement: AnchorBindingNotEvaluated, DisagreementField: AnchorBindingFieldNone, ServedCount: "not_evaluated",
+		SubstitutionGuard: SubjectSubstitutionNotEvaluated,
 	}
 }
 
@@ -1116,6 +1157,7 @@ func (t *anchorBindingTracker) reuseEvent(result InvestigationResult, reading st
 	to, proposal := bindAnchor(in)
 	event := t.lineFor(BudgetAssertReuse, result, in, proposal, to)
 	event.Persisted, event.Agreement, event.DisagreementField = AnchorBindingNotSaved, AnchorBindingNotEvaluated, AnchorBindingFieldNone
+	event.SubstitutionGuard = t.substitutionGuard()
 	return event
 }
 
@@ -1182,6 +1224,7 @@ func AnchorBindingTransitionLogArgs(event AnchorBindingTransitionEvent, orgID st
 		"served_count_decision", SanitizeLogAttr(closed("served_count_decision", event.ServedCount)),
 		"served_count_kind", SanitizeLogAttr(string(event.ServedCountAnchor.Kind)),
 		"served_count_id", SanitizeLogAttr(event.ServedCountAnchor.ID),
+		"substitution_guard", SanitizeLogAttr(closed("substitution_guard", string(event.SubstitutionGuard))),
 	}
 }
 

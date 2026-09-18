@@ -370,6 +370,25 @@
         "presence": "required"
       },
       {
+        "key": "substitution_guard",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_evaluated",
+          "no_parent_reference",
+          "parent_unreadable",
+          "parent_no_identity",
+          "no_committed_subject",
+          "same_subject",
+          "redeemed_choice",
+          "clarified_subject_changed",
+          "clarified_remembered_unavailable",
+          "refused_subject_changed",
+          "refused_remembered_unavailable",
+          "undeclared"
+        ]
+      },
+      {
         "key": "request_id",
         "type": "string",
         "presence": "conditional",
