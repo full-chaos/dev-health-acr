@@ -66,7 +66,7 @@ const (
 	// a line that reads "" cannot be told apart from a field nobody wrote.
 	SubjectSubstitutionNotEvaluated SubjectSubstitutionOutcome = "not_evaluated"
 	// SubjectSubstitutionNoParentReference: this turn names no parent, so
-	// there is no earlier committed subject it could contradict.
+	// there is no parent-committed subject it could contradict.
 	SubjectSubstitutionNoParentReference SubjectSubstitutionOutcome = "no_parent_reference"
 	// SubjectSubstitutionParentUnreadable: this turn names a parent whose
 	// stored semantic state did not read cleanly. A DIFFERENT fact from a
@@ -359,8 +359,8 @@ type subjectSubstitutionInput struct {
 	// re-authorized for this principal at this turn's binding. It decides
 	// what may be LISTED back to the caller, never what may be served, and
 	// it is read on both firing branches -- a caller that cannot be asked a
-	// question is still shown the two identities, and is still never shown
-	// one it may no longer see.
+	// question is still shown the two identities, and is never shown one it
+	// cannot see.
 	RememberedAvailable bool
 }
 
@@ -427,7 +427,7 @@ func decideSubjectSubstitution(in subjectSubstitutionInput) subjectSubstitutionD
 		return decision
 	}
 	// Both firing branches list the two identities, remembered first, and
-	// both withhold the remembered one when it no longer re-reads. They
+	// both withhold the remembered one when it fails its re-read. They
 	// differ only in whether this caller can be asked to pick.
 	decision.RememberedListed = in.RememberedAvailable
 	switch {
@@ -539,17 +539,17 @@ func subjectSubstitutionRedeemedChoice(subject SubjectRef, parentResultID string
 }
 
 // subjectSubstitutionClarificationPrompt is the sentence a guarded turn
-// carries. It states what happened -- the earlier subject, this turn's
+// carries. It states what happened -- the parent's subject, this turn's
 // reading, and that nothing was read for either -- and asks the one question
 // that resolves it. Two wordings, because a clarification that cannot offer
 // the remembered subject must not name it as something to pick.
 const (
-	subjectSubstitutionClarificationPrompt = "This follow-up reads as being about a different subject than the one the earlier answer was about, so no canonical facts were read for either. Pick the subject you mean: the earlier one is listed first."
+	subjectSubstitutionClarificationPrompt = "This follow-up reads as being about a different subject than the answer it follows up on, so no canonical facts were read for either. Pick the subject you mean: the one that answer was about is listed first."
 	// subjectSubstitutionRememberedUnavailablePrompt is the same statement
-	// for a turn whose earlier subject could not be re-read and re-authorized
-	// now. It says so rather than offering something the caller may no
-	// longer see.
-	subjectSubstitutionRememberedUnavailablePrompt = "This follow-up reads as being about a different subject than the one the earlier answer was about, and that earlier subject can no longer be read for you, so no canonical facts were read for either. Name the subject you mean."
+	// for a turn whose remembered subject fails its re-read and re-authorization
+	// at this turn's binding. It says so rather than offering something the
+	// caller cannot see.
+	subjectSubstitutionRememberedUnavailablePrompt = "This follow-up reads as being about a different subject than the answer it follows up on, and the subject of that answer cannot be read for you, so no canonical facts were read for either. Name the subject you mean."
 )
 
 // subjectSubstitutionPromptFor picks the prompt from the ONE fact that
@@ -601,7 +601,7 @@ func subjectSubstitutionResolution(resolution SubjectResolution, decision subjec
 			Subject:        decision.Parent,
 			State:          contractsv1.ContextFabricResolutionAmbiguous,
 			MatchedTerms:   []string{},
-			MatchReasons:   []string{"the subject the earlier answer in this exchange was about"},
+			MatchReasons:   []string{"the subject of the answer this follow-up continues"},
 			Confidence:     0,
 			EvidenceRefIDs: []string{},
 		})

@@ -2852,7 +2852,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// structure.go), so a prior-sourced offer's id is minted through the
 	// exact same path an engine-derived one's is.
 	structureMaterial = e.consultPriorStructureOffers(ctx, principal, priorEntries, structureMaterial)
-	// CHAOS-5917: the subject-substitution guard, at the one point where
+	// The subject-substitution guard (chaos5917_subject_substitution.go), at the one point where
 	// BOTH identities are final -- this turn's resolution has committed, and
 	// the parent's own committed subject is already in hand from the SAME
 	// memoized load the per-need ledger read above (no second store round
@@ -2864,10 +2864,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// OFFERED (never before it can be served -- nothing is served here): the
 	// same keyed (kind, canonical_id) existence-and-authorization check a
 	// candr_ redemption passes. A verifier this deployment does not wire, a
-	// subject that no longer exists or is no longer visible to this
-	// principal, and a cancelled context all read the same way -- the offer
-	// is withheld and the turn still refuses to serve the substitute, which
-	// is the fail-closed direction.
+	// subject that does not exist or is not visible to this principal, and a
+	// cancelled context all read the same way -- the offer is withheld and
+	// the turn refuses to serve the substitute, which is the fail-closed
+	// direction.
 	substitutionCommitted, substitutionHaveCommitted := committedSubjectIdentityOf(committedAnchorForCapture, haveCommittedAnchorForCapture, resolution)
 	substitutionInput := subjectSubstitutionInput{
 		Parent:             confirmedNeedLedger.Parent,
@@ -2884,8 +2884,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// differ and the caller did not pick this one, so the guard is about
 		// to fire and the remembered subject is about to be listed. Asked on
 		// BOTH firing branches -- a caller that cannot be asked a question is
-		// still shown the two identities, and is still never shown one it may
-		// no longer see.
+		// shown the two identities too, and is never shown one it cannot see.
 		if substitutionInput.Parent.held() && !sameSubjectIdentity(substitutionInput.Parent.Subject, substitutionCommitted) && !substitutionInput.RedeemedChoice {
 			substitutionInput.RememberedAvailable = e.rememberedSubjectReadable(ctx, principal, request, binding, substitutionInput.Parent.Subject)
 		}

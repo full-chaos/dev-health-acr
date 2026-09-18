@@ -257,7 +257,7 @@ func TestSubstitutionGuardRefusesWhenTheCallerCannotBeAsked(t *testing.T) {
 }
 
 // TestSubstitutionGuardWithholdsAnUnreadableRememberedSubject: the
-// remembered subject no longer re-reads and re-authorizes, so it is not
+// remembered subject fails its re-read and re-authorization, so it is not
 // offered -- and the substitute is still not served.
 func TestSubstitutionGuardWithholdsAnUnreadableRememberedSubject(t *testing.T) {
 	t.Parallel()
@@ -270,7 +270,7 @@ func TestSubstitutionGuardWithholdsAnUnreadableRememberedSubject(t *testing.T) {
 	assertServedNothing(t, outcome.result)
 	for _, candidate := range outcome.result.SubjectResolution.Candidates {
 		if candidate.Subject.CanonicalID == substitutionRepoOne.CanonicalID {
-			t.Errorf("the remembered subject was offered although it no longer re-reads for this principal")
+			t.Errorf("the remembered subject was offered although it fails its re-read for this principal")
 		}
 	}
 	assertGuard(t, lastSubstitution(t, outcome), SubjectSubstitutionClarifiedRememberedUnavailable, SubjectSubstitutionOriginResolver, substitutionRepoOne, substitutionRepoTwo)
@@ -615,8 +615,8 @@ func TestSubjectSubstitutionOriginOfReadsReceiptsBeforeCallerHints(t *testing.T)
 	}
 }
 
-// TestSubstitutionGuardReportsTheEngineCarryOrigin drives the CHAOS-5788
-// carry rig: turn one commits an anchor the engine captures, turn two asks
+// TestSubstitutionGuardReportsTheEngineCarryOrigin drives the
+// committed-anchor carry rig: turn one commits an anchor the engine captures, turn two asks
 // the SAME question, the ledger admits, and the carried entry is what names
 // the identity resolution then commits. The line reports that channel by
 // name rather than collapsing it into the resolver's.
@@ -706,7 +706,7 @@ func TestCommittedSubjectIdentityOfReadsTheAnchorThenTheSoleCommit(t *testing.T)
 // own candidates survive.
 func TestSubjectSubstitutionResolutionOffersTheRememberedSubjectFirst(t *testing.T) {
 	t.Parallel()
-	original := SubjectResolution{
+	committing := SubjectResolution{
 		Committed: []SubjectRef{substitutionRepoTwo},
 		Candidates: []SubjectCandidate{{
 			ReceiptID: "receipt_original", Subject: substitutionRepoTwo, State: contractsv1.ContextFabricResolutionCommitted,
@@ -715,7 +715,7 @@ func TestSubjectSubstitutionResolutionOffersTheRememberedSubjectFirst(t *testing
 		CommitDecisionDigests: []contractsv1.ContextFabricCommitDecisionDigest{{Subject: substitutionRepoTwo, CommitGate: "identity_fast_path", IdentityProven: true}},
 	}
 	decision := subjectSubstitutionDecision{Outcome: SubjectSubstitutionClarified, Parent: substitutionRepoOne, Substituted: substitutionRepoTwo, RememberedListed: true}
-	guarded := subjectSubstitutionResolution(original, decision, "result_parent_0001")
+	guarded := subjectSubstitutionResolution(committing, decision, "result_parent_0001")
 	if len(guarded.Committed) != 0 || guarded.CommitDecisionDigests != nil {
 		t.Fatalf("guarded resolution still commits: %+v", guarded)
 	}
@@ -728,7 +728,7 @@ func TestSubjectSubstitutionResolutionOffersTheRememberedSubjectFirst(t *testing
 	if err := guarded.Validate(); err != nil {
 		t.Fatalf("guarded resolution violates the wire contract: %v", err)
 	}
-	withheld := subjectSubstitutionResolution(original, subjectSubstitutionDecision{Outcome: SubjectSubstitutionClarifiedRememberedUnavailable, Parent: substitutionRepoOne, Substituted: substitutionRepoTwo}, "result_parent_0001")
+	withheld := subjectSubstitutionResolution(committing, subjectSubstitutionDecision{Outcome: SubjectSubstitutionClarifiedRememberedUnavailable, Parent: substitutionRepoOne, Substituted: substitutionRepoTwo}, "result_parent_0001")
 	if len(withheld.Candidates) != 1 {
 		t.Fatalf("withheld candidates = %d, want only this turn's own", len(withheld.Candidates))
 	}
@@ -826,7 +826,7 @@ func TestSubstitutionGuardClarifiesWhenTheRedeemedChoiceIsNotWhatCommitted(t *te
 }
 
 // TestSubstitutionGuardRefusesAndWithholdsAnUnreadableRememberedSubject: the
-// non-clarifying arm with a remembered subject that no longer re-reads lists
+// non-clarifying arm with a remembered subject that fails its re-read lists
 // only this turn's own proposal, and says so on its own line.
 func TestSubstitutionGuardRefusesAndWithholdsAnUnreadableRememberedSubject(t *testing.T) {
 	t.Parallel()
@@ -843,7 +843,7 @@ func TestSubstitutionGuardRefusesAndWithholdsAnUnreadableRememberedSubject(t *te
 	assertServedNothing(t, outcome.result)
 	for _, candidate := range outcome.result.SubjectResolution.Candidates {
 		if candidate.Subject.CanonicalID == substitutionRepoOne.CanonicalID {
-			t.Errorf("the remembered subject was listed although it no longer re-reads for this principal")
+			t.Errorf("the remembered subject was listed although it fails its re-read for this principal")
 		}
 	}
 	assertGuard(t, lastSubstitution(t, outcome), SubjectSubstitutionRefusedRememberedUnavailable, SubjectSubstitutionOriginResolver, substitutionRepoOne, substitutionRepoTwo)
@@ -940,7 +940,7 @@ func TestSubstitutionGuardWithholdsOnANonValidVerificationReason(t *testing.T) {
 	}
 }
 
-// TestSubstitutionGuardOffersTheParentsOwnLabel drives the CHAOS-5788 carry
+// TestSubstitutionGuardOffersTheParentsOwnLabel drives the committed-anchor carry
 // rig, where the parent's ledger records the anchor it bound: the remembered
 // subject listed back to the caller carries the LABEL that parent served, not
 // a canonical id standing in for one.
