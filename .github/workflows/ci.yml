@@ -519,29 +519,29 @@ jobs:
           printf 'isolated (shared) packages:\n%s\n' "$packages"
           make test-race GOTEST_PKGS="$packages" GOTEST_TIMEOUT=900s
 
-  # CHAOS-5977: devhealthfacts carries the CHAOS-5270 shared-container HEAVY
-  # pattern (scripts/ci/test-shard.sh heavy) -- its real-ClickHouse suite
-  # keeps ONE testcontainer alive for its whole run. It used to round-robin
-  # into the 4-way race matrix above (landing in shard 1 alongside
-  # devhealthsource, the OTHER heavy package there; CHAOS-5653 already keeps
-  # two heavy packages apart, but the shard's 420s budget is still shared
-  # with whatever light packages round-robin draws beside it), and as its
-  # own suite grew, that shared budget stopped being enough: 377.7s wall at
-  # main 9f8eb2e4 (PR #585 run 35334211413, "race (shard 1 of 4)"), then a
-  # `panic: test timed out after 7m0s` at PR #586 tip 44be355c (run
-  # 35353894690, job 105628526270). scripts/ci/test-shard.sh's
+  # CHAOS-5977: devhealthfacts carries the shared-container HEAVY pattern
+  # (scripts/ci/test-shard.sh heavy) -- its real-ClickHouse suite keeps ONE
+  # testcontainer alive for its whole run. It used to round-robin into the
+  # 4-way race matrix above (landing in shard 1 alongside devhealthsource,
+  # the OTHER heavy package there; the shard-rebalance fix that keeps two
+  # heavy packages apart already covers that pairing, but the shard's 420s
+  # budget is still shared with whatever light packages round-robin draws
+  # beside it), and as its own suite grew, that shared budget stopped being
+  # enough: 377.7s wall at main 9f8eb2e4 (PR #585 run 35334211413, "race
+  # (shard 1 of 4)"), then a `panic: test timed out after 7m0s` at PR #586
+  # tip 44be355c (run 35353894690, job 105628526270). scripts/ci/test-shard.sh's
   # isolated_packages/dedicated_isolated_packages exclude it from the
-  # round-robin split (the same mechanism CHAOS-3974 uses for
-  # devhealthschema) AND from race-devhealthschema's own combined
+  # round-robin split (the same mechanism devhealthschema's own isolated job
+  # already uses) AND from race-devhealthschema's own combined
   # "isolated-shared" invocation above -- a HEAVY package sharing that `go
-  # test` call would recreate the exact CHAOS-5653 contention this separates
-  # it from. It runs alone, here, under its own explicit timeout budget
-  # instead.
+  # test` call would recreate the exact container-collision pattern that
+  # shard-rebalance fix separates it from. It runs alone, here, under its
+  # own explicit timeout budget instead.
   #
   # Same CI_RACE_RUNNER contract as the `race` job above. Unlike
   # race-devhealthschema, this suite is testcontainers-backed (real
   # ClickHouse), so it needs the same GHCR login + TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX
-  # mirror redirect as the `race` job (CHAOS-4855) -- devhealthfacts has no
+  # mirror redirect as the `race` job uses -- devhealthfacts has no
   # psql/pg_isready dependency, so the Postgres-client install step the
   # `race` job carries is not needed here.
   race-devhealthfacts:
@@ -558,7 +558,7 @@ jobs:
           go-version: '1.27.0'
           cache: true
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
-      # job above (CHAOS-4855).
+      # job above.
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
         with:

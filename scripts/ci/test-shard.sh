@@ -117,10 +117,11 @@ isolated_packages=(
 # internal/contextfabric) TOGETHER in one combined invocation
 # (`test-shard.sh isolated-shared`, below); that is fine because neither one
 # is HEAVY (see is_heavy_package). devhealthfacts is HEAVY -- it keeps one
-# real ClickHouse testcontainer alive for its whole run (the CHAOS-5270
-# pattern) -- so folding it into that same combined call would recreate,
-# inside the isolated bucket, exactly the resource-contention pattern
-# CHAOS-5653 fixed for the round-robin shards. It gets its own CI job
+# real ClickHouse testcontainer alive for its whole run (the same
+# shared-container pattern is_heavy_package looks for above) -- so folding it
+# into that same combined call would recreate, inside the isolated bucket,
+# exactly the resource-contention pattern the heavy/light shard split above
+# exists to prevent on the round-robin shards. It gets its own CI job
 # instead (race-devhealthfacts), selected by `test-shard.sh
 # isolated-dedicated` rather than the combined `isolated-shared` listing.
 # This is a -race cost and -race contention decision only, same as
