@@ -60,11 +60,22 @@ import (
 // a grouped cohort names no explicit operand set to compare -- the same
 // interpretation's own remaining goals already say what the question is
 // asking instead. See repairCompareGroupedCollapse's own doc comment below
-// for its bound. Every repair in frameRepairTable answers exactly one
-// invariant, runs at most once per proposal (frameRepairBound), and
-// revalidates through validateAgainstInterpretation unrelaxed -- the shape
-// this file's first repair established, extended here rather than
-// replaced.
+// for its bound.
+//
+// A THIRD BOUNDED REPAIR, ALSO FOR I7 (CHAOS-6003): a compare goal proposed
+// over a DISCOVERED cohort, alongside rank_or_survey, names no explicit
+// operand set either -- the same proposal's own rank_or_survey goal already
+// says the question is a ranking, not a comparison. See
+// repairCompareRankingCollapse's own doc comment below for its bound. Two
+// Two repairs answer I7, one per cohort shape the traces show a misread
+// for (grouped_members, discovered_kind); neither ever reaches a proposal
+// the other already resolved, since a subject expression has exactly one
+// Kind (invariant I1).
+//
+// Every repair in frameRepairTable answers exactly one invariant, runs at
+// most once per proposal (frameRepairBound), and revalidates through
+// validateAgainstInterpretation unrelaxed -- the shape this file's first
+// repair established, extended here rather than replaced.
 
 // FrameRepairDecision is what the bounded repair decided for one proposal.
 // Closed, because it reaches a log field operators group on.
@@ -101,8 +112,21 @@ const (
 	// number of attempts. Refused on the failure it carries.
 	FrameRepairDeclinedBoundReached FrameRepairDecision = "declined_bound_reached"
 	// FrameRepairDeclinedNotGroupedCohort: the I7 failure is not over a
-	// grouped_members expression. Refused on I7.
+	// grouped_members expression. Refused on I7. Also the answer for every
+	// cohort shape NEITHER I7 repair owns (named_subject, children_of_scope,
+	// organization_scope): repairCompareRankingCollapse (CHAOS-6003) passes
+	// a non-discovered_kind proposal straight through rather than recording
+	// a second, competing decline, so this decline (recorded first, by
+	// repairCompareGroupedCollapse, which runs before it in
+	// frameRepairTable) is what a proposal neither repair recognises
+	// carries to the log line.
 	FrameRepairDeclinedNotGroupedCohort FrameRepairDecision = "declined_not_grouped_cohort"
+	// FrameRepairDeclinedNotRankingGoal: the I7 failure is over a
+	// discovered_kind expression, but the proposal never stated
+	// rank_or_survey -- compare has no ranking reading to fall back to, and
+	// a compare-only proposal is refused exactly as before, never turned
+	// into a ranking it did not ask for. Refused on I7.
+	FrameRepairDeclinedNotRankingGoal FrameRepairDecision = "declined_not_ranking_goal"
 )
 
 var frameRepairDecisions = [...]FrameRepairDecision{
@@ -117,6 +141,7 @@ var frameRepairDecisions = [...]FrameRepairDecision{
 	FrameRepairDeclinedHintUnservable,
 	FrameRepairDeclinedBoundReached,
 	FrameRepairDeclinedNotGroupedCohort,
+	FrameRepairDeclinedNotRankingGoal,
 }
 
 // FrameRepairTermsMatch is whether the named subject's terms equal the flat
@@ -145,12 +170,18 @@ type FrameRepairName string
 // FrameRepairCountKindCollapse is the I9 repair this file implements.
 const FrameRepairCountKindCollapse FrameRepairName = "count_kind_collapse"
 
-// FrameRepairCompareGroupedCollapse is the I7 repair this file implements.
+// FrameRepairCompareGroupedCollapse is the I7 repair this file implements,
+// for grouped_members.
 const FrameRepairCompareGroupedCollapse FrameRepairName = "compare_grouped_collapse"
+
+// FrameRepairCompareRankingCollapse is the I7 repair this file implements,
+// for discovered_kind (CHAOS-6003).
+const FrameRepairCompareRankingCollapse FrameRepairName = "compare_ranking_collapse"
 
 var frameRepairNames = [...]FrameRepairName{
 	FrameRepairCountKindCollapse,
 	FrameRepairCompareGroupedCollapse,
+	FrameRepairCompareRankingCollapse,
 }
 
 // FrameRepairNameCount is the closed vocabulary's size.
@@ -469,6 +500,117 @@ func repairCompareGroupedCollapse(receipt ModelExecutionReceipt, proposed Questi
 	return FrameValidationResult{Frame: revalidated.Frame, Outcome: FrameValidationOutcomeRepaired, Repair: considered}
 }
 
+// repairCompareRankingCollapse applies the I7 bound above to one validation
+// result and returns the result the turn acts on. A compare goal read over
+// a discovered cohort ALONGSIDE rank_or_survey names no explicit operand
+// set either -- the same proposal's own rank_or_survey goal already says
+// the question is a ranking, not a comparison. The sibling
+// repairCompareGroupedCollapse answers this same invariant for
+// grouped_members; this answers it for discovered_kind (CHAOS-6003), the
+// shape corpus row cv-c4-discovered-rank-both-ends's traces show.
+//
+// THE BOUND, every clause pinned by frame_repair_test.go:
+//
+//   - Only an I7 failure. A frame that fails any other invariant first is
+//     refused exactly as before.
+//   - Only from discovered_kind. compare over named_subject,
+//     children_of_scope or organization_scope has no evidenced reading here
+//     and is refused as before -- this repair PASSES THROUGH rather than
+//     declining a second time, leaving repairCompareGroupedCollapse's own
+//     declined_not_grouped_cohort (it runs first in frameRepairTable) as
+//     the one recorded reason, so the two sibling I7 repairs never leave
+//     competing decisions on the same proposal. grouped_members is that
+//     sibling's own shape and is never reached here either, for the same
+//     reason (a subject expression has exactly one Kind, invariant I1): by
+//     the time a grouped_members proposal reaches this function it has
+//     already been repaired or refused under a DIFFERENT invariant, so
+//     Failure.Invariant holds that invariant, not i7.
+//   - Only when the proposal ALSO states rank_or_survey. A proposal whose
+//     only goal-shaped signal is compare has no ranking reading to fall
+//     back to and is refused exactly as before -- an explicit comparison
+//     set is never manufactured, and a compare-only proposal is never
+//     turned into a ranking it never asked for.
+//   - Only Goals changes: compare is dropped, every other goal the
+//     proposal stated (rank_or_survey, and anything else) is kept
+//     unchanged, in the proposal's own order. Unlike the grouped sibling,
+//     nothing is ADDED -- the proposal's own rank_or_survey goal is already
+//     the reading compare was standing in for, so there is no missing
+//     companion goal to invent.
+//   - The repaired frame passes the SAME validation, unrelaxed. If it does
+//     not (I8's temporal requirement not met, when a co-occurring
+//     describe_trend survives the drop), the turn is refused with the
+//     invariant the repaired frame failed, and the event says a repair
+//     ran.
+//   - At most frameRepairBound attempts.
+//
+// CARRY: this repair never touches SubjectExpression, so ScopeAnchorKind
+// stays the zero value (discovered_kind has no scope anchor either --
+// scope_anchor_kind.go admits only children_of_scope). RequestedJudgment
+// ALSO stays the zero value, and that is the one point this repair departs
+// from its grouped-cohort sibling: replaceCompareGoal (the sibling's own
+// transform) INVENTS a companion goal the proposal never stated, so the
+// model's own free text cannot describe a shape it never proposed and a
+// substitute is the only honest value. dropCompareGoal invents nothing --
+// it only ever REMOVES compare, so the surviving Goals (rank_or_survey and
+// anything else the proposal already carried) are exactly what the model
+// already described in its own words. Composing a generic substitute here
+// would DISCARD real information a correctly-worded free-text judgment
+// already carries (e.g. "rank teams by deployment stability" collapsing to
+// the closed phrase "a ranking or survey") for a proposal this repair never
+// asked the model to reconsider. See FrameRepairCarry's own doc comment and
+// this repair's fixture in repairTableFixtures (frame_repair_test.go).
+func repairCompareRankingCollapse(receipt ModelExecutionReceipt, proposed QuestionFrame, emittedShape InvestigationShape, subjectTerms []string, result FrameValidationResult) FrameValidationResult {
+	if result.Failure.Invariant != FrameInvariantI7 || proposed.SubjectExpression.Kind != SubjectExpressionDiscoveredKind {
+		// Not an I7 failure, or not this repair's cohort shape. A
+		// non-discovered_kind I7 failure (named_subject, children_of_scope,
+		// organization_scope, or grouped_members already resolved by the
+		// sibling repair above) already carries whatever decision the
+		// preceding repairs in frameRepairTable recorded for it; this repair
+		// adds nothing to it. Only the very first repair in the table
+		// (never applicable to an I7 failure) can still find Decision unset
+		// here.
+		if result.Repair.Decision == "" {
+			result.Repair.Decision = FrameRepairNotApplicable
+		}
+		return result
+	}
+	considered := FrameRepair{
+		Name:       FrameRepairCompareRankingCollapse,
+		Invariant:  FrameInvariantI7,
+		KindBefore: proposed.SubjectExpression.Kind,
+		Attempts:   result.Repair.Attempts,
+	}
+	declined := func(decision FrameRepairDecision) FrameValidationResult {
+		considered.Decision = decision
+		result.Repair = considered
+		return result
+	}
+	if result.Repair.Attempts >= frameRepairBound {
+		return declined(FrameRepairDeclinedBoundReached)
+	}
+	if !proposed.HasGoal(GoalRankOrSurvey) {
+		return declined(FrameRepairDeclinedNotRankingGoal)
+	}
+	repaired := proposed
+	repaired.Goals = dropCompareGoal(proposed.Goals)
+	considered.Attempts++
+	considered.KindAfter = repaired.SubjectExpression.Kind
+	revalidated := validateAgainstInterpretation(receipt, repaired, emittedShape)
+	if revalidated.Outcome != FrameValidationOutcomeValid {
+		considered.Decision = FrameRepairRefusedAfterRepair
+		return FrameValidationResult{Outcome: revalidated.Outcome, Failure: revalidated.Failure, Repair: considered}
+	}
+	considered.Decision = FrameRepairApplied
+	// RequestedJudgment is left at its zero value deliberately -- see this
+	// function's own doc comment above (the CARRY paragraph). Unlike the
+	// grouped-cohort sibling, this repair invents no goal the model did not
+	// already state, so the model's own free text (read straight off the
+	// SAME interpretation by chaos4636_synthesis_assembly.go, untouched by
+	// this repair) already describes the surviving Goals and a generic
+	// substitute would only discard real information.
+	return FrameValidationResult{Frame: revalidated.Frame, Outcome: FrameValidationOutcomeRepaired, Repair: considered}
+}
+
 // goalJudgmentPhrase is a TOTAL function over the closed Goal vocabulary
 // (frame_vocab.go, InvestigationGoalVocabulary): every member names its own
 // fragment, including GoalCompare's, which requestedJudgmentForGoals never
@@ -560,6 +702,24 @@ func replaceCompareGoal(goals []InvestigationGoal) []InvestigationGoal {
 	return kept
 }
 
+// dropCompareGoal is the I7 discovered-ranking repair's goal transform
+// (CHAOS-6003): compare is dropped; every other goal the proposal stated is
+// kept, unchanged, in the proposal's own order. Unlike replaceCompareGoal
+// (the grouped_members sibling), nothing is added -- this repair only
+// applies when the proposal already states rank_or_survey (its own
+// declined_not_ranking_goal guard above), so the reading compare stood in
+// for is already present and there is no missing companion goal to invent.
+func dropCompareGoal(goals []InvestigationGoal) []InvestigationGoal {
+	kept := make([]InvestigationGoal, 0, len(goals))
+	for _, goal := range goals {
+		if goal == GoalCompare {
+			continue
+		}
+		kept = append(kept, goal)
+	}
+	return kept
+}
+
 // frameRepairFunc is one bounded repair's shape -- exactly
 // repairCountKindCollapse's own signature, so every repair in
 // frameRepairTable is invoked identically by validateProposedFrame.
@@ -574,4 +734,5 @@ type frameRepairFunc func(receipt ModelExecutionReceipt, proposed QuestionFrame,
 var frameRepairTable = []frameRepairFunc{
 	repairCountKindCollapse,
 	repairCompareGroupedCollapse,
+	repairCompareRankingCollapse,
 }

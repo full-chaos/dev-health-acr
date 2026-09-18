@@ -4,16 +4,17 @@ package contextfabric
 // against events built by struct literal (frame_validation_certify_test.go,
 // package contextfabric_test). That proves the declaration and the
 // certifier agree with EACH OTHER; it never drives the real repair
-// producers (repairCountKindCollapse, repairCompareGroupedCollapse, both
-// reached only through frameRepairTable -> validateProposedFrame) or
-// requestedJudgmentForGoals, so a real producer emitting a value outside
-// its own declared vocabulary -- a third repair added to frameRepairTable
-// with a name nobody added to FrameRepairNameVocabulary, say -- ships
-// undetected. This file exports every cell frame_repair_test.go already
-// drives through the production interpreter (repairCells,
-// compareRepairCells) or the production repair functions directly at the
-// attempts bound (repairAtTheBound, compareRepairAtTheBound) as a raw
-// production log, test-only, so the external certification pin
+// producers (repairCountKindCollapse, repairCompareGroupedCollapse,
+// repairCompareRankingCollapse, all three reached only through
+// frameRepairTable -> validateProposedFrame) or requestedJudgmentForGoals,
+// so a real producer emitting a value outside its own declared vocabulary
+// -- a repair added to frameRepairTable with a name nobody added to
+// FrameRepairNameVocabulary, say -- ships undetected. This file exports
+// every cell frame_repair_test.go already drives through the production
+// interpreter (repairCells, compareRepairCells, rankingRepairCells) or the
+// production repair functions directly at the attempts bound
+// (repairAtTheBound, compareRepairAtTheBound, rankingRepairAtTheBound) as
+// a raw production log, test-only, so the external certification pin
 // (frame_validation_real_producer_eventspec_certify_test.go, package
 // contextfabric_test, which can import eventspec/certify without the cycle
 // this package cannot take) certifies the REAL emitted line, not a
@@ -38,16 +39,20 @@ import (
 // added there reaches this list without a second, independently
 // maintained one.
 func FrameValidationRealProducerScenarios() []string {
-	names := make([]string, 0, len(repairCells())+len(compareRepairCells())+4)
+	names := make([]string, 0, len(repairCells())+len(compareRepairCells())+len(rankingRepairCells())+6)
 	for _, tc := range repairCells() {
 		names = append(names, "count_kind/"+tc.cell)
 	}
 	for _, tc := range compareRepairCells() {
 		names = append(names, "compare_grouped/"+tc.cell)
 	}
+	for _, tc := range rankingRepairCells() {
+		names = append(names, "compare_ranking/"+tc.cell)
+	}
 	for _, attempts := range []int{0, frameRepairBound} {
 		names = append(names, fmt.Sprintf("count_kind_bound/%d", attempts))
 		names = append(names, fmt.Sprintf("compare_grouped_bound/%d", attempts))
+		names = append(names, fmt.Sprintf("compare_ranking_bound/%d", attempts))
 	}
 	return names
 }
@@ -83,12 +88,23 @@ func RunFrameValidationRealProducerScenarioForTest(t *testing.T, scenario string
 		tc.receipt(&receipt)
 		return runFrameValidationInterpretForTest(t, receipt, tc.frame(), []string{repairAnchorTerm}), orgID
 	}
+	for _, tc := range rankingRepairCells() {
+		if "compare_ranking/"+tc.cell != scenario {
+			continue
+		}
+		receipt := rankingReceipt()
+		tc.receipt(&receipt)
+		return runFrameValidationInterpretForTest(t, receipt, tc.frame(), []string{repairAnchorTerm}), orgID
+	}
 	for _, attempts := range []int{0, frameRepairBound} {
 		if scenario == fmt.Sprintf("count_kind_bound/%d", attempts) {
 			return runFrameValidationResultForTest(t, classAReceipt(), countOverNamedSubject(), repairAtTheBound(t, attempts)), orgID
 		}
 		if scenario == fmt.Sprintf("compare_grouped_bound/%d", attempts) {
 			return runFrameValidationResultForTest(t, compareGroupedReceipt(), compareOverGroupedCohort(), compareRepairAtTheBound(t, attempts)), orgID
+		}
+		if scenario == fmt.Sprintf("compare_ranking_bound/%d", attempts) {
+			return runFrameValidationResultForTest(t, rankingReceipt(), compareOverDiscoveredCohort(), rankingRepairAtTheBound(t, attempts)), orgID
 		}
 	}
 	t.Fatalf("unknown FrameValidationRealProducer scenario %q", scenario)
