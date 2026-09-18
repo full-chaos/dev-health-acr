@@ -203,6 +203,80 @@ func TestProjectThemeMixAgainstRealClickHouse(t *testing.T) {
 		}
 	})
 
+	t.Run("two_unrelated_projects_in_one_request_never_cross_attribute_each_others_repos", func(t *testing.T) {
+		// Both the team_project_ownership->team_repo_ownership join and the
+		// direct work_unit_investments.repo_id join are scoped to the SAME
+		// requested project ids -- but every other subtest in this suite
+		// requests at most one project whose OWN team/repo already belong to
+		// it, so an unconditional ("ON 1 = 1") join would still land on the
+		// right project by coincidence (nothing else to cross into). This
+		// requests TWO unrelated projects -- different owning team, different
+		// owned repo, different theme -- in ONE call, so a join that stopped
+		// checking team_id/repo_id equality would leak repo-p1's
+		// feature_delivery effort into proj-p2 (and repo-p2's risk effort
+		// into proj-p1), which the assertions below would catch as a
+		// polluted, non-1.0 share on either project.
+		const orgID = "org-unrelated-projects"
+		seedProject("proj-p1", orgID)
+		seedProject("proj-p2", orgID)
+		seedTeam("team-p1", orgID, "Team P1")
+		seedTeam("team-p2", orgID, "Team P2")
+		seedProjectOwnership(orgID, "team-p1", "proj-p1")
+		seedProjectOwnership(orgID, "team-p2", "proj-p2")
+		seedRepo("repo-p1", orgID)
+		seedRepo("repo-p2", orgID)
+		seedRepoOwnership(orgID, "team-p1", "repo-p1")
+		seedRepoOwnership(orgID, "team-p2", "repo-p2")
+		seedWorkUnit("wu-p1", orgID, "repo-p1", 10, map[string]float64{"feature_delivery": 1.0})
+		seedWorkUnit("wu-p2", orgID, "repo-p2", 10, map[string]float64{"risk": 1.0})
+
+		provider := findProvider(t, providers, contextfabric.FactInvestment)
+		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
+			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Kind: contextfabric.FactInvestment,
+			Subjects: []contextfabric.SubjectRef{
+				projectSubject("linear", "proj-p1"),
+				projectSubject("linear", "proj-p2"),
+			},
+		})
+		if err != nil {
+			t.Fatalf("ReadFacts: %v", err)
+		}
+		if len(result.Facts) != 2 {
+			t.Fatalf("facts = %#v, want exactly 2", result.Facts)
+		}
+		var p1, p2 *contextfabric.CanonicalFact
+		for i := range result.Facts {
+			switch result.Facts[i].Subject.Label {
+			case "proj-p1":
+				p1 = &result.Facts[i]
+			case "proj-p2":
+				p2 = &result.Facts[i]
+			}
+		}
+		if p1 == nil || p2 == nil {
+			t.Fatalf("facts = %#v, want one fact per requested project", result.Facts)
+		}
+		if got := factNumber(t, *p1, "theme_feature_delivery"); got != 1.0 {
+			t.Errorf("proj-p1 theme_feature_delivery = %v, want 1.0 -- repo-p2's risk effort must not leak in via a mis-scoped join", got)
+		}
+		if got := factNumber(t, *p1, "theme_risk"); got != 0.0 {
+			t.Errorf("proj-p1 theme_risk = %v, want 0.0", got)
+		}
+		if got := factNumber(t, *p2, "theme_risk"); got != 1.0 {
+			t.Errorf("proj-p2 theme_risk = %v, want 1.0 -- repo-p1's feature_delivery effort must not leak in via a mis-scoped join", got)
+		}
+		if got := factNumber(t, *p2, "theme_feature_delivery"); got != 0.0 {
+			t.Errorf("proj-p2 theme_feature_delivery = %v, want 0.0", got)
+		}
+		if got := factInt(t, *p1, "work_unit_count"); got != 1 {
+			t.Errorf("proj-p1 work_unit_count = %d, want 1", got)
+		}
+		if got := factInt(t, *p2, "work_unit_count"); got != 1 {
+			t.Errorf("proj-p2 work_unit_count = %d, want 1", got)
+		}
+	})
+
 	t.Run("excluded_no_repo_link_counts_evidence_attributed_work_missing_a_repo_id", func(t *testing.T) {
 		const orgID = "org-no-repo-link"
 		seedProject("proj-cov", orgID)
