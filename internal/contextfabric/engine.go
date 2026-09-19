@@ -327,6 +327,7 @@ type EngineDependencies struct {
 type EngineTelemetry interface {
 	RecordWorkItemReuse(context.Context, storage.Principal, WorkItemReuseEvent)
 	RecordWorkItemStoredServing(context.Context, storage.Principal, WorkItemStoredServingEvent)
+	RecordWorkItemAuthorizationGap(context.Context, storage.Principal, WorkItemAuthorizationGapEvent)
 	// RecordWorkItemTupleAdmission is the settled (enforced) counterpart to
 	// FrameValidationEvent's PredictedStrippedObligations -- see
 	// WorkItemTupleAdmissionEvent's own doc comment.
@@ -3691,6 +3692,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// served on the second pass.
 	if tupleCensus != nil {
 		result = ServeWorkItemTupleCensus(result, tupleCensus)
+		if gapEvent, ok := newWorkItemAuthorizationGapEvent(tupleCensus, result); ok && e.telemetry != nil {
+			e.telemetry.RecordWorkItemAuthorizationGap(ctx, principal, gapEvent)
+		}
 		// Measure the same display labels the final response will carry.
 		applyCoverageDisplayLabels(&result)
 		result = restrictWorkItemTupleEvidence(result)

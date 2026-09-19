@@ -2550,6 +2550,24 @@ func (t SlogEngineTelemetry) RecordWorkItemTupleAdmission(ctx context.Context, p
 	t.logger.InfoContext(ctx, "context fabric work item tuple admission settled", args...)
 }
 
+// RecordWorkItemAuthorizationGap logs the settled decision to disclose denied
+// work-item members: the census it read, the reason, and the shape served.
+func (t SlogEngineTelemetry) RecordWorkItemAuthorizationGap(ctx context.Context, principal storage.Principal, event WorkItemAuthorizationGapEvent) {
+	args := []any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"reason", SanitizeLogAttr(event.Reason),
+		"census_state", SanitizeLogAttr(sanitizeWorkItemMembershipState(event.CensusState)),
+		"observed_population", event.Observed,
+		"authorized_population", event.Authorized,
+		"denied_population", event.Denied,
+		"served_status", SanitizeLogAttr(string(event.ServedStatus)),
+		"served_members", event.ServedMembers,
+		"limitation_disclosed", event.LimitationPresent,
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric work item authorization gap", args...)
+}
+
 func (t SlogEngineTelemetry) RecordRetainedRankingAccounting(ctx context.Context, principal storage.Principal, event RetainedRankingAccountingEvent) {
 	args := append(RetainedRankingAccountingLogArgs(event, principal.OrgID), requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, RetainedRankingAccountingLogMessage, args...)

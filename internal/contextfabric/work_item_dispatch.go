@@ -41,6 +41,14 @@ func (e *Engine) discoverWorkItemTuple(ctx context.Context, principal storage.Pr
 	if readErr != nil || lease == nil || !membership.Census.PopulationMeasured || membership.Census.State == WorkItemMembershipCensusUnmeasured {
 		return graph, census, nil
 	}
+	if gap, ok := workItemAuthorizationGapOf(membership.Census); ok {
+		census.gap = &gap
+		if gap.NoneAuthorized() {
+			// Members exist and none are authorized: the answer is a
+			// disclosure, not an empty project and not a zero count.
+			return graph, census, nil
+		}
+	}
 	census.State = membership.Census.State
 	census.Value = membership.Census.AuthorizedPopulation
 	if census.State == WorkItemMembershipCensusFloor {

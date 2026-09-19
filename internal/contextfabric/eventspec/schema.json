@@ -3787,6 +3787,77 @@
     ]
   },
   {
+    "id": "contextfabric.work_item_authorization_gap",
+    "msg": "context fabric work item authorization gap",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "at most one line per fresh work-item tuple request, emitted only when the measured census has denied members; counts and closed states only.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none_authorized",
+          "partially_authorized"
+        ]
+      },
+      {
+        "key": "census_state",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "exact",
+          "floor"
+        ]
+      },
+      {
+        "key": "observed_population",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "authorized_population",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "denied_population",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "served_status",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "served_members",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "limitation_disclosed",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.work_item_membership_gate",
     "msg": "context fabric work item membership gate",
     "level": "info",

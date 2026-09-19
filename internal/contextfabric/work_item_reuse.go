@@ -134,6 +134,13 @@ func (e *Engine) tryReuseWorkItemTuple(ctx context.Context, principal storage.Pr
 }
 
 func workItemReuseMembershipEqual(candidate InvestigationResult, census *WorkItemTupleCensus, current WorkItemMembershipResult) bool {
+	if gap, gapped := workItemAuthorizationGapOf(current.Census); gapped {
+		if gap.NoneAuthorized() || !slices.Contains(candidate.Limitations, gap.Limitation()) {
+			return false
+		}
+	} else if hasWorkItemAuthorizationGapLimitation(candidate.Limitations) {
+		return false
+	}
 	value := current.Census.AuthorizedPopulation
 	if current.Census.State == WorkItemMembershipCensusFloor {
 		value = WorkItemMembershipCensusLimit
