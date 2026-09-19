@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -242,5 +243,132 @@ func TestCohortRankedLineCarriesTheReadAttributionDecision(t *testing.T) {
 	}
 	if got := records[0]["deficiency_zero_withheld"]; got != float64(3) {
 		t.Fatalf("deficiency_zero_withheld = %v, want 3", got)
+	}
+}
+
+// An unread member on a batch that never promised a zero is not "withheld":
+// the batch state, not the missing read, is what refused it.
+func TestRankCohortWithReads_UnreadMemberOnRefusedBatchIsNotCountedWithheld(t *testing.T) {
+	t.Parallel()
+	cohort := &Cohort{Kind: SubjectProject, Members: []CohortMember{rankTestProjectMember("proj-a")}}
+	coverage := Coverage{Sources: []SourceObservation{{Source: "canonical_fact:operational_deficiencies", State: SourceTruncated}}}
+	_, event, _ := RankCohortWithReads(cohort, nil, coverage, FactReadSubjects{})
+	if event.DeficiencyZeroWithheld != 0 {
+		t.Fatalf("withheld = %d, want 0", event.DeficiencyZeroWithheld)
+	}
+}
+
+// A group read composed into a turn that carried no attribution of its own
+// hands the turn the group's attribution.
+func TestMergeGroupBundle_AdoptsGroupAttributionWhenTurnCarriesNone(t *testing.T) {
+	t.Parallel()
+	subject := rankTestProject("proj-a")
+	into := CanonicalFactBundle{}
+	group := CanonicalFactBundle{ReadSubjects: readsFor(FactOperationalDeficiencies, subject)}
+	if mergeGroupBundle(&into, group, "org_1") {
+		t.Fatal("mergeGroupBundle refused a composable pair")
+	}
+	if !into.ReadSubjects.covers(FactOperationalDeficiencies, subject) {
+		t.Fatalf("merged reads = %v, want the group's subject", into.ReadSubjects)
+	}
+}
+
+// A bundle the engine ranks carries its read attribution into the ranking:
+// the served cohort's members are attributed per subject, end to end.
+func TestEngineRanksAgainstTheBundlesReadAttribution(t *testing.T) {
+	t.Parallel()
+	readProject := SubjectRef{Kind: SubjectProject, CanonicalID: "project:read", Label: "Read"}
+	unreadProject := SubjectRef{Kind: SubjectProject, CanonicalID: "project:unread", Label: "Unread"}
+	cohort := &Cohort{
+		Kind: SubjectProject, Rationale: "kind census match",
+		Members: []CohortMember{
+			{Subject: readProject, Rank: 1, InclusionReasons: []string{"matched"}},
+			{Subject: unreadProject, Rank: 2, InclusionReasons: []string{"matched"}},
+		},
+	}
+	interpretation := InterpretedQuestion{
+		Shape: ShapeDiscoveredCohort, RequestedJudgment: "projects_under_pressure",
+		TimeContext:      TimeContext{Axis: TemporalCurrent},
+		FactRequirements: []FactRequirement{{Kind: FactHealth}},
+	}
+	graph := graphReaderStub{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+		context: GraphContext{
+			Cohort: cohort, Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
+			FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
+			Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		},
+	}
+	telemetry := &recordingTelemetry{}
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return interpretation, nil
+		}),
+		Graph: graph,
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{
+				Facts:        []CanonicalFact{},
+				Coverage:     Coverage{Sources: []SourceObservation{{Source: "canonical_fact:operational_deficiencies", State: SourceAvailable}}, DegradedReasons: []string{}},
+				Version:      "ops-v1",
+				Versions:     map[FactKind]string{},
+				Watermarks:   map[FactKind]string{},
+				ReadSubjects: readsFor(FactOperationalDeficiencies, readProject),
+			}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return InvestigationResult{
+				Status: InvestigationComplete, DirectJudgment: "Some projects are under pressure.",
+				CurrentState: "Nominal.", StrongestPressures: []string{}, Drivers: []DriverJudgment{},
+				RemainingWork: []Finding{}, ReadinessGaps: []Finding{}, Paths: []RelationshipPath{},
+				Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{},
+				ClaimedFacts: []ClaimedFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				DeterministicAnswer: "Some projects are under pressure.", Warnings: []string{},
+				Versions: VersionSet{
+					Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1",
+					InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1",
+				},
+			}, nil
+		}),
+		Results: &resultStoreStub{}, Telemetry: telemetry,
+	}, EngineOptions{ServiceVersion: "acr-test", Now: func() time.Time { return time.Unix(300, 0).UTC() }, NewResultID: func() string { return "result_59340001" }})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+	request := validInvestigationRequestWithConfirmedWindow()
+	request.RequestID = "request_59340001"
+	request.Question = "which projects are struggling?"
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org-1"}, request); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(telemetry.cohortRanked) != 1 {
+		t.Fatalf("cohortRanked events = %#v, want exactly 1", telemetry.cohortRanked)
+	}
+	event := telemetry.cohortRanked[0]
+	if !event.ReadAttributionCarried || event.DeficiencyZeroWithheld != 1 {
+		t.Fatalf("event carried=%v withheld=%d, want true/1", event.ReadAttributionCarried, event.DeficiencyZeroWithheld)
+	}
+	if event.SignalsAvailable[RankingSignalDeficiencySeverity] != 1 {
+		t.Fatalf("SignalsAvailable = %v, want exactly the read member credited", event.SignalsAvailable)
+	}
+}
+
+// The narrowing retry re-ranks the surviving members against the same read
+// attribution the first pass used.
+func TestNarrowSynthesisInputReRanksAgainstTheBundlesReadAttribution(t *testing.T) {
+	t.Parallel()
+	cohort := planFixtureCohort("a1", "b1", "c1", "d1")
+	params := synthesisAssemblyParams{
+		Graph: GraphContext{Cohort: cohort},
+		Facts: CanonicalFactBundle{
+			Coverage:     Coverage{Sources: []SourceObservation{{Source: "canonical_fact:operational_deficiencies", State: SourceAvailable}}},
+			ReadSubjects: FactReadSubjects{},
+		},
+	}
+	result := narrowSynthesisInput(params, &AnswerPlan{})
+	if !result.Narrow {
+		t.Fatal("result.Narrow = false, want a re-rank")
+	}
+	if !result.Ranked.ReadAttributionCarried || result.Ranked.DeficiencyZeroWithheld != 2 {
+		t.Fatalf("Ranked carried=%v withheld=%d, want true/2 (the two survivors, none of them read)", result.Ranked.ReadAttributionCarried, result.Ranked.DeficiencyZeroWithheld)
 	}
 }
