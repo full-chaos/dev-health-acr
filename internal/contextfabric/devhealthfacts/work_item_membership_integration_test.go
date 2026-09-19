@@ -478,15 +478,20 @@ func TestWorkItemMembershipS1AgainstActualDDL(t *testing.T) {
 	}
 	defer floorLease.Release()
 	if floorResult.Census.State == contextfabric.WorkItemMembershipCensusUnmeasured {
-		// The retained 8192 real-DDL receipt records ClickHouse code 158 for
-		// this transition-heavy C+2 fixture. Assert the backend mechanism so
-		// this branch cannot silently turn a semantic failure into a passing
-		// unmeasured result. The rows are intentionally discarded by S1.
-		if floorResult.Census.UnmeasuredReason != contextfabric.WorkItemMembershipUnmeasuredS1Error || floorResult.Census.PopulationMeasured || len(floorResult.Members) != 0 || !strings.Contains(recordingClient.lastErrorText(), "code: 158") {
+		// The current workItemMembershipMaxRowsToRead may still not be
+		// enough for a fixture this large (it has real headroom, not an
+		// unbounded one). Assert the backend mechanism so this
+		// branch cannot silently turn a semantic failure into a passing
+		// unmeasured result: a code-158 (TOO_MANY_ROWS)/code-307
+		// (TOO_MANY_BYTES) resource-budget exception classifies as
+		// read_limit_exceeded, NOT the generic s1_error -- see
+		// classifyWorkItemMembershipS1Error. The rows are intentionally
+		// discarded by S1.
+		if floorResult.Census.UnmeasuredReason != contextfabric.WorkItemMembershipUnmeasuredReadLimitExceeded || floorResult.Census.PopulationMeasured || len(floorResult.Members) != 0 || !(strings.Contains(recordingClient.lastErrorText(), "code: 158") || strings.Contains(recordingClient.lastErrorText(), "code: 307")) {
 			floorLease.Release()
-			t.Fatalf("live C+2 resource result = %+v backend=%q, want code-158 unmeasured result with no members", floorResult.Census, recordingClient.lastErrorText())
+			t.Fatalf("live C+2 resource result = %+v backend=%q, want read_limit_exceeded unmeasured result with no members", floorResult.Census, recordingClient.lastErrorText())
 		}
-		t.Logf("live C+2 transition fixture is intentionally unmeasured at max_rows_to_read=%d: backend=%s", workItemMembershipMaxRowsToRead, recordingClient.lastErrorText())
+		t.Logf("live C+2 transition fixture is unmeasured at max_rows_to_read=%d: backend=%s", workItemMembershipMaxRowsToRead, recordingClient.lastErrorText())
 	} else {
 		if floorResult.Census.State != contextfabric.WorkItemMembershipCensusFloor || !floorResult.Census.PopulationIncomplete || floorResult.Census.CappedPopulation != contextfabric.WorkItemMembershipCensusLimit+1 || floorResult.Census.AuthorizedPopulation != contextfabric.WorkItemMembershipCensusLimit+1 || floorResult.Census.DeniedPopulation != 0 || floorResult.Census.ServedMembers != contextfabric.WorkItemMembershipServeLimit || len(floorResult.Members) != contextfabric.WorkItemMembershipServeLimit {
 			floorLease.Release()
@@ -535,6 +540,168 @@ func TestWorkItemMembershipS1AgainstActualDDL(t *testing.T) {
 	}
 	t.Logf("live ambiguous project fixture: state=%s reason=%s measured=%t members=%d", ambiguousResult.Census.State, ambiguousResult.Census.UnmeasuredReason, ambiguousResult.Census.PopulationMeasured, len(ambiguousResult.Members))
 	ambiguousLease.Release()
+}
+
+// TestWorkItemMembershipS1ReadLimitExceededIsCertifiedAgainstRealClickHouse
+// pins CHAOS-5991's disclosed-reason bar directly, against a real ClickHouse
+// container running the actual production DDL (never a mock): a real,
+// ordinary-sized project whose census fits comfortably under the PRODUCTION
+// bound still trips a DELIBERATELY lowered one, and the real emitted S1 Info
+// line -- not a synthetic event -- carries read_limit_exceeded, never the
+// generic s1_error the pre-fix code would have reported for the exact same
+// ClickHouse exception. This package's white-box (package devhealthfacts)
+// tests spin their own container rather than the black-box
+// (devhealthfacts_test) shared fixture, because reaching the unexported
+// workItemMembershipMaxRowsToRead var to lower it IS the point of this test.
+func TestWorkItemMembershipS1ReadLimitExceededIsCertifiedAgainstRealClickHouse(t *testing.T) {
+	ctx := context.Background()
+	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image: chfixture.Image, ExposedPorts: []string{"9000/tcp"},
+			Env: map[string]string{
+				"CLICKHOUSE_USER":     "acr",
+				"CLICKHOUSE_PASSWORD": "acr",
+				"CLICKHOUSE_DB":       "default",
+			},
+			WaitingFor: wait.ForListeningPort("9000/tcp").WithStartupTimeout(2 * time.Minute),
+		},
+		Started: true,
+	})
+	if err != nil {
+		t.Fatalf("start ClickHouse: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := container.Terminate(context.Background()); err != nil {
+			t.Errorf("terminate ClickHouse: %v", err)
+		}
+	})
+	host, err := container.Host(ctx)
+	if err != nil {
+		t.Fatalf("ClickHouse host: %v", err)
+	}
+	port, err := container.MappedPort(ctx, "9000/tcp")
+	if err != nil {
+		t.Fatalf("ClickHouse port: %v", err)
+	}
+	address := net.JoinHostPort(host, port.Port())
+	direct, err := clickhousedriver.Open(&clickhousedriver.Options{
+		Addr:        []string{address},
+		Auth:        clickhousedriver.Auth{Database: "default", Username: "acr", Password: "acr"},
+		DialTimeout: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("open ClickHouse: %v", err)
+	}
+	t.Cleanup(func() { _ = direct.Close() })
+	pingDeadline := time.Now().Add(30 * time.Second)
+	for {
+		if pingErr := direct.Ping(ctx); pingErr == nil {
+			break
+		} else if time.Now().After(pingDeadline) {
+			t.Fatalf("ping ClickHouse: %v", pingErr)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	query, err := runtimeclickhouse.NewClickHouseQueryClientWithOptions(runtimeclickhouse.Options{
+		DSN:         "clickhouse://acr:acr@" + address + "/default",
+		DialTimeout: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("open query client: %v", err)
+	}
+	t.Cleanup(func() { _ = query.Close() })
+	for _, statement := range devhealthschema.DDL("repos", "work_items", "projects", "project_membership_transitions") {
+		if err := direct.Exec(ctx, statement); err != nil {
+			t.Fatalf("create fixture table: %v\n%s", err, statement)
+		}
+	}
+	if err := direct.Exec(ctx, devhealthschema.ProjectMembershipPresenceViewDDL); err != nil {
+		t.Fatalf("create membership view: %v", err)
+	}
+
+	orgID := "chaos-5991-read-limit"
+	at := time.Now().UTC().Truncate(time.Second)
+
+	const (
+		projectID = "P-read-limit"
+		repoID    = "20000000-0000-4000-8000-0000000000f1"
+		repoSlug  = "acme/read-limit"
+		rowCount  = 40
+	)
+	seed := func(statement string, args ...any) {
+		t.Helper()
+		if err := direct.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("seed fixture: %v", err)
+		}
+	}
+	seed(`INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
+		repoID, orgID, repoSlug, "linear", at)
+	seed(`INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		projectID, orgID, "linear", projectID, "Read limit", uint8(1), "active", "", at)
+	values := make([]string, 0, rowCount)
+	args := make([]any, 0, rowCount*10)
+	for i := 0; i < rowCount; i++ {
+		workID := fmt.Sprintf("read-limit-%03d", i)
+		values = append(values, "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+		args = append(args, workID, repoID, orgID, workID, "open", "", at, "", "linear", projectID)
+	}
+	seed("INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id) VALUES "+strings.Join(values, ", "), args...)
+
+	telemetry := &workItemMembershipTelemetrySpy{}
+	reader, err := NewWorkItemMembershipReader(query, WorkItemMembershipReaderOptions{Telemetry: telemetry})
+	if err != nil {
+		t.Fatalf("create membership reader: %v", err)
+	}
+	request := contextfabric.WorkItemMembershipRequest{
+		Anchor:                   workItemMembershipTestAnchor(t, "linear", projectID),
+		RequestedRepositoryScope: []string{repoSlug},
+		S1Instant:                at.Add(time.Minute),
+	}
+
+	// CONTROL FIRST: the production bound serves this small, ordinary
+	// project cleanly. Without this arm, tripping the lowered bound below
+	// would prove nothing about THIS fixture specifically.
+	controlCtx, cancelControl := context.WithTimeout(ctx, 30*time.Second)
+	controlLease, controlResult, err := reader.BeginWorkItemMembership(controlCtx, storage.Principal{OrgID: orgID}, request)
+	cancelControl()
+	if err != nil || controlLease == nil {
+		t.Fatalf("control BeginWorkItemMembership lease=%v err=%v", controlLease, err)
+	}
+	if controlResult.Census.State != contextfabric.WorkItemMembershipCensusExact || !controlResult.Census.PopulationMeasured || controlResult.Census.AuthorizedPopulation != rowCount || len(controlResult.Members) != rowCount {
+		controlLease.Release()
+		t.Fatalf("control census = %+v, want exact measured %d at the production bound", controlResult.Census, rowCount)
+	}
+	controlLease.Release()
+
+	// THE TRIP: same fixture, same reader, ONLY the row-read bound lowered
+	// below what this real query must read to answer it -- proving the
+	// classifier fires on the REAL ClickHouse exception this exact
+	// statement throws, not a fabricated error.
+	productionBound := workItemMembershipMaxRowsToRead
+	workItemMembershipMaxRowsToRead = 10
+	t.Cleanup(func() { workItemMembershipMaxRowsToRead = productionBound })
+
+	trippedCtx, cancelTripped := context.WithTimeout(ctx, 30*time.Second)
+	trippedLease, trippedResult, err := reader.BeginWorkItemMembership(trippedCtx, storage.Principal{OrgID: orgID}, request)
+	cancelTripped()
+	if err != nil || trippedLease == nil {
+		t.Fatalf("tripped BeginWorkItemMembership lease=%v err=%v", trippedLease, err)
+	}
+	defer trippedLease.Release()
+	if trippedResult.Census.State != contextfabric.WorkItemMembershipCensusUnmeasured || trippedResult.Census.PopulationMeasured || len(trippedResult.Members) != 0 {
+		t.Fatalf("tripped census = %+v, want unmeasured with no members", trippedResult.Census)
+	}
+	if trippedResult.Census.UnmeasuredReason != contextfabric.WorkItemMembershipUnmeasuredReadLimitExceeded {
+		t.Fatalf("tripped reason = %q, want read_limit_exceeded", trippedResult.Census.UnmeasuredReason)
+	}
+
+	// THE REAL EMITTED TRACE LINE, not a synthetic event: the telemetry spy
+	// records exactly what RecordWorkItemMembershipS1 was called with from
+	// the live BeginWorkItemMembership call above.
+	if len(telemetry.s1) != 2 || telemetry.s1[1].Reason != contextfabric.WorkItemMembershipUnmeasuredReadLimitExceeded || telemetry.s1[1].State != contextfabric.WorkItemMembershipCensusUnmeasured {
+		t.Fatalf("S1 telemetry = %#v, want [exact, read_limit_exceeded]", telemetry.s1)
+	}
+	t.Logf("live read-limit trip: rowCount=%d lowered_bound=%d reason=%s", rowCount, workItemMembershipMaxRowsToRead, trippedResult.Census.UnmeasuredReason)
 }
 
 var _ contextpacket.ClickHouseQueryClient = (*runtimeclickhouse.Client)(nil)

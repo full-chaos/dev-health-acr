@@ -3,10 +3,12 @@ package devhealthfacts
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/proto"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -212,7 +214,7 @@ func TestWorkItemMembershipS1UsesAtomicMaskAndCanonicalOrder(t *testing.T) {
 		"max_threads = 1",
 		"max_execution_time = ",
 		"timeout_overflow_mode = 'throw'",
-		"max_rows_to_read = 8192",
+		"max_rows_to_read = 2000000",
 		"read_overflow_mode = 'throw'",
 		"max_memory_usage = 67108864",
 		"max_result_rows = 3",
@@ -464,8 +466,20 @@ func TestWorkItemMembershipSettingsUsesSharedResourceClass(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if settings.MaxRowsToRead != workItemReaderMaxRowsToRead || settings.MaxMemoryUsage != workItemReaderMaxMemoryUsage || settings.MaxThreads != workItemReaderMaxThreads {
-			t.Fatalf("K=%d S1 resource class differs from shared policy: %+v", k, settings)
+		// MaxMemoryUsage/MaxThreads stay the shared content-reader policy;
+		// MaxRowsToRead does NOT -- S1 is a whole-population census (window
+		// count() OVER() aggregates over every relation it joins before any
+		// cap applies), not a bounded per-id-list page read, so it needs its
+		// OWN, much larger row-read bound: a real project's census read
+		// that shares the too-small page bound exceeds it and fails closed.
+		if settings.MaxRowsToRead == workItemReaderMaxRowsToRead {
+			t.Fatalf("K=%d S1 MaxRowsToRead must NOT equal the shared per-page bound %d -- S1 needs its own, larger census bound", k, workItemReaderMaxRowsToRead)
+		}
+		if settings.MaxRowsToRead != workItemMembershipMaxRowsToRead {
+			t.Fatalf("K=%d S1 MaxRowsToRead = %d, want its own dedicated bound %d", k, settings.MaxRowsToRead, workItemMembershipMaxRowsToRead)
+		}
+		if settings.MaxMemoryUsage != workItemReaderMaxMemoryUsage || settings.MaxThreads != workItemReaderMaxThreads {
+			t.Fatalf("K=%d S1 memory/thread class differs from the shared policy it DOES still share: %+v", k, settings)
 		}
 		if settings.MaxResultRows != uint64(k+1) {
 			t.Fatalf("K=%d result probe=%d, want K+1", k, settings.MaxResultRows)
@@ -498,6 +512,92 @@ func TestWorkItemMembershipS1QueryFailureDiscardsRowsAndMeasuresNothing(t *testi
 	}
 	if len(telemetry.s1) != 1 || telemetry.s1[0].Reason != contextfabric.WorkItemMembershipUnmeasuredS1Error {
 		t.Fatalf("query failure telemetry = %#v, want s1_error", telemetry.s1)
+	}
+}
+
+// TestWorkItemMembershipS1ClassifiesQueryBudgetExceededDistinctly pins
+// CHAOS-5991: a ClickHouse query-resource-budget exception (the census's own
+// MaxRowsToRead/MaxMemoryUsage bound, the exact shape a real project's
+// census hit live) must classify as read_limit_exceeded, NOT the generic
+// s1_error -- so an operator can tell "the census outgrew its own bound"
+// from any other backend fault without ever seeing the underlying
+// ClickHouse exception text, which this vocabulary never carries.
+func TestWorkItemMembershipS1ClassifiesQueryBudgetExceededDistinctly(t *testing.T) {
+	client := &workItemMembershipFakeClient{queryErr: fmt.Errorf("wrapped: %w", &proto.Exception{Code: 158, Name: "TOO_MANY_ROWS", Message: "Limit for rows or bytes to read exceeded"})}
+	telemetry := &workItemMembershipTelemetrySpy{}
+	reader, _ := newWorkItemMembershipTestReader(t, client, telemetry)
+	lease, result, err := reader.BeginWorkItemMembership(context.Background(), storage.Principal{OrgID: workItemMembershipTestOrg}, contextfabric.WorkItemMembershipRequest{
+		Anchor: workItemMembershipTestAnchor(t, "linear", "P1"),
+	})
+	if err != nil || lease == nil {
+		t.Fatalf("BeginWorkItemMembership returned lease=%v err=%v, want held lease and no public backend error", lease, err)
+	}
+	defer lease.Release()
+	if result.Census.State != contextfabric.WorkItemMembershipCensusUnmeasured {
+		t.Fatalf("query-budget failure state = %v, want unmeasured", result.Census.State)
+	}
+	if len(telemetry.s1) != 1 || telemetry.s1[0].Reason != contextfabric.WorkItemMembershipUnmeasuredReadLimitExceeded {
+		t.Fatalf("query-budget failure telemetry = %#v, want read_limit_exceeded", telemetry.s1)
+	}
+}
+
+// TestWorkItemMembershipS1ClassifiesCancellationDistinctly pins the third
+// closed-vocabulary arm: a context cancellation/deadline mid-query is the
+// CALLER's story, not a backend fault, and must not be reported as
+// read_limit_exceeded or the generic s1_error.
+func TestWorkItemMembershipS1ClassifiesCancellationDistinctly(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"canceled", fmt.Errorf("wrapped: %w", context.Canceled)},
+		{"deadline exceeded", fmt.Errorf("wrapped: %w", context.DeadlineExceeded)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &workItemMembershipFakeClient{queryErr: tc.err}
+			telemetry := &workItemMembershipTelemetrySpy{}
+			reader, _ := newWorkItemMembershipTestReader(t, client, telemetry)
+			lease, result, err := reader.BeginWorkItemMembership(context.Background(), storage.Principal{OrgID: workItemMembershipTestOrg}, contextfabric.WorkItemMembershipRequest{
+				Anchor: workItemMembershipTestAnchor(t, "linear", "P1"),
+			})
+			if err != nil || lease == nil {
+				t.Fatalf("BeginWorkItemMembership returned lease=%v err=%v, want held lease and no public backend error", lease, err)
+			}
+			defer lease.Release()
+			if result.Census.State != contextfabric.WorkItemMembershipCensusUnmeasured {
+				t.Fatalf("%s state = %v, want unmeasured", tc.name, result.Census.State)
+			}
+			if len(telemetry.s1) != 1 || telemetry.s1[0].Reason != contextfabric.WorkItemMembershipUnmeasuredCancelled {
+				t.Fatalf("%s telemetry = %#v, want cancelled", tc.name, telemetry.s1)
+			}
+		})
+	}
+}
+
+// TestClassifyWorkItemMembershipS1Error exercises the classifier directly
+// over its whole input domain: a budget exception, a budget exception
+// wrapped through fmt.Errorf (errors.As must unwrap it), cancellation, a
+// deadline, and a plain backend error that is none of those.
+func TestClassifyWorkItemMembershipS1Error(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want contextfabric.WorkItemMembershipUnmeasuredReason
+	}{
+		{"bare budget exception (rows)", &proto.Exception{Code: 158}, contextfabric.WorkItemMembershipUnmeasuredReadLimitExceeded},
+		{"bare budget exception (bytes)", &proto.Exception{Code: 307}, contextfabric.WorkItemMembershipUnmeasuredReadLimitExceeded},
+		{"wrapped budget exception", fmt.Errorf("query: %w", &proto.Exception{Code: 158}), contextfabric.WorkItemMembershipUnmeasuredReadLimitExceeded},
+		{"unrelated exception code", &proto.Exception{Code: 999}, contextfabric.WorkItemMembershipUnmeasuredS1Error},
+		{"cancelled", context.Canceled, contextfabric.WorkItemMembershipUnmeasuredCancelled},
+		{"deadline exceeded", context.DeadlineExceeded, contextfabric.WorkItemMembershipUnmeasuredCancelled},
+		{"wrapped cancelled", fmt.Errorf("op: %w", context.Canceled), contextfabric.WorkItemMembershipUnmeasuredCancelled},
+		{"plain backend error", errors.New("connection reset"), contextfabric.WorkItemMembershipUnmeasuredS1Error},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifyWorkItemMembershipS1Error(tc.err); got != tc.want {
+				t.Fatalf("classifyWorkItemMembershipS1Error(%v) = %q, want %q", tc.err, got, tc.want)
+			}
+		})
 	}
 }
 

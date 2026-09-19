@@ -11,8 +11,32 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/full-chaos/dev-health-go/readers"
 )
+
+// classifyWorkItemMembershipS1Error maps an S1 query failure onto the
+// closed WorkItemMembershipUnmeasuredReason vocabulary WITHOUT ever
+// carrying the underlying error's own text -- that text is a
+// ClickHouse exception message, which is never safe to log or persist
+// verbatim (query fragments, backend detail). Precedence: a query-resource
+// budget failure (the census's own MaxRowsToRead/MaxMemoryUsage bound) is
+// checked FIRST via the shared, already-certified
+// runtimeclickhouse.IsQueryBudgetExceeded classifier (the SAME one
+// devhealthsource/assemble.go's error taxonomy already uses -- reused, not
+// re-derived) so a caller can tell "the census outgrew its own bound" from
+// any other backend fault; context cancellation/deadline is checked next,
+// because that is the CALLER's story, not the backend's; anything else
+// stays the pre-existing generic s1_error.
+func classifyWorkItemMembershipS1Error(err error) contextfabric.WorkItemMembershipUnmeasuredReason {
+	if runtimeclickhouse.IsQueryBudgetExceeded(err) {
+		return contextfabric.WorkItemMembershipUnmeasuredReadLimitExceeded
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return contextfabric.WorkItemMembershipUnmeasuredCancelled
+	}
+	return contextfabric.WorkItemMembershipUnmeasuredS1Error
+}
 
 // WorkItemMembershipReader is the dormant PR2 S1 port. No registry or
 // Engine constructor installs it yet; a later wiring change owns that switch.
@@ -181,7 +205,7 @@ func (r *WorkItemMembershipReader) BeginWorkItemMembership(ctx context.Context, 
 		return nil
 	}, extraBindings...)
 	if queryErr != nil {
-		result := unmeasuredWorkItemMembershipResult(contextfabric.WorkItemMembershipUnmeasuredS1Error)
+		result := unmeasuredWorkItemMembershipResult(classifyWorkItemMembershipS1Error(queryErr))
 		r.recordS1(ctx, principal, result, settings)
 		return lease, result, nil
 	}
@@ -228,12 +252,56 @@ func workItemMembershipAnchorSentinelIsValid(row workItemMembershipS1Row) bool {
 
 const (
 	workItemMembershipDefaultTimeout = 5 * time.Second
-	// S1 shares the content readers' private resource class. Keep its deadline
-	// and K+1 result probe separate from the content reader settings helper.
+	// S1 shares the content readers' private resource class for threads and
+	// memory, but NOT for MaxRowsToRead -- see workItemMembershipMaxRowsToRead
+	// below, which is deliberately its own, much larger bound.
 	workItemMembershipMaxThreads     = workItemReaderMaxThreads
-	workItemMembershipMaxRowsToRead  = workItemReaderMaxRowsToRead
 	workItemMembershipMaxMemoryUsage = workItemReaderMaxMemoryUsage
 )
+
+// workItemMembershipMaxRowsToRead is S1's OWN row-read bound, not the shared
+// workItemReaderMaxRowsToRead (8192, sized for a bounded per-page content
+// read keyed by an explicit id list, single table, no JOIN -- confirmed from
+// dev-health-go/readers.workItemReadStatement's own source). S1's statement
+// is structurally a WHOLE-POPULATION CENSUS: every relation it joins
+// (project_membership_presence, work_items FINAL, the transition-metadata
+// window subquery, resolved_projects) is read in full before WHERE/LIMIT
+// narrow it, and ClickHouse's MaxRowsToRead counts that PRE-FILTER,
+// PRE-FINAL-merge physical read (workitem_scope.go's own comment already
+// says this).
+//
+// CHAOS-5991, root cause proven live against the trial store (EXPLAIN
+// indexes=1 + system.query_log, never inferred): org/project-scoped
+// primary-key pruning is already applied correctly at every base table
+// (EXPLAIN's PrimaryKey Condition binds org_id exactly), but the read still
+// exceeded 8192 -- the shared bound, which happens to equal every touched
+// table's own index_granularity -- because (a) a table smaller than one
+// granule reads as a whole regardless of predicate selectivity, and (b) the
+// query plan reads several relations MORE THAN ONCE (a
+// ClickHouse-optimizer-introduced anti-join pass, a runtime-filter build,
+// and the join itself, each a separate ReadFromMergeTree).
+//
+// DERIVED, not an arbitrary constant picked by feel. The REAL production statement
+// (workItemMembershipS1Statement), run against the trial store for a real
+// 1675-work-item project, measured via system.query_log: 14,063 rows read,
+// across 9 distinct ReadFromMergeTree passes (EXPLAIN indexes=1, counted
+// exactly): work_items x2, project_membership_transitions x2, repos x1,
+// projects x4. Scaling that measured cost linearly with population (primary-
+// key pruning already proven correct, so a well-pruned org-scoped read
+// grows with THAT org's own row count, not the shared table's) to a large
+// real organization's project (100,000 work items, ~60x this trial
+// project's size): 14,063 x 60 = 843,780 rows; doubled for safety margin
+// (multiple projects sharing the touched tables, plan variance) = 1,687,560,
+// rounded up to the clean value below. Re-derive by the same method (real
+// statement, real system.query_log, a real project near the new headroom
+// target) if this table's shape or the query's own pass count ever changes.
+//
+// A package-level VAR, not a const, so an integration test can lower it
+// (restored via t.Cleanup) to prove -- against a REAL ClickHouse container,
+// not a mock -- that exceeding it emits the read_limit_exceeded reason on
+// the real trace line. Production composition (NewWorkItemMembershipReader)
+// never overrides it.
+var workItemMembershipMaxRowsToRead = uint64(2_000_000)
 
 func workItemMembershipSettings(ctx context.Context, k int) (readers.Settings, error) {
 	seconds := uint64(workItemMembershipDefaultTimeout / time.Second)

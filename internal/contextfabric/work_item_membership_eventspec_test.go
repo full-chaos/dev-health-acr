@@ -69,6 +69,66 @@ func TestWorkItemMembershipS1InfoIsCertifiedFromTheConfiguredJSONLogger(t *testi
 	}
 }
 
+// TestWorkItemMembershipS1UnmeasuredReasonsAreCertified pins CHAOS-5991's two
+// new closed-vocabulary reasons on the REAL emitted Info line (never a hand
+// list): read_limit_exceeded (the S1 census's own query-resource budget was
+// exceeded -- the exact shape a real project's census hit live) and
+// cancelled (the caller's context ended in flight). Each is asserted
+// distinctly from the pre-existing generic s1_error.
+func TestWorkItemMembershipS1UnmeasuredReasonsAreCertified(t *testing.T) {
+	for _, reason := range []contextfabric.WorkItemMembershipUnmeasuredReason{
+		contextfabric.WorkItemMembershipUnmeasuredReadLimitExceeded,
+		contextfabric.WorkItemMembershipUnmeasuredCancelled,
+	} {
+		t.Run(string(reason), func(t *testing.T) {
+			var logBytes bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&logBytes, nil))
+			contextfabric.NewSlogWorkItemMembershipTelemetry(logger).RecordWorkItemMembershipS1(
+				context.Background(), storage.Principal{OrgID: "org_5752"}, contextfabric.WorkItemMembershipS1Event{
+					State:                   contextfabric.WorkItemMembershipCensusUnmeasured,
+					Reason:                  reason,
+					PopulationMeasured:      false,
+					CensusLimit:             contextfabric.WorkItemMembershipCensusLimit,
+					MaxExecutionTimeSeconds: 5,
+					MaxRowsToRead:           2_000_000,
+					MaxMemoryUsage:          contextfabric.WorkItemMembershipMaxMemoryUsage,
+					MaxResultRows:           contextfabric.WorkItemMembershipServeLimit + 1,
+				},
+			)
+			if bytes.Contains(logBytes.Bytes(), []byte("Exception")) || bytes.Contains(logBytes.Bytes(), []byte("code:")) {
+				t.Fatalf("S1 Info record leaked a ClickHouse exception shape: %s", logBytes.Bytes())
+			}
+			parsed, err := certify.Parse(logBytes.Bytes())
+			if err != nil {
+				t.Fatalf("certify.Parse(): %v", err)
+			}
+			if _, err := certify.Certify(parsed, certify.Assertion{
+				Event: eventspec.WorkItemMembershipS1,
+				Want: map[string]any{
+					"org_id":                     "org_5752",
+					"state":                      "unmeasured",
+					"reason":                     string(reason),
+					"population_measured":        false,
+					"population_complete":        false,
+					"capped_population":          0,
+					"authorized_population":      0,
+					"denied_population":          0,
+					"served_members":             0,
+					"census_limit":               2000,
+					"future_boundary_count":      0,
+					"transition_assertion_count": 0,
+					"max_execution_time_seconds": 5,
+					"max_rows_to_read":           2_000_000,
+					"max_memory_usage":           int(contextfabric.WorkItemMembershipMaxMemoryUsage),
+					"max_result_rows":            201,
+				},
+			}); err != nil {
+				t.Fatalf("certify S1 %s Info line: %v", reason, err)
+			}
+		})
+	}
+}
+
 func TestWorkItemMembershipGateInfoIsCertifiedFromTheConfiguredJSONLogger(t *testing.T) {
 	var logBytes bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logBytes, nil))

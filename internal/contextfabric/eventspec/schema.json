@@ -3869,6 +3869,8 @@
         "closed_vocabulary": [
           "",
           "s1_error",
+          "read_limit_exceeded",
+          "cancelled",
           "excluded_provider",
           "zero_authorized_overflow",
           "identity_omitted"

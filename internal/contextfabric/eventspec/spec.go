@@ -1920,7 +1920,7 @@ var WorkItemMembershipS1 = Event{
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "state", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"exact", "floor", "unmeasured"}},
-		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"", "s1_error", "excluded_provider", "zero_authorized_overflow", "identity_omitted"}},
+		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"", "s1_error", "read_limit_exceeded", "cancelled", "excluded_provider", "zero_authorized_overflow", "identity_omitted"}},
 		{Key: "population_measured", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "population_complete", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "capped_population", Type: FieldInt, Presence: PresenceRequired},
