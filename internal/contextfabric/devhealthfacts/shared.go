@@ -127,7 +127,7 @@ import (
 // coverage aggregate over recommendations_daily and reports subjects whose
 // rules were evaluated inside the freshness window with none fired as an
 // available read. A candidate saved under v13 reports a clean team as no_data.
-const QueryVersion = "devhealthfacts.clickhouse.v14"
+const QueryVersion = "devhealthfacts.clickhouse.v15"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

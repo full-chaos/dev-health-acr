@@ -183,7 +183,7 @@ FactInvestment
     calls not_a_call          13
     calls excluded_by_design  136
     calls leaked              1
-  fields             churn_loc cycle_p50_hours day delivery_units effort_unit_count investment_area investment_mix_source native_ambiguous_unit_count owning_team_rollup_work_unit_count population_window project_stream prs_merged repo_count rollup_basis spanning_unit_count team_breakdown team_count team_id team_name theme_quality_bugfix work_items_completed work_unit_count work_units_without_repo_link
+  fields             churn_loc cycle_p50_hours day delivery_units effort_unit_count investment_area investment_mix_source native_multi_placed_unit_count owning_team_rollup_work_unit_count population_window project_stream prs_merged repo_count rollup_basis spanning_unit_count team_breakdown team_count team_id team_name theme_quality_bugfix work_items_completed work_unit_count work_units_without_repo_link
 
 FactLandscape
   reached_funcs      30
