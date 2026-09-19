@@ -122,7 +122,12 @@ import (
 // every project theme fact carries investment_mix_source. A candidate saved
 // under v12 carried the owning-team roll-up unlabelled and must not be served
 // as though it named its source.
-const QueryVersion = "devhealthfacts.clickhouse.v13"
+//
+// v13 -> v14: the operational-deficiency read gains a per-team evaluation
+// coverage aggregate over recommendations_daily and reports subjects whose
+// rules were evaluated inside the freshness window with none fired as an
+// available read. A candidate saved under v13 reports a clean team as no_data.
+const QueryVersion = "devhealthfacts.clickhouse.v14"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

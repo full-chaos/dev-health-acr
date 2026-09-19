@@ -18,7 +18,7 @@ func deficiencyRow(teamID string) []any {
 
 func TestOperationalDeficienciesProviderHappyPath(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM recommendations_daily", rows: [][]any{deficiencyRow("CHAOS")}}}}
+	client := &fakeClient{tables: []fakeTable{{match: "WHERE rn = 1", rows: [][]any{deficiencyRow("CHAOS")}}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactOperationalDeficiencies)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -44,7 +44,7 @@ func TestOperationalDeficienciesProviderHappyPath(t *testing.T) {
 // this provider only ever surfaces that decision, never re-evaluates it.
 func TestOperationalDeficienciesProviderOnlyFiredRows(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM recommendations_daily", rows: nil}}}
+	client := &fakeClient{tables: []fakeTable{{match: "WHERE rn = 1", rows: nil}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactOperationalDeficiencies)
 	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -60,7 +60,7 @@ func TestOperationalDeficienciesProviderOnlyFiredRows(t *testing.T) {
 
 func TestOperationalDeficienciesProviderZeroRowSubjectHasNoFactEntry(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM recommendations_daily", rows: nil}}}
+	client := &fakeClient{tables: []fakeTable{{match: "WHERE rn = 1", rows: nil}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactOperationalDeficiencies)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -76,7 +76,7 @@ func TestOperationalDeficienciesProviderZeroRowSubjectHasNoFactEntry(t *testing.
 
 func TestOperationalDeficienciesProviderQueryErrorReturnsFactReadFailure(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM recommendations_daily", err: errors.New("boom")}}}
+	client := &fakeClient{tables: []fakeTable{{match: "WHERE rn = 1", err: errors.New("boom")}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactOperationalDeficiencies)
 	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -90,7 +90,7 @@ func TestOperationalDeficienciesProviderQueryErrorReturnsFactReadFailure(t *test
 
 func TestOperationalDeficienciesProviderScopedToOrgAndRequestedSubjects(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM recommendations_daily", rows: nil}}}
+	client := &fakeClient{tables: []fakeTable{{match: "WHERE rn = 1", rows: nil}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactOperationalDeficiencies)
 	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-8"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -112,7 +112,7 @@ func TestOperationalDeficienciesProviderScopedToOrgAndRequestedSubjects(t *testi
 // the F5 result-content guard.
 func TestOperationalDeficienciesProviderRowForUnrequestedTeamNeverAppears(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM recommendations_daily", rows: [][]any{deficiencyRow("other-team")}}}}
+	client := &fakeClient{tables: []fakeTable{{match: "WHERE rn = 1", rows: [][]any{deficiencyRow("other-team")}}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactOperationalDeficiencies)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -139,7 +139,7 @@ func deficiencyRows(n int) [][]any {
 
 func TestOperationalDeficienciesProviderTruncatesWhenRowCountReachesLimit(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM recommendations_daily", rows: deficiencyRows(maxDeficiencyRowsPerQueryForTest)}}}
+	client := &fakeClient{tables: []fakeTable{{match: "WHERE rn = 1", rows: deficiencyRows(maxDeficiencyRowsPerQueryForTest)}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactOperationalDeficiencies)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},

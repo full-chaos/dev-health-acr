@@ -368,6 +368,40 @@ type FactProviderResult struct {
 	// defines as "fewer rows than exist" and which degrades coverage to
 	// partial while KEEPING the rows that were fine.
 	OmittedCount int
+	// EvaluatedSubjects lists the subjects the producer can show its
+	// evaluation covered in the read window even though it returned no
+	// fact for them: a measured "nothing found", as distinct from a
+	// subject the producer never evaluated. Only honoured on an available
+	// result; every entry must belong to the queried subjects.
+	EvaluatedSubjects []SubjectRef
+	// Evaluation is the coverage evidence behind EvaluatedSubjects, carried
+	// to the fact-read trace.
+	Evaluation *FactEvaluationCoverage
+}
+
+// FactEvaluationCoverage summarises how many queried subjects a producer's
+// evaluation covered, was stale for, or never reached. RulesEvaluated and
+// LatestWindowEnd describe the freshest covering evaluation seen.
+type FactEvaluationCoverage struct {
+	Covered             int
+	Fired               int
+	Stale               int
+	BeforeRange         int
+	NeverEvaluated      int
+	RulesEvaluated      int
+	LatestWindowEnd     string
+	FreshnessWindowDays int
+	// Withheld is set when the fact read was capped, so no subject could be
+	// shown to have zero findings.
+	Withheld bool
+	// Members is the state of every requested subject, decided per subject.
+	Members []FactEvaluationMember
+}
+
+// FactEvaluationMember is one requested subject's evaluation state.
+type FactEvaluationMember struct {
+	Subject SubjectRef
+	State   string
 }
 
 type FactProvider interface {
@@ -743,12 +777,13 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 	}
 
 	bundle := CanonicalFactBundle{
-		Facts:        []CanonicalFact{},
-		Coverage:     Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
-		Version:      CanonicalFactRegistryVersion,
-		Versions:     map[FactKind]string{},
-		Watermarks:   map[FactKind]string{},
-		ReadSubjects: FactReadSubjects{},
+		Facts:             []CanonicalFact{},
+		Coverage:          Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		Version:           CanonicalFactRegistryVersion,
+		Versions:          map[FactKind]string{},
+		Watermarks:        map[FactKind]string{},
+		ReadSubjects:      FactReadSubjects{},
+		EvaluatedSubjects: FactReadSubjects{},
 	}
 	allowedSubjects := investigationScopeSubjectSet(request)
 	// CHAOS-3783: decide the whole fan-out up front, before any provider is
@@ -1043,6 +1078,7 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		// is set. One source, so the pair cannot drift.
 		mergedState := lastCoverageState(&bundle)
 		bundle.ReadSubjects.add(planned.Kind, query.Subjects)
+		r.recordEvaluationCoverage(ctx, principal, planned.Kind, result.Evaluation, len(result.EvaluatedSubjects))
 		r.recordFactRead(ctx, principal, planned.Kind, factReadCompleted, mergedState, query.Subjects, factsReturned, mergedState == SourceTruncated)
 	}
 	sortCanonicalFacts(bundle.Facts)
@@ -1132,6 +1168,32 @@ func (r *FactCapabilityRegistry) recordFactRead(ctx context.Context, principal s
 	}
 	attrs = append(attrs, requestIDLogAttrs(ctx)...)
 	r.logger.InfoContext(ctx, "context fabric fact read", attrs...)
+}
+
+// recordEvaluationCoverage logs the evidence behind a measured zero: how
+// many subjects the producer's evaluation covered, was stale for, or never
+// reached, and the window it was judged against. Nil coverage (a producer
+// that reports none) logs nothing.
+func (r *FactCapabilityRegistry) recordEvaluationCoverage(ctx context.Context, principal storage.Principal, kind FactKind, coverage *FactEvaluationCoverage, credited int) {
+	if r == nil || r.logger == nil || coverage == nil {
+		return
+	}
+	attrs := []any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"kind", SanitizeLogAttr(string(kind)),
+		"evaluated_covered", coverage.Covered,
+		"evaluated_fired", coverage.Fired,
+		"evaluated_stale", coverage.Stale,
+		"evaluated_before_range", coverage.BeforeRange,
+		"never_evaluated", coverage.NeverEvaluated,
+		"measured_zero_credited", credited,
+		"rules_evaluated", coverage.RulesEvaluated,
+		"latest_window_end", SanitizeLogAttr(coverage.LatestWindowEnd),
+		"freshness_window_days", coverage.FreshnessWindowDays,
+		"withheld_capped_read", coverage.Withheld,
+	}
+	attrs = append(attrs, requestIDLogAttrs(ctx)...)
+	r.logger.InfoContext(ctx, "context fabric evaluation coverage", attrs...)
 }
 
 // distinctSubjectKinds reduces a subject list to its sorted, deduplicated
@@ -1355,6 +1417,17 @@ func mergeFactProviderResult(bundle *CanonicalFactBundle, capability FactCapabil
 	}
 	if stateRejectsFacts(result.State) && len(result.Facts) > 0 {
 		return fmt.Errorf("source state %q cannot return facts", result.State)
+	}
+	for _, subject := range result.EvaluatedSubjects {
+		if _, ok := allowed[canonicalFactSubjectKey(subject)]; !ok {
+			return fmt.Errorf("provider reported evaluation of subject %q outside the investigation set", subject.CanonicalID)
+		}
+	}
+	if result.State == SourceAvailable {
+		if bundle.EvaluatedSubjects == nil {
+			bundle.EvaluatedSubjects = FactReadSubjects{}
+		}
+		bundle.EvaluatedSubjects.add(capability.Kind, result.EvaluatedSubjects)
 	}
 	for index := range result.Facts {
 		fact := result.Facts[index]

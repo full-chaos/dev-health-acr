@@ -36,7 +36,11 @@ import (
 // weight gets a real score" behavior. A real, counted formula change, not
 // a contract-only addition -- see cf-standing-rules.md's own mandate on
 // this constant.
-const RankingFormulaVersion = "cohort-ranking.v3"
+// v4: the deficiency zero is credited from the producer's per-subject
+// evaluation evidence (CanonicalFactBundle.EvaluatedSubjects), so a member
+// whose rules were evaluated in the freshness window and none fired scores a
+// measured zero, and a member without that evidence stays missing.
+const RankingFormulaVersion = "cohort-ranking.v4"
 
 // Top-level signal-family names -- closed vocabulary. These are exactly the
 // values RankCohort can add to a member's RankingBasis, and exactly the keys
@@ -215,17 +219,19 @@ func RankCohort(cohort *Cohort, facts []CanonicalFact, coverage Coverage) (*Coho
 	return RankCohortWithReads(cohort, facts, coverage, nil)
 }
 
-// RankCohortWithReads is RankCohort over a read that also says WHICH
-// subjects each fact kind's read covered (CanonicalFactBundle.ReadSubjects).
+// RankCohortWithReads is RankCohort over a bundle that also says WHICH
+// subjects a producer showed its evaluation covered
+// (CanonicalFactBundle.EvaluatedSubjects).
 //
 // Coverage.Sources holds one state per fact kind for the whole
-// investigation, so a successful read of one subject says nothing about any
-// other member. reads makes the per-member statement: a member is credited
-// the "no fired rule" zero of operational_deficiencies.severity only when
-// that kind's read completed for THAT member's own subject. A nil reads
-// carries no attribution at all (a caller that never had a registry read,
-// e.g. a hand-built fixture) and keeps the coverage-only rule; every
-// registry bundle carries a non-nil reads, so production is always strict.
+// investigation, so an available read says nothing about any one member.
+// reads makes the per-member statement: a member is credited the "no fired
+// rule" zero of operational_deficiencies.severity only when the producer
+// showed its evaluation covered THAT member's own subject in the window. A
+// nil reads carries no attribution at all (a caller that never had a
+// registry read, e.g. a hand-built fixture) and keeps the coverage-only
+// rule; every registry bundle carries a non-nil reads, so production is
+// always strict.
 func RankCohortWithReads(cohort *Cohort, facts []CanonicalFact, coverage Coverage, reads FactReadSubjects) (*Cohort, CohortRankedEvent, cohortMemberSignalCitations) {
 	event := CohortRankedEvent{FormulaVersion: RankingFormulaVersion, SignalsAvailable: map[string]int{}, OutcomeCounts: map[string]int{}, InvestmentMixSourceCounts: map[string]int{}, ReadAttributionCarried: reads != nil}
 	if cohort == nil || len(cohort.Members) == 0 {
@@ -924,12 +930,13 @@ func healthRiskSignal(facts []CanonicalFact, coverage Coverage) (value float64, 
 // fired rules (one could exist past the truncation cap), so it does NOT
 // get the zero exception.
 //
-// memberRead is whether the deficiencies read completed for THIS member's
-// own subject. The zero exception is a statement about that member -- "read,
-// nothing fired" -- so it requires the member's own read; the coverage state
-// alone describes the whole investigation and would credit a member with a
-// clean result that only some other subject's read produced. Without it the
-// member has no evidence for this family and the signal is unavailable.
+// memberRead is whether the producer showed its deficiency evaluation
+// covered THIS member's own subject in the window. The zero exception is a
+// statement about that member -- "evaluated, nothing fired" -- so it
+// requires that evidence; the coverage state alone describes the whole
+// investigation, and a read that merely queried the member proves nothing
+// about it. Without the evidence the member has no basis for this family
+// and the signal is unavailable.
 func deficiencySeveritySignal(facts []CanonicalFact, coverage Coverage, memberRead bool) (value float64, available bool, citation *signalCitation) {
 	max := 0.0
 	found := false

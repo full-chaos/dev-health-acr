@@ -3629,7 +3629,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	var rankedForServedResult *CohortRankedEvent
 	if graphContext.Cohort != nil && !workItemTuple {
 		var rankEvent CohortRankedEvent
-		graphContext.Cohort, rankEvent, cohortSignalCitations = RankCohortWithReads(graphContext.Cohort, facts.Facts, facts.Coverage, facts.ReadSubjects)
+		graphContext.Cohort, rankEvent, cohortSignalCitations = RankCohortWithReads(graphContext.Cohort, facts.Facts, facts.Coverage, facts.EvaluatedSubjects)
 		applyCohortJudgmentMismatch(graphContext.Cohort, interpretation.RequestedJudgmentKind)
 		// The event captures the SAME decision applyCohortJudgmentMismatch
 		// just wrote onto the cohort, plus the interpreter's own pick it was

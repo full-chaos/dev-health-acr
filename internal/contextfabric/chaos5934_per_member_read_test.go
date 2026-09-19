@@ -123,8 +123,8 @@ func TestRankCohortWithReads_NilReadsKeepsCoverageOnlyRule(t *testing.T) {
 
 func TestRankCohortWithReads_FormulaVersionMovedWithTheRule(t *testing.T) {
 	t.Parallel()
-	if RankingFormulaVersion != "cohort-ranking.v3" {
-		t.Fatalf("RankingFormulaVersion = %q, want cohort-ranking.v3", RankingFormulaVersion)
+	if RankingFormulaVersion != "cohort-ranking.v4" {
+		t.Fatalf("RankingFormulaVersion = %q, want cohort-ranking.v4", RankingFormulaVersion)
 	}
 }
 
@@ -144,11 +144,11 @@ func TestFactReadSubjects_MergeGroupBundleUnionsAttribution(t *testing.T) {
 	}
 }
 
-func deficienciesRegistry(t *testing.T) *FactCapabilityRegistry {
+func deficienciesRegistry(t *testing.T, evaluated ...SubjectRef) *FactCapabilityRegistry {
 	t.Helper()
 	provider := &factProviderStub{
 		capability: FactCapability{Kind: FactOperationalDeficiencies, Name: "ops-deficiencies", Version: "def-v1", SupportedSubjectKinds: []SubjectKind{SubjectTeam}, RequiresEvidence: true, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject}},
-		result:     FactProviderResult{State: SourceAvailable, Watermark: "wm", Version: "def-v1", Facts: []CanonicalFact{}},
+		result:     FactProviderResult{State: SourceAvailable, Watermark: "wm", Version: "def-v1", Facts: []CanonicalFact{}, EvaluatedSubjects: evaluated},
 	}
 	registry, err := NewFactCapabilityRegistry([]FactProvider{provider}, FactRegistryOptions{})
 	if err != nil {
@@ -167,17 +167,17 @@ func TestFactCapabilityRegistry_ProjectCohortIsNotCreditedTheAnchorTeamsRead(t *
 	cohort := &Cohort{Kind: SubjectProject, Members: []CohortMember{rankTestProjectMember("proj-a"), rankTestProjectMember("proj-b")}}
 	request := canonicalFactRequest(anchor, FactOperationalDeficiencies)
 	request.Cohort = cohort
-	bundle, err := deficienciesRegistry(t).ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+	bundle, err := deficienciesRegistry(t, anchor).ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, request)
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
 	}
 	if state, _ := coverageState(bundle.Coverage, FactOperationalDeficiencies); state != SourceAvailable {
 		t.Fatalf("coverage state = %q, want available (the premise of the leak)", state)
 	}
-	if !bundle.ReadSubjects.covers(FactOperationalDeficiencies, anchor) {
-		t.Fatalf("ReadSubjects = %v, want the anchor team covered", bundle.ReadSubjects)
+	if !bundle.EvaluatedSubjects.covers(FactOperationalDeficiencies, anchor) {
+		t.Fatalf("EvaluatedSubjects = %v, want the anchor team covered", bundle.EvaluatedSubjects)
 	}
-	got, event, _ := RankCohortWithReads(cohort, bundle.Facts, bundle.Coverage, bundle.ReadSubjects)
+	got, event, _ := RankCohortWithReads(cohort, bundle.Facts, bundle.Coverage, bundle.EvaluatedSubjects)
 	for _, member := range got.Members {
 		if !hasMissing(member, RankingSignalDeficiencySeverity) {
 			t.Fatalf("project %s credited the anchor team's read: missing=%v", member.Subject.CanonicalID, member.MissingSignals)
@@ -196,11 +196,11 @@ func TestFactCapabilityRegistry_TeamCohortMembersKeepTheirOwnZero(t *testing.T) 
 	request := canonicalFactRequest(rankTestSubject("t1"), FactOperationalDeficiencies)
 	request.Subjects = nil
 	request.Cohort = cohort
-	bundle, err := deficienciesRegistry(t).ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+	bundle, err := deficienciesRegistry(t, cohort.Members[0].Subject, cohort.Members[1].Subject).ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, request)
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
 	}
-	got, event, _ := RankCohortWithReads(cohort, bundle.Facts, bundle.Coverage, bundle.ReadSubjects)
+	got, event, _ := RankCohortWithReads(cohort, bundle.Facts, bundle.Coverage, bundle.EvaluatedSubjects)
 	for _, member := range got.Members {
 		if hasMissing(member, RankingSignalDeficiencySeverity) {
 			t.Fatalf("team %s lost its own read's zero: missing=%v", member.Subject.CanonicalID, member.MissingSignals)
@@ -220,11 +220,11 @@ func TestFactCapabilityRegistry_PrunedKindRecordsNoReads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
 	}
-	if len(bundle.ReadSubjects) != 0 {
-		t.Fatalf("ReadSubjects = %v, want none for a pruned kind", bundle.ReadSubjects)
+	if len(bundle.ReadSubjects) != 0 || len(bundle.EvaluatedSubjects) != 0 {
+		t.Fatalf("ReadSubjects = %v EvaluatedSubjects = %v, want none for a pruned kind", bundle.ReadSubjects, bundle.EvaluatedSubjects)
 	}
-	if bundle.ReadSubjects == nil || !reflect.DeepEqual(bundle.ReadSubjects, FactReadSubjects{}) {
-		t.Fatalf("ReadSubjects = %#v, want a non-nil empty attribution", bundle.ReadSubjects)
+	if bundle.ReadSubjects == nil || !reflect.DeepEqual(bundle.ReadSubjects, FactReadSubjects{}) || bundle.EvaluatedSubjects == nil {
+		t.Fatalf("ReadSubjects = %#v EvaluatedSubjects = %#v, want non-nil empty attribution", bundle.ReadSubjects, bundle.EvaluatedSubjects)
 	}
 }
 
@@ -307,12 +307,12 @@ func TestEngineRanksAgainstTheBundlesReadAttribution(t *testing.T) {
 		Graph: graph,
 		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
 			return CanonicalFactBundle{
-				Facts:        []CanonicalFact{},
-				Coverage:     Coverage{Sources: []SourceObservation{{Source: "canonical_fact:operational_deficiencies", State: SourceAvailable}}, DegradedReasons: []string{}},
-				Version:      "ops-v1",
-				Versions:     map[FactKind]string{},
-				Watermarks:   map[FactKind]string{},
-				ReadSubjects: readsFor(FactOperationalDeficiencies, readProject),
+				Facts:             []CanonicalFact{},
+				Coverage:          Coverage{Sources: []SourceObservation{{Source: "canonical_fact:operational_deficiencies", State: SourceAvailable}}, DegradedReasons: []string{}},
+				Version:           "ops-v1",
+				Versions:          map[FactKind]string{},
+				Watermarks:        map[FactKind]string{},
+				EvaluatedSubjects: readsFor(FactOperationalDeficiencies, readProject),
 			}, nil
 		}),
 		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
@@ -360,8 +360,8 @@ func TestNarrowSynthesisInputReRanksAgainstTheBundlesReadAttribution(t *testing.
 	params := synthesisAssemblyParams{
 		Graph: GraphContext{Cohort: cohort},
 		Facts: CanonicalFactBundle{
-			Coverage:     Coverage{Sources: []SourceObservation{{Source: "canonical_fact:operational_deficiencies", State: SourceAvailable}}},
-			ReadSubjects: FactReadSubjects{},
+			Coverage:          Coverage{Sources: []SourceObservation{{Source: "canonical_fact:operational_deficiencies", State: SourceAvailable}}},
+			EvaluatedSubjects: FactReadSubjects{},
 		},
 	}
 	result := narrowSynthesisInput(params, &AnswerPlan{})
@@ -370,5 +370,67 @@ func TestNarrowSynthesisInputReRanksAgainstTheBundlesReadAttribution(t *testing.
 	}
 	if !result.Ranked.ReadAttributionCarried || result.Ranked.DeficiencyZeroWithheld != 2 {
 		t.Fatalf("Ranked carried=%v withheld=%d, want true/2 (the two survivors, none of them read)", result.Ranked.ReadAttributionCarried, result.Ranked.DeficiencyZeroWithheld)
+	}
+}
+
+// Evaluation evidence is honoured only on an available result and only for
+// subjects the read was asked about.
+func TestFactCapabilityRegistry_EvaluatedSubjectsAreValidatedAndStateGated(t *testing.T) {
+	t.Parallel()
+	anchor := rankTestSubject("anchor")
+	stranger := rankTestSubject("stranger")
+	request := canonicalFactRequest(anchor, FactOperationalDeficiencies)
+	if _, err := deficienciesRegistry(t, stranger).ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, request); err == nil {
+		t.Fatal("ReadFacts() accepted evaluation evidence for a subject outside the investigation")
+	}
+	provider := &factProviderStub{
+		capability: FactCapability{Kind: FactOperationalDeficiencies, Name: "ops-deficiencies", Version: "def-v1", SupportedSubjectKinds: []SubjectKind{SubjectTeam}, RequiresEvidence: true, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject}},
+		result:     FactProviderResult{State: SourceNoData, Reason: "none", Watermark: "wm", Version: "def-v1", Facts: []CanonicalFact{}, EvaluatedSubjects: []SubjectRef{anchor}},
+	}
+	registry, err := NewFactCapabilityRegistry([]FactProvider{provider}, FactRegistryOptions{})
+	if err != nil {
+		t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
+	}
+	bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if bundle.EvaluatedSubjects.covers(FactOperationalDeficiencies, anchor) {
+		t.Fatal("a no_data result credited a measured zero")
+	}
+}
+
+func TestFactReadSubjects_MergeGroupBundleUnionsEvaluatedSubjects(t *testing.T) {
+	t.Parallel()
+	a, b := rankTestProject("a"), rankTestProject("b")
+	into := CanonicalFactBundle{EvaluatedSubjects: readsFor(FactOperationalDeficiencies, a)}
+	group := CanonicalFactBundle{EvaluatedSubjects: readsFor(FactOperationalDeficiencies, b)}
+	if mergeGroupBundle(&into, group, "org_1") {
+		t.Fatal("mergeGroupBundle refused a composable pair")
+	}
+	if !into.EvaluatedSubjects.covers(FactOperationalDeficiencies, a) || !into.EvaluatedSubjects.covers(FactOperationalDeficiencies, b) {
+		t.Fatalf("merged evaluated subjects = %v, want both", into.EvaluatedSubjects)
+	}
+}
+
+// Only the deficiency family has a measured zero: for every other signal
+// family an absent row stays missing even when the producer reports the
+// member as evaluated and the kind's state is available.
+func TestRankCohortWithReads_NoOtherFamilyGetsAFreeZero(t *testing.T) {
+	t.Parallel()
+	member := rankTestProjectMember("evaluated")
+	cohort := &Cohort{Kind: SubjectProject, Members: []CohortMember{member}}
+	evaluated := FactReadSubjects{}
+	for _, kind := range []FactKind{FactInvestment, FactHealth, FactOperationalDeficiencies, FactReadiness, FactWorkload} {
+		evaluated.add(kind, []SubjectRef{member.Subject})
+	}
+	got, _, _ := RankCohortWithReads(cohort, nil, availableCoverage(), evaluated)
+	for _, signal := range []string{RankingSignalInvestmentMix, RankingSignalHealthRisk, RankingSignalReadinessGap, RankingSignalWorkloadPressure} {
+		if !hasMissing(got.Members[0], signal) {
+			t.Errorf("%s was credited without a fact row: missing=%v", signal, got.Members[0].MissingSignals)
+		}
+	}
+	if hasMissing(got.Members[0], RankingSignalDeficiencySeverity) {
+		t.Errorf("evaluated member lost the measured deficiency zero: missing=%v", got.Members[0].MissingSignals)
 	}
 }

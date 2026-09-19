@@ -231,7 +231,7 @@ func runProjectCohortInvestigation(t *testing.T, ctx context.Context, cells []pr
 	// The anchor team's own deficiency read is clean and available: evidence
 	// about the team only, never about the projects it anchors.
 	if err := direct.Exec(ctx, `INSERT INTO recommendations_daily (team_id, org_id, rule_id, window_start, window_end, fired, severity, title, rationale, success_criterion, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		"ALPHA", orgID, "saturation", date(2026, 7, 29), date(2026, 8, 12), true, "warning", "Saturation", "elevated", "below threshold", ts(2026, 8, 12, 2, 0, 0)); err != nil {
+		"ALPHA", orgID, "saturation", recentHealthDay(16), recentHealthDay(2), true, "warning", "Saturation", "elevated", "below threshold", recentHealthDay(2).Add(2*time.Hour)); err != nil {
 		t.Fatalf("seed anchor deficiency: %v", err)
 	}
 

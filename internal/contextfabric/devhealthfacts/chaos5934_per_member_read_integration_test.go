@@ -10,6 +10,7 @@ package devhealthfacts_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
@@ -65,7 +66,7 @@ func TestCHAOS5934DeficiencyZeroIsPerMemberAgainstRealClickHouse(t *testing.T) {
 		// The anchor team was read and its read is available for the whole
 		// investigation -- evidence about the team only.
 		if err := direct.Exec(ctx, `INSERT INTO recommendations_daily (team_id, org_id, rule_id, window_start, window_end, fired, severity, title, rationale, success_criterion, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-			"ANCHOR", orgID, "saturation", date(2026, 7, 29), date(2026, 8, 12), true, "warning", "Saturation", "elevated", "below threshold", ts(2026, 8, 12, 2, 0, 0)); err != nil {
+			"ANCHOR", orgID, "saturation", recentHealthDay(15), recentHealthDay(1), true, "warning", "Saturation", "elevated", "below threshold", recentHealthDay(1).Add(2*time.Hour)); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 		cohort := &contextfabric.Cohort{Kind: contextfabric.SubjectProject, Members: []contextfabric.CohortMember{
@@ -79,7 +80,7 @@ func TestCHAOS5934DeficiencyZeroIsPerMemberAgainstRealClickHouse(t *testing.T) {
 		if source := bundle.Coverage.Sources; len(source) != 1 || source[0].State != contextfabric.SourceAvailable {
 			t.Fatalf("coverage = %#v, want the kind available (the premise of the leak)", source)
 		}
-		ranked, event, _ := contextfabric.RankCohortWithReads(cohort, bundle.Facts, bundle.Coverage, bundle.ReadSubjects)
+		ranked, event, _ := contextfabric.RankCohortWithReads(cohort, bundle.Facts, bundle.Coverage, bundle.EvaluatedSubjects)
 		for _, member := range ranked.Members {
 			if !deficiencyRankingSignalMissing(member) {
 				t.Fatalf("%s was credited the deficiency zero the anchor team's read produced: missing=%v", member.Subject.CanonicalID, member.MissingSignals)
@@ -93,15 +94,17 @@ func TestCHAOS5934DeficiencyZeroIsPerMemberAgainstRealClickHouse(t *testing.T) {
 	t.Run("team_members_keep_their_own_zero_and_their_own_fired_rule", func(t *testing.T) {
 		const orgID = "org-5934-teams"
 		if err := direct.Exec(ctx, `INSERT INTO recommendations_daily (team_id, org_id, rule_id, window_start, window_end, fired, severity, title, rationale, success_criterion, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-			"HOT", orgID, "saturation", date(2026, 7, 29), date(2026, 8, 12), true, "critical", "Saturation", "high", "below threshold", ts(2026, 8, 12, 2, 0, 0)); err != nil {
+			"HOT", orgID, "saturation", recentHealthDay(15), recentHealthDay(1), true, "critical", "Saturation", "high", "below threshold", recentHealthDay(1).Add(2*time.Hour)); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
+		// QUIET was evaluated recently and nothing fired: a measured zero.
+		seedEvaluation(t, ctx, direct, orgID, "QUIET", recentHealthDay(1))
 		cohort := &contextfabric.Cohort{Kind: contextfabric.SubjectTeam, Members: []contextfabric.CohortMember{
 			{Subject: teamSubject("QUIET"), Rank: 1, InclusionReasons: []string{"matched"}},
 			{Subject: teamSubject("HOT"), Rank: 2, InclusionReasons: []string{"matched"}},
 		}}
 		bundle := readDeficiencyBundle(t, ctx, orgID, deficiencyRequest(cohort))
-		ranked, event, _ := contextfabric.RankCohortWithReads(cohort, bundle.Facts, bundle.Coverage, bundle.ReadSubjects)
+		ranked, event, _ := contextfabric.RankCohortWithReads(cohort, bundle.Facts, bundle.Coverage, bundle.EvaluatedSubjects)
 		for _, member := range ranked.Members {
 			if deficiencyRankingSignalMissing(member) {
 				t.Fatalf("%s lost the deficiency signal: missing=%v", member.Subject.CanonicalID, member.MissingSignals)
