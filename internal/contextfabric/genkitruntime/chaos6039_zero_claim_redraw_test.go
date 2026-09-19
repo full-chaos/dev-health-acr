@@ -330,3 +330,27 @@ func TestClaimingDrawAtTheCeilingIsNotReportedAsDeclined(t *testing.T) {
 		"zero_claim_redraw": eventspec.SynthesisZeroClaimRedrawNotNeeded,
 	})
 }
+
+// TestRejectedRedrawsDoNotOutrunTheOperatorBound: the rule grants ONE draw
+// beyond a bound too small to hold it, not extra draws on top of a bound
+// that already holds several. A zero-claim draft followed by rejections
+// stops at the operator's three draws and serves the held draft.
+func TestRejectedRedrawsDoNotOutrunTheOperatorBound(t *testing.T) {
+	t.Parallel()
+	zero := validSynthesisOutput()
+	gen := &scriptedGenerator{steps: steps(zero, invalidTitleSynthesisOutput(), invalidEvidenceSynthesisOutput(), claimedSynthesisOutput())}
+	run := runRedraw(t, context.Background(), gen, Config{MaxSynthesisResynthesisAttempts: 3}, validSynthesisInput())
+	if run.err != nil {
+		t.Fatalf("SynthesizeAnswer() error = %v, want the held draft served", run.err)
+	}
+	if gen.calls != 3 {
+		t.Fatalf("generator.calls = %d, want the operator bound 3", gen.calls)
+	}
+	if run.receipt.OutputDigest != digestOf(t, zero) {
+		t.Fatalf("receipt.OutputDigest = %q, want the held first draft's", run.receipt.OutputDigest)
+	}
+	run.certify(t, map[string]any{
+		"draws_total": 3, "draw_outcomes": "1:success,2:invalid_output,3:invalid_output", "claims": 0,
+		"zero_claim_redraw": eventspec.SynthesisZeroClaimRedrawFailed,
+	})
+}
