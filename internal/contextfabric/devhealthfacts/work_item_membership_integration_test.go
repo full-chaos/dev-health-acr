@@ -493,9 +493,9 @@ func TestWorkItemMembershipS1AgainstActualDDL(t *testing.T) {
 		}
 		t.Logf("live C+2 transition fixture is unmeasured at max_rows_to_read=%d: backend=%s", workItemMembershipMaxRowsToRead, recordingClient.lastErrorText())
 	} else {
-		if floorResult.Census.State != contextfabric.WorkItemMembershipCensusFloor || !floorResult.Census.PopulationIncomplete || floorResult.Census.CappedPopulation != contextfabric.WorkItemMembershipCensusLimit+1 || floorResult.Census.AuthorizedPopulation != contextfabric.WorkItemMembershipCensusLimit+1 || floorResult.Census.DeniedPopulation != 0 || floorResult.Census.ServedMembers != contextfabric.WorkItemMembershipServeLimit || len(floorResult.Members) != contextfabric.WorkItemMembershipServeLimit {
+		if floorResult.Census.State != contextfabric.WorkItemMembershipCensusFloor || !floorResult.Census.PopulationIncomplete || floorResult.Census.CappedPopulation != contextfabric.WorkItemMembershipCensusLimit+1 || floorResult.Census.AuthorizedPopulation != contextfabric.WorkItemMembershipCensusLimit+1 || floorResult.Census.DeniedPopulation != 1 || floorResult.Census.ServedMembers != contextfabric.WorkItemMembershipServeLimit || len(floorResult.Members) != contextfabric.WorkItemMembershipServeLimit {
 			floorLease.Release()
-			t.Fatalf("live floor census = %+v, telemetry = %#v, want C+1 capped/authorized, no denied row in authorized-first probe, incomplete, and K served", floorResult.Census, telemetry.s1)
+			t.Fatalf("live floor census = %+v, telemetry = %#v, want C+1 capped/authorized, the one denied member counted although it ranks past the row bound, incomplete, and K served", floorResult.Census, telemetry.s1)
 		}
 		if floorResult.Members[0].CanonicalID >= floorResult.Members[len(floorResult.Members)-1].CanonicalID {
 			floorLease.Release()

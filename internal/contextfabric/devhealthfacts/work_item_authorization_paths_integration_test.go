@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+	"github.com/full-chaos/dev-health-go/readers"
 )
 
 // The work-item authorization paths through every SQL reader of the shared
@@ -255,6 +257,121 @@ func TestWorkItemAuthorizationPathsThroughEverySQLReader(t *testing.T) {
 					t.Errorf("%s: S1 line %s = %v (present=%t), want %v", tc.name, key, got, ok, value)
 				}
 			}
+		}
+	})
+
+	t.Run("read caps cover the measured trial read and the statement shapes they were derived from", func(t *testing.T) {
+		// The caps were derived from system.query_log on the trial store's
+		// 1675-item project: S1 32,504 rows over 17 ReadFromMergeTree
+		// passes; the content readers at most 23,948 rows over 11 passes
+		// (status 10, roll-up 11); each x60 for a large organization, x2
+		// margin. A cap below that, or a statement that grew passes (and so
+		// reads more per organization than the cap was sized for), fails
+		// here rather than surfacing later as an unmeasured census.
+		const scale = 60 * 2
+		if workItemMembershipMaxRowsToRead < 32_504*scale {
+			t.Fatalf("workItemMembershipMaxRowsToRead = %d, below the measured S1 read x%d", workItemMembershipMaxRowsToRead, scale)
+		}
+		if workItemReaderMaxRowsToRead < 23_948*scale {
+			t.Fatalf("workItemReaderMaxRowsToRead = %d, below the measured content read x%d", workItemReaderMaxRowsToRead, scale)
+		}
+		passes := func(name, statement string, bindings []readers.Binding) int {
+			// EXPLAIN goes through the native connection: the production
+			// client refuses any statement that is not a plain read.
+			parameters := clickhousedriver.Parameters{"org_id": authzPathsOrg}
+			for _, binding := range bindings {
+				switch value := binding.Value.(type) {
+				case string:
+					parameters[binding.Name] = value
+				case []string:
+					quoted := make([]string, 0, len(value))
+					for _, item := range value {
+						quoted = append(quoted, "'"+strings.ReplaceAll(item, "'", "\\'")+"'")
+					}
+					parameters[binding.Name] = "[" + strings.Join(quoted, ",") + "]"
+				case uint8:
+					parameters[binding.Name] = strconv.Itoa(int(value))
+				case uint32:
+					parameters[binding.Name] = strconv.Itoa(int(value))
+				case time.Time:
+					parameters[binding.Name] = value.UTC().Format("2006-01-02 15:04:05")
+				default:
+					t.Fatalf("%s binding %s has unhandled type %T", name, binding.Name, binding.Value)
+				}
+			}
+			rows, err := fixture.direct.Query(clickhousedriver.Context(ctx, clickhousedriver.WithParameters(parameters)), "EXPLAIN indexes = 1 "+statement)
+			if err != nil {
+				t.Fatalf("%s EXPLAIN: %v", name, err)
+			}
+			defer rows.Close()
+			count := 0
+			for rows.Next() {
+				var line string
+				if err := rows.Scan(&line); err != nil {
+					t.Fatalf("%s EXPLAIN scan: %v", name, err)
+				}
+				if strings.Contains(line, "ReadFromMergeTree") {
+					count++
+				}
+			}
+			return count
+		}
+		scope := workItemRepositoryAuthorization(scoped, nil)
+		s1, s1Bindings := workItemMembershipS1Statement(scope, 200)
+		s1Bindings = append(s1Bindings,
+			readers.Binding{Name: "anchor_provider", Value: "linear"}, readers.Binding{Name: "anchor_project_id", Value: authzPathsProjectP},
+			readers.Binding{Name: "s1_instant", Value: fixture.at}, readers.Binding{Name: "serve_limit", Value: uint32(200)})
+		rollup, rollupBindings := workItemProjectCompletionStatement(scope)
+		rollupBindings = append(rollupBindings, readers.Binding{Name: "ids", Value: []string{"linear:" + authzPathsProjectP}})
+		for _, tc := range []struct {
+			name      string
+			statement string
+			bindings  []readers.Binding
+			max       int
+		}{
+			{"S1", s1, s1Bindings, 17},
+			{"project roll-up", rollup, rollupBindings, 11},
+		} {
+			got := passes(tc.name, tc.statement, tc.bindings)
+			if got == 0 || got > tc.max {
+				t.Fatalf("%s reads %d ReadFromMergeTree passes, derivation assumed at most %d -- re-derive the cap", tc.name, got, tc.max)
+			}
+			t.Logf("%s: %d ReadFromMergeTree passes (derivation: %d)", tc.name, got, tc.max)
+		}
+	})
+
+	t.Run("S1 counts every member past the served row bound", func(t *testing.T) {
+		// bound+1 authorized members rank ahead of every denied one, so a
+		// count taken after the row bound would see no denied member at all.
+		const projectR = "authz-proj-r"
+		bound := contextfabric.WorkItemMembershipCensusLimit + 1
+		for _, statement := range []string{
+			`INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES ('` + projectR + `', '` + authzPathsOrg + `', 'linear', NULL, 'R', 1, 'started', '', now64(3))`,
+			`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id) SELECT concat('linear:r-granted-', toString(number)), '` + authzPathsRepoG + `', '` + authzPathsOrg + `', 't', 'open', '', now64(3), '', 'linear', '` + projectR + `' FROM numbers(` + strconv.Itoa(bound+1) + `)`,
+			`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id) SELECT concat('linear:r-denied-', toString(number)), '` + authzPathsRepoN + `', '` + authzPathsOrg + `', 't', 'open', '', now64(3), '', 'linear', '` + projectR + `' FROM numbers(3)`,
+		} {
+			if err := fixture.direct.Exec(ctx, statement); err != nil {
+				t.Fatalf("seed bound fixture: %v", err)
+			}
+		}
+		gate, err := contextfabric.NewWorkItemMembershipGate(1, 1)
+		if err != nil {
+			t.Fatalf("create gate: %v", err)
+		}
+		reader, err := NewWorkItemMembershipReader(fixture.query, WorkItemMembershipReaderOptions{Gate: gate, Telemetry: contextfabric.NoopWorkItemMembershipTelemetry{}})
+		if err != nil {
+			t.Fatalf("create membership reader: %v", err)
+		}
+		lease, result, err := reader.BeginWorkItemMembership(ctx, scoped, contextfabric.WorkItemMembershipRequest{
+			Anchor: workItemMembershipTestAnchor(t, "linear", projectR), S1Instant: fixture.at,
+		})
+		if err != nil || lease == nil {
+			t.Fatalf("BeginWorkItemMembership lease=%v err=%v", lease, err)
+		}
+		lease.Release()
+		census := result.Census
+		if census.DeniedPopulation != 3 || census.Paths.DirectRepository != bound+1 || census.State != contextfabric.WorkItemMembershipCensusFloor {
+			t.Fatalf("census past the bound = %+v, want denied=3 direct_repo=%d state=floor", census, bound+1)
 		}
 	})
 

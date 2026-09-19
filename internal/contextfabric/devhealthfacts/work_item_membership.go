@@ -760,17 +760,17 @@ LEFT JOIN ` + workItemMembershipTransitionMetadataSQL + ` AS tm
       excluded_heuristic_link,
       transition_assertions,
       future_boundaries,
-      count() OVER () AS scoped_population,
-      countIf(authorized_flag = 1) OVER () AS authorized_population,
-      countIf(authorized_flag = 0) OVER () AS denied_population,
-` + workItemMembershipPathWindowsSQL() + `
-      countIf(repo_less = 1) OVER () AS repo_less_population,
-      countIf(repo_less = 1 AND authorized_flag = 0) OVER () AS repo_less_denied_population,
-      countIf(project_less = 1 AND authorized_flag = 0) OVER () AS denied_project_less_population,
-      countIf(excluded_explicit_text_link = 1) OVER () AS excluded_explicit_text_link_population,
-      countIf(excluded_heuristic_link = 1) OVER () AS excluded_heuristic_link_population,
-      sum(future_boundaries) OVER () AS future_boundary_count,
-      sum(transition_assertions) OVER () AS transition_assertion_count
+      scoped_population,
+      authorized_population,
+      denied_population,
+      ` + workItemMembershipPathColumns("", "_population") + `,
+      repo_less_population,
+      repo_less_denied_population,
+      denied_project_less_population,
+      excluded_explicit_text_link_population,
+      excluded_heuristic_link_population,
+      future_boundary_count,
+      transition_assertion_count
     FROM (
       SELECT
         canonical_key,
@@ -784,7 +784,23 @@ LEFT JOIN ` + workItemMembershipTransitionMetadataSQL + ` AS tm
         excluded_explicit_text_link,
         excluded_heuristic_link,
         transition_assertions,
-        future_boundaries
+        future_boundaries,
+        -- Every population is a window over the WHOLE member relation. A
+        -- window is evaluated before this SELECT's ORDER BY and LIMIT, so
+        -- the row bound below narrows the rows that can be served and
+        -- never the counts: a denied member ranked past the bound is still
+        -- counted.
+        count() OVER () AS scoped_population,
+        countIf(authorized_flag = 1) OVER () AS authorized_population,
+        countIf(authorized_flag = 0) OVER () AS denied_population,
+` + workItemMembershipPathWindowsSQL() + `
+        countIf(repo_less = 1) OVER () AS repo_less_population,
+        countIf(repo_less = 1 AND authorized_flag = 0) OVER () AS repo_less_denied_population,
+        countIf(project_less = 1 AND authorized_flag = 0) OVER () AS denied_project_less_population,
+        countIf(excluded_explicit_text_link = 1) OVER () AS excluded_explicit_text_link_population,
+        countIf(excluded_heuristic_link = 1) OVER () AS excluded_heuristic_link_population,
+        sum(future_boundaries) OVER () AS future_boundary_count,
+        sum(transition_assertions) OVER () AS transition_assertion_count
       FROM (` + memberRows + `)
       ORDER BY authorized_flag DESC, canonical_key ASC
       LIMIT 2001
