@@ -25,6 +25,17 @@ func TestStore_parity(t *testing.T) {
 }
 
 // TestStore_semanticStateCap runs the shared byte-cap cells.
+// TestStore_questionWindowRedemptionParity: this store keeps no graph epoch,
+// so it cannot prove the offering turn and withholds the continuation -- on
+// the threaded and the unthreaded redemption alike.
+func TestStore_questionWindowRedemptionParity(t *testing.T) {
+	t.Parallel()
+	runs := paritytest.RunQuestionWindowRedemptionSuite(t, func(*testing.T) contextfabric.InvestigationResultStore {
+		return memoryinvestigation.NewStore()
+	})
+	paritytest.AssertQuestionWindowRedemptionParity(t, runs, false)
+}
+
 func TestStore_semanticStateCap(t *testing.T) {
 	paritytest.RunSemanticStateCapSuite(t,
 		func(t *testing.T) contextfabric.InvestigationResultStore { return memoryinvestigation.NewStore() },

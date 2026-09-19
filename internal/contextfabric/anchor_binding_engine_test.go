@@ -515,6 +515,9 @@ func anchorSiteScenarios() []anchorSiteScenario {
 				request := needTurnRequest("request_site_axis_two", false)
 				request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: one.result.ResultID, ReceiptID: option.ReceiptID}}
 				request.ParentResultID = one.result.ResultID
+				// A changed question: the confirmation speaks for turn one's
+				// question only, so the moved axis meets the veto.
+				request.Question += " Include the drivers."
 				two := h.turn(request, committingNeedResponse())
 				axis := false
 				for _, outcome := range two.windowCanons {

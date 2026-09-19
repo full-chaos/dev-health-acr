@@ -304,6 +304,20 @@ VALUES ($1, $2, $3, $4, $5::jsonb)`, resultID, orgID, payload, time.Date(2026, 1
 	})
 }
 
+// TestStore_questionWindowRedemption runs the threaded and the unthreaded
+// window redemption through the real engine against REAL Postgres: both are
+// served under the confirmed window, alike.
+func TestStore_questionWindowRedemption(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	runs := paritytest.RunQuestionWindowRedemptionSuite(t, func(t *testing.T) contextfabric.InvestigationResultStore {
+		store, err := pginvestigation.NewStore(db)
+		require.NoError(t, err)
+		return store
+	})
+	paritytest.AssertQuestionWindowRedemptionParity(t, runs, true)
+}
+
 // TestStore_substitutionParentRead runs the SHARED parent-read domain for the
 // subject-substitution guard through the real engine against REAL Postgres,
 // seeding the parent row and its jsonb snapshot directly (NULL for absent).

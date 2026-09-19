@@ -2295,6 +2295,90 @@
     ]
   },
   {
+    "id": "contextfabric.remembered_window_axis",
+    "msg": "context fabric remembered window axis",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per Investigate call, emitted only when the confirmed-need ledger applied a remembered window and interpretation produced an answerable-or-not fresh time.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "source_result_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "carrier_read",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_read",
+          "read",
+          "failed"
+        ]
+      },
+      {
+        "key": "interpreted_axis",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "current",
+          "valid_time",
+          "observed_time",
+          "range",
+          ""
+        ]
+      },
+      {
+        "key": "carried_axis",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "current",
+          "valid_time",
+          "observed_time",
+          "range",
+          ""
+        ]
+      },
+      {
+        "key": "decided_axis",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "current",
+          "valid_time",
+          "observed_time",
+          "range",
+          ""
+        ]
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_evaluated",
+          "agreed",
+          "overridden_by_receipt",
+          "vetoed"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.requirement_outcome_transition",
     "msg": "context fabric requirement outcome transition",
     "level": "info",
@@ -3925,6 +4009,21 @@
           "overridden_by_receipt",
           "vetoed"
         ]
+      },
+      {
+        "key": "parent_reference",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "absent",
+          "window_receipt_result",
+          "other_result"
+        ]
+      },
+      {
+        "key": "question_window_confirmed",
+        "type": "bool",
+        "presence": "required"
       },
       {
         "key": "request_id",

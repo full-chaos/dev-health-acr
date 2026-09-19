@@ -144,9 +144,10 @@ func TestCaptureSkipReasonWindowAxisConflict(t *testing.T) {
 	buf := swapToJSONLedgerTelemetry(h)
 	request := needTurnRequest("request_5844_axis_conflict_two", false)
 	request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: one.result.ResultID, ReceiptID: option.ReceiptID}}
-	// A parent reference takes this turn outside the window-only continuation
-	// shape, whose carried axis would otherwise override the moved one.
-	request.ParentResultID = one.result.ResultID
+	// A CHANGED question: the window was confirmed for turn one's question, not
+	// this one, so the confirmation does not speak for this turn's time and the
+	// moved axis meets the veto.
+	request.Question += " Include the drivers."
 	if _, err := h.engine.Investigate(context.Background(), acceptancePrincipal(), request); err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}

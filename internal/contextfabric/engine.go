@@ -661,6 +661,10 @@ type EngineTelemetry interface {
 	// decision is the closed ConfirmedNeedLedgerWindowDecision vocabulary;
 	// appliedWindow is the remembered relative window id, or "absolute".
 	RecordConfirmedNeedLedgerWindow(ctx context.Context, principal storage.Principal, decision ConfirmedNeedLedgerWindowDecision, sourceResultID, appliedWindow string)
+	// RecordRememberedWindowAxis reports the axis decision for a turn whose
+	// window the confirmed-need ledger remembered from its parent: once per
+	// such turn, after interpretation.
+	RecordRememberedWindowAxis(ctx context.Context, principal storage.Principal, decision rememberedWindowAxisDecision)
 	// RecordStructureNeedsDisclosed (CHAOS-3900 P1.F, design brief §2.1's
 	// cf_structure_needs_disclosed{member}) reports one member appearing
 	// in a composed StructureNeeds.Missing -- called once per member,
@@ -2118,6 +2122,15 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		executedTime, axisOutcome := decideContinuationAxis(continuation, interpretedTimeBound.Bound, interpretedTimeBound.Answerable(), clampedRequestTime, windowCommitted)
 		continuation.AxisOutcome = axisOutcome
 		if axisOutcome == ContinuationAxisOverriddenByReceipt {
+			interpretedTimeBound = resolveInterpretedTimeContext(executedTime, e.now())
+		}
+	} else if ledgerWindow.Applied() {
+		// The remembered window is the receipt's twin (CHAOS-5734 parity):
+		// the same axis rule, keyed on the same fact -- a window confirmed
+		// for this identical question.
+		executedTime, remembered := e.decideRememberedWindowAxis(carryCtx, principal, ledgerWindow, interpretedTimeBound.Bound, interpretedTimeBound.Answerable(), clampedRequestTime, windowCommitted)
+		e.recordRememberedWindowAxis(ctx, principal, remembered)
+		if remembered.Outcome == ContinuationAxisOverriddenByReceipt {
 			interpretedTimeBound = resolveInterpretedTimeContext(executedTime, e.now())
 		}
 	}

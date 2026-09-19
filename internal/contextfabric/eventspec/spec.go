@@ -1168,6 +1168,36 @@ var WindowContinuationDecision = Event{
 		{Key: "carried_axis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ContinuationDecisionLineVocabulary("carried_axis")},
 		{Key: "executed_axis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ContinuationDecisionLineVocabulary("executed_axis")},
 		{Key: "interpreted_axis_outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ContinuationDecisionLineVocabulary("interpreted_axis_outcome")},
+		// The axis decision's authority: the parent's relation to the window
+		// receipt, and whether the window was confirmed for this identical
+		// question (read apart from the window-only shape).
+		{Key: "parent_reference", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ContinuationDecisionLineVocabulary("parent_reference")},
+		{Key: "question_window_confirmed", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+	},
+}
+
+// RememberedWindowAxis is the once-per-request Info line
+// (telemetry.go, SlogEngineTelemetry.RecordRememberedWindowAxis) reporting the
+// axis decision for a turn whose window the confirmed-need ledger remembered
+// from its parent. Closed vocabularies are read from production
+// (contextfabric.RememberedWindowAxisLineVocabulary).
+var RememberedWindowAxis = Event{
+	ID:                 "contextfabric.remembered_window_axis",
+	Msg:                "context fabric remembered window axis",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per Investigate call, emitted only when the confirmed-need ledger applied a remembered window and interpretation produced an answerable-or-not fresh time.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		// Open: the parent result the remembered window came from.
+		{Key: "source_result_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "carrier_read", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RememberedWindowAxisLineVocabulary("carrier_read")},
+		{Key: "interpreted_axis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RememberedWindowAxisLineVocabulary("interpreted_axis")},
+		{Key: "carried_axis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RememberedWindowAxisLineVocabulary("carried_axis")},
+		{Key: "decided_axis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RememberedWindowAxisLineVocabulary("decided_axis")},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RememberedWindowAxisLineVocabulary("outcome")},
 		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
 	},
 }
@@ -2490,7 +2520,7 @@ var All = []Event{
 	Corroboration, CorroborationSummary, ReservedKindAdmitted, OfferPool, OfferPoolSummary,
 	Decision, SearchQuestion, AliasLookup, AnchorPool, KindCoverageFloor, ConfirmedKindRescue,
 	IdentityUniverse, KindHintSearch, ExactNameSearch, AnchorOffer,
-	AnchorKindWithheld, AnchorKindWithheldSummary, WindowContinuationDecision,
+	AnchorKindWithheld, AnchorKindWithheldSummary, WindowContinuationDecision, RememberedWindowAxis,
 	// CHAOS-5636: KindOffer/ConfirmedKindScope
 	// close out the two remaining "(only)" events; LowPopulationKindScope/
 	// IdentityGate/SliceBSurvivorVerdict each contribute a detail+summary

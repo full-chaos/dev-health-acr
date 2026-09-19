@@ -26,6 +26,7 @@ var ByID = map[string]Event{
 	"contextfabric.confirmed_need_ledger":          ConfirmedNeedLedger,
 	"contextfabric.count_population_scope":         CountPopulationScope,
 	"contextfabric.frame_validation":               FrameValidation,
+	"contextfabric.remembered_window_axis":         RememberedWindowAxis,
 	"contextfabric.requirement_outcome_transition": RequirementOutcomeTransition,
 	"contextfabric.retained_ranking_accounting":    RetainedRankingAccounting,
 	"contextfabric.semantic_state_persistence":     SemanticStatePersistence,
@@ -1208,6 +1209,68 @@ func (f FrameValidationFields) SlogArgs() []any {
 	}
 }
 
+// RememberedWindowAxisFields is contextfabric.remembered_window_axis's generated typed construction interface
+// (CHAOS-5516): one Go field per Field RememberedWindowAxis.Fields declares in spec.go.
+type RememberedWindowAxisFields struct {
+	OrgID           string
+	SourceResultID  string
+	CarrierRead     string
+	InterpretedAxis string
+	CarriedAxis     string
+	DecidedAxis     string
+	Outcome         string
+	RequestID       string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every RememberedWindowAxisFields uniformly, set ONLY by NewRememberedWindowAxisFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewRememberedWindowAxisFields is the generated constructor for RememberedWindowAxisFields -- every
+// field RememberedWindowAxis.Fields declares is a required parameter.
+func NewRememberedWindowAxisFields(orgID string, sourceResultID string, carrierRead string, interpretedAxis string, carriedAxis string, decidedAxis string, outcome string, requestID string) RememberedWindowAxisFields {
+	return RememberedWindowAxisFields{
+		OrgID:           orgID,
+		SourceResultID:  sourceResultID,
+		CarrierRead:     carrierRead,
+		InterpretedAxis: interpretedAxis,
+		CarriedAxis:     carriedAxis,
+		DecidedAxis:     decidedAxis,
+		Outcome:         outcome,
+		RequestID:       requestID,
+		constructed:     true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewRememberedWindowAxisFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f RememberedWindowAxisFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns RememberedWindowAxis's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f RememberedWindowAxisFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"source_result_id", contextfabric.SanitizeLogAttr(f.SourceResultID),
+		"carrier_read", contextfabric.SanitizeLogAttr(f.CarrierRead),
+		"interpreted_axis", contextfabric.SanitizeLogAttr(f.InterpretedAxis),
+		"carried_axis", contextfabric.SanitizeLogAttr(f.CarriedAxis),
+		"decided_axis", contextfabric.SanitizeLogAttr(f.DecidedAxis),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
 // RequirementOutcomeTransitionFields is contextfabric.requirement_outcome_transition's generated typed construction interface
 // (CHAOS-5516): one Go field per Field RequirementOutcomeTransition.Fields declares in spec.go.
 type RequirementOutcomeTransitionFields struct {
@@ -1755,6 +1818,8 @@ type WindowContinuationDecisionFields struct {
 	CarriedAxis                string
 	ExecutedAxis               string
 	InterpretedAxisOutcome     string
+	ParentReference            string
+	QuestionWindowConfirmed    bool
 	RequestID                  string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every WindowContinuationDecisionFields uniformly, set ONLY by NewWindowContinuationDecisionFields below. A caller
@@ -1769,7 +1834,7 @@ type WindowContinuationDecisionFields struct {
 
 // NewWindowContinuationDecisionFields is the generated constructor for WindowContinuationDecisionFields -- every
 // field WindowContinuationDecision.Fields declares is a required parameter.
-func NewWindowContinuationDecisionFields(orgID string, sourceResultID string, seedSource string, familyCarried string, familyFresh string, familyAccepted string, familySource string, continuationDisposition string, decisionReason string, comparisonEvaluated bool, agreement bool, conflictReason string, conflictCount int, conflictFields string, appliedWindow string, carriedContextID string, freshContextID string, acceptedContextID string, compositionOutcome string, compositionFailedInvariant string, refusalBasis string, referencedResultID string, carrierRead string, carriedStateRead string, requestIdentityMatch string, carriedState map[string]any, freshState map[string]any, windowReceiptCount int, explicitWindowPresent bool, interpretedAxis string, carriedAxis string, executedAxis string, interpretedAxisOutcome string, requestID string) WindowContinuationDecisionFields {
+func NewWindowContinuationDecisionFields(orgID string, sourceResultID string, seedSource string, familyCarried string, familyFresh string, familyAccepted string, familySource string, continuationDisposition string, decisionReason string, comparisonEvaluated bool, agreement bool, conflictReason string, conflictCount int, conflictFields string, appliedWindow string, carriedContextID string, freshContextID string, acceptedContextID string, compositionOutcome string, compositionFailedInvariant string, refusalBasis string, referencedResultID string, carrierRead string, carriedStateRead string, requestIdentityMatch string, carriedState map[string]any, freshState map[string]any, windowReceiptCount int, explicitWindowPresent bool, interpretedAxis string, carriedAxis string, executedAxis string, interpretedAxisOutcome string, parentReference string, questionWindowConfirmed bool, requestID string) WindowContinuationDecisionFields {
 	return WindowContinuationDecisionFields{
 		OrgID:                      orgID,
 		SourceResultID:             sourceResultID,
@@ -1804,6 +1869,8 @@ func NewWindowContinuationDecisionFields(orgID string, sourceResultID string, se
 		CarriedAxis:                carriedAxis,
 		ExecutedAxis:               executedAxis,
 		InterpretedAxisOutcome:     interpretedAxisOutcome,
+		ParentReference:            parentReference,
+		QuestionWindowConfirmed:    questionWindowConfirmed,
 		RequestID:                  requestID,
 		constructed:                true,
 	}
@@ -1855,6 +1922,8 @@ func (f WindowContinuationDecisionFields) SlogArgs() []any {
 		"carried_axis", contextfabric.SanitizeLogAttr(f.CarriedAxis),
 		"executed_axis", contextfabric.SanitizeLogAttr(f.ExecutedAxis),
 		"interpreted_axis_outcome", contextfabric.SanitizeLogAttr(f.InterpretedAxisOutcome),
+		"parent_reference", contextfabric.SanitizeLogAttr(f.ParentReference),
+		"question_window_confirmed", f.QuestionWindowConfirmed,
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }

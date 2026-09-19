@@ -1569,6 +1569,9 @@ func TestCHAOS4335_AxisConflictVeto_EchoesExplicitStructureHint(t *testing.T) {
 	request.Consumer.Surface = "mcp"
 	request.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{SubjectWorkItem}
 	request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "winr_confirm4335"}}
+	// A changed question: the confirmation speaks for the prior question only,
+	// so the moved axis meets the veto.
+	request.Question += " Include the drivers."
 
 	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
 	if err != nil {

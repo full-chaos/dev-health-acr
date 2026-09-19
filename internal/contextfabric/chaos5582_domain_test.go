@@ -19,7 +19,7 @@ func TestCHAOS5582_AxisDecisionInputDomain(t *testing.T) {
 	asOf := time.Unix(90, 0).UTC()
 	carried := &continuationCarriedContext{Family: QuestionFamilyGroupedCohortStatus, GroupKind: contractsv1.ContextFabricSubjectTeam}
 	applied := func(carriedAxis contractsv1.ContextFabricTemporalAxis) windowContinuationDecision {
-		return windowContinuationDecision{Observed: true, Disposition: ContinuationApplied, Accepted: carried, Carried: carried, CarriedAxis: carriedAxis, TransitionEstablished: true}
+		return windowContinuationDecision{Observed: true, Disposition: ContinuationApplied, Accepted: carried, Carried: carried, CarriedAxis: carriedAxis, TransitionEstablished: true, QuestionWindowConfirmed: true}
 	}
 	current := TimeContext{Axis: TemporalCurrent}
 	rangeFresh := TimeContext{Axis: TemporalRange, Start: &axis5582RangeStart, End: &axis5582RangeEnd}
@@ -58,10 +58,14 @@ func TestCHAOS5582_AxisDecisionInputDomain(t *testing.T) {
 		// transition x disposition (fresh drifted): the axis follows the
 		// established transition, never the applied reading
 		{"transition/not_established_but_applied", windowContinuationDecision{Disposition: ContinuationApplied, Accepted: carried, CarriedAxis: TemporalCurrent}, rangeFresh, true, current, true, TemporalRange, ContinuationAxisVetoed, nil, false},
-		{"transition/established_withheld", windowContinuationDecision{Disposition: ContinuationWithheld, CarriedAxis: TemporalCurrent, TransitionEstablished: true}, rangeFresh, true, current, true, TemporalCurrent, ContinuationAxisOverriddenByReceipt, nil, true},
-		{"transition/established_not_applicable", windowContinuationDecision{Disposition: ContinuationNotApplicable, CarriedAxis: TemporalCurrent, TransitionEstablished: true}, rangeFresh, true, current, true, TemporalCurrent, ContinuationAxisOverriddenByReceipt, nil, true},
+		{"transition/established_withheld", windowContinuationDecision{Disposition: ContinuationWithheld, CarriedAxis: TemporalCurrent, TransitionEstablished: true, QuestionWindowConfirmed: true}, rangeFresh, true, current, true, TemporalCurrent, ContinuationAxisOverriddenByReceipt, nil, true},
+		{"transition/established_not_applicable", windowContinuationDecision{Disposition: ContinuationNotApplicable, CarriedAxis: TemporalCurrent, TransitionEstablished: true, QuestionWindowConfirmed: true}, rangeFresh, true, current, true, TemporalCurrent, ContinuationAxisOverriddenByReceipt, nil, true},
 		{"transition/zero_decision", windowContinuationDecision{}, rangeFresh, true, current, true, TemporalRange, ContinuationAxisVetoed, nil, false},
-		{"transition/established_fresh_current", windowContinuationDecision{Disposition: ContinuationWithheld, CarriedAxis: TemporalCurrent, TransitionEstablished: true}, current, true, current, true, TemporalCurrent, ContinuationAxisAgreed, nil, true},
+		// the question-window confirmation alone (a co-redeemed offer or a
+		// stated scope beside the window receipt): the axis follows it
+		{"question_confirmed/not_window_only_shape", windowContinuationDecision{Disposition: ContinuationNotApplicable, CarriedAxis: TemporalCurrent, QuestionWindowConfirmed: true}, rangeFresh, true, current, true, TemporalCurrent, ContinuationAxisOverriddenByReceipt, nil, true},
+		{"question_confirmed/established_flag_alone_is_not_authority", windowContinuationDecision{Disposition: ContinuationWithheld, CarriedAxis: TemporalCurrent, TransitionEstablished: true}, rangeFresh, true, current, true, TemporalRange, ContinuationAxisVetoed, nil, false},
+		{"transition/established_fresh_current", windowContinuationDecision{Disposition: ContinuationWithheld, CarriedAxis: TemporalCurrent, TransitionEstablished: true, QuestionWindowConfirmed: true}, current, true, current, true, TemporalCurrent, ContinuationAxisAgreed, nil, true},
 		// window commitment x {false}
 		{"committed/false_fresh_range", applied(TemporalCurrent), rangeFresh, true, current, false, TemporalRange, ContinuationAxisNotEvaluated, nil, false},
 		{"committed/false_fresh_current", applied(TemporalCurrent), current, true, current, false, TemporalCurrent, ContinuationAxisNotEvaluated, nil, true},
@@ -338,7 +342,8 @@ func TestCHAOS5582_EveryExitPublishesTheAxisStateItReached(t *testing.T) {
 		// Base-branch siblings, each executed under a drifting fresh axis: a
 		// changed answer budget is decided after the transition is established
 		// (confirmed axis, fresh reading served); a stated scope disqualifies
-		// before any carrier is read (no transition, fresh axis governs).
+		// the transition (fresh reading) but not the window confirmed for this
+		// identical question (confirmed axis).
 		{name: "answer_budget_changed_under_drift",
 			mutate:      func(r *InvestigationRequest) { r.Options.MaxSerializedBytes = r.Options.MaxSerializedBytes / 2 },
 			interpreter: freshAxisInterpreter{family: QuestionFamilyDiscoveredCohortRanking, timeContext: axis5582DriftedAxes()[0].time},
@@ -346,8 +351,7 @@ func TestCHAOS5582_EveryExitPublishesTheAxisStateItReached(t *testing.T) {
 		{name: "requested_scope_under_drift",
 			mutate:      func(r *InvestigationRequest) { r.RequestedScope.RepositorySlugs = []string{"widget-service"} },
 			interpreter: freshAxisInterpreter{family: QuestionFamilyDiscoveredCohortRanking, timeContext: axis5582DriftedAxes()[0].time},
-			want:        map[string]any{"continuation_disposition": "not_applicable", "decision_reason": "explicit_structure_hint", "interpreted_axis": "range", "carried_axis": "", "executed_axis": "range", "interpreted_axis_outcome": "vetoed", "refusal_basis": "none"},
-			wantVetoed:  true},
+			want:        map[string]any{"continuation_disposition": "not_applicable", "decision_reason": "explicit_structure_hint", "interpreted_axis": "range", "carried_axis": "current", "executed_axis": "current", "interpreted_axis_outcome": "overridden_by_receipt", "refusal_basis": "none", "question_window_confirmed": true, "parent_reference": "absent"}},
 		// An unanswerable fresh BOUND on an established transition is a
 		// diagnostic like a drifted axis: overridden, answered, never refused.
 		{"unanswerable_fresh_bound_on_established_transition", nil, nil, freshAxisInterpreter{family: QuestionFamilyGroupedCohortStatus, timeContext: TimeContext{Axis: TemporalValidTime}}, false,
@@ -462,7 +466,10 @@ func TestCHAOS5582_TheLineVocabularyIsTheGuardsVocabulary(t *testing.T) {
 			d.ExecutedAxis = contractsv1.ContextFabricTemporalAxis(m)
 		},
 		"interpreted_axis_outcome": func(d *windowContinuationDecision, m string) { d.AxisOutcome = ContinuationAxisOutcome(m) },
-		"carrier_read":             func(d *windowContinuationDecision, m string) { d.CarrierRead = ContinuationCarrierRead(m) },
+		"parent_reference": func(d *windowContinuationDecision, m string) {
+			d.ParentReference = ContinuationParentReference(m)
+		},
+		"carrier_read": func(d *windowContinuationDecision, m string) { d.CarrierRead = ContinuationCarrierRead(m) },
 		"request_identity_match": func(d *windowContinuationDecision, m string) {
 			d.RequestIdentityMatch = ContinuationRequestIdentityMatch(m)
 		},

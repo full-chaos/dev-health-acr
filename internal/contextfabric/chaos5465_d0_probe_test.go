@@ -215,12 +215,16 @@ func TestWindowContinuation_D0ControlA_TheLegacyCarryStillApplies(t *testing.T) 
 	request := validInvestigationRequest()
 	request.Question = prior.Question
 	request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: prior.ResultID, ReceiptID: "winr_d0probe1aaaaaaaaaaaa"}}
-	// The parent makes the shape NOT window-only, so admission refuses and the
-	// legacy carry is the only route left.
-	request.ParentResultID = prior.ResultID
+	// A parent naming a DIFFERENT prior result makes the shape NOT window-only,
+	// so admission refuses and the legacy carry is the only route left. (A
+	// parent naming the receipt's own result is that same carrier, and keeps
+	// the shape.)
+	other := prior
+	other.ResultID = "result_d0_probe1_other"
+	request.ParentResultID = other.ResultID
 
 	// Turn one saved its accepted reading, as every production turn does.
-	store := withCarrierStates(t, &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}})
+	store := withCarrierStates(t, &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior, other.ResultID: other}})
 	telemetry := &recordingTelemetry{}
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	fresh := validInvestigationResult()

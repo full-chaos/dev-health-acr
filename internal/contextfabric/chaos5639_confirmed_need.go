@@ -253,9 +253,9 @@ type confirmedNeedLedgerResult struct {
 //
 // Uses carryLoadResult (chaos4360_carry.go) so a call already made for the
 // SAME result id within this Investigate call costs no second store round
-// trip; window-only continuations name a DIFFERENT id (D-d requires
-// ParentResultID empty for that shape), so the two mechanisms never share a
-// cache hit, only the cache itself.
+// trip. A window-only continuation names its carrier in the window receipt,
+// and a parent it also names is that same carrier, so the two mechanisms may
+// share a cache hit as well as the cache.
 func (e *Engine) resolveConfirmedNeedLedger(ctx context.Context, principal storage.Principal, request InvestigationRequest, binding ResolvedGraphBinding) confirmedNeedLedgerResult {
 	parent := carryParentSeed(request)
 	if parent == "" {

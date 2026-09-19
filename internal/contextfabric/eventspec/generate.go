@@ -134,6 +134,8 @@ func goVarName(e Event) string {
 		return "AnchorKindWithheldSummary"
 	case WindowContinuationDecision.ID:
 		return "WindowContinuationDecision"
+	case RememberedWindowAxis.ID:
+		return "RememberedWindowAxis"
 	case KindOffer.ID:
 		return "KindOffer"
 	case ConfirmedKindScope.ID:
