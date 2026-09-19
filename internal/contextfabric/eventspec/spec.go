@@ -1905,6 +1905,46 @@ var SynthesisRetrySelection = Event{
 	},
 }
 
+// SynthesisInput is the Info line one synthesize model call emits once its
+// prompt input is encoded: the shape of what the synthesizer was handed
+// (a digest of the encoded input plus counts of what it carries) beside the
+// shape of what it returned per draw, so a zero-claim answer can be
+// attributed to its input, or cleared of it, from the trace alone. Counts and
+// digests only -- no question text, no fact values. The scope is one line per
+// (request, encoded input, model): the fallback leg encodes the same input
+// under its own model id, so the two never share a scope.
+var SynthesisInput = Event{
+	ID:                 "contextfabric.synthesis_input",
+	Msg:                "context fabric synthesis input",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id", "input_digest", "model_id"},
+	BoundedAggregation: "at most one line per synthesize call, emitted when the call has encoded its model input; a call rejected before encoding emits none. Per-draw lists are bounded by the re-synthesis ceiling.",
+	Fields: []Field{
+		{Key: "org_id_hash", Type: FieldString, Presence: PresenceRequired},
+		{Key: "model_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "model_version", Type: FieldString, Presence: PresenceRequired},
+		{Key: "prompt_version", Type: FieldString, Presence: PresenceRequired},
+		{Key: "input_digest", Type: FieldString, Presence: PresenceRequired},
+		{Key: "input_bytes", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "facts", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "fact_evidence_refs", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "fact_evidence_refs_distinct", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "paths", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "driver_candidates", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "cohort_members", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired},
+		{Key: "draws_total", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "draw_outcomes", Type: FieldString, Presence: PresenceRequired},
+		{Key: "draw_claims", Type: FieldString, Presence: PresenceRequired},
+		{Key: "draw_output_digests", Type: FieldString, Presence: PresenceRequired},
+		{Key: "claims", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "drivers", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "evidence_refs", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+	},
+}
+
 // WorkItemMembershipS1 is the Info line emitted after the dormant PR2 reader
 // completes its one-statement S1 census. Counts are explicit even when zero;
 // an unmeasured result is identified by state/reason and never represented by
@@ -2427,6 +2467,7 @@ var All = []Event{
 	RequirementOutcomeTransition,
 	CompletenessAuthority,
 	SynthesisRetrySelection,
+	SynthesisInput,
 	WorkItemMembershipS1,
 	WorkItemMembershipGate,
 	WorkItemReuse,

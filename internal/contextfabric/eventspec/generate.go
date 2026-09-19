@@ -168,6 +168,8 @@ func goVarName(e Event) string {
 		return "CompletenessAuthority"
 	case SynthesisRetrySelection.ID:
 		return "SynthesisRetrySelection"
+	case SynthesisInput.ID:
+		return "SynthesisInput"
 	case WorkItemMembershipS1.ID:
 		return "WorkItemMembershipS1"
 	case WorkItemMembershipGate.ID:

@@ -20,6 +20,7 @@ import (
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/invopop/jsonschema"
@@ -1615,9 +1616,16 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		// state -- see the loop's own comment for the mechanism.
 		budgetChecked, budgetStopped        bool
 		budgetRemainingMS, budgetReservedMS int64
+		// inputTrace describes the encoded model input; nil until the call
+		// has encoded one, so a call rejected before encoding emits no
+		// input line (there is no input to describe).
+		inputTrace *synthesisInputTrace
 	)
 	defer func() {
 		r.logSynthesizeDecision(ctx, principal.OrgID, input.Request.RequestID, receipt, primaryFailureClassification, grounding, rejectionReason, factGroupSize, groundedBeyondFirst, attemptOutcomes, fallbackAttempts, primaryProvider, primaryModel, primaryModelVersion, draws, budgetChecked, budgetRemainingMS, budgetReservedMS, budgetStopped)
+		if inputTrace != nil {
+			r.logSynthesizeInput(ctx, principal.OrgID, input.Request.RequestID, *inputTrace, receipt, primaryModel, primaryModelVersion, grounding, draws)
+		}
 	}()
 
 	if strings.TrimSpace(principal.OrgID) == "" {
@@ -1628,6 +1636,8 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	if err != nil {
 		return contextfabric.SynthesisDraft{}, contextfabric.ModelExecutionReceipt{}, err
 	}
+	trace := newSynthesisInputTrace(encoded, input)
+	inputTrace = &trace
 
 	// setDiagnostics populates the two rejection fields from the error whose
 	// outcome the receipt reports -- and ONLY when that error really is a
@@ -1771,7 +1781,7 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		}
 		if err == nil {
 			outputBytes, _ := json.Marshal(output)
-			draws = append(draws, synthesisDraw{Index: draw, Outcome: "success", OutputDigest: contextfabric.DigestModelValue(outputBytes), Clause: contractsv1.ContextFabricClauseNone})
+			draws = append(draws, synthesisDraw{Index: draw, Outcome: "success", OutputDigest: contextfabric.DigestModelValue(outputBytes), Claims: len(output.ClaimedFacts), Clause: contractsv1.ContextFabricClauseNone})
 			break
 		}
 		// This draw's draft was rejected: record its digest and clause
@@ -1780,7 +1790,7 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		// draw is visible, not only the one this call ultimately reports.
 		rejectedBytes, _ := json.Marshal(output)
 		clause, _ := contextfabric.SynthesisRejectionClauseOf(err)
-		draws = append(draws, synthesisDraw{Index: draw, Outcome: "invalid_output", OutputDigest: contextfabric.DigestModelValue(rejectedBytes), Clause: clause})
+		draws = append(draws, synthesisDraw{Index: draw, Outcome: "invalid_output", OutputDigest: contextfabric.DigestModelValue(rejectedBytes), Claims: len(output.ClaimedFacts), Clause: clause})
 	}
 	completed := r.now().UTC()
 	attempts := len(attemptOutcomes)
@@ -2210,6 +2220,10 @@ type synthesisDraw struct {
 	// genuinely different output each time; identical digests would prove
 	// the extra draw bought nothing.
 	OutputDigest string
+	// Claims is how many claimed facts the raw model output carried,
+	// whether or not the draw validated -- the count the answer's status
+	// basis later depends on.
+	Claims int
 	// Clause is ContextFabricClauseNone for a successful draw or a rejection
 	// that does not delegate to a model-minted struct's own Validate() --
 	// see SynthesisRejection.Clause's own doc comment for which three
@@ -2250,6 +2264,63 @@ func formatSynthesisDrawClauses(draws []synthesisDraw) string {
 		parts = append(parts, fmt.Sprintf("%d:%s", draw.Index, string(draw.Clause)))
 	}
 	return strings.Join(parts, ",")
+}
+
+// formatSynthesisDrawClaims renders "1:0,2:3", index-aligned with
+// formatSynthesisDraws: the claimed-fact count of each draw's raw output.
+func formatSynthesisDrawClaims(draws []synthesisDraw) string {
+	parts := make([]string, 0, len(draws))
+	for _, draw := range draws {
+		parts = append(parts, fmt.Sprintf("%d:%d", draw.Index, draw.Claims))
+	}
+	return strings.Join(parts, ",")
+}
+
+// synthesisInputTrace is the shape of one encoded synthesis input: a digest of
+// the exact bytes sent to the model and counts of what they carry. It holds
+// no question text and no fact value.
+type synthesisInputTrace struct {
+	Digest                   string
+	Bytes                    int
+	Facts                    int
+	FactEvidenceRefs         int
+	FactEvidenceRefsDistinct int
+	Paths                    int
+	DriverCandidates         int
+	CohortMembers            int
+}
+
+func newSynthesisInputTrace(encoded []byte, input contextfabric.SynthesisInput) synthesisInputTrace {
+	refs, distinct := 0, map[string]struct{}{}
+	for _, fact := range input.Facts.Facts {
+		refs += len(fact.EvidenceRefIDs)
+		for _, id := range fact.EvidenceRefIDs {
+			distinct[id] = struct{}{}
+		}
+	}
+	members := 0
+	if input.Graph.Cohort != nil {
+		members = len(input.Graph.Cohort.Members)
+	}
+	return synthesisInputTrace{
+		Digest: contextfabric.DigestModelValue(encoded), Bytes: len(encoded),
+		Facts: len(input.Facts.Facts), FactEvidenceRefs: refs, FactEvidenceRefsDistinct: len(distinct),
+		Paths: len(input.Graph.Paths), DriverCandidates: len(input.Graph.DriverCandidates), CohortMembers: members,
+	}
+}
+
+// logSynthesizeInput emits the declared synthesis-input line: the encoded
+// input's shape beside each draw's output shape. It carries the PRIMARY leg's
+// model identity, because the input it describes is the one that leg sent.
+func (r *Runtime) logSynthesizeInput(ctx context.Context, orgID, requestID string, trace synthesisInputTrace, receipt contextfabric.ModelExecutionReceipt, model, modelVersion string, grounding synthesisGroundingCounts, draws []synthesisDraw) {
+	fields := eventspec.NewSynthesisInputFields(
+		decisionOrgIDHash(orgID), model, modelVersion, receipt.PromptVersion,
+		trace.Digest, trace.Bytes, trace.Facts, trace.FactEvidenceRefs, trace.FactEvidenceRefsDistinct,
+		trace.Paths, trace.DriverCandidates, trace.CohortMembers,
+		receipt.Outcome, len(draws), formatSynthesisDraws(draws), formatSynthesisDrawClaims(draws), formatSynthesisDrawDigests(draws),
+		grounding.Claims, grounding.Drivers, grounding.EvidenceRefs, requestID,
+	)
+	r.config.Logger.InfoContext(ctx, eventspec.SynthesisInput.Msg, fields.SlogArgs()...)
 }
 
 // drawsRetried mirrors attemptsRetried at draw granularity: the count of

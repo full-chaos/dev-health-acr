@@ -29,6 +29,7 @@ var ByID = map[string]Event{
 	"contextfabric.requirement_outcome_transition": RequirementOutcomeTransition,
 	"contextfabric.retained_ranking_accounting":    RetainedRankingAccounting,
 	"contextfabric.semantic_state_persistence":     SemanticStatePersistence,
+	"contextfabric.synthesis_input":                SynthesisInput,
 	"contextfabric.synthesis_retry_selection":      SynthesisRetrySelection,
 	"contextfabric.window_continuation_decision":   WindowContinuationDecision,
 	"contextfabric.work_item_authorization_gap":    WorkItemAuthorizationGap,
@@ -1455,6 +1456,107 @@ func (f SemanticStatePersistenceFields) SlogArgs() []any {
 		"encoded_bytes", f.EncodedBytes,
 		"encoded_cap", f.EncodedCap,
 		"state", f.State,
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// SynthesisInputFields is contextfabric.synthesis_input's generated typed construction interface
+// (CHAOS-5516): one Go field per Field SynthesisInput.Fields declares in spec.go.
+type SynthesisInputFields struct {
+	OrgIDHash                string
+	ModelID                  string
+	ModelVersion             string
+	PromptVersion            string
+	InputDigest              string
+	InputBytes               int
+	Facts                    int
+	FactEvidenceRefs         int
+	FactEvidenceRefsDistinct int
+	Paths                    int
+	DriverCandidates         int
+	CohortMembers            int
+	Outcome                  string
+	DrawsTotal               int
+	DrawOutcomes             string
+	DrawClaims               string
+	DrawOutputDigests        string
+	Claims                   int
+	Drivers                  int
+	EvidenceRefs             int
+	RequestID                string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every SynthesisInputFields uniformly, set ONLY by NewSynthesisInputFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewSynthesisInputFields is the generated constructor for SynthesisInputFields -- every
+// field SynthesisInput.Fields declares is a required parameter.
+func NewSynthesisInputFields(orgIDHash string, modelID string, modelVersion string, promptVersion string, inputDigest string, inputBytes int, facts int, factEvidenceRefs int, factEvidenceRefsDistinct int, paths int, driverCandidates int, cohortMembers int, outcome string, drawsTotal int, drawOutcomes string, drawClaims string, drawOutputDigests string, claims int, drivers int, evidenceRefs int, requestID string) SynthesisInputFields {
+	return SynthesisInputFields{
+		OrgIDHash:                orgIDHash,
+		ModelID:                  modelID,
+		ModelVersion:             modelVersion,
+		PromptVersion:            promptVersion,
+		InputDigest:              inputDigest,
+		InputBytes:               inputBytes,
+		Facts:                    facts,
+		FactEvidenceRefs:         factEvidenceRefs,
+		FactEvidenceRefsDistinct: factEvidenceRefsDistinct,
+		Paths:                    paths,
+		DriverCandidates:         driverCandidates,
+		CohortMembers:            cohortMembers,
+		Outcome:                  outcome,
+		DrawsTotal:               drawsTotal,
+		DrawOutcomes:             drawOutcomes,
+		DrawClaims:               drawClaims,
+		DrawOutputDigests:        drawOutputDigests,
+		Claims:                   claims,
+		Drivers:                  drivers,
+		EvidenceRefs:             evidenceRefs,
+		RequestID:                requestID,
+		constructed:              true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewSynthesisInputFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f SynthesisInputFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns SynthesisInput's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f SynthesisInputFields) SlogArgs() []any {
+	return []any{
+		"org_id_hash", contextfabric.SanitizeLogAttr(f.OrgIDHash),
+		"model_id", contextfabric.SanitizeLogAttr(f.ModelID),
+		"model_version", contextfabric.SanitizeLogAttr(f.ModelVersion),
+		"prompt_version", contextfabric.SanitizeLogAttr(f.PromptVersion),
+		"input_digest", contextfabric.SanitizeLogAttr(f.InputDigest),
+		"input_bytes", f.InputBytes,
+		"facts", f.Facts,
+		"fact_evidence_refs", f.FactEvidenceRefs,
+		"fact_evidence_refs_distinct", f.FactEvidenceRefsDistinct,
+		"paths", f.Paths,
+		"driver_candidates", f.DriverCandidates,
+		"cohort_members", f.CohortMembers,
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"draws_total", f.DrawsTotal,
+		"draw_outcomes", contextfabric.SanitizeLogAttr(f.DrawOutcomes),
+		"draw_claims", contextfabric.SanitizeLogAttr(f.DrawClaims),
+		"draw_output_digests", contextfabric.SanitizeLogAttr(f.DrawOutputDigests),
+		"claims", f.Claims,
+		"drivers", f.Drivers,
+		"evidence_refs", f.EvidenceRefs,
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }
