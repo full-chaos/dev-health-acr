@@ -56,11 +56,11 @@ func interpretRawGroupedMetric(t *testing.T, flatGroupKind string) (contextfabri
 	if err != nil {
 		t.Fatalf("ParseInterpretationOutputSignals() error = %v", err)
 	}
-	now := time.Date(2026, 8, 11, 20, 0, 0, 0, time.UTC)
+	started := time.Date(2026, 8, 11, 20, 0, 0, 0, time.UTC)
 	receipt := contextfabric.ModelExecutionReceipt{
 		Operation: contextfabric.ModelOperationInterpret, Provider: "test-provider", Model: "test-model", ModelVersion: "model-v1",
 		PromptVersion: "prompt-v1", SchemaVersion: "schema-v1", EvaluatorVersion: "eval-v1",
-		StartedAt: now, CompletedAt: now, Attempts: 1,
+		StartedAt: started, CompletedAt: started, Attempts: 1,
 		InputDigest: strings.Repeat("a", 64), OutputDigest: strings.Repeat("b", 64), Outcome: "success",
 	}
 	ApplyInterpretationCapture(&receipt, capture)
