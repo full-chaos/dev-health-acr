@@ -390,7 +390,7 @@ func freshLiveDatabase(t *testing.T) (*runtimeclickhouse.Client, clickhousedrive
 			t.Error(err)
 		}
 	})
-	for _, ddl := range devhealthschema.DDL("repos", "work_items", "projects", "project_membership_transitions") {
+	for _, ddl := range devhealthschema.DDL("repos", "work_items", "projects", "project_membership_transitions", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr") {
 		if err := direct.Exec(ctx, ddl); err != nil {
 			t.Fatal(err)
 		}

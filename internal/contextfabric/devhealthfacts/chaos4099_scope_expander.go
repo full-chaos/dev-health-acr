@@ -15,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-go/readers"
 )
 
 // CHAOS-4099 stage 2: the ClickHouse-backed contextfabric.FactScopeExpander
@@ -1526,9 +1527,16 @@ type workItemCandidate struct {
 	authorizationSlug string
 	repoLess          bool
 	orphaned          bool
-	basis             contextfabric.FactScopeBasis
-	attributionSource string
-	originRoot        contextfabric.SubjectRef
+	// authorizationPaths names every library authorization path that
+	// admitted the row (readers.WorkItemAuthorizationPaths vocabulary), and
+	// authorizationRepositories the granted repositories behind them. The
+	// second gate re-checks a repo-less row against those repositories
+	// rather than trusting the statement's own decision.
+	authorizationPaths        []string
+	authorizationRepositories []string
+	basis                     contextfabric.FactScopeBasis
+	attributionSource         string
+	originRoot                contextfabric.SubjectRef
 }
 
 // The two sentinels devhealthsource/clickhouse.go's workItemAuthorization
@@ -1563,89 +1571,26 @@ func workItemAuthorizationSlug(repoID, repoSlug string) string {
 	return orphanedRepositorySentinelForScope
 }
 
-// workItemScopeSelectionColumns documents the TWELVE columns every work-item
-// selection statement returns, in order, because the scanner depends on that
-// exact shape and a silent drift between the two is a mis-scan, not a compile
-// error:
+// workItemScopeSelectionColumns documents the TWENTY columns every
+// work-item selection statement returns, in order, because the scanner
+// depends on that exact shape and a silent drift between the two is a
+// mis-scan, not a compile error:
 //
 //	repo_id, work_item_id, repo_slug, origin_id, attribution_source,
-//	authorized, repo_less,
+//	authorized, repo_less, authorization_paths, authorization_repositories,
 //	scoped_population, authorized_population, repo_less_population,
-//	repo_less_denied, orphaned_population
+//	repo_less_denied, orphaned_population,
+//	organization_grant_population, direct_repo_population,
+//	project_ownership_population, pr_link_population,
+//	excluded_explicit_text_link_population, excluded_heuristic_link_population
 //
-// The first five are MASKED to ” on an unauthorized row (see
-// workItemAuthorizationExprSQL). The last FIVE are WINDOW aggregates over the
-// same relation, so the census and the page can never come from two different
-// observations -- D-a's "a count and page obtained from unrelated
-// observations cannot constitute a complete census", made mechanical.
-const workItemScopeSelectionColumns = "repo_id, work_item_id, repo_slug, origin_id, attribution_source, authorized, repo_less, scoped_population, authorized_population, repo_less_population, repo_less_denied, orphaned_population"
-
-// authorizedRepositoryScopesFor renders the principal's repository scope for
-// binding INTO the selection relation (D-c step 5: authorization is applied
-// before content projection, not as a Go filter afterwards).
-//
-// IT CARRIES graphrank.ScopeMatch'S RULE; IT DOES NOT RE-DERIVE ONE. The first
-// version bound the scope strings VERBATIM against an exact `IN` match, which
-// silently disagreed with the layer that owns repository authorization for
-// every wildcard scope: a principal scoped `*` is UNRESTRICTED there, and here
-// matched nothing, so every row was masked and the caller was served an empty
-// answer with no error and no disclosure. Found by codex r1 (graded P2),
-// reproduced in both arms before this fix, and pinned as a cross-layer
-// agreement test in both directions.
-//
-// The mapping, one line per rule in ScopeMatch/auth.RepositoryAllowed:
-//
-//   - no scopes at all -> unrestricted. Both lists empty.
-//   - any `*` scope -> unrestricted, whatever else is present. `*` admits
-//     unconditionally there, so a list carrying it can only be widened by its
-//     other members, never narrowed.
-//   - `owner/*` -> the OWNER, lowercased, into the owners list. The SQL
-//     compares it against the owner segment of the row's own slug.
-//   - anything else -> an exact slug, trimmed and LOWERCASED, into the slugs
-//     list. ScopeMatch's exact arm normalises a repository slug on both sides
-//     (auth.NormalizeRepositorySlug lowercases), so this is what makes the two
-//     gates agree on a slug that differs only in case.
-//
-// The two sentinel populations (repo-less, orphaned) carry no slug and so
-// authorize ONLY under the unrestricted arm -- unchanged, and the reason the
-// predicate cannot simply drop its empty-list special case.
-func authorizedRepositoryScopesFor(principal storage.Principal) (slugs []string, owners []string) {
-	for _, raw := range principal.RepositoryScopes {
-		// TRIMMED AND LOWERCASED, both sides (chris, 2026-09-09: "Case
-		// insensitive is the only way to search"). ScopeMatch's exact arm now
-		// normalises a repository slug on both sides through
-		// auth.NormalizeRepositorySlug, which lowercases -- so lowercasing
-		// here is what makes this predicate agree with it rather than
-		// disagree.
-		//
-		// The order this arrived in is worth keeping: the first version
-		// lowercased, the agreement test caught it disagreeing with a
-		// then-case-SENSITIVE ScopeMatch, and the resolution was that
-		// ScopeMatch was the side that was wrong. The test did its job twice
-		// -- once against the predicate, once against the rule.
-		scope := strings.ToLower(strings.TrimSpace(raw))
-		switch {
-		case scope == "":
-			// An empty entry is not a scope. Dropping it rather than binding
-			// it keeps a malformed list from accidentally matching a row
-			// whose own slug failed to resolve.
-			continue
-		case scope == "*":
-			return nil, nil
-		default:
-			if owner, ok := strings.CutSuffix(scope, "/*"); ok && owner != "" {
-				// Already lowercased with the whole scope above; ScopeMatch
-				// lowercases the scope's owner and compares it against the
-				// owner of a NORMALIZED entry, so this arm is
-				// case-insensitive on both sides too.
-				owners = append(owners, owner)
-				continue
-			}
-			slugs = append(slugs, scope)
-		}
-	}
-	return slugs, owners
-}
+// The first five and the two authorization arrays are MASKED on an
+// unauthorized row (see workItemScopeAuthorizationColumnsSQL). The last ELEVEN
+// are WINDOW aggregates over the same relation, so the census and the page
+// can never come from two different observations -- D-a's "a count and page
+// obtained from unrelated observations cannot constitute a complete census",
+// made mechanical.
+const workItemScopeSelectionColumns = "repo_id, work_item_id, repo_slug, origin_id, attribution_source, authorized, repo_less, authorization_paths, authorization_repositories, scoped_population, authorized_population, repo_less_population, repo_less_denied, orphaned_population, organization_grant_population, direct_repo_population, project_ownership_population, pr_link_population, excluded_explicit_text_link_population, excluded_heuristic_link_population"
 
 // projectWorkItems runs the ONE-HOP project chain: project -> work_item,
 // stopping at the work item rather than continuing to its repository.
@@ -1672,8 +1617,10 @@ func (e *ScopeExpander) projectWorkItems(ctx context.Context, principal storage.
 		// decision record can say origin_unresolved rather than "empty".
 		return nil, contextfabric.FactScopeExpansionCounts{AmbiguousOriginCount: len(origins)}, nil
 	}
-	statement := projectWorkItemSelectionSQL(limit)
-	return e.scanWorkItemCandidates(ctx, statement, orgID, principal, []contextpacket.ClickHouseBinding{
+	scope := workItemRepositoryAuthorization(principal, nil)
+	rendered := readers.WorkItemScopeSQL(scope)
+	statement := projectWorkItemSelectionSQL(rendered, limit)
+	return e.scanWorkItemCandidates(ctx, statement, orgID, scope, rendered, []contextpacket.ClickHouseBinding{
 		{Name: "project_ids", Value: projectKeys},
 	}, projectOriginsByKey(origins), limit, false)
 }
@@ -1698,22 +1645,24 @@ func (e *ScopeExpander) teamWorkItems(ctx context.Context, principal storage.Pri
 	if len(teamIDs) == 0 {
 		return nil, contextfabric.FactScopeExpansionCounts{AmbiguousOriginCount: len(origins)}, nil
 	}
+	scope := workItemRepositoryAuthorization(principal, nil)
+	rendered := readers.WorkItemScopeSQL(scope)
 	statement := workItemScopeProjection(`  SELECT toString(w.repo_id) AS repo_id, w.work_item_id AS work_item_id, ifNull(r.repo, '') AS repo_slug, min(a.team_id) AS origin_id, argMin(toString(a.source), `+teamAttributionSourceRankSQL+`) AS attribution_source,
-    `+workItemAuthorizationExprSQL+` AS authorized,
+`+workItemScopeAuthorizationColumnsSQL(rendered)+`,
     toUInt8(toString(w.repo_id) = '`+zeroRepositoryID+`') AS repo_less,
     toUInt8(toString(w.repo_id) != '`+zeroRepositoryID+`' AND ifNull(r.repo, '') = '') AS orphaned
 FROM work_item_team_attributions AS a FINAL
-INNER JOIN (SELECT work_item_id, repo_id, org_id FROM work_items FINAL WHERE org_id = {org_id:String}) AS w ON w.work_item_id = a.work_item_id AND w.repo_id = a.repo_id AND w.org_id = a.org_id
-LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
+INNER JOIN (SELECT work_item_id, repo_id, org_id, provider, project_id FROM work_items FINAL WHERE org_id = {org_id:String}) AS w ON w.work_item_id = a.work_item_id AND w.repo_id = a.repo_id AND w.org_id = a.org_id
+`+rendered.JoinSQL+`
 WHERE a.org_id = {org_id:String} AND a.is_primary = 1 AND a.team_id IN {team_ids:Array(String)}
 GROUP BY toString(w.repo_id), w.work_item_id, ifNull(r.repo, '')`, limit)
-	return e.scanWorkItemCandidates(ctx, statement, orgID, principal, []contextpacket.ClickHouseBinding{
+	return e.scanWorkItemCandidates(ctx, statement, orgID, scope, rendered, []contextpacket.ClickHouseBinding{
 		{Name: "team_ids", Value: teamIDs},
 	}, teamOriginsByRawID(origins), limit, true)
 }
 
-// workItemAuthorizationExprSQL is D-c step 5 in SQL -- and it is a PROJECTION
-// MASK, never a row filter. That distinction is the whole design.
+// workItemScopeAuthorizationColumnsSQL is D-c step 5 in SQL -- and it is a
+// PROJECTION MASK, never a row filter. That distinction is the whole design.
 //
 // The obvious reading of "apply target authorization inside the selection
 // relation before content projection" is a WHERE clause. That was implemented
@@ -1737,17 +1686,42 @@ GROUP BY toString(w.repo_id), w.work_item_id, ifNull(r.repo, '')`, limit)
 // is count-only disclosure and honest telemetry at the same time, rather than
 // trading one for the other.
 //
-// An EMPTY bound array means organization-wide, matching
-// graphrank.AuthorizedAttributes' own rule that a principal naming no
-// repositories is unrestricted. The two sentinel populations have no slug to
-// compare, so they authorize only under that empty-array arm -- which is
-// precisely the ruled behaviour: neither an authorized project nor an
-// authorized team upgrades a repository-restricted principal.
-const workItemAuthorizationExprSQL = `toUInt8(
-    (empty({authorized_repository_slugs:Array(String)}) AND empty({authorized_repository_owners:Array(String)}))
-    OR (ifNull(r.repo, '') != '' AND lower(ifNull(r.repo, '')) IN {authorized_repository_slugs:Array(String)})
-    OR (ifNull(r.repo, '') != '' AND lower(splitByChar('/', ifNull(r.repo, ''))[1]) IN {authorized_repository_owners:Array(String)})
-  )`
+// THE RULE IS THE LIBRARY'S. The decision is readers.WorkItemScopeSQL's
+// AuthorizationExpr over the same principal translation every other
+// work-item reader uses (workItemRepositoryAuthorization), so this traversal
+// and the S1 census and content readers cannot disagree about who may see a
+// work item. A repo-less item is admitted for a repository-scoped principal
+// when its project's owning teams, or its linked pull requests, reach a
+// granted repository; with neither it stays masked. The row also carries
+// which paths admitted it and the granted repositories behind them, for
+// the second gate and the trace.
+//
+// any() because the expressions read the item's own columns and its joined
+// authorization aggregates, all functionally dependent on the GROUP BY key
+// (one work item per group); any() takes that one value without adding
+// every such column to the key.
+func workItemScopeAuthorizationColumnsSQL(rendered readers.WorkItemScopeSQLResult) string {
+	names := make([]string, 0, len(rendered.Provenance))
+	repositories := make([]string, 0, len(rendered.Provenance))
+	for _, path := range rendered.Provenance {
+		names = append(names, "if("+path.Expr+", '"+path.Path+"', '')")
+		repositories = append(repositories, path.RepositoriesExpr)
+	}
+	pathsSQL := "CAST([], 'Array(String)')"
+	repositoriesSQL := "CAST([], 'Array(String)')"
+	excludedSQL := "CAST([], 'Array(String)')"
+	if rendered.ExcludedLinkProvenancesExpr != "" {
+		excludedSQL = rendered.ExcludedLinkProvenancesExpr
+	}
+	if len(names) > 0 {
+		pathsSQL = "arrayFilter(path -> path != '', [" + strings.Join(names, ", ") + "])"
+		repositoriesSQL = "arraySort(arrayDistinct(arrayConcat(" + strings.Join(repositories, ", ") + ")))"
+	}
+	return `    any(toUInt8(` + rendered.AuthorizationExpr + `)) AS authorized,
+    any(` + pathsSQL + `) AS authorization_paths,
+    any(` + repositoriesSQL + `) AS authorization_repositories,
+    any(` + excludedSQL + `) AS authorization_excluded_links`
+}
 
 // workItemScopeProjection wraps one inner selection in the masking outer
 // projection plus the three window aggregates the census needs.
@@ -1765,6 +1739,11 @@ func workItemScopeProjection(inner string, limit int) string {
   if(authorized = 1, attribution_source, '') AS attribution_source,
   authorized,
   repo_less,
+  -- The two authorization arrays need no mask: the library makes every
+  -- path expression imply the row's authorization, so a denied row's
+  -- arrays are empty by construction.
+  authorization_paths,
+  authorization_repositories,
   count() OVER () AS scoped_population,
   countIf(authorized = 1) OVER () AS authorized_population,
   -- THE REPO-LESS CANDIDATE POPULATION, authorized or not, over the WHOLE
@@ -1781,7 +1760,17 @@ func workItemScopeProjection(inner string, limit int) string {
   -- odd one out.
   countIf(repo_less = 1) OVER () AS repo_less_population,
   countIf(repo_less = 1 AND authorized = 0) OVER () AS repo_less_denied,
-  countIf(orphaned = 1) OVER () AS orphaned_population
+  countIf(orphaned = 1) OVER () AS orphaned_population,
+  -- One population per library authorization path, each over the whole
+  -- relation. A row two paths admit counts under both.
+  countIf(authorized = 1 AND has(authorization_paths, 'organization_grant')) OVER () AS organization_grant_population,
+  countIf(authorized = 1 AND has(authorization_paths, 'direct_repo')) OVER () AS direct_repo_population,
+  countIf(authorized = 1 AND has(authorization_paths, 'project_ownership')) OVER () AS project_ownership_population,
+  countIf(authorized = 1 AND has(authorization_paths, 'pr_link')) OVER () AS pr_link_population,
+  -- Rows with a link to a granted repository that is evidence, not a grant
+  -- (only native links authorize), by kind, authorized or not.
+  countIf(has(authorization_excluded_links, 'explicit_text')) OVER () AS excluded_explicit_text_link_population,
+  countIf(has(authorization_excluded_links, 'heuristic')) OVER () AS excluded_heuristic_link_population
 FROM (
 ` + inner + `
 )
@@ -1803,23 +1792,33 @@ func (e *ScopeExpander) scanWorkItemCandidates(
 	ctx context.Context,
 	statement string,
 	orgID string,
-	principal storage.Principal,
+	scope readers.AuthorizationScope,
+	rendered readers.WorkItemScopeSQLResult,
 	extraBindings []contextpacket.ClickHouseBinding,
 	originsByID map[string]contextfabric.SubjectRef,
 	limit int,
 	teamOrigin bool,
 ) ([]workItemCandidate, contextfabric.FactScopeExpansionCounts, error) {
-	authorizedSlugs, authorizedOwners := authorizedRepositoryScopesFor(principal)
-	bindings := append([]contextpacket.ClickHouseBinding{
-		{Name: "org_id", Value: orgID},
-		{Name: "authorized_repository_slugs", Value: authorizedSlugs},
-		{Name: "authorized_repository_owners", Value: authorizedOwners},
-	}, extraBindings...)
+	bindings := append([]contextpacket.ClickHouseBinding{{Name: "org_id", Value: orgID}}, rendered.Bindings...)
+	bindings = append(bindings, extraBindings...)
 
-	counts := contextfabric.FactScopeExpansionCounts{}
+	grant := workItemMembershipGrantShape(scope)
+	// The grant shape is the traversal's pre-entry state: set before the
+	// query so a failed read still says what it was asked to authorize.
+	counts := contextfabric.FactScopeExpansionCounts{
+		AuthorizationGrantMeasured:         true,
+		AuthorizationGrantOrganizationWide: grant.OrganizationWide,
+		AuthorizationGrantExactSelectors:   grant.ExactSelectors,
+		AuthorizationGrantOwnerSelectors:   grant.OwnerSelectors,
+	}
+	// The same physical row ceiling as the content readers: the selection
+	// reads the organization-wide authorization aggregates, and its result
+	// LIMIT bounds only what comes back, not what is read. A ceiling hit is
+	// reported as a read-limit failure, never as a generic backend fault.
+	statement = readers.WithSettings(statement, readers.Settings{MaxRowsToRead: workItemScopeSelectionMaxRowsToRead})
 	rows, err := e.client.Query(ctx, statement, bindings)
 	if err != nil {
-		return nil, counts, err
+		return nil, counts, workItemScopeReadError(err)
 	}
 	defer rows.Close()
 
@@ -1828,9 +1827,15 @@ func (e *ScopeExpander) scanWorkItemCandidates(
 	for rows.Next() {
 		var repoID, workItemID, repoSlug, originID, attributionSource string
 		var authorized, repoLess uint8
+		var authorizationPaths, authorizationRepositories []string
 		var scopedPopulation, authorizedPopulation, repoLessPopulation, repoLessDenied, orphanedPopulation uint64
+		var organizationGrantPopulation, directRepoPopulation, projectOwnershipPopulation, pullRequestLinkPopulation uint64
+		var excludedExplicitTextPopulation, excludedHeuristicPopulation uint64
 		if err := rows.Scan(&repoID, &workItemID, &repoSlug, &originID, &attributionSource,
-			&authorized, &repoLess, &scopedPopulation, &authorizedPopulation, &repoLessPopulation, &repoLessDenied, &orphanedPopulation); err != nil {
+			&authorized, &repoLess, &authorizationPaths, &authorizationRepositories,
+			&scopedPopulation, &authorizedPopulation, &repoLessPopulation, &repoLessDenied, &orphanedPopulation,
+			&organizationGrantPopulation, &directRepoPopulation, &projectOwnershipPopulation, &pullRequestLinkPopulation,
+			&excludedExplicitTextPopulation, &excludedHeuristicPopulation); err != nil {
 			return nil, contextfabric.FactScopeExpansionCounts{}, err
 		}
 		returned++
@@ -1847,6 +1852,12 @@ func (e *ScopeExpander) scanWorkItemCandidates(
 		counts.RepoLessCandidateCount = int(repoLessPopulation)
 		counts.RepoLessAuthorizationDroppedCount = int(repoLessDenied)
 		counts.OrphanedRepositoryCount = int(orphanedPopulation)
+		counts.OrganizationGrantAuthorizedCount = int(organizationGrantPopulation)
+		counts.DirectRepositoryAuthorizedCount = int(directRepoPopulation)
+		counts.ProjectOwnershipAuthorizedCount = int(projectOwnershipPopulation)
+		counts.PullRequestLinkAuthorizedCount = int(pullRequestLinkPopulation)
+		counts.ExcludedExplicitTextLinkCount = int(excludedExplicitTextPopulation)
+		counts.ExcludedHeuristicLinkCount = int(excludedHeuristicPopulation)
 		// AuthorizationDroppedCount comes from the AGGREGATES, never from
 		// counting masked rows on this page: the projection orders admissible
 		// rows first, so a denied row may not be on the page at all, and the
@@ -1872,14 +1883,16 @@ func (e *ScopeExpander) scanWorkItemCandidates(
 		}
 
 		candidate := workItemCandidate{
-			repoID:            repoID,
-			repoSlug:          repoSlug,
-			workItemID:        workItemID,
-			authorizationSlug: workItemAuthorizationSlug(repoID, repoSlug),
-			repoLess:          repoLess == 1,
-			orphaned:          repoID != zeroRepositoryID && repoSlug == "",
-			attributionSource: attributionSource,
-			originRoot:        originsByID[originID],
+			repoID:                    repoID,
+			repoSlug:                  repoSlug,
+			workItemID:                workItemID,
+			authorizationSlug:         workItemAuthorizationSlug(repoID, repoSlug),
+			repoLess:                  repoLess == 1,
+			orphaned:                  repoID != zeroRepositoryID && repoSlug == "",
+			authorizationPaths:        authorizationPaths,
+			authorizationRepositories: authorizationRepositories,
+			attributionSource:         attributionSource,
+			originRoot:                originsByID[originID],
 		}
 		if teamOrigin {
 			// A closed vocabulary, and an unrecognised source is a REFUSAL,
@@ -1900,7 +1913,7 @@ func (e *ScopeExpander) scanWorkItemCandidates(
 		candidates = append(candidates, candidate)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, contextfabric.FactScopeExpansionCounts{}, err
+		return nil, contextfabric.FactScopeExpansionCounts{}, workItemScopeReadError(err)
 	}
 	// THE CENSUS COMPLETED BECAUSE THE QUERY DID, not because a row came
 	// back (codex r1 P1, reproduced before it was fixed: an empty successful
@@ -1949,7 +1962,11 @@ func knownComputedAttributionSource(source string) bool {
 // It re-uses the SAME primitive the repository hop uses --
 // graphrank.AuthorizedAttributes via authorizedForRepository -- applied to the
 // candidate's authorization slug, which for a repo-less or orphaned row is the
-// sentinel rather than a manufactured repository.
+// sentinel rather than a manufactured repository. A repo-less row the
+// sentinel does not admit is re-checked against the granted repositories its
+// project-ownership or pull-request-link path returned; it is admitted only
+// when one of those repositories passes the same primitive, and never on the
+// statement's flag alone.
 func authorizeWorkItems(principal storage.Principal, candidates []workItemCandidate) ([]contextfabric.SubjectRef, map[string]contextfabric.FactScopeBasis, map[string]string, map[string]contextfabric.SubjectRef, contextfabric.FactScopeExpansionCounts) {
 	targets := make([]contextfabric.SubjectRef, 0, len(candidates))
 	var targetBasis map[string]contextfabric.FactScopeBasis
@@ -1958,7 +1975,17 @@ func authorizeWorkItems(principal storage.Principal, candidates []workItemCandid
 	counts := contextfabric.FactScopeExpansionCounts{}
 
 	for _, candidate := range candidates {
-		if !authorizedForRepository(principal, candidate.authorizationSlug) {
+		admitted := authorizedForRepository(principal, candidate.authorizationSlug)
+		derived := false
+		if !admitted && candidate.repoLess && workItemDerivedPath(candidate.authorizationPaths) {
+			for _, repository := range candidate.authorizationRepositories {
+				if authorizedForRepository(principal, repository) {
+					admitted, derived = true, true
+					break
+				}
+			}
+		}
+		if !admitted {
 			// The mask should already have caught this. Reaching here means
 			// the two gates DISAGREE, which is a defect in the statement --
 			// counted as a drop rather than admitted on the SQL's word.
@@ -1982,6 +2009,16 @@ func authorizeWorkItems(principal storage.Principal, candidates []workItemCandid
 		targets = append(targets, target)
 		if candidate.repoLess {
 			counts.RepoLessAdmittedCount++
+		}
+		if derived {
+			for _, path := range candidate.authorizationPaths {
+				switch path {
+				case readers.WorkItemAuthorizationProjectOwnership:
+					counts.ProjectOwnershipAdmittedCount++
+				case readers.WorkItemAuthorizationPullRequestLink:
+					counts.PullRequestLinkAdmittedCount++
+				}
+			}
 		}
 		key := contextfabric.FactSubjectKey(target)
 		if candidate.basis != "" {
@@ -2031,6 +2068,34 @@ func refuseNonCurrentWorkItemAxis(request contextfabric.FactScopeExpansionReques
 	}
 }
 
+// workItemScopeSelectionMaxRowsToRead is the work-item selection's physical
+// row ceiling: the content readers' derived bound (the measured project
+// expansion read, 24,001 rows on the trial store, sits within it). A
+// package var only so a real-ClickHouse test can lower it and observe the
+// read-limit classification.
+var workItemScopeSelectionMaxRowsToRead = workItemReaderMaxRowsToRead
+
+// workItemScopeReadError marks a physical read-limit failure of a work-item
+// selection so the resolver classifies it as such; any other error passes
+// through unchanged.
+func workItemScopeReadError(err error) error {
+	if err != nil && classifyWorkItemMembershipS1Error(err) == contextfabric.WorkItemMembershipUnmeasuredReadLimitExceeded {
+		return fmt.Errorf("devhealthfacts: work-item scope selection: %w: %w", contextfabric.ErrFactScopeReadLimitExceeded, err)
+	}
+	return err
+}
+
+// workItemDerivedPath reports whether a row's paths include one of the two
+// repo-less paths whose repositories the second gate may re-check.
+func workItemDerivedPath(paths []string) bool {
+	for _, path := range paths {
+		if path == readers.WorkItemAuthorizationProjectOwnership || path == readers.WorkItemAuthorizationPullRequestLink {
+			return true
+		}
+	}
+	return false
+}
+
 // workItemExpansionResult applies the second authorization gate and folds its
 // counts into the traversal's, so both work-item arms return an identically
 // shaped result and neither can forget the gate.
@@ -2040,6 +2105,8 @@ func workItemExpansionResult(principal storage.Principal, candidates []workItemC
 	counts.RepoLessAdmittedCount += authCounts.RepoLessAdmittedCount
 	counts.RepoLessAuthorizationDroppedCount += authCounts.RepoLessAuthorizationDroppedCount
 	counts.MalformedTouchCount += authCounts.MalformedTouchCount
+	counts.ProjectOwnershipAdmittedCount += authCounts.ProjectOwnershipAdmittedCount
+	counts.PullRequestLinkAdmittedCount += authCounts.PullRequestLinkAdmittedCount
 	return contextfabric.FactScopeExpansionResult{
 		Targets: targets, TargetBasis: targetBasis,
 		TargetAttributionSource: targetSource, TargetRoot: targetRoot,
@@ -2057,9 +2124,9 @@ func workItemExpansionResult(principal storage.Principal, candidates []workItemC
 // client can observe, and the substring guards that stood in for them were
 // satisfied by a mutant that put the expected text in an SQL comment. The
 // answer is to execute it, which needs the string to be reachable.
-func projectWorkItemSelectionSQL(limit int) string {
+func projectWorkItemSelectionSQL(rendered readers.WorkItemScopeSQLResult, limit int) string {
 	return workItemScopeProjection(`  SELECT toString(w.repo_id) AS repo_id, w.work_item_id AS work_item_id, ifNull(r.repo, '') AS repo_slug, min(concat(p.provider, '`+projectOriginKeySeparator+`', p.id)) AS origin_id, '' AS attribution_source,
-    `+workItemAuthorizationExprSQL+` AS authorized,
+`+workItemScopeAuthorizationColumnsSQL(rendered)+`,
     toUInt8(toString(w.repo_id) = '`+zeroRepositoryID+`') AS repo_less,
     toUInt8(toString(w.repo_id) != '`+zeroRepositoryID+`' AND ifNull(r.repo, '') = '') AS orphaned
 FROM work_items AS w FINAL
@@ -2087,7 +2154,7 @@ INNER JOIN (
   -- to be the same string. Joining on the key alone admitted a jira work item
   -- as scope for a linear project.
   ON p.join_key = w.project_id AND p.provider = w.provider
-LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
+`+rendered.JoinSQL+`
 -- The requested origins are bound PROVIDER-QUALIFIED for the same reason (see
 -- decodeProjectOriginKeys): the caller named a canonical project, and its
 -- provider is half of that name.

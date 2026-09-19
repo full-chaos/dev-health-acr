@@ -110,7 +110,13 @@ import (
 // derives ObligationPeriodDelta -- see chaos5990_period_delta.go. A
 // candidate saved under v10 never issued the second as-of read and must
 // not be served as though its period_delta fields were computed.
-const QueryVersion = "devhealthfacts.clickhouse.v11"
+//
+// v11 -> v12: every work-item reader evaluates the shared authorization
+// relation that admits a repo-less item through its project's owned
+// repositories or a native pull-request link. A candidate saved under v11
+// was authorized by the repository column alone and must not be served as
+// though it had been authorized by the wider rule.
+const QueryVersion = "devhealthfacts.clickhouse.v12"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

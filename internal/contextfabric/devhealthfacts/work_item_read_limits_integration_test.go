@@ -78,8 +78,13 @@ func TestChaos5751WorkItemReaderPhysicalAndMemoryBudgetLimitsAgainstRealClickHou
 	for _, read := range reads {
 		read := read
 		t.Run("two-row control completes under independent ceilings/"+read.name, func(t *testing.T) {
+			// The physical read is the two work items plus the one seeded
+			// repos row, read once by each of the relation's three
+			// repository reads (the item's own repository and the two
+			// authorization aggregates); the ownership and link tables are
+			// empty here.
 			rows, err := read.call(readers.Settings{
-				MaxRowsToRead:  uint64(len(ids) + 1),
+				MaxRowsToRead:  uint64(len(ids) + 3),
 				MaxMemoryUsage: 512 << 20,
 				MaxThreads:     1,
 				MaxResultRows:  uint64(len(ids) + 1),
@@ -225,7 +230,7 @@ func newWorkItemReadLimitFixture(t *testing.T, ctx context.Context) (*runtimecli
 	if err != nil {
 		t.Fatalf("open work-item read-limit production query client (container_id=%q): %v", containerID, err)
 	}
-	for _, statement := range devhealthschema.DDL("repos", "work_items") {
+	for _, statement := range devhealthschema.DDL("repos", "work_items", "projects", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create work-item read-limit production table (container_id=%q): %v\n%s", containerID, err, statement)
 		}

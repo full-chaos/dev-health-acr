@@ -88,12 +88,20 @@ func freshTupleResolvedS1Rows(members [][]any) ([][]any, error) {
 		if len(member) != 10 {
 			return nil, fmt.Errorf("resolved S1 fixture member width %d != 10", len(member))
 		}
-		row := make([]any, 12)
-		copy(row, member)
-		row[10], row[11] = uint8(0), uint8(1)
+		// The eight census fields, the nine per-path census columns (four
+		// authorization paths, repo-less, repo-less denied, denied
+		// project-less, two excluded link kinds), the two counters, then the
+		// row kind and the anchor resolution.
+		row := append(append(append([]any{}, member[:8]...), s1PathZeros()...), member[8:]...)
+		row = append(row, uint8(0), uint8(1))
 		rows = append(rows, row)
 	}
-	return append(rows, []any{"", "", "", "", uint8(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint8(1), uint8(1)}), nil
+	sentinel := append(append([]any{"", "", "", "", uint8(0), uint64(0), uint64(0), uint64(0)}, s1PathZeros()...), uint64(0), uint64(0), uint8(1), uint8(1))
+	return append(rows, sentinel), nil
+}
+
+func s1PathZeros() []any {
+	return []any{uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0)}
 }
 
 type freshTupleQueryRows struct {

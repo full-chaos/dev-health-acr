@@ -36,6 +36,18 @@ func workItemRepositoryAuthorization(principal storage.Principal, requested []st
 	}
 }
 
+// workItemAuthorizedIDsSQL is the set of work_item_id values the scope
+// authorizes, for a statement that names a work item by its id alone (a
+// dependency edge carries no repository). An id is in the set only when
+// EVERY stored row carrying it is authorized, so an id shared by an
+// authorized and an unauthorized row is left out; an id with no work_items
+// row is left out too. The rule is the library's, over its own aliases,
+// inside an uncorrelated subquery, so it never meets the caller's aliases.
+func workItemAuthorizedIDsSQL(scope readers.AuthorizationScope) (string, []readers.Binding) {
+	rendered := readers.WorkItemScopeSQL(scope)
+	return `(SELECT w.work_item_id FROM work_items AS w FINAL ` + rendered.JoinSQL + ` WHERE w.org_id = {org_id:String} GROUP BY w.work_item_id HAVING min(toUInt8(` + rendered.AuthorizationExpr + `)) = 1)`, rendered.Bindings
+}
+
 // workItemRepositorySelectorSet normalizes the same exact and wildcard
 // forms accepted by auth.NormalizeRepositoryScopes. Exact selectors also go
 // through auth.NormalizeRepositorySlug, which is the repository-name
@@ -122,8 +134,26 @@ func workItemRepositorySelector(raw string) (workItemSelectorKind, string, bool)
 // fixed private resource bounds. The physical scan limit is independent of
 // each reader's result probe: ClickHouse counts source rows before WHERE,
 // LIMIT and FINAL. These finite bounds do not promise that every input fits.
+//
+// workItemReaderMaxRowsToRead is sized for the library authorization
+// relation, not for the id-keyed page alone. The rule joins two
+// organization-wide aggregates (project -> owning team -> owned repository,
+// and issue -> linked pull request repository), and ClickHouse counts every
+// relation a statement reads, joined or subqueried, against
+// max_rows_to_read (executed on 24.8 and 26.7: an IN subquery over a
+// 100-row table breaks a 150-row cap on a 100-row outer read). So the read
+// grows with the organization, not with the page. DERIVED the same way as
+// workItemMembershipMaxRowsToRead, from system.query_log on the trial
+// store's 1675-item project: status for a 200-id page 23,895 rows (10
+// ReadFromMergeTree passes, EXPLAIN indexes=1), the project roll-up 23,948
+// (11 passes). The status figure is the granule floor exactly: work_items
+// 5,333 + team_project_ownership 6,242 x2 (the ownership join's two arms) +
+// team_repo_ownership 2,715 + work_graph_issue_pr 2,894 + projects 53 x2 +
+// repos 121 x3, every table read whole because each is below one 8192-row
+// granule. Largest (23,948) x60 for a large organization, x2 margin =
+// 2,873,760, rounded up.
 const (
-	workItemReaderMaxRowsToRead  = uint64(8192)
+	workItemReaderMaxRowsToRead  = uint64(3_000_000)
 	workItemReaderMaxMemoryUsage = uint64(64 << 20)
 	workItemReaderMaxThreads     = uint64(1)
 )

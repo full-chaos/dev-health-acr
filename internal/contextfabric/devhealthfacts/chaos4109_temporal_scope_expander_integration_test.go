@@ -39,7 +39,7 @@ func chaos4109ScopeSeed(t *testing.T, ctx context.Context, direct interface {
 	Exec(ctx context.Context, query string, args ...any) error
 }, t1, t2, t3 time.Time) {
 	t.Helper()
-	for _, statement := range devhealthschema.DDL("projects", "repos", "work_items", "project_membership_transitions") {
+	for _, statement := range devhealthschema.DDL("projects", "repos", "work_items", "project_membership_transitions", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
@@ -257,7 +257,7 @@ func TestScopeExpanderAsOf_NoHistorySubjectFallsBackUnconditionally(t *testing.T
 	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	longAgo := at.Add(-365 * 24 * time.Hour)
 	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
-	for _, statement := range devhealthschema.DDL("projects", "repos", "work_items", "project_membership_transitions") {
+	for _, statement := range devhealthschema.DDL("projects", "repos", "work_items", "project_membership_transitions", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
@@ -329,7 +329,7 @@ func TestScopeExpanderAsOf_TemporalDroppedCountReachesThePullRequestPolicy(t *te
 	asOf := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 
 	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
-	for _, statement := range devhealthschema.DDL("projects", "repos", "work_items", "project_membership_transitions", "git_pull_requests") {
+	for _, statement := range devhealthschema.DDL("projects", "repos", "work_items", "project_membership_transitions", "git_pull_requests", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
@@ -410,7 +410,7 @@ func TestScopeExpanderAsOf_ZeroUUIDHistoryNeverInflatesTemporalDropped(t *testin
 	asOf := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 
 	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
-	for _, statement := range devhealthschema.DDL("projects", "repos", "work_items", "project_membership_transitions") {
+	for _, statement := range devhealthschema.DDL("projects", "repos", "work_items", "project_membership_transitions", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
@@ -482,7 +482,7 @@ func TestScopeExpanderAsOf_DuplicateAddIsCountedAndKeepsAttributing(t *testing.T
 	asOf := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 
 	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
-	for _, statement := range devhealthschema.DDL("projects", "repos", "work_items", "project_membership_transitions") {
+	for _, statement := range devhealthschema.DDL("projects", "repos", "work_items", "project_membership_transitions", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
@@ -552,7 +552,7 @@ func TestScopeExpanderAsOf_DanglingRemoveIsCountedNotSilentlyDropped(t *testing.
 	asOf := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 
 	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
-	for _, statement := range devhealthschema.DDL("projects", "repos", "work_items", "project_membership_transitions") {
+	for _, statement := range devhealthschema.DDL("projects", "repos", "work_items", "project_membership_transitions", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}

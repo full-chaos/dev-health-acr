@@ -57,7 +57,8 @@ var sharedClickHouseTables = []string{
 	"investment_metrics_daily", "estimate_coverage_metrics_daily", "recommendations_daily",
 	"work_unit_investments", "work_item_team_attributions", "repos",
 	"projects", "work_items", "git_pull_requests", "git_pull_request_reviews",
-	"work_item_metrics_daily",
+	"work_item_metrics_daily", "team_project_ownership", "team_repo_ownership",
+	"work_graph_issue_pr",
 }
 
 var (

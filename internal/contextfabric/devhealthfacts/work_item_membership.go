@@ -173,6 +173,7 @@ func (r *WorkItemMembershipReader) BeginWorkItemMembership(ctx context.Context, 
 	// S1 time; no caller can inject a stale typed grant. The same resulting
 	// scope shape is used by the later S2/S3 readers on the stacked tip.
 	authorization := workItemRepositoryAuthorization(principal, requestedScope)
+	grant := workItemMembershipGrantShape(authorization)
 	statement, extraBindings := workItemMembershipS1Statement(authorization, k)
 	extraBindings = append(extraBindings,
 		readers.Binding{Name: "anchor_provider", Value: provider},
@@ -194,6 +195,15 @@ func (r *WorkItemMembershipReader) BeginWorkItemMembership(ctx context.Context, 
 			&row.ScopedPopulation,
 			&row.AuthorizedPopulation,
 			&row.DeniedPopulation,
+			&row.Paths.OrganizationGrant,
+			&row.Paths.DirectRepository,
+			&row.Paths.ProjectOwnership,
+			&row.Paths.PullRequestLink,
+			&row.Paths.RepoLess,
+			&row.Paths.RepoLessDenied,
+			&row.Paths.DeniedProjectLess,
+			&row.Paths.ExcludedExplicitTextLink,
+			&row.Paths.ExcludedHeuristicLink,
 			&row.FutureBoundaryCount,
 			&row.TransitionAssertionCount,
 			&row.RowKind,
@@ -206,12 +216,12 @@ func (r *WorkItemMembershipReader) BeginWorkItemMembership(ctx context.Context, 
 	}, extraBindings...)
 	if queryErr != nil {
 		result := unmeasuredWorkItemMembershipResult(classifyWorkItemMembershipS1Error(queryErr))
-		r.recordS1(ctx, principal, result, settings)
+		r.recordS1(ctx, principal, result, settings, grant)
 		return lease, result, nil
 	}
 
 	result := finalizeWorkItemMembershipS1(rows, request.Anchor, k)
-	r.recordS1(ctx, principal, result, settings)
+	r.recordS1(ctx, principal, result, settings, grant)
 	return lease, result, nil
 }
 
@@ -224,10 +234,51 @@ type workItemMembershipS1Row struct {
 	ScopedPopulation         uint64
 	AuthorizedPopulation     uint64
 	DeniedPopulation         uint64
+	Paths                    workItemMembershipPathPopulations
 	FutureBoundaryCount      uint64
 	TransitionAssertionCount uint64
 	RowKind                  uint8
 	AnchorResolution         uint8
+}
+
+// workItemMembershipPathPopulations are S1's per-path window counts, in the
+// statement's column order (the library path order, then the three
+// repo-less/project-less splits).
+type workItemMembershipPathPopulations struct {
+	OrganizationGrant uint64
+	DirectRepository  uint64
+	ProjectOwnership  uint64
+	PullRequestLink   uint64
+	RepoLess          uint64
+	RepoLessDenied    uint64
+	DeniedProjectLess uint64
+	// The members with a non-authorizing link to a granted repository, by
+	// link kind (an issue key in pull-request text; a time-window guess).
+	ExcludedExplicitTextLink uint64
+	ExcludedHeuristicLink    uint64
+}
+
+func (p workItemMembershipPathPopulations) fit() bool {
+	const maxInt = int(^uint(0) >> 1)
+	max := uint64(maxInt)
+	return p.OrganizationGrant <= max && p.DirectRepository <= max && p.ProjectOwnership <= max &&
+		p.PullRequestLink <= max && p.RepoLess <= max && p.RepoLessDenied <= max && p.DeniedProjectLess <= max &&
+		p.ExcludedExplicitTextLink <= max && p.ExcludedHeuristicLink <= max
+}
+
+func (p workItemMembershipPathPopulations) census() contextfabric.WorkItemMembershipPathCensus {
+	return contextfabric.WorkItemMembershipPathCensus{
+		OrganizationGrant: boundedInt(p.OrganizationGrant),
+		DirectRepository:  boundedInt(p.DirectRepository),
+		ProjectOwnership:  boundedInt(p.ProjectOwnership),
+		PullRequestLink:   boundedInt(p.PullRequestLink),
+		RepoLess:          boundedInt(p.RepoLess),
+		RepoLessDenied:    boundedInt(p.RepoLessDenied),
+		DeniedProjectLess: boundedInt(p.DeniedProjectLess),
+
+		ExcludedExplicitTextLink: boundedInt(p.ExcludedExplicitTextLink),
+		ExcludedHeuristicLink:    boundedInt(p.ExcludedHeuristicLink),
+	}
 }
 
 const (
@@ -246,6 +297,7 @@ func workItemMembershipAnchorSentinelIsValid(row workItemMembershipS1Row) bool {
 		row.ScopedPopulation == 0 &&
 		row.AuthorizedPopulation == 0 &&
 		row.DeniedPopulation == 0 &&
+		row.Paths == (workItemMembershipPathPopulations{}) &&
 		row.FutureBoundaryCount == 0 &&
 		row.TransitionAssertionCount == 0
 }
@@ -283,16 +335,18 @@ const (
 //
 // DERIVED, not an arbitrary constant picked by feel. The REAL production statement
 // (workItemMembershipS1Statement), run against the trial store for a real
-// 1675-work-item project, measured via system.query_log: 14,063 rows read,
-// across 9 distinct ReadFromMergeTree passes (EXPLAIN indexes=1, counted
-// exactly): work_items x2, project_membership_transitions x2, repos x1,
-// projects x4. Scaling that measured cost linearly with population (primary-
-// key pruning already proven correct, so a well-pruned org-scoped read
-// grows with THAT org's own row count, not the shared table's) to a large
-// real organization's project (100,000 work items, ~60x this trial
-// project's size): 14,063 x 60 = 843,780 rows; doubled for safety margin
-// (multiple projects sharing the touched tables, plan variance) = 1,687,560,
-// rounded up to the clean value below. Re-derive by the same method (real
+// 1675-work-item project, measured via system.query_log: 32,504 rows read,
+// across 17 ReadFromMergeTree passes (EXPLAIN indexes=1), with the library
+// authorization relation's two organization-wide aggregates joined in
+// (project ownership and linked pull requests; 14,063 rows and 9 passes
+// before them). Every touched table is smaller than one 8192-row granule
+// there, so each pass reads its table whole -- the granule floor. Scaling that measured cost linearly with
+// population (primary-key pruning already proven correct, so a well-pruned
+// org-scoped read grows with THAT org's own row count, not the shared
+// table's) to a large real organization's project (100,000 work items, ~60x
+// this trial project's size): 32,504 x 60 = 1,950,240 rows; doubled for
+// safety margin (multiple projects sharing the touched tables, plan
+// variance) = 3,900,480, rounded up to the clean value below. Re-derive by the same method (real
 // statement, real system.query_log, a real project near the new headroom
 // target) if this table's shape or the query's own pass count ever changes.
 //
@@ -301,7 +355,7 @@ const (
 // not a mock -- that exceeding it emits the read_limit_exceeded reason on
 // the real trace line. Production composition (NewWorkItemMembershipReader)
 // never overrides it.
-var workItemMembershipMaxRowsToRead = uint64(2_000_000)
+var workItemMembershipMaxRowsToRead = uint64(4_000_000)
 
 func workItemMembershipSettings(ctx context.Context, k int) (readers.Settings, error) {
 	seconds := uint64(workItemMembershipDefaultTimeout / time.Second)
@@ -401,10 +455,11 @@ func finalizeWorkItemMembershipS1(rows []workItemMembershipS1Row, anchor context
 	result.Census.CappedPopulation = boundedInt(first.ScopedPopulation)
 	result.Census.AuthorizedPopulation = boundedInt(first.AuthorizedPopulation)
 	result.Census.DeniedPopulation = boundedInt(first.DeniedPopulation)
+	result.Census.Paths = first.Paths.census()
 	result.Census.FutureBoundaryCount = boundedInt(first.FutureBoundaryCount)
 	result.Census.TransitionAssertionCount = boundedInt(first.TransitionAssertionCount)
 	for _, row := range rows {
-		if row.Authorized > 1 || row.ScopedPopulation != first.ScopedPopulation || row.AuthorizedPopulation != first.AuthorizedPopulation || row.DeniedPopulation != first.DeniedPopulation || row.FutureBoundaryCount != first.FutureBoundaryCount || row.TransitionAssertionCount != first.TransitionAssertionCount {
+		if row.Authorized > 1 || row.ScopedPopulation != first.ScopedPopulation || row.AuthorizedPopulation != first.AuthorizedPopulation || row.DeniedPopulation != first.DeniedPopulation || row.Paths != first.Paths || row.FutureBoundaryCount != first.FutureBoundaryCount || row.TransitionAssertionCount != first.TransitionAssertionCount {
 			return unmeasuredWorkItemMembershipResult(contextfabric.WorkItemMembershipUnmeasuredS1Error)
 		}
 	}
@@ -470,6 +525,7 @@ func unmeasuredWorkItemMembershipResultWithAssertions(reason contextfabric.WorkI
 		result.Census.FutureBoundaryCount = boundedInt(row.FutureBoundaryCount)
 		result.Census.CappedPopulation = boundedInt(row.ScopedPopulation)
 		result.Census.DeniedPopulation = boundedInt(row.DeniedPopulation)
+		result.Census.Paths = row.Paths.census()
 		break
 	}
 	return result
@@ -490,7 +546,8 @@ func workItemMembershipCountsFit(row workItemMembershipS1Row) bool {
 		row.AuthorizedPopulation <= max &&
 		row.DeniedPopulation <= max &&
 		row.FutureBoundaryCount <= max &&
-		row.TransitionAssertionCount <= max
+		row.TransitionAssertionCount <= max &&
+		row.Paths.fit()
 }
 
 func membershipColumnArmExcluded(provider, projectID string) bool {
@@ -500,13 +557,32 @@ func membershipColumnArmExcluded(provider, projectID string) bool {
 	return provider == "github" && !strings.HasPrefix(projectID, "ghprojv2:")
 }
 
-func (r *WorkItemMembershipReader) recordS1(ctx context.Context, principal storage.Principal, result contextfabric.WorkItemMembershipResult, settings readers.Settings) {
+// workItemMembershipGrantShape is the pre-entry shape of the grant S1
+// evaluates: whether it is organization-wide and how many exact and owner
+// selectors it carries, plus whether the request narrowed it. Counts only;
+// the selector values never reach the trace.
+func workItemMembershipGrantShape(scope readers.AuthorizationScope) contextfabric.WorkItemMembershipGrantShape {
+	if scope.RepositorySelectors == nil {
+		return contextfabric.WorkItemMembershipGrantShape{}
+	}
+	granted := scope.RepositorySelectors.Granted
+	return contextfabric.WorkItemMembershipGrantShape{
+		OrganizationWide:   granted.All,
+		ExactSelectors:     len(granted.ExactSlugs),
+		OwnerSelectors:     len(granted.Owners),
+		RequestedSelectors: scope.RepositorySelectors.Requested != nil,
+	}
+}
+
+func (r *WorkItemMembershipReader) recordS1(ctx context.Context, principal storage.Principal, result contextfabric.WorkItemMembershipResult, settings readers.Settings, grant contextfabric.WorkItemMembershipGrantShape) {
 	event := contextfabric.WorkItemMembershipS1Event{
 		State:                    result.Census.State,
 		Reason:                   result.Census.UnmeasuredReason,
 		CappedPopulation:         result.Census.CappedPopulation,
 		AuthorizedPopulation:     result.Census.AuthorizedPopulation,
 		DeniedPopulation:         result.Census.DeniedPopulation,
+		Grant:                    grant,
+		Paths:                    result.Census.Paths,
 		ServedMembers:            result.Census.ServedMembers,
 		CensusLimit:              result.Census.CensusLimit,
 		FutureBoundaryCount:      result.Census.FutureBoundaryCount,
@@ -636,6 +712,11 @@ LEFT JOIN ` + workItemMembershipTransitionMetadataSQL + ` AS tm
     w.work_item_id AS work_item_id,
     ifNull(r.repo, '') AS repo_slug,
     toUInt8(if(` + rendered.AuthorizationExpr + `, 1, 0)) AS authorized_flag,
+` + workItemMembershipPathFlagsSQL(rendered) + `
+    toUInt8(NOT (toString(w.repo_id) != '' AND toString(w.repo_id) != '` + zeroRepositoryID + `')) AS repo_less,
+    toUInt8(w.project_id = '') AS project_less,
+    toUInt8(has(` + workItemMembershipExcludedLinksSQL(rendered) + `, 'explicit_text')) AS excluded_explicit_text_link,
+    toUInt8(has(` + workItemMembershipExcludedLinksSQL(rendered) + `, 'heuristic')) AS excluded_heuristic_link,
     countIf(m.source = 'transition') AS transition_assertions,
     countIf(m.source = 'transition' AND m.observed_at > {s1_instant:DateTime64(6, 'UTC')} AND ifNull(tm.is_boundary, toUInt8(0)) = 1) AS future_boundaries
   ` + from + `
@@ -644,7 +725,8 @@ LEFT JOIN ` + workItemMembershipTransitionMetadataSQL + ` AS tm
     AND p.provider = {anchor_provider:String}
     AND p.id = {anchor_project_id:String}
     AND p.key_resolution_count = 1
-  GROUP BY canonical_key, repo_id, work_item_id, repo_slug, authorized_flag`
+  GROUP BY canonical_key, repo_id, work_item_id, repo_slug, authorized_flag,
+    ` + workItemMembershipPathColumns("path_") + `, repo_less, project_less, excluded_explicit_text_link, excluded_heuristic_link`
 
 	selectedRows := `(
   SELECT
@@ -656,6 +738,12 @@ LEFT JOIN ` + workItemMembershipTransitionMetadataSQL + ` AS tm
     scoped_population,
     authorized_population,
     denied_population,
+    ` + workItemMembershipPathColumns("", "_population") + `,
+    repo_less_population,
+    repo_less_denied_population,
+    denied_project_less_population,
+    excluded_explicit_text_link_population,
+    excluded_heuristic_link_population,
     future_boundary_count,
     transition_assertion_count
   FROM (
@@ -665,13 +753,24 @@ LEFT JOIN ` + workItemMembershipTransitionMetadataSQL + ` AS tm
       work_item_id,
       repo_slug,
       authorized_flag,
+      ` + workItemMembershipPathColumns("path_") + `,
+      repo_less,
+      project_less,
+      excluded_explicit_text_link,
+      excluded_heuristic_link,
       transition_assertions,
       future_boundaries,
-      count() OVER () AS scoped_population,
-      countIf(authorized_flag = 1) OVER () AS authorized_population,
-      countIf(authorized_flag = 0) OVER () AS denied_population,
-      sum(future_boundaries) OVER () AS future_boundary_count,
-      sum(transition_assertions) OVER () AS transition_assertion_count
+      scoped_population,
+      authorized_population,
+      denied_population,
+      ` + workItemMembershipPathColumns("", "_population") + `,
+      repo_less_population,
+      repo_less_denied_population,
+      denied_project_less_population,
+      excluded_explicit_text_link_population,
+      excluded_heuristic_link_population,
+      future_boundary_count,
+      transition_assertion_count
     FROM (
       SELECT
         canonical_key,
@@ -679,8 +778,29 @@ LEFT JOIN ` + workItemMembershipTransitionMetadataSQL + ` AS tm
         work_item_id,
         repo_slug,
         authorized_flag,
+        ` + workItemMembershipPathColumns("path_") + `,
+        repo_less,
+        project_less,
+        excluded_explicit_text_link,
+        excluded_heuristic_link,
         transition_assertions,
-        future_boundaries
+        future_boundaries,
+        -- Every population is a window over the WHOLE member relation. A
+        -- window is evaluated before this SELECT's ORDER BY and LIMIT, so
+        -- the row bound below narrows the rows that can be served and
+        -- never the counts: a denied member ranked past the bound is still
+        -- counted.
+        count() OVER () AS scoped_population,
+        countIf(authorized_flag = 1) OVER () AS authorized_population,
+        countIf(authorized_flag = 0) OVER () AS denied_population,
+` + workItemMembershipPathWindowsSQL() + `
+        countIf(repo_less = 1) OVER () AS repo_less_population,
+        countIf(repo_less = 1 AND authorized_flag = 0) OVER () AS repo_less_denied_population,
+        countIf(project_less = 1 AND authorized_flag = 0) OVER () AS denied_project_less_population,
+        countIf(excluded_explicit_text_link = 1) OVER () AS excluded_explicit_text_link_population,
+        countIf(excluded_heuristic_link = 1) OVER () AS excluded_heuristic_link_population,
+        sum(future_boundaries) OVER () AS future_boundary_count,
+        sum(transition_assertions) OVER () AS transition_assertion_count
       FROM (` + memberRows + `)
       ORDER BY authorized_flag DESC, canonical_key ASC
       LIMIT 2001
@@ -699,6 +819,12 @@ LEFT JOIN ` + workItemMembershipTransitionMetadataSQL + ` AS tm
 	    selected.scoped_population,
 	    selected.authorized_population,
 	    selected.denied_population,
+	    ` + workItemMembershipPathColumns("selected.", "_population") + `,
+	    selected.repo_less_population,
+	    selected.repo_less_denied_population,
+	    selected.denied_project_less_population,
+	    selected.excluded_explicit_text_link_population,
+	    selected.excluded_heuristic_link_population,
 	    selected.future_boundary_count,
 	    selected.transition_assertion_count,
 	    toUInt8(0) AS row_kind
@@ -713,6 +839,12 @@ LEFT JOIN ` + workItemMembershipTransitionMetadataSQL + ` AS tm
 	    toUInt64(0) AS scoped_population,
 	    toUInt64(0) AS authorized_population,
 	    toUInt64(0) AS denied_population,
+	    ` + workItemMembershipPathZeroColumnsSQL() + `,
+	    toUInt64(0) AS repo_less_population,
+	    toUInt64(0) AS repo_less_denied_population,
+	    toUInt64(0) AS denied_project_less_population,
+	    toUInt64(0) AS excluded_explicit_text_link_population,
+	    toUInt64(0) AS excluded_heuristic_link_population,
 	    toUInt64(0) AS future_boundary_count,
 	    toUInt64(0) AS transition_assertion_count,
 	    toUInt8(1) AS row_kind
@@ -729,6 +861,12 @@ LEFT JOIN ` + workItemMembershipTransitionMetadataSQL + ` AS tm
 	  result_rows.scoped_population,
 	  result_rows.authorized_population,
 	  result_rows.denied_population,
+	  ` + workItemMembershipPathColumns("result_rows.", "_population") + `,
+	  result_rows.repo_less_population,
+	  result_rows.repo_less_denied_population,
+	  result_rows.denied_project_less_population,
+	  result_rows.excluded_explicit_text_link_population,
+	  result_rows.excluded_heuristic_link_population,
 	  result_rows.future_boundary_count,
 	  result_rows.transition_assertion_count,
 	  result_rows.row_kind,
@@ -737,6 +875,69 @@ FROM ` + memberAndSentinelRows + ` AS result_rows
 CROSS JOIN ` + anchorResolution + ` AS anchor_state
 ORDER BY row_kind ASC, authorized_flag DESC, canonical_id ASC`
 	return statement, rendered.Bindings
+}
+
+// workItemMembershipPathFlagsSQL projects one 0/1 flag per authorization
+// path, in the library's fixed path order, from the same rendered scope
+// whose AuthorizationExpr decides authorized_flag. A scope with no path
+// expressions (the ID-only mode) projects zero for every path, so the census
+// never reports a path it did not evaluate.
+func workItemMembershipPathFlagsSQL(rendered readers.WorkItemScopeSQLResult) string {
+	exprs := make(map[string]string, len(rendered.Provenance))
+	for _, path := range rendered.Provenance {
+		exprs[path.Path] = path.Expr
+	}
+	var b strings.Builder
+	for _, path := range readers.WorkItemAuthorizationPaths() {
+		expr, ok := exprs[path]
+		if !ok {
+			expr = "0"
+		}
+		b.WriteString("    toUInt8(if(" + expr + ", 1, 0)) AS path_" + path + ",\n")
+	}
+	return b.String()
+}
+
+// workItemMembershipPathColumns lists one column per authorization path as
+// prefix+path+suffix, comma-separated, in the library's fixed order.
+func workItemMembershipPathColumns(prefix string, suffix ...string) string {
+	tail := strings.Join(suffix, "")
+	names := make([]string, 0, len(readers.WorkItemAuthorizationPaths()))
+	for _, path := range readers.WorkItemAuthorizationPaths() {
+		names = append(names, prefix+path+tail)
+	}
+	return strings.Join(names, ", ")
+}
+
+// workItemMembershipPathWindowsSQL counts, over the whole capped census,
+// the members each path authorizes. A member admitted by two paths counts
+// in both, so the path counts may sum past authorized_population; each is
+// the population that path alone would admit.
+func workItemMembershipPathWindowsSQL() string {
+	var b strings.Builder
+	for _, path := range readers.WorkItemAuthorizationPaths() {
+		b.WriteString("      countIf(path_" + path + " = 1) OVER () AS " + path + "_population,\n")
+	}
+	return b.String()
+}
+
+// workItemMembershipExcludedLinksSQL is the library's excluded-link
+// disclosure for the row: the kinds of non-authorizing links that name a
+// granted repository for a repo-less item. A scope without one (ID-only)
+// discloses nothing.
+func workItemMembershipExcludedLinksSQL(rendered readers.WorkItemScopeSQLResult) string {
+	if rendered.ExcludedLinkProvenancesExpr == "" {
+		return "CAST([], 'Array(String)')"
+	}
+	return rendered.ExcludedLinkProvenancesExpr
+}
+
+func workItemMembershipPathZeroColumnsSQL() string {
+	names := make([]string, 0, len(readers.WorkItemAuthorizationPaths()))
+	for _, path := range readers.WorkItemAuthorizationPaths() {
+		names = append(names, "toUInt64(0) AS "+path+"_population")
+	}
+	return strings.Join(names, ", ")
 }
 
 var _ contextfabric.WorkItemMembershipPort = (*WorkItemMembershipReader)(nil)

@@ -7,6 +7,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // TestChaos5405_TheProjectionMaskAndOrderAreOBSERVED replaces the substring
@@ -44,12 +45,10 @@ func TestChaos5405_TheProjectionMaskAndOrderAreOBSERVED(t *testing.T) {
 	// authorized and the mask has nothing to mask -- the assertions below
 	// would pass on an unmasked statement, which is the vacuity this setup
 	// exists to avoid.
-	rows, err := query.Query(ctx, devhealthfacts.ProjectWorkItemSelectionSQLForTest(200), []contextpacket.ClickHouseBinding{
-		{Name: "org_id", Value: orgID},
-		{Name: "authorized_repository_slugs", Value: []string{chaos5405LiveRepoSlug}},
-		{Name: "authorized_repository_owners", Value: []string{}},
-		{Name: "project_ids", Value: []string{chaos5405LiveProjectProvider + ":" + chaos5405LiveProjectID}},
-	})
+	statement, authorization := devhealthfacts.ProjectWorkItemSelectionForTest(storage.Principal{OrgID: orgID, RepositoryScopes: []string{chaos5405LiveRepoSlug}}, 200)
+	bindings := append([]contextpacket.ClickHouseBinding{{Name: "org_id", Value: orgID}}, authorization...)
+	bindings = append(bindings, contextpacket.ClickHouseBinding{Name: "project_ids", Value: []string{chaos5405LiveProjectProvider + ":" + chaos5405LiveProjectID}})
+	rows, err := query.Query(ctx, statement, bindings)
 	if err != nil {
 		t.Fatalf("execute the selection: %v", err)
 	}
@@ -58,14 +57,18 @@ func TestChaos5405_TheProjectionMaskAndOrderAreOBSERVED(t *testing.T) {
 	type row struct {
 		repoID, workItemID, repoSlug, originID, attributionSource string
 		authorized, repoLess                                      uint8
+		paths, repositories                                       []string
 	}
 	var got []row
 	for rows.Next() {
 		var r row
 		var scoped, authorizedPop, repoLessPop, repoLessDenied, orphaned uint64
+		var organizationPop, directPop, projectPop, linkPop, excludedTextPop, excludedHeuristicPop uint64
 		if err := rows.Scan(&r.repoID, &r.workItemID, &r.repoSlug, &r.originID, &r.attributionSource,
-			&r.authorized, &r.repoLess, &scoped, &authorizedPop, &repoLessPop, &repoLessDenied, &orphaned); err != nil {
-			t.Fatalf("scan: %v -- the twelve-column shape %s and the scanner have drifted", err, devhealthfacts.WorkItemScopeSelectionColumnsForTest)
+			&r.authorized, &r.repoLess, &r.paths, &r.repositories,
+			&scoped, &authorizedPop, &repoLessPop, &repoLessDenied, &orphaned,
+			&organizationPop, &directPop, &projectPop, &linkPop, &excludedTextPop, &excludedHeuristicPop); err != nil {
+			t.Fatalf("scan: %v -- the twenty-column shape %s and the scanner have drifted", err, devhealthfacts.WorkItemScopeSelectionColumnsForTest)
 		}
 		got = append(got, r)
 	}
@@ -106,6 +109,9 @@ func TestChaos5405_TheProjectionMaskAndOrderAreOBSERVED(t *testing.T) {
 			if column.value != "" {
 				t.Errorf("row %d is DENIED and still carried %s=%q -- an unauthorized work item's identity crossed the database boundary", i, column.name, column.value)
 			}
+		}
+		if len(r.paths) != 0 || len(r.repositories) != 0 {
+			t.Errorf("row %d is DENIED and still carried authorization paths %v / repositories %v", i, r.paths, r.repositories)
 		}
 	}
 

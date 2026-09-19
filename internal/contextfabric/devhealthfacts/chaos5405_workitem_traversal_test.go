@@ -144,15 +144,27 @@ type chaos5405Census struct {
 	RepoLessDenied uint64
 	// Orphaned is countIf(orphaned = 1).
 	Orphaned uint64
+	// OrganizationGrant, DirectRepository, ProjectOwnership and
+	// PullRequestLink are the per-path authorized populations.
+	OrganizationGrant, DirectRepository, ProjectOwnership, PullRequestLink uint64
+	// ExcludedExplicitText and ExcludedHeuristic are the excluded-link
+	// populations.
+	ExcludedExplicitText, ExcludedHeuristic uint64
 }
 
 func (c chaos5405Census) columns() []any {
-	return []any{c.Scoped, c.Authorized, c.RepoLess, c.RepoLessDenied, c.Orphaned}
+	return []any{c.Scoped, c.Authorized, c.RepoLess, c.RepoLessDenied, c.Orphaned,
+		c.OrganizationGrant, c.DirectRepository, c.ProjectOwnership, c.PullRequestLink,
+		c.ExcludedExplicitText, c.ExcludedHeuristic}
 }
 
-// chaos5405Row builds one selection row in the TWELVE-column shape
+// chaos5405Row builds one selection row in the TWENTY-column shape
 // workItemScopeSelectionColumns documents: five masked identity columns, the
-// two per-row flags, then the five window aggregates.
+// two per-row flags, the two authorization arrays, then the eleven window
+// aggregates. An authorized row with a repository names the direct path and
+// its slug; a repo-less one names the organization grant and no repository,
+// the only path a row with empty derived evidence can pass the second gate
+// on.
 //
 // The helper takes the AUTHORIZED case; chaos5405MaskedRow builds the denied
 // one, where every identity column is ” exactly as the SQL projection makes
@@ -163,7 +175,11 @@ func chaos5405Row(repoID, workItemID, repoSlug, originID, source string, census 
 	if repoID == chaos5405ZeroRepoID {
 		repoLess = 1
 	}
-	return append([]any{repoID, workItemID, repoSlug, originID, source, uint8(1), repoLess}, census.columns()...)
+	paths, repositories := []string{"organization_grant"}, []string{}
+	if repoLess == 0 {
+		paths, repositories = []string{"direct_repo"}, []string{repoSlug}
+	}
+	return append([]any{repoID, workItemID, repoSlug, originID, source, uint8(1), repoLess, paths, repositories}, census.columns()...)
 }
 
 // chaos5405MaskedRow is a DENIED row as the projection actually returns it:
@@ -173,7 +189,7 @@ func chaos5405MaskedRow(repoLess bool, census chaos5405Census) []any {
 	if repoLess {
 		flag = 1
 	}
-	return append([]any{"", "", "", "", "", uint8(0), flag}, census.columns()...)
+	return append([]any{"", "", "", "", "", uint8(0), flag, []string{}, []string{}}, census.columns()...)
 }
 
 func chaos5405Expand(t *testing.T, client *fakeClient, principal storage.Principal, policy contextfabric.FactScopePolicy, kind contextfabric.FactKind, origin contextfabric.SubjectRef, limit int) (contextfabric.FactScopeExpansionResult, error) {
@@ -283,7 +299,7 @@ func TestChaos5405_AuthorizationIsBoundInsideTheSelectionRelation(t *testing.T) 
 			}
 			var bound bool
 			for _, binding := range client.queries[0].bindings {
-				if binding.Name == "authorized_repository_slugs" {
+				if binding.Name == "authorized_repo_slugs" {
 					bound = true
 				}
 			}

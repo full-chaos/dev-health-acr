@@ -117,6 +117,8 @@ func (s *fakeScanner) Scan(dest ...any) error {
 			*value = row[index].(time.Time)
 		case *float64:
 			*value = row[index].(float64)
+		case *[]string:
+			*value = row[index].([]string)
 		default:
 			return errors.New("devhealthfacts_test: unsupported scan destination")
 		}

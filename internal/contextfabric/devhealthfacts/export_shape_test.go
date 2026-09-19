@@ -6,13 +6,21 @@ package devhealthfacts
 //
 // This file is a _test.go file: nothing here ships, and the production package
 // gains no exported surface.
+import (
+	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-go/readers"
+)
+
 var (
-	// ProjectWorkItemSelectionSQLForTest is the project -> work_item selection
-	// exactly as projectWorkItems sends it.
-	ProjectWorkItemSelectionSQLForTest = projectWorkItemSelectionSQL
-	// WorkItemAuthorizationExprSQLForTest is the pushed-down predicate.
-	WorkItemAuthorizationExprSQLForTest = workItemAuthorizationExprSQL
 	// WorkItemScopeSelectionColumnsForTest documents the column order the
 	// scanner depends on.
 	WorkItemScopeSelectionColumnsForTest = workItemScopeSelectionColumns
 )
+
+// ProjectWorkItemSelectionForTest is the project -> work_item selection and
+// its authorization bindings exactly as projectWorkItems builds them for
+// principal.
+func ProjectWorkItemSelectionForTest(principal storage.Principal, limit int) (string, []readers.Binding) {
+	rendered := readers.WorkItemScopeSQL(workItemRepositoryAuthorization(principal, nil))
+	return projectWorkItemSelectionSQL(rendered, limit), rendered.Bindings
+}

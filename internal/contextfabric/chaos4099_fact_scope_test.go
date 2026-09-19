@@ -1409,6 +1409,15 @@ func TestChaos4099_ExpansionTelemetryLeaksNoIdentityAndSplitsLevelByDegradation(
 		"repo_less_authorization_dropped_count", "orphaned_repository_count",
 		"ambiguous_origin_count", "unknown_attribution_source_count",
 		"scope_query_count", "scope_rows_returned", "decision_reason",
+		// The work-item authorization split: per-path counts, the excluded
+		// link kinds, and the grant's pre-entry shape (a flag and two
+		// selector counts, never a selector value).
+		"organization_grant_authorized_count", "direct_repo_authorized_count",
+		"project_ownership_authorized_count", "pr_link_authorized_count",
+		"project_ownership_admitted_count", "pr_link_admitted_count",
+		"excluded_explicit_text_link_count", "excluded_heuristic_link_count",
+		"authorization_grant_measured", "authorization_grant_organization_wide",
+		"authorization_grant_exact_selectors", "authorization_grant_owner_selectors",
 	} { // "axis"/"unbounded_validity_count"/"malformed_touch_count"/"duplicate_add_count": CHAOS-4109
 		allowed[key] = struct{}{}
 	}
@@ -1482,6 +1491,19 @@ func TestChaos4099_EveryEventFieldReachesTheSink(t *testing.T) {
 		"ScopeQueryCount":                   "scope_query_count",
 		"ScopeRowsReturned":                 "scope_rows_returned",
 		"DecisionReason":                    "decision_reason",
+		// The work-item authorization split.
+		"OrganizationGrantAuthorizedCount":   "organization_grant_authorized_count",
+		"DirectRepositoryAuthorizedCount":    "direct_repo_authorized_count",
+		"ProjectOwnershipAuthorizedCount":    "project_ownership_authorized_count",
+		"PullRequestLinkAuthorizedCount":     "pr_link_authorized_count",
+		"ProjectOwnershipAdmittedCount":      "project_ownership_admitted_count",
+		"PullRequestLinkAdmittedCount":       "pr_link_admitted_count",
+		"ExcludedExplicitTextLinkCount":      "excluded_explicit_text_link_count",
+		"ExcludedHeuristicLinkCount":         "excluded_heuristic_link_count",
+		"AuthorizationGrantMeasured":         "authorization_grant_measured",
+		"AuthorizationGrantOrganizationWide": "authorization_grant_organization_wide",
+		"AuthorizationGrantExactSelectors":   "authorization_grant_exact_selectors",
+		"AuthorizationGrantOwnerSelectors":   "authorization_grant_owner_selectors",
 	}
 	eventType := reflect.TypeOf(FactScopeExpansionEvent{})
 	if eventType.NumField() != len(fieldToKey) {
