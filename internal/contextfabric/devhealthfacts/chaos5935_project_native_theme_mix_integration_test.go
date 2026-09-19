@@ -30,14 +30,14 @@ func factString(t *testing.T, fact contextfabric.CanonicalFact, field string) st
 	return *value.String
 }
 
-func TestQueryVersionMovedPastTheUnlabelledProjectMix(t *testing.T) {
+func TestQueryVersionMovedPastTheMultiPlacedExclusion(t *testing.T) {
 	const prefix = "devhealthfacts.clickhouse.v"
 	version, ok := strings.CutPrefix(devhealthfacts.QueryVersion, prefix)
 	if !ok {
 		t.Fatalf("QueryVersion = %q, want the %q<n> shape", devhealthfacts.QueryVersion, prefix)
 	}
-	if n, err := strconv.Atoi(version); err != nil || n < 13 {
-		t.Fatalf("QueryVersion = %q: a candidate saved before project theme facts named their source (v12 and before) must not be served as though it did", devhealthfacts.QueryVersion)
+	if n, err := strconv.Atoi(version); err != nil || n < 15 {
+		t.Fatalf("QueryVersion = %q: a candidate saved before project theme facts named their source (v14 and before, which excluded a multi-placed work item id) must not be served as though it did", devhealthfacts.QueryVersion)
 	}
 }
 

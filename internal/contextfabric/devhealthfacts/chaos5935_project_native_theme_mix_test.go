@@ -135,7 +135,7 @@ func TestProjectNativeThemeMixReadFailureIsReported(t *testing.T) {
 // carrying only the multi-placed count; one with neither serves nothing.
 func TestProjectNativeThemeMixDisclosesMultiPlacedUnitsWithoutAMix(t *testing.T) {
 	t.Parallel()
-	onlyMultiPlaced := []any{"linear:a", 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, uint64(2), uint64(0), uint64(0), uint64(2)}
+	onlyMultiPlaced := []any{"linear:a", 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, uint64(3), uint64(0), uint64(0), uint64(2)}
 	client := &fakeClient{tables: []fakeTable{{match: "unit_span AS", rows: [][]any{onlyMultiPlaced}}}}
 	result, err := readNativeMix(t, client, "a")
 	if err != nil {
