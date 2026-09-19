@@ -92,9 +92,16 @@ func TestEveryFrameKindByRequestedGroupHintIsKeptOrRefused(t *testing.T) {
 				t.Logf("frame=%s hint=%s -> outcome=%v failed_invariant=%v failure_detail=%v frame_gate=%v group_axis=%v",
 					frame.name, hint.name, line["outcome"], line["failed_invariant"], line["failure_detail"], line["frame_gate"], line["group_axis"])
 				switch {
+				case frame.self && !hint.requested || frame.self && hint.kind != "":
+					// A self-group whose receipt names its own group kind (the
+					// flat hint, or the frame's when the hint was empty) is
+					// re-read as a flat cohort of that kind.
+					if line["frame_gate"] != string(FrameGatePassed) || line["outcome"] != string(FrameValidationOutcomeRepaired) || line["group_axis"] != "kept" || line["repair"] != string(FrameRepairSelfGroupFlatCohort) {
+						t.Errorf("a self-group with a group kind on the receipt must be repaired into a flat cohort; got gate=%v outcome=%v axis=%v repair=%v", line["frame_gate"], line["outcome"], line["group_axis"], line["repair"])
+					}
 				case frame.self:
 					if line["frame_gate"] != "rejected:i6" || line["failure_detail"] != string(FrameFailureGroupEqualsMember) || line["group_axis"] != "refused" {
-						t.Errorf("a self-group must be refused under i6 whatever the hint; got gate=%v detail=%v axis=%v", line["frame_gate"], line["failure_detail"], line["group_axis"])
+						t.Errorf("a self-group whose hint the sanitizer dropped must be refused under i6; got gate=%v detail=%v axis=%v", line["frame_gate"], line["failure_detail"], line["group_axis"])
 					}
 				case frame.grouped:
 					if line["frame_gate"] != string(FrameGatePassed) || line["group_axis"] != "kept" {

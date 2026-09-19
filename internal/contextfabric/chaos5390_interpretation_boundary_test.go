@@ -108,11 +108,11 @@ func TestTheBoundaryShowsAGroupingTheFrameDropped(t *testing.T) {
 // change is for: the grouping expressed as asked, the kind grouped by itself,
 // and the server -- not the model -- refusing it under i6.
 func TestTheBoundaryShowsASelfGroupRefusedWithItsInvariant(t *testing.T) {
-	line := interpretThroughTheBoundary(t, contractsv1.ContextFabricSubjectTeam, "",
+	line := interpretThroughTheBoundary(t, contractsv1.ContextFabricSubjectTeam, contractsv1.ContextFabricSubjectProject,
 		boundaryFrame(groupedExpression(contractsv1.ContextFabricSubjectTeam, contractsv1.ContextFabricSubjectTeam)))
 	assertBoundaryLine(t, line, map[string]string{
 		"requested_group_hint":  "team",
-		"requested_member_hint": "absent",
+		"requested_member_hint": "project",
 		"proposed_kind":         string(SubjectExpressionGroupedMembers),
 		"proposed_group_kind":   "team",
 		"proposed_member_kind":  "team",

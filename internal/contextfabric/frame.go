@@ -92,8 +92,9 @@ type QuestionFrame struct {
 	Version string `json:"version"`
 
 	// CollapsedGroupAxisMemberKind is PROVENANCE: set ONLY by
-	// repairMemberKindFactAliasCollapse (CHAOS-5992) on the frame IT
-	// produces, to the member kind the repair collapsed a requested group
+	// repairMemberKindFactAliasCollapse (CHAOS-5992) and
+	// repairSelfGroupFlatCohort on the frame THEY produce, to the member
+	// kind the repair collapsed a requested group
 	// axis into (the receipt's own GroupKind). requestedGroupAxisDropped
 	// (model_runtime.go) and the plan-seam collapse check (engine.go) read it
 	// to decide that the axis is EXPRESSED, not dropped, for exactly this

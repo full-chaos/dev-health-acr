@@ -583,8 +583,12 @@ func domainInterpretationBoundary(d *domainTable) {
 	d.want(guard, "Grouped.GroupKind", "zero with the frame's unrecognized flag",
 		run(ModelExecutionReceipt{GroupKind: team, FrameGroupKindUnrecognized: true}, groupedExpression(project, "")),
 		"hint=team member_hint=absent group=unrecognized member=project axis=refused")
-	d.want(guard, "Grouped.{Group,Member}Kind", "duplicate (a kind grouped by itself)", run(hint(team, false), groupedExpression(team, team)),
-		"hint=team member_hint=absent group=team member=team axis=refused")
+	d.want(guard, "Grouped.{Group,Member}Kind", "duplicate (a kind grouped by itself), the request's own group axis: re-read as a flat cohort", run(hint(team, false), groupedExpression(team, team)),
+		"hint=team member_hint=absent group=team member=team axis=kept")
+	d.want(guard, "Grouped.{Group,Member}Kind", "duplicate (a kind grouped by itself), a second level requested", run(ModelExecutionReceipt{GroupKind: team, RequestedSubjectKind: project}, groupedExpression(team, team)),
+		"hint=team member_hint=project group=team member=team axis=refused")
+	d.want(guard, "Grouped.{Group,Member}Kind", "duplicate (a kind grouped by itself), hint dropped as unrecognized", run(hint("", true), groupedExpression(team, team)),
+		"hint=unrecognized member_hint=absent group=team member=team axis=refused")
 	d.want(guard, "Grouped.{Group,Member}Kind", "canonical (projects by team)", run(hint(team, false), groupedExpression(project, team)),
 		"hint=team member_hint=absent group=team member=project axis=kept")
 	d.want(guard, "Grouped.{Group,Member}Kind", "canonical, no hint", run(hint("", false), groupedExpression(project, team)),

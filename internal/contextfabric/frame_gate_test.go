@@ -168,6 +168,19 @@ func frameGateOutcome(frame *QuestionFrame, gate FrameGate) QuestionFamilyOutcom
 // selfGroupedFrame is the I6-illegal shape measured on the rig: a
 // grouped_members expression whose grouping axis IS its member kind.
 // checkI6 refuses it, and before this change nothing acted on the refusal.
+// selfGroupRefusedReceipt gives a proposed frame the receipt the interpreter
+// would hold for it. A self-group frame is paired with a member hint of a
+// different kind, so the request names two levels and the frame stays refused
+// under I6; every other frame gets the plain receipt.
+func selfGroupRefusedReceipt(frame *QuestionFrame) ModelExecutionReceipt {
+	receipt := validModelReceiptFixture(ModelOperationInterpret)
+	receipt.QuestionFrame = frame
+	if grouped := frame.SubjectExpression.Grouped; grouped != nil && grouped.GroupKind == grouped.MemberKind {
+		receipt.RequestedSubjectKind = SubjectProject
+	}
+	return receipt
+}
+
 func selfGroupedFrame() *QuestionFrame {
 	return &QuestionFrame{
 		Goals: []InvestigationGoal{GoalAssessState},
@@ -412,6 +425,9 @@ func TestTheDeployedInterpreterAlwaysDecidesTheFrameGate(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			receipt := ModelExecutionReceipt{QuestionFrame: testCase.frame}
+			if testCase.frame != nil {
+				receipt = selfGroupRefusedReceipt(testCase.frame)
+			}
 			RuntimeQuestionInterpreter{}.resolveFrame(context.Background(), storage.Principal{OrgID: "org_1"}, &receipt, "", nil)
 			if receipt.FrameGateOutcome == FrameGateNotEvaluated {
 				t.Fatalf("the deployed interpreter left the gate UNDECIDED; the zero value allows, so this reverts the seam to a shadow with no other symptom")
@@ -431,7 +447,7 @@ func TestTheDeployedInterpreterAlwaysDecidesTheFrameGate(t *testing.T) {
 func TestTheCarriedGateAgreesWithTheReceipt(t *testing.T) {
 	t.Parallel()
 	for _, frame := range []*QuestionFrame{selfGroupedFrame(), unservableMemberKindFrame(), namedSubjectFrame()} {
-		receipt := ModelExecutionReceipt{QuestionFrame: frame}
+		receipt := selfGroupRefusedReceipt(frame)
 		RuntimeQuestionInterpreter{}.resolveFrame(context.Background(), storage.Principal{OrgID: "org_1"}, &receipt, "", nil)
 		fromResult := DecideFrameGate(ValidateFrame(*frame, nil, ""), true)
 		if receipt.FrameGateOutcome != fromResult.Outcome {
@@ -759,8 +775,7 @@ func TestInterpretCarriesARefusingGateOutOfTheReceipt(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			receipt := validModelReceiptFixture(ModelOperationInterpret)
-			receipt.QuestionFrame = testCase.frame
+			receipt := selfGroupRefusedReceipt(testCase.frame)
 
 			interpreter := RuntimeQuestionInterpreter{
 				Runtime: fakeModelRuntime{interpreted: groupedInterpretation(), receipt: receipt},
