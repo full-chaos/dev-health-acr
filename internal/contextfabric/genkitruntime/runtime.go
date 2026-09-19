@@ -720,6 +720,26 @@ type decodeRejection struct {
 func (e *decodeRejection) Error() string { return e.cause.Error() }
 func (e *decodeRejection) Unwrap() error { return e.cause }
 
+// The three fence shapes Genkit's JSON output parser unwraps before it
+// validates (ai/format_json.go via internal/base ExtractJSONFromMarkdown,
+// v1.11.0), in its own order. A refused draw is re-decoded here, so the
+// recovery must accept exactly what Genkit accepted or a fenced draw would
+// lose its specific rejection reason.
+var (
+	genkitJSONFence     = regexp.MustCompile("(?si)```\\s*json\\s*(.*?)```")
+	genkitPlainFence    = regexp.MustCompile("(?s)```\\s*\\n(.*?)```")
+	genkitImplicitFence = regexp.MustCompile("(?si)```\\s*([{\\[].*?)```")
+)
+
+func extractGenkitJSON(text string) string {
+	for _, fence := range []*regexp.Regexp{genkitJSONFence, genkitPlainFence, genkitImplicitFence} {
+		if m := fence.FindStringSubmatch(text); len(m) >= 2 {
+			return strings.TrimSpace(m[1])
+		}
+	}
+	return strings.TrimSpace(text)
+}
+
 // genkitSchemaMismatchPrefix is the fixed prefix Genkit puts on its own
 // structured-output mismatch error (see classifyModelError).
 const genkitSchemaMismatchPrefix = "model failed to generate output matching expected schema"
@@ -754,7 +774,7 @@ func (g sdkGenerator) Interpret(ctx context.Context, request generationRequest) 
 		if errors.As(err, &genkitErr) && genkitErr.Status == core.INTERNAL && strings.HasPrefix(genkitErr.Message, genkitSchemaMismatchPrefix) {
 			rejection := &decodeRejection{cause: err}
 			var lenient interpretationOutput
-			if json.Unmarshal([]byte(strings.TrimSpace(rawText)), &lenient) == nil {
+			if json.Unmarshal([]byte(extractGenkitJSON(rawText)), &lenient) == nil {
 				rejection.output, rejection.parsed = lenient, true
 			}
 			return rejection.output, rawUsage, rejection

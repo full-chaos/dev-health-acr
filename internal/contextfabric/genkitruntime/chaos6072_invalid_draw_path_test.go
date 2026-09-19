@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -293,5 +294,57 @@ func TestRecoveredMalformedDrawIsLoggedAsUnclassified(t *testing.T) {
 	lines := handler.rejectedDrawEvents()
 	if len(lines) != 1 || lines[0].Attrs["rejection_reason"] != "unclassified" {
 		t.Fatalf("rejected-draw lines = %#v, want one unclassified line", lines)
+	}
+}
+
+// TestFencedInvalidDrawKeepsItsSpecificRejection: Genkit unwraps three fence
+// shapes before it validates, so a refused draw wearing any of them must be
+// recovered with the same content Genkit judged.
+func TestFencedInvalidDrawKeepsItsSpecificRejection(t *testing.T) {
+	fences := map[string]string{
+		"json_fence":     "```json\n%s\n```",
+		"json_fence_up":  "```JSON\n%s\n```",
+		"plain_fence":    "```\n%s\n```",
+		"implicit_fence": "```%s```",
+		"prose_and_json": "Here is the answer:\n```json\n%s\n```\nDone.",
+	}
+	for name, format := range fences {
+		t.Run(name, func(t *testing.T) {
+			bad := fmt.Sprintf(format, invalidDrawText(t, drawOutOfEnumKind))
+			rt, handler, _, calls := scriptedGenkitRuntime(t, []string{bad})
+			_, _, err := rt.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest())
+			if got := contextfabric.InterpretationRejectionReasonOf(err); got != "fact_requirement_kind_invalid" {
+				t.Fatalf("reason = %q (err %v), want fact_requirement_kind_invalid", got, err)
+			}
+			if calls.Load() != invalidDrawCeiling {
+				t.Fatalf("calls = %d, want %d", calls.Load(), invalidDrawCeiling)
+			}
+			if got := onlyDecisionEvent(t, handler).Attrs["rejected_fact_kind"]; got != "kind_outside_the_enum" {
+				t.Fatalf("rejected_fact_kind = %v", got)
+			}
+			// The same fence around a valid draw is accepted by Genkit itself.
+			rt, _, _, _ = scriptedGenkitRuntime(t, []string{fmt.Sprintf(format, validDrawText(t))})
+			if _, _, err := rt.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest()); err != nil {
+				t.Fatalf("fenced valid draw refused: %v", err)
+			}
+		})
+	}
+}
+
+// TestMeasurementEntryPointTakesTheSameRejectionOutcome: the sample-indexed
+// entry point runs one draw by design, so a locally refused draw there ends as
+// the typed rejection after that one draw, exactly as a validator-refused draw
+// does.
+func TestMeasurementEntryPointTakesTheSameRejectionOutcome(t *testing.T) {
+	rt, handler, _, calls := scriptedGenkitRuntime(t, []string{invalidDrawText(t, drawOutOfEnumKind)})
+	_, _, err := rt.InterpretQuestionForSample(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest(), 2)
+	if !errors.Is(err, contextfabric.ErrInterpretationRejected) || contextfabric.InterpretationRejectionReasonOf(err) != "fact_requirement_kind_invalid" {
+		t.Fatalf("err = %v, want the typed rejection", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("calls = %d, want 1", calls.Load())
+	}
+	if got := onlyDecisionEvent(t, handler).Attrs["rejected_fact_kind"]; got != "kind_outside_the_enum" {
+		t.Fatalf("rejected_fact_kind = %v", got)
 	}
 }
