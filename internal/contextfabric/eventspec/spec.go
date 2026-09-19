@@ -2137,6 +2137,7 @@ var StoredResultAuthorization = Event{
 		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultReasonArr[:])},
 		{Key: "subject_count", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "graph_subject_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "unkinded_subject_count", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "admitted_count", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "denied_count", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "absent_count", Type: FieldInt, Presence: PresenceRequired},

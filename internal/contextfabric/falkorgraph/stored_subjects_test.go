@@ -62,6 +62,38 @@ func TestAuthorizeStoredSubjectsInputDomain(t *testing.T) {
 		}
 	}
 
+	// A subject named by canonical id alone is read by id; every node that
+	// carries the id decides it.
+	var unkindedQueries int
+	byID := &fakeConn{queryFunc: func(_ context.Context, _ string, cypher string, params map[string]interface{}, _ bool) ([]row, error) {
+		var rows []row
+		for _, raw := range params["targets"].([]interface{}) {
+			target := raw.(map[string]interface{})
+			if _, hasKind := target["kind"]; hasKind {
+				continue
+			}
+			unkindedQueries++
+			switch target["id"] {
+			case "shared":
+				rows = append(rows,
+					row{"n": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "shared", "authorization_repositories": []string{"acme/api"}}}},
+					row{"n": &node{Properties: map[string]interface{}{propKind: "team", propCanonicalID: "shared", "authorization_repositories": []string{"other/repo"}}}})
+			case "granted":
+				rows = append(rows,
+					row{"n": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "granted", "authorization_repositories": []string{"acme/api"}}}},
+					row{"n": &node{Properties: map[string]interface{}{propKind: "team", propCanonicalID: "granted", "authorization_repositories": "*"}}})
+			}
+		}
+		return rows, nil
+	}}
+	unkinded, err := newFakeAdapter(t, byID).AuthorizeStoredSubjects(context.Background(), principal, binding, []contextfabric.SubjectRef{{CanonicalID: "shared"}, {CanonicalID: "granted"}, {CanonicalID: "nowhere"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unkindedQueries != 3 || unkinded[0] != contextfabric.StoredSubjectDenied || unkinded[1] != contextfabric.StoredSubjectAdmitted || unkinded[2] != contextfabric.StoredSubjectAbsent {
+		t.Fatalf("unkinded outcomes = %v (queries %d), want denied/admitted/absent", unkinded, unkindedQueries)
+	}
+
 	failing := &fakeConn{queryFunc: func(context.Context, string, string, map[string]interface{}, bool) ([]row, error) {
 		return nil, fmt.Errorf("wrapped: %w", ErrNotFound)
 	}}

@@ -1559,6 +1559,7 @@ type StoredResultAuthorizationFields struct {
 	Reason                    string
 	SubjectCount              int
 	GraphSubjectCount         int
+	UnkindedSubjectCount      int
 	AdmittedCount             int
 	DeniedCount               int
 	AbsentCount               int
@@ -1582,7 +1583,7 @@ type StoredResultAuthorizationFields struct {
 
 // NewStoredResultAuthorizationFields is the generated constructor for StoredResultAuthorizationFields -- every
 // field StoredResultAuthorization.Fields declares is a required parameter.
-func NewStoredResultAuthorizationFields(orgID string, surface string, principalScope string, repositoryScopeCount int, decision string, reason string, subjectCount int, graphSubjectCount int, admittedCount int, deniedCount int, absentCount int, organizationSubjectCount int, organizationMismatchCount int, groupCount int, groupUnprovenCount int, refusedKinds []string, errorClass string, requestID string) StoredResultAuthorizationFields {
+func NewStoredResultAuthorizationFields(orgID string, surface string, principalScope string, repositoryScopeCount int, decision string, reason string, subjectCount int, graphSubjectCount int, unkindedSubjectCount int, admittedCount int, deniedCount int, absentCount int, organizationSubjectCount int, organizationMismatchCount int, groupCount int, groupUnprovenCount int, refusedKinds []string, errorClass string, requestID string) StoredResultAuthorizationFields {
 	valid := true
 	if refusedKinds == nil {
 		valid = false
@@ -1596,6 +1597,7 @@ func NewStoredResultAuthorizationFields(orgID string, surface string, principalS
 		Reason:                    reason,
 		SubjectCount:              subjectCount,
 		GraphSubjectCount:         graphSubjectCount,
+		UnkindedSubjectCount:      unkindedSubjectCount,
 		AdmittedCount:             admittedCount,
 		DeniedCount:               deniedCount,
 		AbsentCount:               absentCount,
@@ -1631,6 +1633,7 @@ func (f StoredResultAuthorizationFields) SlogArgs() []any {
 		"reason", contextfabric.SanitizeLogAttr(f.Reason),
 		"subject_count", f.SubjectCount,
 		"graph_subject_count", f.GraphSubjectCount,
+		"unkinded_subject_count", f.UnkindedSubjectCount,
 		"admitted_count", f.AdmittedCount,
 		"denied_count", f.DeniedCount,
 		"absent_count", f.AbsentCount,

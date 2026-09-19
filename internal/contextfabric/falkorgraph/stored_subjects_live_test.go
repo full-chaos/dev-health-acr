@@ -83,6 +83,22 @@ func TestLiveStoredSubjectDecisionEqualsTheLiveExactHintDecision(t *testing.T) {
 		if len(outcomes) != len(subjects) {
 			t.Fatalf("%s: %d outcomes for %d subjects", name, len(outcomes), len(subjects))
 		}
+		// The same subjects named by canonical id alone: each id is carried by
+		// exactly one projected node here, so the id-only decision equals the
+		// keyed one.
+		unkinded := make([]contextfabric.SubjectRef, len(subjects))
+		for index, subject := range subjects {
+			unkinded[index] = contextfabric.SubjectRef{CanonicalID: subject.CanonicalID}
+		}
+		byID, err := adapter.AuthorizeStoredSubjects(ctx, principal, binding, unkinded)
+		if err != nil {
+			t.Fatalf("%s: AuthorizeStoredSubjects(by id) error = %v", name, err)
+		}
+		for index := range subjects {
+			if byID[index] != outcomes[index] {
+				t.Errorf("%s/%s: by-id outcome %s, keyed outcome %s", name, subjects[index].CanonicalID, byID[index], outcomes[index])
+			}
+		}
 		for index, subject := range subjects {
 			request := liveInvestigationRequest()
 			request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: subject.Kind, ID: subject.CanonicalID, Label: subject.Label, Source: "live-test"}}

@@ -3084,6 +3084,11 @@
         "presence": "required"
       },
       {
+        "key": "unkinded_subject_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "admitted_count",
         "type": "int",
         "presence": "required"

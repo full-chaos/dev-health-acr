@@ -18,7 +18,7 @@ import (
 // graphrank predicate.
 type certifyGraph struct {
 	contextfabric.GraphReader
-	nodes map[string]graphrank.CandidateNode
+	nodes map[string][]graphrank.CandidateNode
 }
 
 func (certifyGraph) ResolveInvestigationBinding(context.Context, storage.Principal) (contextfabric.ResolvedGraphBinding, error) {
@@ -34,8 +34,8 @@ func (g certifyGraph) AuthorizeStoredSubjects(_ context.Context, principal stora
 func TestStoredResultAuthorizationEngineLineCertifiesAgainstItsSpecification(t *testing.T) {
 	member := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:out", Label: "Out"}
 	org := contextfabric.SubjectRef{Kind: "organization", CanonicalID: "organization:org_1", Label: "Org"}
-	graph := certifyGraph{nodes: map[string]graphrank.CandidateNode{
-		graphrank.SubjectKey(member): {Attributes: map[string]interface{}{"authorization_repositories": []string{"other-org/secret"}}},
+	graph := certifyGraph{nodes: map[string][]graphrank.CandidateNode{
+		graphrank.SubjectKey(member): {{Attributes: map[string]interface{}{"authorization_repositories": []string{"other-org/secret"}}}},
 	}}
 	result := contextfabric.InvestigationResult{}
 	result.SubjectResolution.Committed = []contextfabric.SubjectRef{member, org}
@@ -51,7 +51,7 @@ func TestStoredResultAuthorizationEngineLineCertifiesAgainstItsSpecification(t *
 	}
 	if _, err := certify.Certify(parsed, certify.Assertion{Event: eventspec.StoredResultAuthorization, Want: map[string]any{
 		"org_id": "org_1", "surface": "prior_result", "principal_scope": "restricted", "repository_scope_count": 3,
-		"decision": "denied", "reason": "subject_denied", "subject_count": 2, "graph_subject_count": 1,
+		"decision": "denied", "reason": "subject_denied", "subject_count": 2, "graph_subject_count": 1, "unkinded_subject_count": 0,
 		"admitted_count": 0, "denied_count": 1, "absent_count": 0, "organization_subject_count": 1, "organization_mismatch_count": 0,
 		"group_count": 0, "group_unproven_count": 0, "refused_kinds": []any{"repository"}, "request_id": "req_0123456789abcdef0123456789abcdef",
 	}}); err != nil {

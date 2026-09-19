@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
@@ -66,15 +67,18 @@ func (g subjectNodeGraph) AuthorizeStoredSubjects(_ context.Context, principal s
 	if g.principal != nil {
 		*g.principal = principal
 	}
-	nodes := map[string]graphrank.CandidateNode{}
+	nodes := map[string][]graphrank.CandidateNode{}
 	for _, subject := range subjects {
 		key := graphrank.SubjectKey(subject)
-		if attributes, ok := g.nodes[key]; ok {
-			nodes[key] = graphrank.CandidateNode{Attributes: attributes}
-			continue
+		for nodeKey, attributes := range g.nodes {
+			// A subject named by canonical id alone matches every node that
+			// carries the id, whatever its kind.
+			if nodeKey == key || subject.Kind == "" && strings.HasSuffix(nodeKey, "\x00"+subject.CanonicalID) {
+				nodes[key] = append(nodes[key], graphrank.CandidateNode{Attributes: attributes})
+			}
 		}
-		if g.grant != nil {
-			nodes[key] = graphrank.CandidateNode{Attributes: map[string]interface{}{"authorization_repositories": append([]string(nil), g.grant...)}}
+		if len(nodes[key]) == 0 && g.grant != nil {
+			nodes[key] = []graphrank.CandidateNode{{Attributes: map[string]interface{}{"authorization_repositories": append([]string(nil), g.grant...)}}}
 		}
 	}
 	return graphrank.AuthorizeStoredSubjectNodes(principal, subjects, nodes), nil

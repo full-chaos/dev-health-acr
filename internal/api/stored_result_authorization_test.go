@@ -233,13 +233,13 @@ func TestStoredResultAuthorizationLineCertifiesAgainstItsSpecification(t *testin
 	}{
 		{"admitted", []contractsv1.ContextFabricSubjectRef{subject("pa"), subject("pb")},
 			subjectNodeGraph{nodes: map[string]map[string]interface{}{"project\x00pa": granted, "project\x00pb": granted}}, http.StatusOK,
-			map[string]any{"decision": "admitted", "reason": "subjects_admitted", "subject_count": 2, "graph_subject_count": 2, "admitted_count": 2, "denied_count": 0, "absent_count": 0, "refused_kinds": []any{}}},
+			map[string]any{"decision": "admitted", "reason": "subjects_admitted", "subject_count": 2, "graph_subject_count": 2, "unkinded_subject_count": 0, "admitted_count": 2, "denied_count": 0, "absent_count": 0, "refused_kinds": []any{}}},
 		{"denied", []contractsv1.ContextFabricSubjectRef{subject("pa"), subject("pc"), subject("pd")},
 			subjectNodeGraph{nodes: map[string]map[string]interface{}{"project\x00pa": granted, "project\x00pc": other}}, http.StatusNotFound,
-			map[string]any{"decision": "denied", "reason": "subject_denied", "subject_count": 3, "graph_subject_count": 3, "admitted_count": 1, "denied_count": 1, "absent_count": 1, "refused_kinds": []any{"project"}}},
+			map[string]any{"decision": "denied", "reason": "subject_denied", "subject_count": 3, "graph_subject_count": 3, "unkinded_subject_count": 0, "admitted_count": 1, "denied_count": 1, "absent_count": 1, "refused_kinds": []any{"project"}}},
 		{"unavailable", []contractsv1.ContextFabricSubjectRef{subject("pe")},
 			subjectNodeGraph{readErr: errors.New("graph down")}, http.StatusServiceUnavailable,
-			map[string]any{"decision": "unavailable", "reason": "graph_read_failed", "subject_count": 1, "graph_subject_count": 1, "admitted_count": 0, "denied_count": 0, "absent_count": 0, "refused_kinds": []any{}, "error_class": "graph_error"}},
+			map[string]any{"decision": "unavailable", "reason": "graph_read_failed", "subject_count": 1, "graph_subject_count": 1, "unkinded_subject_count": 0, "admitted_count": 0, "denied_count": 0, "absent_count": 0, "refused_kinds": []any{}, "error_class": "graph_error"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := memoryinvestigation.NewStore()
@@ -273,5 +273,75 @@ func TestStoredResultAuthorizationLineCertifiesAgainstItsSpecification(t *testin
 				t.Fatalf("certify: %v\n%s", err, logs.String())
 			}
 		})
+	}
+}
+
+// A subject can be named by canonical id alone -- a carried structure
+// confirmation (anchor, candidate, handle) stores only the id. Such an identity
+// is decided by every graph node carrying the id: a result whose current
+// subject is granted but whose carried identity is not is refused on every
+// surface, exactly like a refused committed subject.
+func TestAStoredResultNamingAnUngrantedSubjectByIDAloneIsRefused(t *testing.T) {
+	granted := map[string]interface{}{"authorization_repositories": []string{hostedTestRepository}}
+	other := map[string]interface{}{"authorization_repositories": []string{"other-org/secret-service"}}
+	current := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: "project_current", Label: "Current"}
+	nodes := map[string]map[string]interface{}{
+		"project\x00project_current": granted,
+		"project\x00project_granted": granted,
+		"project\x00project_secret":  other,
+		"team\x00project_split":      granted,
+		"project\x00project_split":   other,
+	}
+	store := memoryinvestigation.NewStore()
+	type cell struct {
+		member contractsv1.ContextFabricStructureNeedKind
+		value  string
+		served bool
+		result contractsv1.ContextFabricInvestigationResult
+	}
+	var cells []cell
+	for _, member := range []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor, contractsv1.ContextFabricStructureNeedSubjectCandidate, contractsv1.ContextFabricStructureNeedSubjectHandle} {
+		for _, target := range []struct {
+			value  string
+			served bool
+		}{{"project_granted", true}, {"project_secret", false}, {"project_split", false}, {"project_nowhere", false}} {
+			result := validContextFabricInvestigationResult()
+			result.ResultID = fmt.Sprintf("result_unkinded_%s_%s", member, target.value)
+			result.DirectJudgment = "JUDGMENT-" + result.ResultID
+			result.SubjectResolution.Committed = []contractsv1.ContextFabricSubjectRef{current}
+			result.SubjectResolution.Candidates = []contractsv1.ContextFabricSubjectCandidate{}
+			result.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{{
+				Member: member, AppliedValue: target.value, Source: contractsv1.ContextFabricStructureSourceReceipt,
+				ReceiptID: "candr_0000000000000000000000aa", PriorResultID: "result_prior_" + result.ResultID,
+				Provenance: contractsv1.ContextFabricStructureClarificationConfirmed, Disposition: contractsv1.ContextFabricStructureDispositionApplied,
+			}}
+			seedResult3355(t, store, "org_1", result)
+			cells = append(cells, cell{member: member, value: target.value, served: target.served, result: result})
+		}
+	}
+	app, _ := newParityHostedAppWithLogs(t, nil, store, limits.ResourceBudget{MaxItems: 50, MaxTokens: 16_000, MaxBytes: 1 << 20}, &bytes.Buffer{})
+	app.runtime.StoredResultGate = contextfabric.NewStoredResultGate(subjectNodeGraph{nodes: nodes})
+	token := storedServingCredential(t, app, []string{hostedTestRepository})
+	for _, c := range cells {
+		name := fmt.Sprintf("%s/%s", c.member, c.value)
+		for _, view := range []string{"", "view=projection"} {
+			req := investigationResultRequest(t, token, c.result.ResultID)
+			req.URL.RawQuery = view
+			rec := httptest.NewRecorder()
+			app.Handler().ServeHTTP(rec, req)
+			if (rec.Code == http.StatusOK) != c.served || !c.served && rec.Code != http.StatusNotFound {
+				t.Errorf("%s/http%s: status %d, want served=%t", name, view, rec.Code, c.served)
+			}
+			if !c.served && bytes.Contains(rec.Body.Bytes(), []byte(c.value)) {
+				t.Errorf("%s/http%s: denial exposed the carried identity", name, view)
+			}
+		}
+		called, raw := callStoredServingMCP(t, app, token, c.result.ResultID)
+		if called.IsError == c.served {
+			t.Errorf("%s/mcp: error=%t want served=%t", name, called.IsError, c.served)
+		}
+		if !c.served && bytes.Contains(raw, []byte(c.value)) {
+			t.Errorf("%s/mcp: denial exposed the carried identity", name)
+		}
 	}
 }

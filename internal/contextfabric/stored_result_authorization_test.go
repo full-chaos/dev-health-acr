@@ -56,6 +56,16 @@ func plantSubjects(t reflect.Type, next *int, onPath map[reflect.Type]bool) refl
 			kind.SetString(string(SubjectProject))
 			id.SetString(fmt.Sprintf("planted-%d", *next))
 		}
+		// A canonical id carried without its kind.
+		if id := value.FieldByName("SubjectCanonicalID"); id.IsValid() && id.Type() == stringType {
+			*next++
+			id.SetString(fmt.Sprintf("planted-%d", *next))
+		}
+		if t == confirmedStructureEntryType {
+			*next++
+			value.FieldByName("Member").SetString(string(contractsv1.ContextFabricStructureNeedSubjectAnchor))
+			value.FieldByName("AppliedValue").SetString(fmt.Sprintf("planted-%d", *next))
+		}
 	}
 	return value
 }
@@ -65,7 +75,7 @@ func plantSubjects(t reflect.Type, next *int, onPath map[reflect.Type]bool) refl
 func TestStoredResultSubjectsCoverEveryPositionTheResultTypeHas(t *testing.T) {
 	planted := 0
 	result := plantSubjects(reflect.TypeOf(InvestigationResult{}), &planted, map[reflect.Type]bool{}).Interface().(InvestigationResult)
-	if planted < 14 {
+	if planted < 16 {
 		t.Fatalf("planted %d subject positions; the result type holds at least the fourteen stored positions measured on the trial store", planted)
 	}
 	got := StoredResultSubjects(result)
@@ -178,6 +188,9 @@ func TestStoredResultGateDecisionTable(t *testing.T) {
 		{"group/no_members", restricted, grouped(), &gateGraph{outcomes: map[string]StoredSubjectOutcome{SubjectMapKey(project): StoredSubjectAdmitted, SubjectMapKey(member): StoredSubjectAdmitted}}, false, StoredResultDenied, StoredResultReasonGroupUnproven, 1},
 		{"group/unlisted_member", restricted, grouped("project:elsewhere"), &gateGraph{outcomes: map[string]StoredSubjectOutcome{SubjectMapKey(project): StoredSubjectAdmitted, SubjectMapKey(member): StoredSubjectAdmitted}}, false, StoredResultDenied, StoredResultReasonGroupUnproven, 1},
 		{"group/unrestricted_proven", unrestricted, grouped(member.CanonicalID), &gateGraph{}, false, StoredResultAdmitted, StoredResultReasonUnrestrictedPrincipal, 0},
+		{"unkinded/admitted", restricted, gateResult(SubjectRef{CanonicalID: "project:a"}), &gateGraph{outcomes: map[string]StoredSubjectOutcome{SubjectMapKey(SubjectRef{CanonicalID: "project:a"}): StoredSubjectAdmitted}}, false, StoredResultAdmitted, StoredResultReasonSubjectsAdmitted, 1},
+		{"unkinded/denied", restricted, gateResult(project, SubjectRef{CanonicalID: "project:x"}), &gateGraph{outcomes: map[string]StoredSubjectOutcome{SubjectMapKey(project): StoredSubjectAdmitted, SubjectMapKey(SubjectRef{CanonicalID: "project:x"}): StoredSubjectDenied}}, false, StoredResultDenied, StoredResultReasonSubjectDenied, 1},
+		{"unkinded/absent", restricted, gateResult(SubjectRef{CanonicalID: "project:x"}), &gateGraph{}, false, StoredResultDenied, StoredResultReasonSubjectAbsent, 1},
 		{"plane/no_authorizer", restricted, gateResult(project), nil, true, StoredResultUnavailable, StoredResultReasonAuthorizerMissing, 0},
 		{"plane/bind_not_projected", restricted, gateResult(project), &gateGraph{bindErr: fmt.Errorf("wrapped: %w", ErrGraphNotProjected)}, false, StoredResultDenied, StoredResultReasonGraphNotProjected, 0},
 		{"plane/bind_failed", restricted, gateResult(project), &gateGraph{bindErr: errors.New("epoch store down")}, false, StoredResultUnavailable, StoredResultReasonGraphReadFailed, 0},
@@ -198,6 +211,14 @@ func TestStoredResultGateDecisionTable(t *testing.T) {
 			}
 			if !c.noGraph && c.graph.calls != c.graphCalls {
 				t.Fatalf("graph lookups = %d, want %d", c.graph.calls, c.graphCalls)
+			}
+			if wantUnkinded := strings.HasPrefix(c.name, "unkinded/"); (decision.UnkindedSubjectCount > 0) != wantUnkinded {
+				t.Fatalf("unkinded subject count = %d for %s", decision.UnkindedSubjectCount, c.name)
+			}
+			for _, kind := range decision.RefusedKinds {
+				if kind == "" {
+					t.Fatalf("refused kinds carry an empty kind: %v", decision.RefusedKinds)
+				}
 			}
 			err := decision.ServingError()
 			switch c.decision {
@@ -306,13 +327,13 @@ func TestStoredResultSubjectCollectorDomain(t *testing.T) {
 	var got []string
 	seen := map[string]bool{}
 	collectStoredResultSubjects(reflect.ValueOf(value), func(s SubjectRef) {
-		if s.Kind == "" || strings.TrimSpace(s.CanonicalID) == "" || seen[SubjectMapKey(s)] {
+		if strings.TrimSpace(s.CanonicalID) == "" || seen[SubjectMapKey(s)] {
 			return
 		}
 		seen[SubjectMapKey(s)] = true
 		got = append(got, s.CanonicalID)
 	})
-	want := []string{"set", "iface", "array", "map"}
+	want := []string{"set", "iface", "array", "map", "empty-kind"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("collected %v, want %v", got, want)
 	}
@@ -320,8 +341,24 @@ func TestStoredResultSubjectCollectorDomain(t *testing.T) {
 	result := validInvestigationResult()
 	result.SubjectResolution = SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{set, set, {Kind: SubjectProject, CanonicalID: " "}, {CanonicalID: "no-kind"}}}
 	result.ClaimedFacts = []ClaimedFact{{Subject: SubjectRef{}}}
-	if subjects := StoredResultSubjects(result); len(subjects) != 1 || subjects[0] != set {
-		t.Fatalf("StoredResultSubjects = %#v, want the one real subject once", subjects)
+	result.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{
+		{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedValue: "anchored"},
+		{Member: contractsv1.ContextFabricStructureNeedSubjectCandidate, AppliedValue: "candidate"},
+		{Member: contractsv1.ContextFabricStructureNeedSubjectHandle, AppliedValue: "handle"},
+		{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: "project"},
+		{Member: contractsv1.ContextFabricStructureNeedWindow, AppliedValue: "trailing_30d"},
+		{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedValue: " "},
+	}
+	want = []string{"set", "no-kind", "anchored", "candidate", "handle"}
+	var ids []string
+	for _, subject := range StoredResultSubjects(result) {
+		ids = append(ids, subject.CanonicalID)
+		if subject.CanonicalID != "set" && subject.Kind != "" {
+			t.Errorf("%s collected with kind %q, want none", subject.CanonicalID, subject.Kind)
+		}
+	}
+	if !reflect.DeepEqual(ids, want) {
+		t.Fatalf("StoredResultSubjects ids = %v, want %v", ids, want)
 	}
 }
 
@@ -336,6 +373,16 @@ func TestStoredResultPredicateGuards(t *testing.T) {
 	group := contractsv1.ContextFabricCohortGroup{Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: "T"}, MemberCanonicalIDs: []string{"unlisted"}}
 	if groupProvenByMembers(group, cohort, map[string]struct{}{SubjectMapKey(SubjectRef{CanonicalID: "unlisted"}): {}}) {
 		t.Fatal("a group listing a member the cohort does not carry was proven")
+	}
+	// A listed member the decision did not admit leaves the group unproven.
+	// (A refused or absent member already refuses the whole result, so this
+	// restates that decision at the group; pinned here with a crafted map.)
+	listedGroup := contractsv1.ContextFabricCohortGroup{Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: "T"}, MemberCanonicalIDs: []string{"listed"}}
+	if groupProvenByMembers(listedGroup, cohort, map[string]struct{}{}) {
+		t.Fatal("a group whose listed member was not admitted was proven")
+	}
+	if !groupProvenByMembers(listedGroup, cohort, map[string]struct{}{SubjectMapKey(SubjectRef{Kind: SubjectProject, CanonicalID: "listed"}): {}}) {
+		t.Fatal("control: a group whose listed member was admitted was not proven")
 	}
 	if groupProvenByMembers(group, nil, map[string]struct{}{}) {
 		t.Fatal("a group without a cohort was proven")

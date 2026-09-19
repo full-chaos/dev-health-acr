@@ -31,29 +31,47 @@ func (a *Adapter) AuthorizeStoredSubjects(ctx context.Context, principal storage
 	if err != nil {
 		return nil, err
 	}
-	nodes := make(map[string]graphrank.CandidateNode, len(subjects))
-	cypher := fmt.Sprintf("UNWIND $targets AS t MATCH (n:%s {%s:$org, %s:t.kind, %s:t.id}) RETURN n",
+	// A subject with a kind is read by its natural key; a subject named by
+	// canonical id alone is read by the id, and every node carrying it counts.
+	keyed := fmt.Sprintf("UNWIND $targets AS t MATCH (n:%s {%s:$org, %s:t.kind, %s:t.id}) RETURN n",
 		labelSubject, propOrgID, propKind, propCanonicalID)
+	unkinded := fmt.Sprintf("UNWIND $targets AS t MATCH (n:%s {%s:$org, %s:t.id}) RETURN n",
+		labelSubject, propOrgID, propCanonicalID)
+	nodes := make(map[string][]graphrank.CandidateNode, len(subjects))
 	for start := 0; start < len(subjects); start += storedSubjectBatch {
 		end := min(start+storedSubjectBatch, len(subjects))
-		targets := make([]interface{}, 0, end-start)
+		var kindedTargets, unkindedTargets []interface{}
 		for _, subject := range subjects[start:end] {
-			targets = append(targets, map[string]interface{}{"kind": string(subject.Kind), "id": subject.CanonicalID})
-		}
-		rows, err := a.api.query(ctx, key, cypher, map[string]interface{}{"org": orgID, "targets": targets}, true)
-		if err != nil {
-			return nil, graphNotProjectedError(safeDependencyError("authorize stored subjects", err))
-		}
-		for _, row := range rows {
-			n, ok := row["n"].(*node)
-			if !ok || n == nil {
+			if subject.Kind == "" {
+				unkindedTargets = append(unkindedTargets, map[string]interface{}{"id": subject.CanonicalID})
 				continue
 			}
-			subject := contextfabric.SubjectRef{
-				Kind:        contextfabric.SubjectKind(propStringValue(n.Properties[propKind])),
-				CanonicalID: propStringValue(n.Properties[propCanonicalID]),
+			kindedTargets = append(kindedTargets, map[string]interface{}{"kind": string(subject.Kind), "id": subject.CanonicalID})
+		}
+		for _, lookup := range []struct {
+			cypher  string
+			targets []interface{}
+			byID    bool
+		}{{keyed, kindedTargets, false}, {unkinded, unkindedTargets, true}} {
+			if len(lookup.targets) == 0 {
+				continue
 			}
-			nodes[graphrank.SubjectKey(subject)] = toCandidateNode(n)
+			rows, err := a.api.query(ctx, key, lookup.cypher, map[string]interface{}{"org": orgID, "targets": lookup.targets}, true)
+			if err != nil {
+				return nil, graphNotProjectedError(safeDependencyError("authorize stored subjects", err))
+			}
+			for _, row := range rows {
+				n, ok := row["n"].(*node)
+				if !ok || n == nil {
+					continue
+				}
+				subject := contextfabric.SubjectRef{CanonicalID: propStringValue(n.Properties[propCanonicalID])}
+				if !lookup.byID {
+					subject.Kind = contextfabric.SubjectKind(propStringValue(n.Properties[propKind]))
+				}
+				subjectKey := graphrank.SubjectKey(subject)
+				nodes[subjectKey] = append(nodes[subjectKey], toCandidateNode(n))
+			}
 		}
 	}
 	return graphrank.AuthorizeStoredSubjectNodes(principal, subjects, nodes), nil

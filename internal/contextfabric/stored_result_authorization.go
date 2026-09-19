@@ -165,9 +165,12 @@ type StoredResultAuthorization struct {
 	SubjectCount int
 	// GraphSubjectCount is the subset decided by the graph predicate.
 	GraphSubjectCount int
-	AdmittedCount     int
-	DeniedCount       int
-	AbsentCount       int
+	// UnkindedSubjectCount is the subset of graph subjects the result names by
+	// canonical id alone, decided by every node carrying that id.
+	UnkindedSubjectCount int
+	AdmittedCount        int
+	DeniedCount          int
+	AbsentCount          int
 	// OrganizationSubjectCount / OrganizationMismatchCount: subjects of kind
 	// organization, decided against the caller's own organization.
 	OrganizationSubjectCount  int
@@ -272,6 +275,11 @@ func (g *StoredResultGate) decide(ctx context.Context, principal storage.Princip
 		graphSubjects = append(graphSubjects, subject)
 	}
 	decision.GraphSubjectCount = len(graphSubjects)
+	for _, subject := range graphSubjects {
+		if subject.Kind == "" {
+			decision.UnkindedSubjectCount++
+		}
+	}
 
 	admittedMembers := map[string]struct{}{}
 	switch {
@@ -294,7 +302,7 @@ func (g *StoredResultGate) decide(ctx context.Context, principal storage.Princip
 		case errors.Is(err, ErrGraphNotProjected):
 			decision.Decision, decision.Reason = StoredResultDenied, StoredResultReasonGraphNotProjected
 			for _, subject := range graphSubjects {
-				refused[string(subject.Kind)] = struct{}{}
+				refuseKind(refused, subject)
 			}
 			decision.AbsentCount = len(graphSubjects)
 			return finishStoredResultAuthorization(decision, refused)
@@ -314,10 +322,10 @@ func (g *StoredResultGate) decide(ctx context.Context, principal storage.Princip
 				admittedMembers[SubjectMapKey(subject)] = struct{}{}
 			case StoredSubjectDenied:
 				decision.DeniedCount++
-				refused[string(subject.Kind)] = struct{}{}
+				refuseKind(refused, subject)
 			default:
 				decision.AbsentCount++
-				refused[string(subject.Kind)] = struct{}{}
+				refuseKind(refused, subject)
 			}
 		}
 	}
@@ -346,6 +354,15 @@ func (g *StoredResultGate) decide(ctx context.Context, principal storage.Princip
 		decision.Decision, decision.Reason = StoredResultAdmitted, StoredResultReasonSubjectsAdmitted
 	}
 	return finishStoredResultAuthorization(decision, refused)
+}
+
+// refuseKind names a refused subject's kind on the trace. A subject named by
+// canonical id alone carries no kind; it is counted in unkinded_subject_count
+// and its refusal in the denied/absent counts.
+func refuseKind(refused map[string]struct{}, subject SubjectRef) {
+	if subject.Kind != "" {
+		refused[string(subject.Kind)] = struct{}{}
+	}
 }
 
 func finishStoredResultAuthorization(decision StoredResultAuthorization, refused map[string]struct{}) StoredResultAuthorization {
@@ -404,14 +421,21 @@ var (
 )
 
 // StoredResultSubjects returns every distinct subject a result names, in
-// first-seen order. It walks the WHOLE result by reflection and takes every
-// struct that carries a subject kind and a canonical id, so a subject-bearing
-// field added to the contract later is decided without a change here.
+// first-seen order. It walks the WHOLE result by reflection, so a field added
+// to the contract later is decided without a change here. A subject is named
+// in one of two shapes:
+//
+//   - a struct carrying a subject kind and a canonical id (a subject
+//     reference, an offer option);
+//   - a canonical id carried without its kind: a confirmed structure entry
+//     whose member names a subject (anchor, candidate, handle), or a field
+//     named SubjectCanonicalID. These are returned with an empty kind and are
+//     decided by every graph node carrying the id.
 func StoredResultSubjects(result InvestigationResult) []SubjectRef {
 	seen := map[string]struct{}{}
 	var subjects []SubjectRef
 	collectStoredResultSubjects(reflect.ValueOf(result), func(subject SubjectRef) {
-		if subject.Kind == "" || strings.TrimSpace(subject.CanonicalID) == "" {
+		if strings.TrimSpace(subject.CanonicalID) == "" {
 			return
 		}
 		key := SubjectMapKey(subject)
@@ -423,6 +447,16 @@ func StoredResultSubjects(result InvestigationResult) []SubjectRef {
 	})
 	return subjects
 }
+
+// storedSubjectStructureMembers are the confirmed-structure members whose
+// applied value is a subject identity rather than a kind or a window.
+var storedSubjectStructureMembers = map[contractsv1.ContextFabricStructureNeedKind]bool{
+	contractsv1.ContextFabricStructureNeedSubjectAnchor:    true,
+	contractsv1.ContextFabricStructureNeedSubjectCandidate: true,
+	contractsv1.ContextFabricStructureNeedSubjectHandle:    true,
+}
+
+var confirmedStructureEntryType = reflect.TypeOf(contractsv1.ContextFabricConfirmedStructureEntry{})
 
 func collectStoredResultSubjects(value reflect.Value, emit func(SubjectRef)) {
 	switch value.Kind() {
@@ -443,10 +477,21 @@ func collectStoredResultSubjects(value reflect.Value, emit func(SubjectRef)) {
 		if subject, ok := subjectShaped(value); ok {
 			emit(subject)
 		}
-		for index := 0; index < value.NumField(); index++ {
-			if value.Type().Field(index).IsExported() {
-				collectStoredResultSubjects(value.Field(index), emit)
+		if value.Type() == confirmedStructureEntryType {
+			entry := value.Interface().(contractsv1.ContextFabricConfirmedStructureEntry)
+			if storedSubjectStructureMembers[entry.Member] {
+				emit(SubjectRef{CanonicalID: entry.AppliedValue})
 			}
+		}
+		for index := 0; index < value.NumField(); index++ {
+			field := value.Type().Field(index)
+			if !field.IsExported() {
+				continue
+			}
+			if field.Name == "SubjectCanonicalID" && field.Type == stringType {
+				emit(SubjectRef{CanonicalID: value.Field(index).String()})
+			}
+			collectStoredResultSubjects(value.Field(index), emit)
 		}
 	}
 }
@@ -502,6 +547,7 @@ func StoredResultAuthorizationLogArgs(principal storage.Principal, decision Stor
 		"reason", string(decision.Reason),
 		"subject_count", decision.SubjectCount,
 		"graph_subject_count", decision.GraphSubjectCount,
+		"unkinded_subject_count", decision.UnkindedSubjectCount,
 		"admitted_count", decision.AdmittedCount,
 		"denied_count", decision.DeniedCount,
 		"absent_count", decision.AbsentCount,
