@@ -20,8 +20,11 @@ package contextfabric
 // the code under test.
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"testing"
@@ -475,6 +478,43 @@ func TestQuestionWindow_RememberedWindowAxisDomain(t *testing.T) {
 			_, got := engine.decideRememberedWindowAxis(context.Background(), acceptancePrincipal(), tc.app, tc.fresh, true, tc.request, tc.committed)
 			if got != tc.want {
 				t.Fatalf("decision = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestQuestionWindow_RememberedWindowAxisLineGuardsEveryClosedField drives the
+// production emitter with a value outside each closed field's vocabulary and
+// requires the unrecognised token in that field alone.
+func TestQuestionWindow_RememberedWindowAxisLineGuardsEveryClosedField(t *testing.T) {
+	t.Parallel()
+	valid := rememberedWindowAxisDecision{SourceResultID: "result_a", CarrierRead: ContinuationCarrierReadOK, InterpretedAxis: TemporalRange, CarriedAxis: TemporalCurrent, DecidedAxis: TemporalCurrent, Outcome: ContinuationAxisOverriddenByReceipt}
+	for _, tc := range []struct {
+		key    string
+		invent func(*rememberedWindowAxisDecision)
+	}{
+		{"carrier_read", func(d *rememberedWindowAxisDecision) { d.CarrierRead = "invented" }},
+		{"interpreted_axis", func(d *rememberedWindowAxisDecision) { d.InterpretedAxis = "invented" }},
+		{"carried_axis", func(d *rememberedWindowAxisDecision) { d.CarriedAxis = "invented" }},
+		{"decided_axis", func(d *rememberedWindowAxisDecision) { d.DecidedAxis = "invented" }},
+		{"outcome", func(d *rememberedWindowAxisDecision) { d.Outcome = "invented" }},
+	} {
+		tc := tc
+		t.Run(tc.key, func(t *testing.T) {
+			t.Parallel()
+			decision := valid
+			tc.invent(&decision)
+			var buf bytes.Buffer
+			NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))).RecordRememberedWindowAxis(context.Background(), acceptancePrincipal(), decision)
+			var line map[string]any
+			if err := json.Unmarshal(buf.Bytes(), &line); err != nil {
+				t.Fatalf("line is not JSON: %v", err)
+			}
+			for _, key := range []string{"carrier_read", "interpreted_axis", "carried_axis", "decided_axis", "outcome"} {
+				unrecognised := line[key] == continuationTelemetryUnrecognised
+				if unrecognised != (key == tc.key) {
+					t.Errorf("%s = %v with %s invented", key, line[key], tc.key)
+				}
 			}
 		})
 	}
