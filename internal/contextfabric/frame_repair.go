@@ -920,9 +920,9 @@ func repairMemberKindFactAliasCollapse(receipt ModelExecutionReceipt, proposed Q
 //
 // THE BOUND, every clause pinned by frame_repair_test.go:
 //
-//   - Only an I6 failure whose detail is group_kind_equals_member_kind, on a
-//     grouped_members proposal. Any other failure, and any valid frame, passes
-//     through untouched (not_applicable).
+//   - Only an I6 failure whose detail is group_kind_equals_member_kind (a
+//     detail only a grouped_members proposal can carry). Any other failure,
+//     and any valid frame, passes through untouched (not_applicable).
 //   - Only when the receipt's group kind equals K. The receipt's group kind is
 //     the interpretation's own group axis: the flat hint the model stated, or
 //     the frame's own group kind when the hint was empty (the receipt records
@@ -950,9 +950,7 @@ func repairMemberKindFactAliasCollapse(receipt ModelExecutionReceipt, proposed Q
 // children_of_scope expression, so ScopeAnchorKind and RequestedJudgment stay
 // the zero value, the same declaration the fact-alias repair carries.
 func repairSelfGroupFlatCohort(receipt ModelExecutionReceipt, proposed QuestionFrame, emittedShape InvestigationShape, subjectTerms []string, result FrameValidationResult) FrameValidationResult {
-	applicable := result.Failure.Invariant == FrameInvariantI6 &&
-		result.Failure.Detail == FrameFailureGroupEqualsMember &&
-		proposed.SubjectExpression.Kind == SubjectExpressionGroupedMembers &&
+	applicable := result.Failure.Detail == FrameFailureGroupEqualsMember &&
 		proposed.SubjectExpression.Grouped != nil
 	if !applicable {
 		if result.Repair.Decision == "" {
@@ -975,7 +973,7 @@ func repairSelfGroupFlatCohort(receipt ModelExecutionReceipt, proposed QuestionF
 	if result.Repair.Attempts >= frameRepairBound {
 		return declined(FrameRepairDeclinedBoundReached)
 	}
-	if receipt.GroupKind == "" || receipt.GroupKind != kind {
+	if receipt.GroupKind != kind {
 		return declined(FrameRepairDeclinedGroupKindMismatch)
 	}
 	if receipt.RequestedSubjectKindUnrecognized || (receipt.RequestedSubjectKind != "" && receipt.RequestedSubjectKind != kind) {

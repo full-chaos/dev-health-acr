@@ -104,6 +104,23 @@ func selfGroupCells() []selfGroupCell {
 			wantLine: withGroupHintSource(memberKindAliasAppliedLine(), "model"),
 		},
 		{
+			// The repaired frame meets the SAME validation: a compare goal
+			// over a discovered cohort fails I7 after the repair, and the
+			// turn is refused with that failure, the line saying a repair ran.
+			cell:    "a repaired frame that fails another invariant is refused after the repair",
+			receipt: func(*ModelExecutionReceipt) {},
+			frame: func() QuestionFrame {
+				frame := selfGroupByRepoFrame()
+				frame.Goals = []InvestigationGoal{GoalCompare}
+				return frame
+			},
+			wantLine: map[string]any{
+				"outcome": "refused_invalid", "failed_invariant": "i7", "repair_decision": "refused_after_repair",
+				"repair": "self_group_flat_cohort", "repair_invariant": "i6", "repair_attempts": float64(1),
+				"repair_kind_after": "discovered_kind", "repair_member_kind": "repository",
+			},
+		},
+		{
 			cell:    "a genuine two-level grouping is untouched",
 			receipt: func(*ModelExecutionReceipt) {},
 			frame: func() QuestionFrame {
@@ -339,4 +356,23 @@ func newSelfGroupRepairEngine(t *testing.T, receipt ModelExecutionReceipt, propo
 		t.Fatalf("NewEngine() error = %v", err)
 	}
 	return engine, graph
+}
+
+// TestTheSelfGroupRepairNeverReadsAFrameWithoutAGroupedExpression holds that
+// the repair's own guard, not the validator's failure alone, decides that the
+// proposal is grouped: a self-group failure paired with a proposal that has no
+// grouped expression is passed through, never dereferenced.
+func TestTheSelfGroupRepairNeverReadsAFrameWithoutAGroupedExpression(t *testing.T) {
+	t.Parallel()
+	receipt := groupedMetricByRepoReceipt()
+	proposal := selfGroupByRepoFrame()
+	proposal.SubjectExpression = discoveredExpression(SubjectRepository)
+	failed := FrameValidationResult{
+		Outcome: FrameValidationOutcomeRefusedInvalid,
+		Failure: FrameValidationFailure{Invariant: FrameInvariantI6, Phase: FrameValidationPhaseA1, Detail: FrameFailureGroupEqualsMember},
+	}
+	result := repairSelfGroupFlatCohort(receipt, proposal, ShapeSingleSubject, nil, failed)
+	if result.Repair.Decision != FrameRepairNotApplicable || result.Outcome != FrameValidationOutcomeRefusedInvalid {
+		t.Fatalf("result = %+v, want the failure untouched and not_applicable", result)
+	}
 }
