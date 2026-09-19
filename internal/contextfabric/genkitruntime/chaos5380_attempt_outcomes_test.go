@@ -273,7 +273,7 @@ func TestDecisionEventReportsTheFallbackLegsOwnAttempts(t *testing.T) {
 func TestSynthesizeDecisionEventCarriesEveryAttempt(t *testing.T) {
 	t.Parallel()
 	handler, logger := newCaptureLogger()
-	generator := &sequencedGenerator{synthesis: validSynthesisOutput(), errs: []error{retryableUnavailable()}}
+	generator := &sequencedGenerator{synthesis: claimedSynthesisOutput(), errs: []error{retryableUnavailable()}}
 	runtime := mustRuntime(t, generator, Config{Logger: logger, MaxAttempts: 2})
 	if _, _, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput()); err != nil {
 		t.Fatalf("SynthesizeAnswer() error = %v", err)

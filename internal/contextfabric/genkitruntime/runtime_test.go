@@ -701,6 +701,7 @@ func mustRuntime(t *testing.T, generator generator, override Config) *Runtime {
 	if override.MaxSynthesisResynthesisAttempts != 0 {
 		config.MaxSynthesisResynthesisAttempts = override.MaxSynthesisResynthesisAttempts
 	}
+	config.SingleDraw = override.SingleDraw
 	runtime, err := newWithGenerator(config, generator)
 	if err != nil {
 		t.Fatalf("newWithGenerator() error = %v", err)

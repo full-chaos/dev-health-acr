@@ -214,7 +214,7 @@ func TestSynthesizeAnswerStopsDrawingImmediatelyOnSuccess(t *testing.T) {
 	t.Parallel()
 	gen := &drawSequenceGenerator{outputs: []synthesisOutput{
 		invalidTitleSynthesisOutput(),
-		validSynthesisOutput(),
+		claimedSynthesisOutput(),
 	}}
 	runtime := mustRuntime(t, gen, Config{MaxSynthesisResynthesisAttempts: MaxSynthesisResynthesisAttemptsCeiling})
 
@@ -471,7 +471,7 @@ func TestBoundedResynthesisStopsDrawingWhenDeadlineCannotAffordAnotherDraw(t *te
 func TestBoundedResynthesisProceedsWhenDeadlineHasRoom(t *testing.T) {
 	t.Parallel()
 	handler, logger := newCaptureLogger()
-	valid := validSynthesisOutput()
+	valid := claimedSynthesisOutput()
 	gen := &drawSequenceGenerator{outputs: []synthesisOutput{
 		invalidTitleSynthesisOutput(),
 		valid,
@@ -572,7 +572,7 @@ func TestBoundedResynthesisAllowsRedrawInTheSameBandWithoutFallback(t *testing.T
 	handler, logger := newCaptureLogger()
 	gen := &drawSequenceGenerator{outputs: []synthesisOutput{
 		invalidTitleSynthesisOutput(),
-		validSynthesisOutput(),
+		claimedSynthesisOutput(),
 	}}
 	runtime := mustRuntime(t, gen, Config{Logger: logger, Timeout: time.Second, MaxSynthesisResynthesisAttempts: 3})
 	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)

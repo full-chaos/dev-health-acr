@@ -2948,6 +2948,21 @@
         "presence": "required"
       },
       {
+        "key": "zero_claim_redraw",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_evaluated",
+          "not_needed",
+          "redrawn_recovered",
+          "redrawn_still_zero",
+          "redraw_failed",
+          "declined_deadline",
+          "declined_ceiling",
+          "declined_single_draw"
+        ]
+      },
+      {
         "key": "request_id",
         "type": "string",
         "presence": "required"

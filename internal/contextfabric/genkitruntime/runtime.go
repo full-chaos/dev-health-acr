@@ -553,7 +553,12 @@ type Config struct {
 	// ordering (primary re-samples first, fallback runs once after the
 	// bound is exhausted).
 	MaxSynthesisResynthesisAttempts int
-	Fallback                        contextfabric.ModelRuntime
+	// SingleDraw keeps a runtime to exactly one synthesis draw per call: it
+	// also declines the extra draw a validated zero-claim draft would
+	// otherwise get. Set on the fallback runtime, which by design answers
+	// once after the primary has spent its draws.
+	SingleDraw bool
+	Fallback   contextfabric.ModelRuntime
 	// Logger receives the ACR-owned decision-event log line CHAOS-3889 emits
 	// once per model call (see logInterpretDecision/logSynthesizeDecision).
 	// Defaults to slog.Default() when nil, matching every other
@@ -1620,11 +1625,15 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		// has encoded one, so a call rejected before encoding emits no
 		// input line (there is no input to describe).
 		inputTrace *synthesisInputTrace
+		// zeroClaimRedraw records what the zero-claim redraw rule decided for
+		// this call, from the closed eventspec vocabulary. It starts at
+		// "not_evaluated" and is only ever moved by a draw that validated.
+		zeroClaimRedraw = eventspec.SynthesisZeroClaimRedrawNotEvaluated
 	)
 	defer func() {
 		r.logSynthesizeDecision(ctx, principal.OrgID, input.Request.RequestID, receipt, primaryFailureClassification, grounding, rejectionReason, factGroupSize, groundedBeyondFirst, attemptOutcomes, fallbackAttempts, primaryProvider, primaryModel, primaryModelVersion, draws, budgetChecked, budgetRemainingMS, budgetReservedMS, budgetStopped)
 		if inputTrace != nil {
-			r.logSynthesizeInput(ctx, principal.OrgID, input.Request.RequestID, *inputTrace, receipt, primaryModel, primaryModelVersion, grounding, draws)
+			r.logSynthesizeInput(ctx, principal.OrgID, input.Request.RequestID, *inputTrace, receipt, primaryModel, primaryModelVersion, grounding, draws, zeroClaimRedraw)
 		}
 	}()
 
@@ -1694,7 +1703,14 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	// synthesisDraw's own doc comment for why this is a separate axis from
 	// attemptOutcomes/receipt.Attempts below (transport retries within ONE
 	// draw, versus how many draws were drawn).
-	for draw := 1; draw <= maxDraws; draw++ {
+	// A draw that validates with no claimed fact although the input carries
+	// evidence references is held and drawn once more (see
+	// zeroClaimRedrawApplies). limit is maxDraws until that decision raises it
+	// by the one extra draw, never past the ceiling the log line's digest
+	// lists are sized for.
+	limit := maxDraws
+	var held *heldSynthesisDraw
+	for draw := 1; draw <= limit; draw++ {
 		// CHAOS-5655 / 4452 vol.1 §10 D5 ("the reserved synthesis deadline
 		// ships in the same slice ... or the terminal case is a 504
 		// regardless"): the first draw is unconditional, matching a
@@ -1729,6 +1745,9 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 				budgetReservedMS = contextfabric.SanitizeLogInt(reserved.Milliseconds())
 				if remaining < reserved {
 					budgetStopped = true
+					if held != nil {
+						zeroClaimRedraw = eventspec.SynthesisZeroClaimRedrawDeclinedDeadline
+					}
 					break
 				}
 			}
@@ -1782,6 +1801,28 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		if err == nil {
 			outputBytes, _ := json.Marshal(output)
 			draws = append(draws, synthesisDraw{Index: draw, Outcome: "success", OutputDigest: contextfabric.DigestModelValue(outputBytes), Claims: len(output.ClaimedFacts), Clause: contractsv1.ContextFabricClauseNone})
+			zeroClaims := zeroClaimRedrawApplies(draft, *inputTrace)
+			switch {
+			case held != nil && zeroClaims:
+				zeroClaimRedraw = eventspec.SynthesisZeroClaimRedrawStillZero
+			case held != nil:
+				zeroClaimRedraw = eventspec.SynthesisZeroClaimRedrawRecovered
+			case zeroClaims && r.config.SingleDraw:
+				zeroClaimRedraw = eventspec.SynthesisZeroClaimRedrawDeclinedSingleDraw
+			case zeroClaims && draw >= MaxSynthesisResynthesisAttemptsCeiling:
+				zeroClaimRedraw = eventspec.SynthesisZeroClaimRedrawDeclinedCeiling
+			case zeroClaims:
+				// Held so a redraw that is rejected or fails in transport
+				// cannot cost the call the valid answer it already has.
+				held = &heldSynthesisDraw{output: output, draft: draft, attempts: attemptOutcomes}
+				zeroClaimRedraw = eventspec.SynthesisZeroClaimRedrawFailed
+				if limit == draw {
+					limit++
+				}
+				continue
+			default:
+				zeroClaimRedraw = eventspec.SynthesisZeroClaimRedrawNotNeeded
+			}
 			break
 		}
 		// This draw's draft was rejected: record its digest and clause
@@ -1791,6 +1832,13 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		rejectedBytes, _ := json.Marshal(output)
 		clause, _ := contextfabric.SynthesisRejectionClauseOf(err)
 		draws = append(draws, synthesisDraw{Index: draw, Outcome: "invalid_output", OutputDigest: contextfabric.DigestModelValue(rejectedBytes), Claims: len(output.ClaimedFacts), Clause: clause})
+	}
+	// A redraw that was rejected or failed in transport serves the valid
+	// zero-claim draft it followed: an honest degraded answer, never a failure
+	// the first draw did not have. zeroClaimRedraw already reads "failed".
+	if held != nil && (generationErr != nil || err != nil) {
+		output, draft, attemptOutcomes = held.output, held.draft, held.attempts
+		generationErr, err = nil, nil
 	}
 	completed := r.now().UTC()
 	attempts := len(attemptOutcomes)
@@ -2276,6 +2324,22 @@ func formatSynthesisDrawClaims(draws []synthesisDraw) string {
 	return strings.Join(parts, ",")
 }
 
+// heldSynthesisDraw is a draw that validated but claimed no fact although the
+// input carried evidence references, kept while one more draw is attempted.
+type heldSynthesisDraw struct {
+	output   synthesisOutput
+	draft    contextfabric.SynthesisDraft
+	attempts []attemptOutcome
+}
+
+// zeroClaimRedrawApplies reports whether a validated draft claims no fact
+// although the input it answered carries evidence references on its facts. A
+// bundle with no such references gives the model nothing to claim, so an empty
+// claim list there is an honest answer and never a reason to draw again.
+func zeroClaimRedrawApplies(draft contextfabric.SynthesisDraft, trace synthesisInputTrace) bool {
+	return len(draft.ClaimedFacts) == 0 && trace.FactEvidenceRefs > 0
+}
+
 // synthesisInputTrace is the shape of one encoded synthesis input: a digest of
 // the exact bytes sent to the model and counts of what they carry. It holds
 // no question text and no fact value.
@@ -2317,7 +2381,7 @@ func newSynthesisInputTrace(encoded []byte, input contextfabric.SynthesisInput) 
 // logSynthesizeInput emits the declared synthesis-input line: the encoded
 // input's shape beside each draw's output shape. It carries the PRIMARY leg's
 // model identity, because the input it describes is the one that leg sent.
-func (r *Runtime) logSynthesizeInput(ctx context.Context, orgID, requestID string, trace synthesisInputTrace, receipt contextfabric.ModelExecutionReceipt, model, modelVersion string, grounding synthesisGroundingCounts, draws []synthesisDraw) {
+func (r *Runtime) logSynthesizeInput(ctx context.Context, orgID, requestID string, trace synthesisInputTrace, receipt contextfabric.ModelExecutionReceipt, model, modelVersion string, grounding synthesisGroundingCounts, draws []synthesisDraw, zeroClaimRedraw string) {
 	fields := eventspec.NewSynthesisInputFields(
 		decisionOrgIDHash(orgID),
 		model,
@@ -2339,6 +2403,7 @@ func (r *Runtime) logSynthesizeInput(ctx context.Context, orgID, requestID strin
 		grounding.Claims,
 		grounding.Drivers,
 		grounding.EvidenceRefs,
+		zeroClaimRedraw,
 		requestID,
 	)
 	r.config.Logger.InfoContext(ctx, eventspec.SynthesisInput.Msg, fields.SlogArgs()...)

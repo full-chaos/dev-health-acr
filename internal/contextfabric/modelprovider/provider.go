@@ -81,7 +81,7 @@ func newPrimaryRuntime(ctx context.Context, cfg Config) (*genkitruntime.Runtime,
 	}
 	var fallback contextfabric.ModelRuntime
 	if cfg.FallbackModel != "" {
-		fallbackRuntime, err := genkitruntime.New(runtimeConfig(instance, cfg, cfg.FallbackModel, nil))
+		fallbackRuntime, err := genkitruntime.New(fallbackRuntimeConfig(instance, cfg))
 		if err != nil {
 			return nil, fmt.Errorf("initialize fallback model runtime: %w", err)
 		}
@@ -97,6 +97,15 @@ func newPrimaryRuntime(ctx context.Context, cfg Config) (*genkitruntime.Runtime,
 		return nil, fmt.Errorf("initialize model runtime: %w", err)
 	}
 	return primary, nil
+}
+
+// fallbackRuntimeConfig is the fallback leg's runtime config: the plain
+// runtimeConfig (no phrasing model, no re-synthesis bound) held to a single
+// synthesis draw, because it answers once after the primary has spent its own.
+func fallbackRuntimeConfig(instance *genkit.Genkit, cfg Config) genkitruntime.Config {
+	config := runtimeConfig(instance, cfg, cfg.FallbackModel, nil)
+	config.SingleDraw = true
+	return config
 }
 
 func runtimeConfig(instance *genkit.Genkit, cfg Config, model string, fallback contextfabric.ModelRuntime) genkitruntime.Config {

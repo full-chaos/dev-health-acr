@@ -1905,6 +1905,44 @@ var SynthesisRetrySelection = Event{
 	},
 }
 
+// SynthesisZeroClaimRedraw* are the closed values of synthesis_input's
+// zero_claim_redraw field: what the rule "a validated draft that claims no fact
+// although the input's facts carry evidence references is drawn once more"
+// decided for one synthesize call.
+const (
+	// SynthesisZeroClaimRedrawNotEvaluated: no draw validated, so the rule had
+	// no draft to judge.
+	SynthesisZeroClaimRedrawNotEvaluated = "not_evaluated"
+	// SynthesisZeroClaimRedrawNotNeeded: the first validated draft claimed a
+	// fact, or the input carried no fact evidence references to claim from.
+	SynthesisZeroClaimRedrawNotNeeded = "not_needed"
+	// SynthesisZeroClaimRedrawRecovered: the extra draw validated and claimed
+	// a fact.
+	SynthesisZeroClaimRedrawRecovered = "redrawn_recovered"
+	// SynthesisZeroClaimRedrawStillZero: the extra draw validated and still
+	// claimed no fact; that draft is the one served.
+	SynthesisZeroClaimRedrawStillZero = "redrawn_still_zero"
+	// SynthesisZeroClaimRedrawFailed: the extra draw was rejected or failed in
+	// transport; the first valid zero-claim draft is the one served.
+	SynthesisZeroClaimRedrawFailed = "redraw_failed"
+	// SynthesisZeroClaimRedrawDeclinedDeadline: the caller's remaining
+	// deadline could not cover the extra draw.
+	SynthesisZeroClaimRedrawDeclinedDeadline = "declined_deadline"
+	// SynthesisZeroClaimRedrawDeclinedCeiling: the call had already used every
+	// draw the re-synthesis ceiling allows.
+	SynthesisZeroClaimRedrawDeclinedCeiling = "declined_ceiling"
+	// SynthesisZeroClaimRedrawDeclinedSingleDraw: the runtime is configured to
+	// draw once per call (the fallback leg), so no extra draw is taken.
+	SynthesisZeroClaimRedrawDeclinedSingleDraw = "declined_single_draw"
+)
+
+var synthesisZeroClaimRedrawVocabulary = []string{
+	SynthesisZeroClaimRedrawNotEvaluated, SynthesisZeroClaimRedrawNotNeeded,
+	SynthesisZeroClaimRedrawRecovered, SynthesisZeroClaimRedrawStillZero,
+	SynthesisZeroClaimRedrawFailed, SynthesisZeroClaimRedrawDeclinedDeadline,
+	SynthesisZeroClaimRedrawDeclinedCeiling, SynthesisZeroClaimRedrawDeclinedSingleDraw,
+}
+
 // SynthesisInput is the Info line one synthesize model call emits once its
 // prompt input is encoded: the shape of what the synthesizer was handed
 // (a digest of the encoded input plus counts of what it carries) beside the
@@ -1941,6 +1979,7 @@ var SynthesisInput = Event{
 		{Key: "claims", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "drivers", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "evidence_refs", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "zero_claim_redraw", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: synthesisZeroClaimRedrawVocabulary},
 		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
 	},
 }
