@@ -2438,3 +2438,24 @@ func assertRepairedCarriedFrame(t *testing.T, where string, frame *QuestionFrame
 		t.Fatalf("%s: frame expression = %+v, want children_of_scope anchored on %q with member kind team", where, expression, repairAnchorTerm)
 	}
 }
+
+// The group-hint source is a closed vocabulary at every boundary it crosses:
+// the receipt refuses an outside value and the line never renders one.
+func TestGroupHintSourceIsClosedAtTheReceiptAndTheLine(t *testing.T) {
+	receipt := validModelReceiptFixture(ModelOperationInterpret)
+	receipt.GroupKindSource = GroupHintSource("free text")
+	if err := receipt.Validate(); err == nil {
+		t.Fatal("Validate() accepted a group_kind_source outside the closed vocabulary")
+	}
+	for source, want := range map[GroupHintSource]string{
+		"": "none", GroupHintSourceModel: "model", GroupHintSourceFrame: "frame", "free text": "unclassified",
+	} {
+		if got := groupHintSourceToken(source); got != want {
+			t.Errorf("groupHintSourceToken(%q) = %q, want %q", source, got, want)
+		}
+	}
+	receipt.GroupKindSource = GroupHintSourceFrame
+	if err := receipt.Validate(); err != nil {
+		t.Fatalf("Validate() rejected a closed value: %v", err)
+	}
+}

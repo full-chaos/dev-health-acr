@@ -408,6 +408,9 @@ func (r ModelExecutionReceipt) Validate() error {
 	if len(r.RequestID) > 256 {
 		return fmt.Errorf("model receipt request_id is invalid")
 	}
+	if r.GroupKindSource != "" && r.GroupKindSource != GroupHintSourceModel && r.GroupKindSource != GroupHintSourceFrame {
+		return fmt.Errorf("model receipt group_kind_source is invalid")
+	}
 	// CHAOS-3900 W0: the closed-vocabulary guarantee on WindowClass/
 	// WindowConfidence must live HERE, at the receipt's own persistence
 	// boundary (pgmodelreceipts.Store.RecordModelExecution calls Validate()

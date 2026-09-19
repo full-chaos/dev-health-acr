@@ -183,10 +183,14 @@ func hintKindToken(kind SubjectKind, unrecognized bool) string {
 // groupHintSourceToken renders where the receipt's group kind came from,
 // `none` when it has none.
 func groupHintSourceToken(source GroupHintSource) string {
-	if source == "" {
+	switch source {
+	case "":
 		return "none"
+	case GroupHintSourceModel, GroupHintSourceFrame:
+		return string(source)
+	default:
+		return boundaryKindUnclassified
 	}
-	return string(source)
 }
 
 // slotKindToken renders a kind slot the variant HAS.

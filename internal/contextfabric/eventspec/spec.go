@@ -2234,7 +2234,7 @@ var FrameValidation = Event{
 		{Key: "frame_gate", Type: FieldString, Presence: PresenceRequired},
 		{Key: "refuse_basis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"none"}, cohortDiscoverabilityTokens...)},
 		{Key: "requested_group_hint", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: frameValidationRequestedHintKindTokens},
-		{Key: "group_hint_source", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"none", "model", "frame"}},
+		{Key: "group_hint_source", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"none", "model", "frame", "unclassified"}},
 		{Key: "requested_member_hint", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: frameValidationRequestedHintKindTokens},
 		{Key: "proposed_group_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: frameValidationProposedSlotKindTokens},
 		{Key: "proposed_member_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: frameValidationProposedSlotKindTokens},
