@@ -112,41 +112,6 @@ type OfferFloorRow struct {
 // offerFloorRowCap bounds the per-request row list carried on the trace.
 const offerFloorRowCap = 20
 
-// FilterOfferCandidates returns the candidates ClassifyOffer admits, in their
-// own order, and one decision row per input candidate (highest confidence
-// first, capped). The input is never mutated.
-func FilterOfferCandidates(candidates []contextfabric.SubjectCandidate) (admitted []contextfabric.SubjectCandidate, rows []OfferFloorRow, refused int) {
-	admitted = make([]contextfabric.SubjectCandidate, 0, len(candidates))
-	for _, candidate := range candidates {
-		admission := ClassifyOffer(candidate)
-		rows = append(rows, offerFloorRow(candidate, admission))
-		if admission.Admitted() {
-			admitted = append(admitted, candidate)
-			continue
-		}
-		refused++
-	}
-	return admitted, rows, refused
-}
-
-// FilterOfferPool is FilterOfferCandidates over a subject-keyed pool. The
-// returned map is a fresh one; the input is never mutated.
-func FilterOfferPool(pool map[string]contextfabric.SubjectCandidate) (map[string]contextfabric.SubjectCandidate, []OfferFloorRow, int) {
-	out := make(map[string]contextfabric.SubjectCandidate, len(pool))
-	rows := make([]OfferFloorRow, 0, len(pool))
-	refused := 0
-	for key, candidate := range pool {
-		admission := ClassifyOffer(candidate)
-		rows = append(rows, offerFloorRow(candidate, admission))
-		if admission.Admitted() {
-			out[key] = candidate
-			continue
-		}
-		refused++
-	}
-	return out, rows, refused
-}
-
 func offerFloorRow(candidate contextfabric.SubjectCandidate, admission OfferAdmission) OfferFloorRow {
 	mechanisms := MergeMechanisms(candidate.MatchMechanisms)
 	names := make([]string, 0, len(mechanisms))

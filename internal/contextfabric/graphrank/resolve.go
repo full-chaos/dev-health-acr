@@ -3944,7 +3944,6 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	}
 	var offerFloorRows []OfferFloorRow
 	coverageAdmitted := make([]contextfabric.SubjectCandidate, 0, len(coverageCandidates))
-	coverageRefused := 0
 	for _, candidate := range coverageCandidates {
 		admission := offerAdmissionOf(candidate, offerFloorCommitted)
 		offerFloorRows = append(offerFloorRows, offerFloorRow(candidate, admission))
@@ -3952,13 +3951,11 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			coverageAdmitted = append(coverageAdmitted, candidate)
 			continue
 		}
-		coverageRefused++
 	}
 	kindOfferCandidates := unionCandidatesForOffer(resolution.Candidates, coverageAdmitted)
 	// offerFullPool is the untruncated merged pool the kind offers read for
 	// "which kinds does the pool hold", held to the same floor.
 	offerFullPool := make(map[string]contextfabric.SubjectCandidate, len(candidatesBySubject))
-	fullPoolRefused := 0
 	for key, candidate := range candidatesBySubject {
 		admission := offerAdmissionOf(candidate, offerFloorCommitted)
 		offerFloorRows = append(offerFloorRows, offerFloorRow(candidate, admission))
@@ -3966,7 +3963,6 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			offerFullPool[key] = candidate
 			continue
 		}
-		fullPoolRefused++
 	}
 	// CHAOS-4234: a coverage-floor find the final cut dropped still reaches
 	// the offer builders through the union above -- emit its own

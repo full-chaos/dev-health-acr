@@ -137,23 +137,3 @@ func TestOfferSimilarityFloorIsDerivedFromTheLexicalBand(t *testing.T) {
 		}
 	}
 }
-
-// TestFilterOfferPoolAndCandidatesAgree: the map and slice helpers apply the
-// one classifier, never mutate their input, and count what they refuse.
-func TestFilterOfferPoolAndCandidatesAgree(t *testing.T) {
-	strong := contextfabric.SubjectCandidate{Subject: contextfabric.SubjectRef{Kind: "team", CanonicalID: "a"}, State: contextfabric.ResolutionProposed, Confidence: 1, MatchMechanisms: []contextfabric.MatchMechanism{contextfabric.MatchExact}}
-	weak := contextfabric.SubjectCandidate{Subject: contextfabric.SubjectRef{Kind: "team", CanonicalID: "b"}, State: contextfabric.ResolutionProposed, Confidence: 0.5625, MatchMechanisms: []contextfabric.MatchMechanism{contextfabric.MatchLexical}}
-	candidates := []contextfabric.SubjectCandidate{weak, strong}
-	admitted, rows, refused := FilterOfferCandidates(candidates)
-	if len(admitted) != 1 || admitted[0].Subject.CanonicalID != "a" || refused != 1 || len(rows) != 2 {
-		t.Fatalf("candidates: admitted=%v refused=%d rows=%d", admitted, refused, len(rows))
-	}
-	if candidates[0].Subject.CanonicalID != "b" {
-		t.Fatal("input reordered")
-	}
-	pool := map[string]contextfabric.SubjectCandidate{SubjectKey(strong.Subject): strong, SubjectKey(weak.Subject): weak}
-	out, poolRows, poolRefused := FilterOfferPool(pool)
-	if len(out) != 1 || poolRefused != 1 || len(poolRows) != 2 || len(pool) != 2 {
-		t.Fatalf("pool: out=%d refused=%d rows=%d input=%d", len(out), poolRefused, len(poolRows), len(pool))
-	}
-}
