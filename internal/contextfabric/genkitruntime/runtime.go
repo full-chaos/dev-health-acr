@@ -1002,6 +1002,8 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 	// entry point runs exactly one draw so its sample index keeps meaning
 	// what the caller asked. Bounded by maxDraws and by ctx (the request
 	// deadline); a final rejection is returned unchanged.
+	var totalUsage contextfabric.ModelUsage
+	totalAttempts := 0
 	for draw := 0; ; draw++ {
 		decodingSeed = chaos4631InterpretSeedFor(questionHash, sample)
 		attemptOutcomes, generationErr = r.withRetry(ctx, func(callCtx context.Context) error {
@@ -1012,6 +1014,11 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 			})
 			return err
 		})
+		// Every draw's cost counts on the receipt, redrawn or not.
+		totalAttempts += len(attemptOutcomes)
+		totalUsage.InputTokens += usage.InputTokens
+		totalUsage.OutputTokens += usage.OutputTokens
+		totalUsage.TotalTokens += usage.TotalTokens
 		if generationErr != nil {
 			break
 		}
@@ -1023,12 +1030,12 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 		sample++
 	}
 	completed := r.now().UTC()
-	attempts := len(attemptOutcomes)
+	attempts := totalAttempts
 	var classifiedErr error
 	if generationErr != nil {
 		classifiedErr = classifyModelError(generationErr)
 	}
-	receipt = r.receipt(contextfabric.ModelOperationInterpret, r.config.InterpretationPromptVersion, started, completed, attempts, encoded, nil, usage, classifiedErr)
+	receipt = r.receipt(contextfabric.ModelOperationInterpret, r.config.InterpretationPromptVersion, started, completed, attempts, encoded, nil, totalUsage, classifiedErr)
 	// RequestID correlates the durable receipt row back to this
 	// investigation (audit MED item, CHAOS-3889 secondary). Stamped once,
 	// up front, so it survives every return path below -- including

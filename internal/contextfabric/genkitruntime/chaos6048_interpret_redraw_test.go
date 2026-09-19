@@ -120,3 +120,19 @@ func (g *cancelingGen) Interpret(ctx context.Context, req generationRequest) (in
 	g.cancel()
 	return out, u, err
 }
+
+func TestInterpretReceiptCountsEveryDrawsAttemptsAndUsage(t *testing.T) {
+	t.Parallel()
+	gen := &redrawGenerator{outputs: []interpretationOutput{invalidInterpretationOutput(), validInterpretationOutput()}}
+	rt := mustRuntime(t, gen, Config{MaxSynthesisResynthesisAttempts: 3})
+	_, receipt, err := rt.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest())
+	if err != nil {
+		t.Fatalf("InterpretQuestion() error = %v", err)
+	}
+	if receipt.Attempts != 2 {
+		t.Fatalf("receipt.Attempts = %d, want 2 (one per draw)", receipt.Attempts)
+	}
+	if receipt.Usage.InputTokens != 20 || receipt.Usage.OutputTokens != 8 || receipt.Usage.TotalTokens != 28 {
+		t.Fatalf("receipt usage = %+v, want the sum of both draws (20/8/28)", receipt.Usage)
+	}
+}
