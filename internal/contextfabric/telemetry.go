@@ -780,6 +780,12 @@ func (t SlogEngineTelemetry) RecordCohortRanked(ctx context.Context, principal s
 		// not_applicable), content-safe by the same reasoning as
 		// signals_available above -- counts and enum keys only.
 		"outcome_counts", event.OutcomeCounts,
+		// read_attribution_carried / deficiency_zero_withheld: whether the
+		// ranking knew which subjects each read covered, and how many
+		// members lost the operational_deficiencies zero because their own
+		// subject was not read. A bool and a count, content-safe.
+		"read_attribution_carried", event.ReadAttributionCarried,
+		"deficiency_zero_withheld", event.DeficiencyZeroWithheld,
 	}, requestIDLogAttrs(ctx)...)...)
 }
 

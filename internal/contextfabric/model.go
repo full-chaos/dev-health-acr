@@ -943,6 +943,41 @@ type CanonicalFactBundle struct {
 	// this is engine bookkeeping about how a read was planned, never part of
 	// the evidence a bundle carries.
 	Scope *FactReadScope `json:"-"`
+	// ReadSubjects records, per fact kind, the subjects a provider was
+	// actually queried for and answered. Coverage.Sources is one entry per
+	// kind for the whole investigation, so it cannot say WHICH subject a
+	// successful read covered; this can. Non-nil on every bundle the
+	// registry returns (a kind that never completed a read has no entry),
+	// nil on a bundle that carries no attribution.
+	//
+	// `json:"-"`: read bookkeeping, never part of the evidence a bundle
+	// carries.
+	ReadSubjects FactReadSubjects `json:"-"`
+}
+
+// FactReadSubjects maps a fact kind to the set of subject keys
+// (canonicalFactSubjectKey) whose read for that kind completed.
+type FactReadSubjects map[FactKind]map[string]struct{}
+
+// add records subjects as read for kind.
+func (r FactReadSubjects) add(kind FactKind, subjects []SubjectRef) {
+	if len(subjects) == 0 {
+		return
+	}
+	set := r[kind]
+	if set == nil {
+		set = make(map[string]struct{}, len(subjects))
+		r[kind] = set
+	}
+	for _, subject := range subjects {
+		set[canonicalFactSubjectKey(subject)] = struct{}{}
+	}
+}
+
+// covers reports whether kind's read completed for subject.
+func (r FactReadSubjects) covers(kind FactKind, subject SubjectRef) bool {
+	_, ok := r[kind][canonicalFactSubjectKey(subject)]
+	return ok
 }
 
 type SynthesisInput struct {

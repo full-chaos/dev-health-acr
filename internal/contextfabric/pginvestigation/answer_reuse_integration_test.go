@@ -1325,7 +1325,7 @@ func TestFindReusable_RankingFormulaVersionIsConjunctive(t *testing.T) {
 	// threshold, a new signal -- design doc §8's own v1 -> v2 change). The
 	// stored row -- computed under the OLD formula -- must miss.
 	bumped := reuseKeyFor(result)
-	bumped.RankingFormulaVersion = "cohort-ranking.v3"
+	bumped.RankingFormulaVersion = contextfabric.RankingFormulaVersion + ".next"
 	_, ok, _, err := store.FindReusable(ctx, principal, bumped)
 	require.NoError(t, err)
 	require.False(t, ok, "expected a stale cohort answer computed under an old ranking formula version to miss after the formula version changed, not be silently reused under the new formula's semantics")

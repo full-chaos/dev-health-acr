@@ -36,7 +36,7 @@ import (
 // weight gets a real score" behavior. A real, counted formula change, not
 // a contract-only addition -- see cf-standing-rules.md's own mandate on
 // this constant.
-const RankingFormulaVersion = "cohort-ranking.v2"
+const RankingFormulaVersion = "cohort-ranking.v3"
 
 // Top-level signal-family names -- closed vocabulary. These are exactly the
 // values RankCohort can add to a member's RankingBasis, and exactly the keys
@@ -180,7 +180,22 @@ type cohortMemberSignalCitations map[string]map[string]*signalCitation
 // mint citations, and engine.go's own call site comment for how it
 // threads this map to narrateCohortDriverJudgments after synthesis.
 func RankCohort(cohort *Cohort, facts []CanonicalFact, coverage Coverage) (*Cohort, CohortRankedEvent, cohortMemberSignalCitations) {
-	event := CohortRankedEvent{FormulaVersion: RankingFormulaVersion, SignalsAvailable: map[string]int{}, OutcomeCounts: map[string]int{}}
+	return RankCohortWithReads(cohort, facts, coverage, nil)
+}
+
+// RankCohortWithReads is RankCohort over a read that also says WHICH
+// subjects each fact kind's read covered (CanonicalFactBundle.ReadSubjects).
+//
+// Coverage.Sources holds one state per fact kind for the whole
+// investigation, so a successful read of one subject says nothing about any
+// other member. reads makes the per-member statement: a member is credited
+// the "no fired rule" zero of operational_deficiencies.severity only when
+// that kind's read completed for THAT member's own subject. A nil reads
+// carries no attribution at all (a caller that never had a registry read,
+// e.g. a hand-built fixture) and keeps the coverage-only rule; every
+// registry bundle carries a non-nil reads, so production is always strict.
+func RankCohortWithReads(cohort *Cohort, facts []CanonicalFact, coverage Coverage, reads FactReadSubjects) (*Cohort, CohortRankedEvent, cohortMemberSignalCitations) {
+	event := CohortRankedEvent{FormulaVersion: RankingFormulaVersion, SignalsAvailable: map[string]int{}, OutcomeCounts: map[string]int{}, ReadAttributionCarried: reads != nil}
 	if cohort == nil || len(cohort.Members) == 0 {
 		return cohort, event, nil
 	}
@@ -252,7 +267,18 @@ func RankCohort(cohort *Cohort, facts []CanonicalFact, coverage Coverage) (*Coho
 			workloadValue = normalizeWorkloadMinMax(rawWorkload[key], workloadMin, workloadMax)
 		}
 
-		score, basis, completeness, contributed, drivers, outcome, missingSignals, citations := scoreMember(memberFacts, coverage, workloadValue, hasWorkload, workloadCitation[key])
+		// A nil reads is "attribution not carried": every member reads as
+		// covered, which is exactly the coverage-only rule.
+		deficiencyRead := reads == nil || reads.covers(FactOperationalDeficiencies, member.Subject)
+		if !deficiencyRead {
+			_, strictAvailable, _ := deficiencySeveritySignal(memberFacts, coverage, false)
+			if _, creditedWithoutRead, _ := deficiencySeveritySignal(memberFacts, coverage, true); creditedWithoutRead && !strictAvailable {
+				// Would have been scored from another subject's read. Counted
+				// so the trace shows the decision and how often it fires.
+				event.DeficiencyZeroWithheld++
+			}
+		}
+		score, basis, completeness, contributed, drivers, outcome, missingSignals, citations := scoreMember(memberFacts, coverage, workloadValue, hasWorkload, workloadCitation[key], deficiencyRead)
 		results[i] = memberResult{score: score, basis: basis, completeness: completeness, contributed: contributed, drivers: drivers, outcome: outcome, missingSignals: missingSignals, citations: citations}
 		if completeness == CohortDataDegraded {
 			degradedCount++
@@ -365,10 +391,10 @@ func cohortDriverClaimID(subject SubjectRef, signal string, window CohortMemberD
 // empty iff Outcome is insufficient_evidence or not_applicable (see
 // memberResult's own doc comment above and Outcome's design doc §8
 // thresholds).
-func scoreMember(facts []CanonicalFact, coverage Coverage, workloadValue float64, workloadAvailable bool, workloadCitation *signalCitation) (score *float64, basis []string, completeness CohortDataCompleteness, contributed []string, drivers []CohortMemberDriver, outcome CohortMemberOutcome, missingSignals []string, citations []*signalCitation) {
+func scoreMember(facts []CanonicalFact, coverage Coverage, workloadValue float64, workloadAvailable bool, workloadCitation *signalCitation, deficiencyRead bool) (score *float64, basis []string, completeness CohortDataCompleteness, contributed []string, drivers []CohortMemberDriver, outcome CohortMemberOutcome, missingSignals []string, citations []*signalCitation) {
 	mixValue, mixLabels, mixUsedPriorWindow, mixConcentration, mixConcentrationMethod, mixAvailable, mixCitation := investmentMixSignal(facts, coverage)
 	healthValue, healthAvailable, healthCitation := healthRiskSignal(facts, coverage)
-	deficiencyValue, deficiencyAvailable, deficiencyCitation := deficiencySeveritySignal(facts, coverage)
+	deficiencyValue, deficiencyAvailable, deficiencyCitation := deficiencySeveritySignal(facts, coverage, deficiencyRead)
 	readinessValue, readinessAvailable, readinessCitation := readinessGapSignal(facts, coverage)
 
 	type signal struct {
@@ -862,7 +888,14 @@ func healthRiskSignal(facts []CanonicalFact, coverage Coverage) (value float64, 
 // convention) -- a Truncated batch cannot promise there were truly zero
 // fired rules (one could exist past the truncation cap), so it does NOT
 // get the zero exception.
-func deficiencySeveritySignal(facts []CanonicalFact, coverage Coverage) (value float64, available bool, citation *signalCitation) {
+//
+// memberRead is whether the deficiencies read completed for THIS member's
+// own subject. The zero exception is a statement about that member -- "read,
+// nothing fired" -- so it requires the member's own read; the coverage state
+// alone describes the whole investigation and would credit a member with a
+// clean result that only some other subject's read produced. Without it the
+// member has no evidence for this family and the signal is unavailable.
+func deficiencySeveritySignal(facts []CanonicalFact, coverage Coverage, memberRead bool) (value float64, available bool, citation *signalCitation) {
 	max := 0.0
 	found := false
 	var maxFact CanonicalFact
@@ -897,6 +930,9 @@ func deficiencySeveritySignal(facts []CanonicalFact, coverage Coverage) (value f
 		// actually produced max -- the same "worst case governs" fact this
 		// value already came from.
 		return max, true, citeFactField(FactOperationalDeficiencies, maxFact, "severity")
+	}
+	if !memberRead {
+		return 0, false, nil
 	}
 	state, foundState := coverageState(coverage, FactOperationalDeficiencies)
 	if !foundState || state == SourceAvailable {

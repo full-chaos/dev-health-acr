@@ -87,6 +87,8 @@ func TestCohortRankedLineCarriesNoKeyOutsideItsAllowList(t *testing.T) {
 		// judgment_mismatch/requested_judgment_kind: a bool and a
 		// closed-vocabulary value, content-free by the same reasoning.
 		"judgment_mismatch": true, "requested_judgment_kind": true,
+		// read attribution: a bool and a count, content-free.
+		"read_attribution_carried": true, "deficiency_zero_withheld": true,
 	}
 	for key := range records[0] {
 		if !allowed[key] {

@@ -1161,6 +1161,15 @@ type CohortRankedEvent struct {
 	// cohort answer actually clears the qualification threshold, distinct
 	// from DegradedMemberCount's data-availability-only measure.
 	OutcomeCounts map[string]int
+	// ReadAttributionCarried is whether the ranking pass knew which subjects
+	// each fact kind's read covered. False only for a caller with no
+	// registry read behind it.
+	ReadAttributionCarried bool
+	// DeficiencyZeroWithheld counts members that would have been credited a
+	// "no fired rule" zero from the investigation-wide read state but whose
+	// own subject was never read for that kind, so the signal stayed
+	// unavailable for them.
+	DeficiencyZeroWithheld int
 }
 
 // Engine coordinates one open-ended investigation. It deliberately composes
@@ -3585,7 +3594,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	var rankedForServedResult *CohortRankedEvent
 	if graphContext.Cohort != nil && !workItemTuple {
 		var rankEvent CohortRankedEvent
-		graphContext.Cohort, rankEvent, cohortSignalCitations = RankCohort(graphContext.Cohort, facts.Facts, facts.Coverage)
+		graphContext.Cohort, rankEvent, cohortSignalCitations = RankCohortWithReads(graphContext.Cohort, facts.Facts, facts.Coverage, facts.ReadSubjects)
 		applyCohortJudgmentMismatch(graphContext.Cohort, interpretation.RequestedJudgmentKind)
 		// The event captures the SAME decision applyCohortJudgmentMismatch
 		// just wrote onto the cohort, plus the interpreter's own pick it was
