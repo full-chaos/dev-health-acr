@@ -117,3 +117,40 @@ func TestSynthesizeAnswerEmitsNoInputLineBeforeEncoding(t *testing.T) {
 		t.Fatalf("a call rejected before encoding emitted an input line: %s", buf.String())
 	}
 }
+
+// TestSynthesizeInputLineNamesThePrimaryModelWhenTheFallbackAnswers: the line
+// describes the input the PRIMARY leg sent, so its model id stays the
+// primary's even when the served answer is the fallback's -- the fallback's
+// own identity (a different value here) would misattribute the draws.
+func TestSynthesizeInputLineNamesThePrimaryModelWhenTheFallbackAnswers(t *testing.T) {
+	t.Parallel()
+	primary := validSynthesisOutput()
+	primary.Status = "" // rejected: the fallback then answers
+	gen := &drawSequenceGenerator{outputs: []synthesisOutput{primary}}
+	var buf bytes.Buffer
+	runtime := mustRuntime(t, gen, Config{
+		Logger:   slog.New(slog.NewJSONHandler(&buf, nil)),
+		Fallback: fallbackRuntime{draft: validDraft()},
+	})
+	_, receipt, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput())
+	if err != nil {
+		t.Fatalf("SynthesizeAnswer() error = %v, want the fallback to succeed", err)
+	}
+	if receipt.Model == "test/model" {
+		t.Fatalf("fixture: served receipt model = %q must differ from the primary's", receipt.Model)
+	}
+	parsed, err := certify.Parse(buf.Bytes())
+	if err != nil {
+		t.Fatalf("certify.Parse: %v", err)
+	}
+	want := map[string]any{
+		"request_id":    "request_12345678",
+		"input_digest":  sha256Hex(gen.requests[0].Prompt),
+		"model_id":      "test/model",
+		"outcome":       "fallback",
+		"draw_outcomes": "1:invalid_output",
+	}
+	if _, err := certify.Certify(parsed, certify.Assertion{Event: eventspec.SynthesisInput, Want: want}); err != nil {
+		t.Fatalf("certify synthesis input line: %v", err)
+	}
+}
