@@ -9,6 +9,7 @@ package devhealthfacts_test
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"testing"
@@ -29,14 +30,14 @@ func factString(t *testing.T, fact contextfabric.CanonicalFact, field string) st
 	return *value.String
 }
 
-func TestQueryVersionMovedPastTheUnlabelledProjectMix(t *testing.T) {
+func TestQueryVersionMovedPastTheMultiPlacedExclusion(t *testing.T) {
 	const prefix = "devhealthfacts.clickhouse.v"
 	version, ok := strings.CutPrefix(devhealthfacts.QueryVersion, prefix)
 	if !ok {
 		t.Fatalf("QueryVersion = %q, want the %q<n> shape", devhealthfacts.QueryVersion, prefix)
 	}
-	if n, err := strconv.Atoi(version); err != nil || n < 13 {
-		t.Fatalf("QueryVersion = %q: a candidate saved before project theme facts named their source (v12 and before) must not be served as though it did", devhealthfacts.QueryVersion)
+	if n, err := strconv.Atoi(version); err != nil || n < 15 {
+		t.Fatalf("QueryVersion = %q: a candidate saved before project theme facts named their source (v14 and before, which excluded a multi-placed work item id) must not be served as though it did", devhealthfacts.QueryVersion)
 	}
 }
 
@@ -322,23 +323,42 @@ func TestProjectNativeThemeMixAgainstRealClickHouse(t *testing.T) {
 		}
 	})
 
-	t.Run("a_work_item_id_under_two_repositories_attributes_to_no_project_and_is_disclosed", func(t *testing.T) {
-		const org = "org-ambiguous-item"
+	t.Run("a_work_item_id_under_several_repositories_counts_for_each_project_and_is_disclosed", func(t *testing.T) {
+		const org = "org-multi-placed-item"
 		seedProject("proj-amb-a", org)
 		seedProject("proj-amb-b", org)
+		seedProject("proj-amb-c", org)
 		seedItemInRepo(org, "linear:AMB-1", "proj-amb-a", "11111111-1111-4111-8111-000000000001")
 		seedItemInRepo(org, "linear:AMB-1", "proj-amb-b", "11111111-1111-4111-8111-000000000002")
+		seedItemInRepo(org, "linear:AMB-3", "proj-amb-a", "11111111-1111-4111-8111-000000000001")
+		seedItemInRepo(org, "linear:AMB-3", "proj-amb-b", "11111111-1111-4111-8111-000000000002")
+		seedItemInRepo(org, "linear:AMB-3", "proj-amb-c", "11111111-1111-4111-8111-000000000003")
 		seedIssueUnit(org, "wu-amb", 10, map[string]float64{"risk": 1.0}, "linear:AMB-1")
+		seedIssueUnit(org, "wu-amb3", 30, map[string]float64{"quality": 1.0}, "linear:AMB-3")
 
-		facts := read(org, "proj-amb-a", "proj-amb-b")
-		if len(facts) != 2 {
-			t.Fatalf("facts = %#v, want one disclosure-only fact per candidate project", facts)
+		facts := read(org, "proj-amb-a", "proj-amb-b", "proj-amb-c")
+		if len(facts) != 3 {
+			t.Fatalf("facts = %#v, want one fact per placed project", facts)
 		}
-		for project, fact := range facts {
-			if got := factInt(t, fact, "native_ambiguous_unit_count"); got != 1 {
-				t.Errorf("%s native_ambiguous_unit_count = %d, want 1", project, got)
+		want := map[string]struct {
+			units, multi int64
+			risk         float64
+		}{
+			"proj-amb-a": {2, 2, 0.25},
+			"proj-amb-b": {2, 2, 0.25},
+			"proj-amb-c": {1, 1, 0},
+		}
+		for project, w := range want {
+			fact := facts[project]
+			if got := factInt(t, fact, "work_unit_count"); got != w.units {
+				t.Errorf("%s work_unit_count = %d, want %d", project, got, w.units)
 			}
-			absent(t, fact, "theme_risk", "investment_mix_source", "work_unit_count")
+			if got := factInt(t, fact, "native_multi_placed_unit_count"); got != w.multi {
+				t.Errorf("%s native_multi_placed_unit_count = %d, want %d", project, got, w.multi)
+			}
+			if got := factNumber(t, fact, "theme_risk"); math.Abs(got-w.risk) > 1e-9 {
+				t.Errorf("%s theme_risk = %v, want %v", project, got, w.risk)
+			}
 		}
 	})
 

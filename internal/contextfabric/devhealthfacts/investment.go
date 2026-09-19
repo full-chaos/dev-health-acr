@@ -939,10 +939,11 @@ const projectNativeMixBasis = "project_work_items_issue_evidence_work_unit_inves
 // A work unit that touches several projects counts in full for each;
 // spanning_unit_count discloses how many of the project's units do. A work
 // item id that project membership places under more than one repository
-// attributes to no project; native_ambiguous_unit_count discloses the work
-// units excluded that way, on the mix fact when there is a native mix and
-// on the project's fact (the roll-up's, or a fact carrying only that count)
-// when there is not.
+// counts for each project it is placed in, like a spanning unit;
+// native_multi_placed_unit_count discloses how many of the project's units
+// were counted through such an id (a data defect shows as a non-zero count),
+// on the mix fact when there is a native mix and on the project's fact (the
+// roll-up's, or a fact carrying only that count) when there is not.
 func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, unusableRollup map[string]int64) (rowCount int, err error) {
 	ids, bySubject, _ := v2Index(subjects, identity.KindProject)
 	if len(ids) == 0 {
@@ -964,12 +965,11 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 		}
 		currentTotal := row.FeatureDelivery + row.Operational + row.Maintenance + row.Quality + row.Risk
 		if row.EffortUnits == 0 || currentTotal <= 0 {
-			// No native mix. A project whose evidence was excluded as
-			// ambiguous still says so, so an absent native mix is
-			// distinguishable from a project with no work.
-			if row.AmbiguousUnits > 0 {
+			// No native mix. A project whose only counted units carry no
+			// effort still discloses its multi-placed units.
+			if row.MultiPlacedUnits > 0 {
 				mergeProjectInvestmentFact(facts, subject, row.ProjectSubjectKey, map[string]contextfabric.FactValue{
-					"native_ambiguous_unit_count": contextfabric.IntegerFactValue(int64(row.AmbiguousUnits)),
+					"native_multi_placed_unit_count": contextfabric.IntegerFactValue(int64(row.MultiPlacedUnits)),
 				}, nil)
 			}
 			continue
@@ -991,7 +991,7 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 		fields["work_unit_count"] = contextfabric.IntegerFactValue(int64(row.WorkUnits))
 		fields["effort_unit_count"] = contextfabric.IntegerFactValue(int64(row.EffortUnits))
 		fields["spanning_unit_count"] = contextfabric.IntegerFactValue(int64(row.SpanningUnits))
-		fields["native_ambiguous_unit_count"] = contextfabric.IntegerFactValue(int64(row.AmbiguousUnits))
+		fields["native_multi_placed_unit_count"] = contextfabric.IntegerFactValue(int64(row.MultiPlacedUnits))
 		if timeBound.active {
 			fields["population_window"] = contextfabric.StringFactValue("requested_range")
 		} else {

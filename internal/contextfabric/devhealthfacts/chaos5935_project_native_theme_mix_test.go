@@ -48,8 +48,8 @@ func TestProjectNativeThemeMixFromScannedRow(t *testing.T) {
 	if got := factNumber(t, fact, "theme_quality_bugfix"); got != 0.1 {
 		t.Errorf("theme_quality_bugfix = %v, want 0.1", got)
 	}
-	if got, want := [4]int64{factInt(t, fact, "work_unit_count"), factInt(t, fact, "effort_unit_count"), factInt(t, fact, "spanning_unit_count"), factInt(t, fact, "native_ambiguous_unit_count")}, [4]int64{9, 7, 2, 3}; got != want {
-		t.Errorf("populations = %v, want %v (work, effort, spanning, ambiguous)", got, want)
+	if got, want := [4]int64{factInt(t, fact, "work_unit_count"), factInt(t, fact, "effort_unit_count"), factInt(t, fact, "spanning_unit_count"), factInt(t, fact, "native_multi_placed_unit_count")}, [4]int64{9, 7, 2, 3}; got != want {
+		t.Errorf("populations = %v, want %v (work, effort, spanning, multi-placed)", got, want)
 	}
 	if result.Truncated {
 		t.Errorf("Truncated = true for one row")
@@ -131,22 +131,22 @@ func TestProjectNativeThemeMixReadFailureIsReported(t *testing.T) {
 	}
 }
 
-// A project with no native weight and excluded ambiguous evidence serves a
-// fact carrying only the excluded count; one with neither serves nothing.
-func TestProjectNativeThemeMixDisclosesAnExclusionWithoutAMix(t *testing.T) {
+// A project with no native weight and multi-placed units serves a fact
+// carrying only the multi-placed count; one with neither serves nothing.
+func TestProjectNativeThemeMixDisclosesMultiPlacedUnitsWithoutAMix(t *testing.T) {
 	t.Parallel()
-	onlyAmbiguous := []any{"linear:a", 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, uint64(0), uint64(0), uint64(0), uint64(2)}
-	client := &fakeClient{tables: []fakeTable{{match: "unit_span AS", rows: [][]any{onlyAmbiguous}}}}
+	onlyMultiPlaced := []any{"linear:a", 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, uint64(3), uint64(0), uint64(0), uint64(2)}
+	client := &fakeClient{tables: []fakeTable{{match: "unit_span AS", rows: [][]any{onlyMultiPlaced}}}}
 	result, err := readNativeMix(t, client, "a")
 	if err != nil {
 		t.Fatalf("ReadFacts: %v", err)
 	}
 	if len(result.Facts) != 1 {
-		t.Fatalf("facts = %#v, want one fact carrying the excluded count", result.Facts)
+		t.Fatalf("facts = %#v, want one fact carrying the multi-placed count", result.Facts)
 	}
 	fact := result.Facts[0]
-	if got := factInt(t, fact, "native_ambiguous_unit_count"); got != 2 {
-		t.Errorf("native_ambiguous_unit_count = %d, want 2", got)
+	if got := factInt(t, fact, "native_multi_placed_unit_count"); got != 2 {
+		t.Errorf("native_multi_placed_unit_count = %d, want 2", got)
 	}
 	for _, field := range []string{"investment_mix_source", "theme_feature_delivery"} {
 		if _, has := fact.Fields[field]; has {
