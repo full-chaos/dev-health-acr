@@ -259,6 +259,65 @@ func TestInterpretDecisionLineSanitizesRejectedFactKind(t *testing.T) {
 	}
 }
 
+// TestInterpretDecisionLinePreservesRejectedFactKindVerbatim pins CHAOS-5986's
+// byte-exact contract: toDomain trims fact_requirements[].kind before
+// Validate() ever runs, so without a raw side-channel the decision line
+// would silently report a DIFFERENT string than the one the model actually
+// sent -- an operator diagnosing the exact out-of-vocabulary value a
+// misbehaving model emitted would be misled by their own telemetry.
+func TestInterpretDecisionLinePreservesRejectedFactKindVerbatim(t *testing.T) {
+	t.Parallel()
+	const raw = "  bad_kind  "
+	output := validInterpretationOutput()
+	output.FactRequirements = []factRequirementOutput{{Kind: raw}}
+
+	fields, _ := interpretDecisionLine(t, output)
+
+	got, ok := fields["rejected_fact_kind"].(string)
+	if !ok {
+		t.Fatalf("rejected_fact_kind missing or not a string: %#v", fields["rejected_fact_kind"])
+	}
+	if got != raw {
+		t.Fatalf("rejected_fact_kind = %q, want the RAW model value %q verbatim (not trimmed)", got, raw)
+	}
+}
+
+// TestInterpretDecisionLineSurfacesAnAllWhitespaceRejectedFactKind pins
+// CHAOS-5986's presence contract: an out-of-vocabulary kind that is
+// entirely whitespace trims to "", and a presence signal keyed on string
+// emptiness (rather than an explicit "was this actually attached" flag)
+// would silently OMIT the field -- indistinguishable from a rejection
+// whose reason was not fact_requirement_kind_invalid at all, exactly the
+// ambiguity this field exists to remove.
+func TestInterpretDecisionLineSurfacesAnAllWhitespaceRejectedFactKind(t *testing.T) {
+	t.Parallel()
+	const raw = " \t\n "
+	output := validInterpretationOutput()
+	output.FactRequirements = []factRequirementOutput{{Kind: raw}}
+
+	fields, _ := interpretDecisionLine(t, output)
+
+	if got := fields["rejection_reason"]; got != string(contractsv1.ContextFabricInterpretationRejectionFactRequirementKindInvalid) {
+		t.Fatalf("rejection_reason = %v, want %q -- fixture is wrong", got, contractsv1.ContextFabricInterpretationRejectionFactRequirementKindInvalid)
+	}
+	// SanitizeLogAttr replaces every control byte (tab/newline included)
+	// with '?' before the value reaches the line -- see its own doc
+	// comment -- so the assertion here is PRESENCE, not a byte-exact
+	// match against raw: that exact-match proof already exists,
+	// pre-sanitization, at TestClassifyInterpretationRejectionPrefersTheRawMapOverTheTrimmedValue.
+	// What this test pins is that an all-whitespace kind reaches the
+	// line AT ALL, rather than being silently treated as "no kind was
+	// ever attached".
+	got, present := fields["rejected_fact_kind"]
+	if !present {
+		t.Fatalf("rejected_fact_kind is absent, want it present (the model's all-whitespace value, sanitized) -- an all-whitespace kind is a real rejected value, not the same as no kind ever attached")
+	}
+	gotStr, isString := got.(string)
+	if !isString || strings.TrimSpace(strings.ReplaceAll(gotStr, "?", "")) != "" {
+		t.Fatalf("rejected_fact_kind = %#v, want a sanitized (space/'?'-only) rendering of the all-whitespace raw value %q", got, raw)
+	}
+}
+
 // TestFallbackSemanticRejectionCarriesItsReasonToTheOuterArtifacts closes a
 // gap an adversarial review round found: when the primary's interpretation
 // is rejected AND a configured fallback also fails semantically, the
@@ -368,6 +427,7 @@ func TestFallbackFactKindRejectionCarriesItsRawValueToTheOuterArtifacts(t *testi
 		t.Fatalf("NewInterpretationRejection() did not return *InterpretationRejection: %#v", fallbackRejected)
 	}
 	rejection.RejectedFactKind = "fallback_bad_kind"
+	rejection.RejectedFactKindSet = true
 
 	primary := validInterpretationOutput()
 	primary.Shape = "not_a_real_shape"

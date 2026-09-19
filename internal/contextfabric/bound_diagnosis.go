@@ -22,7 +22,22 @@ import (
 // this function must be reachable from there too, not only from
 // RuntimeQuestionInterpreter.Interpret's defensive re-validation for a
 // ModelRuntime that does not self-validate.
-func ClassifyInterpretationRejection(question InterpretedQuestion, cause error) error {
+//
+// rawFactKindByKind, when non-nil, maps each DISTINCT
+// TRIMMED fact_requirements[].kind value question can carry to the RAW
+// (untrimmed, possibly empty) string the model actually sent for it.
+// question's own Kind fields are already trimmed by the time this function
+// sees them (genkitruntime's toDomain trims/dedupes before Validate() ever
+// runs), so without this map, the value RejectedFactRequirementKind names
+// is the trimmed one -- silently dropping leading/trailing whitespace an
+// operator needs to see BY VALUE, and (worse) an all-whitespace kind
+// trimming to "" collapsing into the same "no kind attached" shape a
+// caller with nothing to attach produces. A caller with no raw output in
+// scope (RuntimeQuestionInterpreter.Interpret's defensive re-validation of
+// an InterpretedQuestion an arbitrary ModelRuntime already built, with no
+// raw model JSON available) passes nil, and the trimmed value is used
+// instead -- still sound, only not always byte-exact.
+func ClassifyInterpretationRejection(question InterpretedQuestion, cause error, rawFactKindByKind map[contractsv1.ContextFabricFactKind]string) error {
 	// CHAOS-3811: %w on the cause too, not %v. The rendered message is
 	// identical either way; what changes is that a sentinel the
 	// contracts/v1 validator attached to cause still answers errors.Is at
@@ -62,7 +77,21 @@ func ClassifyInterpretationRejection(question InterpretedQuestion, cause error) 
 	// further), in this same package.
 	if kind, ok := contractsv1.RejectedFactRequirementKind(question); ok {
 		if ir, ok := rejected.(*InterpretationRejection); ok {
-			ir.RejectedFactKind = kind
+			// Prefer the RAW value the map carries for this trimmed kind --
+			// kind here is already trimmed (question's own Kind fields are),
+			// so a hit in rawFactKindByKind is the model's actual, possibly
+			// whitespace-bearing or empty, untrimmed text. A caller that
+			// passed nil (or, in principle, a map missing this exact
+			// trimmed key -- unreachable in practice, since
+			// rawFactKindByKind is built from the SAME raw output toDomain
+			// trimmed question's kinds from) falls back to kind itself,
+			// never silently drops the attach.
+			raw, present := rawFactKindByKind[contractsv1.ContextFabricFactKind(kind)]
+			if !present {
+				raw = kind
+			}
+			ir.RejectedFactKind = raw
+			ir.RejectedFactKindSet = true
 		}
 	}
 	return rejected

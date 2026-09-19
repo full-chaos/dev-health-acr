@@ -45,7 +45,18 @@ type InterpretationRejection struct {
 	// line (InterpretationRejectedFactKindOf below makes no safety claim
 	// about the value it returns).
 	RejectedFactKind string
-	err              error
+	// RejectedFactKindSet is the explicit presence signal for
+	// RejectedFactKind, distinct from RejectedFactKind's own zero value.
+	// An out-of-vocabulary kind that is empty or all whitespace is still
+	// a rejected kind the model proposed -- treating RejectedFactKind ==
+	// "" as "absent" silently dropped that exact case, indistinguishable
+	// from a rejection this field was never attached to at all. Set true
+	// whenever ClassifyInterpretationRejection actually attempted the
+	// attach (the reason WAS FactRequirementKindInvalid), false on every
+	// other path, including the two fact_registry.go callers that never
+	// set the field at all.
+	RejectedFactKindSet bool
+	err                 error
 }
 
 func (e *InterpretationRejection) Error() string { return e.err.Error() }
@@ -99,6 +110,13 @@ func InterpretationRejectionReasonOf(err error) InterpretationRejectionReason {
 // never set the field (the two fact_registry.go NewInterpretationRejection
 // callers, and a rejection reason that canonicalized to Unclassified).
 //
+// ok reports RejectedFactKindSet, NOT RejectedFactKind != "": an
+// all-whitespace or genuinely empty out-of-vocabulary kind is a real,
+// present rejected value -- the model proposed it and it is why
+// the interpretation was rejected -- and a caller must be able to tell
+// that apart from "no kind was ever attached". A string-emptiness check
+// here collapsed those two cases and silently dropped the first.
+//
 // UNLIKE InterpretationRejectionReasonOf, the string this returns is NOT
 // safe to log unsanitized -- see RejectedFactKind's own doc comment. Every
 // caller of this function must route the value through SanitizeLogAttr (or
@@ -111,5 +129,5 @@ func InterpretationRejectedFactKindOf(err error) (string, bool) {
 	if contractsv1.CanonicalContextFabricInterpretationRejectionReason(rejection.Reason) != contractsv1.ContextFabricInterpretationRejectionFactRequirementKindInvalid {
 		return "", false
 	}
-	return rejection.RejectedFactKind, rejection.RejectedFactKind != ""
+	return rejection.RejectedFactKind, rejection.RejectedFactKindSet
 }

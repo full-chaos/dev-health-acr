@@ -38,7 +38,7 @@ func rejectedQuestion() InterpretedQuestion {
 func TestClassifyInterpretationRejectionPreservesEverySentinel(t *testing.T) {
 	t.Parallel()
 	cause := errors.New("clarification_needed requires a reason")
-	err := ClassifyInterpretationRejection(rejectedQuestion(), cause)
+	err := ClassifyInterpretationRejection(rejectedQuestion(), cause, nil)
 
 	if !errors.Is(err, ErrInterpretationRejected) {
 		t.Fatalf("errors.Is(err, ErrInterpretationRejected) = false -- the route's 422 classification would break")
@@ -58,7 +58,7 @@ func TestClassifyInterpretationRejectionPreservesEverySentinel(t *testing.T) {
 // the reason is attached, and it is the rule that actually rejected.
 func TestClassifyInterpretationRejectionCarriesTheRule(t *testing.T) {
 	t.Parallel()
-	err := ClassifyInterpretationRejection(rejectedQuestion(), errors.New("clarification_needed requires a reason"))
+	err := ClassifyInterpretationRejection(rejectedQuestion(), errors.New("clarification_needed requires a reason"), nil)
 	got := InterpretationRejectionReasonOf(err)
 	want := contractsv1.ContextFabricInterpretationRejectionClarificationReasonMissing
 	if got != want {
@@ -77,7 +77,7 @@ func TestClassifyInterpretationRejectionStillAttachesTheBoundViolation(t *testin
 	q.ClarificationNeeded = false
 	q.RequestedJudgment = strings.Repeat("j", contractsv1.ContextFabricRequestedJudgmentMaxLength+1)
 
-	err := ClassifyInterpretationRejection(q, errors.New("interpreted question violates v1 bounds"))
+	err := ClassifyInterpretationRejection(q, errors.New("interpreted question violates v1 bounds"), nil)
 
 	var violation *ModelBoundViolation
 	if !errors.As(err, &violation) {
@@ -398,7 +398,7 @@ func factKindRejectedQuestion(kind string) InterpretedQuestion {
 func TestClassifyInterpretationRejectionCarriesTheRejectedFactKind(t *testing.T) {
 	t.Parallel()
 	q := factKindRejectedQuestion("not_a_fact_kind")
-	err := ClassifyInterpretationRejection(q, errors.New("fact requirement violates v1 bounds"))
+	err := ClassifyInterpretationRejection(q, errors.New("fact requirement violates v1 bounds"), nil)
 
 	if got := InterpretationRejectionReasonOf(err); got != contractsv1.ContextFabricInterpretationRejectionFactRequirementKindInvalid {
 		t.Fatalf("InterpretationRejectionReasonOf() = %q, want %q -- fixture is wrong", got, contractsv1.ContextFabricInterpretationRejectionFactRequirementKindInvalid)
@@ -418,6 +418,40 @@ func TestClassifyInterpretationRejectionCarriesTheRejectedFactKind(t *testing.T)
 	if rejection.RejectedFactKind != "not_a_fact_kind" {
 		t.Fatalf("rejection.RejectedFactKind = %q, want %q -- the struct field itself must carry the value, not only the reader", rejection.RejectedFactKind, "not_a_fact_kind")
 	}
+	if !rejection.RejectedFactKindSet {
+		t.Fatalf("rejection.RejectedFactKindSet = false, want true -- the presence signal must be explicit, not re-derived from string emptiness")
+	}
+}
+
+// TestClassifyInterpretationRejectionPrefersTheRawMapOverTheTrimmedValue
+// pins the raw-map lookup CHAOS-5986 relies on: question's own
+// Kind is ALREADY TRIMMED by the time it reaches this function (toDomain
+// trims before Validate() runs), so genkitruntime.InterpretQuestion passes a
+// map from that trimmed value back to the model's RAW text. This pins the
+// map lookup itself, independent of the runtime-level proof in
+// genkitruntime -- a caller that supplies raw text for the trimmed kind
+// gets that raw text, not the trimmed one, and a caller that supplies
+// nothing (nil, the shape the test above and RuntimeQuestionInterpreter's
+// defensive path both use) falls back to the trimmed value rather than
+// dropping the attach.
+func TestClassifyInterpretationRejectionPrefersTheRawMapOverTheTrimmedValue(t *testing.T) {
+	t.Parallel()
+	// The trimmed kind toDomain would have produced from either raw string
+	// below is the SAME: "" (all-whitespace trims to empty, same as a
+	// genuinely empty kind). The map is what tells them apart.
+	q := factKindRejectedQuestion("")
+	rawByKind := map[contractsv1.ContextFabricFactKind]string{
+		"": " \t\n ",
+	}
+	err := ClassifyInterpretationRejection(q, errors.New("fact requirement violates v1 bounds"), rawByKind)
+
+	kind, ok := InterpretationRejectedFactKindOf(err)
+	if !ok {
+		t.Fatalf("InterpretationRejectedFactKindOf() ok = false, want true -- an all-whitespace kind is a real rejected value")
+	}
+	if kind != " \t\n " {
+		t.Fatalf("InterpretationRejectedFactKindOf() = %q, want the RAW map value %q, not the trimmed \"\"", kind, " \t\n ")
+	}
 }
 
 // TestInterpretationRejectedFactKindOfIsAbsentForEveryOtherRejection pins the
@@ -432,7 +466,7 @@ func TestInterpretationRejectedFactKindOfIsAbsentForEveryOtherRejection(t *testi
 	}{
 		{
 			name: "a rejection for an unrelated clause (clarification_reason_missing)",
-			err:  ClassifyInterpretationRejection(rejectedQuestion(), errors.New("clarification_needed requires a reason")),
+			err:  ClassifyInterpretationRejection(rejectedQuestion(), errors.New("clarification_needed requires a reason"), nil),
 		},
 		{name: "a plain error carrying no rejection", err: errors.New("something else")},
 		{name: "a nil error", err: nil},

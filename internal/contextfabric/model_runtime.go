@@ -1986,7 +1986,12 @@ func (r RuntimeQuestionInterpreter) interpretOneSample(
 	if err == nil {
 		if validateErr := question.Validate(); validateErr != nil {
 			receipt.Outcome = "invalid_output"
-			err = ClassifyInterpretationRejection(question, validateErr)
+			// nil: this defensive re-validation path has no raw model JSON
+			// in scope (question was already built by an arbitrary
+			// ModelRuntime), so ClassifyInterpretationRejection reports the
+			// trimmed kind rather than the byte-exact raw one -- see its own
+			// doc comment.
+			err = ClassifyInterpretationRejection(question, validateErr, nil)
 			// The reason rides the RECEIPT here too, not only the error.
 			// This adapter builds and mutates its OWN receipt and then
 			// persists it below, so leaving the field empty meant a
