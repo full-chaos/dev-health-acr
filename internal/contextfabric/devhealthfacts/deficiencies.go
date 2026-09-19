@@ -168,7 +168,7 @@ func (e deficiencyEvaluation) coverage() *contextfabric.FactEvaluationCoverage {
 // evaluations are named, alone or beside the absence.
 func (e deficiencyEvaluation) noDataReason(fallback string) string {
 	switch {
-	case e.withheld || e.stale == 0:
+	case e.stale == 0:
 		return fallback
 	case e.never == 0:
 		return deficiencyEvaluationReasonStale

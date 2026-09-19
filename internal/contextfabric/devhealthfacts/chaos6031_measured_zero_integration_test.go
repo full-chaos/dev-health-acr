@@ -9,6 +9,7 @@ package devhealthfacts_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -121,6 +122,33 @@ func TestCHAOS6031MeasuredZeroDomainAgainstRealClickHouse(t *testing.T) {
 		}
 		if stale.Reason == never.Reason || stale.Reason == "" || never.Reason == "" {
 			t.Fatalf("stale reason %q and never reason %q must both be set and differ", stale.Reason, never.Reason)
+		}
+	})
+
+	t.Run("a_clear_only_read_is_available_and_names_its_evidence", func(t *testing.T) {
+		const orgID = "org-6031-clear-only"
+		seedEvaluation(t, ctx, direct, orgID, "SOLO", day(-1))
+		// An older evaluation of a rule the latest one no longer carries
+		// must not inflate the rule count of the latest evaluation.
+		if err := direct.Exec(ctx, `INSERT INTO recommendations_daily (team_id, org_id, rule_id, window_start, window_end, fired, severity, title, rationale, success_criterion, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+			"SOLO", orgID, "retired-rule", day(-30), day(-16), false, "warning", "t", "", "", day(-16).Add(time.Hour)); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		result := readDeficiencyAsOf(t, ctx, orgID, asOf, "SOLO")
+		if result.State != contextfabric.SourceAvailable || result.Reason != "" || len(result.Facts) != 0 {
+			t.Fatalf("state %q reason %q facts %d, want available, no reason, no facts", result.State, result.Reason, len(result.Facts))
+		}
+		if !evaluatedSet(result)["SOLO"] || result.Evaluation == nil || result.Evaluation.RulesEvaluated != len(evaluationRules) {
+			t.Fatalf("evaluated %v evaluation %#v, want SOLO with %d rules at the latest evaluation", evaluatedSet(result), result.Evaluation, len(evaluationRules))
+		}
+	})
+
+	t.Run("stale_and_never_evaluated_teams_are_both_named", func(t *testing.T) {
+		const orgID = "org-6031-mixed"
+		seedEvaluation(t, ctx, direct, orgID, "OLD", day(-40))
+		result := readDeficiencyAsOf(t, ctx, orgID, asOf, "OLD", "GHOST")
+		if !strings.Contains(result.Reason, "outside the freshness window") || !strings.Contains(result.Reason, "; ") {
+			t.Fatalf("reason = %q, want the stale disclosure and the absence disclosure together", result.Reason)
 		}
 	})
 
