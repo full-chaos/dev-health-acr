@@ -325,14 +325,14 @@ func (e *Engine) chainIdentityOf(ctx context.Context, principal storage.Principa
 		case evidence.IssuedFor == "":
 			return unavailable(SubjectSubstitutionChainReceiptMismatch)
 		}
-		served, chain, readErr := e.answeredIdentityOf(ctx, principal, evidence.IssuedFor, evidence.Subject)
+		_, chain, readErr := e.answeredIdentityOf(ctx, principal, evidence.IssuedFor, evidence.Subject)
 		if chain != SubjectSubstitutionChainVerified {
 			if readErr != SubjectSubstitutionChainErrorNone {
 				evidence.ChainError = readErr
 			}
 			return unavailable(chain)
 		}
-		evidence.Chain, evidence.Subject = SubjectSubstitutionChainGuardReceipt, served
+		evidence.Chain = SubjectSubstitutionChainGuardReceipt
 		return evidence
 	}
 	switch {

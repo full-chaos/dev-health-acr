@@ -724,6 +724,11 @@ func assertChainCell(t *testing.T, row ChainRow, cell ChainCell, served contextf
 		if listed != cell.RememberedFirst {
 			t.Errorf("%s: remembered subject listed first = %t, want %t", name, cell.RememberedFirst, listed)
 		}
+		// The remembered subject is offered with the label the answered
+		// result served.
+		if listed && served.SubjectResolution.Candidates[0].Subject.Label != chainSubject.Label {
+			t.Errorf("%s: remembered subject offered as %q, want the answered label %q", name, served.SubjectResolution.Candidates[0].Subject.Label, chainSubject.Label)
+		}
 		if listed && (cell.LineParentID != chainSubject.CanonicalID || cell.LineParentRes != answered) {
 			t.Errorf("%s: fired on parent %q of %q, want %q of the answered result %q", name, cell.LineParentID, cell.LineParentRes, chainSubject.CanonicalID, answered)
 		}
