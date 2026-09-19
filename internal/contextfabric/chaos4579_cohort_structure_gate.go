@@ -239,7 +239,6 @@ func GateOffersByFamily(material StructureOfferMaterial, outcome QuestionFamilyO
 		}
 		gated.CandidateOptions = nil
 	}
-	gated.SubjectFloor = material.SubjectFloor
 	if !removed {
 		return gated, CohortStructureGateNoOp
 	}
