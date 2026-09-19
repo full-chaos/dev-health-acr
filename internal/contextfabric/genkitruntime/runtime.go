@@ -849,7 +849,7 @@ func newWithGenerator(config Config, gen generator) (*Runtime, error) {
 // interpretation exactly once (S1 ships N=1 -- see chaos4631InterpretSeedFor's
 // doc comment), under the sample-0 derived seed.
 func (r *Runtime) InterpretQuestion(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
-	return r.interpretQuestionWithSample(ctx, principal, request, 0)
+	return r.interpretQuestionWithSample(ctx, principal, request, 0, r.config.MaxSynthesisResynthesisAttempts)
 }
 
 // InterpretQuestionForSample is CHAOS-4631's measurement-only entry point.
@@ -880,10 +880,10 @@ func (r *Runtime) InterpretQuestion(ctx context.Context, principal storage.Princ
 // fallback-sample-0 result. interpretseedbench.Run surfaces FallbackUsed on
 // every Sample for exactly this reason.
 func (r *Runtime) InterpretQuestionForSample(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, sample int) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
-	return r.interpretQuestionWithSample(ctx, principal, request, sample)
+	return r.interpretQuestionWithSample(ctx, principal, request, sample, 1)
 }
 
-func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, sample int) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
+func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, sample, maxDraws int) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
 	// CHAOS-3889 (H6/H7/H8): emit one decision-event log line for this
 	// call, covering every return path below via defer instead of a
 	// duplicated call at each return statement. receipt is mutated in
@@ -943,6 +943,11 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 		// zero when no fallback ran.
 		fallbackAttempts int
 		decodingSeed     int64
+		// redraws (CHAOS-6048): how many extra draws ran because an earlier
+		// draw was rejected as invalid output. initialSample is the sample
+		// index the first draw used; the final draw used initialSample+redraws.
+		redraws       int
+		initialSample int
 		// primaryProvider/primaryModel/primaryModelVersion (CHAOS-5380 PR-A
 		// B4, r5 P1-1): the PRIMARY leg's own identity, snapshotted BEFORE
 		// mergeFallbackReceipt overwrites receipt.Provider/Model/ModelVersion
@@ -955,7 +960,7 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 		primaryProvider, primaryModel, primaryModelVersion string
 	)
 	defer func() {
-		r.logInterpretDecision(ctx, principal.OrgID, request.RequestID, receipt, primaryFailureClassification, axisSource, decodingSeed, sample, rejectionReason, rejectedFactKind, rejectedFactKindSet, attemptOutcomes, fallbackAttempts, primaryProvider, primaryModel, primaryModelVersion)
+		r.logInterpretDecision(ctx, principal.OrgID, request.RequestID, receipt, primaryFailureClassification, axisSource, decodingSeed, sample, initialSample, redraws, rejectionReason, rejectedFactKind, rejectedFactKindSet, attemptOutcomes, fallbackAttempts, primaryProvider, primaryModel, primaryModelVersion)
 	}()
 
 	if err := request.Validate(); err != nil {
@@ -983,20 +988,40 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 	// request and the deferred telemetry read below, rather than mutated
 	// in place the way receipt/axisSource/primaryFailureClassification are.
 	questionHash := contextfabric.QuestionHash(request.Question)
-	decodingSeed = chaos4631InterpretSeedFor(questionHash, sample)
+	initialSample = sample
 
 	started := r.now().UTC()
 	var output interpretationOutput
 	var usage contextfabric.ModelUsage
 	var generationErr error
-	attemptOutcomes, generationErr = r.withRetry(ctx, func(callCtx context.Context) error {
-		var err error
-		output, usage, err = r.generator.Interpret(callCtx, generationRequest{
-			Model: r.config.ModelRef, System: interpretationSystemPrompt, Prompt: string(encoded),
-			Config: chaos4631InterpretDecodingConfig(decodingSeed),
+	var interpreted contextfabric.InterpretedQuestion
+	// CHAOS-6048: a draw whose output the validator rejects re-draws under
+	// the NEXT sample index's derived seed (a fresh, still reproducible
+	// draw) instead of surfacing the rejection of one unlucky sample. Only
+	// the production entry point (maxDraws > 1) redraws; the measurement
+	// entry point runs exactly one draw so its sample index keeps meaning
+	// what the caller asked. Bounded by maxDraws and by ctx (the request
+	// deadline); a final rejection is returned unchanged.
+	for draw := 0; ; draw++ {
+		decodingSeed = chaos4631InterpretSeedFor(questionHash, sample)
+		attemptOutcomes, generationErr = r.withRetry(ctx, func(callCtx context.Context) error {
+			var err error
+			output, usage, err = r.generator.Interpret(callCtx, generationRequest{
+				Model: r.config.ModelRef, System: interpretationSystemPrompt, Prompt: string(encoded),
+				Config: chaos4631InterpretDecodingConfig(decodingSeed),
+			})
+			return err
 		})
-		return err
-	})
+		if generationErr != nil {
+			break
+		}
+		interpreted, err = output.toDomain(request.TimeContext)
+		if err == nil || draw+1 >= maxDraws || ctx.Err() != nil {
+			break
+		}
+		redraws++
+		sample++
+	}
 	completed := r.now().UTC()
 	attempts := len(attemptOutcomes)
 	var classifiedErr error
@@ -1075,7 +1100,6 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 		}
 		return contextfabric.InterpretedQuestion{}, receipt, classifiedErr
 	}
-	interpreted, err := output.toDomain(request.TimeContext)
 	// H6: the caller's default TimeContext is substituted BEFORE Validate
 	// whenever the model returns an empty Axis (toDomain, below this
 	// function) -- record which happened so a defaulted axis is never
@@ -2600,7 +2624,7 @@ func decisionOrgIDHash(orgID string) string {
 // strings.NewReplacer pass changes CodeQL's read of the finding above is
 // verified per-PR, not assumed from this comment.
 
-func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification, axisSource string, decodingSeed int64, sample int, rejectionReason, rejectedFactKind string, rejectedFactKindSet bool, attemptOutcomes []attemptOutcome, fallbackAttempts int, primaryProvider, primaryModel, primaryModelVersion string) {
+func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification, axisSource string, decodingSeed int64, sample, initialSample, redraws int, rejectionReason, rejectedFactKind string, rejectedFactKindSet bool, attemptOutcomes []attemptOutcome, fallbackAttempts int, primaryProvider, primaryModel, primaryModelVersion string) {
 	fields := []any{
 		"request_id", contextfabric.SanitizeLogAttr(requestID),
 		"org_id_hash", contextfabric.SanitizeLogAttr(decisionOrgIDHash(orgID)),
@@ -2623,6 +2647,8 @@ func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID str
 		// repro), so seed is the only decoding parameter this change applies.
 		"decoding_seed", decodingSeed,
 		"sample", sample,
+		"initial_sample", initialSample,
+		"redraws", redraws,
 		// CHAOS-4631 ticket point 4: model id and prompt version recorded in
 		// telemetry, not on the result -- receipt.Model/ModelVersion/
 		// PromptVersion are already the durable ModelExecutionReceipt sink's
