@@ -20,7 +20,7 @@ func TestDefaultInterpretationPromptVersionIsExactlyCurrent(t *testing.T) {
 
 func TestDefaultSchemaVersionIsExactlyCurrent(t *testing.T) {
 	t.Parallel()
-	const wantVersion = "context-fabric-model-output.v6"
+	const wantVersion = "context-fabric-model-output.v7"
 	if DefaultSchemaVersion != wantVersion {
 		t.Fatalf("DefaultSchemaVersion = %q, want %q -- update this pin only alongside a genuine model-output-schema content change", DefaultSchemaVersion, wantVersion)
 	}
