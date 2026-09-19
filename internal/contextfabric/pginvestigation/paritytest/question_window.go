@@ -122,11 +122,11 @@ func RunQuestionWindowRedemptionSuite(t *testing.T, newStore func(t *testing.T) 
 
 func runQuestionWindowRedemption(t *testing.T, store contextfabric.InvestigationResultStore, threaded bool) QuestionWindowRedemption {
 	t.Helper()
-	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
-	start := now.Add(-90 * 24 * time.Hour)
+	at := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	start := at.Add(-90 * 24 * time.Hour)
 	model := &questionWindowModel{turns: []contextfabric.InterpretedQuestion{
 		{Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, WindowClass: contextfabric.WindowClassTrendAssessment},
-		{Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &now}, WindowClass: contextfabric.WindowClassTrendAssessment},
+		{Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &at}, WindowClass: contextfabric.WindowClassTrendAssessment},
 	}}
 	var logs bytes.Buffer
 	next := 0
@@ -139,7 +139,7 @@ func runQuestionWindowRedemption(t *testing.T, store contextfabric.Investigation
 		Telemetry:   contextfabric.NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))),
 	}, contextfabric.EngineOptions{
 		ServiceVersion: "question-window-parity",
-		Now:            func() time.Time { return now },
+		Now:            func() time.Time { return at },
 		NewResultID: func() string {
 			next++
 			return fmt.Sprintf("result_question_window_%t_%02d", threaded, next)
