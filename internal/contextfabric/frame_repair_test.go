@@ -226,6 +226,19 @@ func notApplicableLine(outcome, invariant, gate string) map[string]any {
 	}
 }
 
+// selfGroupDeclinedLine is the line a self-group proposal carries when the
+// self-group repair considered it and declined: the frame stays refused
+// under I6.
+func selfGroupDeclinedLine(decision string) map[string]any {
+	return map[string]any{
+		"outcome": "refused_invalid", "failed_invariant": "i6", "failure_detail": "group_kind_equals_member_kind",
+		"frame_gate": "rejected:i6", "repair_decision": decision,
+		"repair": "self_group_flat_cohort", "repair_invariant": "i6",
+		"repair_kind_before": "grouped_members", "repair_kind_after": "none", "repair_member_kind": "none",
+		"repair_terms_match": "not_evaluated", "repair_attempts": float64(0),
+	}
+}
+
 func appliedLine() map[string]any {
 	return map[string]any{
 		"outcome": "repaired", "failed_invariant": "", "frame_gate": "passed", "repair_decision": "applied",
@@ -653,7 +666,7 @@ func compareRepairCells() []compareRepairCell {
 				frame.SubjectExpression = groupedExpression(SubjectTeam, SubjectTeam)
 			}),
 			wantOutcome: FrameValidationOutcomeRefusedInvalid,
-			wantLine:    notApplicableLine("refused_invalid", "i6", "rejected:i6"),
+			wantLine:    selfGroupDeclinedLine("declined_two_level_request"),
 		},
 		{
 			cell:    "control: describe_trend and explain_change alone never fail I7",
@@ -1562,17 +1575,16 @@ func memberKindAliasRepairCells() []memberKindAliasRepairCell {
 			wantLine:    memberKindAliasDeclinedLine("declined_group_kind_mismatch", "refused:member_kind_unservable"),
 		},
 		{
-			// THE ILLEGAL SELF-GROUP CASE STAYS REFUSED, UNTOUCHED: I6
-			// fails before this repair ever sees a Valid outcome, so it
-			// is not_applicable, exactly like the other two repairs on an
-			// invariant they do not answer.
-			cell:    "an illegal self-group frame fails I6 before this repair ever runs",
-			receipt: func(*ModelExecutionReceipt) {},
+			// THE SELF-GROUP FRAME IS NEVER THIS REPAIR'S: I6 fails before
+			// it sees a Valid outcome. A two-level request keeps the
+			// refusal, decided by the self-group repair.
+			cell:    "a two-level self-group frame fails I6 before this repair ever runs",
+			receipt: func(r *ModelExecutionReceipt) { r.RequestedSubjectKind = SubjectIncident },
 			frame: withFrame(func(frame *QuestionFrame) {
 				frame.SubjectExpression = groupedExpression(SubjectRepository, SubjectRepository)
 			}),
 			wantOutcome: FrameValidationOutcomeRefusedInvalid,
-			wantLine:    notApplicableLine("refused_invalid", "i6", "rejected:i6"),
+			wantLine:    selfGroupDeclinedLine("declined_two_level_request"),
 		},
 		{
 			// THE PROVENANCE BOUND'S OWN CONTROL: a DIRECT model proposal
@@ -1996,6 +2008,15 @@ func TestEveryFrameRepairDecisionHasAnExecutedDriver(t *testing.T) {
 	for _, attempts := range []int{0, frameRepairBound} {
 		produced[memberKindAliasRepairAtTheBound(t, attempts).Repair.Decision] = true
 	}
+	for _, testCase := range selfGroupCells() {
+		receipt := groupedMetricByRepoReceipt()
+		testCase.receipt(&receipt)
+		run := interpretForRepair(t, receipt, testCase.frame(), []string{repairAnchorTerm})
+		produced[FrameRepairDecision(run.line["repair_decision"].(string))] = true
+	}
+	for _, attempts := range []int{0, frameRepairBound} {
+		produced[selfGroupRepairAtTheBound(t, attempts).Repair.Decision] = true
+	}
 	for _, member := range FrameRepairDecisionVocabulary() {
 		if !produced[member] {
 			t.Errorf("no executed driver produces repair decision %q", member)
@@ -2375,6 +2396,14 @@ func repairTableFixtures() []repairTableFixture {
 			name:            "member_kind_fact_alias_collapse",
 			receipt:         groupedMetricByRepoReceipt(),
 			frame:           groupedMetricByRepoFrame(),
+			shape:           ShapeSingleSubject,
+			terms:           []string{repairAnchorTerm},
+			zeroCarryFields: map[string]bool{"ScopeAnchorKind": true, "RequestedJudgment": true},
+		},
+		{
+			name:            "self_group_flat_cohort",
+			receipt:         groupedMetricByRepoReceipt(),
+			frame:           selfGroupByRepoFrame(),
 			shape:           ShapeSingleSubject,
 			terms:           []string{repairAnchorTerm},
 			zeroCarryFields: map[string]bool{"ScopeAnchorKind": true, "RequestedJudgment": true},

@@ -3137,6 +3137,14 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		repairAccountedForCollapse := familyOutcome.Frame != nil &&
 			familyOutcome.Frame.CollapsedGroupAxisMemberKind != "" &&
 			familyOutcome.Frame.CollapsedGroupAxisMemberKind == plan.MemberKind
+		if planGroupAxisCollapsed(plan.GroupKind, plan.MemberKind) && repairAccountedForCollapse {
+			// The requested axis is expressed by the flat cohort itself: one
+			// row per member of that kind. A plan that ALSO carried the group
+			// axis would partition the cohort by its own kind, which the plan
+			// contract refuses, and the group read would build groups of
+			// members by themselves. The served plan states the flat shape.
+			plan.GroupKind = ""
+		}
 		if planGroupAxisCollapsed(plan.GroupKind, plan.MemberKind) && !repairAccountedForCollapse {
 			// A group axis that collapsed onto the member kind partitions a
 			// set by itself, which no grouping can mean -- invariant I6, at

@@ -143,6 +143,11 @@ const (
 	// sampled signals disagree, and the repair anchors to neither rather
 	// than guessing.
 	FrameRepairDeclinedGroupKindMismatch FrameRepairDecision = "declined_group_kind_mismatch"
+	// FrameRepairDeclinedTwoLevelRequest: the interpretation stated a member
+	// kind of its own that is not the self-group kind (or one the sanitizer
+	// dropped as unrecognised), so the request names a second level the
+	// proposed frame lost. Refused on I6 (group_kind_equals_member_kind).
+	FrameRepairDeclinedTwoLevelRequest FrameRepairDecision = "declined_two_level_request"
 )
 
 var frameRepairDecisions = [...]FrameRepairDecision{
@@ -161,6 +166,7 @@ var frameRepairDecisions = [...]FrameRepairDecision{
 	FrameRepairDeclinedNotFactAliasKind,
 	FrameRepairDeclinedGroupKindUnservable,
 	FrameRepairDeclinedGroupKindMismatch,
+	FrameRepairDeclinedTwoLevelRequest,
 }
 
 // FrameRepairTermsMatch is whether the named subject's terms equal the flat
@@ -207,11 +213,18 @@ const FrameRepairCompareRankingCollapse FrameRepairName = "compare_ranking_colla
 // FrameValidationFailure. See its own doc comment for the full bound.
 const FrameRepairMemberKindFactAliasCollapse FrameRepairName = "member_kind_fact_alias_collapse"
 
+// FrameRepairSelfGroupFlatCohort re-reads a self-group frame (member kind =
+// group kind = K) from a "per K" request as a flat discovered_kind cohort of
+// K. It answers invariant I6 (group_kind_equals_member_kind). See
+// repairSelfGroupFlatCohort for its bound.
+const FrameRepairSelfGroupFlatCohort FrameRepairName = "self_group_flat_cohort"
+
 var frameRepairNames = [...]FrameRepairName{
 	FrameRepairCountKindCollapse,
 	FrameRepairCompareGroupedCollapse,
 	FrameRepairCompareRankingCollapse,
 	FrameRepairMemberKindFactAliasCollapse,
+	FrameRepairSelfGroupFlatCohort,
 }
 
 // FrameRepairNameCount is the closed vocabulary's size.
@@ -898,6 +911,93 @@ func repairMemberKindFactAliasCollapse(receipt ModelExecutionReceipt, proposed Q
 	return FrameValidationResult{Frame: revalidated.Frame, Outcome: FrameValidationOutcomeRepaired, Repair: considered}
 }
 
+// repairSelfGroupFlatCohort re-reads a self-group grouped_members frame as a
+// flat discovered_kind cohort. A frame whose member kind equals its group kind
+// K, proposed for a request whose own group axis is K ("per K"), has no second
+// level to enumerate: one row per K is exactly what the request asked for.
+// Invariant I6 refuses the frame as proposed (group_kind_equals_member_kind);
+// this is the one bounded repair for that refusal.
+//
+// THE BOUND, every clause pinned by frame_repair_test.go:
+//
+//   - Only an I6 failure whose detail is group_kind_equals_member_kind (a
+//     detail only a grouped_members proposal can carry). Any other failure,
+//     and any valid frame, passes through untouched (not_applicable).
+//   - Only when the receipt's group kind equals K. The receipt's group kind is
+//     the interpretation's own group axis: the flat hint the model stated, or
+//     the frame's own group kind when the hint was empty (the receipt records
+//     which). An absent or unrecognised hint, or a hint naming another kind,
+//     gives the repair no evidence of a "per K" request and it never guesses
+//     one.
+//   - Never when the interpretation stated a member kind of its own that is
+//     not K, or one the sanitizer dropped as unrecognised: that request has
+//     two levels, and collapsing it would lose the level it named.
+//   - Only when K itself is servable (CohortMemberKindFor over the candidate
+//     discovered_kind expression reports discoverable). A repair into a frame
+//     the gate would refuse on its own basis would trade one refusal for
+//     another and hide the first.
+//   - Only SubjectExpression changes, to discovered_kind{MemberKind: K} --
+//     Goals, Temporal, Dimensions, Emphasis and every other field are the
+//     proposal's own.
+//   - The repaired frame passes the SAME validation, unrelaxed, including the
+//     requested-group-axis check, which admits it only by the provenance this
+//     repair stamps (QuestionFrame.CollapsedGroupAxisMemberKind, the same
+//     field and the same reader the fact-alias repair uses). A direct model
+//     proposal of the identical discovered_kind shape stays refused.
+//   - At most frameRepairBound attempts.
+//
+// CARRY: SubjectExpression changes only and the result is not a
+// children_of_scope expression, so ScopeAnchorKind and RequestedJudgment stay
+// the zero value, the same declaration the fact-alias repair carries.
+func repairSelfGroupFlatCohort(receipt ModelExecutionReceipt, proposed QuestionFrame, emittedShape InvestigationShape, subjectTerms []string, result FrameValidationResult) FrameValidationResult {
+	applicable := result.Failure.Detail == FrameFailureGroupEqualsMember &&
+		proposed.SubjectExpression.Grouped != nil
+	if !applicable {
+		if result.Repair.Decision == "" {
+			result.Repair.Decision = FrameRepairNotApplicable
+		}
+		return result
+	}
+	kind := proposed.SubjectExpression.Grouped.GroupKind
+	considered := FrameRepair{
+		Name:       FrameRepairSelfGroupFlatCohort,
+		Invariant:  FrameInvariantI6,
+		KindBefore: proposed.SubjectExpression.Kind,
+		Attempts:   result.Repair.Attempts,
+	}
+	declined := func(decision FrameRepairDecision) FrameValidationResult {
+		considered.Decision = decision
+		result.Repair = considered
+		return result
+	}
+	if result.Repair.Attempts >= frameRepairBound {
+		return declined(FrameRepairDeclinedBoundReached)
+	}
+	if receipt.GroupKind != kind {
+		return declined(FrameRepairDeclinedGroupKindMismatch)
+	}
+	if receipt.RequestedSubjectKindUnrecognized || (receipt.RequestedSubjectKind != "" && receipt.RequestedSubjectKind != kind) {
+		return declined(FrameRepairDeclinedTwoLevelRequest)
+	}
+	candidate := SubjectExpression{Kind: SubjectExpressionDiscoveredKind, Discovered: &DiscoveredSetExpression{MemberKind: kind}}
+	if _, _, reason := CohortMemberKindFor(candidate); reason != CohortDiscoverable {
+		return declined(FrameRepairDeclinedGroupKindUnservable)
+	}
+	repaired := proposed
+	repaired.SubjectExpression = candidate
+	repaired.CollapsedGroupAxisMemberKind = kind
+	considered.Attempts++
+	considered.KindAfter = repaired.SubjectExpression.Kind
+	considered.MemberKind = kind
+	revalidated := validateAgainstInterpretation(receipt, repaired, emittedShape)
+	if revalidated.Outcome != FrameValidationOutcomeValid {
+		considered.Decision = FrameRepairRefusedAfterRepair
+		return FrameValidationResult{Outcome: revalidated.Outcome, Failure: revalidated.Failure, Repair: considered}
+	}
+	considered.Decision = FrameRepairApplied
+	return FrameValidationResult{Frame: revalidated.Frame, Outcome: FrameValidationOutcomeRepaired, Repair: considered}
+}
+
 // frameRepairFunc is one bounded repair's shape -- exactly
 // repairCountKindCollapse's own signature, so every repair in
 // frameRepairTable is invoked identically by validateProposedFrame.
@@ -914,4 +1014,5 @@ var frameRepairTable = []frameRepairFunc{
 	repairCompareGroupedCollapse,
 	repairCompareRankingCollapse,
 	repairMemberKindFactAliasCollapse,
+	repairSelfGroupFlatCohort,
 }
