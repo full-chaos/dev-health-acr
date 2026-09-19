@@ -1168,6 +1168,11 @@ var WindowContinuationDecision = Event{
 		{Key: "carried_axis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ContinuationDecisionLineVocabulary("carried_axis")},
 		{Key: "executed_axis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ContinuationDecisionLineVocabulary("executed_axis")},
 		{Key: "interpreted_axis_outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ContinuationDecisionLineVocabulary("interpreted_axis_outcome")},
+		// The axis decision's authority: the parent's relation to the window
+		// receipt, and whether the window was confirmed for this identical
+		// question (read apart from the window-only shape).
+		{Key: "parent_reference", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ContinuationDecisionLineVocabulary("parent_reference")},
+		{Key: "question_window_confirmed", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
 	},
 }

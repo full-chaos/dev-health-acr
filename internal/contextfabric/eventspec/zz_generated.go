@@ -1755,6 +1755,8 @@ type WindowContinuationDecisionFields struct {
 	CarriedAxis                string
 	ExecutedAxis               string
 	InterpretedAxisOutcome     string
+	ParentReference            string
+	QuestionWindowConfirmed    bool
 	RequestID                  string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every WindowContinuationDecisionFields uniformly, set ONLY by NewWindowContinuationDecisionFields below. A caller
@@ -1769,7 +1771,7 @@ type WindowContinuationDecisionFields struct {
 
 // NewWindowContinuationDecisionFields is the generated constructor for WindowContinuationDecisionFields -- every
 // field WindowContinuationDecision.Fields declares is a required parameter.
-func NewWindowContinuationDecisionFields(orgID string, sourceResultID string, seedSource string, familyCarried string, familyFresh string, familyAccepted string, familySource string, continuationDisposition string, decisionReason string, comparisonEvaluated bool, agreement bool, conflictReason string, conflictCount int, conflictFields string, appliedWindow string, carriedContextID string, freshContextID string, acceptedContextID string, compositionOutcome string, compositionFailedInvariant string, refusalBasis string, referencedResultID string, carrierRead string, carriedStateRead string, requestIdentityMatch string, carriedState map[string]any, freshState map[string]any, windowReceiptCount int, explicitWindowPresent bool, interpretedAxis string, carriedAxis string, executedAxis string, interpretedAxisOutcome string, requestID string) WindowContinuationDecisionFields {
+func NewWindowContinuationDecisionFields(orgID string, sourceResultID string, seedSource string, familyCarried string, familyFresh string, familyAccepted string, familySource string, continuationDisposition string, decisionReason string, comparisonEvaluated bool, agreement bool, conflictReason string, conflictCount int, conflictFields string, appliedWindow string, carriedContextID string, freshContextID string, acceptedContextID string, compositionOutcome string, compositionFailedInvariant string, refusalBasis string, referencedResultID string, carrierRead string, carriedStateRead string, requestIdentityMatch string, carriedState map[string]any, freshState map[string]any, windowReceiptCount int, explicitWindowPresent bool, interpretedAxis string, carriedAxis string, executedAxis string, interpretedAxisOutcome string, parentReference string, questionWindowConfirmed bool, requestID string) WindowContinuationDecisionFields {
 	return WindowContinuationDecisionFields{
 		OrgID:                      orgID,
 		SourceResultID:             sourceResultID,
@@ -1804,6 +1806,8 @@ func NewWindowContinuationDecisionFields(orgID string, sourceResultID string, se
 		CarriedAxis:                carriedAxis,
 		ExecutedAxis:               executedAxis,
 		InterpretedAxisOutcome:     interpretedAxisOutcome,
+		ParentReference:            parentReference,
+		QuestionWindowConfirmed:    questionWindowConfirmed,
 		RequestID:                  requestID,
 		constructed:                true,
 	}
@@ -1855,6 +1859,8 @@ func (f WindowContinuationDecisionFields) SlogArgs() []any {
 		"carried_axis", contextfabric.SanitizeLogAttr(f.CarriedAxis),
 		"executed_axis", contextfabric.SanitizeLogAttr(f.ExecutedAxis),
 		"interpreted_axis_outcome", contextfabric.SanitizeLogAttr(f.InterpretedAxisOutcome),
+		"parent_reference", contextfabric.SanitizeLogAttr(f.ParentReference),
+		"question_window_confirmed", f.QuestionWindowConfirmed,
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }

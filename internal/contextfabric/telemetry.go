@@ -2073,6 +2073,18 @@ func closedDecisionFields() []closedDecisionField {
 			},
 			Invent: func(d *windowContinuationDecision) { d.AxisOutcome = ContinuationAxisOutcome("invented-axis-outcome") },
 		},
+		{
+			// The request's parent against its window receipt: the input that
+			// decides whether a threaded parent is the offering result named
+			// again or a second prior reference.
+			Key: "parent_reference",
+			Token: func(d windowContinuationDecision) string {
+				return guard(ValidContinuationParentReference(d.ParentReference), string(d.ParentReference))
+			},
+			Invent: func(d *windowContinuationDecision) {
+				d.ParentReference = ContinuationParentReference("invented-parent-reference")
+			},
+		},
 	}
 }
 
@@ -2122,6 +2134,8 @@ func ContinuationDecisionLineVocabulary(key string) []string {
 		return optional(tokenStrings(axes[:]))
 	case "interpreted_axis_outcome":
 		return tokenStrings(continuationAxisOutcomes())
+	case "parent_reference":
+		return tokenStrings(continuationParentReferences())
 	case "carrier_read":
 		return tokenStrings(continuationCarrierReadVocabulary())
 	case "request_identity_match":
@@ -2215,6 +2229,12 @@ func (t SlogEngineTelemetry) RecordWindowContinuationDecision(ctx context.Contex
 		"carried_axis", SanitizeLogAttr(closedDecisionToken("carried_axis", decision)),
 		"executed_axis", SanitizeLogAttr(closedDecisionToken("executed_axis", decision)),
 		"interpreted_axis_outcome", SanitizeLogAttr(closedDecisionToken("interpreted_axis_outcome", decision)),
+		// The axis decision's own authority: the parent's relation to the
+		// window receipt, and whether the window was confirmed for this
+		// identical question -- the fact the override reads, apart from the
+		// window-only shape decision_reason reports.
+		"parent_reference", SanitizeLogAttr(closedDecisionToken("parent_reference", decision)),
+		"question_window_confirmed", decision.QuestionWindowConfirmed,
 		"carried_state_read", SanitizeLogAttr(closedDecisionToken("carried_state_read", decision)),
 		"request_identity_match", SanitizeLogAttr(closedDecisionToken("request_identity_match", decision)),
 		// The two readings, in full. The carried one is what admission read;

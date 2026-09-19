@@ -503,9 +503,21 @@ type windowContinuationDecision struct {
 	// the carried reading is examined (plan, family-table version, recorded
 	// axis, composition), because the time the user confirmed the window under
 	// is a property of the transition, not of whether the family reading could
-	// be continued. Read from the line as: carried_axis non-empty and
-	// decision_reason not changed_question/indeterminate_identity.
+	// be continued. Implies QuestionWindowConfirmed.
 	TransitionEstablished bool
+	// QuestionWindowConfirmed is the fact the AXIS decision reads: the sole
+	// window receipt's carrier loaded and passed the ingress taint gate, and
+	// this turn asks it the identical question with a nonempty canonical
+	// identity, the parent (if any) naming that same carrier. It holds for
+	// every such request, whatever else the request selects on this turn (a
+	// co-redeemed kind or subject offer, a stated scope): those change which
+	// READING continues, which the window-only transition above decides, never
+	// which time the user confirmed for this question. On the line as
+	// question_window_confirmed.
+	QuestionWindowConfirmed bool
+	// ParentReference is the request's parent against its window receipt,
+	// decided from the request alone. On the line as parent_reference.
+	ParentReference ContinuationParentReference
 	// InterpretedAxis is THIS turn's fresh interpreted axis, empty when
 	// interpretation never produced one.
 	InterpretedAxis contractsv1.ContextFabricTemporalAxis
@@ -788,6 +800,7 @@ func newWindowContinuationDecision(request InvestigationRequest) windowContinuat
 		WindowReceiptCount:    len(request.PriorWindowReceipts),
 		ExplicitWindowPresent: request.TimeContext.EvidenceWindow != nil,
 		AxisOutcome:           ContinuationAxisNotEvaluated,
+		ParentReference:       continuationParentReferenceOf(request),
 	}
 	if decision.Observed {
 		decision.SeedSource = CarrySeedReceipt
@@ -832,6 +845,36 @@ func requestCarriesWindowReceipts(request InvestigationRequest) bool {
 // Deliberately computed from the REQUEST alone, with no I/O, so it can be
 // decided before anything expensive runs and so a veto path can report it.
 func windowOnlyReferencedResultID(request InvestigationRequest) (string, bool) {
+	carrier, ok := windowReceiptCarrierID(request)
+	if !ok {
+		return "", false
+	}
+	if len(request.PriorSubjectReceipts) > 0 ||
+		len(request.PriorKindReceipts) > 0 ||
+		len(request.PriorAnchorReceipts) > 0 ||
+		len(request.PriorHandleReceipts) > 0 ||
+		len(request.PriorCandidateReceipts) > 0 {
+		return "", false
+	}
+	return carrier, true
+}
+
+// windowReceiptCarrierID reports the ONE prior result this request's window
+// confirmation was offered by, and whether the request names no OTHER prior
+// result beside it.
+//
+// A PARENT REFERENCE NAMING THAT SAME RESULT IS NOT A SECOND REFERENCE. A
+// caller that threads its conversation sends the result it continues as the
+// parent on every turn, so a turn redeeming a window offer names the offering
+// result twice: once in the receipt, once as the parent. Both name one prior
+// result, and the window receipt already binds it; reading the second copy as
+// a new selection would make the same redemption continue or not depending on
+// whether the caller threads parents. A parent naming a DIFFERENT result is a
+// second prior reference, and the request is not a window confirmation of one
+// carrier.
+//
+// Computed from the REQUEST alone, with no I/O.
+func windowReceiptCarrierID(request InvestigationRequest) (string, bool) {
 	var seen []string
 	for _, receipt := range request.PriorWindowReceipts {
 		id := strings.TrimSpace(receipt.ResultID)
@@ -847,17 +890,59 @@ func windowOnlyReferencedResultID(request InvestigationRequest) (string, bool) {
 	if len(seen) != 1 {
 		return "", false
 	}
-	if strings.TrimSpace(request.ParentResultID) != "" {
-		return "", false
-	}
-	if len(request.PriorSubjectReceipts) > 0 ||
-		len(request.PriorKindReceipts) > 0 ||
-		len(request.PriorAnchorReceipts) > 0 ||
-		len(request.PriorHandleReceipts) > 0 ||
-		len(request.PriorCandidateReceipts) > 0 {
+	if continuationParentReferenceOf(request) == ContinuationParentOtherResult {
 		return "", false
 	}
 	return seen[0], true
+}
+
+// ContinuationParentReference is the CLOSED relation between the request's
+// parent reference and the result its window receipt names.
+type ContinuationParentReference string
+
+const (
+	// ContinuationParentAbsent: the request names no parent.
+	ContinuationParentAbsent ContinuationParentReference = "absent"
+	// ContinuationParentWindowReceiptResult: the parent is the very result the
+	// sole window receipt names.
+	ContinuationParentWindowReceiptResult ContinuationParentReference = "window_receipt_result"
+	// ContinuationParentOtherResult: the parent names any other result, or the
+	// request carries no single window receipt for it to match.
+	ContinuationParentOtherResult ContinuationParentReference = "other_result"
+)
+
+func continuationParentReferences() []ContinuationParentReference {
+	return []ContinuationParentReference{ContinuationParentAbsent, ContinuationParentWindowReceiptResult, ContinuationParentOtherResult}
+}
+
+// ValidContinuationParentReference reports membership.
+func ValidContinuationParentReference(value ContinuationParentReference) bool {
+	for _, member := range continuationParentReferences() {
+		if member == value {
+			return true
+		}
+	}
+	return false
+}
+
+// continuationParentReferenceOf classifies the request's parent against its
+// window receipts. Identifiers compare case-sensitively, after the same
+// whitespace trim every receipt id gets.
+func continuationParentReferenceOf(request InvestigationRequest) ContinuationParentReference {
+	parent := strings.TrimSpace(request.ParentResultID)
+	if parent == "" {
+		return ContinuationParentAbsent
+	}
+	var seen []string
+	for _, receipt := range request.PriorWindowReceipts {
+		if id := strings.TrimSpace(receipt.ResultID); id != "" {
+			seen = append(seen, id)
+		}
+	}
+	if len(seen) == 1 && seen[0] == parent {
+		return ContinuationParentWindowReceiptResult
+	}
+	return ContinuationParentOtherResult
 }
 
 // continuationQuestionIdentity applies D-a's identity rule to the two
@@ -937,7 +1022,7 @@ func (e *Engine) admitWindowContinuation(
 
 	if !windowOnly {
 		decision.Reason = ContinuationReasonNotWindowOnly
-		return decision
+		return e.confirmQuestionWindow(ctx, principal, request, binding, decision)
 	}
 	decision.ReferencedResultID = referenced
 	// DISQUALIFIER (R2-1). A caller stating structure on THIS turn -- an
@@ -948,7 +1033,7 @@ func (e *Engine) admitWindowContinuation(
 	// by name in TestWindowContinuation_EveryRequestFieldIsDecidedByName.
 	if requestStatesStructure(request) {
 		decision.Reason = ContinuationReasonExplicitStructureHint
-		return decision
+		return e.confirmQuestionWindow(ctx, principal, request, binding, decision)
 	}
 	// NO FRESH-AXIS DISQUALIFIER (CHAOS-5582). The fresh interpreted axis is
 	// deliberately not an input to admission: admission decides whether the
@@ -1007,6 +1092,7 @@ func (e *Engine) admitWindowContinuation(
 	// taint-valid carrier, identical question. Every check below is about the
 	// carried READING, and none of them changes what the user confirmed.
 	decision.TransitionEstablished = true
+	decision.QuestionWindowConfirmed = true
 
 	plan := carriablePlan(prior)
 	if plan == nil {
@@ -1105,12 +1191,53 @@ func (e *Engine) admitWindowContinuation(
 	return decision
 }
 
-// decideContinuationAxis reconciles THIS turn's fresh interpreted time with an
-// established window-only transition, and returns the time the rest of the
-// turn executes under together with the outcome the line reports (CHAOS-5582).
+// confirmQuestionWindow decides QuestionWindowConfirmed for a request that
+// redeems a window offer but is NOT a window-only continuation: it also
+// redeems another offer, or states structure. Such a request continues no
+// carried reading -- its disposition and reason are already decided and are
+// not touched here -- but the window it redeems was still confirmed for a
+// question, and when this turn asks that identical question of the carrier
+// that offered it, the confirmed window speaks for this turn's time exactly as
+// it does on the window-only transition.
 //
-// ONE RULE. When the transition is established, the carrier recorded
-// `current`, the caller's own axis is `current` and a window commitment was
+// THE SAME CHECKS, IN THE SAME ORDER, as admission applies before it
+// establishes the transition: one carrier (a parent naming it is the same
+// carrier), a read that succeeded, the ingress taint gate, the identical
+// question. The carrier is normally the per-request memo entry window-receipt
+// redemption loaded moments ago. Each exit leaves its own trace on the line:
+// carrier_read failed; carrier_read read with carried_axis empty (the taint
+// gate); carried_axis set with question_window_confirmed false (the
+// question).
+func (e *Engine) confirmQuestionWindow(ctx context.Context, principal storage.Principal, request InvestigationRequest, binding ResolvedGraphBinding, decision windowContinuationDecision) windowContinuationDecision {
+	carrier, ok := windowReceiptCarrierID(request)
+	if !ok || e.results == nil {
+		return decision
+	}
+	stored, err := carryLoadResult(ctx, e.results, principal, carrier)
+	if err != nil {
+		decision.CarrierRead = ContinuationCarrierReadFailed
+		return decision
+	}
+	decision.CarrierRead = ContinuationCarrierReadOK
+	if stored.GraphEpoch == nil || *stored.GraphEpoch != binding.Epoch {
+		return decision
+	}
+	decision.CarriedAxis = stored.Result.Interpretation.TimeContext.Axis
+	if continuationQuestionIdentity(request.Question, stored.Result.Question) != ContinuationReasonNone {
+		return decision
+	}
+	decision.QuestionWindowConfirmed = true
+	return decision
+}
+
+// decideContinuationAxis reconciles THIS turn's fresh interpreted time with an
+// window the user confirmed for this identical question, and returns the time
+// the rest of the turn executes under together with the outcome the line
+// reports (CHAOS-5582).
+//
+// ONE RULE. When the window was confirmed for this question
+// (QuestionWindowConfirmed), the carrier recorded `current`, the caller's own
+// axis is `current` and a window commitment was
 // resolved, a fresh axis that moved off current is a DIAGNOSTIC: the turn
 // executes under the caller's clamped current axis -- the one the window was
 // canonicalized against -- and the confirmed window stays applied. In every
@@ -1125,6 +1252,10 @@ func (e *Engine) admitWindowContinuation(
 // question whose window the user had just confirmed. Whether the family
 // reading continues and which time the confirmed window speaks for are
 // separate facts; a changed question still follows its own fresh reading (D-d).
+// For the same reason the rule does not read the window-only SHAPE: a turn
+// that redeems a kind offer beside the window offer, or names the offering
+// result again as its parent, asks the same question the window was confirmed
+// for, and a sampled axis may not veto that confirmation to nothing.
 //
 // THE RECEIPT CONFLICTS ARE NOT DECIDED HERE, and that is the separation the
 // design of record holds: plural receipts and an explicit window beyond skew
@@ -1153,7 +1284,7 @@ func decideContinuationAxis(
 	if fresh.Axis == contractsv1.ContextFabricTemporalCurrent && freshAnswerable {
 		return fresh, ContinuationAxisAgreed
 	}
-	if decision.TransitionEstablished &&
+	if decision.QuestionWindowConfirmed &&
 		decision.CarriedAxis == contractsv1.ContextFabricTemporalCurrent &&
 		requestTime.Axis == contractsv1.ContextFabricTemporalCurrent {
 		// The caller's axis and instant only: a fresh proposal's range bounds

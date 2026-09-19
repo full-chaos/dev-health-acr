@@ -109,7 +109,8 @@ func RunCaptureSkipReasonRealProducerScenarioForTest(t *testing.T, scenario stri
 		buf := swapToJSONLedgerTelemetry(h)
 		request := needTurnRequest("request_5802_axis_conflict_two", false)
 		request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: one.result.ResultID, ReceiptID: option.ReceiptID}}
-		request.ParentResultID = one.result.ResultID
+		// A changed question: the confirmation speaks for turn one's question only.
+		request.Question += " Include the drivers."
 		if _, err := h.engine.Investigate(context.Background(), acceptancePrincipal(), request); err != nil {
 			t.Fatalf("Investigate() error = %v", err)
 		}

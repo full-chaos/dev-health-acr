@@ -3927,6 +3927,21 @@
         ]
       },
       {
+        "key": "parent_reference",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "absent",
+          "window_receipt_result",
+          "other_result"
+        ]
+      },
+      {
+        "key": "question_window_confirmed",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
         "key": "request_id",
         "type": "string",
         "presence": "required"
