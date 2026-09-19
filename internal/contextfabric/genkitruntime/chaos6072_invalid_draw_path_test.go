@@ -225,3 +225,60 @@ func TestValidatorDetectedInvalidDrawTakesTheSameRejectionPath(t *testing.T) {
 		})
 	}
 }
+
+func (h *captureLogger) rejectedDrawEvents() []decisionRecord {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var out []decisionRecord
+	for _, r := range h.records {
+		if r.Message == rejectedInterpretDrawMessage {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// TestRecoveredInterpretSequenceKeepsEveryRejectedDrawOnTheTrace: a draw
+// rejected by either detector and then recovered by a redraw still leaves one
+// Info line naming its own reason, kind, sample and attempt.
+func TestRecoveredInterpretSequenceKeepsEveryRejectedDrawOnTheTrace(t *testing.T) {
+	rt, handler, _, calls := scriptedGenkitRuntime(t, []string{
+		invalidDrawText(t, drawOutOfEnumKind), invalidDrawText(t, drawUnknownProperty), validDrawText(t),
+	})
+	if _, _, err := rt.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest()); err != nil {
+		t.Fatalf("error = %v, want the third draw to serve", err)
+	}
+	if calls.Load() != 3 {
+		t.Fatalf("calls = %d, want 3", calls.Load())
+	}
+	lines := handler.rejectedDrawEvents()
+	if len(lines) != 2 {
+		t.Fatalf("rejected-draw lines = %d, want 2 (one per rejected draw): %#v", len(lines), lines)
+	}
+	first, second := lines[0].Attrs, lines[1].Attrs
+	if first["rejection_reason"] != "fact_requirement_kind_invalid" || first["rejected_fact_kind"] != "kind_outside_the_enum" || attrInt(t, first, "sample") != 0 || attrInt(t, first, "attempt") != 1 {
+		t.Fatalf("first rejected-draw line = %#v", first)
+	}
+	if second["rejection_reason"] != "unclassified" || attrInt(t, second, "sample") != 1 || attrInt(t, second, "attempt") != 2 {
+		t.Fatalf("second rejected-draw line = %#v", second)
+	}
+	if _, present := second["rejected_fact_kind"]; present {
+		t.Fatalf("second line carries a kind: %#v", second)
+	}
+}
+
+// TestSchemaOnlyRejectionDoesNotLeakIntoALaterValidatorRejection: the
+// reason of the terminal draw is that draw's own rule.
+func TestSchemaOnlyRejectionDoesNotLeakIntoALaterValidatorRejection(t *testing.T) {
+	overlong := validInterpretationOutput()
+	overlong.RequestedJudgment = strings.Repeat("x", 4096)
+	encoded, err := json.Marshal(overlong)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, _, _, _ := scriptedGenkitRuntime(t, []string{invalidDrawText(t, drawUnknownProperty), invalidDrawText(t, drawUnknownProperty), string(encoded)})
+	_, _, gotErr := rt.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest())
+	if got := contextfabric.InterpretationRejectionReasonOf(gotErr); got != "requested_judgment_invalid" {
+		t.Fatalf("reason = %q (err %v), want the validator's own rule for the terminal draw", got, gotErr)
+	}
+}

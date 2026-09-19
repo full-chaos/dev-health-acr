@@ -1102,6 +1102,9 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 		} else {
 			interpreted, err = output.toDomain(request.TimeContext)
 		}
+		if err != nil {
+			r.logRejectedInterpretDraw(ctx, principal.OrgID, request.RequestID, sample, draw+1, interpreted, err, schemaOnlyRejection, output)
+		}
 		if err == nil || draw+1 >= maxDraws || ctx.Err() != nil {
 			break
 		}
@@ -2744,6 +2747,31 @@ func decisionOrgIDHash(orgID string) string {
 	sum := sha256.Sum256([]byte(orgID))
 	return hex.EncodeToString(sum[:6])
 }
+
+// logRejectedInterpretDraw emits one Info line for a draw that was rejected,
+// so a rejection a later redraw recovers from stays visible: the terminal
+// decision line only describes the draw that ended the call.
+func (r *Runtime) logRejectedInterpretDraw(ctx context.Context, orgID, requestID string, sample, attempt int, interpreted contextfabric.InterpretedQuestion, cause error, schemaOnly bool, output interpretationOutput) {
+	rejection := contextfabric.ClassifyInterpretationRejection(interpreted, cause, rawFactRequirementKindsByTrimmedKind(output.FactRequirements))
+	if schemaOnly {
+		rejection = contextfabric.NewInterpretationRejection(contextfabric.InterpretationRejectionUnclassified, cause)
+	}
+	fields := []any{
+		"request_id", contextfabric.SanitizeLogAttr(requestID),
+		"org_id_hash", contextfabric.SanitizeLogAttr(decisionOrgIDHash(orgID)),
+		"sample", sample,
+		"attempt", attempt,
+		"rejection_reason", contextfabric.SanitizeLogAttr(string(contextfabric.InterpretationRejectionReasonOf(rejection))),
+	}
+	if kind, ok := contextfabric.InterpretationRejectedFactKindOf(rejection); ok {
+		fields = append(fields, "rejected_fact_kind", contextfabric.SanitizeLogAttr(kind))
+	}
+	r.config.Logger.InfoContext(ctx, rejectedInterpretDrawMessage, fields...)
+}
+
+// rejectedInterpretDrawMessage is the fixed message of the per-draw
+// rejection line; never interpolated with request- or model-derived text.
+const rejectedInterpretDrawMessage = "context fabric interpret draw rejected"
 
 // logInterpretDecision emits the CHAOS-3889 decision-event line for one
 // InterpretQuestion call (H6/H7). Every field is a count, enum, id, or bool:
