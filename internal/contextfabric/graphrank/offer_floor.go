@@ -109,9 +109,6 @@ type OfferFloorRow struct {
 	Admission   OfferAdmission
 }
 
-// offerFloorRowCap bounds the per-request row list carried on the trace.
-const offerFloorRowCap = 20
-
 func offerFloorRow(candidate contextfabric.SubjectCandidate, admission OfferAdmission) OfferFloorRow {
 	mechanisms := MergeMechanisms(candidate.MatchMechanisms)
 	names := make([]string, 0, len(mechanisms))
@@ -131,9 +128,10 @@ func offerFloorRow(candidate contextfabric.SubjectCandidate, admission OfferAdmi
 	}
 }
 
-// boundOfferFloorRows orders rows by confidence (ties by canonical id) and
-// caps them at offerFloorRowCap, so the trace line stays bounded and stable.
-func boundOfferFloorRows(rows []OfferFloorRow) []OfferFloorRow {
+// orderOfferFloorRows orders rows by confidence (ties by kind, then canonical
+// id) so the trace line is stable. Nothing is dropped: the pool is already
+// bounded by the retrieval limit.
+func orderOfferFloorRows(rows []OfferFloorRow) []OfferFloorRow {
 	sorted := append([]OfferFloorRow(nil), rows...)
 	sort.Slice(sorted, func(i, j int) bool {
 		if sorted[i].Confidence == sorted[j].Confidence {
@@ -144,9 +142,6 @@ func boundOfferFloorRows(rows []OfferFloorRow) []OfferFloorRow {
 		}
 		return sorted[i].Confidence > sorted[j].Confidence
 	})
-	if len(sorted) > offerFloorRowCap {
-		sorted = sorted[:offerFloorRowCap]
-	}
 	return sorted
 }
 
@@ -158,23 +153,6 @@ func offerAdmissionOf(candidate contextfabric.SubjectCandidate, committed map[st
 		return OfferAdmittedCommitted
 	}
 	return ClassifyOffer(candidate)
-}
-
-// searchedOfferKinds returns the distinct kinds of the candidates the
-// retrieval pool held, sorted -- the kinds the no-match names as searched.
-func searchedOfferKinds(candidates []contextfabric.SubjectCandidate) []string {
-	seen := make(map[string]bool, len(candidates))
-	kinds := make([]string, 0, len(candidates))
-	for _, candidate := range candidates {
-		kind := string(candidate.Subject.Kind)
-		if kind == "" || seen[kind] {
-			continue
-		}
-		seen[kind] = true
-		kinds = append(kinds, kind)
-	}
-	sort.Strings(kinds)
-	return kinds
 }
 
 // dedupOfferFloorRows folds the rows every offer site classified into one row
@@ -198,10 +176,10 @@ func dedupOfferFloorRows(rows []OfferFloorRow) ([]OfferFloorRow, int) {
 	return out, refused
 }
 
-// offerFloorCandidateLines renders the bounded pre-decision list:
+// offerFloorCandidateLines renders the full pre-decision list:
 // "kind|canonical_id|mechanisms|confidence|admission".
 func offerFloorCandidateLines(rows []OfferFloorRow) []string {
-	bounded := boundOfferFloorRows(rows)
+	bounded := orderOfferFloorRows(rows)
 	lines := make([]string, 0, len(bounded))
 	for _, row := range bounded {
 		lines = append(lines, fmt.Sprintf("%s|%s|%s|%.4f|%s", row.Kind, row.CanonicalID, row.Mechanisms, row.Confidence, row.Admission))
@@ -209,9 +187,9 @@ func offerFloorCandidateLines(rows []OfferFloorRow) []string {
 	return lines
 }
 
-// offerFloorOfferLines renders the post-decision offers, bounded.
+// offerFloorOfferLines renders every post-decision offer.
 func offerFloorOfferLines(kind, candidate, handle contextfabric.StructureOfferMaterial) []string {
-	lines := make([]string, 0, offerFloorRowCap)
+	lines := make([]string, 0, len(kind.KindOptions)+len(candidate.CandidateOptions)+len(handle.HandleOptions))
 	for _, option := range kind.KindOptions {
 		lines = append(lines, "kind|"+string(option.Kind))
 	}
@@ -220,9 +198,6 @@ func offerFloorOfferLines(kind, candidate, handle contextfabric.StructureOfferMa
 	}
 	for _, option := range handle.HandleOptions {
 		lines = append(lines, "handle|"+string(option.Kind)+"|"+option.Value)
-	}
-	if len(lines) > offerFloorRowCap {
-		lines = lines[:offerFloorRowCap]
 	}
 	return lines
 }
@@ -257,4 +232,29 @@ func offerFloorReasonOrDefault(reason string) string {
 		return "not_evaluated"
 	}
 	return reason
+}
+
+// subjectFloorOutcome is the typed no-match: the floor withheld at least one
+// candidate for matching by similarity at or below it, and nothing is left to
+// offer or commit -- no candidate, no committed subject, no offer option of
+// any kind.
+func subjectFloorOutcome(rows []OfferFloorRow, resolution contextfabric.SubjectResolution, material contextfabric.StructureOfferMaterial) contextfabric.OfferFloorOutcome {
+	withheld := false
+	seen := make(map[string]bool, len(rows))
+	kinds := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if row.Admission == OfferRefusedAtOrBelowFloor {
+			withheld = true
+		}
+		if row.Kind != "" && !seen[row.Kind] {
+			seen[row.Kind] = true
+			kinds = append(kinds, row.Kind)
+		}
+	}
+	sort.Strings(kinds)
+	offers := len(material.KindOptions) + len(material.AnchorOptions) + len(material.HandleOptions) + len(material.CandidateOptions)
+	if !withheld || offers > 0 || len(resolution.Candidates) > 0 || len(resolution.Committed) > 0 {
+		return contextfabric.OfferFloorOutcome{}
+	}
+	return contextfabric.OfferFloorOutcome{Refused: true, SearchedKinds: kinds}
 }

@@ -2,6 +2,7 @@ package graphrank
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -49,9 +50,8 @@ func TestAnUnresolvableNamedSubjectOffersNothing(t *testing.T) {
 	if len(material.CandidateOptions)+len(material.KindOptions)+len(material.HandleOptions)+len(material.AnchorOptions) != 0 {
 		t.Fatalf("material = %+v, want zero offers of every kind", material)
 	}
-	if !strings.HasPrefix(resolution.ClarificationPrompt, contextfabric.OfferFloorEmptiedClarificationPrompt(nil)[:40]) ||
-		!strings.Contains(resolution.ClarificationPrompt, "ci_pipeline_run, team") {
-		t.Fatalf("prompt = %q, want the floor-emptied prompt naming the kinds searched", resolution.ClarificationPrompt)
+	if !material.SubjectFloor.Refused || strings.Join(material.SubjectFloor.SearchedKinds, ",") != "ci_pipeline_run,team" {
+		t.Fatalf("SubjectFloor = %+v, want the typed outcome naming the kinds searched", material.SubjectFloor)
 	}
 	event, ok := lastEventForStage(tracer, "kind_offer")
 	if !ok {
@@ -222,12 +222,12 @@ func TestOfferFloorTraceHelpers(t *testing.T) {
 	if len(lines) != 2 || lines[0] != "team|b|exact|1.0000|identity" || lines[1] != "team|a||0.5000|at_or_below_floor" {
 		t.Fatalf("lines = %v", lines)
 	}
-	many := make([]OfferFloorRow, 0, offerFloorRowCap+5)
-	for i := 0; i < offerFloorRowCap+5; i++ {
+	many := make([]OfferFloorRow, 0, 25)
+	for i := 0; i < 25; i++ {
 		many = append(many, OfferFloorRow{Kind: "team", CanonicalID: string(rune('a' + i)), Confidence: 0.5})
 	}
-	if got := len(offerFloorCandidateLines(many)); got != offerFloorRowCap {
-		t.Fatalf("bounded lines = %d, want %d", got, offerFloorRowCap)
+	if got := len(offerFloorCandidateLines(many)); got != 25 {
+		t.Fatalf("lines = %d, want every one of 25", got)
 	}
 	if offerFloorDecisionOrDefault("") != "no_offer" || offerFloorReasonOrDefault("") != "not_evaluated" ||
 		offerFloorDecisionOrDefault("offered") != "offered" || offerFloorReasonOrDefault("empty_pool") != "empty_pool" {
@@ -253,9 +253,69 @@ func TestOfferFloorTraceHelpers(t *testing.T) {
 			t.Fatalf("%+v: got %s/%s", tc, decision, reason)
 		}
 	}
-	if got := searchedOfferKinds([]contextfabric.SubjectCandidate{
-		{Subject: contextfabric.SubjectRef{Kind: "team"}}, {Subject: contextfabric.SubjectRef{Kind: "project"}}, {Subject: contextfabric.SubjectRef{Kind: "team"}}, {},
-	}); len(got) != 2 || got[0] != "project" || got[1] != "team" {
-		t.Fatalf("searched kinds = %v", got)
+	weakRows := []OfferFloorRow{
+		{Kind: "team", Admission: OfferRefusedAtOrBelowFloor}, {Kind: "project", Admission: OfferAdmittedIdentity}, {Kind: "team", Admission: OfferRefusedVectorOnly}, {},
+	}
+	outcome := subjectFloorOutcome(weakRows, contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{})
+	if !outcome.Refused || strings.Join(outcome.SearchedKinds, ",") != "project,team" {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	for name, tc := range map[string]struct {
+		rows       []OfferFloorRow
+		resolution contextfabric.SubjectResolution
+		material   contextfabric.StructureOfferMaterial
+	}{
+		"nothing withheld for the floor": {rows: []OfferFloorRow{{Kind: "team", Admission: OfferRefusedVectorOnly}}},
+		"a candidate remains":            {rows: weakRows, resolution: contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{{}}}},
+		"a subject is committed":         {rows: weakRows, resolution: contextfabric.SubjectResolution{Committed: []contextfabric.SubjectRef{{}}}},
+		"a kind offer remains":           {rows: weakRows, material: contextfabric.StructureOfferMaterial{KindOptions: make([]contractsv1.ContextFabricKindOption, 1)}},
+		"an anchor offer remains":        {rows: weakRows, material: contextfabric.StructureOfferMaterial{AnchorOptions: make([]contractsv1.ContextFabricAnchorOption, 1)}},
+		"a handle offer remains":         {rows: weakRows, material: contextfabric.StructureOfferMaterial{HandleOptions: make([]contractsv1.ContextFabricHandleOption, 1)}},
+		"a candidate offer remains":      {rows: weakRows, material: contextfabric.StructureOfferMaterial{CandidateOptions: make([]contractsv1.ContextFabricCandidateOption, 1)}},
+	} {
+		if got := subjectFloorOutcome(tc.rows, tc.resolution, tc.material); got.Refused {
+			t.Fatalf("%s: outcome = %+v, want not refused", name, got)
+		}
+	}
+}
+
+// TestACoverageOnlyWeakMatchIsATypedNoMatchNamingItsKind: the ranked pool is
+// empty and the only finds are weak coverage-floor ones; the typed outcome
+// still names every kind searched, coverage kinds included.
+func TestACoverageOnlyWeakMatchIsATypedNoMatchNamingItsKind(t *testing.T) {
+	t.Parallel()
+	backend := &fakeGraphBackend{
+		enableSearchKind: true,
+		searchResults:    map[string][]CandidateNode{},
+		searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
+			"phantom": {contextfabric.SubjectTeam: {candidateNode(contextfabric.SubjectTeam, "team:ops", "Ops Team", 0.5, "*")}},
+		},
+	}
+	deps := backend.deps()
+	resolution, material, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("phantom"), deps, nil, nil)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Candidates) != 0 || len(material.CandidateOptions)+len(material.KindOptions) != 0 {
+		t.Fatalf("resolution=%+v material=%+v, want nothing offered", resolution, material)
+	}
+	if !material.SubjectFloor.Refused || strings.Join(material.SubjectFloor.SearchedKinds, ",") != "team" {
+		t.Fatalf("SubjectFloor = %+v, want the typed outcome naming the coverage kind", material.SubjectFloor)
+	}
+}
+
+// TestTheInfoTraceCarriesEveryCandidateAndOffer: more than twenty candidates
+// all appear on the kind_offer line, so a change to the twenty-first is
+// visible.
+func TestTheInfoTraceCarriesEveryCandidateAndOffer(t *testing.T) {
+	t.Parallel()
+	nodes := make([]CandidateNode, 0, 30)
+	for i := 0; i < 30; i++ {
+		nodes = append(nodes, candidateNode(contextfabric.SubjectTeam, fmt.Sprintf("team-%02d", i), fmt.Sprintf("Team %02d", i), 0.5, "*"))
+	}
+	_, _, tracer := resolveWithOfferFloor(t, []string{"phantom"}, nodes)
+	event, ok := lastEventForStage(tracer, "kind_offer")
+	if !ok || event.OfferFloorPoolCount != 30 || len(event.OfferFloorCandidates) != 30 {
+		t.Fatalf("pool=%d lines=%d, want all 30", event.OfferFloorPoolCount, len(event.OfferFloorCandidates))
 	}
 }

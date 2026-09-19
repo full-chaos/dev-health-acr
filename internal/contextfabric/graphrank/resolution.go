@@ -1747,9 +1747,6 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 	// a non-empty candidate list.
 	if offerPoolEmptiedByExclusion && allowClarification {
 		resolution.ClarificationPrompt = contextfabric.OfferPoolEmptiedClarificationPrompt
-		if offerPoolFloorExcluded > 0 {
-			resolution.ClarificationPrompt = contextfabric.OfferFloorEmptiedClarificationPrompt(searchedOfferKinds(ordered))
-		}
 	}
 	if tracer != nil {
 		// ONE decision event PER COMMITTED SUBJECT (CHAOS-4096: cardinality

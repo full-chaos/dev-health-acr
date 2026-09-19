@@ -240,40 +240,23 @@ const (
 		"mean, or rephrase the question so it names one."
 )
 
-// offerFloorEmptiedPromptPrefix starts the prompt a resolution carries when
-// every candidate the offer pool would have offered was withheld and at least
-// one was withheld for matching by similarity at or below the offer floor.
-// The prompt is the typed carrier of that outcome (an empty candidate list
-// beside a prompt with this prefix); the kinds searched follow the prefix.
-const offerFloorEmptiedPromptPrefix = "No subject matching the name in the question was found; candidates that matched only part of it were not offered. Kinds searched: "
-
-// OfferFloorEmptiedClarificationPrompt builds that prompt for the kinds the
-// retrieval pool held.
-func OfferFloorEmptiedClarificationPrompt(kinds []string) string {
+// kindsSearchedText renders the searched kinds, "none" when the pool held none.
+func kindsSearchedText(kinds []string) string {
 	if len(kinds) == 0 {
-		return offerFloorEmptiedPromptPrefix + "none."
+		return "none"
 	}
-	return offerFloorEmptiedPromptPrefix + strings.Join(kinds, ", ") + "."
-}
-
-// offerFloorEmptiedKinds reports whether prompt is the floor-emptied prompt
-// and, when it is, the searched-kinds text it carries.
-func offerFloorEmptiedKinds(prompt string) (string, bool) {
-	if !strings.HasPrefix(prompt, offerFloorEmptiedPromptPrefix) {
-		return "", false
-	}
-	return strings.TrimSuffix(strings.TrimPrefix(prompt, offerFloorEmptiedPromptPrefix), "."), true
+	return strings.Join(kinds, ", ")
 }
 
 // noMatchLimitationSubjectNotFound is the terminal prose for a named subject
 // no candidate identified: it names what was searched for and which kinds
 // were searched, and it states that nothing was offered.
-func noMatchLimitationSubjectNotFound(subjectTerms []string, searchedKinds string) string {
+func noMatchLimitationSubjectNotFound(subjectTerms []string, searchedKinds []string) string {
 	named := "the subject named in the question"
 	if terms := strings.TrimSpace(strings.Join(subjectTerms, " ")); terms != "" {
 		named = "\"" + terms + "\""
 	}
-	return "No subject matching " + named + " was found among the kinds searched (" + searchedKinds + "), so nothing was offered and no canonical facts were read. Candidates that matched only part of the name were not offered. Name the subject you mean, or rephrase the question so it names one."
+	return "No subject matching " + named + " was found among the kinds searched (" + kindsSearchedText(searchedKinds) + "), so nothing was offered and no canonical facts were read. Candidates that matched only part of the name were not offered. Name the subject you mean, or rephrase the question so it names one."
 }
 
 // terminalResult composes the model-free result for an investigation that
@@ -393,10 +376,9 @@ func (e *Engine) terminalResult(
 	// produced, never reconstructed here; it is what tells a held
 	// comparison's empty pool apart from an ordinary one.
 	status, limitation := resolveTerminalStatus(request, &resolution, familyOutcome.Frame,
-		clarificationOffersRedeemable(resolution, structureMaterial, windowClarification, declaredKind), declaredKind, substitutionOutcome)
+		clarificationOffersRedeemable(resolution, structureMaterial, windowClarification, declaredKind), declaredKind, substitutionOutcome, effectiveSubjectFloor(structureMaterial))
 	if limitation == noMatchLimitationOfferFloorEmptied {
-		searched, _ := offerFloorEmptiedKinds(resolution.ClarificationPrompt)
-		limitation = noMatchLimitationSubjectNotFound(interpretation.SubjectTerms, searched)
+		limitation = noMatchLimitationSubjectNotFound(interpretation.SubjectTerms, effectiveSubjectFloor(structureMaterial).SearchedKinds)
 	}
 	// CHAOS-5442: a frame the gate refused gets its own disclosure, on
 	// both surfaces, decided from the ONE value that already holds the
@@ -823,7 +805,7 @@ func comparisonHeldWithoutCandidates(frame *QuestionFrame, resolution *SubjectRe
 // frame is the question frame this turn already produced -- carried, never
 // reconstructed here from the interpretation or the shape. It is what tells
 // a held comparison's empty pool apart from an ordinary one.
-func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectResolution, frame *QuestionFrame, otherOffersRedeemable bool, declaredKind declaredKindDecision, substitutionOutcome SubjectSubstitutionOutcome) (InvestigationStatus, string) {
+func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectResolution, frame *QuestionFrame, otherOffersRedeemable bool, declaredKind declaredKindDecision, substitutionOutcome SubjectSubstitutionOutcome, subjectFloor OfferFloorOutcome) (InvestigationStatus, string) {
 	// CHAOS-5660, FIRST, ahead of both branches below.
 	//
 	// It is first because it is the only arm that describes a turn no
@@ -955,7 +937,7 @@ func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectReso
 		// by this ticket's own test rather than by inspection. The two
 		// arms differ in STATUS for two different reasons; they never
 		// differed in what actually happened to the pool.
-		if _, floorEmptied := offerFloorEmptiedKinds(resolution.ClarificationPrompt); floorEmptied && !resolution.GraphNotProjected {
+		if subjectFloor.Refused && !resolution.GraphNotProjected {
 			return InvestigationNoMatch, noMatchLimitationOfferFloorEmptied
 		}
 		if strings.TrimSpace(resolution.ClarificationPrompt) != "" && !resolution.GraphNotProjected {

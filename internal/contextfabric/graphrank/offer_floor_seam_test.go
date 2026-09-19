@@ -72,14 +72,14 @@ func TestTheResolutionSeamNeverWithholdsACommittedSubjectAtOrBelowTheFloor(t *te
 	}
 }
 
-// TestALoneWeakCandidateEmptiesThePoolWithTheFloorPrompt: one floor-excluded
-// candidate is enough for the typed floor prompt (not the vector-only one),
-// naming the searched kind; a vector-only exclusion keeps the vector prompt.
-func TestALoneWeakCandidateEmptiesThePoolWithTheFloorPrompt(t *testing.T) {
+// TestALoneWeakCandidateEmptiesThePool: one floor-excluded candidate empties
+// the pool with the pool-emptied prompt, exactly as a vector-only exclusion
+// does; the typed floor outcome travels on the offer material, never the prompt.
+func TestALoneWeakCandidateEmptiesThePool(t *testing.T) {
 	t.Parallel()
 	weak := lexicalCandidate(contextfabric.SubjectTeam, "team_w", 0.5)
 	resolution := resolvePoolWithGate(map[string]contextfabric.SubjectCandidate{SubjectKey(weak.Subject): weak}, DefaultCommitGatePolicy(), nil)
-	want := contextfabric.OfferFloorEmptiedClarificationPrompt([]string{"team"})
+	want := contextfabric.OfferPoolEmptiedClarificationPrompt
 	if resolution.ClarificationPrompt != want || len(resolution.Candidates) != 0 {
 		t.Fatalf("prompt=%q candidates=%v, want %q and none", resolution.ClarificationPrompt, resolution.Candidates, want)
 	}
@@ -204,14 +204,14 @@ func TestOfferFloorOfferLinesAndOutcome(t *testing.T) {
 		t.Fatalf("lines = %q, want %q", got, want)
 	}
 	big := contextfabric.StructureOfferMaterial{}
-	for i := 0; i < offerFloorRowCap+3; i++ {
+	for i := 0; i < 23; i++ {
 		big.KindOptions = append(big.KindOptions, contractsv1.ContextFabricKindOption{Kind: "team"})
 	}
-	if n := len(offerFloorOfferLines(big, contextfabric.StructureOfferMaterial{}, contextfabric.StructureOfferMaterial{})); n != 20 {
-		t.Fatalf("bounded offer lines = %d, want 20", n)
+	if n := len(offerFloorOfferLines(big, contextfabric.StructureOfferMaterial{}, contextfabric.StructureOfferMaterial{})); n != 23 {
+		t.Fatalf("offer lines = %d, want every one of 23", n)
 	}
 	exact := contextfabric.StructureOfferMaterial{}
-	for i := 0; i < offerFloorRowCap; i++ {
+	for i := 0; i < 20; i++ {
 		exact.KindOptions = append(exact.KindOptions, contractsv1.ContextFabricKindOption{Kind: "team"})
 	}
 	if n := len(offerFloorOfferLines(exact, contextfabric.StructureOfferMaterial{}, contextfabric.StructureOfferMaterial{})); n != 20 {

@@ -40,7 +40,7 @@ func TestOfferFloorRowCarriesEveryFieldAndJoinsMechanisms(t *testing.T) {
 	}
 }
 
-func TestBoundOfferFloorRowsOrderAndCap(t *testing.T) {
+func TestOrderOfferFloorRowsOrderAndKeepsEveryRow(t *testing.T) {
 	rows := []OfferFloorRow{
 		{Kind: "team", CanonicalID: "b", Confidence: 0.6},
 		{Kind: "repository", CanonicalID: "z", Confidence: 0.6},
@@ -49,7 +49,7 @@ func TestBoundOfferFloorRowsOrderAndCap(t *testing.T) {
 		{Kind: "team", CanonicalID: "lo", Confidence: 0.1},
 	}
 	before := append([]OfferFloorRow(nil), rows...)
-	got := boundOfferFloorRows(rows)
+	got := orderOfferFloorRows(rows)
 	wantIDs := []string{"hi", "z", "a", "b", "lo"}
 	if len(got) != len(wantIDs) {
 		t.Fatalf("len = %d", len(got))
@@ -65,21 +65,17 @@ func TestBoundOfferFloorRowsOrderAndCap(t *testing.T) {
 		}
 	}
 
-	for _, n := range []int{offerFloorRowCap - 1, offerFloorRowCap, offerFloorRowCap + 1, offerFloorRowCap + 5} {
+	for _, n := range []int{19, 20, 21, 25, 150} {
 		many := make([]OfferFloorRow, 0, n)
 		for i := 0; i < n; i++ {
 			many = append(many, OfferFloorRow{Kind: "team", CanonicalID: fmt.Sprintf("id%03d", i), Confidence: 0.7})
 		}
-		bounded := boundOfferFloorRows(many)
-		want := n
-		if want > 20 {
-			want = 20
+		ordered := orderOfferFloorRows(many)
+		if len(ordered) != n {
+			t.Fatalf("n=%d: ordered len = %d, want every row", n, len(ordered))
 		}
-		if len(bounded) != want {
-			t.Fatalf("n=%d: bounded len = %d, want %d", n, len(bounded), want)
-		}
-		if bounded[len(bounded)-1].CanonicalID != fmt.Sprintf("id%03d", want-1) {
-			t.Fatalf("n=%d: last = %s", n, bounded[len(bounded)-1].CanonicalID)
+		if ordered[len(ordered)-1].CanonicalID != fmt.Sprintf("id%03d", n-1) {
+			t.Fatalf("n=%d: last = %s", n, ordered[len(ordered)-1].CanonicalID)
 		}
 	}
 }

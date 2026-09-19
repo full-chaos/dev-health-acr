@@ -127,7 +127,7 @@ func TestResolveTerminalStatusNeverRefusesAClarifyingCallerOnTheSubstitutionOutc
 	for _, outcome := range []SubjectSubstitutionOutcome{SubjectSubstitutionRefused, SubjectSubstitutionRefusedRememberedUnavailable} {
 		request := InvestigationRequest{Options: InvestigationOptions{AllowClarification: true}}
 		resolution := SubjectResolution{}
-		status, limitation := resolveTerminalStatus(request, &resolution, nil, false, declaredKindDecision{}, outcome)
+		status, limitation := resolveTerminalStatus(request, &resolution, nil, false, declaredKindDecision{}, outcome, OfferFloorOutcome{})
 		if limitation == subjectIdentityUnconfirmedTerminalLimitation {
 			t.Fatalf("outcome %q with AllowClarification=true reached the non-clarifying refusal sentence (status %q) -- an invariant only decideSubjectSubstitution enforces was silently trusted here", outcome, status)
 		}

@@ -4203,6 +4203,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		anchorOffer,
 		handleOffer,
 	)
+	offerMaterial.SubjectFloor = subjectFloorOutcome(offerFloorPoolRows, resolution, offerMaterial)
 	return resolution, offerMaterial, nil
 }
 
