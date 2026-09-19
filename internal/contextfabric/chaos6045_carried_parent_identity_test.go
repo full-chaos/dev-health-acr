@@ -499,21 +499,54 @@ func TestSubjectSubstitutionReceiptIssuerNamesTheAnsweredResult(t *testing.T) {
 	}
 }
 
-// TestAGuardClarificationKeepsItsReceiptAndReportsAMalformedMember: a guard
-// clarification is decided by its own receipt whatever its member says, and
-// a member that does not decode is reported, not dropped.
-func TestAGuardClarificationKeepsItsReceiptAndReportsAMalformedMember(t *testing.T) {
+// TestAGuardClarificationIsVerifiedAgainstItsAnsweredResult: a guard
+// clarification's receipt names the answered result, which is read and must
+// still serve the remembered subject; every way that fails leaves no subject,
+// and a malformed member is reported beside a verified receipt.
+func TestAGuardClarificationIsVerifiedAgainstItsAnsweredResult(t *testing.T) {
 	t.Parallel()
 	guard := guardIssuedStored("result_parent", "result_parent", true)
 	guard.SemanticStateRead = SemanticStateReadAvailable
 	guard.SemanticState = &PersistedSemanticState{Extensions: SemanticStateExtensions{carriedParentIdentityExtension: json.RawMessage(`{"state":"identity_held","depth":0}`)}}
-	base := parentIdentityOf(parentAnchorEvidence{Referenced: true, Loaded: true}, guard, "result_clarification")
-	got := (&Engine{}).chainIdentityOf(context.Background(), acceptancePrincipal(), base, guard)
-	if got.Chain != SubjectSubstitutionChainGuardReceipt || got.ChainError != SubjectSubstitutionChainErrorMalformedMember || got.ChainDepth != 1 {
-		t.Errorf("chain = %q (%q) depth %d, want guard_receipt reporting a malformed member at depth 1", got.Chain, got.ChainError, got.ChainDepth)
+	answered := func(subject SubjectRef) *staticResultStore {
+		result := validInvestigationResult()
+		result.ResultID = "result_parent"
+		result.SubjectResolution = substitutionResponse(subject, "receipt_parent").resolution
+		return &staticResultStore{results: map[string]InvestigationResult{"result_parent": result}, states: map[string]*PersistedSemanticState{}}
 	}
-	if !sameSubjectIdentity(got.Subject, substitutionRepoOne) || got.ResultID != "result_parent" || got.Carried {
-		t.Errorf("evidence = %+v, want the receipt-proven parent", got)
+	stale := guard
+	stale.Result.SubjectResolution.Candidates = append([]SubjectCandidate(nil), guard.Result.SubjectResolution.Candidates...)
+	stale.Result.SubjectResolution.Candidates[0].ReceiptID = "subr_000000000000000000000000"
+	cases := []struct {
+		name    string
+		engine  *Engine
+		stored  StoredInvestigationResult
+		chain   SubjectSubstitutionParentChain
+		reason  SubjectSubstitutionChainError
+		subject bool
+	}{
+		{"answered result serves the subject", &Engine{results: answered(substitutionRepoOne)}, guard, SubjectSubstitutionChainGuardReceipt, SubjectSubstitutionChainErrorMalformedMember, true},
+		{"answered result serves another subject", &Engine{results: answered(substitutionRepoTwo)}, guard, SubjectSubstitutionChainAnswerMismatch, SubjectSubstitutionChainErrorMalformedMember, false},
+		{"answered result missing", &Engine{results: &staticResultStore{results: map[string]InvestigationResult{}, states: map[string]*PersistedSemanticState{}}}, guard, SubjectSubstitutionChainAnswerUnreadable, SubjectSubstitutionChainErrorStore, false},
+		{"answered result not found", &Engine{results: &staticResultStore{getErr: fmt.Errorf("get: %w", ErrInvestigationResultNotFound)}}, guard, SubjectSubstitutionChainAnswerUnreadable, SubjectSubstitutionChainErrorNotFound, false},
+		{"no store", &Engine{}, guard, SubjectSubstitutionChainAnswerUnreadable, SubjectSubstitutionChainErrorNoStore, false},
+		{"stale receipt", &Engine{results: answered(substitutionRepoOne)}, stale, SubjectSubstitutionChainReceiptMismatch, SubjectSubstitutionChainErrorMalformedMember, false},
+	}
+	for _, tc := range cases {
+		base := parentIdentityOf(parentAnchorEvidence{Referenced: true, Loaded: true}, tc.stored, "result_clarification")
+		got := tc.engine.chainIdentityOf(context.Background(), acceptancePrincipal(), base, tc.stored)
+		if got.Chain != tc.chain || got.ChainError != tc.reason || got.ChainDepth != 1 {
+			t.Errorf("%s: chain = %q (%q) depth %d, want %q (%q) depth 1", tc.name, got.Chain, got.ChainError, got.ChainDepth, tc.chain, tc.reason)
+		}
+		if tc.subject != (sameSubjectIdentity(got.Subject, substitutionRepoOne) && got.ResultID == "result_parent" && got.IssuedFor == "result_parent") {
+			t.Errorf("%s: evidence = %+v, want subject held = %t", tc.name, got, tc.subject)
+		}
+		if !tc.subject && (got.Subject.CanonicalID != "" || got.ResultID != "" || got.IssuedFor != "") {
+			t.Errorf("%s: a failed verification kept %+v", tc.name, got)
+		}
+		if got.Carried || !got.GuardIssued {
+			t.Errorf("%s: a guard clarification reads as carried=%t guard=%t", tc.name, got.Carried, got.GuardIssued)
+		}
 	}
 }
 

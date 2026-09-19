@@ -286,8 +286,11 @@ func storedCarriedParentIdentity(stored StoredInvestigationResult) (member carri
 // chain, which the decision reads as the remembered subject being
 // unavailable -- never as a parent that asserted none.
 //
-// A guard clarification keeps what its own remembered-offer receipt proved
-// (parentIdentityOf); its member only reports the chain depth.
+// A guard clarification speaks for the result its remembered-offer receipt
+// was minted from (parentIdentityOf); that result is then read and must
+// still serve the remembered subject, exactly as a prompt's carried member
+// is verified. Its member only reports the chain depth and names a receipt
+// candidate.
 func (e *Engine) chainIdentityOf(ctx context.Context, principal storage.Principal, evidence parentAnchorEvidence, stored StoredInvestigationResult) parentAnchorEvidence {
 	evidence.ResultKind = parentResultKindOf(stored)
 	evidence.Chain = SubjectSubstitutionChainNotAPrompt
@@ -300,26 +303,40 @@ func (e *Engine) chainIdentityOf(ctx context.Context, principal storage.Principa
 	} else {
 		evidence.ChainDepth = 1
 	}
-	// A guard clarification speaks for its parent only through its own
-	// remembered-offer receipt (parentIdentityOf), and one that listed no
-	// remembered subject fails closed whatever its member says: the member
-	// can name a candidate the receipt is tried against, never an identity
-	// the clarification itself declined to list.
-	if evidence.ResultKind == SubjectSubstitutionParentResultGuardClarification {
-		evidence.Chain = SubjectSubstitutionChainGuardReceipt
-		if err != nil {
-			evidence.ChainError = SubjectSubstitutionChainErrorMalformedMember
-		}
-		return evidence
+	if err != nil {
+		evidence.ChainError = SubjectSubstitutionChainErrorMalformedMember
 	}
 	unavailable := func(chain SubjectSubstitutionParentChain) parentAnchorEvidence {
-		evidence.Carried, evidence.Chain = true, chain
+		evidence.Chain = chain
+		if evidence.ResultKind == SubjectSubstitutionParentResultPrompt {
+			evidence.Carried = true
+		}
 		evidence.Subject, evidence.ResultID, evidence.IssuedFor = SubjectRef{}, "", ""
+		return evidence
+	}
+	if evidence.ResultKind == SubjectSubstitutionParentResultGuardClarification {
+		// A clarification that listed no remembered subject holds none, and
+		// one whose receipt verifies against no candidate proves none: both
+		// fail closed, whatever subject the clarification lists. The member
+		// never supplies an identity the clarification itself did not prove.
+		switch {
+		case evidence.Subject.CanonicalID == "":
+			return unavailable(SubjectSubstitutionChainUnavailable)
+		case evidence.IssuedFor == "":
+			return unavailable(SubjectSubstitutionChainReceiptMismatch)
+		}
+		served, chain, readErr := e.answeredIdentityOf(ctx, principal, evidence.IssuedFor, evidence.Subject)
+		if chain != SubjectSubstitutionChainVerified {
+			if readErr != SubjectSubstitutionChainErrorNone {
+				evidence.ChainError = readErr
+			}
+			return unavailable(chain)
+		}
+		evidence.Chain, evidence.Subject = SubjectSubstitutionChainGuardReceipt, served
 		return evidence
 	}
 	switch {
 	case err != nil:
-		evidence.ChainError = SubjectSubstitutionChainErrorMalformedMember
 		return unavailable(SubjectSubstitutionChainMalformed)
 	case !present:
 		return unavailable(SubjectSubstitutionChainAbsent)
@@ -335,30 +352,42 @@ func (e *Engine) chainIdentityOf(ctx context.Context, principal storage.Principa
 	if member.ReceiptID != subjectSubstitutionReceiptID(member.ResultID, member.subject()) {
 		return unavailable(SubjectSubstitutionChainReceiptMismatch)
 	}
-	if e.results == nil {
-		evidence.ChainError = SubjectSubstitutionChainErrorNoStore
-		return unavailable(SubjectSubstitutionChainAnswerUnreadable)
-	}
-	answered, loadErr := carryLoadResult(ctx, e.results, principal, member.ResultID)
-	if loadErr != nil {
-		evidence.ChainError = parentReadErrorOf(loadErr)
-		return unavailable(SubjectSubstitutionChainAnswerUnreadable)
-	}
-	// The answered result is read as the guard reads any parent: from its
-	// payload, one committed identity or none. A prompt commits none, so a
-	// member naming a prompt never verifies.
-	served := parentCommittedIdentityOf(answered)
-	if !sameSubjectIdentity(served, member.subject()) {
-		return unavailable(SubjectSubstitutionChainAnswerMismatch)
+	served, chain, readErr := e.answeredIdentityOf(ctx, principal, member.ResultID, member.subject())
+	if chain != SubjectSubstitutionChainVerified {
+		if readErr != SubjectSubstitutionChainErrorNone {
+			evidence.ChainError = readErr
+		}
+		return unavailable(chain)
 	}
 	evidence.Chain = SubjectSubstitutionChainVerified
 	// The subject carries the label the answered result served, so an offer
-	// built from it reads the way the caller already saw it.
-	// Receipts the answered result issued are the parent's own offer, as
-	// they are for a guard clarification proven to continue it.
+	// built from it reads the way the caller already saw it. Receipts the
+	// answered result issued are the parent's own offer, as they are for a
+	// guard clarification proven to continue it.
 	evidence.Subject, evidence.ResultID = served, strings.TrimSpace(member.ResultID)
 	evidence.IssuedFor = evidence.ResultID
 	return evidence
+}
+
+// answeredIdentityOf reads the answered result a receipt names and returns
+// the identity it serves when that is exactly subject. The answered result is
+// read as the guard reads any parent: from its payload, one committed
+// identity or none, so a prompt (which commits none) never verifies. The ONE
+// verification both a prompt's member and a guard clarification's receipt
+// pass through.
+func (e *Engine) answeredIdentityOf(ctx context.Context, principal storage.Principal, resultID string, subject SubjectRef) (SubjectRef, SubjectSubstitutionParentChain, SubjectSubstitutionChainError) {
+	if e.results == nil {
+		return SubjectRef{}, SubjectSubstitutionChainAnswerUnreadable, SubjectSubstitutionChainErrorNoStore
+	}
+	answered, err := carryLoadResult(ctx, e.results, principal, strings.TrimSpace(resultID))
+	if err != nil {
+		return SubjectRef{}, SubjectSubstitutionChainAnswerUnreadable, parentReadErrorOf(err)
+	}
+	served := parentCommittedIdentityOf(answered)
+	if !sameSubjectIdentity(served, subject) {
+		return SubjectRef{}, SubjectSubstitutionChainAnswerMismatch, SubjectSubstitutionChainErrorNone
+	}
+	return served, SubjectSubstitutionChainVerified, SubjectSubstitutionChainErrorNone
 }
 
 // SubjectSubstitutionChainError is why a parent or a chain did not read.

@@ -131,7 +131,15 @@ func ChainDecisionTable() []ChainRow {
 			"the chain's answer served no single identity, or the chain began with no parent: nothing to substitute"},
 		{contextfabric.SubjectSubstitutionParentResultGuardClarification, contextfabric.SubjectSubstitutionChainGuardReceipt,
 			outcomes(same, clarified, refused, nothing),
-			"a guard clarification speaks for the answered result its remembered-offer receipt was minted from, at any depth"},
+			"a guard clarification speaks for the answered result its remembered-offer receipt was minted from, re-read and still serving that subject, at any depth"},
+		{contextfabric.SubjectSubstitutionParentResultGuardClarification, contextfabric.SubjectSubstitutionChainUnavailable, failClosed,
+			"a guard clarification that listed no remembered subject holds none: fail closed"},
+		{contextfabric.SubjectSubstitutionParentResultGuardClarification, contextfabric.SubjectSubstitutionChainReceiptMismatch, failClosed,
+			"a remembered-offer receipt that verifies against no candidate proves nothing: fail closed"},
+		{contextfabric.SubjectSubstitutionParentResultGuardClarification, contextfabric.SubjectSubstitutionChainAnswerUnreadable, failClosed,
+			"the answered result the receipt names does not read: fail closed"},
+		{contextfabric.SubjectSubstitutionParentResultGuardClarification, contextfabric.SubjectSubstitutionChainAnswerMismatch, failClosed,
+			"the answered result the receipt names does not serve the remembered subject: fail closed"},
 	}
 }
 
@@ -153,8 +161,12 @@ func ChainInapplicableCells() []ChainInapplicable {
 					reason = "only a guard clarification lists a remembered-offer receipt"
 				}
 			case contextfabric.SubjectSubstitutionParentResultGuardClarification:
-				if chain != contextfabric.SubjectSubstitutionChainGuardReceipt {
-					reason = "a guard clarification is decided by its own remembered-offer receipt"
+				switch chain {
+				case contextfabric.SubjectSubstitutionChainGuardReceipt, contextfabric.SubjectSubstitutionChainUnavailable,
+					contextfabric.SubjectSubstitutionChainReceiptMismatch, contextfabric.SubjectSubstitutionChainAnswerUnreadable,
+					contextfabric.SubjectSubstitutionChainAnswerMismatch:
+				default:
+					reason = "a guard clarification is decided by its own remembered-offer receipt and the answered result it names; it carries no member of its own to be absent, malformed or chain-less"
 				}
 			default:
 				if chain != contextfabric.SubjectSubstitutionChainNotAPrompt {
@@ -208,6 +220,9 @@ type chainRig struct {
 	// answered is the answered result the chain under test continues, ""
 	// when the chain has none.
 	answered string
+	// refuseRemembered makes the candidate verifier refuse, so a guard
+	// clarification cannot list the remembered subject.
+	refuseRemembered bool
 }
 
 type chainResponse struct {
@@ -249,6 +264,9 @@ func newChainRig(t *testing.T, newStore func(t *testing.T) (contextfabric.Invest
 		Results:   store,
 		Telemetry: contextfabric.NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(rig.sink, &slog.HandlerOptions{Level: slog.LevelInfo}))),
 		CandidateVerifier: func(context.Context, storage.Principal, contextfabric.RequestedScope, contextfabric.ResolvedGraphBinding, contractsv1.ContextFabricSubjectKind, string) (bool, contextfabric.CandidateVerificationReason) {
+			if rig.refuseRemembered {
+				return false, contextfabric.CandidateVerificationClaimLost
+			}
 			return true, contextfabric.CandidateVerificationValid
 		},
 	}, contextfabric.EngineOptions{
@@ -499,7 +517,12 @@ func (r *chainRig) buildChain(row ChainRow, producer string, depth int) string {
 			head = r.turn("", true, true, commitResponse(chainSubject, chainOtherTwo)).ResultID
 		}
 	case contextfabric.SubjectSubstitutionChainUnavailable:
-		head = "result-chain-never-saved-" + r.prefix
+		if producer != "guard_clarification" {
+			head = "result-chain-never-saved-" + r.prefix
+			break
+		}
+		head = r.turn("", true, true, commitResponse(chainSubject)).ResultID
+		r.answered = head
 	default:
 		head = r.turn("", true, true, commitResponse(chainSubject)).ResultID
 		r.answered = head
@@ -508,14 +531,23 @@ func (r *chainRig) buildChain(row ChainRow, producer string, depth int) string {
 	for i := 1; i < depth; i++ {
 		current = r.promptTurn("window_prompt", current)
 	}
+	var named string
 	if producer == "guard_clarification" {
+		r.refuseRemembered = row.Chain == contextfabric.SubjectSubstitutionChainUnavailable
 		served := r.turn(current, true, true, commitResponse(chainOther))
+		r.refuseRemembered = false
 		if served.Status != contextfabric.InvestigationClarificationRequired || len(served.SubjectResolution.Committed) != 0 {
 			r.t.Fatalf("%s: fixture defect: the guard did not clarify (status %q)", r.prefix, served.Status)
 		}
-		return served.ResultID
+		named = served.ResultID
+		if row.Chain == contextfabric.SubjectSubstitutionChainReceiptMismatch {
+			r.reseed(named, func(result *contextfabric.InvestigationResult) {
+				result.SubjectResolution.Candidates[0].ReceiptID = "subr_000000000000000000000000"
+			}, nil)
+		}
+	} else {
+		named = r.promptTurn(producer, current)
 	}
-	named := r.promptTurn(producer, current)
 	switch row.Chain {
 	case contextfabric.SubjectSubstitutionChainAbsent:
 		if depth%2 == 0 {
@@ -534,6 +566,9 @@ func (r *chainRig) buildChain(row ChainRow, producer string, depth int) string {
 			})
 		})
 	case contextfabric.SubjectSubstitutionChainReceiptMismatch:
+		if producer == "guard_clarification" {
+			break
+		}
 		r.reseed(named, nil, func(state *contextfabric.PersistedSemanticState) []byte {
 			return r.rewriteMember(state, func(member map[string]any) []byte {
 				member["receipt_id"] = "subr_000000000000000000000000"
