@@ -31,6 +31,7 @@ var ByID = map[string]Event{
 	"contextfabric.semantic_state_persistence":     SemanticStatePersistence,
 	"contextfabric.synthesis_retry_selection":      SynthesisRetrySelection,
 	"contextfabric.window_continuation_decision":   WindowContinuationDecision,
+	"contextfabric.work_item_authorization_gap":    WorkItemAuthorizationGap,
 	"contextfabric.work_item_membership_gate":      WorkItemMembershipGate,
 	"contextfabric.work_item_membership_s1":        WorkItemMembershipS1,
 	"contextfabric.work_item_reuse":                WorkItemReuse,
@@ -1746,6 +1747,74 @@ func (f WindowContinuationDecisionFields) SlogArgs() []any {
 		"carried_axis", contextfabric.SanitizeLogAttr(f.CarriedAxis),
 		"executed_axis", contextfabric.SanitizeLogAttr(f.ExecutedAxis),
 		"interpreted_axis_outcome", contextfabric.SanitizeLogAttr(f.InterpretedAxisOutcome),
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// WorkItemAuthorizationGapFields is contextfabric.work_item_authorization_gap's generated typed construction interface
+// (CHAOS-5516): one Go field per Field WorkItemAuthorizationGap.Fields declares in spec.go.
+type WorkItemAuthorizationGapFields struct {
+	OrgID                string
+	Reason               string
+	CensusState          string
+	ObservedPopulation   int
+	AuthorizedPopulation int
+	DeniedPopulation     int
+	ServedStatus         string
+	ServedMembers        int
+	LimitationDisclosed  bool
+	RequestID            string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every WorkItemAuthorizationGapFields uniformly, set ONLY by NewWorkItemAuthorizationGapFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewWorkItemAuthorizationGapFields is the generated constructor for WorkItemAuthorizationGapFields -- every
+// field WorkItemAuthorizationGap.Fields declares is a required parameter.
+func NewWorkItemAuthorizationGapFields(orgID string, reason string, censusState string, observedPopulation int, authorizedPopulation int, deniedPopulation int, servedStatus string, servedMembers int, limitationDisclosed bool, requestID string) WorkItemAuthorizationGapFields {
+	return WorkItemAuthorizationGapFields{
+		OrgID:                orgID,
+		Reason:               reason,
+		CensusState:          censusState,
+		ObservedPopulation:   observedPopulation,
+		AuthorizedPopulation: authorizedPopulation,
+		DeniedPopulation:     deniedPopulation,
+		ServedStatus:         servedStatus,
+		ServedMembers:        servedMembers,
+		LimitationDisclosed:  limitationDisclosed,
+		RequestID:            requestID,
+		constructed:          true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewWorkItemAuthorizationGapFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f WorkItemAuthorizationGapFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns WorkItemAuthorizationGap's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f WorkItemAuthorizationGapFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"reason", contextfabric.SanitizeLogAttr(f.Reason),
+		"census_state", contextfabric.SanitizeLogAttr(f.CensusState),
+		"observed_population", f.ObservedPopulation,
+		"authorized_population", f.AuthorizedPopulation,
+		"denied_population", f.DeniedPopulation,
+		"served_status", contextfabric.SanitizeLogAttr(f.ServedStatus),
+		"served_members", f.ServedMembers,
+		"limitation_disclosed", f.LimitationDisclosed,
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }

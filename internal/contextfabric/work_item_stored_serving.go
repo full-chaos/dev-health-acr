@@ -50,9 +50,14 @@ func ServeWorkItemTupleCensus(candidate InvestigationResult, census *WorkItemTup
 	case WorkItemMembershipCensusUnmeasured:
 		candidate.Coverage.Details = withoutWorkItemKindCensusDetails(candidate.Coverage.Details)
 		candidate.Coverage.DegradedReasons = withoutWorkItemKindCensusReasons(candidate.Coverage.DegradedReasons)
-		composed, displaced := appendBoundedLimitations(candidate.Limitations, []string{WorkItemMembershipLimitation()})
-		candidate.Limitations = composed
-		candidate.LimitationsDisplaced += displaced
+		if census.gap == nil && !hasWorkItemAuthorizationGapLimitation(candidate.Limitations) {
+			composed, displaced := appendBoundedLimitations(candidate.Limitations, []string{WorkItemMembershipLimitation()})
+			candidate.Limitations = composed
+			candidate.LimitationsDisplaced += displaced
+		}
+	}
+	if census.gap != nil {
+		candidate = applyWorkItemAuthorizationGap(candidate, *census.gap)
 	}
 	return candidate
 }

@@ -34,6 +34,11 @@ type WorkItemTupleCensus struct {
 	// outer semantic snapshot remains readable. It is never exposed to a
 	// consumer and is emitted only when decoding an existing stored row.
 	raw json.RawMessage
+
+	// gap is the denied partition measured for this request. It is not part
+	// of the persisted encoding: a stored answer already carries the
+	// disclosure it was served with.
+	gap *workItemAuthorizationGap
 }
 
 // WorkItemTupleCensusReadStatus describes the independent status of the

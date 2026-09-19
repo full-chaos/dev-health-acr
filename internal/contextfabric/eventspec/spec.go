@@ -2086,6 +2086,31 @@ var WorkItemTupleAdmission = Event{
 	},
 }
 
+// WorkItemAuthorizationGap is the settled decision to disclose work-item
+// members the principal may not read. It carries the census the decision was
+// made from and the shape served, so a measured-but-denied project is never
+// read as an empty one.
+var WorkItemAuthorizationGap = Event{
+	ID:                 "contextfabric.work_item_authorization_gap",
+	Msg:                "context fabric work item authorization gap",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"org_id"},
+	BoundedAggregation: "at most one line per fresh work-item tuple request, emitted only when the measured census has denied members; counts and closed states only.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"none_authorized", "partially_authorized"}},
+		{Key: "census_state", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"exact", "floor"}},
+		{Key: "observed_population", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "authorized_population", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "denied_population", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "served_status", Type: FieldString, Presence: PresenceRequired},
+		{Key: "served_members", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "limitation_disclosed", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
 // arrayTokens is tokenStrings' own counterpart for a "XVocabulary() [N]X"
 // accessor: those return an array BY VALUE, which Go will not let a caller
 // slice directly off the call result (unaddressable), so this copies it
@@ -2367,6 +2392,7 @@ var All = []Event{
 	AnswerDisplay,
 	RetainedRankingAccounting,
 	WorkItemTupleAdmission,
+	WorkItemAuthorizationGap,
 	RankedCutSummary, AnchorSlotDisplaced, DecisionSummary, Search, KindOfferWithheld,
 	Corroboration, CorroborationSummary, ReservedKindAdmitted, OfferPool, OfferPoolSummary,
 	Decision, SearchQuestion, AliasLookup, AnchorPool, KindCoverageFloor, ConfirmedKindRescue,

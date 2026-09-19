@@ -101,7 +101,12 @@ func (e *Engine) tryReuseWorkItemTuple(ctx context.Context, principal storage.Pr
 	servingEvent := newWorkItemStoredServingEvent(StoredAnswerabilitySurfaceReuse, stored.SemanticStateRead, candidate)
 	servingEvent.CensusRead = event.CensusRead
 	servingEvent.Basis = "digest_matched"
-	candidate = ServeWorkItemTupleCensus(candidate, census)
+	serving := *census
+	if gap, gapped := workItemAuthorizationGapOf(current.Census); gapped {
+		serving.gap = &gap
+	}
+	candidate = ServeWorkItemTupleCensus(candidate, &serving)
+	e.recordWorkItemAuthorizationGap(ctx, principal, &serving, candidate)
 	servingErr = validateWorkItemStoredCoverage(candidate, &servingEvent)
 	if e.telemetry != nil {
 		e.telemetry.RecordWorkItemStoredServing(ctx, principal, servingEvent)
@@ -134,6 +139,13 @@ func (e *Engine) tryReuseWorkItemTuple(ctx context.Context, principal storage.Pr
 }
 
 func workItemReuseMembershipEqual(candidate InvestigationResult, census *WorkItemTupleCensus, current WorkItemMembershipResult) bool {
+	if gap, gapped := workItemAuthorizationGapOf(current.Census); gapped {
+		if gap.NoneAuthorized() || !slices.Contains(candidate.Limitations, gap.Limitation()) {
+			return false
+		}
+	} else if hasWorkItemAuthorizationGapLimitation(candidate.Limitations) {
+		return false
+	}
 	value := current.Census.AuthorizedPopulation
 	if current.Census.State == WorkItemMembershipCensusFloor {
 		value = WorkItemMembershipCensusLimit

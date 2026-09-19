@@ -178,6 +178,8 @@ func goVarName(e Event) string {
 		return "WorkItemStoredServing"
 	case CountPopulationScope.ID:
 		return "CountPopulationScope"
+	case WorkItemAuthorizationGap.ID:
+		return "WorkItemAuthorizationGap"
 	case WorkItemTupleAdmission.ID:
 		return "WorkItemTupleAdmission"
 	case FrameValidation.ID:

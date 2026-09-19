@@ -382,7 +382,8 @@ type recordingTelemetry struct {
 	retainedRankingAccounting     []RetainedRankingAccountingEvent
 	// workItemTupleAdmissions records every settled work-item tuple
 	// admission decision verbatim, in emission order.
-	workItemTupleAdmissions []WorkItemTupleAdmissionEvent
+	workItemTupleAdmissions   []WorkItemTupleAdmissionEvent
+	workItemAuthorizationGaps []WorkItemAuthorizationGapEvent
 	// planCarries records every applied carry verbatim -- the ONLY event
 	// that can carry family_source=carried, since the family-resolution
 	// line is sent before the carry runs.
@@ -2293,6 +2294,10 @@ func (r *recordingTelemetry) RecordWorkItemReuse(context.Context, storage.Princi
 }
 
 func (r *recordingTelemetry) RecordWorkItemStoredServing(context.Context, storage.Principal, WorkItemStoredServingEvent) {
+}
+
+func (r *recordingTelemetry) RecordWorkItemAuthorizationGap(_ context.Context, _ storage.Principal, event WorkItemAuthorizationGapEvent) {
+	r.workItemAuthorizationGaps = append(r.workItemAuthorizationGaps, event)
 }
 
 func (r *recordingTelemetry) RecordWorkItemTupleAdmission(_ context.Context, _ storage.Principal, event WorkItemTupleAdmissionEvent) {
