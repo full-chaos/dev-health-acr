@@ -1483,6 +1483,7 @@ type SynthesisInputFields struct {
 	Claims                   int
 	Drivers                  int
 	EvidenceRefs             int
+	ZeroClaimRedraw          string
 	RequestID                string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every SynthesisInputFields uniformly, set ONLY by NewSynthesisInputFields below. A caller
@@ -1497,7 +1498,7 @@ type SynthesisInputFields struct {
 
 // NewSynthesisInputFields is the generated constructor for SynthesisInputFields -- every
 // field SynthesisInput.Fields declares is a required parameter.
-func NewSynthesisInputFields(orgIDHash string, modelID string, modelVersion string, promptVersion string, inputDigest string, inputBytes int, facts int, factEvidenceRefs int, factEvidenceRefsDistinct int, paths int, driverCandidates int, cohortMembers int, outcome string, drawsTotal int, drawOutcomes string, drawClaims string, drawOutputDigests string, claims int, drivers int, evidenceRefs int, requestID string) SynthesisInputFields {
+func NewSynthesisInputFields(orgIDHash string, modelID string, modelVersion string, promptVersion string, inputDigest string, inputBytes int, facts int, factEvidenceRefs int, factEvidenceRefsDistinct int, paths int, driverCandidates int, cohortMembers int, outcome string, drawsTotal int, drawOutcomes string, drawClaims string, drawOutputDigests string, claims int, drivers int, evidenceRefs int, zeroClaimRedraw string, requestID string) SynthesisInputFields {
 	return SynthesisInputFields{
 		OrgIDHash:                orgIDHash,
 		ModelID:                  modelID,
@@ -1519,6 +1520,7 @@ func NewSynthesisInputFields(orgIDHash string, modelID string, modelVersion stri
 		Claims:                   claims,
 		Drivers:                  drivers,
 		EvidenceRefs:             evidenceRefs,
+		ZeroClaimRedraw:          zeroClaimRedraw,
 		RequestID:                requestID,
 		constructed:              true,
 	}
@@ -1557,6 +1559,7 @@ func (f SynthesisInputFields) SlogArgs() []any {
 		"claims", f.Claims,
 		"drivers", f.Drivers,
 		"evidence_refs", f.EvidenceRefs,
+		"zero_claim_redraw", contextfabric.SanitizeLogAttr(f.ZeroClaimRedraw),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }

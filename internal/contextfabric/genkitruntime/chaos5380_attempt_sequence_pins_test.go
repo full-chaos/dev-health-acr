@@ -314,7 +314,7 @@ func TestSynthesizeAttemptSequenceIsCollectedAtInfoAndLostAboveIt(t *testing.T) 
 	run := func(collectAt slog.Level) []decisionRecord {
 		inner, logger := newCaptureLogger()
 		logger = slog.New(&levelledCapture{inner: inner, level: collectAt})
-		generator := &sequencedGenerator{synthesis: validSynthesisOutput(), errs: []error{retryableUnavailable()}}
+		generator := &sequencedGenerator{synthesis: claimedSynthesisOutput(), errs: []error{retryableUnavailable()}}
 		runtime := mustRuntime(t, generator, Config{Logger: logger, MaxAttempts: 2})
 		if _, _, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput()); err != nil {
 			t.Fatalf("SynthesizeAnswer() error = %v", err)
