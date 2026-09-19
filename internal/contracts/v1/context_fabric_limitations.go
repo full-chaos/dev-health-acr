@@ -539,6 +539,18 @@ const ContextFabricDeclaredKindUnmatchedLimitation = "No option found for this q
 // readable; the basis is on the wire as refusal_basis and on the log line.
 const ContextFabricOrganizationScopeUnsupportedLimitation = "This question was read as being about the organization as a whole. Organization-wide analysis of status, health or drivers is not supported; organization-wide counts of one kind of subject, such as how many repositories or teams there are, are supported. No canonical facts were read."
 
+// ContextFabricSubjectIdentityUnconfirmedLimitation is the sentence a
+// follow-up carries when the subject-substitution guard fired and this
+// caller declined (or cannot accept) a clarification
+// (ContextFabricRefusalBasisSubjectIdentityUnconfirmed). Chris-worded and
+// ACCEPTED verbatim (CHAOS-5926, dictations 1998/1999) -- not composed here.
+//
+// IT NAMES THE BASIS TOKEN, the same choice
+// ContextFabricContinuationContextUnverifiableLimitation makes and for the
+// same reason: a reader joins the sentence to the machine field and to the
+// log line through the one value all three share.
+const ContextFabricSubjectIdentityUnconfirmedLimitation = "This follow-up appears to be about a different subject than the earlier answer it continues, so the server did not guess which one was meant and no canonical facts were read. Name the subject directly, or answer the earlier offer naming it, to continue. The server refused this follow-up on the basis subject_identity_unconfirmed."
+
 // ContextFabricServiceAuthoredLimitations returns every disclosure this
 // service composes for itself, in no significant order.
 //
@@ -571,6 +583,7 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricContinuationContextUnverifiableLimitation,
 		ContextFabricDeclaredKindUnmatchedLimitation,
 		ContextFabricOrganizationScopeUnsupportedLimitation,
+		ContextFabricSubjectIdentityUnconfirmedLimitation,
 	}
 }
 

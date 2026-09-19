@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -329,6 +330,13 @@ func TestNoMatchProseDoesNotClaimAbsenceWhenCandidatesArePresent(t *testing.T) {
 	}
 	if !slices.Contains(result.Limitations, ambiguousNoClarificationLimitation) {
 		t.Fatalf("Limitations = %#v, want the ambiguous-and-clarification-unavailable wording", result.Limitations)
+	}
+	// CHAOS-5926: an ORDINARY ambiguous match -- no subject-substitution
+	// guard involved, no matching prompt -- must not pick up the guard's
+	// named reason. Proves the new branch keys on the guard's own fixed
+	// prompt, not on "ambiguous plus no clarification" in general.
+	if result.RefusalBasis == contractsv1.ContextFabricRefusalBasisSubjectIdentityUnconfirmed {
+		t.Fatalf("refusal_basis = %q, want empty: this is an ordinary ambiguous match, not a subject substitution", result.RefusalBasis)
 	}
 	if strings.Contains(result.DeterministicAnswer, "No investigation subject could be resolved") {
 		t.Fatalf("DeterministicAnswer = %q, want it not to claim absence while candidates are attached", result.DeterministicAnswer)

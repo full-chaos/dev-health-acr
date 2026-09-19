@@ -131,6 +131,35 @@ const (
 	// it stays outside ValidContextFabricFrameRefusalBasis and carries its own
 	// sentence (ContextFabricOrganizationScopeUnsupportedLimitation).
 	ContextFabricRefusalBasisOrganizationScopeUnsupported ContextFabricRefusalBasis = "organization_scope_unsupported"
+	// ContextFabricRefusalBasisSubjectIdentityUnconfirmed (CHAOS-5926): a
+	// follow-up naming a parent result resolved to an identity other than
+	// the one the parent asserted, whichever way that identity reached
+	// resolution (the question's own words, a caller hint, a receipt or the
+	// engine's carried subject) -- the subject-substitution guard
+	// (chaos5917_subject_substitution.go) fired, and this caller declined
+	// (or cannot accept) a clarification, so the turn ends with the reason
+	// stated rather than an answer about a subject the caller never asked
+	// for.
+	//
+	// FIRES ONLY ON THE NON-CLARIFYING BRANCH. A caller that can clarify is
+	// never refused this way -- it is offered the remembered subject first,
+	// same as this vocabulary's guard-issued clarification elsewhere. A subject
+	// change always clarifies
+	// for a caller that can be asked, and gets a refusal-with-reason for one
+	// that cannot; this member is that reason, named rather than folded into
+	// the ordinary ambiguous-candidate ("no_match") ending every other
+	// undecided pool reaches, because a substituted identity is a distinct
+	// claim from "retrieval found more than one match" -- the resolution DID
+	// commit, cleanly, to a real subject; it is simply not the one this
+	// exchange was about.
+	//
+	// NOT A FRAME REFUSAL: the frame validated, the gate passed, and
+	// resolution committed a real identity -- nothing about the QUESTION was
+	// refused. What this member reports is a CONTINUATION decision, the same
+	// class continuation_context_unverifiable is, so it stays outside
+	// ValidContextFabricFrameRefusalBasis for the same reason and carries its
+	// own fixed sentence (ContextFabricSubjectIdentityUnconfirmedLimitation).
+	ContextFabricRefusalBasisSubjectIdentityUnconfirmed ContextFabricRefusalBasis = "subject_identity_unconfirmed"
 )
 
 var contextFabricRefusalBases = [...]ContextFabricRefusalBasis{
@@ -140,6 +169,7 @@ var contextFabricRefusalBases = [...]ContextFabricRefusalBasis{
 	ContextFabricRefusalBasisContinuationContextUnverifiable,
 	ContextFabricRefusalBasisDeclaredKindUnmatched,
 	ContextFabricRefusalBasisOrganizationScopeUnsupported,
+	ContextFabricRefusalBasisSubjectIdentityUnconfirmed,
 }
 
 // ValidContextFabricFrameRefusalBasis reports whether a basis is one of the

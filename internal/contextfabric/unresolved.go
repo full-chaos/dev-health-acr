@@ -256,6 +256,14 @@ func (e *Engine) terminalResult(
 	interpretation InterpretedQuestion,
 	familyOutcome QuestionFamilyOutcome,
 	resolution SubjectResolution,
+	// substitutionOutcome (CHAOS-5926) is the subject-substitution guard's
+	// own typed decision (chaos5917_subject_substitution.go) for THIS turn --
+	// SubjectSubstitutionNotEvaluated on every path that never ran the guard
+	// (the caller passes the zero value). resolveTerminalStatus decides the
+	// non-clarifying refusal on THIS value alone, never on resolution's
+	// ClarificationPrompt text: a guard decided on behaviour, not on string
+	// equality with a sentence a future edit could change out from under it.
+	substitutionOutcome SubjectSubstitutionOutcome,
 	graphContext GraphContext,
 	watermark SourceWatermarkSnapshot,
 	epoch RebuildEpoch,
@@ -345,7 +353,7 @@ func (e *Engine) terminalResult(
 	// produced, never reconstructed here; it is what tells a held
 	// comparison's empty pool apart from an ordinary one.
 	status, limitation := resolveTerminalStatus(request, &resolution, familyOutcome.Frame,
-		clarificationOffersRedeemable(resolution, structureMaterial, windowClarification, declaredKind), declaredKind)
+		clarificationOffersRedeemable(resolution, structureMaterial, windowClarification, declaredKind), declaredKind, substitutionOutcome)
 	// CHAOS-5442: a frame the gate refused gets its own disclosure, on
 	// both surfaces, decided from the ONE value that already holds the
 	// verdict.
@@ -378,6 +386,17 @@ func (e *Engine) terminalResult(
 	// limitation above, so its basis is never written over.
 	if declaredKind.OrganizationScopeUnsupported && status == InvestigationNoMatch && limitation == organizationScopeTerminalLimitation {
 		refusalBasis = organizationScopeTerminalBasis
+	}
+	// The subject-substitution guard's non-clarifying refusal discloses its
+	// own basis, same after-the-gate rule -- both the guard's
+	// own typed outcome and the limitation sentinel must agree, so a future
+	// member added to this same sentence text cannot be written over by
+	// mistake, and this cannot fire on the clarifying caller's identical
+	// prompt (that caller's outcome is Clarified/ClarifiedRememberedUnavailable,
+	// never one of these two).
+	if (substitutionOutcome == SubjectSubstitutionRefused || substitutionOutcome == SubjectSubstitutionRefusedRememberedUnavailable) &&
+		status == InvestigationNoMatch && limitation == subjectIdentityUnconfirmedTerminalLimitation {
+		refusalBasis = subjectIdentityUnconfirmedTerminalBasis
 	}
 	// CHAOS-3888: telemetry-only -- classifies WHY this investigation
 	// reached its own subjectless terminal path, never changes status,
@@ -760,7 +779,7 @@ func comparisonHeldWithoutCandidates(frame *QuestionFrame, resolution *SubjectRe
 // frame is the question frame this turn already produced -- carried, never
 // reconstructed here from the interpretation or the shape. It is what tells
 // a held comparison's empty pool apart from an ordinary one.
-func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectResolution, frame *QuestionFrame, otherOffersRedeemable bool, declaredKind declaredKindDecision) (InvestigationStatus, string) {
+func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectResolution, frame *QuestionFrame, otherOffersRedeemable bool, declaredKind declaredKindDecision, substitutionOutcome SubjectSubstitutionOutcome) (InvestigationStatus, string) {
 	// CHAOS-5660, FIRST, ahead of both branches below.
 	//
 	// It is first because it is the only arm that describes a turn no
@@ -792,6 +811,31 @@ func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectReso
 	}
 	if declaredKind.Unsatisfiable && request.Options.AllowClarification {
 		return InvestigationNoMatch, declaredKindTerminalLimitation
+	}
+	// Ahead of both the zero-candidate and the ambiguous
+	// branches below: the subject-substitution guard already committed a
+	// real identity and withdrew it (chaos5917_subject_substitution.go),
+	// which is a different claim from "retrieval found more than one
+	// match" -- the ordinary ambiguous ending below is accurate about a
+	// pool that never resolved anything, and would be false of a turn that
+	// resolved cleanly and was refused for continuing a different subject.
+	//
+	// DECIDED ON THE GUARD'S OWN TYPED OUTCOME, never on resolution's
+	// ClarificationPrompt text: the two refusing members
+	// (SubjectSubstitutionRefused/RefusedRememberedUnavailable) are the
+	// guard's closed vocabulary for exactly this state, and a decision keyed
+	// on comparing prompt strings would silently stop firing the moment
+	// either prompt's wording changed -- a guard that checks text instead of
+	// behaviour is a finding class this codebase already reviews for.
+	//
+	// The AllowClarification check is redundant with the outcome today
+	// (decideSubjectSubstitution only ever produces these two members when
+	// AllowClarification is false) and kept anyway, belt and braces, same
+	// discipline the declaredKind/organizationScope arms above use: a future
+	// change to one side alone cannot silently widen who this arm refuses.
+	if !request.Options.AllowClarification &&
+		(substitutionOutcome == SubjectSubstitutionRefused || substitutionOutcome == SubjectSubstitutionRefusedRememberedUnavailable) {
+		return InvestigationNoMatch, subjectIdentityUnconfirmedTerminalLimitation
 	}
 	if len(resolution.Candidates) == 0 {
 		// THE COMPARISON-ONLY BRANCH, checked before the exclusion arm below
