@@ -286,6 +286,8 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 				"pass", event.Pass,
 				"vector_only_excluded", event.OfferPoolVectorOnlyExcluded,
 				"vector_only_demoted", event.OfferPoolVectorOnlyDemoted,
+				"below_floor_excluded", event.OfferPoolBelowFloorExcluded,
+				"similarity_floor", event.OfferPoolSimilarityFloor,
 				"emptied_by_exclusion", event.OfferPoolEmptiedByExclusion)
 			return
 		}
@@ -465,7 +467,14 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"handle_offer_count_before_graph_source", event.HandleOfferCountBeforeGraphSource,
 			"handle_offer_graph_derived_count", event.HandleOfferGraphDerivedCount,
 			"handle_offer_graph_derived_rejected_count", event.HandleOfferGraphDerivedRejectedCount,
-			"offered_under_window_gate", event.OfferedUnderWindowGate)
+			"offered_under_window_gate", event.OfferedUnderWindowGate,
+			"offer_floor", event.OfferFloorValue,
+			"offer_floor_pool_count", event.OfferFloorPoolCount,
+			"offer_floor_refused_count", event.OfferFloorRefused,
+			"offer_floor_candidates", contextfabric.SanitizeLogStrings(emptyIfNilStrings(event.OfferFloorCandidates)),
+			"offer_floor_decision", contextfabric.SanitizeLogAttr(offerFloorDecisionOrDefault(event.OfferFloorDecision)),
+			"offer_floor_reason", contextfabric.SanitizeLogAttr(offerFloorReasonOrDefault(event.OfferFloorReason)),
+			"offer_floor_offers", contextfabric.SanitizeLogStrings(emptyIfNilStrings(event.OfferFloorOffers)))
 	case "kind_offer_withheld":
 		// CHAOS-5218. Emitted ONLY when the offer withheld at least one
 		// frame-declared kind because the full merged pool held no candidate

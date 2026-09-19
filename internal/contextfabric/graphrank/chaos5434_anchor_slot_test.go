@@ -698,7 +698,7 @@ func TestTheAnchorSlotChangesTheOfferedListAndNotTheDecision(t *testing.T) {
 		team := contextfabric.SubjectCandidate{
 			Subject:    contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team_1", Label: "CHAOS Team"},
 			State:      contractsv1.ContextFabricResolutionAmbiguous,
-			Confidence: 0.4,
+			Confidence: 0.68,
 		}
 		pool[SubjectKey(team.Subject)] = team
 		return pool

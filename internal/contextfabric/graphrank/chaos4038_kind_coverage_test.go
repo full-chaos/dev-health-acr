@@ -162,7 +162,7 @@ func TestResolveSubjects_SearchKindSkippedWhenPoolAlreadyCoversAllFloorKinds(t *
 // CHAOS-4038 describes end to end, not merely that a candidate was added.
 func TestResolveSubjects_SearchKindFillsMissingCoverageKind(t *testing.T) {
 	t.Parallel()
-	prCandidate := candidateNode(contextfabric.SubjectPullRequest, "pr_1", "Outage PR", 0.6, "*")
+	prCandidate := candidateNode(contextfabric.SubjectPullRequest, "pr_1", "Outage PR", 0.68, "*")
 	backend := &fakeGraphBackend{
 		enableSearchKind: true,
 		searchResults: map[string][]CandidateNode{
@@ -290,7 +290,7 @@ func TestResolveSubjects_SearchKindRescuesAliasLookupScopedKindWhenAliasLookupCo
 	// (chaos3900_structure_offers.go), which would make this test's offer
 	// assertion pass for the wrong reason (suppression, not visibility).
 	strongWorkItem := candidateNode(contextfabric.SubjectWorkItem, "wi_1", "Outage work item", 0.9, "*")
-	repoCandidate := candidateNode(contextfabric.SubjectRepository, "repo_1", "acr", 0.6, "*")
+	repoCandidate := candidateNode(contextfabric.SubjectRepository, "repo_1", "acr", 0.68, "*")
 	backend := &fakeGraphBackend{
 		enableSearchKind:     true,
 		enableAliasLookup:    true,
@@ -348,9 +348,9 @@ func TestResolveSubjects_SearchKindRescuesAliasLookupScopedKindWhenAliasLookupCo
 // named.
 func TestResolveSubjects_SearchKindRescuesOnlyTheAliasLookupScopedKindsAliasLookupMissed(t *testing.T) {
 	t.Parallel()
-	projectCandidate := candidateNode(contextfabric.SubjectProject, "proj_1", "Widgets", 0.6, "*")
-	repoCandidate := candidateNode(contextfabric.SubjectRepository, "repo_1", "acr", 0.6, "*")
-	teamCandidate := candidateNode(contextfabric.SubjectTeam, "team_1", "Platform", 0.6, "*")
+	projectCandidate := candidateNode(contextfabric.SubjectProject, "proj_1", "Widgets", 0.68, "*")
+	repoCandidate := candidateNode(contextfabric.SubjectRepository, "repo_1", "acr", 0.68, "*")
+	teamCandidate := candidateNode(contextfabric.SubjectTeam, "team_1", "Platform", 0.68, "*")
 	backend := &fakeGraphBackend{
 		enableSearchKind:     true,
 		enableAliasLookup:    true,
@@ -655,7 +655,7 @@ func TestResolveSubjects_SearchKindCoversAliasLookupScopedKindsWhenAliasLookupIn
 func TestResolveSubjects_SearchKindOfferSurvivesFinalRankedTruncation(t *testing.T) {
 	t.Parallel()
 	strongWorkItem := candidateNode(contextfabric.SubjectWorkItem, "wi_1", "Outage work item", 0.95, "*")
-	weakPR := candidateNode(contextfabric.SubjectPullRequest, "pr_1", "Outage PR", 0.5, "*")
+	weakPR := candidateNode(contextfabric.SubjectPullRequest, "pr_1", "Outage PR", 0.68, "*")
 	backend := &fakeGraphBackend{
 		enableSearchKind: true,
 		searchResults:    map[string][]CandidateNode{"outage": {strongWorkItem}},

@@ -225,3 +225,13 @@ func assertAnswerableClarification(result InvestigationResult) error {
 	}
 	return ErrUnanswerableClarification
 }
+
+// effectiveSubjectFloor is the floor outcome the terminal acts on: material
+// that gained a redeemable offer after the floor decided (a prior-receipt
+// offer merged in later) has something left to offer.
+func effectiveSubjectFloor(material StructureOfferMaterial) OfferFloorOutcome {
+	if offerMaterialRedeemable(material) {
+		return OfferFloorOutcome{}
+	}
+	return material.SubjectFloor
+}

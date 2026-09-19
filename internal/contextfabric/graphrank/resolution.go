@@ -1605,6 +1605,10 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 	// embeddings-off run reaches.
 	offered := make([]contextfabric.SubjectCandidate, 0, len(ordered))
 	offerPoolVectorOnlyExcluded := 0
+	// offerPoolFloorExcluded counts the candidates withheld for matching by
+	// similarity at or below OfferSimilarityFloor; the vector-only count above
+	// stays its own figure. Both are withheld by the ONE classifier.
+	offerPoolFloorExcluded := 0
 	// CHAOS-5517: pre-count the excluded set BEFORE emitting anything, so
 	// the offer_pool DETAIL event's own Total (demoted + excluded, the
 	// SAME two counts OfferPoolSummary reports below) is known before the
@@ -1615,7 +1619,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 	if tracer != nil {
 		excludedPrecount := 0
 		for _, candidate := range ordered {
-			if isVectorOnlyCandidate(candidate.MatchMechanisms) && !demotedKeys[SubjectKey(candidate.Subject)] {
+			if !ClassifyOffer(candidate).Admitted() && !demotedKeys[SubjectKey(candidate.Subject)] {
 				excludedPrecount++
 			}
 		}
@@ -1630,18 +1634,25 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		}
 	}
 	for _, candidate := range ordered {
-		if isVectorOnlyCandidate(candidate.MatchMechanisms) {
+		admission := ClassifyOffer(candidate)
+		if !admission.Admitted() {
 			// A demoted arrival is withheld from the offer for the same
 			// reason and is NOT counted twice -- re-offering the receipt the
 			// caller just answered would hand the same guess round again
 			// under a new id. It already has its own disposition event.
 			if !demotedKeys[SubjectKey(candidate.Subject)] {
-				offerPoolVectorOnlyExcluded++
+				disposition := "vector_only_excluded"
+				if admission == OfferRefusedAtOrBelowFloor {
+					offerPoolFloorExcluded++
+					disposition = "below_floor_excluded"
+				} else {
+					offerPoolVectorOnlyExcluded++
+				}
 				if tracer != nil {
 					offerPoolDetailIndex++
 					tracer.Trace(ResolutionTraceEvent{
 						RequestID: requestID, Stage: "offer_pool", Subject: candidate.Subject,
-						Pass: pass, OfferPoolDisposition: "vector_only_excluded",
+						Pass: pass, OfferPoolDisposition: disposition,
 						Index: offerPoolDetailIndex, Total: offerPoolDetailTotal,
 					})
 				}
@@ -1706,6 +1717,8 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 			Pass:                        pass,
 			OfferPoolVectorOnlyExcluded: offerPoolVectorOnlyExcluded,
 			OfferPoolVectorOnlyDemoted:  offerPoolVectorOnlyDemoted,
+			OfferPoolBelowFloorExcluded: offerPoolFloorExcluded,
+			OfferPoolSimilarityFloor:    OfferSimilarityFloor,
 			OfferPoolEmptiedByExclusion: offerPoolEmptiedByExclusion,
 		})
 	}

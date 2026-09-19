@@ -192,6 +192,10 @@ const (
 	// subject, or rephrase -- which is the one thing that was worth saying
 	// on the turn this replaces.
 	noMatchLimitationOfferPoolEmptied = "Retrieval matched one or more subjects only by semantic similarity, which is not enough to identify a subject, so none could be offered and no canonical facts were read. Name the subject you mean, or rephrase the question so it names one."
+	// noMatchLimitationOfferFloorEmptied marks the floor-emptied terminal in
+	// resolveTerminalStatus's own return; terminalResult replaces it with
+	// noMatchLimitationSubjectNotFound, which names the subject and the kinds.
+	noMatchLimitationOfferFloorEmptied = "No subject matching the name in the question was found, so nothing was offered and no canonical facts were read."
 	// The ambiguous-and-clarification-unavailable pair (CHAOS-3810 codex
 	// round-1 P2): a no_match result reached WITH candidates attached must
 	// not claim nothing matched while the candidates it names sit in the
@@ -235,6 +239,25 @@ const (
 		"semantic similarity, which is not enough to identify a subject. Name the subject you " +
 		"mean, or rephrase the question so it names one."
 )
+
+// kindsSearchedText renders the searched kinds, "none" when the pool held none.
+func kindsSearchedText(kinds []string) string {
+	if len(kinds) == 0 {
+		return "none"
+	}
+	return strings.Join(kinds, ", ")
+}
+
+// noMatchLimitationSubjectNotFound is the terminal prose for a named subject
+// no candidate identified: it names what was searched for and which kinds
+// were searched, and it states that nothing was offered.
+func noMatchLimitationSubjectNotFound(subjectTerms []string, searchedKinds []string) string {
+	named := "the subject named in the question"
+	if terms := strings.TrimSpace(strings.Join(subjectTerms, " ")); terms != "" {
+		named = "\"" + terms + "\""
+	}
+	return "No subject matching " + named + " was found among the kinds searched (" + kindsSearchedText(searchedKinds) + "), so nothing was offered and no canonical facts were read. Candidates that matched only part of the name were not offered. Name the subject you mean, or rephrase the question so it names one."
+}
 
 // terminalResult composes the model-free result for an investigation that
 // resolved no subject to read facts for.
@@ -353,7 +376,10 @@ func (e *Engine) terminalResult(
 	// produced, never reconstructed here; it is what tells a held
 	// comparison's empty pool apart from an ordinary one.
 	status, limitation := resolveTerminalStatus(request, &resolution, familyOutcome.Frame,
-		clarificationOffersRedeemable(resolution, structureMaterial, windowClarification, declaredKind), declaredKind, substitutionOutcome)
+		clarificationOffersRedeemable(resolution, structureMaterial, windowClarification, declaredKind), declaredKind, substitutionOutcome, effectiveSubjectFloor(structureMaterial))
+	if limitation == noMatchLimitationOfferFloorEmptied {
+		limitation = noMatchLimitationSubjectNotFound(interpretation.SubjectTerms, effectiveSubjectFloor(structureMaterial).SearchedKinds)
+	}
 	// CHAOS-5442: a frame the gate refused gets its own disclosure, on
 	// both surfaces, decided from the ONE value that already holds the
 	// verdict.
@@ -779,7 +805,7 @@ func comparisonHeldWithoutCandidates(frame *QuestionFrame, resolution *SubjectRe
 // frame is the question frame this turn already produced -- carried, never
 // reconstructed here from the interpretation or the shape. It is what tells
 // a held comparison's empty pool apart from an ordinary one.
-func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectResolution, frame *QuestionFrame, otherOffersRedeemable bool, declaredKind declaredKindDecision, substitutionOutcome SubjectSubstitutionOutcome) (InvestigationStatus, string) {
+func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectResolution, frame *QuestionFrame, otherOffersRedeemable bool, declaredKind declaredKindDecision, substitutionOutcome SubjectSubstitutionOutcome, subjectFloor OfferFloorOutcome) (InvestigationStatus, string) {
 	// CHAOS-5660, FIRST, ahead of both branches below.
 	//
 	// It is first because it is the only arm that describes a turn no
@@ -911,6 +937,9 @@ func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectReso
 		// by this ticket's own test rather than by inspection. The two
 		// arms differ in STATUS for two different reasons; they never
 		// differed in what actually happened to the pool.
+		if subjectFloor.Refused && !resolution.GraphNotProjected {
+			return InvestigationNoMatch, noMatchLimitationOfferFloorEmptied
+		}
 		if strings.TrimSpace(resolution.ClarificationPrompt) != "" && !resolution.GraphNotProjected {
 			if request.Options.AllowClarification && otherOffersRedeemable {
 				return InvestigationClarificationRequired, clarificationRequiredLimitationOne

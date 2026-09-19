@@ -372,6 +372,22 @@ type StructureOfferMaterial struct {
 	// CandidateOptions (CHAOS-4012) fires INDEPENDENTLY of KindOptions above
 	// -- see ContextFabricStructureNeedSubjectCandidate's own doc comment.
 	CandidateOptions []contractsv1.ContextFabricCandidateOption
+	// SubjectFloor is the typed outcome of the offer floor for this
+	// resolution: true when candidates were withheld for matching by
+	// similarity at or below the floor and nothing was left to offer or
+	// commit. It is the ONLY signal the terminal reads for the subject-not-
+	// found outcome -- never the clarification prompt's text.
+	SubjectFloor OfferFloorOutcome
+}
+
+// OfferFloorOutcome is the typed no-match the offer floor produces.
+type OfferFloorOutcome struct {
+	// Refused is true when the floor withheld at least one candidate and the
+	// resolution had nothing left to offer or commit.
+	Refused bool
+	// SearchedKinds are the distinct subject kinds the retrieval pool held
+	// (offered or withheld), sorted.
+	SearchedKinds []string
 }
 
 type GraphDiscoveryRequest struct {

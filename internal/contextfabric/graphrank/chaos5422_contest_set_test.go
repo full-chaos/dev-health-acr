@@ -79,7 +79,7 @@ func contestBackend(term string) *fakeGraphBackend {
 	repo := candidateNode(contextfabric.SubjectRepository,
 		"repository.v2:github:"+term, term, 0.95, "*")
 	team := candidateNode(contextfabric.SubjectTeam,
-		"team.v2:github:"+term+"-owners", term+" owners", 0.4, "*")
+		"team.v2:github:"+term+"-owners", term+" owners", 0.68, "*")
 	return &fakeGraphBackend{
 		searchResults:    map[string][]CandidateNode{term: {repo, team}},
 		enableSearchKind: true,
@@ -161,8 +161,8 @@ func TestARefusedMemberNeverConsumesTheAnchorsOfferSlot(t *testing.T) {
 			// the slot competition happens. A fixture with both in ordinary
 			// search passes even on the implementation that had this defect,
 			// which I verified before trusting this pin.
-			team := candidateNode(contextfabric.SubjectTeam, "team.v2:github:platform-owners", "platform owners", 0.6, "*")
-			repo := candidateNode(contextfabric.SubjectRepository, "repository.v2:github:platform", "platform repository", 0.3, "*")
+			team := candidateNode(contextfabric.SubjectTeam, "team.v2:github:platform-owners", "platform owners", 0.68, "*")
+			repo := candidateNode(contextfabric.SubjectRepository, "repository.v2:github:platform", "platform repository", 0.68, "*")
 			backend.searchResults["platform"] = []CandidateNode{team}
 			backend.searchKindResults["platform"][contextfabric.SubjectTeam] = []CandidateNode{team}
 			backend.searchKindResults["platform"][contextfabric.SubjectRepository] = []CandidateNode{repo}
@@ -629,8 +629,8 @@ func TestTheConfirmedKindRedecisionCarriesTheSameAdmission(t *testing.T) {
 	// the equal relevances stay genuinely ambiguous — otherwise the first pass
 	// commits and the re-decision, which only runs when it did not, never
 	// happens at all.
-	anchor := candidateNode(contextfabric.SubjectRepository, "repository.v2:github:plat-one", "plat one", 0.5, "*")
-	rival := candidateNode(contextfabric.SubjectRepository, "repository.v2:github:plat-two", "plat two", 0.5, "*")
+	anchor := candidateNode(contextfabric.SubjectRepository, "repository.v2:github:plat-one", "plat one", 0.68, "*")
+	rival := candidateNode(contextfabric.SubjectRepository, "repository.v2:github:plat-two", "plat two", 0.68, "*")
 	late := candidateNode(contextfabric.SubjectTeam, "team.v2:github:platform-late", "platform late", 0.95, "*")
 
 	backend := &fakeGraphBackend{

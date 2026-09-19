@@ -495,7 +495,7 @@ func TestAnOrganizationScopeReadingIsRefusedOnBothSidesWhateverItsRoles(t *testi
 		t.Fatalf("fixture defect: fresh unsatisfiable/org = %v/%v, want false/true -- the reading must derive no role", fresh.Unsatisfiable, fresh.OrganizationScopeUnsupported)
 	}
 	request := InvestigationRequest{Options: InvestigationOptions{AllowClarification: true}}
-	if status, limitation := resolveTerminalStatus(request, &resolution, frame, true, fresh, SubjectSubstitutionNotEvaluated); status != InvestigationNoMatch || limitation != organizationScopeTerminalLimitation {
+	if status, limitation := resolveTerminalStatus(request, &resolution, frame, true, fresh, SubjectSubstitutionNotEvaluated, OfferFloorOutcome{}); status != InvestigationNoMatch || limitation != organizationScopeTerminalLimitation {
 		t.Fatalf("fresh status/limitation = %q/%q, want the organization-scope refusal", status, limitation)
 	}
 

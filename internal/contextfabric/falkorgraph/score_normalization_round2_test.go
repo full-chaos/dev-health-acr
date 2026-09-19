@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -83,6 +84,8 @@ func TestResolveSubjectsWeakLoneFulltextHitDoesNotAutoCommit(t *testing.T) {
 	weakHit := fulltextRow("incident", "weak_hit", "Unrelated Status", "Unrelated outage Status", nil)
 	fake := fixedRowsFulltextConn([]row{weakHit})
 	adapter := newFakeAdapter(t, fake)
+	observer := &fakeRawSignalObserver{}
+	adapter.config.RawSignalObserver = observer
 	request, interpreted := openQuestionRequest("incident outage payment gateway")
 
 	resolution, _, _, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, nil, "")
@@ -97,12 +100,20 @@ func TestResolveSubjectsWeakLoneFulltextHitDoesNotAutoCommit(t *testing.T) {
 	// below both the pre- and post-CHAOS-3857 gate values), so "nothing
 	// committed" alone cannot distinguish the claimed 1-of-4 edge from a
 	// different, weaker claim.
-	if len(resolution.Candidates) != 1 {
-		t.Fatalf("ResolveSubjects(nil) candidates = %#v, want exactly 1", resolution.Candidates)
+	// The offer floor withholds a similarity-only hit at/below 0.625 from
+	// the offer list, so the pinned confidence is read from the candidate the
+	// adapter produced (via the raw-signal observer) instead.
+	if len(observer.observed) != 1 {
+		t.Fatalf("observer.observed = %#v, want exactly 1 candidate", observer.observed)
 	}
 	const want1of4 = 0.50 + 0.25*0.25 // fulltextRelevanceFloor + span*(1/4)
-	if got := resolution.Candidates[0].Confidence; got != want1of4 {
-		t.Fatalf("weak hit confidence = %v, want %v (exactly a 1-of-4-term match)", got, want1of4)
+	for _, node := range observer.observed {
+		if got := graphrank.ResultConfidence(node.Relevance, node.Score); got != want1of4 {
+			t.Fatalf("weak hit confidence = %v, want %v (exactly a 1-of-4-term match)", got, want1of4)
+		}
+	}
+	if len(resolution.Candidates) != 0 {
+		t.Fatalf("ResolveSubjects(nil) candidates = %#v, want the weak 1-of-4 similarity-only hit withheld from offers", resolution.Candidates)
 	}
 }
 
@@ -154,7 +165,7 @@ func TestResolveSubjectsFullyMatchingLoneFulltextHitStillAutoCommits(t *testing.
 // cross-call comparison is sound.
 func TestResolveSubjectsComparesConfidenceAcrossTermsOnOneScale(t *testing.T) {
 	fullMatch := fulltextRow("incident", "full_match", "Alpha Widget", "Alpha Widget", nil)
-	partialMatch := fulltextRow("incident", "partial_match", "Unrelated", "Unrelated beta", nil)
+	partialMatch := fulltextRow("incident", "partial_match", "Unrelated", "Unrelated beta gamma", nil)
 	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
 		q, _ := params["query"].(string)
 		switch q {

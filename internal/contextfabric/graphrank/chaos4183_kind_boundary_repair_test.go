@@ -34,7 +34,7 @@ func TestResolveSubjects_KindBoundaryRepairCausalFixture(t *testing.T) {
 	// all (projectKindOfferKinds skips repair whenever committedCount > 0).
 	workItemA := candidateNode(contextfabric.SubjectWorkItem, "wi_1", "Outage work item A", 0.95, "*")
 	workItemB := candidateNode(contextfabric.SubjectWorkItem, "wi_2", "Outage work item B", 0.90, "*")
-	weakPR := candidateNode(contextfabric.SubjectPullRequest, "pr_1", "Outage PR", 0.5, "*")
+	weakPR := candidateNode(contextfabric.SubjectPullRequest, "pr_1", "Outage PR", 0.68, "*")
 	backend := &fakeGraphBackend{
 		searchResults: map[string][]CandidateNode{"outage": {workItemA, workItemB, weakPR}},
 	}
@@ -178,7 +178,7 @@ func TestResolveSubjects_KindBoundaryRepairCausalFixture(t *testing.T) {
 func TestResolveSubjects_KindOfferBoundaryKindsStaysUnfilteredWhenCommitted(t *testing.T) {
 	t.Parallel()
 	strongWorkItem := candidateNode(contextfabric.SubjectWorkItem, "wi_1", "Outage work item", 0.95, "*")
-	weakDocument := candidateNode(contextfabric.SubjectDocument, "doc_1", "Outage doc", 0.1, "*")
+	weakDocument := candidateNode(contextfabric.SubjectDocument, "doc_1", "Outage doc", 0.68, "*")
 	backend := &fakeGraphBackend{
 		searchResults: map[string][]CandidateNode{"outage": {strongWorkItem, weakDocument}},
 	}

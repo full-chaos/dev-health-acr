@@ -44,8 +44,15 @@ func TestAdapterResolveSubjects_RawSignalObserverReceivesRawLexicalCoverage(t *t
 	// Sanity anchor: still the same 1-of-4 remapped confidence the
 	// pre-existing test pins, so this test is observing the SAME candidate.
 	const want1of4 = 0.50 + 0.25*0.25
-	if len(resolution.Candidates) != 1 || resolution.Candidates[0].Confidence != want1of4 {
-		t.Fatalf("resolution.Candidates = %#v, want exactly 1 at confidence %v", resolution.Candidates, want1of4)
+	// The offer floor withholds this similarity-only 1-of-4 hit from offers;
+	// its confidence is read from the observed candidate instead.
+	if len(resolution.Candidates) != 0 {
+		t.Fatalf("resolution.Candidates = %#v, want the weak 1-of-4 hit withheld from offers", resolution.Candidates)
+	}
+	for _, node := range observer.observed {
+		if graphrank.ResultConfidence(node.Relevance, node.Score) != want1of4 {
+			t.Fatalf("observed confidence = %v, want %v", graphrank.ResultConfidence(node.Relevance, node.Score), want1of4)
+		}
 	}
 
 	if len(observer.observed) != 1 {
@@ -77,8 +84,8 @@ func TestAdapterResolveSubjects_NilRawSignalObserverIsDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v (nil observer must never cause a failure)", err)
 	}
-	if len(resolution.Candidates) != 1 {
-		t.Fatalf("resolution.Candidates = %#v, want exactly 1", resolution.Candidates)
+	if len(resolution.Candidates) != 0 {
+		t.Fatalf("resolution.Candidates = %#v, want the weak similarity-only hit withheld from offers", resolution.Candidates)
 	}
 }
 
