@@ -3988,6 +3988,71 @@
         "presence": "required"
       },
       {
+        "key": "grant_organization_wide",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "grant_exact_selectors",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "grant_owner_selectors",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "grant_requested_selectors",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "organization_grant_population",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "direct_repo_population",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "project_ownership_population",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "pr_link_population",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "repo_less_population",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "repo_less_denied_population",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "denied_project_less_population",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "excluded_explicit_text_link_population",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "excluded_heuristic_link_population",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "served_members",
         "type": "int",
         "presence": "required"

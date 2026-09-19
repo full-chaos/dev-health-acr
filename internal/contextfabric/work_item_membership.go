@@ -109,19 +109,57 @@ type WorkItemMembershipMember struct {
 // meaningful only when PopulationMeasured is true, except CappedPopulation
 // which records the rows observed before a floor or an unmeasured failure.
 type WorkItemMembershipCensus struct {
-	State                    WorkItemMembershipCensusState
-	PopulationMeasured       bool
-	PopulationComplete       bool
-	PopulationIncomplete     bool
-	CappedPopulation         int
-	AuthorizedPopulation     int
-	DeniedPopulation         int
+	State                WorkItemMembershipCensusState
+	PopulationMeasured   bool
+	PopulationComplete   bool
+	PopulationIncomplete bool
+	CappedPopulation     int
+	AuthorizedPopulation int
+	DeniedPopulation     int
+	// Paths splits the measured population by the authorization path that
+	// admits each member and by the repo-less and project-less subsets of
+	// the denied members. Meaningful exactly when the other counts are.
+	Paths                    WorkItemMembershipPathCensus
 	ServedMembers            int
 	CensusLimit              int
 	FutureBoundaryCount      int
 	TransitionAssertionCount int
 	UnmeasuredReason         WorkItemMembershipUnmeasuredReason
 	Limitation               string
+}
+
+// WorkItemMembershipPathCensus is S1's per-path census over the same capped
+// population as AuthorizedPopulation. A member two paths admit counts under
+// both, so the four path counts may sum past AuthorizedPopulation; each is
+// the population that path alone admits. RepoLess is every member with no
+// real repository, RepoLessDenied the denied part of it, and
+// DeniedProjectLess the denied members whose own row names no project --
+// the population no project path can ever reach.
+type WorkItemMembershipPathCensus struct {
+	OrganizationGrant int
+	DirectRepository  int
+	ProjectOwnership  int
+	PullRequestLink   int
+	RepoLess          int
+	RepoLessDenied    int
+	DeniedProjectLess int
+	// ExcludedExplicitTextLink and ExcludedHeuristicLink count the members
+	// with a link to a granted repository that is evidence, not a grant: an
+	// issue key found in pull-request text, and a time-window guess. Only a
+	// provider-recorded (native) link authorizes; these disclose the rest.
+	ExcludedExplicitTextLink int
+	ExcludedHeuristicLink    int
+}
+
+// WorkItemMembershipGrantShape is the pre-entry shape of the repository
+// grant S1 evaluates: organization-wide or not, how many exact and owner
+// selectors, and whether the request narrowed it. Counts only; selector
+// values never reach telemetry.
+type WorkItemMembershipGrantShape struct {
+	OrganizationWide   bool
+	ExactSelectors     int
+	OwnerSelectors     int
+	RequestedSelectors bool
 }
 
 // WorkItemMembershipResult is the inactive PR2 seam result. A successful
@@ -169,6 +207,8 @@ type WorkItemMembershipS1Event struct {
 	CappedPopulation         int
 	AuthorizedPopulation     int
 	DeniedPopulation         int
+	Grant                    WorkItemMembershipGrantShape
+	Paths                    WorkItemMembershipPathCensus
 	ServedMembers            int
 	CensusLimit              int
 	FutureBoundaryCount      int
@@ -233,6 +273,19 @@ func (t SlogWorkItemMembershipTelemetry) RecordWorkItemMembershipS1(ctx context.
 		"capped_population", event.CappedPopulation,
 		"authorized_population", event.AuthorizedPopulation,
 		"denied_population", event.DeniedPopulation,
+		"grant_organization_wide", event.Grant.OrganizationWide,
+		"grant_exact_selectors", event.Grant.ExactSelectors,
+		"grant_owner_selectors", event.Grant.OwnerSelectors,
+		"grant_requested_selectors", event.Grant.RequestedSelectors,
+		"organization_grant_population", event.Paths.OrganizationGrant,
+		"direct_repo_population", event.Paths.DirectRepository,
+		"project_ownership_population", event.Paths.ProjectOwnership,
+		"pr_link_population", event.Paths.PullRequestLink,
+		"repo_less_population", event.Paths.RepoLess,
+		"repo_less_denied_population", event.Paths.RepoLessDenied,
+		"denied_project_less_population", event.Paths.DeniedProjectLess,
+		"excluded_explicit_text_link_population", event.Paths.ExcludedExplicitTextLink,
+		"excluded_heuristic_link_population", event.Paths.ExcludedHeuristicLink,
 		"served_members", event.ServedMembers,
 		"census_limit", event.CensusLimit,
 		"future_boundary_count", event.FutureBoundaryCount,

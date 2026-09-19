@@ -123,11 +123,18 @@ func workItemMembershipTestRow(t *testing.T, repoID, workItemID string, authoriz
 	if authorized == 0 {
 		canonicalID, repoID, workItemID = "", "", ""
 	}
-	return []any{canonicalID, repoID, workItemID, "acme/api", authorized, scoped, allowed, denied, uint64(0), uint64(0), uint8(0), uint8(1)}
+	return append(append([]any{canonicalID, repoID, workItemID, "acme/api", authorized, scoped, allowed, denied}, workItemMembershipTestZeroPaths()...), uint64(0), uint64(0), uint8(0), uint8(1))
 }
 
 func workItemMembershipTestSentinelRow() []any {
-	return []any{"", "", "", "", uint8(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint8(1), uint8(1)}
+	return append(append([]any{"", "", "", "", uint8(0), uint64(0), uint64(0), uint64(0)}, workItemMembershipTestZeroPaths()...), uint64(0), uint64(0), uint8(1), uint8(1))
+}
+
+// workItemMembershipTestZeroPaths is the nine per-path census columns
+// (four authorization paths, then repo-less, repo-less denied, denied
+// project-less and the two excluded link kinds), all zero.
+func workItemMembershipTestZeroPaths() []any {
+	return []any{uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0)}
 }
 
 func workItemMembershipRowsWithSentinel(rows ...workItemMembershipS1Row) []workItemMembershipS1Row {
@@ -214,7 +221,7 @@ func TestWorkItemMembershipS1UsesAtomicMaskAndCanonicalOrder(t *testing.T) {
 		"max_threads = 1",
 		"max_execution_time = ",
 		"timeout_overflow_mode = 'throw'",
-		"max_rows_to_read = 2000000",
+		"max_rows_to_read = 4000000",
 		"read_overflow_mode = 'throw'",
 		"max_memory_usage = 67108864",
 		"max_result_rows = 3",

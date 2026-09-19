@@ -55,6 +55,10 @@ var factSchemaTables = []string{
 	// investment_metrics_daily, above -- see that reader's own doc
 	// comment).
 	"work_unit_investments", "work_item_team_attributions",
+	// The shared work-item authorization relation joins the project
+	// ownership chain and the issue-to-pull-request links into every
+	// work-item reader's statement.
+	"team_repo_ownership", "work_graph_issue_pr",
 }
 
 // TestLiveSchemaParityAcrossEveryFactProvider is the round-2 F1 guard: no
@@ -345,9 +349,9 @@ func TestLiveFinalKeepsTheVersionColumnWinner(t *testing.T) {
 	client, direct := newCHAOS3780IntegrationClient(t, ctx)
 	// The work-item content readers now always evaluate the typed repository
 	// selector relation, including for an organization-wide principal. Keep
-	// this FINAL fixture production-shaped by creating the metadata table that
-	// the same statement joins.
-	for _, statement := range devhealthschema.DDL("repos", "work_items") {
+	// this FINAL fixture production-shaped by creating the metadata and
+	// ownership/link tables that the same statement joins.
+	for _, statement := range devhealthschema.DDL("repos", "work_items", "projects", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}

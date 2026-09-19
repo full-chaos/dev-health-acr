@@ -141,8 +141,8 @@ func selectorSetMatchesRepository(set readers.RepositorySelectorSet, slug string
 
 func TestWorkItemReaderSettingsUseThrowingCeilingsAndRespectDeadline(t *testing.T) {
 	t.Parallel()
-	if workItemReaderMaxRowsToRead != 8192 {
-		t.Fatalf("workItemReaderMaxRowsToRead = %d, want 8192", workItemReaderMaxRowsToRead)
+	if workItemReaderMaxRowsToRead != 3_000_000 {
+		t.Fatalf("workItemReaderMaxRowsToRead = %d, want 3000000", workItemReaderMaxRowsToRead)
 	}
 	if workItemReaderMaxMemoryUsage != 64<<20 {
 		t.Fatalf("workItemReaderMaxMemoryUsage = %d, want 64 MiB", workItemReaderMaxMemoryUsage)

@@ -457,7 +457,7 @@ func newCompletionLimitProbeFixture(t *testing.T, ctx context.Context) (*runtime
 	if err != nil {
 		t.Fatalf("open completion limit-probe production query client: %v", err)
 	}
-	for _, statement := range devhealthschema.DDL("repos", "projects", "work_items") {
+	for _, statement := range devhealthschema.DDL("repos", "projects", "work_items", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create completion limit-probe production table: %v\n%s", err, statement)
 		}

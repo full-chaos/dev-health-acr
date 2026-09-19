@@ -40,7 +40,7 @@ func seedChaos4101TeamFixture(t *testing.T, ctx context.Context, direct interfac
 	Exec(ctx context.Context, query string, args ...any) error
 }, at time.Time) {
 	t.Helper()
-	for _, statement := range devhealthschema.DDL("teams", "work_items", "work_item_team_attributions", "repos", "git_pull_requests", "git_pull_request_reviews") {
+	for _, statement := range devhealthschema.DDL("teams", "work_items", "work_item_team_attributions", "repos", "git_pull_requests", "git_pull_request_reviews", "projects", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
@@ -382,7 +382,7 @@ func TestScopeExpander_TeamToRepository_RootIsPerTargetAcrossTwoTeamOrigins(t *t
 	ctx := context.Background()
 	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
 	at := time.Now().UTC()
-	for _, statement := range devhealthschema.DDL("teams", "work_items", "work_item_team_attributions", "repos") {
+	for _, statement := range devhealthschema.DDL("teams", "work_items", "work_item_team_attributions", "repos", "projects", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}

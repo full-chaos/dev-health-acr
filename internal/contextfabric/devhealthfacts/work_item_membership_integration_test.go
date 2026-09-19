@@ -81,7 +81,7 @@ func TestWorkItemMembershipS1AgainstActualDDL(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = query.Close() })
 
-	for _, statement := range devhealthschema.DDL("repos", "work_items", "projects", "project_membership_transitions") {
+	for _, statement := range devhealthschema.DDL("repos", "work_items", "projects", "project_membership_transitions", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create fixture table: %v\n%s", err, statement)
 		}
@@ -610,7 +610,7 @@ func TestWorkItemMembershipS1ReadLimitExceededIsCertifiedAgainstRealClickHouse(t
 		t.Fatalf("open query client: %v", err)
 	}
 	t.Cleanup(func() { _ = query.Close() })
-	for _, statement := range devhealthschema.DDL("repos", "work_items", "projects", "project_membership_transitions") {
+	for _, statement := range devhealthschema.DDL("repos", "work_items", "projects", "project_membership_transitions", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create fixture table: %v\n%s", err, statement)
 		}

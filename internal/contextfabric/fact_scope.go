@@ -538,6 +538,31 @@ type FactScopeExpansionEvent struct {
 	RepoLessCandidateCount            int
 	RepoLessAdmittedCount             int
 	RepoLessAuthorizationDroppedCount int
+	// The four path counts split the authorized population by the library
+	// authorization path that admitted each target (a target two paths
+	// admit counts under both), and the two admitted counts are the
+	// repo-less targets the second gate admitted on the granted
+	// repositories a derived path returned.
+	OrganizationGrantAuthorizedCount int
+	DirectRepositoryAuthorizedCount  int
+	ProjectOwnershipAuthorizedCount  int
+	PullRequestLinkAuthorizedCount   int
+	ProjectOwnershipAdmittedCount    int
+	PullRequestLinkAdmittedCount     int
+	// AuthorizationGrantMeasured is set by the work-item traversals only:
+	// the pre-entry shape of the repository grant their authorization
+	// relation evaluated (organization-wide, and how many exact and owner
+	// selectors). Unset, the three values below are not applicable rather
+	// than zero.
+	// ExcludedExplicitTextLinkCount and ExcludedHeuristicLinkCount are the
+	// rows with a link to a granted repository that is evidence, not a
+	// grant (only native links authorize), by kind.
+	ExcludedExplicitTextLinkCount      int
+	ExcludedHeuristicLinkCount         int
+	AuthorizationGrantMeasured         bool
+	AuthorizationGrantOrganizationWide bool
+	AuthorizationGrantExactSelectors   int
+	AuthorizationGrantOwnerSelectors   int
 	// OrphanedRepositoryCount is nonzero unresolved repository references --
 	// a data-quality signal, and deliberately NOT merged with the repo-less
 	// counts: "never had a repository" and "named one that did not resolve"
@@ -1390,6 +1415,31 @@ type FactScopeExpansionCounts struct {
 	RepoLessCandidateCount            int
 	RepoLessAdmittedCount             int
 	RepoLessAuthorizationDroppedCount int
+	// The four path counts split the authorized population by the library
+	// authorization path that admitted each target (a target two paths
+	// admit counts under both), and the two admitted counts are the
+	// repo-less targets the second gate admitted on the granted
+	// repositories a derived path returned.
+	OrganizationGrantAuthorizedCount int
+	DirectRepositoryAuthorizedCount  int
+	ProjectOwnershipAuthorizedCount  int
+	PullRequestLinkAuthorizedCount   int
+	ProjectOwnershipAdmittedCount    int
+	PullRequestLinkAdmittedCount     int
+	// AuthorizationGrantMeasured is set by the work-item traversals only:
+	// the pre-entry shape of the repository grant their authorization
+	// relation evaluated (organization-wide, and how many exact and owner
+	// selectors). Unset, the three values below are not applicable rather
+	// than zero.
+	// ExcludedExplicitTextLinkCount and ExcludedHeuristicLinkCount are the
+	// rows with a link to a granted repository that is evidence, not a
+	// grant (only native links authorize), by kind.
+	ExcludedExplicitTextLinkCount      int
+	ExcludedHeuristicLinkCount         int
+	AuthorizationGrantMeasured         bool
+	AuthorizationGrantOrganizationWide bool
+	AuthorizationGrantExactSelectors   int
+	AuthorizationGrantOwnerSelectors   int
 	// OrphanedRepositoryCount is nonzero-but-unresolved repository
 	// references. Deliberately NOT merged with the repo-less counts: "never
 	// had a repository" and "named one that did not resolve" are different
@@ -1867,6 +1917,18 @@ func (r *FactReadScopeResolver) expand(
 	event.RepoLessAdmittedCount = result.Counts.RepoLessAdmittedCount
 	event.RepoLessAuthorizationDroppedCount = result.Counts.RepoLessAuthorizationDroppedCount
 	event.OrphanedRepositoryCount = result.Counts.OrphanedRepositoryCount
+	event.OrganizationGrantAuthorizedCount = result.Counts.OrganizationGrantAuthorizedCount
+	event.DirectRepositoryAuthorizedCount = result.Counts.DirectRepositoryAuthorizedCount
+	event.ProjectOwnershipAuthorizedCount = result.Counts.ProjectOwnershipAuthorizedCount
+	event.PullRequestLinkAuthorizedCount = result.Counts.PullRequestLinkAuthorizedCount
+	event.ProjectOwnershipAdmittedCount = result.Counts.ProjectOwnershipAdmittedCount
+	event.PullRequestLinkAdmittedCount = result.Counts.PullRequestLinkAdmittedCount
+	event.AuthorizationGrantMeasured = result.Counts.AuthorizationGrantMeasured
+	event.ExcludedExplicitTextLinkCount = result.Counts.ExcludedExplicitTextLinkCount
+	event.ExcludedHeuristicLinkCount = result.Counts.ExcludedHeuristicLinkCount
+	event.AuthorizationGrantOrganizationWide = result.Counts.AuthorizationGrantOrganizationWide
+	event.AuthorizationGrantExactSelectors = result.Counts.AuthorizationGrantExactSelectors
+	event.AuthorizationGrantOwnerSelectors = result.Counts.AuthorizationGrantOwnerSelectors
 	event.AmbiguousOriginCount = result.Counts.AmbiguousOriginCount
 	event.UnknownAttributionSourceCount = result.Counts.UnknownAttributionSourceCount
 	event.ScopeQueryCount = result.Counts.ScopeQueryCount

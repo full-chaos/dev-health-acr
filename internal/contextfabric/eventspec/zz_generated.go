@@ -1884,23 +1884,36 @@ func (f WorkItemMembershipGateFields) SlogArgs() []any {
 // WorkItemMembershipS1Fields is contextfabric.work_item_membership_s1's generated typed construction interface
 // (CHAOS-5516): one Go field per Field WorkItemMembershipS1.Fields declares in spec.go.
 type WorkItemMembershipS1Fields struct {
-	OrgID                    string
-	State                    string
-	Reason                   string
-	PopulationMeasured       bool
-	PopulationComplete       bool
-	CappedPopulation         int
-	AuthorizedPopulation     int
-	DeniedPopulation         int
-	ServedMembers            int
-	CensusLimit              int
-	FutureBoundaryCount      int
-	TransitionAssertionCount int
-	MaxExecutionTimeSeconds  int
-	MaxRowsToRead            int
-	MaxMemoryUsage           int
-	MaxResultRows            int
-	RequestID                string
+	OrgID                              string
+	State                              string
+	Reason                             string
+	PopulationMeasured                 bool
+	PopulationComplete                 bool
+	CappedPopulation                   int
+	AuthorizedPopulation               int
+	DeniedPopulation                   int
+	GrantOrganizationWide              bool
+	GrantExactSelectors                int
+	GrantOwnerSelectors                int
+	GrantRequestedSelectors            bool
+	OrganizationGrantPopulation        int
+	DirectRepoPopulation               int
+	ProjectOwnershipPopulation         int
+	PrLinkPopulation                   int
+	RepoLessPopulation                 int
+	RepoLessDeniedPopulation           int
+	DeniedProjectLessPopulation        int
+	ExcludedExplicitTextLinkPopulation int
+	ExcludedHeuristicLinkPopulation    int
+	ServedMembers                      int
+	CensusLimit                        int
+	FutureBoundaryCount                int
+	TransitionAssertionCount           int
+	MaxExecutionTimeSeconds            int
+	MaxRowsToRead                      int
+	MaxMemoryUsage                     int
+	MaxResultRows                      int
+	RequestID                          string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every WorkItemMembershipS1Fields uniformly, set ONLY by NewWorkItemMembershipS1Fields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -1914,26 +1927,39 @@ type WorkItemMembershipS1Fields struct {
 
 // NewWorkItemMembershipS1Fields is the generated constructor for WorkItemMembershipS1Fields -- every
 // field WorkItemMembershipS1.Fields declares is a required parameter.
-func NewWorkItemMembershipS1Fields(orgID string, state string, reason string, populationMeasured bool, populationComplete bool, cappedPopulation int, authorizedPopulation int, deniedPopulation int, servedMembers int, censusLimit int, futureBoundaryCount int, transitionAssertionCount int, maxExecutionTimeSeconds int, maxRowsToRead int, maxMemoryUsage int, maxResultRows int, requestID string) WorkItemMembershipS1Fields {
+func NewWorkItemMembershipS1Fields(orgID string, state string, reason string, populationMeasured bool, populationComplete bool, cappedPopulation int, authorizedPopulation int, deniedPopulation int, grantOrganizationWide bool, grantExactSelectors int, grantOwnerSelectors int, grantRequestedSelectors bool, organizationGrantPopulation int, directRepoPopulation int, projectOwnershipPopulation int, prLinkPopulation int, repoLessPopulation int, repoLessDeniedPopulation int, deniedProjectLessPopulation int, excludedExplicitTextLinkPopulation int, excludedHeuristicLinkPopulation int, servedMembers int, censusLimit int, futureBoundaryCount int, transitionAssertionCount int, maxExecutionTimeSeconds int, maxRowsToRead int, maxMemoryUsage int, maxResultRows int, requestID string) WorkItemMembershipS1Fields {
 	return WorkItemMembershipS1Fields{
-		OrgID:                    orgID,
-		State:                    state,
-		Reason:                   reason,
-		PopulationMeasured:       populationMeasured,
-		PopulationComplete:       populationComplete,
-		CappedPopulation:         cappedPopulation,
-		AuthorizedPopulation:     authorizedPopulation,
-		DeniedPopulation:         deniedPopulation,
-		ServedMembers:            servedMembers,
-		CensusLimit:              censusLimit,
-		FutureBoundaryCount:      futureBoundaryCount,
-		TransitionAssertionCount: transitionAssertionCount,
-		MaxExecutionTimeSeconds:  maxExecutionTimeSeconds,
-		MaxRowsToRead:            maxRowsToRead,
-		MaxMemoryUsage:           maxMemoryUsage,
-		MaxResultRows:            maxResultRows,
-		RequestID:                requestID,
-		constructed:              true,
+		OrgID:                              orgID,
+		State:                              state,
+		Reason:                             reason,
+		PopulationMeasured:                 populationMeasured,
+		PopulationComplete:                 populationComplete,
+		CappedPopulation:                   cappedPopulation,
+		AuthorizedPopulation:               authorizedPopulation,
+		DeniedPopulation:                   deniedPopulation,
+		GrantOrganizationWide:              grantOrganizationWide,
+		GrantExactSelectors:                grantExactSelectors,
+		GrantOwnerSelectors:                grantOwnerSelectors,
+		GrantRequestedSelectors:            grantRequestedSelectors,
+		OrganizationGrantPopulation:        organizationGrantPopulation,
+		DirectRepoPopulation:               directRepoPopulation,
+		ProjectOwnershipPopulation:         projectOwnershipPopulation,
+		PrLinkPopulation:                   prLinkPopulation,
+		RepoLessPopulation:                 repoLessPopulation,
+		RepoLessDeniedPopulation:           repoLessDeniedPopulation,
+		DeniedProjectLessPopulation:        deniedProjectLessPopulation,
+		ExcludedExplicitTextLinkPopulation: excludedExplicitTextLinkPopulation,
+		ExcludedHeuristicLinkPopulation:    excludedHeuristicLinkPopulation,
+		ServedMembers:                      servedMembers,
+		CensusLimit:                        censusLimit,
+		FutureBoundaryCount:                futureBoundaryCount,
+		TransitionAssertionCount:           transitionAssertionCount,
+		MaxExecutionTimeSeconds:            maxExecutionTimeSeconds,
+		MaxRowsToRead:                      maxRowsToRead,
+		MaxMemoryUsage:                     maxMemoryUsage,
+		MaxResultRows:                      maxResultRows,
+		RequestID:                          requestID,
+		constructed:                        true,
 	}
 }
 
@@ -1958,6 +1984,19 @@ func (f WorkItemMembershipS1Fields) SlogArgs() []any {
 		"capped_population", f.CappedPopulation,
 		"authorized_population", f.AuthorizedPopulation,
 		"denied_population", f.DeniedPopulation,
+		"grant_organization_wide", f.GrantOrganizationWide,
+		"grant_exact_selectors", f.GrantExactSelectors,
+		"grant_owner_selectors", f.GrantOwnerSelectors,
+		"grant_requested_selectors", f.GrantRequestedSelectors,
+		"organization_grant_population", f.OrganizationGrantPopulation,
+		"direct_repo_population", f.DirectRepoPopulation,
+		"project_ownership_population", f.ProjectOwnershipPopulation,
+		"pr_link_population", f.PrLinkPopulation,
+		"repo_less_population", f.RepoLessPopulation,
+		"repo_less_denied_population", f.RepoLessDeniedPopulation,
+		"denied_project_less_population", f.DeniedProjectLessPopulation,
+		"excluded_explicit_text_link_population", f.ExcludedExplicitTextLinkPopulation,
+		"excluded_heuristic_link_population", f.ExcludedHeuristicLinkPopulation,
 		"served_members", f.ServedMembers,
 		"census_limit", f.CensusLimit,
 		"future_boundary_count", f.FutureBoundaryCount,
