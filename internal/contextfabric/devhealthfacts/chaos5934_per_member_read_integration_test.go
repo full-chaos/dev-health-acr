@@ -79,7 +79,7 @@ func TestCHAOS5934DeficiencyZeroIsPerMemberAgainstRealClickHouse(t *testing.T) {
 		if source := bundle.Coverage.Sources; len(source) != 1 || source[0].State != contextfabric.SourceAvailable {
 			t.Fatalf("coverage = %#v, want the kind available (the premise of the leak)", source)
 		}
-		ranked, event, _ := contextfabric.RankCohortWithReads(cohort, bundle.Facts, bundle.Coverage, bundle.ReadSubjects)
+		ranked, event, _ := contextfabric.RankCohortWithReads(cohort, bundle.Facts, bundle.Coverage, bundle.EvaluatedSubjects)
 		for _, member := range ranked.Members {
 			if !deficiencyRankingSignalMissing(member) {
 				t.Fatalf("%s was credited the deficiency zero the anchor team's read produced: missing=%v", member.Subject.CanonicalID, member.MissingSignals)
@@ -96,12 +96,14 @@ func TestCHAOS5934DeficiencyZeroIsPerMemberAgainstRealClickHouse(t *testing.T) {
 			"HOT", orgID, "saturation", date(2026, 7, 29), date(2026, 8, 12), true, "critical", "Saturation", "high", "below threshold", ts(2026, 8, 12, 2, 0, 0)); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
+		// QUIET was evaluated recently and nothing fired: a measured zero.
+		seedEvaluation(t, ctx, direct, orgID, "QUIET", recentHealthDay(1))
 		cohort := &contextfabric.Cohort{Kind: contextfabric.SubjectTeam, Members: []contextfabric.CohortMember{
 			{Subject: teamSubject("QUIET"), Rank: 1, InclusionReasons: []string{"matched"}},
 			{Subject: teamSubject("HOT"), Rank: 2, InclusionReasons: []string{"matched"}},
 		}}
 		bundle := readDeficiencyBundle(t, ctx, orgID, deficiencyRequest(cohort))
-		ranked, event, _ := contextfabric.RankCohortWithReads(cohort, bundle.Facts, bundle.Coverage, bundle.ReadSubjects)
+		ranked, event, _ := contextfabric.RankCohortWithReads(cohort, bundle.Facts, bundle.Coverage, bundle.EvaluatedSubjects)
 		for _, member := range ranked.Members {
 			if deficiencyRankingSignalMissing(member) {
 				t.Fatalf("%s lost the deficiency signal: missing=%v", member.Subject.CanonicalID, member.MissingSignals)
