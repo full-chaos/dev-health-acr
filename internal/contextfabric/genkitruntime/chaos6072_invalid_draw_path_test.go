@@ -282,3 +282,16 @@ func TestSchemaOnlyRejectionDoesNotLeakIntoALaterValidatorRejection(t *testing.T
 		t.Fatalf("reason = %q (err %v), want the validator's own rule for the terminal draw", got, gotErr)
 	}
 }
+
+// TestRecoveredMalformedDrawIsLoggedAsUnclassified: a draw that never decoded
+// names no validator rule, on the trace as on the terminal rejection.
+func TestRecoveredMalformedDrawIsLoggedAsUnclassified(t *testing.T) {
+	rt, handler, _, _ := scriptedGenkitRuntime(t, []string{invalidDrawText(t, drawMalformedJSON), validDrawText(t)})
+	if _, _, err := rt.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest()); err != nil {
+		t.Fatalf("error = %v, want the redraw to serve", err)
+	}
+	lines := handler.rejectedDrawEvents()
+	if len(lines) != 1 || lines[0].Attrs["rejection_reason"] != "unclassified" {
+		t.Fatalf("rejected-draw lines = %#v, want one unclassified line", lines)
+	}
+}
