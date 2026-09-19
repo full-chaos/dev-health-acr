@@ -324,8 +324,8 @@ func TestQuestionWindow_ConfirmationReadsTheCarrierAndReportsEveryExit(t *testin
 		}, "", "", false},
 	} {
 		tc := tc
+		// Sequential: the cells share one recording store.
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
 			request := continuationRequest(question)
 			if tc.mutate != nil {
 				tc.mutate(&request)
@@ -484,8 +484,8 @@ func TestQuestionWindow_RememberedWindowAxisDomain(t *testing.T) {
 			rememberedWindowAxisDecision{prior.ResultID, ContinuationCarrierReadOK, TemporalRange, TemporalCurrent, TemporalRange, ContinuationAxisNotEvaluated}},
 	} {
 		tc := tc
+		// Sequential: the cells share one recording store.
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
 			engine := &Engine{}
 			if tc.store != nil {
 				engine.results = tc.store
