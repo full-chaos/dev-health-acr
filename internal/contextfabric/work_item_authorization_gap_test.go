@@ -153,10 +153,27 @@ func TestWorkItemReuseRefusesStaleAuthorizationGapAnswers(t *testing.T) {
 	if !workItemReuseMembershipEqual(stored(), census, current(0, 0)) {
 		t.Error("an undisclosed empty project stopped being reusable")
 	}
-	partial := workItemAuthorizationGap{State: WorkItemMembershipCensusExact, Observed: 4, Authorized: 1, Denied: 3}
+	if workItemReuseMembershipEqual(stored(gap.Limitation()), census, current(0, 3)) {
+		t.Error("an all-denied answer was reused")
+	}
+	withMember := func(limitations ...string) InvestigationResult {
+		result := stored(limitations...)
+		result.Cohort = &Cohort{Members: []CohortMember{{Subject: SubjectRef{CanonicalID: "a"}}}}
+		return result
+	}
+	one := &WorkItemTupleCensus{State: WorkItemMembershipCensusExact, Value: 1, Retained: 1}
+	members := []WorkItemMembershipMember{{CanonicalID: "a"}}
+	partial := WorkItemMembershipResult{Census: current(1, 3).Census, Members: members}
+	fresh := workItemAuthorizationGap{State: WorkItemMembershipCensusExact, Observed: 4, Authorized: 1, Denied: 3}
 	stale := workItemAuthorizationGap{State: WorkItemMembershipCensusExact, Observed: 3, Authorized: 1, Denied: 2}
-	if workItemReuseMembershipEqual(stored(stale.Limitation()), &WorkItemTupleCensus{State: WorkItemMembershipCensusExact, Value: 1, Retained: 1}, WorkItemMembershipResult{Census: current(1, 3).Census, Members: []WorkItemMembershipMember{{CanonicalID: "a"}}}) {
-		t.Errorf("a disclosure with different counts was reused: %s vs %s", stale.Limitation(), partial.Limitation())
+	if workItemReuseMembershipEqual(withMember(stale.Limitation()), one, partial) {
+		t.Error("a disclosure with different counts was reused")
+	}
+	if workItemReuseMembershipEqual(withMember(), one, partial) {
+		t.Error("an answer without the partition disclosure was reused")
+	}
+	if !workItemReuseMembershipEqual(withMember(fresh.Limitation()), one, partial) {
+		t.Error("a current partition disclosure was not reusable")
 	}
 }
 
@@ -190,12 +207,12 @@ func TestServedGapLimitationIsNotDoubledWithTheUnmeasuredDisclosure(t *testing.T
 func TestWorkItemAuthorizationGapInfoLine(t *testing.T) {
 	var out bytes.Buffer
 	telemetry := NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(&out, nil)))
-	telemetry.RecordWorkItemAuthorizationGap(context.Background(), storage.Principal{OrgID: "org-1"}, WorkItemAuthorizationGapEvent{Reason: "none_authorized", CensusState: WorkItemMembershipCensusExact, Observed: 7, Authorized: 2, Denied: 5, ServedStatus: InvestigationDegraded, ServedMembers: 3, LimitationPresent: true})
+	telemetry.RecordWorkItemAuthorizationGap(context.Background(), storage.Principal{OrgID: "org-1"}, WorkItemAuthorizationGapEvent{Reason: "none_authorized", CensusState: WorkItemMembershipCensusExact, Observed: 7, Authorized: 2, Denied: 5, ServedStatus: InvestigationDegraded, ServedMembers: 3, LimitationPresent: false})
 	var line map[string]any
 	if err := json.Unmarshal(out.Bytes(), &line); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]any{"level": "INFO", "msg": "context fabric work item authorization gap", "org_id": "org-1", "reason": "none_authorized", "census_state": "exact", "observed_population": float64(7), "authorized_population": float64(2), "denied_population": float64(5), "served_status": "degraded", "served_members": float64(3), "limitation_disclosed": true}
+	want := map[string]any{"level": "INFO", "msg": "context fabric work item authorization gap", "org_id": "org-1", "reason": "none_authorized", "census_state": "exact", "observed_population": float64(7), "authorized_population": float64(2), "denied_population": float64(5), "served_status": "degraded", "served_members": float64(3), "limitation_disclosed": false}
 	for key, value := range want {
 		if line[key] != value {
 			t.Errorf("%s=%v want %v", key, line[key], value)
