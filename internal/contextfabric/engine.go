@@ -1172,6 +1172,12 @@ type CohortRankedEvent struct {
 	// cohort answer actually clears the qualification threshold, distinct
 	// from DegradedMemberCount's data-availability-only measure.
 	OutcomeCounts map[string]int
+	// InvestmentMixSourceCounts maps an InvestmentMixSource* value to the
+	// count of members whose investment_mix signal drew from a fact with
+	// that source label this call. A member whose mix came from a fact with
+	// no label counts under InvestmentMixSourceUnlabeled; a member with no
+	// mix signal counts nowhere.
+	InvestmentMixSourceCounts map[string]int
 	// ReadAttributionCarried is whether the ranking pass knew which subjects
 	// each fact kind's read covered. False only for a caller with no
 	// registry read behind it.

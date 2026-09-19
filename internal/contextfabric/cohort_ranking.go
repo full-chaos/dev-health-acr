@@ -141,6 +141,38 @@ func FactFieldPriorTheme(theme string) string { return "prior_theme_" + theme }
 
 const FactFieldThemeQualityBugfix = "theme_quality_bugfix"
 
+// FactFieldInvestmentMixSource names the FactInvestment field that says which
+// attribution produced the theme_* shares: a project's own work items, or a
+// roll-up of its owning teams' repositories. The two are never blended; a
+// fact carries exactly one of the values below. A fact with theme shares and
+// no such field (a team subject) is reported as InvestmentMixSourceUnlabeled.
+const (
+	FactFieldInvestmentMixSource        = "investment_mix_source"
+	InvestmentMixSourceProjectNative    = "project_native"
+	InvestmentMixSourceOwningTeamRollup = "owning_team_rollup"
+	InvestmentMixSourceUnlabeled        = "unlabeled"
+)
+
+// investmentMixSource returns the source label of the fact investmentMixSignal
+// would read for a member, or "" when the member has no theme-carrying
+// FactInvestment fact at all. It selects the fact the same way
+// investmentMixSignal does.
+func investmentMixSource(facts []CanonicalFact) string {
+	for _, candidate := range facts {
+		if candidate.Kind != FactInvestment {
+			continue
+		}
+		if _, has := candidate.Fields[FactFieldTheme(ThemeFeatureDelivery)]; !has {
+			continue
+		}
+		if label, ok := stringField(candidate, FactFieldInvestmentMixSource); ok && label != "" {
+			return label
+		}
+		return InvestmentMixSourceUnlabeled
+	}
+	return ""
+}
+
 // RankCohort computes a deterministic attention score for every member of
 // cohort from already-read canonical facts and the SAME investigation's
 // fact-read Coverage (needed for the per-family availability rule below),
@@ -195,7 +227,7 @@ func RankCohort(cohort *Cohort, facts []CanonicalFact, coverage Coverage) (*Coho
 // e.g. a hand-built fixture) and keeps the coverage-only rule; every
 // registry bundle carries a non-nil reads, so production is always strict.
 func RankCohortWithReads(cohort *Cohort, facts []CanonicalFact, coverage Coverage, reads FactReadSubjects) (*Cohort, CohortRankedEvent, cohortMemberSignalCitations) {
-	event := CohortRankedEvent{FormulaVersion: RankingFormulaVersion, SignalsAvailable: map[string]int{}, OutcomeCounts: map[string]int{}, ReadAttributionCarried: reads != nil}
+	event := CohortRankedEvent{FormulaVersion: RankingFormulaVersion, SignalsAvailable: map[string]int{}, OutcomeCounts: map[string]int{}, InvestmentMixSourceCounts: map[string]int{}, ReadAttributionCarried: reads != nil}
 	if cohort == nil || len(cohort.Members) == 0 {
 		return cohort, event, nil
 	}
@@ -285,6 +317,9 @@ func RankCohortWithReads(cohort *Cohort, facts []CanonicalFact, coverage Coverag
 		}
 		for _, name := range contributed {
 			event.SignalsAvailable[name]++
+			if name == RankingSignalInvestmentMix {
+				event.InvestmentMixSourceCounts[investmentMixSource(memberFacts)]++
+			}
 		}
 		event.OutcomeCounts[string(outcome)]++
 	}

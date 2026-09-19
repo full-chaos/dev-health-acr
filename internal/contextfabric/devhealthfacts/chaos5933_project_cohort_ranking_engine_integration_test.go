@@ -217,11 +217,14 @@ func runProjectCohortInvestigation(t *testing.T, ctx context.Context, cells []pr
 		"projects", "team_project_ownership", "team_repo_ownership", "teams",
 		"investment_metrics_daily", "capacity_forecasts", "estimate_coverage_metrics_daily",
 		"compounding_risk_daily", "work_unit_investments", "repos", "work_item_team_attributions",
-		"recommendations_daily",
+		"recommendations_daily", "work_items", "project_membership_transitions",
 	) {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
+	}
+	if err := direct.Exec(ctx, devhealthschema.ProjectMembershipPresenceViewDDL); err != nil {
+		t.Fatalf("create view: %v", err)
 	}
 	orgID := sharedTestOrgID(t)
 	seedProjectCohort(t, ctx, direct, orgID, cells)

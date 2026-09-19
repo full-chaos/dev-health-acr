@@ -116,7 +116,13 @@ import (
 // repositories or a native pull-request link. A candidate saved under v11
 // was authorized by the repository column alone and must not be served as
 // though it had been authorized by the wider rule.
-const QueryVersion = "devhealthfacts.clickhouse.v12"
+//
+// v12 -> v13: a project's FactInvestment theme fields can come from the
+// project's own work items instead of its owning teams' repositories, and
+// every project theme fact carries investment_mix_source. A candidate saved
+// under v12 carried the owning-team roll-up unlabelled and must not be served
+// as though it named its source.
+const QueryVersion = "devhealthfacts.clickhouse.v13"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
