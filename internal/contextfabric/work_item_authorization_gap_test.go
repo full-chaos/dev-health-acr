@@ -292,3 +292,8 @@ func TestWorkItemReuseHitEmitsTheAuthorizationGapDecision(t *testing.T) {
 		}
 	}
 }
+
+func TestRecordWorkItemAuthorizationGapWithoutTelemetryIsQuiet(t *testing.T) {
+	census := &WorkItemTupleCensus{gap: &workItemAuthorizationGap{State: WorkItemMembershipCensusExact, Observed: 2, Denied: 2}}
+	(&Engine{}).recordWorkItemAuthorizationGap(context.Background(), storage.Principal{OrgID: "org-1"}, census, InvestigationResult{})
+}
