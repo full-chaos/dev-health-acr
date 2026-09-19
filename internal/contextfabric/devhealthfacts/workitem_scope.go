@@ -36,6 +36,18 @@ func workItemRepositoryAuthorization(principal storage.Principal, requested []st
 	}
 }
 
+// workItemAuthorizedIDsSQL is the set of work_item_id values the scope
+// authorizes, for a statement that names a work item by its id alone (a
+// dependency edge carries no repository). An id is in the set only when
+// EVERY stored row carrying it is authorized, so an id shared by an
+// authorized and an unauthorized row is left out; an id with no work_items
+// row is left out too. The rule is the library's, over its own aliases,
+// inside an uncorrelated subquery, so it never meets the caller's aliases.
+func workItemAuthorizedIDsSQL(scope readers.AuthorizationScope) (string, []readers.Binding) {
+	rendered := readers.WorkItemScopeSQL(scope)
+	return `(SELECT w.work_item_id FROM work_items AS w FINAL ` + rendered.JoinSQL + ` WHERE w.org_id = {org_id:String} GROUP BY w.work_item_id HAVING min(toUInt8(` + rendered.AuthorizationExpr + `)) = 1)`, rendered.Bindings
+}
+
 // workItemRepositorySelectorSet normalizes the same exact and wildcard
 // forms accepted by auth.NormalizeRepositoryScopes. Exact selectors also go
 // through auth.NormalizeRepositorySlug, which is the repository-name

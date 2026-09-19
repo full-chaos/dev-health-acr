@@ -1811,9 +1811,14 @@ func (e *ScopeExpander) scanWorkItemCandidates(
 		AuthorizationGrantExactSelectors:   grant.ExactSelectors,
 		AuthorizationGrantOwnerSelectors:   grant.OwnerSelectors,
 	}
+	// The same physical row ceiling as the content readers: the selection
+	// reads the organization-wide authorization aggregates, and its result
+	// LIMIT bounds only what comes back, not what is read. A ceiling hit is
+	// reported as a read-limit failure, never as a generic backend fault.
+	statement = readers.WithSettings(statement, readers.Settings{MaxRowsToRead: workItemScopeSelectionMaxRowsToRead})
 	rows, err := e.client.Query(ctx, statement, bindings)
 	if err != nil {
-		return nil, counts, err
+		return nil, counts, workItemScopeReadError(err)
 	}
 	defer rows.Close()
 
@@ -1908,7 +1913,7 @@ func (e *ScopeExpander) scanWorkItemCandidates(
 		candidates = append(candidates, candidate)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, contextfabric.FactScopeExpansionCounts{}, err
+		return nil, contextfabric.FactScopeExpansionCounts{}, workItemScopeReadError(err)
 	}
 	// THE CENSUS COMPLETED BECAUSE THE QUERY DID, not because a row came
 	// back (codex r1 P1, reproduced before it was fixed: an empty successful
@@ -2061,6 +2066,23 @@ func refuseNonCurrentWorkItemAxis(request contextfabric.FactScopeExpansionReques
 		return fmt.Errorf("devhealthfacts: work-item scope policy %q supports the current axis only, got %q: %w",
 			request.Policy, request.TimeContext.Axis, contextfabric.ErrFactScopeAxisUnsupported)
 	}
+}
+
+// workItemScopeSelectionMaxRowsToRead is the work-item selection's physical
+// row ceiling: the content readers' derived bound (the measured project
+// expansion read, 24,001 rows on the trial store, sits within it). A
+// package var only so a real-ClickHouse test can lower it and observe the
+// read-limit classification.
+var workItemScopeSelectionMaxRowsToRead = workItemReaderMaxRowsToRead
+
+// workItemScopeReadError marks a physical read-limit failure of a work-item
+// selection so the resolver classifies it as such; any other error passes
+// through unchanged.
+func workItemScopeReadError(err error) error {
+	if err != nil && classifyWorkItemMembershipS1Error(err) == contextfabric.WorkItemMembershipUnmeasuredReadLimitExceeded {
+		return fmt.Errorf("devhealthfacts: work-item scope selection: %w: %w", contextfabric.ErrFactScopeReadLimitExceeded, err)
+	}
+	return err
 }
 
 // workItemDerivedPath reports whether a row's paths include one of the two

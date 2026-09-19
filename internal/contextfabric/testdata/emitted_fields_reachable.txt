@@ -58,19 +58,19 @@ FactActualCompletion
   fields             archived_items cancelled_count completed completed_at completed_count completion_ratio counted_work_items member_kind rollup_basis unknown_status_count work_item_count
 
 FactBlockers
-  reached_funcs      23
+  reached_funcs      27
   dynamic_key_sites  0
-  leaked_call_sites  6
-    leak interface_method     5
-    leak external_func_value  1
+  leaked_call_sites  3
+    leak interface_method     3
+    leak external_func_value  0
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            22
+    calls followed            28
     calls accounted           13
-    calls not_a_call          1
-    calls excluded_by_design  22
-    calls leaked              6
+    calls not_a_call          4
+    calls excluded_by_design  41
+    calls leaked              3
   fields             blocked_by_work_item_id
 
 FactContinuousIntegration
@@ -282,19 +282,19 @@ FactReadiness
   fields             backlog_size basis daily_readiness daily_readiness_omitted_count day estimate_coverage_ratio estimated_count provider rollup_basis team_breakdown team_count team_id team_name unestimated_count work_scope_id
 
 FactRequiredChildren
-  reached_funcs      23
+  reached_funcs      27
   dynamic_key_sites  0
-  leaked_call_sites  6
-    leak interface_method     5
-    leak external_func_value  1
+  leaked_call_sites  3
+    leak interface_method     3
+    leak external_func_value  0
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            22
+    calls followed            28
     calls accounted           13
-    calls not_a_call          1
-    calls excluded_by_design  24
-    calls leaked              6
+    calls not_a_call          4
+    calls excluded_by_design  43
+    calls leaked              3
   fields             relationship_type required_child_work_item_id
 
 FactReviews

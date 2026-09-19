@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net"
 	"sort"
@@ -108,7 +109,7 @@ func newAuthzPathsFixture(t *testing.T) authzPathsFixture {
 		t.Fatalf("open query client: %v", err)
 	}
 	t.Cleanup(func() { _ = query.Close() })
-	for _, statement := range devhealthschema.DDL("repos", "work_items", "projects", "project_membership_transitions", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr") {
+	for _, statement := range devhealthschema.DDL("repos", "work_items", "projects", "project_membership_transitions", "team_project_ownership", "team_repo_ownership", "work_graph_issue_pr", "work_item_dependencies") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create fixture table: %v\n%s", err, statement)
 		}
@@ -158,6 +159,21 @@ func newAuthzPathsFixture(t *testing.T) authzPathsFixture {
 		seed(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, 1, ?, 'fixture', ?, ?)`,
 			repoID, workItemID, pr, provenance, at, authzPathsOrg)
 	}
+	// linear:secret sits in the non-granted repository; linear:shared-id is
+	// stored twice, once authorized and once not.
+	item("linear:secret", authzPathsRepoN, "")
+	item("linear:shared-id", authzPathsRepoG, "")
+	item("linear:shared-id", authzPathsRepoN, "")
+	dependency := func(source, target, relationship string) {
+		seed(`INSERT INTO work_item_dependencies (org_id, source_work_item_id, target_work_item_id, relationship_type, last_synced) VALUES (?, ?, ?, ?, ?)`,
+			authzPathsOrg, source, target, relationship, at)
+	}
+	dependency("linear:secret", "linear:p-project", "blocks")
+	dependency("linear:p-both", "linear:p-project", "blocks")
+	dependency("linear:shared-id", "linear:p-project", "blocks")
+	dependency("linear:p-project", "linear:secret", "parent_of")
+	dependency("linear:p-project", "linear:p-both", "parent_of")
+	dependency("linear:p-project", "linear:shared-id", "parent_of")
 	link("linear:p-both", authzPathsRepoG, "native", 1)
 	link("linear:q-link", authzPathsRepoG, "native", 2)
 	link("linear:q-heuristic", authzPathsRepoG, "heuristic", 3)
@@ -445,6 +461,67 @@ func TestWorkItemAuthorizationPathsThroughEverySQLReader(t *testing.T) {
 			if len(gated.Targets) != 0 {
 				t.Fatalf("candidate %s admitted by the second gate: %+v", candidate.workItemID, gated.Targets)
 			}
+		}
+	})
+
+	t.Run("dependency facts name only work items the principal may see", func(t *testing.T) {
+		canonicalID, _, err := identity.Derive(identity.KindWorkItem, []string{zeroRepositoryID, "linear:p-project"}, nil)
+		if err != nil {
+			t.Fatalf("derive subject: %v", err)
+		}
+		subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: canonicalID}
+		current := contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}
+		named := func(principal storage.Principal, kind contextfabric.FactKind, field string) string {
+			var provider interface {
+				ReadFacts(context.Context, storage.Principal, contextfabric.FactQuery) (contextfabric.FactProviderResult, error)
+			} = newBlockersProvider(fixture.query)
+			if kind == contextfabric.FactRequiredChildren {
+				provider = newRequiredChildrenProvider(fixture.query)
+			}
+			result, err := provider.ReadFacts(ctx, principal, contextfabric.FactQuery{Time: current, Kind: kind, Subjects: []contextfabric.SubjectRef{subject}})
+			if err != nil {
+				t.Fatalf("%s ReadFacts: %v", kind, err)
+			}
+			var ids []string
+			for _, fact := range result.Facts {
+				ids = append(ids, *fact.Fields[field].String)
+			}
+			sort.Strings(ids)
+			return strings.Join(ids, ",")
+		}
+		for _, tc := range []struct {
+			principal storage.Principal
+			kind      contextfabric.FactKind
+			field     string
+			want      string
+		}{
+			{scoped, contextfabric.FactBlockers, "blocked_by_work_item_id", "linear:p-both"},
+			{scoped, contextfabric.FactRequiredChildren, "required_child_work_item_id", "linear:p-both"},
+			{authzPathsPrincipal(), contextfabric.FactBlockers, "blocked_by_work_item_id", "linear:p-both,linear:secret,linear:shared-id"},
+			{authzPathsPrincipal(), contextfabric.FactRequiredChildren, "required_child_work_item_id", "linear:p-both,linear:secret,linear:shared-id"},
+			// A principal who may not see the subject gets nothing about it.
+			{authzPathsPrincipal("zzz/none"), contextfabric.FactBlockers, "blocked_by_work_item_id", ""},
+			{authzPathsPrincipal("zzz/none"), contextfabric.FactRequiredChildren, "required_child_work_item_id", ""},
+		} {
+			if got := named(tc.principal, tc.kind, tc.field); got != tc.want {
+				t.Fatalf("%s for %v = %q, want %q", tc.kind, tc.principal.RepositoryScopes, got, tc.want)
+			}
+		}
+	})
+
+	t.Run("the scope expansion's read ceiling is enforced and classified", func(t *testing.T) {
+		expander := NewScopeExpander(fixture.query)
+		origin := workItemMembershipTestAnchor(t, "linear", authzPathsProjectP).Subject
+		saved := workItemScopeSelectionMaxRowsToRead
+		t.Cleanup(func() { workItemScopeSelectionMaxRowsToRead = saved })
+		workItemScopeSelectionMaxRowsToRead = 5
+		_, _, err := expander.projectWorkItems(ctx, scoped, authzPathsOrg, []contextfabric.SubjectRef{origin}, 50)
+		if err == nil || !errors.Is(err, contextfabric.ErrFactScopeReadLimitExceeded) {
+			t.Fatalf("lowered ceiling error = %v, want ErrFactScopeReadLimitExceeded", err)
+		}
+		workItemScopeSelectionMaxRowsToRead = saved
+		if _, _, err := expander.projectWorkItems(ctx, scoped, authzPathsOrg, []contextfabric.SubjectRef{origin}, 50); err != nil {
+			t.Fatalf("shipped ceiling error = %v", err)
 		}
 	})
 

@@ -359,6 +359,10 @@ const (
 	// temporal axis. Reachable only when the resolver's own axis gate did not
 	// hold, which is why it is a failure rather than a gate outcome.
 	FactScopeFailureAxisUnsupported FactScopeFailureClass = "axis_unsupported"
+	// FactScopeFailureReadLimitExceeded: the expander's statement hit its
+	// physical row-read ceiling. The outcome stays failed; the class names
+	// the resource bound rather than a backend fault.
+	FactScopeFailureReadLimitExceeded FactScopeFailureClass = "read_limit_exceeded"
 )
 
 // ---------------------------------------------------------------------------
@@ -2280,6 +2284,11 @@ var ErrFactScopeAuthorization = errors.New("contextfabric: fact scope authorizat
 // sends the operator somewhere real and wrong.
 var ErrFactScopeAxisUnsupported = errors.New("contextfabric: fact scope policy does not support this temporal axis")
 
+// ErrFactScopeReadLimitExceeded is what an expander wraps when its statement
+// hits its physical row-read ceiling, so the failure is classified as the
+// resource bound it is (FactScopeFailureReadLimitExceeded).
+var ErrFactScopeReadLimitExceeded = errors.New("contextfabric: fact scope selection exceeded its row-read ceiling")
+
 func classifyFactScopeFailure(err error) FactScopeFailureClass {
 	switch {
 	case err == nil:
@@ -2291,6 +2300,8 @@ func classifyFactScopeFailure(err error) FactScopeFailureClass {
 	// context without losing the classification.
 	case errors.Is(err, ErrFactScopeAuthorization):
 		return FactScopeFailureAuthorization
+	case errors.Is(err, ErrFactScopeReadLimitExceeded):
+		return FactScopeFailureReadLimitExceeded
 	case errors.Is(err, ErrFactScopeAxisUnsupported):
 		// Not a backend fault: the caller asked for an axis this policy does
 		// not serve. It keeps the `failed` OUTCOME -- an expander that had to

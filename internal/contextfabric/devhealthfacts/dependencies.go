@@ -9,6 +9,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-go/readers"
 )
 
 // work_item_dependencies has one free-text relationship_type column (see
@@ -74,12 +75,23 @@ func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	// cardinality (one work item can have thousands of blockers), so this
 	// provider is exactly the shape the row bound was introduced for, and
 	// exactly the shape where reporting a full page as truncated is wrong.
-	statement := withRowProbeLimit(`SELECT d.source_work_item_id, d.target_work_item_id, toString(t.repo_id)
+	//
+	// BOTH ENDS pass the shared work-item authorization rule: the blocked
+	// subject and the blocking item it names. A blocker is itself a work
+	// item's identity, so an authorized subject must never carry the id of
+	// one the principal may not see.
+	authorized, authorizationBindings := workItemAuthorizedIDsSQL(workItemRepositoryAuthorization(principal, query.RequestedRepositoryScope))
+	settings, settingsErr := workItemReaderSettings(ctx)
+	if settingsErr != nil {
+		return contextfabric.FactProviderResult{}, readFailure("query work item blockers", settingsErr)
+	}
+	statement := readers.WithSettings(withRowProbeLimit(`SELECT d.source_work_item_id, d.target_work_item_id, toString(t.repo_id)
 FROM work_item_dependencies AS d FINAL
 INNER JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
-WHERE d.org_id = {org_id:String} AND concat(toString(t.repo_id), ':', d.target_work_item_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) = '` + blockerRelationshipType + `'`)
+WHERE d.org_id = {org_id:String} AND concat(toString(t.repo_id), ':', d.target_work_item_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) = '`+blockerRelationshipType+`'
+  AND d.target_work_item_id IN `+authorized+` AND d.source_work_item_id IN `+authorized), settings)
 	rowCount := 0
-	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+	scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadWorkItemBlockers", statement, orgID, ids, func(row readers.RowScanner) error {
 		rowCount++
 		var sourceID, targetID, targetRepoID string
 		if err := row.Scan(&sourceID, &targetID, &targetRepoID); err != nil {
@@ -98,7 +110,7 @@ WHERE d.org_id = {org_id:String} AND concat(toString(t.repo_id), ':', d.target_w
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItemDependency, sourceID+":"+targetID)},
 		})
 		return nil
-	})
+	}, authorizationBindings...)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item blockers", scanErr)
 	}
@@ -150,12 +162,21 @@ func (p *RequiredChildrenProvider) ReadFacts(ctx context.Context, principal stor
 	// work_items the same way devhealthsource's own producer does.
 	// CHAOS-5438: probe limit, output bound separate -- see the same note
 	// on BlockersProvider above.
-	statement := withRowProbeLimit(`SELECT d.source_work_item_id, d.target_work_item_id, ifNull(d.relationship_type, ''), toString(s.repo_id)
+	//
+	// BOTH ENDS pass the shared work-item authorization rule, as on
+	// BlockersProvider: the subject and the required child it names.
+	authorized, authorizationBindings := workItemAuthorizedIDsSQL(workItemRepositoryAuthorization(principal, query.RequestedRepositoryScope))
+	settings, settingsErr := workItemReaderSettings(ctx)
+	if settingsErr != nil {
+		return contextfabric.FactProviderResult{}, readFailure("query work item required children", settingsErr)
+	}
+	statement := readers.WithSettings(withRowProbeLimit(`SELECT d.source_work_item_id, d.target_work_item_id, ifNull(d.relationship_type, ''), toString(s.repo_id)
 FROM work_item_dependencies AS d FINAL
 INNER JOIN work_items AS s FINAL ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
-WHERE d.org_id = {org_id:String} AND concat(toString(s.repo_id), ':', d.source_work_item_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) != '` + blockerRelationshipType + `'`)
+WHERE d.org_id = {org_id:String} AND concat(toString(s.repo_id), ':', d.source_work_item_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) != '`+blockerRelationshipType+`'
+  AND d.source_work_item_id IN `+authorized+` AND d.target_work_item_id IN `+authorized), settings)
 	rowCount := 0
-	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+	scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadWorkItemRequiredChildren", statement, orgID, ids, func(row readers.RowScanner) error {
 		rowCount++
 		var sourceID, targetID, relationshipType, sourceRepoID string
 		if err := row.Scan(&sourceID, &targetID, &relationshipType, &sourceRepoID); err != nil {
@@ -177,7 +198,7 @@ WHERE d.org_id = {org_id:String} AND concat(toString(s.repo_id), ':', d.source_w
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItemDependency, sourceID+":"+targetID)},
 		})
 		return nil
-	})
+	}, authorizationBindings...)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item required children", scanErr)
 	}
