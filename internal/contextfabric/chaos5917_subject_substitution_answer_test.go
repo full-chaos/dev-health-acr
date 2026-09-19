@@ -213,7 +213,7 @@ func TestSubstitutionGuardProvesItsClarificationByTheRememberedReceipt(t *testin
 			if event.SubstitutionParentResultID != wantParentResult {
 				t.Errorf("substitution_parent_result_id = %q, want %q", event.SubstitutionParentResultID, wantParentResult)
 			}
-			if names == "parent" && event.SubstitutionOriginIssuedFor != parent.result.ResultID {
+			if event.SubstitutionOriginIssuedFor != parent.result.ResultID {
 				t.Errorf("substitution_origin_issued_for = %q, want the named parent %q its receipt verifies against", event.SubstitutionOriginIssuedFor, parent.result.ResultID)
 			}
 			if event.SubstitutionParentResultID == stranger.result.ResultID || event.SubstitutionOriginIssuedFor == stranger.result.ResultID {

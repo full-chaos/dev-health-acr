@@ -479,3 +479,43 @@ func TestSaveReadsTheTurnParentFromItsContext(t *testing.T) {
 		t.Errorf("the capture's own evidence was replaced: %+v", got.carriedParent)
 	}
 }
+
+// TestSubjectSubstitutionReceiptIssuerNamesTheAnsweredResult: the remembered
+// offer's receipt is minted from the result whose subject it is, and from
+// the named parent only when the decision proved none.
+func TestSubjectSubstitutionReceiptIssuerNamesTheAnsweredResult(t *testing.T) {
+	t.Parallel()
+	if got := subjectSubstitutionReceiptIssuer(subjectSubstitutionDecision{ParentResultID: "result_answered"}, "result_prompt"); got != "result_answered" {
+		t.Errorf("issuer = %q, want the answered result", got)
+	}
+	if got := subjectSubstitutionReceiptIssuer(subjectSubstitutionDecision{}, "result_prompt"); got != "result_prompt" {
+		t.Errorf("issuer = %q, want the named parent", got)
+	}
+}
+
+// TestAGuardClarificationKeepsItsReceiptAndReportsAMalformedMember: a guard
+// clarification is decided by its own receipt whatever its member says, and
+// a member that does not decode is reported, not dropped.
+func TestAGuardClarificationKeepsItsReceiptAndReportsAMalformedMember(t *testing.T) {
+	t.Parallel()
+	guard := guardIssuedStored("result_parent", "result_parent", true)
+	guard.SemanticStateRead = SemanticStateReadAvailable
+	guard.SemanticState = &PersistedSemanticState{Extensions: SemanticStateExtensions{carriedParentIdentityExtension: json.RawMessage(`{"state":"identity_held","depth":0}`)}}
+	base := parentIdentityOf(parentAnchorEvidence{Referenced: true, Loaded: true}, guard, "result_clarification")
+	got := (&Engine{}).chainIdentityOf(context.Background(), acceptancePrincipal(), base, guard)
+	if got.Chain != SubjectSubstitutionChainGuardReceipt || got.ChainError != SubjectSubstitutionChainErrorMalformedMember || got.ChainDepth != 1 {
+		t.Errorf("chain = %q (%q) depth %d, want guard_receipt reporting a malformed member at depth 1", got.Chain, got.ChainError, got.ChainDepth)
+	}
+	if !sameSubjectIdentity(got.Subject, substitutionRepoOne) || got.ResultID != "result_parent" || got.Carried {
+		t.Errorf("evidence = %+v, want the receipt-proven parent", got)
+	}
+}
+
+// TestSemanticStateExtensionRefusesAnUnencodableValue: a value that does not
+// encode is refused, never written as something else.
+func TestSemanticStateExtensionRefusesAnUnencodableValue(t *testing.T) {
+	t.Parallel()
+	if _, err := withSemanticStateExtension(&PersistedSemanticState{}, carriedParentIdentityExtension, make(chan int)); !errors.Is(err, ErrSemanticStateRejected) {
+		t.Errorf("err = %v, want a rejection", err)
+	}
+}

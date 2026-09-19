@@ -204,6 +204,9 @@ type chainRig struct {
 	windowed bool
 	next     int
 	prefix   string
+	// answered is the answered result the chain under test continues, ""
+	// when the chain has none.
+	answered string
 }
 
 type chainResponse struct {
@@ -467,7 +470,8 @@ func (r *chainRig) buildChain(row ChainRow, producer string, depth int) string {
 	case "missing_parent":
 		return "result-chain-never-saved-" + r.prefix
 	case "answer":
-		return r.turn("", true, true, commitResponse(chainSubject)).ResultID
+		r.answered = r.turn("", true, true, commitResponse(chainSubject)).ResultID
+		return r.answered
 	case "no_match":
 		answered := r.turn("", true, true, commitResponse(chainSubject)).ResultID
 		served := r.turn(answered, true, true, emptyResponse())
@@ -497,6 +501,7 @@ func (r *chainRig) buildChain(row ChainRow, producer string, depth int) string {
 		head = "result-chain-never-saved-" + r.prefix
 	default:
 		head = r.turn("", true, true, commitResponse(chainSubject)).ResultID
+		r.answered = head
 	}
 	current := head
 	for i := 1; i < depth; i++ {
@@ -614,7 +619,7 @@ func RunCarriedParentChainSuite(t *testing.T, newStore func(t *testing.T) (conte
 					cell.RememberedFirst = len(served.SubjectResolution.Candidates) > 0 &&
 						served.SubjectResolution.Candidates[0].Subject.CanonicalID == chainSubject.CanonicalID &&
 						strings.HasPrefix(served.SubjectResolution.Candidates[0].ReceiptID, "subr_")
-					assertChainCell(t, row, cell, served)
+					assertChainCell(t, row, cell, served, rig.answered)
 					cells = append(cells, cell)
 				}
 			}
@@ -636,7 +641,7 @@ func chainServedShape(served contextfabric.InvestigationResult) string {
 	}
 }
 
-func assertChainCell(t *testing.T, row ChainRow, cell ChainCell, served contextfabric.InvestigationResult) {
+func assertChainCell(t *testing.T, row ChainRow, cell ChainCell, served contextfabric.InvestigationResult, answered string) {
 	t.Helper()
 	name := cell.Name()
 	want := row.Want[cell.FollowUp]
@@ -665,8 +670,8 @@ func assertChainCell(t *testing.T, row ChainRow, cell ChainCell, served contextf
 		if listed != cell.RememberedFirst {
 			t.Errorf("%s: remembered subject listed first = %t, want %t", name, cell.RememberedFirst, listed)
 		}
-		if listed && (cell.LineParentID != chainSubject.CanonicalID || cell.LineParentRes == "") {
-			t.Errorf("%s: fired on parent %q of %q, want %q of the answered result", name, cell.LineParentID, cell.LineParentRes, chainSubject.CanonicalID)
+		if listed && (cell.LineParentID != chainSubject.CanonicalID || cell.LineParentRes != answered) {
+			t.Errorf("%s: fired on parent %q of %q, want %q of the answered result %q", name, cell.LineParentID, cell.LineParentRes, chainSubject.CanonicalID, answered)
 		}
 		if !listed && cell.LineParentID != "" {
 			t.Errorf("%s: fail-closed parent identity = %q, want none", name, cell.LineParentID)
@@ -675,8 +680,8 @@ func assertChainCell(t *testing.T, row ChainRow, cell ChainCell, served contextf
 		if cell.Served != chainStatusServed || len(cell.CommittedIDs) != 1 || cell.CommittedIDs[0] != string(chainSubject.Kind)+":"+chainSubject.CanonicalID {
 			t.Errorf("%s: same subject served %v (%s)", name, cell.CommittedIDs, cell.Served)
 		}
-		if cell.LineParentRes == "" || strings.Contains(cell.LineParentRes, "never-saved") {
-			t.Errorf("%s: same subject decided against parent result %q", name, cell.LineParentRes)
+		if cell.LineParentRes != answered {
+			t.Errorf("%s: same subject decided against parent result %q, want the answered result %q", name, cell.LineParentRes, answered)
 		}
 	}
 	// A prompt is never an identity of its own: whatever parent result the
