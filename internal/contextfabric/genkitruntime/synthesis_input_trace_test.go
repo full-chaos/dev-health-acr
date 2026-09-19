@@ -38,7 +38,7 @@ func sha256Hex(s string) string {
 }
 
 // TestSynthesizeAnswerEmitsDeclaredInputLine drives two draws whose raw
-// outputs carry DIFFERENT claim counts (2 then 0), so an arm that reports one
+// outputs carry DIFFERENT claim counts (2 then 1), so an arm that reports one
 // draw's count for the other, or the served count for both, cannot pass. Every
 // value is asserted against an independent source: the digest against the
 // prompt the generator actually received, the counts against the fixture.
@@ -47,6 +47,7 @@ func TestSynthesizeAnswerEmitsDeclaredInputLine(t *testing.T) {
 	rejected := invalidTitleSynthesisOutput()
 	rejected.ClaimedFacts = []contextfabric.ClaimedFact{{}, {}}
 	valid := validSynthesisOutput()
+	valid.ClaimedFacts = []contextfabric.ClaimedFact{groundedReadinessClaim(validSynthesisInput())}
 	gen := &drawSequenceGenerator{outputs: []synthesisOutput{rejected, valid}}
 	input := validSynthesisInput()
 	// a second fact sharing one ref and adding one, so total and distinct differ
@@ -55,6 +56,11 @@ func TestSynthesizeAnswerEmitsDeclaredInputLine(t *testing.T) {
 		Fields:         input.Facts.Facts[0].Fields,
 		EvidenceRefIDs: []string{"evidence_release_1234", "evidence_other_5678"}, SourceState: contextfabric.SourceAvailable,
 	})
+
+	// distinct non-zero counts for every graph collection, so an arm reading
+	// one collection's length for another cannot pass.
+	input.Graph.Cohort = &contextfabric.Cohort{Members: make([]contextfabric.CohortMember, 3)}
+	input.Graph.DriverCandidates = make([]contextfabric.DriverJudgment, 2)
 
 	parsed, receipt, err := synthesisInputLineFor(t, gen, Config{MaxSynthesisResynthesisAttempts: 2}, input)
 	if err != nil {
@@ -79,14 +85,14 @@ func TestSynthesizeAnswerEmitsDeclaredInputLine(t *testing.T) {
 		"fact_evidence_refs":          3,
 		"fact_evidence_refs_distinct": 2,
 		"paths":                       1,
-		"driver_candidates":           0,
-		"cohort_members":              0,
+		"driver_candidates":           2,
+		"cohort_members":              3,
 		"outcome":                     "success",
 		"draws_total":                 2,
 		"draw_outcomes":               "1:invalid_output,2:success",
-		"draw_claims":                 "1:2,2:0",
+		"draw_claims":                 "1:2,2:1",
 		"draw_output_digests":         fmt.Sprintf("1:%s,2:%s", contextfabric.DigestModelValue(rejectedBytes), contextfabric.DigestModelValue(validBytes)),
-		"claims":                      0,
+		"claims":                      1,
 		"drivers":                     1,
 		"evidence_refs":               1,
 	}

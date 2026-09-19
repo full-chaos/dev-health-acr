@@ -2303,9 +2303,14 @@ func newSynthesisInputTrace(encoded []byte, input contextfabric.SynthesisInput) 
 		members = len(input.Graph.Cohort.Members)
 	}
 	return synthesisInputTrace{
-		Digest: contextfabric.DigestModelValue(encoded), Bytes: len(encoded),
-		Facts: len(input.Facts.Facts), FactEvidenceRefs: refs, FactEvidenceRefsDistinct: len(distinct),
-		Paths: len(input.Graph.Paths), DriverCandidates: len(input.Graph.DriverCandidates), CohortMembers: members,
+		Digest:                   contextfabric.DigestModelValue(encoded),
+		Bytes:                    len(encoded),
+		Facts:                    len(input.Facts.Facts),
+		FactEvidenceRefs:         refs,
+		FactEvidenceRefsDistinct: len(distinct),
+		Paths:                    len(input.Graph.Paths),
+		DriverCandidates:         len(input.Graph.DriverCandidates),
+		CohortMembers:            members,
 	}
 }
 
@@ -2314,11 +2319,27 @@ func newSynthesisInputTrace(encoded []byte, input contextfabric.SynthesisInput) 
 // model identity, because the input it describes is the one that leg sent.
 func (r *Runtime) logSynthesizeInput(ctx context.Context, orgID, requestID string, trace synthesisInputTrace, receipt contextfabric.ModelExecutionReceipt, model, modelVersion string, grounding synthesisGroundingCounts, draws []synthesisDraw) {
 	fields := eventspec.NewSynthesisInputFields(
-		decisionOrgIDHash(orgID), model, modelVersion, receipt.PromptVersion,
-		trace.Digest, trace.Bytes, trace.Facts, trace.FactEvidenceRefs, trace.FactEvidenceRefsDistinct,
-		trace.Paths, trace.DriverCandidates, trace.CohortMembers,
-		receipt.Outcome, len(draws), formatSynthesisDraws(draws), formatSynthesisDrawClaims(draws), formatSynthesisDrawDigests(draws),
-		grounding.Claims, grounding.Drivers, grounding.EvidenceRefs, requestID,
+		decisionOrgIDHash(orgID),
+		model,
+		modelVersion,
+		receipt.PromptVersion,
+		trace.Digest,
+		trace.Bytes,
+		trace.Facts,
+		trace.FactEvidenceRefs,
+		trace.FactEvidenceRefsDistinct,
+		trace.Paths,
+		trace.DriverCandidates,
+		trace.CohortMembers,
+		receipt.Outcome,
+		len(draws),
+		formatSynthesisDraws(draws),
+		formatSynthesisDrawClaims(draws),
+		formatSynthesisDrawDigests(draws),
+		grounding.Claims,
+		grounding.Drivers,
+		grounding.EvidenceRefs,
+		requestID,
 	)
 	r.config.Logger.InfoContext(ctx, eventspec.SynthesisInput.Msg, fields.SlogArgs()...)
 }
