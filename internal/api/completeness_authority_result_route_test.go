@@ -50,6 +50,7 @@ func newCompletenessAuthorityTestApp(t *testing.T, results contextfabric.Investi
 			DeviceAuthorizationLimiter: NewDeviceAuthorizationLimiter(ClockFunc(func() time.Time { return now })),
 			ReadinessChecks:            exactRuntimeChecks(),
 			InvestigationResults:       results,
+			StoredResultGate:           testStoredResultGate(nil),
 		},
 	}, testLogger(logs))
 	if err != nil {

@@ -2110,6 +2110,46 @@ var WorkItemReuse = Event{
 	},
 }
 
+// The stored-result authorization vocabularies, each derived from the one
+// array its producer declares.
+var (
+	storedResultSurfaceArr        = contextfabric.StoredResultSurfaceVocabulary()
+	storedResultDecisionArr       = contextfabric.StoredResultDecisionVocabulary()
+	storedResultReasonArr         = contextfabric.StoredResultAuthorizationReasonVocabulary()
+	storedResultPrincipalScopeArr = contextfabric.StoredResultPrincipalScopeVocabulary()
+	storedResultSubjectKindArr    = contractsv1.ContextFabricSubjectKindVocabulary()
+)
+
+// StoredResultAuthorization records the live authorization decision taken on
+// every read of a stored result: what the caller's grant is, what the result
+// names, and what each class of subject came out as. One line per decision, on
+// the result-by-id route and on every engine read of a prior result.
+var StoredResultAuthorization = Event{
+	ID: "contextfabric.stored_result_authorization", Msg: "context fabric stored result authorization", Level: LevelInfo,
+	Multiplicity: MultiplicityZeroOrOnePerRequest, Attribution: []string{"org_id", "surface"},
+	BoundedAggregation: "one decision per stored result read (engine reads are memoised per request per result); counts and kinds only, never ids or labels",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "surface", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultSurfaceArr[:])},
+		{Key: "principal_scope", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultPrincipalScopeArr[:])},
+		{Key: "repository_scope_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultDecisionArr[:])},
+		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultReasonArr[:])},
+		{Key: "subject_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "graph_subject_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "admitted_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "denied_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "absent_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "organization_subject_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "organization_mismatch_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "group_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "group_unproven_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "refused_kinds", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultSubjectKindArr[:])},
+		{Key: "error_class", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the decision is unavailable because a graph read failed", ClosedVocabulary: []string{"deadline_exceeded", "canceled", "dependency_unavailable", "graph_error"}},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
 // WorkItemStoredServing records tuple authorization and mandatory coverage
 // capacity on both stored serving surfaces, before any success is emitted.
 var WorkItemStoredServing = Event{
@@ -2551,6 +2591,7 @@ var All = []Event{
 	WorkItemMembershipGate,
 	WorkItemReuse,
 	WorkItemStoredServing,
+	StoredResultAuthorization,
 	CountPopulationScope,
 	FrameValidation,
 	ConfirmedNeedLedger,

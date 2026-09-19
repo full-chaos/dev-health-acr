@@ -39,11 +39,22 @@ func (a *App) investigationResults() contextfabric.InvestigationResultStore {
 	return a.runtime.InvestigationResults
 }
 
+// storedResultGate returns the configured stored-result decision, or nil.
+// Same typed-nil discipline as investigationResults.
+func (a *App) storedResultGate() StoredResultAuthorizer {
+	if a.runtime == nil || storage.IsNil(a.runtime.StoredResultGate) {
+		return nil
+	}
+	return a.runtime.StoredResultGate
+}
+
 // ContextFabricInvestigationResultHandler returns the protected retrieval
 // endpoint. It is strictly read-only: it never runs an investigation, never
-// touches the graph, the canonical fact sources, or a model, and never
-// writes. Reading a stored answer is meant to be cheap.
-func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.InvestigationResultStore) http.Handler {
+// touches the canonical fact sources or a model, and never writes. It reads
+// the graph only to decide, live, whether the caller's current grant admits
+// every subject the stored answer names -- the organization check the store
+// applies is not enough on its own.
+func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.InvestigationResultStore, gate StoredResultAuthorizer) http.Handler {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// The nil check lives inside the handler body, after
 		// protectedRuntimeHandler has already authenticated, scoped,
@@ -82,6 +93,22 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 		// response contract.
 		stored, err := results.Get(r.Context(), principal, resultID)
 		if err != nil {
+			a.writeInvestigationResultError(w, r, principal, err)
+			return
+		}
+		// The live authorization decision, before anything about the row
+		// reaches the response: a result whose subjects the caller's CURRENT
+		// grant does not admit does not exist for this caller, and is answered
+		// exactly like an unknown id. An undecidable read fails closed as
+		// unavailable. No gate configured is the same failure, never a pass.
+		authorization := contextfabric.StoredResultAuthorization{Surface: contextfabric.StoredResultSurfaceResultByID, Decision: contextfabric.StoredResultUnavailable, Reason: contextfabric.StoredResultReasonAuthorizerMissing}
+		if gate != nil {
+			authorization = gate.Authorize(r.Context(), principal, stored, contextfabric.StoredResultSurfaceResultByID)
+		}
+		authorizationArgs := contextfabric.StoredResultAuthorizationLogArgs(principal, authorization)
+		authorizationArgs = append(authorizationArgs, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())))
+		a.logger.InfoContext(r.Context(), contextfabric.StoredResultAuthorizationLogMessage, authorizationArgs...)
+		if err := authorization.ServingError(); err != nil {
 			a.writeInvestigationResultError(w, r, principal, err)
 			return
 		}

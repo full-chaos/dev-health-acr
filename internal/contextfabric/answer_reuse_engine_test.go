@@ -112,6 +112,12 @@ func reusableCandidate() (SubjectRef, InvestigationResult) {
 // hit always makes).
 type bindingOnlyGraphReader struct{ t *testing.T }
 
+// AuthorizeStoredSubjects: the reuse fixtures' graph holds every stored
+// subject under the test's grant, as graphReaderStub's does.
+func (g bindingOnlyGraphReader) AuthorizeStoredSubjects(ctx context.Context, principal storage.Principal, binding ResolvedGraphBinding, subjects []SubjectRef) ([]StoredSubjectOutcome, error) {
+	return graphReaderStub{}.AuthorizeStoredSubjects(ctx, principal, binding, subjects)
+}
+
 func (g bindingOnlyGraphReader) ResolveInvestigationBinding(context.Context, storage.Principal) (ResolvedGraphBinding, error) {
 	return ResolvedGraphBinding{GraphKey: "binding-only-key", Epoch: 0}, nil
 }

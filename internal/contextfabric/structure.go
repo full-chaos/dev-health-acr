@@ -806,7 +806,7 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 		// own doc comment) -- absent, this consult is simply skipped and
 		// Save's own atomic claim remains the sole (still sufficient)
 		// enforcement point.
-		if checker, ok := e.results.(StructureSupersessionChecker); ok {
+		if checker, ok := e.rawResults.(StructureSupersessionChecker); ok {
 			superseded, err := checker.IsStructureSuperseded(ctx, principal.OrgID, resultID, m.member)
 			if err != nil || superseded {
 				// Fail-closed on an authority-relevant read (design brief

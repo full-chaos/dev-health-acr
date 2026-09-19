@@ -552,7 +552,7 @@ func (e *Engine) resolveWindowReceipts(ctx context.Context, principal storage.Pr
 	// consult is simply skipped and Save's own atomic claim (once this
 	// result's ConfirmedMember reaches it) remains the sole enforcement
 	// point.
-	if checker, ok := e.results.(StructureSupersessionChecker); ok {
+	if checker, ok := e.rawResults.(StructureSupersessionChecker); ok {
 		superseded, err := checker.IsStructureSuperseded(ctx, principal.OrgID, resultID, contractsv1.ContextFabricStructureNeedWindow)
 		if err != nil || superseded {
 			// Fail-closed on an authority-relevant read, exactly like
