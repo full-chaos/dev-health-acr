@@ -100,7 +100,9 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			content: string(schema),
 			// v5 -> v6: requested_judgment_kind. See DefaultSchemaVersion's
 			// own doc comment.
-			digest: "94dcf346c753a493c9055b76e36f349a103cd269ef7a6c0ec10250fc25b3276d",
+			// v6 -> v7: fact_requirements[].kind is an enum over the fact-kind
+			// vocabulary. See DefaultSchemaVersion's own doc comment.
+			digest: "e78818739e52cbe4f773a06df8d58c486cfcbbd4adc9ab390fde0076e9db9526",
 		},
 	} {
 		t.Run(binding.name, func(t *testing.T) {

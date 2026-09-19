@@ -39,12 +39,11 @@ const (
 	// invented fact-kind names on ordinary questions
 	// (InterpretedQuestion.Validate then rejected every interpretation
 	// with "fact requirement violates v1 bounds"), because
-	// factRequirementOutput.Kind deliberately carries NO jsonschema enum
-	// -- the layering is that Genkit parses permissively and the
-	// ACR-owned semantic validator owns the registry. Closing the
-	// vocabulary in the prompt is the fix that keeps that layering,
-	// mirroring what v3 of the synthesis prompt did for driver
-	// categories. A receipt's PromptVersion is part of what a
+	// factRequirementOutput.Kind was an unconstrained string. v3 closes
+	// the vocabulary in the prompt, mirroring what v3 of the synthesis
+	// prompt did for driver categories; the decode-time enum on that
+	// field (DefaultSchemaVersion v7) is the second constraint, and the
+	// ACR-owned semantic validator stays as the last one. A receipt's PromptVersion is part of what a
 	// replay/evaluation pipeline uses to interpret
 	// ModelExecutionReceipt content (ADR 0008), so a prompt content
 	// change must bump this even though the interpretationOutput schema
@@ -454,7 +453,11 @@ const (
 	// requested_judgment_kind (widening, same reasoning as v3/v4 above --
 	// a v5-era model was never offered this field and could not have
 	// emitted it).
-	DefaultSchemaVersion    = "context-fabric-model-output.v6"
+	// v7: fact_requirements[].kind became an enum over the servable fact-kind
+	// vocabulary (a NARROWING of the decoded output space: a v6-era model
+	// could emit a kind the validator then rejected, a v7 model cannot), so
+	// a stored result must say which contract it was produced under.
+	DefaultSchemaVersion    = "context-fabric-model-output.v7"
 	defaultEvaluatorVersion = "context-fabric-grounding.v1"
 	// DefaultPhrasingPromptVersion is v1 (CHAOS-4171 PR2): the SECOND
 	// bounded model call's own prompt, versioned independently of
@@ -3379,6 +3382,36 @@ func (outputTimeContext) JSONSchema() *jsonschema.Schema {
 type factRequirementOutput struct {
 	Kind       string            `json:"kind"`
 	Parameters map[string]string `json:"parameters,omitempty"`
+}
+
+// JSONSchema hand-authors factRequirementOutput's schema so kind is an enum
+// over contractsv1.ContextFabricFactKindVocabulary() -- the SAME declaration
+// the semantic validator (InterpretedQuestion.Validate) consults and the prompt's closed
+// set renders -- which a struct tag cannot express because the members
+// come from a function, not a literal. Under constrained decoding the model
+// cannot emit a kind outside the servable set; the semantic validator in
+// InterpretedQuestion.Validate stays as the second line for any transport
+// that does not enforce the enum. The shape otherwise matches the
+// struct-tag-derived default: kind required, parameters an optional
+// string-to-string map, no other property.
+func (factRequirementOutput) JSONSchema() *jsonschema.Schema {
+	vocabulary := contractsv1.ContextFabricFactKindVocabulary()
+	kinds := make([]any, 0, len(vocabulary))
+	for _, kind := range vocabulary {
+		kinds = append(kinds, string(kind))
+	}
+	properties := orderedmap.New[string, *jsonschema.Schema]()
+	properties.Set("kind", &jsonschema.Schema{Type: "string", Enum: kinds})
+	properties.Set("parameters", &jsonschema.Schema{
+		Type:                 "object",
+		AdditionalProperties: &jsonschema.Schema{Type: "string"},
+	})
+	return &jsonschema.Schema{
+		Type:                 "object",
+		Properties:           properties,
+		Required:             []string{"kind"},
+		AdditionalProperties: jsonschema.FalseSchema,
+	}
 }
 
 // sanitizeRequestedJudgmentKind maps raw (the model's own free-text field)
