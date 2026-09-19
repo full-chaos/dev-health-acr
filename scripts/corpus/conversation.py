@@ -137,9 +137,9 @@ def conversation_identity_check(turns, observations):
     """Cross-turn identity verdict per turn (additive to score_turn, never replaces it).
 
     wrong_subject_carried  a continuation turn (declares no anchor of its own) was served
-                           bound to a DIFFERENT subject than the nearest earlier turn that
+                           bound to a DIFFERENT subject than the nearest preceding turn that
                            committed one.
-    silent_substitution    a turn declaring a subject other than the nearest earlier committed
+    silent_substitution    a turn declaring a subject other than the nearest preceding committed
                            subject was served without the previous turn being a clarification.
     """
     out, prior = [], None

@@ -170,17 +170,17 @@ def test_runner_refuses_corpus_without_conversations():
 
 
 def test_series_posts_parent_and_redemption_receipt_then_merges():
-    script = [_res("complete", "r1", ["syn:one"]),
-              _res("clarification_required", "r2", [], ["syn:one", "syn:two"], 0),
-              _res("complete", "r3", ["syn:two"])]
+    script = [_res("complete", "res-a", ["syn:one"]),
+              _res("clarification_required", "res-b", [], ["syn:one", "syn:two"], 0),
+              _res("complete", "res-c", ["syn:two"])]
     with _Server(script) as srv:
         r, tmp = _run("run_conversations.py", CONV_CORPUS, ["1"], srv.base)
         assert r.returncode == 0, r.stderr
         t1, t2, t3 = srv.seen
     assert "parentResultId" not in t1
-    assert t2["parentResultId"] == "r1" and "priorSubjectReceipts" not in t2
-    assert t3["parentResultId"] == "r2"
-    assert t3["priorSubjectReceipts"] == [{"result_id": "r2", "receipt_id": "rc-syn:two"}]
+    assert t2["parentResultId"] == "res-a" and "priorSubjectReceipts" not in t2
+    assert t3["parentResultId"] == "res-b"
+    assert t3["priorSubjectReceipts"] == [{"result_id": "res-b", "receipt_id": "rc-syn:two"}]
     out = tmp / "out" / "verdict.json"
     m, _ = subprocess.run, None
     d = tmp / "d"
@@ -196,8 +196,8 @@ def test_series_posts_parent_and_redemption_receipt_then_merges():
 
 
 def test_unredeemable_offer_is_not_measured_and_merge_fails():
-    script = [_res("complete", "r1", ["syn:one"]),
-              _res("clarification_required", "r2", [], ["syn:one"], 0)]
+    script = [_res("complete", "res-a", ["syn:one"]),
+              _res("clarification_required", "res-b", [], ["syn:one"], 0)]
     with _Server(script) as srv:
         r, tmp = _run("run_conversations.py", CONV_CORPUS, ["1"], srv.base)
         assert r.returncode == 0 and len(srv.seen) == 2

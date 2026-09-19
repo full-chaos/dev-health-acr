@@ -713,7 +713,7 @@ def run_conversation(conv, rep, outdir, warn=print):
             fname = outdir / f"{conv['id']}-rep{rep}-t{n}-a{attempt}.json"
             with open(fname, "w") as f:
                 json.dump({"request": body, "status": status, "response": payload,
-                           "dt": round(dt, 1), "body_undecodable": undecodable}, f, indent=2)
+                           "dt": float(f"{dt:.1f}"), "body_undecodable": undecodable}, f, indent=2)
             persist_raw_response(fname, raw)
             print(f"  [{tag}] t{n} a{attempt}: http={status} dt={dt:.1f}s", flush=True)
             if contract.is_success_status(status) or not is_retryable(status, payload):
