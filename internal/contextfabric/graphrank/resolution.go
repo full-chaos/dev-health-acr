@@ -1609,10 +1609,6 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 	// similarity at or below OfferSimilarityFloor; the vector-only count above
 	// stays its own figure. Both are withheld by the ONE classifier.
 	offerPoolFloorExcluded := 0
-	committedOfferKeys := make(map[string]bool, len(resolution.Committed))
-	for _, subject := range resolution.Committed {
-		committedOfferKeys[SubjectKey(subject)] = true
-	}
 	// CHAOS-5517: pre-count the excluded set BEFORE emitting anything, so
 	// the offer_pool DETAIL event's own Total (demoted + excluded, the
 	// SAME two counts OfferPoolSummary reports below) is known before the
@@ -1623,7 +1619,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 	if tracer != nil {
 		excludedPrecount := 0
 		for _, candidate := range ordered {
-			if !offerAdmissionOf(candidate, committedOfferKeys).Admitted() && !demotedKeys[SubjectKey(candidate.Subject)] {
+			if !ClassifyOffer(candidate).Admitted() && !demotedKeys[SubjectKey(candidate.Subject)] {
 				excludedPrecount++
 			}
 		}
@@ -1638,7 +1634,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		}
 	}
 	for _, candidate := range ordered {
-		admission := offerAdmissionOf(candidate, committedOfferKeys)
+		admission := ClassifyOffer(candidate)
 		if !admission.Admitted() {
 			// A demoted arrival is withheld from the offer for the same
 			// reason and is NOT counted twice -- re-offering the receipt the
