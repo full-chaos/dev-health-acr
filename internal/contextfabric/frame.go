@@ -92,7 +92,7 @@ type QuestionFrame struct {
 	Version string `json:"version"`
 
 	// CollapsedGroupAxisMemberKind is PROVENANCE: set ONLY by
-	// repairMemberKindFactAliasCollapse (CHAOS-5992) and
+	// repairMemberKindFactAliasCollapse and
 	// repairSelfGroupFlatCohort on the frame THEY produce, to the member
 	// kind the repair collapsed a requested group
 	// axis into (the receipt's own GroupKind). requestedGroupAxisDropped
