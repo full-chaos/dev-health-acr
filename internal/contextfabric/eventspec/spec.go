@@ -1923,7 +1923,7 @@ const (
 	// claimed no fact; that draft is the one served.
 	SynthesisZeroClaimRedrawStillZero = "redrawn_still_zero"
 	// SynthesisZeroClaimRedrawFailed: the extra draw was rejected or failed in
-	// transport; the earlier valid zero-claim draft is the one served.
+	// transport; the first valid zero-claim draft is the one served.
 	SynthesisZeroClaimRedrawFailed = "redraw_failed"
 	// SynthesisZeroClaimRedrawDeclinedDeadline: the caller's remaining
 	// deadline could not cover the extra draw.

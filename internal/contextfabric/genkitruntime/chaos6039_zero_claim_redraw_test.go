@@ -224,7 +224,7 @@ func TestFailedZeroClaimRedrawServesTheEarlierValidDraft(t *testing.T) {
 			gen := &scriptedGenerator{steps: []scriptedStep{{output: zero}, tc.step}}
 			run := runRedraw(t, context.Background(), gen, Config{}, validSynthesisInput())
 			if run.err != nil {
-				t.Fatalf("SynthesizeAnswer() error = %v, want the earlier valid draft served", run.err)
+				t.Fatalf("SynthesizeAnswer() error = %v, want the first valid draft served", run.err)
 			}
 			if run.receipt.Outcome != "success" {
 				t.Fatalf("receipt.Outcome = %q, want success", run.receipt.Outcome)
