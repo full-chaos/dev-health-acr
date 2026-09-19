@@ -3,6 +3,7 @@ package genkitruntime
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -134,5 +135,43 @@ func TestInterpretReceiptCountsEveryDrawsAttemptsAndUsage(t *testing.T) {
 	}
 	if receipt.Usage.InputTokens != 20 || receipt.Usage.OutputTokens != 8 || receipt.Usage.TotalTokens != 28 {
 		t.Fatalf("receipt usage = %+v, want the sum of both draws (20/8/28)", receipt.Usage)
+	}
+}
+
+func TestInterpretDecisionLineCoversEveryDraw(t *testing.T) {
+	t.Parallel()
+	handler, logger := newCaptureLogger()
+	gen := &redrawGenerator{outputs: []interpretationOutput{invalidInterpretationOutput(), validInterpretationOutput()}}
+	rt := mustRuntime(t, gen, Config{Logger: logger, MaxSynthesisResynthesisAttempts: 3})
+	_, receipt, err := rt.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest())
+	if err != nil {
+		t.Fatalf("InterpretQuestion() error = %v", err)
+	}
+	attrs := onlyDecisionEvent(t, handler).Attrs
+	if got := attrInt(t, attrs, "attempts_total"); got != receipt.Attempts || got != 2 {
+		t.Fatalf("attempts_total = %d, receipt.Attempts = %d, want both 2", got, receipt.Attempts)
+	}
+	if got, _ := attrs["attempt_outcomes"].(string); got != "1:success,2:success" {
+		t.Fatalf("attempt_outcomes = %q, want one continuously numbered entry per draw", got)
+	}
+}
+
+func TestInterpretRedrawKeepsRoomForFallbackUnderASharedDeadline(t *testing.T) {
+	t.Parallel()
+	gen := &redrawGenerator{outputs: []interpretationOutput{invalidInterpretationOutput(), validInterpretationOutput()}}
+	rt := mustRuntime(t, gen, Config{
+		Timeout: time.Second, MaxSynthesisResynthesisAttempts: 3,
+		Fallback: fallbackRuntime{},
+	})
+	// 1.5s left is below the 2s (call + fallback) reservation but above 1s (call alone): the
+	// invalid first draw must go straight to the fallback, not a redraw.
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	_, receipt, err := rt.InterpretQuestion(ctx, storage.Principal{OrgID: "org_1"}, validRequest())
+	if err != nil {
+		t.Fatalf("InterpretQuestion() error = %v, want the fallback to serve", err)
+	}
+	if !receipt.FallbackUsed || len(gen.seeds) != 1 {
+		t.Fatalf("fallback_used=%v draws=%d, want fallback served after exactly 1 draw", receipt.FallbackUsed, len(gen.seeds))
 	}
 }

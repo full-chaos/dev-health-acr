@@ -1006,7 +1006,8 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 	totalAttempts := 0
 	for draw := 0; ; draw++ {
 		decodingSeed = chaos4631InterpretSeedFor(questionHash, sample)
-		attemptOutcomes, generationErr = r.withRetry(ctx, func(callCtx context.Context) error {
+		var drawOutcomes []attemptOutcome
+		drawOutcomes, generationErr = r.withRetry(ctx, func(callCtx context.Context) error {
 			var err error
 			output, usage, err = r.generator.Interpret(callCtx, generationRequest{
 				Model: r.config.ModelRef, System: interpretationSystemPrompt, Prompt: string(encoded),
@@ -1015,7 +1016,13 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 			return err
 		})
 		// Every draw's cost counts on the receipt, redrawn or not.
-		totalAttempts += len(attemptOutcomes)
+		// The decision line's attempt list covers EVERY draw, renumbered
+		// continuously, so attempts_total agrees with receipt.Attempts.
+		for _, o := range drawOutcomes {
+			o.Index = len(attemptOutcomes) + 1
+			attemptOutcomes = append(attemptOutcomes, o)
+		}
+		totalAttempts += len(drawOutcomes)
 		totalUsage.InputTokens += usage.InputTokens
 		totalUsage.OutputTokens += usage.OutputTokens
 		totalUsage.TotalTokens += usage.TotalTokens
@@ -1025,6 +1032,20 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 		interpreted, err = output.toDomain(request.TimeContext)
 		if err == nil || draw+1 >= maxDraws || ctx.Err() != nil {
 			break
+		}
+		// A redraw must leave room for itself AND the fallback leg, exactly
+		// as synthesis re-draws reserve (r.config.Timeout per call, doubled
+		// when a fallback exists): a redraw that eats the shared deadline
+		// would turn a rejection the fallback could have served into a
+		// deadline error. No deadline on ctx means no shared budget.
+		if deadline, ok := ctx.Deadline(); ok {
+			reserved := r.config.Timeout
+			if r.config.Fallback != nil {
+				reserved *= 2
+			}
+			if time.Until(deadline) < reserved {
+				break
+			}
 		}
 		redraws++
 		sample++
