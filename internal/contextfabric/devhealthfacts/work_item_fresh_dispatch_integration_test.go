@@ -222,6 +222,25 @@ func TestWorkItemFreshEngineAgainstRealClickHouse(t *testing.T) {
 				}
 				return
 			}
+			if population == 0 {
+				// The fixture always seeds one member the principal may not read, so a
+				// measured population of zero authorized is a disclosed gap, not an
+				// empty project.
+				if result.Cohort != nil || result.Status != contextfabric.InvestigationDegraded {
+					t.Fatalf("all-denied census served status=%q cohort=%+v", result.Status, result.Cohort)
+				}
+				if persisted.Value != 0 || persisted.Retained != 0 || census.DeniedPopulation != 1 {
+					t.Fatalf("all-denied census=%+v persisted=%+v", census, persisted)
+				}
+				gapDisclosed := false
+				for _, limitation := range result.Limitations {
+					gapDisclosed = gapDisclosed || strings.Contains(limitation, "1 work items were observed and none are authorized")
+				}
+				if !gapDisclosed {
+					t.Fatalf("denied population not disclosed: %q", result.Limitations)
+				}
+				return
+			}
 			if result.Cohort == nil {
 				t.Fatal("completed S1 lost cohort")
 			}
