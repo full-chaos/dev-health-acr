@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -110,6 +111,121 @@ func assertServedNothing(t *testing.T, result InvestigationResult) {
 	}
 }
 
+// TestResolveTerminalStatusNeverRefusesAClarifyingCallerOnTheSubstitutionOutcome
+// is a crafted-input, predicate-level pin for a guard clause that restates an
+// invariant enforced by construction at a different site: today
+// decideSubjectSubstitution only ever PRODUCES
+// SubjectSubstitutionRefused/RefusedRememberedUnavailable when
+// AllowClarification is false, so resolveTerminalStatus's own
+// AllowClarification check is a second enforcement of an invariant already
+// held at that different site -- defence in depth, not dead code, and this
+// is what proves it: an input combination the real guard cannot produce,
+// exercised directly against resolveTerminalStatus, so the check's own
+// removal is observable even though no real turn can reach it.
+func TestResolveTerminalStatusNeverRefusesAClarifyingCallerOnTheSubstitutionOutcome(t *testing.T) {
+	t.Parallel()
+	for _, outcome := range []SubjectSubstitutionOutcome{SubjectSubstitutionRefused, SubjectSubstitutionRefusedRememberedUnavailable} {
+		request := InvestigationRequest{Options: InvestigationOptions{AllowClarification: true}}
+		resolution := SubjectResolution{}
+		status, limitation := resolveTerminalStatus(request, &resolution, nil, false, declaredKindDecision{}, outcome)
+		if limitation == subjectIdentityUnconfirmedTerminalLimitation {
+			t.Fatalf("outcome %q with AllowClarification=true reached the non-clarifying refusal sentence (status %q) -- an invariant only decideSubjectSubstitution enforces was silently trusted here", outcome, status)
+		}
+	}
+}
+
+// TestTheSubjectIdentityUnconfirmedBasisOverItsWholeVocabularyDomain
+// executes the new member's own domain on both sides of every rule that
+// classifies a basis, same shape
+// TestTheOrganizationScopeBasisOverItsWholeVocabularyDomain uses for its own
+// member (role_answerability_test.go) -- except this member DOES carry its
+// own basis token in its fixed sentence, the continuation_context_unverifiable
+// convention, not the organization-scope one.
+func TestTheSubjectIdentityUnconfirmedBasisOverItsWholeVocabularyDomain(t *testing.T) {
+	t.Parallel()
+	basis := subjectIdentityUnconfirmedTerminalBasis
+	if basis != contractsv1.ContextFabricRefusalBasisSubjectIdentityUnconfirmed || string(basis) != "subject_identity_unconfirmed" {
+		t.Fatalf("subjectIdentityUnconfirmedTerminalBasis = %q", basis)
+	}
+	if !contractsv1.ValidContextFabricRefusalBasis(basis) {
+		t.Fatalf("%q is not a vocabulary member", basis)
+	}
+	seen := 0
+	for _, member := range contractsv1.ContextFabricRefusalBasisVocabulary() {
+		if member == basis {
+			seen++
+		}
+	}
+	if seen != 1 {
+		t.Fatalf("member occurs %d times in the vocabulary, want exactly 1", seen)
+	}
+	if contractsv1.ValidContextFabricFrameRefusalBasis(basis) {
+		t.Fatal("admitted to the FRAME refusal allow-list: the frame validated, the gate passed, and resolution committed a real identity")
+	}
+	for _, nearMiss := range []contractsv1.ContextFabricRefusalBasis{"subject_identity_unconfirmed_", "SUBJECT_IDENTITY_UNCONFIRMED", "subject_identity", ""} {
+		if contractsv1.ValidContextFabricRefusalBasis(nearMiss) {
+			t.Fatalf("near miss %q was accepted", nearMiss)
+		}
+	}
+	sentence := subjectIdentityUnconfirmedTerminalLimitation
+	if !contractsv1.IsContextFabricServiceAuthoredLimitation(sentence) {
+		t.Fatalf("the sentence is not service-authored: %q", sentence)
+	}
+	for _, fragment := range []string{"Name the subject directly", "no canonical facts were read"} {
+		if !strings.Contains(sentence, fragment) {
+			t.Fatalf("the sentence lacks %q: it must name what happened and how to continue", fragment)
+		}
+	}
+	// UNLIKE organization_scope_unsupported/declared_kind_unmatched: this
+	// sentence DOES carry its own basis token, the continuation_context_
+	// unverifiable convention -- chris's exact accepted wording (dictations
+	// 1998/1999) ends with it.
+	if !strings.Contains(sentence, string(basis)) {
+		t.Fatalf("the sentence must carry its basis token, chris's accepted wording: %q", sentence)
+	}
+}
+
+// TestSubjectIdentityUnconfirmedValidatorHoldsBasisAndSentenceTogether
+// takes the REAL served refusal document from
+// TestSubstitutionGuardRefusesWhenTheCallerCannotBeAsked's own shape and
+// proves the one-direction validation pin against it: the canonical
+// document validates, and a copy with the fixed sentence stripped (basis
+// left in place) is refused, naming this basis.
+func TestSubjectIdentityUnconfirmedValidatorHoldsBasisAndSentenceTogether(t *testing.T) {
+	t.Parallel()
+	h := newNeedTurnHarness(t, nil)
+	_, two := substitutionTurns(t, h, "request_5926_validator",
+		substitutionResponse(substitutionRepoOne, "receipt_5926_validator_one"),
+		substitutionResponse(substitutionRepoTwo, "receipt_5926_validator_two"),
+		func(request *InvestigationRequest) { request.Options.AllowClarification = false })
+	served := two.result
+	if served.RefusalBasis != contractsv1.ContextFabricRefusalBasisSubjectIdentityUnconfirmed {
+		t.Fatalf("precondition failed: refusal_basis = %q", served.RefusalBasis)
+	}
+	if err := contractsv1.ValidateStoredResult(served); err != nil {
+		t.Fatalf("the canonical served document does not validate: %v", err)
+	}
+	stripped := served
+	stripped.Limitations = []string{ambiguousNoClarificationLimitation}
+	if err := contractsv1.ValidateStoredResult(stripped); err == nil {
+		t.Fatal("basis present, sentence stripped: want a validation error, got none")
+	} else if !strings.Contains(err.Error(), "requires its fixed limitation sentence") {
+		t.Fatalf("error = %v, want the fixed-sentence pin", err)
+	}
+}
+
+// assertLimitationPresent checks a fixed disclosure sentence is
+// present, exact-match, among a served result's limitations.
+func assertLimitationPresent(t *testing.T, limitations []string, want string) {
+	t.Helper()
+	for _, limitation := range limitations {
+		if limitation == want {
+			return
+		}
+	}
+	t.Fatalf("limitations = %v, want to contain %q", limitations, want)
+}
+
 // substitutionTurns runs the two-turn shape at the heart of this axis: turn
 // one commits parent, turn two names it and commits child. mutate adapts the
 // second request before it runs.
@@ -154,6 +270,12 @@ func TestSubstitutionGuardClarifiesAResolverOriginSubjectChange(t *testing.T) {
 		}
 	}
 	assertGuard(t, lastSubstitution(t, two), SubjectSubstitutionClarified, SubjectSubstitutionOriginResolver, substitutionRepoOne, substitutionRepoTwo)
+	// A caller that CAN clarify never reads the non-clarifying
+	// caller's named reason -- same guard, same fixed prompt, different
+	// RefusalBasis outcome entirely (empty: this is not a refusal).
+	if two.result.RefusalBasis != "" {
+		t.Fatalf("refusal_basis = %q, want empty: a clarifying caller is not refused", two.result.RefusalBasis)
+	}
 }
 
 // TestSubstitutionGuardClarifiesAHintOriginSubjectChange is the same cell
@@ -262,6 +384,15 @@ func TestSubstitutionGuardRefusesWhenTheCallerCannotBeAsked(t *testing.T) {
 		t.Fatalf("candidates = %+v, want both identities with the remembered one first", candidates)
 	}
 	assertGuard(t, lastSubstitution(t, two), SubjectSubstitutionRefused, SubjectSubstitutionOriginResolver, substitutionRepoOne, substitutionRepoTwo)
+	// The non-clarifying caller reads a NAMED reason, not the
+	// generic ambiguous-candidate ending.
+	if two.result.RefusalBasis != contractsv1.ContextFabricRefusalBasisSubjectIdentityUnconfirmed {
+		t.Fatalf("refusal_basis = %q, want %q", two.result.RefusalBasis, contractsv1.ContextFabricRefusalBasisSubjectIdentityUnconfirmed)
+	}
+	if two.result.Completeness.RefusalBasis != two.result.RefusalBasis {
+		t.Fatalf("completeness.refusal_basis = %q, must mirror result.refusal_basis %q", two.result.Completeness.RefusalBasis, two.result.RefusalBasis)
+	}
+	assertLimitationPresent(t, two.result.Limitations, contractsv1.ContextFabricSubjectIdentityUnconfirmedLimitation)
 }
 
 // TestSubstitutionGuardWithholdsAnUnreadableRememberedSubject: the
@@ -935,6 +1066,13 @@ func TestSubstitutionGuardRefusesAndWithholdsAnUnreadableRememberedSubject(t *te
 		}
 	}
 	assertGuard(t, lastSubstitution(t, outcome), SubjectSubstitutionRefusedRememberedUnavailable, SubjectSubstitutionOriginResolver, substitutionRepoOne, substitutionRepoTwo)
+	// An unreadable remembered subject still gets the SAME named
+	// reason -- one fixed sentence for both firing outcomes, per chris's
+	// acceptance (dictation 1999), not a second wording keyed on readability.
+	if outcome.result.RefusalBasis != contractsv1.ContextFabricRefusalBasisSubjectIdentityUnconfirmed {
+		t.Fatalf("refusal_basis = %q, want %q", outcome.result.RefusalBasis, contractsv1.ContextFabricRefusalBasisSubjectIdentityUnconfirmed)
+	}
+	assertLimitationPresent(t, outcome.result.Limitations, contractsv1.ContextFabricSubjectIdentityUnconfirmedLimitation)
 }
 
 // substitutionSharedIDRepo/Team are one canonical id under two kinds: the

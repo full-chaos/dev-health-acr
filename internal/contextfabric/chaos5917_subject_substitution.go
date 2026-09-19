@@ -827,6 +827,16 @@ const (
 	subjectSubstitutionRememberedUnavailablePrompt = "This follow-up reads as being about a different subject than the answer it follows up on, and the subject of that answer cannot be read for you, so no canonical facts were read for either. Name the subject you mean."
 )
 
+// CHAOS-5926: the non-clarifying branch's basis and sentence, named rather
+// than left to fall into the ordinary ambiguous-candidate ending. Same
+// convention chaos5660_declared_kind_terminal.go and role_answerability.go
+// each use for their own terminal member: a private alias here, beside the
+// guard that decides it, of the one exported pair contracts/v1 publishes.
+const (
+	subjectIdentityUnconfirmedTerminalLimitation = contractsv1.ContextFabricSubjectIdentityUnconfirmedLimitation
+	subjectIdentityUnconfirmedTerminalBasis      = contractsv1.ContextFabricRefusalBasisSubjectIdentityUnconfirmed
+)
+
 // subjectSubstitutionPromptFor picks the prompt from the ONE fact that
 // decides what the caller is looking at: whether the remembered subject is
 // listed. A prompt that names it as something to pick beside a list that

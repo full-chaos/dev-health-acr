@@ -1221,6 +1221,19 @@ func (r ContextFabricInvestigationResult) validateCompleteness(bounds contextFab
 	if continuationBasis && !continuationSentence {
 		return fmt.Errorf("refusal_basis %q requires its fixed limitation sentence", r.RefusalBasis)
 	}
+	// CHAOS-5926: same one-direction pin, same reasoning, for the
+	// subject-identity-unconfirmed refusal.
+	subjectIdentitySentence := false
+	for _, limitation := range r.Limitations {
+		if limitation == ContextFabricSubjectIdentityUnconfirmedLimitation {
+			subjectIdentitySentence = true
+			break
+		}
+	}
+	subjectIdentityBasis := r.RefusalBasis == ContextFabricRefusalBasisSubjectIdentityUnconfirmed
+	if subjectIdentityBasis && !subjectIdentitySentence {
+		return fmt.Errorf("refusal_basis %q requires its fixed limitation sentence", r.RefusalBasis)
+	}
 	return validateAnswerOutcomes(c, bounds)
 }
 
