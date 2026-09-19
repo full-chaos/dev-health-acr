@@ -48,7 +48,7 @@ func TestBoundOfferFloorRowsOrderAndCap(t *testing.T) {
 		{Kind: "team", CanonicalID: "hi", Confidence: 0.9},
 		{Kind: "team", CanonicalID: "lo", Confidence: 0.1},
 	}
-	original := append([]OfferFloorRow(nil), rows...)
+	before := append([]OfferFloorRow(nil), rows...)
 	got := boundOfferFloorRows(rows)
 	wantIDs := []string{"hi", "z", "a", "b", "lo"}
 	if len(got) != len(wantIDs) {
@@ -60,7 +60,7 @@ func TestBoundOfferFloorRowsOrderAndCap(t *testing.T) {
 		}
 	}
 	for i := range rows {
-		if rows[i] != original[i] {
+		if rows[i] != before[i] {
 			t.Fatalf("input mutated at %d: %+v", i, rows)
 		}
 	}
