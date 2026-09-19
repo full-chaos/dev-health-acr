@@ -545,7 +545,7 @@ func TestDeficiencySeveritySignal_TakesMaxAcrossFiredRules(t *testing.T) {
 	value, available, _ := deficiencySeveritySignal([]CanonicalFact{
 		deficiencyFact("A", "warning"),
 		deficiencyFact("A", "critical"),
-	}, availableCoverage())
+	}, availableCoverage(), true)
 	if !available || value != 1.0 {
 		t.Fatalf("value = %v, available = %v, want (1.0, true)", value, available)
 	}
@@ -556,7 +556,7 @@ func TestDeficiencySeveritySignal_TakesMaxAcrossFiredRules(t *testing.T) {
 // not as missing -- the design doc's own available-zero exception.
 func TestDeficiencySeveritySignal_AvailableZeroException(t *testing.T) {
 	t.Parallel()
-	value, available, _ := deficiencySeveritySignal(nil, availableCoverage())
+	value, available, _ := deficiencySeveritySignal(nil, availableCoverage(), true)
 	if !available || value != 0 {
 		t.Fatalf("value = %v, available = %v, want (0, true) -- SourceAvailable batch, zero fired rules", value, available)
 	}
@@ -569,8 +569,8 @@ func TestDeficiencySeveritySignal_AvailableZeroException(t *testing.T) {
 // gets the available-zero exception, not a hard missing.
 func TestDeficiencySeveritySignal_NoCoverageEntryDefaultsToAvailable(t *testing.T) {
 	t.Parallel()
-	if _, available, _ := deficiencySeveritySignal(nil, Coverage{}); !available {
-		t.Fatal("deficiencySeveritySignal(nil, Coverage{}) available = false, want true (no coverage entry defaults permissive)")
+	if _, available, _ := deficiencySeveritySignal(nil, Coverage{}, true); !available {
+		t.Fatal("deficiencySeveritySignal(nil, Coverage{}, true) available = false, want true (no coverage entry defaults permissive)")
 	}
 }
 
@@ -580,7 +580,7 @@ func TestDeficiencySeveritySignal_NoCoverageEntryDefaultsToAvailable(t *testing.
 func TestDeficiencySeveritySignal_TruncatedBatchWithZeroRowsIsMissing(t *testing.T) {
 	t.Parallel()
 	coverage := Coverage{Sources: []SourceObservation{{Source: "canonical_fact:operational_deficiencies", State: SourceTruncated}}}
-	if _, available, _ := deficiencySeveritySignal(nil, coverage); available {
+	if _, available, _ := deficiencySeveritySignal(nil, coverage, true); available {
 		t.Fatal("deficiencySeveritySignal(nil, truncated) available = true, want false")
 	}
 }

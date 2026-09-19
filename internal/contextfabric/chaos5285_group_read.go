@@ -522,6 +522,19 @@ func mergeGroupBundle(into *CanonicalFactBundle, group CanonicalFactBundle, orgI
 	// sources this answer is built from -- so a day-grain group read must
 	// coarsen an instant-grain member read, never the other way round.
 	into.TemporalGrain = coarsestGrain(into.TemporalGrain, group.TemporalGrain)
+	// The group read's own attribution joins the turn's: a member the group
+	// read covered for a kind is covered for that kind in the merged bundle.
+	if group.ReadSubjects != nil && into.ReadSubjects == nil {
+		into.ReadSubjects = FactReadSubjects{}
+	}
+	for kind, set := range group.ReadSubjects {
+		if into.ReadSubjects[kind] == nil {
+			into.ReadSubjects[kind] = make(map[string]struct{}, len(set))
+		}
+		for key := range set {
+			into.ReadSubjects[kind][key] = struct{}{}
+		}
+	}
 	return false
 }
 

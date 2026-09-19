@@ -743,11 +743,12 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 	}
 
 	bundle := CanonicalFactBundle{
-		Facts:      []CanonicalFact{},
-		Coverage:   Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
-		Version:    CanonicalFactRegistryVersion,
-		Versions:   map[FactKind]string{},
-		Watermarks: map[FactKind]string{},
+		Facts:        []CanonicalFact{},
+		Coverage:     Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		Version:      CanonicalFactRegistryVersion,
+		Versions:     map[FactKind]string{},
+		Watermarks:   map[FactKind]string{},
+		ReadSubjects: FactReadSubjects{},
 	}
 	allowedSubjects := investigationScopeSubjectSet(request)
 	// CHAOS-3783: decide the whole fan-out up front, before any provider is
@@ -1041,6 +1042,7 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		// construction: it sets SourceTruncated if and only if Truncated
 		// is set. One source, so the pair cannot drift.
 		mergedState := lastCoverageState(&bundle)
+		bundle.ReadSubjects.add(planned.Kind, query.Subjects)
 		r.recordFactRead(ctx, principal, planned.Kind, factReadCompleted, mergedState, query.Subjects, factsReturned, mergedState == SourceTruncated)
 	}
 	sortCanonicalFacts(bundle.Facts)

@@ -322,10 +322,17 @@ rule, applied per `(member, signal family)` pair:
   batch's row count, it does not retroactively invalidate a row that
   survived truncation).
 - **available-zero** (a defined exception, not a general rule): this member
-  has no deficiency row at all AND the batch state is `SourceAvailable` —
-  this is the one family where "no row" has an established meaning ("no
-  currently fired rules"). No other family in this table gets a free zero
-  for an absent row or an absent target field.
+  has no deficiency row at all AND the batch state is `SourceAvailable` AND
+  the deficiencies read completed for THIS member's own subject — this is
+  the one family where "no row" has an established meaning ("no currently
+  fired rules"). The batch state is one value for the whole investigation,
+  so it never stands in for the member's own read: the registry records,
+  per fact kind, which subjects a read covered
+  (`CanonicalFactBundle.ReadSubjects`), and a member outside that set has no
+  deficiency evidence and reads as missing (`cohort-ranking.v3`). A ranking
+  built without that attribution (a bundle that carries none) keeps the
+  batch-state-only rule. No other family in this table gets a free zero for
+  an absent row or an absent target field.
 - **missing** for this member: the batch state is `SourcePruned`/
   `SourceUnavailable`/error (never per-row for these three — an
   unsuccessful batch read has no valid rows to salvage), OR the batch state
