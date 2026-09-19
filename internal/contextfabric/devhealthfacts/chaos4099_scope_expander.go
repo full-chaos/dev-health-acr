@@ -1739,8 +1739,11 @@ func workItemScopeProjection(inner string, limit int) string {
   if(authorized = 1, attribution_source, '') AS attribution_source,
   authorized,
   repo_less,
-  if(authorized = 1, authorization_paths, CAST([], 'Array(String)')) AS authorization_paths,
-  if(authorized = 1, authorization_repositories, CAST([], 'Array(String)')) AS authorization_repositories,
+  -- The two authorization arrays need no mask: the library makes every
+  -- path expression imply the row's authorization, so a denied row's
+  -- arrays are empty by construction.
+  authorization_paths,
+  authorization_repositories,
   count() OVER () AS scoped_population,
   countIf(authorized = 1) OVER () AS authorized_population,
   -- THE REPO-LESS CANDIDATE POPULATION, authorized or not, over the WHOLE

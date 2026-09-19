@@ -39,6 +39,9 @@ import (
 //	Q members: q-link (repo-less + native link to G), q-none (repo-less),
 //	           q-heuristic (repo-less + heuristic link to G),
 //	           q-explicit (repo-less + explicit_text link to G),
+//	           q-heuristic-2 (repo-less + heuristic link to G; two heuristic
+//	           members against one explicit_text member keep the two
+//	           excluded counts distinct),
 //	           q-projectless (repo-less, no project_id, member by transition)
 const (
 	authzPathsOrg      = "authz-paths-org"
@@ -145,6 +148,7 @@ func newAuthzPathsFixture(t *testing.T) authzPathsFixture {
 	item("linear:q-none", zeroRepositoryID, authzPathsProjectQ)
 	item("linear:q-heuristic", zeroRepositoryID, authzPathsProjectQ)
 	item("linear:q-explicit", zeroRepositoryID, authzPathsProjectQ)
+	item("linear:q-heuristic-2", zeroRepositoryID, authzPathsProjectQ)
 	item("linear:q-projectless", zeroRepositoryID, "")
 	// q-projectless is a member of Q by a transition only; its own row names
 	// no project, so no project path can reach it.
@@ -158,6 +162,7 @@ func newAuthzPathsFixture(t *testing.T) authzPathsFixture {
 	link("linear:q-link", authzPathsRepoG, "native", 2)
 	link("linear:q-heuristic", authzPathsRepoG, "heuristic", 3)
 	link("linear:q-explicit", authzPathsRepoG, "explicit_text", 4)
+	link("linear:q-heuristic-2", authzPathsRepoG, "heuristic", 5)
 	return authzPathsFixture{query: query, direct: direct, at: at}
 }
 
@@ -196,12 +201,12 @@ func TestWorkItemAuthorizationPathsThroughEverySQLReader(t *testing.T) {
 		}{
 			{"P scoped", scoped, authzPathsProjectP, want{3, 1, []string{"linear:direct-granted", "linear:p-both", "linear:p-project"},
 				contextfabric.WorkItemMembershipPathCensus{DirectRepository: 1, ProjectOwnership: 2, PullRequestLink: 1, RepoLess: 2}}},
-			{"Q scoped", scoped, authzPathsProjectQ, want{1, 4, []string{"linear:q-link"},
-				contextfabric.WorkItemMembershipPathCensus{PullRequestLink: 1, RepoLess: 5, RepoLessDenied: 4, DeniedProjectLess: 1, ExcludedExplicitTextLink: 1, ExcludedHeuristicLink: 1}}},
+			{"Q scoped", scoped, authzPathsProjectQ, want{1, 5, []string{"linear:q-link"},
+				contextfabric.WorkItemMembershipPathCensus{PullRequestLink: 1, RepoLess: 6, RepoLessDenied: 5, DeniedProjectLess: 1, ExcludedExplicitTextLink: 1, ExcludedHeuristicLink: 2}}},
 			// The organization grant names no repository, so no link row is
 			// matched against a grant and nothing is disclosed as excluded.
-			{"Q organization-wide", authzPathsPrincipal(), authzPathsProjectQ, want{5, 0, []string{"linear:q-explicit", "linear:q-heuristic", "linear:q-link", "linear:q-none", "linear:q-projectless"},
-				contextfabric.WorkItemMembershipPathCensus{OrganizationGrant: 5, RepoLess: 5}}},
+			{"Q organization-wide", authzPathsPrincipal(), authzPathsProjectQ, want{6, 0, []string{"linear:q-explicit", "linear:q-heuristic", "linear:q-heuristic-2", "linear:q-link", "linear:q-none", "linear:q-projectless"},
+				contextfabric.WorkItemMembershipPathCensus{OrganizationGrant: 6, RepoLess: 6}}},
 		} {
 			buffer.Reset()
 			lease, result, err := reader.BeginWorkItemMembership(ctx, tc.principal, contextfabric.WorkItemMembershipRequest{
@@ -388,7 +393,7 @@ func TestWorkItemAuthorizationPathsThroughEverySQLReader(t *testing.T) {
 			directPop, authorized           int
 		}{
 			{"P", authzPathsProjectP, []string{"linear:direct-granted", "linear:p-both", "linear:p-project"}, 2, 1, 0, 0, 2, 1, 1, 3},
-			{"Q", authzPathsProjectQ, []string{"linear:q-link"}, 0, 1, 1, 1, 0, 1, 0, 1},
+			{"Q", authzPathsProjectQ, []string{"linear:q-link"}, 0, 1, 1, 2, 0, 1, 0, 1},
 		} {
 			origin := workItemMembershipTestAnchor(t, "linear", tc.project).Subject
 			candidates, counts, err := expander.projectWorkItems(ctx, scoped, authzPathsOrg, []contextfabric.SubjectRef{origin}, 50)
@@ -434,7 +439,7 @@ func TestWorkItemAuthorizationPathsThroughEverySQLReader(t *testing.T) {
 		// or a row whose paths name no derived path.
 		for _, candidate := range []workItemCandidate{
 			{repoID: authzPathsRepoN, workItemID: "linear:real-repo", authorizationSlug: authzPathsSlugN, authorizationPaths: []string{"project_ownership"}, authorizationRepositories: []string{authzPathsSlugG}},
-			{repoID: zeroRepositoryID, workItemID: "linear:no-path", authorizationSlug: noRepositorySentinelForScope, repoLess: true, authorizationRepositories: []string{authzPathsSlugG}},
+			{repoID: zeroRepositoryID, workItemID: "linear:no-derived-path", authorizationSlug: noRepositorySentinelForScope, repoLess: true, authorizationPaths: []string{"organization_grant", "direct_repo"}, authorizationRepositories: []string{authzPathsSlugG}},
 		} {
 			gated := workItemExpansionResult(scoped, []workItemCandidate{candidate}, contextfabric.FactScopeExpansionCounts{})
 			if len(gated.Targets) != 0 {
