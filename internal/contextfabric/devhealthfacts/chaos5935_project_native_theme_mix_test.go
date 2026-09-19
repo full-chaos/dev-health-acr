@@ -13,7 +13,7 @@ import (
 )
 
 func nativeMixRow(project string, effortUnits uint64) []any {
-	return []any{"linear:" + project, 6.0, 4.0, 0.0, 0.0, 0.0, 1.0, uint64(9), effortUnits, uint64(2)}
+	return []any{"linear:" + project, 6.0, 4.0, 0.0, 0.0, 0.0, 1.0, uint64(9), effortUnits, uint64(2), uint64(3)}
 }
 
 func readNativeMix(t *testing.T, client *fakeClient, projects ...string) (contextfabric.FactProviderResult, error) {
@@ -48,8 +48,8 @@ func TestProjectNativeThemeMixFromScannedRow(t *testing.T) {
 	if got := factNumber(t, fact, "theme_quality_bugfix"); got != 0.1 {
 		t.Errorf("theme_quality_bugfix = %v, want 0.1", got)
 	}
-	if got, want := [3]int64{factInt(t, fact, "work_unit_count"), factInt(t, fact, "effort_unit_count"), factInt(t, fact, "spanning_unit_count")}, [3]int64{9, 7, 2}; got != want {
-		t.Errorf("populations = %v, want %v (work, effort, spanning)", got, want)
+	if got, want := [4]int64{factInt(t, fact, "work_unit_count"), factInt(t, fact, "effort_unit_count"), factInt(t, fact, "spanning_unit_count"), factInt(t, fact, "native_ambiguous_unit_count")}, [4]int64{9, 7, 2, 3}; got != want {
+		t.Errorf("populations = %v, want %v (work, effort, spanning, ambiguous)", got, want)
 	}
 	if result.Truncated {
 		t.Errorf("Truncated = true for one row")
@@ -58,8 +58,8 @@ func TestProjectNativeThemeMixFromScannedRow(t *testing.T) {
 
 func TestProjectNativeThemeMixIgnoresARowWithNoEffortOrNoWeight(t *testing.T) {
 	t.Parallel()
-	noEffort := nativeMixRow("a", 0)
-	noWeight := []any{"linear:b", 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, uint64(3), uint64(3), uint64(0)}
+	noEffort := []any{"linear:a", 6.0, 4.0, 0.0, 0.0, 0.0, 1.0, uint64(9), uint64(0), uint64(2), uint64(0)}
+	noWeight := []any{"linear:b", 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, uint64(3), uint64(3), uint64(0), uint64(0)}
 	client := &fakeClient{tables: []fakeTable{{match: "unit_span AS", rows: [][]any{noEffort, noWeight}}}}
 	result, err := readNativeMix(t, client, "a", "b")
 	if err != nil {
@@ -128,5 +128,29 @@ func TestProjectNativeThemeMixReadFailureIsReported(t *testing.T) {
 	client := &fakeClient{tables: []fakeTable{{match: "unit_span AS", err: errors.New("boom")}}}
 	if _, err := readNativeMix(t, client, "a"); err == nil || !strings.Contains(err.Error(), "query project native theme mix") {
 		t.Fatalf("err = %v, want the native read named", err)
+	}
+}
+
+// A project with no native weight and excluded ambiguous evidence serves a
+// fact carrying only the excluded count; one with neither serves nothing.
+func TestProjectNativeThemeMixDisclosesAnExclusionWithoutAMix(t *testing.T) {
+	t.Parallel()
+	onlyAmbiguous := []any{"linear:a", 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, uint64(0), uint64(0), uint64(0), uint64(2)}
+	client := &fakeClient{tables: []fakeTable{{match: "unit_span AS", rows: [][]any{onlyAmbiguous}}}}
+	result, err := readNativeMix(t, client, "a")
+	if err != nil {
+		t.Fatalf("ReadFacts: %v", err)
+	}
+	if len(result.Facts) != 1 {
+		t.Fatalf("facts = %#v, want one fact carrying the excluded count", result.Facts)
+	}
+	fact := result.Facts[0]
+	if got := factInt(t, fact, "native_ambiguous_unit_count"); got != 2 {
+		t.Errorf("native_ambiguous_unit_count = %d, want 2", got)
+	}
+	for _, field := range []string{"investment_mix_source", "theme_feature_delivery"} {
+		if _, has := fact.Fields[field]; has {
+			t.Errorf("field %q present on a fact with no native mix", field)
+		}
 	}
 }

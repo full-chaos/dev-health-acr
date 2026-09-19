@@ -129,7 +129,11 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		// investment_metrics_daily path. It shares projectSubjects with
 		// readProjectInvestment above, so only that call's own rejectedCount
 		// is folded in -- counting it twice here would double it.
-		themeRowCount, themeScanErr := p.readProjectThemeMix(ctx, orgID, projectSubjects, &facts, timeBound)
+		// unusableRollup carries the unit population of a roll-up that had
+		// units but no positive effort, so a native mix that replaces it can
+		// still disclose that population.
+		unusableRollup := map[string]int64{}
+		themeRowCount, themeScanErr := p.readProjectThemeMix(ctx, orgID, projectSubjects, &facts, timeBound, unusableRollup)
 		if themeScanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query project theme mix", themeScanErr)
 		}
@@ -138,7 +142,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		// project that has any, and leaves the roll-up in place for one that
 		// has none. It reads after the roll-up so it can merge onto the same
 		// fact and move the roll-up's population beside it.
-		nativeRowCount, nativeScanErr := p.readProjectNativeThemeMix(ctx, orgID, projectSubjects, &facts, timeBound)
+		nativeRowCount, nativeScanErr := p.readProjectNativeThemeMix(ctx, orgID, projectSubjects, &facts, timeBound, unusableRollup)
 		if nativeScanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query project native theme mix", nativeScanErr)
 		}
@@ -621,7 +625,7 @@ func themeInvestmentRangePredicate(b factTimeBound, fromColumn, toColumn string)
 // sitting exactly at the served cap is distinguishable from one that
 // overflowed it -- the same discipline workItemProjectCompletionStatement
 // documents for its own project-grain aggregate.
-func (p *InvestmentProvider) readProjectThemeMix(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rowCount int, err error) {
+func (p *InvestmentProvider) readProjectThemeMix(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, unusableRollup map[string]int64) (rowCount int, err error) {
 	ids, bySubject, _ := v2Index(subjects, identity.KindProject)
 	if len(ids) == 0 {
 		return 0, nil
@@ -821,6 +825,7 @@ ORDER BY project_key`)
 		}
 		currentTotal := featureDelivery + operational + maintenance + quality + risk
 		if currentTotal <= 0 {
+			unusableRollup[projectKey] = int64(workUnits)
 			return nil
 		}
 		themeValues := map[string]float64{
@@ -932,8 +937,13 @@ const projectNativeMixBasis = "project_work_items_issue_evidence_work_unit_inves
 // populations stay visible.
 //
 // A work unit that touches several projects counts in full for each;
-// spanning_unit_count discloses how many of the project's units do.
-func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rowCount int, err error) {
+// spanning_unit_count discloses how many of the project's units do. A work
+// item id that project membership places under more than one repository
+// attributes to no project; native_ambiguous_unit_count discloses the work
+// units excluded that way, on the mix fact when there is a native mix and
+// on the project's fact (the roll-up's, or a fact carrying only that count)
+// when there is not.
+func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, unusableRollup map[string]int64) (rowCount int, err error) {
 	ids, bySubject, _ := v2Index(subjects, identity.KindProject)
 	if len(ids) == 0 {
 		return 0, nil
@@ -954,6 +964,14 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 		}
 		currentTotal := row.FeatureDelivery + row.Operational + row.Maintenance + row.Quality + row.Risk
 		if row.EffortUnits == 0 || currentTotal <= 0 {
+			// No native mix. A project whose evidence was excluded as
+			// ambiguous still says so, so an absent native mix is
+			// distinguishable from a project with no work.
+			if row.AmbiguousUnits > 0 {
+				mergeProjectInvestmentFact(facts, subject, row.ProjectSubjectKey, map[string]contextfabric.FactValue{
+					"native_ambiguous_unit_count": contextfabric.IntegerFactValue(int64(row.AmbiguousUnits)),
+				}, nil)
+			}
 			continue
 		}
 		themeValues := map[string]float64{
@@ -973,13 +991,19 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 		fields["work_unit_count"] = contextfabric.IntegerFactValue(int64(row.WorkUnits))
 		fields["effort_unit_count"] = contextfabric.IntegerFactValue(int64(row.EffortUnits))
 		fields["spanning_unit_count"] = contextfabric.IntegerFactValue(int64(row.SpanningUnits))
+		fields["native_ambiguous_unit_count"] = contextfabric.IntegerFactValue(int64(row.AmbiguousUnits))
 		if timeBound.active {
 			fields["population_window"] = contextfabric.StringFactValue("requested_range")
 		} else {
 			fields["population_window"] = contextfabric.StringFactValue("current")
 		}
 		// The roll-up's unit population moves aside rather than being
-		// overwritten by a count of a different population.
+		// overwritten by a count of a different population. A roll-up with no
+		// positive effort served no fact, so its population comes from the
+		// side channel instead.
+		if count, unusable := unusableRollup[row.ProjectSubjectKey]; unusable {
+			fields["owning_team_rollup_work_unit_count"] = contextfabric.IntegerFactValue(count)
+		}
 		targetKey := contextfabric.FactSubjectKey(subject)
 		for j := range *facts {
 			existing := &(*facts)[j]

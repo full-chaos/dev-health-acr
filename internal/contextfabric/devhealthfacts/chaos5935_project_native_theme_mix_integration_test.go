@@ -9,6 +9,8 @@ package devhealthfacts_test
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,8 +30,13 @@ func factString(t *testing.T, fact contextfabric.CanonicalFact, field string) st
 }
 
 func TestQueryVersionMovedPastTheUnlabelledProjectMix(t *testing.T) {
-	if devhealthfacts.QueryVersion == "devhealthfacts.clickhouse.v12" {
-		t.Fatalf("QueryVersion = %q: a candidate saved before project theme facts named their source must not be served as though it did", devhealthfacts.QueryVersion)
+	const prefix = "devhealthfacts.clickhouse.v"
+	version, ok := strings.CutPrefix(devhealthfacts.QueryVersion, prefix)
+	if !ok {
+		t.Fatalf("QueryVersion = %q, want the %q<n> shape", devhealthfacts.QueryVersion, prefix)
+	}
+	if n, err := strconv.Atoi(version); err != nil || n < 13 {
+		t.Fatalf("QueryVersion = %q: a candidate saved before project theme facts named their source (v12 and earlier) must not be served as though it did", devhealthfacts.QueryVersion)
 	}
 }
 
@@ -73,6 +80,10 @@ func TestProjectNativeThemeMixAgainstRealClickHouse(t *testing.T) {
 	seedItem := func(orgID, itemID, projectID string) {
 		exec("work item "+itemID, `INSERT INTO work_items (repo_id, work_item_id, provider, title, type, status, project_key, project_id, native_team_key, project_name, created_at, updated_at, completed_at, parent_id, url, last_synced, org_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			"00000000-0000-0000-0000-000000000000", itemID, "linear", "title", "issue", "open", "", projectID, "", "", at, at, nil, "", "", at, orgID)
+	}
+	seedItemInRepo := func(orgID, itemID, projectID, repoID string) {
+		exec("work item "+itemID+" in "+repoID, `INSERT INTO work_items (repo_id, work_item_id, provider, title, type, status, project_key, project_id, native_team_key, project_name, created_at, updated_at, completed_at, parent_id, url, last_synced, org_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			repoID, itemID, "linear", "title", "issue", "open", "", projectID, "", "", at, at, nil, "", "", at, orgID)
 	}
 	seedRepoUnit := func(orgID, id, repoLabel string, effort float64, themes map[string]float64) {
 		exec("repo unit "+id, `INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
@@ -194,6 +205,26 @@ func TestProjectNativeThemeMixAgainstRealClickHouse(t *testing.T) {
 		absent(t, fact, "effort_unit_count")
 	})
 
+	t.Run("a_zero_effort_rollup_still_discloses_its_population_beside_the_native_mix", func(t *testing.T) {
+		const org = "org-zero-rollup"
+		seedProject("proj-zr", org)
+		seedOwnedRepo(org, "proj-zr", "team-zr", "repo-zr")
+		seedRepoUnit(org, "wu-zr-rollup", "repo-zr", 0, map[string]float64{"risk": 1.0})
+		seedItem(org, "linear:ZR-1", "proj-zr")
+		seedIssueUnit(org, "wu-zr-native", 10, map[string]float64{"quality": 1.0}, "linear:ZR-1")
+
+		fact := read(org, "proj-zr")["proj-zr"]
+		if got := factString(t, fact, "investment_mix_source"); got != "project_native" {
+			t.Fatalf("investment_mix_source = %q, want project_native", got)
+		}
+		if got := factInt(t, fact, "owning_team_rollup_work_unit_count"); got != 1 {
+			t.Errorf("owning_team_rollup_work_unit_count = %d, want the displaced zero-effort roll-up's 1 unit", got)
+		}
+		if got := factInt(t, fact, "work_unit_count"); got != 1 {
+			t.Errorf("work_unit_count = %d, want the native population 1", got)
+		}
+	})
+
 	t.Run("a_project_with_only_native_work_serves_a_standalone_native_fact", func(t *testing.T) {
 		const org = "org-native-only"
 		seedProject("proj-o", org)
@@ -288,6 +319,26 @@ func TestProjectNativeThemeMixAgainstRealClickHouse(t *testing.T) {
 		}
 		if got := factString(t, fact, "population_window"); got != "requested_range" {
 			t.Errorf("population_window = %q, want requested_range", got)
+		}
+	})
+
+	t.Run("a_work_item_id_under_two_repositories_attributes_to_no_project_and_is_disclosed", func(t *testing.T) {
+		const org = "org-ambiguous-item"
+		seedProject("proj-amb-a", org)
+		seedProject("proj-amb-b", org)
+		seedItemInRepo(org, "linear:AMB-1", "proj-amb-a", "11111111-1111-4111-8111-000000000001")
+		seedItemInRepo(org, "linear:AMB-1", "proj-amb-b", "11111111-1111-4111-8111-000000000002")
+		seedIssueUnit(org, "wu-amb", 10, map[string]float64{"risk": 1.0}, "linear:AMB-1")
+
+		facts := read(org, "proj-amb-a", "proj-amb-b")
+		if len(facts) != 2 {
+			t.Fatalf("facts = %#v, want one disclosure-only fact per candidate project", facts)
+		}
+		for project, fact := range facts {
+			if got := factInt(t, fact, "native_ambiguous_unit_count"); got != 1 {
+				t.Errorf("%s native_ambiguous_unit_count = %d, want 1", project, got)
+			}
+			absent(t, fact, "theme_risk", "investment_mix_source", "work_unit_count")
 		}
 	})
 
