@@ -214,6 +214,64 @@ func TestSubjectIdentityUnconfirmedValidatorHoldsBasisAndSentenceTogether(t *tes
 	}
 }
 
+// TestTheRefusalSentenceMakesNoClaimAboutTheFollowUpText serves the
+// non-clarifying refusal over every way the guard can be reached -- the
+// follow-up's own words naming the new subject, an "it"-style follow-up whose
+// resolution still lands elsewhere, a caller hint, and a remembered subject
+// that cannot be re-read -- and holds the ONE fixed sentence to what the
+// guard actually decided: the identity moved. The guard is origin-blind, so a
+// sentence that says anything about whether the follow-up's own text named a
+// subject is false for part of that domain.
+func TestTheRefusalSentenceMakesNoClaimAboutTheFollowUpText(t *testing.T) {
+	t.Parallel()
+	forbidden := []string{"own text", "named no subject", "named a subject", "names no subject", "names a subject"}
+	for _, fragment := range forbidden {
+		if strings.Contains(subjectIdentityUnconfirmedTerminalLimitation, fragment) {
+			t.Fatalf("the fixed sentence claims something about the follow-up's text (%q): %q", fragment, subjectIdentityUnconfirmedTerminalLimitation)
+		}
+	}
+	cases := []struct {
+		name           string
+		question       string
+		hint           bool
+		rememberedGone bool
+	}{
+		{name: "explicit_name", question: "How is " + substitutionRepoTwo.CanonicalID + " doing?"},
+		{name: "it_style", question: "And how is it doing over the same period?"},
+		{name: "caller_hint", question: "And how does that compare?", hint: true},
+		{name: "remembered_unreadable", question: "How is " + substitutionRepoTwo.CanonicalID + " doing?", rememberedGone: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := newNeedTurnHarness(t, nil)
+			one := h.turn(needTurnRequest("request_refusal_text_"+tc.name+"_one", true), substitutionResponse(substitutionRepoOne, "receipt_refusal_text_"+tc.name+"_one"))
+			h.refuseCandidates = tc.rememberedGone
+			two := continuingNeedTurn(needTurnRequest("request_refusal_text_"+tc.name+"_two", true), one.result.ResultID)
+			two.Question = tc.question
+			two.Options.AllowClarification = false
+			if tc.hint {
+				two.RequestedScope.SubjectHints = []SubjectHint{{
+					Kind: substitutionRepoTwo.Kind, ID: substitutionRepoTwo.CanonicalID,
+					Label: substitutionRepoTwo.Label, Source: "caller",
+				}}
+			}
+			out := h.turn(two, substitutionResponse(substitutionRepoTwo, "receipt_refusal_text_"+tc.name+"_two"))
+			if out.result.Status != InvestigationNoMatch || out.result.RefusalBasis != contractsv1.ContextFabricRefusalBasisSubjectIdentityUnconfirmed {
+				t.Fatalf("status=%q basis=%q, want the named refusal", out.result.Status, out.result.RefusalBasis)
+			}
+			assertLimitationPresent(t, out.result.Limitations, contractsv1.ContextFabricSubjectIdentityUnconfirmedLimitation)
+			for _, limitation := range out.result.Limitations {
+				for _, fragment := range forbidden {
+					if strings.Contains(limitation, fragment) {
+						t.Errorf("served limitation claims something about the follow-up's text (%q): %q", fragment, limitation)
+					}
+				}
+			}
+		})
+	}
+}
+
 // assertLimitationPresent checks a fixed disclosure sentence is
 // present, exact-match, among a served result's limitations.
 func assertLimitationPresent(t *testing.T, limitations []string, want string) {

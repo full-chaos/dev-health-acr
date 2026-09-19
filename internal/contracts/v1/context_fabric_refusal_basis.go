@@ -132,12 +132,14 @@ const (
 	// sentence (ContextFabricOrganizationScopeUnsupportedLimitation).
 	ContextFabricRefusalBasisOrganizationScopeUnsupported ContextFabricRefusalBasis = "organization_scope_unsupported"
 	// ContextFabricRefusalBasisSubjectIdentityUnconfirmed (CHAOS-5926): a
-	// follow-up naming a parent result committed no subject of its own AND
-	// what it DID commit is not the identity the parent asserted -- the
-	// subject-substitution guard (chaos5917_subject_substitution.go) fired,
-	// and this caller declined (or cannot accept) a clarification, so the
-	// turn ends with the reason stated rather than an answer about a
-	// subject the caller never asked for.
+	// follow-up naming a parent result resolved to an identity other than
+	// the one the parent asserted, whichever way that identity reached
+	// resolution (the question's own words, a caller hint, a receipt or the
+	// engine's carried subject) -- the subject-substitution guard
+	// (chaos5917_subject_substitution.go) fired, and this caller declined
+	// (or cannot accept) a clarification, so the turn ends with the reason
+	// stated rather than an answer about a subject the caller never asked
+	// for.
 	//
 	// FIRES ONLY ON THE NON-CLARIFYING BRANCH. A caller that can clarify is
 	// never refused this way -- it is offered the remembered subject first,

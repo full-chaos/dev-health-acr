@@ -549,7 +549,7 @@ const ContextFabricOrganizationScopeUnsupportedLimitation = "This question was r
 // ContextFabricContinuationContextUnverifiableLimitation makes and for the
 // same reason: a reader joins the sentence to the machine field and to the
 // log line through the one value all three share.
-const ContextFabricSubjectIdentityUnconfirmedLimitation = "This follow-up's own text named no subject, and the subject carried from the earlier answer no longer matches what it implies, so the server did not guess which one was meant and no canonical facts were read. Name the subject directly, or answer the earlier offer naming it, to continue. The server refused this follow-up on the basis subject_identity_unconfirmed."
+const ContextFabricSubjectIdentityUnconfirmedLimitation = "This follow-up appears to be about a different subject than the earlier answer it continues, so the server did not guess which one was meant and no canonical facts were read. Name the subject directly, or answer the earlier offer naming it, to continue. The server refused this follow-up on the basis subject_identity_unconfirmed."
 
 // ContextFabricServiceAuthoredLimitations returns every disclosure this
 // service composes for itself, in no significant order.
