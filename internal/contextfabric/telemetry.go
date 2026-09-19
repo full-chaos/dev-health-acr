@@ -913,6 +913,8 @@ func (t SlogEngineTelemetry) RecordPeriodDeltaComposition(ctx context.Context, p
 		"grain", SanitizeLogAttr(string(event.Grain)),
 		"composed_kinds", SanitizeLogStrings(composedKinds),
 		"prior_read_issued", event.PriorReadIssued,
+		"failure_reason", SanitizeLogAttr(string(event.FailureReason)),
+		"unserved_count", event.UnservedCount,
 		"transition_counts", transitionCounts,
 	}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric period delta composition", args...)

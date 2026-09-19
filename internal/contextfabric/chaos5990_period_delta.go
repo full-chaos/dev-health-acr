@@ -41,17 +41,22 @@ package contextfabric
 // This file computes the delta from bands already on the primary read's
 // CanonicalFacts (the current point) plus one additional as-of read issued
 // through the SAME FactCapabilityRegistry.ReadFacts port the primary read
-// used (the prior point) -- see applyPeriodDelta below, called from
-// engine.go. It adds no new ClickHouse SQL and no new FactProvider: both
-// reads run the existing, unmodified HealthProvider.ReadFacts, at two
-// different TimeContext values. That is what keeps this a "two reads, one
-// comparison" change rather than a new fact-provider surface.
+// used (the prior point), over the fact kinds the status composition maps
+// the subject kinds to -- see applyPeriodDelta below, called from
+// engine.go. It adds no new ClickHouse SQL and no new FactProvider: the
+// reads run the existing providers at two different TimeContext values.
+// The band compared is the health severity band; the other composed kinds
+// are read at the prior point because the composition names them, not
+// because they carry a band.
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -105,6 +110,49 @@ const (
 	PeriodDeltaTransitionUnknownCurrent PeriodDeltaTransition = "unknown_current"
 	// PeriodDeltaTransitionUnknownBoth: neither point carries a real band.
 	PeriodDeltaTransitionUnknownBoth PeriodDeltaTransition = "unknown_both"
+	// PeriodDeltaTransitionPriorReadFailed: the second as-of read did not
+	// complete, so no prior band exists to compare against. Distinct from
+	// unknown_prior (the read ran and held no real band): here nothing was
+	// learned about the prior point at all. The reason rides beside it in
+	// PeriodDeltaFailureReason.
+	PeriodDeltaTransitionPriorReadFailed PeriodDeltaTransition = "prior_read_failed"
+	// PeriodDeltaTransitionAnchorUnresolved: the request carries no as-of
+	// instant this comparison can anchor to, so no second read was issued.
+	PeriodDeltaTransitionAnchorUnresolved PeriodDeltaTransition = "anchor_unresolved"
+)
+
+// PeriodDeltaFailureReason is the closed reason a comparison could not be
+// made. Empty when a comparison ran. Never text derived from an error
+// message: only the class of the failure.
+type PeriodDeltaFailureReason string
+
+const (
+	PeriodDeltaFailureNone             PeriodDeltaFailureReason = ""
+	PeriodDeltaFailureAnchorUnresolved PeriodDeltaFailureReason = "anchor_unresolved"
+	PeriodDeltaFailureDeadlineExceeded PeriodDeltaFailureReason = "deadline_exceeded"
+	PeriodDeltaFailureCanceled         PeriodDeltaFailureReason = "canceled"
+	PeriodDeltaFailureReadFailed       PeriodDeltaFailureReason = "read_failed"
+)
+
+// periodDeltaFailureReasonOf classifies a prior-read error into its closed
+// class.
+func periodDeltaFailureReasonOf(err error) PeriodDeltaFailureReason {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return PeriodDeltaFailureDeadlineExceeded
+	case errors.Is(err, context.Canceled):
+		return PeriodDeltaFailureCanceled
+	default:
+		return PeriodDeltaFailureReadFailed
+	}
+}
+
+// PeriodDeltaProducer and PeriodDeltaVersion name the source of a fact this
+// file mints for a subject that had no current fact of any kind to carry
+// its outcome.
+const (
+	PeriodDeltaProducer = "contextfabric.period_delta"
+	PeriodDeltaVersion  = "period-delta.v1"
 )
 
 // periodDeltaTransitions is the closed vocabulary in evaluation order, for
@@ -117,6 +165,8 @@ var periodDeltaTransitions = [...]PeriodDeltaTransition{
 	PeriodDeltaTransitionUnknownPrior,
 	PeriodDeltaTransitionUnknownCurrent,
 	PeriodDeltaTransitionUnknownBoth,
+	PeriodDeltaTransitionPriorReadFailed,
+	PeriodDeltaTransitionAnchorUnresolved,
 }
 
 // PeriodDeltaTransitionVocabulary returns the closed vocabulary.
@@ -186,9 +236,9 @@ type PeriodDeltaCompositionEvent struct {
 	// subject served via D1's disclosed rollup (never a silent
 	// substitution to SubjectTeam, because no team subject is minted).
 	Grain PeriodDeltaGrain
-	// ComposedKinds is the CHAOS-4347 composed fact-kind set this
-	// comparison was read over, in the same deterministic order
-	// statusCategoryFactKindComposition declares.
+	// ComposedKinds is the fact-kind set the prior read REQUESTED for this
+	// subject kind: statusCategoryFactKindComposition[SubjectKind], the same
+	// set the primary read composed, in its declared order.
 	ComposedKinds []FactKind
 	// PriorReadIssued is whether a genuine second, distinct as-of read ran
 	// (true) or the comparison could not be attempted at all for this
@@ -197,6 +247,14 @@ type PeriodDeltaCompositionEvent struct {
 	// TransitionCounts below already reports that distribution, including
 	// unknown_both.
 	PriorReadIssued bool
+	// FailureReason is the closed class of why no comparison ran; empty when
+	// one did.
+	FailureReason PeriodDeltaFailureReason
+	// UnservedCount is how many subjects had an outcome that no served fact
+	// could carry (no current fact of any kind and no evidence ref
+	// derivable to mint one). Their outcome is in TransitionCounts and
+	// nowhere else -- disclosed, never dropped.
+	UnservedCount int
 	// TransitionCounts tallies every subject this decision covered by its
 	// resulting PeriodDeltaTransition, INCLUDING ZERO MEMBERS -- the same
 	// "a distribution that omits its empty members cannot be told apart
@@ -275,117 +333,229 @@ func periodDeltaFieldAsOf(fact CanonicalFact) string {
 // periodDeltaCurrentAsOf resolves the CURRENT point's own as-of instant
 // from the investigation's own clamped, resolved TimeContext -- the
 // request's own as-of, never a second, independently-taken instant. A
-// current-axis request's as-of is wallClock (the engine's own injected
-// clock); a historical request's as-of/end is used verbatim, so a
-// period-delta computed for a historical question compares two points BOTH
-// in the past, exactly as far apart as PeriodDeltaWindowDays, rather than
-// silently pulling one point up to the present instant.
-func periodDeltaCurrentAsOf(tc TimeContext, wallClock time.Time) time.Time {
+// current-axis request states no instant, so its as-of is wallClock (the
+// engine's own injected clock); a valid-time or observed-time request's
+// as-of, and a range's end, is used verbatim, so a period-delta computed
+// for a historical question compares two points BOTH in the past, exactly
+// as far apart as PeriodDeltaWindowDays. A non-current axis that carries
+// no instant is NOT defaulted to a clock: ok is false and the caller
+// discloses anchor_unresolved.
+func periodDeltaCurrentAsOf(tc TimeContext, wallClock time.Time) (asOf time.Time, ok bool) {
 	switch tc.Axis {
-	case TemporalValidTime:
+	case TemporalCurrent:
+		return wallClock, true
+	case TemporalValidTime, TemporalObservedTime:
 		if tc.AsOf != nil {
-			return *tc.AsOf
+			return *tc.AsOf, true
 		}
 	case TemporalRange:
 		if tc.End != nil {
-			return *tc.End
+			return *tc.End, true
 		}
 	}
-	return wallClock
+	return time.Time{}, false
 }
 
-// applyPeriodDelta enriches the CHAOS-4347 composed team/
-// project FactHealth facts already on currentFacts with a genuine two-as-of
-// period comparison, when the frame demands ObligationPeriodDelta.
+// periodDeltaSubjectEvidenceRef mints the evidence ref for a subject the
+// same way the health producer does, and reports false when the identity
+// does not decode -- a ref is never guessed.
+func periodDeltaSubjectEvidenceRef(subject SubjectRef) (string, bool) {
+	switch subject.Kind {
+	case SubjectTeam:
+		raw, ok := TeamRawKey(subject.CanonicalID)
+		if !ok {
+			return "", false
+		}
+		return contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, raw), true
+	case SubjectProject:
+		segments, ok := identity.Segments(identity.KindProject, subject.CanonicalID)
+		if !ok || len(segments) < 2 || segments[0] == "" || segments[len(segments)-1] == "" {
+			return "", false
+		}
+		return contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityProject, segments[0]+":"+segments[len(segments)-1]), true
+	}
+	return "", false
+}
+
+// periodDeltaOutcome is one subject's typed result.
+type periodDeltaOutcome struct {
+	transition   PeriodDeltaTransition
+	priorBand    string
+	priorAsOfDay string
+	reason       PeriodDeltaFailureReason
+}
+
+// writeTo adds the outcome's served fields to fact. Additive only: no field
+// the producer already set is touched.
+func (o periodDeltaOutcome) writeTo(fact *CanonicalFact) {
+	fact.Fields["period_delta_transition"] = StringFactValue(string(o.transition))
+	fact.Fields["period_delta_window_days"] = IntegerFactValue(PeriodDeltaWindowDays)
+	fact.Fields["period_delta_prior_band"] = StringFactValue(o.priorBand)
+	if o.priorAsOfDay != "" {
+		fact.Fields["period_delta_prior_as_of"] = StringFactValue(o.priorAsOfDay)
+	}
+	if o.reason != PeriodDeltaFailureNone {
+		fact.Fields["period_delta_unavailable_reason"] = StringFactValue(string(o.reason))
+	}
+}
+
+// periodDeltaRequirements derives the prior read's requirements from the
+// status composition itself: every fact kind the composition maps any
+// eligible subject kind to, once, in declared order. Nothing here names a
+// kind.
+func periodDeltaRequirements(kinds []SubjectKind) []FactRequirement {
+	seen := make(map[FactKind]bool)
+	var requirements []FactRequirement
+	for _, kind := range kinds {
+		for _, factKind := range statusCategoryFactKindComposition[kind] {
+			if seen[factKind] {
+				continue
+			}
+			seen[factKind] = true
+			requirements = append(requirements, FactRequirement{Kind: factKind})
+		}
+	}
+	return requirements
+}
+
+// applyPeriodDeltaForTurn is the one entry the investigation calls: it
+// resolves the turn's own as-of from its resolved TimeContext (the engine's
+// injected clock only for a current-axis request) and hands the frame, the
+// subjects and the just-read facts to applyPeriodDelta. A turn with no
+// validated frame derives no obligations, so it changes nothing.
+func (e *Engine) applyPeriodDeltaForTurn(ctx context.Context, principal storage.Principal, frame *QuestionFrame, timeContext TimeContext, subjects []SubjectRef, facts []CanonicalFact) []CanonicalFact {
+	if frame == nil {
+		return facts
+	}
+	asOf, anchored := periodDeltaCurrentAsOf(timeContext, e.now())
+	return e.applyPeriodDelta(ctx, principal, *frame, subjects, facts, asOf, anchored)
+}
+
+// applyPeriodDelta compares the current and prior health bands of every
+// eligible team/project subject when the frame demands
+// ObligationPeriodDelta, and returns the (possibly extended) fact list.
 //
-// It mutates currentFacts' own Fields maps IN PLACE, before cohort
-// grouping and synthesis run (engine.go calls this immediately after the
-// primary fact read) -- so the added fields flow through the SAME
-// CanonicalFact objects every existing downstream consumer already reads,
-// with no new result field and no schema migration.
-//
-// ADDITIVE AND BEST-EFFORT: a second-read failure leaves currentFacts
-// untouched and returns silently. period_delta had NO working comparison
-// before this ticket (status_shadow.go's own entry says so); a transient
-// failure enriching it must never newly fail an otherwise-servable turn
-// that this obligation already degraded on.
-func (e *Engine) applyPeriodDelta(ctx context.Context, principal storage.Principal, frame QuestionFrame, subjects []SubjectRef, currentFacts []CanonicalFact, currentAsOf time.Time) {
+// EVERY outcome is disclosed twice: as typed served fields on the subject's
+// fact, and on one Info event per subject kind. That includes the outcomes
+// with no band to report -- an unresolvable anchor, a failed prior read, a
+// subject with no current health fact. A subject's served carrier is its
+// health fact; failing that any current fact of the subject; failing that a
+// minimal fact minted for it (source and version named, state no_data).
+// Only when no evidence ref can be derived for a subject is its outcome
+// left off the served facts, and that count rides the event as
+// UnservedCount. Served fields of the producer are never replaced.
+func (e *Engine) applyPeriodDelta(ctx context.Context, principal storage.Principal, frame QuestionFrame, subjects []SubjectRef, currentFacts []CanonicalFact, currentAsOf time.Time, anchored bool) []CanonicalFact {
 	if !frame.HasObligation(ObligationPeriodDelta) {
-		return
+		return currentFacts
 	}
 	eligible := periodDeltaEligibleSubjects(subjects)
 	if len(eligible) == 0 {
-		return
+		return currentFacts
 	}
-	// The prior point is exactly PeriodDeltaWindowDays before the CURRENT
-	// point's own as-of instant -- never wall-clock time and never a
-	// calendar month.
-	priorAsOf := currentAsOf.Add(-PeriodDeltaWindowDays * 24 * time.Hour)
-	priorBundle, err := e.facts.ReadFacts(ctx, principal, CanonicalFactRequest{
-		Question: InterpretedQuestion{
-			TimeContext: TimeContext{Axis: TemporalValidTime, AsOf: &priorAsOf},
-		},
-		Subjects:     eligible,
-		Requirements: []FactRequirement{{Kind: FactHealth, Subjects: eligible}},
-	})
-	if err != nil {
-		return
-	}
-	priorByCanonicalID := make(map[string]CanonicalFact, len(priorBundle.Facts))
-	for _, fact := range priorBundle.Facts {
-		if fact.Kind != FactHealth {
-			continue
+	touchedKinds := periodDeltaTouchedSubjectKinds(eligible)
+
+	failure := PeriodDeltaFailureNone
+	priorIssued := false
+	priorByCanonicalID := map[string]CanonicalFact{}
+	if !anchored {
+		failure = PeriodDeltaFailureAnchorUnresolved
+	} else {
+		// The prior point is exactly PeriodDeltaWindowDays before the
+		// CURRENT point's own as-of instant.
+		priorAsOf := currentAsOf.Add(-PeriodDeltaWindowDays * 24 * time.Hour)
+		priorBundle, err := e.facts.ReadFacts(ctx, principal, CanonicalFactRequest{
+			Question: InterpretedQuestion{
+				TimeContext: TimeContext{Axis: TemporalValidTime, AsOf: &priorAsOf},
+			},
+			Subjects:     eligible,
+			Requirements: periodDeltaRequirements(touchedKinds),
+		})
+		if err != nil {
+			failure = periodDeltaFailureReasonOf(err)
+		} else {
+			priorIssued = true
+			for _, fact := range priorBundle.Facts {
+				if fact.Kind == FactHealth {
+					priorByCanonicalID[fact.Subject.CanonicalID] = fact
+				}
+			}
 		}
-		priorByCanonicalID[fact.Subject.CanonicalID] = fact
 	}
-	countsByKind := map[SubjectKind]map[PeriodDeltaTransition]int{
-		SubjectTeam:    newPeriodDeltaTransitionCounts(),
-		SubjectProject: newPeriodDeltaTransitionCounts(),
-	}
-	touchedKind := make(map[SubjectKind]bool, 2)
+
+	healthByID := make(map[string]*CanonicalFact, len(currentFacts))
+	anyByID := make(map[string]*CanonicalFact, len(currentFacts))
 	for i := range currentFacts {
 		fact := &currentFacts[i]
-		if fact.Kind != FactHealth {
-			continue
+		id := fact.Subject.CanonicalID
+		if _, ok := anyByID[id]; !ok {
+			anyByID[id] = fact
 		}
-		if fact.Subject.Kind != SubjectTeam && fact.Subject.Kind != SubjectProject {
-			continue
+		if fact.Kind == FactHealth {
+			healthByID[id] = fact
 		}
-		priorFact, hasPrior := priorByCanonicalID[fact.Subject.CanonicalID]
-		currentBand := periodDeltaFieldSeverity(*fact)
-		priorBand := PeriodDeltaBandUnknown
-		priorAsOfDay := ""
-		if hasPrior {
-			priorBand = periodDeltaFieldSeverity(priorFact)
-			priorAsOfDay = periodDeltaFieldAsOf(priorFact)
-		}
-		transition := classifyPeriodDeltaTransition(priorBand, currentBand)
-		// Additive fields only -- every field readScope/readProjectHealth
-		// already set on this fact (severity, severity_as_of,
-		// severity_basis, severity_unavailable_reason, risk_rules,
-		// risk_breakdown, ...) is untouched.
-		fact.Fields["period_delta_transition"] = StringFactValue(string(transition))
-		fact.Fields["period_delta_window_days"] = IntegerFactValue(PeriodDeltaWindowDays)
-		fact.Fields["period_delta_prior_band"] = StringFactValue(priorBand)
-		if priorAsOfDay != "" {
-			fact.Fields["period_delta_prior_as_of"] = StringFactValue(priorAsOfDay)
-		}
-		touchedKind[fact.Subject.Kind] = true
-		countsByKind[fact.Subject.Kind][transition]++
 	}
-	for _, kind := range periodDeltaEligibleSubjectKinds() {
-		if !touchedKind[kind] {
+
+	counts := map[SubjectKind]map[PeriodDeltaTransition]int{}
+	unserved := map[SubjectKind]int{}
+	for _, kind := range touchedKinds {
+		counts[kind] = newPeriodDeltaTransitionCounts()
+	}
+	var minted []CanonicalFact
+	for _, subject := range eligible {
+		var outcome periodDeltaOutcome
+		switch failure {
+		case PeriodDeltaFailureNone:
+			priorBand, priorDay := PeriodDeltaBandUnknown, ""
+			if priorFact, ok := priorByCanonicalID[subject.CanonicalID]; ok {
+				priorBand, priorDay = periodDeltaFieldSeverity(priorFact), periodDeltaFieldAsOf(priorFact)
+			}
+			currentBand := PeriodDeltaBandUnknown
+			if healthFact, ok := healthByID[subject.CanonicalID]; ok {
+				currentBand = periodDeltaFieldSeverity(*healthFact)
+			}
+			outcome = periodDeltaOutcome{transition: classifyPeriodDeltaTransition(priorBand, currentBand), priorBand: priorBand, priorAsOfDay: priorDay}
+		case PeriodDeltaFailureAnchorUnresolved:
+			outcome = periodDeltaOutcome{transition: PeriodDeltaTransitionAnchorUnresolved, priorBand: PeriodDeltaBandUnknown, reason: failure}
+		default:
+			outcome = periodDeltaOutcome{transition: PeriodDeltaTransitionPriorReadFailed, priorBand: PeriodDeltaBandUnknown, reason: failure}
+		}
+		counts[subject.Kind][outcome.transition]++
+
+		carrier := healthByID[subject.CanonicalID]
+		if carrier == nil {
+			carrier = anyByID[subject.CanonicalID]
+		}
+		if carrier != nil {
+			outcome.writeTo(carrier)
 			continue
 		}
+		ref, ok := periodDeltaSubjectEvidenceRef(subject)
+		if !ok {
+			unserved[subject.Kind]++
+			continue
+		}
+		fact := CanonicalFact{
+			Kind: FactHealth, Subject: subject, Fields: map[string]FactValue{},
+			EvidenceRefIDs: []string{ref}, SourceState: SourceNoData,
+			Source: PeriodDeltaProducer, SourceVersion: PeriodDeltaVersion,
+		}
+		outcome.writeTo(&fact)
+		minted = append(minted, fact)
+	}
+
+	for _, kind := range touchedKinds {
 		e.recordPeriodDeltaComposition(ctx, principal, PeriodDeltaCompositionEvent{
 			RequirementKind:  FactStatus,
 			SubjectKind:      kind,
 			Grain:            kind,
 			ComposedKinds:    statusCategoryFactKindComposition[kind],
-			PriorReadIssued:  true,
-			TransitionCounts: countsByKind[kind],
+			PriorReadIssued:  priorIssued,
+			FailureReason:    failure,
+			UnservedCount:    unserved[kind],
+			TransitionCounts: counts[kind],
 		})
 	}
+	return append(currentFacts, minted...)
 }
 
 // recordPeriodDeltaComposition emits one PeriodDeltaCompositionEvent. Needs
@@ -397,4 +567,21 @@ func (e *Engine) recordPeriodDeltaComposition(ctx context.Context, principal sto
 		return
 	}
 	e.telemetry.RecordPeriodDeltaComposition(ctx, principal, event)
+}
+
+// periodDeltaTouchedSubjectKinds returns, in periodDeltaEligibleSubjectKinds'
+// own deterministic order, exactly the eligible kinds present in subjects --
+// the set applyPeriodDelta owes a decision event to on every path.
+func periodDeltaTouchedSubjectKinds(subjects []SubjectRef) []SubjectKind {
+	present := make(map[SubjectKind]bool, 2)
+	for _, subject := range subjects {
+		present[subject.Kind] = true
+	}
+	touched := make([]SubjectKind, 0, 2)
+	for _, kind := range periodDeltaEligibleSubjectKinds() {
+		if present[kind] {
+			touched = append(touched, kind)
+		}
+	}
+	return touched
 }

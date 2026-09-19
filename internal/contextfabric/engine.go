@@ -3245,8 +3245,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// status-category requirements (workItemTupleFactRequirements is a
 	// different, fixed plan), so period-delta has nothing to enrich on
 	// that path.
-	if !workItemTuple && familyOutcome.Frame != nil {
-		e.applyPeriodDelta(ctx, principal, *familyOutcome.Frame, subjects, facts.Facts, periodDeltaCurrentAsOf(clampedInterpretedTime, e.now()))
+	if !workItemTuple {
+		facts.Facts = e.applyPeriodDeltaForTurn(ctx, principal, familyOutcome.Frame, clampedInterpretedTime, subjects, facts.Facts)
 	}
 
 	if workItemTuple {
