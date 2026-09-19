@@ -30,10 +30,10 @@ func TestCHAOS4234_RankedCutTrace_OneEventPerCandidateInRankOrderWithSurvival(t 
 	t.Parallel()
 	pool := map[string]contextfabric.SubjectCandidate{}
 	for _, c := range []contextfabric.SubjectCandidate{
-		chaos4234Candidate(contextfabric.SubjectWorkItem, "wi_low", 0.30),
-		chaos4234Candidate(contextfabric.SubjectPullRequest, "pr_top", 0.60),
-		chaos4234Candidate(contextfabric.SubjectRepository, "repo_mid", 0.45),
-		chaos4234Candidate(contextfabric.SubjectProject, "proj_floor", 0.20),
+		chaos4234Candidate(contextfabric.SubjectWorkItem, "wi_low", 0.66),
+		chaos4234Candidate(contextfabric.SubjectPullRequest, "pr_top", 0.70),
+		chaos4234Candidate(contextfabric.SubjectRepository, "repo_mid", 0.68),
+		chaos4234Candidate(contextfabric.SubjectProject, "proj_floor", 0.64),
 	} {
 		pool[SubjectKey(c.Subject)] = c
 	}
@@ -84,8 +84,8 @@ func TestCHAOS4234_RankedCutTrace_UnboundedMaxMarksEverySurvivor(t *testing.T) {
 	t.Parallel()
 	pool := map[string]contextfabric.SubjectCandidate{}
 	for _, c := range []contextfabric.SubjectCandidate{
-		chaos4234Candidate(contextfabric.SubjectWorkItem, "wi_a", 0.30),
-		chaos4234Candidate(contextfabric.SubjectPullRequest, "pr_b", 0.60),
+		chaos4234Candidate(contextfabric.SubjectWorkItem, "wi_a", 0.66),
+		chaos4234Candidate(contextfabric.SubjectPullRequest, "pr_b", 0.70),
 	} {
 		pool[SubjectKey(c.Subject)] = c
 	}
@@ -105,7 +105,7 @@ func TestCHAOS4234_RankedCutTrace_UnboundedMaxMarksEverySurvivor(t *testing.T) {
 
 func TestCHAOS4234_RankedCutTrace_CoverageBypassCompanionForFloorFindTheCutDropped(t *testing.T) {
 	t.Parallel()
-	floorFind := candidateNode(contextfabric.SubjectPullRequest, "pr_floor", "Outage PR", 0.10, "*")
+	floorFind := candidateNode(contextfabric.SubjectPullRequest, "pr_floor", "Outage PR", 0.68, "*")
 	backend := &fakeGraphBackend{
 		enableSearchKind: true,
 		searchResults: map[string][]CandidateNode{
@@ -155,8 +155,8 @@ func TestCHAOS4234_RankedCutTrace_CoverageBypassCompanionForFloorFindTheCutDropp
 
 func TestCHAOS4234_OffersOnlyResolution_SkipsCensusAndFlagsTheKindOfferEvent(t *testing.T) {
 	t.Parallel()
-	target := candidateNode(contextfabric.SubjectPullRequest, "pull_request:repo-1:532", "PR #532", 0.50, "*")
-	sibling := candidateNode(contextfabric.SubjectWorkItem, "work_item:repo-1:9", "WI 9", 0.40, "*")
+	target := candidateNode(contextfabric.SubjectPullRequest, "pull_request:repo-1:532", "PR #532", 0.68, "*")
+	sibling := candidateNode(contextfabric.SubjectWorkItem, "work_item:repo-1:9", "WI 9", 0.66, "*")
 	build := func() (*fakeGraphBackend, ResolveDeps, *captureResolutionTracer, *int) {
 		backend := &fakeGraphBackend{
 			searchResults:   map[string][]CandidateNode{"PR 532": {target, sibling}},

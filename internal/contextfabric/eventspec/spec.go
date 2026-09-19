@@ -708,7 +708,7 @@ var OfferPool = Event{
 		{Key: "total", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired},
 		{Key: "subject_canonical_id", Type: FieldString, Presence: PresenceRequired},
-		{Key: "disposition", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"vector_only_demoted", "vector_only_excluded"}},
+		{Key: "disposition", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"vector_only_demoted", "vector_only_excluded", "below_floor_excluded"}},
 	},
 }
 
@@ -731,6 +731,8 @@ var OfferPoolSummary = Event{
 		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"offer_pool"}},
 		{Key: "vector_only_excluded", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "vector_only_demoted", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "below_floor_excluded", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "similarity_floor", Type: FieldFloat, Presence: PresenceRequired},
 		{Key: "emptied_by_exclusion", Type: FieldBool, Presence: PresenceRequired},
 	},
 }
@@ -1253,6 +1255,13 @@ var KindOffer = Event{
 		{Key: "handle_offer_graph_derived_count", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "handle_offer_graph_derived_rejected_count", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "offered_under_window_gate", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "offer_floor", Type: FieldFloat, Presence: PresenceRequired},
+		{Key: "offer_floor_pool_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "offer_floor_refused_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "offer_floor_candidates", Type: FieldStringSlice, Presence: PresenceRequired},
+		{Key: "offer_floor_decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"offered", "no_offer"}},
+		{Key: "offer_floor_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"admitted_candidates_offered", "empty_pool", "every_candidate_below_floor", "no_offer_material", "not_evaluated"}},
+		{Key: "offer_floor_offers", Type: FieldStringSlice, Presence: PresenceRequired},
 	},
 }
 

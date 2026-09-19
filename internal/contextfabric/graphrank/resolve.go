@@ -1089,6 +1089,17 @@ type ResolutionTraceEvent struct {
 	HandleOfferCountBeforeGraphSource    int
 	HandleOfferGraphDerivedCount         int
 	HandleOfferGraphDerivedRejectedCount int
+	// OfferFloor* (stage=="kind_offer" ONLY) make the offer floor decision
+	// rebuildable from the line alone: the floor, every pre-decision
+	// candidate (bounded) with its provenance and score, the decision and its
+	// reason, and the offers that survived it.
+	OfferFloorValue      float64
+	OfferFloorPoolCount  int
+	OfferFloorRefused    int
+	OfferFloorCandidates []string
+	OfferFloorDecision   string
+	OfferFloorReason     string
+	OfferFloorOffers     []string
 	// OfferedUnderWindowGate (CHAOS-4234) is true when this resolution
 	// ran in offers-only mode under the class-default window gate
 	// (contextfabric.OffersOnlyResolution). Set on TWO stages, for two
@@ -1471,6 +1482,11 @@ type ResolutionTraceEvent struct {
 	// excluded nothing must not read like one where the exclusion never ran.
 	OfferPoolVectorOnlyExcluded int
 	OfferPoolVectorOnlyDemoted  int
+	// OfferPoolBelowFloorExcluded / OfferPoolSimilarityFloor: the candidates
+	// withheld for matching by similarity at or below the derived floor, and
+	// the floor itself, on the same summary line.
+	OfferPoolBelowFloorExcluded int
+	OfferPoolSimilarityFloor    float64
 	// OfferPoolEmptiedByExclusion reports that this resolution was
 	// AMBIGUOUS and had every offerable candidate withheld by the exclusion
 	// -- the state that must clarify rather than collapse to `no_match`.
@@ -3918,7 +3934,40 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// trace loop immediately below is the one place that DID need its own
 	// dedup guard for this (fixed there, not here).
 	coverageCandidates = append(coverageCandidates, lowPopulationOfferCandidates...)
-	kindOfferCandidates := unionCandidatesForOffer(resolution.Candidates, coverageCandidates)
+	// The coverage-floor and low-population finds reach the offer
+	// builders outside resolution.Candidates, so the offer floor applies to
+	// them here through the SAME classifier the resolution seam uses. The
+	// committed subjects are never withheld.
+	offerFloorCommitted := make(map[string]bool, len(resolution.Committed))
+	for _, subject := range resolution.Committed {
+		offerFloorCommitted[SubjectKey(subject)] = true
+	}
+	var offerFloorRows []OfferFloorRow
+	coverageAdmitted := make([]contextfabric.SubjectCandidate, 0, len(coverageCandidates))
+	coverageRefused := 0
+	for _, candidate := range coverageCandidates {
+		admission := offerAdmissionOf(candidate, offerFloorCommitted)
+		offerFloorRows = append(offerFloorRows, offerFloorRow(candidate, admission))
+		if admission.Admitted() {
+			coverageAdmitted = append(coverageAdmitted, candidate)
+			continue
+		}
+		coverageRefused++
+	}
+	kindOfferCandidates := unionCandidatesForOffer(resolution.Candidates, coverageAdmitted)
+	// offerFullPool is the untruncated merged pool the kind offers read for
+	// "which kinds does the pool hold", held to the same floor.
+	offerFullPool := make(map[string]contextfabric.SubjectCandidate, len(candidatesBySubject))
+	fullPoolRefused := 0
+	for key, candidate := range candidatesBySubject {
+		admission := offerAdmissionOf(candidate, offerFloorCommitted)
+		offerFloorRows = append(offerFloorRows, offerFloorRow(candidate, admission))
+		if admission.Admitted() {
+			offerFullPool[key] = candidate
+			continue
+		}
+		fullPoolRefused++
+	}
 	// CHAOS-4234: a coverage-floor find the final cut dropped still reaches
 	// the offer builders through the union above -- emit its own
 	// "ranked_cut" companion (CoverageBypass=true, Rank 0) so a reader of
@@ -3960,7 +4009,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// have real representation there and still never reach
 	// kindOfferCandidates once ResolveFromMergedCandidatesWithGateAndBasis's
 	// own MaxSubjectCandidates ranking/truncation has run.
-	beforeKinds, afterKinds := projectKindOfferKinds(kindOfferCandidates, candidatesBySubject, len(resolution.Committed))
+	beforeKinds, afterKinds := projectKindOfferKinds(kindOfferCandidates, offerFullPool, len(resolution.Committed))
 	// CHAOS-4967: the frame's own declared member/group kind(s) -- the SAME
 	// closed-vocabulary field hintedPoolKinds/frameKindHints already reads
 	// for RETRIEVAL (chaos4348_reachability.go, this file's own call at
@@ -3983,7 +4032,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// the wrong authority and why the offer-only finds must be included.
 	// Computed once and reused for both calls below, mirroring declaredKinds'
 	// own "read once, read twice" shape.
-	poolHeld := poolHeldKindsOf(candidatesBySubject, kindOfferCandidates)
+	poolHeld := poolHeldKindsOf(offerFullPool, kindOfferCandidates)
 	// beforeOffer is discarded -- only beforeDiag's counts are kept, as the
 	// PRE-repair telemetry twin below. Calling kindOfferMaterial twice
 	// (once per kind list) keeps both diagnostics computed by the
@@ -4027,6 +4076,8 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// asked of the OUTCOME instead: the kind axis fired iff it actually
 	// produced options. That is correct for both current suppressions and for
 	// any future one, and it cannot drift out of step with them.
+	offerFloorPoolRows, offerFloorPoolRefused := dedupOfferFloorRows(offerFloorRows)
+	offerFloorDecision, offerFloorReason := offerFloorOutcome(len(offerFloorPoolRows), offerFloorPoolRefused, kindOffer, candidateOffer, handleOffer)
 	kindOfferFired := len(kindOffer.KindOptions) > 0
 	offerKind := ""
 	switch {
@@ -4111,6 +4162,13 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			HandleOfferCountBeforeGraphSource:            handleOfferDiag.CountBeforeGraphSource,
 			HandleOfferGraphDerivedCount:                 handleOfferDiag.GraphDerivedCount,
 			HandleOfferGraphDerivedRejectedCount:         handleOfferDiag.GraphDerivedRejectedCount,
+			OfferFloorValue:                              OfferSimilarityFloor,
+			OfferFloorPoolCount:                          len(offerFloorPoolRows),
+			OfferFloorRefused:                            offerFloorPoolRefused,
+			OfferFloorCandidates:                         offerFloorCandidateLines(offerFloorPoolRows),
+			OfferFloorDecision:                           offerFloorDecision,
+			OfferFloorReason:                             offerFloorReason,
+			OfferFloorOffers:                             offerFloorOfferLines(kindOffer, candidateOffer, handleOffer),
 		})
 	}
 	// CHAOS-5218: the operator-visible half of the declared-kind withholding

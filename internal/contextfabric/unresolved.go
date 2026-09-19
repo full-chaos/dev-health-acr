@@ -192,6 +192,10 @@ const (
 	// subject, or rephrase -- which is the one thing that was worth saying
 	// on the turn this replaces.
 	noMatchLimitationOfferPoolEmptied = "Retrieval matched one or more subjects only by semantic similarity, which is not enough to identify a subject, so none could be offered and no canonical facts were read. Name the subject you mean, or rephrase the question so it names one."
+	// noMatchLimitationOfferFloorEmptied marks the floor-emptied terminal in
+	// resolveTerminalStatus's own return; terminalResult replaces it with
+	// noMatchLimitationSubjectNotFound, which names the subject and the kinds.
+	noMatchLimitationOfferFloorEmptied = "No subject matching the name in the question was found, so nothing was offered and no canonical facts were read."
 	// The ambiguous-and-clarification-unavailable pair (CHAOS-3810 codex
 	// round-1 P2): a no_match result reached WITH candidates attached must
 	// not claim nothing matched while the candidates it names sit in the
@@ -235,6 +239,42 @@ const (
 		"semantic similarity, which is not enough to identify a subject. Name the subject you " +
 		"mean, or rephrase the question so it names one."
 )
+
+// offerFloorEmptiedPromptPrefix starts the prompt a resolution carries when
+// every candidate the offer pool would have offered was withheld and at least
+// one was withheld for matching by similarity at or below the offer floor.
+// The prompt is the typed carrier of that outcome (an empty candidate list
+// beside a prompt with this prefix); the kinds searched follow the prefix.
+const offerFloorEmptiedPromptPrefix = "No subject matching the name in the question was found; candidates that matched only part of it were not offered. Kinds searched: "
+
+// OfferFloorEmptiedClarificationPrompt builds that prompt for the kinds the
+// retrieval pool held.
+func OfferFloorEmptiedClarificationPrompt(kinds []string) string {
+	if len(kinds) == 0 {
+		return offerFloorEmptiedPromptPrefix + "none."
+	}
+	return offerFloorEmptiedPromptPrefix + strings.Join(kinds, ", ") + "."
+}
+
+// offerFloorEmptiedKinds reports whether prompt is the floor-emptied prompt
+// and, when it is, the searched-kinds text it carries.
+func offerFloorEmptiedKinds(prompt string) (string, bool) {
+	if !strings.HasPrefix(prompt, offerFloorEmptiedPromptPrefix) {
+		return "", false
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(prompt, offerFloorEmptiedPromptPrefix), "."), true
+}
+
+// noMatchLimitationSubjectNotFound is the terminal prose for a named subject
+// no candidate identified: it names what was searched for and which kinds
+// were searched, and it states that nothing was offered.
+func noMatchLimitationSubjectNotFound(subjectTerms []string, searchedKinds string) string {
+	named := "the subject named in the question"
+	if terms := strings.TrimSpace(strings.Join(subjectTerms, " ")); terms != "" {
+		named = "\"" + terms + "\""
+	}
+	return "No subject matching " + named + " was found among the kinds searched (" + searchedKinds + "), so nothing was offered and no canonical facts were read. Candidates that matched only part of the name were not offered. Name the subject you mean, or rephrase the question so it names one."
+}
 
 // terminalResult composes the model-free result for an investigation that
 // resolved no subject to read facts for.
@@ -354,6 +394,10 @@ func (e *Engine) terminalResult(
 	// comparison's empty pool apart from an ordinary one.
 	status, limitation := resolveTerminalStatus(request, &resolution, familyOutcome.Frame,
 		clarificationOffersRedeemable(resolution, structureMaterial, windowClarification, declaredKind), declaredKind, substitutionOutcome)
+	if limitation == noMatchLimitationOfferFloorEmptied {
+		searched, _ := offerFloorEmptiedKinds(resolution.ClarificationPrompt)
+		limitation = noMatchLimitationSubjectNotFound(interpretation.SubjectTerms, searched)
+	}
 	// CHAOS-5442: a frame the gate refused gets its own disclosure, on
 	// both surfaces, decided from the ONE value that already holds the
 	// verdict.
@@ -911,6 +955,9 @@ func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectReso
 		// by this ticket's own test rather than by inspection. The two
 		// arms differ in STATUS for two different reasons; they never
 		// differed in what actually happened to the pool.
+		if _, floorEmptied := offerFloorEmptiedKinds(resolution.ClarificationPrompt); floorEmptied && !resolution.GraphNotProjected {
+			return InvestigationNoMatch, noMatchLimitationOfferFloorEmptied
+		}
 		if strings.TrimSpace(resolution.ClarificationPrompt) != "" && !resolution.GraphNotProjected {
 			if request.Options.AllowClarification && otherOffersRedeemable {
 				return InvestigationClarificationRequired, clarificationRequiredLimitationOne

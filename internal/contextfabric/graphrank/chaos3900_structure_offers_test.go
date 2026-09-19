@@ -902,8 +902,8 @@ func TestResolveSubjects_ConfirmedKindNarrowsThePool(t *testing.T) {
 // -- both kinds present in the pool, neither dropped.
 func TestResolveSubjects_NilConfirmedKindIsByteIdenticalToPreP1D(t *testing.T) {
 	t.Parallel()
-	pr := candidateNode(contractsv1.ContextFabricSubjectPullRequest, "pr_1", "PR 1", 0.5, "*")
-	wi := candidateNode(contractsv1.ContextFabricSubjectWorkItem, "wi_1", "WI 1", 0.5, "*")
+	pr := candidateNode(contractsv1.ContextFabricSubjectPullRequest, "pr_1", "PR 1", 0.68, "*")
+	wi := candidateNode(contractsv1.ContextFabricSubjectWorkItem, "wi_1", "WI 1", 0.68, "*")
 	backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{"Ask Dev": {pr, wi}}}
 
 	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("Ask Dev"), backend.deps(), nil, nil)

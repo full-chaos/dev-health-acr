@@ -60,7 +60,7 @@ func lexicalCrowd(term string, n int) []CandidateNode {
 }
 
 func anchorTeamNode(term, label string) CandidateNode {
-	return candidateNode(contextfabric.SubjectTeam, "team.v2:github:"+term, label, 0.4, "*")
+	return candidateNode(contextfabric.SubjectTeam, "team.v2:github:"+term, label, 0.68, "*")
 }
 
 func candidateKinds(res contextfabric.SubjectResolution) map[contextfabric.SubjectKind]int {
@@ -301,7 +301,7 @@ func TestReservedKinds_DoNotChangeCommitDecisions(t *testing.T) {
 		team := contextfabric.SubjectCandidate{
 			Subject:    contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team_1", Label: "Platform Team"},
 			State:      contractsv1.ContextFabricResolutionAmbiguous,
-			Confidence: 0.4,
+			Confidence: 0.68,
 		}
 		pool[SubjectKey(team.Subject)] = team
 		return pool
@@ -527,7 +527,7 @@ func TestReservedPrefix_AdmissionTraceMatchesTheReturnedCandidates(t *testing.T)
 	team := contextfabric.SubjectCandidate{
 		Subject:    contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team_1", Label: "Platform Team"},
 		State:      contractsv1.ContextFabricResolutionAmbiguous,
-		Confidence: 0.4,
+		Confidence: 0.68,
 	}
 	pool[SubjectKey(team.Subject)] = team
 

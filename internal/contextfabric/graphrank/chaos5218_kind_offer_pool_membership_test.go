@@ -390,8 +390,8 @@ func TestOfferableKindsInPool_IsTheRepairProjectionsOwnPredicate(t *testing.T) {
 // came back no_match.
 func TestResolveSubjects_QbScopedShapeRaisesNoNeedAndKeepsThePoolAcrossTurns(t *testing.T) {
 	t.Parallel()
-	teamNode := candidateNode(contextfabric.SubjectTeam, "team:CHAOS", "CHAOS", 0.55, "*")
-	prNode := candidateNode(contextfabric.SubjectPullRequest, "pr:1", "CHAOS pull request", 0.5, "*")
+	teamNode := candidateNode(contextfabric.SubjectTeam, "team:CHAOS", "CHAOS", 0.68, "*")
+	prNode := candidateNode(contextfabric.SubjectPullRequest, "pr:1", "CHAOS pull request", 0.66, "*")
 	newBackend := func() *fakeGraphBackend {
 		return &fakeGraphBackend{
 			searchResults: map[string][]CandidateNode{"CHAOS": {teamNode, prNode}},
@@ -539,8 +539,8 @@ func TestResolveSubjects_ServedDeclaredKindStillReachesTheOfferAndCommits(t *tes
 // carries DeclaredHintCount 1 and a withheld count of 1 at the same time.
 func TestResolveSubjects_PartialWithholdingCarriesItsCountsNonZero(t *testing.T) {
 	t.Parallel()
-	teamNode := candidateNode(contextfabric.SubjectTeam, "team:CHAOS", "CHAOS", 0.55, "*")
-	prNode := candidateNode(contextfabric.SubjectPullRequest, "pr:1", "CHAOS pull request", 0.5, "*")
+	teamNode := candidateNode(contextfabric.SubjectTeam, "team:CHAOS", "CHAOS", 0.68, "*")
+	prNode := candidateNode(contextfabric.SubjectPullRequest, "pr:1", "CHAOS pull request", 0.66, "*")
 	backend := &fakeGraphBackend{
 		searchResults: map[string][]CandidateNode{"CHAOS": {teamNode, prNode}},
 	}

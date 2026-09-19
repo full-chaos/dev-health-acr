@@ -152,8 +152,8 @@ func TestAVectorOnlyCandidateStillOpposesTheOthers(t *testing.T) {
 func TestACorroboratedVectorCandidateIsStillOffered(t *testing.T) {
 	t.Parallel()
 	resolution := resolveOfferPool(
-		vectorOfferCandidate("team_corroborated", 0.5, contextfabric.ResolutionProposed, contextfabric.MatchVector, contextfabric.MatchLexical),
-		vectorOfferCandidate("team_rival", 0.5, contextfabric.ResolutionProposed, contextfabric.MatchLexical),
+		vectorOfferCandidate("team_corroborated", 0.68, contextfabric.ResolutionProposed, contextfabric.MatchVector, contextfabric.MatchLexical),
+		vectorOfferCandidate("team_rival", 0.68, contextfabric.ResolutionProposed, contextfabric.MatchLexical),
 	)
 	offered := offeredIDs(resolution)
 	if len(offered) != 2 {
@@ -185,8 +185,8 @@ func TestAVectorOnlyCandidateIsExcludedWhileARealOneSurvives(t *testing.T) {
 func TestAnOrdinaryCandidatePoolIsStillOffered(t *testing.T) {
 	t.Parallel()
 	resolution := resolveOfferPool(
-		vectorOfferCandidate("team_lexical_one", 0.5, contextfabric.ResolutionProposed, contextfabric.MatchLexical),
-		vectorOfferCandidate("team_lexical_two", 0.5, contextfabric.ResolutionProposed, contextfabric.MatchLexical),
+		vectorOfferCandidate("team_lexical_one", 0.68, contextfabric.ResolutionProposed, contextfabric.MatchLexical),
+		vectorOfferCandidate("team_lexical_two", 0.68, contextfabric.ResolutionProposed, contextfabric.MatchLexical),
 	)
 	if len(resolution.Candidates) != 2 {
 		t.Fatalf("offered %v, want both lexical candidates -- if this is empty, every exclusion pin in this file is vacuous", offeredIDs(resolution))
@@ -432,8 +432,8 @@ func TestTheEmptiedByExclusionFlagIsExplicitOnEveryPass(t *testing.T) {
 		{
 			name: "ambiguous but still offerable",
 			candidates: []contextfabric.SubjectCandidate{
-				vectorOfferCandidate("team_lexical_one", 0.5, contextfabric.ResolutionProposed, contextfabric.MatchLexical),
-				vectorOfferCandidate("team_lexical_two", 0.5, contextfabric.ResolutionProposed, contextfabric.MatchLexical),
+				vectorOfferCandidate("team_lexical_one", 0.68, contextfabric.ResolutionProposed, contextfabric.MatchLexical),
+				vectorOfferCandidate("team_lexical_two", 0.68, contextfabric.ResolutionProposed, contextfabric.MatchLexical),
 			},
 			want: false,
 		},
@@ -706,8 +706,8 @@ func TestTheClarificationPromptNeverNamesAWithheldCandidate(t *testing.T) {
 	withheld := vectorOfferCandidate("team_withheld_guess", 0.5, contextfabric.ResolutionProposed, contextfabric.MatchVector)
 	withheld.Subject.Label = "Withheld Guess"
 	resolution := resolveOfferPool(
-		vectorOfferCandidate("team_lexical_one", 0.5, contextfabric.ResolutionProposed, contextfabric.MatchLexical),
-		vectorOfferCandidate("team_lexical_two", 0.5, contextfabric.ResolutionProposed, contextfabric.MatchLexical),
+		vectorOfferCandidate("team_lexical_one", 0.68, contextfabric.ResolutionProposed, contextfabric.MatchLexical),
+		vectorOfferCandidate("team_lexical_two", 0.68, contextfabric.ResolutionProposed, contextfabric.MatchLexical),
 		withheld,
 	)
 	if resolution.ClarificationPrompt == "" {

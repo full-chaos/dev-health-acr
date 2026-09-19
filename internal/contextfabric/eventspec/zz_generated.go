@@ -3919,6 +3919,13 @@ type KindOfferFields struct {
 	HandleOfferGraphDerivedCount         int
 	HandleOfferGraphDerivedRejectedCount int
 	OfferedUnderWindowGate               bool
+	OfferFloor                           float64
+	OfferFloorPoolCount                  int
+	OfferFloorRefusedCount               int
+	OfferFloorCandidates                 []string
+	OfferFloorDecision                   string
+	OfferFloorReason                     string
+	OfferFloorOffers                     []string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every KindOfferFields uniformly, set ONLY by NewKindOfferFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -3932,12 +3939,18 @@ type KindOfferFields struct {
 
 // NewKindOfferFields is the generated constructor for KindOfferFields -- every
 // field KindOffer.Fields declares is a required parameter.
-func NewKindOfferFields(requestID string, explicitHintCount int, declaredHintCount int, declaredWithheldNotInPoolCount int, distinctKindCount int, suppressedByCardinality bool, suppressedByUnservableDeclaredKind bool, candidateOfferCount int, offerKind string, candidateOfferLabelsNormalizedCount int, boundaryKinds []string, boundaryKindsBeforeRepair []string, distinctKindCountBeforeRepair int, suppressedByCardinalityBeforeRepair bool, handleOfferCountBeforeGraphSource int, handleOfferGraphDerivedCount int, handleOfferGraphDerivedRejectedCount int, offeredUnderWindowGate bool) KindOfferFields {
+func NewKindOfferFields(requestID string, explicitHintCount int, declaredHintCount int, declaredWithheldNotInPoolCount int, distinctKindCount int, suppressedByCardinality bool, suppressedByUnservableDeclaredKind bool, candidateOfferCount int, offerKind string, candidateOfferLabelsNormalizedCount int, boundaryKinds []string, boundaryKindsBeforeRepair []string, distinctKindCountBeforeRepair int, suppressedByCardinalityBeforeRepair bool, handleOfferCountBeforeGraphSource int, handleOfferGraphDerivedCount int, handleOfferGraphDerivedRejectedCount int, offeredUnderWindowGate bool, offerFloor float64, offerFloorPoolCount int, offerFloorRefusedCount int, offerFloorCandidates []string, offerFloorDecision string, offerFloorReason string, offerFloorOffers []string) KindOfferFields {
 	valid := true
 	if boundaryKinds == nil {
 		valid = false
 	}
 	if boundaryKindsBeforeRepair == nil {
+		valid = false
+	}
+	if offerFloorCandidates == nil {
+		valid = false
+	}
+	if offerFloorOffers == nil {
 		valid = false
 	}
 	return KindOfferFields{
@@ -3959,6 +3972,13 @@ func NewKindOfferFields(requestID string, explicitHintCount int, declaredHintCou
 		HandleOfferGraphDerivedCount:         handleOfferGraphDerivedCount,
 		HandleOfferGraphDerivedRejectedCount: handleOfferGraphDerivedRejectedCount,
 		OfferedUnderWindowGate:               offeredUnderWindowGate,
+		OfferFloor:                           offerFloor,
+		OfferFloorPoolCount:                  offerFloorPoolCount,
+		OfferFloorRefusedCount:               offerFloorRefusedCount,
+		OfferFloorCandidates:                 offerFloorCandidates,
+		OfferFloorDecision:                   offerFloorDecision,
+		OfferFloorReason:                     offerFloorReason,
+		OfferFloorOffers:                     offerFloorOffers,
 		constructed:                          valid,
 	}
 }
@@ -3995,6 +4015,13 @@ func (f KindOfferFields) SlogArgs() []any {
 		"handle_offer_graph_derived_count", f.HandleOfferGraphDerivedCount,
 		"handle_offer_graph_derived_rejected_count", f.HandleOfferGraphDerivedRejectedCount,
 		"offered_under_window_gate", f.OfferedUnderWindowGate,
+		"offer_floor", f.OfferFloor,
+		"offer_floor_pool_count", f.OfferFloorPoolCount,
+		"offer_floor_refused_count", f.OfferFloorRefusedCount,
+		"offer_floor_candidates", contextfabric.SanitizeLogStrings(f.OfferFloorCandidates),
+		"offer_floor_decision", contextfabric.SanitizeLogAttr(f.OfferFloorDecision),
+		"offer_floor_reason", contextfabric.SanitizeLogAttr(f.OfferFloorReason),
+		"offer_floor_offers", contextfabric.SanitizeLogStrings(f.OfferFloorOffers),
 	}
 }
 
@@ -4231,6 +4258,8 @@ type OfferPoolSummaryFields struct {
 	Pass               int
 	VectorOnlyExcluded int
 	VectorOnlyDemoted  int
+	BelowFloorExcluded int
+	SimilarityFloor    float64
 	EmptiedByExclusion bool
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every OfferPoolSummaryFields uniformly, set ONLY by NewOfferPoolSummaryFields below. A caller
@@ -4245,12 +4274,14 @@ type OfferPoolSummaryFields struct {
 
 // NewOfferPoolSummaryFields is the generated constructor for OfferPoolSummaryFields -- every
 // field OfferPoolSummary.Fields declares is a required parameter.
-func NewOfferPoolSummaryFields(requestID string, pass int, vectorOnlyExcluded int, vectorOnlyDemoted int, emptiedByExclusion bool) OfferPoolSummaryFields {
+func NewOfferPoolSummaryFields(requestID string, pass int, vectorOnlyExcluded int, vectorOnlyDemoted int, belowFloorExcluded int, similarityFloor float64, emptiedByExclusion bool) OfferPoolSummaryFields {
 	return OfferPoolSummaryFields{
 		RequestID:          requestID,
 		Pass:               pass,
 		VectorOnlyExcluded: vectorOnlyExcluded,
 		VectorOnlyDemoted:  vectorOnlyDemoted,
+		BelowFloorExcluded: belowFloorExcluded,
+		SimilarityFloor:    similarityFloor,
 		EmptiedByExclusion: emptiedByExclusion,
 		constructed:        true,
 	}
@@ -4274,6 +4305,8 @@ func (f OfferPoolSummaryFields) SlogArgs() []any {
 		"stage", "offer_pool",
 		"vector_only_excluded", f.VectorOnlyExcluded,
 		"vector_only_demoted", f.VectorOnlyDemoted,
+		"below_floor_excluded", f.BelowFloorExcluded,
+		"similarity_floor", f.SimilarityFloor,
 		"emptied_by_exclusion", f.EmptiedByExclusion,
 	}
 }

@@ -43,8 +43,8 @@ import (
 // (resolve.go, resolution.go) as if they shared one scale, when each one's
 // ceiling only ever meant "best of its own, unrelated result set").
 const (
-	fulltextRelevanceFloor   = 0.50
-	fulltextRelevanceCeiling = 0.75
+	fulltextRelevanceFloor   = graphrank.LexicalBandFloor
+	fulltextRelevanceCeiling = graphrank.LexicalBandCeiling
 )
 
 // fulltextRelevanceFromMatchedTerms maps ONE candidate's own matched-term
