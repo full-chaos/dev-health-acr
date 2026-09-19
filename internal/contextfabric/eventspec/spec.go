@@ -1931,13 +1931,16 @@ const (
 	// SynthesisZeroClaimRedrawDeclinedCeiling: the call had already used every
 	// draw the re-synthesis ceiling allows.
 	SynthesisZeroClaimRedrawDeclinedCeiling = "declined_ceiling"
+	// SynthesisZeroClaimRedrawDeclinedSingleDraw: the runtime is configured to
+	// draw once per call (the fallback leg), so no extra draw is taken.
+	SynthesisZeroClaimRedrawDeclinedSingleDraw = "declined_single_draw"
 )
 
 var synthesisZeroClaimRedrawVocabulary = []string{
 	SynthesisZeroClaimRedrawNotEvaluated, SynthesisZeroClaimRedrawNotNeeded,
 	SynthesisZeroClaimRedrawRecovered, SynthesisZeroClaimRedrawStillZero,
 	SynthesisZeroClaimRedrawFailed, SynthesisZeroClaimRedrawDeclinedDeadline,
-	SynthesisZeroClaimRedrawDeclinedCeiling,
+	SynthesisZeroClaimRedrawDeclinedCeiling, SynthesisZeroClaimRedrawDeclinedSingleDraw,
 }
 
 // SynthesisInput is the Info line one synthesize model call emits once its

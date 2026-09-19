@@ -354,3 +354,31 @@ func TestRejectedRedrawsDoNotOutrunTheOperatorBound(t *testing.T) {
 		"zero_claim_redraw": eventspec.SynthesisZeroClaimRedrawFailed,
 	})
 }
+
+// TestSingleDrawRuntimeNeverTakesTheExtraDraw: a runtime configured as single
+// draw (the fallback leg) serves its first valid draft even when it claims
+// nothing, and says why no extra draw was taken.
+func TestSingleDrawRuntimeNeverTakesTheExtraDraw(t *testing.T) {
+	t.Parallel()
+	gen := &scriptedGenerator{steps: steps(validSynthesisOutput(), claimedSynthesisOutput())}
+	run := runRedraw(t, context.Background(), gen, Config{SingleDraw: true}, validSynthesisInput())
+	if run.err != nil {
+		t.Fatalf("SynthesizeAnswer() error = %v", run.err)
+	}
+	if gen.calls != 1 {
+		t.Fatalf("generator.calls = %d, want 1", gen.calls)
+	}
+	run.certify(t, map[string]any{"draws_total": 1, "claims": 0, "zero_claim_redraw": eventspec.SynthesisZeroClaimRedrawDeclinedSingleDraw})
+}
+
+// TestSingleDrawRuntimeReportsNotNeededForAClaimingDraft: single draw is only
+// named as the reason when there was a zero-claim draft to redraw.
+func TestSingleDrawRuntimeReportsNotNeededForAClaimingDraft(t *testing.T) {
+	t.Parallel()
+	gen := &scriptedGenerator{steps: steps(claimedSynthesisOutput())}
+	run := runRedraw(t, context.Background(), gen, Config{SingleDraw: true}, validSynthesisInput())
+	if run.err != nil {
+		t.Fatalf("SynthesizeAnswer() error = %v", run.err)
+	}
+	run.certify(t, map[string]any{"draws_total": 1, "claims": 1, "zero_claim_redraw": eventspec.SynthesisZeroClaimRedrawNotNeeded})
+}

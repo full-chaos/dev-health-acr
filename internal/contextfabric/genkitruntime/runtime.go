@@ -553,7 +553,12 @@ type Config struct {
 	// ordering (primary re-samples first, fallback runs once after the
 	// bound is exhausted).
 	MaxSynthesisResynthesisAttempts int
-	Fallback                        contextfabric.ModelRuntime
+	// SingleDraw keeps a runtime to exactly one synthesis draw per call: it
+	// also declines the extra draw a validated zero-claim draft would
+	// otherwise get. Set on the fallback runtime, which by design answers
+	// once after the primary has spent its draws.
+	SingleDraw bool
+	Fallback   contextfabric.ModelRuntime
 	// Logger receives the ACR-owned decision-event log line CHAOS-3889 emits
 	// once per model call (see logInterpretDecision/logSynthesizeDecision).
 	// Defaults to slog.Default() when nil, matching every other
@@ -1802,6 +1807,8 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 				zeroClaimRedraw = eventspec.SynthesisZeroClaimRedrawStillZero
 			case held != nil:
 				zeroClaimRedraw = eventspec.SynthesisZeroClaimRedrawRecovered
+			case zeroClaims && r.config.SingleDraw:
+				zeroClaimRedraw = eventspec.SynthesisZeroClaimRedrawDeclinedSingleDraw
 			case zeroClaims && draw >= MaxSynthesisResynthesisAttemptsCeiling:
 				zeroClaimRedraw = eventspec.SynthesisZeroClaimRedrawDeclinedCeiling
 			case zeroClaims:

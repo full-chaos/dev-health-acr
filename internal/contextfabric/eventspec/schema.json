@@ -2958,7 +2958,8 @@
           "redrawn_still_zero",
           "redraw_failed",
           "declined_deadline",
-          "declined_ceiling"
+          "declined_ceiling",
+          "declined_single_draw"
         ]
       },
       {
