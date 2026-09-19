@@ -1529,6 +1529,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// carry axis in this package already pays for at this exact point.
 	confirmedNeedLedger := e.resolveConfirmedNeedLedger(carryCtx, principal, request, binding)
 	remembered := confirmedNeedLedger.Entries
+	// Every Save below this point reads the parent evidence this turn
+	// resolved, so a clarification prompt it saves carries its chain forward
+	// (chaos6045_carried_parent_identity.go). One site, above every exit.
+	ctx = withTurnParentEvidence(ctx, confirmedNeedLedger.Parent)
 	// The shadow anchor binding reads the parent through the memo the ledger
 	// load above filled; nil when the shadow is off.
 	anchorShadow := e.newAnchorBindingTracker(carryCtx, request, binding)
@@ -2934,7 +2938,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	substitutionForTelemetry = decideSubjectSubstitution(substitutionInput)
 	anchorShadow.observeSubstitutionGuard(substitutionForTelemetry.Outcome)
 	if substitutionForTelemetry.Outcome.Fired() {
-		resolution = subjectSubstitutionResolution(resolution, substitutionForTelemetry, carryParentSeed(request))
+		resolution = subjectSubstitutionResolution(resolution, substitutionForTelemetry, subjectSubstitutionReceiptIssuer(substitutionForTelemetry, carryParentSeed(request)))
 		if len(request.PriorSubjectReceipts) > 0 {
 			// Composed against the GUARDED resolution, the one this turn
 			// actually serves: a receipt is reported applied only against the

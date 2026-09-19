@@ -1248,6 +1248,55 @@
         "presence": "required"
       },
       {
+        "key": "substitution_parent_result_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "unreadable",
+          "answer",
+          "prompt",
+          "guard_clarification",
+          "refusal"
+        ]
+      },
+      {
+        "key": "substitution_parent_chain",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_a_prompt",
+          "verified",
+          "guard_receipt",
+          "absent",
+          "malformed",
+          "receipt_mismatch",
+          "answer_unreadable",
+          "answer_mismatch",
+          "no_identity",
+          "unavailable"
+        ]
+      },
+      {
+        "key": "substitution_parent_chain_depth",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "substitution_parent_chain_error",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "not_found",
+          "context_canceled",
+          "context_deadline_exceeded",
+          "store_error",
+          "no_store",
+          "malformed_member"
+        ]
+      },
+      {
         "key": "request_id",
         "type": "string",
         "presence": "conditional",
@@ -2913,6 +2962,41 @@
             "applicability": "written when present=true; the names of the snapshot's extension members, sorted, empty when none; never their values"
           }
         ]
+      },
+      {
+        "key": "carried_parent",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_a_prompt",
+          "attached",
+          "no_snapshot",
+          "unwired",
+          "unencodable"
+        ]
+      },
+      {
+        "key": "carried_parent_state",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "identity_held",
+          "no_parent_reference",
+          "parent_no_identity",
+          "parent_unreadable",
+          "identity_unavailable"
+        ]
+      },
+      {
+        "key": "carried_parent_result_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "carried_parent_depth",
+        "type": "int",
+        "presence": "required"
       },
       {
         "key": "request_id",

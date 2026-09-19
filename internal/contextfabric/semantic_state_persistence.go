@@ -98,6 +98,10 @@ type SemanticStatePersistenceEvent struct {
 	Bound SemanticStateBound
 	// State is the snapshot the write carried, nil for an absence.
 	State *PersistedSemanticState
+	// CarriedParent is what this Save did about a prompt's carried chain
+	// member: whether it was written, and when it was, its state, the
+	// answered result it names and the chain depth.
+	CarriedParent carriedParentOutcome
 }
 
 // saveResult is the engine's only Save. It persists, then emits the decision.
@@ -106,6 +110,7 @@ func (e *Engine) saveResult(
 	watermark SourceWatermarkSnapshot, epoch RebuildEpoch, timeAxisKey string, graphEpoch int64, parentResultID string,
 	capture semanticStateCapture,
 ) error {
+	capture, carried := capture.withTurnParentFrom(ctx).attachCarriedParent(result)
 	capture, anchorEvent := capture.attachAnchorBinding(site, result)
 	if anchorEvent == nil && !e.anchorBindingShadowDisabled {
 		unrecorded := unrecordedAnchorBindingEvent(site, result)
@@ -131,6 +136,7 @@ func (e *Engine) saveResult(
 			EncodedBytes:   capture.EncodedBytes,
 			Bound:          capture.Bound,
 			State:          capture.Write.State,
+			CarriedParent:  carried,
 		})
 	}
 	if anchorEvent != nil {

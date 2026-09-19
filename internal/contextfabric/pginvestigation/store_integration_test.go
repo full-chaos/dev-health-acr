@@ -338,6 +338,29 @@ VALUES ($1, $2, $3, $4, $5::jsonb)`, resultID, orgID, payload, time.Date(2026, 1
 	})
 }
 
+// TestStore_carriedParentChain runs the SHARED carried-parent chain domain
+// against REAL Postgres: every chain is built by the real engine over this
+// store, and every receipt state is re-seeded as a raw row (the snapshot
+// column NULL for an absent one).
+func TestStore_carriedParentChain(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	paritytest.RunCarriedParentChainSuite(t, func(t *testing.T) (contextfabric.InvestigationResultStore, paritytest.SemanticSeed) {
+		store, err := pginvestigation.NewStore(db)
+		require.NoError(t, err)
+		return store, func(t *testing.T, orgID, resultID string, payload, semanticState []byte) {
+			t.Helper()
+			column := sql.NullString{String: string(semanticState), Valid: len(semanticState) > 0}
+			_, execErr := db.ExecContext(ctx, `DELETE FROM acr.context_fabric_investigation_results WHERE result_id = $1 AND org_id = $2`, resultID, orgID)
+			require.NoError(t, execErr)
+			_, execErr = db.ExecContext(ctx, `
+INSERT INTO acr.context_fabric_investigation_results (result_id, org_id, payload, generated_at, semantic_state)
+VALUES ($1, $2, $3, $4, $5::jsonb)`, resultID, orgID, payload, time.Date(2026, 1, 15, 9, 30, 0, 0, time.UTC), column)
+			require.NoError(t, execErr)
+		}
+	})
+}
+
 // TestStore_FindReusableReturnsSemanticTupleCensusRoundTrip proves the reuse
 // lookup carries the same decoded semantic snapshot as Get through REAL
 // Postgres. The tuple branch must receive the census beside the payload; it

@@ -445,6 +445,10 @@ func (t SlogEngineTelemetry) RecordConfirmedNeedLedger(ctx context.Context, prin
 		"substitution_remembered_check", SanitizeLogAttr(string(event.SubstitutionRememberedCheck)),
 		"substitution_remembered_reason", SanitizeLogAttr(string(event.SubstitutionRememberedReason)),
 		"substitution_remembered_context_error", SanitizeLogAttr(event.SubstitutionRememberedContextError),
+		"substitution_parent_result_kind", SanitizeLogAttr(string(parentResultKindToken(event.SubstitutionParentResultKind))),
+		"substitution_parent_chain", SanitizeLogAttr(string(parentChainToken(event.SubstitutionParentChain))),
+		"substitution_parent_chain_depth", event.SubstitutionParentChainDepth,
+		"substitution_parent_chain_error", SanitizeLogAttr(string(noneChainError(event.SubstitutionParentChainError))),
 	}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric confirmed need ledger", args...)
 }

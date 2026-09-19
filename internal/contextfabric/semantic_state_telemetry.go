@@ -216,6 +216,10 @@ func (t SlogEngineTelemetry) RecordSemanticStatePersistence(ctx context.Context,
 		"encoded_bytes", event.EncodedBytes,
 		"encoded_cap", SemanticStateMaxEncodedBytes,
 		semanticStateLogGroup("state", event.State),
+		"carried_parent", SanitizeLogAttr(string(carriedParentAttachmentToken(event.CarriedParent.Attachment))),
+		"carried_parent_state", SanitizeLogAttr(noneWhenEmpty(string(event.CarriedParent.State))),
+		"carried_parent_result_id", SanitizeLogAttr(event.CarriedParent.ResultID),
+		"carried_parent_depth", event.CarriedParent.Depth,
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric semantic state persistence", args...)
