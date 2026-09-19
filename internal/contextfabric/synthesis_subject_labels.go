@@ -15,9 +15,7 @@ type SubjectLabelCanonicalization struct {
 	// finds those by shape, so a nonzero value is a defect made visible.
 	KeysResidual int
 	// Measured is false when the payload could not be serialized for the
-	// census; both counts are then unknown, never zero. The payload after the
-	// pass differs from the one before only in labels, so one serialization
-	// outcome covers both.
+	// census; both counts are then unknown, never zero.
 	Measured bool
 }
 
@@ -208,9 +206,12 @@ func canonicalizeSynthesisSubjectLabels(input SynthesisInput) (SynthesisInput, S
 		}
 	}
 
-	after, afterMeasured := synthesisPayloadSubjectLabels(out)
+	// Only a payload that serialized before reaches here with keys to collapse,
+	// and the payload after differs from it in label strings alone, so it
+	// serializes too.
+	after, _ := synthesisPayloadSubjectLabels(out)
 	report := SubjectLabelCanonicalization{
-		Measured:      afterMeasured,
+		Measured:      true,
 		KeysCollapsed: multiLabelKeys(before),
 		KeysResidual:  multiLabelKeys(after),
 	}

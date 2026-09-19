@@ -337,7 +337,7 @@ func TestUnchangedInputReportsUnchanged(t *testing.T) {
 	t.Parallel()
 	input, _, _ := groupedCohortFixture()
 	out, report := canonicalizeSynthesisSubjectLabels(input)
-	if out.Graph.Cohort != input.Graph.Cohort {
+	if out.Graph.Cohort != input.Graph.Cohort || &out.Facts.Facts[0] != &input.Facts.Facts[0] {
 		t.Fatal("an input with one label per key was copied instead of passed through")
 	}
 	if report.KeysCollapsed != 0 || report.KeysResidual != 0 || report.Outcome() != LabelCanonicalizationUnchanged {
