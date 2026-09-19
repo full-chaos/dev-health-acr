@@ -348,16 +348,16 @@ func (e *Engine) chainIdentityOf(ctx context.Context, principal storage.Principa
 	// payload, one committed identity or none. A prompt commits none, so a
 	// member naming a prompt never verifies.
 	served := parentCommittedIdentityOf(answered)
-	if resultIsPrompt(answered.Result) || !sameSubjectIdentity(served, member.subject()) {
+	if !sameSubjectIdentity(served, member.subject()) {
 		return unavailable(SubjectSubstitutionChainAnswerMismatch)
 	}
 	evidence.Carried, evidence.Chain = true, SubjectSubstitutionChainVerified
 	// The subject carries the label the answered result served, so an offer
 	// built from it reads the way the caller already saw it.
+	// Receipts the answered result issued are the parent's own offer, as
+	// they are for a guard clarification proven to continue it.
 	evidence.Subject, evidence.ResultID = served, strings.TrimSpace(member.ResultID)
-	if evidence.IssuedFor == "" {
-		evidence.IssuedFor = evidence.ResultID
-	}
+	evidence.IssuedFor = evidence.ResultID
 	return evidence
 }
 
@@ -455,6 +455,30 @@ type carriedParentOutcome struct {
 // a prompt it saves can carry the chain forward.
 func (c semanticStateCapture) withCarriedParent(parent parentAnchorEvidence) semanticStateCapture {
 	c.carriedParent = &parent
+	return c
+}
+
+// turnParentEvidenceKey keys the turn's resolved parent evidence on the
+// request context.
+type turnParentEvidenceKey struct{}
+
+// withTurnParentEvidence records the parent evidence this turn resolved, once,
+// above every exit that saves: every Save the turn makes then reads the same
+// evidence the guard read, and no exit can be left out of it.
+func withTurnParentEvidence(ctx context.Context, parent parentAnchorEvidence) context.Context {
+	return context.WithValue(ctx, turnParentEvidenceKey{}, parent)
+}
+
+// withTurnParentFrom hands the capture the evidence recorded on ctx, unless
+// the capture already carries some. A context with none leaves the capture
+// unwired, which the persistence line reports.
+func (c semanticStateCapture) withTurnParentFrom(ctx context.Context) semanticStateCapture {
+	if c.carriedParent != nil {
+		return c
+	}
+	if parent, ok := ctx.Value(turnParentEvidenceKey{}).(parentAnchorEvidence); ok {
+		return c.withCarriedParent(parent)
+	}
 	return c
 }
 

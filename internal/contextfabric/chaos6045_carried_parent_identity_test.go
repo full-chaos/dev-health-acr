@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 // The carried chain member's own input domains. The whole chain decision is
@@ -139,6 +141,9 @@ func TestStoredCarriedParentIdentityOverItsDecodeDomain(t *testing.T) {
 		{"held without kind", carriedStored(SemanticStateReadAvailable, withField("kind", nil)), true, true},
 		{"held without canonical id", carriedStored(SemanticStateReadAvailable, withField("canonical_id", nil)), true, true},
 		{"no identity naming a result", carriedStored(SemanticStateReadAvailable, encode(map[string]any{"state": "parent_no_identity", "result_id": "result_answered", "depth": 1})), true, true},
+		{"no identity naming a kind", carriedStored(SemanticStateReadAvailable, encode(map[string]any{"state": "parent_no_identity", "kind": "repository", "depth": 1})), true, true},
+		{"no identity naming an id", carriedStored(SemanticStateReadAvailable, encode(map[string]any{"state": "parent_no_identity", "canonical_id": "repository:alpha-service", "depth": 1})), true, true},
+		{"no identity naming a receipt", carriedStored(SemanticStateReadAvailable, encode(map[string]any{"state": "identity_unavailable", "receipt_id": "subr_x", "depth": 1})), true, true},
 		{"no identity, consistent", carriedStored(SemanticStateReadAvailable, encode(map[string]any{"state": "parent_no_identity", "depth": 2})), true, false},
 		{"not an object", carriedStored(SemanticStateReadAvailable, json.RawMessage(`"identity_held"`)), true, true},
 		{"null", carriedStored(SemanticStateReadAvailable, json.RawMessage(`null`)), true, true},
@@ -358,5 +363,119 @@ func TestDecideSubjectSubstitutionReadsACarriedChain(t *testing.T) {
 		if tc.in.Parent.Carried && !tc.in.Parent.held() && got.RememberedListed {
 			t.Errorf("%s: listed a remembered subject the chain never verified", tc.name)
 		}
+	}
+}
+
+// TestAChoiceRedeemedFromTheAnsweredResultPastAPromptIsServed: a follow-up
+// that names a window prompt and redeems an offer the ANSWERED result made is
+// answering that result, so the choice is served; the same follow-up
+// committing a subject nobody offered is clarified against the answered
+// subject.
+func TestAChoiceRedeemedFromTheAnsweredResultPastAPromptIsServed(t *testing.T) {
+	t.Parallel()
+	answered := substitutionResponse(substitutionRepoOne, "receipt_chain_one")
+	answered.resolution.Candidates = append(answered.resolution.Candidates, SubjectCandidate{
+		ReceiptID: "receipt_chain_two", Subject: substitutionRepoTwo, State: contractsv1.ContextFabricResolutionAmbiguous,
+		MatchedTerms: []string{"service"}, MatchReasons: []string{"matched"}, Confidence: 0.5, EvidenceRefIDs: []string{},
+	})
+	for _, redeem := range []bool{true, false} {
+		redeem := redeem
+		t.Run(fmt.Sprintf("redeem=%t", redeem), func(t *testing.T) {
+			t.Parallel()
+			h := newNeedTurnHarness(t, nil)
+			one := h.turn(needTurnRequest(fmt.Sprintf("request_chain_redeem_%t_one", redeem), true), answered)
+			prompt := h.turn(continuingNeedTurn(needTurnRequest(fmt.Sprintf("request_chain_redeem_%t_two", redeem), false), one.result.ResultID), substitutionResponse(substitutionRepoTwo, "receipt_chain_prompt"))
+			if !resultIsPrompt(prompt.result) {
+				t.Fatalf("premise: turn two served %q, want a window prompt", prompt.result.Status)
+			}
+			var receipts []BoundSubjectReceipt
+			if redeem {
+				receipts = []BoundSubjectReceipt{{ResultID: one.result.ResultID, ReceiptID: "receipt_chain_two"}}
+			}
+			three := answerTurn(h, fmt.Sprintf("request_chain_redeem_%t_three", redeem), prompt.result.ResultID, receipts, substitutionResponse(substitutionRepoTwo, "receipt_chain_three"))
+			event := lastSubstitution(t, three)
+			if event.SubstitutionParentChain != SubjectSubstitutionChainVerified || event.SubstitutionParentResultID != one.result.ResultID {
+				t.Fatalf("chain = %q parent result = %q, want verified %q", event.SubstitutionParentChain, event.SubstitutionParentResultID, one.result.ResultID)
+			}
+			if redeem {
+				assertServed(t, three.result, substitutionRepoTwo)
+				assertGuard(t, event, SubjectSubstitutionRedeemedChoice, SubjectSubstitutionOriginPriorReceipt, substitutionRepoOne, substitutionRepoTwo)
+				return
+			}
+			assertServedNothing(t, three.result)
+			assertGuard(t, event, SubjectSubstitutionClarified, SubjectSubstitutionOriginResolver, substitutionRepoOne, substitutionRepoTwo)
+		})
+	}
+}
+
+// TestChainIdentityOfNeverKeepsAnUnverifiedSubject: whatever subject the
+// evidence arrived holding, a prompt whose chain does not verify leaves it
+// holding none, and an engine with no store verifies nothing.
+func TestChainIdentityOfNeverKeepsAnUnverifiedSubject(t *testing.T) {
+	t.Parallel()
+	prompt := StoredInvestigationResult{Result: InvestigationResult{Status: InvestigationClarificationRequired, SubjectResolution: SubjectResolution{Committed: []SubjectRef{}}}, SemanticStateRead: SemanticStateReadAvailable, SemanticState: &PersistedSemanticState{}}
+	member := carriedParentIdentityOf(parentAnchorEvidence{Referenced: true, Loaded: true, Subject: substitutionRepoOne, ResultID: "result_answered"})
+	raw, err := json.Marshal(member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withMember := prompt
+	withMember.SemanticState = &PersistedSemanticState{Extensions: SemanticStateExtensions{carriedParentIdentityExtension: raw}}
+	arriving := parentAnchorEvidence{Referenced: true, Loaded: true, Subject: substitutionRepoTwo, ResultID: "result_prompt", IssuedFor: "result_elsewhere"}
+	storeless := &Engine{}
+	for _, tc := range []struct {
+		name   string
+		engine *Engine
+		stored StoredInvestigationResult
+		chain  SubjectSubstitutionParentChain
+		reason SubjectSubstitutionChainError
+	}{
+		{"no member", storeless, prompt, SubjectSubstitutionChainAbsent, ""},
+		{"no store", storeless, withMember, SubjectSubstitutionChainAnswerUnreadable, SubjectSubstitutionChainErrorNoStore},
+	} {
+		got := tc.engine.chainIdentityOf(context.Background(), acceptancePrincipal(), arriving, tc.stored)
+		if got.Chain != tc.chain || got.ChainError != tc.reason {
+			t.Errorf("%s: chain = %q (%q), want %q (%q)", tc.name, got.Chain, got.ChainError, tc.chain, tc.reason)
+		}
+		if got.Subject.CanonicalID != "" || got.ResultID != "" || got.IssuedFor != "" || !got.Carried {
+			t.Errorf("%s: evidence = %+v, want a carried chain holding nothing", tc.name, got)
+		}
+	}
+}
+
+// TestSemanticStateExtensionKeepsEveryOtherMember: writing the member never
+// drops a member the snapshot already carried, and never touches the
+// caller's snapshot.
+func TestSemanticStateExtensionKeepsEveryOtherMember(t *testing.T) {
+	t.Parallel()
+	state := &PersistedSemanticState{Extensions: SemanticStateExtensions{"anchor_binding": json.RawMessage(`{"state":"unbound"}`)}}
+	out, err := withSemanticStateExtension(state, carriedParentIdentityExtension, map[string]int{"depth": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out.Extensions["anchor_binding"]) != `{"state":"unbound"}` || len(out.Extensions) != 2 {
+		t.Errorf("extensions = %v, want both members", out.Extensions)
+	}
+	if len(state.Extensions) != 1 {
+		t.Errorf("the caller's snapshot gained a member")
+	}
+}
+
+// TestSaveReadsTheTurnParentFromItsContext: a capture takes the turn's
+// evidence from the context unless it already carries some, and a context
+// without any leaves the capture unwired.
+func TestSaveReadsTheTurnParentFromItsContext(t *testing.T) {
+	t.Parallel()
+	recorded := parentAnchorEvidence{Referenced: true, Loaded: true, Subject: substitutionRepoOne, ResultID: "result_recorded"}
+	own := parentAnchorEvidence{Referenced: true, Loaded: true, Subject: substitutionRepoTwo, ResultID: "result_own"}
+	ctx := withTurnParentEvidence(context.Background(), recorded)
+	if got := (semanticStateCapture{}).withTurnParentFrom(context.Background()); got.carriedParent != nil {
+		t.Errorf("a context with no evidence wired %+v", got.carriedParent)
+	}
+	if got := (semanticStateCapture{}).withTurnParentFrom(ctx); got.carriedParent == nil || got.carriedParent.ResultID != "result_recorded" {
+		t.Errorf("the recorded evidence was not taken: %+v", got.carriedParent)
+	}
+	if got := (semanticStateCapture{}).withCarriedParent(own).withTurnParentFrom(ctx); got.carriedParent == nil || got.carriedParent.ResultID != "result_own" {
+		t.Errorf("the capture's own evidence was replaced: %+v", got.carriedParent)
 	}
 }

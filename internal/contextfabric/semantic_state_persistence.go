@@ -110,7 +110,7 @@ func (e *Engine) saveResult(
 	watermark SourceWatermarkSnapshot, epoch RebuildEpoch, timeAxisKey string, graphEpoch int64, parentResultID string,
 	capture semanticStateCapture,
 ) error {
-	capture, carried := capture.attachCarriedParent(result)
+	capture, carried := capture.withTurnParentFrom(ctx).attachCarriedParent(result)
 	capture, anchorEvent := capture.attachAnchorBinding(site, result)
 	if anchorEvent == nil && !e.anchorBindingShadowDisabled {
 		unrecorded := unrecordedAnchorBindingEvent(site, result)
