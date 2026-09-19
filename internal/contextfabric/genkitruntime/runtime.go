@@ -706,15 +706,59 @@ type sdkGenerator struct {
 	genkit *genkit.Genkit
 }
 
+// decodeRejection is the error sdkGenerator.Interpret returns when Genkit's
+// own local output check refused the draw. It carries what the model
+// actually wrote (parsed leniently, without the schema check) so the caller
+// runs it through the SAME validator and rejection path an acr-detected
+// invalid draw takes; parsed is false when the text was not decodable JSON.
+type decodeRejection struct {
+	output interpretationOutput
+	parsed bool
+	cause  error
+}
+
+func (e *decodeRejection) Error() string { return e.cause.Error() }
+func (e *decodeRejection) Unwrap() error { return e.cause }
+
+// genkitSchemaMismatchPrefix is the fixed prefix Genkit puts on its own
+// structured-output mismatch error (see classifyModelError).
+const genkitSchemaMismatchPrefix = "model failed to generate output matching expected schema"
+
 func (g sdkGenerator) Interpret(ctx context.Context, request generationRequest) (interpretationOutput, contextfabric.ModelUsage, error) {
+	// Keep the raw model response: Genkit drops it when its local schema
+	// check fails, and the rejection path needs both the draw and its cost.
+	var rawText string
+	var rawUsage contextfabric.ModelUsage
+	capture := func(next ai.ModelFunc) ai.ModelFunc {
+		return func(callCtx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			resp, err := next(callCtx, req, cb)
+			if err == nil && resp != nil {
+				rawUsage = modelUsage(resp)
+				if resp.Message != nil {
+					rawText = resp.Message.Text()
+				}
+			}
+			return resp, err
+		}
+	}
 	output, response, err := genkit.GenerateData[interpretationOutput](ctx, g.genkit,
 		ai.WithModelName(request.Model),
 		ai.WithSystem(request.System),
 		ai.WithPrompt("%s", request.Prompt),
 		ai.WithCustomConstrainedOutput(),
 		ai.WithConfig(request.Config),
+		ai.WithMiddleware(capture),
 	)
 	if err != nil {
+		var genkitErr *core.GenkitError
+		if errors.As(err, &genkitErr) && genkitErr.Status == core.INTERNAL && strings.HasPrefix(genkitErr.Message, genkitSchemaMismatchPrefix) {
+			rejection := &decodeRejection{cause: err}
+			var lenient interpretationOutput
+			if json.Unmarshal([]byte(strings.TrimSpace(rawText)), &lenient) == nil {
+				rejection.output, rejection.parsed = lenient, true
+			}
+			return rejection.output, rawUsage, rejection
+		}
 		return interpretationOutput{}, contextfabric.ModelUsage{}, err
 	}
 	if output == nil {
@@ -1016,6 +1060,7 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 	// what the caller asked. Bounded by maxDraws and by ctx (the request
 	// deadline); a final rejection is returned unchanged.
 	var totalUsage contextfabric.ModelUsage
+	var schemaOnlyRejection bool
 	for draw := 0; ; draw++ {
 		decodingSeed = chaos4631InterpretSeedFor(questionHash, sample)
 		var drawOutcomes []attemptOutcome
@@ -1037,10 +1082,26 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 		totalUsage.InputTokens += usage.InputTokens
 		totalUsage.OutputTokens += usage.OutputTokens
 		totalUsage.TotalTokens += usage.TotalTokens
-		if generationErr != nil {
+		schemaOnlyRejection = false
+		err = nil
+		var localRejection *decodeRejection
+		if errors.As(generationErr, &localRejection) {
+			// Genkit's own local check refused this draw: it is an invalid
+			// draw like any the validator refuses, so it takes the same
+			// validator, redraw and rejection path below.
+			output, generationErr = localRejection.output, nil
+			if localRejection.parsed {
+				interpreted, err = output.toDomain(request.TimeContext)
+			}
+			if err == nil || !localRejection.parsed {
+				schemaOnlyRejection = true
+				err = localRejection.cause
+			}
+		} else if generationErr != nil {
 			break
+		} else {
+			interpreted, err = output.toDomain(request.TimeContext)
 		}
-		interpreted, err = output.toDomain(request.TimeContext)
 		if err == nil || draw+1 >= maxDraws || ctx.Err() != nil {
 			break
 		}
@@ -1205,6 +1266,12 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 		// every real bound violation reaches the route as an
 		// indistinguishable bare ErrModelOutput.
 		rejection := contextfabric.ClassifyInterpretationRejection(interpreted, err, rawFactRequirementKindsByTrimmedKind(output.FactRequirements))
+		if schemaOnlyRejection {
+			// Genkit refused a draw the validator has no rule for (or that
+			// never decoded): typed as a rejection, never as a rule that was
+			// not the one violated.
+			rejection = contextfabric.NewInterpretationRejection(contextfabric.InterpretationRejectionUnclassified, fmt.Errorf("%w: %w: %w", contextfabric.ErrInterpretationRejected, contextfabric.ErrModelOutput, err))
+		}
 		// Read the reason back OFF the classified error rather than
 		// deriving it a second time here. One derivation, one source of
 		// truth: a second call to the diagnosis mirror could drift from
@@ -3076,7 +3143,7 @@ func classifyModelError(err error) error {
 			// output. Distinguish by the fixed prefix Genkit always uses for
 			// the schema-mismatch case; never inspect or forward the rest of
 			// the message, which may quote the malformed output.
-			if strings.HasPrefix(genkitErr.Message, "model failed to generate output matching expected schema") {
+			if strings.HasPrefix(genkitErr.Message, genkitSchemaMismatchPrefix) {
 				return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelOutput, genkitErr.Status)
 			}
 			return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelUnavailable, genkitErr.Status)
