@@ -674,6 +674,25 @@ def _redemption_body(turn, prev_result, warn):
                                       "receipt_id": hit[0]["receipt_id"]}]}
 
 
+def _need_receipts(result, want_kind):
+    """Receipts answering the window and kind offers on `result`, or {} when neither is
+    offered. Kind is matched by the turn's declared requested_kind, never by index; no match
+    leaves it unanswered."""
+    sn = result.get("structure_needs") or {}
+    wc = result.get("window_clarification")
+    win = sn.get("window_options") or (wc.get("options") if wc else None) or []
+    out = {}
+    pick = next((o for o in win if o.get("relative_id") == "trailing_90d"), None) or (win[0] if win else None)
+    if pick:
+        out["priorWindowReceipts"] = [{"result_id": result.get("result_id"),
+                                       "receipt_id": pick["receipt_id"]}]
+    kind = [o for o in (sn.get("kind_options") or []) if want_kind and o.get("kind") == want_kind]
+    if kind:
+        out["priorKindReceipts"] = [{"result_id": result.get("result_id"),
+                                     "receipt_id": kind[0]["receipt_id"]}]
+    return out
+
+
 def run_conversation(conv, rep, outdir, warn=print):
     """One replicate of one authored conversation. Sibling of run_replicate, not a variant:
     every turn posts ITS OWN authored text; turn N>1 carries `parentResultId` +
@@ -706,20 +725,34 @@ def run_conversation(conv, rep, outdir, warn=print):
                     rec["why"] = broken = "redeem_unavailable"
                     continue
                 body.update(receipt)
-        status = payload = None
-        for attempt in range(1, MAX_ATTEMPTS_PER_TURN + 1):
-            status, payload, dt, undecodable, raw = post(body)
-            rec["attempts"] += 1
-            fname = outdir / f"{conv['id']}-rep{rep}-t{n}-a{attempt}.json"
-            with open(fname, "w") as f:
-                json.dump({"request": body, "status": status, "response": payload,
-                           "dt": float(f"{dt:.1f}"), "body_undecodable": undecodable}, f, indent=2)
-            persist_raw_response(fname, raw)
-            print(f"  [{tag}] t{n} a{attempt}: http={status} dt={dt:.1f}s", flush=True)
-            if contract.is_success_status(status) or not is_retryable(status, payload):
+        result, status = None, None
+        for step in range(1, MAX_TURNS + 1):
+            status, payload = None, None
+            for attempt in range(1, MAX_ATTEMPTS_PER_TURN + 1):
+                status, payload, dt, undecodable, raw = post(body)
+                rec["attempts"] += 1
+                fname = outdir / f"{conv['id']}-rep{rep}-t{n}-s{step}-a{attempt}.json"
+                with open(fname, "w") as f:
+                    json.dump({"request": body, "status": status, "response": payload,
+                               "dt": round(dt, 1), "body_undecodable": undecodable}, f, indent=2)
+                persist_raw_response(fname, raw)
+                print(f"  [{tag}] t{n} s{step} a{attempt}: http={status} dt={dt:.1f}s", flush=True)
+                if contract.is_success_status(status) or not is_retryable(status, payload):
+                    break
+            result = (payload or {}).get("result") if contract.is_success_status(status) else None
+            rec["steps"] = step
+            if not result:
                 break
+            # Window / kind needs are answered INSIDE the turn (as run_replicate does), so a
+            # turn's verdict reflects what the engine does with the authored question, not
+            # an unanswered window prompt. A subject-candidate offer is never answered here:
+            # that is the behaviour the turn's own expectation is about.
+            receipts = _need_receipts(result, turn.get("requested_kind") or "")
+            if (result.get("status") != "clarification_required" or not receipts
+                    or (result.get("subject_resolution") or {}).get("candidates")):
+                break
+            body = {"question": turn["text"], **receipts, **derive_parent_reference(result)}
         rec["ran"] = True
-        result = (payload or {}).get("result") if contract.is_success_status(status) else None
         rec["obs"] = _conversation.observe(status, result)
         if not result:
             rec["why"] = broken = f"previous_turn_no_result(http={status})"

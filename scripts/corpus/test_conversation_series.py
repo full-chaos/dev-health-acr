@@ -209,6 +209,25 @@ def test_unredeemable_offer_is_not_measured_and_merge_fails():
     assert m.returncode == 2 and "not measured" in m.stderr
 
 
+def test_window_prompt_is_answered_inside_the_turn():
+    win = _res("clarification_required", "res-w", [], [], 0)
+    win[1]["result"]["window_clarification"] = {
+        "options": [{"relative_id": "trailing_90d", "receipt_id": "wr-1"}]}
+    script = [win, _res("complete", "r1x", ["syn:one"]),
+              _res("clarification_required", "r2x", [], ["syn:one", "syn:two"], 0),
+              _res("complete", "r3x", ["syn:two"])]
+    with _Server(script) as srv:
+        r, tmp = _run("run_conversations.py", CONV_CORPUS, ["1"], srv.base)
+        assert r.returncode == 0, r.stderr
+        seen = srv.seen
+    assert len(seen) == 4
+    assert seen[1]["priorWindowReceipts"] == [{"result_id": "res-w", "receipt_id": "wr-1"}]
+    summ = json.loads((tmp / "out" / "rep1" / "conversation-summary.json").read_text())
+    t1 = summ["records"][0]["turns"][0]
+    assert t1["steps"] == 2 and t1["obs"]["status"] == "complete"
+    assert seen[2]["parentResultId"] == "r1x" and "priorWindowReceipts" not in seen[2]
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):
