@@ -87,6 +87,7 @@ func newContextFabricTestAppWithResultsAndLogs(t *testing.T, investigator contex
 			ReadinessChecks:            exactRuntimeChecks(),
 			Investigator:               investigator,
 			InvestigationResults:       results,
+			StoredResultGate:           testStoredResultGate(investigator),
 		},
 	}, testLogger(logs))
 	if err != nil {

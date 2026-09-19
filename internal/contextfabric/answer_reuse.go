@@ -577,6 +577,19 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 	if err := ctx.Err(); err != nil {
 		return InvestigationResult{}, false, false, storedCountReading{}, nil
 	}
+	// The stored-result decision every read of a stored answer takes, before
+	// any reuse-specific rule: a candidate whose subjects the caller's current
+	// grant does not admit is never served, whatever else it matches. An
+	// undecidable candidate is a miss, never a hit.
+	if decision := e.storedResultGate.Authorize(ctx, principal, stored, StoredResultSurfaceAnswerReuse); !decision.Admitted() {
+		if e.telemetry != nil {
+			e.telemetry.RecordStoredResultAuthorization(ctx, principal, decision)
+		}
+		e.recordReuseOutcome(ctx, principal, AnswerReuseMissAuthorization)
+		return InvestigationResult{}, false, false, storedCountReading{}, nil
+	} else if e.telemetry != nil {
+		e.telemetry.RecordStoredResultAuthorization(ctx, principal, decision)
+	}
 	// CHAOS-3900 W1 (codex review, rounds 2-5, consolidated round 5): a
 	// window-keyed lookup (windowKey != "") must never serve a candidate
 	// whose OWN stored content disagrees with what the window fragment in

@@ -39,6 +39,12 @@ type EpisodeCreator interface {
 	Create(context.Context, storage.Principal, contractsv1.AgentEpisodeCreate) (contractsv1.AgentEpisode, bool, error)
 }
 
+// StoredResultAuthorizer is the stored-result authorization decision the
+// retrieval route consults (contextfabric.StoredResultGate).
+type StoredResultAuthorizer interface {
+	Authorize(context.Context, storage.Principal, contextfabric.StoredInvestigationResult, contextfabric.StoredResultSurface) contextfabric.StoredResultAuthorization
+}
+
 type RuntimeDependencies struct {
 	Credentials                *storage.CredentialLifecycle
 	DeviceAuthorizations       storage.DeviceAuthorizationStore
@@ -69,6 +75,12 @@ type RuntimeDependencies struct {
 	// model work -- and folding it into the Investigator port would widen
 	// a domain interface for one consumer's convenience.
 	InvestigationResults contextfabric.InvestigationResultStore
+	// StoredResultGate decides, live on every read, whether a stored result
+	// may be served to the calling principal. It is the SAME gate the engine
+	// decides its own prior-result reads with. When InvestigationResults is
+	// configured and this is nil, the retrieval route fails closed as
+	// unavailable rather than serve an undecided result.
+	StoredResultGate StoredResultAuthorizer
 	// OrgModelConfigs is optional (CHAOS-3775) -- same convention as
 	// Investigator. When nil (no ACR_CONTEXT_FABRIC_CREDENTIAL_ENCRYPTION_KEYS
 	// configured), the model-config routes stay registered, authorized, and

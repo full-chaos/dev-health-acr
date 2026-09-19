@@ -574,6 +574,16 @@ type engineTupleReuseGraph struct {
 	discoverContextCalls int
 }
 
+// AuthorizeStoredSubjects: this fixture's graph holds every stored subject
+// under the test principal's grant.
+func (g *engineTupleReuseGraph) AuthorizeStoredSubjects(_ context.Context, _ storage.Principal, _ contextfabric.ResolvedGraphBinding, subjects []contextfabric.SubjectRef) ([]contextfabric.StoredSubjectOutcome, error) {
+	out := make([]contextfabric.StoredSubjectOutcome, len(subjects))
+	for index := range out {
+		out[index] = contextfabric.StoredSubjectAdmitted
+	}
+	return out, nil
+}
+
 func (g *engineTupleReuseGraph) ResolveInvestigationBinding(context.Context, storage.Principal) (contextfabric.ResolvedGraphBinding, error) {
 	return g.binding, nil
 }

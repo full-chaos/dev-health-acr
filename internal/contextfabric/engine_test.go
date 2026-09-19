@@ -85,6 +85,17 @@ func identityProvenDigests(subjects ...SubjectRef) []contractsv1.ContextFabricCo
 	return digests
 }
 
+// AuthorizeStoredSubjects: graphReaderStub's graph holds every stored subject
+// under the test's grant. Tests about the stored-result decision itself use
+// their own graph.
+func (graphReaderStub) AuthorizeStoredSubjects(_ context.Context, _ storage.Principal, _ ResolvedGraphBinding, subjects []SubjectRef) ([]StoredSubjectOutcome, error) {
+	out := make([]StoredSubjectOutcome, len(subjects))
+	for index := range out {
+		out[index] = StoredSubjectAdmitted
+	}
+	return out, nil
+}
+
 func (g graphReaderStub) ResolveInvestigationBinding(context.Context, storage.Principal) (ResolvedGraphBinding, error) {
 	return ResolvedGraphBinding{GraphKey: "stub-key", Epoch: 0}, nil
 }
@@ -376,6 +387,9 @@ func TestNewEngineRequiresAllCoreCapabilities(t *testing.T) {
 // through.
 type recordingTelemetry struct {
 	ensembleEvents []InterpretationEnsembleEvent
+	// storedResultAuthorizations records every stored-result decision
+	// verbatim, in emission order.
+	storedResultAuthorizations []StoredResultAuthorization
 	// requirementOutcomeTransitions (CHAOS-5737) records every transition line
 	// verbatim, in emission order.
 	requirementOutcomeTransitions []RequirementOutcomeTransitionEvent
@@ -2296,6 +2310,10 @@ func (g *countingGraphReader) DiscoverContext(context.Context, storage.Principal
 }
 
 func (r *recordingTelemetry) RecordWorkItemReuse(context.Context, storage.Principal, WorkItemReuseEvent) {
+}
+
+func (r *recordingTelemetry) RecordStoredResultAuthorization(_ context.Context, _ storage.Principal, decision StoredResultAuthorization) {
+	r.storedResultAuthorizations = append(r.storedResultAuthorizations, decision)
 }
 
 func (r *recordingTelemetry) RecordWorkItemStoredServing(context.Context, storage.Principal, WorkItemStoredServingEvent) {
