@@ -499,7 +499,11 @@ func TestWorkItemAuthorizationPathsThroughEverySQLReader(t *testing.T) {
 			{scoped, contextfabric.FactRequiredChildren, "required_child_work_item_id", "linear:p-both"},
 			{authzPathsPrincipal(), contextfabric.FactBlockers, "blocked_by_work_item_id", "linear:p-both,linear:secret,linear:shared-id"},
 			{authzPathsPrincipal(), contextfabric.FactRequiredChildren, "required_child_work_item_id", "linear:p-both,linear:secret,linear:shared-id"},
-			// A principal who may not see the subject gets nothing about it.
+			// A principal who may not see the subject gets nothing about it,
+			// even when it may see the item on the other end (linear:secret
+			// lives in the repository this principal holds).
+			{authzPathsPrincipal(authzPathsSlugN), contextfabric.FactBlockers, "blocked_by_work_item_id", ""},
+			{authzPathsPrincipal(authzPathsSlugN), contextfabric.FactRequiredChildren, "required_child_work_item_id", ""},
 			{authzPathsPrincipal("zzz/none"), contextfabric.FactBlockers, "blocked_by_work_item_id", ""},
 			{authzPathsPrincipal("zzz/none"), contextfabric.FactRequiredChildren, "required_child_work_item_id", ""},
 		} {
