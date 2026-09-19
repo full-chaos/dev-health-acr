@@ -1278,14 +1278,31 @@ func decideContinuationAxis(
 	requestTime TimeContext,
 	windowCommitted bool,
 ) (TimeContext, ContinuationAxisOutcome) {
+	return decideConfirmedWindowAxis(decision.QuestionWindowConfirmed, decision.CarriedAxis, fresh, freshAnswerable, requestTime, windowCommitted)
+}
+
+// decideConfirmedWindowAxis is the ONE axis rule, shared by every source of a
+// window confirmed for this identical question: a redeemed window receipt
+// (decideContinuationAxis) and a remembered window the confirmed-need ledger
+// applies from the parent (decideRememberedWindowAxis). confirmed is that
+// source's own proof that the window was confirmed for this question;
+// carriedAxis is the axis the confirming result recorded.
+func decideConfirmedWindowAxis(
+	confirmed bool,
+	carriedAxis contractsv1.ContextFabricTemporalAxis,
+	fresh TimeContext,
+	freshAnswerable bool,
+	requestTime TimeContext,
+	windowCommitted bool,
+) (TimeContext, ContinuationAxisOutcome) {
 	if !windowCommitted {
 		return fresh, ContinuationAxisNotEvaluated
 	}
 	if fresh.Axis == contractsv1.ContextFabricTemporalCurrent && freshAnswerable {
 		return fresh, ContinuationAxisAgreed
 	}
-	if decision.QuestionWindowConfirmed &&
-		decision.CarriedAxis == contractsv1.ContextFabricTemporalCurrent &&
+	if confirmed &&
+		carriedAxis == contractsv1.ContextFabricTemporalCurrent &&
 		requestTime.Axis == contractsv1.ContextFabricTemporalCurrent {
 		// The caller's axis and instant only: a fresh proposal's range bounds
 		// are not carried onto the current axis, and the caller's requested

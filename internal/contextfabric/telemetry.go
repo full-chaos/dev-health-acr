@@ -461,6 +461,34 @@ func (t SlogEngineTelemetry) RecordConfirmedNeedLedgerWindow(ctx context.Context
 	t.logger.InfoContext(ctx, "context fabric confirmed need ledger window", args...)
 }
 
+// RecordRememberedWindowAxis logs at Info the axis decision for a turn whose
+// window the confirmed-need ledger remembered: the parent it came from, the
+// read of that parent, the fresh, carried and decided axes, and the outcome.
+// Every closed field goes through its membership guard.
+func (t SlogEngineTelemetry) RecordRememberedWindowAxis(ctx context.Context, principal storage.Principal, decision rememberedWindowAxisDecision) {
+	axis := func(value contractsv1.ContextFabricTemporalAxis) string {
+		if value == "" || contractsv1.ValidContextFabricTemporalAxis(value) {
+			return string(value)
+		}
+		return continuationTelemetryUnrecognised
+	}
+	read := string(decision.CarrierRead)
+	if !ValidContinuationCarrierRead(decision.CarrierRead) {
+		read = continuationTelemetryUnrecognised
+	}
+	outcome := string(decision.Outcome)
+	if !ValidContinuationAxisOutcome(decision.Outcome) {
+		outcome = continuationTelemetryUnrecognised
+	}
+	args := append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID), "source_result_id", SanitizeLogAttr(decision.SourceResultID),
+		"carrier_read", SanitizeLogAttr(read), "interpreted_axis", SanitizeLogAttr(axis(decision.InterpretedAxis)),
+		"carried_axis", SanitizeLogAttr(axis(decision.CarriedAxis)), "decided_axis", SanitizeLogAttr(axis(decision.DecidedAxis)),
+		"outcome", SanitizeLogAttr(outcome),
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric remembered window axis", args...)
+}
+
 // RecordStructureNeedsDisclosed (CHAOS-3900 P1.F). member is a closed
 // StructureNeedKind enum value -- content-safe by construction, never
 // question text or a subject identifier.

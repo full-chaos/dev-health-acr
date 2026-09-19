@@ -469,7 +469,7 @@ func TestCHAOS5582_TheLineVocabularyIsTheGuardsVocabulary(t *testing.T) {
 		"parent_reference": func(d *windowContinuationDecision, m string) {
 			d.ParentReference = ContinuationParentReference(m)
 		},
-		"carrier_read":             func(d *windowContinuationDecision, m string) { d.CarrierRead = ContinuationCarrierRead(m) },
+		"carrier_read": func(d *windowContinuationDecision, m string) { d.CarrierRead = ContinuationCarrierRead(m) },
 		"request_identity_match": func(d *windowContinuationDecision, m string) {
 			d.RequestIdentityMatch = ContinuationRequestIdentityMatch(m)
 		},

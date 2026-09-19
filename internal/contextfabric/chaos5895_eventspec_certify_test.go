@@ -56,3 +56,21 @@ func TestQuestionWindow_TheDecisionLineCertifiesAgainstItsSpecification(t *testi
 		})
 	}
 }
+
+// The remembered-window axis line, certified from the real producer: the
+// third turn of a chain continues the identical question from the answered
+// turn while the model reads it on another axis.
+func TestQuestionWindow_TheRememberedWindowAxisLineCertifiesAgainstItsSpecification(t *testing.T) {
+	t.Parallel()
+	raw, orgID, requestID := contextfabric.RunRememberedWindowAxisScenarioForTest(t)
+	log, err := certify.Parse(raw)
+	if err != nil {
+		t.Fatalf("certify.Parse() on production slog output: %v", err)
+	}
+	if _, err := certify.Certify(log, certify.Assertion{Event: eventspec.RememberedWindowAxis, Want: map[string]any{
+		"org_id": orgID, "request_id": requestID, "carrier_read": "read", "interpreted_axis": "valid_time", "carried_axis": "current",
+		"decided_axis": "current", "outcome": "overridden_by_receipt",
+	}}); err != nil {
+		t.Fatalf("certify: %v", err)
+	}
+}

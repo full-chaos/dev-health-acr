@@ -237,6 +237,9 @@ func TestPriorSubjectReceiptDispositionsDisclosedOnAxisConflictVeto(t *testing.T
 	request := validInvestigationRequest()
 	request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: priorWindowResult.ResultID, ReceiptID: "winr_confirm34780"}}
 	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: priorSubjectResult.ResultID, ReceiptID: "receipt_axisconflict1"}}
+	// A changed question: the confirmation speaks for the prior question only,
+	// so the moved axis meets the veto.
+	request.Question += " Include the drivers."
 
 	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
 	if err != nil {

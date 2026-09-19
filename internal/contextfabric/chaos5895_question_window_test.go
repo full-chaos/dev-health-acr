@@ -10,7 +10,9 @@ package contextfabric
 // confirmation to nothing. A turn the confirmation does not govern (a changed
 // question, a parent naming another result, a carrier from another graph epoch
 // or one recording a non-current axis) keeps its typed outcome: the fresh
-// reading's axis-conflict veto, or the continuation refusal.
+// reading's axis-conflict veto, or the continuation refusal. The window the
+// confirmed-need ledger remembers from the answered parent is the same
+// confirmation carried one turn on, and the same rule decides its axis.
 //
 // The domain is ENUMERATED from production vocabularies, every cell is executed
 // through Engine.Investigate, and the expected outcome of every cell is stated
@@ -47,17 +49,17 @@ func questionWindowSelections() []questionWindowSelection {
 type questionWindowCarrier string
 
 const (
-	carrierCurrent      questionWindowCarrier = "current"
-	carrierNonCurrent   questionWindowCarrier = "range_recorded"
-	carrierEpochStale   questionWindowCarrier = "epoch_stale"
-	questionIdentical                         = "identical"
-	questionChanged                           = "changed"
-	outcomeConfirmed                          = "served_confirmed_window"
-	outcomeFreshAgreed                        = "served_fresh_current"
-	outcomeAxisVeto                           = "refused_window_axis_conflict"
-	outcomeContinuation                       = "refused_continuation_context_unverifiable"
-	questionWindowOtherID                     = "result_5895_other_turn_01"
-	questionWindowKindReceiptID               = "kindr_5895resolvable0001"
+	carrierCurrent              questionWindowCarrier = "current"
+	carrierNonCurrent           questionWindowCarrier = "range_recorded"
+	carrierEpochStale           questionWindowCarrier = "epoch_stale"
+	questionIdentical                                 = "identical"
+	questionChanged                                   = "changed"
+	outcomeConfirmed                                  = "served_confirmed_window"
+	outcomeFreshAgreed                                = "served_fresh_current"
+	outcomeAxisVeto                                   = "refused_window_axis_conflict"
+	outcomeContinuation                               = "refused_continuation_context_unverifiable"
+	questionWindowOtherID                             = "result_5895_other_turn_01"
+	questionWindowKindReceiptID                       = "kindr_5895resolvable0001"
 )
 
 func questionWindowCarriers() []questionWindowCarrier {
@@ -385,5 +387,95 @@ func TestQuestionWindow_ParentReferenceDomain(t *testing.T) {
 	}
 	if ValidContinuationParentReference("invented") || ValidContinuationParentReference("") {
 		t.Fatal("membership admits a non-member")
+	}
+}
+
+// TestQuestionWindow_AByteDifferentWindowOnlyFollowUpTakesTheFreshPath pins
+// the path the confirmed-window rule does NOT widen: a follow-up whose text
+// differs from the answered parent's, redeeming no window offer, continues no
+// confirmed window. The remembered window is not admitted (the ledger refuses a
+// changed question), no axis decision runs, and the fresh reading governs --
+// the path it takes on main.
+func TestQuestionWindow_AByteDifferentWindowOnlyFollowUpTakesTheFreshPath(t *testing.T) {
+	t.Parallel()
+	h := newNeedTurnHarness(t, nil)
+	_, two, _ := windowLedgerChain(t, h, "byte_different")
+	h.historical = true
+	axesMark, decisionsMark := len(h.telemetry.rememberedWindowAxes), len(h.telemetry.windowContinuationDecisions)
+	request := continuingNeedTurn(needTurnRequest("request_need_byte_different_three", false), two.result.ResultID)
+	request.Question += " Over another window."
+	request.RequestedScope.SubjectHints = []contractsv1.ContextFabricSubjectHint{}
+	three := h.turn(request, committingNeedResponse())
+	if len(three.ledgers) != 1 || three.ledgers[0].Outcome == ConfirmedNeedLedgerHit {
+		t.Fatalf("ledger = %#v, want one line refusing the changed question", three.ledgers)
+	}
+	if got := len(h.telemetry.rememberedWindowAxes) - axesMark; got != 0 {
+		t.Fatalf("remembered-window axis decisions = %d, want 0", got)
+	}
+	if got := len(h.telemetry.windowContinuationDecisions) - decisionsMark; got != 0 {
+		t.Fatalf("window continuation decisions = %d, want 0", got)
+	}
+	if window := three.result.EffectiveEvidenceWindow; window != nil && window.Provenance == WindowClarificationConfirmed {
+		t.Fatalf("served a confirmed window %#v on a turn that confirmed none", window)
+	}
+}
+
+// TestQuestionWindow_RememberedWindowAxisDomain is the remembered-window axis
+// decision's input domain: ledger application × parent read × parent axis ×
+// fresh axis, each cell with a literal outcome.
+func TestQuestionWindow_RememberedWindowAxisDomain(t *testing.T) {
+	t.Parallel()
+	question := validInvestigationRequest().Question
+	prior := continuationPrior(t, continuationPriorID, question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
+	ranged := prior
+	ranged.ResultID = continuationOlderID
+	ranged.Interpretation.TimeContext = TimeContext{Axis: TemporalRange, Start: &axis5582RangeStart, End: &axis5582RangeEnd}
+	store := &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior, ranged.ResultID: ranged}}
+	window := &contractsv1.ContextFabricEffectiveEvidenceWindow{RelativeID: RelativeWindowTrailing90D, Provenance: WindowClarificationConfirmed}
+	applied := func(source string) ledgerWindowApplication {
+		return ledgerWindowApplication{Present: true, Decision: ConfirmedNeedLedgerWindowApplied, SourceResultID: source, Window: window}
+	}
+	current := TimeContext{Axis: TemporalCurrent}
+	drift := TimeContext{Axis: TemporalRange, Start: &axis5582RangeStart, End: &axis5582RangeEnd}
+	for _, tc := range []struct {
+		name      string
+		store     InvestigationResultStore
+		app       ledgerWindowApplication
+		fresh     TimeContext
+		request   TimeContext
+		committed bool
+		want      rememberedWindowAxisDecision
+	}{
+		{"applied/current_parent/drift", store, applied(prior.ResultID), drift, current, true,
+			rememberedWindowAxisDecision{prior.ResultID, ContinuationCarrierReadOK, TemporalRange, TemporalCurrent, TemporalCurrent, ContinuationAxisOverriddenByReceipt}},
+		{"applied/current_parent/fresh_current", store, applied(prior.ResultID), current, current, true,
+			rememberedWindowAxisDecision{prior.ResultID, ContinuationCarrierReadOK, TemporalCurrent, TemporalCurrent, TemporalCurrent, ContinuationAxisAgreed}},
+		{"applied/range_parent/drift", store, applied(ranged.ResultID), drift, current, true,
+			rememberedWindowAxisDecision{ranged.ResultID, ContinuationCarrierReadOK, TemporalRange, TemporalRange, TemporalRange, ContinuationAxisVetoed}},
+		{"applied/read_failed/drift", failingGetStore{store, prior.ResultID}, applied(prior.ResultID), drift, current, true,
+			rememberedWindowAxisDecision{prior.ResultID, ContinuationCarrierReadFailed, TemporalRange, "", TemporalRange, ContinuationAxisVetoed}},
+		{"applied/no_store/drift", nil, applied(prior.ResultID), drift, current, true,
+			rememberedWindowAxisDecision{prior.ResultID, ContinuationCarrierNotRead, TemporalRange, "", TemporalRange, ContinuationAxisVetoed}},
+		{"not_applied/drift", store, ledgerWindowApplication{Present: true, Decision: ConfirmedNeedLedgerWindowNotApplicable, SourceResultID: prior.ResultID}, drift, current, true,
+			rememberedWindowAxisDecision{prior.ResultID, ContinuationCarrierNotRead, TemporalRange, "", TemporalRange, ContinuationAxisVetoed}},
+		{"applied_without_window/drift", store, ledgerWindowApplication{Present: true, Decision: ConfirmedNeedLedgerWindowApplied, SourceResultID: prior.ResultID}, drift, current, true,
+			rememberedWindowAxisDecision{prior.ResultID, ContinuationCarrierNotRead, TemporalRange, "", TemporalRange, ContinuationAxisVetoed}},
+		{"applied/request_not_current", store, applied(prior.ResultID), drift, TimeContext{Axis: TemporalValidTime, AsOf: &axis5582AsOf}, true,
+			rememberedWindowAxisDecision{prior.ResultID, ContinuationCarrierReadOK, TemporalRange, TemporalCurrent, TemporalRange, ContinuationAxisVetoed}},
+		{"applied/uncommitted", store, applied(prior.ResultID), drift, current, false,
+			rememberedWindowAxisDecision{prior.ResultID, ContinuationCarrierReadOK, TemporalRange, TemporalCurrent, TemporalRange, ContinuationAxisNotEvaluated}},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			engine := &Engine{}
+			if tc.store != nil {
+				engine.results = tc.store
+			}
+			_, got := engine.decideRememberedWindowAxis(context.Background(), acceptancePrincipal(), tc.app, tc.fresh, true, tc.request, tc.committed)
+			if got != tc.want {
+				t.Fatalf("decision = %+v, want %+v", got, tc.want)
+			}
+		})
 	}
 }

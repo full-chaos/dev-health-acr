@@ -910,9 +910,10 @@ func TestConfirmedNeedConsumers_AxisConflictVetoCapturesNoWindow(t *testing.T) {
 	h.historical = true
 	request := needTurnRequest("request_need_axis_two", false)
 	request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: one.result.ResultID, ReceiptID: option.ReceiptID}}
-	// A parent reference takes this turn outside the window-only continuation
-	// shape, whose carried axis would otherwise override the moved one.
+	// A changed question: the confirmation speaks for turn one's question
+	// only, so the moved axis meets the veto.
 	request.ParentResultID = one.result.ResultID
+	request.Question += " Include the drivers."
 	two := h.turn(request, committingNeedResponse())
 	if two.result.Status != InvestigationNoMatch || len(memberEntries(two.result, contractsv1.ContextFabricStructureNeedWindow)) != 0 {
 		t.Fatalf("fixture defect: turn two must be the axis-conflict veto echoing no window; status=%s structure=%#v", two.result.Status, two.result.ConfirmedStructure)
@@ -1498,8 +1499,8 @@ func TestConfirmedNeedConsumers_RememberedWindowAppliesWhereTheReceiptDoes(t *te
 	fresh := func(requestID string) InvestigationRequest {
 		request := needTurnRequest(requestID, false)
 		request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: one.result.ResultID, ReceiptID: option.ReceiptID}}
-		// A parent reference keeps the receipt turn outside the window-only
-		// continuation shape, as the ledger turn is.
+		// The receipt turn names turn one as its parent, as a threading
+		// caller does.
 		request.ParentResultID = one.result.ResultID
 		return request
 	}
@@ -1533,12 +1534,16 @@ func TestConfirmedNeedConsumers_RememberedWindowAppliesWhereTheReceiptDoes(t *te
 		}
 	})
 
-	t.Run("interpretation moves the axis: the same veto as the receipt", func(t *testing.T) {
+	t.Run("interpretation moves the axis: the confirmed window governs, as for the receipt", func(t *testing.T) {
 		h.historical = true
 		defer func() { h.historical = false }()
+		axesMark := len(h.telemetry.rememberedWindowAxes)
 		ledger := h.turn(continuingNeedTurn(needTurnRequest("request_need_parity_axis_ledger", false), two.result.ResultID), committingNeedResponse())
+		ledgerAxes := append([]rememberedWindowAxisDecision(nil), h.telemetry.rememberedWindowAxes[axesMark:]...)
 		receipt := h.turn(fresh("request_need_parity_axis_receipt"), committingNeedResponse())
-		control := h.turn(changed(continuingNeedTurn(needTurnRequest("request_need_parity_axis_control", false), two.result.ResultID)), committingNeedResponse())
+		changedQuestion := continuingNeedTurn(needTurnRequest("request_need_parity_axis_changed", false), two.result.ResultID)
+		changedQuestion.Question += " Include the drivers."
+		drifted := h.turn(changedQuestion, committingNeedResponse())
 		vetoed := func(o needTurnOutcome) bool {
 			for _, outcome := range o.windowCanons {
 				if outcome == WindowCanonicalizationVetoAxisConflict {
@@ -1547,11 +1552,29 @@ func TestConfirmedNeedConsumers_RememberedWindowAppliesWhereTheReceiptDoes(t *te
 			}
 			return false
 		}
-		if !vetoed(ledger) || !vetoed(receipt) || vetoed(control) {
-			t.Fatalf("axis-conflict veto ledger=%v receipt=%v control=%v, want true, true, false", vetoed(ledger), vetoed(receipt), vetoed(control))
+		for name, turn := range map[string]needTurnOutcome{"ledger": ledger, "receipt": receipt} {
+			window := turn.result.EffectiveEvidenceWindow
+			if vetoed(turn) || window == nil || window.Provenance != WindowClarificationConfirmed || window.RelativeID != option.RelativeID {
+				t.Fatalf("%s turn: vetoed=%v status=%s window=%#v, want served under the confirmed option's window", name, vetoed(turn), turn.result.Status, window)
+			}
+		}
+		if ledger.saveKey != receipt.saveKey {
+			t.Fatalf("save keys ledger=%q receipt=%q, want equal", ledger.saveKey, receipt.saveKey)
+		}
+		want := []rememberedWindowAxisDecision{{
+			SourceResultID: two.result.ResultID, CarrierRead: ContinuationCarrierReadOK,
+			InterpretedAxis: TemporalValidTime, CarriedAxis: TemporalCurrent, DecidedAxis: TemporalCurrent, Outcome: ContinuationAxisOverriddenByReceipt,
+		}}
+		if !reflect.DeepEqual(ledgerAxes, want) {
+			t.Fatalf("ledger remembered-window axis decisions = %#v, want %#v", ledgerAxes, want)
+		}
+		// A changed question admits no remembered window: its own fresh axis
+		// governs and meets no confirmed window at all.
+		if drifted.result.EffectiveEvidenceWindow != nil && drifted.result.EffectiveEvidenceWindow.Provenance == WindowClarificationConfirmed {
+			t.Fatalf("changed question served the remembered window %#v", drifted.result.EffectiveEvidenceWindow)
 		}
 		if ledger.saved == nil || len(ledger.saved.ConfirmedNeeds) != 1 || ledger.saved.ConfirmedNeeds[0].Member != contractsv1.ContextFabricStructureNeedWindow {
-			t.Fatalf("ledger turn saved %#v, want the remembered window carried forward through the veto", ledger.saved)
+			t.Fatalf("ledger turn saved %#v, want the remembered window carried forward", ledger.saved)
 		}
 	})
 }

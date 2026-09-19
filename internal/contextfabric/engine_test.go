@@ -534,6 +534,7 @@ type recordingTelemetry struct {
 	// confirmedNeedLedgerWindows (CHAOS-5734) mirrors the SAME list-not-count
 	// discipline.
 	confirmedNeedLedgerWindows []confirmedNeedLedgerWindowRecord
+	rememberedWindowAxes       []rememberedWindowAxisDecision
 	// modelRowsStripped (CHAOS-4355 follow-up) mirrors the SAME
 	// list-not-count discipline.
 	modelRowsStripped []int
@@ -772,6 +773,10 @@ func (r *recordingTelemetry) RecordConfirmedNeedLedger(_ context.Context, _ stor
 
 func (r *recordingTelemetry) RecordConfirmedNeedLedgerWindow(_ context.Context, _ storage.Principal, decision ConfirmedNeedLedgerWindowDecision, sourceResultID, appliedWindow string) {
 	r.confirmedNeedLedgerWindows = append(r.confirmedNeedLedgerWindows, confirmedNeedLedgerWindowRecord{decision, sourceResultID, appliedWindow})
+}
+
+func (r *recordingTelemetry) RecordRememberedWindowAxis(_ context.Context, _ storage.Principal, decision rememberedWindowAxisDecision) {
+	r.rememberedWindowAxes = append(r.rememberedWindowAxes, decision)
 }
 
 func (r *recordingTelemetry) RecordGatedOfferResolution(_ context.Context, _ storage.Principal, outcome GatedOfferResolutionOutcome) {

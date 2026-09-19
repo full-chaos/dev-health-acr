@@ -26,6 +26,7 @@ var ByID = map[string]Event{
 	"contextfabric.confirmed_need_ledger":          ConfirmedNeedLedger,
 	"contextfabric.count_population_scope":         CountPopulationScope,
 	"contextfabric.frame_validation":               FrameValidation,
+	"contextfabric.remembered_window_axis":         RememberedWindowAxis,
 	"contextfabric.requirement_outcome_transition": RequirementOutcomeTransition,
 	"contextfabric.retained_ranking_accounting":    RetainedRankingAccounting,
 	"contextfabric.semantic_state_persistence":     SemanticStatePersistence,
@@ -1204,6 +1205,68 @@ func (f FrameValidationFields) SlogArgs() []any {
 		"requirement_computed_input_kind_landscape", f.RequirementComputedInputKindLandscape,
 		"requirement_computed_step_server_executed", f.RequirementComputedStepServerExecuted,
 		"requirement_computed_step_declared_only", f.RequirementComputedStepDeclaredOnly,
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// RememberedWindowAxisFields is contextfabric.remembered_window_axis's generated typed construction interface
+// (CHAOS-5516): one Go field per Field RememberedWindowAxis.Fields declares in spec.go.
+type RememberedWindowAxisFields struct {
+	OrgID           string
+	SourceResultID  string
+	CarrierRead     string
+	InterpretedAxis string
+	CarriedAxis     string
+	DecidedAxis     string
+	Outcome         string
+	RequestID       string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every RememberedWindowAxisFields uniformly, set ONLY by NewRememberedWindowAxisFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewRememberedWindowAxisFields is the generated constructor for RememberedWindowAxisFields -- every
+// field RememberedWindowAxis.Fields declares is a required parameter.
+func NewRememberedWindowAxisFields(orgID string, sourceResultID string, carrierRead string, interpretedAxis string, carriedAxis string, decidedAxis string, outcome string, requestID string) RememberedWindowAxisFields {
+	return RememberedWindowAxisFields{
+		OrgID:           orgID,
+		SourceResultID:  sourceResultID,
+		CarrierRead:     carrierRead,
+		InterpretedAxis: interpretedAxis,
+		CarriedAxis:     carriedAxis,
+		DecidedAxis:     decidedAxis,
+		Outcome:         outcome,
+		RequestID:       requestID,
+		constructed:     true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewRememberedWindowAxisFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f RememberedWindowAxisFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns RememberedWindowAxis's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f RememberedWindowAxisFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"source_result_id", contextfabric.SanitizeLogAttr(f.SourceResultID),
+		"carrier_read", contextfabric.SanitizeLogAttr(f.CarrierRead),
+		"interpreted_axis", contextfabric.SanitizeLogAttr(f.InterpretedAxis),
+		"carried_axis", contextfabric.SanitizeLogAttr(f.CarriedAxis),
+		"decided_axis", contextfabric.SanitizeLogAttr(f.DecidedAxis),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }
