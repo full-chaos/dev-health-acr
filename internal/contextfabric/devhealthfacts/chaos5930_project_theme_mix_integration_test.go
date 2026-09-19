@@ -44,11 +44,14 @@ func createCHAOS5930Tables(t *testing.T, ctx context.Context, connection clickho
 	for _, statement := range devhealthschema.DDL(
 		"projects", "teams", "team_project_ownership", "team_repo_ownership",
 		"repos", "work_unit_investments", "investment_metrics_daily",
-		"work_item_team_attributions",
+		"work_item_team_attributions", "work_items", "project_membership_transitions",
 	) {
 		if err := connection.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
+	}
+	if err := connection.Exec(ctx, devhealthschema.ProjectMembershipPresenceViewDDL); err != nil {
+		t.Fatalf("create view: %v", err)
 	}
 }
 

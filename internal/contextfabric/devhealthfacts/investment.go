@@ -134,6 +134,15 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 			return contextfabric.FactProviderResult{}, readFailure("query project theme mix", themeScanErr)
 		}
 		truncated = truncated || themeRowCount > maxFactRowsPerQuery
+		// The project's OWN attribution replaces the roll-up's shares for a
+		// project that has any, and leaves the roll-up in place for one that
+		// has none. It reads after the roll-up so it can merge onto the same
+		// fact and move the roll-up's population beside it.
+		nativeRowCount, nativeScanErr := p.readProjectNativeThemeMix(ctx, orgID, projectSubjects, &facts, timeBound)
+		if nativeScanErr != nil {
+			return contextfabric.FactProviderResult{}, readFailure("query project native theme mix", nativeScanErr)
+		}
+		truncated = truncated || nativeRowCount > maxFactRowsPerQuery
 	}
 
 	state, retentionReason := timeBound.retentionState(len(facts))
@@ -830,6 +839,7 @@ ORDER BY project_key`)
 		// repos) so a synthesizer never presents this as a project-native
 		// attribution computed directly from the project's own work items.
 		fields["rollup_basis"] = contextfabric.StringFactValue("team_project_ownership_via_owned_repos_work_unit_investments")
+		fields[contextfabric.FactFieldInvestmentMixSource] = contextfabric.StringFactValue(contextfabric.InvestmentMixSourceOwningTeamRollup)
 		fields["team_count"] = contextfabric.IntegerFactValue(int64(teamCount))
 		fields["repo_count"] = contextfabric.IntegerFactValue(int64(repoCount))
 		fields["work_unit_count"] = contextfabric.IntegerFactValue(int64(workUnits))
@@ -867,28 +877,123 @@ ORDER BY project_key`)
 		// own doc comment for why (lookupCanonicalFact first-match
 		// shadowing, the same reason readTeamThemeMix merges for the team
 		// subject).
-		merged := false
-		targetKey := contextfabric.FactSubjectKey(subject)
-		for i := range *facts {
-			if (*facts)[i].Kind != contextfabric.FactInvestment || contextfabric.FactSubjectKey((*facts)[i].Subject) != targetKey {
-				continue
-			}
-			for field, value := range fields {
-				(*facts)[i].Fields[field] = value
-			}
-			merged = true
-			break
-		}
-		if !merged {
-			*facts = append(*facts, contextfabric.CanonicalFact{
-				Kind: contextfabric.FactInvestment, Subject: subject, Fields: fields,
-				EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityProject, projectKey)},
-			})
-		}
+		mergeProjectInvestmentFact(facts, subject, projectKey, fields, nil)
 		return nil
 	}, extraBindings...)
 	if scanErr != nil {
 		return rowCount, scanErr
+	}
+	return rowCount, nil
+}
+
+// mergeProjectInvestmentFact merges fields onto the project's existing
+// FactInvestment fact, or appends a standalone one when none exists. A field
+// named in remove is deleted from an existing fact first. Merging rather than
+// appending is what keeps synthesis's first-match lookup from resolving a
+// theme claim to a fact without the theme fields.
+func mergeProjectInvestmentFact(facts *[]contextfabric.CanonicalFact, subject contextfabric.SubjectRef, projectKey string, fields map[string]contextfabric.FactValue, remove []string) {
+	targetKey := contextfabric.FactSubjectKey(subject)
+	for i := range *facts {
+		if (*facts)[i].Kind != contextfabric.FactInvestment || contextfabric.FactSubjectKey((*facts)[i].Subject) != targetKey {
+			continue
+		}
+		for _, field := range remove {
+			delete((*facts)[i].Fields, field)
+		}
+		for field, value := range fields {
+			(*facts)[i].Fields[field] = value
+		}
+		return
+	}
+	*facts = append(*facts, contextfabric.CanonicalFact{
+		Kind: contextfabric.FactInvestment, Subject: subject, Fields: fields,
+		EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityProject, projectKey)},
+	})
+}
+
+// projectNativeMixBasis names the attribution behind a project_native mix:
+// the project's own issue evidence, never pull requests and never the owning
+// teams' repositories.
+const projectNativeMixBasis = "project_work_items_issue_evidence_work_unit_investments"
+
+// readProjectNativeThemeMix attributes FactInvestment's canonical theme
+// fields to a project through the project's OWN work items
+// (readers.ReadProjectThemeMix), and makes that the project's mix when it has
+// any weight. The owning-team roll-up (readProjectThemeMix) stays for a
+// project with no native weight; the two are never blended, and the fact says
+// which one it carries in investment_mix_source.
+//
+// A project with native work units but no positive effort keeps the roll-up
+// and gains nothing: a zero total is not a mix. When the native mix replaces
+// the roll-up, the roll-up's population is not carried as the native
+// population: team_count, repo_count and work_units_without_repo_link are
+// removed because they describe a different attribution, and the roll-up's
+// work_unit_count moves to owning_team_rollup_work_unit_count so both
+// populations stay visible.
+//
+// A work unit that touches several projects counts in full for each;
+// spanning_unit_count discloses how many of the project's units do.
+func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rowCount int, err error) {
+	ids, bySubject, _ := v2Index(subjects, identity.KindProject)
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	rows, err := readers.ReadProjectThemeMixWithRowLimit(ctx, p.facts.client, orgID, ids, timeBound.neutral(), maxFactRowsProbe)
+	if err != nil {
+		return 0, err
+	}
+	rowCount = len(rows)
+	for i, row := range rows {
+		// The probe row is evidence of truncation, never served.
+		if i >= maxFactRowsPerQuery {
+			break
+		}
+		subject, ok := bySubject[row.ProjectSubjectKey]
+		if !ok {
+			continue
+		}
+		currentTotal := row.FeatureDelivery + row.Operational + row.Maintenance + row.Quality + row.Risk
+		if row.EffortUnits == 0 || currentTotal <= 0 {
+			continue
+		}
+		themeValues := map[string]float64{
+			contextfabric.ThemeFeatureDelivery: row.FeatureDelivery,
+			contextfabric.ThemeOperational:     row.Operational,
+			contextfabric.ThemeMaintenance:     row.Maintenance,
+			contextfabric.ThemeQuality:         row.Quality,
+			contextfabric.ThemeRisk:            row.Risk,
+		}
+		fields := make(map[string]contextfabric.FactValue, 2*len(canonicalInvestmentThemes)+8)
+		for _, theme := range canonicalInvestmentThemes {
+			fields[contextfabric.FactFieldTheme(theme)] = contextfabric.NumberFactValue(themeValues[theme] / currentTotal)
+		}
+		fields[contextfabric.FactFieldThemeQualityBugfix] = contextfabric.NumberFactValue(row.BugfixWeighted / currentTotal)
+		fields[contextfabric.FactFieldInvestmentMixSource] = contextfabric.StringFactValue(contextfabric.InvestmentMixSourceProjectNative)
+		fields["rollup_basis"] = contextfabric.StringFactValue(projectNativeMixBasis)
+		fields["work_unit_count"] = contextfabric.IntegerFactValue(int64(row.WorkUnits))
+		fields["effort_unit_count"] = contextfabric.IntegerFactValue(int64(row.EffortUnits))
+		fields["spanning_unit_count"] = contextfabric.IntegerFactValue(int64(row.SpanningUnits))
+		if timeBound.active {
+			fields["population_window"] = contextfabric.StringFactValue("requested_range")
+		} else {
+			fields["population_window"] = contextfabric.StringFactValue("current")
+		}
+		// The roll-up's unit population moves aside rather than being
+		// overwritten by a count of a different population.
+		targetKey := contextfabric.FactSubjectKey(subject)
+		for j := range *facts {
+			existing := &(*facts)[j]
+			if existing.Kind != contextfabric.FactInvestment || contextfabric.FactSubjectKey(existing.Subject) != targetKey {
+				continue
+			}
+			if prior, has := existing.Fields[contextfabric.FactFieldInvestmentMixSource]; has && prior.String != nil && *prior.String == contextfabric.InvestmentMixSourceOwningTeamRollup {
+				if count, hasCount := existing.Fields["work_unit_count"]; hasCount {
+					fields["owning_team_rollup_work_unit_count"] = count
+				}
+			}
+			break
+		}
+		mergeProjectInvestmentFact(facts, subject, row.ProjectSubjectKey, fields, []string{"team_count", "repo_count", "work_units_without_repo_link"})
 	}
 	return rowCount, nil
 }

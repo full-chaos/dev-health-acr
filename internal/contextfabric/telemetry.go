@@ -792,6 +792,11 @@ func (t SlogEngineTelemetry) RecordCohortRanked(ctx context.Context, principal s
 		// not_applicable), content-safe by the same reasoning as
 		// signals_available above -- counts and enum keys only.
 		"outcome_counts", event.OutcomeCounts,
+		// investment_mix_source_counts: which attribution the members'
+		// investment_mix signal read (project_native / owning_team_rollup /
+		// unlabeled). Enum keys and counts only, content-safe like
+		// outcome_counts above.
+		"investment_mix_source_counts", event.InvestmentMixSourceCounts,
 		// read_attribution_carried / deficiency_zero_withheld: whether the
 		// ranking knew which subjects each read covered, and how many
 		// members lost the operational_deficiencies zero because their own

@@ -76,7 +76,7 @@ func TestCohortRankedLineCarriesNoKeyOutsideItsAllowList(t *testing.T) {
 		"time": true, "level": true, "msg": true, "request_id": true,
 		"org_id": true, "member_count": true, "formula_version": true,
 		"degraded_member_count": true, "signals_available": true,
-		"outcome_counts": true,
+		"outcome_counts": true, "investment_mix_source_counts": true,
 		// The served cohort kind: one member of the published
 		// fifteen-value subject-kind vocabulary, content-free by the same
 		// reasoning that admits every other key here.
