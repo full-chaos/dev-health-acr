@@ -6,6 +6,7 @@ import (
 	"math"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,7 +41,7 @@ func labelPlacements() []labelPlacement {
 			in.Graph.Resolution.Committed = append(in.Graph.Resolution.Committed, s)
 		}},
 		{"Resolution.Candidates", func(in *SynthesisInput, s SubjectRef) {
-			in.Graph.Resolution.Candidates = append(in.Graph.Resolution.Candidates, SubjectCandidate{ReceiptID: "receipt_12345678", Subject: s, MatchReasons: []string{"lexical"}, Confidence: 0.4})
+			in.Graph.Resolution.Candidates = append(in.Graph.Resolution.Candidates, SubjectCandidate{ReceiptID: "receipt_12345678", Subject: s, State: ResolutionAmbiguous, MatchReasons: []string{"lexical"}, Confidence: 0.4})
 		}},
 		{"Cohort.Members", func(in *SynthesisInput, s SubjectRef) {
 			c := cohort(in)
@@ -81,6 +82,12 @@ func labelPlacements() []labelPlacement {
 			})
 		}},
 	}
+}
+
+// servedAsIs names the placements whose values the returned answer carries
+// unchanged, and which the pass therefore never rewrites.
+func servedAsIs(name string) bool {
+	return strings.HasPrefix(name, "Cohort.") || name == "Resolution.Committed"
 }
 
 func groupFor(s SubjectRef) contractsv1.ContextFabricCohortGroup {
@@ -127,19 +134,40 @@ func TestEverySubjectSourcePairServesOneLabelPerKey(t *testing.T) {
 					if got := labelsOfKey(t, input, first); len(got) != 2 {
 						t.Fatalf("fixture: key shown under %d labels before the pass, want 2", len(got))
 					}
-					bound := canonicalSubjectLabels(input)[subjectKeyForModel(first)]
-
 					out, report := canonicalizeSynthesisSubjectLabels(input)
 
 					if afterCall, _ := synthesisPayloadDecoded(input); !reflect.DeepEqual(before, afterCall) {
 						t.Fatal("the caller's input was mutated")
 					}
+					if out.Graph.Cohort != input.Graph.Cohort || !reflect.DeepEqual(out.Graph.Resolution.Committed, input.Graph.Resolution.Committed) {
+						t.Fatal("the served cohort or committed subjects were rewritten")
+					}
+					if servedAsIs(a.name) && servedAsIs(b.name) {
+						// Two labels for one key inside what the answer serves as
+						// it stands cannot be resolved without rewriting it:
+						// reported, not hidden.
+						if report.KeysCollapsed != 1 || report.KeysResidual != 1 || report.Outcome() != LabelCanonicalizationResidual {
+							t.Fatalf("report = %+v (%s), want the in-cohort disagreement reported residual", report, report.Outcome())
+						}
+						return
+					}
+					// The label the served answer carries wins for a cohort key;
+					// otherwise the validator's own first-write binding.
+					var want string
+					switch {
+					case servedAsIs(a.name):
+						want = first.Label
+					case servedAsIs(b.name):
+						want = second.Label
+					default:
+						want = canonicalSubjectLabels(input)[subjectKeyForModel(first)]
+					}
 					got := labelsOfKey(t, out, first)
 					if len(got) != 1 {
 						t.Fatalf("key shown under %d labels after the pass, want 1: %v", len(got), got)
 					}
-					if _, ok := got[bound]; !ok {
-						t.Fatalf("shown label %v is not the validator-bound label %q", got, bound)
+					if _, ok := got[want]; !ok {
+						t.Fatalf("shown label %v, want %q", got, want)
 					}
 					if report.KeysCollapsed != 1 || report.KeysResidual != 0 || !report.Measured || report.Outcome() != LabelCanonicalizationCollapsed {
 						t.Fatalf("report = %+v (%s), want one key collapsed, none residual", report, report.Outcome())
@@ -147,21 +175,22 @@ func TestEverySubjectSourcePairServesOneLabelPerKey(t *testing.T) {
 					if out.LabelCanonicalization != report {
 						t.Fatal("the report is not carried on the returned input")
 					}
-					if canonicalSubjectLabels(out)[subjectKeyForModel(first)] != bound {
-						t.Fatal("the bound label moved")
+					// The validator is not widened: it binds the shown label,
+					// accepts it and rejects the other.
+					bound := canonicalSubjectLabels(out)
+					if bound[subjectKeyForModel(first)] != want {
+						t.Fatalf("validator binds %q, want the shown %q", bound[subjectKeyForModel(first)], want)
 					}
-					// The validator is not widened: the bound label passes and
-					// the other label is rejected.
 					other := first
-					if bound == first.Label {
+					if want == first.Label {
 						other = second
 					}
-					if err := requireBoundLabel("claimed fact", other, canonicalSubjectLabels(out)); err == nil {
+					if err := requireBoundLabel("claimed fact", other, bound); err == nil {
 						t.Fatalf("the label %q that is not bound was accepted", other.Label)
 					}
-					sameKey := SubjectRef{Kind: kind, CanonicalID: "subject_under_test", Label: bound}
-					if err := requireBoundLabel("claimed fact", sameKey, canonicalSubjectLabels(out)); err != nil {
-						t.Fatalf("the bound label was rejected: %v", err)
+					sameKey := SubjectRef{Kind: kind, CanonicalID: "subject_under_test", Label: want}
+					if err := requireBoundLabel("claimed fact", sameKey, bound); err != nil {
+						t.Fatalf("the shown label was rejected: %v", err)
 					}
 					// Idempotent: a second pass finds nothing to collapse.
 					_, again := canonicalizeSynthesisSubjectLabels(out)
@@ -237,7 +266,12 @@ func TestEngineServesOneLabelPerKeyAndTheModelDraftValidates(t *testing.T) {
 	item := SubjectRef{Kind: SubjectWorkItem, CanonicalID: "work_item_7", Label: "Member Label"}
 	factItem := item
 	factItem.Label = "Fact Label"
-	resolution := SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}
+	candidate := item
+	candidate.Label = "Candidate Label"
+	resolution := SubjectResolution{
+		Candidates: []SubjectCandidate{{ReceiptID: "receipt_12345678", Subject: candidate, State: ResolutionAmbiguous, MatchReasons: []string{"lexical"}, Confidence: 0.4}},
+		Committed:  []SubjectRef{},
+	}
 	graph := GraphContext{
 		Resolution: resolution,
 		Cohort: &Cohort{
@@ -277,14 +311,21 @@ func TestEngineServesOneLabelPerKeyAndTheModelDraftValidates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)
 	}
-	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest()); err != nil {
+	served, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
+	if err != nil {
 		t.Fatalf("Investigate() error = %v", err)
+	}
+	if served.Cohort == nil || len(served.Cohort.Members) != 1 || served.Cohort.Members[0].Subject.Label != "Member Label" {
+		t.Fatalf("served cohort = %+v, want the member label", served.Cohort)
 	}
 	if len(captured.Facts.Facts) != 1 || captured.Graph.Cohort == nil {
 		t.Fatalf("synthesizer input: %d facts, cohort %v", len(captured.Facts.Facts), captured.Graph.Cohort)
 	}
-	if got := captured.Facts.Facts[0].Subject.Label; got != "Member Label" {
-		t.Fatalf("the fact is shown under %q, want the cohort member label", got)
+	if got := captured.Facts.Facts[0].Subject.Label; got != served.Cohort.Members[0].Subject.Label {
+		t.Fatalf("the fact is shown under %q, the served cohort carries %q", got, served.Cohort.Members[0].Subject.Label)
+	}
+	if got := captured.Graph.Cohort.Members[0].Subject.Label; got != served.Cohort.Members[0].Subject.Label {
+		t.Fatalf("the model was shown cohort label %q, the served cohort carries %q", got, served.Cohort.Members[0].Subject.Label)
 	}
 	if report := captured.LabelCanonicalization; report.KeysCollapsed != 1 || report.KeysResidual != 0 || !report.Measured {
 		t.Fatalf("report = %+v, want one collapsed key", report)
@@ -360,47 +401,69 @@ func TestUnserializablePayloadReportsUnmeasured(t *testing.T) {
 	}
 }
 
-// TestTwoCandidatesForOneKeyCollapseToTheFirstLabel: candidates are the first
-// binding source, so a second candidate for the same key is rewritten too.
+// TestTwoCandidatesForOneKeyCollapseToTheFirstLabel: candidates are
+// alternatives that follow the payload's label, and the first wins.
 func TestTwoCandidatesForOneKeyCollapseToTheFirstLabel(t *testing.T) {
 	t.Parallel()
 	input, _ := closureFixture()
 	place := labelPlacements()[1]
-	if place.name != "Resolution.Candidates" {
-		t.Fatalf("placement 1 = %s", place.name)
-	}
 	first := SubjectRef{Kind: SubjectWorkItem, CanonicalID: "candidate_key", Label: "First"}
 	second := first
 	second.Label = "Second"
 	place.add(&input, first)
 	place.add(&input, second)
 	out, report := canonicalizeSynthesisSubjectLabels(input)
-	if got := labelsOfKey(t, out, first); len(got) != 1 {
-		t.Fatalf("labels after the pass = %v, want one", got)
+	if got := labelsOfKey(t, out, first); len(got) != 1 || report.KeysCollapsed != 1 || report.KeysResidual != 0 {
+		t.Fatalf("labels %v, report %+v, want one label and one collapsed key", got, report)
 	}
-	if _, ok := labelsOfKey(t, out, first)["First"]; !ok || report.KeysCollapsed != 1 || report.KeysResidual != 0 {
-		t.Fatalf("report = %+v, want the first label kept", report)
+	if _, ok := labelsOfKey(t, out, first)["First"]; !ok {
+		t.Fatal("the first label was not kept")
 	}
 }
 
-// TestACohortWhoseLabelsAreBoundKeepsItsIdentity: a collision elsewhere (a fact
-// under another label) rewrites the fact and leaves the cohort, the value the
-// served answer carries, as the same object.
-func TestACohortWhoseLabelsAreBoundKeepsItsIdentity(t *testing.T) {
+// TestTheServedCohortLabelWinsOverEarlierSources: a resolution candidate is
+// the first binding source, and a fact is a later one. Both are rewritten to
+// the label the served cohort carries, and the cohort stays the same object.
+func TestTheServedCohortLabelWinsOverEarlierSources(t *testing.T) {
 	t.Parallel()
 	input, _, _ := groupedCohortFixture()
 	member := input.Graph.Cohort.Members[0].Subject
-	fact := member
-	fact.Label = "Fact Label"
-	labelPlacements()[7].add(&input, fact)
+	candidate, fact := member, member
+	candidate.Label, fact.Label = "Candidate Label", "Fact Label"
+	places := labelPlacements()
+	places[1].add(&input, candidate)
+	places[7].add(&input, fact)
 	out, report := canonicalizeSynthesisSubjectLabels(input)
-	if report.KeysCollapsed != 1 {
+	if report.KeysCollapsed != 1 || report.KeysResidual != 0 {
 		t.Fatalf("report = %+v, want one collapsed key", report)
 	}
 	if out.Graph.Cohort != input.Graph.Cohort {
-		t.Fatal("a cohort needing no rewrite was copied")
+		t.Fatal("the served cohort was copied")
 	}
 	if got := out.Facts.Facts[len(out.Facts.Facts)-1].Subject.Label; got != member.Label {
 		t.Fatalf("fact label = %q, want the cohort member's %q", got, member.Label)
+	}
+	if got := out.Graph.Resolution.Candidates[len(out.Graph.Resolution.Candidates)-1].Subject.Label; got != member.Label {
+		t.Fatalf("candidate label = %q, want the cohort member's %q", got, member.Label)
+	}
+	if canonicalSubjectLabels(out)[subjectKeyForModel(member)] != member.Label {
+		t.Fatal("the validator binds a label other than the cohort's")
+	}
+}
+
+// TestTheFirstCohortLabelWinsForItsKey: a member, then an exclusion, name one
+// key; a fact takes the member's label.
+func TestTheFirstCohortLabelWinsForItsKey(t *testing.T) {
+	t.Parallel()
+	input, _, _ := groupedCohortFixture()
+	member := input.Graph.Cohort.Members[0].Subject
+	excluded, fact := member, member
+	excluded.Label, fact.Label = "Excluded Label", "Fact Label"
+	places := labelPlacements()
+	places[4].add(&input, excluded)
+	places[7].add(&input, fact)
+	out, _ := canonicalizeSynthesisSubjectLabels(input)
+	if got := out.Facts.Facts[len(out.Facts.Facts)-1].Subject.Label; got != member.Label {
+		t.Fatalf("fact label = %q, want the member's %q", got, member.Label)
 	}
 }

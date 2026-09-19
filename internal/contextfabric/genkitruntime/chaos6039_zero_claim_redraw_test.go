@@ -413,14 +413,19 @@ func TestSynthesisInputLineReportsTheLabelCanonicalization(t *testing.T) {
 	}
 }
 
-// TestSynthesisPromptAsksForRelevantFactsAsClaims: the prompt tells the model
-// to restate the relevant supplied facts as claimed_facts although no driver
-// or finding cites them; the digest pin alone would pass any other edit made
-// together with a digest update.
-func TestSynthesisPromptAsksForRelevantFactsAsClaims(t *testing.T) {
+// TestSynthesizeSendsThePromptThatAsksForRelevantFactsAsClaims: the system
+// prompt of the request the runtime actually sends to the model carries the
+// instruction to restate the relevant supplied facts as claimed_facts although
+// no driver or finding cites them.
+func TestSynthesizeSendsThePromptThatAsksForRelevantFactsAsClaims(t *testing.T) {
 	t.Parallel()
 	const instruction = "as claimed_facts even when no driver or finding cites them"
-	if !strings.Contains(synthesisSystemPrompt, instruction) {
-		t.Fatalf("the synthesis prompt lacks %q", instruction)
+	gen := &scriptedGenerator{steps: steps(claimedSynthesisOutput())}
+	run := runRedraw(t, context.Background(), gen, Config{}, validSynthesisInput())
+	if run.err != nil {
+		t.Fatalf("SynthesizeAnswer() error = %v", run.err)
+	}
+	if len(gen.requests) == 0 || !strings.Contains(gen.requests[0].System, instruction) {
+		t.Fatalf("the request sent to the model lacks %q", instruction)
 	}
 }

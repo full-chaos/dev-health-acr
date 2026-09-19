@@ -102,16 +102,15 @@ func multiLabelKeys(labels map[string]map[string]struct{}) int {
 
 // canonicalizeSynthesisSubjectLabels makes every subject key carry ONE label
 // across everything the synthesis payload shows the model: cohort members,
-// canonical facts, paths and drivers. The label is the one
-// canonicalSubjectLabels already binds for the key, which is the one
-// requireBoundLabel accepts, so what the model is shown and what the
-// validator accepts are the same string by construction. The validator is not
-// widened.
+// canonical facts, paths and drivers.
 //
-// The bound label is the first source in the published walk, which puts a
-// cohort member's label ahead of a fact's, and the cohort member row is the
-// label the returned answer carries for that subject (the result cohort is
-// the graph cohort).
+// The label is the one the served answer already carries for a key the
+// cohort or the committed subjects name (cohort first), and the label
+// canonicalSubjectLabels binds (first source in the published walk) otherwise.
+// Every occurrence then carries that label, so the binding requireBoundLabel
+// enforces is that same label whatever the walk order, and the validator is
+// not widened. The cohort and the committed subjects are served as they stand,
+// so they are the sources for their own keys and are never rewritten.
 //
 // The input is copied on write; the caller's value is never mutated.
 func canonicalizeSynthesisSubjectLabels(input SynthesisInput) (SynthesisInput, SubjectLabelCanonicalization) {
@@ -125,6 +124,35 @@ func canonicalizeSynthesisSubjectLabels(input SynthesisInput) (SynthesisInput, S
 		return input, report
 	}
 	bound := canonicalSubjectLabels(input)
+	// The cohort and the committed subjects are the parts of the payload the
+	// returned answer carries as they stand and the model cites, so their
+	// labels are the labels for every key they name and neither is rewritten.
+	// Two labels for one key inside those structures cannot be resolved here
+	// and are reported as residual. Resolution candidates are alternatives the
+	// model may not cite, so they follow the label the rest of the payload has.
+	named := make(map[string]struct{})
+	claim := func(subject SubjectRef) {
+		key := subjectKeyForModel(subject)
+		if _, done := named[key]; done {
+			return
+		}
+		named[key] = struct{}{}
+		bound[key] = subject.Label
+	}
+	if cohort := input.Graph.Cohort; cohort != nil {
+		for _, member := range cohort.Members {
+			claim(member.Subject)
+		}
+		for _, group := range cohort.Groups {
+			claim(group.Subject)
+		}
+		for _, exclusion := range cohort.Exclusions {
+			claim(exclusion.Subject)
+		}
+	}
+	for _, subject := range input.Graph.Resolution.Committed {
+		claim(subject)
+	}
 	fix := func(subject SubjectRef) SubjectRef {
 		if want, ok := bound[subjectKeyForModel(subject)]; ok {
 			subject.Label = want
@@ -143,37 +171,12 @@ func canonicalizeSynthesisSubjectLabels(input SynthesisInput) (SynthesisInput, S
 	}
 	out := input
 
-	out.Graph.Resolution.Committed = fixAll(input.Graph.Resolution.Committed)
 	if input.Graph.Resolution.Candidates != nil {
 		out.Graph.Resolution.Candidates = make([]SubjectCandidate, len(input.Graph.Resolution.Candidates))
 		for i, candidate := range input.Graph.Resolution.Candidates {
 			candidate.Subject = fix(candidate.Subject)
 			out.Graph.Resolution.Candidates[i] = candidate
 		}
-	}
-	if input.Graph.Cohort != nil && cohortLabelsChange(*input.Graph.Cohort, fix) {
-		cohort := *input.Graph.Cohort
-		if cohort.Members != nil {
-			cohort.Members = make([]CohortMember, len(input.Graph.Cohort.Members))
-			for i, member := range input.Graph.Cohort.Members {
-				member.Subject = fix(member.Subject)
-				cohort.Members[i] = member
-			}
-		}
-		if cohort.Exclusions != nil {
-			cohort.Exclusions = make([]CohortExclusion, len(input.Graph.Cohort.Exclusions))
-			for i, exclusion := range input.Graph.Cohort.Exclusions {
-				exclusion.Subject = fix(exclusion.Subject)
-				cohort.Exclusions[i] = exclusion
-			}
-		}
-		if cohort.Groups != nil {
-			cohort.Groups = append(cohort.Groups[:0:0], input.Graph.Cohort.Groups...)
-			for i := range cohort.Groups {
-				cohort.Groups[i].Subject = fix(cohort.Groups[i].Subject)
-			}
-		}
-		out.Graph.Cohort = &cohort
 	}
 	if input.Graph.Paths != nil {
 		out.Graph.Paths = make([]RelationshipPath, len(input.Graph.Paths))
@@ -245,27 +248,4 @@ func (r SubjectLabelCanonicalization) Outcome() string {
 	default:
 		return LabelCanonicalizationUnchanged
 	}
-}
-
-// cohortLabelsChange reports whether rewriting would alter any subject label
-// in the cohort. A cohort that needs no rewrite keeps its identity: the served
-// answer carries this very value, so the synthesizer and the answer read one
-// cohort.
-func cohortLabelsChange(cohort Cohort, fix func(SubjectRef) SubjectRef) bool {
-	for _, member := range cohort.Members {
-		if fix(member.Subject) != member.Subject {
-			return true
-		}
-	}
-	for _, exclusion := range cohort.Exclusions {
-		if fix(exclusion.Subject) != exclusion.Subject {
-			return true
-		}
-	}
-	for _, group := range cohort.Groups {
-		if fix(group.Subject) != group.Subject {
-			return true
-		}
-	}
-	return false
 }
