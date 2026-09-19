@@ -283,6 +283,16 @@ func (s failingGetStore) Get(ctx context.Context, principal storage.Principal, i
 	return s.staticResultStore.Get(ctx, principal, id)
 }
 
+// nilEpochStore serves every result with no stored graph epoch, the shape a
+// store that keeps none returns: the epoch cannot be proven.
+type nilEpochStore struct{ *staticResultStore }
+
+func (s nilEpochStore) Get(ctx context.Context, principal storage.Principal, id string) (StoredInvestigationResult, error) {
+	stored, err := s.staticResultStore.Get(ctx, principal, id)
+	stored.GraphEpoch = nil
+	return stored, err
+}
+
 // TestQuestionWindow_ConfirmationReadsTheCarrierAndReportsEveryExit drives
 // confirmQuestionWindow directly for the exits the engine cannot reach (the
 // window redemption reads the same carrier first and vetoes on its failure),
@@ -334,6 +344,10 @@ func TestQuestionWindow_ConfirmationReadsTheCarrierAndReportsEveryExit(t *testin
 			}
 		})
 	}
+	unproven := (&Engine{results: nilEpochStore{base}}).confirmQuestionWindow(context.Background(), acceptancePrincipal(), continuationRequest(question), binding, newWindowContinuationDecision(continuationRequest(question)))
+	if unproven.CarrierRead != ContinuationCarrierReadOK || unproven.CarriedAxis != "" || unproven.QuestionWindowConfirmed {
+		t.Fatalf("no stored epoch: read=%q axis=%q confirmed=%v, want read, empty axis, unconfirmed", unproven.CarrierRead, unproven.CarriedAxis, unproven.QuestionWindowConfirmed)
+	}
 	stale := int64(97)
 	staleStore := &staticResultStore{results: base.results, states: base.states, graphEpoch: &stale}
 	got := (&Engine{results: staleStore}).confirmQuestionWindow(context.Background(), acceptancePrincipal(), continuationRequest(question), binding, newWindowContinuationDecision(continuationRequest(question)))
@@ -366,6 +380,7 @@ func TestQuestionWindow_ParentReferenceDomain(t *testing.T) {
 		{"empty_receipt_list", "result_a", []BoundSubjectReceipt{}, ContinuationParentOtherResult, false},
 		{"blank_receipt_result", "result_a", []BoundSubjectReceipt{{ResultID: " ", ReceiptID: continuationReceiptID}}, ContinuationParentOtherResult, false},
 		{"two_receipts_same_result", "result_a", []BoundSubjectReceipt{one[0], one[0]}, ContinuationParentOtherResult, false},
+		{"same_beside_blank_receipt", "result_a", []BoundSubjectReceipt{one[0], {ResultID: " ", ReceiptID: continuationReceiptID}}, ContinuationParentWindowReceiptResult, true},
 		{"two_receipts_absent_parent", "", []BoundSubjectReceipt{one[0], {ResultID: "result_b", ReceiptID: continuationReceiptID}}, ContinuationParentAbsent, false},
 	} {
 		tc := tc

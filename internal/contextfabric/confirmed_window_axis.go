@@ -29,7 +29,6 @@ type rememberedWindowAxisDecision struct {
 // admission loaded), and a parent that cannot be read decides nothing.
 func (e *Engine) decideRememberedWindowAxis(ctx context.Context, principal storage.Principal, app ledgerWindowApplication, fresh TimeContext, freshAnswerable bool, requestTime TimeContext, windowCommitted bool) (TimeContext, rememberedWindowAxisDecision) {
 	decision := rememberedWindowAxisDecision{SourceResultID: app.SourceResultID, CarrierRead: ContinuationCarrierNotRead, InterpretedAxis: fresh.Axis}
-	confirmed := false
 	if app.Applied() && e.results != nil {
 		stored, err := carryLoadResult(ctx, e.results, principal, app.SourceResultID)
 		if err != nil {
@@ -37,10 +36,14 @@ func (e *Engine) decideRememberedWindowAxis(ctx context.Context, principal stora
 		} else {
 			decision.CarrierRead = ContinuationCarrierReadOK
 			decision.CarriedAxis = stored.Result.Interpretation.TimeContext.Axis
-			confirmed = true
 		}
 	}
-	decided, outcome := decideConfirmedWindowAxis(confirmed, decision.CarriedAxis, fresh, freshAnswerable, requestTime, windowCommitted)
+	// THE CARRIED AXIS IS THE PROOF. The ledger's own admission already
+	// established the identical question; what this site adds is the axis the
+	// parent recorded, and it is set only by a successful read of an applied
+	// remembered window. Every other path leaves it empty, which the rule
+	// refuses exactly as it refuses an unconfirmed window.
+	decided, outcome := decideConfirmedWindowAxis(true, decision.CarriedAxis, fresh, freshAnswerable, requestTime, windowCommitted)
 	decision.DecidedAxis, decision.Outcome = decided.Axis, outcome
 	return decided, decision
 }
