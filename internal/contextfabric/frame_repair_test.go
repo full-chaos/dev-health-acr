@@ -1430,6 +1430,11 @@ func memberKindAliasAppliedLine() map[string]any {
 	}
 }
 
+func withGroupHintSource(line map[string]any, source string) map[string]any {
+	line["group_hint_source"] = source
+	return line
+}
+
 // memberKindAliasDeclinedLine is every DECLINE this repair produces: the
 // proposed frame validated (Outcome stays valid, Kind stays grouped_members,
 // no repair invariant applies because none failed), and DecideFrameGate
@@ -1498,6 +1503,38 @@ func memberKindAliasRepairCells() []memberKindAliasRepairCell {
 			wantOutcome: FrameValidationOutcomeValid,
 			wantKind:    SubjectExpressionGroupedMembers,
 			wantLine:    memberKindAliasDeclinedLine("declined_not_fact_alias_kind", "refused:member_kind_unservable"),
+		},
+		{
+			// The model named the group axis only inside its frame; the
+			// receipt takes it from that frame, so the repair completes and
+			// the line says where the group kind came from.
+			cell:           "a group kind named only by the frame is adopted and the collapse applies",
+			receipt:        func(r *ModelExecutionReceipt) { r.GroupKind = "" },
+			frame:          groupedMetricByRepoFrame,
+			wantOutcome:    FrameValidationOutcomeRepaired,
+			wantKind:       SubjectExpressionDiscoveredKind,
+			wantMemberKind: SubjectRepository,
+			wantLine:       withGroupHintSource(memberKindAliasAppliedLine(), "frame"),
+		},
+		{
+			// A flat hint the model stated is never overwritten by the frame.
+			cell:           "a stated flat group kind keeps its own source",
+			receipt:        func(*ModelExecutionReceipt) {},
+			frame:          groupedMetricByRepoFrame,
+			wantOutcome:    FrameValidationOutcomeRepaired,
+			wantKind:       SubjectExpressionDiscoveredKind,
+			wantMemberKind: SubjectRepository,
+			wantLine:       withGroupHintSource(memberKindAliasAppliedLine(), "model"),
+		},
+		{
+			// A flat hint dropped as unrecognised is a stated disagreement
+			// the frame never papers over.
+			cell:        "an unrecognised flat group kind is never replaced by the frame's",
+			receipt:     func(r *ModelExecutionReceipt) { r.GroupKind = ""; r.GroupKindUnrecognized = true },
+			frame:       groupedMetricByRepoFrame,
+			wantOutcome: FrameValidationOutcomeValid,
+			wantKind:    SubjectExpressionGroupedMembers,
+			wantLine:    withGroupHintSource(memberKindAliasDeclinedLine("declined_group_kind_mismatch", "refused:member_kind_unservable"), "none"),
 		},
 		{
 			// The collapse TARGET (the group kind) must itself be
@@ -2399,5 +2436,26 @@ func assertRepairedCarriedFrame(t *testing.T, where string, frame *QuestionFrame
 	if expression.Kind != SubjectExpressionChildrenOfScope || expression.Scoped == nil ||
 		expression.Scoped.MemberKind != SubjectTeam || !reflect.DeepEqual(expression.Scoped.AnchorTerms, []string{repairAnchorTerm}) {
 		t.Fatalf("%s: frame expression = %+v, want children_of_scope anchored on %q with member kind team", where, expression, repairAnchorTerm)
+	}
+}
+
+// The group-hint source is a closed vocabulary at every boundary it crosses:
+// the receipt refuses an outside value and the line never renders one.
+func TestGroupHintSourceIsClosedAtTheReceiptAndTheLine(t *testing.T) {
+	receipt := validModelReceiptFixture(ModelOperationInterpret)
+	receipt.GroupKindSource = GroupHintSource("free text")
+	if err := receipt.Validate(); err == nil {
+		t.Fatal("Validate() accepted a group_kind_source outside the closed vocabulary")
+	}
+	for source, want := range map[GroupHintSource]string{
+		"": "none", GroupHintSourceModel: "model", GroupHintSourceFrame: "frame", "free text": "unclassified",
+	} {
+		if got := groupHintSourceToken(source); got != want {
+			t.Errorf("groupHintSourceToken(%q) = %q, want %q", source, got, want)
+		}
+	}
+	receipt.GroupKindSource = GroupHintSourceFrame
+	if err := receipt.Validate(); err != nil {
+		t.Fatalf("Validate() rejected a closed value: %v", err)
 	}
 }

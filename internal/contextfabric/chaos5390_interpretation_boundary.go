@@ -100,6 +100,7 @@ func ValidGroupAxisDecision(value GroupAxisDecision) bool {
 // frame-validation line. See the file comment for what each field answers.
 type InterpretationBoundary struct {
 	RequestedGroupHint  string
+	GroupHintSource     string
 	RequestedMemberHint string
 	ProposedGroupKind   string
 	ProposedMemberKind  string
@@ -114,6 +115,7 @@ func InterpretationBoundaryFrom(receipt ModelExecutionReceipt, proposed Question
 	expression := proposed.SubjectExpression
 	boundary := InterpretationBoundary{
 		RequestedGroupHint:  hintKindToken(receipt.GroupKind, receipt.GroupKindUnrecognized),
+		GroupHintSource:     groupHintSourceToken(receipt.GroupKindSource),
 		RequestedMemberHint: hintKindToken(receipt.RequestedSubjectKind, receipt.RequestedSubjectKindUnrecognized),
 		ProposedGroupKind:   boundaryKindNotApplicable,
 		ProposedMemberKind:  boundaryKindNotApplicable,
@@ -175,6 +177,19 @@ func hintKindToken(kind SubjectKind, unrecognized bool) string {
 		return boundaryKindUnrecognized
 	default:
 		return boundaryKindAbsent
+	}
+}
+
+// groupHintSourceToken renders where the receipt's group kind came from,
+// `none` when it has none.
+func groupHintSourceToken(source GroupHintSource) string {
+	switch source {
+	case "":
+		return "none"
+	case GroupHintSourceModel, GroupHintSourceFrame:
+		return string(source)
+	default:
+		return boundaryKindUnclassified
 	}
 }
 

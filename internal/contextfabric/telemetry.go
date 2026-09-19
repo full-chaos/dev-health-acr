@@ -1217,6 +1217,7 @@ func (t SlogEngineTelemetry) RecordFrameValidation(ctx context.Context, principa
 		// became of the group axis. Every value is a closed token or an
 		// explicit absence token, never an empty string.
 		"requested_group_hint", SanitizeLogAttr(event.Boundary.RequestedGroupHint),
+		"group_hint_source", SanitizeLogAttr(noneWhenEmpty(event.Boundary.GroupHintSource)),
 		"requested_member_hint", SanitizeLogAttr(event.Boundary.RequestedMemberHint),
 		"proposed_group_kind", SanitizeLogAttr(event.Boundary.ProposedGroupKind),
 		"proposed_member_kind", SanitizeLogAttr(event.Boundary.ProposedMemberKind),
