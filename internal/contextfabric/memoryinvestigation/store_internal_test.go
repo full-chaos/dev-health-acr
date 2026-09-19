@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 	"testing"
 
@@ -184,4 +185,53 @@ func TestStore_substitutionParentRead(t *testing.T) {
 			store.results[resultID] = entry{orgID: orgID, payload: payload, semanticState: semanticState}
 		}
 	})
+}
+
+// TestStore_carriedParentChain runs the SHARED carried-parent chain domain:
+// every chain is built by the real engine over this store, and every receipt
+// state is re-seeded through the store's own raw seed.
+func TestStore_carriedParentChain(t *testing.T) {
+	cells := paritytest.RunCarriedParentChainSuite(t, func(t *testing.T) (contextfabric.InvestigationResultStore, paritytest.SemanticSeed) {
+		store := NewStore()
+		return store, func(t *testing.T, orgID, resultID string, payload, semanticState []byte) {
+			t.Helper()
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			store.results[resultID] = entry{orgID: orgID, payload: payload, semanticState: semanticState}
+		}
+	})
+	for _, cell := range cells {
+		t.Logf("%-96s guard=%-34s kind=%-20s chain=%-18s depth=%d parent=%q served=%s", cell.Name(), cell.Guard, cell.LineKind, cell.LineChain, cell.LineDepth, cell.LineParentID, cell.Served)
+	}
+}
+
+// TestCarriedParentChainTableCoversTheGeneratedDomain pins the decision table
+// to the domain generated from the two closed vocabularies: every
+// (parent result kind, chain) pair has exactly one row or one inapplicable
+// entry, and nothing else is named. A new member of either vocabulary turns
+// this red until the table decides it.
+func TestCarriedParentChainTableCoversTheGeneratedDomain(t *testing.T) {
+	domain := paritytest.ChainDomain()
+	covered, duplicates := paritytest.ChainTableCoverage()
+	sorted := append([]string(nil), domain...)
+	sort.Strings(sorted)
+	if len(duplicates) != 0 {
+		t.Errorf("pairs named twice: %v", duplicates)
+	}
+	if strings.Join(sorted, ",") != strings.Join(covered, ",") {
+		t.Errorf("table covers %v\ndomain is %v", covered, sorted)
+	}
+	if got, want := len(domain), len(contextfabric.SubjectSubstitutionParentResultKindVocabulary())*len(contextfabric.SubjectSubstitutionParentChainVocabulary()); got != want {
+		t.Errorf("domain = %d pairs, want %d", got, want)
+	}
+	for _, row := range paritytest.ChainDecisionTable() {
+		for _, followUp := range paritytest.ChainFollowUps() {
+			if outcome, ok := row.Want[followUp]; !ok || !contextfabric.ValidSubjectSubstitutionOutcome(outcome) {
+				t.Errorf("%s/%s: follow-up %s has no typed outcome", row.Kind, row.Chain, followUp)
+			}
+		}
+		if row.Reason == "" {
+			t.Errorf("%s/%s: no reason", row.Kind, row.Chain)
+		}
+	}
 }

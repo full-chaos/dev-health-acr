@@ -1732,6 +1732,13 @@ var SemanticStatePersistence = Event{
 		{Key: "encoded_bytes", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "encoded_cap", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "state", Type: FieldObject, Presence: PresenceRequired, Fields: semanticStateGroupFields},
+		// What this Save did about a clarification prompt's carried chain
+		// member, the state it wrote, the answered result it names (open,
+		// empty unless one is named) and the chain depth (0 unless written).
+		{Key: "carried_parent", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: carriedParentAttachmentTokens},
+		{Key: "carried_parent_state", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: carriedParentStateTokens},
+		{Key: "carried_parent_result_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "carried_parent_depth", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
 	},
 }
@@ -2620,6 +2627,16 @@ var (
 	subjectSubstitutionOriginTokens       = arrayTokens(subjectSubstitutionOriginArr[:])
 	subjectSubstitutionRememberedArr      = contextfabric.SubjectSubstitutionRememberedCheckVocabulary()
 	subjectSubstitutionRememberedTokens   = arrayTokens(subjectSubstitutionRememberedArr[:])
+	substitutionParentResultKindArr       = contextfabric.SubjectSubstitutionParentResultKindVocabulary()
+	substitutionParentResultKindTokens    = arrayTokens(substitutionParentResultKindArr[:])
+	substitutionParentChainArr            = contextfabric.SubjectSubstitutionParentChainVocabulary()
+	substitutionParentChainTokens         = arrayTokens(substitutionParentChainArr[:])
+	substitutionChainErrorArr             = contextfabric.SubjectSubstitutionChainErrorVocabulary()
+	substitutionChainErrorTokens          = arrayTokens(substitutionChainErrorArr[:])
+	carriedParentAttachmentArr            = contextfabric.CarriedParentAttachmentVocabulary()
+	carriedParentAttachmentTokens         = arrayTokens(carriedParentAttachmentArr[:])
+	carriedParentStateArr                 = contextfabric.CarriedParentIdentityStateVocabulary()
+	carriedParentStateTokens              = append([]string{"none"}, arrayTokens(carriedParentStateArr[:])...)
 )
 
 // ConfirmedNeedLedger is the per-need confirmation ledger's own trace: the
@@ -2707,6 +2724,15 @@ var ConfirmedNeedLedger = Event{
 		{Key: "substitution_remembered_check", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: subjectSubstitutionRememberedTokens},
 		{Key: "substitution_remembered_reason", Type: FieldString, Presence: PresenceRequired},
 		{Key: "substitution_remembered_context_error", Type: FieldString, Presence: PresenceRequired},
+		// The named parent before the guard decides, published on every exit:
+		// what it was (read from its payload), how a prompt's carried chain
+		// was verified or why it was not, how many prompts lie between the
+		// answered result and this turn (0 when the parent is not a prompt),
+		// and the class of the read that failed.
+		{Key: "substitution_parent_result_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: substitutionParentResultKindTokens},
+		{Key: "substitution_parent_chain", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: substitutionParentChainTokens},
+		{Key: "substitution_parent_chain_depth", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "substitution_parent_chain_error", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: substitutionChainErrorTokens},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }

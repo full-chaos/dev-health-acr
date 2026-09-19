@@ -167,6 +167,15 @@ func TestEveryClosedValueOnTheConfirmedNeedLedgerLineCertifies(t *testing.T) {
 		"substitution_parent_kind": func(e *contextfabric.ConfirmedNeedLedgerEvent, v string) {
 			e.SubstitutionParentKind = contractsv1.ContextFabricSubjectKind(v)
 		},
+		"substitution_parent_result_kind": func(e *contextfabric.ConfirmedNeedLedgerEvent, v string) {
+			e.SubstitutionParentResultKind = contextfabric.SubjectSubstitutionParentResultKind(v)
+		},
+		"substitution_parent_chain": func(e *contextfabric.ConfirmedNeedLedgerEvent, v string) {
+			e.SubstitutionParentChain = contextfabric.SubjectSubstitutionParentChain(v)
+		},
+		"substitution_parent_chain_error": func(e *contextfabric.ConfirmedNeedLedgerEvent, v string) {
+			e.SubstitutionParentChainError = contextfabric.SubjectSubstitutionChainError(v)
+		},
 	}
 
 	closed := 0

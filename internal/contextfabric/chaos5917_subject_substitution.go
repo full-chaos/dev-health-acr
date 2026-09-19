@@ -363,6 +363,22 @@ type parentAnchorEvidence struct {
 	// when the remembered offer's receipt proves it.
 	GuardIssued bool
 	IssuedFor   string
+	// Carried is true when the named parent is a prompt that speaks for the
+	// chain it continued (chaos6045_carried_parent_identity.go): Subject is
+	// then the verified identity of the chain's answered result, or zero when
+	// that identity could not be verified. Either way the parent is never
+	// read as asserting no identity.
+	Carried bool
+	// ResultKind is what the named parent was; Chain is how a prompt's
+	// identity was reached or why it was not; ChainDepth is how many prompts
+	// lie between the answered result and this turn (0 when the named parent
+	// is not a prompt); ChainError is the reason a member or the answered
+	// result did not read, empty otherwise. Reported on the ledger line,
+	// never consulted by the decision.
+	ResultKind SubjectSubstitutionParentResultKind
+	Chain      SubjectSubstitutionParentChain
+	ChainDepth int
+	ChainError SubjectSubstitutionChainError
 }
 
 // held reports whether the parent asserted an identity for this turn to
@@ -476,10 +492,26 @@ func parentIdentityOf(evidence parentAnchorEvidence, stored StoredInvestigationR
 	}
 	evidence.GuardIssued, evidence.ResultID = true, ""
 	evidence.Subject = guardIssuedRememberedOf(stored)
-	if subjectSubstitutionIssuedFor(stored, stored.ParentResultID) {
-		evidence.IssuedFor, evidence.ResultID = stored.ParentResultID, stored.ParentResultID
+	for _, candidate := range guardIssuedForCandidates(stored) {
+		if subjectSubstitutionIssuedFor(stored, candidate) {
+			evidence.IssuedFor, evidence.ResultID = candidate, candidate
+			break
+		}
 	}
 	return evidence
+}
+
+// guardIssuedForCandidates are the results a guard clarification may have
+// been issued for, in the order they are tried: its recorded ancestry, then
+// the answered result its own carried chain member names. Each is only a
+// CANDIDATE -- the remembered offer's receipt decides -- so neither can make
+// a clarification speak for a result its receipt was not minted from.
+func guardIssuedForCandidates(stored StoredInvestigationResult) []string {
+	candidates := []string{stored.ParentResultID}
+	if member, present, err := storedCarriedParentIdentity(stored); present && err == nil && member.State == CarriedParentIdentityHeld {
+		candidates = append(candidates, member.ResultID)
+	}
+	return candidates
 }
 
 // parentReceiptIssuers decides which results' receipts are the parent's own
@@ -518,8 +550,10 @@ func (p parentReceiptIssuers) issuedForOf(resultID string) string {
 	if subjectSubstitutionIssuedFor(stored, p.named) {
 		return p.named
 	}
-	if subjectSubstitutionIssuedFor(stored, stored.ParentResultID) {
-		return stored.ParentResultID
+	for _, candidate := range guardIssuedForCandidates(stored) {
+		if subjectSubstitutionIssuedFor(stored, candidate) {
+			return candidate
+		}
 	}
 	return ""
 }
@@ -626,7 +660,7 @@ func decideSubjectSubstitution(in subjectSubstitutionInput) subjectSubstitutionD
 	case !in.Parent.Loaded:
 		decision.Outcome = SubjectSubstitutionParentUnreadable
 		return decision
-	case !in.Parent.held() && !in.Parent.GuardIssued:
+	case !in.Parent.held() && !in.Parent.GuardIssued && !in.Parent.Carried:
 		decision.Outcome = SubjectSubstitutionParentNoIdentity
 		return decision
 	}
@@ -861,6 +895,18 @@ const subjectSubstitutionReceiptPrefix = "subr_"
 func subjectSubstitutionReceiptID(parentResultID string, subject SubjectRef) string {
 	sum := sha256.Sum256([]byte("context-fabric-remembered-subject\x00" + parentResultID + "\x00" + SubjectMapKey(subject)))
 	return subjectSubstitutionReceiptPrefix + hex.EncodeToString(sum[:])[:24]
+}
+
+// subjectSubstitutionReceiptIssuer is the result the remembered offer's
+// receipt is minted from: the result whose subject the remembered one is
+// (the decision's parent result), so a clarification issued past a prompt
+// speaks for the answered result rather than for the prompt. named is used
+// only when the decision proved no such result.
+func subjectSubstitutionReceiptIssuer(decision subjectSubstitutionDecision, named string) string {
+	if decision.ParentResultID != "" {
+		return decision.ParentResultID
+	}
+	return named
 }
 
 // subjectSubstitutionResolution is the resolution a guarded turn serves its

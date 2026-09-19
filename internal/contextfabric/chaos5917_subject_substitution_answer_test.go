@@ -186,7 +186,9 @@ func TestSubstitutionGuardClarifiesAChoiceRedeemedFromAnotherResultAfterItsClari
 // link from a clarification to the parent it continued is the remembered
 // offer's receipt, never stored ancestry. A recorded parent that names some
 // other result -- the shape a question-drift refusal records -- neither
-// breaks the answer nor names the wrong parent on the line.
+// breaks the answer nor names the wrong parent on the line: the receipt is
+// tried against the answered result the clarification's own carried chain
+// names, and it verifies there.
 func TestSubstitutionGuardProvesItsClarificationByTheRememberedReceipt(t *testing.T) {
 	t.Parallel()
 	for _, names := range []string{"parent", "clarification"} {
@@ -201,9 +203,6 @@ func TestSubstitutionGuardProvesItsClarificationByTheRememberedReceipt(t *testin
 			wantParentResult := parent.result.ResultID
 			if names == "clarification" {
 				named = clarification.result.ResultID
-				// The receipt verifies against the parent, not against the
-				// recorded ancestry, so no parent result is named.
-				wantParentResult = ""
 			}
 			outcome := answerTurn(h, "request_5917_drift_"+names+"_three", named,
 				[]BoundSubjectReceipt{{ResultID: clarification.result.ResultID, ReceiptID: chosen}},

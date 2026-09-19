@@ -639,6 +639,10 @@ type ConfirmedNeedLedgerFields struct {
 	SubstitutionRememberedCheck        string
 	SubstitutionRememberedReason       string
 	SubstitutionRememberedContextError string
+	SubstitutionParentResultKind       string
+	SubstitutionParentChain            string
+	SubstitutionParentChainDepth       int
+	SubstitutionParentChainError       string
 	RequestID                          string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every ConfirmedNeedLedgerFields uniformly, set ONLY by NewConfirmedNeedLedgerFields below. A caller
@@ -653,7 +657,7 @@ type ConfirmedNeedLedgerFields struct {
 
 // NewConfirmedNeedLedgerFields is the generated constructor for ConfirmedNeedLedgerFields -- every
 // field ConfirmedNeedLedger.Fields declares is a required parameter.
-func NewConfirmedNeedLedgerFields(orgID string, outcome string, sourceResultID string, appliedMembers string, appliedExpectedKind string, appliedAnchorKind string, appliedAnchorValueHash string, appliedAnchorBasis string, appliedCandidateKind string, appliedCandidateValueHash string, appliedHandleKind string, appliedHandleValueHash string, droppedMembers string, anchorAgreement string, anchorDisposition string, captureDecision string, captureSkipReason string, substitutionGuard string, substitutionOrigin string, substitutionParentKind string, substitutionParentID string, substitutionCommittedIDs []string, substitutionOriginResultID string, substitutionOriginReceiptID string, substitutionParentResultID string, substitutionOriginIssuedFor string, substitutionRememberedCheck string, substitutionRememberedReason string, substitutionRememberedContextError string, requestID string) ConfirmedNeedLedgerFields {
+func NewConfirmedNeedLedgerFields(orgID string, outcome string, sourceResultID string, appliedMembers string, appliedExpectedKind string, appliedAnchorKind string, appliedAnchorValueHash string, appliedAnchorBasis string, appliedCandidateKind string, appliedCandidateValueHash string, appliedHandleKind string, appliedHandleValueHash string, droppedMembers string, anchorAgreement string, anchorDisposition string, captureDecision string, captureSkipReason string, substitutionGuard string, substitutionOrigin string, substitutionParentKind string, substitutionParentID string, substitutionCommittedIDs []string, substitutionOriginResultID string, substitutionOriginReceiptID string, substitutionParentResultID string, substitutionOriginIssuedFor string, substitutionRememberedCheck string, substitutionRememberedReason string, substitutionRememberedContextError string, substitutionParentResultKind string, substitutionParentChain string, substitutionParentChainDepth int, substitutionParentChainError string, requestID string) ConfirmedNeedLedgerFields {
 	valid := true
 	if substitutionCommittedIDs == nil {
 		valid = false
@@ -688,6 +692,10 @@ func NewConfirmedNeedLedgerFields(orgID string, outcome string, sourceResultID s
 		SubstitutionRememberedCheck:        substitutionRememberedCheck,
 		SubstitutionRememberedReason:       substitutionRememberedReason,
 		SubstitutionRememberedContextError: substitutionRememberedContextError,
+		SubstitutionParentResultKind:       substitutionParentResultKind,
+		SubstitutionParentChain:            substitutionParentChain,
+		SubstitutionParentChainDepth:       substitutionParentChainDepth,
+		SubstitutionParentChainError:       substitutionParentChainError,
 		RequestID:                          requestID,
 		constructed:                        valid,
 	}
@@ -735,6 +743,10 @@ func (f ConfirmedNeedLedgerFields) SlogArgs() []any {
 		"substitution_remembered_check", contextfabric.SanitizeLogAttr(f.SubstitutionRememberedCheck),
 		"substitution_remembered_reason", contextfabric.SanitizeLogAttr(f.SubstitutionRememberedReason),
 		"substitution_remembered_context_error", contextfabric.SanitizeLogAttr(f.SubstitutionRememberedContextError),
+		"substitution_parent_result_kind", contextfabric.SanitizeLogAttr(f.SubstitutionParentResultKind),
+		"substitution_parent_chain", contextfabric.SanitizeLogAttr(f.SubstitutionParentChain),
+		"substitution_parent_chain_depth", f.SubstitutionParentChainDepth,
+		"substitution_parent_chain_error", contextfabric.SanitizeLogAttr(f.SubstitutionParentChainError),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }
@@ -1455,17 +1467,21 @@ func (f RetainedRankingAccountingFields) SlogArgs() []any {
 // SemanticStatePersistenceFields is contextfabric.semantic_state_persistence's generated typed construction interface
 // (CHAOS-5516): one Go field per Field SemanticStatePersistence.Fields declares in spec.go.
 type SemanticStatePersistenceFields struct {
-	OrgID          string
-	ResultID       string
-	ParentResultID string
-	Site           string
-	Decision       string
-	Absence        string
-	OversizedBound string
-	EncodedBytes   int
-	EncodedCap     int
-	State          map[string]any
-	RequestID      string
+	OrgID                 string
+	ResultID              string
+	ParentResultID        string
+	Site                  string
+	Decision              string
+	Absence               string
+	OversizedBound        string
+	EncodedBytes          int
+	EncodedCap            int
+	State                 map[string]any
+	CarriedParent         string
+	CarriedParentState    string
+	CarriedParentResultID string
+	CarriedParentDepth    int
+	RequestID             string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every SemanticStatePersistenceFields uniformly, set ONLY by NewSemanticStatePersistenceFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -1479,20 +1495,24 @@ type SemanticStatePersistenceFields struct {
 
 // NewSemanticStatePersistenceFields is the generated constructor for SemanticStatePersistenceFields -- every
 // field SemanticStatePersistence.Fields declares is a required parameter.
-func NewSemanticStatePersistenceFields(orgID string, resultID string, parentResultID string, site string, decision string, absence string, oversizedBound string, encodedBytes int, encodedCap int, state map[string]any, requestID string) SemanticStatePersistenceFields {
+func NewSemanticStatePersistenceFields(orgID string, resultID string, parentResultID string, site string, decision string, absence string, oversizedBound string, encodedBytes int, encodedCap int, state map[string]any, carriedParent string, carriedParentState string, carriedParentResultID string, carriedParentDepth int, requestID string) SemanticStatePersistenceFields {
 	return SemanticStatePersistenceFields{
-		OrgID:          orgID,
-		ResultID:       resultID,
-		ParentResultID: parentResultID,
-		Site:           site,
-		Decision:       decision,
-		Absence:        absence,
-		OversizedBound: oversizedBound,
-		EncodedBytes:   encodedBytes,
-		EncodedCap:     encodedCap,
-		State:          state,
-		RequestID:      requestID,
-		constructed:    true,
+		OrgID:                 orgID,
+		ResultID:              resultID,
+		ParentResultID:        parentResultID,
+		Site:                  site,
+		Decision:              decision,
+		Absence:               absence,
+		OversizedBound:        oversizedBound,
+		EncodedBytes:          encodedBytes,
+		EncodedCap:            encodedCap,
+		State:                 state,
+		CarriedParent:         carriedParent,
+		CarriedParentState:    carriedParentState,
+		CarriedParentResultID: carriedParentResultID,
+		CarriedParentDepth:    carriedParentDepth,
+		RequestID:             requestID,
+		constructed:           true,
 	}
 }
 
@@ -1519,6 +1539,10 @@ func (f SemanticStatePersistenceFields) SlogArgs() []any {
 		"encoded_bytes", f.EncodedBytes,
 		"encoded_cap", f.EncodedCap,
 		"state", f.State,
+		"carried_parent", contextfabric.SanitizeLogAttr(f.CarriedParent),
+		"carried_parent_state", contextfabric.SanitizeLogAttr(f.CarriedParentState),
+		"carried_parent_result_id", contextfabric.SanitizeLogAttr(f.CarriedParentResultID),
+		"carried_parent_depth", f.CarriedParentDepth,
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }

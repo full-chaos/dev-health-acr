@@ -1278,6 +1278,10 @@ type semanticStateCapture struct {
 	// anchorShadow is the turn's anchor binding tracker, nil when the shadow
 	// is off. saveResult decides and attaches the binding from it.
 	anchorShadow *anchorBindingTracker
+	// carriedParent is this turn's resolved parent evidence, nil when the
+	// exit did not hand it over. saveResult writes a prompt's carried chain
+	// member from it (chaos6045_carried_parent_identity.go).
+	carriedParent *parentAnchorEvidence
 }
 
 // captureSemanticState builds, validates and measures the snapshot. A snapshot

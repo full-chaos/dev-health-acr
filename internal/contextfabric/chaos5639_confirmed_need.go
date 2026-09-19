@@ -259,18 +259,19 @@ type confirmedNeedLedgerResult struct {
 func (e *Engine) resolveConfirmedNeedLedger(ctx context.Context, principal storage.Principal, request InvestigationRequest, binding ResolvedGraphBinding) confirmedNeedLedgerResult {
 	parent := carryParentSeed(request)
 	if parent == "" {
-		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerMissNoReference}
+		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerMissNoReference, Parent: parentAnchorEvidence{ResultKind: SubjectSubstitutionParentResultNone, Chain: SubjectSubstitutionChainNotAPrompt}}
 	}
 	// Referenced from here down: the request named a parent, whatever
 	// happens to the read below. The guard tells "named nothing" apart from
 	// "named something unreadable", so the flag is set before the read, not
 	// after it succeeds.
-	evidence := parentAnchorEvidence{Referenced: true}
+	evidence := parentAnchorEvidence{Referenced: true, ResultKind: SubjectSubstitutionParentResultUnreadable, Chain: SubjectSubstitutionChainNotAPrompt}
 	if e.results == nil {
 		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerMissUnloadable, Parent: evidence}
 	}
 	stored, err := carryLoadResult(ctx, e.results, principal, parent)
 	if err != nil {
+		evidence.ChainError = parentReadErrorOf(err)
 		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerMissUnloadable, Parent: evidence}
 	}
 	// The stored RESULT PAYLOAD read, so the identity the parent served is
@@ -281,6 +282,9 @@ func (e *Engine) resolveConfirmedNeedLedger(ctx context.Context, principal stora
 	// against.
 	evidence.Loaded = true
 	evidence = parentIdentityOf(evidence, stored, parent)
+	// A prompt answered nothing: the identity it speaks for is its chain's,
+	// verified against the answered result, never the prompt's own.
+	evidence = e.chainIdentityOf(ctx, principal, evidence, stored)
 	// UNLOADABLE (malformed/oversized/unsupported/unreported) is a DIFFERENT
 	// fact than EMPTY (a clean read that simply has no ledger): an operator
 	// who can only see "empty" for both cannot tell a live storage/decode
@@ -879,6 +883,16 @@ type ConfirmedNeedLedgerEvent struct {
 	SubstitutionRememberedCheck        SubjectSubstitutionRememberedCheck
 	SubstitutionRememberedReason       CandidateVerificationReason
 	SubstitutionRememberedContextError string
+	// SubstitutionParentResultKind, SubstitutionParentChain,
+	// SubstitutionParentChainDepth and SubstitutionParentChainError are the
+	// named parent before any decision: what it was, how a prompt's chain
+	// was verified or why it was not, how many prompts deep it is, and the
+	// read error behind a failed verification. Published on every exit,
+	// including one that ends the turn before the guard runs.
+	SubstitutionParentResultKind SubjectSubstitutionParentResultKind
+	SubstitutionParentChain      SubjectSubstitutionParentChain
+	SubstitutionParentChainDepth int
+	SubstitutionParentChainError SubjectSubstitutionChainError
 }
 
 // confirmedNeedLedgerEventOf builds the event from the admission result and
@@ -905,6 +919,10 @@ func confirmedNeedLedgerEventOf(ledger confirmedNeedLedgerResult, applied map[co
 		SubstitutionRememberedCheck:        substitution.Remembered.Check,
 		SubstitutionRememberedReason:       substitution.Remembered.Reason,
 		SubstitutionRememberedContextError: substitution.Remembered.ContextError,
+		SubstitutionParentResultKind:       parentResultKindForLine(ledger.Parent),
+		SubstitutionParentChain:            parentChainToken(ledger.Parent.Chain),
+		SubstitutionParentChainDepth:       ledger.Parent.ChainDepth,
+		SubstitutionParentChainError:       ledger.Parent.ChainError,
 	}
 	if entry, ok := applied[contractsv1.ContextFabricStructureNeedExpectedKind]; ok {
 		event.AppliedExpectedKind = contractsv1.ContextFabricSubjectKind(entry.AppliedValue)
