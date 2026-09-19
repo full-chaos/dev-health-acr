@@ -2994,6 +2994,27 @@
         "presence": "required"
       },
       {
+        "key": "label_canonicalization",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "unchanged",
+          "collapsed",
+          "residual",
+          "unmeasured"
+        ]
+      },
+      {
+        "key": "label_keys_collapsed",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "label_keys_residual",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "outcome",
         "type": "string",
         "presence": "required"

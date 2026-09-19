@@ -1002,4 +1002,8 @@ type SynthesisInput struct {
 	// states no numbers at all rather than stating zero -- a model shown a
 	// quota of zero has been told to write nothing.
 	Allocation ItemAllocation `json:"allocation"`
+	// LabelCanonicalization is what the label pass did to this input. It is
+	// engine bookkeeping for the synthesis_input trace line and never reaches
+	// the model.
+	LabelCanonicalization SubjectLabelCanonicalization `json:"-"`
 }

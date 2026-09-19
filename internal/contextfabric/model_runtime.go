@@ -3407,37 +3407,8 @@ func synthesisSubjectScopeBasisUnavailable() SynthesisSubjectScopeBasis {
 // answer, and asserting that on the strength of a failed measurement is
 // exactly the shape this file's telemetry exists to stop.
 func synthesisPayloadSubjects(input SynthesisInput) (map[string]struct{}, bool) {
-	payload := struct {
-		Interpretation   InterpretedQuestion `json:"interpretation"`
-		Resolution       SubjectResolution   `json:"subject_resolution"`
-		Cohort           *Cohort             `json:"cohort,omitempty"`
-		Paths            []RelationshipPath  `json:"paths"`
-		DriverCandidates []DriverJudgment    `json:"driver_candidates"`
-		Facts            []CanonicalFact     `json:"canonical_facts"`
-		Coverage         Coverage            `json:"coverage"`
-		// AnswerBudget contributes NO subject-shaped values -- it is counts
-		// only -- so it cannot change what this census finds. It is mirrored
-		// here anyway because the stated residual is that this list must
-		// match the serializer, and a list that is "true except for the
-		// members that do not matter" is how the mirror drifts the first
-		// time a member that DOES matter is added.
-		AnswerBudget ItemAllocation `json:"answer_budget"`
-	}{
-		AnswerBudget:     input.Allocation,
-		Interpretation:   input.Interpretation,
-		Resolution:       input.Graph.Resolution,
-		Cohort:           input.Graph.Cohort,
-		Paths:            input.Graph.Paths,
-		DriverCandidates: input.Graph.DriverCandidates,
-		Facts:            input.Facts.Facts,
-		Coverage:         input.Graph.Coverage,
-	}
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return nil, false
-	}
-	var decoded any
-	if err := json.Unmarshal(raw, &decoded); err != nil {
+	decoded, ok := synthesisPayloadDecoded(input)
+	if !ok {
 		return nil, false
 	}
 	result := make(map[string]struct{})
