@@ -535,6 +535,17 @@ func mergeGroupBundle(into *CanonicalFactBundle, group CanonicalFactBundle, orgI
 			into.ReadSubjects[kind][key] = struct{}{}
 		}
 	}
+	if group.EvaluatedSubjects != nil && into.EvaluatedSubjects == nil {
+		into.EvaluatedSubjects = FactReadSubjects{}
+	}
+	for kind, set := range group.EvaluatedSubjects {
+		if into.EvaluatedSubjects[kind] == nil {
+			into.EvaluatedSubjects[kind] = make(map[string]struct{}, len(set))
+		}
+		for key := range set {
+			into.EvaluatedSubjects[kind][key] = struct{}{}
+		}
+	}
 	return false
 }
 

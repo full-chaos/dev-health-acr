@@ -953,6 +953,11 @@ type CanonicalFactBundle struct {
 	// `json:"-"`: read bookkeeping, never part of the evidence a bundle
 	// carries.
 	ReadSubjects FactReadSubjects `json:"-"`
+	// EvaluatedSubjects records, per fact kind, the subjects a producer
+	// showed its evaluation covered while returning no fact for them (a
+	// measured zero). Distinct from ReadSubjects: a completed read of a
+	// subject the producer never evaluated is not evidence of a zero.
+	EvaluatedSubjects FactReadSubjects `json:"-"`
 }
 
 // FactReadSubjects maps a fact kind to the set of subject keys
