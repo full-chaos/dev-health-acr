@@ -1,8 +1,11 @@
 package contextfabric
 
 import (
+	"context"
 	"fmt"
 	"strings"
+
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // workItemAuthorizationGapPrefix opens every authorization-gap limitation, so
@@ -36,7 +39,10 @@ func (g workItemAuthorizationGap) Limitation() string {
 	if g.NoneAuthorized() {
 		return fmt.Sprintf("%s: %d work items were observed and none are authorized, so no work item can be listed or counted.", workItemAuthorizationGapPrefix, g.Denied)
 	}
-	return fmt.Sprintf("%s: %d work items are authorized and listed, and %d more are denied and are not counted.", workItemAuthorizationGapPrefix, g.Authorized, g.Denied)
+	if g.State == WorkItemMembershipCensusFloor {
+		return fmt.Sprintf("%s: the census stopped at its bound, with at least %d work items authorized and at least %d more denied and not counted.", workItemAuthorizationGapPrefix, g.Authorized, g.Denied)
+	}
+	return fmt.Sprintf("%s: %d work items are authorized and %d more are denied and are not counted.", workItemAuthorizationGapPrefix, g.Authorized, g.Denied)
 }
 
 func hasWorkItemAuthorizationGapLimitation(limitations []string) bool {
@@ -88,4 +94,15 @@ func newWorkItemAuthorizationGapEvent(census *WorkItemTupleCensus, served Invest
 		ServedStatus: served.Status, ServedMembers: cohortMemberCount(served.Cohort),
 		LimitationPresent: hasWorkItemAuthorizationGapLimitation(served.Limitations),
 	}, true
+}
+
+// recordWorkItemAuthorizationGap emits the settled disclosure decision for the
+// census that was measured on this request, on every path that measures one.
+func (e *Engine) recordWorkItemAuthorizationGap(ctx context.Context, principal storage.Principal, census *WorkItemTupleCensus, served InvestigationResult) {
+	if e.telemetry == nil {
+		return
+	}
+	if event, ok := newWorkItemAuthorizationGapEvent(census, served); ok {
+		e.telemetry.RecordWorkItemAuthorizationGap(ctx, principal, event)
+	}
 }

@@ -101,7 +101,12 @@ func (e *Engine) tryReuseWorkItemTuple(ctx context.Context, principal storage.Pr
 	servingEvent := newWorkItemStoredServingEvent(StoredAnswerabilitySurfaceReuse, stored.SemanticStateRead, candidate)
 	servingEvent.CensusRead = event.CensusRead
 	servingEvent.Basis = "digest_matched"
-	candidate = ServeWorkItemTupleCensus(candidate, census)
+	serving := *census
+	if gap, gapped := workItemAuthorizationGapOf(current.Census); gapped {
+		serving.gap = &gap
+	}
+	candidate = ServeWorkItemTupleCensus(candidate, &serving)
+	e.recordWorkItemAuthorizationGap(ctx, principal, &serving, candidate)
 	servingErr = validateWorkItemStoredCoverage(candidate, &servingEvent)
 	if e.telemetry != nil {
 		e.telemetry.RecordWorkItemStoredServing(ctx, principal, servingEvent)

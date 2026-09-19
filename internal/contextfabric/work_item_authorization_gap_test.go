@@ -241,8 +241,54 @@ func TestWorkItemAuthorizationGapLimitationText(t *testing.T) {
 	if want := "Work items exist in this project that are outside this principal's authorized scope: 1675 work items were observed and none are authorized, so no work item can be listed or counted."; none != want {
 		t.Errorf("none authorized: %q", none)
 	}
+	floor := workItemAuthorizationGap{State: WorkItemMembershipCensusFloor, Observed: 2001, Authorized: 2001, Denied: 3}.Limitation()
+	if want := "Work items exist in this project that are outside this principal's authorized scope: the census stopped at its bound, with at least 2001 work items authorized and at least 3 more denied and not counted."; floor != want {
+		t.Errorf("floor: %q", floor)
+	}
 	partial := workItemAuthorizationGap{Observed: 5, Authorized: 2, Denied: 3}.Limitation()
-	if want := "Work items exist in this project that are outside this principal's authorized scope: 2 work items are authorized and listed, and 3 more are denied and are not counted."; partial != want {
+	if want := "Work items exist in this project that are outside this principal's authorized scope: 2 work items are authorized and 3 more are denied and are not counted."; partial != want {
 		t.Errorf("partial: %q", partial)
+	}
+}
+
+func TestWorkItemReuseHitEmitsTheAuthorizationGapDecision(t *testing.T) {
+	for _, denied := range []int{1, 0} {
+		principal, request, stored, current := tupleReuseFixture(t)
+		current.Census.DeniedPopulation = denied
+		current.Census.CappedPopulation = 7 + denied
+		if denied > 0 {
+			gap := workItemAuthorizationGap{State: WorkItemMembershipCensusExact, Observed: 8, Authorized: 7, Denied: 1}
+			stored.Result.Limitations = append(stored.Result.Limitations, gap.Limitation())
+		}
+		gate, err := NewWorkItemMembershipGate(1, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		telemetry := &recordingTelemetry{}
+		engine := mustReuseTestEngine(t, EngineDependencies{Telemetry: telemetry, ReuseGate: tupleReuseGate{stored}, CandidateVerifier: func(context.Context, storage.Principal, RequestedScope, ResolvedGraphBinding, SubjectKind, string) (bool, CandidateVerificationReason) {
+			return true, CandidateVerificationValid
+		}, WorkItemMembership: tupleMembershipFunc(func(c context.Context, _ storage.Principal, _ WorkItemMembershipRequest) (*WorkItemMembershipLease, WorkItemMembershipResult, error) {
+			lease, err := gate.Acquire(c)
+			return lease, current, err
+		})})
+		ctx, owner := NewWorkItemResponseOwnerContext(context.Background())
+		served, hit, _, _, reuseErr := engine.tryReuseWithReading(ctx, principal, request, TimeContext{Axis: TemporalCurrent}, "", windowKeyRederivable, ResolvedGraphBinding{})
+		owner.Complete()
+		if reuseErr != nil || !hit {
+			t.Fatalf("denied=%d hit=%t err=%v", denied, hit, reuseErr)
+		}
+		if denied == 0 {
+			if len(telemetry.workItemAuthorizationGaps) != 0 {
+				t.Fatalf("an undenied reuse hit emitted %+v", telemetry.workItemAuthorizationGaps)
+			}
+			continue
+		}
+		if len(telemetry.workItemAuthorizationGaps) != 1 {
+			t.Fatalf("reuse hit gap events=%d", len(telemetry.workItemAuthorizationGaps))
+		}
+		event := telemetry.workItemAuthorizationGaps[0]
+		if event.Reason != "partially_authorized" || event.Observed != 8 || event.Authorized != 7 || event.Denied != 1 || event.ServedMembers != 1 || !event.LimitationPresent || event.ServedStatus != served.Status {
+			t.Fatalf("event=%+v", event)
+		}
 	}
 }

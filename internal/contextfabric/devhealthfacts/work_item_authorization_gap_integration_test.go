@@ -22,7 +22,7 @@ func TestWorkItemAuthorizationGapAgainstRealClickHouse(t *testing.T) {
 		wantLimitation     string
 	}{
 		{name: "all_denied", denied: 3, wantStatus: "degraded", wantLimitation: "3 work items were observed and none are authorized"},
-		{name: "partly_denied", authorized: 2, denied: 3, wantLimitation: "2 work items are authorized and listed, and 3 more are denied"},
+		{name: "partly_denied", authorized: 2, denied: 3, wantLimitation: "2 work items are authorized and 3 more are denied"},
 		{name: "none_denied", authorized: 2},
 		{name: "empty_project"},
 	} {

@@ -3692,9 +3692,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// served on the second pass.
 	if tupleCensus != nil {
 		result = ServeWorkItemTupleCensus(result, tupleCensus)
-		if gapEvent, ok := newWorkItemAuthorizationGapEvent(tupleCensus, result); ok && e.telemetry != nil {
-			e.telemetry.RecordWorkItemAuthorizationGap(ctx, principal, gapEvent)
-		}
+		e.recordWorkItemAuthorizationGap(ctx, principal, tupleCensus, result)
 		// Measure the same display labels the final response will carry.
 		applyCoverageDisplayLabels(&result)
 		result = restrictWorkItemTupleEvidence(result)
