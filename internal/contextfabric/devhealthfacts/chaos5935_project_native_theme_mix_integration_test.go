@@ -36,7 +36,7 @@ func TestQueryVersionMovedPastTheUnlabelledProjectMix(t *testing.T) {
 		t.Fatalf("QueryVersion = %q, want the %q<n> shape", devhealthfacts.QueryVersion, prefix)
 	}
 	if n, err := strconv.Atoi(version); err != nil || n < 13 {
-		t.Fatalf("QueryVersion = %q: a candidate saved before project theme facts named their source (v12 and earlier) must not be served as though it did", devhealthfacts.QueryVersion)
+		t.Fatalf("QueryVersion = %q: a candidate saved before project theme facts named their source (v12 and before) must not be served as though it did", devhealthfacts.QueryVersion)
 	}
 }
 
