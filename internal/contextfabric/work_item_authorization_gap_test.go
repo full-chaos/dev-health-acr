@@ -97,6 +97,9 @@ func TestWorkItemPartiallyDeniedCensusDisclosesPartition(t *testing.T) {
 	if result.Cohort == nil || len(result.Cohort.Members) != 1 {
 		t.Fatalf("cohort=%+v", result.Cohort)
 	}
+	if result.Status == InvestigationDegraded {
+		t.Fatalf("a partly authorized census was served degraded")
+	}
 	if len(telemetry.workItemAuthorizationGaps) != 1 {
 		t.Fatalf("gap events=%d", len(telemetry.workItemAuthorizationGaps))
 	}
@@ -213,5 +216,16 @@ func TestWorkItemAuthorizationGapEventNamesTheReasonAndServedShape(t *testing.T)
 	none := &WorkItemTupleCensus{gap: &workItemAuthorizationGap{State: WorkItemMembershipCensusExact, Observed: 5, Denied: 5}}
 	if event, _ := newWorkItemAuthorizationGapEvent(none, InvestigationResult{}); event.Reason != "none_authorized" || event.LimitationPresent {
 		t.Fatalf("event=%+v", event)
+	}
+}
+
+func TestWorkItemAuthorizationGapLimitationText(t *testing.T) {
+	none := workItemAuthorizationGap{Observed: 1675, Denied: 1675}.Limitation()
+	if want := "Work items exist in this project that are outside this principal's authorized scope: 1675 work items were observed and none are authorized, so no work item can be listed or counted."; none != want {
+		t.Errorf("none authorized: %q", none)
+	}
+	partial := workItemAuthorizationGap{Observed: 5, Authorized: 2, Denied: 3}.Limitation()
+	if want := "Work items exist in this project that are outside this principal's authorized scope: 2 work items are authorized and listed, and 3 more are denied and are not counted."; partial != want {
+		t.Errorf("partial: %q", partial)
 	}
 }
