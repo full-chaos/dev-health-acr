@@ -2836,6 +2836,125 @@
     ]
   },
   {
+    "id": "contextfabric.synthesis_input",
+    "msg": "context fabric synthesis input",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id",
+      "input_digest",
+      "model_id"
+    ],
+    "bounded_aggregation": "at most one line per synthesize call, emitted when the call has encoded its model input; a call rejected before encoding emits none. Per-draw lists are bounded by the re-synthesis ceiling.",
+    "fields": [
+      {
+        "key": "org_id_hash",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "model_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "model_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "prompt_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "input_digest",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "input_bytes",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "facts",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "fact_evidence_refs",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "fact_evidence_refs_distinct",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "paths",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "driver_candidates",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "cohort_members",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "draws_total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "draw_outcomes",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "draw_claims",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "draw_output_digests",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "claims",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "drivers",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "evidence_refs",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.synthesis_retry_selection",
     "msg": "context fabric synthesis retry selected",
     "level": "info",

@@ -53,7 +53,7 @@ var forgeShapes = []struct {
 // one JSON log line into two, or overwrite one in a naive renderer), and
 // exactly one decision line exists in the captured log -- never a second,
 // forged one.
-func assertNoLineBreakSurvives(t *testing.T, buf *bytes.Buffer, got string) {
+func assertNoLineBreakSurvives(t *testing.T, buf *bytes.Buffer, got string, wantLines int) {
 	t.Helper()
 	if strings.ContainsAny(got, "\n\r") {
 		t.Fatalf("request_id = %q still carries a line break -- a caller can forge log lines", got)
@@ -65,8 +65,8 @@ func assertNoLineBreakSurvives(t *testing.T, buf *bytes.Buffer, got string) {
 			lines++
 		}
 	}
-	if lines != 1 {
-		t.Fatalf("emitted %d JSON log lines, want exactly 1 -- more means the request id forged one; log = %s", lines, buf.String())
+	if lines != wantLines {
+		t.Fatalf("emitted %d JSON log lines, want exactly %d -- more means the request id forged one; log = %s", lines, wantLines, buf.String())
 	}
 }
 
@@ -99,7 +99,7 @@ func TestInterpretQuestionSanitizesRequestIDAcrossTheInputDomain(t *testing.T) {
 			}
 			fields := lastJSONLine(t, &buf)
 			got, _ := fields["request_id"].(string)
-			assertNoLineBreakSurvives(t, &buf, got)
+			assertNoLineBreakSurvives(t, &buf, got, 1)
 		})
 	}
 }
@@ -125,7 +125,18 @@ func TestSynthesizeAnswerSanitizesRequestIDAcrossTheInputDomain(t *testing.T) {
 			}
 			fields := lastJSONLine(t, &buf)
 			got, _ := fields["request_id"].(string)
-			assertNoLineBreakSurvives(t, &buf, got)
+			assertNoLineBreakSurvives(t, &buf, got, 2)
+			// Both synthesize lines carry the id, and both carry the SAME
+			// sanitized value: each sanitizes at its own emission site.
+			for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+				var candidate map[string]any
+				if json.Unmarshal(line, &candidate) != nil {
+					continue
+				}
+				if candidate["request_id"] != got {
+					t.Fatalf("line %q request_id = %v, want %q", candidate["msg"], candidate["request_id"], got)
+				}
+			}
 		})
 	}
 }
@@ -150,7 +161,7 @@ func TestPhraseStructureOffersSanitizesRequestIDAcrossTheInputDomain(t *testing.
 			}
 			fields := lastJSONLine(t, &buf)
 			got, _ := fields["request_id"].(string)
-			assertNoLineBreakSurvives(t, &buf, got)
+			assertNoLineBreakSurvives(t, &buf, got, 1)
 		})
 	}
 }
