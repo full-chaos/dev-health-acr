@@ -1003,7 +1003,6 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 	// what the caller asked. Bounded by maxDraws and by ctx (the request
 	// deadline); a final rejection is returned unchanged.
 	var totalUsage contextfabric.ModelUsage
-	totalAttempts := 0
 	for draw := 0; ; draw++ {
 		decodingSeed = chaos4631InterpretSeedFor(questionHash, sample)
 		var drawOutcomes []attemptOutcome
@@ -1022,7 +1021,6 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 			o.Index = len(attemptOutcomes) + 1
 			attemptOutcomes = append(attemptOutcomes, o)
 		}
-		totalAttempts += len(drawOutcomes)
 		totalUsage.InputTokens += usage.InputTokens
 		totalUsage.OutputTokens += usage.OutputTokens
 		totalUsage.TotalTokens += usage.TotalTokens
@@ -1051,7 +1049,7 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 		sample++
 	}
 	completed := r.now().UTC()
-	attempts := totalAttempts
+	attempts := len(attemptOutcomes)
 	var classifiedErr error
 	if generationErr != nil {
 		classifiedErr = classifyModelError(generationErr)
