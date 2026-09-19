@@ -639,7 +639,8 @@ var frameFieldConsumers = map[string]string{
 	"CollapsedGroupAxisMemberKind": "requestedGroupAxisDropped (model_runtime.go) and the plan-seam " +
 		"planGroupAxisCollapsed call site (engine.go) -- both read it as PROVENANCE that " +
 		"repairMemberKindFactAliasCollapse (CHAOS-5992) produced this exact frame, never inferred " +
-		"from shape; json:\"-\" deliberately, never a wire/persisted field",
+		"from shape; encoded (omitempty) so the provenance survives the semantic-state write and " +
+		"read that carries a frame into a later turn",
 }
 
 // TestLawL6EveryFrameFieldHasANamedConsumer is law L6's structural half.

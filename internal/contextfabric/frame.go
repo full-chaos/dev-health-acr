@@ -91,20 +91,24 @@ type QuestionFrame struct {
 	// interchangeable for answer reuse.
 	Version string `json:"version"`
 
-	// CollapsedGroupAxisMemberKind is PROVENANCE, not a wire field --
-	// json:"-" deliberately, so it never survives a persistence write and read
-	// or the contract and never needs a QueryVersion bump of its own. Set
-	// ONLY by repairMemberKindFactAliasCollapse (CHAOS-5992) on the frame
-	// IT produces, to the member kind the repair collapsed a requested
-	// group axis into (the receipt's own GroupKind). requestedGroupAxisDropped
-	// (model_runtime.go) reads it to decide that the axis is EXPRESSED,
-	// not dropped, for exactly this provenance -- never by inferring the
-	// same conclusion from the frame's shape alone, which would also
-	// admit a DIRECT model proposal of the identical shape that invariant
-	// I6 has never validated. Empty on every direct proposal and on
-	// every other repair's output; this repair's own doc comment states
-	// the bound in full.
-	CollapsedGroupAxisMemberKind SubjectKind `json:"-"`
+	// CollapsedGroupAxisMemberKind is PROVENANCE: set ONLY by
+	// repairMemberKindFactAliasCollapse (CHAOS-5992) on the frame IT
+	// produces, to the member kind the repair collapsed a requested group
+	// axis into (the receipt's own GroupKind). requestedGroupAxisDropped
+	// (model_runtime.go) and the plan-seam collapse check (engine.go) read it
+	// to decide that the axis is EXPRESSED, not dropped, for exactly this
+	// provenance -- never by inferring the same conclusion from the frame's
+	// shape alone, which would also admit a DIRECT model proposal of the
+	// identical shape that invariant I6 has never validated.
+	//
+	// It is encoded (omitempty) because a frame is persisted in the semantic
+	// state and carried into a later turn, and provenance that does not
+	// survive that write and read leaves the carried frame refused at the plan
+	// seam. Absent from the encoding on every direct proposal and on every
+	// other repair's output, so those encodings are byte-identical. The model
+	// never writes this field: its frame enters through a separate output
+	// type and is rebuilt server-side, so a model emission cannot forge it.
+	CollapsedGroupAxisMemberKind SubjectKind `json:"collapsed_group_axis_member_kind,omitempty"`
 }
 
 // QuestionFrameVersion is the derivation-table version this build

@@ -1777,6 +1777,64 @@ func TestTheGroupedMetricTurnIsServedAsAFlatRepositoryCohort(t *testing.T) {
 	}
 }
 
+// TestTheRepairProvenanceSurvivesTheSemanticStatePersistenceCycle holds that the
+// provenance the repair stamps on its frame is still on the frame after the
+// semantic-state write and read that carries a frame into a later turn, and
+// that a direct proposal of the identical shape carries none after the same
+// persistence cycle. A carried frame that lost the stamp is refused at the frame
+// seam and at the plan seam even though the turn that produced it was served.
+func TestTheRepairProvenanceSurvivesTheSemanticStatePersistenceCycle(t *testing.T) {
+	persistCycle := func(t *testing.T, frame QuestionFrame) QuestionFrame {
+		t.Helper()
+		gate := DecideFrameGate(FrameValidationResult{Frame: frame, Outcome: FrameValidationOutcomeValid}, true)
+		state := BuildSemanticState(SemanticStateInput{
+			Outcome:         QuestionFamilyOutcome{Family: QuestionFamilyGroupedCohortStatus, Source: QuestionFamilySourceModel, Frame: &frame, Gate: gate},
+			EmittedShape:    ShapeOpen,
+			GroupKind:       SubjectRepository,
+			FamilyVersion:   QuestionFamilyTableVersion,
+			RequestIdentity: carrierRequestIdentity("provenance persistence cycle"),
+		})
+		raw, err := EncodeSemanticState(state)
+		if err != nil {
+			t.Fatalf("EncodeSemanticState() error = %v", err)
+		}
+		decoded, status := DecodeSemanticState(raw)
+		if status != SemanticStateReadAvailable || decoded == nil || decoded.Frame == nil {
+			t.Fatalf("DecodeSemanticState() = (%v, %v), want an available state carrying the frame", decoded, status)
+		}
+		return *decoded.Frame
+	}
+
+	receipt := groupedMetricByRepoReceipt()
+	proposed := groupedMetricByRepoFrame()
+	repaired := validateProposedFrame(receipt, proposed, ShapeOpen, nil)
+	if repaired.Outcome != FrameValidationOutcomeRepaired || repaired.Frame.CollapsedGroupAxisMemberKind != SubjectRepository {
+		t.Fatalf("fixture defect: the repair did not stamp its provenance (outcome %q, stamp %q)", repaired.Outcome, repaired.Frame.CollapsedGroupAxisMemberKind)
+	}
+
+	t.Run("the repaired frame keeps its provenance", func(t *testing.T) {
+		carried := persistCycle(t, repaired.Frame)
+		if carried.CollapsedGroupAxisMemberKind != SubjectRepository {
+			t.Fatalf("carried provenance = %q, want %q", carried.CollapsedGroupAxisMemberKind, SubjectRepository)
+		}
+		if requestedGroupAxisDropped(receipt, carried) {
+			t.Fatal("the carried repaired frame is refused as a dropped group axis")
+		}
+	})
+
+	t.Run("a direct proposal of the same shape still carries none", func(t *testing.T) {
+		direct := repaired.Frame
+		direct.CollapsedGroupAxisMemberKind = ""
+		carried := persistCycle(t, direct)
+		if carried.CollapsedGroupAxisMemberKind != "" {
+			t.Fatalf("carried provenance = %q, want none", carried.CollapsedGroupAxisMemberKind)
+		}
+		if !requestedGroupAxisDropped(receipt, carried) {
+			t.Fatal("a carried direct proposal is admitted as an expressed group axis")
+		}
+	})
+}
+
 // TestADirectGroupEqualsMemberDiscoveryIsRefusedAtThePlanSeam is the plan
 // seam's OWN provenance control (CHAOS-5992), the sibling of
 // TestTheCompareRankingRepairIsBounded's "direct proposal" cell at the
