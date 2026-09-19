@@ -1500,6 +1500,8 @@ func TestDecisionEventNeverCarriesCorpusText(t *testing.T) {
 		// closed config/version identifiers. See logInterpretDecision's own
 		// doc comment.
 		"decoding_seed":  true,
+		"initial_sample": true,
+		"redraws":        true,
 		"sample":         true,
 		"model_id":       true,
 		"model_version":  true,
