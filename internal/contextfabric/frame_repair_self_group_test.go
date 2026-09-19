@@ -307,12 +307,27 @@ func TestATwoLevelSelfGroupTurnIsNotServed(t *testing.T) {
 
 func newSelfGroupRepairEngine(t *testing.T, receipt ModelExecutionReceipt, proposal QuestionFrame) (*Engine, *retrievalRecordingGraph) {
 	t.Helper()
+	return newSelfGroupRepairEngineFor(t, receipt, proposal, countingCohort(SubjectRepository, 3), nil)
+}
+
+// newSelfGroupRepairEngineFor builds the engine over a caller-chosen cohort and
+// fact reader; a nil reader returns an empty bundle.
+func newSelfGroupRepairEngineFor(t *testing.T, receipt ModelExecutionReceipt, proposal QuestionFrame, cohort *Cohort, readFacts factReaderFunc) (*Engine, *retrievalRecordingGraph) {
+	t.Helper()
+	if readFacts == nil {
+		readFacts = func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{
+				Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{},
+			}, nil
+		}
+	}
 	logs := captureEngineLogger(t)
 	receipt.QuestionFrame = &proposal
 	graph := &retrievalRecordingGraph{graphReaderStub: graphReaderStub{
 		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
 		context: GraphContext{
-			Cohort: countingCohort(SubjectRepository, 3), Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
+			Cohort: cohort, Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
 			FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
 			Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 		},
@@ -325,12 +340,7 @@ func newSelfGroupRepairEngine(t *testing.T, receipt ModelExecutionReceipt, propo
 			Requirements:   registryDeriver{},
 		},
 		Graph: graph,
-		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
-			return CanonicalFactBundle{
-				Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
-				Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{},
-			}, nil
-		}),
+		Facts: readFacts,
 		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
 			return InvestigationResult{
 				Status: InvestigationComplete, DirectJudgment: "Assessed.", CurrentState: "Nominal.",
@@ -374,5 +384,55 @@ func TestTheSelfGroupRepairNeverReadsAFrameWithoutAGroupedExpression(t *testing.
 	result := repairSelfGroupFlatCohort(receipt, proposal, ShapeSingleSubject, nil, failed)
 	if result.Repair.Decision != FrameRepairNotApplicable || result.Outcome != FrameValidationOutcomeRefusedInvalid {
 		t.Fatalf("result = %+v, want the failure untouched and not_applicable", result)
+	}
+}
+
+// TestASelfGroupTeamCohortWithTeamBreakdownFactsIsServedFlat carries the case
+// where group placement could otherwise build groups of teams by teams: every
+// member fact names a team breakdown row. The served plan states the flat
+// shape and the result validates.
+func TestASelfGroupTeamCohortWithTeamBreakdownFactsIsServedFlat(t *testing.T) {
+	for name, proposal := range map[string]QuestionFrame{
+		"self-group": selfGroupFrame(SubjectTeam),
+		"fact-alias": {Goals: []InvestigationGoal{GoalCountOrAggregate}, SubjectExpression: groupedExpression(SubjectMetric, SubjectTeam), Temporal: TemporalIntentCurrent},
+	} {
+		t.Run(name, func(t *testing.T) { runSelfGroupTeamBreakdown(t, proposal) })
+	}
+}
+
+func runSelfGroupTeamBreakdown(t *testing.T, proposal QuestionFrame) {
+	t.Helper()
+	receipt := groupedMetricByRepoReceipt()
+	receipt.GroupKind = SubjectTeam
+	cohort := countingCohort(SubjectTeam, 3)
+	readFacts := factReaderFunc(func(_ context.Context, _ storage.Principal, request CanonicalFactRequest) (CanonicalFactBundle, error) {
+		facts := make([]CanonicalFact, 0, len(request.Subjects))
+		for _, subject := range request.Subjects {
+			row := FactValueRow{Fields: map[string]FactValue{
+				"scope": StringFactValue("team"), "team_id": StringFactValue("alpha"), "team_name": StringFactValue("Alpha"),
+			}}
+			facts = append(facts, CanonicalFact{
+				Kind: FactHealth, Subject: subject,
+				Fields:      map[string]FactValue{"breakdown": {Rows: []FactValueRow{row}}},
+				SourceState: SourceAvailable, Source: "ops", SourceVersion: "v1",
+			})
+		}
+		return CanonicalFactBundle{
+			Facts: facts, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+			Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{},
+		}, nil
+	})
+	engine, _ := newSelfGroupRepairEngineFor(t, receipt, proposal, cohort, readFacts)
+	request := validInvestigationRequestWithConfirmedWindow()
+	request.RequestID = "request_self_group_repair_03"
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_repair"}, request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Status != InvestigationComplete {
+		t.Fatalf("status = %q (basis %q), want complete", result.Status, result.RefusalBasis)
+	}
+	if result.AnswerPlan == nil || result.AnswerPlan.GroupKind != "" || result.AnswerPlan.MemberKind != SubjectTeam {
+		t.Fatalf("served plan = %+v, want a flat team cohort with no group axis", result.AnswerPlan)
 	}
 }
