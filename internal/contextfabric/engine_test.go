@@ -470,7 +470,10 @@ type recordingTelemetry struct {
 	commitAffirmations               int
 	// categoryFactCompositions (CHAOS-4347) records every status-category
 	// composition event verbatim, same list-not-count discipline.
-	categoryFactCompositions       []CategoryFactCompositionEvent
+	categoryFactCompositions []CategoryFactCompositionEvent
+	// periodDeltaCompositions (CHAOS-5990) mirrors categoryFactCompositions'
+	// own list-not-count discipline.
+	periodDeltaCompositions        []PeriodDeltaCompositionEvent
 	priorSubjectReceiptSkipReasons []priorSubjectReceiptSkipReasonRecord
 	answerReuseServedRequestIDs    []answerReuseServedRequestIDRecord
 	bindingEpochDeltas             []bindingEpochDeltaRecord
@@ -709,6 +712,10 @@ func (r *recordingTelemetry) RecordFactScopeExpansion(_ context.Context, _ stora
 
 func (r *recordingTelemetry) RecordCategoryFactComposition(_ context.Context, _ storage.Principal, event CategoryFactCompositionEvent) {
 	r.categoryFactCompositions = append(r.categoryFactCompositions, event)
+}
+
+func (r *recordingTelemetry) RecordPeriodDeltaComposition(_ context.Context, _ storage.Principal, event PeriodDeltaCompositionEvent) {
+	r.periodDeltaCompositions = append(r.periodDeltaCompositions, event)
 }
 
 func (r *recordingTelemetry) RecordPriorSubjectReceiptSkipReason(_ context.Context, _ storage.Principal, reason string, count int, epochDelta int64) {
