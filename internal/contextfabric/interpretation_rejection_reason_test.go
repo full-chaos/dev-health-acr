@@ -38,7 +38,7 @@ func rejectedQuestion() InterpretedQuestion {
 func TestClassifyInterpretationRejectionPreservesEverySentinel(t *testing.T) {
 	t.Parallel()
 	cause := errors.New("clarification_needed requires a reason")
-	err := ClassifyInterpretationRejection(rejectedQuestion(), cause)
+	err := ClassifyInterpretationRejection(rejectedQuestion(), cause, nil)
 
 	if !errors.Is(err, ErrInterpretationRejected) {
 		t.Fatalf("errors.Is(err, ErrInterpretationRejected) = false -- the route's 422 classification would break")
@@ -58,7 +58,7 @@ func TestClassifyInterpretationRejectionPreservesEverySentinel(t *testing.T) {
 // the reason is attached, and it is the rule that actually rejected.
 func TestClassifyInterpretationRejectionCarriesTheRule(t *testing.T) {
 	t.Parallel()
-	err := ClassifyInterpretationRejection(rejectedQuestion(), errors.New("clarification_needed requires a reason"))
+	err := ClassifyInterpretationRejection(rejectedQuestion(), errors.New("clarification_needed requires a reason"), nil)
 	got := InterpretationRejectionReasonOf(err)
 	want := contractsv1.ContextFabricInterpretationRejectionClarificationReasonMissing
 	if got != want {
@@ -77,7 +77,7 @@ func TestClassifyInterpretationRejectionStillAttachesTheBoundViolation(t *testin
 	q.ClarificationNeeded = false
 	q.RequestedJudgment = strings.Repeat("j", contractsv1.ContextFabricRequestedJudgmentMaxLength+1)
 
-	err := ClassifyInterpretationRejection(q, errors.New("interpreted question violates v1 bounds"))
+	err := ClassifyInterpretationRejection(q, errors.New("interpreted question violates v1 bounds"), nil)
 
 	var violation *ModelBoundViolation
 	if !errors.As(err, &violation) {
@@ -376,5 +376,147 @@ func TestInterpretationRejectionReasonOfReturnsTheTableConstant(t *testing.T) {
 	nonMember := &InterpretationRejection{Reason: "MARKER_NOT_A_MEMBER_9c12", err: errors.New("boom")}
 	if got := InterpretationRejectionReasonOf(nonMember); got != InterpretationRejectionUnclassified {
 		t.Fatalf("InterpretationRejectionReasonOf() = %q for a hand-built non-member, want %q", got, InterpretationRejectionUnclassified)
+	}
+}
+
+// factKindRejectedQuestion is an interpretation Validate() refuses
+// specifically on ContextFabricInterpretationRejectionFactRequirementKindInvalid
+// -- an out-of-vocabulary fact_requirements[].kind, the model-authored
+// string CHAOS-5986 (telemetry half) exists to surface.
+func factKindRejectedQuestion(kind string) InterpretedQuestion {
+	q := rejectedQuestion()
+	q.ClarificationNeeded = false
+	q.FactRequirements = []FactRequirement{{Kind: contractsv1.ContextFabricFactKind(kind)}}
+	return q
+}
+
+// TestClassifyInterpretationRejectionCarriesTheRejectedFactKind is CHAOS-5986's
+// real producer for the ClassifyInterpretationRejection <-> RejectedFactKind
+// seam: it drives the actual engine classification function against a
+// question carrying a genuinely out-of-vocabulary kind, not a struct literal
+// standing in for one.
+func TestClassifyInterpretationRejectionCarriesTheRejectedFactKind(t *testing.T) {
+	t.Parallel()
+	q := factKindRejectedQuestion("not_a_fact_kind")
+	err := ClassifyInterpretationRejection(q, errors.New("fact requirement violates v1 bounds"), nil)
+
+	if got := InterpretationRejectionReasonOf(err); got != contractsv1.ContextFabricInterpretationRejectionFactRequirementKindInvalid {
+		t.Fatalf("InterpretationRejectionReasonOf() = %q, want %q -- fixture is wrong", got, contractsv1.ContextFabricInterpretationRejectionFactRequirementKindInvalid)
+	}
+	kind, ok := InterpretationRejectedFactKindOf(err)
+	if !ok {
+		t.Fatalf("InterpretationRejectedFactKindOf() ok = false, want true -- q was rejected for exactly this reason")
+	}
+	if kind != "not_a_fact_kind" {
+		t.Fatalf("InterpretationRejectedFactKindOf() = %q, want %q", kind, "not_a_fact_kind")
+	}
+
+	var rejection *InterpretationRejection
+	if !errors.As(err, &rejection) {
+		t.Fatalf("errors.As(err, &InterpretationRejection{}) = false")
+	}
+	if rejection.RejectedFactKind != "not_a_fact_kind" {
+		t.Fatalf("rejection.RejectedFactKind = %q, want %q -- the struct field itself must carry the value, not only the reader", rejection.RejectedFactKind, "not_a_fact_kind")
+	}
+	if !rejection.RejectedFactKindSet {
+		t.Fatalf("rejection.RejectedFactKindSet = false, want true -- the presence signal must be explicit, not re-derived from string emptiness")
+	}
+}
+
+// TestClassifyInterpretationRejectionPrefersTheRawMapOverTheTrimmedValue
+// pins the raw-map lookup CHAOS-5986 relies on: question's own
+// Kind is ALREADY TRIMMED by the time it reaches this function (toDomain
+// trims before Validate() runs), so genkitruntime.InterpretQuestion passes a
+// map from that trimmed value back to the model's RAW text. This pins the
+// map lookup itself, independent of the runtime-level proof in
+// genkitruntime -- a caller that supplies raw text for the trimmed kind
+// gets that raw text, not the trimmed one, and a caller that supplies
+// nothing (nil, the shape the test above and RuntimeQuestionInterpreter's
+// defensive path both use) falls back to the trimmed value rather than
+// dropping the attach.
+func TestClassifyInterpretationRejectionPrefersTheRawMapOverTheTrimmedValue(t *testing.T) {
+	t.Parallel()
+	// The trimmed kind toDomain would have produced from either raw string
+	// below is the SAME: "" (all-whitespace trims to empty, same as a
+	// genuinely empty kind). The map is what tells them apart.
+	q := factKindRejectedQuestion("")
+	rawByKind := map[contractsv1.ContextFabricFactKind]string{
+		"": " \t\n ",
+	}
+	err := ClassifyInterpretationRejection(q, errors.New("fact requirement violates v1 bounds"), rawByKind)
+
+	kind, ok := InterpretationRejectedFactKindOf(err)
+	if !ok {
+		t.Fatalf("InterpretationRejectedFactKindOf() ok = false, want true -- an all-whitespace kind is a real rejected value")
+	}
+	if kind != " \t\n " {
+		t.Fatalf("InterpretationRejectedFactKindOf() = %q, want the RAW map value %q, not the trimmed \"\"", kind, " \t\n ")
+	}
+}
+
+// TestInterpretationRejectedFactKindOfIsAbsentForEveryOtherRejection pins the
+// "ONLY for fact_requirement_kind_invalid" scope: every other rejection
+// reason -- including ones ClassifyInterpretationRejection itself classifies
+// -- must leave the field unreadable, never a stale or unrelated value.
+func TestInterpretationRejectedFactKindOfIsAbsentForEveryOtherRejection(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		name string
+		err  error
+	}{
+		{
+			name: "a rejection for an unrelated clause (clarification_reason_missing)",
+			err:  ClassifyInterpretationRejection(rejectedQuestion(), errors.New("clarification_needed requires a reason"), nil),
+		},
+		{name: "a plain error carrying no rejection", err: errors.New("something else")},
+		{name: "a nil error", err: nil},
+		{
+			name: "a hand-built rejection whose Reason is kind-invalid but RejectedFactKind was never set",
+			err:  &InterpretationRejection{Reason: contractsv1.ContextFabricInterpretationRejectionFactRequirementKindInvalid, err: errors.New("boom")},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if kind, ok := InterpretationRejectedFactKindOf(testCase.err); ok || kind != "" {
+				t.Fatalf("InterpretationRejectedFactKindOf() = (%q, %t), want (\"\", false)", kind, ok)
+			}
+		})
+	}
+}
+
+// TestNewInterpretationRejectionLeavesRejectedFactKindEmpty pins the two
+// fact_registry.go NewInterpretationRejection callers' own contract: they
+// reject for ContextFabricInterpretationRejectionFactCapabilityParameterNotAllowed,
+// a DIFFERENT reason, and never set RejectedFactKind -- so a value set on
+// one *InterpretationRejection instance can never leak across an unrelated
+// rejection built via a different construction path.
+func TestNewInterpretationRejectionLeavesRejectedFactKindEmpty(t *testing.T) {
+	t.Parallel()
+	err := NewInterpretationRejection(
+		contractsv1.ContextFabricInterpretationRejectionFactCapabilityParameterNotAllowed,
+		errors.New("boom"),
+	)
+	if kind, ok := InterpretationRejectedFactKindOf(err); ok || kind != "" {
+		t.Fatalf("InterpretationRejectedFactKindOf() = (%q, %t), want (\"\", false) -- NewInterpretationRejection alone never sets RejectedFactKind", kind, ok)
+	}
+}
+
+// TestInterpretationRejectedFactKindOfEnforcesReasonIndependentlyOfEmptiness
+// pins the REASON gate on its own, separate from the emptiness gate
+// TestInterpretationRejectedFactKindOfIsAbsentForEveryOtherRejection already
+// covers. A hand-built *InterpretationRejection here carries a NON-EMPTY
+// RejectedFactKind under an UNRELATED Reason -- a shape no production caller
+// builds (ClassifyInterpretationRejection only ever sets the field alongside
+// the matching reason), but the one shape that proves the reason check runs
+// at all rather than the function merely happening to see an empty string on
+// every other reason in practice.
+func TestInterpretationRejectedFactKindOfEnforcesReasonIndependentlyOfEmptiness(t *testing.T) {
+	t.Parallel()
+	mismatched := &InterpretationRejection{
+		Reason:           contractsv1.ContextFabricInterpretationRejectionShapeInvalid,
+		RejectedFactKind: "should_never_surface",
+		err:              errors.New("boom"),
+	}
+	if kind, ok := InterpretationRejectedFactKindOf(mismatched); ok || kind != "" {
+		t.Fatalf("InterpretationRejectedFactKindOf() = (%q, %t), want (\"\", false) -- Reason is shape_invalid, not fact_requirement_kind_invalid", kind, ok)
 	}
 }

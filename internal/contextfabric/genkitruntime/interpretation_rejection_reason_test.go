@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -60,10 +61,11 @@ func interpretDecisionLine(t *testing.T, output interpretationOutput) (map[strin
 func TestInterpretDecisionLineNamesTheRuleThatRejectedTheInterpretation(t *testing.T) {
 	t.Parallel()
 	for _, testCase := range []struct {
-		name   string
-		mutate func(*interpretationOutput)
-		want   contractsv1.ContextFabricInterpretationRejectionReason
-		clause string
+		name         string
+		mutate       func(*interpretationOutput)
+		want         contractsv1.ContextFabricInterpretationRejectionReason
+		clause       string
+		wantFactKind string
 	}{
 		{
 			name:   "an out-of-vocabulary shape",
@@ -82,6 +84,11 @@ func TestInterpretDecisionLineNamesTheRuleThatRejectedTheInterpretation(t *testi
 			mutate: func(o *interpretationOutput) { o.FactRequirements = []factRequirementOutput{{Kind: "not_a_fact_kind"}} },
 			want:   contractsv1.ContextFabricInterpretationRejectionFactRequirementKindInvalid,
 			clause: "statement 3, the fact_requirements loop",
+			// CHAOS-5986 (telemetry half): this is the case the whole
+			// ticket is for -- the raw, model-proposed kind must reach the
+			// decision line BY VALUE, not only the fact that a kind was
+			// rejected.
+			wantFactKind: "not_a_fact_kind",
 		},
 		{
 			// The case that justifies this whole vocabulary. This is a
@@ -115,6 +122,25 @@ func TestInterpretDecisionLineNamesTheRuleThatRejectedTheInterpretation(t *testi
 			}
 			if got := fields["outcome"]; got != "invalid_output" {
 				t.Fatalf("outcome = %v, want \"invalid_output\" -- naming the rule must not change the outcome classification any existing consumer reads", got)
+			}
+			// CHAOS-5986 (telemetry half): rejected_fact_kind is present
+			// with the model's raw value ONLY for the fact-requirement-kind
+			// case, and absent for every other rejection -- the same
+			// append-only-when-applicable discipline rejection_reason
+			// itself follows.
+			gotFactKind, present := fields["rejected_fact_kind"]
+			if testCase.wantFactKind != "" {
+				if !present || gotFactKind != testCase.wantFactKind {
+					t.Fatalf("rejected_fact_kind = (%v, present=%t), want (%q, true)", gotFactKind, present, testCase.wantFactKind)
+				}
+				// The join key an operator rebuilds the decision graph on:
+				// rejected_fact_kind is worthless without the request id on
+				// the SAME line.
+				if got := fields["request_id"]; got != "request_12345678" {
+					t.Fatalf("request_id = %v, want %q on the same line as rejected_fact_kind", got, "request_12345678")
+				}
+			} else if present {
+				t.Fatalf("rejected_fact_kind = %v, want the field absent -- this rejection's rule was %q, not fact_requirement_kind_invalid", gotFactKind, testCase.want)
 			}
 		})
 	}
@@ -181,6 +207,114 @@ func TestInterpretRejectionReasonIsNeverModelAuthoredText(t *testing.T) {
 	}
 	if bytes.Contains([]byte(receipt.InterpretationRejectionReason), []byte(marker)) {
 		t.Fatalf("receipt.InterpretationRejectionReason leaked model-authored text: %q", receipt.InterpretationRejectionReason)
+	}
+}
+
+// TestInterpretDecisionLineSanitizesRejectedFactKind is CHAOS-5986's own
+// corpus-safety proof, and it has to assert the OPPOSITE direction from
+// TestInterpretRejectionReasonIsNeverModelAuthoredText above: rejected_fact_kind
+// is deliberately model-authored text (that is the whole point of this
+// field), so the assertion here is not "the marker never appears" but "the
+// marker appears ONLY in this one field, and only after going through the
+// sanitizer" -- a CRLF pair proves the barrier ran, and every OTHER field on
+// the line must stay exactly as clean as it already was.
+func TestInterpretDecisionLineSanitizesRejectedFactKind(t *testing.T) {
+	t.Parallel()
+	const marker = "MARKER_KIND_5a9c1e"
+	output := validInterpretationOutput()
+	// CRLF plus the marker: if SanitizeLogAttr were skipped, the raw value
+	// would split this JSON log line in two (go/log-injection, CWE-117).
+	output.FactRequirements = []factRequirementOutput{{Kind: marker + "\r\ninjected"}}
+
+	fields, receipt := interpretDecisionLine(t, output)
+
+	if got := fields["rejection_reason"]; got != string(contractsv1.ContextFabricInterpretationRejectionFactRequirementKindInvalid) {
+		t.Fatalf("rejection_reason = %v, want %q -- fixture is wrong", got, contractsv1.ContextFabricInterpretationRejectionFactRequirementKindInvalid)
+	}
+	got, ok := fields["rejected_fact_kind"].(string)
+	if !ok {
+		t.Fatalf("rejected_fact_kind missing or not a string: %#v", fields["rejected_fact_kind"])
+	}
+	if !strings.Contains(got, marker) {
+		t.Fatalf("rejected_fact_kind = %q, want it to still contain %q -- this field exists specifically to carry the model's raw value", got, marker)
+	}
+	// The sanitizer's own documented behaviour (chaos5544_log_sanitizer.go):
+	// \r\n replaced, never left as raw control bytes that could forge a
+	// second JSON log line.
+	if strings.Contains(got, "\r") || strings.Contains(got, "\n") {
+		t.Fatalf("rejected_fact_kind = %q, contains a raw CR or LF -- SanitizeLogAttr was not applied", got)
+	}
+
+	for field, value := range fields {
+		if field == "rejected_fact_kind" {
+			continue
+		}
+		text, isText := value.(string)
+		if isText && strings.Contains(text, marker) {
+			t.Fatalf("decision field %q leaked the model-authored kind %q outside rejected_fact_kind", field, text)
+		}
+	}
+	if strings.Contains(string(receipt.InterpretationRejectionReason), marker) {
+		t.Fatalf("receipt.InterpretationRejectionReason leaked model-authored text: %q", receipt.InterpretationRejectionReason)
+	}
+}
+
+// TestInterpretDecisionLinePreservesRejectedFactKindVerbatim pins CHAOS-5986's
+// byte-exact contract: toDomain trims fact_requirements[].kind before
+// Validate() ever runs, so without a raw side-channel the decision line
+// would silently report a DIFFERENT string than the one the model actually
+// sent -- an operator diagnosing the exact out-of-vocabulary value a
+// misbehaving model emitted would be misled by their own telemetry.
+func TestInterpretDecisionLinePreservesRejectedFactKindVerbatim(t *testing.T) {
+	t.Parallel()
+	const raw = "  bad_kind  "
+	output := validInterpretationOutput()
+	output.FactRequirements = []factRequirementOutput{{Kind: raw}}
+
+	fields, _ := interpretDecisionLine(t, output)
+
+	got, ok := fields["rejected_fact_kind"].(string)
+	if !ok {
+		t.Fatalf("rejected_fact_kind missing or not a string: %#v", fields["rejected_fact_kind"])
+	}
+	if got != raw {
+		t.Fatalf("rejected_fact_kind = %q, want the RAW model value %q verbatim (not trimmed)", got, raw)
+	}
+}
+
+// TestInterpretDecisionLineSurfacesAnAllWhitespaceRejectedFactKind pins
+// CHAOS-5986's presence contract: an out-of-vocabulary kind that is
+// entirely whitespace trims to "", and a presence signal keyed on string
+// emptiness (rather than an explicit "was this actually attached" flag)
+// would silently OMIT the field -- indistinguishable from a rejection
+// whose reason was not fact_requirement_kind_invalid at all, exactly the
+// ambiguity this field exists to remove.
+func TestInterpretDecisionLineSurfacesAnAllWhitespaceRejectedFactKind(t *testing.T) {
+	t.Parallel()
+	const raw = " \t\n "
+	output := validInterpretationOutput()
+	output.FactRequirements = []factRequirementOutput{{Kind: raw}}
+
+	fields, _ := interpretDecisionLine(t, output)
+
+	if got := fields["rejection_reason"]; got != string(contractsv1.ContextFabricInterpretationRejectionFactRequirementKindInvalid) {
+		t.Fatalf("rejection_reason = %v, want %q -- fixture is wrong", got, contractsv1.ContextFabricInterpretationRejectionFactRequirementKindInvalid)
+	}
+	// SanitizeLogAttr replaces every control byte (tab/newline included)
+	// with '?' before the value reaches the line -- see its own doc
+	// comment -- so the assertion here is PRESENCE, not a byte-exact
+	// match against raw: that exact-match proof already exists,
+	// pre-sanitization, at TestClassifyInterpretationRejectionPrefersTheRawMapOverTheTrimmedValue.
+	// What this test pins is that an all-whitespace kind reaches the
+	// line AT ALL, rather than being silently treated as "no kind was
+	// ever attached".
+	got, present := fields["rejected_fact_kind"]
+	if !present {
+		t.Fatalf("rejected_fact_kind is absent, want it present (the model's all-whitespace value, sanitized) -- an all-whitespace kind is a real rejected value, not the same as no kind ever attached")
+	}
+	gotStr, isString := got.(string)
+	if !isString || strings.TrimSpace(strings.ReplaceAll(gotStr, "?", "")) != "" {
+		t.Fatalf("rejected_fact_kind = %#v, want a sanitized (space/'?'-only) rendering of the all-whitespace raw value %q", got, raw)
 	}
 }
 
@@ -272,4 +406,61 @@ func TestFallbackSemanticRejectionCarriesItsReasonToTheOuterArtifacts(t *testing
 			t.Fatal("no interpret decision line was emitted")
 		})
 	}
+}
+
+// TestFallbackFactKindRejectionCarriesItsRawValueToTheOuterArtifacts closes
+// the fallback-leg gap on the same path
+// TestFallbackSemanticRejectionCarriesItsReasonToTheOuterArtifacts covers for
+// rejection_reason: when the PRIMARY produced invalid output and the
+// FALLBACK also rejects -- for fact_requirement_kind_invalid specifically --
+// the fallback's own raw kind value must reach the decision line, not stay
+// silent because it came from the fallback leg rather than the primary's own
+// ClassifyInterpretationRejection call.
+func TestFallbackFactKindRejectionCarriesItsRawValueToTheOuterArtifacts(t *testing.T) {
+	t.Parallel()
+	fallbackRejected := contextfabric.NewInterpretationRejection(
+		contractsv1.ContextFabricInterpretationRejectionFactRequirementKindInvalid,
+		fmt.Errorf("%w: %w: fact requirement kind invalid", contextfabric.ErrInterpretationRejected, contextfabric.ErrModelOutput),
+	)
+	rejection, ok := fallbackRejected.(*contextfabric.InterpretationRejection)
+	if !ok {
+		t.Fatalf("NewInterpretationRejection() did not return *InterpretationRejection: %#v", fallbackRejected)
+	}
+	rejection.RejectedFactKind = "fallback_bad_kind"
+	rejection.RejectedFactKindSet = true
+
+	primary := validInterpretationOutput()
+	primary.Shape = "not_a_real_shape"
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	runtime := mustRuntime(t, &generatorStub{interpretation: primary}, Config{
+		Logger:   logger,
+		Fallback: erroringFallbackRuntime{err: fallbackRejected},
+	})
+
+	_, receipt, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest())
+	if err == nil {
+		t.Fatal("InterpretQuestion() = nil error, want the fallback's rejection")
+	}
+	if got := contextfabric.InterpretationRejectionReasonOf(err); got != contractsv1.ContextFabricInterpretationRejectionFactRequirementKindInvalid {
+		t.Fatalf("the RETURNED error's reason = %q, want %q -- fixture is wrong", got, contractsv1.ContextFabricInterpretationRejectionFactRequirementKindInvalid)
+	}
+	if receipt.InterpretationRejectionReason != contractsv1.ContextFabricInterpretationRejectionFactRequirementKindInvalid {
+		t.Fatalf("receipt.InterpretationRejectionReason = %q, want %q", receipt.InterpretationRejectionReason, contractsv1.ContextFabricInterpretationRejectionFactRequirementKindInvalid)
+	}
+	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+		fields := map[string]any{}
+		if json.Unmarshal(line, &fields) != nil {
+			continue
+		}
+		if fields["operation"] != string(contextfabric.ModelOperationInterpret) {
+			continue
+		}
+		if got := fields["rejected_fact_kind"]; got != "fallback_bad_kind" {
+			t.Fatalf("decision line rejected_fact_kind = %v, want %q -- the fallback leg's own raw value must not stay silent", got, "fallback_bad_kind")
+		}
+		return
+	}
+	t.Fatal("no interpret decision line was emitted")
 }

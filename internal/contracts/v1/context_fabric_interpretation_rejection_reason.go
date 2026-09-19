@@ -233,6 +233,63 @@ func DiagnoseContextFabricInterpretedQuestionRejection(q ContextFabricInterprete
 	return ContextFabricInterpretationRejectionUnclassified, false
 }
 
+// RejectedFactRequirementKind returns the raw, OUT-OF-VOCABULARY
+// fact_requirements[].kind value the model proposed, when q was rejected
+// specifically for ContextFabricInterpretationRejectionFactRequirementKindInvalid
+// -- the one case in this whole vocabulary where a caller needs the actual
+// model-authored string, not merely the rule that named it.
+//
+// WHY THIS EXISTS, SEPARATE FROM THE REASON TABLE ABOVE. Every constant this
+// file returns is deliberately NEVER derived from model output (see
+// ContextFabricInterpretationRejectionReason's own doc comment) -- the
+// reason vocabulary answers "which clause", and that answer must stay a
+// fixed, ACR-owned identifier so it is safe to log unconditionally.
+// CHAOS-5986 (telemetry half) asks for a SECOND, DIFFERENT value: an
+// operator diagnosing a yardstick abort needs to see WHAT out-of-vocabulary
+// string the model actually proposed, not only that it proposed one. That
+// is model output by construction, so it is returned here as its own named
+// function -- explicit at every call site that it is choosing to carry raw
+// text -- rather than folded into DiagnoseContextFabricInterpretedQuestionRejection's
+// own signature, whose entire contract is "every return is a fixed
+// constant, safe to log". A caller logging this value MUST
+// sanitize/bound it itself (see contextfabric.SanitizeLogAttr); this
+// function makes no safety claim about the string it returns.
+//
+// It reuses DiagnoseContextFabricInterpretedQuestionRejection rather than
+// re-deriving whether/why q was rejected: one source of truth for WHICH
+// RULE fired, so the walk below only has to answer WHICH REQUIREMENT,
+// never re-decide whether q was rejected for this reason at all.
+func RejectedFactRequirementKind(q ContextFabricInterpretedQuestion) (string, bool) {
+	reason, ok := DiagnoseContextFabricInterpretedQuestionRejection(q)
+	if !ok || reason != ContextFabricInterpretationRejectionFactRequirementKindInvalid {
+		return "", false
+	}
+	// Mirrors the SAME first-failing-requirement walk
+	// DiagnoseContextFabricInterpretedQuestionRejection's own fact_requirements
+	// loop performs (statement 3) -- not an independent scan for "any
+	// invalid kind", which could name a LATER requirement than the one that
+	// actually caused the rejection. A value must be sound before it is
+	// complete, the same discipline this file's reason diagnosis already
+	// applies to itself.
+	bounds := contextFabricWriteBounds
+	for _, requirement := range q.FactRequirements {
+		if requirement.validate(bounds) != nil {
+			if !validFactKind(requirement.Kind) {
+				return string(requirement.Kind), true
+			}
+			// The first-failing requirement failed a DIFFERENT per-entry
+			// clause (subjects/params), not kind. Unreachable given the
+			// reason check above -- diagnoseContextFabricFactRequirementRejection
+			// checks kind FIRST, exactly as validate() does, so a
+			// FactRequirementKindInvalid reason can only come from the
+			// kind branch -- but Unclassified-shaped rather than a guess:
+			// no value, never a fabricated one.
+			return "", false
+		}
+	}
+	return "", false
+}
+
 // diagnoseContextFabricFactRequirementRejection mirrors
 // ContextFabricFactRequirement.validate()'s own clause order: kind enum,
 // then subjects count/uniqueness, then parameters count, THEN (a separate

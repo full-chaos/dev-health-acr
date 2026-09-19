@@ -34,7 +34,29 @@ const InterpretationRejectionUnclassified = contractsv1.ContextFabricInterpretat
 // the same guarantee SynthesisRejection makes on the synthesis side.
 type InterpretationRejection struct {
 	Reason InterpretationRejectionReason
-	err    error
+	// RejectedFactKind is the raw, out-of-vocabulary fact_requirements[].kind
+	// value the model proposed. Set ONLY when Reason is
+	// FactRequirementKindInvalid (empty for every other reason, including
+	// the two fact_registry.go callers below, which never set it) -- see
+	// contractsv1.RejectedFactRequirementKind's doc comment for why this
+	// field deliberately carries raw text where every other field on this
+	// type and its contracts/v1 counterpart is a fixed, ACR-owned
+	// identifier, and why a caller must sanitize it before it reaches a log
+	// line (InterpretationRejectedFactKindOf below makes no safety claim
+	// about the value it returns).
+	RejectedFactKind string
+	// RejectedFactKindSet is the explicit presence signal for
+	// RejectedFactKind, distinct from RejectedFactKind's own zero value.
+	// An out-of-vocabulary kind that is empty or all whitespace is still
+	// a rejected kind the model proposed -- treating RejectedFactKind ==
+	// "" as "absent" silently dropped that exact case, indistinguishable
+	// from a rejection this field was never attached to at all. Set true
+	// whenever ClassifyInterpretationRejection actually attempted the
+	// attach (the reason WAS FactRequirementKindInvalid), false on every
+	// other path, including the two fact_registry.go callers that never
+	// set the field at all.
+	RejectedFactKindSet bool
+	err                 error
 }
 
 func (e *InterpretationRejection) Error() string { return e.err.Error() }
@@ -79,4 +101,33 @@ func InterpretationRejectionReasonOf(err error) InterpretationRejectionReason {
 		return contractsv1.CanonicalContextFabricInterpretationRejectionReason(rejection.Reason)
 	}
 	return InterpretationRejectionUnclassified
+}
+
+// InterpretationRejectedFactKindOf extracts the raw fact_requirements[].kind
+// value from err, when err carries an InterpretationRejection whose
+// (canonicalized) Reason is FactRequirementKindInvalid. ok is false for
+// every other rejection reason, a non-rejection error, or a rejection that
+// never set the field (the two fact_registry.go NewInterpretationRejection
+// callers, and a rejection reason that canonicalized to Unclassified).
+//
+// ok reports RejectedFactKindSet, NOT RejectedFactKind != "": an
+// all-whitespace or genuinely empty out-of-vocabulary kind is a real,
+// present rejected value -- the model proposed it and it is why
+// the interpretation was rejected -- and a caller must be able to tell
+// that apart from "no kind was ever attached". A string-emptiness check
+// here collapsed those two cases and silently dropped the first.
+//
+// UNLIKE InterpretationRejectionReasonOf, the string this returns is NOT
+// safe to log unsanitized -- see RejectedFactKind's own doc comment. Every
+// caller of this function must route the value through SanitizeLogAttr (or
+// an equivalent bound-and-strip barrier) before it becomes a log attribute.
+func InterpretationRejectedFactKindOf(err error) (string, bool) {
+	var rejection *InterpretationRejection
+	if !errors.As(err, &rejection) {
+		return "", false
+	}
+	if contractsv1.CanonicalContextFabricInterpretationRejectionReason(rejection.Reason) != contractsv1.ContextFabricInterpretationRejectionFactRequirementKindInvalid {
+		return "", false
+	}
+	return rejection.RejectedFactKind, rejection.RejectedFactKindSet
 }
