@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
@@ -237,6 +238,37 @@ func TestProjectNativeThemeMixAgainstRealClickHouse(t *testing.T) {
 		}
 		if got := factInt(t, s2, "spanning_unit_count"); got != 1 {
 			t.Errorf("proj-s2 spanning_unit_count = %d, want 1", got)
+		}
+	})
+
+	t.Run("the_requested_range_bounds_native_units_and_is_disclosed", func(t *testing.T) {
+		const org = "org-native-window"
+		seedProject("proj-w", org)
+		seedItem(org, "linear:W-1", "proj-w")
+		seed := func(id string, validAt time.Time, effort float64, themes map[string]float64) {
+			exec("windowed unit "+id, `INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?)`,
+				id, validAt, validAt, effort, themes, map[string]float64{}, `{"issues":["linear:W-1"],"prs":[]}`, at, org)
+		}
+		seed("wu-w-in", ts(2026, 6, 10, 0, 0, 0), 10, map[string]float64{"feature_delivery": 1.0})
+		seed("wu-w-out", ts(2026, 1, 5, 0, 0, 0), 40, map[string]float64{"risk": 1.0})
+		rangeStart, rangeEnd := ts(2026, 6, 1, 0, 0, 0), ts(2026, 7, 1, 0, 0, 0)
+		provider := findProvider(t, providers, contextfabric.FactInvestment)
+		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: org}, contextfabric.FactQuery{
+			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &rangeStart, End: &rangeEnd},
+			Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-w")},
+		})
+		if err != nil || len(result.Facts) != 1 {
+			t.Fatalf("facts = %#v err = %v, want exactly one", result.Facts, err)
+		}
+		fact := result.Facts[0]
+		if got := factNumber(t, fact, "theme_feature_delivery"); got != 1.0 {
+			t.Errorf("theme_feature_delivery = %v, want 1.0 (the out-of-range risk effort must not count)", got)
+		}
+		if got := factInt(t, fact, "work_unit_count"); got != 1 {
+			t.Errorf("work_unit_count = %d, want 1", got)
+		}
+		if got := factString(t, fact, "population_window"); got != "requested_range" {
+			t.Errorf("population_window = %q, want requested_range", got)
 		}
 	})
 

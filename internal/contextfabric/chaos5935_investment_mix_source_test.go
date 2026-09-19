@@ -81,3 +81,12 @@ func TestCohortRankedLineCarriesTheInvestmentMixSourceCounts(t *testing.T) {
 		t.Fatalf("level = %v, want INFO", records[0]["level"])
 	}
 }
+
+// A fact whose label is present but empty is not a named source.
+func TestInvestmentMixSourceTreatsAnEmptyLabelAsUnlabeled(t *testing.T) {
+	t.Parallel()
+	fact := labelledInvestmentFact("m", "")
+	if got := investmentMixSource([]CanonicalFact{fact}); got != InvestmentMixSourceUnlabeled {
+		t.Fatalf("investmentMixSource = %q, want %q", got, InvestmentMixSourceUnlabeled)
+	}
+}

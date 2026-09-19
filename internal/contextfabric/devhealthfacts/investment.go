@@ -986,10 +986,9 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 			if existing.Kind != contextfabric.FactInvestment || contextfabric.FactSubjectKey(existing.Subject) != targetKey {
 				continue
 			}
-			if prior, has := existing.Fields[contextfabric.FactFieldInvestmentMixSource]; has && prior.String != nil && *prior.String == contextfabric.InvestmentMixSourceOwningTeamRollup {
-				if count, hasCount := existing.Fields["work_unit_count"]; hasCount {
-					fields["owning_team_rollup_work_unit_count"] = count
-				}
+			// Only the roll-up writes work_unit_count onto the project's fact.
+			if count, hasCount := existing.Fields["work_unit_count"]; hasCount {
+				fields["owning_team_rollup_work_unit_count"] = count
 			}
 			break
 		}
