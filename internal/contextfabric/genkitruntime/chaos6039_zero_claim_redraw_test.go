@@ -232,6 +232,9 @@ func TestFailedZeroClaimRedrawServesTheEarlierValidDraft(t *testing.T) {
 			if run.receipt.OutputDigest != digestOf(t, zero) {
 				t.Fatalf("receipt.OutputDigest = %q, want the served (first) draft's %q", run.receipt.OutputDigest, digestOf(t, zero))
 			}
+			if run.draft.DirectJudgment != zero.DirectJudgment || run.draft.DirectJudgment == "" {
+				t.Fatalf("served draft = %q, want the held first draft's %q", run.draft.DirectJudgment, zero.DirectJudgment)
+			}
 			if run.receipt.Attempts != 1 {
 				t.Fatalf("receipt.Attempts = %d, want the served draw's own 1", run.receipt.Attempts)
 			}
@@ -310,4 +313,20 @@ func TestNoValidDrawLeavesTheRedrawRuleUnevaluated(t *testing.T) {
 		t.Fatal("SynthesizeAnswer() must fail when no draw validates")
 	}
 	run.certify(t, map[string]any{"draws_total": 1, "zero_claim_redraw": eventspec.SynthesisZeroClaimRedrawNotEvaluated})
+}
+
+// TestClaimingDrawAtTheCeilingIsNotReportedAsDeclined: a draw that claims a
+// fact needs no extra draw, so reaching the ceiling with a claiming draft is
+// "not needed", never "declined".
+func TestClaimingDrawAtTheCeilingIsNotReportedAsDeclined(t *testing.T) {
+	t.Parallel()
+	gen := &scriptedGenerator{steps: steps(invalidTitleSynthesisOutput(), invalidEvidenceSynthesisOutput(), claimedSynthesisOutput())}
+	run := runRedraw(t, context.Background(), gen, Config{MaxSynthesisResynthesisAttempts: MaxSynthesisResynthesisAttemptsCeiling}, validSynthesisInput())
+	if run.err != nil {
+		t.Fatalf("SynthesizeAnswer() error = %v", run.err)
+	}
+	run.certify(t, map[string]any{
+		"draws_total": 3, "draw_outcomes": "1:invalid_output,2:invalid_output,3:success", "claims": 1,
+		"zero_claim_redraw": eventspec.SynthesisZeroClaimRedrawNotNeeded,
+	})
 }
