@@ -109,6 +109,7 @@ var projectCohortCells = []projectCohortCell{
 
 func seedProjectCohort(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID string, cells []projectCohortCell) {
 	t.Helper()
+	// devhealthschema:not-a-production-replica rows are inserted into tables whose schema comes only from devhealthschema.DDL, never defined here
 	epoch := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	workAt := ts(2026, 9, 18, 0, 0, 0)
 	exec := func(what, sql string, args ...any) {
@@ -211,6 +212,7 @@ type projectCohortRun struct {
 func runProjectCohortInvestigation(t *testing.T, ctx context.Context, cells []projectCohortCell) projectCohortRun {
 	t.Helper()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	// devhealthschema:not-a-production-replica rows are inserted into tables whose schema comes only from devhealthschema.DDL, never defined here
 	for _, statement := range devhealthschema.DDL(
 		"projects", "team_project_ownership", "team_repo_ownership", "teams",
 		"investment_metrics_daily", "capacity_forecasts", "estimate_coverage_metrics_daily",
