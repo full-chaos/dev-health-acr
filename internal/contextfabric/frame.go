@@ -90,6 +90,21 @@ type QuestionFrame struct {
 	// frames derived under different table versions are not
 	// interchangeable for answer reuse.
 	Version string `json:"version"`
+
+	// CollapsedGroupAxisMemberKind is PROVENANCE, not a wire field --
+	// json:"-" deliberately, so it never survives a persistence write and read
+	// or the contract and never needs a QueryVersion bump of its own. Set
+	// ONLY by repairMemberKindFactAliasCollapse (CHAOS-5992) on the frame
+	// IT produces, to the member kind the repair collapsed a requested
+	// group axis into (the receipt's own GroupKind). requestedGroupAxisDropped
+	// (model_runtime.go) reads it to decide that the axis is EXPRESSED,
+	// not dropped, for exactly this provenance -- never by inferring the
+	// same conclusion from the frame's shape alone, which would also
+	// admit a DIRECT model proposal of the identical shape that invariant
+	// I6 has never validated. Empty on every direct proposal and on
+	// every other repair's output; this repair's own doc comment states
+	// the bound in full.
+	CollapsedGroupAxisMemberKind SubjectKind `json:"-"`
 }
 
 // QuestionFrameVersion is the derivation-table version this build

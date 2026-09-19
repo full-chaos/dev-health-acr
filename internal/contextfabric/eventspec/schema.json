@@ -1783,7 +1783,10 @@
           "declined_hint_unservable",
           "declined_bound_reached",
           "declined_not_grouped_cohort",
-          "declined_not_ranking_goal"
+          "declined_not_ranking_goal",
+          "declined_not_fact_alias_kind",
+          "declined_group_kind_unservable",
+          "declined_group_kind_mismatch"
         ]
       },
       {
@@ -1794,7 +1797,8 @@
           "none",
           "count_kind_collapse",
           "compare_grouped_collapse",
-          "compare_ranking_collapse"
+          "compare_ranking_collapse",
+          "member_kind_fact_alias_collapse"
         ]
       },
       {

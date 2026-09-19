@@ -3102,7 +3102,22 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// defect this field exists to make visible.
 	if graphContext.Cohort != nil {
 		plan.MemberKind = graphContext.Cohort.Kind
-		if planGroupAxisCollapsed(plan.GroupKind, plan.MemberKind) {
+		// PROVENANCE, not inference (CHAOS-5992, the sibling of the identical
+		// rule requestedGroupAxisDropped applies at the frame seam,
+		// model_runtime.go): a plan whose group kind and discovered member
+		// kind coincide because repairMemberKindFactAliasCollapse ITSELF
+		// stamped that exact member kind (SubjectExpression's own
+		// CollapsedGroupAxisMemberKind, carried through validation
+		// unchanged) is not a data-shape SURPRISE the frame gate could not
+		// have caught -- it is the shape that repair deliberately produced,
+		// already proven servable before it ran. Every OTHER coincidence
+		// (a frame the model proposed directly, or discovery returning an
+		// unexpected kind for an untouched frame) has no such provenance and
+		// refuses exactly as before.
+		repairAccountedForCollapse := familyOutcome.Frame != nil &&
+			familyOutcome.Frame.CollapsedGroupAxisMemberKind != "" &&
+			familyOutcome.Frame.CollapsedGroupAxisMemberKind == plan.MemberKind
+		if planGroupAxisCollapsed(plan.GroupKind, plan.MemberKind) && !repairAccountedForCollapse {
 			// A group axis that collapsed onto the member kind partitions a
 			// set by itself, which no grouping can mean -- invariant I6, at
 			// a seam the frame gate cannot reach.

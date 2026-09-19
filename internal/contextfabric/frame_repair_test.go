@@ -1374,6 +1374,470 @@ func TestTheRankingRepairPreservesTheModelsOwnJudgment(t *testing.T) {
 	}
 }
 
+// THE FOURTH BOUNDED REPAIR, EXECUTED (CHAOS-5992). Unlike the other three,
+// this repair does not answer a FrameValidationFailure -- it fires on a
+// frame phase A1/A2 already accepted, heading off the LATER
+// member_kind_unservable refusal DecideFrameGate would otherwise reach for
+// it. groupedMetricByRepoReceipt/groupedMetricByRepoFrame are the misread
+// turn's fixtures: a grouped cohort (group repository, member metric) the
+// corpus row basis-grouped-metric-by-repo's traces show -- no question text
+// is carried, only its columns (family grouped_cohort_status, group
+// repository, member unservable).
+
+// groupedMetricByRepoReceipt is the misread turn's receipt: the group axis
+// the same call requested.
+func groupedMetricByRepoReceipt() ModelExecutionReceipt {
+	receipt := validModelReceiptFixture(ModelOperationInterpret)
+	receipt.GroupKind = SubjectRepository
+	return receipt
+}
+
+// groupedMetricByRepoFrame is the misread proposal: a grouped cohort whose
+// member kind names a fact concept ("metric"), not a servable entity --
+// distinct from the ILLEGAL self-group shape (group == member), which I6
+// already refuses and this repair never reaches.
+func groupedMetricByRepoFrame() QuestionFrame {
+	return QuestionFrame{
+		Goals:             []InvestigationGoal{GoalCountOrAggregate},
+		SubjectExpression: groupedExpression(SubjectMetric, SubjectRepository),
+		Temporal:          TemporalIntentCurrent,
+	}
+}
+
+type memberKindAliasRepairCell struct {
+	cell        string
+	receipt     func(*ModelExecutionReceipt)
+	frame       func() QuestionFrame
+	wantOutcome FrameValidationOutcome
+	// wantKind is the carried frame's kind. Unlike the other repair cell
+	// tables, a DECLINED cell here still carries a frame (the proposal,
+	// untouched, still Valid) -- the turn is refused, downstream, by
+	// DecideFrameGate, which this table's wantLine frame_gate value
+	// exercises directly rather than treating "no repair" as "no frame".
+	wantKind SubjectExpressionKind
+	// wantMemberKind is the carried discovered_kind frame's own member
+	// kind on the applied path, empty otherwise.
+	wantMemberKind SubjectKind
+	wantLine       map[string]any
+}
+
+func memberKindAliasAppliedLine() map[string]any {
+	return map[string]any{
+		"outcome": "repaired", "failed_invariant": "", "frame_gate": "passed", "repair_decision": "applied",
+		"repair": "member_kind_fact_alias_collapse", "repair_invariant": "none",
+		"repair_kind_before": "grouped_members", "repair_kind_after": "discovered_kind",
+		"repair_member_kind": "repository", "repair_terms_match": "not_evaluated", "repair_attempts": float64(1),
+	}
+}
+
+// memberKindAliasDeclinedLine is every DECLINE this repair produces: the
+// proposed frame validated (Outcome stays valid, Kind stays grouped_members,
+// no repair invariant applies because none failed), and DecideFrameGate
+// -- not this function -- is what refuses the turn, on the proposal's own
+// still-unservable member kind. gate is the frame_gate token that refusal
+// renders as; "passed" for the one control (a genuinely discoverable
+// member) that is not refused at all.
+func memberKindAliasDeclinedLine(decision, gate string) map[string]any {
+	return map[string]any{
+		"outcome": "valid", "failed_invariant": "", "frame_gate": gate, "repair_decision": decision,
+		"repair": "member_kind_fact_alias_collapse", "repair_invariant": "none",
+		"repair_kind_before": "grouped_members", "repair_kind_after": "none",
+		"repair_member_kind": "none", "repair_terms_match": "not_evaluated", "repair_attempts": float64(0),
+	}
+}
+
+// memberKindAliasRepairCells is this repair's own domain table: goal/kind
+// combinations across (member kind alias-set membership) x (group kind
+// servability) x (declared-vs-receipt group kind match) x the two controls
+// every repair table needs (an invariant that fails before this repair
+// ever sees the frame, and a DIRECT model proposal of the identical
+// repaired shape).
+func memberKindAliasRepairCells() []memberKindAliasRepairCell {
+	withFrame := func(mutate func(*QuestionFrame)) func() QuestionFrame {
+		return func() QuestionFrame {
+			frame := groupedMetricByRepoFrame()
+			mutate(&frame)
+			return frame
+		}
+	}
+	return []memberKindAliasRepairCell{
+		{
+			cell:           "metric member over a servable group is collapsed to a flat discovered cohort",
+			receipt:        func(*ModelExecutionReceipt) {},
+			frame:          groupedMetricByRepoFrame,
+			wantOutcome:    FrameValidationOutcomeRepaired,
+			wantKind:       SubjectExpressionDiscoveredKind,
+			wantMemberKind: SubjectRepository,
+			wantLine:       memberKindAliasAppliedLine(),
+		},
+		{
+			// A genuine two-level ask (incidents grouped by repository,
+			// both servable) is NEVER collapsed -- that would lose the
+			// member dimension the question named. Untouched (not even
+			// CONSIDERED -- not_applicable, the same as every other
+			// repair's own shape it does not own), it still serves fine on
+			// its own: frame_gate passes.
+			cell:    "a genuinely discoverable member kind is never collapsed",
+			receipt: func(*ModelExecutionReceipt) {},
+			frame: withFrame(func(frame *QuestionFrame) {
+				frame.SubjectExpression = groupedExpression(SubjectIncident, SubjectRepository)
+			}),
+			wantOutcome: FrameValidationOutcomeValid,
+			wantKind:    SubjectExpressionGroupedMembers,
+			wantLine:    notApplicableLine("valid", "", "passed"),
+		},
+		{
+			// An unservable member kind outside the ticket-scoped alias
+			// set has no evidenced reading and is never guessed at --
+			// stays refused downstream, exactly as before this repair.
+			cell:    "an unservable member kind outside the alias set has no evidenced reading",
+			receipt: func(*ModelExecutionReceipt) {},
+			frame: withFrame(func(frame *QuestionFrame) {
+				frame.SubjectExpression = groupedExpression(SubjectDeployment, SubjectRepository)
+			}),
+			wantOutcome: FrameValidationOutcomeValid,
+			wantKind:    SubjectExpressionGroupedMembers,
+			wantLine:    memberKindAliasDeclinedLine("declined_not_fact_alias_kind", "refused:member_kind_unservable"),
+		},
+		{
+			// The collapse TARGET (the group kind) must itself be
+			// servable, or the repair would trade one unservable refusal
+			// for another and hide the first.
+			cell:    "a group kind with no discovery arm is never collapsed into",
+			receipt: func(r *ModelExecutionReceipt) { r.GroupKind = SubjectDeployment },
+			frame: withFrame(func(frame *QuestionFrame) {
+				frame.SubjectExpression = groupedExpression(SubjectMetric, SubjectDeployment)
+			}),
+			wantOutcome: FrameValidationOutcomeValid,
+			wantKind:    SubjectExpressionGroupedMembers,
+			wantLine:    memberKindAliasDeclinedLine("declined_group_kind_unservable", "refused:member_kind_unservable"),
+		},
+		{
+			// The receipt's own GroupKind (the signal that routed this
+			// turn) must equal the frame's own declared GroupKind -- two
+			// disagreeing signals are never silently reconciled by
+			// trusting one of them.
+			cell:        "a receipt group-kind hint that disagrees with the frame's own is never trusted",
+			receipt:     func(r *ModelExecutionReceipt) { r.GroupKind = SubjectTeam },
+			frame:       groupedMetricByRepoFrame,
+			wantOutcome: FrameValidationOutcomeValid,
+			wantKind:    SubjectExpressionGroupedMembers,
+			wantLine:    memberKindAliasDeclinedLine("declined_group_kind_mismatch", "refused:member_kind_unservable"),
+		},
+		{
+			// THE ILLEGAL SELF-GROUP CASE STAYS REFUSED, UNTOUCHED: I6
+			// fails before this repair ever sees a Valid outcome, so it
+			// is not_applicable, exactly like the other two repairs on an
+			// invariant they do not answer.
+			cell:    "an illegal self-group frame fails I6 before this repair ever runs",
+			receipt: func(*ModelExecutionReceipt) {},
+			frame: withFrame(func(frame *QuestionFrame) {
+				frame.SubjectExpression = groupedExpression(SubjectRepository, SubjectRepository)
+			}),
+			wantOutcome: FrameValidationOutcomeRefusedInvalid,
+			wantLine:    notApplicableLine("refused_invalid", "i6", "rejected:i6"),
+		},
+		{
+			// THE PROVENANCE BOUND'S OWN CONTROL: a DIRECT model proposal
+			// of the IDENTICAL shape this repair produces (discovered_kind
+			// over the requested group kind, no group axis expressed) is
+			// refused exactly as before this repair existed -- the
+			// admission is never inferred from shape, only from the
+			// provenance this repair itself stamps.
+			cell:    "a direct proposal of the repaired shape is refused exactly as before",
+			receipt: func(*ModelExecutionReceipt) {},
+			frame: func() QuestionFrame {
+				return QuestionFrame{
+					Goals:             []InvestigationGoal{GoalAssessState},
+					SubjectExpression: discoveredExpression(SubjectRepository),
+					Temporal:          TemporalIntentCurrent,
+				}
+			},
+			wantOutcome: FrameValidationOutcomeRefusedInvalid,
+			wantLine: map[string]any{
+				"outcome": "refused_invalid", "failed_invariant": "i6", "failure_detail": "requested_group_axis_not_expressed",
+				"frame_gate": "rejected:i6", "repair_decision": "not_applicable", "repair": "none", "repair_invariant": "none",
+				"repair_kind_before": "none", "repair_kind_after": "none", "repair_member_kind": "none",
+				"repair_terms_match": "not_evaluated", "repair_attempts": float64(0),
+			},
+		},
+		{
+			cell:    "a preceding A1 invariant (I15, empty goals) fails first",
+			receipt: func(*ModelExecutionReceipt) {},
+			frame: withFrame(func(frame *QuestionFrame) {
+				frame.Goals = []InvestigationGoal{}
+			}),
+			wantOutcome: FrameValidationOutcomeRefusedInvalid,
+			wantLine:    notApplicableLine("refused_invalid", "i15", "rejected:i15"),
+		},
+	}
+}
+
+// TestTheMemberKindFactAliasRepairIsBounded executes every clause of this
+// repair's own bound through the production interpreter.
+func TestTheMemberKindFactAliasRepairIsBounded(t *testing.T) {
+	for _, testCase := range memberKindAliasRepairCells() {
+		t.Run(testCase.cell, func(t *testing.T) {
+			receipt := groupedMetricByRepoReceipt()
+			testCase.receipt(&receipt)
+			run := interpretForRepair(t, receipt, testCase.frame(), []string{repairAnchorTerm})
+
+			if run.receipt.FrameOutcome != testCase.wantOutcome {
+				t.Errorf("receipt frame outcome = %q, want %q", run.receipt.FrameOutcome, testCase.wantOutcome)
+			}
+			switch {
+			case testCase.wantKind == "" && run.outcome.Frame != nil:
+				t.Errorf("the turn carries a %v frame, want none", run.outcome.Frame.SubjectExpression.Kind)
+			case testCase.wantKind != "" && run.outcome.Frame == nil:
+				t.Fatalf("the turn carries no frame, want %q (gate %s)", testCase.wantKind, run.outcome.Gate.Observable())
+			case testCase.wantKind != "" && run.outcome.Frame.SubjectExpression.Kind != testCase.wantKind:
+				t.Errorf("carried frame kind = %q, want %q", run.outcome.Frame.SubjectExpression.Kind, testCase.wantKind)
+			}
+			if testCase.wantMemberKind != "" {
+				if run.outcome.Frame == nil || run.outcome.Frame.SubjectExpression.Discovered == nil || run.outcome.Frame.SubjectExpression.Discovered.MemberKind != testCase.wantMemberKind {
+					t.Errorf("carried frame = %+v, want discovered_kind member %q", run.outcome.Frame, testCase.wantMemberKind)
+				}
+			}
+			if testCase.wantKind == "" && !run.outcome.Gate.Refuses() {
+				t.Errorf("gate %s does not refuse a turn that carries no frame", run.outcome.Gate.Observable())
+			}
+			// NOTE, unlike the other three repairs' cell tables: wantKind !=
+			// "" does not imply the gate serves here. member_kind_unservable
+			// is a DIFFERENT refusal shape from rejected_invalid -- the
+			// frame itself is valid and still carried (for disclosure);
+			// only its declared population cannot be discovered. A declined
+			// cell legitimately carries both a frame and a refusing gate.
+			assertRepairLine(t, run.line, testCase.wantLine)
+		})
+	}
+}
+
+// memberKindAliasRepairAtTheBound calls the production repair step on the
+// grouped-metric proposal's own already-valid result, carrying `attempts`
+// prior attempts.
+func memberKindAliasRepairAtTheBound(t *testing.T, attempts int) FrameValidationResult {
+	t.Helper()
+	receipt := groupedMetricByRepoReceipt()
+	proposal := groupedMetricByRepoFrame()
+	valid := validateAgainstInterpretation(receipt, proposal, ShapeSingleSubject)
+	if valid.Outcome != FrameValidationOutcomeValid {
+		t.Fatalf("fixture defect: the grouped-metric proposal validated to %q without reaching this repair", valid.Outcome)
+	}
+	valid.Repair.Attempts = attempts
+	return repairMemberKindFactAliasCollapse(receipt, proposal, ShapeSingleSubject, nil, valid)
+}
+
+// TestTheMemberKindFactAliasRepairRunsAtMostOnce holds the bound on
+// attempts, the same shape held for the other three repairs.
+func TestTheMemberKindFactAliasRepairRunsAtMostOnce(t *testing.T) {
+	t.Parallel()
+	fresh := memberKindAliasRepairAtTheBound(t, 0)
+	if fresh.Outcome != FrameValidationOutcomeRepaired || fresh.Repair.Decision != FrameRepairApplied || fresh.Repair.Attempts != 1 {
+		t.Fatalf("control: fresh result outcome/decision/attempts = %q/%q/%d, want repaired/applied/1", fresh.Outcome, fresh.Repair.Decision, fresh.Repair.Attempts)
+	}
+	exhausted := memberKindAliasRepairAtTheBound(t, frameRepairBound)
+	if exhausted.Outcome != FrameValidationOutcomeValid || exhausted.Repair.Decision != FrameRepairDeclinedBoundReached || exhausted.Repair.Attempts != frameRepairBound {
+		t.Fatalf("repair at the bound = %+v, want valid/declined_bound_reached/%d attempts", exhausted.Repair, frameRepairBound)
+	}
+	if exhausted.Frame.SubjectExpression.Kind != SubjectExpressionGroupedMembers {
+		t.Fatalf("a result at the bound carries a repaired frame: %+v", exhausted.Frame)
+	}
+}
+
+// TestMemberKindFactAliasRepairDecisionsAreInTheClosedVocabulary holds
+// that this repair's own decline decisions are members of the closed
+// vocabulary array.
+func TestMemberKindFactAliasRepairDecisionsAreInTheClosedVocabulary(t *testing.T) {
+	for _, want := range []FrameRepairDecision{
+		FrameRepairDeclinedNotFactAliasKind,
+		FrameRepairDeclinedGroupKindUnservable,
+		FrameRepairDeclinedGroupKindMismatch,
+	} {
+		found := false
+		for _, member := range FrameRepairDecisionVocabulary() {
+			if member == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("%q is not a member of FrameRepairDecisionVocabulary()", want)
+		}
+	}
+}
+
+// newMemberKindAliasRepairEngine drives the production engine over the
+// misread grouped-metric proposal, with a recording graph, the same shape
+// newRepairEngine uses for the count-kind repair.
+func newMemberKindAliasRepairEngine(t *testing.T) (*Engine, *retrievalRecordingGraph) {
+	t.Helper()
+	logs := captureEngineLogger(t)
+	receipt := groupedMetricByRepoReceipt()
+	proposal := groupedMetricByRepoFrame()
+	receipt.QuestionFrame = &proposal
+	graph := &retrievalRecordingGraph{graphReaderStub: graphReaderStub{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+		context: GraphContext{
+			Cohort: countingCohort(SubjectRepository, 3), Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
+			FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
+			Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		},
+	}}
+	store := &staticResultStore{results: map[string]InvestigationResult{}}
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: RuntimeQuestionInterpreter{
+			Runtime:        fakeModelRuntime{interpreted: repairInterpretation([]string{repairAnchorTerm}), receipt: receipt},
+			Sink:           &fakeReceiptSink{},
+			FrameTelemetry: logs.telemetry,
+			Requirements:   registryDeriver{},
+		},
+		Graph: graph,
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{
+				Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{},
+			}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return InvestigationResult{
+				Status: InvestigationComplete, DirectJudgment: "Assessed.", CurrentState: "Nominal.",
+				StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{},
+				Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{},
+				ClaimedFacts: []ClaimedFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				DeterministicAnswer: "Assessed.", Warnings: []string{},
+				Versions: VersionSet{
+					Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1",
+					InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1",
+				},
+			}, nil
+		}),
+		Results:      store,
+		Telemetry:    &recordingTelemetry{},
+		Requirements: registryDeriver{},
+	}, EngineOptions{
+		ServiceVersion: "acr-test",
+		Now:            func() time.Time { return time.Unix(600, 0).UTC() },
+		NewResultID:    func() string { return "result_member_kind_alias_repair_01" },
+	})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+	return engine, graph
+}
+
+// TestTheGroupedMetricTurnIsServedAsAFlatRepositoryCohort drives
+// Engine.Investigate end to end: the repaired turn SERVES, retrieval
+// receives the discovered_kind{MemberKind: repository} frame this repair
+// produced (never the grouped_members proposal the model emitted), and the
+// turn is not refused at either of the two seams that independently
+// compare a group kind against a member kind for equality -- the frame
+// seam (requestedGroupAxisDropped, model_runtime.go) and the plan seam
+// (planGroupAxisCollapsed's call site, this file), found and fixed
+// together: a frame this repair produces collapses group and member onto
+// the SAME kind by construction, and would trip both invariant-I6-shaped
+// checks as a data-shape "surprise" without the provenance
+// (QuestionFrame.CollapsedGroupAxisMemberKind) each one reads before
+// concluding one.
+func TestTheGroupedMetricTurnIsServedAsAFlatRepositoryCohort(t *testing.T) {
+	engine, graph := newMemberKindAliasRepairEngine(t)
+	request := validInvestigationRequestWithConfirmedWindow()
+	request.RequestID = "request_member_kind_alias_repair_01"
+
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_repair"}, request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Status != InvestigationComplete {
+		t.Fatalf("status = %q (basis %q, limitations %#v), want complete: the collapsed cohort was not served", result.Status, result.RefusalBasis, result.Limitations)
+	}
+	if len(graph.frames) == 0 {
+		t.Fatal("retrieval was never called for the repaired turn")
+	}
+	for call, frame := range graph.frames {
+		if frame == nil || frame.SubjectExpression.Kind != SubjectExpressionDiscoveredKind ||
+			frame.SubjectExpression.Discovered == nil || frame.SubjectExpression.Discovered.MemberKind != SubjectRepository {
+			t.Fatalf("retrieval call %d received %+v, want a discovered_kind repository cohort", call, frame)
+		}
+	}
+}
+
+// TestADirectGroupEqualsMemberDiscoveryIsRefusedAtThePlanSeam is the plan
+// seam's OWN provenance control (CHAOS-5992), the sibling of
+// TestTheCompareRankingRepairIsBounded's "direct proposal" cell at the
+// frame seam: a DIRECT model proposal already shaped discovered_kind over
+// the requested group kind (no grouped_members proposal, no repair
+// involved at all) still collapses group onto member once discovery
+// returns that same kind -- and is refused exactly as
+// planGroupAxisCollapsed's own call site always refused it, because this
+// frame carries no CollapsedGroupAxisMemberKind provenance for the engine's
+// own repair-awareness check to find.
+func TestADirectGroupEqualsMemberDiscoveryIsRefusedAtThePlanSeam(t *testing.T) {
+	logs := captureEngineLogger(t)
+	receipt := validModelReceiptFixture(ModelOperationInterpret)
+	receipt.GroupKind = SubjectRepository
+	proposal := QuestionFrame{
+		Goals:             []InvestigationGoal{GoalCountOrAggregate},
+		SubjectExpression: groupedExpression(SubjectIncident, SubjectRepository),
+		Temporal:          TemporalIntentCurrent,
+	}
+	receipt.QuestionFrame = &proposal
+	// The graph returns REPOSITORY as the cohort kind despite the frame
+	// declaring incident as its member -- the "data came back surprising"
+	// scenario this seam's own doc comment describes, never touched by
+	// this repair (member=incident is servable, so
+	// repairMemberKindFactAliasCollapse treats it as not_applicable --
+	// never even considered -- and never stamps provenance on a frame it
+	// does not touch).
+	graph := &retrievalRecordingGraph{graphReaderStub: graphReaderStub{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+		context: GraphContext{
+			Cohort: countingCohort(SubjectRepository, 3), Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
+			FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
+			Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		},
+	}}
+	store := &staticResultStore{results: map[string]InvestigationResult{}}
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: RuntimeQuestionInterpreter{
+			Runtime:        fakeModelRuntime{interpreted: repairInterpretation([]string{repairAnchorTerm}), receipt: receipt},
+			Sink:           &fakeReceiptSink{},
+			FrameTelemetry: logs.telemetry,
+			Requirements:   registryDeriver{},
+		},
+		Graph: graph,
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{
+				Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{},
+			}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			t.Fatal("synthesis must not run for a turn the plan seam refuses")
+			return InvestigationResult{}, nil
+		}),
+		Results:      store,
+		Telemetry:    &recordingTelemetry{},
+		Requirements: registryDeriver{},
+	}, EngineOptions{
+		ServiceVersion: "acr-test",
+		Now:            func() time.Time { return time.Unix(600, 0).UTC() },
+		NewResultID:    func() string { return "result_plan_seam_control_01" },
+	})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+	request := validInvestigationRequestWithConfirmedWindow()
+	request.RequestID = "request_plan_seam_control_01"
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_repair"}, request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.RefusalBasis != contractsv1.ContextFabricRefusalBasisFrameInvariantViolated {
+		t.Fatalf("basis = %q, want %q: a frame with no repair provenance must still refuse when discovery collapses group onto member",
+			result.RefusalBasis, contractsv1.ContextFabricRefusalBasisFrameInvariantViolated)
+	}
+}
+
 // TestEveryFrameRepairDecisionHasAnExecutedDriver holds, over the WHOLE
 // closed vocabulary and both repairs together, what
 // TestTheCountKindRepairIsBounded and TestTheCompareGroupedRepairIsBounded
@@ -1411,6 +1875,15 @@ func TestEveryFrameRepairDecisionHasAnExecutedDriver(t *testing.T) {
 	}
 	for _, attempts := range []int{0, frameRepairBound} {
 		produced[rankingRepairAtTheBound(t, attempts).Repair.Decision] = true
+	}
+	for _, testCase := range memberKindAliasRepairCells() {
+		receipt := groupedMetricByRepoReceipt()
+		testCase.receipt(&receipt)
+		run := interpretForRepair(t, receipt, testCase.frame(), []string{repairAnchorTerm})
+		produced[FrameRepairDecision(run.line["repair_decision"].(string))] = true
+	}
+	for _, attempts := range []int{0, frameRepairBound} {
+		produced[memberKindAliasRepairAtTheBound(t, attempts).Repair.Decision] = true
 	}
 	for _, member := range FrameRepairDecisionVocabulary() {
 		if !produced[member] {
@@ -1783,6 +2256,14 @@ func repairTableFixtures() []repairTableFixture {
 			name:            "compare_ranking_collapse",
 			receipt:         rankingReceipt(),
 			frame:           compareOverDiscoveredCohort(),
+			shape:           ShapeSingleSubject,
+			terms:           []string{repairAnchorTerm},
+			zeroCarryFields: map[string]bool{"ScopeAnchorKind": true, "RequestedJudgment": true},
+		},
+		{
+			name:            "member_kind_fact_alias_collapse",
+			receipt:         groupedMetricByRepoReceipt(),
+			frame:           groupedMetricByRepoFrame(),
 			shape:           ShapeSingleSubject,
 			terms:           []string{repairAnchorTerm},
 			zeroCarryFields: map[string]bool{"ScopeAnchorKind": true, "RequestedJudgment": true},

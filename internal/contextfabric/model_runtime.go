@@ -1844,11 +1844,42 @@ func validateAgainstInterpretation(receipt ModelExecutionReceipt, proposed Quest
 // asked for a group axis -- a recognised kind, or one the sanitizer dropped as
 // unrecognised -- while the frame it proposed expresses none.
 //
+// The invariant this enforces is that the requested group axis is EXPRESSED
+// in the served shape, not merely that the shape is literally grouped_members.
+// A discovered_kind cohort whose member kind IS the requested group kind
+// still expresses it: one row per <group kind> is exactly what "grouped by
+// <group kind>" asked for when the model's own declared member kind names
+// no distinct entity to break that population down BY -- the two dimensions
+// collapse into one because the requested member kind was never a servable
+// entity kind, only the fact subject itself (repairMemberKindFactAliasCollapse,
+// CHAOS-5992). That collapse is admitted ONLY by PROVENANCE the repaired
+// frame itself carries (QuestionFrame.CollapsedGroupAxisMemberKind, set by
+// no code path but that one repair) -- never inferred from the frame's shape
+// or kind alone, so a DIRECT model proposal of the identical discovered_kind
+// shape is refused exactly as it always was: nothing about this expression
+// shape is legalized in general, only the one frame this package's own
+// repair produced and can account for.
+//
 // The same predicate the interpretation boundary reads for its
 // `group_axis` token (InterpretationBoundaryFrom), so the line and the gate
 // cannot disagree about whether an axis was requested.
 func requestedGroupAxisDropped(receipt ModelExecutionReceipt, proposed QuestionFrame) bool {
-	return receiptRequestsGroupAxis(receipt) && proposed.SubjectExpression.Kind != SubjectExpressionGroupedMembers
+	if !receiptRequestsGroupAxis(receipt) {
+		return false
+	}
+	if proposed.SubjectExpression.Kind == SubjectExpressionGroupedMembers {
+		return false
+	}
+	// PROVENANCE, not inference: only a frame this package's own repair
+	// produced, and only when the collapse target equals the SAME group
+	// kind the receipt requested, expresses the axis by this narrower
+	// route. A frame with no such provenance falls through to the refusal
+	// below unchanged.
+	if receipt.GroupKind != "" && proposed.CollapsedGroupAxisMemberKind != "" &&
+		proposed.CollapsedGroupAxisMemberKind == receipt.GroupKind {
+		return false
+	}
+	return true
 }
 
 // receiptRequestsGroupAxis reports whether the model's own hint asked for a
