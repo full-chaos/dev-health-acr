@@ -1896,6 +1896,8 @@ func combineStructureOfferMaterial(materials ...contextfabric.StructureOfferMate
 		// both may be non-empty on the SAME combined material, so this is a
 		// plain concatenation, same as every other list above.
 		combined.CandidateOptions = append(combined.CandidateOptions, m.CandidateOptions...)
+		combined.SubjectFloor.Refused = combined.SubjectFloor.Refused || m.SubjectFloor.Refused
+		combined.SubjectFloor.SearchedKinds = append(combined.SubjectFloor.SearchedKinds, m.SubjectFloor.SearchedKinds...)
 	}
 	return combined
 }

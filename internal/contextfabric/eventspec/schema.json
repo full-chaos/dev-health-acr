@@ -6217,6 +6217,52 @@
         "key": "offered_under_window_gate",
         "type": "bool",
         "presence": "required"
+      },
+      {
+        "key": "offer_floor",
+        "type": "float",
+        "presence": "required"
+      },
+      {
+        "key": "offer_floor_pool_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "offer_floor_refused_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "offer_floor_candidates",
+        "type": "string_slice",
+        "presence": "required"
+      },
+      {
+        "key": "offer_floor_decision",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "offered",
+          "no_offer"
+        ]
+      },
+      {
+        "key": "offer_floor_reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "admitted_candidates_offered",
+          "empty_pool",
+          "every_candidate_below_floor",
+          "no_offer_material",
+          "not_evaluated"
+        ]
+      },
+      {
+        "key": "offer_floor_offers",
+        "type": "string_slice",
+        "presence": "required"
       }
     ]
   },
@@ -6422,7 +6468,8 @@
         "presence": "required",
         "closed_vocabulary": [
           "vector_only_demoted",
-          "vector_only_excluded"
+          "vector_only_excluded",
+          "below_floor_excluded"
         ]
       }
     ]
@@ -6463,6 +6510,16 @@
       {
         "key": "vector_only_demoted",
         "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "below_floor_excluded",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "similarity_floor",
+        "type": "float",
         "presence": "required"
       },
       {

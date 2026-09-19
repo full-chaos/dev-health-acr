@@ -696,9 +696,9 @@ func TestResolveSubjects_SearchQuestionRunsAfterTermLoopForTieBreakDeterminism(t
 	t.Parallel()
 	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_tied", Label: "Tied Project"}
 	request := testRequest()
-	termNode := candidateNode(subject.Kind, subject.CanonicalID, subject.Label, 0.5, "*")
+	termNode := candidateNode(subject.Kind, subject.CanonicalID, subject.Label, 0.68, "*")
 	termNode.Mechanism = contextfabric.MatchLexical
-	questionNode := candidateNode(subject.Kind, subject.CanonicalID, subject.Label, 0.5, "*")
+	questionNode := candidateNode(subject.Kind, subject.CanonicalID, subject.Label, 0.68, "*")
 	questionNode.Mechanism = contextfabric.MatchLexical
 	backend := &fakeGraphBackend{
 		enableSearchQuestion: true,

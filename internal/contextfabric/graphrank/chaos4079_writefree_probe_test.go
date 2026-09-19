@@ -452,7 +452,7 @@ func TestResolveSubjects_ZeroOverlapHintDoesNotChangeCommitUnderCensusDrift(t *t
 // as "observed_subsumed", not as the no_overlap default.
 func TestResolveSubjects_SubsumingHintWiresObservedSubsumedMode(t *testing.T) {
 	t.Parallel()
-	target := candidateNode(contextfabric.SubjectPullRequest, "pull_request:repo-1:532", "PR #532", 0.50, "*")
+	target := candidateNode(contextfabric.SubjectPullRequest, "pull_request:repo-1:532", "PR #532", 0.68, "*")
 	backend := &fakeGraphBackend{
 		searchResults:   map[string][]CandidateNode{"PR 532": {target}},
 		searchTruncated: true,

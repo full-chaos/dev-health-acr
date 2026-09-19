@@ -268,7 +268,7 @@ func TestHeldComparisonTerminalOverTheWholeAnswerabilityGrid(t *testing.T) {
 			t.Parallel()
 			resolution := cell.resolution
 			request := InvestigationRequest{Options: InvestigationOptions{AllowClarification: cell.allow}}
-			status, limitation := resolveTerminalStatus(request, &resolution, cell.frame, cell.redeemable, declaredKindDecision{}, SubjectSubstitutionNotEvaluated)
+			status, limitation := resolveTerminalStatus(request, &resolution, cell.frame, cell.redeemable, declaredKindDecision{}, SubjectSubstitutionNotEvaluated, OfferFloorOutcome{})
 			if status != cell.wantStatus {
 				t.Errorf("status = %q, want %q -- %s", status, cell.wantStatus, cell.why)
 			}

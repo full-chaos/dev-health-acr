@@ -234,8 +234,8 @@ func TestThePolicyLineOpensEveryComparisonDecisionPath(t *testing.T) {
 			backend: func() *fakeGraphBackend {
 				return &fakeGraphBackend{searchResults: map[string][]CandidateNode{
 					"alpha": {
-						candidateNode(contextfabric.SubjectTeam, "team_alpha_one", "Alpha One", 0.5, "*"),
-						candidateNode(contextfabric.SubjectTeam, "team_alpha_two", "Alpha Two", 0.5, "*"),
+						candidateNode(contextfabric.SubjectTeam, "team_alpha_one", "Alpha One", 0.68, "*"),
+						candidateNode(contextfabric.SubjectTeam, "team_alpha_two", "Alpha Two", 0.68, "*"),
 					},
 					"beta": {beta},
 				}}

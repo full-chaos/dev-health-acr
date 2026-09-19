@@ -208,11 +208,12 @@ func TestLiveResolveSubjectsWeakLoneFulltextHitDoesNotAutoCommit(t *testing.T) {
 
 	orgID := "live-weak-lone-" + time.Now().UTC().Format("20060102T150405.000000000")
 	observed := time.Now().UTC()
-	// Only "outage" from the 4-term question below appears in this
-	// project's label -- a genuinely weak, 1-of-4 lexical match, and the
-	// ONLY subject projected into this organization's graph (so it is a
-	// real "lone hit", not an artifact of truncation).
-	weak := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_weak", Label: "Unrelated Outage Tracker"}
+	// Three of the 4 terms in the question below appear in this project's
+	// label -- a partial lexical match above the offer floor (more than half
+	// of the terms) yet below the lone-candidate gate, and the ONLY subject
+	// projected into this organization's graph (so it is a real "lone hit",
+	// not an artifact of truncation).
+	weak := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_weak", Label: "Incident Outage Payment Tracker"}
 	batch := contextfabric.ProjectionBatch{
 		SchemaVersion: contextfabric.ProjectionBatchSchemaV1, BatchID: "batch_live_weak_00000001", OrgID: orgID, Source: "live-score-test",
 		SourceVersion: "v1", Cursor: "cursor-1", NextCursor: "cursor-2", GeneratedAt: observed,
@@ -245,7 +246,7 @@ func TestLiveResolveSubjectsWeakLoneFulltextHitDoesNotAutoCommit(t *testing.T) {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
 	if len(resolution.Committed) != 0 {
-		t.Fatalf("ResolveSubjects(nil) committed %#v against a real FalkorDB server for a lone hit matching only 1 of 4 query terms -- want no auto-commit", resolution.Committed)
+		t.Fatalf("ResolveSubjects(nil) committed %#v against a real FalkorDB server for a lone hit matching only 3 of 4 query terms -- want no auto-commit", resolution.Committed)
 	}
 	// Codex R2-3: asserting only "nothing committed" passes vacuously if
 	// the search found nothing at all (e.g. a query/index regression that
@@ -269,6 +270,6 @@ func TestLiveResolveSubjectsWeakLoneFulltextHitDoesNotAutoCommit(t *testing.T) {
 	// against a threshold production no longer uses.
 	loneFloor := graphrank.DefaultCommitGatePolicy().LoneFloor
 	if weakCandidate.Confidence >= loneFloor {
-		t.Fatalf("planted weak hit confidence = %v, want < %v (the lone-candidate auto-commit gate) for a 1-of-4-term match", weakCandidate.Confidence, loneFloor)
+		t.Fatalf("planted weak hit confidence = %v, want < %v (the lone-candidate auto-commit gate) for a 3-of-4-term match", weakCandidate.Confidence, loneFloor)
 	}
 }
