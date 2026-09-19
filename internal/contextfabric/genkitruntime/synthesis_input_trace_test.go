@@ -45,22 +45,31 @@ func sha256Hex(s string) string {
 func TestSynthesizeAnswerEmitsDeclaredInputLine(t *testing.T) {
 	t.Parallel()
 	rejected := invalidTitleSynthesisOutput()
-	rejected.ClaimedFacts = []contextfabric.ClaimedFact{{}, {}}
+	rejected.ClaimedFacts = []contextfabric.ClaimedFact{{}, {}, {}}
 	valid := validSynthesisOutput()
-	valid.ClaimedFacts = []contextfabric.ClaimedFact{groundedReadinessClaim(validSynthesisInput())}
+	second := groundedReadinessClaim(validSynthesisInput())
+	second.ClaimID = "claim_readiness_second"
+	valid.ClaimedFacts = []contextfabric.ClaimedFact{groundedReadinessClaim(validSynthesisInput()), second}
 	gen := &drawSequenceGenerator{outputs: []synthesisOutput{rejected, valid}}
 	input := validSynthesisInput()
-	// a second fact sharing one ref and adding one, so total and distinct differ
-	input.Facts.Facts = append(input.Facts.Facts, contextfabric.CanonicalFact{
-		Kind: contextfabric.FactReadiness, Subject: input.Facts.Facts[0].Subject,
-		Fields:         input.Facts.Facts[0].Fields,
-		EvidenceRefIDs: []string{"evidence_release_1234", "evidence_other_5678"}, SourceState: contextfabric.SourceAvailable,
-	})
-
+	// two more facts: refs {a,b} sharing "a" with the first fact, and refs
+	// {c,d,e} -- total 6, distinct 5, facts 3, so no two of them coincide.
+	input.Facts.Facts = append(input.Facts.Facts,
+		contextfabric.CanonicalFact{
+			Kind: contextfabric.FactReadiness, Subject: input.Facts.Facts[0].Subject,
+			Fields:         input.Facts.Facts[0].Fields,
+			EvidenceRefIDs: []string{"evidence_release_1234", "evidence_other_5678"}, SourceState: contextfabric.SourceAvailable,
+		},
+		contextfabric.CanonicalFact{
+			Kind: contextfabric.FactReadiness, Subject: input.Facts.Facts[0].Subject,
+			Fields:         input.Facts.Facts[0].Fields,
+			EvidenceRefIDs: []string{"evidence_c_0001", "evidence_d_0002", "evidence_e_0003"}, SourceState: contextfabric.SourceAvailable,
+		})
+	input.Graph.Paths = append(input.Graph.Paths, input.Graph.Paths[0])
 	// distinct non-zero counts for every graph collection, so an arm reading
 	// one collection's length for another cannot pass.
-	input.Graph.Cohort = &contextfabric.Cohort{Members: make([]contextfabric.CohortMember, 3)}
-	input.Graph.DriverCandidates = make([]contextfabric.DriverJudgment, 2)
+	input.Graph.Cohort = &contextfabric.Cohort{Members: make([]contextfabric.CohortMember, 4)}
+	input.Graph.DriverCandidates = make([]contextfabric.DriverJudgment, 7)
 
 	parsed, receipt, err := synthesisInputLineFor(t, gen, Config{MaxSynthesisResynthesisAttempts: 2}, input)
 	if err != nil {
@@ -81,18 +90,18 @@ func TestSynthesizeAnswerEmitsDeclaredInputLine(t *testing.T) {
 		"model_version":               receipt.ModelVersion,
 		"prompt_version":              "synthesis-v1",
 		"input_bytes":                 len(gen.requests[0].Prompt),
-		"facts":                       2,
-		"fact_evidence_refs":          3,
-		"fact_evidence_refs_distinct": 2,
-		"paths":                       1,
-		"driver_candidates":           2,
-		"cohort_members":              3,
+		"facts":                       3,
+		"fact_evidence_refs":          6,
+		"fact_evidence_refs_distinct": 5,
+		"paths":                       2,
+		"driver_candidates":           7,
+		"cohort_members":              4,
 		"outcome":                     "success",
 		"draws_total":                 2,
 		"draw_outcomes":               "1:invalid_output,2:success",
-		"draw_claims":                 "1:2,2:1",
+		"draw_claims":                 "1:3,2:2",
 		"draw_output_digests":         fmt.Sprintf("1:%s,2:%s", contextfabric.DigestModelValue(rejectedBytes), contextfabric.DigestModelValue(validBytes)),
-		"claims":                      1,
+		"claims":                      2,
 		"drivers":                     1,
 		"evidence_refs":               1,
 	}
