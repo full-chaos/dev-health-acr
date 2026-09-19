@@ -153,10 +153,10 @@ func canonicalizeSynthesisSubjectLabels(input SynthesisInput) (SynthesisInput, S
 	for _, subject := range input.Graph.Resolution.Committed {
 		claim(subject)
 	}
+	// Every subject rewritten below is visited by the walk canonicalSubjectLabels
+	// binds from, so each has a binding; the enumeration test pins that.
 	fix := func(subject SubjectRef) SubjectRef {
-		if want, ok := bound[subjectKeyForModel(subject)]; ok {
-			subject.Label = want
-		}
+		subject.Label = bound[subjectKeyForModel(subject)]
 		return subject
 	}
 	fixAll := func(subjects []SubjectRef) []SubjectRef {

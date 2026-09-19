@@ -90,6 +90,17 @@ func servedAsIs(name string) bool {
 	return strings.HasPrefix(name, "Cohort.") || name == "Resolution.Committed"
 }
 
+func placementNamed(t *testing.T, name string) labelPlacement {
+	t.Helper()
+	for _, place := range labelPlacements() {
+		if place.name == name {
+			return place
+		}
+	}
+	t.Fatalf("no placement named %q", name)
+	return labelPlacement{}
+}
+
 func groupFor(s SubjectRef) contractsv1.ContextFabricCohortGroup {
 	return contractsv1.ContextFabricCohortGroup{Subject: s, MemberCanonicalIDs: []string{"project_ask_dev"}, Complete: true, Total: 1}
 }
@@ -406,7 +417,7 @@ func TestUnserializablePayloadReportsUnmeasured(t *testing.T) {
 func TestTwoCandidatesForOneKeyCollapseToTheFirstLabel(t *testing.T) {
 	t.Parallel()
 	input, _ := closureFixture()
-	place := labelPlacements()[1]
+	place := placementNamed(t, "Resolution.Candidates")
 	first := SubjectRef{Kind: SubjectWorkItem, CanonicalID: "candidate_key", Label: "First"}
 	second := first
 	second.Label = "Second"
@@ -430,9 +441,8 @@ func TestTheServedCohortLabelWinsOverEarlierSources(t *testing.T) {
 	member := input.Graph.Cohort.Members[0].Subject
 	candidate, fact := member, member
 	candidate.Label, fact.Label = "Candidate Label", "Fact Label"
-	places := labelPlacements()
-	places[1].add(&input, candidate)
-	places[7].add(&input, fact)
+	placementNamed(t, "Resolution.Candidates").add(&input, candidate)
+	placementNamed(t, "Facts[].Subject").add(&input, fact)
 	out, report := canonicalizeSynthesisSubjectLabels(input)
 	if report.KeysCollapsed != 1 || report.KeysResidual != 0 {
 		t.Fatalf("report = %+v, want one collapsed key", report)
@@ -456,12 +466,11 @@ func TestTheServedCohortLabelWinsOverEarlierSources(t *testing.T) {
 func TestTheFirstCohortLabelWinsForItsKey(t *testing.T) {
 	t.Parallel()
 	input, _, _ := groupedCohortFixture()
-	member := input.Graph.Cohort.Members[0].Subject
+	member := input.Graph.Cohort.Members[1].Subject
 	excluded, fact := member, member
 	excluded.Label, fact.Label = "Excluded Label", "Fact Label"
-	places := labelPlacements()
-	places[4].add(&input, excluded)
-	places[7].add(&input, fact)
+	placementNamed(t, "Cohort.Exclusions").add(&input, excluded)
+	placementNamed(t, "Facts[].Subject").add(&input, fact)
 	out, _ := canonicalizeSynthesisSubjectLabels(input)
 	if got := out.Facts.Facts[len(out.Facts.Facts)-1].Subject.Label; got != member.Label {
 		t.Fatalf("fact label = %q, want the member's %q", got, member.Label)
