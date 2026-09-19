@@ -323,6 +323,7 @@ func newParityHostedAppWithLogs(t *testing.T, investigator contextfabric.Investi
 			ReadinessChecks:            exactRuntimeChecks(),
 			Investigator:               investigator,
 			InvestigationResults:       results,
+			StoredResultGate:           testStoredResultGate(investigator),
 		},
 	}, testLogger(logs))
 	if err != nil {

@@ -325,6 +325,10 @@ type EngineDependencies struct {
 // other investigation content -- so a signal is diagnosable without
 // becoming a new disclosure surface.
 type EngineTelemetry interface {
+	// StoredResultAuthorizationRecorder is embedded so a telemetry
+	// implementation that cannot trace a stored-result decision fails to
+	// compile.
+	StoredResultAuthorizationRecorder
 	RecordWorkItemReuse(context.Context, storage.Principal, WorkItemReuseEvent)
 	RecordWorkItemStoredServing(context.Context, storage.Principal, WorkItemStoredServingEvent)
 	RecordWorkItemAuthorizationGap(context.Context, storage.Principal, WorkItemAuthorizationGapEvent)
@@ -1196,11 +1200,16 @@ type CohortRankedEvent struct {
 // Engine coordinates one open-ended investigation. It deliberately composes
 // capabilities rather than matching the question against a route/plan table.
 type Engine struct {
-	interpreter                                 QuestionInterpreter
-	graph                                       GraphReader
-	facts                                       CanonicalFactReader
-	synthesizer                                 AnswerSynthesizer
-	results                                     InvestigationResultStore
+	interpreter QuestionInterpreter
+	graph       GraphReader
+	facts       CanonicalFactReader
+	synthesizer AnswerSynthesizer
+	results     InvestigationResultStore
+	// rawResults is the unwrapped store, kept only for optional-capability
+	// assertions (StructureSupersessionChecker). Every payload read goes
+	// through results, whose Get is decided by storedResultGate.
+	rawResults                                  InvestigationResultStore
+	storedResultGate                            *StoredResultGate
 	telemetry                                   EngineTelemetry
 	reuseGate                                   AnswerReuseGate
 	reuseSnapshotter                            SourceWatermarkSnapshotter
@@ -1248,10 +1257,20 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 	if options.NewResultID == nil {
 		return nil, errors.New("context fabric engine result ID generator is required")
 	}
+	var recorder StoredResultAuthorizationRecorder
+	if dependencies.Telemetry != nil {
+		recorder = dependencies.Telemetry
+	}
+	gate := NewStoredResultGate(dependencies.Graph)
+	var results InvestigationResultStore
+	if dependencies.Results != nil {
+		results = authorizedResultStore{InvestigationResultStore: dependencies.Results, gate: gate, recorder: recorder}
+	}
 	return &Engine{
 		interpreter: dependencies.Interpreter, graph: dependencies.Graph, facts: dependencies.Facts,
-		synthesizer: dependencies.Synthesizer, results: dependencies.Results, telemetry: dependencies.Telemetry,
-		reuseGate: dependencies.ReuseGate, reuseSnapshotter: dependencies.ReuseSnapshotter,
+		synthesizer: dependencies.Synthesizer, results: results, rawResults: dependencies.Results, telemetry: dependencies.Telemetry,
+		storedResultGate: gate,
+		reuseGate:        dependencies.ReuseGate, reuseSnapshotter: dependencies.ReuseSnapshotter,
 		reuseEpochSnapshotter:      dependencies.ReuseEpochSnapshotter,
 		reuseModelIdentityResolver: dependencies.ReuseModelIdentityResolver,
 		clarificationSelectionSink: dependencies.ClarificationSelectionSink,

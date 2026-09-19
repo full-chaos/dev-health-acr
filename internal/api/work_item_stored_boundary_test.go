@@ -118,11 +118,20 @@ func TestStoredWorkItemAuthorizationBeforeFallback(t *testing.T) {
 				if want == http.StatusNotFound {
 					assertStoredServingContentAbsent(t, raw, stored.Result)
 				}
-				if !strings.Contains(logs.String(), contextfabric.WorkItemStoredServingLogMessage) {
-					t.Error("missing configured Info serving decision")
-				}
-				if mode != "available" && grant.name != "universal" && !strings.Contains(logs.String(), "authorization_unverifiable") {
-					t.Error("missing unverifiable basis")
+				// A grant that does not admit the tuple's subjects is refused by
+				// the stored-result authorization decision, before the tuple rule
+				// is consulted; every other grant reaches the tuple rule.
+				if grant.name == "revoked" {
+					if !strings.Contains(logs.String(), contextfabric.StoredResultAuthorizationLogMessage) || !strings.Contains(logs.String(), `"reason":"subject_denied"`) {
+						t.Errorf("missing stored-result denial on the trace: %s", logs.String())
+					}
+				} else {
+					if !strings.Contains(logs.String(), contextfabric.WorkItemStoredServingLogMessage) {
+						t.Error("missing configured Info serving decision")
+					}
+					if mode != "available" && grant.name != "universal" && !strings.Contains(logs.String(), "authorization_unverifiable") {
+						t.Error("missing unverifiable basis")
+					}
 				}
 				if want == http.StatusNotFound {
 					denied := 0

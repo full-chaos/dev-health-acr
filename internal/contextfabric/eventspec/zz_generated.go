@@ -30,6 +30,7 @@ var ByID = map[string]Event{
 	"contextfabric.requirement_outcome_transition": RequirementOutcomeTransition,
 	"contextfabric.retained_ranking_accounting":    RetainedRankingAccounting,
 	"contextfabric.semantic_state_persistence":     SemanticStatePersistence,
+	"contextfabric.stored_result_authorization":    StoredResultAuthorization,
 	"contextfabric.synthesis_input":                SynthesisInput,
 	"contextfabric.synthesis_retry_selection":      SynthesisRetrySelection,
 	"contextfabric.window_continuation_decision":   WindowContinuationDecision,
@@ -1543,6 +1544,105 @@ func (f SemanticStatePersistenceFields) SlogArgs() []any {
 		"carried_parent_state", contextfabric.SanitizeLogAttr(f.CarriedParentState),
 		"carried_parent_result_id", contextfabric.SanitizeLogAttr(f.CarriedParentResultID),
 		"carried_parent_depth", f.CarriedParentDepth,
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// StoredResultAuthorizationFields is contextfabric.stored_result_authorization's generated typed construction interface
+// (CHAOS-5516): one Go field per Field StoredResultAuthorization.Fields declares in spec.go.
+type StoredResultAuthorizationFields struct {
+	OrgID                     string
+	Surface                   string
+	PrincipalScope            string
+	RepositoryScopeCount      int
+	Decision                  string
+	Reason                    string
+	SubjectCount              int
+	GraphSubjectCount         int
+	UnkindedSubjectCount      int
+	AdmittedCount             int
+	DeniedCount               int
+	AbsentCount               int
+	OrganizationSubjectCount  int
+	OrganizationMismatchCount int
+	GroupCount                int
+	GroupUnprovenCount        int
+	RefusedKinds              []string
+	ErrorClass                string
+	RequestID                 string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every StoredResultAuthorizationFields uniformly, set ONLY by NewStoredResultAuthorizationFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewStoredResultAuthorizationFields is the generated constructor for StoredResultAuthorizationFields -- every
+// field StoredResultAuthorization.Fields declares is a required parameter.
+func NewStoredResultAuthorizationFields(orgID string, surface string, principalScope string, repositoryScopeCount int, decision string, reason string, subjectCount int, graphSubjectCount int, unkindedSubjectCount int, admittedCount int, deniedCount int, absentCount int, organizationSubjectCount int, organizationMismatchCount int, groupCount int, groupUnprovenCount int, refusedKinds []string, errorClass string, requestID string) StoredResultAuthorizationFields {
+	valid := true
+	if refusedKinds == nil {
+		valid = false
+	}
+	return StoredResultAuthorizationFields{
+		OrgID:                     orgID,
+		Surface:                   surface,
+		PrincipalScope:            principalScope,
+		RepositoryScopeCount:      repositoryScopeCount,
+		Decision:                  decision,
+		Reason:                    reason,
+		SubjectCount:              subjectCount,
+		GraphSubjectCount:         graphSubjectCount,
+		UnkindedSubjectCount:      unkindedSubjectCount,
+		AdmittedCount:             admittedCount,
+		DeniedCount:               deniedCount,
+		AbsentCount:               absentCount,
+		OrganizationSubjectCount:  organizationSubjectCount,
+		OrganizationMismatchCount: organizationMismatchCount,
+		GroupCount:                groupCount,
+		GroupUnprovenCount:        groupUnprovenCount,
+		RefusedKinds:              refusedKinds,
+		ErrorClass:                errorClass,
+		RequestID:                 requestID,
+		constructed:               valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewStoredResultAuthorizationFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f StoredResultAuthorizationFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns StoredResultAuthorization's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f StoredResultAuthorizationFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"surface", contextfabric.SanitizeLogAttr(f.Surface),
+		"principal_scope", contextfabric.SanitizeLogAttr(f.PrincipalScope),
+		"repository_scope_count", f.RepositoryScopeCount,
+		"decision", contextfabric.SanitizeLogAttr(f.Decision),
+		"reason", contextfabric.SanitizeLogAttr(f.Reason),
+		"subject_count", f.SubjectCount,
+		"graph_subject_count", f.GraphSubjectCount,
+		"unkinded_subject_count", f.UnkindedSubjectCount,
+		"admitted_count", f.AdmittedCount,
+		"denied_count", f.DeniedCount,
+		"absent_count", f.AbsentCount,
+		"organization_subject_count", f.OrganizationSubjectCount,
+		"organization_mismatch_count", f.OrganizationMismatchCount,
+		"group_count", f.GroupCount,
+		"group_unproven_count", f.GroupUnprovenCount,
+		"refused_kinds", contextfabric.SanitizeLogStrings(f.RefusedKinds),
+		"error_class", contextfabric.SanitizeLogAttr(f.ErrorClass),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }

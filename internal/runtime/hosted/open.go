@@ -180,6 +180,18 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	if investigationResultStore != nil {
 		investigationResults = investigationResultStore
 	}
+	// The retrieval route decides every read with the engine's own gate, so
+	// a stored answer and a prior-result read take one decision. Nil only
+	// when the investigator was not composed, in which case the route has no
+	// store either.
+	var storedResultGate api.StoredResultAuthorizer
+	if engine, ok := investigator.(interface {
+		StoredResultGate() *contextfabric.StoredResultGate
+	}); ok {
+		if gate := engine.StoredResultGate(); gate != nil {
+			storedResultGate = gate
+		}
+	}
 	// Same typed-nil guard: workloadTokenExchange is a concrete
 	// *authverify.WorkloadTokenExchangeService, nil whenever CHAOS-4013 is
 	// unconfigured (see buildWorkloadTokenExchange's doc comment).
@@ -197,6 +209,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 			DeviceAuthorizationLimiter: api.NewDeviceAuthorizationLimiter(api.ClockFunc(request.options.Now)),
 			Investigator:               investigator,
 			InvestigationResults:       investigationResults,
+			StoredResultGate:           storedResultGate,
 			OrgModelConfigs:            orgModelConfigs,
 			OrgModelRuntimeEvictor:     orgModelRuntimeEvictor,
 			// CHAOS-3786, codex round-1 P1(b): resultReuseInvalidator is

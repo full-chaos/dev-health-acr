@@ -3006,6 +3006,166 @@
     ]
   },
   {
+    "id": "contextfabric.stored_result_authorization",
+    "msg": "context fabric stored result authorization",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "org_id",
+      "surface"
+    ],
+    "bounded_aggregation": "one decision per stored result read (engine reads are memoised per request per result); counts and kinds only, never ids or labels",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "surface",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "result_by_id",
+          "prior_result",
+          "answer_reuse"
+        ]
+      },
+      {
+        "key": "principal_scope",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "unrestricted",
+          "universal",
+          "restricted"
+        ]
+      },
+      {
+        "key": "repository_scope_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "decision",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "admitted",
+          "denied",
+          "unavailable"
+        ]
+      },
+      {
+        "key": "reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "no_subjects",
+          "unrestricted_principal",
+          "subjects_admitted",
+          "organization_mismatch",
+          "subject_denied",
+          "subject_absent",
+          "group_unproven",
+          "graph_not_projected",
+          "authorizer_missing",
+          "graph_read_failed"
+        ]
+      },
+      {
+        "key": "subject_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "graph_subject_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "unkinded_subject_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "admitted_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "denied_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "absent_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "organization_subject_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "organization_mismatch_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "group_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "group_unproven_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "refused_kinds",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "error_class",
+        "type": "string",
+        "presence": "conditional",
+        "closed_vocabulary": [
+          "deadline_exceeded",
+          "canceled",
+          "dependency_unavailable",
+          "graph_error"
+        ],
+        "applicability": "written when the decision is unavailable because a graph read failed"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.synthesis_input",
     "msg": "context fabric synthesis input",
     "level": "info",
