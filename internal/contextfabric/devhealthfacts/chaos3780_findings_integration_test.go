@@ -155,11 +155,11 @@ func TestCHAOS3780FindingsAgainstRealClickHouse(t *testing.T) {
 		// The exact live-data shape: an OLDER window fired=true, a NEWER
 		// window (later window_end) fired=false -- Ops already cleared it.
 		if err := direct.Exec(ctx, `INSERT INTO recommendations_daily (team_id, org_id, rule_id, window_start, window_end, fired, severity, title, rationale, success_criterion, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-			"TEAM1", orgID, "saturation", date(2026, 7, 25), date(2026, 8, 8), true, "critical", "Saturation", "was high", "drops below threshold", ts(2026, 8, 8, 2, 0, 0)); err != nil {
+			"TEAM1", orgID, "saturation", recentHealthDay(20), recentHealthDay(6), true, "critical", "Saturation", "was high", "drops below threshold", recentHealthDay(6).Add(2*time.Hour)); err != nil {
 			t.Fatalf("seed old fired row: %v", err)
 		}
 		if err := direct.Exec(ctx, `INSERT INTO recommendations_daily (team_id, org_id, rule_id, window_start, window_end, fired, severity, title, rationale, success_criterion, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-			"TEAM1", orgID, "saturation", date(2026, 7, 29), date(2026, 8, 12), false, "critical", "Saturation", "cleared", "drops below threshold", ts(2026, 8, 12, 2, 0, 0)); err != nil {
+			"TEAM1", orgID, "saturation", recentHealthDay(16), recentHealthDay(2), false, "critical", "Saturation", "cleared", "drops below threshold", recentHealthDay(2).Add(2*time.Hour)); err != nil {
 			t.Fatalf("seed new cleared row: %v", err)
 		}
 		provider := findProvider(t, providers, contextfabric.FactOperationalDeficiencies)
@@ -181,7 +181,7 @@ func TestCHAOS3780FindingsAgainstRealClickHouse(t *testing.T) {
 	t.Run("F1_deficiency_still_reports_when_latest_evaluation_is_fired", func(t *testing.T) {
 		const orgID = "org-f1b"
 		if err := direct.Exec(ctx, `INSERT INTO recommendations_daily (team_id, org_id, rule_id, window_start, window_end, fired, severity, title, rationale, success_criterion, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-			"TEAM1", orgID, "saturation", date(2026, 7, 29), date(2026, 8, 12), true, "critical", "Saturation", "still high", "drops below threshold", ts(2026, 8, 12, 2, 0, 0)); err != nil {
+			"TEAM1", orgID, "saturation", recentHealthDay(16), recentHealthDay(2), true, "critical", "Saturation", "still high", "drops below threshold", recentHealthDay(2).Add(2*time.Hour)); err != nil {
 			t.Fatalf("seed latest fired row: %v", err)
 		}
 		provider := findProvider(t, providers, contextfabric.FactOperationalDeficiencies)
@@ -228,13 +228,13 @@ func TestCHAOS3780FindingsAgainstRealClickHouse(t *testing.T) {
 	t.Run("FINAL_binding_later_version_wins_over_replaced_key", func(t *testing.T) {
 		const orgID = "org-final"
 		if err := direct.Exec(ctx, `INSERT INTO recommendations_daily (team_id, org_id, rule_id, window_start, window_end, fired, severity, title, rationale, success_criterion, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-			"TEAM1", orgID, "saturation", date(2026, 7, 29), date(2026, 8, 12), true, "critical", "OLD VERSION", "stale", "drops below threshold", ts(2026, 8, 12, 2, 0, 0)); err != nil {
+			"TEAM1", orgID, "saturation", recentHealthDay(16), recentHealthDay(2), true, "critical", "OLD VERSION", "stale", "drops below threshold", recentHealthDay(2).Add(2*time.Hour)); err != nil {
 			t.Fatalf("seed old version: %v", err)
 		}
 		// Same (org_id, team_id, rule_id, window_end) -- the replacing key --
 		// a later computed_at, different content.
 		if err := direct.Exec(ctx, `INSERT INTO recommendations_daily (team_id, org_id, rule_id, window_start, window_end, fired, severity, title, rationale, success_criterion, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-			"TEAM1", orgID, "saturation", date(2026, 7, 29), date(2026, 8, 12), true, "high", "NEW VERSION", "fresh", "drops below threshold", ts(2026, 8, 12, 20, 0, 0)); err != nil {
+			"TEAM1", orgID, "saturation", recentHealthDay(16), recentHealthDay(2), true, "high", "NEW VERSION", "fresh", "drops below threshold", recentHealthDay(2).Add(20*time.Hour)); err != nil {
 			t.Fatalf("seed new version: %v", err)
 		}
 		provider := findProvider(t, providers, contextfabric.FactOperationalDeficiencies)
