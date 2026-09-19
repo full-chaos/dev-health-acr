@@ -1538,6 +1538,9 @@ type SynthesisInputFields struct {
 	Paths                    int
 	DriverCandidates         int
 	CohortMembers            int
+	LabelCanonicalization    string
+	LabelKeysCollapsed       int
+	LabelKeysResidual        int
 	Outcome                  string
 	DrawsTotal               int
 	DrawOutcomes             string
@@ -1561,7 +1564,7 @@ type SynthesisInputFields struct {
 
 // NewSynthesisInputFields is the generated constructor for SynthesisInputFields -- every
 // field SynthesisInput.Fields declares is a required parameter.
-func NewSynthesisInputFields(orgIDHash string, modelID string, modelVersion string, promptVersion string, inputDigest string, inputBytes int, facts int, factEvidenceRefs int, factEvidenceRefsDistinct int, paths int, driverCandidates int, cohortMembers int, outcome string, drawsTotal int, drawOutcomes string, drawClaims string, drawOutputDigests string, claims int, drivers int, evidenceRefs int, zeroClaimRedraw string, requestID string) SynthesisInputFields {
+func NewSynthesisInputFields(orgIDHash string, modelID string, modelVersion string, promptVersion string, inputDigest string, inputBytes int, facts int, factEvidenceRefs int, factEvidenceRefsDistinct int, paths int, driverCandidates int, cohortMembers int, labelCanonicalization string, labelKeysCollapsed int, labelKeysResidual int, outcome string, drawsTotal int, drawOutcomes string, drawClaims string, drawOutputDigests string, claims int, drivers int, evidenceRefs int, zeroClaimRedraw string, requestID string) SynthesisInputFields {
 	return SynthesisInputFields{
 		OrgIDHash:                orgIDHash,
 		ModelID:                  modelID,
@@ -1575,6 +1578,9 @@ func NewSynthesisInputFields(orgIDHash string, modelID string, modelVersion stri
 		Paths:                    paths,
 		DriverCandidates:         driverCandidates,
 		CohortMembers:            cohortMembers,
+		LabelCanonicalization:    labelCanonicalization,
+		LabelKeysCollapsed:       labelKeysCollapsed,
+		LabelKeysResidual:        labelKeysResidual,
 		Outcome:                  outcome,
 		DrawsTotal:               drawsTotal,
 		DrawOutcomes:             drawOutcomes,
@@ -1614,6 +1620,9 @@ func (f SynthesisInputFields) SlogArgs() []any {
 		"paths", f.Paths,
 		"driver_candidates", f.DriverCandidates,
 		"cohort_members", f.CohortMembers,
+		"label_canonicalization", contextfabric.SanitizeLogAttr(f.LabelCanonicalization),
+		"label_keys_collapsed", f.LabelKeysCollapsed,
+		"label_keys_residual", f.LabelKeysResidual,
 		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
 		"draws_total", f.DrawsTotal,
 		"draw_outcomes", contextfabric.SanitizeLogAttr(f.DrawOutcomes),

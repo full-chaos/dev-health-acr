@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -381,4 +382,50 @@ func TestSingleDrawRuntimeReportsNotNeededForAClaimingDraft(t *testing.T) {
 		t.Fatalf("SynthesizeAnswer() error = %v", run.err)
 	}
 	run.certify(t, map[string]any{"draws_total": 1, "claims": 1, "zero_claim_redraw": eventspec.SynthesisZeroClaimRedrawNotNeeded})
+}
+
+// TestSynthesisInputLineReportsTheLabelCanonicalization: the line states what
+// the label pass did to the input it describes, at Info, for each outcome.
+func TestSynthesisInputLineReportsTheLabelCanonicalization(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		report contextfabric.SubjectLabelCanonicalization
+		want   map[string]any
+	}{
+		{"unchanged", contextfabric.SubjectLabelCanonicalization{Measured: true}, map[string]any{"label_canonicalization": "unchanged", "label_keys_collapsed": 0, "label_keys_residual": 0}},
+		{"collapsed", contextfabric.SubjectLabelCanonicalization{Measured: true, KeysCollapsed: 14}, map[string]any{"label_canonicalization": "collapsed", "label_keys_collapsed": 14, "label_keys_residual": 0}},
+		{"residual", contextfabric.SubjectLabelCanonicalization{Measured: true, KeysCollapsed: 3, KeysResidual: 1}, map[string]any{"label_canonicalization": "residual", "label_keys_collapsed": 3, "label_keys_residual": 1}},
+		{"unmeasured", contextfabric.SubjectLabelCanonicalization{}, map[string]any{"label_canonicalization": "unmeasured", "label_keys_collapsed": 0, "label_keys_residual": 0}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			input := validSynthesisInput()
+			input.LabelCanonicalization = tc.report
+			gen := &scriptedGenerator{steps: steps(claimedSynthesisOutput())}
+			run := runRedraw(t, context.Background(), gen, Config{}, input)
+			if run.err != nil {
+				t.Fatalf("SynthesizeAnswer() error = %v", run.err)
+			}
+			run.certify(t, tc.want)
+		})
+	}
+}
+
+// TestSynthesizeSendsThePromptThatAsksForRelevantFactsAsClaims: the system
+// prompt of the request the runtime actually sends to the model carries the
+// instruction to restate the relevant supplied facts as claimed_facts although
+// no driver or finding cites them.
+func TestSynthesizeSendsThePromptThatAsksForRelevantFactsAsClaims(t *testing.T) {
+	t.Parallel()
+	const instruction = "as claimed_facts even when no driver or finding cites them"
+	gen := &scriptedGenerator{steps: steps(claimedSynthesisOutput())}
+	run := runRedraw(t, context.Background(), gen, Config{}, validSynthesisInput())
+	if run.err != nil {
+		t.Fatalf("SynthesizeAnswer() error = %v", run.err)
+	}
+	if len(gen.requests) == 0 || !strings.Contains(gen.requests[0].System, instruction) {
+		t.Fatalf("the request sent to the model lacks %q", instruction)
+	}
 }

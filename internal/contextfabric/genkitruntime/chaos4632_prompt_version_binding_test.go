@@ -92,7 +92,9 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// v15 -> v16: the score_meaning/judgment_mismatch paragraph and the
 			// instruction that an unrankable member is never given a ranking
 			// superlative. See DefaultSynthesisPromptVersion's own doc comment.
-			digest: "b9ffc74e66594954bdd2f0bb0a39513b8122949e085a2cebf6f4168b2a08ddef",
+			// v16 -> v17: the instruction to restate relevant supplied facts as
+			// claimed_facts. See DefaultSynthesisPromptVersion's own doc comment.
+			digest: "3ee3dd9a01d316a04c6f2068d8f11da3750a570f8f3a4fb9e2f43e2dcea4ee15",
 		},
 		{
 			name:    "interpretation model-output schema",

@@ -51,7 +51,7 @@ func TestDefaultSynthesisPromptVersionBumpedForModelFacingFactsChange(t *testing
 	// shortening the interpolated list and adding one more prose sentence.
 	// v20 -> v21: the interpolated word list is gone entirely, replaced by
 	// a plain, non-interpolated parenthetical of examples.
-	const wantVersion = "context-fabric-synthesis.v16"
+	const wantVersion = "context-fabric-synthesis.v17"
 	if DefaultSynthesisPromptVersion != wantVersion {
 		t.Fatalf("DefaultSynthesisPromptVersion = %q, want %q (moved off the pre-CHAOS-4355-follow-up v12 value now that modelFacingFacts changes the prompt payload)", DefaultSynthesisPromptVersion, wantVersion)
 	}

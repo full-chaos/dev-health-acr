@@ -395,7 +395,12 @@ const (
 	// paragraph and the instruction that an unrankable member is never given a
 	// ranking superlative -- model-facing bytes changed, standing reuse rule
 	// applies (same standing rule as v6-v15 above).
-	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v16"
+	//
+	// v16 -> v17: synthesisSystemPrompt gains the instruction to restate the
+	// relevant supplied canonical facts as claimed_facts even when no driver or
+	// finding cites them -- model-facing bytes changed, standing reuse rule
+	// applies (same standing rule as v6-v16 above).
+	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v17"
 	// DefaultSchemaVersion is the genkit MODEL-OUTPUT JSON SCHEMA version
 	// -- ONE value shared by both the interpret and synthesize calls
 	// (Config carries a single SchemaVersion field, not a per-operation
@@ -2405,6 +2410,7 @@ type synthesisInputTrace struct {
 	Paths                    int
 	DriverCandidates         int
 	CohortMembers            int
+	LabelCanonicalization    contextfabric.SubjectLabelCanonicalization
 }
 
 func newSynthesisInputTrace(encoded []byte, input contextfabric.SynthesisInput) synthesisInputTrace {
@@ -2428,6 +2434,7 @@ func newSynthesisInputTrace(encoded []byte, input contextfabric.SynthesisInput) 
 		Paths:                    len(input.Graph.Paths),
 		DriverCandidates:         len(input.Graph.DriverCandidates),
 		CohortMembers:            members,
+		LabelCanonicalization:    input.LabelCanonicalization,
 	}
 }
 
@@ -2448,6 +2455,9 @@ func (r *Runtime) logSynthesizeInput(ctx context.Context, orgID, requestID strin
 		trace.Paths,
 		trace.DriverCandidates,
 		trace.CohortMembers,
+		trace.LabelCanonicalization.Outcome(),
+		trace.LabelCanonicalization.KeysCollapsed,
+		trace.LabelCanonicalization.KeysResidual,
 		receipt.Outcome,
 		len(draws),
 		formatSynthesisDraws(draws),

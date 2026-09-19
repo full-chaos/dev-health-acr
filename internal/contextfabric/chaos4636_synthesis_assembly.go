@@ -334,10 +334,11 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// Corrected here, once per pass, immediately before synthesis reads
 	// Coverage.Details, mirroring where the cardinality step reads it.
 	correctKindCensusTruncatedServedCounts(graphContext.Coverage.Details, graphContext.Cohort)
-	result, err := e.synthesizer.Synthesize(ctx, principal, SynthesisInput{
+	synthesisInput, _ := canonicalizeSynthesisSubjectLabels(SynthesisInput{
 		Allocation: synthesisAllocation,
 		Request:    request, Interpretation: interpretation, Graph: graphContext, Facts: facts,
 	})
+	result, err := e.synthesizer.Synthesize(ctx, principal, synthesisInput)
 	if err != nil {
 		return InvestigationResult{}, synthesisAllocation, assemblyTelemetry{}, MembershipCardinality{}, stageError(StageSynthesis, fmt.Errorf("synthesize investigation: %w", err))
 	}
