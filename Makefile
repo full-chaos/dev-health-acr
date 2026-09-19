@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check test test-race test-race-shared test-race-isolated test-race-split test-shuffle-random test-coverage crosscompile hosted-integration clients-real vet contract-write contract-test codegraph-contract shard-plan canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract
+.PHONY: fmt fmt-check test test-split test-race test-race-shared test-race-isolated test-race-split test-shuffle-random test-coverage crosscompile hosted-integration clients-real vet contract-write contract-test codegraph-contract shard-plan canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract
 
 RELEASE_OUTPUT ?= .tmp/release
 RELEASE_VERSION ?=
@@ -28,6 +28,9 @@ GOTEST_TIMEOUT ?= 420s
 # package list; the default is the whole module so local `make test*`
 # invocations are unchanged.
 GOTEST_PKGS ?= ./...
+# Per-package ceiling of the plain (non-race) `go test`; the value is go's own
+# default, named so test-split can pass a larger one for isolated packages.
+GOTEST_PLAIN_TIMEOUT ?= 10m
 # CHAOS-4567: the default timeout an isolated package (scripts/ci/test-shard.sh
 # isolated) runs under when test-race-split/test-race-isolated runs it on its
 # own, for any isolated package that does not name its own override below.
@@ -92,7 +95,24 @@ fmt-check:
 	if [ -n "$$files" ]; then echo "Go files need formatting:"; echo "$$files"; exit 1; fi
 
 test:
-	go test -count=1 $(GOTEST_PKGS)
+	go test -count=1 -timeout $(GOTEST_PLAIN_TIMEOUT) $(GOTEST_PKGS)
+
+# The plain suite over the same partition the race suite and CI use: the
+# shared packages in one invocation at the default ceiling, then each isolated
+# package (scripts/ci/test-shard.sh isolated) as its own invocation under its
+# own ceiling. Package parallelism inside one unsharded `go test ./...` makes
+# the heavy packages contend for CPU; a solo isolated run does not, and the
+# ceiling it needs is measured against solo runs (GOTEST_ISOLATED_TIMEOUT).
+test-split:
+	$(MAKE) test GOTEST_PKGS="$$(scripts/ci/test-shard.sh 1 1)"
+	@for pkg in $$(scripts/ci/test-shard.sh isolated); do \
+		case "$$pkg" in \
+			*/internal/contextfabric) timeout="$(GOTEST_CONTEXTFABRIC_TIMEOUT)" ;; \
+			*) timeout="$(GOTEST_ISOLATED_TIMEOUT)" ;; \
+		esac; \
+		echo "test-split: $$pkg (GOTEST_PLAIN_TIMEOUT=$$timeout)"; \
+		$(MAKE) test GOTEST_PKGS="$$pkg" GOTEST_PLAIN_TIMEOUT="$$timeout" || exit $$?; \
+	done
 
 # test-race runs the same suite with the race detector and randomized test
 # order. -count=1 defeats the build cache so a warm-cache result cannot stand
@@ -266,7 +286,7 @@ build:
 	go build -o .tmp/acr-migrate ./cmd/acr-migrate
 	go build -ldflags "$(LOCAL_BUILD_LDFLAGS)" -o .tmp/acr-projector ./cmd/acr-projector
 
-verify: fmt-check vet test test-race-split crosscompile contract-test codegraph-contract shard-plan canonical-receipts fullstack-contract build
+verify: fmt-check vet test-split test-race-split crosscompile contract-test codegraph-contract shard-plan canonical-receipts fullstack-contract build
 
 container-contract:
 	bash scripts/container/test-contract.sh
