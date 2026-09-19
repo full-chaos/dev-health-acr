@@ -329,7 +329,11 @@ rule, applied per `(member, signal family)` pair:
   the whole investigation, so it never stands in for the member: the
   producer (`recommendations_daily` writes one row per rule per evaluation,
   fired or not) reports the subjects whose latest evaluation at or before the
-  as-of date sits inside the health freshness window, and the registry
+  as-of date sits inside the requested range intersected with the health
+  freshness window (the one predicate every deficiency read applies, fired
+  rules and tombstones included), decides each member's state on its own
+  (fired, measured zero, stale, before the range, never evaluated) and names
+  every unmeasured member in the read's reason; the registry
   records them per fact kind (`CanonicalFactBundle.EvaluatedSubjects`). A
   member outside that set — never evaluated, or evaluated only outside the
   window, or covered by a capped read — has no deficiency evidence and reads

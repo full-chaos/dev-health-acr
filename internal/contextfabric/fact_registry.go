@@ -384,7 +384,9 @@ type FactProviderResult struct {
 // LatestWindowEnd describe the freshest covering evaluation seen.
 type FactEvaluationCoverage struct {
 	Covered             int
+	Fired               int
 	Stale               int
+	BeforeRange         int
 	NeverEvaluated      int
 	RulesEvaluated      int
 	LatestWindowEnd     string
@@ -392,6 +394,14 @@ type FactEvaluationCoverage struct {
 	// Withheld is set when the fact read was capped, so no subject could be
 	// shown to have zero findings.
 	Withheld bool
+	// Members is the state of every requested subject, decided per subject.
+	Members []FactEvaluationMember
+}
+
+// FactEvaluationMember is one requested subject's evaluation state.
+type FactEvaluationMember struct {
+	Subject SubjectRef
+	State   string
 }
 
 type FactProvider interface {
@@ -1172,7 +1182,9 @@ func (r *FactCapabilityRegistry) recordEvaluationCoverage(ctx context.Context, p
 		"org_id", SanitizeLogAttr(principal.OrgID),
 		"kind", SanitizeLogAttr(string(kind)),
 		"evaluated_covered", coverage.Covered,
+		"evaluated_fired", coverage.Fired,
 		"evaluated_stale", coverage.Stale,
+		"evaluated_before_range", coverage.BeforeRange,
 		"never_evaluated", coverage.NeverEvaluated,
 		"measured_zero_credited", credited,
 		"rules_evaluated", coverage.RulesEvaluated,

@@ -10,6 +10,7 @@ package devhealthfacts_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
@@ -65,7 +66,7 @@ func TestCHAOS5934DeficiencyZeroIsPerMemberAgainstRealClickHouse(t *testing.T) {
 		// The anchor team was read and its read is available for the whole
 		// investigation -- evidence about the team only.
 		if err := direct.Exec(ctx, `INSERT INTO recommendations_daily (team_id, org_id, rule_id, window_start, window_end, fired, severity, title, rationale, success_criterion, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-			"ANCHOR", orgID, "saturation", date(2026, 7, 29), date(2026, 8, 12), true, "warning", "Saturation", "elevated", "below threshold", ts(2026, 8, 12, 2, 0, 0)); err != nil {
+			"ANCHOR", orgID, "saturation", recentHealthDay(15), recentHealthDay(1), true, "warning", "Saturation", "elevated", "below threshold", recentHealthDay(1).Add(2*time.Hour)); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 		cohort := &contextfabric.Cohort{Kind: contextfabric.SubjectProject, Members: []contextfabric.CohortMember{
@@ -93,7 +94,7 @@ func TestCHAOS5934DeficiencyZeroIsPerMemberAgainstRealClickHouse(t *testing.T) {
 	t.Run("team_members_keep_their_own_zero_and_their_own_fired_rule", func(t *testing.T) {
 		const orgID = "org-5934-teams"
 		if err := direct.Exec(ctx, `INSERT INTO recommendations_daily (team_id, org_id, rule_id, window_start, window_end, fired, severity, title, rationale, success_criterion, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-			"HOT", orgID, "saturation", date(2026, 7, 29), date(2026, 8, 12), true, "critical", "Saturation", "high", "below threshold", ts(2026, 8, 12, 2, 0, 0)); err != nil {
+			"HOT", orgID, "saturation", recentHealthDay(15), recentHealthDay(1), true, "critical", "Saturation", "high", "below threshold", recentHealthDay(1).Add(2*time.Hour)); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 		// QUIET was evaluated recently and nothing fired: a measured zero.

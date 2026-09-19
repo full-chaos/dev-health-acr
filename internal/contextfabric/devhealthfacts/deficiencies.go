@@ -2,7 +2,9 @@ package devhealthfacts
 
 import (
 	"context"
+	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -90,7 +92,7 @@ FROM (
 	SELECT team_id, rule_id, rule_version, severity, title, rationale, success_criterion, window_start, window_end, fired,
 		row_number() OVER (PARTITION BY team_id, rule_id ORDER BY window_end DESC, computed_at DESC, cityHash64(tuple(fired, severity, title, rationale, success_criterion, rule_version, window_start)) DESC) AS rn
 	FROM recommendations_daily FINAL
-	WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)}` + timeBound.timestampPredicate("window_end") + `
+	WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)} AND ` + deficiencyWindowSQL("window_end", timeBound) + `
 )
 WHERE rn = 1 AND fired = 1`)
 	rowCount := 0
@@ -125,55 +127,86 @@ WHERE rn = 1 AND fired = 1`)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query team operational deficiencies", scanErr)
 	}
-	evaluated, evaluation := coverage.measuredClear(firedTeams, rowCount >= maxFactRowsPerQuery)
+	evaluated, evaluation := coverage.classify(firedTeams, rowCount >= maxFactRowsPerQuery)
 	state, retentionReason := timeBound.retentionState(rowCount)
 	if len(evaluated) > 0 {
-		// A subject with an evaluation inside the freshness window and no
-		// fired rule is a measured "nothing found": the source answered.
-		state, retentionReason = contextfabric.SourceAvailable, ""
-	} else if len(facts) == 0 {
-		retentionReason = evaluation.noDataReason(retentionReason)
+		// A subject with an evaluation inside the window and no fired rule
+		// is a measured "nothing found": the source answered.
+		state = contextfabric.SourceAvailable
 	}
+	retentionReason = evaluation.reason(len(evaluated) > 0 || len(facts) > 0, retentionReason)
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: rowCount >= maxFactRowsPerQuery, EvaluatedSubjects: evaluated, Evaluation: evaluation.coverage()}
 	return result, nil
 }
 
-// deficiencyEvaluationReasonStale separates a subject whose rules were
-// evaluated too long ago to speak for the request from one never evaluated,
-// which keeps the generic empty-read reason.
-const deficiencyEvaluationReasonStale = "operational deficiency rules were last evaluated for the requested teams outside the freshness window"
+// deficiencyWindowSQL is the ONE temporal predicate every deficiency read
+// applies to recommendations_daily.window_end: the requested range
+// intersected with the freshness window that trails the request's as-of date.
+// Fired facts, tombstones and the latest evaluation are all judged by it, so
+// a row that one read counts as current is current for the others.
+func deficiencyWindowSQL(column string, timeBound factTimeBound) string {
+	predicate := freshnessIsFreshSQL(column, timeBound)
+	if timeBound.active && timeBound.hasStart {
+		predicate = "(" + predicate + " AND " + column + " >= toDate({" + boundStartParam + ":DateTime64(6,'UTC')}))"
+	}
+	return predicate
+}
 
-// deficiencyEvaluation is the coverage evidence behind a measured zero.
+// Per-member evaluation states a deficiency read reports.
+const (
+	deficiencyStateFired        = "fired"
+	deficiencyStateMeasuredZero = "measured_zero"
+	deficiencyStateStale        = "stale"
+	deficiencyStateBeforeRange  = "before_range"
+	deficiencyStateNever        = "never_evaluated"
+	deficiencyStateWithheld     = "withheld_capped_read"
+)
+
+// deficiencyEvaluation is the per-member evidence behind one read.
 type deficiencyEvaluation struct {
-	covered, stale, never int
-	rules                 int
-	latestWindowEnd       string
-	withheld              bool
-	requested             int
+	members         []contextfabric.FactEvaluationMember
+	counts          map[string]int
+	rules           int
+	latestWindowEnd string
+	capped          bool
 }
 
 func (e deficiencyEvaluation) coverage() *contextfabric.FactEvaluationCoverage {
-	if e.requested == 0 {
+	if len(e.members) == 0 {
 		return nil
 	}
 	return &contextfabric.FactEvaluationCoverage{
-		Covered: e.covered, Stale: e.stale, NeverEvaluated: e.never,
+		Covered: e.counts[deficiencyStateMeasuredZero], Stale: e.counts[deficiencyStateStale], BeforeRange: e.counts[deficiencyStateBeforeRange],
+		NeverEvaluated: e.counts[deficiencyStateNever], Fired: e.counts[deficiencyStateFired],
 		RulesEvaluated: e.rules, LatestWindowEnd: e.latestWindowEnd,
-		FreshnessWindowDays: healthSeverityFreshnessWindowDays, Withheld: e.withheld,
+		FreshnessWindowDays: healthSeverityFreshnessWindowDays, Withheld: e.capped, Members: e.members,
 	}
 }
 
-// noDataReason names why a read with no fired rule and no measured zero is
-// empty. A team never evaluated keeps the generic absence reason; stale
-// evaluations are named, alone or beside the absence.
-func (e deficiencyEvaluation) noDataReason(fallback string) string {
-	switch {
-	case e.stale == 0:
-		return fallback
-	case e.never == 0:
-		return deficiencyEvaluationReasonStale
+// reason names every requested team the read could not measure, whatever
+// other teams it did measure. A read where every requested team was simply
+// never evaluated keeps the generic empty-read reason.
+func (e deficiencyEvaluation) reason(answered bool, fallback string) string {
+	parts := make([]string, 0, 4)
+	missing := 0
+	for _, entry := range []struct{ state, text string }{
+		{deficiencyStateStale, "evaluated outside the freshness window"},
+		{deficiencyStateBeforeRange, "evaluated before the requested range"},
+		{deficiencyStateNever, "never evaluated"},
+		{deficiencyStateWithheld, "withheld by a capped read"},
+	} {
+		if n := e.counts[entry.state]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", n, entry.text))
+			missing += n
+		}
 	}
-	return deficiencyEvaluationReasonStale + "; " + fallback
+	if missing == 0 {
+		return ""
+	}
+	if !answered && missing == e.counts[deficiencyStateNever] {
+		return fallback
+	}
+	return fmt.Sprintf("operational deficiency evaluation missing for %d of %d requested teams: %s", missing, len(e.members), strings.Join(parts, ", "))
 }
 
 // teamEvaluation is one team's latest evaluation at or before the as-of date.
@@ -181,11 +214,12 @@ type teamEvaluation struct {
 	subject         contextfabric.SubjectRef
 	latestWindowEnd string
 	rules           int
+	inWindow        bool
 	fresh           bool
 }
 
 // readEvaluationCoverage reads, per requested team, the latest evaluation at
-// or before the request's as-of date and whether it sits inside the freshness
+// or before the request's as-of date and where it sits against the shared
 // window. The producer wrote one recommendations_daily row per rule per
 // evaluation, fired or not, so a team with such a row was evaluated. One
 // aggregate row per team, never row-capped.
@@ -194,7 +228,7 @@ func (p *OperationalDeficienciesProvider) readEvaluationCoverage(ctx context.Con
 	if len(ids) == 0 {
 		return byTeam, nil
 	}
-	statement := `SELECT team_id, toString(mx), toUInt32(uniqExactIf(rule_id, window_end = mx)), toUInt8(` + freshnessIsFreshSQL("mx", timeBound) + `)
+	statement := `SELECT team_id, toString(mx), toUInt32(uniqExactIf(rule_id, window_end = mx)), toUInt8(` + deficiencyWindowSQL("mx", timeBound) + `), toUInt8(` + freshnessIsFreshSQL("mx", timeBound) + `)
 FROM (
 	SELECT team_id, rule_id, window_end, max(window_end) OVER (PARTITION BY team_id) AS mx
 	FROM recommendations_daily FINAL
@@ -204,15 +238,15 @@ GROUP BY team_id, mx`
 	err := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		var teamID, latest string
 		var rules uint32
-		var fresh uint8
-		if err := row.Scan(&teamID, &latest, &rules, &fresh); err != nil {
+		var inWindow, fresh uint8
+		if err := row.Scan(&teamID, &latest, &rules, &inWindow, &fresh); err != nil {
 			return err
 		}
 		subject, ok := bySubject[teamID]
 		if !ok {
 			return nil
 		}
-		byTeam[teamID] = teamEvaluation{subject: subject, latestWindowEnd: latest, rules: int(rules), fresh: fresh != 0}
+		byTeam[teamID] = teamEvaluation{subject: subject, latestWindowEnd: latest, rules: int(rules), inWindow: inWindow != 0, fresh: fresh != 0}
 		return nil
 	}, timeBound.bindings()...)
 	return byTeam, err
@@ -224,25 +258,37 @@ type evaluationCoverage struct {
 	requested map[string]contextfabric.SubjectRef
 }
 
-// measuredClear returns the requested teams whose latest evaluation sits
-// inside the freshness window and for which the fired-rule read returned
-// nothing. A capped fired-rule read withholds every zero because a fired rule
-// may sit past the cap.
-func (c evaluationCoverage) measuredClear(fired map[string]struct{}, capped bool) ([]contextfabric.SubjectRef, deficiencyEvaluation) {
-	evaluation := deficiencyEvaluation{requested: len(c.requested), withheld: capped}
+// classify decides every requested team's state on its own: fired, measured
+// zero, evaluated before the range, evaluated outside the freshness window,
+// never evaluated, or withheld because the fired-rule read was capped (a
+// fired rule may sit past the cap). It returns the measured-zero subjects.
+func (c evaluationCoverage) classify(fired map[string]struct{}, capped bool) ([]contextfabric.SubjectRef, deficiencyEvaluation) {
+	evaluation := deficiencyEvaluation{counts: map[string]int{}, capped: capped}
 	var measured []contextfabric.SubjectRef
+	teamIDs := make([]string, 0, len(c.requested))
 	for teamID := range c.requested {
+		teamIDs = append(teamIDs, teamID)
+	}
+	sort.Strings(teamIDs)
+	for _, teamID := range teamIDs {
 		team, ok := c.byTeam[teamID]
+		_, hasFired := fired[teamID]
+		var state string
 		switch {
+		case hasFired:
+			state = deficiencyStateFired
 		case !ok:
-			evaluation.never++
+			state = deficiencyStateNever
 		case !team.fresh:
-			evaluation.stale++
+			state = deficiencyStateStale
+		case !team.inWindow:
+			// Fresh against the as-of date yet outside the window: it sits
+			// before the requested range's own start.
+			state = deficiencyStateBeforeRange
+		case capped:
+			state = deficiencyStateWithheld
 		default:
-			if _, hasFired := fired[teamID]; hasFired || capped {
-				continue
-			}
-			evaluation.covered++
+			state = deficiencyStateMeasuredZero
 			if team.rules > evaluation.rules {
 				evaluation.rules = team.rules
 			}
@@ -251,7 +297,8 @@ func (c evaluationCoverage) measuredClear(fired map[string]struct{}, capped bool
 			}
 			measured = append(measured, team.subject)
 		}
+		evaluation.counts[state]++
+		evaluation.members = append(evaluation.members, contextfabric.FactEvaluationMember{Subject: c.requested[teamID], State: state})
 	}
-	sort.Slice(measured, func(i, j int) bool { return measured[i].CanonicalID < measured[j].CanonicalID })
 	return measured, evaluation
 }
