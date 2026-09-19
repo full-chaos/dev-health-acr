@@ -1,8 +1,11 @@
 package contextfabric
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -161,5 +164,54 @@ func TestWorkItemAuthorizationGapLimitationFitsTheBound(t *testing.T) {
 	}
 	if !strings.HasPrefix(fmt.Sprint(text), workItemAuthorizationGapPrefix) {
 		t.Fatal("prefix")
+	}
+}
+
+func TestServedGapLimitationIsNotDoubledWithTheUnmeasuredDisclosure(t *testing.T) {
+	gap := workItemAuthorizationGap{State: WorkItemMembershipCensusExact, Observed: 5, Denied: 5}
+	stored := InvestigationResult{Limitations: []string{gap.Limitation()}}
+	census := &WorkItemTupleCensus{Version: WorkItemTupleCensusVersion, State: WorkItemMembershipCensusUnmeasured, RequestedRepositoryScope: []string{}, AuthorizationDigest: strings.Repeat("a", 64)}
+	served := ServeWorkItemTupleCensus(stored, census)
+	if len(served.Limitations) != 1 || served.Limitations[0] != gap.Limitation() {
+		t.Fatalf("limitations=%q", served.Limitations)
+	}
+	if served.Status == InvestigationDegraded {
+		t.Fatalf("a stored answer's status was rewritten on read: %q", served.Status)
+	}
+	plain := ServeWorkItemTupleCensus(InvestigationResult{Limitations: []string{}}, census)
+	if len(plain.Limitations) != 1 || plain.Limitations[0] != WorkItemMembershipLimitation() {
+		t.Fatalf("an unmeasured census lost its own disclosure: %q", plain.Limitations)
+	}
+}
+
+func TestWorkItemAuthorizationGapInfoLine(t *testing.T) {
+	var out bytes.Buffer
+	telemetry := NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(&out, nil)))
+	telemetry.RecordWorkItemAuthorizationGap(context.Background(), storage.Principal{OrgID: "org-1"}, WorkItemAuthorizationGapEvent{Reason: "none_authorized", CensusState: WorkItemMembershipCensusExact, Observed: 7, Authorized: 2, Denied: 5, ServedStatus: InvestigationDegraded, ServedMembers: 3, LimitationPresent: true})
+	var line map[string]any
+	if err := json.Unmarshal(out.Bytes(), &line); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"level": "INFO", "msg": "context fabric work item authorization gap", "org_id": "org-1", "reason": "none_authorized", "census_state": "exact", "observed_population": float64(7), "authorized_population": float64(2), "denied_population": float64(5), "served_status": "degraded", "served_members": float64(3), "limitation_disclosed": true}
+	for key, value := range want {
+		if line[key] != value {
+			t.Errorf("%s=%v want %v", key, line[key], value)
+		}
+	}
+}
+
+func TestWorkItemAuthorizationGapEventNamesTheReasonAndServedShape(t *testing.T) {
+	census := &WorkItemTupleCensus{gap: &workItemAuthorizationGap{State: WorkItemMembershipCensusFloor, Observed: 9, Authorized: 4, Denied: 5}}
+	served := InvestigationResult{Status: InvestigationComplete, Cohort: &Cohort{Members: []CohortMember{{}, {}}}, Limitations: []string{census.gap.Limitation()}}
+	event, ok := newWorkItemAuthorizationGapEvent(census, served)
+	if !ok || event.Reason != "partially_authorized" || event.CensusState != WorkItemMembershipCensusFloor || event.Observed != 9 || event.Authorized != 4 || event.Denied != 5 || event.ServedStatus != InvestigationComplete || event.ServedMembers != 2 || !event.LimitationPresent {
+		t.Fatalf("event=%+v ok=%v", event, ok)
+	}
+	if _, ok := newWorkItemAuthorizationGapEvent(&WorkItemTupleCensus{}, served); ok {
+		t.Fatal("a census without a gap produced an event")
+	}
+	none := &WorkItemTupleCensus{gap: &workItemAuthorizationGap{State: WorkItemMembershipCensusExact, Observed: 5, Denied: 5}}
+	if event, _ := newWorkItemAuthorizationGapEvent(none, InvestigationResult{}); event.Reason != "none_authorized" || event.LimitationPresent {
+		t.Fatalf("event=%+v", event)
 	}
 }
