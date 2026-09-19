@@ -1677,6 +1677,16 @@
         ]
       },
       {
+        "key": "group_hint_source",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "model",
+          "frame"
+        ]
+      },
+      {
         "key": "requested_member_hint",
         "type": "string",
         "presence": "required",

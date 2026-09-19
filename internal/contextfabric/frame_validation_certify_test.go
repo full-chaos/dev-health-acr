@@ -189,6 +189,9 @@ func TestEveryClosedValueOnTheFrameValidationLineCertifies(t *testing.T) {
 		"requested_group_hint": func(e *contextfabric.FrameValidationEvent, v string) {
 			e.Boundary.RequestedGroupHint = v
 		},
+		"group_hint_source": func(e *contextfabric.FrameValidationEvent, v string) {
+			e.Boundary.GroupHintSource = v
+		},
 		"requested_member_hint": func(e *contextfabric.FrameValidationEvent, v string) {
 			e.Boundary.RequestedMemberHint = v
 		},

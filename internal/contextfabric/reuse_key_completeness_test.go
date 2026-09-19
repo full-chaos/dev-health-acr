@@ -185,6 +185,7 @@ var modelExecutionReceiptAuthorities = map[string]versionAuthority{
 	"QuestionFamilyUnrecognized":       {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
 	"GroupKind":                        {reason: "per-call model-emitted structure signal captured receipt-only (shadow), not a version identity -- same reasoning as QuestionFamily"},
 	"GroupKindUnrecognized":            {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
+	"GroupKindSource":                  {reason: "per-call provenance of the group kind hint (telemetry only), not a version identity -- same reasoning as GroupKindUnrecognized"},
 	"ScopeAnchorTerm":                  {reason: "per-call model-emitted retrieval pointer captured receipt-only (shadow), not a version identity -- and free text, which could never be a reuse dimension in any case"},
 	"ScopeAnchorTermTruncated":         {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as ScopeAnchorTerm"},
 	"ScopeAnchorKind":                  {reason: "per-call model-emitted structure signal captured receipt-only (shadow), not a version identity -- same reasoning as QuestionFamily"},

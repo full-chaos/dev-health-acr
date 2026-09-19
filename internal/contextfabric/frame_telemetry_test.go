@@ -140,6 +140,7 @@ func TestEveryFrameRepairFieldReachesTheLogLine(t *testing.T) {
 // chaos5390_interpretation_boundary.go), so none can carry question text.
 var interpretationBoundaryLogKeys = map[string]string{
 	"RequestedGroupHint":  "requested_group_hint",
+	"GroupHintSource":     "group_hint_source",
 	"RequestedMemberHint": "requested_member_hint",
 	"ProposedGroupKind":   "proposed_group_kind",
 	"ProposedMemberKind":  "proposed_member_kind",

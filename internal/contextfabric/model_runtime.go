@@ -194,8 +194,12 @@ type ModelExecutionReceipt struct {
 	QuestionFamilyUnrecognized bool           `json:"question_family_unrecognized,omitempty"`
 	GroupKind                  SubjectKind    `json:"group_kind,omitempty"`
 	GroupKindUnrecognized      bool           `json:"group_kind_unrecognized,omitempty"`
-	ScopeAnchorTerm            string         `json:"scope_anchor_term,omitempty"`
-	ScopeAnchorTermTruncated   bool           `json:"scope_anchor_term_truncated,omitempty"`
+	// GroupKindSource names where GroupKind came from: the model's own flat
+	// group_kind hint, or the group kind of the frame the same call
+	// proposed (adoptGroupHintFromFrame). Empty when GroupKind is empty.
+	GroupKindSource          GroupHintSource `json:"group_kind_source,omitempty"`
+	ScopeAnchorTerm          string          `json:"scope_anchor_term,omitempty"`
+	ScopeAnchorTermTruncated bool            `json:"scope_anchor_term_truncated,omitempty"`
 	// ScopeAnchorKind and RequestedSubjectKind are the two halves of
 	// §4.2 row 2's ASYMMETRY test ("ScopeAnchorTerm set AND the question
 	// asks about a different kind than the anchor's"). Both are closed
@@ -1649,6 +1653,7 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 		return
 	}
 	proposed := *receipt.QuestionFrame
+	adoptGroupHintFromFrame(receipt, proposed)
 	result := validateProposedFrame(*receipt, proposed, emittedShape, subjectTerms)
 
 	receipt.FrameOutcome = result.Outcome
@@ -1880,6 +1885,44 @@ func requestedGroupAxisDropped(receipt ModelExecutionReceipt, proposed QuestionF
 		return false
 	}
 	return true
+}
+
+// GroupHintSource names the origin of a receipt's group kind.
+type GroupHintSource string
+
+const (
+	// GroupHintSourceModel: the model stated the flat group_kind hint.
+	GroupHintSourceModel GroupHintSource = "model"
+	// GroupHintSourceFrame: the flat hint was empty and the receipt's group
+	// kind was taken from the grouped_members frame the same call proposed.
+	GroupHintSourceFrame GroupHintSource = "frame"
+)
+
+// adoptGroupHintFromFrame makes the receipt's group kind agree with the
+// group kind of the frame proposed by the same model call. The model states a
+// group axis in two places, the flat group_kind hint and the frame's own
+// grouped_members expression; the frame gate and the frame repairs read the
+// frame, while the family sample and the group-axis check read the receipt.
+// A call that names the axis only in its frame left the receipt empty and the
+// two readers disagreed. When the flat hint is empty (and was not dropped as
+// unrecognised) and the proposed frame is grouped_members with a group kind,
+// that group kind becomes the receipt's. A flat hint the model did state is
+// never overwritten, so a disagreement between the two stays visible to
+// the repair's own group-kind check.
+func adoptGroupHintFromFrame(receipt *ModelExecutionReceipt, proposed QuestionFrame) {
+	if receipt.GroupKind != "" {
+		receipt.GroupKindSource = GroupHintSourceModel
+		return
+	}
+	if receipt.GroupKindUnrecognized {
+		return
+	}
+	group, ok := proposed.SubjectExpression.GroupKind()
+	if !ok {
+		return
+	}
+	receipt.GroupKind = group
+	receipt.GroupKindSource = GroupHintSourceFrame
 }
 
 // receiptRequestsGroupAxis reports whether the model's own hint asked for a
