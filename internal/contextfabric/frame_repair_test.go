@@ -1666,6 +1666,22 @@ func TestMemberKindFactAliasRepairDecisionsAreInTheClosedVocabulary(t *testing.T
 	}
 }
 
+// TestMemberKindFactAliasRepairNameIsInTheClosedVocabulary holds that this
+// repair's own name is a member of the closed vocabulary array -- the name
+// counterpart to TestMemberKindFactAliasRepairDecisionsAreInTheClosedVocabulary
+// above. frameRepairTable (the actual dispatch slice) and frameRepairNames
+// (the exported vocabulary array) are two independent declarations; a repair
+// can be wired into the former while silently missing from the latter, which
+// no other test in this file catches.
+func TestMemberKindFactAliasRepairNameIsInTheClosedVocabulary(t *testing.T) {
+	for _, member := range FrameRepairNameVocabulary() {
+		if member == FrameRepairMemberKindFactAliasCollapse {
+			return
+		}
+	}
+	t.Errorf("%q is not a member of FrameRepairNameVocabulary()", FrameRepairMemberKindFactAliasCollapse)
+}
+
 // newMemberKindAliasRepairEngine drives the production engine over the
 // misread grouped-metric proposal, with a recording graph, the same shape
 // newRepairEngine uses for the count-kind repair.
