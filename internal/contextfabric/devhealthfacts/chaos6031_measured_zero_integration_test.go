@@ -277,6 +277,20 @@ func TestCHAOS6031DeficiencyWindowIsOnePredicateAgainstRealClickHouse(t *testing
 		}
 	})
 
+	t.Run("never_evaluated_members_are_named_beside_answered_ones", func(t *testing.T) {
+		const orgID = "org-6031-answered"
+		seedEvaluation(t, ctx, direct, orgID, "CLEAR", day(-1))
+		seedEvaluation(t, ctx, direct, orgID, "HOT", day(-1), "saturation")
+		measured := readDeficiencyAsOf(t, ctx, orgID, asOf, "CLEAR", "GHOST")
+		if !strings.Contains(measured.Reason, "1 of 2") || !strings.Contains(measured.Reason, "1 never evaluated") {
+			t.Fatalf("measured plus never reason = %q, want the never-evaluated team named", measured.Reason)
+		}
+		fired := readDeficiencyAsOf(t, ctx, orgID, asOf, "HOT", "GHOST")
+		if !strings.Contains(fired.Reason, "1 of 2") || !strings.Contains(fired.Reason, "1 never evaluated") {
+			t.Fatalf("fired plus never reason = %q, want the never-evaluated team named", fired.Reason)
+		}
+	})
+
 	// {fresh, stale, before-range, never} x {fired, clean, cleared, refired}
 	t.Run("enumeration", func(t *testing.T) {
 		type cell struct {
