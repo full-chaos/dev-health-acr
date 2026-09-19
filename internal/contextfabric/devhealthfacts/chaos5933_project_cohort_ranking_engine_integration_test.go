@@ -107,7 +107,6 @@ var projectCohortCells = []projectCohortCell{
 	{key: "STALE30", health: true, investment: true, healthAgeDays: 30},
 }
 
-
 func seedProjectCohort(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID string, cells []projectCohortCell) {
 	t.Helper()
 	epoch := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
