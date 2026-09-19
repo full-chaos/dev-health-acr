@@ -384,8 +384,11 @@ func TestAChoiceRedeemedFromTheAnsweredResultPastAPromptIsServed(t *testing.T) {
 			t.Parallel()
 			h := newNeedTurnHarness(t, nil)
 			one := h.turn(needTurnRequest(fmt.Sprintf("request_chain_redeem_%t_one", redeem), true), answered)
-			prompt := h.turn(continuingNeedTurn(needTurnRequest(fmt.Sprintf("request_chain_redeem_%t_two", redeem), false), one.result.ResultID), substitutionResponse(substitutionRepoTwo, "receipt_chain_prompt"))
-			if !resultIsPrompt(prompt.result) {
+			// A different question carries no window, so the window gate asks.
+			second := continuingNeedTurn(needTurnRequest(fmt.Sprintf("request_chain_redeem_%t_two", redeem), false), one.result.ResultID)
+			second.Question = "And how has it trended?"
+			prompt := h.turn(second, substitutionResponse(substitutionRepoOne, "receipt_chain_prompt"))
+			if !resultIsPrompt(prompt.result) || prompt.result.WindowClarification == nil {
 				t.Fatalf("premise: turn two served %q, want a window prompt", prompt.result.Status)
 			}
 			var receipts []BoundSubjectReceipt
