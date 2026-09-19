@@ -1,0 +1,29 @@
+{
+  "_why": "Hand-authored reference for conversation.score_turn, independent of the implementation. Own file: golden_verdicts.json pins the single-turn table and is never appended to. A clarify turn's `agree` here is PROVISIONAL (settled by its redemption turn).",
+  "cases": [
+    {"name": "serve, data, right subject", "expect": "serve", "want": "s:a",
+     "obs": {"http": 200, "status": "complete", "claimed_facts_n": 2, "committed": ["s:a"], "offered": []}, "verdict": "agree"},
+    {"name": "serve, hollow", "expect": "serve", "want": "s:a",
+     "obs": {"http": 200, "status": "degraded", "claimed_facts_n": 0, "committed": ["s:a"], "offered": []}, "verdict": "agree_weak"},
+    {"name": "serve, wrong subject", "expect": "serve", "want": "s:a",
+     "obs": {"http": 200, "status": "complete", "claimed_facts_n": 2, "committed": ["s:b"], "offered": []}, "verdict": "disagree"},
+    {"name": "serve, clarified instead", "expect": "serve", "want": "s:a",
+     "obs": {"http": 200, "status": "clarification_required", "claimed_facts_n": 0, "committed": [], "offered": ["s:a"]}, "verdict": "disagree"},
+    {"name": "serve, http error", "expect": "serve", "want": "s:a",
+     "obs": {"http": 502, "status": null, "claimed_facts_n": 0, "committed": [], "offered": []}, "verdict": "disagree"},
+    {"name": "decline, no_match", "expect": "decline", "want": null,
+     "obs": {"http": 200, "status": "no_match", "claimed_facts_n": 0, "committed": [], "offered": []}, "verdict": "agree"},
+    {"name": "decline, served", "expect": "decline", "want": null,
+     "obs": {"http": 200, "status": "complete", "claimed_facts_n": 1, "committed": ["s:a"], "offered": []}, "verdict": "disagree"},
+    {"name": "clarify, offered with remembered first", "expect": "clarify", "want": null,
+     "obs": {"http": 200, "status": "clarification_required", "claimed_facts_n": 0, "committed": [], "offered": ["s:a", "s:b"]}, "verdict": "agree"},
+    {"name": "clarify, remembered not first", "expect": "clarify", "want": null,
+     "obs": {"http": 200, "status": "clarification_required", "claimed_facts_n": 0, "committed": [], "offered": ["s:b", "s:a"]}, "verdict": "disagree"},
+    {"name": "clarify, candidate missing", "expect": "clarify", "want": null,
+     "obs": {"http": 200, "status": "clarification_required", "claimed_facts_n": 0, "committed": [], "offered": ["s:a"]}, "verdict": "disagree"},
+    {"name": "clarify, silently served", "expect": "clarify", "want": null,
+     "obs": {"http": 200, "status": "complete", "claimed_facts_n": 3, "committed": ["s:a"], "offered": []}, "verdict": "disagree"},
+    {"name": "no expectation", "expect": null, "want": null,
+     "obs": {"http": 200, "status": "complete", "claimed_facts_n": 3, "committed": ["s:a"], "offered": []}, "verdict": "unscored"}
+  ]
+}

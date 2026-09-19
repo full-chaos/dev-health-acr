@@ -71,7 +71,9 @@ if __name__ == "__main__" and not os.environ.get("CORPUS_BASE"):
     sys.exit(_MISSING_BASE_MSG)
 
 sys.path.insert(0, str(Path(__file__).parent))
+import corpus as _corpus_module  # noqa: E402
 from corpus import CORPUS, REQUESTED_KIND, ANCHOR_KIND  # noqa: E402
+import conversation as _conversation  # noqa: E402
 from validators import validate_attempt, validate_response  # noqa: E402
 # CHAOS-5380 review round 2: the producer and every reader SHARE these values rather than
 # a pin deriving one from the other -- a derived oracle was measured hollowing out
@@ -631,6 +633,99 @@ def run_replicate(qid, question, rep, warn=print):
         "no_redeemable_offer_flag": no_redeemable_offer_flag,
         "stop_reason": stop_reason,
     }
+
+
+class MissingConversations(RuntimeError):
+    """The supplied corpus module has no usable CONVERSATIONS section. A conversation run
+    over nothing would report an empty, clean-looking result -- refuse instead."""
+
+
+def load_conversations(module=None):
+    """The supplied corpus's CONVERSATIONS list, validated. Absent, empty or malformed
+    raises: never an empty pass."""
+    mod = module or _corpus_module
+    convs = getattr(mod, "CONVERSATIONS", None)
+    if not isinstance(convs, list) or not convs:
+        raise MissingConversations(
+            "the supplied corpus module has no CONVERSATIONS section (or it is empty) -- "
+            "refusing to run a conversation series over nothing")
+    seen = set()
+    for c in convs:
+        ok, reason = _conversation.validate_conversation(c)
+        if not ok:
+            raise MissingConversations(f"invalid conversation: {reason}")
+        if c["id"] in seen:
+            raise MissingConversations(f"duplicate conversation id {c['id']!r}")
+        seen.add(c["id"])
+    return convs
+
+
+def _redemption_body(turn, prev_result, warn):
+    """Receipt selecting the candidate `turn['redeem']` names from the PREVIOUS turn's
+    offered candidates -- matched by canonical_id, never by index. None when the previous
+    turn offered no such candidate (recorded as redeem_unavailable, never guessed)."""
+    want = turn["redeem"]["canonical_id"]
+    cands = (prev_result.get("subject_resolution") or {}).get("candidates") or []
+    hit = [c for c in cands if (c.get("subject") or {}).get("canonical_id") == want]
+    if not hit or not hit[0].get("receipt_id"):
+        warn(f"redemption target not among the {len(cands)} offered candidates")
+        return None
+    return {"priorSubjectReceipts": [{"result_id": prev_result.get("result_id"),
+                                      "receipt_id": hit[0]["receipt_id"]}]}
+
+
+def run_conversation(conv, rep, outdir, warn=print):
+    """One replicate of one authored conversation. Sibling of run_replicate, not a variant:
+    every turn posts ITS OWN authored text; turn N>1 carries `parentResultId` +
+    `subjectHints` derived from turn N-1's result (never a receipt), except a `redeem` turn,
+    which also carries the receipt of the offered candidate it selects. Returns
+    `{id, rep, turns: [{n, ran, why, obs, attempts, redeem_unavailable}]}` -- the scoring
+    inputs, not the verdict (conversation.score_conversation derives that)."""
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    tag = f"{conv['id']} rep{rep}"
+    prev_result = None
+    broken = None
+    records = []
+    for turn in conv["turns"]:
+        n = turn["n"]
+        rec = {"n": n, "ran": False, "why": None, "obs": {}, "attempts": 0,
+               "redeem_unavailable": False}
+        records.append(rec)
+        if broken:
+            rec["why"] = broken
+            continue
+        body = {"question": turn["text"]}
+        if n > 1:
+            body.update(derive_parent_reference(prev_result))
+            if turn.get("redeem") is not None:
+                receipt = _redemption_body(
+                    turn, prev_result, lambda m, _t=tag, _n=n: warn(f"[{_t}] t{_n} WARNING: {m}"))
+                if receipt is None:
+                    rec["redeem_unavailable"] = True
+                    rec["why"] = broken = "redeem_unavailable"
+                    continue
+                body.update(receipt)
+        status = payload = None
+        for attempt in range(1, MAX_ATTEMPTS_PER_TURN + 1):
+            status, payload, dt, undecodable, raw = post(body)
+            rec["attempts"] += 1
+            fname = outdir / f"{conv['id']}-rep{rep}-t{n}-a{attempt}.json"
+            with open(fname, "w") as f:
+                json.dump({"request": body, "status": status, "response": payload,
+                           "dt": round(dt, 1), "body_undecodable": undecodable}, f, indent=2)
+            persist_raw_response(fname, raw)
+            print(f"  [{tag}] t{n} a{attempt}: http={status} dt={dt:.1f}s", flush=True)
+            if contract.is_success_status(status) or not is_retryable(status, payload):
+                break
+        rec["ran"] = True
+        result = (payload or {}).get("result") if contract.is_success_status(status) else None
+        rec["obs"] = _conversation.observe(status, result)
+        if not result:
+            rec["why"] = broken = f"previous_turn_no_result(http={status})"
+            continue
+        prev_result = result
+    return {"id": conv["id"], "rep": rep, "turns": records}
 
 
 def _parse_argv(argv):
