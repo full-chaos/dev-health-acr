@@ -117,7 +117,15 @@ func multiLabelKeys(labels map[string]map[string]struct{}) int {
 //
 // The input is copied on write; the caller's value is never mutated.
 func canonicalizeSynthesisSubjectLabels(input SynthesisInput) (SynthesisInput, SubjectLabelCanonicalization) {
-	before, _ := synthesisPayloadSubjectLabels(input)
+	before, beforeMeasured := synthesisPayloadSubjectLabels(input)
+	if multiLabelKeys(before) == 0 {
+		// One label per key already: nothing to rewrite, and the input is
+		// returned as it came so the served cohort stays the very value the
+		// synthesizer was shown.
+		report := SubjectLabelCanonicalization{Measured: beforeMeasured}
+		input.LabelCanonicalization = report
+		return input, report
+	}
 	bound := canonicalSubjectLabels(input)
 	fix := func(subject SubjectRef) SubjectRef {
 		if want, ok := bound[subjectKeyForModel(subject)]; ok {
@@ -145,7 +153,7 @@ func canonicalizeSynthesisSubjectLabels(input SynthesisInput) (SynthesisInput, S
 			out.Graph.Resolution.Candidates[i] = candidate
 		}
 	}
-	if input.Graph.Cohort != nil {
+	if input.Graph.Cohort != nil && cohortLabelsChange(*input.Graph.Cohort, fix) {
 		cohort := *input.Graph.Cohort
 		if cohort.Members != nil {
 			cohort.Members = make([]CohortMember, len(input.Graph.Cohort.Members))
@@ -236,4 +244,27 @@ func (r SubjectLabelCanonicalization) Outcome() string {
 	default:
 		return LabelCanonicalizationUnchanged
 	}
+}
+
+// cohortLabelsChange reports whether rewriting would alter any subject label
+// in the cohort. A cohort that needs no rewrite keeps its identity: the served
+// answer carries this very value, so the synthesizer and the answer read one
+// cohort.
+func cohortLabelsChange(cohort Cohort, fix func(SubjectRef) SubjectRef) bool {
+	for _, member := range cohort.Members {
+		if fix(member.Subject) != member.Subject {
+			return true
+		}
+	}
+	for _, exclusion := range cohort.Exclusions {
+		if fix(exclusion.Subject) != exclusion.Subject {
+			return true
+		}
+	}
+	for _, group := range cohort.Groups {
+		if fix(group.Subject) != group.Subject {
+			return true
+		}
+	}
+	return false
 }

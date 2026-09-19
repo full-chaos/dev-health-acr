@@ -335,8 +335,11 @@ func TestAKeyOutsideTheBindingWalkIsReportedResidual(t *testing.T) {
 // TestUnchangedInputReportsUnchanged: one label per key needs no collapse.
 func TestUnchangedInputReportsUnchanged(t *testing.T) {
 	t.Parallel()
-	input, _ := closureFixture()
+	input, _, _ := groupedCohortFixture()
 	out, report := canonicalizeSynthesisSubjectLabels(input)
+	if out.Graph.Cohort != input.Graph.Cohort {
+		t.Fatal("an input with one label per key was copied instead of passed through")
+	}
 	if report.KeysCollapsed != 0 || report.KeysResidual != 0 || report.Outcome() != LabelCanonicalizationUnchanged {
 		t.Fatalf("report = %+v (%s), want unchanged", report, report.Outcome())
 	}
@@ -377,5 +380,27 @@ func TestTwoCandidatesForOneKeyCollapseToTheFirstLabel(t *testing.T) {
 	}
 	if _, ok := labelsOfKey(t, out, first)["First"]; !ok || report.KeysCollapsed != 1 || report.KeysResidual != 0 {
 		t.Fatalf("report = %+v, want the first label kept", report)
+	}
+}
+
+// TestACohortWhoseLabelsAreBoundKeepsItsIdentity: a collision elsewhere (a fact
+// under another label) rewrites the fact and leaves the cohort, the value the
+// served answer carries, as the same object.
+func TestACohortWhoseLabelsAreBoundKeepsItsIdentity(t *testing.T) {
+	t.Parallel()
+	input, _, _ := groupedCohortFixture()
+	member := input.Graph.Cohort.Members[0].Subject
+	fact := member
+	fact.Label = "Fact Label"
+	labelPlacements()[7].add(&input, fact)
+	out, report := canonicalizeSynthesisSubjectLabels(input)
+	if report.KeysCollapsed != 1 {
+		t.Fatalf("report = %+v, want one collapsed key", report)
+	}
+	if out.Graph.Cohort != input.Graph.Cohort {
+		t.Fatal("a cohort needing no rewrite was copied")
+	}
+	if got := out.Facts.Facts[len(out.Facts.Facts)-1].Subject.Label; got != member.Label {
+		t.Fatalf("fact label = %q, want the cohort member's %q", got, member.Label)
 	}
 }
