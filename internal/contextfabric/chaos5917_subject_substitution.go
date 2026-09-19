@@ -363,11 +363,11 @@ type parentAnchorEvidence struct {
 	// when the remembered offer's receipt proves it.
 	GuardIssued bool
 	IssuedFor   string
-	// Carried is true when the named parent is a prompt that speaks for the
-	// chain it continued (chaos6045_carried_parent_identity.go): Subject is
-	// then the verified identity of the chain's answered result, or zero when
-	// that identity could not be verified. Either way the parent is never
-	// read as asserting no identity.
+	// Carried is true when the named parent is a prompt that speaks for a
+	// chain whose identity could not be verified
+	// (chaos6045_carried_parent_identity.go): Subject is then zero, and the
+	// parent is still never read as asserting no identity. A verified chain
+	// holds the answered result's Subject instead.
 	Carried bool
 	// ResultKind is what the named parent was; Chain is how a prompt's
 	// identity was reached or why it was not; ChainDepth is how many prompts
@@ -506,12 +506,14 @@ func parentIdentityOf(evidence parentAnchorEvidence, stored StoredInvestigationR
 // the answered result its own carried chain member names. Each is only a
 // CANDIDATE -- the remembered offer's receipt decides -- so neither can make
 // a clarification speak for a result its receipt was not minted from.
+//
+// A member that is absent, malformed or names no answered result reads as
+// the zero member and contributes "", which verifies no receipt: a remembered
+// offer's receipt is always minted from a non-empty result id. The member's
+// own read error is reported on the ledger line by chainIdentityOf.
 func guardIssuedForCandidates(stored StoredInvestigationResult) []string {
-	candidates := []string{stored.ParentResultID}
-	if member, present, err := storedCarriedParentIdentity(stored); present && err == nil && member.State == CarriedParentIdentityHeld {
-		candidates = append(candidates, member.ResultID)
-	}
-	return candidates
+	member, _, _ := storedCarriedParentIdentity(stored)
+	return []string{stored.ParentResultID, member.ResultID}
 }
 
 // parentReceiptIssuers decides which results' receipts are the parent's own

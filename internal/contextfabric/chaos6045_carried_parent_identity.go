@@ -351,7 +351,7 @@ func (e *Engine) chainIdentityOf(ctx context.Context, principal storage.Principa
 	if !sameSubjectIdentity(served, member.subject()) {
 		return unavailable(SubjectSubstitutionChainAnswerMismatch)
 	}
-	evidence.Carried, evidence.Chain = true, SubjectSubstitutionChainVerified
+	evidence.Chain = SubjectSubstitutionChainVerified
 	// The subject carries the label the answered result served, so an offer
 	// built from it reads the way the caller already saw it.
 	// Receipts the answered result issued are the parent's own offer, as

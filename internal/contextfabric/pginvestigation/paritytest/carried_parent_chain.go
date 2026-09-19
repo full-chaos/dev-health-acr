@@ -183,6 +183,7 @@ type ChainCell struct {
 	LineDepth       int
 	LineParentID    string
 	LineParentRes   string
+	LineChainError  string
 	Served          string
 	CommittedIDs    []string
 	RememberedFirst bool
@@ -612,6 +613,7 @@ func RunCarriedParentChainSuite(t *testing.T, newStore func(t *testing.T) (conte
 					}
 					cell.LineParentID, _ = line["substitution_parent_id"].(string)
 					cell.LineParentRes, _ = line["substitution_parent_result_id"].(string)
+					cell.LineChainError, _ = line["substitution_parent_chain_error"].(string)
 					for _, subject := range served.SubjectResolution.Committed {
 						cell.CommittedIDs = append(cell.CommittedIDs, string(subject.Kind)+":"+subject.CanonicalID)
 					}
@@ -658,6 +660,23 @@ func assertChainCell(t *testing.T, row ChainRow, cell ChainCell, served contextf
 	}
 	if cell.LineDepth != wantDepth {
 		t.Errorf("%s: substitution_parent_chain_depth = %d, want %d", name, cell.LineDepth, wantDepth)
+	}
+	// The read that failed is named by its class.
+	switch {
+	case row.Kind == contextfabric.SubjectSubstitutionParentResultUnreadable && cell.LineChainError != string(contextfabric.SubjectSubstitutionChainErrorNotFound):
+		t.Errorf("%s: chain error = %q, want not_found", name, cell.LineChainError)
+	case row.Chain == contextfabric.SubjectSubstitutionChainAnswerUnreadable && (cell.LineChainError == string(contextfabric.SubjectSubstitutionChainErrorNone) || cell.LineChainError == ""):
+		t.Errorf("%s: chain error = %q, want the failed read's class", name, cell.LineChainError)
+	case row.Chain == contextfabric.SubjectSubstitutionChainMalformed && cell.LineChainError != string(contextfabric.SubjectSubstitutionChainErrorMalformedMember):
+		t.Errorf("%s: chain error = %q, want malformed_member", name, cell.LineChainError)
+	case row.Chain == contextfabric.SubjectSubstitutionChainVerified && cell.LineChainError != string(contextfabric.SubjectSubstitutionChainErrorNone):
+		t.Errorf("%s: chain error = %q on a verified chain", name, cell.LineChainError)
+	}
+	// A prompt is never an identity of its own: the only result a prompt or
+	// guard clarification may name as the parent result is the answered one.
+	if (row.Kind == contextfabric.SubjectSubstitutionParentResultPrompt || row.Kind == contextfabric.SubjectSubstitutionParentResultGuardClarification) &&
+		cell.LineParentRes != "" && cell.LineParentRes != answered {
+		t.Errorf("%s: parent result %q is neither empty nor the answered result %q", name, cell.LineParentRes, answered)
 	}
 	outcome := contextfabric.SubjectSubstitutionOutcome(cell.Guard)
 	switch {
