@@ -127,6 +127,22 @@ const (
 	// a compare-only proposal is refused exactly as before, never turned
 	// into a ranking it did not ask for. Refused on I7.
 	FrameRepairDeclinedNotRankingGoal FrameRepairDecision = "declined_not_ranking_goal"
+	// FrameRepairDeclinedNotFactAliasKind: the declared member kind is
+	// unservable, but is not in the ticket-scoped alias set this repair
+	// answers for -- no evidenced reading for any other hallucinated
+	// token. Refused on member_kind_unservable.
+	FrameRepairDeclinedNotFactAliasKind FrameRepairDecision = "declined_not_fact_alias_kind"
+	// FrameRepairDeclinedGroupKindUnservable: the group kind this repair
+	// would collapse the member axis into has no discovery arm either --
+	// the repaired frame would trade one unservable refusal for another,
+	// so the turn stays refused on the proposal's own stated shape.
+	FrameRepairDeclinedGroupKindUnservable FrameRepairDecision = "declined_group_kind_unservable"
+	// FrameRepairDeclinedGroupKindMismatch: the receipt's own GroupKind
+	// (the signal that routed this turn to grouped_cohort_status) does not
+	// equal the frame's own declared GroupKind -- the two independently
+	// sampled signals disagree, and the repair anchors to neither rather
+	// than guessing.
+	FrameRepairDeclinedGroupKindMismatch FrameRepairDecision = "declined_group_kind_mismatch"
 )
 
 var frameRepairDecisions = [...]FrameRepairDecision{
@@ -142,6 +158,9 @@ var frameRepairDecisions = [...]FrameRepairDecision{
 	FrameRepairDeclinedBoundReached,
 	FrameRepairDeclinedNotGroupedCohort,
 	FrameRepairDeclinedNotRankingGoal,
+	FrameRepairDeclinedNotFactAliasKind,
+	FrameRepairDeclinedGroupKindUnservable,
+	FrameRepairDeclinedGroupKindMismatch,
 }
 
 // FrameRepairTermsMatch is whether the named subject's terms equal the flat
@@ -178,10 +197,21 @@ const FrameRepairCompareGroupedCollapse FrameRepairName = "compare_grouped_colla
 // for discovered_kind (CHAOS-6003).
 const FrameRepairCompareRankingCollapse FrameRepairName = "compare_ranking_collapse"
 
+// FrameRepairMemberKindFactAliasCollapse collapses a grouped_members frame
+// whose declared member kind is a fact concept, not a servable entity, into
+// a flat discovered_kind cohort of the group kind (CHAOS-5992). Unlike the
+// other three repairs, it does not answer a FAILED invariant: the frame it
+// acts on already validated (I6 passed -- both kinds are real, distinct
+// SubjectKind values), and the refusal it heads off is the LATER,
+// downstream member_kind_unservable gate (DecideFrameGate), not any
+// FrameValidationFailure. See its own doc comment for the full bound.
+const FrameRepairMemberKindFactAliasCollapse FrameRepairName = "member_kind_fact_alias_collapse"
+
 var frameRepairNames = [...]FrameRepairName{
 	FrameRepairCountKindCollapse,
 	FrameRepairCompareGroupedCollapse,
 	FrameRepairCompareRankingCollapse,
+	FrameRepairMemberKindFactAliasCollapse,
 }
 
 // FrameRepairNameCount is the closed vocabulary's size.
@@ -720,6 +750,154 @@ func dropCompareGoal(goals []InvestigationGoal) []InvestigationGoal {
 	return kept
 }
 
+// memberKindFactAliasSet is the ticket-scoped alias set repairMemberKindFactAliasCollapse
+// answers for (CHAOS-5992): SubjectKind values that ARE real, closed
+// contract members -- so I6 admits them as a legal, distinct member kind --
+// but that name a FACT concept the model lifted from the question's own
+// wording ("metrics grouped per repository") rather than a second entity
+// to enumerate under the group. `metric` is the ONE proven shape a live
+// corpus trace showed; this set grows only when a NEW shape is proven,
+// never by guessing a broader mapping -- widening it casually would risk
+// collapsing a genuine two-level ask (e.g. work items per repository) that
+// happens to share no evidence with this one.
+var memberKindFactAliasSet = map[SubjectKind]bool{
+	SubjectMetric: true,
+}
+
+// repairMemberKindFactAliasCollapse collapses a grouped_members frame whose
+// declared member kind is a fact concept (memberKindFactAliasSet), not a
+// servable entity, into a flat discovered_kind cohort of the group kind
+// (CHAOS-5992). "Metrics grouped per repository" has no real second-level
+// member distinct from the group -- repository IS the fact-bearing subject,
+// and grouping it by itself is exactly what invariant I6 already forbids
+// for a DIFFERENT reason (self-group); this shape is different: group and
+// member are legally distinct SubjectKind values (repository, metric), I6
+// passes cleanly, and the frame only fails later, when discovery finds no
+// arm for `metric` (CohortMemberKindFor: member_kind_unservable).
+//
+// THE BOUND, every clause pinned by frame_repair_test.go:
+//
+//   - Only a VALID grouped_members frame. This repair does not answer a
+//     FrameValidationFailure at all (unlike its three siblings) -- it
+//     fires on a frame phase A1/A2 already accepted, heading off the
+//     LATER discoverability refusal DecideFrameGate would otherwise reach
+//     for it. A frame that failed validation for any reason (including
+//     the self-group case I6 already refuses) is untouched: this repair
+//     never runs on it.
+//   - Only when the declared member kind is unservable
+//     (CohortMemberKindForFrame reports member_kind_unservable). A member
+//     kind that already discovers fine is a genuine two-level ask (e.g.
+//     work items per repository) and is NEVER collapsed -- that would
+//     lose the member dimension the question named.
+//   - Only when the unservable member kind is in the ticket-scoped
+//     memberKindFactAliasSet. No evidenced reading exists for any other
+//     hallucinated token, and none is invented here.
+//   - Only when the group kind itself is servable (CohortMemberKindFor
+//     over the candidate discovered_kind expression reports
+//     discoverable). A repair into a frame the gate would refuse on ITS
+//     OWN basis would trade one refusal for another and hide the first.
+//   - Only SubjectExpression changes, to discovered_kind{MemberKind:
+//     group kind} -- Goals, Temporal, Dimensions, Emphasis and every
+//     other field are the proposal's own.
+//   - The repaired frame passes the SAME validation, unrelaxed --
+//     including the requested-group-axis check, which admits this ONE
+//     repaired frame only by the PROVENANCE it itself stamps
+//     (QuestionFrame.CollapsedGroupAxisMemberKind, read by
+//     requestedGroupAxisDropped in model_runtime.go), never by inferring
+//     the same conclusion from the frame's shape alone -- a direct model
+//     proposal of the identical discovered_kind shape is refused exactly
+//     as before, proven by its own control cell.
+//   - At most frameRepairBound attempts.
+//
+// CARRY: this repair changes SubjectExpression only, so -- like
+// repairCountKindCollapse's own count-kind repair, the one other repair in
+// this file that also never touches Goals -- RequestedJudgment stays the
+// zero value: the model's own free text describes what it asked for
+// ("metrics ... per repository"), a claim this repair's transform does not
+// invalidate. It never produces a children_of_scope expression, so
+// ScopeAnchorKind also stays zero, the same declaration
+// repairCompareRankingCollapse's own discovered_kind shape already carries.
+func repairMemberKindFactAliasCollapse(receipt ModelExecutionReceipt, proposed QuestionFrame, emittedShape InvestigationShape, subjectTerms []string, result FrameValidationResult) FrameValidationResult {
+	applicable := result.Outcome == FrameValidationOutcomeValid &&
+		result.Frame.SubjectExpression.Kind == SubjectExpressionGroupedMembers
+	if !applicable {
+		if result.Repair.Decision == "" {
+			result.Repair.Decision = FrameRepairNotApplicable
+		}
+		return result
+	}
+	// grouped is never nil here: `applicable` above already required
+	// Outcome == Valid with Kind == grouped_members, and invariant I1 (the
+	// exactly-one-variant-pointer check every valid frame already passed)
+	// guarantees the pointer the Kind names is the one that is set.
+	grouped := result.Frame.SubjectExpression.Grouped
+	// NOT THIS REPAIR'S CONCERN AT ALL, treated as NOT APPLICABLE (the same
+	// convention every repair in this table uses for a shape it does not
+	// own) rather than as an active decline: a member kind that already
+	// discovers fine is a genuine two-level ask (e.g. incidents grouped by
+	// repository) this repair never touches -- bound 3 of its own doc
+	// comment. Checked BEFORE `considered` exists and before any other
+	// guard runs, so an ordinary, already-serving grouped_members turn's
+	// trace is never told a repair considered and declined it; only a
+	// frame genuinely headed for a member_kind_unservable refusal reaches
+	// the decisions below.
+	_, declaredKind, reason := CohortMemberKindForFrame(result.Frame)
+	if reason != CohortMemberKindUnservable {
+		if result.Repair.Decision == "" {
+			result.Repair.Decision = FrameRepairNotApplicable
+		}
+		return result
+	}
+	considered := FrameRepair{
+		Name:       FrameRepairMemberKindFactAliasCollapse,
+		KindBefore: result.Frame.SubjectExpression.Kind,
+		Attempts:   result.Repair.Attempts,
+	}
+	declined := func(decision FrameRepairDecision) FrameValidationResult {
+		considered.Decision = decision
+		result.Repair = considered
+		return result
+	}
+	if result.Repair.Attempts >= frameRepairBound {
+		return declined(FrameRepairDeclinedBoundReached)
+	}
+	if !memberKindFactAliasSet[declaredKind] {
+		return declined(FrameRepairDeclinedNotFactAliasKind)
+	}
+	// The receipt's own GroupKind is the SAME shadow signal that already
+	// routed this turn to grouped_cohort_status (chaos4632_question_family_precedence.go);
+	// requiring it to equal the frame's own declared GroupKind anchors the
+	// collapse to that one signal rather than a second, independently
+	// sampled field the model could have stated differently. This is also
+	// exactly the equality requestedGroupAxisDropped (model_runtime.go)
+	// checks before admitting the provenance this repair stamps below --
+	// declining here gives a repair-specific decision instead of a
+	// generic refused_after_repair for the same disagreement.
+	if receipt.GroupKind == "" || receipt.GroupKind != grouped.GroupKind {
+		return declined(FrameRepairDeclinedGroupKindMismatch)
+	}
+	candidate := SubjectExpression{Kind: SubjectExpressionDiscoveredKind, Discovered: &DiscoveredSetExpression{MemberKind: grouped.GroupKind}}
+	if _, _, reason := CohortMemberKindFor(candidate); reason != CohortDiscoverable {
+		return declined(FrameRepairDeclinedGroupKindUnservable)
+	}
+	repaired := proposed
+	repaired.SubjectExpression = candidate
+	// PROVENANCE, stamped explicitly on the frame this repair itself
+	// produces -- see requestedGroupAxisDropped's own doc comment
+	// (model_runtime.go) for why this is never inferred from shape.
+	repaired.CollapsedGroupAxisMemberKind = grouped.GroupKind
+	considered.Attempts++
+	considered.KindAfter = repaired.SubjectExpression.Kind
+	considered.MemberKind = grouped.GroupKind
+	revalidated := validateAgainstInterpretation(receipt, repaired, emittedShape)
+	if revalidated.Outcome != FrameValidationOutcomeValid {
+		considered.Decision = FrameRepairRefusedAfterRepair
+		return FrameValidationResult{Outcome: revalidated.Outcome, Failure: revalidated.Failure, Repair: considered}
+	}
+	considered.Decision = FrameRepairApplied
+	return FrameValidationResult{Frame: revalidated.Frame, Outcome: FrameValidationOutcomeRepaired, Repair: considered}
+}
+
 // frameRepairFunc is one bounded repair's shape -- exactly
 // repairCountKindCollapse's own signature, so every repair in
 // frameRepairTable is invoked identically by validateProposedFrame.
@@ -735,4 +913,5 @@ var frameRepairTable = []frameRepairFunc{
 	repairCountKindCollapse,
 	repairCompareGroupedCollapse,
 	repairCompareRankingCollapse,
+	repairMemberKindFactAliasCollapse,
 }
