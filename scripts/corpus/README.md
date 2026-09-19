@@ -160,3 +160,12 @@ real `corpus.py`'s own sha256), plus the run's aggregate: `verdict_counts`,
 `family_relation_counts`, `confirmed_family_verified`, and `unscored_count` /
 `unscored_reasons`. See `semantic_verdict_bridge.py`'s own module docstring
 and `test_findings_5625.py` for the row-shape and no-drift pins.
+
+## Conversation series
+
+A corpus module may also supply `CONVERSATIONS`: authored multi-turn conversations, each turn with its own text and `expect`. It is a separate series with its own runner, merge, golden file and denominator; it never adds to or subtracts from the single-turn counts above.
+
+- `run_conversations.py <rep>` runs one replicate (turn N>1 posts `parentResultId` + `subjectHints` from turn N-1's result). Refuses a corpus with no `CONVERSATIONS`.
+- A turn with `redeem: {canonical_id}` selects that offered candidate from the previous turn. Every `clarify` turn must be followed by one: a clarification scores `agree` only when redeemed by a served answer with claimed facts for the declared subject.
+- `merge_conversations.py --in DIR --out FILE --reps 3` writes the verdict file and the report table; exits 2 on a missing rep, a missing conversation, or any `not_measured` turn.
+- `conversation_identity_check` (in `conversation.py`) adds `wrong_subject_carried` / `silent_substitution` per turn.
