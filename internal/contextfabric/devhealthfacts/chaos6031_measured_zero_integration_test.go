@@ -128,7 +128,7 @@ func TestCHAOS6031MeasuredZeroDomainAgainstRealClickHouse(t *testing.T) {
 	t.Run("a_clear_only_read_is_available_and_names_its_evidence", func(t *testing.T) {
 		const orgID = "org-6031-clear-only"
 		seedEvaluation(t, ctx, direct, orgID, "SOLO", day(-1))
-		// An older evaluation of a rule the latest one no longer carries
+		// An older evaluation of a rule the latest one does not carry
 		// must not inflate the rule count of the latest evaluation.
 		if err := direct.Exec(ctx, `INSERT INTO recommendations_daily (team_id, org_id, rule_id, window_start, window_end, fired, severity, title, rationale, success_criterion, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
 			"SOLO", orgID, "retired-rule", day(-30), day(-16), false, "warning", "t", "", "", day(-16).Add(time.Hour)); err != nil {
