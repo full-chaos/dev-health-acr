@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "acr": {
+      "url": "https://acr-mcp.dev-health.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${env:ACR_MCP_TOKEN}"
+      }
+    }
+  }
+}

@@ -113,6 +113,32 @@ the supported OS/user credential source; never copy them into a project file.
 
 `ACR_ENABLE_WRITEBACK` is optional and defaults to `false`. <!-- FIXTURE:doctor-gate-note -->Local flags grant no server authorization; the hosted API is the authority. The connected MCP client's tools/list response is the authoritative runtime tool surface. acr-mcp metadata is a static, network-free description of the default surface and does not report live registration; `doctor` diagnoses the hosted gates automatically once local configuration is valid (network-free otherwise), `doctor --offline` forces a network-free check regardless of configuration validity, and `doctor --live` is an explicit, equivalent alias for that automatic behavior.<!-- /FIXTURE:doctor-gate-note -->
 
+## Remote (hosted) server
+
+Point the client at a running hosted server (`acr-mcp serve --transport=http`) instead of launching a local process. The client sends your own ACR API token as a bearer on every request; the hosted server holds no credential of its own. Export the token in the shell that starts the client, and never write it into the file. The full contract (auth failures, tool needs, the investigate flow) is in [Remote (hosted) server](../../mcp-sidecar.md#remote-hosted-server).
+
+```json
+<!-- FIXTURE:opencode-remote-json -->
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "acr": {
+      "type": "remote",
+      "url": "https://acr-mcp.dev-health.example.com/mcp",
+      "enabled": true,
+      "headers": {
+        "Authorization": "Bearer {env:ACR_MCP_TOKEN}"
+      }
+    }
+  }
+}
+<!-- /FIXTURE:opencode-remote-json -->
+```
+
+A ready-to-copy template is `opencode-remote-config.json` in this directory.
+
+`opencode.json` shape per the [OpenCode MCP docs](https://opencode.ai/docs/mcp-servers/): `"type": "remote"`, `url`, `headers`, with `{env:NAME}` substitution. Those docs state no MCP protocol revision.
+
 ## Update, uninstall, and residue check
 
 ```bash

@@ -1,0 +1,11 @@
+# Example ACR MCP remote (hosted) server entry for Codex CLI.
+# Codex sends the value of the named environment variable as
+# "Authorization: Bearer <value>" on every request. Export the variable in the
+# shell that starts Codex; never write the token into this file. Place this
+# table in ~/.codex/config.toml (user scope) or .codex/config.toml (project
+# scope, requires trusting the project on first use).
+
+[mcp_servers.acr]
+url = "https://acr-mcp.dev-health.example.com/mcp"
+bearer_token_env_var = "ACR_MCP_TOKEN"
+enabled = true
