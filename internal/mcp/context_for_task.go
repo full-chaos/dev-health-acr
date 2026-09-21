@@ -43,6 +43,12 @@ func handleContextForTask(ctx context.Context, cfg *ProcessConfig, req *mcpsdk.C
 	if err := json.Unmarshal(rawArgs(req), &input); err != nil {
 		return toolErrorResult(&classifiedError{category: "validation", message: "context_for_task arguments are not valid JSON for the declared schema"}), nil
 	}
+	// A hosted caller that sends an empty repository object has named no
+	// repository: treat it as omitted so it gets the typed refusal that names
+	// repository.slug rather than the generic schema failure.
+	if cfg.Hosted() && input.Repository != nil && input.Repository.Slug == "" {
+		input.Repository = nil
+	}
 	if err := input.Validate(); err != nil {
 		return toolErrorResult(&classifiedError{category: "validation", message: "context_for_task arguments failed schema validation"}), nil
 	}

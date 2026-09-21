@@ -14,8 +14,9 @@ import (
 var ErrHostedRepositoryRequired = errors.New("mcp: a hosted context_for_task call requires repository.slug")
 
 // ErrHostedChangedFilesUnsupported reports a hosted context_for_task call
-// that asked for workspace-derived changed files. Only the caller can see
-// its own working tree, so the caller lists the paths itself.
+// that asked for workspace-derived changed files without listing any. Only
+// the caller can see its own working tree, so the caller lists the paths
+// itself.
 var ErrHostedChangedFilesUnsupported = errors.New("mcp: scope.include_changed_files is not available on a hosted server")
 
 const (
@@ -49,7 +50,10 @@ func resolveHostedTaskScope(req contractsv1.MCPContextForTaskRequest) (resolvedT
 		result.Scope.Files = req.Scope.Files
 		result.Scope.AsOf = req.Scope.AsOf
 		result.Scope.TimeWindowDays = req.Scope.TimeWindowDays
-		if req.Scope.IncludeChangedFiles != nil && *req.Scope.IncludeChangedFiles {
+		// Explicit files always win over changed-file discovery, as they do
+		// locally; the flag only asks for something the host cannot supply
+		// when the caller listed no files.
+		if len(req.Scope.Files) == 0 && req.Scope.IncludeChangedFiles != nil && *req.Scope.IncludeChangedFiles {
 			return resolvedTaskScope{}, hostedScopeChangedFiles, ErrHostedChangedFilesUnsupported
 		}
 	}
