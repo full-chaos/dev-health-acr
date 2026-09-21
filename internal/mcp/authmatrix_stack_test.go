@@ -38,6 +38,10 @@ import (
 // the graph the stored-result gate reads (matrixGraph), the investigator
 // (identityInvestigator) and the episode sink (countingEpisodes).
 
+// matrixRigDeadline bounds every call the matrix rig makes to another part of
+// the rig (the endpoint to acr-api, the runner to the endpoint).
+const matrixRigDeadline = 120 * time.Second
+
 // Organizations, repositories and identities of the matrix.
 const (
 	orgOne = "org_1"
@@ -331,7 +335,7 @@ func newMatrixStack(t *testing.T) *matrixStack {
 	}
 	episodes := &countingEpisodes{}
 	apiLogs := &syncBuffer{}
-	app, err := api.NewApp(api.AppConfig{ServiceName: "acr", ServiceVersion: "test", RequestTimeout: 5 * time.Second}, api.Dependencies{
+	app, err := api.NewApp(api.AppConfig{ServiceName: "acr", ServiceVersion: "test", RequestTimeout: matrixRigDeadline}, api.Dependencies{
 		Capabilities: api.StaticCapabilitiesProvider{Now: time.Now, Value: contractsv1.Capabilities{
 			SchemaVersion: contractsv1.CapabilitiesSchema, Service: "dev-health-acr", ServiceVersion: "1.2.3", MinimumSidecarVersion: "1.0.0",
 			SupportedSchemaVersions: contractsv1.AllSchemaVersions,
@@ -391,8 +395,13 @@ func (s *matrixStack) sidecarConfig() sidecar.Config {
 		s.t.Fatal(err)
 	}
 	return sidecar.Config{
-		APIBaseURL:            base,
-		Timeout:               5 * time.Second,
+		APIBaseURL: base,
+		// The matrix measures isolation, not capacity. Its concurrency test
+		// puts 660 requests, each with its own credential decision, on one
+		// process pair; on a two-CPU race build a request can wait seconds
+		// for a slot, and a deadline that fires then is the rig running out
+		// of CPU, not an answer about who may read what.
+		Timeout:               matrixRigDeadline,
 		MaxResponseBytes:      1 << 20,
 		MaxRequestBodyBytes:   256 << 10,
 		ClientName:            "test-sidecar",

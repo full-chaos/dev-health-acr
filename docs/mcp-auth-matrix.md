@@ -7,7 +7,7 @@ One table of rows (`internal/mcp/authmatrix_test.go`, `matrixRows`) is executed 
 | Where | Test | Target | Extra evidence per row |
 | --- | --- | --- | --- |
 | CI | `TestAuthMatrixInProcess` | `acr-mcp` HTTP handler in front of a real in-process acr-api (`api.NewApp`: real `Authenticator`, stored-result route and live-grant gate, evidence store, context-packet assembler) | the SDK handler never ran for a refused request, which stores were consulted, the acr-api calls it made, one request line and one stored-result decision line per row |
-| CI | `TestAuthMatrixConcurrentCallersNeverBleedIdentity` | same | 60 parallel callers each for A, B and H, interleaved: every answer belongs to its own bearer, every bearer maps to one `principal_ref`, no two bearers share one, acr-api decided each stored-result read on the caller's own organization |
+| CI | `TestAuthMatrixConcurrentCallersNeverBleedIdentity` | same | 50 parallel callers each for A, B and H, interleaved: every answer belongs to its own bearer, every bearer maps to one `principal_ref`, no two bearers share one, acr-api decided each stored-result read on the caller's own organization |
 | CI | `TestAuthMatrixLiveRunnerAgainstAnInProcessEndpoint`, `TestAuthMatrixLiveThroughTheRealTestBinary` | the same in-process endpoint, configured only through the environment variables below, the second one through a child of the real test binary (correct deployment passes, nothing configured skips loudly, `REQUIRE_LIVE` and a partial configuration fail, a deployment that leaks the owner's data to another organization fails) | wire only (proves the live runner) |
 | A deployment | `TestAuthMatrixLive` | the endpoint named by `ACR_MCP_MATRIX_URL` | wire only |
 

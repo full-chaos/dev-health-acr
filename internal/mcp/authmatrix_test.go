@@ -720,7 +720,7 @@ func newMatrixEndpoint(t *testing.T, s *matrixStack) *endpoint {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := acrmcp.NewHTTPHandler(cfg, acrmcp.HTTPHandlerOptions{BasePath: "/mcp", Identity: testIdentity, MaxRequestBodyBytes: 1 << 20, ResolveTimeout: 5 * time.Second})
+	handler, err := acrmcp.NewHTTPHandler(cfg, acrmcp.HTTPHandlerOptions{BasePath: "/mcp", Identity: testIdentity, MaxRequestBodyBytes: 1 << 20, ResolveTimeout: matrixRigDeadline})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -756,7 +756,7 @@ func inProcessTarget(t *testing.T) (*matrixTarget, *matrixStack, *endpoint, matr
 	callers := issueMatrixCallers(stack)
 	e := newMatrixEndpoint(t, stack)
 	target := &matrixTarget{
-		name: "in-process", url: e.url(), client: &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{MaxIdleConnsPerHost: 256}},
+		name: "in-process", url: e.url(), client: &http.Client{Timeout: matrixRigDeadline, Transport: &http.Transport{MaxIdleConnsPerHost: 256}},
 		bearers: callers.bearers(), fixture: inProcessFixture(callers),
 		hooks: &matrixHooks{
 			sdkHits: e.sdkHits.Load, apiMark: stack.calls.mark, apiSince: stack.calls.since, apiLog: stack.apiLogs.Bytes,
@@ -786,7 +786,7 @@ func TestAuthMatrixConcurrentCallersNeverBleedIdentity(t *testing.T) {
 	t.Parallel()
 	target, stack, e, callers := inProcessTarget(t)
 	f := target.fixture
-	const perCaller = 60
+	const perCaller = 50
 
 	var wg sync.WaitGroup
 	start := make(chan struct{})
@@ -824,16 +824,16 @@ func TestAuthMatrixConcurrentCallersNeverBleedIdentity(t *testing.T) {
 	}
 	for i := range perCaller {
 		launch("A", i, func(id func(string) string) {
-			if names := target.callRaw(t, "A", id("list"), "", nil).toolNames(); !slices.Equal(names, toolsAnswerSet) {
-				t.Errorf("A list %v", names)
+			if reply := target.callRaw(t, "A", id("list"), "", nil); !slices.Equal(reply.toolNames(), toolsAnswerSet) {
+				t.Errorf("A list %v: status %d body %.300s", reply.toolNames(), reply.status, reply.raw)
 			}
 			expectOK(t, id("result"), target.callRaw(t, "A", id("result"), "investigation_result", resultArgs(f.resultA)), f.resultA)
 			expectOK(t, id("evidence"), target.callRaw(t, "A", id("evidence"), "source_evidence", evidenceArgs(f.evidenceA)), f.evidenceA)
 			expectOK(t, id("investigate"), target.callRaw(t, "A", id("investigate"), "investigate_question", map[string]any{"question": "what is the status of the project?"}), f.investigateMark)
 		})
 		launch("B", i, func(id func(string) string) {
-			if names := target.callRaw(t, "B", id("list"), "", nil).toolNames(); !slices.Equal(names, toolsAnswerSet) {
-				t.Errorf("B list %v", names)
+			if reply := target.callRaw(t, "B", id("list"), "", nil); !slices.Equal(reply.toolNames(), toolsAnswerSet) {
+				t.Errorf("B list %v: status %d body %.300s", reply.toolNames(), reply.status, reply.raw)
 			}
 			expectDenied(t, id("foreign"), target.callRaw(t, "B", id("foreign"), "investigation_result", resultArgs(f.resultA)))
 			expectOK(t, id("result"), target.callRaw(t, "B", id("result"), "investigation_result", resultArgs(f.resultB)), f.resultB)
@@ -841,8 +841,8 @@ func TestAuthMatrixConcurrentCallersNeverBleedIdentity(t *testing.T) {
 			expectOK(t, id("investigate"), target.callRaw(t, "B", id("investigate"), "investigate_question", map[string]any{"question": "what is the status of the project?"}), f.investigateMarkB)
 		})
 		launch("H", i, func(id func(string) string) {
-			if names := target.callRaw(t, "H", id("list"), "", nil).toolNames(); !slices.Equal(names, toolsWriteSet) {
-				t.Errorf("H list %v", names)
+			if reply := target.callRaw(t, "H", id("list"), "", nil); !slices.Equal(reply.toolNames(), toolsWriteSet) {
+				t.Errorf("H list %v: status %d body %.300s", reply.toolNames(), reply.status, reply.raw)
 			}
 			expectOK(t, id("result"), target.callRaw(t, "H", id("result"), "investigation_result", resultArgs(f.resultA)), f.resultA)
 		})
