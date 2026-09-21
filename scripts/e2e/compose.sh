@@ -372,18 +372,54 @@ ops_clickhouse_database() { printf 'acr_%s_e2e' "${PROJECT//-/}"; }
 clickhouse_query() { compose exec -T clickhouse clickhouse-client --user default --password ch --query "$1"; }
 
 # seed_go_api_routing writes the go_api_routing_state rows that make the Go-owned GraphQL
-# operations reachable, through ops' own committed writer (`dev-hops go-api routing enable`),
-# never hand-written SQL. Without them the ops `api` answers a Go-owned operation (catalog,
-# which the web Repository select needs) with GoServedOperationUnavailableError. enable's first
-# preflight is "is query-api reachable", so this loop doubles as the query-api readiness wait;
-# it refuses (exit 2, nothing written) on any doubt, including a schema-digest mismatch between
-# the two planes. --acknowledge-unproven: a fresh per-run stack has no deployed_executed proof
-# run for this build, which is exactly the case the flag names.
+# operations reachable, through ops' own committed row writer (enable_operation in
+# dev_health_ops.api.graphql.go_api_routing_admin), never hand-written SQL. Without them the ops
+# `api` answers a Go-owned operation (catalog, which the web Repository select needs) with
+# GoServedOperationUnavailableError.
+#
+# It does NOT call `dev-hops go-api routing enable`. Since ops CHAOS-6154 (ops PR #2806) that verb
+# admits an operation only from a recorded deployed_executed proof run for the build or a written
+# ledger limit, with no flag that can add one, and a fresh per-run stack has neither. Ops CI meets
+# the same situation in ci/lib/go_api_prove_e2e.sh (GO_API_PROVE_E2E_ROUTING_PROGRAM) and writes
+# the fixture row directly; this follows that precedent, in primary mode. The program keeps the
+# preflights that still matter here: the running query-api's /registry must answer (this loop is
+# also the query-api readiness wait), and its schema digest must equal this checkout's, because
+# rows are keyed by it and a mismatch makes them unreachable. Digests come from /registry.
+SEED_GO_API_ROUTING_PROGRAM='import asyncio, json, os, sys, urllib.request
+from dev_health_ops.api.graphql.go_api_routing_admin import enable_operation
+from dev_health_ops.api.graphql.go_api_schema_digest import current_schema_digest
+from dev_health_ops.db import get_postgres_session
+
+build = sys.argv[1]
+with urllib.request.urlopen(os.environ["GO_API_QUERY_API_URL"].rstrip("/") + "/registry", timeout=10) as resp:
+    registry = json.loads(resp.read().decode("utf-8"))
+local = current_schema_digest()
+if registry["schema_digest"] != local:
+    sys.exit("schema digest mismatch: python edge %s, query-api %s" % (local, registry["schema_digest"]))
+operations = {e["operation"]: e["document_digest"] for e in registry["operations"]}
+if not operations:
+    sys.exit("query-api registers no operations")
+
+async def main():
+    async with get_postgres_session() as session:
+        for operation, document_digest in sorted(operations.items()):
+            await enable_operation(
+                session, schema_digest=local, document_digest=document_digest,
+                selected_operation=operation, candidate_build=build, mode="primary",
+                rollout_percentage=100,
+                review_evidence="isolated compose E2E fixture row: per-run stack, no deployed proof run",
+                recorded_by="acr-compose-e2e",
+            )
+        await session.commit()
+    print("seeded %d go_api_routing_state rows in primary mode at schema_digest=%s" % (len(operations), local))
+
+asyncio.run(main())
+'
 seed_go_api_routing() {
   local build attempts=0 output
   build="$(git -C "$STATE/stage/ops" rev-parse HEAD 2>/dev/null || true)"
   [[ -n "$build" ]] || build='acr-e2e-local'
-  until output="$(compose exec -T api dev-hops go-api routing enable --operations all-registered --candidate-build "$build" --mode primary --acknowledge-unproven --review-evidence 'isolated compose E2E: per-run stack, no deployed proof run' 2>&1)"; do
+  until output="$(compose exec -T api python -c "$SEED_GO_API_ROUTING_PROGRAM" "$build" 2>&1)"; do
     attempts=$((attempts + 1))
     if [[ "$attempts" -ge 30 ]]; then
       printf '%s\n' "$output" | redact_log >&2
