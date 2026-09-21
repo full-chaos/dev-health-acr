@@ -1196,8 +1196,10 @@ bash scripts/docs/clean-room.sh --mode kustomize --cluster "$ACR_KUSTOMIZE_CLUST
 
 The Kustomize apply helper runs `acr-migrate` before it applies the API
 Deployment. It references existing runtime, migration, entitlement, CA, and
-registry-pull Secrets. It does not create a database, Gateway, Gateway
-controller, or MCP workload.
+registry-pull Secrets. It does not create a database, Gateway, or Gateway
+controller, and the plain overlays render no MCP workload; the hosted
+`acr-mcp` is the opt-in `components/acr-mcp` Component described in
+`deploy/README.md`.
 
 ## Migrations, upgrades, and rollback
 

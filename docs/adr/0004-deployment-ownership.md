@@ -67,14 +67,21 @@ reference before rendering. Images are built only from `dev-health-acr`
 ([ADR-0001](0001-go-service-boundary.md)) and never built by, or reside in,
 `dev-health-ops`.
 
-## No MCP workload
+## The MCP server as a workload
 
-`acr-mcp` is a local STDIO binary invoked by the operator or agent host
-([`docs/prd-v2.1.md`](../prd-v2.1.md), Section 2). No deployment surface —
-Helm chart, raw Kubernetes manifest, or Compose overlay — instantiates it as
-a `Service`, `Deployment`, container, or long-running process. Template
-guards in each surface reject any manifest that would run `acr-mcp` as a
-workload.
+`acr-mcp` is a local STDIO binary by default, invoked by the operator or agent
+host ([`docs/prd-v2.1.md`](../prd-v2.1.md), Section 2). Its hosted mode is the
+stateless Streamable HTTP transport.
+
+- Hosted `acr-mcp` is Kubernetes only: Helm (`acrMcp.enabled`, off by default)
+  or the Kustomize Component.
+- There is no Compose service for it.
+- It is always its own workload from its own image, never a sidecar or extra
+  container of `acr-api`; template guards reject any `extraContainers` entry
+  that would run it beside `acr-api`.
+- The hosted workload holds no credential of its own: it forwards each caller's
+  own ACR API bearer to `acr-api`, so `acr-api` stays the only place
+  credentials are decided.
 
 ## Superseded paths
 

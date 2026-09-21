@@ -110,7 +110,10 @@ require_adr_literal() {
 require_adr_regex 'external.*(postgres|clickhouse)' "external Postgres/ClickHouse/Ops dependency declaration"
 require_adr_regex 'existing-secret-only|existing secret' "existing-Secret-only credential contract"
 require_adr_regex 'immutable' "immutable private image requirement"
-require_adr_regex 'no mcp|mcp is not deployed|acr-mcp is a local' "no-MCP-workload boundary"
+require_adr_regex 'kubernetes only' "hosted MCP is Kubernetes-only"
+require_adr_regex 'no compose service' "hosted MCP has no Compose service"
+require_adr_regex 'never a sidecar' "hosted MCP is never a sidecar of acr-api"
+require_adr_regex 'holds no credential' "hosted MCP holds no credential"
 require_adr_regex 'supersede' "superseded Ops-owned packaging paths"
 require_adr_literal 'Todos 9-11' "reference to superseded deployment plan Todos 9-11"
 

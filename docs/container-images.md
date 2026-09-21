@@ -38,6 +38,13 @@ sidecar's own read-only workspace-discovery command, the same code path
 `context_for_task` uses) against a real mounted fixture repository, not only
 a direct `git` invocation, and asserts the reported commit SHA matches.
 
+The same image also serves the hosted transport: `acr-mcp serve` with
+`ACR_MCP_TRANSPORT=http` (listening on `:8081`, `EXPOSE`d) runs the stateless
+Streamable HTTP server the Kubernetes deployments use. STDIO stays the default,
+the image holds no credential in either mode, and the runtime gate runs
+`doctor --offline` with the HTTP environment to prove the mode is selected by
+environment alone.
+
 ## Immutable inputs
 
 Every executable build input is tag plus immutable OCI index digest (or a

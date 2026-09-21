@@ -12,7 +12,32 @@ script-driven overlay path.
 | `acr-db-acl` (runtime ACL grants) | **not covered -- documented gap** (see below) | not covered |
 | `acr-projector` | `templates/projector-deployment.yaml` (values-gated) | **not covered -- documented gap** (see below) |
 | `falkordb` (profile-gated) | `templates/falkordb-statefulset.yaml` + service (values-gated, CHAOS-4055) | not covered (use helm) |
+| `acr-mcp` (hosted Streamable HTTP; **no compose service, Kubernetes only**) | `templates/acr-mcp-*.yaml` (`acrMcp.enabled`, off by default) | `components/acr-mcp` + `overlays/development-mcp` (opt-in Component) |
 | `postgres` / `clickhouse` (root compose) | external by contract (ADR-0004) | external by contract |
+
+## Hosted acr-mcp (Kubernetes only)
+
+`acr-mcp` runs as its own stateless workload from its own image (the
+`acr-mcp` Dockerfile target, published multi-arch `linux/amd64` +
+`linux/arm64` by the release workflow). It is selected with `serve` plus
+`ACR_MCP_TRANSPORT=http`; STDIO stays the image default. It has **no compose
+service** and is never injected beside `acr-api` (`deployment.extraContainers`
+still fails closed naming `injected-mcp`).
+
+The pod holds **no credential**: no Secret is referenced or mounted, no
+ServiceAccount token is mounted, and `ACR_API_TOKEN` is never set. Each request
+carries the caller's own ACR API bearer, which `acr-mcp` decides against and
+forwards to `acr-api`; there is no service-to-service credential.
+
+- Helm: set `acrMcp.enabled=true` and `acrMcp.image.reference` (an
+  `@sha256` digest of the `acr-mcp` image). `acrMcp.apiUrl` defaults to the
+  release's own `acr-api` Service. `acrMcp.gateway.*` adds an HTTPRoute for a
+  caller-supplied Gateway that routes only `acrMcp.basePath` (`/mcp`). The
+  workload ships a default-deny NetworkPolicy and admits itself on `acr-api`'s.
+- Kustomize: an overlay lists `components: [../../components/acr-mcp]` and adds
+  its own HTTPRoute; `overlays/development-mcp` is the reference composition.
+  Plain `development`, `staging` and `production` never render it.
+- Probes: `/healthz` (liveness), `/readyz` (readiness, requires `acr-api` live).
 
 ## Documented gaps (deliberate, not oversights)
 
