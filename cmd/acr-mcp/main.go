@@ -174,7 +174,17 @@ func runDoctor() doctorReport {
 		checks = append(checks, diagnostic{Name: "api_url", Status: "ok", Detail: "ACR_API_URL is configured and valid"})
 	}
 
-	credential, credentialErr := sidecar.LoadCredential()
+	// The hosted transport reads no process credential -- every hosted call
+	// carries the calling client's own bearer -- so doctor does not read one
+	// either: an inherited token, well formed or not, says nothing about a
+	// hosted process's configuration.
+	var credential sidecar.CredentialResult
+	var credentialErr error
+	if hosted {
+		credentialErr = sidecar.ErrCredentialMissing
+	} else {
+		credential, credentialErr = sidecar.LoadCredential()
+	}
 	// A credential that failed LoadCredential's own shape check is still
 	// "set" from the operator's point of view -- they configured something,
 	// it is just malformed. Lifecycle contention and every other operational
@@ -191,7 +201,7 @@ func runDoctor() doctorReport {
 	credentialShapeValid := credentialErr == nil && auth.IsTokenShapeValid(credential.Token)
 	switch {
 	case hosted && credentialMissing:
-		checks = append(checks, diagnostic{Name: "credential", Status: "ok", Detail: "no process credential is needed: the hosted transport forwards each caller's own bearer"})
+		checks = append(checks, diagnostic{Name: "credential", Status: "ok", Detail: "no process credential is read: the hosted transport forwards each caller's own bearer"})
 	case credentialMissing:
 		checks = append(checks, diagnostic{Name: "credential", Status: "warning", Detail: "ACR API credential is not configured"})
 	case credentialShapeInvalid:

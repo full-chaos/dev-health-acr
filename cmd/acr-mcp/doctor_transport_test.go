@@ -191,3 +191,31 @@ func TestParseServeArgs(t *testing.T) {
 		t.Fatalf("defaults: %#v %v", opts, err)
 	}
 }
+
+// The hosted transport reads no process credential, so doctor must not read
+// one either: every shape of an inherited ACR_API_TOKEN (absent, malformed,
+// well formed) leaves the hosted report ok and credential-free.
+func TestDoctorForTheHTTPTransportReadsNoProcessCredential(t *testing.T) {
+	cells := map[string]string{
+		"absent":      "",
+		"malformed":   "fcacr_x",
+		"not_acr":     "dh_live_0123456789abcdef",
+		"well_formed": "fcacr_" + strings.Repeat("A", 43),
+	}
+	for name, token := range cells {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(sidecar.APIURLEnvironment, "https://acr.example.test")
+			t.Setenv(sidecar.TokenEnvironment, token)
+			t.Setenv(sidecar.TokenFileEnvironment, t.TempDir()+"/missing-token")
+			t.Setenv(acrmcp.TransportEnvironment, "http")
+			report := runDoctor()
+			check := doctorCheck(t, report, "credential")
+			if report.Status != "ok" || check.Status != "ok" || report.CredentialSet || report.CredentialShapeValid || report.CredentialSource != "" {
+				t.Fatalf("report status %q credential %#v set=%v shape=%v source=%q", report.Status, check, report.CredentialSet, report.CredentialShapeValid, report.CredentialSource)
+			}
+		})
+	}
+	if len(cells) != 4 {
+		t.Fatalf("%d cells, want 4", len(cells))
+	}
+}
