@@ -26,12 +26,12 @@ When the question implies a time window that ACR inferred, the answer carries `w
 ## Conversation context
 
 - `parent_result_id`: the `result_id` of the answer this turn follows. It seeds carry-over only. It never binds that answer's subjects into this turn.
-- `conversation`: earlier turns, if you want them considered.
+- `conversation`: prior turns, if you want them considered.
 - ACR keeps no session. Send the receipts and ids you need on every call.
 
 ## Fetch a stored result
 
-`investigation_result` takes one `result_id` and returns the full canonical result of an earlier answer, when the bounded answer left out detail you need. Authorization is checked live on every call. A result you may not read looks the same as a result that does not exist. How long a `result_id` stays fetchable is unspecified. Do not depend on it.
+`investigation_result` takes one `result_id` and returns the full canonical result of a prior answer, when the bounded answer left out detail you need. Authorization is checked live on every call. A result you may not read looks the same as a result that does not exist. How long a `result_id` stays fetchable is unspecified. Do not depend on it.
 
 ## Expand evidence
 

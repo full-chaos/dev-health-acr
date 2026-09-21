@@ -53,11 +53,11 @@ func buildConversation() string {
 
 	b.WriteString("## Conversation context\n\n")
 	b.WriteString("- `parent_result_id`: the `result_id` of the answer this turn follows. It seeds carry-over only. It never binds that answer's subjects into this turn.\n")
-	b.WriteString("- `conversation`: earlier turns, if you want them considered.\n")
+	b.WriteString("- `conversation`: prior turns, if you want them considered.\n")
 	b.WriteString("- ACR keeps no session. Send the receipts and ids you need on every call.\n\n")
 
 	b.WriteString("## Fetch a stored result\n\n")
-	b.WriteString("`investigation_result` takes one `result_id` and returns the full canonical result of an earlier answer, ")
+	b.WriteString("`investigation_result` takes one `result_id` and returns the full canonical result of a prior answer, ")
 	b.WriteString("when the bounded answer left out detail you need. Authorization is checked live on every call. ")
 	b.WriteString("A result you may not read looks the same as a result that does not exist. ")
 	b.WriteString("How long a `result_id` stays fetchable is unspecified. Do not depend on it.\n\n")
