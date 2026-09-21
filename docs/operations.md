@@ -19,12 +19,13 @@ neither ACR nor its sidecar fetches them.
 | Engineering evidence and product entitlement | Dev Health Ops; ClickHouse is read-only to ACR |
 | ACR credentials, packets, audits, and migrations | Private ACR hosted deployment and ACR PostgreSQL |
 | Human inspection | `dev-health-web` |
-| Agent integration | A locally installed `acr-mcp` process over STDIO |
+| Agent integration | A locally installed `acr-mcp` process over STDIO, or the opt-in hosted `acr-mcp` (stateless Streamable HTTP, Kubernetes only) |
 | External fact ingestion | External Push; not the ACR API |
 
 The deployment artifacts require caller-provided PostgreSQL, ClickHouse,
 entitlement, Gateway, and Secrets. They do not provision those dependencies,
-and no supported deployment runs `acr-mcp` in a container or Kubernetes Pod.
+and `acr-mcp` runs on Kubernetes only as the opt-in hosted workload described in
+`deploy/README.md`; there is no Compose service for it.
 
 ## Developer getting started
 
@@ -1196,8 +1197,10 @@ bash scripts/docs/clean-room.sh --mode kustomize --cluster "$ACR_KUSTOMIZE_CLUST
 
 The Kustomize apply helper runs `acr-migrate` before it applies the API
 Deployment. It references existing runtime, migration, entitlement, CA, and
-registry-pull Secrets. It does not create a database, Gateway, Gateway
-controller, or MCP workload.
+registry-pull Secrets. It does not create a database, Gateway, or Gateway
+controller, and the plain overlays render no MCP workload; the hosted
+`acr-mcp` is the opt-in `components/acr-mcp` Component described in
+`deploy/README.md`.
 
 ## Migrations, upgrades, and rollback
 

@@ -2,7 +2,8 @@
 
 `Dockerfile` has exactly two production targets: `acr-api` (plus the separate
 `acr-migrate` and `acr-projector` commands) and `acr-mcp`, a local STDIO
-sidecar—not a daemon or a Compose/Kubernetes service.
+sidecar by default that also serves the hosted Streamable HTTP transport on
+Kubernetes (never a Compose service).
 
 All binaries are static cross-builds (`CGO_ENABLED=0`, `-trimpath`, cleared
 Go build ID, `-buildvcs=false`, `SOURCE_DATE_EPOCH`) carrying the actual clean
@@ -37,6 +38,13 @@ refusal; verification exercises `acr-mcp workspace --path /workspace` (the
 sidecar's own read-only workspace-discovery command, the same code path
 `context_for_task` uses) against a real mounted fixture repository, not only
 a direct `git` invocation, and asserts the reported commit SHA matches.
+
+The same image also serves the hosted transport: `acr-mcp serve` with
+`ACR_MCP_TRANSPORT=http` (listening on `:8081`, `EXPOSE`d) runs the stateless
+Streamable HTTP server the Kubernetes deployments use. STDIO stays the default,
+the image holds no credential in either mode, and the runtime gate runs
+`doctor --offline` with the HTTP environment to prove the mode is selected by
+environment alone.
 
 ## Immutable inputs
 

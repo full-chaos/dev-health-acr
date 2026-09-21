@@ -1,0 +1,12 @@
+# The development overlay plus the hosted acr-mcp workload and its route.
+# `patches:` stays the LAST key: scripts/lib.sh render_manifest appends the
+# acr-api/acr-migrate image patches beneath it.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: acr-development
+resources:
+  - ../development
+  - httproute.yaml
+components:
+  - ../../components/acr-mcp
+patches:

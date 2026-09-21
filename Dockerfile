@@ -104,7 +104,7 @@ ARG COMMIT=unknown
 ARG BUILD_DATE=1970-01-01T00:00:00Z
 
 LABEL org.opencontainers.image.title="ACR MCP" \
-      org.opencontainers.image.description="Dev Health Agent Context Runtime local STDIO sidecar" \
+      org.opencontainers.image.description="Dev Health Agent Context Runtime MCP server: local STDIO sidecar, or hosted stateless Streamable HTTP with ACR_MCP_TRANSPORT=http" \
       org.opencontainers.image.source="https://github.com/full-chaos/dev-health-acr" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${COMMIT}" \
@@ -113,5 +113,9 @@ LABEL org.opencontainers.image.title="ACR MCP" \
 COPY --from=acr-mcp-root /mcp-root/ /
 COPY --from=build /out-mcp-root/ /
 
+# The default remains the local STDIO sidecar. A hosted deployment selects the
+# stateless Streamable HTTP transport with `serve` plus ACR_MCP_TRANSPORT=http
+# (default listen :8081); the image holds no credential in either mode.
 USER 65532:65532
+EXPOSE 8081
 ENTRYPOINT ["/usr/local/bin/acr-mcp"]

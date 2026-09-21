@@ -40,7 +40,9 @@ Usage: test-helm.sh --values <path> [--image <ref>] [--chart <path>] [--scenario
               pgbouncer-missing-pooler, extra-container, direct-with-pooler,
               unsupported-entitlement-scheme, userinfo-url, query-url, fragment-url, unknown-root-key,
               unknown-config-key, alternate-port, mutable-token-copy-image,
-              missing-device-verification-url, invalid-device-verification-url.
+              missing-device-verification-url, invalid-device-verification-url,
+              acr-mcp-mutable-image, acr-mcp-missing-image, acr-mcp-api-url,
+              acr-mcp-base-path, acr-mcp-gateway-no-parent.
 
 The harness only renders (helm template/lint) and validates output offline.
 EOF
@@ -213,6 +215,40 @@ case "$scenario" in
       --set "config.requireBackingStores=true" \
       --set-string "config.deviceVerificationUrl=/acr/device"
     exit 0 ;;
+  acr-mcp-mutable-image)
+    # Production-shaped inputs so the digest rule (not the development tag
+    # allowance) is what rejects the mutable tag.
+    negative acr-mcp-mutable-image "mutable-image: acrMcp.image.reference" \
+      --set-string config.environment=production \
+      --set config.requireBackingStores=true \
+      --set config.localCompositionReady=false \
+      --set-string config.entitlement.url=https://ops.dev-health.internal \
+      --set-string credentials.entitlementToken.existingSecret=acr-entitlement-token \
+      --set acrMcp.enabled=true \
+      --set-string "acrMcp.image.reference=registry.internal/dev-health-acr/acr-mcp:latest"
+    exit 0 ;;
+  acr-mcp-missing-image)
+    negative acr-mcp-missing-image "mutable-image: acrMcp.image.reference is required" \
+      --set acrMcp.enabled=true
+    exit 0 ;;
+  acr-mcp-api-url)
+    negative acr-mcp-api-url "acr-mcp-api-url" \
+      --set acrMcp.enabled=true \
+      --set-string "acrMcp.image.reference=${image}" \
+      --set-string "acrMcp.apiUrl=https://acr.internal/api/v1"
+    exit 0 ;;
+  acr-mcp-base-path)
+    negative acr-mcp-base-path "acr-mcp-base-path" \
+      --set acrMcp.enabled=true \
+      --set-string "acrMcp.image.reference=${image}" \
+      --set-string "acrMcp.basePath=/healthz"
+    exit 0 ;;
+  acr-mcp-gateway-no-parent)
+    negative acr-mcp-gateway-no-parent "acr-mcp-gateway" \
+      --set acrMcp.enabled=true \
+      --set acrMcp.gateway.enabled=true \
+      --set-string "acrMcp.image.reference=${image}"
+    exit 0 ;;
   happy) : ;;
   *) printf 'unknown scenario: %s\n' "$scenario" >&2; usage; exit 2 ;;
 esac
@@ -261,12 +297,13 @@ if grep -E '^\s*image:' "$rendered" | grep -vq '@sha256:'; then
 fi
 pass "immutable-image: all rendered images pinned to @sha256"
 
-# Gate 6: no-MCP workload anywhere in the render.
+# Gate 6: acr-mcp is opt-in. A render that leaves acrMcp.enabled at its default
+# must not reference acr-mcp anywhere; the enabled render is asserted below.
 if grep -q 'acr-mcp' "$rendered"; then
   grep -n 'acr-mcp' "$rendered" >&2 || true
-  fail_gate "no-mcp: rendered output references acr-mcp"
+  fail_gate "mcp-default-off: rendered output references acr-mcp although acrMcp.enabled is not set"
 fi
-pass "no-mcp: rendered output contains no acr-mcp workload"
+pass "mcp-default-off: default render contains no acr-mcp workload"
 
 # Gate 7: existing-Secret-only credential + imagePullSecret reference syntax.
 grep -q 'secretKeyRef:' "$rendered" || fail_gate "secret-ref: no secretKeyRef found (credentials must come from existing Secrets)"
@@ -641,5 +678,86 @@ set -e
 grep -qF 'mutable-image: contextFabric.falkordb.image' <<<"$falkordb_mutable" \
   || fail_gate "falkordb-workload: mutable falkordb image failure did not name the violation"
 pass "falkordb-workload: mutable falkordb image reference fails closed naming the violation"
+
+# Gate 13: hosted acr-mcp workload. Enabled, it is its own Deployment from its
+# own digest-pinned image, restricted, probed on /healthz and /readyz, and holds
+# NO credential: no Secret mounted or read into its environment, no mounted
+# token, no ACR_API_TOKEN, no service-account secrets. The only Secret
+# reference it may carry is the chart-wide imagePullSecrets (registry auth). acr-api gains ingress from it and nothing else changes.
+mcp_image="registry.example/acr-mcp@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+mcp_render="$(render \
+  --set acrMcp.enabled=true \
+  --set-string "acrMcp.image.reference=${mcp_image}" \
+  --set acrMcp.gateway.enabled=true \
+  --set-json 'acrMcp.gateway.httpRoute.parentRefs=[{"name":"acr-gateway","namespace":"gateway-system","sectionName":"https"}]' \
+  --set-json 'acrMcp.gateway.httpRoute.hostnames=["mcp.dev-health.internal"]')"
+# Select by resource NAME: the acr-api NetworkPolicy also carries a `component: mcp`
+# label (its ingress from the acr-mcp pods), so a label match alone is ambiguous.
+extract_mcp_doc() { extract_doc "$1" '  name: [^\n]*-mcp(-config)?\n' <<<"$mcp_render"; }
+
+mcp_deploy="$(extract_mcp_doc Deployment)"
+[[ -n "$mcp_deploy" ]] || fail_gate "acr-mcp: enabled render is missing the acr-mcp Deployment"
+grep -qF "image: \"${mcp_image}\"" <<<"$mcp_deploy" || fail_gate "acr-mcp: Deployment does not run acrMcp.image.reference"
+grep -qF 'args: ["serve"]' <<<"$mcp_deploy" || fail_gate "acr-mcp: Deployment must run the serve command"
+grep -qE '^\s+path: /healthz\s*$' <<<"$mcp_deploy" || fail_gate "acr-mcp: liveness probe must use /healthz"
+grep -qE '^\s+path: /readyz\s*$' <<<"$mcp_deploy" || fail_gate "acr-mcp: readiness probe must use /readyz"
+grep -qE '^\s+containerPort: 8081\s*$' <<<"$mcp_deploy" || fail_gate "acr-mcp: container must listen on 8081"
+grep -qF 'automountServiceAccountToken: false' <<<"$mcp_deploy" || fail_gate "acr-mcp: pod must not mount a service-account token"
+if grep -qE 'secretKeyRef|secretName|secretRef|projected:|ACR_API_TOKEN|serviceAccountToken' <<<"$mcp_deploy"; then
+  fail_gate "acr-mcp: Deployment mounts a Secret, projected token, or ACR_API_TOKEN; the pod must hold no credential"
+fi
+# The only Secret name the pod may reference is one of the chart's imagePullSecrets.
+mcp_pull_names="$(awk '/^      imagePullSecrets:/{f=1;next} f&&/^        - name: /{print $3;next} f{f=0}' <<<"$mcp_deploy")"
+chart_pull_names="$(awk '/^      imagePullSecrets:/{f=1;next} f&&/^        - name: /{print $3;next} f{f=0}' <<<"$(extract_doc Deployment 'component: api' <<<"$mcp_render")")"
+[[ "$mcp_pull_names" == "$chart_pull_names" ]] || fail_gate "acr-mcp: pod imagePullSecrets ($mcp_pull_names) must equal the chart-wide list ($chart_pull_names) and nothing else"
+assert_restricted_container acr-mcp <(printf '%s\n' "$mcp_deploy")
+mcp_sa="$(extract_mcp_doc ServiceAccount)"
+[[ -n "$mcp_sa" ]] || fail_gate "acr-mcp: enabled render is missing the acr-mcp ServiceAccount"
+grep -qF 'automountServiceAccountToken: false' <<<"$mcp_sa" || fail_gate "acr-mcp: ServiceAccount must not automount a token"
+if grep -qE '^(secrets|imagePullSecrets):' <<<"$mcp_sa"; then fail_gate "acr-mcp: ServiceAccount must carry no secrets"; fi
+mcp_cm="$(extract_mcp_doc ConfigMap)"
+for token in 'ACR_MCP_TRANSPORT: "http"' 'ACR_MCP_HTTP_BASE_PATH: "/mcp"' 'ACR_API_URL: "http://' 'ACR_API_ALLOW_INSECURE_INTERNAL_HTTP: "true"'; do
+  grep -qF "$token" <<<"$mcp_cm" || fail_gate "acr-mcp: ConfigMap is missing $token"
+done
+if grep -qE 'TOKEN|PASSWORD|SECRET|DSN' <<<"$mcp_cm"; then fail_gate "acr-mcp: ConfigMap carries a credential-shaped key"; fi
+mcp_svc="$(extract_mcp_doc Service)"
+grep -qE '^\s+port: 8081\s*$' <<<"$mcp_svc" || fail_gate "acr-mcp: Service must expose 8081"
+mcp_route="$(extract_mcp_doc HTTPRoute)"
+grep -qE '^\s+value: "/mcp"\s*$' <<<"$mcp_route" || fail_gate "acr-mcp: HTTPRoute must match the MCP base path"
+if grep -qE '^\s+value: "?/"?\s*$|/healthz|/readyz' <<<"$mcp_route"; then fail_gate "acr-mcp: HTTPRoute must route only the MCP base path"; fi
+mcp_np="$(extract_mcp_doc NetworkPolicy)"
+grep -qE '^\s+port: 8081\s*$' <<<"$mcp_np" || fail_gate "acr-mcp: NetworkPolicy must admit 8081"
+# The route targets a Gateway in gateway-system; the policy must admit that namespace
+# or the route it renders is unreachable.
+grep -qE '^\s+kubernetes.io/metadata.name: "gateway-system"\s*$' <<<"$mcp_np" \
+  || fail_gate "acr-mcp: NetworkPolicy ingress must admit the namespace of the HTTPRoute parentRef (gateway-system)"
+grep -qE '^\s+app.kubernetes.io/component: api\s*$' <<<"$mcp_np" || fail_gate "acr-mcp: NetworkPolicy egress must reach the acr-api pods"
+mcp_api_np="$(extract_doc NetworkPolicy 'component: api' '  name: [^\n]*-mcp\n' <<<"$mcp_render")"
+grep -qE '^\s+app.kubernetes.io/component: mcp\s*$' <<<"$mcp_api_np" || fail_gate "acr-mcp: acr-api NetworkPolicy must admit the acr-mcp pods"
+# The acr-mcp reference must stay out of the acr-api Deployment and the migration Job.
+for pair in 'Deployment|component: api' 'Job|component: migration'; do
+  other_doc="$(extract_doc "${pair%%|*}" "${pair#*|}" <<<"$mcp_render")"
+  [[ -n "$other_doc" ]] || fail_gate "acr-mcp: ${pair} resource is missing from the enabled render"
+  if grep -q 'acr-mcp' <<<"$other_doc"; then
+    fail_gate "acr-mcp: the ${pair#*|} ${pair%%|*} references acr-mcp; it must run only as its own workload"
+  fi
+done
+if grep -qE '^\s*kind:\s*(Secret|Gateway)\s*$' <<<"$mcp_render"; then fail_gate "acr-mcp: enabled render created a Secret or Gateway"; fi
+pass "acr-mcp: enabled render is its own restricted, credential-less, digest-pinned workload with a base-path-only route"
+
+# With no pull secret configured the pod references no Secret at all.
+mcp_public="$(render --set acrMcp.enabled=true --set-string "acrMcp.image.reference=${mcp_image}" --set-json 'imagePullSecrets=[]')"
+mcp_public_deploy="$(extract_doc Deployment '  name: [^\n]*-mcp\n' <<<"$mcp_public")"
+[[ -n "$mcp_public_deploy" ]] || fail_gate "acr-mcp: public-image render is missing the acr-mcp Deployment"
+if grep -qiE 'secret' <<<"$mcp_public_deploy"; then
+  fail_gate "acr-mcp: with no imagePullSecrets the Deployment must reference no Secret at all"
+fi
+pass "acr-mcp: with no pull secret configured the pod references no Secret"
+
+mcp_single="$(render --set acrMcp.enabled=true --set-string "acrMcp.image.reference=${mcp_image}" --set acrMcp.replicaCount=1)"
+if [[ -n "$(extract_doc PodDisruptionBudget '  name: [^\n]*-mcp\n' <<<"$mcp_single")" ]]; then
+  fail_gate "acr-mcp: a single replica must not render a PodDisruptionBudget"
+fi
+pass "acr-mcp: single-replica render has no PodDisruptionBudget that would block a drain"
 
 printf 'RESULT: happy path passed all gates\n'

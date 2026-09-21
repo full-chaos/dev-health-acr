@@ -251,6 +251,16 @@ docker run --rm "${readonly_probe_flags[@]}" \
   -e ACR_API_TOKEN_FILE=/var/tmp/acr-container-verify-missing-token \
   "$mcp_image" doctor --offline | jq -e \
   '.status == "incomplete_configuration" and .api_url_set == false and .credential_set == false' >/dev/null
+# Hosted mode is selected by environment alone (no rebuilt image): the same
+# image reports the stateless HTTP transport with its 2026-07-28 revision first,
+# and a missing process credential is not a missing setting there.
+docker run --rm "${readonly_probe_flags[@]}" \
+  --tmpfs /var/tmp:rw,noexec,nosuid,nodev,size=1m,mode=1777 \
+  -e ACR_MCP_TRANSPORT=http \
+  -e ACR_API_URL=http://acr-api.acr.svc:8080 \
+  -e ACR_API_ALLOW_INSECURE_INTERNAL_HTTP=true \
+  "$mcp_image" doctor --offline | jq -e \
+  '.transport.mode == "http" and .transport.valid == true and .transport.protocol_revisions[0] == "2026-07-28" and .transport.listen_address == ":8081" and .credential_set == false' >/dev/null
 docker run --rm "${readonly_probe_flags[@]}" --entrypoint /usr/bin/git "$mcp_image" --version >/dev/null
 
 # Real read-only mounted Git workspace: `git` must operate on an actual
