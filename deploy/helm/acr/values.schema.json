@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
   "title": "Private ACR Helm chart values",
-  "description": "Structural contract for the private Dev Health ACR chart. Semantic rules (immutable-digest image, existing-Secret-only credentials, distinct runtime/migration DSN, no-MCP workload) are enforced fail-closed by templates/_helpers.tpl so that violations render a named error.",
+  "description": "Structural contract for the private Dev Health ACR chart. Semantic rules (immutable-digest image, existing-Secret-only credentials, distinct runtime/migration DSN, acr-mcp only as its own credential-less workload) are enforced fail-closed by templates/_helpers.tpl so that violations render a named error.",
   "type": "object",
   "additionalProperties": false,
   "required": ["image", "config", "credentials"],
@@ -337,6 +337,91 @@
       "properties": {
         "type": { "type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
         "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    },
+    "acrMcp": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Hosted acr-mcp: a stateless Streamable HTTP MCP server, its own workload from its own image, holding no credential (each caller's bearer is forwarded to acr-api). Disabled by default.",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "reference": { "type": "string", "description": "Immutable acr-mcp image reference; pinned to an @sha256 digest (validated at render time)." },
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+          }
+        },
+        "replicaCount": { "type": "integer", "minimum": 1 },
+        "revisionHistoryLimit": { "type": "integer", "minimum": 0 },
+        "strategy": { "type": "object", "additionalProperties": true },
+        "apiUrl": { "type": "string", "description": "acr-api origin; empty selects the in-cluster Service of this release." },
+        "basePath": { "type": "string", "pattern": "^/[A-Za-z0-9/_.-]{0,127}$" },
+        "logLevel": { "type": "string", "enum": ["debug", "info", "warn", "error"] },
+        "apiTimeout": { "type": "string" },
+        "http": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "readHeaderTimeout": { "type": "string" },
+            "readTimeout": { "type": "string" },
+            "writeTimeout": { "type": "string" },
+            "idleTimeout": { "type": "string" },
+            "shutdownTimeout": { "type": "string" },
+            "maxBodyBytes": { "type": "integer", "minimum": 1, "maximum": 16777216 }
+          }
+        },
+        "terminationGracePeriodSeconds": { "type": "integer", "minimum": 1 },
+        "service": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": { "type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "annotations": { "type": "object", "additionalProperties": true }
+          }
+        },
+        "gateway": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "httpRoute": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "annotations": { "type": "object", "additionalProperties": true },
+                "parentRefs": { "type": "array" },
+                "hostnames": { "type": "array", "items": { "type": "string" } }
+              }
+            }
+          }
+        },
+        "podDisruptionBudget": { "type": "object", "additionalProperties": true },
+        "networkPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "ingressNamespaceSelectors": { "type": "array" },
+            "egress": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "dns": { "type": "boolean" },
+                "apiPort": { "type": "integer", "minimum": 1, "maximum": 65535 }
+              }
+            }
+          }
+        },
+        "podAnnotations": { "type": "object", "additionalProperties": true },
+        "podLabels": { "type": "object", "additionalProperties": true },
+        "nodeSelector": { "type": "object", "additionalProperties": true },
+        "tolerations": { "type": "array" },
+        "affinity": { "type": "object", "additionalProperties": true },
+        "topologySpreadConstraints": { "type": "array" },
+        "resources": { "type": "object", "additionalProperties": true }
       }
     },
     "gateway": {

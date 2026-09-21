@@ -4,8 +4,14 @@ Image (immutable):
   {{ include "acr.image" . }}
 
 Boundary reminders (ADR-0004):
-  - This chart packages only acr-api and its pre-install/pre-upgrade migration
-    Job. No MCP workload is deployed; acr-mcp remains host-local.
+  - This chart packages acr-api, its pre-install/pre-upgrade migration Job and,
+    only when acrMcp.enabled, the hosted acr-mcp workload.
+  {{- if .Values.acrMcp.enabled }}
+  - acr-mcp is ENABLED: Deployment {{ include "acr.fullname" . }}-mcp serving
+    {{ .Values.acrMcp.basePath }} on Service {{ include "acr.fullname" . }}-mcp:{{ .Values.acrMcp.service.port }},
+    forwarding each caller's own bearer to {{ include "acr.mcpApiUrl" . }}.
+    The pod holds no credential; no Secret is mounted for it.
+  {{- end }}
   - Postgres and ClickHouse are external, pre-existing dependencies. This chart
     provisions neither of them.
   {{- if .Values.contextFabric.falkordb.enabled }}

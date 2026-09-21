@@ -33,6 +33,18 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
+    {{- if .Values.acrMcp.enabled }}
+    {{- /* acr-mcp reaches acr-api in-cluster to decide each caller's bearer
+         and to forward its calls; without this rule a gateway-only ingress
+         selector would cut the MCP workload off. */}}
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "acr.mcpSelectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8080
+    {{- end }}
   egress:
     {{- if .Values.networkPolicy.egress.dns }}
     - ports:

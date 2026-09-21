@@ -5,7 +5,8 @@
 #   - Every credential is a reference to a pre-existing Secret; this chart never
 #     creates a Secret or embeds a credential literal.
 #   - The migration DSN reference MUST differ from the runtime DSN reference.
-#   - No container may run acr-mcp; the MCP sidecar is host-local only.
+#   - acr-mcp runs only as its own workload (acrMcp below), from its own image,
+#     holding no credential; it is never injected beside acr-api.
 
 nameOverride: ""
 fullnameOverride: ""
@@ -150,7 +151,7 @@ deployment:
       labelSelectorFromRelease: true
   affinity: {}
   # UNSUPPORTED escape hatch. Additional workload containers would bypass the
-  # restricted pod-security and no-MCP guarantees, so any non-empty value fails
+  # restricted pod-security guarantees, so any non-empty value fails
   # closed and this list is never rendered. Keep empty.
   extraContainers: []
   # CHAOS-4076: generic escape hatch for acr-api container env vars this
@@ -402,6 +403,94 @@ contextFabric:
         memory: 512Mi
     service:
       port: 8090
+
+# Hosted acr-mcp: the stateless Streamable HTTP MCP server (MCP 2026-07-28), an
+# independent workload from its own image (the acr-mcp Dockerfile target, not
+# the acr-api image). Disabled by default.
+#
+# Credential model: the pod holds NO credential. No Secret is referenced or
+# mounted, no ServiceAccount token is mounted, and ACR_API_TOKEN is never set.
+# Each request must carry the caller's own `Authorization: Bearer <ACR API
+# token>`; acr-mcp decides it against acr-api and forwards the same bearer on
+# every tool call, so acr-api stays the only place credentials are checked.
+# There is no service-to-service credential between the two workloads.
+acrMcp:
+  enabled: false
+  # Immutable acr-mcp image (ghcr.io/full-chaos/dev-health-acr/acr-mcp@sha256:...);
+  # same digest rule as image.reference (a local tag is accepted only when
+  # config.environment is development or test).
+  image:
+    reference: ""
+    pullPolicy: IfNotPresent
+  # Stateless: replicas are interchangeable, scale freely.
+  replicaCount: 2
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  # Origin of acr-api. Empty selects the in-cluster Service of this release
+  # (http://<fullname>.<namespace>.svc:<service.port>, plain HTTP inside the
+  # cluster, TLS terminating at the Gateway). Set an https origin to reach an
+  # acr-api elsewhere; the in-cluster default also sets
+  # ACR_API_ALLOW_INSECURE_INTERNAL_HTTP.
+  apiUrl: ""
+  # MCP endpoint path served by the pod and matched by the HTTPRoute. The probe
+  # paths /healthz and /readyz are fixed by the binary.
+  basePath: /mcp
+  logLevel: info
+  # ACR_API_TIMEOUT: also bounds each per-request credential decision.
+  apiTimeout: "15s"
+  http:
+    readHeaderTimeout: "10s"
+    readTimeout: "30s"
+    writeTimeout: "300s"
+    idleTimeout: "120s"
+    shutdownTimeout: "30s"
+    maxBodyBytes: 1048576
+  # Must exceed http.shutdownTimeout so a rollout lets in-flight calls finish.
+  terminationGracePeriodSeconds: 45
+  service:
+    type: ClusterIP
+    port: 8081
+    annotations: {}
+  # Optional Gateway API HTTPRoute for a caller-supplied, pre-existing Gateway;
+  # same posture as the acr-api route above. Routes only acrMcp.basePath.
+  gateway:
+    enabled: false
+    httpRoute:
+      annotations: {}
+      parentRefs: []
+      hostnames: []
+  # Rendered only when replicaCount > 1.
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+    maxUnavailable: null
+  # Default-deny. Ingress only from these namespace selectors (for example the
+  # Gateway namespace); empty means same-namespace only. Egress is DNS plus
+  # acr-api: the release's own acr-api pods when apiUrl is empty, otherwise
+  # egress.apiPort with no destination restriction.
+  networkPolicy:
+    enabled: true
+    ingressNamespaceSelectors: []
+    egress:
+      dns: true
+      apiPort: 443
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: "1"
+      memory: 256Mi
 
 # Optional Gateway API HTTPRoute targeting a caller-supplied, pre-existing
 # Gateway. This chart never installs a Gateway controller or a Gateway object.

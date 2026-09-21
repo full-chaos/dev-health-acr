@@ -1,0 +1,22 @@
+{{- if .Values.acrMcp.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "acr.fullname" . }}-mcp
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "acr.mcpLabels" . | nindent 4 }}
+  {{- with .Values.acrMcp.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.acrMcp.service.type }}
+  selector:
+    {{- include "acr.mcpSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.acrMcp.service.port }}
+      targetPort: http
+      protocol: TCP
+{{- end }}

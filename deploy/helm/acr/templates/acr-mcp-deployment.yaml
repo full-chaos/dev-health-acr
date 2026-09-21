@@ -1,0 +1,118 @@
+{{- /*
+acr-mcp Deployment: the hosted, stateless Streamable HTTP MCP server. It is its
+own workload from its own image, never a sidecar of acr-api. It carries no
+credential: no Secret is referenced, mounted or projected, and no
+ServiceAccount token is mounted. Every request is decided on the caller's own
+bearer, which acr-mcp forwards to acr-api. Because no state lives in the pod,
+replicas are interchangeable and any replica may serve any request.
+*/ -}}
+{{- if .Values.acrMcp.enabled }}
+{{- include "acr.validateAcrMcp" . -}}
+{{- $image := include "acr.mcpImage" . -}}
+{{- $m := .Values.acrMcp -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "acr.fullname" . }}-mcp
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "acr.mcpLabels" . | nindent 4 }}
+spec:
+  replicas: {{ $m.replicaCount }}
+  revisionHistoryLimit: {{ $m.revisionHistoryLimit }}
+  strategy:
+    type: {{ $m.strategy.type }}
+    {{- if eq $m.strategy.type "RollingUpdate" }}
+    rollingUpdate:
+      {{- toYaml $m.strategy.rollingUpdate | nindent 6 }}
+    {{- end }}
+  selector:
+    matchLabels:
+      {{- include "acr.mcpSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "acr.mcpSelectorLabels" . | nindent 8 }}
+        {{- with $m.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/acr-mcp-configmap.yaml") . | sha256sum }}
+        {{- with $m.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "acr.fullname" . }}-mcp
+      automountServiceAccountToken: false
+      {{- include "acr.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- include "acr.podSecurityContext" . | nindent 8 }}
+      {{- with $m.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $m.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $m.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $m.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- range $m.topologySpreadConstraints }}
+        - maxSkew: {{ .maxSkew }}
+          topologyKey: {{ .topologyKey | quote }}
+          whenUnsatisfiable: {{ .whenUnsatisfiable }}
+          labelSelector:
+            matchLabels:
+              {{- include "acr.mcpSelectorLabels" $ | nindent 14 }}
+        {{- end }}
+      {{- end }}
+      containers:
+        - name: acr-mcp
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ $m.image.pullPolicy }}
+          args: ["serve"]
+          ports:
+            - name: http
+              containerPort: 8081
+              protocol: TCP
+          securityContext:
+            {{- include "acr.containerSecurityContext" . | nindent 12 }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "acr.fullname" . }}-mcp-config
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          resources:
+            {{- toYaml $m.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      terminationGracePeriodSeconds: {{ $m.terminationGracePeriodSeconds }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}

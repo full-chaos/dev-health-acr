@@ -3,7 +3,7 @@ Private ACR chart helpers.
 
 Fail-closed guards live here so that every security violation renders a named
 error (mutable-image, invalid-secret-ref, invalid-image-pull-secret-ref,
-shared-runtime-migration-dsn, injected-mcp) before any manifest is produced.
+shared-runtime-migration-dsn, injected-mcp, acr-mcp-*) before any manifest is produced.
 */}}
 
 {{- define "acr.name" -}}
@@ -75,6 +75,22 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 app.kubernetes.io/part-of: dev-health-acr
 {{- end -}}
 
+{{- define "acr.mcpSelectorLabels" -}}
+app.kubernetes.io/name: {{ include "acr.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: mcp
+{{- end -}}
+
+{{- define "acr.mcpLabels" -}}
+helm.sh/chart: {{ include "acr.chart" . }}
+{{ include "acr.mcpSelectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+app.kubernetes.io/part-of: dev-health-acr
+{{- end -}}
+
 {{- define "acr.falkordbSelectorLabels" -}}
 app.kubernetes.io/name: {{ include "acr.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
@@ -134,25 +150,39 @@ fails with the supplied violation label.
 {{- end -}}
 
 {{/*
-Immutable image guard. Production requires a digest; development and test may
-use a local kind-loaded tag, which has no registry manifest to resolve.
+Immutable image reference guard shared by every workload image. Production
+requires a digest; development and test may use a local kind-loaded tag, which
+has no registry manifest to resolve. Called with {ref, env, field}.
 */}}
-{{- define "acr.image" -}}
-{{- $ref := .Values.image.reference | default "" -}}
+{{- define "acr.imageRef" -}}
+{{- $ref := .ref | default "" -}}
+{{- $field := .field -}}
 {{- if not $ref -}}
-{{- fail "mutable-image: image.reference is required and must be an immutable @sha256 digest reference" -}}
+{{- fail (printf "mutable-image: %s is required and must be an immutable @sha256 digest reference" $field) -}}
 {{- end -}}
 
 {{- if not (regexMatch "@sha256:[0-9a-f]{64}$" $ref) -}}
-{{- if or (eq .Values.config.environment "development") (eq .Values.config.environment "test") -}}
+{{- if or (eq .env "development") (eq .env "test") -}}
 {{- if not (regexMatch "^[a-zA-Z0-9][a-zA-Z0-9._/-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*$" $ref) -}}
-{{- fail (printf "mutable-image: development/test image.reference %q must be a local tagged image or immutable @sha256 digest" $ref) -}}
+{{- fail (printf "mutable-image: development/test %s %q must be a local tagged image or immutable @sha256 digest" $field $ref) -}}
 {{- end -}}
 {{- else -}}
-{{- fail (printf "mutable-image: image.reference %q must be pinned to an immutable @sha256:<digest>; mutable tags are rejected" $ref) -}}
+{{- fail (printf "mutable-image: %s %q must be pinned to an immutable @sha256:<digest>; mutable tags are rejected" $field $ref) -}}
 {{- end -}}
 {{- end -}}
 {{- $ref -}}
+{{- end -}}
+
+{{- define "acr.image" -}}
+{{- include "acr.imageRef" (dict "ref" .Values.image.reference "env" .Values.config.environment "field" "image.reference") -}}
+{{- end -}}
+
+{{/*
+acr-mcp is a separate image (its own Dockerfile target), so it carries its own
+reference under the same immutability rule as the acr-api image.
+*/}}
+{{- define "acr.mcpImage" -}}
+{{- include "acr.imageRef" (dict "ref" .Values.acrMcp.image.reference "env" .Values.config.environment "field" "acrMcp.image.reference") -}}
 {{- end -}}
 
 {{- define "acr.tokenCopyImage" -}}
@@ -199,20 +229,57 @@ enforces that the migration DSN is not the runtime DSN reference.
 
 {{/*
 No additional-workload guard. deployment.extraContainers is unsupported: any
-additional container would bypass the pod-security and no-MCP guarantees, so a
+additional container would bypass the restricted pod-security guarantees, so a
 non-empty value fails closed. A value that names acr-mcp is called out
-specifically. The Deployment never renders extraContainers regardless.
+specifically: acr-mcp is never injected beside acr-api; it runs as its own
+workload through acrMcp.enabled. The Deployment never renders extraContainers
+regardless.
 */}}
 {{- define "acr.validateNoMcp" -}}
 {{- $extra := .Values.deployment.extraContainers | default list -}}
 {{- range $i, $ctr := $extra -}}
 {{- $blob := printf "%s %s %s %s" ($ctr.name | default "") ($ctr.image | default "") (join " " ($ctr.command | default list)) (join " " ($ctr.args | default list)) -}}
 {{- if regexMatch "acr-mcp" $blob -}}
-{{- fail (printf "injected-mcp: deployment.extraContainers[%d] would run acr-mcp; the MCP sidecar is host-local and must never be deployed as a workload" $i) -}}
+{{- fail (printf "injected-mcp: deployment.extraContainers[%d] would run acr-mcp beside acr-api; acr-mcp runs only as its own workload (acrMcp.enabled)" $i) -}}
 {{- end -}}
 {{- end -}}
 {{- if $extra -}}
-{{- fail "injected-mcp: deployment.extraContainers is not permitted; additional workload containers would bypass the restricted pod-security and no-MCP guarantees" -}}
+{{- fail "injected-mcp: deployment.extraContainers is not permitted; additional workload containers would bypass the restricted pod-security guarantees" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+acr-mcp workload guard. The hosted MCP server holds no credential of its own
+and forwards each caller's bearer to acr-api, so its inputs are only an origin,
+a base path and a gateway reference.
+*/}}
+{{- define "acr.validateAcrMcp" -}}
+{{- $m := .Values.acrMcp -}}
+{{- if $m.enabled -}}
+{{- $_ := include "acr.mcpImage" . -}}
+{{- $url := $m.apiUrl | default "" -}}
+{{- if and $url (not (regexMatch "^https?://[^/@?#[:space:]]+$" $url)) -}}
+{{- fail (printf "acr-mcp-api-url: acrMcp.apiUrl %q must be an HTTP(S) origin only (host[:port], no userinfo, path, query, or fragment)" $url) -}}
+{{- end -}}
+{{- $path := $m.basePath | default "" -}}
+{{- if or (not (regexMatch "^/[A-Za-z0-9/_.-]{0,127}$" $path)) (hasSuffix "/" $path) (contains "//" $path) (contains "/../" (printf "%s/" $path)) (contains "/./" (printf "%s/" $path)) (eq $path "/healthz") (eq $path "/readyz") -}}
+{{- fail (printf "acr-mcp-base-path: acrMcp.basePath %q must be an absolute path without a trailing slash, at most 128 characters of [A-Za-z0-9/_.-], and not a probe path" $path) -}}
+{{- end -}}
+{{- if and $m.gateway.enabled (not $m.gateway.httpRoute.parentRefs) -}}
+{{- fail "acr-mcp-gateway: acrMcp.gateway.enabled is true but acrMcp.gateway.httpRoute.parentRefs is empty; a caller-supplied Gateway reference is required" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+In-cluster origin of acr-api unless acrMcp.apiUrl overrides it. The Service is
+in the release namespace, so its short name resolves from the acr-mcp pods.
+*/}}
+{{- define "acr.mcpApiUrl" -}}
+{{- if .Values.acrMcp.apiUrl -}}
+{{- .Values.acrMcp.apiUrl -}}
+{{- else -}}
+{{- printf "http://%s.%s.svc:%d" (include "acr.fullname" .) .Release.Namespace (int .Values.service.port) -}}
 {{- end -}}
 {{- end -}}
 

@@ -1,0 +1,34 @@
+{{- /*
+acr-mcp process configuration. Non-secret only: the hosted MCP server holds no
+credential of its own (each caller's bearer is forwarded to acr-api), so this
+ConfigMap is the whole configuration surface. The listen address is fixed to
+:8081 to match containerPort and is not an operator knob.
+*/ -}}
+{{- if .Values.acrMcp.enabled }}
+{{- include "acr.validateAcrMcp" . -}}
+{{- $m := .Values.acrMcp -}}
+{{- $apiUrl := include "acr.mcpApiUrl" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "acr.fullname" . }}-mcp-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "acr.mcpLabels" . | nindent 4 }}
+data:
+  ACR_MCP_TRANSPORT: "http"
+  ACR_MCP_HTTP_LISTEN: ":8081"
+  ACR_MCP_HTTP_BASE_PATH: {{ $m.basePath | quote }}
+  ACR_MCP_HTTP_READ_HEADER_TIMEOUT: {{ $m.http.readHeaderTimeout | quote }}
+  ACR_MCP_HTTP_READ_TIMEOUT: {{ $m.http.readTimeout | quote }}
+  ACR_MCP_HTTP_WRITE_TIMEOUT: {{ $m.http.writeTimeout | quote }}
+  ACR_MCP_HTTP_IDLE_TIMEOUT: {{ $m.http.idleTimeout | quote }}
+  ACR_MCP_HTTP_SHUTDOWN_TIMEOUT: {{ $m.http.shutdownTimeout | quote }}
+  ACR_MCP_HTTP_MAX_BODY_BYTES: {{ $m.http.maxBodyBytes | int | quote }}
+  ACR_API_URL: {{ $apiUrl | quote }}
+  ACR_API_TIMEOUT: {{ $m.apiTimeout | quote }}
+  {{- if hasPrefix "http://" $apiUrl }}
+  ACR_API_ALLOW_INSECURE_INTERNAL_HTTP: "true"
+  {{- end }}
+  ACR_LOG_LEVEL: {{ $m.logLevel | quote }}
+{{- end }}

@@ -1,0 +1,57 @@
+{{- /*
+Default-deny NetworkPolicy for acr-mcp. Ingress reaches the MCP port only from
+the configured namespaces (the Gateway namespace) or, when none are set, from
+the release namespace. Egress is DNS plus acr-api: the in-cluster acr-api pods
+by label when acrMcp.apiUrl is unset, otherwise the explicit apiPort with no
+destination restriction (NetworkPolicy cannot resolve a hostname).
+*/ -}}
+{{- if and .Values.acrMcp.enabled .Values.acrMcp.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "acr.fullname" . }}-mcp
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "acr.mcpLabels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "acr.mcpSelectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        {{- if .Values.acrMcp.networkPolicy.ingressNamespaceSelectors }}
+        {{- range .Values.acrMcp.networkPolicy.ingressNamespaceSelectors }}
+        - namespaceSelector:
+            {{- toYaml . | nindent 12 }}
+        {{- end }}
+        {{- else }}
+        - podSelector: {}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 8081
+  egress:
+    {{- if .Values.acrMcp.networkPolicy.egress.dns }}
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- end }}
+    {{- if .Values.acrMcp.apiUrl }}
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.acrMcp.networkPolicy.egress.apiPort }}
+    {{- else }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "acr.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8080
+    {{- end }}
+{{- end }}

@@ -1,6 +1,6 @@
 {{- /*
 acr-api Deployment. Guards run first; the runtime container uses the
-least-privilege runtime credentials and never runs acr-mcp.
+least-privilege runtime credentials; acr-mcp is a separate workload.
 */ -}}
 {{- include "acr.validateCredentials" . -}}
 {{- include "acr.validateConnectionKind" . -}}
