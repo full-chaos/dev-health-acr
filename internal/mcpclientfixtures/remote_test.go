@@ -17,6 +17,7 @@ var remoteFixtureFiles = []struct {
 	{RemoteCodex, "docs/examples/mcp-clients/codex-remote-config.toml"},
 	{RemoteCursor, "docs/examples/mcp-clients/cursor-remote-mcp-config.json"},
 	{RemoteOpenCode, "docs/examples/mcp-clients/opencode-remote-config.json"},
+	{RemoteOpenCodeV2, "docs/examples/mcp-clients/opencode-v2-remote-config.json"},
 }
 
 // TestRemoteFixturesMatchCanonicalModel: every checked-in remote config is
@@ -96,6 +97,32 @@ func TestRemoteGoldenShapes(t *testing.T) {
 		})
 	}
 
+	// OpenCode v2 nests servers under mcp.servers and defaults OAuth on.
+	var v2 struct {
+		MCP struct {
+			Servers map[string]struct {
+				Type     string            `json:"type"`
+				URL      string            `json:"url"`
+				OAuth    *bool             `json:"oauth"`
+				Protocol string            `json:"protocol"`
+				Enabled  *bool             `json:"enabled"`
+				Headers  map[string]string `json:"headers"`
+			} `json:"servers"`
+			Direct json.RawMessage `json:"acr"`
+		} `json:"mcp"`
+	}
+	if err := json.Unmarshal([]byte(RenderOpenCodeV2RemoteJSON()), &v2); err != nil {
+		t.Fatal(err)
+	}
+	v2s, ok := v2.MCP.Servers[RemoteServerName]
+	if !ok || len(v2.MCP.Servers) != 1 || v2.MCP.Direct != nil {
+		t.Fatalf("opencode v2: want exactly one server under mcp.servers and none directly under mcp, got %v", v2.MCP)
+	}
+	if v2s.Type != "remote" || v2s.URL != ExampleRemoteURL || v2s.OAuth == nil || *v2s.OAuth || v2s.Protocol != "auto" || v2s.Enabled != nil ||
+		len(v2s.Headers) != 1 || v2s.Headers["Authorization"] != "Bearer {env:ACR_MCP_TOKEN}" {
+		t.Fatalf("opencode v2 entry = %+v", v2s)
+	}
+
 	const wantTOML = `# Example ACR MCP remote (hosted) server entry for Codex CLI.
 # Codex sends the value of the named environment variable as
 # "Authorization: Bearer <value>" on every request. Export the variable in the
@@ -127,6 +154,7 @@ func TestRemoteFixturesNeverEmbedALiteralSecret(t *testing.T) {
 		RemoteCodex:      "", // bearer_token_env_var carries the bare variable name
 		RemoteCursor:     "${env:" + RemoteTokenEnvVar + "}",
 		RemoteOpenCode:   "{env:" + RemoteTokenEnvVar + "}",
+		RemoteOpenCodeV2: "{env:" + RemoteTokenEnvVar + "}",
 	}
 	for _, client := range RemoteClients {
 		rendered, _ := RenderRemote(client)
@@ -182,6 +210,7 @@ func TestRemoteGuideSnippetsAreCanonical(t *testing.T) {
 		{"docs/examples/mcp-clients/codex.md", "codex-remote-toml", RenderCodexRemoteTOML()},
 		{"docs/examples/mcp-clients/cursor.md", "cursor-remote-json", RenderCursorRemoteJSON()},
 		{"docs/examples/mcp-clients/opencode.md", "opencode-remote-json", RenderOpenCodeRemoteJSON()},
+		{"docs/examples/mcp-clients/opencode.md", "opencode-v2-remote-json", RenderOpenCodeV2RemoteJSON()},
 	}
 	for _, tc := range cases {
 		t.Run(tc.marker, func(t *testing.T) {
@@ -245,7 +274,7 @@ func TestClientSkillsCoverTheInvestigationFlow(t *testing.T) {
 			text := string(readDoc(t, root, rel))
 			for _, needle := range []string{
 				"context_for_task", "source_evidence", "investigate_question", "investigation_result",
-				"parent_result_id", "prior_*_receipts", "repository.slug", "acr://guide/", "untrusted",
+				"parent_result_id", "prior_*_receipts", "single `evidence_ref_id` argument", "repository.slug", "acr://guide/", "untrusted",
 			} {
 				if !strings.Contains(text, needle) {
 					t.Errorf("%s lacks %q", rel, needle)

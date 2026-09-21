@@ -139,6 +139,30 @@ A ready-to-copy template is `opencode-remote-config.json` in this directory.
 
 `opencode.json` shape per the [OpenCode MCP docs](https://opencode.ai/docs/mcp-servers/): `"type": "remote"`, `url`, `headers`, with `{env:NAME}` substitution. Those docs state no MCP protocol revision.
 
+OpenCode v2 uses a different shape ([v2 docs](https://opencode.ai/v2/docs/mcp-servers/)): servers nest under `mcp.servers`, the v1 shape is not accepted, OAuth is on by default (switched off here because the bearer header is the credential), and `protocol` selects `legacy` (default), `auto` or `2026-07-28`. `auto` lets it use `2026-07-28` against this server.
+
+```json
+<!-- FIXTURE:opencode-v2-remote-json -->
+{
+  "mcp": {
+    "servers": {
+      "acr": {
+        "type": "remote",
+        "url": "https://acr-mcp.dev-health.example.com/mcp",
+        "oauth": false,
+        "protocol": "auto",
+        "headers": {
+          "Authorization": "Bearer {env:ACR_MCP_TOKEN}"
+        }
+      }
+    }
+  }
+}
+<!-- /FIXTURE:opencode-v2-remote-json -->
+```
+
+A ready-to-copy template is `opencode-v2-remote-config.json` in this directory.
+
 ## Update, uninstall, and residue check
 
 ```bash

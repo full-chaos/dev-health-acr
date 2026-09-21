@@ -614,7 +614,7 @@ Evidence URLs are references only. The sidecar does not fetch them. If you need 
 - **URL:** the deployment host plus the MCP base path, `/mcp` by default (`--base-path`), for example `https://acr-mcp.dev-health.example.com/mcp`. `GET /healthz` (liveness) and `GET /readyz` (readiness) are probe paths, not MCP endpoints.
 - **Transport:** stateless Streamable HTTP. No `Mcp-Session-Id` is issued or honoured, so any replica can answer any request and a client needs no session affinity.
 - **Protocol revision:** the server lists `2026-07-28` first and negotiates through `server/discover`. Older revisions the Go SDK still speaks are accepted, so a client that does not yet speak `2026-07-28` connects on an older revision. The server never narrows itself for a client.
-- **Which revision a client speaks is a client fact.** Claude Code documents `2026-07-28` support on its v2 MCP runtime (it asks HTTP servers whether they support the newer revision). The Codex, Cursor and OpenCode MCP docs state no protocol revision; treat their revision as unconfirmed until a live `tools/list` proves it. Check what a client negotiated in the `protocol_revision` field of the server's `acr-mcp http request` log line.
+- **Which revision a client speaks is a client fact.** Claude Code documents `2026-07-28` support on its v2 MCP runtime (it asks HTTP servers whether they support the newer revision). OpenCode v2 documents a `protocol` setting (`legacy` default, `auto`, `2026-07-28`); `auto` is what the fixture sets. The Codex, Cursor and OpenCode v1 MCP docs state no protocol revision; treat their revision as unconfirmed until a live `tools/list` proves it. Check what a client negotiated in the `protocol_revision` field of the server's `acr-mcp http request` log line.
 
 ### Authentication
 
@@ -634,6 +634,7 @@ Ready-to-copy files are in `docs/examples/mcp-clients/`, generated from one mode
 | Codex | `codex-remote-config.toml` (`[mcp_servers.acr]`) | `bearer_token_env_var = "ACR_MCP_TOKEN"` | https://learn.chatgpt.com/docs/extend/mcp |
 | Cursor | `cursor-remote-mcp-config.json` | `"Authorization": "Bearer ${env:ACR_MCP_TOKEN}"` | https://cursor.com/docs/context/mcp |
 | OpenCode | `opencode-remote-config.json` | `"Authorization": "Bearer {env:ACR_MCP_TOKEN}"` | https://opencode.ai/docs/mcp-servers/ |
+| OpenCode v2 | `opencode-v2-remote-config.json` (`mcp.servers`, `"oauth": false`, `"protocol": "auto"`) | `"Authorization": "Bearer {env:ACR_MCP_TOKEN}"` | https://opencode.ai/v2/docs/mcp-servers/ |
 
 Claude Code can also register the server from the command line. The header is single-quoted so the shell does not expand the token into the client's config file:
 
@@ -689,7 +690,7 @@ The server lists three read-only guide resources and three prompts. They are sta
 
    It returns the full canonical result. The id is a handle: the call succeeds only for a caller whose live grant covers that result.
 
-3. **`source_evidence`** to inspect one cited source. Pass an `evidence_ref_id` from `evidence_ref_ids` exactly as returned; do not parse or construct one.
+3. **`source_evidence`** to inspect one cited source. Pass one entry of the answer's `evidence_ref_ids` list as the single `evidence_ref_id` argument, exactly as returned; do not parse or construct one. The argument is singular; a call with `evidence_ref_ids` fails schema validation.
 
    ```json
    {"evidence_ref_id": "ev_01J0ACR001"}

@@ -67,8 +67,8 @@ func RenderCursorRemoteJSON() string {
 `, RemoteServerName, ExampleRemoteURL, RemoteTokenEnvVar)
 }
 
-// RenderOpenCodeRemoteJSON renders the OpenCode `opencode.json` remote entry.
-// OpenCode substitutes {env:NAME}.
+// RenderOpenCodeRemoteJSON renders the OpenCode v1 `opencode.json` remote
+// entry (servers directly under "mcp"). OpenCode substitutes {env:NAME}.
 func RenderOpenCodeRemoteJSON() string {
 	return fmt.Sprintf(`{
   "$schema": "https://opencode.ai/config.json",
@@ -79,6 +79,29 @@ func RenderOpenCodeRemoteJSON() string {
       "enabled": true,
       "headers": {
         "Authorization": "Bearer {env:%s}"
+      }
+    }
+  }
+}
+`, RemoteServerName, ExampleRemoteURL, RemoteTokenEnvVar)
+}
+
+// RenderOpenCodeV2RemoteJSON renders the OpenCode v2 `opencode.json` remote
+// entry: servers nest under "mcp.servers", OAuth is on by default so it is
+// switched off (the bearer header is the credential), and "protocol" is left
+// on negotiation so the client can use 2026-07-28 against this server.
+func RenderOpenCodeV2RemoteJSON() string {
+	return fmt.Sprintf(`{
+  "mcp": {
+    "servers": {
+      %q: {
+        "type": "remote",
+        "url": %q,
+        "oauth": false,
+        "protocol": "auto",
+        "headers": {
+          "Authorization": "Bearer {env:%s}"
+        }
       }
     }
   }
@@ -113,10 +136,13 @@ const (
 	RemoteCodex      RemoteClient = "codex"
 	RemoteCursor     RemoteClient = "cursor"
 	RemoteOpenCode   RemoteClient = "opencode"
+	// RemoteOpenCodeV2 is the OpenCode v2 config shape, which is not
+	// accepted by v1 and does not accept v1's.
+	RemoteOpenCodeV2 RemoteClient = "opencode-v2"
 )
 
 // RemoteClients lists every client with a remote fixture, in a fixed order.
-var RemoteClients = []RemoteClient{RemoteClaudeCode, RemoteCodex, RemoteCursor, RemoteOpenCode}
+var RemoteClients = []RemoteClient{RemoteClaudeCode, RemoteCodex, RemoteCursor, RemoteOpenCode, RemoteOpenCodeV2}
 
 // RenderRemote returns the remote config for one client, or false for a client
 // without a remote fixture.
@@ -130,6 +156,8 @@ func RenderRemote(client RemoteClient) (string, bool) {
 		return RenderCursorRemoteJSON(), true
 	case RemoteOpenCode:
 		return RenderOpenCodeRemoteJSON(), true
+	case RemoteOpenCodeV2:
+		return RenderOpenCodeV2RemoteJSON(), true
 	}
 	return "", false
 }
