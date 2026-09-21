@@ -28,8 +28,34 @@ import (
 // ordinary opaque fcacr_ bearer with the device flow's org and repository
 // scopes, bound to the resource the request named.
 
-// OAuthScope is the scope string every OAuth-issued credential carries.
+// OAuthScope is the scope an OAuth request gets when it names none: every
+// scope the approval grants.
 var OAuthScope = ScopeContextRead + " " + ScopeEvidenceRead
+
+// oauthScopes are the scopes an OAuth request may ask for, in canonical order.
+var oauthScopes = oauthvocab.ScopeVocabulary()
+
+// NormalizeOAuthScope parses a space-separated scope parameter: empty means
+// every supported scope; otherwise each token must be a supported scope. The
+// result is canonical (supported order, no duplicates, space-joined).
+func NormalizeOAuthScope(raw string) (string, bool) {
+	requested := strings.Fields(raw)
+	if len(requested) == 0 {
+		return OAuthScope, true
+	}
+	for _, scope := range requested {
+		if !slices.Contains(oauthScopes, scope) {
+			return "", false
+		}
+	}
+	granted := make([]string, 0, len(oauthScopes))
+	for _, scope := range oauthScopes {
+		if slices.Contains(requested, scope) {
+			granted = append(granted, scope)
+		}
+	}
+	return strings.Join(granted, " "), true
+}
 
 const (
 	oauthHandleBytes       = 32
@@ -51,26 +77,16 @@ type OAuthError struct {
 	Code         string
 	Outcome      string
 	Redirectable bool
+	// RedirectURL is set for a redirectable refusal: the client's registered
+	// redirect URI (never the value the request carried) with error, state
+	// and iss.
+	RedirectURL string
 }
 
 func (e *OAuthError) Error() string { return "oauth: " + e.Code + " (" + e.Outcome + ")" }
 
 func oauthError(code, outcome string, redirectable bool) *OAuthError {
 	return &OAuthError{Code: code, Outcome: outcome, Redirectable: redirectable}
-}
-
-// OAuthClientMetadataFetcher resolves a client ID metadata document. A nil
-// fetcher disables metadata-document clients.
-type OAuthClientMetadataFetcher interface {
-	Fetch(ctx context.Context, clientID string) (OAuthClientMetadata, error)
-}
-
-// OAuthClientMetadata is the part of a client's metadata this server uses.
-type OAuthClientMetadata struct {
-	ClientID                string   `json:"client_id"`
-	ClientName              string   `json:"client_name"`
-	RedirectURIs            []string `json:"redirect_uris"`
-	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"`
 }
 
 // OAuthConfig configures the OAuth service.
@@ -81,10 +97,8 @@ type OAuthConfig struct {
 	// Resources are the protected resources credentials may be bound to:
 	// the public URLs of hosted MCP endpoints.
 	Resources []string
-	// ClientMetadata resolves client ID metadata documents; nil disables them.
-	ClientMetadata OAuthClientMetadataFetcher
-	Now            func() time.Time
-	Random         io.Reader
+	Now       func() time.Time
+	Random    io.Reader
 }
 
 // OAuthService runs registration, authorization and token exchange.
@@ -93,7 +107,6 @@ type OAuthService struct {
 	devices   OAuthConsentAuthority
 	issuer    string
 	resources []string
-	metadata  OAuthClientMetadataFetcher
 	now       func() time.Time
 	randomMu  sync.Mutex
 	random    io.Reader
@@ -123,13 +136,9 @@ func NewOAuthService(store storage.OAuthStore, devices OAuthConsentAuthority, cf
 	if storage.IsNil(cfg.Random) {
 		cfg.Random = rand.Reader
 	}
-	var metadata OAuthClientMetadataFetcher
-	if !storage.IsNil(cfg.ClientMetadata) {
-		metadata = cfg.ClientMetadata
-	}
 	return &OAuthService{
 		store: store, devices: devices, issuer: cfg.Issuer, resources: resources,
-		metadata: metadata, now: cfg.Now, random: cfg.Random,
+		now: cfg.Now, random: cfg.Random,
 	}, nil
 }
 
@@ -157,10 +166,6 @@ func (s *OAuthService) Issuer() string { return s.issuer }
 
 // Resources returns the protected resources this server issues for.
 func (s *OAuthService) Resources() []string { return append([]string(nil), s.resources...) }
-
-// ClientMetadataDocumentsSupported reports whether metadata-document client
-// IDs are accepted.
-func (s *OAuthService) ClientMetadataDocumentsSupported() bool { return s.metadata != nil }
 
 // OAuthRegistrationRequest is an RFC 7591 registration request.
 type OAuthRegistrationRequest struct {
@@ -228,8 +233,8 @@ type OAuthResolvedClient struct {
 	RedirectURIs []string
 }
 
-// ResolveClient identifies a client by its ID: a dynamic registration, or a
-// metadata document when enabled. Anything else is invalid_client.
+// ResolveClient identifies a client by its ID: a dynamic registration.
+// Anything else is invalid_client.
 func (s *OAuthService) ResolveClient(ctx context.Context, clientID string) (OAuthResolvedClient, error) {
 	switch {
 	case storage.IsDynamicOAuthClientID(clientID):
@@ -241,29 +246,6 @@ func (s *OAuthService) ResolveClient(ctx context.Context, clientID string) (OAut
 			return OAuthResolvedClient{}, fmt.Errorf("%w: read client", ErrOAuthUnavailable)
 		}
 		return OAuthResolvedClient{ClientID: client.ClientID, Kind: storage.OAuthClientKindDynamic, Name: client.ClientName, RedirectURIs: client.RedirectURIs}, nil
-	case s.metadata != nil && storage.ValidOAuthClientMetadataURL(clientID):
-		document, err := s.metadata.Fetch(ctx, clientID)
-		if err != nil {
-			return OAuthResolvedClient{}, oauthError("invalid_client", oauthvocab.OutcomeInvalidClientMetadata, false)
-		}
-		if document.ClientID != clientID || len(document.RedirectURIs) == 0 {
-			return OAuthResolvedClient{}, oauthError("invalid_client", oauthvocab.OutcomeInvalidClientMetadata, false)
-		}
-		switch document.TokenEndpointAuthMethod {
-		case "", "none":
-		default:
-			return OAuthResolvedClient{}, oauthError("invalid_client", oauthvocab.OutcomeInvalidClientMetadata, false)
-		}
-		for _, redirect := range document.RedirectURIs {
-			if !storage.ValidOAuthRedirectURI(redirect) {
-				return OAuthResolvedClient{}, oauthError("invalid_client", oauthvocab.OutcomeInvalidClientMetadata, false)
-			}
-		}
-		name := strings.TrimSpace(document.ClientName)
-		if len(name) > 200 || !utf8.ValidString(name) || strings.ContainsFunc(name, isControlRune) {
-			name = ""
-		}
-		return OAuthResolvedClient{ClientID: clientID, Kind: storage.OAuthClientKindMetadataDocument, Name: name, RedirectURIs: document.RedirectURIs}, nil
 	default:
 		return OAuthResolvedClient{}, oauthError("invalid_client", oauthvocab.OutcomeInvalidClient, false)
 	}
@@ -291,6 +273,7 @@ type OAuthAuthorization struct {
 	ExpiresAt time.Time
 	Client    OAuthResolvedClient
 	Resource  string
+	Scope     string
 }
 
 const oauthAuthorizationRedacted = "auth.OAuthAuthorization{redacted}"
@@ -306,22 +289,34 @@ func (s *OAuthService) Authorize(ctx context.Context, request OAuthAuthorizeRequ
 	if err != nil {
 		return OAuthAuthorization{}, err
 	}
-	if request.RedirectURI == "" || !slices.Contains(client.RedirectURIs, request.RedirectURI) {
+	registered := slices.Index(client.RedirectURIs, request.RedirectURI)
+	if request.RedirectURI == "" || registered < 0 {
 		return OAuthAuthorization{}, oauthError("invalid_request", oauthvocab.OutcomeInvalidRedirectURI, false)
 	}
+	redirectURI := client.RedirectURIs[registered]
+	refuse := func(code, outcome string) (OAuthAuthorization, error) {
+		return OAuthAuthorization{}, &OAuthError{
+			Code: code, Outcome: outcome, Redirectable: true,
+			RedirectURL: s.redirectURL(storage.OAuthAuthorizationRequest{RedirectURI: redirectURI, State: request.State}, url.Values{"error": {code}}),
+		}
+	}
 	if request.ResponseType != "code" {
-		return OAuthAuthorization{}, oauthError("unsupported_response_type", oauthvocab.OutcomeUnsupportedResponseType, true)
+		return refuse("unsupported_response_type", oauthvocab.OutcomeUnsupportedResponseType)
 	}
 	if request.CodeChallengeMethod != "S256" || !storage.ValidOAuthCodeChallenge(request.CodeChallenge) {
-		return OAuthAuthorization{}, oauthError("invalid_request", oauthvocab.OutcomePKCERequired, true)
+		return refuse("invalid_request", oauthvocab.OutcomePKCERequired)
 	}
 	resource, ok := s.resolveResource(request.Resource)
 	if !ok {
-		return OAuthAuthorization{}, oauthError("invalid_target", oauthvocab.OutcomeInvalidTarget, true)
+		return refuse("invalid_target", oauthvocab.OutcomeInvalidTarget)
 	}
 	if len(request.State) > maxOAuthStateLength || len(request.Scope) > maxOAuthScopeLength ||
 		!utf8.ValidString(request.State) || strings.ContainsFunc(request.State, isControlRune) || strings.ContainsFunc(request.Scope, isControlRune) {
-		return OAuthAuthorization{}, oauthError("invalid_request", oauthvocab.OutcomeInvalidRequest, true)
+		return refuse("invalid_request", oauthvocab.OutcomeInvalidRequest)
+	}
+	scope, ok := NormalizeOAuthScope(request.Scope)
+	if !ok {
+		return refuse("invalid_scope", oauthvocab.OutcomeInvalidScope)
 	}
 	device, err := s.devices.StartForOAuth(ctx)
 	if err != nil {
@@ -334,14 +329,14 @@ func (s *OAuthService) Authorize(ctx context.Context, request OAuthAuthorizeRequ
 	now := s.now().UTC()
 	_, err = s.store.CreateAuthorizationRequest(ctx, storage.OAuthAuthorizationRequest{
 		HandleHash: storage.HashOAuthSecret(handle), DeviceCodeHash: device.DeviceCodeHash,
-		ClientID: client.ClientID, ClientKind: client.Kind, RedirectURI: request.RedirectURI,
-		CodeChallenge: request.CodeChallenge, Resource: resource, Scope: request.Scope, State: request.State,
+		ClientID: client.ClientID, ClientKind: client.Kind, RedirectURI: redirectURI,
+		CodeChallenge: request.CodeChallenge, Resource: resource, Scope: scope, State: request.State,
 		CreatedAt: now, ExpiresAt: device.ExpiresAt,
 	})
 	if err != nil {
 		return OAuthAuthorization{}, fmt.Errorf("%w: store authorization request", ErrOAuthUnavailable)
 	}
-	return OAuthAuthorization{Handle: handle, UserCode: device.UserCode, ExpiresAt: device.ExpiresAt, Client: client, Resource: resource}, nil
+	return OAuthAuthorization{Handle: handle, UserCode: device.UserCode, ExpiresAt: device.ExpiresAt, Client: client, Resource: resource, Scope: scope}, nil
 }
 
 // resolveResource returns the resource a request binds to: the one it named,
@@ -425,11 +420,6 @@ func (s *OAuthService) Consent(ctx context.Context, handle string) (OAuthConsent
 	return OAuthConsent{State: OAuthConsentApproved, ClientKind: request.ClientKind, RedirectURL: s.redirectURL(request, url.Values{"code": {code}})}, nil
 }
 
-// RedirectError builds the redirect for a redirectable refusal.
-func (s *OAuthService) RedirectError(redirectURI, state, code string) string {
-	return s.redirectURL(storage.OAuthAuthorizationRequest{RedirectURI: redirectURI, State: state}, url.Values{"error": {code}})
-}
-
 func (s *OAuthService) redirectURL(request storage.OAuthAuthorizationRequest, values url.Values) string {
 	target, err := url.Parse(request.RedirectURI)
 	if err != nil {
@@ -502,7 +492,11 @@ func (s *OAuthService) Exchange(ctx context.Context, request OAuthTokenRequest) 
 	if request.Resource != "" && request.Resource != pending.Resource {
 		return refuse("invalid_target", oauthvocab.OutcomeResourceMismatch)
 	}
-	issued, err := s.devices.RedeemForResource(ctx, pending.DeviceCodeHash, pending.Resource)
+	scope, ok := NormalizeOAuthScope(pending.Scope)
+	if !ok {
+		return refuse("invalid_grant", oauthvocab.OutcomeInvalidGrant)
+	}
+	issued, err := s.devices.RedeemForResource(ctx, pending.DeviceCodeHash, pending.Resource, strings.Fields(scope))
 	if errors.Is(err, ErrOAuthDeviceNotApproved) {
 		return refuse("invalid_grant", oauthvocab.OutcomeInvalidGrant)
 	}
@@ -513,7 +507,7 @@ func (s *OAuthService) Exchange(ctx context.Context, request OAuthTokenRequest) 
 	if issued.Credential.ExpiresAt != nil {
 		lifetime = issued.Credential.ExpiresAt.Sub(s.now().UTC())
 	}
-	return OAuthToken{Issued: issued, ExpiresIn: lifetime, Scope: OAuthScope, ClientKind: pending.ClientKind}, nil
+	return OAuthToken{Issued: issued, ExpiresIn: lifetime, Scope: scope, ClientKind: pending.ClientKind}, nil
 }
 
 // VerifyPKCES256 reports whether a code verifier (RFC 7636 §4.1: 43 to 128

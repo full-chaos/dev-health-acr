@@ -1236,15 +1236,10 @@ func closeAfterError(runtime *Runtime, cause error) error {
 }
 
 // oauthRuntime composes the OAuth login for hosted MCP clients, or nil when
-// it is not configured. Client ID metadata documents are fetched only from
-// publicly routable addresses.
+// it is not configured.
 func oauthRuntime(cfg config.Config, store storage.OAuthStore) *api.OAuthRuntime {
 	if !cfg.OAuthConfigured() {
 		return nil
 	}
-	runtime := &api.OAuthRuntime{Store: store, Issuer: cfg.OAuthIssuer, Resources: append([]string(nil), cfg.OAuthResources...)}
-	if cfg.OAuthClientMetadataDocuments {
-		runtime.ClientMetadata = auth.NewPublicClientMetadataFetcher()
-	}
-	return runtime
+	return &api.OAuthRuntime{Store: store, Issuer: cfg.OAuthIssuer, Resources: append([]string(nil), cfg.OAuthResources...)}
 }

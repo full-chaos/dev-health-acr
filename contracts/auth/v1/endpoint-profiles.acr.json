@@ -834,8 +834,8 @@
         "description": "No authenticator wrapper -- mux.HandleFunc directly; the body is built from process configuration alone.",
         "anchor": {
           "path": "internal/api/oauth_routes.go",
-          "line": 60,
-          "line_end": 60,
+          "line": 59,
+          "line_end": 59,
           "note": "func (a *App) handleOAuthMetadata("
         }
       },
@@ -865,25 +865,25 @@
       },
       "public_rationale": "OAuth 2.1 authorization endpoint (authorization code + PKCE S256 + RFC 8707 resource) for hosted MCP clients; the caller has no credential by definition. It only starts a consent: the credential is issued after a web-assertion-authenticated approval on the device approval route.",
       "primary_validator": {
-        "description": "OAuthService.Authorize -- verifies the client (dynamic registration or client ID metadata document) and the exact redirect URI before anything is redirectable, then requires response_type=code, S256 PKCE and a configured resource; rate limited per IP by AllowDeviceCreation.",
+        "description": "OAuthService.Authorize -- verifies the client (a dynamic registration) and the exact registered redirect URI before anything is redirectable, then requires response_type=code, S256 PKCE and a configured resource; rate limited per IP by AllowDeviceCreation.",
         "anchor": {
           "path": "internal/auth/oauth.go",
-          "line": 304,
-          "line_end": 304,
+          "line": 260,
+          "line_end": 260,
           "note": "func (s *OAuthService) Authorize("
         }
       },
       "action": "oauth.authorize.start",
       "resource_resolver": "None yet -- starts a device authorization with no hints; org and repositories are chosen at approval.",
-      "disclosure_behavior": "Consent page (HTML, CSP nonce, no-store, frame-ancestors none) or a 303 to the verified redirect URI with a closed OAuth error code; an unverified client/redirect gets a fixed HTML problem page and is never redirected.",
+      "disclosure_behavior": "Consent page (HTML, CSP nonce, no-store, frame-ancestors none) or a 303 to the verified redirect URI with a closed OAuth error code; an unverified client/redirect gets a fixed HTML problem page and is never redirected; error redirects go to the registered redirect URI, never the request value.",
       "issued_credential": [
         {
           "class_id": "acr_device_flow_code",
           "direction": "returned_to_caller",
           "anchor": {
             "path": "internal/auth/device_oauth.go",
-            "line": 29,
-            "line_end": 49,
+            "line": 44,
+            "line_end": 64,
             "note": "DeviceFlowService.StartForOAuth -- mints a device authorization via s.store.Create; only the user_code is returned (in the consent page), the raw device_code is discarded"
           },
           "issuer": "acr DeviceFlowService",
@@ -891,7 +891,7 @@
           "algorithm": null,
           "lifetime_seconds": 600,
           "key_source": null,
-          "verified_by": "acr:internal/auth/device_oauth.go:100"
+          "verified_by": "acr:internal/auth/device_oauth.go:115"
         }
       ]
     },
@@ -920,8 +920,8 @@
         "description": "OAuthService.Consent -- looks the request up by the SHA-256 of the handle; issues a code at most once (IssueAuthorizationCode is conditional on no code yet).",
         "anchor": {
           "path": "internal/auth/oauth.go",
-          "line": 385,
-          "line_end": 385,
+          "line": 350,
+          "line_end": 350,
           "note": "func (s *OAuthService) Consent("
         }
       },
@@ -961,8 +961,8 @@
         "description": "OAuthService.Exchange -- consumes the code atomically first (a refused exchange spends it), then requires the same client_id and redirect_uri, an S256 code_verifier matching the stored challenge, and a resource equal to the authorized one; redeems the approved device authorization bound to that resource. Rate limited per IP by AllowTokenRequest.",
         "anchor": {
           "path": "internal/auth/oauth.go",
-          "line": 478,
-          "line_end": 478,
+          "line": 435,
+          "line_end": 435,
           "note": "func (s *OAuthService) Exchange("
         }
       },
@@ -975,8 +975,8 @@
           "direction": "returned_to_caller",
           "anchor": {
             "path": "internal/auth/device_oauth.go",
-            "line": 100,
-            "line_end": 117,
+            "line": 115,
+            "line_end": 132,
             "note": "DeviceFlowService.RedeemForResource -- redeem mints the fcacr_ credential (30-day expiry) with Resource bound; the authenticator admits it only with a matching X-ACR-Resource header"
           },
           "issuer": "acr credential Service (via DeviceFlowService.redeem)",
@@ -1008,13 +1008,13 @@
         "file": "internal/api/app.go",
         "line": 97
       },
-      "public_rationale": "RFC 7591 dynamic client registration for public MCP clients (DCR fallback to client ID metadata documents); the caller has no credential by definition.",
+      "public_rationale": "RFC 7591 dynamic client registration for public MCP clients; the caller has no credential by definition.",
       "primary_validator": {
         "description": "OAuthService.Register -- public clients only (token_endpoint_auth_method none), grant types limited to authorization_code (refresh_token requests are answered without it), redirect URIs HTTPS or HTTP loopback; rate limited per IP by AllowDeviceCreation. Registration grants nothing by itself.",
         "anchor": {
           "path": "internal/auth/oauth.go",
-          "line": 179,
-          "line_end": 179,
+          "line": 158,
+          "line_end": 158,
           "note": "func (s *OAuthService) Register("
         }
       },

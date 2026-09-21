@@ -34,6 +34,7 @@ const (
 	OutcomeUnsupportedGrantType    = "unsupported_grant_type"
 	OutcomePKCERequired            = "pkce_required"
 	OutcomeInvalidTarget           = "invalid_target"
+	OutcomeInvalidScope            = "invalid_scope"
 	OutcomeInvalidGrant            = "invalid_grant"
 	OutcomePKCEMismatch            = "pkce_mismatch"
 	OutcomeRedirectMismatch        = "redirect_mismatch"
@@ -48,7 +49,7 @@ func OutcomeVocabulary() []string {
 	return []string{
 		OutcomeOK, OutcomePending, OutcomeAccessDenied, OutcomeExpired, OutcomeAlreadyCompleted,
 		OutcomeInvalidRequest, OutcomeInvalidClient, OutcomeInvalidClientMetadata, OutcomeInvalidRedirectURI,
-		OutcomeUnsupportedResponseType, OutcomeUnsupportedGrantType, OutcomePKCERequired, OutcomeInvalidTarget,
+		OutcomeUnsupportedResponseType, OutcomeUnsupportedGrantType, OutcomePKCERequired, OutcomeInvalidTarget, OutcomeInvalidScope,
 		OutcomeInvalidGrant, OutcomePKCEMismatch, OutcomeRedirectMismatch, OutcomeClientMismatch,
 		OutcomeResourceMismatch, OutcomeRateLimited, OutcomeUnavailable,
 	}
@@ -56,13 +57,23 @@ func OutcomeVocabulary() []string {
 
 // OAuth client kinds.
 const (
-	ClientKindNone             = "none"
-	ClientKindDynamic          = "dynamic"
-	ClientKindMetadataDocument = "metadata_document"
+	ClientKindNone    = "none"
+	ClientKindDynamic = "dynamic"
 )
 
 // ClientKindVocabulary lists every client kind; none means the step
 // stopped before a client was identified.
 func ClientKindVocabulary() []string {
-	return []string{ClientKindNone, ClientKindDynamic, ClientKindMetadataDocument}
+	return []string{ClientKindNone, ClientKindDynamic}
 }
+
+// Scopes an OAuth request may ask for and a credential may be granted, in
+// canonical order. internal/auth pins this list against its own scope
+// constants.
+const (
+	ScopeContextRead  = "context:read"
+	ScopeEvidenceRead = "evidence:read"
+)
+
+// ScopeVocabulary lists every OAuth scope.
+func ScopeVocabulary() []string { return []string{ScopeContextRead, ScopeEvidenceRead} }

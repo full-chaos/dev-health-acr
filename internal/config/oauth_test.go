@@ -56,16 +56,15 @@ func TestValidateOAuthConfigDomain(t *testing.T) {
 
 func TestLoad_oauthSettingsParse(t *testing.T) {
 	cfg, err := load(mapLookup(map[string]string{
-		"ACR_LOCAL_COMPOSITION_READY":         "true",
-		"ACR_OAUTH_RESOURCES":                 " https://a.example.test/mcp , https://b.example.test/mcp",
-		"ACR_OAUTH_CLIENT_METADATA_DOCUMENTS": "false",
+		"ACR_LOCAL_COMPOSITION_READY": "true",
+		"ACR_OAUTH_RESOURCES":         " https://a.example.test/mcp , https://b.example.test/mcp",
 	}))
 	if err == nil || !strings.Contains(err.Error(), "ACR_OAUTH_ISSUER is required") {
 		t.Fatalf("resources without issuer: err = %v", err)
 	}
 	cfg, err = load(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true"}))
-	if err != nil || cfg.OAuthConfigured() || !cfg.OAuthClientMetadataDocuments {
-		t.Fatalf("defaults: configured=%v metadata-documents=%v err=%v", cfg.OAuthConfigured(), cfg.OAuthClientMetadataDocuments, err)
+	if err != nil || cfg.OAuthConfigured() {
+		t.Fatalf("defaults: configured=%v err=%v", cfg.OAuthConfigured(), err)
 	}
 	if got := oauthResources(" https://a.example.test/mcp , https://b.example.test/mcp"); len(got) != 2 || got[1] != "https://b.example.test/mcp" {
 		t.Fatalf("oauthResources = %q", got)

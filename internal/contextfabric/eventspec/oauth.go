@@ -21,6 +21,9 @@ func OAuthStepVocabulary() []string { return oauthvocab.StepVocabulary() }
 // OAuthOutcomeVocabulary lists every outcome, ok first.
 func OAuthOutcomeVocabulary() []string { return oauthvocab.OutcomeVocabulary() }
 
+// OAuthScopeVocabulary lists every OAuth scope.
+func OAuthScopeVocabulary() []string { return oauthvocab.ScopeVocabulary() }
+
 // OAuthClientKindVocabulary lists every client kind.
 func OAuthClientKindVocabulary() []string { return oauthvocab.ClientKindVocabulary() }
 
@@ -44,6 +47,7 @@ var OAuthStep = Event{
 		{Key: "step", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: OAuthStepVocabulary()},
 		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: OAuthOutcomeVocabulary()},
 		{Key: "client_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: OAuthClientKindVocabulary()},
+		{Key: "scopes", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: OAuthScopeVocabulary(), Applicability: "the requested scopes on an authorize ok line, the granted scopes on a token ok line, empty on every other line"},
 		{Key: "status", Type: FieldInt, Presence: PresenceRequired},
 	},
 }

@@ -232,9 +232,6 @@ type Config struct {
 	// OAuthResources (ACR_OAUTH_RESOURCES, comma separated) are the hosted
 	// MCP endpoint URLs an OAuth credential may be bound to.
 	OAuthResources []string
-	// OAuthClientMetadataDocuments (ACR_OAUTH_CLIENT_METADATA_DOCUMENTS,
-	// default true) accepts client ID metadata documents as client IDs.
-	OAuthClientMetadataDocuments bool
 }
 
 type lookupEnv func(string) (string, bool)
@@ -319,9 +316,6 @@ func load(lookup lookupEnv) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.EvidenceIDKeys, err = evidenceIDKeysValue(lookup); err != nil {
-		return Config{}, err
-	}
-	if cfg.OAuthClientMetadataDocuments, err = boolValue(lookup, "ACR_OAUTH_CLIENT_METADATA_DOCUMENTS", true); err != nil {
 		return Config{}, err
 	}
 

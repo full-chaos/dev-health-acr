@@ -504,3 +504,26 @@ the complete web-assertion configuration its consent step depends on.
 {{- fail "oauth: config.oauth.enabled requires config.webAssertion.issuer, audience and existingSecret (consent is approved on the web approval page)" -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+The hosted MCP endpoint advertises this release's acr-api as its authorization
+server, so the two must agree: acr-api serves OAuth, names this issuer, and
+issues for this resource URL. A mismatch renders a deployment where every
+login ends in invalid_target.
+*/}}
+{{- define "acr.validateMcpOAuth" -}}
+{{- $m := .Values.acrMcp.oauth -}}
+{{- $o := .Values.config.oauth -}}
+{{- if not (and $m.resourceUrl $m.authorizationServer) -}}
+{{- fail "oauth: acrMcp.oauth.resourceUrl and acrMcp.oauth.authorizationServer are set together" -}}
+{{- end -}}
+{{- if not $o.enabled -}}
+{{- fail "oauth: acrMcp.oauth requires config.oauth.enabled (acr-api is the authorization server it advertises)" -}}
+{{- end -}}
+{{- if ne ($m.authorizationServer | default "") ($o.issuer | default "") -}}
+{{- fail (printf "oauth: acrMcp.oauth.authorizationServer %q must equal config.oauth.issuer %q" ($m.authorizationServer | default "") ($o.issuer | default "")) -}}
+{{- end -}}
+{{- if not (has ($m.resourceUrl | default "") ($o.resources | default list)) -}}
+{{- fail (printf "oauth: acrMcp.oauth.resourceUrl %q must be listed in config.oauth.resources" ($m.resourceUrl | default "")) -}}
+{{- end -}}
+{{- end -}}

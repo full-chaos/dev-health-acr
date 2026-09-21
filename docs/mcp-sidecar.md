@@ -629,7 +629,7 @@ Two ways to authenticate. Both end with the same `fcacr_` bearer on every reques
 
 1. The client calls the endpoint without a credential and gets `401` with `WWW-Authenticate: Bearer resource_metadata="https://<mcp host>/.well-known/oauth-protected-resource/mcp", scope="context:read evidence:read"`.
 2. It reads that protected resource metadata (RFC 9728), which names acr-api as the authorization server, and then acr-api's `/.well-known/oauth-authorization-server` (RFC 8414).
-3. It identifies itself with a client ID metadata document (an HTTPS `client_id`) or registers at `/register` (RFC 7591, public clients only, no secret).
+3. It registers at `/register` (RFC 7591 dynamic registration, public clients only, no secret). Client ID metadata documents are not accepted.
 4. It opens `/authorize` in the browser with PKCE (`S256` only) and the `resource` parameter (RFC 8707). The page shows a user code and a link to the web approval page. Sign in there, enter the code and choose the repositories. This is the same approval as `acr-mcp login`: the credential gets `context:read` and `evidence:read` for the organization and repositories you approve.
 5. The page returns the browser to the client with a one-time code (valid 2 minutes, with `iss`), and the client exchanges it at `/token` with its PKCE verifier.
 

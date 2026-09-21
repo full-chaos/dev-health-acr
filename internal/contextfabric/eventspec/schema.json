@@ -43,6 +43,7 @@
           "unsupported_grant_type",
           "pkce_required",
           "invalid_target",
+          "invalid_scope",
           "invalid_grant",
           "pkce_mismatch",
           "redirect_mismatch",
@@ -58,9 +59,18 @@
         "presence": "required",
         "closed_vocabulary": [
           "none",
-          "dynamic",
-          "metadata_document"
+          "dynamic"
         ]
+      },
+      {
+        "key": "scopes",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "context:read",
+          "evidence:read"
+        ],
+        "applicability": "the requested scopes on an authorize ok line, the granted scopes on a token ok line, empty on every other line"
       },
       {
         "key": "status",

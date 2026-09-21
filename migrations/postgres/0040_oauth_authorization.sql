@@ -26,9 +26,7 @@ COMMENT ON COLUMN acr.client_credentials.resource IS
 
 -- acr.oauth_clients holds dynamically registered public clients (RFC 7591).
 -- Only public clients exist here: registration never issues a client
--- secret. A client whose client_id is an HTTPS client ID metadata document
--- URL (draft-ietf-oauth-client-id-metadata-document) is never stored --
--- its metadata is fetched and validated per request instead.
+-- secret.
 CREATE TABLE IF NOT EXISTS acr.oauth_clients (
     client_id TEXT PRIMARY KEY,
     client_name TEXT NOT NULL DEFAULT '',
@@ -65,7 +63,7 @@ CREATE TABLE IF NOT EXISTS acr.oauth_authorization_requests (
     code_expires_at TIMESTAMPTZ,
     consumed_at TIMESTAMPTZ,
     CHECK (handle_hash ~ '^[0-9a-f]{64}$'),
-    CHECK (client_kind IN ('dynamic', 'metadata_document')),
+    CHECK (client_kind IN ('dynamic')),
     CHECK (code_challenge ~ '^[A-Za-z0-9_-]{43}$'),
     CHECK (code_hash IS NULL OR code_hash ~ '^[0-9a-f]{64}$'),
     CHECK ((code_hash IS NULL) = (code_expires_at IS NULL)),

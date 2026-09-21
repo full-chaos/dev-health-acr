@@ -48,7 +48,7 @@ import (
 // builds it, and the go-sdk's own MCP OAuth client (AuthorizationCodeHandler),
 // which knows nothing about this server: it follows the 401 challenge to the
 // protected resource metadata, discovers the authorization server, registers
-// or presents a metadata-document client ID, sends PKCE and the resource
+// dynamically, sends PKCE and the resource
 // indicator, and exchanges the code. Only the human is scripted: the
 // fetcher reads the consent page, approves its user code the way the web
 // approval page does (a signed web assertion), and follows the redirect.
@@ -156,7 +156,6 @@ func newOAuthStack(t *testing.T, extraResources ...string) *oauthStack {
 		t.Fatal(err)
 	}
 
-	metadataClient := s.api.Client()
 	app, err := api.NewApp(api.AppConfig{ServiceName: "acr", ServiceVersion: "test", RequestTimeout: 30 * time.Second}, api.Dependencies{
 		Capabilities: api.StaticCapabilitiesProvider{Now: time.Now, Value: contractsv1.Capabilities{
 			SchemaVersion: contractsv1.CapabilitiesSchema, Service: "dev-health-acr", ServiceVersion: "1.2.3", MinimumSidecarVersion: "1.0.0",
@@ -173,8 +172,7 @@ func newOAuthStack(t *testing.T, extraResources ...string) *oauthStack {
 			ReadinessChecks:            []api.ReadinessCheck{api.CheckFunc{CheckName: "postgres"}, api.CheckFunc{CheckName: "clickhouse"}, api.CheckFunc{CheckName: "entitlement"}},
 			OAuth: &api.OAuthRuntime{
 				Store: memory.NewOAuthStore(s.clock.now), Issuer: s.api.URL,
-				Resources:      append([]string{s.mcpURL}, extraResources...),
-				ClientMetadata: auth.NewClientMetadataFetcher(metadataClient),
+				Resources: append([]string{s.mcpURL}, extraResources...),
 			},
 		},
 	}, slog.New(slog.NewJSONHandler(s.apiLogs, &slog.HandlerOptions{Level: slog.LevelInfo})))
@@ -182,16 +180,7 @@ func newOAuthStack(t *testing.T, extraResources ...string) *oauthStack {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = app.Close() })
-	front := http.NewServeMux()
-	front.HandleFunc("GET /cimd/client.json", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"client_id": s.api.URL + "/cimd/client.json", "client_name": "Metadata Client", "redirect_uris": []string{oauthLoginRedirect},
-			"grant_types": []string{"authorization_code"}, "response_types": []string{"code"}, "token_endpoint_auth_method": "none",
-		})
-	})
-	front.Handle("/", app.Handler())
-	apiSwap.set(front)
+	apiSwap.set(app.Handler())
 
 	s.mcpHandler = s.newEndpoint(s.mcpURL)
 	mcpSwap.set(s.mcpHandler)
@@ -531,6 +520,16 @@ func TestOAuthLoginEndToEnd(t *testing.T) {
 	if strings.Join(steps, ",") != strings.Join(want, ",") {
 		t.Fatalf("oauth telemetry steps = %v, want %v", steps, want)
 	}
+	for _, line := range s.oauthLines(t) {
+		scopes, _ := json.Marshal(line["scopes"])
+		wantScopes := `[]`
+		if line["outcome"] == "ok" && (line["step"] == "authorize" || line["step"] == "token") {
+			wantScopes = `["context:read","evidence:read"]`
+		}
+		if string(scopes) != wantScopes {
+			t.Fatalf("%s:%s scopes = %s, want %s", line["step"], line["outcome"], scopes, wantScopes)
+		}
+	}
 	logs := string(s.apiLogs.Bytes())
 	if strings.Contains(logs, token) {
 		t.Fatal("acr-api logs carry the issued access token")
@@ -742,35 +741,6 @@ func TestOAuthAuthorizeRequiresPKCE(t *testing.T) {
 	response.Body.Close()
 	if response.StatusCode != http.StatusBadRequest || response.Header.Get("Location") != "" {
 		t.Fatalf("unregistered redirect URI: status %d location %q, want 400 and no redirect", response.StatusCode, response.Header.Get("Location"))
-	}
-}
-
-func TestOAuthLoginWithClientMetadataDocument(t *testing.T) {
-	s := newOAuthStack(t)
-	documentURL := s.api.URL + "/cimd/client.json"
-	handler, err := sdkauth.NewAuthorizationCodeHandler(&sdkauth.AuthorizationCodeHandlerConfig{
-		ClientIDMetadataDocumentConfig: &sdkauth.ClientIDMetadataDocumentConfig{URL: documentURL},
-		RedirectURL:                    oauthLoginRedirect,
-		AuthorizationCodeFetcher:       s.fetcher([]string{repoWidget}),
-		Client:                         s.api.Client(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	session, err := s.connect(handler)
-	if err != nil {
-		t.Fatalf("login with a client metadata document: %v (telemetry %v)", err, s.oauthLines(t))
-	}
-	defer session.Close()
-	if _, err := session.ListTools(context.Background(), nil); err != nil {
-		t.Fatal(err)
-	}
-	var kinds []string
-	for _, line := range s.oauthLines(t) {
-		kinds = append(kinds, line["step"].(string)+":"+line["client_kind"].(string))
-	}
-	if strings.Join(kinds, ",") != "authorize:metadata_document,consent:metadata_document,consent:metadata_document,token:metadata_document" {
-		t.Fatalf("metadata-document login telemetry = %v", kinds)
 	}
 }
 

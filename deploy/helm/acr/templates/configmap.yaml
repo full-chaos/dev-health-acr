@@ -45,7 +45,6 @@ data:
   {{- include "acr.validateOAuth" . }}
   ACR_OAUTH_ISSUER: {{ .Values.config.oauth.issuer | quote }}
   ACR_OAUTH_RESOURCES: {{ join "," .Values.config.oauth.resources | quote }}
-  ACR_OAUTH_CLIENT_METADATA_DOCUMENTS: {{ .Values.config.oauth.clientMetadataDocuments | quote }}
   {{- end }}
   {{- if include "acr.remoteEntitlement" . }}
   ACR_DEV_HEALTH_ENTITLEMENT_URL: {{ .Values.config.entitlement.url | quote }}

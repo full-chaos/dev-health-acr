@@ -104,7 +104,9 @@ func TestOAuthMetadataDocument(t *testing.T) {
 	want := map[string]any{
 		"issuer": oauthTestIssuer, "authorization_endpoint": oauthTestIssuer + "/authorize", "token_endpoint": oauthTestIssuer + "/token",
 		"registration_endpoint": oauthTestIssuer + "/register", "authorization_response_iss_parameter_supported": true,
-		"client_id_metadata_document_supported": false,
+	}
+	if _, present := metadata["client_id_metadata_document_supported"]; present {
+		t.Error("metadata advertises client ID metadata documents, which this server does not accept")
 	}
 	for key, value := range want {
 		if metadata[key] != value {
@@ -233,5 +235,26 @@ func TestOAuthTokenRefusesNonFormAndRepeatedParameters(t *testing.T) {
 	}
 	if count := strings.Count(logs.String(), `"step":"token","outcome":"invalid_request"`); count != 3 {
 		t.Fatalf("token invalid_request lines = %d, want 3", count)
+	}
+}
+
+func TestOAuthConsentChecksAreRateLimitedPerIP(t *testing.T) {
+	app, logs, err := newOAuthTestApp(t, &OAuthRuntime{Issuer: oauthTestIssuer, Resources: []string{oauthTestResource}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statuses := map[int]int{}
+	for range 70 {
+		request := httptest.NewRequest(http.MethodPost, OAuthConsentPath, strings.NewReader("handle=unknown"))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		recorder := httptest.NewRecorder()
+		app.Handler().ServeHTTP(recorder, request)
+		statuses[recorder.Code]++
+	}
+	if statuses[http.StatusBadRequest] != 60 || statuses[http.StatusTooManyRequests] != 10 {
+		t.Fatalf("70 consent checks from one IP: statuses %v, want 60x400 then 10x429", statuses)
+	}
+	if count := strings.Count(logs.String(), `"step":"consent","outcome":"rate_limited"`); count != 10 {
+		t.Fatalf("consent rate_limited lines = %d, want 10", count)
 	}
 }

@@ -90,6 +90,7 @@ type OAuthStepFields struct {
 	Step       string
 	Outcome    string
 	ClientKind string
+	Scopes     []string
 	Status     int
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every OAuthStepFields uniformly, set ONLY by NewOAuthStepFields below. A caller
@@ -104,14 +105,19 @@ type OAuthStepFields struct {
 
 // NewOAuthStepFields is the generated constructor for OAuthStepFields -- every
 // field OAuthStep.Fields declares is a required parameter.
-func NewOAuthStepFields(requestID string, step string, outcome string, clientKind string, status int) OAuthStepFields {
+func NewOAuthStepFields(requestID string, step string, outcome string, clientKind string, scopes []string, status int) OAuthStepFields {
+	valid := true
+	if scopes == nil {
+		valid = false
+	}
 	return OAuthStepFields{
 		RequestID:   requestID,
 		Step:        step,
 		Outcome:     outcome,
 		ClientKind:  clientKind,
+		Scopes:      scopes,
 		Status:      status,
-		constructed: true,
+		constructed: valid,
 	}
 }
 
@@ -132,6 +138,7 @@ func (f OAuthStepFields) SlogArgs() []any {
 		"step", contextfabric.SanitizeLogAttr(f.Step),
 		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
 		"client_kind", contextfabric.SanitizeLogAttr(f.ClientKind),
+		"scopes", contextfabric.SanitizeLogStrings(f.Scopes),
 		"status", f.Status,
 	}
 }

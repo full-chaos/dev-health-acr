@@ -253,8 +253,7 @@
           "properties": {
             "enabled": { "type": "boolean" },
             "issuer": { "type": "string" },
-            "resources": { "type": "array", "items": { "type": "string" } },
-            "clientMetadataDocuments": { "type": "boolean" }
+            "resources": { "type": "array", "items": { "type": "string" } }
           }
         }
       }

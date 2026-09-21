@@ -19,7 +19,7 @@ import (
 type OAuthConsentAuthority interface {
 	StartForOAuth(ctx context.Context) (OAuthDeviceAuthorization, error)
 	StateForOAuth(ctx context.Context, ref storage.DeviceCodeHash) (OAuthDeviceState, error)
-	RedeemForResource(ctx context.Context, ref storage.DeviceCodeHash, resource string) (IssuedCredential, error)
+	RedeemForResource(ctx context.Context, ref storage.DeviceCodeHash, resource string, scopes []string) (IssuedCredential, error)
 }
 
 var _ OAuthConsentAuthority = (*DeviceFlowService)(nil)
@@ -111,12 +111,13 @@ func (s *DeviceFlowService) StateForOAuth(ctx context.Context, hash storage.Devi
 var ErrOAuthDeviceNotApproved = errors.New("device authorization is not approved")
 
 // RedeemForResource issues the credential of an approved device authorization,
-// bound to the protected resource the OAuth request named.
-func (s *DeviceFlowService) RedeemForResource(ctx context.Context, hash storage.DeviceCodeHash, resource string) (IssuedCredential, error) {
+// bound to the protected resource the OAuth request named and carrying only
+// the scopes it asked for (a non-empty subset of the approved ones).
+func (s *DeviceFlowService) RedeemForResource(ctx context.Context, hash storage.DeviceCodeHash, resource string, scopes []string) (IssuedCredential, error) {
 	if err := s.ready(ctx); err != nil {
 		return IssuedCredential{}, err
 	}
-	if resource == "" || !storage.ValidOAuthResource(resource) {
+	if resource == "" || !storage.ValidOAuthResource(resource) || len(scopes) == 0 {
 		return IssuedCredential{}, ErrInvalidDeviceFlow
 	}
 	record, err := s.store.GetByDeviceCodeHash(ctx, hash)
@@ -129,7 +130,7 @@ func (s *DeviceFlowService) RedeemForResource(ctx context.Context, hash storage.
 	if record.State != storage.DeviceAuthorizationStateApproved || !record.ExpiresAt.After(s.now().UTC()) {
 		return IssuedCredential{}, ErrOAuthDeviceNotApproved
 	}
-	issued, err := s.redeem(ctx, record, resource)
+	issued, err := s.redeem(ctx, record, resource, scopes)
 	if err != nil {
 		var pollError *DevicePollError
 		if errors.As(err, &pollError) {

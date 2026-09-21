@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
@@ -54,7 +55,6 @@ type oauthAuthorizationServerMetadata struct {
 	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported"`
 	CodeChallengeMethodsSupported     []string `json:"code_challenge_methods_supported"`
 	AuthorizationResponseIssParameter bool     `json:"authorization_response_iss_parameter_supported"`
-	ClientIDMetadataDocumentSupported bool     `json:"client_id_metadata_document_supported"`
 }
 
 func (a *App) handleOAuthMetadata(w http.ResponseWriter, _ *http.Request) {
@@ -71,7 +71,6 @@ func (a *App) handleOAuthMetadata(w http.ResponseWriter, _ *http.Request) {
 		TokenEndpointAuthMethodsSupported: []string{"none"},
 		CodeChallengeMethodsSupported:     []string{"S256"},
 		AuthorizationResponseIssParameter: true,
-		ClientIDMetadataDocumentSupported: a.oauth.ClientMetadataDocumentsSupported(),
 	})
 }
 
@@ -87,10 +86,16 @@ type oauthErrorBody struct {
 
 // emitOAuthStep writes the one telemetry line of an OAuth request.
 func (a *App) emitOAuthStep(r *http.Request, step, outcome, clientKind string, status int) {
+	a.emitOAuthStepScopes(r, step, outcome, clientKind, status, []string{})
+}
+
+// emitOAuthStepScopes writes the line with the requested (authorize) or
+// granted (token) scopes.
+func (a *App) emitOAuthStepScopes(r *http.Request, step, outcome, clientKind string, status int, scopes []string) {
 	if clientKind == "" {
 		clientKind = oauthvocab.ClientKindNone
 	}
-	fields := eventspec.NewOAuthStepFields(RequestID(r.Context()), step, outcome, clientKind, status)
+	fields := eventspec.NewOAuthStepFields(RequestID(r.Context()), step, outcome, clientKind, scopes, status)
 	a.logger.InfoContext(r.Context(), eventspec.OAuthStepLogMessage, fields.SlogArgs()...)
 }
 
@@ -183,9 +188,9 @@ func (a *App) handleOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
 	authorization, err := a.oauth.Authorize(r.Context(), request)
 	if err != nil {
 		if refusal, ok := oauthOutcome(err); ok {
-			if refusal.Redirectable {
+			if refusal.Redirectable && refusal.RedirectURL != "" {
 				w.Header().Set("Cache-Control", "no-store")
-				http.Redirect(w, r, a.oauth.RedirectError(request.RedirectURI, request.State, refusal.Code), http.StatusSeeOther)
+				http.Redirect(w, r, refusal.RedirectURL, http.StatusSeeOther)
 				a.emitOAuthStep(r, oauthvocab.StepAuthorize, refusal.Outcome, "", http.StatusSeeOther)
 				return
 			}
@@ -199,7 +204,7 @@ func (a *App) handleOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.renderOAuthConsent(w, r, authorization)
-	a.emitOAuthStep(r, oauthvocab.StepAuthorize, oauthvocab.OutcomeOK, authorization.Client.Kind, http.StatusOK)
+	a.emitOAuthStepScopes(r, oauthvocab.StepAuthorize, oauthvocab.OutcomeOK, authorization.Client.Kind, http.StatusOK, strings.Fields(authorization.Scope))
 }
 
 type oauthConsentBody struct {
@@ -208,6 +213,9 @@ type oauthConsentBody struct {
 }
 
 func (a *App) handleOAuthConsent(w http.ResponseWriter, r *http.Request) {
+	if a.oauthRateLimited(w, r, oauthvocab.StepConsent, a.runtime.DeviceAuthorizationLimiter.AllowOAuthConsentCheck) {
+		return
+	}
 	if err := parseOAuthForm(w, r); err != nil {
 		writeOAuthJSON(w, http.StatusBadRequest, oauthErrorBody{Error: "invalid_request"})
 		a.emitOAuthStep(r, oauthvocab.StepConsent, oauthvocab.OutcomeInvalidRequest, "", http.StatusBadRequest)
@@ -301,7 +309,7 @@ func (a *App) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 		AccessToken: token.Issued.Token, TokenType: "Bearer",
 		ExpiresIn: int64(token.ExpiresIn / time.Second), Scope: token.Scope,
 	})
-	a.emitOAuthStep(r, oauthvocab.StepToken, oauthvocab.OutcomeOK, token.ClientKind, http.StatusOK)
+	a.emitOAuthStepScopes(r, oauthvocab.StepToken, oauthvocab.OutcomeOK, token.ClientKind, http.StatusOK, strings.Fields(token.Scope))
 }
 
 // tokenClientID reads the client ID of a public client: the client_id form
@@ -465,7 +473,7 @@ func newOAuthService(deps Dependencies, deviceFlow *auth.DeviceFlowService) (*au
 		return nil, ErrOAuthRequiresWebApproval
 	}
 	return auth.NewOAuthService(runtime.Store, deviceFlow, auth.OAuthConfig{
-		Issuer: runtime.Issuer, Resources: runtime.Resources, ClientMetadata: runtime.ClientMetadata, Now: deps.Now,
+		Issuer: runtime.Issuer, Resources: runtime.Resources, Now: deps.Now,
 	})
 }
 
@@ -477,6 +485,4 @@ type OAuthRuntime struct {
 	Issuer string
 	// Resources are the hosted MCP endpoint URLs credentials may be bound to.
 	Resources []string
-	// ClientMetadata resolves client ID metadata documents; nil disables them.
-	ClientMetadata auth.OAuthClientMetadataFetcher
 }

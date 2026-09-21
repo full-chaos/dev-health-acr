@@ -12,6 +12,9 @@ const (
 	deviceCreationLimit            = 10
 	tokenRequestLimit              = 60
 	approvalAttemptLimit           = 5
+	// oauthConsentCheckLimit bounds the OAuth consent page's approval checks
+	// per client IP: the page checks every 3 s, 20 a minute per open page.
+	oauthConsentCheckLimit         = 60
 	defaultDeviceAuthorizationKeys = 4096
 )
 
@@ -32,6 +35,7 @@ type DeviceAuthorizationLimiter interface {
 	AllowDeviceCreation(string) DeviceAuthorizationLimitDecision
 	AllowTokenRequest(string) DeviceAuthorizationLimitDecision
 	AllowApprovalAttempt(string, storage.UserCodeHash) DeviceAuthorizationLimitDecision
+	AllowOAuthConsentCheck(string) DeviceAuthorizationLimitDecision
 }
 
 type DeviceAuthorizationLimiterOptions struct {
@@ -75,6 +79,10 @@ func (l *deviceAuthorizationLimiter) AllowTokenRequest(ip string) DeviceAuthoriz
 
 func (l *deviceAuthorizationLimiter) AllowApprovalAttempt(ip string, userCode storage.UserCodeHash) DeviceAuthorizationLimitDecision {
 	return l.allow("device:approve\x00"+ip+"\x00"+userCode.String(), approvalAttemptLimit)
+}
+
+func (l *deviceAuthorizationLimiter) AllowOAuthConsentCheck(ip string) DeviceAuthorizationLimitDecision {
+	return l.allow("oauth:consent\x00"+ip, oauthConsentCheckLimit)
 }
 
 func (l *deviceAuthorizationLimiter) allow(key string, limit int) DeviceAuthorizationLimitDecision {

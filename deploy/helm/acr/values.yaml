@@ -96,9 +96,6 @@ config:
     # Public URLs of the hosted MCP endpoints a credential may be bound to,
     # e.g. [https://mcp.example.com/mcp].
     resources: []
-    # Accept client ID metadata documents (HTTPS client_id URLs). Fetches go
-    # to public addresses only.
-    clientMetadataDocuments: true
 
 # Existing-Secret-only credential contract. Each existingSecret is the NAME of a
 # Secret that already exists in the release namespace. This chart validates the
