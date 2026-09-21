@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"net/netip"
 	"net/url"
 	"slices"
 	"strings"
@@ -28,11 +29,26 @@ type oauthHarness struct {
 	devices *DeviceFlowService
 	store   storage.DeviceAuthorizationStore
 	creds   *storage.CredentialLifecycle
+	meta    *fakeMetadata
+}
+
+type fakeMetadata struct {
+	documents map[string]OAuthClientMetadata
+	calls     int
+}
+
+func (f *fakeMetadata) Fetch(_ context.Context, clientID string) (OAuthClientMetadata, error) {
+	f.calls++
+	document, ok := f.documents[clientID]
+	if !ok {
+		return OAuthClientMetadata{}, ErrClientMetadataUnavailable
+	}
+	return document, nil
 }
 
 func newOAuthHarness(t *testing.T, resources ...string) *oauthHarness {
 	t.Helper()
-	h := &oauthHarness{now: time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)}
+	h := &oauthHarness{now: time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC), meta: &fakeMetadata{documents: map[string]OAuthClientMetadata{}}}
 	clock := func() time.Time { return h.now }
 	credentials, err := memory.NewCredentialStoreWithOptions(memory.CredentialStoreOptions{Audit: memory.NewAuditStore(), Now: clock})
 	if err != nil {
@@ -55,7 +71,7 @@ func newOAuthHarness(t *testing.T, resources ...string) *oauthHarness {
 	if len(resources) == 0 {
 		resources = []string{testResource}
 	}
-	h.oauth, err = NewOAuthService(memory.NewOAuthStore(clock), h.devices, OAuthConfig{Issuer: testIssuer, Resources: resources, Now: clock})
+	h.oauth, err = NewOAuthService(memory.NewOAuthStore(clock), h.devices, OAuthConfig{Issuer: testIssuer, Resources: resources, ClientMetadata: h.meta, Now: clock})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,9 +325,88 @@ func TestOAuthRegisterRefusals(t *testing.T) {
 	}
 }
 
+func TestOAuthClientMetadataDocumentResolution(t *testing.T) {
+	h := newOAuthHarness(t)
+	id := "https://client.example.test/oauth/client.json"
+	for _, tc := range []struct {
+		name     string
+		document *OAuthClientMetadata
+		want     string
+	}{
+		{"valid", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}}, ""},
+		{"absent", nil, oauthvocab.OutcomeInvalidClientMetadata},
+		{"other client id", &OAuthClientMetadata{ClientID: "https://evil.example.test/c.json", RedirectURIs: []string{testRedirect}}, oauthvocab.OutcomeInvalidClientMetadata},
+		{"no redirects", &OAuthClientMetadata{ClientID: id}, oauthvocab.OutcomeInvalidClientMetadata},
+		{"confidential", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{testRedirect}, TokenEndpointAuthMethod: "private_key_jwt"}, oauthvocab.OutcomeInvalidClientMetadata},
+		{"bad redirect", &OAuthClientMetadata{ClientID: id, RedirectURIs: []string{"http://evil.example.test/cb"}}, oauthvocab.OutcomeInvalidClientMetadata},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			delete(h.meta.documents, id)
+			if tc.document != nil {
+				h.meta.documents[id] = *tc.document
+			}
+			client, err := h.oauth.ResolveClient(context.Background(), id)
+			if tc.want == "" {
+				if err != nil || client.Kind != storage.OAuthClientKindMetadataDocument {
+					t.Fatalf("resolve = %+v %v", client, err)
+				}
+				return
+			}
+			if outcomeOf(err) != tc.want {
+				t.Fatalf("outcome = %s, want %s", outcomeOf(err), tc.want)
+			}
+		})
+	}
+	for _, id := range []string{"http://client.example.test/c.json", "https://client.example.test/", "https://client.example.test", "https://client.example.test/a/../c.json"} {
+		calls := h.meta.calls
+		if _, err := h.oauth.ResolveClient(context.Background(), id); outcomeOf(err) != oauthvocab.OutcomeInvalidClient || h.meta.calls != calls {
+			t.Fatalf("client id %q: %v (fetched %d times), want invalid_client without a fetch", id, err, h.meta.calls-calls)
+		}
+	}
+}
+
+func TestPublicAddress(t *testing.T) {
+	for address, want := range map[string]bool{
+		"8.8.8.8": true, "2606:4700::1111": true,
+		"127.0.0.1": false, "10.1.2.3": false, "172.16.0.1": false, "192.168.1.1": false, "169.254.169.254": false,
+		"100.64.0.1": false, "0.0.0.0": false, "::1": false, "fe80::1": false, "fc00::1": false, "::ffff:10.0.0.1": false,
+		"::ffff:127.0.0.1": false, "224.0.0.1": false, "198.18.0.1": false, "::": false, "64:ff9b::a00:1": false,
+	} {
+		if got := PublicAddress(netip.MustParseAddr(address)); got != want {
+			t.Errorf("PublicAddress(%s) = %v, want %v", address, got, want)
+		}
+	}
+}
+
+// TestClientMetadataDocumentsAreOffWithoutAFetcher: with no fetcher (or a
+// typed-nil one) an HTTPS client ID is just an unknown client and nothing is
+// fetched.
+func TestClientMetadataDocumentsAreOffWithoutAFetcher(t *testing.T) {
+	id := "https://client.example.test/oauth/client.json"
+	for name, fetcher := range map[string]OAuthClientMetadataFetcher{"nil": nil, "typed nil": (*HTTPClientMetadataFetcher)(nil)} {
+		t.Run(name, func(t *testing.T) {
+			h := newOAuthHarness(t)
+			service, err := NewOAuthService(memory.NewOAuthStore(func() time.Time { return h.now }), h.devices, OAuthConfig{Issuer: testIssuer, Resources: []string{testResource}, ClientMetadata: fetcher})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if service.ClientMetadataDocumentsSupported() {
+				t.Fatal("metadata documents reported as supported without a fetcher")
+			}
+			if _, err := service.ResolveClient(context.Background(), id); outcomeOf(err) != oauthvocab.OutcomeInvalidClient {
+				t.Fatalf("resolve = %v, want invalid_client", err)
+			}
+		})
+	}
+	h := newOAuthHarness(t)
+	if !h.oauth.ClientMetadataDocumentsSupported() {
+		t.Fatal("metadata documents not supported with a fetcher")
+	}
+}
+
 func TestUnknownClientIDShapesAreRefused(t *testing.T) {
 	h := newOAuthHarness(t)
-	for _, id := range []string{"https://client.example.test/oauth/client.json", "http://client.example.test/c.json", "claude", "acrc_00000000000000000000000000000000", ""} {
+	for _, id := range []string{"claude", "acrc_00000000000000000000000000000000", ""} {
 		if _, err := h.oauth.ResolveClient(context.Background(), id); outcomeOf(err) != oauthvocab.OutcomeInvalidClient {
 			t.Fatalf("client id %q: %v, want invalid_client", id, err)
 		}

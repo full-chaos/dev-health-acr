@@ -55,6 +55,7 @@ type oauthAuthorizationServerMetadata struct {
 	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported"`
 	CodeChallengeMethodsSupported     []string `json:"code_challenge_methods_supported"`
 	AuthorizationResponseIssParameter bool     `json:"authorization_response_iss_parameter_supported"`
+	ClientIDMetadataDocumentSupported bool     `json:"client_id_metadata_document_supported"`
 }
 
 func (a *App) handleOAuthMetadata(w http.ResponseWriter, _ *http.Request) {
@@ -71,6 +72,7 @@ func (a *App) handleOAuthMetadata(w http.ResponseWriter, _ *http.Request) {
 		TokenEndpointAuthMethodsSupported: []string{"none"},
 		CodeChallengeMethodsSupported:     []string{"S256"},
 		AuthorizationResponseIssParameter: true,
+		ClientIDMetadataDocumentSupported: a.oauth.ClientMetadataDocumentsSupported(),
 	})
 }
 
@@ -473,7 +475,7 @@ func newOAuthService(deps Dependencies, deviceFlow *auth.DeviceFlowService) (*au
 		return nil, ErrOAuthRequiresWebApproval
 	}
 	return auth.NewOAuthService(runtime.Store, deviceFlow, auth.OAuthConfig{
-		Issuer: runtime.Issuer, Resources: runtime.Resources, Now: deps.Now,
+		Issuer: runtime.Issuer, Resources: runtime.Resources, ClientMetadata: runtime.ClientMetadata, Now: deps.Now,
 	})
 }
 
@@ -485,4 +487,6 @@ type OAuthRuntime struct {
 	Issuer string
 	// Resources are the hosted MCP endpoint URLs credentials may be bound to.
 	Resources []string
+	// ClientMetadata resolves client ID metadata documents; nil disables them.
+	ClientMetadata auth.OAuthClientMetadataFetcher
 }

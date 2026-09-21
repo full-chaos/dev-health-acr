@@ -328,3 +328,33 @@ func credentialCreateRequestWithResource(suffix, resource string) storage.Creden
 		ActorID: credentialTestActorID, Resource: resource,
 	}
 }
+
+// TestOAuthStore_AuthorizationRequestForAMetadataDocumentClient: a request
+// whose client_id is a client ID metadata document URL is stored and read
+// back with client_kind metadata_document (migration 0041 widened the CHECK).
+func TestOAuthStore_AuthorizationRequestForAMetadataDocumentClient(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	db := newCredentialStoreDatabase(t, ctx)
+	audit, err := NewAuditStore(db)
+	require.NoError(t, err)
+	deviceStore, err := NewDeviceAuthorizationStoreWithOptions(db, audit, DeviceAuthorizationStoreOptions{Now: func() time.Time { return now }})
+	require.NoError(t, err)
+	store, err := NewOAuthStoreWithOptions(db, OAuthStoreOptions{Now: func() time.Time { return now }})
+	require.NoError(t, err)
+	device, err := deviceStore.Create(ctx, storage.DeviceAuthorizationCreateInput{
+		DeviceCodeHash: storage.HashDeviceCode("cimd-device"),
+		UserCodeHash:   storage.HashUserCode("CIMDCODE"),
+	})
+	require.NoError(t, err)
+	request := validOAuthAuthorizationRequestPG(now, device.DeviceCodeHash, "cimd-handle")
+	request.ClientKind = storage.OAuthClientKindMetadataDocument
+	request.ClientID = "https://client.example.test/oauth/client.json"
+
+	created, err := store.CreateAuthorizationRequest(ctx, request)
+	require.NoError(t, err)
+	fetched, err := store.GetAuthorizationRequest(ctx, created.HandleHash)
+	require.NoError(t, err)
+	require.Equal(t, storage.OAuthClientKindMetadataDocument, fetched.ClientKind)
+	require.Equal(t, request.ClientID, fetched.ClientID)
+}

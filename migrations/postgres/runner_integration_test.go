@@ -92,7 +92,7 @@ import (
 // gains a resource column, plus the new acr.oauth_clients and
 // acr.oauth_authorization_requests tables (internal/storage/oauth.go's
 // package doc comment has the full flow).
-var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40}
+var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41}
 
 func TestEmbeddedRunner_appliesMigrationsInOrder_whenDatabaseIsFresh(t *testing.T) {
 	// Given
@@ -1460,4 +1460,49 @@ func TestRunner_upgradeTo38IsIdempotentOnRetry(t *testing.T) {
 	require.NoError(t, runner.Up(ctx, db))
 	require.NoError(t, runner.Up(ctx, db), "a second Up() over an already-migrated database must not error")
 	require.Equal(t, expectedMigrationVersions, migrationVersions(t, ctx, runner, db))
+}
+
+// TestRunner_upgradeTo41AcceptsMetadataDocumentClientKind: a database at 0040
+// (client_kind restricted to 'dynamic') upgrades so a client ID metadata
+// document authorization request is storable, an unknown kind is still
+// refused, and re-running the migration is a no-op.
+func TestRunner_upgradeTo41AcceptsMetadataDocumentClientKind(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDatabase(t, ctx)
+	through40 := fstest.MapFS{}
+	entries, err := fs.ReadDir(Files, ".")
+	require.NoError(t, err)
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".sql") && entry.Name() < "0041" {
+			through40[entry.Name()] = &fstest.MapFile{Data: mustReadFile(t, entry.Name())}
+		}
+	}
+	released, err := NewRunner(through40)
+	require.NoError(t, err)
+	require.NoError(t, released.Up(ctx, db))
+
+	insert := func(handle, device, clientKind string) error {
+		_, err := db.ExecContext(ctx, `INSERT INTO acr.device_authorizations
+			(device_code_hash, user_code_hash, state, created_at, expires_at, poll_interval_seconds, issuance_provenance)
+			VALUES ($1, $2, 'pending', NOW(), NOW() + INTERVAL '10 minutes', 5, 'device_authorization')`, device, strings.Repeat(handle[:1], 64))
+		if err != nil {
+			return err
+		}
+		_, err = db.ExecContext(ctx, `INSERT INTO acr.oauth_authorization_requests
+			(handle_hash, device_code_hash, client_id, client_kind, redirect_uri, code_challenge, resource, created_at, expires_at)
+			VALUES ($1, $2, 'https://client.example.test/c.json', $3, 'https://client.example.test/cb', $4, 'https://mcp.example.test/mcp', NOW(), NOW() + INTERVAL '10 minutes')`,
+			handle, device, clientKind, strings.Repeat("A", 43))
+		return err
+	}
+	require.Error(t, insert(strings.Repeat("1", 64), strings.Repeat("a", 64), "metadata_document"), "0040 refuses metadata_document")
+
+	latest, err := Embedded()
+	require.NoError(t, err)
+	require.NoError(t, latest.Up(ctx, db))
+	require.NoError(t, latest.Up(ctx, db), "a second Up() must not error")
+	require.Equal(t, expectedMigrationVersions, migrationVersions(t, ctx, latest, db))
+	requireConstraintExists(t, ctx, db, "oauth_authorization_requests_client_kind_check")
+	require.NoError(t, insert(strings.Repeat("2", 64), strings.Repeat("b", 64), "metadata_document"))
+	require.NoError(t, insert(strings.Repeat("3", 64), strings.Repeat("c", 64), "dynamic"))
+	require.Error(t, insert(strings.Repeat("4", 64), strings.Repeat("e", 64), "confidential"), "an unknown client kind stays refused")
 }
