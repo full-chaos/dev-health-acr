@@ -1541,6 +1541,11 @@
         "presence": "required"
       },
       {
+        "key": "withheld_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "authorization_reason",
         "type": "string",
         "presence": "conditional",

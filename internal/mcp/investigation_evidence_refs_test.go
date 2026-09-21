@@ -40,7 +40,7 @@ func (c *citingInvestigator) Investigate(ctx context.Context, principal storage.
 func citedEvidenceRefs() []string {
 	var refs []string
 	for _, kind := range contractsv1.ContextFabricEvidenceEntityTypeVocabulary() {
-		refs = append(refs, contractsv1.EvidenceRefID(kind, "matrix-"+string(kind)+"-0001"))
+		refs = append(refs, contractsv1.EvidenceRefID(kind, "example-org/matrix:"+string(kind)+"-0001"))
 	}
 	return refs
 }

@@ -2170,7 +2170,8 @@ var (
 // EvidenceExpansion records every expansion of a Context Fabric evidence ref
 // on the hosted evidence route: the ref's entity type, how many stored
 // results the citing-result search returned, how many of them cite the ref,
-// how the live stored-result authorization came out on them, and the one
+// how the live stored-result authorization came out on them, how many the
+// result-by-id serving rules withheld, and the one
 // reason that decided the outcome. A ref that cannot be served is never a
 // silent not-found: its reason names why.
 var EvidenceExpansion = Event{
@@ -2187,6 +2188,7 @@ var EvidenceExpansion = Event{
 		{Key: "admitted_count", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "denied_count", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "unavailable_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "withheld_count", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "authorization_reason", Type: FieldString, Presence: PresenceConditional, Applicability: "written when a citing result reached the stored-result authorization", ClosedVocabulary: arrayTokens(storedResultReasonArr[:])},
 		{Key: "error_class", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the search, a read, the authorization or the built expansion failed", ClosedVocabulary: []string{"deadline_exceeded", "canceled", "dependency_unavailable", "internal"}},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},

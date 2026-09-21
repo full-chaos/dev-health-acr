@@ -311,7 +311,7 @@ func (s *Store) Get(ctx context.Context, principal storage.Principal, resultID s
 // ResultIDsCitingEvidence implements contextfabric.CitedEvidenceLookup: the
 // ids of the organization's stored results whose evidence-ref closure holds
 // evidenceRefID, newest generated_at first (result_id breaks ties).
-func (s *Store) ResultIDsCitingEvidence(ctx context.Context, principal storage.Principal, evidenceRefID string, limit int) ([]string, error) {
+func (s *Store) ResultIDsCitingEvidence(ctx context.Context, principal storage.Principal, evidenceRefID string, offset, limit int) ([]string, error) {
 	if s == nil {
 		return nil, errors.New("memoryinvestigation: store is not configured")
 	}
@@ -319,7 +319,7 @@ func (s *Store) ResultIDsCitingEvidence(ctx context.Context, principal storage.P
 		return nil, err
 	}
 	orgID := strings.TrimSpace(principal.OrgID)
-	if orgID == "" || evidenceRefID == "" || limit <= 0 {
+	if orgID == "" || evidenceRefID == "" || limit <= 0 || offset < 0 {
 		return nil, nil
 	}
 	type citing struct {
@@ -348,6 +348,10 @@ func (s *Store) ResultIDsCitingEvidence(ctx context.Context, principal storage.P
 		}
 		return found[i].id > found[j].id
 	})
+	if offset >= len(found) {
+		return nil, nil
+	}
+	found = found[offset:]
 	if len(found) > limit {
 		found = found[:limit]
 	}

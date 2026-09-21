@@ -1182,18 +1182,22 @@ func RunCitedEvidenceSuite(t *testing.T, newStore func(t *testing.T) contextfabr
 		name      string
 		principal storage.Principal
 		ref       string
+		offset    int
 		limit     int
 		want      []string
 	}{
-		{"newest first across closure sites", orgOne, cited, 16, []string{"result-cites-nested", "result-cites-old"}},
-		{"limit keeps the newest", orgOne, cited, 1, []string{"result-cites-nested"}},
-		{"another organization sees only its own", orgTwo, cited, 16, []string{"result-cites-foreign"}},
-		{"a different ref", orgOne, other, 16, []string{"result-cites-other"}},
-		{"an uncited ref", orgOne, uncited, 16, nil},
-		{"an organization with no results", storage.Principal{OrgID: "org-cites-none"}, cited, 16, nil},
+		{"newest first across closure sites", orgOne, cited, 0, 16, []string{"result-cites-nested", "result-cites-old"}},
+		{"limit keeps the newest", orgOne, cited, 0, 1, []string{"result-cites-nested"}},
+		{"another organization sees only its own", orgTwo, cited, 0, 16, []string{"result-cites-foreign"}},
+		{"a different ref", orgOne, other, 0, 16, []string{"result-cites-other"}},
+		{"an uncited ref", orgOne, uncited, 0, 16, nil},
+		{"an organization with no results", storage.Principal{OrgID: "org-cites-none"}, cited, 0, 16,
+			nil},
+		{"the next page", orgOne, cited, 1, 1, []string{"result-cites-old"}},
+		{"past the last page", orgOne, cited, 2, 16, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := lookup.ResultIDsCitingEvidence(ctx, tc.principal, tc.ref, tc.limit)
+			got, err := lookup.ResultIDsCitingEvidence(ctx, tc.principal, tc.ref, tc.offset, tc.limit)
 			if err != nil {
 				t.Fatalf("lookup: %v", err)
 			}

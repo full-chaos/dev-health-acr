@@ -873,6 +873,7 @@ type EvidenceExpansionFields struct {
 	AdmittedCount       int
 	DeniedCount         int
 	UnavailableCount    int
+	WithheldCount       int
 	AuthorizationReason string
 	ErrorClass          string
 	RequestID           string
@@ -889,7 +890,7 @@ type EvidenceExpansionFields struct {
 
 // NewEvidenceExpansionFields is the generated constructor for EvidenceExpansionFields -- every
 // field EvidenceExpansion.Fields declares is a required parameter.
-func NewEvidenceExpansionFields(orgID string, reason string, entityType string, candidateCount int, citingCount int, unreadableCount int, admittedCount int, deniedCount int, unavailableCount int, authorizationReason string, errorClass string, requestID string) EvidenceExpansionFields {
+func NewEvidenceExpansionFields(orgID string, reason string, entityType string, candidateCount int, citingCount int, unreadableCount int, admittedCount int, deniedCount int, unavailableCount int, withheldCount int, authorizationReason string, errorClass string, requestID string) EvidenceExpansionFields {
 	return EvidenceExpansionFields{
 		OrgID:               orgID,
 		Reason:              reason,
@@ -900,6 +901,7 @@ func NewEvidenceExpansionFields(orgID string, reason string, entityType string, 
 		AdmittedCount:       admittedCount,
 		DeniedCount:         deniedCount,
 		UnavailableCount:    unavailableCount,
+		WithheldCount:       withheldCount,
 		AuthorizationReason: authorizationReason,
 		ErrorClass:          errorClass,
 		RequestID:           requestID,
@@ -929,6 +931,7 @@ func (f EvidenceExpansionFields) SlogArgs() []any {
 		"admitted_count", f.AdmittedCount,
 		"denied_count", f.DeniedCount,
 		"unavailable_count", f.UnavailableCount,
+		"withheld_count", f.WithheldCount,
 		"authorization_reason", contextfabric.SanitizeLogAttr(f.AuthorizationReason),
 		"error_class", contextfabric.SanitizeLogAttr(f.ErrorClass),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),

@@ -30,11 +30,10 @@ import (
 // caller the result is not readable by gets the same not-found as for a ref
 // nobody cited.
 
-// ContextFabricEvidenceRefPrefix starts every Context Fabric evidence ref.
-const ContextFabricEvidenceRefPrefix = "acr:v1:"
-
-// CitedEvidenceCandidateLimit bounds how many citing results one expansion
-// reads and authorizes.
+// CitedEvidenceCandidateLimit is the page size of the citing-result search.
+// The search pages until a result is served or no citing result is left, so
+// a readable result is never hidden behind newer ones the caller may not
+// read.
 const CitedEvidenceCandidateLimit = 16
 
 // EvidenceExpansionLogMessage is the one Info line an expansion emits.
@@ -54,12 +53,13 @@ const ContextFabricEvidenceProvenance = "derived"
 // rendered markdown says what the record is.
 const persistedRecordCitationPrefix = "Persisted evidence record (not the source row): "
 
-// CitedEvidenceLookup lists, newest first, the ids of stored results in the
-// principal's organization that may cite evidenceRefID. It may over-report;
-// ExpandCitedEvidence re-checks the decoded result's closure. It must never
-// return a result of another organization.
+// CitedEvidenceLookup lists, newest first, one page (offset, limit) of the
+// ids of stored results in the principal's organization that may cite
+// evidenceRefID. It may over-report; ExpandCitedEvidence re-checks the
+// decoded result's closure. It must never return a result of another
+// organization. A page shorter than limit is the last one.
 type CitedEvidenceLookup interface {
-	ResultIDsCitingEvidence(ctx context.Context, principal storage.Principal, evidenceRefID string, limit int) ([]string, error)
+	ResultIDsCitingEvidence(ctx context.Context, principal storage.Principal, evidenceRefID string, offset, limit int) ([]string, error)
 }
 
 // StoredResultAuthorizer decides whether a stored result may be served to a
@@ -124,6 +124,9 @@ type EvidenceExpansionDecision struct {
 	AdmittedCount    int
 	DeniedCount      int
 	UnavailableCount int
+	// WithheldCount is how many admitted results the result-by-id serving
+	// rules withhold from this caller, or serve without the ref.
+	WithheldCount int
 	// Authorization is the decisive stored-result decision: the admitted
 	// one, else the first unavailable one, else the first denied one. Nil
 	// when no citing result reached the gate.
@@ -154,12 +157,12 @@ func (d EvidenceExpansionDecision) ServingError() error {
 // IsContextFabricEvidenceRef reports whether ref is in the Context Fabric
 // evidence-ref namespace, whatever its entity type.
 func IsContextFabricEvidenceRef(ref string) bool {
-	return strings.HasPrefix(ref, ContextFabricEvidenceRefPrefix)
+	return strings.HasPrefix(ref, contractsv1.ContextFabricEvidenceRefPrefix)
 }
 
 // parseContextFabricEvidenceRef splits acr:v1:<type>:<id...>.
 func parseContextFabricEvidenceRef(ref string) (entityType, id string, ok bool) {
-	rest, found := strings.CutPrefix(ref, ContextFabricEvidenceRefPrefix)
+	rest, found := strings.CutPrefix(ref, contractsv1.ContextFabricEvidenceRefPrefix)
 	if !found {
 		return "", "", false
 	}
@@ -194,71 +197,125 @@ func ExpandCitedEvidence(ctx context.Context, principal storage.Principal, ref s
 		decision.Reason = EvidenceExpansionLookupUnavailable
 		return contractsv1.ExpandedEvidence{}, decision
 	}
-	ids, err := lookup.ResultIDsCitingEvidence(ctx, principal, ref, CitedEvidenceCandidateLimit)
-	if err != nil {
-		decision.Reason, decision.Err = EvidenceExpansionLookupFailed, err
-		return contractsv1.ExpandedEvidence{}, decision
-	}
-	if len(ids) > CitedEvidenceCandidateLimit {
-		ids = ids[:CitedEvidenceCandidateLimit]
-	}
-	decision.CandidateCount = len(ids)
 	var firstUnavailable, firstDenied *StoredResultAuthorization
 	var readErr error
-	for _, id := range ids {
-		stored, err := results.Get(ctx, principal, id)
+	for offset := 0; ; offset += CitedEvidenceCandidateLimit {
+		if err := ctx.Err(); err != nil {
+			decision.Reason, decision.Err = EvidenceExpansionLookupFailed, err
+			return contractsv1.ExpandedEvidence{}, decision
+		}
+		ids, err := lookup.ResultIDsCitingEvidence(ctx, principal, ref, offset, CitedEvidenceCandidateLimit)
 		if err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				decision.Reason, decision.Err = EvidenceExpansionResultUnreadable, ctxErr
-				return contractsv1.ExpandedEvidence{}, decision
+			decision.Reason, decision.Err = EvidenceExpansionLookupFailed, err
+			return contractsv1.ExpandedEvidence{}, decision
+		}
+		for _, id := range ids {
+			decision.CandidateCount++
+			stored, err := results.Get(ctx, principal, id)
+			if err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					decision.Reason, decision.Err = EvidenceExpansionResultUnreadable, ctxErr
+					return contractsv1.ExpandedEvidence{}, decision
+				}
+				if !errors.Is(err, ErrInvestigationResultNotFound) {
+					decision.UnreadableCount++
+					if readErr == nil {
+						readErr = err
+					}
+				}
+				continue
 			}
-			if !errors.Is(err, ErrInvestigationResultNotFound) {
+			if _, cited := contractsv1.ContextFabricEvidenceRefClosure(stored.Result)[ref]; !cited {
+				continue
+			}
+			decision.CitingCount++
+			authorization := gate.Authorize(ctx, principal, stored, StoredResultSurfaceEvidenceExpansion)
+			switch authorization.Decision {
+			case StoredResultAdmitted:
+			case StoredResultDenied:
+				decision.DeniedCount++
+				if firstDenied == nil {
+					firstDenied = &authorization
+				}
+				continue
+			default:
+				decision.UnavailableCount++
+				if firstUnavailable == nil {
+					firstUnavailable = &authorization
+				}
+				continue
+			}
+			decision.AdmittedCount++
+			served, withheld, serveErr := servedStoredResult(stored, principal)
+			if serveErr != nil {
 				decision.UnreadableCount++
 				if readErr == nil {
-					readErr = err
+					readErr = serveErr
 				}
+				continue
 			}
-			continue
-		}
-		if _, cited := contractsv1.ContextFabricEvidenceRefClosure(stored.Result)[ref]; !cited {
-			continue
-		}
-		decision.CitingCount++
-		authorization := gate.Authorize(ctx, principal, stored, StoredResultSurfaceEvidenceExpansion)
-		switch authorization.Decision {
-		case StoredResultAdmitted:
-			decision.AdmittedCount++
+			if _, cited := contractsv1.ContextFabricEvidenceRefClosure(served)[ref]; withheld || !cited {
+				decision.WithheldCount++
+				if firstDenied == nil {
+					firstDenied = &authorization
+				}
+				continue
+			}
 			decision.Authorization = &authorization
-			expanded := citedEvidenceExpansion(stored.Result, ref, entityType, entityID, now)
+			expanded := citedEvidenceExpansion(served, ref, entityType, entityID, now)
 			if err := expanded.Validate(); err != nil {
 				decision.Reason, decision.Err = EvidenceExpansionInvalid, err
 				return contractsv1.ExpandedEvidence{}, decision
 			}
 			decision.Reason = EvidenceExpansionServed
 			return expanded, decision
-		case StoredResultDenied:
-			decision.DeniedCount++
-			if firstDenied == nil {
-				firstDenied = &authorization
-			}
-		default:
-			decision.UnavailableCount++
-			if firstUnavailable == nil {
-				firstUnavailable = &authorization
-			}
+		}
+		if len(ids) < CitedEvidenceCandidateLimit {
+			break
 		}
 	}
+	// A candidate that could not be decided or read may be the one this
+	// caller can read, so it outranks a denial: the caller retries a 503,
+	// never trusts a not-found that might be wrong.
 	switch {
 	case firstUnavailable != nil:
 		decision.Reason, decision.Authorization, decision.Err = EvidenceExpansionAuthorizationUnavailable, firstUnavailable, firstUnavailable.Err
-	case firstDenied != nil:
-		decision.Reason, decision.Authorization = EvidenceExpansionAuthorizationDenied, firstDenied
 	case decision.UnreadableCount > 0:
 		decision.Reason, decision.Err = EvidenceExpansionResultUnreadable, readErr
+	case firstDenied != nil:
+		decision.Reason, decision.Authorization = EvidenceExpansionAuthorizationDenied, firstDenied
 	default:
 		decision.Reason = EvidenceExpansionNotCited
 	}
 	return contractsv1.ExpandedEvidence{}, decision
+}
+
+// servedStoredResult applies the result-by-id route's own serving decisions
+// that can withhold a stored result or change which evidence it carries: the
+// work-item tuple census rule (a changed authorization digest is not found),
+// retained-ranking accounting, and the served-requirement assertion (a row
+// that route refuses to serve). The clarification and cardinality-subject
+// repairs it also applies change status and claim subjects only, never an
+// evidence ref, a label or a citing site. withheld reports a result that
+// route would answer as not found; an error is a result it could not serve.
+func servedStoredResult(stored StoredInvestigationResult, principal storage.Principal) (InvestigationResult, bool, error) {
+	result := stored.Result
+	tuple := ServeStoredWorkItemTuple(result, stored.SemanticState, stored.SemanticStateRead, principal)
+	if tuple.Err != nil {
+		return InvestigationResult{}, false, tuple.Err
+	}
+	switch tuple.Disposition {
+	case WorkItemTupleByIDNotFound:
+		return InvestigationResult{}, true, nil
+	case WorkItemTupleByIDServed, WorkItemTupleByIDStored:
+		result = tuple.Result
+	}
+	result, _ = AccountForRetainedRanking(result)
+	result.Completeness = ComputeAnswerCompleteness(result)
+	if err := AssertServedRequirementEvidence(result); err != nil {
+		return InvestigationResult{}, false, err
+	}
+	return result, false, nil
 }
 
 // citedEvidenceExpansion builds the expansion from the stored result's own
@@ -383,6 +440,7 @@ func EvidenceExpansionLogArgs(principal storage.Principal, decision EvidenceExpa
 		"admitted_count", decision.AdmittedCount,
 		"denied_count", decision.DeniedCount,
 		"unavailable_count", decision.UnavailableCount,
+		"withheld_count", decision.WithheldCount,
 	}
 	if decision.Authorization != nil {
 		args = append(args, "authorization_reason", string(decision.Authorization.Reason))

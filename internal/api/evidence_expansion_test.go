@@ -5,10 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
@@ -21,7 +24,7 @@ import (
 
 func evidenceRequest(t *testing.T, token, ref string) *http.Request {
 	t.Helper()
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/evidence/"+ref, nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/evidence/"+url.PathEscape(ref), nil)
 	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("X-ACR-Client-Version", "1.0.0")
 	return request
@@ -56,14 +59,17 @@ type failingLookupResults struct {
 	ids       []string
 }
 
-func (f failingLookupResults) ResultIDsCitingEvidence(ctx context.Context, principal storage.Principal, ref string, limit int) ([]string, error) {
+func (f failingLookupResults) ResultIDsCitingEvidence(ctx context.Context, principal storage.Principal, ref string, offset, limit int) ([]string, error) {
 	if f.lookupErr != nil {
 		return nil, f.lookupErr
 	}
 	if f.ids != nil {
+		if offset > 0 {
+			return nil, nil
+		}
 		return f.ids, nil
 	}
-	return f.Store.ResultIDsCitingEvidence(ctx, principal, ref, limit)
+	return f.Store.ResultIDsCitingEvidence(ctx, principal, ref, offset, limit)
 }
 
 func (f failingLookupResults) Get(ctx context.Context, principal storage.Principal, resultID string) (contextfabric.StoredInvestigationResult, error) {
@@ -82,7 +88,7 @@ func TestEvidenceRouteExpandsContextFabricRefsWithAClassifiedDecision(t *testing
 	// ref a stored result may carry, whose expansion cannot validate.
 	oversized := "acr:v1:" + strings.Repeat("t", 120) + ":x-0001"
 	counts := func(candidate, citing, unreadable, admitted, denied, unavailable int) map[string]any {
-		return map[string]any{"candidate_count": candidate, "citing_count": citing, "unreadable_count": unreadable, "admitted_count": admitted, "denied_count": denied, "unavailable_count": unavailable}
+		return map[string]any{"candidate_count": candidate, "citing_count": citing, "unreadable_count": unreadable, "admitted_count": admitted, "denied_count": denied, "unavailable_count": unavailable, "withheld_count": 0}
 	}
 	type cell struct {
 		name   string
@@ -216,4 +222,211 @@ func merge(a, b map[string]any) map[string]any {
 		out[k] = v
 	}
 	return out
+}
+
+// pagedResults serves every lookup page from a fixed newest-first id list,
+// and fails Get for the ids in unreadable.
+type pagedResults struct {
+	*memoryinvestigation.Store
+	ids        []string
+	unreadable map[string]bool
+}
+
+func (p pagedResults) ResultIDsCitingEvidence(_ context.Context, _ storage.Principal, _ string, offset, limit int) ([]string, error) {
+	if offset >= len(p.ids) {
+		return nil, nil
+	}
+	end := min(offset+limit, len(p.ids))
+	return append([]string(nil), p.ids[offset:end]...), nil
+}
+
+func (p pagedResults) Get(ctx context.Context, principal storage.Principal, resultID string) (contextfabric.StoredInvestigationResult, error) {
+	if p.unreadable[resultID] {
+		return contextfabric.StoredInvestigationResult{}, contextfabric.ErrUnavailable
+	}
+	return p.Store.Get(ctx, principal, resultID)
+}
+
+// subjectCitingResult is citingStoredResult about one project subject.
+func subjectCitingResult(resultID, subjectID string, generated time.Time, refs ...string) contractsv1.ContextFabricInvestigationResult {
+	result := citingStoredResult(resultID, refs...)
+	subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: subjectID, Label: "Project " + subjectID}
+	result.SubjectResolution.Committed = []contractsv1.ContextFabricSubjectRef{subject}
+	result.SubjectResolution.Candidates = []contractsv1.ContextFabricSubjectCandidate{}
+	for i := range result.Drivers {
+		result.Drivers[i].AffectedSubjects = []contractsv1.ContextFabricSubjectRef{subject}
+	}
+	result.GeneratedAt = generated
+	result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
+	return result
+}
+
+// A readable citing result is found however many newer citing results the
+// caller may not read: the search pages instead of stopping at a cap.
+func TestEvidenceRouteFindsAReadableResultBehindMoreThanOnePageOfDeniedOnes(t *testing.T) {
+	ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, "repo-paged-0001")
+	store := memoryinvestigation.NewStore()
+	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	denied := contextfabric.CitedEvidenceCandidateLimit + 1
+	nodes := map[string]map[string]interface{}{"project\x00project_readable": {"authorization_repositories": []string{hostedTestRepository}}}
+	var ids []string
+	for i := 0; i < denied; i++ {
+		id := fmt.Sprintf("result_paged_denied_%02d", i)
+		seedResult3355(t, store, "org_1", subjectCitingResult(id, fmt.Sprintf("project_secret_%02d", i), base.Add(time.Duration(denied-i)*time.Hour), ref))
+		nodes[fmt.Sprintf("project\x00project_secret_%02d", i)] = map[string]interface{}{"authorization_repositories": []string{"other-org/secret-service"}}
+		ids = append(ids, id)
+	}
+	seedResult3355(t, store, "org_1", subjectCitingResult("result_paged_readable", "project_readable", base, ref))
+	ids = append(ids, "result_paged_readable")
+	for _, results := range []contextfabric.InvestigationResultStore{store, pagedResults{Store: store, ids: ids}} {
+		logs := &bytes.Buffer{}
+		app, token := newParityHostedAppWithLogs(t, nil, results, limits.ResourceBudget{MaxItems: 50, MaxTokens: 16_000, MaxBytes: 1 << 20}, logs)
+		app.runtime.StoredResultGate = contextfabric.NewStoredResultGate(subjectNodeGraph{nodes: nodes})
+		rec := httptest.NewRecorder()
+		app.Handler().ServeHTTP(rec, evidenceRequest(t, token, ref))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%T: status = %d, want 200 from the readable oldest result: %s\n%s", results, rec.Code, rec.Body.String(), logs.String())
+		}
+		if !strings.Contains(rec.Body.String(), "result_paged_readable") {
+			t.Fatalf("%T: served from the wrong result: %s", results, rec.Body.String())
+		}
+	}
+}
+
+// An unreadable candidate may be the readable one: the outcome is a 503, not
+// the denial the other candidate earned.
+func TestEvidenceRouteReportsAnUnreadableCandidateOverADeniedOne(t *testing.T) {
+	ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, "repo-mixed-0001")
+	store := memoryinvestigation.NewStore()
+	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	seedResult3355(t, store, "org_1", subjectCitingResult("result_mixed_unreadable", "project_unknown", base.Add(time.Hour), ref))
+	seedResult3355(t, store, "org_1", subjectCitingResult("result_mixed_denied", "project_secret", base, ref))
+	logs := &bytes.Buffer{}
+	results := pagedResults{Store: store, ids: []string{"result_mixed_unreadable", "result_mixed_denied"}, unreadable: map[string]bool{"result_mixed_unreadable": true}}
+	app, token := newParityHostedAppWithLogs(t, nil, results, limits.ResourceBudget{MaxItems: 50, MaxTokens: 16_000, MaxBytes: 1 << 20}, logs)
+	app.runtime.StoredResultGate = contextfabric.NewStoredResultGate(subjectNodeGraph{nodes: map[string]map[string]interface{}{
+		"project\x00project_secret": {"authorization_repositories": []string{"other-org/secret-service"}},
+	}})
+	logs.Reset()
+	rec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rec, evidenceRequest(t, token, ref))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503: %s\n%s", rec.Code, rec.Body.String(), logs.String())
+	}
+	parsed, err := certify.Parse(logs.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := certify.Certify(parsed, certify.Assertion{Event: eventspec.EvidenceExpansion, Want: map[string]any{
+		"org_id": "org_1", "reason": string(contextfabric.EvidenceExpansionResultUnreadable), "candidate_count": 2, "citing_count": 1, "unreadable_count": 1, "denied_count": 1, "withheld_count": 0,
+	}}); err != nil {
+		t.Fatalf("certify: %v\n%s", err, logs.String())
+	}
+}
+
+// storedTupleEvidenceStore serves one stored carrier and finds it for the
+// ref it cites.
+type storedTupleEvidenceStore struct {
+	storedWorkItemTupleRouteStore
+}
+
+func (s *storedTupleEvidenceStore) ResultIDsCitingEvidence(_ context.Context, _ storage.Principal, ref string, offset, _ int) ([]string, error) {
+	if _, ok := contractsv1.ContextFabricEvidenceRefClosure(s.stored.Result)[ref]; !ok || offset > 0 {
+		return nil, nil
+	}
+	return []string{s.stored.Result.ResultID}, nil
+}
+
+// The expansion serves a result only when investigation_result would serve
+// it to the same credential: a work-item tuple whose authorization digest
+// changed is not found on both routes, and served on both when it matches.
+func TestEvidenceRouteFollowsTheResultByIDServingDecision(t *testing.T) {
+	principal := storage.Principal{OrgID: callerOrgID, RepositoryScopes: []string{hostedTestRepository}}
+	ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, "example-org/widget-service:WI-1")
+	for _, tc := range []struct {
+		name   string
+		mutate func(*contextfabric.StoredInvestigationResult)
+		status int
+	}{
+		{"digest matches", func(*contextfabric.StoredInvestigationResult) {}, http.StatusOK},
+		{"digest changed", func(stored *contextfabric.StoredInvestigationResult) {
+			other := storage.Principal{OrgID: callerOrgID, RepositoryScopes: []string{"other-org/other-repository"}}
+			digest, err := contextfabric.WorkItemAuthorizationDigest(other, stored.SemanticState.WorkItemCensus.RequestedRepositoryScope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stored.SemanticState.WorkItemCensus.AuthorizationDigest = digest
+		}, http.StatusNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stored := storedWorkItemTupleRouteFixture(t, principal)
+			tc.mutate(&stored)
+			store := &storedTupleEvidenceStore{storedWorkItemTupleRouteStore{stored: stored}}
+			logs := &bytes.Buffer{}
+			app, token := newParityHostedAppWithLogs(t, nil, store, limits.ResourceBudget{MaxItems: 50, MaxTokens: 16_000, MaxBytes: 1 << 20}, logs)
+			byID := httptest.NewRecorder()
+			app.Handler().ServeHTTP(byID, investigationResultRequest(t, token, stored.Result.ResultID))
+			expand := httptest.NewRecorder()
+			app.Handler().ServeHTTP(expand, evidenceRequest(t, token, ref))
+			if byID.Code != tc.status || expand.Code != tc.status {
+				t.Fatalf("investigation_result status %d, source evidence status %d, want both %d: %s", byID.Code, expand.Code, tc.status, expand.Body.String())
+			}
+			if tc.status != http.StatusOK && strings.Contains(expand.Body.String(), stored.Result.ResultID) {
+				t.Fatalf("withheld expansion disclosed the result id: %s", expand.Body.String())
+			}
+			reason, withheld := contextfabric.EvidenceExpansionServed, 0
+			if tc.status != http.StatusOK {
+				reason, withheld = contextfabric.EvidenceExpansionAuthorizationDenied, 1
+			}
+			parsed, err := certify.Parse(logs.Bytes())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := certify.Certify(parsed, certify.Assertion{Event: eventspec.EvidenceExpansion, Want: map[string]any{
+				"org_id": callerOrgID, "reason": string(reason), "entity_type": "work-item", "admitted_count": 1, "withheld_count": withheld,
+			}}); err != nil {
+				t.Fatalf("certify: %v\n%s", err, logs.String())
+			}
+		})
+	}
+}
+
+// A stored row the result-by-id route refuses to serve (a satisfied
+// requirement with no served evidence) is not expanded either: the
+// expansion answers 503 as an unreadable candidate, never a 200 carrying
+// that row's content.
+func TestEvidenceRouteRefusesARowTheResultByIDRouteRefuses(t *testing.T) {
+	ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, "team-refused-0001")
+	stored := storedResultWithCountOutcome(t, contractsv1.ContextFabricPlanRequirementOutcomeRow{
+		Stage: contractsv1.ContextFabricOutcomeStageAssembledResult, Requirement: "count/member/team",
+		Obligation: contractsv1.ContextFabricAnswerObligationCount, Outcome: contractsv1.ContextFabricRequirementSatisfied,
+		Impact: contractsv1.ContextFabricAnswerImpactNone, Served: 3, Declared: 3,
+	}, nil)
+	stored.EvidenceRefIDs = append(stored.EvidenceRefIDs, ref)
+	stored.EvidenceRefLabels = map[string]string{}
+	for cited := range contractsv1.ContextFabricEvidenceRefClosure(stored) {
+		label, _ := contractsv1.ContextFabricEvidenceRefLabel(cited)
+		stored.EvidenceRefLabels[cited] = label
+	}
+	store := memoryinvestigation.NewStore()
+	seedResult3355(t, store, "org_1", stored)
+	logs := &bytes.Buffer{}
+	app, token := newParityHostedAppWithLogs(t, nil, store, limits.ResourceBudget{MaxItems: 50, MaxTokens: 16_000, MaxBytes: 1 << 20}, logs)
+	byID := httptest.NewRecorder()
+	app.Handler().ServeHTTP(byID, investigationResultRequest(t, token, stored.ResultID))
+	logs.Reset()
+	expand := httptest.NewRecorder()
+	app.Handler().ServeHTTP(expand, evidenceRequest(t, token, ref))
+	if byID.Code != http.StatusInternalServerError || expand.Code != http.StatusServiceUnavailable {
+		t.Fatalf("investigation_result status %d (want 500), source evidence status %d (want 503): %s", byID.Code, expand.Code, expand.Body.String())
+	}
+	parsed, err := certify.Parse(logs.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := certify.Certify(parsed, certify.Assertion{Event: eventspec.EvidenceExpansion, Want: map[string]any{
+		"org_id": "org_1", "reason": string(contextfabric.EvidenceExpansionResultUnreadable), "admitted_count": 1, "unreadable_count": 1, "error_class": "internal",
+	}}); err != nil {
+		t.Fatalf("certify: %v\n%s", err, logs.String())
+	}
 }

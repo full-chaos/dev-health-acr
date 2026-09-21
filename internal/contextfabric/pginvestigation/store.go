@@ -508,19 +508,19 @@ SELECT EXISTS (
 // evidence_ref_ids array of the payload -- every site of the evidence-ref
 // closure is such an array. contextfabric.ExpandCitedEvidence re-checks the
 // closure on the decoded result.
-func (s *Store) ResultIDsCitingEvidence(ctx context.Context, principal storage.Principal, evidenceRefID string, limit int) ([]string, error) {
+func (s *Store) ResultIDsCitingEvidence(ctx context.Context, principal storage.Principal, evidenceRefID string, offset, limit int) ([]string, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("pginvestigation: store is not configured")
 	}
 	orgID := strings.TrimSpace(principal.OrgID)
-	if orgID == "" || evidenceRefID == "" || limit <= 0 {
+	if orgID == "" || evidenceRefID == "" || limit <= 0 || offset < 0 {
 		return nil, nil
 	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT result_id FROM acr.context_fabric_investigation_results
 WHERE org_id = $1 AND jsonb_path_exists(payload, 'lax $.**.evidence_ref_ids ? (@ == $ref)', jsonb_build_object('ref', $2::text))
 ORDER BY generated_at DESC, result_id DESC
-LIMIT $3`, orgID, evidenceRefID, limit)
+OFFSET $3 LIMIT $4`, orgID, evidenceRefID, offset, limit)
 	if err != nil {
 		return nil, fmt.Errorf("find investigation results citing evidence: %w", sanitizeError(err))
 	}
