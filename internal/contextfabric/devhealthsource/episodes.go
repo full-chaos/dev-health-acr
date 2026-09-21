@@ -37,20 +37,44 @@ type EpisodeRows interface {
 // (EpisodeStore.Redact) is projected as a tombstone on the next batch that
 // observes it, propagating the revocation into the graph.
 type EpisodesProjectionSource struct {
-	rows EpisodeRows
-	now  func() time.Time
+	rows    EpisodeRows
+	now     func() time.Time
+	enabled bool
 }
 
 func NewEpisodesProjectionSource(rows EpisodeRows) (*EpisodesProjectionSource, error) {
 	if rows == nil {
 		return nil, fmt.Errorf("devhealthsource: episode rows dependency is required")
 	}
-	return &EpisodesProjectionSource{rows: rows, now: time.Now}, nil
+	return &EpisodesProjectionSource{rows: rows, now: time.Now, enabled: true}, nil
+}
+
+// WithEnabled sets whether the source reads acr.agent_episodes at all. The
+// composition root passes the episode write-back flag: with write-back off
+// nothing writes the table and the runtime role holds no grant on it, so a
+// read would fail on every tick and a healthy deployment would report a
+// failing source. A disabled source stays registered (its checkpoint must not
+// be stranded) and yields no batch, the same shape as TeamsProjectsSource.
+func (s *EpisodesProjectionSource) WithEnabled(enabled bool) *EpisodesProjectionSource {
+	if s != nil {
+		s.enabled = enabled
+	}
+	return s
+}
+
+// Enabled implements contextfabric.ProjectionSourceEnablement, so a build
+// classifier names a disabled source "disabled_at_freeze" instead of treating
+// it as an empty one.
+func (s *EpisodesProjectionSource) Enabled() bool {
+	return s != nil && s.enabled
 }
 
 func (s *EpisodesProjectionSource) NextProjectionBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
 	if s == nil || s.rows == nil {
 		return contextfabric.ProjectionBatch{}, false, fmt.Errorf("devhealthsource: episode source is not configured")
+	}
+	if !s.enabled {
+		return contextfabric.ProjectionBatch{}, false, nil
 	}
 	orgID := strings.TrimSpace(checkpoint.OrgID)
 	if orgID == "" {

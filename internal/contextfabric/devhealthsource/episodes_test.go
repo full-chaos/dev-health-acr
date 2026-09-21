@@ -246,3 +246,45 @@ func TestEpisodesProjectionSourceWrapsFailureAsUnavailable(t *testing.T) {
 		t.Fatalf("expected ErrUnavailable, got: %v", err)
 	}
 }
+
+// A source disabled by the write-back flag must not touch the table: the
+// runtime role holds no grant on it, so any read fails on every tick. The
+// rows dependency errors on any call, so a defect that reads anyway fails
+// this test with ErrUnavailable.
+func TestEpisodesProjectionSourceDisabledYieldsNothingAndDoesNotRead(t *testing.T) {
+	t.Parallel()
+	source, err := devhealthsource.NewEpisodesProjectionSource(&fakeEpisodeRows{err: errors.New("permission denied")})
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+	source.WithEnabled(false)
+	batch, available, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.EpisodesSourceName})
+	if err != nil {
+		t.Fatalf("disabled source must not fail, got: %v", err)
+	}
+	if available || len(batch.Episodes) != 0 || len(batch.Tombstones) != 0 {
+		t.Fatalf("disabled source must yield no batch, got available=%v batch=%+v", available, batch)
+	}
+	enablement, ok := contextfabric.ProjectionSource(source).(contextfabric.ProjectionSourceEnablement)
+	if !ok || enablement.Enabled() {
+		t.Fatal("disabled episodes source must report Enabled() == false through ProjectionSourceEnablement")
+	}
+}
+
+// Enabled with an unreadable table stays a loud, classified failure: the
+// gate must not turn a real fault on an enabled deployment into silence.
+func TestEpisodesProjectionSourceEnabledUnreadableStillFailsClassified(t *testing.T) {
+	t.Parallel()
+	source, err := devhealthsource.NewEpisodesProjectionSource(&fakeEpisodeRows{err: errors.New("permission denied")})
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+	source.WithEnabled(true)
+	if !source.Enabled() {
+		t.Fatal("source must report Enabled() == true")
+	}
+	_, _, err = source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.EpisodesSourceName})
+	if !errors.Is(err, contextfabric.ErrUnavailable) {
+		t.Fatalf("enabled source with unreadable table must fail with ErrUnavailable, got: %v", err)
+	}
+}

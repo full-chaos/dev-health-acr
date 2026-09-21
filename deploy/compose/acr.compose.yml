@@ -111,6 +111,7 @@ services:
       ACR_CONTEXT_FABRIC_PROJECTION_ENABLED: ${ACR_CONTEXT_FABRIC_PROJECTION_ENABLED:-false}
       ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS: ${ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS:-}
       ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED: ${ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED:-false}
+      ACR_ENABLE_EPISODE_WRITEBACK: ${ACR_ENABLE_EPISODE_WRITEBACK:-false}
       # FalkorDB graph backend (ADR 0009): self-hosted, no external
       # credential required, so there is no secret to leave unprovisioned
       # here. Still left unset/disabled by default: the `falkordb` service

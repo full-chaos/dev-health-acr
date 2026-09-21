@@ -187,7 +187,7 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 		return nil, errors.Join(err, runtime.Close())
 	}
 	clickhouseSource.WithLogger(logger)
-	episodesSource, err := devhealthsource.NewEpisodesProjectionSource(episodeRows)
+	episodesSource, err := newEpisodesSource(episodeRows, cfg.EpisodeWriteback)
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}
@@ -364,6 +364,17 @@ func openProjectionBackend(logger *slog.Logger, epochResolver contextfabric.OrgE
 		return err
 	}
 	return adapter, check, nil
+}
+
+// newEpisodesSource builds the episodes source with its write-back gate. The
+// source stays registered either way (see projectionSources); the gate only
+// decides whether it reads acr.agent_episodes.
+func newEpisodesSource(rows devhealthsource.EpisodeRows, writebackEnabled bool) (*devhealthsource.EpisodesProjectionSource, error) {
+	source, err := devhealthsource.NewEpisodesProjectionSource(rows)
+	if err != nil {
+		return nil, err
+	}
+	return source.WithEnabled(writebackEnabled), nil
 }
 
 // projectionSources is the composition root's registered ProjectionSource
