@@ -137,10 +137,10 @@ var wireDenials = []struct {
 	outcome string
 	guard   string
 }{
-	{"D", 401, acrmcp.HTTPAuthInvalidCredential, "revocation_check"},
+	{"D", 401, acrmcp.HTTPAuthInvalidCredential, "revocation_in_store_lookup"},
 	{"E", 401, acrmcp.HTTPAuthInvalidCredential, "expiry_check"},
 	{"F", 401, acrmcp.HTTPAuthMissingBearer, "bearer_required"},
-	{"G", 401, acrmcp.HTTPAuthMalformedBearer, "bearer_shape"},
+	{"G", 401, acrmcp.HTTPAuthMalformedBearer, "bearer_shape_three_layers"},
 }
 
 func matrixRows(f matrixFixture) []matrixRow {
