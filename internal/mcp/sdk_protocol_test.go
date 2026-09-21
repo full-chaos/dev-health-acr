@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"slices"
 	"testing"
 
@@ -19,9 +20,9 @@ func TestLinkedSDKSupportsProtocolRevisions(t *testing.T) {
 	}
 }
 
-// The in-memory STDIO-equivalent handshake must keep negotiating a revision the
-// linked SDK lists as supported.
-func TestInitializeNegotiatesSupportedRevision(t *testing.T) {
+// The in-memory STDIO-equivalent handshake negotiates the newest revision the
+// STDIO server lists.
+func TestInitializeNegotiatesNewestStdioRevision(t *testing.T) {
 	fx := newFixtureServer(t)
 	boot := newFixtureBootstrap(t, fx)
 	client, closeFn := connectedClient(t, boot)
@@ -31,7 +32,36 @@ func TestInitializeNegotiatesSupportedRevision(t *testing.T) {
 	if result == nil {
 		t.Fatal("no initialize result")
 	}
-	if !slices.Contains(mcpsdk.SupportedProtocolVersions(), result.ProtocolVersion) {
-		t.Fatalf("negotiated %q, not in supported %v", result.ProtocolVersion, mcpsdk.SupportedProtocolVersions())
+	if want := stdioProtocolVersions()[0]; result.ProtocolVersion != want {
+		t.Fatalf("negotiated %q, want the newest STDIO revision %q", result.ProtocolVersion, want)
+	}
+}
+
+// The STDIO server negotiates a revision on which roots/list is still allowed,
+// even when the client asks for a newer one, so context_for_task keeps
+// resolving its workspace from client roots.
+func TestStdioServerNegotiatesRootsCapableRevision(t *testing.T) {
+	fx := newFixtureServer(t)
+	boot := newFixtureBootstrap(t, fx)
+	ctx := context.Background()
+	server := NewServer(boot, "test-version")
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test-client", Version: "0.0.1"}, nil)
+	t1, t2 := mcpsdk.NewInMemoryTransports()
+	serverSession, err := server.Connect(ctx, t1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverSession.Close()
+	clientSession, err := client.Connect(ctx, t2, &mcpsdk.ClientSessionOptions{ProtocolVersion: "2026-07-28"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientSession.Close()
+
+	if got := clientSession.InitializeResult().ProtocolVersion; got != "2025-11-25" {
+		t.Fatalf("negotiated %q, want 2025-11-25", got)
+	}
+	if _, err := serverSession.ListRoots(ctx, nil); err != nil {
+		t.Fatalf("roots/list refused on the negotiated revision: %v", err)
 	}
 }
