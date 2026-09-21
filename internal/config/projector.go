@@ -36,6 +36,7 @@ const (
 	envContextFabricConcurrency       = "ACR_CONTEXT_FABRIC_PROJECTION_CONCURRENCY"
 	envContextFabricDrainBudget       = "ACR_CONTEXT_FABRIC_PROJECTION_DRAIN_BATCH_BUDGET"
 	envContextFabricTeamsProjects     = "ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED"
+	envEpisodeWriteback               = "ACR_ENABLE_EPISODE_WRITEBACK"
 	envContextFabricGraphReads        = "ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED"
 	envProjectorListenAddress         = "ACR_PROJECTOR_ADDR"
 	envProjectorEnvironment           = "ACR_ENVIRONMENT"
@@ -115,6 +116,10 @@ type ProjectorConfig struct {
 	// next poll -- see projectionrun.Config.DrainBatchBudget's doc comment.
 	DrainBatchBudget     int
 	TeamsProjectsEnabled bool
+	// EpisodeWriteback mirrors acr-api's flag of the same name. It gates the
+	// episodes projection source: with write-back off nothing writes
+	// acr.agent_episodes and the runtime role has no grant on it.
+	EpisodeWriteback bool
 }
 
 // requiredStores names the specific backing stores ONE CALLER of
@@ -257,6 +262,9 @@ func loadProjector(lookup lookupEnv, required requiredStores) (ProjectorConfig, 
 	if cfg.TeamsProjectsEnabled, err = boolValue(lookup, envContextFabricTeamsProjects, true); err != nil {
 		return ProjectorConfig{}, err
 	}
+	if cfg.EpisodeWriteback, err = boolValue(lookup, envEpisodeWriteback, false); err != nil {
+		return ProjectorConfig{}, err
+	}
 
 	if err := cfg.validate(required); err != nil {
 		return ProjectorConfig{}, err
@@ -350,7 +358,7 @@ func (c ProjectorConfig) SafeAttributes() []any {
 		"organization_count", len(c.OrgIDs), "org_discovery_enabled", c.OrgDiscoveryEnabled,
 		"org_activity_window", c.OrgActivityWindow.String(), "org_discovery_deny_count", len(c.OrgDiscoveryDenyIDs),
 		"poll_interval", c.PollInterval.String(),
-		"concurrency", c.Concurrency, "drain_batch_budget", c.DrainBatchBudget, "teams_projects_enabled", c.TeamsProjectsEnabled,
+		"concurrency", c.Concurrency, "drain_batch_budget", c.DrainBatchBudget, "teams_projects_enabled", c.TeamsProjectsEnabled, "episode_writeback_enabled", c.EpisodeWriteback,
 		"require_backing_stores", c.RequireBackingStores, "local_composition_ready", c.LocalCompositionReady,
 	}
 }

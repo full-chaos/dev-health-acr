@@ -423,3 +423,26 @@ func TestTeamsProjectsDefaultsToEnabled(t *testing.T) {
 		t.Fatal("an explicit false must still disable team/project projection")
 	}
 }
+
+// The episodes source is gated by the same flag acr-api uses for write-back;
+// it defaults off so a deployment without write-back (and without the table
+// grant) does not report a failing source.
+func TestProjectorEpisodeWritebackDefaultsOffAndIsSettable(t *testing.T) {
+	t.Parallel()
+	def, err := loadProjector(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true"}), requiredStoresAll)
+	if err != nil {
+		t.Fatalf("loadProjector: %v", err)
+	}
+	if def.EpisodeWriteback {
+		t.Fatal("ACR_ENABLE_EPISODE_WRITEBACK must default to false")
+	}
+	on, err := loadProjector(mapLookup(map[string]string{
+		"ACR_ENABLE_EPISODE_WRITEBACK": "true", "ACR_LOCAL_COMPOSITION_READY": "true",
+	}), requiredStoresAll)
+	if err != nil {
+		t.Fatalf("loadProjector: %v", err)
+	}
+	if !on.EpisodeWriteback {
+		t.Fatal("an explicit true must enable the episodes source")
+	}
+}

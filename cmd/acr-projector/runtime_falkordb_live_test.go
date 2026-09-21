@@ -113,6 +113,9 @@ func TestOpenRuntimeProjectsIntoRealFalkorDBAndRetrievalReadsItBack(t *testing.T
 	t.Setenv(falkorgraph.EnvAllowInsecure, "true")
 	t.Setenv(falkorgraph.EnvGraphPrefix, "acr-cf-accept")
 	t.Setenv("ACR_LOCAL_COMPOSITION_READY", "true")
+	// The seeded episode exists only on a deployment with write-back on, and
+	// the episodes source reads the table only then.
+	t.Setenv("ACR_ENABLE_EPISODE_WRITEBACK", "true")
 
 	cfg, err := config.LoadProjector()
 	require.NoError(t, err)

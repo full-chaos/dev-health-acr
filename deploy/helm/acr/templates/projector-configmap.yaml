@@ -42,6 +42,7 @@ data:
   ACR_CONTEXT_FABRIC_PROJECTION_POLL_INTERVAL: {{ .Values.contextFabric.projector.pollInterval | quote }}
   ACR_CONTEXT_FABRIC_PROJECTION_CONCURRENCY: {{ .Values.contextFabric.projector.concurrency | quote }}
   ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED: {{ .Values.contextFabric.projector.teamsProjectsEnabled | quote }}
+  ACR_ENABLE_EPISODE_WRITEBACK: {{ .Values.config.enableEpisodeWriteback | quote }}
   {{- if .Values.config.postgresCaBundle.existingSecret }}
   ACR_POSTGRES_CA_BUNDLE: "/var/run/acr/postgres-ca/ca.crt"
   {{- end }}

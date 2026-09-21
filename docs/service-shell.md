@@ -145,6 +145,10 @@ for the target repository. Invalid or unentitled callers may receive `401` or
 `403` before runtime availability is evaluated. A valid authorized caller
 receives a retryable `503` while writeback is disabled; enabling
 `ACR_ENABLE_EPISODE_WRITEBACK=true` makes the hosted episode service available.
+`acr-projector` reads the same variable: with it `false` the
+`dev_health_episodes` projection source idles (no read of `acr.agent_episodes`,
+which the runtime role cannot select), and `acr-db-init.sh runtime-acl` grants
+that table only when it is `true`. Set it to the same value on both binaries.
 
 ## Request behavior
 
