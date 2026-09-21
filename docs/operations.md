@@ -172,13 +172,66 @@ must never fail closed" posture as `falkorgraph.Configured`, because:
   (`context-fabric-graph`), disabled unless an operator opts in, so local
   development and CI do not pay for a graph database by default;
 - `ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS` (`contextFabric.projector.orgIds`)
-  is an explicit allowlist, empty by default — see the design note for why
-  this starts explicit rather than auto-discovered from `client_credentials`.
+  is a static allowlist, empty by default, and organization auto-discovery
+  (below) is off by default — so an out-of-the-box projector has no
+  organizations to project and says so.
+
+**Organization auto-discovery (`ACR_CONTEXT_FABRIC_PROJECTOR_ORG_DISCOVERY`,
+`contextFabric.projector.orgDiscovery`, default `false`).** With it on, the
+projector re-reads the eligible organization set from ClickHouse at the
+start of every poll and projects the **union** of that set and the static
+allowlist, so a newly onboarded tenant gets a graph without a redeploy.
+With it on, an empty `ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS` is accepted;
+with it off, enabling projection without an allowlist is still refused at
+startup.
+
+Discovering an organization id is not the same as giving it a graph. An
+organization is admitted only if it owns at least one `repos` row and its
+newest canonical activity (`repos.last_synced`, `work_items.updated_at`,
+`git_pull_requests.last_synced`) falls inside
+`ACR_CONTEXT_FABRIC_PROJECTOR_ORG_ACTIVITY_WINDOW`
+(`contextFabric.projector.orgActivityWindow`, default `720h`). `0s`
+disables the activity condition; a negative value is refused at startup.
+`ACR_CONTEXT_FABRIC_PROJECTOR_ORG_DISCOVERY_DENY_IDS`
+(`contextFabric.projector.orgDiscoveryDenyIds`) excludes named
+organizations outright. All three filter the DISCOVERED set only —
+`ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS` is an always-include allowlist and
+is never filtered, so an organization you pin by hand is projected even if
+it is dormant or denied.
+
+What to watch once it is on:
+
+- `context_fabric: projection organization discovery` (Info, one per tick)
+  carries `org_discovery_outcome=succeeded`, `orgs_static`,
+  `orgs_discovered`, `orgs_effective`, `orgs_new`, `orgs_skipped` and a
+  per-reason count (`orgs_skipped_no_repo`, `orgs_skipped_inactive`,
+  `orgs_skipped_denied`) present on every line, at zero when a reason did
+  not fire. A tenant appearing shows up as `orgs_new` > 0 on exactly one
+  tick.
+- `context_fabric: projection organization skipped` (Info) names each
+  excluded organization with its `org_skip_reason`. It is capped at 20 per
+  tick — `skipped_truncated: true` on the summary line says the cap bit —
+  so in a large shared environment read the per-reason COUNTS, which are
+  never capped, and narrow the window or the deny list rather than
+  expecting every id to be named.
+- A tenant you expected and do not see: check `orgs_skipped_inactive`
+  first. Both data conditions are reversible with no operator action — one
+  new row inside the window admits the organization on the very next tick.
+- `context_fabric: projection organization discovery failed` (Warn) carries
+  the same fields plus `failure_class`. `org_discovery_outcome=failed`
+  means the last-known set was retained and the tick went ahead normally —
+  discovery never shrinks the served set on a failed read.
+  `failed_no_prior_set` means discovery has never yet succeeded in this
+  process, so only the static allowlist is being served.
+- `acr-projector rebuild --org` / `rollback --org` refresh discovery once
+  before admitting the organization, so a discovered tenant can be rebuilt
+  by hand without being added to the allowlist first.
 
 To actually run it: bring up the `falkordb` Compose service
 (`docker compose --profile context-fabric-graph up`), set
 `ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=true`, supply
-`ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS`, and point
+`ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS` (or set
+`ACR_CONTEXT_FABRIC_PROJECTOR_ORG_DISCOVERY=true`), and point
 `ACR_CONTEXT_FABRIC_FALKOR_ADDR` at it (e.g. `falkordb:6379`) — FalkorDB is
 self-hosted and needs no external credential at all (ADR 0009);
 `ACR_CONTEXT_FABRIC_FALKOR_PASSWORD` stays optional and empty by default,

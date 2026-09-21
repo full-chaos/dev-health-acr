@@ -187,3 +187,13 @@ func EntityTableSubjectKindsForTest() map[string][]contractsv1.ContextFabricSubj
 	}
 	return declared
 }
+
+// SetOrgSourceClockForTest pins ClickHouseOrgSource's activity-window clock
+// (CHAOS-6182), so an eligibility test states its fixtures relative to a
+// FIXED now instead of wall time. Without it, a boundary cell ("exactly one
+// window old is still eligible") is decided by however many microseconds
+// elapsed between building the fixture and running the query -- a test that
+// passes because it is fast, not because the comparison is right.
+func SetOrgSourceClockForTest(source *ClickHouseOrgSource, now func() time.Time) {
+	source.now = now
+}

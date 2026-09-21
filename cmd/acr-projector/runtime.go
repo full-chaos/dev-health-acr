@@ -197,10 +197,30 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 	}
 	teamsProjectsSource.WithLogger(logger)
 
+	// CHAOS-6182: organization auto-discovery. Constructed ONLY when the
+	// operator opted in -- a nil projectionrun.Config.OrgSource leaves the
+	// effective organization set equal to cfg.OrgIDs, byte-identical to
+	// pre-CHAOS-6182 behavior. It reads through the same ClickHouse client
+	// every canonical source already uses, so it adds no connection,
+	// credential, or configuration surface of its own.
+	var orgSource projectionrun.OrgSource
+	if cfg.OrgDiscoveryEnabled {
+		clickhouseOrgs, err := devhealthsource.NewClickHouseOrgSourceWithWindow(clickhouseClient, cfg.OrgActivityWindow)
+		if err != nil {
+			return nil, errors.Join(err, runtime.Close())
+		}
+		orgSource = clickhouseOrgs
+	}
+
 	coordinatorConfig := projectionrun.Config{
-		OrgIDs:  cfg.OrgIDs,
-		Sources: projectionSources(clickhouseSource, episodesSource, teamsProjectsSource),
-		Backend: backend, Checkpoints: checkpoints, RebuildMarkers: rebuildMarkers, Locker: locker,
+		OrgIDs:    cfg.OrgIDs,
+		OrgSource: orgSource,
+		// Passed unconditionally: NewCoordinator ignores it when OrgSource
+		// is nil, and reading it only inside the branch above would make a
+		// deny list silently disappear if the two were ever decoupled.
+		OrgDiscoveryDeny: cfg.OrgDiscoveryDenyIDs,
+		Sources:          projectionSources(clickhouseSource, episodesSource, teamsProjectsSource),
+		Backend:          backend, Checkpoints: checkpoints, RebuildMarkers: rebuildMarkers, Locker: locker,
 		ReuseInvalidator: reuseInvalidator,
 		PollInterval:     cfg.PollInterval, Concurrency: cfg.Concurrency, DrainBatchBudget: cfg.DrainBatchBudget, Logger: logger,
 		// Codex round-3 F2: a real observer, not the no-op default. A tick
