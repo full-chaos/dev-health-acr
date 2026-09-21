@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -29,7 +30,8 @@ import (
 //
 //	ACR_MCP_MATRIX_URL, ACR_MCP_MATRIX_BEARER_A, ACR_MCP_MATRIX_BEARER_C,
 //	ACR_MCP_MATRIX_REPO_A                   required (as for the matrix)
-//	ACR_MCP_MATRIX_E2E_REPO_C               a repository in C's grant and not in A's (required)
+//	ACR_MCP_MATRIX_E2E_REPO_C               a repository in C's grant (required); C's grant must not hold REPO_A
+//	ACR_MCP_MATRIX_E2E_GRANT_A              comma-separated repositories in A's grant (default: REPO_A)
 //	ACR_MCP_MATRIX_E2E_QUESTION             a question answerable on A's data (required)
 //	ACR_MCP_MATRIX_E2E_CLARIFY_QUESTION     a question expected to need clarification (optional)
 //	ACR_MCP_MATRIX_E2E_TOOLS_A, _TOOLS_C, _TOOLS_H   comma-separated expected catalogues
@@ -37,7 +39,8 @@ import (
 //	ACR_MCP_MATRIX_BEARER_H                 an optional third caller for the catalogue step
 //	ACR_MCP_MATRIX_E2E_SERVER_REVISION      text the discovered serverInfo.version must carry
 //	ACR_MCP_MATRIX_E2E_CONCURRENCY          requests per caller in the concurrency step (default 24)
-//	ACR_MCP_MATRIX_E2E_EXPECT_OMITTED=1     the 8192-byte budget must drop the full result
+//	ACR_MCP_MATRIX_E2E_BUDGET_BYTES         max_serialized_bytes of the include_full_result call (default 8192)
+//	ACR_MCP_MATRIX_E2E_EXPECT_OMITTED=1     that budget must drop the full result
 //	ACR_MCP_MATRIX_RESULT_A                 a stored result id owned by A, also read back (optional)
 //	ACR_MCP_MATRIX_E2E_OUT                  directory for the captured transcripts (no bearer is written)
 //
@@ -64,11 +67,13 @@ type hostedE2EConfig struct {
 	bearers         map[string]string
 	tools           map[string][]string
 	repoA, repoC    string
+	grantA          []string
 	question        string
 	clarifyQuestion string
 	serverRevision  string
 	concurrency     int
 	expectOmitted   bool
+	budgetBytes     int
 	storedResult    string
 	// investigatedNotStored is set only by the in-process runner, whose
 	// stand-in investigator answers without storing its results.
@@ -105,6 +110,7 @@ func hostedE2EConfigFromEnv(getenv func(string) string) (*hostedE2EConfig, []str
 		serverRevision:  getenv("ACR_MCP_MATRIX_E2E_SERVER_REVISION"),
 		concurrency:     24,
 		expectOmitted:   getenv("ACR_MCP_MATRIX_E2E_EXPECT_OMITTED") == "1",
+		budgetBytes:     8192,
 		storedResult:    getenv("ACR_MCP_MATRIX_RESULT_A"),
 		outDir:          getenv("ACR_MCP_MATRIX_E2E_OUT"),
 		runID:           randomToken(4),
@@ -119,6 +125,23 @@ func hostedE2EConfigFromEnv(getenv func(string) string) (*hostedE2EConfig, []str
 				}
 			}
 			slices.Sort(cfg.tools[caller])
+		}
+	}
+	cfg.grantA = []string{cfg.repoA}
+	if list := getenv("ACR_MCP_MATRIX_E2E_GRANT_A"); list != "" {
+		cfg.grantA = nil
+		for _, repo := range strings.Split(list, ",") {
+			if repo = strings.TrimSpace(repo); repo != "" {
+				cfg.grantA = append(cfg.grantA, repo)
+			}
+		}
+	}
+	if !slices.Contains(cfg.grantA, cfg.repoA) || cfg.repoA == cfg.repoC {
+		missing = append(missing, "ACR_MCP_MATRIX_E2E_GRANT_A (must contain ACR_MCP_MATRIX_REPO_A, which must differ from ACR_MCP_MATRIX_E2E_REPO_C)")
+	}
+	if n := getenv("ACR_MCP_MATRIX_E2E_BUDGET_BYTES"); n != "" {
+		if _, err := fmt.Sscanf(n, "%d", &cfg.budgetBytes); err != nil || cfg.budgetBytes < 8192 || cfg.budgetBytes > 1048576 {
+			missing = append(missing, "ACR_MCP_MATRIX_E2E_BUDGET_BYTES (an integer from 8192 to 1048576)")
 		}
 	}
 	if n := getenv("ACR_MCP_MATRIX_E2E_CONCURRENCY"); n != "" {
@@ -214,12 +237,16 @@ func (cfg *hostedE2EConfig) connect(t *testing.T, caller, step string) *hostedCa
 	t.Helper()
 	rt := &recordingTransport{bearer: cfg.bearers[caller], prefix: fmt.Sprintf("e2e-%s-%s-%s", cfg.runID, step, caller)}
 	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "acr-hosted-e2e", Version: "1"}, nil)
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	session, err := client.Connect(ctx, &mcpsdk.StreamableClientTransport{
-		Endpoint: cfg.url, HTTPClient: &http.Client{Transport: rt, Timeout: 5 * time.Minute},
-		DisableStandaloneSSE: true, MaxRetries: -1,
-	}, &mcpsdk.ClientSessionOptions{ProtocolVersion: "2026-07-28"})
+	var session *mcpsdk.ClientSession
+	err := retryTooMany(t, "caller "+caller+" connect", func() (err error) {
+		session, err = client.Connect(ctx, &mcpsdk.StreamableClientTransport{
+			Endpoint: cfg.url, HTTPClient: &http.Client{Transport: rt, Timeout: 5 * time.Minute},
+			DisableStandaloneSSE: true, MaxRetries: -1,
+		}, &mcpsdk.ClientSessionOptions{ProtocolVersion: "2026-07-28"})
+		return err
+	})
 	if err != nil {
 		t.Fatalf("caller %s: connect: %v", caller, err)
 	}
@@ -253,11 +280,85 @@ func (c *hostedCaller) call(t *testing.T, tool string, args map[string]any) *mcp
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	res, err := c.session.CallTool(ctx, &mcpsdk.CallToolParams{Name: tool, Arguments: args})
-	if err != nil {
-		t.Fatalf("caller %s: %s: %v", c.name, tool, err)
+	for attempt := 1; ; attempt++ {
+		var res *mcpsdk.CallToolResult
+		err := retryTooMany(t, "caller "+c.name+" "+tool, func() (err error) {
+			res, err = c.session.CallTool(ctx, &mcpsdk.CallToolParams{Name: tool, Arguments: args})
+			return err
+		})
+		if err != nil {
+			t.Fatalf("caller %s: %s: %v", c.name, tool, err)
+		}
+		if !rateLimited(res) || attempt == rateLimitAttempts {
+			return res
+		}
+		t.Logf("E2E-RETRY caller %s %s: rate_limited (attempt %d), waiting %s", c.name, tool, attempt, rateLimitBackoff)
+		select {
+		case <-ctx.Done():
+			return res
+		case <-time.After(rateLimitBackoff):
+		}
 	}
-	return res
+}
+
+// A rate-limited answer decides nothing about identity or scope, so it is
+// retried; every retry is logged. The deployment's own per-credential and
+// per-organization request budget is not relaxed for the proof.
+const (
+	rateLimitAttempts = 10
+	rateLimitBackoff  = 40 * time.Second
+)
+
+// retryTooMany retries fn while the endpoint answers HTTP 429, logging every
+// retry.
+func retryTooMany(t *testing.T, label string, fn func() error) error {
+	t.Helper()
+	for attempt := 1; ; attempt++ {
+		err := fn()
+		if err == nil || !strings.Contains(err.Error(), "Too Many Requests") || attempt == 2*rateLimitAttempts {
+			return err
+		}
+		t.Logf("E2E-RETRY %s: HTTP 429 (attempt %d), waiting %s", label, attempt, rateLimitBackoff)
+		time.Sleep(rateLimitBackoff)
+	}
+}
+
+func rateLimited(res *mcpsdk.CallToolResult) bool {
+	return res != nil && res.IsError && strings.Contains(resultText(res), "rate_limited")
+}
+
+// investigate asks one question and answers every clarification the service
+// asks for, up to three follow-ups. Each follow-up carries, for every kind of
+// choice the latest answer offered, the receipt of its first option, all
+// bound to that latest answer: a receipt names an offer of the answer it came
+// from, and a newer answer supersedes it. It returns every turn, oldest first.
+func (c *hostedCaller) investigate(t *testing.T, args map[string]any) []*mcpsdk.CallToolResult {
+	t.Helper()
+	var turns []*mcpsdk.CallToolResult
+	turn := maps.Clone(args)
+	for range 4 {
+		res := c.call(t, "investigate_question", turn)
+		turns = append(turns, res)
+		if res.IsError {
+			return turns
+		}
+		answer, _ := structured(t, res)["structured"].(map[string]any)
+		if answer["status"] != "clarification_required" {
+			return turns
+		}
+		id, _ := answer["result_id"].(string)
+		receipts := firstReceipts(answer)
+		if len(receipts) == 0 {
+			return turns
+		}
+		t.Logf("E2E-EVIDENCE clarification turn %d: result_id=%s missing=%v -> %v", len(turns), id, field(answer, "structure_needs", "missing"), receipts)
+		turn = maps.Clone(args)
+		turn["parent_result_id"] = id
+		for reqField, receipt := range receipts {
+			turn[reqField] = []any{map[string]any{"result_id": id, "receipt_id": receipt}}
+		}
+	}
+	return turns
 }
 
 func resultText(res *mcpsdk.CallToolResult) string {
@@ -316,7 +417,7 @@ func truncate(s string, n int) string {
 
 func runHostedE2E(t *testing.T, cfg *hostedE2EConfig) {
 	t.Logf("E2E run id %s against %s", cfg.runID, cfg.url)
-	var resultID, evidenceRef string
+	var resultID, evidenceRef, investigationRef string
 
 	t.Run("01_discover_2026_07_28", func(t *testing.T) {
 		a := cfg.connect(t, "A", "discover")
@@ -325,6 +426,14 @@ func runHostedE2E(t *testing.T, cfg *hostedE2EConfig) {
 			t.Fatalf("negotiated %+v, want protocol 2026-07-28", init)
 		}
 		log := a.transport.exchanges()
+		// Only the attempt that connected counts: an attempt the endpoint
+		// refused with HTTP 429 is retried from the start.
+		for i := len(log) - 1; i >= 0; i-- {
+			if log[i].Status == http.StatusTooManyRequests {
+				log = log[i+1:]
+				break
+			}
+		}
 		if len(log) == 0 || log[0].Method != "server/discover" {
 			t.Fatalf("first request was not server/discover: %+v", log)
 		}
@@ -352,8 +461,12 @@ func runHostedE2E(t *testing.T, cfg *hostedE2EConfig) {
 				continue
 			}
 			c := cfg.connect(t, caller, "catalogue")
-			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-			tools, err := c.session.ListTools(ctx, nil)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			var tools *mcpsdk.ListToolsResult
+			err := retryTooMany(t, caller+" tools/list", func() (err error) {
+				tools, err = c.session.ListTools(ctx, nil)
+				return err
+			})
 			cancel()
 			if err != nil {
 				t.Fatalf("%s tools/list: %v", caller, err)
@@ -374,9 +487,13 @@ func runHostedE2E(t *testing.T, cfg *hostedE2EConfig) {
 		cfg.record(t, "02_catalogues", catalogues)
 
 		a := cfg.connect(t, "A", "guide")
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
-		resources, err := a.session.ListResources(ctx, nil)
+		var resources *mcpsdk.ListResourcesResult
+		err := retryTooMany(t, "resources/list", func() (err error) {
+			resources, err = a.session.ListResources(ctx, nil)
+			return err
+		})
 		if err != nil {
 			t.Fatalf("resources/list: %v", err)
 		}
@@ -393,7 +510,11 @@ func runHostedE2E(t *testing.T, cfg *hostedE2EConfig) {
 		if guides == 0 {
 			t.Errorf("resources/list carries no acr://guide/* resource: %v", uris)
 		}
-		prompts, err := a.session.ListPrompts(ctx, nil)
+		var prompts *mcpsdk.ListPromptsResult
+		err = retryTooMany(t, "prompts/list", func() (err error) {
+			prompts, err = a.session.ListPrompts(ctx, nil)
+			return err
+		})
 		if err != nil {
 			t.Fatalf("prompts/list: %v", err)
 		}
@@ -440,7 +561,11 @@ func runHostedE2E(t *testing.T, cfg *hostedE2EConfig) {
 
 	t.Run("04_investigate_question", func(t *testing.T) {
 		a := cfg.connect(t, "A", "investigate")
-		res := a.call(t, "investigate_question", map[string]any{"question": cfg.question})
+		turns := a.investigate(t, map[string]any{"question": cfg.question})
+		for i, turn := range turns {
+			cfg.record(t, fmt.Sprintf("04_investigate_turn%d", i+1), turn)
+		}
+		res := turns[len(turns)-1]
 		if res.IsError {
 			t.Fatalf("investigate_question refused: %s", truncate(resultText(res), 800))
 		}
@@ -454,6 +579,9 @@ func runHostedE2E(t *testing.T, cfg *hostedE2EConfig) {
 				t.Errorf("answer lacks contract field %q", key)
 			}
 		}
+		if answer["status"] == "clarification_required" {
+			t.Errorf("still clarification_required after %d turns", len(turns))
+		}
 		if field(m, "untrusted_content", "untrusted") != true {
 			t.Errorf("untrusted_content.untrusted = %v, want true", field(m, "untrusted_content", "untrusted"))
 		}
@@ -463,52 +591,42 @@ func runHostedE2E(t *testing.T, cfg *hostedE2EConfig) {
 		}
 		refs := stringsAt(answer, "evidence_ref_ids")
 		if len(refs) > 0 {
-			evidenceRef = refs[0]
+			investigationRef = refs[0]
 		}
-		t.Logf("E2E-EVIDENCE investigate_question: result_id=%s status=%v completeness=%v coverage_partial=%v evidence_refs=%d warnings=%d limitations=%d",
-			resultID, answer["status"], field(answer, "completeness", "state"), answer["coverage_partial"], len(refs),
+		t.Logf("E2E-EVIDENCE investigate_question: turns=%d result_id=%s status=%v completeness=%v coverage_partial=%v evidence_refs=%d warnings=%d limitations=%d",
+			len(turns), resultID, answer["status"], field(answer, "completeness", "state"), answer["coverage_partial"], len(refs),
 			lenOf(answer["warnings"]), lenOf(answer["limitations"]))
-		cfg.record(t, "04_investigate", res)
 
 		if cfg.clarifyQuestion == "" {
-			t.Log("E2E-EVIDENCE clarification path: NOT EXECUTED (ACR_MCP_MATRIX_E2E_CLARIFY_QUESTION unset)")
+			if len(turns) == 1 {
+				t.Log("E2E-EVIDENCE clarification path: NOT EXECUTED (the question needed no clarification and ACR_MCP_MATRIX_E2E_CLARIFY_QUESTION is unset)")
+			}
 			return
 		}
-		first := a.call(t, "investigate_question", map[string]any{"question": cfg.clarifyQuestion, "allow_clarification": true})
-		if first.IsError {
-			t.Fatalf("clarification question refused: %s", truncate(resultText(first), 800))
+		clarify := a.investigate(t, map[string]any{"question": cfg.clarifyQuestion, "allow_clarification": true})
+		for i, turn := range clarify {
+			cfg.record(t, fmt.Sprintf("04_clarify_turn%d", i+1), turn)
 		}
-		fm, _ := structured(t, first)["structured"].(map[string]any)
-		cfg.record(t, "04_clarify_first", first)
-		if fm["status"] != "clarification_required" {
-			t.Fatalf("clarification question answered with status %v, want clarification_required", fm["status"])
+		first, _ := structured(t, clarify[0])["structured"].(map[string]any)
+		if first["status"] != "clarification_required" || len(clarify) < 2 {
+			t.Fatalf("clarification question: first status %v over %d turns, want clarification_required then a follow-up", first["status"], len(clarify))
 		}
-		firstID, _ := fm["result_id"].(string)
-		reqField, receipt := firstReceipt(fm)
-		if receipt == "" {
-			t.Fatalf("clarification_required carries no option receipt: structure_needs=%v", fm["structure_needs"])
+		last := clarify[len(clarify)-1]
+		if last.IsError {
+			t.Fatalf("clarification follow-up refused: %s", truncate(resultText(last), 800))
 		}
-		second := a.call(t, "investigate_question", map[string]any{
-			"question":         cfg.clarifyQuestion,
-			"parent_result_id": firstID,
-			reqField:           []any{map[string]any{"result_id": firstID, "receipt_id": receipt}},
-		})
-		if second.IsError {
-			t.Fatalf("follow-up with %s refused: %s", reqField, truncate(resultText(second), 800))
-		}
-		sm, _ := structured(t, second)["structured"].(map[string]any)
-		t.Logf("E2E-EVIDENCE clarification: first status=%v missing=%v; follow-up %s=%s -> status=%v result_id=%v",
-			fm["status"], field2(fm, "structure_needs", "missing"), reqField, receipt, sm["status"], sm["result_id"])
-		cfg.record(t, "04_clarify_followup", second)
+		lm, _ := structured(t, last)["structured"].(map[string]any)
+		t.Logf("E2E-EVIDENCE clarification question: %d turns, final status=%v result_id=%v", len(clarify), lm["status"], lm["result_id"])
 	})
 
 	t.Run("05_investigation_result_by_id", func(t *testing.T) {
 		a := cfg.connect(t, "A", "result")
-		small := a.call(t, "investigate_question", map[string]any{
+		smallTurns := a.investigate(t, map[string]any{
 			"question":            cfg.question,
 			"include_full_result": true,
-			"budget":              map[string]any{"max_serialized_bytes": 8192},
+			"budget":              map[string]any{"max_serialized_bytes": cfg.budgetBytes},
 		})
+		small := smallTurns[len(smallTurns)-1]
 		if small.IsError {
 			t.Fatalf("budgeted investigate_question refused: %s", truncate(resultText(small), 800))
 		}
@@ -517,13 +635,13 @@ func runHostedE2E(t *testing.T, cfg *hostedE2EConfig) {
 		omitted := field(answer, "projection_budget", "full_result_omitted") == true
 		switch {
 		case omitted && sm["full_result"] != nil:
-			t.Fatal("8192-byte budget: full_result_omitted=true but the full result is attached")
+			t.Fatalf("%d-byte budget: full_result_omitted=true but the full result is attached", cfg.budgetBytes)
 		case !omitted && sm["full_result"] == nil:
 			t.Fatal("include_full_result=true: no full result and no full_result_omitted declaration")
 		case !omitted && cfg.expectOmitted:
-			t.Fatal("8192-byte budget: the full result fit, so the omission path was not exercised (ACR_MCP_MATRIX_E2E_EXPECT_OMITTED=1)")
+			t.Fatalf("%d-byte budget: the full result fit, so the omission path was not exercised (ACR_MCP_MATRIX_E2E_EXPECT_OMITTED=1)", cfg.budgetBytes)
 		case !omitted:
-			t.Log("E2E-EVIDENCE budget: FULL-RESULT OMISSION NOT EXERCISED: the full result fit within 8192 bytes")
+			t.Logf("E2E-EVIDENCE budget: FULL-RESULT OMISSION NOT EXERCISED: the full result fit within %d bytes", cfg.budgetBytes)
 		}
 		id, _ := answer["result_id"].(string)
 		cfg.record(t, "05_budgeted", small)
@@ -555,58 +673,84 @@ func runHostedE2E(t *testing.T, cfg *hostedE2EConfig) {
 		t.Logf("E2E-EVIDENCE budget: result_id=%s full_result_omitted=%v truncated=%v", id, omitted, field(answer, "projection_budget", "truncated"))
 	})
 
-	t.Run("06_source_evidence", func(t *testing.T) {
-		if evidenceRef == "" {
-			t.Fatal("no evidence reference was returned by steps 03/04; source_evidence cannot be exercised")
-		}
-		a := cfg.connect(t, "A", "evidence")
-		res := a.call(t, "source_evidence", map[string]any{"evidence_ref_id": evidenceRef})
+	expand := func(t *testing.T, name, ref string) {
+		t.Helper()
+		a := cfg.connect(t, "A", name)
+		res := a.call(t, "source_evidence", map[string]any{"evidence_ref_id": ref})
+		cfg.record(t, "06_"+name, res)
 		if res.IsError {
-			t.Fatalf("source_evidence %s refused: %s", evidenceRef, truncate(resultText(res), 600))
+			t.Fatalf("source_evidence %s refused: %s", ref, truncate(resultText(res), 600))
 		}
 		m := structured(t, res)
 		if field(m, "rendered_markdown", "untrusted") != true {
 			t.Errorf("rendered_markdown.untrusted = %v, want true", field(m, "rendered_markdown", "untrusted"))
 		}
-		t.Logf("E2E-EVIDENCE source_evidence %s: ok untrusted=%v truncated=%v", evidenceRef,
+		t.Logf("E2E-EVIDENCE source_evidence %s: ok untrusted=%v truncated=%v", ref,
 			field(m, "rendered_markdown", "untrusted"), field(m, "rendered_markdown", "truncated"))
-		cfg.record(t, "06_source_evidence", res)
-		cfg.record(t, "ids", map[string]string{"result_a": resultID, "evidence_a": evidenceRef})
+	}
+	t.Run("06_source_evidence_context_ref", func(t *testing.T) {
+		if evidenceRef == "" {
+			t.Fatal("context_for_task returned no evidence reference; source_evidence cannot be exercised")
+		}
+		expand(t, "source_evidence_context_ref", evidenceRef)
 	})
+	// The tool contract names investigate_question's evidence_ref_ids as
+	// expandable too, so a refusal here is a failure, not a skip.
+	t.Run("06_source_evidence_investigation_ref", func(t *testing.T) {
+		if investigationRef == "" {
+			t.Log("E2E-EVIDENCE source_evidence investigation ref: NOT EXECUTED (the answer carried no evidence_ref_ids)")
+			return
+		}
+		expand(t, "source_evidence_investigation_ref", investigationRef)
+	})
+	cfg.record(t, "ids", map[string]string{"result_a": resultID, "evidence_a": evidenceRef, "investigation_ref_a": investigationRef})
 
 	t.Run("08_concurrent_callers_no_identity_bleed", func(t *testing.T) {
 		callers := map[string]*hostedCaller{"A": cfg.connect(t, "A", "conc"), "C": cfg.connect(t, "C", "conc")}
-		own := map[string]string{"A": cfg.repoA, "C": cfg.repoC}
-		other := map[string]string{"A": cfg.repoC, "C": cfg.repoA}
+		repos := map[string][2]string{"A": {cfg.repoA, cfg.repoC}, "C": {cfg.repoC, cfg.repoA}}
+		grants := map[string][]string{"A": cfg.grantA, "C": {cfg.repoC}}
 		type outcome struct {
 			caller, repo string
 			allowed      bool
+			retries      int
 			text         string
 		}
 		var mu sync.Mutex
 		var outcomes []outcome
 		var wg sync.WaitGroup
 		start := make(chan struct{})
+		// Four in flight per caller: the two callers' requests interleave on
+		// the one workload while staying near the deployment's request budget.
+		sem := map[string]chan struct{}{"A": make(chan struct{}, 4), "C": make(chan struct{}, 4)}
 		for name, c := range callers {
 			for i := range cfg.concurrency {
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
 					<-start
-					repo := own[name]
-					if i%2 == 1 {
-						repo = other[name]
-					}
-					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+					repo := repos[name][i%2]
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 					defer cancel()
-					res, err := c.session.CallTool(ctx, &mcpsdk.CallToolParams{Name: "context_for_task", Arguments: map[string]any{
-						"goal": "Summarize recent work.", "repository": map[string]any{"slug": repo},
-					}})
+					sem[name] <- struct{}{}
+					defer func() { <-sem[name] }()
 					o := outcome{caller: name, repo: repo}
-					if err != nil {
-						o.text = "transport: " + err.Error()
-					} else {
-						o.allowed, o.text = !res.IsError, resultText(res)
+					for attempt := 1; attempt <= 2*rateLimitAttempts; attempt++ {
+						res, err := c.session.CallTool(ctx, &mcpsdk.CallToolParams{Name: "context_for_task", Arguments: map[string]any{
+							"goal": "Summarize recent work.", "repository": map[string]any{"slug": repo},
+						}})
+						if err != nil {
+							o.allowed, o.text = false, "transport: "+err.Error()
+							if !strings.Contains(err.Error(), "Too Many Requests") {
+								break
+							}
+						} else {
+							o.allowed, o.text = !res.IsError, resultText(res)
+							if !rateLimited(res) {
+								break
+							}
+						}
+						o.retries++
+						time.Sleep(rateLimitBackoff)
 					}
 					mu.Lock()
 					outcomes = append(outcomes, o)
@@ -617,8 +761,9 @@ func runHostedE2E(t *testing.T, cfg *hostedE2EConfig) {
 		close(start)
 		wg.Wait()
 		counts := map[string]int{}
+		retries := 0
 		for _, o := range outcomes {
-			wantAllowed := o.repo == own[o.caller]
+			wantAllowed := slices.Contains(grants[o.caller], o.repo)
 			if o.allowed != wantAllowed {
 				t.Errorf("caller %s on %s: allowed=%v, want %v (%s)", o.caller, o.repo, o.allowed, wantAllowed, truncate(o.text, 200))
 			}
@@ -626,6 +771,7 @@ func runHostedE2E(t *testing.T, cfg *hostedE2EConfig) {
 				t.Errorf("caller %s on %s refused without repo_forbidden: %s", o.caller, o.repo, truncate(o.text, 200))
 			}
 			counts[fmt.Sprintf("%s:%s:allowed=%v", o.caller, o.repo, o.allowed)]++
+			retries += o.retries
 		}
 		echoMismatch := 0
 		for _, c := range callers {
@@ -641,8 +787,8 @@ func runHostedE2E(t *testing.T, cfg *hostedE2EConfig) {
 		if len(outcomes) != 2*cfg.concurrency {
 			t.Fatalf("%d outcomes, want %d", len(outcomes), 2*cfg.concurrency)
 		}
-		t.Logf("E2E-EVIDENCE concurrency: %d requests per caller, interleaved; outcomes=%v; correlation echo mismatches=0; request id prefixes e2e-%s-conc-{A,C}",
-			cfg.concurrency, counts, cfg.runID)
+		t.Logf("E2E-EVIDENCE concurrency: %d requests per caller, interleaved; outcomes=%v; rate-limit retries=%d; correlation echo mismatches=0; request id prefixes e2e-%s-conc-{A,C}",
+			cfg.concurrency, counts, retries, cfg.runID)
 		cfg.record(t, "08_concurrency", counts)
 	})
 }
@@ -673,9 +819,9 @@ func collectEvidenceRefs(m map[string]any) []string {
 	return out
 }
 
-// firstReceipt picks the first offered option of a clarification and names
-// the request field that confirms it.
-func firstReceipt(answer map[string]any) (string, string) {
+// firstReceipts picks, for every kind of choice a clarification offers, its
+// first option, keyed by the request field that confirms it.
+func firstReceipts(answer map[string]any) map[string]string {
 	fields := []struct{ options, request string }{
 		{"kind_options", "prior_kind_receipts"},
 		{"anchor_options", "prior_anchor_receipts"},
@@ -683,15 +829,17 @@ func firstReceipt(answer map[string]any) (string, string) {
 		{"handle_options", "prior_handle_receipts"},
 		{"window_options", "prior_window_receipts"},
 	}
+	out := map[string]string{}
 	for _, f := range fields {
 		options, _ := field(answer, "structure_needs", f.options).([]any)
 		for _, o := range options {
 			if id, _ := field2(o, "receipt_id").(string); id != "" {
-				return f.request, id
+				out[f.request] = id
+				break
 			}
 		}
 	}
-	return "", ""
+	return out
 }
 
 func field2(v any, path ...string) any {
