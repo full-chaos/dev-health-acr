@@ -576,7 +576,7 @@ The text is generated from the ACR registries by `go generate ./internal/mcp/gui
 
 ## Prompts
 
-The server lists MCP prompts that build well-formed calls. They are static: the text depends only on the prompt arguments and the embedded registry snapshot (`prompt_vocab.json`, generated into `guide/zz_generated.go` with the guide resources). They read no caller state, call no model, and call no hosted API. A refused argument returns an invalid-params error that does not echo the value.
+The server lists MCP prompts that build well-formed calls. They are static: the text depends only on the prompt arguments and the embedded registry snapshot (`prompt_vocab.json`, generated into `guide/zz_generated.go` with the guide resources). They read no caller state, call no model, and call no hosted API. A refused argument (out of bounds, out of vocabulary, or not declared by the prompt) returns an invalid-params error that does not echo the value; bounds count Unicode code points, as the request schemas do.
 
 - `investigate` (`question`; optional `repository`, `project`, `team`, `expected_kinds`, `window`): the exact `investigate_question` arguments, the question shapes ACR answers, and what to do with the reply (clarification receipts, `investigation_result`, `source_evidence`).
 - `continue_investigation` (`parent_result_id`, `question`; optional `receipts`): the follow-up `investigate_question` call, with each receipt in the `prior_*_receipts` field its prefix names.

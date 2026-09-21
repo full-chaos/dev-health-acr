@@ -207,6 +207,10 @@ func TestPromptRefusalIsAnInvalidParamsErrorThatDoesNotEchoInput(t *testing.T) {
 	if strings.Contains(err.Error(), "SECRETVALUE") || !strings.Contains(err.Error(), "trailing_30d") {
 		t.Fatalf("refusal must list the vocabulary and not echo the value: %v", err)
 	}
+	_, err = getPromptText(t, client, guide.PromptInvestigate, map[string]string{"question": "q", "expected_kindz": "team"})
+	if err == nil || strings.Contains(err.Error(), "expected_kindz") || !strings.Contains(err.Error(), "expected_kinds") {
+		t.Fatalf("an undeclared argument must be refused, listing declared names and not echoing the input: %v", err)
+	}
 	if _, err := getPromptText(t, client, guide.PromptExpand, nil); err == nil {
 		t.Fatal("expand_evidence without evidence_ref_id must be refused")
 	}

@@ -396,3 +396,108 @@ func TestPromptArgumentDescriptionsListVocabulary(t *testing.T) {
 		}
 	}
 }
+
+// Bounds are Unicode code points, as in the schema: a multi-byte value at the
+// boundary is accepted, one code point over is refused, and the accepted call
+// validates against the schema.
+func TestPromptBoundsCountCodePointsNotBytes(t *testing.T) {
+	v := mustVocab(t)
+	multi := func(n int) string { return strings.Repeat("é", n) }
+	type cell struct {
+		name string
+		args map[string]string
+		max  int
+		set  func(string) map[string]string
+	}
+	cells := []cell{
+		{PromptInvestigate, nil, maxQuestionLen, func(s string) map[string]string { return map[string]string{ArgQuestion: s} }},
+		{PromptInvestigate, nil, maxRepoLen, func(s string) map[string]string { return map[string]string{ArgQuestion: "q", ArgRepository: s} }},
+		{PromptInvestigate, nil, maxProjectLen, func(s string) map[string]string { return map[string]string{ArgQuestion: "q", ArgProject: s} }},
+		{PromptInvestigate, nil, maxTeamLen, func(s string) map[string]string { return map[string]string{ArgQuestion: "q", ArgTeam: s} }},
+		{PromptContinue, nil, maxResultIDLen, func(s string) map[string]string { return map[string]string{ArgQuestion: "q", ArgParentResultID: s} }},
+		{PromptContinue, nil, maxReceiptIDLen, func(s string) map[string]string {
+			return map[string]string{ArgQuestion: "q", ArgParentResultID: "result_0001", ArgReceipts: "kindr_" + s}
+		}},
+		{PromptExpand, nil, maxEvidenceIDLen, func(s string) map[string]string { return map[string]string{ArgEvidenceRefID: s} }},
+	}
+	for _, c := range cells {
+		atMax := c.max
+		if c.name == PromptContinue && strings.Contains(c.set("x")[ArgReceipts], "kindr_") {
+			atMax = c.max - len("kindr_")
+		}
+		out, err := RenderPrompt(v, c.name, c.set(multi(atMax)))
+		if err != nil {
+			t.Errorf("%s: %d code points must be accepted: %v", c.name, atMax, err)
+			continue
+		}
+		schema := investigateSchema
+		if c.name == PromptExpand {
+			schema = evidenceSchema
+		}
+		validate(t, schema, callJSON(t, out.Text))
+		if _, err := RenderPrompt(v, c.name, c.set(multi(atMax+1))); err == nil {
+			t.Errorf("%s: %d code points must be refused", c.name, atMax+1)
+		}
+	}
+	// Lower bounds count code points too: 8 two-byte characters is long enough.
+	if _, err := RenderPrompt(v, PromptContinue, map[string]string{ArgQuestion: "q", ArgParentResultID: multi(minResultIDLen)}); err != nil {
+		t.Errorf("parent_result_id of %d code points must be accepted: %v", minResultIDLen, err)
+	}
+	if _, err := RenderPrompt(v, PromptContinue, map[string]string{ArgQuestion: "q", ArgParentResultID: multi(minResultIDLen - 1)}); err == nil {
+		t.Error("parent_result_id below the minimum must be refused")
+	}
+}
+
+// An argument the prompt does not declare is refused for every prompt, and the
+// refusal lists the declared names without echoing the offender.
+func TestPromptRefusesUndeclaredArguments(t *testing.T) {
+	v := mustVocab(t)
+	valid := map[string]map[string]string{
+		PromptInvestigate: {ArgQuestion: "q"},
+		PromptContinue:    {ArgQuestion: "q", ArgParentResultID: "result_0001"},
+		PromptExpand:      {ArgEvidenceRefID: "e1"},
+	}
+	for _, def := range PromptDefs(v) {
+		for _, stray := range []string{"expected_kindz", "SECRETTYPO", "", ArgEvidenceRefID + "s"} {
+			args := map[string]string{stray: "x"}
+			for k, val := range valid[def.Name] {
+				args[k] = val
+			}
+			_, err := RenderPrompt(v, def.Name, args)
+			if err == nil {
+				t.Errorf("%s: undeclared argument %q accepted", def.Name, stray)
+				continue
+			}
+			if stray != "" && strings.Contains(err.Error(), stray) {
+				t.Errorf("%s: refusal echoes %q: %v", def.Name, stray, err)
+			}
+			for _, arg := range def.Args {
+				if !strings.Contains(err.Error(), "`"+arg.Name+"`") {
+					t.Errorf("%s: refusal does not list declared argument %s", def.Name, arg.Name)
+				}
+			}
+		}
+		// Every declared argument of another prompt is undeclared here.
+		for _, other := range PromptDefs(v) {
+			if other.Name == def.Name {
+				continue
+			}
+			for _, arg := range other.Args {
+				declaredHere := false
+				for _, a := range def.Args {
+					declaredHere = declaredHere || a.Name == arg.Name
+				}
+				if declaredHere {
+					continue
+				}
+				args := map[string]string{arg.Name: "x"}
+				for k, val := range valid[def.Name] {
+					args[k] = val
+				}
+				if _, err := RenderPrompt(v, def.Name, args); err == nil {
+					t.Errorf("%s accepted %s's argument %s", def.Name, other.Name, arg.Name)
+				}
+			}
+		}
+	}
+}

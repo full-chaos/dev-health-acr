@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // PromptVocabFile is the generated registry snapshot the prompts render from.
@@ -120,6 +121,10 @@ func (e *ArgError) Error() string { return e.Msg }
 
 func argErr(format string, a ...any) error { return &ArgError{Msg: fmt.Sprintf(format, a...)} }
 
+// chars counts Unicode code points, the unit JSON Schema minLength and
+// maxLength use.
+func chars(s string) int { return utf8.RuneCountInString(s) }
+
 func codes(values []string) string {
 	quoted := make([]string, len(values))
 	for i, v := range values {
@@ -187,6 +192,9 @@ type PromptText struct {
 // RenderPrompt renders one prompt. The result depends only on v, name, and
 // args: no caller, credential, or organization state.
 func RenderPrompt(v PromptVocab, name string, args map[string]string) (PromptText, error) {
+	if err := checkKnownArgs(v, name, args); err != nil {
+		return PromptText{}, err
+	}
 	switch name {
 	case PromptInvestigate:
 		return renderInvestigate(v, args)
@@ -196,6 +204,30 @@ func RenderPrompt(v PromptVocab, name string, args map[string]string) (PromptTex
 		return renderExpand(args)
 	}
 	return PromptText{}, argErr("unknown prompt %q", name)
+}
+
+// checkKnownArgs refuses an argument the prompt does not declare, so a typo
+// cannot silently drop a hint. The error lists the declared names and does
+// not echo the offending one.
+func checkKnownArgs(v PromptVocab, name string, args map[string]string) error {
+	for _, def := range PromptDefs(v) {
+		if def.Name != name {
+			continue
+		}
+		declared := make([]string, len(def.Args))
+		known := map[string]bool{}
+		for i, arg := range def.Args {
+			declared[i] = arg.Name
+			known[arg.Name] = true
+		}
+		for key := range args {
+			if !known[key] {
+				return argErr("prompt %q has an argument it does not declare. Declared arguments: %s", name, codes(declared))
+			}
+		}
+		return nil
+	}
+	return nil
 }
 
 // splitList splits a comma or newline separated argument, trims each item,
@@ -219,7 +251,7 @@ func checkList(arg string, items []string, maxItems, maxLen int, noPipe bool) er
 		return argErr("argument %q has more than %d items", arg, maxItems)
 	}
 	for _, item := range items {
-		if len(item) > maxLen {
+		if chars(item) > maxLen {
 			return argErr("argument %q has an item longer than %d characters", arg, maxLen)
 		}
 		if noPipe && strings.Contains(item, "|") {
@@ -234,7 +266,7 @@ func checkQuestion(args map[string]string) (string, error) {
 	if q == "" {
 		return "", argErr("argument %q is required", ArgQuestion)
 	}
-	if len(q) > maxQuestionLen {
+	if chars(q) > maxQuestionLen {
 		return "", argErr("argument %q is longer than %d characters", ArgQuestion, maxQuestionLen)
 	}
 	return q, nil
@@ -350,7 +382,7 @@ func renderContinue(v PromptVocab, args map[string]string) (PromptText, error) {
 	if parent == "" {
 		return PromptText{}, argErr("argument %q is required", ArgParentResultID)
 	}
-	if len(parent) < minResultIDLen || len(parent) > maxResultIDLen {
+	if chars(parent) < minResultIDLen || chars(parent) > maxResultIDLen {
 		return PromptText{}, argErr("argument %q must be %d to %d characters", ArgParentResultID, minResultIDLen, maxResultIDLen)
 	}
 	call := map[string]any{"question": question, "parent_result_id": parent}
@@ -363,7 +395,7 @@ func renderContinue(v PromptVocab, args map[string]string) (PromptText, error) {
 	}
 	perField := map[string][]map[string]string{}
 	for _, receipt := range splitList(args[ArgReceipts]) {
-		if len(receipt) < minReceiptIDLen || len(receipt) > maxReceiptIDLen {
+		if chars(receipt) < minReceiptIDLen || chars(receipt) > maxReceiptIDLen {
 			return PromptText{}, argErr("argument %q has a receipt id that is not %d to %d characters", ArgReceipts, minReceiptIDLen, maxReceiptIDLen)
 		}
 		field := ""
@@ -413,7 +445,7 @@ func renderExpand(args map[string]string) (PromptText, error) {
 	if id == "" {
 		return PromptText{}, argErr("argument %q is required", ArgEvidenceRefID)
 	}
-	if len(id) > maxEvidenceIDLen {
+	if chars(id) > maxEvidenceIDLen {
 		return PromptText{}, argErr("argument %q is longer than %d characters", ArgEvidenceRefID, maxEvidenceIDLen)
 	}
 	callJSON, err := indentedJSON(map[string]any{"evidence_ref_id": id})
