@@ -380,8 +380,9 @@ type OAuthConsent struct {
 }
 
 // Consent checks the approval of the request behind a browser handle. The
-// first check after approval issues the one authorization code; every later
-// check is already_completed, so a code is never issued twice.
+// first check after approval issues the one authorization code; the store
+// attaches a code only to a request that has none, so every later check is
+// already_completed and a code is never issued twice.
 func (s *OAuthService) Consent(ctx context.Context, handle string) (OAuthConsent, error) {
 	if len(handle) == 0 || len(handle) > 128 {
 		return OAuthConsent{}, oauthError("invalid_request", oauthvocab.OutcomeInvalidRequest, false)
@@ -392,9 +393,6 @@ func (s *OAuthService) Consent(ctx context.Context, handle string) (OAuthConsent
 	}
 	if err != nil {
 		return OAuthConsent{}, fmt.Errorf("%w: read authorization request", ErrOAuthUnavailable)
-	}
-	if request.CodeHash != nil {
-		return OAuthConsent{ClientKind: request.ClientKind}, oauthError("invalid_request", oauthvocab.OutcomeAlreadyCompleted, false)
 	}
 	now := s.now().UTC()
 	if !request.ExpiresAt.After(now) {

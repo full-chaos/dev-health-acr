@@ -84,7 +84,7 @@ func (s *DeviceFlowService) StateForOAuth(ctx context.Context, hash storage.Devi
 	}
 	record, err := s.store.GetByDeviceCodeHash(ctx, hash)
 	if err != nil {
-		if errors.Is(err, storage.ErrDeviceAuthorizationNotFound) || errors.Is(err, storage.ErrNotFound) {
+		if errors.Is(err, storage.ErrDeviceAuthorizationNotFound) || errors.Is(err, storage.ErrDeviceAuthorizationExpired) || errors.Is(err, storage.ErrNotFound) {
 			return OAuthDeviceStateExpired, nil
 		}
 		return "", fmt.Errorf("read device authorization: %w", err)
@@ -121,7 +121,7 @@ func (s *DeviceFlowService) RedeemForResource(ctx context.Context, hash storage.
 	}
 	record, err := s.store.GetByDeviceCodeHash(ctx, hash)
 	if err != nil {
-		if errors.Is(err, storage.ErrDeviceAuthorizationNotFound) || errors.Is(err, storage.ErrNotFound) {
+		if errors.Is(err, storage.ErrDeviceAuthorizationNotFound) || errors.Is(err, storage.ErrDeviceAuthorizationExpired) || errors.Is(err, storage.ErrNotFound) {
 			return IssuedCredential{}, ErrOAuthDeviceNotApproved
 		}
 		return IssuedCredential{}, fmt.Errorf("read device authorization: %w", err)

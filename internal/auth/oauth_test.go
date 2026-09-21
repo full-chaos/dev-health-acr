@@ -376,6 +376,14 @@ func TestVerifyPKCES256(t *testing.T) {
 			t.Fatalf("verifier %q accepted", bad)
 		}
 	}
+	// A verifier outside 43..128 characters is refused even when its digest
+	// matches the challenge the client chose.
+	for _, weak := range []string{"short", strings.Repeat("v", 42), strings.Repeat("v", 129)} {
+		digest := sha256.Sum256([]byte(weak))
+		if VerifyPKCES256(weak, base64.RawURLEncoding.EncodeToString(digest[:])) {
+			t.Fatalf("verifier of length %d accepted", len(weak))
+		}
+	}
 	if VerifyPKCES256(verifier, "") || VerifyPKCES256(verifier, challenge[:42]) {
 		t.Fatal("malformed challenge accepted")
 	}
@@ -417,5 +425,24 @@ func TestNewOAuthServiceRefusesBadConfiguration(t *testing.T) {
 		if _, err := NewOAuthService(store, h.devices, cfg); !errors.Is(err, ErrInvalidOAuthConfig) {
 			t.Errorf("%s: err = %v, want ErrInvalidOAuthConfig", name, err)
 		}
+	}
+}
+
+func TestRedeemForResourceRefusesAnUnapprovedAuthorization(t *testing.T) {
+	h := newOAuthHarness(t)
+	started, err := h.devices.StartForOAuth(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.devices.RedeemForResource(context.Background(), started.DeviceCodeHash, testResource); !errors.Is(err, ErrOAuthDeviceNotApproved) {
+		t.Fatalf("pending authorization: err = %v, want ErrOAuthDeviceNotApproved", err)
+	}
+	h.approve(t, started.UserCode, []string{"org/repo"})
+	h.now = h.now.Add(storage.DeviceAuthorizationTTL + time.Second)
+	if state, err := h.devices.StateForOAuth(context.Background(), started.DeviceCodeHash); err != nil || state != OAuthDeviceStateExpired {
+		t.Fatalf("expired approval state = %q, %v, want expired", state, err)
+	}
+	if _, err := h.devices.RedeemForResource(context.Background(), started.DeviceCodeHash, testResource); !errors.Is(err, ErrOAuthDeviceNotApproved) {
+		t.Fatalf("expired approval: err = %v, want ErrOAuthDeviceNotApproved", err)
 	}
 }
