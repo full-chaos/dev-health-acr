@@ -125,7 +125,7 @@ type EvidenceExpansionDecision struct {
 	DeniedCount      int
 	UnavailableCount int
 	// WithheldCount is how many admitted results the result-by-id serving
-	// rules withhold from this caller, or serve without the ref.
+	// rules withhold from this caller.
 	WithheldCount int
 	// Authorization is the decisive stored-result decision: the admitted
 	// one, else the first unavailable one, else the first denied one. Nil
@@ -254,7 +254,11 @@ func ExpandCitedEvidence(ctx context.Context, principal storage.Principal, ref s
 				}
 				continue
 			}
-			if _, cited := contractsv1.ContextFabricEvidenceRefClosure(served)[ref]; withheld || !cited {
+			// No serving rule drops an evidence ref, a label or a citing
+			// site (they touch coverage, limitations, outcome rows, status
+			// and claim subjects), so the served copy cites ref whenever the
+			// stored one does.
+			if withheld {
 				decision.WithheldCount++
 				if firstDenied == nil {
 					firstDenied = &authorization
