@@ -292,6 +292,13 @@ func TestHTTPConcurrentCallersNeverShareIdentity(t *testing.T) {
 			t.Fatalf("hosted API saw %d evidence calls on credential %s, want %d", evidenceCalls, id, rounds)
 		}
 	}
+	// A client call returns once its answer is read; the handler's own tail
+	// (the request line, then the gauge release) may still be running, so
+	// the gauge is required to reach 0, not to be 0 at that instant.
+	deadline := time.Now().Add(5 * time.Second)
+	for e.handler.InFlight() != 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
 	if n := e.handler.InFlight(); n != 0 {
 		t.Fatalf("in-flight gauge %d after every request completed, want 0", n)
 	}
@@ -302,8 +309,11 @@ func TestHTTPConcurrentCallersNeverShareIdentity(t *testing.T) {
 			maxInFlight = int(v)
 		}
 	}
-	if maxInFlight != 2 {
-		t.Fatalf("max in_flight on request lines %d, want 2", maxInFlight)
+	// Both calls of a round are held in flight together, so some line saw
+	// at least 2. More is possible: a round's first request can be admitted
+	// while the previous round's handlers are still finishing.
+	if maxInFlight < 2 {
+		t.Fatalf("max in_flight on request lines %d, want >= 2", maxInFlight)
 	}
 }
 

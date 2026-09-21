@@ -79,8 +79,8 @@ func NewProcessConfig(cfg sidecar.Config, identity version.Info, diagnostics io.
 var errNoProcessCredential = errors.New("mcp: the hosted transport holds no process credential")
 
 // NewHTTPProcessConfig builds the process half for the hosted Streamable
-// HTTP transport: NewProcessConfig, marked as the HTTP transport (its
-// servers keep cacheable results private to the caller) and holding one
+// HTTP transport: NewProcessConfig (already the HTTP transport, so its
+// servers keep cacheable results private to the caller) plus one
 // credential-less hosted client whose connection pool every caller's client
 // shares, so a request costs no new TLS handshake and leaves no idle pool
 // behind.
@@ -92,7 +92,6 @@ func NewHTTPProcessConfig(cfg sidecar.Config, identity version.Info, diagnostics
 	if err != nil {
 		return nil, err
 	}
-	process.transport = TransportHTTP
 	process.hosted = base
 	return process, nil
 }
