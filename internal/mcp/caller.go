@@ -11,6 +11,7 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/version"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -33,19 +34,25 @@ type ProcessConfig struct {
 	local       *localFederationRuntime
 }
 
-// NewProcessConfig builds the process half from a validated configuration.
-// diagnostics receives the structured JSON log stream (production supplies
-// stderr; stdout stays protocol-only on STDIO).
+// NewProcessConfig builds the process half a hosted transport serves many
+// callers from. identity is the running binary's compiled-in release
+// identity: it is authoritative over an unset or "dev" client/sidecar
+// version exactly as it is on the STDIO boot path, so the version header a
+// hosted API enforces and the minimum-sidecar-version gate both see the real
+// release rather than the "dev" sentinel. diagnostics receives the
+// structured JSON log stream.
 //
-// The local federation runtime it constructs reads the PROCESS's own
-// workspace, which is a local-sidecar concept: a hosted transport that
-// serves many callers leaves it disabled through the local index
-// configuration rather than handing one caller another's workspace.
-func NewProcessConfig(cfg sidecar.Config, diagnostics io.Writer) *ProcessConfig {
+// It deliberately builds NO local workspace federation. Local federation
+// reads the workspace of the process itself and puts what it finds into a
+// caller's answer; in a process serving many callers that workspace belongs
+// to none of them, and no caller's credential authorised it, so the hosted
+// constructor leaves it off rather than trusting configuration to.
+func NewProcessConfig(cfg sidecar.Config, identity version.Info, diagnostics io.Writer) *ProcessConfig {
+	cfg.ClientVersion = effectiveSidecarVersion(cfg.ClientVersion, identity)
+	cfg.SidecarVersion = effectiveSidecarVersion(cfg.SidecarVersion, identity)
 	return &ProcessConfig{
 		Config:      cfg,
 		diagnostics: newDiagnosticsLogger(diagnostics, cfg.LogLevel),
-		local:       newLocalFederationRuntime(sidecar.LoadLocalIndexConfig(), time.Now, sha256Sum),
 	}
 }
 
@@ -148,7 +155,8 @@ var ErrProcessConfigMissing = errors.New("mcp: a process configuration is requir
 // Capabilities are fetched with the caller's own bearer on every call
 // rather than read from a process snapshot, which is what makes tool
 // visibility, limits, and entitlement reflect the caller and not whoever
-// started the process.
+// started the process. The compatibility gate applied here is the read
+// contract only; writeback is decided per caller by recordEpisodeEnabled.
 func ResolveCaller(ctx context.Context, cfg *ProcessConfig, credential CallerCredential) (*CallerContext, error) {
 	if cfg == nil {
 		return nil, ErrProcessConfigMissing
@@ -164,7 +172,12 @@ func ResolveCaller(ctx context.Context, cfg *ProcessConfig, credential CallerCre
 	if err != nil {
 		return nil, newProbeError(err)
 	}
-	if err := checkCompatibility(capabilities, cfg.Config.SidecarVersion, cfg.Config.EnableWriteback); err != nil {
+	// The gate a caller must pass to exist at all is the READ contract.
+	// Writeback is not part of it even when the process enables writeback:
+	// a caller without episode:write is still a valid reader, and
+	// recordEpisodeEnabled leaves record_episode out of that caller's
+	// catalogue instead of refusing the caller outright.
+	if err := checkCompatibility(capabilities, cfg.Config.SidecarVersion, false); err != nil {
 		return nil, err
 	}
 	return newCallerContext(credential.Principal, client, capabilities), nil

@@ -125,7 +125,7 @@ func twoCallerProcess(t *testing.T) (*multiCallerFixture, *ProcessConfig, *Calle
 	fx.register(bearerA, "caller-a", answerCapabilitiesFixture())
 	fx.register(bearerB, "caller-b", validCapabilitiesFixture())
 
-	cfg := NewProcessConfig(fixtureConfig(t, fx.Server), io.Discard)
+	cfg := NewProcessConfig(fixtureConfig(t, fx.Server), testReleaseIdentity(), io.Discard)
 	callerA, err := ResolveCaller(context.Background(), cfg, CallerCredential{Bearer: bearerA})
 	require.NoError(t, err)
 	callerB, err := ResolveCaller(context.Background(), cfg, CallerCredential{Bearer: bearerB})
@@ -345,7 +345,7 @@ func TestResolveCallerFailsClosedOnAnUnusableCredential(t *testing.T) {
 	fx := newMultiCallerFixture(t)
 	known := fixtureToken(0x33)
 	fx.register(known, "caller-known", validCapabilitiesFixture())
-	cfg := NewProcessConfig(fixtureConfig(t, fx.Server), io.Discard)
+	cfg := NewProcessConfig(fixtureConfig(t, fx.Server), testReleaseIdentity(), io.Discard)
 
 	shapeRefused := map[string]string{
 		"empty":            "",
@@ -392,7 +392,7 @@ func TestResolveCallerRunsTheCompatibilityGateAgainstEachCallersOwnSnapshot(t *t
 	unentitled := validCapabilitiesFixture()
 	unentitled.Entitlements.AgentContextRuntime = false
 	fx.register(incompatible, "caller-unentitled", unentitled)
-	cfg := NewProcessConfig(fixtureConfig(t, fx.Server), io.Discard)
+	cfg := NewProcessConfig(fixtureConfig(t, fx.Server), testReleaseIdentity(), io.Discard)
 
 	// When
 	good, goodErr := ResolveCaller(context.Background(), cfg, CallerCredential{Bearer: compatible})
@@ -427,7 +427,7 @@ func TestResolveCallerCarriesAnAuthenticatedPrincipalByValue(t *testing.T) {
 	fx := newMultiCallerFixture(t)
 	bearer := fixtureToken(0x55)
 	fx.register(bearer, "caller-principal", validCapabilitiesFixture())
-	cfg := NewProcessConfig(fixtureConfig(t, fx.Server), io.Discard)
+	cfg := NewProcessConfig(fixtureConfig(t, fx.Server), testReleaseIdentity(), io.Discard)
 	principal := storage.Principal{
 		AuthenticationMethod: storage.AuthenticationMethodCredential,
 		Subject:              "cred_1",

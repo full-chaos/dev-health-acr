@@ -17,7 +17,19 @@ func recordEpisodeEnabled(cfg *ProcessConfig, caller *CallerContext) bool {
 		return false
 	}
 	capabilities := caller.Capabilities()
-	return capabilities.Entitlements.AgentContextRuntime && capabilities.Permissions.EpisodeWrite && slices.Contains(capabilities.EnabledTools, toolRecordEpisode)
+	if !capabilities.Entitlements.AgentContextRuntime || !capabilities.Permissions.EpisodeWrite || !slices.Contains(capabilities.EnabledTools, toolRecordEpisode) {
+		return false
+	}
+	// The writeback schemas are part of the caller's snapshot, not of the
+	// process: ResolveCaller admits a reader without checking them, so the
+	// writeback tool is offered only when this caller's hosted API speaks
+	// every schema it needs.
+	for _, want := range writebackSchemaVersions {
+		if !slices.Contains(capabilities.SupportedSchemaVersions, want) {
+			return false
+		}
+	}
+	return true
 }
 
 func handleRecordEpisode(ctx context.Context, cfg *ProcessConfig, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {

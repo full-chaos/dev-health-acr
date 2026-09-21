@@ -78,7 +78,14 @@ func NewServer(boot *Bootstrap, serverVersion string) *mcpsdk.Server {
 // protocol-only.
 func NewServerWithDiagnostics(boot *Bootstrap, serverVersion string, diagnostics io.Writer) *mcpsdk.Server {
 	cfg, caller := boot.split(diagnostics)
-	return NewServerForCaller(cfg, caller, serverVersion)
+	return newStdioServer(cfg, caller, serverVersion)
+}
+
+// newStdioServer is the STDIO server: the per-caller construction with its
+// protocol revisions capped below rootsRemovedRevision, because STDIO
+// context_for_task resolves its workspace from client roots.
+func newStdioServer(cfg *ProcessConfig, caller *CallerContext, serverVersion string) *mcpsdk.Server {
+	return newServer(cfg, caller, serverVersion, stdioProtocolVersions())
 }
 
 // NewServerForCaller builds a server whose tool catalogue is the catalogue
@@ -99,7 +106,16 @@ func NewServerWithDiagnostics(boot *Bootstrap, serverVersion string, diagnostics
 // either of them outright. A caller reaching this constructor therefore
 // always has both, and a caller that does not has no context at all --
 // which is a stricter answer than hiding a tool.
+//
+// It advertises every protocol revision the SDK supports, including
+// 2026-07-28; the roots-driven cap applies to STDIO only.
 func NewServerForCaller(cfg *ProcessConfig, caller *CallerContext, serverVersion string) *mcpsdk.Server {
+	return newServer(cfg, caller, serverVersion, nil)
+}
+
+// newServer builds a server for one caller. protocolVersions narrows the
+// advertised revisions; nil keeps every revision the SDK supports.
+func newServer(cfg *ProcessConfig, caller *CallerContext, serverVersion string, protocolVersions []string) *mcpsdk.Server {
 	impl := &mcpsdk.Implementation{
 		Name:    "dev-health-acr-mcp",
 		Title:   "Dev Health ACR",
@@ -107,7 +123,7 @@ func NewServerForCaller(cfg *ProcessConfig, caller *CallerContext, serverVersion
 	}
 	server := mcpsdk.NewServer(impl, &mcpsdk.ServerOptions{
 		Instructions:              serverInstructions(cfg, caller),
-		SupportedProtocolVersions: stdioProtocolVersions(),
+		SupportedProtocolVersions: protocolVersions,
 	})
 	server.AddReceivingMiddleware(callerMiddleware(caller))
 
