@@ -1,17 +1,11 @@
-// Package guide embeds the static MCP guide resources. The files under
-// content are generated from the ACR registries by ./gen and are identical
-// for every caller. This package links no engine code.
+// Package guide serves the static MCP guide resources. The text in
+// zz_generated.go is generated from the ACR registries by ./gen and is
+// identical for every caller. This package links no engine code.
 package guide
 
-import (
-	"embed"
-	"fmt"
-)
+import "fmt"
 
 //go:generate go run ./gen
-
-//go:embed content/*.md
-var files embed.FS
 
 // MIMEType is the media type of every guide resource.
 const MIMEType = "text/markdown"
@@ -60,11 +54,11 @@ func Text(uri string) (string, error) {
 		if r.URI != uri {
 			continue
 		}
-		data, err := files.ReadFile("content/" + r.File)
-		if err != nil {
-			return "", fmt.Errorf("guide: read %s: %w", r.File, err)
+		text, ok := generated[r.File]
+		if !ok || text == "" {
+			return "", fmt.Errorf("guide: no generated text for %s", r.File)
 		}
-		return string(data), nil
+		return text, nil
 	}
 	return "", fmt.Errorf("guide: unknown resource %q", uri)
 }

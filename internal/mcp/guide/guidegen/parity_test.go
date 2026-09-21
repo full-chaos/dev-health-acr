@@ -139,23 +139,54 @@ func TestUnreachableFamiliesAreMarkedNotAnswerable(t *testing.T) {
 	}
 }
 
-func TestRenderKindsAreDerivedFromFamilyTable(t *testing.T) {
+func TestRenderKindsSplitByProducerAgainstRegistry(t *testing.T) {
+	unproduced := map[string]bool{}
+	for _, kind := range contextfabric.DeclaredUnproducedRenderKinds() {
+		unproduced[string(kind)] = true
+	}
+	if len(unproduced) == 0 {
+		t.Fatal("no declared-unproduced render kinds in the registry")
+	}
 	in := FromRegistries()
-	want := map[string]bool{}
+	used := map[string]bool{}
 	for _, f := range in.Families {
 		for _, k := range f.RenderKinds {
-			want[k] = true
+			used[k] = true
 		}
 	}
-	if len(want) == 0 {
+	if len(used) == 0 {
 		t.Fatal("no render kinds in the family table")
 	}
-	text := embeddedFiles(t)[FileVocabulary]
+	files := embeddedFiles(t)
+	// A kind the registry declares unproduced never appears on a "May render as" line.
+	for _, line := range strings.Split(files[FileQuestions], "\n") {
+		if !strings.HasPrefix(line, "- May render as:") {
+			continue
+		}
+		for kind := range unproduced {
+			if strings.Contains(line, "`"+kind+"`") {
+				t.Errorf("guide offers unproduced render kind %s: %s", kind, line)
+			}
+		}
+	}
+	// Vocabulary: each used kind sits under exactly the heading its registry status implies.
+	text := files[FileVocabulary]
 	section := text[strings.Index(text, "## Render kinds"):]
+	split := strings.Index(section, "Declared by a family, no producer today:")
+	if split < 0 {
+		t.Fatal("vocabulary has no declared-unproduced list")
+	}
+	producedPart, declaredPart := section[:split], section[split:]
 	for kind := range renderKindTexts {
-		listed := strings.Contains(section, "\n- `"+kind+"`:")
-		if listed != want[kind] {
-			t.Errorf("render kind %s: listed=%v, in family table=%v", kind, listed, want[kind])
+		inProduced := strings.Contains(producedPart, "\n- `"+kind+"`:")
+		inDeclared := strings.Contains(declaredPart, "\n- `"+kind+"`:")
+		switch {
+		case !used[kind] && (inProduced || inDeclared):
+			t.Errorf("render kind %s is listed but no family names it", kind)
+		case used[kind] && unproduced[kind] && !(inDeclared && !inProduced):
+			t.Errorf("render kind %s is declared unproduced but is not listed as such", kind)
+		case used[kind] && !unproduced[kind] && !(inProduced && !inDeclared):
+			t.Errorf("render kind %s has a producer but is not listed as produced", kind)
 		}
 	}
 }
@@ -312,6 +343,7 @@ func TestParityDetectsRemovedRegistryEntries(t *testing.T) {
 			c.Grammars = slices.Clone(in.Grammars)
 			c.Windows = slices.Clone(in.Windows)
 			c.Statuses = slices.Clone(in.Statuses)
+			c.UnproducedRenderKinds = slices.Clone(in.UnproducedRenderKinds)
 			return c
 		}
 		cases := map[string]Inputs{}
@@ -336,6 +368,9 @@ func TestParityDetectsRemovedRegistryEntries(t *testing.T) {
 		c = clone()
 		c.Families[0].Unreachable = !c.Families[0].Unreachable
 		cases["reachability flip"] = c
+		c = clone()
+		c.UnproducedRenderKinds = slices.DeleteFunc(c.UnproducedRenderKinds, func(k string) bool { return k == "table" })
+		cases["render kind became produced"] = c
 		return cases
 	}(FromRegistries())
 	if len(drop) == 0 {

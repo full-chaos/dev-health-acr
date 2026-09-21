@@ -25,7 +25,7 @@ Local STDIO protocol boundary. Bootstrap proves hosted service identity, compati
 - `context_for_task` and `source_evidence` are always registered; both remain read-only, idempotent, non-destructive, and open-world.
 - `investigate_question` and `investigation_result` register ONLY when the hosted capabilities response advertises them. Context Fabric is an optional hosted capability, so registering unconditionally would offer an agent tools that every call fails, and requiring them at the compatibility gate would refuse to start against a healthy hosted API with no graph backend.
 - Never register `record_episode` in this package.
-- Guide resources are read-only, embedded, and identical for every caller. Regenerate with `go generate ./internal/mcp/guide`; never hand-edit `guide/content`. The `guide` package must not import engine packages; only `guide/guidegen` and its tests do.
+- Guide resources are read-only, embedded, and identical for every caller. Regenerate with `go generate ./internal/mcp/guide`; never hand-edit `guide/zz_generated.go`. The `guide` package must not import engine packages; only `guide/guidegen` and its tests do.
 - This package must never narrow an investigation result itself. `investigate_question` projects through `internal/contextfabric/answerprojection` and nothing else: that single choke point is what makes API/MCP answer parity structural rather than a convention. A second summariser here silently reopens consumer drift.
 - The sidecar owns consumer surface identity and the time axis on an investigation request. Neither is caller-settable: surface identity is how the differential parity check tells the surfaces apart.
 - Scope precedence is explicit request values, then compatible MCP file roots, then cwd Git discovery.

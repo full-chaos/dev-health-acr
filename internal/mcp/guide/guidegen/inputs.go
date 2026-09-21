@@ -1,7 +1,7 @@
 // Package guidegen builds the static MCP guide resources from the ACR
 // registries. It links the engine's registries, so it lives outside the
 // package the acr-mcp binary links: the generator (../gen) writes the
-// output into ../content, and ../guide embeds those files.
+// output into ../zz_generated.go.
 package guidegen
 
 import (
@@ -36,6 +36,9 @@ type Inputs struct {
 	Grammars            []GrammarRow
 	Windows             []string
 	Statuses            []string
+	// UnproducedRenderKinds are render kinds a family may name that no
+	// producer builds today.
+	UnproducedRenderKinds []string
 }
 
 // FromRegistries reads the live registries.
@@ -70,6 +73,9 @@ func FromRegistries() Inputs {
 	}
 	for _, window := range contractsv1.ContextFabricRelativeWindowIDVocabulary() {
 		in.Windows = append(in.Windows, string(window))
+	}
+	for _, kind := range contextfabric.DeclaredUnproducedRenderKinds() {
+		in.UnproducedRenderKinds = append(in.UnproducedRenderKinds, string(kind))
 	}
 	in.Statuses = []string{
 		string(contractsv1.ContextFabricInvestigationComplete),

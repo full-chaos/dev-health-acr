@@ -39,7 +39,7 @@ var familyTexts = map[string]familyText{
 		Example: "Where did the platform team's effort go last quarter?",
 	},
 	"unclassified": {
-		Meaning: "Fallback when the question shape cannot be established. It is not an error and not a question type to ask for. ACR returns a clarification (structure_needs) instead of a guess.",
+		Meaning: "Fallback when the question shape cannot be established. ACR refuses to guess. It is not an error and not a question type to ask for.",
 		Example: "How are things going?",
 	},
 }
@@ -118,11 +118,11 @@ var windowTexts = map[string]string{
 }
 
 var statusTexts = map[string]string{
-	"complete":               "ACR read what the question needed. Still read `limitations` and coverage.",
-	"partial":                "Some needed evidence was not read. The answer states what it could establish.",
-	"degraded":               "The answer exists with reduced trust. Read `limitations`.",
+	"complete":               "The investigation is complete. Still read `limitations` and coverage.",
+	"partial":                "Some canonical or graph coverage was unavailable. The answer states what it could establish.",
+	"degraded":               "Coverage was limited. Read `limitations`.",
 	"clarification_required": "ACR needs one more input. Follow `structure_needs`; see `acr://guide/conversation`.",
-	"no_match":               "No subject matched. Rephrase or name the subject with a handle or kind.",
+	"no_match":               "ACR could not commit an answer as asked. Causes differ: no subject matched, the offered choices can no longer be redeemed, or a time bound could not be honored. Read `limitations` and the answer text, then rephrase with a named subject, handle, kind, or window.",
 }
 
 var renderKindTexts = map[string]string{

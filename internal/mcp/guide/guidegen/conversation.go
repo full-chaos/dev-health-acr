@@ -33,9 +33,9 @@ func buildConversation() string {
 	b.WriteString("Identifiers such as `result_id`, `receipt_id`, and `evidence_ref_id` are opaque. Pass them back exactly as returned. Never parse them.\n\n")
 
 	b.WriteString("## Clarification\n\n")
-	b.WriteString("When `status` is `clarification_required`, or `no_match` with `structure_needs`, ACR needs one more input. ")
+	b.WriteString("When `status` is `clarification_required`, or an answer carries `structure_needs`, ACR offers choices for one more input. ")
 	b.WriteString("`structure_needs.missing` names what is missing. Each offer (kind, anchor, handle, window, candidate) carries a `receipt_id`. ")
-	b.WriteString("To choose an offer, ask again with the same `question` and send `{result_id, receipt_id}` in the matching field. `result_id` is the id of the answer that made the offer.\n\n")
+	b.WriteString("To choose an offer, ask again and send `{result_id, receipt_id}` in the matching field. `result_id` is the id of the answer that made the offer.\n\n")
 	b.WriteString("| Request field | `receipt_id` prefix | Offer appears in |\n|---|---|---|\n")
 	for _, receipt := range Receipts {
 		prefix := "any"
@@ -44,17 +44,17 @@ func buildConversation() string {
 		}
 		fmt.Fprintf(&b, "| `%s` | %s | %s |\n", receipt.Field, prefix, receipt.Offer)
 	}
-	b.WriteString("\nSend a receipt only in the field that matches its prefix. Set `allow_clarification` to false only when you want a best-effort answer instead of a clarification.\n\n")
+	b.WriteString("\nSend a receipt only in the field that matches its prefix. `allow_clarification` sets whether ACR may answer with a clarification request.\n\n")
 
 	b.WriteString("## Window confirmation\n\n")
 	b.WriteString("When the question implies a time window that ACR inferred, the answer carries `window_clarification`. ")
 	b.WriteString("Confirm it with a `winr_` receipt in `prior_window_receipts`, or set `evidence_window` yourself. ")
-	b.WriteString("`window_confirmation_mode` is `headless` (default) or `nudge`. It changes how the disclosure is worded, not the evidence read.\n\n")
+	b.WriteString("`window_confirmation_mode` is `headless` (default) or `nudge`. It sets whether the disclosure is also nudged through `warnings`.\n\n")
 
 	b.WriteString("## Conversation context\n\n")
 	b.WriteString("- `parent_result_id`: the `result_id` of the answer this turn follows. It seeds carry-over only. It never binds that answer's subjects into this turn.\n")
 	b.WriteString("- `conversation`: prior turns, if you want them considered.\n")
-	b.WriteString("- ACR keeps no session. Send the receipts and ids you need on every call.\n\n")
+	b.WriteString("- The MCP server keeps no conversation session. Send the receipts and ids you need on every call.\n\n")
 
 	b.WriteString("## Fetch a stored result\n\n")
 	b.WriteString("`investigation_result` takes one `result_id` and returns the full canonical result of a prior answer, ")
