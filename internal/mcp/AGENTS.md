@@ -16,7 +16,7 @@ Local STDIO protocol boundary. Bootstrap proves hosted service identity, compati
 | Result tool | `investigation_result.go` | Opaque `result_id` to the full canonical result; narrows nothing |
 | Repository/scope | `context_scope.go`, `roots.go`, `hosted_scope.go` | Local: explicit input → MCP roots → cwd discovery. Hosted (`ProcessConfig.Hosted()`): explicit input only |
 | Guide resources | `guide_resources.go`, `guide/` | Static `acr://guide/*` resources; text generated from registries by `guide/gen`; parity-tested in `guide/guidegen` |
-| Investigate prompts | `investigate_prompts.go`, `guide/prompts.go` | Static prompts `investigate`, `continue_investigation`, `expand_evidence`; render from the `prompt_vocab.json` snapshot in `guide/zz_generated.go`; argument completion from the same vocabulary |
+| Investigate prompts | `investigate_prompts.go`, `guide/prompts.go` | Static prompts `investigate`, `continue_investigation`, `expand_evidence`; render from the `prompt_vocab.txt` snapshot in `guide/zz_generated.go`; argument completion from the same vocabulary |
 | Safe errors | `toolerror.go`, `result.go` | Typed categories; no raw transport/body/path text |
 | Embedded contracts | `schemas.go`, `schemas/` | Installed-binary schemas; parity-tested against canonical files |
 

@@ -1,19 +1,26 @@
 package guidegen
 
 import (
-	"encoding/json"
 	"fmt"
-
-	"github.com/full-chaos/dev-health-acr/internal/mcp/guide"
+	"strings"
 )
 
 // fallbackFamily is the registry's catch-all. It is declared reachable but is
 // not a shape to ask for, so no prompt offers it as an example.
 const fallbackFamily = "unclassified"
 
-// buildPromptVocab renders the registry snapshot the MCP prompts read. It
-// refuses a family that has no authored example, so a family added to the
-// registry cannot reach the prompts without one.
+// field refuses a value the line format cannot carry.
+func field(what, value string) (string, error) {
+	if strings.ContainsAny(value, "\t\n") {
+		return "", fmt.Errorf("guidegen: %s contains a tab or newline", what)
+	}
+	return value, nil
+}
+
+// buildPromptVocab renders the registry snapshot the MCP prompts read, as
+// tab-separated records written through a text builder. It refuses a family
+// that has no authored example, so a family added to the registry cannot reach
+// the prompts without one.
 func buildPromptVocab(in Inputs) (string, error) {
 	if err := coverage("subject kind", in.SubjectKinds, subjectKindTexts); err != nil {
 		return "", err
@@ -21,27 +28,47 @@ func buildPromptVocab(in Inputs) (string, error) {
 	if err := coverage("relative window", in.Windows, windowTexts); err != nil {
 		return "", err
 	}
-	vocab := guide.PromptVocab{
-		SubjectKinds: append([]string{}, in.SubjectKinds...),
-		Windows:      append([]string{}, in.Windows...),
+	var b strings.Builder
+	for _, kind := range in.SubjectKinds {
+		v, err := field("subject kind", kind)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(&b, "kind\t%s\n", v)
+	}
+	for _, window := range in.Windows {
+		v, err := field("window", window)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(&b, "window\t%s\n", v)
 	}
 	for _, family := range in.Families {
 		text, ok := familyTexts[family.ID]
 		if !ok {
 			return "", fmt.Errorf("guidegen: question family %q has no authored text", family.ID)
 		}
-		vocab.Families = append(vocab.Families, guide.PromptFamily{
-			ID:         family.ID,
-			Example:    text.Example,
-			Answerable: !family.Unreachable && family.ID != fallbackFamily,
-		})
+		id, err := field("family id", family.ID)
+		if err != nil {
+			return "", err
+		}
+		example, err := field("family example", text.Example)
+		if err != nil {
+			return "", err
+		}
+		answerable := "0"
+		if !family.Unreachable && family.ID != fallbackFamily {
+			answerable = "1"
+		}
+		fmt.Fprintf(&b, "family\t%s\t%s\t%s\n", id, answerable, example)
 	}
 	for _, r := range Receipts {
-		vocab.Receipts = append(vocab.Receipts, guide.PromptReceipt{Field: r.Field, Prefix: r.Prefix, Offer: r.Offer})
+		for _, part := range []string{r.Field, r.Prefix, r.Offer} {
+			if _, err := field("receipt", part); err != nil {
+				return "", err
+			}
+		}
+		fmt.Fprintf(&b, "receipt\t%s\t%s\t%s\n", r.Field, r.Prefix, r.Offer)
 	}
-	data, err := json.MarshalIndent(vocab, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("guidegen: encode prompt vocabulary: %w", err)
-	}
-	return string(data) + "\n", nil
+	return b.String(), nil
 }

@@ -501,3 +501,32 @@ func TestPromptRefusesUndeclaredArguments(t *testing.T) {
 		}
 	}
 }
+
+func TestPromptVocabParserRefusesMalformedSnapshots(t *testing.T) {
+	good := "kind\tteam\nwindow\tall_time\nfamily\tf1\t1\tExample?\nreceipt\tprior_x_receipts\tx_\ttop\n"
+	if _, err := parsePromptVocab(good); err != nil {
+		t.Fatalf("well-formed snapshot refused: %v", err)
+	}
+	for name, text := range map[string]string{
+		"empty":                    "",
+		"unknown record":           good + "bogus\tx\n",
+		"kind without value":       "kind\nwindow\tw\nfamily\tf\t1\te\nreceipt\tr\tp\to\n",
+		"kind with empty value":    "kind\t\nwindow\tw\nfamily\tf\t1\te\nreceipt\tr\tp\to\n",
+		"kind with extra cell":     "kind\tk\textra\nwindow\tw\nfamily\tf\t1\te\nreceipt\tr\tp\to\n",
+		"window without value":     "kind\tk\nwindow\nfamily\tf\t1\te\nreceipt\tr\tp\to\n",
+		"family short":             "kind\tk\nwindow\tw\nfamily\tf\t1\nreceipt\tr\tp\to\n",
+		"family bad flag":          "kind\tk\nwindow\tw\nfamily\tf\tyes\te\nreceipt\tr\tp\to\n",
+		"family empty id":          "kind\tk\nwindow\tw\nfamily\t\t1\te\nreceipt\tr\tp\to\n",
+		"receipt short":            "kind\tk\nwindow\tw\nfamily\tf\t1\te\nreceipt\tr\tp\n",
+		"receipt empty field":      "kind\tk\nwindow\tw\nfamily\tf\t1\te\nreceipt\t\tp\to\n",
+		"missing kinds section":    "window\tw\nfamily\tf\t1\te\nreceipt\tr\tp\to\n",
+		"missing windows section":  "kind\tk\nfamily\tf\t1\te\nreceipt\tr\tp\to\n",
+		"missing families section": "kind\tk\nwindow\tw\nreceipt\tr\tp\to\n",
+		"missing receipts section": "kind\tk\nwindow\tw\nfamily\tf\t1\te\n",
+		"blank line":               good + "\n",
+	} {
+		if _, err := parsePromptVocab(text); err == nil {
+			t.Errorf("%s: malformed snapshot accepted", name)
+		}
+	}
+}

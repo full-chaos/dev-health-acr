@@ -10,29 +10,33 @@ import (
 
 // PromptVocabFile is the generated registry snapshot the prompts render from.
 // It is written by ./gen from the same registries as the guide resources.
-const PromptVocabFile = "prompt_vocab.json"
+//
+// The snapshot is line text, not JSON: one record per line, tab-separated,
+// starting with a record type (kind, window, family, receipt). The generator
+// writes it with a text builder, never by filling a serializable struct.
+const PromptVocabFile = "prompt_vocab.txt"
 
 // PromptFamily is one question family as the registry declares it.
 type PromptFamily struct {
-	ID         string `json:"id"`
-	Example    string `json:"example"`
-	Answerable bool   `json:"answerable"`
+	ID         string
+	Example    string
+	Answerable bool
 }
 
 // PromptReceipt is one prior_*_receipts request field, the receipt id prefix
 // it accepts (empty means any), and where the offer appears in an answer.
 type PromptReceipt struct {
-	Field  string `json:"field"`
-	Prefix string `json:"prefix"`
-	Offer  string `json:"offer"`
+	Field  string
+	Prefix string
+	Offer  string
 }
 
 // PromptVocab is every registry value the prompts quote.
 type PromptVocab struct {
-	SubjectKinds []string        `json:"subject_kinds"`
-	Windows      []string        `json:"windows"`
-	Families     []PromptFamily  `json:"families"`
-	Receipts     []PromptReceipt `json:"receipts"`
+	SubjectKinds []string
+	Windows      []string
+	Families     []PromptFamily
+	Receipts     []PromptReceipt
 }
 
 // PromptVocabText returns the embedded registry snapshot verbatim.
@@ -50,9 +54,38 @@ func LoadPromptVocab() (PromptVocab, error) {
 	if err != nil {
 		return PromptVocab{}, err
 	}
+	return parsePromptVocab(text)
+}
+
+func parsePromptVocab(text string) (PromptVocab, error) {
 	var v PromptVocab
-	if err := json.Unmarshal([]byte(text), &v); err != nil {
-		return PromptVocab{}, fmt.Errorf("guide: parse %s: %w", PromptVocabFile, err)
+	for i, line := range strings.Split(strings.TrimSuffix(text, "\n"), "\n") {
+		f := strings.Split(line, "\t")
+		bad := func() error { return fmt.Errorf("guide: %s line %d is malformed", PromptVocabFile, i+1) }
+		switch f[0] {
+		case "kind":
+			if len(f) != 2 || f[1] == "" {
+				return PromptVocab{}, bad()
+			}
+			v.SubjectKinds = append(v.SubjectKinds, f[1])
+		case "window":
+			if len(f) != 2 || f[1] == "" {
+				return PromptVocab{}, bad()
+			}
+			v.Windows = append(v.Windows, f[1])
+		case "family":
+			if len(f) != 4 || f[1] == "" || (f[2] != "0" && f[2] != "1") {
+				return PromptVocab{}, bad()
+			}
+			v.Families = append(v.Families, PromptFamily{ID: f[1], Answerable: f[2] == "1", Example: f[3]})
+		case "receipt":
+			if len(f) != 4 || f[1] == "" {
+				return PromptVocab{}, bad()
+			}
+			v.Receipts = append(v.Receipts, PromptReceipt{Field: f[1], Prefix: f[2], Offer: f[3]})
+		default:
+			return PromptVocab{}, bad()
+		}
 	}
 	if len(v.SubjectKinds) == 0 || len(v.Windows) == 0 || len(v.Families) == 0 || len(v.Receipts) == 0 {
 		return PromptVocab{}, fmt.Errorf("guide: %s has an empty section", PromptVocabFile)
