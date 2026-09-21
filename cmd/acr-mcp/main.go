@@ -51,6 +51,48 @@ type doctorReport struct {
 	Status                   string           `json:"status"`
 	LiveCheck                *doctorLiveCheck `json:"live_check,omitempty"`
 	LocalIndex               localIndexReport `json:"local_index"`
+	ServerRevision           string           `json:"server_revision"`
+	Transport                doctorTransport  `json:"transport"`
+}
+
+// doctorTransport reports the transport `acr-mcp serve` would run with the
+// same ACR_MCP_* environment, and the MCP protocol revisions it negotiates.
+// The listen address, base path and probe paths are reported for the HTTP
+// transport only.
+type doctorTransport struct {
+	Mode              string   `json:"mode"`
+	Valid             bool     `json:"valid"`
+	ProtocolRevisions []string `json:"protocol_revisions"`
+	ListenAddress     string   `json:"listen_address,omitempty"`
+	BasePath          string   `json:"base_path,omitempty"`
+	HealthPath        string   `json:"health_path,omitempty"`
+	ReadyPath         string   `json:"ready_path,omitempty"`
+}
+
+// doctorTransportReport resolves the serve settings from the environment.
+// An invalid setting names the setting, never its value.
+func doctorTransportReport() (doctorTransport, diagnostic) {
+	opts, err := acrmcp.ServeOptionsFromEnvironment(os.LookupEnv)
+	if err == nil {
+		err = opts.Validate()
+	}
+	if err != nil {
+		mode := strings.TrimSpace(os.Getenv(acrmcp.TransportEnvironment))
+		if mode != acrmcp.TransportHTTP {
+			mode = acrmcp.TransportSTDIO
+		}
+		return doctorTransport{Mode: mode, Valid: false, ProtocolRevisions: acrmcp.ProtocolRevisions(mode)},
+			diagnostic{Name: "transport", Status: "error", Detail: err.Error()}
+	}
+	report := doctorTransport{Mode: opts.Transport, Valid: true, ProtocolRevisions: acrmcp.ProtocolRevisions(opts.Transport)}
+	if opts.Transport == acrmcp.TransportHTTP {
+		report.ListenAddress = opts.Listen
+		report.BasePath = opts.BasePath
+		report.HealthPath = acrmcp.HealthPath
+		report.ReadyPath = acrmcp.ReadyPath
+		return report, diagnostic{Name: "transport", Status: "ok", Detail: "stateless Streamable HTTP; each request is authenticated with the caller's own ACR API bearer"}
+	}
+	return report, diagnostic{Name: "transport", Status: "ok", Detail: "STDIO is the SVS MCP transport"}
 }
 
 // doctorLiveCheck is populated by plain `acr-mcp doctor` (live is its
@@ -93,9 +135,11 @@ func currentMetadata() metadata {
 func runDoctor() doctorReport {
 	info := version.Current()
 	apiURLSet := strings.TrimSpace(os.Getenv(sidecar.APIURLEnvironment)) != ""
+	transport, transportCheck := doctorTransportReport()
+	hosted := transport.Mode == acrmcp.TransportHTTP
 	checks := []diagnostic{
 		{Name: "binary", Status: "ok", Detail: "acr-mcp is executable"},
-		{Name: "transport", Status: "ok", Detail: "STDIO is the SVS MCP transport"},
+		transportCheck,
 	}
 
 	// sidecar.LoadConfig applies the same network-free invariants the real
@@ -146,6 +190,8 @@ func runDoctor() doctorReport {
 	credentialSet := credentialErr == nil || credentialShapeInvalid
 	credentialShapeValid := credentialErr == nil && auth.IsTokenShapeValid(credential.Token)
 	switch {
+	case hosted && credentialMissing:
+		checks = append(checks, diagnostic{Name: "credential", Status: "ok", Detail: "no process credential is needed: the hosted transport forwards each caller's own bearer"})
 	case credentialMissing:
 		checks = append(checks, diagnostic{Name: "credential", Status: "warning", Detail: "ACR API credential is not configured"})
 	case credentialShapeInvalid:
@@ -159,8 +205,11 @@ func runDoctor() doctorReport {
 	}
 
 	status := "ok"
-	if !apiURLSet || credentialMissing {
+	if !apiURLSet || (credentialMissing && !hosted) {
 		status = "incomplete_configuration"
+	}
+	if !transport.Valid {
+		status = "invalid_configuration"
 	}
 	if apiURLSet && !apiURLValid {
 		status = "invalid_configuration"
@@ -195,6 +244,8 @@ func runDoctor() doctorReport {
 		Checks:               checks,
 		Status:               status,
 		LocalIndex:           localIndex,
+		ServerRevision:       info.Version,
+		Transport:            transport,
 	}
 	if configErr == nil {
 		report.LogLevel = cfg.LogLevel.String()
@@ -217,6 +268,9 @@ func runDoctor() doctorReport {
 // contract; see its doc comment).
 func runDoctorLive() doctorReport {
 	report := runDoctor()
+	if report.Transport.Mode == acrmcp.TransportHTTP {
+		return runDoctorLiveHosted(report)
+	}
 	if !report.APIURLValid || !report.CredentialShapeValid {
 		report.LiveCheck = &doctorLiveCheck{Reachable: false, Detail: "local configuration is not valid; live check skipped"}
 		return report
@@ -257,6 +311,23 @@ func runDoctorLive() doctorReport {
 	return report
 }
 
+// runDoctorLiveHosted is the live check for the hosted transport: it holds no
+// process credential, so it checks what /readyz checks -- the hosted API's
+// liveness route answers with the process configuration alone.
+func runDoctorLiveHosted(report doctorReport) doctorReport {
+	if !report.APIURLValid || !report.Transport.Valid {
+		report.LiveCheck = &doctorLiveCheck{Reachable: false, Detail: "local configuration is not valid; live check skipped"}
+		return report
+	}
+	if err := acrmcp.ProbeHostedLiveness(context.Background(), version.Current()); err != nil {
+		report.LiveCheck = &doctorLiveCheck{Reachable: false, Detail: "the hosted API liveness route did not answer"}
+		report.Status = "live_check_unreachable"
+		return report
+	}
+	report.LiveCheck = &doctorLiveCheck{Reachable: true, Detail: "the hosted API liveness route answered; capabilities are decided per caller"}
+	return report
+}
+
 func printJSON(value any) {
 	if err := json.NewEncoder(os.Stdout).Encode(value); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -264,14 +335,21 @@ func printJSON(value any) {
 	}
 }
 
-// runServe bootstraps and runs the STDIO MCP server, returning a process
-// exit code. Startup failures (invalid config, missing/invalid credential,
-// hosted API incompatibility) are reported as a single sanitized line on
-// stderr by acrmcp.Serve; stdout is reserved exclusively for MCP JSON-RPC
-// traffic and is never written to directly here.
-func runServe() int {
+// runServe runs the configured transport, returning a process exit code.
+// STDIO: startup failures (invalid config, missing/invalid credential, hosted
+// API incompatibility) are reported as a single sanitized line on stderr by
+// acrmcp.ServeWithIdentity; stdout is reserved exclusively for MCP JSON-RPC
+// traffic and is never written to directly here. HTTP: the hosted server logs
+// to stderr and needs no process credential.
+func runServe(opts acrmcp.ServeOptions) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if opts.Transport == acrmcp.TransportHTTP {
+		if err := acrmcp.ServeHTTPTransport(ctx, os.Stderr, version.Current(), opts); err != nil {
+			return 1
+		}
+		return 0
+	}
 	if err := acrmcp.ServeWithIdentity(ctx, os.Stderr, version.Current()); err != nil {
 		return 1
 	}

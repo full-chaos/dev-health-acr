@@ -2608,6 +2608,9 @@ var All = []Event{
 	CohortKindFulltext,
 	AnchorBindingTransition,
 	MCPHostedContextScope,
+	MCPHTTPRequest,
+	MCPHTTPServing,
+	MCPHTTPReadiness,
 }
 
 // CountPopulationScope (CHAOS-5775) is the Info line for whether a served

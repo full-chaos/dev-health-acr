@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -48,10 +49,15 @@ func runCLI(args []string) int {
 		printJSON(currentMetadata())
 		return 0
 	case "serve":
-		if len(commandArgs) > 0 {
-			return rejectRootArgs()
+		opts, err := parseServeArgs(commandArgs, os.LookupEnv)
+		if err != nil {
+			if errors.Is(err, errServeUsage) {
+				return rejectRootArgs()
+			}
+			fmt.Fprintf(os.Stderr, "acr-mcp: startup failed: %s\n", err.Error())
+			return 2
 		}
-		return runServe()
+		return runServe(opts)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q; use version, doctor, diagnostics, metadata, workspace, login, logout, or serve\n", command)
 		return 2

@@ -7097,5 +7097,268 @@
         "presence": "required"
       }
     ]
+  },
+  {
+    "id": "mcp.http_readiness",
+    "msg": "acr-mcp http readiness",
+    "level": "info",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "sequence"
+    ],
+    "bounded_aggregation": "one line per readiness state change, numbered by sequence; a probe that repeats the last state emits none",
+    "fields": [
+      {
+        "key": "sequence",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "transport",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "stdio",
+          "http"
+        ]
+      },
+      {
+        "key": "state",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "ready",
+          "not_ready"
+        ]
+      },
+      {
+        "key": "previous_state",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "unknown",
+          "ready",
+          "not_ready"
+        ]
+      },
+      {
+        "key": "failure_class",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "unreachable",
+          "timeout",
+          "not_live"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "mcp.http_request",
+    "msg": "acr-mcp http request",
+    "level": "info",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "exactly one line per HTTP request on the MCP base path, written after the response; probe routes emit none",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "transport",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "stdio",
+          "http"
+        ]
+      },
+      {
+        "key": "server_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "server_commit",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "protocol_revision",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "unspecified",
+          "2026-07-28",
+          "2025-11-25",
+          "2025-06-18",
+          "2025-03-26",
+          "2024-11-05",
+          "other"
+        ]
+      },
+      {
+        "key": "method",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "server/discover",
+          "initialize",
+          "notifications/initialized",
+          "ping",
+          "tools/list",
+          "tools/call",
+          "prompts/list",
+          "prompts/get",
+          "resources/list",
+          "resources/templates/list",
+          "resources/read",
+          "completion/complete",
+          "logging/setLevel",
+          "subscriptions/listen",
+          "notifications/cancelled",
+          "other"
+        ]
+      },
+      {
+        "key": "tool",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "context_for_task",
+          "source_evidence",
+          "investigate_question",
+          "investigation_result",
+          "record_episode",
+          "other"
+        ]
+      },
+      {
+        "key": "principal_class",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "bearer"
+        ]
+      },
+      {
+        "key": "principal_ref",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when principal_class=bearer; an opaque per-process keyed digest, never the credential or its store hash"
+      },
+      {
+        "key": "auth_outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "admitted",
+          "missing_bearer",
+          "malformed_bearer",
+          "invalid_credential",
+          "insufficient_scope",
+          "insufficient_entitlement",
+          "rate_limited",
+          "upstream_incompatible",
+          "upstream_unavailable"
+        ]
+      },
+      {
+        "key": "result_class",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "ok",
+          "tool_error",
+          "protocol_error",
+          "auth_denied",
+          "auth_unavailable",
+          "transport_rejected"
+        ]
+      },
+      {
+        "key": "status",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "latency_ms",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "in_flight",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "mcp.http_serving",
+    "msg": "acr-mcp http serving",
+    "level": "info",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "listen_address"
+    ],
+    "bounded_aggregation": "exactly one line per process start, after the listener is bound",
+    "fields": [
+      {
+        "key": "listen_address",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "transport",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "stdio",
+          "http"
+        ]
+      },
+      {
+        "key": "base_path",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "server_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "server_commit",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "protocol_revisions",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "unspecified",
+          "2026-07-28",
+          "2025-11-25",
+          "2025-06-18",
+          "2025-03-26",
+          "2024-11-05",
+          "other"
+        ]
+      },
+      {
+        "key": "max_body_bytes",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
   }
 ]
