@@ -333,7 +333,7 @@
           "$ref": "#/$defs/context_fabric_common.v1/$defs/SubjectResolution"
         },
         "temporal": {
-          "$ref": "context_fabric_common.v1.schema.json#/$defs/TemporalLabel"
+          "$ref": "#/$defs/context_fabric_common.v1/$defs/TemporalLabel"
         },
         "versions": {
           "$ref": "#/$defs/context_fabric_common.v1/$defs/VersionSet"
