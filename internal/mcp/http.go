@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"net/http"
 	"reflect"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
+	"github.com/full-chaos/dev-health-acr/internal/logsanitize"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 	"github.com/full-chaos/dev-health-acr/internal/version"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -381,13 +381,17 @@ func isNilValue(value any) bool {
 	return v.Kind() == reflect.Pointer && v.IsNil()
 }
 
-// bucket maps an untrusted value onto a closed vocabulary.
+// bucket maps an untrusted value onto a closed vocabulary. It returns the
+// vocabulary's own member, never the caller's string, so what reaches a log
+// line is always a value this package declared.
 func bucket(value string, vocabulary []string) string {
 	if value == httpValueNone || value == httpValueOther || value == httpValueUnspecified {
 		return httpValueOther
 	}
-	if slices.Contains(vocabulary, value) {
-		return value
+	for _, member := range vocabulary {
+		if member == value {
+			return member
+		}
 	}
 	return httpValueOther
 }
@@ -499,7 +503,7 @@ func (h *HTTPHandler) emitRequestLine(ctx context.Context, line requestLine, rec
 		result = HTTPResultProtocolError
 	}
 	args := []any{
-		"request_id", line.requestID,
+		"request_id", logsanitize.SanitizeLogAttr(line.requestID),
 		"transport", TransportHTTP,
 		"server_version", h.opts.Identity.Version,
 		"server_commit", h.opts.Identity.Commit,
