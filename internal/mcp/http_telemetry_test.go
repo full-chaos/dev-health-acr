@@ -51,10 +51,16 @@ func TestHTTPRequestLineCertifiesEveryAuthOutcomeAndResultClass(t *testing.T) {
 			want: map[string]any{"auth_outcome": "admitted", "result_class": "tool_error", "method": "tools/call", "tool": "source_evidence"}},
 		{id: "req-protocol-error", body: rawToolsCall("no_such_tool", map[string]any{}), header: bearerHeader(valid.token), bearer: true,
 			want: map[string]any{"auth_outcome": "admitted", "result_class": "protocol_error", "method": "tools/call", "tool": "other"}},
+		{id: "req-protocol-error-legacy", body: []byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"no_such_tool","arguments":{}}}`),
+			header: withProtocol(bearerHeader(valid.token), "2025-11-25"), bearer: true, wantHTTP: 200,
+			want: map[string]any{"auth_outcome": "admitted", "result_class": "protocol_error", "method": "tools/call", "tool": "other", "protocol_revision": "2025-11-25", "status": 200}},
+		{id: "req-method-not-found", body: []byte(`{"jsonrpc":"2.0","id":3,"method":"ping","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`),
+			header: bearerHeader(valid.token), bearer: true, wantHTTP: 404,
+			want: map[string]any{"auth_outcome": "admitted", "result_class": "transport_rejected", "method": "ping", "tool": "none", "status": 404}},
 		{id: "req-transport-rejected", method: http.MethodGet, header: bearerHeader(valid.token), bearer: true, wantHTTP: 405,
 			want: map[string]any{"auth_outcome": "admitted", "result_class": "transport_rejected", "method": "none", "tool": "none", "status": 405}},
 		{id: "req-missing", body: rawToolsList(), header: http.Header{}, wantHTTP: 401,
-			want: map[string]any{"auth_outcome": "missing_bearer", "result_class": "auth_denied", "principal_class": "none", "status": 401, "method": "none"}},
+			want: map[string]any{"auth_outcome": "missing_bearer", "result_class": "auth_denied", "principal_class": "none", "status": 401, "method": "tools/list"}},
 		{id: "req-malformed", body: rawToolsList(), header: bearerHeader("fcacr_short"), wantHTTP: 401,
 			want: map[string]any{"auth_outcome": "malformed_bearer", "result_class": "auth_denied", "principal_class": "none", "status": 401}},
 		{id: "req-invalid", body: rawToolsList(), header: bearerHeader(expired.token), bearer: true, wantHTTP: 401,
@@ -138,6 +144,12 @@ func TestHTTPRequestLineCertifiesEveryAuthOutcomeAndResultClass(t *testing.T) {
 	if e.handler.InFlight() != 0 || eDown.handler.InFlight() != 0 {
 		t.Fatalf("in-flight gauge did not return to 0")
 	}
+}
+
+func withProtocol(h http.Header, revision string) http.Header {
+	out := h.Clone()
+	out.Set("Mcp-Protocol-Version", revision)
+	return out
 }
 
 // The line never carries the bearer, its store hash, or a request body, and

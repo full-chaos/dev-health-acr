@@ -395,12 +395,16 @@ func postMCP(t *testing.T, e *endpoint, method string, body []byte, header http.
 		Method string `json:"method"`
 		Params struct {
 			Name string `json:"name"`
+			URI  string `json:"uri"`
 		} `json:"params"`
 	}
 	if json.Unmarshal(body, &envelope) == nil && envelope.Method != "" {
 		req.Header.Set("Mcp-Method", envelope.Method)
-		if envelope.Params.Name != "" {
+		switch {
+		case envelope.Params.Name != "":
 			req.Header.Set("Mcp-Name", envelope.Params.Name)
+		case envelope.Params.URI != "":
+			req.Header.Set("Mcp-Name", envelope.Params.URI)
 		}
 	}
 	for name, values := range header {

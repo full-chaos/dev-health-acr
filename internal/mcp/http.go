@@ -417,7 +417,7 @@ func (h *HTTPHandler) serveMCP(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		line.status = recorder.statusCode()
 		line.latency = h.now().Sub(started)
-		h.emitRequestLine(r.Context(), line, record, r.Header.Get("Mcp-Protocol-Version"))
+		h.emitRequestLine(r.Context(), line, record, r.Header.Get("Mcp-Protocol-Version"), r.Header.Get("Mcp-Method"))
 	}()
 
 	bearer, presented := bearerFromRequest(r)
@@ -464,11 +464,19 @@ type requestLine struct {
 
 // emitRequestLine writes the one line every MCP request produces, on every
 // path: refused before the SDK, rejected by the transport, or served.
-func (h *HTTPHandler) emitRequestLine(ctx context.Context, line requestLine, record *requestRecord, protocolHeader string) {
+//
+// When no MCP method ran (a refusal, or a request the SDK rejected before
+// dispatch), method and protocol_revision are read from the request's
+// Mcp-Method and Mcp-Protocol-Version headers, bucketed like every other
+// caller-sent value.
+func (h *HTTPHandler) emitRequestLine(ctx context.Context, line requestLine, record *requestRecord, protocolHeader, methodHeader string) {
 	record.mu.Lock()
 	method, tool, protocolSet, protocol := record.method, record.tool, record.protocolSet, record.protocol
 	toolError, rpcError, methodsRun := record.toolError, record.rpcError, record.methodsRun
 	record.mu.Unlock()
+	if methodsRun == 0 && methodHeader != "" {
+		method = bucket(methodHeader, HTTPMethodVocabulary())
+	}
 	if !protocolSet {
 		protocol = httpValueUnspecified
 		if protocolHeader != "" {
