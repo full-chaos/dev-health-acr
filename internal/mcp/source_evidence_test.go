@@ -18,7 +18,7 @@ func TestHandleSourceEvidenceSuccess(t *testing.T) {
 	req := callToolRequest(t, map[string]any{
 		"evidence_ref_id": "ev_abc123",
 	})
-	result, err := handleSourceEvidence(context.Background(), boot, req)
+	result, err := invokeSourceEvidence(context.Background(), boot, req)
 	if err != nil {
 		t.Fatalf("expected a normal tool result, got protocol error: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestHandleSourceEvidenceDoesNotFalselyReportTruncationForMarkerTextInHosted
 	req := callToolRequest(t, map[string]any{
 		"evidence_ref_id": "ev_abc123",
 	})
-	result, err := handleSourceEvidence(context.Background(), boot, req)
+	result, err := invokeSourceEvidence(context.Background(), boot, req)
 	if err != nil {
 		t.Fatalf("expected a normal tool result, got protocol error: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestHandleSourceEvidenceRejectsMissingID(t *testing.T) {
 	boot := newFixtureBootstrap(t, fx)
 
 	req := callToolRequest(t, map[string]any{})
-	result, err := handleSourceEvidence(context.Background(), boot, req)
+	result, err := invokeSourceEvidence(context.Background(), boot, req)
 	if err != nil {
 		t.Fatalf("expected a tool error, not a protocol error: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestHandleSourceEvidenceRejectsExplicitNullID(t *testing.T) {
 	req := &mcpsdk.CallToolRequest{Params: &mcpsdk.CallToolParamsRaw{
 		Arguments: []byte(`{"evidence_ref_id":null}`),
 	}}
-	result, err := handleSourceEvidence(context.Background(), boot, req)
+	result, err := invokeSourceEvidence(context.Background(), boot, req)
 	if err != nil {
 		t.Fatalf("expected a tool error, not a protocol error: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestHandleSourceEvidenceMapsNotFound(t *testing.T) {
 	req := callToolRequest(t, map[string]any{
 		"evidence_ref_id": "ev_missing",
 	})
-	result, err := handleSourceEvidence(context.Background(), boot, req)
+	result, err := invokeSourceEvidence(context.Background(), boot, req)
 	if err != nil {
 		t.Fatalf("hosted API failures must be tool errors, not protocol errors: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestHandleSourceEvidenceHonorsTimeout(t *testing.T) {
 	req := callToolRequest(t, map[string]any{
 		"evidence_ref_id": "ev_abc123",
 	})
-	result, err := handleSourceEvidence(ctx, boot, req)
+	result, err := invokeSourceEvidence(ctx, boot, req)
 	if err != nil {
 		t.Fatalf("timeout must be a tool error, not a protocol error: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestHandleSourceEvidenceRejectsSchemaVersionField(t *testing.T) {
 		"schema_version":  "mcp_source_evidence_request.v1",
 		"evidence_ref_id": "ev_abc123",
 	})
-	result, err := handleSourceEvidence(context.Background(), boot, req)
+	result, err := invokeSourceEvidence(context.Background(), boot, req)
 	if err != nil {
 		t.Fatalf("expected a tool error, not a protocol error: %v", err)
 	}

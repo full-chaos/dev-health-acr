@@ -47,7 +47,7 @@ func TestHandleRecordEpisodeRejectsInvalidJSONBeforeHostedCall(t *testing.T) {
 	request := &mcpsdk.CallToolRequest{Params: &mcpsdk.CallToolParamsRaw{Arguments: []byte(`{"client_episode_id":"client_ep_01J0ACR001","idempotency_key":"idem_01J0ACR001","idempotency_key":"idem_01J0ACR002"}`)}}
 
 	// When
-	result, err := handleRecordEpisode(context.Background(), boot, request)
+	result, err := invokeRecordEpisode(context.Background(), boot, request)
 
 	// Then
 	if err != nil || !result.IsError || calls != 0 {

@@ -15,7 +15,7 @@ func TestServerInstructionsDescribeWritebackWhenActive(t *testing.T) {
 	boot := newWritebackFixtureBootstrap(t, fx)
 
 	// When
-	instructions := serverInstructions(boot)
+	instructions := serverInstructions(bootHandlerHalvesConfig(boot))
 
 	// Then
 	if strings.Contains(instructions, "Read-only") || !strings.Contains(instructions, "append-only") {

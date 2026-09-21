@@ -156,7 +156,7 @@ func TestRecordEpisodeRejectsTranscriptWhenLocalCaptureIsDisabled(t *testing.T) 
 	request := callToolRequest(t, recordEpisodeArguments("safe-summary", "transcript-secret", "default_90d"))
 
 	// When
-	result, err := handleRecordEpisode(context.Background(), boot, request)
+	result, err := invokeRecordEpisode(context.Background(), boot, request)
 
 	// Then
 	if err != nil || !result.IsError || calls != 0 {

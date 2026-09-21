@@ -163,7 +163,7 @@ func callInvestigateQuestion(t *testing.T, boot *Bootstrap, input contractsv1.MC
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := handleInvestigateQuestion(context.Background(), boot, &mcpsdk.CallToolRequest{
+	result, err := invokeInvestigateQuestion(context.Background(), boot, &mcpsdk.CallToolRequest{
 		Params: &mcpsdk.CallToolParamsRaw{Arguments: args},
 	})
 	if err != nil {
@@ -520,7 +520,7 @@ func TestInvestigationResultReturnsTheCanonicalResultWhole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	toolResult, err := handleInvestigationResult(context.Background(), boot, &mcpsdk.CallToolRequest{
+	toolResult, err := invokeInvestigationResult(context.Background(), boot, &mcpsdk.CallToolRequest{
 		Params: &mcpsdk.CallToolParamsRaw{Arguments: args},
 	})
 	if err != nil {
@@ -553,7 +553,7 @@ func TestInvestigationResultRejectsMalformedID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	toolResult, err := handleInvestigationResult(context.Background(), boot, &mcpsdk.CallToolRequest{
+	toolResult, err := invokeInvestigationResult(context.Background(), boot, &mcpsdk.CallToolRequest{
 		Params: &mcpsdk.CallToolParamsRaw{Arguments: args},
 	})
 	if err != nil {
@@ -651,7 +651,7 @@ func TestStructuredPayloadsCarryTheUntrustedDeclaration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	toolResult, err := handleInvestigationResult(context.Background(), boot, &mcpsdk.CallToolRequest{
+	toolResult, err := invokeInvestigationResult(context.Background(), boot, &mcpsdk.CallToolRequest{
 		Params: &mcpsdk.CallToolParamsRaw{Arguments: args},
 	})
 	if err != nil || toolResult.IsError {
@@ -719,7 +719,7 @@ func TestMCPWrappersAreClosedOverCanonicalMaxima(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		toolResult, err := handleInvestigationResult(context.Background(), boot, &mcpsdk.CallToolRequest{
+		toolResult, err := invokeInvestigationResult(context.Background(), boot, &mcpsdk.CallToolRequest{
 			Params: &mcpsdk.CallToolParamsRaw{Arguments: args},
 		})
 		if err != nil {
@@ -874,7 +874,7 @@ func TestMatchReasonsAreReachableThroughTheFullResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	toolResult, err := handleInvestigationResult(context.Background(), boot, &mcpsdk.CallToolRequest{
+	toolResult, err := invokeInvestigationResult(context.Background(), boot, &mcpsdk.CallToolRequest{
 		Params: &mcpsdk.CallToolParamsRaw{Arguments: args},
 	})
 	if err != nil || toolResult.IsError {

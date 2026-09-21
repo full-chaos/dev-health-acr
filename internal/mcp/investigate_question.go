@@ -52,7 +52,12 @@ const (
 //
 // Every returned error is a normal tool failure (CallToolResult.IsError),
 // never a Go error that would tear down the protocol session.
-func handleInvestigateQuestion(ctx context.Context, boot *Bootstrap, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+func handleInvestigateQuestion(ctx context.Context, cfg *ProcessConfig, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	caller, callerErr := CallerFromContext(ctx)
+	if callerErr != nil {
+		return refuseWithoutCaller(ctx, cfg, toolInvestigateQuestion), nil
+	}
+
 	var input contractsv1.MCPInvestigateQuestionRequest
 	if err := json.Unmarshal(rawArgs(req), &input); err != nil {
 		return toolErrorResult(&classifiedError{category: "validation", message: "investigate_question arguments are not valid JSON for the declared schema"}), nil
@@ -61,7 +66,7 @@ func handleInvestigateQuestion(ctx context.Context, boot *Bootstrap, req *mcpsdk
 		return toolErrorResult(&classifiedError{category: "validation", message: "investigate_question arguments failed schema validation"}), nil
 	}
 
-	budget := answerBudget(input.Budget, boot.Capabilities.Limits)
+	budget := answerBudget(input.Budget, caller.Capabilities().Limits)
 	hosted := contractsv1.ContextFabricInvestigationRequest{
 		Question:             input.Question,
 		Conversation:         input.Conversation,
@@ -127,7 +132,7 @@ func handleInvestigateQuestion(ctx context.Context, boot *Bootstrap, req *mcpsdk
 		}
 	}
 
-	result, currentRequestID, err := boot.Client.InvestigateWithRequestID(ctx, hosted)
+	result, currentRequestID, err := caller.client.InvestigateWithRequestID(ctx, hosted)
 	if err != nil {
 		return toolErrorResult(err), nil
 	}
@@ -163,10 +168,10 @@ func handleInvestigateQuestion(ctx context.Context, boot *Bootstrap, req *mcpsdk
 	if err := response.Validate(); err != nil {
 		return toolErrorResult(&classifiedError{category: "internal", message: "the assembled response failed contract validation"}), nil
 	}
-	if boot.diagnostics != nil {
+	if cfg.diagnostics != nil {
 		args := answerprojection.DisplayLogArgs(result, response.Structured, answerprojection.Budget{MaxDrivers: budget.MaxDrivers, MaxCohortMembers: budget.MaxCohortMembers, MaxEvidenceRefs: budget.MaxEvidenceRefs}, true, truncated)
 		args = append(args, "request_id", currentRequestID, "surface", "investigate_question")
-		boot.diagnostics.InfoContext(ctx, "context fabric answer display", args...)
+		cfg.diagnostics.InfoContext(ctx, "context fabric answer display", args...)
 	}
 	return buildToolResult(response, response.RenderedMarkdown.Markdown)
 }

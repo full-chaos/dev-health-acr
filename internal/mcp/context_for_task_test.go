@@ -31,7 +31,7 @@ func TestHandleContextForTaskSuccess(t *testing.T) {
 		"scope":      map[string]any{"branch": "main"},
 	})
 
-	result, err := handleContextForTask(context.Background(), boot, req)
+	result, err := invokeContextForTask(context.Background(), boot, req)
 	if err != nil {
 		t.Fatalf("expected a normal tool result, got protocol error: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestHandleContextForTaskDoesNotFalselyReportTruncationForMarkerTextInHosted
 		"repository": map[string]any{"slug": "acme/widgets"},
 		"scope":      map[string]any{"branch": "main"},
 	})
-	result, err := handleContextForTask(context.Background(), boot, req)
+	result, err := invokeContextForTask(context.Background(), boot, req)
 	if err != nil {
 		t.Fatalf("expected a normal tool result, got protocol error: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestHandleContextForTaskRejectsMalformedArguments(t *testing.T) {
 	boot := newFixtureBootstrap(t, fx)
 
 	req := &mcpsdk.CallToolRequest{Params: &mcpsdk.CallToolParamsRaw{Arguments: []byte("{not json")}}
-	result, err := handleContextForTask(context.Background(), boot, req)
+	result, err := invokeContextForTask(context.Background(), boot, req)
 	if err != nil {
 		t.Fatalf("malformed arguments must be a tool error, not a protocol error: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestHandleContextForTaskRejectsExplicitNullGoal(t *testing.T) {
 	req := &mcpsdk.CallToolRequest{Params: &mcpsdk.CallToolParamsRaw{
 		Arguments: []byte(`{"goal":null}`),
 	}}
-	result, err := handleContextForTask(context.Background(), boot, req)
+	result, err := invokeContextForTask(context.Background(), boot, req)
 	if err != nil {
 		t.Fatalf("expected a tool error, not a protocol error: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestHandleContextForTaskRejectsMissingGoal(t *testing.T) {
 	boot := newFixtureBootstrap(t, fx)
 
 	req := callToolRequest(t, map[string]any{})
-	result, err := handleContextForTask(context.Background(), boot, req)
+	result, err := invokeContextForTask(context.Background(), boot, req)
 	if err != nil {
 		t.Fatalf("expected a tool error, not a protocol error: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestHandleContextForTaskMapsHostedAPIErrorMatrix(t *testing.T) {
 				"repository": map[string]any{"slug": "acme/widgets"},
 				"scope":      map[string]any{"branch": "main"},
 			})
-			result, err := handleContextForTask(context.Background(), boot, req)
+			result, err := invokeContextForTask(context.Background(), boot, req)
 			if err != nil {
 				t.Fatalf("hosted API failures must be tool errors, not protocol errors: %v", err)
 			}
@@ -188,7 +188,7 @@ func TestHandleContextForTaskHonorsCancellation(t *testing.T) {
 		"repository": map[string]any{"slug": "acme/widgets"},
 		"scope":      map[string]any{"branch": "main"},
 	})
-	result, err := handleContextForTask(ctx, boot, req)
+	result, err := invokeContextForTask(ctx, boot, req)
 	if err != nil {
 		t.Fatalf("cancellation must be a tool error, not a protocol error: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestHandleContextForTaskRejectsGoalOnlyOutsideDiscoverableWorkspace(t *test
 	req := callToolRequest(t, map[string]any{
 		"goal": "goal-only, no local workspace",
 	})
-	result, err := handleContextForTask(context.Background(), boot, req)
+	result, err := invokeContextForTask(context.Background(), boot, req)
 	if err != nil {
 		t.Fatalf("expected a tool error, not a protocol error: %v", err)
 	}

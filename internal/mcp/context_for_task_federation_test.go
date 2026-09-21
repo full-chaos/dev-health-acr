@@ -28,7 +28,7 @@ func TestHandleContextForTaskMapsRequestedCategories(t *testing.T) {
 	})
 
 	// When
-	result, err := handleContextForTask(context.Background(), boot, req)
+	result, err := invokeContextForTask(context.Background(), boot, req)
 
 	// Then
 	if err != nil || result.IsError {

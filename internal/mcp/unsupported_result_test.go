@@ -85,7 +85,7 @@ func TestAnUnsupportedResultReachesAnMCPClientWithAnEmptyAnswerSentence(t *testi
 		if err != nil {
 			t.Fatal(err)
 		}
-		toolResult, err := handleInvestigationResult(context.Background(), controlBoot, &mcpsdk.CallToolRequest{Params: &mcpsdk.CallToolParamsRaw{Arguments: args}})
+		toolResult, err := invokeInvestigationResult(context.Background(), controlBoot, &mcpsdk.CallToolRequest{Params: &mcpsdk.CallToolParamsRaw{Arguments: args}})
 		if err != nil {
 			t.Fatalf("protocol error: %v", err)
 		}
@@ -101,7 +101,7 @@ func callInvestigationResult(t *testing.T, boot *Bootstrap, resultID string) con
 	if err != nil {
 		t.Fatal(err)
 	}
-	toolResult, err := handleInvestigationResult(context.Background(), boot, &mcpsdk.CallToolRequest{Params: &mcpsdk.CallToolParamsRaw{Arguments: args}})
+	toolResult, err := invokeInvestigationResult(context.Background(), boot, &mcpsdk.CallToolRequest{Params: &mcpsdk.CallToolParamsRaw{Arguments: args}})
 	if err != nil {
 		t.Fatalf("protocol error: %v", err)
 	}

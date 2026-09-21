@@ -91,11 +91,11 @@ func TestFederation_KnownHostedLocalPrefixRoutesHosted(t *testing.T) {
 	boot := federationBootstrap(t, fx, sidecar.LocalEvidenceBundle{}, sidecar.ErrLocalIndexUnavailable)
 	boot.hostedRoutes = newHostedRouteCache(1024, 30*time.Minute, time.Now)
 	initTempGitRepo(t, "acme/widgets")
-	_, err := handleContextForTask(context.Background(), boot, callToolRequest(t, map[string]any{"goal": "inspect widget"}))
+	_, err := invokeContextForTask(context.Background(), boot, callToolRequest(t, map[string]any{"goal": "inspect widget"}))
 	require.NoError(t, err)
 
 	// When
-	result, err := handleSourceEvidence(context.Background(), boot, callToolRequest(t, map[string]any{"evidence_ref_id": hostedID}))
+	result, err := invokeSourceEvidence(context.Background(), boot, callToolRequest(t, map[string]any{"evidence_ref_id": hostedID}))
 
 	// Then
 	require.NoError(t, err)
@@ -123,7 +123,7 @@ func TestFederation_ResponseTrimsLocalOverflow(t *testing.T) {
 	// When
 	boot := federationBootstrap(t, fx, bundle, nil)
 	initTempGitRepo(t, "acme/widgets")
-	result, err := handleContextForTask(context.Background(), boot, callToolRequest(t, map[string]any{"goal": "inspect widget", "budget": map[string]any{"max_items": 4}}))
+	result, err := invokeContextForTask(context.Background(), boot, callToolRequest(t, map[string]any{"goal": "inspect widget", "budget": map[string]any{"max_items": 4}}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 	var response contractsv1.MCPContextForTaskResponse
