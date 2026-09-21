@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -268,4 +269,26 @@ func TestHostedIsProcessConfigurationOnly(t *testing.T) {
 	require.False(t, (&ProcessConfig{}).Hosted())
 	require.False(t, (&ProcessConfig{Transport: TransportStdio}).Hosted())
 	require.True(t, (&ProcessConfig{Transport: TransportHTTP}).Hosted())
+}
+
+// The hosted constructor is what a hosted transport builds its process from,
+// so a goal-only call against a process built there is refused even though
+// the host's working directory is a Git checkout that would resolve one.
+func TestProcessBuiltByTheHostedConstructorRefusesAGoalOnlyContextCall(t *testing.T) {
+	fx := newMultiCallerFixture(t)
+	bearer := fixtureToken(0x52)
+	fx.register(bearer, "caller-hosted", validCapabilitiesFixture())
+	process := NewProcessConfig(fixtureConfig(t, fx.Server), testReleaseIdentity(), io.Discard)
+	caller, err := ResolveCaller(context.Background(), process, CallerCredential{Bearer: bearer})
+	require.NoError(t, err)
+	initTempGitRepo(t, "acme/from-cwd")
+	before := len(fx.pathsSeenFor("caller-hosted"))
+
+	result, err := handleContextForTask(ContextWithCaller(context.Background(), caller), process, callToolRequest(t, map[string]any{"goal": "inspect"}))
+
+	require.NoError(t, err)
+	require.True(t, process.Hosted())
+	require.True(t, result.IsError)
+	require.Equal(t, "validation: "+hostedRepositoryRequiredMessage, toolResultText(result))
+	require.Len(t, fx.pathsSeenFor("caller-hosted"), before, "a refused call must not reach the hosted API")
 }

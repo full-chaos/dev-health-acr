@@ -146,9 +146,10 @@ func TestHostedProcessNeverFederatesProcessLocalEvidence(t *testing.T) {
 	initTempGitRepo(t, "acme/widgets")
 
 	// When
-	result, err := handleContextForTask(ContextWithCaller(context.Background(), caller), process, callToolRequest(t, map[string]any{"goal": "inspect widget"}))
+	result, err := handleContextForTask(ContextWithCaller(context.Background(), caller), process, callToolRequest(t, map[string]any{"goal": "inspect widget", "repository": map[string]any{"slug": "acme/widgets"}}))
 
 	// Then
+	require.True(t, process.Hosted())
 	require.Nil(t, process.local)
 	require.NoError(t, err)
 	require.False(t, result.IsError, "context_for_task reported an error: %s", toolResultText(result))
