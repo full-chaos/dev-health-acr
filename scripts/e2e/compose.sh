@@ -183,6 +183,7 @@ prepare_state() {
   write_container_secret "$STATE/secrets/evidence-keys" "acr-e2e-kid=$(random_base64)"
   : > "$STATE/secrets/ops-token"; chmod 600 "$STATE/secrets/ops-token"
   write_clickhouse_readonly_client_config
+  write_go_api_envelope_material
   cat > "$STATE/nginx-api.conf" <<'EOF'
 events {}
 http {
@@ -190,6 +191,25 @@ http {
   server { listen 8443 ssl; ssl_certificate /run/pki/acr.crt; ssl_certificate_key /run/pki/acr.key; location / { proxy_pass http://acr-api:8080; } }
 }
 EOF
+}
+
+# write_go_api_envelope_material creates the per-run Ed25519 pair the Go API edge needs: the
+# ops `api` signs principal envelopes with the private key, query-api verifies them against
+# the public JWKS. Same openssl derivation as fullstack-opencode.sh's
+# write_web_assertion_material. The kid must equal the api's GO_API_ENVELOPE_KEY_ID
+# (compose.ci.yml default), or query-api rejects every envelope.
+write_go_api_envelope_material() {
+  local key public kid
+  kid="${GO_API_ENVELOPE_KEY_ID:-go-api-envelope-2026-08}"
+  mkdir -p "$STATE/go-api"
+  key="$STATE/go-api/envelope-private-key.pem"
+  openssl genpkey -algorithm ED25519 -out "$key" 2>/dev/null
+  chmod 600 "$key"
+  public="$(openssl pkey -in "$key" -pubout -outform DER | python3 -c 'import base64,sys; print(base64.urlsafe_b64encode(sys.stdin.buffer.read()[-32:]).rstrip(b"=").decode())')"
+  # 644: query-api runs as the distroless nonroot UID and the file is public key material.
+  write_container_secret "$STATE/go-api/envelope-jwks.json" "$(printf '{"keys":[{"kty":"OKP","crv":"Ed25519","kid":"%s","use":"sig","alg":"EdDSA","x":"%s"}]}' "$kid" "$public")"
+  export GO_API_ENVELOPE_PRIVATE_KEY GO_API_ENVELOPE_JWKS_FILE="$STATE/go-api/envelope-jwks.json"
+  GO_API_ENVELOPE_PRIVATE_KEY="$(<"$key")"
 }
 
 ensure_image() {
@@ -351,6 +371,33 @@ ops_clickhouse_database() { printf 'acr_%s_e2e' "${PROJECT//-/}"; }
 
 clickhouse_query() { compose exec -T clickhouse clickhouse-client --user default --password ch --query "$1"; }
 
+# seed_go_api_routing writes the go_api_routing_state rows that make the Go-owned GraphQL
+# operations reachable, through ops' own committed writer (`dev-hops go-api routing enable`),
+# never hand-written SQL. Without them the ops `api` answers a Go-owned operation (catalog,
+# which the web Repository select needs) with GoServedOperationUnavailableError. enable's first
+# preflight is "is query-api reachable", so this loop doubles as the query-api readiness wait;
+# it refuses (exit 2, nothing written) on any doubt, including a schema-digest mismatch between
+# the two planes. --acknowledge-unproven: a fresh per-run stack has no deployed_executed proof
+# run for this build, which is exactly the case the flag names.
+seed_go_api_routing() {
+  local build attempts=0 output
+  build="$(git -C "$STATE/stage/ops" rev-parse HEAD 2>/dev/null || true)"
+  [[ -n "$build" ]] || build='acr-e2e-local'
+  until output="$(compose exec -T api dev-hops go-api routing enable --operations all-registered --candidate-build "$build" --mode primary --acknowledge-unproven --review-evidence 'isolated compose E2E: per-run stack, no deployed proof run' 2>&1)"; do
+    attempts=$((attempts + 1))
+    if [[ "$attempts" -ge 30 ]]; then
+      printf '%s\n' "$output" | redact_log >&2
+      compose logs --no-color query-api 2>&1 | redact_log | tail -40 >&2 || true
+      die 'Go API routing enablement failed'
+    fi
+    sleep 4
+  done
+  printf '%s\n' "$output" | redact_log | tail -5 >&2
+  compose exec -T api dev-hops go-api routing status --json 2>/dev/null \
+    | jq -e '[.. | objects | select(has("mode")) | .mode] | length > 0 and all(. == "primary")' >/dev/null \
+    || die 'Go API routing rows are not all in primary mode after enablement'
+}
+
 provision_ops_control_plane() {
   local output org_id token
   # The isolated ClickHouse database is created before the ops services start, not in
@@ -359,7 +406,8 @@ provision_ops_control_plane() {
   # than a later one.
   compose up -d --wait clickhouse >/dev/null
   clickhouse_query "CREATE DATABASE IF NOT EXISTS $(ops_clickhouse_database)" >/dev/null
-  compose up -d postgres valkey pgbouncer mailpit migrate api >/dev/null
+  compose up -d postgres valkey pgbouncer mailpit migrate api query-api >/dev/null
+  seed_go_api_routing
   if ! output="$(compose exec -T api dev-hops admin orgs create --name "${PROJECT} E2E" --slug "$PROJECT" --description 'isolated compose E2E' --tier community)"; then
     printf '%s\n' "$output" >&2
     die 'Ops organization provisioning failed'
