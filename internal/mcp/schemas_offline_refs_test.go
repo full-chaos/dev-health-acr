@@ -15,7 +15,7 @@ import (
 	"github.com/xeipuuv/gojsonschema"
 )
 
-// networkForbidden fails every outbound HTTP round trip and records the URL
+// networkForbidden fails every outbound HTTP request and records the URL
 // so the failing test can name the ref that tried to leave the document.
 type networkForbidden struct {
 	mu   sync.Mutex
