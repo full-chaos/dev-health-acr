@@ -66,6 +66,13 @@ func classify(err error) *classifiedError {
 		return &classifiedError{category: "validation", message: "the local Git workspace could not be resolved for this request"}
 	}
 
+	if errors.Is(err, ErrHostedRepositoryRequired) {
+		return &classifiedError{category: "validation", message: hostedRepositoryRequiredMessage}
+	}
+	if errors.Is(err, ErrHostedChangedFilesUnsupported) {
+		return &classifiedError{category: "validation", message: hostedChangedFilesMessage}
+	}
+
 	if errors.Is(err, ErrRepositoryScopeMismatch) || errors.Is(err, ErrChangedFilesTruncated) {
 		return &classifiedError{category: "validation", message: err.Error()}
 	}

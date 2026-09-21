@@ -196,6 +196,8 @@ func goVarName(e Event) string {
 		return "CohortKindFulltext"
 	case AnchorBindingTransition.ID:
 		return "AnchorBindingTransition"
+	case MCPHostedContextScope.ID:
+		return "MCPHostedContextScope"
 	default:
 		panic("eventspec: goVarName has no mapping for " + e.ID + " -- add one before regenerating")
 	}

@@ -7051,5 +7051,51 @@
         "presence": "required"
       }
     ]
+  },
+  {
+    "id": "mcp.hosted_context_scope",
+    "msg": "mcp hosted context scope",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "tool",
+      "scope_source"
+    ],
+    "bounded_aggregation": "one line per hosted context_for_task call that reaches scope resolution; a call whose arguments fail the request schema never reaches scope resolution and emits none",
+    "fields": [
+      {
+        "key": "tool",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "context_for_task"
+        ]
+      },
+      {
+        "key": "scope_source",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "explicit_repository",
+          "repository_missing",
+          "changed_files_unsupported"
+        ]
+      },
+      {
+        "key": "has_branch",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "has_commit",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "file_count",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
   }
 ]

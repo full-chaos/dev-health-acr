@@ -2607,6 +2607,7 @@ var All = []Event{
 	ConfirmedNeedLedger,
 	CohortKindFulltext,
 	AnchorBindingTransition,
+	MCPHostedContextScope,
 }
 
 // CountPopulationScope (CHAOS-5775) is the Info line for whether a served
@@ -2886,4 +2887,23 @@ var AnchorBindingTransition = Event{
 // the emitter's fail-closed token for a value outside it.
 func anchorBindingVocabulary(key string) []string {
 	return append(contextfabric.AnchorBindingTransitionLineVocabulary(key), contextfabric.AnchorBindingUndeclaredToken)
+}
+
+// MCPHostedContextScope records the scope decision the hosted acr-mcp
+// context_for_task tool takes for one call: a hosted process resolves the
+// repository from the request alone and never from a workspace, so the only
+// outcomes are an explicit repository, a refusal because none was given, and
+// a refusal because the request asked for workspace-derived changed files.
+// Counts and presence only, never a slug, path or file name.
+var MCPHostedContextScope = Event{
+	ID: "mcp.hosted_context_scope", Msg: "mcp hosted context scope", Level: LevelInfo,
+	Multiplicity: MultiplicityZeroOrOnePerRequest, Attribution: []string{"tool", "scope_source"},
+	BoundedAggregation: "one line per hosted context_for_task call that reaches scope resolution; a call whose arguments fail the request schema never reaches scope resolution and emits none",
+	Fields: []Field{
+		{Key: "tool", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"context_for_task"}},
+		{Key: "scope_source", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"explicit_repository", "repository_missing", "changed_files_unsupported"}},
+		{Key: "has_branch", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "has_commit", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "file_count", Type: FieldInt, Presence: PresenceRequired},
+	},
 }

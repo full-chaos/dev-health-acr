@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ACR MCP context_for_task Request v1",
-  "description": "Ergonomic goal-only-by-default input for the context_for_task MCP tool. Only goal is required; repository, scope, budget, and requested_categories are optional overrides. There is no caller-supplied schema_version wire field: tool identity is established by the MCP call itself, not a wire field, matching the source_evidence request contract. scope.as_of pins retrieval to a point in time; scope.include_changed_files is a tri-state opt-in (omitted: sidecar default; true: include bounded git-changed files when scope.files is not explicitly set; false: never auto-include them) that lets a caller distinguish 'not specified' from an explicit choice. The sidecar maps omitted fields to fixed safe defaults before calling the hosted HTTP contract.",
+  "description": "Ergonomic goal-only-by-default input for the context_for_task MCP tool. Only goal is required; repository, scope, budget, and requested_categories are optional overrides. There is no caller-supplied schema_version wire field: tool identity is established by the MCP call itself, not a wire field, matching the source_evidence request contract. scope.as_of pins retrieval to a point in time; scope.include_changed_files is a tri-state opt-in (omitted: sidecar default; true: include bounded git-changed files when scope.files is not explicitly set; false: never auto-include them) that lets a caller distinguish 'not specified' from an explicit choice. The sidecar maps omitted fields to fixed safe defaults before calling the hosted HTTP contract. On a hosted server there is no workspace to detect: repository.slug is required, MCP roots, the working directory, Git and the local index are never consulted, and scope.include_changed_files=true without scope.files is refused; pass repository and, if wanted, scope.files.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -15,6 +15,7 @@
     },
     "repository": {
       "type": "object",
+      "description": "The repository the task is about. On a hosted server it is required: the server cannot see your workspace, so omitting it returns a validation error that names repository.slug. On a local server it is optional and detected from the open workspace when omitted.",
       "additionalProperties": false,
       "required": [
         "slug"
@@ -46,6 +47,7 @@
         },
         "files": {
           "type": "array",
+          "description": "Repository-relative paths the task touches (up to 200, no duplicates). When set, these replace the automatic changed-files detection. On a hosted server this is how you supply changed files.",
           "maxItems": 200,
           "items": {
             "type": "string",
@@ -64,7 +66,8 @@
           "maximum": 365
         },
         "include_changed_files": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Whether to add the workspace's git-changed files to the scope. Omitted: sidecar default. true: include a bounded list of changed files when files is not set. false: never add them. Not available on a hosted server unless files is set: true without files returns a validation error; list the paths in files instead."
         }
       }
     },

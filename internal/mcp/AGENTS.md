@@ -14,8 +14,7 @@ Local STDIO protocol boundary. Bootstrap proves hosted service identity, compati
 | Evidence tool | `source_evidence.go` | Opaque evidence ID to authorized hosted expansion |
 | Answer tool | `investigate_question.go` | Question to bounded projection; narrows via `contextfabric/answerprojection` only |
 | Result tool | `investigation_result.go` | Opaque `result_id` to the full canonical result; narrows nothing |
-| Repository/scope | `context_scope.go`, `roots.go` | Explicit input → MCP roots → cwd discovery |
-| Guide resources | `guide_resources.go`, `guide/` | Static `acr://guide/*` resources; text generated from registries by `guide/gen`; parity-tested in `guide/guidegen` |
+| Repository/scope | `context_scope.go`, `roots.go`, `hosted_scope.go` | Local: explicit input → MCP roots → cwd discovery. Hosted (`ProcessConfig.Hosted()`): explicit input only |
 | Safe errors | `toolerror.go`, `result.go` | Typed categories; no raw transport/body/path text |
 | Embedded contracts | `schemas.go`, `schemas/` | Installed-binary schemas; parity-tested against canonical files |
 
@@ -28,7 +27,7 @@ Local STDIO protocol boundary. Bootstrap proves hosted service identity, compati
 - Guide resources are read-only, embedded, and identical for every caller. Regenerate with `go generate ./internal/mcp/guide`; never hand-edit `guide/zz_generated.go`. The `guide` package must not import engine packages; only `guide/guidegen` and its tests do.
 - This package must never narrow an investigation result itself. `investigate_question` projects through `internal/contextfabric/answerprojection` and nothing else: that single choke point is what makes API/MCP answer parity structural rather than a convention. A second summariser here silently reopens consumer drift.
 - The sidecar owns consumer surface identity and the time axis on an investigation request. Neither is caller-settable: surface identity is how the differential parity check tells the surfaces apart.
-- Scope precedence is explicit request values, then compatible MCP file roots, then cwd Git discovery.
+- Scope precedence is explicit request values, then compatible MCP file roots, then cwd Git discovery. When `ProcessConfig.Hosted()` is true, `context_for_task` resolves from the request alone: no roots, cwd, Git or local index, and a missing `repository.slug` is a typed validation refusal.
 - Bound the raw root count before parsing URIs. Propagate caller cancellation; malformed individual roots may be ignored only within the bounded list.
 - `include_changed_files` is tri-state: nil uses the sidecar default, true requests bounded discovery, false disables it. Explicit file lists are authoritative.
 - Hosted limits cap caller budgets; response Markdown remains bounded and marked untrusted.

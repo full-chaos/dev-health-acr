@@ -234,6 +234,9 @@ func TestLocalEvidenceCachedForOneCallerIsUnreachableFromAnother(t *testing.T) {
 		return federationProvider{bundle: validLocalBundle(now)}
 	}
 	cfg.local = local
+	// Local evidence exists only where the process serves its own workspace;
+	// a hosted process resolves scope from the request and never federates.
+	cfg.transport = TransportSTDIO
 	initTempGitRepo(t, "acme/widgets")
 
 	// When: caller A asks a question that federates local evidence.
