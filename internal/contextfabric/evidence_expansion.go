@@ -40,8 +40,19 @@ const CitedEvidenceCandidateLimit = 16
 // EvidenceExpansionLogMessage is the one Info line an expansion emits.
 const EvidenceExpansionLogMessage = "context fabric evidence expansion"
 
-// ContextFabricEvidenceSystem is the source system an expansion names.
-const ContextFabricEvidenceSystem = "dev-health"
+// ContextFabricEvidenceSystem is the source system an expansion names. It
+// says, in a typed field, that the expansion is the persisted investigation
+// evidence record (the label and the citing sites of a stored result), not
+// the source row the ref's entity id names.
+const ContextFabricEvidenceSystem = "acr-investigation-record"
+
+// ContextFabricEvidenceProvenance is the expansion's provenance: derived from
+// a stored investigation result.
+const ContextFabricEvidenceProvenance = "derived"
+
+// persistedRecordCitationPrefix opens every expansion's citation, so the
+// rendered markdown says what the record is.
+const persistedRecordCitationPrefix = "Persisted evidence record (not the source row): "
 
 // CitedEvidenceLookup lists, newest first, the ids of stored results in the
 // principal's organization that may cite evidenceRefID. It may over-report;
@@ -268,19 +279,19 @@ func citedEvidenceExpansion(result InvestigationResult, ref, entityType, entityI
 	for _, name := range siteNames {
 		structuredSites[name] = sites[name]
 	}
-	citation := boundRunes(fmt.Sprintf("%s, cited by investigation result %s (%s).", label, result.ResultID, strings.Join(siteNames, ", ")), 2000)
+	citation := boundRunes(fmt.Sprintf("%s%s, cited by investigation result %s (%s).", persistedRecordCitationPrefix, label, result.ResultID, strings.Join(siteNames, ", ")), 2000)
 	evidence := contractsv1.EvidenceRef{
 		SchemaVersion: contractsv1.EvidenceRefSchema,
 		EvidenceRefID: ref,
 		Source: contractsv1.EvidenceSource{
 			System: ContextFabricEvidenceSystem, EntityType: entityType, EntityID: entityID, DisplayLabel: boundRunes(label, 1000),
 		},
-		Provenance:   "derived",
+		Provenance:   ContextFabricEvidenceProvenance,
 		Confidence:   1,
 		Citation:     citation,
 		ObservedAt:   result.GeneratedAt.UTC(),
 		Availability: contractsv1.EvidenceAvailable,
-		Metadata:     map[string]any{"cited_by": "investigation_result"},
+		Metadata:     map[string]any{"record": "persisted_investigation_evidence", "cited_by": "investigation_result"},
 	}
 	return contractsv1.ExpandedEvidence{
 		SchemaVersion: contractsv1.ExpandedEvidenceSchema,

@@ -496,6 +496,11 @@ Retrieves evidence metadata and references. Evidence URLs are returned as refere
 
 **Scope:** Read-only. Requires `ACR_API_URL` and a valid credential.
 
+It expands both kinds of reference an answer carries:
+
+- A `context_for_task` reference expands from the evidence row the packet was built from.
+- An `investigate_question` reference (`acr:v1:<type>:<id>`) expands from the stored investigation result that cited it. It is the persisted evidence record, not the source row: `source.system` is `acr-investigation-record` and `provenance` is `derived`. The hosted API finds the newest results of your organization that cite the reference, re-checks access to each against your credential, and builds the expansion from the first one you may read: the entity type and id, the label the answer showed, the result id, where the result cites it, and the titles of the drivers and findings that cite it. It never returns more than `investigation_result` would return to you for that result. A reference no readable result cites gets the same not-found as an unknown one. Each expansion logs one `context fabric evidence expansion` line with the reason.
+
 **Important:** Evidence URLs are untrusted data. Do not execute, eval, or fetch them without validation. Treat them as opaque references.
 
 ### investigate_question

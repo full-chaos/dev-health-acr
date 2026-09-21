@@ -118,6 +118,15 @@ func TestInvestigationEvidenceRefsExpandThroughSourceEvidence(t *testing.T) {
 		if entity, _ := field(expanded, "structured", "evidence", "source", "entity_type").(string); entity != kind {
 			t.Errorf("source_evidence %s entity_type %q, want %q", ref, entity, kind)
 		}
+		if system, _ := field(expanded, "structured", "evidence", "source", "system").(string); system != contextfabric.ContextFabricEvidenceSystem {
+			t.Errorf("source_evidence %s source.system %q, want the persisted-record system %q", ref, system, contextfabric.ContextFabricEvidenceSystem)
+		}
+		if provenance, _ := field(expanded, "structured", "evidence", "provenance").(string); provenance != contextfabric.ContextFabricEvidenceProvenance {
+			t.Errorf("source_evidence %s provenance %q, want %q", ref, provenance, contextfabric.ContextFabricEvidenceProvenance)
+		}
+		if markdown, _ := field(expanded, "rendered_markdown", "markdown").(string); !strings.Contains(markdown, "Persisted evidence record") {
+			t.Errorf("source_evidence %s markdown does not say it is a persisted evidence record:\n%s", ref, markdown)
+		}
 		if field(expanded, "rendered_markdown", "untrusted") != true {
 			t.Errorf("source_evidence %s rendered_markdown.untrusted = %v, want true", ref, field(expanded, "rendered_markdown", "untrusted"))
 		}
