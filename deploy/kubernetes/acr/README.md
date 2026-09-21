@@ -7,7 +7,7 @@ may select TLS DSNs/origins and add the corresponding CA projections. The base
 does not create Secrets, a Gateway, a Gateway controller, a database, or an MCP
 workload. The hosted `acr-mcp` workload is an opt-in Component
 (`components/acr-mcp`) that an overlay composes; `overlays/development-mcp` is
-the reference. It carries no Secret and no credential (each caller's bearer is
+the reference. It mounts no Secret and holds no credential (only the registry pull secret is referenced; each caller's bearer is
 forwarded to `acr-api`), and `apply.sh`/`wait.sh`/`rollback.sh` handle it like
 the API Deployment (rollback re-applies the overlay-pinned `acr-mcp` digest).
 

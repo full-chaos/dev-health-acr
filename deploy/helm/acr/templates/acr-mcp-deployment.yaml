@@ -1,8 +1,9 @@
 {{- /*
 acr-mcp Deployment: the hosted, stateless Streamable HTTP MCP server. It is its
 own workload from its own image, never a sidecar of acr-api. It carries no
-credential: no Secret is referenced, mounted or projected, and no
-ServiceAccount token is mounted. Every request is decided on the caller's own
+credential: no Secret is mounted or read into its environment, and no
+ServiceAccount token is mounted. The only Secret reference it can carry is the
+chart-wide imagePullSecrets (registry pull auth). Every request is decided on the caller's own
 bearer, which acr-mcp forwards to acr-api. Because no state lives in the pod,
 replicas are interchangeable and any replica may serve any request.
 */ -}}

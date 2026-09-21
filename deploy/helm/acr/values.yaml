@@ -408,8 +408,11 @@ contextFabric:
 # independent workload from its own image (the acr-mcp Dockerfile target, not
 # the acr-api image). Disabled by default.
 #
-# Credential model: the pod holds NO credential. No Secret is referenced or
-# mounted, no ServiceAccount token is mounted, and ACR_API_TOKEN is never set.
+# Credential model: the pod holds NO credential. No Secret is mounted or read
+# into its environment, no ServiceAccount token is mounted, and ACR_API_TOKEN is
+# never set. The only Secret reference it can carry is the chart-wide
+# imagePullSecrets (registry pull auth, not an ACR credential); leave that list
+# empty for a public image and the pod references no Secret at all.
 # Each request must carry the caller's own `Authorization: Bearer <ACR API
 # token>`; acr-mcp decides it against acr-api and forwards the same bearer on
 # every tool call, so acr-api stays the only place credentials are checked.
@@ -468,8 +471,8 @@ acrMcp:
     enabled: true
     minAvailable: 1
     maxUnavailable: null
-  # Default-deny. Ingress only from these namespace selectors (for example the
-  # Gateway namespace); empty means same-namespace only. Egress is DNS plus
+  # Default-deny. Ingress only from these namespace selectors plus the
+  # namespace of each acrMcp.gateway parentRef; with neither, same-namespace only. Egress is DNS plus
   # acr-api: the release's own acr-api pods when apiUrl is empty, otherwise
   # egress.apiPort with no destination restriction.
   networkPolicy:

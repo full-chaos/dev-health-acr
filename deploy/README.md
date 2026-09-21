@@ -24,7 +24,9 @@ script-driven overlay path.
 service** and is never injected beside `acr-api` (`deployment.extraContainers`
 still fails closed naming `injected-mcp`).
 
-The pod holds **no credential**: no Secret is referenced or mounted, no
+The pod holds **no credential**: no Secret is mounted or read into its
+environment (the only Secret reference is the image pull secret, which is
+registry auth, and it is absent when none is configured), no
 ServiceAccount token is mounted, and `ACR_API_TOKEN` is never set. Each request
 carries the caller's own ACR API bearer, which `acr-mcp` decides against and
 forwards to `acr-api`; there is no service-to-service credential.

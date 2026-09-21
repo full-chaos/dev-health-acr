@@ -1,5 +1,6 @@
 # Hosted acr-mcp workload as an opt-in Component: a stateless Streamable HTTP
-# MCP server from its own image, holding no credential (it forwards each
+# MCP server from its own image, holding no credential (only the registry
+# pull secret is referenced; it forwards each
 # caller's bearer to acr-api). An overlay enables it with
 #   components:
 #     - ../../components/acr-mcp

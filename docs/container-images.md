@@ -2,7 +2,8 @@
 
 `Dockerfile` has exactly two production targets: `acr-api` (plus the separate
 `acr-migrate` and `acr-projector` commands) and `acr-mcp`, a local STDIO
-sidecar—not a daemon or a Compose/Kubernetes service.
+sidecar by default that also serves the hosted Streamable HTTP transport on
+Kubernetes (never a Compose service).
 
 All binaries are static cross-builds (`CGO_ENABLED=0`, `-trimpath`, cleared
 Go build ID, `-buildvcs=false`, `SOURCE_DATE_EPOCH`) carrying the actual clean

@@ -19,12 +19,13 @@ neither ACR nor its sidecar fetches them.
 | Engineering evidence and product entitlement | Dev Health Ops; ClickHouse is read-only to ACR |
 | ACR credentials, packets, audits, and migrations | Private ACR hosted deployment and ACR PostgreSQL |
 | Human inspection | `dev-health-web` |
-| Agent integration | A locally installed `acr-mcp` process over STDIO |
+| Agent integration | A locally installed `acr-mcp` process over STDIO, or the opt-in hosted `acr-mcp` (stateless Streamable HTTP, Kubernetes only) |
 | External fact ingestion | External Push; not the ACR API |
 
 The deployment artifacts require caller-provided PostgreSQL, ClickHouse,
 entitlement, Gateway, and Secrets. They do not provision those dependencies,
-and no supported deployment runs `acr-mcp` in a container or Kubernetes Pod.
+and `acr-mcp` runs on Kubernetes only as the opt-in hosted workload described in
+`deploy/README.md`; there is no Compose service for it.
 
 ## Developer getting started
 

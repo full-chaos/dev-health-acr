@@ -1,7 +1,8 @@
 {{- /*
 Default-deny NetworkPolicy for acr-mcp. Ingress reaches the MCP port only from
-the configured namespaces (the Gateway namespace) or, when none are set, from
-the release namespace. Egress is DNS plus acr-api: the in-cluster acr-api pods
+the configured namespaces plus the namespace of every acrMcp.gateway parentRef
+(so the route it renders is reachable), or, when neither exists, from the
+release namespace. Egress is DNS plus acr-api: the in-cluster acr-api pods
 by label when acrMcp.apiUrl is unset, otherwise the explicit apiPort with no
 destination restriction (NetworkPolicy cannot resolve a hostname).
 */ -}}
@@ -22,10 +23,21 @@ spec:
     - Egress
   ingress:
     - from:
-        {{- if .Values.acrMcp.networkPolicy.ingressNamespaceSelectors }}
+        {{- $ns := dict }}
+        {{- if .Values.acrMcp.gateway.enabled }}
+        {{- range .Values.acrMcp.gateway.httpRoute.parentRefs }}
+        {{- $_ := set $ns (.namespace | default $.Release.Namespace) true }}
+        {{- end }}
+        {{- end }}
+        {{- if or .Values.acrMcp.networkPolicy.ingressNamespaceSelectors $ns }}
         {{- range .Values.acrMcp.networkPolicy.ingressNamespaceSelectors }}
         - namespaceSelector:
             {{- toYaml . | nindent 12 }}
+        {{- end }}
+        {{- range $name := keys $ns | sortAlpha }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $name | quote }}
         {{- end }}
         {{- else }}
         - podSelector: {}

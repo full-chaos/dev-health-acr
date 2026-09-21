@@ -6,7 +6,8 @@
 #     -f <acr-api values> -f deploy/helm/acr/values-acr-mcp-trial.example.yaml \
 #     --set-string acrMcp.image.reference=ghcr.io/full-chaos/dev-health-acr/acr-mcp@sha256:<64 hex>
 #
-# acr-mcp holds no credential, so nothing here references a Secret. Clients
+# acr-mcp holds no credential, so nothing here mounts a Secret (only the
+# chart-wide imagePullSecrets, if any, names one for registry pulls). Clients
 # reach it on the NodePort Kubernetes assigns to <fullname>-mcp (read it with
 # `kubectl -n <namespace> get svc <fullname>-mcp`), path /mcp, sending their own
 # ACR API bearer.

@@ -133,7 +133,13 @@ if [[ "$overlay" == *-mcp ]]; then
   done
   grep -qE 'image: [^ ]*/acr-mcp@sha256:[a-f0-9]{64}' <<<"$mcp_deploy" || fail_gate "acr-mcp: image is not the digest-pinned acr-mcp image"
   if grep -qE 'secretKeyRef|secretName|secretRef|projected:|ACR_API_TOKEN|serviceAccountToken' <<<"$mcp_deploy"; then
-    fail_gate "acr-mcp: Deployment references a Secret, projected token, or ACR_API_TOKEN; the pod must hold no credential"
+    fail_gate "acr-mcp: Deployment mounts a Secret, projected token, or ACR_API_TOKEN; the pod must hold no credential"
+  fi
+  # Registry pull auth is the only Secret reference allowed: every line naming a
+  # secret is the imagePullSecrets key itself, and its one entry is the base's pull secret.
+  if [[ "$(grep -ci 'secret' <<<"$mcp_deploy")" != "$(grep -c '^ *imagePullSecrets:$' <<<"$mcp_deploy")" ]] \
+    || ! grep -qA1 '^ *imagePullSecrets:$' <<<"$mcp_deploy" || ! grep -qF -- '- name: acr-registry-pull' <<<"$mcp_deploy"; then
+    fail_gate "acr-mcp: the only Secret reference allowed is imagePullSecrets acr-registry-pull"
   fi
   mcp_cm="$(resource_doc ConfigMap acr-mcp-config)"
   for token in 'ACR_MCP_TRANSPORT: http' 'ACR_MCP_HTTP_BASE_PATH: /mcp' 'ACR_API_URL: http://acr-api:8080'; do
