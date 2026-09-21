@@ -516,7 +516,22 @@ duplicating the numbers and risking drift -- a pure refactor of
      read over `repos`, `work_items` and `git_pull_requests` — never a
      query per organization — bounded by `LIMIT 10000` and its own 10s
      timeout, over the same ClickHouse client every canonical source
-     already reads through.
+     already reads through. The ceiling is ENFORCED, not merely intended:
+     the query asks for one row more than the ceiling and a saturated read
+     returns `ErrOrgDiscoverySaturated` instead of an organization list.
+     Serving the prefix would be the worst available answer, because the
+     coordinator treats a successful enumeration as the complete truth —
+     every organization past the ceiling would silently stop being
+     projected and would not even appear as a skip.
+   - A refresh's enumeration and the state it produces commit as ONE step
+     (`Coordinator.refreshMu`, held across the ClickHouse read). Locking
+     only the write is not enough: two concurrent refreshes — an
+     overlapping tick, or a tick racing the CLI's `RefreshOrgs` — would
+     then commit in completion order rather than start order, so a slow
+     older read lands last and overwrites the newer one. A just-discovered
+     organization disappears again, and if the older read saw nothing the
+     effective set collapses to the static allowlist, with
+     `outcome=succeeded` on the line.
    - **Discovering an org id is not the same as deciding to build it a
      graph.** The trial ClickHouse carries 88 organization ids, most of
      them test junk; each graph is real projection work, real FalkorDB
@@ -556,7 +571,12 @@ duplicating the numbers and risking drift -- a pure refactor of
      not fire), and each skipped organization is named on its own
      `context_fabric: projection organization skipped` line, capped at 20
      per tick with `skipped_truncated` stating when the cap bit. The counts
-     are never capped.
+     are never capped, and the detail window ROTATES across ticks: a fixed
+     window would name the same 20 forever, so with 88 excluded tenants
+     the other 68 would never receive a decision record on any tick at any
+     log level — a permanent blind spot rather than a volume bound. The
+     whole list is covered within `ceil(len/20)` ticks at unchanged
+     per-tick volume.
    - The effective set is the **union** of the static allowlist and the
      discovered set, trimmed, de-duplicated and sorted. The allowlist is a
      floor, never a ceiling, so an operator can still pin an organization

@@ -211,9 +211,14 @@ What to watch once it is on:
 - `context_fabric: projection organization skipped` (Info) names each
   excluded organization with its `org_skip_reason`. It is capped at 20 per
   tick — `skipped_truncated: true` on the summary line says the cap bit —
-  so in a large shared environment read the per-reason COUNTS, which are
-  never capped, and narrow the window or the deny list rather than
-  expecting every id to be named.
+  but the window ROTATES, so every excluded organization is named within
+  `ceil(skipped/20)` ticks (about a minute at the default poll interval).
+  The per-reason counts are never capped.
+- `org_discovery_outcome=failed` on a deployment with more than 10,000
+  organizations means the eligibility read came back saturated and the set
+  could not be known to be complete. The projector keeps its last-known
+  set and adopts nothing new until that is resolved — a capacity decision,
+  not a limit to raise silently.
 - A tenant you expected and do not see: check `orgs_skipped_inactive`
   first. Both data conditions are reversible with no operator action — one
   new row inside the window admits the organization on the very next tick.

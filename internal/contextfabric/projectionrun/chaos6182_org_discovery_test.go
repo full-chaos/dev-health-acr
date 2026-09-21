@@ -11,6 +11,7 @@ import (
 	"sort"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/projectionrun"
@@ -757,5 +758,288 @@ func TestOrgSkipReasonVocabularyIsClosed(t *testing.T) {
 	}
 	if len(want) != 0 {
 		t.Fatalf("missing org_skip_reason members: %v", want)
+	}
+}
+
+// blockingOrgSource blocks inside its FIRST ListOrgs until released, and
+// records the greatest number of ListOrgs calls ever in flight at once.
+// Both are needed to state the refresh-ordering property: the enumeration
+// and the state it produces must commit as one step.
+type blockingOrgSource struct {
+	entered  chan struct{} // closed when the FIRST enumeration begins
+	release  chan struct{} // closed by the test to let the first enumeration return
+	second   chan struct{} // closed when a SECOND enumeration begins
+	firstErr error
+
+	mu          sync.Mutex
+	calls       int
+	inFlight    int
+	maxInFlight int
+}
+
+func newBlockingOrgSource(firstErr error) *blockingOrgSource {
+	return &blockingOrgSource{
+		entered: make(chan struct{}), release: make(chan struct{}),
+		second: make(chan struct{}), firstErr: firstErr,
+	}
+}
+
+func (s *blockingOrgSource) ListOrgs(context.Context) (contextfabric.OrgDiscoveryResult, error) {
+	s.mu.Lock()
+	s.calls++
+	call := s.calls
+	s.inFlight++
+	if s.inFlight > s.maxInFlight {
+		s.maxInFlight = s.inFlight
+	}
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.inFlight--
+		s.mu.Unlock()
+	}()
+
+	if call == 1 {
+		close(s.entered)
+		<-s.release
+		return contextfabric.OrgDiscoveryResult{}, s.firstErr
+	}
+	if call == 2 {
+		close(s.second)
+	}
+	return contextfabric.OrgDiscoveryResult{OrgIDs: []string{"org-new"}}, nil
+}
+
+// awaitNoSecondEnumeration waits for a second enumeration to BEGIN while
+// the first is still blocked, and fails if one does.
+//
+// The wait is generous and one-sided on purpose. Under the correct
+// implementation the signal can never arrive, so the test always waits the
+// full budget and then proceeds -- there is no way for it to fail
+// spuriously. Under an implementation that enumerates outside the refresh
+// lock, the second goroutine only has to be scheduled once for the signal
+// to arrive, which a second is many orders of magnitude more than enough
+// for. Simply reading a counter right after starting the goroutine does
+// NOT discriminate: the goroutine has usually not run yet, so the counter
+// reads 1 either way and the test passes against the defect it exists to
+// catch.
+func (s *blockingOrgSource) awaitNoSecondEnumeration(t *testing.T) {
+	t.Helper()
+	select {
+	case <-s.second:
+		t.Fatal("a second refresh enumerated while the first was still in flight: the enumeration and its commit are not one step, so an older read can land last and overwrite a newer one")
+	case <-time.After(time.Second):
+	}
+}
+
+func (s *blockingOrgSource) counts() (calls, maxInFlight int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls, s.maxInFlight
+}
+
+// TestOrgDiscovery_ARefreshEnumeratesAndCommitsAsOneStep is the
+// out-of-order-commit regression. With the enumeration outside the lock,
+// two concurrent refreshes commit in COMPLETION order rather than start
+// order: a slow older read lands last and overwrites the newer one, so a
+// just-discovered organization silently disappears again -- and because
+// the older read here returns nothing, the effective set collapses to the
+// (empty) static allowlist while the line still says outcome=succeeded.
+//
+// The property that makes that impossible is stronger than "the writes are
+// locked": the READ and the write are one step, so the last commit is also
+// the last read. That is what this asserts -- the second refresh's
+// enumeration must not even begin until the first has committed, which is
+// why the call count, not just the final set, is checked.
+func TestOrgDiscovery_ARefreshEnumeratesAndCommitsAsOneStep(t *testing.T) {
+	t.Parallel()
+	source := newBlockingOrgSource(nil)
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgSource: source,
+		Sources:   []projectionrun.SourcePair{{Name: "source-a", Source: &fakeSource{name: "source-a"}}},
+		Backend:   newFakeBackend(), Checkpoints: newFakeCheckpointStore(), RebuildMarkers: newFakeRebuildMarker(),
+		DrainBatchBudget: -1, Logger: discardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+	ctx := context.Background()
+
+	first := make(chan error, 1)
+	go func() { first <- coordinator.RefreshOrgs(ctx) }()
+	<-source.entered // the first refresh is inside ListOrgs, holding the refresh
+
+	second := make(chan error, 1)
+	go func() { second <- coordinator.RefreshOrgs(ctx) }()
+
+	// The second refresh must be QUEUED, not racing: while the first is
+	// still enumerating, the source must not be called again.
+	source.awaitNoSecondEnumeration(t)
+
+	close(source.release)
+	if err := <-first; err != nil {
+		t.Fatalf("first refresh: %v", err)
+	}
+	if err := <-second; err != nil {
+		t.Fatalf("second refresh: %v", err)
+	}
+
+	calls, maxInFlight := source.counts()
+	if maxInFlight != 1 {
+		t.Fatalf("refreshes must never enumerate concurrently: max in flight = %d", maxInFlight)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
+	}
+	// The later enumeration's result is what stands.
+	if err := coordinator.Rebuild(ctx, "org-new"); err != nil {
+		t.Fatalf("the newer enumeration's organization must survive: %v", err)
+	}
+}
+
+// TestOrgDiscovery_AFailedRefreshCannotOverwriteALaterSuccess is the same
+// hazard with the two commits' outcomes swapped: the in-flight older
+// refresh FAILS. Its failure must not retroactively discard the newer
+// successful discovery -- a transient ClickHouse error that started before
+// a successful read must not un-discover what that read found.
+func TestOrgDiscovery_AFailedRefreshCannotOverwriteALaterSuccess(t *testing.T) {
+	t.Parallel()
+	source := newBlockingOrgSource(errors.New("clickhouse unavailable"))
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgSource: source,
+		Sources:   []projectionrun.SourcePair{{Name: "source-a", Source: &fakeSource{name: "source-a"}}},
+		Backend:   newFakeBackend(), Checkpoints: newFakeCheckpointStore(), RebuildMarkers: newFakeRebuildMarker(),
+		DrainBatchBudget: -1, Logger: discardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+	ctx := context.Background()
+
+	first := make(chan error, 1)
+	go func() { first <- coordinator.RefreshOrgs(ctx) }()
+	<-source.entered
+	second := make(chan error, 1)
+	go func() { second <- coordinator.RefreshOrgs(ctx) }()
+	source.awaitNoSecondEnumeration(t)
+	close(source.release)
+
+	if err := <-first; err == nil {
+		t.Fatal("the first refresh was scripted to fail")
+	}
+	if err := <-second; err != nil {
+		t.Fatalf("second refresh: %v", err)
+	}
+	if err := coordinator.Rebuild(ctx, "org-new"); err != nil {
+		t.Fatalf("a successful refresh must survive an earlier in-flight failure: %v", err)
+	}
+}
+
+// TestOrgDiscovery_SkipLoggingRotatesSoEveryOrganizationIsEventuallyNamed
+// is the fixed-window regression. Capping the detail lines is right;
+// always naming the FIRST 20 is not -- with 88 excluded tenants the same
+// 20 are named every tick forever and the other 68 never receive a
+// decision record at all, on any tick, at any level. That is not a volume
+// bound, it is a permanent blind spot, and it is invisible precisely
+// because the log looks busy.
+//
+// The bar is coverage within ceil(len/cap) refreshes at an UNCHANGED
+// per-refresh volume, so the fix cannot be "log more".
+func TestOrgDiscovery_SkipLoggingRotatesSoEveryOrganizationIsEventuallyNamed(t *testing.T) {
+	t.Parallel()
+	const junk = 88
+	const cap = 20
+	skipped := make([]contextfabric.SkippedOrg, 0, junk)
+	for i := 0; i < junk; i++ {
+		skipped = append(skipped, contextfabric.SkippedOrg{
+			OrgID: fmt.Sprintf("org-junk-%02d", i), Reason: contextfabric.OrgSkipReasonInactive,
+		})
+	}
+	orgs := &fakeOrgSource{results: []fakeOrgResult{{orgs: []string{"org-ok"}, skipped: skipped}}}
+	logger, buffer := capturingLogger()
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgSource: orgs,
+		Sources:   []projectionrun.SourcePair{{Name: "source-a", Source: &fakeSource{name: "source-a"}}},
+		Backend:   newFakeBackend(), Checkpoints: newFakeCheckpointStore(), RebuildMarkers: newFakeRebuildMarker(),
+		DrainBatchBudget: -1, Logger: logger,
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+	ctx := context.Background()
+
+	ticksToCover := (junk + cap - 1) / cap // 5
+	for tick := 1; tick <= ticksToCover; tick++ {
+		if err := coordinator.RefreshOrgs(ctx); err != nil {
+			t.Fatalf("refresh %d: %v", tick, err)
+		}
+		lines := logLines(t, buffer, "context_fabric: projection organization skipped")
+		// The per-refresh volume must stay capped, or "rotation" would just
+		// be a louder log.
+		if len(lines) != tick*cap {
+			t.Fatalf("after %d refreshes: detail lines = %d, want exactly %d (%d per refresh)", tick, len(lines), tick*cap, cap)
+		}
+	}
+
+	named := map[string]bool{}
+	for _, line := range logLines(t, buffer, "context_fabric: projection organization skipped") {
+		named[line["org_id"].(string)] = true
+	}
+	if len(named) != junk {
+		missing := make([]string, 0, junk)
+		for _, skip := range skipped {
+			if !named[skip.OrgID] {
+				missing = append(missing, skip.OrgID)
+			}
+		}
+		t.Fatalf("after %d refreshes only %d of %d excluded organizations were ever named; never named: %v",
+			ticksToCover, len(named), junk, missing)
+	}
+}
+
+// TestOrgDiscovery_FirstEverFailureWithNoStaticAllowlist is the domain cell
+// the sibling first-failure test does not reach, and it is the RECOMMENDED
+// production shape: discovery on, no static allowlist at all. The outcome
+// must still be failed_no_prior_set (nothing is being retained), and the
+// effective set is legitimately empty -- which must not be reported as a
+// success.
+func TestOrgDiscovery_FirstEverFailureWithNoStaticAllowlist(t *testing.T) {
+	t.Parallel()
+	orgs := &fakeOrgSource{results: []fakeOrgResult{
+		{err: errors.New("clickhouse unavailable")},
+		{orgs: []string{"org-a"}},
+	}}
+	logger, buffer := capturingLogger()
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgSource: orgs,
+		Sources:   []projectionrun.SourcePair{{Name: "source-a", Source: &fakeSource{name: "source-a"}}},
+		Backend:   newFakeBackend(), Checkpoints: newFakeCheckpointStore(), RebuildMarkers: newFakeRebuildMarker(),
+		DrainBatchBudget: -1, Logger: logger,
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+	ctx := context.Background()
+	coordinator.Tick(ctx)
+
+	failures := logLines(t, buffer, "context_fabric: projection organization discovery failed")
+	if len(failures) != 1 {
+		t.Fatalf("expected one failure line, got %d", len(failures))
+	}
+	if got := failures[0]["org_discovery_outcome"]; got != "failed_no_prior_set" {
+		t.Fatalf("org_discovery_outcome = %v, want failed_no_prior_set -- there is no prior set to retain", got)
+	}
+	if got := failures[0]["orgs_effective"]; got != float64(0) {
+		t.Fatalf("orgs_effective = %v, want 0", got)
+	}
+	if got := failures[0]["orgs_new"]; got != float64(0) {
+		t.Fatalf("orgs_new = %v, want 0", got)
+	}
+
+	// And the failure is not sticky: the next enumeration succeeds and the
+	// organization is projected.
+	coordinator.Tick(ctx)
+	if err := coordinator.Rebuild(ctx, "org-a"); err != nil {
+		t.Fatalf("discovery must recover on the next tick: %v", err)
 	}
 }

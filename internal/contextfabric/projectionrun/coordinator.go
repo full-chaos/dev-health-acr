@@ -366,6 +366,28 @@ type Coordinator struct {
 	// the only thing any scheduling or admission path reads.
 	staticOrgIDs []string
 	orgSource    OrgSource
+	// refreshMu serializes WHOLE refreshes -- the ListOrgs call together
+	// with the state it produces -- and is therefore held across a network
+	// read, unlike every other mutex in this file.
+	//
+	// orgsMu alone is not enough, and the gap it leaves is not theoretical:
+	// with the enumeration outside the lock, two concurrent refreshes (an
+	// overlapping Tick, or a tick racing the CLI's RefreshOrgs) commit in
+	// COMPLETION order rather than start order, so a slow older read lands
+	// last and overwrites the newer one. A newly discovered organization
+	// disappears again, and if the older read saw nothing, the effective
+	// set collapses back to the static allowlist -- with outcome=succeeded
+	// on the line, which is the shape nobody can debug.
+	//
+	// The cost is that a second refresh waits out the first's ClickHouse
+	// read instead of issuing its own. That is the right trade: ticks are
+	// 15s apart, the read carries its own 10s bound, and a queued refresh
+	// is strictly better than a duplicate concurrent query whose result may
+	// be discarded anyway.
+	refreshMu sync.Mutex
+	// orgSkipLogCursor rotates which window of a large skip list the next
+	// refresh names -- see logOrgSkips. Guarded by refreshMu.
+	orgSkipLogCursor int
 	// orgDiscoveryDeny is Config.OrgDiscoveryDeny as a set, immutable
 	// after construction. Empty is the default and means no filtering.
 	orgDiscoveryDeny map[string]struct{}
@@ -505,6 +527,11 @@ func (c *Coordinator) refreshOrgs(ctx context.Context) error {
 	if c == nil || c.orgSource == nil {
 		return nil
 	}
+	// Held across the enumeration AND the state it produces -- see
+	// refreshMu's own doc comment for the out-of-order commit this closes.
+	c.refreshMu.Lock()
+	defer c.refreshMu.Unlock()
+
 	discovery, listErr := c.orgSource.ListOrgs(ctx)
 	// The deny list is applied HERE rather than inside the adapter so it
 	// governs every OrgSource identically, and so the static allowlist's
@@ -601,16 +628,36 @@ func countOrgSkips(skipped []contextfabric.SkippedOrg) map[contextfabric.OrgSkip
 // projected, and here is why" is exactly the question an operator reaches
 // for this log to answer, and a line only visible at a level nobody runs
 // in production answers nothing. The per-reason counts on the summary line
-// above are the unbounded half; this is the detail.
+// are the unbounded half; this is the detail.
+//
+// The window ROTATES across refreshes rather than always naming the first
+// N. A fixed window makes the cap far worse than a volume bound: with 88
+// excluded tenants and a cap of 20, the same 20 are named on every tick
+// forever and the other 68 never receive a decision record at all, on any
+// tick, at any log level. Rotating keeps the same per-tick volume and
+// makes "every skipped organization is eventually named" true -- the whole
+// list is covered within ceil(len/cap) ticks, about a minute at the
+// default poll interval.
+//
+// The cursor is deliberately a per-process position, not a per-organization
+// one: it needs no bookkeeping that could itself drift, and a restart
+// simply begins the sweep again.
 func (c *Coordinator) logOrgSkips(ctx context.Context, skipped []contextfabric.SkippedOrg) {
-	for i, skip := range skipped {
-		if i >= maxLoggedOrgSkipsPerTick {
-			return
-		}
+	if len(skipped) == 0 {
+		return
+	}
+	start := c.orgSkipLogCursor % len(skipped)
+	count := len(skipped)
+	if count > maxLoggedOrgSkipsPerTick {
+		count = maxLoggedOrgSkipsPerTick
+	}
+	for i := 0; i < count; i++ {
+		skip := skipped[(start+i)%len(skipped)]
 		c.logger.InfoContext(ctx, "context_fabric: projection organization skipped",
 			"org_id", contextfabric.SanitizeLogAttr(skip.OrgID),
 			"org_skip_reason", contextfabric.SanitizeLogAttr(string(skip.Reason)))
 	}
+	c.orgSkipLogCursor = (start + count) % len(skipped)
 }
 
 // orgDiscoveryOutcome is the closed vocabulary of refreshOrgs' decision

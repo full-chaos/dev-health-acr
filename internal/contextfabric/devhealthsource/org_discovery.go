@@ -2,6 +2,7 @@ package devhealthsource
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -15,7 +16,21 @@ import (
 // capacity decision to make, not a projector that should silently serve an
 // arbitrary prefix of them. Exported so the bound a test asserts is the
 // bound production uses.
+//
+// That is ENFORCED, not merely intended: the query asks for one more row
+// than the ceiling, and a saturated read returns ErrOrgDiscoverySaturated
+// instead of an organization list. Returning the prefix would be the worst
+// available answer, because the coordinator treats a successful
+// enumeration as the complete truth: every organization past the ceiling
+// would silently stop being projected and would not even appear as a
+// skip. A failure instead retains the last-known set and says so loudly.
 const OrgDiscoveryLimit = 10000
+
+// ErrOrgDiscoverySaturated reports that the eligibility read came back
+// with as many rows as it asked for, so the organization set cannot be
+// known to be complete. Deliberately an ERROR rather than a partial
+// result -- see OrgDiscoveryLimit.
+var ErrOrgDiscoverySaturated = errors.New("devhealthsource: organization discovery read is saturated")
 
 // OrgDiscoveryTimeout bounds one ListOrgs read independently of the caller's
 // context. Discovery runs at the START of every projection tick, so a
@@ -168,8 +183,12 @@ func (s *ClickHouseOrgSource) ListOrgs(ctx context.Context) (contextfabric.OrgDi
 
 	queryCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	// limit+1, the same over-read convention tables.go's fetch helper uses:
+	// asking for exactly the ceiling makes "we found the ceiling" and "there
+	// is more than the ceiling" the identical row count, so saturation would
+	// be undetectable.
 	rows, err := s.client.Query(queryCtx, orgDiscoveryStatement, []contextpacket.ClickHouseBinding{
-		{Name: "row_limit", Value: uint32(limit)},
+		{Name: "row_limit", Value: uint32(limit) + 1},
 	})
 	if err != nil {
 		return contextfabric.OrgDiscoveryResult{}, fmt.Errorf("devhealthsource: list organizations: %w", err)
@@ -177,12 +196,16 @@ func (s *ClickHouseOrgSource) ListOrgs(ctx context.Context) (contextfabric.OrgDi
 	defer rows.Close()
 
 	result := contextfabric.OrgDiscoveryResult{}
+	seen := 0
 	for rows.Next() {
 		var orgID string
 		var repoRows uint64
 		var lastActivity time.Time
 		if err := rows.Scan(&orgID, &repoRows, &lastActivity); err != nil {
 			return contextfabric.OrgDiscoveryResult{}, fmt.Errorf("devhealthsource: scan organization: %w", err)
+		}
+		if seen++; seen > limit {
+			return contextfabric.OrgDiscoveryResult{}, fmt.Errorf("%w: more than %d organizations are present, so the set read here cannot be complete", ErrOrgDiscoverySaturated, limit)
 		}
 		switch {
 		case repoRows == 0:

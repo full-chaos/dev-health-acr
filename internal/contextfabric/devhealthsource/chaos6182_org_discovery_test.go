@@ -3,6 +3,7 @@ package devhealthsource_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"testing"
@@ -156,8 +157,11 @@ func TestClickHouseOrgSourceIssuesOneBoundedEligibilityRead(t *testing.T) {
 	if len(client.bindings[0]) != 1 || client.bindings[0][0].Name != "row_limit" {
 		t.Fatalf("bindings = %#v, want exactly one row_limit binding", client.bindings[0])
 	}
-	if got := client.bindings[0][0].Value; got != uint32(devhealthsource.OrgDiscoveryLimit) {
-		t.Fatalf("row_limit = %#v, want uint32(%d)", got, devhealthsource.OrgDiscoveryLimit)
+	// limit+1, not limit: asking for exactly the ceiling makes "we found
+	// the ceiling" and "there is more than the ceiling" the same row count,
+	// so saturation would be undetectable. See the saturation test below.
+	if got := client.bindings[0][0].Value; got != uint32(devhealthsource.OrgDiscoveryLimit)+1 {
+		t.Fatalf("row_limit = %#v, want uint32(%d)", got, devhealthsource.OrgDiscoveryLimit+1)
 	}
 }
 
@@ -436,4 +440,77 @@ func TestClickHouseOrgSourceAgainstRealClickHouse(t *testing.T) {
 			t.Fatal("a blank org_id must not even appear as a skip -- it is excluded in SQL")
 		}
 	}
+}
+
+// TestClickHouseOrgSourceRefusesASaturatedRead pins the bound's ENFORCEMENT,
+// which is separate from the bound existing.
+//
+// The coordinator treats a successful enumeration as the complete truth, so
+// returning the prefix of an over-large read is the worst available answer:
+// every organization past the ceiling silently stops being projected and
+// does not even appear as a skip, while the refresh line reports
+// outcome=succeeded. The read must fail instead, so the last-known set is
+// retained and the condition is announced.
+func TestClickHouseOrgSourceRefusesASaturatedRead(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	rows := func(count int) [][]any {
+		out := make([][]any, 0, count)
+		for i := 0; i < count; i++ {
+			out = append(out, orgRow(fmt.Sprintf("org-%06d", i), 1, now))
+		}
+		return out
+	}
+	for _, testCase := range []struct {
+		name      string
+		rowCount  int
+		saturated bool
+	}{
+		// The boundary in both directions -- the whole point is that these
+		// two row counts must not be treated alike.
+		{name: "one below the ceiling", rowCount: devhealthsource.OrgDiscoveryLimit - 1},
+		{name: "exactly the ceiling", rowCount: devhealthsource.OrgDiscoveryLimit},
+		{name: "one above the ceiling", rowCount: devhealthsource.OrgDiscoveryLimit + 1, saturated: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			source, err := devhealthsource.NewClickHouseOrgSource(&recordingOrgQueryClient{rows: rows(testCase.rowCount)})
+			if err != nil {
+				t.Fatalf("new org source: %v", err)
+			}
+			result, err := source.ListOrgs(context.Background())
+			if testCase.saturated {
+				if !errors.Is(err, devhealthsource.ErrOrgDiscoverySaturated) {
+					t.Fatalf("error = %v, want ErrOrgDiscoverySaturated", err)
+				}
+				if result.OrgIDs != nil || result.Skipped != nil {
+					t.Fatalf("a saturated read must return no partial set, got %d admitted / %d skipped", len(result.OrgIDs), len(result.Skipped))
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("a read inside the ceiling must succeed, got %v", err)
+			}
+			if len(result.OrgIDs) != testCase.rowCount {
+				t.Fatalf("admitted = %d, want %d", len(result.OrgIDs), testCase.rowCount)
+			}
+		})
+	}
+}
+
+// TestSaturationReachesTheCoordinatorAsARetainingFailure closes the loop
+// the adapter test alone cannot: a saturated read must behave like every
+// other enumeration failure at the coordinator -- last-known set retained,
+// announced, never a silently shrunk organization set.
+func TestSaturationReachesTheCoordinatorAsARetainingFailure(t *testing.T) {
+	t.Parallel()
+	if !errors.Is(fmt.Errorf("wrapped: %w", devhealthsource.ErrOrgDiscoverySaturated), devhealthsource.ErrOrgDiscoverySaturated) {
+		t.Fatal("ErrOrgDiscoverySaturated must survive wrapping, or a caller cannot classify it")
+	}
+	// The coordinator-side half of this property -- a failed enumeration
+	// retains the last-known set -- is pinned by
+	// TestOrgDiscovery_AFailedEnumerationKeepsTheLastKnownSet in
+	// internal/contextfabric/projectionrun. What matters here is that
+	// saturation IS a failure rather than a short success, which the
+	// adapter test above asserts directly.
 }
