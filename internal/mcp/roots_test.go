@@ -15,7 +15,15 @@ import (
 // added the given file:// roots before connecting, so
 // resolveMCPFileRoots's capability check and ListRoots round trip both
 // exercise real SDK behavior instead of a hand-built fixture.
+//
+// The session negotiates protocol revision 2025-11-25: roots are a
+// server-to-client request, which the SDK forbids on 2026-07-28 and later.
 func connectedServerSession(t *testing.T, uris ...string) (*mcpsdk.ServerSession, func()) {
+	t.Helper()
+	return connectedServerSessionAt(t, "2025-11-25", uris...)
+}
+
+func connectedServerSessionAt(t *testing.T, protocolVersion string, uris ...string) (*mcpsdk.ServerSession, func()) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -31,7 +39,7 @@ func connectedServerSession(t *testing.T, uris ...string) (*mcpsdk.ServerSession
 	if err != nil {
 		t.Fatalf("server connect: %v", err)
 	}
-	clientSession, err := client.Connect(ctx, t2, nil)
+	clientSession, err := client.Connect(ctx, t2, &mcpsdk.ClientSessionOptions{ProtocolVersion: protocolVersion})
 	if err != nil {
 		t.Fatalf("client connect: %v", err)
 	}
@@ -51,6 +59,22 @@ func TestResolveMCPFileRootsReturnsClientRoots(t *testing.T) {
 	}
 	if len(roots) != 2 || roots[0] != "/tmp/repo-a" || roots[1] != "/tmp/repo-b" {
 		t.Fatalf("unexpected roots: %#v", roots)
+	}
+}
+
+// Roots are deprecated as of revision 2026-07-28 and the SDK refuses the
+// server-to-client roots request there; workspace discovery must fall back to
+// the working directory instead of failing the tool call.
+func TestResolveMCPFileRootsFallsBackWhenRevisionForbidsRootsRequests(t *testing.T) {
+	session, closeFn := connectedServerSessionAt(t, "2026-07-28", "file:///tmp/repo-a")
+	defer closeFn()
+
+	roots, err := resolveMCPFileRoots(context.Background(), session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(roots) != 0 {
+		t.Fatalf("expected no roots on revision 2026-07-28, got: %#v", roots)
 	}
 }
 
