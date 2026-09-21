@@ -30,11 +30,11 @@ type ProcessConfig struct {
 	// the process lifetime; a caller never influences it.
 	Config sidecar.Config
 
-	// Transport names how this process serves callers. Hosted() is the ONE
+	// transport names how this process serves callers. Hosted() is the ONE
 	// signal that the process serves callers whose workspace it cannot see;
 	// context_for_task then resolves repository and scope from the request
 	// alone. See hosted_transport_stub.go.
-	Transport Transport
+	transport string
 
 	diagnostics *slog.Logger
 	local       *localFederationRuntime
@@ -61,7 +61,7 @@ func NewProcessConfig(cfg sidecar.Config, identity version.Info, diagnostics io.
 	cfg.SidecarVersion = effectiveSidecarVersion(cfg.SidecarVersion, identity)
 	return &ProcessConfig{
 		Config:      cfg,
-		Transport:   TransportHTTP,
+		transport:   TransportHTTP,
 		diagnostics: newDiagnosticsLogger(diagnostics, cfg.LogLevel),
 	}
 }

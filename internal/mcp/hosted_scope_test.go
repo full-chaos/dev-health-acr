@@ -92,7 +92,7 @@ func (r *hostedRig) call(t *testing.T, hosted bool, args map[string]any) *mcpsdk
 	t.Helper()
 	cfg, caller := r.boot.split(&r.log)
 	if hosted {
-		cfg.Transport = TransportHTTP
+		cfg.transport = TransportHTTP
 	}
 	req := callToolRequest(t, args)
 	req.Session = r.session
@@ -267,8 +267,11 @@ func TestHostedRefusalsAreClassifiedAsValidation(t *testing.T) {
 func TestHostedIsProcessConfigurationOnly(t *testing.T) {
 	require.False(t, (*ProcessConfig)(nil).Hosted())
 	require.False(t, (&ProcessConfig{}).Hosted())
-	require.False(t, (&ProcessConfig{Transport: TransportStdio}).Hosted())
-	require.True(t, (&ProcessConfig{Transport: TransportHTTP}).Hosted())
+	require.False(t, (&ProcessConfig{transport: TransportSTDIO}).Hosted())
+	require.True(t, (&ProcessConfig{transport: TransportHTTP}).Hosted())
+	require.Equal(t, TransportSTDIO, (&ProcessConfig{}).Transport())
+	require.Equal(t, TransportSTDIO, (*ProcessConfig)(nil).Transport())
+	require.Equal(t, TransportHTTP, (&ProcessConfig{transport: TransportHTTP}).Transport())
 }
 
 // The hosted constructor is what a hosted transport builds its process from,
