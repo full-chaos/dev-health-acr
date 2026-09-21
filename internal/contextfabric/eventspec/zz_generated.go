@@ -75,6 +75,7 @@ var ByID = map[string]Event{
 	"graphrank.search_question":                    SearchQuestion,
 	"graphrank.slice_b_survivor_verdict":           SliceBSurvivorVerdict,
 	"graphrank.slice_b_survivor_verdict_summary":   SliceBSurvivorVerdictSummary,
+	"mcp.hosted_context_scope":                     MCPHostedContextScope,
 }
 
 // AnchorBindingTransitionFields is contextfabric.anchor_binding_transition's generated typed construction interface
@@ -4770,5 +4771,58 @@ func (f SliceBSurvivorVerdictSummaryFields) SlogArgs() []any {
 		"neutral_count", f.NeutralCount,
 		"eliminated_count", f.EliminatedCount,
 		"eliminated_ids", contextfabric.SanitizeLogStrings(f.EliminatedIDs),
+	}
+}
+
+// MCPHostedContextScopeFields is mcp.hosted_context_scope's generated typed construction interface
+// (CHAOS-5516): one Go field per Field MCPHostedContextScope.Fields declares in spec.go.
+type MCPHostedContextScopeFields struct {
+	Tool        string
+	ScopeSource string
+	HasBranch   bool
+	HasCommit   bool
+	FileCount   int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every MCPHostedContextScopeFields uniformly, set ONLY by NewMCPHostedContextScopeFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewMCPHostedContextScopeFields is the generated constructor for MCPHostedContextScopeFields -- every
+// field MCPHostedContextScope.Fields declares is a required parameter.
+func NewMCPHostedContextScopeFields(tool string, scopeSource string, hasBranch bool, hasCommit bool, fileCount int) MCPHostedContextScopeFields {
+	return MCPHostedContextScopeFields{
+		Tool:        tool,
+		ScopeSource: scopeSource,
+		HasBranch:   hasBranch,
+		HasCommit:   hasCommit,
+		FileCount:   fileCount,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewMCPHostedContextScopeFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f MCPHostedContextScopeFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns MCPHostedContextScope's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f MCPHostedContextScopeFields) SlogArgs() []any {
+	return []any{
+		"tool", contextfabric.SanitizeLogAttr(f.Tool),
+		"scope_source", contextfabric.SanitizeLogAttr(f.ScopeSource),
+		"has_branch", f.HasBranch,
+		"has_commit", f.HasCommit,
+		"file_count", f.FileCount,
 	}
 }

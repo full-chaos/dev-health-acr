@@ -47,7 +47,15 @@ func handleContextForTask(ctx context.Context, cfg *ProcessConfig, req *mcpsdk.C
 		return toolErrorResult(&classifiedError{category: "validation", message: "context_for_task arguments failed schema validation"}), nil
 	}
 
-	resolved, err := resolveTaskScope(ctx, req.Session, input)
+	var resolved resolvedTaskScope
+	var err error
+	if cfg.hostedMode() {
+		var source string
+		resolved, source, err = resolveHostedTaskScope(input)
+		logHostedScope(ctx, cfg, source, input)
+	} else {
+		resolved, err = resolveTaskScope(ctx, req.Session, input)
+	}
 	if err != nil {
 		return toolErrorResult(err), nil
 	}

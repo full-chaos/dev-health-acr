@@ -30,6 +30,14 @@ type ProcessConfig struct {
 	// the process lifetime; a caller never influences it.
 	Config sidecar.Config
 
+	// HostedMode is set by a transport that serves callers whose workspace
+	// this process cannot see (the http transport). It is plain process
+	// configuration: context_for_task then resolves its repository and
+	// scope from the request alone and never consults MCP roots, the
+	// working directory, local Git or the local index. STDIO leaves it
+	// false and resolves scope exactly as before.
+	HostedMode bool
+
 	diagnostics *slog.Logger
 	local       *localFederationRuntime
 }
