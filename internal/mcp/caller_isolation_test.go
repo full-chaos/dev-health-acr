@@ -249,6 +249,7 @@ func TestLocalEvidenceCachedForOneCallerIsUnreachableFromAnother(t *testing.T) {
 
 	// Then: A reads its own cached excerpt.
 	require.Equal(t, "safe local evidence", sourceEvidenceExcerpt(t, context.Background(), cfg, callerA, localID))
+	require.NotNil(t, callerA.localCache)
 	require.NotZero(t, callerA.localCache.lru.Len())
 
 	// And: B, asking for the identical reference id, is refused rather than
@@ -257,6 +258,7 @@ func TestLocalEvidenceCachedForOneCallerIsUnreachableFromAnother(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, refused.IsError, "caller B read caller A's cached local evidence")
 	require.NotContains(t, toolResultText(refused), "safe local evidence")
+	require.NotNil(t, callerB.localCache)
 	require.Zero(t, callerB.localCache.lru.Len())
 	require.Zero(t, fx.unauthorizedCount())
 }

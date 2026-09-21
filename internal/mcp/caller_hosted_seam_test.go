@@ -156,5 +156,6 @@ func TestHostedProcessNeverFederatesProcessLocalEvidence(t *testing.T) {
 	require.NoError(t, json.Unmarshal(result.StructuredContent.(json.RawMessage), &response))
 	require.Nil(t, response.LocalContext, "a hosted caller was served process-local evidence")
 	require.Equal(t, "caller-hosted summary", response.Structured.Summary)
+	require.NotNil(t, caller.localCache)
 	require.Zero(t, caller.localCache.lru.Len())
 }
