@@ -582,7 +582,7 @@ The server lists MCP prompts that build well-formed calls. They are static: the 
 - `continue_investigation` (`parent_result_id`, `question`; optional `receipts`): the follow-up `investigate_question` call, with each receipt in the `prior_*_receipts` field its prefix names.
 - `expand_evidence` (`evidence_ref_id`): the `source_evidence` call and the untrusted-content rule.
 
-`investigate` and `continue_investigation` are listed only when `investigate_question` is. `expected_kinds` and `window` complete from the registry vocabulary (`completion/complete`). Scope and kind lists are comma separated. A parity test fails when a question family, subject kind, window, or receipt field is added to a registry and not to the prompt guidance.
+`investigate` and `continue_investigation` are listed only when `investigate_question` is listed for that caller. `expected_kinds` and `window` complete from the registry vocabulary (`completion/complete`). Scope and kind lists are comma separated. A parity test fails when a question family, subject kind, window, or receipt field is added to a registry and not to the prompt guidance.
 
 ## Security
 

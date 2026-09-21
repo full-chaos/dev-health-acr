@@ -285,3 +285,34 @@ func TestPromptArgumentCompletionOverMCP(t *testing.T) {
 		t.Errorf("resource references must complete to nothing: %v %v", res, err)
 	}
 }
+
+// In one process two callers with different capability sets list different
+// prompt catalogues, the same way they list different tools: a prompt is
+// listed exactly when the tool it builds a call for is.
+func TestPromptCatalogueFollowsTheCallersOwnCapabilities(t *testing.T) {
+	_, cfg, callerA, callerB, _, _ := twoCallerProcess(t)
+	sessionA := connectedClientForCaller(t, cfg, callerA)
+	sessionB := connectedClientForCaller(t, cfg, callerB)
+
+	namesA := promptNames(t, sessionA)
+	namesB := promptNames(t, sessionB)
+
+	if len(namesA) != 3 || len(namesB) != 1 || namesB[0] != guide.PromptExpand {
+		t.Fatalf("caller A prompts %v, caller B prompts %v", namesA, namesB)
+	}
+	args := map[string]string{"evidence_ref_id": "e1"}
+	a, err := getPromptText(t, sessionA, guide.PromptExpand, args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := getPromptText(t, sessionB, guide.PromptExpand, args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a != b {
+		t.Fatal("expand_evidence text differs between callers")
+	}
+	if _, err := getPromptText(t, sessionB, guide.PromptInvestigate, map[string]string{"question": "q"}); err == nil {
+		t.Fatal("caller B has no investigate_question, so investigate must not be gettable")
+	}
+}
