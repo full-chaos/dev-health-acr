@@ -249,6 +249,15 @@
             "key": { "type": "string" },
             "mountPath": { "type": "string" }
           }
+        },
+        "oauth": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "issuer": { "type": "string" },
+            "resources": { "type": "array", "items": { "type": "string" } }
+          }
         }
       }
     },
@@ -361,6 +370,14 @@
         "strategy": { "type": "object", "additionalProperties": true },
         "apiUrl": { "type": "string", "description": "acr-api origin; empty selects the in-cluster Service of this release." },
         "basePath": { "type": "string", "pattern": "^/[A-Za-z0-9/_.-]{0,127}$" },
+        "oauth": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "resourceUrl": { "type": "string" },
+            "authorizationServer": { "type": "string" }
+          }
+        },
         "logLevel": { "type": "string", "enum": ["debug", "info", "warn", "error"] },
         "apiTimeout": { "type": "string" },
         "http": {

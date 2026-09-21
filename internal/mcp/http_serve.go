@@ -28,6 +28,13 @@ const (
 	HTTPIdleTimeoutEnvironment       = "ACR_MCP_HTTP_IDLE_TIMEOUT"
 	HTTPShutdownTimeoutEnvironment   = "ACR_MCP_HTTP_SHUTDOWN_TIMEOUT"
 	HTTPMaxBodyBytesEnvironment      = "ACR_MCP_HTTP_MAX_BODY_BYTES"
+	// ResourceURLEnvironment is this endpoint's public URL, its OAuth
+	// protected resource identifier (RFC 9728, RFC 8707).
+	ResourceURLEnvironment = "ACR_MCP_RESOURCE_URL"
+	// AuthorizationServerEnvironment is the issuer of the authorization
+	// server that mints credentials for this resource (the acr-api public
+	// origin).
+	AuthorizationServerEnvironment = "ACR_MCP_AUTHORIZATION_SERVER"
 )
 
 // Defaults of the serve contract.
@@ -56,6 +63,13 @@ type ServeOptions struct {
 	IdleTimeout       time.Duration
 	ShutdownTimeout   time.Duration
 	MaxBodyBytes      int64
+	// ResourceURL and AuthorizationServer are set together or not at all.
+	// Set, the endpoint advertises OAuth discovery (protected resource
+	// metadata and a resource_metadata challenge) and forwards ResourceURL
+	// on every hosted API call so a credential bound to another resource is
+	// refused.
+	ResourceURL         string
+	AuthorizationServer string
 }
 
 // ErrServeOptionInvalid reports a serve setting that is out of range or
@@ -112,6 +126,8 @@ func ServeOptionsFromEnvironment(lookup func(string) (string, bool)) (ServeOptio
 		set(TransportEnvironment, func(v string) error { opts.Transport = v; return nil }),
 		set(HTTPListenEnvironment, func(v string) error { opts.Listen = v; return nil }),
 		set(HTTPBasePathEnvironment, func(v string) error { opts.BasePath = v; return nil }),
+		set(ResourceURLEnvironment, func(v string) error { opts.ResourceURL = v; return nil }),
+		set(AuthorizationServerEnvironment, func(v string) error { opts.AuthorizationServer = v; return nil }),
 		set(HTTPMaxBodyBytesEnvironment, func(v string) error {
 			n, err := strconv.ParseInt(v, 10, 64)
 			opts.MaxBodyBytes = n
@@ -173,7 +189,7 @@ func (o ServeOptions) Validate() error {
 	if o.MaxBodyBytes <= 0 || o.MaxBodyBytes > maxHTTPMaxBodyBytes {
 		return &ErrServeOptionInvalid{Setting: HTTPMaxBodyBytesEnvironment}
 	}
-	return nil
+	return validateOAuthDiscovery(o)
 }
 
 // ServeHTTPTransport runs the hosted Streamable HTTP server until ctx is
@@ -191,7 +207,7 @@ func ServeHTTPTransport(ctx context.Context, diagnostics io.Writer, identity ver
 		fmt.Fprintf(diagnostics, "acr-mcp: startup failed: %s\n", wrapped.Error())
 		return wrapped
 	}
-	cfg, err := NewHTTPProcessConfig(sidecarCfg, identity, diagnostics)
+	cfg, err := newServeProcessConfig(sidecarCfg, identity, diagnostics, opts)
 	if err != nil {
 		fmt.Fprintf(diagnostics, "acr-mcp: startup failed: %s\n", classify(err).Error())
 		return err
@@ -221,12 +237,7 @@ func ProbeHostedLiveness(ctx context.Context, identity version.Info) error {
 // serveHTTPOn serves on an already-bound listener. It owns the listener.
 func serveHTTPOn(ctx context.Context, listener net.Listener, cfg *ProcessConfig, identity version.Info, opts ServeOptions) error {
 	logger := cfg.Diagnostics()
-	handler, err := NewHTTPHandler(cfg, HTTPHandlerOptions{
-		BasePath:            opts.BasePath,
-		Identity:            identity,
-		MaxRequestBodyBytes: opts.MaxBodyBytes,
-		ResolveTimeout:      cfg.Config.Timeout,
-	})
+	handler, err := NewHTTPHandler(cfg, serveHandlerOptions(cfg, identity, opts))
 	if err != nil {
 		_ = listener.Close()
 		logger.ErrorContext(ctx, "acr-mcp http startup failed", "failure_class", "handler_options")
@@ -270,4 +281,37 @@ func serveHTTPOn(ctx context.Context, listener net.Listener, cfg *ProcessConfig,
 	}
 	<-serveErr
 	return nil
+}
+
+// newServeProcessConfig builds the hosted process configuration for a serve
+// command: the sidecar configuration plus the resource identifier every
+// hosted API call forwards.
+func newServeProcessConfig(sidecarCfg sidecar.Config, identity version.Info, diagnostics io.Writer, opts ServeOptions) (*ProcessConfig, error) {
+	sidecarCfg.Resource = opts.ResourceURL
+	return NewHTTPProcessConfig(sidecarCfg, identity, diagnostics)
+}
+
+// serveHandlerOptions maps serve options onto the handler's options.
+func serveHandlerOptions(cfg *ProcessConfig, identity version.Info, opts ServeOptions) HTTPHandlerOptions {
+	return HTTPHandlerOptions{
+		BasePath:            opts.BasePath,
+		Identity:            identity,
+		MaxRequestBodyBytes: opts.MaxBodyBytes,
+		ResolveTimeout:      cfg.Config.Timeout,
+		ResourceURL:         opts.ResourceURL,
+		AuthorizationServer: opts.AuthorizationServer,
+	}
+}
+
+// NewServeHTTPHandler builds the endpoint exactly as ServeHTTPTransport does,
+// without binding a listener.
+func NewServeHTTPHandler(sidecarCfg sidecar.Config, identity version.Info, diagnostics io.Writer, opts ServeOptions) (*HTTPHandler, error) {
+	if err := opts.Validate(); err != nil {
+		return nil, err
+	}
+	cfg, err := newServeProcessConfig(sidecarCfg, identity, diagnostics, opts)
+	if err != nil {
+		return nil, err
+	}
+	return NewHTTPHandler(cfg, serveHandlerOptions(cfg, identity, opts))
 }

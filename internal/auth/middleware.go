@@ -129,6 +129,11 @@ func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler
 			a.writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
 			return
 		}
+		if !resourceAdmitted(credential.Resource, r.Header.Values(ResourceHeader)) {
+			a.recordKnownFailure(r, credential, "resource_mismatch", now)
+			a.writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
+			return
+		}
 
 		// Subject is the credential's own ID for every ordinary credential,
 		// but for a workload-exchanged token (CHAOS-4013) it is the STABLE
@@ -283,4 +288,20 @@ func requestID(r *http.Request) string {
 		return value
 	}
 	return "unknown"
+}
+
+// ResourceHeader names the protected resource a request is made on behalf of.
+// The hosted MCP endpoint sets it to its own resource identifier on every
+// call it forwards, from process configuration, never from the caller.
+const ResourceHeader = "X-ACR-Resource"
+
+// resourceAdmitted decides audience binding (RFC 8707, MCP authorization): a
+// credential bound to a protected resource is accepted only on requests that
+// carry exactly that resource. A credential with no binding (operator, device,
+// workload issuance) is accepted as before.
+func resourceAdmitted(bound string, presented []string) bool {
+	if bound == "" {
+		return true
+	}
+	return len(presented) == 1 && presented[0] == bound
 }

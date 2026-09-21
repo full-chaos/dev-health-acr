@@ -54,7 +54,7 @@ func (s *credentialStore) List(ctx context.Context, orgID string) ([]contractsv1
 	}
 	rows, err := s.DB.QueryContext(ctx, `
 SELECT credential_id, name, token_prefix, org_id, repository_scopes, scopes,
-       created_at, expires_at, revoked_at, last_used_at, workload_binding_id
+       created_at, expires_at, revoked_at, last_used_at, workload_binding_id, resource
 FROM acr.client_credentials
 WHERE org_id = $1
 ORDER BY created_at, credential_id`, orgID)
@@ -82,7 +82,7 @@ func (s *credentialStore) GetByID(ctx context.Context, orgID, credentialID strin
 	}
 	row := s.DB.QueryRowContext(ctx, `
 SELECT credential_id, name, token_prefix, org_id, repository_scopes, scopes,
-       created_at, expires_at, revoked_at, last_used_at, workload_binding_id
+       created_at, expires_at, revoked_at, last_used_at, workload_binding_id, resource
 FROM acr.client_credentials
 WHERE org_id = $1 AND credential_id = $2`, orgID, credentialID)
 	credential, err := scanCredential(row)
@@ -95,7 +95,7 @@ func (s *credentialStore) FindByTokenHash(ctx context.Context, tokenHash string)
 	}
 	row := s.DB.QueryRowContext(ctx, `
 SELECT credential_id, name, token_prefix, org_id, repository_scopes, scopes,
-       created_at, expires_at, revoked_at, last_used_at, workload_binding_id
+       created_at, expires_at, revoked_at, last_used_at, workload_binding_id, resource
 FROM acr.client_credentials
 WHERE token_hash = $1
   AND revoked_at IS NULL
@@ -164,8 +164,8 @@ func insertCredential(ctx context.Context, executor execer, record storage.Crede
 INSERT INTO acr.client_credentials (
     credential_id, org_id, name, token_prefix, token_hash,
     repository_scopes, scopes, created_by, created_at, expires_at,
-    revoked_at, last_used_at, last_used_ip, last_used_user_agent, workload_binding_id
-) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, NULLIF($8, ''), $9, $10, $11, $12, NULLIF($13, '')::inet, NULLIF($14, ''), $15)`,
+    revoked_at, last_used_at, last_used_ip, last_used_user_agent, workload_binding_id, resource
+) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, NULLIF($8, ''), $9, $10, $11, $12, NULLIF($13, '')::inet, NULLIF($14, ''), $15, NULLIF($16, ''))`,
 		record.Metadata.CredentialID,
 		record.Metadata.OrgID,
 		record.Metadata.Name,
@@ -181,6 +181,7 @@ INSERT INTO acr.client_credentials (
 		record.LastUsedIP,
 		record.LastUsedUserAgent,
 		workloadBindingID,
+		record.Metadata.Resource,
 	)
 	if err != nil {
 		return fmt.Errorf("insert credential: %w", sanitizeDatabaseError(err))
@@ -196,6 +197,7 @@ func scanCredential(row scanner) (contractsv1.ClientCredential, error) {
 	var credential contractsv1.ClientCredential
 	var repositoryJSON, scopeJSON []byte
 	var workloadBindingID sql.NullString
+	var resource sql.NullString
 	err := row.Scan(
 		&credential.CredentialID,
 		&credential.Name,
@@ -208,6 +210,7 @@ func scanCredential(row scanner) (contractsv1.ClientCredential, error) {
 		&credential.RevokedAt,
 		&credential.LastUsedAt,
 		&workloadBindingID,
+		&resource,
 	)
 	if err != nil {
 		return contractsv1.ClientCredential{}, err
@@ -220,6 +223,9 @@ func scanCredential(row scanner) (contractsv1.ClientCredential, error) {
 	}
 	if workloadBindingID.Valid {
 		credential.WorkloadBindingID = &workloadBindingID.String
+	}
+	if resource.Valid {
+		credential.Resource = resource.String
 	}
 	credential.SchemaVersion = contractsv1.ClientCredentialSchema
 	return credential, nil

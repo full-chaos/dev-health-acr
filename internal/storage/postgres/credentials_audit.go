@@ -150,7 +150,7 @@ func (s *credentialStore) rotateCredential(ctx context.Context, input storage.Cr
 	if input.Replacement.ExpiresAt != nil && !input.Replacement.ExpiresAt.After(now) {
 		return contractsv1.ClientCredential{}, storage.ErrInvalidCredentialInput
 	}
-	replacement := credentialFromRotation(input.Replacement, source.OrgID, now)
+	replacement := credentialFromRotation(input.Replacement, source.OrgID, now, source.Resource)
 	if err := rotateCredential(ctx, tx, source.OrgID, source.CredentialID, replacement, input.Replacement.TokenHash, input.ActorID, overlapExpiry(now, input.Replacement.Overlap), now); err != nil {
 		return contractsv1.ClientCredential{}, err
 	}
@@ -211,7 +211,7 @@ WHERE org_id = $1 AND credential_id = $2
 func lockedCredential(ctx context.Context, tx *sql.Tx, orgID, credentialID string) (contractsv1.ClientCredential, error) {
 	row := tx.QueryRowContext(ctx, `
 SELECT credential_id, name, token_prefix, org_id, repository_scopes, scopes,
-       created_at, expires_at, revoked_at, last_used_at, workload_binding_id
+       created_at, expires_at, revoked_at, last_used_at, workload_binding_id, resource
 FROM acr.client_credentials WHERE org_id = $1 AND credential_id = $2 FOR UPDATE`, orgID, credentialID)
 	credential, err := scanCredential(row)
 	if err != nil {
@@ -274,6 +274,9 @@ func credentialCreatedEvent(record storage.CredentialRecord) storage.AuditEvent 
 	if credential.WorkloadBindingID != nil {
 		metadata["workload_binding_id"] = *credential.WorkloadBindingID
 	}
+	if credential.Resource != "" {
+		metadata["resource"] = credential.Resource
+	}
 	return storage.AuditEvent{
 		OrgID: credential.OrgID, ActorType: "user", ActorID: record.CreatedBy,
 		Action: storage.AuditActionCredentialCreated, ResourceType: "acr_credential", ResourceID: credential.CredentialID,
@@ -307,6 +310,7 @@ func credentialFromCreate(input storage.CredentialCreateInput, createdAt time.Ti
 		SchemaVersion: contractsv1.ClientCredentialSchema, CredentialID: input.CredentialID, OrgID: input.OrgID, Name: input.Name, TokenPrefix: input.TokenPrefix,
 		RepositoryScopes: append([]string(nil), input.RepositoryScopes...), Scopes: append([]string(nil), input.Scopes...), CreatedAt: createdAt, ExpiresAt: cloneTime(input.ExpiresAt),
 		WorkloadBindingID: nonEmptyPtr(input.WorkloadBindingID),
+		Resource:          input.Resource,
 	}
 }
 
@@ -320,8 +324,13 @@ func nonEmptyPtr(value string) *string {
 	return &value
 }
 
-func credentialFromRotation(input storage.CredentialRotationReplacement, orgID string, createdAt time.Time) contractsv1.ClientCredential {
-	return credentialFromCreate(storage.CredentialCreateInput{CredentialID: input.CredentialID, OrgID: orgID, Name: input.Name, TokenPrefix: input.TokenPrefix, RepositoryScopes: input.RepositoryScopes, Scopes: input.Scopes, ExpiresAt: input.ExpiresAt}, createdAt)
+// credentialFromRotation builds the rotation successor's metadata. resource
+// is carried over from the SOURCE credential row, never from the rotation
+// request -- a rotated successor inherits the resource binding it replaces
+// exactly like it inherits repository/scope invariants, rather than
+// re-deriving it from caller-supplied input.
+func credentialFromRotation(input storage.CredentialRotationReplacement, orgID string, createdAt time.Time, resource string) contractsv1.ClientCredential {
+	return credentialFromCreate(storage.CredentialCreateInput{CredentialID: input.CredentialID, OrgID: orgID, Name: input.Name, TokenPrefix: input.TokenPrefix, RepositoryScopes: input.RepositoryScopes, Scopes: input.Scopes, ExpiresAt: input.ExpiresAt, Resource: resource}, createdAt)
 }
 
 func overlapExpiry(now time.Time, overlap time.Duration) *time.Time {

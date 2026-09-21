@@ -1,0 +1,283 @@
+package storage
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"net/url"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"github.com/full-chaos/dev-health-acr/internal/oauthvocab"
+)
+
+// OAuth authorization-code login for the hosted MCP endpoint.
+//
+// An MCP client (Claude Code, Codex, ...) discovers acr-api as its OAuth
+// authorization server and runs the authorization-code grant with PKCE. The
+// browser consent step reuses the device authorization record: /authorize
+// starts one (its raw device code is generated and discarded, so the device
+// grant can never redeem it), the user approves the displayed user code on the
+// existing web approval page, and the token endpoint redeems the approved
+// record by its hash. The rows below carry what the device record does not:
+// the client, its redirect URI, the PKCE challenge, the protected resource the
+// token is bound to, and the one-time authorization code.
+
+const (
+	// OAuthAuthorizationCodeTTL bounds how long an issued authorization code
+	// can be exchanged. RFC 6749 §4.1.2 recommends at most ten minutes.
+	OAuthAuthorizationCodeTTL = 2 * time.Minute
+
+	// OAuthClientKindDynamic marks a client registered through RFC 7591
+	// dynamic client registration and stored in acr.oauth_clients.
+	OAuthClientKindDynamic = oauthvocab.ClientKindDynamic
+
+	maxOAuthClientNameLength  = 200
+	maxOAuthRedirectURIs      = 8
+	maxOAuthURILength         = 2048
+	maxOAuthStateLength       = 1024
+	maxOAuthScopeLength       = 512
+	oauthCodeChallengeLength  = 43
+	dynamicOAuthClientIDBytes = 16
+	dynamicOAuthClientIDStart = "acrc_"
+)
+
+var (
+	ErrInvalidOAuthClient               = errors.New("invalid oauth client")
+	ErrInvalidOAuthAuthorizationRequest = errors.New("invalid oauth authorization request")
+	// ErrOAuthAuthorizationCodeUnavailable reports that no unexpired,
+	// unconsumed authorization code matches. Unknown, expired and already
+	// used codes are deliberately indistinguishable.
+	ErrOAuthAuthorizationCodeUnavailable = errors.New("oauth authorization code unavailable")
+)
+
+// OAuthSecretHash is the SHA-256 of a high-entropy one-time secret (the
+// browser request handle or the authorization code). Raw values are never
+// persisted.
+type OAuthSecretHash struct{ value [sha256.Size]byte }
+
+func HashOAuthSecret(secret string) OAuthSecretHash {
+	return OAuthSecretHash{value: sha256.Sum256([]byte(secret))}
+}
+
+func ParseOAuthSecretHash(value string) (OAuthSecretHash, error) {
+	decoded, err := hex.DecodeString(strings.TrimSpace(value))
+	if err != nil || len(decoded) != sha256.Size {
+		return OAuthSecretHash{}, ErrInvalidOAuthAuthorizationRequest
+	}
+	var hash OAuthSecretHash
+	copy(hash.value[:], decoded)
+	return hash, nil
+}
+
+func (h OAuthSecretHash) String() string { return hex.EncodeToString(h.value[:]) }
+
+func (h OAuthSecretHash) IsZero() bool { return h == OAuthSecretHash{} }
+
+// OAuthClient is a dynamically registered public client. Only public clients
+// exist: registration never issues a client secret.
+type OAuthClient struct {
+	ClientID     string
+	ClientName   string
+	RedirectURIs []string
+	CreatedAt    time.Time
+}
+
+// OAuthAuthorizationRequest is one pending or completed /authorize request.
+type OAuthAuthorizationRequest struct {
+	HandleHash     OAuthSecretHash
+	DeviceCodeHash DeviceCodeHash
+	ClientID       string
+	ClientKind     string
+	RedirectURI    string
+	CodeChallenge  string
+	Resource       string
+	Scope          string
+	State          string
+	CreatedAt      time.Time
+	ExpiresAt      time.Time
+	CodeHash       *OAuthSecretHash
+	CodeExpiresAt  *time.Time
+	ConsumedAt     *time.Time
+}
+
+// OAuthStore persists dynamic clients and authorization requests.
+type OAuthStore interface {
+	// RegisterClient stores a new dynamic client. A duplicate client ID is
+	// ErrConflict.
+	RegisterClient(context.Context, OAuthClient) (OAuthClient, error)
+	// GetClient returns a dynamic client or ErrNotFound.
+	GetClient(ctx context.Context, clientID string) (OAuthClient, error)
+	// CreateAuthorizationRequest stores a new pending request. A duplicate
+	// handle or device code hash is ErrConflict.
+	CreateAuthorizationRequest(context.Context, OAuthAuthorizationRequest) (OAuthAuthorizationRequest, error)
+	// GetAuthorizationRequest returns the request with this handle or
+	// ErrNotFound. Expired requests are still returned; callers decide.
+	GetAuthorizationRequest(context.Context, OAuthSecretHash) (OAuthAuthorizationRequest, error)
+	// IssueAuthorizationCode attaches the code hash to an unexpired request
+	// that has no code yet. Any other state is ErrConflict; an unknown handle
+	// is ErrNotFound.
+	IssueAuthorizationCode(ctx context.Context, handle OAuthSecretHash, code OAuthSecretHash, codeExpiresAt time.Time) (OAuthAuthorizationRequest, error)
+	// ConsumeAuthorizationCode atomically marks the code used and returns its
+	// request. Unknown, expired and already consumed codes all return
+	// ErrOAuthAuthorizationCodeUnavailable.
+	ConsumeAuthorizationCode(context.Context, OAuthSecretHash) (OAuthAuthorizationRequest, error)
+}
+
+// IsDynamicOAuthClientID reports whether a client ID has the shape this
+// server issues at registration.
+func IsDynamicOAuthClientID(clientID string) bool {
+	rest, ok := strings.CutPrefix(clientID, dynamicOAuthClientIDStart)
+	if !ok || len(rest) != 2*dynamicOAuthClientIDBytes {
+		return false
+	}
+	for _, r := range rest {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// NewDynamicOAuthClientID formats random bytes as a dynamic client ID.
+func NewDynamicOAuthClientID(random [dynamicOAuthClientIDBytes]byte) string {
+	return dynamicOAuthClientIDStart + hex.EncodeToString(random[:])
+}
+
+// ValidateOAuthClient checks a dynamic client before it is stored.
+func ValidateOAuthClient(client OAuthClient) error {
+	if !IsDynamicOAuthClientID(client.ClientID) || client.CreatedAt.IsZero() {
+		return ErrInvalidOAuthClient
+	}
+	if !utf8.ValidString(client.ClientName) || len(client.ClientName) > maxOAuthClientNameLength || hasControl(client.ClientName) {
+		return ErrInvalidOAuthClient
+	}
+	if len(client.RedirectURIs) == 0 || len(client.RedirectURIs) > maxOAuthRedirectURIs {
+		return ErrInvalidOAuthClient
+	}
+	seen := make(map[string]struct{}, len(client.RedirectURIs))
+	for _, redirect := range client.RedirectURIs {
+		if !ValidOAuthRedirectURI(redirect) {
+			return ErrInvalidOAuthClient
+		}
+		if _, duplicate := seen[redirect]; duplicate {
+			return ErrInvalidOAuthClient
+		}
+		seen[redirect] = struct{}{}
+	}
+	return nil
+}
+
+// ValidOAuthRedirectURI accepts an absolute redirect URI without a fragment
+// or user info that is either HTTPS or an HTTP loopback address (RFC 8252
+// §7.3, the native-client pattern MCP clients use).
+func ValidOAuthRedirectURI(value string) bool {
+	if value == "" || len(value) > maxOAuthURILength || !utf8.ValidString(value) || hasControl(value) {
+		return false
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || !parsed.IsAbs() || parsed.Host == "" || parsed.Fragment != "" || parsed.User != nil || parsed.Opaque != "" {
+		return false
+	}
+	switch parsed.Scheme {
+	case "https":
+		return true
+	case "http":
+		host := parsed.Hostname()
+		return host == "localhost" || host == "127.0.0.1" || host == "::1"
+	default:
+		return false
+	}
+}
+
+// ValidateOAuthAuthorizationRequest checks a request before it is stored.
+func ValidateOAuthAuthorizationRequest(request OAuthAuthorizationRequest) error {
+	if request.HandleHash.IsZero() || request.DeviceCodeHash.IsZero() || request.CodeHash != nil || request.CodeExpiresAt != nil || request.ConsumedAt != nil {
+		return ErrInvalidOAuthAuthorizationRequest
+	}
+	if request.CreatedAt.IsZero() || !request.ExpiresAt.After(request.CreatedAt) {
+		return ErrInvalidOAuthAuthorizationRequest
+	}
+	switch request.ClientKind {
+	case OAuthClientKindDynamic:
+		if !IsDynamicOAuthClientID(request.ClientID) {
+			return ErrInvalidOAuthAuthorizationRequest
+		}
+	default:
+		return ErrInvalidOAuthAuthorizationRequest
+	}
+	if !ValidOAuthRedirectURI(request.RedirectURI) || !ValidOAuthCodeChallenge(request.CodeChallenge) || !ValidOAuthResource(request.Resource) {
+		return ErrInvalidOAuthAuthorizationRequest
+	}
+	if len(request.Scope) > maxOAuthScopeLength || len(request.State) > maxOAuthStateLength || !utf8.ValidString(request.State) || hasControl(request.State) || hasControl(request.Scope) {
+		return ErrInvalidOAuthAuthorizationRequest
+	}
+	return nil
+}
+
+// ValidOAuthCodeChallenge accepts an S256 challenge: the base64url (no
+// padding) encoding of a SHA-256 digest, exactly 43 characters.
+func ValidOAuthCodeChallenge(value string) bool {
+	if len(value) != oauthCodeChallengeLength {
+		return false
+	}
+	for _, r := range value {
+		if !isBase64URLRune(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// ValidOAuthResource accepts an absolute HTTPS (or HTTP loopback) URI without
+// a fragment, the RFC 8707 resource indicator shape.
+func ValidOAuthResource(value string) bool {
+	if value == "" || len(value) > maxOAuthURILength || !utf8.ValidString(value) || hasControl(value) {
+		return false
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || !parsed.IsAbs() || parsed.Host == "" || parsed.Fragment != "" || parsed.User != nil || parsed.Opaque != "" {
+		return false
+	}
+	switch parsed.Scheme {
+	case "https":
+		return true
+	case "http":
+		host := parsed.Hostname()
+		return host == "localhost" || host == "127.0.0.1" || host == "::1"
+	default:
+		return false
+	}
+}
+
+func isBase64URLRune(r rune) bool {
+	return (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_'
+}
+
+func hasControl(value string) bool {
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
+// CloneOAuthAuthorizationRequest deep-copies a request.
+func CloneOAuthAuthorizationRequest(request OAuthAuthorizationRequest) OAuthAuthorizationRequest {
+	if request.CodeHash != nil {
+		code := *request.CodeHash
+		request.CodeHash = &code
+	}
+	if request.CodeExpiresAt != nil {
+		expires := *request.CodeExpiresAt
+		request.CodeExpiresAt = &expires
+	}
+	if request.ConsumedAt != nil {
+		consumed := *request.ConsumedAt
+		request.ConsumedAt = &consumed
+	}
+	return request
+}

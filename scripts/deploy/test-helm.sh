@@ -760,4 +760,45 @@ if [[ -n "$(extract_doc PodDisruptionBudget '  name: [^\n]*-mcp\n' <<<"$mcp_sing
 fi
 pass "acr-mcp: single-replica render has no PodDisruptionBudget that would block a drain"
 
+# OAuth login: acr-api and the hosted MCP endpoint must agree on issuer and
+# resource, and OAuth turns on the existing web-assertion wiring in any
+# environment.
+oauth_args=(--set acrMcp.enabled=true --set-string "acrMcp.image.reference=${mcp_image}"
+  --set config.oauth.enabled=true --set-string config.oauth.issuer=https://acr.example.test
+  --set-string 'config.oauth.resources[0]=https://mcp.example.test/mcp'
+  --set-string config.webAssertion.issuer=https://web.example.test --set-string config.webAssertion.audience=acr-api
+  --set-string config.webAssertion.existingSecret=acr-web-assertion-jwks)
+oauth_render="$(render "${oauth_args[@]}" --set-string acrMcp.oauth.resourceUrl=https://mcp.example.test/mcp --set-string acrMcp.oauth.authorizationServer=https://acr.example.test)"
+for want in 'ACR_OAUTH_ISSUER: "https://acr.example.test"' 'ACR_OAUTH_RESOURCES: "https://mcp.example.test/mcp"' \
+  'ACR_MCP_RESOURCE_URL: "https://mcp.example.test/mcp"' 'ACR_MCP_AUTHORIZATION_SERVER: "https://acr.example.test"' \
+  'ACR_WEB_ASSERTION_JWKS_FILE:' 'secretName: "acr-web-assertion-jwks"'; do
+  grep -qF "$want" <<<"$oauth_render" || fail_gate "oauth: render is missing ${want}"
+done
+pass "oauth: agreeing acr-api and acr-mcp settings render the OAuth and web-assertion wiring"
+oauth_off="$(render --set acrMcp.enabled=true --set-string "acrMcp.image.reference=${mcp_image}")"
+if grep -qE 'ACR_OAUTH_|ACR_MCP_RESOURCE_URL|ACR_MCP_AUTHORIZATION_SERVER' <<<"$oauth_off"; then
+  fail_gate "oauth: the default render must carry no OAuth settings"
+fi
+pass "oauth: the default render carries no OAuth settings"
+oauth_must_fail() {
+  local name="$1" expect="$2"; shift 2
+  local out status
+  set +e; out="$(render "$@" 2>&1)"; status=$?; set -e
+  [[ $status -ne 0 ]] || fail_gate "oauth: ${name} rendered but must fail closed"
+  grep -qF "$expect" <<<"$out" || fail_gate "oauth: ${name} failed without naming ${expect}"
+  pass "oauth: ${name} fails closed naming '${expect}'"
+}
+oauth_must_fail "mcp resource not issued for" "must be listed in config.oauth.resources" "${oauth_args[@]}" \
+  --set-string acrMcp.oauth.resourceUrl=https://other.example.test/mcp --set-string acrMcp.oauth.authorizationServer=https://acr.example.test
+oauth_must_fail "mcp names another issuer" "must equal config.oauth.issuer" "${oauth_args[@]}" \
+  --set-string acrMcp.oauth.resourceUrl=https://mcp.example.test/mcp --set-string acrMcp.oauth.authorizationServer=https://other.example.test
+oauth_must_fail "mcp advertises OAuth the api does not serve" "requires config.oauth.enabled" --set acrMcp.enabled=true --set-string "acrMcp.image.reference=${mcp_image}" \
+  --set-string acrMcp.oauth.resourceUrl=https://mcp.example.test/mcp --set-string acrMcp.oauth.authorizationServer=https://acr.example.test
+oauth_must_fail "half-set mcp pair" "are set together" --set acrMcp.enabled=true --set-string "acrMcp.image.reference=${mcp_image}" \
+  --set-string acrMcp.oauth.resourceUrl=https://mcp.example.test/mcp
+oauth_must_fail "oauth without web assertions" "requires config.webAssertion" --set config.oauth.enabled=true --set-string config.webAssertion.existingSecret= \
+  --set-string config.oauth.issuer=https://acr.example.test --set-string 'config.oauth.resources[0]=https://mcp.example.test/mcp'
+oauth_must_fail "issuer with a path" "must be an https origin" --set config.oauth.enabled=true \
+  --set-string config.oauth.issuer=https://acr.example.test/x --set-string 'config.oauth.resources[0]=https://mcp.example.test/mcp'
+
 printf 'RESULT: happy path passed all gates\n'

@@ -141,6 +141,10 @@ type HTTPHandlerOptions struct {
 	ResolveTimeout time.Duration
 	// Now is the clock latency is measured with. Nil means time.Now.
 	Now func() time.Time
+	// ResourceURL and AuthorizationServer enable OAuth discovery; see
+	// ServeOptions. Both empty leaves it off.
+	ResourceURL         string
+	AuthorizationServer string
 }
 
 // HTTPHandler is the hosted, stateless Streamable HTTP MCP endpoint plus its
@@ -174,6 +178,9 @@ func NewHTTPHandler(cfg *ProcessConfig, opts HTTPHandlerOptions) (*HTTPHandler, 
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
+	if validateOAuthDiscovery(ServeOptions{BasePath: opts.BasePath, ResourceURL: opts.ResourceURL, AuthorizationServer: opts.AuthorizationServer}) != nil {
+		return nil, ErrHTTPOptionsInvalid
+	}
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
 		return nil, err
@@ -193,6 +200,7 @@ func NewHTTPHandler(cfg *ProcessConfig, opts HTTPHandlerOptions) (*HTTPHandler, 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+HealthPath, h.serveHealth)
 	mux.HandleFunc("GET "+ReadyPath, h.serveReady)
+	h.registerOAuthDiscovery(mux)
 	pattern := opts.BasePath
 	if pattern == "/" {
 		pattern = "/{$}"
@@ -436,7 +444,7 @@ func (h *HTTPHandler) serveMCP(w http.ResponseWriter, r *http.Request) {
 		line.authOutcome = HTTPAuthMalformedBearer
 	}
 	if line.authOutcome != HTTPAuthAdmitted {
-		writeAuthRefusal(recorder, line.authOutcome, 0)
+		h.writeAuthRefusal(recorder, line.authOutcome, 0)
 		return
 	}
 
@@ -446,7 +454,7 @@ func (h *HTTPHandler) serveMCP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		outcome, retryAfter := classifyResolveFailure(err)
 		line.authOutcome = outcome
-		writeAuthRefusal(recorder, outcome, retryAfter)
+		h.writeAuthRefusal(recorder, outcome, retryAfter)
 		return
 	}
 
@@ -605,14 +613,14 @@ type refusalBody struct {
 	ErrorDescription string `json:"error_description"`
 }
 
-func writeAuthRefusal(w http.ResponseWriter, outcome string, retryAfter time.Duration) {
+func (h *HTTPHandler) writeAuthRefusal(w http.ResponseWriter, outcome string, retryAfter time.Duration) {
 	refusal, ok := authRefusal[outcome]
 	if !ok {
 		refusal = authRefusal[HTTPAuthUpstreamUnavailable]
 		outcome = HTTPAuthUpstreamUnavailable
 	}
 	if refusal.challenge != "" {
-		w.Header().Set("WWW-Authenticate", refusal.challenge)
+		w.Header().Set("WWW-Authenticate", h.challenge(refusal.challenge))
 	}
 	if retryAfter > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(max(1, int((retryAfter+time.Second-1)/time.Second))))

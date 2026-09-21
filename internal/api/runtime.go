@@ -116,6 +116,8 @@ type RuntimeDependencies struct {
 	// Investigator/OrgModelConfigs above. The pre-existing device-code
 	// grant on that same endpoint is entirely unaffected either way.
 	WorkloadTokenExchange WorkloadTokenExchanger
+	// OAuth is optional (nil: no OAuth routes); see OAuthRuntime.
+	OAuth *OAuthRuntime
 }
 
 func (r *RuntimeDependencies) validate() error {

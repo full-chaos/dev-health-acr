@@ -623,6 +623,20 @@ Evidence URLs are references only. The sidecar does not fetch them. If you need 
 
 ### Authentication
 
+Two ways to authenticate. Both end with the same `fcacr_` bearer on every request.
+
+**OAuth login (no pre-shared token).** When the deployment sets `ACR_MCP_RESOURCE_URL` and `ACR_MCP_AUTHORIZATION_SERVER` (and acr-api sets `ACR_OAUTH_ISSUER` and `ACR_OAUTH_RESOURCES`), an MCP client that supports MCP authorization logs in by itself:
+
+1. The client calls the endpoint without a credential and gets `401` with `WWW-Authenticate: Bearer resource_metadata="https://<mcp host>/.well-known/oauth-protected-resource/mcp", scope="context:read evidence:read"`.
+2. It reads that protected resource metadata (RFC 9728), which names acr-api as the authorization server, and then acr-api's `/.well-known/oauth-authorization-server` (RFC 8414).
+3. It registers at `/register` (RFC 7591 dynamic registration, public clients only, no secret). Client ID metadata documents are not accepted.
+4. It opens `/authorize` in the browser with PKCE (`S256` only) and the `resource` parameter (RFC 8707). The page shows a user code and a link to the web approval page. Sign in there, enter the code and choose the repositories. This is the same approval as `acr-mcp login`: the credential gets `context:read` and `evidence:read` for the organization and repositories you approve.
+5. The page returns the browser to the client with a one-time code (valid 2 minutes, with `iss`), and the client exchanges it at `/token` with its PKCE verifier.
+
+The token is an ordinary 30-day `fcacr_` credential, revocable like any other (a revoked credential is refused on the next request). There is no refresh token; log in again after it expires. The credential is bound to the MCP URL it was requested for: acr-api accepts it only on requests the hosted endpoint forwards with that same URL, so a token issued for another endpoint is refused with `401`. With Claude Code: `claude mcp add --transport http acr https://<mcp host>/mcp` and then `/mcp` to log in.
+
+**Static bearer.**
+
 - Send `Authorization: Bearer <ACR API token>` on **every** request. The token is the caller's own ACR credential (the one `acr-mcp login` stores for STDIO use). The hosted server holds no credential of its own and never signs in as a shared identity.
 - Each request is decided on its own bearer, against acr-api, before any MCP method runs. Missing, malformed, unknown, expired, revoked or insufficient credentials are refused with `401` or `403` and a fixed JSON body (`missing_bearer`, `malformed_bearer`, `invalid_credential`, `insufficient_scope`, `insufficient_entitlement`); the server fails closed. `429` (`rate_limited`, with `Retry-After`), `502` (`upstream_incompatible`) and `503` (`upstream_unavailable`) mean the request was not decided; retry later.
 - `tools/list` follows the credential: a credential without Context Fabric access lists `context_for_task` and `source_evidence` only.
@@ -713,7 +727,7 @@ Every response carries `untrusted_content`. Treat titles, excerpts, answer prose
 
 ### Server settings
 
-The hosted transport reads `ACR_MCP_TRANSPORT` (`stdio` or `http`), `ACR_MCP_HTTP_LISTEN` (default `:8081`), `ACR_MCP_HTTP_BASE_PATH` (default `/mcp`), `ACR_MCP_HTTP_READ_HEADER_TIMEOUT`, `ACR_MCP_HTTP_READ_TIMEOUT`, `ACR_MCP_HTTP_WRITE_TIMEOUT`, `ACR_MCP_HTTP_IDLE_TIMEOUT`, `ACR_MCP_HTTP_SHUTDOWN_TIMEOUT`, `ACR_MCP_HTTP_MAX_BODY_BYTES` (each also a `--` flag), and `ACR_API_URL` for the acr-api it forwards to. It does not read `ACR_API_TOKEN`, a token file or the keyring: callers bring their own bearer. `acr-mcp doctor` reports the transport block (mode, protocol revisions, listen address, probe paths).
+The hosted transport reads `ACR_MCP_TRANSPORT` (`stdio` or `http`), `ACR_MCP_HTTP_LISTEN` (default `:8081`), `ACR_MCP_HTTP_BASE_PATH` (default `/mcp`), `ACR_MCP_HTTP_READ_HEADER_TIMEOUT`, `ACR_MCP_HTTP_READ_TIMEOUT`, `ACR_MCP_HTTP_WRITE_TIMEOUT`, `ACR_MCP_HTTP_IDLE_TIMEOUT`, `ACR_MCP_HTTP_SHUTDOWN_TIMEOUT`, `ACR_MCP_HTTP_MAX_BODY_BYTES` (each also a `--` flag), `ACR_API_URL` for the acr-api it forwards to, and the OAuth discovery pair `ACR_MCP_RESOURCE_URL` (this endpoint's public URL; its path must equal the base path) and `ACR_MCP_AUTHORIZATION_SERVER` (the acr-api public origin), set together or not at all. It does not read `ACR_API_TOKEN`, a token file or the keyring: callers bring their own bearer. `acr-mcp doctor` reports the transport block (mode, protocol revisions, listen address, probe paths).
 
 ## Troubleshooting
 

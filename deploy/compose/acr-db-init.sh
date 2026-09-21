@@ -162,6 +162,16 @@ GRANT SELECT, INSERT, UPDATE ON TABLE acr.agent_episodes TO :"runtime_user";
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.device_authorizations FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE ON TABLE acr.device_authorizations TO :"runtime_user";
 
+-- OAuth 2.1 authorization-code login (migration 0040): dynamically
+-- registered clients and pending/completed /authorize requests, both
+-- read and written on the hosted request path exactly like
+-- device_authorizations immediately above.
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.oauth_clients FROM :"runtime_user";
+GRANT SELECT, INSERT, UPDATE ON TABLE acr.oauth_clients TO :"runtime_user";
+
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.oauth_authorization_requests FROM :"runtime_user";
+GRANT SELECT, INSERT, UPDATE ON TABLE acr.oauth_authorization_requests TO :"runtime_user";
+
 -- CHAOS-3859 (sol review F1): the hosted runtime writes clarification-
 -- selection capture events through pgclarification.Sink -- INSERT only,
 -- mirroring audit_events immediately above exactly: this table has no

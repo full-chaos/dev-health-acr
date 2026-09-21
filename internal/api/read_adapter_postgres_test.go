@@ -84,6 +84,9 @@ func (c *fixturePostgresConn) ExecContext(_ context.Context, query string, args 
 			// nil (SQL NULL) -- matches insertCredential's real 15th
 			// parameter position.
 			args[14].Value,
+			// resource ($16): the OAuth audience binding; NULL for this
+			// fixture's operator-issued credential.
+			args[15].Value,
 		}
 	}
 	return driver.RowsAffected(1), nil
@@ -99,7 +102,7 @@ func (c *fixturePostgresConn) QueryContext(_ context.Context, query string, args
 }
 
 func (r *fixturePostgresRows) Columns() []string {
-	return []string{"credential_id", "name", "token_prefix", "org_id", "repository_scopes", "scopes", "created_at", "expires_at", "revoked_at", "last_used_at", "workload_binding_id"}
+	return []string{"credential_id", "name", "token_prefix", "org_id", "repository_scopes", "scopes", "created_at", "expires_at", "revoked_at", "last_used_at", "workload_binding_id", "resource"}
 }
 
 func (r *fixturePostgresRows) Close() error { return nil }

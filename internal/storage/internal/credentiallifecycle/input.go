@@ -30,6 +30,11 @@ type CreateInput struct {
 	// IssuanceProvenanceWorkloadExchange -- see that constant's doc
 	// comment. normalizeCreate enforces the pairing.
 	WorkloadBindingID string
+	// Resource is the RFC 8707 protected resource this credential is bound
+	// to. Empty for every issuance path except an OAuth authorization-code
+	// exchange that named one; never set alongside
+	// IssuanceProvenanceWorkloadExchange. normalizeCreate enforces both.
+	Resource string
 }
 
 type RotationReplacement struct {

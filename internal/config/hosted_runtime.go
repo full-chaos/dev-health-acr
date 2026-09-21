@@ -206,5 +206,7 @@ func (c Config) SafeAttributes() []any {
 		"dev_health_entitlement_token_file_configured", c.DevHealthEntitlementTokenFile != "",
 		"web_assertions_configured", c.WebAssertionJWKSFile != "",
 		"device_verification_configured", c.DeviceVerificationURL != "",
+		"oauth_configured", c.OAuthConfigured(),
+		"oauth_resource_count", len(c.OAuthResources),
 	}
 }

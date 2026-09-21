@@ -31,4 +31,11 @@ data:
   ACR_API_ALLOW_INSECURE_INTERNAL_HTTP: "true"
   {{- end }}
   ACR_LOG_LEVEL: {{ $m.logLevel | quote }}
+  {{- with $m.oauth }}
+  {{- if or .resourceUrl .authorizationServer }}
+  {{- include "acr.validateMcpOAuth" $ }}
+  ACR_MCP_RESOURCE_URL: {{ required "acrMcp.oauth.resourceUrl is required with acrMcp.oauth.authorizationServer" .resourceUrl | quote }}
+  ACR_MCP_AUTHORIZATION_SERVER: {{ required "acrMcp.oauth.authorizationServer is required with acrMcp.oauth.resourceUrl" .authorizationServer | quote }}
+  {{- end }}
+  {{- end }}
 {{- end }}

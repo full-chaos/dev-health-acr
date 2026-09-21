@@ -255,7 +255,22 @@ func DeviceAuthorizationCredentialMatches(record DeviceAuthorization, input Cred
 	return input.OrgID == record.AuthorizedOrgID &&
 		input.ActorID == record.ApprovingSubject &&
 		slices.Equal(input.RepositoryScopes, record.AuthorizedRepositoryScopes) &&
-		slices.Equal(input.Scopes, record.AuthorizedScopes)
+		scopesWithin(input.Scopes, record.AuthorizedScopes)
+}
+
+// scopesWithin reports whether the credential's scopes are a non-empty subset
+// of the approved scopes: a redemption may narrow the approval (an OAuth
+// client that asked for less), never widen it.
+func scopesWithin(requested, approved []string) bool {
+	if len(requested) == 0 {
+		return false
+	}
+	for _, scope := range requested {
+		if !slices.Contains(approved, scope) {
+			return false
+		}
+	}
+	return true
 }
 
 func NewDeviceAuthorizationError(kind DeviceAuthorizationErrorKind, state DeviceAuthorizationState, retryAfter time.Duration) error {

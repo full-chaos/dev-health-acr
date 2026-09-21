@@ -2647,6 +2647,7 @@ var All = []Event{
 	MCPHTTPRequest,
 	MCPHTTPServing,
 	MCPHTTPReadiness,
+	OAuthStep,
 }
 
 // CountPopulationScope (CHAOS-5775) is the Info line for whether a served

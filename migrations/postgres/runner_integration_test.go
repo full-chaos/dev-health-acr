@@ -87,8 +87,12 @@ import (
 // (CHAOS-5792) is the ownership-routing reuse-key dimension: same shape
 // again, fencing reuse on contextfabric.OwnershipRoutingVersion so a
 // stored repository-anchored team count computed under different routing
-// rules is not served under the current rules' semantics.
-var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39}
+// rules is not served under the current rules' semantics. 0040 is the
+// OAuth 2.1 authorization-code login storage layer: client_credentials
+// gains a resource column, plus the new acr.oauth_clients and
+// acr.oauth_authorization_requests tables (internal/storage/oauth.go's
+// package doc comment has the full flow).
+var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40}
 
 func TestEmbeddedRunner_appliesMigrationsInOrder_whenDatabaseIsFresh(t *testing.T) {
 	// Given

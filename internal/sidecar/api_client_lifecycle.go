@@ -189,6 +189,9 @@ func (c *LifecycleClient) callPublic(ctx context.Context, path string, request a
 	if c.cfg.ClientVersion != "" {
 		httpRequest.Header.Set("X-ACR-Client-Version", c.cfg.ClientVersion)
 	}
+	if c.cfg.Resource != "" {
+		httpRequest.Header.Set(auth.ResourceHeader, c.cfg.Resource)
+	}
 	httpResponse, err := c.http.Do(httpRequest)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {

@@ -3,6 +3,7 @@ package credentiallifecycle
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -17,6 +18,13 @@ var (
 	tokenHashPattern      = regexp.MustCompile(`^[a-f0-9]{64}$`)
 	tokenPrefixPattern    = regexp.MustCompile(`^fcacr_[A-Za-z0-9_-]{6,64}$`)
 )
+
+// maxResourceLength bounds Resource: RFC 8707 gives no length limit, so this
+// mirrors the OAuth authorization-request resource cap in internal/storage
+// (maxOAuthURILength) -- this package cannot import that one without a
+// cycle (storage already imports credentiallifecycle), so the bound is
+// duplicated by value, not by reference.
+const maxResourceLength = 2048
 
 var knownScopes = map[string]struct{}{
 	"context:read":  {},
@@ -78,10 +86,47 @@ func normalizeCreate(input CreateInput) (CreateInput, error) {
 		if err != nil {
 			return CreateInput{}, err
 		}
+		if input.Resource != "" {
+			return CreateInput{}, invalid("resource")
+		}
 	default:
 		return CreateInput{}, invalid("issuance provenance")
 	}
+	input.Resource, err = normalizeResource(input.Resource)
+	if err != nil {
+		return CreateInput{}, err
+	}
 	return input, nil
+}
+
+// normalizeResource accepts an empty value, or an absolute HTTPS (or HTTP
+// loopback) URI without a fragment or user info -- the RFC 8707 resource
+// indicator shape. Pairing with IssuanceProvenance (never set alongside
+// workload exchange) is enforced by normalizeCreate's caller above.
+func normalizeResource(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	if len(value) > maxResourceLength || !utf8.ValidString(value) || strings.IndexFunc(value, unicode.IsControl) >= 0 {
+		return "", invalid("resource")
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || !parsed.IsAbs() || parsed.Host == "" || parsed.Fragment != "" || parsed.User != nil || parsed.Opaque != "" {
+		return "", invalid("resource")
+	}
+	switch parsed.Scheme {
+	case "https":
+		return value, nil
+	case "http":
+		host := parsed.Hostname()
+		if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+			return value, nil
+		}
+		return "", invalid("resource")
+	default:
+		return "", invalid("resource")
+	}
 }
 
 func normalizeRotation(input RotationInput) (RotationInput, error) {

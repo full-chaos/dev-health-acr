@@ -118,7 +118,7 @@ func (s *credentialStore) rotateCredential(ctx context.Context, input storage.Cr
 	if _, exists := s.byHash[replacementInput.TokenHash]; exists {
 		return contractsv1.ClientCredential{}, storage.ErrConflict
 	}
-	replacement := credentialFromRotation(replacementInput, old.Metadata.OrgID, now)
+	replacement := credentialFromRotation(replacementInput, old.Metadata.OrgID, now, old.Metadata.Resource)
 	previousValidUntil := overlapExpiry(now, replacementInput.Overlap)
 	if err := s.recordAudit(ctx, credentialRotatedEvent(old.Metadata, replacement, input.ActorID, replacementInput.Overlap, now)); err != nil {
 		return contractsv1.ClientCredential{}, err

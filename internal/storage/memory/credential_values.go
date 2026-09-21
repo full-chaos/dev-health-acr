@@ -44,6 +44,9 @@ func credentialCreatedEvent(record storage.CredentialRecord) storage.AuditEvent 
 	if credential.WorkloadBindingID != nil {
 		metadata["workload_binding_id"] = *credential.WorkloadBindingID
 	}
+	if credential.Resource != "" {
+		metadata["resource"] = credential.Resource
+	}
 	return storage.AuditEvent{OrgID: credential.OrgID, ActorType: "user", ActorID: record.CreatedBy, Action: storage.AuditActionCredentialCreated, ResourceType: "acr_credential", ResourceID: credential.CredentialID, Status: "success", CreatedAt: credential.CreatedAt, Metadata: metadata}
 }
 
@@ -60,6 +63,7 @@ func credentialFromCreate(input storage.CredentialCreateInput, createdAt time.Ti
 		SchemaVersion: contractsv1.ClientCredentialSchema, CredentialID: input.CredentialID, OrgID: input.OrgID, Name: input.Name, TokenPrefix: input.TokenPrefix,
 		RepositoryScopes: append([]string(nil), input.RepositoryScopes...), Scopes: append([]string(nil), input.Scopes...), CreatedAt: createdAt, ExpiresAt: cloneTime(input.ExpiresAt),
 		WorkloadBindingID: nonEmptyPtr(input.WorkloadBindingID),
+		Resource:          input.Resource,
 	}
 }
 
@@ -70,8 +74,12 @@ func nonEmptyPtr(value string) *string {
 	return &value
 }
 
-func credentialFromRotation(input storage.CredentialRotationReplacement, orgID string, createdAt time.Time) contractsv1.ClientCredential {
-	return credentialFromCreate(storage.CredentialCreateInput{CredentialID: input.CredentialID, OrgID: orgID, Name: input.Name, TokenPrefix: input.TokenPrefix, RepositoryScopes: input.RepositoryScopes, Scopes: input.Scopes, ExpiresAt: input.ExpiresAt}, createdAt)
+// credentialFromRotation builds the rotation successor's metadata. resource
+// is carried over from the SOURCE credential row, never from the rotation
+// request -- a rotated successor inherits the resource binding it replaces
+// exactly like it inherits repository/scope invariants.
+func credentialFromRotation(input storage.CredentialRotationReplacement, orgID string, createdAt time.Time, resource string) contractsv1.ClientCredential {
+	return credentialFromCreate(storage.CredentialCreateInput{CredentialID: input.CredentialID, OrgID: orgID, Name: input.Name, TokenPrefix: input.TokenPrefix, RepositoryScopes: input.RepositoryScopes, Scopes: input.Scopes, ExpiresAt: input.ExpiresAt, Resource: resource}, createdAt)
 }
 
 func overlapExpiry(now time.Time, overlap time.Duration) *time.Time {

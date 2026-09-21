@@ -1,5 +1,85 @@
 [
   {
+    "id": "api.oauth_step",
+    "msg": "acr-api oauth step",
+    "level": "info",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "exactly one line per request to /register, /authorize or /oauth/token; metadata routes emit none",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "step",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "register",
+          "authorize",
+          "consent",
+          "token"
+        ]
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "ok",
+          "pending",
+          "access_denied",
+          "expired",
+          "already_completed",
+          "invalid_request",
+          "invalid_client",
+          "invalid_client_metadata",
+          "invalid_redirect_uri",
+          "unsupported_response_type",
+          "unsupported_grant_type",
+          "pkce_required",
+          "invalid_target",
+          "invalid_scope",
+          "invalid_grant",
+          "pkce_mismatch",
+          "redirect_mismatch",
+          "client_mismatch",
+          "resource_mismatch",
+          "rate_limited",
+          "unavailable"
+        ]
+      },
+      {
+        "key": "client_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "dynamic"
+        ]
+      },
+      {
+        "key": "scopes",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "context:read",
+          "evidence:read"
+        ],
+        "applicability": "the requested scopes on an authorize ok line, the granted scopes on a token ok line, empty on every other line"
+      },
+      {
+        "key": "status",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.anchor_binding_transition",
     "msg": "context fabric anchor binding transition",
     "level": "info",

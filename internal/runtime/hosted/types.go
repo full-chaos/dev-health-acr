@@ -196,9 +196,16 @@ func (r *Runtime) closeIndependentLocked() error {
 type postgresComponents struct {
 	credentials *storage.CredentialLifecycle
 	devices     storage.DeviceAuthorizationStore
-	audit       storage.AuditStore
-	packets     storage.PacketStore
-	episodes    storage.EpisodeStore
+	// oauth backs the OAuth 2.1 authorization-code login for the hosted
+	// MCP endpoint (internal/storage/oauth.go's package doc comment) --
+	// dynamic client registration and pending/completed /authorize
+	// requests, keyed off the SAME device_authorizations row devices
+	// above owns. Wired here so the API layer can compose it into the
+	// runtime bundle; this package does not itself expose an HTTP route.
+	oauth    storage.OAuthStore
+	audit    storage.AuditStore
+	packets  storage.PacketStore
+	episodes storage.EpisodeStore
 	// workloadBindings is CHAOS-4013's read-only lookup store; see
 	// storage.WorkloadBindingStore's doc comment for why it has no write
 	// path here.

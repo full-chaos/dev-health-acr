@@ -44,6 +44,10 @@ func openPostgres(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 	if err != nil {
 		return fail(fmt.Errorf("create device authorization store: %w", err))
 	}
+	oauth, err := storagepostgres.NewOAuthStore(database)
+	if err != nil {
+		return fail(fmt.Errorf("create oauth store: %w", err))
+	}
 	packets, err := storagepostgres.NewPacketStore(database, nil)
 	if err != nil {
 		return fail(fmt.Errorf("create packet store: %w", err))
@@ -83,7 +87,7 @@ func openPostgres(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 		readinessTimeout = defaultPostgresReadinessTimeout
 	}
 	return postgresComponents{
-		credentials: credentials, devices: devices, audit: audit, packets: packets, episodes: episodes,
+		credentials: credentials, devices: devices, oauth: oauth, audit: audit, packets: packets, episodes: episodes,
 		workloadBindings: workloadBindings, db: database,
 		check: func(ctx context.Context) error {
 			checkContext, cancel := context.WithTimeout(ctx, readinessTimeout)

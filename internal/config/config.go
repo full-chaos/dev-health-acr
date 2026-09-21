@@ -225,6 +225,13 @@ type Config struct {
 	WebAssertionAudience                 string
 	WebAssertionJWKSFile                 string
 	DeviceVerificationURL                string
+	// OAuthIssuer (ACR_OAUTH_ISSUER) is the acr-api public origin. Set
+	// together with OAuthResources it turns on the OAuth authorization-code
+	// login hosted MCP clients use.
+	OAuthIssuer string
+	// OAuthResources (ACR_OAUTH_RESOURCES, comma separated) are the hosted
+	// MCP endpoint URLs an OAuth credential may be bound to.
+	OAuthResources []string
 }
 
 type lookupEnv func(string) (string, bool)
@@ -291,6 +298,8 @@ func load(lookup lookupEnv) (Config, error) {
 		WebAssertionAudience:           stringValue(lookup, "ACR_WEB_ASSERTION_AUDIENCE", ""),
 		WebAssertionJWKSFile:           stringValue(lookup, "ACR_WEB_ASSERTION_JWKS_FILE", ""),
 		DeviceVerificationURL:          stringValue(lookup, "ACR_DEVICE_VERIFICATION_URL", ""),
+		OAuthIssuer:                    stringValue(lookup, "ACR_OAUTH_ISSUER", ""),
+		OAuthResources:                 oauthResources(stringValue(lookup, "ACR_OAUTH_RESOURCES", "")),
 	}
 	// r1 P2 finding 1: the explicit dev opt-out (ACR_LOCAL_COMPOSITION_READY)
 	// must be the ONLY way to turn backing stores off -- a bare
@@ -470,6 +479,9 @@ func (c Config) Validate() error {
 		}
 	}
 	if err := validateWebAssertionConfig(c); err != nil {
+		return err
+	}
+	if err := validateOAuthConfig(c); err != nil {
 		return err
 	}
 	return nil

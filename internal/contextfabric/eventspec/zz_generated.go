@@ -19,6 +19,7 @@ func FieldKeys(e Event) []string {
 // ByID is the generated lookup from Event.ID to its declaration -- generated
 // rather than hand-maintained so it can never drift from All.
 var ByID = map[string]Event{
+	"api.oauth_step": OAuthStep,
 	"contextfabric.anchor_binding_transition":      AnchorBindingTransition,
 	"contextfabric.answer_display":                 AnswerDisplay,
 	"contextfabric.cohort_kind_fulltext":           CohortKindFulltext,
@@ -80,6 +81,66 @@ var ByID = map[string]Event{
 	"mcp.http_readiness":                           MCPHTTPReadiness,
 	"mcp.http_request":                             MCPHTTPRequest,
 	"mcp.http_serving":                             MCPHTTPServing,
+}
+
+// OAuthStepFields is api.oauth_step's generated typed construction interface
+// (CHAOS-5516): one Go field per Field OAuthStep.Fields declares in spec.go.
+type OAuthStepFields struct {
+	RequestID  string
+	Step       string
+	Outcome    string
+	ClientKind string
+	Scopes     []string
+	Status     int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every OAuthStepFields uniformly, set ONLY by NewOAuthStepFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewOAuthStepFields is the generated constructor for OAuthStepFields -- every
+// field OAuthStep.Fields declares is a required parameter.
+func NewOAuthStepFields(requestID string, step string, outcome string, clientKind string, scopes []string, status int) OAuthStepFields {
+	valid := true
+	if scopes == nil {
+		valid = false
+	}
+	return OAuthStepFields{
+		RequestID:   requestID,
+		Step:        step,
+		Outcome:     outcome,
+		ClientKind:  clientKind,
+		Scopes:      scopes,
+		Status:      status,
+		constructed: valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewOAuthStepFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f OAuthStepFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns OAuthStep's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f OAuthStepFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"step", contextfabric.SanitizeLogAttr(f.Step),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"client_kind", contextfabric.SanitizeLogAttr(f.ClientKind),
+		"scopes", contextfabric.SanitizeLogStrings(f.Scopes),
+		"status", f.Status,
+	}
 }
 
 // AnchorBindingTransitionFields is contextfabric.anchor_binding_transition's generated typed construction interface

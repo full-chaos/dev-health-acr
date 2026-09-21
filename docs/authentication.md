@@ -125,6 +125,42 @@ default. To replace an exact credential with an organization-wide credential,
 run `acr-mcp logout` (which revokes remotely before removing local material),
 then run `acr-mcp login` and approve the new request in the web UI.
 
+## OAuth login for hosted MCP clients
+
+acr-api is an OAuth 2.1 authorization server for the hosted MCP endpoint when
+`ACR_OAUTH_ISSUER` (the acr-api public origin) and `ACR_OAUTH_RESOURCES` (the
+hosted MCP URLs, comma separated) are set. It needs the web approval surface
+(`ACR_WEB_ASSERTION_*`) and the hosted runtime; startup fails without them.
+Clients register with RFC 7591 dynamic registration; client ID metadata
+documents are not accepted.
+
+Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
+`POST /authorize/consent`, `POST /token`, `POST /register`.
+
+- Only the authorization-code grant with PKCE `S256`. No implicit grant, no
+  refresh token, no client secrets.
+- Consent is the device flow's approval. `/authorize` starts a device
+  authorization whose raw device code is discarded, so the device grant can
+  never redeem it. The user approves the displayed user code on the web
+  approval page; the org and repository scopes come from that approval, as for
+  `acr-mcp login`.
+- The authorization code is 256-bit, stored as SHA-256, valid 2 minutes and
+  single use. The token endpoint consumes it before any other check, so a
+  refused exchange (wrong verifier, redirect URI, client or resource) spends it.
+- The issued credential is an ordinary `fcacr_` credential (30 days, live
+  revocation). It carries a resource binding (`client_credentials.resource`,
+  migration 0040), never on the wire. The authenticator accepts a bound
+  credential only when the request carries `X-ACR-Resource` with exactly that
+  value; the hosted MCP endpoint sets that header from its own configuration.
+  A credential without a binding (operator, device, workload) is unaffected.
+- Each OAuth request writes one `acr-api oauth step` line (step, outcome,
+  client kind, status). Codes, handles, verifiers, client IDs, redirect URIs,
+  state and tokens are never logged.
+
+The runtime database role needs `SELECT, INSERT, UPDATE` on
+`acr.oauth_clients` and `acr.oauth_authorization_requests`
+(`deploy/compose/acr-db-init.sh runtime-acl`).
+
 ## Rate limiting
 
 The auth package exposes an attempt/failure limiter and includes a deterministic in-memory implementation for tests and local operation. Production shared rate-limit storage is owned by the platform observability/rate-limit work and must preserve the same pre-lookup attempt ceiling.

@@ -89,6 +89,13 @@ func (a *App) Handler() http.Handler {
 	mux.Handle("POST /api/v1/oauth/device_approval", a.deviceRuntimeHandler(a.deviceApprovalHandler(http.HandlerFunc(a.handleDeviceApproval))))
 	mux.Handle("POST /api/v1/auth/credentials/self/rotate", a.selfLifecycleHandler(http.HandlerFunc(a.handleRotateSelfCredential)))
 	mux.Handle("POST /api/v1/auth/credentials/self/revoke", a.selfLifecycleHandler(http.HandlerFunc(a.handleRevokeSelfCredential)))
+	if a.oauth != nil {
+		mux.HandleFunc("GET "+OAuthAuthorizationServerMetadataPath, a.handleOAuthMetadata)
+		mux.HandleFunc("GET "+OAuthAuthorizePath, a.handleOAuthAuthorize)
+		mux.HandleFunc("POST "+OAuthConsentPath, a.handleOAuthConsent)
+		mux.HandleFunc("POST "+OAuthTokenPath, a.handleOAuthToken)
+		mux.HandleFunc("POST "+OAuthRegisterPath, a.handleOAuthRegister)
+	}
 	return a.InstrumentedHandler(mux)
 }
 

@@ -251,7 +251,7 @@ spec:
               mountPath: /var/run/acr/entitlement-ca
               readOnly: true
             {{- end }}
-            {{- if and (or (eq .Values.config.environment "development") (eq .Values.config.environment "test")) .Values.config.webAssertion.existingSecret }}
+            {{- if and (or (eq .Values.config.environment "development") (eq .Values.config.environment "test") .Values.config.oauth.enabled) .Values.config.webAssertion.existingSecret }}
             - name: web-assertion-jwks
               mountPath: {{ .Values.config.webAssertion.mountPath | quote }}
               readOnly: true
@@ -303,7 +303,7 @@ spec:
               - key: {{ .Values.config.clickhouseCaBundle.key | quote }}
                 path: ca.crt
         {{- end }}
-        {{- if and (or (eq .Values.config.environment "development") (eq .Values.config.environment "test")) .Values.config.webAssertion.existingSecret }}
+        {{- if and (or (eq .Values.config.environment "development") (eq .Values.config.environment "test") .Values.config.oauth.enabled) .Values.config.webAssertion.existingSecret }}
         - name: web-assertion-jwks
           secret:
             secretName: {{ .Values.config.webAssertion.existingSecret | quote }}
