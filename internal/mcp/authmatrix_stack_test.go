@@ -24,6 +24,7 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/evalfixture"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
+	acrmcp "github.com/full-chaos/dev-health-acr/internal/mcp"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-acr/internal/storage/memory"
@@ -401,4 +402,85 @@ func (s *matrixStack) sidecarConfig() sidecar.Config {
 		AllowInsecureLoopback: true,
 		EnableWriteback:       true,
 	}
+}
+
+// staleStore is a credential store that still returns a row the lookup
+// contract says it must not: it serves a revoked or expired credential's row
+// on a hash lookup, as a lagging replica or a store defect could. The
+// production stores filter such rows in the lookup itself, so the
+// authenticator's own revocation and expiry checks are a second layer that no
+// row of a correct store can reach; this store is the only way to observe it.
+type staleStore struct {
+	storage.CredentialStore
+	orgID  string
+	mu     sync.Mutex
+	byHash map[string]string // token hash -> credential id
+}
+
+func (s *staleStore) FindByTokenHash(ctx context.Context, tokenHash string) (contractsv1.ClientCredential, error) {
+	credential, err := s.CredentialStore.FindByTokenHash(ctx, tokenHash)
+	if !errors.Is(err, storage.ErrNotFound) {
+		return credential, err
+	}
+	s.mu.Lock()
+	id, known := s.byHash[tokenHash]
+	s.mu.Unlock()
+	if !known {
+		return credential, err
+	}
+	return s.CredentialStore.GetByID(ctx, s.orgID, id)
+}
+
+func (s *staleStore) remember(token string, c issued) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.byHash == nil {
+		s.byHash = map[string]string{}
+	}
+	s.byHash[auth.HashToken(token)] = c.credentialID
+}
+
+// newStaleStoreAPI is a hosted API whose real Authenticator sits over a
+// staleStore, exposing only the capabilities route the endpoint decides a
+// caller with.
+func newStaleStoreAPI(t *testing.T) (*httptest.Server, string, *staleStore, *auth.Service, *storage.CredentialLifecycle) {
+	t.Helper()
+	issuedAt := time.Now().Add(-2 * time.Hour)
+	credentials, err := memory.NewCredentialStoreWithOptions(memory.CredentialStoreOptions{Audit: memory.NewAuditStore(), Now: func() time.Time { return issuedAt }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := auth.NewService(credentials, auth.ServiceOptions{Now: func() time.Time { return issuedAt }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := &staleStore{CredentialStore: credentials, orgID: orgOne}
+	authenticator, err := auth.NewAuthenticator(stale, memory.NewAuditStore(), auth.AuthenticatorOptions{Logger: slog.New(slog.NewJSONHandler(&syncBuffer{}, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = authenticator.Close() })
+	mux := http.NewServeMux()
+	mux.Handle("GET /api/v1/agent-context/capabilities", authenticator.Middleware(authenticator.RequireScope(auth.ScopeContextRead, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, _ := auth.PrincipalFromContext(r.Context())
+		writeHostedJSON(w, http.StatusOK, contractsv1.Capabilities{
+			SchemaVersion: contractsv1.CapabilitiesSchema, Service: "dev-health-acr", ServiceVersion: "1.2.3", MinimumSidecarVersion: "0.1.0",
+			SupportedSchemaVersions: acrmcp.OurSchemaVersionsForTest,
+			EnabledTools:            []string{acrmcp.ToolContextForTaskForTest, acrmcp.ToolSourceEvidenceForTest},
+			Entitlements:            contractsv1.CapabilityEntitlements{AgentContextRuntime: true},
+			Permissions: contractsv1.CapabilityPermissions{
+				ContextRead:  auth.HasScope(principal.Permissions, auth.ScopeContextRead),
+				EvidenceRead: auth.HasScope(principal.Permissions, auth.ScopeEvidenceRead),
+			},
+			Limits:      contractsv1.CapabilityLimits{MaxItems: 30, MaxOutputTokens: 4000, MaxSerializedBytes: 262144, RequestsPerMinute: 60},
+			GeneratedAt: time.Now().UTC(),
+		})
+	}))))
+	server := httptest.NewTLSServer(mux)
+	t.Cleanup(server.Close)
+	caPath := filepath.Join(t.TempDir(), "stale-ca.pem")
+	if err := os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return server, caPath, stale, service, credentials
 }

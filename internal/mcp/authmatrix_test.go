@@ -2,6 +2,7 @@ package mcp_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"regexp"
 	"slices"
@@ -22,6 +24,8 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec/certify"
 	acrmcp "github.com/full-chaos/dev-health-acr/internal/mcp"
+	"github.com/full-chaos/dev-health-acr/internal/sidecar"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // The auth and isolation matrix for hosted MCP callers.
@@ -1087,4 +1091,68 @@ func TestAuthMatrixLiveRunnerAgainstAnInProcessEndpoint(t *testing.T) {
 			t.Fatalf("%v %v %v", target, missing, err)
 		}
 	})
+}
+
+// The authenticator refuses a revoked or expired credential itself, not only
+// through the store's lookup: a store that still returns the row (a lagging
+// replica, a defect) must not turn the credential back on. Only the caller
+// that is valid is admitted.
+func TestAuthMatrixRefusesARevokedOrExpiredRowTheStoreStillReturns(t *testing.T) {
+	server, caPath, stale, service, credentials := newStaleStoreAPI(t)
+	issue := func(expires *time.Time) issued {
+		credential, err := service.Create(context.Background(), auth.CreateCredentialRequest{
+			OrgID: orgOne, Name: "stale-store", RepositoryScopes: []string{repoWidget}, Scopes: []string{auth.ScopeContextRead, auth.ScopeEvidenceRead}, CreatedBy: "test_actor", ExpiresAt: expires,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := issued{token: credential.Token, credentialID: credential.Credential.CredentialID}
+		stale.remember(c.token, c)
+		return c
+	}
+	expiredAt := time.Now().Add(-time.Hour)
+	valid, revoked, expired := issue(nil), issue(nil), issue(&expiredAt)
+	if _, err := credentials.RevokeCredential(context.Background(), storage.CredentialRevocationInput{OrgID: orgOne, CredentialID: revoked.credentialID, ActorID: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+
+	base, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := acrmcp.NewHTTPProcessConfig(sidecar.Config{
+		APIBaseURL: base, Timeout: 5 * time.Second, MaxResponseBytes: 1 << 20, MaxRequestBodyBytes: 256 << 10,
+		ClientName: "test-sidecar", ClientVersion: "1.0.0", SidecarVersion: "1.0.0", CACertPath: caPath, AllowInsecureLoopback: true,
+	}, testIdentity, &syncBuffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := acrmcp.NewHTTPHandler(cfg, acrmcp.HTTPHandlerOptions{BasePath: "/mcp", Identity: testIdentity, MaxRequestBodyBytes: 1 << 20, ResolveTimeout: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := &endpoint{handler: handler, server: httptest.NewServer(handler)}
+	t.Cleanup(e.server.Close)
+
+	for _, row := range []struct {
+		name   string
+		cred   issued
+		status int
+	}{{"valid", valid, 200}, {"revoked row returned by the store", revoked, 401}, {"expired row returned by the store", expired, 401}} {
+		t.Run(row.name, func(t *testing.T) {
+			resp := postMCP(t, e, http.MethodPost, rawToolsList(), bearerHeader(row.cred.token))
+			body, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode != row.status {
+				t.Fatalf("status %d, want %d: %.200s", resp.StatusCode, row.status, body)
+			}
+		})
+	}
+	// The control that makes the two refusals mean something: the store DID
+	// return both rows.
+	for name, c := range map[string]issued{"revoked": revoked, "expired": expired} {
+		got, err := stale.FindByTokenHash(context.Background(), auth.HashToken(c.token))
+		if err != nil || got.CredentialID != c.credentialID {
+			t.Errorf("the %s row was not returned by the stale store: %v", name, err)
+		}
+	}
 }
