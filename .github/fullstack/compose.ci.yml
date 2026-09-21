@@ -22,6 +22,17 @@
 # rather than hardcoding them the way dev-health-ops's own standalone
 # compose.yml does for local dev.
 #
+# query-api is included because dev-health-ops serves Go-owned GraphQL
+# operations (catalog and the rest of the registry) only through it: the
+# Python resolvers were deleted, so without a query-api service and a
+# go_api_routing_state row the ops `api` raises GoServedOperationUnavailableError.
+# It is built from the SAME ./ops checkout as `api`, so both planes hash the
+# same schema SDL (a prebuilt image can drift from the checkout and
+# `dev-hops go-api routing enable` refuses a digest mismatch). The envelope key
+# pair and the routing rows are per-run material created by
+# scripts/e2e/compose.sh (write_go_api_envelope_material,
+# seed_go_api_routing).
+#
 # Deliberately excluded (not needed to boot ACR + the two MCP tools + the
 # smoke/full task set): billing-edge, worker-*, beat, bugsink, mailpit,
 # SigNoz/observability. Scoped out explicitly rather than faked; see the
@@ -158,6 +169,14 @@ services:
       CLICKHOUSE_URI: clickhouse://default:ch@clickhouse:8123/${CLICKHOUSE_DB:-default}
       REDIS_URL: redis://valkey:6379/1
       SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:-}
+      # Go API edge half (go_api_dispatcher): GO_API_QUERY_API_URL is its master
+      # switch. Key, issuer, audience and key id must agree with query-api below.
+      GO_API_QUERY_API_URL: http://query-api:8090
+      GO_API_ENVELOPE_PRIVATE_KEY: ${GO_API_ENVELOPE_PRIVATE_KEY:-}
+      GO_API_ENVELOPE_ISSUER: ${GO_API_ENVELOPE_ISSUER:-dev-health-ops-edge}
+      GO_API_ENVELOPE_AUDIENCE: ${GO_API_ENVELOPE_AUDIENCE:-query-api}
+      GO_API_ENVELOPE_KEY_ID: ${GO_API_ENVELOPE_KEY_ID:-go-api-envelope-2026-08}
+      GO_API_PLANE_HEADER_ENABLED: "true"
       AUTO_RUN_MIGRATIONS: "false"
       EMAIL_PROVIDER: console
       EMAIL_FROM_ADDRESS: noreply@example.com
@@ -180,6 +199,37 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+    networks: [dev-health]
+
+  # Go query-api: serves the Go-owned GraphQL operations the ops `api` dispatches
+  # to. Same shape as dev-health-ops deploy/go-api/compose-query-api.yml, built
+  # from the checked-out ./ops tree (multi-arch: the build runs natively on
+  # amd64 and arm64). Distroless runtime: no shell, so no container healthcheck;
+  # scripts/e2e/compose.sh seed_go_api_routing proves reachability through
+  # `dev-hops go-api routing enable`, whose first preflight is this service.
+  query-api:
+    build:
+      context: ./ops
+      dockerfile: docker/query-api.Dockerfile
+      target: runtime
+    restart: unless-stopped
+    environment:
+      QUERY_API_ADDR: ":8090"
+      # Native ClickHouse port (9000), not the HTTP 8123 the Python services use.
+      CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-default}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/${CLICKHOUSE_DB:-default}
+      GO_API_REGISTRY_POSTGRES_URI: postgresql://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+      GO_API_ENVELOPE_JWKS_PATH: /secrets/envelope-jwks.json
+      GO_API_ENVELOPE_ISSUER: ${GO_API_ENVELOPE_ISSUER:-dev-health-ops-edge}
+      GO_API_ENVELOPE_AUDIENCE: ${GO_API_ENVELOPE_AUDIENCE:-query-api}
+    volumes:
+      - ${GO_API_ENVELOPE_JWKS_FILE:?set by scripts/e2e/compose.sh}:/secrets/envelope-jwks.json:ro
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     networks: [dev-health]
 
   # Structural placeholder only. compose.sh's render_override() unconditionally sets
