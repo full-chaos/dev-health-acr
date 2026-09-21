@@ -8,7 +8,7 @@ import (
 )
 
 // The hosted MCP transport depends on the linked SDK speaking the 2026-07-28
-// revision while still negotiating every earlier revision the STDIO sidecar
+// revision while still negotiating every older revision the STDIO sidecar
 // serves today.
 func TestLinkedSDKSupportsProtocolRevisions(t *testing.T) {
 	supported := mcpsdk.SupportedProtocolVersions()
