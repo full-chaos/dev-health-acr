@@ -1,7 +1,28 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ACR MCP context_for_task Request v1",
-  "description": "Ergonomic goal-only-by-default input for the context_for_task MCP tool. Only goal is required; repository, scope, budget, and requested_categories are optional overrides. There is no caller-supplied schema_version wire field: tool identity is established by the MCP call itself, not a wire field, matching the source_evidence request contract. scope.as_of pins retrieval to a point in time; scope.include_changed_files is a tri-state opt-in (omitted: sidecar default; true: include bounded git-changed files when scope.files is not explicitly set; false: never auto-include them) that lets a caller distinguish 'not specified' from an explicit choice. The sidecar maps omitted fields to fixed safe defaults before calling the hosted HTTP contract. On a hosted server there is no workspace to detect: repository.slug is required, MCP roots, the working directory, Git and the local index are never consulted, and scope.include_changed_files=true without scope.files is refused; pass repository and, if wanted, scope.files.",
+  "description": "Input for the context_for_task tool. Only goal is required. Give a short, concrete description of the task you are about to do; add repository, scope, budget or requested_categories only when you need to override what the sidecar detects from the open workspace. Omitted optional fields take safe defaults. On a hosted server there is no workspace to detect: repository.slug is required, MCP roots, the working directory, Git and the local index are never consulted, and scope.include_changed_files=true without scope.files is refused; pass repository and, if wanted, scope.files.",
+  "examples": [
+    {
+      "goal": "Add retry handling to the webhook sender"
+    },
+    {
+      "goal": "Reduce flaky test failures in the billing service",
+      "repository": {
+        "slug": "acme/billing"
+      },
+      "scope": {
+        "time_window_days": 90,
+        "files": [
+          "src/billing/retry.go"
+        ]
+      },
+      "requested_categories": [
+        "state",
+        "cause"
+      ]
+    }
+  ],
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -10,12 +31,13 @@
   "properties": {
     "goal": {
       "type": "string",
+      "description": "What you are trying to do, in one or two plain sentences (for example a change you plan to make, or a problem you are diagnosing). Required. The packet is ranked against this text, so be specific about the area and the outcome.",
       "minLength": 1,
       "maxLength": 4000
     },
     "repository": {
       "type": "object",
-      "description": "The repository the task is about. On a hosted server it is required: the server cannot see your workspace, so omitting it returns a validation error that names repository.slug. On a local server it is optional and detected from the open workspace when omitted.",
+      "description": "The repository the task is about. On a hosted server it is required: the server cannot see your workspace, so omitting it returns a validation error that names repository.slug. On a local server it is optional and detected from the open workspace when omitted; set it to override that or when no workspace is open.",
       "additionalProperties": false,
       "required": [
         "slug"
@@ -23,6 +45,7 @@
       "properties": {
         "slug": {
           "type": "string",
+          "description": "Repository in owner/name form, for example acme/billing. Exactly one slash and no spaces.",
           "pattern": "^[^/\\s]+/[^/\\s]+$",
           "minLength": 1,
           "maxLength": 512
@@ -31,18 +54,22 @@
     },
     "scope": {
       "type": "object",
+      "description": "Optional narrowing of what evidence is considered. Every field is optional; leave the object out to use defaults.",
       "additionalProperties": false,
       "properties": {
         "branch": {
           "type": "string",
+          "description": "Branch name to focus on. Optional.",
           "maxLength": 512
         },
         "commit_sha": {
           "type": "string",
+          "description": "Commit to focus on, as a full or abbreviated hex SHA (7 to 64 characters). Optional.",
           "pattern": "^[0-9a-fA-F]{7,64}$"
         },
         "task_ref": {
           "type": "string",
+          "description": "Free-form reference to the task, such as an issue key or URL, kept with the request for traceability. Optional; it does not select evidence by itself.",
           "maxLength": 1024
         },
         "files": {
@@ -58,10 +85,12 @@
         },
         "as_of": {
           "type": "string",
+          "description": "Pin retrieval to a point in time (RFC 3339 date-time). Optional. Omit for current state.",
           "format": "date-time"
         },
         "time_window_days": {
           "type": "integer",
+          "description": "How many trailing days of history to consider, from 1 to 365. Optional; omitted uses the service default.",
           "minimum": 1,
           "maximum": 365
         },
@@ -73,20 +102,24 @@
     },
     "budget": {
       "type": "object",
+      "description": "Optional size limits for the packet. Each value is clamped to what the service allows for your credential, so you can only ask for less than the maximum, never more.",
       "additionalProperties": false,
       "properties": {
         "max_items": {
           "type": "integer",
+          "description": "Maximum number of ranked context items, 1 to 50.",
           "minimum": 1,
           "maximum": 50
         },
         "max_output_tokens": {
           "type": "integer",
+          "description": "Approximate token ceiling for the packet, 500 to 16000.",
           "minimum": 500,
           "maximum": 16000
         },
         "max_serialized_bytes": {
           "type": "integer",
+          "description": "Byte ceiling for the whole serialized response, 8192 to 1048576. Content that does not fit is dropped, never cut mid-document.",
           "minimum": 8192,
           "maximum": 1048576
         }
@@ -94,6 +127,7 @@
     },
     "requested_categories": {
       "type": "array",
+      "description": "Optional. Kinds of context to prioritize: state (where things stand today), pressure (what is under strain), cause (why), evidence (the supporting records), action (suggested next steps). Omit for all.",
       "maxItems": 5,
       "uniqueItems": true,
       "items": {
