@@ -8,7 +8,7 @@ One table of rows (`internal/mcp/authmatrix_test.go`, `matrixRows`) is executed 
 | --- | --- | --- | --- |
 | CI | `TestAuthMatrixInProcess` | `acr-mcp` HTTP handler in front of a real in-process acr-api (`api.NewApp`: real `Authenticator`, stored-result route and live-grant gate, evidence store, context-packet assembler) | the SDK handler never ran for a refused request, which stores were consulted, the acr-api calls it made, one request line and one stored-result decision line per row |
 | CI | `TestAuthMatrixConcurrentCallersNeverBleedIdentity` | same | 60 parallel callers each for A, B and H, interleaved: every answer belongs to its own bearer, every bearer maps to one `principal_ref`, no two bearers share one, acr-api decided each stored-result read on the caller's own organization |
-| CI | `TestAuthMatrixLiveRunnerAgainstAnInProcessEndpoint` | the same in-process endpoint, configured only through the environment variables below | wire only (proves the live runner) |
+| CI | `TestAuthMatrixLiveRunnerAgainstAnInProcessEndpoint`, `TestAuthMatrixLiveThroughTheRealTestBinary` | the same in-process endpoint, configured only through the environment variables below, the second one through a child of the real test binary (correct deployment passes, nothing configured skips loudly, `REQUIRE_LIVE` and a partial configuration fail, a deployment that leaks the owner's data to another organization fails) | wire only (proves the live runner) |
 | A deployment | `TestAuthMatrixLive` | the endpoint named by `ACR_MCP_MATRIX_URL` | wire only |
 
 ## Callers
@@ -38,7 +38,7 @@ Every caller is exercised on every tool it may reach, and D–G on every tool at
 
 ## Running the matrix against a deployment
 
-Nothing is committed: the endpoint and every bearer come from the environment. With `ACR_MCP_MATRIX_URL` unset the live test **skips loudly** ("LIVE MATRIX NOT EXECUTED") and never passes. Set `ACR_MCP_MATRIX_REQUIRE_LIVE=1` in a job that must execute it and an unset endpoint fails instead. A configuration that names an endpoint but misses a required setting fails and lists the missing names.
+Nothing is committed: the endpoint and every bearer come from the environment. The test binary captures the `ACR_MCP_MATRIX_*` variables before it removes every other `ACR_` variable from the process, so they reach the live test and nothing else. With `ACR_MCP_MATRIX_URL` unset the live test **skips loudly** ("LIVE MATRIX NOT EXECUTED") and never passes. Set `ACR_MCP_MATRIX_REQUIRE_LIVE=1` in a job that must execute it and an unset endpoint fails instead. A configuration that names an endpoint but misses a required setting fails and lists the missing names.
 
 Required:
 
@@ -54,6 +54,7 @@ Required:
 | `ACR_MCP_MATRIX_EVIDENCE_A` | an evidence reference id readable by A |
 | `ACR_MCP_MATRIX_REPO_A` | a repository slug in A's grant, and in neither C's grant nor B's organization |
 | `ACR_MCP_MATRIX_REPO_OUT` | a repository slug outside every grant |
+| `ACR_MCP_MATRIX_CONTEXT_MARKER` | text a `context_for_task` packet for A carries; asserted present for A and absent for B, so a deployment that leaks A's data to B cannot pass |
 
 Optional (a row that needs an absent setting is reported `NOT EXECUTED` in the test output):
 
@@ -62,7 +63,6 @@ Optional (a row that needs an absent setting is reported `NOT EXECUTED` in the t
 | `ACR_MCP_MATRIX_BEARER_H` | a caller with `episode:write`; enables the five-tool catalogue row |
 | `ACR_MCP_MATRIX_RESULT_B` | a stored result id owned by B; enables B's own-read and A's foreign-read rows |
 | `ACR_MCP_MATRIX_BRANCH`, `ACR_MCP_MATRIX_COMMIT` | scope of the `context_for_task` rows |
-| `ACR_MCP_MATRIX_CONTEXT_MARKER` | text a `context_for_task` packet for A carries; asserted present for A and absent for B |
 | `ACR_MCP_MATRIX_INVESTIGATE=1` | also run the `investigate_question` rows (they cost a model call) |
 | `ACR_MCP_MATRIX_FORBID` | comma-separated text that must never appear in a denial (a judgment, a label) |
 | `ACR_MCP_MATRIX_CA_FILE` | PEM bundle that signs the endpoint's certificate |

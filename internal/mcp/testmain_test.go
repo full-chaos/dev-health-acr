@@ -31,10 +31,18 @@ import (
 // wins precedence before the keyring is consulted at all. That is a property of
 // those tests, not a guarantee: one test that stops setting it would otherwise
 // put a real keychain lookup into the suite.
+//
+// The auth matrix's own configuration (ACR_MCP_MATRIX_*) is the one thing an
+// operator hands the test binary on purpose. It is captured before the removal
+// and exposed through MatrixEnvironmentForTest, so it never reaches anything
+// the tests resolve.
 func TestMain(m *testing.M) {
 	for _, entry := range os.Environ() {
-		name, _, found := strings.Cut(entry, "=")
+		name, value, found := strings.Cut(entry, "=")
 		if found && strings.HasPrefix(name, "ACR_") {
+			if strings.HasPrefix(name, matrixEnvironmentPrefix) {
+				matrixEnvironment[name] = value
+			}
 			_ = os.Unsetenv(name)
 		}
 	}

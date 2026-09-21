@@ -8,12 +8,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
 	"net/url"
 	"os"
+	"os/exec"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -414,6 +418,14 @@ func runMatrix(t *testing.T, target *matrixTarget) {
 			t.Fatalf("duplicate row id %q", row.id)
 		}
 		seen[row.id] = true
+	}
+	for _, row := range rows {
+		if row.kind == kindOK && len(row.contains) == 0 && row.tool != "investigate_question" {
+			t.Fatalf("row %s is an OK row that names nothing its answer carries: it cannot fail", row.id)
+		}
+		if row.kind == kindNoData && len(row.absent) == 0 {
+			t.Fatalf("row %s is a no-data row that names nothing it must not carry: it cannot fail", row.id)
+		}
 	}
 	for _, denial := range wireDenials {
 		if _, ok := target.bearers[denial.caller]; !ok {
@@ -973,11 +985,11 @@ func TestAuthMatrixLive(t *testing.T) {
 
 func runLiveMatrixFromEnv(t *testing.T) {
 	t.Helper()
-	target, missing, err := liveTargetFromEnv(os.Getenv)
+	target, missing, err := liveTargetFromEnv(acrmcp.MatrixEnvironmentForTest)
 	switch {
 	case err != nil:
 		t.Fatal(err)
-	case target == nil && os.Getenv("ACR_MCP_MATRIX_REQUIRE_LIVE") == "1":
+	case target == nil && acrmcp.MatrixEnvironmentForTest("ACR_MCP_MATRIX_REQUIRE_LIVE") == "1":
 		t.Fatal("ACR_MCP_MATRIX_REQUIRE_LIVE=1 but ACR_MCP_MATRIX_URL is not set: the live matrix did not run")
 	case target == nil:
 		t.Skip("LIVE MATRIX NOT EXECUTED: ACR_MCP_MATRIX_URL is not set. The in-process matrix (TestAuthMatrixInProcess) is not a substitute for a deployed endpoint; see docs/mcp-auth-matrix.md")
@@ -1015,7 +1027,7 @@ func liveTargetFromEnv(getenv func(string) string) (*matrixTarget, []string, err
 		branch: getenv("ACR_MCP_MATRIX_BRANCH"), commit: getenv("ACR_MCP_MATRIX_COMMIT"),
 		hasResultB: getenv("ACR_MCP_MATRIX_RESULT_B") != "", hasH: bearers["H"] != "",
 		canInvestigate: getenv("ACR_MCP_MATRIX_INVESTIGATE") == "1",
-		contextMarkers: nonEmpty(getenv("ACR_MCP_MATRIX_CONTEXT_MARKER")),
+		contextMarkers: nonEmpty(need("ACR_MCP_MATRIX_CONTEXT_MARKER")),
 	}
 	for _, s := range strings.Split(getenv("ACR_MCP_MATRIX_FORBID"), ",") {
 		if s = strings.TrimSpace(s); s != "" {
@@ -1037,14 +1049,11 @@ func liveTargetFromEnv(getenv func(string) string) (*matrixTarget, []string, err
 	return &matrixTarget{name: "live", url: endpointURL, client: client, bearers: bearers, fixture: f}, missing, nil
 }
 
-// The live runner, driven only by the environment, against the in-process
-// endpoint: it proves the runner a deployed target would use reads its
-// configuration, refuses a partial one, and passes on a correct deployment
-// using nothing but the wire.
-func TestAuthMatrixLiveRunnerAgainstAnInProcessEndpoint(t *testing.T) {
-	target, _, _, callers := inProcessTarget(t)
+// liveEnvironment is the configuration a deployed target is given, for the
+// in-process endpoint.
+func liveEnvironment(target *matrixTarget, callers matrixCallers) map[string]string {
 	f := target.fixture
-	env := map[string]string{
+	return map[string]string{
 		"ACR_MCP_MATRIX_URL":            target.url,
 		"ACR_MCP_MATRIX_BEARER_A":       callers.a.token,
 		"ACR_MCP_MATRIX_BEARER_B":       callers.b.token,
@@ -1062,33 +1071,167 @@ func TestAuthMatrixLiveRunnerAgainstAnInProcessEndpoint(t *testing.T) {
 		"ACR_MCP_MATRIX_INVESTIGATE":    "1",
 		"ACR_MCP_MATRIX_CONTEXT_MARKER": f.contextMarkers[0],
 		"ACR_MCP_MATRIX_FORBID":         strings.Join([]string{judgmentOfA, labelOfA, judgmentOfB, labelOfB}, ","),
-		"ACR_MCP_MATRIX_REQUIRE_LIVE":   "1",
 	}
-	for name, value := range env {
-		t.Setenv(name, value)
-	}
-	t.Run("configured", func(t *testing.T) { runLiveMatrixFromEnv(t) })
+}
 
-	// A partial configuration is reported, never run as a smaller matrix.
-	t.Run("partial configuration is reported", func(t *testing.T) {
-		partial := func(name string) string {
-			if name == "ACR_MCP_MATRIX_BEARER_E" || name == "ACR_MCP_MATRIX_RESULT_A" {
-				return ""
+func mapGetenv(env map[string]string) func(string) string {
+	return func(name string) string { return env[name] }
+}
+
+// The environment-configured, wire-only runner a deployed target uses, given
+// the in-process endpoint's configuration: it reads its configuration, reports
+// a partial one instead of running a smaller matrix, and passes on a correct
+// deployment using nothing but the wire.
+func TestAuthMatrixLiveRunnerAgainstAnInProcessEndpoint(t *testing.T) {
+	target, _, _, callers := inProcessTarget(t)
+	env := liveEnvironment(target, callers)
+	t.Run("configured", func(t *testing.T) {
+		live, missing, err := liveTargetFromEnv(mapGetenv(env))
+		if err != nil || live == nil || len(missing) != 0 {
+			t.Fatalf("target %v missing %v err %v", live, missing, err)
+		}
+		runMatrix(t, live)
+	})
+
+	// Every required setting, left out alone, is reported by name.
+	t.Run("each required setting is reported when it is missing", func(t *testing.T) {
+		required := []string{
+			"ACR_MCP_MATRIX_BEARER_A", "ACR_MCP_MATRIX_BEARER_B", "ACR_MCP_MATRIX_BEARER_C", "ACR_MCP_MATRIX_BEARER_D", "ACR_MCP_MATRIX_BEARER_E",
+			"ACR_MCP_MATRIX_RESULT_A", "ACR_MCP_MATRIX_EVIDENCE_A", "ACR_MCP_MATRIX_REPO_A", "ACR_MCP_MATRIX_REPO_OUT", "ACR_MCP_MATRIX_CONTEXT_MARKER",
+		}
+		for _, name := range required {
+			partial := maps.Clone(env)
+			delete(partial, name)
+			target, missing, err := liveTargetFromEnv(mapGetenv(partial))
+			if err != nil || target == nil || !slices.Equal(missing, []string{name}) {
+				t.Errorf("without %s: target %v missing %v err %v", name, target, missing, err)
 			}
-			return os.Getenv(name)
 		}
-		target, missing, err := liveTargetFromEnv(partial)
-		if err != nil || target == nil {
-			t.Fatalf("target %v err %v", target, err)
-		}
-		if want := []string{"ACR_MCP_MATRIX_BEARER_E", "ACR_MCP_MATRIX_RESULT_A"}; !slices.Equal(missing, want) {
-			t.Fatalf("missing %v, want %v", missing, want)
+		if len(required) != 10 {
+			t.Fatalf("%d required settings, want 10", len(required))
 		}
 	})
 	t.Run("no endpoint configured", func(t *testing.T) {
 		target, missing, err := liveTargetFromEnv(func(string) string { return "" })
 		if target != nil || missing != nil || err != nil {
 			t.Fatalf("%v %v %v", target, missing, err)
+		}
+	})
+}
+
+// A row that cannot fail is a defect of the table, not a pass: an OK row must
+// name what its answer carries, and a no-data row what it must not carry.
+// investigate_question is the one exception, because what a deployed model
+// answers is not knowable in advance.
+func TestAuthMatrixEveryRowCanFail(t *testing.T) {
+	target, _, _, callers := inProcessTarget(t)
+	live, _, err := liveTargetFromEnv(mapGetenv(liveEnvironment(target, callers)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, fixture := range map[string]matrixFixture{"in-process": target.fixture, "live": live.fixture} {
+		for _, row := range matrixRows(fixture) {
+			switch {
+			case row.kind == kindOK && len(row.contains) == 0 && row.tool != "investigate_question":
+				t.Errorf("%s: row %s is an OK row that names nothing its answer carries", name, row.id)
+			case row.kind == kindNoData && len(row.absent) == 0:
+				t.Errorf("%s: row %s is a no-data row that names nothing it must not carry", name, row.id)
+			}
+		}
+	}
+}
+
+// runLiveChild runs TestAuthMatrixLive in a child of THIS test binary, so the
+// environment travels the way an operator's does: through the process
+// environment, TestMain and the captured settings.
+func runLiveChild(t *testing.T, env map[string]string) (string, error) {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(exe, "-test.run", "^TestAuthMatrixLive$", "-test.v", "-test.count=1")
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "ACR_") {
+			cmd.Env = append(cmd.Env, entry)
+		}
+	}
+	for name, value := range env {
+		cmd.Env = append(cmd.Env, name+"="+value)
+	}
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// The live test, through the real test binary and the real environment: it
+// runs on a correct deployment, skips loudly when nothing is configured, fails
+// when the operator required it or configured it in part, and fails on a
+// deployment that leaks the owner's data to another organization.
+func TestAuthMatrixLiveThroughTheRealTestBinary(t *testing.T) {
+	target, _, _, callers := inProcessTarget(t)
+	env := liveEnvironment(target, callers)
+
+	t.Run("a correct deployment passes", func(t *testing.T) {
+		out, err := runLiveChild(t, env)
+		if err != nil || !strings.Contains(out, "--- PASS: TestAuthMatrixLive") || strings.Contains(out, "NOT EXECUTED") {
+			t.Fatalf("err %v\n%s", err, out)
+		}
+		if n := strings.Count(out, "--- PASS: TestAuthMatrixLive/"); n != expectedMatrixRows {
+			t.Fatalf("%d rows passed through the real environment, want %d", n, expectedMatrixRows)
+		}
+	})
+	t.Run("nothing configured skips loudly", func(t *testing.T) {
+		out, err := runLiveChild(t, map[string]string{})
+		if err != nil || !strings.Contains(out, "LIVE MATRIX NOT EXECUTED") || !strings.Contains(out, "--- SKIP: TestAuthMatrixLive") {
+			t.Fatalf("err %v\n%s", err, out)
+		}
+	})
+	t.Run("nothing configured fails when the run is required", func(t *testing.T) {
+		out, err := runLiveChild(t, map[string]string{"ACR_MCP_MATRIX_REQUIRE_LIVE": "1"})
+		if err == nil || !strings.Contains(out, "the live matrix did not run") {
+			t.Fatalf("err %v\n%s", err, out)
+		}
+	})
+	t.Run("a partial configuration fails naming what is missing", func(t *testing.T) {
+		partial := maps.Clone(env)
+		delete(partial, "ACR_MCP_MATRIX_BEARER_E")
+		delete(partial, "ACR_MCP_MATRIX_CONTEXT_MARKER")
+		out, err := runLiveChild(t, partial)
+		if err == nil || !strings.Contains(out, "ACR_MCP_MATRIX_BEARER_E, ACR_MCP_MATRIX_CONTEXT_MARKER") {
+			t.Fatalf("err %v\n%s", err, out)
+		}
+	})
+	t.Run("a deployment that leaks the owner's data to another organization fails", func(t *testing.T) {
+		upstream, err := url.Parse(target.url)
+		if err != nil {
+			t.Fatal(err)
+		}
+		upstream.Path = ""
+		proxy := httputil.NewSingleHostReverseProxy(upstream)
+		proxy.ModifyResponse = func(resp *http.Response) error {
+			if resp.Request.Header.Get("Mcp-Name") != "context_for_task" || resp.Request.Header.Get("Authorization") != "Bearer "+callers.b.token {
+				return nil
+			}
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return err
+			}
+			body = bytes.Replace(body, []byte("Status: degraded"), []byte("Status: degraded "+target.fixture.contextMarkers[0]), 1)
+			resp.Body = io.NopCloser(bytes.NewReader(body))
+			resp.ContentLength = int64(len(body))
+			resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
+			return nil
+		}
+		leaky := httptest.NewServer(proxy)
+		t.Cleanup(leaky.Close)
+		leaking := maps.Clone(env)
+		leaking["ACR_MCP_MATRIX_URL"] = leaky.URL + "/mcp"
+		out, err := runLiveChild(t, leaking)
+		if err == nil || !strings.Contains(out, "--- FAIL: TestAuthMatrixLive/context.B.foreign") || !strings.Contains(out, "carries the owner's data") {
+			t.Fatalf("a leaking deployment was not refused: err %v\n%s", err, out)
+		}
+		if strings.Contains(out, "--- FAIL: TestAuthMatrixLive/context.A.own") {
+			t.Fatalf("the leak proxy broke a row it should not touch:\n%s", out)
 		}
 	})
 }
