@@ -1448,6 +1448,137 @@
     ]
   },
   {
+    "id": "contextfabric.evidence_expansion",
+    "msg": "context fabric evidence expansion",
+    "level": "info",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "one line per evidence request whose ref is in the Context Fabric namespace; counts and kinds only, never ids or labels",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "served",
+          "malformed_ref",
+          "lookup_unavailable",
+          "lookup_failed",
+          "not_cited",
+          "result_unreadable",
+          "authorization_denied",
+          "authorization_unavailable",
+          "expansion_invalid"
+        ]
+      },
+      {
+        "key": "entity_type",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "ai-artifact",
+          "ai-run",
+          "ci",
+          "commit",
+          "commit-file",
+          "complexity",
+          "deployment",
+          "deployment-incident",
+          "episode",
+          "graph",
+          "hotspot",
+          "incident",
+          "organization",
+          "project",
+          "project-team",
+          "pull-request",
+          "repository",
+          "review",
+          "review-outcome",
+          "team",
+          "work-item",
+          "work-item-dependency",
+          "work-item-hierarchy",
+          "work-item-team",
+          "unregistered"
+        ]
+      },
+      {
+        "key": "candidate_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "citing_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "unreadable_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "admitted_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "denied_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "unavailable_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "authorization_reason",
+        "type": "string",
+        "presence": "conditional",
+        "closed_vocabulary": [
+          "no_subjects",
+          "unrestricted_principal",
+          "subjects_admitted",
+          "organization_mismatch",
+          "subject_denied",
+          "subject_absent",
+          "group_unproven",
+          "graph_not_projected",
+          "authorizer_missing",
+          "graph_read_failed"
+        ],
+        "applicability": "written when a citing result reached the stored-result authorization"
+      },
+      {
+        "key": "error_class",
+        "type": "string",
+        "presence": "conditional",
+        "closed_vocabulary": [
+          "deadline_exceeded",
+          "canceled",
+          "dependency_unavailable",
+          "internal"
+        ],
+        "applicability": "written when the search, a read, the authorization or the built expansion failed"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.frame_validation",
     "msg": "context fabric frame validation",
     "level": "info",
@@ -3028,7 +3159,8 @@
         "closed_vocabulary": [
           "result_by_id",
           "prior_result",
-          "answer_reuse"
+          "answer_reuse",
+          "evidence_expansion"
         ]
       },
       {

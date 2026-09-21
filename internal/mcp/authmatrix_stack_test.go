@@ -276,6 +276,14 @@ type matrixStack struct {
 
 func newMatrixStack(t *testing.T) *matrixStack {
 	t.Helper()
+	return newMatrixStackWith(t, func(*memoryinvestigation.Store) contextfabric.Investigator { return identityInvestigator{} })
+}
+
+// newMatrixStackWith is newMatrixStack with the investigator built over the
+// stack's own result store, for an investigator that persists what it
+// answers the way the engine does.
+func newMatrixStackWith(t *testing.T, investigator func(*memoryinvestigation.Store) contextfabric.Investigator) *matrixStack {
+	t.Helper()
 	issuedAt := time.Now().Add(-2 * time.Hour)
 	audit := memory.NewAuditStore()
 	credentials, err := memory.NewCredentialStoreWithOptions(memory.CredentialStoreOptions{Audit: audit, Now: func() time.Time { return issuedAt }})
@@ -349,7 +357,7 @@ func newMatrixStack(t *testing.T) *matrixStack {
 			DeviceAuthorizations: devices, DeviceVerificationURL: "https://verify.example.test/device",
 			DeviceAuthorizationLimiter: api.NewDeviceAuthorizationLimiter(api.ClockFunc(time.Now)),
 			ReadinessChecks:            []api.ReadinessCheck{api.CheckFunc{CheckName: "postgres"}, api.CheckFunc{CheckName: "clickhouse"}, api.CheckFunc{CheckName: "entitlement"}},
-			Investigator:               identityInvestigator{},
+			Investigator:               investigator(results),
 			InvestigationResults:       results,
 			StoredResultGate:           contextfabric.NewStoredResultGate(graph),
 		},

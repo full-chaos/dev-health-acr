@@ -67,11 +67,15 @@ const (
 	// StoredResultSurfaceAnswerReuse is a stored answer offered for reuse in
 	// place of a fresh investigation.
 	StoredResultSurfaceAnswerReuse StoredResultSurface = "answer_reuse"
+	// StoredResultSurfaceEvidenceExpansion is the evidence route reading a
+	// stored result that cites the Context Fabric evidence ref it was asked
+	// to expand (see ExpandCitedEvidence).
+	StoredResultSurfaceEvidenceExpansion StoredResultSurface = "evidence_expansion"
 )
 
 // StoredResultSurfaceVocabulary is the closed set of surfaces.
-func StoredResultSurfaceVocabulary() [3]StoredResultSurface {
-	return [3]StoredResultSurface{StoredResultSurfaceResultByID, StoredResultSurfacePriorResult, StoredResultSurfaceAnswerReuse}
+func StoredResultSurfaceVocabulary() [4]StoredResultSurface {
+	return [4]StoredResultSurface{StoredResultSurfaceResultByID, StoredResultSurfacePriorResult, StoredResultSurfaceAnswerReuse, StoredResultSurfaceEvidenceExpansion}
 }
 
 // StoredResultDecision is the served outcome.

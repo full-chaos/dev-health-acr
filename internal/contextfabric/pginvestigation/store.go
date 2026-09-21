@@ -502,6 +502,43 @@ SELECT EXISTS (
 // of the query: result_id is already a primary key, but Get must never
 // return a row belonging to a different organization (see
 // contextfabric.InvestigationResultStore's doc comment).
+// ResultIDsCitingEvidence implements contextfabric.CitedEvidenceLookup: the
+// ids, newest generated_at first (result_id breaks ties), of the
+// organization's stored results holding evidenceRefID in any
+// evidence_ref_ids array of the payload -- every site of the evidence-ref
+// closure is such an array. contextfabric.ExpandCitedEvidence re-checks the
+// closure on the decoded result.
+func (s *Store) ResultIDsCitingEvidence(ctx context.Context, principal storage.Principal, evidenceRefID string, limit int) ([]string, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("pginvestigation: store is not configured")
+	}
+	orgID := strings.TrimSpace(principal.OrgID)
+	if orgID == "" || evidenceRefID == "" || limit <= 0 {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT result_id FROM acr.context_fabric_investigation_results
+WHERE org_id = $1 AND jsonb_path_exists(payload, 'lax $.**.evidence_ref_ids ? (@ == $ref)', jsonb_build_object('ref', $2::text))
+ORDER BY generated_at DESC, result_id DESC
+LIMIT $3`, orgID, evidenceRefID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("find investigation results citing evidence: %w", sanitizeError(err))
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("find investigation results citing evidence: %w", sanitizeError(err))
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("find investigation results citing evidence: %w", sanitizeError(err))
+	}
+	return ids, nil
+}
+
 func (s *Store) Get(ctx context.Context, principal storage.Principal, resultID string) (contextfabric.StoredInvestigationResult, error) {
 	if s == nil || s.db == nil {
 		return contextfabric.StoredInvestigationResult{}, errors.New("pginvestigation: store is not configured")

@@ -12,8 +12,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -304,6 +306,56 @@ func (s *Store) Get(ctx context.Context, principal storage.Principal, resultID s
 	// treat that as "cannot prove", never a silent pass.
 	semanticState, semanticStatus := contextfabric.DecodeSemanticState(stored.semanticState)
 	return contextfabric.StoredInvestigationResult{Result: result, ParentResultID: stored.parentResultID, SemanticState: semanticState, SemanticStateRead: semanticStatus}, nil
+}
+
+// ResultIDsCitingEvidence implements contextfabric.CitedEvidenceLookup: the
+// ids of the organization's stored results whose evidence-ref closure holds
+// evidenceRefID, newest generated_at first (result_id breaks ties).
+func (s *Store) ResultIDsCitingEvidence(ctx context.Context, principal storage.Principal, evidenceRefID string, limit int) ([]string, error) {
+	if s == nil {
+		return nil, errors.New("memoryinvestigation: store is not configured")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	orgID := strings.TrimSpace(principal.OrgID)
+	if orgID == "" || evidenceRefID == "" || limit <= 0 {
+		return nil, nil
+	}
+	type citing struct {
+		id        string
+		generated time.Time
+	}
+	var found []citing
+	s.mu.Lock()
+	for id, stored := range s.results {
+		if stored.orgID != orgID {
+			continue
+		}
+		var result contextfabric.InvestigationResult
+		if err := json.Unmarshal(stored.payload, &result); err != nil {
+			s.mu.Unlock()
+			return nil, fmt.Errorf("memoryinvestigation: decode investigation result: %w", err)
+		}
+		if _, ok := contractsv1.ContextFabricEvidenceRefClosure(result)[evidenceRefID]; ok {
+			found = append(found, citing{id: id, generated: result.GeneratedAt})
+		}
+	}
+	s.mu.Unlock()
+	sort.Slice(found, func(i, j int) bool {
+		if !found[i].generated.Equal(found[j].generated) {
+			return found[i].generated.After(found[j].generated)
+		}
+		return found[i].id > found[j].id
+	})
+	if len(found) > limit {
+		found = found[:limit]
+	}
+	ids := make([]string, len(found))
+	for i, c := range found {
+		ids[i] = c.id
+	}
+	return ids, nil
 }
 
 // rejectExplicitNullDegradedReasons reports whether payload contains a

@@ -119,6 +119,18 @@ func TestStore_parity(t *testing.T) {
 	)
 }
 
+// TestStore_citedEvidenceLookup runs the shared citing-result lookup table
+// against Postgres, so the JSON path query executes for real.
+func TestStore_citedEvidenceLookup(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	paritytest.RunCitedEvidenceSuite(t, func(t *testing.T) contextfabric.InvestigationResultStore {
+		store, err := pginvestigation.NewStore(db)
+		require.NoError(t, err)
+		return store
+	})
+}
+
 func TestStore_saveAndGetReturnContextCanceledWithoutWrappingAsUnavailable(t *testing.T) {
 	ctx := context.Background()
 	db := newInvestigationTestDatabase(t, ctx)
