@@ -32,7 +32,7 @@ data:
   ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE: {{ .Values.workloadTokenExchange.audience | quote }}
   ACR_WORKLOAD_TRUST_DOMAIN: {{ .Values.workloadTokenExchange.trustDomain | quote }}
   {{- end }}
-  {{- if or (eq .Values.config.environment "development") (eq .Values.config.environment "test") }}
+  {{- if or (eq .Values.config.environment "development") (eq .Values.config.environment "test") .Values.config.oauth.enabled }}
   {{- with .Values.config.webAssertion }}
   {{- if and .issuer .audience .existingSecret }}
   ACR_WEB_ASSERTION_ISSUER: {{ .issuer | quote }}
@@ -40,6 +40,12 @@ data:
   ACR_WEB_ASSERTION_JWKS_FILE: {{ printf "%s/%s" (.mountPath | trimSuffix "/") .key | quote }}
   {{- end }}
   {{- end }}
+  {{- end }}
+  {{- if .Values.config.oauth.enabled }}
+  {{- include "acr.validateOAuth" . }}
+  ACR_OAUTH_ISSUER: {{ .Values.config.oauth.issuer | quote }}
+  ACR_OAUTH_RESOURCES: {{ join "," .Values.config.oauth.resources | quote }}
+  ACR_OAUTH_CLIENT_METADATA_DOCUMENTS: {{ .Values.config.oauth.clientMetadataDocuments | quote }}
   {{- end }}
   {{- if include "acr.remoteEntitlement" . }}
   ACR_DEV_HEALTH_ENTITLEMENT_URL: {{ .Values.config.entitlement.url | quote }}

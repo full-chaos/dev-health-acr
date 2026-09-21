@@ -58,6 +58,11 @@ type CreateCredentialRequest struct {
 	// behavior.
 	IssuanceProvenance storage.CredentialIssuanceProvenance
 	WorkloadBindingID  string
+	// Resource binds the credential to one protected resource (RFC 8707
+	// audience). It is set only by the OAuth authorization-code grant; the
+	// authenticator then admits the credential only on requests made for
+	// that resource (see ResourceHeader).
+	Resource string
 }
 
 type RotateCredentialRequest struct {

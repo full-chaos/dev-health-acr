@@ -174,6 +174,10 @@ type Config struct {
 	ClientName     string
 	ClientVersion  string
 	SidecarVersion string
+	// Resource is the protected resource identifier the hosted MCP endpoint
+	// forwards on every hosted API call (auth.ResourceHeader). It is set only
+	// by the hosted transport, from its own configuration; empty sends none.
+	Resource string
 	// LogLevel controls the sidecar's structured diagnostic verbosity (see
 	// internal/mcp.Serve). ACR_LOG_LEVEL accepts "debug", "info", "warn", or
 	// "error" (case-insensitive); default is "info". LogLevel never gates

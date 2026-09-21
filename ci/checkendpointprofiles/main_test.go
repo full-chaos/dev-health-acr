@@ -194,8 +194,11 @@ func TestRealTreeProofFailsLoudlyInTheContractGateStepWhenInputsAreMissing(t *te
 }
 
 func TestRealInventoryRowCountMatchesTheWave0Baseline(t *testing.T) {
-	// 16 rows = 12 protected / 4 public (lane brief section 6 baseline). A
-	// different number is a finding to reconcile, not an adjustment.
+	// 21 rows = 12 protected / 9 public: the Wave 0 baseline of 16 (12 / 4)
+	// plus the five public OAuth authorization-server routes hosted MCP
+	// clients log in through (metadata, authorize, consent, token,
+	// register). A different number is a finding to reconcile, not an
+	// adjustment.
 	root := repoRoot(t)
 	inventoryPath := filepath.Join(root, "contracts", "auth", "v1", "endpoint-profiles.acr.json")
 	inventory, err := loadJSON(inventoryPath)
@@ -203,8 +206,8 @@ func TestRealInventoryRowCountMatchesTheWave0Baseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := asArray(inventory["rows"])
-	if len(rows) != 16 {
-		t.Fatalf("expected 16 rows, got %d", len(rows))
+	if len(rows) != 21 {
+		t.Fatalf("expected 21 rows, got %d", len(rows))
 	}
 	var protected, public int
 	for _, r := range rows {
@@ -219,8 +222,8 @@ func TestRealInventoryRowCountMatchesTheWave0Baseline(t *testing.T) {
 	if protected != 12 {
 		t.Errorf("expected 12 protected rows, got %d", protected)
 	}
-	if public != 4 {
-		t.Errorf("expected 4 public rows, got %d", public)
+	if public != 9 {
+		t.Errorf("expected 9 public rows, got %d", public)
 	}
 }
 

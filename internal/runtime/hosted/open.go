@@ -222,6 +222,9 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 			// and ACR_WORKLOAD_TRUST_DOMAIN are both set -- see
 			// buildWorkloadTokenExchange's own doc comment.
 			WorkloadTokenExchange: workloadTokenExchanger,
+			// nil unless ACR_OAUTH_ISSUER and ACR_OAUTH_RESOURCES are set;
+			// config validation already required web assertions for it.
+			OAuth: oauthRuntime(request.config, postgres.oauth),
 		},
 	}
 	return runtime, nil
@@ -1230,4 +1233,18 @@ func closeAfterError(runtime *Runtime, cause error) error {
 		return errors.Join(cause, fmt.Errorf("close hosted runtime: %w", closeErr))
 	}
 	return cause
+}
+
+// oauthRuntime composes the OAuth login for hosted MCP clients, or nil when
+// it is not configured. Client ID metadata documents are fetched only from
+// publicly routable addresses.
+func oauthRuntime(cfg config.Config, store storage.OAuthStore) *api.OAuthRuntime {
+	if !cfg.OAuthConfigured() {
+		return nil
+	}
+	runtime := &api.OAuthRuntime{Store: store, Issuer: cfg.OAuthIssuer, Resources: append([]string(nil), cfg.OAuthResources...)}
+	if cfg.OAuthClientMetadataDocuments {
+		runtime.ClientMetadata = auth.NewPublicClientMetadataFetcher()
+	}
+	return runtime
 }

@@ -85,6 +85,20 @@ config:
     existingSecret: ""
     key: web-jwks.json
     mountPath: /var/run/acr/web-assertion
+  # OAuth 2.1 authorization-code login for hosted MCP clients (acr-api is the
+  # authorization server). Consent is the device flow's web approval, so
+  # enabling it also enables webAssertion (issuer, audience, existingSecret)
+  # in every environment, production included.
+  oauth:
+    enabled: false
+    # acr-api public origin, e.g. https://acr.example.com (no path).
+    issuer: ""
+    # Public URLs of the hosted MCP endpoints a credential may be bound to,
+    # e.g. [https://mcp.example.com/mcp].
+    resources: []
+    # Accept client ID metadata documents (HTTPS client_id URLs). Fetches go
+    # to public addresses only.
+    clientMetadataDocuments: true
 
 # Existing-Secret-only credential contract. Each existingSecret is the NAME of a
 # Secret that already exists in the release namespace. This chart validates the
@@ -442,6 +456,12 @@ acrMcp:
   # MCP endpoint path served by the pod and matched by the HTTPRoute. The probe
   # paths /healthz and /readyz are fixed by the binary.
   basePath: /mcp
+  # OAuth discovery (RFC 9728): set both to advertise acr-api as the
+  # authorization server. resourceUrl is this endpoint's public URL and must
+  # end in basePath; authorizationServer is config.oauth.issuer.
+  oauth:
+    resourceUrl: ""
+    authorizationServer: ""
   logLevel: info
   # ACR_API_TIMEOUT: also bounds each per-request credential decision.
   apiTimeout: "15s"

@@ -75,7 +75,7 @@ func (s *DeviceFlowService) Poll(ctx context.Context, deviceCode string) (Issued
 	case storage.DeviceAuthorizationStatePending:
 		return IssuedCredential{}, newDevicePollError(DevicePollAuthorizationPending, 0)
 	case storage.DeviceAuthorizationStateApproved:
-		return s.redeem(ctx, record)
+		return s.redeem(ctx, record, "")
 	case storage.DeviceAuthorizationStateDenied:
 		return IssuedCredential{}, newDevicePollError(DevicePollAccessDenied, 0)
 	case storage.DeviceAuthorizationStateExpired:
@@ -87,7 +87,7 @@ func (s *DeviceFlowService) Poll(ctx context.Context, deviceCode string) (Issued
 	}
 }
 
-func (s *DeviceFlowService) redeem(ctx context.Context, record storage.DeviceAuthorization) (IssuedCredential, error) {
+func (s *DeviceFlowService) redeem(ctx context.Context, record storage.DeviceAuthorization, resource string) (IssuedCredential, error) {
 	expiresAt := s.now().UTC().Add(DeviceCredentialLifetime)
 	prepared, err := s.credentials.PrepareCreate(CreateCredentialRequest{
 		OrgID:            record.AuthorizedOrgID,
@@ -96,6 +96,7 @@ func (s *DeviceFlowService) redeem(ctx context.Context, record storage.DeviceAut
 		Scopes:           []string{ScopeContextRead, ScopeEvidenceRead},
 		CreatedBy:        record.ApprovingSubject,
 		ExpiresAt:        &expiresAt,
+		Resource:         resource,
 	})
 	if err != nil {
 		return IssuedCredential{}, fmt.Errorf("prepare device credential: %w", err)

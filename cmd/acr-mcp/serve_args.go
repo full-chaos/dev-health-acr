@@ -25,6 +25,8 @@ func parseServeArgs(args []string, lookup func(string) (string, bool)) (acrmcp.S
 	fs.StringVar(&opts.Transport, "transport", opts.Transport, "stdio|http ("+acrmcp.TransportEnvironment+")")
 	fs.StringVar(&opts.Listen, "listen", opts.Listen, "HTTP listen address ("+acrmcp.HTTPListenEnvironment+")")
 	fs.StringVar(&opts.BasePath, "base-path", opts.BasePath, "HTTP MCP endpoint path ("+acrmcp.HTTPBasePathEnvironment+")")
+	fs.StringVar(&opts.ResourceURL, "resource-url", opts.ResourceURL, "public MCP endpoint URL, the OAuth protected resource ("+acrmcp.ResourceURLEnvironment+")")
+	fs.StringVar(&opts.AuthorizationServer, "authorization-server", opts.AuthorizationServer, "OAuth authorization server issuer ("+acrmcp.AuthorizationServerEnvironment+")")
 	fs.DurationVar(&opts.ReadHeaderTimeout, "read-header-timeout", opts.ReadHeaderTimeout, acrmcp.HTTPReadHeaderTimeoutEnvironment)
 	fs.DurationVar(&opts.ReadTimeout, "read-timeout", opts.ReadTimeout, acrmcp.HTTPReadTimeoutEnvironment)
 	fs.DurationVar(&opts.WriteTimeout, "write-timeout", opts.WriteTimeout, acrmcp.HTTPWriteTimeoutEnvironment)

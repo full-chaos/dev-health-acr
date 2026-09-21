@@ -16,10 +16,13 @@ ship").
 
 ## Coverage
 
-16 route registrations in `internal/api/app.go` (lines 75-90), matching the
-orchestrator's estimate exactly. Two are unauthenticated probes
-(`/healthz`, `/readyz`); two are unauthenticated-by-design OAuth entry
-points (`device_authorization`, `token`); the remaining 12 are behind
+21 route registrations in `internal/api/app.go`. Two are unauthenticated
+probes (`/healthz`, `/readyz`); two are unauthenticated-by-design device-flow
+entry points (`device_authorization`, `token`); five are the
+unauthenticated-by-design OAuth authorization-server routes hosted MCP clients
+log in through (`/.well-known/oauth-authorization-server`, `/authorize`,
+`/authorize/consent`, `/token`, `/register`, registered only when OAuth is
+configured; see `authentication.md`); the remaining 12 are behind
 `Authenticator.MiddlewareFor` in one of its two shapes, or the bearer-only
 `selfLifecycleHandler`.
 

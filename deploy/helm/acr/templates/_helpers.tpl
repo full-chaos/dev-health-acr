@@ -481,3 +481,26 @@ Non-secret environment shared by both workloads, sourced from the ConfigMap.
 - configMapRef:
     name: {{ include "acr.fullname" . }}-config
 {{- end -}}
+
+{{/*
+OAuth login for hosted MCP clients: the issuer and at least one resource, and
+the complete web-assertion configuration its consent step depends on.
+*/}}
+{{- define "acr.validateOAuth" -}}
+{{- $o := .Values.config.oauth -}}
+{{- $w := .Values.config.webAssertion -}}
+{{- if not (regexMatch "^https://[^/?#]+$" ($o.issuer | default "")) -}}
+{{- fail (printf "oauth: config.oauth.issuer %q must be an https origin with no path" ($o.issuer | default "")) -}}
+{{- end -}}
+{{- if not $o.resources -}}
+{{- fail "oauth: config.oauth.resources must list at least one hosted MCP URL" -}}
+{{- end -}}
+{{- range $o.resources -}}
+{{- if not (regexMatch "^https://[^?#]+$" .) -}}
+{{- fail (printf "oauth: config.oauth.resources entry %q must be an https URL without query or fragment" .) -}}
+{{- end -}}
+{{- end -}}
+{{- if not (and $w.issuer $w.audience $w.existingSecret) -}}
+{{- fail "oauth: config.oauth.enabled requires config.webAssertion.issuer, audience and existingSecret (consent is approved on the web approval page)" -}}
+{{- end -}}
+{{- end -}}

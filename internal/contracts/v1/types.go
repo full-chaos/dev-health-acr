@@ -373,6 +373,10 @@ type ClientCredential struct {
 	// CredentialID (see internal/auth/middleware.go). Nil for every other
 	// credential (device-flow, self-service, rotation).
 	WorkloadBindingID *string `json:"workload_binding_id,omitempty"`
+	// Resource is the RFC 8707 protected resource an OAuth-issued credential
+	// is bound to (empty for every other issuance path). Server-side audience
+	// binding only: never serialized, and NOT part of the wire contract.
+	Resource string `json:"-"`
 }
 
 type ErrorEnvelope struct {

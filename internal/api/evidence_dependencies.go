@@ -65,6 +65,7 @@ type App struct {
 	authenticator        *auth.Authenticator
 	credentialService    *auth.Service
 	deviceFlow           *auth.DeviceFlowService
+	oauth                *auth.OAuthService
 	clientIP             auth.ClientIPResolver
 	usageTelemetry       *auth.UsageTelemetry
 	closers              appClosers
@@ -125,6 +126,7 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 	var authenticator *auth.Authenticator
 	var credentialService *auth.Service
 	var deviceFlow *auth.DeviceFlowService
+	var oauth *auth.OAuthService
 	if deps.Runtime != nil {
 		if err := deps.Runtime.validate(); err != nil {
 			return nil, err
@@ -149,6 +151,10 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 			return nil, err
 		}
 		deps.ReadinessChecks = append(deps.ReadinessChecks, deps.Runtime.ReadinessChecks...)
+		oauth, err = newOAuthService(deps, deviceFlow)
+		if err != nil {
+			return nil, err
+		}
 	}
 	for _, check := range deps.ReadinessChecks {
 		if check == nil || strings.TrimSpace(check.Name()) == "" {
@@ -172,6 +178,7 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 		usageTelemetry:       deps.UsageTelemetry,
 		credentialService:    credentialService,
 		deviceFlow:           deviceFlow,
+		oauth:                oauth,
 		readinessTransitions: NewReadinessTransitionLogger(),
 	}
 	if app.clientIP == nil {

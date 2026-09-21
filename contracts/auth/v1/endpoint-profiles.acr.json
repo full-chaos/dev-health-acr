@@ -96,8 +96,8 @@
         "description": "protectedRuntimeHandler(RequestClassAuth, ScopeContextRead, entitlement=false, allowWebAssertions=true): Authenticator.MiddlewareFor(true,...) dispatches on X-ACR-Web-Assertion presence (WebAssertionVerifier) vs Authorization: Bearer (credential-store lookup), then RequireScope(context:read).",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 168,
-          "line_end": 178,
+          "line": 170,
+          "line_end": 180,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -151,8 +151,8 @@
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=false, allowWebAssertions=true).",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 168,
-          "line_end": 178,
+          "line": 170,
+          "line_end": 180,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -208,8 +208,8 @@
         "description": "protectedRuntimeHandler(RequestClassEvidence, ScopeEvidenceRead, entitlement=TRUE (agentContextRuntimeEntitlement), allowWebAssertions=true).",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 168,
-          "line_end": 178,
+          "line": 170,
+          "line_end": 180,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -262,8 +262,8 @@
         "description": "protectedRuntimeHandler(RequestClassEpisode, ScopeEpisodeWrite, entitlement=true, allowWebAssertions=FALSE) -- the only agent-context route that does NOT accept a web assertion; episode writes require a bearer fcacr_ credential.",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 168,
-          "line_end": 178,
+          "line": 170,
+          "line_end": 180,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -808,6 +808,219 @@
       "entitlement_requirement": null,
       "disclosure_behavior": "writeSelfLifecycleError() closed shape.",
       "gaps": []
+    },
+    {
+      "surface_kind": "rest",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "classification": "public",
+      "accepted_credential_classes": [],
+      "token_shape": null,
+      "reachable_validators": [],
+      "tenant_requirement": "none",
+      "current_state_cache_behavior": "stateless",
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": null,
+      "gaps": [],
+      "id": "GET /.well-known/oauth-authorization-server [dev-health-acr-api]",
+      "method": "GET",
+      "route": "/.well-known/oauth-authorization-server",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 93
+      },
+      "public_rationale": "RFC 8414 authorization server metadata for hosted MCP clients; static configuration, no principal, no org context. Registered only when ACR_OAUTH_ISSUER/ACR_OAUTH_RESOURCES are configured.",
+      "primary_validator": {
+        "description": "No authenticator wrapper -- mux.HandleFunc directly; the body is built from process configuration alone.",
+        "anchor": {
+          "path": "internal/api/oauth_routes.go",
+          "line": 60,
+          "line_end": 60,
+          "note": "func (a *App) handleOAuthMetadata("
+        }
+      },
+      "action": "oauth.metadata.read",
+      "resource_resolver": "None -- caller-independent static document.",
+      "disclosure_behavior": "Fixed RFC 8414 document (issuer, endpoints, supported methods)."
+    },
+    {
+      "surface_kind": "rest",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "classification": "public",
+      "accepted_credential_classes": [],
+      "token_shape": null,
+      "reachable_validators": [],
+      "tenant_requirement": "none",
+      "current_state_cache_behavior": "stateless",
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": null,
+      "gaps": [],
+      "id": "GET /authorize [dev-health-acr-api]",
+      "method": "GET",
+      "route": "/authorize",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 94
+      },
+      "public_rationale": "OAuth 2.1 authorization endpoint (authorization code + PKCE S256 + RFC 8707 resource) for hosted MCP clients; the caller has no credential by definition. It only starts a consent: the credential is issued after a web-assertion-authenticated approval on the device approval route.",
+      "primary_validator": {
+        "description": "OAuthService.Authorize -- verifies the client (dynamic registration or client ID metadata document) and the exact redirect URI before anything is redirectable, then requires response_type=code, S256 PKCE and a configured resource; rate limited per IP by AllowDeviceCreation.",
+        "anchor": {
+          "path": "internal/auth/oauth.go",
+          "line": 304,
+          "line_end": 304,
+          "note": "func (s *OAuthService) Authorize("
+        }
+      },
+      "action": "oauth.authorize.start",
+      "resource_resolver": "None yet -- starts a device authorization with no hints; org and repositories are chosen at approval.",
+      "disclosure_behavior": "Consent page (HTML, CSP nonce, no-store, frame-ancestors none) or a 303 to the verified redirect URI with a closed OAuth error code; an unverified client/redirect gets a fixed HTML problem page and is never redirected.",
+      "issued_credential": [
+        {
+          "class_id": "acr_device_flow_code",
+          "direction": "returned_to_caller",
+          "anchor": {
+            "path": "internal/auth/device_oauth.go",
+            "line": 29,
+            "line_end": 49,
+            "note": "DeviceFlowService.StartForOAuth -- mints a device authorization via s.store.Create; only the user_code is returned (in the consent page), the raw device_code is discarded"
+          },
+          "issuer": "acr DeviceFlowService",
+          "audience": null,
+          "algorithm": null,
+          "lifetime_seconds": 600,
+          "key_source": null,
+          "verified_by": "acr:internal/auth/device_oauth.go:100"
+        }
+      ]
+    },
+    {
+      "surface_kind": "rest",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "classification": "public",
+      "accepted_credential_classes": [],
+      "token_shape": null,
+      "reachable_validators": [],
+      "tenant_requirement": "none",
+      "current_state_cache_behavior": "stateless",
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": null,
+      "gaps": [],
+      "id": "POST /authorize/consent [dev-health-acr-api]",
+      "method": "POST",
+      "route": "/authorize/consent",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 95
+      },
+      "public_rationale": "Consent check the consent page makes with its 256-bit browser handle (form body, never a URL); no principal. It reads the device approval state and, once approved, issues the one-time authorization code to the verified redirect URI.",
+      "primary_validator": {
+        "description": "OAuthService.Consent -- looks the request up by the SHA-256 of the handle; issues a code at most once (IssueAuthorizationCode is conditional on no code yet).",
+        "anchor": {
+          "path": "internal/auth/oauth.go",
+          "line": 385,
+          "line_end": 385,
+          "note": "func (s *OAuthService) Consent("
+        }
+      },
+      "action": "oauth.authorize.consent",
+      "resource_resolver": "The handle's stored authorization request.",
+      "disclosure_behavior": "JSON {state, redirect_url?} or a closed OAuth error code; no-JS form fallback redirects (303) or renders a fixed page."
+    },
+    {
+      "surface_kind": "rest",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "classification": "public",
+      "accepted_credential_classes": [
+        "acr_device_flow_code"
+      ],
+      "token_shape": {
+        "token_type": "OAuth authorization code (opaque, 256-bit, SHA-256 at rest, 2-minute TTL, single use) standing for an approved device authorization",
+        "issuer": "acr-api OAuthService",
+        "audience": "the RFC 8707 resource the authorization request named (a hosted MCP endpoint URL)",
+        "algorithm": null
+      },
+      "reachable_validators": [],
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": "stateless",
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": null,
+      "gaps": [],
+      "id": "POST /token [dev-health-acr-api]",
+      "method": "POST",
+      "route": "/token",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 96
+      },
+      "public_rationale": "OAuth 2.1 token endpoint (authorization_code grant only, public clients, no refresh token); no principal on entry by definition.",
+      "primary_validator": {
+        "description": "OAuthService.Exchange -- consumes the code atomically first (a refused exchange spends it), then requires the same client_id and redirect_uri, an S256 code_verifier matching the stored challenge, and a resource equal to the authorized one; redeems the approved device authorization bound to that resource. Rate limited per IP by AllowTokenRequest.",
+        "anchor": {
+          "path": "internal/auth/oauth.go",
+          "line": 478,
+          "line_end": 478,
+          "note": "func (s *OAuthService) Exchange("
+        }
+      },
+      "action": "oauth.token.authorization_code",
+      "resource_resolver": "Authorization code -> stored request -> approved device authorization (org + repository scopes chosen at web approval).",
+      "disclosure_behavior": "RFC 6749 \u00a75.2 JSON errors (invalid_grant, invalid_target, unsupported_grant_type, invalid_request); unknown, expired and used codes are indistinguishable (invalid_grant).",
+      "issued_credential": [
+        {
+          "class_id": "acr_client_credential",
+          "direction": "returned_to_caller",
+          "anchor": {
+            "path": "internal/auth/device_oauth.go",
+            "line": 100,
+            "line_end": 117,
+            "note": "DeviceFlowService.RedeemForResource -- redeem mints the fcacr_ credential (30-day expiry) with Resource bound; the authenticator admits it only with a matching X-ACR-Resource header"
+          },
+          "issuer": "acr credential Service (via DeviceFlowService.redeem)",
+          "audience": "bound resource (X-ACR-Resource)",
+          "algorithm": null,
+          "lifetime_seconds": 2592000,
+          "key_source": null,
+          "verified_by": "acr:internal/auth/middleware.go:111"
+        }
+      ]
+    },
+    {
+      "surface_kind": "rest",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "classification": "public",
+      "accepted_credential_classes": [],
+      "token_shape": null,
+      "reachable_validators": [],
+      "tenant_requirement": "none",
+      "current_state_cache_behavior": "stateless",
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": null,
+      "gaps": [],
+      "id": "POST /register [dev-health-acr-api]",
+      "method": "POST",
+      "route": "/register",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 97
+      },
+      "public_rationale": "RFC 7591 dynamic client registration for public MCP clients (DCR fallback to client ID metadata documents); the caller has no credential by definition.",
+      "primary_validator": {
+        "description": "OAuthService.Register -- public clients only (token_endpoint_auth_method none), grant types limited to authorization_code (refresh_token requests are answered without it), redirect URIs HTTPS or HTTP loopback; rate limited per IP by AllowDeviceCreation. Registration grants nothing by itself.",
+        "anchor": {
+          "path": "internal/auth/oauth.go",
+          "line": 179,
+          "line_end": 179,
+          "note": "func (s *OAuthService) Register("
+        }
+      },
+      "action": "oauth.client.register",
+      "resource_resolver": "None -- stores a public client row (client_id, name, redirect URIs).",
+      "disclosure_behavior": "201 RFC 7591 client information (no secret) or 400 invalid_client_metadata/invalid_redirect_uri."
     }
   ]
 }

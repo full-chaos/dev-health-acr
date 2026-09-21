@@ -79,6 +79,9 @@ func (c *Client) callWithHeaders(ctx context.Context, method, subPath string, re
 	if c.cfg.ClientVersion != "" {
 		req.Header.Set("X-ACR-Client-Version", c.cfg.ClientVersion)
 	}
+	if c.cfg.Resource != "" {
+		req.Header.Set(auth.ResourceHeader, c.cfg.Resource)
+	}
 	if requestBody != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
