@@ -26,6 +26,11 @@ func embeddedFiles(t *testing.T) map[string]string {
 	if len(files) != 3 {
 		t.Fatalf("expected 3 embedded guide files, got %d", len(files))
 	}
+	vocab, err := guide.PromptVocabText()
+	if err != nil {
+		t.Fatal(err)
+	}
+	files[FilePromptVocab] = vocab
 	return files
 }
 
