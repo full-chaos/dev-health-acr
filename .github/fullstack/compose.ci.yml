@@ -28,7 +28,7 @@
 # go_api_routing_state row the ops `api` raises GoServedOperationUnavailableError.
 # It is built from the SAME ./ops checkout as `api`, so both planes hash the
 # same schema SDL (a prebuilt image can drift from the checkout and
-# `dev-hops go-api routing enable` refuses a digest mismatch). The envelope key
+# seed_go_api_routing refuses a digest mismatch). The envelope key
 # pair and the routing rows are per-run material created by
 # scripts/e2e/compose.sh (write_go_api_envelope_material,
 # seed_go_api_routing).
@@ -205,8 +205,8 @@ services:
   # to. Same shape as dev-health-ops deploy/go-api/compose-query-api.yml, built
   # from the checked-out ./ops tree (multi-arch: the build runs natively on
   # amd64 and arm64). Distroless runtime: no shell, so no container healthcheck;
-  # scripts/e2e/compose.sh seed_go_api_routing proves reachability through
-  # `dev-hops go-api routing enable`, whose first preflight is this service.
+  # scripts/e2e/compose.sh seed_go_api_routing proves reachability by reading
+  # this service's /registry before it writes the routing rows.
   query-api:
     build:
       context: ./ops
