@@ -30,14 +30,20 @@ type ProcessConfig struct {
 	// the process lifetime; a caller never influences it.
 	Config sidecar.Config
 
-	// transport names how this process serves callers. Hosted() is the ONE
-	// signal that the process serves callers whose workspace it cannot see;
-	// context_for_task then resolves repository and scope from the request
-	// alone. See hosted_transport_stub.go.
+	// transport names how this process serves callers: empty or
+	// TransportSTDIO for the local sidecar, TransportHTTP for the hosted
+	// multi-caller server. Hosted() is the ONE signal that the process
+	// serves callers whose workspace it cannot see; context_for_task then
+	// resolves repository and scope from the request alone.
 	transport string
 
 	diagnostics *slog.Logger
 	local       *localFederationRuntime
+
+	// hosted, when set, is a credential-less hosted API client whose
+	// connection pool every caller's client shares (see ResolveCaller). It
+	// resolves no bearer of its own: its credential source refuses.
+	hosted *sidecar.Client
 }
 
 // NewProcessConfig builds the process half a hosted transport serves many
@@ -64,6 +70,46 @@ func NewProcessConfig(cfg sidecar.Config, identity version.Info, diagnostics io.
 		transport:   TransportHTTP,
 		diagnostics: newDiagnosticsLogger(diagnostics, cfg.LogLevel),
 	}
+}
+
+// errNoProcessCredential is what the hosted transport's shared client
+// answers when anything asks it for a bearer of its own. A multi-caller
+// process has no identity to lend: every hosted call carries the caller's
+// bearer, so a call that reaches this source is a wiring defect and fails.
+var errNoProcessCredential = errors.New("mcp: the hosted transport holds no process credential")
+
+// NewHTTPProcessConfig builds the process half for the hosted Streamable
+// HTTP transport: NewProcessConfig (already the HTTP transport, so its
+// servers keep cacheable results private to the caller) plus one
+// credential-less hosted client whose connection pool every caller's client
+// shares, so a request costs no new TLS handshake and leaves no idle pool
+// behind.
+func NewHTTPProcessConfig(cfg sidecar.Config, identity version.Info, diagnostics io.Writer) (*ProcessConfig, error) {
+	process := NewProcessConfig(cfg, identity, diagnostics)
+	base, err := sidecar.NewClient(process.Config, func() (sidecar.CredentialResult, error) {
+		return sidecar.CredentialResult{}, errNoProcessCredential
+	})
+	if err != nil {
+		return nil, err
+	}
+	process.hosted = base
+	return process, nil
+}
+
+// Transport names the MCP transport this process serves; nil and unset read
+// as STDIO.
+func (p *ProcessConfig) Transport() string {
+	if p == nil || p.transport == "" {
+		return TransportSTDIO
+	}
+	return p.transport
+}
+
+// Hosted reports whether this process serves callers whose workspace it
+// cannot see. It is plain process configuration, never derived from a
+// request or a session.
+func (p *ProcessConfig) Hosted() bool {
+	return p.Transport() == TransportHTTP
 }
 
 // Diagnostics exposes the process logger so a transport can log on the same
@@ -174,7 +220,13 @@ func ResolveCaller(ctx context.Context, cfg *ProcessConfig, credential CallerCre
 	if !auth.IsTokenShapeValid(credential.Bearer) {
 		return nil, ErrCallerCredentialInvalid
 	}
-	client, err := sidecar.NewClient(cfg.Config, callerCredentialSource(credential.Bearer))
+	var client *sidecar.Client
+	var err error
+	if cfg.hosted != nil {
+		client, err = cfg.hosted.WithCredentialSource(callerCredentialSource(credential.Bearer))
+	} else {
+		client, err = sidecar.NewClient(cfg.Config, callerCredentialSource(credential.Bearer))
+	}
 	if err != nil {
 		return nil, newProbeError(err)
 	}

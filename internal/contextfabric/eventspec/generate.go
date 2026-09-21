@@ -198,6 +198,12 @@ func goVarName(e Event) string {
 		return "AnchorBindingTransition"
 	case MCPHostedContextScope.ID:
 		return "MCPHostedContextScope"
+	case MCPHTTPRequest.ID:
+		return "MCPHTTPRequest"
+	case MCPHTTPServing.ID:
+		return "MCPHTTPServing"
+	case MCPHTTPReadiness.ID:
+		return "MCPHTTPReadiness"
 	default:
 		panic("eventspec: goVarName has no mapping for " + e.ID + " -- add one before regenerating")
 	}

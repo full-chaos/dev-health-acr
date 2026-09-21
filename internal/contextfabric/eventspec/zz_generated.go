@@ -76,6 +76,9 @@ var ByID = map[string]Event{
 	"graphrank.slice_b_survivor_verdict":           SliceBSurvivorVerdict,
 	"graphrank.slice_b_survivor_verdict_summary":   SliceBSurvivorVerdictSummary,
 	"mcp.hosted_context_scope":                     MCPHostedContextScope,
+	"mcp.http_readiness":                           MCPHTTPReadiness,
+	"mcp.http_request":                             MCPHTTPRequest,
+	"mcp.http_serving":                             MCPHTTPServing,
 }
 
 // AnchorBindingTransitionFields is contextfabric.anchor_binding_transition's generated typed construction interface
@@ -4824,5 +4827,201 @@ func (f MCPHostedContextScopeFields) SlogArgs() []any {
 		"has_branch", f.HasBranch,
 		"has_commit", f.HasCommit,
 		"file_count", f.FileCount,
+	}
+}
+
+// MCPHTTPReadinessFields is mcp.http_readiness's generated typed construction interface
+// (CHAOS-5516): one Go field per Field MCPHTTPReadiness.Fields declares in spec.go.
+type MCPHTTPReadinessFields struct {
+	Sequence      int
+	Transport     string
+	State         string
+	PreviousState string
+	FailureClass  string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every MCPHTTPReadinessFields uniformly, set ONLY by NewMCPHTTPReadinessFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewMCPHTTPReadinessFields is the generated constructor for MCPHTTPReadinessFields -- every
+// field MCPHTTPReadiness.Fields declares is a required parameter.
+func NewMCPHTTPReadinessFields(sequence int, transport string, state string, previousState string, failureClass string) MCPHTTPReadinessFields {
+	return MCPHTTPReadinessFields{
+		Sequence:      sequence,
+		Transport:     transport,
+		State:         state,
+		PreviousState: previousState,
+		FailureClass:  failureClass,
+		constructed:   true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewMCPHTTPReadinessFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f MCPHTTPReadinessFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns MCPHTTPReadiness's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f MCPHTTPReadinessFields) SlogArgs() []any {
+	return []any{
+		"sequence", f.Sequence,
+		"transport", contextfabric.SanitizeLogAttr(f.Transport),
+		"state", contextfabric.SanitizeLogAttr(f.State),
+		"previous_state", contextfabric.SanitizeLogAttr(f.PreviousState),
+		"failure_class", contextfabric.SanitizeLogAttr(f.FailureClass),
+	}
+}
+
+// MCPHTTPRequestFields is mcp.http_request's generated typed construction interface
+// (CHAOS-5516): one Go field per Field MCPHTTPRequest.Fields declares in spec.go.
+type MCPHTTPRequestFields struct {
+	RequestID        string
+	Transport        string
+	ServerVersion    string
+	ServerCommit     string
+	ProtocolRevision string
+	Method           string
+	Tool             string
+	PrincipalClass   string
+	PrincipalRef     string
+	AuthOutcome      string
+	ResultClass      string
+	Status           int
+	LatencyMs        int
+	InFlight         int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every MCPHTTPRequestFields uniformly, set ONLY by NewMCPHTTPRequestFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewMCPHTTPRequestFields is the generated constructor for MCPHTTPRequestFields -- every
+// field MCPHTTPRequest.Fields declares is a required parameter.
+func NewMCPHTTPRequestFields(requestID string, transport string, serverVersion string, serverCommit string, protocolRevision string, method string, tool string, principalClass string, principalRef string, authOutcome string, resultClass string, status int, latencyMs int, inFlight int) MCPHTTPRequestFields {
+	return MCPHTTPRequestFields{
+		RequestID:        requestID,
+		Transport:        transport,
+		ServerVersion:    serverVersion,
+		ServerCommit:     serverCommit,
+		ProtocolRevision: protocolRevision,
+		Method:           method,
+		Tool:             tool,
+		PrincipalClass:   principalClass,
+		PrincipalRef:     principalRef,
+		AuthOutcome:      authOutcome,
+		ResultClass:      resultClass,
+		Status:           status,
+		LatencyMs:        latencyMs,
+		InFlight:         inFlight,
+		constructed:      true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewMCPHTTPRequestFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f MCPHTTPRequestFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns MCPHTTPRequest's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f MCPHTTPRequestFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"transport", contextfabric.SanitizeLogAttr(f.Transport),
+		"server_version", contextfabric.SanitizeLogAttr(f.ServerVersion),
+		"server_commit", contextfabric.SanitizeLogAttr(f.ServerCommit),
+		"protocol_revision", contextfabric.SanitizeLogAttr(f.ProtocolRevision),
+		"method", contextfabric.SanitizeLogAttr(f.Method),
+		"tool", contextfabric.SanitizeLogAttr(f.Tool),
+		"principal_class", contextfabric.SanitizeLogAttr(f.PrincipalClass),
+		"principal_ref", contextfabric.SanitizeLogAttr(f.PrincipalRef),
+		"auth_outcome", contextfabric.SanitizeLogAttr(f.AuthOutcome),
+		"result_class", contextfabric.SanitizeLogAttr(f.ResultClass),
+		"status", f.Status,
+		"latency_ms", f.LatencyMs,
+		"in_flight", f.InFlight,
+	}
+}
+
+// MCPHTTPServingFields is mcp.http_serving's generated typed construction interface
+// (CHAOS-5516): one Go field per Field MCPHTTPServing.Fields declares in spec.go.
+type MCPHTTPServingFields struct {
+	ListenAddress     string
+	Transport         string
+	BasePath          string
+	ServerVersion     string
+	ServerCommit      string
+	ProtocolRevisions []string
+	MaxBodyBytes      int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every MCPHTTPServingFields uniformly, set ONLY by NewMCPHTTPServingFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewMCPHTTPServingFields is the generated constructor for MCPHTTPServingFields -- every
+// field MCPHTTPServing.Fields declares is a required parameter.
+func NewMCPHTTPServingFields(listenAddress string, transport string, basePath string, serverVersion string, serverCommit string, protocolRevisions []string, maxBodyBytes int) MCPHTTPServingFields {
+	valid := true
+	if protocolRevisions == nil {
+		valid = false
+	}
+	return MCPHTTPServingFields{
+		ListenAddress:     listenAddress,
+		Transport:         transport,
+		BasePath:          basePath,
+		ServerVersion:     serverVersion,
+		ServerCommit:      serverCommit,
+		ProtocolRevisions: protocolRevisions,
+		MaxBodyBytes:      maxBodyBytes,
+		constructed:       valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewMCPHTTPServingFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f MCPHTTPServingFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns MCPHTTPServing's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f MCPHTTPServingFields) SlogArgs() []any {
+	return []any{
+		"listen_address", contextfabric.SanitizeLogAttr(f.ListenAddress),
+		"transport", contextfabric.SanitizeLogAttr(f.Transport),
+		"base_path", contextfabric.SanitizeLogAttr(f.BasePath),
+		"server_version", contextfabric.SanitizeLogAttr(f.ServerVersion),
+		"server_commit", contextfabric.SanitizeLogAttr(f.ServerCommit),
+		"protocol_revisions", contextfabric.SanitizeLogStrings(f.ProtocolRevisions),
+		"max_body_bytes", f.MaxBodyBytes,
 	}
 }

@@ -122,11 +122,18 @@ func newServer(cfg *ProcessConfig, caller *CallerContext, serverVersion string, 
 		Title:   "Dev Health ACR",
 		Version: serverVersion,
 	}
-	server := mcpsdk.NewServer(impl, &mcpsdk.ServerOptions{
+	options := &mcpsdk.ServerOptions{
 		Instructions:              serverInstructions(cfg, caller),
 		SupportedProtocolVersions: protocolVersions,
 		CompletionHandler:         promptCompletionHandler(),
-	})
+	}
+	if cfg.Transport() == TransportHTTP {
+		// A hosted server's discover and list answers describe ONE
+		// credential's catalogue, so no shared cache may serve them to
+		// another caller.
+		options.SetCacheable = privateCacheable
+	}
+	server := mcpsdk.NewServer(impl, options)
 	server.AddReceivingMiddleware(callerMiddleware(caller))
 
 	server.AddTool(
@@ -178,6 +185,13 @@ func newServer(cfg *ProcessConfig, caller *CallerContext, serverVersion string, 
 		)
 	}
 	return server
+}
+
+// privateCacheable marks every cacheable result as private to the requesting
+// caller and immediately stale.
+func privateCacheable(_ context.Context, _ mcpsdk.Request, c *mcpsdk.Cacheable) {
+	c.TTLMs = 0
+	c.CacheScope = "private"
 }
 
 // hostedToolEnabled reports whether the hosted API advertised a tool for
@@ -255,6 +269,19 @@ func stdioProtocolVersions() []string {
 		}
 	}
 	return versions
+}
+
+// ProtocolRevisions lists, newest first, the MCP revisions a server built for
+// transport negotiates. STDIO is capped below rootsRemovedRevision so
+// context_for_task keeps client roots; the hosted HTTP transport serves every
+// revision the linked SDK speaks, 2026-07-28 included, because it resolves
+// scope from explicit input and never asks the client for roots. An unknown
+// transport gets the STDIO list, the narrower of the two.
+func ProtocolRevisions(transport string) []string {
+	if transport == TransportHTTP {
+		return mcpsdk.SupportedProtocolVersions()
+	}
+	return stdioProtocolVersions()
 }
 
 // Run serves MCP over STDIO until the client disconnects or ctx is
