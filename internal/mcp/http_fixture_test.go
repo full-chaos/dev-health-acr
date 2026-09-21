@@ -37,6 +37,7 @@ const (
 	repoAnswers      = "acme/answers"
 	repoIncompatible = "acme/incompatible"
 	repoPlain        = "acme/plain"
+	repoUpgrade      = "acme/upgrade"
 	evidenceMissing  = "evidence_missing"
 )
 
@@ -157,6 +158,13 @@ func (h *hostedAPI) pathsSeenBy(credentialID string) []string {
 func (h *hostedAPI) capabilities(w http.ResponseWriter, r *http.Request) {
 	principal, _ := auth.PrincipalFromContext(r.Context())
 	h.record(principal, r.URL.Path)
+	if slices.Contains(principal.RepositoryScopes, repoUpgrade) {
+		writeHostedJSON(w, http.StatusUpgradeRequired, contractsv1.ErrorEnvelope{
+			SchemaVersion: contractsv1.ErrorSchema, RequestID: "req_fixture",
+			Error: contractsv1.ErrorDetail{Code: "version_mismatch", Message: "upgrade", HTTPStatus: http.StatusUpgradeRequired, Details: map[string]any{"minimum_client_version": "99.0.0"}},
+		})
+		return
+	}
 	caps := contractsv1.Capabilities{
 		SchemaVersion:           contractsv1.CapabilitiesSchema,
 		Service:                 "dev-health-acr",

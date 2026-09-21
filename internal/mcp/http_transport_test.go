@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -67,6 +69,40 @@ func TestHTTPIgnoresAnUnissuedSessionID(t *testing.T) {
 			t.Fatalf("status %d session %q body %s", resp.StatusCode, resp.Header.Get("Mcp-Session-Id"), body)
 		}
 		mustContain(t, string(body), `"source_evidence"`)
+		// The catalogue is this credential's own: no shared cache may keep it.
+		mustContain(t, string(body), `"cacheScope":"private"`)
+	}
+}
+
+// The configured body bound is enforced by the transport for an admitted
+// caller, and the request line records the rejection.
+func TestHTTPBodyLimitIsEnforced(t *testing.T) {
+	hosted := newHostedAPI(t)
+	logs := &syncBuffer{}
+	cfg, err := acrmcp.NewHTTPProcessConfig(hosted.sidecarConfig(), testIdentity, logs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := acrmcp.NewHTTPHandler(cfg, acrmcp.HTTPHandlerOptions{BasePath: "/mcp", Identity: testIdentity, MaxRequestBodyBytes: 512, ResolveTimeout: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := &endpoint{handler: handler, logs: logs, server: httptest.NewServer(handler)}
+	t.Cleanup(e.server.Close)
+	caller := hosted.issue(readScopes, []string{repoPlain}, nil)
+	big := rawToolsCall("source_evidence", map[string]any{"evidence_ref_id": strings.Repeat("e", 600)})
+	resp := postMCP(t, e, http.MethodPost, big, withRequestID(bearerHeader(caller.token), "big"))
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status %d, want 413", resp.StatusCode)
+	}
+	if _, err := certify.Certify(parseLog(t, e), certify.Assertion{Event: eventspec.MCPHTTPRequest, Want: map[string]any{
+		"request_id": "big", "auth_outcome": "admitted", "result_class": "transport_rejected", "status": 413,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	small := postMCP(t, e, http.MethodPost, rawToolsList(), bearerHeader(caller.token))
+	if small.StatusCode != http.StatusOK {
+		t.Fatalf("a request within the bound: %d", small.StatusCode)
 	}
 }
 
@@ -111,6 +147,7 @@ func TestHTTPAuthMatrixFailsClosedBeforeTheSDKHandler(t *testing.T) {
 	noContextRead := hosted.issue([]string{auth.ScopeEvidenceRead}, []string{repoPlain}, nil)
 	noEvidenceRead := hosted.issue([]string{auth.ScopeContextRead}, []string{repoPlain}, nil)
 	incompatible := hosted.issue(readScopes, []string{repoIncompatible}, nil)
+	upgrade := hosted.issue(readScopes, []string{repoUpgrade}, nil)
 	unknown := hosted.issue(readScopes, []string{repoPlain}, nil)
 	unknown.token = unknown.token[:len(unknown.token)-4] + "AAAA"
 
@@ -135,6 +172,7 @@ func TestHTTPAuthMatrixFailsClosedBeforeTheSDKHandler(t *testing.T) {
 		{name: "insufficient_scope", header: bearerHeader(noContextRead.token), status: 403, outcome: acrmcp.HTTPAuthInsufficientScope, challenge: `Bearer error="insufficient_scope"`},
 		{name: "insufficient_entitlement", header: bearerHeader(noEvidenceRead.token), status: 403, outcome: acrmcp.HTTPAuthInsufficientEntitlement, challenge: `Bearer error="insufficient_scope"`},
 		{name: "upstream_incompatible", header: bearerHeader(incompatible.token), status: 502, outcome: acrmcp.HTTPAuthUpstreamIncompatible},
+		{name: "upstream_version_mismatch", header: bearerHeader(upgrade.token), status: 502, outcome: acrmcp.HTTPAuthUpstreamIncompatible},
 		{name: "rate_limited", header: bearerHeader(valid.token), setup: func() { hosted.blocked.Store(true) }, status: 429, outcome: acrmcp.HTTPAuthRateLimited},
 	}
 	for _, r := range rows {
@@ -192,8 +230,8 @@ func TestHTTPAuthMatrixFailsClosedBeforeTheSDKHandler(t *testing.T) {
 			t.Errorf("auth outcome %q has no executed row", outcome)
 		}
 	}
-	if len(rows) != 13 {
-		t.Fatalf("matrix has %d rows, want 13", len(rows))
+	if len(rows) != 14 {
+		t.Fatalf("matrix has %d rows, want 14", len(rows))
 	}
 }
 
