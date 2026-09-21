@@ -165,6 +165,9 @@ var contextFabricResultDefsRewrites = map[string]string{
 	"context_fabric_common.v1.schema.json#/$defs/AnswerCompleteness": "#/$defs/context_fabric_common.v1/$defs/AnswerCompleteness",
 	// CHAOS-4636: answer_plan's own cross-file pointer into common.v1.
 	"context_fabric_common.v1.schema.json#/$defs/AnswerPlan": "#/$defs/context_fabric_common.v1/$defs/AnswerPlan",
+	// The result schema's temporal label, relocated like every other common
+	// $def so the offline response schema stays self-contained.
+	"context_fabric_common.v1.schema.json#/$defs/TemporalLabel": "#/$defs/context_fabric_common.v1/$defs/TemporalLabel",
 }
 
 // contextFabricProjectionDefsRewrites relocates
