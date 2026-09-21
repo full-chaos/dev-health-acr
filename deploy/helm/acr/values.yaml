@@ -383,9 +383,32 @@ contextFabric:
     # process's own ACR_CONTEXT_FABRIC_PROJECTION_ENABLED master switch
     # (rollback/disable lever without deleting the Deployment).
     projectionEnabled: false
-    # Explicit organization allowlist -- see docs/design/context-fabric-projection-worker.md
-    # for why this starts explicit rather than auto-discovered.
+    # Static organization allowlist. With `orgDiscovery: false` (the
+    # default) it is the WHOLE set of organizations this projector serves,
+    # and an empty list with `projectionEnabled: true` is refused at
+    # startup. With `orgDiscovery: true` it is a floor: the projector
+    # unions it with the organizations it discovers, so an empty list is
+    # accepted and is the normal setting.
     orgIds: []
+    # CHAOS-6182: auto-discover organizations (ACR_CONTEXT_FABRIC_PROJECTOR_ORG_DISCOVERY).
+    # When true the projector re-reads the distinct organization set from
+    # ClickHouse at the start of every poll, so a new tenant gets a graph
+    # without a chart edit or a redeploy. Off by default: a chart that does
+    # not set it behaves exactly as it did before.
+    orgDiscovery: false
+    # How recently a DISCOVERED organization's canonical data must have
+    # moved (repos.last_synced / work_items.updated_at /
+    # git_pull_requests.last_synced) for discovery to give it a graph.
+    # Exists because a shared ClickHouse accumulates throwaway tenants and
+    # each one would otherwise cost real projection, key and embedding
+    # work. "0s" disables the activity condition (repository ownership
+    # still applies); a negative value is refused at startup. Ignored when
+    # orgDiscovery is false, and it NEVER filters orgIds above.
+    orgActivityWindow: "720h"
+    # Organizations discovery must never admit. Filters the DISCOVERED set
+    # only -- orgIds above is an always-include list, so an organization
+    # named in both is projected.
+    orgDiscoveryDenyIds: []
     pollInterval: "15s"
     concurrency: 4
     teamsProjectsEnabled: false

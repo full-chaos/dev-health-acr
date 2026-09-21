@@ -25,7 +25,20 @@ data:
   ACR_LOCAL_COMPOSITION_READY: {{ .Values.config.localCompositionReady | quote }}
   ACR_POSTGRES_CONNECTION_KIND: {{ .Values.config.postgresConnectionKind | quote }}
   ACR_CONTEXT_FABRIC_PROJECTION_ENABLED: {{ .Values.contextFabric.projector.projectionEnabled | quote }}
+  # CHAOS-6182: rendered only when a static allowlist is actually
+  # configured. An empty key would be indistinguishable from an unset one
+  # to ProjectorConfig (stringListValue treats "" as no entries), but
+  # leaving it out keeps the ConfigMap an honest statement of what this
+  # deployment configures -- with orgDiscovery on, an empty allowlist is
+  # the normal setting, not an omission.
+  {{- if .Values.contextFabric.projector.orgIds }}
   ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS: {{ join "," .Values.contextFabric.projector.orgIds | quote }}
+  {{- end }}
+  ACR_CONTEXT_FABRIC_PROJECTOR_ORG_DISCOVERY: {{ .Values.contextFabric.projector.orgDiscovery | default false | quote }}
+  ACR_CONTEXT_FABRIC_PROJECTOR_ORG_ACTIVITY_WINDOW: {{ .Values.contextFabric.projector.orgActivityWindow | default "720h" | quote }}
+  {{- if .Values.contextFabric.projector.orgDiscoveryDenyIds }}
+  ACR_CONTEXT_FABRIC_PROJECTOR_ORG_DISCOVERY_DENY_IDS: {{ join "," .Values.contextFabric.projector.orgDiscoveryDenyIds | quote }}
+  {{- end }}
   ACR_CONTEXT_FABRIC_PROJECTION_POLL_INTERVAL: {{ .Values.contextFabric.projector.pollInterval | quote }}
   ACR_CONTEXT_FABRIC_PROJECTION_CONCURRENCY: {{ .Values.contextFabric.projector.concurrency | quote }}
   ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED: {{ .Values.contextFabric.projector.teamsProjectsEnabled | quote }}

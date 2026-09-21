@@ -499,13 +499,126 @@ duplicating the numbers and risking drift -- a pure refactor of
    just wait/retry next tick) but can never *under*-serialize two orgs into
    running concurrently while believing they're isolated; it fails toward
    extra safety, not toward the race the amendment exists to prevent.
-2. **Org selection: explicit allowlist, confirmed — no auto-discovery.**
-   `ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS` stays the only source of the org
-   set for this reset. **Named follow-up:** an entitlement- or
-   `client_credentials`-driven auto-discovery mode, so an org doesn't need a
-   manual allowlist edit to get projected — out of scope here because it
-   would project every org with credentials regardless of whether that org
-   opted into Context Fabric.
+2. **Org selection: allowlist plus opt-in auto-discovery (delivered).**
+   The original ruling made `ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS` the only
+   source of the org set, with auto-discovery as a named follow-up. That
+   follow-up is now built, and the shape it took differs from the one the
+   ruling anticipated: discovery reads the organizations that already have
+   synced data, not the ones that hold credentials.
+
+   `ACR_CONTEXT_FABRIC_PROJECTOR_ORG_DISCOVERY=true` (default `false`,
+   `contextFabric.projector.orgDiscovery` in the chart) makes the
+   coordinator refresh its organization set at the start of **every** tick:
+
+   - The source is `projectionrun.OrgSource`, a one-method discovery port.
+     The production implementation
+     (`devhealthsource.ClickHouseOrgSource`) is ONE grouped eligibility
+     read over `repos`, `work_items` and `git_pull_requests` — never a
+     query per organization — bounded by `LIMIT 10000` and its own 10s
+     timeout, over the same ClickHouse client every canonical source
+     already reads through. The ceiling is ENFORCED, not merely intended:
+     the query asks for one row more than the ceiling and a saturated read
+     returns `ErrOrgDiscoverySaturated` instead of an organization list.
+     Serving the prefix would be the worst available answer, because the
+     coordinator treats a successful enumeration as the complete truth —
+     every organization past the ceiling would silently stop being
+     projected and would not even appear as a skip.
+   - A refresh's enumeration and the state it produces commit as ONE step
+     (`Coordinator.refreshMu`, held across the ClickHouse read). Locking
+     only the write is not enough: two concurrent refreshes — an
+     overlapping tick, or a tick racing the CLI's `RefreshOrgs` — would
+     then commit in completion order rather than start order, so a slow
+     older read lands last and overwrites the newer one. A just-discovered
+     organization disappears again, and if the older read saw nothing the
+     effective set collapses to the static allowlist, with
+     `outcome=succeeded` on the line.
+   - **Discovering an org id is not the same as deciding to build it a
+     graph.** The trial ClickHouse carries 88 organization ids, most of
+     them test junk; each graph is real projection work, real FalkorDB
+     keys and real embedding cost. Two eligibility conditions, both
+     evaluated in that one query:
+     1. the organization owns at least one `repos` row (repository
+        ownership is how this platform scopes a graph, so an organization
+        with work items and no repository has nothing to scope one around
+        yet) — reason `no_repo`;
+     2. its newest canonical activity — the maximum of
+        `repos.last_synced`, `work_items.updated_at` and
+        `git_pull_requests.last_synced` — falls inside
+        `ACR_CONTEXT_FABRIC_PROJECTOR_ORG_ACTIVITY_WINDOW`
+        (`contextFabric.projector.orgActivityWindow`, default 720h; `0s`
+        disables the condition, a negative value is refused) — reason
+        `inactive`.
+
+     Three tables rather than `repos` alone because `repos.last_synced` is
+     a SYNC stamp: a scheduled sync touches it for a dormant tenant just as
+     for a busy one, so on its own it would admit everything. Both
+     conditions are REVERSIBLE with no operator action: one new row inside
+     the window makes a skipped organization eligible on the next tick.
+   - `ACR_CONTEXT_FABRIC_PROJECTOR_ORG_DISCOVERY_DENY_IDS`
+     (`contextFabric.projector.orgDiscoveryDenyIds`) is the operator's
+     explicit exclusion — reason `denied`. It filters the DISCOVERED set
+     only; `ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS` is an always-include
+     allowlist and is never filtered by it, so an organization named in
+     both is projected (the explicit inclusion is the more specific
+     instruction).
+   - **Every exclusion is published, never silently dropped.** The
+     `OrgSource` port returns the skipped organizations alongside the
+     admitted ones, each with a closed reason
+     (`contextfabric.OrgSkipReasonVocabulary`), because "why is this tenant
+     not being projected" is the question an operator will actually ask.
+     The refresh line carries `orgs_skipped` plus a per-reason count for
+     EVERY vocabulary member on every refresh (at zero when a reason did
+     not fire), and each skipped organization is named on its own
+     `context_fabric: projection organization skipped` line, capped at 20
+     per tick with `skipped_truncated` stating when the cap bit. The counts
+     are never capped, and the detail window ROTATES across ticks: a fixed
+     window would name the same 20 forever, so with 88 excluded tenants
+     the other 68 would never receive a decision record on any tick at any
+     log level — a permanent blind spot rather than a volume bound. The
+     whole list is covered within `ceil(len/20)` ticks at unchanged
+     per-tick volume.
+   - The effective set is the **union** of the static allowlist and the
+     discovered set, trimmed, de-duplicated and sorted. The allowlist is a
+     floor, never a ceiling, so an operator can still pin an organization
+     that has not synced a repository yet.
+   - An enumeration failure **never shrinks the set.** The last successful
+     discovery is retained and the tick proceeds against it; only a
+     first-ever failure (no last-known set) falls back to the static
+     allowlist alone. The two cases carry different
+     `org_discovery_outcome` values (`failed` vs `failed_no_prior_set`)
+     because their consequences differ.
+   - Every refresh emits its decision basis at Info
+     (`org_discovery_outcome`, `orgs_static`, `orgs_discovered`,
+     `orgs_effective`, `orgs_new`), a failure at Warn with the same fields
+     plus a bounded `failure_class`. The tick summary's `orgs_configured`
+     reports the effective set, so the bucket identity still totals.
+   - A newly discovered organization has no checkpoint, so the existing
+     zero-cursor full-build path serves it, and under
+     `ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED` it builds at epoch 0
+     exactly as an organization present at startup does — proven, not
+     assumed, by
+     `TestOrgDiscovery_ANewlyDiscoveredOrganizationBuildsUnderTheLifecycleMachine`
+     against the real `pglifecycle.Store`.
+   - `Coordinator.allowsOrg` — the admission check behind
+     `acr-projector rebuild --org` / `rollback --org` — means "static
+     allowlist ∪ currently discovered set". Keeping it static-only would
+     refuse an operator lever for precisely the organizations discovery
+     exists to pick up. It is not an authorization widening: nothing in
+     this binary serves a request on a caller's behalf, and ACR API
+     authorization is decided in `internal/auth` from an authenticated
+     `Principal`. The two short-lived CLI commands have no tick, so they
+     call `Coordinator.RefreshOrgs` once before the check.
+   - The ruling's original objection — that credential-driven discovery
+     would project every org holding credentials regardless of opt-in — is
+     what the eligibility predicate answers. `repos` rows exist only for
+     organizations that have actually synced data, and the activity window
+     narrows that again to the ones still in use. The process-level
+     `ACR_CONTEXT_FABRIC_PROJECTION_ENABLED` switch, the default-off
+     discovery flag and the deny list remain the operator's levers.
+
+   With discovery enabled, an empty `ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS`
+   is accepted by `ProjectorConfig.validate`; with discovery off it is
+   still refused, unchanged.
 3. **`storage.EpisodeStore` extended directly — no parallel interface.**
    Implemented as described above: `ListSince` on the shared interface,
    both backends, with tests following each store's existing conventions

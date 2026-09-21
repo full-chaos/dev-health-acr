@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -207,14 +208,64 @@ const (
 	defaultDrainBatchBudget = 500
 )
 
+// OrgSource discovers the organizations a deployment should project,
+// beyond the static ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS allowlist
+// (CHAOS-6182). devhealthsource.ClickHouseOrgSource is the production
+// implementation: the organizations of the canonical Dev Health catalog
+// that own repositories and have moved recently.
+//
+// It is a DISCOVERY port, never an authorization one. Nothing here decides
+// whether a caller may act on an organization -- it only answers "which
+// organizations is this deployment meant to project", which is the same
+// question the static allowlist answers, from a live source instead of a
+// deploy-time list. The read must be cheap, read-only and bounded: it runs
+// at the START of every Tick.
+type OrgSource interface {
+	// ListOrgs returns the currently-eligible organization ids, together
+	// with every organization the enumeration saw and did not admit. An
+	// error is a transient enumeration failure, never "there are no
+	// organizations": Coordinator keeps its last-known set on error and
+	// never shrinks to empty on the strength of one failed read.
+	//
+	// An organization the adapter excluded belongs in Skipped, never
+	// silently omitted -- "why is this tenant not being projected" must be
+	// answerable from the run's own log line.
+	ListOrgs(ctx context.Context) (contextfabric.OrgDiscoveryResult, error)
+}
+
+// maxLoggedOrgSkipsPerTick caps how many individual skipped organizations
+// one refresh names. A shared environment can hold scores of throwaway
+// tenants, and naming every one of them every 15 seconds forever would
+// drown the operator's log in a steady state that never changes. The
+// per-reason COUNTS are always published in full, on every refresh, so the
+// cap costs detail about WHICH organizations were skipped, never the fact
+// that they were -- and the line says when it truncated.
+const maxLoggedOrgSkipsPerTick = 20
+
 type Config struct {
-	OrgIDs         []string
-	Sources        []SourcePair
-	Backend        contextfabric.ProjectionBackend
-	Checkpoints    contextfabric.ProjectionCheckpointStore
-	RebuildMarkers RebuildMarker // required -- see RebuildMarker's doc comment
-	Locker         OrgLocker     // nil -> NoopOrgLocker (in-process mutex only)
-	Observer       Observer      // nil -> discarded
+	OrgIDs []string
+	// OrgSource (CHAOS-6182) is optional. When set, Coordinator refreshes
+	// the effective organization set at the start of every Tick: the union
+	// of OrgIDs (the static allowlist) and whatever ListOrgs returns. When
+	// nil the effective set is exactly OrgIDs forever -- byte-identical to
+	// pre-CHAOS-6182 behavior, which is why discovery is opt-in at the
+	// config layer (ACR_CONTEXT_FABRIC_PROJECTOR_ORG_DISCOVERY) rather than
+	// on by default.
+	OrgSource OrgSource
+	// OrgDiscoveryDeny (CHAOS-6182) names organizations discovery must
+	// never admit -- an operator's explicit exclusion, applied to the
+	// DISCOVERED set only. OrgIDs is an always-include allowlist and is
+	// never filtered by it: an operator who both named an organization and
+	// denied it has contradicted themselves, and the explicit inclusion is
+	// the more specific instruction. Ignored entirely when OrgSource is
+	// nil, because there is nothing to filter.
+	OrgDiscoveryDeny []string
+	Sources          []SourcePair
+	Backend          contextfabric.ProjectionBackend
+	Checkpoints      contextfabric.ProjectionCheckpointStore
+	RebuildMarkers   RebuildMarker // required -- see RebuildMarker's doc comment
+	Locker           OrgLocker     // nil -> NoopOrgLocker (in-process mutex only)
+	Observer         Observer      // nil -> discarded
 	// ReuseInvalidator is optional (CHAOS-3782). When set, Coordinator
 	// calls InvalidateOrganizationReuse for orgID immediately after a
 	// rebuild (explicit or crash-resumed) completes -- see
@@ -309,7 +360,53 @@ type RetireScheduler interface {
 // (org, source) pair, cancellation, and failure isolation: one pair's error
 // never blocks another org or source.
 type Coordinator struct {
-	orgIDs           []string
+	// staticOrgIDs is the deploy-time allowlist (Config.OrgIDs), immutable
+	// after construction. orgIDs below is the EFFECTIVE set -- the static
+	// allowlist unioned with the most recent successful discovery -- and is
+	// the only thing any scheduling or admission path reads.
+	staticOrgIDs []string
+	orgSource    OrgSource
+	// refreshMu serializes WHOLE refreshes -- the ListOrgs call together
+	// with the state it produces -- and is therefore held across a network
+	// read, unlike every other mutex in this file.
+	//
+	// orgsMu alone is not enough, and the gap it leaves is not theoretical:
+	// with the enumeration outside the lock, two concurrent refreshes (an
+	// overlapping Tick, or a tick racing the CLI's RefreshOrgs) commit in
+	// COMPLETION order rather than start order, so a slow older read lands
+	// last and overwrites the newer one. A newly discovered organization
+	// disappears again, and if the older read saw nothing, the effective
+	// set collapses back to the static allowlist -- with outcome=succeeded
+	// on the line, which is the shape nobody can debug.
+	//
+	// The cost is that a second refresh waits out the first's ClickHouse
+	// read instead of issuing its own. That is the right trade: ticks are
+	// 15s apart, the read carries its own 10s bound, and a queued refresh
+	// is strictly better than a duplicate concurrent query whose result may
+	// be discarded anyway.
+	refreshMu sync.Mutex
+	// orgSkipLogCursor rotates which window of a large skip list the next
+	// refresh names -- see logOrgSkips. Guarded by refreshMu.
+	orgSkipLogCursor int
+	// orgDiscoveryDeny is Config.OrgDiscoveryDeny as a set, immutable
+	// after construction. Empty is the default and means no filtering.
+	orgDiscoveryDeny map[string]struct{}
+	// orgsMu guards orgIDs and discoveredOrgs. Every reader takes a
+	// SNAPSHOT under RLock (see orgs()) rather than ranging over the live
+	// slice: refreshOrgs replaces the slice wholesale from Tick's goroutine
+	// while LivenessCheck runs concurrently on the readiness-probe
+	// goroutine.
+	orgsMu sync.RWMutex
+	orgIDs []string
+	// discoveredOrgs is the last SUCCESSFUL discovery result, retained so a
+	// failed enumeration keeps the effective set intact instead of
+	// collapsing it back to the static allowlist.
+	discoveredOrgs []string
+	// orgDiscoveryStarted records whether any discovery has ever succeeded,
+	// so the first-ever failure is distinguishable from a later one on the
+	// log line (the first has no last-known set to keep).
+	orgDiscoveryStarted bool
+
 	sourceNames      []string
 	workers          map[string]*contextfabric.ProjectionWorker
 	sources          map[string]contextfabric.ProjectionSource // CHAOS-3887: needed for the freshness signal's current_source_version, which ProjectionWorker does not expose
@@ -358,20 +455,283 @@ type pairBackoff struct {
 	nextAttempt         time.Time
 }
 
-// allowsOrg reports whether orgID is in the coordinator's configured
-// allowlist (Config.OrgIDs / ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS). Every
-// entry point that acts on an organization by ID -- Tick (implicitly, since
-// it only ever iterates c.orgIDs) and Rebuild (explicitly, since it takes
-// an arbitrary caller-supplied ID) -- must go through this so an operator
-// invoking `acr-projector rebuild --org <id>` can never purge a tenant the
-// deployment was never configured to project.
+// orgs returns a SNAPSHOT of the effective organization set. Every
+// iteration site takes one rather than ranging over c.orgIDs directly:
+// refreshOrgs replaces the slice wholesale at the start of each Tick while
+// LivenessCheck may be running concurrently on the readiness-probe
+// goroutine.
+func (c *Coordinator) orgs() []string {
+	c.orgsMu.RLock()
+	defer c.orgsMu.RUnlock()
+	return append([]string(nil), c.orgIDs...)
+}
+
+// allowsOrg reports whether orgID is in the coordinator's EFFECTIVE
+// organization set: the static allowlist (Config.OrgIDs /
+// ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS) unioned with the currently
+// discovered set (CHAOS-6182). Every entry point that acts on an
+// organization by ID -- Tick (implicitly, since it only ever iterates the
+// effective set) and Rebuild/Rollback (explicitly, since they take an
+// arbitrary caller-supplied ID) -- must go through this so an operator
+// invoking `acr-projector rebuild --org <id>` can never purge a tenant this
+// deployment does not project.
+//
+// Widening it to include the discovered set is deliberate, and it is NOT a
+// widening of authorization: discovery decides what this projector
+// projects, so the set of organizations it ticks and the set an operator
+// may rebuild MUST be the same set, or `rebuild --org` would be refused for
+// exactly the organizations auto-discovery exists to pick up -- an operator
+// lever that works for hand-listed tenants and silently not for discovered
+// ones. Authorization for the ACR API is decided elsewhere entirely
+// (internal/auth, from an authenticated Principal); nothing in this binary
+// serves a request on a caller's behalf. A short-lived CLI process has no
+// Tick, so it refreshes discovery once before checking -- see RefreshOrgs.
 func (c *Coordinator) allowsOrg(orgID string) bool {
+	c.orgsMu.RLock()
+	defer c.orgsMu.RUnlock()
 	for _, allowed := range c.orgIDs {
 		if allowed == orgID {
 			return true
 		}
 	}
 	return false
+}
+
+// RefreshOrgs re-runs discovery once and updates the effective organization
+// set, for a caller that has no Tick loop to do it: `acr-projector rebuild
+// --org` / `rollback --org` are separate short-lived processes, so without
+// this they would decide admission against the static allowlist alone and
+// refuse every auto-discovered organization. A nil OrgSource makes it a
+// no-op returning nil, so a discovery-off deployment behaves exactly as
+// before. An enumeration failure is returned so the CLI can report it --
+// the effective set is left at its last-known value either way.
+func (c *Coordinator) RefreshOrgs(ctx context.Context) error {
+	return c.refreshOrgs(ctx)
+}
+
+// refreshOrgs recomputes the effective organization set from the static
+// allowlist and a fresh ListOrgs read. It NEVER shrinks the set to empty on
+// a failed read: the last successful discovery is retained, so a ClickHouse
+// blip cannot silently stop projecting every discovered tenant (which would
+// look exactly like a healthy idle projector -- the CHAOS-3882 failure
+// shape one level up).
+//
+// Every refresh emits its decision basis: the three set sizes, how many
+// organizations are new relative to the previous effective set, a
+// per-reason count of every organization discovery saw and did NOT admit,
+// and a closed-vocabulary outcome. Required, not optional -- "which
+// organizations is this projector serving, and why is this one not among
+// them" is an outcome-affecting branch, and a diagnosis must be possible
+// from the run's own artifacts.
+func (c *Coordinator) refreshOrgs(ctx context.Context) error {
+	if c == nil || c.orgSource == nil {
+		return nil
+	}
+	// Held across the enumeration AND the state it produces -- see
+	// refreshMu's own doc comment for the out-of-order commit this closes.
+	c.refreshMu.Lock()
+	defer c.refreshMu.Unlock()
+
+	discovery, listErr := c.orgSource.ListOrgs(ctx)
+	// The deny list is applied HERE rather than inside the adapter so it
+	// governs every OrgSource identically, and so the static allowlist's
+	// "never filtered" rule lives in one place -- see Config.OrgDiscoveryDeny.
+	admitted, denied := c.applyOrgDeny(discovery.OrgIDs)
+	skipped := append(append([]contextfabric.SkippedOrg(nil), discovery.Skipped...), denied...)
+
+	c.orgsMu.Lock()
+	previous := c.orgIDs
+	outcome := orgDiscoveryOutcomeSucceeded
+	switch {
+	case listErr != nil && c.orgDiscoveryStarted:
+		// Keep the last-known discovered set verbatim.
+		outcome = orgDiscoveryOutcomeFailed
+	case listErr != nil:
+		// First-ever attempt failed: there is no last-known set, so the
+		// effective set is the static allowlist alone. A distinct outcome
+		// because the consequence differs -- nothing is being retained.
+		outcome = orgDiscoveryOutcomeFailedNoPriorSet
+	default:
+		c.discoveredOrgs = sanitizeOrgIDs(admitted)
+		c.orgDiscoveryStarted = true
+	}
+	effective := unionOrgIDs(c.staticOrgIDs, c.discoveredOrgs)
+	added := countNewOrgs(previous, effective)
+	c.orgIDs = effective
+	staticCount, discoveredCount, effectiveCount := len(c.staticOrgIDs), len(c.discoveredOrgs), len(effective)
+	c.orgsMu.Unlock()
+
+	skipCounts := countOrgSkips(skipped)
+	attrs := []any{
+		"org_discovery_outcome", string(outcome),
+		"orgs_static", staticCount,
+		"orgs_discovered", discoveredCount,
+		"orgs_effective", effectiveCount,
+		"orgs_new", added,
+		// Present on EVERY refresh, at zero when nothing was skipped: a
+		// field that appeared only when non-zero could not be told apart
+		// from a build that does not report skips at all. Same reasoning
+		// the tick summary's own failed-source disclosure gives.
+		"orgs_skipped", len(skipped),
+	}
+	for _, reason := range contextfabric.OrgSkipReasonVocabulary() {
+		attrs = append(attrs, "orgs_skipped_"+string(reason), skipCounts[reason])
+	}
+	if listErr != nil {
+		c.logger.WarnContext(ctx, "context_fabric: projection organization discovery failed",
+			append(attrs, "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(listErr)))...)
+		return listErr
+	}
+	c.logger.InfoContext(ctx, "context_fabric: projection organization discovery",
+		append(attrs, "skipped_truncated", len(skipped) > maxLoggedOrgSkipsPerTick)...)
+	c.logOrgSkips(ctx, skipped)
+	return nil
+}
+
+// applyOrgDeny splits a discovered set into the organizations to admit and
+// the ones an operator's deny list excludes. It never consults the static
+// allowlist: Config.OrgIDs is an always-include list, and an organization
+// on it reaches the effective set through unionOrgIDs regardless of what
+// this returns.
+func (c *Coordinator) applyOrgDeny(discovered []string) (admitted []string, denied []contextfabric.SkippedOrg) {
+	if len(c.orgDiscoveryDeny) == 0 {
+		return discovered, nil
+	}
+	admitted = make([]string, 0, len(discovered))
+	for _, orgID := range discovered {
+		if _, blocked := c.orgDiscoveryDeny[strings.TrimSpace(orgID)]; blocked {
+			denied = append(denied, contextfabric.SkippedOrg{OrgID: orgID, Reason: contextfabric.OrgSkipReasonDenied})
+			continue
+		}
+		admitted = append(admitted, orgID)
+	}
+	return admitted, denied
+}
+
+// countOrgSkips tallies skips per reason, seeding EVERY vocabulary member
+// at zero so the emitted line carries the whole vocabulary on every
+// refresh. A reason present only when it fired is indistinguishable from a
+// build that does not know about it.
+func countOrgSkips(skipped []contextfabric.SkippedOrg) map[contextfabric.OrgSkipReason]int {
+	counts := map[contextfabric.OrgSkipReason]int{}
+	for _, reason := range contextfabric.OrgSkipReasonVocabulary() {
+		counts[reason] = 0
+	}
+	for _, skip := range skipped {
+		counts[skip.Reason]++
+	}
+	return counts
+}
+
+// logOrgSkips names individual skipped organizations, bounded by
+// maxLoggedOrgSkipsPerTick. At Info, not Debug: "this tenant is not being
+// projected, and here is why" is exactly the question an operator reaches
+// for this log to answer, and a line only visible at a level nobody runs
+// in production answers nothing. The per-reason counts on the summary line
+// are the unbounded half; this is the detail.
+//
+// The window ROTATES across refreshes rather than always naming the first
+// N. A fixed window makes the cap far worse than a volume bound: with 88
+// excluded tenants and a cap of 20, the same 20 are named on every tick
+// forever and the other 68 never receive a decision record at all, on any
+// tick, at any log level. Rotating keeps the same per-tick volume and
+// makes "every skipped organization is eventually named" true -- the whole
+// list is covered within ceil(len/cap) ticks, about a minute at the
+// default poll interval.
+//
+// The cursor is deliberately a per-process position, not a per-organization
+// one: it needs no bookkeeping that could itself drift, and a restart
+// simply begins the sweep again.
+func (c *Coordinator) logOrgSkips(ctx context.Context, skipped []contextfabric.SkippedOrg) {
+	if len(skipped) == 0 {
+		return
+	}
+	start := c.orgSkipLogCursor % len(skipped)
+	count := len(skipped)
+	if count > maxLoggedOrgSkipsPerTick {
+		count = maxLoggedOrgSkipsPerTick
+	}
+	for i := 0; i < count; i++ {
+		skip := skipped[(start+i)%len(skipped)]
+		c.logger.InfoContext(ctx, "context_fabric: projection organization skipped",
+			"org_id", contextfabric.SanitizeLogAttr(skip.OrgID),
+			"org_skip_reason", contextfabric.SanitizeLogAttr(string(skip.Reason)))
+	}
+	c.orgSkipLogCursor = (start + count) % len(skipped)
+}
+
+// orgDiscoveryOutcome is the closed vocabulary of refreshOrgs' decision
+// basis. Three members, because the two failure cases have DIFFERENT
+// consequences: one retains a last-known discovered set, the other has none
+// to retain and falls back to the static allowlist alone.
+type orgDiscoveryOutcome string
+
+const (
+	orgDiscoveryOutcomeSucceeded        orgDiscoveryOutcome = "succeeded"
+	orgDiscoveryOutcomeFailed           orgDiscoveryOutcome = "failed"
+	orgDiscoveryOutcomeFailedNoPriorSet orgDiscoveryOutcome = "failed_no_prior_set"
+)
+
+// OrgDiscoveryOutcomeVocabulary is the closed set refreshOrgs' logged
+// org_discovery_outcome field may carry. Exported as the ONE list, so a
+// test asserting the vocabulary cannot drift from the producer by keeping
+// its own copy.
+func OrgDiscoveryOutcomeVocabulary() [3]string {
+	return [3]string{
+		string(orgDiscoveryOutcomeSucceeded),
+		string(orgDiscoveryOutcomeFailed),
+		string(orgDiscoveryOutcomeFailedNoPriorSet),
+	}
+}
+
+// sanitizeOrgIDs trims, drops blanks and de-duplicates. A discovered set
+// comes from a data store, not a validated config, so a blank or padded
+// value is reachable here in a way NewCoordinator's static-allowlist check
+// never has to consider -- and a blank org id reaches
+// ProjectionWorker.RunOnce's own validation as an unattributable pair
+// failure (see that check's own comment).
+func sanitizeOrgIDs(ids []string) []string {
+	seen := make(map[string]struct{}, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		trimmed := strings.TrimSpace(id)
+		if trimmed == "" {
+			continue
+		}
+		if _, duplicate := seen[trimmed]; duplicate {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+// unionOrgIDs merges the static allowlist with the discovered set, sorted,
+// so the tick's dispatch order is deterministic regardless of the order a
+// store happened to return rows in.
+func unionOrgIDs(static, discovered []string) []string {
+	merged := sanitizeOrgIDs(append(append([]string(nil), static...), discovered...))
+	sort.Strings(merged)
+	return merged
+}
+
+// countNewOrgs reports how many members of current were absent from
+// previous -- the "orgs_new" field, which is what makes a newly discovered
+// tenant's first tick visible rather than inferable from a count that
+// happened to change.
+func countNewOrgs(previous, current []string) int {
+	known := make(map[string]struct{}, len(previous))
+	for _, id := range previous {
+		known[id] = struct{}{}
+	}
+	added := 0
+	for _, id := range current {
+		if _, ok := known[id]; !ok {
+			added++
+		}
+	}
+	return added
 }
 
 func NewCoordinator(cfg Config) (*Coordinator, error) {
@@ -455,8 +815,19 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 		sources[pair.Name] = pair.Source
 		sourceNames = append(sourceNames, pair.Name)
 	}
+	// CHAOS-6182: the static allowlist is BOTH the initial effective set and
+	// a permanent floor. A deployment that configures discovery and nothing
+	// else starts with an empty effective set and picks its organizations up
+	// on the first Tick's refresh; a deployment that configures neither
+	// keeps exactly the pre-CHAOS-6182 behavior.
+	staticOrgIDs := sanitizeOrgIDs(cfg.OrgIDs)
+	orgDiscoveryDeny := make(map[string]struct{}, len(cfg.OrgDiscoveryDeny))
+	for _, orgID := range sanitizeOrgIDs(cfg.OrgDiscoveryDeny) {
+		orgDiscoveryDeny[orgID] = struct{}{}
+	}
 	return &Coordinator{
-		orgIDs: append([]string(nil), cfg.OrgIDs...), sourceNames: sourceNames, workers: workers, sources: sources,
+		staticOrgIDs: staticOrgIDs, orgSource: cfg.OrgSource, orgDiscoveryDeny: orgDiscoveryDeny,
+		orgIDs: append([]string(nil), staticOrgIDs...), sourceNames: sourceNames, workers: workers, sources: sources,
 		backend: cfg.Backend, checkpoints: cfg.Checkpoints, rebuildMarkers: cfg.RebuildMarkers,
 		locker: cfg.Locker, observer: cfg.Observer, reuseInvalidator: cfg.ReuseInvalidator,
 		lifecycle: cfg.Lifecycle, epochCheckpoints: cfg.EpochCheckpoints, retireScheduler: cfg.RetireScheduler,
@@ -1320,10 +1691,17 @@ func (s *tickFreshnessStats) recordDivergenceRecovered() {
 // Exported so hosting composition (and tests) can drive ticks explicitly
 // instead of waiting on PollInterval.
 func (c *Coordinator) Tick(ctx context.Context) {
+	// CHAOS-6182: refresh BEFORE anything else this tick, so an
+	// organization that appeared since the last tick is projected on this
+	// one rather than the next. A failed refresh is logged loudly and the
+	// tick proceeds against the last-known set -- a discovery outage must
+	// degrade to "project what we knew about", never to "project nothing".
+	_ = c.refreshOrgs(ctx)
+	orgIDs := c.orgs()
 	sem := make(chan struct{}, c.concurrency)
 	var wg sync.WaitGroup
 	stats := &tickFreshnessStats{}
-	for i, orgID := range c.orgIDs {
+	for i, orgID := range orgIDs {
 		if ctx.Err() != nil {
 			// Every remaining organization is unevaluated, and the tick is
 			// partial. Counting them is what keeps the bucket identity
@@ -1333,7 +1711,7 @@ func (c *Coordinator) Tick(ctx context.Context) {
 			// "finish() is the only commit path" is literally true rather
 			// than nearly true. Each of these was never dispatched, so each
 			// scope is incomplete by construction.
-			for range c.orgIDs[i:] {
+			for range orgIDs[i:] {
 				undispatched := stats.beginOrg(ctx)
 				undispatched.finish()
 			}
@@ -1386,7 +1764,7 @@ func (c *Coordinator) Tick(ctx context.Context) {
 		// configured organization summed to zero and simply vanished from
 		// the line. A reviewer executed that. orgs_divergence_recovered is
 		// now a full member of the identity, not a side note beside it.
-		"orgs_configured", int64(len(c.orgIDs)),
+		"orgs_configured", int64(len(orgIDs)),
 		// tick_complete says the tick finished dispatching and evaluating.
 		// Present on every line so a finished tick is an assertion, not the
 		// absence of a warning -- a cancelled tick used to be visible only
@@ -1403,7 +1781,7 @@ func (c *Coordinator) Tick(ctx context.Context) {
 		// bucket no longer supplies.
 		"tick_complete", atomic.LoadInt64(&stats.orgsUnevaluated) == 0 &&
 			atomic.LoadInt64(&stats.orgsTruncated) == 0 &&
-			int64(len(c.orgIDs)) == atomic.LoadInt64(&stats.orgsOK)+
+			int64(len(orgIDs)) == atomic.LoadInt64(&stats.orgsOK)+
 				atomic.LoadInt64(&stats.orgsRebuildRequired)+
 				atomic.LoadInt64(&stats.orgsBackoff)+
 				atomic.LoadInt64(&stats.orgsSourceFailed)+
@@ -2183,7 +2561,10 @@ func (c *Coordinator) checkpointStoreDiverged(ctx context.Context, orgID string,
 // while resolution is silently served against an empty graph.
 func (c *Coordinator) LivenessCheck(ctx context.Context) error {
 	var diverged []string
-	for _, orgID := range c.orgIDs {
+	// Snapshot, never the live slice: this runs on the readiness-probe
+	// goroutine while Tick's refreshOrgs may be replacing it (CHAOS-6182).
+	// Read-only here too -- a readiness probe never triggers discovery.
+	for _, orgID := range c.orgs() {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -2637,7 +3018,7 @@ func (c *Coordinator) sweepGraceExpirations(ctx context.Context) {
 	if c.lifecycle == nil {
 		return
 	}
-	for _, orgID := range c.orgIDs {
+	for _, orgID := range c.orgs() {
 		if ctx.Err() != nil {
 			return
 		}

@@ -118,6 +118,16 @@ func rebuild(args []string) error {
 	if runtime.Coordinator == nil {
 		return errors.New("acr-projector rebuild requires Postgres, ClickHouse, and a configured Zep graph backend")
 	}
+	// CHAOS-6182: this is a short-lived process with no Tick loop, so
+	// nothing else would ever populate the discovered organization set --
+	// without this refresh, `rebuild --org` would be refused for precisely
+	// the auto-discovered organizations the feature exists to project. A
+	// no-op when discovery is off. A failed enumeration is NOT fatal: the
+	// static allowlist still admits its own organizations, and the
+	// coordinator has already logged the failure with its outcome.
+	if err := runtime.Coordinator.RefreshOrgs(ctx); err != nil {
+		logger.WarnContext(ctx, "organization discovery failed before rebuild; falling back to the static allowlist", "failure_class", projectionrun.ClassifyFailure(err))
+	}
 	if err := runtime.Coordinator.Rebuild(ctx, *org); err != nil {
 		return fmt.Errorf("rebuild organization %s: %w", *org, err)
 	}
@@ -164,6 +174,12 @@ func rollback(args []string) error {
 	}()
 	if runtime.Coordinator == nil {
 		return errors.New("acr-projector rollback requires Postgres, ClickHouse, and a configured Zep graph backend")
+	}
+	// CHAOS-6182: same reason as rebuild's own refresh above -- a
+	// short-lived process has no Tick to populate the discovered set, and
+	// rollback is admitted through the same allowsOrg check.
+	if err := runtime.Coordinator.RefreshOrgs(ctx); err != nil {
+		logger.WarnContext(ctx, "organization discovery failed before rollback; falling back to the static allowlist", "failure_class", projectionrun.ClassifyFailure(err))
 	}
 	if err := runtime.Coordinator.Rollback(ctx, *org); err != nil {
 		return fmt.Errorf("rollback organization %s: %w", *org, err)

@@ -23,13 +23,22 @@ const (
 	defaultProjectorPingTimeout   = 5 * time.Second
 	envContextFabricProjection    = "ACR_CONTEXT_FABRIC_PROJECTION_ENABLED"
 	envContextFabricProjectorOrgs = "ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS"
-	envContextFabricPollInterval  = "ACR_CONTEXT_FABRIC_PROJECTION_POLL_INTERVAL"
-	envContextFabricConcurrency   = "ACR_CONTEXT_FABRIC_PROJECTION_CONCURRENCY"
-	envContextFabricDrainBudget   = "ACR_CONTEXT_FABRIC_PROJECTION_DRAIN_BATCH_BUDGET"
-	envContextFabricTeamsProjects = "ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED"
-	envContextFabricGraphReads    = "ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED"
-	envProjectorListenAddress     = "ACR_PROJECTOR_ADDR"
-	envProjectorEnvironment       = "ACR_ENVIRONMENT"
+	envContextFabricOrgDiscovery  = "ACR_CONTEXT_FABRIC_PROJECTOR_ORG_DISCOVERY"
+	envContextFabricOrgActivity   = "ACR_CONTEXT_FABRIC_PROJECTOR_ORG_ACTIVITY_WINDOW"
+	envContextFabricOrgDenyIDs    = "ACR_CONTEXT_FABRIC_PROJECTOR_ORG_DISCOVERY_DENY_IDS"
+	// defaultProjectorOrgActivityWindow mirrors
+	// devhealthsource.DefaultOrgActivityWindow. It is restated rather than
+	// imported because internal/config must not depend on a Context Fabric
+	// adapter package; the two are pinned equal by a test rather than by
+	// hope (see TestOrgActivityWindowDefaultMatchesTheAdapter).
+	defaultProjectorOrgActivityWindow = 720 * time.Hour
+	envContextFabricPollInterval      = "ACR_CONTEXT_FABRIC_PROJECTION_POLL_INTERVAL"
+	envContextFabricConcurrency       = "ACR_CONTEXT_FABRIC_PROJECTION_CONCURRENCY"
+	envContextFabricDrainBudget       = "ACR_CONTEXT_FABRIC_PROJECTION_DRAIN_BATCH_BUDGET"
+	envContextFabricTeamsProjects     = "ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED"
+	envContextFabricGraphReads        = "ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED"
+	envProjectorListenAddress         = "ACR_PROJECTOR_ADDR"
+	envProjectorEnvironment           = "ACR_ENVIRONMENT"
 )
 
 // ProjectorConfig is cmd/acr-projector's process configuration. It shares
@@ -69,12 +78,37 @@ type ProjectorConfig struct {
 	// two lanes don't collide on the name). When false the coordinator loop
 	// never starts; the readiness server still runs and reports disabled.
 	ProjectionEnabled bool
-	// OrgIDs is the explicit allowlist of organizations to project. See
-	// docs/design/context-fabric-projection-worker.md for why this starts
-	// as an explicit list rather than auto-discovery.
-	OrgIDs       []string
-	PollInterval time.Duration
-	Concurrency  int
+	// OrgIDs is the static allowlist of organizations to project. Since
+	// CHAOS-6182 it is a FLOOR rather than the whole set: when
+	// OrgDiscoveryEnabled is true the coordinator unions it with the
+	// organizations it discovers from ClickHouse on every tick. See
+	// docs/design/context-fabric-projection-worker.md.
+	OrgIDs []string
+	// OrgDiscoveryEnabled (CHAOS-6182,
+	// ACR_CONTEXT_FABRIC_PROJECTOR_ORG_DISCOVERY) makes acr-projector
+	// auto-discover organizations every tick instead of projecting only
+	// the hand-maintained OrgIDs list -- so a new tenant gets a graph
+	// without a deploy. Default FALSE: a deployment that does not set it
+	// behaves exactly as it did before, and the empty-OrgIDs refusal in
+	// validate() below still applies to it.
+	OrgDiscoveryEnabled bool
+	// OrgActivityWindow (ACR_CONTEXT_FABRIC_PROJECTOR_ORG_ACTIVITY_WINDOW)
+	// is how recently a DISCOVERED organization's canonical data must have
+	// moved for it to be given a graph. It exists because a shared
+	// ClickHouse accumulates throwaway tenants -- the trial instance
+	// carries 88 organization ids, most of them test junk -- and giving
+	// each one a graph is real projection, key and embedding cost for
+	// nothing. Zero disables the activity condition (repository ownership
+	// still applies); a negative value is refused. Ignored entirely when
+	// OrgDiscoveryEnabled is false, and it never affects OrgIDs.
+	OrgActivityWindow time.Duration
+	// OrgDiscoveryDenyIDs (ACR_CONTEXT_FABRIC_PROJECTOR_ORG_DISCOVERY_DENY_IDS)
+	// names organizations discovery must never admit. It filters the
+	// DISCOVERED set only: OrgIDs is an always-include allowlist, so an
+	// organization named in both is projected.
+	OrgDiscoveryDenyIDs []string
+	PollInterval        time.Duration
+	Concurrency         int
 	// DrainBatchBudget (CHAOS-3826) bounds how many extra batches, beyond
 	// the one every configured source always attempts, one organization's
 	// Tick may pull across all its sources combined before yielding to the
@@ -196,6 +230,13 @@ func loadProjector(lookup lookupEnv, required requiredStores) (ProjectorConfig, 
 		return ProjectorConfig{}, err
 	}
 	cfg.OrgIDs = stringListValue(lookup, envContextFabricProjectorOrgs)
+	if cfg.OrgDiscoveryEnabled, err = boolValue(lookup, envContextFabricOrgDiscovery, false); err != nil {
+		return ProjectorConfig{}, err
+	}
+	if cfg.OrgActivityWindow, err = durationValue(lookup, envContextFabricOrgActivity, defaultProjectorOrgActivityWindow); err != nil {
+		return ProjectorConfig{}, err
+	}
+	cfg.OrgDiscoveryDenyIDs = stringListValue(lookup, envContextFabricOrgDenyIDs)
 	if cfg.PollInterval, err = durationValue(lookup, envContextFabricPollInterval, defaultProjectionPollInterval); err != nil {
 		return ProjectorConfig{}, err
 	}
@@ -275,8 +316,27 @@ func (c ProjectorConfig) validate(required requiredStores) error {
 	// environment's ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=true (set for a
 	// co-located `serve` process, not for priors) without org ids must not
 	// refuse a priors start that has nothing to do with that loop.
-	if required.projection && c.ProjectionEnabled && c.RequireBackingStores && len(c.OrgIDs) == 0 {
-		return fmt.Errorf("%s is required when %s is true in an environment that requires backing stores", envContextFabricProjectorOrgs, envContextFabricProjection)
+	//
+	// CHAOS-6182: ...unless auto-discovery is on. The refusal exists because
+	// a projector that can name NO organizations projects nothing while
+	// looking healthy. With ACR_CONTEXT_FABRIC_PROJECTOR_ORG_DISCOVERY=true
+	// an empty static list is not that state: the coordinator enumerates
+	// its organizations at the start of every tick and reports the outcome
+	// of every enumeration, so "which organizations does this projector
+	// serve" is still an answerable question -- answered live rather than
+	// at deploy time. An empty list with discovery OFF is refused exactly
+	// as before.
+	// A negative window is refused rather than silently coerced: it can
+	// only be a mistake, and coercing it to "disabled" or to the default
+	// would each be a different guess at what the operator meant. Zero IS
+	// meaningful (the activity condition off), so it cannot double as the
+	// sentinel -- the same reasoning DrainBatchBudget's own doc comment
+	// gives for its sign convention.
+	if required.projection && c.OrgActivityWindow < 0 {
+		return fmt.Errorf("%s must not be negative (0 disables the activity condition)", envContextFabricOrgActivity)
+	}
+	if required.projection && c.ProjectionEnabled && c.RequireBackingStores && !c.OrgDiscoveryEnabled && len(c.OrgIDs) == 0 {
+		return fmt.Errorf("%s is required when %s is true in an environment that requires backing stores (or set %s=true to auto-discover organizations)", envContextFabricProjectorOrgs, envContextFabricProjection, envContextFabricOrgDiscovery)
 	}
 	return nil
 }
@@ -287,7 +347,9 @@ func (c ProjectorConfig) SafeAttributes() []any {
 	return []any{
 		"environment", c.Environment, "listen_address", c.ListenAddress,
 		"projection_enabled", c.ProjectionEnabled,
-		"organization_count", len(c.OrgIDs), "poll_interval", c.PollInterval.String(),
+		"organization_count", len(c.OrgIDs), "org_discovery_enabled", c.OrgDiscoveryEnabled,
+		"org_activity_window", c.OrgActivityWindow.String(), "org_discovery_deny_count", len(c.OrgDiscoveryDenyIDs),
+		"poll_interval", c.PollInterval.String(),
 		"concurrency", c.Concurrency, "drain_batch_budget", c.DrainBatchBudget, "teams_projects_enabled", c.TeamsProjectsEnabled,
 		"require_backing_stores", c.RequireBackingStores, "local_composition_ready", c.LocalCompositionReady,
 	}
