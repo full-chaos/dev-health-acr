@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"errors"
+	"io"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -179,5 +180,42 @@ func TestServeOptionsFromEnvironmentDomain(t *testing.T) {
 	}
 	if len(cells) != 8 {
 		t.Fatalf("%d cells, want 8", len(cells))
+	}
+}
+
+// The http process constructor is the only thing that turns the hosted
+// scope rule on: the process it builds is Hosted, the STDIO boot split is
+// not, and an http process marked back to STDIO stops being Hosted, so the
+// deny path is decided by Transport alone.
+func TestHostedFollowsTheTransportOnly(t *testing.T) {
+	fx := newFixtureServer(t)
+	process, err := NewHTTPProcessConfig(fixtureConfig(t, fx.Server), testReleaseIdentity(), io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if process.Transport() != TransportHTTP || !process.Hosted() {
+		t.Fatalf("http process: transport %q hosted %v", process.Transport(), process.Hosted())
+	}
+	stdio, _ := newFixtureBootstrap(t, fx).split(io.Discard)
+	if stdio.Transport() != TransportSTDIO || stdio.Hosted() {
+		t.Fatalf("stdio process: transport %q hosted %v", stdio.Transport(), stdio.Hosted())
+	}
+	process.transport = TransportSTDIO
+	if process.Hosted() {
+		t.Fatal("an http-built process marked STDIO is still hosted")
+	}
+}
+
+// Every tool the server can register is a member of the request line's tool
+// vocabulary, so no registered tool is logged as "other".
+func TestEveryRegisteredToolIsInTheRequestLineVocabulary(t *testing.T) {
+	registered := []string{toolContextForTask, toolSourceEvidence, toolInvestigateQuestion, toolInvestigationResult, toolRecordEpisode}
+	for _, name := range registered {
+		if bucket(name, HTTPToolVocabulary()) != name {
+			t.Errorf("tool %q is not in the request line vocabulary", name)
+		}
+	}
+	if len(registered) != 5 {
+		t.Fatalf("%d tools, want 5", len(registered))
 	}
 }

@@ -377,3 +377,33 @@ func parseLog(t *testing.T, e *endpoint) *certify.Log {
 	}
 	return log
 }
+
+// The hosted transport is the process the explicit-scope rule exists for: a
+// goal-only context_for_task over HTTP is refused with the typed hosted
+// refusal and never reaches acr-api's context-packet route, even though this
+// test process's working directory is a Git checkout a STDIO sidecar would
+// resolve a repository from.
+func TestHTTPContextForTaskWithoutARepositoryIsTheHostedRefusal(t *testing.T) {
+	hosted := newHostedAPI(t)
+	e := newEndpoint(t, hosted)
+	caller := hosted.issue(readScopes, []string{repoPlain}, nil)
+	session := connectClient(t, e, &headerTransport{bearer: caller.token})
+	result, err := session.CallTool(context.Background(), &mcpsdk.CallToolParams{Name: "context_for_task", Arguments: map[string]any{"goal": "inspect"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var text string
+	for _, c := range result.Content {
+		if tc, ok := c.(*mcpsdk.TextContent); ok {
+			text += tc.Text
+		}
+	}
+	if !result.IsError || text != "validation: "+acrmcp.HostedRepositoryRequiredMessageForTest {
+		t.Fatalf("result isError=%v text=%q, want the hosted repository refusal", result.IsError, text)
+	}
+	for _, path := range hosted.pathsSeenBy(caller.credentialID) {
+		if path == "/api/v1/agent-context/context-packets" {
+			t.Fatal("a refused hosted context_for_task reached acr-api")
+		}
+	}
+}
