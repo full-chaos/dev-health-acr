@@ -33,7 +33,12 @@ var validateFederatedResponse = func(response contractsv1.MCPContextForTaskRespo
 // markdown rendering. Every returned error is a normal tool failure
 // (CallToolResult.IsError), never a Go error that would crash the protocol
 // session.
-func handleContextForTask(ctx context.Context, boot *Bootstrap, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+func handleContextForTask(ctx context.Context, cfg *ProcessConfig, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	caller, callerErr := CallerFromContext(ctx)
+	if callerErr != nil {
+		return refuseWithoutCaller(ctx, cfg, toolContextForTask), nil
+	}
+
 	var input contractsv1.MCPContextForTaskRequest
 	if err := json.Unmarshal(rawArgs(req), &input); err != nil {
 		return toolErrorResult(&classifiedError{category: "validation", message: "context_for_task arguments are not valid JSON for the declared schema"}), nil
@@ -58,29 +63,29 @@ func handleContextForTask(ctx context.Context, boot *Bootstrap, req *mcpsdk.Call
 		return toolErrorResult(&classifiedError{category: "validation", message: "context_for_task requires either an explicit repository or a discoverable local Git workspace to resolve one"}), nil
 	}
 
-	options := budgetOptions(input.Budget, input.RequestedCategories, boot.Capabilities.Limits)
+	options := budgetOptions(input.Budget, input.RequestedCategories, caller.Capabilities().Limits)
 	hostedOptions := options
 	var local mappedLocalBundle
 	var bundle sidecar.LocalEvidenceBundle
 	var localFailure *contractsv1.MCPLocalContext
 	localSucceeded := false
-	if boot.local != nil && resolved.LocalEligible && boot.local.eligible(resolved.Workspace) {
+	if cfg.local != nil && resolved.LocalEligible && cfg.local.eligible(resolved.Workspace) {
 		var localErr error
-		bundle, localErr = boot.local.bundle(ctx, resolved, input, options)
+		bundle, localErr = cfg.local.bundle(ctx, resolved, input, options)
 		if localErr != nil && ctx.Err() != nil {
 			return toolErrorResult(ctx.Err()), nil
 		}
 		if localErr == nil {
 			if localErr = validateDistinctLocalEvidence(bundle); localErr == nil {
 				localSucceeded = true
-				reserve := localReservation(boot.local.config, options)
+				reserve := localReservation(cfg.local.config, options)
 				hostedOptions.MaxItems -= reserve.MaxItems
 				hostedOptions.MaxOutputTokens -= reserve.MaxOutputTokens
 				hostedOptions.MaxSerializedBytes -= reserve.MaxSerializedBytes
 			}
 		}
 		if localErr != nil {
-			if context, timedOut := boot.local.unavailableContext(localErr); timedOut {
+			if context, timedOut := cfg.local.unavailableContext(localErr); timedOut {
 				localFailure = &context
 			}
 		}
@@ -93,12 +98,12 @@ func handleContextForTask(ctx context.Context, boot *Bootstrap, req *mcpsdk.Call
 		Options:    hostedOptions,
 	}
 
-	packet, err := boot.Client.ContextPacket(ctx, hostedReq)
+	packet, err := caller.client.ContextPacket(ctx, hostedReq)
 	if err != nil {
 		return toolErrorResult(err), nil
 	}
 	if localSucceeded {
-		local, err = boot.local.mapLocalBundle(resolved.Repository.Slug, bundle, occupiedPacketIDs(packet))
+		local, err = cfg.local.mapLocalBundle(resolved.Repository.Slug, bundle, occupiedPacketIDs(packet))
 		if err != nil {
 			return toolErrorResult(&classifiedError{category: "internal", message: "local federation finalization failed"}), nil
 		}
@@ -144,15 +149,19 @@ func handleContextForTask(ctx context.Context, boot *Bootstrap, req *mcpsdk.Call
 	if buildErr != nil {
 		return result, buildErr
 	}
-	if boot.hostedRoutes != nil {
+	// Both caches below belong to THIS caller: the routing decision and
+	// the excerpts were produced while answering this caller's question,
+	// so writing them anywhere process-wide would let the next caller read
+	// evidence its own credential never authorised.
+	if caller.hostedRoutes != nil {
 		for id := range occupiedPacketIDs(packet) {
 			if strings.HasPrefix(id, localEvidencePrefix) {
-				boot.hostedRoutes.put(id)
+				caller.hostedRoutes.put(id)
 			}
 		}
 	}
-	if localSucceeded && len(local.refs) > 0 {
-		boot.local.cache.putBatch(cacheEntries(local))
+	if localSucceeded && len(local.refs) > 0 && caller.localCache != nil {
+		caller.localCache.putBatch(cacheEntries(local))
 	}
 	return result, nil
 }

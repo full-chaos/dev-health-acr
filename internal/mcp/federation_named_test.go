@@ -18,7 +18,7 @@ import (
 func federationResponse(t *testing.T, boot *Bootstrap) contractsv1.MCPContextForTaskResponse {
 	t.Helper()
 	initTempGitRepo(t, "acme/widgets")
-	result, err := handleContextForTask(context.Background(), boot, callToolRequest(t, map[string]any{"goal": "inspect widget"}))
+	result, err := invokeContextForTask(context.Background(), boot, callToolRequest(t, map[string]any{"goal": "inspect widget"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 	var response contractsv1.MCPContextForTaskResponse
@@ -47,7 +47,7 @@ func TestFederation_LocalRouting(t *testing.T) {
 
 	// When
 	response := federationResponse(t, boot)
-	result, err := handleSourceEvidence(context.Background(), boot, callToolRequest(t, map[string]any{"evidence_ref_id": response.LocalContext.EvidenceRefs[0].EvidenceRefID}))
+	result, err := invokeSourceEvidence(context.Background(), boot, callToolRequest(t, map[string]any{"evidence_ref_id": response.LocalContext.EvidenceRefs[0].EvidenceRefID}))
 
 	// Then
 	require.NoError(t, err)
@@ -70,7 +70,7 @@ func TestFederation_HostedRouting(t *testing.T) {
 	boot := federationBootstrap(t, fx, sidecar.LocalEvidenceBundle{}, sidecar.ErrLocalIndexUnavailable)
 
 	// When
-	result, err := handleSourceEvidence(context.Background(), boot, callToolRequest(t, map[string]any{"evidence_ref_id": "hosted-evidence"}))
+	result, err := invokeSourceEvidence(context.Background(), boot, callToolRequest(t, map[string]any{"evidence_ref_id": "hosted-evidence"}))
 
 	// Then
 	require.NoError(t, err)
@@ -126,7 +126,7 @@ func TestFederation_UnknownLocalID(t *testing.T) {
 	boot := federationBootstrap(t, fx, sidecar.LocalEvidenceBundle{}, sidecar.ErrLocalIndexUnavailable)
 
 	// When
-	result, err := handleSourceEvidence(context.Background(), boot, callToolRequest(t, map[string]any{"evidence_ref_id": localEvidencePrefix + "unknown"}))
+	result, err := invokeSourceEvidence(context.Background(), boot, callToolRequest(t, map[string]any{"evidence_ref_id": localEvidencePrefix + "unknown"}))
 
 	// Then
 	require.NoError(t, err)
@@ -139,10 +139,11 @@ func TestFederation_EvictedLocalID(t *testing.T) {
 	cache.putBatch([]cachedLocalEvidence{{ref: contractsv1.EvidenceRef{EvidenceRefID: localEvidencePrefix + "one"}}, {ref: contractsv1.EvidenceRef{EvidenceRefID: localEvidencePrefix + "two"}}})
 	fx := newFixtureServer(t)
 	boot := newFixtureBootstrap(t, fx)
-	boot.local = &localFederationRuntime{cache: cache, clock: time.Now}
+	boot.local = &localFederationRuntime{clock: time.Now}
+	boot.localCache = cache
 
 	// When
-	result, err := handleSourceEvidence(context.Background(), boot, callToolRequest(t, map[string]any{"evidence_ref_id": localEvidencePrefix + "one"}))
+	result, err := invokeSourceEvidence(context.Background(), boot, callToolRequest(t, map[string]any{"evidence_ref_id": localEvidencePrefix + "one"}))
 
 	// Then
 	require.NoError(t, err)
@@ -180,12 +181,12 @@ func TestFederation_HostedError(t *testing.T) {
 
 	// When
 	initTempGitRepo(t, "acme/widgets")
-	result, err := handleContextForTask(context.Background(), boot, callToolRequest(t, map[string]any{"goal": "inspect widget"}))
+	result, err := invokeContextForTask(context.Background(), boot, callToolRequest(t, map[string]any{"goal": "inspect widget"}))
 
 	// Then
 	require.NoError(t, err)
 	require.True(t, result.IsError)
-	require.Zero(t, boot.local.cache.lru.Len())
+	require.Zero(t, boot.localCache.lru.Len())
 }
 
 func TestFederation_DiscoveryOnce(t *testing.T) {
@@ -221,7 +222,11 @@ func TestFederation_ZeroReserveAndValidationBeforeCache(t *testing.T) {
 	// Then
 	require.ErrorIs(t, err, sidecar.ErrLocalIndexUnavailable)
 	require.NoError(t, mapErr)
-	require.Zero(t, runtime.cache.lru.Len())
+	// The federation runtime owns no evidence cache: the cache belongs to
+	// the caller whose question produced the excerpts, and only the tool
+	// handler writes it. That write is pinned through the handler in
+	// TestFederation_MappedLocalEvidenceIsCacheable below and in
+	// federation_oracle_test.go, which assert the CALLER's cache.
 }
 
 func TestFederation_WarningDistinctionAndOrder(t *testing.T) {

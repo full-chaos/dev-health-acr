@@ -117,12 +117,12 @@ func TestFederation_HostedRouteBeatsStaleLocalCacheForSameID(t *testing.T) {
 	boot := federationBootstrap(t, fx, validLocalBundle(now), nil)
 	response := federationResponse(t, boot)
 	id := response.LocalContext.EvidenceRefs[0].EvidenceRefID
-	boot.local.cache.putBatch([]cachedLocalEvidence{{ref: response.LocalContext.EvidenceRefs[0], evidence: sidecar.LocalExpandedEvidence{Excerpt: "stale local"}}})
+	boot.localCache.putBatch([]cachedLocalEvidence{{ref: response.LocalContext.EvidenceRefs[0], evidence: sidecar.LocalExpandedEvidence{Excerpt: "stale local"}}})
 	boot.hostedRoutes = newHostedRouteCache(1024, time.Minute, func() time.Time { return now })
 	boot.hostedRoutes.put(id)
 
 	// When
-	result, err := handleSourceEvidence(context.Background(), boot, callToolRequest(t, map[string]any{"evidence_ref_id": id}))
+	result, err := invokeSourceEvidence(context.Background(), boot, callToolRequest(t, map[string]any{"evidence_ref_id": id}))
 
 	// Then
 	require.NoError(t, err)

@@ -72,67 +72,105 @@ func NewServer(boot *Bootstrap, serverVersion string) *mcpsdk.Server {
 	return NewServerWithDiagnostics(boot, serverVersion, os.Stderr)
 }
 
-// NewServerWithDiagnostics shares the configured sidecar JSON logger with
-// tool execution. Production supplies stderr; stdout remains protocol-only.
+// NewServerWithDiagnostics builds the STDIO server for the single caller
+// this process booted as. It shares the configured sidecar JSON logger with
+// tool execution; production supplies stderr and stdout remains
+// protocol-only.
 func NewServerWithDiagnostics(boot *Bootstrap, serverVersion string, diagnostics io.Writer) *mcpsdk.Server {
-	configured := *boot
-	boot = &configured
-	boot.diagnostics = newDiagnosticsLogger(diagnostics, boot.Config.LogLevel)
+	cfg, caller := boot.split(diagnostics)
+	return newStdioServer(cfg, caller, serverVersion)
+}
 
+// newStdioServer is the STDIO server: the per-caller construction with its
+// protocol revisions capped below rootsRemovedRevision, because STDIO
+// context_for_task resolves its workspace from client roots.
+func newStdioServer(cfg *ProcessConfig, caller *CallerContext, serverVersion string) *mcpsdk.Server {
+	return newServer(cfg, caller, serverVersion, stdioProtocolVersions())
+}
+
+// NewServerForCaller builds a server whose tool catalogue is the catalogue
+// THIS caller is entitled to, and which binds this caller to every request
+// it serves.
+//
+// It is the constructor a hosted transport calls per request in the
+// stateless 2026-07-28 model (the SDK's getServer(*http.Request) hook):
+// because the tool set is decided here, from caller.Capabilities(), a
+// tools/list answer describes what that credential can actually do rather
+// than what the process operator could do. The caller reaches tool handlers
+// only through the request context, installed by callerMiddleware, so no
+// handler closes over an identity.
+//
+// context_for_task and source_evidence stay unconditional because they are
+// not a per-caller variable: checkCompatibility, which ResolveCaller runs
+// with the caller's own capability snapshot, refuses a caller that lacks
+// either of them outright. A caller reaching this constructor therefore
+// always has both, and a caller that does not has no context at all --
+// which is a stricter answer than hiding a tool.
+//
+// It advertises every protocol revision the SDK supports, including
+// 2026-07-28; the roots-driven cap applies to STDIO only.
+func NewServerForCaller(cfg *ProcessConfig, caller *CallerContext, serverVersion string) *mcpsdk.Server {
+	return newServer(cfg, caller, serverVersion, nil)
+}
+
+// newServer builds a server for one caller. protocolVersions narrows the
+// advertised revisions; nil keeps every revision the SDK supports.
+func newServer(cfg *ProcessConfig, caller *CallerContext, serverVersion string, protocolVersions []string) *mcpsdk.Server {
 	impl := &mcpsdk.Implementation{
 		Name:    "dev-health-acr-mcp",
 		Title:   "Dev Health ACR",
 		Version: serverVersion,
 	}
 	server := mcpsdk.NewServer(impl, &mcpsdk.ServerOptions{
-		Instructions:              serverInstructions(boot),
-		SupportedProtocolVersions: stdioProtocolVersions(),
+		Instructions:              serverInstructions(cfg, caller),
+		SupportedProtocolVersions: protocolVersions,
 	})
+	server.AddReceivingMiddleware(callerMiddleware(caller))
 
 	server.AddTool(
 		buildTool(toolContextForTask, "Context for task", contextForTaskRequestSchemaFile, contextForTaskResponseSchemaFile),
 		func(ctx context.Context, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
-			return handleContextForTask(ctx, boot, req)
+			return handleContextForTask(ctx, cfg, req)
 		},
 	)
 	server.AddTool(
 		buildTool(toolSourceEvidence, "Source evidence", sourceEvidenceRequestSchemaFile, sourceEvidenceResponseSchemaFile),
 		func(ctx context.Context, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
-			return handleSourceEvidence(ctx, boot, req)
+			return handleSourceEvidence(ctx, cfg, req)
 		},
 	)
 	// The CHAOS-3746 answer tools are registered only when the hosted API
-	// advertises them. Context Fabric is an OPTIONAL hosted capability
-	// (ADR 0007: composition never fails closed over an unconfigured
-	// optional dependency), so a deployment without a graph backend
-	// serves no investigations. Registering the tools anyway would
+	// advertises them for THIS caller. Context Fabric is an OPTIONAL hosted
+	// capability (ADR 0007: composition never fails closed over an
+	// unconfigured optional dependency), so a deployment without a graph
+	// backend serves no investigations. Registering the tools anyway would
 	// advertise a capability to the agent that every call then fails, and
-	// requiring them at the startup compatibility gate would refuse to
-	// start against a perfectly healthy hosted API. Advertise-gated
-	// registration is the honest middle: the tools appear exactly when
-	// they work, matching how record_episode is gated below.
-	if hostedToolEnabled(boot, toolInvestigateQuestion) {
+	// requiring them at the compatibility gate would refuse a perfectly
+	// healthy hosted API. Advertise-gated registration is the honest
+	// middle: the tools appear exactly when they work, matching how
+	// record_episode is gated below.
+	if hostedToolEnabled(caller, toolInvestigateQuestion) {
 		server.AddTool(
 			buildTool(toolInvestigateQuestion, "Investigate question", investigateQuestionRequestSchemaFile, investigateQuestionResponseSchemaFile),
 			func(ctx context.Context, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
-				return handleInvestigateQuestion(ctx, boot, req)
+				return handleInvestigateQuestion(ctx, cfg, req)
 			},
 		)
 	}
-	if hostedToolEnabled(boot, toolInvestigationResult) {
+	if hostedToolEnabled(caller, toolInvestigationResult) {
 		server.AddTool(
 			buildTool(toolInvestigationResult, "Investigation result", investigationResultRequestSchemaFile, investigationResultResponseSchemaFile),
 			func(ctx context.Context, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
-				return handleInvestigationResult(ctx, boot, req)
+				return handleInvestigationResult(ctx, cfg, req)
 			},
 		)
 	}
 	registerGuideResources(server)
-	if recordEpisodeEnabled(boot) {
+	if recordEpisodeEnabled(cfg, caller) {
 		server.AddTool(
 			buildWritebackTool(toolRecordEpisode, "Record episode", recordEpisodeRequestSchemaFile, recordEpisodeResponseSchemaFile),
 			func(ctx context.Context, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
-				return handleRecordEpisode(ctx, boot, req)
+				return handleRecordEpisode(ctx, cfg, req)
 			},
 		)
 	}
@@ -140,13 +178,13 @@ func NewServerWithDiagnostics(boot *Bootstrap, serverVersion string, diagnostics
 }
 
 // hostedToolEnabled reports whether the hosted API advertised a tool for
-// this credential in its capabilities handshake.
-func hostedToolEnabled(boot *Bootstrap, name string) bool {
-	return boot != nil && slices.Contains(boot.Capabilities.EnabledTools, name)
+// THIS caller's credential in its capabilities handshake.
+func hostedToolEnabled(caller *CallerContext, name string) bool {
+	return slices.Contains(caller.Capabilities().EnabledTools, name)
 }
 
-func serverInstructions(boot *Bootstrap) string {
-	if recordEpisodeEnabled(boot) {
+func serverInstructions(cfg *ProcessConfig, caller *CallerContext) string {
+	if recordEpisodeEnabled(cfg, caller) {
 		// Deliberately does NOT say "read-only": with writeback active the
 		// server is not, and claiming otherwise would understate what the
 		// agent is allowed to do.

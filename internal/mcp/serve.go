@@ -37,7 +37,8 @@ func ServeWithIdentity(ctx context.Context, diagnostics io.Writer, identity vers
 		fmt.Fprintf(diagnostics, "acr-mcp: startup failed: %s\n", err.Error())
 		return err
 	}
-	logger := newDiagnosticsLogger(diagnostics, boot.Config.LogLevel)
+	cfg, caller := boot.split(diagnostics)
+	logger := cfg.Diagnostics()
 	logger.InfoContext(ctx, "acr-mcp starting",
 		"version", identity.Version,
 		"commit", identity.Commit,
@@ -49,9 +50,9 @@ func ServeWithIdentity(ctx context.Context, diagnostics io.Writer, identity vers
 		"evidence_read_scope", boot.Capabilities.Permissions.EvidenceRead,
 		"episode_write_scope", boot.Capabilities.Permissions.EpisodeWrite,
 		"writeback_enabled", boot.Config.EnableWriteback,
-		"record_episode_active", recordEpisodeEnabled(boot),
+		"record_episode_active", recordEpisodeEnabled(cfg, caller),
 	)
-	server := NewServerWithDiagnostics(boot, identity.Version, diagnostics)
+	server := newStdioServer(cfg, caller, identity.Version)
 	if err := Run(ctx, server); err != nil {
 		if causedByCallerCancellation(ctx, err) {
 			return nil

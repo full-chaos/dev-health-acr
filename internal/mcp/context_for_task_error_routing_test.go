@@ -50,7 +50,7 @@ func TestHandleContextForTaskMapsMalformedTwoHundredResponseToUnavailable(t *tes
 		"repository": map[string]any{"slug": "acme/widgets"},
 		"scope":      map[string]any{"branch": "main"},
 	})
-	result, err := handleContextForTask(context.Background(), boot, req)
+	result, err := invokeContextForTask(context.Background(), boot, req)
 	assertErrorCategory(t, result, err, "unavailable")
 }
 
@@ -79,7 +79,7 @@ func TestHandleContextForTaskMapsOversizedRequestToValidation(t *testing.T) {
 		"repository": map[string]any{"slug": "acme/widgets"},
 		"scope":      map[string]any{"branch": "main", "commit_sha": strings.Repeat("a", 40), "files": files},
 	})
-	result, err := handleContextForTask(context.Background(), boot, req)
+	result, err := invokeContextForTask(context.Background(), boot, req)
 	assertErrorCategory(t, result, err, "validation")
 }
 
@@ -102,7 +102,7 @@ func TestHandleContextForTaskMapsRepositoryScopeMismatchToValidation(t *testing.
 		"repository": map[string]any{"slug": "explicit/repo"},
 		"scope":      map[string]any{"include_changed_files": true},
 	})
-	result, err := handleContextForTask(context.Background(), boot, req)
+	result, err := invokeContextForTask(context.Background(), boot, req)
 	assertErrorCategory(t, result, err, "validation")
 }
 
@@ -125,7 +125,7 @@ func TestHandleContextForTaskMapsTruncatedChangedFilesToValidation(t *testing.T)
 		"goal":  "goal-only, discovered repo with a truncated changed-file list",
 		"scope": map[string]any{"include_changed_files": true},
 	})
-	result, err := handleContextForTask(context.Background(), boot, req)
+	result, err := invokeContextForTask(context.Background(), boot, req)
 	assertErrorCategory(t, result, err, "validation")
 }
 
@@ -158,7 +158,7 @@ func TestHandleContextForTaskMapsCancelledDiscoveryToCancelled(t *testing.T) {
 	req := callToolRequest(t, map[string]any{
 		"goal": "goal-only, cancelled mid-discovery",
 	})
-	result, callErr := handleContextForTask(ctx, boot, req)
+	result, callErr := invokeContextForTask(ctx, boot, req)
 	assertErrorCategory(t, result, callErr, "cancelled")
 }
 
@@ -187,6 +187,6 @@ func TestHandleContextForTaskMapsDeadlineDiscoveryToTimeout(t *testing.T) {
 	req := callToolRequest(t, map[string]any{
 		"goal": "goal-only, expired deadline mid-discovery",
 	})
-	result, callErr := handleContextForTask(ctx, boot, req)
+	result, callErr := invokeContextForTask(ctx, boot, req)
 	assertErrorCategory(t, result, callErr, "timeout")
 }

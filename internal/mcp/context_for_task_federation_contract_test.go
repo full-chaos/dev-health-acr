@@ -47,7 +47,7 @@ func federationBootstrap(t *testing.T, fx *fixtureServer, bundle sidecar.LocalEv
 func callFederatedContext(t *testing.T, boot *Bootstrap) contractsv1.MCPContextForTaskResponse {
 	t.Helper()
 	initTempGitRepo(t, "acme/widgets")
-	result, err := handleContextForTask(context.Background(), boot, callToolRequest(t, map[string]any{"goal": "inspect widget"}))
+	result, err := invokeContextForTask(context.Background(), boot, callToolRequest(t, map[string]any{"goal": "inspect widget"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
 	var response contractsv1.MCPContextForTaskResponse

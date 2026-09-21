@@ -9,12 +9,35 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-func recordEpisodeEnabled(boot *Bootstrap) bool {
-	return boot != nil && boot.Config.EnableWriteback && boot.Capabilities.Entitlements.AgentContextRuntime && boot.Capabilities.Permissions.EpisodeWrite && slices.Contains(boot.Capabilities.EnabledTools, toolRecordEpisode)
+// recordEpisodeEnabled needs BOTH halves to agree: writeback is a process
+// deployment policy, while the entitlement, the episode:write scope and the
+// hosted advertisement are all properties of THIS caller's credential.
+func recordEpisodeEnabled(cfg *ProcessConfig, caller *CallerContext) bool {
+	if cfg == nil || !cfg.Config.EnableWriteback {
+		return false
+	}
+	capabilities := caller.Capabilities()
+	if !capabilities.Entitlements.AgentContextRuntime || !capabilities.Permissions.EpisodeWrite || !slices.Contains(capabilities.EnabledTools, toolRecordEpisode) {
+		return false
+	}
+	// The writeback schemas are part of the caller's snapshot, not of the
+	// process: ResolveCaller admits a reader without checking them, so the
+	// writeback tool is offered only when this caller's hosted API speaks
+	// every schema it needs.
+	for _, want := range writebackSchemaVersions {
+		if !slices.Contains(capabilities.SupportedSchemaVersions, want) {
+			return false
+		}
+	}
+	return true
 }
 
-func handleRecordEpisode(ctx context.Context, boot *Bootstrap, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
-	if !recordEpisodeEnabled(boot) {
+func handleRecordEpisode(ctx context.Context, cfg *ProcessConfig, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	caller, callerErr := CallerFromContext(ctx)
+	if callerErr != nil {
+		return refuseWithoutCaller(ctx, cfg, toolRecordEpisode), nil
+	}
+	if !recordEpisodeEnabled(cfg, caller) {
 		return toolErrorResult(&classifiedError{category: "entitlement", message: "record_episode is not enabled for this sidecar and credential"}), nil
 	}
 
@@ -22,11 +45,11 @@ func handleRecordEpisode(ctx context.Context, boot *Bootstrap, req *mcpsdk.CallT
 	if err != nil {
 		return toolErrorResult(&classifiedError{category: "validation", message: "record_episode arguments are not valid JSON for the declared schema"}), nil
 	}
-	if input.Transcript.Mode != "none" && !boot.Config.EnableTranscriptCapture {
+	if input.Transcript.Mode != "none" && !cfg.Config.EnableTranscriptCapture {
 		return toolErrorResult(&classifiedError{category: "validation", message: "record_episode transcript capture is not enabled for this sidecar"}), nil
 	}
 
-	result, err := boot.Client.RecordEpisode(ctx, agentEpisodeCreate(input))
+	result, err := caller.client.RecordEpisode(ctx, agentEpisodeCreate(input))
 	if err != nil {
 		return toolErrorResult(err), nil
 	}

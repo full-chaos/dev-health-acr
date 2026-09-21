@@ -54,7 +54,7 @@ func TestFederation_HostedRouteOverridesStaleLocalCache(t *testing.T) {
 	boot.hostedRoutes.put(id)
 
 	// When
-	result, err := handleSourceEvidence(context.Background(), boot, callToolRequest(t, map[string]any{"evidence_ref_id": id}))
+	result, err := invokeSourceEvidence(context.Background(), boot, callToolRequest(t, map[string]any{"evidence_ref_id": id}))
 
 	// Then
 	require.NoError(t, err)
@@ -109,7 +109,7 @@ func TestFederation_HandlerRejectsDuplicateLocalBeforeHostedReservation(t *testi
 	require.Equal(t, defaultMaxItems, received.Options.MaxItems)
 	require.Nil(t, response.LocalContext)
 	require.Nil(t, response.FederatedBudget)
-	require.Zero(t, boot.local.cache.lru.Len())
+	require.Zero(t, boot.localCache.lru.Len())
 }
 
 func TestFederation_HandlerValidationFailureDoesNotCacheOrRoute(t *testing.T) {
@@ -125,12 +125,12 @@ func TestFederation_HandlerValidationFailureDoesNotCacheOrRoute(t *testing.T) {
 	initTempGitRepo(t, "acme/widgets")
 
 	// When
-	result, err := handleContextForTask(context.Background(), boot, callToolRequest(t, map[string]any{"goal": "inspect widget"}))
+	result, err := invokeContextForTask(context.Background(), boot, callToolRequest(t, map[string]any{"goal": "inspect widget"}))
 
 	// Then
 	require.NoError(t, err)
 	require.True(t, result.IsError)
-	require.Zero(t, boot.local.cache.lru.Len())
+	require.Zero(t, boot.localCache.lru.Len())
 	require.Zero(t, boot.hostedRoutes.lru.Len())
 }
 
@@ -171,7 +171,7 @@ func TestFederation_HandlerDiscoversOnceForCompatibleExplicitRequest(t *testing.
 	boot := federationBootstrap(t, fx, validLocalBundle(now), nil)
 
 	// When
-	result, err := handleContextForTask(context.Background(), boot, callToolRequest(t, map[string]any{"goal": "inspect", "repository": map[string]any{"slug": "acme/widgets"}, "scope": map[string]any{"branch": "main", "commit_sha": strings.Repeat("a", 40)}}))
+	result, err := invokeContextForTask(context.Background(), boot, callToolRequest(t, map[string]any{"goal": "inspect", "repository": map[string]any{"slug": "acme/widgets"}, "scope": map[string]any{"branch": "main", "commit_sha": strings.Repeat("a", 40)}}))
 
 	// Then
 	require.NoError(t, err)
@@ -196,11 +196,11 @@ func TestFederation_HandlerCollisionExhaustionDoesNotCacheOrRetryHosted(t *testi
 	initTempGitRepo(t, "acme/widgets")
 
 	// When
-	result, err := handleContextForTask(context.Background(), boot, callToolRequest(t, map[string]any{"goal": "inspect"}))
+	result, err := invokeContextForTask(context.Background(), boot, callToolRequest(t, map[string]any{"goal": "inspect"}))
 
 	// Then
 	require.NoError(t, err)
 	require.True(t, result.IsError)
 	require.Equal(t, 1, calls)
-	require.Zero(t, boot.local.cache.lru.Len())
+	require.Zero(t, boot.localCache.lru.Len())
 }

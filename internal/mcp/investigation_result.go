@@ -22,7 +22,12 @@ import (
 // Authorization is re-enforced on the hosted side for this call, exactly as
 // it was for the investigation that produced the result. A result_id is a
 // handle, never a capability: holding one grants nothing on its own.
-func handleInvestigationResult(ctx context.Context, boot *Bootstrap, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+func handleInvestigationResult(ctx context.Context, cfg *ProcessConfig, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	caller, callerErr := CallerFromContext(ctx)
+	if callerErr != nil {
+		return refuseWithoutCaller(ctx, cfg, toolInvestigationResult), nil
+	}
+
 	var input contractsv1.MCPInvestigationResultRequest
 	if err := json.Unmarshal(rawArgs(req), &input); err != nil {
 		return toolErrorResult(&classifiedError{category: "validation", message: "investigation_result arguments are not valid JSON for the declared schema"}), nil
@@ -31,7 +36,7 @@ func handleInvestigationResult(ctx context.Context, boot *Bootstrap, req *mcpsdk
 		return toolErrorResult(&classifiedError{category: "validation", message: "investigation_result arguments failed schema validation"}), nil
 	}
 
-	result, err := boot.Client.InvestigationResult(ctx, input.ResultID)
+	result, err := caller.client.InvestigationResult(ctx, input.ResultID)
 	if err != nil {
 		return toolErrorResult(err), nil
 	}

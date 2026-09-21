@@ -51,9 +51,14 @@ func TestServerOmitsRecordEpisodeWhenAnyWritebackGateFails(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			// Given
+			// Every other gate passes, so the row fails on its one named
+			// gate alone; a base missing any gate would pass each row for
+			// the wrong reason.
 			fx := newFixtureServer(t)
-			boot := newFixtureBootstrap(t, fx)
-			boot.Config.EnableWriteback = true
+			boot := newWritebackFixtureBootstrap(t, fx)
+			if !recordEpisodeEnabled(bootHandlerHalvesConfig(boot)) {
+				t.Fatal("the base must pass every writeback gate")
+			}
 			test.mutate(boot)
 			client, closeFn := connectedClient(t, boot)
 			defer closeFn()
@@ -156,7 +161,7 @@ func TestRecordEpisodeRejectsTranscriptWhenLocalCaptureIsDisabled(t *testing.T) 
 	request := callToolRequest(t, recordEpisodeArguments("safe-summary", "transcript-secret", "default_90d"))
 
 	// When
-	result, err := handleRecordEpisode(context.Background(), boot, request)
+	result, err := invokeRecordEpisode(context.Background(), boot, request)
 
 	// Then
 	if err != nil || !result.IsError || calls != 0 {

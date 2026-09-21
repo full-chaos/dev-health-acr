@@ -25,11 +25,15 @@ type localFederationRuntime struct {
 	clock           func() time.Time
 	hash            func([]byte) [32]byte
 	providerFactory func(sidecar.LocalIndexConfig, sidecar.LocalWorkspaceSnapshot) sidecar.LocalIndexProvider
-	cache           *localEvidenceCache
 }
 
+// newLocalFederationRuntime builds the PROCESS-wide local workspace
+// federation runtime. It deliberately owns no evidence cache: the excerpts
+// a federated answer produces are made for one caller's question and live
+// on that caller's CallerContext, so a second caller in the same process
+// can never read them.
 func newLocalFederationRuntime(config sidecar.LocalIndexConfig, clock func() time.Time, hash func([]byte) [32]byte) *localFederationRuntime {
-	return &localFederationRuntime{config: config, clock: clock, hash: hash, providerFactory: sidecar.NewWorkspaceLocalIndexProvider, cache: newLocalEvidenceCache(1024, 30*time.Minute, clock)}
+	return &localFederationRuntime{config: config, clock: clock, hash: hash, providerFactory: sidecar.NewWorkspaceLocalIndexProvider}
 }
 
 func (r *localFederationRuntime) eligible(snapshot *sidecar.LocalWorkspaceSnapshot) bool {
