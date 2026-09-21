@@ -127,6 +127,7 @@ func NewServerWithDiagnostics(boot *Bootstrap, serverVersion string, diagnostics
 			},
 		)
 	}
+	registerGuideResources(server)
 	if recordEpisodeEnabled(boot) {
 		server.AddTool(
 			buildWritebackTool(toolRecordEpisode, "Record episode", recordEpisodeRequestSchemaFile, recordEpisodeResponseSchemaFile),
