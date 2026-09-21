@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: acr-mcp-config
+  labels:
+    app.kubernetes.io/name: acr
+    app.kubernetes.io/component: mcp
+    app.kubernetes.io/part-of: dev-health-acr
+data:
+  ACR_MCP_TRANSPORT: "http"
+  ACR_MCP_HTTP_LISTEN: ":8081"
+  ACR_MCP_HTTP_BASE_PATH: "/mcp"
+  ACR_MCP_HTTP_READ_HEADER_TIMEOUT: "10s"
+  ACR_MCP_HTTP_READ_TIMEOUT: "30s"
+  ACR_MCP_HTTP_WRITE_TIMEOUT: "300s"
+  ACR_MCP_HTTP_IDLE_TIMEOUT: "120s"
+  ACR_MCP_HTTP_SHUTDOWN_TIMEOUT: "30s"
+  ACR_MCP_HTTP_MAX_BODY_BYTES: "1048576"
+  ACR_API_URL: "http://acr-api:8080"
+  ACR_API_TIMEOUT: "15s"
+  ACR_API_ALLOW_INSECURE_INTERNAL_HTTP: "true"
+  ACR_LOG_LEVEL: "info"

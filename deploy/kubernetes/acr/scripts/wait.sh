@@ -22,3 +22,10 @@ namespace="$(overlay_namespace "$overlay")"
 
 kubectl --namespace "$namespace" rollout status deployment/acr-api --timeout="$timeout"
 kubectl --namespace "$namespace" wait --for=condition=available deployment/acr-api --timeout="$timeout"
+
+# Overlays that compose the hosted acr-mcp component (development-mcp) also
+# roll out acr-mcp; the plain overlays never render it.
+if [[ "$overlay" == *-mcp ]]; then
+  kubectl --namespace "$namespace" rollout status deployment/acr-mcp --timeout="$timeout"
+  kubectl --namespace "$namespace" wait --for=condition=available deployment/acr-mcp --timeout="$timeout"
+fi

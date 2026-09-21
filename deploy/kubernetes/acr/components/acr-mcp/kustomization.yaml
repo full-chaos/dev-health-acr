@@ -1,0 +1,37 @@
+# Hosted acr-mcp workload as an opt-in Component: a stateless Streamable HTTP
+# MCP server from its own image, holding no credential (it forwards each
+# caller's bearer to acr-api). An overlay enables it with
+#   components:
+#     - ../../components/acr-mcp
+# and adds its own HTTPRoute. The base never carries it.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - configmap.yaml
+  - serviceaccount.yaml
+  - service.yaml
+  - deployment.yaml
+  - networkpolicy.yaml
+images:
+  - name: acr-mcp
+    newName: ghcr.io/full-chaos/dev-health-acr/acr-mcp
+    digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+patches:
+  # acr-api admits the acr-mcp pods on its API port, alongside the Gateway.
+  - target:
+      group: networking.k8s.io
+      version: v1
+      kind: NetworkPolicy
+      name: acr-api
+    patch: |-
+      - op: add
+        path: /spec/ingress/-
+        value:
+          from:
+            - podSelector:
+                matchLabels:
+                  app.kubernetes.io/name: acr
+                  app.kubernetes.io/component: mcp
+          ports:
+            - protocol: TCP
+              port: 8080

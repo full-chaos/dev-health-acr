@@ -5,7 +5,11 @@ They reference existing runtime, migration, entitlement, and registry-pull
 Secrets. The base uses plaintext private-service transports; an operator overlay
 may select TLS DSNs/origins and add the corresponding CA projections. The base
 does not create Secrets, a Gateway, a Gateway controller, a database, or an MCP
-workload.
+workload. The hosted `acr-mcp` workload is an opt-in Component
+(`components/acr-mcp`) that an overlay composes; `overlays/development-mcp` is
+the reference. It carries no Secret and no credential (each caller's bearer is
+forwarded to `acr-api`), and `apply.sh`/`wait.sh`/`rollback.sh` handle it like
+the API Deployment (rollback re-applies the overlay-pinned `acr-mcp` digest).
 
 Each overlay pins `acr-api` to an immutable digest. The deployment script
 applies supporting resources, creates and waits for `acr-migrate`, and applies

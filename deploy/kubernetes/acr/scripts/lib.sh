@@ -124,7 +124,7 @@ select_kinds() {
 overlay_namespace() {
   local overlay="$1"
   case "$overlay" in
-    development) printf '%s\n' acr-development ;;
+    development|development-mcp) printf '%s\n' acr-development ;;
     staging) printf '%s\n' acr-staging ;;
     production) printf '%s\n' acr-production ;;
     *) fail "unknown overlay: $overlay" ;;

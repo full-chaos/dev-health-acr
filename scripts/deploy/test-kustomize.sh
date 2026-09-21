@@ -12,7 +12,7 @@ work=""
 
 usage() {
   cat >&2 <<'EOF'
-Usage: test-kustomize.sh --overlay <development|staging|production> --image <digest> [--scenario <name>]
+Usage: test-kustomize.sh --overlay <development|development-mcp|staging|production> --image <digest> [--scenario <name>]
 
 Scenarios: happy, mutable-image, migration-failure, rollback-fail-closed
 EOF
@@ -107,10 +107,56 @@ pass "policy-parity: required ACR resources are rendered"
 if grep -Eq '^kind: (Secret|Gateway)$' "$work/rendered.yaml"; then
   fail_gate "ownership: rendered a caller-owned Secret or Gateway"
 fi
-if grep -qi 'acr-mcp' "$work/rendered.yaml"; then
-  fail_gate "no-mcp: rendered output references acr-mcp"
+# resource_doc <kind> <name>: the one rendered document for that resource.
+resource_doc() {
+  awk -v kind="$1" -v name="$2" '
+    function check() {
+      if (index(document, "kind: " kind "\n") > 0 && index(document, "\n  name: " name "\n") > 0) { printf "%s", document; found = 1 }
+    }
+    /^---[[:space:]]*$/ { check(); document=""; next }
+    { document = document $0 "\n" }
+    END { check(); exit(found ? 0 : 1) }
+  ' "$work/rendered.yaml"
+}
+
+if [[ "$overlay" == *-mcp ]]; then
+  # Overlays that compose the hosted acr-mcp component: it must be its own
+  # restricted, digest-pinned, credential-less workload with probes and a
+  # base-path-only route; acr-api and acr-migrate must not reference it.
+  for target in 'Deployment acr-mcp' 'Service acr-mcp' 'ServiceAccount acr-mcp' 'ConfigMap acr-mcp-config' 'NetworkPolicy acr-mcp' 'HTTPRoute acr-mcp'; do
+    read -r kind name <<<"$target"
+    resource_doc "$kind" "$name" >/dev/null || fail_gate "acr-mcp: ${kind}/${name} was not rendered"
+  done
+  mcp_deploy="$(resource_doc Deployment acr-mcp)"
+  for token in 'args:' '- serve' 'path: /healthz' 'path: /readyz' 'containerPort: 8081' 'runAsNonRoot: true' 'readOnlyRootFilesystem: true' 'allowPrivilegeEscalation: false' 'type: RuntimeDefault' 'automountServiceAccountToken: false' '- ALL'; do
+    grep -qF -- "$token" <<<"$mcp_deploy" || fail_gate "acr-mcp: Deployment is missing $token"
+  done
+  grep -qE 'image: [^ ]*/acr-mcp@sha256:[a-f0-9]{64}' <<<"$mcp_deploy" || fail_gate "acr-mcp: image is not the digest-pinned acr-mcp image"
+  if grep -qE 'secretKeyRef|secretName|secretRef|projected:|ACR_API_TOKEN|serviceAccountToken' <<<"$mcp_deploy"; then
+    fail_gate "acr-mcp: Deployment references a Secret, projected token, or ACR_API_TOKEN; the pod must hold no credential"
+  fi
+  mcp_cm="$(resource_doc ConfigMap acr-mcp-config)"
+  for token in 'ACR_MCP_TRANSPORT: http' 'ACR_MCP_HTTP_BASE_PATH: /mcp' 'ACR_API_URL: http://acr-api:8080'; do
+    grep -qF -- "$token" <<<"$mcp_cm" || fail_gate "acr-mcp: ConfigMap is missing $token"
+  done
+  if grep -qE 'TOKEN|PASSWORD|SECRET|DSN' <<<"$mcp_cm"; then fail_gate "acr-mcp: ConfigMap carries a credential-shaped key"; fi
+  if resource_doc ServiceAccount acr-mcp | grep -qE '^(secrets|imagePullSecrets):'; then fail_gate "acr-mcp: ServiceAccount must carry no secrets"; fi
+  mcp_route="$(resource_doc HTTPRoute acr-mcp)"
+  grep -qF 'value: /mcp' <<<"$mcp_route" || fail_gate "acr-mcp: HTTPRoute must match the MCP base path"
+  grep -qE 'component: mcp' <<<"$(resource_doc NetworkPolicy acr-api)" || fail_gate "acr-mcp: acr-api NetworkPolicy must admit the acr-mcp pods"
+  for target in 'Deployment acr-api' 'Job acr-migrate'; do
+    read -r kind name <<<"$target"
+    if resource_doc "$kind" "$name" | grep -qi 'acr-mcp'; then
+      fail_gate "acr-mcp: ${kind}/${name} references acr-mcp; it must run only as its own workload"
+    fi
+  done
+  pass "ownership: existing Secrets and caller-owned Gateway only; acr-mcp is its own credential-less workload"
+else
+  if grep -qi 'acr-mcp' "$work/rendered.yaml"; then
+    fail_gate "mcp-default-off: rendered output references acr-mcp in an overlay that does not compose the component"
+  fi
+  pass "ownership: existing Secrets and caller-owned Gateway only; no MCP workload"
 fi
-pass "ownership: existing Secrets and caller-owned Gateway only; no MCP workload"
 
 if grep -E '^\s*image:' "$work/rendered.yaml" | grep -vq '@sha256:'; then
   fail_gate "immutable-image: a rendered image is not pinned to @sha256"
