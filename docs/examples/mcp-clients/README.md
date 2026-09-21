@@ -299,6 +299,10 @@ The `--output` (or `--bundle`) path is required and explicit -- there is no defa
 
 The bundle never contains the configured `ACR_API_URL` host or any embedded userinfo, the bearer credential value, any filesystem path (token file, CA bundle, or otherwise), CA bundle contents, or any HTTP header or body -- only presence/validity flags, enum values (like the credential source), and numeric/boolean bounds. Being secrets-free does not make it safe for a public audience -- it still identifies your organization's sidecar deployment -- so share it only through an approved private support channel, never a public issue or issue tracker.
 
+## Remote (hosted) server configs
+
+Each client guide has a "Remote (hosted) server" section, and this directory carries a ready-to-copy remote config per client: `claude-code-remote-mcp.json`, `codex-remote-config.toml`, `cursor-remote-mcp-config.json`, `opencode-remote-config.json`, `opencode-v2-remote-config.json`. They point at a running `acr-mcp serve --transport=http` and read the caller's bearer from the `ACR_MCP_TOKEN` environment variable; none contains a token. The contract (endpoint, auth, per-tool requirements, the investigate flow) is in [`docs/mcp-sidecar.md`](../../mcp-sidecar.md#remote-hosted-server).
+
 ## Next Steps
 
 - See `docs/mcp-sidecar.md` for detailed configuration and troubleshooting.

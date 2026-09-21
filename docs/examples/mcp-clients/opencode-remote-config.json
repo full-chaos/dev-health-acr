@@ -1,0 +1,13 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "acr": {
+      "type": "remote",
+      "url": "https://acr-mcp.dev-health.example.com/mcp",
+      "enabled": true,
+      "headers": {
+        "Authorization": "Bearer {env:ACR_MCP_TOKEN}"
+      }
+    }
+  }
+}

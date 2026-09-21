@@ -221,6 +221,39 @@ See [Proxy and Custom CA Configuration](proxy-and-custom-ca.md) for validation r
   ```
 - Windows: `ACR_API_TOKEN_FILE` is not supported. The sidecar fails closed and refuses to load any token file on Windows; use `ACR_API_TOKEN` instead -- the OS keyring source is also macOS/Linux only.
 
+## Remote (hosted) server
+
+Point the client at a running hosted server (`acr-mcp serve --transport=http`) instead of launching a local process. The client sends your own ACR API token as a bearer on every request; the hosted server holds no credential of its own. Export the token in the shell that starts the client, and never write it into the file. The full contract (auth failures, tool needs, the investigate flow) is in [Remote (hosted) server](../../mcp-sidecar.md#remote-hosted-server).
+
+```json
+<!-- FIXTURE:claude-code-remote-json -->
+{
+  "mcpServers": {
+    "acr": {
+      "type": "http",
+      "url": "https://acr-mcp.dev-health.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${ACR_MCP_TOKEN}"
+      }
+    }
+  }
+}
+<!-- /FIXTURE:claude-code-remote-json -->
+```
+
+A ready-to-copy template is `claude-code-remote-mcp.json` in this directory.
+
+`.mcp.json` shape per the [Claude Code MCP docs](https://code.claude.com/docs/en/mcp): `"type": "http"`, `url`, `headers`, with `${VAR}` expansion. Or register it from the command line (the single quotes keep the shell from expanding the token into your config):
+
+```bash
+export ACR_MCP_TOKEN="<your ACR API token>"
+<!-- FIXTURE:claude-code-remote-add -->
+claude mcp add --transport http acr https://acr-mcp.dev-health.example.com/mcp --header 'Authorization: Bearer ${ACR_MCP_TOKEN}'
+<!-- /FIXTURE:claude-code-remote-add -->
+```
+
+Claude Code documents MCP protocol revision `2026-07-28` on its v2 runtime; it asks an HTTP server whether it supports the newer revision. Older revisions still connect.
+
 ## Troubleshooting
 
 ### MCP Server Not Appearing

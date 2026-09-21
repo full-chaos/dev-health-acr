@@ -201,6 +201,29 @@ See [Proxy and Custom CA Configuration](proxy-and-custom-ca.md) for validation r
 
 Cursor prefers the project-scoped `.cursor/mcp.json` over the global `~/.cursor/mcp.json` when both define the same server name. Use the global file for a server you want in every project; use the project file for one you want to share with your team via git.
 
+## Remote (hosted) server
+
+Point the client at a running hosted server (`acr-mcp serve --transport=http`) instead of launching a local process. The client sends your own ACR API token as a bearer on every request; the hosted server holds no credential of its own. Export the token in the shell that starts the client, and never write it into the file. The full contract (auth failures, tool needs, the investigate flow) is in [Remote (hosted) server](../../mcp-sidecar.md#remote-hosted-server).
+
+```json
+<!-- FIXTURE:cursor-remote-json -->
+{
+  "mcpServers": {
+    "acr": {
+      "url": "https://acr-mcp.dev-health.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${env:ACR_MCP_TOKEN}"
+      }
+    }
+  }
+}
+<!-- /FIXTURE:cursor-remote-json -->
+```
+
+A ready-to-copy template is `cursor-remote-mcp-config.json` in this directory.
+
+`mcp.json` shape per the [Cursor MCP docs](https://cursor.com/docs/context/mcp): `url` plus `headers`, with `${env:NAME}` interpolation. Those docs state no MCP protocol revision.
+
 ## Troubleshooting
 
 ### MCP Server Not Appearing
