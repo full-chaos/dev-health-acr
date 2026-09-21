@@ -25,6 +25,7 @@ var ByID = map[string]Event{
 	"contextfabric.completeness_authority":         CompletenessAuthority,
 	"contextfabric.confirmed_need_ledger":          ConfirmedNeedLedger,
 	"contextfabric.count_population_scope":         CountPopulationScope,
+	"contextfabric.evidence_expansion":             EvidenceExpansion,
 	"contextfabric.frame_validation":               FrameValidation,
 	"contextfabric.remembered_window_axis":         RememberedWindowAxis,
 	"contextfabric.requirement_outcome_transition": RequirementOutcomeTransition,
@@ -856,6 +857,83 @@ func (f CountPopulationScopeFields) SlogArgs() []any {
 		"reused", f.Reused,
 		"subject_kind", contextfabric.SanitizeLogAttr(f.SubjectKind),
 		"subject_id", contextfabric.SanitizeLogAttr(f.SubjectID),
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// EvidenceExpansionFields is contextfabric.evidence_expansion's generated typed construction interface
+// (CHAOS-5516): one Go field per Field EvidenceExpansion.Fields declares in spec.go.
+type EvidenceExpansionFields struct {
+	OrgID               string
+	Reason              string
+	EntityType          string
+	CandidateCount      int
+	CitingCount         int
+	UnreadableCount     int
+	AdmittedCount       int
+	DeniedCount         int
+	UnavailableCount    int
+	WithheldCount       int
+	AuthorizationReason string
+	ErrorClass          string
+	RequestID           string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every EvidenceExpansionFields uniformly, set ONLY by NewEvidenceExpansionFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewEvidenceExpansionFields is the generated constructor for EvidenceExpansionFields -- every
+// field EvidenceExpansion.Fields declares is a required parameter.
+func NewEvidenceExpansionFields(orgID string, reason string, entityType string, candidateCount int, citingCount int, unreadableCount int, admittedCount int, deniedCount int, unavailableCount int, withheldCount int, authorizationReason string, errorClass string, requestID string) EvidenceExpansionFields {
+	return EvidenceExpansionFields{
+		OrgID:               orgID,
+		Reason:              reason,
+		EntityType:          entityType,
+		CandidateCount:      candidateCount,
+		CitingCount:         citingCount,
+		UnreadableCount:     unreadableCount,
+		AdmittedCount:       admittedCount,
+		DeniedCount:         deniedCount,
+		UnavailableCount:    unavailableCount,
+		WithheldCount:       withheldCount,
+		AuthorizationReason: authorizationReason,
+		ErrorClass:          errorClass,
+		RequestID:           requestID,
+		constructed:         true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewEvidenceExpansionFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f EvidenceExpansionFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns EvidenceExpansion's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f EvidenceExpansionFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"reason", contextfabric.SanitizeLogAttr(f.Reason),
+		"entity_type", contextfabric.SanitizeLogAttr(f.EntityType),
+		"candidate_count", f.CandidateCount,
+		"citing_count", f.CitingCount,
+		"unreadable_count", f.UnreadableCount,
+		"admitted_count", f.AdmittedCount,
+		"denied_count", f.DeniedCount,
+		"unavailable_count", f.UnavailableCount,
+		"withheld_count", f.WithheldCount,
+		"authorization_reason", contextfabric.SanitizeLogAttr(f.AuthorizationReason),
+		"error_class", contextfabric.SanitizeLogAttr(f.ErrorClass),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }

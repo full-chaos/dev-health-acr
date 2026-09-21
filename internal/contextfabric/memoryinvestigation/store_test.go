@@ -24,6 +24,11 @@ func TestStore_parity(t *testing.T) {
 	)
 }
 
+// TestStore_citedEvidenceLookup runs the shared citing-result lookup table.
+func TestStore_citedEvidenceLookup(t *testing.T) {
+	paritytest.RunCitedEvidenceSuite(t, func(t *testing.T) contextfabric.InvestigationResultStore { return memoryinvestigation.NewStore() })
+}
+
 // TestStore_semanticStateCap runs the shared byte-cap cells.
 // TestStore_questionWindowRedemptionParity: this store keeps no graph epoch,
 // so it cannot prove the offering turn and withholds the continuation -- on

@@ -599,8 +599,13 @@ func EvidenceRefID(entityType ContextFabricEvidenceEntityType, id string) string
 	if !validEvidenceEntityType(entityType) {
 		panic("contracts: EvidenceRefID called with an entity type outside the closed vocabulary: " + string(entityType) + " -- add it to contextFabricEvidenceEntityTypes and contextFabricEvidenceEntityLabels in the SAME change")
 	}
-	return "acr:v1:" + string(entityType) + ":" + id
+	return ContextFabricEvidenceRefPrefix + string(entityType) + ":" + id
 }
+
+// ContextFabricEvidenceRefPrefix starts every ref EvidenceRefID mints. A
+// reader that recognizes or splits such a ref uses this constant; it never
+// spells the prefix itself.
+const ContextFabricEvidenceRefPrefix = "acr:v1:"
 
 // ContextFabricDriverCategory is a closed vocabulary for
 // ContextFabricDriverJudgment.Category / ContextFabricFinding.Kind values

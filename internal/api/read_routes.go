@@ -79,10 +79,18 @@ func (a *App) handleEvidence(w http.ResponseWriter, r *http.Request) {
 		a.writeEvidenceNotFound(w, r, principal)
 		return
 	}
-	expanded, err := a.runtime.Evidence.ResolveEvidence(r.Context(), principal, referenceID)
-	if err != nil {
-		a.writeEvidenceError(w, r, principal, err)
-		return
+	var expanded contractsv1.ExpandedEvidence
+	if contextfabric.IsContextFabricEvidenceRef(referenceID) {
+		var ok bool
+		if expanded, ok = a.expandContextFabricEvidence(w, r, principal, referenceID); !ok {
+			return
+		}
+	} else {
+		var err error
+		if expanded, err = a.runtime.Evidence.ResolveEvidence(r.Context(), principal, referenceID); err != nil {
+			a.writeEvidenceError(w, r, principal, err)
+			return
+		}
 	}
 	if expanded.Availability == contractsv1.EvidenceDeleted || expanded.Availability == contractsv1.EvidenceUnauthorized {
 		a.writeEvidenceNotFound(w, r, principal)
@@ -100,6 +108,42 @@ func (a *App) handleEvidence(w http.ResponseWriter, r *http.Request) {
 	}
 	a.recordReadAudit(r.Context(), principal, "evidence_expanded", "evidence", "expanded", "success", nil)
 	writeEncodedJSON(w, http.StatusOK, encoded)
+}
+
+// expandContextFabricEvidence serves an acr:v1:<type>:<id> evidence ref from
+// the stored investigation results citing it (contextfabric.
+// ExpandCitedEvidence). Every outcome emits one classified decision line,
+// and the decisive stored-result authorization is traced like the
+// result-by-id route's own.
+func (a *App) expandContextFabricEvidence(w http.ResponseWriter, r *http.Request, principal storage.Principal, referenceID string) (contractsv1.ExpandedEvidence, bool) {
+	results := a.investigationResults()
+	var lookup contextfabric.CitedEvidenceLookup
+	if finder, ok := results.(contextfabric.CitedEvidenceLookup); ok {
+		lookup = finder
+	}
+	var gate contextfabric.StoredResultAuthorizer
+	if authorizer := a.storedResultGate(); authorizer != nil {
+		gate = authorizer
+	}
+	expanded, decision := contextfabric.ExpandCitedEvidence(r.Context(), principal, referenceID, lookup, results, gate, a.now())
+	requestID := contextfabric.SanitizeLogAttr(RequestID(r.Context()))
+	if decision.Authorization != nil {
+		args := contextfabric.StoredResultAuthorizationLogArgs(principal, *decision.Authorization)
+		args = append(args, "request_id", requestID)
+		a.logger.InfoContext(r.Context(), contextfabric.StoredResultAuthorizationLogMessage, args...)
+	}
+	args := contextfabric.EvidenceExpansionLogArgs(principal, decision)
+	args = append(args, "request_id", requestID)
+	a.logger.InfoContext(r.Context(), contextfabric.EvidenceExpansionLogMessage, args...)
+	if err := decision.ServingError(); err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			a.writeEvidenceNotFound(w, r, principal)
+		} else {
+			a.writeReadDependencyError(w, r, err, "evidence_resolution")
+		}
+		return contractsv1.ExpandedEvidence{}, false
+	}
+	return expanded, true
 }
 
 func (a *App) requestWithinLimits(request contractsv1.ContextPacketRequest) bool {

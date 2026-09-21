@@ -1128,3 +1128,87 @@ func reorderTopLevelKeys(t *testing.T, raw []byte) []byte {
 	}
 	return buf.Bytes()
 }
+
+// CitingResult is ValidResult citing refs from the result level and from one
+// finding, generated at generated, with the label map the engine stamps
+// over the closure.
+func CitingResult(resultID string, generated time.Time, resultRefs, findingRefs []string) contextfabric.InvestigationResult {
+	built := result(resultID, "question for "+resultID)
+	built.GeneratedAt = generated
+	built.EvidenceRefIDs = append([]string{}, resultRefs...)
+	if len(findingRefs) > 0 {
+		built.RemainingWork = []contextfabric.Finding{{FindingID: "finding-" + resultID, Kind: "narrative", Summary: "Remaining work for " + resultID + ".", EvidenceRefIDs: append([]string{}, findingRefs...)}}
+	}
+	built.EvidenceRefLabels = map[string]string{}
+	for ref := range contractsv1.ContextFabricEvidenceRefClosure(built) {
+		label, _ := contractsv1.ContextFabricEvidenceRefLabel(ref)
+		built.EvidenceRefLabels[ref] = label
+	}
+	built.Completeness = contextfabric.ComputeAnswerCompleteness(built)
+	return built
+}
+
+// RunCitedEvidenceSuite runs the contextfabric.CitedEvidenceLookup table
+// against a store: organization scope, closure sites beyond the result
+// level, newest-first order, the limit, and an uncited ref.
+func RunCitedEvidenceSuite(t *testing.T, newStore func(t *testing.T) contextfabric.InvestigationResultStore) {
+	t.Helper()
+	store := newStore(t)
+	lookup, ok := store.(contextfabric.CitedEvidenceLookup)
+	if !ok {
+		t.Fatalf("%T does not implement contextfabric.CitedEvidenceLookup", store)
+	}
+	ctx := context.Background()
+	orgOne, orgTwo := storage.Principal{OrgID: "org-cites-1"}, storage.Principal{OrgID: "org-cites-2"}
+	cited := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, "repo-cited-0001")
+	other := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, "team-other-0001")
+	uncited := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, "repo-uncited-0001")
+	base := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
+	seeds := []struct {
+		principal storage.Principal
+		result    contextfabric.InvestigationResult
+	}{
+		{orgOne, CitingResult("result-cites-old", base, []string{cited}, nil)},
+		{orgOne, CitingResult("result-cites-other", base.Add(time.Minute), []string{other}, nil)},
+		{orgOne, CitingResult("result-cites-nested", base.Add(time.Hour), nil, []string{cited})},
+		{orgTwo, CitingResult("result-cites-foreign", base.Add(2*time.Hour), []string{cited}, nil)},
+	}
+	for _, seed := range seeds {
+		if err := store.Save(ctx, seed.principal, seed.result, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation)); err != nil {
+			t.Fatalf("save %s: %v", seed.result.ResultID, err)
+		}
+	}
+	for _, tc := range []struct {
+		name      string
+		principal storage.Principal
+		ref       string
+		offset    int
+		limit     int
+		want      []string
+	}{
+		{"newest first across closure sites", orgOne, cited, 0, 16, []string{"result-cites-nested", "result-cites-old"}},
+		{"limit keeps the newest", orgOne, cited, 0, 1, []string{"result-cites-nested"}},
+		{"another organization sees only its own", orgTwo, cited, 0, 16, []string{"result-cites-foreign"}},
+		{"a different ref", orgOne, other, 0, 16, []string{"result-cites-other"}},
+		{"an uncited ref", orgOne, uncited, 0, 16, nil},
+		{"an organization with no results", storage.Principal{OrgID: "org-cites-none"}, cited, 0, 16,
+			nil},
+		{"the next page", orgOne, cited, 1, 1, []string{"result-cites-old"}},
+		{"past the last page", orgOne, cited, 2, 16, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := lookup.ResultIDsCitingEvidence(ctx, tc.principal, tc.ref, tc.offset, tc.limit)
+			if err != nil {
+				t.Fatalf("lookup: %v", err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("lookup = %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("lookup = %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}

@@ -182,6 +182,8 @@ func goVarName(e Event) string {
 		return "WorkItemStoredServing"
 	case StoredResultAuthorization.ID:
 		return "StoredResultAuthorization"
+	case EvidenceExpansion.ID:
+		return "EvidenceExpansion"
 	case CountPopulationScope.ID:
 		return "CountPopulationScope"
 	case WorkItemAuthorizationGap.ID:
