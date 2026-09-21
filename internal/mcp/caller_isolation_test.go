@@ -376,6 +376,47 @@ func TestResolveCallerFailsClosedOnAnUnusableCredential(t *testing.T) {
 	require.Nil(t, caller)
 }
 
+// TestResolveCallerRunsTheCompatibilityGateAgainstEachCallersOwnSnapshot
+// pins that the handshake is decided per caller: one credential the hosted
+// API serves an incompatible snapshot for is refused with no caller
+// context, while another credential in the same process is unaffected.
+//
+// Before caller contexts the gate ran once, at boot, against the operator's
+// snapshot, so a second credential inherited a verdict that was never about
+// it.
+func TestResolveCallerRunsTheCompatibilityGateAgainstEachCallersOwnSnapshot(t *testing.T) {
+	// Given
+	fx := newMultiCallerFixture(t)
+	compatible, incompatible := fixtureToken(0x66), fixtureToken(0x77)
+	fx.register(compatible, "caller-compatible", validCapabilitiesFixture())
+	unentitled := validCapabilitiesFixture()
+	unentitled.Entitlements.AgentContextRuntime = false
+	fx.register(incompatible, "caller-unentitled", unentitled)
+	cfg := NewProcessConfig(fixtureConfig(t, fx.Server), io.Discard)
+
+	// When
+	good, goodErr := ResolveCaller(context.Background(), cfg, CallerCredential{Bearer: compatible})
+	bad, badErr := ResolveCaller(context.Background(), cfg, CallerCredential{Bearer: incompatible})
+
+	// Then
+	require.NoError(t, goodErr)
+	require.NotNil(t, good)
+	require.NotEmpty(t, good.Capabilities().EnabledTools)
+	require.Error(t, badErr)
+	require.Contains(t, badErr.Error(), "entitlement")
+	require.Nil(t, bad)
+
+	// And the order does not decide it: resolving the unentitled credential
+	// first still refuses it and still admits the other.
+	bad, badErr = ResolveCaller(context.Background(), cfg, CallerCredential{Bearer: incompatible})
+	require.Error(t, badErr)
+	require.Nil(t, bad)
+	good, goodErr = ResolveCaller(context.Background(), cfg, CallerCredential{Bearer: compatible})
+	require.NoError(t, goodErr)
+	require.NotEmpty(t, good.Capabilities().EnabledTools)
+	require.Zero(t, fx.unauthorizedCount())
+}
+
 // TestResolveCallerCarriesAnAuthenticatedPrincipalByValue covers the A5
 // reuse path: when the hosting process already authenticated the bearer
 // through internal/auth, the caller carries that storage.Principal, and it
