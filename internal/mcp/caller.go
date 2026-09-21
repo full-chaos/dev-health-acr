@@ -30,13 +30,11 @@ type ProcessConfig struct {
 	// the process lifetime; a caller never influences it.
 	Config sidecar.Config
 
-	// HostedMode is set by a transport that serves callers whose workspace
-	// this process cannot see (the http transport). It is plain process
-	// configuration: context_for_task then resolves its repository and
-	// scope from the request alone and never consults MCP roots, the
-	// working directory, local Git or the local index. STDIO leaves it
-	// false and resolves scope exactly as before.
-	HostedMode bool
+	// Transport names how this process serves callers. Hosted() is the ONE
+	// signal that the process serves callers whose workspace it cannot see;
+	// context_for_task then resolves repository and scope from the request
+	// alone. See hosted_transport_stub.go.
+	Transport Transport
 
 	diagnostics *slog.Logger
 	local       *localFederationRuntime
@@ -54,12 +52,16 @@ type ProcessConfig struct {
 // reads the workspace of the process itself and puts what it finds into a
 // caller's answer; in a process serving many callers that workspace belongs
 // to none of them, and no caller's credential authorised it, so the hosted
-// constructor leaves it off rather than trusting configuration to.
+// constructor leaves it off rather than trusting configuration to. It also
+// marks the process as serving over the http transport, so Hosted() is true
+// for every process built here and context_for_task resolves scope from the
+// request alone.
 func NewProcessConfig(cfg sidecar.Config, identity version.Info, diagnostics io.Writer) *ProcessConfig {
 	cfg.ClientVersion = effectiveSidecarVersion(cfg.ClientVersion, identity)
 	cfg.SidecarVersion = effectiveSidecarVersion(cfg.SidecarVersion, identity)
 	return &ProcessConfig{
 		Config:      cfg,
+		Transport:   TransportHTTP,
 		diagnostics: newDiagnosticsLogger(diagnostics, cfg.LogLevel),
 	}
 }

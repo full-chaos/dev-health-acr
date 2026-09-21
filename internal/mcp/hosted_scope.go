@@ -30,13 +30,6 @@ const (
 	hostedScopeChangedFiles = "changed_files_unsupported"
 )
 
-// hostedMode reports whether this process serves callers whose workspace it
-// cannot see. It is plain process configuration, never derived from a
-// request or a session.
-func (p *ProcessConfig) hostedMode() bool {
-	return p != nil && p.HostedMode
-}
-
 // resolveHostedTaskScope derives the repository and scope of a hosted
 // context_for_task call from the request ALONE. It takes no session and no
 // context: it cannot list MCP roots, read the working directory, run Git or

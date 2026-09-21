@@ -49,7 +49,7 @@ func handleContextForTask(ctx context.Context, cfg *ProcessConfig, req *mcpsdk.C
 
 	var resolved resolvedTaskScope
 	var err error
-	if cfg.hostedMode() {
+	if cfg.Hosted() {
 		var source string
 		resolved, source, err = resolveHostedTaskScope(input)
 		logHostedScope(ctx, cfg, source, input)

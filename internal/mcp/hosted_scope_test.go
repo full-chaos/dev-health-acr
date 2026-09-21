@@ -90,7 +90,9 @@ func newHostedRig(t *testing.T) *hostedRig {
 func (r *hostedRig) call(t *testing.T, hosted bool, args map[string]any) *mcpsdk.CallToolResult {
 	t.Helper()
 	cfg, caller := r.boot.split(&r.log)
-	cfg.HostedMode = hosted
+	if hosted {
+		cfg.Transport = TransportHTTP
+	}
 	req := callToolRequest(t, args)
 	req.Session = r.session
 	result, err := handleContextForTask(ContextWithCaller(context.Background(), caller), cfg, req)
@@ -258,8 +260,9 @@ func TestHostedRefusalsAreClassifiedAsValidation(t *testing.T) {
 	}
 }
 
-func TestHostedModeIsProcessConfigurationOnly(t *testing.T) {
-	require.False(t, (*ProcessConfig)(nil).hostedMode())
-	require.False(t, (&ProcessConfig{}).hostedMode())
-	require.True(t, (&ProcessConfig{HostedMode: true}).hostedMode())
+func TestHostedIsProcessConfigurationOnly(t *testing.T) {
+	require.False(t, (*ProcessConfig)(nil).Hosted())
+	require.False(t, (&ProcessConfig{}).Hosted())
+	require.False(t, (&ProcessConfig{Transport: TransportStdio}).Hosted())
+	require.True(t, (&ProcessConfig{Transport: TransportHTTP}).Hosted())
 }
