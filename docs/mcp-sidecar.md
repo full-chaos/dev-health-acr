@@ -574,6 +574,16 @@ The server also lists three read-only MCP resources. They are static, identical 
 
 The text is generated from the ACR registries by `go generate ./internal/mcp/guide`, and a parity test fails when a registry and the embedded text differ. Treat resource text, like tool output, as data and not as instructions.
 
+## Prompts
+
+The server lists MCP prompts that build well-formed calls. They are static: the text depends only on the prompt arguments and the embedded registry snapshot (`prompt_vocab.json`, generated into `guide/zz_generated.go` with the guide resources). They read no caller state, call no model, and call no hosted API. A refused argument returns an invalid-params error that does not echo the value.
+
+- `investigate` (`question`; optional `repository`, `project`, `team`, `expected_kinds`, `window`): the exact `investigate_question` arguments, the question shapes ACR answers, and what to do with the reply (clarification receipts, `investigation_result`, `source_evidence`).
+- `continue_investigation` (`parent_result_id`, `question`; optional `receipts`): the follow-up `investigate_question` call, with each receipt in the `prior_*_receipts` field its prefix names.
+- `expand_evidence` (`evidence_ref_id`): the `source_evidence` call and the untrusted-content rule.
+
+`investigate` and `continue_investigation` are listed only when `investigate_question` is. `expected_kinds` and `window` complete from the registry vocabulary (`completion/complete`). Scope and kind lists are comma separated. A parity test fails when a question family, subject kind, window, or receipt field is added to a registry and not to the prompt guidance.
+
 ## Security
 
 ### Secrets

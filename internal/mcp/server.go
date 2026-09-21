@@ -124,6 +124,7 @@ func newServer(cfg *ProcessConfig, caller *CallerContext, serverVersion string, 
 	server := mcpsdk.NewServer(impl, &mcpsdk.ServerOptions{
 		Instructions:              serverInstructions(cfg, caller),
 		SupportedProtocolVersions: protocolVersions,
+		CompletionHandler:         promptCompletionHandler(),
 	})
 	server.AddReceivingMiddleware(callerMiddleware(caller))
 
@@ -166,6 +167,7 @@ func newServer(cfg *ProcessConfig, caller *CallerContext, serverVersion string, 
 		)
 	}
 	registerGuideResources(server)
+	registerInvestigatePrompts(server, caller)
 	if recordEpisodeEnabled(cfg, caller) {
 		server.AddTool(
 			buildWritebackTool(toolRecordEpisode, "Record episode", recordEpisodeRequestSchemaFile, recordEpisodeResponseSchemaFile),
