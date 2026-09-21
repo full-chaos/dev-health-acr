@@ -1,7 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ACR MCP source_evidence Request v1",
-  "description": "Input for the source_evidence MCP tool. Accepts exactly evidence_ref_id; no schema_version is required on this request (the tool identity is established by the MCP call itself, not a wire field).",
+  "description": "Input for the source_evidence tool. Exactly one field, evidence_ref_id, is accepted and required.",
+  "examples": [
+    {
+      "evidence_ref_id": "ev_2f9c81ab"
+    }
+  ],
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -10,6 +15,7 @@
   "properties": {
     "evidence_ref_id": {
       "type": "string",
+      "description": "An evidence reference exactly as a previous context_for_task or investigate_question response returned it (its evidence_ref_ids, or an evidence reference on a context item). Opaque: pass it back unchanged; never build or parse one yourself.",
       "minLength": 1,
       "maxLength": 256
     }
