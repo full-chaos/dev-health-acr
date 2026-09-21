@@ -2,6 +2,7 @@ package mcp_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"regexp"
@@ -263,7 +264,7 @@ func TestServeHTTPTransportServesAndShutsDownGracefully(t *testing.T) {
 	go func() {
 		result, err := session.CallTool(context.Background(), &mcpsdk.CallToolParams{Name: "source_evidence", Arguments: map[string]any{"evidence_ref_id": "evidence_slow"}})
 		if err == nil && result.IsError {
-			err = io.ErrUnexpectedEOF
+			err = errors.New("the held call answered a tool error")
 		}
 		callDone <- err
 	}()
