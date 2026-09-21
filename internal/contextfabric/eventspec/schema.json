@@ -7061,7 +7061,7 @@
       "tool",
       "scope_source"
     ],
-    "bounded_aggregation": "one line per hosted context_for_task call that reaches scope resolution; a call refused earlier for arguments that fail the request schema emits none",
+    "bounded_aggregation": "one line per hosted context_for_task call that reaches scope resolution; a call whose arguments fail the request schema never reaches scope resolution and emits none",
     "fields": [
       {
         "key": "tool",

@@ -2898,7 +2898,7 @@ func anchorBindingVocabulary(key string) []string {
 var MCPHostedContextScope = Event{
 	ID: "mcp.hosted_context_scope", Msg: "mcp hosted context scope", Level: LevelInfo,
 	Multiplicity: MultiplicityZeroOrOnePerRequest, Attribution: []string{"tool", "scope_source"},
-	BoundedAggregation: "one line per hosted context_for_task call that reaches scope resolution; a call refused earlier for arguments that fail the request schema emits none",
+	BoundedAggregation: "one line per hosted context_for_task call that reaches scope resolution; a call whose arguments fail the request schema never reaches scope resolution and emits none",
 	Fields: []Field{
 		{Key: "tool", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"context_for_task"}},
 		{Key: "scope_source", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"explicit_repository", "repository_missing", "changed_files_unsupported"}},
