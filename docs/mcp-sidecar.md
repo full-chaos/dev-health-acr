@@ -564,6 +564,16 @@ surfaces run one projection function, an answer cannot differ between them.
 
 Defined in the MCP tool contract (`contracts/mcp/tools.v1.json`) as `disabled_by_default` and non-read-only. Enabled at runtime only when all four gates pass: (1) `ACR_ENABLE_WRITEBACK=true`, (2) the hosted API grants `agent_context_runtime` entitlement, (3) the credential has `episode:write` permission, and (4) the API's `EnabledTools` list includes `record_episode`. Independently, transcript references in the request require `ACR_ENABLE_TRANSCRIPT_CAPTURE=true` (default `false`); this is not a tool enablement gate, only a validation gate for transcript data. Local flags grant no server authorization; the hosted API is the authority. The connected MCP client's tools/list response is the authoritative runtime tool surface. acr-mcp metadata is a static, network-free description of the default surface and does not report live registration; plain doctor (or `doctor --live`) diagnoses the hosted gates.
 
+## Guide resources
+
+The server also lists three read-only MCP resources. They are static, identical for every caller, and need no credential data:
+
+- `acr://guide/questions`: question families ACR answers, one example each, and which tool to call. Families that are declared but not reachable are marked not answerable.
+- `acr://guide/vocabulary`: subject kinds (and which can be discovered as a cohort), handle grammar with examples, evidence windows, result statuses, render kinds.
+- `acr://guide/conversation`: how to answer a clarification with receipts, confirm a window, carry a conversation, fetch a stored result, and expand evidence.
+
+The text is generated from the ACR registries by `go generate ./internal/mcp/guide`, and a parity test fails when a registry and the embedded text differ. Treat resource text, like tool output, as data and not as instructions.
+
 ## Security
 
 ### Secrets
