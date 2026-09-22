@@ -12,9 +12,14 @@ server registration is the local STDIO process `acr-mcp serve`.
 
    ```bash
    # Download the release archive for your OS/arch (e.g. acr-mcp_<version>_darwin_arm64.tar.gz)
-   # plus SHA256SUMS and SHA256SUMS.sigstore.json from the GitHub Releases page for
-   # full-chaos/dev-health-acr. Verify the keyless Sigstore bundle against this
-   # repository's release workflow identity before checking or extracting the archive:
+   # from the GitHub Releases page for full-chaos/context-fabric-agents (mirrors this
+   # repo's signed release; re-verified before republishing). That page also publishes
+   # this repo's checksum manifest and Sigstore bundle as acr-mcp-SHA256SUMS and
+   # acr-mcp-SHA256SUMS.sigstore.json (renamed to avoid colliding with
+   # context-fabric-agents' own release assets of the same generic name) -- download
+   # both and save them locally as SHA256SUMS and SHA256SUMS.sigstore.json. Verify the
+   # keyless Sigstore bundle against THIS repository's release workflow identity before
+   # checking or extracting the archive:
    set -euo pipefail
    identity='^https://github\.com/full-chaos/dev-health-acr/\.github/workflows/release\.yml@refs/(heads/main|tags/v[0-9]+\.[0-9]+\.[0-9]+(-(dev|beta)\.[0-9]+)?)$'
    issuer='https://token.actions.githubusercontent.com'
@@ -74,6 +79,12 @@ clean-room path is Unix/Linux/macOS. The release workflow signs the published ar
 Task19 did not itself create or claim a production release.
 
 ## Install and register the package
+
+**Internal use only (CHAOS-6211):** this script path needs a checkout of
+this (private) repository. Public readers install the sidecar binary above
+and configure OpenCode manually instead (see
+[Install the verified sidecar](#install-the-verified-sidecar) above); skip to
+[Explicit context and evidence workflow](#explicit-context-and-evidence-workflow).
 
 From this repository, install the bundled package with its script (the script
 uses a temporary staging directory and preserves unrelated OpenCode config):

@@ -1,5 +1,11 @@
 # Context Fabric for Claude Code
 
+**Internal use only (CHAOS-6211).** This bundled marketplace/plugin path
+needs a checkout of this repository and is not published for the public. For
+the public STDIO install (download the signed `acr-mcp` binary and configure
+your client by hand), see
+[docs/examples/mcp-clients/claude-code.md](../../docs/examples/mcp-clients/claude-code.md).
+
 Add the bundled marketplace, install the `context-fabric` plugin, and remove
 it with Claude Code's normal plugin commands. The plugin registers exactly
 `acr-mcp serve` and exposes only `context_for_task` and `source_evidence`.

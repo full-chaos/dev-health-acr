@@ -8,6 +8,20 @@ import "strings"
 // source builds use the supported Make target so they carry a usable local
 // identity; direct go build output remains an unversioned fixture build.
 //
+// CHAOS-6211: acr is going private, so the release archives are downloaded
+// from the public full-chaos/context-fabric-agents Releases page, which
+// mirrors them from this repo's own release workflow (re-verified there
+// before republishing -- see .github/workflows/publish-acr-release.yml in
+// that repo). The Sigstore identity check below stays pinned to THIS repo's
+// release workflow, because the assets are the same signed originals,
+// unmodified, just rehosted. That mirror publishes the manifest and
+// sigstore bundle as acr-mcp-SHA256SUMS / acr-mcp-SHA256SUMS.sigstore.json
+// -- renamed on the cfa side because context-fabric-agents' own release
+// already publishes a plain SHA256SUMS for its own assets in the same
+// GitHub Release -- so both snippets below tell the reader to save the
+// downloaded files locally as SHA256SUMS / SHA256SUMS.sigstore.json before
+// running the rest of the (unchanged) verification commands.
+//
 // Both snippets verify the keyless Sigstore bundle over the complete
 // SHA256SUMS manifest against the exact GitHub Actions release-workflow
 // identity before selecting the one archive the consumer downloaded. They then
@@ -23,9 +37,14 @@ const installSidecarSnippetRaw = `1. **Install the sidecar binary.** The normal 
 
    @BT@@BT@@BT@bash
    # Download the release archive for your OS/arch (e.g. acr-mcp_<version>_darwin_arm64.tar.gz)
-   # plus SHA256SUMS and SHA256SUMS.sigstore.json from the GitHub Releases page for
-   # full-chaos/dev-health-acr. Verify the keyless Sigstore bundle against this
-   # repository's release workflow identity before checking or extracting the archive:
+   # from the GitHub Releases page for full-chaos/context-fabric-agents (mirrors this
+   # repo's signed release; re-verified before republishing). That page also publishes
+   # this repo's checksum manifest and Sigstore bundle as acr-mcp-SHA256SUMS and
+   # acr-mcp-SHA256SUMS.sigstore.json (renamed to avoid colliding with
+   # context-fabric-agents' own release assets of the same generic name) -- download
+   # both and save them locally as SHA256SUMS and SHA256SUMS.sigstore.json. Verify the
+   # keyless Sigstore bundle against THIS repository's release workflow identity before
+   # checking or extracting the archive:
    set -euo pipefail
    identity='^https://github\.com/full-chaos/dev-health-acr/\.github/workflows/release\.yml@refs/(heads/main|tags/v[0-9]+\.[0-9]+\.[0-9]+(-(dev|beta)\.[0-9]+)?)$'
    issuer='https://token.actions.githubusercontent.com'
@@ -72,9 +91,14 @@ const installSidecarWindowsSnippetRaw = `1. **Install the sidecar binary (Window
 
    @BT@@BT@@BT@powershell
    # Download the release archive for your Windows build (e.g. acr-mcp_<version>_windows_amd64.zip)
-   # plus SHA256SUMS and SHA256SUMS.sigstore.json from the GitHub Releases page for
-   # full-chaos/dev-health-acr. Verify the keyless Sigstore bundle against this
-   # repository's release workflow identity before checking or extracting the archive.
+   # from the GitHub Releases page for full-chaos/context-fabric-agents (mirrors this
+   # repo's signed release; re-verified before republishing). That page also publishes
+   # this repo's checksum manifest and Sigstore bundle as acr-mcp-SHA256SUMS and
+   # acr-mcp-SHA256SUMS.sigstore.json (renamed to avoid colliding with
+   # context-fabric-agents' own release assets of the same generic name) -- download
+   # both and save them locally as SHA256SUMS and SHA256SUMS.sigstore.json. Verify the
+   # keyless Sigstore bundle against THIS repository's release workflow identity before
+   # checking or extracting the archive.
    # $ErrorActionPreference covers cmdlet failures; cosign.exe is a native executable,
    # so its exit code is checked explicitly before continuing:
    $ErrorActionPreference = 'Stop'

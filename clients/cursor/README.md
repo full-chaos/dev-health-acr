@@ -1,5 +1,11 @@
 # Context Fabric for Cursor
 
+**Internal use only (CHAOS-6211).** This plugin install path needs a
+checkout of this repository and is not published for the public. For the
+public STDIO install (download the signed `acr-mcp` binary and configure
+Cursor's `mcp.json` by hand), see
+[docs/examples/mcp-clients/cursor.md](../../docs/examples/mcp-clients/cursor.md).
+
 A Cursor plugin that adds explicit, evidence-backed ACR context and evidence retrieval to Cursor's agent. It never runs on its own: every context or evidence fetch is a user-requested command, skill, or rule invocation.
 
 ## Layout
