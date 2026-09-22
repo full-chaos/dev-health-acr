@@ -45,6 +45,57 @@ func validOAuthAuthorizationRequestPG(now time.Time, deviceCodeHash storage.Devi
 	}
 }
 
+func validOAuthDeviceGrantPG(now time.Time, deviceCodeHash storage.DeviceCodeHash) storage.OAuthDeviceGrant {
+	return storage.OAuthDeviceGrant{
+		DeviceCodeHash: deviceCodeHash,
+		ClientID:       dynamicOAuthClientIDPG(0xef),
+		ClientKind:     storage.OAuthClientKindDynamic,
+		Resource:       "https://example.com/resource",
+		Scope:          "context:read",
+		CreatedAt:      now,
+		ExpiresAt:      now.Add(storage.DeviceAuthorizationTTL),
+	}
+}
+
+func TestOAuthStore_DeviceGrantLifecycle(t *testing.T) {
+	// Given
+	ctx := context.Background()
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	db := newCredentialStoreDatabase(t, ctx)
+	audit, err := NewAuditStore(db)
+	require.NoError(t, err)
+	deviceStore, err := NewDeviceAuthorizationStoreWithOptions(db, audit, DeviceAuthorizationStoreOptions{Now: func() time.Time { return now }})
+	require.NoError(t, err)
+	store, err := NewOAuthStoreWithOptions(db, OAuthStoreOptions{Now: func() time.Time { return now }})
+	require.NoError(t, err)
+	device, err := deviceStore.Create(ctx, storage.DeviceAuthorizationCreateInput{
+		DeviceCodeHash: storage.HashDeviceCode("device-grant-lifecycle"),
+		UserCodeHash:   storage.HashUserCode("DEVGRANT"),
+	})
+	require.NoError(t, err)
+	grant := validOAuthDeviceGrantPG(now, device.DeviceCodeHash)
+
+	// When
+	created, err := store.CreateDeviceGrant(ctx, grant)
+	fetched, getErr := store.GetDeviceGrant(ctx, grant.DeviceCodeHash)
+	_, duplicateErr := store.CreateDeviceGrant(ctx, grant)
+	_, unknownErr := store.GetDeviceGrant(ctx, storage.HashDeviceCode("device-grant-unknown"))
+
+	// Then
+	require.NoError(t, err)
+	require.Equal(t, grant.ClientID, created.ClientID)
+	require.NoError(t, getErr)
+	require.Equal(t, grant.DeviceCodeHash, fetched.DeviceCodeHash)
+	require.Equal(t, grant.ClientID, fetched.ClientID)
+	require.Equal(t, grant.ClientKind, fetched.ClientKind)
+	require.Equal(t, grant.Resource, fetched.Resource)
+	require.Equal(t, grant.Scope, fetched.Scope)
+	require.True(t, grant.CreatedAt.Equal(fetched.CreatedAt))
+	require.True(t, grant.ExpiresAt.Equal(fetched.ExpiresAt))
+	require.ErrorIs(t, duplicateErr, storage.ErrConflict)
+	require.ErrorIs(t, unknownErr, storage.ErrNotFound)
+}
+
 func TestOAuthStore_ClientLifecycle(t *testing.T) {
 	// Given
 	ctx := context.Background()

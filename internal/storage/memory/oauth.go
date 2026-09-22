@@ -17,6 +17,7 @@ type OAuthStore struct {
 	byHandle     map[storage.OAuthSecretHash]storage.OAuthAuthorizationRequest
 	byDeviceCode map[storage.DeviceCodeHash]storage.OAuthSecretHash
 	byCode       map[storage.OAuthSecretHash]storage.OAuthSecretHash
+	deviceGrants map[storage.DeviceCodeHash]storage.OAuthDeviceGrant
 }
 
 // NewOAuthStore constructs an OAuthStore. now must be non-nil.
@@ -30,11 +31,12 @@ func NewOAuthStore(now func() time.Time) *OAuthStore {
 		byHandle:     make(map[storage.OAuthSecretHash]storage.OAuthAuthorizationRequest),
 		byDeviceCode: make(map[storage.DeviceCodeHash]storage.OAuthSecretHash),
 		byCode:       make(map[storage.OAuthSecretHash]storage.OAuthSecretHash),
+		deviceGrants: make(map[storage.DeviceCodeHash]storage.OAuthDeviceGrant),
 	}
 }
 
 func (s *OAuthStore) ready(ctx context.Context) error {
-	if s == nil || s.now == nil || s.clients == nil || s.byHandle == nil || s.byDeviceCode == nil || s.byCode == nil || storage.IsNil(ctx) {
+	if s == nil || s.now == nil || s.clients == nil || s.byHandle == nil || s.byDeviceCode == nil || s.byCode == nil || s.deviceGrants == nil || storage.IsNil(ctx) {
 		return storage.ErrInvalidOAuthClient
 	}
 	return ctx.Err()
@@ -179,4 +181,36 @@ func (s *OAuthStore) ConsumeAuthorizationCode(ctx context.Context, code storage.
 func cloneOAuthClient(client storage.OAuthClient) storage.OAuthClient {
 	client.RedirectURIs = append([]string(nil), client.RedirectURIs...)
 	return client
+}
+
+func (s *OAuthStore) CreateDeviceGrant(ctx context.Context, grant storage.OAuthDeviceGrant) (storage.OAuthDeviceGrant, error) {
+	if err := s.ready(ctx); err != nil {
+		return storage.OAuthDeviceGrant{}, err
+	}
+	if err := storage.ValidateOAuthDeviceGrant(grant); err != nil {
+		return storage.OAuthDeviceGrant{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return storage.OAuthDeviceGrant{}, err
+	}
+	if _, exists := s.deviceGrants[grant.DeviceCodeHash]; exists {
+		return storage.OAuthDeviceGrant{}, storage.ErrConflict
+	}
+	s.deviceGrants[grant.DeviceCodeHash] = grant
+	return grant, nil
+}
+
+func (s *OAuthStore) GetDeviceGrant(ctx context.Context, hash storage.DeviceCodeHash) (storage.OAuthDeviceGrant, error) {
+	if err := s.ready(ctx); err != nil {
+		return storage.OAuthDeviceGrant{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	grant, exists := s.deviceGrants[hash]
+	if !exists {
+		return storage.OAuthDeviceGrant{}, storage.ErrNotFound
+	}
+	return grant, nil
 }

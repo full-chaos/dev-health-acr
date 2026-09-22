@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
+	"github.com/full-chaos/dev-health-acr/internal/oauthvocab"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -87,8 +88,26 @@ func (a *App) handleDeviceCodeToken(w http.ResponseWriter, r *http.Request) {
 		a.writeOAuthDeviceError(w, contractsv1.OAuthDeviceErrorInvalidGrant, 0)
 		return
 	}
+	// DeviceFlowService.Poll itself refuses (CHAOS-6233, ErrOAuthDeviceGrantConflict)
+	// a device code that belongs to an RFC 8628 device grant (POST
+	// /device_authorization) -- such a code must be redeemed only through
+	// this server's OAuth-aware /token branch (ExchangeDeviceCode), which
+	// binds the credential to the requested resource and scope subset; this
+	// legacy JSON endpoint's Poll has neither binding. The two telemetry
+	// branches below emit the same "acr-api oauth step" line the real /token
+	// branch would have written for this device code, so the refusal is
+	// visible in the OAuth login's own observability even though it happened
+	// on this endpoint.
 	issued, err := a.deviceFlow.Poll(r.Context(), request.DeviceCode)
 	if err != nil {
+		if errors.Is(err, auth.ErrOAuthDeviceGrantConflict) {
+			a.emitOAuthStep(r, oauthvocab.StepToken, oauthvocab.OutcomeInvalidGrant, "", http.StatusBadRequest)
+		} else if errors.Is(err, auth.ErrOAuthDeviceGrantLookupUnavailable) {
+			a.logOAuthDependencyFailure(r, oauthvocab.StepToken)
+			a.emitOAuthStep(r, oauthvocab.StepToken, oauthvocab.OutcomeUnavailable, "", http.StatusServiceUnavailable)
+			a.writeDeviceDependencyError(w, r)
+			return
+		}
 		var pollError *auth.DevicePollError
 		if errors.As(err, &pollError) {
 			a.writeOAuthDeviceError(w, contractsv1.OAuthDeviceErrorCode(pollError.Kind), pollError.RetryAfter)

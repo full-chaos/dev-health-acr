@@ -109,7 +109,26 @@ type OAuthAuthorizationRequest struct {
 	ConsumedAt     *time.Time
 }
 
-// OAuthStore persists dynamic clients and authorization requests.
+// OAuthDeviceGrant is what POST /device_authorization stores alongside its
+// device authorization record for RFC 8628's device-code grant: the client
+// and what /token needs when the client polls back with only the
+// device_code -- the resource and scope the /device_authorization request
+// named. Unlike OAuthAuthorizationRequest it carries no redirect URI or PKCE
+// challenge (RFC 8628 has no redirect step) and no code (the client polls
+// /token directly with the device code; the device authorization record's
+// own state, not a second code, tracks the decision).
+type OAuthDeviceGrant struct {
+	DeviceCodeHash DeviceCodeHash
+	ClientID       string
+	ClientKind     string
+	Resource       string
+	Scope          string
+	CreatedAt      time.Time
+	ExpiresAt      time.Time
+}
+
+// OAuthStore persists dynamic clients, authorization requests and device
+// grants.
 type OAuthStore interface {
 	// RegisterClient stores a new dynamic client. A duplicate client ID is
 	// ErrConflict.
@@ -130,6 +149,12 @@ type OAuthStore interface {
 	// request. Unknown, expired and already consumed codes all return
 	// ErrOAuthAuthorizationCodeUnavailable.
 	ConsumeAuthorizationCode(context.Context, OAuthSecretHash) (OAuthAuthorizationRequest, error)
+	// CreateDeviceGrant stores a new device-code grant. A duplicate device
+	// code hash is ErrConflict.
+	CreateDeviceGrant(context.Context, OAuthDeviceGrant) (OAuthDeviceGrant, error)
+	// GetDeviceGrant returns the grant for this device code hash or
+	// ErrNotFound. Expired grants are still returned; callers decide.
+	GetDeviceGrant(context.Context, DeviceCodeHash) (OAuthDeviceGrant, error)
 }
 
 // IsDynamicOAuthClientID reports whether a client ID has the shape this
@@ -160,7 +185,11 @@ func ValidateOAuthClient(client OAuthClient) error {
 	if !utf8.ValidString(client.ClientName) || len(client.ClientName) > maxOAuthClientNameLength || hasControl(client.ClientName) {
 		return ErrInvalidOAuthClient
 	}
-	if len(client.RedirectURIs) == 0 || len(client.RedirectURIs) > maxOAuthRedirectURIs {
+	// Zero redirect URIs is valid here: a client registered for the RFC 8628
+	// device-code grant only (CHAOS-6233) declares none, since the device
+	// grant has no redirect step. The caller (OAuthService.Register) is what
+	// requires at least one when the client also wants authorization_code.
+	if len(client.RedirectURIs) > maxOAuthRedirectURIs {
 		return ErrInvalidOAuthClient
 	}
 	seen := make(map[string]struct{}, len(client.RedirectURIs))
@@ -280,6 +309,35 @@ func ValidateOAuthAuthorizationRequest(request OAuthAuthorizationRequest) error 
 		return ErrInvalidOAuthAuthorizationRequest
 	}
 	if len(request.Scope) > maxOAuthScopeLength || len(request.State) > maxOAuthStateLength || !utf8.ValidString(request.State) || hasControl(request.State) || hasControl(request.Scope) {
+		return ErrInvalidOAuthAuthorizationRequest
+	}
+	return nil
+}
+
+// ValidateOAuthDeviceGrant checks a device grant before it is stored.
+func ValidateOAuthDeviceGrant(grant OAuthDeviceGrant) error {
+	if grant.DeviceCodeHash.IsZero() {
+		return ErrInvalidOAuthAuthorizationRequest
+	}
+	if grant.CreatedAt.IsZero() || !grant.ExpiresAt.After(grant.CreatedAt) {
+		return ErrInvalidOAuthAuthorizationRequest
+	}
+	switch grant.ClientKind {
+	case OAuthClientKindDynamic:
+		if !IsDynamicOAuthClientID(grant.ClientID) {
+			return ErrInvalidOAuthAuthorizationRequest
+		}
+	case OAuthClientKindMetadataDocument:
+		if !ValidOAuthClientMetadataURL(grant.ClientID) {
+			return ErrInvalidOAuthAuthorizationRequest
+		}
+	default:
+		return ErrInvalidOAuthAuthorizationRequest
+	}
+	if !ValidOAuthResource(grant.Resource) {
+		return ErrInvalidOAuthAuthorizationRequest
+	}
+	if len(grant.Scope) > maxOAuthScopeLength || !utf8.ValidString(grant.Scope) || hasControl(grant.Scope) {
 		return ErrInvalidOAuthAuthorizationRequest
 	}
 	return nil

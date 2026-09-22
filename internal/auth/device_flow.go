@@ -30,14 +30,27 @@ var (
 type DeviceFlowOptions struct {
 	Now    func() time.Time
 	Random io.Reader
+	// OAuthDeviceGrants lets Poll refuse redeeming a device code that
+	// belongs to an RFC 8628 device grant (CHAOS-6233, POST
+	// /device_authorization): such a code must be redeemed only through
+	// OAuthService.ExchangeDeviceCode, which binds the credential to the
+	// grant's resource and requested scope; this legacy path binds neither.
+	// REQUIRED -- NewDeviceFlowService refuses construction when this is
+	// nil, so a caller cannot silently end up with the guard skipped by
+	// forgetting to wire it. A deployment with no OAuth login configured at
+	// all passes the explicit NoOAuthDeviceGrants{} value instead of
+	// leaving this unset, so "OAuth is genuinely off" and "OAuth is on but
+	// someone forgot to wire the lookup" can never be the same nil.
+	OAuthDeviceGrants OAuthDeviceGrantLookup
 }
 
 type DeviceFlowService struct {
-	store       storage.DeviceAuthorizationStore
-	credentials *Service
-	now         func() time.Time
-	random      io.Reader
-	randomMu    sync.Mutex
+	store             storage.DeviceAuthorizationStore
+	credentials       *Service
+	now               func() time.Time
+	random            io.Reader
+	randomMu          sync.Mutex
+	oauthDeviceGrants OAuthDeviceGrantLookup
 }
 
 type DeviceAuthorizationStart struct {
@@ -83,7 +96,18 @@ func NewDeviceFlowService(store storage.DeviceAuthorizationStore, credentials *S
 	if storage.IsNil(options.Random) {
 		options.Random = rand.Reader
 	}
-	return &DeviceFlowService{store: store, credentials: credentials, now: options.Now, random: options.Random}, nil
+	// storage.IsNil, not a bare != nil: a caller passing a typed nil
+	// pointer that satisfies the interface (e.g. a nil *memory.OAuthStore)
+	// must be refused exactly like an unset field -- an interface holding a
+	// typed nil is itself non-nil and would slip past a bare check, defeating
+	// this guard through the exact shape it exists to catch.
+	if storage.IsNil(options.OAuthDeviceGrants) {
+		return nil, fmt.Errorf("%w: OAuthDeviceGrants is required (pass NoOAuthDeviceGrants{} when OAuth login is not configured)", ErrInvalidDeviceFlow)
+	}
+	return &DeviceFlowService{
+		store: store, credentials: credentials, now: options.Now, random: options.Random,
+		oauthDeviceGrants: options.OAuthDeviceGrants,
+	}, nil
 }
 
 func (s *DeviceFlowService) Start(ctx context.Context, hints DeviceAuthorizationHints) (DeviceAuthorizationStart, error) {

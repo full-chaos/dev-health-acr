@@ -138,10 +138,17 @@ metadata documents; they are fetched only from public addresses, with no
 redirects, a 5-second timeout and a 5 KiB limit.
 
 Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
-`POST /authorize/consent`, `POST /token`, `POST /register`.
+`POST /authorize/consent`, `POST /token`, `POST /register`,
+`POST /device_authorization`.
 
-- Only the authorization-code grant with PKCE `S256`. No implicit grant, no
-  refresh token, no client secrets.
+- The authorization-code grant with PKCE `S256`, and RFC 8628's device-code
+  grant for headless/remote clients (`POST /device_authorization` starts it;
+  `POST /token` with `grant_type=urn:ietf:params:oauth:grant-type:device_code`
+  polls it -- `authorization_pending`, `slow_down` with `Retry-After`,
+  `access_denied`, `expired_token`, or a token once approved at the same
+  typed-user-code page `acr-mcp login`'s device flow uses). No implicit grant,
+  no refresh token, no client secrets. See `docs/mcp-sidecar.md`'s
+  Authentication section for the client-facing device-login sequence.
 - Consent happens on the web consent page, with nothing to type. `/authorize`
   verifies the client, the exact registered redirect URI, PKCE, the resource
   and the scope, starts a device authorization whose raw device and user codes
@@ -182,11 +189,16 @@ Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
   client kind, status). Steps: `register`, `authorize` (ok = sent to the
   consent page), `consent_preview`, `consent` (ok = approved, `access_denied`
   = denied, `unauthenticated` = no valid web assertion; every consent request
-  writes its line, including those refused before the handler), `token`. Codes, handles, verifiers, client IDs, redirect URIs,
-  state and tokens are never logged.
+  writes its line, including those refused before the handler),
+  `device_authorization` (ok = a device_code/user_code pair was issued),
+  `token` (covers both the authorization_code and device_code grants; the
+  device_code branch's `outcome` also carries `authorization_pending` and
+  `slow_down`). Codes, handles, verifiers, client IDs, device codes, user
+  codes, redirect URIs, state and tokens are never logged.
 
 The runtime database role needs `SELECT, INSERT, UPDATE` on
-`acr.oauth_clients` and `acr.oauth_authorization_requests`
+`acr.oauth_clients` and `acr.oauth_authorization_requests`, and
+`SELECT, INSERT` on `acr.oauth_device_grants`
 (`deploy/compose/acr-db-init.sh runtime-acl`).
 
 ## Rate limiting

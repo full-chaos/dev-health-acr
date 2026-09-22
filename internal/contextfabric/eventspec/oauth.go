@@ -15,6 +15,9 @@ const (
 	OAuthStepToken     = oauthvocab.StepToken
 	// OAuthStepConsentPreview is the web consent page reading a request.
 	OAuthStepConsentPreview = oauthvocab.StepConsentPreview
+	// OAuthStepDeviceAuthorization is RFC 8628's device_authorization
+	// endpoint.
+	OAuthStepDeviceAuthorization = oauthvocab.StepDeviceAuthorization
 )
 
 // OAuthStepVocabulary lists every step.
@@ -45,7 +48,7 @@ var OAuthStep = Event{
 	Level:              LevelInfo,
 	Multiplicity:       MultiplicityExactlyOnePerRequest,
 	Attribution:        []string{"request_id"},
-	BoundedAggregation: "exactly one line per request to /register, /authorize, /authorize/consent or /token; metadata routes emit none",
+	BoundedAggregation: "exactly one line per request to /register, /authorize, /authorize/consent, /device_authorization or /token; metadata routes emit none",
 	Fields: []Field{
 		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "step", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: OAuthStepVocabulary()},

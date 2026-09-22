@@ -64,14 +64,20 @@ func newOAuthHarness(t *testing.T, resources ...string) *oauthHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.devices, err = NewDeviceFlowService(store, service, DeviceFlowOptions{Now: clock})
+	// The SAME OAuthStore instance is wired into both h.devices (so Poll can
+	// see the device-grant bindings StartDeviceAuthorization writes -- CHAOS-6233)
+	// and h.oauth below (so StartDeviceAuthorization/ExchangeDeviceCode write
+	// and read the same store Poll reads) -- two separate stores would make
+	// the harness unable to reproduce the conflict Poll now refuses.
+	oauthStore := memory.NewOAuthStore(clock)
+	h.devices, err = NewDeviceFlowService(store, service, DeviceFlowOptions{Now: clock, OAuthDeviceGrants: oauthStore})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(resources) == 0 {
 		resources = []string{testResource}
 	}
-	h.oauth, err = NewOAuthService(memory.NewOAuthStore(clock), h.devices, OAuthConfig{Issuer: testIssuer, Resources: resources, ClientMetadata: h.meta, Now: clock})
+	h.oauth, err = NewOAuthService(oauthStore, h.devices, OAuthConfig{Issuer: testIssuer, Resources: resources, ClientMetadata: h.meta, Now: clock})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -426,6 +432,50 @@ func TestOAuthRegisterRefusals(t *testing.T) {
 	client, err := h.oauth.Register(context.Background(), OAuthRegistrationRequest{RedirectURIs: []string{testRedirect}, GrantTypes: []string{"authorization_code", "refresh_token"}, TokenEndpointAuthMethod: "none"})
 	if err != nil || !storage.IsDynamicOAuthClientID(client.ClientID) {
 		t.Fatalf("refresh_token in the request is accepted and dropped: %+v %v", client, err)
+	}
+}
+
+// TestOAuthRegisterDeviceCodeOnlyClient pins the CHAOS-6233 fix: a client
+// declaring ONLY the RFC 8628 device-code grant type registers successfully
+// with no redirect_uris (the device grant has no redirect step), can then
+// start a device authorization (StartDeviceAuthorization never checks
+// redirect_uris), and cannot complete the authorization_code flow (Authorize
+// refuses since it has none registered to match against).
+func TestOAuthRegisterDeviceCodeOnlyClient(t *testing.T) {
+	h := newOAuthHarness(t)
+	client, err := h.oauth.Register(context.Background(), OAuthRegistrationRequest{GrantTypes: []string{OAuthDeviceCodeGrantType}})
+	if err != nil {
+		t.Fatalf("device-only registration: %v", err)
+	}
+	if len(client.RedirectURIs) != 0 {
+		t.Fatalf("device-only client stored RedirectURIs = %v, want none", client.RedirectURIs)
+	}
+	if _, err := h.oauth.StartDeviceAuthorization(context.Background(), OAuthDeviceAuthorizationRequest{ClientID: client.ClientID}); err != nil {
+		t.Fatalf("device-only client cannot start a device authorization: %v", err)
+	}
+	challenge, _ := pkce(t)
+	_, err = h.oauth.Authorize(context.Background(), OAuthAuthorizeRequest{
+		ResponseType: "code", ClientID: client.ClientID, RedirectURI: testRedirect,
+		CodeChallenge: challenge, CodeChallengeMethod: "S256",
+	})
+	if outcomeOf(err) != oauthvocab.OutcomeInvalidRedirectURI {
+		t.Fatalf("device-only client authorization_code outcome = %s, want %s", outcomeOf(err), oauthvocab.OutcomeInvalidRedirectURI)
+	}
+}
+
+// TestOAuthRegisterHybridClient pins that a client naming BOTH
+// authorization_code and device_code registers normally (redirect_uris still
+// required, since authorization_code was requested) and can use either grant.
+func TestOAuthRegisterHybridClient(t *testing.T) {
+	h := newOAuthHarness(t)
+	client, err := h.oauth.Register(context.Background(), OAuthRegistrationRequest{
+		RedirectURIs: []string{testRedirect}, GrantTypes: []string{"authorization_code", OAuthDeviceCodeGrantType},
+	})
+	if err != nil {
+		t.Fatalf("hybrid registration: %v", err)
+	}
+	if _, err := h.oauth.StartDeviceAuthorization(context.Background(), OAuthDeviceAuthorizationRequest{ClientID: client.ClientID}); err != nil {
+		t.Fatalf("hybrid client cannot start a device authorization: %v", err)
 	}
 }
 

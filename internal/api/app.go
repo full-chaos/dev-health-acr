@@ -95,6 +95,7 @@ func (a *App) Handler() http.Handler {
 		mux.Handle("POST "+OAuthConsentPath, a.oauthConsentLine(a.deviceRuntimeHandler(a.deviceApprovalHandler(http.HandlerFunc(a.handleOAuthConsent)))))
 		mux.HandleFunc("POST "+OAuthTokenPath, a.handleOAuthToken)
 		mux.HandleFunc("POST "+OAuthRegisterPath, a.handleOAuthRegister)
+		mux.HandleFunc("POST "+OAuthDeviceAuthorizationPath, a.handleOAuthDeviceAuthorization)
 	}
 	return a.InstrumentedHandler(mux)
 }

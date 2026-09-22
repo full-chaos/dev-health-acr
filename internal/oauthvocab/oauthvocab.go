@@ -13,11 +13,15 @@ const (
 	// StepConsentPreview is the web consent page reading a request before
 	// the signed-in user decides it (StepConsent).
 	StepConsentPreview = "consent_preview"
+	// StepDeviceAuthorization is RFC 8628's device_authorization endpoint,
+	// which starts a device-code grant. StepToken covers every /token poll
+	// against it, the same as it covers authorization_code exchanges.
+	StepDeviceAuthorization = "device_authorization"
 )
 
 // StepVocabulary lists every step.
 func StepVocabulary() []string {
-	return []string{StepRegister, StepAuthorize, StepConsentPreview, StepConsent, StepToken}
+	return []string{StepRegister, StepAuthorize, StepConsentPreview, StepConsent, StepDeviceAuthorization, StepToken}
 }
 
 // OAuth step outcomes. "ok" means the step did what it exists to do: a client
@@ -47,7 +51,13 @@ const (
 	// OutcomeUnauthenticated: a consent request without a valid web
 	// assertion for a signed-in user.
 	OutcomeUnauthenticated = "unauthenticated"
-	OutcomeUnavailable     = "unavailable"
+	// OutcomeAuthorizationPending: an RFC 8628 /token poll before the device
+	// authorization has been decided.
+	OutcomeAuthorizationPending = "authorization_pending"
+	// OutcomeSlowDown: an RFC 8628 /token poll faster than the device
+	// authorization's interval since the last poll.
+	OutcomeSlowDown    = "slow_down"
+	OutcomeUnavailable = "unavailable"
 )
 
 // OutcomeVocabulary lists every outcome, ok first.
@@ -57,7 +67,7 @@ func OutcomeVocabulary() []string {
 		OutcomeInvalidRequest, OutcomeInvalidClient, OutcomeInvalidClientMetadata, OutcomeInvalidRedirectURI,
 		OutcomeUnsupportedResponseType, OutcomeUnsupportedGrantType, OutcomePKCERequired, OutcomeInvalidTarget, OutcomeInvalidScope,
 		OutcomeInvalidGrant, OutcomePKCEMismatch, OutcomeRedirectMismatch, OutcomeClientMismatch,
-		OutcomeResourceMismatch, OutcomeUnauthenticated, OutcomeRateLimited, OutcomeUnavailable,
+		OutcomeResourceMismatch, OutcomeUnauthenticated, OutcomeAuthorizationPending, OutcomeSlowDown, OutcomeRateLimited, OutcomeUnavailable,
 	}
 }
 

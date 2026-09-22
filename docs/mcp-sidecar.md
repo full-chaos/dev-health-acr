@@ -635,6 +635,14 @@ Two ways to authenticate. Both end with the same `fcacr_` bearer on every reques
 
 The token is an ordinary 30-day `fcacr_` credential, revocable like any other (a revoked credential is refused on the next request). There is no refresh token; log in again after it expires. The credential is bound to the MCP URL it was requested for: acr-api accepts it only on requests the hosted endpoint forwards with that same URL, so a token issued for another endpoint is refused with `401`. With Claude Code: `claude mcp add --transport http acr https://<mcp host>/mcp` and then `/mcp` to log in.
 
+**Device login (RFC 8628, no browser or redirect on the client's own host).** For a headless or remote client -- a shared dev box, CI, a machine with no local browser -- the authorization-code flow above cannot work: its redirect lands on whoever's browser approves it, not the machine that started the login. The device grant instead uses one-time approval at a web page:
+
+1. `POST /device_authorization` (form-encoded: `client_id`, optional `scope`, optional `resource`) returns `device_code`, `user_code`, `verification_uri`, `verification_uri_complete`, `expires_in` (600s) and `interval` (5s). `verification_uri` is the same approval page `acr-mcp login`'s device flow already uses; `verification_uri_complete` carries `user_code` as a query parameter so most users only click it (the page prefills the code field and still accepts typing it, for a client that only prints `user_code` and `verification_uri` separately). Sign in and Approve there, the same repository picker as any other device login.
+2. The client polls `/token` with `grant_type=urn:ietf:params:oauth:grant-type:device_code` and `device_code` (plus `client_id`, matching the one `/device_authorization` used) no faster than `interval`: `authorization_pending` while undecided, `slow_down` (with `Retry-After`) if polled too fast, `access_denied` if denied, `expired_token` after 10 minutes unapproved, or a token once approved -- the same 30-day `fcacr_` credential shape as the authorization-code flow, scoped to the org and repositories chosen at approval and bound to the `resource` requested.
+3. AS metadata advertises this at `device_authorization_endpoint` and lists `urn:ietf:params:oauth:grant-type:device_code` in `grant_types_supported`.
+
+Claude Code and Codex do not request the device grant for MCP today (a client fact, not an acr limitation); a `cfa` login helper that runs it and writes the bearer into a headless client's config is tracked separately.
+
 **Static bearer.**
 
 - Send `Authorization: Bearer <ACR API token>` on **every** request. The token is the caller's own ACR credential (the one `acr-mcp login` stores for STDIO use). The hosted server holds no credential of its own and never signs in as a shared identity.

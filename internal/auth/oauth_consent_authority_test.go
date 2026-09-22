@@ -44,6 +44,17 @@ func (s *stubConsentAuthority) RedeemForResource(context.Context, storage.Device
 	return IssuedCredential{}, ErrOAuthDeviceNotApproved
 }
 
+func (s *stubConsentAuthority) StartDeviceGrant(context.Context) (OAuthDeviceGrantStart, error) {
+	return OAuthDeviceGrantStart{
+		DeviceCode: "device", UserCode: "USER-CODE", DeviceCodeHash: storage.HashDeviceCode("device"),
+		ExpiresAt: time.Date(2026, 9, 21, 12, 10, 0, 0, time.UTC), Interval: storage.DeviceAuthorizationPollInterval,
+	}, nil
+}
+
+func (s *stubConsentAuthority) PollDeviceGrant(context.Context, storage.DeviceCodeHash, string, []string) (IssuedCredential, error) {
+	return IssuedCredential{}, newDevicePollError(DevicePollAuthorizationPending, 0)
+}
+
 func newStubConsent(t *testing.T) (*OAuthService, *stubConsentAuthority, string) {
 	t.Helper()
 	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
