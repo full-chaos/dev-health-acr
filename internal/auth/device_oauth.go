@@ -125,8 +125,10 @@ func (s *DeviceFlowService) ApproveForOAuth(ctx context.Context, principal stora
 	if err != nil {
 		return fmt.Errorf("read device authorization for approval: %w", err)
 	}
+	// An expired record never reaches here: both stores expire it on read
+	// (GetByDeviceCodeHash answers ErrDeviceAuthorizationExpired).
 	if record.State == storage.DeviceAuthorizationStateApproved {
-		if sameOAuthApproval(record, principal, repositoryScopes) && record.ExpiresAt.After(s.now().UTC()) {
+		if sameOAuthApproval(record, principal, repositoryScopes) {
 			return nil
 		}
 		return storage.NewDeviceAuthorizationError(storage.DeviceAuthorizationErrorConflict, record.State, 0)
