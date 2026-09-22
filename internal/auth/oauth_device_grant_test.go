@@ -1,0 +1,174 @@
+package auth
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/full-chaos/dev-health-acr/internal/oauthvocab"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
+)
+
+// approveDeviceGrant approves the device authorization behind an RFC 8628
+// device_code as the web verification page (POST /api/v1/oauth/device_approval)
+// would: the SAME approval mechanism a typed-user-code approval or an OAuth
+// authorization-code browser consent uses, keyed here by the device code's
+// hash rather than a user code, since ApproveForOAuth works off either
+// origin's device_authorizations row.
+func (h *oauthHarness) approveDeviceGrant(t *testing.T, deviceCode string, repositories []string) {
+	t.Helper()
+	h.approveDevice(t, storage.HashDeviceCode(deviceCode), repositories)
+}
+
+func TestOAuthServiceDeviceGrantFullFlow(t *testing.T) {
+	h := newOAuthHarness(t)
+	clientID := h.register(t)
+
+	started, err := h.oauth.StartDeviceAuthorization(context.Background(), OAuthDeviceAuthorizationRequest{ClientID: clientID})
+	if err != nil {
+		t.Fatalf("StartDeviceAuthorization: %v", err)
+	}
+	if started.DeviceCode == "" || started.UserCode == "" || started.ExpiresIn != storage.DeviceAuthorizationTTL || started.Interval != storage.DeviceAuthorizationPollInterval {
+		t.Fatalf("unexpected start: %+v", started)
+	}
+
+	// Undecided: authorization_pending.
+	_, err = h.oauth.ExchangeDeviceCode(context.Background(), OAuthDeviceTokenRequest{GrantType: OAuthDeviceCodeGrantType, DeviceCode: started.DeviceCode, ClientID: clientID})
+	if outcomeOf(err) != oauthvocab.OutcomeAuthorizationPending {
+		t.Fatalf("pending poll outcome = %s, want %s", outcomeOf(err), oauthvocab.OutcomeAuthorizationPending)
+	}
+
+	// Polled again before the interval elapses: slow_down, with a positive
+	// RetryAfter the /token handler turns into a Retry-After header.
+	_, err = h.oauth.ExchangeDeviceCode(context.Background(), OAuthDeviceTokenRequest{GrantType: OAuthDeviceCodeGrantType, DeviceCode: started.DeviceCode, ClientID: clientID})
+	var slowDown *OAuthError
+	if !errors.As(err, &slowDown) || slowDown.Outcome != oauthvocab.OutcomeSlowDown || slowDown.Code != "slow_down" || slowDown.RetryAfter <= 0 {
+		t.Fatalf("slow_down poll = %+v, want a positive-RetryAfter slow_down", err)
+	}
+
+	h.approveDeviceGrant(t, started.DeviceCode, []string{"org/repo"})
+
+	// The interval still governs polling after approval, on the same clock.
+	h.now = h.now.Add(storage.DeviceAuthorizationPollInterval)
+	token, err := h.oauth.ExchangeDeviceCode(context.Background(), OAuthDeviceTokenRequest{GrantType: OAuthDeviceCodeGrantType, DeviceCode: started.DeviceCode, ClientID: clientID})
+	if err != nil {
+		t.Fatalf("ExchangeDeviceCode after approval: %v", err)
+	}
+	if token.Issued.Token == "" || !IsTokenShapeValid(token.Issued.Token) {
+		t.Fatalf("issued token shape invalid: %+v", token)
+	}
+	if token.Scope != OAuthScope {
+		t.Fatalf("token scope = %q, want every requested scope %q", token.Scope, OAuthScope)
+	}
+	if token.Issued.Credential.RepositoryScopes == nil || len(token.Issued.Credential.RepositoryScopes) != 1 || token.Issued.Credential.RepositoryScopes[0] != "org/repo" {
+		t.Fatalf("issued credential repository scopes = %v, want [org/repo]", token.Issued.Credential.RepositoryScopes)
+	}
+	if token.ClientKind != storage.OAuthClientKindDynamic {
+		t.Fatalf("token client kind = %s, want dynamic", token.ClientKind)
+	}
+
+	// Redeemed: the record can never be polled again.
+	h.now = h.now.Add(storage.DeviceAuthorizationPollInterval)
+	_, err = h.oauth.ExchangeDeviceCode(context.Background(), OAuthDeviceTokenRequest{GrantType: OAuthDeviceCodeGrantType, DeviceCode: started.DeviceCode, ClientID: clientID})
+	if outcomeOf(err) != oauthvocab.OutcomeInvalidGrant {
+		t.Fatalf("re-poll after redemption outcome = %s, want %s", outcomeOf(err), oauthvocab.OutcomeInvalidGrant)
+	}
+}
+
+func TestOAuthServiceDeviceGrantDenied(t *testing.T) {
+	h := newOAuthHarness(t)
+	clientID := h.register(t)
+	started, err := h.oauth.StartDeviceAuthorization(context.Background(), OAuthDeviceAuthorizationRequest{ClientID: clientID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.devices.DenyForOAuth(context.Background(), webPrincipal([]string{"org/repo"}), storage.HashDeviceCode(started.DeviceCode)); err != nil {
+		t.Fatal(err)
+	}
+	_, err = h.oauth.ExchangeDeviceCode(context.Background(), OAuthDeviceTokenRequest{GrantType: OAuthDeviceCodeGrantType, DeviceCode: started.DeviceCode, ClientID: clientID})
+	if outcomeOf(err) != oauthvocab.OutcomeAccessDenied {
+		t.Fatalf("poll after deny outcome = %s, want %s", outcomeOf(err), oauthvocab.OutcomeAccessDenied)
+	}
+}
+
+func TestOAuthServiceDeviceGrantExpires(t *testing.T) {
+	h := newOAuthHarness(t)
+	clientID := h.register(t)
+	started, err := h.oauth.StartDeviceAuthorization(context.Background(), OAuthDeviceAuthorizationRequest{ClientID: clientID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.now = h.now.Add(storage.DeviceAuthorizationTTL + time.Second)
+	_, err = h.oauth.ExchangeDeviceCode(context.Background(), OAuthDeviceTokenRequest{GrantType: OAuthDeviceCodeGrantType, DeviceCode: started.DeviceCode, ClientID: clientID})
+	if outcomeOf(err) != oauthvocab.OutcomeExpired {
+		t.Fatalf("poll after expiry outcome = %s, want %s", outcomeOf(err), oauthvocab.OutcomeExpired)
+	}
+}
+
+func TestOAuthServiceDeviceGrantClientMismatch(t *testing.T) {
+	h := newOAuthHarness(t)
+	clientID := h.register(t)
+	other, err := h.oauth.Register(context.Background(), OAuthRegistrationRequest{ClientName: "other", RedirectURIs: []string{testRedirect}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := h.oauth.StartDeviceAuthorization(context.Background(), OAuthDeviceAuthorizationRequest{ClientID: clientID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = h.oauth.ExchangeDeviceCode(context.Background(), OAuthDeviceTokenRequest{GrantType: OAuthDeviceCodeGrantType, DeviceCode: started.DeviceCode, ClientID: other.ClientID})
+	if outcomeOf(err) != oauthvocab.OutcomeClientMismatch {
+		t.Fatalf("poll with the wrong client outcome = %s, want %s", outcomeOf(err), oauthvocab.OutcomeClientMismatch)
+	}
+}
+
+func TestOAuthServiceStartDeviceAuthorizationRefusals(t *testing.T) {
+	h := newOAuthHarness(t)
+	clientID := h.register(t)
+	for name, tc := range map[string]struct {
+		request      OAuthDeviceAuthorizationRequest
+		wantOutcome  string
+		wantRedirect bool
+	}{
+		"unknown client":       {request: OAuthDeviceAuthorizationRequest{ClientID: "acrc_unknown"}, wantOutcome: oauthvocab.OutcomeInvalidClient},
+		"unsupported scope":    {request: OAuthDeviceAuthorizationRequest{ClientID: clientID, Scope: "not_a_scope"}, wantOutcome: oauthvocab.OutcomeInvalidScope},
+		"unsupported resource": {request: OAuthDeviceAuthorizationRequest{ClientID: clientID, Resource: "https://other.example.test/mcp"}, wantOutcome: oauthvocab.OutcomeInvalidTarget},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := h.oauth.StartDeviceAuthorization(context.Background(), tc.request)
+			if outcomeOf(err) != tc.wantOutcome {
+				t.Fatalf("outcome = %s, want %s", outcomeOf(err), tc.wantOutcome)
+			}
+			var oauthErr *OAuthError
+			if errors.As(err, &oauthErr) && oauthErr.Redirectable {
+				t.Fatal("StartDeviceAuthorization refusal must never be redirectable: RFC 8628 has no redirect step")
+			}
+		})
+	}
+}
+
+func TestOAuthServiceExchangeDeviceCodeRefusals(t *testing.T) {
+	h := newOAuthHarness(t)
+	clientID := h.register(t)
+	for name, request := range map[string]OAuthDeviceTokenRequest{
+		"wrong grant type":      {GrantType: "authorization_code", DeviceCode: "x", ClientID: clientID},
+		"empty device code":     {GrantType: OAuthDeviceCodeGrantType, DeviceCode: "", ClientID: clientID},
+		"malformed device code": {GrantType: OAuthDeviceCodeGrantType, DeviceCode: "not-base64url-shaped-or-right-length", ClientID: clientID},
+		"unknown device code":   {GrantType: OAuthDeviceCodeGrantType, DeviceCode: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", ClientID: clientID},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := h.oauth.ExchangeDeviceCode(context.Background(), request)
+			if err == nil {
+				t.Fatal("want a refusal")
+			}
+		})
+	}
+	wantGrantType := outcomeOf(func() error {
+		_, err := h.oauth.ExchangeDeviceCode(context.Background(), OAuthDeviceTokenRequest{GrantType: "authorization_code", DeviceCode: "x", ClientID: clientID})
+		return err
+	}())
+	if wantGrantType != oauthvocab.OutcomeUnsupportedGrantType {
+		t.Fatalf("wrong grant type outcome = %s, want %s", wantGrantType, oauthvocab.OutcomeUnsupportedGrantType)
+	}
+}

@@ -127,19 +127,24 @@ func TestOAuthMetadataDocument(t *testing.T) {
 	}
 	want := map[string]any{
 		"issuer": oauthTestIssuer, "authorization_endpoint": oauthTestIssuer + "/authorize", "token_endpoint": oauthTestIssuer + "/token",
-		"registration_endpoint": oauthTestIssuer + "/register", "authorization_response_iss_parameter_supported": true,
-		"client_id_metadata_document_supported": false,
+		"registration_endpoint": oauthTestIssuer + "/register", "device_authorization_endpoint": oauthTestIssuer + "/device_authorization",
+		"authorization_response_iss_parameter_supported": true, "client_id_metadata_document_supported": false,
 	}
 	for key, value := range want {
 		if metadata[key] != value {
 			t.Errorf("metadata %s = %v, want %v", key, metadata[key], value)
 		}
 	}
-	for key, value := range map[string]string{"code_challenge_methods_supported": "S256", "grant_types_supported": "authorization_code", "token_endpoint_auth_methods_supported": "none", "response_types_supported": "code"} {
+	for key, value := range map[string]string{"code_challenge_methods_supported": "S256", "token_endpoint_auth_methods_supported": "none", "response_types_supported": "code"} {
 		list, _ := metadata[key].([]any)
 		if len(list) != 1 || list[0] != value {
 			t.Errorf("metadata %s = %v, want [%s]", key, metadata[key], value)
 		}
+	}
+	grantTypes, _ := metadata["grant_types_supported"].([]any)
+	wantGrantTypes := []any{"authorization_code", auth.OAuthDeviceCodeGrantType}
+	if len(grantTypes) != len(wantGrantTypes) || grantTypes[0] != wantGrantTypes[0] || grantTypes[1] != wantGrantTypes[1] {
+		t.Errorf("metadata grant_types_supported = %v, want %v", grantTypes, wantGrantTypes)
 	}
 }
 

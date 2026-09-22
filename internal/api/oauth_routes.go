@@ -44,6 +44,10 @@ const OAuthTokenPath = "/token"
 // OAuthRegisterPath is the dynamic client registration endpoint.
 const OAuthRegisterPath = "/register"
 
+// OAuthDeviceAuthorizationPath is RFC 8628's device authorization endpoint,
+// which starts a device-code grant for headless/remote clients.
+const OAuthDeviceAuthorizationPath = "/device_authorization"
+
 const oauthFormMaxBytes = 16 * 1024
 
 // oauthAuthorizationServerMetadata is the RFC 8414 document.
@@ -52,6 +56,7 @@ type oauthAuthorizationServerMetadata struct {
 	AuthorizationEndpoint             string   `json:"authorization_endpoint"`
 	TokenEndpoint                     string   `json:"token_endpoint"`
 	RegistrationEndpoint              string   `json:"registration_endpoint"`
+	DeviceAuthorizationEndpoint       string   `json:"device_authorization_endpoint"`
 	ScopesSupported                   []string `json:"scopes_supported"`
 	ResponseTypesSupported            []string `json:"response_types_supported"`
 	ResponseModesSupported            []string `json:"response_modes_supported"`
@@ -69,10 +74,11 @@ func (a *App) handleOAuthMetadata(w http.ResponseWriter, _ *http.Request) {
 		AuthorizationEndpoint:             issuer + OAuthAuthorizePath,
 		TokenEndpoint:                     issuer + OAuthTokenPath,
 		RegistrationEndpoint:              issuer + OAuthRegisterPath,
+		DeviceAuthorizationEndpoint:       issuer + OAuthDeviceAuthorizationPath,
 		ScopesSupported:                   []string{auth.ScopeContextRead, auth.ScopeEvidenceRead},
 		ResponseTypesSupported:            []string{"code"},
 		ResponseModesSupported:            []string{"query"},
-		GrantTypesSupported:               []string{"authorization_code"},
+		GrantTypesSupported:               []string{"authorization_code", auth.OAuthDeviceCodeGrantType},
 		TokenEndpointAuthMethodsSupported: []string{"none"},
 		CodeChallengeMethodsSupported:     []string{"S256"},
 		AuthorizationResponseIssParameter: true,
@@ -219,6 +225,86 @@ func (a *App) logOAuthRedirectMismatch(r *http.Request, mismatch *auth.OAuthRedi
 		"registered_origins", mismatch.Registered,
 		"presented_origin", mismatch.Presented,
 	)
+}
+
+// oauthDeviceAuthorizationBody is RFC 8628 §3.2's device authorization
+// response.
+type oauthDeviceAuthorizationBody struct {
+	DeviceCode      string `json:"device_code"`
+	UserCode        string `json:"user_code"`
+	VerificationURI string `json:"verification_uri"`
+	// VerificationURIComplete carries the user code as a query parameter so
+	// most users only need to click it, never type the code. Omitted only if
+	// the configured verification URL fails to parse (config validation
+	// rejects that at startup, so this is a defensive fallback, not the
+	// normal path).
+	VerificationURIComplete string `json:"verification_uri_complete,omitempty"`
+	ExpiresIn               int64  `json:"expires_in"`
+	Interval                int64  `json:"interval"`
+}
+
+// deviceVerificationURIComplete appends user_code to the verification URI's
+// query string, preserving any existing query. Returns "" if verificationURI
+// does not parse.
+func deviceVerificationURIComplete(verificationURI, userCode string) string {
+	parsed, err := url.Parse(verificationURI)
+	if err != nil {
+		return ""
+	}
+	query := parsed.Query()
+	query.Set("user_code", userCode)
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
+}
+
+// handleOAuthDeviceAuthorization serves RFC 8628's device_authorization
+// endpoint: a client with no browser of its own (or that cannot receive a
+// redirect, e.g. a headless host) starts a device-code grant here and polls
+// OAuthTokenPath with the returned device_code while a human approves it at
+// VerificationURI, typing UserCode -- the SAME device_authorizations row and
+// approval page (POST /api/v1/oauth/device_approval) an OAuth
+// authorization-code request's browser consent already reuses internally
+// (device_oauth.go), except here the raw codes leave the server, as RFC 8628
+// requires.
+func (a *App) handleOAuthDeviceAuthorization(w http.ResponseWriter, r *http.Request) {
+	if a.oauthRateLimited(w, r, oauthvocab.StepDeviceAuthorization, a.runtime.DeviceAuthorizationLimiter.AllowDeviceCreation) {
+		return
+	}
+	if err := parseOAuthForm(w, r); err != nil {
+		writeOAuthJSON(w, http.StatusBadRequest, oauthErrorBody{Error: "invalid_request"})
+		a.emitOAuthStep(r, oauthvocab.StepDeviceAuthorization, oauthvocab.OutcomeInvalidRequest, "", http.StatusBadRequest)
+		return
+	}
+	form := r.PostForm
+	for _, values := range form {
+		if len(values) > 1 {
+			writeOAuthJSON(w, http.StatusBadRequest, oauthErrorBody{Error: "invalid_request"})
+			a.emitOAuthStep(r, oauthvocab.StepDeviceAuthorization, oauthvocab.OutcomeInvalidRequest, "", http.StatusBadRequest)
+			return
+		}
+	}
+	start, err := a.oauth.StartDeviceAuthorization(r.Context(), auth.OAuthDeviceAuthorizationRequest{
+		ClientID: form.Get("client_id"), Scope: form.Get("scope"), Resource: form.Get("resource"),
+	})
+	if err != nil {
+		if refusal, ok := oauthOutcome(err); ok {
+			writeOAuthJSON(w, http.StatusBadRequest, oauthErrorBody{Error: refusal.Code})
+			a.emitOAuthStep(r, oauthvocab.StepDeviceAuthorization, refusal.Outcome, start.ClientKind, http.StatusBadRequest)
+			return
+		}
+		a.logOAuthDependencyFailure(r, oauthvocab.StepDeviceAuthorization)
+		writeOAuthJSON(w, http.StatusServiceUnavailable, oauthErrorBody{Error: "temporarily_unavailable"})
+		a.emitOAuthStep(r, oauthvocab.StepDeviceAuthorization, oauthvocab.OutcomeUnavailable, start.ClientKind, http.StatusServiceUnavailable)
+		return
+	}
+	writeOAuthJSON(w, http.StatusOK, oauthDeviceAuthorizationBody{
+		DeviceCode: start.DeviceCode, UserCode: start.UserCode,
+		VerificationURI:         a.runtime.DeviceVerificationURL,
+		VerificationURIComplete: deviceVerificationURIComplete(a.runtime.DeviceVerificationURL, start.UserCode),
+		ExpiresIn:               int64(start.ExpiresIn / time.Second),
+		Interval:                int64(start.Interval / time.Second),
+	})
+	a.emitOAuthStep(r, oauthvocab.StepDeviceAuthorization, oauthvocab.OutcomeOK, start.ClientKind, http.StatusOK)
 }
 
 func (a *App) handleOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
@@ -471,12 +557,23 @@ func (a *App) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 		a.emitOAuthStep(r, oauthvocab.StepToken, oauthvocab.OutcomeInvalidRequest, "", http.StatusBadRequest)
 		return
 	}
-	token, err := a.oauth.Exchange(r.Context(), auth.OAuthTokenRequest{
-		GrantType: form.Get("grant_type"), Code: form.Get("code"), RedirectURI: form.Get("redirect_uri"),
-		ClientID: clientID, CodeVerifier: form.Get("code_verifier"), Resource: form.Get("resource"),
-	})
+	var token auth.OAuthToken
+	var err error
+	if form.Get("grant_type") == auth.OAuthDeviceCodeGrantType {
+		token, err = a.oauth.ExchangeDeviceCode(r.Context(), auth.OAuthDeviceTokenRequest{
+			GrantType: form.Get("grant_type"), DeviceCode: form.Get("device_code"), ClientID: clientID,
+		})
+	} else {
+		token, err = a.oauth.Exchange(r.Context(), auth.OAuthTokenRequest{
+			GrantType: form.Get("grant_type"), Code: form.Get("code"), RedirectURI: form.Get("redirect_uri"),
+			ClientID: clientID, CodeVerifier: form.Get("code_verifier"), Resource: form.Get("resource"),
+		})
+	}
 	if err != nil {
 		if refusal, ok := oauthOutcome(err); ok {
+			if refusal.RetryAfter > 0 {
+				w.Header().Set("Retry-After", strconv.Itoa(max(1, int((refusal.RetryAfter+time.Second-1)/time.Second))))
+			}
 			writeOAuthJSON(w, http.StatusBadRequest, oauthErrorBody{Error: refusal.Code})
 			a.emitOAuthStep(r, oauthvocab.StepToken, refusal.Outcome, token.ClientKind, http.StatusBadRequest)
 			return

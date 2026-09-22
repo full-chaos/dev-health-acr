@@ -66,6 +66,9 @@ const (
 	maxOAuthScopeLength    = 512
 )
 
+// OAuthDeviceCodeGrantType is RFC 8628's device-code grant_type value.
+const OAuthDeviceCodeGrantType = "urn:ietf:params:oauth:grant-type:device_code"
+
 // ErrOAuthUnavailable reports a storage or dependency failure.
 var ErrOAuthUnavailable = errors.New("oauth service unavailable")
 
@@ -86,6 +89,9 @@ type OAuthError struct {
 	// path/query/fragment) so the caller can log what diverged without ever
 	// logging a full redirect URI.
 	RedirectMismatch *OAuthRedirectMismatch
+	// RetryAfter is set for an RFC 8628 slow_down refusal: how long the
+	// client must wait before polling again. Zero for every other refusal.
+	RetryAfter time.Duration
 }
 
 // OAuthRedirectMismatch is diagnostic-only, never a secret: the origins of a
@@ -750,6 +756,154 @@ func (s *OAuthService) Exchange(ctx context.Context, request OAuthTokenRequest) 
 		lifetime = issued.Credential.ExpiresAt.Sub(s.now().UTC())
 	}
 	return OAuthToken{Issued: issued, ExpiresIn: lifetime, Scope: scope, ClientKind: pending.ClientKind}, nil
+}
+
+// OAuthDeviceAuthorizationRequest carries POST /device_authorization's form
+// parameters (RFC 8628 §3.1).
+type OAuthDeviceAuthorizationRequest struct {
+	ClientID string
+	Scope    string
+	Resource string
+}
+
+// OAuthDeviceAuthorizationStart is a started RFC 8628 device authorization:
+// what POST /device_authorization returns.
+type OAuthDeviceAuthorizationStart struct {
+	DeviceCode string
+	UserCode   string
+	ExpiresIn  time.Duration
+	Interval   time.Duration
+	ClientKind string
+}
+
+const oauthDeviceAuthorizationStartRedacted = "auth.OAuthDeviceAuthorizationStart{redacted}"
+
+func (OAuthDeviceAuthorizationStart) String() string   { return oauthDeviceAuthorizationStartRedacted }
+func (OAuthDeviceAuthorizationStart) GoString() string { return oauthDeviceAuthorizationStartRedacted }
+
+// StartDeviceAuthorization validates an RFC 8628 device_authorization
+// request and starts it: resolves the client (the same dynamic-registration
+// or client ID metadata document resolution Authorize uses), a supported
+// scope, and a resource this server issues for, then starts the underlying
+// device authorization and records the client, resource and scope /token
+// needs when the client polls back with only the device_code. Unlike
+// Authorize, no refusal here is redirectable: RFC 8628 has no redirect step,
+// so every refusal is answered directly.
+func (s *OAuthService) StartDeviceAuthorization(ctx context.Context, request OAuthDeviceAuthorizationRequest) (OAuthDeviceAuthorizationStart, error) {
+	client, err := s.ResolveClient(ctx, request.ClientID)
+	if err != nil {
+		return OAuthDeviceAuthorizationStart{}, err
+	}
+	if len(request.Scope) > maxOAuthScopeLength || strings.ContainsFunc(request.Scope, isControlRune) {
+		return OAuthDeviceAuthorizationStart{ClientKind: client.Kind}, oauthError("invalid_request", oauthvocab.OutcomeInvalidRequest, false)
+	}
+	scope, ok := NormalizeOAuthScope(request.Scope)
+	if !ok {
+		return OAuthDeviceAuthorizationStart{ClientKind: client.Kind}, oauthError("invalid_scope", oauthvocab.OutcomeInvalidScope, false)
+	}
+	resource, ok := s.resolveResource(request.Resource)
+	if !ok {
+		return OAuthDeviceAuthorizationStart{ClientKind: client.Kind}, oauthError("invalid_target", oauthvocab.OutcomeInvalidTarget, false)
+	}
+	start, err := s.devices.StartDeviceGrant(ctx)
+	if err != nil {
+		return OAuthDeviceAuthorizationStart{ClientKind: client.Kind}, fmt.Errorf("%w: start device grant", ErrOAuthUnavailable)
+	}
+	now := s.now().UTC()
+	_, err = s.store.CreateDeviceGrant(ctx, storage.OAuthDeviceGrant{
+		DeviceCodeHash: start.DeviceCodeHash, ClientID: client.ClientID, ClientKind: client.Kind,
+		Resource: resource, Scope: scope, CreatedAt: now, ExpiresAt: start.ExpiresAt,
+	})
+	if err != nil {
+		return OAuthDeviceAuthorizationStart{ClientKind: client.Kind}, fmt.Errorf("%w: store device grant", ErrOAuthUnavailable)
+	}
+	return OAuthDeviceAuthorizationStart{
+		DeviceCode: start.DeviceCode, UserCode: start.UserCode, ExpiresIn: storage.DeviceAuthorizationTTL,
+		Interval: start.Interval, ClientKind: client.Kind,
+	}, nil
+}
+
+// OAuthDeviceTokenRequest carries an RFC 8628 device-code /token poll's form
+// parameters.
+type OAuthDeviceTokenRequest struct {
+	GrantType  string
+	DeviceCode string
+	ClientID   string
+}
+
+// ExchangeDeviceCode answers one RFC 8628 /token poll for a device grant
+// started by StartDeviceAuthorization: authorization_pending while
+// undecided, slow_down if polled faster than the interval, access_denied or
+// expired_token if the user denied it or it timed out, or a token once
+// approved. Unlike Exchange (authorization_code, single-use, consumed
+// before any other check), a device-code poll is retried on purpose, so
+// nothing here is consumed until the grant is actually approved.
+func (s *OAuthService) ExchangeDeviceCode(ctx context.Context, request OAuthDeviceTokenRequest) (OAuthToken, error) {
+	if request.GrantType != OAuthDeviceCodeGrantType {
+		return OAuthToken{}, oauthError("unsupported_grant_type", oauthvocab.OutcomeUnsupportedGrantType, false)
+	}
+	if request.DeviceCode == "" || len(request.DeviceCode) > 128 {
+		return OAuthToken{}, oauthError("invalid_grant", oauthvocab.OutcomeInvalidGrant, false)
+	}
+	normalized, ok := normalizeDeviceCode(request.DeviceCode)
+	if !ok {
+		return OAuthToken{}, oauthError("invalid_grant", oauthvocab.OutcomeInvalidGrant, false)
+	}
+	hash := storage.HashDeviceCode(normalized)
+	grant, err := s.store.GetDeviceGrant(ctx, hash)
+	if errors.Is(err, storage.ErrNotFound) {
+		return OAuthToken{}, oauthError("invalid_grant", oauthvocab.OutcomeInvalidGrant, false)
+	}
+	if err != nil {
+		return OAuthToken{}, fmt.Errorf("%w: read device grant", ErrOAuthUnavailable)
+	}
+	refuse := func(code, outcome string) (OAuthToken, error) {
+		return OAuthToken{ClientKind: grant.ClientKind}, oauthError(code, outcome, false)
+	}
+	if request.ClientID != grant.ClientID {
+		return refuse("invalid_grant", oauthvocab.OutcomeClientMismatch)
+	}
+	scope, ok := NormalizeOAuthScope(grant.Scope)
+	if !ok {
+		return refuse("invalid_grant", oauthvocab.OutcomeInvalidGrant)
+	}
+	issued, err := s.devices.PollDeviceGrant(ctx, hash, grant.Resource, strings.Fields(scope))
+	if err != nil {
+		var pollError *DevicePollError
+		if errors.As(err, &pollError) {
+			return OAuthToken{ClientKind: grant.ClientKind}, mapDevicePollOutcome(pollError)
+		}
+		return OAuthToken{ClientKind: grant.ClientKind}, fmt.Errorf("%w: poll device grant", ErrOAuthUnavailable)
+	}
+	lifetime := DeviceCredentialLifetime
+	if issued.Credential.ExpiresAt != nil {
+		lifetime = issued.Credential.ExpiresAt.Sub(s.now().UTC())
+	}
+	return OAuthToken{Issued: issued, ExpiresIn: lifetime, Scope: scope, ClientKind: grant.ClientKind}, nil
+}
+
+// mapDevicePollOutcome maps a device poll refusal to its RFC 8628 OAuth
+// error code and telemetry outcome. The wire error codes ARE the
+// DevicePollErrorKind values -- RFC 8628 defines the same strings this
+// package's legacy JSON device flow already used (DevicePollErrorKind's own
+// doc comment).
+func mapDevicePollOutcome(pollError *DevicePollError) error {
+	switch pollError.Kind {
+	case DevicePollAuthorizationPending:
+		return oauthDeviceGrantError(DevicePollAuthorizationPending, oauthvocab.OutcomeAuthorizationPending, 0)
+	case DevicePollSlowDown:
+		return oauthDeviceGrantError(DevicePollSlowDown, oauthvocab.OutcomeSlowDown, pollError.RetryAfter)
+	case DevicePollAccessDenied:
+		return oauthDeviceGrantError(DevicePollAccessDenied, oauthvocab.OutcomeAccessDenied, 0)
+	case DevicePollExpiredToken:
+		return oauthDeviceGrantError(DevicePollExpiredToken, oauthvocab.OutcomeExpired, 0)
+	default:
+		return oauthDeviceGrantError(DevicePollInvalidGrant, oauthvocab.OutcomeInvalidGrant, 0)
+	}
+}
+
+func oauthDeviceGrantError(kind DevicePollErrorKind, outcome string, retryAfter time.Duration) error {
+	return &OAuthError{Code: string(kind), Outcome: outcome, RetryAfter: retryAfter}
 }
 
 // VerifyPKCES256 reports whether a code verifier (RFC 7636 §4.1: 43 to 128

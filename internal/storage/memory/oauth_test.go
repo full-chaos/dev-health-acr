@@ -56,6 +56,53 @@ func validOAuthAuthorizationRequest(now time.Time, deviceCodeSeed, handleSeed st
 	}
 }
 
+func validOAuthDeviceGrant(now time.Time, deviceCodeSeed string) storage.OAuthDeviceGrant {
+	return storage.OAuthDeviceGrant{
+		DeviceCodeHash: storage.HashDeviceCode(deviceCodeSeed),
+		ClientID:       dynamicOAuthClientID(0xab),
+		ClientKind:     storage.OAuthClientKindDynamic,
+		Resource:       "https://example.com/resource",
+		Scope:          "context:read",
+		CreatedAt:      now,
+		ExpiresAt:      now.Add(storage.DeviceAuthorizationTTL),
+	}
+}
+
+func TestOAuthStore_CreateDeviceGrant_duplicateIsConflict(t *testing.T) {
+	fixture := newOAuthFixture(t)
+	grant := validOAuthDeviceGrant(fixture.now, "device-1")
+	_, err := fixture.store.CreateDeviceGrant(context.Background(), grant)
+	require.NoError(t, err)
+
+	_, err = fixture.store.CreateDeviceGrant(context.Background(), grant)
+	require.ErrorIs(t, err, storage.ErrConflict)
+}
+
+func TestOAuthStore_CreateDeviceGrant_rejectsInvalid(t *testing.T) {
+	fixture := newOAuthFixture(t)
+	invalid := validOAuthDeviceGrant(fixture.now, "device-invalid")
+	invalid.Resource = "not-a-url"
+	_, err := fixture.store.CreateDeviceGrant(context.Background(), invalid)
+	require.Error(t, err)
+}
+
+func TestOAuthStore_GetDeviceGrant_missingIsNotFound(t *testing.T) {
+	fixture := newOAuthFixture(t)
+	_, err := fixture.store.GetDeviceGrant(context.Background(), storage.HashDeviceCode("never-created"))
+	require.ErrorIs(t, err, storage.ErrNotFound)
+}
+
+func TestOAuthStore_GetDeviceGrant_returnsWhatWasStored(t *testing.T) {
+	fixture := newOAuthFixture(t)
+	grant := validOAuthDeviceGrant(fixture.now, "device-2")
+	_, err := fixture.store.CreateDeviceGrant(context.Background(), grant)
+	require.NoError(t, err)
+
+	got, err := fixture.store.GetDeviceGrant(context.Background(), grant.DeviceCodeHash)
+	require.NoError(t, err)
+	require.Equal(t, grant, got)
+}
+
 func TestOAuthStore_RegisterClient_duplicateIsConflict(t *testing.T) {
 	// Given
 	fixture := newOAuthFixture(t)

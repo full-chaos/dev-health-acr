@@ -50,6 +50,8 @@ const oauthAuthorizationRequestColumns = `
 	code_challenge, resource, scope, state, created_at, expires_at,
 	code_hash, code_expires_at, consumed_at`
 
+const oauthDeviceGrantColumns = `device_code_hash, client_id, client_kind, resource, scope, created_at, expires_at`
+
 func (s *OAuthStore) RegisterClient(ctx context.Context, client storage.OAuthClient) (storage.OAuthClient, error) {
 	if err := s.ready(ctx); err != nil {
 		return storage.OAuthClient{}, err
@@ -193,6 +195,59 @@ RETURNING `+oauthAuthorizationRequestColumns,
 		return storage.OAuthAuthorizationRequest{}, storage.ErrOAuthAuthorizationCodeUnavailable
 	}
 	return storage.OAuthAuthorizationRequest{}, fmt.Errorf("consume oauth authorization code: %w", sanitizeDatabaseError(err))
+}
+
+func (s *OAuthStore) CreateDeviceGrant(ctx context.Context, grant storage.OAuthDeviceGrant) (storage.OAuthDeviceGrant, error) {
+	if err := s.ready(ctx); err != nil {
+		return storage.OAuthDeviceGrant{}, err
+	}
+	if err := storage.ValidateOAuthDeviceGrant(grant); err != nil {
+		return storage.OAuthDeviceGrant{}, err
+	}
+	_, err := s.DB.ExecContext(ctx, `
+INSERT INTO acr.oauth_device_grants (`+oauthDeviceGrantColumns+`)
+VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		grant.DeviceCodeHash.String(), grant.ClientID, grant.ClientKind, grant.Resource, grant.Scope,
+		grant.CreatedAt, grant.ExpiresAt,
+	)
+	if err != nil {
+		sanitized := sanitizeDatabaseError(err)
+		if errors.Is(sanitized, storage.ErrConflict) {
+			return storage.OAuthDeviceGrant{}, storage.ErrConflict
+		}
+		return storage.OAuthDeviceGrant{}, fmt.Errorf("create oauth device grant: %w", sanitized)
+	}
+	return grant, nil
+}
+
+func (s *OAuthStore) GetDeviceGrant(ctx context.Context, hash storage.DeviceCodeHash) (storage.OAuthDeviceGrant, error) {
+	if err := s.ready(ctx); err != nil {
+		return storage.OAuthDeviceGrant{}, err
+	}
+	row := s.DB.QueryRowContext(ctx, `SELECT `+oauthDeviceGrantColumns+`
+FROM acr.oauth_device_grants WHERE device_code_hash = $1`, hash.String())
+	grant, err := scanOAuthDeviceGrant(row)
+	if err != nil {
+		return storage.OAuthDeviceGrant{}, mapNotFound("get oauth device grant", err)
+	}
+	return grant, nil
+}
+
+func scanOAuthDeviceGrant(row scanner) (storage.OAuthDeviceGrant, error) {
+	var (
+		deviceCodeHash string
+		grant          storage.OAuthDeviceGrant
+	)
+	err := row.Scan(&deviceCodeHash, &grant.ClientID, &grant.ClientKind, &grant.Resource, &grant.Scope, &grant.CreatedAt, &grant.ExpiresAt)
+	if err != nil {
+		return storage.OAuthDeviceGrant{}, err
+	}
+	parsedDeviceCode, err := storage.ParseDeviceCodeHash(deviceCodeHash)
+	if err != nil {
+		return storage.OAuthDeviceGrant{}, fmt.Errorf("decode oauth device grant device code: %w", err)
+	}
+	grant.DeviceCodeHash = parsedDeviceCode
+	return grant, nil
 }
 
 func scanOAuthClient(row scanner) (storage.OAuthClient, error) {

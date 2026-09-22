@@ -1,0 +1,294 @@
+package api
+
+import (
+	"bytes"
+	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/full-chaos/dev-health-acr/internal/auth"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+)
+
+// oauthDeviceAuthorizationRequest builds a form-encoded POST
+// OAuthDeviceAuthorizationPath request (RFC 8628 §3.1).
+func oauthDeviceAuthorizationRequest(form url.Values) *http.Request {
+	request := httptest.NewRequest(http.MethodPost, OAuthDeviceAuthorizationPath, strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return request
+}
+
+// oauthDeviceTokenRequest builds a form-encoded POST OAuthTokenPath device-code
+// poll (RFC 8628 §3.4).
+func oauthDeviceTokenRequest(deviceCode, clientID string) *http.Request {
+	form := url.Values{"grant_type": {auth.OAuthDeviceCodeGrantType}, "device_code": {deviceCode}}
+	if clientID != "" {
+		form.Set("client_id", clientID)
+	}
+	request := httptest.NewRequest(http.MethodPost, OAuthTokenPath, strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return request
+}
+
+// oauthDeviceApprovalRequest signs a web assertion deciding or previewing
+// userCode at POST /api/v1/oauth/device_approval, the same route the
+// typed-user-code approval page and OAuth authorization-code browser consent
+// both use.
+func oauthDeviceApprovalRequest[T contractsv1.DeviceApprovalRequest | contractsv1.DeviceApprovalPreviewRequest](t *testing.T, approval T, repositoryScopes []string, jti string) *http.Request {
+	t.Helper()
+	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
+	body, err := json.Marshal(approval)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/oauth/device_approval", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	digest := sha256.Sum256(body)
+	claims := map[string]any{
+		"iss": "https://web.example.test", "aud": "acr-api", "sub": "user_123", "org_id": oauthTestOrg,
+		"repository_scopes": repositoryScopes, "permissions": []string{auth.WebAssertionPermissionCredentialIssue},
+		"iat": now.Unix(), "nbf": now.Unix(), "exp": now.Add(30 * time.Second).Unix(), "jti": jti,
+		"method": request.Method, "path": request.URL.EscapedPath(), "body_sha256": base64.RawURLEncoding.EncodeToString(digest[:]),
+	}
+	header, _ := json.Marshal(map[string]string{"alg": "EdDSA", "typ": "JWT", "kid": "current"})
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(payload)
+	request.Header.Set(auth.WebAssertionHeader, input+"."+base64.RawURLEncoding.EncodeToString(ed25519.Sign(oauthTestWebKey, []byte(input))))
+	return request
+}
+
+// startOAuthDeviceAuthorization registers a client and starts a device grant
+// for it, returning the decoded response and the client ID.
+func startOAuthDeviceAuthorization(t *testing.T, app *App, extra url.Values) (map[string]any, string) {
+	t.Helper()
+	clientID := registerOAuthTestClient(t, app, "cfa login")
+	form := url.Values{"client_id": {clientID}}
+	for key, values := range extra {
+		form[key] = values
+	}
+	recorder := httptest.NewRecorder()
+	app.Handler().ServeHTTP(recorder, oauthDeviceAuthorizationRequest(form))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("device_authorization: %d %s", recorder.Code, recorder.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	return body, clientID
+}
+
+func TestOAuthDeviceAuthorizationFullFlow(t *testing.T) {
+	app, logs, err := newOAuthTestApp(t, &OAuthRuntime{Issuer: oauthTestIssuer, Resources: []string{oauthTestResource}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, clientID := startOAuthDeviceAuthorization(t, app, nil)
+	for _, key := range []string{"device_code", "user_code", "verification_uri", "verification_uri_complete", "expires_in", "interval"} {
+		if started[key] == nil || started[key] == "" {
+			t.Fatalf("device_authorization response missing %s: %v", key, started)
+		}
+	}
+	if started["verification_uri"] != "https://web.example.test/acr/device" {
+		t.Fatalf("verification_uri = %v, want the configured device verification URL", started["verification_uri"])
+	}
+	deviceCode := started["device_code"].(string)
+	userCode := started["user_code"].(string)
+	if want := "https://web.example.test/acr/device?user_code=" + url.QueryEscape(userCode); started["verification_uri_complete"] != want {
+		t.Fatalf("verification_uri_complete = %v, want %s", started["verification_uri_complete"], want)
+	}
+
+	// A poll before approval is authorization_pending, and a poll immediately
+	// after that (same clock tick) is slow_down with Retry-After set -- the
+	// device authorization's own poll-interval enforcement, not a new limiter.
+	pendingResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(pendingResponse, oauthDeviceTokenRequest(deviceCode, clientID))
+	assertOAuthTokenError(t, pendingResponse, "authorization_pending")
+
+	slowDownResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(slowDownResponse, oauthDeviceTokenRequest(deviceCode, clientID))
+	assertOAuthTokenError(t, slowDownResponse, "slow_down")
+	if slowDownResponse.Header().Get("Retry-After") == "" {
+		t.Fatal("slow_down response missing Retry-After")
+	}
+
+	approval := contractsv1.DeviceApprovalRequest{SchemaVersion: contractsv1.DeviceApprovalRequestSchema, UserCode: userCode, RepositoryScopes: []string{"*"}}
+	approvalResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(approvalResponse, oauthDeviceApprovalRequest(t, approval, []string{"*"}, "approve_1"))
+	if approvalResponse.Code != http.StatusOK {
+		t.Fatalf("approval: %d %s", approvalResponse.Code, approvalResponse.Body.String())
+	}
+
+	// The interval keeps governing polling after approval too: this app's
+	// test clock is fixed, so a poll immediately after the one above is
+	// still too soon -- the SAME interval gate, not something approval
+	// bypasses. Successful redemption once the interval elapses (a clock
+	// that advances) is proven at the auth-service unit layer,
+	// TestOAuthServiceDeviceGrantFullFlow, which also proves the redeemed
+	// record then answers invalid_grant, exactly the shape
+	// mapDevicePollOutcome/writeOAuthJSON put on the wire here.
+	tooSoonAfterApproval := httptest.NewRecorder()
+	app.Handler().ServeHTTP(tooSoonAfterApproval, oauthDeviceTokenRequest(deviceCode, clientID))
+	assertOAuthTokenError(t, tooSoonAfterApproval, "slow_down")
+
+	if !strings.Contains(logs.String(), `"step":"device_authorization","outcome":"ok"`) {
+		t.Fatal("missing device_authorization ok telemetry line")
+	}
+}
+
+func TestDeviceVerificationURIComplete(t *testing.T) {
+	for name, tc := range map[string]struct {
+		verificationURI, userCode, want string
+	}{
+		"plain URL":                {"https://web.example.test/acr/device", "ABCD-EFGH", "https://web.example.test/acr/device?user_code=ABCD-EFGH"},
+		"existing query preserved": {"https://web.example.test/acr/device?ref=cli", "ABCD-EFGH", "https://web.example.test/acr/device?ref=cli&user_code=ABCD-EFGH"},
+		"unparseable":              {"://not a url", "ABCD-EFGH", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := deviceVerificationURIComplete(tc.verificationURI, tc.userCode)
+			if got != tc.want {
+				t.Fatalf("deviceVerificationURIComplete(%q, %q) = %q, want %q", tc.verificationURI, tc.userCode, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestOAuthDeviceAuthorizationPreviewShowsHints confirms the device grant's
+// device_authorizations row previews exactly like the legacy machine-auth
+// flow's -- no OAuth client name, resource or scope (CHAOS-6233's known
+// follow-up: the preview does not yet carry OAuth context; see PICKUP.md).
+func TestOAuthDeviceAuthorizationPreviewShowsHints(t *testing.T) {
+	app, _, err := newOAuthTestApp(t, &OAuthRuntime{Issuer: oauthTestIssuer, Resources: []string{oauthTestResource}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, _ := startOAuthDeviceAuthorization(t, app, nil)
+	userCode := started["user_code"].(string)
+	previewRequestBody := contractsv1.DeviceApprovalPreviewRequest{SchemaVersion: contractsv1.DeviceApprovalPreviewRequestSchema, UserCode: userCode}
+	previewRequest := oauthDeviceApprovalRequest(t, previewRequestBody, []string{"*"}, "preview_1")
+	recorder := httptest.NewRecorder()
+	app.Handler().ServeHTTP(recorder, previewRequest)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("preview: %d %s", recorder.Code, recorder.Body.String())
+	}
+	var preview contractsv1.DeviceApprovalPreviewResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&preview); err != nil {
+		t.Fatal(err)
+	}
+	if preview.OrganizationIDHint != "" || len(preview.RepositoryHints) != 0 {
+		t.Fatalf("device grant preview hints = %+v, want empty (no org/repo hint was set at StartDeviceAuthorization)", preview)
+	}
+}
+
+func TestOAuthDeviceAuthorizationRefusals(t *testing.T) {
+	app, _, err := newOAuthTestApp(t, &OAuthRuntime{Issuer: oauthTestIssuer, Resources: []string{oauthTestResource}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientID := registerOAuthTestClient(t, app, "cfa login")
+	for name, tc := range map[string]struct {
+		build     func() *http.Request
+		wantCode  int
+		wantError string
+	}{
+		"unknown client": {
+			build: func() *http.Request {
+				return oauthDeviceAuthorizationRequest(url.Values{"client_id": {"acrc_" + strings.Repeat("0", 32)}})
+			},
+			wantCode:  http.StatusBadRequest,
+			wantError: "invalid_client",
+		},
+		"invalid scope": {
+			build: func() *http.Request {
+				return oauthDeviceAuthorizationRequest(url.Values{"client_id": {clientID}, "scope": {"not_a_scope"}})
+			},
+			wantCode:  http.StatusBadRequest,
+			wantError: "invalid_scope",
+		},
+		"unsupported resource": {
+			build: func() *http.Request {
+				return oauthDeviceAuthorizationRequest(url.Values{"client_id": {clientID}, "resource": {"https://other.example.test/mcp"}})
+			},
+			wantCode:  http.StatusBadRequest,
+			wantError: "invalid_target",
+		},
+		"json body": {
+			build: func() *http.Request {
+				r := httptest.NewRequest(http.MethodPost, OAuthDeviceAuthorizationPath, strings.NewReader(`{"client_id":"x"}`))
+				r.Header.Set("Content-Type", "application/json")
+				return r
+			},
+			wantCode:  http.StatusBadRequest,
+			wantError: "invalid_request",
+		},
+		"repeated client_id": {
+			build: func() *http.Request {
+				r := httptest.NewRequest(http.MethodPost, OAuthDeviceAuthorizationPath, strings.NewReader("client_id=a&client_id=b"))
+				r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+				return r
+			},
+			wantCode:  http.StatusBadRequest,
+			wantError: "invalid_request",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			app.Handler().ServeHTTP(recorder, tc.build())
+			if recorder.Code != tc.wantCode {
+				t.Fatalf("status = %d, want %d (%s)", recorder.Code, tc.wantCode, recorder.Body.String())
+			}
+			var body map[string]any
+			if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body["error"] != tc.wantError {
+				t.Fatalf("error = %v, want %s", body["error"], tc.wantError)
+			}
+		})
+	}
+}
+
+func TestOAuthDeviceTokenRefusals(t *testing.T) {
+	app, _, err := newOAuthTestApp(t, &OAuthRuntime{Issuer: oauthTestIssuer, Resources: []string{oauthTestResource}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, clientID := startOAuthDeviceAuthorization(t, app, nil)
+	deviceCode := started["device_code"].(string)
+
+	unknownCode := httptest.NewRecorder()
+	app.Handler().ServeHTTP(unknownCode, oauthDeviceTokenRequest("bogus", clientID))
+	assertOAuthTokenError(t, unknownCode, "invalid_grant")
+
+	wrongClient := httptest.NewRecorder()
+	app.Handler().ServeHTTP(wrongClient, oauthDeviceTokenRequest(deviceCode, registerOAuthTestClient(t, app, "someone else")))
+	assertOAuthTokenError(t, wrongClient, "invalid_grant")
+
+	missingClient := httptest.NewRecorder()
+	app.Handler().ServeHTTP(missingClient, oauthDeviceTokenRequest(deviceCode, ""))
+	assertOAuthTokenError(t, missingClient, "invalid_grant")
+}
+
+func assertOAuthTokenError(t *testing.T, recorder *httptest.ResponseRecorder, wantError string) {
+	t.Helper()
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (%s)", recorder.Code, recorder.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["error"] != wantError {
+		t.Fatalf("error = %v, want %s", body["error"], wantError)
+	}
+}

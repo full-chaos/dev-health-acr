@@ -23,6 +23,13 @@ type OAuthConsentAuthority interface {
 	ApproveForOAuth(ctx context.Context, principal storage.Principal, ref storage.DeviceCodeHash, repositoryScopes []string) error
 	DenyForOAuth(ctx context.Context, principal storage.Principal, ref storage.DeviceCodeHash) error
 	RedeemForResource(ctx context.Context, ref storage.DeviceCodeHash, resource string, scopes []string) (IssuedCredential, error)
+	// StartDeviceGrant starts a device authorization for RFC 8628's
+	// device_authorization endpoint.
+	StartDeviceGrant(ctx context.Context) (OAuthDeviceGrantStart, error)
+	// PollDeviceGrant reports an RFC 8628 device-code poll: the standard
+	// authorization_pending/slow_down/access_denied/expired_token progression,
+	// enforcing the poll interval, and an issued credential once approved.
+	PollDeviceGrant(ctx context.Context, ref storage.DeviceCodeHash, resource string, scopes []string) (IssuedCredential, error)
 }
 
 var _ OAuthConsentAuthority = (*DeviceFlowService)(nil)
@@ -205,4 +212,91 @@ func (s *DeviceFlowService) RedeemForResource(ctx context.Context, hash storage.
 		return IssuedCredential{}, err
 	}
 	return issued, nil
+}
+
+// OAuthDeviceGrantStart is a device authorization started for RFC 8628's
+// device_authorization endpoint. Unlike StartForOAuth -- whose raw codes are
+// discarded so only the OAuth authorization-code flow's handle-based
+// session can redeem it -- the raw codes here ARE returned to the caller:
+// RFC 8628 requires the client to receive device_code and the user to
+// receive user_code directly.
+type OAuthDeviceGrantStart struct {
+	DeviceCode     string
+	UserCode       string
+	DeviceCodeHash storage.DeviceCodeHash
+	ExpiresAt      time.Time
+	Interval       time.Duration
+}
+
+const oauthDeviceGrantStartRedacted = "auth.OAuthDeviceGrantStart{redacted}"
+
+func (OAuthDeviceGrantStart) String() string   { return oauthDeviceGrantStartRedacted }
+func (OAuthDeviceGrantStart) GoString() string { return oauthDeviceGrantStartRedacted }
+
+// StartDeviceGrant starts a device authorization for RFC 8628's
+// device_authorization endpoint. It creates the same kind of
+// device_authorizations row StartForOAuth and the legacy Start do, so the
+// existing typed-user-code approval page and POST /api/v1/oauth/device_approval
+// (device_approval.go) approve it exactly as they approve any other device
+// authorization, with no hints (any org, any repository the approving
+// principal is entitled to, same as an OAuth authorization-code request).
+func (s *DeviceFlowService) StartDeviceGrant(ctx context.Context) (OAuthDeviceGrantStart, error) {
+	if err := s.ready(ctx); err != nil {
+		return OAuthDeviceGrantStart{}, err
+	}
+	for range maxDeviceCodeAttempts {
+		deviceCode, userCode, err := s.nextCodes()
+		if err != nil {
+			return OAuthDeviceGrantStart{}, ErrDeviceCodeGeneration
+		}
+		record, err := s.store.Create(ctx, storage.DeviceAuthorizationCreateInput{
+			DeviceCodeHash: storage.HashDeviceCode(deviceCode),
+			UserCodeHash:   storage.HashUserCode(userCode),
+		})
+		if err == nil {
+			return OAuthDeviceGrantStart{
+				DeviceCode: deviceCode, UserCode: userCode,
+				DeviceCodeHash: record.DeviceCodeHash, ExpiresAt: record.ExpiresAt,
+				Interval: storage.DeviceAuthorizationPollInterval,
+			}, nil
+		}
+		if !errors.Is(err, storage.ErrDeviceAuthorizationConflict) {
+			return OAuthDeviceGrantStart{}, fmt.Errorf("create device authorization: %w", err)
+		}
+	}
+	return OAuthDeviceGrantStart{}, ErrDeviceCodeCollision
+}
+
+// PollDeviceGrant reports one RFC 8628 /token poll for a device authorization
+// started by StartDeviceGrant. It enforces the store's poll interval like
+// the legacy Poll, and issues a credential bound to the given resource and
+// scopes like RedeemForResource, distinguishing pending/slow_down/
+// denied/expired so /token can answer each with its own RFC 8628 error code
+// (RedeemForResource, built for the single-shot authorization-code exchange,
+// collapses all of those into one error and never enforces the interval).
+func (s *DeviceFlowService) PollDeviceGrant(ctx context.Context, hash storage.DeviceCodeHash, resource string, scopes []string) (IssuedCredential, error) {
+	if err := s.ready(ctx); err != nil {
+		return IssuedCredential{}, err
+	}
+	if resource == "" || !storage.ValidOAuthResource(resource) || len(scopes) == 0 {
+		return IssuedCredential{}, ErrInvalidDeviceFlow
+	}
+	record, err := s.store.Poll(ctx, hash)
+	if err != nil {
+		return IssuedCredential{}, mapDevicePollStoreError(err)
+	}
+	switch record.State {
+	case storage.DeviceAuthorizationStatePending:
+		return IssuedCredential{}, newDevicePollError(DevicePollAuthorizationPending, 0)
+	case storage.DeviceAuthorizationStateApproved:
+		return s.redeem(ctx, record, resource, scopes)
+	case storage.DeviceAuthorizationStateDenied:
+		return IssuedCredential{}, newDevicePollError(DevicePollAccessDenied, 0)
+	case storage.DeviceAuthorizationStateExpired:
+		return IssuedCredential{}, newDevicePollError(DevicePollExpiredToken, 0)
+	case storage.DeviceAuthorizationStateRedeemed:
+		return IssuedCredential{}, newDevicePollError(DevicePollInvalidGrant, 0)
+	default:
+		return IssuedCredential{}, ErrInvalidDeviceFlow
+	}
 }

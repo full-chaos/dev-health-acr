@@ -172,6 +172,14 @@ GRANT SELECT, INSERT, UPDATE ON TABLE acr.oauth_clients TO :"runtime_user";
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.oauth_authorization_requests FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE ON TABLE acr.oauth_authorization_requests TO :"runtime_user";
 
+-- RFC 8628 device authorization grant (CHAOS-6233, migration 0042): the
+-- client/resource/scope POST /device_authorization stores alongside its
+-- reused device_authorizations row. Read at /token, written once at
+-- /device_authorization, never updated (the referenced device_authorizations
+-- row carries state).
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.oauth_device_grants FROM :"runtime_user";
+GRANT SELECT, INSERT ON TABLE acr.oauth_device_grants TO :"runtime_user";
+
 -- CHAOS-3859 (sol review F1): the hosted runtime writes clarification-
 -- selection capture events through pgclarification.Sink -- INSERT only,
 -- mirroring audit_events immediately above exactly: this table has no
