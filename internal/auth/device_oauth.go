@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -110,9 +111,12 @@ func (s *DeviceFlowService) StateForOAuth(ctx context.Context, hash storage.Devi
 
 // ApproveForOAuth approves the pending device authorization behind an OAuth
 // request for the signed-in web user, with the same org and repository rules
-// as the typed-code approval. A record that is no longer pending (approved,
-// denied, redeemed) fails with storage.ErrDeviceAuthorizationConflict, so a
-// request is decided at most once.
+// as the typed-code approval. A record that is no longer pending fails with
+// storage.ErrDeviceAuthorizationConflict, so a request is decided at most
+// once, with one exception that makes the decision retryable: a record this
+// same user already approved, for the same org and the same repositories, is
+// accepted again (the approval happened, but attaching the authorization code
+// may have failed after it).
 func (s *DeviceFlowService) ApproveForOAuth(ctx context.Context, principal storage.Principal, hash storage.DeviceCodeHash, repositoryScopes []string) error {
 	if err := s.ready(ctx); err != nil {
 		return err
@@ -121,8 +125,29 @@ func (s *DeviceFlowService) ApproveForOAuth(ctx context.Context, principal stora
 	if err != nil {
 		return fmt.Errorf("read device authorization for approval: %w", err)
 	}
+	if record.State == storage.DeviceAuthorizationStateApproved {
+		if sameOAuthApproval(record, principal, repositoryScopes) && record.ExpiresAt.After(s.now().UTC()) {
+			return nil
+		}
+		return storage.NewDeviceAuthorizationError(storage.DeviceAuthorizationErrorConflict, record.State, 0)
+	}
 	_, err = s.approveUserCodeHash(ctx, principal, record.UserCodeHash, repositoryScopes)
 	return err
+}
+
+// sameOAuthApproval reports whether an approved record is exactly the
+// approval this web principal is asking for again.
+func sameOAuthApproval(record storage.DeviceAuthorization, principal storage.Principal, repositoryScopes []string) bool {
+	if !validDeviceApprovalPrincipal(principal) {
+		return false
+	}
+	repositories, err := NormalizeRepositoryScopes(repositoryScopes)
+	if err != nil {
+		return false
+	}
+	return record.ApprovingAuthenticationMethod == storage.AuthenticationMethodWebAssertion &&
+		record.ApprovingSubject == principal.Subject && record.AuthorizedOrgID == principal.OrgID &&
+		slices.Equal(record.AuthorizedRepositoryScopes, repositories)
 }
 
 // DenyForOAuth denies the pending device authorization behind an OAuth

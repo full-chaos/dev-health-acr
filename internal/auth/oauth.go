@@ -464,8 +464,12 @@ func (OAuthConsentDecision) GoString() string { return oauthConsentDecisionRedac
 
 // pendingConsent returns the undecided, unexpired request behind a handle.
 // The returned client kind is set whenever the request was found, so refusals
-// after that point still report it.
-func (s *OAuthService) pendingConsent(ctx context.Context, handle string) (storage.OAuthAuthorizationRequest, error) {
+// after that point still report it. With resumable, a request whose approval
+// was recorded but whose code was never attached (a failure between the two)
+// is also returned, so the approving user can finish it; the consent
+// authority accepts that approval again only from the same user
+// (ApproveForOAuth), and a request with a code is never returned.
+func (s *OAuthService) pendingConsent(ctx context.Context, handle string, resumable bool) (storage.OAuthAuthorizationRequest, error) {
 	if !validOAuthHandle(handle) {
 		return storage.OAuthAuthorizationRequest{}, oauthError(OAuthConsentCodeInvalid, oauthvocab.OutcomeInvalidRequest, false)
 	}
@@ -489,6 +493,11 @@ func (s *OAuthService) pendingConsent(ctx context.Context, handle string) (stora
 	switch state {
 	case OAuthDeviceStatePending:
 		return request, nil
+	case OAuthDeviceStateApproved:
+		if resumable {
+			return request, nil
+		}
+		return request, oauthError(OAuthConsentCodeCompleted, oauthvocab.OutcomeAlreadyCompleted, false)
 	case OAuthDeviceStateExpired:
 		return request, oauthError(OAuthConsentCodeExpired, oauthvocab.OutcomeExpired, false)
 	default:
@@ -509,7 +518,7 @@ func validOAuthHandle(handle string) bool {
 // ConsentRequest returns what the web consent page shows for an undecided
 // request.
 func (s *OAuthService) ConsentRequest(ctx context.Context, handle string) (OAuthConsentRequest, string, error) {
-	request, err := s.pendingConsent(ctx, handle)
+	request, err := s.pendingConsent(ctx, handle, true)
 	if err != nil {
 		return OAuthConsentRequest{}, request.ClientKind, err
 	}
@@ -542,9 +551,11 @@ func redirectOrigin(raw string) (string, error) {
 // ApproveConsent records the signed-in user's approval of the request behind
 // a handle (org from the principal, the chosen repositories within the
 // principal's grant) and issues its one authorization code. A request is
-// decided at most once: a second approve or deny is already_completed.
+// decided at most once: once a code is attached, or after a deny, every
+// later decision is already_completed. If attaching the code fails after the
+// approval was recorded, the same user can approve again to finish.
 func (s *OAuthService) ApproveConsent(ctx context.Context, handle string, principal storage.Principal, repositoryScopes []string) (OAuthConsentDecision, error) {
-	request, err := s.pendingConsent(ctx, handle)
+	request, err := s.pendingConsent(ctx, handle, true)
 	if err != nil {
 		return OAuthConsentDecision{ClientKind: request.ClientKind}, err
 	}
@@ -568,7 +579,7 @@ func (s *OAuthService) ApproveConsent(ctx context.Context, handle string, princi
 // DenyConsent records the signed-in user's denial; the browser returns to the
 // client with error=access_denied.
 func (s *OAuthService) DenyConsent(ctx context.Context, handle string, principal storage.Principal) (OAuthConsentDecision, error) {
-	request, err := s.pendingConsent(ctx, handle)
+	request, err := s.pendingConsent(ctx, handle, false)
 	if err != nil {
 		return OAuthConsentDecision{ClientKind: request.ClientKind}, err
 	}

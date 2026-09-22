@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -97,11 +98,46 @@ func (a *App) emitOAuthStep(r *http.Request, step, outcome, clientKind string, s
 // emitOAuthStepScopes writes the line with the requested (authorize) or
 // granted (token) scopes.
 func (a *App) emitOAuthStepScopes(r *http.Request, step, outcome, clientKind string, status int, scopes []string) {
+	if marker, ok := r.Context().Value(oauthLineMarkerKey{}).(*oauthLineMarker); ok {
+		marker.emitted = true
+	}
 	if clientKind == "" {
 		clientKind = oauthvocab.ClientKindNone
 	}
 	fields := eventspec.NewOAuthStepFields(RequestID(r.Context()), step, outcome, clientKind, scopes, status)
 	a.logger.InfoContext(r.Context(), eventspec.OAuthStepLogMessage, fields.SlogArgs()...)
+}
+
+type oauthLineMarkerKey struct{}
+
+// oauthLineMarker records whether a request already wrote its OAuth line.
+type oauthLineMarker struct{ emitted bool }
+
+// oauthConsentLine keeps the one-OAuth-line-per-request contract on the
+// consent route, whose web-assertion wrapper answers before the handler runs
+// (401 without a valid assertion, 503 without the approval runtime): any
+// request the handler never reached still writes a consent line, with the
+// outcome its status means.
+func (a *App) oauthConsentLine(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		marker := &oauthLineMarker{}
+		r = r.WithContext(context.WithValue(r.Context(), oauthLineMarkerKey{}, marker))
+		recorder := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(recorder, r)
+		if marker.emitted {
+			return
+		}
+		outcome := oauthvocab.OutcomeInvalidRequest
+		switch {
+		case recorder.status == http.StatusUnauthorized || recorder.status == http.StatusForbidden:
+			outcome = oauthvocab.OutcomeUnauthenticated
+		case recorder.status == http.StatusTooManyRequests:
+			outcome = oauthvocab.OutcomeRateLimited
+		case recorder.status >= http.StatusInternalServerError:
+			outcome = oauthvocab.OutcomeUnavailable
+		}
+		a.emitOAuthStep(r, oauthvocab.StepConsent, outcome, "", recorder.status)
+	})
 }
 
 // oauthOutcome maps a service error to its telemetry outcome and OAuth code.

@@ -164,7 +164,9 @@ Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
   `{"redirect_url": "<redirect_uri>?code=...&state=...&iss=..."}`; `deny`
   returns the same with `error=access_denied`. The web sends the browser to
   `redirect_url`. A request is decided once: a later read or decision is `409
-  already_completed`; an expired request is `410 expired`; an unknown handle
+  already_completed`, with one exception: if the approval was recorded but
+  the code could not be attached (a `503`), the same user may approve again
+  with the same repositories to finish; an expired request is `410 expired`; an unknown handle
   or a decision the approver may not make is `400 invalid_request` and leaves
   the request undecided.
 - The authorization code is 256-bit, stored as SHA-256, valid 2 minutes and
@@ -179,7 +181,8 @@ Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
 - Each OAuth request writes one `acr-api oauth step` line (step, outcome,
   client kind, status). Steps: `register`, `authorize` (ok = sent to the
   consent page), `consent_preview`, `consent` (ok = approved, `access_denied`
-  = denied), `token`. Codes, handles, verifiers, client IDs, redirect URIs,
+  = denied, `unauthenticated` = no valid web assertion; every consent request
+  writes its line, including those refused before the handler), `token`. Codes, handles, verifiers, client IDs, redirect URIs,
   state and tokens are never logged.
 
 The runtime database role needs `SELECT, INSERT, UPDATE` on

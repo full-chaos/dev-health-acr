@@ -658,3 +658,94 @@ func TestRedeemForResourceNeverWidensTheApproval(t *testing.T) {
 		}
 	}
 }
+
+// flakyCodeStore fails the next code attachment once, as a transient storage
+// failure between the approval and the code would.
+type flakyCodeStore struct {
+	storage.OAuthStore
+	failNext bool
+}
+
+func (s *flakyCodeStore) IssueAuthorizationCode(ctx context.Context, handle, code storage.OAuthSecretHash, expiresAt time.Time) (storage.OAuthAuthorizationRequest, error) {
+	if s.failNext {
+		s.failNext = false
+		return storage.OAuthAuthorizationRequest{}, errors.New("transient")
+	}
+	return s.OAuthStore.IssueAuthorizationCode(ctx, handle, code, expiresAt)
+}
+
+// A failure after the approval is recorded but before the code is attached
+// is recoverable by the approving user, and only by them: same user, org and
+// repositories finish the login; anyone or anything else stays refused.
+func TestOAuthApprovalIsResumableOnlyByTheApprover(t *testing.T) {
+	h := newOAuthHarness(t)
+	clock := func() time.Time { return h.now }
+	store := &flakyCodeStore{OAuthStore: memory.NewOAuthStore(clock)}
+	service, err := NewOAuthService(store, h.devices, OAuthConfig{Issuer: testIssuer, Resources: []string{testResource}, Now: clock})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := service.Register(context.Background(), OAuthRegistrationRequest{ClientName: "c", RedirectURIs: []string{testRedirect}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, challenge := pkce(t)
+	authorization, err := service.Authorize(context.Background(), OAuthAuthorizeRequest{ResponseType: "code", ClientID: client.ClientID, RedirectURI: testRedirect, CodeChallenge: challenge, CodeChallengeMethod: "S256"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	repos := []string{"org/repo"}
+	store.failNext = true
+	if _, err := service.ApproveConsent(ctx, authorization.Handle, webPrincipal(repos), repos); !errors.Is(err, ErrOAuthUnavailable) {
+		t.Fatalf("approval with a failing code store = %v, want ErrOAuthUnavailable", err)
+	}
+	// Still readable, so the page can offer the approve again.
+	if _, _, err := service.ConsentRequest(ctx, authorization.Handle); err != nil {
+		t.Fatalf("preview after the failure = %v", err)
+	}
+	// Someone else, another org, other repositories, a deny: refused.
+	other := webPrincipal(repos)
+	other.Subject = "user_2"
+	otherOrg := webPrincipal(repos)
+	otherOrg.OrgID = "22222222-2222-4222-8222-222222222222"
+	for name, attempt := range map[string]func() error{
+		"another user": func() error { _, err := service.ApproveConsent(ctx, authorization.Handle, other, repos); return err },
+		"another org":  func() error { _, err := service.ApproveConsent(ctx, authorization.Handle, otherOrg, repos); return err },
+		"other repositories": func() error {
+			_, err := service.ApproveConsent(ctx, authorization.Handle, webPrincipal([]string{"org/repo", "org/two"}), []string{"org/repo", "org/two"})
+			return err
+		},
+		"deny": func() error {
+			_, err := service.DenyConsent(ctx, authorization.Handle, webPrincipal(repos))
+			return err
+		},
+	} {
+		if err := attempt(); outcomeOf(err) != oauthvocab.OutcomeAlreadyCompleted {
+			t.Fatalf("%s after the approval = %v, want already_completed", name, err)
+		}
+	}
+	// The approver finishes: one code, redeemable once.
+	decision, err := service.ApproveConsent(ctx, authorization.Handle, webPrincipal(repos), repos)
+	if err != nil {
+		t.Fatalf("the approver's retry = %v", err)
+	}
+	token, err := service.Exchange(ctx, OAuthTokenRequest{GrantType: "authorization_code", Code: codeFrom(t, decision.RedirectURL), RedirectURI: testRedirect, ClientID: client.ClientID, CodeVerifier: verifier})
+	if err != nil || token.Issued.Token == "" {
+		t.Fatalf("exchange after the resumed approval = %v", err)
+	}
+	if _, err := service.ApproveConsent(ctx, authorization.Handle, webPrincipal(repos), repos); outcomeOf(err) != oauthvocab.OutcomeAlreadyCompleted {
+		t.Fatalf("approval after the code = %v, want already_completed", err)
+	}
+	// An approval that outlived the request is not resumable.
+	second, err := service.Authorize(ctx, OAuthAuthorizeRequest{ResponseType: "code", ClientID: client.ClientID, RedirectURI: testRedirect, CodeChallenge: challenge, CodeChallengeMethod: "S256"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.failNext = true
+	_, _ = service.ApproveConsent(ctx, second.Handle, webPrincipal(repos), repos)
+	h.now = h.now.Add(storage.DeviceAuthorizationTTL + time.Second)
+	if _, err := service.ApproveConsent(ctx, second.Handle, webPrincipal(repos), repos); outcomeOf(err) != oauthvocab.OutcomeExpired {
+		t.Fatalf("resume after expiry = %v, want expired", err)
+	}
+}

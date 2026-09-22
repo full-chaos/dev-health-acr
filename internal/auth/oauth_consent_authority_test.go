@@ -68,24 +68,32 @@ func newStubConsent(t *testing.T) (*OAuthService, *stubConsentAuthority, string)
 func TestOAuthConsentMapsEveryAuthorityState(t *testing.T) {
 	for _, tc := range []struct {
 		state OAuthDeviceState
-		want  string
+		// read is the preview and approve outcome; deny is the deny outcome.
+		read, deny string
 	}{
-		{OAuthDeviceStatePending, "nil"},
-		{OAuthDeviceStateExpired, oauthvocab.OutcomeExpired},
-		{OAuthDeviceStateApproved, oauthvocab.OutcomeAlreadyCompleted},
-		{OAuthDeviceStateDenied, oauthvocab.OutcomeAlreadyCompleted},
-		{OAuthDeviceStateRedeemed, oauthvocab.OutcomeAlreadyCompleted},
+		{OAuthDeviceStatePending, "nil", "nil"},
+		// Approved without a code: the approving user may finish (the
+		// authority decides whether this principal is that user).
+		{OAuthDeviceStateApproved, "nil", oauthvocab.OutcomeAlreadyCompleted},
+		{OAuthDeviceStateExpired, oauthvocab.OutcomeExpired, oauthvocab.OutcomeExpired},
+		{OAuthDeviceStateDenied, oauthvocab.OutcomeAlreadyCompleted, oauthvocab.OutcomeAlreadyCompleted},
+		{OAuthDeviceStateRedeemed, oauthvocab.OutcomeAlreadyCompleted, oauthvocab.OutcomeAlreadyCompleted},
 	} {
 		service, authority, handle := newStubConsent(t)
 		authority.state = tc.state
-		if _, _, err := service.ConsentRequest(context.Background(), handle); outcomeOf(err) != tc.want {
-			t.Errorf("preview with state %s = %v, want %s", tc.state, err, tc.want)
+		if _, _, err := service.ConsentRequest(context.Background(), handle); outcomeOf(err) != tc.read {
+			t.Errorf("preview with state %s = %v, want %s", tc.state, err, tc.read)
 		}
-		if _, err := service.ApproveConsent(context.Background(), handle, webPrincipal([]string{"org/repo"}), []string{"org/repo"}); tc.want != "nil" && outcomeOf(err) != tc.want {
-			t.Errorf("approve with state %s = %v, want %s", tc.state, err, tc.want)
+		if _, err := service.DenyConsent(context.Background(), handle, webPrincipal([]string{"org/repo"})); outcomeOf(err) != tc.deny {
+			t.Errorf("deny with state %s = %v, want %s", tc.state, err, tc.deny)
 		}
-		if tc.want != "nil" && authority.approvals != 0 {
-			t.Errorf("state %s reached the authority's approval", tc.state)
+		service, authority, handle = newStubConsent(t)
+		authority.state = tc.state
+		if _, err := service.ApproveConsent(context.Background(), handle, webPrincipal([]string{"org/repo"}), []string{"org/repo"}); outcomeOf(err) != tc.read {
+			t.Errorf("approve with state %s = %v, want %s", tc.state, err, tc.read)
+		}
+		if (tc.read != "nil") != (authority.approvals == 0) {
+			t.Errorf("state %s: authority approvals = %d", tc.state, authority.approvals)
 		}
 	}
 	service, authority, handle := newStubConsent(t)

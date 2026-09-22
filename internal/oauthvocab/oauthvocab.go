@@ -44,7 +44,10 @@ const (
 	OutcomeClientMismatch          = "client_mismatch"
 	OutcomeResourceMismatch        = "resource_mismatch"
 	OutcomeRateLimited             = "rate_limited"
-	OutcomeUnavailable             = "unavailable"
+	// OutcomeUnauthenticated: a consent request without a valid web
+	// assertion for a signed-in user.
+	OutcomeUnauthenticated = "unauthenticated"
+	OutcomeUnavailable     = "unavailable"
 )
 
 // OutcomeVocabulary lists every outcome, ok first.
@@ -54,7 +57,7 @@ func OutcomeVocabulary() []string {
 		OutcomeInvalidRequest, OutcomeInvalidClient, OutcomeInvalidClientMetadata, OutcomeInvalidRedirectURI,
 		OutcomeUnsupportedResponseType, OutcomeUnsupportedGrantType, OutcomePKCERequired, OutcomeInvalidTarget, OutcomeInvalidScope,
 		OutcomeInvalidGrant, OutcomePKCEMismatch, OutcomeRedirectMismatch, OutcomeClientMismatch,
-		OutcomeResourceMismatch, OutcomeRateLimited, OutcomeUnavailable,
+		OutcomeResourceMismatch, OutcomeUnauthenticated, OutcomeRateLimited, OutcomeUnavailable,
 	}
 }
 

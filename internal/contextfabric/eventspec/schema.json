@@ -50,6 +50,7 @@
           "redirect_mismatch",
           "client_mismatch",
           "resource_mismatch",
+          "unauthenticated",
           "rate_limited",
           "unavailable"
         ]

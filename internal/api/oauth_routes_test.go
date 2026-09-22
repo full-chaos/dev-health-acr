@@ -397,7 +397,7 @@ func TestOAuthConsentRouteDenyReturnsAccessDenied(t *testing.T) {
 }
 
 func TestOAuthConsentRouteRefusals(t *testing.T) {
-	app, _, err := newOAuthTestApp(t, &OAuthRuntime{Issuer: oauthTestIssuer, Resources: []string{oauthTestResource}}, true)
+	app, logs, err := newOAuthTestApp(t, &OAuthRuntime{Issuer: oauthTestIssuer, Resources: []string{oauthTestResource}}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -429,6 +429,10 @@ func TestOAuthConsentRouteRefusals(t *testing.T) {
 		if recorder.Code != http.StatusUnauthorized {
 			t.Fatalf("%s: %d, want 401", name, recorder.Code)
 		}
+	}
+	// Each rejected request still wrote its one OAuth line.
+	if count := strings.Count(logs.String(), `"step":"consent","outcome":"unauthenticated","client_kind":"none","scopes":[],"status":401`); count != 3 {
+		t.Fatalf("unauthenticated consent lines = %d, want 3: %s", count, logs.String())
 	}
 	for name, tc := range map[string]struct {
 		body   any
@@ -688,5 +692,73 @@ func TestOAuthConsentBodyDomain(t *testing.T) {
 		if recorder.Code != http.StatusOK || body["redirect_url"] == nil {
 			t.Errorf("approve %v: %d %v, want 200 with redirect_url", repositories, recorder.Code, body)
 		}
+	}
+}
+
+// Every request to the consent route writes exactly one OAuth line, whether
+// the handler decided it or a wrapper in front of it refused it.
+func TestOAuthConsentRouteWritesOneOAuthLinePerRequest(t *testing.T) {
+	app, logs, err := newOAuthTestApp(t, &OAuthRuntime{Issuer: oauthTestIssuer, Resources: []string{oauthTestResource}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle := authorizeToConsent(t, app, oauthTestAuthorizeQuery(registerOAuthTestClient(t, app, "c")))
+	requests := []*http.Request{
+		consentRequest(t, map[string]any{"action": "preview", "handle": handle}, []string{"*"}, "one1"),
+		consentRequest(t, map[string]any{"action": "poll", "handle": handle}, []string{"*"}, "one2"),
+		consentRequest(t, map[string]any{"action": "preview", "handle": strings.Repeat("A", 43)}, []string{"*"}, "one3"),
+		consentRequest(t, map[string]any{"action": "approve", "handle": handle, "repository_scopes": []string{"*"}}, []string{"*"}, "one4"),
+		consentRequest(t, map[string]any{"action": "approve", "handle": handle, "repository_scopes": []string{"*"}}, []string{"*"}, "one5"),
+		httptest.NewRequest(http.MethodPost, OAuthConsentPath, strings.NewReader(`{}`)),
+	}
+	before := strings.Count(logs.String(), `"msg":"acr-api oauth step"`)
+	for _, request := range requests {
+		serveConsent(app, request)
+	}
+	lines := []string{}
+	for _, line := range strings.Split(logs.String(), "\n") {
+		if strings.Contains(line, `"msg":"acr-api oauth step"`) {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines)-before != len(requests) {
+		t.Fatalf("consent requests %d wrote %d OAuth lines: %v", len(requests), len(lines)-before, lines[before:])
+	}
+}
+
+// resumeOAuthStore fails the next code attachment once.
+type resumeOAuthStore struct {
+	storage.OAuthStore
+	failNext *bool
+}
+
+func (s resumeOAuthStore) IssueAuthorizationCode(ctx context.Context, handle, code storage.OAuthSecretHash, expiresAt time.Time) (storage.OAuthAuthorizationRequest, error) {
+	if *s.failNext {
+		*s.failNext = false
+		return storage.OAuthAuthorizationRequest{}, errors.New("transient")
+	}
+	return s.OAuthStore.IssueAuthorizationCode(ctx, handle, code, expiresAt)
+}
+
+// A transient failure after the approval is recorded: 503, then the same
+// user's retry finishes the login with a code.
+func TestOAuthConsentRouteApprovalRetriesAfterATransientFailure(t *testing.T) {
+	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
+	failNext := false
+	store := resumeOAuthStore{OAuthStore: memory.NewOAuthStore(func() time.Time { return now }), failNext: &failNext}
+	app, _, err := newOAuthTestApp(t, &OAuthRuntime{Issuer: oauthTestIssuer, Resources: []string{oauthTestResource}, Store: store}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle := authorizeToConsent(t, app, oauthTestAuthorizeQuery(registerOAuthTestClient(t, app, "c")))
+	failNext = true
+	recorder, body := serveConsent(app, consentRequest(t, map[string]any{"action": "approve", "handle": handle, "repository_scopes": []string{"*"}}, []string{"*"}, "rs1"))
+	if recorder.Code != http.StatusServiceUnavailable || body["error"] != "temporarily_unavailable" {
+		t.Fatalf("approval with a failing code store: %d %v", recorder.Code, body)
+	}
+	recorder, body = serveConsent(app, consentRequest(t, map[string]any{"action": "approve", "handle": handle, "repository_scopes": []string{"*"}}, []string{"*"}, "rs2"))
+	redirect, _ := body["redirect_url"].(string)
+	if recorder.Code != http.StatusOK || !strings.Contains(redirect, "code=") {
+		t.Fatalf("the approver's retry: %d %v, want 200 with a code", recorder.Code, body)
 	}
 }
