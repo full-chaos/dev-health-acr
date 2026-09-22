@@ -560,8 +560,8 @@
         "description": "deviceRuntimeHandler -- no auth check beyond runtime readiness; protected only by allowDeviceRequest's per-IP rate limiter.",
         "anchor": {
           "path": "internal/api/device_routes.go",
-          "line": 241,
-          "line_end": 246,
+          "line": 252,
+          "line_end": 252,
           "note": "func (a *App) deviceRuntimeHandler(next http.Handler) http.Handler {"
         }
       },
@@ -612,7 +612,7 @@
         "acr_workload_identity_exchange"
       ],
       "primary_validator": {
-        "description": "handleDeviceToken dispatches on Content-Type: 'application/x-www-form-urlencoded' -> handleTokenExchange (RFC 8693 grant; subject_token = k8s SA JWT, validated via github.com/full-chaos/dev-health-go/authverify's KubernetesTokenReviewValidator -- see docs/endpoint-profiles.md '#authverify-anchor' for the full v0.5.5-pinned trace). Otherwise -> handleDeviceCodeToken (device_code poll, auth.DeviceFlow.Poll). THIS IS THE acr_workload_identity_exchange ENDPOINT L0 left as a stated gap.",
+        "description": "handleDeviceToken dispatches on Content-Type: 'application/x-www-form-urlencoded' -> handleTokenExchange (RFC 8693 grant; subject_token = k8s SA JWT, validated via github.com/full-chaos/dev-health-go/authverify's KubernetesTokenReviewValidator -- see docs/endpoint-profiles.md '#authverify-anchor' for the full v0.5.5-pinned trace). Otherwise -> handleDeviceCodeToken (device_code poll, auth.DeviceFlow.Poll) -- which first refuses (CHAOS-6233, oauthDeviceCodeConflict) any device_code that belongs to an RFC 8628 device grant (storage.OAuthDeviceGrant present for its hash), since this legacy path mints with neither the resource nor the requested-scope subset that grant's binding requires. THIS IS THE acr_workload_identity_exchange ENDPOINT L0 left as a stated gap.",
         "anchor": {
           "path": "internal/api/device_routes.go",
           "line": 69,
@@ -690,8 +690,8 @@
         "description": "deviceApprovalHandler requires X-ACR-Web-Assertion EXACTLY (exactly one header) AND explicitly rejects if Authorization is ALSO present, at the route-wrapper level itself (in addition to the same check inside authenticateWebAssertion) -- a double belt-and-braces enforcement of the CHAOS-3271 double-header rejection pattern. RequireScope(credential:issue).",
         "anchor": {
           "path": "internal/api/device_routes.go",
-          "line": 219,
-          "line_end": 232,
+          "line": 230,
+          "line_end": 230,
           "note": "func (a *App) deviceApprovalHandler(next http.Handler) http.Handler {"
         }
       },
@@ -745,8 +745,8 @@
         "description": "selfLifecycleHandler = authenticator.Middleware (bearer only, allowWebAssertions=false) + ProtectedHandler(rate limit only) -- NO RequireScope call. Self-service rotation only needs a valid credential; it operates on the CALLER'S OWN principal.CredentialID, so no additional scope check is layered on.",
         "anchor": {
           "path": "internal/api/device_routes.go",
-          "line": 234,
-          "line_end": 239,
+          "line": 245,
+          "line_end": 245,
           "note": "func (a *App) selfLifecycleHandler(next http.Handler) http.Handler {"
         }
       },
@@ -788,8 +788,8 @@
         "description": "Same selfLifecycleHandler as rotate -- bearer only, no explicit scope requirement.",
         "anchor": {
           "path": "internal/api/device_routes.go",
-          "line": 234,
-          "line_end": 239,
+          "line": 245,
+          "line_end": 245,
           "note": "func (a *App) selfLifecycleHandler(next http.Handler) http.Handler {"
         }
       },
@@ -898,8 +898,8 @@
         "description": "deviceApprovalHandler (the same wrapper as device_approval) requires X-ACR-Web-Assertion EXACTLY (exactly one header) and rejects if Authorization is also present, then RequireScope(credential:issue): only the web, acting for its signed-in user, can read or decide a request; the browser that holds the handle cannot.",
         "anchor": {
           "path": "internal/api/device_routes.go",
-          "line": 219,
-          "line_end": 232,
+          "line": 230,
+          "line_end": 230,
           "note": "func (a *App) deviceApprovalHandler(next http.Handler) http.Handler {"
         }
       },

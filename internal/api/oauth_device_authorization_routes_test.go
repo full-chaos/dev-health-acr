@@ -146,6 +146,40 @@ func TestOAuthDeviceAuthorizationFullFlow(t *testing.T) {
 	}
 }
 
+// TestOAuthDeviceCodeCannotRedeemViaLegacyEndpoint pins the fix for a real
+// P1 (found by codex round cf-6233-r1, executed and confirmed): a device
+// code started by POST /device_authorization was, before this fix,
+// redeemable through the legacy JSON device-flow endpoint
+// (POST /api/v1/oauth/token, device_routes.go's handleDeviceCodeToken via
+// DeviceFlowService.Poll), which mints a credential with neither the OAuth
+// request's resource binding nor its requested-scope subset -- a narrower
+// OAuth request could get a BROADER, unbound credential just by hitting the
+// wrong endpoint with the same device_code.
+func TestOAuthDeviceCodeCannotRedeemViaLegacyEndpoint(t *testing.T) {
+	app, logs, err := newOAuthTestApp(t, &OAuthRuntime{Issuer: oauthTestIssuer, Resources: []string{oauthTestResource}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, _ := startOAuthDeviceAuthorization(t, app, url.Values{"scope": {"context:read"}})
+	deviceCode := started["device_code"].(string)
+
+	legacyResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(legacyResponse, deviceTokenRequest(t, deviceCode))
+	if legacyResponse.Code != http.StatusBadRequest {
+		t.Fatalf("legacy endpoint status = %d, want 400 (%s)", legacyResponse.Code, legacyResponse.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(legacyResponse.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["error"] != string(contractsv1.OAuthDeviceErrorInvalidGrant) {
+		t.Fatalf("legacy endpoint error = %v, want %s -- an OAuth device code must never be redeemable through the legacy JSON grant with no resource/scope binding", body["error"], contractsv1.OAuthDeviceErrorInvalidGrant)
+	}
+	if !strings.Contains(logs.String(), `"step":"token","outcome":"invalid_grant"`) {
+		t.Fatal("the legacy-endpoint conflict refusal must still emit the acr-api oauth step token/invalid_grant line -- otherwise the refusal is invisible in the OAuth login's own telemetry")
+	}
+}
+
 func TestDeviceVerificationURIComplete(t *testing.T) {
 	for name, tc := range map[string]struct {
 		verificationURI, userCode, want string

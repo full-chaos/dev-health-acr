@@ -257,6 +257,27 @@ func deviceVerificationURIComplete(verificationURI, userCode string) string {
 	return parsed.String()
 }
 
+// oauthDeviceCodeConflict reports whether deviceCode belongs to an RFC 8628
+// device grant (POST /device_authorization) -- such a device_authorizations
+// row must be redeemed only through ExchangeDeviceCode (this file), which
+// enforces the resource and scope binding storage.OAuthDeviceGrant carries;
+// device_routes.go's legacy JSON device-flow endpoint enforces neither. A hit
+// writes the same "acr-api oauth step" telemetry line the OAuth /token branch
+// would have written for this device code (StepToken, OutcomeInvalidGrant),
+// so redeeming it the wrong way is visible in the OAuth login's own
+// telemetry, not silent as far as it's concerned. Returns false immediately
+// (no lookup) when OAuth login is not configured at all.
+func (a *App) oauthDeviceCodeConflict(r *http.Request, deviceCode string) bool {
+	if a.runtime == nil || a.runtime.OAuth == nil || storage.IsNil(a.runtime.OAuth.Store) {
+		return false
+	}
+	if _, err := a.runtime.OAuth.Store.GetDeviceGrant(r.Context(), storage.HashDeviceCode(deviceCode)); err != nil {
+		return false
+	}
+	a.emitOAuthStep(r, oauthvocab.StepToken, oauthvocab.OutcomeInvalidGrant, "", http.StatusBadRequest)
+	return true
+}
+
 // handleOAuthDeviceAuthorization serves RFC 8628's device_authorization
 // endpoint: a client with no browser of its own (or that cannot receive a
 // redirect, e.g. a headless host) starts a device-code grant here and polls

@@ -87,6 +87,17 @@ func (a *App) handleDeviceCodeToken(w http.ResponseWriter, r *http.Request) {
 		a.writeOAuthDeviceError(w, contractsv1.OAuthDeviceErrorInvalidGrant, 0)
 		return
 	}
+	// A device code started by POST /device_authorization (CHAOS-6233) must be
+	// redeemed only through this server's OAuth-aware /token branch
+	// (ExchangeDeviceCode), which binds the credential to the requested
+	// resource and scope subset. This legacy JSON endpoint's Poll has neither
+	// binding -- accepting an OAuth device code here would mint a broader,
+	// unbound credential for a client that asked for less. Refuse it, with the
+	// same oauth-step telemetry line the real /token would have written.
+	if a.oauthDeviceCodeConflict(r, request.DeviceCode) {
+		a.writeOAuthDeviceError(w, contractsv1.OAuthDeviceErrorInvalidGrant, 0)
+		return
+	}
 	issued, err := a.deviceFlow.Poll(r.Context(), request.DeviceCode)
 	if err != nil {
 		var pollError *auth.DevicePollError
