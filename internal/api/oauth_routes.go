@@ -289,7 +289,19 @@ func (a *App) oauthDeviceCodeConflict(w http.ResponseWriter, r *http.Request, de
 	if a.runtime == nil || a.runtime.OAuth == nil || storage.IsNil(a.runtime.OAuth.Store) {
 		return false
 	}
-	_, err := a.runtime.OAuth.Store.GetDeviceGrant(r.Context(), storage.HashDeviceCode(deviceCode))
+	// Hash the SAME normalized form DeviceFlowService.Poll and ExchangeDeviceCode
+	// hash (auth.NormalizeDeviceCode -- trims whitespace, checks the base64url
+	// shape) -- hashing the raw presented value here would let a
+	// whitespace-padded code slip past this lookup while Poll's own
+	// normalization still resolves and redeems it. A code that fails to
+	// normalize cannot match any stored hash either way, so it is safe to let
+	// it fall through to Poll, which rejects it with the same invalid_grant it
+	// always has.
+	normalized, ok := auth.NormalizeDeviceCode(deviceCode)
+	if !ok {
+		return false
+	}
+	_, err := a.runtime.OAuth.Store.GetDeviceGrant(r.Context(), storage.HashDeviceCode(normalized))
 	switch {
 	case err == nil:
 		a.writeOAuthDeviceError(w, contractsv1.OAuthDeviceErrorInvalidGrant, 0)

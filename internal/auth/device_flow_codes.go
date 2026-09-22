@@ -29,7 +29,15 @@ func generateDeviceCodes(random io.Reader) (string, string, error) {
 	return base64.RawURLEncoding.EncodeToString(deviceBytes), userCodeEncoding.EncodeToString(userBytes), nil
 }
 
-func normalizeDeviceCode(value string) (string, bool) {
+// NormalizeDeviceCode is exported so every caller that must hash a
+// caller-presented device code -- not just the packages that redeem it --
+// canonicalizes it exactly the same way first. A hash taken over the raw,
+// un-normalized value diverges from the hash the code was stored under
+// whenever the presented form differs only in whitespace, letting a check
+// keyed on that hash (e.g. the legacy endpoint's OAuth-device-grant conflict
+// guard, internal/api/oauth_routes.go) miss a match that redemption itself
+// still finds.
+func NormalizeDeviceCode(value string) (string, bool) {
 	value = strings.TrimSpace(value)
 	decoded, err := base64.RawURLEncoding.DecodeString(value)
 	if err != nil || len(decoded) != deviceCodeBytes || base64.RawURLEncoding.EncodeToString(decoded) != value {

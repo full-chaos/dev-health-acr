@@ -63,7 +63,7 @@ func (s *DeviceFlowService) Poll(ctx context.Context, deviceCode string) (Issued
 	if err := s.ready(ctx); err != nil {
 		return IssuedCredential{}, err
 	}
-	deviceCode, ok := normalizeDeviceCode(deviceCode)
+	deviceCode, ok := NormalizeDeviceCode(deviceCode)
 	if !ok {
 		return IssuedCredential{}, newDevicePollError(DevicePollInvalidGrant, 0)
 	}

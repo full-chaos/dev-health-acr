@@ -273,6 +273,38 @@ func TestOAuthRegisterDeviceCodeOnlyClientHTTP(t *testing.T) {
 	}
 }
 
+// TestOAuthDeviceCodeConflictNormalizesBeforeHashing pins the CHAOS-6233 fix
+// for a real P1 (found by codex round cf-6233-r3, executed and confirmed):
+// oauthDeviceCodeConflict hashed the RAW presented device_code, while
+// DeviceFlowService.Poll normalizes (trims whitespace) before hashing --  a
+// whitespace-padded device_code missed the OAuth-grant lookup here but still
+// resolved at Poll, letting the legacy endpoint redeem an OAuth device code
+// after all with no resource/scope binding.
+func TestOAuthDeviceCodeConflictNormalizesBeforeHashing(t *testing.T) {
+	app, _, err := newOAuthTestApp(t, &OAuthRuntime{Issuer: oauthTestIssuer, Resources: []string{oauthTestResource}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, _ := startOAuthDeviceAuthorization(t, app, nil)
+	deviceCode := started["device_code"].(string)
+
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, deviceTokenRequest(t, "  "+deviceCode+"  "))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("legacy endpoint with a whitespace-padded OAuth device_code: status = %d, want 400 (%s)", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "access_token") {
+		t.Fatal("legacy endpoint minted a credential for a whitespace-padded OAuth device_code")
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["error"] != string(contractsv1.OAuthDeviceErrorInvalidGrant) {
+		t.Fatalf("legacy endpoint error = %v, want %s", body["error"], contractsv1.OAuthDeviceErrorInvalidGrant)
+	}
+}
+
 func TestDeviceVerificationURIComplete(t *testing.T) {
 	for name, tc := range map[string]struct {
 		verificationURI, userCode, want string

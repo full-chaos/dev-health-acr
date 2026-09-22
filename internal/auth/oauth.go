@@ -860,7 +860,7 @@ func (s *OAuthService) ExchangeDeviceCode(ctx context.Context, request OAuthDevi
 	if request.DeviceCode == "" || len(request.DeviceCode) > 128 {
 		return OAuthToken{}, oauthError("invalid_grant", oauthvocab.OutcomeInvalidGrant, false)
 	}
-	normalized, ok := normalizeDeviceCode(request.DeviceCode)
+	normalized, ok := NormalizeDeviceCode(request.DeviceCode)
 	if !ok {
 		return OAuthToken{}, oauthError("invalid_grant", oauthvocab.OutcomeInvalidGrant, false)
 	}
