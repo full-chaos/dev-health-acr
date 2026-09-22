@@ -615,3 +615,78 @@ func TestOAuthConsentIsRateLimitedPerHandleNotPerAddress(t *testing.T) {
 		t.Fatalf("consent rate_limited lines = %d, want 5", count)
 	}
 }
+
+// The consent body's whole input domain in one pass: every cell that is not
+// a contract shape is 400 invalid_request and decides nothing. Repository
+// lists follow the device approval's own rules (NormalizeRepositoryScopes):
+// a repeated slug is normalized away, never refused; each approve cell that
+// can succeed runs on a request of its own.
+func TestOAuthConsentBodyDomain(t *testing.T) {
+	app, _, err := newOAuthTestApp(t, &OAuthRuntime{Issuer: oauthTestIssuer, Resources: []string{oauthTestResource}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientID := registerOAuthTestClient(t, app, "c")
+	handle := authorizeToConsent(t, app, oauthTestAuthorizeQuery(clientID))
+	h := `"` + handle + `"`
+	cells := []struct {
+		name, contentType, body string
+		want                    int
+	}{
+		{"canonical preview", "application/json", `{"action":"preview","handle":` + h + `}`, http.StatusOK},
+		{"form content type", "application/x-www-form-urlencoded", "action=preview&handle=" + handle, http.StatusBadRequest},
+		{"no content type", "", `{"action":"preview","handle":` + h + `}`, http.StatusBadRequest},
+		{"empty body", "application/json", ``, http.StatusBadRequest},
+		{"null body", "application/json", `null`, http.StatusBadRequest},
+		{"array body", "application/json", `[]`, http.StatusBadRequest},
+		{"two objects", "application/json", `{"action":"preview","handle":` + h + `}{}`, http.StatusBadRequest},
+		{"action absent", "application/json", `{"handle":` + h + `}`, http.StatusBadRequest},
+		{"action null", "application/json", `{"action":null,"handle":` + h + `}`, http.StatusBadRequest},
+		{"action number", "application/json", `{"action":1,"handle":` + h + `}`, http.StatusBadRequest},
+		{"action case", "application/json", `{"action":"Preview","handle":` + h + `}`, http.StatusBadRequest},
+		{"action out of vocabulary", "application/json", `{"action":"poll","handle":` + h + `}`, http.StatusBadRequest},
+		{"duplicate action", "application/json", `{"action":"preview","action":"approve","handle":` + h + `,"repository_scopes":["*"]}`, http.StatusBadRequest},
+		{"handle absent", "application/json", `{"action":"preview"}`, http.StatusBadRequest},
+		{"handle null", "application/json", `{"action":"preview","handle":null}`, http.StatusBadRequest},
+		{"handle number", "application/json", `{"action":"preview","handle":1}`, http.StatusBadRequest},
+		{"handle empty", "application/json", `{"action":"preview","handle":""}`, http.StatusBadRequest},
+		{"handle 42 chars", "application/json", `{"action":"preview","handle":"` + handle[:42] + `"}`, http.StatusBadRequest},
+		{"handle 44 chars", "application/json", `{"action":"preview","handle":"` + handle + `A"}`, http.StatusBadRequest},
+		{"handle padded", "application/json", `{"action":"preview","handle":"` + handle[:42] + `="}`, http.StatusBadRequest},
+		{"unknown field", "application/json", `{"action":"preview","handle":` + h + `,"redirect_uri":"https://evil.example/"}`, http.StatusBadRequest},
+		{"preview with repositories", "application/json", `{"action":"preview","handle":` + h + `,"repository_scopes":["*"]}`, http.StatusBadRequest},
+		{"deny with repositories", "application/json", `{"action":"deny","handle":` + h + `,"repository_scopes":["*"]}`, http.StatusBadRequest},
+		{"approve repositories absent", "application/json", `{"action":"approve","handle":` + h + `}`, http.StatusBadRequest},
+		{"approve repositories null", "application/json", `{"action":"approve","handle":` + h + `,"repository_scopes":null}`, http.StatusBadRequest},
+		{"approve repositories empty", "application/json", `{"action":"approve","handle":` + h + `,"repository_scopes":[]}`, http.StatusBadRequest},
+		{"approve repositories string", "application/json", `{"action":"approve","handle":` + h + `,"repository_scopes":"*"}`, http.StatusBadRequest},
+		{"approve repositories number item", "application/json", `{"action":"approve","handle":` + h + `,"repository_scopes":[1]}`, http.StatusBadRequest},
+		{"approve wildcard mixed", "application/json", `{"action":"approve","handle":` + h + `,"repository_scopes":["*","org/repo"]}`, http.StatusBadRequest},
+		{"approve repository not a slug", "application/json", `{"action":"approve","handle":` + h + `,"repository_scopes":["not a slug"]}`, http.StatusBadRequest},
+	}
+	for i, cell := range cells {
+		request := httptest.NewRequest(http.MethodPost, OAuthConsentPath, strings.NewReader(cell.body))
+		if cell.contentType != "" {
+			request.Header.Set("Content-Type", cell.contentType)
+		}
+		request.Header.Set(auth.WebAssertionHeader, signConsentAssertion(t, request, []byte(cell.body), []string{"*"}, "dom"+strconv.Itoa(i)))
+		recorder, body := serveConsent(app, request)
+		t.Logf("cell %-34s -> %d %v", cell.name, recorder.Code, body["error"])
+		if recorder.Code != cell.want || (cell.want == http.StatusBadRequest && body["error"] != "invalid_request") {
+			t.Errorf("%s: %d %v, want %d", cell.name, recorder.Code, body, cell.want)
+		}
+	}
+	recorder, _ := serveConsent(app, consentRequest(t, map[string]any{"action": "preview", "handle": handle}, []string{"*"}, "dom-final"))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("a refused cell decided the request: %d", recorder.Code)
+	}
+	// Accepted shapes, each on its own request.
+	for i, repositories := range [][]string{{"*"}, {"org/repo"}, {"org/repo", "org/repo"}, {"org/a", "org/b"}} {
+		fresh := authorizeToConsent(t, app, oauthTestAuthorizeQuery(clientID))
+		recorder, body := serveConsent(app, consentRequest(t, map[string]any{"action": "approve", "handle": fresh, "repository_scopes": repositories}, slices.Compact(slices.Clone(repositories)), "acc"+strconv.Itoa(i)))
+		t.Logf("cell approve %-30v -> %d", repositories, recorder.Code)
+		if recorder.Code != http.StatusOK || body["redirect_url"] == nil {
+			t.Errorf("approve %v: %d %v, want 200 with redirect_url", repositories, recorder.Code, body)
+		}
+	}
+}

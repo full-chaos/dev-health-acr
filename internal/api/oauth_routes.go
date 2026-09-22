@@ -1,11 +1,13 @@
 package api
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"html/template"
+	"io"
 	"mime"
 	"net/http"
 	"net/url"
@@ -320,7 +322,11 @@ func decodeOAuthConsentBody(w http.ResponseWriter, r *http.Request) (oauthConsen
 	if mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mediaType != "application/json" {
 		return request, false
 	}
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, oauthFormMaxBytes))
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, oauthFormMaxBytes))
+	if err != nil || !uniqueTopLevelJSONKeys(raw) {
+		return oauthConsentRequestBody{}, false
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil || decoder.More() {
 		return oauthConsentRequestBody{}, false
@@ -333,6 +339,33 @@ func decodeOAuthConsentBody(w http.ResponseWriter, r *http.Request) (oauthConsen
 	default:
 		return oauthConsentRequestBody{}, false
 	}
+}
+
+// uniqueTopLevelJSONKeys reports whether raw is one JSON object whose keys
+// are all distinct. encoding/json keeps the last of repeated keys, so
+// {"action":"preview","action":"approve"} would otherwise decode as approve.
+func uniqueTopLevelJSONKeys(raw []byte) bool {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		return false
+	}
+	seen := map[string]struct{}{}
+	for decoder.More() {
+		token, err := decoder.Token()
+		key, ok := token.(string)
+		if err != nil || !ok {
+			return false
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return false
+		}
+		seen[key] = struct{}{}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *App) writeOAuthConsentError(w http.ResponseWriter, r *http.Request, step, clientKind string, err error) {
