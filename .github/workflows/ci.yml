@@ -357,8 +357,39 @@ jobs:
         run: |
           packages="$(scripts/ci/test-shard.sh --with-isolated ${{ matrix.shard }} 4)"
           printf 'unit shard %s/4 packages:\n%s\n' '${{ matrix.shard }}' "$packages"
+          # CHAOS-6220: --with-isolated round-robins scripts/ci/test-shard.sh's
+          # isolated_packages IN like any other package (unlike the race
+          # matrix below, which excludes them), so one of them --
+          # internal/contextfabric/devhealthfacts measured 660-690s wall,
+          # zero margin against go test's bare 600s default -- can land in
+          # any of the 4 shards. `go test`'s -timeout panics per TEST BINARY
+          # (one per listed package), not once for the whole multi-package
+          # invocation, so raising it for a shard that draws an isolated
+          # package costs that shard's other, fast packages nothing, and
+          # leaves the shards that draw none unchanged. `make isolated-timeout`
+          # is the single source both this job and test-split/test-race-isolated
+          # (Makefile) read the per-package budget from.
+          isolated_timeout=""
+          for isolated_pkg in $(scripts/ci/test-shard.sh isolated); do
+            case " $packages " in
+              *" $isolated_pkg "*)
+                pkg_timeout="$(make -s isolated-timeout PKG="$isolated_pkg")"
+                printf 'unit shard %s/4 carries isolated package %s -> GOTEST_PLAIN_TIMEOUT=%s\n' \
+                  '${{ matrix.shard }}' "$isolated_pkg" "$pkg_timeout"
+                pkg_secs="${pkg_timeout%s}"
+                cur_secs="${isolated_timeout%s}"
+                if [ -z "$isolated_timeout" ] || [ "$pkg_secs" -gt "$cur_secs" ]; then
+                  isolated_timeout="$pkg_timeout"
+                fi
+                ;;
+            esac
+          done
           set +e
-          make test-coverage GOTEST_PKGS="$packages"
+          if [ -n "$isolated_timeout" ]; then
+            make test-coverage GOTEST_PKGS="$packages" GOTEST_PLAIN_TIMEOUT="$isolated_timeout"
+          else
+            make test-coverage GOTEST_PKGS="$packages"
+          fi
           status=$?
           set -e
           failure="$(jq -r '
