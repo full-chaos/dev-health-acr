@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check test test-split test-race test-race-shared test-race-isolated test-race-split test-shuffle-random test-coverage crosscompile hosted-integration clients-real vet contract-write contract-test codegraph-contract shard-plan canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract
+.PHONY: fmt fmt-check test test-split test-race test-race-shared test-race-isolated test-race-split test-shuffle-random test-coverage isolated-timeout crosscompile hosted-integration clients-real vet contract-write contract-test codegraph-contract shard-plan canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract
 
 RELEASE_OUTPUT ?= .tmp/release
 RELEASE_VERSION ?=
@@ -190,11 +190,26 @@ test-coverage:
 	mkdir -p $(COVERAGE_DIR)
 	status=0; \
 	scripts/ci/retry.sh go run gotest.tools/gotestsum@$(GOTESTSUM_VERSION) --junitfile $(COVERAGE_JUNIT) --jsonfile $(COVERAGE_JSON) -- \
-		-count=1 -coverprofile=$(COVERAGE_PROFILE) $(GOTEST_PKGS) || status=$$?; \
+		-count=1 -timeout $(GOTEST_PLAIN_TIMEOUT) -coverprofile=$(COVERAGE_PROFILE) $(GOTEST_PKGS) || status=$$?; \
 	if [ -f $(COVERAGE_PROFILE) ]; then \
 		scripts/ci/retry.sh go run github.com/boumenot/gocover-cobertura@$(GOCOVER_COBERTURA_VERSION) < $(COVERAGE_PROFILE) > $(COVERAGE_COBERTURA) || status=$$?; \
 	fi; \
 	exit $$status
+
+# CHAOS-6220: single source of truth for "what plain (non -race) -timeout
+# budget does an ISOLATED package (scripts/ci/test-shard.sh isolated) need,"
+# so test-split's own per-package loop above and the CI `unit` job's
+# --with-isolated coverage shards (ci.yml, which cannot read a Make variable
+# directly) can never silently settle on different budgets for the same
+# package. PKG must be the full import path, the same value test-shard.sh
+# itself emits. Mirrors the identical case-statement lookup test-split
+# (above) and test-race-isolated (below) already use inline for their own
+# per-package loops.
+isolated-timeout:
+	@case "$(PKG)" in \
+		*/internal/contextfabric) echo "$(GOTEST_CONTEXTFABRIC_TIMEOUT)" ;; \
+		*) echo "$(GOTEST_ISOLATED_TIMEOUT)" ;; \
+	esac
 
 crosscompile:
 	GOOS=windows GOARCH=amd64 go build ./...

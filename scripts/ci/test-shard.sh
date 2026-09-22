@@ -170,6 +170,11 @@ usage() {
   printf 'usage: %s isolated-dedicated\n' "${0##*/}" >&2
   printf '  prints dedicated_isolated_packages -- isolated package(s) that run\n' >&2
   printf '  alone, in their own dedicated job\n' >&2
+  printf 'usage: %s --print-isolated-packages\n' "${0##*/}" >&2
+  printf '  same listing as "isolated", for a caller that only needs to check\n' >&2
+  printf '  membership (e.g. does my shard carry one), never to select what a\n' >&2
+  printf '  job runs -- see the flag'"'"'s own comment in main() for why it is not\n' >&2
+  printf '  named as a bare "isolated*" subcommand\n' >&2
   printf 'usage: %s heavy\n' "${0##*/}" >&2
   printf '  prints the packages round-robin gives their own shard (see is_heavy_package)\n' >&2
 }
@@ -350,6 +355,29 @@ heavy_packages_of() {
 
 main() {
   if [ "$#" -eq 1 ] && [ "$1" = "isolated" ]; then
+    printf '%s\n' "${isolated_packages[*]}"
+    return 0
+  fi
+
+  # CHAOS-6220: same listing as `isolated` above, under a flag-shaped name
+  # instead of a bare subcommand -- deliberately, not cosmetically. Every
+  # bare `isolated`/`isolated-<suffix>` invocation in a ci.yml job block
+  # means "this job RUNS that selection" to
+  # scripts/ci/test-workflow-contract.sh's check_isolated_devhealthschema_job
+  # (it greps job blocks for that exact shape to prove every isolated
+  # package actually runs somewhere, see that function's own comment). The
+  # `unit` job's coverage step only needs to ask "is one of my shard's
+  # packages ALSO an isolated one, so I should widen my own -timeout" -- a
+  # membership check, not a run selection (the round-robin `--with-isolated`
+  # call already covers running them). A bare `isolated` call for that
+  # purpose would misclassify `unit` as a dedicated isolated-package job to
+  # that checker, which then double-counts it and silently defeats its own
+  # negative control for a REAL dedicated job going missing (caught by
+  # scripts/ci/test-workflow-contract.sh's own mutation suite). The
+  # `--with-isolated` flag two blocks below already established the
+  # convention that a dash-prefixed form reads as "how I run", not "what I
+  # run" -- this flag extends that convention to "list, don't run".
+  if [ "$#" -eq 1 ] && [ "$1" = "--print-isolated-packages" ]; then
     printf '%s\n' "${isolated_packages[*]}"
     return 0
   fi
