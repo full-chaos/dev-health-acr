@@ -27,6 +27,11 @@ func TestPublicAddressDomain(t *testing.T) {
 		{"172.32.0.1", true}, {"172.15.255.255", true}, {"100.63.255.255", true}, {"100.128.0.1", true},
 		{"198.17.255.255", true}, {"198.20.0.1", true}, {"239.255.255.255", false}, {"11.0.0.1", true},
 		{"192.0.1.1", true}, {"1.0.0.1", true}, {"223.255.255.255", true},
+		// IANA-reserved documentation/benchmarking/discard ranges (review round P2)
+		{"192.0.2.1", false}, {"198.51.100.1", false}, {"203.0.113.1", false},
+		{"100::1", false}, {"2001:2::1", false}, {"2001:10::1", false}, {"2001:20::1", false}, {"3fff::1", false},
+		// the deprecated IPv4-compatible IPv6 form embeds the same address rules apply to
+		{"::10.0.0.1", false}, {"::a00:1", false}, {"::8.8.8.8", true}, {"::0.0.0.1", false}, {"::", false}, {"::1:a00:1", true},
 		// loopback / unspecified / this-network
 		{"127.0.0.1", false}, {"127.255.255.254", false}, {"::1", false}, {"0.0.0.0", false}, {"0.1.2.3", false}, {"::", false},
 		// RFC 1918
