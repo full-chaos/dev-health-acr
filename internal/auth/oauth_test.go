@@ -333,6 +333,9 @@ func TestOAuthConsentDecisions(t *testing.T) {
 	if _, err := h.oauth.DenyConsent(ctx, denied.Handle, principal); outcomeOf(err) != oauthvocab.OutcomeAlreadyCompleted {
 		t.Fatalf("second deny = %v, want already_completed", err)
 	}
+	if _, _, err := h.oauth.ConsentRequest(ctx, denied.Handle); outcomeOf(err) != oauthvocab.OutcomeAlreadyCompleted {
+		t.Fatalf("preview after deny = %v, want already_completed", err)
+	}
 
 	expiring := start()
 	h.now = h.now.Add(storage.DeviceAuthorizationTTL + time.Second)
