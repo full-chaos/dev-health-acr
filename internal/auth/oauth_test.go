@@ -768,3 +768,94 @@ func TestApproveForOAuthResumesOnlyALiveApproval(t *testing.T) {
 		t.Fatal("an expired approval was accepted again")
 	}
 }
+
+// TestOAuthAuthorizeAcceptsAnyLoopbackPortForACIMDClient is the CHAOS-6232
+// fix at the service level: codex's CIMD document registers
+// "http://127.0.0.1/callback" and "http://localhost/callback" (no port,
+// exactly https://chatgpt.com/oauth/codex/client.json as fetched
+// 2026-09-22), and codex presents an ephemeral port at request time
+// (36229 in the executed prod repro). Before the fix, exact string matching
+// refused this with invalid_redirect_uri (400) every time, because a native
+// app cannot pre-register a port it binds at runtime (RFC 8252 §7.3). After
+// the fix, Authorize accepts it, and the code it issues is bound to the
+// PRESENTED (ported) redirect_uri, not the portless registered template, so
+// /token's exact-match re-check of the SAME redirect_uri codex presents
+// again still succeeds.
+func TestOAuthAuthorizeAcceptsAnyLoopbackPortForACIMDClient(t *testing.T) {
+	h := newOAuthHarness(t)
+	const clientID = "https://chatgpt.com/oauth/codex/client.json"
+	h.meta.documents[clientID] = OAuthClientMetadata{
+		ClientID:     clientID,
+		RedirectURIs: []string{"http://127.0.0.1/callback", "http://localhost/callback"},
+	}
+	verifier, challenge := pkce(t)
+	const presented = "http://127.0.0.1:36229/callback"
+	authorization, err := h.oauth.Authorize(context.Background(), OAuthAuthorizeRequest{
+		ResponseType: "code", ClientID: clientID, RedirectURI: presented,
+		CodeChallenge: challenge, CodeChallengeMethod: "S256", State: "codex-state",
+	})
+	if err != nil {
+		t.Fatalf("Authorize with an unregistered port on a registered loopback host = %v, want nil (RFC 8252 §7.3)", err)
+	}
+	if authorization.Client.Kind != storage.OAuthClientKindMetadataDocument {
+		t.Fatalf("client kind = %q", authorization.Client.Kind)
+	}
+	redirect := h.approve(t, authorization.Handle, []string{"org/repo"})
+	if !strings.HasPrefix(redirect, presented+"?") {
+		t.Fatalf("approval redirect = %q, want the presented port preserved (prefix %q)", redirect, presented+"?")
+	}
+	code := codeFrom(t, redirect)
+	token, err := h.oauth.Exchange(context.Background(), OAuthTokenRequest{
+		GrantType: "authorization_code", Code: code, RedirectURI: presented, ClientID: clientID,
+		CodeVerifier: verifier, Resource: testResource,
+	})
+	if err != nil {
+		t.Fatalf("token exchange presenting the same redirect_uri again = %v, want nil", err)
+	}
+	if token.ClientKind != storage.OAuthClientKindMetadataDocument {
+		t.Fatalf("token client kind = %q", token.ClientKind)
+	}
+	// /token's redirect_uri check against the one used at /authorize stays
+	// exact: a DIFFERENT port than the one presented at /authorize is
+	// refused even though both are loopback.
+	authorization2, err := h.oauth.Authorize(context.Background(), OAuthAuthorizeRequest{
+		ResponseType: "code", ClientID: clientID, RedirectURI: presented,
+		CodeChallenge: challenge, CodeChallengeMethod: "S256", State: "codex-state-2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code2 := codeFrom(t, h.approve(t, authorization2.Handle, []string{"org/repo"}))
+	if _, err := h.oauth.Exchange(context.Background(), OAuthTokenRequest{
+		GrantType: "authorization_code", Code: code2, RedirectURI: "http://127.0.0.1:9999/callback", ClientID: clientID,
+		CodeVerifier: verifier, Resource: testResource,
+	}); outcomeOf(err) != oauthvocab.OutcomeRedirectMismatch {
+		t.Fatalf("token exchange with a DIFFERENT presented port than /authorize used = %s, want %s", outcomeOf(err), oauthvocab.OutcomeRedirectMismatch)
+	}
+}
+
+// TestOAuthAuthorizeRejectsLocalhostLoopbackForNonCIMDClients confirms the
+// localhost-hostname allowance (distinct from the 127.0.0.1/[::1] IP
+// literals) applies to CIMD clients only, per the ticket's scope: a
+// dynamically-registered (RFC 7591) client that registered
+// "http://localhost/callback" still needs an exact port match, since DCR
+// clients register their exact redirect URI up front and RFC 8252 §7.3
+// itself recommends against relying on the "localhost" hostname due to DNS
+// rebinding.
+func TestOAuthAuthorizeRejectsLocalhostLoopbackForNonCIMDClients(t *testing.T) {
+	h := newOAuthHarness(t)
+	client, err := h.oauth.Register(context.Background(), OAuthRegistrationRequest{
+		ClientName: "dynamic-localhost", RedirectURIs: []string{"http://localhost/callback"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, challenge := pkce(t)
+	_, err = h.oauth.Authorize(context.Background(), OAuthAuthorizeRequest{
+		ResponseType: "code", ClientID: client.ClientID, RedirectURI: "http://localhost:5555/callback",
+		CodeChallenge: challenge, CodeChallengeMethod: "S256",
+	})
+	if outcomeOf(err) != oauthvocab.OutcomeInvalidRedirectURI {
+		t.Fatalf("outcome = %s, want %s (localhost port-matching is CIMD-only)", outcomeOf(err), oauthvocab.OutcomeInvalidRedirectURI)
+	}
+}

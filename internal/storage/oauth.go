@@ -198,6 +198,48 @@ func ValidOAuthRedirectURI(value string) bool {
 	}
 }
 
+// MatchOAuthRedirectURI reports whether a presented redirect_uri satisfies a
+// client's registered one. Exact string equality always matches. A native
+// app binds an ephemeral loopback port at runtime and cannot pre-register
+// it, so RFC 8252 §7.3 requires the authorization server to accept any port
+// when the registered URI is itself a loopback URI carrying no port: when
+// the registered URI's host is a loopback IP literal (127.0.0.1, ::1) — or,
+// for CIMD clients only (allowLocalhost), the localhost hostname the MCP
+// CIMD guidance also allows — and the registered URI names no port, the
+// presented URI matches for any port sharing the same scheme, host and
+// path. A registered URI naming an explicit port, or any non-loopback host,
+// keeps exact matching. This allowance is for matching a presented
+// redirect_uri against a client's REGISTERED one at /authorize only; /token
+// re-checks a presented redirect_uri against the one already verified and
+// stored at /authorize, which is always an exact comparison (request to
+// request, not request to registration).
+func MatchOAuthRedirectURI(registered, presented string, allowLocalhost bool) bool {
+	if registered == presented {
+		return true
+	}
+	reg, err := url.Parse(registered)
+	if err != nil || reg.Port() != "" || !isLoopbackRedirectHost(reg.Hostname(), allowLocalhost) {
+		return false
+	}
+	pres, err := url.Parse(presented)
+	if err != nil || pres.User != nil || pres.Fragment != "" {
+		return false
+	}
+	return pres.Scheme == reg.Scheme && pres.Hostname() == reg.Hostname() &&
+		pres.Path == reg.Path && pres.RawQuery == reg.RawQuery
+}
+
+func isLoopbackRedirectHost(host string, allowLocalhost bool) bool {
+	switch host {
+	case "127.0.0.1", "::1":
+		return true
+	case "localhost":
+		return allowLocalhost
+	default:
+		return false
+	}
+}
+
 // ValidateOAuthAuthorizationRequest checks a request before it is stored.
 func ValidateOAuthAuthorizationRequest(request OAuthAuthorizationRequest) error {
 	if request.HandleHash.IsZero() || request.DeviceCodeHash.IsZero() || request.CodeHash != nil || request.CodeExpiresAt != nil || request.ConsumedAt != nil {

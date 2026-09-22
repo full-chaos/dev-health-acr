@@ -81,6 +81,21 @@ type OAuthError struct {
 	// redirect URI (never the value the request carried) with error, state
 	// and iss.
 	RedirectURL string
+	// RedirectMismatch is set only for an invalid_redirect_uri refusal: the
+	// registered and presented redirect_uri origins (scheme+host+port, no
+	// path/query/fragment) so the caller can log what diverged without ever
+	// logging a full redirect URI.
+	RedirectMismatch *OAuthRedirectMismatch
+}
+
+// OAuthRedirectMismatch is diagnostic-only, never a secret: the origins of a
+// redirect_uri that failed to match a client's registration.
+type OAuthRedirectMismatch struct {
+	// Registered is every registered redirect_uri's origin, in order.
+	Registered []string
+	// Presented is the presented redirect_uri's origin, or "" if it did not
+	// parse to one.
+	Presented string
 }
 
 func (e *OAuthError) Error() string { return "oauth: " + e.Code + " (" + e.Outcome + ")" }
@@ -363,11 +378,30 @@ func (s *OAuthService) Authorize(ctx context.Context, request OAuthAuthorizeRequ
 	if err != nil {
 		return OAuthAuthorization{}, err
 	}
-	registered := slices.Index(client.RedirectURIs, request.RedirectURI)
-	if request.RedirectURI == "" || registered < 0 {
-		return OAuthAuthorization{}, oauthError("invalid_request", oauthvocab.OutcomeInvalidRedirectURI, false)
+	allowLocalhost := client.Kind == storage.OAuthClientKindMetadataDocument
+	matched := request.RedirectURI != ""
+	if matched {
+		matched = false
+		for _, candidate := range client.RedirectURIs {
+			if storage.MatchOAuthRedirectURI(candidate, request.RedirectURI, allowLocalhost) {
+				matched = true
+				break
+			}
+		}
 	}
-	redirectURI := client.RedirectURIs[registered]
+	if !matched {
+		return OAuthAuthorization{}, &OAuthError{
+			Code: "invalid_request", Outcome: oauthvocab.OutcomeInvalidRedirectURI,
+			RedirectMismatch: &OAuthRedirectMismatch{
+				Registered: redirectOrigins(client.RedirectURIs),
+				Presented:  safeRedirectOrigin(request.RedirectURI),
+			},
+		}
+	}
+	// The presented redirect_uri, not the registered template it matched
+	// (which may carry no port for a loopback client) — this is the value
+	// the code is bound to and /token must see again, exactly.
+	redirectURI := request.RedirectURI
 	refuse := func(code, outcome string) (OAuthAuthorization, error) {
 		return OAuthAuthorization{}, &OAuthError{
 			Code: code, Outcome: outcome, Redirectable: true,
@@ -551,6 +585,26 @@ func redirectOrigin(raw string) (string, error) {
 		return "", ErrOAuthUnavailable
 	}
 	return parsed.Scheme + "://" + parsed.Host, nil
+}
+
+// redirectOrigins returns each redirect URI's origin (scheme+host+port), for
+// diagnostics only; an unparseable entry contributes "".
+func redirectOrigins(uris []string) []string {
+	origins := make([]string, len(uris))
+	for i, uri := range uris {
+		origins[i] = safeRedirectOrigin(uri)
+	}
+	return origins
+}
+
+// safeRedirectOrigin returns a redirect URI's origin for diagnostics, or ""
+// when it does not parse to one — never the full URI (path, query, secrets).
+func safeRedirectOrigin(raw string) string {
+	origin, err := redirectOrigin(raw)
+	if err != nil {
+		return ""
+	}
+	return origin
 }
 
 // ApproveConsent records the signed-in user's approval of the request behind
