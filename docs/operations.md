@@ -1489,7 +1489,7 @@ OTLP/gRPC when `OTEL_ENABLED=true`:
 | Variable | Meaning |
 | --- | --- |
 | `OTEL_ENABLED` | `true`/`false` (unset = false). Any other value, or `true` without an endpoint, fails startup. |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | Collector, e.g. `http://collector:4317` (`http://` = plaintext gRPC). Required when enabled. Other standard `OTEL_EXPORTER_OTLP_*` variables apply. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Collector, e.g. `http://collector:4317` (`http://` = plaintext gRPC). Required when enabled, and it must name a host: a hostless `http://:4317` is refused at startup rather than exporting to the pod's own loopback. Other standard `OTEL_EXPORTER_OTLP_*` variables apply. |
 | `OTEL_SERVICE_NAME` | `service.name`; defaults to the binary name. |
 | `OTEL_RESOURCE_ATTRIBUTES` | Extra resource attributes. `service.version` is always the build commit. |
 
@@ -1516,7 +1516,11 @@ fails on any new global install, and `modelprovider`'s
 request and asserts no Genkit span, metric or content reaches the export.
 
 The Helm chart sets these from `otel.enabled`, `otel.endpoint` and
-`otel.serviceNames` (off by default).
+`otel.serviceNames` (off by default); a release whose endpoint is blank,
+schemeless or hostless, or whose service name is blank, is refused at render
+time. The api and mcp NetworkPolicies gain collector egress when export is on;
+no policy selects the projector pods, so its egress is unrestricted — if one
+is ever added it must carry the collector port too.
 
 Troubleshoot with safe status, error classes, and deployment logs:
 

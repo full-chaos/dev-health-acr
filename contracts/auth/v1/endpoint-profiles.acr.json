@@ -1087,7 +1087,7 @@
       "route": "/device_authorization",
       "source": {
         "file": "internal/api/app.go",
-        "line": 98
+        "line": 99
       },
       "public_rationale": "RFC 8628 device authorization endpoint (CHAOS-6233): starts a device-code grant for a headless/remote MCP client with no browser or redirect of its own; the caller has no credential by definition. It reuses the same device_authorizations row and POST /api/v1/oauth/device_approval approval page an OAuth authorization-code request's browser consent already reuses internally (device_oauth.go), except the raw device_code and user_code leave the server here, as RFC 8628 requires.",
       "primary_validator": {

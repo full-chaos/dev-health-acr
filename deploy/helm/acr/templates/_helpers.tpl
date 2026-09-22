@@ -551,6 +551,13 @@ Call with (dict "root" $ "name" <service.name>).
 {{- if not (or (hasPrefix "http://" $endpoint) (hasPrefix "https://" $endpoint)) -}}
 {{- fail "otel.endpoint must start with http:// or https:// (http:// selects plaintext OTLP/gRPC)" -}}
 {{- end -}}
+{{- /* A hostless endpoint (http://:4317) parses, and the OTLP exporter then
+     dials the pod's own loopback: the deployment looks configured and every
+     export is refused locally. Require a host. */ -}}
+{{- $authority := (splitList "/" (trimPrefix "https://" (trimPrefix "http://" $endpoint))) | first -}}
+{{- if not (splitList ":" $authority | first) -}}
+{{- fail "otel.endpoint must name a collector host, not just a port (http://:4317 sends to the pod's own loopback)" -}}
+{{- end -}}
 {{- $service := trim (toString .name) -}}
 {{- if not $service -}}
 {{- fail "otel.serviceNames entries must be non-empty" -}}

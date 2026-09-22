@@ -77,7 +77,7 @@ func env(values map[string]string) func(string) (string, bool) {
 
 func TestConfigFromEnvDomain(t *testing.T) {
 	info := version.Info{Version: "v1.2.3", Commit: testCommit}
-	endpoint := "http://collector:4317"
+	endpoint := "http://otlp-fixture.example:4317"
 	cases := []struct {
 		name        string
 		values      map[string]string
@@ -100,6 +100,11 @@ func TestConfigFromEnvDomain(t *testing.T) {
 		{name: "enabled without endpoint", values: map[string]string{EnvEnabled: "true"}, wantErr: "OTEL_ENABLED=true requires OTEL_EXPORTER_OTLP_ENDPOINT"},
 		{name: "enabled with empty endpoint", values: map[string]string{EnvEnabled: "true", EnvEndpoint: ""}, wantErr: "requires OTEL_EXPORTER_OTLP_ENDPOINT"},
 		{name: "enabled with blank endpoint", values: map[string]string{EnvEnabled: "true", EnvEndpoint: "   "}, wantErr: "requires OTEL_EXPORTER_OTLP_ENDPOINT"},
+		{name: "enabled with a hostless endpoint", values: map[string]string{EnvEnabled: "true", EnvEndpoint: "http://:4317"}, wantErr: "must name a collector host"},
+		{name: "enabled with a port-only endpoint", values: map[string]string{EnvEnabled: "true", EnvEndpoint: ":4317"}, wantErr: "must name a collector host"},
+		{name: "enabled with an unparseable endpoint", values: map[string]string{EnvEnabled: "true", EnvEndpoint: "http://[::1"}, wantErr: "must name a collector host"},
+		{name: "enabled with a host and no scheme is accepted by this check", values: map[string]string{EnvEnabled: "true", EnvEndpoint: "collector:4317"}, wantErr: "must name a collector host"},
+		{name: "enabled with https endpoint", values: map[string]string{EnvEnabled: "true", EnvEndpoint: "https://otlp-fixture.example:4317"}, wantEnabled: true, wantService: "acr-api", wantVersion: testCommit},
 		{name: "disabled without endpoint is fine", values: map[string]string{EnvEnabled: "false"}, wantService: "acr-api", wantVersion: testCommit},
 		{name: "service name override", values: map[string]string{EnvServiceName: " acr-api-canary "}, wantService: "acr-api-canary", wantVersion: testCommit},
 		{name: "blank service name keeps default", values: map[string]string{EnvServiceName: "  "}, wantService: "acr-api", wantVersion: testCommit},
@@ -117,7 +122,7 @@ func TestConfigFromEnvDomain(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("err = %v, want %q", err, tc.wantErr)
 				}
-				if strings.Contains(err.Error(), "collector") {
+				if strings.Contains(err.Error(), "otlp-fixture.example") {
 					t.Fatalf("error leaks a value: %v", err)
 				}
 				return

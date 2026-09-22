@@ -840,6 +840,19 @@ for pair in 'api|component: api|  name: [^\n]*-mcp\n' 'mcp|  name: [^\n]*-mcp\n|
   grep -Pzq 'protocol: TCP\n\s+port: 4317\n' <<<"$np" || fail_gate "otel: ${who} NetworkPolicy does not admit TCP egress to the collector port"
 done
 pass "otel: enabled render admits TCP collector egress from the api and mcp NetworkPolicies"
+# The projector exports too. Today no NetworkPolicy selects its pods, so its
+# egress is unrestricted; if one is ever added it must carry the collector
+# port, or the projector goes dark with the chart still reporting enabled.
+otel_projector="$(render "${otel_base[@]}" --set otel.enabled=true --set-string otel.endpoint=http://10.0.0.151:4317 --set networkPolicy.enabled=true)"
+projector_np="$(extract_doc NetworkPolicy 'component: projector' <<<"$otel_projector")"
+if [[ -n "$projector_np" ]]; then
+  grep -Pzq 'protocol: TCP\n\s+port: 4317\n' <<<"$projector_np" || fail_gate "otel: a NetworkPolicy now selects the projector but does not admit TCP egress to the collector port"
+  pass "otel: the projector NetworkPolicy admits TCP collector egress"
+else
+  grep -qF 'OTEL_ENABLED: "true"' <<<"$(extract_doc ConfigMap '  name: [^\n]*-projector-config\n' <<<"$otel_projector")" \
+    || fail_gate "otel: projector ConfigMap does not enable export, so the unrestricted-egress claim below pins nothing"
+  pass "otel: the projector exports with no NetworkPolicy selecting its pods (egress unrestricted by construction)"
+fi
 otel_endpoint_must_fail() {
   local name="$1" expect="$2"; shift 2
   local out status
@@ -852,6 +865,7 @@ otel_endpoint_must_fail "enabled without an endpoint" "otel.endpoint"
 otel_endpoint_must_fail "enabled with an empty endpoint" "otel.endpoint" --set-string otel.endpoint=
 otel_endpoint_must_fail "enabled with a whitespace endpoint" "/otel/endpoint" --set-string 'otel.endpoint=   '
 otel_endpoint_must_fail "enabled with a schemeless endpoint" "/otel/endpoint" --set-string otel.endpoint=10.0.0.151:4317
+otel_endpoint_must_fail "enabled with a hostless endpoint" "/otel/endpoint" --set-string otel.endpoint=http://:4317
 otel_endpoint_must_fail "enabled with a blank service name" "otel.serviceNames" --set-string otel.endpoint=http://collector:4317 --set-string 'otel.serviceNames.api= '
 
 printf 'RESULT: happy path passed all gates\n'

@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -91,8 +92,16 @@ func ConfigFromEnv(lookup func(string) (string, bool), defaultServiceName string
 		return Config{}, fmt.Errorf("%s must be a boolean", EnvEnabled)
 	}
 	if enabled {
-		if endpoint, ok := lookup(EnvEndpoint); !ok || strings.TrimSpace(endpoint) == "" {
+		endpoint, ok := lookup(EnvEndpoint)
+		endpoint = strings.TrimSpace(endpoint)
+		if !ok || endpoint == "" {
 			return Config{}, fmt.Errorf("%s=true requires %s", EnvEnabled, EnvEndpoint)
+		}
+		// A hostless endpoint ("http://:4317") parses, and the OTLP exporter
+		// then dials this pod's own loopback: the process looks configured
+		// while every export is refused locally. Fail at startup instead.
+		if parsed, err := url.Parse(endpoint); err != nil || parsed.Hostname() == "" {
+			return Config{}, fmt.Errorf("%s must name a collector host", EnvEndpoint)
 		}
 	}
 	cfg.Enabled = enabled
