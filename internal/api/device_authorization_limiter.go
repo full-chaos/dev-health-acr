@@ -12,9 +12,12 @@ const (
 	deviceCreationLimit            = 10
 	tokenRequestLimit              = 60
 	approvalAttemptLimit           = 5
-	// oauthConsentCheckLimit bounds the OAuth consent page's approval checks
-	// per client IP: the page checks every 3 s, 20 a minute per open page.
-	oauthConsentCheckLimit         = 60
+	// oauthConsentRequestLimit bounds the web consent page's requests per
+	// OAuth request handle (a login makes a preview and one decision). It is
+	// keyed by the handle, never the peer address: every consent request
+	// comes from the web server, and behind the ingress every public caller
+	// shares one peer address, so an address key throttles all users at once.
+	oauthConsentRequestLimit       = 20
 	defaultDeviceAuthorizationKeys = 4096
 )
 
@@ -35,7 +38,8 @@ type DeviceAuthorizationLimiter interface {
 	AllowDeviceCreation(string) DeviceAuthorizationLimitDecision
 	AllowTokenRequest(string) DeviceAuthorizationLimitDecision
 	AllowApprovalAttempt(string, storage.UserCodeHash) DeviceAuthorizationLimitDecision
-	AllowOAuthConsentCheck(string) DeviceAuthorizationLimitDecision
+	// AllowOAuthConsentRequest takes the SHA-256 of the request handle.
+	AllowOAuthConsentRequest(storage.OAuthSecretHash) DeviceAuthorizationLimitDecision
 }
 
 type DeviceAuthorizationLimiterOptions struct {
@@ -81,8 +85,8 @@ func (l *deviceAuthorizationLimiter) AllowApprovalAttempt(ip string, userCode st
 	return l.allow("device:approve\x00"+ip+"\x00"+userCode.String(), approvalAttemptLimit)
 }
 
-func (l *deviceAuthorizationLimiter) AllowOAuthConsentCheck(ip string) DeviceAuthorizationLimitDecision {
-	return l.allow("oauth:consent\x00"+ip, oauthConsentCheckLimit)
+func (l *deviceAuthorizationLimiter) AllowOAuthConsentRequest(handle storage.OAuthSecretHash) DeviceAuthorizationLimitDecision {
+	return l.allow("oauth:consent\x00"+handle.String(), oauthConsentRequestLimit)
 }
 
 func (l *deviceAuthorizationLimiter) allow(key string, limit int) DeviceAuthorizationLimitDecision {

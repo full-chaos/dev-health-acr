@@ -257,9 +257,6 @@ var oauthConsentStatus = map[string]int{
 // and the repositories an approval grants come from the web, never the
 // browser that holds the handle.
 func (a *App) handleOAuthConsent(w http.ResponseWriter, r *http.Request) {
-	if a.oauthRateLimited(w, r, oauthvocab.StepConsent, a.runtime.DeviceAuthorizationLimiter.AllowOAuthConsentCheck) {
-		return
-	}
 	request, ok := decodeOAuthConsentBody(w, r)
 	step := oauthvocab.StepConsent
 	if ok && request.Action == oauthConsentActionPreview {
@@ -268,6 +265,14 @@ func (a *App) handleOAuthConsent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		writeOAuthJSON(w, http.StatusBadRequest, oauthErrorBody{Error: auth.OAuthConsentCodeInvalid})
 		a.emitOAuthStep(r, step, oauthvocab.OutcomeInvalidRequest, "", http.StatusBadRequest)
+		return
+	}
+	// Limited per request handle: see oauthConsentRequestLimit.
+	if decision := a.runtime.DeviceAuthorizationLimiter.AllowOAuthConsentRequest(storage.HashOAuthSecret(request.Handle)); !decision.Allowed {
+		seconds := max(1, int((decision.RetryAfter+time.Second-1)/time.Second))
+		w.Header().Set("Retry-After", strconv.Itoa(seconds))
+		writeOAuthJSON(w, http.StatusTooManyRequests, oauthErrorBody{Error: "slow_down", ErrorDescription: "too many requests"})
+		a.emitOAuthStep(r, step, oauthvocab.OutcomeRateLimited, "", http.StatusTooManyRequests)
 		return
 	}
 	principal, found := auth.PrincipalFromContext(r.Context())

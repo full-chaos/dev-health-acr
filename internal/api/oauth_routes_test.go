@@ -578,22 +578,40 @@ func TestOAuthTokenRefusesNonFormAndRepeatedParameters(t *testing.T) {
 	}
 }
 
-func TestOAuthConsentChecksAreRateLimitedPerIP(t *testing.T) {
+// The consent limiter keys on the request handle, never the peer address:
+// every consent request comes from the web server (one peer address, and
+// behind the ingress every public user shares it), so many logins through
+// one address are never throttled together, and one handle over its limit is.
+func TestOAuthConsentIsRateLimitedPerHandleNotPerAddress(t *testing.T) {
 	app, logs, err := newOAuthTestApp(t, &OAuthRuntime{Issuer: oauthTestIssuer, Resources: []string{oauthTestResource}}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	statuses := map[int]int{}
 	jti := 0
-	for range 70 {
+	preview := func(handle string) int {
 		jti++
-		recorder, _ := serveConsent(app, consentRequest(t, map[string]any{"action": "preview", "handle": strings.Repeat("A", 43)}, []string{"*"}, "rl"+strconv.Itoa(jti)))
-		statuses[recorder.Code]++
+		request := consentRequest(t, map[string]any{"action": "preview", "handle": handle}, []string{"*"}, "rl"+strconv.Itoa(jti))
+		request.RemoteAddr = "10.42.0.7:40000" // the one ingress pod every request arrives from
+		recorder, _ := serveConsent(app, request)
+		return recorder.Code
 	}
-	if statuses[http.StatusBadRequest] != 60 || statuses[http.StatusTooManyRequests] != 10 {
-		t.Fatalf("70 consent requests from one IP: statuses %v, want 60x400 then 10x429", statuses)
+	// 70 distinct handles (70 logins) through one address: none throttled.
+	for i := range 70 {
+		handle := base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat(string(rune('a'+i%26)), 31) + string(rune('A'+i/26))))
+		if status := preview(handle); status != http.StatusBadRequest {
+			t.Fatalf("login %d through one address: status %d, want 400 (unknown handle, not throttled)", i, status)
+		}
 	}
-	if count := strings.Count(logs.String(), `"step":"consent","outcome":"rate_limited"`); count != 10 {
-		t.Fatalf("consent rate_limited lines = %d, want 10", count)
+	// One handle: 20 requests a minute, then 429 with Retry-After.
+	handle := strings.Repeat("B", 43)
+	statuses := map[int]int{}
+	for range 25 {
+		statuses[preview(handle)]++
+	}
+	if statuses[http.StatusBadRequest] != 20 || statuses[http.StatusTooManyRequests] != 5 {
+		t.Fatalf("25 requests for one handle: statuses %v, want 20x400 then 5x429", statuses)
+	}
+	if count := strings.Count(logs.String(), `"step":"consent_preview","outcome":"rate_limited"`); count != 5 {
+		t.Fatalf("consent rate_limited lines = %d, want 5", count)
 	}
 }
