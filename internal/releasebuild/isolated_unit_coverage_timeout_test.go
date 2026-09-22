@@ -3,6 +3,7 @@ package releasebuild
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -97,8 +98,8 @@ func TestUnitCoverageShard_appliesExtendedTimeoutToIsolatedPackages(t *testing.T
 	if !strings.Contains(unitStep, "test-shard.sh --with-isolated") {
 		t.Fatalf("unit job step must still shard with --with-isolated; step:\n%s", unitStep)
 	}
-	if !strings.Contains(unitStep, "scripts/ci/test-shard.sh isolated)") {
-		t.Fatalf("unit job step must check the shard's packages against scripts/ci/test-shard.sh isolated to detect one sharing this shard; step:\n%s", unitStep)
+	if !strings.Contains(unitStep, "scripts/ci/test-shard.sh --print-isolated-packages") {
+		t.Fatalf("unit job step must check the shard's packages against scripts/ci/test-shard.sh --print-isolated-packages to detect one sharing this shard -- NOT the bare `isolated` subcommand, which scripts/ci/test-workflow-contract.sh's check_isolated_devhealthschema_job reads as \"this job runs the isolated set for real\" and would misclassify/double-count the unit job; step:\n%s", unitStep)
 	}
 	if !strings.Contains(unitStep, "make -s isolated-timeout") {
 		t.Fatalf("unit job step must read the per-package budget from `make isolated-timeout`, not a second hard-coded copy; step:\n%s", unitStep)
@@ -108,6 +109,40 @@ func TestUnitCoverageShard_appliesExtendedTimeoutToIsolatedPackages(t *testing.T
 	}
 	if !strings.Contains(unitStep, `if [ -n "$isolated_timeout" ]`) || !strings.Contains(unitStep, "else") {
 		t.Fatalf("unit job step must apply the override conditionally -- only when the shard drew an isolated package -- keeping an unconditional branch for shards that draw none; step:\n%s", unitStep)
+	}
+
+	// CHAOS-6220 own trap: a bare `test-shard.sh isolated` (or
+	// `isolated-<suffix>`) call anywhere in the unit job's block is read by
+	// scripts/ci/test-workflow-contract.sh's check_isolated_devhealthschema_job
+	// as "this job RUNS the isolated set for real" -- it would misclassify
+	// `unit` alongside race-devhealthschema/race-devhealthfacts, double-count
+	// it into that checker's coverage union, and silently defeat its negative
+	// control for a real dedicated job going missing (proven while building
+	// this fix: `bash scripts/ci/test-workflow-contract.sh` failed exactly
+	// this way with the bare form, and passed identically to an untouched
+	// origin/main control once switched to the flag below).
+	bareIsolatedCall := regexp.MustCompile(`test-shard\.sh[[:space:]]+isolated(-[a-z]+)?\b`)
+	if bareIsolatedCall.MatchString(unitStep) {
+		t.Fatalf("unit job step must not call a bare `isolated`/`isolated-<suffix>` test-shard.sh subcommand -- use --print-isolated-packages instead, see scripts/ci/test-shard.sh's own comment on that flag; step:\n%s", unitStep)
+	}
+
+	// scripts/ci/test-shard.sh must actually define --print-isolated-packages
+	// as the same listing as `isolated`, not a second hand-maintained list.
+	shardScript, err := os.ReadFile(filepath.Join(repoRoot, "scripts", "ci", "test-shard.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	shardSrc := string(shardScript)
+	flagIdx := strings.Index(shardSrc, `"$1" = "--print-isolated-packages"`)
+	if flagIdx < 0 {
+		t.Fatalf(`scripts/ci/test-shard.sh must define a --print-isolated-packages flag`)
+	}
+	flagBlock := shardSrc[flagIdx:]
+	if end := strings.Index(flagBlock, "fi"); end >= 0 {
+		flagBlock = flagBlock[:end]
+	}
+	if !strings.Contains(flagBlock, `"${isolated_packages[*]}"`) {
+		t.Fatalf("--print-isolated-packages must print isolated_packages itself, not a separate hand-maintained list; block:\n%s", flagBlock)
 	}
 }
 

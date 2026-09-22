@@ -370,7 +370,7 @@ jobs:
           # is the single source both this job and test-split/test-race-isolated
           # (Makefile) read the per-package budget from.
           isolated_timeout=""
-          for isolated_pkg in $(scripts/ci/test-shard.sh isolated); do
+          for isolated_pkg in $(scripts/ci/test-shard.sh --print-isolated-packages); do
             case " $packages " in
               *" $isolated_pkg "*)
                 pkg_timeout="$(make -s isolated-timeout PKG="$isolated_pkg")"
