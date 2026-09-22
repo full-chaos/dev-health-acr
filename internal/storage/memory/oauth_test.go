@@ -156,9 +156,17 @@ func TestOAuthStore_RegisterClient_noRedirectURIsIsValid(t *testing.T) {
 	// When
 	registered, err := fixture.store.RegisterClient(context.Background(), client)
 
-	// Then
+	// Then: normalized to [] (never bare nil) -- the Postgres adapter can
+	// never persist or return a bare nil for this field (its jsonb column
+	// requires a JSON array), so this adapter must not observably diverge.
 	require.NoError(t, err)
+	require.NotNil(t, registered.RedirectURIs)
 	require.Empty(t, registered.RedirectURIs)
+
+	fetched, err := fixture.store.GetClient(context.Background(), client.ClientID)
+	require.NoError(t, err)
+	require.NotNil(t, fetched.RedirectURIs)
+	require.Empty(t, fetched.RedirectURIs)
 }
 
 func TestOAuthStore_CreateAuthorizationRequest_invalidInputIsInvalidError(t *testing.T) {
