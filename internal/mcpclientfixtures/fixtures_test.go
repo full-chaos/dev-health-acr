@@ -85,3 +85,34 @@ func TestJSONFixturesInvokeServeWithNoOtherArgs(t *testing.T) {
 		}
 	}
 }
+
+// TestClientSkillsCoverTheInvestigationFlow: every packaged STDIO skill names
+// the investigate -> result -> evidence tools, the receipt handoff, and the
+// untrusted-content rule. The STDIO package contract (mcp_commands, enabled
+// tools) is unchanged and asserted by the package-tree tests. Remote (hosted)
+// server client configuration and skill text now live in the public
+// context-fabric-agents repo (CHAOS-6209), so this no longer asserts
+// remote-only content such as repository.slug.
+func TestClientSkillsCoverTheInvestigationFlow(t *testing.T) {
+	root := findRepoRoot(t)
+	skills := []string{
+		"clients/claude-code/marketplace/plugins/context-fabric/skills/context-fabric/SKILL.md",
+		"clients/codex/marketplace/plugins/context-fabric/skills/context-fabric/SKILL.md",
+		"clients/opencode/config/skills/context-fabric/SKILL.md",
+		"clients/cursor/skills/context-fabric/SKILL.md",
+	}
+	for _, rel := range skills {
+		t.Run(rel, func(t *testing.T) {
+			text := string(readDoc(t, root, rel))
+			for _, needle := range []string{
+				"context_for_task", "source_evidence", "investigate_question", "investigation_result",
+				"parent_result_id", "prior_*_receipts", "single `evidence_ref_id` argument", "acr://guide/", "untrusted",
+				"context-fabric-agents",
+			} {
+				if !strings.Contains(text, needle) {
+					t.Errorf("%s lacks %q", rel, needle)
+				}
+			}
+		})
+	}
+}
