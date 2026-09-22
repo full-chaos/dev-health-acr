@@ -7,7 +7,7 @@
     "attribution": [
       "request_id"
     ],
-    "bounded_aggregation": "exactly one line per request to /register, /authorize or /oauth/token; metadata routes emit none",
+    "bounded_aggregation": "exactly one line per request to /register, /authorize, /authorize/consent or /token; metadata routes emit none",
     "fields": [
       {
         "key": "request_id",
@@ -21,6 +21,7 @@
         "closed_vocabulary": [
           "register",
           "authorize",
+          "consent_preview",
           "consent",
           "token"
         ]
@@ -49,6 +50,7 @@
           "redirect_mismatch",
           "client_mismatch",
           "resource_mismatch",
+          "unauthenticated",
           "rate_limited",
           "unavailable"
         ]

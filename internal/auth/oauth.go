@@ -182,6 +182,33 @@ func ValidOAuthIssuer(value string) bool {
 	}
 }
 
+// ValidOAuthConsentURL accepts the web consent page URL /authorize redirects
+// to: https (or http on a loopback host, for tests), a host, a non-root path,
+// and no user info, query or fragment, so exactly one handle parameter is
+// appended. internal/config applies the same rule to ACR_OAUTH_CONSENT_URL
+// (a test pins the two against one table).
+func ValidOAuthConsentURL(value string) bool {
+	// A bare "?" or "#" parses to an empty query or fragment, so refuse the
+	// characters themselves: the handle must be the only query parameter.
+	if strings.ContainsAny(value, "?#") {
+		return false
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" ||
+		parsed.Path == "" || parsed.Path == "/" {
+		return false
+	}
+	switch parsed.Scheme {
+	case "https":
+		return true
+	case "http":
+		host := parsed.Hostname()
+		return host == "localhost" || host == "127.0.0.1" || host == "::1"
+	default:
+		return false
+	}
+}
+
 // Issuer returns the authorization server identifier.
 func (s *OAuthService) Issuer() string { return s.issuer }
 
@@ -313,11 +340,10 @@ type OAuthAuthorizeRequest struct {
 	State               string
 }
 
-// OAuthAuthorization is a started authorization: the browser handle the
-// consent page checks with and the user code the user approves.
+// OAuthAuthorization is a started authorization: the browser handle the web
+// consent page decides it with.
 type OAuthAuthorization struct {
 	Handle    string
-	UserCode  string
 	ExpiresAt time.Time
 	Client    OAuthResolvedClient
 	Resource  string
@@ -384,7 +410,7 @@ func (s *OAuthService) Authorize(ctx context.Context, request OAuthAuthorizeRequ
 	if err != nil {
 		return OAuthAuthorization{}, fmt.Errorf("%w: store authorization request", ErrOAuthUnavailable)
 	}
-	return OAuthAuthorization{Handle: handle, UserCode: device.UserCode, ExpiresAt: device.ExpiresAt, Client: client, Resource: resource, Scope: scope}, nil
+	return OAuthAuthorization{Handle: handle, ExpiresAt: device.ExpiresAt, Client: client, Resource: resource, Scope: scope}, nil
 }
 
 // resolveResource returns the resource a request binds to: the one it named,
@@ -403,69 +429,183 @@ func (s *OAuthService) resolveResource(requested string) (string, bool) {
 	return "", false
 }
 
-// OAuthConsentState is what the consent page learns on each check.
-type OAuthConsentState string
-
+// Consent refusals the web consent page shows. Each is an OAuthError whose
+// Code the consent route returns and whose Outcome the telemetry line carries.
 const (
-	OAuthConsentPending  OAuthConsentState = "pending"
-	OAuthConsentApproved OAuthConsentState = "approved"
-	OAuthConsentDenied   OAuthConsentState = "denied"
-	OAuthConsentExpired  OAuthConsentState = "expired"
+	// OAuthConsentCodeInvalid: no request has this handle, or the decision
+	// itself is not allowed (repositories outside the approver's grant).
+	OAuthConsentCodeInvalid = "invalid_request"
+	// OAuthConsentCodeExpired: the request outlived its ten minutes.
+	OAuthConsentCodeExpired = "expired"
+	// OAuthConsentCodeCompleted: the request was already decided.
+	OAuthConsentCodeCompleted = "already_completed"
 )
 
-// OAuthConsent is the result of one consent check. RedirectURL is set when
-// the browser must now go back to the client: with a code once approved, or
-// with access_denied once denied.
-type OAuthConsent struct {
-	State       OAuthConsentState
+// OAuthConsentRequest is what the web consent page shows before the signed-in
+// user decides: who is asking, where the browser returns, and for what.
+type OAuthConsentRequest struct {
+	ClientName string
+	ClientKind string
+	// RedirectOrigin is the scheme, host and port of the verified redirect
+	// URI: where the browser goes after the decision.
+	RedirectOrigin string
+	Resource       string
+	Scopes         []string
+	ExpiresAt      time.Time
+}
+
+// OAuthConsentDecision is a recorded decision. RedirectURL is the client's
+// registered redirect URI with code (approved) or error=access_denied
+// (denied), state and iss.
+type OAuthConsentDecision struct {
 	RedirectURL string
 	ClientKind  string
 }
 
-// Consent checks the approval of the request behind a browser handle. The
-// first check after approval issues the one authorization code; the store
-// attaches a code only to a request that has none, so every later check is
-// already_completed and a code is never issued twice.
-func (s *OAuthService) Consent(ctx context.Context, handle string) (OAuthConsent, error) {
-	if len(handle) == 0 || len(handle) > 128 {
-		return OAuthConsent{}, oauthError("invalid_request", oauthvocab.OutcomeInvalidRequest, false)
+const oauthConsentDecisionRedacted = "auth.OAuthConsentDecision{redacted}"
+
+func (OAuthConsentDecision) String() string   { return oauthConsentDecisionRedacted }
+func (OAuthConsentDecision) GoString() string { return oauthConsentDecisionRedacted }
+
+// pendingConsent returns the undecided, unexpired request behind a handle.
+// The returned client kind is set whenever the request was found, so refusals
+// after that point still report it. With resumable, a request whose approval
+// was recorded but whose code was never attached (a failure between the two)
+// is also returned, so the approving user can finish it; the consent
+// authority accepts that approval again only from the same user
+// (ApproveForOAuth), and a request with a code is never returned.
+func (s *OAuthService) pendingConsent(ctx context.Context, handle string, resumable bool) (storage.OAuthAuthorizationRequest, error) {
+	if !validOAuthHandle(handle) {
+		return storage.OAuthAuthorizationRequest{}, oauthError(OAuthConsentCodeInvalid, oauthvocab.OutcomeInvalidRequest, false)
 	}
 	request, err := s.store.GetAuthorizationRequest(ctx, storage.HashOAuthSecret(handle))
 	if errors.Is(err, storage.ErrNotFound) {
-		return OAuthConsent{}, oauthError("invalid_request", oauthvocab.OutcomeInvalidRequest, false)
+		return storage.OAuthAuthorizationRequest{}, oauthError(OAuthConsentCodeInvalid, oauthvocab.OutcomeInvalidRequest, false)
 	}
 	if err != nil {
-		return OAuthConsent{}, fmt.Errorf("%w: read authorization request", ErrOAuthUnavailable)
+		return storage.OAuthAuthorizationRequest{}, fmt.Errorf("%w: read authorization request", ErrOAuthUnavailable)
 	}
-	now := s.now().UTC()
-	if !request.ExpiresAt.After(now) {
-		return OAuthConsent{State: OAuthConsentExpired, ClientKind: request.ClientKind}, nil
+	if request.CodeHash != nil {
+		return request, oauthError(OAuthConsentCodeCompleted, oauthvocab.OutcomeAlreadyCompleted, false)
+	}
+	if !request.ExpiresAt.After(s.now().UTC()) {
+		return request, oauthError(OAuthConsentCodeExpired, oauthvocab.OutcomeExpired, false)
 	}
 	state, err := s.devices.StateForOAuth(ctx, request.DeviceCodeHash)
 	if err != nil {
-		return OAuthConsent{}, fmt.Errorf("%w: read consent", ErrOAuthUnavailable)
+		return request, fmt.Errorf("%w: read consent", ErrOAuthUnavailable)
 	}
 	switch state {
 	case OAuthDeviceStatePending:
-		return OAuthConsent{State: OAuthConsentPending, ClientKind: request.ClientKind}, nil
-	case OAuthDeviceStateDenied:
-		return OAuthConsent{State: OAuthConsentDenied, ClientKind: request.ClientKind, RedirectURL: s.redirectURL(request, url.Values{"error": {"access_denied"}})}, nil
+		return request, nil
 	case OAuthDeviceStateApproved:
+		if resumable {
+			return request, nil
+		}
+		return request, oauthError(OAuthConsentCodeCompleted, oauthvocab.OutcomeAlreadyCompleted, false)
+	case OAuthDeviceStateExpired:
+		return request, oauthError(OAuthConsentCodeExpired, oauthvocab.OutcomeExpired, false)
 	default:
-		return OAuthConsent{State: OAuthConsentExpired, ClientKind: request.ClientKind}, nil
+		return request, oauthError(OAuthConsentCodeCompleted, oauthvocab.OutcomeAlreadyCompleted, false)
+	}
+}
+
+// validOAuthHandle accepts the shape Authorize issues: 32 random bytes,
+// base64url without padding.
+func validOAuthHandle(handle string) bool {
+	if len(handle) != base64.RawURLEncoding.EncodedLen(oauthHandleBytes) {
+		return false
+	}
+	_, err := base64.RawURLEncoding.DecodeString(handle)
+	return err == nil
+}
+
+// ConsentRequest returns what the web consent page shows for an undecided
+// request.
+func (s *OAuthService) ConsentRequest(ctx context.Context, handle string) (OAuthConsentRequest, string, error) {
+	request, err := s.pendingConsent(ctx, handle, true)
+	if err != nil {
+		return OAuthConsentRequest{}, request.ClientKind, err
+	}
+	client, err := s.ResolveClient(ctx, request.ClientID)
+	if err != nil {
+		var refusal *OAuthError
+		if errors.As(err, &refusal) {
+			return OAuthConsentRequest{}, request.ClientKind, oauthError(OAuthConsentCodeInvalid, oauthvocab.OutcomeInvalidClient, false)
+		}
+		return OAuthConsentRequest{}, request.ClientKind, err
+	}
+	origin, err := redirectOrigin(request.RedirectURI)
+	if err != nil {
+		return OAuthConsentRequest{}, request.ClientKind, fmt.Errorf("%w: stored redirect uri", ErrOAuthUnavailable)
+	}
+	return OAuthConsentRequest{
+		ClientName: client.Name, ClientKind: request.ClientKind, RedirectOrigin: origin,
+		Resource: request.Resource, Scopes: strings.Fields(request.Scope), ExpiresAt: request.ExpiresAt.UTC(),
+	}, request.ClientKind, nil
+}
+
+func redirectOrigin(raw string) (string, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", ErrOAuthUnavailable
+	}
+	return parsed.Scheme + "://" + parsed.Host, nil
+}
+
+// ApproveConsent records the signed-in user's approval of the request behind
+// a handle (org from the principal, the chosen repositories within the
+// principal's grant) and issues its one authorization code. A request is
+// decided at most once: once a code is attached, or after a deny, every
+// later decision is already_completed. If attaching the code fails after the
+// approval was recorded, the same user can approve again to finish.
+func (s *OAuthService) ApproveConsent(ctx context.Context, handle string, principal storage.Principal, repositoryScopes []string) (OAuthConsentDecision, error) {
+	request, err := s.pendingConsent(ctx, handle, true)
+	if err != nil {
+		return OAuthConsentDecision{ClientKind: request.ClientKind}, err
+	}
+	if err := s.devices.ApproveForOAuth(ctx, principal, request.DeviceCodeHash, repositoryScopes); err != nil {
+		return OAuthConsentDecision{ClientKind: request.ClientKind}, consentDecisionError(err)
 	}
 	code, err := s.secret(oauthCodeBytes)
 	if err != nil {
-		return OAuthConsent{}, ErrOAuthUnavailable
+		return OAuthConsentDecision{ClientKind: request.ClientKind}, ErrOAuthUnavailable
 	}
-	_, err = s.store.IssueAuthorizationCode(ctx, request.HandleHash, storage.HashOAuthSecret(code), now.Add(storage.OAuthAuthorizationCodeTTL))
-	if errors.Is(err, storage.ErrConflict) {
-		return OAuthConsent{ClientKind: request.ClientKind}, oauthError("invalid_request", oauthvocab.OutcomeAlreadyCompleted, false)
+	_, err = s.store.IssueAuthorizationCode(ctx, request.HandleHash, storage.HashOAuthSecret(code), s.now().UTC().Add(storage.OAuthAuthorizationCodeTTL))
+	if errors.Is(err, storage.ErrConflict) || errors.Is(err, storage.ErrNotFound) {
+		return OAuthConsentDecision{ClientKind: request.ClientKind}, oauthError(OAuthConsentCodeCompleted, oauthvocab.OutcomeAlreadyCompleted, false)
 	}
 	if err != nil {
-		return OAuthConsent{}, fmt.Errorf("%w: issue code", ErrOAuthUnavailable)
+		return OAuthConsentDecision{ClientKind: request.ClientKind}, fmt.Errorf("%w: issue code", ErrOAuthUnavailable)
 	}
-	return OAuthConsent{State: OAuthConsentApproved, ClientKind: request.ClientKind, RedirectURL: s.redirectURL(request, url.Values{"code": {code}})}, nil
+	return OAuthConsentDecision{ClientKind: request.ClientKind, RedirectURL: s.redirectURL(request, url.Values{"code": {code}})}, nil
+}
+
+// DenyConsent records the signed-in user's denial; the browser returns to the
+// client with error=access_denied.
+func (s *OAuthService) DenyConsent(ctx context.Context, handle string, principal storage.Principal) (OAuthConsentDecision, error) {
+	request, err := s.pendingConsent(ctx, handle, false)
+	if err != nil {
+		return OAuthConsentDecision{ClientKind: request.ClientKind}, err
+	}
+	if err := s.devices.DenyForOAuth(ctx, principal, request.DeviceCodeHash); err != nil {
+		return OAuthConsentDecision{ClientKind: request.ClientKind}, consentDecisionError(err)
+	}
+	return OAuthConsentDecision{ClientKind: request.ClientKind, RedirectURL: s.redirectURL(request, url.Values{"error": {"access_denied"}})}, nil
+}
+
+// consentDecisionError maps a consent authority failure to its refusal.
+func consentDecisionError(err error) error {
+	switch {
+	case errors.Is(err, ErrInvalidDeviceFlow):
+		return oauthError(OAuthConsentCodeInvalid, oauthvocab.OutcomeInvalidRequest, false)
+	case errors.Is(err, storage.ErrDeviceAuthorizationConflict):
+		return oauthError(OAuthConsentCodeCompleted, oauthvocab.OutcomeAlreadyCompleted, false)
+	case errors.Is(err, storage.ErrDeviceAuthorizationExpired), errors.Is(err, storage.ErrDeviceAuthorizationNotFound):
+		return oauthError(OAuthConsentCodeExpired, oauthvocab.OutcomeExpired, false)
+	default:
+		return fmt.Errorf("%w: record consent", ErrOAuthUnavailable)
+	}
 }
 
 func (s *OAuthService) redirectURL(request storage.OAuthAuthorizationRequest, values url.Values) string {

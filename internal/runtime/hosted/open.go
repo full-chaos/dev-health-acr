@@ -1242,7 +1242,7 @@ func oauthRuntime(cfg config.Config, store storage.OAuthStore) *api.OAuthRuntime
 	if !cfg.OAuthConfigured() {
 		return nil
 	}
-	runtime := &api.OAuthRuntime{Store: store, Issuer: cfg.OAuthIssuer, Resources: append([]string(nil), cfg.OAuthResources...)}
+	runtime := &api.OAuthRuntime{Store: store, Issuer: cfg.OAuthIssuer, Resources: append([]string(nil), cfg.OAuthResources...), ConsentURL: cfg.OAuthConsentURL}
 	if cfg.OAuthClientMetadataDocuments {
 		runtime.ClientMetadata = auth.NewPublicClientMetadataFetcher()
 	}

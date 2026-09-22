@@ -232,6 +232,10 @@ type Config struct {
 	// OAuthResources (ACR_OAUTH_RESOURCES, comma separated) are the hosted
 	// MCP endpoint URLs an OAuth credential may be bound to.
 	OAuthResources []string
+	// OAuthConsentURL (ACR_OAUTH_CONSENT_URL) is the web consent page
+	// /authorize sends the browser to, with the request's handle as the
+	// handle query parameter, e.g. https://www.example.com/acr/authorize.
+	OAuthConsentURL string
 	// OAuthClientMetadataDocuments (ACR_OAUTH_CLIENT_METADATA_DOCUMENTS,
 	// default true) accepts client ID metadata documents as client IDs.
 	OAuthClientMetadataDocuments bool
@@ -303,6 +307,7 @@ func load(lookup lookupEnv) (Config, error) {
 		DeviceVerificationURL:          stringValue(lookup, "ACR_DEVICE_VERIFICATION_URL", ""),
 		OAuthIssuer:                    stringValue(lookup, "ACR_OAUTH_ISSUER", ""),
 		OAuthResources:                 oauthResources(stringValue(lookup, "ACR_OAUTH_RESOURCES", "")),
+		OAuthConsentURL:                stringValue(lookup, "ACR_OAUTH_CONSENT_URL", ""),
 	}
 	// r1 P2 finding 1: the explicit dev opt-out (ACR_LOCAL_COMPOSITION_READY)
 	// must be the ONLY way to turn backing stores off -- a bare

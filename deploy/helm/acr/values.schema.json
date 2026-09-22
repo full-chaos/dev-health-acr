@@ -257,6 +257,7 @@
             "enabled": { "type": "boolean" },
             "issuer": { "type": "string" },
             "resources": { "type": "array", "items": { "type": "string" } },
+            "consentUrl": { "type": "string" },
             "clientMetadataDocuments": { "type": "boolean" }
           }
         }

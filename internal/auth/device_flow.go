@@ -154,22 +154,33 @@ func (s *DeviceFlowService) Approve(ctx context.Context, request DeviceApprovalR
 		return storage.DeviceAuthorization{}, err
 	}
 	userCode, ok := normalizeUserCode(request.UserCode)
-	if !ok || !validDeviceApprovalPrincipal(request.Principal) {
+	if !ok {
 		return storage.DeviceAuthorization{}, ErrInvalidDeviceFlow
 	}
-	repositories, err := NormalizeRepositoryScopes(request.RepositoryScopes)
+	return s.approveUserCodeHash(ctx, request.Principal, storage.HashUserCode(userCode), request.RepositoryScopes)
+}
+
+// approveUserCodeHash approves the pending device authorization behind a user
+// code hash for a web-assertion principal. The device approval page (by the
+// typed user code) and the OAuth consent page (by the request's handle) both
+// approve through it, so both apply the same org and repository rules.
+func (s *DeviceFlowService) approveUserCodeHash(ctx context.Context, principal storage.Principal, userCodeHash storage.UserCodeHash, repositoryScopes []string) (storage.DeviceAuthorization, error) {
+	if !validDeviceApprovalPrincipal(principal) {
+		return storage.DeviceAuthorization{}, ErrInvalidDeviceFlow
+	}
+	repositories, err := NormalizeRepositoryScopes(repositoryScopes)
 	if err != nil {
 		return storage.DeviceAuthorization{}, ErrInvalidDeviceFlow
 	}
-	principalRepositories, err := normalizedPrincipalRepositories(request.Principal)
+	principalRepositories, err := normalizedPrincipalRepositories(principal)
 	if err != nil {
 		return storage.DeviceAuthorization{}, ErrInvalidDeviceFlow
 	}
-	record, err := s.store.Preview(ctx, storage.HashUserCode(userCode))
+	record, err := s.store.Preview(ctx, userCodeHash)
 	if err != nil {
 		return storage.DeviceAuthorization{}, fmt.Errorf("preview device authorization for approval: %w", err)
 	}
-	if record.OrganizationIDHint != "" && record.OrganizationIDHint != request.Principal.OrgID {
+	if record.OrganizationIDHint != "" && record.OrganizationIDHint != principal.OrgID {
 		return storage.DeviceAuthorization{}, ErrInvalidDeviceFlow
 	}
 	organizationWide := slices.Equal(repositories, []string{"*"})
@@ -180,11 +191,11 @@ func (s *DeviceFlowService) Approve(ctx context.Context, request DeviceApprovalR
 	} else if hasRepositoryWildcard(repositories) || !repositoriesWithinGrant(principalRepositories, repositories) {
 		return storage.DeviceAuthorization{}, ErrInvalidDeviceFlow
 	}
-	record, err = s.store.Approve(ctx, storage.HashUserCode(userCode), storage.DeviceAuthorizationGrant{
-		OrgID:                         request.Principal.OrgID,
+	record, err = s.store.Approve(ctx, userCodeHash, storage.DeviceAuthorizationGrant{
+		OrgID:                         principal.OrgID,
 		RepositoryScopes:              repositories,
 		Scopes:                        []string{ScopeContextRead, ScopeEvidenceRead},
-		ApprovingSubject:              request.Principal.Subject,
+		ApprovingSubject:              principal.Subject,
 		ApprovingAuthenticationMethod: storage.AuthenticationMethodWebAssertion,
 	})
 	if err != nil {

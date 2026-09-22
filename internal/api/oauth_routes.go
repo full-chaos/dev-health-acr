@@ -1,11 +1,14 @@
 package api
 
 import (
+	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"html/template"
+	"io"
 	"mime"
 	"net/http"
 	"net/url"
@@ -31,7 +34,8 @@ const OAuthAuthorizationServerMetadataPath = "/.well-known/oauth-authorization-s
 // OAuthAuthorizePath is the authorization endpoint.
 const OAuthAuthorizePath = "/authorize"
 
-// OAuthConsentPath is where the consent page checks the approval.
+// OAuthConsentPath is where the web consent page (acting for the signed-in
+// user, authenticated by a web assertion) reads and decides a request.
 const OAuthConsentPath = "/authorize/consent"
 
 // OAuthTokenPath is the token endpoint.
@@ -94,11 +98,46 @@ func (a *App) emitOAuthStep(r *http.Request, step, outcome, clientKind string, s
 // emitOAuthStepScopes writes the line with the requested (authorize) or
 // granted (token) scopes.
 func (a *App) emitOAuthStepScopes(r *http.Request, step, outcome, clientKind string, status int, scopes []string) {
+	if marker, ok := r.Context().Value(oauthLineMarkerKey{}).(*oauthLineMarker); ok {
+		marker.emitted = true
+	}
 	if clientKind == "" {
 		clientKind = oauthvocab.ClientKindNone
 	}
 	fields := eventspec.NewOAuthStepFields(RequestID(r.Context()), step, outcome, clientKind, scopes, status)
 	a.logger.InfoContext(r.Context(), eventspec.OAuthStepLogMessage, fields.SlogArgs()...)
+}
+
+type oauthLineMarkerKey struct{}
+
+// oauthLineMarker records whether a request already wrote its OAuth line.
+type oauthLineMarker struct{ emitted bool }
+
+// oauthConsentLine keeps the one-OAuth-line-per-request contract on the
+// consent route, whose web-assertion wrapper answers before the handler runs
+// (401 without a valid assertion, 503 without the approval runtime): any
+// request the handler never reached still writes a consent line, with the
+// outcome its status means.
+func (a *App) oauthConsentLine(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		marker := &oauthLineMarker{}
+		r = r.WithContext(context.WithValue(r.Context(), oauthLineMarkerKey{}, marker))
+		recorder := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(recorder, r)
+		if marker.emitted {
+			return
+		}
+		outcome := oauthvocab.OutcomeInvalidRequest
+		switch {
+		case recorder.status == http.StatusUnauthorized || recorder.status == http.StatusForbidden:
+			outcome = oauthvocab.OutcomeUnauthenticated
+		case recorder.status == http.StatusTooManyRequests:
+			outcome = oauthvocab.OutcomeRateLimited
+		case recorder.status >= http.StatusInternalServerError:
+			outcome = oauthvocab.OutcomeUnavailable
+		}
+		a.emitOAuthStep(r, oauthvocab.StepConsent, outcome, "", recorder.status)
+	})
 }
 
 // oauthOutcome maps a service error to its telemetry outcome and OAuth code.
@@ -205,61 +244,186 @@ func (a *App) handleOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
 		a.emitOAuthStep(r, oauthvocab.StepAuthorize, oauthvocab.OutcomeUnavailable, "", http.StatusServiceUnavailable)
 		return
 	}
-	a.renderOAuthConsent(w, r, authorization)
-	a.emitOAuthStepScopes(r, oauthvocab.StepAuthorize, oauthvocab.OutcomeOK, authorization.Client.Kind, http.StatusOK, strings.Fields(authorization.Scope))
-}
-
-type oauthConsentBody struct {
-	State       string `json:"state"`
-	RedirectURL string `json:"redirect_url,omitempty"`
-}
-
-func (a *App) handleOAuthConsent(w http.ResponseWriter, r *http.Request) {
-	if a.oauthRateLimited(w, r, oauthvocab.StepConsent, a.runtime.DeviceAuthorizationLimiter.AllowOAuthConsentCheck) {
-		return
-	}
-	if err := parseOAuthForm(w, r); err != nil {
-		writeOAuthJSON(w, http.StatusBadRequest, oauthErrorBody{Error: "invalid_request"})
-		a.emitOAuthStep(r, oauthvocab.StepConsent, oauthvocab.OutcomeInvalidRequest, "", http.StatusBadRequest)
-		return
-	}
-	consent, err := a.oauth.Consent(r.Context(), r.PostForm.Get("handle"))
+	// The browser goes straight to the web consent page for this request;
+	// the web signs the user in first when needed and comes back to it.
+	target, err := url.Parse(a.oauthConsentURL)
 	if err != nil {
-		if refusal, ok := oauthOutcome(err); ok {
-			writeOAuthJSON(w, http.StatusBadRequest, oauthErrorBody{Error: refusal.Code})
-			a.emitOAuthStep(r, oauthvocab.StepConsent, refusal.Outcome, consent.ClientKind, http.StatusBadRequest)
+		a.renderOAuthProblem(w, r, http.StatusServiceUnavailable, "Sign-in is temporarily unavailable. Try again in a moment.")
+		a.emitOAuthStep(r, oauthvocab.StepAuthorize, oauthvocab.OutcomeUnavailable, authorization.Client.Kind, http.StatusServiceUnavailable)
+		return
+	}
+	target.RawQuery = url.Values{"handle": {authorization.Handle}}.Encode()
+	target.Fragment, target.RawFragment = "", ""
+	header := w.Header()
+	header.Set("Cache-Control", "no-store")
+	header.Set("Pragma", "no-cache")
+	header.Set("Referrer-Policy", "no-referrer")
+	http.Redirect(w, r, target.String(), http.StatusFound)
+	a.emitOAuthStepScopes(r, oauthvocab.StepAuthorize, oauthvocab.OutcomeOK, authorization.Client.Kind, http.StatusFound, strings.Fields(authorization.Scope))
+}
+
+// oauthConsentRequestBody is what the web consent page sends. preview reads
+// the request; approve and deny decide it, once.
+type oauthConsentRequestBody struct {
+	Action           string   `json:"action"`
+	Handle           string   `json:"handle"`
+	RepositoryScopes []string `json:"repository_scopes,omitempty"`
+}
+
+const (
+	oauthConsentActionPreview = "preview"
+	oauthConsentActionApprove = "approve"
+	oauthConsentActionDeny    = "deny"
+)
+
+type oauthConsentPreviewBody struct {
+	ClientName         string   `json:"client_name"`
+	ClientSelfAsserted bool     `json:"client_self_asserted"`
+	ClientKind         string   `json:"client_kind"`
+	RedirectOrigin     string   `json:"redirect_origin"`
+	Resource           string   `json:"resource"`
+	Scopes             []string `json:"scopes"`
+	ExpiresAt          string   `json:"expires_at"`
+}
+
+type oauthConsentDecisionBody struct {
+	RedirectURL string `json:"redirect_url"`
+}
+
+// oauthConsentStatus maps a consent refusal code to its HTTP status.
+var oauthConsentStatus = map[string]int{
+	auth.OAuthConsentCodeInvalid:   http.StatusBadRequest,
+	auth.OAuthConsentCodeExpired:   http.StatusGone,
+	auth.OAuthConsentCodeCompleted: http.StatusConflict,
+}
+
+// handleOAuthConsent serves the web consent page. The route wrapper admits
+// only a web assertion (credential:issue) for the signed-in user, so the org
+// and the repositories an approval grants come from the web, never the
+// browser that holds the handle.
+func (a *App) handleOAuthConsent(w http.ResponseWriter, r *http.Request) {
+	request, ok := decodeOAuthConsentBody(w, r)
+	step := oauthvocab.StepConsent
+	if ok && request.Action == oauthConsentActionPreview {
+		step = oauthvocab.StepConsentPreview
+	}
+	if !ok {
+		writeOAuthJSON(w, http.StatusBadRequest, oauthErrorBody{Error: auth.OAuthConsentCodeInvalid})
+		a.emitOAuthStep(r, step, oauthvocab.OutcomeInvalidRequest, "", http.StatusBadRequest)
+		return
+	}
+	// Limited per request handle: see oauthConsentRequestLimit.
+	if decision := a.runtime.DeviceAuthorizationLimiter.AllowOAuthConsentRequest(storage.HashOAuthSecret(request.Handle)); !decision.Allowed {
+		seconds := max(1, int((decision.RetryAfter+time.Second-1)/time.Second))
+		w.Header().Set("Retry-After", strconv.Itoa(seconds))
+		writeOAuthJSON(w, http.StatusTooManyRequests, oauthErrorBody{Error: "slow_down", ErrorDescription: "too many requests"})
+		a.emitOAuthStep(r, step, oauthvocab.OutcomeRateLimited, "", http.StatusTooManyRequests)
+		return
+	}
+	principal, found := auth.PrincipalFromContext(r.Context())
+	if !found {
+		writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
+		a.emitOAuthStep(r, step, oauthvocab.OutcomeInvalidRequest, "", http.StatusUnauthorized)
+		return
+	}
+	switch request.Action {
+	case oauthConsentActionPreview:
+		view, clientKind, err := a.oauth.ConsentRequest(r.Context(), request.Handle)
+		if err != nil {
+			a.writeOAuthConsentError(w, r, step, clientKind, err)
 			return
 		}
-		a.logOAuthDependencyFailure(r, oauthvocab.StepConsent)
-		writeOAuthJSON(w, http.StatusServiceUnavailable, oauthErrorBody{Error: "temporarily_unavailable"})
-		a.emitOAuthStep(r, oauthvocab.StepConsent, oauthvocab.OutcomeUnavailable, consent.ClientKind, http.StatusServiceUnavailable)
-		return
-	}
-	outcome := map[auth.OAuthConsentState]string{
-		auth.OAuthConsentPending:  oauthvocab.OutcomePending,
-		auth.OAuthConsentApproved: oauthvocab.OutcomeOK,
-		auth.OAuthConsentDenied:   oauthvocab.OutcomeAccessDenied,
-		auth.OAuthConsentExpired:  oauthvocab.OutcomeExpired,
-	}[consent.State]
-	if r.PostForm.Get("navigate") != "" {
-		// The page's form without script: go back to the application once
-		// there is somewhere to go, otherwise say what is still missing.
-		switch {
-		case consent.RedirectURL != "":
-			w.Header().Set("Cache-Control", "no-store")
-			http.Redirect(w, r, consent.RedirectURL, http.StatusSeeOther)
-			a.emitOAuthStep(r, oauthvocab.StepConsent, outcome, consent.ClientKind, http.StatusSeeOther)
-		case consent.State == auth.OAuthConsentPending:
-			a.renderOAuthProblem(w, r, http.StatusOK, "The request is not approved yet. Go back, approve the code, then continue again.")
-			a.emitOAuthStep(r, oauthvocab.StepConsent, outcome, consent.ClientKind, http.StatusOK)
-		default:
-			a.renderOAuthProblem(w, r, http.StatusOK, "This request expired. Start the sign-in again from the application.")
-			a.emitOAuthStep(r, oauthvocab.StepConsent, outcome, consent.ClientKind, http.StatusOK)
+		writeOAuthJSON(w, http.StatusOK, oauthConsentPreviewBody{
+			ClientName: view.ClientName, ClientSelfAsserted: view.ClientKind == storage.OAuthClientKindDynamic,
+			ClientKind: view.ClientKind, RedirectOrigin: view.RedirectOrigin, Resource: view.Resource,
+			Scopes: view.Scopes, ExpiresAt: view.ExpiresAt.Format(time.RFC3339),
+		})
+		a.emitOAuthStep(r, step, oauthvocab.OutcomeOK, view.ClientKind, http.StatusOK)
+	case oauthConsentActionApprove:
+		decision, err := a.oauth.ApproveConsent(r.Context(), request.Handle, principal, request.RepositoryScopes)
+		if err != nil {
+			a.writeOAuthConsentError(w, r, step, decision.ClientKind, err)
+			return
 		}
+		writeOAuthJSON(w, http.StatusOK, oauthConsentDecisionBody{RedirectURL: decision.RedirectURL})
+		a.emitOAuthStep(r, step, oauthvocab.OutcomeOK, decision.ClientKind, http.StatusOK)
+	case oauthConsentActionDeny:
+		decision, err := a.oauth.DenyConsent(r.Context(), request.Handle, principal)
+		if err != nil {
+			a.writeOAuthConsentError(w, r, step, decision.ClientKind, err)
+			return
+		}
+		writeOAuthJSON(w, http.StatusOK, oauthConsentDecisionBody{RedirectURL: decision.RedirectURL})
+		a.emitOAuthStep(r, step, oauthvocab.OutcomeAccessDenied, decision.ClientKind, http.StatusOK)
+	}
+}
+
+// decodeOAuthConsentBody reads one JSON object with a known action; approve
+// must name repositories, preview and deny must not.
+func decodeOAuthConsentBody(w http.ResponseWriter, r *http.Request) (oauthConsentRequestBody, bool) {
+	var request oauthConsentRequestBody
+	if mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mediaType != "application/json" {
+		return request, false
+	}
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, oauthFormMaxBytes))
+	if err != nil || !uniqueTopLevelJSONKeys(raw) {
+		return oauthConsentRequestBody{}, false
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || decoder.More() {
+		return oauthConsentRequestBody{}, false
+	}
+	switch request.Action {
+	case oauthConsentActionApprove:
+		return request, len(request.RepositoryScopes) > 0
+	case oauthConsentActionPreview, oauthConsentActionDeny:
+		return request, request.RepositoryScopes == nil
+	default:
+		return oauthConsentRequestBody{}, false
+	}
+}
+
+// uniqueTopLevelJSONKeys reports whether raw is one JSON object whose keys
+// are all distinct. encoding/json keeps the last of repeated keys, so
+// {"action":"preview","action":"approve"} would otherwise decode as approve.
+func uniqueTopLevelJSONKeys(raw []byte) bool {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		return false
+	}
+	seen := map[string]struct{}{}
+	for decoder.More() {
+		token, err := decoder.Token()
+		key, ok := token.(string)
+		if err != nil || !ok {
+			return false
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return false
+		}
+		seen[key] = struct{}{}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func (a *App) writeOAuthConsentError(w http.ResponseWriter, r *http.Request, step, clientKind string, err error) {
+	if refusal, ok := oauthOutcome(err); ok {
+		status, known := oauthConsentStatus[refusal.Code]
+		if !known {
+			status = http.StatusBadRequest
+		}
+		writeOAuthJSON(w, status, oauthErrorBody{Error: refusal.Code})
+		a.emitOAuthStep(r, step, refusal.Outcome, clientKind, status)
 		return
 	}
-	writeOAuthJSON(w, http.StatusOK, oauthConsentBody{State: string(consent.State), RedirectURL: consent.RedirectURL})
-	a.emitOAuthStep(r, oauthvocab.StepConsent, outcome, consent.ClientKind, http.StatusOK)
+	a.logOAuthDependencyFailure(r, step)
+	writeOAuthJSON(w, http.StatusServiceUnavailable, oauthErrorBody{Error: "temporarily_unavailable"})
+	a.emitOAuthStep(r, step, oauthvocab.OutcomeUnavailable, clientKind, http.StatusServiceUnavailable)
 }
 
 type oauthTokenBody struct {
@@ -355,61 +519,6 @@ func parseOAuthForm(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// The consent page. It holds the browser handle in the page (never in a URL),
-// shows the user code the user approves on the web approval page, and checks
-// the approval until it can send the browser back to the application.
-var oauthConsentTemplate = template.Must(template.New("consent").Parse(`<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="referrer" content="no-referrer">
-<title>Approve agent access</title>
-<style nonce="{{.Nonce}}">
-body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:36rem;margin:3rem auto;padding:0 1rem;color:#1b1f24;background:#fff}
-@media (prefers-color-scheme:dark){body{color:#e6e8eb;background:#0f1216}a{color:#8ab4ff}}
-.code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:2rem;letter-spacing:.2rem;padding:.5rem 1rem;border:1px solid #8888;border-radius:.5rem;display:inline-block}
-.muted{opacity:.75;font-size:.9rem}
-button{font:inherit;padding:.5rem 1rem;border-radius:.4rem;border:1px solid #8888;cursor:pointer}
-</style>
-</head>
-<body>
-<h1>Approve agent access</h1>
-<p><strong>{{.ClientName}}</strong> is asking for read access to your organization's agent context{{if .Resource}} on <code>{{.Resource}}</code>{{end}}.</p>
-{{if .SelfAsserted}}<p class="muted">The application named itself. Approve only if you started this sign-in.</p>{{end}}
-<ol>
-<li>Open <a href="{{.VerificationURL}}" target="_blank" rel="noopener noreferrer">{{.VerificationURL}}</a> and sign in.</li>
-<li>Enter this code and choose the repositories to share:<br><span class="code" id="user-code">{{.UserCode}}</span></li>
-<li>Come back to this page. It returns you to the application when you have approved.</li>
-</ol>
-<p id="status" role="status">Waiting for approval. The code expires at {{.ExpiresAt}}.</p>
-<form method="post" action="{{.ConsentPath}}" id="continue">
-<input type="hidden" name="handle" value="{{.Handle}}">
-<input type="hidden" name="navigate" value="1">
-<button type="submit">I approved it, continue</button>
-</form>
-<script nonce="{{.Nonce}}">
-(function(){
-var form=document.getElementById("continue"),status=document.getElementById("status"),stopped=false;
-function check(){
-if(stopped)return;
-fetch(form.action,{method:"POST",credentials:"omit",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({handle:form.elements.handle.value})})
-.then(function(r){return r.json();})
-.then(function(b){
-if(b.redirect_url){stopped=true;status.textContent="Approved. Returning to the application.";window.location.assign(b.redirect_url);return;}
-if(b.state==="expired"){stopped=true;status.textContent="This request expired. Start the sign-in again from the application.";return;}
-if(b.error){stopped=true;status.textContent="This request is not valid. Start the sign-in again from the application.";return;}
-setTimeout(check,3000);
-}).catch(function(){setTimeout(check,5000);});
-}
-form.addEventListener("submit",function(e){e.preventDefault();check();});
-setTimeout(check,3000);
-})();
-</script>
-</body>
-</html>
-`))
-
 var oauthProblemTemplate = template.Must(template.New("problem").Parse(`<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer"><title>Sign-in stopped</title>
@@ -435,24 +544,7 @@ func setOAuthPageHeaders(w http.ResponseWriter, nonce string) {
 	header.Set("X-Content-Type-Options", "nosniff")
 	header.Set("X-Frame-Options", "DENY")
 	header.Set("Referrer-Policy", "no-referrer")
-	header.Set("Content-Security-Policy", "default-src 'none'; script-src 'nonce-"+nonce+"'; style-src 'nonce-"+nonce+"'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
-}
-
-func (a *App) renderOAuthConsent(w http.ResponseWriter, r *http.Request, authorization auth.OAuthAuthorization) {
-	nonce := oauthPageNonce()
-	setOAuthPageHeaders(w, nonce)
-	name := authorization.Client.Name
-	if name == "" {
-		name = "An application"
-	}
-	w.WriteHeader(http.StatusOK)
-	_ = oauthConsentTemplate.Execute(w, map[string]any{
-		"Nonce": nonce, "ClientName": name, "Resource": authorization.Resource,
-		"SelfAsserted":    authorization.Client.Kind == storage.OAuthClientKindDynamic,
-		"VerificationURL": a.runtime.DeviceVerificationURL, "UserCode": authorization.UserCode,
-		"ExpiresAt":   authorization.ExpiresAt.UTC().Format("15:04 UTC"),
-		"ConsentPath": OAuthConsentPath, "Handle": authorization.Handle,
-	})
+	header.Set("Content-Security-Policy", "default-src 'none'; script-src 'nonce-"+nonce+"'; style-src 'nonce-"+nonce+"'; connect-src 'none'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'")
 }
 
 func (a *App) renderOAuthProblem(w http.ResponseWriter, _ *http.Request, status int, message string) {
@@ -466,6 +558,10 @@ func (a *App) renderOAuthProblem(w http.ResponseWriter, _ *http.Request, status 
 // without the web approval surface: no consent could ever be approved.
 var ErrOAuthRequiresWebApproval = errors.New("oauth login requires the web approval surface (web assertion verification)")
 
+// ErrOAuthRequiresConsentURL reports an OAuth configuration without a valid
+// web consent page URL: /authorize would have nowhere to send the browser.
+var ErrOAuthRequiresConsentURL = errors.New("oauth login requires the web consent page URL")
+
 func newOAuthService(deps Dependencies, deviceFlow *auth.DeviceFlowService) (*auth.OAuthService, error) {
 	runtime := deps.Runtime.OAuth
 	if runtime == nil {
@@ -473,6 +569,9 @@ func newOAuthService(deps Dependencies, deviceFlow *auth.DeviceFlowService) (*au
 	}
 	if deps.WebAssertions == nil {
 		return nil, ErrOAuthRequiresWebApproval
+	}
+	if !auth.ValidOAuthConsentURL(runtime.ConsentURL) {
+		return nil, ErrOAuthRequiresConsentURL
 	}
 	return auth.NewOAuthService(runtime.Store, deviceFlow, auth.OAuthConfig{
 		Issuer: runtime.Issuer, Resources: runtime.Resources, ClientMetadata: runtime.ClientMetadata, Now: deps.Now,
@@ -489,4 +588,6 @@ type OAuthRuntime struct {
 	Resources []string
 	// ClientMetadata resolves client ID metadata documents; nil disables them.
 	ClientMetadata auth.OAuthClientMetadataFetcher
+	// ConsentURL is the web consent page /authorize redirects the browser to.
+	ConsentURL string
 }

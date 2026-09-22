@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
-	"html"
 	"io"
 	"log/slog"
 	"net/http"
@@ -18,7 +17,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -49,11 +47,16 @@ import (
 // which knows nothing about this server: it follows the 401 challenge to the
 // protected resource metadata, discovers the authorization server, registers
 // dynamically or presents a metadata-document client ID, sends PKCE and the resource
-// indicator, and exchanges the code. Only the human is scripted: the
-// fetcher reads the consent page, approves its user code the way the web
-// approval page does (a signed web assertion), and follows the redirect.
+// indicator, and exchanges the code. Only the browser and the web consent
+// page are scripted (a stub consent approver): the fetcher follows /authorize
+// to the consent page URL, reads the request and approves or denies it on the
+// consent route the way the web consent page does (a signed web assertion for
+// the signed-in user), and follows the redirect_url it gets back.
 
-const oauthLoginRedirect = "http://127.0.0.1:47111/callback"
+const (
+	oauthLoginRedirect   = "http://127.0.0.1:47111/callback"
+	oauthLoginConsentURL = "https://web.example.test/acr/authorize"
+)
 
 // oauthClock is the acr-api clock; tests move it to cross an expiry.
 type oauthClock struct{ offset atomic.Int64 }
@@ -175,6 +178,7 @@ func newOAuthStack(t *testing.T, extraResources ...string) *oauthStack {
 				Store: memory.NewOAuthStore(s.clock.now), Issuer: s.api.URL,
 				Resources:      append([]string{s.mcpURL}, extraResources...),
 				ClientMetadata: auth.NewClientMetadataFetcher(metadataClient),
+				ConsentURL:     oauthLoginConsentURL,
 			},
 		},
 	}, slog.New(slog.NewJSONHandler(s.apiLogs, &slog.HandlerOptions{Level: slog.LevelInfo})))
@@ -224,13 +228,10 @@ func (s *oauthStack) newEndpoint(resourceURL string) *acrmcp.HTTPHandler {
 	return handler
 }
 
-var (
-	consentHandle   = regexp.MustCompile(`name="handle" value="([^"]+)"`)
-	consentUserCode = regexp.MustCompile(`id="user-code">([A-Z0-9]+)<`)
-)
-
-// fetcher is the scripted human: open the authorization URL, approve its user
-// code on the approval route, then check the consent until it redirects.
+// fetcher is the scripted browser plus a stub of the web consent page:
+// /authorize must send the browser straight to the consent page with a
+// handle; the stub reads the request and approves (or denies) it for the
+// signed-in user, and the browser follows the redirect_url it returns.
 func (s *oauthStack) fetcher(repositories []string) sdkauth.AuthorizationCodeFetcher {
 	return func(ctx context.Context, args *sdkauth.AuthorizationArgs) (*sdkauth.AuthorizationResult, error) {
 		client := s.api.Client()
@@ -248,54 +249,66 @@ func (s *oauthStack) fetcher(repositories []string) sdkauth.AuthorizationCodeFet
 		if response.StatusCode == http.StatusSeeOther {
 			return resultFromRedirect(response.Header.Get("Location"))
 		}
-		if response.StatusCode != http.StatusOK {
+		if response.StatusCode != http.StatusFound {
 			return nil, errors.New("authorize answered " + response.Status + ": " + string(page))
 		}
-		handle := consentHandle.FindSubmatch(page)
-		userCode := consentUserCode.FindSubmatch(page)
-		if handle == nil || userCode == nil {
-			return nil, errors.New("consent page carries no handle or user code")
+		location, err := url.Parse(response.Header.Get("Location"))
+		if err != nil {
+			return nil, err
 		}
-		state := s.checkConsent(ctx, html.UnescapeString(string(handle[1])))
-		if state.State != "pending" {
-			return nil, errors.New("consent was " + state.State + " before approval")
+		if location.Scheme+"://"+location.Host+location.Path != oauthLoginConsentURL || location.Query().Get("handle") == "" {
+			return nil, errors.New("authorize did not send the browser to the consent page: " + location.String())
 		}
-		if s.deny.Load() {
-			s.denyCode(string(userCode[1]))
-		} else if s.approve.Load() {
-			s.approveCode(string(userCode[1]), repositories)
+		handle := location.Query().Get("handle")
+		status, preview := s.consent(ctx, map[string]any{"action": "preview", "handle": handle}, []string{"*"})
+		if status != http.StatusOK || preview.RedirectURL != "" {
+			return nil, errors.New("consent preview answered " + http.StatusText(status) + " " + preview.Error)
 		}
-		state = s.checkConsent(ctx, html.UnescapeString(string(handle[1])))
-		if state.RedirectURL == "" {
-			return nil, errors.New("consent is " + state.State + " after approval")
+		var decision consentReply
+		switch {
+		case s.deny.Load():
+			status, decision = s.consent(ctx, map[string]any{"action": "deny", "handle": handle}, []string{"*"})
+		case s.approve.Load():
+			status, decision = s.consent(ctx, map[string]any{"action": "approve", "handle": handle, "repository_scopes": repositories}, repositories)
+		default:
+			return nil, errors.New("the consent was left undecided")
 		}
-		return resultFromRedirect(state.RedirectURL)
+		if status != http.StatusOK || decision.RedirectURL == "" {
+			return nil, errors.New("consent decision answered " + http.StatusText(status) + " " + decision.Error)
+		}
+		return resultFromRedirect(decision.RedirectURL)
 	}
 }
 
 type consentReply struct {
-	State       string `json:"state"`
 	RedirectURL string `json:"redirect_url"`
+	ClientName  string `json:"client_name"`
 	Error       string `json:"error"`
 }
 
-func (s *oauthStack) checkConsent(ctx context.Context, handle string) consentReply {
+// consent posts to the consent route exactly as the web consent page does:
+// a JSON body and a web assertion for the signed-in user of orgOne granting
+// these repositories.
+func (s *oauthStack) consent(ctx context.Context, body map[string]any, grant []string) (int, consentReply) {
 	s.t.Helper()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, s.api.URL+api.OAuthConsentPath, strings.NewReader(url.Values{"handle": {handle}}.Encode()))
+	encoded, err := json.Marshal(body)
 	if err != nil {
 		s.t.Fatal(err)
 	}
-	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, s.api.URL+api.OAuthConsentPath, bytes.NewReader(encoded))
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(auth.WebAssertionHeader, s.webAssertion(api.OAuthConsentPath, encoded, grant))
 	response, err := s.api.Client().Do(request)
 	if err != nil {
 		s.t.Fatal(err)
 	}
 	defer response.Body.Close()
 	var reply consentReply
-	if err := json.NewDecoder(response.Body).Decode(&reply); err != nil {
-		s.t.Fatal(err)
-	}
-	return reply
+	_ = json.NewDecoder(response.Body).Decode(&reply)
+	return response.StatusCode, reply
 }
 
 func resultFromRedirect(location string) (*sdkauth.AuthorizationResult, error) {
@@ -310,25 +323,9 @@ func resultFromRedirect(location string) (*sdkauth.AuthorizationResult, error) {
 	return &sdkauth.AuthorizationResult{Code: query.Get("code"), State: query.Get("state"), Iss: query.Get("iss")}, nil
 }
 
-// approveCode approves a user code exactly as the web approval page does.
-func (s *oauthStack) approveCode(userCode string, repositories []string) {
+// webAssertion signs the assertion the web sends for its signed-in user.
+func (s *oauthStack) webAssertion(path string, body []byte, grant []string) string {
 	s.t.Helper()
-	s.webApproval(contractsv1.DeviceApprovalRequest{SchemaVersion: contractsv1.DeviceApprovalRequestSchema, UserCode: userCode, RepositoryScopes: repositories}, repositories)
-}
-
-func (s *oauthStack) denyCode(string) {
-	s.t.Helper()
-	// The approval route has no denial; an unapproved request expires. The
-	// denial row instead moves the clock past the device authorization TTL.
-	s.clock.advance(storage.DeviceAuthorizationTTL + time.Second)
-}
-
-func (s *oauthStack) webApproval(approval contractsv1.DeviceApprovalRequest, grant []string) {
-	s.t.Helper()
-	body, err := json.Marshal(approval)
-	if err != nil {
-		s.t.Fatal(err)
-	}
 	digest := sha256.Sum256(body)
 	now := s.clock.now()
 	var jti [8]byte
@@ -337,26 +334,12 @@ func (s *oauthStack) webApproval(approval contractsv1.DeviceApprovalRequest, gra
 		"iss": "https://web.example.test", "aud": "acr-api", "sub": "user_oauth", "org_id": orgOne,
 		"repository_scopes": grant, "permissions": []string{auth.WebAssertionPermissionCredentialIssue},
 		"iat": now.Unix(), "nbf": now.Unix(), "exp": now.Add(30 * time.Second).Unix(), "jti": base64.RawURLEncoding.EncodeToString(jti[:]),
-		"method": http.MethodPost, "path": "/api/v1/oauth/device_approval", "body_sha256": base64.RawURLEncoding.EncodeToString(digest[:]),
+		"method": http.MethodPost, "path": path, "body_sha256": base64.RawURLEncoding.EncodeToString(digest[:]),
 	}
 	header, _ := json.Marshal(map[string]string{"alg": "EdDSA", "typ": "JWT", "kid": "current"})
 	payload, _ := json.Marshal(claims)
 	input := base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(payload)
-	request, err := http.NewRequest(http.MethodPost, s.api.URL+"/api/v1/oauth/device_approval", bytes.NewReader(body))
-	if err != nil {
-		s.t.Fatal(err)
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set(auth.WebAssertionHeader, input+"."+base64.RawURLEncoding.EncodeToString(ed25519.Sign(s.private, []byte(input))))
-	response, err := s.api.Client().Do(request)
-	if err != nil {
-		s.t.Fatal(err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		raw, _ := io.ReadAll(response.Body)
-		s.t.Fatalf("web approval answered %d: %s", response.StatusCode, raw)
-	}
+	return input + "." + base64.RawURLEncoding.EncodeToString(ed25519.Sign(s.private, []byte(input)))
 }
 
 // oauthHandler is the go-sdk MCP OAuth client, registering dynamically.
@@ -521,13 +504,14 @@ func TestOAuthLoginEndToEnd(t *testing.T) {
 		t.Fatalf("revoked bearer: status %d, want 401", status)
 	}
 
-	// 6. Telemetry rebuilds the login: register, authorize, consent pending
-	// then ok, token ok, all from a dynamic client.
+	// 6. Telemetry rebuilds the login: register, authorize (the redirect to
+	// the consent page), the consent page's read, the approval, token ok,
+	// all from a dynamic client.
 	var steps []string
 	for _, line := range s.oauthLines(t) {
 		steps = append(steps, line["step"].(string)+":"+line["outcome"].(string))
 	}
-	want := []string{"register:ok", "authorize:ok", "consent:pending", "consent:ok", "token:ok"}
+	want := []string{"register:ok", "authorize:ok", "consent_preview:ok", "consent:ok", "token:ok"}
 	if strings.Join(steps, ",") != strings.Join(want, ",") {
 		t.Fatalf("oauth telemetry steps = %v, want %v", steps, want)
 	}
@@ -544,6 +528,25 @@ func TestOAuthLoginEndToEnd(t *testing.T) {
 	logs := string(s.apiLogs.Bytes())
 	if strings.Contains(logs, token) {
 		t.Fatal("acr-api logs carry the issued access token")
+	}
+}
+
+// A denial on the consent page sends the browser back with access_denied:
+// the client never gets a code and never connects.
+func TestOAuthLoginDeniedNeverConnects(t *testing.T) {
+	s := newOAuthStack(t)
+	s.deny.Store(true)
+	if session, err := s.connect(s.oauthHandler([]string{repoWidget})); err == nil {
+		session.Close()
+		t.Fatal("a denied login connected")
+	} else if !strings.Contains(err.Error(), "access_denied") {
+		t.Fatalf("denied login error = %v, want access_denied", err)
+	}
+	assertLastOutcomes(t, s, "consent", []string{"access_denied"})
+	for _, line := range s.oauthLines(t) {
+		if line["step"] == "token" {
+			t.Fatalf("a denied login reached the token endpoint: %v", line)
+		}
 	}
 }
 
@@ -779,7 +782,7 @@ func TestOAuthLoginWithClientMetadataDocument(t *testing.T) {
 	for _, line := range s.oauthLines(t) {
 		kinds = append(kinds, line["step"].(string)+":"+line["client_kind"].(string))
 	}
-	if strings.Join(kinds, ",") != "authorize:metadata_document,consent:metadata_document,consent:metadata_document,token:metadata_document" {
+	if strings.Join(kinds, ",") != "authorize:metadata_document,consent_preview:metadata_document,consent:metadata_document,token:metadata_document" {
 		t.Fatalf("metadata-document login telemetry = %v", kinds)
 	}
 }

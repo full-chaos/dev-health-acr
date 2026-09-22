@@ -96,6 +96,10 @@ config:
     # Public URLs of the hosted MCP endpoints a credential may be bound to,
     # e.g. [https://mcp.example.com/mcp].
     resources: []
+    # The web consent page /authorize sends the browser to (the handle is
+    # appended as ?handle=...), e.g. https://www.example.com/acr/authorize.
+    # Required with enabled. Roll it only once that web page is live.
+    consentUrl: ""
     # Accept client ID metadata documents (HTTPS client_id URLs). Fetches go
     # to public addresses only.
     clientMetadataDocuments: true

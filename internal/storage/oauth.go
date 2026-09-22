@@ -19,10 +19,11 @@ import (
 // An MCP client (Claude Code, Codex, ...) discovers acr-api as its OAuth
 // authorization server and runs the authorization-code grant with PKCE. The
 // browser consent step reuses the device authorization record: /authorize
-// starts one (its raw device code is generated and discarded, so the device
-// grant can never redeem it), the user approves the displayed user code on the
-// existing web approval page, and the token endpoint redeems the approved
-// record by its hash. The rows below carry what the device record does not:
+// starts one (its raw device and user codes are generated and discarded, so
+// neither the device grant nor the typed-code approval page can use it) and
+// sends the browser to the web consent page with the request's handle; the
+// signed-in user approves or denies it there, and the token endpoint redeems
+// the approved record by its hash. The rows below carry what the device record does not:
 // the client, its redirect URI, the PKCE challenge, the protected resource the
 // token is bound to, and the one-time authorization code.
 

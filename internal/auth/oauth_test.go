@@ -94,19 +94,34 @@ func (h *oauthHarness) register(t *testing.T) string {
 	return client.ClientID
 }
 
-// approve approves the user code as a web assertion principal would.
-func (h *oauthHarness) approve(t *testing.T, userCode string, repositories []string) {
+const testOrg = "11111111-1111-4111-8111-111111111111"
+
+// webPrincipal is the principal a web assertion for the signed-in user
+// carries, granted these repositories.
+func webPrincipal(repositories []string) storage.Principal {
+	return storage.Principal{
+		AuthenticationMethod: storage.AuthenticationMethodWebAssertion, Subject: "user_1", OrgID: testOrg,
+		RepositoryScopes: repositories, Permissions: []string{WebAssertionPermissionCredentialIssue},
+	}
+}
+
+// approveDevice approves a device authorization started for OAuth as the web
+// consent page would.
+func (h *oauthHarness) approveDevice(t *testing.T, hash storage.DeviceCodeHash, repositories []string) {
 	t.Helper()
-	_, err := h.devices.Approve(context.Background(), DeviceApprovalRequest{
-		Principal: storage.Principal{
-			AuthenticationMethod: storage.AuthenticationMethodWebAssertion, Subject: "user_1", OrgID: "11111111-1111-4111-8111-111111111111",
-			RepositoryScopes: repositories, Permissions: []string{WebAssertionPermissionCredentialIssue},
-		},
-		UserCode: userCode, RepositoryScopes: repositories,
-	})
+	if err := h.devices.ApproveForOAuth(context.Background(), webPrincipal(repositories), hash, repositories); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// approve approves the request behind a handle and returns the redirect.
+func (h *oauthHarness) approve(t *testing.T, handle string, repositories []string) string {
+	t.Helper()
+	decision, err := h.oauth.ApproveConsent(context.Background(), handle, webPrincipal(repositories), repositories)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return decision.RedirectURL
 }
 
 func codeFrom(t *testing.T, redirect string) string {
@@ -139,12 +154,7 @@ func (h *oauthHarness) login(t *testing.T, clientID, challenge, resource string)
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.approve(t, authorization.UserCode, []string{"org/repo"})
-	consent, err := h.oauth.Consent(context.Background(), authorization.Handle)
-	if err != nil || consent.State != OAuthConsentApproved {
-		t.Fatalf("consent = %+v, %v", consent, err)
-	}
-	return codeFrom(t, consent.RedirectURL)
+	return codeFrom(t, h.approve(t, authorization.Handle, []string{"org/repo"}))
 }
 
 func TestOAuthExchangeChecksEveryBinding(t *testing.T) {
@@ -241,40 +251,134 @@ func TestOAuthAuthorizeRefusals(t *testing.T) {
 	}
 }
 
-func TestOAuthConsentStates(t *testing.T) {
+func TestOAuthConsentDecisions(t *testing.T) {
 	h := newOAuthHarness(t)
 	clientID := h.register(t)
 	_, challenge := pkce(t)
+	ctx := context.Background()
 	start := func() OAuthAuthorization {
-		authorization, err := h.oauth.Authorize(context.Background(), OAuthAuthorizeRequest{ResponseType: "code", ClientID: clientID, RedirectURI: testRedirect, CodeChallenge: challenge, CodeChallengeMethod: "S256", State: "st"})
+		authorization, err := h.oauth.Authorize(ctx, OAuthAuthorizeRequest{ResponseType: "code", ClientID: clientID, RedirectURI: testRedirect, CodeChallenge: challenge, CodeChallengeMethod: "S256", State: "st"})
 		if err != nil {
 			t.Fatal(err)
 		}
 		return authorization
 	}
+	repos := []string{"org/repo"}
+	principal := webPrincipal(repos)
+
 	pending := start()
-	if consent, err := h.oauth.Consent(context.Background(), pending.Handle); err != nil || consent.State != OAuthConsentPending || consent.RedirectURL != "" {
-		t.Fatalf("pending consent = %+v, %v", consent, err)
+	view, kind, err := h.oauth.ConsentRequest(ctx, pending.Handle)
+	if err != nil || kind != storage.OAuthClientKindDynamic || view.ClientName != "test" || view.RedirectOrigin != "http://127.0.0.1:4711" ||
+		view.Resource != testResource || !slices.Equal(view.Scopes, []string{ScopeContextRead, ScopeEvidenceRead}) || !view.ExpiresAt.Equal(pending.ExpiresAt) {
+		t.Fatalf("preview = %+v kind %q, %v", view, kind, err)
 	}
-	if _, err := h.oauth.Consent(context.Background(), "unknown-handle"); outcomeOf(err) != oauthvocab.OutcomeInvalidRequest {
-		t.Fatalf("unknown handle = %v", err)
+	for _, handle := range []string{"", "unknown-handle", strings.Repeat("A", 43), strings.Repeat("A", 44), pending.Handle + "="} {
+		if _, _, err := h.oauth.ConsentRequest(ctx, handle); outcomeOf(err) != oauthvocab.OutcomeInvalidRequest {
+			t.Fatalf("preview handle %q = %v, want invalid_request", handle, err)
+		}
+		if _, err := h.oauth.ApproveConsent(ctx, handle, principal, repos); outcomeOf(err) != oauthvocab.OutcomeInvalidRequest {
+			t.Fatalf("approve handle %q = %v, want invalid_request", handle, err)
+		}
+		if _, err := h.oauth.DenyConsent(ctx, handle, principal); outcomeOf(err) != oauthvocab.OutcomeInvalidRequest {
+			t.Fatalf("deny handle %q = %v, want invalid_request", handle, err)
+		}
 	}
-	approved := start()
-	h.approve(t, approved.UserCode, []string{"org/repo"})
-	consent, err := h.oauth.Consent(context.Background(), approved.Handle)
-	if err != nil || consent.State != OAuthConsentApproved {
-		t.Fatalf("approved consent = %+v, %v", consent, err)
+
+	// A decision the approver may not make leaves the request pending.
+	if _, err := h.oauth.ApproveConsent(ctx, pending.Handle, principal, []string{"other/repo"}); outcomeOf(err) != oauthvocab.OutcomeInvalidRequest {
+		t.Fatalf("repositories outside the grant = %v, want invalid_request", err)
 	}
-	redirect, _ := url.Parse(consent.RedirectURL)
-	if redirect.Query().Get("state") != "st" || redirect.Query().Get("iss") != testIssuer || redirect.Query().Get("code") == "" || redirect.Host != "127.0.0.1:4711" {
-		t.Fatalf("redirect = %s", consent.RedirectURL)
+	if _, err := h.oauth.ApproveConsent(ctx, pending.Handle, storage.Principal{AuthenticationMethod: storage.AuthenticationMethodCredential, Subject: "user_1", OrgID: testOrg, RepositoryScopes: repos}, repos); outcomeOf(err) != oauthvocab.OutcomeInvalidRequest {
+		t.Fatalf("non-web principal = %v, want invalid_request", err)
 	}
-	if _, err := h.oauth.Consent(context.Background(), approved.Handle); outcomeOf(err) != oauthvocab.OutcomeAlreadyCompleted {
-		t.Fatalf("second consent after the code was issued = %v, want already_completed", err)
+	if _, err := h.oauth.DenyConsent(ctx, pending.Handle, storage.Principal{AuthenticationMethod: storage.AuthenticationMethodCredential, Subject: "user_1", OrgID: testOrg}); outcomeOf(err) != oauthvocab.OutcomeInvalidRequest {
+		t.Fatalf("non-web principal deny = %v, want invalid_request", err)
 	}
+	if _, _, err := h.oauth.ConsentRequest(ctx, pending.Handle); err != nil {
+		t.Fatalf("refused decisions must leave the request pending: %v", err)
+	}
+
+	decision, err := h.oauth.ApproveConsent(ctx, pending.Handle, principal, repos)
+	if err != nil || decision.ClientKind != storage.OAuthClientKindDynamic {
+		t.Fatalf("approve = %+v, %v", decision, err)
+	}
+	redirect, _ := url.Parse(decision.RedirectURL)
+	if redirect.Query().Get("state") != "st" || redirect.Query().Get("iss") != testIssuer || redirect.Query().Get("code") == "" ||
+		redirect.Host != "127.0.0.1:4711" || redirect.Path != "/callback" || redirect.Query().Get("error") != "" {
+		t.Fatalf("redirect = %s", decision.RedirectURL)
+	}
+	// The handle is single use: every later read or decision is refused.
+	if _, err := h.oauth.ApproveConsent(ctx, pending.Handle, principal, repos); outcomeOf(err) != oauthvocab.OutcomeAlreadyCompleted {
+		t.Fatalf("second approve = %v, want already_completed", err)
+	}
+	if _, err := h.oauth.DenyConsent(ctx, pending.Handle, principal); outcomeOf(err) != oauthvocab.OutcomeAlreadyCompleted {
+		t.Fatalf("deny after approve = %v, want already_completed", err)
+	}
+	if _, _, err := h.oauth.ConsentRequest(ctx, pending.Handle); outcomeOf(err) != oauthvocab.OutcomeAlreadyCompleted {
+		t.Fatalf("preview after approve = %v, want already_completed", err)
+	}
+
+	denied := start()
+	decision, err = h.oauth.DenyConsent(ctx, denied.Handle, principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	redirect, _ = url.Parse(decision.RedirectURL)
+	if redirect.Query().Get("error") != "access_denied" || redirect.Query().Get("state") != "st" || redirect.Query().Get("iss") != testIssuer || redirect.Query().Get("code") != "" {
+		t.Fatalf("deny redirect = %s", decision.RedirectURL)
+	}
+	if _, err := h.oauth.ApproveConsent(ctx, denied.Handle, principal, repos); outcomeOf(err) != oauthvocab.OutcomeAlreadyCompleted {
+		t.Fatalf("approve after deny = %v, want already_completed", err)
+	}
+	if _, err := h.oauth.DenyConsent(ctx, denied.Handle, principal); outcomeOf(err) != oauthvocab.OutcomeAlreadyCompleted {
+		t.Fatalf("second deny = %v, want already_completed", err)
+	}
+	if _, _, err := h.oauth.ConsentRequest(ctx, denied.Handle); outcomeOf(err) != oauthvocab.OutcomeAlreadyCompleted {
+		t.Fatalf("preview after deny = %v, want already_completed", err)
+	}
+
+	expiring := start()
 	h.now = h.now.Add(storage.DeviceAuthorizationTTL + time.Second)
-	if consent, err := h.oauth.Consent(context.Background(), pending.Handle); err != nil || consent.State != OAuthConsentExpired {
-		t.Fatalf("expired consent = %+v, %v", consent, err)
+	if _, _, err := h.oauth.ConsentRequest(ctx, expiring.Handle); outcomeOf(err) != oauthvocab.OutcomeExpired {
+		t.Fatalf("expired preview = %v, want expired", err)
+	}
+	if _, err := h.oauth.ApproveConsent(ctx, expiring.Handle, principal, repos); outcomeOf(err) != oauthvocab.OutcomeExpired {
+		t.Fatalf("expired approve = %v, want expired", err)
+	}
+	if _, err := h.oauth.DenyConsent(ctx, expiring.Handle, principal); outcomeOf(err) != oauthvocab.OutcomeExpired {
+		t.Fatalf("expired deny = %v, want expired", err)
+	}
+}
+
+// The consent window is the device authorization's: at most ten minutes.
+func TestOAuthConsentWindowIsAtMostTenMinutes(t *testing.T) {
+	h := newOAuthHarness(t)
+	clientID := h.register(t)
+	_, challenge := pkce(t)
+	authorization, err := h.oauth.Authorize(context.Background(), OAuthAuthorizeRequest{ResponseType: "code", ClientID: clientID, RedirectURI: testRedirect, CodeChallenge: challenge, CodeChallengeMethod: "S256"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if window := authorization.ExpiresAt.Sub(h.now); window <= 0 || window > 10*time.Minute {
+		t.Fatalf("consent window = %s, want (0, 10m]", window)
+	}
+	h.now = authorization.ExpiresAt
+	if _, err := h.oauth.ApproveConsent(context.Background(), authorization.Handle, webPrincipal([]string{"org/repo"}), []string{"org/repo"}); outcomeOf(err) != oauthvocab.OutcomeExpired {
+		t.Fatalf("approve at the expiry instant = %v, want expired", err)
+	}
+}
+
+func TestValidOAuthConsentURL(t *testing.T) {
+	for value, want := range map[string]bool{
+		"https://www.example.com/acr/authorize": true, "http://localhost:3000/acr/authorize": true, "http://127.0.0.1/x": true,
+		"": false, "https://www.example.com": false, "https://www.example.com/": false, "http://www.example.com/acr/authorize": false,
+		"https://www.example.com/acr/authorize?x=1": false, "https://www.example.com/acr/authorize?": false, "https://www.example.com/acr/authorize#f": false,
+		"https://user@www.example.com/acr/authorize": false, "/acr/authorize": false, "javascript:alert(1)": false, "ftp://example.com/x": false,
+		"https://www.example.com/acr/authorize#": false, "https://www.example.com/acr/authorize?#": false, "https://www.example.com/acr/a%3Fb": true,
+	} {
+		if got := ValidOAuthConsentURL(value); got != want {
+			t.Errorf("ValidOAuthConsentURL(%q) = %v, want %v", value, got, want)
+		}
 	}
 }
 
@@ -484,7 +588,7 @@ func TestRedeemForResourceRefusesAnUnapprovedAuthorization(t *testing.T) {
 	if _, err := h.devices.RedeemForResource(context.Background(), started.DeviceCodeHash, testResource, []string{ScopeContextRead}); !errors.Is(err, ErrOAuthDeviceNotApproved) {
 		t.Fatalf("pending authorization: err = %v, want ErrOAuthDeviceNotApproved", err)
 	}
-	h.approve(t, started.UserCode, []string{"org/repo"})
+	h.approveDevice(t, started.DeviceCodeHash, []string{"org/repo"})
 	h.now = h.now.Add(storage.DeviceAuthorizationTTL + time.Second)
 	if state, err := h.devices.StateForOAuth(context.Background(), started.DeviceCodeHash); err != nil || state != OAuthDeviceStateExpired {
 		t.Fatalf("expired approval state = %q, %v, want expired", state, err)
@@ -531,12 +635,8 @@ func TestOAuthTokenCarriesOnlyTheRequestedScopes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		h.approve(t, authorization.UserCode, []string{"org/repo"})
-		consent, err := h.oauth.Consent(context.Background(), authorization.Handle)
-		if err != nil {
-			t.Fatal(err)
-		}
-		token, err := h.oauth.Exchange(context.Background(), OAuthTokenRequest{GrantType: "authorization_code", Code: codeFrom(t, consent.RedirectURL), RedirectURI: testRedirect, ClientID: clientID, CodeVerifier: verifier})
+		redirect := h.approve(t, authorization.Handle, []string{"org/repo"})
+		token, err := h.oauth.Exchange(context.Background(), OAuthTokenRequest{GrantType: "authorization_code", Code: codeFrom(t, redirect), RedirectURI: testRedirect, ClientID: clientID, CodeVerifier: verifier})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -552,10 +652,119 @@ func TestRedeemForResourceNeverWidensTheApproval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.approve(t, started.UserCode, []string{"org/repo"})
+	h.approveDevice(t, started.DeviceCodeHash, []string{"org/repo"})
 	for _, scopes := range [][]string{{ScopeContextAdmin}, {ScopeContextRead, ScopeEpisodeWrite}, {}} {
 		if issued, err := h.devices.RedeemForResource(context.Background(), started.DeviceCodeHash, testResource, scopes); err == nil {
 			t.Fatalf("scopes %v redeemed as %v", scopes, issued.Credential.Scopes)
 		}
+	}
+}
+
+// flakyCodeStore fails the next code attachment once, as a transient storage
+// failure between the approval and the code would.
+type flakyCodeStore struct {
+	storage.OAuthStore
+	failNext bool
+}
+
+func (s *flakyCodeStore) IssueAuthorizationCode(ctx context.Context, handle, code storage.OAuthSecretHash, expiresAt time.Time) (storage.OAuthAuthorizationRequest, error) {
+	if s.failNext {
+		s.failNext = false
+		return storage.OAuthAuthorizationRequest{}, errors.New("transient")
+	}
+	return s.OAuthStore.IssueAuthorizationCode(ctx, handle, code, expiresAt)
+}
+
+// A failure after the approval is recorded but before the code is attached
+// is recoverable by the approving user, and only by them: same user, org and
+// repositories finish the login; anyone or anything else stays refused.
+func TestOAuthApprovalIsResumableOnlyByTheApprover(t *testing.T) {
+	h := newOAuthHarness(t)
+	clock := func() time.Time { return h.now }
+	store := &flakyCodeStore{OAuthStore: memory.NewOAuthStore(clock)}
+	service, err := NewOAuthService(store, h.devices, OAuthConfig{Issuer: testIssuer, Resources: []string{testResource}, Now: clock})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := service.Register(context.Background(), OAuthRegistrationRequest{ClientName: "c", RedirectURIs: []string{testRedirect}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, challenge := pkce(t)
+	authorization, err := service.Authorize(context.Background(), OAuthAuthorizeRequest{ResponseType: "code", ClientID: client.ClientID, RedirectURI: testRedirect, CodeChallenge: challenge, CodeChallengeMethod: "S256"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	repos := []string{"org/repo"}
+	store.failNext = true
+	if _, err := service.ApproveConsent(ctx, authorization.Handle, webPrincipal(repos), repos); !errors.Is(err, ErrOAuthUnavailable) {
+		t.Fatalf("approval with a failing code store = %v, want ErrOAuthUnavailable", err)
+	}
+	// Still readable, so the page can offer the approve again.
+	if _, _, err := service.ConsentRequest(ctx, authorization.Handle); err != nil {
+		t.Fatalf("preview after the failure = %v", err)
+	}
+	// Someone else, another org, other repositories, a deny: refused.
+	other := webPrincipal(repos)
+	other.Subject = "user_2"
+	otherOrg := webPrincipal(repos)
+	otherOrg.OrgID = "22222222-2222-4222-8222-222222222222"
+	for name, attempt := range map[string]func() error{
+		"another user": func() error { _, err := service.ApproveConsent(ctx, authorization.Handle, other, repos); return err },
+		"another org":  func() error { _, err := service.ApproveConsent(ctx, authorization.Handle, otherOrg, repos); return err },
+		"other repositories": func() error {
+			_, err := service.ApproveConsent(ctx, authorization.Handle, webPrincipal([]string{"org/repo", "org/two"}), []string{"org/repo", "org/two"})
+			return err
+		},
+		"deny": func() error {
+			_, err := service.DenyConsent(ctx, authorization.Handle, webPrincipal(repos))
+			return err
+		},
+	} {
+		if err := attempt(); outcomeOf(err) != oauthvocab.OutcomeAlreadyCompleted {
+			t.Fatalf("%s after the approval = %v, want already_completed", name, err)
+		}
+	}
+	// The approver finishes: one code, redeemable once.
+	decision, err := service.ApproveConsent(ctx, authorization.Handle, webPrincipal(repos), repos)
+	if err != nil {
+		t.Fatalf("the approver's retry = %v", err)
+	}
+	token, err := service.Exchange(ctx, OAuthTokenRequest{GrantType: "authorization_code", Code: codeFrom(t, decision.RedirectURL), RedirectURI: testRedirect, ClientID: client.ClientID, CodeVerifier: verifier})
+	if err != nil || token.Issued.Token == "" {
+		t.Fatalf("exchange after the resumed approval = %v", err)
+	}
+	if _, err := service.ApproveConsent(ctx, authorization.Handle, webPrincipal(repos), repos); outcomeOf(err) != oauthvocab.OutcomeAlreadyCompleted {
+		t.Fatalf("approval after the code = %v, want already_completed", err)
+	}
+	// An approval that outlived the request is not resumable.
+	second, err := service.Authorize(ctx, OAuthAuthorizeRequest{ResponseType: "code", ClientID: client.ClientID, RedirectURI: testRedirect, CodeChallenge: challenge, CodeChallengeMethod: "S256"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.failNext = true
+	_, _ = service.ApproveConsent(ctx, second.Handle, webPrincipal(repos), repos)
+	h.now = h.now.Add(storage.DeviceAuthorizationTTL + time.Second)
+	if _, err := service.ApproveConsent(ctx, second.Handle, webPrincipal(repos), repos); outcomeOf(err) != oauthvocab.OutcomeExpired {
+		t.Fatalf("resume after expiry = %v, want expired", err)
+	}
+}
+
+// The consent authority itself re-accepts an approval only while it is live.
+func TestApproveForOAuthResumesOnlyALiveApproval(t *testing.T) {
+	h := newOAuthHarness(t)
+	started, err := h.devices.StartForOAuth(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repos := []string{"org/repo"}
+	h.approveDevice(t, started.DeviceCodeHash, repos)
+	if err := h.devices.ApproveForOAuth(context.Background(), webPrincipal(repos), started.DeviceCodeHash, repos); err != nil {
+		t.Fatalf("same approval again while live = %v, want nil", err)
+	}
+	h.now = h.now.Add(storage.DeviceAuthorizationTTL + time.Second)
+	if err := h.devices.ApproveForOAuth(context.Background(), webPrincipal(repos), started.DeviceCodeHash, repos); err == nil {
+		t.Fatal("an expired approval was accepted again")
 	}
 }

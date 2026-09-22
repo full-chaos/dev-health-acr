@@ -243,6 +243,6 @@ func (*typedNilDeviceAuthorizationLimiter) AllowTokenRequest(string) DeviceAutho
 func (*typedNilDeviceAuthorizationLimiter) AllowApprovalAttempt(string, storage.UserCodeHash) DeviceAuthorizationLimitDecision {
 	return DeviceAuthorizationLimitDecision{}
 }
-func (*typedNilDeviceAuthorizationLimiter) AllowOAuthConsentCheck(string) DeviceAuthorizationLimitDecision {
+func (*typedNilDeviceAuthorizationLimiter) AllowOAuthConsentRequest(storage.OAuthSecretHash) DeviceAuthorizationLimitDecision {
 	return DeviceAuthorizationLimitDecision{}
 }

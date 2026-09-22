@@ -92,7 +92,7 @@ func (a *App) Handler() http.Handler {
 	if a.oauth != nil {
 		mux.HandleFunc("GET "+OAuthAuthorizationServerMetadataPath, a.handleOAuthMetadata)
 		mux.HandleFunc("GET "+OAuthAuthorizePath, a.handleOAuthAuthorize)
-		mux.HandleFunc("POST "+OAuthConsentPath, a.handleOAuthConsent)
+		mux.Handle("POST "+OAuthConsentPath, a.oauthConsentLine(a.deviceRuntimeHandler(a.deviceApprovalHandler(http.HandlerFunc(a.handleOAuthConsent)))))
 		mux.HandleFunc("POST "+OAuthTokenPath, a.handleOAuthToken)
 		mux.HandleFunc("POST "+OAuthRegisterPath, a.handleOAuthRegister)
 	}
