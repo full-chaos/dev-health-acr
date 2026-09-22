@@ -53,6 +53,20 @@ func TestMatchOAuthRedirectURIDomain(t *testing.T) {
 
 		{"empty presented refused", "http://127.0.0.1/callback", "", false, false},
 		{"empty registered refused", "", "http://127.0.0.1:36229/callback", false, false},
+
+		// Class sweep from the codex round's finding (CHAOS-6232 r1, P1): the
+		// port is the ONLY thing allowed to differ. A first pass compared
+		// url.URL's decoded Path/RawQuery/Fragment fields, which cannot tell
+		// an escaped-path respelling, or an empty "?"/"#" marker, apart from
+		// its absence — every cell below is a sibling of that same shape.
+		{"escaped path respelling refused (encoded slash vs literal slash)", "http://127.0.0.1/cb%2Fchild", "http://127.0.0.1:36229/cb/child", false, false},
+		{"escaped path respelling refused (encoded space vs literal space)", "http://127.0.0.1/cb%20x", "http://127.0.0.1:36229/cb x", false, false},
+		{"escaped path respelling, byte-identical, still matches", "http://127.0.0.1/cb%2Fchild", "http://127.0.0.1:36229/cb%2Fchild", false, true},
+		{"empty query marker refused (registered has none)", "http://127.0.0.1/callback", "http://127.0.0.1:36229/callback?", false, false},
+		{"empty fragment marker refused (registered has none)", "http://127.0.0.1/callback", "http://127.0.0.1:36229/callback#", false, false},
+		{"query marker present on both sides, empty, matches", "http://127.0.0.1/callback?", "http://127.0.0.1:36229/callback?", false, true},
+		{"IPv6 brackets preserved through the port strip", "http://[::1]/callback", "http://[::1]:36229/callback", false, true},
+		{"IPv6 with a zone id keeps exact matching beyond the port", "http://[::1]/callback", "http://[fe80::1%25eth0]:36229/callback", false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := MatchOAuthRedirectURI(tc.registered, tc.presented, tc.allowLocalhost); got != tc.want {

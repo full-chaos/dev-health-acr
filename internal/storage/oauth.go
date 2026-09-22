@@ -222,11 +222,27 @@ func MatchOAuthRedirectURI(registered, presented string, allowLocalhost bool) bo
 		return false
 	}
 	pres, err := url.Parse(presented)
-	if err != nil || pres.User != nil || pres.Fragment != "" {
+	if err != nil || pres.User != nil || pres.Hostname() != reg.Hostname() || pres.Scheme != reg.Scheme || pres.Port() == "" {
 		return false
 	}
-	return pres.Scheme == reg.Scheme && pres.Hostname() == reg.Hostname() &&
-		pres.Path == reg.Path && pres.RawQuery == reg.RawQuery
+	// Everything except the port must be BYTE-IDENTICAL to the registered
+	// URI, so this never widens past the port: rebuild the presented URI
+	// with its authority's port removed by editing the raw string (never by
+	// reconstructing from parsed fields, which would re-escape the path and
+	// silently accept an escaped-path respelling, or drop an empty "?"/"#"
+	// marker the parsed Path/RawQuery/Fragment fields cannot distinguish
+	// from "absent"). pres.Host always carries the exact authority text
+	// that follows "scheme://" (userinfo, if any, comes before it — already
+	// refused above by the User check), so trimming the ":<port>" suffix
+	// Go itself parsed out of it reproduces the authority exactly as
+	// written, brackets included for an IPv6 literal.
+	prefix := pres.Scheme + "://" + pres.Host
+	if !strings.HasPrefix(presented, prefix) {
+		return false
+	}
+	hostWithoutPort := strings.TrimSuffix(pres.Host, ":"+pres.Port())
+	presentedWithoutPort := pres.Scheme + "://" + hostWithoutPort + presented[len(prefix):]
+	return presentedWithoutPort == registered
 }
 
 func isLoopbackRedirectHost(host string, allowLocalhost bool) bool {
