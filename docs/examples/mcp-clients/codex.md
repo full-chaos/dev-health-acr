@@ -205,27 +205,7 @@ acr-mcp doctor --offline
 
 ## Remote (hosted) server
 
-Point the client at a running hosted server (`acr-mcp serve --transport=http`) instead of launching a local process. The client sends your own ACR API token as a bearer on every request; the hosted server holds no credential of its own. Export the token in the shell that starts the client, and never write it into the file. The full contract (auth failures, tool needs, the investigate flow) is in [Remote (hosted) server](../../mcp-sidecar.md#remote-hosted-server).
-
-```toml
-<!-- FIXTURE:codex-remote-toml -->
-# Example ACR MCP remote (hosted) server entry for Codex CLI.
-# Codex sends the value of the named environment variable as
-# "Authorization: Bearer <value>" on every request. Export the variable in the
-# shell that starts Codex; never write the token into this file. Place this
-# table in ~/.codex/config.toml (user scope) or .codex/config.toml (project
-# scope, requires trusting the project on first use).
-
-[mcp_servers.acr]
-url = "https://acr-mcp.dev-health.example.com/mcp"
-bearer_token_env_var = "ACR_MCP_TOKEN"
-enabled = true
-<!-- /FIXTURE:codex-remote-toml -->
-```
-
-A ready-to-copy template is `codex-remote-config.toml` in this directory.
-
-`config.toml` shape per the [Codex MCP docs](https://learn.chatgpt.com/docs/extend/mcp): `url` plus `bearer_token_env_var`, which names the environment variable Codex reads and sends as `Authorization: Bearer <value>`. Those docs show no `codex mcp add` form for URL servers and state no MCP protocol revision; confirm the negotiated revision from the server's request log.
+Point the client at a running hosted server (`acr-mcp serve --transport=http`) instead of launching a local process, using your own ACR API bearer instead of a local credential. The ready-to-copy `config.toml` table, plugin, and skill text for Codex against the hosted server are published in the public [`full-chaos/context-fabric-agents`](https://github.com/full-chaos/context-fabric-agents) repo, not this directory. The server-side contract (endpoint, protocol, auth failures, tool needs, the investigate flow) is in [Remote (hosted) server](../../mcp-sidecar.md#remote-hosted-server).
 
 ## Troubleshooting
 

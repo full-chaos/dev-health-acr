@@ -30,6 +30,7 @@ docs/adr/                  # Owned architecture decisions
 | --- | --- | --- |
 | Hosted startup/routes | `cmd/acr-api`, `internal/api` | Stock binary fails closed without the complete runtime bundle |
 | MCP commands/tools | `cmd/acr-mcp`, `internal/mcp` | `context_for_task`, `source_evidence`, and the advertise-gated `investigate_question` / `investigation_result` |
+| Remote (hosted) MCP client configs/plugins | `docs/mcp-sidecar.md` §Remote (hosted) server | Server-side contract only; client configs, plugins, and skill text for every supported client live in the public [`full-chaos/context-fabric-agents`](https://github.com/full-chaos/context-fabric-agents) repo (CHAOS-6209) |
 | Packet behavior | `internal/contextpacket` | Scope → evidence → ranking → budget → validation → snapshot |
 | Local client/security | `internal/sidecar` | HTTPS, credential precedence, Git discovery, inert Markdown |
 | Wire changes | `internal/contracts/v1`, `contracts` | Contract-first unit; update together |

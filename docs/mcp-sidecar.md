@@ -616,7 +616,7 @@ Evidence URLs are references only. The sidecar does not fetch them. If you need 
 
 ### Endpoint and protocol
 
-- **URL:** the deployment host plus the MCP base path, `/mcp` by default (`--base-path`), for example `https://acr-mcp.dev-health.example.com/mcp`. `GET /healthz` (liveness) and `GET /readyz` (readiness) are probe paths, not MCP endpoints.
+- **URL:** the deployment host plus the MCP base path, `/mcp` by default (`--base-path`), for example `https://<mcp host>/mcp`. `GET /healthz` (liveness) and `GET /readyz` (readiness) are probe paths, not MCP endpoints.
 - **Transport:** stateless Streamable HTTP. No `Mcp-Session-Id` is issued or honoured, so any replica can answer any request and a client needs no session affinity.
 - **Protocol revision:** the server lists `2026-07-28` first and negotiates through `server/discover`. Older revisions the Go SDK still speaks are accepted, so a client that does not yet speak `2026-07-28` connects on an older revision. The server never narrows itself for a client.
 - **Which revision a client speaks is a client fact.** Claude Code documents `2026-07-28` support on its v2 MCP runtime (it asks HTTP servers whether they support the newer revision). OpenCode v2 documents a `protocol` setting (`legacy` default, `auto`, `2026-07-28`); `auto` is what the fixture sets. The Codex, Cursor and OpenCode v1 MCP docs state no protocol revision; treat their revision as unconfirmed until a live `tools/list` proves it. Check what a client negotiated in the `protocol_revision` field of the server's `acr-mcp http request` log line.
@@ -645,24 +645,13 @@ The token is an ordinary 30-day `fcacr_` credential, revocable like any other (a
 
 ### Client configuration
 
-Ready-to-copy files are in `docs/examples/mcp-clients/`, generated from one model by `internal/mcpclientfixtures` and checked by tests. Each references the token as `ACR_MCP_TOKEN`; it never contains a token.
+Ready-to-copy configs, plugins, and skill text for every supported client (Claude Code, Codex, Cursor, OpenCode v1/v2, VS Code) — both the bearer and OAuth-discovery variants — live in the public [`full-chaos/context-fabric-agents`](https://github.com/full-chaos/context-fabric-agents) repo, not here. That repo owns its own renderer, goldens, and per-client docs, snapshotting this server's live contract instead of reading acr's source.
 
-| Client | File | Bearer form | Doc |
-| --- | --- | --- | --- |
-| Claude Code | `claude-code-remote-mcp.json` (`.mcp.json`, `"type": "http"`) | `"Authorization": "Bearer ${ACR_MCP_TOKEN}"` | https://code.claude.com/docs/en/mcp |
-| Codex | `codex-remote-config.toml` (`[mcp_servers.acr]`) | `bearer_token_env_var = "ACR_MCP_TOKEN"` | https://learn.chatgpt.com/docs/extend/mcp |
-| Cursor | `cursor-remote-mcp-config.json` | `"Authorization": "Bearer ${env:ACR_MCP_TOKEN}"` | https://cursor.com/docs/context/mcp |
-| OpenCode | `opencode-remote-config.json` | `"Authorization": "Bearer {env:ACR_MCP_TOKEN}"` | https://opencode.ai/docs/mcp-servers/ |
-| OpenCode v2 | `opencode-v2-remote-config.json` (`mcp.servers`, `"oauth": false`, `"protocol": "auto"`) | `"Authorization": "Bearer {env:ACR_MCP_TOKEN}"` | https://opencode.ai/v2/docs/mcp-servers/ |
+- Releases (signed tarballs, checksums, provenance): https://github.com/full-chaos/context-fabric-agents/releases
+- Claude Code: `/plugin marketplace add full-chaos/context-fabric-agents` then `/plugin install dev-health@dev-health`
+- Codex, Cursor, OpenCode, VS Code: copy-ready configs and install steps are in that repo's per-client README
 
-Claude Code can also register the server from the command line. The header is single-quoted so the shell does not expand the token into the client's config file:
-
-```bash
-export ACR_MCP_TOKEN="<your ACR API token>"
-claude mcp add --transport http acr https://acr-mcp.dev-health.example.com/mcp --header 'Authorization: Bearer ${ACR_MCP_TOKEN}'
-```
-
-The per-client guides (`claude-code.md`, `codex.md`, `cursor.md`, `opencode.md`) carry the same snippets. The Codex documentation does not show a `codex mcp add` form for URL servers; use the `config.toml` table.
+acr keeps only the server-side contract on this page (endpoint, protocol, auth semantics, what each tool needs); it no longer ships remote client fixtures.
 
 ### What each tool needs remotely
 
