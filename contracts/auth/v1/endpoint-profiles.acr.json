@@ -865,11 +865,11 @@
       },
       "public_rationale": "OAuth 2.1 authorization endpoint (authorization code + PKCE S256 + RFC 8707 resource) for hosted MCP clients; the caller has no credential by definition. It only starts a consent and sends the browser (302) to the web consent page with a 256-bit request handle; the handle authorizes nothing by itself -- the decision is made on POST /authorize/consent, which admits only a web assertion for the signed-in user.",
       "primary_validator": {
-        "description": "OAuthService.Authorize -- verifies the client (a dynamic registration or a client ID metadata document) and the exact registered redirect URI before anything is redirectable, then requires response_type=code, S256 PKCE, a configured resource and a known scope; only then starts the consent and redirects to the web consent page; rate limited per IP by AllowDeviceCreation.",
+        "description": "OAuthService.Authorize -- verifies the client (a dynamic registration or a client ID metadata document) and the registered redirect URI before anything is redirectable (exact match, except a loopback URI registered with no port also matches any port on that same scheme/host/path/query -- RFC 8252 §7.3; localhost additionally for client ID metadata document clients only), then requires response_type=code, S256 PKCE, a configured resource and a known scope; only then starts the consent and redirects to the web consent page; rate limited per IP by AllowDeviceCreation.",
         "anchor": {
           "path": "internal/auth/oauth.go",
-          "line": 361,
-          "line_end": 361,
+          "line": 376,
+          "line_end": 376,
           "note": "func (s *OAuthService) Authorize("
         }
       },
@@ -914,8 +914,8 @@
           "description": "OAuthService.ApproveConsent/DenyConsent/ConsentRequest -- the handle's request must be undecided and unexpired (10 minutes); approval applies the device approval's org and repository rules (ApproveForOAuth) and issues the code at most once.",
           "anchor": {
             "path": "internal/auth/oauth.go",
-            "line": 562,
-            "line_end": 582
+            "line": 616,
+            "line_end": 636
           },
           "is_intended_validator": true,
           "reachable_but_not_owner": false
@@ -935,8 +935,8 @@
           "direction": "returned_to_caller",
           "anchor": {
             "path": "internal/auth/oauth.go",
-            "line": 562,
-            "line_end": 582,
+            "line": 616,
+            "line_end": 636,
             "note": "OAuthService.ApproveConsent -- approves the device authorization, then mints the one-time OAuth authorization code via s.store.IssueAuthorizationCode and returns it inside redirect_url"
           },
           "issuer": "acr-api OAuthService",
@@ -944,7 +944,7 @@
           "algorithm": null,
           "lifetime_seconds": 120,
           "key_source": null,
-          "verified_by": "acr:internal/auth/oauth.go:654"
+          "verified_by": "acr:internal/auth/oauth.go:708"
         }
       ]
     },
@@ -980,8 +980,8 @@
         "description": "OAuthService.Exchange -- consumes the code atomically first (a refused exchange spends it), then requires the same client_id and redirect_uri, an S256 code_verifier matching the stored challenge, and a resource equal to the authorized one; redeems the approved device authorization bound to that resource. Rate limited per IP by AllowTokenRequest.",
         "anchor": {
           "path": "internal/auth/oauth.go",
-          "line": 654,
-          "line_end": 654,
+          "line": 708,
+          "line_end": 708,
           "note": "func (s *OAuthService) Exchange("
         }
       },
@@ -1032,8 +1032,8 @@
         "description": "OAuthService.Register -- public clients only (token_endpoint_auth_method none), grant types limited to authorization_code (refresh_token requests are answered without it), redirect URIs HTTPS or HTTP loopback; rate limited per IP by AllowDeviceCreation. Registration grants nothing by itself.",
         "anchor": {
           "path": "internal/auth/oauth.go",
-          "line": 236,
-          "line_end": 236,
+          "line": 251,
+          "line_end": 251,
           "note": "func (s *OAuthService) Register("
         }
       },

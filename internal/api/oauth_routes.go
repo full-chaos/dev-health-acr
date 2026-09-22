@@ -209,6 +209,18 @@ func (a *App) logOAuthDependencyFailure(r *http.Request, step string) {
 	)
 }
 
+// logOAuthRedirectMismatch diagnoses an invalid_redirect_uri refusal: the
+// registered and presented redirect_uri origins only (scheme+host+port),
+// never a full redirect URI, path, query or credential.
+func (a *App) logOAuthRedirectMismatch(r *http.Request, mismatch *auth.OAuthRedirectMismatch) {
+	a.logger.WarnContext(r.Context(), "oauth redirect_uri mismatch",
+		"request_id", logsanitize.SanitizeLogAttr(RequestID(r.Context())),
+		"step", oauthvocab.StepAuthorize,
+		"registered_origins", mismatch.Registered,
+		"presented_origin", mismatch.Presented,
+	)
+}
+
 func (a *App) handleOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
 	if a.oauthRateLimited(w, r, oauthvocab.StepAuthorize, a.runtime.DeviceAuthorizationLimiter.AllowDeviceCreation) {
 		return
@@ -236,6 +248,9 @@ func (a *App) handleOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			a.renderOAuthProblem(w, r, http.StatusBadRequest, "The application's sign-in request is not valid, so it cannot be sent back to the application.")
+			if refusal.RedirectMismatch != nil {
+				a.logOAuthRedirectMismatch(r, refusal.RedirectMismatch)
+			}
 			a.emitOAuthStep(r, oauthvocab.StepAuthorize, refusal.Outcome, "", http.StatusBadRequest)
 			return
 		}

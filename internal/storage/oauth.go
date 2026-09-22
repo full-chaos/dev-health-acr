@@ -198,6 +198,64 @@ func ValidOAuthRedirectURI(value string) bool {
 	}
 }
 
+// MatchOAuthRedirectURI reports whether a presented redirect_uri satisfies a
+// client's registered one. Exact string equality always matches. A native
+// app binds an ephemeral loopback port at runtime and cannot pre-register
+// it, so RFC 8252 §7.3 requires the authorization server to accept any port
+// when the registered URI is itself a loopback URI carrying no port: when
+// the registered URI's host is a loopback IP literal (127.0.0.1, ::1) — or,
+// for CIMD clients only (allowLocalhost), the localhost hostname the MCP
+// CIMD guidance also allows — and the registered URI names no port, the
+// presented URI matches for any port sharing the same scheme, host and
+// path. A registered URI naming an explicit port, or any non-loopback host,
+// keeps exact matching. This allowance is for matching a presented
+// redirect_uri against a client's REGISTERED one at /authorize only; /token
+// re-checks a presented redirect_uri against the one already verified and
+// stored at /authorize, which is always an exact comparison (request to
+// request, not request to registration).
+func MatchOAuthRedirectURI(registered, presented string, allowLocalhost bool) bool {
+	if registered == presented {
+		return true
+	}
+	reg, err := url.Parse(registered)
+	if err != nil || reg.Port() != "" || !isLoopbackRedirectHost(reg.Hostname(), allowLocalhost) {
+		return false
+	}
+	pres, err := url.Parse(presented)
+	if err != nil || pres.User != nil || pres.Hostname() != reg.Hostname() || pres.Scheme != reg.Scheme || pres.Port() == "" {
+		return false
+	}
+	// Everything except the port must be BYTE-IDENTICAL to the registered
+	// URI, so this never widens past the port: rebuild the presented URI
+	// with its authority's port removed by editing the raw string (never by
+	// reconstructing from parsed fields, which would re-escape the path and
+	// silently accept an escaped-path respelling, or drop an empty "?"/"#"
+	// marker the parsed Path/RawQuery/Fragment fields cannot distinguish
+	// from "absent"). pres.Host always carries the exact authority text
+	// that follows "scheme://" (userinfo, if any, comes before it — already
+	// refused above by the User check), so trimming the ":<port>" suffix
+	// Go itself parsed out of it reproduces the authority exactly as
+	// written, brackets included for an IPv6 literal.
+	prefix := pres.Scheme + "://" + pres.Host
+	if !strings.HasPrefix(presented, prefix) {
+		return false
+	}
+	hostWithoutPort := strings.TrimSuffix(pres.Host, ":"+pres.Port())
+	presentedWithoutPort := pres.Scheme + "://" + hostWithoutPort + presented[len(prefix):]
+	return presentedWithoutPort == registered
+}
+
+func isLoopbackRedirectHost(host string, allowLocalhost bool) bool {
+	switch host {
+	case "127.0.0.1", "::1":
+		return true
+	case "localhost":
+		return allowLocalhost
+	default:
+		return false
+	}
+}
+
 // ValidateOAuthAuthorizationRequest checks a request before it is stored.
 func ValidateOAuthAuthorizationRequest(request OAuthAuthorizationRequest) error {
 	if request.HandleHash.IsZero() || request.DeviceCodeHash.IsZero() || request.CodeHash != nil || request.CodeExpiresAt != nil || request.ConsumedAt != nil {
