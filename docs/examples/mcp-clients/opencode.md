@@ -78,12 +78,35 @@ deferred to CHAOS-3058 and is not a Task19 blocker. The current exercised
 clean-room path is Unix/Linux/macOS. The release workflow signs the published artifacts;
 Task19 did not itself create or claim a production release.
 
+## Register manually (local STDIO)
+
+Add the server to your OpenCode user or project config (see the
+[OpenCode MCP docs](https://opencode.ai/docs/mcp-servers/)):
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "acr": {
+      "type": "local",
+      "command": ["acr-mcp", "serve"]
+    }
+  }
+}
+```
+
+The registration under `mcp.acr` must be exactly `{"command": ["acr-mcp",
+"serve"]}`; `acr-mcp` must resolve on `PATH` (or use its full install path in
+`command`). This is the same registration the internal bundle script below
+writes for org members — hand-editing your config is the public equivalent.
+
 ## Install and register the package
 
 **Internal use only (CHAOS-6211):** this script path needs a checkout of
 this (private) repository. Public readers install the sidecar binary above
-and configure OpenCode manually instead (see
-[Install the verified sidecar](#install-the-verified-sidecar) above); skip to
+and register it manually instead (see
+[Register manually (local STDIO)](#register-manually-local-stdio) above);
+skip to
 [Explicit context and evidence workflow](#explicit-context-and-evidence-workflow).
 
 From this repository, install the bundled package with its script (the script
