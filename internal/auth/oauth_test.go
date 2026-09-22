@@ -749,3 +749,21 @@ func TestOAuthApprovalIsResumableOnlyByTheApprover(t *testing.T) {
 		t.Fatalf("resume after expiry = %v, want expired", err)
 	}
 }
+
+// The consent authority itself re-accepts an approval only while it is live.
+func TestApproveForOAuthResumesOnlyALiveApproval(t *testing.T) {
+	h := newOAuthHarness(t)
+	started, err := h.devices.StartForOAuth(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repos := []string{"org/repo"}
+	h.approveDevice(t, started.DeviceCodeHash, repos)
+	if err := h.devices.ApproveForOAuth(context.Background(), webPrincipal(repos), started.DeviceCodeHash, repos); err != nil {
+		t.Fatalf("same approval again while live = %v, want nil", err)
+	}
+	h.now = h.now.Add(storage.DeviceAuthorizationTTL + time.Second)
+	if err := h.devices.ApproveForOAuth(context.Background(), webPrincipal(repos), started.DeviceCodeHash, repos); err == nil {
+		t.Fatal("an expired approval was accepted again")
+	}
+}
