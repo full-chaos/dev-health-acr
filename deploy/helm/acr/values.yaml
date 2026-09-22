@@ -598,6 +598,26 @@ networkPolicy:
     # label the way it can an in-cluster Service.
     kubernetesAPIPort: 443
 
+# OTLP/gRPC export of each workload's own telemetry (acr-api, acr-mcp,
+# acr-projector): HTTP server spans and metrics, projection-tick spans, and a
+# copy of every structured log line. Off by default. Genkit's own telemetry
+# (model prompt/response content) is never exported -- see
+# docs/operations.md "OpenTelemetry export".
+otel:
+  enabled: false
+  # OTLP/gRPC collector, e.g. http://otel-collector:4317 (http:// = plaintext
+  # gRPC). Required when enabled.
+  endpoint: ""
+  # service.name per workload (OTEL_SERVICE_NAME).
+  serviceNames:
+    api: acr-api
+    mcp: acr-mcp
+    projector: acr-projector
+  # Collector port the api and mcp NetworkPolicies allow egress to when
+  # enabled. Port-only, the same convention as networkPolicy.egress: a
+  # NetworkPolicy cannot name the collector host.
+  egressPort: 4317
+
 # CHAOS-4013: RFC 8693 workload token exchange. Disabled by default -- an
 # unconfigured deployment leaves api.RuntimeDependencies.WorkloadTokenExchange
 # nil and the grant on POST /api/v1/oauth/token degrades to a clean 503; the

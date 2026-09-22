@@ -9,8 +9,10 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
+	"github.com/full-chaos/dev-health-acr/internal/otelexport"
 	"github.com/full-chaos/dev-health-acr/internal/runtime/hosted"
 	"github.com/full-chaos/dev-health-acr/internal/version"
 )
@@ -73,18 +75,29 @@ func serve(args []string) error {
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("configuration: %w", err)
 	}
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
 	info := version.Current()
+	otelConfig, err := otelexport.ConfigFromEnv(os.LookupEnv, "acr-api", info)
+	if err != nil {
+		return fmt.Errorf("configuration: %w", err)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	exporter, err := otelexport.New(ctx, otelConfig)
+	if err != nil {
+		return fmt.Errorf("initialize otel export: %w", err)
+	}
+	defer shutdownExporter(exporter)
+	logger := slog.New(exporter.LogHandler(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel})))
 	logger.Info("starting acr-api", append([]any{
 		"version", info.Version,
 		"commit", info.Commit,
 		"build_date", info.Date,
 	}, cfg.SafeAttributes()...)...)
+	exporter.LogStart(ctx, logger)
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	server, closeRuntime, err := prepareServer(ctx, serverBuildRequest{
 		config: cfg, logger: logger, serviceVersion: info.Version,
+		wrapHandler: exporter.HTTPHandler,
 		openRuntime: func(ctx context.Context, options hosted.Options) (*hosted.Runtime, error) {
 			return hosted.Open(ctx, cfg, options)
 		},
@@ -98,4 +111,15 @@ func serve(args []string) error {
 		return runErr
 	}
 	return errors.Join(runErr, closeRuntime())
+}
+
+// shutdownExporter flushes what the exporter still buffers, bounded so a
+// dark collector never holds the process past its termination grace period.
+// A flush failure is written to stderr: the logger may itself be exporting.
+func shutdownExporter(exporter *otelexport.Exporter) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := exporter.Shutdown(ctx); err != nil {
+		fmt.Fprintln(os.Stderr, "acr-api: otel export shutdown incomplete:", err)
+	}
 }

@@ -531,3 +531,28 @@ login ends in invalid_target.
 {{- fail (printf "oauth: acrMcp.oauth.resourceUrl %q must be listed in config.oauth.resources" ($m.resourceUrl | default "")) -}}
 {{- end -}}
 {{- end -}}
+
+{{- /*
+OTLP export environment for one workload's ConfigMap. Renders nothing when
+otel.enabled is false, so a disabled chart leaves every ConfigMap unchanged.
+Call with (dict "root" $ "name" <service.name>).
+*/ -}}
+{{- define "acr.otelEnv" -}}
+{{- $o := .root.Values.otel -}}
+{{- if $o.enabled -}}
+OTEL_ENABLED: "true"
+OTEL_EXPORTER_OTLP_ENDPOINT: {{ required "otel.endpoint is required when otel.enabled is true" $o.endpoint | quote }}
+OTEL_SERVICE_NAME: {{ required "otel.serviceNames entries must be non-empty" .name | quote }}
+{{- end -}}
+{{- end -}}
+
+{{- /*
+NetworkPolicy egress to the OTLP collector port, when otel.enabled.
+*/ -}}
+{{- define "acr.otelEgress" -}}
+{{- if .Values.otel.enabled -}}
+- ports:
+    - protocol: TCP
+      port: {{ .Values.otel.egressPort }}
+{{- end -}}
+{{- end -}}

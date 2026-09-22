@@ -28,6 +28,9 @@ data:
   ACR_REQUESTS_PER_MINUTE: {{ .Values.config.requestsPerMinute | quote }}
   ACR_ENABLE_EPISODE_WRITEBACK: {{ .Values.config.enableEpisodeWriteback | quote }}
   ACR_DEVICE_VERIFICATION_URL: {{ .Values.config.deviceVerificationUrl | quote }}
+  {{- with include "acr.otelEnv" (dict "root" . "name" .Values.otel.serviceNames.api) }}
+  {{- . | nindent 2 }}
+  {{- end }}
   {{- if .Values.workloadTokenExchange.enabled }}
   ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE: {{ .Values.workloadTokenExchange.audience | quote }}
   ACR_WORKLOAD_TRUST_DOMAIN: {{ .Values.workloadTokenExchange.trustDomain | quote }}

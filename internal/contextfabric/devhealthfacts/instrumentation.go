@@ -43,14 +43,16 @@ func (p instrumentedProvider) ReadFacts(ctx context.Context, principal storage.P
 //
 // WHY the production caller (internal/runtime/hosted/open.go) always wires
 // this with readers.NewSlogInstrumentation, never
-// readers.NewOTelInstrumentation: acr imports go.opentelemetry.io/otel for
-// exactly one reason -- internal/contextfabric/modelprovider/provider.go's
-// suppressGenkitTelemetryExport unconditionally overwrites the GLOBAL
-// otel.SetTracerProvider/otel.SetMeterProvider with no-op/discard providers
-// whenever the model provider initializes, purely to stop Genkit exporting
-// its own telemetry. There is no real, live OTel exporter anywhere in acr's
-// deployment, so pointing readers.NewOTelInstrumentation at that suppressed
-// global would silently discard every reader-telemetry event it produced --
+// readers.NewOTelInstrumentation: internal/contextfabric/modelprovider/
+// provider.go's suppressGenkitTelemetryExport unconditionally overwrites the
+// GLOBAL otel.SetTracerProvider/otel.SetMeterProvider with no-op/discard
+// providers whenever the model provider initializes, purely to stop Genkit
+// exporting its own telemetry. The process's real OTLP export
+// (internal/otelexport) deliberately never touches those globals -- it hands
+// its providers explicitly to its own handlers -- and it already exports these
+// slog lines through its log bridge. Pointing readers.NewOTelInstrumentation
+// at the suppressed global would silently discard every reader-telemetry
+// event it produced --
 // the exact failure mode a "wire it in and forget it" instrumentation hook
 // must not have. acr's actual telemetry idiom (AGENTS.md: "Structured
 // logging uses log/slog") is log/slog, which is why acr is dev-health-go's

@@ -105,4 +105,7 @@ spec:
         - protocol: TCP
           port: {{ .Values.networkPolicy.egress.kubernetesAPIPort }}
     {{- end }}
+    {{- with include "acr.otelEgress" . }}
+    {{- . | nindent 4 }}
+    {{- end }}
 {{- end }}

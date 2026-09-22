@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/otelexport"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 	"github.com/full-chaos/dev-health-acr/internal/version"
 )
@@ -70,6 +72,10 @@ type ServeOptions struct {
 	// refused.
 	ResourceURL         string
 	AuthorizationServer string
+	// Telemetry is the process's OTLP export (the http transport only). It is
+	// set by the command, never read from the environment here. nil serves
+	// without export and writes no export line.
+	Telemetry *otelexport.Exporter
 }
 
 // ErrServeOptionInvalid reports a serve setting that is out of range or
@@ -236,7 +242,13 @@ func ProbeHostedLiveness(ctx context.Context, identity version.Info) error {
 
 // serveHTTPOn serves on an already-bound listener. It owns the listener.
 func serveHTTPOn(ctx context.Context, listener net.Listener, cfg *ProcessConfig, identity version.Info, opts ServeOptions) error {
+	if opts.Telemetry != nil {
+		// Before the handler is built: it captures the process logger, and
+		// every request line must reach the export as well as stderr.
+		cfg.diagnostics = slog.New(opts.Telemetry.LogHandler(cfg.diagnostics.Handler()))
+	}
 	logger := cfg.Diagnostics()
+	opts.Telemetry.LogStart(ctx, logger)
 	handler, err := NewHTTPHandler(cfg, serveHandlerOptions(cfg, identity, opts))
 	if err != nil {
 		_ = listener.Close()
@@ -244,7 +256,7 @@ func serveHTTPOn(ctx context.Context, listener net.Listener, cfg *ProcessConfig,
 		return err
 	}
 	server := &http.Server{
-		Handler:           handler,
+		Handler:           opts.Telemetry.HTTPHandler(handler),
 		ReadHeaderTimeout: opts.ReadHeaderTimeout,
 		ReadTimeout:       opts.ReadTimeout,
 		WriteTimeout:      opts.WriteTimeout,

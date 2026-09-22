@@ -7583,5 +7583,45 @@
         "presence": "required"
       }
     ]
+  },
+  {
+    "id": "process.otel_export",
+    "msg": "acr otel export",
+    "level": "info",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "service_name"
+    ],
+    "bounded_aggregation": "exactly one line per process start, before the listener is bound",
+    "fields": [
+      {
+        "key": "service_name",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "service_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "state",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "enabled",
+          "disabled"
+        ]
+      },
+      {
+        "key": "protocol",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "grpc",
+          "none"
+        ]
+      }
+    ]
   }
 ]

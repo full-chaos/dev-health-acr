@@ -811,4 +811,36 @@ for bad_consent in "" "https://www.example.test" "https://www.example.test/" "ht
   oauth_must_fail "consent url '${bad_consent}'" "config.oauth.consentUrl" "${oauth_args[@]}" --set-string "config.oauth.consentUrl=${bad_consent}"
 done
 
+# Gate: OTLP export. Off by default: no OTEL_ key anywhere and no collector
+# egress. On: every workload ConfigMap (api, mcp, projector) carries the three
+# keys with its own service name, and both the api and mcp NetworkPolicies
+# admit egress to the collector port. On without an endpoint fails closed.
+otel_base=(--set acrMcp.enabled=true --set-string "acrMcp.image.reference=${mcp_image}"
+  --set contextFabric.projector.enabled=true)
+otel_off="$(render "${otel_base[@]}")"
+if grep -qE 'OTEL_|port: 4317' <<<"$otel_off"; then fail_gate "otel: the default render must carry no OTEL_ key and no collector egress"; fi
+[[ -n "$(extract_doc ConfigMap '  name: [^\n]*-projector-config\n' <<<"$otel_off")" ]] || fail_gate "otel: projector ConfigMap missing from the base render (the off check would be vacuous)"
+pass "otel: the default render carries no OTEL_ key and no collector egress"
+otel_on="$(render "${otel_base[@]}" --set otel.enabled=true --set-string otel.endpoint=http://10.0.0.151:4317)"
+for pair in 'api;  name: [^\n]*-config\n;-(mcp|projector)-config\n;acr-api' 'mcp;  name: [^\n]*-mcp-config\n;;acr-mcp' 'projector;  name: [^\n]*-projector-config\n;;acr-projector'; do
+  IFS=';' read -r who selector veto service <<<"$pair"
+  cm="$(extract_doc ConfigMap "$selector" "$veto" <<<"$otel_on")"
+  [[ -n "$cm" ]] || fail_gate "otel: ${who} ConfigMap missing from the enabled render"
+  for want in 'OTEL_ENABLED: "true"' 'OTEL_EXPORTER_OTLP_ENDPOINT: "http://10.0.0.151:4317"' "OTEL_SERVICE_NAME: \"${service}\""; do
+    grep -qF "$want" <<<"$cm" || fail_gate "otel: ${who} ConfigMap is missing ${want}"
+  done
+done
+pass "otel: enabled render gives acr-api, acr-mcp and acr-projector the endpoint and their own service names"
+for pair in 'api|component: api|  name: [^\n]*-mcp\n' 'mcp|  name: [^\n]*-mcp\n|'; do
+  IFS='|' read -r who selector exclude <<<"$pair"
+  if [[ -n "$exclude" ]]; then np="$(extract_doc NetworkPolicy "$selector" "$exclude" <<<"$otel_on")"; else np="$(extract_doc NetworkPolicy "$selector" <<<"$otel_on")"; fi
+  [[ -n "$np" ]] || fail_gate "otel: ${who} NetworkPolicy missing from the enabled render"
+  grep -qE '^\s+port: 4317\s*$' <<<"$np" || fail_gate "otel: ${who} NetworkPolicy does not admit egress to the collector port"
+done
+pass "otel: enabled render admits collector egress from the api and mcp NetworkPolicies"
+set +e; otel_out="$(render --set otel.enabled=true 2>&1)"; otel_status=$?; set -e
+[[ $otel_status -ne 0 ]] || fail_gate "otel: enabled without an endpoint rendered but must fail closed"
+grep -qF 'otel.endpoint is required' <<<"$otel_out" || fail_gate "otel: enabled without an endpoint failed without naming otel.endpoint"
+pass "otel: enabled without an endpoint fails closed naming otel.endpoint"
+
 printf 'RESULT: happy path passed all gates\n'

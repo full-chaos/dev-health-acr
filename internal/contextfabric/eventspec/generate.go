@@ -208,6 +208,8 @@ func goVarName(e Event) string {
 		return "MCPHTTPReadiness"
 	case OAuthStep.ID:
 		return "OAuthStep"
+	case OTelExport.ID:
+		return "OTelExport"
 	default:
 		panic("eventspec: goVarName has no mapping for " + e.ID + " -- add one before regenerating")
 	}

@@ -66,4 +66,7 @@ spec:
         - protocol: TCP
           port: 8080
     {{- end }}
+    {{- with include "acr.otelEgress" . }}
+    {{- . | nindent 4 }}
+    {{- end }}
 {{- end }}
