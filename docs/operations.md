@@ -1500,7 +1500,10 @@ and every structured log line the process writes, at the same level and with
 the same fields, correlated to the active span. The STDIO transport of
 `acr-mcp` never exports. Each process writes one `acr otel export` line at
 start with `state` `enabled` or `disabled`, so a dark backend can be told
-apart from a process that was never told to send.
+apart from a process that was never told to send — at Info, like every other
+decision line this service emits, so a deployment running at
+`config.logLevel` `warn` or `error` suppresses it together with the
+per-request lines (spans and metrics still export).
 
 What is never exported: Genkit's spans, metrics and log lines (they carry model
 prompt and response content). The exporter's providers are passed explicitly

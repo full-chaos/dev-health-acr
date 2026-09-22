@@ -501,7 +501,7 @@
       "additionalProperties": false,
       "properties": {
         "enabled": { "type": "boolean" },
-        "endpoint": { "type": "string" },
+        "endpoint": { "type": "string", "pattern": "^$|^https?://[^\\s]+$" },
         "serviceNames": {
           "type": "object",
           "additionalProperties": false,

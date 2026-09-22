@@ -82,6 +82,9 @@ func globalInstallCalls(t *testing.T, path, rel string) []string {
 		t.Fatalf("parse %s: %v", rel, err)
 	}
 	local := map[string]string{}
+	// dotted holds the watched packages imported with `.`, whose setters are
+	// then called as bare identifiers with no selector to match.
+	dotted := map[string]bool{}
 	for _, spec := range file.Imports {
 		importPath, _ := strconv.Unquote(spec.Path.Value)
 		if _, watched := globalInstalls[importPath]; !watched {
@@ -91,24 +94,38 @@ func globalInstallCalls(t *testing.T, path, rel string) []string {
 		if spec.Name != nil {
 			name = spec.Name.Name
 		}
+		if name == "." {
+			dotted[importPath] = true
+			continue
+		}
 		local[name] = importPath
 	}
-	if len(local) == 0 {
+	if len(local) == 0 && len(dotted) == 0 {
 		return nil
 	}
 	var calls []string
 	ast.Inspect(file, func(n ast.Node) bool {
-		sel, ok := n.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-		ident, ok := sel.X.(*ast.Ident)
-		if !ok {
-			return true
-		}
-		importPath, ok := local[ident.Name]
-		if ok && globalInstalls[importPath][sel.Sel.Name] {
-			calls = append(calls, rel+": "+importPath+"."+sel.Sel.Name)
+		switch node := n.(type) {
+		case *ast.SelectorExpr:
+			ident, ok := node.X.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			importPath, ok := local[ident.Name]
+			if ok && globalInstalls[importPath][node.Sel.Name] {
+				calls = append(calls, rel+": "+importPath+"."+node.Sel.Name)
+			}
+		case *ast.CallExpr:
+			// A dot-imported setter is a bare identifier call.
+			ident, ok := node.Fun.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			for importPath := range dotted {
+				if globalInstalls[importPath][ident.Name] {
+					calls = append(calls, rel+": "+importPath+"."+ident.Name)
+				}
+			}
 		}
 		return true
 	})

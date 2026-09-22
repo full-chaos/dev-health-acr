@@ -835,12 +835,23 @@ for pair in 'api|component: api|  name: [^\n]*-mcp\n' 'mcp|  name: [^\n]*-mcp\n|
   IFS='|' read -r who selector exclude <<<"$pair"
   if [[ -n "$exclude" ]]; then np="$(extract_doc NetworkPolicy "$selector" "$exclude" <<<"$otel_on")"; else np="$(extract_doc NetworkPolicy "$selector" <<<"$otel_on")"; fi
   [[ -n "$np" ]] || fail_gate "otel: ${who} NetworkPolicy missing from the enabled render"
-  grep -qE '^\s+port: 4317\s*$' <<<"$np" || fail_gate "otel: ${who} NetworkPolicy does not admit egress to the collector port"
+  # Protocol AND port: OTLP/gRPC is TCP, and a port-only assertion passes on a
+  # UDP rule that would never carry the export.
+  grep -Pzq 'protocol: TCP\n\s+port: 4317\n' <<<"$np" || fail_gate "otel: ${who} NetworkPolicy does not admit TCP egress to the collector port"
 done
-pass "otel: enabled render admits collector egress from the api and mcp NetworkPolicies"
-set +e; otel_out="$(render --set otel.enabled=true 2>&1)"; otel_status=$?; set -e
-[[ $otel_status -ne 0 ]] || fail_gate "otel: enabled without an endpoint rendered but must fail closed"
-grep -qF 'otel.endpoint is required' <<<"$otel_out" || fail_gate "otel: enabled without an endpoint failed without naming otel.endpoint"
-pass "otel: enabled without an endpoint fails closed naming otel.endpoint"
+pass "otel: enabled render admits TCP collector egress from the api and mcp NetworkPolicies"
+otel_endpoint_must_fail() {
+  local name="$1" expect="$2"; shift 2
+  local out status
+  set +e; out="$(render --set otel.enabled=true "$@" 2>&1)"; status=$?; set -e
+  [[ $status -ne 0 ]] || fail_gate "otel: ${name} rendered but must fail closed"
+  grep -qF "$expect" <<<"$out" || fail_gate "otel: ${name} failed without naming ${expect}"
+  pass "otel: ${name} fails closed naming '${expect}'"
+}
+otel_endpoint_must_fail "enabled without an endpoint" "otel.endpoint"
+otel_endpoint_must_fail "enabled with an empty endpoint" "otel.endpoint" --set-string otel.endpoint=
+otel_endpoint_must_fail "enabled with a whitespace endpoint" "/otel/endpoint" --set-string 'otel.endpoint=   '
+otel_endpoint_must_fail "enabled with a schemeless endpoint" "/otel/endpoint" --set-string otel.endpoint=10.0.0.151:4317
+otel_endpoint_must_fail "enabled with a blank service name" "otel.serviceNames" --set-string otel.endpoint=http://collector:4317 --set-string 'otel.serviceNames.api= '
 
 printf 'RESULT: happy path passed all gates\n'

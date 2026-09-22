@@ -289,6 +289,12 @@ func (h teeHandler) WithGroup(name string) slog.Handler {
 // LogStart writes the process-start line: whether this process exports, as
 // which service. It is written to logger, so when export is on the line is
 // itself the first exported log record. A nil Exporter writes nothing.
+//
+// At Info, like every other declared event in this repository: a deployment
+// running ACR_LOG_LEVEL above info suppresses this line together with every
+// other Info line (the per-request lines included), while spans and metrics
+// still export. That is the service-wide level contract, not an exception
+// this line gets to opt out of -- see docs/operations.md.
 func (e *Exporter) LogStart(ctx context.Context, logger *slog.Logger) {
 	if e == nil || logger == nil {
 		return
