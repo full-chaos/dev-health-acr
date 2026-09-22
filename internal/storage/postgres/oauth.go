@@ -59,7 +59,14 @@ func (s *OAuthStore) RegisterClient(ctx context.Context, client storage.OAuthCli
 	if err := storage.ValidateOAuthClient(client); err != nil {
 		return storage.OAuthClient{}, err
 	}
-	redirectURIs, err := json.Marshal(client.RedirectURIs)
+	// A device-only client (CHAOS-6233: grant_types=[device_code], no
+	// redirect_uris) legitimately has none -- normalized to [] (never nil)
+	// here so the returned client matches what's actually stored, same as
+	// device_authorization.go's Create does for RepositoryHints.
+	if client.RedirectURIs == nil {
+		client.RedirectURIs = []string{}
+	}
+	redirectURIs, err := marshalJSONStringArray(client.RedirectURIs)
 	if err != nil {
 		return storage.OAuthClient{}, fmt.Errorf("encode oauth client redirect uris: %w", err)
 	}

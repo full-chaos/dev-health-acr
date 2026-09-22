@@ -119,6 +119,48 @@ func TestOAuthStore_ClientLifecycle(t *testing.T) {
 	require.ErrorIs(t, unknownErr, storage.ErrNotFound)
 }
 
+// TestOAuthStore_RegisterClient_deviceOnlyClientWithNoRedirectURIsPersists
+// pins CHAOS-6233's device-only DCR path all the way through the REAL
+// Postgres INSERT, not just app-layer validation: a client with zero
+// redirect_uris (grant_types=[device_code] only, no authorization_code
+// support) is exactly what a nil (never-appended-to) Go []string produces,
+// and encoding/json marshals that as the JSON literal `null` -- which fails
+// migration 0040's `CHECK (jsonb_typeof(redirect_uris) = 'array')` on
+// acr.oauth_clients (constraint name oauth_clients_redirect_uris_check).
+// Before the fix in RegisterClient (marshalJSONStringArray, credentials.go),
+// this test fails RED with exactly that Postgres error; the fix makes it
+// pass by never letting a nil slice reach the marshal call.
+func TestOAuthStore_RegisterClient_deviceOnlyClientWithNoRedirectURIsPersists(t *testing.T) {
+	// Given
+	ctx := context.Background()
+	db := newCredentialStoreDatabase(t, ctx)
+	store, err := NewOAuthStore(db)
+	require.NoError(t, err)
+	var noRedirectURIs []string // deliberately nil, not []string{} -- the shape Register() actually builds for a device-only client
+	client := storage.OAuthClient{
+		ClientID:     dynamicOAuthClientIDPG(0x13),
+		ClientName:   "device-only pg test client",
+		RedirectURIs: noRedirectURIs,
+		CreatedAt:    time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC),
+	}
+	require.Nil(t, client.RedirectURIs)
+
+	// When
+	registered, err := store.RegisterClient(ctx, client)
+
+	// Then: the INSERT actually reached Postgres and the row exists -- a
+	// constraint violation on oauth_clients_redirect_uris_check is exactly
+	// the failure this pins closed.
+	require.NoError(t, err, "expected the row to persist, not violate oauth_clients_redirect_uris_check")
+	require.NotNil(t, registered.RedirectURIs, "the returned client must reflect what Postgres actually stored ([]), not a bare nil")
+	require.Empty(t, registered.RedirectURIs)
+
+	fetched, err := store.GetClient(ctx, client.ClientID)
+	require.NoError(t, err)
+	require.NotNil(t, fetched.RedirectURIs)
+	require.Empty(t, fetched.RedirectURIs)
+}
+
 func TestOAuthStore_AuthorizationRequestIssueAndConsumeLifecycle(t *testing.T) {
 	// Given
 	ctx := context.Background()

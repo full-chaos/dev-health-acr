@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -18,11 +17,11 @@ func (s *DeviceAuthorizationStore) Approve(ctx context.Context, hash storage.Use
 	if err := storage.ValidateDeviceAuthorizationGrant(grant); err != nil {
 		return storage.DeviceAuthorization{}, err
 	}
-	repositories, err := json.Marshal(grant.RepositoryScopes)
+	repositories, err := marshalJSONStringArray(grant.RepositoryScopes)
 	if err != nil {
 		return storage.DeviceAuthorization{}, fmt.Errorf("encode authorized repositories: %w", err)
 	}
-	scopes, err := json.Marshal(grant.Scopes)
+	scopes, err := marshalJSONStringArray(grant.Scopes)
 	if err != nil {
 		return storage.DeviceAuthorization{}, fmt.Errorf("encode authorized scopes: %w", err)
 	}

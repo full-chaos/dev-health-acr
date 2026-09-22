@@ -148,11 +148,11 @@ type execer interface {
 }
 
 func insertCredential(ctx context.Context, executor execer, record storage.CredentialRecord) error {
-	repositories, err := json.Marshal(record.Metadata.RepositoryScopes)
+	repositories, err := marshalJSONStringArray(record.Metadata.RepositoryScopes)
 	if err != nil {
 		return fmt.Errorf("encode repository scopes: %w", err)
 	}
-	scopes, err := json.Marshal(record.Metadata.Scopes)
+	scopes, err := marshalJSONStringArray(record.Metadata.Scopes)
 	if err != nil {
 		return fmt.Errorf("encode credential scopes: %w", err)
 	}
@@ -229,6 +229,26 @@ func scanCredential(row scanner) (contractsv1.ClientCredential, error) {
 	}
 	credential.SchemaVersion = contractsv1.ClientCredentialSchema
 	return credential, nil
+}
+
+// marshalJSONStringArray encodes a []string for a `JSONB NOT NULL` column
+// carrying a `CHECK (jsonb_typeof(col) = 'array')` constraint (every such
+// column in this schema: oauth_clients.redirect_uris, device_authorizations'
+// repository_hints/authorized_repository_scopes/authorized_scopes,
+// client_credentials' repository_scopes/scopes). encoding/json marshals a
+// nil []string as the JSON literal `null`, whose jsonb_typeof is "null", not
+// "array" -- every one of those CHECK constraints then rejects the row, and
+// the caller sees a generic wrapped/sanitized database error with no hint
+// this is why (CHAOS-6233: a device-only OAuth client, which legitimately
+// has zero redirect_uris, failed exactly this way). This is the single seam
+// every INSERT/UPDATE touching one of those columns must go through instead
+// of a bare json.Marshal, so a nil-vs-empty slice can never reach one of
+// them as anything but `[]`.
+func marshalJSONStringArray(values []string) ([]byte, error) {
+	if values == nil {
+		values = []string{}
+	}
+	return json.Marshal(values)
 }
 
 func mapNotFound(operation string, err error) error {
