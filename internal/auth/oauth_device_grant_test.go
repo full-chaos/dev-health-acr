@@ -172,3 +172,88 @@ func TestOAuthServiceExchangeDeviceCodeRefusals(t *testing.T) {
 		t.Fatalf("wrong grant type outcome = %s, want %s", wantGrantType, oauthvocab.OutcomeUnsupportedGrantType)
 	}
 }
+
+// TestDeviceFlowServicePollRefusesAnOAuthDeviceGrant pins the CHAOS-6233
+// structural fix (three prior review rounds each found a way a SEPARATE
+// pre-check disagreed with Poll's own normalization/lookup): the conflict
+// check now lives INSIDE Poll itself, on the already-normalized,
+// already-resolved device code, so there is exactly one normalization and
+// one lookup for both the legacy and the OAuth-aware redemption paths.
+func TestDeviceFlowServicePollRefusesAnOAuthDeviceGrant(t *testing.T) {
+	h := newOAuthHarness(t)
+	clientID := h.register(t)
+	started, err := h.oauth.StartDeviceAuthorization(context.Background(), OAuthDeviceAuthorizationRequest{ClientID: clientID, Scope: ScopeContextRead})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The guard fires before the record's state is even considered: an
+	// UNDECIDED OAuth device grant is refused the same as an approved one --
+	// Poll must never leak "this is a real, pending OAuth device code" to the
+	// legacy caller either.
+	_, err = h.devices.Poll(context.Background(), started.DeviceCode)
+	if !errors.Is(err, ErrOAuthDeviceGrantConflict) {
+		t.Fatalf("Poll on a pending OAuth device grant: err = %v, want ErrOAuthDeviceGrantConflict", err)
+	}
+	var pollError *DevicePollError
+	if !errors.As(err, &pollError) || pollError.Kind != DevicePollInvalidGrant {
+		t.Fatalf("Poll on a pending OAuth device grant: pollError = %+v, want Kind=invalid_grant", pollError)
+	}
+
+	h.approveDeviceGrant(t, started.DeviceCode, []string{"org/repo"})
+	h.now = h.now.Add(storage.DeviceAuthorizationPollInterval)
+	_, err = h.devices.Poll(context.Background(), started.DeviceCode)
+	if !errors.Is(err, ErrOAuthDeviceGrantConflict) {
+		t.Fatalf("Poll on an approved OAuth device grant: err = %v, want ErrOAuthDeviceGrantConflict", err)
+	}
+}
+
+// TestDeviceFlowServicePollUnaffectedByLegacyDeviceCodes confirms the
+// CHAOS-6233 guard is additive: a device code from the pre-existing
+// typed-user-code flow (Start, no associated storage.OAuthDeviceGrant row)
+// polls exactly as it always has.
+func TestDeviceFlowServicePollUnaffectedByLegacyDeviceCodes(t *testing.T) {
+	h := newOAuthHarness(t)
+	started, err := h.devices.Start(context.Background(), DeviceAuthorizationHints{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = h.devices.Poll(context.Background(), started.DeviceCode)
+	if !errors.Is(err, ErrDeviceAuthorizationPending) {
+		t.Fatalf("Poll on a legacy device code: err = %v, want ErrDeviceAuthorizationPending", err)
+	}
+}
+
+// TestDeviceFlowServicePollFailsClosedOnDeviceGrantLookupError pins the
+// fail-closed half of the CHAOS-6233 guard at its new home inside Poll.
+func TestDeviceFlowServicePollFailsClosedOnDeviceGrantLookupError(t *testing.T) {
+	h := newOAuthHarness(t)
+	clientID := h.register(t)
+	started, err := h.oauth.StartDeviceAuthorization(context.Background(), OAuthDeviceAuthorizationRequest{ClientID: clientID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := func() time.Time { return h.now }
+	service, err := NewService(h.creds, ServiceOptions{Now: clock})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failing, err := NewDeviceFlowService(h.store, service, DeviceFlowOptions{Now: clock, OAuthDeviceGrants: failingDeviceGrantLookup{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = failing.Poll(context.Background(), started.DeviceCode)
+	if !errors.Is(err, ErrOAuthDeviceGrantLookupUnavailable) {
+		t.Fatalf("Poll on a lookup failure: err = %v, want ErrOAuthDeviceGrantLookupUnavailable", err)
+	}
+}
+
+// failingDeviceGrantLookup makes every GetDeviceGrant call fail with a
+// generic (non-ErrNotFound) error.
+type failingDeviceGrantLookup struct{}
+
+var errDeviceGrantLookupDown = errors.New("device grant lookup unavailable")
+
+func (failingDeviceGrantLookup) GetDeviceGrant(context.Context, storage.DeviceCodeHash) (storage.OAuthDeviceGrant, error) {
+	return storage.OAuthDeviceGrant{}, errDeviceGrantLookupDown
+}

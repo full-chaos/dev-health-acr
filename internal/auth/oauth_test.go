@@ -64,14 +64,20 @@ func newOAuthHarness(t *testing.T, resources ...string) *oauthHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.devices, err = NewDeviceFlowService(store, service, DeviceFlowOptions{Now: clock})
+	// The SAME OAuthStore instance is wired into both h.devices (so Poll can
+	// see the device-grant bindings StartDeviceAuthorization writes -- CHAOS-6233)
+	// and h.oauth below (so StartDeviceAuthorization/ExchangeDeviceCode write
+	// and read the same store Poll reads) -- two separate stores would make
+	// the harness unable to reproduce the conflict Poll now refuses.
+	oauthStore := memory.NewOAuthStore(clock)
+	h.devices, err = NewDeviceFlowService(store, service, DeviceFlowOptions{Now: clock, OAuthDeviceGrants: oauthStore})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(resources) == 0 {
 		resources = []string{testResource}
 	}
-	h.oauth, err = NewOAuthService(memory.NewOAuthStore(clock), h.devices, OAuthConfig{Issuer: testIssuer, Resources: resources, ClientMetadata: h.meta, Now: clock})
+	h.oauth, err = NewOAuthService(oauthStore, h.devices, OAuthConfig{Issuer: testIssuer, Resources: resources, ClientMetadata: h.meta, Now: clock})
 	if err != nil {
 		t.Fatal(err)
 	}

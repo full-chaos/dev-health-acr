@@ -18,7 +18,6 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
-	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/logsanitize"
 	"github.com/full-chaos/dev-health-acr/internal/oauthvocab"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -267,54 +266,6 @@ func deviceVerificationURIComplete(verificationURI, userCode string) string {
 	query.Set("user_code", userCode)
 	parsed.RawQuery = query.Encode()
 	return parsed.String()
-}
-
-// oauthDeviceCodeConflict blocks a device code that belongs to an RFC 8628
-// device grant (POST /device_authorization) from being redeemed through the
-// legacy JSON device-flow endpoint (device_routes.go), which mints with
-// neither the resource nor the requested-scope binding storage.OAuthDeviceGrant
-// carries; the OAuth-aware /token branch (ExchangeDeviceCode, this file) is
-// the only correct redemption path for such a code. It writes the response
-// and the same "acr-api oauth step" telemetry line the OAuth /token branch
-// would have written, and reports true when the caller must stop. Returns
-// false immediately (no lookup) when OAuth login is not configured at all.
-//
-// The lookup fails CLOSED: an error other than "no such grant" -- a lookup
-// outage, a missing migration, a permission failure -- is an UNCONFIRMED
-// conflict, not a cleared one. The device code might belong to an OAuth
-// device grant this call simply failed to prove, and minting an unbound
-// credential on that uncertainty is exactly the defect this guard exists to
-// close; only a definite storage.ErrNotFound clears it.
-func (a *App) oauthDeviceCodeConflict(w http.ResponseWriter, r *http.Request, deviceCode string) bool {
-	if a.runtime == nil || a.runtime.OAuth == nil || storage.IsNil(a.runtime.OAuth.Store) {
-		return false
-	}
-	// Hash the SAME normalized form DeviceFlowService.Poll and ExchangeDeviceCode
-	// hash (auth.NormalizeDeviceCode -- trims whitespace, checks the base64url
-	// shape) -- hashing the raw presented value here would let a
-	// whitespace-padded code slip past this lookup while Poll's own
-	// normalization still resolves and redeems it. A code that fails to
-	// normalize cannot match any stored hash either way, so it is safe to let
-	// it fall through to Poll, which rejects it with the same invalid_grant it
-	// always has.
-	normalized, ok := auth.NormalizeDeviceCode(deviceCode)
-	if !ok {
-		return false
-	}
-	_, err := a.runtime.OAuth.Store.GetDeviceGrant(r.Context(), storage.HashDeviceCode(normalized))
-	switch {
-	case err == nil:
-		a.writeOAuthDeviceError(w, contractsv1.OAuthDeviceErrorInvalidGrant, 0)
-		a.emitOAuthStep(r, oauthvocab.StepToken, oauthvocab.OutcomeInvalidGrant, "", http.StatusBadRequest)
-		return true
-	case errors.Is(err, storage.ErrNotFound):
-		return false
-	default:
-		a.logOAuthDependencyFailure(r, oauthvocab.StepToken)
-		a.writeDeviceDependencyError(w, r)
-		a.emitOAuthStep(r, oauthvocab.StepToken, oauthvocab.OutcomeUnavailable, "", http.StatusServiceUnavailable)
-		return true
-	}
 }
 
 // handleOAuthDeviceAuthorization serves RFC 8628's device_authorization

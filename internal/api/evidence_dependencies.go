@@ -147,7 +147,15 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 		if err != nil {
 			return nil, err
 		}
-		deviceFlow, err = auth.NewDeviceFlowService(deps.Runtime.DeviceAuthorizations, credentialService, auth.DeviceFlowOptions{Now: deps.Now})
+		// Wired here, before newOAuthService below constructs anything from it,
+		// so Poll can refuse an RFC 8628 device code the moment OAuth login is
+		// configured (deps.Runtime.OAuth is config data present on deps
+		// already, not something derived from deviceFlow or oauth).
+		var oauthDeviceGrants auth.OAuthDeviceGrantLookup
+		if deps.Runtime.OAuth != nil {
+			oauthDeviceGrants = deps.Runtime.OAuth.Store
+		}
+		deviceFlow, err = auth.NewDeviceFlowService(deps.Runtime.DeviceAuthorizations, credentialService, auth.DeviceFlowOptions{Now: deps.Now, OAuthDeviceGrants: oauthDeviceGrants})
 		if err != nil {
 			return nil, err
 		}

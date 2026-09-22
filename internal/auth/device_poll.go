@@ -27,6 +27,26 @@ var (
 	ErrDeviceInvalidGrant         = errors.New("device authorization grant is invalid")
 )
 
+// OAuthDeviceGrantLookup is the narrow capability Poll needs to refuse
+// redeeming a device code that belongs to an RFC 8628 device grant (CHAOS-6233)
+// through this legacy path. Satisfied by storage.OAuthStore.
+type OAuthDeviceGrantLookup interface {
+	GetDeviceGrant(ctx context.Context, hash storage.DeviceCodeHash) (storage.OAuthDeviceGrant, error)
+}
+
+// ErrOAuthDeviceGrantConflict marks a Poll refusal for a device code that
+// belongs to an RFC 8628 device grant: the underlying error is still a
+// *DevicePollError with the ordinary invalid_grant wire shape, but a caller
+// that wants OAuth-login telemetry for this SPECIFIC refusal
+// (internal/api/device_routes.go) can detect it with errors.Is.
+var ErrOAuthDeviceGrantConflict = errors.New("device code belongs to an oauth device grant")
+
+// ErrOAuthDeviceGrantLookupUnavailable marks a Poll refusal caused by a
+// failed attempt to confirm whether a device code belongs to an RFC 8628
+// device grant (a storage/dependency failure, not a definite answer) --
+// Poll fails CLOSED on this uncertainty rather than proceeding to redeem.
+var ErrOAuthDeviceGrantLookupUnavailable = errors.New("oauth device grant lookup unavailable")
+
 type DevicePollError struct {
 	Kind       DevicePollErrorKind
 	RetryAfter time.Duration
@@ -67,9 +87,29 @@ func (s *DeviceFlowService) Poll(ctx context.Context, deviceCode string) (Issued
 	if !ok {
 		return IssuedCredential{}, newDevicePollError(DevicePollInvalidGrant, 0)
 	}
-	record, err := s.store.Poll(ctx, storage.HashDeviceCode(deviceCode))
+	hash := storage.HashDeviceCode(deviceCode)
+	record, err := s.store.Poll(ctx, hash)
 	if err != nil {
 		return IssuedCredential{}, mapDevicePollStoreError(err)
+	}
+	// A device code started by RFC 8628's POST /device_authorization
+	// (CHAOS-6233) must be redeemed only through OAuthService.ExchangeDeviceCode,
+	// which binds the credential to the grant's resource and requested scope;
+	// this legacy path binds neither. Checked here, on the ALREADY-NORMALIZED,
+	// ALREADY-RESOLVED device code -- the one place this poll and the
+	// OAuth-aware one necessarily agree on what "the same device code" means,
+	// closing the class of defect a separate pre-check (hashing or
+	// normalizing even slightly differently from this method) keeps
+	// reopening.
+	if !storage.IsNil(s.oauthDeviceGrants) {
+		if _, grantErr := s.oauthDeviceGrants.GetDeviceGrant(ctx, hash); grantErr == nil {
+			return IssuedCredential{}, fmt.Errorf("%w: %w", ErrOAuthDeviceGrantConflict, newDevicePollError(DevicePollInvalidGrant, 0))
+		} else if !errors.Is(grantErr, storage.ErrNotFound) {
+			// Fail CLOSED: an unconfirmed lookup is an unconfirmed conflict,
+			// never "safe to proceed" -- redeeming on this uncertainty is
+			// exactly the defect this guard exists to close.
+			return IssuedCredential{}, fmt.Errorf("%w: %w", ErrOAuthDeviceGrantLookupUnavailable, grantErr)
+		}
 	}
 	switch record.State {
 	case storage.DeviceAuthorizationStatePending:

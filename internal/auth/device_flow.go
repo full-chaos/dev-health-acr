@@ -30,14 +30,23 @@ var (
 type DeviceFlowOptions struct {
 	Now    func() time.Time
 	Random io.Reader
+	// OAuthDeviceGrants, when set, lets Poll refuse redeeming a device code
+	// that belongs to an RFC 8628 device grant (CHAOS-6233, POST
+	// /device_authorization): such a code must be redeemed only through
+	// OAuthService.ExchangeDeviceCode, which binds the credential to the
+	// grant's resource and requested scope; this legacy path binds neither.
+	// Nil when OAuth login is not configured at all -- Poll then behaves
+	// exactly as it always has.
+	OAuthDeviceGrants OAuthDeviceGrantLookup
 }
 
 type DeviceFlowService struct {
-	store       storage.DeviceAuthorizationStore
-	credentials *Service
-	now         func() time.Time
-	random      io.Reader
-	randomMu    sync.Mutex
+	store             storage.DeviceAuthorizationStore
+	credentials       *Service
+	now               func() time.Time
+	random            io.Reader
+	randomMu          sync.Mutex
+	oauthDeviceGrants OAuthDeviceGrantLookup
 }
 
 type DeviceAuthorizationStart struct {
@@ -83,7 +92,14 @@ func NewDeviceFlowService(store storage.DeviceAuthorizationStore, credentials *S
 	if storage.IsNil(options.Random) {
 		options.Random = rand.Reader
 	}
-	return &DeviceFlowService{store: store, credentials: credentials, now: options.Now, random: options.Random}, nil
+	oauthDeviceGrants := options.OAuthDeviceGrants
+	if storage.IsNil(oauthDeviceGrants) {
+		oauthDeviceGrants = nil
+	}
+	return &DeviceFlowService{
+		store: store, credentials: credentials, now: options.Now, random: options.Random,
+		oauthDeviceGrants: oauthDeviceGrants,
+	}, nil
 }
 
 func (s *DeviceFlowService) Start(ctx context.Context, hints DeviceAuthorizationHints) (DeviceAuthorizationStart, error) {

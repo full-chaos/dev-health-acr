@@ -560,8 +560,8 @@
         "description": "deviceRuntimeHandler -- no auth check beyond runtime readiness; protected only by allowDeviceRequest's per-IP rate limiter.",
         "anchor": {
           "path": "internal/api/device_routes.go",
-          "line": 251,
-          "line_end": 251,
+          "line": 260,
+          "line_end": 260,
           "note": "func (a *App) deviceRuntimeHandler(next http.Handler) http.Handler {"
         }
       },
@@ -615,8 +615,8 @@
         "description": "handleDeviceToken dispatches on Content-Type: 'application/x-www-form-urlencoded' -> handleTokenExchange (RFC 8693 grant; subject_token = k8s SA JWT, validated via github.com/full-chaos/dev-health-go/authverify's KubernetesTokenReviewValidator -- see docs/endpoint-profiles.md '#authverify-anchor' for the full v0.5.5-pinned trace). Otherwise -> handleDeviceCodeToken (device_code poll, auth.DeviceFlow.Poll) -- which first refuses (CHAOS-6233, oauthDeviceCodeConflict) any device_code that belongs to an RFC 8628 device grant (storage.OAuthDeviceGrant present for its hash), since this legacy path mints with neither the resource nor the requested-scope subset that grant's binding requires. THIS IS THE acr_workload_identity_exchange ENDPOINT L0 left as a stated gap.",
         "anchor": {
           "path": "internal/api/device_routes.go",
-          "line": 69,
-          "line_end": 79,
+          "line": 70,
+          "line_end": 80,
           "note": "func (a *App) handleDeviceToken(w http.ResponseWriter, r *http.Request) {"
         }
       },
@@ -690,8 +690,8 @@
         "description": "deviceApprovalHandler requires X-ACR-Web-Assertion EXACTLY (exactly one header) AND explicitly rejects if Authorization is ALSO present, at the route-wrapper level itself (in addition to the same check inside authenticateWebAssertion) -- a double belt-and-braces enforcement of the CHAOS-3271 double-header rejection pattern. RequireScope(credential:issue).",
         "anchor": {
           "path": "internal/api/device_routes.go",
-          "line": 229,
-          "line_end": 229,
+          "line": 238,
+          "line_end": 238,
           "note": "func (a *App) deviceApprovalHandler(next http.Handler) http.Handler {"
         }
       },
@@ -745,8 +745,8 @@
         "description": "selfLifecycleHandler = authenticator.Middleware (bearer only, allowWebAssertions=false) + ProtectedHandler(rate limit only) -- NO RequireScope call. Self-service rotation only needs a valid credential; it operates on the CALLER'S OWN principal.CredentialID, so no additional scope check is layered on.",
         "anchor": {
           "path": "internal/api/device_routes.go",
-          "line": 244,
-          "line_end": 244,
+          "line": 253,
+          "line_end": 253,
           "note": "func (a *App) selfLifecycleHandler(next http.Handler) http.Handler {"
         }
       },
@@ -788,8 +788,8 @@
         "description": "Same selfLifecycleHandler as rotate -- bearer only, no explicit scope requirement.",
         "anchor": {
           "path": "internal/api/device_routes.go",
-          "line": 244,
-          "line_end": 244,
+          "line": 253,
+          "line_end": 253,
           "note": "func (a *App) selfLifecycleHandler(next http.Handler) http.Handler {"
         }
       },
@@ -834,8 +834,8 @@
         "description": "No authenticator wrapper -- mux.HandleFunc directly; the body is built from process configuration alone.",
         "anchor": {
           "path": "internal/api/oauth_routes.go",
-          "line": 71,
-          "line_end": 71,
+          "line": 70,
+          "line_end": 70,
           "note": "func (a *App) handleOAuthMetadata("
         }
       },
@@ -865,7 +865,7 @@
       },
       "public_rationale": "OAuth 2.1 authorization endpoint (authorization code + PKCE S256 + RFC 8707 resource) for hosted MCP clients; the caller has no credential by definition. It only starts a consent and sends the browser (302) to the web consent page with a 256-bit request handle; the handle authorizes nothing by itself -- the decision is made on POST /authorize/consent, which admits only a web assertion for the signed-in user.",
       "primary_validator": {
-        "description": "OAuthService.Authorize -- verifies the client (a dynamic registration or a client ID metadata document) and the registered redirect URI before anything is redirectable (exact match, except a loopback URI registered with no port also matches any port on that same scheme/host/path/query -- RFC 8252 §7.3; localhost additionally for client ID metadata document clients only), then requires response_type=code, S256 PKCE, a configured resource and a known scope; only then starts the consent and redirects to the web consent page; rate limited per IP by AllowDeviceCreation.",
+        "description": "OAuthService.Authorize -- verifies the client (a dynamic registration or a client ID metadata document) and the registered redirect URI before anything is redirectable (exact match, except a loopback URI registered with no port also matches any port on that same scheme/host/path/query -- RFC 8252 \u00a77.3; localhost additionally for client ID metadata document clients only), then requires response_type=code, S256 PKCE, a configured resource and a known scope; only then starts the consent and redirects to the web consent page; rate limited per IP by AllowDeviceCreation.",
         "anchor": {
           "path": "internal/auth/oauth.go",
           "line": 397,
@@ -898,8 +898,8 @@
         "description": "deviceApprovalHandler (the same wrapper as device_approval) requires X-ACR-Web-Assertion EXACTLY (exactly one header) and rejects if Authorization is also present, then RequireScope(credential:issue): only the web, acting for its signed-in user, can read or decide a request; the browser that holds the handle cannot.",
         "anchor": {
           "path": "internal/api/device_routes.go",
-          "line": 229,
-          "line_end": 229,
+          "line": 238,
+          "line_end": 238,
           "note": "func (a *App) deviceApprovalHandler(next http.Handler) http.Handler {"
         }
       },
@@ -999,7 +999,7 @@
       },
       "action": "oauth.token.authorization_code",
       "resource_resolver": "Authorization code -> stored request -> approved device authorization (org + repository scopes chosen at web approval).",
-      "disclosure_behavior": "RFC 6749 §5.2 JSON errors (invalid_grant, invalid_target, unsupported_grant_type, invalid_request); unknown, expired and used codes are indistinguishable (invalid_grant).",
+      "disclosure_behavior": "RFC 6749 \u00a75.2 JSON errors (invalid_grant, invalid_target, unsupported_grant_type, invalid_request); unknown, expired and used codes are indistinguishable (invalid_grant).",
       "issued_credential": [
         {
           "class_id": "acr_client_credential",
