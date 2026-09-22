@@ -15,6 +15,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/projectionrun"
+	"github.com/full-chaos/dev-health-acr/internal/otelexport"
 	"github.com/full-chaos/dev-health-acr/internal/version"
 )
 
@@ -204,12 +205,21 @@ func serve(args []string) error {
 		return fmt.Errorf("configuration: %w", err)
 	}
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
 	info := version.Current()
-	logger.Info("starting acr-projector", append([]any{"version", info.Version, "commit", info.Commit, "build_date", info.Date}, cfg.SafeAttributes()...)...)
-
+	otelConfig, err := otelexport.ConfigFromEnv(os.LookupEnv, "acr-projector", info)
+	if err != nil {
+		return fmt.Errorf("configuration: %w", err)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	exporter, err := otelexport.New(ctx, otelConfig)
+	if err != nil {
+		return fmt.Errorf("initialize otel export: %w", err)
+	}
+	defer shutdownExporter(exporter)
+	logger := slog.New(exporter.LogHandler(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel})))
+	logger.Info("starting acr-projector", append([]any{"version", info.Version, "commit", info.Commit, "build_date", info.Date}, cfg.SafeAttributes()...)...)
+	exporter.LogStart(ctx, logger)
 
 	runtime, err := openRuntime(ctx, cfg, logger)
 	if err != nil {
@@ -227,7 +237,7 @@ func serve(args []string) error {
 
 	coordinatorErr := make(chan error, 1)
 	if runtime.Coordinator != nil {
-		go func() { coordinatorErr <- runtime.Coordinator.Run(ctx) }()
+		go func() { coordinatorErr <- runtime.Coordinator.RunTraced(ctx, exporter.Tracer()) }()
 	} else {
 		logger.Warn("projection coordinator did not start; readiness server is running in disabled mode")
 	}
@@ -255,4 +265,15 @@ func serve(args []string) error {
 		return runErr
 	}
 	return nil
+}
+
+// shutdownExporter flushes what the exporter still buffers, bounded so a
+// dark collector never holds the process past its termination grace period.
+// A flush failure is written to stderr: the logger may itself be exporting.
+func shutdownExporter(exporter *otelexport.Exporter) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := exporter.Shutdown(ctx); err != nil {
+		fmt.Fprintln(os.Stderr, "acr-projector: otel export shutdown incomplete:", err)
+	}
 }

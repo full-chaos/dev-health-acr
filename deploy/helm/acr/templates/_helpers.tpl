@@ -531,3 +531,50 @@ login ends in invalid_target.
 {{- fail (printf "oauth: acrMcp.oauth.resourceUrl %q must be listed in config.oauth.resources" ($m.resourceUrl | default "")) -}}
 {{- end -}}
 {{- end -}}
+
+{{- /*
+OTLP export environment for one workload's ConfigMap. Renders nothing when
+otel.enabled is false, so a disabled chart leaves every ConfigMap unchanged.
+Call with (dict "root" $ "name" <service.name>).
+*/ -}}
+{{- define "acr.otelEnv" -}}
+{{- $o := .root.Values.otel -}}
+{{- if $o.enabled -}}
+{{- $endpoint := trim (toString $o.endpoint) -}}
+{{- /* `required` accepts a whitespace-only string, and the workloads then
+     exit at startup ("OTEL_ENABLED=true requires OTEL_EXPORTER_OTLP_ENDPOINT")
+     -- a restart loop instead of a refused release. Trim first, and require a
+     scheme the OTLP gRPC exporter can parse. */ -}}
+{{- if not $endpoint -}}
+{{- fail "otel.endpoint is required when otel.enabled is true" -}}
+{{- end -}}
+{{- if not (or (hasPrefix "http://" $endpoint) (hasPrefix "https://" $endpoint)) -}}
+{{- fail "otel.endpoint must start with http:// or https:// (http:// selects plaintext OTLP/gRPC)" -}}
+{{- end -}}
+{{- /* A hostless endpoint (http://:4317) parses, and the OTLP exporter then
+     dials the pod's own loopback: the deployment looks configured and every
+     export is refused locally. Require a host. */ -}}
+{{- $authority := (splitList "/" (trimPrefix "https://" (trimPrefix "http://" $endpoint))) | first -}}
+{{- if not (splitList ":" $authority | first) -}}
+{{- fail "otel.endpoint must name a collector host, not just a port (http://:4317 sends to the pod's own loopback)" -}}
+{{- end -}}
+{{- $service := trim (toString .name) -}}
+{{- if not $service -}}
+{{- fail "otel.serviceNames entries must be non-empty" -}}
+{{- end -}}
+OTEL_ENABLED: "true"
+OTEL_EXPORTER_OTLP_ENDPOINT: {{ $endpoint | quote }}
+OTEL_SERVICE_NAME: {{ $service | quote }}
+{{- end -}}
+{{- end -}}
+
+{{- /*
+NetworkPolicy egress to the OTLP collector port, when otel.enabled.
+*/ -}}
+{{- define "acr.otelEgress" -}}
+{{- if .Values.otel.enabled -}}
+- ports:
+    - protocol: TCP
+      port: {{ .Values.otel.egressPort }}
+{{- end -}}
+{{- end -}}

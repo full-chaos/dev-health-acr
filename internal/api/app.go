@@ -19,6 +19,7 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
+	"github.com/full-chaos/dev-health-acr/internal/otelexport"
 )
 
 type contextKey string
@@ -97,7 +98,10 @@ func (a *App) Handler() http.Handler {
 		mux.HandleFunc("POST "+OAuthRegisterPath, a.handleOAuthRegister)
 		mux.HandleFunc("POST "+OAuthDeviceAuthorizationPath, a.handleOAuthDeviceAuthorization)
 	}
-	return a.InstrumentedHandler(mux)
+	// RouteNamer names the OTel server span (when export is on) by the matched
+	// route: InstrumentedHandler's middleware sits between the exporter's
+	// handler and this mux.
+	return a.InstrumentedHandler(otelexport.RouteNamer(mux))
 }
 
 type healthResponse struct {

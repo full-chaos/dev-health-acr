@@ -1474,12 +1474,53 @@ or to roll schema backward.
 
 ## Observability and incident response
 
-ACR supplies bounded in-process snapshots and structured logs; it does not
-ship an HTTP, Prometheus, or OpenTelemetry exporter. The hosting service owns
-exporter integration, retention, alert routing, and tenancy review. Use the
-metric mapping and SLOs in [observability](observability.md). Never add bearer
+ACR supplies bounded in-process snapshots and structured logs, and can export
+its own service telemetry over OTLP (below). The hosting service owns the
+collector, retention, alert routing, and tenancy review. Use the metric
+mapping and SLOs in [observability](observability.md). Never add bearer
 values, DSNs, packet content, evidence URLs, transcripts, organization IDs, or
 repository names as log fields or metric labels.
+
+### OpenTelemetry export
+
+`acr-api`, `acr-mcp` (http transport only) and `acr-projector` export over
+OTLP/gRPC when `OTEL_ENABLED=true`:
+
+| Variable | Meaning |
+| --- | --- |
+| `OTEL_ENABLED` | `true`/`false` (unset = false). Any other value, or `true` without an endpoint, fails startup. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Collector, e.g. `http://collector:4317` (`http://` = plaintext gRPC). Required when enabled, and it must name a host: a hostless `http://:4317` is refused at startup rather than exporting to the pod's own loopback. Other standard `OTEL_EXPORTER_OTLP_*` variables apply. |
+| `OTEL_SERVICE_NAME` | `service.name`; defaults to the binary name. |
+| `OTEL_RESOURCE_ATTRIBUTES` | Extra resource attributes. `service.version` is always the build commit. |
+
+What is exported: one server span per HTTP request, named by the matched
+route (never the raw path; `/healthz`, `/readyz`, `/livez` are not traced),
+the `http.server.*` metrics, one `projection tick` span per projector tick,
+and every structured log line the process writes, at the same level and with
+the same fields, correlated to the active span. The STDIO transport of
+`acr-mcp` never exports. Each process writes one `acr otel export` line at
+start with `state` `enabled` or `disabled`, so a dark backend can be told
+apart from a process that was never told to send — at Info, like every other
+decision line this service emits, so a deployment running at
+`config.logLevel` `warn` or `error` suppresses it together with the
+per-request lines (spans and metrics still export).
+
+What is never exported: Genkit's spans, metrics and log lines (they carry model
+prompt and response content). The exporter's providers are passed explicitly
+to the HTTP handler, the log handler and the tick tracer; nothing installs a
+global OpenTelemetry provider or `slog.SetDefault`, so Genkit -- which reads
+only the globals, which `modelprovider` keeps exporter-less -- has no path to
+the collector. `internal/otelexport`'s `TestNoGlobalTelemetryInstallOutsideModelProvider`
+fails on any new global install, and `modelprovider`'s
+`TestGenkitTelemetryNeverExported` runs a real generation inside an exported
+request and asserts no Genkit span, metric or content reaches the export.
+
+The Helm chart sets these from `otel.enabled`, `otel.endpoint` and
+`otel.serviceNames` (off by default); a release whose endpoint is blank,
+schemeless or hostless, or whose service name is blank, is refused at render
+time. The api and mcp NetworkPolicies gain collector egress when export is on;
+no policy selects the projector pods, so its egress is unrestricted — if one
+is ever added it must carry the collector port too.
 
 Troubleshoot with safe status, error classes, and deployment logs:
 

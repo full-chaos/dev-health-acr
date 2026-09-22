@@ -1,6 +1,14 @@
 package mcp
 
-import "net/http"
+import (
+	"context"
+	"io"
+	"net"
+	"net/http"
+
+	"github.com/full-chaos/dev-health-acr/internal/sidecar"
+	"github.com/full-chaos/dev-health-acr/internal/version"
+)
 
 // This file exposes package internals to the external mcp_test package, whose
 // tests drive the hosted transport only through its exported surface.
@@ -25,4 +33,16 @@ const HostedRepositoryRequiredMessageForTest = hostedRepositoryRequiredMessage
 // reached it.
 func WrapHTTPHandlerSDKForTest(h *HTTPHandler, wrap func(http.Handler) http.Handler) {
 	h.mcp = wrap(h.mcp)
+}
+
+// ServeHTTPOnForTest runs the serve command's own path (the process
+// configuration ServeHTTPTransport builds, then serveHTTPOn) on an
+// already-bound listener, so a test learns the port.
+func ServeHTTPOnForTest(ctx context.Context, listener net.Listener, sidecarCfg sidecar.Config, identity version.Info, diagnostics io.Writer, opts ServeOptions) error {
+	cfg, err := newServeProcessConfig(sidecarCfg, identity, diagnostics, opts)
+	if err != nil {
+		_ = listener.Close()
+		return err
+	}
+	return serveHTTPOn(ctx, listener, cfg, identity, opts)
 }

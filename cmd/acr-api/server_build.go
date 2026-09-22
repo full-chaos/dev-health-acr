@@ -28,6 +28,10 @@ type serverBuildRequest struct {
 	serviceVersion string
 	openRuntime    func(context.Context, hosted.Options) (*hosted.Runtime, error)
 	newServer      func(api.ServerConfig, http.Handler, *slog.Logger) (serverRunner, error)
+	// wrapHandler, when set, wraps the application handler before the server
+	// is built (the OTel server span and metrics). nil serves the handler
+	// unwrapped.
+	wrapHandler func(http.Handler) http.Handler
 }
 
 func prepareServer(ctx context.Context, request serverBuildRequest) (serverRunner, func() error, error) {
@@ -56,7 +60,11 @@ func prepareServer(ctx context.Context, request serverBuildRequest) (serverRunne
 		}
 		return errors.Join(app.Close(), closeRuntime())
 	}
-	server, err := request.newServer(serverConfig(request.config), app.Handler(), request.logger)
+	handler := app.Handler()
+	if request.wrapHandler != nil {
+		handler = request.wrapHandler(handler)
+	}
+	server, err := request.newServer(serverConfig(request.config), handler, request.logger)
 	if err != nil {
 		return nil, nil, closeBuildFailure(closeApplication, fmt.Errorf("initialize server: %w", err))
 	}

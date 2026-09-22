@@ -10,9 +10,11 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	acrmcp "github.com/full-chaos/dev-health-acr/internal/mcp"
+	"github.com/full-chaos/dev-health-acr/internal/otelexport"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 	"github.com/full-chaos/dev-health-acr/internal/version"
 )
@@ -355,6 +357,13 @@ func runServe(opts acrmcp.ServeOptions) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if opts.Transport == acrmcp.TransportHTTP {
+		exporter, err := newHTTPExporter(ctx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "acr-mcp: startup failed: %s\n", err.Error())
+			return 1
+		}
+		defer shutdownExporter(exporter)
+		opts.Telemetry = exporter
 		if err := acrmcp.ServeHTTPTransport(ctx, os.Stderr, version.Current(), opts); err != nil {
 			return 1
 		}
@@ -364,4 +373,29 @@ func runServe(opts acrmcp.ServeOptions) int {
 		return 1
 	}
 	return 0
+}
+
+// newHTTPExporter builds the http transport's OTLP export from OTEL_ENABLED
+// and the standard OTEL_* variables. The STDIO transport never exports: it
+// runs on a developer's machine, and its stdout belongs to JSON-RPC.
+func newHTTPExporter(ctx context.Context) (*otelexport.Exporter, error) {
+	cfg, err := otelexport.ConfigFromEnv(os.LookupEnv, "acr-mcp", version.Current())
+	if err != nil {
+		return nil, fmt.Errorf("configuration: %w", err)
+	}
+	exporter, err := otelexport.New(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("initialize otel export: %w", err)
+	}
+	return exporter, nil
+}
+
+// shutdownExporter flushes what the exporter still buffers, bounded so a
+// dark collector never holds the process past its termination grace period.
+func shutdownExporter(exporter *otelexport.Exporter) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := exporter.Shutdown(ctx); err != nil {
+		fmt.Fprintln(os.Stderr, "acr-mcp: otel export shutdown incomplete:", err)
+	}
 }

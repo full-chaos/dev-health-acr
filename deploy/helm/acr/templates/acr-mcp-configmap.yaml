@@ -31,6 +31,9 @@ data:
   ACR_API_ALLOW_INSECURE_INTERNAL_HTTP: "true"
   {{- end }}
   ACR_LOG_LEVEL: {{ $m.logLevel | quote }}
+  {{- with include "acr.otelEnv" (dict "root" $ "name" $.Values.otel.serviceNames.mcp) }}
+  {{- . | nindent 2 }}
+  {{- end }}
   {{- with $m.oauth }}
   {{- if or .resourceUrl .authorizationServer }}
   {{- include "acr.validateMcpOAuth" $ }}

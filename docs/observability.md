@@ -111,10 +111,11 @@ dimensions. `context-query.v1` and `ranker.v2` are aliases of the canonical
 context-packet constants, not copyable telemetry literals. Query timeout and store
 backend dimensions expose database/query behavior without statement text or IDs.
 
-HTTP metric export is intentionally deferred. This package supplies
-bounded snapshots and a standard-library `SlogSink`; an HTTP/Prometheus/OpenTelemetry
-exporter must be introduced through the owning service integration with its own
-availability, tenancy, and cardinality review.
+This package supplies bounded snapshots and a standard-library `SlogSink`; it
+exports nothing itself. Process-level OTLP export (HTTP server spans, HTTP
+server metrics, and a copy of the structured log lines) is the separate
+`internal/otelexport` package, off unless `OTEL_ENABLED=true` -- see
+[operations](operations.md#opentelemetry-export).
 
 The deterministic API driver exercises one canonical request ID through
 authentication, per-class admission, the real evaluation evidence store and

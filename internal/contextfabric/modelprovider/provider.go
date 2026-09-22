@@ -336,12 +336,16 @@ func sanitizeProviderErrorBody(req *http.Request, next option.MiddlewareNext) (*
 // this repository that imports otel's Set{Tracer,Meter}Provider at all,
 // and the only Genkit plugin ACR uses (compat_oai) never touches
 // OpenTelemetry itself (only Genkit's own plugins/googlecloud does, and
-// ACR does not import it). If a future change adds real OpenTelemetry
-// export to ACR (e.g. for legitimate service observability), it MUST
-// either route through this same construction point or be reviewed
-// against this comment -- a bare otel.Set{Tracer,Meter}Provider call added
-// elsewhere in this repository silently re-exposes Genkit's prompt/
-// response content to whatever exporter it configures. This function also
+// ACR does not import it). ACR's real service export (internal/otelexport)
+// was built against this comment: its providers are never installed
+// globally, only handed explicitly to its own HTTP handler, log handler and
+// tick tracer, so Genkit -- which reads only the globals set here -- never
+// reaches them. A bare otel.Set{Tracer,Meter}Provider call added elsewhere
+// in this repository would silently re-expose Genkit's prompt/response
+// content to whatever exporter it configures;
+// internal/otelexport.TestNoGlobalTelemetryInstallOutsideModelProvider fails
+// on one, and TestGenkitTelemetryNeverExported (this package) proves the
+// isolation end to end. This function also
 // necessarily overwrites any tracer/meter provider a HOST process embedding
 // this code as a library had already configured for its OWN purposes --
 // acceptable because ACR ships as a self-contained service (cmd/acr-api),

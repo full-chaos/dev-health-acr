@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
 
@@ -1104,16 +1106,36 @@ func (c *Coordinator) resetAllCheckpoints(ctx context.Context, orgID string) err
 // Run schedules ticks on PollInterval until ctx is canceled. It never
 // returns early because of a single organization's or source's failure.
 func (c *Coordinator) Run(ctx context.Context) error {
+	return c.RunTraced(ctx, nil)
+}
+
+// TickSpanName names the span RunTraced opens around each tick.
+const TickSpanName = "projection tick"
+
+// RunTraced is Run with one span per tick on tracer, so every line a tick
+// logs carries that tick's trace ID. A nil tracer traces nothing.
+func (c *Coordinator) RunTraced(ctx context.Context, tracer trace.Tracer) error {
 	ticker := time.NewTicker(c.poll)
 	defer ticker.Stop()
 	for {
-		c.Tick(ctx)
+		c.tickTraced(ctx, tracer)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
 		}
 	}
+}
+
+// tickTraced runs one Tick, inside a span on tracer when tracer is set.
+func (c *Coordinator) tickTraced(ctx context.Context, tracer trace.Tracer) {
+	if tracer == nil {
+		c.Tick(ctx)
+		return
+	}
+	tickCtx, span := tracer.Start(ctx, TickSpanName, trace.WithSpanKind(trace.SpanKindInternal))
+	defer span.End()
+	c.Tick(tickCtx)
 }
 
 // tickFreshnessStats is the CHAOS-3887 (H12) fleet aggregate: one Tick's
