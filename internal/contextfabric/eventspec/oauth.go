@@ -13,6 +13,8 @@ const (
 	OAuthStepAuthorize = oauthvocab.StepAuthorize
 	OAuthStepConsent   = oauthvocab.StepConsent
 	OAuthStepToken     = oauthvocab.StepToken
+	// OAuthStepConsentPreview is the web consent page reading a request.
+	OAuthStepConsentPreview = oauthvocab.StepConsentPreview
 )
 
 // OAuthStepVocabulary lists every step.
@@ -31,17 +33,19 @@ func OAuthClientKindVocabulary() []string { return oauthvocab.ClientKindVocabula
 const OAuthStepLogMessage = "acr-api oauth step"
 
 // OAuthStep is the one line each OAuth request to acr-api produces:
-// registration, the authorize request, each consent check the browser page
-// makes, and each token request. From the lines of one login a reader can
-// rebuild it: the client kind, whether consent was pending, approved or
-// denied, and why a token request was refused.
+// registration, the authorize request (a redirect to the web consent page),
+// the consent page's read of the request, its approve or deny decision, and
+// each token request. From the lines of one login a reader can rebuild it:
+// the client kind, whether the consent page read the request, whether the
+// user approved (ok) or denied (access_denied) it or why the decision was
+// refused, and why a token request was refused.
 var OAuthStep = Event{
 	ID:                 "api.oauth_step",
 	Msg:                OAuthStepLogMessage,
 	Level:              LevelInfo,
 	Multiplicity:       MultiplicityExactlyOnePerRequest,
 	Attribution:        []string{"request_id"},
-	BoundedAggregation: "exactly one line per request to /register, /authorize or /oauth/token; metadata routes emit none",
+	BoundedAggregation: "exactly one line per request to /register, /authorize, /authorize/consent or /token; metadata routes emit none",
 	Fields: []Field{
 		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "step", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: OAuthStepVocabulary()},

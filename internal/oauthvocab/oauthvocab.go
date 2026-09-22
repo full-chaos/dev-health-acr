@@ -10,16 +10,19 @@ const (
 	StepAuthorize = "authorize"
 	StepConsent   = "consent"
 	StepToken     = "token"
+	// StepConsentPreview is the web consent page reading a request before
+	// the signed-in user decides it (StepConsent).
+	StepConsentPreview = "consent_preview"
 )
 
 // StepVocabulary lists every step.
 func StepVocabulary() []string {
-	return []string{StepRegister, StepAuthorize, StepConsent, StepToken}
+	return []string{StepRegister, StepAuthorize, StepConsentPreview, StepConsent, StepToken}
 }
 
 // OAuth step outcomes. "ok" means the step did what it exists to do: a client
-// was registered, a consent page was served, a code was issued, a credential
-// was minted. Every other member names the one reason the step stopped.
+// was registered, the browser was sent to the consent page, the consent page
+// read the request, a code was issued, a credential was minted. Every other member names the one reason the step stopped.
 const (
 	OutcomeOK                      = "ok"
 	OutcomePending                 = "pending"

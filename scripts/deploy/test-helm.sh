@@ -766,10 +766,12 @@ pass "acr-mcp: single-replica render has no PodDisruptionBudget that would block
 oauth_args=(--set acrMcp.enabled=true --set-string "acrMcp.image.reference=${mcp_image}"
   --set config.oauth.enabled=true --set-string config.oauth.issuer=https://acr.example.test
   --set-string 'config.oauth.resources[0]=https://mcp.example.test/mcp'
+  --set-string config.oauth.consentUrl=https://www.example.test/acr/authorize
   --set-string config.webAssertion.issuer=https://web.example.test --set-string config.webAssertion.audience=acr-api
   --set-string config.webAssertion.existingSecret=acr-web-assertion-jwks)
 oauth_render="$(render "${oauth_args[@]}" --set-string acrMcp.oauth.resourceUrl=https://mcp.example.test/mcp --set-string acrMcp.oauth.authorizationServer=https://acr.example.test)"
 for want in 'ACR_OAUTH_ISSUER: "https://acr.example.test"' 'ACR_OAUTH_RESOURCES: "https://mcp.example.test/mcp"' \
+  'ACR_OAUTH_CONSENT_URL: "https://www.example.test/acr/authorize"' \
   'ACR_MCP_RESOURCE_URL: "https://mcp.example.test/mcp"' 'ACR_MCP_AUTHORIZATION_SERVER: "https://acr.example.test"' \
   'ACR_WEB_ASSERTION_JWKS_FILE:' 'secretName: "acr-web-assertion-jwks"'; do
   grep -qF "$want" <<<"$oauth_render" || fail_gate "oauth: render is missing ${want}"
@@ -804,5 +806,9 @@ oauth_must_fail "oauth without web assertions" "requires config.webAssertion" --
   --set-string config.oauth.issuer=https://acr.example.test --set-string 'config.oauth.resources[0]=https://mcp.example.test/mcp'
 oauth_must_fail "issuer with a path" "must be an https origin" --set config.oauth.enabled=true \
   --set-string config.oauth.issuer=https://acr.example.test/x --set-string 'config.oauth.resources[0]=https://mcp.example.test/mcp'
+for bad_consent in "" "https://www.example.test" "https://www.example.test/" "https://www.example.test/acr/authorize?x=1" \
+  "https://www.example.test/acr/authorize#f" "http://www.example.test/acr/authorize"; do
+  oauth_must_fail "consent url '${bad_consent}'" "config.oauth.consentUrl" "${oauth_args[@]}" --set-string "config.oauth.consentUrl=${bad_consent}"
+done
 
 printf 'RESULT: happy path passed all gates\n'

@@ -10,26 +10,28 @@ import (
 )
 
 // OAuthConsentAuthority is the consent step of the OAuth login: it starts a
-// consent the user approves out of band, reports its state, and issues the
-// credential once approved. /authorize, /token and the MCP audience check
-// depend only on this interface. DeviceFlowService implements it today (the
-// user approves the user code on the web approval page, authenticated by a
-// web assertion); an Auth Control Plane session or device implementation can
-// replace it without touching those routes.
+// consent, reports its state, records the signed-in user's decision, and
+// issues the credential once approved. /authorize, /authorize/consent, /token
+// and the MCP audience check depend only on this interface. DeviceFlowService
+// implements it today (the web consent page approves the request behind its
+// handle, authenticated by a web assertion); an Auth Control Plane session or
+// device implementation can replace it without touching those routes.
 type OAuthConsentAuthority interface {
 	StartForOAuth(ctx context.Context) (OAuthDeviceAuthorization, error)
 	StateForOAuth(ctx context.Context, ref storage.DeviceCodeHash) (OAuthDeviceState, error)
+	ApproveForOAuth(ctx context.Context, principal storage.Principal, ref storage.DeviceCodeHash, repositoryScopes []string) error
+	DenyForOAuth(ctx context.Context, principal storage.Principal, ref storage.DeviceCodeHash) error
 	RedeemForResource(ctx context.Context, ref storage.DeviceCodeHash, resource string, scopes []string) (IssuedCredential, error)
 }
 
 var _ OAuthConsentAuthority = (*DeviceFlowService)(nil)
 
 // OAuthDeviceAuthorization is a device authorization started on behalf of an
-// OAuth authorization-code request. Only the user code leaves this package:
-// the raw device code is discarded, so the device grant can never redeem the
-// record and only RedeemForResource (keyed by its hash) can.
+// OAuth authorization-code request. Neither code leaves this package: the raw
+// device code and the raw user code are discarded, so the device grant can
+// never redeem the record and the typed-code approval page can never approve
+// it; only the ForOAuth methods (keyed by the device code hash) can.
 type OAuthDeviceAuthorization struct {
-	UserCode       string
 	DeviceCodeHash storage.DeviceCodeHash
 	ExpiresAt      time.Time
 }
@@ -40,7 +42,7 @@ func (OAuthDeviceAuthorization) String() string   { return oauthDeviceAuthorizat
 func (OAuthDeviceAuthorization) GoString() string { return oauthDeviceAuthorizationRedacted }
 
 // StartForOAuth starts a device authorization without hints. The approval
-// page and the approval rules are the device flow's own.
+// rules are the device flow's own.
 func (s *DeviceFlowService) StartForOAuth(ctx context.Context) (OAuthDeviceAuthorization, error) {
 	if err := s.ready(ctx); err != nil {
 		return OAuthDeviceAuthorization{}, err
@@ -55,7 +57,7 @@ func (s *DeviceFlowService) StartForOAuth(ctx context.Context) (OAuthDeviceAutho
 			UserCodeHash:   storage.HashUserCode(userCode),
 		})
 		if err == nil {
-			return OAuthDeviceAuthorization{UserCode: userCode, DeviceCodeHash: record.DeviceCodeHash, ExpiresAt: record.ExpiresAt}, nil
+			return OAuthDeviceAuthorization{DeviceCodeHash: record.DeviceCodeHash, ExpiresAt: record.ExpiresAt}, nil
 		}
 		if !errors.Is(err, storage.ErrDeviceAuthorizationConflict) {
 			return OAuthDeviceAuthorization{}, fmt.Errorf("create device authorization: %w", err)
@@ -104,6 +106,43 @@ func (s *DeviceFlowService) StateForOAuth(ctx context.Context, hash storage.Devi
 	default:
 		return OAuthDeviceStateExpired, nil
 	}
+}
+
+// ApproveForOAuth approves the pending device authorization behind an OAuth
+// request for the signed-in web user, with the same org and repository rules
+// as the typed-code approval. A record that is no longer pending (approved,
+// denied, redeemed) fails with storage.ErrDeviceAuthorizationConflict, so a
+// request is decided at most once.
+func (s *DeviceFlowService) ApproveForOAuth(ctx context.Context, principal storage.Principal, hash storage.DeviceCodeHash, repositoryScopes []string) error {
+	if err := s.ready(ctx); err != nil {
+		return err
+	}
+	record, err := s.store.GetByDeviceCodeHash(ctx, hash)
+	if err != nil {
+		return fmt.Errorf("read device authorization for approval: %w", err)
+	}
+	_, err = s.approveUserCodeHash(ctx, principal, record.UserCodeHash, repositoryScopes)
+	return err
+}
+
+// DenyForOAuth denies the pending device authorization behind an OAuth
+// request for the signed-in web user; a decided record fails with
+// storage.ErrDeviceAuthorizationConflict.
+func (s *DeviceFlowService) DenyForOAuth(ctx context.Context, principal storage.Principal, hash storage.DeviceCodeHash) error {
+	if err := s.ready(ctx); err != nil {
+		return err
+	}
+	if !validDeviceApprovalPrincipal(principal) {
+		return ErrInvalidDeviceFlow
+	}
+	record, err := s.store.GetByDeviceCodeHash(ctx, hash)
+	if err != nil {
+		return fmt.Errorf("read device authorization for denial: %w", err)
+	}
+	if _, err := s.store.Deny(ctx, record.UserCodeHash); err != nil {
+		return fmt.Errorf("deny device authorization: %w", err)
+	}
+	return nil
 }
 
 // ErrOAuthDeviceNotApproved reports that the device authorization behind an

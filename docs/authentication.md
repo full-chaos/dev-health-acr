@@ -129,8 +129,10 @@ then run `acr-mcp login` and approve the new request in the web UI.
 
 acr-api is an OAuth 2.1 authorization server for the hosted MCP endpoint when
 `ACR_OAUTH_ISSUER` (the acr-api public origin) and `ACR_OAUTH_RESOURCES` (the
-hosted MCP URLs, comma separated) are set. It needs the web approval surface
-(`ACR_WEB_ASSERTION_*`) and the hosted runtime; startup fails without them.
+hosted MCP URLs, comma separated) are set. It needs `ACR_OAUTH_CONSENT_URL`
+(the web consent page, e.g. `https://www.example.com/acr/authorize`), the web
+approval surface (`ACR_WEB_ASSERTION_*`) and the hosted runtime; startup fails
+without them.
 `ACR_OAUTH_CLIENT_METADATA_DOCUMENTS` (default `true`) accepts HTTPS client ID
 metadata documents; they are fetched only from public addresses, with no
 redirects, a 5-second timeout and a 5 KiB limit.
@@ -140,11 +142,31 @@ Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
 
 - Only the authorization-code grant with PKCE `S256`. No implicit grant, no
   refresh token, no client secrets.
-- Consent is the device flow's approval. `/authorize` starts a device
-  authorization whose raw device code is discarded, so the device grant can
-  never redeem it. The user approves the displayed user code on the web
-  approval page; the org and repository scopes come from that approval, as for
-  `acr-mcp login`.
+- Consent happens on the web consent page, with nothing to type. `/authorize`
+  verifies the client, the exact registered redirect URI, PKCE, the resource
+  and the scope, starts a device authorization whose raw device and user codes
+  are discarded (neither the device grant nor the typed-code approval page can
+  use it), and answers `302` to `ACR_OAUTH_CONSENT_URL?handle=<handle>`. The
+  handle is 256-bit, stored as SHA-256, and lives as long as the device
+  authorization (10 minutes). A request that fails verification never reaches
+  the consent page: an unverified client or redirect URI gets an error page,
+  anything else the OAuth error redirect.
+- The web signs the user in (and returns to the same consent URL), then calls
+  `POST /authorize/consent` for the signed-in user with a web assertion
+  (`credential:issue`, exactly one `X-ACR-Web-Assertion`, no `Authorization`;
+  the browser that holds the handle cannot call it). The JSON body is
+  `{"action":"preview"|"approve"|"deny","handle":...}`, plus
+  `repository_scopes` on approve. `preview` returns the client name (and
+  whether the client named itself), the redirect origin, the resource, the
+  scopes and the expiry. `approve` approves the device authorization with the
+  assertion's org and the chosen repositories (the same rules as the typed-code
+  approval), issues the one authorization code and returns
+  `{"redirect_url": "<redirect_uri>?code=...&state=...&iss=..."}`; `deny`
+  returns the same with `error=access_denied`. The web sends the browser to
+  `redirect_url`. A request is decided once: a later read or decision is `409
+  already_completed`; an expired request is `410 expired`; an unknown handle
+  or a decision the approver may not make is `400 invalid_request` and leaves
+  the request undecided.
 - The authorization code is 256-bit, stored as SHA-256, valid 2 minutes and
   single use. The token endpoint consumes it before any other check, so a
   refused exchange (wrong verifier, redirect URI, client or resource) spends it.
@@ -155,7 +177,9 @@ Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
   value; the hosted MCP endpoint sets that header from its own configuration.
   A credential without a binding (operator, device, workload) is unaffected.
 - Each OAuth request writes one `acr-api oauth step` line (step, outcome,
-  client kind, status). Codes, handles, verifiers, client IDs, redirect URIs,
+  client kind, status). Steps: `register`, `authorize` (ok = sent to the
+  consent page), `consent_preview`, `consent` (ok = approved, `access_denied`
+  = denied), `token`. Codes, handles, verifiers, client IDs, redirect URIs,
   state and tokens are never logged.
 
 The runtime database role needs `SELECT, INSERT, UPDATE` on

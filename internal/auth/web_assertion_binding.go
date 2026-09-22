@@ -6,10 +6,23 @@ import (
 	"encoding/base64"
 	"io"
 	"net/http"
+	"slices"
 	"sort"
 )
 
 const WebAssertionPermissionCredentialIssue = "credential:issue"
+
+// webAssertionOrganizationWidePaths are the only routes a web assertion may
+// name every repository ("*") on: the two credential approvals, the typed-code
+// device approval and the OAuth consent decision (api.OAuthConsentPath, pinned
+// by a test in internal/api).
+var webAssertionOrganizationWidePaths = []string{"/api/v1/oauth/device_approval", "/authorize/consent"}
+
+// WebAssertionOrganizationWidePaths returns the routes an organization-wide
+// web assertion may name.
+func WebAssertionOrganizationWidePaths() []string {
+	return append([]string(nil), webAssertionOrganizationWidePaths...)
+}
 
 func readAssertionBody(r *http.Request, maximum int64) ([]byte, error) {
 	if r.Body == nil {
@@ -37,7 +50,7 @@ func validWebRepositories(scopes, permissions []string, method, path string) boo
 	}
 	if len(scopes) == 1 && scopes[0] == "*" {
 		return len(permissions) == 1 && permissions[0] == WebAssertionPermissionCredentialIssue &&
-			method == http.MethodPost && path == "/api/v1/oauth/device_approval"
+			method == http.MethodPost && slices.Contains(webAssertionOrganizationWidePaths, path)
 	}
 	seen := make(map[string]struct{}, len(scopes))
 	for _, scope := range scopes {

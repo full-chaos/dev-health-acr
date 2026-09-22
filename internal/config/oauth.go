@@ -19,7 +19,9 @@ func oauthResources(value string) []string {
 }
 
 // OAuthConfigured reports whether the OAuth login is turned on.
-func (c Config) OAuthConfigured() bool { return c.OAuthIssuer != "" || len(c.OAuthResources) > 0 }
+func (c Config) OAuthConfigured() bool {
+	return c.OAuthIssuer != "" || len(c.OAuthResources) > 0 || c.OAuthConsentURL != ""
+}
 
 // validateOAuthConfig requires the issuer and resources together, the web
 // approval surface (consent is the device flow's approval) and the hosted
@@ -47,6 +49,12 @@ func validateOAuthConfig(c Config) error {
 		}
 		seen[resource] = struct{}{}
 	}
+	if c.OAuthConsentURL == "" {
+		return errors.New("ACR_OAUTH_CONSENT_URL is required with ACR_OAUTH_ISSUER: /authorize sends the browser to the web consent page")
+	}
+	if !ConsentPageURL(c.OAuthConsentURL) {
+		return errors.New("ACR_OAUTH_CONSENT_URL must be an absolute https URL with a path and no query or fragment")
+	}
 	if c.WebAssertionJWKSFile == "" {
 		return errors.New("ACR_OAUTH_ISSUER requires web assertions (ACR_WEB_ASSERTION_*): consent is approved on the web approval page")
 	}
@@ -71,6 +79,18 @@ func originURL(value string) bool {
 func resourceURL(value string) bool {
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return false
+	}
+	return parsed.Scheme == "https" || (parsed.Scheme == "http" && loopbackHost(parsed.Hostname()))
+}
+
+// ConsentPageURL accepts the web consent page URL: https (or http on a
+// loopback host, for tests), a host, a non-root path, and no user info, query
+// or fragment, so /authorize can append exactly one handle parameter.
+func ConsentPageURL(value string) bool {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" ||
+		parsed.Path == "" || parsed.Path == "/" {
 		return false
 	}
 	return parsed.Scheme == "https" || (parsed.Scheme == "http" && loopbackHost(parsed.Hostname()))

@@ -3,11 +3,14 @@ package config
 import (
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 )
 
 func TestValidateOAuthConfigDomain(t *testing.T) {
 	valid := Config{
 		OAuthIssuer: "https://acr.example.test", OAuthResources: []string{"https://mcp.example.test/mcp"},
+		OAuthConsentURL:      "https://www.example.test/acr/authorize",
 		WebAssertionJWKSFile: "/run/jwks.json", RequireBackingStores: true,
 	}
 	for _, tc := range []struct {
@@ -16,7 +19,14 @@ func TestValidateOAuthConfigDomain(t *testing.T) {
 		want   string
 	}{
 		{"valid", func(*Config) {}, ""},
-		{"off", func(c *Config) { c.OAuthIssuer, c.OAuthResources = "", nil }, ""},
+		{"off", func(c *Config) { c.OAuthIssuer, c.OAuthResources, c.OAuthConsentURL = "", nil, "" }, ""},
+		{"consent url only", func(c *Config) { c.OAuthIssuer, c.OAuthResources = "", nil }, "ACR_OAUTH_ISSUER is required"},
+		{"no consent url", func(c *Config) { c.OAuthConsentURL = "" }, "ACR_OAUTH_CONSENT_URL is required"},
+		{"consent url origin only", func(c *Config) { c.OAuthConsentURL = "https://www.example.test" }, "ACR_OAUTH_CONSENT_URL must be"},
+		{"consent url root", func(c *Config) { c.OAuthConsentURL = "https://www.example.test/" }, "ACR_OAUTH_CONSENT_URL must be"},
+		{"consent url query", func(c *Config) { c.OAuthConsentURL = "https://www.example.test/acr/authorize?handle=x" }, "ACR_OAUTH_CONSENT_URL must be"},
+		{"consent url http", func(c *Config) { c.OAuthConsentURL = "http://www.example.test/acr/authorize" }, "ACR_OAUTH_CONSENT_URL must be"},
+		{"consent url loopback http", func(c *Config) { c.OAuthConsentURL = "http://localhost:3000/acr/authorize" }, ""},
 		{"two resources", func(c *Config) { c.OAuthResources = append(c.OAuthResources, "https://mcp2.example.test/mcp") }, ""},
 		{"loopback http", func(c *Config) {
 			c.OAuthIssuer, c.OAuthResources = "http://127.0.0.1:8080", []string{"http://localhost:8081/mcp"}
@@ -69,5 +79,20 @@ func TestLoad_oauthSettingsParse(t *testing.T) {
 	}
 	if got := oauthResources(" https://a.example.test/mcp , https://b.example.test/mcp"); len(got) != 2 || got[1] != "https://b.example.test/mcp" {
 		t.Fatalf("oauthResources = %q", got)
+	}
+}
+
+// ACR_OAUTH_CONSENT_URL passes config validation exactly when acr-api's own
+// check (auth.ValidOAuthConsentURL, applied when the app is built) accepts it.
+func TestConsentPageURLAgreesWithTheAuthCheck(t *testing.T) {
+	for _, value := range []string{
+		"https://www.example.com/acr/authorize", "http://localhost:3000/acr/authorize", "http://127.0.0.1/x", "http://[::1]:3000/x",
+		"", "https://www.example.com", "https://www.example.com/", "http://www.example.com/acr/authorize",
+		"https://www.example.com/acr/authorize?x=1", "https://www.example.com/acr/authorize?", "https://www.example.com/acr/authorize#f",
+		"https://user@www.example.com/acr/authorize", "/acr/authorize", "javascript:alert(1)", "ftp://example.com/x", "https:///x",
+	} {
+		if got, want := ConsentPageURL(value), auth.ValidOAuthConsentURL(value); got != want {
+			t.Errorf("%q: config %v, auth %v", value, got, want)
+		}
 	}
 }

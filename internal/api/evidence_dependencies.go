@@ -66,6 +66,7 @@ type App struct {
 	credentialService    *auth.Service
 	deviceFlow           *auth.DeviceFlowService
 	oauth                *auth.OAuthService
+	oauthConsentURL      string
 	clientIP             auth.ClientIPResolver
 	usageTelemetry       *auth.UsageTelemetry
 	closers              appClosers
@@ -179,6 +180,7 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 		credentialService:    credentialService,
 		deviceFlow:           deviceFlow,
 		oauth:                oauth,
+		oauthConsentURL:      oauthConsentURL(deps),
 		readinessTransitions: NewReadinessTransitionLogger(),
 	}
 	if app.clientIP == nil {
@@ -206,4 +208,11 @@ func (a *App) NewEvidenceStore(rows contextpacket.ClickHouseRows) (*contextpacke
 		return nil, errors.New("evidence store factory is not configured")
 	}
 	return a.evidenceStoreFactory(rows)
+}
+
+func oauthConsentURL(deps Dependencies) string {
+	if deps.Runtime == nil || deps.Runtime.OAuth == nil {
+		return ""
+	}
+	return deps.Runtime.OAuth.ConsentURL
 }
