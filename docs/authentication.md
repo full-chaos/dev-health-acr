@@ -131,8 +131,9 @@ acr-api is an OAuth 2.1 authorization server for the hosted MCP endpoint when
 `ACR_OAUTH_ISSUER` (the acr-api public origin) and `ACR_OAUTH_RESOURCES` (the
 hosted MCP URLs, comma separated) are set. It needs the web approval surface
 (`ACR_WEB_ASSERTION_*`) and the hosted runtime; startup fails without them.
-Clients register with RFC 7591 dynamic registration; client ID metadata
-documents are not accepted.
+`ACR_OAUTH_CLIENT_METADATA_DOCUMENTS` (default `true`) accepts HTTPS client ID
+metadata documents; they are fetched only from public addresses, with no
+redirects, a 5-second timeout and a 5 KiB limit.
 
 Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
 `POST /authorize/consent`, `POST /token`, `POST /register`.

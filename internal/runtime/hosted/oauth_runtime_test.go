@@ -13,9 +13,13 @@ func TestOAuthRuntimeComposition(t *testing.T) {
 	if got := oauthRuntime(config.Config{}, store); got != nil {
 		t.Fatalf("unconfigured OAuth composed %+v", got)
 	}
-	cfg := config.Config{OAuthIssuer: "https://acr.example.test", OAuthResources: []string{"https://mcp.example.test/mcp"}}
+	cfg := config.Config{OAuthIssuer: "https://acr.example.test", OAuthResources: []string{"https://mcp.example.test/mcp"}, OAuthClientMetadataDocuments: true}
 	runtime := oauthRuntime(cfg, store)
-	if runtime == nil || runtime.Store != store || runtime.Issuer != cfg.OAuthIssuer || len(runtime.Resources) != 1 || runtime.Resources[0] != cfg.OAuthResources[0] {
+	if runtime == nil || runtime.Store != store || runtime.Issuer != cfg.OAuthIssuer || len(runtime.Resources) != 1 || runtime.Resources[0] != cfg.OAuthResources[0] || runtime.ClientMetadata == nil {
 		t.Fatalf("composed OAuth runtime = %+v", runtime)
+	}
+	cfg.OAuthClientMetadataDocuments = false
+	if runtime := oauthRuntime(cfg, store); runtime == nil || runtime.ClientMetadata != nil {
+		t.Fatalf("metadata documents off still composed a fetcher: %+v", runtime)
 	}
 }

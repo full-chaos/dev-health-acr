@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -33,6 +34,10 @@ const (
 	// OAuthClientKindDynamic marks a client registered through RFC 7591
 	// dynamic client registration and stored in acr.oauth_clients.
 	OAuthClientKindDynamic = oauthvocab.ClientKindDynamic
+	// OAuthClientKindMetadataDocument marks a client whose client_id is an
+	// HTTPS URL naming its own client ID metadata document. Such clients are
+	// never stored.
+	OAuthClientKindMetadataDocument = oauthvocab.ClientKindMetadataDocument
 
 	maxOAuthClientNameLength  = 200
 	maxOAuthRedirectURIs      = 8
@@ -205,6 +210,10 @@ func ValidateOAuthAuthorizationRequest(request OAuthAuthorizationRequest) error 
 		if !IsDynamicOAuthClientID(request.ClientID) {
 			return ErrInvalidOAuthAuthorizationRequest
 		}
+	case OAuthClientKindMetadataDocument:
+		if !ValidOAuthClientMetadataURL(request.ClientID) {
+			return ErrInvalidOAuthAuthorizationRequest
+		}
 	default:
 		return ErrInvalidOAuthAuthorizationRequest
 	}
@@ -250,6 +259,23 @@ func ValidOAuthResource(value string) bool {
 	default:
 		return false
 	}
+}
+
+// ValidOAuthClientMetadataURL accepts a client ID metadata document URL: an
+// HTTPS URL with a non-root path, no fragment, no user info and no dot
+// segments (draft-ietf-oauth-client-id-metadata-document §3).
+func ValidOAuthClientMetadataURL(value string) bool {
+	if value == "" || len(value) > maxOAuthURILength || !utf8.ValidString(value) || hasControl(value) {
+		return false
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.Fragment != "" || parsed.User != nil || parsed.Opaque != "" {
+		return false
+	}
+	if parsed.Path == "" || parsed.Path == "/" || strings.HasSuffix(parsed.Path, "/") {
+		return false
+	}
+	return !slices.Contains(strings.Split(parsed.Path, "/"), ".") && !slices.Contains(strings.Split(parsed.Path, "/"), "..")
 }
 
 func isBase64URLRune(r rune) bool {

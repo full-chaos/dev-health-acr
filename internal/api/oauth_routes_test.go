@@ -104,9 +104,7 @@ func TestOAuthMetadataDocument(t *testing.T) {
 	want := map[string]any{
 		"issuer": oauthTestIssuer, "authorization_endpoint": oauthTestIssuer + "/authorize", "token_endpoint": oauthTestIssuer + "/token",
 		"registration_endpoint": oauthTestIssuer + "/register", "authorization_response_iss_parameter_supported": true,
-	}
-	if _, present := metadata["client_id_metadata_document_supported"]; present {
-		t.Error("metadata advertises client ID metadata documents, which this server does not accept")
+		"client_id_metadata_document_supported": false,
 	}
 	for key, value := range want {
 		if metadata[key] != value {
@@ -118,6 +116,26 @@ func TestOAuthMetadataDocument(t *testing.T) {
 		if len(list) != 1 || list[0] != value {
 			t.Errorf("metadata %s = %v, want [%s]", key, metadata[key], value)
 		}
+	}
+}
+
+func TestOAuthMetadataAdvertisesClientIDMetadataDocumentsOnlyWithAFetcher(t *testing.T) {
+	for name, fetcher := range map[string]auth.OAuthClientMetadataFetcher{"fetcher": auth.NewClientMetadataFetcher(http.DefaultClient), "none": nil} {
+		t.Run(name, func(t *testing.T) {
+			app, _, err := newOAuthTestApp(t, &OAuthRuntime{Issuer: oauthTestIssuer, Resources: []string{oauthTestResource}, ClientMetadata: fetcher}, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			recorder := httptest.NewRecorder()
+			app.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, OAuthAuthorizationServerMetadataPath, nil))
+			var metadata map[string]any
+			if err := json.NewDecoder(recorder.Body).Decode(&metadata); err != nil {
+				t.Fatal(err)
+			}
+			if got := metadata["client_id_metadata_document_supported"]; got != (fetcher != nil) {
+				t.Fatalf("client_id_metadata_document_supported = %v, want %v", got, fetcher != nil)
+			}
+		})
 	}
 }
 

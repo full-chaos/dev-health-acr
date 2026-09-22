@@ -775,6 +775,10 @@ for want in 'ACR_OAUTH_ISSUER: "https://acr.example.test"' 'ACR_OAUTH_RESOURCES:
   grep -qF "$want" <<<"$oauth_render" || fail_gate "oauth: render is missing ${want}"
 done
 pass "oauth: agreeing acr-api and acr-mcp settings render the OAuth and web-assertion wiring"
+grep -qF 'ACR_OAUTH_CLIENT_METADATA_DOCUMENTS: "true"' <<<"$oauth_render" || fail_gate "oauth: client ID metadata documents are not on by default"
+oauth_cimd_off="$(render "${oauth_args[@]}" --set config.oauth.clientMetadataDocuments=false)"
+grep -qF 'ACR_OAUTH_CLIENT_METADATA_DOCUMENTS: "false"' <<<"$oauth_cimd_off" || fail_gate "oauth: config.oauth.clientMetadataDocuments=false does not render ACR_OAUTH_CLIENT_METADATA_DOCUMENTS=false"
+pass "oauth: config.oauth.clientMetadataDocuments renders ACR_OAUTH_CLIENT_METADATA_DOCUMENTS (default true)"
 oauth_off="$(render --set acrMcp.enabled=true --set-string "acrMcp.image.reference=${mcp_image}")"
 if grep -qE 'ACR_OAUTH_|ACR_MCP_RESOURCE_URL|ACR_MCP_AUTHORIZATION_SERVER' <<<"$oauth_off"; then
   fail_gate "oauth: the default render must carry no OAuth settings"

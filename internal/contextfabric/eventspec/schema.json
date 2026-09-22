@@ -59,7 +59,8 @@
         "presence": "required",
         "closed_vocabulary": [
           "none",
-          "dynamic"
+          "dynamic",
+          "metadata_document"
         ]
       },
       {

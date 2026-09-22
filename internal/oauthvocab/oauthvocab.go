@@ -57,14 +57,15 @@ func OutcomeVocabulary() []string {
 
 // OAuth client kinds.
 const (
-	ClientKindNone    = "none"
-	ClientKindDynamic = "dynamic"
+	ClientKindNone             = "none"
+	ClientKindDynamic          = "dynamic"
+	ClientKindMetadataDocument = "metadata_document"
 )
 
 // ClientKindVocabulary lists every client kind; none means the step
 // stopped before a client was identified.
 func ClientKindVocabulary() []string {
-	return []string{ClientKindNone, ClientKindDynamic}
+	return []string{ClientKindNone, ClientKindDynamic, ClientKindMetadataDocument}
 }
 
 // Scopes an OAuth request may ask for and a credential may be granted, in

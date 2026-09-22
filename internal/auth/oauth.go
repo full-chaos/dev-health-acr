@@ -89,6 +89,20 @@ func oauthError(code, outcome string, redirectable bool) *OAuthError {
 	return &OAuthError{Code: code, Outcome: outcome, Redirectable: redirectable}
 }
 
+// OAuthClientMetadataFetcher resolves a client ID metadata document. A nil
+// fetcher disables metadata-document clients.
+type OAuthClientMetadataFetcher interface {
+	Fetch(ctx context.Context, clientID string) (OAuthClientMetadata, error)
+}
+
+// OAuthClientMetadata is the part of a client's metadata this server uses.
+type OAuthClientMetadata struct {
+	ClientID                string   `json:"client_id"`
+	ClientName              string   `json:"client_name"`
+	RedirectURIs            []string `json:"redirect_uris"`
+	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"`
+}
+
 // OAuthConfig configures the OAuth service.
 type OAuthConfig struct {
 	// Issuer is the authorization server identifier: the acr-api public
@@ -97,8 +111,10 @@ type OAuthConfig struct {
 	// Resources are the protected resources credentials may be bound to:
 	// the public URLs of hosted MCP endpoints.
 	Resources []string
-	Now       func() time.Time
-	Random    io.Reader
+	// ClientMetadata resolves client ID metadata documents; nil disables them.
+	ClientMetadata OAuthClientMetadataFetcher
+	Now            func() time.Time
+	Random         io.Reader
 }
 
 // OAuthService runs registration, authorization and token exchange.
@@ -107,6 +123,7 @@ type OAuthService struct {
 	devices   OAuthConsentAuthority
 	issuer    string
 	resources []string
+	metadata  OAuthClientMetadataFetcher
 	now       func() time.Time
 	randomMu  sync.Mutex
 	random    io.Reader
@@ -136,9 +153,13 @@ func NewOAuthService(store storage.OAuthStore, devices OAuthConsentAuthority, cf
 	if storage.IsNil(cfg.Random) {
 		cfg.Random = rand.Reader
 	}
+	var metadata OAuthClientMetadataFetcher
+	if !storage.IsNil(cfg.ClientMetadata) {
+		metadata = cfg.ClientMetadata
+	}
 	return &OAuthService{
 		store: store, devices: devices, issuer: cfg.Issuer, resources: resources,
-		now: cfg.Now, random: cfg.Random,
+		metadata: metadata, now: cfg.Now, random: cfg.Random,
 	}, nil
 }
 
@@ -166,6 +187,10 @@ func (s *OAuthService) Issuer() string { return s.issuer }
 
 // Resources returns the protected resources this server issues for.
 func (s *OAuthService) Resources() []string { return append([]string(nil), s.resources...) }
+
+// ClientMetadataDocumentsSupported reports whether metadata-document client
+// IDs are accepted.
+func (s *OAuthService) ClientMetadataDocumentsSupported() bool { return s.metadata != nil }
 
 // OAuthRegistrationRequest is an RFC 7591 registration request.
 type OAuthRegistrationRequest struct {
@@ -233,8 +258,8 @@ type OAuthResolvedClient struct {
 	RedirectURIs []string
 }
 
-// ResolveClient identifies a client by its ID: a dynamic registration.
-// Anything else is invalid_client.
+// ResolveClient identifies a client by its ID: a dynamic registration, or a
+// metadata document when enabled. Anything else is invalid_client.
 func (s *OAuthService) ResolveClient(ctx context.Context, clientID string) (OAuthResolvedClient, error) {
 	switch {
 	case storage.IsDynamicOAuthClientID(clientID):
@@ -246,6 +271,29 @@ func (s *OAuthService) ResolveClient(ctx context.Context, clientID string) (OAut
 			return OAuthResolvedClient{}, fmt.Errorf("%w: read client", ErrOAuthUnavailable)
 		}
 		return OAuthResolvedClient{ClientID: client.ClientID, Kind: storage.OAuthClientKindDynamic, Name: client.ClientName, RedirectURIs: client.RedirectURIs}, nil
+	case s.metadata != nil && storage.ValidOAuthClientMetadataURL(clientID):
+		document, err := s.metadata.Fetch(ctx, clientID)
+		if err != nil {
+			return OAuthResolvedClient{}, oauthError("invalid_client", oauthvocab.OutcomeInvalidClientMetadata, false)
+		}
+		if document.ClientID != clientID || len(document.RedirectURIs) == 0 {
+			return OAuthResolvedClient{}, oauthError("invalid_client", oauthvocab.OutcomeInvalidClientMetadata, false)
+		}
+		switch document.TokenEndpointAuthMethod {
+		case "", "none":
+		default:
+			return OAuthResolvedClient{}, oauthError("invalid_client", oauthvocab.OutcomeInvalidClientMetadata, false)
+		}
+		for _, redirect := range document.RedirectURIs {
+			if !storage.ValidOAuthRedirectURI(redirect) {
+				return OAuthResolvedClient{}, oauthError("invalid_client", oauthvocab.OutcomeInvalidClientMetadata, false)
+			}
+		}
+		name := strings.TrimSpace(document.ClientName)
+		if len(name) > 200 || !utf8.ValidString(name) || strings.ContainsFunc(name, isControlRune) {
+			name = ""
+		}
+		return OAuthResolvedClient{ClientID: clientID, Kind: storage.OAuthClientKindMetadataDocument, Name: name, RedirectURIs: document.RedirectURIs}, nil
 	default:
 		return OAuthResolvedClient{}, oauthError("invalid_client", oauthvocab.OutcomeInvalidClient, false)
 	}

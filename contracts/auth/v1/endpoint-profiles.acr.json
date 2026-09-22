@@ -834,8 +834,8 @@
         "description": "No authenticator wrapper -- mux.HandleFunc directly; the body is built from process configuration alone.",
         "anchor": {
           "path": "internal/api/oauth_routes.go",
-          "line": 60,
-          "line_end": 60,
+          "line": 61,
+          "line_end": 61,
           "note": "func (a *App) handleOAuthMetadata("
         }
       },
@@ -865,11 +865,11 @@
       },
       "public_rationale": "OAuth 2.1 authorization endpoint (authorization code + PKCE S256 + RFC 8707 resource) for hosted MCP clients; the caller has no credential by definition. It only starts a consent: the credential is issued after a web-assertion-authenticated approval on the device approval route.",
       "primary_validator": {
-        "description": "OAuthService.Authorize -- verifies the client (a dynamic registration) and the exact registered redirect URI before anything is redirectable, then requires response_type=code, S256 PKCE and a configured resource; rate limited per IP by AllowDeviceCreation.",
+        "description": "OAuthService.Authorize -- verifies the client (a dynamic registration or a client ID metadata document) and the exact registered redirect URI before anything is redirectable, then requires response_type=code, S256 PKCE and a configured resource; rate limited per IP by AllowDeviceCreation.",
         "anchor": {
           "path": "internal/auth/oauth.go",
-          "line": 287,
-          "line_end": 287,
+          "line": 335,
+          "line_end": 335,
           "note": "func (s *OAuthService) Authorize("
         }
       },
@@ -920,8 +920,8 @@
         "description": "OAuthService.Consent -- looks the request up by the SHA-256 of the handle; issues a code at most once (IssueAuthorizationCode is conditional on no code yet).",
         "anchor": {
           "path": "internal/auth/oauth.go",
-          "line": 381,
-          "line_end": 381,
+          "line": 429,
+          "line_end": 429,
           "note": "func (s *OAuthService) Consent("
         }
       },
@@ -961,8 +961,8 @@
         "description": "OAuthService.Exchange -- consumes the code atomically first (a refused exchange spends it), then requires the same client_id and redirect_uri, an S256 code_verifier matching the stored challenge, and a resource equal to the authorized one; redeems the approved device authorization bound to that resource. Rate limited per IP by AllowTokenRequest.",
         "anchor": {
           "path": "internal/auth/oauth.go",
-          "line": 466,
-          "line_end": 466,
+          "line": 514,
+          "line_end": 514,
           "note": "func (s *OAuthService) Exchange("
         }
       },
@@ -1008,13 +1008,13 @@
         "file": "internal/api/app.go",
         "line": 97
       },
-      "public_rationale": "RFC 7591 dynamic client registration for public MCP clients; the caller has no credential by definition.",
+      "public_rationale": "RFC 7591 dynamic client registration for public MCP clients (DCR fallback to client ID metadata documents); the caller has no credential by definition.",
       "primary_validator": {
         "description": "OAuthService.Register -- public clients only (token_endpoint_auth_method none), grant types limited to authorization_code (refresh_token requests are answered without it), redirect URIs HTTPS or HTTP loopback; rate limited per IP by AllowDeviceCreation. Registration grants nothing by itself.",
         "anchor": {
           "path": "internal/auth/oauth.go",
-          "line": 184,
-          "line_end": 184,
+          "line": 209,
+          "line_end": 209,
           "note": "func (s *OAuthService) Register("
         }
       },
