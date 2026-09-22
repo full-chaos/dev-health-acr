@@ -18,6 +18,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/logsanitize"
 	"github.com/full-chaos/dev-health-acr/internal/oauthvocab"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -195,13 +196,24 @@ func (a *App) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
 		a.emitOAuthStep(r, oauthvocab.StepRegister, oauthvocab.OutcomeUnavailable, "", http.StatusServiceUnavailable)
 		return
 	}
+	// Every registered client can run the device grant (StartDeviceAuthorization
+	// never checks redirect_uris); authorization_code additionally applies
+	// only when the client has at least one registered redirect_uri (Register
+	// requires one whenever the client wants authorization_code, so its
+	// presence here means exactly that).
+	grantTypes := []string{auth.OAuthDeviceCodeGrantType}
+	responseTypes := []string{}
+	if len(client.RedirectURIs) > 0 {
+		grantTypes = []string{"authorization_code", auth.OAuthDeviceCodeGrantType}
+		responseTypes = []string{"code"}
+	}
 	writeOAuthJSON(w, http.StatusCreated, map[string]any{
 		"client_id":                  client.ClientID,
 		"client_id_issued_at":        client.CreatedAt.Unix(),
 		"client_name":                client.ClientName,
 		"redirect_uris":              client.RedirectURIs,
-		"grant_types":                []string{"authorization_code"},
-		"response_types":             []string{"code"},
+		"grant_types":                grantTypes,
+		"response_types":             responseTypes,
 		"token_endpoint_auth_method": "none",
 	})
 	a.emitOAuthStep(r, oauthvocab.StepRegister, oauthvocab.OutcomeOK, oauthvocab.ClientKindDynamic, http.StatusCreated)
@@ -257,25 +269,40 @@ func deviceVerificationURIComplete(verificationURI, userCode string) string {
 	return parsed.String()
 }
 
-// oauthDeviceCodeConflict reports whether deviceCode belongs to an RFC 8628
-// device grant (POST /device_authorization) -- such a device_authorizations
-// row must be redeemed only through ExchangeDeviceCode (this file), which
-// enforces the resource and scope binding storage.OAuthDeviceGrant carries;
-// device_routes.go's legacy JSON device-flow endpoint enforces neither. A hit
-// writes the same "acr-api oauth step" telemetry line the OAuth /token branch
-// would have written for this device code (StepToken, OutcomeInvalidGrant),
-// so redeeming it the wrong way is visible in the OAuth login's own
-// telemetry, not silent as far as it's concerned. Returns false immediately
-// (no lookup) when OAuth login is not configured at all.
-func (a *App) oauthDeviceCodeConflict(r *http.Request, deviceCode string) bool {
+// oauthDeviceCodeConflict blocks a device code that belongs to an RFC 8628
+// device grant (POST /device_authorization) from being redeemed through the
+// legacy JSON device-flow endpoint (device_routes.go), which mints with
+// neither the resource nor the requested-scope binding storage.OAuthDeviceGrant
+// carries; the OAuth-aware /token branch (ExchangeDeviceCode, this file) is
+// the only correct redemption path for such a code. It writes the response
+// and the same "acr-api oauth step" telemetry line the OAuth /token branch
+// would have written, and reports true when the caller must stop. Returns
+// false immediately (no lookup) when OAuth login is not configured at all.
+//
+// The lookup fails CLOSED: an error other than "no such grant" -- a lookup
+// outage, a missing migration, a permission failure -- is an UNCONFIRMED
+// conflict, not a cleared one. The device code might belong to an OAuth
+// device grant this call simply failed to prove, and minting an unbound
+// credential on that uncertainty is exactly the defect this guard exists to
+// close; only a definite storage.ErrNotFound clears it.
+func (a *App) oauthDeviceCodeConflict(w http.ResponseWriter, r *http.Request, deviceCode string) bool {
 	if a.runtime == nil || a.runtime.OAuth == nil || storage.IsNil(a.runtime.OAuth.Store) {
 		return false
 	}
-	if _, err := a.runtime.OAuth.Store.GetDeviceGrant(r.Context(), storage.HashDeviceCode(deviceCode)); err != nil {
+	_, err := a.runtime.OAuth.Store.GetDeviceGrant(r.Context(), storage.HashDeviceCode(deviceCode))
+	switch {
+	case err == nil:
+		a.writeOAuthDeviceError(w, contractsv1.OAuthDeviceErrorInvalidGrant, 0)
+		a.emitOAuthStep(r, oauthvocab.StepToken, oauthvocab.OutcomeInvalidGrant, "", http.StatusBadRequest)
+		return true
+	case errors.Is(err, storage.ErrNotFound):
 		return false
+	default:
+		a.logOAuthDependencyFailure(r, oauthvocab.StepToken)
+		a.writeDeviceDependencyError(w, r)
+		a.emitOAuthStep(r, oauthvocab.StepToken, oauthvocab.OutcomeUnavailable, "", http.StatusServiceUnavailable)
+		return true
 	}
-	a.emitOAuthStep(r, oauthvocab.StepToken, oauthvocab.OutcomeInvalidGrant, "", http.StatusBadRequest)
-	return true
 }
 
 // handleOAuthDeviceAuthorization serves RFC 8628's device_authorization

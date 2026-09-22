@@ -253,17 +253,32 @@ type OAuthRegistrationRequest struct {
 // a client asking for a confidential authentication method is refused. A
 // request naming refresh_token among its grant types is accepted and answered
 // with authorization_code alone (RFC 7591 §3.2.1 lets the server replace
-// requested values).
+// requested values). RFC 7591 §2 defaults grant_types to ["authorization_code"]
+// when omitted; CHAOS-6233 additionally accepts the RFC 8628 device-code
+// grant. A client declaring ONLY device_code needs no redirect_uri (the
+// device grant has no redirect step) and may register with none; a client
+// that also names authorization_code (or omits grant_types, the default)
+// still needs at least one, exactly as before.
 func (s *OAuthService) Register(ctx context.Context, request OAuthRegistrationRequest) (storage.OAuthClient, error) {
 	switch request.TokenEndpointAuthMethod {
 	case "", "none":
 	default:
 		return storage.OAuthClient{}, oauthError("invalid_client_metadata", oauthvocab.OutcomeInvalidClientMetadata, false)
 	}
+	wantsAuthorizationCode := len(request.GrantTypes) == 0
+	wantsDeviceCode := false
 	for _, grant := range request.GrantTypes {
-		if grant != "authorization_code" && grant != "refresh_token" {
+		switch grant {
+		case "authorization_code", "refresh_token":
+			wantsAuthorizationCode = true
+		case OAuthDeviceCodeGrantType:
+			wantsDeviceCode = true
+		default:
 			return storage.OAuthClient{}, oauthError("invalid_client_metadata", oauthvocab.OutcomeInvalidClientMetadata, false)
 		}
+	}
+	if !wantsAuthorizationCode && !wantsDeviceCode {
+		return storage.OAuthClient{}, oauthError("invalid_client_metadata", oauthvocab.OutcomeInvalidClientMetadata, false)
 	}
 	for _, responseType := range request.ResponseTypes {
 		if responseType != "code" {
@@ -280,7 +295,7 @@ func (s *OAuthService) Register(ctx context.Context, request OAuthRegistrationRe
 		RedirectURIs: append([]string(nil), request.RedirectURIs...),
 		CreatedAt:    s.now().UTC(),
 	}
-	if len(client.RedirectURIs) == 0 {
+	if len(client.RedirectURIs) == 0 && wantsAuthorizationCode {
 		return storage.OAuthClient{}, oauthError("invalid_redirect_uri", oauthvocab.OutcomeInvalidRedirectURI, false)
 	}
 	for _, redirect := range client.RedirectURIs {

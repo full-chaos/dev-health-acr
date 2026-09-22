@@ -132,13 +132,33 @@ func TestOAuthStore_RegisterClient_invalidInputIsInvalidError(t *testing.T) {
 	// Given
 	fixture := newOAuthFixture(t)
 	client := validOAuthClient(dynamicOAuthClientID(0x03))
-	client.RedirectURIs = nil
+	client.RedirectURIs = []string{"not-a-valid-redirect-uri"}
 
 	// When
 	_, err := fixture.store.RegisterClient(context.Background(), client)
 
 	// Then
 	require.ErrorIs(t, err, storage.ErrInvalidOAuthClient)
+}
+
+// TestOAuthStore_RegisterClient_noRedirectURIsIsValid pins the CHAOS-6233
+// device-only-client case: a client with zero redirect_uris (registering for
+// the RFC 8628 device-code grant only, which has no redirect step) is a
+// valid stored client, not an error -- the requirement of at least one
+// redirect_uri belongs to OAuthService.Register (only when the client also
+// wants authorization_code), not to this storage-layer validation.
+func TestOAuthStore_RegisterClient_noRedirectURIsIsValid(t *testing.T) {
+	// Given
+	fixture := newOAuthFixture(t)
+	client := validOAuthClient(dynamicOAuthClientID(0x04))
+	client.RedirectURIs = nil
+
+	// When
+	registered, err := fixture.store.RegisterClient(context.Background(), client)
+
+	// Then
+	require.NoError(t, err)
+	require.Empty(t, registered.RedirectURIs)
 }
 
 func TestOAuthStore_CreateAuthorizationRequest_invalidInputIsInvalidError(t *testing.T) {

@@ -94,8 +94,7 @@ func (a *App) handleDeviceCodeToken(w http.ResponseWriter, r *http.Request) {
 	// binding -- accepting an OAuth device code here would mint a broader,
 	// unbound credential for a client that asked for less. Refuse it, with the
 	// same oauth-step telemetry line the real /token would have written.
-	if a.oauthDeviceCodeConflict(r, request.DeviceCode) {
-		a.writeOAuthDeviceError(w, contractsv1.OAuthDeviceErrorInvalidGrant, 0)
+	if a.oauthDeviceCodeConflict(w, r, request.DeviceCode) {
 		return
 	}
 	issued, err := a.deviceFlow.Poll(r.Context(), request.DeviceCode)

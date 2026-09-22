@@ -2,10 +2,12 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,6 +17,8 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/storage/memory"
 )
 
 // oauthDeviceAuthorizationRequest builds a form-encoded POST
@@ -177,6 +181,95 @@ func TestOAuthDeviceCodeCannotRedeemViaLegacyEndpoint(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), `"step":"token","outcome":"invalid_grant"`) {
 		t.Fatal("the legacy-endpoint conflict refusal must still emit the acr-api oauth step token/invalid_grant line -- otherwise the refusal is invisible in the OAuth login's own telemetry")
+	}
+}
+
+// failingDeviceGrantLookupStore makes GetDeviceGrant fail with a generic
+// (non-ErrNotFound) error, for TestOAuthDeviceCodeConflictFailsClosed below.
+type failingDeviceGrantLookupStore struct{ storage.OAuthStore }
+
+var errDeviceGrantLookupDown = errors.New("device grant lookup unavailable")
+
+func (s failingDeviceGrantLookupStore) GetDeviceGrant(ctx context.Context, hash storage.DeviceCodeHash) (storage.OAuthDeviceGrant, error) {
+	return storage.OAuthDeviceGrant{}, errDeviceGrantLookupDown
+}
+
+// TestOAuthDeviceCodeConflictFailsClosed pins the CHAOS-6233 fix for a real
+// P1 (found by codex round cf-6233-r2, executed and confirmed): the legacy
+// endpoint's OAuth-device-grant conflict check treated ANY lookup error --
+// not just "no such grant" -- as "not OAuth-bound," so a storage outage let
+// the legacy endpoint mint an unbound credential instead of refusing. The
+// check must fail CLOSED (refuse) on an unconfirmed lookup, and open only on
+// a definite storage.ErrNotFound.
+func TestOAuthDeviceCodeConflictFailsClosed(t *testing.T) {
+	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	app, logs, err := newOAuthTestApp(t, &OAuthRuntime{
+		Issuer: oauthTestIssuer, Resources: []string{oauthTestResource},
+		Store: failingDeviceGrantLookupStore{OAuthStore: memory.NewOAuthStore(clock)},
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, _ := startOAuthDeviceAuthorization(t, app, nil)
+	deviceCode := started["device_code"].(string)
+
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, deviceTokenRequest(t, deviceCode))
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("legacy endpoint on a lookup failure: status = %d, want 503 (fail closed) -- body=%s", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "access_token") {
+		t.Fatal("legacy endpoint minted a credential despite an unconfirmed OAuth-device-grant lookup")
+	}
+	if !strings.Contains(logs.String(), `"step":"token","outcome":"unavailable"`) {
+		t.Fatal("the fail-closed refusal must still emit the acr-api oauth step token/unavailable line")
+	}
+}
+
+// TestOAuthRegisterDeviceCodeOnlyClientHTTP pins the CHAOS-6233 fix for a
+// second real P1 (found by codex round cf-6233-r2, executed and confirmed):
+// a headless client registering with ONLY the RFC 8628 device-code grant
+// type and no redirect_uris (which the device grant never uses) was refused
+// invalid_client_metadata -- the registration allowlist accepted only
+// authorization_code/refresh_token, so a device-only client had no way to
+// self-register as what it actually is.
+func TestOAuthRegisterDeviceCodeOnlyClientHTTP(t *testing.T) {
+	app, _, err := newOAuthTestApp(t, &OAuthRuntime{Issuer: oauthTestIssuer, Resources: []string{oauthTestResource}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registration, _ := json.Marshal(map[string]any{"client_name": "cfa login", "grant_types": []string{auth.OAuthDeviceCodeGrantType}})
+	request := httptest.NewRequest(http.MethodPost, OAuthRegisterPath, bytes.NewReader(registration))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	app.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("device-only registration: %d %s", recorder.Code, recorder.Body.String())
+	}
+	var registered map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &registered); err != nil {
+		t.Fatal(err)
+	}
+	if redirects := registered["redirect_uris"]; redirects != nil {
+		if list, ok := redirects.([]any); !ok || len(list) != 0 {
+			t.Fatalf("device-only client redirect_uris = %v, want none", redirects)
+		}
+	}
+	grantTypes, _ := registered["grant_types"].([]any)
+	if len(grantTypes) != 1 || grantTypes[0] != auth.OAuthDeviceCodeGrantType {
+		t.Fatalf("device-only client grant_types = %v, want [%s]", grantTypes, auth.OAuthDeviceCodeGrantType)
+	}
+	responseTypes, _ := registered["response_types"].([]any)
+	if len(responseTypes) != 0 {
+		t.Fatalf("device-only client response_types = %v, want empty", responseTypes)
+	}
+
+	// That client can then start a device authorization.
+	clientID, _ := registered["client_id"].(string)
+	started, _ := startOAuthDeviceAuthorization(t, app, url.Values{"client_id": {clientID}})
+	if started["device_code"] == nil || started["device_code"] == "" {
+		t.Fatalf("device-only client could not start a device authorization: %v", started)
 	}
 }
 

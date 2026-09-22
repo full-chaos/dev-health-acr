@@ -185,7 +185,11 @@ func ValidateOAuthClient(client OAuthClient) error {
 	if !utf8.ValidString(client.ClientName) || len(client.ClientName) > maxOAuthClientNameLength || hasControl(client.ClientName) {
 		return ErrInvalidOAuthClient
 	}
-	if len(client.RedirectURIs) == 0 || len(client.RedirectURIs) > maxOAuthRedirectURIs {
+	// Zero redirect URIs is valid here: a client registered for the RFC 8628
+	// device-code grant only (CHAOS-6233) declares none, since the device
+	// grant has no redirect step. The caller (OAuthService.Register) is what
+	// requires at least one when the client also wants authorization_code.
+	if len(client.RedirectURIs) > maxOAuthRedirectURIs {
 		return ErrInvalidOAuthClient
 	}
 	seen := make(map[string]struct{}, len(client.RedirectURIs))

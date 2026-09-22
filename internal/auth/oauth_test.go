@@ -429,6 +429,50 @@ func TestOAuthRegisterRefusals(t *testing.T) {
 	}
 }
 
+// TestOAuthRegisterDeviceCodeOnlyClient pins the CHAOS-6233 fix: a client
+// declaring ONLY the RFC 8628 device-code grant type registers successfully
+// with no redirect_uris (the device grant has no redirect step), can then
+// start a device authorization (StartDeviceAuthorization never checks
+// redirect_uris), and cannot complete the authorization_code flow (Authorize
+// refuses since it has none registered to match against).
+func TestOAuthRegisterDeviceCodeOnlyClient(t *testing.T) {
+	h := newOAuthHarness(t)
+	client, err := h.oauth.Register(context.Background(), OAuthRegistrationRequest{GrantTypes: []string{OAuthDeviceCodeGrantType}})
+	if err != nil {
+		t.Fatalf("device-only registration: %v", err)
+	}
+	if len(client.RedirectURIs) != 0 {
+		t.Fatalf("device-only client stored RedirectURIs = %v, want none", client.RedirectURIs)
+	}
+	if _, err := h.oauth.StartDeviceAuthorization(context.Background(), OAuthDeviceAuthorizationRequest{ClientID: client.ClientID}); err != nil {
+		t.Fatalf("device-only client cannot start a device authorization: %v", err)
+	}
+	challenge, _ := pkce(t)
+	_, err = h.oauth.Authorize(context.Background(), OAuthAuthorizeRequest{
+		ResponseType: "code", ClientID: client.ClientID, RedirectURI: testRedirect,
+		CodeChallenge: challenge, CodeChallengeMethod: "S256",
+	})
+	if outcomeOf(err) != oauthvocab.OutcomeInvalidRedirectURI {
+		t.Fatalf("device-only client authorization_code outcome = %s, want %s", outcomeOf(err), oauthvocab.OutcomeInvalidRedirectURI)
+	}
+}
+
+// TestOAuthRegisterHybridClient pins that a client naming BOTH
+// authorization_code and device_code registers normally (redirect_uris still
+// required, since authorization_code was requested) and can use either grant.
+func TestOAuthRegisterHybridClient(t *testing.T) {
+	h := newOAuthHarness(t)
+	client, err := h.oauth.Register(context.Background(), OAuthRegistrationRequest{
+		RedirectURIs: []string{testRedirect}, GrantTypes: []string{"authorization_code", OAuthDeviceCodeGrantType},
+	})
+	if err != nil {
+		t.Fatalf("hybrid registration: %v", err)
+	}
+	if _, err := h.oauth.StartDeviceAuthorization(context.Background(), OAuthDeviceAuthorizationRequest{ClientID: client.ClientID}); err != nil {
+		t.Fatalf("hybrid client cannot start a device authorization: %v", err)
+	}
+}
+
 func TestOAuthClientMetadataDocumentResolution(t *testing.T) {
 	h := newOAuthHarness(t)
 	id := "https://client.example.test/oauth/client.json"
