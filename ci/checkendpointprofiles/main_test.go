@@ -194,10 +194,11 @@ func TestRealTreeProofFailsLoudlyInTheContractGateStepWhenInputsAreMissing(t *te
 }
 
 func TestRealInventoryRowCountMatchesTheWave0Baseline(t *testing.T) {
-	// 21 rows = 12 protected / 9 public: the Wave 0 baseline of 16 (12 / 4)
-	// plus the five public OAuth authorization-server routes hosted MCP
-	// clients log in through (metadata, authorize, consent, token,
-	// register). A different number is a finding to reconcile, not an
+	// 21 rows = 13 protected / 8 public: the Wave 0 baseline of 16 (12 / 4)
+	// plus the four public OAuth authorization-server routes hosted MCP
+	// clients log in through (metadata, authorize, token, register) and the
+	// OAuth consent route the web consent page calls (protected: web
+	// assertion only). A different number is a finding to reconcile, not an
 	// adjustment.
 	root := repoRoot(t)
 	inventoryPath := filepath.Join(root, "contracts", "auth", "v1", "endpoint-profiles.acr.json")
@@ -219,11 +220,11 @@ func TestRealInventoryRowCountMatchesTheWave0Baseline(t *testing.T) {
 			public++
 		}
 	}
-	if protected != 12 {
-		t.Errorf("expected 12 protected rows, got %d", protected)
+	if protected != 13 {
+		t.Errorf("expected 13 protected rows, got %d", protected)
 	}
-	if public != 9 {
-		t.Errorf("expected 9 public rows, got %d", public)
+	if public != 8 {
+		t.Errorf("expected 8 public rows, got %d", public)
 	}
 }
 
