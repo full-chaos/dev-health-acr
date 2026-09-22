@@ -30,13 +30,17 @@ var (
 type DeviceFlowOptions struct {
 	Now    func() time.Time
 	Random io.Reader
-	// OAuthDeviceGrants, when set, lets Poll refuse redeeming a device code
-	// that belongs to an RFC 8628 device grant (CHAOS-6233, POST
+	// OAuthDeviceGrants lets Poll refuse redeeming a device code that
+	// belongs to an RFC 8628 device grant (CHAOS-6233, POST
 	// /device_authorization): such a code must be redeemed only through
 	// OAuthService.ExchangeDeviceCode, which binds the credential to the
 	// grant's resource and requested scope; this legacy path binds neither.
-	// Nil when OAuth login is not configured at all -- Poll then behaves
-	// exactly as it always has.
+	// REQUIRED -- NewDeviceFlowService refuses construction when this is
+	// nil, so a caller cannot silently end up with the guard skipped by
+	// forgetting to wire it. A deployment with no OAuth login configured at
+	// all passes the explicit NoOAuthDeviceGrants{} value instead of
+	// leaving this unset, so "OAuth is genuinely off" and "OAuth is on but
+	// someone forgot to wire the lookup" can never be the same nil.
 	OAuthDeviceGrants OAuthDeviceGrantLookup
 }
 
@@ -92,13 +96,17 @@ func NewDeviceFlowService(store storage.DeviceAuthorizationStore, credentials *S
 	if storage.IsNil(options.Random) {
 		options.Random = rand.Reader
 	}
-	oauthDeviceGrants := options.OAuthDeviceGrants
-	if storage.IsNil(oauthDeviceGrants) {
-		oauthDeviceGrants = nil
+	// storage.IsNil, not a bare != nil: a caller passing a typed nil
+	// pointer that satisfies the interface (e.g. a nil *memory.OAuthStore)
+	// must be refused exactly like an unset field -- an interface holding a
+	// typed nil is itself non-nil and would slip past a bare check, defeating
+	// this guard through the exact shape it exists to catch.
+	if storage.IsNil(options.OAuthDeviceGrants) {
+		return nil, fmt.Errorf("%w: OAuthDeviceGrants is required (pass NoOAuthDeviceGrants{} when OAuth login is not configured)", ErrInvalidDeviceFlow)
 	}
 	return &DeviceFlowService{
 		store: store, credentials: credentials, now: options.Now, random: options.Random,
-		oauthDeviceGrants: oauthDeviceGrants,
+		oauthDeviceGrants: options.OAuthDeviceGrants,
 	}, nil
 }
 

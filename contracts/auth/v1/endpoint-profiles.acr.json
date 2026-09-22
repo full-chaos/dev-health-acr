@@ -581,8 +581,8 @@
           "direction": "returned_to_caller",
           "anchor": {
             "path": "internal/auth/device_flow.go",
-            "line": 89,
-            "line_end": 121,
+            "line": 113,
+            "line_end": 145,
             "note": "DeviceFlowService.Start -- mints device_code + user_code via s.store.Create"
           },
           "issuer": "acr DeviceFlowService",
@@ -641,8 +641,8 @@
           "direction": "returned_to_caller",
           "anchor": {
             "path": "internal/auth/device_poll.go",
-            "line": 90,
-            "line_end": 112,
+            "line": 95,
+            "line_end": 171,
             "note": "device_code grant path (JSON body, handleDeviceCodeToken -> deviceFlow.Poll -> redeem): mints the fcacr_ credential on approved-device redemption"
           },
           "issuer": "acr credential Service (via DeviceFlowService.redeem)",

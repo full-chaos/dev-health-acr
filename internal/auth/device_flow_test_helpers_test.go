@@ -40,8 +40,9 @@ func newDeviceFlowFixture(t *testing.T, random io.Reader) *deviceFlowFixture {
 	fixture.store = deviceStore
 	credentialService := newTestService(t, fixture.credentials, fixture.audit, fixture.now)
 	fixture.flow, err = NewDeviceFlowService(fixture.store, credentialService, DeviceFlowOptions{
-		Now:    func() time.Time { return fixture.now },
-		Random: random,
+		Now:               func() time.Time { return fixture.now },
+		Random:            random,
+		OAuthDeviceGrants: NoOAuthDeviceGrants{},
 	})
 	require.NoError(t, err)
 	return fixture

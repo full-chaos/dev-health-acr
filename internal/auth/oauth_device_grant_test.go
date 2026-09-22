@@ -257,3 +257,45 @@ var errDeviceGrantLookupDown = errors.New("device grant lookup unavailable")
 func (failingDeviceGrantLookup) GetDeviceGrant(context.Context, storage.DeviceCodeHash) (storage.OAuthDeviceGrant, error) {
 	return storage.OAuthDeviceGrant{}, errDeviceGrantLookupDown
 }
+
+// TestNewDeviceFlowServiceRequiresOAuthDeviceGrants pins the construction-time
+// half of the CHAOS-6233 guard: a caller cannot end up with the guard
+// silently skipped by forgetting to wire OAuthDeviceGrants. A deployment
+// with no OAuth login at all must say so explicitly (NoOAuthDeviceGrants{}),
+// never by leaving the field unset -- the one thing this test proves an
+// unset (nil, or a nil-holding-interface) field can no longer do is
+// construct successfully.
+func TestNewDeviceFlowServiceRequiresOAuthDeviceGrants(t *testing.T) {
+	h := newOAuthHarness(t)
+	clock := func() time.Time { return h.now }
+	service, err := NewService(h.creds, ServiceOptions{Now: clock})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := NewDeviceFlowService(h.store, service, DeviceFlowOptions{Now: clock}); !errors.Is(err, ErrInvalidDeviceFlow) {
+		t.Fatalf("NewDeviceFlowService with OAuthDeviceGrants unset: err = %v, want ErrInvalidDeviceFlow", err)
+	}
+
+	// A typed nil satisfying the interface (the shape a wiring bug would
+	// actually produce -- an *memory.OAuthStore left nil, not a bare Go
+	// nil) must be refused the same way: an interface holding a typed nil
+	// is itself non-nil and would slip past a bare `== nil` check.
+	var typedNilStore *failingDeviceGrantLookupPointer
+	if _, err := NewDeviceFlowService(h.store, service, DeviceFlowOptions{Now: clock, OAuthDeviceGrants: typedNilStore}); !errors.Is(err, ErrInvalidDeviceFlow) {
+		t.Fatalf("NewDeviceFlowService with a typed-nil OAuthDeviceGrants: err = %v, want ErrInvalidDeviceFlow", err)
+	}
+
+	if _, err := NewDeviceFlowService(h.store, service, DeviceFlowOptions{Now: clock, OAuthDeviceGrants: NoOAuthDeviceGrants{}}); err != nil {
+		t.Fatalf("NewDeviceFlowService with the explicit NoOAuthDeviceGrants{} opt-out: %v", err)
+	}
+}
+
+// failingDeviceGrantLookupPointer exists only so
+// TestNewDeviceFlowServiceRequiresOAuthDeviceGrants can construct a typed nil
+// pointer that satisfies OAuthDeviceGrantLookup.
+type failingDeviceGrantLookupPointer struct{}
+
+func (*failingDeviceGrantLookupPointer) GetDeviceGrant(context.Context, storage.DeviceCodeHash) (storage.OAuthDeviceGrant, error) {
+	return storage.OAuthDeviceGrant{}, storage.ErrNotFound
+}

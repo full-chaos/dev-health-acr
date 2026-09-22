@@ -34,6 +34,19 @@ type OAuthDeviceGrantLookup interface {
 	GetDeviceGrant(ctx context.Context, hash storage.DeviceCodeHash) (storage.OAuthDeviceGrant, error)
 }
 
+// NoOAuthDeviceGrants is the explicit OAuthDeviceGrantLookup a caller passes
+// to NewDeviceFlowService when OAuth login is not configured in this
+// deployment at all -- GetDeviceGrant always reports storage.ErrNotFound, so
+// Poll's guard falls through to the ordinary legacy poll path unchanged.
+// Deliberately not the zero value of an unexported type and not nil: a
+// caller has to name this type to opt out, so "OAuth is genuinely off" can
+// never be produced by simply forgetting to wire the real lookup.
+type NoOAuthDeviceGrants struct{}
+
+func (NoOAuthDeviceGrants) GetDeviceGrant(context.Context, storage.DeviceCodeHash) (storage.OAuthDeviceGrant, error) {
+	return storage.OAuthDeviceGrant{}, storage.ErrNotFound
+}
+
 // ErrOAuthDeviceGrantConflict marks a Poll refusal for a device code that
 // belongs to an RFC 8628 device grant: the underlying error is still a
 // *DevicePollError with the ordinary invalid_grant wire shape, but a caller
@@ -101,15 +114,17 @@ func (s *DeviceFlowService) Poll(ctx context.Context, deviceCode string) (Issued
 	// closing the class of defect a separate pre-check (hashing or
 	// normalizing even slightly differently from this method) keeps
 	// reopening.
-	if !storage.IsNil(s.oauthDeviceGrants) {
-		if _, grantErr := s.oauthDeviceGrants.GetDeviceGrant(ctx, hash); grantErr == nil {
-			return IssuedCredential{}, fmt.Errorf("%w: %w", ErrOAuthDeviceGrantConflict, newDevicePollError(DevicePollInvalidGrant, 0))
-		} else if !errors.Is(grantErr, storage.ErrNotFound) {
-			// Fail CLOSED: an unconfirmed lookup is an unconfirmed conflict,
-			// never "safe to proceed" -- redeeming on this uncertainty is
-			// exactly the defect this guard exists to close.
-			return IssuedCredential{}, fmt.Errorf("%w: %w", ErrOAuthDeviceGrantLookupUnavailable, grantErr)
-		}
+	// s.oauthDeviceGrants is guaranteed non-nil (NewDeviceFlowService refuses
+	// construction otherwise) -- there is no "skip the guard" branch here by
+	// construction; a deployment with no OAuth login configured wires the
+	// explicit NoOAuthDeviceGrants{} value, which always misses below.
+	if _, grantErr := s.oauthDeviceGrants.GetDeviceGrant(ctx, hash); grantErr == nil {
+		return IssuedCredential{}, fmt.Errorf("%w: %w", ErrOAuthDeviceGrantConflict, newDevicePollError(DevicePollInvalidGrant, 0))
+	} else if !errors.Is(grantErr, storage.ErrNotFound) {
+		// Fail CLOSED: an unconfirmed lookup is an unconfirmed conflict,
+		// never "safe to proceed" -- redeeming on this uncertainty is
+		// exactly the defect this guard exists to close.
+		return IssuedCredential{}, fmt.Errorf("%w: %w", ErrOAuthDeviceGrantLookupUnavailable, grantErr)
 	}
 	switch record.State {
 	case storage.DeviceAuthorizationStatePending:
