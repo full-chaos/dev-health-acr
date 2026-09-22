@@ -374,6 +374,7 @@ func TestValidOAuthConsentURL(t *testing.T) {
 		"": false, "https://www.example.com": false, "https://www.example.com/": false, "http://www.example.com/acr/authorize": false,
 		"https://www.example.com/acr/authorize?x=1": false, "https://www.example.com/acr/authorize?": false, "https://www.example.com/acr/authorize#f": false,
 		"https://user@www.example.com/acr/authorize": false, "/acr/authorize": false, "javascript:alert(1)": false, "ftp://example.com/x": false,
+		"https://www.example.com/acr/authorize#": false, "https://www.example.com/acr/authorize?#": false, "https://www.example.com/acr/a%3Fb": true,
 	} {
 		if got := ValidOAuthConsentURL(value); got != want {
 			t.Errorf("ValidOAuthConsentURL(%q) = %v, want %v", value, got, want)

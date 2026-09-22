@@ -188,6 +188,11 @@ func ValidOAuthIssuer(value string) bool {
 // appended. internal/config applies the same rule to ACR_OAUTH_CONSENT_URL
 // (a test pins the two against one table).
 func ValidOAuthConsentURL(value string) bool {
+	// A bare "?" or "#" parses to an empty query or fragment, so refuse the
+	// characters themselves: the handle must be the only query parameter.
+	if strings.ContainsAny(value, "?#") {
+		return false
+	}
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" ||
 		parsed.Path == "" || parsed.Path == "/" {

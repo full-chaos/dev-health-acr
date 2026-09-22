@@ -26,6 +26,8 @@ func TestValidateOAuthConfigDomain(t *testing.T) {
 		{"consent url root", func(c *Config) { c.OAuthConsentURL = "https://www.example.test/" }, "ACR_OAUTH_CONSENT_URL must be"},
 		{"consent url query", func(c *Config) { c.OAuthConsentURL = "https://www.example.test/acr/authorize?handle=x" }, "ACR_OAUTH_CONSENT_URL must be"},
 		{"consent url http", func(c *Config) { c.OAuthConsentURL = "http://www.example.test/acr/authorize" }, "ACR_OAUTH_CONSENT_URL must be"},
+		{"consent url bare fragment", func(c *Config) { c.OAuthConsentURL = "https://www.example.test/acr/authorize#" }, "ACR_OAUTH_CONSENT_URL must be"},
+		{"consent url bare query", func(c *Config) { c.OAuthConsentURL = "https://www.example.test/acr/authorize?" }, "ACR_OAUTH_CONSENT_URL must be"},
 		{"consent url loopback http", func(c *Config) { c.OAuthConsentURL = "http://localhost:3000/acr/authorize" }, ""},
 		{"two resources", func(c *Config) { c.OAuthResources = append(c.OAuthResources, "https://mcp2.example.test/mcp") }, ""},
 		{"loopback http", func(c *Config) {
@@ -90,6 +92,7 @@ func TestConsentPageURLAgreesWithTheAuthCheck(t *testing.T) {
 		"", "https://www.example.com", "https://www.example.com/", "http://www.example.com/acr/authorize",
 		"https://www.example.com/acr/authorize?x=1", "https://www.example.com/acr/authorize?", "https://www.example.com/acr/authorize#f",
 		"https://user@www.example.com/acr/authorize", "/acr/authorize", "javascript:alert(1)", "ftp://example.com/x", "https:///x",
+		"https://www.example.com/acr/authorize#", "https://www.example.com/acr/authorize?#", "https://www.example.com/acr/a%3Fb",
 	} {
 		if got, want := ConsentPageURL(value), auth.ValidOAuthConsentURL(value); got != want {
 			t.Errorf("%q: config %v, auth %v", value, got, want)

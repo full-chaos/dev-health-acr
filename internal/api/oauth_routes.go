@@ -246,12 +246,19 @@ func (a *App) handleOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
 	}
 	// The browser goes straight to the web consent page for this request;
 	// the web signs the user in first when needed and comes back to it.
-	target := a.oauthConsentURL + "?" + url.Values{"handle": {authorization.Handle}}.Encode()
+	target, err := url.Parse(a.oauthConsentURL)
+	if err != nil {
+		a.renderOAuthProblem(w, r, http.StatusServiceUnavailable, "Sign-in is temporarily unavailable. Try again in a moment.")
+		a.emitOAuthStep(r, oauthvocab.StepAuthorize, oauthvocab.OutcomeUnavailable, authorization.Client.Kind, http.StatusServiceUnavailable)
+		return
+	}
+	target.RawQuery = url.Values{"handle": {authorization.Handle}}.Encode()
+	target.Fragment, target.RawFragment = "", ""
 	header := w.Header()
 	header.Set("Cache-Control", "no-store")
 	header.Set("Pragma", "no-cache")
 	header.Set("Referrer-Policy", "no-referrer")
-	http.Redirect(w, r, target, http.StatusFound)
+	http.Redirect(w, r, target.String(), http.StatusFound)
 	a.emitOAuthStepScopes(r, oauthvocab.StepAuthorize, oauthvocab.OutcomeOK, authorization.Client.Kind, http.StatusFound, strings.Fields(authorization.Scope))
 }
 

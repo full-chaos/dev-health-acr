@@ -90,7 +90,8 @@ func TestOAuthRoutesRequireWebApprovalAndStayUnregisteredWhenOff(t *testing.T) {
 	if _, _, err := newOAuthTestApp(t, &OAuthRuntime{Issuer: oauthTestIssuer, Resources: []string{oauthTestResource}}, false); !errors.Is(err, ErrOAuthRequiresWebApproval) {
 		t.Fatalf("OAuth without web assertions: err = %v, want ErrOAuthRequiresWebApproval", err)
 	}
-	for _, consentURL := range []string{"https://web.example.test", "https://web.example.test/acr/authorize?x=1", "http://web.example.test/acr/authorize", "/acr/authorize"} {
+	for _, consentURL := range []string{"https://web.example.test", "https://web.example.test/acr/authorize?x=1", "http://web.example.test/acr/authorize", "/acr/authorize",
+		"https://web.example.test/acr/authorize#", "https://web.example.test/acr/authorize?"} {
 		if _, _, err := newOAuthTestApp(t, &OAuthRuntime{Issuer: oauthTestIssuer, Resources: []string{oauthTestResource}, ConsentURL: consentURL}, true); !errors.Is(err, ErrOAuthRequiresConsentURL) {
 			t.Fatalf("OAuth with consent URL %q: err = %v, want ErrOAuthRequiresConsentURL", consentURL, err)
 		}

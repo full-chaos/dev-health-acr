@@ -88,6 +88,11 @@ func resourceURL(value string) bool {
 // loopback host, for tests), a host, a non-root path, and no user info, query
 // or fragment, so /authorize can append exactly one handle parameter.
 func ConsentPageURL(value string) bool {
+	// A bare "?" or "#" parses to an empty query or fragment, so refuse the
+	// characters themselves: the handle must be the only query parameter.
+	if strings.ContainsAny(value, "?#") {
+		return false
+	}
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" ||
 		parsed.Path == "" || parsed.Path == "/" {
