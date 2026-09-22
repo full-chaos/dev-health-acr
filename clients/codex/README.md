@@ -1,5 +1,11 @@
 # Context Fabric for Codex CLI
 
+**Internal use only (CHAOS-6211).** This bundled marketplace/plugin path
+needs a checkout of this repository and is not published for the public. For
+the public STDIO install (download the signed `acr-mcp` binary and configure
+your client by hand), see
+[docs/examples/mcp-clients/codex.md](../../docs/examples/mcp-clients/codex.md).
+
 Add the bundled local marketplace and install the `context-fabric` plugin with
 Codex. The plugin registers exactly `acr-mcp serve` and exposes only the
 read-only tools `context_for_task` and `source_evidence`.

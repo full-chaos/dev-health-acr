@@ -18,9 +18,14 @@ To integrate the ACR sidecar with a generic MCP client, you need to:
 
    ```bash
    # Download the release archive for your OS/arch (e.g. acr-mcp_<version>_darwin_arm64.tar.gz)
-   # plus SHA256SUMS and SHA256SUMS.sigstore.json from the GitHub Releases page for
-   # full-chaos/dev-health-acr. Verify the keyless Sigstore bundle against this
-   # repository's release workflow identity before checking or extracting the archive:
+   # from the GitHub Releases page for full-chaos/context-fabric-agents (mirrors this
+   # repo's signed release; re-verified before republishing). That page also publishes
+   # this repo's checksum manifest and Sigstore bundle as acr-mcp-SHA256SUMS and
+   # acr-mcp-SHA256SUMS.sigstore.json (renamed to avoid colliding with
+   # context-fabric-agents' own release assets of the same generic name) -- download
+   # both and save them locally as SHA256SUMS and SHA256SUMS.sigstore.json. Verify the
+   # keyless Sigstore bundle against THIS repository's release workflow identity before
+   # checking or extracting the archive:
    set -euo pipefail
    identity='^https://github\.com/full-chaos/dev-health-acr/\.github/workflows/release\.yml@refs/(heads/main|tags/v[0-9]+\.[0-9]+\.[0-9]+(-(dev|beta)\.[0-9]+)?)$'
    issuer='https://token.actions.githubusercontent.com'
@@ -65,9 +70,14 @@ To integrate the ACR sidecar with a generic MCP client, you need to:
 
    ```powershell
    # Download the release archive for your Windows build (e.g. acr-mcp_<version>_windows_amd64.zip)
-   # plus SHA256SUMS and SHA256SUMS.sigstore.json from the GitHub Releases page for
-   # full-chaos/dev-health-acr. Verify the keyless Sigstore bundle against this
-   # repository's release workflow identity before checking or extracting the archive.
+   # from the GitHub Releases page for full-chaos/context-fabric-agents (mirrors this
+   # repo's signed release; re-verified before republishing). That page also publishes
+   # this repo's checksum manifest and Sigstore bundle as acr-mcp-SHA256SUMS and
+   # acr-mcp-SHA256SUMS.sigstore.json (renamed to avoid colliding with
+   # context-fabric-agents' own release assets of the same generic name) -- download
+   # both and save them locally as SHA256SUMS and SHA256SUMS.sigstore.json. Verify the
+   # keyless Sigstore bundle against THIS repository's release workflow identity before
+   # checking or extracting the archive.
    # $ErrorActionPreference covers cmdlet failures; cosign.exe is a native executable,
    # so its exit code is checked explicitly before continuing:
    $ErrorActionPreference = 'Stop'

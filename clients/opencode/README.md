@@ -1,5 +1,11 @@
 # Context Fabric for OpenCode
 
+**Internal use only (CHAOS-6211).** This bundled package install path needs
+a checkout of this repository and is not published for the public. For the
+public STDIO install (download the signed `acr-mcp` binary and configure
+OpenCode by hand), see
+[docs/examples/mcp-clients/opencode.md](../../docs/examples/mcp-clients/opencode.md).
+
 Install with `scripts/install.sh`, update with `scripts/update.sh`, and remove
 with `scripts/uninstall.sh`. These scripts use an owned user configuration
 directory, preserve unrelated OpenCode files, and refuse unowned targets.
