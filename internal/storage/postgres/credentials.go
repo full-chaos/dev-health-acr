@@ -280,12 +280,12 @@ func sanitizeDatabaseError(err error) error {
 	}
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-		if class := classifyDatabaseError(pgErr); class != nil {
+		if class := classifyDatabaseError(err); class != nil {
 			return fmt.Errorf("%w: %w", storage.ErrConflict, class)
 		}
 		return storage.ErrConflict
 	}
-	if class := classifyDatabaseError(pgErr); class != nil {
+	if class := classifyDatabaseError(err); class != nil {
 		return fmt.Errorf("%w: %w", storage.ErrUnavailable, class)
 	}
 	return storage.ErrUnavailable
@@ -316,23 +316,49 @@ var postgresErrorClassNames = map[string]string{
 }
 
 // classifyDatabaseError builds the safe classification CHAOS-6278's
-// dependency-failure logging needs from a *pgconn.PgError. pgErr may be nil
-// (a non-Postgres error, e.g. a network-level failure with no PgError at
-// all) -- returns nil in that case, same as "no class available", so a
-// caller's errors.As simply finds nothing rather than a zero-value class
-// with an empty SQLState.
-func classifyDatabaseError(pgErr *pgconn.PgError) *storage.DependencyErrorClass {
-	if pgErr == nil {
-		return nil
+// dependency-failure logging needs from err. Handles two shapes:
+//
+//   - *pgconn.PgError: a real server-side SQLSTATE (a constraint violation,
+//     a permission denial once the connection succeeded, ...) -- classified
+//     by postgresErrorClassNames, with the constraint/table names it
+//     carries.
+//   - *pgconn.ConnectError: a dial-time failure (refused, timed out, DNS,
+//     TLS) -- the connection attempt itself never reached a point where
+//     Postgres could hand back a SQLSTATE at all (codex round cf-6278-r1b's
+//     P1, executed repro: a refused connection classified as nothing,
+//     indistinguishable from an unrelated unclassified failure). Classified
+//     under the SQL-standard "08" connection-exception class (SQLState
+//     "08000") even though no server ever produced that code, since that is
+//     the closed vocabulary's own bucket for exactly this failure shape.
+//     ConnectError.Config (the attempted connection's own DSN) is
+//     DELIBERATELY never read here -- this repository never logs raw
+//     transports/DSNs (AGENTS.md), so only the class name is derived, never
+//     the address that failed.
+//
+// Anything else (context.Canceled/DeadlineExceeded are handled by the
+// caller before this is reached; any other error) returns nil -- "no class
+// available" -- so a caller's errors.As simply finds nothing rather than a
+// zero-value class with an empty SQLState.
+func classifyDatabaseError(err error) *storage.DependencyErrorClass {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		name, ok := postgresErrorClassNames[pgErr.Code]
+		if !ok {
+			name = "unclassified"
+		}
+		return &storage.DependencyErrorClass{
+			SQLState:   pgErr.Code,
+			Class:      name,
+			Constraint: pgErr.ConstraintName,
+			Table:      pgErr.TableName,
+		}
 	}
-	name, ok := postgresErrorClassNames[pgErr.Code]
-	if !ok {
-		name = "unclassified"
+	var connErr *pgconn.ConnectError
+	if errors.As(err, &connErr) {
+		return &storage.DependencyErrorClass{
+			SQLState: "08000",
+			Class:    "connection_failure",
+		}
 	}
-	return &storage.DependencyErrorClass{
-		SQLState:   pgErr.Code,
-		Class:      name,
-		Constraint: pgErr.ConstraintName,
-		Table:      pgErr.TableName,
-	}
+	return nil
 }

@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/require"
 )
 
@@ -80,4 +83,42 @@ VALUES ('acrc_00000000000000000000000000000000', 'test client', '[]'::jsonb, now
 	require.True(t, errors.As(sanitized, &class))
 	require.Equal(t, "23505", class.SQLState)
 	require.Equal(t, "unique_violation", class.Class)
+}
+
+// TestSanitizeDatabaseError_connectionFailureCarriesSafeErrorClass is
+// codex round cf-6278-r1b's P1 regression test: a dial-time failure (the
+// server refuses the TCP connection outright) never reaches a point where
+// Postgres could hand back a SQLSTATE at all, so it surfaces as a real
+// *pgconn.ConnectError, not a *pgconn.PgError -- a shape
+// classifyDatabaseError did not check for before this fix, so a genuine
+// connection failure classified as NOTHING, indistinguishable in
+// acr-api's own logs from an unrelated unclassified dependency failure
+// (exactly the "distinguish a permission failure from a connection
+// failure from a constraint violation" CHAOS-6278 itself asks for).
+//
+// RED on baseline: errors.As below found no *storage.DependencyErrorClass
+// at all for a real connection refusal.
+func TestSanitizeDatabaseError_connectionFailureCarriesSafeErrorClass(t *testing.T) {
+	// Given a DSN that dials a port nothing listens on -- a real refused
+	// TCP connection, not a hand-authored error.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// When
+	_, dialErr := pgx.Connect(ctx, "postgres://acr:acr@127.0.0.1:1/acr?connect_timeout=1")
+	require.Error(t, dialErr, "127.0.0.1:1 must actually refuse the connection for this to be a real repro")
+	var connErr *pgconn.ConnectError
+	require.True(t, errors.As(dialErr, &connErr), "the dial failure must be a real *pgconn.ConnectError, the shape this fix targets")
+	sanitized := sanitizeDatabaseError(dialErr)
+
+	// Then
+	require.ErrorIs(t, sanitized, storage.ErrUnavailable)
+	var class *storage.DependencyErrorClass
+	require.True(t, errors.As(sanitized, &class), "a real connection refusal must carry a storage.DependencyErrorClass")
+	require.Equal(t, "connection_failure", class.Class)
+	require.Equal(t, "08000", class.SQLState)
+	// The failed DSN/address is never echoed into the safe class -- only
+	// the class name and a synthetic SQLSTATE bucket.
+	require.Empty(t, class.Constraint)
+	require.Empty(t, class.Table)
 }
