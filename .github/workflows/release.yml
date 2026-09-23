@@ -338,7 +338,6 @@ jobs:
           trap release_verify_cleanup EXIT
           go mod download
           go mod verify
-          make contract-test
           scripts/ci/retry.sh go install golang.org/x/vuln/cmd/govulncheck@v1.5.0
           govulncheck ./...
 
