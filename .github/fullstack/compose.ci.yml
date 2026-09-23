@@ -221,6 +221,36 @@ services:
       GO_API_ENVELOPE_JWKS_PATH: /secrets/envelope-jwks.json
       GO_API_ENVELOPE_ISSUER: ${GO_API_ENVELOPE_ISSUER:-dev-health-ops-edge}
       GO_API_ENVELOPE_AUDIENCE: ${GO_API_ENVELOPE_AUDIENCE:-query-api}
+      # Each of the 32 Go-served REST routes is gated behind its own per-route
+      # GO_API_*_ENABLED flag (cmd/query-api/*.go), default OFF -- without these,
+      # query-api 404s every one of them regardless of ingress/router path routing.
+      # Copied verbatim from full-chaos/dev-health-deploy's chart/values.prod.yaml
+      # (the query-api Deployment env block), the same list the CHAOS-6326 fixture
+      # router (scripts/e2e/fullstack-opencode.sh render_web_override) sends to
+      # query-api. Keep both lists in lockstep by hand.
+      GO_API_INVESTMENT_EXPLAIN_ENABLED: "true"
+      GO_API_QUADRANT_ENABLED: "true"
+      GO_API_FILTER_OPTIONS_ENABLED: "true"
+      GO_API_DRILLDOWN_PRS_ENABLED: "true"
+      GO_API_DRILLDOWN_ISSUES_ENABLED: "true"
+      GO_API_META_ENABLED: "true"
+      GO_API_EXPLAIN_ENABLED: "true"
+      GO_API_PEOPLE_SEARCH_ENABLED: "true"
+      GO_API_PEOPLE_SUMMARY_ENABLED: "true"
+      GO_API_PEOPLE_METRIC_ENABLED: "true"
+      GO_API_FLAME_ENABLED: "true"
+      GO_API_PEOPLE_DRILLDOWN_PRS_ENABLED: "true"
+      GO_API_PEOPLE_DRILLDOWN_ISSUES_ENABLED: "true"
+      GO_API_FLAME_AGGREGATED_ENABLED: "true"
+      GO_API_HEATMAP_ENABLED: "true"
+      GO_API_SANKEY_ENABLED: "true"
+      GO_API_INVESTMENT_ENABLED: "true"
+      GO_API_INVESTMENT_FLOW_ENABLED: "true"
+      GO_API_INVESTMENT_SUNBURST_ENABLED: "true"
+      GO_API_HOME_ENABLED: "true"
+      GO_API_OPPORTUNITIES_ENABLED: "true"
+      GO_API_WORK_UNITS_ENABLED: "true"
+      GO_API_WORK_UNIT_EXPLAIN_ENABLED: "true"
     volumes:
       - ${GO_API_ENVELOPE_JWKS_FILE:?set by scripts/e2e/compose.sh}:/secrets/envelope-jwks.json:ro
     depends_on:

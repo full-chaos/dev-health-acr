@@ -1,0 +1,110 @@
+{{- if .Values.migration.enabled }}
+{{- /*
+CHAOS-6277: pre-install/pre-upgrade runtime-ACL Job, one hook-weight step
+after the migration Job (-5) so it always runs against an up-to-date
+schema. Compose bootstraps and re-asserts the runtime role's table grants
+with deploy/compose/acr-db-init.sh's runtime-acl mode, using the Postgres
+ADMIN credential -- a credential Kubernetes deliberately never holds (see
+deploy/README.md's "documented gaps" section and ADR-0004's
+existing-Secret-only contract). This Job closes the SAME gap without an
+admin DSN: it reuses the migration Job's own DSN (the schema owner, which
+can GRANT privileges on any table it owns to any other role without
+needing to be a superuser) plus the ALREADY-required runtime DSN Secret
+(read only for its embedded role name, never dialed) -- no new Secret or
+required value. acr-migrate grant-runtime-acl's own REVOKE-then-GRANT is
+idempotent, so this is equally safe on a fresh install and on a re-run
+against an environment where the grant was already applied by hand.
+*/ -}}
+{{- include "acr.validateCredentials" . -}}
+{{- include "acr.validateConnectionKind" . -}}
+{{- include "acr.validateNoMcp" . -}}
+{{- include "acr.validateDeviceVerificationURL" . -}}
+{{- include "acr.validateEntitlementOrigin" . -}}
+{{- $image := include "acr.image" . -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "acr.fullname" . }}-grant-runtime-acl
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "acr.migrationLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-4"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migration.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migration.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "acr.migrationSelectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/migration-prereqs.yaml") . | sha256sum }}
+        checksum/credentials: {{ include "acr.credentialsChecksumInput" . | sha256sum }}
+        {{- with .Values.migration.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "acr.fullname" . }}-migrate
+      automountServiceAccountToken: false
+      {{- include "acr.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- include "acr.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: acr-grant-runtime-acl
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/usr/local/bin/acr-migrate", "grant-runtime-acl"]
+          securityContext:
+            {{- include "acr.containerSecurityContext" . | nindent 12 }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "acr.fullname" . }}-migrate-config
+          env:
+            - name: ACR_POSTGRES_MIGRATION_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.credentials.migration.existingSecret | quote }}
+                  key: {{ .Values.credentials.migration.postgresDsnKey | default "ACR_POSTGRES_MIGRATION_DSN" | quote }}
+            {{- if eq .Values.config.postgresConnectionKind "pgbouncer" }}
+            - name: ACR_POSTGRES_MIGRATION_POOLER_ADMIN_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.credentials.migration.existingSecret | quote }}
+                  key: {{ .Values.credentials.migration.poolerAdminDsnKey | quote }}
+            {{- end }}
+            # Read-only: acr-migrate grant-runtime-acl parses just the
+            # embedded username out of this DSN (the runtime role it grants
+            # to) and never dials it. Already a required Secret reference
+            # (acr.validateCredentials) -- the SAME one the hosted runtime
+            # workloads consume, so this adds no new credential surface.
+            - name: ACR_POSTGRES_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.credentials.runtime.existingSecret | quote }}
+                  key: {{ .Values.credentials.runtime.postgresDsnKey | default "ACR_POSTGRES_DSN" | quote }}
+          resources:
+            {{- toYaml .Values.migration.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.config.postgresCaBundle.existingSecret }}
+            - name: postgres-ca
+              mountPath: /var/run/acr/postgres-ca
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+        {{- if .Values.config.postgresCaBundle.existingSecret }}
+        - name: postgres-ca
+          secret:
+            secretName: {{ .Values.config.postgresCaBundle.existingSecret | quote }}
+            items:
+              - key: {{ .Values.config.postgresCaBundle.key | quote }}
+                path: ca.crt
+        {{- end }}
+{{- end }}
