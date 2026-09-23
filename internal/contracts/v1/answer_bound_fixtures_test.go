@@ -2,6 +2,7 @@ package v1
 
 import (
 	"encoding/json"
+	"os"
 	"reflect"
 	"sort"
 	"strings"
@@ -1026,9 +1027,19 @@ func navigateBoundPath(root reflect.Value, path []boundPathStep) (reflect.Value,
 // in the probe's log line, and in the PR body.
 const saturationProbeMaxDepth = 8
 
+// saturationProbeEnv opts TestMaximalIsSaturated in (see the test).
+const saturationProbeEnv = "ACR_RUN_SATURATION_PROBE"
+
 func TestMaximalIsSaturated(t *testing.T) {
-	if testing.Short() {
-		t.Skip("rebuilds the ~520MB maximal fixture once per probed field (~90s); `make contract-test` runs it without -short")
+	// CHAOS-6360: this probe measured 420s solo on a 64-core host (459s for the
+	// whole package on a hosted runner), which left the shared `go test`
+	// bucket in Release's `make verify` with no headroom under its 10m
+	// per-binary wall. It is an explicit opt-in: `make contract-test` sets
+	// ACR_RUN_SATURATION_PROBE=1 and runs it under its own -timeout, and
+	// TestContractTestTargetRunsTheSaturationProbe pins that wiring so the
+	// skip cannot quietly turn into "never runs".
+	if os.Getenv(saturationProbeEnv) != "1" {
+		t.Skipf("opt-in (~420s, rebuilds a ~520MB fixture per probed field): set %s=1; `make contract-test` does", saturationProbeEnv)
 	}
 	if raceDetectorEnabled {
 		// Race instrumentation makes each rebuild about an order of magnitude

@@ -259,9 +259,12 @@ contract-test:
 # would have caught it never ran here.
 	go test ./internal/contracts/v1/ -run 'TestEverySchemaDocumentAndDefIsBoundOrExempt|TestPublishedSchemaPropertiesMatchGoWireFields|TestPublishedEnumsMatchGoVocabularies|TestReportOrphanSchemaDefs|TestSchemaAndGoBoundsAgree|TestKnownDisagreementsGoSideStillMatchesRecordedValue' -count=1
 # The measured answer fixtures. TestMaximalIsSaturated rebuilds a ~520MB
-# document once per probed field and takes ~90s, so it skips under -short;
-# this target is the explicit opt-in that pays that cost deliberately.
-	go test ./internal/contracts/v1/ -run 'TestEveryResultFieldIsInTheBoundTable|TestIrreducibleAndMaximalFixturesAreValid|TestEveryBoundIsBreachable|TestIrreducibleUsesTheByteMinimalEncoding|TestMaximalIsSaturated' -count=1
+# document once per probed field and takes ~420s (CHAOS-6360: it is opt-in via
+# ACR_RUN_SATURATION_PROBE so the plain suite and Release's shared `go test`
+# bucket do not pay it); this target is the explicit opt-in. -timeout 20m:
+# the probe plus TestEveryBoundIsBreachable (~70s) overran the 10m default's
+# headroom on hosted runners.
+	ACR_RUN_SATURATION_PROBE=1 go test ./internal/contracts/v1/ -run 'TestEveryResultFieldIsInTheBoundTable|TestIrreducibleAndMaximalFixturesAreValid|TestEveryBoundIsBreachable|TestIrreducibleUsesTheByteMinimalEncoding|TestMaximalIsSaturated' -count=1 -timeout 20m
 
 codegraph-contract:
 	bash scripts/codegraph/verify-contract.sh --fixtures testdata/codegraph/v1.2.0
