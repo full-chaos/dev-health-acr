@@ -226,12 +226,16 @@ func consentRequest(t *testing.T, body any, repositories []string, jti string) *
 	return request
 }
 
+// oauthConsentSubject is the signed-in web user consentRequest signs for; a
+// test that needs a second user sets it for the requests it builds.
+var oauthConsentSubject = "user_123"
+
 func signConsentAssertion(t *testing.T, request *http.Request, body []byte, repositories []string, jti string) string {
 	t.Helper()
 	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
 	digest := sha256.Sum256(body)
 	claims := map[string]any{
-		"iss": "https://web.example.test", "aud": "acr-api", "sub": "user_123", "org_id": oauthTestOrg,
+		"iss": "https://web.example.test", "aud": "acr-api", "sub": oauthConsentSubject, "org_id": oauthTestOrg,
 		"repository_scopes": repositories, "permissions": []string{auth.WebAssertionPermissionCredentialIssue},
 		"iat": now.Unix(), "nbf": now.Unix(), "exp": now.Add(30 * time.Second).Unix(), "jti": jti,
 		"method": request.Method, "path": request.URL.EscapedPath(), "body_sha256": base64.RawURLEncoding.EncodeToString(digest[:]),
@@ -766,5 +770,38 @@ func TestOAuthConsentRouteApprovalRetriesAfterATransientFailure(t *testing.T) {
 	redirect, _ := body["redirect_url"].(string)
 	if recorder.Code != http.StatusOK || !strings.Contains(redirect, "code=") {
 		t.Fatalf("the approver's retry: %d %v, want 200 with a code", recorder.Code, body)
+	}
+}
+
+// CHAOS-6231 through the route: a request is bound to the first signed-in user
+// who previews it, so a second signed-in user holding the handle cannot deny
+// (or approve) it, and the bound user still can.
+func TestOAuthConsentDenyIsBoundToTheUserWhoPreviewed(t *testing.T) {
+	app, _, err := newOAuthTestApp(t, &OAuthRuntime{Issuer: oauthTestIssuer, Resources: []string{oauthTestResource}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle := authorizeToConsent(t, app, oauthTestAuthorizeQuery(registerOAuthTestClient(t, app, "c")))
+	if recorder, _ := serveConsent(app, consentRequest(t, map[string]any{"action": "preview", "handle": handle}, []string{"*"}, "b1")); recorder.Code != http.StatusOK {
+		t.Fatalf("first user's preview: %d", recorder.Code)
+	}
+	oauthConsentSubject = "user_456"
+	t.Cleanup(func() { oauthConsentSubject = "user_123" })
+	for i, body := range []map[string]any{
+		{"action": "deny", "handle": handle},
+		{"action": "approve", "handle": handle, "repository_scopes": []string{"*"}},
+		{"action": "preview", "handle": handle},
+	} {
+		repos := []string{"*"}
+		recorder, _ := serveConsent(app, consentRequest(t, body, repos, "b2-"+strconv.Itoa(i)))
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("second user %v: status %d, want 400", body["action"], recorder.Code)
+		}
+	}
+	oauthConsentSubject = "user_123"
+	recorder, body := serveConsent(app, consentRequest(t, map[string]any{"action": "deny", "handle": handle}, []string{"*"}, "b3"))
+	redirect, _ := url.Parse(body["redirect_url"].(string))
+	if recorder.Code != http.StatusOK || redirect.Query().Get("error") != "access_denied" {
+		t.Fatalf("the bound user's deny: %d %v", recorder.Code, body)
 	}
 }

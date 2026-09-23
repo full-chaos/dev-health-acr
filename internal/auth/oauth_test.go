@@ -273,13 +273,13 @@ func TestOAuthConsentDecisions(t *testing.T) {
 	principal := webPrincipal(repos)
 
 	pending := start()
-	view, kind, err := h.oauth.ConsentRequest(ctx, pending.Handle)
+	view, kind, err := h.oauth.ConsentRequest(ctx, pending.Handle, webPrincipal(nil))
 	if err != nil || kind != storage.OAuthClientKindDynamic || view.ClientName != "test" || view.RedirectOrigin != "http://127.0.0.1:4711" ||
 		view.Resource != testResource || !slices.Equal(view.Scopes, []string{ScopeContextRead, ScopeEvidenceRead}) || !view.ExpiresAt.Equal(pending.ExpiresAt) {
 		t.Fatalf("preview = %+v kind %q, %v", view, kind, err)
 	}
 	for _, handle := range []string{"", "unknown-handle", strings.Repeat("A", 43), strings.Repeat("A", 44), pending.Handle + "="} {
-		if _, _, err := h.oauth.ConsentRequest(ctx, handle); outcomeOf(err) != oauthvocab.OutcomeInvalidRequest {
+		if _, _, err := h.oauth.ConsentRequest(ctx, handle, webPrincipal(nil)); outcomeOf(err) != oauthvocab.OutcomeInvalidRequest {
 			t.Fatalf("preview handle %q = %v, want invalid_request", handle, err)
 		}
 		if _, err := h.oauth.ApproveConsent(ctx, handle, principal, repos); outcomeOf(err) != oauthvocab.OutcomeInvalidRequest {
@@ -300,7 +300,7 @@ func TestOAuthConsentDecisions(t *testing.T) {
 	if _, err := h.oauth.DenyConsent(ctx, pending.Handle, storage.Principal{AuthenticationMethod: storage.AuthenticationMethodCredential, Subject: "user_1", OrgID: testOrg}); outcomeOf(err) != oauthvocab.OutcomeInvalidRequest {
 		t.Fatalf("non-web principal deny = %v, want invalid_request", err)
 	}
-	if _, _, err := h.oauth.ConsentRequest(ctx, pending.Handle); err != nil {
+	if _, _, err := h.oauth.ConsentRequest(ctx, pending.Handle, webPrincipal(nil)); err != nil {
 		t.Fatalf("refused decisions must leave the request pending: %v", err)
 	}
 
@@ -320,7 +320,7 @@ func TestOAuthConsentDecisions(t *testing.T) {
 	if _, err := h.oauth.DenyConsent(ctx, pending.Handle, principal); outcomeOf(err) != oauthvocab.OutcomeAlreadyCompleted {
 		t.Fatalf("deny after approve = %v, want already_completed", err)
 	}
-	if _, _, err := h.oauth.ConsentRequest(ctx, pending.Handle); outcomeOf(err) != oauthvocab.OutcomeAlreadyCompleted {
+	if _, _, err := h.oauth.ConsentRequest(ctx, pending.Handle, webPrincipal(nil)); outcomeOf(err) != oauthvocab.OutcomeAlreadyCompleted {
 		t.Fatalf("preview after approve = %v, want already_completed", err)
 	}
 
@@ -339,13 +339,13 @@ func TestOAuthConsentDecisions(t *testing.T) {
 	if _, err := h.oauth.DenyConsent(ctx, denied.Handle, principal); outcomeOf(err) != oauthvocab.OutcomeAlreadyCompleted {
 		t.Fatalf("second deny = %v, want already_completed", err)
 	}
-	if _, _, err := h.oauth.ConsentRequest(ctx, denied.Handle); outcomeOf(err) != oauthvocab.OutcomeAlreadyCompleted {
+	if _, _, err := h.oauth.ConsentRequest(ctx, denied.Handle, webPrincipal(nil)); outcomeOf(err) != oauthvocab.OutcomeAlreadyCompleted {
 		t.Fatalf("preview after deny = %v, want already_completed", err)
 	}
 
 	expiring := start()
 	h.now = h.now.Add(storage.DeviceAuthorizationTTL + time.Second)
-	if _, _, err := h.oauth.ConsentRequest(ctx, expiring.Handle); outcomeOf(err) != oauthvocab.OutcomeExpired {
+	if _, _, err := h.oauth.ConsentRequest(ctx, expiring.Handle, webPrincipal(nil)); outcomeOf(err) != oauthvocab.OutcomeExpired {
 		t.Fatalf("expired preview = %v, want expired", err)
 	}
 	if _, err := h.oauth.ApproveConsent(ctx, expiring.Handle, principal, repos); outcomeOf(err) != oauthvocab.OutcomeExpired {
@@ -752,7 +752,7 @@ func TestOAuthApprovalIsResumableOnlyByTheApprover(t *testing.T) {
 		t.Fatalf("approval with a failing code store = %v, want ErrOAuthUnavailable", err)
 	}
 	// Still readable, so the page can offer the approve again.
-	if _, _, err := service.ConsentRequest(ctx, authorization.Handle); err != nil {
+	if _, _, err := service.ConsentRequest(ctx, authorization.Handle, webPrincipal(nil)); err != nil {
 		t.Fatalf("preview after the failure = %v", err)
 	}
 	// Someone else, another org, other repositories, a deny: refused.
@@ -772,8 +772,15 @@ func TestOAuthApprovalIsResumableOnlyByTheApprover(t *testing.T) {
 			return err
 		},
 	} {
-		if err := attempt(); outcomeOf(err) != oauthvocab.OutcomeAlreadyCompleted {
-			t.Fatalf("%s after the approval = %v, want already_completed", name, err)
+		// Another user or org is not the user the request is bound to
+		// (CHAOS-6231): refused like an unknown handle. The bound user's own
+		// attempts that cannot finish the approval are already_completed.
+		want := oauthvocab.OutcomeAlreadyCompleted
+		if name == "another user" || name == "another org" {
+			want = oauthvocab.OutcomeInvalidRequest
+		}
+		if err := attempt(); outcomeOf(err) != want {
+			t.Fatalf("%s after the approval = %v, want %s", name, err, want)
 		}
 	}
 	// The approver finishes: one code, redeemable once.
@@ -907,5 +914,58 @@ func TestOAuthAuthorizeRejectsLocalhostLoopbackForNonCIMDClients(t *testing.T) {
 	})
 	if outcomeOf(err) != oauthvocab.OutcomeInvalidRedirectURI {
 		t.Fatalf("outcome = %s, want %s (localhost port-matching is CIMD-only)", outcomeOf(err), oauthvocab.OutcomeInvalidRedirectURI)
+	}
+}
+
+// CHAOS-6231: a request is bound to the first signed-in user who opens it; a
+// second signed-in user (same org, or another) can neither preview, deny nor
+// approve it, and the refusal leaves the request pending for the bound user.
+func TestOAuthConsentIsBoundToTheFirstUserWhoOpensIt(t *testing.T) {
+	h := newOAuthHarness(t)
+	clientID := h.register(t)
+	_, challenge := pkce(t)
+	ctx := context.Background()
+	authorization, err := h.oauth.Authorize(ctx, OAuthAuthorizeRequest{ResponseType: "code", ClientID: clientID, RedirectURI: testRedirect, CodeChallenge: challenge, CodeChallengeMethod: "S256"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repos := []string{"org/repo"}
+	first := webPrincipal(repos)
+	second := webPrincipal(repos)
+	second.Subject = "user_2"
+	otherOrg := webPrincipal(repos)
+	otherOrg.OrgID = "22222222-2222-4222-8222-222222222222"
+
+	if _, _, err := h.oauth.ConsentRequest(ctx, authorization.Handle, first); err != nil {
+		t.Fatalf("first user's preview = %v", err)
+	}
+	for name, other := range map[string]storage.Principal{"second user": second, "other org": otherOrg} {
+		if _, err := h.oauth.DenyConsent(ctx, authorization.Handle, other); outcomeOf(err) != oauthvocab.OutcomeInvalidRequest {
+			t.Fatalf("%s deny = %v, want invalid_request", name, err)
+		}
+		if _, err := h.oauth.ApproveConsent(ctx, authorization.Handle, other, repos); outcomeOf(err) != oauthvocab.OutcomeInvalidRequest {
+			t.Fatalf("%s approve = %v, want invalid_request", name, err)
+		}
+		if _, _, err := h.oauth.ConsentRequest(ctx, authorization.Handle, other); outcomeOf(err) != oauthvocab.OutcomeInvalidRequest {
+			t.Fatalf("%s preview = %v, want invalid_request", name, err)
+		}
+	}
+	// The refused attempts decided nothing: the first user can still deny.
+	decision, err := h.oauth.DenyConsent(ctx, authorization.Handle, first)
+	if err != nil || !strings.Contains(decision.RedirectURL, "error=access_denied") {
+		t.Fatalf("first user's deny = %+v, %v", decision, err)
+	}
+
+	// No preview: whoever decides first binds the request, and only they
+	// decide it afterwards (here a deny by the second user).
+	direct, err := h.oauth.Authorize(ctx, OAuthAuthorizeRequest{ResponseType: "code", ClientID: clientID, RedirectURI: testRedirect, CodeChallenge: challenge, CodeChallengeMethod: "S256"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := h.oauth.ConsentRequest(ctx, direct.Handle, second); err != nil {
+		t.Fatalf("second user's first preview binds = %v", err)
+	}
+	if _, err := h.oauth.DenyConsent(ctx, direct.Handle, first); outcomeOf(err) != oauthvocab.OutcomeInvalidRequest {
+		t.Fatalf("deny by a user the request is not bound to = %v, want invalid_request", err)
 	}
 }

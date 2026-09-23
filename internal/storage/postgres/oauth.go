@@ -131,6 +131,36 @@ FROM acr.oauth_authorization_requests WHERE handle_hash = $1`, handle.String())
 	return request, nil
 }
 
+// BindAuthorizationRequestUser binds the request to (orgID, subject) in one
+// atomic UPDATE: the first caller wins and the same user may repeat it. A
+// zero-row result is an unknown handle (ErrNotFound) or another user's
+// request (ErrConflict).
+func (s *OAuthStore) BindAuthorizationRequestUser(ctx context.Context, handle storage.OAuthSecretHash, orgID, subject string) error {
+	if err := s.ready(ctx); err != nil {
+		return err
+	}
+	if handle.IsZero() || orgID == "" || subject == "" {
+		return storage.ErrInvalidOAuthAuthorizationRequest
+	}
+	result, err := s.DB.ExecContext(ctx, `
+UPDATE acr.oauth_authorization_requests
+SET bound_org_id = $2, bound_subject = $3
+WHERE handle_hash = $1
+  AND (bound_subject IS NULL OR (bound_org_id = $2 AND bound_subject = $3))`,
+		handle.String(), orgID, subject,
+	)
+	if err != nil {
+		return fmt.Errorf("bind oauth authorization request user: %w", sanitizeDatabaseError(err))
+	}
+	if affected, err := result.RowsAffected(); err == nil && affected > 0 {
+		return nil
+	}
+	if _, getErr := s.GetAuthorizationRequest(ctx, handle); getErr != nil {
+		return getErr
+	}
+	return storage.ErrConflict
+}
+
 // IssueAuthorizationCode attaches the code hash to an unexpired request that
 // has no code yet, in one atomic UPDATE. A zero-row result means either the
 // handle is unknown or the request is in some other state (expired or

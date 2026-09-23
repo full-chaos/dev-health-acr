@@ -440,7 +440,7 @@ func (a *App) handleOAuthConsent(w http.ResponseWriter, r *http.Request) {
 	}
 	switch request.Action {
 	case oauthConsentActionPreview:
-		view, clientKind, err := a.oauth.ConsentRequest(r.Context(), request.Handle)
+		view, clientKind, err := a.oauth.ConsentRequest(r.Context(), request.Handle, principal)
 		if err != nil {
 			a.writeOAuthConsentError(w, r, step, clientKind, err)
 			return

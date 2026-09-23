@@ -451,3 +451,53 @@ func TestOAuthStore_AuthorizationRequestForAMetadataDocumentClient(t *testing.T)
 	require.Equal(t, storage.OAuthClientKindMetadataDocument, fetched.ClientKind)
 	require.Equal(t, request.ClientID, fetched.ClientID)
 }
+
+// CHAOS-6231: the first user to bind a request wins, atomically, and only
+// that (org, subject) can bind it again.
+func TestOAuthStore_BindAuthorizationRequestUser_firstUserWinsUnderConcurrency(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	db := newCredentialStoreDatabase(t, ctx)
+	audit, err := NewAuditStore(db)
+	require.NoError(t, err)
+	deviceStore, err := NewDeviceAuthorizationStoreWithOptions(db, audit, DeviceAuthorizationStoreOptions{Now: func() time.Time { return now }})
+	require.NoError(t, err)
+	store, err := NewOAuthStoreWithOptions(db, OAuthStoreOptions{Now: func() time.Time { return now }})
+	require.NoError(t, err)
+	device, err := deviceStore.Create(ctx, storage.DeviceAuthorizationCreateInput{
+		DeviceCodeHash: storage.HashDeviceCode("bind-device"),
+		UserCodeHash:   storage.HashUserCode("BINDCODE"),
+	})
+	require.NoError(t, err)
+	created, err := store.CreateAuthorizationRequest(ctx, validOAuthAuthorizationRequestPG(now, device.DeviceCodeHash, "bind-handle"))
+	require.NoError(t, err)
+
+	require.ErrorIs(t, store.BindAuthorizationRequestUser(ctx, storage.HashOAuthSecret("unknown"), "org_1", "user_1"), storage.ErrNotFound)
+
+	const contenders = 16
+	var wg sync.WaitGroup
+	results := make([]error, contenders)
+	for i := range contenders {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i] = store.BindAuthorizationRequestUser(ctx, created.HandleHash, "org_1", "user_"+strings.Repeat("x", i+1))
+		}()
+	}
+	wg.Wait()
+	winners := 0
+	for _, err := range results {
+		if err == nil {
+			winners++
+			continue
+		}
+		require.ErrorIs(t, err, storage.ErrConflict)
+	}
+	require.Equal(t, 1, winners, "exactly one user binds the request")
+
+	var org, subject string
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT bound_org_id, bound_subject FROM acr.oauth_authorization_requests WHERE handle_hash = $1", created.HandleHash.String()).Scan(&org, &subject))
+	require.Equal(t, "org_1", org)
+	require.NoError(t, store.BindAuthorizationRequestUser(ctx, created.HandleHash, org, subject), "the bound user may bind again")
+	require.ErrorIs(t, store.BindAuthorizationRequestUser(ctx, created.HandleHash, "org_2", subject), storage.ErrConflict, "same subject in another org is another user")
+}

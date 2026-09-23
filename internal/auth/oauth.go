@@ -575,11 +575,35 @@ func validOAuthHandle(handle string) bool {
 	return err == nil
 }
 
+// bindConsentUser binds a request to the signed-in web user who first opens
+// it (preview, approve or deny) and refuses every other user afterwards. A
+// login is started before anyone signs in, so the request has no owner until
+// then; the handle lives only in the starting user's browser, so the first
+// user to present it is that user. Any other user gets the same refusal an
+// unknown handle gets (CHAOS-6231).
+func (s *OAuthService) bindConsentUser(ctx context.Context, request storage.OAuthAuthorizationRequest, principal storage.Principal) error {
+	if !validDeviceApprovalPrincipal(principal) {
+		return oauthError(OAuthConsentCodeInvalid, oauthvocab.OutcomeInvalidRequest, false)
+	}
+	err := s.store.BindAuthorizationRequestUser(ctx, request.HandleHash, principal.OrgID, principal.Subject)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, storage.ErrConflict), errors.Is(err, storage.ErrNotFound):
+		return oauthError(OAuthConsentCodeInvalid, oauthvocab.OutcomeInvalidRequest, false)
+	default:
+		return fmt.Errorf("%w: bind consent user", ErrOAuthUnavailable)
+	}
+}
+
 // ConsentRequest returns what the web consent page shows for an undecided
-// request.
-func (s *OAuthService) ConsentRequest(ctx context.Context, handle string) (OAuthConsentRequest, string, error) {
+// request, and binds it to the signed-in user.
+func (s *OAuthService) ConsentRequest(ctx context.Context, handle string, principal storage.Principal) (OAuthConsentRequest, string, error) {
 	request, err := s.pendingConsent(ctx, handle, true)
 	if err != nil {
+		return OAuthConsentRequest{}, request.ClientKind, err
+	}
+	if err := s.bindConsentUser(ctx, request, principal); err != nil {
 		return OAuthConsentRequest{}, request.ClientKind, err
 	}
 	client, err := s.ResolveClient(ctx, request.ClientID)
@@ -639,6 +663,9 @@ func (s *OAuthService) ApproveConsent(ctx context.Context, handle string, princi
 	if err != nil {
 		return OAuthConsentDecision{ClientKind: request.ClientKind}, err
 	}
+	if err := s.bindConsentUser(ctx, request, principal); err != nil {
+		return OAuthConsentDecision{ClientKind: request.ClientKind}, err
+	}
 	if err := s.devices.ApproveForOAuth(ctx, principal, request.DeviceCodeHash, repositoryScopes); err != nil {
 		return OAuthConsentDecision{ClientKind: request.ClientKind}, consentDecisionError(err)
 	}
@@ -661,6 +688,9 @@ func (s *OAuthService) ApproveConsent(ctx context.Context, handle string, princi
 func (s *OAuthService) DenyConsent(ctx context.Context, handle string, principal storage.Principal) (OAuthConsentDecision, error) {
 	request, err := s.pendingConsent(ctx, handle, false)
 	if err != nil {
+		return OAuthConsentDecision{ClientKind: request.ClientKind}, err
+	}
+	if err := s.bindConsentUser(ctx, request, principal); err != nil {
 		return OAuthConsentDecision{ClientKind: request.ClientKind}, err
 	}
 	if err := s.devices.DenyForOAuth(ctx, principal, request.DeviceCodeHash); err != nil {

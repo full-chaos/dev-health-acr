@@ -18,6 +18,7 @@ type OAuthStore struct {
 	byDeviceCode map[storage.DeviceCodeHash]storage.OAuthSecretHash
 	byCode       map[storage.OAuthSecretHash]storage.OAuthSecretHash
 	deviceGrants map[storage.DeviceCodeHash]storage.OAuthDeviceGrant
+	bound        map[storage.OAuthSecretHash][2]string
 }
 
 // NewOAuthStore constructs an OAuthStore. now must be non-nil.
@@ -32,11 +33,12 @@ func NewOAuthStore(now func() time.Time) *OAuthStore {
 		byDeviceCode: make(map[storage.DeviceCodeHash]storage.OAuthSecretHash),
 		byCode:       make(map[storage.OAuthSecretHash]storage.OAuthSecretHash),
 		deviceGrants: make(map[storage.DeviceCodeHash]storage.OAuthDeviceGrant),
+		bound:        make(map[storage.OAuthSecretHash][2]string),
 	}
 }
 
 func (s *OAuthStore) ready(ctx context.Context) error {
-	if s == nil || s.now == nil || s.clients == nil || s.byHandle == nil || s.byDeviceCode == nil || s.byCode == nil || s.deviceGrants == nil || storage.IsNil(ctx) {
+	if s == nil || s.now == nil || s.clients == nil || s.byHandle == nil || s.byDeviceCode == nil || s.byCode == nil || s.deviceGrants == nil || s.bound == nil || storage.IsNil(ctx) {
 		return storage.ErrInvalidOAuthClient
 	}
 	return ctx.Err()
@@ -109,6 +111,32 @@ func (s *OAuthStore) GetAuthorizationRequest(ctx context.Context, handle storage
 		return storage.OAuthAuthorizationRequest{}, storage.ErrNotFound
 	}
 	return storage.CloneOAuthAuthorizationRequest(request), nil
+}
+
+// BindAuthorizationRequestUser binds the request to (orgID, subject): the
+// first caller wins, the same user may repeat it, another user is
+// ErrConflict, an unknown handle is ErrNotFound.
+func (s *OAuthStore) BindAuthorizationRequestUser(ctx context.Context, handle storage.OAuthSecretHash, orgID, subject string) error {
+	if err := s.ready(ctx); err != nil {
+		return err
+	}
+	if handle.IsZero() || orgID == "" || subject == "" {
+		return storage.ErrInvalidOAuthAuthorizationRequest
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, exists := s.byHandle[handle]; !exists {
+		return storage.ErrNotFound
+	}
+	bound, owned := s.bound[handle]
+	if owned && bound != [2]string{orgID, subject} {
+		return storage.ErrConflict
+	}
+	s.bound[handle] = [2]string{orgID, subject}
+	return nil
 }
 
 // IssueAuthorizationCode attaches the code hash to an unexpired request that
