@@ -178,8 +178,17 @@ func (s *OAuthStore) ConsumeAuthorizationCode(ctx context.Context, code storage.
 	return storage.CloneOAuthAuthorizationRequest(stored), nil
 }
 
+// cloneOAuthClient defensively copies RedirectURIs and normalizes a nil
+// slice to [] -- a device-only client (CHAOS-6233) legitimately registers
+// with none, and this adapter must observably agree with Postgres, which
+// can never store or return a bare `null` for this field (see
+// postgres.marshalJSONStringArray's doc comment).
 func cloneOAuthClient(client storage.OAuthClient) storage.OAuthClient {
-	client.RedirectURIs = append([]string(nil), client.RedirectURIs...)
+	redirectURIs := append([]string(nil), client.RedirectURIs...)
+	if redirectURIs == nil {
+		redirectURIs = []string{}
+	}
+	client.RedirectURIs = redirectURIs
 	return client
 }
 

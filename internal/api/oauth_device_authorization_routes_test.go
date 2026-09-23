@@ -251,10 +251,18 @@ func TestOAuthRegisterDeviceCodeOnlyClientHTTP(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &registered); err != nil {
 		t.Fatal(err)
 	}
-	if redirects := registered["redirect_uris"]; redirects != nil {
-		if list, ok := redirects.([]any); !ok || len(list) != 0 {
-			t.Fatalf("device-only client redirect_uris = %v, want none", redirects)
-		}
+	// redirect_uris must be the JSON array [], never a bare null -- a null
+	// here is exactly the wire-level symptom of the nil-slice bug this
+	// ticket fixed (a nil Go []string round-tripping as JSON null all the
+	// way from the Postgres-adapter's own marshal). This assertion used to
+	// silently skip whenever the value was nil, which would have hidden
+	// that exact regression.
+	redirects, ok := registered["redirect_uris"].([]any)
+	if !ok {
+		t.Fatalf("device-only client redirect_uris = %#v (%T), want a JSON array, never null", registered["redirect_uris"], registered["redirect_uris"])
+	}
+	if len(redirects) != 0 {
+		t.Fatalf("device-only client redirect_uris = %v, want none", redirects)
 	}
 	grantTypes, _ := registered["grant_types"].([]any)
 	if len(grantTypes) != 1 || grantTypes[0] != auth.OAuthDeviceCodeGrantType {

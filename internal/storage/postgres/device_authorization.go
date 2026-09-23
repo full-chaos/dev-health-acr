@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -54,7 +53,7 @@ func (s *DeviceAuthorizationStore) Create(ctx context.Context, input storage.Dev
 	if record.RepositoryHints == nil {
 		record.RepositoryHints = []string{}
 	}
-	repositoryHints, err := json.Marshal(record.RepositoryHints)
+	repositoryHints, err := marshalJSONStringArray(record.RepositoryHints)
 	if err != nil {
 		return storage.DeviceAuthorization{}, fmt.Errorf("encode repository hints: %w", err)
 	}
