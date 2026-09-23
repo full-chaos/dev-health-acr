@@ -103,7 +103,7 @@ func (a *App) handleDeviceCodeToken(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, auth.ErrOAuthDeviceGrantConflict) {
 			a.emitOAuthStep(r, oauthvocab.StepToken, oauthvocab.OutcomeInvalidGrant, "", http.StatusBadRequest)
 		} else if errors.Is(err, auth.ErrOAuthDeviceGrantLookupUnavailable) {
-			a.logOAuthDependencyFailure(r, oauthvocab.StepToken)
+			a.logOAuthDependencyFailure(r, oauthvocab.StepToken, err)
 			a.emitOAuthStep(r, oauthvocab.StepToken, oauthvocab.OutcomeUnavailable, "", http.StatusServiceUnavailable)
 			a.writeDeviceDependencyError(w, r)
 			return
@@ -113,6 +113,12 @@ func (a *App) handleDeviceCodeToken(w http.ResponseWriter, r *http.Request) {
 			a.writeOAuthDeviceError(w, contractsv1.OAuthDeviceErrorCode(pollError.Kind), pollError.RetryAfter)
 			return
 		}
+		// CHAOS-6278: this fallback (a genuine mapDevicePollStoreError
+		// dependency failure that isn't the device-grant-conflict class
+		// above) previously logged nothing at all -- not even step/
+		// failure_class -- swallowing the cause even harder than the OAuth
+		// route handlers this ticket fixes.
+		a.logOAuthDependencyFailure(r, oauthvocab.StepToken, err)
 		a.writeDeviceDependencyError(w, r)
 		return
 	}

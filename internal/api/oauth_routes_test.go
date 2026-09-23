@@ -773,6 +773,74 @@ func TestOAuthConsentRouteApprovalRetriesAfterATransientFailure(t *testing.T) {
 	}
 }
 
+// CHAOS-6229: behind the ingress every public caller arrives from one peer
+// address, so /authorize and /token must be limited per client_id, never per
+// address. One flooding client is throttled; every other client is not.
+func TestOAuthAuthorizeAndTokenAreLimitedPerClientNotPerAddress(t *testing.T) {
+	app, _, err := newOAuthTestApp(t, &OAuthRuntime{Issuer: oauthTestIssuer, Resources: []string{oauthTestResource}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const ingress = "10.42.0.7:40000"
+	authorize := func(clientID string) int {
+		request := httptest.NewRequest(http.MethodGet, OAuthAuthorizePath+"?"+oauthTestAuthorizeQuery(clientID).Encode(), nil)
+		request.RemoteAddr = ingress
+		recorder := httptest.NewRecorder()
+		app.Handler().ServeHTTP(recorder, request)
+		return recorder.Code
+	}
+	token := func(clientID string) (int, string) {
+		request := httptest.NewRequest(http.MethodPost, OAuthTokenPath, strings.NewReader(url.Values{"client_id": {clientID}, "grant_type": {"authorization_code"}}.Encode()))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		request.RemoteAddr = ingress
+		recorder := httptest.NewRecorder()
+		app.Handler().ServeHTTP(recorder, request)
+		return recorder.Code, recorder.Header().Get("Retry-After")
+	}
+	// 80 distinct logins / token calls through one address: none throttled.
+	for i := range 80 {
+		id := "client-" + strconv.Itoa(i)
+		if status := authorize(id); status == http.StatusTooManyRequests {
+			t.Fatalf("authorize for distinct client %d was throttled with the shared ingress address", i)
+		}
+		if status, _ := token(id); status == http.StatusTooManyRequests {
+			t.Fatalf("token for distinct client %d was throttled with the shared ingress address", i)
+		}
+	}
+	// One abusive client is still throttled, and only that client.
+	flood := map[int]int{}
+	for range 15 {
+		flood[authorize("abusive")]++
+	}
+	if flood[http.StatusTooManyRequests] != 5 {
+		t.Fatalf("15 authorize calls for one client: statuses %v, want 5x429", flood)
+	}
+	if status := authorize("innocent"); status == http.StatusTooManyRequests {
+		t.Fatal("an innocent client was throttled by another client's flood")
+	}
+	floodToken := map[int]int{}
+	var retryAfter string
+	for range 70 {
+		status, retry := token("abusive")
+		floodToken[status]++
+		if status == http.StatusTooManyRequests {
+			retryAfter = retry
+		}
+	}
+	if floodToken[http.StatusTooManyRequests] != 10 || retryAfter == "" {
+		t.Fatalf("70 token calls for one client: statuses %v retry-after %q, want 10x429 with Retry-After", floodToken, retryAfter)
+	}
+	// No client named (malformed): falls back to the address bucket.
+	anon := map[int]int{}
+	for range 70 {
+		status, _ := token("")
+		anon[status]++
+	}
+	if anon[http.StatusTooManyRequests] == 0 {
+		t.Fatalf("clientless token calls never throttled: %v", anon)
+	}
+}
+
 // CHAOS-6231 through the route: a request is bound to the first signed-in user
 // who previews it, so a second signed-in user holding the handle cannot deny
 // (or approve) it, and the bound user still can.

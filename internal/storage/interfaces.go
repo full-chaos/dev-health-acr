@@ -18,6 +18,42 @@ var (
 	ErrInvalidCredentialInput     = credentiallifecycle.ErrInvalidInput
 )
 
+// DependencyErrorClass is safe, schema-shaped classification an adapter may
+// attach (via error wrapping, alongside ErrUnavailable or ErrConflict) when
+// the underlying failure came from the database: the driver's own error
+// code, a closed-vocabulary class name derived from it, and -- only when the
+// driver's error carries one -- the constraint or table name. It never
+// carries row values, raw SQL text, or a DSN; this package's own rule
+// ("do not expose raw SQL/driver errors across the storage interface")
+// still holds, this is the safe subset that rule always permitted.
+//
+// A caller extracts it with errors.As to distinguish WHY a dependency
+// failed -- a permission denial from a connection failure from a constraint
+// violation -- for its own structured logs, without ever seeing the raw
+// driver error itself (CHAOS-6278: acr-api's oauth dependency-failure log
+// previously carried none of this, which cost real debugging time root-
+// causing a prod incident that Postgres's OWN log had to be read to find).
+type DependencyErrorClass struct {
+	// SQLState is the driver's own error code (e.g. Postgres's SQLSTATE,
+	// "23514"), verbatim -- never blank when this type is attached.
+	SQLState string
+	// Class is a closed-vocabulary name derived from SQLState (e.g.
+	// "check_violation", "insufficient_privilege", "connection_failure").
+	// "unclassified" when SQLState is not in the adapter's known set --
+	// SQLState itself is always present regardless, so nothing is lost.
+	Class string
+	// Constraint is the violated constraint's name, when the driver error
+	// names one; "" otherwise.
+	Constraint string
+	// Table is the affected table's name, when the driver error names one;
+	// "" otherwise.
+	Table string
+}
+
+func (c *DependencyErrorClass) Error() string {
+	return "dependency error class " + c.Class + " (" + c.SQLState + ")"
+}
+
 const MaximumCredentialOverlap = credentiallifecycle.MaximumOverlap
 
 const (

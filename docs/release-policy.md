@@ -144,7 +144,9 @@ Every GitHub Release contains:
 - `release-manifest.json`;
 - `container-release-manifest.json`;
 - `SHA256SUMS`;
-- `SHA256SUMS.sigstore.json`.
+- `SHA256SUMS.sigstore.json`;
+- `acr-api-SHA256SUMS` and `acr-mcp-SHA256SUMS`, one per product, each with its
+  own `.sigstore.json` bundle.
 
 The workflow also retains the same assembled set as the Actions artifact named
 `release` for seven days, including when publication fails after assembly.
@@ -264,6 +266,25 @@ if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expec
   throw "checksum mismatch: $archive"
 }
 ```
+
+### Per-product manifests
+
+Each product also has its own signed manifest, signed with the same identity as
+`SHA256SUMS`. `acr-mcp-SHA256SUMS` lists only files named `acr-mcp_*` or
+`acr-mcp-*` (archives, OCI archive, SBOMs, scans), and `acr-api-SHA256SUMS`
+does the same for `acr-api`. Its lines are copied byte-for-byte from
+`SHA256SUMS`, so the two cannot disagree. Consumers of one product verify that
+product's manifest directly and never need the other product's file names:
+
+```bash
+cosign verify-blob acr-mcp-SHA256SUMS \
+  --bundle acr-mcp-SHA256SUMS.sigstore.json \
+  --certificate-identity-regexp "$identity" \
+  --certificate-oidc-issuer "$issuer"
+(sha256sum --check --ignore-missing acr-mcp-SHA256SUMS)
+```
+
+Releases published before CHAOS-6236 carry only the combined `SHA256SUMS`.
 
 ## Local operator fallback
 

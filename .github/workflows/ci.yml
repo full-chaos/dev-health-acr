@@ -603,9 +603,61 @@ jobs:
       - name: Run isolated devhealthfacts race suite
         run: |
           set -euo pipefail
-          packages="$(scripts/ci/test-shard.sh isolated-dedicated)"
+          packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           make test-race GOTEST_PKGS="$packages" GOTEST_TIMEOUT=20m
+
+  # CHAOS-6342: devhealthsource is the OTHER shared-container HEAVY package
+  # (see race-devhealthfacts above) and used to round-robin into race shard 1
+  # of 4, whose 420s budget it exhausted: measured 318.8s wall under -race on
+  # bigboy (32-core, uncontended; 381.6s before an unrelated test fix), and
+  # the hosted 4-vCPU runs were killed at 420s. It now runs alone here,
+  # isolated exactly like devhealthfacts (isolated_packages +
+  # dedicated_isolated_packages in scripts/ci/test-shard.sh), under its own
+  # Makefile budget GOTEST_DEVHEALTHSOURCE_TIMEOUT. That budget is a
+  # measurement-based guess, not a blanket raise: the step prints the
+  # package's measured wall time and FAILS if it exceeds 85% of the budget,
+  # so a creeping suite is caught loudly here instead of being eaten by the
+  # timeout. Re-measure from the first hosted run and retune the Makefile.
+  race-devhealthsource:
+    name: race (devhealthsource, isolated scope)
+    # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
+    # same as race-devhealthfacts -- needs mirror-preflight.
+    needs: mirror-preflight
+    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.0'
+          cache: true
+      # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
+      # job above.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run isolated devhealthsource race suite
+        run: |
+          set -euo pipefail
+          packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthsource)"
+          printf 'isolated (dedicated) packages:\n%s\n' "$packages"
+          timeout="$(make -s isolated-timeout PKG="$packages")"
+          start=$SECONDS
+          make test-race GOTEST_PKGS="$packages" GOTEST_TIMEOUT="$timeout"
+          elapsed=$((SECONDS - start))
+          limit=${timeout%s}
+          printf 'devhealthsource race wall time: %ss (budget %ss)\n' "$elapsed" "$limit"
+          if [ $((elapsed * 100)) -gt $((limit * 85)) ]; then
+            printf '::error::CHAOS-6342: devhealthsource took %ss, over 85%% of its %ss budget (GOTEST_DEVHEALTHSOURCE_TIMEOUT); retune the budget or shrink the suite\n' "$elapsed" "$limit"
+            exit 1
+          fi
 
   build:
     runs-on: ubuntu-latest
@@ -1079,6 +1131,7 @@ jobs:
       - race
       - race-devhealthschema
       - race-devhealthfacts
+      - race-devhealthsource
       - build
       - contracts
       - container-contract-smoke

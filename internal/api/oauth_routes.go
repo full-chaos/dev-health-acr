@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"html/template"
@@ -155,8 +157,22 @@ func oauthOutcome(err error) (*auth.OAuthError, bool) {
 	return nil, false
 }
 
-func (a *App) oauthRateLimited(w http.ResponseWriter, r *http.Request, step string, allow func(string) DeviceAuthorizationLimitDecision) bool {
-	decision := allow(a.clientIP(r))
+// oauthLimitKey is the one place an OAuth limiter key is built. Behind the
+// ingress every public caller shares one peer address (CHAOS-6229), so an
+// address key throttles all users as one bucket. The key is the OAuth
+// client_id instead (each DCR install registers its own), hashed so
+// attacker-chosen length cannot grow the key map. A request that names no
+// client (registration, a malformed body) falls back to the address.
+func (a *App) oauthLimitKey(r *http.Request, clientID string) string {
+	if clientID == "" {
+		return "ip:" + a.clientIP(r)
+	}
+	sum := sha256.Sum256([]byte(clientID))
+	return "client:" + hex.EncodeToString(sum[:])
+}
+
+func (a *App) oauthRateLimited(w http.ResponseWriter, r *http.Request, step, key string, allow func(string) DeviceAuthorizationLimitDecision) bool {
+	decision := allow(key)
 	if decision.Allowed {
 		return false
 	}
@@ -168,7 +184,7 @@ func (a *App) oauthRateLimited(w http.ResponseWriter, r *http.Request, step stri
 }
 
 func (a *App) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
-	if a.oauthRateLimited(w, r, oauthvocab.StepRegister, a.runtime.DeviceAuthorizationLimiter.AllowDeviceCreation) {
+	if a.oauthRateLimited(w, r, oauthvocab.StepRegister, a.oauthLimitKey(r, ""), a.runtime.DeviceAuthorizationLimiter.AllowDeviceCreation) {
 		return
 	}
 	var request auth.OAuthRegistrationRequest
@@ -190,7 +206,7 @@ func (a *App) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
 			a.emitOAuthStep(r, oauthvocab.StepRegister, refusal.Outcome, "", http.StatusBadRequest)
 			return
 		}
-		a.logOAuthDependencyFailure(r, oauthvocab.StepRegister)
+		a.logOAuthDependencyFailure(r, oauthvocab.StepRegister, err)
 		writeOAuthJSON(w, http.StatusServiceUnavailable, oauthErrorBody{Error: "temporarily_unavailable"})
 		a.emitOAuthStep(r, oauthvocab.StepRegister, oauthvocab.OutcomeUnavailable, "", http.StatusServiceUnavailable)
 		return
@@ -218,12 +234,39 @@ func (a *App) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
 	a.emitOAuthStep(r, oauthvocab.StepRegister, oauthvocab.OutcomeOK, oauthvocab.ClientKindDynamic, http.StatusCreated)
 }
 
-func (a *App) logOAuthDependencyFailure(r *http.Request, step string) {
-	a.logger.WarnContext(r.Context(), "oauth dependency failed",
+// logOAuthDependencyFailure logs a safe classification of WHY an OAuth
+// dependency (Postgres, through internal/storage) failed -- never the raw
+// error, row values, or a DSN. Before CHAOS-6278 this logged only step and a
+// constant failure_class, no matter what actually failed underneath; a real
+// prod register-503 (CHAOS-6233, a check constraint violation) had to be
+// root-caused by reading Postgres's OWN pod log instead, because this line
+// gave no signal to distinguish it from, say, a missing runtime-role grant
+// (CHAOS-6277) -- a different, equally plausible hypothesis from this log
+// alone. err's storage.DependencyErrorClass (attached by the postgres
+// adapter via error wrapping; see storage.DependencyErrorClass's own doc
+// comment) is extracted with errors.As; absent for a non-Postgres failure
+// (e.g. a context deadline), in which case only step/failure_class are
+// logged, same as before this change.
+func (a *App) logOAuthDependencyFailure(r *http.Request, step string, err error) {
+	attrs := []any{
 		"request_id", logsanitize.SanitizeLogAttr(RequestID(r.Context())),
 		"step", step,
 		"failure_class", "oauth_dependency",
-	)
+	}
+	var class *storage.DependencyErrorClass
+	if errors.As(err, &class) {
+		attrs = append(attrs,
+			"db_error_class", class.Class,
+			"db_sqlstate", class.SQLState,
+		)
+		if class.Constraint != "" {
+			attrs = append(attrs, "db_constraint", class.Constraint)
+		}
+		if class.Table != "" {
+			attrs = append(attrs, "db_table", class.Table)
+		}
+	}
+	a.logger.WarnContext(r.Context(), "oauth dependency failed", attrs...)
 }
 
 // logOAuthRedirectMismatch diagnoses an invalid_redirect_uri refusal: the
@@ -278,10 +321,15 @@ func deviceVerificationURIComplete(verificationURI, userCode string) string {
 // (device_oauth.go), except here the raw codes leave the server, as RFC 8628
 // requires.
 func (a *App) handleOAuthDeviceAuthorization(w http.ResponseWriter, r *http.Request) {
-	if a.oauthRateLimited(w, r, oauthvocab.StepDeviceAuthorization, a.runtime.DeviceAuthorizationLimiter.AllowDeviceCreation) {
+	parseErr := parseOAuthForm(w, r)
+	clientID := ""
+	if parseErr == nil {
+		clientID = r.PostForm.Get("client_id")
+	}
+	if a.oauthRateLimited(w, r, oauthvocab.StepDeviceAuthorization, a.oauthLimitKey(r, clientID), a.runtime.DeviceAuthorizationLimiter.AllowDeviceCreation) {
 		return
 	}
-	if err := parseOAuthForm(w, r); err != nil {
+	if err := parseErr; err != nil {
 		writeOAuthJSON(w, http.StatusBadRequest, oauthErrorBody{Error: "invalid_request"})
 		a.emitOAuthStep(r, oauthvocab.StepDeviceAuthorization, oauthvocab.OutcomeInvalidRequest, "", http.StatusBadRequest)
 		return
@@ -303,7 +351,7 @@ func (a *App) handleOAuthDeviceAuthorization(w http.ResponseWriter, r *http.Requ
 			a.emitOAuthStep(r, oauthvocab.StepDeviceAuthorization, refusal.Outcome, start.ClientKind, http.StatusBadRequest)
 			return
 		}
-		a.logOAuthDependencyFailure(r, oauthvocab.StepDeviceAuthorization)
+		a.logOAuthDependencyFailure(r, oauthvocab.StepDeviceAuthorization, err)
 		writeOAuthJSON(w, http.StatusServiceUnavailable, oauthErrorBody{Error: "temporarily_unavailable"})
 		a.emitOAuthStep(r, oauthvocab.StepDeviceAuthorization, oauthvocab.OutcomeUnavailable, start.ClientKind, http.StatusServiceUnavailable)
 		return
@@ -319,7 +367,7 @@ func (a *App) handleOAuthDeviceAuthorization(w http.ResponseWriter, r *http.Requ
 }
 
 func (a *App) handleOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
-	if a.oauthRateLimited(w, r, oauthvocab.StepAuthorize, a.runtime.DeviceAuthorizationLimiter.AllowDeviceCreation) {
+	if a.oauthRateLimited(w, r, oauthvocab.StepAuthorize, a.oauthLimitKey(r, r.URL.Query().Get("client_id")), a.runtime.DeviceAuthorizationLimiter.AllowDeviceCreation) {
 		return
 	}
 	query := r.URL.Query()
@@ -351,7 +399,7 @@ func (a *App) handleOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
 			a.emitOAuthStep(r, oauthvocab.StepAuthorize, refusal.Outcome, "", http.StatusBadRequest)
 			return
 		}
-		a.logOAuthDependencyFailure(r, oauthvocab.StepAuthorize)
+		a.logOAuthDependencyFailure(r, oauthvocab.StepAuthorize, err)
 		a.renderOAuthProblem(w, r, http.StatusServiceUnavailable, "Sign-in is temporarily unavailable. Try again in a moment.")
 		a.emitOAuthStep(r, oauthvocab.StepAuthorize, oauthvocab.OutcomeUnavailable, "", http.StatusServiceUnavailable)
 		return
@@ -533,7 +581,7 @@ func (a *App) writeOAuthConsentError(w http.ResponseWriter, r *http.Request, ste
 		a.emitOAuthStep(r, step, refusal.Outcome, clientKind, status)
 		return
 	}
-	a.logOAuthDependencyFailure(r, step)
+	a.logOAuthDependencyFailure(r, step, err)
 	writeOAuthJSON(w, http.StatusServiceUnavailable, oauthErrorBody{Error: "temporarily_unavailable"})
 	a.emitOAuthStep(r, step, oauthvocab.OutcomeUnavailable, clientKind, http.StatusServiceUnavailable)
 }
@@ -546,10 +594,16 @@ type oauthTokenBody struct {
 }
 
 func (a *App) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
-	if a.oauthRateLimited(w, r, oauthvocab.StepToken, a.runtime.DeviceAuthorizationLimiter.AllowTokenRequest) {
+	parseErr := parseOAuthForm(w, r)
+	var clientID string
+	clientIDOK := false
+	if parseErr == nil {
+		clientID, clientIDOK = tokenClientID(r)
+	}
+	if a.oauthRateLimited(w, r, oauthvocab.StepToken, a.oauthLimitKey(r, clientID), a.runtime.DeviceAuthorizationLimiter.AllowTokenRequest) {
 		return
 	}
-	if err := parseOAuthForm(w, r); err != nil {
+	if parseErr != nil {
 		writeOAuthJSON(w, http.StatusBadRequest, oauthErrorBody{Error: "invalid_request"})
 		a.emitOAuthStep(r, oauthvocab.StepToken, oauthvocab.OutcomeInvalidRequest, "", http.StatusBadRequest)
 		return
@@ -562,8 +616,7 @@ func (a *App) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	clientID, ok := tokenClientID(r)
-	if !ok {
+	if !clientIDOK {
 		writeOAuthJSON(w, http.StatusBadRequest, oauthErrorBody{Error: "invalid_request"})
 		a.emitOAuthStep(r, oauthvocab.StepToken, oauthvocab.OutcomeInvalidRequest, "", http.StatusBadRequest)
 		return
@@ -589,7 +642,7 @@ func (a *App) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 			a.emitOAuthStep(r, oauthvocab.StepToken, refusal.Outcome, token.ClientKind, http.StatusBadRequest)
 			return
 		}
-		a.logOAuthDependencyFailure(r, oauthvocab.StepToken)
+		a.logOAuthDependencyFailure(r, oauthvocab.StepToken, err)
 		writeOAuthJSON(w, http.StatusServiceUnavailable, oauthErrorBody{Error: "temporarily_unavailable"})
 		a.emitOAuthStep(r, oauthvocab.StepToken, oauthvocab.OutcomeUnavailable, token.ClientKind, http.StatusServiceUnavailable)
 		return
