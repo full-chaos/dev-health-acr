@@ -259,7 +259,7 @@ contract-test:
 # would have caught it never ran here.
 	go test ./internal/contracts/v1/ -run 'TestEverySchemaDocumentAndDefIsBoundOrExempt|TestPublishedSchemaPropertiesMatchGoWireFields|TestPublishedEnumsMatchGoVocabularies|TestReportOrphanSchemaDefs|TestSchemaAndGoBoundsAgree|TestKnownDisagreementsGoSideStillMatchesRecordedValue' -count=1
 # The measured answer fixtures. TestMaximalIsSaturated rebuilds a ~520MB
-# document once per probed field and takes ~420s (CHAOS-6360: it is opt-in via
+# document once per probed field and takes ~420s; TestEveryBoundIsBreachable takes ~70s plain and ~260s under -race (CHAOS-6360: both are opt-in via
 # ACR_RUN_SATURATION_PROBE so the plain suite and Release's shared `go test`
 # bucket do not pay it); this target is the explicit opt-in. -timeout 20m:
 # the probe plus TestEveryBoundIsBreachable (~70s) overran the 10m default's
