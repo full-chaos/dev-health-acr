@@ -195,6 +195,19 @@ for target in 'Deployment acr-api' 'Job acr-migrate'; do
 done
 pass "internal-transport: ordinary base renders without CA projections"
 
+migrate_doc="$(resource_doc Job acr-migrate)"
+python3 - "$migrate_doc" <<'PY' || fail_gate "runtime-acl: Job/acr-migrate must run 'up' as an initContainer, then 'grant-runtime-acl' as the main container"
+import sys, yaml
+spec = yaml.safe_load(sys.argv[1])["spec"]["template"]["spec"]
+inits, mains = spec["initContainers"], spec["containers"]
+assert [c["command"] for c in inits] == [["/usr/local/bin/acr-migrate", "up"]], inits
+assert [c["command"] for c in mains] == [["/usr/local/bin/acr-migrate", "grant-runtime-acl"]], mains
+refs = {e["name"]: e["valueFrom"]["secretKeyRef"]["name"] for e in mains[0]["env"] if "secretKeyRef" in e.get("valueFrom", {})}
+assert refs.get("ACR_POSTGRES_DSN") == "acr-runtime-credentials", refs
+assert refs.get("ACR_POSTGRES_MIGRATION_DSN") == "acr-migration-credentials", refs
+PY
+pass "runtime-acl: migration Job migrates, then grants the runtime role"
+
 if [[ "$overlay" == staging || "$overlay" == production ]]; then
   require_literal "ACR_ENVIRONMENT: $overlay" "overlay: wrong environment value"
 fi

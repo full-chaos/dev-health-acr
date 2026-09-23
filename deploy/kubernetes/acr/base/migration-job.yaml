@@ -29,7 +29,9 @@ spec:
         fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
-      containers:
+      # initContainer applies migrations; the main container then grants the
+      # runtime role on tables the migrations create (kustomize has no hooks).
+      initContainers:
         - name: acr-migrate
           image: acr-api
           imagePullPolicy: IfNotPresent
@@ -65,6 +67,58 @@ spec:
                 secretKeyRef:
                   name: acr-migration-credentials
                   key: ACR_POSTGRES_MIGRATION_DSN
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      containers:
+        - name: acr-grant-runtime-acl
+          image: acr-api
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/acr-migrate", "grant-runtime-acl"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          env:
+            - name: ACR_ENVIRONMENT
+              valueFrom:
+                configMapKeyRef:
+                  name: acr-config
+                  key: ACR_ENVIRONMENT
+            - name: ACR_LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: acr-config
+                  key: ACR_LOG_LEVEL
+            - name: ACR_POSTGRES_CONNECTION_KIND
+              valueFrom:
+                configMapKeyRef:
+                  name: acr-config
+                  key: ACR_POSTGRES_CONNECTION_KIND
+            - name: ACR_POSTGRES_MIGRATION_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: acr-migration-credentials
+                  key: ACR_POSTGRES_MIGRATION_DSN
+            # Parsed only for the runtime role name; never dialed.
+            - name: ACR_POSTGRES_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: acr-runtime-credentials
+                  key: ACR_POSTGRES_DSN
           resources:
             requests:
               cpu: 100m

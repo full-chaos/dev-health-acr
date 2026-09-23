@@ -20,6 +20,11 @@ const migrationDSNEnvironment = "ACR_POSTGRES_MIGRATION_DSN"
 const poolerAdminDSNEnvironment = "ACR_POSTGRES_MIGRATION_POOLER_ADMIN_DSN"
 const migrationConnectionKindEnvironment = "ACR_POSTGRES_CONNECTION_KIND"
 
+// runtimeDSNEnvironment is read ONLY by the grant-runtime-acl verb, and
+// only for the username embedded in it (see grantRuntimeACL's doc comment)
+// -- it is never dialed. Same key acr-api/acr-mcp already require.
+const runtimeDSNEnvironment = "ACR_POSTGRES_DSN"
+
 // migrationConnectRetriesEnvironment/migrationConnectRetryBackoffEnvironment
 // (CHAOS-4116, the 2026-08-22 A/B incident -- see the scoped-kill skill):
 // runtimepostgres.Open already bounds each attempt to Config.PingTimeout's
@@ -99,8 +104,8 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, lookup lookupEnv, output io.Writer) error {
-	if len(args) != 1 || (args[0] != "up" && args[0] != "status") {
-		return errors.New("invalid arguments: use acr-migrate up or acr-migrate status")
+	if len(args) != 1 || (args[0] != "up" && args[0] != "status" && args[0] != "grant-runtime-acl") {
+		return errors.New("invalid arguments: use acr-migrate up, acr-migrate status, or acr-migrate grant-runtime-acl")
 	}
 	dsn, err := config.SecretValue(lookup, migrationDSNEnvironment)
 	if err != nil {
@@ -123,6 +128,16 @@ func run(ctx context.Context, args []string, lookup lookupEnv, output io.Writer)
 		return fmt.Errorf("open PostgreSQL: %w", err)
 	}
 	defer db.Close()
+	if args[0] == "grant-runtime-acl" {
+		runtimeDSN, err := config.SecretValue(lookup, runtimeDSNEnvironment)
+		if err != nil {
+			return err
+		}
+		if runtimeDSN == "" {
+			return fmt.Errorf("%s or %s_FILE is required", runtimeDSNEnvironment, runtimeDSNEnvironment)
+		}
+		return grantRuntimeACL(ctx, db, runtimeDSN, output)
+	}
 	runner, err := migrations.Embedded()
 	if err != nil {
 		return fmt.Errorf("load migrations: %w", err)
