@@ -1102,6 +1102,63 @@ write_web_assertion_material() {
   chmod 644 "$jwks"
 }
 
+# write_query_api_router_conf renders the nginx config for api-router: prod's ingress
+# splits REST paths between the Python `api` and the Go query-api
+# (full-chaos/dev-health-deploy chart/templates/query-api-ingress.yaml, paths from
+# chart/values.prod.yaml ingress.queryApiPaths), but this fixture's `web-fullstack`
+# previously called BACKEND_URL=http://api:8000 directly, with no such split -- so once
+# ops #2821 (CHAOS-6241) reduced the Go-served REST route bodies in Python to a loud 500
+# sentinel, every one of those 32 routes 500'd here even though query-api (already built
+# from the same ./ops checkout, see compose.ci.yml's query-api service comment) serves
+# them correctly. CHAOS-6326.
+#
+# The path list below is copied from values.prod.yaml's ingress.queryApiPaths, not
+# rederived: keep the two in lockstep by hand, the same way
+# verify-query-api-plane.sh's PROBE_PATHS is kept in lockstep with it (a new
+# Go-served REST route is added here in the same change that lists it in the chart).
+# Exact entries become nginx `location =`; the chart's ImplementationSpecific
+# (person/work-unit-scoped) entries become nginx regex locations. Everything else falls
+# through to the Python api, mirroring the ingress's catch-all.
+write_query_api_router_conf() {
+  mkdir -p "$STATE/web"
+  cat > "$STATE/web/query-api-router.conf" <<'EOF'
+events {}
+http {
+  server {
+    listen 8080;
+
+    location = /api/v1/meta { proxy_pass http://query-api:8090; }
+    location = /api/v1/filters/options { proxy_pass http://query-api:8090; }
+    location = /api/v1/investment/explain { proxy_pass http://query-api:8090; }
+    location = /api/v1/flame/aggregated { proxy_pass http://query-api:8090; }
+    location = /api/v1/people { proxy_pass http://query-api:8090; }
+    location = /api/v1/quadrant { proxy_pass http://query-api:8090; }
+    location = /api/v1/explain { proxy_pass http://query-api:8090; }
+    location = /api/v1/drilldown/issues { proxy_pass http://query-api:8090; }
+    location = /api/v1/flame { proxy_pass http://query-api:8090; }
+    location = /api/v1/sankey { proxy_pass http://query-api:8090; }
+    location = /api/v1/heatmap { proxy_pass http://query-api:8090; }
+    location = /api/v1/drilldown/prs { proxy_pass http://query-api:8090; }
+    location = /api/v1/opportunities { proxy_pass http://query-api:8090; }
+    location = /api/v1/investment/sunburst { proxy_pass http://query-api:8090; }
+    location = /api/v1/investment/flow/repo-team { proxy_pass http://query-api:8090; }
+    location = /api/v1/investment/flow { proxy_pass http://query-api:8090; }
+    location = /api/v1/investment { proxy_pass http://query-api:8090; }
+    location = /api/v1/home { proxy_pass http://query-api:8090; }
+    location = /api/v1/work-units { proxy_pass http://query-api:8090; }
+
+    location ~ ^/api/v1/people/[^/]+/metric$ { proxy_pass http://query-api:8090; }
+    location ~ ^/api/v1/people/[^/]+/summary$ { proxy_pass http://query-api:8090; }
+    location ~ ^/api/v1/people/[^/]+/drilldown/issues$ { proxy_pass http://query-api:8090; }
+    location ~ ^/api/v1/people/[^/]+/drilldown/prs$ { proxy_pass http://query-api:8090; }
+    location ~ ^/api/v1/work-units/[^/]+/explain$ { proxy_pass http://query-api:8090; }
+
+    location / { proxy_pass http://api:8000; }
+  }
+}
+EOF
+}
+
 # The web overlay lands in svs.override.yml because the shared compose() helper already
 # includes that file when present; adding a second override path would change the driver's
 # rendering contract for every suite.
@@ -1110,6 +1167,7 @@ render_web_override() {
   WEB_EMAIL="admin@test.com"
   WEB_PASSWORD="default1234"
   WEB_AUTH_SECRET="$(random_secret)"
+  write_query_api_router_conf
   cat > "$STATE/svs.override.yml" <<EOF
 services:
   acr-api:
@@ -1123,6 +1181,17 @@ services:
     container_name: ${PROJECT}-bugsink
     ports: []
     restart: "no"
+  # api-router splits REST traffic between the Python api and the Go query-api the same
+  # way prod's ingress does (see write_query_api_router_conf above). web-fullstack talks
+  # to this instead of api directly so the fixture proves the same routing prod relies on.
+  api-router:
+    image: "${NGINX_IMAGE}"
+    volumes:
+      - ${STATE}/web/query-api-router.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      api: { condition: service_healthy }
+      query-api: { condition: service_started }
+    networks: [dev-health]
   web-fullstack:
     build:
       context: ${WEB_ROOT}
@@ -1132,7 +1201,7 @@ services:
     environment:
       AUTH_SECRET: ${WEB_AUTH_SECRET}
       AUTH_URL: http://127.0.0.1:${WEB_PORT}
-      BACKEND_URL: http://api:8000
+      BACKEND_URL: http://api-router:8080
       REDIS_URL: redis://valkey:6379/0
       ACR_API_ORIGIN: http://acr-api:8080
       ACR_WEB_ASSERTION_AUDIENCE: dev-health-acr
@@ -1144,6 +1213,7 @@ services:
       - ${STATE}/web/web-assertion.key:/run/acr-e2e/web-assertion.key:ro
     depends_on:
       api: { condition: service_healthy }
+      api-router: { condition: service_started }
       bugsink: { condition: service_started }
       valkey: { condition: service_healthy }
     networks: [dev-health]

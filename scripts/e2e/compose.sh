@@ -254,6 +254,11 @@ services:
   api:
     environment: { SETUPTOOLS_SCM_PRETEND_VERSION: "0.0.0", JWT_SECRET_KEY: "${jwt}" }
     healthcheck: { test: ["CMD", "wget", "--spider", "http://localhost:8000/ready"], interval: 5s, timeout: 5s, retries: 36, start_period: 120s }
+  # query-api authenticates the Go-served REST routes with the user's edge access token, the HS256
+  # JWT the Python api mints with JWT_SECRET_KEY (cmd/query-api edge_verifier_config.go). It needs
+  # the same per-run secret as api, or every routed call answers 401 (CHAOS-6326).
+  query-api:
+    environment: { GO_API_EDGE_JWT_SECRET: "${jwt}" }
   traefik: { ports: [] }
   acr-api:
     image: "${IMAGE}"
