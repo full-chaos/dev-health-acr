@@ -442,11 +442,17 @@ for d in docs:
         migration_weight = weight(d)
     if 'grant-runtime-acl' in d:
         runtime_acl_weight = weight(d)
-        runtime_acl_command_ok = 'acr-migrate' in d
+        # codex round cf-6277-r2 P3: a bare 'grant-runtime-acl' in d
+        # substring-matches ANY command, including a bogus binary path --
+        # the actual rendered command line is
+        # command: ["/usr/local/bin/acr-migrate", "grant-runtime-acl"],
+        # so require that EXACT command array, not just the two strings
+        # appearing anywhere in the document.
+        runtime_acl_command_ok = 'command: ["/usr/local/bin/acr-migrate", "grant-runtime-acl"]' in d
 if runtime_acl_weight is None:
     print("  FAIL runtime-acl-order: no Job runs acr-migrate grant-runtime-acl", file=sys.stderr); sys.exit(1)
 if not runtime_acl_command_ok:
-    print("  FAIL runtime-acl-order: the grant-runtime-acl Job does not invoke acr-migrate", file=sys.stderr); sys.exit(1)
+    print("  FAIL runtime-acl-order: the grant-runtime-acl Job's command is not exactly [\"/usr/local/bin/acr-migrate\", \"grant-runtime-acl\"]", file=sys.stderr); sys.exit(1)
 if migration_weight is None:
     print("  FAIL runtime-acl-order: no migration Job found to order against", file=sys.stderr); sys.exit(1)
 if not (migration_weight < runtime_acl_weight):
