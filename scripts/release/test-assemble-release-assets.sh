@@ -24,6 +24,7 @@ mv "$tmp/binary-SHA256SUMS" "$tmp/binary/SHA256SUMS"
 
 for product in acr-api acr-mcp; do
   printf '%s image\n' "$product" >"$tmp/container/${product}_1.2.3_linux_multiarch.oci.tar"
+  printf '%s scan\n' "$product" >"$tmp/container/${product}-amd64-trivy.json"
 done
 jq -cn --arg commit "$commit" \
   '{schema_version:"container_release_manifest.v1",tag:"v1.2.3",version:"1.2.3",commit:$commit,date:"2026-07-23T00:00:00Z",images:[{product:"acr-api"},{product:"acr-mcp"}]}' \
@@ -45,7 +46,30 @@ mv "$tmp/CONTAINER-SHA256SUMS" "$tmp/container/CONTAINER-SHA256SUMS"
 test -f "$tmp/output/SHA256SUMS"
 if grep -F '  SHA256SUMS' "$tmp/output/SHA256SUMS"; then exit 1; fi
 (cd "$tmp/output" && shasum -a 256 --check SHA256SUMS)
-test "$(find "$tmp/output" -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 15
+test "$(find "$tmp/output" -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 19
+
+# CHAOS-6236: per-product manifests. The fixture only has product-named OCI
+# archives, so each manifest is exactly that one line: names, sums and
+# product isolation are all asserted against the combined manifest.
+for product in acr-api acr-mcp; do
+  other=acr-mcp; [[ "$product" == acr-mcp ]] && other=acr-api
+  test -f "$tmp/output/${product}-SHA256SUMS"
+  (cd "$tmp/output" && shasum -a 256 --check "${product}-SHA256SUMS")
+  test "$(cat "$tmp/output/${product}-SHA256SUMS")" = "$(grep -E "  ${product}[_-]" "$tmp/output/SHA256SUMS")"
+  test "$(wc -l <"$tmp/output/${product}-SHA256SUMS" | tr -d ' ')" -eq 2
+  if grep -F "$other" "$tmp/output/${product}-SHA256SUMS"; then exit 1; fi
+  if grep -E 'SHA256SUMS|release-manifest' "$tmp/output/${product}-SHA256SUMS"; then exit 1; fi
+  if grep -F "  ${product}-SHA256SUMS" "$tmp/output/SHA256SUMS"; then exit 1; fi
+done
+
+# Determinism: a second assembly of the same inputs is byte-identical.
+mkdir "$tmp/output-again"
+"$root/scripts/release/assemble-release-assets.sh" \
+  --binary "$tmp/binary" --container "$tmp/container" --output "$tmp/output-again" \
+  --tag v1.2.3 --version 1.2.3 --commit "$commit"
+for f in SHA256SUMS acr-api-SHA256SUMS acr-mcp-SHA256SUMS; do
+  cmp "$tmp/output/$f" "$tmp/output-again/$f"
+done
 
 main_commit=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 main_version="1.2.4-main.$main_commit"

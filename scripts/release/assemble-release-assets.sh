@@ -68,7 +68,7 @@ for source in "$binary_dir" "$container_dir"; do
 done
 
 tmp_sums="$(mktemp)"
-trap 'rm -f "$tmp_sums"' EXIT
+trap 'rm -f "$tmp_sums" "$tmp_sums".*' EXIT
 (
   cd "$output_dir"
   find . -maxdepth 1 -type f -exec basename {} \; | LC_ALL=C sort \
@@ -80,7 +80,34 @@ trap 'rm -f "$tmp_sums"' EXIT
       fi
     done
 ) >"$tmp_sums"
+# Per-product manifests (CHAOS-6236). One table-driven pass over the SAME
+# lines that make up the combined SHA256SUMS, so a per-product manifest can
+# never disagree with it. A line belongs to a product when its filename starts
+# with "<product>_" (archives, OCI tar, .spdx.json) or "<product>-" (per-image
+# SBOM/trivy scans). Shared files (release-manifest.json, trivy-db-*) match no
+# product and stay only in the combined manifest. The combined SHA256SUMS is
+# derived BEFORE these files exist, so it never lists them, and they never list
+# themselves. Lines are copied byte-for-byte, keeping the combined LC_ALL=C
+# order, so the output is deterministic. An empty product manifest is an error:
+# it would sign nothing and read as coverage.
+product_manifests=(acr-api acr-mcp)
+for product in "${product_manifests[@]}"; do
+  awk -v a="${product}_" -v b="${product}-" \
+    '{ n = substr($0, index($0, "  ") + 2); if (index(n, a) == 1 || index(n, b) == 1) print }' \
+    "$tmp_sums" >"$tmp_sums.$product"
+  test -s "$tmp_sums.$product" || {
+    printf 'no %s assets found for its per-product manifest\n' "$product" >&2
+    rm -f "$tmp_sums".*
+    exit 1
+  }
+done
 mv "$tmp_sums" "$output_dir/SHA256SUMS"
+for product in "${product_manifests[@]}"; do
+  mv "$tmp_sums.$product" "$output_dir/${product}-SHA256SUMS"
+done
 trap - EXIT
 check_sums "$output_dir" SHA256SUMS
+for product in "${product_manifests[@]}"; do
+  check_sums "$output_dir" "${product}-SHA256SUMS"
+done
 printf 'assembled release assets: %s\n' "$output_dir"

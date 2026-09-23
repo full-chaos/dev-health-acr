@@ -171,6 +171,11 @@ issuer="https://token.actions.githubusercontent.com"
 identity_regexp='^https://github\.com/full-chaos/dev-health-acr/\.github/workflows/release\.yml@refs/(heads/main|tags/v[0-9]+\.[0-9]+\.[0-9]+(-(dev|beta)\.[0-9]+)?)$'
 bundle_name="SHA256SUMS.sigstore.json"
 bundle="$release_dir/$bundle_name"
+# CHAOS-6236: per-product manifests, each signed with the same keyless flow as
+# the combined SHA256SUMS. Their lines are a subset of the combined manifest
+# (assemble-release-assets.sh derives them from it), which
+# verify_downloaded_release re-checks on every download.
+products=(acr-api acr-mcp)
 tmp="$(mktemp -d)"
 draft_created=false
 draft_release_id=""
@@ -217,8 +222,33 @@ verify_downloaded_release() {
     --certificate-identity-regexp "$identity_regexp" \
     --certificate-oidc-issuer "$issuer" >/dev/null
   check_sums "$dir"
+  local product
+  for product in "${products[@]}"; do
+    test -f "$dir/${product}-SHA256SUMS" || fail "$label is missing ${product}-SHA256SUMS"
+    test -f "$dir/${product}-SHA256SUMS.sigstore.json" \
+      || fail "$label is missing ${product}-SHA256SUMS.sigstore.json"
+    cosign verify-blob "$dir/${product}-SHA256SUMS" \
+      --bundle "$dir/${product}-SHA256SUMS.sigstore.json" \
+      --certificate-identity-regexp "$identity_regexp" \
+      --certificate-oidc-issuer "$issuer" >/dev/null
+    (cd "$dir" && sha256sum --check "${product}-SHA256SUMS")
+    test -s "$dir/${product}-SHA256SUMS" || fail "$label ${product}-SHA256SUMS is empty"
+    # Every per-product line must be a line of the combined manifest, and only
+    # that product's files may appear in it.
+    if grep -Fvx -f "$dir/SHA256SUMS" "$dir/${product}-SHA256SUMS" >/dev/null; then
+      fail "$label ${product}-SHA256SUMS lists a line the combined SHA256SUMS does not"
+    fi
+    if awk -v a="${product}_" -v b="${product}-" \
+      '{ n = substr($0, index($0, "  ") + 2); if (index(n, a) != 1 && index(n, b) != 1) bad = 1 } END { exit !bad }' \
+      "$dir/${product}-SHA256SUMS"; then
+      fail "$label ${product}-SHA256SUMS lists a file of another product"
+    fi
+  done
   {
     printf '%s\n' SHA256SUMS "$bundle_name"
+    for product in "${products[@]}"; do
+      printf '%s\n' "${product}-SHA256SUMS" "${product}-SHA256SUMS.sigstore.json"
+    done
     awk '{print $2}' "$dir/SHA256SUMS"
   } | LC_ALL=C sort -u >"$expected"
   find "$dir" -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort >"$actual"
@@ -237,6 +267,10 @@ test -f "$release_dir/SHA256SUMS" || fail "SHA256SUMS is missing"
 test -f "$release_dir/release-manifest.json" || fail "release-manifest.json is missing"
 test -f "$release_dir/container-release-manifest.json" || fail "container-release-manifest.json is missing"
 check_sums "$release_dir"
+for product in "${products[@]}"; do
+  test -f "$release_dir/${product}-SHA256SUMS" || fail "${product}-SHA256SUMS is missing"
+  (cd "$release_dir" && sha256sum --check "${product}-SHA256SUMS")
+done
 
 jq -e --arg version "$version" --arg commit "$commit" '
   .schema_version == "release_manifest.v1" and
@@ -345,6 +379,11 @@ if release_json="$(gh api "repos/$expected_repo/releases/tags/$release_tag" 2>"$
   verify_downloaded_release "$tmp/existing-release" existing-release
   cmp "$release_dir/SHA256SUMS" "$tmp/existing-release/SHA256SUMS" >/dev/null \
     || fail "existing GitHub Release assets differ from the verified build"
+  for product in "${products[@]}"; do
+    cmp "$release_dir/${product}-SHA256SUMS" "$tmp/existing-release/${product}-SHA256SUMS" >/dev/null \
+      || fail "existing GitHub Release ${product}-SHA256SUMS differs from the verified build"
+    cp "$tmp/existing-release/${product}-SHA256SUMS.sigstore.json" "$release_dir/${product}-SHA256SUMS.sigstore.json"
+  done
   cp "$tmp/existing-release/$bundle_name" "$bundle"
   release_exists=true
   printf 'release already published and verified: %s\n' "$release_tag"
@@ -362,6 +401,17 @@ if ! "$release_exists"; then
     --certificate-oidc-issuer "$issuer" >/dev/null
 
   assets=("$release_dir/SHA256SUMS" "$bundle")
+  for product in "${products[@]}"; do
+    test -f "$release_dir/${product}-SHA256SUMS" || fail "${product}-SHA256SUMS is missing"
+    rm -f "$release_dir/${product}-SHA256SUMS.sigstore.json"
+    cosign sign-blob "$release_dir/${product}-SHA256SUMS" \
+      --bundle "$release_dir/${product}-SHA256SUMS.sigstore.json" --yes
+    cosign verify-blob "$release_dir/${product}-SHA256SUMS" \
+      --bundle "$release_dir/${product}-SHA256SUMS.sigstore.json" \
+      --certificate-identity-regexp "$identity_regexp" \
+      --certificate-oidc-issuer "$issuer" >/dev/null
+    assets+=("$release_dir/${product}-SHA256SUMS" "$release_dir/${product}-SHA256SUMS.sigstore.json")
+  done
   while IFS=' ' read -r _ name; do
     test -n "$name"
     test -f "$release_dir/$name"
@@ -382,7 +432,7 @@ if ! "$release_exists"; then
     if [[ "$channel" == main ]]; then
       printf '\nIf this commit is still the tip of `main` when publication completes, the same image digests and this GitHub Release are promoted to `latest`.\n'
     fi
-    printf '\nVerify `%s` before extracting a binary archive. Deploy containers by digest when immutability is required.\n' "$bundle_name"
+    printf '\nVerify `%s` before extracting a binary archive. Each product also has its own signed manifest (`acr-api-SHA256SUMS`, `acr-mcp-SHA256SUMS`, each with a `.sigstore.json` bundle) listing only that product'"'"'s files. Deploy containers by digest when immutability is required.\n' "$bundle_name"
   } >"$notes"
 
   release_args=(
@@ -411,6 +461,10 @@ if ! "$release_exists"; then
   verify_downloaded_release "$tmp/draft-release" draft-release
   cmp "$release_dir/SHA256SUMS" "$tmp/draft-release/SHA256SUMS" >/dev/null \
     || fail "downloaded draft assets differ from the verified build"
+  for product in "${products[@]}"; do
+    cmp "$release_dir/${product}-SHA256SUMS" "$tmp/draft-release/${product}-SHA256SUMS" >/dev/null \
+      || fail "downloaded draft ${product}-SHA256SUMS differs from the verified build"
+  done
 fi
 
 publish_latest=false
