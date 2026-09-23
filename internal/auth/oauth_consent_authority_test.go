@@ -92,7 +92,7 @@ func TestOAuthConsentMapsEveryAuthorityState(t *testing.T) {
 	} {
 		service, authority, handle := newStubConsent(t)
 		authority.state = tc.state
-		if _, _, err := service.ConsentRequest(context.Background(), handle); outcomeOf(err) != tc.read {
+		if _, _, err := service.ConsentRequest(context.Background(), handle, webPrincipal(nil)); outcomeOf(err) != tc.read {
 			t.Errorf("preview with state %s = %v, want %s", tc.state, err, tc.read)
 		}
 		if _, err := service.DenyConsent(context.Background(), handle, webPrincipal([]string{"org/repo"})); outcomeOf(err) != tc.deny {
@@ -109,7 +109,7 @@ func TestOAuthConsentMapsEveryAuthorityState(t *testing.T) {
 	}
 	service, authority, handle := newStubConsent(t)
 	authority.stateErr = errors.New("store down")
-	if _, _, err := service.ConsentRequest(context.Background(), handle); !errors.Is(err, ErrOAuthUnavailable) {
+	if _, _, err := service.ConsentRequest(context.Background(), handle, webPrincipal(nil)); !errors.Is(err, ErrOAuthUnavailable) {
 		t.Fatalf("state read failure = %v, want ErrOAuthUnavailable", err)
 	}
 }
@@ -154,7 +154,7 @@ func TestOAuthConsentIssuesOneCodeWhateverTheAuthoritySays(t *testing.T) {
 	if _, err := service.ApproveConsent(context.Background(), handle, webPrincipal([]string{"org/repo"}), []string{"org/repo"}); outcomeOf(err) != oauthvocab.OutcomeAlreadyCompleted {
 		t.Fatalf("second approval with a pending authority = %v, want already_completed", err)
 	}
-	if _, _, err := service.ConsentRequest(context.Background(), handle); outcomeOf(err) != oauthvocab.OutcomeAlreadyCompleted {
+	if _, _, err := service.ConsentRequest(context.Background(), handle, webPrincipal(nil)); outcomeOf(err) != oauthvocab.OutcomeAlreadyCompleted {
 		t.Fatalf("preview after the code = %v, want already_completed", err)
 	}
 }

@@ -327,3 +327,20 @@ func TestOAuthStore_ConsumeAuthorizationCode_concurrentConsumersExactlyOneSuccee
 	require.EqualValues(t, 1, successes)
 	require.EqualValues(t, workers-1, failures)
 }
+
+// CHAOS-6231 parity with the Postgres store: the first user binds, only that
+// (org, subject) may bind again, an unknown handle is not found.
+func TestOAuthStore_BindAuthorizationRequestUser(t *testing.T) {
+	ctx := context.Background()
+	fixture := newOAuthFixture(t)
+	request := validOAuthAuthorizationRequest(fixture.now, "bind-device", "bind-handle")
+	created, err := fixture.store.CreateAuthorizationRequest(ctx, request)
+	require.NoError(t, err)
+
+	require.ErrorIs(t, fixture.store.BindAuthorizationRequestUser(ctx, storage.HashOAuthSecret("unknown"), "org_1", "user_1"), storage.ErrNotFound)
+	require.ErrorIs(t, fixture.store.BindAuthorizationRequestUser(ctx, created.HandleHash, "", "user_1"), storage.ErrInvalidOAuthAuthorizationRequest)
+	require.NoError(t, fixture.store.BindAuthorizationRequestUser(ctx, created.HandleHash, "org_1", "user_1"))
+	require.NoError(t, fixture.store.BindAuthorizationRequestUser(ctx, created.HandleHash, "org_1", "user_1"))
+	require.ErrorIs(t, fixture.store.BindAuthorizationRequestUser(ctx, created.HandleHash, "org_1", "user_2"), storage.ErrConflict)
+	require.ErrorIs(t, fixture.store.BindAuthorizationRequestUser(ctx, created.HandleHash, "org_2", "user_1"), storage.ErrConflict)
+}

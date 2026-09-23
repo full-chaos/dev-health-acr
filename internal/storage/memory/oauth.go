@@ -111,6 +111,33 @@ func (s *OAuthStore) GetAuthorizationRequest(ctx context.Context, handle storage
 	return storage.CloneOAuthAuthorizationRequest(request), nil
 }
 
+// BindAuthorizationRequestUser binds the request to (orgID, subject): the
+// first caller wins, the same user may repeat it, another user is
+// ErrConflict, an unknown handle is ErrNotFound.
+func (s *OAuthStore) BindAuthorizationRequestUser(ctx context.Context, handle storage.OAuthSecretHash, orgID, subject string) error {
+	if err := s.ready(ctx); err != nil {
+		return err
+	}
+	if handle.IsZero() || orgID == "" || subject == "" {
+		return storage.ErrInvalidOAuthAuthorizationRequest
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, exists := s.byHandle[handle]; !exists {
+		return storage.ErrNotFound
+	}
+	request := s.byHandle[handle]
+	if request.BoundSubject != "" && (request.BoundOrgID != orgID || request.BoundSubject != subject) {
+		return storage.ErrConflict
+	}
+	request.BoundOrgID, request.BoundSubject = orgID, subject
+	s.byHandle[handle] = request
+	return nil
+}
+
 // IssueAuthorizationCode attaches the code hash to an unexpired request that
 // has no code yet. An unknown handle is ErrNotFound; an expired request or a
 // request that already has a code is ErrConflict.

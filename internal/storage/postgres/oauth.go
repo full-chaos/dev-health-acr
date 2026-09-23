@@ -48,7 +48,7 @@ const oauthClientColumns = `client_id, client_name, redirect_uris, created_at`
 const oauthAuthorizationRequestColumns = `
 	handle_hash, device_code_hash, client_id, client_kind, redirect_uri,
 	code_challenge, resource, scope, state, created_at, expires_at,
-	code_hash, code_expires_at, consumed_at`
+	code_hash, code_expires_at, consumed_at, bound_org_id, bound_subject`
 
 const oauthDeviceGrantColumns = `device_code_hash, client_id, client_kind, resource, scope, created_at, expires_at`
 
@@ -103,7 +103,7 @@ func (s *OAuthStore) CreateAuthorizationRequest(ctx context.Context, request sto
 	}
 	_, err := s.DB.ExecContext(ctx, `
 INSERT INTO acr.oauth_authorization_requests (`+oauthAuthorizationRequestColumns+`)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULL, NULL, NULL)`,
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULL, NULL, NULL, NULL, NULL)`,
 		request.HandleHash.String(), request.DeviceCodeHash.String(), request.ClientID, request.ClientKind,
 		request.RedirectURI, request.CodeChallenge, request.Resource, request.Scope, request.State,
 		request.CreatedAt, request.ExpiresAt,
@@ -129,6 +129,36 @@ FROM acr.oauth_authorization_requests WHERE handle_hash = $1`, handle.String())
 		return storage.OAuthAuthorizationRequest{}, mapNotFound("get oauth authorization request", err)
 	}
 	return request, nil
+}
+
+// BindAuthorizationRequestUser binds the request to (orgID, subject) in one
+// atomic UPDATE: the first caller wins and the same user may repeat it. A
+// zero-row result is an unknown handle (ErrNotFound) or another user's
+// request (ErrConflict).
+func (s *OAuthStore) BindAuthorizationRequestUser(ctx context.Context, handle storage.OAuthSecretHash, orgID, subject string) error {
+	if err := s.ready(ctx); err != nil {
+		return err
+	}
+	if handle.IsZero() || orgID == "" || subject == "" {
+		return storage.ErrInvalidOAuthAuthorizationRequest
+	}
+	result, err := s.DB.ExecContext(ctx, `
+UPDATE acr.oauth_authorization_requests
+SET bound_org_id = $2, bound_subject = $3
+WHERE handle_hash = $1
+  AND (bound_subject IS NULL OR (bound_org_id = $2 AND bound_subject = $3))`,
+		handle.String(), orgID, subject,
+	)
+	if err != nil {
+		return fmt.Errorf("bind oauth authorization request user: %w", sanitizeDatabaseError(err))
+	}
+	if affected, err := result.RowsAffected(); err == nil && affected > 0 {
+		return nil
+	}
+	if _, getErr := s.GetAuthorizationRequest(ctx, handle); getErr != nil {
+		return getErr
+	}
+	return storage.ErrConflict
 }
 
 // IssueAuthorizationCode attaches the code hash to an unexpired request that
@@ -276,11 +306,12 @@ func scanOAuthAuthorizationRequest(row scanner) (storage.OAuthAuthorizationReque
 		codeHash                   sql.NullString
 		codeExpiresAt              sql.NullTime
 		consumedAt                 sql.NullTime
+		boundOrgID, boundSubject   sql.NullString
 	)
 	err := row.Scan(
 		&handleHash, &deviceCodeHash, &request.ClientID, &request.ClientKind, &request.RedirectURI,
 		&request.CodeChallenge, &request.Resource, &request.Scope, &request.State,
-		&request.CreatedAt, &request.ExpiresAt, &codeHash, &codeExpiresAt, &consumedAt,
+		&request.CreatedAt, &request.ExpiresAt, &codeHash, &codeExpiresAt, &consumedAt, &boundOrgID, &boundSubject,
 	)
 	if err != nil {
 		return storage.OAuthAuthorizationRequest{}, err
@@ -295,6 +326,7 @@ func scanOAuthAuthorizationRequest(row scanner) (storage.OAuthAuthorizationReque
 		return storage.OAuthAuthorizationRequest{}, fmt.Errorf("decode oauth authorization request device code: %w", err)
 	}
 	request.DeviceCodeHash = parsedDeviceCode
+	request.BoundOrgID, request.BoundSubject = boundOrgID.String, boundSubject.String
 	if codeHash.Valid {
 		parsedCode, err := storage.ParseOAuthSecretHash(codeHash.String)
 		if err != nil {

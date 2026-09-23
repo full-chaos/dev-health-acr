@@ -107,6 +107,10 @@ type OAuthAuthorizationRequest struct {
 	CodeHash       *OAuthSecretHash
 	CodeExpiresAt  *time.Time
 	ConsumedAt     *time.Time
+	// BoundOrgID and BoundSubject are the signed-in web user the request is
+	// bound to (BindAuthorizationRequestUser); both empty until bound.
+	BoundOrgID   string
+	BoundSubject string
 }
 
 // OAuthDeviceGrant is what POST /device_authorization stores alongside its
@@ -141,6 +145,12 @@ type OAuthStore interface {
 	// GetAuthorizationRequest returns the request with this handle or
 	// ErrNotFound. Expired requests are still returned; callers decide.
 	GetAuthorizationRequest(context.Context, OAuthSecretHash) (OAuthAuthorizationRequest, error)
+	// BindAuthorizationRequestUser binds the request to the signed-in web user
+	// (org and subject) who first opens it, atomically: the first call wins,
+	// the same user again is accepted, a different user is ErrConflict, an
+	// unknown handle is ErrNotFound. A request that carries no owner at
+	// /authorize gets one here, so only that user can decide it.
+	BindAuthorizationRequestUser(ctx context.Context, handle OAuthSecretHash, orgID, subject string) error
 	// IssueAuthorizationCode attaches the code hash to an unexpired request
 	// that has no code yet. Any other state is ErrConflict; an unknown handle
 	// is ErrNotFound.
