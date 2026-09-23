@@ -54,6 +54,15 @@ GOTEST_ISOLATED_TIMEOUT ?= 900s
 # e7e48b5c, 229.427s at 8299ec38 -- isolation removes contention, so it will
 # not run slower than that. 3 * 247.735s ~= 743s; rounded up to 750s.
 GOTEST_CONTEXTFABRIC_TIMEOUT ?= 750s
+# CHAOS-6342: internal/contextfabric/devhealthsource's own isolated budget
+# (its own ci.yml job, race-devhealthsource). Measured 318.8s wall under
+# -race on bigboy (32-core, uncontended); a 4-vCPU hosted runner is slower and
+# the failed hosted runs were killed at the 420s shared-shard budget. 600s is
+# ~1.9x the bigboy figure: deliberately just above the observed range, NOT a
+# blanket raise of any shared budget. The hosted job's own duration must be
+# re-measured from its first hosted run (race-devhealthsource prints it and
+# fails past 85% of this budget) and this number retuned from that evidence.
+GOTEST_DEVHEALTHSOURCE_TIMEOUT ?= 600s
 VERSION_PKG := github.com/full-chaos/dev-health-acr/internal/version
 
 # Pinned exact versions (not @latest) so the coverage/JUnit toolchain is
@@ -108,6 +117,7 @@ test-split:
 	@for pkg in $$(scripts/ci/test-shard.sh isolated); do \
 		case "$$pkg" in \
 			*/internal/contextfabric) timeout="$(GOTEST_CONTEXTFABRIC_TIMEOUT)" ;; \
+			*/internal/contextfabric/devhealthsource) timeout="$(GOTEST_DEVHEALTHSOURCE_TIMEOUT)" ;; \
 			*) timeout="$(GOTEST_ISOLATED_TIMEOUT)" ;; \
 		esac; \
 		echo "test-split: $$pkg (GOTEST_PLAIN_TIMEOUT=$$timeout)"; \
@@ -157,6 +167,7 @@ test-race-isolated:
 	@for pkg in $$(scripts/ci/test-shard.sh isolated); do \
 		case "$$pkg" in \
 			*/internal/contextfabric) timeout="$(GOTEST_CONTEXTFABRIC_TIMEOUT)" ;; \
+			*/internal/contextfabric/devhealthsource) timeout="$(GOTEST_DEVHEALTHSOURCE_TIMEOUT)" ;; \
 			*) timeout="$(GOTEST_ISOLATED_TIMEOUT)" ;; \
 		esac; \
 		echo "test-race-isolated: $$pkg (GOTEST_TIMEOUT=$$timeout)"; \
@@ -208,6 +219,7 @@ test-coverage:
 isolated-timeout:
 	@case "$(PKG)" in \
 		*/internal/contextfabric) echo "$(GOTEST_CONTEXTFABRIC_TIMEOUT)" ;; \
+		*/internal/contextfabric/devhealthsource) echo "$(GOTEST_DEVHEALTHSOURCE_TIMEOUT)" ;; \
 		*) echo "$(GOTEST_ISOLATED_TIMEOUT)" ;; \
 	esac
 
