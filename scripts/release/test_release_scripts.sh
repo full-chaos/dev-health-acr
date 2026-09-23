@@ -248,7 +248,9 @@ if grep -F 'lework/skopeo-binary' "$release_workflow"; then exit 1; fi
 # CHAOS-4855 R4: 5, not 4 -- the new mirror-preflight job (checks the
 # ghcr mirror is populated before build/container pull from it) adds its
 # own checkout step.
-test "$(grep -c 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' "$release_workflow")" -eq 5
+# CHAOS-6400: 7, not 5 -- the supply-chain job and the per-platform build-leg
+# job each check out the source (ci-reference needs no checkout).
+test "$(grep -c 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' "$release_workflow")" -eq 7
 
 grep -F 'skopeo copy --all --preserve-digests' "$root/scripts/release/publish-ci-release.sh" >/dev/null
 grep -F 'cosign sign --yes' "$root/scripts/release/publish-ci-release.sh" >/dev/null
