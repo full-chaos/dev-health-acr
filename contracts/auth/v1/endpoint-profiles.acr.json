@@ -834,8 +834,8 @@
         "description": "No authenticator wrapper -- mux.HandleFunc directly; the body is built from process configuration alone.",
         "anchor": {
           "path": "internal/api/oauth_routes.go",
-          "line": 70,
-          "line_end": 70,
+          "line": 72,
+          "line_end": 72,
           "note": "func (a *App) handleOAuthMetadata("
         }
       },
