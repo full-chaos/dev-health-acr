@@ -242,15 +242,9 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      # CHAOS-4855 R4 (codex round 2, executed): `make verify` below runs
-      # `go test ./...` (via test-race-split), and this module's
-      # testcontainers-backed tests carry no build tag or skip guard --
-      # release's own build job was pulling postgres/clickhouse/falkordb/
-      # pgbouncer/ryuk from Docker Hub anonymously, unmirrored, same as
-      # ci.yml's unit/race/build jobs before they were fixed.
-      packages: read
-    env:
-      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+      # CHAOS-6400: read the same-sha ci run's `verify` job (tests are
+      # verified by reference, never re-run here).
+      actions: read
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -272,7 +266,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      # CHAOS-6378: this job runs the whole suite (plain + -race) and then two
+      # CHAOS-6378: this job runs two
       # cold reproducible builds on one hosted runner (~14 GB free at start),
       # and died `no space left on device`. Free the preinstalled toolchains it
       # never uses first (same list as the fullstack jobs, CHAOS-6326) and print
@@ -282,19 +276,71 @@ jobs:
           df -h / | tail -1
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h / | tail -1
-      - name: Verify source and dependencies
+      # CHAOS-6400: tests are verified BY REFERENCE. ci.yml already ran the
+      # whole suite (sharded, plain + race) on this exact commit when it landed
+      # on main; re-running it serially here failed three ways (CHAOS-6360,
+      # CHAOS-6366, CHAOS-6378). This step instead requires that ci's `push`
+      # run for the EXACT release commit sha (no branch resolution) has a
+      # `verify` job with conclusion success. Polls because Release and ci
+      # both trigger on the same push. Never skips: every other outcome
+      # (missing run, missing job, failure, timeout) fails loudly and names
+      # what was missing. workflow_dispatch of an existing tag resolves the
+      # tag's commit (an ancestor of main), whose main-push ci run is looked up
+      # the same way; there is no override input.
+      - name: Require same-sha ci verify to have succeeded
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          COMMIT: ${{ needs.preflight.outputs.commit }}
+          WAIT_SECONDS: "3600"
+        run: |
+          set -euo pipefail
+          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "ci reference: commit is not a full sha: '$COMMIT'" >&2; exit 1; }
+          deadline=$(( $(date +%s) + WAIT_SECONDS ))
+          while :; do
+            runs="$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$COMMIT&event=push&per_page=50" \
+              --jq '[.workflow_runs[] | select(.head_sha == "'"$COMMIT"'" and .head_branch == "main")] | sort_by(.created_at) | reverse')"
+            run_id="$(printf '%s' "$runs" | jq -r '.[0].id // empty')"
+            if [ -z "$run_id" ]; then
+              state="no ci.yml push run for $COMMIT on main yet"
+            else
+              job="$(gh api "repos/$REPO/actions/runs/$run_id/jobs?per_page=100" \
+                --jq '[.jobs[] | select(.name == "verify")] | .[0] // empty')"
+              if [ -z "$job" ]; then
+                state="ci run $run_id has no job named verify yet"
+              else
+                status="$(printf '%s' "$job" | jq -r '.status')"
+                conclusion="$(printf '%s' "$job" | jq -r '.conclusion // ""')"
+                state="ci run $run_id job verify: status=$status conclusion=$conclusion"
+                if [ "$status" = completed ]; then
+                  if [ "$conclusion" = success ]; then
+                    echo "ci reference OK: $state (commit $COMMIT)"
+                    exit 0
+                  fi
+                  echo "ci reference FAILED: $state (commit $COMMIT); tests did not pass, refusing to release" >&2
+                  exit 1
+                fi
+              fi
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "ci reference TIMEOUT after ${WAIT_SECONDS}s: $state (commit $COMMIT)" >&2
+              exit 1
+            fi
+            echo "ci reference waiting: $state"
+            sleep 30
+          done
+      # Supply-chain checks only. The test suite, vet, fmt, crosscompile and
+      # contract checks that `make verify` ran are covered by ci.yml's verify
+      # gate (see step above).
+      - name: Verify dependencies
         run: |
           set -euo pipefail
           verify_module_cache="$(mktemp -d)"
           verify_build_cache="$(mktemp -d)"
           export GOMODCACHE="$verify_module_cache/mod" GOCACHE="$verify_build_cache/build"
-          # CHAOS-6378: `make verify` (plain + -race builds of every package)
-          # fills these throwaway caches with many GB, and the next step
-          # (two more cold caches for the reproducible build) then died with
-          # `no space left on device` on the hosted runner (Release run
-          # 35914141622). Free them the moment verify is done, on success or
-          # failure, and print free space so the next ENOSPC is not a mystery.
-          # Go marks module-cache files read-only, hence chmod before rm.
+          # CHAOS-6378: free the throwaway caches as soon as this step ends so
+          # the reproducible build below has disk. Go marks module-cache files
+          # read-only, hence chmod before rm.
           release_verify_cleanup() {
             echo "verify: free space before cleanup: $(df -h /tmp | tail -1)"
             chmod -R u+w "$verify_module_cache" "$verify_build_cache" 2>/dev/null || true
@@ -303,16 +349,8 @@ jobs:
           }
           trap release_verify_cleanup EXIT
           go mod download
-          # CHAOS-4567: `make verify` runs the race suite as test-race-split --
-          # the shared packages at GOTEST_TIMEOUT and the isolated ones
-          # (internal/contextfabric/devhealthschema, per
-          # scripts/ci/test-shard.sh) at GOTEST_ISOLATED_TIMEOUT -- the same
-          # partition ci.yml's race matrix + race-devhealthschema job use.
-          # The unsharded run this job used to do timed devhealthschema out
-          # at 420s on every main merge from a4e2e5a3 (#327) on and stopped
-          # image publication; do not collapse this back into one `go test`.
-          make verify
           go mod verify
+          make contract-test
           scripts/ci/retry.sh go install golang.org/x/vuln/cmd/govulncheck@v1.5.0
           govulncheck ./...
       - name: Build deterministic matrix and final checksum manifest
