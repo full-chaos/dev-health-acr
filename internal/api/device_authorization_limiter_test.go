@@ -1,6 +1,7 @@
 package api
 
 import (
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -90,7 +91,7 @@ func TestDeviceAuthorizationLimiter_isConcurrencySafeAtDeviceCreationBoundary(t 
 	}
 }
 
-func TestDeviceAuthorizationLimiter_reclaimsExpiredSubjectsBeforeAdmittingNewOnes(t *testing.T) {
+func TestDeviceAuthorizationLimiter_evictsTheOldestSubjectInsteadOfLockingNewOnesOut(t *testing.T) {
 	// Given
 	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
 	limiter := NewBoundedDeviceAuthorizationLimiter(DeviceAuthorizationLimiterOptions{
@@ -106,7 +107,26 @@ func TestDeviceAuthorizationLimiter_reclaimsExpiredSubjectsBeforeAdmittingNewOne
 	admitted := limiter.AllowTokenRequest("192.0.2.3")
 
 	// Then
-	if blocked.Allowed || !admitted.Allowed {
+	if !blocked.Allowed || !admitted.Allowed {
 		t.Fatalf("bounded cleanup decisions = %#v, %#v", blocked, admitted)
+	}
+}
+
+// CHAOS-6229: keys are attacker-choosable, so a flood of bogus keys must not
+// lock a fresh legitimate client out (the map stays bounded).
+func TestDeviceAuthorizationLimiter_bogusKeyFloodDoesNotLockOutAFreshClient(t *testing.T) {
+	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
+	limiter := NewBoundedDeviceAuthorizationLimiter(DeviceAuthorizationLimiterOptions{
+		Clock: ClockFunc(func() time.Time { return now }), MaxTrackedKeys: 4096,
+	})
+	for i := range 5000 {
+		now = now.Add(time.Millisecond)
+		limiter.AllowDeviceCreation("bogus-" + strconv.Itoa(i))
+	}
+	if !limiter.AllowDeviceCreation("fresh-legit-client").Allowed {
+		t.Fatal("a fresh client was locked out after 5000 bogus keys")
+	}
+	if l := limiter.(*deviceAuthorizationLimiter); len(l.windows) > 4096 {
+		t.Fatalf("tracked keys = %d, want <= 4096", len(l.windows))
 	}
 }
