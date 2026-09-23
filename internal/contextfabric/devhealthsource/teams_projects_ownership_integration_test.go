@@ -869,7 +869,8 @@ func subOmittedRowsBeyondTheSkipBoundStillConverge(t *testing.T, ctx context.Con
 		t.Fatalf("NewProjectionWorker: %v", err)
 	}
 
-	// Termination is by CONSTRUCTION, not by observation (codex round-5).
+	// Termination is by CONSTRUCTION, bounded by MEASUREMENT (codex round-5,
+	// CHAOS-6342).
 	//
 	// Two earlier versions of this loop were vacuous in the same family this
 	// batch keeps finding. The first broke on the first sighting of the edge,
@@ -878,14 +879,25 @@ func subOmittedRowsBeyondTheSkipBoundStillConverge(t *testing.T, ctx context.Con
 	// leaving the cursor unmoved satisfies that condition, so the exact defect
 	// the test exists to catch could end the loop before it was observed.
 	//
+	// The loop therefore ends only when the source is provably exhausted: at
+	// least quietTail CONSECUTIVE ticks that neither published a batch nor
+	// moved the cursor. A tick that publishes, or moves the cursor, resets the
+	// count, so neither earlier defect can end the run early.
+	//
+	// The previous version ran a fixed 120 ticks "because every tick after
+	// exhaustion is a cheap no-op". That premise is FALSE and was never
+	// measured: each tick re-reads the 10400-row block from ClickHouse
+	// (~0.55s under -race), so ~110 post-exhaustion ticks cost ~60s of a
+	// 126s subtest and pushed devhealthsource past the 420s race-shard wall.
+	//
 	// The fixture knows its own size: 5200 ambiguous keys is 10400 joined
 	// rows, ~52 pages, and one tick absorbs up to maxOmittedPageSkips (50)
-	// pages, so the whole block plus the edge beyond it needs a handful of
-	// ticks. Running a fixed count far past that, with no early exit, means
-	// the source is exhausted by construction rather than because a signal
-	// said so -- and every tick after exhaustion is a cheap no-op.
+	// pages, so the block plus the edge beyond it converge in a handful of
+	// ticks. maxTicks is a safety cap far above that, not the exit condition;
+	// reaching it without quietTail consecutive quiet ticks fails the test
+	// LOUDLY below rather than passing on a timeout.
 	const (
-		totalTicks = 120
+		totalTicks = 40
 		quietTail  = 10
 	)
 	wantEdge := devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-PAST-BOUND", "TEAM-GITHUB", "native")
@@ -923,6 +935,12 @@ func subOmittedRowsBeyondTheSkipBoundStillConverge(t *testing.T, ctx context.Con
 		}
 		if appliedThisTick == 0 {
 			quiet++
+		} else {
+			quiet = 0
+		}
+		if quiet >= quietTail {
+			t.Logf("source exhausted: %d consecutive quiet ticks reached at tick %d of a %d-tick cap", quiet, tick, totalTicks)
+			break
 		}
 	}
 	if quiet < quietTail {
