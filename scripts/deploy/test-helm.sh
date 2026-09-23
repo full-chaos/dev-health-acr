@@ -416,6 +416,44 @@ if not deploy_no_hook:
 print("  ok   migration-order: migration Job is a pre-install,pre-upgrade hook; Deployment is not hooked")
 PY
 
+# Gate 9b (CHAOS-6277, codex round cf-6277-r1 P3): the generic Gate 9 check
+# above passes as long as ANY Job carries a pre-install,pre-upgrade hook --
+# it would still pass if runtime-acl-job.yaml were deleted entirely, since
+# the migration Job alone satisfies it. This gate specifically requires the
+# runtime-acl Job to exist, run acr-migrate grant-runtime-acl, and be
+# ordered strictly after the migration Job (a more negative hook-weight
+# means it runs FIRST, so migration-weight < runtime-acl-weight is the
+# correct order).
+python3 - "$rendered" <<'PY' || exit 1
+import sys
+docs = open(sys.argv[1]).read().split('\n---\n')
+def weight(d):
+    for line in d.splitlines():
+        if 'helm.sh/hook-weight' in line:
+            return int(line.split(':')[-1].strip().strip('"'))
+    return None
+migration_weight = runtime_acl_weight = None
+runtime_acl_command_ok = False
+for d in docs:
+    is_job = '\nkind: Job' in ('\n'+d) or d.lstrip().startswith('kind: Job')
+    if not is_job:
+        continue
+    if 'component: migration' in d and 'grant-runtime-acl' not in d:
+        migration_weight = weight(d)
+    if 'grant-runtime-acl' in d:
+        runtime_acl_weight = weight(d)
+        runtime_acl_command_ok = 'acr-migrate' in d
+if runtime_acl_weight is None:
+    print("  FAIL runtime-acl-order: no Job runs acr-migrate grant-runtime-acl", file=sys.stderr); sys.exit(1)
+if not runtime_acl_command_ok:
+    print("  FAIL runtime-acl-order: the grant-runtime-acl Job does not invoke acr-migrate", file=sys.stderr); sys.exit(1)
+if migration_weight is None:
+    print("  FAIL runtime-acl-order: no migration Job found to order against", file=sys.stderr); sys.exit(1)
+if not (migration_weight < runtime_acl_weight):
+    print(f"  FAIL runtime-acl-order: migration Job weight ({migration_weight}) must be MORE NEGATIVE than the runtime-acl Job weight ({runtime_acl_weight}) so migration runs first", file=sys.stderr); sys.exit(1)
+print(f"  ok   runtime-acl-order: grant-runtime-acl Job present, runs acr-migrate, ordered after migration (weights {migration_weight} < {runtime_acl_weight})")
+PY
+
 # Gate 10: HTTPRoute targets a caller-supplied Gateway and no Gateway is created.
 if grep -q 'kind: HTTPRoute' "$rendered"; then
   grep -q 'parentRefs:' "$rendered" || fail_gate "httproute: HTTPRoute rendered without parentRefs"

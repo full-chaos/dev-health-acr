@@ -5,19 +5,10 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
-	"regexp"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
 )
-
-// runtimeRoleNamePattern is the identifier charset every runtime role this
-// repository provisions actually uses (acr_runtime, acr_mcp_runtime, ...:
-// see deploy/compose/acr-db-init.sh). grantRuntimeACL fails closed on
-// anything else instead of interpolating an unvalidated identifier into SQL
-// -- defense in depth, since the value only ever originates from this
-// deployment's own Secret, never external input.
-var runtimeRoleNamePattern = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 
 // grantRuntimeACL is CHAOS-6277's durable fix for a gap specific to
 // Kubernetes: migration 0042 (acr.oauth_device_grants) documents, in its
@@ -61,8 +52,22 @@ func grantRuntimeACL(ctx context.Context, db *sql.DB, runtimeDSN string, output 
 	if role == "" {
 		return fmt.Errorf("runtime DSN has no username")
 	}
-	if !runtimeRoleNamePattern.MatchString(role) {
-		return fmt.Errorf("runtime role name %q is not a plain lowercase identifier", role)
+	// Postgres quoted identifiers (`"..."`) admit almost any character --
+	// including this repository's own convention (acr_runtime,
+	// acr_mcp_runtime) but also hyphens, spaces, and mixed case, which a
+	// real PostgreSQL role name is free to use (codex round cf-6277-r1's
+	// P1, executed repro: a role literally named "acr-runtime" was
+	// rejected by an earlier, narrower charset check here even though it
+	// is a perfectly valid role Postgres itself created and would have
+	// GRANTed correctly). The ONLY unsafe input for a double-quoted
+	// identifier is a NUL byte (Postgres/the wire protocol cannot
+	// represent one inside a C string, and Go's database/sql driver would
+	// reject it before this ever reaches the server) -- doubling every
+	// embedded `"` below is what makes any other string safe to
+	// interpolate, the same mechanism psql's own `%I`/`format(...,
+	// :'ident')` quoting (acr-db-init.sh's runtime-acl mode) relies on.
+	if strings.ContainsRune(role, 0) {
+		return fmt.Errorf("runtime role name %q contains a NUL byte", role)
 	}
 	quotedRole := `"` + strings.ReplaceAll(role, `"`, `""`) + `"`
 

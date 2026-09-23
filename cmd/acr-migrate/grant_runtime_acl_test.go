@@ -3,6 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -125,6 +128,63 @@ func TestGrantRuntimeACL_deviceGrantsRoundTrip(t *testing.T) {
 	_, err = runtimeDB.ExecContext(ctx, `UPDATE acr.oauth_device_grants SET scope = 'widened' WHERE device_code_hash = $1`, deviceCodeHashA)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "permission denied")
+}
+
+// TestGrantRuntimeACL_acceptsRoleNamesWithHyphens is the codex round
+// cf-6277-r1 P1 regression test: an earlier version of grantRuntimeACL
+// additionally rejected any role name outside a narrow lowercase/underscore
+// charset, so a genuinely valid PostgreSQL role like "acr-runtime"
+// (hyphenated -- this repository's own convention never uses one, but
+// nothing about PostgreSQL or the Helm chart's credential contract forbids
+// it) was refused even though it is perfectly safe once double-quoted. A
+// real role with a hyphen, a space, and mixed case all round-trip through
+// grantRuntimeACL and actually receive the grant.
+func TestGrantRuntimeACL_acceptsRoleNamesWithHyphens(t *testing.T) {
+	ctx := context.Background()
+	migrationDSN := newTestPostgresDSN(t, ctx)
+	require.NoError(t, run(ctx, []string{"up"}, testMigrationEnvironment(migrationDSN), &bytes.Buffer{}))
+
+	for _, roleName := range []string{"acr-runtime", "acr runtime", "Acr_Runtime"} {
+		t.Run(roleName, func(t *testing.T) {
+			adminDB, err := pgx.ParseConfig(migrationDSN)
+			require.NoError(t, err)
+			rawDB := stdlib.OpenDB(*adminDB)
+			t.Cleanup(func() { require.NoError(t, rawDB.Close()) })
+			quoted := `"` + strings.ReplaceAll(roleName, `"`, `""`) + `"`
+			_, err = rawDB.ExecContext(ctx, fmt.Sprintf(`CREATE ROLE %s LOGIN PASSWORD 'x'`, quoted))
+			require.NoError(t, err)
+			_, err = rawDB.ExecContext(ctx, fmt.Sprintf(`GRANT CONNECT ON DATABASE acr TO %s`, quoted))
+			require.NoError(t, err)
+			_, err = rawDB.ExecContext(ctx, fmt.Sprintf(`GRANT USAGE ON SCHEMA acr TO %s`, quoted))
+			require.NoError(t, err)
+
+			// url.QueryEscape encodes a space as "+", which is
+			// form-encoding, not userinfo percent-encoding -- pgx (like any
+			// RFC 3986 URL parser) does NOT decode "+" back to a space in
+			// the userinfo component, so that mis-escaping alone made the
+			// "acr runtime" case fail here on a TEST bug, not a production
+			// one. url.URL{User: url.UserPassword(...)}.String() escapes
+			// userinfo correctly for every case, including the space.
+			dsnURL := url.URL{Scheme: "postgres", User: url.UserPassword(roleName, "x"), Host: "runtime-dsn-is-never-dialed.invalid:5432", Path: "/acr"}
+			runtimeDSN := dsnURL.String()
+			var output bytes.Buffer
+			err = run(ctx, []string{"grant-runtime-acl"}, environment(map[string]string{
+				migrationDSNEnvironment: migrationDSN,
+				runtimeDSNEnvironment:   runtimeDSN,
+			}), &output)
+			require.NoErrorf(t, err, "grant-runtime-acl rejected a valid PostgreSQL role name %q", roleName)
+			require.Contains(t, output.String(), roleName)
+
+			runtimeConfig, err := pgx.ParseConfig(migrationDSN)
+			require.NoError(t, err)
+			runtimeConfig.User = roleName
+			runtimeConfig.Password = "x"
+			runtimeDB := stdlib.OpenDB(*runtimeConfig)
+			t.Cleanup(func() { require.NoError(t, runtimeDB.Close()) })
+			_, err = runtimeDB.ExecContext(ctx, `SELECT 1 FROM acr.oauth_device_grants LIMIT 0`)
+			require.NoError(t, err, "the hyphenated/spaced/mixed-case role must have actually received SELECT")
+		})
+	}
 }
 
 // TestGrantRuntimeACL_rejectsMalformedRuntimeDSN proves grantRuntimeACL
