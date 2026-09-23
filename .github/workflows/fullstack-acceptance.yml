@@ -61,6 +61,15 @@ jobs:
       # no local record of that "digest" and falls through to an actual registry pull, which
       # 404s: "pull access denied for <project>-acr-api, repository does not exist". This must
       # run before anything else touches Docker in this job.
+      # This job builds the ops api, query-api, web and acr images on one hosted runner
+      # (~14 GB free at start); a run died with "No space left on device" in the runner's own
+      # worker (CHAOS-6326). Free the preinstalled toolchains this job never uses first, and
+      # print free space so a repeat shows how close the job runs to the limit.
+      - name: Free runner disk space
+        run: |
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h / | tail -1
       - name: Enable the Docker containerd image store
         run: |
           echo '{"features": {"containerd-snapshotter": true}}' | sudo tee /etc/docker/daemon.json
@@ -320,6 +329,15 @@ jobs:
     steps:
       # See the equivalent step in the compose job for why this must run before anything else
       # touches Docker in this job.
+      # This job builds the ops api, query-api, web and acr images on one hosted runner
+      # (~14 GB free at start); a run died with "No space left on device" in the runner's own
+      # worker (CHAOS-6326). Free the preinstalled toolchains this job never uses first, and
+      # print free space so a repeat shows how close the job runs to the limit.
+      - name: Free runner disk space
+        run: |
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h / | tail -1
       - name: Enable the Docker containerd image store
         run: |
           echo '{"features": {"containerd-snapshotter": true}}' | sudo tee /etc/docker/daemon.json
