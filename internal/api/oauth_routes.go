@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"html/template"
@@ -155,8 +157,22 @@ func oauthOutcome(err error) (*auth.OAuthError, bool) {
 	return nil, false
 }
 
-func (a *App) oauthRateLimited(w http.ResponseWriter, r *http.Request, step string, allow func(string) DeviceAuthorizationLimitDecision) bool {
-	decision := allow(a.clientIP(r))
+// oauthLimitKey is the one place an OAuth limiter key is built. Behind the
+// ingress every public caller shares one peer address (CHAOS-6229), so an
+// address key throttles all users as one bucket. The key is the OAuth
+// client_id instead (each DCR install registers its own), hashed so
+// attacker-chosen length cannot grow the key map. A request that names no
+// client (registration, a malformed body) falls back to the address.
+func (a *App) oauthLimitKey(r *http.Request, clientID string) string {
+	if clientID == "" {
+		return "ip:" + a.clientIP(r)
+	}
+	sum := sha256.Sum256([]byte(clientID))
+	return "client:" + hex.EncodeToString(sum[:])
+}
+
+func (a *App) oauthRateLimited(w http.ResponseWriter, r *http.Request, step, key string, allow func(string) DeviceAuthorizationLimitDecision) bool {
+	decision := allow(key)
 	if decision.Allowed {
 		return false
 	}
@@ -168,7 +184,7 @@ func (a *App) oauthRateLimited(w http.ResponseWriter, r *http.Request, step stri
 }
 
 func (a *App) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
-	if a.oauthRateLimited(w, r, oauthvocab.StepRegister, a.runtime.DeviceAuthorizationLimiter.AllowDeviceCreation) {
+	if a.oauthRateLimited(w, r, oauthvocab.StepRegister, a.oauthLimitKey(r, ""), a.runtime.DeviceAuthorizationLimiter.AllowDeviceCreation) {
 		return
 	}
 	var request auth.OAuthRegistrationRequest
@@ -278,10 +294,15 @@ func deviceVerificationURIComplete(verificationURI, userCode string) string {
 // (device_oauth.go), except here the raw codes leave the server, as RFC 8628
 // requires.
 func (a *App) handleOAuthDeviceAuthorization(w http.ResponseWriter, r *http.Request) {
-	if a.oauthRateLimited(w, r, oauthvocab.StepDeviceAuthorization, a.runtime.DeviceAuthorizationLimiter.AllowDeviceCreation) {
+	parseErr := parseOAuthForm(w, r)
+	clientID := ""
+	if parseErr == nil {
+		clientID = r.PostForm.Get("client_id")
+	}
+	if a.oauthRateLimited(w, r, oauthvocab.StepDeviceAuthorization, a.oauthLimitKey(r, clientID), a.runtime.DeviceAuthorizationLimiter.AllowDeviceCreation) {
 		return
 	}
-	if err := parseOAuthForm(w, r); err != nil {
+	if err := parseErr; err != nil {
 		writeOAuthJSON(w, http.StatusBadRequest, oauthErrorBody{Error: "invalid_request"})
 		a.emitOAuthStep(r, oauthvocab.StepDeviceAuthorization, oauthvocab.OutcomeInvalidRequest, "", http.StatusBadRequest)
 		return
@@ -319,7 +340,7 @@ func (a *App) handleOAuthDeviceAuthorization(w http.ResponseWriter, r *http.Requ
 }
 
 func (a *App) handleOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
-	if a.oauthRateLimited(w, r, oauthvocab.StepAuthorize, a.runtime.DeviceAuthorizationLimiter.AllowDeviceCreation) {
+	if a.oauthRateLimited(w, r, oauthvocab.StepAuthorize, a.oauthLimitKey(r, r.URL.Query().Get("client_id")), a.runtime.DeviceAuthorizationLimiter.AllowDeviceCreation) {
 		return
 	}
 	query := r.URL.Query()
@@ -546,10 +567,16 @@ type oauthTokenBody struct {
 }
 
 func (a *App) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
-	if a.oauthRateLimited(w, r, oauthvocab.StepToken, a.runtime.DeviceAuthorizationLimiter.AllowTokenRequest) {
+	parseErr := parseOAuthForm(w, r)
+	var clientID string
+	clientIDOK := false
+	if parseErr == nil {
+		clientID, clientIDOK = tokenClientID(r)
+	}
+	if a.oauthRateLimited(w, r, oauthvocab.StepToken, a.oauthLimitKey(r, clientID), a.runtime.DeviceAuthorizationLimiter.AllowTokenRequest) {
 		return
 	}
-	if err := parseOAuthForm(w, r); err != nil {
+	if parseErr != nil {
 		writeOAuthJSON(w, http.StatusBadRequest, oauthErrorBody{Error: "invalid_request"})
 		a.emitOAuthStep(r, oauthvocab.StepToken, oauthvocab.OutcomeInvalidRequest, "", http.StatusBadRequest)
 		return
@@ -562,8 +589,7 @@ func (a *App) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	clientID, ok := tokenClientID(r)
-	if !ok {
+	if !clientIDOK {
 		writeOAuthJSON(w, http.StatusBadRequest, oauthErrorBody{Error: "invalid_request"})
 		a.emitOAuthStep(r, oauthvocab.StepToken, oauthvocab.OutcomeInvalidRequest, "", http.StatusBadRequest)
 		return
