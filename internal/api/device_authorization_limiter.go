@@ -97,7 +97,10 @@ func (l *deviceAuthorizationLimiter) allow(key string, limit int) DeviceAuthoriz
 	window, exists := l.windows[key]
 	if !exists {
 		if len(l.windows) >= l.maxKeys {
-			return DeviceAuthorizationLimitDecision{RetryAfter: deviceAuthorizationLimitWindow}
+			// Never a hard lock-out: keys are attacker-choosable (a bogus
+			// client_id per request), so a full map would let one source
+			// refuse every new legitimate client. Evict the oldest window.
+			l.evictOldest()
 		}
 		window = deviceAuthorizationWindow{started: now}
 	}
@@ -114,5 +117,19 @@ func (l *deviceAuthorizationLimiter) cleanup(now time.Time) {
 		if !now.Before(window.started.Add(deviceAuthorizationLimitWindow)) {
 			delete(l.windows, key)
 		}
+	}
+}
+
+func (l *deviceAuthorizationLimiter) evictOldest() {
+	var oldestKey string
+	var oldest time.Time
+	first := true
+	for key, window := range l.windows {
+		if first || window.started.Before(oldest) {
+			oldestKey, oldest, first = key, window.started, false
+		}
+	}
+	if !first {
+		delete(l.windows, oldestKey)
 	}
 }
