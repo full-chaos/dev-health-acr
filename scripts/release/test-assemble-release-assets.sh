@@ -24,6 +24,7 @@ mv "$tmp/binary-SHA256SUMS" "$tmp/binary/SHA256SUMS"
 
 for product in acr-api acr-mcp; do
   printf '%s image\n' "$product" >"$tmp/container/${product}_1.2.3_linux_multiarch.oci.tar"
+  printf '%s scan\n' "$product" >"$tmp/container/${product}-amd64-trivy.json"
 done
 jq -cn --arg commit "$commit" \
   '{schema_version:"container_release_manifest.v1",tag:"v1.2.3",version:"1.2.3",commit:$commit,date:"2026-07-23T00:00:00Z",images:[{product:"acr-api"},{product:"acr-mcp"}]}' \
@@ -45,7 +46,30 @@ mv "$tmp/CONTAINER-SHA256SUMS" "$tmp/container/CONTAINER-SHA256SUMS"
 test -f "$tmp/output/SHA256SUMS"
 if grep -F '  SHA256SUMS' "$tmp/output/SHA256SUMS"; then exit 1; fi
 (cd "$tmp/output" && shasum -a 256 --check SHA256SUMS)
-test "$(find "$tmp/output" -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 15
+test "$(find "$tmp/output" -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 19
+
+# CHAOS-6236: per-product manifests. The fixture only has product-named OCI
+# archives, so each manifest is exactly that one line: names, sums and
+# product isolation are all asserted against the combined manifest.
+for product in acr-api acr-mcp; do
+  other=acr-mcp; [[ "$product" == acr-mcp ]] && other=acr-api
+  test -f "$tmp/output/${product}-SHA256SUMS"
+  (cd "$tmp/output" && shasum -a 256 --check "${product}-SHA256SUMS")
+  test "$(cat "$tmp/output/${product}-SHA256SUMS")" = "$(grep -E "  ${product}[_-]" "$tmp/output/SHA256SUMS")"
+  test "$(wc -l <"$tmp/output/${product}-SHA256SUMS" | tr -d ' ')" -eq 2
+  if grep -F "$other" "$tmp/output/${product}-SHA256SUMS"; then exit 1; fi
+  if grep -E 'SHA256SUMS|release-manifest' "$tmp/output/${product}-SHA256SUMS"; then exit 1; fi
+  if grep -F "  ${product}-SHA256SUMS" "$tmp/output/SHA256SUMS"; then exit 1; fi
+done
+
+# Determinism: a second assembly of the same inputs is byte-identical.
+mkdir "$tmp/output-again"
+"$root/scripts/release/assemble-release-assets.sh" \
+  --binary "$tmp/binary" --container "$tmp/container" --output "$tmp/output-again" \
+  --tag v1.2.3 --version 1.2.3 --commit "$commit"
+for f in SHA256SUMS acr-api-SHA256SUMS acr-mcp-SHA256SUMS; do
+  cmp "$tmp/output/$f" "$tmp/output-again/$f"
+done
 
 main_commit=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 main_version="1.2.4-main.$main_commit"
@@ -105,5 +129,43 @@ if "$root/scripts/release/assemble-release-assets.sh" \
   --commit "$commit"; then
   exit 1
 fi
+
+# product-manifest.sh against the production naming pattern. This is the
+# function both the assembler and the publisher's verification use, so the
+# publisher's "exactly the product's lines" comparison is exercised here too.
+pm="$root/scripts/release/product-manifest.sh"
+v=0.1.1-main.$commit
+{
+  for p in acr-api acr-mcp; do
+    for t in linux_amd64.tar.gz linux_arm64.tar.gz darwin_amd64.tar.gz darwin_arm64.tar.gz windows_amd64.zip; do
+      printf '%064d  %s_%s_%s\n' 1 "$p" "$v" "$t"
+      printf '%064d  %s_%s_%s.spdx.json\n' 2 "$p" "$v" "$t"
+    done
+    printf '%064d  %s_%s_linux_multiarch.oci.tar\n' 3 "$p" "$v"
+    for a in amd64 arm64; do
+      printf '%064d  %s-%s.spdx.json\n' 4 "$p" "$a"
+      printf '%064d  %s-%s-trivy.json\n' 5 "$p" "$a"
+    done
+  done
+  printf '%064d  acr-mcpx_%s_linux_amd64.tar.gz\n' 6 "$v"
+  printf '%064d  container-release-manifest.json\n' 7
+  printf '%064d  release-manifest.json\n' 8
+  printf '%064d  trivy-db-metadata.json\n' 9
+} | LC_ALL=C sort -k2 >"$tmp/prod-SHA256SUMS"
+"$pm" acr-mcp "$tmp/prod-SHA256SUMS" >"$tmp/prod-mcp"
+test "$(wc -l <"$tmp/prod-mcp" | tr -d ' ')" -eq 15
+if grep -E 'acr-api|acr-mcpx|manifest|trivy-db' "$tmp/prod-mcp"; then exit 1; fi
+"$pm" acr-api "$tmp/prod-SHA256SUMS" >"$tmp/prod-api"
+test "$(wc -l <"$tmp/prod-api" | tr -d ' ')" -eq 15
+if grep -E 'acr-mcp|manifest|trivy-db' "$tmp/prod-api"; then exit 1; fi
+"$pm" acr-mcp "$tmp/prod-SHA256SUMS" | cmp - "$tmp/prod-mcp"
+# A manifest that omits a matching line must differ from the derived one,
+# which is what makes the publisher refuse it (codex r1 P1).
+sed '3d' "$tmp/prod-api" >"$tmp/prod-api-omitted"
+if cmp -s "$tmp/prod-api-omitted" <("$pm" acr-api "$tmp/prod-SHA256SUMS"); then exit 1; fi
+# No matching line, bad product, missing file: refused.
+if "$pm" acr-none "$tmp/prod-SHA256SUMS" >/dev/null; then exit 1; fi
+if "$pm" 'bad product' "$tmp/prod-SHA256SUMS" >/dev/null 2>&1; then exit 1; fi
+if "$pm" acr-mcp "$tmp/nope" >/dev/null 2>&1; then exit 1; fi
 
 printf 'release assembly fixture passed\n'
