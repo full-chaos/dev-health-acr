@@ -233,16 +233,12 @@ verify_downloaded_release() {
       --certificate-oidc-issuer "$issuer" >/dev/null
     (cd "$dir" && sha256sum --check "${product}-SHA256SUMS")
     test -s "$dir/${product}-SHA256SUMS" || fail "$label ${product}-SHA256SUMS is empty"
-    # Every per-product line must be a line of the combined manifest, and only
-    # that product's files may appear in it.
-    if grep -Fvx -f "$dir/SHA256SUMS" "$dir/${product}-SHA256SUMS" >/dev/null; then
-      fail "$label ${product}-SHA256SUMS lists a line the combined SHA256SUMS does not"
-    fi
-    if awk -v a="${product}_" -v b="${product}-" \
-      '{ n = substr($0, index($0, "  ") + 2); if (index(n, a) != 1 && index(n, b) != 1) bad = 1 } END { exit !bad }' \
-      "$dir/${product}-SHA256SUMS"; then
-      fail "$label ${product}-SHA256SUMS lists a file of another product"
-    fi
+    # The manifest must be EXACTLY the product's lines of the combined
+    # manifest: no extra line, no other product's file, and no omitted file.
+    "$(dirname "$0")/product-manifest.sh" "$product" "$dir/SHA256SUMS" >"$tmp/${label}-${product}-expected" \
+      || fail "$label combined SHA256SUMS has no ${product} files"
+    cmp "$tmp/${label}-${product}-expected" "$dir/${product}-SHA256SUMS" >/dev/null \
+      || fail "$label ${product}-SHA256SUMS is not exactly the ${product} lines of the combined SHA256SUMS"
   done
   {
     printf '%s\n' SHA256SUMS "$bundle_name"
@@ -270,6 +266,10 @@ check_sums "$release_dir"
 for product in "${products[@]}"; do
   test -f "$release_dir/${product}-SHA256SUMS" || fail "${product}-SHA256SUMS is missing"
   (cd "$release_dir" && sha256sum --check "${product}-SHA256SUMS")
+  "$(dirname "$0")/product-manifest.sh" "$product" "$release_dir/SHA256SUMS" >"$tmp/${product}-local-expected" \
+    || fail "combined SHA256SUMS has no ${product} files"
+  cmp "$tmp/${product}-local-expected" "$release_dir/${product}-SHA256SUMS" >/dev/null \
+    || fail "${product}-SHA256SUMS is not exactly the ${product} lines of the combined SHA256SUMS"
 done
 
 jq -e --arg version "$version" --arg commit "$commit" '

@@ -256,6 +256,8 @@ grep -F 'cosign sign-blob' "$root/scripts/release/publish-ci-release.sh" | grep 
 grep -F 'products=(acr-api acr-mcp)' "$root/scripts/release/publish-ci-release.sh" >/dev/null
 grep -F -- '--bundle "$release_dir/${product}-SHA256SUMS.sigstore.json" --yes' "$root/scripts/release/publish-ci-release.sh" >/dev/null
 grep -F 'product_manifests=(acr-api acr-mcp)' "$root/scripts/release/assemble-release-assets.sh" >/dev/null
+grep -F 'product-manifest.sh' "$root/scripts/release/assemble-release-assets.sh" >/dev/null
+test "$(grep -c 'product-manifest.sh' "$root/scripts/release/publish-ci-release.sh")" -ge 2
 grep -F 'release_tag="main-$commit"' "$root/scripts/release/publish-ci-release.sh" >/dev/null
 grep -F 'release create "$release_tag"' "$root/scripts/release/publish-ci-release.sh" >/dev/null
 grep -F 'releases/tags/$release_tag' "$root/scripts/release/publish-ci-release.sh" >/dev/null
