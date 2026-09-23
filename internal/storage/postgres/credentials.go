@@ -232,12 +232,19 @@ func scanCredential(row scanner) (contractsv1.ClientCredential, error) {
 }
 
 // marshalJSONStringArray encodes a []string for a `JSONB NOT NULL` column
-// carrying a `CHECK (jsonb_typeof(col) = 'array')` constraint (every such
-// column in this schema: oauth_clients.redirect_uris, device_authorizations'
-// repository_hints/authorized_repository_scopes/authorized_scopes,
-// client_credentials' repository_scopes/scopes). encoding/json marshals a
-// nil []string as the JSON literal `null`, whose jsonb_typeof is "null", not
-// "array" -- every one of those CHECK constraints then rejects the row, and
+// carrying a `CHECK (jsonb_typeof(col) = 'array')` constraint. Seven columns
+// across four tables share this exact shape: oauth_clients.redirect_uris,
+// device_authorizations' repository_hints/authorized_repository_scopes/
+// authorized_scopes, client_credentials' repository_scopes/scopes, and
+// workload_bindings.repository_scopes (migration 0030). Every INSERT/UPDATE
+// call site in this package touching one of the first six goes through this
+// helper. workload_bindings.repository_scopes is the seventh: its adapter
+// (workload_bindings.go) only ever SELECTs the column, with no Go
+// INSERT/UPDATE call site of its own to fix -- it carries the identical
+// constraint but nothing in this package can put a bad value in it.
+// encoding/json marshals a nil []string as the JSON literal `null`, whose
+// jsonb_typeof is "null", not "array" -- every one of those CHECK
+// constraints then rejects the row, and
 // the caller sees a generic wrapped/sanitized database error with no hint
 // this is why (CHAOS-6233: a device-only OAuth client, which legitimately
 // has zero redirect_uris, failed exactly this way). This is the single seam
