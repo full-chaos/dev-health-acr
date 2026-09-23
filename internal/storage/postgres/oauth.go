@@ -48,7 +48,7 @@ const oauthClientColumns = `client_id, client_name, redirect_uris, created_at`
 const oauthAuthorizationRequestColumns = `
 	handle_hash, device_code_hash, client_id, client_kind, redirect_uri,
 	code_challenge, resource, scope, state, created_at, expires_at,
-	code_hash, code_expires_at, consumed_at`
+	code_hash, code_expires_at, consumed_at, bound_org_id, bound_subject`
 
 const oauthDeviceGrantColumns = `device_code_hash, client_id, client_kind, resource, scope, created_at, expires_at`
 
@@ -103,7 +103,7 @@ func (s *OAuthStore) CreateAuthorizationRequest(ctx context.Context, request sto
 	}
 	_, err := s.DB.ExecContext(ctx, `
 INSERT INTO acr.oauth_authorization_requests (`+oauthAuthorizationRequestColumns+`)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULL, NULL, NULL)`,
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULL, NULL, NULL, NULL, NULL)`,
 		request.HandleHash.String(), request.DeviceCodeHash.String(), request.ClientID, request.ClientKind,
 		request.RedirectURI, request.CodeChallenge, request.Resource, request.Scope, request.State,
 		request.CreatedAt, request.ExpiresAt,
@@ -306,11 +306,12 @@ func scanOAuthAuthorizationRequest(row scanner) (storage.OAuthAuthorizationReque
 		codeHash                   sql.NullString
 		codeExpiresAt              sql.NullTime
 		consumedAt                 sql.NullTime
+		boundOrgID, boundSubject   sql.NullString
 	)
 	err := row.Scan(
 		&handleHash, &deviceCodeHash, &request.ClientID, &request.ClientKind, &request.RedirectURI,
 		&request.CodeChallenge, &request.Resource, &request.Scope, &request.State,
-		&request.CreatedAt, &request.ExpiresAt, &codeHash, &codeExpiresAt, &consumedAt,
+		&request.CreatedAt, &request.ExpiresAt, &codeHash, &codeExpiresAt, &consumedAt, &boundOrgID, &boundSubject,
 	)
 	if err != nil {
 		return storage.OAuthAuthorizationRequest{}, err
@@ -325,6 +326,7 @@ func scanOAuthAuthorizationRequest(row scanner) (storage.OAuthAuthorizationReque
 		return storage.OAuthAuthorizationRequest{}, fmt.Errorf("decode oauth authorization request device code: %w", err)
 	}
 	request.DeviceCodeHash = parsedDeviceCode
+	request.BoundOrgID, request.BoundSubject = boundOrgID.String, boundSubject.String
 	if codeHash.Valid {
 		parsedCode, err := storage.ParseOAuthSecretHash(codeHash.String)
 		if err != nil {

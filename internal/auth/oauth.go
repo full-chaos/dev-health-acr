@@ -529,7 +529,7 @@ func (OAuthConsentDecision) GoString() string { return oauthConsentDecisionRedac
 // is also returned, so the approving user can finish it; the consent
 // authority accepts that approval again only from the same user
 // (ApproveForOAuth), and a request with a code is never returned.
-func (s *OAuthService) pendingConsent(ctx context.Context, handle string, resumable bool) (storage.OAuthAuthorizationRequest, error) {
+func (s *OAuthService) pendingConsent(ctx context.Context, handle string, principal storage.Principal, resumable bool) (storage.OAuthAuthorizationRequest, error) {
 	if !validOAuthHandle(handle) {
 		return storage.OAuthAuthorizationRequest{}, oauthError(OAuthConsentCodeInvalid, oauthvocab.OutcomeInvalidRequest, false)
 	}
@@ -539,6 +539,9 @@ func (s *OAuthService) pendingConsent(ctx context.Context, handle string, resuma
 	}
 	if err != nil {
 		return storage.OAuthAuthorizationRequest{}, fmt.Errorf("%w: read authorization request", ErrOAuthUnavailable)
+	}
+	if err := refuseOtherConsentUser(request, principal); err != nil {
+		return storage.OAuthAuthorizationRequest{}, err
 	}
 	if request.CodeHash != nil {
 		return request, oauthError(OAuthConsentCodeCompleted, oauthvocab.OutcomeAlreadyCompleted, false)
@@ -575,6 +578,18 @@ func validOAuthHandle(handle string) bool {
 	return err == nil
 }
 
+// refuseOtherConsentUser refuses a user the request is already bound to
+// someone else, BEFORE any state check: a non-owner must not learn whether the
+// handle is completed, expired or pending, so it gets the unknown-handle
+// refusal. An invalid principal gets it too.
+func refuseOtherConsentUser(request storage.OAuthAuthorizationRequest, principal storage.Principal) error {
+	if !validDeviceApprovalPrincipal(principal) ||
+		(request.BoundSubject != "" && (request.BoundOrgID != principal.OrgID || request.BoundSubject != principal.Subject)) {
+		return oauthError(OAuthConsentCodeInvalid, oauthvocab.OutcomeInvalidRequest, false)
+	}
+	return nil
+}
+
 // bindConsentUser binds a request to the signed-in web user who first opens
 // it (preview, approve or deny) and refuses every other user afterwards. A
 // login is started before anyone signs in, so the request has no owner until
@@ -599,7 +614,7 @@ func (s *OAuthService) bindConsentUser(ctx context.Context, request storage.OAut
 // ConsentRequest returns what the web consent page shows for an undecided
 // request, and binds it to the signed-in user.
 func (s *OAuthService) ConsentRequest(ctx context.Context, handle string, principal storage.Principal) (OAuthConsentRequest, string, error) {
-	request, err := s.pendingConsent(ctx, handle, true)
+	request, err := s.pendingConsent(ctx, handle, principal, true)
 	if err != nil {
 		return OAuthConsentRequest{}, request.ClientKind, err
 	}
@@ -659,7 +674,7 @@ func safeRedirectOrigin(raw string) string {
 // later decision is already_completed. If attaching the code fails after the
 // approval was recorded, the same user can approve again to finish.
 func (s *OAuthService) ApproveConsent(ctx context.Context, handle string, principal storage.Principal, repositoryScopes []string) (OAuthConsentDecision, error) {
-	request, err := s.pendingConsent(ctx, handle, true)
+	request, err := s.pendingConsent(ctx, handle, principal, true)
 	if err != nil {
 		return OAuthConsentDecision{ClientKind: request.ClientKind}, err
 	}
@@ -686,7 +701,7 @@ func (s *OAuthService) ApproveConsent(ctx context.Context, handle string, princi
 // DenyConsent records the signed-in user's denial; the browser returns to the
 // client with error=access_denied.
 func (s *OAuthService) DenyConsent(ctx context.Context, handle string, principal storage.Principal) (OAuthConsentDecision, error) {
-	request, err := s.pendingConsent(ctx, handle, false)
+	request, err := s.pendingConsent(ctx, handle, principal, false)
 	if err != nil {
 		return OAuthConsentDecision{ClientKind: request.ClientKind}, err
 	}

@@ -18,7 +18,6 @@ type OAuthStore struct {
 	byDeviceCode map[storage.DeviceCodeHash]storage.OAuthSecretHash
 	byCode       map[storage.OAuthSecretHash]storage.OAuthSecretHash
 	deviceGrants map[storage.DeviceCodeHash]storage.OAuthDeviceGrant
-	bound        map[storage.OAuthSecretHash][2]string
 }
 
 // NewOAuthStore constructs an OAuthStore. now must be non-nil.
@@ -33,12 +32,11 @@ func NewOAuthStore(now func() time.Time) *OAuthStore {
 		byDeviceCode: make(map[storage.DeviceCodeHash]storage.OAuthSecretHash),
 		byCode:       make(map[storage.OAuthSecretHash]storage.OAuthSecretHash),
 		deviceGrants: make(map[storage.DeviceCodeHash]storage.OAuthDeviceGrant),
-		bound:        make(map[storage.OAuthSecretHash][2]string),
 	}
 }
 
 func (s *OAuthStore) ready(ctx context.Context) error {
-	if s == nil || s.now == nil || s.clients == nil || s.byHandle == nil || s.byDeviceCode == nil || s.byCode == nil || s.deviceGrants == nil || s.bound == nil || storage.IsNil(ctx) {
+	if s == nil || s.now == nil || s.clients == nil || s.byHandle == nil || s.byDeviceCode == nil || s.byCode == nil || s.deviceGrants == nil || storage.IsNil(ctx) {
 		return storage.ErrInvalidOAuthClient
 	}
 	return ctx.Err()
@@ -131,11 +129,12 @@ func (s *OAuthStore) BindAuthorizationRequestUser(ctx context.Context, handle st
 	if _, exists := s.byHandle[handle]; !exists {
 		return storage.ErrNotFound
 	}
-	bound, owned := s.bound[handle]
-	if owned && bound != [2]string{orgID, subject} {
+	request := s.byHandle[handle]
+	if request.BoundSubject != "" && (request.BoundOrgID != orgID || request.BoundSubject != subject) {
 		return storage.ErrConflict
 	}
-	s.bound[handle] = [2]string{orgID, subject}
+	request.BoundOrgID, request.BoundSubject = orgID, subject
+	s.byHandle[handle] = request
 	return nil
 }
 

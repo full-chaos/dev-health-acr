@@ -498,6 +498,10 @@ func TestOAuthStore_BindAuthorizationRequestUser_firstUserWinsUnderConcurrency(t
 	var org, subject string
 	require.NoError(t, db.QueryRowContext(ctx, "SELECT bound_org_id, bound_subject FROM acr.oauth_authorization_requests WHERE handle_hash = $1", created.HandleHash.String()).Scan(&org, &subject))
 	require.Equal(t, "org_1", org)
+	fetched, err := store.GetAuthorizationRequest(ctx, created.HandleHash)
+	require.NoError(t, err)
+	require.Equal(t, org, fetched.BoundOrgID, "reads expose the binding so the service can refuse non-owners before any state check")
+	require.Equal(t, subject, fetched.BoundSubject)
 	require.NoError(t, store.BindAuthorizationRequestUser(ctx, created.HandleHash, org, subject), "the bound user may bind again")
 	require.ErrorIs(t, store.BindAuthorizationRequestUser(ctx, created.HandleHash, "org_2", subject), storage.ErrConflict, "same subject in another org is another user")
 }

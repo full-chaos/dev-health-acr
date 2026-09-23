@@ -107,6 +107,10 @@ type OAuthAuthorizationRequest struct {
 	CodeHash       *OAuthSecretHash
 	CodeExpiresAt  *time.Time
 	ConsumedAt     *time.Time
+	// BoundOrgID and BoundSubject are the signed-in web user the request is
+	// bound to (BindAuthorizationRequestUser); both empty until bound.
+	BoundOrgID   string
+	BoundSubject string
 }
 
 // OAuthDeviceGrant is what POST /device_authorization stores alongside its

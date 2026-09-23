@@ -804,4 +804,10 @@ func TestOAuthConsentDenyIsBoundToTheUserWhoPreviewed(t *testing.T) {
 	if recorder.Code != http.StatusOK || redirect.Query().Get("error") != "access_denied" {
 		t.Fatalf("the bound user's deny: %d %v", recorder.Code, body)
 	}
+	// After the owner decided, a non-owner still sees the unknown-handle
+	// refusal, never the completed state (409).
+	oauthConsentSubject = "user_456"
+	if recorder, body := serveConsent(app, consentRequest(t, map[string]any{"action": "preview", "handle": handle}, []string{"*"}, "b4")); recorder.Code != http.StatusBadRequest || body["error"] != "invalid_request" {
+		t.Fatalf("non-owner preview of a completed request: %d %v, want 400 invalid_request", recorder.Code, body)
+	}
 }

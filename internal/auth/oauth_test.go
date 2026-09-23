@@ -956,6 +956,33 @@ func TestOAuthConsentIsBoundToTheFirstUserWhoOpensIt(t *testing.T) {
 		t.Fatalf("first user's deny = %+v, %v", decision, err)
 	}
 
+	// A non-owner learns nothing about the request's state: after the owner
+	// decided it (completed), and after it expired, the other user still gets
+	// the unknown-handle refusal, while the owner gets the real state.
+	if _, _, err := h.oauth.ConsentRequest(ctx, authorization.Handle, second); outcomeOf(err) != oauthvocab.OutcomeInvalidRequest {
+		t.Fatalf("non-owner preview of a completed request = %v, want invalid_request", err)
+	}
+	if _, err := h.oauth.ApproveConsent(ctx, authorization.Handle, second, repos); outcomeOf(err) != oauthvocab.OutcomeInvalidRequest {
+		t.Fatalf("non-owner approve of a completed request = %v, want invalid_request", err)
+	}
+	if _, _, err := h.oauth.ConsentRequest(ctx, authorization.Handle, first); outcomeOf(err) != oauthvocab.OutcomeAlreadyCompleted {
+		t.Fatalf("owner preview of a completed request = %v, want already_completed", err)
+	}
+	expiring, err := h.oauth.Authorize(ctx, OAuthAuthorizeRequest{ResponseType: "code", ClientID: clientID, RedirectURI: testRedirect, CodeChallenge: challenge, CodeChallengeMethod: "S256"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := h.oauth.ConsentRequest(ctx, expiring.Handle, first); err != nil {
+		t.Fatal(err)
+	}
+	h.now = h.now.Add(storage.DeviceAuthorizationTTL + time.Second)
+	if _, _, err := h.oauth.ConsentRequest(ctx, expiring.Handle, second); outcomeOf(err) != oauthvocab.OutcomeInvalidRequest {
+		t.Fatalf("non-owner preview of an expired request = %v, want invalid_request", err)
+	}
+	if _, _, err := h.oauth.ConsentRequest(ctx, expiring.Handle, first); outcomeOf(err) != oauthvocab.OutcomeExpired {
+		t.Fatalf("owner preview of an expired request = %v, want expired", err)
+	}
+
 	// No preview: whoever decides first binds the request, and only they
 	// decide it afterwards (here a deny by the second user).
 	direct, err := h.oauth.Authorize(ctx, OAuthAuthorizeRequest{ResponseType: "code", ClientID: clientID, RedirectURI: testRedirect, CodeChallenge: challenge, CodeChallengeMethod: "S256"})
