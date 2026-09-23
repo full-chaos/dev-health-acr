@@ -432,16 +432,27 @@ def weight(d):
         if 'helm.sh/hook-weight' in line:
             return int(line.split(':')[-1].strip().strip('"'))
     return None
+# codex round cf-6277-r3 P3: hook-weight only orders Jobs WITHIN the same
+# hook phase -- Helm runs every pre-install,pre-upgrade hook (by weight),
+# THEN every post-install,post-upgrade hook (by weight), as two separate
+# passes. A weight comparison alone would pass even if the runtime-acl Job
+# were moved to post-install,post-upgrade (it would then run AFTER the
+# Deployment is already live, not "after migration" in any meaningful
+# sense) -- reproduced by the reviewer by changing only the hook phase.
+# Require the exact phase string on both Jobs, not just a relative weight.
+REQUIRED_PHASE = '"helm.sh/hook": pre-install,pre-upgrade'
 migration_weight = runtime_acl_weight = None
-runtime_acl_command_ok = False
+runtime_acl_command_ok = migration_phase_ok = runtime_acl_phase_ok = False
 for d in docs:
     is_job = '\nkind: Job' in ('\n'+d) or d.lstrip().startswith('kind: Job')
     if not is_job:
         continue
     if 'component: migration' in d and 'grant-runtime-acl' not in d:
         migration_weight = weight(d)
+        migration_phase_ok = REQUIRED_PHASE in d
     if 'grant-runtime-acl' in d:
         runtime_acl_weight = weight(d)
+        runtime_acl_phase_ok = REQUIRED_PHASE in d
         # codex round cf-6277-r2 P3: a bare 'grant-runtime-acl' in d
         # substring-matches ANY command, including a bogus binary path --
         # the actual rendered command line is
@@ -455,6 +466,8 @@ if not runtime_acl_command_ok:
     print("  FAIL runtime-acl-order: the grant-runtime-acl Job's command is not exactly [\"/usr/local/bin/acr-migrate\", \"grant-runtime-acl\"]", file=sys.stderr); sys.exit(1)
 if migration_weight is None:
     print("  FAIL runtime-acl-order: no migration Job found to order against", file=sys.stderr); sys.exit(1)
+if not migration_phase_ok or not runtime_acl_phase_ok:
+    print(f"  FAIL runtime-acl-order: both the migration Job and the runtime-acl Job must carry the exact hook {REQUIRED_PHASE!r} (migration_ok={migration_phase_ok} runtime_acl_ok={runtime_acl_phase_ok})", file=sys.stderr); sys.exit(1)
 if not (migration_weight < runtime_acl_weight):
     print(f"  FAIL runtime-acl-order: migration Job weight ({migration_weight}) must be MORE NEGATIVE than the runtime-acl Job weight ({runtime_acl_weight}) so migration runs first", file=sys.stderr); sys.exit(1)
 print(f"  ok   runtime-acl-order: grant-runtime-acl Job present, runs acr-migrate, ordered after migration (weights {migration_weight} < {runtime_acl_weight})")

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -130,6 +132,96 @@ func TestGrantRuntimeACL_deviceGrantsRoundTrip(t *testing.T) {
 	require.Contains(t, err.Error(), "permission denied")
 }
 
+// TestGrantRuntimeACL_reapplyingNeverInterruptsAConcurrentReader is codex
+// round cf-6277-r3's P1 regression test, executed repro: an earlier
+// version of grantRuntimeACL did REVOKE then GRANT as two separate,
+// separately-committed statements -- during a rolling Helm upgrade,
+// already-running application pods holding the SAME already-granted role
+// could see a real, if narrow, window of permission-denied reads between
+// the REVOKE committing and the GRANT committing. The round's own
+// reproduction observed 201 of 4953 concurrent reads fail across 50
+// reapplications. Fixed by removing the REVOKE entirely (a bare,
+// idempotent GRANT is the correct fix, not making REVOKE+GRANT atomic --
+// this function never has a legitimate reason to narrow the role's
+// privileges). This test reapplies the grant repeatedly while a separate
+// connection, using the SAME already-granted runtime role, reads
+// continuously in a tight loop -- proving zero permission-denied reads
+// occur at any point.
+func TestGrantRuntimeACL_reapplyingNeverInterruptsAConcurrentReader(t *testing.T) {
+	ctx := context.Background()
+	migrationDSN := newTestPostgresDSN(t, ctx)
+	require.NoError(t, run(ctx, []string{"up"}, testMigrationEnvironment(migrationDSN), &bytes.Buffer{}))
+
+	adminDB, err := pgx.ParseConfig(migrationDSN)
+	require.NoError(t, err)
+	rawDB := stdlib.OpenDB(*adminDB)
+	t.Cleanup(func() { require.NoError(t, rawDB.Close()) })
+	_, err = rawDB.ExecContext(ctx, `CREATE ROLE reapply_reader_role LOGIN PASSWORD 'x'`)
+	require.NoError(t, err)
+	_, err = rawDB.ExecContext(ctx, `GRANT CONNECT ON DATABASE acr TO reapply_reader_role`)
+	require.NoError(t, err)
+	_, err = rawDB.ExecContext(ctx, `GRANT USAGE ON SCHEMA acr TO reapply_reader_role`)
+	require.NoError(t, err)
+
+	runtimeDSN := "postgres://reapply_reader_role:x@runtime-dsn-is-never-dialed.invalid:5432/acr"
+	// Grant once up front, matching a real already-granted trial/prod
+	// environment -- the interruption this test guards against is on the
+	// REAPPLY path, not the first grant.
+	require.NoError(t, run(ctx, []string{"grant-runtime-acl"}, environment(map[string]string{
+		migrationDSNEnvironment: migrationDSN,
+		runtimeDSNEnvironment:   runtimeDSN,
+	}), &bytes.Buffer{}))
+
+	runtimeConfig, err := pgx.ParseConfig(migrationDSN)
+	require.NoError(t, err)
+	runtimeConfig.User = "reapply_reader_role"
+	runtimeConfig.Password = "x"
+	readerDB := stdlib.OpenDB(*runtimeConfig)
+	t.Cleanup(func() { require.NoError(t, readerDB.Close()) })
+
+	stop := make(chan struct{})
+	var permissionDenied atomic.Int64
+	var totalReads atomic.Int64
+	var readerWG sync.WaitGroup
+	readerWG.Add(1)
+	go func() {
+		defer readerWG.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			_, readErr := readerDB.ExecContext(ctx, `SELECT 1 FROM acr.oauth_device_grants LIMIT 0`)
+			totalReads.Add(1)
+			if readErr != nil {
+				if strings.Contains(readErr.Error(), "permission denied") {
+					permissionDenied.Add(1)
+				} else {
+					// A non-permission error (e.g. connection reset)
+					// would also be a real defect, but this test's own
+					// claim is narrowly about permission-denied reads.
+					require.NoError(t, readErr)
+				}
+			}
+		}
+	}()
+
+	const reapplications = 25
+	for i := 0; i < reapplications; i++ {
+		var output bytes.Buffer
+		require.NoError(t, run(ctx, []string{"grant-runtime-acl"}, environment(map[string]string{
+			migrationDSNEnvironment: migrationDSN,
+			runtimeDSNEnvironment:   runtimeDSN,
+		}), &output))
+	}
+	close(stop)
+	readerWG.Wait()
+
+	require.Positive(t, totalReads.Load(), "the concurrent reader goroutine must have actually run reads for this test to mean anything")
+	require.Zero(t, permissionDenied.Load(), "reapplying grant-runtime-acl must never interrupt an already-granted role's access (observed %d/%d permission-denied reads across %d reapplications)", permissionDenied.Load(), totalReads.Load(), reapplications)
+}
+
 // TestGrantRuntimeACL_acceptsRoleNamesWithHyphens is the codex round
 // cf-6277-r1 P1 regression test: an earlier version of grantRuntimeACL
 // additionally rejected any role name outside a narrow lowercase/underscore
@@ -188,29 +280,94 @@ func TestGrantRuntimeACL_acceptsRoleNamesWithHyphens(t *testing.T) {
 }
 
 // TestGrantRuntimeACL_rejectsMalformedRuntimeDSN proves grantRuntimeACL
-// fails closed rather than silently doing nothing or interpolating a bad
-// value when the runtime DSN cannot be parsed, or carries no username.
+// fails closed rather than silently doing nothing when the runtime DSN
+// cannot be parsed at all.
+//
+// codex round cf-6277-r3's P3, executed repro: a prior version of this
+// test also carried a "missing username" case asserting the plain
+// `role == ""` check in grant_runtime_acl.go fires -- but pgx.ParseConfig
+// implements the same fallback chain libpq/psql does: PGUSER, then the
+// OS user (os/user.Current()), so a real DSN with no explicit userinfo
+// NEVER actually parses to an empty User in practice (the round proved
+// this by setting PGUSER, which this test's own attempt to force it via
+// `t.Setenv("PGUSER", "")` also could not prevent -- pgx treats an EMPTY
+// PGUSER the same as an unset one and still falls through to the OS
+// user). The `role == ""` branch is therefore unreachable from any real
+// runtime DSN and is kept purely as defense in depth, not because a test
+// can drive it -- removing the false "proves rejection" claim is the fix,
+// not adding more environment manipulation that cannot work either.
+// TestGrantRuntimeACL_missingUsernameFallsBackToPGUSER (below) tests the
+// REAL behavior this DSN shape actually has.
 func TestGrantRuntimeACL_rejectsMalformedRuntimeDSN(t *testing.T) {
 	ctx := context.Background()
 	migrationDSN := newTestPostgresDSN(t, ctx)
 	require.NoError(t, run(ctx, []string{"up"}, testMigrationEnvironment(migrationDSN), &bytes.Buffer{}))
 
-	tests := []struct {
-		name       string
-		runtimeDSN string
-	}{
-		{name: "unparseable", runtimeDSN: "not a dsn at all"},
-		{name: "missing username", runtimeDSN: "postgres://runtime-dsn-is-never-dialed.invalid:5432/acr"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			err := run(ctx, []string{"grant-runtime-acl"}, environment(map[string]string{
-				migrationDSNEnvironment: migrationDSN,
-				runtimeDSNEnvironment:   test.runtimeDSN,
-			}), &bytes.Buffer{})
-			require.Error(t, err)
-		})
-	}
+	err := run(ctx, []string{"grant-runtime-acl"}, environment(map[string]string{
+		migrationDSNEnvironment: migrationDSN,
+		runtimeDSNEnvironment:   "not a dsn at all",
+	}), &bytes.Buffer{})
+	require.EqualError(t, err, "invalid runtime DSN")
+}
+
+// TestGrantRuntimeACL_missingUsernameFallsBackToPGUSER is codex round
+// cf-6277-r3's P3 regression test, testing the REAL, demonstrated
+// behavior of a runtime DSN with no explicit userinfo: pgx.ParseConfig
+// resolves the username from the PGUSER environment variable (libpq's own
+// fallback chain), so grant-runtime-acl operates on THAT role, not an
+// empty one. Documenting and pinning this (rather than leaving it as an
+// implicit, untested side effect) is the point -- an operator relying on
+// "no username in the DSN" to mean "rejected" would be wrong, and this
+// test is what would catch a future pgx upgrade changing that fallback.
+func TestGrantRuntimeACL_missingUsernameFallsBackToPGUSER(t *testing.T) {
+	ctx := context.Background()
+	migrationDSN := newTestPostgresDSN(t, ctx)
+	require.NoError(t, run(ctx, []string{"up"}, testMigrationEnvironment(migrationDSN), &bytes.Buffer{}))
+
+	adminDB, err := pgx.ParseConfig(migrationDSN)
+	require.NoError(t, err)
+	rawDB := stdlib.OpenDB(*adminDB)
+	t.Cleanup(func() { require.NoError(t, rawDB.Close()) })
+	_, err = rawDB.ExecContext(ctx, `CREATE ROLE pguser_fallback_role LOGIN PASSWORD 'x'`)
+	require.NoError(t, err)
+	_, err = rawDB.ExecContext(ctx, `GRANT CONNECT ON DATABASE acr TO pguser_fallback_role`)
+	require.NoError(t, err)
+	_, err = rawDB.ExecContext(ctx, `GRANT USAGE ON SCHEMA acr TO pguser_fallback_role`)
+	require.NoError(t, err)
+
+	t.Setenv("PGUSER", "pguser_fallback_role")
+	var output bytes.Buffer
+	err = run(ctx, []string{"grant-runtime-acl"}, environment(map[string]string{
+		migrationDSNEnvironment: migrationDSN,
+		runtimeDSNEnvironment:   "postgres://runtime-dsn-is-never-dialed.invalid:5432/acr",
+	}), &output)
+	require.NoError(t, err)
+	require.Contains(t, output.String(), "pguser_fallback_role", "grant-runtime-acl must operate on the PGUSER-resolved role, not silently do nothing")
+}
+
+// TestGrantRuntimeACL_parseErrorNeverLeaksTheRuntimeDSN is codex round
+// cf-6277-r3's second P1 regression test: a malformed runtime DSN
+// (unparseable by pgx for a reason unrelated to the username, e.g. a bad
+// connect_timeout) must never echo the DSN -- including any embedded
+// password -- into the returned error, which a Helm hook Job would print
+// to Kubernetes' own Job logs.
+func TestGrantRuntimeACL_parseErrorNeverLeaksTheRuntimeDSN(t *testing.T) {
+	ctx := context.Background()
+	migrationDSN := newTestPostgresDSN(t, ctx)
+	require.NoError(t, run(ctx, []string{"up"}, testMigrationEnvironment(migrationDSN), &bytes.Buffer{}))
+
+	const secretMarker = "review-secret-marker-9f3a1c"
+	runtimeDSN := "postgres://acr_mcp_runtime:" + secretMarker + "@runtime-dsn-is-never-dialed.invalid:5432/acr?connect_timeout=not-a-number"
+
+	err := run(ctx, []string{"grant-runtime-acl"}, environment(map[string]string{
+		migrationDSNEnvironment: migrationDSN,
+		runtimeDSNEnvironment:   runtimeDSN,
+	}), &bytes.Buffer{})
+
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), secretMarker, "the parse error must never echo the runtime DSN's password")
+	require.NotContains(t, err.Error(), "connect_timeout", "the parse error must never echo the raw DSN text at all")
+	require.Equal(t, "invalid runtime DSN", err.Error())
 }
 
 // TestGrantRuntimeACL_requiresRuntimeDSNEnvironment proves the new verb

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -38,15 +39,34 @@ import (
 // predates this range or only alters existing tables (0041), so no other
 // table needs the same fix here (see this PR's RISK-NOTES).
 //
-// REVOKE-then-GRANT, not a bare GRANT, makes this idempotent: safe on a
-// fresh install, and equally safe re-run against trial/prod, where the
-// grant already exists from the hand-applied fix -- it converges to the
-// identical ACL either way instead of erroring on a privilege that is
-// already present.
+// A bare, repeatable GRANT (not REVOKE-then-GRANT) makes this idempotent
+// AND safe to run against a role that is already serving live traffic:
+// codex round cf-6277-r3's P1, executed repro, found that a separate
+// REVOKE-then-GRANT (two autocommitted statements) opens a real window,
+// during a rolling Helm upgrade, where already-running application pods
+// hold the same already-granted role and see permission-denied reads
+// between the REVOKE committing and the GRANT committing -- 201 of 4953
+// concurrent reads failed in the reviewer's 50-reapplication reproduction.
+// Re-granting an already-held privilege is a no-op in Postgres (no error,
+// no interruption), so a bare GRANT is EQUALLY idempotent against
+// trial/prod (where the grant already exists from the hand-applied fix)
+// without ever narrowing the role's privileges first. This function has
+// no legitimate reason to ever REDUCE this role's privileges on this
+// table -- it exists only to ensure SELECT, INSERT are present -- so
+// there is no privilege-reduction case to make atomic either; removing it
+// is the fix, not a workaround.
 func grantRuntimeACL(ctx context.Context, db *sql.DB, runtimeDSN string, output io.Writer) error {
 	parsed, err := pgx.ParseConfig(runtimeDSN)
 	if err != nil {
-		return fmt.Errorf("parse runtime DSN: %w", err)
+		// codex round cf-6277-r3's P1, executed repro: pgx's own parse
+		// error echoes the offending DSN verbatim, INCLUDING the
+		// password, into this error -- which a Helm hook Job would then
+		// print to Kubernetes' own Job logs on any malformed runtime DSN
+		// (a wrong connect_timeout value was enough to trigger it).
+		// internal/runtime/postgres.Open's own DSN parse-error handling
+		// already established the pattern this follows: a fixed, generic
+		// message, NEVER err.Error() or a %w wrap of the raw pgx error.
+		return errors.New("invalid runtime DSN")
 	}
 	role := parsed.User
 	if role == "" {
@@ -71,12 +91,6 @@ func grantRuntimeACL(ctx context.Context, db *sql.DB, runtimeDSN string, output 
 	}
 	quotedRole := `"` + strings.ReplaceAll(role, `"`, `""`) + `"`
 
-	if _, err := db.ExecContext(ctx, fmt.Sprintf(
-		`REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.oauth_device_grants FROM %s`,
-		quotedRole,
-	)); err != nil {
-		return fmt.Errorf("revoke acr.oauth_device_grants privileges from %s: %w", role, err)
-	}
 	if _, err := db.ExecContext(ctx, fmt.Sprintf(
 		`GRANT SELECT, INSERT ON TABLE acr.oauth_device_grants TO %s`,
 		quotedRole,
