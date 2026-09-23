@@ -2,7 +2,11 @@ package postgres
 
 import (
 	"context"
+	"database/sql/driver"
 	"errors"
+	"fmt"
+	"io"
+	"net"
 	"testing"
 	"time"
 
@@ -121,4 +125,113 @@ func TestSanitizeDatabaseError_connectionFailureCarriesSafeErrorClass(t *testing
 	// the class name and a synthetic SQLSTATE bucket.
 	require.Empty(t, class.Constraint)
 	require.Empty(t, class.Table)
+}
+
+// TestSanitizeDatabaseError_connectionTimeoutCarriesSafeErrorClass is
+// codex round cf-6278-r2's P1 regression test, executed repro: a
+// dial-time TIMEOUT (the server ACCEPTS the TCP connection but never
+// completes the Postgres handshake, so pgx's own deadline fires) produces
+// a *pgconn.ConnectError that ALSO wraps context.DeadlineExceeded in its
+// chain. sanitizeDatabaseError's bare context.Canceled/DeadlineExceeded
+// short-circuits used to run BEFORE the connection classification, so this
+// shape returned a bare context.DeadlineExceeded with no class at all --
+// indistinguishable, in acr-api's logs, from an unrelated deadline.
+//
+// RED on baseline (before reordering the ConnectError check ahead of the
+// context.* short-circuits): errors.As found no DependencyErrorClass and
+// errors.Is(sanitized, storage.ErrUnavailable) was false too.
+func TestSanitizeDatabaseError_connectionTimeoutCarriesSafeErrorClass(t *testing.T) {
+	// Given a TCP listener that accepts connections but never speaks the
+	// Postgres protocol, so pgx's handshake hangs until its own deadline.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr == nil {
+			accepted <- conn
+		}
+	}()
+	t.Cleanup(func() {
+		select {
+		case conn := <-accepted:
+			_ = conn.Close()
+		default:
+		}
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	// When
+	dsn := "postgres://acr:acr@" + listener.Addr().String() + "/acr?sslmode=disable"
+	_, dialErr := pgx.Connect(ctx, dsn)
+	require.Error(t, dialErr)
+	var connErr *pgconn.ConnectError
+	require.True(t, errors.As(dialErr, &connErr), "the stalled handshake must surface as a real *pgconn.ConnectError")
+	require.True(t, errors.Is(dialErr, context.DeadlineExceeded), "the repro must be the deadline-wrapping shape this fix targets, not a plain refusal")
+	sanitized := sanitizeDatabaseError(dialErr)
+
+	// Then
+	require.ErrorIs(t, sanitized, storage.ErrUnavailable)
+	var class *storage.DependencyErrorClass
+	require.True(t, errors.As(sanitized, &class), "a real dial-time timeout must carry a storage.DependencyErrorClass")
+	require.Equal(t, "connection_failure", class.Class)
+	require.Equal(t, "08000", class.SQLState)
+}
+
+// TestSanitizeDatabaseError_connectionLostAfterEstablishmentCarriesSafeErrorClass
+// is the class sweep for codex rounds cf-6278-r1b and r2, which each found
+// ONE dial-time variant of "a connection failure classifies as nothing"
+// (a refusal, then a deadline-wrapped timeout). The remaining family
+// members are failures AFTER the connection was established -- the server
+// (or the network path to it) going away mid-query -- which are neither a
+// *pgconn.PgError (the server that would produce a SQLSTATE is exactly
+// what's gone) nor a *pgconn.ConnectError (dial-time only): a raw
+// *net.OpError (reset, broken pipe), the stream closing (io.EOF /
+// io.ErrUnexpectedEOF), and database/sql's own driver.ErrBadConn marker.
+// All must classify as connection_failure, each wrapped the way a real
+// caller's fmt.Errorf("...: %w", err) would wrap it.
+func TestSanitizeDatabaseError_connectionLostAfterEstablishmentCarriesSafeErrorClass(t *testing.T) {
+	// A real *net.OpError, produced by the standard library dialing a port
+	// nothing listens on -- not hand-authored.
+	_, dialErr := net.DialTimeout("tcp", "127.0.0.1:1", time.Second)
+	require.Error(t, dialErr)
+	var opErr *net.OpError
+	require.True(t, errors.As(dialErr, &opErr), "net.Dial's own failure must be a real *net.OpError")
+
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{name: "net.OpError", err: dialErr},
+		{name: "io.EOF", err: io.EOF},
+		{name: "io.ErrUnexpectedEOF", err: io.ErrUnexpectedEOF},
+		{name: "driver.ErrBadConn", err: driver.ErrBadConn},
+		{name: "wrapped net.OpError", err: fmt.Errorf("query: %w", dialErr)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sanitized := sanitizeDatabaseError(tc.err)
+
+			require.ErrorIs(t, sanitized, storage.ErrUnavailable)
+			var class *storage.DependencyErrorClass
+			require.True(t, errors.As(sanitized, &class), "a connection lost after establishment must carry a storage.DependencyErrorClass")
+			require.Equal(t, "connection_failure", class.Class)
+			require.Equal(t, "08006", class.SQLState)
+		})
+	}
+}
+
+// TestSanitizeDatabaseError_plainDeadlineStillReturnsBareDeadline proves
+// the reordering above did not change the pre-existing bare
+// context.DeadlineExceeded/Canceled behavior for errors that are NOT
+// connection errors -- e.g. a query whose caller-supplied context expired
+// mid-flight on an already-established connection.
+func TestSanitizeDatabaseError_plainDeadlineStillReturnsBareDeadline(t *testing.T) {
+	sanitized := sanitizeDatabaseError(context.DeadlineExceeded)
+	require.Equal(t, context.DeadlineExceeded, sanitized)
+	canceled := sanitizeDatabaseError(context.Canceled)
+	require.Equal(t, context.Canceled, canceled)
 }

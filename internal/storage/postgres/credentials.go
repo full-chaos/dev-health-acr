@@ -3,9 +3,12 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -272,6 +275,24 @@ func sanitizeDatabaseError(err error) error {
 	if err == nil || errors.Is(err, sql.ErrNoRows) || errors.Is(err, storage.ErrNotFound) || errors.Is(err, storage.ErrConflict) || errors.Is(err, storage.ErrUnavailable) {
 		return err
 	}
+	// codex round cf-6278-r2's P1, executed repro: a *pgconn.ConnectError
+	// caused by a dial-time TIMEOUT (as opposed to an immediate refusal)
+	// wraps context.DeadlineExceeded in its own chain -- so the bare
+	// context.Canceled/DeadlineExceeded short-circuits below, if checked
+	// FIRST, catch it before classifyDatabaseError ever runs, and the
+	// connection failure is misreported as a generic deadline with no
+	// db_error_class at all. A dial-time failure is a genuine dependency-
+	// unavailable condition (this repo's storage.ErrUnavailable shape),
+	// not the "caller's own context expired mid-query" condition the bare
+	// sentinels below exist for -- so it is classified BEFORE those checks
+	// run, regardless of what it also wraps.
+	var connErr *pgconn.ConnectError
+	if errors.As(err, &connErr) {
+		if class := classifyDatabaseError(err); class != nil {
+			return fmt.Errorf("%w: %w", storage.ErrUnavailable, class)
+		}
+		return storage.ErrUnavailable
+	}
 	if errors.Is(err, context.Canceled) {
 		return context.Canceled
 	}
@@ -316,7 +337,11 @@ var postgresErrorClassNames = map[string]string{
 }
 
 // classifyDatabaseError builds the safe classification CHAOS-6278's
-// dependency-failure logging needs from err. Handles two shapes:
+// dependency-failure logging needs from err. Handles these shapes, all of
+// which are the SAME class -- "a Postgres failure the driver hands back in
+// a shape other than a plain *pgconn.PgError" -- swept together rather
+// than one shape per codex round (rounds cf-6278-r1b and r2 each found a
+// different variant of this class):
 //
 //   - *pgconn.PgError: a real server-side SQLSTATE (a constraint violation,
 //     a permission denial once the connection succeeded, ...) -- classified
@@ -324,21 +349,28 @@ var postgresErrorClassNames = map[string]string{
 //     carries.
 //   - *pgconn.ConnectError: a dial-time failure (refused, timed out, DNS,
 //     TLS) -- the connection attempt itself never reached a point where
-//     Postgres could hand back a SQLSTATE at all (codex round cf-6278-r1b's
-//     P1, executed repro: a refused connection classified as nothing,
-//     indistinguishable from an unrelated unclassified failure). Classified
-//     under the SQL-standard "08" connection-exception class (SQLState
-//     "08000") even though no server ever produced that code, since that is
-//     the closed vocabulary's own bucket for exactly this failure shape.
+//     Postgres could hand back a SQLSTATE at all. Classified under the
+//     SQL-standard "08" connection-exception class (SQLState "08000") even
+//     though no server ever produced that code, since that is the closed
+//     vocabulary's own bucket for exactly this failure shape.
 //     ConnectError.Config (the attempted connection's own DSN) is
 //     DELIBERATELY never read here -- this repository never logs raw
 //     transports/DSNs (AGENTS.md), so only the class name is derived, never
 //     the address that failed.
+//   - a connection lost AFTER it was established (a broken pipe or reset
+//     mid-query, the server closing the stream, database/sql's own
+//     driver.ErrBadConn marker): the same "connection_failure" class,
+//     SQLState "08006" (Postgres's own name for it). None of these are a
+//     *pgconn.PgError (the server that would have produced a SQLSTATE is
+//     exactly what's gone) or a *pgconn.ConnectError (that type is
+//     dial-time only), so without this branch they classified as nothing.
 //
-// Anything else (context.Canceled/DeadlineExceeded are handled by the
-// caller before this is reached; any other error) returns nil -- "no class
-// available" -- so a caller's errors.As simply finds nothing rather than a
-// zero-value class with an empty SQLState.
+// Anything else returns nil -- "no class available" -- so a caller's
+// errors.As simply finds nothing rather than a zero-value class with an
+// empty SQLState. sanitizeDatabaseError's bare context.Canceled/
+// DeadlineExceeded short-circuits run AFTER a *pgconn.ConnectError check
+// but BEFORE this function is reached for everything else, so a plain
+// caller-context deadline is never misclassified here.
 func classifyDatabaseError(err error) *storage.DependencyErrorClass {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
@@ -357,6 +389,13 @@ func classifyDatabaseError(err error) *storage.DependencyErrorClass {
 	if errors.As(err, &connErr) {
 		return &storage.DependencyErrorClass{
 			SQLState: "08000",
+			Class:    "connection_failure",
+		}
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, driver.ErrBadConn) {
+		return &storage.DependencyErrorClass{
+			SQLState: "08006",
 			Class:    "connection_failure",
 		}
 	}
