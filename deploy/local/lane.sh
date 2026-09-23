@@ -229,9 +229,7 @@ lane_required_images() {
     dev-health-go-worker:latest \
     dev-health-go-scheduler:latest \
     dev-health-go-reconciler:latest \
-    dev-health-go-stream-ingest:latest \
-    dev-health-go-stream-external:latest \
-    dev-health-go-stream-pagerduty:latest \
+    dev-health-go-dho:latest \
     dev-health-go-worker-migrate:latest
 }
 
@@ -512,9 +510,9 @@ goWorkers:
     - { name: sync-provider, image: dev-health-go-worker:latest, resources: {requests: {cpu: 25m, memory: 128Mi}, limits: {cpu: "1", memory: 1Gi}}, queues: [sync_provider], queueConcurrency: {sync_provider: 2}, replicas: 0, terminationGracePeriodSeconds: 960, autoscaling: {enabled: false} }
     - { name: reconciler, image: dev-health-go-reconciler:latest, resources: {requests: {cpu: 25m, memory: 128Mi}, limits: {cpu: "1", memory: 1Gi}}, replicas: ${replicas}, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }
     - { name: scheduler, image: dev-health-go-scheduler:latest, resources: {requests: {cpu: 25m, memory: 128Mi}, limits: {cpu: "1", memory: 1Gi}}, replicas: ${replicas}, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }
-    - { name: stream-external, image: dev-health-go-stream-external:latest, resources: {requests: {cpu: 25m, memory: 128Mi}, limits: {cpu: "1", memory: 1Gi}}, runtimeProfile: external, replicas: ${replicas}, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }
-    - { name: stream-ingest, image: dev-health-go-stream-ingest:latest, resources: {requests: {cpu: 25m, memory: 128Mi}, limits: {cpu: "1", memory: 1Gi}}, runtimeProfile: ingest, replicas: ${replicas}, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }
-    - { name: stream-pagerduty, image: dev-health-go-stream-pagerduty:latest, resources: {requests: {cpu: 25m, memory: 128Mi}, limits: {cpu: "1", memory: 1Gi}}, runtimeProfile: pagerduty, replicas: ${replicas}, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }
+    - { name: stream-external, image: dev-health-go-dho:latest, subcommand: stream-runner, resources: {requests: {cpu: 25m, memory: 128Mi}, limits: {cpu: "1", memory: 1Gi}}, runtimeProfile: external, replicas: ${replicas}, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }
+    - { name: stream-ingest, image: dev-health-go-dho:latest, subcommand: stream-runner, resources: {requests: {cpu: 25m, memory: 128Mi}, limits: {cpu: "1", memory: 1Gi}}, runtimeProfile: ingest, replicas: ${replicas}, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }
+    - { name: stream-pagerduty, image: dev-health-go-dho:latest, subcommand: stream-runner, resources: {requests: {cpu: 25m, memory: 128Mi}, limits: {cpu: "1", memory: 1Gi}}, runtimeProfile: pagerduty, replicas: ${replicas}, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }
 YAML
 }
 
