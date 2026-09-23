@@ -271,14 +271,13 @@ docker.io/library/dev-health-go-worker:latest
 EOF
 cat >>"$tmp/node-images-partial" <<'EOF'
 docker.io/library/dev-health-go-dho:latest
-docker.io/library/dev-health-go-worker-migrate:latest
 EOF
 export KFAKE_CLUSTER_EXISTS=1 KFAKE_CREATE_NS_RC=0 \
        KFAKE_NODE_IMAGES="$tmp/node-images-partial" KFAKE_TRIALDATA_FAIL_ON=apply
 run_lane up lanefake-reuse
 load_argv="$(grep -F 'kiac.sh load-image' "$tmp/events" || true)"
 check_contains "a reused cluster still gets the image it is missing" \
-  "dev-health-go-scheduler:latest" "$load_argv"
+  "dev-health-go-worker-migrate:latest" "$load_argv"
 check_absent "images the nodes already hold are not re-loaded" \
   "dev-health-ops-local:test" "$load_argv"
 check_absent "a registry-qualified node image counts as present" \
@@ -290,7 +289,7 @@ check_absent "a registry-qualified node image counts as present" \
 # reconciliation degrades into "always load everything".
 scenario '[R3-2] a fully populated reused cluster loads nothing'
 cat "$tmp/node-images-partial" >"$tmp/node-images-full"
-printf 'docker.io/library/dev-health-go-scheduler:latest\n' >>"$tmp/node-images-full"
+printf 'docker.io/library/dev-health-go-worker-migrate:latest\n' >>"$tmp/node-images-full"
 export KFAKE_CLUSTER_EXISTS=1 KFAKE_CREATE_NS_RC=0 \
        KFAKE_NODE_IMAGES="$tmp/node-images-full" KFAKE_TRIALDATA_FAIL_ON=apply
 run_lane up lanefake-full
