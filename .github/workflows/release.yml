@@ -272,12 +272,36 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # CHAOS-6378: this job runs the whole suite (plain + -race) and then two
+      # cold reproducible builds on one hosted runner (~14 GB free at start),
+      # and died `no space left on device`. Free the preinstalled toolchains it
+      # never uses first (same list as the fullstack jobs, CHAOS-6326) and print
+      # free space so a repeat shows how close it runs to the limit.
+      - name: Free runner disk space
+        run: |
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h / | tail -1
       - name: Verify source and dependencies
         run: |
           set -euo pipefail
           verify_module_cache="$(mktemp -d)"
           verify_build_cache="$(mktemp -d)"
           export GOMODCACHE="$verify_module_cache/mod" GOCACHE="$verify_build_cache/build"
+          # CHAOS-6378: `make verify` (plain + -race builds of every package)
+          # fills these throwaway caches with many GB, and the next step
+          # (two more cold caches for the reproducible build) then died with
+          # `no space left on device` on the hosted runner (Release run
+          # 35914141622). Free them the moment verify is done, on success or
+          # failure, and print free space so the next ENOSPC is not a mystery.
+          # Go marks module-cache files read-only, hence chmod before rm.
+          release_verify_cleanup() {
+            echo "verify: free space before cleanup: $(df -h /tmp | tail -1)"
+            chmod -R u+w "$verify_module_cache" "$verify_build_cache" 2>/dev/null || true
+            rm -rf "$verify_module_cache" "$verify_build_cache" || echo "verify: WARNING cache cleanup failed"
+            echo "verify: free space after cleanup: $(df -h /tmp | tail -1)"
+          }
+          trap release_verify_cleanup EXIT
           go mod download
           # CHAOS-4567: `make verify` runs the race suite as test-race-split --
           # the shared packages at GOTEST_TIMEOUT and the isolated ones
