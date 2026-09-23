@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 )
@@ -458,6 +459,13 @@ func pass1Reported(offences []string, relative, table string) bool {
 // runtime names none of them literally and escapes -- the same accepted
 // class as concat-assembled DDL. A source doing that is deliberately
 // hiding, which is review's job, not this test's.
+// secondSourceSweepBudget bounds the repo-wide sweep. Measured after the
+// CHAOS-6230 prefilter it should be seconds; the pre-fix cost was ~41s plain
+// and past 900s under -race on a hosted runner. 300s leaves race headroom
+// while still failing loudly, with a named cause, far below the 900s package
+// timeout.
+const secondSourceSweepBudget = 300 * time.Second
+
 func TestNoSecondPhysicalSourceOutsideTheDeclaration(t *testing.T) {
 	t.Parallel()
 	root := repoRoot(t)
@@ -489,6 +497,19 @@ func TestNoSecondPhysicalSourceOutsideTheDeclaration(t *testing.T) {
 	// Re-measure if the declaration grows; the reasoning is "no file sits
 	// at 3", not "3 feels right".
 	const rivalTableThreshold = 3
+
+	// CHAOS-6230: make a slow sweep LOUD. This walk is CPU-bound, so under
+	// -race a regression shows up as the package hitting its timeout with no
+	// signal of why. Log the elapsed time always, and fail well before the
+	// package timeout so the cause is named instead of a bare panic.
+	sweepStart := time.Now()
+	defer func() {
+		elapsed := time.Since(sweepStart)
+		t.Logf("second-physical-source sweep took %s (budget %s)", elapsed, secondSourceSweepBudget)
+		if elapsed > secondSourceSweepBudget {
+			t.Errorf("second-physical-source sweep took %s, over its %s budget: the per-line matching regressed (see CHAOS-6230)", elapsed, secondSourceSweepBudget)
+		}
+	}()
 
 	var offences []string
 	// sanctionedSightings proves the detection still fires: the
@@ -868,6 +889,16 @@ func skipInterpretedLiteral(source string, quote int) int {
 // strings -- measured on devhealthsource/tables.go, which is the very code
 // the declaration exists to serve.
 func namesDeclaredTable(line, table string) bool {
+	// CHAOS-6230: cheap literal prefilter. The pattern below can only match
+	// a line that contains the table name verbatim, so a line without it
+	// cannot match. Measured: the sweep runs this once per line per declared
+	// table over the whole repo (~725k lines x every table), and the regexp
+	// backtracker was 96% of the test's CPU (41s plain, past the 900s race
+	// budget on a shared CI runner). strings.Contains skips almost every
+	// line without changing which lines match.
+	if !strings.Contains(line, table) {
+		return false
+	}
 	return declarationShape(table).MatchString(line)
 }
 
