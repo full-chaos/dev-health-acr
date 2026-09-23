@@ -390,3 +390,43 @@ func TestGrantRuntimeACL_rejectsUnexpectedArguments(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid arguments")
 }
+
+// TestGrantRuntimeACL_grantsTheEffectiveRoleOfARoleParameterDSN: a runtime
+// DSN carrying `role=<name>` logs in as one role but executes queries as
+// another (SET ROLE on connect). The grant must reach the effective role, or
+// the hook reports success while runtime queries stay permission-denied.
+func TestGrantRuntimeACL_grantsTheEffectiveRoleOfARoleParameterDSN(t *testing.T) {
+	ctx := context.Background()
+	migrationDSN := newTestPostgresDSN(t, ctx)
+	require.NoError(t, run(ctx, []string{"up"}, testMigrationEnvironment(migrationDSN), &bytes.Buffer{}))
+
+	adminConfig, err := pgx.ParseConfig(migrationDSN)
+	require.NoError(t, err)
+	adminDB := stdlib.OpenDB(*adminConfig)
+	t.Cleanup(func() { require.NoError(t, adminDB.Close()) })
+	for _, stmt := range []string{
+		`CREATE ROLE runtime_effective NOLOGIN`,
+		`CREATE ROLE runtime_login LOGIN PASSWORD 'x' IN ROLE runtime_effective`,
+		`GRANT CONNECT ON DATABASE acr TO runtime_login`,
+		`GRANT USAGE ON SCHEMA acr TO runtime_effective`,
+	} {
+		_, err = adminDB.ExecContext(ctx, stmt)
+		require.NoError(t, err, stmt)
+	}
+
+	runtimeDSN := url.URL{Scheme: "postgres", User: url.UserPassword("runtime_login", "x"), Host: "runtime-dsn-is-never-dialed.invalid:5432", Path: "/acr", RawQuery: "role=runtime_effective"}
+	require.NoError(t, run(ctx, []string{"grant-runtime-acl"}, environment(map[string]string{
+		migrationDSNEnvironment: migrationDSN,
+		runtimeDSNEnvironment:   runtimeDSN.String(),
+	}), &bytes.Buffer{}))
+
+	runtimeConfig, err := pgx.ParseConfig(migrationDSN)
+	require.NoError(t, err)
+	runtimeConfig.User = "runtime_login"
+	runtimeConfig.Password = "x"
+	runtimeConfig.RuntimeParams["role"] = "runtime_effective"
+	runtimeDB := stdlib.OpenDB(*runtimeConfig)
+	t.Cleanup(func() { require.NoError(t, runtimeDB.Close()) })
+	_, err = runtimeDB.ExecContext(ctx, `SELECT 1 FROM acr.oauth_device_grants LIMIT 0`)
+	require.NoError(t, err, "the effective (role=) runtime role must have actually received SELECT")
+}

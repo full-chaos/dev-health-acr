@@ -68,35 +68,33 @@ func grantRuntimeACL(ctx context.Context, db *sql.DB, runtimeDSN string, output 
 		// message, NEVER err.Error() or a %w wrap of the raw pgx error.
 		return errors.New("invalid runtime DSN")
 	}
-	role := parsed.User
-	if role == "" {
-		return fmt.Errorf("runtime DSN has no username")
+	roles := []string{parsed.User}
+	// A runtime DSN may carry `role=<name>` (a runtime parameter, applied as
+	// SET ROLE on connect): queries then execute as that role, not as the
+	// login user, so privileges must be granted to it as well.
+	if effective := parsed.RuntimeParams["role"]; effective != "" && effective != parsed.User {
+		roles = append(roles, effective)
 	}
-	// Postgres quoted identifiers (`"..."`) admit almost any character --
-	// including this repository's own convention (acr_runtime,
-	// acr_mcp_runtime) but also hyphens, spaces, and mixed case, which a
-	// real PostgreSQL role name is free to use (codex round cf-6277-r1's
-	// P1, executed repro: a role literally named "acr-runtime" was
-	// rejected by an earlier, narrower charset check here even though it
-	// is a perfectly valid role Postgres itself created and would have
-	// GRANTed correctly). The ONLY unsafe input for a double-quoted
-	// identifier is a NUL byte (Postgres/the wire protocol cannot
-	// represent one inside a C string, and Go's database/sql driver would
-	// reject it before this ever reaches the server) -- doubling every
-	// embedded `"` below is what makes any other string safe to
-	// interpolate, the same mechanism psql's own `%I`/`format(...,
-	// :'ident')` quoting (acr-db-init.sh's runtime-acl mode) relies on.
-	if strings.ContainsRune(role, 0) {
-		return fmt.Errorf("runtime role name %q contains a NUL byte", role)
+	for _, role := range roles {
+		if role == "" {
+			return fmt.Errorf("runtime DSN has no username")
+		}
+		// Only a NUL byte is unsafe in a double-quoted identifier; every
+		// embedded `"` is doubled below.
+		if strings.ContainsRune(role, 0) {
+			return fmt.Errorf("runtime role name %q contains a NUL byte", role)
+		}
+		quotedRole := `"` + strings.ReplaceAll(role, `"`, `""`) + `"`
+		// A bare repeatable GRANT (never REVOKE first) is idempotent and
+		// never interrupts a role already serving traffic.
+		if _, err := db.ExecContext(ctx, fmt.Sprintf(
+			`GRANT SELECT, INSERT ON TABLE acr.oauth_device_grants TO %s`,
+			quotedRole,
+		)); err != nil {
+			return fmt.Errorf("grant acr.oauth_device_grants privileges to %s: %w", role, err)
+		}
 	}
-	quotedRole := `"` + strings.ReplaceAll(role, `"`, `""`) + `"`
-
-	if _, err := db.ExecContext(ctx, fmt.Sprintf(
-		`GRANT SELECT, INSERT ON TABLE acr.oauth_device_grants TO %s`,
-		quotedRole,
-	)); err != nil {
-		return fmt.Errorf("grant acr.oauth_device_grants privileges to %s: %w", role, err)
-	}
+	role := strings.Join(roles, ", ")
 	_, err = fmt.Fprintf(output, "granted SELECT, INSERT on acr.oauth_device_grants to %s\n", role)
 	return err
 }

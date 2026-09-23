@@ -402,6 +402,9 @@ docs = open(sys.argv[1]).read().split('\n---\n')
 job_hook = False
 deploy_no_hook = True
 for d in docs:
+    # codex round r4 P3: comments are not configuration -- match only
+    # non-comment lines so a commented-out command cannot satisfy the gate.
+    d = "\n".join(l for l in d.splitlines() if not l.lstrip().startswith('#'))
     is_job = '\nkind: Job' in ('\n'+d) or d.lstrip().startswith('kind: Job')
     is_deploy = '\nkind: Deployment' in ('\n'+d) or d.lstrip().startswith('kind: Deployment')
     has_pre = ('helm.sh/hook' in d) and ('pre-install' in d) and ('pre-upgrade' in d)
@@ -444,6 +447,8 @@ REQUIRED_PHASE = '"helm.sh/hook": pre-install,pre-upgrade'
 migration_weight = runtime_acl_weight = None
 runtime_acl_command_ok = migration_phase_ok = runtime_acl_phase_ok = False
 for d in docs:
+    # codex round r4 P3: comments are not configuration.
+    d = "\n".join(l for l in d.splitlines() if not l.lstrip().startswith('#'))
     is_job = '\nkind: Job' in ('\n'+d) or d.lstrip().startswith('kind: Job')
     if not is_job:
         continue
