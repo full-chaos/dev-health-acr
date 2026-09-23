@@ -506,6 +506,7 @@ func TestIrreducibleAndMaximalFixturesAreValid(t *testing.T) {
 // reject. A nil PastMax is not an exemption -- the table entry must say in Why
 // why no bound is breachable, and this test asserts that reason is written down.
 func TestEveryBoundIsBreachable(t *testing.T) {
+	requireHeavyFixtureOptIn(t, "~70s plain, ~260s under -race")
 	for _, b := range answerBoundTable() {
 		t.Run(b.Field, func(t *testing.T) {
 			if b.PastMax == nil {
@@ -1027,20 +1028,27 @@ func navigateBoundPath(root reflect.Value, path []boundPathStep) (reflect.Value,
 // in the probe's log line, and in the PR body.
 const saturationProbeMaxDepth = 8
 
-// saturationProbeEnv opts TestMaximalIsSaturated in (see the test).
+// saturationProbeEnv opts the heavy ~520MB-fixture tests in
+// (TestMaximalIsSaturated, TestEveryBoundIsBreachable).
 const saturationProbeEnv = "ACR_RUN_SATURATION_PROBE"
 
-func TestMaximalIsSaturated(t *testing.T) {
-	// CHAOS-6360: this probe measured 420s solo on a 64-core host (459s for the
-	// whole package on a hosted runner), which left the shared `go test`
-	// bucket in Release's `make verify` with no headroom under its 10m
-	// per-binary wall. It is an explicit opt-in: `make contract-test` sets
-	// ACR_RUN_SATURATION_PROBE=1 and runs it under its own -timeout, and
-	// TestContractTestTargetRunsTheSaturationProbe pins that wiring so the
-	// skip cannot quietly turn into "never runs".
+// requireHeavyFixtureOptIn skips the calling test unless ACR_RUN_SATURATION_PROBE=1.
+// CHAOS-6360: these tests rebuild a ~520MB fixture per probed field (saturation
+// probe ~420s solo; breachability ~70s plain and ~260s under -race), which left
+// the shared `go test` buckets in Release's `make verify` (10m plain, 420s
+// race) with no headroom, and every main Release failed on the wall.
+// `make contract-test` (ci.yml + `make verify`) sets the env and runs them under
+// its own -timeout 20m; TestContractTestTargetRunsTheHeavyFixtureTests pins that
+// wiring so the skip cannot quietly turn into "never runs".
+func requireHeavyFixtureOptIn(t *testing.T, cost string) {
+	t.Helper()
 	if os.Getenv(saturationProbeEnv) != "1" {
-		t.Skipf("opt-in (~420s, rebuilds a ~520MB fixture per probed field): set %s=1; `make contract-test` does", saturationProbeEnv)
+		t.Skipf("opt-in (%s, rebuilds a ~520MB fixture per probed field): set %s=1; `make contract-test` does", cost, saturationProbeEnv)
 	}
+}
+
+func TestMaximalIsSaturated(t *testing.T) {
+	requireHeavyFixtureOptIn(t, "~420s solo")
 	if raceDetectorEnabled {
 		// Race instrumentation makes each rebuild about an order of magnitude
 		// slower, which overruns the package timeout. The probe finds no data
