@@ -280,7 +280,59 @@ func sanitizeDatabaseError(err error) error {
 	}
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		if class := classifyDatabaseError(pgErr); class != nil {
+			return fmt.Errorf("%w: %w", storage.ErrConflict, class)
+		}
 		return storage.ErrConflict
 	}
+	if class := classifyDatabaseError(pgErr); class != nil {
+		return fmt.Errorf("%w: %w", storage.ErrUnavailable, class)
+	}
 	return storage.ErrUnavailable
+}
+
+// postgresErrorClassNames maps a Postgres SQLSTATE code to a closed-
+// vocabulary class name for CHAOS-6278's dependency-failure logging.
+// Deliberately not exhaustive: SQLState itself always survives on
+// storage.DependencyErrorClass regardless, so an unmapped code degrades to
+// "unclassified" rather than losing the code entirely. Covers the classes
+// this repository has actually needed to tell apart: constraint violations
+// (the CHAOS-6233 register-503 incident's own root cause,
+// oauth_clients_redirect_uris_check, was a check_violation), a missing
+// runtime-role grant (CHAOS-6277's own class, insufficient_privilege), and
+// connection-level failures.
+var postgresErrorClassNames = map[string]string{
+	"23502": "not_null_violation",
+	"23503": "foreign_key_violation",
+	"23505": "unique_violation",
+	"23514": "check_violation",
+	"42501": "insufficient_privilege",
+	"28000": "invalid_authorization_specification",
+	"28P01": "invalid_password",
+	"08000": "connection_exception",
+	"08003": "connection_does_not_exist",
+	"08006": "connection_failure",
+	"57014": "query_canceled",
+}
+
+// classifyDatabaseError builds the safe classification CHAOS-6278's
+// dependency-failure logging needs from a *pgconn.PgError. pgErr may be nil
+// (a non-Postgres error, e.g. a network-level failure with no PgError at
+// all) -- returns nil in that case, same as "no class available", so a
+// caller's errors.As simply finds nothing rather than a zero-value class
+// with an empty SQLState.
+func classifyDatabaseError(pgErr *pgconn.PgError) *storage.DependencyErrorClass {
+	if pgErr == nil {
+		return nil
+	}
+	name, ok := postgresErrorClassNames[pgErr.Code]
+	if !ok {
+		name = "unclassified"
+	}
+	return &storage.DependencyErrorClass{
+		SQLState:   pgErr.Code,
+		Class:      name,
+		Constraint: pgErr.ConstraintName,
+		Table:      pgErr.TableName,
+	}
 }

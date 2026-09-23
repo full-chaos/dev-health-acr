@@ -70,6 +70,16 @@ const (
 const OAuthDeviceCodeGrantType = "urn:ietf:params:oauth:grant-type:device_code"
 
 // ErrOAuthUnavailable reports a storage or dependency failure.
+//
+// CHAOS-6278: every wrap below carries the real underlying error alongside
+// this sentinel (`%w: <label>: %w`, ErrOAuthUnavailable, err), not just a
+// static label -- before this change every site here discarded the actual
+// dependency error and returned only ErrOAuthUnavailable plus static prose,
+// which is what made internal/api's oauth dependency-failure log
+// unfixable at the LOGGING layer alone: the real cause (a
+// *storage.DependencyErrorClass, for a Postgres failure) was already gone
+// by the time it reached the route handler. errors.Is(err,
+// ErrOAuthUnavailable) is unaffected by this -- it still wraps first.
 var ErrOAuthUnavailable = errors.New("oauth service unavailable")
 
 // OAuthError is a refusal with an OAuth error code (RFC 6749 §4.1.2.1, §5.2,
@@ -287,7 +297,7 @@ func (s *OAuthService) Register(ctx context.Context, request OAuthRegistrationRe
 	}
 	var random [16]byte
 	if err := s.read(random[:]); err != nil {
-		return storage.OAuthClient{}, ErrOAuthUnavailable
+		return storage.OAuthClient{}, fmt.Errorf("%w: read random client id: %w", ErrOAuthUnavailable, err)
 	}
 	client := storage.OAuthClient{
 		ClientID:     storage.NewDynamicOAuthClientID(random),
@@ -308,7 +318,7 @@ func (s *OAuthService) Register(ctx context.Context, request OAuthRegistrationRe
 	}
 	stored, err := s.store.RegisterClient(ctx, client)
 	if err != nil {
-		return storage.OAuthClient{}, fmt.Errorf("%w: register client", ErrOAuthUnavailable)
+		return storage.OAuthClient{}, fmt.Errorf("%w: register client: %w", ErrOAuthUnavailable, err)
 	}
 	return stored, nil
 }
@@ -331,7 +341,7 @@ func (s *OAuthService) ResolveClient(ctx context.Context, clientID string) (OAut
 			return OAuthResolvedClient{}, oauthError("invalid_client", oauthvocab.OutcomeInvalidClient, false)
 		}
 		if err != nil {
-			return OAuthResolvedClient{}, fmt.Errorf("%w: read client", ErrOAuthUnavailable)
+			return OAuthResolvedClient{}, fmt.Errorf("%w: read client: %w", ErrOAuthUnavailable, err)
 		}
 		return OAuthResolvedClient{ClientID: client.ClientID, Kind: storage.OAuthClientKindDynamic, Name: client.ClientName, RedirectURIs: client.RedirectURIs}, nil
 	case s.metadata != nil && storage.ValidOAuthClientMetadataURL(clientID):
@@ -449,11 +459,11 @@ func (s *OAuthService) Authorize(ctx context.Context, request OAuthAuthorizeRequ
 	}
 	device, err := s.devices.StartForOAuth(ctx)
 	if err != nil {
-		return OAuthAuthorization{}, fmt.Errorf("%w: start consent", ErrOAuthUnavailable)
+		return OAuthAuthorization{}, fmt.Errorf("%w: start consent: %w", ErrOAuthUnavailable, err)
 	}
 	handle, err := s.secret(oauthHandleBytes)
 	if err != nil {
-		return OAuthAuthorization{}, ErrOAuthUnavailable
+		return OAuthAuthorization{}, fmt.Errorf("%w: generate consent handle: %w", ErrOAuthUnavailable, err)
 	}
 	now := s.now().UTC()
 	_, err = s.store.CreateAuthorizationRequest(ctx, storage.OAuthAuthorizationRequest{
@@ -463,7 +473,7 @@ func (s *OAuthService) Authorize(ctx context.Context, request OAuthAuthorizeRequ
 		CreatedAt: now, ExpiresAt: device.ExpiresAt,
 	})
 	if err != nil {
-		return OAuthAuthorization{}, fmt.Errorf("%w: store authorization request", ErrOAuthUnavailable)
+		return OAuthAuthorization{}, fmt.Errorf("%w: store authorization request: %w", ErrOAuthUnavailable, err)
 	}
 	return OAuthAuthorization{Handle: handle, ExpiresAt: device.ExpiresAt, Client: client, Resource: resource, Scope: scope}, nil
 }
@@ -538,7 +548,7 @@ func (s *OAuthService) pendingConsent(ctx context.Context, handle string, resuma
 		return storage.OAuthAuthorizationRequest{}, oauthError(OAuthConsentCodeInvalid, oauthvocab.OutcomeInvalidRequest, false)
 	}
 	if err != nil {
-		return storage.OAuthAuthorizationRequest{}, fmt.Errorf("%w: read authorization request", ErrOAuthUnavailable)
+		return storage.OAuthAuthorizationRequest{}, fmt.Errorf("%w: read authorization request: %w", ErrOAuthUnavailable, err)
 	}
 	if request.CodeHash != nil {
 		return request, oauthError(OAuthConsentCodeCompleted, oauthvocab.OutcomeAlreadyCompleted, false)
@@ -548,7 +558,7 @@ func (s *OAuthService) pendingConsent(ctx context.Context, handle string, resuma
 	}
 	state, err := s.devices.StateForOAuth(ctx, request.DeviceCodeHash)
 	if err != nil {
-		return request, fmt.Errorf("%w: read consent", ErrOAuthUnavailable)
+		return request, fmt.Errorf("%w: read consent: %w", ErrOAuthUnavailable, err)
 	}
 	switch state {
 	case OAuthDeviceStatePending:
@@ -644,14 +654,14 @@ func (s *OAuthService) ApproveConsent(ctx context.Context, handle string, princi
 	}
 	code, err := s.secret(oauthCodeBytes)
 	if err != nil {
-		return OAuthConsentDecision{ClientKind: request.ClientKind}, ErrOAuthUnavailable
+		return OAuthConsentDecision{ClientKind: request.ClientKind}, fmt.Errorf("%w: generate authorization code: %w", ErrOAuthUnavailable, err)
 	}
 	_, err = s.store.IssueAuthorizationCode(ctx, request.HandleHash, storage.HashOAuthSecret(code), s.now().UTC().Add(storage.OAuthAuthorizationCodeTTL))
 	if errors.Is(err, storage.ErrConflict) || errors.Is(err, storage.ErrNotFound) {
 		return OAuthConsentDecision{ClientKind: request.ClientKind}, oauthError(OAuthConsentCodeCompleted, oauthvocab.OutcomeAlreadyCompleted, false)
 	}
 	if err != nil {
-		return OAuthConsentDecision{ClientKind: request.ClientKind}, fmt.Errorf("%w: issue code", ErrOAuthUnavailable)
+		return OAuthConsentDecision{ClientKind: request.ClientKind}, fmt.Errorf("%w: issue code: %w", ErrOAuthUnavailable, err)
 	}
 	return OAuthConsentDecision{ClientKind: request.ClientKind, RedirectURL: s.redirectURL(request, url.Values{"code": {code}})}, nil
 }
@@ -679,7 +689,7 @@ func consentDecisionError(err error) error {
 	case errors.Is(err, storage.ErrDeviceAuthorizationExpired), errors.Is(err, storage.ErrDeviceAuthorizationNotFound):
 		return oauthError(OAuthConsentCodeExpired, oauthvocab.OutcomeExpired, false)
 	default:
-		return fmt.Errorf("%w: record consent", ErrOAuthUnavailable)
+		return fmt.Errorf("%w: record consent: %w", ErrOAuthUnavailable, err)
 	}
 }
 
@@ -738,7 +748,7 @@ func (s *OAuthService) Exchange(ctx context.Context, request OAuthTokenRequest) 
 		return OAuthToken{}, oauthError("invalid_grant", oauthvocab.OutcomeInvalidGrant, false)
 	}
 	if err != nil {
-		return OAuthToken{}, fmt.Errorf("%w: consume code", ErrOAuthUnavailable)
+		return OAuthToken{}, fmt.Errorf("%w: consume code: %w", ErrOAuthUnavailable, err)
 	}
 	refuse := func(code, outcome string) (OAuthToken, error) {
 		return OAuthToken{ClientKind: pending.ClientKind}, oauthError(code, outcome, false)
@@ -764,7 +774,7 @@ func (s *OAuthService) Exchange(ctx context.Context, request OAuthTokenRequest) 
 		return refuse("invalid_grant", oauthvocab.OutcomeInvalidGrant)
 	}
 	if err != nil {
-		return OAuthToken{ClientKind: pending.ClientKind}, fmt.Errorf("%w: issue credential", ErrOAuthUnavailable)
+		return OAuthToken{ClientKind: pending.ClientKind}, fmt.Errorf("%w: issue credential: %w", ErrOAuthUnavailable, err)
 	}
 	lifetime := DeviceCredentialLifetime
 	if issued.Credential.ExpiresAt != nil {
@@ -822,7 +832,7 @@ func (s *OAuthService) StartDeviceAuthorization(ctx context.Context, request OAu
 	}
 	start, err := s.devices.StartDeviceGrant(ctx)
 	if err != nil {
-		return OAuthDeviceAuthorizationStart{ClientKind: client.Kind}, fmt.Errorf("%w: start device grant", ErrOAuthUnavailable)
+		return OAuthDeviceAuthorizationStart{ClientKind: client.Kind}, fmt.Errorf("%w: start device grant: %w", ErrOAuthUnavailable, err)
 	}
 	now := s.now().UTC()
 	_, err = s.store.CreateDeviceGrant(ctx, storage.OAuthDeviceGrant{
@@ -830,7 +840,7 @@ func (s *OAuthService) StartDeviceAuthorization(ctx context.Context, request OAu
 		Resource: resource, Scope: scope, CreatedAt: now, ExpiresAt: start.ExpiresAt,
 	})
 	if err != nil {
-		return OAuthDeviceAuthorizationStart{ClientKind: client.Kind}, fmt.Errorf("%w: store device grant", ErrOAuthUnavailable)
+		return OAuthDeviceAuthorizationStart{ClientKind: client.Kind}, fmt.Errorf("%w: store device grant: %w", ErrOAuthUnavailable, err)
 	}
 	return OAuthDeviceAuthorizationStart{
 		DeviceCode: start.DeviceCode, UserCode: start.UserCode, ExpiresIn: storage.DeviceAuthorizationTTL,
@@ -870,7 +880,7 @@ func (s *OAuthService) ExchangeDeviceCode(ctx context.Context, request OAuthDevi
 		return OAuthToken{}, oauthError("invalid_grant", oauthvocab.OutcomeInvalidGrant, false)
 	}
 	if err != nil {
-		return OAuthToken{}, fmt.Errorf("%w: read device grant", ErrOAuthUnavailable)
+		return OAuthToken{}, fmt.Errorf("%w: read device grant: %w", ErrOAuthUnavailable, err)
 	}
 	refuse := func(code, outcome string) (OAuthToken, error) {
 		return OAuthToken{ClientKind: grant.ClientKind}, oauthError(code, outcome, false)
@@ -888,7 +898,7 @@ func (s *OAuthService) ExchangeDeviceCode(ctx context.Context, request OAuthDevi
 		if errors.As(err, &pollError) {
 			return OAuthToken{ClientKind: grant.ClientKind}, mapDevicePollOutcome(pollError)
 		}
-		return OAuthToken{ClientKind: grant.ClientKind}, fmt.Errorf("%w: poll device grant", ErrOAuthUnavailable)
+		return OAuthToken{ClientKind: grant.ClientKind}, fmt.Errorf("%w: poll device grant: %w", ErrOAuthUnavailable, err)
 	}
 	lifetime := DeviceCredentialLifetime
 	if issued.Credential.ExpiresAt != nil {
