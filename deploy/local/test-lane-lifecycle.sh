@@ -271,9 +271,7 @@ docker.io/library/dev-health-go-worker:latest
 docker.io/library/dev-health-go-scheduler:latest
 EOF
 cat >>"$tmp/node-images-partial" <<'EOF'
-docker.io/library/dev-health-go-stream-ingest:latest
-docker.io/library/dev-health-go-stream-external:latest
-docker.io/library/dev-health-go-stream-pagerduty:latest
+docker.io/library/dev-health-go-dho:latest
 docker.io/library/dev-health-go-worker-migrate:latest
 EOF
 export KFAKE_CLUSTER_EXISTS=1 KFAKE_CREATE_NS_RC=0 \
