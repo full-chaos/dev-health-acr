@@ -560,8 +560,8 @@
         "description": "deviceRuntimeHandler -- no auth check beyond runtime readiness; protected only by allowDeviceRequest's per-IP rate limiter.",
         "anchor": {
           "path": "internal/api/device_routes.go",
-          "line": 260,
-          "line_end": 260,
+          "line": 266,
+          "line_end": 266,
           "note": "func (a *App) deviceRuntimeHandler(next http.Handler) http.Handler {"
         }
       },
@@ -690,8 +690,8 @@
         "description": "deviceApprovalHandler requires X-ACR-Web-Assertion EXACTLY (exactly one header) AND explicitly rejects if Authorization is ALSO present, at the route-wrapper level itself (in addition to the same check inside authenticateWebAssertion) -- a double belt-and-braces enforcement of the CHAOS-3271 double-header rejection pattern. RequireScope(credential:issue).",
         "anchor": {
           "path": "internal/api/device_routes.go",
-          "line": 238,
-          "line_end": 238,
+          "line": 244,
+          "line_end": 244,
           "note": "func (a *App) deviceApprovalHandler(next http.Handler) http.Handler {"
         }
       },
@@ -745,8 +745,8 @@
         "description": "selfLifecycleHandler = authenticator.Middleware (bearer only, allowWebAssertions=false) + ProtectedHandler(rate limit only) -- NO RequireScope call. Self-service rotation only needs a valid credential; it operates on the CALLER'S OWN principal.CredentialID, so no additional scope check is layered on.",
         "anchor": {
           "path": "internal/api/device_routes.go",
-          "line": 253,
-          "line_end": 253,
+          "line": 259,
+          "line_end": 259,
           "note": "func (a *App) selfLifecycleHandler(next http.Handler) http.Handler {"
         }
       },
@@ -788,8 +788,8 @@
         "description": "Same selfLifecycleHandler as rotate -- bearer only, no explicit scope requirement.",
         "anchor": {
           "path": "internal/api/device_routes.go",
-          "line": 253,
-          "line_end": 253,
+          "line": 259,
+          "line_end": 259,
           "note": "func (a *App) selfLifecycleHandler(next http.Handler) http.Handler {"
         }
       },
@@ -868,8 +868,8 @@
         "description": "OAuthService.Authorize -- verifies the client (a dynamic registration or a client ID metadata document) and the registered redirect URI before anything is redirectable (exact match, except a loopback URI registered with no port also matches any port on that same scheme/host/path/query -- RFC 8252 \u00a77.3; localhost additionally for client ID metadata document clients only), then requires response_type=code, S256 PKCE, a configured resource and a known scope; only then starts the consent and redirects to the web consent page; rate limited per IP by AllowDeviceCreation.",
         "anchor": {
           "path": "internal/auth/oauth.go",
-          "line": 397,
-          "line_end": 397,
+          "line": 407,
+          "line_end": 407,
           "note": "func (s *OAuthService) Authorize("
         }
       },
@@ -898,8 +898,8 @@
         "description": "deviceApprovalHandler (the same wrapper as device_approval) requires X-ACR-Web-Assertion EXACTLY (exactly one header) and rejects if Authorization is also present, then RequireScope(credential:issue): only the web, acting for its signed-in user, can read or decide a request; the browser that holds the handle cannot.",
         "anchor": {
           "path": "internal/api/device_routes.go",
-          "line": 238,
-          "line_end": 238,
+          "line": 244,
+          "line_end": 244,
           "note": "func (a *App) deviceApprovalHandler(next http.Handler) http.Handler {"
         }
       },
@@ -914,8 +914,8 @@
           "description": "OAuthService.ApproveConsent/DenyConsent/ConsentRequest -- the handle's request must be undecided and unexpired (10 minutes); approval applies the device approval's org and repository rules (ApproveForOAuth) and issues the code at most once.",
           "anchor": {
             "path": "internal/auth/oauth.go",
-            "line": 637,
-            "line_end": 657
+            "line": 647,
+            "line_end": 667
           },
           "is_intended_validator": true,
           "reachable_but_not_owner": false
@@ -935,8 +935,8 @@
           "direction": "returned_to_caller",
           "anchor": {
             "path": "internal/auth/oauth.go",
-            "line": 637,
-            "line_end": 657,
+            "line": 647,
+            "line_end": 667,
             "note": "OAuthService.ApproveConsent -- approves the device authorization, then mints the one-time OAuth authorization code via s.store.IssueAuthorizationCode and returns it inside redirect_url"
           },
           "issuer": "acr-api OAuthService",
@@ -992,8 +992,8 @@
         "description": "OAuthService.Exchange -- consumes the code atomically first (a refused exchange spends it), then requires the same client_id and redirect_uri, an S256 code_verifier matching the stored challenge, and a resource equal to the authorized one; redeems the approved device authorization bound to that resource. Rate limited per IP by AllowTokenRequest.",
         "anchor": {
           "path": "internal/auth/oauth.go",
-          "line": 729,
-          "line_end": 729,
+          "line": 739,
+          "line_end": 739,
           "note": "func (s *OAuthService) Exchange("
         }
       },
@@ -1060,8 +1060,8 @@
         "description": "OAuthService.Register -- public clients only (token_endpoint_auth_method none), grant types limited to authorization_code/refresh_token/urn:ietf:params:oauth:grant-type:device_code (CHAOS-6233 added the device-code grant; refresh_token requests are answered without it), redirect URIs HTTPS or HTTP loopback and required only when the client wants authorization_code -- a client declaring device_code only registers with none, since the device grant has no redirect step. Rate limited per IP by AllowDeviceCreation. Registration grants nothing by itself.",
         "anchor": {
           "path": "internal/auth/oauth.go",
-          "line": 262,
-          "line_end": 262,
+          "line": 272,
+          "line_end": 272,
           "note": "func (s *OAuthService) Register("
         }
       },
@@ -1094,8 +1094,8 @@
         "description": "OAuthService.StartDeviceAuthorization -- verifies the client (a dynamic registration or a client ID metadata document), a supported scope and a configured resource exactly like Authorize, then starts a device authorization and records the client/resource/scope /token needs when the client polls back with only the device_code; rate limited per IP by AllowDeviceCreation.",
         "anchor": {
           "path": "internal/auth/oauth.go",
-          "line": 807,
-          "line_end": 807,
+          "line": 817,
+          "line_end": 817,
           "note": "func (s *OAuthService) StartDeviceAuthorization("
         }
       },

@@ -111,7 +111,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULL, NULL, NULL)`,
 	if err != nil {
 		sanitized := sanitizeDatabaseError(err)
 		if errors.Is(sanitized, storage.ErrConflict) {
-			return storage.OAuthAuthorizationRequest{}, storage.ErrConflict
+			return storage.OAuthAuthorizationRequest{}, sanitized
 		}
 		return storage.OAuthAuthorizationRequest{}, fmt.Errorf("create oauth authorization request: %w", sanitized)
 	}
@@ -160,7 +160,7 @@ RETURNING `+oauthAuthorizationRequestColumns,
 	if !errors.Is(err, sql.ErrNoRows) {
 		sanitized := sanitizeDatabaseError(err)
 		if errors.Is(sanitized, storage.ErrConflict) {
-			return storage.OAuthAuthorizationRequest{}, storage.ErrConflict
+			return storage.OAuthAuthorizationRequest{}, sanitized
 		}
 		return storage.OAuthAuthorizationRequest{}, fmt.Errorf("issue oauth authorization code: %w", sanitized)
 	}
@@ -220,7 +220,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 	if err != nil {
 		sanitized := sanitizeDatabaseError(err)
 		if errors.Is(sanitized, storage.ErrConflict) {
-			return storage.OAuthDeviceGrant{}, storage.ErrConflict
+			return storage.OAuthDeviceGrant{}, sanitized
 		}
 		return storage.OAuthDeviceGrant{}, fmt.Errorf("create oauth device grant: %w", sanitized)
 	}
