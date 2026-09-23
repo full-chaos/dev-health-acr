@@ -278,6 +278,20 @@ jobs:
           verify_module_cache="$(mktemp -d)"
           verify_build_cache="$(mktemp -d)"
           export GOMODCACHE="$verify_module_cache/mod" GOCACHE="$verify_build_cache/build"
+          # CHAOS-6378: `make verify` (plain + -race builds of every package)
+          # fills these throwaway caches with many GB, and the next step
+          # (two more cold caches for the reproducible build) then died with
+          # `no space left on device` on the hosted runner (Release run
+          # 35914141622). Free them the moment verify is done, on success or
+          # failure, and print free space so the next ENOSPC is not a mystery.
+          # Go marks module-cache files read-only, hence chmod before rm.
+          release_verify_cleanup() {
+            echo "verify: free space before cleanup: $(df -h /tmp | tail -1)"
+            chmod -R u+w "$verify_module_cache" "$verify_build_cache" 2>/dev/null || true
+            rm -rf "$verify_module_cache" "$verify_build_cache" || echo "verify: WARNING cache cleanup failed"
+            echo "verify: free space after cleanup: $(df -h /tmp | tail -1)"
+          }
+          trap release_verify_cleanup EXIT
           go mod download
           # CHAOS-4567: `make verify` runs the race suite as test-race-split --
           # the shared packages at GOTEST_TIMEOUT and the isolated ones
