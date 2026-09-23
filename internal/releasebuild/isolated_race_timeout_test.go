@@ -153,3 +153,88 @@ func readTimeoutVar(t *testing.T, makefile, name string) int {
 type errNotFound string
 
 func (e errNotFound) Error() string { return "not found: " + string(e) }
+
+// TestDevhealthsourceIsolation_ownRaceJobAndBudget pins the CHAOS-6342 fix.
+// internal/contextfabric/devhealthsource is HEAVY (one shared testcontainer
+// for the whole package) and measured 318.8s wall under -race on bigboy
+// (32-core, uncontended); sharing a round-robin shard's 420s budget with
+// other packages timed "race (shard 1 of 4)" out. It is isolated exactly the
+// way devhealthfacts was (CHAOS-5977): listed in isolated_packages AND
+// dedicated_isolated_packages, run by its own ci.yml job, and given its own
+// GOTEST_DEVHEALTHSOURCE_TIMEOUT wired into every per-package timeout lookup.
+func TestDevhealthsourceIsolation_ownRaceJobAndBudget(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	const pkg = `"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"`
+
+	shard, err := os.ReadFile(filepath.Join(repoRoot, "scripts", "ci", "test-shard.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	shardSrc := string(shard)
+	isolated, err := isolatedPackagesBlock(shardSrc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(isolated, pkg) {
+		t.Fatalf("isolated_packages must list devhealthsource; block:\n%s", isolated)
+	}
+	start := strings.Index(shardSrc, "dedicated_isolated_packages=(")
+	if start < 0 {
+		t.Fatal("dedicated_isolated_packages=( not found in scripts/ci/test-shard.sh")
+	}
+	rest := shardSrc[start:]
+	dedicated := rest[:strings.Index(rest, ")")]
+	if !strings.Contains(dedicated, pkg) {
+		t.Fatalf("dedicated_isolated_packages must list devhealthsource (it is HEAVY and must run alone); block:\n%s", dedicated)
+	}
+
+	makefile, err := os.ReadFile(filepath.Join(repoRoot, "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk := string(makefile)
+	// Margin rule: budget >= 1.25x the measured 318.8s bigboy wall time.
+	const measuredDevhealthsourceSeconds = 318.8
+	budget := readTimeoutVar(t, mk, "GOTEST_DEVHEALTHSOURCE_TIMEOUT")
+	if float64(budget) < 1.25*measuredDevhealthsourceSeconds {
+		t.Fatalf("GOTEST_DEVHEALTHSOURCE_TIMEOUT=%ds is below 1.25x the measured devhealthsource -race wall time (%.1fs)", budget, measuredDevhealthsourceSeconds)
+	}
+	for _, target := range []string{"test-split", "test-race-isolated", "isolated-timeout"} {
+		recipe, err := targetRecipe(mk, target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(recipe, "*/internal/contextfabric/devhealthsource)") ||
+			!strings.Contains(recipe, "$(GOTEST_DEVHEALTHSOURCE_TIMEOUT)") {
+			t.Fatalf("%s must select GOTEST_DEVHEALTHSOURCE_TIMEOUT for devhealthsource; recipe:\n%s", target, recipe)
+		}
+	}
+
+	ci, err := os.ReadFile(filepath.Join(repoRoot, ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ciSrc := string(ci)
+	jobStart := strings.Index(ciSrc, "\n  race-devhealthsource:\n")
+	if jobStart < 0 {
+		t.Fatal("ci.yml must define a race-devhealthsource job")
+	}
+	block := ciSrc[jobStart+1:]
+	if next := regexp.MustCompile(`(?m)^  [A-Za-z0-9_-]+:\s*$`).FindStringIndex(block[3:]); next != nil {
+		block = block[:next[0]+3]
+	}
+	for _, want := range []string{
+		"name: race (devhealthsource, isolated scope)",
+		"needs: mirror-preflight",
+		"TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX",
+		"isolated-dedicated devhealthsource",
+		"CHAOS-6342",
+	} {
+		if !strings.Contains(block, want) {
+			t.Fatalf("race-devhealthsource job must contain %q; block:\n%s", want, block)
+		}
+	}
+	if !regexp.MustCompile(`(?m)^      - race-devhealthsource\s*$`).MatchString(ciSrc) {
+		t.Fatal("aggregate verify job must list race-devhealthsource in its needs")
+	}
+}

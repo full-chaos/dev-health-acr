@@ -201,7 +201,9 @@ check_isolated_devhealthschema_job() {
 
   while IFS= read -r job; do
     block="$(job_block "$file" "$job")"
-    subcmd="$(grep -oE 'test-shard\.sh[[:space:]]+isolated(-[a-z]+)?' <<<"$block" | head -n1 | awk '{print $2}' || true)"
+    # Subcommand PLUS its optional package-basename argument (CHAOS-6342:
+    # `isolated-dedicated <basename>` selects ONE dedicated package per job).
+    subcmd="$(grep -oE 'test-shard\.sh[[:space:]]+isolated(-[a-z]+)?([[:space:]]+[a-z0-9]+)?' <<<"$block" | head -n1 | awk '{$1=""; sub(/^ /,""); print}' || true)"
     if [ -z "$subcmd" ]; then
       continue
     fi
@@ -215,7 +217,8 @@ check_isolated_devhealthschema_job() {
       return 1
     fi
 
-    "$repo_root/scripts/ci/test-shard.sh" "$subcmd" | tr ' ' '\n' >>"$union_file"
+    # shellcheck disable=SC2086 # subcmd is "<sub> [basename]", split on purpose
+    "$repo_root/scripts/ci/test-shard.sh" $subcmd | tr ' ' '\n' >>"$union_file"
   done < <(list_jobs "$file")
 
   if [ "$found_any" -eq 0 ]; then

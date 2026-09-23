@@ -107,6 +107,7 @@ isolated_packages=(
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
   "github.com/full-chaos/dev-health-acr/internal/contextfabric"
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+  "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 )
 
 # CHAOS-5977: dedicated_isolated_packages is a SUBSET of isolated_packages
@@ -134,8 +135,18 @@ isolated_packages=(
 # 35353894690, job 105628526270) against the shared 420s race-matrix budget
 # -- its own dedicated job gives it a 20-minute budget instead (see
 # race-devhealthfacts in ci.yml).
+#
+# CHAOS-6342: devhealthsource joins it. It is the other HEAVY package
+# (shared-container pattern) and measured 318.8s wall under -race on bigboy
+# (32-core, uncontended; 381.6s before an unrelated test fix), so sharing a
+# round-robin shard's 420s budget with other packages timed out "race
+# (shard 1 of 4)". Each dedicated package now has its OWN job, selected by
+# `test-shard.sh isolated-dedicated <package-basename>` (see main()) so two
+# dedicated packages never share a `go test` invocation; its own budget is
+# GOTEST_DEVHEALTHSOURCE_TIMEOUT in the Makefile.
 dedicated_isolated_packages=(
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+  "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 )
 
 # heavy_exceptions names a package HEAVY (see is_heavy_package below) despite
@@ -170,6 +181,8 @@ usage() {
   printf 'usage: %s isolated-dedicated\n' "${0##*/}" >&2
   printf '  prints dedicated_isolated_packages -- isolated package(s) that run\n' >&2
   printf '  alone, in their own dedicated job\n' >&2
+  printf 'usage: %s isolated-dedicated <package-basename>\n' "${0##*/}" >&2
+  printf '  prints just that one dedicated package (one dedicated job each)\n' >&2
   printf 'usage: %s --print-isolated-packages\n' "${0##*/}" >&2
   printf '  same listing as "isolated", for a caller that only needs to check\n' >&2
   printf '  membership (e.g. does my shard carry one), never to select what a\n' >&2
@@ -404,6 +417,21 @@ main() {
     assert_dedicated_subset_of_isolated
     printf '%s\n' "${dedicated_isolated_packages[*]}"
     return 0
+  fi
+
+  # One dedicated package by import-path basename (a dedicated package runs
+  # ALONE in its own job, never alongside another dedicated package).
+  if [ "$#" -eq 2 ] && [ "$1" = "isolated-dedicated" ]; then
+    assert_dedicated_subset_of_isolated
+    local entry
+    for entry in "${dedicated_isolated_packages[@]}"; do
+      if [ "${entry##*/}" = "$2" ]; then
+        printf '%s\n' "$entry"
+        return 0
+      fi
+    done
+    printf '%s: no dedicated_isolated_packages entry with basename: %s\n' "${0##*/}" "$2" >&2
+    exit 1
   fi
 
   if [ "$#" -eq 1 ] && [ "$1" = "heavy" ]; then
