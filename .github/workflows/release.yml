@@ -237,45 +237,14 @@ jobs:
         # that would silently re-mirror main's (already-mirrored) pins.
         run: scripts/ci/verify-mirrored-images.sh "${{ github.repository }}" "${{ needs.preflight.outputs.commit }}"
 
-  build:
-    needs: [preflight, mirror-preflight]
+  # CHAOS-6400: the by-reference gate is its own cheap job so every leg below
+  # waits on it and nothing compiles for a commit whose ci `verify` is not green.
+  ci-reference:
+    needs: [preflight]
     runs-on: ubuntu-24.04
     permissions:
-      contents: read
-      # CHAOS-6400: read the same-sha ci run's `verify` job (tests are
-      # verified by reference, never re-run here).
       actions: read
     steps:
-      # actions/checkout v7.0.0
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with:
-          ref: ${{ needs.preflight.outputs.commit }}
-          persist-credentials: false
-      # actions/setup-go v6.5.0
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
-        with:
-          go-version: "1.27.0"
-          check-latest: false
-          cache: false
-      # docker/login-action v4.5.1. No Docker Hub credentials exist in this
-      # repo (CHAOS-4855) -- this authenticates only to the ghcr mirror, which
-      # GITHUB_TOKEN already has read access to.
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      # CHAOS-6378: this job runs two
-      # cold reproducible builds on one hosted runner (~14 GB free at start),
-      # and died `no space left on device`. Free the preinstalled toolchains it
-      # never uses first (same list as the fullstack jobs, CHAOS-6326) and print
-      # free space so a repeat shows how close it runs to the limit.
-      - name: Free runner disk space
-        run: |
-          df -h / | tail -1
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
-          df -h / | tail -1
       # CHAOS-6400: tests are verified BY REFERENCE. ci.yml already ran the
       # whole suite (sharded, plain + race) on this exact commit when it landed
       # on main; re-running it serially here failed three ways (CHAOS-6360,
@@ -329,6 +298,25 @@ jobs:
             echo "ci reference waiting: $state"
             sleep 30
           done
+
+  # Supply-chain checks, parallel with the legs (no tests: see ci-reference).
+  supply-chain:
+    needs: [preflight, ci-reference]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ needs.preflight.outputs.commit }}
+          persist-credentials: false
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: "1.27.0"
+          check-latest: false
+          cache: false
       # Supply-chain checks only. The test suite, vet, fmt, crosscompile and
       # contract checks that `make verify` ran are covered by ci.yml's verify
       # gate (see step above).
@@ -353,22 +341,88 @@ jobs:
           make contract-test
           scripts/ci/retry.sh go install golang.org/x/vuln/cmd/govulncheck@v1.5.0
           govulncheck ./...
-      - name: Build deterministic matrix and final checksum manifest
+
+  # CHAOS-6400: one native leg per platform, in parallel. Go needs no
+  # emulation and each leg builds only its own targets, so no runner compiles
+  # the whole matrix serially. Determinism is checked per leg (two cold builds
+  # must be byte-identical) and across legs by `releasebuild merge` in `build`.
+  # No Go cache: setup-go `cache: false` stays (CodeQL alert #11 dismissal
+  # rests on this workflow having no cache sink); module download is seconds.
+  build-leg:
+    needs: [preflight, ci-reference]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {leg: linux-amd64, runner: ubuntu-24.04, platform: linux/amd64}
+          - {leg: linux-arm64, runner: ubuntu-24.04-arm, platform: linux/arm64}
+          - {leg: darwin, runner: macos-15, platform: "darwin/amd64,darwin/arm64"}
+          - {leg: windows, runner: ubuntu-24.04, platform: windows/amd64}
+    name: build-leg (${{ matrix.leg }})
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ needs.preflight.outputs.commit }}
+          persist-credentials: false
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: "1.27.0"
+          check-latest: false
+          cache: false
+      - name: Build platform fragment twice and require identical output
         env:
           VERSION: ${{ needs.preflight.outputs.version }}
           COMMIT: ${{ needs.preflight.outputs.commit }}
           DATE: ${{ needs.preflight.outputs.date }}
+          PLATFORM: ${{ matrix.platform }}
         run: |
           set -euo pipefail
-          first_cache="$(mktemp -d)"
-          second_cache="$(mktemp -d)"
-          GOMODCACHE="$first_cache/mod" GOCACHE="$first_cache/build" go mod download
-          GOMODCACHE="$first_cache/mod" GOCACHE="$first_cache/build" go run ./cmd/releasebuild build -version "$VERSION" -commit "$COMMIT" -date "$DATE" -out /tmp/first
+          scratch="$(mktemp -d)"
+          for n in first second; do
+            GOMODCACHE="$scratch/$n/mod" GOCACHE="$scratch/$n/build" go mod download
+            GOMODCACHE="$scratch/$n/mod" GOCACHE="$scratch/$n/build" go run ./cmd/releasebuild build -version "$VERSION" -commit "$COMMIT" -date "$DATE" -platform "$PLATFORM" -out "$scratch/$n/out"
+          done
+          diff -qr --no-dereference "$scratch/first/out" "$scratch/second/out"
+          mkdir -p leg && cp "$scratch/first/out/"* leg/
+          chmod -R u+w "$scratch" || true
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with: {name: "release-leg-${{ matrix.leg }}", path: leg/, if-no-files-found: error, retention-days: 1}
+
+  # Merge the legs into the exact tree one host used to build (same
+  # release-manifest.json, SHA256SUMS, artifact name `binary-release`), so
+  # smoke-*, container and assemble are unchanged.
+  build:
+    needs: [preflight, supply-chain, build-leg]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ needs.preflight.outputs.commit }}
+          persist-credentials: false
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: "1.27.0"
+          check-latest: false
+          cache: false
+      # actions/download-artifact v8.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with: {pattern: "release-leg-*", path: legs}
+      - name: Merge legs and write final checksum manifest
+        run: |
+          set -euo pipefail
+          go mod download
+          go run ./cmd/releasebuild merge -out /tmp/first $(for d in legs/*/; do printf -- '-in %s ' "$d"; done)
           go run ./cmd/releasebuild verify -dir /tmp/first
-          GOMODCACHE="$second_cache/mod" GOCACHE="$second_cache/build" go mod download
-          GOMODCACHE="$second_cache/mod" GOCACHE="$second_cache/build" go run ./cmd/releasebuild build -version "$VERSION" -commit "$COMMIT" -date "$DATE" -out /tmp/second
-          go run ./cmd/releasebuild verify -dir /tmp/second
-          diff -qr --no-dereference /tmp/first /tmp/second
           mkdir release; cp /tmp/first/* release/
           for archive in release/*.tar.gz release/*.zip; do
             scripts/ci/retry.sh go run github.com/anchore/syft/cmd/syft@v1.46.0 "$archive" -o "spdx-json=${archive}.spdx.json"

@@ -67,6 +67,10 @@ type Request struct {
 	SourceDir string
 	OutputDir string
 	Identity  Identity
+	// Only limits the build to these targets (a per-platform release leg). When
+	// non-empty the output is a fragment (release-fragment.json, no manifest or
+	// SHA256SUMS) that Merge combines into the full release tree.
+	Only []Target
 }
 
 type Artifact struct {

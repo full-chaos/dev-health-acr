@@ -50,7 +50,14 @@ func (b Builder) Build(ctx context.Context, request Request) (Manifest, error) {
 	defer os.RemoveAll(staging)
 
 	manifest := Manifest{SchemaVersion: manifestSchemaVersion, Version: request.Identity.Version, Commit: request.Identity.Commit, Date: request.Identity.Date}
-	for _, target := range Matrix() {
+	targets := Matrix()
+	if len(request.Only) != 0 {
+		var err error
+		if targets, err = selectTargets(request.Only); err != nil {
+			return Manifest{}, err
+		}
+	}
+	for _, target := range targets {
 		binaryPath := filepath.Join(staging, target.String()+binaryExtension(target))
 		compile := CompileRequest{SourceDir: request.SourceDir, OutputPath: binaryPath, Target: target, Identity: request.Identity, BuildFlags: reproducibleBuildFlags}
 		if err := b.compiler.Compile(ctx, compile); err != nil {
@@ -61,6 +68,9 @@ func (b Builder) Build(ctx context.Context, request Request) (Manifest, error) {
 			return Manifest{}, err
 		}
 		manifest.Artifacts = append(manifest.Artifacts, artifact)
+	}
+	if len(request.Only) != 0 {
+		return manifest, writeFragment(request.OutputDir, manifest)
 	}
 	if err := writeMetadata(request.OutputDir, manifest); err != nil {
 		return Manifest{}, err

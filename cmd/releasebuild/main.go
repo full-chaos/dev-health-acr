@@ -17,17 +17,24 @@ import (
 
 var errDirtyCheckout = errors.New("git checkout is dirty")
 
-const rootUsage = `Usage: releasebuild <build|verify|consume> [flags]
+const rootUsage = `Usage: releasebuild <build|merge|verify|consume> [flags]
 
 Commands:
 	build   create deterministic release archives
+	merge   combine per-platform build fragments into the release tree
 	verify  verify release archives and checksums
 	consume verify and extract the host acr-mcp release artifact
 `
 
-const buildUsage = `Usage: releasebuild build --out DIR --version VERSION --commit SHA --date UTC_TIMESTAMP [--root DIR]
+const buildUsage = `Usage: releasebuild build --out DIR --version VERSION --commit SHA --date UTC_TIMESTAMP [--root DIR] [--platform goos/goarch[,...]]
 
 Creates deterministic archives for the supported release matrix.
+With --platform only those platforms are built and OUT holds a fragment for merge.
+`
+
+const mergeUsage = `Usage: releasebuild merge --out DIR --in DIR [--in DIR ...]
+
+Combines per-platform fragments into the full release tree and verifies it.
 `
 
 const verifyUsage = `Usage: releasebuild verify --dir DIR
@@ -66,6 +73,8 @@ func (r runner) run(ctx context.Context, args []string, output io.Writer) error 
 	switch args[0] {
 	case "build":
 		return r.build(ctx, args[1:], output)
+	case "merge":
+		return r.merge(args[1:], output)
 	case "verify":
 		return r.verify(args[1:], output)
 	case "consume":
@@ -118,6 +127,7 @@ func (r runner) build(ctx context.Context, args []string, output io.Writer) erro
 	version := flags.String("version", "", "canonical release version")
 	commit := flags.String("commit", "", "full commit SHA")
 	date := flags.String("date", "", "UTC commit timestamp")
+	platform := flags.String("platform", "", "comma-separated goos/goarch list for a per-platform fragment")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -147,10 +157,46 @@ func (r runner) build(ctx context.Context, args []string, output io.Writer) erro
 	if compiler == nil {
 		compiler = releasebuild.GoCompiler{}
 	}
-	if _, err := releasebuild.NewBuilder(compiler).Build(ctx, releasebuild.Request{SourceDir: rootPath, OutputDir: *out, Identity: identity}); err != nil {
+	request := releasebuild.Request{SourceDir: rootPath, OutputDir: *out, Identity: identity}
+	written := "release-manifest.json"
+	if *platform != "" {
+		if request.Only, err = releasebuild.ParseTargets(*platform); err != nil {
+			return err
+		}
+		written = "release-fragment.json"
+	}
+	if _, err := releasebuild.NewBuilder(compiler).Build(ctx, request); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(output, "releasebuild build: %s\n", filepath.Join(*out, "release-manifest.json"))
+	_, err = fmt.Fprintf(output, "releasebuild build: %s\n", filepath.Join(*out, written))
+	return err
+}
+
+type repeated []string
+
+func (r *repeated) String() string     { return strings.Join(*r, ",") }
+func (r *repeated) Set(v string) error { *r = append(*r, v); return nil }
+
+func (r runner) merge(args []string, output io.Writer) error {
+	if helpRequested(args) {
+		_, err := fmt.Fprint(output, mergeUsage)
+		return err
+	}
+	flags := flag.NewFlagSet("merge", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	out := flags.String("out", "", "empty release output directory")
+	var inputs repeated
+	flags.Var(&inputs, "in", "fragment directory (repeatable)")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("merge does not accept positional arguments")
+	}
+	if _, err := releasebuild.Merge(inputs, *out); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintf(output, "releasebuild merge: %s\n", filepath.Join(*out, "release-manifest.json"))
 	return err
 }
 

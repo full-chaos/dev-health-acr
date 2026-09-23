@@ -129,7 +129,7 @@ func TestReleasebuild_help_and_invalid_commands_are_process_usable(t *testing.T)
 		wantExitOK bool
 		wantOutput string
 	}{
-		{name: "root help", args: []string{"--help"}, wantExitOK: true, wantOutput: "Usage: releasebuild <build|verify|consume>"},
+		{name: "root help", args: []string{"--help"}, wantExitOK: true, wantOutput: "Usage: releasebuild <build|merge|verify|consume>"},
 		{name: "build help", args: []string{"build", "--help"}, wantExitOK: true, wantOutput: "Usage: releasebuild build"},
 		{name: "verify help", args: []string{"verify", "--help"}, wantExitOK: true, wantOutput: "Usage: releasebuild verify"},
 		{name: "consume help", args: []string{"consume", "--help"}, wantExitOK: true, wantOutput: "Usage: releasebuild consume"},
