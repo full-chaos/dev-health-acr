@@ -107,8 +107,12 @@ func TestInvestigationEvidenceRefsExpandThroughSourceEvidence(t *testing.T) {
 	if !slices.Equal(refs, want) {
 		t.Fatalf("answer evidence refs %v, want every cited kind %v", refs, want)
 	}
+	resultID, _ := field(answer, "structured", "result_id").(string)
+	if resultID == "" {
+		t.Fatalf("the answer carried no result_id: %v", answer)
+	}
 	for _, ref := range refs {
-		reply := target.callRaw(t, "A", "cites-expand", "source_evidence", evidenceArgs(ref))
+		reply := target.callRaw(t, "A", "cites-expand", "source_evidence", scopedEvidenceArgs(ref, resultID))
 		expanded := structuredOf(t, "source_evidence "+ref, reply)
 		got, _ := field(expanded, "structured", "evidence", "evidence_ref_id").(string)
 		if got != ref {
@@ -143,14 +147,18 @@ func TestInvestigationEvidenceRefsStayDeniedForOtherCallers(t *testing.T) {
 	if len(refs) == 0 {
 		t.Fatal("the answer carried no evidence_ref_ids")
 	}
-	never := target.callRaw(t, "A", "cites-never", "source_evidence", evidenceArgs(contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, "never-cited-0001")))
+	resultID, _ := field(answer, "structured", "result_id").(string)
+	if resultID == "" {
+		t.Fatalf("the answer carried no result_id: %v", answer)
+	}
+	never := target.callRaw(t, "A", "cites-never", "source_evidence", scopedEvidenceArgs(contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, "never-cited-0001"), resultID))
 	neverTool, ok := never.tool()
 	if !ok || !neverTool.IsError {
 		t.Fatalf("an uncited ref expanded: %s", string(never.raw))
 	}
 	for _, caller := range []string{"B", "C"} {
 		for _, ref := range refs {
-			reply := target.callRaw(t, caller, "cites-foreign", "source_evidence", evidenceArgs(ref))
+			reply := target.callRaw(t, caller, "cites-foreign", "source_evidence", scopedEvidenceArgs(ref, resultID))
 			tool, ok := reply.tool()
 			if !ok || !tool.IsError {
 				t.Fatalf("caller %s expanded %s: %s", caller, ref, string(reply.raw))
@@ -160,4 +168,11 @@ func TestInvestigationEvidenceRefsStayDeniedForOtherCallers(t *testing.T) {
 			}
 		}
 	}
+}
+
+// scopedEvidenceArgs is the source_evidence call an agent makes for a Context
+// Fabric reference: the reference plus the result_id of the answer that
+// returned it.
+func scopedEvidenceArgs(ref, resultID string) map[string]any {
+	return map[string]any{"evidence_ref_id": ref, "result_id": resultID}
 }

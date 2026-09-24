@@ -64,6 +64,7 @@ func buildConversation() string {
 
 	b.WriteString("## Expand evidence\n\n")
 	b.WriteString("`source_evidence` takes one `evidence_ref_id` from an answer's `evidence_ref_ids` and returns provenance and a bounded excerpt. ")
+	b.WriteString("Also pass that answer's `result_id` with every reference it returned: a reference names its subject, not its answer, and some are refused without it. ")
 	b.WriteString("Authorization is checked live on every call.\n\n")
 
 	b.WriteString("## Trust\n\n")
