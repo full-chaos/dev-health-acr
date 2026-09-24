@@ -27,8 +27,8 @@ import (
 const (
 	chaos6594Repos       = 8
 	chaos6594Units       = 12000
-	chaos6594MinTableMiB = 10 // the trial table was 10.69 MiB; a smaller fixture proves nothing
-	chaos6594MaxFactor   = 2  // read bytes may not exceed this multiple of the table's uncompressed size
+	chaos6594MinTableMiB = 10   // the trial table was 10.69 MiB; a smaller fixture proves nothing
+	chaos6594MaxFactor   = 1.25 // read bytes may not exceed this multiple of the table's uncompressed size; one pass measures 0.97x, a second read of one wide column 1.79x
 )
 
 func seedCHAOS6594(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID string) {
@@ -172,8 +172,8 @@ func TestThemeMixReadsScanWorkUnitInvestmentsOnceAgainstRealClickHouse(t *testin
 				t.Fatalf("measurement did not happen: %d statements, %d bytes in query_log", m.statements, m.readBytes)
 			}
 			t.Logf("%s: %d statement(s) read %d bytes = %.2fx table", kind, m.statements, m.readBytes, float64(m.readBytes)/float64(table))
-			if m.readBytes > chaos6594MaxFactor*table {
-				t.Fatalf("%s mix read %d bytes = %.2fx the %d-byte table, want <= %dx (latest-row selection must be one pass)",
+			if float64(m.readBytes) > chaos6594MaxFactor*float64(table) {
+				t.Fatalf("%s mix read %d bytes = %.2fx the %d-byte table, want <= %.2fx (latest-row selection must be one pass)",
 					kind, m.readBytes, float64(m.readBytes)/float64(table), table, chaos6594MaxFactor)
 			}
 		})
