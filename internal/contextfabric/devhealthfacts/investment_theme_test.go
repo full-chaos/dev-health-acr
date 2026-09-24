@@ -12,10 +12,18 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-// themeMixRow matches readers.ReadTeamThemeMix's own scan order: team_id,
-// team_name, kind, key, weighted_effort.
+// themeMixRow shapes one repository-mix row.
+//
+// CHAOS-6559: the team mix is now the sum over the team's OWNED repositories,
+// so a "team" row here is one owned repository "repo-"+teamID (the ownership
+// table is faked by ownsRepoTable) and the scan order is repo_id, kind, key,
+// weighted_effort, work_units.
 func themeMixRow(teamID, teamName, kind, key string, weightedEffort float64) []any {
-	return []any{teamID, teamName, kind, key, weightedEffort}
+	return []any{"repo-" + teamID, kind, key, weightedEffort, uint64(3)}
+}
+
+func ownsRepoTable(teamID string) fakeTable {
+	return fakeTable{match: "FROM team_repo_ownership", rows: [][]any{{teamID, "repo-" + teamID}}}
 }
 
 // TestInvestmentProviderThemeMixReadsCanonicalSourceNeverLegacy is the
@@ -30,7 +38,7 @@ func TestInvestmentProviderThemeMixReadsCanonicalSourceNeverLegacy(t *testing.T)
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
 		{match: "FROM investment_metrics_daily", rows: nil},
-		{match: "FROM work_unit_investments", rows: [][]any{
+		ownsRepoTable("CHAOS"), {match: "FROM work_unit_investments", rows: [][]any{
 			themeMixRow("CHAOS", "Fullchaos", "theme", "feature_delivery", 60),
 			themeMixRow("CHAOS", "Fullchaos", "theme", "operational", 20),
 			themeMixRow("CHAOS", "Fullchaos", "theme", "maintenance", 10),
@@ -96,7 +104,7 @@ func TestInvestmentProviderThemeMixReadsCanonicalSourceNeverLegacy(t *testing.T)
 func TestInvestmentProviderThemeMixOmitsPriorFieldsOnCurrentAxis(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM work_unit_investments", rows: [][]any{
+		ownsRepoTable("CHAOS"), {match: "FROM work_unit_investments", rows: [][]any{
 			themeMixRow("CHAOS", "Fullchaos", "theme", "feature_delivery", 60),
 			themeMixRow("CHAOS", "Fullchaos", "theme", "operational", 20),
 			themeMixRow("CHAOS", "Fullchaos", "theme", "maintenance", 10),
@@ -143,7 +151,7 @@ func TestInvestmentProviderThemeMixReadsPriorWindowOnExplicitRange(t *testing.T)
 		themeMixRow("CHAOS", "Fullchaos", "theme", "quality", 6),
 		themeMixRow("CHAOS", "Fullchaos", "theme", "risk", 4),
 	}
-	client := &fakeClient{tables: []fakeTable{{match: "FROM work_unit_investments", rows: current}}}
+	client := &fakeClient{tables: []fakeTable{ownsRepoTable("CHAOS"), {match: "FROM work_unit_investments", rows: current}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
 	start := time.Date(2026, 5, 30, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 8, 28, 0, 0, 0, 0, time.UTC)
@@ -185,7 +193,7 @@ func TestInvestmentProviderThemeMixReadsPriorWindowOnExplicitRange(t *testing.T)
 // never a fabricated 0.0 share (CHAOS-3781 degrade-not-fabricate).
 func TestInvestmentProviderThemeMixZeroCurrentEffortOmitsFact(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM work_unit_investments", rows: nil}}}
+	client := &fakeClient{tables: []fakeTable{ownsRepoTable("CHAOS"), {match: "FROM work_unit_investments", rows: nil}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -207,7 +215,7 @@ func TestInvestmentProviderThemeMixZeroCurrentEffortOmitsFact(t *testing.T) {
 // than degrading silently.
 func TestInvestmentProviderThemeMixQueryErrorReturnsFactReadFailure(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM work_unit_investments", err: errors.New("boom")}}}
+	client := &fakeClient{tables: []fakeTable{ownsRepoTable("CHAOS"), {match: "FROM work_unit_investments", err: errors.New("boom")}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
 	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -232,7 +240,7 @@ func TestInvestmentProviderThemeMixMergesOntoExistingLegacyFactNeverShadowed(t *
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
 		{match: "FROM investment_metrics_daily", rows: [][]any{investmentRow("CHAOS")}},
-		{match: "FROM work_unit_investments", rows: [][]any{
+		ownsRepoTable("CHAOS"), {match: "FROM work_unit_investments", rows: [][]any{
 			themeMixRow("CHAOS", "Fullchaos", "theme", "feature_delivery", 60),
 			themeMixRow("CHAOS", "Fullchaos", "theme", "operational", 20),
 			themeMixRow("CHAOS", "Fullchaos", "theme", "maintenance", 10),
@@ -258,5 +266,59 @@ func TestInvestmentProviderThemeMixMergesOntoExistingLegacyFactNeverShadowed(t *
 	themeField, ok := fact.Fields[contextfabric.FactFieldTheme(contextfabric.ThemeFeatureDelivery)]
 	if !ok || themeField.Number == nil {
 		t.Fatalf("merged fact does not carry the canonical theme_feature_delivery field: %#v", fact.Fields)
+	}
+}
+
+// CHAOS-6559: allocation_breakdown for a team needs a DECLARED breakdown
+// table, not only scalar theme_* fields. Red on baseline: Capability().Tables
+// has no team entry (fact_table_shape_undeclared) and the fact carries no
+// theme_breakdown table.
+func TestInvestmentProviderTeamDeclaresAndEmitsThemeBreakdownTable(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM investment_metrics_daily", rows: nil},
+		ownsRepoTable("CHAOS"),
+		{match: "FROM work_unit_investments", rows: [][]any{
+			themeMixRow("CHAOS", "", "theme", "feature_delivery", 60),
+			themeMixRow("CHAOS", "", "theme", "operational", 20),
+			themeMixRow("CHAOS", "", "theme", "maintenance", 10),
+			themeMixRow("CHAOS", "", "theme", "quality", 6),
+			themeMixRow("CHAOS", "", "theme", "risk", 4),
+		}},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
+	shapes := provider.Capability().Tables[contextfabric.SubjectTeam]
+	if len(shapes) != 1 || shapes[0] != contextfabric.FactTableBreakdown {
+		t.Fatalf("team Tables = %v, want [breakdown]", shapes)
+	}
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{teamSubject("CHAOS")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(result.Facts) != 1 {
+		t.Fatalf("facts = %d, want 1", len(result.Facts))
+	}
+	value, ok := result.Facts[0].Fields["theme_breakdown"]
+	if !ok || value.Table == nil {
+		t.Fatalf("theme_breakdown table missing: %#v", result.Facts[0].Fields)
+	}
+	if err := value.Table.Validate(); err != nil {
+		t.Fatalf("table invalid: %v", err)
+	}
+	if value.Table.Shape != contextfabric.FactTableBreakdown || len(value.Table.Rows) != 5 {
+		t.Fatalf("table = %#v", value.Table)
+	}
+	got := map[string]float64{}
+	for _, row := range value.Table.Rows {
+		got[*row.Fields["theme"].String] = *row.Fields["share"].Number
+	}
+	if got["feature_delivery"] != 0.6 || got["risk"] != 0.04 {
+		t.Fatalf("shares = %v", got)
+	}
+	if result.Facts[0].Fields["mix_source"].String == nil || result.Facts[0].Fields["attribution_basis"].String == nil {
+		t.Fatalf("provenance missing: %#v", result.Facts[0].Fields)
 	}
 }

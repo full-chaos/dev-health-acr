@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ACR MCP source_evidence Request v1",
-  "description": "Input for the source_evidence tool. Exactly one field, evidence_ref_id, is accepted and required.",
+  "description": "Input for the source_evidence tool. evidence_ref_id is required. result_id is required for a Context Fabric reference (acr:v1:...), which is keyed by its subject and expands only in the scope of the answer that returned it.",
   "examples": [
     {
       "evidence_ref_id": "ev_2f9c81ab"
@@ -17,6 +17,12 @@
       "type": "string",
       "description": "An evidence reference exactly as a previous context_for_task or investigate_question response returned it (its evidence_ref_ids, or an evidence reference on a context item). Opaque: pass it back unchanged; never build or parse one yourself.",
       "minLength": 1,
+      "maxLength": 256
+    },
+    "result_id": {
+      "type": "string",
+      "description": "The result_id of the investigate_question answer that returned evidence_ref_id. Required when evidence_ref_id is a Context Fabric reference (acr:v1:...): the reference names its subject, not its answer, so without the result_id the citation of a different result could be returned. Opaque: pass it back unchanged.",
+      "minLength": 8,
       "maxLength": 256
     }
   },

@@ -712,6 +712,8 @@ The server lists three read-only guide resources and three prompts. They are sta
    {"evidence_ref_id": "ev_01J0ACR001"}
    ```
 
+   A reference that starts with `acr:v1:` names its subject, not its answer, and many results cite it. Pass the answer's `result_id` too (`{"evidence_ref_id": "acr:v1:team:CHAOS", "result_id": "result_..."}`); the citation returned is then that result's. Without `result_id` the call fails with `evidence_ref_unscoped`.
+
    The reply carries provenance and a bounded excerpt. URLs in it are references; the server never fetches them.
 
 Worked `context_for_task` call (remote requires `repository.slug`):

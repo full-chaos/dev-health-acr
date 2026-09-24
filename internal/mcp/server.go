@@ -229,7 +229,7 @@ func serverInstructions(cfg *ProcessConfig, caller *CallerContext) string {
 	if hostedToolEnabled(caller, toolInvestigationResult) {
 		b.WriteString("- investigation_result: you need the full result behind a previous answer. Pass its result_id.\n")
 	}
-	b.WriteString("- source_evidence: you want to check or quote one source. Pass an evidence_ref_id returned by another tool, unchanged.\n")
+	b.WriteString("- source_evidence: you want to check or quote one source. Pass an evidence_ref_id returned by another tool, unchanged, with the result_id of the answer that returned it.\n")
 	if recordEpisodeEnabled(cfg, caller) {
 		b.WriteString("- record_episode: only to leave append-only evidence about your own run.\n")
 	}
