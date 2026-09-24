@@ -1,7 +1,12 @@
 package contextfabric
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"regexp"
+	"strconv"
+	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -123,5 +128,51 @@ func TestCHAOS6558LeverIsSilentOffTheBytesAxis(t *testing.T) {
 	_, _ = engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
 	if len(telemetry.factRowTruncations) != 0 {
 		t.Fatalf("fact row truncation lines = %+v on an items overrun, want none", telemetry.factRowTruncations)
+	}
+}
+
+// The emitted Info line itself, through the real slog handler: the fields and
+// their VALUES, not the source text of the emitter.
+func TestCHAOS6558TruncationLineIsEmittedAtInfoWithItsValues(t *testing.T) {
+	t.Parallel()
+	var sink bytes.Buffer
+	calls := 0
+	engine := chaos6558Engine(t, &calls, &recordingTelemetry{}, chaos6558ProdShape)
+	engine.telemetry = NewSlogEngineTelemetry(slog.New(slog.NewTextHandler(&sink, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, chaos6558Request()); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	var line string
+	for _, candidate := range strings.Split(sink.String(), "\n") {
+		if strings.Contains(candidate, `msg="context fabric fact row truncation"`) {
+			if line != "" {
+				t.Fatalf("more than one truncation line:\n%s", sink.String())
+			}
+			line = candidate
+		}
+	}
+	if line == "" {
+		t.Fatalf("no truncation line at Info:\n%s", sink.String())
+	}
+	declared := chaos6558Facts * chaos6558RowsPerFact
+	for _, want := range []string{
+		"level=INFO", "axis=bytes", "max_serialized_bytes=65536", "served=true", "declined=\"\"",
+		"rows_before=" + strconv.Itoa(declared), "tables_truncated=" + strconv.Itoa(chaos6558Facts), "rows_dominate=true",
+	} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("truncation line lacks %q:\n%s", want, line)
+		}
+	}
+	after := regexp.MustCompile(`rows_after=(\d+)`).FindStringSubmatch(line)
+	dropped := regexp.MustCompile(`rows_dropped=(\d+)`).FindStringSubmatch(line)
+	bytesAfter := regexp.MustCompile(`bytes_after=(\d+)`).FindStringSubmatch(line)
+	if after == nil || dropped == nil || bytesAfter == nil {
+		t.Fatalf("truncation line lacks rows_after/rows_dropped/bytes_after:\n%s", line)
+	}
+	a, _ := strconv.Atoi(after[1])
+	d, _ := strconv.Atoi(dropped[1])
+	b, _ := strconv.Atoi(bytesAfter[1])
+	if a+d != declared || a >= declared || b > chaos6558MaxBytes || b == 0 {
+		t.Fatalf("rows_after=%d rows_dropped=%d bytes_after=%d do not describe a cut to fit %d rows into %d bytes", a, d, b, declared, chaos6558MaxBytes)
 	}
 }

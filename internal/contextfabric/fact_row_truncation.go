@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
+	"math/big"
 	"sort"
 	"strings"
 	"time"
@@ -180,8 +182,10 @@ func keepFactTableRows(rows []contractsv1.ContextFabricClaimedFactRow, table *co
 		order[index] = index
 	}
 	// Highest score first; ties keep the source order, so the cut is
-	// deterministic.
-	sort.SliceStable(order, func(a, b int) bool { return scores[order[a]] > scores[order[b]] })
+	// deterministic. EXACT comparison (factRowScore.compare), never a
+	// float64 projection: two distinct int64 ranks above 2^53 are equal as
+	// float64, and the cut then kept the lower one (codex r1, P1, executed).
+	sort.SliceStable(order, func(a, b int) bool { return scores[order[a]].compare(scores[order[b]]) > 0 })
 	chosen := append([]int(nil), order[:perTable]...)
 	sort.Ints(chosen)
 	kept := make([]contractsv1.ContextFabricClaimedFactRow, 0, perTable)
@@ -191,14 +195,60 @@ func keepFactTableRows(rows []contractsv1.ContextFabricClaimedFactRow, table *co
 	return kept
 }
 
-// factTableRowScores gives every row a "keep me first" score -- the instant
-// for a dated time series, the order_by value for a ranking -- or false when
-// the table is neither, or any row does not carry a usable value.
-func factTableRowScores(rows []contractsv1.ContextFabricClaimedFactRow, table *contractsv1.ContextFabricClaimedFactTable) ([]float64, bool) {
+// factRowScore is one row's "keep me first" value, held EXACTLY as the row
+// carries it: an instant, an int64, or a finite float64. It is never projected
+// onto float64, which cannot represent every int64 (or every instant in
+// nanoseconds) and would make distinct values tie.
+type factRowScore struct {
+	kind    factRowScoreKind
+	instant time.Time
+	integer int64
+	number  float64
+}
+
+type factRowScoreKind int
+
+const (
+	factRowScoreInstant factRowScoreKind = iota
+	factRowScoreInteger
+	factRowScoreNumber
+)
+
+// compare returns -1, 0 or +1. Instants compare only with instants (a table
+// is scored under one rule). Integers and numbers compare exactly through
+// big.Float, which represents every int64 and every finite float64.
+func (s factRowScore) compare(other factRowScore) int {
+	if s.kind == factRowScoreInstant || other.kind == factRowScoreInstant {
+		return s.instant.Compare(other.instant)
+	}
+	if s.kind == factRowScoreInteger && other.kind == factRowScoreInteger {
+		switch {
+		case s.integer < other.integer:
+			return -1
+		case s.integer > other.integer:
+			return 1
+		}
+		return 0
+	}
+	return s.big().Cmp(other.big())
+}
+
+func (s factRowScore) big() *big.Float {
+	if s.kind == factRowScoreInteger {
+		return new(big.Float).SetInt64(s.integer)
+	}
+	return big.NewFloat(s.number)
+}
+
+// factTableRowScores scores every row -- the instant for a dated time series,
+// the order_by value for a ranking -- or returns false when the table is
+// neither, or any row does not carry a usable value (a non-finite number
+// included), so the caller falls back to the source-order prefix.
+func factTableRowScores(rows []contractsv1.ContextFabricClaimedFactRow, table *contractsv1.ContextFabricClaimedFactTable) ([]factRowScore, bool) {
 	if table == nil {
 		return nil, false
 	}
-	scores := make([]float64, len(rows))
+	scores := make([]factRowScore, len(rows))
 	switch {
 	case table.Shape == contractsv1.ContextFabricFactTableShapeTimeSeries && len(table.Key) == 1:
 		for index, row := range rows {
@@ -210,7 +260,7 @@ func factTableRowScores(rows []contractsv1.ContextFabricClaimedFactRow, table *c
 			if !parsed {
 				return nil, false
 			}
-			scores[index] = float64(instant.UnixNano())
+			scores[index] = factRowScore{kind: factRowScoreInstant, instant: instant}
 		}
 		return scores, true
 	case table.Shape == contractsv1.ContextFabricFactTableShapeRanking && table.OrderBy != "":
@@ -218,9 +268,9 @@ func factTableRowScores(rows []contractsv1.ContextFabricClaimedFactRow, table *c
 			cell, present := row.Fields[table.OrderBy]
 			switch {
 			case present && cell.Integer != nil:
-				scores[index] = float64(*cell.Integer)
-			case present && cell.Number != nil:
-				scores[index] = *cell.Number
+				scores[index] = factRowScore{kind: factRowScoreInteger, integer: *cell.Integer}
+			case present && cell.Number != nil && !math.IsNaN(*cell.Number) && !math.IsInf(*cell.Number, 0):
+				scores[index] = factRowScore{kind: factRowScoreNumber, number: *cell.Number}
 			default:
 				return nil, false
 			}

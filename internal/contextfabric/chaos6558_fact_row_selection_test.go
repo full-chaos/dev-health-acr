@@ -1,6 +1,7 @@
 package contextfabric
 
 import (
+	"math"
 	"reflect"
 	"testing"
 
@@ -16,6 +17,11 @@ func TestCHAOS6558KeepFactTableRowsCutsFromTheRightEnd(t *testing.T) {
 	day := func(value string, count int64) contractsv1.ContextFabricClaimedFactRow {
 		return contractsv1.ContextFabricClaimedFactRow{Fields: map[string]contractsv1.ContextFabricScalarValue{
 			"day": {String: &value}, "count": {Integer: &count},
+		}}
+	}
+	numberDay := func(value string, number float64) contractsv1.ContextFabricClaimedFactRow {
+		return contractsv1.ContextFabricClaimedFactRow{Fields: map[string]contractsv1.ContextFabricScalarValue{
+			"day": {String: &value}, "count": {Number: &number},
 		}}
 	}
 	days := func(rows []contractsv1.ContextFabricClaimedFactRow) []string {
@@ -37,19 +43,28 @@ func TestCHAOS6558KeepFactTableRowsCutsFromTheRightEnd(t *testing.T) {
 		rows  []contractsv1.ContextFabricClaimedFactRow
 		table *contractsv1.ContextFabricClaimedFactTable
 		want  []string
+		cap   int
 	}{
-		{"series listed oldest-first keeps its newest days", ascending, series, []string{"2026-09-03", "2026-09-04"}},
-		{"series listed newest-first keeps its newest days", descending, series, []string{"2026-09-04", "2026-09-03"}},
-		{"series in no order keeps its newest days in table order", rfc, series, []string{"2026-09-03T00:00:00Z", "2026-09-04T00:00:00Z"}},
-		{"ranking keeps its highest order_by values", ascending, ranking, []string{"2026-09-02", "2026-09-04"}},
-		{"breakdown keeps its source-order prefix", ascending, breakdown, []string{"2026-09-01", "2026-09-02"}},
-		{"undeclared keeps its source-order prefix", ascending, nil, []string{"2026-09-01", "2026-09-02"}},
-		{"a series row that is not dated falls back to the prefix", undated, series, []string{"2026-09-01", "not-a-day"}},
+		{"series listed oldest-first keeps its newest days", ascending, series, []string{"2026-09-03", "2026-09-04"}, 0},
+		{"series listed newest-first keeps its newest days", descending, series, []string{"2026-09-04", "2026-09-03"}, 0},
+		{"series in no order keeps its newest days in table order", rfc, series, []string{"2026-09-03T00:00:00Z", "2026-09-04T00:00:00Z"}, 0},
+		{"series separates instants one nanosecond apart", []contractsv1.ContextFabricClaimedFactRow{day("2026-09-01T00:00:00.000000001Z", 1), day("2026-09-01T00:00:00.000000002Z", 2), day("2026-08-01T00:00:00Z", 3)}, series, []string{"2026-09-01T00:00:00.000000002Z"}, 1},
+		{"ranking keeps its highest order_by values", ascending, ranking, []string{"2026-09-02", "2026-09-04"}, 0},
+		{"ranking separates int64 ranks float64 cannot", []contractsv1.ContextFabricClaimedFactRow{day("2026-09-01", 9007199254740992), day("2026-09-02", 9007199254740993), day("2026-09-03", 1)}, ranking, []string{"2026-09-02"}, 1},
+		{"ranking mixes integer and number exactly", []contractsv1.ContextFabricClaimedFactRow{numberDay("2026-09-01", 9007199254740992), day("2026-09-02", 9007199254740993), day("2026-09-03", 1)}, ranking, []string{"2026-09-02"}, 1},
+		{"ranking with a non-finite number falls back to the prefix", []contractsv1.ContextFabricClaimedFactRow{day("2026-09-01", 1), numberDay("2026-09-02", math.Inf(1)), day("2026-09-03", 9)}, ranking, []string{"2026-09-01", "2026-09-02"}, 0},
+		{"breakdown keeps its source-order prefix", ascending, breakdown, []string{"2026-09-01", "2026-09-02"}, 0},
+		{"undeclared keeps its source-order prefix", ascending, nil, []string{"2026-09-01", "2026-09-02"}, 0},
+		{"a series row that is not dated falls back to the prefix", undated, series, []string{"2026-09-01", "not-a-day"}, 0},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			before := days(testCase.rows)
-			got := days(keepFactTableRows(testCase.rows, testCase.table, 2))
+			perTable := testCase.cap
+			if perTable == 0 {
+				perTable = 2
+			}
+			got := days(keepFactTableRows(testCase.rows, testCase.table, perTable))
 			if !reflect.DeepEqual(got, testCase.want) {
 				t.Fatalf("kept %v, want %v", got, testCase.want)
 			}
