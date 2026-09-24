@@ -272,6 +272,17 @@
               "minLength": 8,
               "maxLength": 256
             }
+          },
+          {
+            "name": "result_id",
+            "in": "query",
+            "required": false,
+            "description": "Scopes an acr:v1 evidence reference to the stored investigation result of the answer being verified. Without it the newest citing result answers (deprecated, logged).",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 256
+            }
           }
         ],
         "responses": {

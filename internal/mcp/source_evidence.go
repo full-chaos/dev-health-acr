@@ -28,6 +28,14 @@ func handleSourceEvidence(ctx context.Context, cfg *ProcessConfig, req *mcpsdk.C
 		return toolErrorResult(&classifiedError{category: "validation", message: "source_evidence arguments failed schema validation"}), nil
 	}
 
+	// CHAOS-6563: a Context Fabric ref (acr:v1:...) is keyed by its subject and
+	// many results cite it, so it expands only in the scope of the answer that
+	// returned it. An unscoped one is refused here, by name, rather than
+	// resolving to the citation of some other result.
+	if strings.HasPrefix(input.EvidenceRefID, contractsv1.ContextFabricEvidenceRefPrefix) && strings.TrimSpace(input.ResultID) == "" {
+		return toolErrorResult(&classifiedError{category: "validation", message: "evidence_ref_unscoped: this evidence reference names its subject, not its answer; pass the result_id of the investigate_question answer that returned it as result_id"}), nil
+	}
+
 	var evidence contractsv1.ExpandedEvidence
 	if strings.HasPrefix(input.EvidenceRefID, localEvidencePrefix) {
 		routeHosted := caller.hostedRoutes != nil && caller.hostedRoutes.has(input.EvidenceRefID)
@@ -43,7 +51,7 @@ func handleSourceEvidence(ctx context.Context, cfg *ProcessConfig, req *mcpsdk.C
 	}
 	if evidence.SchemaVersion == "" {
 		var err error
-		evidence, err = caller.client.Evidence(ctx, input.EvidenceRefID)
+		evidence, err = caller.client.EvidenceInResult(ctx, input.EvidenceRefID, input.ResultID)
 		if err != nil {
 			return toolErrorResult(err), nil
 		}

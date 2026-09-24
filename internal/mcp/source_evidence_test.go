@@ -161,3 +161,43 @@ func TestHandleSourceEvidenceRejectsSchemaVersionField(t *testing.T) {
 		t.Fatal("expected IsError for a source_evidence request carrying schema_version")
 	}
 }
+
+// CHAOS-6563: a Context Fabric ref names its subject, not its answer. The
+// tool forwards result_id to the hosted route, and refuses an unscoped
+// acr:v1 ref with a named error instead of resolving a citation of some other
+// result.
+func TestHandleSourceEvidenceScopesContextFabricRefsToTheAnswerResult(t *testing.T) {
+	const ref = "acr:v1:team:CHAOS"
+	fx := newFixtureServer(t)
+	var hostedQueries []string
+	fx.EvidenceHandler = func(w http.ResponseWriter, r *http.Request) {
+		hostedQueries = append(hostedQueries, r.URL.RawQuery)
+		writeJSONFixture(t, w, http.StatusOK, validExpandedEvidenceFixture(r.URL.Path[len("/api/v1/agent-context/evidence/"):]))
+	}
+	boot := newFixtureBootstrap(t, fx)
+
+	scoped, err := invokeSourceEvidence(context.Background(), boot, callToolRequest(t, map[string]any{"evidence_ref_id": ref, "result_id": "result_6563_older"}))
+	if err != nil || scoped.IsError {
+		t.Fatalf("scoped call: err=%v result=%#v", err, scoped)
+	}
+	if len(hostedQueries) != 1 || hostedQueries[0] != "result_id=result_6563_older" {
+		t.Fatalf("hosted query = %q, want result_id=result_6563_older", hostedQueries)
+	}
+
+	unscoped, err := invokeSourceEvidence(context.Background(), boot, callToolRequest(t, map[string]any{"evidence_ref_id": ref}))
+	if err != nil {
+		t.Fatalf("expected a tool error, not a protocol error: %v", err)
+	}
+	if !unscoped.IsError || !strings.Contains(toolResultText(unscoped), "evidence_ref_unscoped") {
+		t.Fatalf("unscoped acr:v1 ref must fail closed with evidence_ref_unscoped, got %q", toolResultText(unscoped))
+	}
+	if len(hostedQueries) != 1 {
+		t.Fatalf("an unscoped ref reached the hosted route: %q", hostedQueries)
+	}
+
+	// Refs outside the Context Fabric namespace are unchanged.
+	packet, err := invokeSourceEvidence(context.Background(), boot, callToolRequest(t, map[string]any{"evidence_ref_id": "ev_abc123"}))
+	if err != nil || packet.IsError {
+		t.Fatalf("packet handle: err=%v result=%#v", err, packet)
+	}
+}
