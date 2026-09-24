@@ -31,6 +31,13 @@ type SourceQueryExecutor interface {
 	QueryEvidence(context.Context, SourceQuery, []ClickHouseBinding) ([]contractsv1.EvidenceRef, error)
 }
 
+// SourceFreshnessExecutor is optionally implemented by an executor that can
+// report a source's newest observed_at independent of the evidence confidence
+// floor (CHAOS-6565).
+type SourceFreshnessExecutor interface {
+	QueryLatestObserved(context.Context, SourceQuery, []ClickHouseBinding) (time.Time, bool, error)
+}
+
 type CatalogResult struct {
 	Evidence    []contractsv1.EvidenceRef
 	Watermarks  []contractsv1.SourceWatermark
@@ -74,6 +81,8 @@ func ExecuteCatalogObserved(ctx context.Context, executor SourceQueryExecutor, p
 		return CatalogResult{}, fmt.Errorf("contextpacket: source query executor is required")
 	}
 	result := CatalogResult{Evidence: []contractsv1.EvidenceRef{}, Unavailable: []contractsv1.UnavailableSource{}}
+	latestObserved := map[string]time.Time{}
+	freshness, _ := executor.(SourceFreshnessExecutor)
 	for _, query := range SourceQueryCatalogV1 {
 		if err := ctx.Err(); err != nil {
 			return CatalogResult{}, err
@@ -97,6 +106,15 @@ func ExecuteCatalogObserved(ctx context.Context, executor SourceQueryExecutor, p
 			result.Unavailable = append(result.Unavailable, contractsv1.UnavailableSource{Source: query.ID, Reason: "source_unavailable"})
 			continue
 		}
+		if freshness != nil {
+			// A failed freshness read falls back to the evidence max; it must
+			// not turn a served source into an unavailable one.
+			if latest, found, ferr := freshness.QueryLatestObserved(ctx, query, plan.Bindings()); ferr == nil && found {
+				latestObserved[query.ID] = latest
+			} else if ctx.Err() != nil {
+				return CatalogResult{}, ctx.Err()
+			}
+		}
 		for index := range rows {
 			rows[index].SourceVersion = query.ID
 			readsRepositoryWide := query.Scope == EvidenceScopeRepo ||
@@ -109,7 +127,7 @@ func ExecuteCatalogObserved(ctx context.Context, executor SourceQueryExecutor, p
 		result.Evidence = append(result.Evidence, rows...)
 	}
 	result.Unavailable = appendMissingCatalogSources(result.Unavailable, result.Evidence, plan.TaskRef)
-	result.Watermarks = catalogWatermarks(plan, result.Evidence, result.Unavailable)
+	result.Watermarks = catalogWatermarks(plan, result.Evidence, result.Unavailable, latestObserved)
 	return result, nil
 }
 
@@ -159,11 +177,18 @@ func appendMissingCatalogSources(unavailable []contractsv1.UnavailableSource, ev
 	return unavailable
 }
 
-func catalogWatermarks(plan ReadPlan, evidence []contractsv1.EvidenceRef, unavailable []contractsv1.UnavailableSource) []contractsv1.SourceWatermark {
+func catalogWatermarks(plan ReadPlan, evidence []contractsv1.EvidenceRef, unavailable []contractsv1.UnavailableSource, sourceLatest map[string]time.Time) []contractsv1.SourceWatermark {
 	latest := map[string]time.Time{}
 	for _, ref := range evidence {
 		if observed, found := latest[ref.SourceVersion]; !found || ref.ObservedAt.After(observed) {
 			latest[ref.SourceVersion] = ref.ObservedAt
+		}
+	}
+	// CHAOS-6565: the source's own newest row wins over the confidence-
+	// filtered evidence subset (it can only be later or equal).
+	for id, observed := range sourceLatest {
+		if current, found := latest[id]; !found || observed.After(current) {
+			latest[id] = observed
 		}
 	}
 	failed := map[string]bool{}
