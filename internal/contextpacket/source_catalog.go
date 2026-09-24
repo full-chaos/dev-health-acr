@@ -119,19 +119,29 @@ func ExecuteCatalogObserved(ctx context.Context, executor SourceQueryExecutor, p
 				latestObserved[query.ID] = latest
 			} else if ctx.Err() != nil {
 				return CatalogResult{}, ctx.Err()
-			} else if ferr != nil {
+			} else if ferr != nil || len(rows) > 0 {
 				// LOUD fallback: the watermark below is derived from the
 				// confidence-filtered evidence rows, which can under-report
-				// freshness (CHAOS-6565). Log it and disclose it in the packet.
-				cause := ferr
-				if unwrapped := errors.Unwrap(ferr); unwrapped != nil {
-					cause = unwrapped
+				// freshness (CHAOS-6565). Covers a failed read AND a read that
+				// succeeded but found nothing (count 0) while the evidence read
+				// returned rows: the two reads disagree, so the freshness is not
+				// the source's own. Log it and disclose it in the packet.
+				reason := "freshness aggregate returned no rows while evidence rows exist"
+				attrs := []any{"source", query.ID}
+				if ferr != nil {
+					cause := ferr
+					if unwrapped := errors.Unwrap(ferr); unwrapped != nil {
+						cause = unwrapped
+					}
+					reason = "freshness read failed"
+					attrs = append(attrs, "phase", string(sourceQueryFailurePhase(ferr)), "error", cause.Error())
+				} else {
+					attrs = append(attrs, "evidence_rows", len(rows))
 				}
-				attrs := []any{"source", query.ID, "phase", string(sourceQueryFailurePhase(ferr)), "error", cause.Error()}
 				if plan.RequestID != "" {
 					attrs = append(attrs, "request_id", plan.RequestID)
 				}
-				slog.WarnContext(ctx, "context packet source freshness read failed; watermark derived from evidence rows", attrs...)
+				slog.WarnContext(ctx, "context packet source "+reason+"; watermark derived from evidence rows", attrs...)
 				result.Warnings = append(result.Warnings, "freshness_from_evidence:"+query.ID)
 			}
 		}

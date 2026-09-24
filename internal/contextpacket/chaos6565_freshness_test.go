@@ -83,3 +83,36 @@ func TestFreshnessFallbackIsLoud(t *testing.T) {
 		t.Fatalf("fallback log not loud or missing source/error/request id: %s", out)
 	}
 }
+
+// emptyFreshnessClient serves evidence but the source-latest aggregate reports
+// count 0 (the source changed between the two reads, or the reads disagree).
+type emptyFreshnessClient struct{ old time.Time }
+
+func (c emptyFreshnessClient) Query(_ context.Context, statement string, _ []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+	if strings.HasPrefix(statement, "SELECT max(observed_at)") {
+		return &rowScanner{rows: [][]any{{time.Time{}, uint64(0)}}}, nil
+	}
+	return &rowScanner{rows: [][]any{{"acr:v1:deployment:1", "dev_health", "deployment", "1", "deployment", "", "native", 0.9, "citation", c.old}}}, nil
+}
+
+func TestFreshnessEmptyAggregateWithEvidenceIsLoud(t *testing.T) {
+	plan, err := contextpacket.BuildReadPlanV1(fixturePrincipal(), fixtureRequest("freshness-empty", "main", "commit-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.RepoID = "00000000-0000-0000-0000-000000000001"
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	result, err := contextpacket.ExecuteCatalog(context.Background(), contextpacket.NewClickHouseSourceExecutor(emptyFreshnessClient{old: time.Now().Add(-time.Hour)}), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(result.Warnings, "freshness_from_evidence:deployments.v1") {
+		t.Fatalf("Warnings = %v, want freshness_from_evidence:deployments.v1", result.Warnings)
+	}
+	if out := logs.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "source=deployments.v1") || !strings.Contains(out, "evidence_rows=1") {
+		t.Fatalf("empty-aggregate fallback not logged loudly: %s", out)
+	}
+}
