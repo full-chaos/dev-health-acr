@@ -191,6 +191,16 @@ func normalizeRevocation(input RevocationInput) (RevocationInput, error) {
 	if err != nil {
 		return RevocationInput{}, err
 	}
+	// A blank reason is "no reason": normalize it to empty so adapters never
+	// persist whitespace as an audit reason.
+	input.Reason = strings.TrimSpace(input.Reason)
+	if input.Reason != "" {
+		input.Reason, err = normalizeText("reason", input.Reason, 500)
+		if err != nil {
+			return RevocationInput{}, err
+		}
+	}
+	input.ActorType = strings.TrimSpace(input.ActorType)
 	return input, nil
 }
 

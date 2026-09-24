@@ -60,6 +60,10 @@ type RevocationInput struct {
 	OrgID        string
 	CredentialID string
 	ActorID      string
+	// ActorType is the audit actor type; empty means "user".
+	ActorType string
+	// Reason is optional free text recorded in the audit metadata.
+	Reason string
 }
 
 // RotationRollbackInput identifies the exact rotation that may be undone. The

@@ -199,7 +199,7 @@ WHERE org_id = $1 AND credential_id = $2
 		return contractsv1.ClientCredential{}, storage.ErrConflict
 	}
 	credential.RevokedAt = cloneTime(&now)
-	if err := s.audit.record(ctx, tx, credentialRevokedEvent(credential, input.ActorID, now)); err != nil {
+	if err := s.audit.record(ctx, tx, withRevocationDetails(credentialRevokedEvent(credential, input.ActorID, now), input)); err != nil {
 		return contractsv1.ClientCredential{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -347,4 +347,16 @@ func cloneTime(value *time.Time) *time.Time {
 	}
 	copy := *value
 	return &copy
+}
+
+// withRevocationDetails applies the optional operator actor type and reason
+// from a revocation input to the standard revocation audit event.
+func withRevocationDetails(event storage.AuditEvent, input storage.CredentialRevocationInput) storage.AuditEvent {
+	if input.ActorType != "" {
+		event.ActorType = input.ActorType
+	}
+	if input.Reason != "" {
+		event.Metadata = map[string]any{"reason": input.Reason}
+	}
+	return event
 }

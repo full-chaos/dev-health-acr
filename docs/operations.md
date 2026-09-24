@@ -130,6 +130,14 @@ the plaintext value is returned only at issuance. Rotation supports at most a
 15-minute overlap. After revocation commits, new requests reject the token;
 in-flight requests are not cancelled.
 
+When a token is lost, an operator revokes the credential without the bearer:
+`acr-api credentials revoke --org-id <org> --credential-id <id> [--reason <text>] [--actor <id>]`
+(runtime DSN from `ACR_POSTGRES_DSN`; find the id with `credentials list --org-id <org> --json`).
+It uses the same storage path as the self-revoke route, so the token is
+rejected at once. The audit event records actor type `operator` (actor id
+defaults to `operator`) and the reason. An unknown id exits non-zero with
+`not found`; an already-revoked id exits non-zero with `already revoked`.
+
 ### Context Fabric projection worker (`acr-projector`, CHAOS-3753)
 
 `cmd/acr-projector` is a dedicated binary, independently deployed and scaled
