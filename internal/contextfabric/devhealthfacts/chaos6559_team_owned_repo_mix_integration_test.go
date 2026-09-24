@@ -107,3 +107,47 @@ func TestTeamThemeMixIsTheSumOfOwnedRepositoriesAgainstRealClickHouse(t *testing
 		t.Fatalf("table invalid: %v", err)
 	}
 }
+
+// A team owning 41 repositories (246 mix rows, over the 200-row statement
+// limit) must be served in full: no owned repository or theme may be dropped.
+func TestTeamThemeMixOverManyOwnedRepositoriesIsCompleteAgainstRealClickHouse(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	createCHAOS5930Tables(t, ctx, direct)
+	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
+	at := ts(2026, 9, 18, 0, 0, 0)
+	const orgID = "org-team-many-repos"
+	const n = 41
+	for i := 0; i < n; i++ {
+		label := fmt.Sprintf("many-%02d", i)
+		if err := direct.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`, repoUUID(label), orgID, "acme/"+label, "github", at); err != nil {
+			t.Fatalf("seed repo: %v", err)
+		}
+		if err := direct.Exec(ctx, `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			orgID, "github", "team-many", repoUUID(label), "acme/"+label, "exact", "native", uint8(1), uint16(100), int32(0), at, nil, at); err != nil {
+			t.Fatalf("seed ownership: %v", err)
+		}
+		if err := direct.Exec(ctx,
+			`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?)`,
+			"wu-"+label, at, at, 1.0, map[string]float64{"feature_delivery": 0.2, "operational": 0.2, "maintenance": 0.2, "quality": 0.2, "risk": 0.2}, map[string]float64{},
+			fmt.Sprintf(`{"issues":[],"prs":["%s#pr1"]}`, repoUUID(label)), at, orgID); err != nil {
+			t.Fatalf("seed wu: %v", err)
+		}
+	}
+	for run := 0; run < 2; run++ { // repeat: an unordered LIMIT used to vary across reads
+		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
+			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactInvestment,
+			Subjects: []contextfabric.SubjectRef{teamSubject("team-many")},
+		})
+		if err != nil || len(result.Facts) != 1 {
+			t.Fatalf("read: err=%v facts=%d", err, len(result.Facts))
+		}
+		total := 0.0
+		for _, row := range result.Facts[0].Fields["theme_breakdown"].Table.Rows {
+			total += *row.Fields["weighted_effort"].Number
+		}
+		if math.Abs(total-n) > 1e-9 || *result.Facts[0].Fields["owned_repository_count"].Integer != n {
+			t.Fatalf("run %d: weighted total = %v repos=%d, want %d/%d", run, total, *result.Facts[0].Fields["owned_repository_count"].Integer, n, n)
+		}
+	}
+}

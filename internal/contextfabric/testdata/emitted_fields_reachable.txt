@@ -172,17 +172,17 @@ FactIncidents
 FactInvestment
   reached_funcs      45
   dynamic_key_sites  8
-  leaked_call_sites  3
+  leaked_call_sites  4
     leak interface_method     3
     leak external_func_value  0
     leak rebound_func_value   0
     leak no_body              0
-    leak unresolvable         0
+    leak unresolvable         1
     calls followed            86
     calls accounted           13
     calls not_a_call          14
-    calls excluded_by_design  175
-    calls leaked              3
+    calls excluded_by_design  181
+    calls leaked              4
   fields             attribution attribution_basis churn_loc cycle_p50_hours day delivery_units effort_unit_count investment_area investment_mix_source mix_source native_multi_placed_unit_count owned_repository_count owning_team_rollup_work_unit_count population_window project_stream prs_merged repo_count rollup_basis share source spanning_unit_count team_breakdown team_count team_id team_name theme theme_breakdown theme_quality_bugfix weighted_effort work_items_completed work_unit_count work_units_without_repo_link
 
 FactLandscape
