@@ -56,8 +56,9 @@ func validateOAuthDiscovery(o ServeOptions) error {
 func (h *HTTPHandler) oauthDiscoveryEnabled() bool { return h.opts.ResourceURL != "" }
 
 // resourceFor is the protected-resource identifier for one served path: the
-// configured ResourceURL's origin plus that path ("/" stays "/"). A strict
-// client that connected to a path sees exactly that URL as `resource`.
+// configured ResourceURL's origin plus that path, and for the root path the
+// bare origin (no trailing slash, the canonical form of a host-only URL). A
+// strict client that connected to a URL sees exactly that URL as `resource`.
 func (h *HTTPHandler) resourceFor(path string) string {
 	resource, err := url.Parse(h.opts.ResourceURL)
 	if err != nil {
@@ -65,6 +66,9 @@ func (h *HTTPHandler) resourceFor(path string) string {
 	}
 	if path == h.opts.BasePath {
 		return h.opts.ResourceURL
+	}
+	if path == "/" {
+		return resource.Scheme + "://" + resource.Host
 	}
 	return resource.Scheme + "://" + resource.Host + path
 }

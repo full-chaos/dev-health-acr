@@ -128,7 +128,7 @@ func TestRootAliasIsTransparentToStrictClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for connected, wantResource := range map[string]string{"/": "https://mcp.example.test/", "/mcp": "https://mcp.example.test/mcp"} {
+	for connected, wantResource := range map[string]string{"/": "https://mcp.example.test", "/mcp": "https://mcp.example.test/mcp"} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodPost, connected, strings.NewReader(string(rawToolsList())))
 		request.Header.Set("Content-Type", "application/json")
@@ -150,10 +150,7 @@ func TestRootAliasIsTransparentToStrictClient(t *testing.T) {
 			t.Fatalf("%s: followed %s -> status %d resource %q, want %q", connected, metadataURL, meta.Code, doc.Resource, wantResource)
 		}
 	}
-	for path, want := range map[string]int{"/healthz": http.StatusOK, acrmcp.ProtectedResourceMetadataPath + "/{$}": http.StatusNotFound, "/other": http.StatusNotFound} {
-		if strings.Contains(path, "{") {
-			continue
-		}
+	for path, want := range map[string]int{"/healthz": http.StatusOK, "/other": http.StatusNotFound} {
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
 		if recorder.Code != want {
@@ -164,5 +161,28 @@ func TestRootAliasIsTransparentToStrictClient(t *testing.T) {
 	handler.ServeHTTP(trailing, httptest.NewRequest(http.MethodGet, acrmcp.ProtectedResourceMetadataPath+"/", nil))
 	if trailing.Code != http.StatusOK {
 		t.Fatalf("trailing-slash root metadata: status %d", trailing.Code)
+	}
+}
+
+// A custom base path gets no root alias: the audience check knows only the
+// "/" and "/mcp" pair, so a root alias there would advertise a resource the
+// authorization server refuses.
+func TestCustomBasePathHasNoRootAlias(t *testing.T) {
+	hosted := newHostedAPI(t)
+	cfg := hosted.sidecarConfig()
+	opts := acrmcp.DefaultServeOptions()
+	opts.Transport = acrmcp.TransportHTTP
+	opts.BasePath = "/agent/mcp"
+	opts.ResourceURL = "https://mcp.example.test/agent/mcp"
+	opts.AuthorizationServer = "https://acr.example.test"
+	handler, err := acrmcp.NewServeHTTPHandler(cfg, testIdentity, &syncBuffer{}, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(string(rawToolsList())))
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("custom base path root: status %d, want 404", recorder.Code)
 	}
 }
