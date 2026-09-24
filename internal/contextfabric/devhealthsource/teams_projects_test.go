@@ -402,6 +402,11 @@ func liveShapedEdgeClient() *fakeClient {
 			projectTeamRow("70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891", "gl:full.chaos", "native",
 				time.Date(2026, 8, 12, 13, 8, 20, 79000000, time.UTC), 1, time.Unix(0, 0).UTC(), at),
 		}},
+		// CHAOS-6561: the collapsed team_repo_ownership group queryRepositoryTeams
+		// projects as repository -> team OWNED_BY_TEAM.
+		fakeTable{match: repositoryTeamsMarker, rows: [][]any{
+			openRepositoryTeam("cd620f84-2602-8dea-7809-8d1f11825cf4", "full.chaos/dev-health-ops", "gl:full.chaos", "gitlab", "native", at).row(),
+		}},
 	)
 	return client
 }

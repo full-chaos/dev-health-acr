@@ -156,6 +156,15 @@ func TestLiveSchemaParityAcrossEveryProducer(t *testing.T) {
 		orgID, "github", teamID, projectID, "PARITY", "native", at.Add(-48*time.Hour), nil, at)
 	mustSeed("team_project_ownership second window", `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		orgID, "github", teamID, projectID, "PARITY", "native", at.Add(-24*time.Hour), nil, at)
+	// CHAOS-6561: queryRepositoryTeams reads Nullable(UUID) repo_id, Enum8
+	// source/match_type through toString(), UInt16/Int32 through toInt64() and
+	// a Nullable(DateTime64) valid_to through the argMax(tuple()) collapse --
+	// every one a Scan shape the fake cannot vouch for. Two windows for one
+	// edge, so the GROUP BY must collapse them or the batch rejects.
+	mustSeed("team_repo_ownership first window", `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		orgID, "github", teamID, repoID, repoSlug, "exact", "native", uint8(1), uint16(100), int32(10), at.Add(-48*time.Hour), nil, at)
+	mustSeed("team_repo_ownership second window", `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		orgID, "github", teamID, repoID, repoSlug, "exact", "native", uint8(1), uint16(100), int32(10), at.Add(-24*time.Hour), nil, at)
 
 	source, err := devhealthsource.NewClickHouseProjectionSource(query)
 	if err != nil {
@@ -294,6 +303,7 @@ func assertTeamsProjectsSchemaParity(t *testing.T, ctx context.Context, query co
 		"project_membership_presence": devhealthsource.ProjectMembershipRelationshipIDForTest(t, devhealthsource.WorkItemSubjectCanonicalIDForTest(t, repoID, "WI-CHILD"), "github", projectID, ""),
 		"work_item_team_attributions": devhealthsource.WorkItemTeamRelationshipIDForTest(t, repoID, "WI-CHILD", teamID),
 		"team_project_ownership":      devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", projectID, teamID, "native"),
+		"team_repo_ownership":         devhealthsource.RepositoryTeamRelationshipIDForTest(repoID, teamID, "github", "native"),
 	}
 	seen := map[string]bool{}
 	for _, entity := range batch.Entities {

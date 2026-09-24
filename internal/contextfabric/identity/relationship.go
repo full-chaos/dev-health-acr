@@ -74,6 +74,13 @@ const (
 	// the same fact twice and invite the two spellings to disagree.
 	RelationshipFamilyWorkItemTeam      RelationshipFamily = "work_item_team"
 	RelationshipFamilyProjectMembership RelationshipFamily = "project_membership"
+	// RelationshipFamilyRepositoryTeam is devhealthsource's repository<->team
+	// OWNED_BY_TEAM ownership edge (CHAOS-6561), read from
+	// team_repo_ownership. It is born on this digest scheme rather than
+	// migrated to it: the same injectivity argument as project_team, because
+	// team ids are routinely `gl:full.chaos` and the provider/source
+	// discriminator is joined beside them.
+	RelationshipFamilyRepositoryTeam RelationshipFamily = "repository_team"
 )
 
 // DeriveRelationship computes the `relationship.v2:<family>:
