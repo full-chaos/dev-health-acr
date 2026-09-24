@@ -1404,6 +1404,22 @@ func (t SlogEngineTelemetry) RecordPlanNarrowing(ctx context.Context, principal 
 	t.logger.InfoContext(ctx, "context fabric plan narrowing", args...)
 }
 
+// RecordCohortNarrowingDisclosure (CHAOS-6561) emits the disclosure decision
+// at Info, every key on every line. Content-safe: closed tokens and integers.
+func (t SlogEngineTelemetry) RecordCohortNarrowingDisclosure(ctx context.Context, principal storage.Principal, event CohortNarrowingDisclosureEvent) {
+	args := []any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"family", SanitizeLogAttr(string(event.Family)),
+		"member_kind", SanitizeLogAttr(string(event.Kind)),
+		"outcome", SanitizeLogAttr(string(event.Outcome)),
+		"declared", event.Declared,
+		"served", event.Served,
+		"steps", event.Steps,
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric cohort narrowing disclosure", args...)
+}
+
 // planNarrowingLogAttrs is the shared, content-safe field formatter for the
 // ordinary plan-narrowing line and the pre-execution retry-selection line.
 // Keeping one field list is deliberate: both lines describe the same measured
@@ -1600,6 +1616,9 @@ func (t SlogEngineTelemetry) RecordReadRequirementPopulation(ctx context.Context
 		"population_census", SanitizeLogAttr(string(event.Census)),
 		"cohort_complete", event.CohortComplete,
 		"cohort_truncated", event.CohortTruncated,
+		"cause_narrowing", SanitizeLogAttr(string(event.CauseNarrowing)),
+		"cause_overrun", SanitizeLogAttr(string(event.CauseOverrun)),
+		"refinements", event.Refinements,
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric read requirement population", args...)

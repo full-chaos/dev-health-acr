@@ -640,6 +640,20 @@ func (e *Engine) finalizeResult(
 	}
 	result.Completeness.Outcomes = appendRankingRequirementEvaluations(
 		result.Completeness.Outcomes, stamped.Requirements, result.Cohort, cardinality)
+	// CHAOS-6561: state the plan's cohort narrowing on the served document --
+	// FROM how many members retrieval found, TO how many the answer carries,
+	// and WHICH recorded steps cut them. HERE, before measurement and before
+	// the completeness block, so stage 3 measures the sentence the route will
+	// marshal. The decision is HELD on the pending telemetry (replaced per
+	// pass, so it describes the last document this pending finalized) and
+	// published once by (*Engine).emit.
+	disclosure, decided := applyCohortNarrowingDisclosure(&result, stamped.Family, cardinality, stamped.Narrowing)
+	if pending != nil {
+		pending.CohortNarrowingDisclosure = nil
+		if decided {
+			pending.CohortNarrowingDisclosure = &disclosure
+		}
+	}
 	result.Completeness = ComputeAnswerCompleteness(result)
 	return result
 }

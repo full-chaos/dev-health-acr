@@ -760,6 +760,11 @@ type assemblyTelemetry struct {
 	// So every pass's events are kept, and (*Engine).emit marks which one was
 	// actually served.
 	ObservationCover []ReadRequirementObservationCoverEvent
+	// CohortNarrowingDisclosure (CHAOS-6561) is the cohort-narrowing
+	// disclosure decision for the document this pending last finalized.
+	// REPLACED per finalize, like CohortRanked, because it describes the
+	// served member set; nil when the cohort was not narrowed.
+	CohortNarrowingDisclosure *CohortNarrowingDisclosureEvent
 }
 
 // emit publishes the held events. The engine calls it EXACTLY ONCE, for the
@@ -784,6 +789,9 @@ func (e *Engine) emit(ctx context.Context, principal storage.Principal, pending 
 		e.telemetry.RecordCohortDriverNarration(ctx, principal, *pending.CohortNarration)
 	}
 	e.recordCommitAffirmation(ctx, principal, pending.CommitAffirmations)
+	if e.telemetry != nil && pending.CohortNarrowingDisclosure != nil {
+		e.telemetry.RecordCohortNarrowingDisclosure(ctx, principal, *pending.CohortNarrowingDisclosure)
+	}
 	// The observation-cover events are NOT published here. emit runs before
 	// the final budget assertion, validation and persistence, any of which can
 	// still withhold the answer, and a cover line marked served for an answer

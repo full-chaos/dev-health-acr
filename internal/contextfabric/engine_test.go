@@ -475,6 +475,7 @@ type recordingTelemetry struct {
 	// narrowing dropped rather than inferring it from what survived.
 	factRetentions             []FactRetentionEvent
 	membershipCardinalities    []MembershipCardinalityEvent
+	cohortNarrowingDisclosures []CohortNarrowingDisclosureEvent
 	countPopulationScopes      []CountPopulationScopeEvent
 	readRequirementPopulations []ReadRequirementPopulationEvent
 	// readRequirementObservationCovers records every observation-cover
@@ -887,6 +888,10 @@ func (r *recordingTelemetry) RecordFactRetention(_ context.Context, _ storage.Pr
 // Engine.Investigate; deleting the production emit must fail it.
 func (r *recordingTelemetry) RecordMembershipCardinality(_ context.Context, _ storage.Principal, event MembershipCardinalityEvent) {
 	r.membershipCardinalities = append(r.membershipCardinalities, event)
+}
+
+func (r *recordingTelemetry) RecordCohortNarrowingDisclosure(_ context.Context, _ storage.Principal, event CohortNarrowingDisclosureEvent) {
+	r.cohortNarrowingDisclosures = append(r.cohortNarrowingDisclosures, event)
 }
 
 func (r *recordingTelemetry) RecordCountPopulationScope(_ context.Context, _ storage.Principal, event CountPopulationScopeEvent) {

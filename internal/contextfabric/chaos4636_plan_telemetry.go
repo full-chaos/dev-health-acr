@@ -389,6 +389,10 @@ type PlanTelemetry interface {
 	// diagnosable and a single summary field could not represent two stages
 	// acting for different reasons.
 	RecordPlanNarrowing(ctx context.Context, principal storage.Principal, event PlanNarrowingEvent)
+	// RecordCohortNarrowingDisclosure (CHAOS-6561) reports, once per served
+	// answer whose cohort carries fewer members than retrieval found, whether
+	// the narrowing was disclosed on the answer or why it was not.
+	RecordCohortNarrowingDisclosure(ctx context.Context, principal storage.Principal, event CohortNarrowingDisclosureEvent)
 	// RecordSynthesisRetrySelection reports the bounded retry cohort selected
 	// after the first synthesis measurement. It fires before the retry starts,
 	// so RetryAttempted, RetryFit and RetryFailed are all false on this event;
