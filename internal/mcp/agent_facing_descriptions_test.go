@@ -248,13 +248,17 @@ func TestServerInstructionsAreAnAgentGuide(t *testing.T) {
 
 	// The four things the guide must say, each pinned by its own phrase.
 	for name, phrase := range map[string]string{
-		"tool choice":        "Choosing a tool:",
-		"question shapes":    "Question shapes that work:",
-		"receipt flow":       "prior_window_receipts",
-		"clarification flow": "clarification_required",
-		"untrusted content":  "untrusted data",
-		"live authorization": "re-checked against your credential on every call",
-		"opaque ids":         "opaque",
+		"tool choice":     "Choosing a tool:",
+		"question shapes": "Question shapes that work:",
+		"receipt flow":    "prior_window_receipts",
+		// CHAOS-6557: a stated period still gets a confirmation turn
+		// (DP12(b)/CHAOS-4040); the guide must tell the agent to send the
+		// window receipt back rather than imply the stated period is used.
+		"window confirmation": "send the matching winr_ receipt back in prior_window_receipts",
+		"clarification flow":  "clarification_required",
+		"untrusted content":   "untrusted data",
+		"live authorization":  "re-checked against your credential on every call",
+		"opaque ids":          "opaque",
 	} {
 		if !strings.Contains(instructions, phrase) {
 			t.Errorf("instructions lack the %s phrase %q", name, phrase)

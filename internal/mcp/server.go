@@ -238,7 +238,7 @@ func serverInstructions(cfg *ProcessConfig, caller *CallerContext) string {
 		b.WriteString("\nQuestion shapes that work:\n")
 		b.WriteString("- One subject with its name: \"what is blocking the payments project?\", \"is pull request 532 ready to merge?\".\n")
 		b.WriteString("- A set, asked as \"which\": \"which teams need attention?\". Only teams, projects, repositories, incidents and pull requests can be listed this way.\n")
-		b.WriteString("- A period when it matters (\"over the last quarter\", or evidence_window). Without one the service picks a window and reports it.\n")
+		b.WriteString("- A period when it matters (\"over the last 30 days\", or evidence_window). The first answer then asks you to confirm the window: send the matching winr_ receipt back in prior_window_receipts, with parent_result_id, on the next call. Without a period the service proposes one the same way.\n")
 		b.WriteString("- Put names in the question. Do not guess scope ids: no tool lists them, and scope only narrows a search you already understand.\n")
 		b.WriteString("- Team answers depend on synced repository ownership. Missing data is reported as missing, not as healthy.\n")
 

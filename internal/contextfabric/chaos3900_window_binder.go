@@ -74,12 +74,25 @@ var windowGrammarRegistry = []windowGrammarEntry{
 	{name: "trailing_month", relativeID: RelativeWindowTrailing30D, pattern: regexp.MustCompile(`(?i)\b(?:last|past)\s+month\b`)},
 	{name: "trailing_quarter", relativeID: RelativeWindowTrailing90D, pattern: regexp.MustCompile(`(?i)\b(?:last|past)\s+quarter\b`)},
 	{name: "trailing_year", relativeID: RelativeWindowTrailing365D, pattern: regexp.MustCompile(`(?i)\b(?:last|past)\s+year\b`)},
+	// CHAOS-6557: numeric trailing phrases, closed to the widths that ARE
+	// registry RelativeIDs. Prod acceptance (req lane-mcp-accept-d49b78d5)
+	// asked "over the last 30 days"; with no entry here the class table's
+	// trailing_90d default was offered instead of the stated 30 days. Any
+	// other width ("last 14 days", "last 2 months") still binds nothing --
+	// never the nearest registry width. Disjoint from the three entries
+	// above: those require the unit word directly after last/past.
+	{name: "trailing_30_days", relativeID: RelativeWindowTrailing30D, pattern: regexp.MustCompile(`(?i)\b(?:last|past)\s+(?:30|thirty)\s+days\b`)},
+	{name: "trailing_90_days", relativeID: RelativeWindowTrailing90D, pattern: regexp.MustCompile(`(?i)\b(?:last|past)\s+(?:90|ninety)\s+days\b`)},
+	{name: "trailing_3_months", relativeID: RelativeWindowTrailing90D, pattern: regexp.MustCompile(`(?i)\b(?:last|past)\s+(?:3|three)\s+months\b`)},
+	{name: "trailing_365_days", relativeID: RelativeWindowTrailing365D, pattern: regexp.MustCompile(`(?i)\b(?:last|past)\s+365\s+days\b`)},
+	{name: "trailing_12_months", relativeID: RelativeWindowTrailing365D, pattern: regexp.MustCompile(`(?i)\b(?:last|past)\s+(?:12|twelve)\s+months\b`)},
 }
 
 // BindWindowSpans applies the closed grammar to question (verbatim
-// request.Question) and returns every bound span. The registry's three
-// patterns target disjoint token shapes (month/quarter/year are mutually
-// exclusive words), so no overlap-dedup is needed, mirroring BindHandles.
+// request.Question) and returns every bound span. The registry's patterns
+// target disjoint token shapes (a bare month/quarter/year word, or one
+// fixed number+unit pair per entry), so no overlap-dedup is needed,
+// mirroring BindHandles.
 func BindWindowSpans(question string) []BoundWindowSpan {
 	var bound []BoundWindowSpan
 	for _, entry := range windowGrammarRegistry {
@@ -225,6 +238,11 @@ const (
 type WindowBindOutcome struct {
 	Reason     WindowBindReason
 	RelativeID RelativeWindowID // set only when Reason == WindowBindRoutedInferred
+	// Grammar (CHAOS-6557) is the registry entry's own fixed name, set
+	// only when Reason == WindowBindRoutedInferred -- safe to trace (never
+	// question text), so the binder telemetry line can name WHICH phrase
+	// shape proposed the window.
+	Grammar    string
 	SpansBound int
 }
 
@@ -247,5 +265,5 @@ func ProposeWindowFromSpans(question string) WindowBindOutcome {
 	if !hasWindowRole(question, span) {
 		return WindowBindOutcome{Reason: WindowBindSpanUnbound, SpansBound: 1}
 	}
-	return WindowBindOutcome{Reason: WindowBindRoutedInferred, RelativeID: span.RelativeID, SpansBound: 1}
+	return WindowBindOutcome{Reason: WindowBindRoutedInferred, RelativeID: span.RelativeID, Grammar: span.Grammar, SpansBound: 1}
 }
