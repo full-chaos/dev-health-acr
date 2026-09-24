@@ -2,6 +2,7 @@ package contextpacket
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -122,7 +123,11 @@ func ExecuteCatalogObserved(ctx context.Context, executor SourceQueryExecutor, p
 				// LOUD fallback: the watermark below is derived from the
 				// confidence-filtered evidence rows, which can under-report
 				// freshness (CHAOS-6565). Log it and disclose it in the packet.
-				attrs := []any{"source", query.ID, "error", ferr.Error()}
+				cause := ferr
+				if unwrapped := errors.Unwrap(ferr); unwrapped != nil {
+					cause = unwrapped
+				}
+				attrs := []any{"source", query.ID, "phase", string(sourceQueryFailurePhase(ferr)), "error", cause.Error()}
 				if plan.RequestID != "" {
 					attrs = append(attrs, "request_id", plan.RequestID)
 				}
