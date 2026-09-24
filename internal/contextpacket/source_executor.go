@@ -89,6 +89,41 @@ func (e *ClickHouseSourceExecutor) QueryEvidence(ctx context.Context, query Sour
 	return evidence, nil
 }
 
+// QueryLatestObserved returns the newest observed_at the source holds for the
+// plan's scope, WITHOUT the confidence floor QueryEvidence applies (CHAOS-6565).
+// Freshness describes the source, not the subset of rows the evidence read kept:
+// deployments carry release_ref_confidence (default 0.0), so a confidence-filtered
+// max reported a source stale while newer low-confidence rows existed.
+func (e *ClickHouseSourceExecutor) QueryLatestObserved(ctx context.Context, query SourceQuery, bindings []ClickHouseBinding) (_ time.Time, _ bool, err error) {
+	if e == nil || e.client == nil {
+		return time.Time{}, false, fmt.Errorf("contextpacket: clickhouse query client is required")
+	}
+	rows, err := e.client.Query(ctx, fmt.Sprintf("SELECT max(observed_at), count() FROM (%s)", query.Statement), bindings)
+	if err != nil {
+		return time.Time{}, false, &sourceExecutionError{phase: SourceQueryPhaseQuery, sourceID: query.ID, cause: err}
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = &sourceExecutionError{phase: SourceQueryPhaseClose, sourceID: query.ID, cause: closeErr}
+		}
+	}()
+	var latest time.Time
+	var count uint64
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return time.Time{}, false, &sourceExecutionError{phase: SourceQueryPhaseIteration, sourceID: query.ID, cause: err}
+		}
+		return time.Time{}, false, nil
+	}
+	if scanErr := rows.Scan(&latest, &count); scanErr != nil {
+		return time.Time{}, false, &sourceExecutionError{phase: SourceQueryPhaseScan, sourceID: query.ID, cause: scanErr}
+	}
+	if count == 0 {
+		return time.Time{}, false, nil
+	}
+	return latest.UTC(), true, nil
+}
+
 func sourceQueryFailurePhase(err error) SourceQueryPhase {
 	var executionErr *sourceExecutionError
 	if !errors.As(err, &executionErr) {

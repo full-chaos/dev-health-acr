@@ -97,7 +97,9 @@ type EvidenceBundle struct {
 	Evidence      []contractsv1.EvidenceRef
 	Watermarks    []contractsv1.SourceWatermark
 	Unavailable   []contractsv1.UnavailableSource
-	QueryVersion  string
+	// Warnings are non-fatal read disclosures surfaced verbatim in the packet.
+	Warnings     []string
+	QueryVersion string
 }
 
 // EvidenceStore is read-only. Implementations may use ClickHouse now and a
