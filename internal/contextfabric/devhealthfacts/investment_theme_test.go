@@ -16,10 +16,10 @@ import (
 //
 // CHAOS-6559: the team mix is now the sum over the team's OWNED repositories,
 // so a "team" row here is one owned repository "repo-"+teamID (the ownership
-// table is faked by ownsRepoTable) and the scan order is repo_id, kind, key,
-// weighted_effort, work_units.
-func themeMixRow(teamID, teamName, kind, key string, weightedEffort float64) []any {
-	return []any{"repo-" + teamID, kind, key, weightedEffort, uint64(3)}
+// table is faked by ownsRepoTable) and the scan order is window, repo_id, theme map,
+// bugfix, work_units.
+func themeMixRow(teamID, teamName string, themes map[string]float64, bugfix float64) []any {
+	return []any{uint8(0), "repo-" + teamID, themes, bugfix, uint64(3)}
 }
 
 func ownsRepoTable(teamID string) fakeTable {
@@ -39,12 +39,7 @@ func TestInvestmentProviderThemeMixReadsCanonicalSourceNeverLegacy(t *testing.T)
 	client := &fakeClient{tables: []fakeTable{
 		{match: "FROM investment_metrics_daily", rows: nil},
 		ownsRepoTable("CHAOS"), {match: "FROM work_unit_investments", rows: [][]any{
-			themeMixRow("CHAOS", "Fullchaos", "theme", "feature_delivery", 60),
-			themeMixRow("CHAOS", "Fullchaos", "theme", "operational", 20),
-			themeMixRow("CHAOS", "Fullchaos", "theme", "maintenance", 10),
-			themeMixRow("CHAOS", "Fullchaos", "theme", "quality", 6),
-			themeMixRow("CHAOS", "Fullchaos", "theme", "risk", 4),
-			themeMixRow("CHAOS", "Fullchaos", "subcategory", "quality.bugfix", 3),
+			themeMixRow("CHAOS", "Fullchaos", map[string]float64{"feature_delivery": 60, "operational": 20, "maintenance": 10, "quality": 6, "risk": 4}, 3),
 		}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
@@ -105,11 +100,7 @@ func TestInvestmentProviderThemeMixOmitsPriorFieldsOnCurrentAxis(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
 		ownsRepoTable("CHAOS"), {match: "FROM work_unit_investments", rows: [][]any{
-			themeMixRow("CHAOS", "Fullchaos", "theme", "feature_delivery", 60),
-			themeMixRow("CHAOS", "Fullchaos", "theme", "operational", 20),
-			themeMixRow("CHAOS", "Fullchaos", "theme", "maintenance", 10),
-			themeMixRow("CHAOS", "Fullchaos", "theme", "quality", 6),
-			themeMixRow("CHAOS", "Fullchaos", "theme", "risk", 4),
+			themeMixRow("CHAOS", "Fullchaos", map[string]float64{"feature_delivery": 60, "operational": 20, "maintenance": 10, "quality": 6, "risk": 4}, 0),
 		}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
@@ -139,19 +130,19 @@ func TestInvestmentProviderThemeMixOmitsPriorFieldsOnCurrentAxis(t *testing.T) {
 }
 
 // TestInvestmentProviderThemeMixReadsPriorWindowOnExplicitRange proves an
-// explicit TemporalRange query issues a SECOND theme-mix statement for the
-// prior comparable window, and the resulting fact carries normalized
-// prior_theme_* shares.
+// explicit TemporalRange query reads the current AND the prior comparable
+// window in ONE theme-mix statement (CHAOS-6594: one pass over
+// work_unit_investments per request), and the resulting fact carries
+// normalized prior_theme_* shares taken from the prior window's own rows.
 func TestInvestmentProviderThemeMixReadsPriorWindowOnExplicitRange(t *testing.T) {
 	t.Parallel()
-	current := [][]any{
-		themeMixRow("CHAOS", "Fullchaos", "theme", "feature_delivery", 60),
-		themeMixRow("CHAOS", "Fullchaos", "theme", "operational", 20),
-		themeMixRow("CHAOS", "Fullchaos", "theme", "maintenance", 10),
-		themeMixRow("CHAOS", "Fullchaos", "theme", "quality", 6),
-		themeMixRow("CHAOS", "Fullchaos", "theme", "risk", 4),
+	prior := themeMixRow("CHAOS", "Fullchaos", map[string]float64{"feature_delivery": 30, "operational": 70}, 0)
+	prior[0] = uint8(1)
+	rows := [][]any{
+		themeMixRow("CHAOS", "Fullchaos", map[string]float64{"feature_delivery": 60, "operational": 20, "maintenance": 10, "quality": 6, "risk": 4}, 0),
+		prior,
 	}
-	client := &fakeClient{tables: []fakeTable{ownsRepoTable("CHAOS"), {match: "FROM work_unit_investments", rows: current}}}
+	client := &fakeClient{tables: []fakeTable{ownsRepoTable("CHAOS"), {match: "FROM work_unit_investments", rows: rows}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
 	start := time.Date(2026, 5, 30, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 8, 28, 0, 0, 0, 0, time.UTC)
@@ -168,18 +159,16 @@ func TestInvestmentProviderThemeMixReadsPriorWindowOnExplicitRange(t *testing.T)
 			themeMixQueries++
 		}
 	}
-	if themeMixQueries != 2 {
-		t.Fatalf("theme mix queries = %d, want exactly 2 (current + prior window)", themeMixQueries)
+	if themeMixQueries != 1 {
+		t.Fatalf("theme mix queries = %d, want exactly 1 (current + prior window in one pass)", themeMixQueries)
 	}
 	found := false
 	for _, fact := range result.Facts {
 		if _, has := fact.Fields[contextfabric.FactFieldPriorTheme(contextfabric.ThemeFeatureDelivery)]; has {
 			found = true
-			// The fake client returns the SAME rows for every query it
-			// matches, so prior shares equal current shares here -- the
-			// assertion is presence and shape, not a specific number.
-			if fact.Fields[contextfabric.FactFieldPriorTheme(contextfabric.ThemeFeatureDelivery)].Number == nil {
-				t.Fatalf("prior_theme_feature_delivery has no number value: %#v", fact.Fields)
+			number := fact.Fields[contextfabric.FactFieldPriorTheme(contextfabric.ThemeFeatureDelivery)].Number
+			if number == nil || *number < 0.299 || *number > 0.301 {
+				t.Fatalf("prior_theme_feature_delivery = %v, want 0.3 (30 of the prior window's 100)", number)
 			}
 		}
 	}
@@ -241,11 +230,7 @@ func TestInvestmentProviderThemeMixMergesOntoExistingLegacyFactNeverShadowed(t *
 	client := &fakeClient{tables: []fakeTable{
 		{match: "FROM investment_metrics_daily", rows: [][]any{investmentRow("CHAOS")}},
 		ownsRepoTable("CHAOS"), {match: "FROM work_unit_investments", rows: [][]any{
-			themeMixRow("CHAOS", "Fullchaos", "theme", "feature_delivery", 60),
-			themeMixRow("CHAOS", "Fullchaos", "theme", "operational", 20),
-			themeMixRow("CHAOS", "Fullchaos", "theme", "maintenance", 10),
-			themeMixRow("CHAOS", "Fullchaos", "theme", "quality", 6),
-			themeMixRow("CHAOS", "Fullchaos", "theme", "risk", 4),
+			themeMixRow("CHAOS", "Fullchaos", map[string]float64{"feature_delivery": 60, "operational": 20, "maintenance": 10, "quality": 6, "risk": 4}, 0),
 		}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
@@ -279,11 +264,7 @@ func TestInvestmentProviderTeamDeclaresAndEmitsThemeBreakdownTable(t *testing.T)
 		{match: "FROM investment_metrics_daily", rows: nil},
 		ownsRepoTable("CHAOS"),
 		{match: "FROM work_unit_investments", rows: [][]any{
-			themeMixRow("CHAOS", "", "theme", "feature_delivery", 60),
-			themeMixRow("CHAOS", "", "theme", "operational", 20),
-			themeMixRow("CHAOS", "", "theme", "maintenance", 10),
-			themeMixRow("CHAOS", "", "theme", "quality", 6),
-			themeMixRow("CHAOS", "", "theme", "risk", 4),
+			themeMixRow("CHAOS", "", map[string]float64{"feature_delivery": 60, "operational": 20, "maintenance": 10, "quality": 6, "risk": 4}, 0),
 		}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)

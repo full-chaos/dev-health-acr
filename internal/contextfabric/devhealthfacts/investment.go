@@ -309,18 +309,14 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 	// repository's mix being the PR-ref-share partition of persisted work
 	// unit distributions (investment_repo_mix.go). Never a member vote and
 	// never a work-item majority vote.
-	current, err := p.teamOwnedRepoMix(ctx, orgID, ids, timeBound)
-	if err != nil {
-		return err
-	}
-	var prior map[string]*repoThemeTotals
+	var priorBound *factTimeBound
 	if timeBound.active && timeBound.hasStart {
 		duration := timeBound.end.Sub(timeBound.start)
-		priorBound := factTimeBound{active: true, hasStart: true, start: timeBound.start.Add(-duration), end: timeBound.start}
-		prior, err = p.teamOwnedRepoMix(ctx, orgID, ids, priorBound)
-		if err != nil {
-			return err
-		}
+		priorBound = &factTimeBound{active: true, hasStart: true, start: timeBound.start.Add(-duration), end: timeBound.start}
+	}
+	current, prior, err := p.teamOwnedRepoMix(ctx, orgID, ids, timeBound, priorBound)
+	if err != nil {
+		return err
 	}
 
 	type teamMix struct {

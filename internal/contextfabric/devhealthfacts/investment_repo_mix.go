@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -38,143 +39,175 @@ const (
 	repoMixBasis  = "pr_ref_share_partition"
 )
 
-// repoMixRow is one (repository, theme-or-tracked-subcategory) weighted
-// effort. WorkUnits is the count of distinct work units contributing to the
-// repository (identical on every row of one repository and kind).
+// repoMixRow is one repository's persisted-effort split in one requested
+// window (Window indexes the bounds given to readRepoMixRows): per-theme weighted
+// effort, the bugfix-subcategory weighted effort and the count of distinct
+// work units attributed to it.
 type repoMixRow struct {
-	RepoID         string
-	Kind           string // "theme" | "subcategory"
-	Key            string
-	WeightedEffort float64
-	WorkUnits      int64
+	Window    int
+	RepoID    string
+	Theme     map[string]float64
+	Bugfix    float64
+	WorkUnits int64
 }
 
-// repoMixStatement builds the repo-level split. It reads only persisted
-// columns of work_unit_investments (argMax by computed_at per work unit),
-// repos (name -> uuid for issue-side PR refs) and nothing else.
-func repoMixStatement(timeBound factTimeBound) string {
-	rangePredicate := themeInvestmentRangePredicate(timeBound, "from_ts", "to_ts")
-	return withRowLimit(`SELECT repo_id, kind, key, weighted_effort, work_units FROM (
-WITH latest AS (
-	SELECT work_unit_id,
-		argMax(repo_id, computed_at) AS repo_id,
-		argMax(from_ts, computed_at) AS from_ts,
-		argMax(to_ts, computed_at) AS to_ts,
-		argMax(effort_value, computed_at) AS effort_value,
-		argMax(theme_distribution_json, computed_at) AS theme_distribution_json,
-		argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json,
-		argMax(structural_evidence_json, computed_at) AS structural_evidence_json
-	FROM work_unit_investments
-	WHERE org_id = {org_id:String}
-	GROUP BY work_unit_id
-),
-windowed AS (
-	SELECT * FROM latest WHERE 1` + rangePredicate + `
-),
-repo_lookup AS (
-	SELECT toString(id) AS repo_uuid, argMax(repo, last_synced) AS repo,
-		if(uniqExact(provider) = 1, argMax(provider, last_synced), '') AS provider
-	FROM repos
-	WHERE org_id = {org_id:String}
-	GROUP BY id
-),
-pr_refs AS (
-	SELECT work_unit_id, ref,
-		splitByString('#pr', ref)[1] AS uuid_direct, '' AS lookup_provider, '' AS lookup_repo,
-		splitByString('#pr', ref)[2] AS pr_number
-	FROM windowed
-	ARRAY JOIN JSONExtract(structural_evidence_json, 'prs', 'Array(String)') AS ref
-	WHERE match(ref, '^[0-9a-fA-F-]{36}#pr[0-9]+$')
-	UNION ALL
-	SELECT work_unit_id, ref, '' AS uuid_direct, 'github' AS lookup_provider,
-		substring(splitByChar('#', ref)[1], 6) AS lookup_repo, splitByChar('#', ref)[2] AS pr_number
-	FROM windowed
-	ARRAY JOIN JSONExtract(structural_evidence_json, 'issues', 'Array(String)') AS ref
-	WHERE match(ref, '^ghpr:[^#]+#[0-9]+$')
-	UNION ALL
-	SELECT work_unit_id, ref, '' AS uuid_direct, 'gitlab' AS lookup_provider,
-		substring(splitByChar('!', ref)[1], 8) AS lookup_repo, splitByChar('!', ref)[2] AS pr_number
-	FROM windowed
-	ARRAY JOIN JSONExtract(structural_evidence_json, 'issues', 'Array(String)') AS ref
-	WHERE match(ref, '^gitlab:[^!]+![0-9]+$')
-),
-pr_parsed AS (
-	SELECT pr_refs.work_unit_id AS work_unit_id, pr_refs.ref AS ref, pr_refs.pr_number AS pr_number,
-		if(pr_refs.uuid_direct != '', pr_refs.uuid_direct, rl.repo_uuid) AS repo_uuid
-	FROM pr_refs
-	LEFT JOIN repo_lookup AS rl ON rl.provider = pr_refs.lookup_provider AND rl.repo = pr_refs.lookup_repo
-),
-refs AS (
-	SELECT DISTINCT work_unit_id, repo_uuid,
-		if(repo_uuid = '', ref, concat(repo_uuid, '#', pr_number)) AS ref_key
-	FROM pr_parsed
-),
-counts AS (
-	SELECT work_unit_id, repo_uuid, uniqExact(ref_key) AS c FROM refs GROUP BY work_unit_id, repo_uuid
-),
-totals AS (
-	SELECT work_unit_id, sum(c) AS n FROM counts GROUP BY work_unit_id
-),
-split AS (
-	SELECT counts.work_unit_id AS work_unit_id, counts.repo_uuid AS repo_uuid, counts.c / totals.n AS frac
-	FROM counts INNER JOIN totals ON totals.work_unit_id = counts.work_unit_id
-	WHERE counts.repo_uuid != ''
-	UNION ALL
-	SELECT work_unit_id, toString(repo_id) AS repo_uuid, 1.0 AS frac
-	FROM windowed
-	WHERE repo_id IS NOT NULL AND work_unit_id NOT IN (SELECT work_unit_id FROM totals)
-),
-attributed AS (
-	SELECT split.repo_uuid AS repo_uuid, split.work_unit_id AS work_unit_id, split.frac * windowed.effort_value AS effort,
-		windowed.theme_distribution_json AS theme_distribution_json,
-		ifNull(windowed.subcategory_distribution_json['` + readers.BugfixSubcategoryKey + `'], 0.0) AS bugfix_share
-	FROM split INNER JOIN windowed ON windowed.work_unit_id = split.work_unit_id
-	WHERE split.repo_uuid IN {ids:Array(String)}
+// mixWindowParams names the bind parameters of window i: window 0 uses the
+// standard bound names, later windows suffix theirs.
+func mixWindowParams(i int) (startParam, endParam string) {
+	if i == 0 {
+		return boundStartParam, boundEndParam
+	}
+	return fmt.Sprintf("%s_w%d", boundStartParam, i), fmt.Sprintf("%s_w%d", boundEndParam, i)
+}
+
+// mixWindowPredicate is window i's row predicate over the latest-row columns
+// from_ts/to_ts (the same half-open rule as themeInvestmentRangePredicate: a
+// unit is in the window when it starts before the end and its inclusive last
+// evidence instant is at or after the start). An inactive bound is always true.
+func mixWindowPredicate(i int, b factTimeBound) string {
+	if !b.active {
+		return "1"
+	}
+	startParam, endParam := mixWindowParams(i)
+	predicate := "from_ts < {" + endParam + ":DateTime64(6,'UTC')}"
+	if b.hasStart {
+		predicate += " AND to_ts >= {" + startParam + ":DateTime64(6,'UTC')}"
+	}
+	return predicate
+}
+
+// repoMixStatement builds the repo-level split for one or more windows. It
+// reads only persisted columns of work_unit_investments (argMax by
+// computed_at per work unit), repos (name -> uuid for issue-side PR refs) and
+// nothing else.
+//
+// CHAOS-6594: work_unit_investments is read ONCE per request, however many
+// windows are asked for. ClickHouse inlines a CTE at every reference, so the
+// earlier chain (latest -> windowed -> pr_refs x3 -> split -> attributed)
+// re-scanned the table ~7x and tripped the read-only user's max_bytes_to_read
+// (error 307). Here the latest-row selection is one nested subquery; each
+// unit's window memberships and PR/issue refs are derived from its own row
+// with array functions (no second reference to the latest set); the per-unit
+// ref total is a window function over the already-grouped rows; and the theme
+// and bugfix sums come out of a single aggregation. repos is referenced once.
+func repoMixStatement(bounds []factTimeBound) string {
+	memberships := make([]string, 0, len(bounds))
+	for i, b := range bounds {
+		memberships = append(memberships, fmt.Sprintf("if(%s, %d, -1)", mixWindowPredicate(i, b), i))
+	}
+	return withRowLimit(`SELECT toUInt8(win) AS window, repo_uuid AS repo_id,
+	sumMap(mapApply((k, v) -> (k, v * effort), theme_distribution_json)) AS theme_effort,
+	sum(bugfix_share * effort) AS bugfix_effort,
+	uniqExact(work_unit_id) AS work_units
+FROM (
+	SELECT win, repo_uuid, work_unit_id, c / n * effort_value AS effort, theme_distribution_json, bugfix_share
+	FROM (
+		SELECT win, repo_uuid, work_unit_id, c,
+			sum(c) OVER (PARTITION BY win, work_unit_id) AS n,
+			effort_value, theme_distribution_json, bugfix_share
+		FROM (
+			SELECT parsed.win AS win, parsed.work_unit_id AS work_unit_id,
+				if(parsed.uuid_direct != '', parsed.uuid_direct, ifNull(rl.repo_uuid, '')) AS repo_uuid,
+				uniqExact(if(repo_uuid = '', parsed.ref_text, concat(repo_uuid, '#', parsed.pr_number))) AS c,
+				any(parsed.effort_value) AS effort_value,
+				any(parsed.theme_distribution_json) AS theme_distribution_json,
+				any(parsed.bugfix_share) AS bugfix_share
+			FROM (
+				SELECT work_unit_id, effort_value, theme_distribution_json, bugfix_share, win,
+					ref.1 AS uuid_direct, ref.2 AS lookup_provider, ref.3 AS lookup_repo, ref.4 AS pr_number, ref.5 AS ref_text
+				FROM (
+					SELECT work_unit_id, repo_id, effort_value, theme_distribution_json,
+						ifNull(subcategory_distribution_json['` + readers.BugfixSubcategoryKey + `'], 0.0) AS bugfix_share,
+						arrayFilter(w -> w >= 0, [` + strings.Join(memberships, ", ") + `]) AS wins,
+						arrayConcat(
+							arrayMap(r -> (splitByString('#pr', r)[1], '', '', splitByString('#pr', r)[2], r),
+								arrayFilter(r -> match(r, '^[0-9a-fA-F-]{36}#pr[0-9]+$'), JSONExtract(structural_evidence_json, 'prs', 'Array(String)'))),
+							arrayMap(r -> ('', 'github', substring(splitByChar('#', r)[1], 6), splitByChar('#', r)[2], r),
+								arrayFilter(r -> match(r, '^ghpr:[^#]+#[0-9]+$'), JSONExtract(structural_evidence_json, 'issues', 'Array(String)'))),
+							arrayMap(r -> ('', 'gitlab', substring(splitByChar('!', r)[1], 8), splitByChar('!', r)[2], r),
+								arrayFilter(r -> match(r, '^gitlab:[^!]+![0-9]+$'), JSONExtract(structural_evidence_json, 'issues', 'Array(String)')))
+						) AS pr_refs,
+						if(empty(pr_refs) AND repo_id IS NOT NULL, [(toString(repo_id), '', '', '', '')], pr_refs) AS refs
+					FROM (
+						SELECT work_unit_id,
+							argMax(repo_id, computed_at) AS repo_id,
+							argMax(from_ts, computed_at) AS from_ts,
+							argMax(to_ts, computed_at) AS to_ts,
+							argMax(effort_value, computed_at) AS effort_value,
+							argMax(theme_distribution_json, computed_at) AS theme_distribution_json,
+							argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json,
+							argMax(structural_evidence_json, computed_at) AS structural_evidence_json
+						FROM work_unit_investments
+						WHERE org_id = {org_id:String}
+						GROUP BY work_unit_id
+					)
+				)
+				ARRAY JOIN wins AS win
+				ARRAY JOIN refs AS ref
+			) AS parsed
+			LEFT JOIN (
+				SELECT toString(id) AS repo_uuid, argMax(repo, last_synced) AS repo,
+					if(uniqExact(provider) = 1, argMax(provider, last_synced), '') AS provider
+				FROM repos
+				WHERE org_id = {org_id:String}
+				GROUP BY id
+			) AS rl ON rl.provider = parsed.lookup_provider AND rl.repo = parsed.lookup_repo
+			GROUP BY win, work_unit_id, repo_uuid
+		)
+	)
+	WHERE repo_uuid != '' AND repo_uuid IN {ids:Array(String)}
 )
-SELECT repo_uuid AS repo_id, 'theme' AS kind, theme_kv.1 AS key, sum(theme_kv.2 * effort) AS weighted_effort, uniqExact(work_unit_id) AS work_units
-FROM attributed
-ARRAY JOIN CAST(theme_distribution_json AS Array(Tuple(String, Float64))) AS theme_kv
-GROUP BY repo_uuid, key
-UNION ALL
-SELECT repo_uuid AS repo_id, 'subcategory' AS kind, '` + readers.BugfixSubcategoryKey + `' AS key, sum(bugfix_share * effort) AS weighted_effort, uniqExact(work_unit_id) AS work_units
-FROM attributed
-GROUP BY repo_uuid
-)`)
+GROUP BY win, repo_uuid`)
 }
 
 // repoMixChunk bounds how many repositories one statement reads. Each
-// repository yields at most 6 rows (5 themes + the tracked subcategory), so
-// 30 repositories stay strictly under maxFactRowsPerQuery (200). The row
-// limit is therefore never reached and a partial mix can never be served as
-// complete: more repositories are read by more statements, in a stable
-// order, never by a silently truncated one.
-const repoMixChunk = 30
+// repository yields one row per window (at most 2), so 90 repositories stay
+// strictly under maxFactRowsPerQuery (200): the row limit is never reached and
+// a partial mix can never be served as complete. More repositories are read by
+// more statements, in a stable order, never by a silently truncated one.
+const repoMixChunk = 90
 
-func (p *InvestmentProvider) readRepoMixRows(ctx context.Context, orgID string, repoIDs []string, timeBound factTimeBound) ([]repoMixRow, error) {
+// readRepoMixRows reads the mix of repoIDs for every window in bounds with ONE
+// pass over work_unit_investments per chunk of repositories; result[i] holds
+// window i's rows.
+func (p *InvestmentProvider) readRepoMixRows(ctx context.Context, orgID string, repoIDs []string, bounds ...factTimeBound) ([][]repoMixRow, error) {
+	out := make([][]repoMixRow, len(bounds))
 	if len(repoIDs) == 0 {
-		return nil, nil
+		return out, nil
 	}
 	sorted := append([]string(nil), repoIDs...)
 	sort.Strings(sorted)
-	extra := make([]readers.Binding, 0, 2)
-	for _, b := range timeBound.bindings() {
-		extra = append(extra, readers.Binding{Name: b.Name, Value: b.Value})
+	var extra []readers.Binding
+	for i, b := range bounds {
+		startParam, endParam := mixWindowParams(i)
+		for _, tb := range b.bindings() {
+			name := endParam
+			if tb.Name == boundStartParam {
+				name = startParam
+			}
+			extra = append(extra, readers.Binding{Name: name, Value: tb.Value})
+		}
 	}
-	var rows []repoMixRow
+	statement := repoMixStatement(bounds)
 	for start := 0; start < len(sorted); start += repoMixChunk {
 		end := start + repoMixChunk
 		if end > len(sorted) {
 			end = len(sorted)
 		}
 		got := 0
-		err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadRepositoryThemeMix", repoMixStatement(timeBound), orgID, sorted[start:end], func(row contextpacket.ClickHouseRowScanner) error {
+		err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadRepositoryThemeMix", statement, orgID, sorted[start:end], func(row contextpacket.ClickHouseRowScanner) error {
 			var r repoMixRow
+			var window uint8
 			var workUnits uint64
-			if err := row.Scan(&r.RepoID, &r.Kind, &r.Key, &r.WeightedEffort, &workUnits); err != nil {
+			if err := row.Scan(&window, &r.RepoID, &r.Theme, &r.Bugfix, &workUnits); err != nil {
 				return err
 			}
+			if int(window) < 0 || int(window) >= len(out) {
+				return fmt.Errorf("repository theme mix returned window %d for %d requested", window, len(out))
+			}
+			r.Window = int(window)
 			r.WorkUnits = int64(workUnits)
-			rows = append(rows, r)
+			out[r.Window] = append(out[r.Window], r)
 			got++
 			return nil
 		}, extra...)
@@ -182,13 +215,13 @@ func (p *InvestmentProvider) readRepoMixRows(ctx context.Context, orgID string, 
 			return nil, err
 		}
 		if got >= maxFactRowsPerQuery {
-			// Unreachable by construction (repoMixChunk * 6 < the limit);
-			// if a future change breaks that, fail loudly, never serve a
-			// truncated mix as complete.
+			// Unreachable by construction (repoMixChunk * windows < the
+			// limit); if a future change breaks that, fail loudly, never
+			// serve a truncated mix as complete.
 			return nil, fmt.Errorf("repository theme mix chunk reached the row limit (%d rows for %d repositories)", got, end-start)
 		}
 	}
-	return rows, nil
+	return out, nil
 }
 
 // repoThemeTotals folds one repository's rows into per-theme effort, the
@@ -213,14 +246,10 @@ func groupRepoMix(rows []repoMixRow) map[string]*repoThemeTotals {
 		if r.WorkUnits > t.workUnits {
 			t.workUnits = r.WorkUnits
 		}
-		switch r.Kind {
-		case "theme":
-			t.theme[r.Key] += r.WeightedEffort
-		case "subcategory":
-			if r.Key == readers.BugfixSubcategoryKey {
-				t.bugfix += r.WeightedEffort
-			}
+		for theme, effort := range r.Theme {
+			t.theme[theme] += effort
 		}
+		t.bugfix += r.Bugfix
 	}
 	return out
 }
@@ -265,11 +294,11 @@ func (p *InvestmentProvider) readRepositoryThemeMix(ctx context.Context, orgID s
 	if len(ids) == 0 {
 		return rejected, nil
 	}
-	rows, err := p.readRepoMixRows(ctx, orgID, ids, timeBound)
+	windows, err := p.readRepoMixRows(ctx, orgID, ids, timeBound)
 	if err != nil {
 		return rejected, err
 	}
-	grouped := groupRepoMix(rows)
+	grouped := groupRepoMix(windows[0])
 	repoIDs := make([]string, 0, len(grouped))
 	for id := range grouped {
 		repoIDs = append(repoIDs, id)
@@ -300,40 +329,67 @@ func (p *InvestmentProvider) readRepositoryThemeMix(ctx context.Context, orgID s
 }
 
 // teamOwnedRepoMix returns, per requested team id, the SUM of the mixes of
-// the repositories the team currently owns. A repository is counted once
-// per team however many ownership sources name it; a team owning no
-// repository with persisted work, or whose owned repositories carry zero
-// effort, is absent from the result (never a fabricated zero mix).
-func (p *InvestmentProvider) teamOwnedRepoMix(ctx context.Context, orgID string, teamIDs []string, timeBound factTimeBound) (map[string]*repoThemeTotals, error) {
-	statement := withRowLimit(`SELECT DISTINCT team_id, toString(repo_id) FROM team_repo_ownership FINAL
-WHERE org_id = {org_id:String} AND repo_id IS NOT NULL AND team_id IN {ids:Array(String)}` + ownershipValidityPredicate(timeBound))
-	extra := make([]readers.Binding, 0, 2)
-	for _, b := range timeBound.bindings() {
-		extra = append(extra, readers.Binding{Name: b.Name, Value: b.Value})
+// the repositories the team owns as of timeBound, and (when prior is set) the
+// same as of the prior window. A repository is counted once per team however
+// many ownership sources name it; a team owning no repository with persisted
+// work, or whose owned repositories carry zero effort, is absent from the
+// result (never a fabricated zero mix). Ownership is read per window, but the
+// mix of both windows comes from ONE pass over work_unit_investments.
+func (p *InvestmentProvider) teamOwnedRepoMix(ctx context.Context, orgID string, teamIDs []string, timeBound factTimeBound, prior *factTimeBound) (current, priorMix map[string]*repoThemeTotals, err error) {
+	bounds := []factTimeBound{timeBound}
+	if prior != nil {
+		bounds = append(bounds, *prior)
 	}
-	owned := map[string][]string{}
+	ownedByWindow := make([]map[string][]string, len(bounds))
 	repoSet := map[string]bool{}
-	if err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamOwnedRepositories", statement, orgID, teamIDs, func(row contextpacket.ClickHouseRowScanner) error {
-		var teamID, repoID string
-		if err := row.Scan(&teamID, &repoID); err != nil {
-			return err
+	for i, b := range bounds {
+		owned, ownedErr := p.readTeamOwnedRepositories(ctx, orgID, teamIDs, b)
+		if ownedErr != nil {
+			return nil, nil, ownedErr
 		}
-		owned[teamID] = append(owned[teamID], repoID)
-		repoSet[repoID] = true
-		return nil
-	}, extra...); err != nil {
-		return nil, err
+		ownedByWindow[i] = owned
+		for _, repos := range owned {
+			for _, repoID := range repos {
+				repoSet[repoID] = true
+			}
+		}
 	}
 	repoIDs := make([]string, 0, len(repoSet))
 	for id := range repoSet {
 		repoIDs = append(repoIDs, id)
 	}
 	sort.Strings(repoIDs)
-	rows, err := p.readRepoMixRows(ctx, orgID, repoIDs, timeBound)
+	windows, err := p.readRepoMixRows(ctx, orgID, repoIDs, bounds...)
 	if err != nil {
+		return nil, nil, err
+	}
+	current = sumOwnedRepoMix(ownedByWindow[0], groupRepoMix(windows[0]))
+	if prior != nil {
+		priorMix = sumOwnedRepoMix(ownedByWindow[1], groupRepoMix(windows[1]))
+	}
+	return current, priorMix, nil
+}
+
+// readTeamOwnedRepositories reads team -> owned repository ids as of bound.
+func (p *InvestmentProvider) readTeamOwnedRepositories(ctx context.Context, orgID string, teamIDs []string, bound factTimeBound) (map[string][]string, error) {
+	statement := withRowLimit(`SELECT DISTINCT team_id, toString(repo_id) FROM team_repo_ownership FINAL
+WHERE org_id = {org_id:String} AND repo_id IS NOT NULL AND team_id IN {ids:Array(String)}` + ownershipValidityPredicate(bound))
+	extra := make([]readers.Binding, 0, 2)
+	for _, b := range bound.bindings() {
+		extra = append(extra, readers.Binding{Name: b.Name, Value: b.Value})
+	}
+	owned := map[string][]string{}
+	if err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamOwnedRepositories", statement, orgID, teamIDs, func(row contextpacket.ClickHouseRowScanner) error {
+		var teamID, repoID string
+		if err := row.Scan(&teamID, &repoID); err != nil {
+			return err
+		}
+		owned[teamID] = append(owned[teamID], repoID)
+		return nil
+	}, extra...); err != nil {
 		return nil, err
 	}
-	return sumOwnedRepoMix(owned, groupRepoMix(rows)), nil
+	return owned, nil
 }
 
 // sumOwnedRepoMix is the pure ownership aggregate: team total = sum of its
