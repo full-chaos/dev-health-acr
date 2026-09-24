@@ -2,6 +2,7 @@ package devhealthfacts
 
 import (
 	"context"
+	"fmt"
 	"sort"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -141,26 +142,53 @@ GROUP BY repo_uuid
 )`)
 }
 
+// repoMixChunk bounds how many repositories one statement reads. Each
+// repository yields at most 6 rows (5 themes + the tracked subcategory), so
+// 30 repositories stay strictly under maxFactRowsPerQuery (200). The row
+// limit is therefore never reached and a partial mix can never be served as
+// complete: more repositories are read by more statements, in a stable
+// order, never by a silently truncated one.
+const repoMixChunk = 30
+
 func (p *InvestmentProvider) readRepoMixRows(ctx context.Context, orgID string, repoIDs []string, timeBound factTimeBound) ([]repoMixRow, error) {
 	if len(repoIDs) == 0 {
 		return nil, nil
 	}
-	var rows []repoMixRow
+	sorted := append([]string(nil), repoIDs...)
+	sort.Strings(sorted)
 	extra := make([]readers.Binding, 0, 2)
 	for _, b := range timeBound.bindings() {
 		extra = append(extra, readers.Binding{Name: b.Name, Value: b.Value})
 	}
-	err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadRepositoryThemeMix", repoMixStatement(timeBound), orgID, repoIDs, func(row contextpacket.ClickHouseRowScanner) error {
-		var r repoMixRow
-		var workUnits uint64
-		if err := row.Scan(&r.RepoID, &r.Kind, &r.Key, &r.WeightedEffort, &workUnits); err != nil {
-			return err
+	var rows []repoMixRow
+	for start := 0; start < len(sorted); start += repoMixChunk {
+		end := start + repoMixChunk
+		if end > len(sorted) {
+			end = len(sorted)
 		}
-		r.WorkUnits = int64(workUnits)
-		rows = append(rows, r)
-		return nil
-	}, extra...)
-	return rows, err
+		got := 0
+		err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadRepositoryThemeMix", repoMixStatement(timeBound), orgID, sorted[start:end], func(row contextpacket.ClickHouseRowScanner) error {
+			var r repoMixRow
+			var workUnits uint64
+			if err := row.Scan(&r.RepoID, &r.Kind, &r.Key, &r.WeightedEffort, &workUnits); err != nil {
+				return err
+			}
+			r.WorkUnits = int64(workUnits)
+			rows = append(rows, r)
+			got++
+			return nil
+		}, extra...)
+		if err != nil {
+			return nil, err
+		}
+		if got >= maxFactRowsPerQuery {
+			// Unreachable by construction (repoMixChunk * 6 < the limit);
+			// if a future change breaks that, fail loudly, never serve a
+			// truncated mix as complete.
+			return nil, fmt.Errorf("repository theme mix chunk reached the row limit (%d rows for %d repositories)", got, end-start)
+		}
+	}
+	return rows, nil
 }
 
 // repoThemeTotals folds one repository's rows into per-theme effort, the

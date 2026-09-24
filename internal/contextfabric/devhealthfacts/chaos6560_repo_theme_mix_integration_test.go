@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
@@ -103,5 +104,85 @@ func TestRepositoryThemeMixAgainstRealClickHouse(t *testing.T) {
 	}
 	if factA.Fields["mix_source"].String == nil || factA.Fields["attribution_basis"].String == nil {
 		t.Fatalf("provenance fields missing: %#v", factA.Fields)
+	}
+}
+
+// CHAOS-6560 review findings, executed on a real ClickHouse: (1) a gitlab
+// `!N` ref resolves through repos.provider='gitlab'; (2) an explicit range
+// includes a unit whose to_ts (the INCLUSIVE last-evidence instant) equals
+// the window start, matching ops' `to_ts >= start_ts`, and excludes units
+// outside it; (3) 41 repositories (246 rows) are read in full -- the 200-row
+// statement limit must never silently drop part of a mix.
+func TestRepositoryThemeMixGitLabRangeAndChunkingAgainstRealClickHouse(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	createCHAOS5930Tables(t, ctx, direct)
+	providers := devhealthfacts.NewProviders(query)
+	provider := findProvider(t, providers, contextfabric.FactInvestment)
+	at := ts(2026, 8, 15, 0, 0, 0)
+	const orgID = "org-repo-mix-2"
+	seedRepo := func(label, name, prov string) {
+		t.Helper()
+		if err := direct.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`, repoUUID(label), orgID, name, prov, at); err != nil {
+			t.Fatalf("seed repo: %v", err)
+		}
+	}
+	seedWU := func(id string, from, to time.Time, effort float64, themes map[string]float64, evidence string) {
+		t.Helper()
+		if err := direct.Exec(ctx,
+			`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?)`,
+			id, from, to, effort, themes, map[string]float64{}, evidence, at, orgID); err != nil {
+			t.Fatalf("seed wu %s: %v", id, err)
+		}
+	}
+	seedRepo("gl", "grp/proj", "gitlab")
+	feature := map[string]float64{"feature_delivery": 1.0}
+	inWin := ts(2026, 8, 10, 0, 0, 0)
+	seedWU("in", inWin, inWin, 6, feature, `{"issues":["gitlab:grp/proj!7"],"prs":[]}`)
+	seedWU("ends-at-start", ts(2026, 7, 1, 0, 0, 0), ts(2026, 8, 1, 0, 0, 0), 100, feature, fmt.Sprintf(`{"issues":[],"prs":["%s#pr1"]}`, repoUUID("gl")))
+	seedWU("after", ts(2026, 9, 2, 0, 0, 0), ts(2026, 9, 3, 0, 0, 0), 9, feature, fmt.Sprintf(`{"issues":[],"prs":["%s#pr2"]}`, repoUUID("gl")))
+	seedWU("before", ts(2026, 7, 1, 0, 0, 0), ts(2026, 7, 31, 0, 0, 0), 1000, feature, fmt.Sprintf(`{"issues":[],"prs":["%s#pr3"]}`, repoUUID("gl")))
+	start, end := ts(2026, 8, 1, 0, 0, 0), ts(2026, 9, 1, 0, 0, 0)
+	result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
+		Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end},
+		Kind:     contextfabric.FactInvestment,
+		Subjects: []contextfabric.SubjectRef{{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:" + repoUUID("gl"), Label: "gl"}},
+	})
+	if err != nil || len(result.Facts) != 1 {
+		t.Fatalf("range read: err=%v facts=%d", err, len(result.Facts))
+	}
+	var got float64
+	for _, row := range result.Facts[0].Fields["theme_breakdown"].Table.Rows {
+		got += *row.Fields["weighted_effort"].Number
+	}
+	// in (6, via the gitlab ref) + ends-at-start (100, to_ts inclusive); after and before excluded.
+	if got != 106 {
+		t.Fatalf("range weighted effort = %v, want 106 (gitlab ref resolved, to_ts inclusive, out-of-window excluded)", got)
+	}
+
+	// (3) 41 repositories, one unit each, 5 positive themes: 246 rows > 200.
+	const n = 41
+	subjects := make([]contextfabric.SubjectRef, 0, n)
+	for i := 0; i < n; i++ {
+		label := fmt.Sprintf("bulk-%02d", i)
+		seedRepo(label, "acme/"+label, "github")
+		seedWU("bulk-"+label, inWin, inWin, 1, map[string]float64{"feature_delivery": 0.2, "operational": 0.2, "maintenance": 0.2, "quality": 0.2, "risk": 0.2},
+			fmt.Sprintf(`{"issues":[],"prs":["%s#pr1"]}`, repoUUID(label)))
+		subjects = append(subjects, contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:" + repoUUID(label), Label: label})
+	}
+	bulk, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactInvestment, Subjects: subjects,
+	})
+	if err != nil || len(bulk.Facts) != n {
+		t.Fatalf("bulk read: err=%v facts=%d, want %d", err, len(bulk.Facts), n)
+	}
+	total := 0.0
+	for _, f := range bulk.Facts {
+		for _, row := range f.Fields["theme_breakdown"].Table.Rows {
+			total += *row.Fields["weighted_effort"].Number
+		}
+	}
+	if math.Abs(total-n) > 1e-9 {
+		t.Fatalf("bulk weighted total = %v, want %d (no repository or theme row may be dropped)", total, n)
 	}
 }
