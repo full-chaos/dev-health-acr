@@ -572,7 +572,9 @@ func logTeamAuthorizationTelemetry(ctx context.Context, logger *slog.Logger, org
 // outcomes over one source run -- same run-scoped-not-page-scoped discipline
 // as ambiguityLedger: edges asserted (and how many of those are closed or
 // inferred), edges scoped to the orphan sentinel because their repo_id has no
-// repos row, and groups OMITTED because repo_id is NULL. The omission count
+// repos row (yet: the repos row's last_synced is in queryRepositoryTeams'
+// watermark, so its later arrival re-emits the edge with the real slug), and
+// groups OMITTED because repo_id is NULL. The omission count
 // is what keeps a NULL repo_id from being a silent drop: an operator reading
 // "0 edges" must be able to tell "no ownership data" from "ownership rows the
 // graph cannot represent".

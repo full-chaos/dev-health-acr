@@ -1562,10 +1562,27 @@ func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQuery
 // edge lands on the right node whenever the repository is projected. Its
 // authorization cannot name a slug, so it fails CLOSED to
 // orphanedRepositorySentinel -- the pull_request precedent in
-// querySubjectProjectMemberships -- and is counted. RESIDUAL: the watermark
-// reads team_repo_ownership only, so a repos row arriving LATER does not
-// re-read the edge; its scope stays the orphan sentinel until the ownership
-// row changes or a rebuild.
+// querySubjectProjectMemberships -- and is counted.
+//
+// THE REPOS SIDE OF THE WATERMARK (codex P1 on this PR, reproduced live). The
+// slug comes from the LEFT JOINed repos row, so the edge's scope depends on a
+// table the ownership row's updated_at knows nothing about. With a watermark
+// over team_repo_ownership alone, a repos row arriving AFTER the first
+// projection never moved the group past the cursor: the edge kept its
+// orphan-sentinel scope until the ownership row changed or a rebuild, and
+// repository-scoped graph reads failed closed on it. So the watermark is
+// greatest(max(o.updated_at), max(o.repo_synced_at)) -- the repos row's
+// last_synced (repos is ReplacingMergeTree(last_synced); it has no
+// updated_at) folded in exactly as queryProjectTeams folds project_updated_at
+// and queryTeams folds its joined ownership rows
+// (queryTeamsEffectiveUpdatedAtExpr). A missing repos row
+// contributes the epoch, so the pre-arrival watermark is unchanged. The edge's
+// ObservedAt is that same watermark, i.e. the later of the two facts it was
+// built from. TRADE-OFF: every repos re-sync moves last_synced and therefore
+// re-emits that repository's ownership edges. That is accepted: the edges are
+// idempotent MERGEs, and queryRepositories already re-emits the repository
+// node on every last_synced move, so this adds edges per re-synced repository,
+// not a new re-emission class.
 //
 // Teams are INNER JOINed exactly as queryProjectTeams does: an edge to a team
 // with no teams row would name a node no producer writes.
@@ -1583,9 +1600,10 @@ func repositoryTeamsQuery(ledger *repositoryOwnershipLedger) func(context.Contex
 
 // repositoryTeamsWatermark / repositoryTeamsRowKey are queryRepositoryTeams'
 // pagination pair, shared by the SELECT, HAVING and ORDER BY so they cannot
-// drift. The row key names every GROUP BY column (CHAOS-4635: a key missing a
+// drift. The watermark folds in the repos row's last_synced (see THE REPOS
+// SIDE OF THE WATERMARK above). The row key names every GROUP BY column (CHAOS-4635: a key missing a
 // grouped column lets two groups tie and the strict `>` drop one).
-const repositoryTeamsWatermark = "max(o.updated_at)"
+const repositoryTeamsWatermark = "greatest(max(o.updated_at), max(o.repo_synced_at))"
 
 var repositoryTeamsRowKey = rowKeySQL("o.provider", "o.repo_key", "o.team_id", "o.source_name", "o.null_repo_name")
 
@@ -1594,7 +1612,8 @@ var repositoryTeamsRowKey = rowKeySQL("o.provider", "o.repo_key", "o.team_id", "
 const repositoryTeamsLatestOrder = "(o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC')))"
 
 // repositoryTeamsStatement. Inner column aliases never reuse a source column's
-// own name (match_type_name, not match_type): an alias that shadows the
+// own name (match_type_name, not match_type; repo_synced_at, not
+// last_synced): an alias that shadows the
 // column it reads bound to itself on 24.8 once already in this file's history.
 func repositoryTeamsStatement(cursor cursorState) string {
 	return `SELECT o.repo_key, o.null_repo_name,
@@ -1616,7 +1635,8 @@ FROM (
 	       rto.team_id AS team_id, toString(rto.source) AS source_name,
 	       toString(rto.match_type) AS match_type_name, toUInt8(rto.is_primary) AS is_primary_flag,
 	       toInt64(rto.specificity) AS specificity_value, toInt64(rto.priority) AS priority_value,
-	       rto.valid_from AS valid_from, rto.valid_to AS valid_to, rto.updated_at AS updated_at
+	       rto.valid_from AS valid_from, rto.valid_to AS valid_to, rto.updated_at AS updated_at,
+	       ifNull(r.last_synced, toDateTime64(0, 3, 'UTC')) AS repo_synced_at
 	FROM team_repo_ownership AS rto FINAL
 	LEFT JOIN repos AS r FINAL ON r.id = rto.repo_id AND r.org_id = rto.org_id
 	INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = rto.team_id
