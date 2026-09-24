@@ -226,7 +226,6 @@ lane_required_images() {
   printf '%s\n' "$LANE_OPS_IMAGE" "$WEB_IMAGE"
   [[ "${LANE_SKIP_ACR:-0}" = "1" ]] || printf '%s\n' "$ACR_IMAGE"
   printf '%s\n' \
-    dev-health-go-worker:latest \
     dev-health-go-dho:latest \
     dev-health-go-worker-migrate:latest
 }
@@ -502,10 +501,10 @@ goWorkers:
         RIVER_QUEUE_DATABASE_PASSWORD: "devhealth_queue"
         RIVER_COORDINATOR_DATABASE_PASSWORD: "devhealth_coordinator"
   groups:
-    - { name: heavy, image: dev-health-go-worker:latest, resources: {requests: {cpu: 25m, memory: 128Mi}, limits: {cpu: "1", memory: 1Gi}}, queues: [investment, metrics, reports, workgraph], queueConcurrency: {investment: 1, metrics: 2, reports: 2, workgraph: 1}, replicas: ${replicas}, terminationGracePeriodSeconds: 7260, autoscaling: {enabled: false}, bridgeUrl: "" }
-    - { name: ops, image: dev-health-go-worker:latest, resources: {requests: {cpu: 25m, memory: 128Mi}, limits: {cpu: "1", memory: 1Gi}}, queues: [coverage, heartbeat, retention, webhooks], queueConcurrency: {coverage: 1, heartbeat: 1, retention: 1, webhooks: 4}, replicas: ${replicas}, terminationGracePeriodSeconds: 960, autoscaling: {enabled: false} }
-    - { name: sync, image: dev-health-go-worker:latest, resources: {requests: {cpu: 25m, memory: 128Mi}, limits: {cpu: "1", memory: 1Gi}}, queues: [sync], queueConcurrency: {sync: 4}, replicas: ${replicas}, terminationGracePeriodSeconds: 960, autoscaling: {enabled: false} }
-    - { name: sync-provider, image: dev-health-go-worker:latest, resources: {requests: {cpu: 25m, memory: 128Mi}, limits: {cpu: "1", memory: 1Gi}}, queues: [sync_provider], queueConcurrency: {sync_provider: 2}, replicas: 0, terminationGracePeriodSeconds: 960, autoscaling: {enabled: false} }
+    - { name: heavy, image: dev-health-go-dho:latest, subcommand: worker, resources: {requests: {cpu: 25m, memory: 128Mi}, limits: {cpu: "1", memory: 1Gi}}, queues: [investment, metrics, reports, workgraph], queueConcurrency: {investment: 1, metrics: 2, reports: 2, workgraph: 1}, replicas: ${replicas}, terminationGracePeriodSeconds: 7260, autoscaling: {enabled: false}, bridgeUrl: "" }
+    - { name: ops, image: dev-health-go-dho:latest, subcommand: worker, resources: {requests: {cpu: 25m, memory: 128Mi}, limits: {cpu: "1", memory: 1Gi}}, queues: [coverage, heartbeat, retention, webhooks], queueConcurrency: {coverage: 1, heartbeat: 1, retention: 1, webhooks: 4}, replicas: ${replicas}, terminationGracePeriodSeconds: 960, autoscaling: {enabled: false} }
+    - { name: sync, image: dev-health-go-dho:latest, subcommand: worker, resources: {requests: {cpu: 25m, memory: 128Mi}, limits: {cpu: "1", memory: 1Gi}}, queues: [sync], queueConcurrency: {sync: 4}, replicas: ${replicas}, terminationGracePeriodSeconds: 960, autoscaling: {enabled: false} }
+    - { name: sync-provider, image: dev-health-go-dho:latest, subcommand: worker, resources: {requests: {cpu: 25m, memory: 128Mi}, limits: {cpu: "1", memory: 1Gi}}, queues: [sync_provider], queueConcurrency: {sync_provider: 2}, replicas: 0, terminationGracePeriodSeconds: 960, autoscaling: {enabled: false} }
     - { name: reconciler, image: dev-health-go-dho:latest, subcommand: reconciler, resources: {requests: {cpu: 25m, memory: 128Mi}, limits: {cpu: "1", memory: 1Gi}}, replicas: ${replicas}, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }
     - { name: scheduler, image: dev-health-go-dho:latest, subcommand: scheduler, resources: {requests: {cpu: 25m, memory: 128Mi}, limits: {cpu: "1", memory: 1Gi}}, replicas: ${replicas}, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }
     - { name: stream-external, image: dev-health-go-dho:latest, subcommand: stream-runner, resources: {requests: {cpu: 25m, memory: 128Mi}, limits: {cpu: "1", memory: 1Gi}}, runtimeProfile: external, replicas: ${replicas}, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }

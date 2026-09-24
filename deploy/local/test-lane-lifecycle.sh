@@ -267,7 +267,6 @@ cat >"$tmp/node-images-partial" <<'EOF'
 docker.io/library/dev-health-ops-local:test
 ghcr.io/full-chaos/dev-health-web:0.1.0
 docker.io/library/dev-health-acr:dev
-docker.io/library/dev-health-go-worker:latest
 EOF
 cat >>"$tmp/node-images-partial" <<'EOF'
 docker.io/library/dev-health-go-dho:latest
