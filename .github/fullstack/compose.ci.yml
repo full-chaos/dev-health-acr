@@ -202,7 +202,9 @@ services:
     networks: [dev-health]
 
   # Go query-api: serves the Go-owned GraphQL operations the ops `api` dispatches
-  # to. Same shape as dev-health-ops deploy/go-api/compose-query-api.yml, built
+  # to. Same shape as dev-health-ops deploy/go-api/compose-query-api.yml: the
+  # `query-api` verb of the dho image (docker/go-worker.Dockerfile, target dho;
+  # the standalone docker/query-api.Dockerfile was retired, CHAOS-6434), built
   # from the checked-out ./ops tree (multi-arch: the build runs natively on
   # amd64 and arm64). Distroless runtime: no shell, so no container healthcheck;
   # scripts/e2e/compose.sh seed_go_api_routing proves reachability by reading
@@ -210,8 +212,9 @@ services:
   query-api:
     build:
       context: ./ops
-      dockerfile: docker/query-api.Dockerfile
-      target: runtime
+      dockerfile: docker/go-worker.Dockerfile
+      target: dho
+    command: ["query-api"]
     restart: unless-stopped
     environment:
       QUERY_API_ADDR: ":8090"
