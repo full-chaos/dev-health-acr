@@ -495,6 +495,8 @@ type recordingTelemetry struct {
 	// windowBinderOutcomes/windowCanonicalizationOutcomes (CHAOS-3900 W1)
 	// mirror the pair above's own list-not-count discipline.
 	windowBinderOutcomes           []WindowBindReason
+	windowBinderProposals          []WindowBindOutcome
+	windowGatedForConfirmation     []windowGatedRecord
 	windowCanonicalizationOutcomes []WindowCanonicalizationOutcome
 	// structureNeedsDisclosed/structureOfferCounts/structureReceipts
 	// (CHAOS-3900 P1.F) mirror the SAME list-not-count discipline.
@@ -746,8 +748,13 @@ func (r *recordingTelemetry) RecordBindingEpochDelta(_ context.Context, _ storag
 	r.bindingEpochDeltas = append(r.bindingEpochDeltas, bindingEpochDeltaRecord{flipped, delta})
 }
 
-func (r *recordingTelemetry) RecordWindowBinderOutcome(_ context.Context, _ storage.Principal, reason WindowBindReason) {
-	r.windowBinderOutcomes = append(r.windowBinderOutcomes, reason)
+func (r *recordingTelemetry) RecordWindowBinderOutcome(_ context.Context, _ storage.Principal, outcome WindowBindOutcome) {
+	r.windowBinderOutcomes = append(r.windowBinderOutcomes, outcome.Reason)
+	r.windowBinderProposals = append(r.windowBinderProposals, outcome)
+}
+
+func (r *recordingTelemetry) RecordWindowGatedForConfirmation(_ context.Context, _ storage.Principal, origin WindowCanonicalizationOutcome, effective contractsv1.ContextFabricEffectiveEvidenceWindow) {
+	r.windowGatedForConfirmation = append(r.windowGatedForConfirmation, windowGatedRecord{origin, effective.RelativeID, effective.Provenance})
 }
 
 func (r *recordingTelemetry) RecordWindowCanonicalization(_ context.Context, _ storage.Principal, outcome WindowCanonicalizationOutcome) {
