@@ -76,17 +76,17 @@ func TestMaxSerializedBytesIsWiredThroughSanitizeLogIntAtBothAlertSites(t *testi
 	}
 	text := string(src)
 	wired := strings.Count(text, `"max_serialized_bytes", SanitizeLogInt(event.MaxSerializedBytes)`)
-	if wired != 2 {
-		t.Fatalf("telemetry.go wires max_serialized_bytes through SanitizeLogInt at %d site(s), want exactly 2 "+
-			"(RecordPlanNarrowing alert #61, RecordBudgetAssertion alert #68)", wired)
+	if wired != 3 {
+		t.Fatalf("telemetry.go wires max_serialized_bytes through SanitizeLogInt at %d site(s), want exactly 3 "+
+			"(RecordPlanNarrowing alert #61, RecordBudgetAssertion alert #68, RecordFactRowTruncation CHAOS-6558)", wired)
 	}
 	if strings.Contains(text, `"max_serialized_bytes", event.MaxSerializedBytes,`) {
 		t.Fatal("telemetry.go still logs event.MaxSerializedBytes bare (unwrapped) at some site")
 	}
 	// Anchor the count itself is not vacuous -- the field name really
 	// appears exactly twice in the file, both wired.
-	if total := strings.Count(text, `"max_serialized_bytes",`); total != 2 {
-		t.Fatalf("telemetry.go has %d max_serialized_bytes field(s) total, want exactly 2 -- this test's own "+
+	if total := strings.Count(text, `"max_serialized_bytes",`); total != 3 {
+		t.Fatalf("telemetry.go has %d max_serialized_bytes field(s) total, want exactly 3 -- this test's own "+
 			"count assumption is stale, update it", total)
 	}
 }

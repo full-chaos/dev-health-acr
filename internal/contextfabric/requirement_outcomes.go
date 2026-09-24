@@ -277,8 +277,15 @@ const (
 	OutcomeReductionNotApplicable OutcomeReductionDeclined = ""
 	// OutcomeReductionNotItemsAxis: the answer overran on BYTES. The
 	// reduction's arithmetic is exact on the items axis and has no
-	// equivalent on the byte axis, so the planned refusal stands by design
-	// rather than by omission.
+	// equivalent on the byte axis, so THIS lever declines by design.
+	//
+	// CHAOS-6558 (chris, 2026-09-24, option b) superseded the rest of this
+	// sentence, which read "so the planned refusal stands by design": the
+	// byte axis now has its own lever, claimed-fact row truncation with
+	// disclosure (fact_row_truncation.go), which stage 3 runs FIRST on a
+	// byte overrun. This token is therefore reached only after that lever
+	// declined or was insufficient, and the refusal it accompanies is the
+	// case where rows could not be cut far enough.
 	OutcomeReductionNotItemsAxis OutcomeReductionDeclined = "not_items_axis"
 	// OutcomeReductionNoItemBudget: this engine was given no item ceiling,
 	// so there is no allowance to compute. A deployment-configuration

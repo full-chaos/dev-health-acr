@@ -28,6 +28,18 @@ import (
 // strictly better than the status quo, which is the same refusal with no
 // explanation at all.
 //
+// CHAOS-6558 (chris, 2026-09-24, option b) added the BYTE-axis lever. The
+// original design gave a byte overrun no reduction of its own ("the planned
+// refusal stands by design"): only the cohort retry, which keeps every
+// retained fact's row tables and so could not reduce them. Now the order on a
+// byte overrun is: (1) cut claimed-fact rows to the largest per-table cap that
+// fits, serve PARTIAL with the cut disclosed (fact_row_truncation.go);
+// (2) only if that cannot fit, the cohort retry -- and NOT when the rows alone
+// overran and the narrowed input keeps every fact, because that retry cannot
+// reduce the axis (RetryDeclinedCannotReduceAxis); the refusal then advises a
+// shorter evidence window; (3) the retry's document gets the row lever too.
+// max_serialized_bytes is unchanged by that ruling.
+//
 // CHAOS-4735 corrected HOW it names that axis. The first version returned a
 // fixed English sentence per family; it now returns a closed token that the
 // family registry declares, because the engine does not author user language.
@@ -186,6 +198,39 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	}
 
 	grouped := params.Graph.Cohort != nil && len(params.Graph.Cohort.Groups) > 0
+	// CHAOS-6558 LEVER ORDER, ruled by chris 2026-09-24 (option b): on a BYTE
+	// overrun, cut claimed-fact rows FIRST -- before any cohort cut -- and
+	// serve the answer partial, with the cut disclosed. Before this, a byte
+	// overrun had exactly one lever, the cohort retry below, which keeps every
+	// retained fact's rows and so could not reduce what overran: prod ran two
+	// syntheses and refused (86,666 -> 122,402 bytes against 65,536).
+	//
+	// A census-bearing tuple is left to its own arms: its payload shape is
+	// pinned by the census, and the lever is not taught it.
+	var rowLever factRowTruncationAttempt
+	if params.WorkItemCensus == nil {
+		var rowErr error
+		rowLever, rowErr = e.planFactRowTruncation(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts, &firstPass, answerPassSecond, cardinality)
+		if rowErr != nil {
+			return InvestigationResult{}, firstPass, rowErr
+		}
+		e.recordFactRowTruncation(ctx, principal, plan, answerPassFirst, measured, rowLever, budget)
+		if rowLever.Served {
+			// ONE decision event, describing ONE document: the assembled
+			// result this stage measured and its axis, exactly as the
+			// refusal arms do. What the lever did to it -- after-bytes, rows
+			// before/after -- is on the fact-row truncation line.
+			members := cohortMemberCount(params.Graph.Cohort)
+			event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult,
+				members, members, grouped, false, overrun, params.GroupedNarrowingBasis)
+			event.recordMeasurement(measured)
+			event.PredictedItems = PredictedItemsForPlan(*plan, members)
+			event.DeadlineReserved = e.synthesisDeadlineReserve > 0
+			event.OutcomeCompletenessState = rowLever.Result.Completeness.State
+			e.recordPlanNarrowing(ctx, principal, event)
+			return rowLever.Result, firstPass, nil
+		}
+	}
 	narrowed := narrowSynthesisInput(params, plan)
 	before, after, canNarrow := narrowed.Before, narrowed.After, narrowed.Narrow
 	// Reported HERE because narrowSynthesisInput has no telemetry handle and
@@ -204,9 +249,19 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// this answer is genuinely slow, or accept that nothing was left to
 	// narrow -- and a single unexplained 413 tells an operator none of them.
 	declined := RetryDeclinedNotApplicable
+	// CHAOS-6558 (a): never run a retry that cannot reduce the overrunning
+	// axis. When the rows alone overran (removing them would have fit) and
+	// the narrowed input keeps every fact, the retry re-synthesizes over the
+	// same evidence, and claim rows are copied verbatim from that evidence --
+	// so it cannot shrink them. It would only spend a second synthesis to
+	// arrive at the same refusal, which is the prod shape exactly.
+	retryCannotReduce := canNarrow && rowLever.RowsDominate &&
+		narrowed.Retention.FactsAfter >= narrowed.Retention.FactsBefore
 	switch {
 	case !canNarrow:
 		declined = RetryDeclinedNothingToNarrow
+	case retryCannotReduce:
+		declined = RetryDeclinedCannotReduceAxis
 	case e.synthesisDeadlineReserve <= 0:
 		declined = RetryDeclinedNoReserve
 	case !e.retryDeadlineAvailable(ctx):
@@ -262,7 +317,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// A refusal is still where a per-group breach matters most, and it
 		// still carries real quota fields rather than the zeros both
 		// refusal arms used to emit.
-		return InvestigationResult{}, firstPass, e.planRefusal(ctx, principal, plan, measured, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined)
+		return InvestigationResult{}, firstPass, e.planRefusal(ctx, principal, plan, measured, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined, continuationAxisForOverrun(*plan, rowLever))
 	}
 
 	// Selection records the first attempt's measured trigger. The retry has
@@ -455,6 +510,30 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// fields off a struct nobody had filled -- reporting no groups and no
 	// quota for a two-group answer that had just been served.
 	outcomeAttempt := outcomeNarrowingAttempt{Measured: retryMeasured}
+	// CHAOS-6558: the retry ran because the rows alone could not account for
+	// the overrun (or the narrowing dropped facts). Its document may now be
+	// curable by the row lever, so the lever gets its turn before refusal.
+	var retryRowLever factRowTruncationAttempt
+	if retryOverrun == contractsv1.ContextFabricBudgetOverrunBytes && params.WorkItemCensus == nil {
+		var rowErr error
+		retryRowLever, rowErr = e.planFactRowTruncation(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts, &retryPending, answerPassThird, retryCardinality)
+		if rowErr != nil {
+			return InvestigationResult{}, retryPending, rowErr
+		}
+		e.recordFactRowTruncation(ctx, principal, plan, answerPassSecond, retryMeasured, retryRowLever, budget)
+		if retryRowLever.Served {
+			event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, false, retryOverrun, narrowed.Basis)
+			event.recordMeasurement(retryMeasured)
+			event.PredictedItems = PredictedItemsForPlan(*plan, after)
+			event.RetryAttempted = true
+			event.DeadlineReserved = e.synthesisDeadlineReserve > 0
+			event.OutcomeCompletenessState = retryRowLever.Result.Completeness.State
+			e.recordPlanNarrowing(ctx, principal, event)
+			retryRanked := narrowed.Ranked
+			retryPending.CohortRanked = &retryRanked
+			return retryRowLever.Result, retryPending, nil
+		}
+	}
 	if retryOverrun != contractsv1.ContextFabricBudgetFits {
 		var accountingErr error
 		outcomeAttempt, accountingErr = e.planCandidateNarrowing(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts, &retryPending, answerPassThird, retryCardinality, params.WorkItemCensus)
@@ -515,7 +594,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// Only when a refusal is actually planned. Recording the axis on a
 		// fitting retry would make the counter say the caller was given
 		// advice they never received.
-		event.NarrowerContinuationAxis = narrowerContinuationAxisFor(*plan)
+		event.NarrowerContinuationAxis = continuationAxisForOverrun(*plan, retryRowLever)
 	}
 	// `retried`, not `measurementInput`/`measured`: when the retry FITS
 	// without needing the candidate reduction (retryOverrun == Fits below),
@@ -535,7 +614,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// retries explicitly: they inherit the same deadline problem and
 		// merely move the terminal case, arriving at the same unanswered
 		// question with more latency.
-		return InvestigationResult{}, retryPending, e.refusalFrom(plan, retryMeasurement, retryOverrun, true)
+		return InvestigationResult{}, retryPending, e.refusalFromAxis(plan, retryMeasurement, retryOverrun, true, continuationAxisForOverrun(*plan, retryRowLever))
 	}
 	// The SERVED answer is the retry's, so the ranking event that describes it
 	// is the retry's too. Emitting the first pass's would report a ranking
@@ -722,7 +801,12 @@ func (e *Engine) retryDeadlineAvailable(ctx context.Context) bool {
 // matters MOST, and both refusal arms used to emit zero quota fields while the
 // real exposure sat on an object one branch away. An enforcement layer told
 // nothing on the one path that refuses has been told nothing.
-func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, plan *AnswerPlan, measured MeasuredAttempt, retryAttempted, grouped bool, basis contractsv1.ContextFabricNarrowingBasis, members, selected int, declined RetryDeclinedReason, reductionDeclined OutcomeReductionDeclined) error {
+//
+// axis is the continuation advice, chosen by the caller (CHAOS-6558): the
+// family's declared axis, except that a byte overrun the fact rows account
+// for is narrowed by less TIME, not by fewer members -- see
+// continuationAxisForOverrun.
+func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, plan *AnswerPlan, measured MeasuredAttempt, retryAttempted, grouped bool, basis contractsv1.ContextFabricNarrowingBasis, members, selected int, declined RetryDeclinedReason, reductionDeclined OutcomeReductionDeclined, axis NarrowingContinuationAxis) error {
 	// THE AXIS COMES FROM THE MEASURED ATTEMPT, not from a parameter.
 	//
 	// This function used to take `overrun` separately while taking the
@@ -755,12 +839,28 @@ func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, p
 	// no candidates", and "the candidate cut ran and was not enough" are one
 	// undifferentiated absence.
 	event.OutcomeReductionDeclined = reductionDeclined
-	event.NarrowerContinuationAxis = narrowerContinuationAxisFor(*plan)
+	event.NarrowerContinuationAxis = axis
 	e.recordPlanNarrowing(ctx, principal, event)
-	return e.refusalFrom(plan, measured.Measurement, overrun, retryAttempted)
+	return e.refusalFromAxis(plan, measured.Measurement, overrun, retryAttempted, axis)
 }
 
 func (e *Engine) refusalFrom(plan *AnswerPlan, measurement ResponseMeasurement, overrun contractsv1.ContextFabricBudgetOverrun, retryAttempted bool) error {
+	return e.refusalFromAxis(plan, measurement, overrun, retryAttempted, narrowerContinuationAxisFor(*plan))
+}
+
+// continuationAxisForOverrun is the advice a refusal gives. The family's
+// declared axis, EXCEPT when the byte overrun is one the fact rows alone
+// account for: fewer members does not shrink rows the retained facts carry,
+// so naming result_count there is advice that cannot work. Rows are the
+// evidence window's volume, so a shorter window is the narrowing that fits.
+func continuationAxisForOverrun(plan AnswerPlan, rowLever factRowTruncationAttempt) NarrowingContinuationAxis {
+	if rowLever.RowsDominate {
+		return NarrowingContinuationEvidenceWindow
+	}
+	return narrowerContinuationAxisFor(plan)
+}
+
+func (e *Engine) refusalFromAxis(plan *AnswerPlan, measurement ResponseMeasurement, overrun contractsv1.ContextFabricBudgetOverrun, retryAttempted bool, axis NarrowingContinuationAxis) error {
 	return AnswerBudgetRefusal{
 		Overrun:                  overrun,
 		MeasuredItems:            measurement.Items.Budgeted(),
@@ -768,7 +868,7 @@ func (e *Engine) refusalFrom(plan *AnswerPlan, measurement ResponseMeasurement, 
 		MaxItems:                 plan.Budget.MaxItems,
 		MaxSerializedBytes:       plan.Budget.MaxSerializedBytes,
 		Family:                   plan.Family,
-		NarrowerContinuationAxis: narrowerContinuationAxisFor(*plan),
+		NarrowerContinuationAxis: axis,
 		RetryAttempted:           retryAttempted,
 	}
 }
