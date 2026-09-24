@@ -133,9 +133,76 @@ type APIError struct {
 	RetryAfter           time.Duration
 	RequestID            string
 	MinimumClientVersion string
+	// Budget (CHAOS-6558) is set only for a 413 invalid_request whose
+	// details carry at least one valid budget field: the hosted answer did
+	// not fit the response budget. Every field is a closed token or a
+	// non-negative integer parsed from error.details -- never hosted text.
+	Budget *BudgetRefusal
 
 	sentinel error
 }
+
+// BudgetRefusal is the closed, client-validated subset of a Context Fabric
+// response-budget refusal (internal/api/context_fabric_routes.go: the
+// AnswerBudgetRefusal branch and the route's own bytes/items gates). It
+// tells the caller WHICH ceiling the answer exceeded, by how much, and
+// along which axis a narrower question would fit. A field the hosted
+// response omitted, or sent with an unknown value or wrong type, is NOT
+// present: its Set flag stays false and it is never rendered. The routes
+// send different subsets (the result-by-id 413 sends only the two byte
+// fields), so a zero value must never stand in for "not sent".
+type BudgetRefusal struct {
+	Overrun                  string // "items" | "bytes"; "" = not sent
+	MeasuredItems            BudgetCount
+	MeasuredBytes            BudgetCount
+	MaxItems                 BudgetCount
+	MaxSerializedBytes       BudgetCount
+	RetryAttempted           BudgetFlag
+	NarrowerContinuationAxis string // closed: budgetContinuationAxes; "" = not sent
+}
+
+// BudgetCount is one validated non-negative count and whether the hosted
+// response actually sent it.
+type BudgetCount struct {
+	Value int64
+	Set   bool
+}
+
+// BudgetFlag is one validated boolean and whether it was sent.
+type BudgetFlag struct {
+	Value bool
+	Set   bool
+}
+
+// budgetOverruns and budgetContinuationAxes are the closed vocabularies a
+// hosted value must match to cross into BudgetRefusal. They mirror
+// contractsv1.ContextFabricBudgetOverrunItems/Bytes and
+// contextfabric.NarrowingContinuationAxisVocabulary (minus "none", which
+// the hosted API omits rather than sends); a drift test in internal/mcp
+// pins the axis set against that registry.
+var budgetOverruns = map[string]bool{
+	string(contractsv1.ContextFabricBudgetOverrunItems): true,
+	string(contractsv1.ContextFabricBudgetOverrunBytes): true,
+}
+
+var budgetContinuationAxes = map[string]bool{
+	"evidence_window": true, "result_count": true, "scope_anchor": true,
+	"group_selection": true, "comparison_pair": true,
+}
+
+// BudgetContinuationAxes returns the closed axis set this client accepts,
+// for the drift test.
+func BudgetContinuationAxes() []string {
+	axes := make([]string, 0, len(budgetContinuationAxes))
+	for axis := range budgetContinuationAxes {
+		axes = append(axes, axis)
+	}
+	return axes
+}
+
+// budgetRefusalSafeMessage replaces the invalid_request message for a
+// budget refusal: the request was valid, the answer was too large.
+const budgetRefusalSafeMessage = "the answer did not fit the response budget"
 
 func (e *APIError) Error() string {
 	base := fmt.Sprintf("acr api error: code=%s status=%d retryable=%t", displayCode(e.Code), e.HTTPStatus, e.Retryable)
@@ -144,6 +211,28 @@ func (e *APIError) Error() string {
 	}
 	if e.Message != "" {
 		base += " message=" + strconv.Quote(e.Message)
+	}
+	if b := e.Budget; b != nil {
+		if b.Overrun != "" {
+			base += " overrun=" + b.Overrun
+		}
+		for _, count := range []struct {
+			name  string
+			value BudgetCount
+		}{
+			{"measured_bytes", b.MeasuredBytes}, {"max_serialized_bytes", b.MaxSerializedBytes},
+			{"measured_items", b.MeasuredItems}, {"max_items", b.MaxItems},
+		} {
+			if count.value.Set {
+				base += fmt.Sprintf(" %s=%d", count.name, count.value.Value)
+			}
+		}
+		if b.RetryAttempted.Set {
+			base += fmt.Sprintf(" retry_attempted=%t", b.RetryAttempted.Value)
+		}
+		if b.NarrowerContinuationAxis != "" {
+			base += " narrower_continuation=" + b.NarrowerContinuationAxis
+		}
 	}
 	return base
 }
@@ -187,12 +276,64 @@ func newAPIError(status int, detail contractsv1.ErrorDetail, requestID, retryAft
 	if detail.Code == "version_mismatch" {
 		apiErr.MinimumClientVersion = minimumClientVersion(detail.Details)
 	}
+	if detail.Code == "invalid_request" && status == 413 {
+		if budget, ok := budgetRefusal(detail.Details); ok {
+			apiErr.Budget = &budget
+			apiErr.Message = budgetRefusalSafeMessage
+		}
+	}
 	if seconds, ok := parseRetryAfterSeconds(retryAfterHeader); ok {
 		apiErr.RetryAfter = time.Duration(seconds) * time.Second
 	} else if seconds, ok := retryAfterFromDetails(detail.Details); ok {
 		apiErr.RetryAfter = time.Duration(seconds) * time.Second
 	}
 	return apiErr
+}
+
+// budgetRefusal parses the closed budget fields from a 413's details. ok is
+// false when no field validated -- the request-body MaxBytes 413 carries no
+// details and stays an ordinary invalid request.
+func budgetRefusal(details map[string]any) (BudgetRefusal, bool) {
+	var b BudgetRefusal
+	found := false
+	if raw, ok := details["overrun"].(string); ok && budgetOverruns[raw] {
+		b.Overrun, found = raw, true
+	}
+	for key, target := range map[string]*BudgetCount{
+		"measured_items": &b.MeasuredItems, "measured_bytes": &b.MeasuredBytes,
+		"max_items": &b.MaxItems, "max_serialized_bytes": &b.MaxSerializedBytes,
+	} {
+		if value, ok := nonNegativeInteger(details[key]); ok {
+			*target, found = BudgetCount{Value: value, Set: true}, true
+		}
+	}
+	if raw, ok := details["retry_attempted"].(bool); ok {
+		b.RetryAttempted, found = BudgetFlag{Value: raw, Set: true}, true
+	}
+	if continuation, ok := details["narrower_continuation"].(map[string]any); ok {
+		if axis, ok := continuation["axis"].(string); ok && budgetContinuationAxes[axis] {
+			b.NarrowerContinuationAxis, found = axis, true
+		}
+	}
+	return b, found
+}
+
+// nonNegativeInteger accepts a JSON number (float64 after decode, or int
+// from a direct caller) that is a whole, non-negative value within int64.
+func nonNegativeInteger(raw any) (int64, bool) {
+	switch value := raw.(type) {
+	case float64:
+		if value < 0 || value != float64(int64(value)) || value > 1<<53 {
+			return 0, false
+		}
+		return int64(value), true
+	case int:
+		return int64(value), value >= 0
+	case int64:
+		return value, value >= 0
+	default:
+		return 0, false
+	}
 }
 
 func minimumClientVersion(details map[string]any) string {
