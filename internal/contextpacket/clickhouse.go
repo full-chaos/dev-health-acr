@@ -44,11 +44,22 @@ func (r *CatalogClickHouseRows) ResolveEvidenceScope(ctx context.Context, plan R
 }
 
 func (r *CatalogClickHouseRows) EvidenceRows(ctx context.Context, plan ReadPlan) ([]contractsv1.EvidenceRef, []contractsv1.SourceWatermark, []contractsv1.UnavailableSource, error) {
+	evidence, watermarks, unavailable, _, err := r.EvidenceRowsWithWarnings(ctx, plan)
+	return evidence, watermarks, unavailable, err
+}
+
+// EvidenceRowsWithWarnings is EvidenceRows plus the catalog's non-fatal
+// disclosures (CHAOS-6565). ContextForTask prefers it when available.
+func (r *CatalogClickHouseRows) EvidenceRowsWithWarnings(ctx context.Context, plan ReadPlan) ([]contractsv1.EvidenceRef, []contractsv1.SourceWatermark, []contractsv1.UnavailableSource, []string, error) {
 	result, err := ExecuteCatalogObserved(ctx, r.executor, plan, r.observer)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	return result.Evidence, result.Watermarks, result.Unavailable, nil
+	return result.Evidence, result.Watermarks, result.Unavailable, result.Warnings, nil
+}
+
+type evidenceRowsWithWarnings interface {
+	EvidenceRowsWithWarnings(context.Context, ReadPlan) ([]contractsv1.EvidenceRef, []contractsv1.SourceWatermark, []contractsv1.UnavailableSource, []string, error)
 }
 
 func (r *CatalogClickHouseRows) AuthorizedRepositories(ctx context.Context, orgID string, scopes []string) (_ []contractsv1.ResolvedScope, err error) {
@@ -193,7 +204,15 @@ func (s *ClickHouseEvidenceStore) ContextForTask(ctx context.Context, p storage.
 		return storage.EvidenceBundle{ResolvedScope: scope, Unavailable: unavailableCatalog("scope_unresolved"), QueryVersion: QueryVersionV1}, nil
 	}
 	plan.RepoID = scope.RepoID
-	evidence, watermarks, unavailable, err := s.rows.EvidenceRows(ctx, plan)
+	var evidence []contractsv1.EvidenceRef
+	var watermarks []contractsv1.SourceWatermark
+	var unavailable []contractsv1.UnavailableSource
+	var catalogWarnings []string
+	if withWarnings, ok := s.rows.(evidenceRowsWithWarnings); ok {
+		evidence, watermarks, unavailable, catalogWarnings, err = withWarnings.EvidenceRowsWithWarnings(ctx, plan)
+	} else {
+		evidence, watermarks, unavailable, err = s.rows.EvidenceRows(ctx, plan)
+	}
 	if err != nil {
 		return storage.EvidenceBundle{}, err
 	}
@@ -205,7 +224,7 @@ func (s *ClickHouseEvidenceStore) ContextForTask(ctx context.Context, p storage.
 		}
 		evidence[index].EvidenceRefID = handle
 	}
-	return storage.EvidenceBundle{ResolvedScope: scope, Evidence: evidence, Watermarks: watermarks, Unavailable: unavailable, QueryVersion: QueryVersionV1}, nil
+	return storage.EvidenceBundle{ResolvedScope: scope, Evidence: evidence, Watermarks: watermarks, Unavailable: unavailable, Warnings: catalogWarnings, QueryVersion: QueryVersionV1}, nil
 }
 
 func unavailableCatalog(reason string) []contractsv1.UnavailableSource {

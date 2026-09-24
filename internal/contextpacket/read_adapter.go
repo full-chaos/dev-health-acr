@@ -35,6 +35,8 @@ type ReadPlan struct {
 	TimeWindowDays       int
 	IncludeLowConfidence bool
 	Statement            string
+	// RequestID is for log correlation only; it is not a query binding.
+	RequestID string
 }
 
 // BuildReadPlanV1 creates the only ClickHouse read shape used by this package.
@@ -55,6 +57,7 @@ func BuildReadPlanV1(principal storage.Principal, request contractsv1.ContextPac
 	}
 	return ReadPlan{
 		Version:              QueryVersionV1,
+		RequestID:            request.RequestID,
 		OrgID:                principal.OrgID,
 		RepoSlug:             slug,
 		Branch:               strings.TrimSpace(request.Scope.Branch),

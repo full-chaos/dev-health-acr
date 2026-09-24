@@ -3,6 +3,7 @@ package contextpacket
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"maps"
 	"sort"
 	"time"
@@ -42,6 +43,10 @@ type CatalogResult struct {
 	Evidence    []contractsv1.EvidenceRef
 	Watermarks  []contractsv1.SourceWatermark
 	Unavailable []contractsv1.UnavailableSource
+	// Warnings are non-fatal disclosures the catalog read produced, e.g.
+	// freshness_from_evidence:<source> when the source-latest read failed and
+	// the watermark fell back to the (confidence-filtered) evidence max.
+	Warnings []string
 }
 
 const repositoryWideSourceLabelSuffix = " (repository-wide)"
@@ -113,6 +118,16 @@ func ExecuteCatalogObserved(ctx context.Context, executor SourceQueryExecutor, p
 				latestObserved[query.ID] = latest
 			} else if ctx.Err() != nil {
 				return CatalogResult{}, ctx.Err()
+			} else if ferr != nil {
+				// LOUD fallback: the watermark below is derived from the
+				// confidence-filtered evidence rows, which can under-report
+				// freshness (CHAOS-6565). Log it and disclose it in the packet.
+				attrs := []any{"source", query.ID, "error", ferr.Error()}
+				if plan.RequestID != "" {
+					attrs = append(attrs, "request_id", plan.RequestID)
+				}
+				slog.WarnContext(ctx, "context packet source freshness read failed; watermark derived from evidence rows", attrs...)
+				result.Warnings = append(result.Warnings, "freshness_from_evidence:"+query.ID)
 			}
 		}
 		for index := range rows {

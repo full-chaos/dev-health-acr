@@ -1,7 +1,11 @@
 package contextpacket_test
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -45,4 +49,37 @@ func TestWatermarkUsesSourceLatestNotConfidenceFilteredEvidence(t *testing.T) {
 		return
 	}
 	t.Fatal("no deployments.v1 watermark")
+}
+
+// failingFreshnessClient serves evidence but fails the source-latest read.
+type failingFreshnessClient struct{ old time.Time }
+
+func (c failingFreshnessClient) Query(_ context.Context, statement string, _ []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+	if strings.HasPrefix(statement, "SELECT max(observed_at)") {
+		return nil, errors.New("freshness boom")
+	}
+	return &rowScanner{rows: [][]any{{"acr:v1:deployment:1", "dev_health", "deployment", "1", "deployment", "", "native", 0.9, "citation", c.old}}}, nil
+}
+
+func TestFreshnessFallbackIsLoud(t *testing.T) {
+	plan, err := contextpacket.BuildReadPlanV1(fixturePrincipal(), fixtureRequest("freshness-loud", "main", "commit-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.RepoID = "00000000-0000-0000-0000-000000000001"
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	result, err := contextpacket.ExecuteCatalog(context.Background(), contextpacket.NewClickHouseSourceExecutor(failingFreshnessClient{old: time.Now().Add(-time.Hour)}), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(result.Warnings, "freshness_from_evidence:deployments.v1") {
+		t.Fatalf("Warnings = %v, want freshness_from_evidence:deployments.v1", result.Warnings)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "level=WARN") || !strings.Contains(out, "source=deployments.v1") || !strings.Contains(out, "freshness boom") || !strings.Contains(out, "request_id="+plan.RequestID) {
+		t.Fatalf("fallback log not loud or missing source/error/request id: %s", out)
+	}
 }
