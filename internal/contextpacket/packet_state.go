@@ -164,6 +164,7 @@ func warnings(b storage.EvidenceBundle) []string {
 	for _, u := range b.Unavailable {
 		out = append(out, "source_unavailable:"+u.Source+":"+u.Reason)
 	}
+	out = append(out, b.Warnings...)
 	return sortedUnique(out)
 }
 func sortedWatermarks(in []contractsv1.SourceWatermark) []contractsv1.SourceWatermark {

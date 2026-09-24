@@ -62,6 +62,24 @@ type CitedEvidenceLookup interface {
 	ResultIDsCitingEvidence(ctx context.Context, principal storage.Principal, evidenceRefID string, offset, limit int) ([]string, error)
 }
 
+// ResultScopedCitedEvidenceLookup narrows a citing-result search to one
+// stored result (CHAOS-6563). A Context Fabric ref is keyed by its subject, so
+// many stored results cite the same ref; a caller that holds the result_id an
+// answer returned names that result, and ExpandCitedEvidence then reads, closure
+// checks and authorizes that result alone -- never a newer or older result that
+// happens to cite the same ref. A result that does not cite the ref, is unknown
+// or is not readable is the same not-found as an uncited ref.
+type ResultScopedCitedEvidenceLookup struct{ ResultID string }
+
+// ResultIDsCitingEvidence returns the scoped result id as the only candidate.
+func (l ResultScopedCitedEvidenceLookup) ResultIDsCitingEvidence(_ context.Context, _ storage.Principal, _ string, offset, limit int) ([]string, error) {
+	id := strings.TrimSpace(l.ResultID)
+	if id == "" || offset > 0 || limit <= 0 {
+		return nil, nil
+	}
+	return []string{id}, nil
+}
+
 // StoredResultAuthorizer decides whether a stored result may be served to a
 // principal. *StoredResultGate implements it.
 type StoredResultAuthorizer interface {

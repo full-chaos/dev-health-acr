@@ -185,6 +185,9 @@ func (c *rowClient) Query(_ context.Context, statement string, _ []contextpacket
 			if err := c.fail[query.ID]; err != nil {
 				return nil, err
 			}
+			if strings.HasPrefix(statement, "SELECT max(observed_at)") {
+				return &rowScanner{rows: [][]any{{time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), uint64(1)}}}, nil
+			}
 			return &rowScanner{rows: [][]any{{"acr:v1:test:1", "dev_health", "test", "1", query.ID, "", "native", 0.9000000000000001, "citation", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}}}, nil
 		}
 	}
@@ -199,16 +202,35 @@ type rowScanner struct {
 func (s *rowScanner) Next() bool { return s.row < len(s.rows) }
 
 func (s *rowScanner) Scan(dest ...any) error {
+	// Checked assertions: a fake row shaped for the evidence read must make the
+	// freshness (max/count) read fail softly, not panic (CHAOS-6565).
+	if s.row >= len(s.rows) || len(dest) > len(s.rows[s.row]) {
+		return errors.New("scan shape mismatch")
+	}
 	for index, target := range dest {
+		var ok bool
 		switch value := target.(type) {
 		case *string:
-			*value = s.rows[s.row][index].(string)
+			var v string
+			v, ok = s.rows[s.row][index].(string)
+			*value = v
 		case *float64:
-			*value = s.rows[s.row][index].(float64)
+			var v float64
+			v, ok = s.rows[s.row][index].(float64)
+			*value = v
 		case *time.Time:
-			*value = s.rows[s.row][index].(time.Time)
+			var v time.Time
+			v, ok = s.rows[s.row][index].(time.Time)
+			*value = v
+		case *uint64:
+			var v uint64
+			v, ok = s.rows[s.row][index].(uint64)
+			*value = v
 		default:
 			return errors.New("unexpected destination")
+		}
+		if !ok {
+			return errors.New("scan type mismatch")
 		}
 	}
 	s.row++

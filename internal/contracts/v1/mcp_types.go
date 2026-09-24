@@ -150,10 +150,14 @@ type MCPFederatedBudget struct {
 }
 
 // MCPSourceEvidenceRequest is the input contract for the source_evidence
-// MCP tool. It accepts exactly evidence_ref_id: no schema_version wire
-// field, since the tool identity is established by the MCP call itself.
+// MCP tool. It accepts evidence_ref_id and, for a Context Fabric reference
+// (acr:v1:...), the result_id of the answer that returned it: no
+// schema_version wire field, since the tool identity is established by the
+// MCP call itself. A Context Fabric reference is keyed by its subject and many
+// results cite it, so it expands only in the scope of one result (CHAOS-6563).
 type MCPSourceEvidenceRequest struct {
 	EvidenceRefID string `json:"evidence_ref_id"`
+	ResultID      string `json:"result_id,omitempty"`
 }
 
 // MCPSourceEvidenceResponse wraps the structured ExpandedEvidence contract

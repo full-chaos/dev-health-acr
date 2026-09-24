@@ -31,6 +31,8 @@ var goldenRelationshipPrefixes = []string{
 	"relationship.v2:project_membership:",
 	"relationship.v2:work_item_team:",
 	"relationship.v2:project_team:",
+	// CHAOS-6561: repository -> team OWNED_BY_TEAM (team_repo_ownership).
+	"relationship.v2:repository_team:",
 }
 
 // retiredRelationshipPrefixes are id prefixes this fixture USED to carry and

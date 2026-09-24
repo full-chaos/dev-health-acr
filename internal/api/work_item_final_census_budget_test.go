@@ -264,7 +264,7 @@ func TestWorkItemFinalBudgetRefusalPreservesExecutionContext(t *testing.T) {
 			}
 			f.engine = engine
 			body := finalCensusBudgetRequest()
-			body.Options.MaxSerializedBytes = 26628
+			body.Options.MaxSerializedBytes = 21000
 			if !retry {
 				body.Options.MaxCohortMembers = 6
 			}

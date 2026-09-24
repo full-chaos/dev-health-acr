@@ -137,7 +137,7 @@ var mcpContextForTaskRequestNullCheck = mcpNullCheck{
 }
 
 var mcpSourceEvidenceRequestNullCheck = mcpNullCheck{
-	keys: []string{"evidence_ref_id"},
+	keys: []string{"evidence_ref_id", "result_id"},
 }
 
 var mcpContextForTaskResponseNullCheck = mcpNullCheck{
@@ -175,8 +175,7 @@ func (r *MCPContextForTaskRequest) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// UnmarshalJSON rejects explicit JSON null for evidence_ref_id, the only
-// field this request declares.
+// UnmarshalJSON rejects explicit JSON null for evidence_ref_id and result_id.
 func (r *MCPSourceEvidenceRequest) UnmarshalJSON(data []byte) error {
 	if err := mcpSourceEvidenceRequestNullCheck.apply(data, "source_evidence request"); err != nil {
 		return err

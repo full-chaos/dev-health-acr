@@ -29,7 +29,7 @@ func EntityTableNamesForTest() []string {
 // matching seed row and expectation fails loudly instead of going silently
 // unasserted.
 func TeamsProjectsTableNamesForTest() []string {
-	tables := teamsProjectsTables(nil, nil, nil)
+	tables := teamsProjectsTables(nil, nil, nil, nil)
 	names := make([]string, len(tables))
 	for i, table := range tables {
 		names[i] = table.name
@@ -108,6 +108,15 @@ func ProjectTeamRelationshipIDForTest(t interface{ Fatalf(string, ...any) }, pro
 	return projectTeamRelationshipID(projectCanonicalID, teamID, source)
 }
 
+// RepositoryTeamRelationshipIDForTest exposes the OWNED_BY_TEAM
+// repository<->team edge id (CHAOS-6561) from the RAW values a fixture seeds
+// -- repos.id, teams.id, team_repo_ownership.provider and .source -- through
+// the producer's own derivation, for the reason
+// ProjectTeamRelationshipIDForTest exists.
+func RepositoryTeamRelationshipIDForTest(repoID, teamID, provider, source string) string {
+	return repositoryTeamRelationshipID(repositoryCanonicalID(repoID), teamID, provider, source)
+}
+
 // RowKeySQLForTest exposes rowKeySQL so the SQL/Go byte-agreement test builds
 // the SAME expression the producers page on, rather than a second copy of it
 // that could agree with Go while production disagrees.
@@ -182,7 +191,7 @@ func EntityTableSubjectKindsForTest() map[string][]contractsv1.ContextFabricSubj
 	for _, table := range entityTables {
 		declared[table.name] = append([]contractsv1.ContextFabricSubjectKind(nil), table.subjectKinds...)
 	}
-	for _, table := range teamsProjectsTables(nil, nil, nil) {
+	for _, table := range teamsProjectsTables(nil, nil, nil, nil) {
 		declared[table.name] = append([]contractsv1.ContextFabricSubjectKind(nil), table.subjectKinds...)
 	}
 	return declared

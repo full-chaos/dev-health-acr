@@ -306,9 +306,13 @@ const (
 	// ContextFabricRelationshipOwnedByTeam (CHAOS-3802): the two containment
 	// edges the newly-projected team and project subject kinds need --
 	// work_item -> project (work_items.project_id) and both work_item ->
-	// team (work_item_team_attributions) and project -> team
-	// (team_project_ownership). Additive v1 members, following the same
-	// precedent as CHAOS-3779's four above.
+	// team (work_item_team_attributions), project -> team
+	// (team_project_ownership) and, since CHAOS-6561, repository -> team
+	// (team_repo_ownership). Additive v1 members, following the same
+	// precedent as CHAOS-3779's four above. The repository -> team edge
+	// widened no contract surface: OWNED_BY_TEAM has no endpoint-kind
+	// validator, and its evidence refs reuse the existing repository and team
+	// evidence entity types.
 	//
 	// Overloading the existing PART_OF for containment was considered and
 	// rejected: the closed vocabulary exists so semantics stay distinct, and

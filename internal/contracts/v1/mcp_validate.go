@@ -129,6 +129,9 @@ func (r MCPSourceEvidenceRequest) Validate() error {
 	if !stringLengthBetween(r.EvidenceRefID, 1, 256) {
 		return fmt.Errorf("evidence_ref_id violates v1 bounds")
 	}
+	if r.ResultID != "" && !stringLengthBetween(r.ResultID, 8, 256) {
+		return fmt.Errorf("result_id violates v1 bounds")
+	}
 	return nil
 }
 

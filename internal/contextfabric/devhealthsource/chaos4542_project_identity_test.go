@@ -182,7 +182,14 @@ func TestChaos4542_CheckpointMarkerMovedWithTheJoin(t *testing.T) {
 	// its own URL. Same trap again -- the project rows' own updated_at does
 	// not move when the producer starts deriving the alias, so an organization
 	// caught up under v10 would never re-read them and never gain it.
-	if want := "devhealthsource.teams_projects.v11"; TeamsProjectsSourceVersion != want {
+	//
+	// v11 -> v12 is CHAOS-6561: a NEW edge family (repository -> team
+	// OWNED_BY_TEAM from team_repo_ownership). The ownership rows' own
+	// updated_at does not move because a producer starts reading them, so an
+	// organization caught up under v11 would never gain the edge without a
+	// rebuild. TestChaos6561_V11CheckpointForcesARebuild proves the worker
+	// actually refuses the v11 marker.
+	if want := "devhealthsource.teams_projects.v12"; TeamsProjectsSourceVersion != want {
 		t.Fatalf("TeamsProjectsSourceVersion = %q, want %q -- changing this constant is a deliberate full-rebuild decision, so update this test with the reason in the constant's doc comment", TeamsProjectsSourceVersion, want)
 	}
 }

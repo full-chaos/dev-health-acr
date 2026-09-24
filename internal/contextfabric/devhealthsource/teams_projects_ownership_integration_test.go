@@ -440,6 +440,7 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 		{"retraction only follows max-raising project writes", "30000000-0000-4000-8000-000000000012", subRetractionOnlyFollowsMaxRaisingProjectWrites},
 		{"the row-key SQL agrees with Go byte for byte", "30000000-0000-4000-8000-000000000013", subRowKeySQLAgreesWithGoByteForByte},
 		{"two groups sharing a project id get distinct cursor keys", "30000000-0000-4000-8000-000000000014", subTwoGroupsSharingAProjectIDGetDistinctCursorKeys},
+		{"a repository->team edge is re-emitted when its repos row arrives", "30000000-0000-4000-8000-000000000016", subRepositoryTeamEdgeReemittedWhenReposRowArrives},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {

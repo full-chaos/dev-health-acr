@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 32a6fb609ada0922d3d48ece289e4ed53f7c5984b343dea6c2cf0b28a26234a5
+# canonical-content-sha256: fddf7c3753bd86b09055f9bb9d4706e3ce5dcf6877df66ce1ab9d84f5b22d144
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -205,6 +205,15 @@ paths:
           in: "path"
           name: "evidence_ref_id"
           required: true
+          schema:
+            maxLength: 256
+            minLength: 8
+            type: "string"
+        -
+          description: "Scopes an acr:v1 evidence reference to the stored investigation result of the answer being verified. Without it the newest citing result answers (deprecated, logged)."
+          in: "query"
+          name: "result_id"
+          required: false
           schema:
             maxLength: 256
             minLength: 8
