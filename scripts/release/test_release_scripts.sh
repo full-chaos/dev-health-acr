@@ -252,6 +252,26 @@ if grep -F 'lework/skopeo-binary' "$release_workflow"; then exit 1; fi
 # job each check out the source (ci-reference needs no checkout).
 test "$(grep -c 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' "$release_workflow")" -eq 7
 
+# CHAOS-6403 (r1 P3 of CHAOS-6400): pin the gate itself, not just the checkout
+# count. Every job that compiles must wait on ci-reference; dropping that
+# `needs` would let a release build for a commit whose ci verify is not green.
+job_needs() { awk -v job="  $1:" '$0 == job {f=1; next} f && /^  [a-z][a-z0-9-]*:/ {exit} f && /^    needs:/ {print; exit}' "$release_workflow"; }
+test "$(job_needs ci-reference)" = "    needs: [preflight]"
+test "$(job_needs supply-chain)" = "    needs: [preflight, ci-reference]"
+test "$(job_needs build-leg)" = "    needs: [preflight, ci-reference]"
+test "$(job_needs build)" = "    needs: [preflight, supply-chain, build-leg]"
+# CHAOS-6403: Syft is a checksum-verified release binary, never compiled in CI;
+# no QEMU in release.yml; each leg builds once.
+if grep -E 'go run [^ ]*anchore/syft' "$release_workflow"; then exit 1; fi
+grep -F 'SYFT_SHA256: d654f678b709eb53c393d38519d5ed7d2e57205529404018614cfefa0fb2b5ca' "$release_workflow" >/dev/null
+grep -F 'sha256sum --check -' "$release_workflow" >/dev/null
+if grep -F 'setup-qemu-action' "$release_workflow"; then exit 1; fi
+test "$(grep -c 'go run ./cmd/releasebuild build ' "$release_workflow")" -eq 1
+# module cache only, verified; never GOCACHE, never a prefix fallback
+if grep -E 'restore-keys|gocache' "$release_workflow"; then exit 1; fi
+test "$(grep -c 'go mod verify' "$release_workflow")" -ge 3
+grep -F 'diff -qr --no-dereference "$RUNNER_TEMP/out-first" "$RUNNER_TEMP/out-second"' "$release_workflow" >/dev/null
+
 grep -F 'skopeo copy --all --preserve-digests' "$root/scripts/release/publish-ci-release.sh" >/dev/null
 grep -F 'cosign sign --yes' "$root/scripts/release/publish-ci-release.sh" >/dev/null
 grep -F 'cosign sign-blob' "$root/scripts/release/publish-ci-release.sh" | grep -F -- '--bundle' >/dev/null
