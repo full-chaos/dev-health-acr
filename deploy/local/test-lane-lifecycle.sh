@@ -108,6 +108,12 @@ cat >>"$tmp/bin/kubectl" <<'EOF'
     exit 0 ;;
 EOF
 cat >>"$tmp/bin/kubectl" <<'EOF'
+  "proxy "*)
+    printf 'proxy-pid %s\n' "$$" >>"$EVENTS"
+    printf 'Starting to serve on 127.0.0.1:38999\n'
+    exec sleep 300 ;;
+  *"role_table_grants"*)
+    printf '%s' "${KFAKE_DOMAIN_GRANTS:-3}"; exit 0 ;;
   "get nodes"*)
     cat "${KFAKE_NODE_IMAGES:-/dev/null}"; exit 0 ;;
   "get namespace"*|"get ns"*)
@@ -131,6 +137,18 @@ case "$*" in
   "version") printf 'kiac v0.5.1\n' ;;
 esac
 exit 0
+EOF
+
+# curl answers each probe with the status a scenario names. KFAKE_CURL_CODES is
+# a space-separated list of `<url-substring>=<code>`; a URL matching none gets 200.
+cat >"$tmp/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+url="${*: -1}"
+printf 'curl %s\n' "$url" >>"$EVENTS"
+for pair in ${KFAKE_CURL_CODES:-}; do
+  if [[ "$url" == *"${pair%%=*}"* ]]; then printf '%s' "${pair#*=}"; exit 0; fi
+done
+printf '200'
 EOF
 
 for fake in container docker helm; do
@@ -179,7 +197,7 @@ run_lane() {
 scenario() {
   unset KFAKE_CREATE_NS_RC KFAKE_SEED_MARKER KFAKE_NS_LABEL_OUT KFAKE_NS_LABEL_ERR \
         KFAKE_NS_LABEL_RC KFAKE_LANE_PG_NODEPORT KFAKE_SVC_TABLE KFAKE_NODE_IMAGES \
-        KFAKE_CLUSTER_EXISTS KFAKE_TRIALDATA_FAIL_ON LANE_SKIP_ACR KFAKE_SVC_LIST_ERR
+        KFAKE_CLUSTER_EXISTS KFAKE_TRIALDATA_FAIL_ON LANE_SKIP_ACR KFAKE_SVC_LIST_ERR KFAKE_CURL_CODES
   printf '\n%s\n' "$1"
 }
 
@@ -432,6 +450,65 @@ check_absent "the lane's datastores are never applied after the failure" \
 # exits non-zero whether or not the guard fires -- the assertion could not fail
 # and would read as coverage. The three checks above are the discriminating
 # ones: without the guard a base IS handed out and the datastores ARE applied.
+
+# ---------------------------------------------------------------------------
+# [P-1] Probe the lane's Services over HTTP from outside every pod
+#
+# verify_lane used to `kubectl exec deploy/<lane>-dev-health-api -- python -c`
+# to fetch each readiness URL, which ties the api Deployment to an image that
+# has an interpreter. The probes now go through `kubectl proxy` and curl, so
+# nothing is exec'd into the api Deployment, the exact HTTP status is read, and
+# a probe that is not 200 still fails the lane's verification.
+# ---------------------------------------------------------------------------
+gate_env() {
+  printf kid >"$tmp/mono/.acr-dev/evidence-kid"
+  printf keys >"$tmp/mono/.acr-dev/evidence-keys"
+  export KFAKE_CLUSTER_EXISTS=1 KFAKE_CREATE_NS_RC=0 KFAKE_NODE_IMAGES="$tmp/node-images-full"
+}
+
+scenario '[P-1] verify_lane probes over the Service proxy, never exec python'
+gate_env
+run_lane up lanefake-probe
+for want in \
+  '/services/http:lanefake-probe-dev-health-api:8000/proxy/health/workers' \
+  '/services/http:lanefake-probe-dev-health-api:8000/proxy/ready' \
+  '/services/http:lanefake-probe-dev-health-metrics-api:8000/proxy/ready' \
+  '/services/http:lanefake-probe-dev-health-web:3000/proxy/health' \
+  '/services/http:lanefake-probe-acr:8080/proxy/readyz'; do
+  check_contains "probe reaches ${want#/services/http:}" "curl http://127.0.0.1:38999/api/v1/namespaces/lanefake-probe$want" "$(events)"
+done
+check_absent "nothing is exec'd into the api Deployment" \
+  "exec deploy/lanefake-probe-dev-health-api" "$(events)"
+check_absent "no python is run to probe" "python" "$(events)"
+check_contains "an all-200 lane comes up READY" "lane 'lanefake-probe' READY" "$LAST_OUT"
+proxy_pid="$(grep -F 'proxy-pid ' "$tmp/events" | head -1 | cut -d' ' -f2)"
+if [[ -n "$proxy_pid" ]] && ! kill -0 "$proxy_pid" 2>/dev/null; then
+  ok "the kubectl proxy is stopped when verification ends"
+else
+  fail "the kubectl proxy is stopped when verification ends" \
+    "proxy pid '${proxy_pid:-none}' is still running or never started"
+  if [[ -n "$proxy_pid" ]]; then kill "$proxy_pid" 2>/dev/null || true; fi
+fi
+
+scenario '[P-1] a probe that is not 200 fails the lane, whatever 2xx it is'
+gate_env
+export KFAKE_CURL_CODES='dev-health-web:3000=503 dev-health-api:8000/proxy/ready=204'
+run_lane up lanefake-probe
+check_contains "a 503 is reported with its status" "web/health 503 (EXPECTED 200)" "$LAST_OUT"
+check_contains "a 204 is not accepted as a 200" "api/ready 204 (EXPECTED 200)" "$LAST_OUT"
+check_contains "the other probes still pass" "/health/workers 200" "$LAST_OUT"
+check_contains "up dies on a failed verification" "came up but failed verification" "$LAST_OUT"
+if [[ "$LAST_RC" -ne 0 ]]; then ok "up exits non-zero when a probe is not 200"
+else fail "up exits non-zero when a probe is not 200" "exit status was 0"; fi
+
+scenario '[P-1] the acr and workers probes hold the same line, and an unreachable probe says so'
+gate_env
+export KFAKE_CURL_CODES='lanefake-probe-acr:8080=204 proxy/health/workers=204 dev-health-metrics-api=000'
+run_lane up lanefake-probe
+check_contains "a 204 from the acr probe is not accepted" "acr /readyz 204 (EXPECTED 200)" "$LAST_OUT"
+check_contains "a 204 from the workers probe is not accepted" "/health/workers 204 (EXPECTED 200)" "$LAST_OUT"
+check_contains "an unreachable probe is reported as ERR" "metrics-api/ready ERR (EXPECTED 200)" "$LAST_OUT"
+check_contains "the probes that answered 200 still pass" "web/health 200" "$LAST_OUT"
 
 # ---------------------------------------------------------------------------
 if (( failures > 0 )); then

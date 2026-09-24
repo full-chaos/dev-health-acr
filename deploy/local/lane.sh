@@ -662,17 +662,72 @@ INNER
 YAML
 }
 
+# The lane's Services are probed from outside every pod: `kubectl proxy` on a
+# loopback port reaches them through the API server's Service proxy, and curl
+# reads the exact HTTP status. Nothing is exec'd into the api Deployment (a Go
+# image with no interpreter to exec), and one helper reaches the api,
+# metrics-api, web and acr Services. The proxy is this script's own child and is
+# stopped by PID, never by pattern.
+PROBE_PROXY_PID=""
+PROBE_PROXY_PORT=""
+
+start_probe_proxy() {
+  local proxy_log
+  proxy_log="$(mktemp)"
+  kubectl proxy --address=127.0.0.1 --port=0 >"$proxy_log" 2>&1 &
+  PROBE_PROXY_PID=$!
+  local _
+  for _ in $(seq 1 50); do
+    PROBE_PROXY_PORT="$(sed -n 's|.*127\.0\.0\.1:\([0-9][0-9]*\).*|\1|p' "$proxy_log" | head -1)"
+    [[ -n "$PROBE_PROXY_PORT" ]] && break
+    kill -0 "$PROBE_PROXY_PID" 2>/dev/null || break
+    sleep 0.2
+  done
+  rm -f "$proxy_log"
+  if [[ -z "$PROBE_PROXY_PORT" ]]; then
+    stop_probe_proxy
+    return 1
+  fi
+}
+
+stop_probe_proxy() {
+  if [[ -n "$PROBE_PROXY_PID" ]]; then
+    kill "$PROBE_PROXY_PID" 2>/dev/null || true
+    wait "$PROBE_PROXY_PID" 2>/dev/null || true
+  fi
+  PROBE_PROXY_PID=""
+  PROBE_PROXY_PORT=""
+}
+
+# probe_http prints the HTTP status the Service answered with, or ERR when it
+# could not be reached at all.
+probe_http() {
+  local lane="$1" svc="$2" port="$3" path="$4" code
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
+    "http://127.0.0.1:${PROBE_PROXY_PORT}/api/v1/namespaces/${lane}/services/http:${svc}:${port}/proxy${path}" 2>/dev/null || true)"
+  if [[ -z "$code" || "$code" = "000" ]]; then echo ERR; else echo "$code"; fi
+}
+
+verify_lane() {
+  trap stop_probe_proxy EXIT
+  if ! start_probe_proxy; then
+    log "could not start kubectl proxy to probe '$1' (EXPECTED 200 from every probe)"
+    return 1
+  fi
+  local rc=0
+  verify_lane_probes "$@" || rc=$?
+  stop_probe_proxy
+  return "$rc"
+}
+
 # Readiness is asserted at the APPLICATION level, not by pod phase. A lane can
 # be 21/21 Running with /health/workers returning 503 -- that is exactly how
 # CHAOS-4455 hid on the first pass.
-verify_lane() {
+verify_lane_probes() {
   local lane="$1" failed=0
   step "verifying '$lane'"
   local hw
-  hw="$(kubectl -n "$lane" exec "deploy/${lane}-dev-health-api" -- python -c "
-import urllib.request
-try: print(urllib.request.urlopen('http://${lane}-dev-health-api:8000/health/workers',timeout=15).status)
-except Exception as e: print(getattr(e,'code','ERR'))" 2>/dev/null || echo ERR)"
+  hw="$(probe_http "$lane" "${lane}-dev-health-api" 8000 /health/workers)"
   [[ "$hw" = "200" ]] && log "  /health/workers 200" || { log "  /health/workers $hw (EXPECTED 200)"; failed=1; }
   for probe in "api:8000:/ready" "metrics-api:8000:/ready" "web:3000:/health"; do
     # Split across statements, not one `local`: bash expands every RHS in a
@@ -683,18 +738,12 @@ except Exception as e: print(getattr(e,'code','ERR'))" 2>/dev/null || echo ERR)"
     rest="${probe#*:}"
     port="${rest%%:*}"
     path="${rest#*:}"
-    code="$(kubectl -n "$lane" exec "deploy/${lane}-dev-health-api" -- python -c "
-import urllib.request
-try: print(urllib.request.urlopen('http://${lane}-dev-health-${svc}:${port}${path}',timeout=15).status)
-except Exception as e: print(getattr(e,'code','ERR'))" 2>/dev/null || echo ERR)"
+    code="$(probe_http "$lane" "${lane}-dev-health-${svc}" "$port" "$path")"
     [[ "$code" = "200" ]] && log "  ${svc}${path} 200" || { log "  ${svc}${path} ${code} (EXPECTED 200)"; failed=1; }
   done
   if [[ "${LANE_SKIP_ACR:-0}" != "1" ]]; then
     local acr
-    acr="$(kubectl -n "$lane" exec "deploy/${lane}-dev-health-api" -- python -c "
-import urllib.request
-try: print(urllib.request.urlopen('http://${lane}-acr:8080/readyz',timeout=15).status)
-except Exception as e: print(getattr(e,'code','ERR'))" 2>/dev/null || echo ERR)"
+    acr="$(probe_http "$lane" "${lane}-acr" 8080 /readyz)"
     [[ "$acr" = "200" ]] && log "  acr /readyz 200" || { log "  acr /readyz ${acr} (EXPECTED 200)"; failed=1; }
   fi
   if [[ "${LANE_SKIP_ACR:-0}" != "1" ]]; then
