@@ -117,3 +117,19 @@ func TestValidateCreateInput_Resource(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeRevocationTreatsBlankReasonAsNoReason(t *testing.T) {
+	for _, reason := range []string{"", "   ", "\t\n "} {
+		got, err := normalizeRevocation(RevocationInput{OrgID: "11111111-1111-1111-1111-111111111111", CredentialID: "cred_abcdefghijklmnop", ActorID: "operator", Reason: reason})
+		if err != nil {
+			t.Fatalf("reason %q: %v", reason, err)
+		}
+		if got.Reason != "" {
+			t.Fatalf("reason %q normalized to %q, want empty", reason, got.Reason)
+		}
+	}
+	got, err := normalizeRevocation(RevocationInput{OrgID: "11111111-1111-1111-1111-111111111111", CredentialID: "cred_abcdefghijklmnop", ActorID: "operator", Reason: "  lost token  "})
+	if err != nil || got.Reason != "lost token" {
+		t.Fatalf("got %q err %v", got.Reason, err)
+	}
+}
