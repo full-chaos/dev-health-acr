@@ -89,7 +89,7 @@ func ProjectedSubjectKinds() []contractsv1.ContextFabricSubjectKind {
 			seen[kind] = true
 		}
 	}
-	for _, table := range teamsProjectsTables(nil, nil, nil) {
+	for _, table := range teamsProjectsTables(nil, nil, nil, nil) {
 		for _, kind := range table.subjectKinds {
 			seen[kind] = true
 		}

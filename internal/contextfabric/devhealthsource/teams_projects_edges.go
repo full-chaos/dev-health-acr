@@ -868,6 +868,31 @@ func workItemTeamRelationshipID(workItemCanonicalID, teamID string) string {
 	return identity.DeriveRelationship(identity.RelationshipFamilyWorkItemTeam, workItemCanonicalID, teamCanonicalID(teamID), "")
 }
 
+// repositoryTeamRelationshipID is the ONE definition of an OWNED_BY_TEAM
+// repository<->team edge's identity (CHAOS-6561), on the same digest scheme
+// and for the same reason as projectTeamRelationshipID: the assertion and
+// any later retraction must spell it byte for byte alike, and team ids carry
+// colons (`gl:full.chaos`).
+//
+// The type slot carries BOTH the provider and the ownership row's source,
+// joined through identity.JoinSegments so the pair stays injective. source is
+// there for the reason project_team carries it: two assertions from different
+// sources are different assertions. provider is there because, unlike a
+// project's canonical id, `repository:<repos.id>` does not carry it, and
+// queryRepositoryTeams groups by provider (team_repo_ownership's own ORDER BY
+// leads with it) -- two groups differing only by provider would otherwise
+// mint one id, and a duplicate RelationshipID rejects the batch and wedges
+// the organization's projection.
+func repositoryTeamRelationshipID(repositoryCanonicalID, teamID, provider, source string) string {
+	return identity.DeriveRelationship(identity.RelationshipFamilyRepositoryTeam, repositoryCanonicalID, teamCanonicalID(teamID), identity.JoinSegments(provider, source))
+}
+
+// repositoryCanonicalID is the repository subject's canonical id, the exact
+// shape queryRepositories (tables.go) mints for the node, so this edge's From
+// endpoint lands on the projected repository rather than a stub no entity
+// write ever fills.
+func repositoryCanonicalID(repoID string) string { return "repository:" + repoID }
+
 // projectMembershipRelationshipID is the subject<->project BELONGS_TO_PROJECT
 // edge's identity (CHAOS-4635), covering both the work-item and pull-request
 // arms.
@@ -1487,6 +1512,199 @@ func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQuery
 		return nil, false, err
 	}
 	return rows, truncated, nil
+}
+
+// queryRepositoryTeams projects repository -> team (OWNED_BY_TEAM) from
+// team_repo_ownership (CHAOS-6561). Ownership rows are the ONLY source of
+// team attribution this platform admits (AGENTS.md; CHAOS-4321: ownership,
+// never membership), and queryTeams already reads this very table for a
+// team's authorization scope -- but until this producer nothing projected it
+// as an edge, so the graph could not walk from a repository to the team that
+// owns it.
+//
+// Modelled on queryProjectTeams, and the same three live findings apply:
+//
+//   - THE COLLAPSE. ReplacingMergeTree(updated_at) ORDER BY (org_id,
+//     provider, repo_full_name, team_id, source, valid_from): valid_from is
+//     in the dedup key, so FINAL keeps one row PER ASSERTION. The GROUP BY is
+//     what makes one edge per (provider, repository, team, source), and
+//     without it a duplicate RelationshipID rejects the batch and wedges the
+//     organization's projection.
+//   - THE VALIDITY RULE. The window runs from the earliest assertion to what
+//     the LATEST assertion says, ordered by (valid_from, valid_to IS NULL,
+//     valid_to) with the argMax(tuple(valid_to)) NULL-preserving spelling --
+//     see queryProjectTeams' FOURTH note, verified there against this
+//     ClickHouse version. A closed latest assertion ENDS the edge (ValidTo),
+//     exactly as ownershipValidity ends a project->team edge. It is history,
+//     not a retraction: the CHAOS-4565 tombstone is reserved for an ownership
+//     that can no longer be SUBSTANTIATED, and a closed window is fully
+//     substantiated -- it is the record of when the team owned the repo.
+//     Tombstoning it would erase the history the CHAOS-3781 temporal axis
+//     exists to answer over (applyActiveValidity's same argument).
+//   - THE WATERMARK covers every row in the group, open and closed alike, so
+//     a revocation advances the cursor as reliably as a grant (the CHAOS-4390
+//     round-2 finding recorded on ownedRepositoriesJoinSQL).
+//
+// Grouped on repo_id, the projected identity -- not repo_full_name, which is
+// a display value that can be renamed under a stable repo_id. The latest
+// assertion's repo_full_name is still carried out for the label.
+//
+// NULL repo_id (the column is Nullable(UUID)): such a row names no
+// repository node -- a pattern match, or a repository the writer could not
+// resolve -- so it is OMITTED, never resolved by guessing through
+// repo_full_name (a full name is not unique across providers, and picking one
+// would mint an ownership nobody recorded). The omission is counted in the
+// run's repositoryOwnershipLedger and logged; each such group keeps its own
+// row (null_repo_name) so the count is per distinct repository name.
+//
+// A repo_id with NO repos row still projects: the repository endpoint is the
+// deterministic `repository:<repo_id>` id queryRepositories mints, so the
+// edge lands on the right node whenever the repository is projected. Its
+// authorization cannot name a slug, so it fails CLOSED to
+// orphanedRepositorySentinel -- the pull_request precedent in
+// querySubjectProjectMemberships -- and is counted. RESIDUAL: the watermark
+// reads team_repo_ownership only, so a repos row arriving LATER does not
+// re-read the edge; its scope stays the orphan sentinel until the ownership
+// row changes or a rebuild.
+//
+// Teams are INNER JOINed exactly as queryProjectTeams does: an edge to a team
+// with no teams row would name a node no producer writes.
+//
+// Provenance: attribution_source (the row's own source enum), match_type,
+// is_primary, specificity and priority, all from the latest assertion.
+// team_repo_ownership has NO confidence column, so no attribution_confidence
+// property is emitted -- inventing one would be the overstatement CHAOS-4101
+// removed.
+func repositoryTeamsQuery(ledger *repositoryOwnershipLedger) func(context.Context, contextpacket.ClickHouseQueryClient, string, cursorState, int) ([]candidate, bool, error) {
+	return func(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
+		return queryRepositoryTeams(ctx, client, orgID, cursor, limit, ledger)
+	}
+}
+
+// repositoryTeamsWatermark / repositoryTeamsRowKey are queryRepositoryTeams'
+// pagination pair, shared by the SELECT, HAVING and ORDER BY so they cannot
+// drift. The row key names every GROUP BY column (CHAOS-4635: a key missing a
+// grouped column lets two groups tie and the strict `>` drop one).
+const repositoryTeamsWatermark = "max(o.updated_at)"
+
+var repositoryTeamsRowKey = rowKeySQL("o.provider", "o.repo_key", "o.team_id", "o.source_name", "o.null_repo_name")
+
+// repositoryTeamsLatestOrder is the latest-assertion ordering key, identical
+// to queryProjectTeams' and ownedRepositoriesJoinSQL's.
+const repositoryTeamsLatestOrder = "(o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC')))"
+
+// repositoryTeamsStatement. Inner column aliases never reuse a source column's
+// own name (match_type_name, not match_type): an alias that shadows the
+// column it reads bound to itself on 24.8 once already in this file's history.
+func repositoryTeamsStatement(cursor cursorState) string {
+	return `SELECT o.repo_key, o.null_repo_name,
+       argMax(o.repo_full_name, ` + repositoryTeamsLatestOrder + `) AS latest_repo_full_name,
+       max(o.repo_slug) AS resolved_repo_slug,
+       o.team_id, o.source_name, o.provider,
+       argMax(o.match_type_name, ` + repositoryTeamsLatestOrder + `) AS latest_match_type,
+       argMax(o.is_primary_flag, ` + repositoryTeamsLatestOrder + `) AS latest_is_primary,
+       argMax(o.specificity_value, ` + repositoryTeamsLatestOrder + `) AS latest_specificity,
+       argMax(o.priority_value, ` + repositoryTeamsLatestOrder + `) AS latest_priority,
+       min(o.valid_from) AS first_valid_from,
+       argMax(tuple(o.valid_to), ` + repositoryTeamsLatestOrder + `).1 IS NULL AS latest_is_open,
+       ifNull(argMax(tuple(o.valid_to), ` + repositoryTeamsLatestOrder + `).1, toDateTime64(0, 3, 'UTC')) AS latest_valid_to,
+       ` + repositoryTeamsWatermark + ` AS observed_at
+FROM (
+	SELECT rto.provider AS provider, ifNull(toString(rto.repo_id), '') AS repo_key,
+	       if(isNull(rto.repo_id), rto.repo_full_name, '') AS null_repo_name,
+	       rto.repo_full_name AS repo_full_name, ifNull(r.repo, '') AS repo_slug,
+	       rto.team_id AS team_id, toString(rto.source) AS source_name,
+	       toString(rto.match_type) AS match_type_name, toUInt8(rto.is_primary) AS is_primary_flag,
+	       toInt64(rto.specificity) AS specificity_value, toInt64(rto.priority) AS priority_value,
+	       rto.valid_from AS valid_from, rto.valid_to AS valid_to, rto.updated_at AS updated_at
+	FROM team_repo_ownership AS rto FINAL
+	LEFT JOIN repos AS r FINAL ON r.id = rto.repo_id AND r.org_id = rto.org_id
+	INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = rto.team_id
+	WHERE rto.org_id = {org_id:String}
+) AS o
+GROUP BY o.provider, o.repo_key, o.team_id, o.source_name, o.null_repo_name` + havingSincePredicate(cursor, repositoryTeamsWatermark, repositoryTeamsRowKey) + orderBy(repositoryTeamsWatermark, repositoryTeamsRowKey)
+}
+
+// repositoryOwnershipSourceAsserted is the closed set of team_repo_ownership
+// sources whose claim some provider or person actually ASSERTED. 'inferred'
+// is the Python team_autoimport heuristic, so it is not in it; and any value
+// this set does not know FAILS TOWARD the weaker classification, the
+// CHAOS-4101 rule workItemTeamAttributionDerivation already applies.
+var repositoryOwnershipSourceAsserted = map[string]bool{"native": true, "jira_legacy": true, "provider_access": true, "manual": true}
+
+// repositoryTeamOwnershipDerivation: Derivation is always RuleInferred (the
+// row is Ops' own ownership record, not a canonical structural column --
+// queryProjectTeams' reasoning). EpistemicStatus is SourceAsserted only for
+// an asserted source matched EXACTLY; a 'pattern' match is a glob Ops applied,
+// not an assertion about this repository, so it is Inferred whatever its
+// source.
+func repositoryTeamOwnershipDerivation(source, matchType string) (contractsv1.ContextFabricDerivationMethod, contractsv1.ContextFabricEpistemicStatus) {
+	if repositoryOwnershipSourceAsserted[source] && matchType == "exact" {
+		return contractsv1.ContextFabricDerivationRuleInferred, contractsv1.ContextFabricEpistemicSourceAsserted
+	}
+	return contractsv1.ContextFabricDerivationRuleInferred, contractsv1.ContextFabricEpistemicInferred
+}
+
+func queryRepositoryTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, ledger *repositoryOwnershipLedger) ([]candidate, bool, error) {
+	return fetch(ctx, client, repositoryTeamsStatement(cursor), rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+		var repoKey, nullRepoName, repoFullName, repoSlug, teamID, source, provider, matchType string
+		var isPrimary, latestIsOpen uint8
+		var specificity, priority int64
+		var validFrom, latestValidTo, observedAt time.Time
+		if err := r.Scan(&repoKey, &nullRepoName, &repoFullName, &repoSlug, &teamID, &source, &provider, &matchType,
+			&isPrimary, &specificity, &priority, &validFrom, &latestIsOpen, &latestValidTo, &observedAt); err != nil {
+			return nil, err
+		}
+		observedAt, validFrom, latestValidTo = observedAt.UTC(), validFrom.UTC(), latestValidTo.UTC()
+		// The Go half of repositoryTeamsRowKey, same component order.
+		rowSortKey := identity.JoinSegments(provider, repoKey, teamID, source, nullRepoName)
+		if repoKey == "" {
+			// NULL repo_id: no repository node to point at. Omitted, never
+			// guessed; still a PROGRESS candidate so the cursor moves past it.
+			ledger.recordNullRepoID(provider, nullRepoName, teamID, source)
+			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
+		}
+		authorization := contractsv1.ContextFabricAuthorizationScope{RepositorySlugs: []string{repoSlug}, TeamIDs: []string{teamID}}
+		if repoSlug == "" {
+			authorization.RepositorySlugs = []string{orphanedRepositorySentinel}
+			ledger.recordOrphanedRepository()
+		}
+		label := repoFullName
+		if repoSlug != "" {
+			label = repoSlug
+		}
+		properties := attributionProperties(source, "")
+		if matchType != "" {
+			properties["match_type"] = stringScalar(matchType)
+		}
+		properties["is_primary"] = boolScalar(isPrimary != 0)
+		properties["specificity"] = intScalar(specificity)
+		properties["priority"] = intScalar(priority)
+		derivation, epistemicStatus := repositoryTeamOwnershipDerivation(source, matchType)
+		fromCanonicalID := repositoryCanonicalID(repoKey)
+		relationship := contractsv1.ContextFabricRelationshipProjection{
+			RelationshipID:  repositoryTeamRelationshipID(fromCanonicalID, teamID, provider, source),
+			Type:            contractsv1.ContextFabricRelationshipOwnedByTeam,
+			From:            contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectRepository, CanonicalID: fromCanonicalID, Label: label},
+			To:              contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: teamCanonicalID(teamID), Label: teamID},
+			Properties:      properties,
+			Derivation:      derivation,
+			EpistemicStatus: epistemicStatus,
+			Authorization:   authorization,
+			// Existing entity types only: the ownership fact is evidenced by
+			// its two endpoints. A dedicated repository_team evidence type
+			// would widen the v1 contract.
+			EvidenceRefIDs: []string{
+				contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, repoKey),
+				contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, teamID),
+			},
+			ObservedAt:    observedAt,
+			SourceVersion: TeamsProjectsSourceVersion,
+		}
+		relationship.ValidFrom, relationship.ValidTo = ownershipValidity(validFrom, latestIsOpen, latestValidTo)
+		ledger.recordAsserted(latestIsOpen != 0, epistemicStatus == contractsv1.ContextFabricEpistemicInferred)
+		return []candidate{{observedAt: observedAt, sortKey: rowSortKey, relationship: &relationship}}, nil
+	})
 }
 
 // ambiguousProjectKeysInCatalogStatement counts (provider, project_key)

@@ -421,6 +421,7 @@ flowchart TD
   WI -->|"OWNED_BY_TEAM (3327)<br/>work_item_team_attributions,<br/>is_primary=1"| TEAM
   WI -->|"BELONGS_TO_PROJECT (3098)<br/>project_membership_presence view<br/>teams_projects_edges.go"| PROJ
   PROJ -->|"OWNED_BY_TEAM (3)<br/>team_project_ownership, collapsed<br/>teams_projects.go Trap C"| TEAM
+  REPO -->|"OWNED_BY_TEAM (CHAOS-6561, new)<br/>team_repo_ownership, collapsed<br/>queryRepositoryTeams"| TEAM
   WI -->|"BELONGS_TO_REPOSITORY (6, rare)"| REPO
   PR -->|"BELONGS_TO_REPOSITORY (2926)"| REPO
   CI -->|"BELONGS_TO_REPOSITORY (27902)"| REPO
@@ -429,7 +430,6 @@ flowchart TD
   WI -->|"PART_OF (2106) / RELATES_TO (657) /<br/>BLOCKS (505) / DUPLICATES (11)"| WI
 
   REPO -.->|"NO edge exists, either direction<br/>(0 live, by design -- 'project' here is<br/>work-tracking, not a repo group)"| PROJ
-  REPO -.->|"NO edge exists, either direction (0 live)"| TEAM
   ORG -.->|"NO edge exists at all (0 live)"| TEAM
 
   classDef gap fill:#78350f,stroke:#f59e0b,color:#ffffff
@@ -439,8 +439,9 @@ flowchart TD
 
 **Caption.** The hierarchy is **not** organization → team → project →
 repository → activity. Live data shows organization has zero edges to
-anything, and there is **no direct repository↔project or repository↔team
-edge at all, by design**
+anything, and there is **no direct repository↔project edge at all, by
+design** (repository→team ownership became an edge in CHAOS-6561 -- see the
+update below; before it there was none)
 (`docs/design/context-fabric-team-project-subjects.md` §9: "No new fact
 providers... project gets zero fact-provider entries... `project` here is a
 work-tracking project, Linear-shaped, not a repository group. There is no
@@ -456,7 +457,8 @@ with at least one project-linked work item," disclosed as such via
 `internal/contextfabric/devhealthsource/teams_projects_edges.go`
 (`querySubjectProjectMemberships`, `queryWorkItemTeams`); repository/PR/CI/
 deployment/review edges from `devhealthsource/tables.go`; project→team from
-`teams_projects.go`. `incident` is a `SubjectKind` the code supports
+`teams_projects.go`; repository→team from `teams_projects_edges.go`
+(`queryRepositoryTeams`, CHAOS-6561 -- see the update below). `incident` is a `SubjectKind` the code supports
 end-to-end but this org's live graph currently has zero incident nodes —
 absence of evidence, not absence of a code path.
 
@@ -497,6 +499,28 @@ traps #10) so a graph rebuilt on this plane authorizes teams as prod does;
 run it once after `restore-clickhouse`, before `acr-projector rebuild`. Prod
 itself is unaffected (real `team_repo_ownership` rows exist there since
 2026-08-29 14:00Z) -- this closes the trial/kiac-only exposure.
+
+**Update (2026-09-24, CHAOS-6561): repository→team ownership is now a
+graph edge.** `queryRepositoryTeams` (`devhealthsource/teams_projects_edges.go`)
+projects `repository -OWNED_BY_TEAM-> team` from `team_repo_ownership`, the
+ownership source of truth (never membership). One edge per
+(provider, repo_id, team_id, source) group, id family
+`relationship.v2:repository_team:` (provider and source are in the digest).
+Validity follows the sibling project→team edge: earliest `valid_from`, ended
+at the LATEST assertion's `valid_to` when that is closed (history, not a
+tombstone). Provenance properties: `attribution_source`, `match_type`,
+`is_primary`, `specificity`, `priority` -- no `attribution_confidence`,
+because the table has no confidence column. `epistemic_status` is
+`source_asserted` only for an asserted source
+(`native`/`jira_legacy`/`provider_access`/`manual`) with an `exact` match,
+otherwise `inferred`. A NULL `repo_id` row is omitted and counted
+(`repository_team_rows_omitted_null_repo_id`); a `repo_id` with no `repos`
+row still projects but is scoped to the orphaned-repository sentinel.
+`TeamsProjectsSourceVersion` moved v11 → v12, so an already-projected
+organization needs one rebuild to gain the edge. The "no direct
+repository↔team edge" statements above are superseded by this; there is
+still no repository↔project edge, and the CHAOS-4363 ClickHouse join is
+unchanged.
 
 **Stale doc comment found (report only, no Go edit per this lane's scope):**
 `internal/contextfabric/devhealthsource/teams_projects.go:54` and

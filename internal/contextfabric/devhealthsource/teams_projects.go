@@ -184,7 +184,18 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // v8 and v10 entries above record. The bump drains that backlog once per
 // organization; a project whose row changes afterwards picks up its alias on
 // the ordinary incremental tick.
-const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v11"
+//
+// v11 -> v12 (CHAOS-6561): a NEW edge family -- repository -> team
+// OWNED_BY_TEAM, projected from team_repo_ownership by queryRepositoryTeams
+// (teams_projects_edges.go). Same unreachable-backlog trap as v8/v10/v11: an
+// organization caught up under a v11 checkpoint already holds ownership rows
+// whose own updated_at will never move just because a producer now reads
+// them, so the incremental cursor would never reach them and the graph would
+// keep having no repository<->team edge at all. The bump forces the one
+// rebuild that projects the backlog; ownership rows written afterwards reach
+// the graph on the ordinary incremental tick (team_repo_ownership is now a
+// registered table in teamsProjectsTables, so its watermark is walked).
+const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v12"
 
 // teamsProjectsTables is this source's bounded coverage. Both tables were
 // already canonical Dev Health data; neither introduces a new ingest path.
@@ -216,13 +227,17 @@ const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v11"
 // ambiguous project keys and must say so) without a package-level global or
 // shared mutable state -- the coordinator projects organizations
 // concurrently, so a shared counter would be a race.
-func teamsProjectsTables(omissions *ambiguityLedger, presence *presenceTelemetryLedger, teamAuth *teamAuthorizationLedger) []entityTable {
+func teamsProjectsTables(omissions *ambiguityLedger, presence *presenceTelemetryLedger, teamAuth *teamAuthorizationLedger, repoOwnership *repositoryOwnershipLedger) []entityTable {
 	return []entityTable{
 		{name: "teams", query: teamsQuery(teamAuth), subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectTeam}},
 		{name: "projects", query: queryProjects, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectProject}},
 		{name: "project_membership_presence", query: subjectProjectMembershipsQuery(presence)},
 		{name: "work_item_team_attributions", query: queryWorkItemTeams},
 		{name: "team_project_ownership", query: projectTeamsQuery(omissions)},
+		// CHAOS-6561: repository -> team OWNED_BY_TEAM, the ownership edge
+		// team_repo_ownership carries (queryTeams reads the same table only
+		// for a team's authorization scope).
+		{name: "team_repo_ownership", query: repositoryTeamsQuery(repoOwnership)},
 	}
 }
 
@@ -256,6 +271,13 @@ type TeamsProjectsSource struct {
 	// accumulate-across-pages discipline as omissions/presence.
 	teamAuthMu sync.Mutex
 	teamAuth   map[string]*teamAuthorizationLedger
+
+	// repoOwnershipMu guards repoOwnership, CHAOS-6561's run-scoped
+	// telemetry for the repository -> team ownership edge (asserted, closed,
+	// inferred, orphan-scoped, NULL-repo_id omitted) -- same per-organization,
+	// accumulate-across-pages discipline as omissions/presence/teamAuth.
+	repoOwnershipMu sync.Mutex
+	repoOwnership   map[string]*repositoryOwnershipLedger
 
 	// consumedMu guards consumed, which memoises the furthest cursor a
 	// NextProjectionBatch call proved holds nothing publishable, per
@@ -544,6 +566,110 @@ func logTeamAuthorizationTelemetry(ctx context.Context, logger *slog.Logger, org
 		"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName,
 		"teams_admitted_by_ownership", admitted,
 		"teams_denied_no_ownership_data", denied)
+}
+
+// repositoryOwnershipLedger (CHAOS-6561) accumulates queryRepositoryTeams'
+// outcomes over one source run -- same run-scoped-not-page-scoped discipline
+// as ambiguityLedger: edges asserted (and how many of those are closed or
+// inferred), edges scoped to the orphan sentinel because their repo_id has no
+// repos row, and groups OMITTED because repo_id is NULL. The omission count
+// is what keeps a NULL repo_id from being a silent drop: an operator reading
+// "0 edges" must be able to tell "no ownership data" from "ownership rows the
+// graph cannot represent".
+type repositoryOwnershipLedger struct {
+	mu           sync.Mutex
+	asserted     int
+	closed       int
+	inferred     int
+	orphaned     int
+	nullRepoKeys map[string]struct{}
+}
+
+func (l *repositoryOwnershipLedger) recordAsserted(open, inferred bool) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.asserted++
+	if !open {
+		l.closed++
+	}
+	if inferred {
+		l.inferred++
+	}
+}
+
+func (l *repositoryOwnershipLedger) recordOrphanedRepository() {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.orphaned++
+}
+
+// recordNullRepoID keys on the GROUP (provider, repo name, team, source), so a
+// page boundary re-reading the same group cannot double-count it.
+func (l *repositoryOwnershipLedger) recordNullRepoID(provider, repoFullName, teamID, source string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.nullRepoKeys == nil {
+		l.nullRepoKeys = map[string]struct{}{}
+	}
+	l.nullRepoKeys[identity.JoinSegments(provider, repoFullName, teamID, source)] = struct{}{}
+}
+
+func (l *repositoryOwnershipLedger) counts() (asserted, closed, inferred, orphaned, nullRepo int) {
+	if l == nil {
+		return 0, 0, 0, 0, 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.asserted, l.closed, l.inferred, l.orphaned, len(l.nullRepoKeys)
+}
+
+// repositoryOwnershipLedgerFor mirrors ledgerFor exactly.
+func (s *TeamsProjectsSource) repositoryOwnershipLedgerFor(orgID string, fromScratch bool) *repositoryOwnershipLedger {
+	s.repoOwnershipMu.Lock()
+	defer s.repoOwnershipMu.Unlock()
+	if s.repoOwnership == nil {
+		s.repoOwnership = map[string]*repositoryOwnershipLedger{}
+	}
+	if fromScratch || s.repoOwnership[orgID] == nil {
+		s.repoOwnership[orgID] = &repositoryOwnershipLedger{}
+	}
+	return s.repoOwnership[orgID]
+}
+
+// logRepositoryOwnershipTelemetry reports the run's repository->team edge
+// outcomes once per batch. The INFO line is unconditional (a zero line is
+// itself informative: an organization whose ownership rows produce no edge
+// must be visible, not silently absent). The WARN line fires only when rows
+// were omitted or scoped to the orphan sentinel. Counts and the hashed org id
+// only -- never a repository name, repo id or team id.
+func logRepositoryOwnershipTelemetry(ctx context.Context, logger *slog.Logger, orgID string, ledger *repositoryOwnershipLedger) {
+	if logger == nil {
+		return
+	}
+	asserted, closed, inferred, orphaned, nullRepo := ledger.counts()
+	logger.InfoContext(ctx, "devhealthsource projected repository ownership edges",
+		"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName,
+		"repository_team_edges_asserted", asserted,
+		"repository_team_edges_closed", closed,
+		"repository_team_edges_inferred", inferred,
+		"repository_team_edges_orphaned_repository", orphaned,
+		"repository_team_rows_omitted_null_repo_id", nullRepo)
+	if nullRepo > 0 || orphaned > 0 {
+		logger.WarnContext(ctx, "devhealthsource repository ownership rows the graph cannot fully represent",
+			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName,
+			"reason", "team_repo_ownership.repo_id is NULL (no repository node; omitted) or names no repos row (edge scoped to the orphaned-repository sentinel)",
+			"repository_team_rows_omitted_null_repo_id", nullRepo,
+			"repository_team_edges_orphaned_repository", orphaned)
+	}
 }
 
 // presenceTelemetryLedger accumulates CHAOS-4193's own read-shape telemetry
@@ -922,11 +1048,13 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 	defer logPresenceTelemetry(ctx, s.logger, checkpoint.OrgID, presence)
 	teamAuth := s.teamAuthLedgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
 	defer logTeamAuthorizationTelemetry(ctx, s.logger, checkpoint.OrgID, teamAuth)
+	repoOwnership := s.repositoryOwnershipLedgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
+	defer logRepositoryOwnershipTelemetry(ctx, s.logger, checkpoint.OrgID, repoOwnership)
 	return sourcePlan{
 		client:         s.client,
 		source:         TeamsProjectsSourceName,
 		version:        TeamsProjectsSourceVersion,
-		tables:         teamsProjectsTables(ledger, presence, teamAuth),
+		tables:         teamsProjectsTables(ledger, presence, teamAuth, repoOwnership),
 		logger:         s.logger,
 		now:            s.now,
 		recordConsumed: s.recordConsumed(checkpoint.Cursor),

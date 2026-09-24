@@ -1,6 +1,7 @@
 package devhealthsource
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
@@ -219,5 +220,61 @@ func TestChaos4635_CursorKeysAreInjective(t *testing.T) {
 	if identity.JoinSegments("work_item", "repo", "linear:CHAOS", "github", "p1", "e1") ==
 		identity.JoinSegments("work_item", "repo", "linear", "CHAOS:github", "p1", "e1") {
 		t.Error("project membership cursor keys collide")
+	}
+}
+
+// CHAOS-6561: the repository<->team OWNED_BY_TEAM edge joins the same scheme.
+// It must be injective over (repository, team, provider, source), distinct
+// from every sibling OWNED_BY_TEAM family even for look-alike inputs, and
+// every component must move the id.
+func TestChaos6561_RepositoryTeamRelationshipIDsAreInjective(t *testing.T) {
+	t.Parallel()
+	repo := repositoryCanonicalID("cd620f84-2602-8dea-7809-8d1f11825cf4")
+	other := repositoryCanonicalID("1b0e2a53-0e5d-4a53-9d3b-3e1c2b1f9a10")
+	base := repositoryTeamRelationshipID(repo, "gl:full.chaos", "github", "native")
+
+	// The provider/source pair shares the type slot, so a colon re-split
+	// between them must not collide.
+	if repositoryTeamRelationshipID(repo, "T", "git:hub", "native") == repositoryTeamRelationshipID(repo, "T", "git", "hub:native") {
+		t.Fatal("provider/source re-split through a colon produced one id")
+	}
+	// Team ids carry colons too.
+	if repositoryTeamRelationshipID(repo, "gl:full", "github", "chaos:native") == repositoryTeamRelationshipID(repo, "gl", "github", "full:chaos:native") {
+		t.Fatal("team/source re-split produced one id")
+	}
+	for _, variant := range []struct{ name, id string }{
+		{"a different repository", repositoryTeamRelationshipID(other, "gl:full.chaos", "github", "native")},
+		{"a different team", repositoryTeamRelationshipID(repo, "CHAOS", "github", "native")},
+		{"a different provider", repositoryTeamRelationshipID(repo, "gl:full.chaos", "gitlab", "native")},
+		{"a different source", repositoryTeamRelationshipID(repo, "gl:full.chaos", "github", "manual")},
+	} {
+		if variant.id == base {
+			t.Errorf("%s produced the SAME id -- that component is not in the derivation", variant.name)
+		}
+	}
+	if again := repositoryTeamRelationshipID(repo, "gl:full.chaos", "github", "native"); again != base {
+		t.Fatalf("id is not deterministic: %q then %q", base, again)
+	}
+
+	// Disjoint from the sibling OWNED_BY_TEAM families, even when the from
+	// endpoint and discriminator are fed the SAME strings: the family prefix
+	// separates them, so a repository edge can never retract or duplicate a
+	// project or work-item edge.
+	project, _, err := identity.Derive(identity.KindProject, []string{"github", "cd620f84-2602-8dea-7809-8d1f11825cf4"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	siblings := map[string]string{
+		"project_team":   projectTeamRelationshipID(project, "gl:full.chaos", identity.JoinSegments("github", "native")),
+		"project_team/r": identity.DeriveRelationship(identity.RelationshipFamilyProjectTeam, repo, teamCanonicalID("gl:full.chaos"), identity.JoinSegments("github", "native")),
+		"work_item_team": workItemTeamRelationshipID(repo, "gl:full.chaos"),
+	}
+	for name, id := range siblings {
+		if id == base {
+			t.Errorf("repository_team id collides with the %s family: %q", name, id)
+		}
+	}
+	if !strings.HasPrefix(base, "relationship.v2:repository_team:") {
+		t.Errorf("id %q does not carry the repository_team family prefix", base)
 	}
 }
