@@ -10,6 +10,7 @@
 
 allocation_breakdown
   project              investment
+  repository           investment
 
 completion
   project              actual_completion
