@@ -2949,9 +2949,25 @@ func principalDriverTitles(drivers []DriverJudgment) []string {
 func claimedFactSentences(claims []ClaimedFact) []string {
 	sorted := append([]ClaimedFact(nil), claims...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].ClaimID < sorted[j].ClaimID })
+	// CHAOS-6564: one sentence per distinct kind.field=value, naming every
+	// subject that carries it, in first-seen (ClaimID) order.
 	sentences := make([]string, 0, len(sorted))
+	index := make(map[string]int, len(sorted))
+	subjects := make([][]string, 0, len(sorted))
+	heads := make([]string, 0, len(sorted))
 	for _, claim := range sorted {
-		sentences = append(sentences, fmt.Sprintf("%s.%s=%s for %s", claim.Kind, claim.Field, scalarValueString(claim.Value), claim.Subject.Label))
+		head := fmt.Sprintf("%s.%s=%s", claim.Kind, claim.Field, scalarValueString(claim.Value))
+		i, ok := index[head]
+		if !ok {
+			i = len(heads)
+			index[head] = i
+			heads = append(heads, head)
+			subjects = append(subjects, nil)
+		}
+		subjects[i] = append(subjects[i], claim.Subject.Label)
+	}
+	for i, head := range heads {
+		sentences = append(sentences, head+" for "+strings.Join(subjects[i], ", "))
 	}
 	return sentences
 }
