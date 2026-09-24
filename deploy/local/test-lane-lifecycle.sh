@@ -108,6 +108,12 @@ cat >>"$tmp/bin/kubectl" <<'EOF'
     exit 0 ;;
 EOF
 cat >>"$tmp/bin/kubectl" <<'EOF'
+  "get --raw"*)
+    if [[ -n "${KFAKE_RAW_FAIL_ON:-}" && "$args" == *"$KFAKE_RAW_FAIL_ON"* ]]; then
+      printf 'Error from server (ServiceUnavailable): the server is currently unable to handle the request\n' >&2
+      exit 1
+    fi
+    printf '{"status":"ok"}'; exit 0 ;;
   "get nodes"*)
     cat "${KFAKE_NODE_IMAGES:-/dev/null}"; exit 0 ;;
   "get namespace"*|"get ns"*)
@@ -179,7 +185,7 @@ run_lane() {
 scenario() {
   unset KFAKE_CREATE_NS_RC KFAKE_SEED_MARKER KFAKE_NS_LABEL_OUT KFAKE_NS_LABEL_ERR \
         KFAKE_NS_LABEL_RC KFAKE_LANE_PG_NODEPORT KFAKE_SVC_TABLE KFAKE_NODE_IMAGES \
-        KFAKE_CLUSTER_EXISTS KFAKE_TRIALDATA_FAIL_ON LANE_SKIP_ACR KFAKE_SVC_LIST_ERR
+        KFAKE_CLUSTER_EXISTS KFAKE_TRIALDATA_FAIL_ON LANE_SKIP_ACR KFAKE_SVC_LIST_ERR KFAKE_RAW_FAIL_ON
   printf '\n%s\n' "$1"
 }
 
@@ -432,6 +438,37 @@ check_absent "the lane's datastores are never applied after the failure" \
 # exits non-zero whether or not the guard fires -- the assertion could not fail
 # and would read as coverage. The three checks above are the discriminating
 # ones: without the guard a base IS handed out and the datastores ARE applied.
+
+# ---------------------------------------------------------------------------
+# [P-1] Probe the lane's Services over HTTP from outside every pod
+#
+# verify_lane used to `kubectl exec deploy/<lane>-dev-health-api -- python -c`
+# to fetch each readiness URL, which ties the api Deployment to an image that
+# has an interpreter. The probes go through the API server's Service proxy
+# instead, so nothing is exec'd into the api Deployment, and a failing probe is
+# still a failing gate.
+# ---------------------------------------------------------------------------
+scenario '[P-1] verify_lane probes over the Service proxy, never exec python'
+run_lane status lanefake-probe
+for want in \
+  '/services/http:lanefake-probe-dev-health-api:8000/proxy/health/workers' \
+  '/services/http:lanefake-probe-dev-health-api:8000/proxy/ready' \
+  '/services/http:lanefake-probe-dev-health-metrics-api:8000/proxy/ready' \
+  '/services/http:lanefake-probe-dev-health-web:3000/proxy/health' \
+  '/services/http:lanefake-probe-acr:8080/proxy/readyz'; do
+  check_contains "probe reaches ${want#/services/http:}" "kubectl get --raw /api/v1/namespaces/lanefake-probe$want" "$(events)"
+done
+check_absent "nothing is exec'd into the api Deployment" \
+  "exec deploy/lanefake-probe-dev-health-api" "$(events)"
+check_absent "no python is run to probe" "python" "$(events)"
+check_contains "an all-200 lane reports each probe as 200" "/health/workers 200" "$LAST_OUT"
+
+scenario '[P-1] a probe that fails is still a failing gate'
+export KFAKE_RAW_FAIL_ON='dev-health-web:3000'
+run_lane status lanefake-probe
+check_contains "the failing probe is reported with the API server's reason" \
+  "web/health (ServiceUnavailable) (EXPECTED 200)" "$LAST_OUT"
+check_contains "the other probes still pass" "/health/workers 200" "$LAST_OUT"
 
 # ---------------------------------------------------------------------------
 if (( failures > 0 )); then

@@ -662,6 +662,22 @@ INNER
 YAML
 }
 
+# probe_http asks the API server to GET a Service through its Service proxy, so
+# the probe runs from outside every pod: nothing is exec'd into the api
+# Deployment (which is a Go image with no interpreter to exec), and the same
+# helper reaches the api, metrics-api, web and acr Services. It prints 200 on
+# success; otherwise the API server's own reason (`Error from server (...)`) or
+# ERR, so a failing probe says what failed instead of a bare code.
+probe_http() {
+  local lane="$1" svc="$2" port="$3" path="$4" out
+  if out="$(kubectl get --raw "/api/v1/namespaces/${lane}/services/http:${svc}:${port}/proxy${path}" 2>&1)"; then
+    echo 200
+  else
+    out="${out#Error from server }"
+    printf '%s\n' "${out%%:*}" | head -1
+  fi
+}
+
 # Readiness is asserted at the APPLICATION level, not by pod phase. A lane can
 # be 21/21 Running with /health/workers returning 503 -- that is exactly how
 # CHAOS-4455 hid on the first pass.
@@ -669,10 +685,7 @@ verify_lane() {
   local lane="$1" failed=0
   step "verifying '$lane'"
   local hw
-  hw="$(kubectl -n "$lane" exec "deploy/${lane}-dev-health-api" -- python -c "
-import urllib.request
-try: print(urllib.request.urlopen('http://${lane}-dev-health-api:8000/health/workers',timeout=15).status)
-except Exception as e: print(getattr(e,'code','ERR'))" 2>/dev/null || echo ERR)"
+  hw="$(probe_http "$lane" "${lane}-dev-health-api" 8000 /health/workers)"
   [[ "$hw" = "200" ]] && log "  /health/workers 200" || { log "  /health/workers $hw (EXPECTED 200)"; failed=1; }
   for probe in "api:8000:/ready" "metrics-api:8000:/ready" "web:3000:/health"; do
     # Split across statements, not one `local`: bash expands every RHS in a
@@ -683,18 +696,12 @@ except Exception as e: print(getattr(e,'code','ERR'))" 2>/dev/null || echo ERR)"
     rest="${probe#*:}"
     port="${rest%%:*}"
     path="${rest#*:}"
-    code="$(kubectl -n "$lane" exec "deploy/${lane}-dev-health-api" -- python -c "
-import urllib.request
-try: print(urllib.request.urlopen('http://${lane}-dev-health-${svc}:${port}${path}',timeout=15).status)
-except Exception as e: print(getattr(e,'code','ERR'))" 2>/dev/null || echo ERR)"
+    code="$(probe_http "$lane" "${lane}-dev-health-${svc}" "$port" "$path")"
     [[ "$code" = "200" ]] && log "  ${svc}${path} 200" || { log "  ${svc}${path} ${code} (EXPECTED 200)"; failed=1; }
   done
   if [[ "${LANE_SKIP_ACR:-0}" != "1" ]]; then
     local acr
-    acr="$(kubectl -n "$lane" exec "deploy/${lane}-dev-health-api" -- python -c "
-import urllib.request
-try: print(urllib.request.urlopen('http://${lane}-acr:8080/readyz',timeout=15).status)
-except Exception as e: print(getattr(e,'code','ERR'))" 2>/dev/null || echo ERR)"
+    acr="$(probe_http "$lane" "${lane}-acr" 8080 /readyz)"
     [[ "$acr" = "200" ]] && log "  acr /readyz 200" || { log "  acr /readyz ${acr} (EXPECTED 200)"; failed=1; }
   fi
   if [[ "${LANE_SKIP_ACR:-0}" != "1" ]]; then
