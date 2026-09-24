@@ -124,8 +124,16 @@ func (a *App) expandContextFabricEvidence(w http.ResponseWriter, r *http.Request
 	// CHAOS-6563: a result_id query parameter scopes the expansion to the
 	// stored result the caller's answer named; without it the newest
 	// admitted citing result answers (legacy, unscoped).
-	if scoped := strings.TrimSpace(r.URL.Query().Get("result_id")); scoped != "" && lookup != nil {
+	scoped := strings.TrimSpace(r.URL.Query().Get("result_id"))
+	if scoped != "" && lookup != nil {
 		lookup = contextfabric.ResultScopedCitedEvidenceLookup{ResultID: scoped}
+	}
+	if scoped == "" {
+		// Deprecated: the ref names its subject, so this read may return the
+		// citation of a result other than the answer the caller holds.
+		a.logger.WarnContext(r.Context(), "context fabric evidence expansion without result_id is deprecated: unscoped read may cite a different result",
+			"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "org_id", contextfabric.SanitizeLogAttr(principal.OrgID),
+			"evidence_ref_id", contextfabric.SanitizeLogAttr(referenceID))
 	}
 	var gate contextfabric.StoredResultAuthorizer
 	if authorizer := a.storedResultGate(); authorizer != nil {

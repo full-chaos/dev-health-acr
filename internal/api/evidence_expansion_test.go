@@ -446,7 +446,8 @@ func TestEvidenceRouteScopesExpansionToTheNamedResult(t *testing.T) {
 	for _, result := range []contractsv1.ContextFabricInvestigationResult{older, newer, uncited} {
 		seedResult3355(t, store, "org_1", result)
 	}
-	app, token := newParityHostedAppWithLogs(t, nil, store, limits.ResourceBudget{MaxItems: 50, MaxTokens: 16_000, MaxBytes: 1 << 20}, &bytes.Buffer{})
+	logs := &bytes.Buffer{}
+	app, token := newParityHostedAppWithLogs(t, nil, store, limits.ResourceBudget{MaxItems: 50, MaxTokens: 16_000, MaxBytes: 1 << 20}, logs)
 	get := func(query string) *httptest.ResponseRecorder {
 		request := evidenceRequest(t, token, ref)
 		request.URL.RawQuery = query
@@ -474,9 +475,13 @@ func TestEvidenceRouteScopesExpansionToTheNamedResult(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			logs.Reset()
 			rec := get(tc.query)
 			if rec.Code != tc.status {
 				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.status, rec.Body.String())
+			}
+			if deprecated := strings.Contains(logs.String(), "without result_id is deprecated"); deprecated != (tc.query == "") {
+				t.Fatalf("deprecated-unscoped log present=%v for query %q:\n%s", deprecated, tc.query, logs.String())
 			}
 			if tc.status == http.StatusOK {
 				if got := servedResult(rec); got != tc.want {
