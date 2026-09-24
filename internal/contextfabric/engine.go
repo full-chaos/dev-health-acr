@@ -1465,11 +1465,22 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// set ONLY at the two returns that hand the evaluated answer (fresh or
 	// reused) to the caller. Every other exit -- including a future one --
 	// publishes the lines with AnswerWithheld, never served.
+	//
+	// The cohort-narrowing disclosure (CHAOS-6561) rides the same exit for the
+	// same reason: `disclosure` is the served pass's decision and
+	// `disclosureMeasured` the final budget assertion's measurement of the
+	// document carrying it (or of the one it refused), so a refusal after
+	// `disclosed` publishes `withheld` rather than reading as a success.
 	var cover struct {
-		events   []ReadRequirementObservationCoverEvent
-		answered bool
+		events             []ReadRequirementObservationCoverEvent
+		answered           bool
+		disclosure         *CohortNarrowingDisclosureEvent
+		disclosureMeasured *disclosureMeasurement
 	}
-	defer func() { e.publishObservationCover(ctx, principal, cover.events, cover.answered) }()
+	defer func() {
+		e.publishObservationCover(ctx, principal, cover.events, cover.answered)
+		e.publishCohortNarrowingDisclosure(ctx, principal, cover.disclosure, cover.answered, cover.disclosureMeasured)
+	}()
 	if err := request.Validate(); err != nil {
 		continuation = continuation.withReason(ContinuationReasonRequestInvalid)
 		return InvestigationResult{}, fmt.Errorf("investigation request: %w", err)
@@ -3782,7 +3793,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// the passes it evaluated, so a refused answer still shows every decision
 	// it made (published with AnswerWithheld by the deferred publisher).
 	cover.events = pendingTelemetry.ObservationCover
+	cover.disclosure = pendingTelemetry.CohortNarrowingDisclosure
 	if err != nil {
+		cover.disclosureMeasured = refusalMeasurementOf(err)
 		return InvestigationResult{}, err
 	}
 	// The plan is re-stamped after the fit, because stage 3 may have appended
@@ -3856,8 +3869,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if fallbacks := applyCoverageDisplayLabels(&result); fallbacks > 0 && e.telemetry != nil {
 		e.telemetry.RecordEvidenceLabelFallback(ctx, principal, fallbacks)
 	}
-	// Y3: the FINAL budget assertion. fitAssembledResult above measured the
-	// result BEFORE the plan re-stamp and before applyCoverageDisplayLabels,
+	// Y3: the FINAL budget assertion. fitAssembledResult above now measures a
+	// copy carrying the coverage cap and display labels
+	// (servedMeasurementShape, CHAOS-6561), so its fit decision weighs the
+	// same bytes; this assertion stays the backstop because it once measured
+	// the result BEFORE the plan re-stamp and before applyCoverageDisplayLabels,
 	// and both of those add bytes to the document the route will serialize --
 	// so the thing measured there was not the thing served. This is the point
 	// at which the document is final, and it is the point four successive
@@ -3880,6 +3896,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		}
 	}
 	result, budgetErr := e.finalizeServed(ctx, principal, BudgetAssertDecisive, result, nil, ResponseBudget{MaxItems: plan.Budget.MaxItems, MaxSerializedBytes: plan.Budget.MaxSerializedBytes})
+	if cover.disclosure != nil {
+		if budgetErr != nil {
+			cover.disclosureMeasured = refusalMeasurementOf(budgetErr)
+		} else if measured, err := contractsv1.MeasureContextFabricResponse(result); err == nil {
+			cover.disclosureMeasured = &disclosureMeasurement{Items: measured.Items.Budgeted(), Bytes: measured.Bytes}
+		}
+	}
 	if budgetErr != nil {
 		if tupleCensus != nil {
 			var refusal AnswerBudgetRefusal

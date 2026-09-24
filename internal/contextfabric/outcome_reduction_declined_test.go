@@ -372,31 +372,29 @@ func outcomeCohortEngineWithCandidates(t *testing.T, cohort *Cohort, claimsPerMe
 	return engine
 }
 
-// The reduction's own dimension must stay TRUE even when the final byte
-// assertion refuses the answer afterwards.
+// The reduction's own dimension must stay TRUE, and the window in which the
+// final byte assertion could refuse a reduction stage 3 called a fit must
+// stay CLOSED.
 //
-// This pins the window adversarial review found. The assembly stage's fit
-// check measures the document BEFORE the plan is re-stamped with the
-// narrowing step it just appended, and before the coverage display labels
-// are applied; both add bytes. So a reduced answer can pass the inner fit
-// and still be refused by the FINAL assertion, which is the only measurement
-// taken against the document the route actually serializes.
+// This pinned a window adversarial review found: the assembly stage's fit
+// check measured the document before the coverage display labels were
+// applied, which add bytes, so a reduced answer could pass the inner fit and
+// still be refused by the FINAL assertion. CHAOS-6561 review round 1 (P1)
+// found the same window refusing an answer the normal narrowing path would
+// have served, and closed it: every stage-3 measurement now measures the
+// served shape (servedMeasurementShape, measured_attempt.go). A 2-byte sweep
+// over 8,192..12,000 at this shape found no late byte refusal after the fix.
 //
-// The earlier name for this dimension, `outcome_narrowed_instead_of_refused`,
-// asserted the final outcome -- something the emitter cannot observe -- and
-// was therefore FALSE in this window. The dimension now reports what its own
-// stage decided: the reduction was applied and it fitted HERE. That claim is
-// true whichever way the final assertion goes, and the refusal carries its
-// own telemetry for the outcome.
+// So the late-byte-refusal regime is now a FAILURE: it means stage 3 and the
+// final assertion measure different documents again. The dimension still
+// reports what its own stage decided -- the reduction was applied and fitted
+// HERE -- on every served answer.
 //
-// The sweep is the test rather than a single ceiling because the window is
-// narrow (~50 bytes at this shape) and a hardcoded number would stop
-// exercising it the moment the fixture's serialized size moved. The bounds
-// are asserted to actually straddle the window, so the test cannot pass
-// vacuously by sitting entirely on one side of it.
+// The sweep keeps the ceilings the window used to occupy (~9,550..9,600 at
+// this shape), and non-vacuity still requires both remaining regimes.
 func TestTheReductionDimensionStaysTrueWhenTheFinalAssertionRefuses(t *testing.T) {
 	t.Parallel()
-	sawItemsRefusal, sawLateByteRefusal, sawServed := false, false, false
+	sawItemsRefusal, sawServed := false, false
 	for _, maxBytes := range []int64{9000, 9400, 9500, 9550, 9560, 9570, 9580, 9590, 9600, 9700, 10000} {
 		calls := 0
 		telemetry := &recordingTelemetry{}
@@ -447,21 +445,19 @@ func TestTheReductionDimensionStaysTrueWhenTheFinalAssertionRefuses(t *testing.T
 				t.Fatalf("maxBytes=%d: an items refusal recorded %d reduction events; the reduction was never applied", maxBytes, applied)
 			}
 		case errors.As(err, &refusal) && refusal.Overrun == contractsv1.ContextFabricBudgetOverrunBytes:
-			// THE WINDOW. The reduction was applied and fitted here; the
-			// final assertion, measuring the document that will actually be
-			// serialized, refused on bytes. Both records are true.
-			sawLateByteRefusal = true
-			if applied != 1 {
-				t.Fatalf("maxBytes=%d: a late byte refusal recorded %d reduction events, want the 1 that genuinely happened", maxBytes, applied)
-			}
+			// THE CLOSED WINDOW. Stage 3 measures the served shape, so a
+			// document it called a fit cannot grow past the ceiling before
+			// the final assertion.
+			t.Fatalf("maxBytes=%d: late byte refusal (%d bytes, %d reduction events): stage 3 and the final assertion measured different documents",
+				maxBytes, refusal.MeasuredBytes, applied)
 		default:
 			t.Fatalf("maxBytes=%d: unclassified outcome err=%v overrun=%q", maxBytes, err, refusal.Overrun)
 		}
 	}
-	// Non-vacuity: the sweep must actually straddle all three regimes. If a
+	// Non-vacuity: the sweep must straddle both remaining regimes. If a
 	// fixture change moved the serialized size, this fails rather than
-	// quietly testing one side of a window that is no longer there.
-	if !sawItemsRefusal || !sawLateByteRefusal || !sawServed {
-		t.Fatalf("the sweep did not straddle the window: items-refusal=%v late-byte-refusal=%v served=%v", sawItemsRefusal, sawLateByteRefusal, sawServed)
+	// quietly testing one side only.
+	if !sawItemsRefusal || !sawServed {
+		t.Fatalf("the sweep did not straddle the regimes: items-refusal=%v served=%v", sawItemsRefusal, sawServed)
 	}
 }

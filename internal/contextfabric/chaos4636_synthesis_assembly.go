@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -760,6 +761,11 @@ type assemblyTelemetry struct {
 	// So every pass's events are kept, and (*Engine).emit marks which one was
 	// actually served.
 	ObservationCover []ReadRequirementObservationCoverEvent
+	// CohortNarrowingDisclosure (CHAOS-6561) is the cohort-narrowing
+	// disclosure decision for the document this pending last finalized.
+	// REPLACED per finalize, like CohortRanked, because it describes the
+	// served member set; nil when the cohort was not narrowed.
+	CohortNarrowingDisclosure *CohortNarrowingDisclosureEvent
 }
 
 // emit publishes the held events. The engine calls it EXACTLY ONCE, for the
@@ -784,11 +790,56 @@ func (e *Engine) emit(ctx context.Context, principal storage.Principal, pending 
 		e.telemetry.RecordCohortDriverNarration(ctx, principal, *pending.CohortNarration)
 	}
 	e.recordCommitAffirmation(ctx, principal, pending.CommitAffirmations)
+	// The cohort-narrowing disclosure (CHAOS-6561) is NOT published here
+	// either, for the same reason as the observation-cover events below: a
+	// `disclosed` line emitted before the final budget assertion read as a
+	// success for an answer that assertion then refused (review round 1, P1).
+	// It is published once, at Investigate's exit, with the final disposition
+	// -- see publishCohortNarrowingDisclosure.
+	//
 	// The observation-cover events are NOT published here. emit runs before
 	// the final budget assertion, validation and persistence, any of which can
 	// still withhold the answer, and a cover line marked served for an answer
 	// the caller never received is the defect this ordering removes. They are
 	// published once, at Investigate's exit -- see publishObservationCover.
+}
+
+// publishCohortNarrowingDisclosure publishes the served pass's cohort-narrowing
+// disclosure decision, ONCE, from Investigate's exit, carrying what finally
+// happened to the document it was made on: served (with the final budget
+// assertion's measurement of that document) or withheld. nil means the cohort
+// was not narrowed, or the investigation never finalized one -- nothing to say.
+func (e *Engine) publishCohortNarrowingDisclosure(ctx context.Context, principal storage.Principal, event *CohortNarrowingDisclosureEvent, answered bool, measurement *disclosureMeasurement) {
+	if e.telemetry == nil || event == nil {
+		return
+	}
+	published := *event
+	published.Disposition = CohortNarrowingDispositionWithheld
+	if answered {
+		published.Disposition = CohortNarrowingDispositionServed
+	}
+	if measurement != nil {
+		published.AssertedItems = measurement.Items
+		published.AssertedBytes = measurement.Bytes
+	}
+	e.telemetry.RecordCohortNarrowingDisclosure(ctx, principal, published)
+}
+
+// disclosureMeasurement is the final budget assertion's item and byte count
+// for the document a cohort-narrowing disclosure was made on.
+type disclosureMeasurement struct {
+	Items int
+	Bytes int64
+}
+
+// refusalMeasurementOf returns the measurement a budget refusal reports, or
+// nil for any other error (nothing was measured that a reader could use).
+func refusalMeasurementOf(err error) *disclosureMeasurement {
+	var refusal AnswerBudgetRefusal
+	if !errors.As(err, &refusal) {
+		return nil
+	}
+	return &disclosureMeasurement{Items: refusal.MeasuredItems, Bytes: refusal.MeasuredBytes}
 }
 
 // publishObservationCover publishes every pass's observation-cover events,

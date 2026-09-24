@@ -88,6 +88,12 @@ type readPopulation struct {
 	// rather than re-derived. Both empty when nothing narrowed.
 	Basis   contractsv1.ContextFabricNarrowingBasis
 	Overrun contractsv1.ContextFabricBudgetOverrun
+	// Narrowing (CHAOS-6561) is the plan's recorded member chain from
+	// Declared down to len(Subjects), as requirement refinements. Set only
+	// when that chain RECONCILES -- every member the owner found and the
+	// answer does not carry is accounted for by a recorded plan step. Empty
+	// otherwise, and then the partially-read arm keeps its prior cause.
+	Narrowing []contractsv1.ContextFabricRequirementRefinement
 }
 
 // readPopulationEvidence is everything the evaluator needs to decide a
@@ -403,7 +409,7 @@ func operandPopulation(frame *QuestionFrame, committed []SubjectRef, kind Subjec
 // restates `!Complete || Truncated` -- a second copy would be a second
 // authority that could drift, and the cross-layer agreement test pins both
 // directions.
-func cohortMemberPopulation(cohort *Cohort, cardinality MembershipCardinality) readPopulation {
+func cohortMemberPopulation(cohort *Cohort, cardinality MembershipCardinality, narrowing []contractsv1.ContextFabricPlanNarrowing) readPopulation {
 	if !cardinality.Resolved {
 		return readPopulation{Census: populationAbsent}
 	}
@@ -418,6 +424,16 @@ func cohortMemberPopulation(cohort *Cohort, cardinality MembershipCardinality) r
 	}
 	for _, member := range cohort.Members {
 		population.Subjects = append(population.Subjects, member.Subject)
+	}
+	// CHAOS-6561: the recorded member chain from what the owner found to what
+	// the answer carries. The SAME chain the cohort-narrowing limitation
+	// states (cohort_narrowing_disclosure.go), so the sentence and the rows
+	// cannot disagree about which steps cut the list. Not for the work-item
+	// census, whose stage-1 record is not a member limit.
+	if cardinality.Kind != SubjectWorkItem {
+		if chain, reconciled := cohortMemberNarrowingChain(population.Declared, len(population.Subjects), narrowing); reconciled {
+			population.Narrowing = cohortNarrowingRefinements(chain)
+		}
 	}
 	return population
 }
@@ -526,7 +542,7 @@ func readPopulationEvidenceFrom(
 		Present:             true,
 		KindsWithFacts:      factKindsWithFacts(facts.Facts),
 		coverage:            subjectReadCoverage(facts),
-		memberPopulation:    cohortMemberPopulation(result.Cohort, cardinality),
+		memberPopulation:    cohortMemberPopulation(result.Cohort, cardinality, plan.Narrowing),
 		groupPopulation:     cohortGroupPopulation(result.Cohort, plan.Narrowing),
 		operandPopulations:  map[SubjectKind]readPopulation{},
 		comparisonStandards: map[SubjectKind]operandStandard{},
@@ -764,6 +780,13 @@ func readPopulationOutcomeRow(
 		row.Impact = contractsv1.ContextFabricAnswerImpactScope
 		row.Served = read
 		row.Declared = population.Declared
+		// CHAOS-6561: when the plan's own recorded steps cut the list from
+		// what the owner found to what the answer carries, THAT is the cause
+		// of the shortfall between them -- a narrowing a mechanism reported,
+		// not an absence inferred from silence.
+		if len(population.Narrowing) > 0 {
+			return narrowedPopulationOutcomeRow(row, population, read, servedKinds, threshold, evidence)
+		}
 		if code, observed := unreadSubjectCause(population, servedKinds, threshold, evidence.coverage, evidence.assignment); observed {
 			row.CauseCoverage = code
 			row.CauseObserved = true
@@ -863,6 +886,68 @@ func readPopulationOutcomeRow(
 	return row
 }
 
+// narrowedPopulationOutcomeRow (CHAOS-6561) states a partially-read row whose
+// population the PLAN narrowed, with the plan's recorded steps as its cause.
+//
+// Served and Declared are UNCHANGED from the arm that called it -- this
+// function changes what the row says CAUSED the shortfall, never the counts.
+//
+// The shortfall has up to two parts, and each gets its own refinement:
+//
+//   - Declared -> carried: members the plan's recorded steps cut. Named by
+//     the owner's basis and overrun and OBSERVED, because the plan recorded
+//     every one of them (population.Narrowing is set only when the chain
+//     reconciles).
+//   - carried -> read: members the answer carries whose evidence did not meet
+//     the standard. Named by the same coverage cause the arm always used, with
+//     the same observed/inferred provenance.
+//
+// CauseObserved is true only when EVERY part's cause was observed: one
+// inferred part makes the row's single flag false, so the flag never
+// overstates.
+func narrowedPopulationOutcomeRow(
+	row RequirementOutcomeRow,
+	population readPopulation,
+	read int,
+	servedKinds []FactKind,
+	threshold int,
+	evidence readPopulationEvidence,
+) RequirementOutcomeRow {
+	refinements := append([]contractsv1.ContextFabricRequirementRefinement(nil), population.Narrowing...)
+	row.CauseNarrowing = population.Basis
+	row.CauseOverrun = population.Overrun
+	for _, refinement := range refinements {
+		if row.CauseNarrowing == "" {
+			row.CauseNarrowing = refinement.Basis
+		}
+		if row.CauseOverrun == "" && refinement.Overrun != "" {
+			row.CauseOverrun = refinement.Overrun
+		}
+	}
+	row.CauseCoverage = ""
+	row.CauseObserved = true
+	if carried := len(population.Subjects); read < carried {
+		code, observed := unreadSubjectCause(population, servedKinds, threshold, evidence.coverage, evidence.assignment)
+		if !observed {
+			code = contractsv1.ContextFabricCoverageDetailFactNarrowed
+		}
+		row.CauseCoverage = code
+		row.CauseObserved = observed
+		refinements = append(refinements, contractsv1.ContextFabricRequirementRefinement{
+			Stage:    contractsv1.ContextFabricOutcomeStageAssembledResult,
+			Coverage: code,
+			Before:   carried,
+			After:    read,
+		})
+	}
+	// Bounded like every refinement chain. A chain the vocabulary cannot hold
+	// is not truncated into a false one; the causes above still stand.
+	if len(refinements) <= contractsv1.ContextFabricRequirementRefinementMaxCount {
+		row.Refinements = refinements
+	}
+	return row
+}
+
 // countUnits says WHICH quantity a read row's two integers carry.
 //
 // CLOSED, two members, emitted on EVERY line. It exists because §(i)-E
@@ -912,6 +997,12 @@ type ReadRequirementPopulationEvent struct {
 	// rather than "there was no cohort".
 	CohortComplete  bool
 	CohortTruncated bool
+	// CauseNarrowing, CauseOverrun and Refinements (CHAOS-6561) are the row's
+	// own narrowing cause and the number of reduction steps it records, read
+	// off the served row like every other field here.
+	CauseNarrowing contractsv1.ContextFabricNarrowingBasis
+	CauseOverrun   contractsv1.ContextFabricBudgetOverrun
+	Refinements    int
 }
 
 // readRequirementPopulationEventsFrom builds one event per distributive read
@@ -969,6 +1060,10 @@ func readRequirementPopulationEventsFrom(
 			Served:        row.Served,
 			Declared:      row.Declared,
 			Units:         rowCountUnits(row),
+			// CHAOS-6561: which recorded narrowing (if any) the row names.
+			CauseNarrowing: row.CauseNarrowing,
+			CauseOverrun:   row.CauseOverrun,
+			Refinements:    len(row.Refinements),
 		}
 		if owned {
 			event.Census = population.Census

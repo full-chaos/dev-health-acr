@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -264,7 +265,7 @@ func (e *Engine) measureAssembledAttempt(
 	result InvestigationResult,
 	budget ResponseBudget,
 ) (MeasuredAttempt, error) {
-	attempt, err := MeasureAttempt(allocation, result, budget)
+	attempt, err := MeasureAttempt(allocation, servedMeasurementShape(result), budget)
 	if err != nil {
 		return MeasuredAttempt{}, stageError(StageValidation, fmt.Errorf("measure %s: %w", stage, err))
 	}
@@ -434,4 +435,32 @@ func allocationAccountingErrorFor(stage string, allocation ItemAllocation) (erro
 		Debits:       allocation.TotalGranted(),
 		Budgeted:     allocation.MaxItems,
 	}, disagreement
+}
+
+// servedMeasurementShape returns a COPY of result carrying the two late
+// composers every fresh decisive exit applies after stage 3 and before the
+// final budget assertion: the coverage-entry cap and the coverage display
+// labels (engine.go, immediately before finalizeServed).
+//
+// WHY (CHAOS-6561 review round 1, P1, executed repro): stage 3 measured the
+// document WITHOUT the display labels, which add bytes (124 on the repro), and
+// the final assertion then measured it WITH them. An answer inside that gap --
+// 8,152 bytes "fits" at stage 3, 8,276 bytes at the final assertion against
+// an 8,192-byte ceiling -- was never narrowed and was refused late, although
+// the normal narrowing path would have served it. The cohort-narrowing
+// sentence was what pushed the repro into the gap, but the gap is the defect:
+// stage 3 must measure the document the route will serialize.
+//
+// A COPY, and the served result is untouched: the labels and the cap are still
+// APPLIED, and their telemetry still emitted, exactly once at the decisive
+// path's single stamp point. Both composers are deterministic functions of the
+// document (the labels are idempotent; the cap is a sorted prefix), so the
+// copy measures byte-for-byte what that stamp point will produce. The coverage
+// slices are cloned because both composers write through them.
+func servedMeasurementShape(result InvestigationResult) InvestigationResult {
+	result.Coverage.Sources = slices.Clone(result.Coverage.Sources)
+	result.Coverage.Details = slices.Clone(result.Coverage.Details)
+	capCoverageEntriesToWriteBound(&result)
+	applyCoverageDisplayLabels(&result)
+	return result
 }

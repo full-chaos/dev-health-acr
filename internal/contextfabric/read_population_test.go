@@ -961,7 +961,7 @@ func TestReadPopulationAgreesWithTheCohortOwnersOwnRule(t *testing.T) {
 		shape := shape
 		t.Run(shape.name, func(t *testing.T) {
 			t.Parallel()
-			population := cohortMemberPopulation(shape.cohort, mustCardinality(shape.cohort, 0, nil))
+			population := cohortMemberPopulation(shape.cohort, mustCardinality(shape.cohort, 0, nil), nil)
 			if population.Census != shape.wantCensus {
 				t.Fatalf("census = %q, want %q", population.Census, shape.wantCensus)
 			}
