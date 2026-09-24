@@ -57,8 +57,9 @@ func TestCHAOS6558_BudgetRefusalDetailsReachTheCaller(t *testing.T) {
 		t.Fatalf("Budget = nil, want the parsed budget refusal")
 	}
 	want := BudgetRefusal{
-		Overrun: "bytes", MeasuredItems: 17, MeasuredBytes: 122402, MaxItems: 30, MaxSerializedBytes: 65536,
-		RetryAttempted: true, NarrowerContinuationAxis: "result_count",
+		Overrun: "bytes", MeasuredItems: BudgetCount{17, true}, MeasuredBytes: BudgetCount{122402, true},
+		MaxItems: BudgetCount{30, true}, MaxSerializedBytes: BudgetCount{65536, true},
+		RetryAttempted: BudgetFlag{true, true}, NarrowerContinuationAxis: "result_count",
 	}
 	if *got.Budget != want {
 		t.Fatalf("Budget = %#v, want %#v", *got.Budget, want)
@@ -94,12 +95,22 @@ func TestCHAOS6558_BudgetRefusalDropsUntrustedValues(t *testing.T) {
 		},
 	}
 	got := newAPIError(http.StatusRequestEntityTooLarge, detail, "req_1", "")
-	want := BudgetRefusal{MaxSerializedBytes: 65536}
+	want := BudgetRefusal{MaxSerializedBytes: BudgetCount{65536, true}}
 	if got.Budget == nil || *got.Budget != want {
 		t.Fatalf("Budget = %#v, want only the valid field %#v", got.Budget, want)
 	}
-	if text := got.Error(); strings.Contains(text, "evil") || strings.Contains(text, "ignore previous") {
+	text := got.Error()
+	if strings.Contains(text, "evil") || strings.Contains(text, "ignore previous") {
 		t.Fatalf("Error() = %q echoes untrusted detail text", text)
+	}
+	// Codex r1 P1: a dropped field is absent, never rendered as 0/false.
+	for _, absent := range []string{"measured_items", "measured_bytes", "max_items", "retry_attempted", "overrun", "narrower_continuation"} {
+		if strings.Contains(text, absent) {
+			t.Fatalf("Error() = %q renders dropped field %q", text, absent)
+		}
+	}
+	if !strings.Contains(text, "max_serialized_bytes=65536") {
+		t.Fatalf("Error() = %q lacks the one valid field", text)
 	}
 }
 
@@ -119,5 +130,25 @@ func TestCHAOS6558_NonBudgetInvalidRequestUnchanged(t *testing.T) {
 	detail := contractsv1.ErrorDetail{Code: "invalid_request", Message: "x", HTTPStatus: http.StatusBadRequest, Details: map[string]any{"overrun": "bytes", "max_items": 30}}
 	if got := newAPIError(http.StatusBadRequest, detail, "req_1", ""); got.Budget != nil {
 		t.Fatalf("400 with budget-shaped details: Budget = %#v, want nil", got.Budget)
+	}
+}
+
+// A zero that WAS sent is a real measurement and is rendered; only an
+// absent field is omitted.
+func TestCHAOS6558_BudgetRefusalRendersSentZeros(t *testing.T) {
+	detail := contractsv1.ErrorDetail{
+		Code: "invalid_request", Message: "x", HTTPStatus: http.StatusRequestEntityTooLarge,
+		Details: map[string]any{"measured_items": 0, "retry_attempted": false},
+	}
+	text := newAPIError(http.StatusRequestEntityTooLarge, detail, "req_1", "").Error()
+	for _, fragment := range []string{"measured_items=0", "retry_attempted=false"} {
+		if !strings.Contains(text, fragment) {
+			t.Fatalf("Error() = %q lacks sent zero %q", text, fragment)
+		}
+	}
+	for _, absent := range []string{"measured_bytes", "max_items", "max_serialized_bytes"} {
+		if strings.Contains(text, absent) {
+			t.Fatalf("Error() = %q renders unsent %q", text, absent)
+		}
 	}
 }

@@ -109,3 +109,58 @@ func TestCHAOS6558_SidecarContinuationAxesMatchEngineRegistry(t *testing.T) {
 		}
 	}
 }
+
+// Codex r1 P1 (CHAOS-6558): the result-by-id route's own 413
+// (internal/api/context_fabric_result_routes.go) sends only measured_bytes
+// and max_serialized_bytes. Every field the tool text renders must be one
+// the hosted API actually sent: an absent count is never shown as 0, an
+// absent retry flag never as false.
+func TestCHAOS6558_InvestigationResultPartialBudgetDetailsRenderOnlyWhatWasSent(t *testing.T) {
+	const resultID = "result_3823e3f3ccab42aa75c067dbf47ccd33"
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/context-fabric/investigations/"+resultID {
+			writeJSONFixture(t, w, http.StatusRequestEntityTooLarge, contractsv1.ErrorEnvelope{
+				SchemaVersion: contractsv1.ErrorSchema, RequestID: "req_result_route_413",
+				Error: contractsv1.ErrorDetail{
+					Code: "invalid_request", Message: "Context Fabric investigation result exceeded service limits",
+					HTTPStatus: http.StatusRequestEntityTooLarge,
+					Details:    map[string]any{"measured_bytes": 122402, "max_serialized_bytes": 65536},
+				},
+			})
+			return
+		}
+		writeErrorFixture(t, w, http.StatusNotFound, "not_found", false)
+	}))
+	t.Cleanup(server.Close)
+	cfg := fixtureConfig(t, server)
+	client, err := sidecar.NewClient(cfg, fixedCredentialSource(fixtureToken(0xAB)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	caps := validCapabilitiesFixture()
+	caps.EnabledTools = append(caps.EnabledTools, toolInvestigateQuestion, toolInvestigationResult)
+	boot := &Bootstrap{Config: cfg, Client: client, Capabilities: caps}
+
+	args, err := json.Marshal(contractsv1.MCPInvestigationResultRequest{ResultID: resultID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := invokeInvestigationResult(context.Background(), boot, &mcpsdk.CallToolRequest{Params: &mcpsdk.CallToolParamsRaw{Arguments: args}})
+	if err != nil {
+		t.Fatalf("protocol error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("IsError = false, want a tool error for the 413")
+	}
+	text := toolResultText(result)
+	for _, fragment := range []string{"did not fit the response budget", "measured_bytes=122402", "max_serialized_bytes=65536"} {
+		if !strings.Contains(text, fragment) {
+			t.Errorf("tool text %q lacks %q", text, fragment)
+		}
+	}
+	for _, absent := range []string{"measured_items", "max_items", "retry_attempted", "overrun", "narrower_continuation"} {
+		if strings.Contains(text, absent) {
+			t.Errorf("tool text %q renders %q, which the hosted API never sent", text, absent)
+		}
+	}
+}

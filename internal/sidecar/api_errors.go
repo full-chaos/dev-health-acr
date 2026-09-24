@@ -147,16 +147,31 @@ type APIError struct {
 // AnswerBudgetRefusal branch and the route's own bytes/items gates). It
 // tells the caller WHICH ceiling the answer exceeded, by how much, and
 // along which axis a narrower question would fit. A field the hosted
-// response omitted, or sent with an unknown value or wrong type, is left
-// at its zero value.
+// response omitted, or sent with an unknown value or wrong type, is NOT
+// present: its Set flag stays false and it is never rendered. The routes
+// send different subsets (the result-by-id 413 sends only the two byte
+// fields), so a zero value must never stand in for "not sent".
 type BudgetRefusal struct {
-	Overrun                  string // "items" | "bytes"
-	MeasuredItems            int64
-	MeasuredBytes            int64
-	MaxItems                 int64
-	MaxSerializedBytes       int64
-	RetryAttempted           bool
-	NarrowerContinuationAxis string // closed: budgetContinuationAxes
+	Overrun                  string // "items" | "bytes"; "" = not sent
+	MeasuredItems            BudgetCount
+	MeasuredBytes            BudgetCount
+	MaxItems                 BudgetCount
+	MaxSerializedBytes       BudgetCount
+	RetryAttempted           BudgetFlag
+	NarrowerContinuationAxis string // closed: budgetContinuationAxes; "" = not sent
+}
+
+// BudgetCount is one validated non-negative count and whether the hosted
+// response actually sent it.
+type BudgetCount struct {
+	Value int64
+	Set   bool
+}
+
+// BudgetFlag is one validated boolean and whether it was sent.
+type BudgetFlag struct {
+	Value bool
+	Set   bool
 }
 
 // budgetOverruns and budgetContinuationAxes are the closed vocabularies a
@@ -201,8 +216,20 @@ func (e *APIError) Error() string {
 		if b.Overrun != "" {
 			base += " overrun=" + b.Overrun
 		}
-		base += fmt.Sprintf(" measured_bytes=%d max_serialized_bytes=%d measured_items=%d max_items=%d retry_attempted=%t",
-			b.MeasuredBytes, b.MaxSerializedBytes, b.MeasuredItems, b.MaxItems, b.RetryAttempted)
+		for _, count := range []struct {
+			name  string
+			value BudgetCount
+		}{
+			{"measured_bytes", b.MeasuredBytes}, {"max_serialized_bytes", b.MaxSerializedBytes},
+			{"measured_items", b.MeasuredItems}, {"max_items", b.MaxItems},
+		} {
+			if count.value.Set {
+				base += fmt.Sprintf(" %s=%d", count.name, count.value.Value)
+			}
+		}
+		if b.RetryAttempted.Set {
+			base += fmt.Sprintf(" retry_attempted=%t", b.RetryAttempted.Value)
+		}
 		if b.NarrowerContinuationAxis != "" {
 			base += " narrower_continuation=" + b.NarrowerContinuationAxis
 		}
@@ -272,16 +299,16 @@ func budgetRefusal(details map[string]any) (BudgetRefusal, bool) {
 	if raw, ok := details["overrun"].(string); ok && budgetOverruns[raw] {
 		b.Overrun, found = raw, true
 	}
-	for key, target := range map[string]*int64{
+	for key, target := range map[string]*BudgetCount{
 		"measured_items": &b.MeasuredItems, "measured_bytes": &b.MeasuredBytes,
 		"max_items": &b.MaxItems, "max_serialized_bytes": &b.MaxSerializedBytes,
 	} {
 		if value, ok := nonNegativeInteger(details[key]); ok {
-			*target, found = value, true
+			*target, found = BudgetCount{Value: value, Set: true}, true
 		}
 	}
 	if raw, ok := details["retry_attempted"].(bool); ok {
-		b.RetryAttempted, found = raw, true
+		b.RetryAttempted, found = BudgetFlag{Value: raw, Set: true}, true
 	}
 	if continuation, ok := details["narrower_continuation"].(map[string]any); ok {
 		if axis, ok := continuation["axis"].(string); ok && budgetContinuationAxes[axis] {
