@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
+	"strings"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -33,12 +36,12 @@ import (
 //     carries them, the retry is declined and the refusal is immediate, with
 //     advice that can actually reduce rows (a shorter evidence window).
 //
-// "HIGHEST-RANKED" IS THE PRODUCER'S ORDER. A row carries no rank of its own.
-// The one existing row cut in this service (canonicalFieldRows, the 64-row
-// contract cap) keeps a PREFIX in the order the fact producer listed the rows,
-// so this lever does the same rather than inventing a second ordering. One cap
-// K applies to every table, so each subject's tables keep their first K rows:
-// no subject loses its evidence to make room for another's.
+// WHICH ROWS SURVIVE (team-lead ruling, 2026-09-24): a dated time series is
+// cut from its OLDEST end (trends over absolutes -- recency matters), a
+// ranking from its lowest rank, and only a table with neither declaration
+// falls back to the source-order prefix the 64-row contract cap uses. See
+// keepFactTableRows. One cap K applies to every table, so no subject loses its
+// evidence to make room for another's.
 //
 // ONE ROW KEPT PER TABLE, AT LEAST. A declared table with no rows fails
 // validation ("declared table describes rows the fact does not carry"), and a
@@ -129,22 +132,117 @@ func claimedFactRowBytes(claims []ClaimedFact) (int64, error) {
 }
 
 // truncateClaimedFactRows returns a COPY of claims with every row table cut
-// to its first perTable rows. The input slice and its row slices are never
+// to at most perTable rows. The input slice and its row slices are never
 // written: the caller's result stays the document it measured.
+//
+// WHICH ROWS SURVIVE (team-lead ruling, 2026-09-24: trends over absolutes,
+// recency matters) is decided per table by keepFactTableRows.
 func truncateClaimedFactRows(claims []ClaimedFact, perTable int) (truncated []ClaimedFact, served, tables int) {
 	truncated = copySlicePreservingEmpty(claims)
 	for index := range truncated {
 		if len(truncated[index].Rows) > perTable {
-			truncated[index].Rows = copySlicePreservingEmpty(truncated[index].Rows[:perTable])
+			truncated[index].Rows = keepFactTableRows(truncated[index].Rows, truncated[index].Table, perTable)
 			tables++
 		}
 		if len(truncated[index].TimeSeriesRows) > perTable {
-			truncated[index].TimeSeriesRows = copySlicePreservingEmpty(truncated[index].TimeSeriesRows[:perTable])
+			truncated[index].TimeSeriesRows = keepFactTableRows(truncated[index].TimeSeriesRows, truncated[index].TimeSeriesTable, perTable)
 			tables++
 		}
 		served += len(truncated[index].Rows) + len(truncated[index].TimeSeriesRows)
 	}
 	return truncated, served, tables
+}
+
+// keepFactTableRows returns a new slice of the perTable rows a table keeps,
+// in the table's own row order:
+//
+//   - a dated time series (declared time_series, every row's single key a
+//     parseable instant) keeps its MOST RECENT rows -- cutting from the
+//     oldest end, whichever way the producer listed them;
+//   - a ranking keeps its HIGHEST order_by values (the declared ranking
+//     direction is descending, highest first);
+//   - anything else -- undeclared, a breakdown, or a declaration its own rows
+//     do not satisfy -- keeps its first rows in the order the source listed
+//     them, the prefix rule the 64-row contract cap already applies.
+//
+// The disclosure sentence states this whole policy, so it is true of every
+// table whichever rule applied.
+func keepFactTableRows(rows []contractsv1.ContextFabricClaimedFactRow, table *contractsv1.ContextFabricClaimedFactTable, perTable int) []contractsv1.ContextFabricClaimedFactRow {
+	if perTable >= len(rows) {
+		return copySlicePreservingEmpty(rows)
+	}
+	scores, ok := factTableRowScores(rows, table)
+	if !ok {
+		return copySlicePreservingEmpty(rows[:perTable])
+	}
+	order := make([]int, len(rows))
+	for index := range order {
+		order[index] = index
+	}
+	// Highest score first; ties keep the source order, so the cut is
+	// deterministic.
+	sort.SliceStable(order, func(a, b int) bool { return scores[order[a]] > scores[order[b]] })
+	chosen := append([]int(nil), order[:perTable]...)
+	sort.Ints(chosen)
+	kept := make([]contractsv1.ContextFabricClaimedFactRow, 0, perTable)
+	for _, index := range chosen {
+		kept = append(kept, rows[index])
+	}
+	return kept
+}
+
+// factTableRowScores gives every row a "keep me first" score -- the instant
+// for a dated time series, the order_by value for a ranking -- or false when
+// the table is neither, or any row does not carry a usable value.
+func factTableRowScores(rows []contractsv1.ContextFabricClaimedFactRow, table *contractsv1.ContextFabricClaimedFactTable) ([]float64, bool) {
+	if table == nil {
+		return nil, false
+	}
+	scores := make([]float64, len(rows))
+	switch {
+	case table.Shape == contractsv1.ContextFabricFactTableShapeTimeSeries && len(table.Key) == 1:
+		for index, row := range rows {
+			cell, present := row.Fields[table.Key[0]]
+			if !present || cell.String == nil {
+				return nil, false
+			}
+			instant, parsed := parseFactTableInstant(*cell.String)
+			if !parsed {
+				return nil, false
+			}
+			scores[index] = float64(instant.UnixNano())
+		}
+		return scores, true
+	case table.Shape == contractsv1.ContextFabricFactTableShapeRanking && table.OrderBy != "":
+		for index, row := range rows {
+			cell, present := row.Fields[table.OrderBy]
+			switch {
+			case present && cell.Integer != nil:
+				scores[index] = float64(*cell.Integer)
+			case present && cell.Number != nil:
+				scores[index] = *cell.Number
+			default:
+				return nil, false
+			}
+		}
+		return scores, true
+	}
+	return nil, false
+}
+
+// parseFactTableInstant parses under the SAME layouts a time_series key is
+// validated against (factTableInstantLayouts), so "dated" here means exactly
+// what the producer contract means by it.
+func parseFactTableInstant(value string) (time.Time, bool) {
+	if strings.TrimSpace(value) == "" {
+		return time.Time{}, false
+	}
+	for _, layout := range factTableInstantLayouts {
+		if instant, err := time.Parse(layout, value); err == nil {
+			return instant, true
+		}
+	}
+	return time.Time{}, false
 }
 
 // factRowTruncationOutcomeRow is the completeness record of the cut: the

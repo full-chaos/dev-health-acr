@@ -1,6 +1,9 @@
 package v1
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestFactRowTruncationLimitationRoundTripsAndRejectsLookalikes(t *testing.T) {
 	t.Parallel()
@@ -26,10 +29,14 @@ func TestFactRowTruncationLimitationRoundTripsAndRejectsLookalikes(t *testing.T)
 	sentence, _ := ContextFabricFactRowTruncationLimitation(26, 780, 1)
 	for _, lookalike := range []string{
 		sentence + " ",
-		"This answer shows 26 of the 780 table rows its facts carried, because the assembled answer exceeded the size budget: each table keeps its first 1 rows in the order its source listed them. Ask about a shorter evidence window or allow a larger response budget to see the rest.",
-		"This answer shows 026 of the 780 table rows its facts carried, because the assembled answer exceeded the size budget: each table keeps its first 1 row in the order its source listed them. Ask about a shorter evidence window or allow a larger response budget to see the rest.",
-		"This answer shows 900 of the 780 table rows its facts carried, because the assembled answer exceeded the size budget: each table keeps its first 1 row in the order its source listed them. Ask about a shorter evidence window or allow a larger response budget to see the rest.",
+		strings.Replace(sentence, "at most 1 row ", "at most 1 rows ", 1),
+		strings.Replace(sentence, "shows 26 ", "shows 026 ", 1),
+		strings.Replace(sentence, "shows 26 ", "shows 900 ", 1),
+		strings.Replace(sentence, "most recent days", "oldest days", 1),
 	} {
+		if lookalike == sentence {
+			t.Fatalf("look-alike %q did not change the sentence; this row tests nothing", lookalike)
+		}
 		if IsContextFabricFactRowTruncationLimitation(lookalike) {
 			t.Fatalf("look-alike recognised: %q", lookalike)
 		}

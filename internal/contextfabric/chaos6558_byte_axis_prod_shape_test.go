@@ -94,6 +94,15 @@ type chaos6558Shape struct {
 // document overruns it on bytes, as prod's did.
 var chaos6558ProdShape = chaos6558Shape{maxBytes: chaos6558MaxBytes}
 
+// chaos6558SeriesTable declares the rows a per-day time series, as the prod
+// facts' daily tables are, so the lever's recency rule applies to them.
+func chaos6558SeriesTable() *contractsv1.ContextFabricClaimedFactTable {
+	return &contractsv1.ContextFabricClaimedFactTable{
+		Field: "status", Shape: contractsv1.ContextFabricFactTableShapeTimeSeries,
+		Key: []string{"day"}, Measures: []string{"count"}, Observations: []string{"state"},
+	}
+}
+
 func chaos6558Engine(t *testing.T, calls *int, telemetry *recordingTelemetry, shape chaos6558Shape) *Engine {
 	t.Helper()
 	engine, err := NewEngine(EngineDependencies{
@@ -143,6 +152,7 @@ func chaos6558Engine(t *testing.T, calls *int, telemetry *recordingTelemetry, sh
 					Kind:    fact.Kind, Subject: fact.Subject, Field: "status",
 					Value: ScalarValue{String: ptrString("green")},
 					Rows:  chaos6558Rows(index, shape),
+					Table: chaos6558SeriesTable(),
 				})
 			}
 			return InvestigationResult{
@@ -228,6 +238,12 @@ func TestCHAOS6558ProdShapeByteOverrunServesPartialAfterOneSynthesis(t *testing.
 			t.Fatalf("claim %s lost its whole table; the floor is one row per table", claim.ClaimID)
 		}
 		served += len(claim.Rows)
+		// RECENCY: the kept rows are the NEWEST days of the series, the
+		// producer listed them oldest-first.
+		last := *claim.Rows[len(claim.Rows)-1].Fields["day"].String
+		if want := time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC).AddDate(0, 0, chaos6558RowsPerFact-1).Format("2006-01-02"); last != want {
+			t.Fatalf("claim %s keeps up to %s, want the newest day %s: a series is cut from its oldest end", claim.ClaimID, last, want)
+		}
 	}
 	if served >= declared {
 		t.Fatalf("served %d of %d rows: nothing was cut", served, declared)

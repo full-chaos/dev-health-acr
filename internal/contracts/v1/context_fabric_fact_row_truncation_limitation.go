@@ -25,12 +25,17 @@ import (
 // cut.
 
 const (
-	contextFabricFactRowTruncationPrefix   = "This answer shows "
-	contextFabricFactRowTruncationOf       = " of the "
-	contextFabricFactRowTruncationRows     = " table rows its facts carried, because the assembled answer exceeded the size budget: each table keeps its first "
-	contextFabricFactRowTruncationRow      = " row"
-	contextFabricFactRowTruncationRowsPl   = " rows"
-	contextFabricFactRowTruncationSuffix   = " in the order its source listed them. Ask about a shorter evidence window or allow a larger response budget to see the rest."
+	contextFabricFactRowTruncationPrefix = "This answer shows "
+	contextFabricFactRowTruncationOf     = " of the "
+	contextFabricFactRowTruncationRows   = " table rows its facts carried, because the assembled answer exceeded the size budget: each table keeps at most "
+	contextFabricFactRowTruncationRow    = " row"
+	contextFabricFactRowTruncationRowsPl = " rows"
+	// The suffix states WHICH END of every table was cut, as the whole
+	// policy, so it is true of every table in the answer whichever rule that
+	// table fell under: recency wins for a dated series (trends over
+	// absolutes), rank wins for a ranked table, and only a table with
+	// neither falls back to the order its source listed it in.
+	contextFabricFactRowTruncationSuffix   = " (a dated time series keeps its most recent days, a ranking its highest-ranked rows, any other table its first rows in the order its source listed them). Ask about a shorter evidence window or allow a larger response budget to see the rest."
 	contextFabricFactRowTruncationNumber   = `(0|[1-9][0-9]{0,8})`
 	contextFabricFactRowTruncationMaxCount = 999999999
 )
