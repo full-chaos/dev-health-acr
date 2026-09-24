@@ -266,7 +266,11 @@ if grep -E 'go run [^ ]*anchore/syft' "$release_workflow"; then exit 1; fi
 grep -F 'SYFT_SHA256: d654f678b709eb53c393d38519d5ed7d2e57205529404018614cfefa0fb2b5ca' "$release_workflow" >/dev/null
 grep -F 'sha256sum --check -' "$release_workflow" >/dev/null
 if grep -F 'setup-qemu-action' "$release_workflow"; then exit 1; fi
-test "$(grep -c 'releasebuild build ' "$release_workflow")" -eq 1
+test "$(grep -c 'go run ./cmd/releasebuild build ' "$release_workflow")" -eq 1
+# module cache only, verified; never GOCACHE, never a prefix fallback
+if grep -E 'restore-keys|gocache' "$release_workflow"; then exit 1; fi
+test "$(grep -c 'go mod verify' "$release_workflow")" -ge 3
+grep -F 'diff -qr --no-dereference "$RUNNER_TEMP/out-first" "$RUNNER_TEMP/out-second"' "$release_workflow" >/dev/null
 
 grep -F 'skopeo copy --all --preserve-digests' "$root/scripts/release/publish-ci-release.sh" >/dev/null
 grep -F 'cosign sign --yes' "$root/scripts/release/publish-ci-release.sh" >/dev/null

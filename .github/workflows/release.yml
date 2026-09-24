@@ -343,9 +343,8 @@ jobs:
 
   # CHAOS-6400: one native leg per platform, in parallel. Go needs no
   # emulation and each leg builds only its own targets, so no runner compiles
-  # the whole matrix serially. CHAOS-6403: one build per leg, Go caches via
-  # actions/cache (setup-go `cache: false` stays; the cache is a plain
-  # actions/cache step so its scope is explicit above).
+  # the whole matrix serially. CHAOS-6403: one build per leg (linux-amd64 also
+  # builds twice as the reproducibility canary), module cache only.
   build-leg:
     needs: [preflight, ci-reference]
     strategy:
@@ -372,35 +371,40 @@ jobs:
           go-version: "1.27.0"
           check-latest: false
           cache: false
-      # CHAOS-6403: Go module + build caches keyed on go.sum and the leg (which
-      # fixes GOOS/GOARCH). Both are content-addressed (module zips are checked
-      # against go.sum, build entries against their input hashes), so a hit can
-      # only skip work, never change bytes. Only runs on main/tag pushes save
-      # into the main scope; nothing a PR does can populate this key.
+      # CHAOS-6403: cache ONLY the Go module cache. It is verifiable: `go mod
+      # verify` below re-checks every restored module against go.sum and the
+      # job fails loud on a mismatch. The compiled-object cache (GOCACHE) is
+      # NOT verifiable, so it is never cached (CodeQL #11 "no cache sink"
+      # rationale stands for it). Key = os + arch + go.sum, EXACT match only
+      # (no prefix fallback), so a branch-scoped cache can never be picked up.
       # actions/cache v6.1.0
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
-          path: |
-            ${{ runner.temp }}/gocache/mod
-            ${{ runner.temp }}/gocache/build
-          key: release-go-${{ matrix.leg }}-${{ hashFiles('go.sum') }}
-          restore-keys: release-go-${{ matrix.leg }}-
+          path: ${{ runner.temp }}/gomod
+          key: release-gomod-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('go.sum') }}
       - name: Build platform fragment
         env:
           VERSION: ${{ needs.preflight.outputs.version }}
           COMMIT: ${{ needs.preflight.outputs.commit }}
           DATE: ${{ needs.preflight.outputs.date }}
           PLATFORM: ${{ matrix.platform }}
+          LEG: ${{ matrix.leg }}
         run: |
           set -euo pipefail
-          # CHAOS-6403: ONE build per leg (was two, diffed). The build is
-          # reproducible by construction (-trimpath, -buildid=, fixed epoch)
-          # and `releasebuild merge`/`verify` still re-check every checksum.
-          export GOMODCACHE="$RUNNER_TEMP/gocache/mod" GOCACHE="$RUNNER_TEMP/gocache/build"
+          export GOMODCACHE="$RUNNER_TEMP/gomod"
           go mod download
-          out="$RUNNER_TEMP/leg-out"
-          go run ./cmd/releasebuild build -version "$VERSION" -commit "$COMMIT" -date "$DATE" -platform "$PLATFORM" -out "$out"
-          mkdir -p leg && cp "$out/"* leg/
+          go mod verify
+          build() { GOCACHE="$RUNNER_TEMP/gobuild-$1" go run ./cmd/releasebuild build -version "$VERSION" -commit "$COMMIT" -date "$DATE" -platform "$PLATFORM" -out "$RUNNER_TEMP/out-$1"; }
+          build first
+          # CHAOS-6403 reproducibility canary: ONE build per leg, except
+          # linux-amd64 which builds a second time from a cold object cache and
+          # must be byte-identical. Cross-leg checksums are re-checked by
+          # `releasebuild merge`/`verify` in `build`.
+          if [ "$LEG" = linux-amd64 ]; then
+            build second
+            diff -qr --no-dereference "$RUNNER_TEMP/out-first" "$RUNNER_TEMP/out-second"
+          fi
+          mkdir -p leg && cp "$RUNNER_TEMP/out-first/"* leg/
       # actions/upload-artifact v7.0.1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with: {name: "release-leg-${{ matrix.leg }}", path: leg/, if-no-files-found: error, retention-days: 1}
@@ -428,14 +432,11 @@ jobs:
       # actions/download-artifact v8.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with: {pattern: "release-leg-*", path: legs}
-      # actions/cache v6.1.0
+      # actions/cache v6.1.0 (module cache only, see build-leg; verified below)
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
-          path: |
-            ${{ runner.temp }}/gocache/mod
-            ${{ runner.temp }}/gocache/build
-          key: release-go-merge-${{ hashFiles('go.sum') }}
-          restore-keys: release-go-merge-
+          path: ${{ runner.temp }}/gomod
+          key: release-gomod-merge-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('go.sum') }}
       - name: Install checksum-verified Syft
         env:
           SYFT_VERSION: v1.46.0
@@ -457,8 +458,9 @@ jobs:
       - name: Merge legs and write final checksum manifest
         run: |
           set -euo pipefail
-          export GOMODCACHE="$RUNNER_TEMP/gocache/mod" GOCACHE="$RUNNER_TEMP/gocache/build"
+          export GOMODCACHE="$RUNNER_TEMP/gomod" GOCACHE="$RUNNER_TEMP/gobuild"
           go mod download
+          go mod verify
           go build -o "$RUNNER_TEMP/releasebuild" ./cmd/releasebuild
           "$RUNNER_TEMP/releasebuild" merge -out /tmp/first $(for d in legs/*/; do printf -- '-in %s ' "$d"; done)
           "$RUNNER_TEMP/releasebuild" verify -dir /tmp/first
