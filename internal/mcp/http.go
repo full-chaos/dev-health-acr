@@ -132,6 +132,10 @@ const requestIDHeader = "X-Request-ID"
 type HTTPHandlerOptions struct {
 	// BasePath is the exact path the MCP endpoint answers on, e.g. "/mcp".
 	BasePath string
+	// AliasPaths are further exact paths served by the same MCP handler as
+	// BasePath (for example "/" beside "/mcp"). They add no OAuth identity:
+	// the protected resource and the challenge stay those of ResourceURL.
+	AliasPaths []string
 	// Identity is the build identity reported as the server revision.
 	Identity version.Info
 	// MaxRequestBodyBytes bounds every MCP request body.
@@ -172,6 +176,11 @@ func NewHTTPHandler(cfg *ProcessConfig, opts HTTPHandlerOptions) (*HTTPHandler, 
 	if cfg == nil || cfg.hosted == nil || cfg.Transport() != TransportHTTP {
 		return nil, ErrProcessConfigMissing
 	}
+	for _, alias := range opts.AliasPaths {
+		if !validBasePath(alias) {
+			return nil, ErrHTTPOptionsInvalid
+		}
+	}
 	if !validBasePath(opts.BasePath) || opts.MaxRequestBodyBytes <= 0 || opts.ResolveTimeout <= 0 {
 		return nil, ErrHTTPOptionsInvalid
 	}
@@ -201,11 +210,18 @@ func NewHTTPHandler(cfg *ProcessConfig, opts HTTPHandlerOptions) (*HTTPHandler, 
 	mux.HandleFunc("GET "+HealthPath, h.serveHealth)
 	mux.HandleFunc("GET "+ReadyPath, h.serveReady)
 	h.registerOAuthDiscovery(mux)
-	pattern := opts.BasePath
-	if pattern == "/" {
-		pattern = "/{$}"
+	registered := map[string]bool{}
+	for _, path := range append([]string{opts.BasePath}, opts.AliasPaths...) {
+		if registered[path] {
+			continue
+		}
+		registered[path] = true
+		pattern := path
+		if pattern == "/" {
+			pattern = "/{$}"
+		}
+		mux.Handle(pattern, http.HandlerFunc(h.serveMCP))
 	}
-	mux.Handle(pattern, http.HandlerFunc(h.serveMCP))
 	h.mux = mux
 	return h, nil
 }

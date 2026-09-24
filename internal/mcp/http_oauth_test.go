@@ -113,3 +113,35 @@ func TestProtectedResourceMetadataAndChallenge(t *testing.T) {
 		t.Fatalf("challenge without discovery = %q, want Bearer", got)
 	}
 }
+
+// CHAOS-6218: the endpoint answers at "/" as well as the base path with the
+// same challenge; metadata, probes and the resource identity are unchanged.
+func TestRootAliasServesSameEndpoint(t *testing.T) {
+	hosted := newHostedAPI(t)
+	cfg := hosted.sidecarConfig()
+	opts := acrmcp.DefaultServeOptions()
+	opts.Transport = acrmcp.TransportHTTP
+	opts.ResourceURL = "https://mcp.example.test/mcp"
+	opts.AuthorizationServer = "https://acr.example.test"
+	handler, err := acrmcp.NewServeHTTPHandler(cfg, testIdentity, &syncBuffer{}, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/", "/mcp"} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(string(rawToolsList())))
+		request.Header.Set("Content-Type", "application/json")
+		handler.ServeHTTP(recorder, request)
+		challenge := recorder.Header().Get("WWW-Authenticate")
+		if recorder.Code != http.StatusUnauthorized || !strings.HasPrefix(challenge, `Bearer resource_metadata="https://mcp.example.test/.well-known/oauth-protected-resource/mcp"`) {
+			t.Fatalf("%s: status %d challenge %q", path, recorder.Code, challenge)
+		}
+	}
+	for path, want := range map[string]int{"/healthz": http.StatusOK, acrmcp.ProtectedResourceMetadataPath: http.StatusOK, acrmcp.ProtectedResourceMetadataPath + "/mcp": http.StatusOK, "/other": http.StatusNotFound} {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		if recorder.Code != want {
+			t.Fatalf("%s: status %d, want %d", path, recorder.Code, want)
+		}
+	}
+}
