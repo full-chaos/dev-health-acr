@@ -63,6 +63,7 @@ func (p *InvestmentProvider) Capability() contextfabric.FactCapability {
 		contextfabric.SubjectTeam, contextfabric.SubjectProject, contextfabric.SubjectRepository,
 	})
 	capability.Tables = map[contextfabric.SubjectKind][]contextfabric.FactTableShape{
+		contextfabric.SubjectTeam:       {contextfabric.FactTableBreakdown},
 		contextfabric.SubjectRepository: {contextfabric.FactTableBreakdown},
 		contextfabric.SubjectProject:    {contextfabric.FactTableBreakdown},
 	}
@@ -303,54 +304,40 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 	if len(ids) == 0 {
 		return nil
 	}
-	current, err := readers.ReadTeamThemeMix(ctx, p.facts.client, orgID, ids, timeBound.neutral())
+	// CHAOS-6559 (chris ruling 2026-09-24): a team's mix is the SUM of the
+	// mixes of the repositories the team OWNS (team_repo_ownership), each
+	// repository's mix being the PR-ref-share partition of persisted work
+	// unit distributions (investment_repo_mix.go). Never a member vote and
+	// never a work-item majority vote.
+	current, err := p.teamOwnedRepoMix(ctx, orgID, ids, timeBound)
 	if err != nil {
 		return err
 	}
-	var prior []readers.TeamThemeMixRow
+	var prior map[string]*repoThemeTotals
 	if timeBound.active && timeBound.hasStart {
 		duration := timeBound.end.Sub(timeBound.start)
 		priorBound := factTimeBound{active: true, hasStart: true, start: timeBound.start.Add(-duration), end: timeBound.start}
-		prior, err = readers.ReadTeamThemeMix(ctx, p.facts.client, orgID, ids, priorBound.neutral())
+		prior, err = p.teamOwnedRepoMix(ctx, orgID, ids, priorBound)
 		if err != nil {
 			return err
 		}
 	}
 
 	type teamMix struct {
-		teamName      string
 		currentTheme  map[string]float64
 		currentBugfix float64
 		priorTheme    map[string]float64
+		totals        *repoThemeTotals
+		ownedRepos    int64
 	}
 	byTeam := make(map[string]*teamMix, len(ids))
-	entry := func(teamID, teamName string) *teamMix {
-		m, ok := byTeam[teamID]
-		if !ok {
-			m = &teamMix{currentTheme: map[string]float64{}, priorTheme: map[string]float64{}}
-			byTeam[teamID] = m
-		}
-		if m.teamName == "" {
-			m.teamName = teamName
-		}
-		return m
+	for teamID, t := range current {
+		byTeam[teamID] = &teamMix{currentTheme: t.theme, currentBugfix: t.bugfix, priorTheme: map[string]float64{}, totals: t, ownedRepos: t.repos}
 	}
-	for _, row := range current {
-		m := entry(row.TeamID, row.TeamName)
-		switch row.Kind {
-		case "theme":
-			m.currentTheme[row.Key] = row.WeightedEffort
-		case "subcategory":
-			if row.Key == readers.BugfixSubcategoryKey {
-				m.currentBugfix = row.WeightedEffort
-			}
+	for teamID, t := range prior {
+		if m, ok := byTeam[teamID]; ok {
+			m.priorTheme = t.theme
 		}
-	}
-	for _, row := range prior {
-		if row.Kind != "theme" {
-			continue
-		}
-		entry(row.TeamID, row.TeamName).priorTheme[row.Key] = row.WeightedEffort
 	}
 
 	for teamID, m := range byTeam {
@@ -370,6 +357,10 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 			fields[contextfabric.FactFieldTheme(theme)] = contextfabric.NumberFactValue(m.currentTheme[theme] / currentTotal)
 		}
 		fields[contextfabric.FactFieldThemeQualityBugfix] = contextfabric.NumberFactValue(m.currentBugfix / currentTotal)
+		fields["theme_breakdown"] = themeBreakdownTable(m.totals, timeBound.effectiveGrain(grainDaily))
+		fields["owned_repository_count"] = contextfabric.IntegerFactValue(m.ownedRepos)
+		fields["mix_source"] = contextfabric.StringFactValue(repoMixSource)
+		fields["attribution_basis"] = contextfabric.StringFactValue(repoMixBasis + "_over_team_repo_ownership")
 
 		priorTotal := 0.0
 		for _, theme := range canonicalInvestmentThemes {

@@ -47,7 +47,7 @@ C1  [grouped team->project, assess + trend, time_series]
   trend_series           member    project        each_member     corroborated  flow health readiness workload
 
 C2  [explicit_set two named team operands, compare, dims=investment_balance]
-  allocation_breakdown   operand   team           each_operand    none          UNAVAILABLE table_shape_undeclared
+  allocation_breakdown   operand   team           each_operand    at_least_one  investment
   state                  operand   team           each_operand    corroborated  flow health investment landscape readiness workload
 
 C3  [grouped team->project, explain_change, period_comparison, dims=delivery_flow]
@@ -65,7 +65,7 @@ C5  [scoped repository->team, count]
   count                  member    team           each_member     exact         step:membership_cardinality
 
 C6  [explicit_set two named team operands, compare + trend, time_series, dims=investment_balance]
-  allocation_breakdown   operand   team           each_operand    none          UNAVAILABLE table_shape_undeclared
+  allocation_breakdown   operand   team           each_operand    at_least_one  investment
   state                  operand   team           each_operand    corroborated  flow health investment landscape readiness workload
   trend_series           operand   team           each_operand    corroborated  flow health readiness workload
 
@@ -83,11 +83,10 @@ C2s  [explicit_set (named team operand, SCOPED project operand), compare]  (ADDE
 C7u  [organization scope, count, MemberKind=work_item (unservable)]  (ADDED to the recorded thirteen)
   count                  member    work_item      each_member     none          UNAVAILABLE computed_population_absent
 
-# MEASUREMENT (recorded thirteen frames): 34 requirement cells derived over 13 frames; 30 served, 4 unserved.
-# MEASUREMENT (whole corpus): 37 requirement cells derived over 15 frames; 32 served, 5 unserved.
+# MEASUREMENT (recorded thirteen frames): 34 requirement cells derived over 13 frames; 32 served, 2 unserved.
+# MEASUREMENT (whole corpus): 37 requirement cells derived over 15 frames; 34 served, 3 unserved.
 #
 # cause distribution over the unserved cells:
-#   allocation_breakdown   table_shape_undeclared     2
 #   count                  computed_population_absent 1
 #   health                 no_declaring_producer      1
 #   state                  no_declaring_producer      1

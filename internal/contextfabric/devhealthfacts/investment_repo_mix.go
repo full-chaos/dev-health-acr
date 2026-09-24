@@ -197,6 +197,9 @@ type repoThemeTotals struct {
 	theme     map[string]float64
 	bugfix    float64
 	workUnits int64
+	// repos counts the repositories folded into a team total (0 for a
+	// single-repository total, where it is not meaningful).
+	repos int64
 }
 
 func groupRepoMix(rows []repoMixRow) map[string]*repoThemeTotals {
@@ -294,4 +297,69 @@ func (p *InvestmentProvider) readRepositoryThemeMix(ctx context.Context, orgID s
 		})
 	}
 	return rejected, nil
+}
+
+// teamOwnedRepoMix returns, per requested team id, the SUM of the mixes of
+// the repositories the team currently owns. A repository is counted once
+// per team however many ownership sources name it; a team owning no
+// repository with persisted work, or whose owned repositories carry zero
+// effort, is absent from the result (never a fabricated zero mix).
+func (p *InvestmentProvider) teamOwnedRepoMix(ctx context.Context, orgID string, teamIDs []string, timeBound factTimeBound) (map[string]*repoThemeTotals, error) {
+	statement := withRowLimit(`SELECT DISTINCT team_id, toString(repo_id) FROM team_repo_ownership FINAL
+WHERE org_id = {org_id:String} AND repo_id IS NOT NULL AND team_id IN {ids:Array(String)}` + ownershipValidityPredicate(timeBound))
+	extra := make([]readers.Binding, 0, 2)
+	for _, b := range timeBound.bindings() {
+		extra = append(extra, readers.Binding{Name: b.Name, Value: b.Value})
+	}
+	owned := map[string][]string{}
+	repoSet := map[string]bool{}
+	if err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamOwnedRepositories", statement, orgID, teamIDs, func(row contextpacket.ClickHouseRowScanner) error {
+		var teamID, repoID string
+		if err := row.Scan(&teamID, &repoID); err != nil {
+			return err
+		}
+		owned[teamID] = append(owned[teamID], repoID)
+		repoSet[repoID] = true
+		return nil
+	}, extra...); err != nil {
+		return nil, err
+	}
+	repoIDs := make([]string, 0, len(repoSet))
+	for id := range repoSet {
+		repoIDs = append(repoIDs, id)
+	}
+	sort.Strings(repoIDs)
+	rows, err := p.readRepoMixRows(ctx, orgID, repoIDs, timeBound)
+	if err != nil {
+		return nil, err
+	}
+	return sumOwnedRepoMix(owned, groupRepoMix(rows)), nil
+}
+
+// sumOwnedRepoMix is the pure ownership aggregate: team total = sum of its
+// owned repositories' totals. Kept separate so the invariant "sum of a
+// team's owned-repo mixes == the team mix" is testable without a server.
+func sumOwnedRepoMix(owned map[string][]string, perRepo map[string]*repoThemeTotals) map[string]*repoThemeTotals {
+	out := map[string]*repoThemeTotals{}
+	for teamID, repos := range owned {
+		seen := map[string]bool{}
+		team := &repoThemeTotals{theme: map[string]float64{}}
+		for _, repoID := range repos {
+			t, ok := perRepo[repoID]
+			if !ok || seen[repoID] {
+				continue
+			}
+			seen[repoID] = true
+			for theme, v := range t.theme {
+				team.theme[theme] += v
+			}
+			team.bugfix += t.bugfix
+			team.repos++
+		}
+		if team.repos == 0 || team.total() <= 0 {
+			continue
+		}
+		out[teamID] = team
+	}
+	return out
 }
