@@ -80,7 +80,13 @@ grep -Eq 'driver-opts: image=(\$\{\{ env\.ACR_IMAGE_MIRROR_PREFIX \}\})?moby/bui
 # 1b. release.yml's container job duplicates the same two pulls (CHAOS-4855);
 # neither may drift from ci.yml's pin or lose the mirror-prefix plumbing.
 release_workflow="${repo_root}/.github/workflows/release.yml"
-grep -Eq 'image: (\$\{\{ env\.ACR_IMAGE_MIRROR_PREFIX \}\})?tonistiigi/binfmt:[^[:space:]]+@sha256:[0-9a-f]{64}' "$release_workflow"
+# CHAOS-6403: release.yml's container job needs no QEMU (the Dockerfile's
+# `build` stage is FROM --platform=$BUILDPLATFORM and cross-compiles; no RUN
+# executes on a foreign architecture), so it must not install it again.
+if grep -q 'setup-qemu-action' "$release_workflow"; then
+  printf 'release.yml must not install QEMU: the image build cross-compiles natively\n' >&2
+  exit 1
+fi
 grep -Eq 'driver-opts: image=(\$\{\{ env\.ACR_IMAGE_MIRROR_PREFIX \}\})?moby/buildkit:v0\.31\.0@sha256:[0-9a-f]{64}' "$release_workflow"
 
 # 1c. No workflow may authenticate to Docker Hub, and no DOCKERHUB_* secret
@@ -116,7 +122,11 @@ grep -Eq '^# syntax=docker/dockerfile:[^[:space:]]+@sha256:[0-9a-f]{64}$' "${rep
 # HIGH/CRITICAL findings must not be hidden via --ignore-unfixed.
 grep -q 'bash scripts/container/oci.sh' "${repo_root}/Makefile"
 grep -q 'CONTAINER_PLATFORMS=linux/amd64,linux/arm64' "${repo_root}/scripts/container/oci.sh"
-test "$(grep -c 'CONTAINER_NO_CACHE=1 CONTAINER_OUTPUT=oci' "${repo_root}/scripts/container/oci.sh")" -eq 2
+# CHAOS-6403: exactly ONE --no-cache build (the first); the second target reuses
+# its `build` stage under the same BUILD_CACHE_ID instead of recompiling.
+test "$(grep -c 'CONTAINER_NO_CACHE=1 CONTAINER_BUILD_CACHE_ID="$shared_cache_id" CONTAINER_OUTPUT=oci' "${repo_root}/scripts/container/oci.sh")" -eq 1
+test "$(grep -c 'CONTAINER_BUILD_CACHE_ID="$shared_cache_id" CONTAINER_OUTPUT=oci' "${repo_root}/scripts/container/oci.sh")" -eq 2
+test "$(grep -c 'CONTAINER_NO_CACHE=1' "${repo_root}/scripts/container/oci.sh")" -eq 1
 grep -q 'container-oci.work.XXXXXX' "${repo_root}/scripts/container/oci.sh"
 grep -q 'publish-directory.sh' "${repo_root}/scripts/container/oci.sh"
 grep -q 'publish-directory.sh' "${repo_root}/scripts/container/scan.sh"

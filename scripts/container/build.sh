@@ -54,7 +54,7 @@ if [[ -n "$dirty_status" ]]; then
   version="${version}-dirty"
   commit="${commit}-dirty"
 fi
-if [[ "${CONTAINER_NO_CACHE:-0}" == "1" ]]; then
+if [[ "${CONTAINER_NO_CACHE:-0}" == "1" && -z "${CONTAINER_BUILD_CACHE_ID:-}" ]]; then
   build_cache_id="no-cache-${RANDOM}-${RANDOM}-$$"
 fi
 
