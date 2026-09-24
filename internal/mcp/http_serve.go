@@ -305,8 +305,17 @@ func newServeProcessConfig(sidecarCfg sidecar.Config, identity version.Info, dia
 
 // serveHandlerOptions maps serve options onto the handler's options.
 func serveHandlerOptions(cfg *ProcessConfig, identity version.Info, opts ServeOptions) HTTPHandlerOptions {
+	// The default base path also answers at the host root, so the bare host
+	// URL is a valid MCP URL (CHAOS-6218). The audience check (auth.SameResource)
+	// knows only the "/" and DefaultHTTPBasePath pair, so a custom base path
+	// gets no root alias.
+	var aliases []string
+	if opts.BasePath == DefaultHTTPBasePath {
+		aliases = []string{"/"}
+	}
 	return HTTPHandlerOptions{
 		BasePath:            opts.BasePath,
+		AliasPaths:          aliases,
 		Identity:            identity,
 		MaxRequestBodyBytes: opts.MaxBodyBytes,
 		ResolveTimeout:      cfg.Config.Timeout,

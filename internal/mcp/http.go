@@ -132,6 +132,10 @@ const requestIDHeader = "X-Request-ID"
 type HTTPHandlerOptions struct {
 	// BasePath is the exact path the MCP endpoint answers on, e.g. "/mcp".
 	BasePath string
+	// AliasPaths are further exact paths served by the same MCP handler as
+	// BasePath (for example "/" beside "/mcp"). They add no OAuth identity:
+	// the protected resource and the challenge stay those of ResourceURL.
+	AliasPaths []string
 	// Identity is the build identity reported as the server revision.
 	Identity version.Info
 	// MaxRequestBodyBytes bounds every MCP request body.
@@ -172,6 +176,11 @@ func NewHTTPHandler(cfg *ProcessConfig, opts HTTPHandlerOptions) (*HTTPHandler, 
 	if cfg == nil || cfg.hosted == nil || cfg.Transport() != TransportHTTP {
 		return nil, ErrProcessConfigMissing
 	}
+	for _, alias := range opts.AliasPaths {
+		if !validBasePath(alias) {
+			return nil, ErrHTTPOptionsInvalid
+		}
+	}
 	if !validBasePath(opts.BasePath) || opts.MaxRequestBodyBytes <= 0 || opts.ResolveTimeout <= 0 {
 		return nil, ErrHTTPOptionsInvalid
 	}
@@ -201,11 +210,18 @@ func NewHTTPHandler(cfg *ProcessConfig, opts HTTPHandlerOptions) (*HTTPHandler, 
 	mux.HandleFunc("GET "+HealthPath, h.serveHealth)
 	mux.HandleFunc("GET "+ReadyPath, h.serveReady)
 	h.registerOAuthDiscovery(mux)
-	pattern := opts.BasePath
-	if pattern == "/" {
-		pattern = "/{$}"
+	registered := map[string]bool{}
+	for _, path := range append([]string{opts.BasePath}, opts.AliasPaths...) {
+		if registered[path] {
+			continue
+		}
+		registered[path] = true
+		pattern := path
+		if pattern == "/" {
+			pattern = "/{$}"
+		}
+		mux.Handle(pattern, http.HandlerFunc(h.serveMCP))
 	}
-	mux.Handle(pattern, http.HandlerFunc(h.serveMCP))
 	h.mux = mux
 	return h, nil
 }
@@ -444,7 +460,7 @@ func (h *HTTPHandler) serveMCP(w http.ResponseWriter, r *http.Request) {
 		line.authOutcome = HTTPAuthMalformedBearer
 	}
 	if line.authOutcome != HTTPAuthAdmitted {
-		h.writeAuthRefusal(recorder, line.authOutcome, 0)
+		h.writeAuthRefusal(recorder, r.URL.Path, line.authOutcome, 0)
 		return
 	}
 
@@ -454,7 +470,7 @@ func (h *HTTPHandler) serveMCP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		outcome, retryAfter := classifyResolveFailure(err)
 		line.authOutcome = outcome
-		h.writeAuthRefusal(recorder, outcome, retryAfter)
+		h.writeAuthRefusal(recorder, r.URL.Path, outcome, retryAfter)
 		return
 	}
 
@@ -613,14 +629,14 @@ type refusalBody struct {
 	ErrorDescription string `json:"error_description"`
 }
 
-func (h *HTTPHandler) writeAuthRefusal(w http.ResponseWriter, outcome string, retryAfter time.Duration) {
+func (h *HTTPHandler) writeAuthRefusal(w http.ResponseWriter, path, outcome string, retryAfter time.Duration) {
 	refusal, ok := authRefusal[outcome]
 	if !ok {
 		refusal = authRefusal[HTTPAuthUpstreamUnavailable]
 		outcome = HTTPAuthUpstreamUnavailable
 	}
 	if refusal.challenge != "" {
-		w.Header().Set("WWW-Authenticate", h.challenge(refusal.challenge))
+		w.Header().Set("WWW-Authenticate", h.challenge(refusal.challenge, path))
 	}
 	if retryAfter > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(max(1, int((retryAfter+time.Second-1)/time.Second))))

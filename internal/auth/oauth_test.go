@@ -604,6 +604,15 @@ func TestResourceAdmitted(t *testing.T) {
 		{testResource, []string{"https://other.example.test/mcp"}, false},
 		{testResource, []string{testResource, testResource}, false},
 		{testResource, []string{testResource + "/"}, false},
+		// CHAOS-6218: the "/" and "/mcp" aliases of one endpoint are one audience.
+		{testResource, []string{"https://mcp.example.test/"}, true},
+		{testResource, []string{"https://mcp.example.test"}, true},
+		{"https://mcp.example.test/", []string{testResource}, true},
+		{"https://mcp.example.test", []string{testResource}, true},
+		{testResource, []string{"https://other.example.test/"}, false},
+		{testResource, []string{"http://mcp.example.test/"}, false},
+		{testResource, []string{"https://mcp.example.test/other"}, false},
+		{testResource, []string{"https://mcp.example.test/?x=1"}, false},
 	} {
 		if got := resourceAdmitted(tc.bound, tc.presented); got != tc.want {
 			t.Errorf("resourceAdmitted(%q, %q) = %v, want %v", tc.bound, tc.presented, got, tc.want)
@@ -994,5 +1003,22 @@ func TestOAuthConsentIsBoundToTheFirstUserWhoOpensIt(t *testing.T) {
 	}
 	if _, err := h.oauth.DenyConsent(ctx, direct.Handle, first); outcomeOf(err) != oauthvocab.OutcomeInvalidRequest {
 		t.Fatalf("deny by a user the request is not bound to = %v, want invalid_request", err)
+	}
+}
+
+func TestResolveResourceAcceptsEndpointAliases(t *testing.T) {
+	s := &OAuthService{resources: []string{testResource}}
+	for requested, want := range map[string]bool{
+		testResource:                     true,
+		"https://mcp.example.test/":      true,
+		"https://mcp.example.test":       true,
+		"https://mcp.example.test/other": false,
+		"https://other.example.test/":    false,
+		"http://mcp.example.test/":       false,
+	} {
+		got, ok := s.resolveResource(requested)
+		if ok != want || (ok && got != requested) {
+			t.Errorf("resolveResource(%q) = %q, %v; want ok=%v as requested", requested, got, ok, want)
+		}
 	}
 }

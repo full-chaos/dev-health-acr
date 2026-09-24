@@ -488,7 +488,7 @@ func (s *OAuthService) resolveResource(requested string) (string, bool) {
 		}
 		return "", false
 	}
-	if slices.Contains(s.resources, requested) {
+	if storage.ValidOAuthResource(requested) && slices.ContainsFunc(s.resources, func(r string) bool { return SameResource(r, requested) }) { // aliases: see SameResource
 		return requested, true
 	}
 	return "", false

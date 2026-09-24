@@ -3,6 +3,7 @@ package mcp
 import (
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
@@ -54,45 +55,98 @@ func validateOAuthDiscovery(o ServeOptions) error {
 
 func (h *HTTPHandler) oauthDiscoveryEnabled() bool { return h.opts.ResourceURL != "" }
 
-// protectedResourceMetadataURL is the path-suffixed RFC 9728 URL for the
-// resource: origin + well-known prefix + resource path.
-func (h *HTTPHandler) protectedResourceMetadataURL() string {
+// resourceFor is the protected-resource identifier for one served path: the
+// configured ResourceURL's origin plus that path, and for the root path the
+// bare origin (no trailing slash, the canonical form of a host-only URL). A
+// strict client that connected to a URL sees exactly that URL as `resource`.
+func (h *HTTPHandler) resourceFor(path string) string {
 	resource, err := url.Parse(h.opts.ResourceURL)
 	if err != nil {
 		return ""
 	}
-	return resource.Scheme + "://" + resource.Host + ProtectedResourceMetadataPath + resource.Path
+	if path == h.opts.BasePath {
+		return h.opts.ResourceURL
+	}
+	if path == "/" {
+		return resource.Scheme + "://" + resource.Host
+	}
+	return resource.Scheme + "://" + resource.Host + path
+}
+
+// metadataPathFor is the RFC 9728 §3.1 well-known path for a served path. The
+// root path's document sits at the bare well-known URL.
+func metadataPathFor(path string) string {
+	if path == "/" {
+		return ProtectedResourceMetadataPath
+	}
+	return ProtectedResourceMetadataPath + path
+}
+
+// protectedResourceMetadataURL is the path-suffixed RFC 9728 URL for the
+// resource served at path: origin + well-known prefix + that path.
+func (h *HTTPHandler) protectedResourceMetadataURL(path string) string {
+	resource, err := url.Parse(h.opts.ResourceURL)
+	if err != nil {
+		return ""
+	}
+	return resource.Scheme + "://" + resource.Host + metadataPathFor(path)
+}
+
+// servedPaths is the base path followed by the aliases, without duplicates.
+func (h *HTTPHandler) servedPaths() []string {
+	paths := []string{h.opts.BasePath}
+	for _, alias := range h.opts.AliasPaths {
+		if !slices.Contains(paths, alias) {
+			paths = append(paths, alias)
+		}
+	}
+	return paths
+}
+
+func withNoStoreFor(resource string, h *HTTPHandler) http.Handler {
+	metadata := sdkauth.ProtectedResourceMetadataHandler(&oauthex.ProtectedResourceMetadata{
+		Resource:               resource,
+		AuthorizationServers:   []string{h.opts.AuthorizationServer},
+		ScopesSupported:        []string{auth.ScopeContextRead, auth.ScopeEvidenceRead},
+		BearerMethodsSupported: []string{"header"},
+		ResourceName:           "Dev Health agent context runtime",
+	})
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		metadata.ServeHTTP(w, r)
+	})
 }
 
 func (h *HTTPHandler) registerOAuthDiscovery(mux *http.ServeMux) {
 	if !h.oauthDiscoveryEnabled() {
 		return
 	}
-	metadata := sdkauth.ProtectedResourceMetadataHandler(&oauthex.ProtectedResourceMetadata{
-		Resource:               h.opts.ResourceURL,
-		AuthorizationServers:   []string{h.opts.AuthorizationServer},
-		ScopesSupported:        []string{auth.ScopeContextRead, auth.ScopeEvidenceRead},
-		BearerMethodsSupported: []string{"header"},
-		ResourceName:           "Dev Health agent context runtime",
-	})
-	withNoStore := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		metadata.ServeHTTP(w, r)
-	})
-	// RFC 9728 §3.1 inserts the well-known segment before the resource path;
-	// clients that probe the root form (MCP authorization's fallback) get the
-	// same document.
-	mux.Handle(ProtectedResourceMetadataPath+h.opts.BasePath, withNoStore)
-	mux.Handle(ProtectedResourceMetadataPath, withNoStore)
+	// One document per served path (RFC 9728 §3.1 inserts the well-known
+	// segment before the resource path), each naming the URL a client
+	// connected to as its `resource`.
+	for _, path := range h.servedPaths() {
+		withNoStore := withNoStoreFor(h.resourceFor(path), h)
+		if path == "/" {
+			mux.Handle(ProtectedResourceMetadataPath, withNoStore)
+			mux.Handle(ProtectedResourceMetadataPath+"/{$}", withNoStore)
+			continue
+		}
+		mux.Handle(ProtectedResourceMetadataPath+path, withNoStore)
+	}
+	if !slices.Contains(h.servedPaths(), "/") {
+		// Nothing is served at the root: clients that probe the root form
+		// (MCP authorization's fallback) get the base path's document.
+		mux.Handle(ProtectedResourceMetadataPath, withNoStoreFor(h.resourceFor(h.opts.BasePath), h))
+	}
 }
 
 // challenge adds the resource_metadata parameter (RFC 9728 §5.1) to a Bearer
 // challenge when discovery is enabled.
-func (h *HTTPHandler) challenge(base string) string {
+func (h *HTTPHandler) challenge(base, path string) string {
 	if !h.oauthDiscoveryEnabled() {
 		return base
 	}
-	parameter := `resource_metadata="` + h.protectedResourceMetadataURL() + `", scope="` + auth.ScopeContextRead + " " + auth.ScopeEvidenceRead + `"`
+	parameter := `resource_metadata="` + h.protectedResourceMetadataURL(path) + `", scope="` + auth.ScopeContextRead + " " + auth.ScopeEvidenceRead + `"`
 	if rest, ok := strings.CutPrefix(base, "Bearer "); ok {
 		return "Bearer " + parameter + ", " + rest
 	}

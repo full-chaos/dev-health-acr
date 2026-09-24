@@ -62,7 +62,7 @@ func TestProtectedResourceMetadataAndChallenge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{acrmcp.ProtectedResourceMetadataPath + "/mcp", acrmcp.ProtectedResourceMetadataPath} {
+	for _, path := range []string{acrmcp.ProtectedResourceMetadataPath + "/mcp"} {
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
 		var metadata struct {
@@ -111,5 +111,78 @@ func TestProtectedResourceMetadataAndChallenge(t *testing.T) {
 	plain.ServeHTTP(recorder, request)
 	if got := recorder.Header().Get("WWW-Authenticate"); got != "Bearer" {
 		t.Fatalf("challenge without discovery = %q, want Bearer", got)
+	}
+}
+
+// CHAOS-6218: the endpoint answers at "/" as well as the base path. A strict
+// client that connects to either URL follows the challenge to metadata whose
+// `resource` is exactly the URL it connected to.
+func TestRootAliasIsTransparentToStrictClient(t *testing.T) {
+	hosted := newHostedAPI(t)
+	cfg := hosted.sidecarConfig()
+	opts := acrmcp.DefaultServeOptions()
+	opts.Transport = acrmcp.TransportHTTP
+	opts.ResourceURL = "https://mcp.example.test/mcp"
+	opts.AuthorizationServer = "https://acr.example.test"
+	handler, err := acrmcp.NewServeHTTPHandler(cfg, testIdentity, &syncBuffer{}, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for connected, wantResource := range map[string]string{"/": "https://mcp.example.test", "/mcp": "https://mcp.example.test/mcp"} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, connected, strings.NewReader(string(rawToolsList())))
+		request.Header.Set("Content-Type", "application/json")
+		handler.ServeHTTP(recorder, request)
+		challenge := recorder.Header().Get("WWW-Authenticate")
+		start := strings.Index(challenge, `resource_metadata="`)
+		if recorder.Code != http.StatusUnauthorized || start < 0 {
+			t.Fatalf("%s: status %d challenge %q", connected, recorder.Code, challenge)
+		}
+		metadataURL := challenge[start+len(`resource_metadata="`):]
+		metadataURL = metadataURL[:strings.Index(metadataURL, `"`)]
+		metadataPath := strings.TrimPrefix(metadataURL, "https://mcp.example.test")
+		meta := httptest.NewRecorder()
+		handler.ServeHTTP(meta, httptest.NewRequest(http.MethodGet, metadataPath, nil))
+		var doc struct {
+			Resource string `json:"resource"`
+		}
+		if meta.Code != http.StatusOK || json.NewDecoder(meta.Body).Decode(&doc) != nil || doc.Resource != wantResource {
+			t.Fatalf("%s: followed %s -> status %d resource %q, want %q", connected, metadataURL, meta.Code, doc.Resource, wantResource)
+		}
+	}
+	for path, want := range map[string]int{"/healthz": http.StatusOK, "/other": http.StatusNotFound} {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		if recorder.Code != want {
+			t.Fatalf("%s: status %d, want %d", path, recorder.Code, want)
+		}
+	}
+	trailing := httptest.NewRecorder()
+	handler.ServeHTTP(trailing, httptest.NewRequest(http.MethodGet, acrmcp.ProtectedResourceMetadataPath+"/", nil))
+	if trailing.Code != http.StatusOK {
+		t.Fatalf("trailing-slash root metadata: status %d", trailing.Code)
+	}
+}
+
+// A custom base path gets no root alias: the audience check knows only the
+// "/" and "/mcp" pair, so a root alias there would advertise a resource the
+// authorization server refuses.
+func TestCustomBasePathHasNoRootAlias(t *testing.T) {
+	hosted := newHostedAPI(t)
+	cfg := hosted.sidecarConfig()
+	opts := acrmcp.DefaultServeOptions()
+	opts.Transport = acrmcp.TransportHTTP
+	opts.BasePath = "/agent/mcp"
+	opts.ResourceURL = "https://mcp.example.test/agent/mcp"
+	opts.AuthorizationServer = "https://acr.example.test"
+	handler, err := acrmcp.NewServeHTTPHandler(cfg, testIdentity, &syncBuffer{}, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(string(rawToolsList())))
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("custom base path root: status %d, want 404", recorder.Code)
 	}
 }
