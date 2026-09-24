@@ -60,10 +60,11 @@ func newInvestmentProvider(client contextpacket.ClickHouseQueryClient) *Investme
 
 func (p *InvestmentProvider) Capability() contextfabric.FactCapability {
 	capability := newCapability(contextfabric.FactInvestment, "devhealthfacts.investment", []contextfabric.SubjectKind{
-		contextfabric.SubjectTeam, contextfabric.SubjectProject,
+		contextfabric.SubjectTeam, contextfabric.SubjectProject, contextfabric.SubjectRepository,
 	})
 	capability.Tables = map[contextfabric.SubjectKind][]contextfabric.FactTableShape{
-		contextfabric.SubjectProject: {contextfabric.FactTableBreakdown},
+		contextfabric.SubjectRepository: {contextfabric.FactTableBreakdown},
+		contextfabric.SubjectProject:    {contextfabric.FactTableBreakdown},
 	}
 	capability.EstimatedItems = 20
 	return capability
@@ -147,6 +148,14 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 			return contextfabric.FactProviderResult{}, readFailure("query project native theme mix", nativeScanErr)
 		}
 		truncated = truncated || nativeRowCount > maxFactRowsPerQuery
+	}
+
+	if repoSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectRepository); len(repoSubjects) > 0 {
+		rejected, scanErr := p.readRepositoryThemeMix(ctx, orgID, repoSubjects, &facts, timeBound)
+		if scanErr != nil {
+			return contextfabric.FactProviderResult{}, readFailure("query repository theme mix", scanErr)
+		}
+		rejectedCount += rejected
 	}
 
 	state, retentionReason := timeBound.retentionState(len(facts))
