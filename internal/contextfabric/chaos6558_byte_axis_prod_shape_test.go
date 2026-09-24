@@ -88,6 +88,11 @@ type chaos6558Shape struct {
 	// on non-member repositories, so halving the cohort DROPS the removed
 	// team's facts -- the case where a retry can reduce the rows.
 	factsOnMembers bool
+	// table selects the claims' row-table declaration: "" is the prod
+	// per-day series, "undated" declares a series keyed on a column that is
+	// not an instant (the rows cannot be dated, so the cut falls back to the
+	// prefix), and "undeclared" carries no declaration at all.
+	table string
 }
 
 // chaos6558ProdShape is the prod ceiling with rows sized so the first
@@ -101,6 +106,19 @@ func chaos6558SeriesTable() *contractsv1.ContextFabricClaimedFactTable {
 		Field: "status", Shape: contractsv1.ContextFabricFactTableShapeTimeSeries,
 		Key: []string{"day"}, Measures: []string{"count"}, Observations: []string{"state"},
 	}
+}
+
+func chaos6558SeriesTableFor(shape chaos6558Shape) *contractsv1.ContextFabricClaimedFactTable {
+	switch shape.table {
+	case "undated":
+		return &contractsv1.ContextFabricClaimedFactTable{
+			Field: "status", Shape: contractsv1.ContextFabricFactTableShapeTimeSeries,
+			Key: []string{"state"}, Measures: []string{"count"}, Observations: []string{"day"},
+		}
+	case "undeclared":
+		return nil
+	}
+	return chaos6558SeriesTable()
 }
 
 func chaos6558Engine(t *testing.T, calls *int, telemetry *recordingTelemetry, shape chaos6558Shape) *Engine {
@@ -152,7 +170,7 @@ func chaos6558Engine(t *testing.T, calls *int, telemetry *recordingTelemetry, sh
 					Kind:    fact.Kind, Subject: fact.Subject, Field: "status",
 					Value: ScalarValue{String: ptrString("green")},
 					Rows:  chaos6558Rows(index, shape),
-					Table: chaos6558SeriesTable(),
+					Table: chaos6558SeriesTableFor(shape),
 				})
 			}
 			return InvestigationResult{

@@ -89,8 +89,9 @@ type factRowTruncationAttempt struct {
 	RowsServed   int
 	// PerTable is the cap applied; zero when nothing was cut.
 	PerTable int
-	// TablesTruncated counts the row tables the cap shortened.
-	TablesTruncated int
+	// Tables counts the row tables the cap shortened, by the rule that cut
+	// each one.
+	Tables factRowCutRules
 	// RowBytes is the marshaled size of every row table in the input, and
 	// RowsDominate reports RowBytes >= the overrun excess: removing rows
 	// alone would have been enough to fit. It is what decides whether a
@@ -139,20 +140,68 @@ func claimedFactRowBytes(claims []ClaimedFact) (int64, error) {
 //
 // WHICH ROWS SURVIVE (team-lead ruling, 2026-09-24: trends over absolutes,
 // recency matters) is decided per table by keepFactTableRows.
-func truncateClaimedFactRows(claims []ClaimedFact, perTable int) (truncated []ClaimedFact, served, tables int) {
+func truncateClaimedFactRows(claims []ClaimedFact, perTable int) (truncated []ClaimedFact, served int, rules factRowCutRules) {
 	truncated = copySlicePreservingEmpty(claims)
 	for index := range truncated {
 		if len(truncated[index].Rows) > perTable {
-			truncated[index].Rows = keepFactTableRows(truncated[index].Rows, truncated[index].Table, perTable)
-			tables++
+			var rule factRowCutRule
+			truncated[index].Rows, rule = keepFactTableRows(truncated[index].Rows, truncated[index].Table, perTable)
+			rules.add(rule)
 		}
 		if len(truncated[index].TimeSeriesRows) > perTable {
-			truncated[index].TimeSeriesRows = keepFactTableRows(truncated[index].TimeSeriesRows, truncated[index].TimeSeriesTable, perTable)
-			tables++
+			var rule factRowCutRule
+			truncated[index].TimeSeriesRows, rule = keepFactTableRows(truncated[index].TimeSeriesRows, truncated[index].TimeSeriesTable, perTable)
+			rules.add(rule)
 		}
 		served += len(truncated[index].Rows) + len(truncated[index].TimeSeriesRows)
 	}
-	return truncated, served, tables
+	return truncated, served, rules
+}
+
+// factRowCutRule is WHICH rule cut one table (codex r2, P1: the served rows
+// depend on it, so a regression from newest-days back to the source-order
+// prefix must be visible at Info, not only in the served dates).
+type factRowCutRule int
+
+const (
+	factRowCutNewestDays factRowCutRule = iota
+	factRowCutHighestRank
+	// factRowCutSourcePrefix: the table declared neither a series nor a
+	// ranking (undeclared or a breakdown), so the prefix is its rule.
+	factRowCutSourcePrefix
+	// factRowCutSeriesUndated / factRowCutRankingUnscored: the table
+	// DECLARED a series or a ranking, and its rows could not be scored, so
+	// it fell back to the prefix. Counted apart from factRowCutSourcePrefix
+	// because a fallback is the regression signal and a breakdown is not.
+	factRowCutSeriesUndated
+	factRowCutRankingUnscored
+)
+
+// factRowCutRules counts the truncated tables by the rule that cut them.
+// Total is every truncated table; the five rule counts sum to it.
+type factRowCutRules struct {
+	Total           int
+	NewestDays      int
+	HighestRank     int
+	SourcePrefix    int
+	SeriesUndated   int
+	RankingUnscored int
+}
+
+func (r *factRowCutRules) add(rule factRowCutRule) {
+	r.Total++
+	switch rule {
+	case factRowCutNewestDays:
+		r.NewestDays++
+	case factRowCutHighestRank:
+		r.HighestRank++
+	case factRowCutSeriesUndated:
+		r.SeriesUndated++
+	case factRowCutRankingUnscored:
+		r.RankingUnscored++
+	default:
+		r.SourcePrefix++
+	}
 }
 
 // keepFactTableRows returns a new slice of the perTable rows a table keeps,
@@ -169,13 +218,20 @@ func truncateClaimedFactRows(claims []ClaimedFact, perTable int) (truncated []Cl
 //
 // The disclosure sentence states this whole policy, so it is true of every
 // table whichever rule applied.
-func keepFactTableRows(rows []contractsv1.ContextFabricClaimedFactRow, table *contractsv1.ContextFabricClaimedFactTable, perTable int) []contractsv1.ContextFabricClaimedFactRow {
+func keepFactTableRows(rows []contractsv1.ContextFabricClaimedFactRow, table *contractsv1.ContextFabricClaimedFactTable, perTable int) ([]contractsv1.ContextFabricClaimedFactRow, factRowCutRule) {
+	rule := factRowCutRuleFor(table)
 	if perTable >= len(rows) {
-		return copySlicePreservingEmpty(rows)
+		return copySlicePreservingEmpty(rows), rule
 	}
 	scores, ok := factTableRowScores(rows, table)
 	if !ok {
-		return copySlicePreservingEmpty(rows[:perTable])
+		switch rule {
+		case factRowCutNewestDays:
+			rule = factRowCutSeriesUndated
+		case factRowCutHighestRank:
+			rule = factRowCutRankingUnscored
+		}
+		return copySlicePreservingEmpty(rows[:perTable]), rule
 	}
 	order := make([]int, len(rows))
 	for index := range order {
@@ -192,7 +248,22 @@ func keepFactTableRows(rows []contractsv1.ContextFabricClaimedFactRow, table *co
 	for _, index := range chosen {
 		kept = append(kept, rows[index])
 	}
-	return kept
+	return kept, rule
+}
+
+// factRowCutRuleFor is the rule a table's DECLARATION asks for, before its
+// rows are looked at; keepFactTableRows downgrades it to a fallback when the
+// rows cannot be scored.
+func factRowCutRuleFor(table *contractsv1.ContextFabricClaimedFactTable) factRowCutRule {
+	switch {
+	case table == nil:
+		return factRowCutSourcePrefix
+	case table.Shape == contractsv1.ContextFabricFactTableShapeTimeSeries:
+		return factRowCutNewestDays
+	case table.Shape == contractsv1.ContextFabricFactTableShapeRanking:
+		return factRowCutHighestRank
+	}
+	return factRowCutSourcePrefix
 }
 
 // factRowScore is one row's "keep me first" value, held EXACTLY as the row
@@ -314,7 +385,7 @@ func factRowTruncationOutcomeRow(served, declared int) RequirementOutcomeRow {
 
 // applyFactRowTruncation builds the truncated, disclosed document for one cap.
 // It returns false when the cap cuts nothing.
-func applyFactRowTruncation(result InvestigationResult, perTable, declared int) (InvestigationResult, int, int, bool) {
+func applyFactRowTruncation(result InvestigationResult, perTable, declared int) (InvestigationResult, int, factRowCutRules, bool) {
 	claims, served, tables := truncateClaimedFactRows(result.ClaimedFacts, perTable)
 	if served >= declared {
 		return result, served, tables, false
@@ -377,7 +448,7 @@ func (e *Engine) planFactRowTruncation(
 		return attempt, nil
 	}
 
-	candidate := func(perTable int) (InvestigationResult, int, int, contractsv1.ContextFabricResponseMeasurement, bool, error) {
+	candidate := func(perTable int) (InvestigationResult, int, factRowCutRules, contractsv1.ContextFabricResponseMeasurement, bool, error) {
 		truncated, served, tables, cut := applyFactRowTruncation(result, perTable, declared)
 		if !cut {
 			return InvestigationResult{}, served, tables, contractsv1.ContextFabricResponseMeasurement{}, false, nil
@@ -417,7 +488,7 @@ func (e *Engine) planFactRowTruncation(
 			}
 		}
 		_, served, tables := truncateClaimedFactRows(result.ClaimedFacts, 1)
-		attempt.RowsServed, attempt.PerTable, attempt.TablesTruncated = served, 1, tables
+		attempt.RowsServed, attempt.PerTable, attempt.Tables = served, 1, tables
 		attempt.Measured.Measurement = smallest
 		attempt.Measured.Overrun = smallest.Overrun(budget)
 		return attempt, nil
@@ -425,7 +496,7 @@ func (e *Engine) planFactRowTruncation(
 
 	truncated, served, tables, _ := applyFactRowTruncation(result, best, declared)
 	truncated = e.finalizeResult(ctx, principal, truncated, *plan, frame, facts, pending, pass, cardinality)
-	attempt.RowsServed, attempt.PerTable, attempt.TablesTruncated = served, best, tables
+	attempt.RowsServed, attempt.PerTable, attempt.Tables = served, best, tables
 	servedMeasured, err := e.measureAssembledAttempt(ctx, principal, "fact_row_truncation", measured.Allocation, truncated, budget)
 	if err != nil {
 		if errors.Is(err, ErrItemAccounting) {
@@ -464,8 +535,14 @@ type FactRowTruncationEvent struct {
 	RowsAfter          int
 	PerTable           int
 	TablesTruncated    int
-	Served             bool
-	Declined           FactRowTruncationDeclined
+	// Per-rule counts of the truncated tables; they sum to TablesTruncated.
+	TablesNewestDays      int
+	TablesHighestRank     int
+	TablesSourcePrefix    int
+	TablesSeriesUndated   int
+	TablesRankingUnscored int
+	Served                bool
+	Declined              FactRowTruncationDeclined
 }
 
 // recordFactRowTruncation emits one lever application. A lever that never ran
@@ -475,20 +552,25 @@ func (e *Engine) recordFactRowTruncation(ctx context.Context, principal storage.
 		return
 	}
 	e.telemetry.RecordFactRowTruncation(ctx, principal, FactRowTruncationEvent{
-		Family:             plan.Family,
-		Stage:              contractsv1.ContextFabricPlanNarrowingAssembledResult,
-		Pass:               pass,
-		Overrun:            before.Overrun,
-		MaxSerializedBytes: budget.MaxSerializedBytes,
-		BytesBefore:        before.Measurement.Bytes,
-		BytesAfter:         attempt.Measured.Measurement.Bytes,
-		RowBytes:           attempt.RowBytes,
-		RowsDominate:       attempt.RowsDominate,
-		RowsBefore:         attempt.RowsDeclared,
-		RowsAfter:          attempt.RowsServed,
-		PerTable:           attempt.PerTable,
-		TablesTruncated:    attempt.TablesTruncated,
-		Served:             attempt.Served,
-		Declined:           attempt.Declined,
+		Family:                plan.Family,
+		Stage:                 contractsv1.ContextFabricPlanNarrowingAssembledResult,
+		Pass:                  pass,
+		Overrun:               before.Overrun,
+		MaxSerializedBytes:    budget.MaxSerializedBytes,
+		BytesBefore:           before.Measurement.Bytes,
+		BytesAfter:            attempt.Measured.Measurement.Bytes,
+		RowBytes:              attempt.RowBytes,
+		RowsDominate:          attempt.RowsDominate,
+		RowsBefore:            attempt.RowsDeclared,
+		RowsAfter:             attempt.RowsServed,
+		PerTable:              attempt.PerTable,
+		TablesTruncated:       attempt.Tables.Total,
+		TablesNewestDays:      attempt.Tables.NewestDays,
+		TablesHighestRank:     attempt.Tables.HighestRank,
+		TablesSourcePrefix:    attempt.Tables.SourcePrefix,
+		TablesSeriesUndated:   attempt.Tables.SeriesUndated,
+		TablesRankingUnscored: attempt.Tables.RankingUnscored,
+		Served:                attempt.Served,
+		Declined:              attempt.Declined,
 	})
 }

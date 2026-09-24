@@ -64,7 +64,8 @@ func TestCHAOS6558KeepFactTableRowsCutsFromTheRightEnd(t *testing.T) {
 			if perTable == 0 {
 				perTable = 2
 			}
-			got := days(keepFactTableRows(testCase.rows, testCase.table, perTable))
+			kept, _ := keepFactTableRows(testCase.rows, testCase.table, perTable)
+			got := days(kept)
 			if !reflect.DeepEqual(got, testCase.want) {
 				t.Fatalf("kept %v, want %v", got, testCase.want)
 			}

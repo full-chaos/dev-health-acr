@@ -2556,6 +2556,11 @@ func (t SlogEngineTelemetry) RecordFactRowTruncation(ctx context.Context, princi
 		"rows_dropped", event.RowsBefore - event.RowsAfter,
 		"per_table_cap", event.PerTable,
 		"tables_truncated", event.TablesTruncated,
+		"tables_newest_days", event.TablesNewestDays,
+		"tables_highest_rank", event.TablesHighestRank,
+		"tables_source_prefix", event.TablesSourcePrefix,
+		"tables_series_undated", event.TablesSeriesUndated,
+		"tables_ranking_unscored", event.TablesRankingUnscored,
 		"served", event.Served,
 		"declined", string(event.Declined),
 	}

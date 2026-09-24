@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -158,6 +159,8 @@ func TestCHAOS6558TruncationLineIsEmittedAtInfoWithItsValues(t *testing.T) {
 	for _, want := range []string{
 		"level=INFO", "axis=bytes", "max_serialized_bytes=65536", "served=true", "declined=\"\"",
 		"rows_before=" + strconv.Itoa(declared), "tables_truncated=" + strconv.Itoa(chaos6558Facts), "rows_dominate=true",
+		"tables_newest_days=" + strconv.Itoa(chaos6558Facts), "tables_highest_rank=0", "tables_source_prefix=0",
+		"tables_series_undated=0", "tables_ranking_unscored=0",
 	} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("truncation line lacks %q:\n%s", want, line)
@@ -174,5 +177,65 @@ func TestCHAOS6558TruncationLineIsEmittedAtInfoWithItsValues(t *testing.T) {
 	b, _ := strconv.Atoi(bytesAfter[1])
 	if a+d != declared || a >= declared || b > chaos6558MaxBytes || b == 0 {
 		t.Fatalf("rows_after=%d rows_dropped=%d bytes_after=%d do not describe a cut to fit %d rows into %d bytes", a, d, b, declared, chaos6558MaxBytes)
+	}
+}
+
+// codex r2 P1: WHICH rule cut the tables must be visible at Info. The same
+// answer, with the rows' declaration changed so the newest-days rule cannot
+// apply, must move the per-rule counts -- a regression to the source-order
+// prefix is then a different line, not an identical one.
+func TestCHAOS6558TruncationLineNamesTheCutRulePerTable(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		table string
+		want  map[string]int
+	}{
+		{"", map[string]int{"tables_newest_days": chaos6558Facts}},
+		{"undated", map[string]int{"tables_series_undated": chaos6558Facts}},
+		{"undeclared", map[string]int{"tables_source_prefix": chaos6558Facts}},
+	} {
+		t.Run("table="+testCase.table, func(t *testing.T) {
+			t.Parallel()
+			var sink bytes.Buffer
+			calls := 0
+			shape := chaos6558ProdShape
+			shape.table = testCase.table
+			engine := chaos6558Engine(t, &calls, &recordingTelemetry{}, shape)
+			engine.telemetry = NewSlogEngineTelemetry(slog.New(slog.NewTextHandler(&sink, &slog.HandlerOptions{Level: slog.LevelInfo})))
+			result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, chaos6558Request())
+			if err != nil {
+				t.Fatalf("Investigate() error = %v", err)
+			}
+			var line string
+			for _, candidate := range strings.Split(sink.String(), "\n") {
+				if strings.Contains(candidate, `msg="context fabric fact row truncation"`) {
+					line = candidate
+				}
+			}
+			if line == "" {
+				t.Fatalf("no truncation line:\n%s", sink.String())
+			}
+			total := 0
+			for _, field := range []string{"tables_newest_days", "tables_highest_rank", "tables_source_prefix", "tables_series_undated", "tables_ranking_unscored"} {
+				match := regexp.MustCompile(field + `=(\d+)`).FindStringSubmatch(line)
+				if match == nil {
+					t.Fatalf("line lacks %s:\n%s", field, line)
+				}
+				got, _ := strconv.Atoi(match[1])
+				if got != testCase.want[field] {
+					t.Fatalf("%s=%d, want %d:\n%s", field, got, testCase.want[field], line)
+				}
+				total += got
+			}
+			if total != chaos6558Facts || !strings.Contains(line, "tables_truncated="+strconv.Itoa(chaos6558Facts)) {
+				t.Fatalf("per-rule counts sum to %d, want tables_truncated=%d:\n%s", total, chaos6558Facts, line)
+			}
+			// The served rows agree with the rule the line names.
+			last := *result.ClaimedFacts[0].Rows[len(result.ClaimedFacts[0].Rows)-1].Fields["day"].String
+			newest := time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC).AddDate(0, 0, chaos6558RowsPerFact-1).Format("2006-01-02")
+			if (testCase.table == "") != (last == newest) {
+				t.Fatalf("table=%q served last day %s; newest-days rule applied = %v", testCase.table, last, last == newest)
+			}
+		})
 	}
 }
