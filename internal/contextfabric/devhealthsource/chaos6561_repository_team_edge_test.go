@@ -219,6 +219,21 @@ func TestChaos6561_ClosedLatestAssertionEndsTheEdge(t *testing.T) {
 	if len(batch.Tombstones) != 0 {
 		t.Fatalf("a closed ownership is history, not a retraction: tombstones = %+v", batch.Tombstones)
 	}
+	// A time-bounded graph read at "now" (falkorgraph/temporal.go admits an
+	// edge when valid_from <= T and valid_to is NULL or > T) excludes the
+	// revoked ownership and keeps the current ones.
+	admittedAt := func(edge contractsv1.ContextFabricRelationshipProjection, instant time.Time) bool {
+		return (edge.ValidFrom == nil || !edge.ValidFrom.After(instant)) && (edge.ValidTo == nil || edge.ValidTo.After(instant))
+	}
+	now := at.Add(time.Minute)
+	if admittedAt(edge, now) {
+		t.Errorf("revoked ownership (valid_to %v) is admitted by a bounded read at %v", edge.ValidTo, now)
+	}
+	for _, f := range []repositoryTeamFixture{inferred, pattern} {
+		if current := relationshipByID(t, batch, devhealthsource.RepositoryTeamRelationshipIDForTest(f.repoKey, f.teamID, f.provider, f.source)); !admittedAt(current, now) {
+			t.Errorf("current ownership %s/%s is excluded by a bounded read at %v (valid_from %v valid_to %v)", f.provider, f.teamID, now, current.ValidFrom, current.ValidTo)
+		}
+	}
 	for _, f := range []repositoryTeamFixture{inferred, pattern} {
 		got := relationshipByID(t, batch, devhealthsource.RepositoryTeamRelationshipIDForTest(f.repoKey, f.teamID, f.provider, f.source))
 		if got.EpistemicStatus != contractsv1.ContextFabricEpistemicInferred {
