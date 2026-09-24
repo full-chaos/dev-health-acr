@@ -338,9 +338,9 @@ func (t SlogEngineTelemetry) RecordBindingEpochDelta(ctx context.Context, princi
 // RecordWindowBinderOutcome logs at Info: the closed WindowBindReason
 // vocabulary is diagnostic (how often does the proposal-only temporal
 // binder route a question), never itself a sign anything is wrong.
-func (t SlogEngineTelemetry) RecordWindowBinderOutcome(ctx context.Context, principal storage.Principal, outcome WindowBindOutcome) {
+func (t SlogEngineTelemetry) RecordWindowBinderOutcome(ctx context.Context, principal storage.Principal, surface string, outcome WindowBindOutcome) {
 	args := append([]any{
-		"org_id", SanitizeLogAttr(principal.OrgID), "reason", SanitizeLogAttr(string(outcome.Reason)),
+		"org_id", SanitizeLogAttr(principal.OrgID), "surface", SanitizeLogAttr(surface), "reason", SanitizeLogAttr(string(outcome.Reason)),
 		"relative_id", SanitizeLogAttr(string(outcome.RelativeID)), "grammar", SanitizeLogAttr(outcome.Grammar),
 		"spans_bound", outcome.SpansBound,
 	}, requestIDLogAttrs(ctx)...)
@@ -349,9 +349,9 @@ func (t SlogEngineTelemetry) RecordWindowBinderOutcome(ctx context.Context, prin
 
 // RecordWindowGatedForConfirmation (CHAOS-6557) logs at Info: every field
 // is a closed vocabulary member, never question text or bounds.
-func (t SlogEngineTelemetry) RecordWindowGatedForConfirmation(ctx context.Context, principal storage.Principal, origin WindowCanonicalizationOutcome, effective contractsv1.ContextFabricEffectiveEvidenceWindow) {
+func (t SlogEngineTelemetry) RecordWindowGatedForConfirmation(ctx context.Context, principal storage.Principal, surface string, origin WindowCanonicalizationOutcome, effective contractsv1.ContextFabricEffectiveEvidenceWindow) {
 	args := append([]any{
-		"org_id", SanitizeLogAttr(principal.OrgID), "origin", SanitizeLogAttr(string(origin)),
+		"org_id", SanitizeLogAttr(principal.OrgID), "surface", SanitizeLogAttr(surface), "origin", SanitizeLogAttr(string(origin)),
 		"relative_id", SanitizeLogAttr(string(effective.RelativeID)), "provenance", SanitizeLogAttr(string(effective.Provenance)),
 		"window_class", SanitizeLogAttr(string(effective.WindowClass)),
 	}, requestIDLogAttrs(ctx)...)

@@ -15,6 +15,7 @@ import (
 // windowGatedRecord is recordingTelemetry's capture of one
 // RecordWindowGatedForConfirmation call.
 type windowGatedRecord struct {
+	Surface    string
 	Origin     WindowCanonicalizationOutcome
 	RelativeID RelativeWindowID
 	Provenance WindowProvenance
@@ -80,49 +81,61 @@ func TestCHAOS6557_BindWindowSpans_NumericOutsideRegistryStaysUnbound(t *testing
 }
 
 // TestCHAOS6557_StatedNumericWindowDrivesInferredDefault replays the exact
-// prod request body (02-q1.json args: question only, MCP surface) through
-// a real Engine: the class-default gate still holds (DP12(b)/CHAOS-4040
-// are unchanged), but the offered effective window is the one the question
-// names (trailing_30d), not the class table's trailing_90d.
+// prod request body (02-q1.json args: question only) through a real Engine:
+// the class-default gate still holds (DP12(b)/CHAOS-4040 are unchanged), but
+// the offered effective window is the one the question names (trailing_30d),
+// not the class table's trailing_90d.
+//
+// Surface-agnostic BY DESIGN (codex r1 on the PR pinned this): the binder
+// runs over the question text before any surface rule, exactly like the
+// pre-existing month/quarter/year entries, so a workbench caller asking
+// "over the last 30 days" is offered 30 days too. Both surfaces are pinned
+// here so that contract is asserted, not incidental; the telemetry lines
+// carry the surface so an operator can tell them apart.
 func TestCHAOS6557_StatedNumericWindowDrivesInferredDefault(t *testing.T) {
 	t.Parallel()
-	interpretation := bootstrapInterpretation()
-	interpretation.Shape = ShapeDiscoveredCohort
-	interpretation.SubjectTerms = nil
-	interpreter := &countingInterpreter{interpretation: interpretation}
-	telemetry := &recordingTelemetry{}
-	engine := buildWindowGateEngineWithTelemetry(t, interpreter, chaos4234GatedGraph(), &staticResultStore{results: map[string]InvestigationResult{}}, telemetry)
+	for _, surface := range []string{"mcp", "workbench"} {
+		t.Run(surface, func(t *testing.T) {
+			t.Parallel()
+			interpretation := bootstrapInterpretation()
+			interpretation.Shape = ShapeDiscoveredCohort
+			interpretation.SubjectTerms = nil
+			interpreter := &countingInterpreter{interpretation: interpretation}
+			telemetry := &recordingTelemetry{}
+			engine := buildWindowGateEngineWithTelemetry(t, interpreter, chaos4234GatedGraph(), &staticResultStore{results: map[string]InvestigationResult{}}, telemetry)
 
-	request := validInvestigationRequest()
-	request.Question = "What is the team investment mix over the last 30 days?"
-	request.Consumer.Surface = "mcp"
+			request := validInvestigationRequest()
+			request.Question = "What is the team investment mix over the last 30 days?"
+			request.Consumer.Surface = surface
 
-	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
-	if err != nil {
-		t.Fatalf("Investigate() error = %v", err)
-	}
-	if result.Status != InvestigationClarificationRequired {
-		t.Fatalf("Status = %q, want clarification_required (the CHAOS-4040 gate is unchanged)", result.Status)
-	}
-	window := result.EffectiveEvidenceWindow
-	if window == nil {
-		t.Fatal("EffectiveEvidenceWindow = nil, want the question's own 30-day window")
-	}
-	if window.RelativeID != RelativeWindowTrailing30D {
-		t.Fatalf("EffectiveEvidenceWindow.RelativeID = %q, want %q -- the question states 30 days", window.RelativeID, RelativeWindowTrailing30D)
-	}
-	if window.Provenance != WindowInferredDefault {
-		t.Fatalf("EffectiveEvidenceWindow.Provenance = %q, want %q (a binder proposal never mints question_stated)", window.Provenance, WindowInferredDefault)
-	}
-	if len(telemetry.windowBinderProposals) != 1 {
-		t.Fatalf("binder telemetry = %#v, want exactly one outcome", telemetry.windowBinderProposals)
-	}
-	if got := telemetry.windowBinderProposals[0]; got.Reason != WindowBindRoutedInferred || got.RelativeID != RelativeWindowTrailing30D || got.Grammar != "trailing_30_days" {
-		t.Fatalf("binder telemetry = %#v, want routed_inferred trailing_30d via trailing_30_days", got)
-	}
-	wantGated := []windowGatedRecord{{Origin: WindowCanonicalizationGatedClassDefault, RelativeID: RelativeWindowTrailing30D, Provenance: WindowInferredDefault}}
-	if len(telemetry.windowGatedForConfirmation) != 1 || telemetry.windowGatedForConfirmation[0] != wantGated[0] {
-		t.Fatalf("gated-window telemetry = %#v, want %#v", telemetry.windowGatedForConfirmation, wantGated)
+			result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+			if err != nil {
+				t.Fatalf("Investigate() error = %v", err)
+			}
+			if result.Status != InvestigationClarificationRequired {
+				t.Fatalf("Status = %q, want clarification_required (the CHAOS-4040 gate is unchanged)", result.Status)
+			}
+			window := result.EffectiveEvidenceWindow
+			if window == nil {
+				t.Fatal("EffectiveEvidenceWindow = nil, want the question's own 30-day window")
+			}
+			if window.RelativeID != RelativeWindowTrailing30D {
+				t.Fatalf("EffectiveEvidenceWindow.RelativeID = %q, want %q -- the question states 30 days", window.RelativeID, RelativeWindowTrailing30D)
+			}
+			if window.Provenance != WindowInferredDefault {
+				t.Fatalf("EffectiveEvidenceWindow.Provenance = %q, want %q (a binder proposal never mints question_stated)", window.Provenance, WindowInferredDefault)
+			}
+			if len(telemetry.windowBinderProposals) != 1 {
+				t.Fatalf("binder telemetry = %#v, want exactly one outcome", telemetry.windowBinderProposals)
+			}
+			if got := telemetry.windowBinderProposals[0]; got.Reason != WindowBindRoutedInferred || got.RelativeID != RelativeWindowTrailing30D || got.Grammar != "trailing_30_days" {
+				t.Fatalf("binder telemetry = %#v, want routed_inferred trailing_30d via trailing_30_days", got)
+			}
+			want := windowGatedRecord{Surface: surface, Origin: WindowCanonicalizationGatedClassDefault, RelativeID: RelativeWindowTrailing30D, Provenance: WindowInferredDefault}
+			if len(telemetry.windowGatedForConfirmation) != 1 || telemetry.windowGatedForConfirmation[0] != want {
+				t.Fatalf("gated-window telemetry = %#v, want %#v", telemetry.windowGatedForConfirmation, want)
+			}
+		})
 	}
 }
 
@@ -133,17 +146,17 @@ func TestCHAOS6557_WindowTelemetryLinesCarryResolvedWindow(t *testing.T) {
 	var buf bytes.Buffer
 	telemetry := NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	principal := storage.Principal{OrgID: "org_6557"}
-	telemetry.RecordWindowBinderOutcome(context.Background(), principal, ProposeWindowFromSpans("Which teams need attention over the last 30 days?"))
-	telemetry.RecordWindowGatedForConfirmation(context.Background(), principal, WindowCanonicalizationGatedExplicitUnconfirmed,
-		contractsv1.ContextFabricEffectiveEvidenceWindow{RelativeID: RelativeWindowTrailing30D, Provenance: WindowInferredDefault})
+	telemetry.RecordWindowBinderOutcome(context.Background(), principal, "mcp", ProposeWindowFromSpans("Which teams need attention over the last 30 days?"))
+	telemetry.RecordWindowGatedForConfirmation(context.Background(), principal, "mcp", WindowCanonicalizationGatedExplicitUnconfirmed,
+		contractsv1.ContextFabricEffectiveEvidenceWindow{RelativeID: RelativeWindowTrailing30D, Provenance: WindowInferredDefault, WindowClass: WindowClassTrendAssessment})
 
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
 	if len(lines) != 2 {
 		t.Fatalf("got %d log lines, want 2: %s", len(lines), buf.String())
 	}
 	want := []map[string]any{
-		{"msg": "context fabric window binder outcome", "reason": "binder_span_routed_inferred", "relative_id": "trailing_30d", "grammar": "trailing_30_days", "spans_bound": float64(1)},
-		{"msg": "context fabric window gated for confirmation", "origin": "gated_explicit_unconfirmed", "relative_id": "trailing_30d", "provenance": "inferred_default"},
+		{"msg": "context fabric window binder outcome", "surface": "mcp", "reason": "binder_span_routed_inferred", "relative_id": "trailing_30d", "grammar": "trailing_30_days", "spans_bound": float64(1)},
+		{"msg": "context fabric window gated for confirmation", "surface": "mcp", "origin": "gated_explicit_unconfirmed", "relative_id": "trailing_30d", "provenance": "inferred_default", "window_class": "trend_assessment"},
 	}
 	for i, line := range lines {
 		var got map[string]any

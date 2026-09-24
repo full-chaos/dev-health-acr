@@ -374,7 +374,7 @@ func (e *Engine) canonicalizeEvidenceWindow(ctx context.Context, principal stora
 	// or another windowless class is resolved).
 	binderProposal := ProposeWindowFromSpans(request.Question)
 	if e.telemetry != nil {
-		e.telemetry.RecordWindowBinderOutcome(ctx, principal, binderProposal)
+		e.telemetry.RecordWindowBinderOutcome(ctx, principal, request.Consumer.Surface, binderProposal)
 	}
 
 	// PriorWindowReceipts is checked BEFORE the axis gate, deliberately: a
@@ -1608,7 +1608,7 @@ func (e *Engine) windowConfirmationRequiredResult(
 	}
 	if e.telemetry != nil {
 		e.telemetry.RecordWindowCanonicalization(ctx, principal, origin)
-		e.telemetry.RecordWindowGatedForConfirmation(ctx, principal, origin, effective)
+		e.telemetry.RecordWindowGatedForConfirmation(ctx, principal, request.Consumer.Surface, origin, effective)
 	}
 	// CHAOS-4118: recordStructureNeedsTelemetry's own nil-means-nothing guard
 	// makes this unconditional call a no-op on the AllowClarification=false

@@ -748,13 +748,13 @@ func (r *recordingTelemetry) RecordBindingEpochDelta(_ context.Context, _ storag
 	r.bindingEpochDeltas = append(r.bindingEpochDeltas, bindingEpochDeltaRecord{flipped, delta})
 }
 
-func (r *recordingTelemetry) RecordWindowBinderOutcome(_ context.Context, _ storage.Principal, outcome WindowBindOutcome) {
+func (r *recordingTelemetry) RecordWindowBinderOutcome(_ context.Context, _ storage.Principal, _ string, outcome WindowBindOutcome) {
 	r.windowBinderOutcomes = append(r.windowBinderOutcomes, outcome.Reason)
 	r.windowBinderProposals = append(r.windowBinderProposals, outcome)
 }
 
-func (r *recordingTelemetry) RecordWindowGatedForConfirmation(_ context.Context, _ storage.Principal, origin WindowCanonicalizationOutcome, effective contractsv1.ContextFabricEffectiveEvidenceWindow) {
-	r.windowGatedForConfirmation = append(r.windowGatedForConfirmation, windowGatedRecord{origin, effective.RelativeID, effective.Provenance})
+func (r *recordingTelemetry) RecordWindowGatedForConfirmation(_ context.Context, _ storage.Principal, surface string, origin WindowCanonicalizationOutcome, effective contractsv1.ContextFabricEffectiveEvidenceWindow) {
+	r.windowGatedForConfirmation = append(r.windowGatedForConfirmation, windowGatedRecord{surface, origin, effective.RelativeID, effective.Provenance})
 }
 
 func (r *recordingTelemetry) RecordWindowCanonicalization(_ context.Context, _ storage.Principal, outcome WindowCanonicalizationOutcome) {

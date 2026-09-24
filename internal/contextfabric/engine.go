@@ -604,14 +604,16 @@ type EngineTelemetry interface {
 	// zero binder-routed rate is as visible as a nonzero one. CHAOS-6557:
 	// takes the whole outcome so the line also names the proposed
 	// RelativeID and the registry grammar entry (both closed values).
-	RecordWindowBinderOutcome(ctx context.Context, principal storage.Principal, outcome WindowBindOutcome)
+	// surface is request.Consumer.Surface: the binder is surface-agnostic by
+	// design, so the line names which surface it served.
+	RecordWindowBinderOutcome(ctx context.Context, principal storage.Principal, surface string, outcome WindowBindOutcome)
 	// RecordWindowGatedForConfirmation (CHAOS-6557) reports the window a
 	// confirmation-required terminal was gated on: origin (closed
 	// WindowCanonicalizationOutcome), RelativeID, Provenance and
 	// WindowClass. Called once per window-gated terminal, so an operator
 	// can read WHICH window a clarification turn offered and why, not only
 	// that one happened.
-	RecordWindowGatedForConfirmation(ctx context.Context, principal storage.Principal, origin WindowCanonicalizationOutcome, effective contractsv1.ContextFabricEffectiveEvidenceWindow)
+	RecordWindowGatedForConfirmation(ctx context.Context, principal storage.Principal, surface string, origin WindowCanonicalizationOutcome, effective contractsv1.ContextFabricEffectiveEvidenceWindow)
 	// RecordWindowCanonicalization (CHAOS-3900 W1) reports design brief
 	// §1.2's own window-canonicalization outcome for one Investigate call
 	// -- see WindowCanonicalizationOutcome's doc comment for the closed
