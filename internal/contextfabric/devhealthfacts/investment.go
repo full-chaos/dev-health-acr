@@ -60,10 +60,11 @@ func newInvestmentProvider(client contextpacket.ClickHouseQueryClient) *Investme
 
 func (p *InvestmentProvider) Capability() contextfabric.FactCapability {
 	capability := newCapability(contextfabric.FactInvestment, "devhealthfacts.investment", []contextfabric.SubjectKind{
-		contextfabric.SubjectTeam, contextfabric.SubjectProject,
+		contextfabric.SubjectTeam, contextfabric.SubjectProject, contextfabric.SubjectRepository,
 	})
 	capability.Tables = map[contextfabric.SubjectKind][]contextfabric.FactTableShape{
-		contextfabric.SubjectProject: {contextfabric.FactTableBreakdown},
+		contextfabric.SubjectRepository: {contextfabric.FactTableBreakdown},
+		contextfabric.SubjectProject:    {contextfabric.FactTableBreakdown},
 	}
 	capability.EstimatedItems = 20
 	return capability
@@ -147,6 +148,14 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 			return contextfabric.FactProviderResult{}, readFailure("query project native theme mix", nativeScanErr)
 		}
 		truncated = truncated || nativeRowCount > maxFactRowsPerQuery
+	}
+
+	if repoSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectRepository); len(repoSubjects) > 0 {
+		rejected, scanErr := p.readRepositoryThemeMix(ctx, orgID, repoSubjects, &facts, timeBound)
+		if scanErr != nil {
+			return contextfabric.FactProviderResult{}, readFailure("query repository theme mix", scanErr)
+		}
+		rejectedCount += rejected
 	}
 
 	state, retentionReason := timeBound.retentionState(len(facts))
@@ -550,7 +559,11 @@ const evidenceVoteAttributedPredicate = "nullIf(t.team_id, '') IS NOT NULL"
 // themeInvestmentRangePredicate mirrors dev-health-go's
 // readers.TimeBound.rangePredicate (investment_theme.go, unexported there):
 // a work_unit_investments row is included whenever any part of its own
-// [from_ts, to_ts) validity window overlaps the requested [start, end) --
+// [from_ts, to_ts] evidence window overlaps the requested [start, end) --
+// to_ts is the INCLUSIVE last-evidence instant, so a unit whose to_ts equals
+// the window start is inside it (ops api/queries/investment.py:518,555,593
+// use the same `to_ts >= start_ts`; ops is the authority for investment
+// semantics) --
 // an overlap test against a row's own two-sided range, unlike
 // factTimeBound's dayPredicate/timestampPredicate (a single row-level
 // column compared to one instant or a half-open range). An inactive bound

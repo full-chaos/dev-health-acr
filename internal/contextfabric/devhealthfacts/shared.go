@@ -768,6 +768,9 @@ func factKindObligations(kind contextfabric.FactKind) map[contextfabric.SubjectK
 		return map[contextfabric.SubjectKind][]contextfabric.AnswerObligation{
 			contextfabric.SubjectTeam:    compositionMember(contextfabric.ObligationAllocationBreakdown),
 			contextfabric.SubjectProject: compositionMember(contextfabric.ObligationAllocationBreakdown),
+			// CHAOS-6560: repository is the primitive of investment
+			// attribution (readRepositoryThemeMix).
+			contextfabric.SubjectRepository: {contextfabric.ObligationAllocationBreakdown},
 		}
 	// landscape.go's IC-level throughput scatter is a team/project state
 	// reading and a driver. It is deliberately NOT the producer for
