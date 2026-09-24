@@ -460,7 +460,7 @@ func (h *HTTPHandler) serveMCP(w http.ResponseWriter, r *http.Request) {
 		line.authOutcome = HTTPAuthMalformedBearer
 	}
 	if line.authOutcome != HTTPAuthAdmitted {
-		h.writeAuthRefusal(recorder, line.authOutcome, 0)
+		h.writeAuthRefusal(recorder, r.URL.Path, line.authOutcome, 0)
 		return
 	}
 
@@ -470,7 +470,7 @@ func (h *HTTPHandler) serveMCP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		outcome, retryAfter := classifyResolveFailure(err)
 		line.authOutcome = outcome
-		h.writeAuthRefusal(recorder, outcome, retryAfter)
+		h.writeAuthRefusal(recorder, r.URL.Path, outcome, retryAfter)
 		return
 	}
 
@@ -629,14 +629,14 @@ type refusalBody struct {
 	ErrorDescription string `json:"error_description"`
 }
 
-func (h *HTTPHandler) writeAuthRefusal(w http.ResponseWriter, outcome string, retryAfter time.Duration) {
+func (h *HTTPHandler) writeAuthRefusal(w http.ResponseWriter, path, outcome string, retryAfter time.Duration) {
 	refusal, ok := authRefusal[outcome]
 	if !ok {
 		refusal = authRefusal[HTTPAuthUpstreamUnavailable]
 		outcome = HTTPAuthUpstreamUnavailable
 	}
 	if refusal.challenge != "" {
-		w.Header().Set("WWW-Authenticate", h.challenge(refusal.challenge))
+		w.Header().Set("WWW-Authenticate", h.challenge(refusal.challenge, path))
 	}
 	if retryAfter > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(max(1, int((retryAfter+time.Second-1)/time.Second))))

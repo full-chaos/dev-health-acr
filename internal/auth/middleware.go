@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -303,5 +304,25 @@ func resourceAdmitted(bound string, presented []string) bool {
 	if bound == "" {
 		return true
 	}
-	return len(presented) == 1 && presented[0] == bound
+	return len(presented) == 1 && SameResource(bound, presented[0])
+}
+
+// SameResource reports whether two protected-resource identifiers name the
+// same hosted MCP endpoint: equal, or the same scheme and host with paths in
+// the alias set the endpoint answers on ("/" and "/mcp"; an empty path is "/").
+// A token bound to one alias is therefore accepted on the other (CHAOS-6218).
+func SameResource(a, b string) bool {
+	if a == b {
+		return true
+	}
+	ua, errA := url.Parse(a)
+	ub, errB := url.Parse(b)
+	if errA != nil || errB != nil || ua.Host == "" || ua.Scheme != ub.Scheme || !strings.EqualFold(ua.Host, ub.Host) {
+		return false
+	}
+	if ua.RawQuery != "" || ub.RawQuery != "" || ua.Fragment != "" || ub.Fragment != "" || ua.User != nil || ub.User != nil {
+		return false
+	}
+	aliasPath := func(p string) bool { return p == "" || p == "/" || p == "/mcp" }
+	return aliasPath(ua.Path) && aliasPath(ub.Path)
 }
