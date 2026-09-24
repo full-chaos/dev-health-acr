@@ -1,6 +1,7 @@
 package contextfabric
 
 import (
+	"errors"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -20,10 +21,17 @@ func TestCHAOS6561DisclosureDecisionIsEmittedOncePerServedAnswer(t *testing.T) {
 		}
 	}
 	telemetry := &recordingTelemetry{}
-	chaos6561Investigate(t, 11, claims, maxItems, telemetry)
+	served, _ := chaos6561Investigate(t, 11, claims, maxItems, telemetry)
+	measured, err := contractsv1.MeasureContextFabricResponse(served)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Published at Investigate's exit with the final disposition and the
+	// final budget assertion's measurement of the served document.
 	want := []CohortNarrowingDisclosureEvent{{
 		Family: QuestionFamilyUnclassified, Kind: SubjectProject, Outcome: CohortNarrowingDisclosed,
 		Declared: 11, Served: 5, Steps: 2,
+		Disposition: CohortNarrowingDispositionServed, AssertedItems: measured.Items.Budgeted(), AssertedBytes: measured.Bytes,
 	}}
 	if len(telemetry.cohortNarrowingDisclosures) != 1 || telemetry.cohortNarrowingDisclosures[0] != want[0] {
 		t.Fatalf("disclosure events = %+v, want exactly %+v (once, for the served retry, not the discarded first pass)",
@@ -45,6 +53,40 @@ func TestCHAOS6561DisclosureDecisionIsEmittedOncePerServedAnswer(t *testing.T) {
 	chaos6561Investigate(t, 3, 1, 1000, quiet)
 	if len(quiet.cohortNarrowingDisclosures) != 0 {
 		t.Fatalf("unnarrowed answer emitted disclosure events %+v", quiet.cohortNarrowingDisclosures)
+	}
+}
+
+// TestCHAOS6561RefusedAnswerDisclosureReadsWithheld: an answer the budget
+// refuses after the disclosure was decided must not publish a line that reads
+// as a served success. The event carries disposition `withheld` and the
+// refusal's own measurement (review round 1: the Info event reported
+// `disclosed` while the answer was refused, so the failure was invisible).
+func TestCHAOS6561RefusedAnswerDisclosureReadsWithheld(t *testing.T) {
+	t.Parallel()
+	maxItems := chaos6561HeadroomItems(t, 10)
+	// Claims per member so even the halved cohort overruns the item budget:
+	// 5*(1+c) > maxItems, and the outcome reduction cannot save it.
+	claims := -1
+	for c := 0; c < 50; c++ {
+		if 5*(1+c) > 2*maxItems {
+			claims = c
+			break
+		}
+	}
+	telemetry := &recordingTelemetry{}
+	_, _, err := chaos6561InvestigateWithin(t, 11, claims, maxItems, 0, telemetry)
+	var refusal AnswerBudgetRefusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("fixture defect: want a budget refusal, got %v", err)
+	}
+	if len(telemetry.cohortNarrowingDisclosures) != 1 {
+		t.Fatalf("disclosure events = %+v, want exactly one", telemetry.cohortNarrowingDisclosures)
+	}
+	event := telemetry.cohortNarrowingDisclosures[0]
+	if event.Disposition != CohortNarrowingDispositionWithheld ||
+		event.AssertedItems != refusal.MeasuredItems || event.AssertedBytes != refusal.MeasuredBytes {
+		t.Fatalf("disclosure event = %+v, want disposition withheld with the refusal's %d items / %d bytes",
+			event, refusal.MeasuredItems, refusal.MeasuredBytes)
 	}
 }
 

@@ -168,7 +168,34 @@ type CohortNarrowingDisclosureEvent struct {
 	// Steps is how many recorded plan steps the chain used; zero when it did
 	// not reconcile.
 	Steps int
+	// Disposition is what happened to the document this decision was made
+	// on: served to the caller, or withheld (a budget refusal, a failed
+	// validation, a persistence failure). Set at Investigate's exit, never
+	// at finalize time, so a `disclosed` line for an answer the caller never
+	// received says so instead of reading as a success.
+	Disposition CohortNarrowingDisposition
+	// AssertedItems and AssertedBytes are the final budget measurement of the
+	// document this decision was made on: the served document (which carries
+	// the sentence), or the one a budget refusal measured. Zero when the
+	// answer was withheld for any other reason. Named apart from the
+	// stage-3 Measured* group, which only recordMeasurement may stamp.
+	AssertedItems int
+	AssertedBytes int64
 }
+
+// CohortNarrowingDisposition is the closed vocabulary for the final fate of
+// the document a disclosure decision was made on.
+type CohortNarrowingDisposition string
+
+const (
+	// CohortNarrowingDispositionServed: the document carrying this decision
+	// was returned to the caller.
+	CohortNarrowingDispositionServed CohortNarrowingDisposition = "served"
+	// CohortNarrowingDispositionWithheld: the investigation exited without
+	// returning it (a budget refusal, a validation failure, a persistence
+	// failure).
+	CohortNarrowingDispositionWithheld CohortNarrowingDisposition = "withheld"
+)
 
 // applyCohortNarrowingDisclosure states the cohort narrowing on the answer's
 // limitations, idempotently.

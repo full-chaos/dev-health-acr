@@ -59,6 +59,18 @@ func (g chaos6561PopulationGraph) DiscoverContext(ctx context.Context, principal
 // (the MCP default).
 func chaos6561Investigate(t *testing.T, population, claims, maxItems int, telemetry *recordingTelemetry) (InvestigationResult, int) {
 	t.Helper()
+	result, calls, err := chaos6561InvestigateWithin(t, population, claims, maxItems, 0, telemetry)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	return result, calls
+}
+
+// chaos6561InvestigateWithin is chaos6561Investigate with a serialized-byte
+// ceiling (0 = none) and the engine's error returned rather than fatal, so a
+// caller can assert on a refusal.
+func chaos6561InvestigateWithin(t *testing.T, population, claims, maxItems int, maxBytes int64, telemetry *recordingTelemetry) (InvestigationResult, int, error) {
+	t.Helper()
 	frame, _ := boundaryGroupedFrame(t, SubjectTeam, SubjectProject)
 	// Two independent kinds serve `state`, so the kind-level evaluation is
 	// lossless and the row reaches the POPULATION arm -- the arm that
@@ -76,6 +88,8 @@ func chaos6561Investigate(t *testing.T, population, claims, maxItems int, teleme
 	if telemetry == nil {
 		telemetry = &recordingTelemetry{}
 	}
+	options := budgetStageOptions(maxItems, time.Second)
+	options.MaxSerializedBytes = maxBytes
 	engine, err := NewEngine(EngineDependencies{
 		Interpreter: familyInterpreter{
 			interpreted: InterpretedQuestion{
@@ -141,17 +155,14 @@ func chaos6561Investigate(t *testing.T, population, claims, maxItems int, teleme
 		}),
 		Requirements: deriver,
 		Telemetry:    telemetry,
-	}, budgetStageOptions(maxItems, time.Second))
+	}, options)
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)
 	}
 	request := validInvestigationRequestWithConfirmedWindow()
 	request.Options.MaxCohortMembers = 20
 	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_6561"}, request)
-	if err != nil {
-		t.Fatalf("Investigate() error = %v", err)
-	}
-	return result, calls
+	return result, calls, err
 }
 
 // chaos6561HeadroomItems returns the item budget at which this fixture's plan
