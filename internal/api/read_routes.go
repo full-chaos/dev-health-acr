@@ -121,6 +121,12 @@ func (a *App) expandContextFabricEvidence(w http.ResponseWriter, r *http.Request
 	if finder, ok := results.(contextfabric.CitedEvidenceLookup); ok {
 		lookup = finder
 	}
+	// CHAOS-6563: a result_id query parameter scopes the expansion to the
+	// stored result the caller's answer named; without it the newest
+	// admitted citing result answers (legacy, unscoped).
+	if scoped := strings.TrimSpace(r.URL.Query().Get("result_id")); scoped != "" && lookup != nil {
+		lookup = contextfabric.ResultScopedCitedEvidenceLookup{ResultID: scoped}
+	}
 	var gate contextfabric.StoredResultAuthorizer
 	if authorizer := a.storedResultGate(); authorizer != nil {
 		gate = authorizer

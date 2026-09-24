@@ -430,3 +430,59 @@ func TestEvidenceRouteRefusesARowTheResultByIDRouteRefuses(t *testing.T) {
 		t.Fatalf("certify: %v\n%s", err, logs.String())
 	}
 }
+
+// CHAOS-6563: one acr:v1 ref is cited by many stored results. Without a
+// result scope the newest citing result answers; with result_id the named
+// result answers and no other, and a result that does not cite the ref (or
+// is unknown) is the same not-found as an uncited ref.
+func TestEvidenceRouteScopesExpansionToTheNamedResult(t *testing.T) {
+	ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, "CHAOS")
+	store := memoryinvestigation.NewStore()
+	older := citingStoredResult("result_6563_older", ref)
+	older.GeneratedAt = time.Date(2026, 9, 24, 10, 0, 0, 0, time.UTC)
+	newer := citingStoredResult("result_6563_newer", ref)
+	newer.GeneratedAt = time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	uncited := citingStoredResult("result_6563_uncited")
+	for _, result := range []contractsv1.ContextFabricInvestigationResult{older, newer, uncited} {
+		seedResult3355(t, store, "org_1", result)
+	}
+	app, token := newParityHostedAppWithLogs(t, nil, store, limits.ResourceBudget{MaxItems: 50, MaxTokens: 16_000, MaxBytes: 1 << 20}, &bytes.Buffer{})
+	get := func(query string) *httptest.ResponseRecorder {
+		request := evidenceRequest(t, token, ref)
+		request.URL.RawQuery = query
+		rec := httptest.NewRecorder()
+		app.Handler().ServeHTTP(rec, request)
+		return rec
+	}
+	servedResult := func(rec *httptest.ResponseRecorder) any {
+		var expanded contractsv1.ExpandedEvidence
+		if err := json.Unmarshal(rec.Body.Bytes(), &expanded); err != nil {
+			t.Fatal(err)
+		}
+		return expanded.Structured["result_id"]
+	}
+	cases := []struct {
+		name, query string
+		status      int
+		want        any
+	}{
+		{"unscoped legacy serves newest", "", http.StatusOK, "result_6563_newer"},
+		{"scoped to older serves older", "result_id=result_6563_older", http.StatusOK, "result_6563_older"},
+		{"scoped to newer serves newer", "result_id=result_6563_newer", http.StatusOK, "result_6563_newer"},
+		{"scoped to non-citing result is not found", "result_id=result_6563_uncited", http.StatusNotFound, nil},
+		{"scoped to unknown result is not found", "result_id=result_6563_unknown", http.StatusNotFound, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := get(tc.query)
+			if rec.Code != tc.status {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.status, rec.Body.String())
+			}
+			if tc.status == http.StatusOK {
+				if got := servedResult(rec); got != tc.want {
+					t.Fatalf("served result_id = %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
