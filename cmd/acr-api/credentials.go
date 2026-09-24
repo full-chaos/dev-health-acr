@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 	storagepostgres "github.com/full-chaos/dev-health-acr/internal/storage/postgres"
 )
 
@@ -103,7 +104,17 @@ func runCredentialCLI(ctx context.Context, arguments []string, lookup lookupEnv,
 		}
 		return writeIssuedCredential(stdout, stderr, issued, parsed.json)
 	case "revoke":
-		credential, err := service.Revoke(ctx, parsed.orgID, parsed.credentialID, parsed.actor)
+		actor := strings.TrimSpace(parsed.actor)
+		if actor == "" {
+			actor = "operator"
+		}
+		credential, err := service.RevokeAsOperator(ctx, parsed.orgID, parsed.credentialID, actor, parsed.reason)
+		if errors.Is(err, storage.ErrNotFound) {
+			return fmt.Errorf("revoke credential: credential %q not found in organization %q", parsed.credentialID, parsed.orgID)
+		}
+		if errors.Is(err, storage.ErrConflict) {
+			return fmt.Errorf("revoke credential: credential %q is already revoked", parsed.credentialID)
+		}
 		if err != nil {
 			return fmt.Errorf("revoke credential: %w", err)
 		}
@@ -137,7 +148,7 @@ func validateCredentialCommand(command string, arguments credentialCommandArgume
 			Scopes: splitCSV(arguments.scopes), CreatedBy: arguments.actor, ExpiresAt: expiresAt,
 		})
 	case "revoke":
-		return requireCredentialArguments(arguments, "org-id", "credential-id", "actor")
+		return requireCredentialArguments(arguments, "org-id", "credential-id")
 	default:
 		return fmt.Errorf("unknown credentials command %q; use create, list, rotate, or revoke", command)
 	}

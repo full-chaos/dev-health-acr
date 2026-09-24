@@ -308,3 +308,44 @@ func issuedTokenLine(t *testing.T, output string) string {
 	require.True(t, auth.IsTokenShapeValid(lines[0]))
 	return lines[0]
 }
+
+func TestCredentialCLI_operatorRevokeRecordsAuditAndNamesFailures(t *testing.T) {
+	// Given
+	ctx := context.Background()
+	dsn := newCredentialTestDatabase(t, ctx)
+	environment := []string{"ACR_POSTGRES_DSN=" + dsn}
+	const orgID = "11111111-1111-1111-1111-111111111111"
+	created := runCredentialCLIProcess(t, environment, "credentials", "create",
+		"--org-id", orgID, "--repository-scope", "acme/widgets", "--scope", "context:read",
+		"--name", "lost-token", "--actor", "22222222-2222-2222-2222-222222222222")
+	require.Zero(t, created.exitCode, created.stderr)
+	credentialID := credentialIDFromList(t, environment)
+
+	// When: revoke without --actor, with a reason
+	revoked := runCredentialCLIProcess(t, environment, "credentials", "revoke",
+		"--org-id", orgID, "--credential-id", credentialID, "--reason", "token lost after oauth login")
+
+	// Then: revoked_at set, audit actor is the operator, reason recorded
+	require.Zero(t, revoked.exitCode, revoked.stderr)
+	db, err := runtimepostgres.Open(ctx, runtimepostgres.Config{DSN: dsn})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	var revokedAt sql.NullTime
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT revoked_at FROM acr.client_credentials WHERE credential_id = $1`, credentialID).Scan(&revokedAt))
+	require.True(t, revokedAt.Valid)
+	var actorType, actorID, metadata string
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT actor_type, actor_id, metadata::text FROM acr.audit_events WHERE action = 'credential_revoked' AND resource_id = $1`, credentialID).Scan(&actorType, &actorID, &metadata))
+	require.Equal(t, "operator", actorType)
+	require.Equal(t, "operator", actorID)
+	require.Contains(t, metadata, "token lost after oauth login")
+
+	// When: revoke again, and revoke an unknown id
+	again := runCredentialCLIProcess(t, environment, "credentials", "revoke", "--org-id", orgID, "--credential-id", credentialID)
+	unknown := runCredentialCLIProcess(t, environment, "credentials", "revoke", "--org-id", orgID, "--credential-id", "cred_doesnotexist0000")
+
+	// Then: non-zero exit with a named error each
+	require.NotZero(t, again.exitCode)
+	require.Contains(t, again.stderr, "already revoked")
+	require.NotZero(t, unknown.exitCode)
+	require.Contains(t, unknown.stderr, "not found")
+}

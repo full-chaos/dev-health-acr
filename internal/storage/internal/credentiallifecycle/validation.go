@@ -191,6 +191,13 @@ func normalizeRevocation(input RevocationInput) (RevocationInput, error) {
 	if err != nil {
 		return RevocationInput{}, err
 	}
+	if strings.TrimSpace(input.Reason) != "" {
+		input.Reason, err = normalizeText("reason", input.Reason, 500)
+		if err != nil {
+			return RevocationInput{}, err
+		}
+	}
+	input.ActorType = strings.TrimSpace(input.ActorType)
 	return input, nil
 }
 

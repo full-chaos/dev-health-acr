@@ -153,7 +153,7 @@ func (s *credentialStore) revokeCredential(ctx context.Context, input storage.Cr
 		return contractsv1.ClientCredential{}, storage.ErrConflict
 	}
 	now := s.now().UTC()
-	if err := s.recordAudit(ctx, credentialRevokedEvent(record.Metadata, input.ActorID, now)); err != nil {
+	if err := s.recordAudit(ctx, withRevocationDetails(credentialRevokedEvent(record.Metadata, input.ActorID, now), input)); err != nil {
 		return contractsv1.ClientCredential{}, err
 	}
 	record.Metadata.RevokedAt = ptrTime(now)
@@ -174,4 +174,14 @@ func (s *credentialStore) recordAudit(ctx context.Context, event storage.AuditEv
 		return err
 	}
 	return s.audit.recordLocked(event)
+}
+
+func withRevocationDetails(event storage.AuditEvent, input storage.CredentialRevocationInput) storage.AuditEvent {
+	if input.ActorType != "" {
+		event.ActorType = input.ActorType
+	}
+	if input.Reason != "" {
+		event.Metadata = map[string]any{"reason": input.Reason}
+	}
+	return event
 }

@@ -208,6 +208,24 @@ func (s *Service) Revoke(ctx context.Context, orgID, credentialID, actorID strin
 	return credential, nil
 }
 
+// RevokeAsOperator revokes a credential through the same storage path as
+// Revoke and RevokeSelf, recording the audit actor type "operator" and an
+// optional reason. An unknown id yields storage.ErrNotFound and an
+// already-revoked id yields storage.ErrConflict.
+func (s *Service) RevokeAsOperator(ctx context.Context, orgID, credentialID, actorID, reason string) (contractsv1.ClientCredential, error) {
+	orgID, credentialID, actorID = strings.TrimSpace(orgID), strings.TrimSpace(credentialID), strings.TrimSpace(actorID)
+	if orgID == "" || credentialID == "" || actorID == "" {
+		return contractsv1.ClientCredential{}, fmt.Errorf("%w: org_id, credential_id, and actor are required", ErrInvalidCredential)
+	}
+	credential, err := s.store.RevokeCredential(ctx, storage.CredentialRevocationInput{
+		OrgID: orgID, CredentialID: credentialID, ActorID: actorID, ActorType: "operator", Reason: reason,
+	})
+	if err != nil {
+		return contractsv1.ClientCredential{}, fmt.Errorf("revoke credential: %w", err)
+	}
+	return credential, nil
+}
+
 func (s *Service) issueCreateInput(request CreateCredentialRequest) (string, storage.CredentialCreateInput, error) {
 	token, err := s.generateToken()
 	if err != nil {

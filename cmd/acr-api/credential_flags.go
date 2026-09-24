@@ -15,6 +15,7 @@ type credentialCommandArguments struct {
 	scopes           string
 	name             string
 	actor            string
+	reason           string
 	expiresAt        string
 	overlap          time.Duration
 	json             bool
@@ -68,7 +69,8 @@ func addRotateFlags(flags *flag.FlagSet, arguments *credentialCommandArguments) 
 func addRevokeFlags(flags *flag.FlagSet, arguments *credentialCommandArguments) {
 	flags.StringVar(&arguments.orgID, "org-id", "", "organization ID")
 	flags.StringVar(&arguments.credentialID, "credential-id", "", "credential ID")
-	flags.StringVar(&arguments.actor, "actor", "", "operator actor ID")
+	flags.StringVar(&arguments.actor, "actor", "", "operator actor ID (default \"operator\")")
+	flags.StringVar(&arguments.reason, "reason", "", "optional revocation reason recorded in the audit event")
 	flags.BoolVar(&arguments.json, "json", false, "write safe metadata as JSON")
 }
 
