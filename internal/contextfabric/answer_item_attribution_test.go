@@ -146,6 +146,12 @@ type attributionFixtureSpec struct {
 	// organization, not about any member or group, so attributing it to a
 	// member would make the member bucket describe something no member has.
 	cardinalityClaims int
+	// rowClaims (CHAOS-6558) is how many claimed facts, each about the
+	// stranger repository and each carrying a 30-row table, the document
+	// carries. They charge the GLOBAL bucket (a subject outside the cohort,
+	// the fail-safe direction), and their rows are what the byte-axis lever
+	// cuts -- rows are not items, so the split must not move when it does.
+	rowClaims int
 }
 
 // expect is what the split must be for a document carrying membersMeasured
@@ -161,7 +167,7 @@ func (s attributionFixtureSpec) expect(membersMeasured, candidatesInDocument int
 		// reduction CUT some, the survivors are what the served document
 		// carries -- so this takes the count from the line, not from the
 		// number the resolver proposed.
-		global: s.globalFindings + candidatesInDocument + s.cardinalityClaims,
+		global: s.globalFindings + candidatesInDocument + s.cardinalityClaims + s.rowClaims,
 		// The cohort member ROWS plus the drivers about a member. The rows
 		// are the item class the earlier design of this seam charged and
 		// never accounted for, so they are counted explicitly.
@@ -245,6 +251,15 @@ func attributionEngine(t *testing.T, spec attributionFixtureSpec, sink *bytes.Bu
 		findings = append(findings, finding("f_global_"+strconv.Itoa(index), subjects))
 	}
 
+	claims := []ClaimedFact{}
+	for index := 0; index < spec.rowClaims; index++ {
+		claims = append(claims, ClaimedFact{
+			ClaimID: "claim_rows_" + strconv.Itoa(index), Kind: FactStatus, Subject: stranger,
+			Field: "status", Value: ScalarValue{String: ptrString("green")},
+			Rows: attributionRowTable(index),
+		})
+	}
+
 	graphCohort := cohort
 	engine, err := NewEngine(EngineDependencies{
 		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
@@ -288,7 +303,7 @@ func attributionEngine(t *testing.T, spec attributionFixtureSpec, sink *bytes.Bu
 				Status: InvestigationComplete, DirectJudgment: "Fine.", CurrentState: "Nominal.",
 				StrongestPressures: []string{}, Drivers: drivers, RemainingWork: findings,
 				ReadinessGaps: []Finding{}, Paths: []RelationshipPath{}, Conflicts: []Finding{},
-				Limitations: []string{}, EvidenceRefIDs: []string{attributionEvidenceRef}, ClaimedFacts: []ClaimedFact{},
+				Limitations: []string{}, EvidenceRefIDs: []string{attributionEvidenceRef}, ClaimedFacts: copySlicePreservingEmpty(claims),
 				Coverage:            Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 				DeterministicAnswer: "Fine, based on available context.", Warnings: []string{},
 				Versions: VersionSet{
@@ -643,6 +658,62 @@ func assembledResultArmCases() []assembledResultArmCase {
 			},
 		},
 		{
+			// CHAOS-6558: the byte-axis lever served the FIRST document. The
+			// event measures that document (bytes over, items inside) and the
+			// split must describe it: rows are not items, so cutting them
+			// moves no bucket.
+			name:          "row lever served the assembled result",
+			discriminator: "overrun=bytes",
+			spec:          attributionFixtureSpec{members: 3, globalFindings: 5, groupDrivers: 3, multiGroupDrivers: 2, memberDrivers: 1, rowClaims: 2},
+			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec, cohortSizes *[]int) (InvestigationResult, bool) {
+				options := budgetStageOptions(30, 0)
+				options.MaxSerializedBytes = attributionUnboundedBytes(t, spec) - attributionRowBytes(t, spec)/2
+				engine, _ := attributionEngine(t, spec, sink, options, cohortSizes)
+				result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+				if err != nil {
+					t.Fatalf("Investigate() error = %v, want the row lever to serve", err)
+				}
+				if len(*cohortSizes) != 1 || !strings.Contains(sink.String(), "context fabric fact row truncation") || !strings.Contains(sink.String(), "served=true") {
+					t.Fatalf("want one synthesis and a served row-truncation line; cohorts=%v\nemitted:\n%s", *cohortSizes, sink.String())
+				}
+				return result, true
+			},
+		},
+		{
+			// CHAOS-6558: the retry ran (the first document's overrun was not
+			// the rows'), and the byte-axis lever served the RETRIED document.
+			// The event measures the retried document.
+			name:          "row lever served the re-synthesized result",
+			discriminator: "retry_attempted=true retry_fit=false retry_failed=false refusal_planned=false",
+			spec:          attributionFixtureSpec{members: 4, globalFindings: 7, groupDrivers: 4, multiGroupDrivers: 2, memberDrivers: 1, rowClaims: 2},
+			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec, cohortSizes *[]int) (InvestigationResult, bool) {
+				options := budgetStageOptions(30, time.Second)
+				options.MaxSerializedBytes = attributionUnboundedBytes(t, spec) - attributionRowBytes(t, spec)/2
+				engine, _ := attributionEngine(t, spec, sink, options, cohortSizes)
+				// The FIRST document alone carries ~15 KB of warnings: an
+				// overrun the rows cannot account for, so the lever is
+				// insufficient there and the retry is the right next step.
+				original := engine.synthesizer
+				calls := 0
+				engine.synthesizer = synthesizerFunc(func(ctx context.Context, principal storage.Principal, input SynthesisInput) (InvestigationResult, error) {
+					calls++
+					result, err := original.Synthesize(ctx, principal, input)
+					if calls == 1 {
+						result.Warnings = repeatAttributionWarnings(10, 1500)
+					}
+					return result, err
+				})
+				result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+				if err != nil {
+					t.Fatalf("Investigate() error = %v, want the row lever to serve the retried document", err)
+				}
+				if calls != 2 || len(*cohortSizes) != 2 || (*cohortSizes)[1] >= (*cohortSizes)[0] {
+					t.Fatalf("synthesis calls=%d cohorts=%v, want one retry over a smaller cohort", calls, *cohortSizes)
+				}
+				return result, true
+			},
+		},
+		{
 			name: "outcome layer served a candidate narrowing",
 			// The arm a review proved I had wrongly declared unreachable.
 			// One member means the cohort cannot be narrowed, so stage three
@@ -663,6 +734,51 @@ func assembledResultArmCases() []assembledResultArmCase {
 			},
 		},
 	}
+}
+
+// attributionRowTable is a 30-row table of ~100-byte rows (CHAOS-6558).
+func attributionRowTable(claim int) []contractsv1.ContextFabricClaimedFactRow {
+	rows := make([]contractsv1.ContextFabricClaimedFactRow, 0, 30)
+	for day := 0; day < 30; day++ {
+		label := "day_" + strconv.Itoa(claim) + "_" + strconv.Itoa(day) + "_" + strings.Repeat("x", 60)
+		count := int64(day)
+		rows = append(rows, contractsv1.ContextFabricClaimedFactRow{Fields: map[string]contractsv1.ContextFabricScalarValue{
+			"label": {String: &label}, "count": {Integer: &count},
+		}})
+	}
+	return rows
+}
+
+// attributionRowBytes is what the fixture's row tables weigh, marshaled.
+func attributionRowBytes(t *testing.T, spec attributionFixtureSpec) int64 {
+	t.Helper()
+	claims := []ClaimedFact{}
+	for index := 0; index < spec.rowClaims; index++ {
+		claims = append(claims, ClaimedFact{Rows: attributionRowTable(index)})
+	}
+	total, err := claimedFactRowBytes(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return total
+}
+
+// attributionUnboundedBytes serves spec with no byte ceiling and returns the
+// served document's size: the probe a byte-lever arm sizes its ceiling from,
+// so the ceiling is derived from the fixture rather than hand-tuned.
+func attributionUnboundedBytes(t *testing.T, spec attributionFixtureSpec) int64 {
+	t.Helper()
+	var sink bytes.Buffer
+	engine, _ := attributionEngine(t, spec, &sink, budgetStageOptions(30, 0), nil)
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+	if err != nil {
+		t.Fatalf("probe Investigate() error = %v", err)
+	}
+	measured, err := contractsv1.MeasureContextFabricResponse(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return measured.Bytes
 }
 
 var beforeAfterPattern = regexp.MustCompile(`before=(-?\d+) after=(-?\d+)`)
@@ -884,4 +1000,12 @@ func TestEveryAssembledResultArmEmitsASplitThatDescribesIt(t *testing.T) {
 			}
 		})
 	}
+}
+
+func repeatAttributionWarnings(count, length int) []string {
+	warnings := make([]string, 0, count)
+	for index := 0; index < count; index++ {
+		warnings = append(warnings, "Fixture warning "+strconv.Itoa(index)+": "+strings.Repeat("w", length))
+	}
+	return warnings
 }

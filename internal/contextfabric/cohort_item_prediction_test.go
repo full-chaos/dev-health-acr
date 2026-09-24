@@ -271,7 +271,7 @@ func TestPlanRefusalPredictsForTheCohortItMeasured(t *testing.T) {
 		},
 		false, true, contractsv1.ContextFabricNarrowingBasisOverlapAwareSetCover,
 		synthesizedMembers, declinedRetryTarget, RetryDeclinedInsufficientDeadline,
-		OutcomeReductionNotItemsAxis,
+		OutcomeReductionNotItemsAxis, narrowerContinuationAxisFor(*plan),
 	)
 	if err == nil {
 		t.Fatal("planRefusal returned no error; a refusal must terminate the answer")

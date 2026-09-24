@@ -272,6 +272,13 @@ const (
 	// or every group was down to its last member and narrowing further
 	// would drop a group, which decision D2 forbids.
 	RetryDeclinedNothingToNarrow RetryDeclinedReason = "nothing_to_narrow"
+	// RetryDeclinedCannotReduceAxis (CHAOS-6558): the overrun was on BYTES,
+	// the claimed-fact rows alone accounted for it, the row lever could not
+	// fit the answer even at one row per table, and the narrowed input kept
+	// every fact -- so the retry would re-synthesize over the same evidence
+	// and could not shrink the rows that overran. Refused without a second
+	// synthesis.
+	RetryDeclinedCannotReduceAxis RetryDeclinedReason = "cannot_reduce_axis"
 )
 
 // PlanNarrowingEventFrom builds the event.
@@ -430,6 +437,12 @@ type PlanTelemetry interface {
 	// and, for a grouped answer, how much was dropped because the group it
 	// spoke for is no longer in the answer.
 	RecordFactRetention(ctx context.Context, principal storage.Principal, event FactRetentionEvent)
+	// RecordFactRowTruncation (CHAOS-6558) reports ONE application of the
+	// byte-axis lever: axis, bytes before/after, rows before/after, the
+	// per-table cap, and whether it served or why not. REQUIRED, like the
+	// other decision lines: a lever that cuts evidence without a line is a
+	// silent cut.
+	RecordFactRowTruncation(ctx context.Context, principal storage.Principal, event FactRowTruncationEvent)
 
 	// RecordMembershipCardinality reports the `membership_cardinality`
 	// server step's own result for one served answer: what was counted, how

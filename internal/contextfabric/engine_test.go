@@ -474,6 +474,7 @@ type recordingTelemetry struct {
 	// factRetentions records every retention pass, so a test can say what
 	// narrowing dropped rather than inferring it from what survived.
 	factRetentions             []FactRetentionEvent
+	factRowTruncations         []FactRowTruncationEvent
 	membershipCardinalities    []MembershipCardinalityEvent
 	cohortNarrowingDisclosures []CohortNarrowingDisclosureEvent
 	countPopulationScopes      []CountPopulationScopeEvent
@@ -880,6 +881,10 @@ func (r *recordingTelemetry) RecordPlanGroupAxisCollapsed(_ context.Context, _ s
 
 func (r *recordingTelemetry) RecordFactRetention(_ context.Context, _ storage.Principal, event FactRetentionEvent) {
 	r.factRetentions = append(r.factRetentions, event)
+}
+
+func (r *recordingTelemetry) RecordFactRowTruncation(_ context.Context, _ storage.Principal, event FactRowTruncationEvent) {
+	r.factRowTruncations = append(r.factRowTruncations, event)
 }
 
 // RecordMembershipCardinality records the whole event, same list-not-count

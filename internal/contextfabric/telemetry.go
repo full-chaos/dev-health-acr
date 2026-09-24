@@ -2532,6 +2532,37 @@ func (t SlogEngineTelemetry) RecordCohortMemberAllowance(ctx context.Context, pr
 	t.logger.InfoContext(ctx, "context fabric cohort member allowance", args...)
 }
 
+// RecordFactRowTruncation emits one byte-axis lever application (CHAOS-6558),
+// at Info. Counts and closed values only. `bytes_after` is the served
+// document's size when `served=true`, and the smallest document the lever
+// could make (one row per table) when it declined as `insufficient`.
+func (t SlogEngineTelemetry) RecordFactRowTruncation(ctx context.Context, principal storage.Principal, event FactRowTruncationEvent) {
+	if t.logger == nil {
+		return
+	}
+	args := []any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"family", string(event.Family),
+		"stage", string(event.Stage),
+		"pass", event.Pass,
+		"axis", string(event.Overrun),
+		"max_serialized_bytes", SanitizeLogInt(event.MaxSerializedBytes),
+		"bytes_before", event.BytesBefore,
+		"bytes_after", event.BytesAfter,
+		"row_bytes", event.RowBytes,
+		"rows_dominate", event.RowsDominate,
+		"rows_before", event.RowsBefore,
+		"rows_after", event.RowsAfter,
+		"rows_dropped", event.RowsBefore - event.RowsAfter,
+		"per_table_cap", event.PerTable,
+		"tables_truncated", event.TablesTruncated,
+		"served", event.Served,
+		"declined", string(event.Declined),
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric fact row truncation", args...)
+}
+
 // RecordFactRetention emits one retention decision, at Info.
 //
 // The anchor fields name the committed resolution subjects the pass admitted
