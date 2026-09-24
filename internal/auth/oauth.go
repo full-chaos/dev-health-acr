@@ -488,13 +488,7 @@ func (s *OAuthService) resolveResource(requested string) (string, bool) {
 		}
 		return "", false
 	}
-	if slices.Contains(s.resources, requested) {
-		return requested, true
-	}
-	// An alias of a configured resource (same endpoint at "/" and "/mcp") is
-	// issued for exactly as requested, so the token exchange's resource
-	// comparison and the audience check both see the client's own value.
-	if storage.ValidOAuthResource(requested) && slices.ContainsFunc(s.resources, func(r string) bool { return SameResource(r, requested) }) {
+	if storage.ValidOAuthResource(requested) && slices.ContainsFunc(s.resources, func(r string) bool { return SameResource(r, requested) }) { // aliases: see SameResource
 		return requested, true
 	}
 	return "", false
