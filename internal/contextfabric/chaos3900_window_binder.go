@@ -249,6 +249,11 @@ type WindowBindOutcome struct {
 	// names the previous CALENDAR period, whose bounds the interpreter -- not
 	// this closed grammar -- supplies; it stays a proposal.
 	Trailing bool
+	// PointInTime (CHAOS-6560) is set when the span is the object of an
+	// explicit point-in-time construction ("as of the end of last month"): the
+	// caller asked about a state at an instant, not a period of activity, so
+	// the span is never an evidence window.
+	PointInTime bool
 }
 
 // ProposeWindowFromSpans runs the whole W0 binder pipeline over question
@@ -270,7 +275,7 @@ func ProposeWindowFromSpans(question string) WindowBindOutcome {
 	if !hasWindowRole(question, span) {
 		return WindowBindOutcome{Reason: WindowBindSpanUnbound, SpansBound: 1}
 	}
-	return WindowBindOutcome{Reason: WindowBindRoutedInferred, RelativeID: span.RelativeID, Grammar: span.Grammar, SpansBound: 1, Trailing: spanStatesTrailingWindow(question, span)}
+	return WindowBindOutcome{Reason: WindowBindRoutedInferred, RelativeID: span.RelativeID, Grammar: span.Grammar, SpansBound: 1, Trailing: spanStatesTrailingWindow(question, span), PointInTime: spanIsPointInTime(question, span)}
 }
 
 // strippedPrecedingPreposition reports whether lowerBefore (lowercased text
@@ -313,4 +318,33 @@ func spanStatesTrailingWindow(question string, span BoundWindowSpan) bool {
 		}
 	}
 	return hadArticle && strippedPrecedingPreposition(stripped)
+}
+
+// windowPointInTimeLeads are the closed word groups that, immediately before a
+// span (articles aside), make it the object of an explicit point in time.
+var windowPointInTimeLeads = []string{"as of", "as at", "end of", "start of", "beginning of", "close of"}
+
+// spanIsPointInTime reports whether the words just before span form a closed
+// point-in-time construction ("as of the end of last month").
+func spanIsPointInTime(question string, span BoundWindowSpan) bool {
+	lowerBefore := strings.ToLower(strings.TrimRightFunc(question[:span.SpanStart], unicode.IsSpace))
+	for {
+		stripped := lowerBefore
+		for _, article := range windowRoleArticles {
+			if s, ok := trimSuffixWord(stripped, article); ok {
+				stripped = s
+				break
+			}
+		}
+		if stripped == lowerBefore {
+			break
+		}
+		lowerBefore = stripped
+	}
+	for _, lead := range windowPointInTimeLeads {
+		if _, ok := trimSuffixWord(lowerBefore, lead); ok {
+			return true
+		}
+	}
+	return false
 }

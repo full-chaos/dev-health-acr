@@ -349,6 +349,14 @@ const (
 	// arm above. This is the arm CHAOS-4998 adds, and its count is the
 	// measurement of what widening the bypass actually costs.
 	AnswerReuseBypassPriorResultReference AnswerReuseBypassReason = "prior_result_reference"
+	// AnswerReuseBypassStatedPeriod (CHAOS-6560): an MCP turn whose question
+	// names a period and that supplied no evidence_window. The period is
+	// committed only AFTER interpretation, so the pre-interpretation lookup has
+	// no window key and could serve a stored answer that never applied it (a
+	// row saved before period handling existed, keyed as plain "current").
+	// Such a turn is always freshly windowed; the count measures what that
+	// costs.
+	AnswerReuseBypassStatedPeriod AnswerReuseBypassReason = "stated_period"
 )
 
 // reuseBypassReason decides whether this request may consult the reuse
@@ -396,6 +404,18 @@ func reuseBypassReason(request InvestigationRequest, structureCanon requestStruc
 	}
 	if len(carryReferencedResultIDs(request, nil)) > 0 || carryParentSeed(request) != "" {
 		return AnswerReuseBypassPriorResultReference
+	}
+	return ""
+}
+
+// statedPeriodReuseBypass reports whether an MCP turn must skip answer reuse
+// because its period is only committed after interpretation (see
+// AnswerReuseBypassStatedPeriod): current-axis request, no window supplied or
+// confirmed, and the binder saw exactly one period span in the question.
+func statedPeriodReuseBypass(request InvestigationRequest, canon requestWindowCanonicalization) AnswerReuseBypassReason {
+	if strings.TrimSpace(request.Consumer.Surface) == mcpSurface && request.TimeContext.Axis == TemporalCurrent &&
+		canon.Effective == nil && canon.Veto == windowVetoNone && canon.BinderProposal.SpansBound == 1 {
+		return AnswerReuseBypassStatedPeriod
 	}
 	return ""
 }

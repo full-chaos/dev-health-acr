@@ -887,7 +887,7 @@ func statedWindowOrigin(canon requestWindowCanonicalization, interpretation Inte
 // instant, a range with no usable bounds, another surface).
 func interpreterPeriodWindow(canon requestWindowCanonicalization, requestAxis TemporalAxis, fresh TimeContext, freshAnswerable bool, surface string) *contractsv1.ContextFabricEffectiveEvidenceWindow {
 	binder := canon.BinderProposal
-	namesAPeriod := binder.SpansBound == 1 && (binder.Reason == WindowBindSpanUnbound || (binder.Reason == WindowBindRoutedInferred && !binder.Trailing))
+	namesAPeriod := binder.SpansBound == 1 && !binder.PointInTime && (binder.Reason == WindowBindSpanUnbound || (binder.Reason == WindowBindRoutedInferred && !binder.Trailing))
 	if strings.TrimSpace(surface) != mcpSurface || !namesAPeriod || canon.Effective != nil || canon.Veto != windowVetoNone ||
 		requestAxis != TemporalCurrent || !freshAnswerable || fresh.Axis != TemporalRange ||
 		fresh.Start == nil || fresh.End == nil || !fresh.Start.Before(*fresh.End) {

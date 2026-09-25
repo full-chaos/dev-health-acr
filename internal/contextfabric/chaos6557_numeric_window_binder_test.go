@@ -211,3 +211,27 @@ func TestCHAOS6557_BinderSeparatesTrailingFromCalendarPhrases(t *testing.T) {
 		}
 	}
 }
+
+// The binder flags the object of an explicit point-in-time construction, and
+// only that.
+func TestCHAOS6557_BinderFlagsPointInTimeConstructions(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		question    string
+		pointInTime bool
+	}{
+		{"What was the team's state as of the end of last month?", true},
+		{"What was the team's state as of last month?", true},
+		{"What was the team's state as at the start of last quarter?", true},
+		{"What was the team's state at the beginning of last year?", true},
+		{"Which repository carried the most work last month?", false},
+		{"What changed in the last month?", false},
+		{"What changed over the end-of-life plan for last month?", false},
+	}
+	for _, tc := range cases {
+		got := ProposeWindowFromSpans(tc.question)
+		if got.SpansBound != 1 || got.PointInTime != tc.pointInTime {
+			t.Fatalf("ProposeWindowFromSpans(%q) = %#v, want one span with PointInTime=%v", tc.question, got, tc.pointInTime)
+		}
+	}
+}

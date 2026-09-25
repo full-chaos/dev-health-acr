@@ -584,3 +584,108 @@ func TestCHAOS6557_StatedWindowAxisLineCarriesItsOwnOutcomeVocabulary(t *testing
 		}
 	}
 }
+
+// prod q2's pre-interpretation reuse lookup carries no window key, because the
+// period is committed only after interpretation. A stored answer that never
+// applied the period (a pre-fix row saved as plain "current") must therefore
+// never be served to an MCP turn whose question names one: it is bypassed with
+// a loud reason and the turn is freshly windowed. An MCP question naming no
+// period, and any other surface, still reuse exactly as before.
+func runReuseGateCase(t *testing.T, surface, question string, field *contractsv1.ContextFabricRequestedEvidenceWindow) (result InvestigationResult, gateCalls int, bypasses []AnswerReuseBypassReason, interpreted bool) {
+	t.Helper()
+	_, store, _ := windowReceiptCarryFixture()
+	_, candidate := reusableCandidate()
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	freshResult := validInvestigationResult()
+	telemetry := &recordingTelemetry{}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return freshResult, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			interpreted = true
+			interpretation := InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}
+			return interpretation, nil
+		}),
+		Results: store,
+		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+			gateCalls++
+			return candidate, true, nil
+		}),
+		Telemetry: telemetry,
+	})
+	request := validInvestigationRequest()
+	request.Question = question
+	request.Consumer.Surface = surface
+	request.TimeContext.EvidenceWindow = field
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	return result, gateCalls, telemetry.answerReuseBypasses, interpreted
+}
+
+func TestCHAOS6557_MCPPeriodQuestionBypassesAnswerReuse(t *testing.T) {
+	t.Parallel()
+	for _, question := range []string{
+		"Which repository carried the most operational/support work last month and why?",
+		"What is the team investment mix over the last 30 days?",
+		"Which repository carried the most operational/support work last month?",
+	} {
+		result, gateCalls, bypasses, interpreted := runReuseGateCase(t, "mcp", question, nil)
+		if gateCalls != 0 || result.Reused || !interpreted {
+			t.Fatalf("%q: gate calls=%d reused=%v interpreted=%v, want a bypass and a fresh turn", question, gateCalls, result.Reused, interpreted)
+		}
+		if !reflect.DeepEqual(bypasses, []AnswerReuseBypassReason{AnswerReuseBypassStatedPeriod}) {
+			t.Fatalf("%q: bypass reasons = %v, want [stated_period]", question, bypasses)
+		}
+	}
+}
+
+func TestCHAOS6557_ReuseIsUntouchedWithoutAStatedPeriodOnMCPOrOffMCP(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name, surface, question string
+		field                   *contractsv1.ContextFabricRequestedEvidenceWindow
+	}{
+		{"mcp no period", "mcp", validInvestigationRequest().Question, nil},
+		{"workbench period", "workbench", "Which repository carried the most operational/support work last month and why?", nil},
+		{"mcp field window keeps its own key", "mcp", "Which teams need attention over the last 30 days?", &contractsv1.ContextFabricRequestedEvidenceWindow{RelativeID: RelativeWindowTrailing30D}},
+	}
+	for _, tc := range cases {
+		result, gateCalls, bypasses, _ := runReuseGateCase(t, tc.surface, tc.question, tc.field)
+		if gateCalls == 0 {
+			t.Fatalf("%s: the reuse gate was never consulted, bypasses=%v", tc.name, bypasses)
+		}
+		for _, reason := range bypasses {
+			if reason == AnswerReuseBypassStatedPeriod {
+				t.Fatalf("%s: bypassed answer reuse for stated_period, want the lookup untouched", tc.name)
+			}
+		}
+		_ = result
+	}
+}
+
+// chris 2026-09-25: an explicit as-of ("as of the end of last month") is a
+// state at an instant, never an evidence window -- even when the interpreter
+// samples it as a range. Nothing is committed, the interpreter's axis is kept.
+func TestCHAOS6557_ExplicitAsOfRangeIsNeverCommittedAsAWindowOnMCP(t *testing.T) {
+	t.Parallel()
+	for _, question := range []string{
+		"What was the team's state as of the end of last month?",
+		"What was the team's state as of last month?",
+		"What was the team's state at the start of last quarter?",
+	} {
+		run := runExplicitWindowCaseWith(t, "mcp", question, nil, driftedInterpretation(contractsv1.ContextFabricTemporalRange))
+		if run.result.EffectiveEvidenceWindow != nil {
+			t.Fatalf("%q: EffectiveEvidenceWindow = %#v, want nil for an explicit as-of", question, run.result.EffectiveEvidenceWindow)
+		}
+		if len(run.resolvedAxes) == 0 || run.resolvedAxes[0] != contractsv1.ContextFabricTemporalRange {
+			t.Fatalf("%q: resolved axes = %v, want the interpreter's range axis untouched", question, run.resolvedAxes)
+		}
+	}
+}

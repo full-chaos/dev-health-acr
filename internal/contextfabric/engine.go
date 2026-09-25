@@ -1782,7 +1782,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// whole rule in one place, keyed on the carries' own seed population so
 	// the two cannot drift again, and NAMES the arm that fired so the
 	// bypass stops being a silent branch.
-	if bypass := reuseBypassReason(request, structureCanon); bypass != "" {
+	bypass := reuseBypassReason(request, structureCanon)
+	if bypass == "" {
+		bypass = statedPeriodReuseBypass(request, windowCanon)
+	}
+	if bypass != "" {
 		e.recordReuseBypass(ctx, principal, bypass)
 	} else {
 		reused, ok, workItemTuple, reusedReading, reuseErr := e.tryReuseWithReading(ctx, principal, request, clampedRequestTime, windowCanon.KeyComponent, windowCanon.KeyEncoding, binding)
