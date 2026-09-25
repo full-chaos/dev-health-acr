@@ -152,6 +152,10 @@ type attributionFixtureSpec struct {
 	// the fail-safe direction), and their rows are what the byte-axis lever
 	// cuts -- rows are not items, so the split must not move when it does.
 	rowClaims int
+	// memberClaims (CHAOS-6743) is how many claimed facts synthesis writes
+	// about EACH cohort member it is handed. They charge the MEMBER bucket,
+	// and they are what the item-axis claim-depth lever cuts.
+	memberClaims int
 }
 
 // expect is what the split must be for a document carrying membersMeasured
@@ -171,7 +175,7 @@ func (s attributionFixtureSpec) expect(membersMeasured, candidatesInDocument int
 		// The cohort member ROWS plus the drivers about a member. The rows
 		// are the item class the earlier design of this seam charged and
 		// never accounted for, so they are counted explicitly.
-		member:     membersMeasured + s.memberDrivers,
+		member:     membersMeasured + membersMeasured*s.memberClaims + s.memberDrivers,
 		group:      s.groupDrivers,
 		multiGroup: s.multiGroupDrivers,
 	}
@@ -299,11 +303,22 @@ func attributionEngine(t *testing.T, spec attributionFixtureSpec, sink *bytes.Bu
 				members = len(input.Graph.Cohort.Members)
 			}
 			*synthesisCohortSizes = append(*synthesisCohortSizes, members)
+			served := copySlicePreservingEmpty(claims)
+			if input.Graph.Cohort != nil {
+				for _, member := range input.Graph.Cohort.Members {
+					for index := 0; index < spec.memberClaims; index++ {
+						served = append(served, ClaimedFact{
+							ClaimID: "claim_" + member.Subject.CanonicalID + "_" + strconv.Itoa(index), Kind: FactStatus,
+							Subject: member.Subject, Field: "status", Value: ScalarValue{String: ptrString("green")},
+						})
+					}
+				}
+			}
 			return InvestigationResult{
 				Status: InvestigationComplete, DirectJudgment: "Fine.", CurrentState: "Nominal.",
 				StrongestPressures: []string{}, Drivers: drivers, RemainingWork: findings,
 				ReadinessGaps: []Finding{}, Paths: []RelationshipPath{}, Conflicts: []Finding{},
-				Limitations: []string{}, EvidenceRefIDs: []string{attributionEvidenceRef}, ClaimedFacts: copySlicePreservingEmpty(claims),
+				Limitations: []string{}, EvidenceRefIDs: []string{attributionEvidenceRef}, ClaimedFacts: served,
 				Coverage:            Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 				DeterministicAnswer: "Fine, based on available context.", Warnings: []string{},
 				Versions: VersionSet{
@@ -709,6 +724,44 @@ func assembledResultArmCases() []assembledResultArmCase {
 				}
 				if calls != 2 || len(*cohortSizes) != 2 || (*cohortSizes)[1] >= (*cohortSizes)[0] {
 					t.Fatalf("synthesis calls=%d cohorts=%v, want one retry over a smaller cohort", calls, *cohortSizes)
+				}
+				return result, true
+			},
+		},
+		{
+			// CHAOS-6743: the claim-depth lever served the FIRST document.
+			// The event measures that document (items over, before the cut),
+			// and its member bucket carries every per-member claim.
+			name:          "claim-depth lever served the assembled result",
+			discriminator: "overrun=items measured_items=20 ",
+			spec:          attributionFixtureSpec{members: 3, globalFindings: 5, groupDrivers: 3, multiGroupDrivers: 2, memberDrivers: 1, memberClaims: 2},
+			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec, cohortSizes *[]int) (InvestigationResult, bool) {
+				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(18, 0), cohortSizes)
+				result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+				if err != nil {
+					t.Fatalf("Investigate() error = %v, want the claim-depth lever to serve", err)
+				}
+				if len(*cohortSizes) != 1 || !strings.Contains(sink.String(), "context fabric claim depth narrowing") || !strings.Contains(sink.String(), "served=true") {
+					t.Fatalf("want one synthesis and a served claim-depth line; cohorts=%v\nemitted:\n%s", *cohortSizes, sink.String())
+				}
+				return result, true
+			},
+		},
+		{
+			// CHAOS-6743: one claim per member did not fit the first document,
+			// so the retry ran; the claim-depth lever served the RETRIED
+			// document. The event measures the retried document.
+			name:          "claim-depth lever served the re-synthesized result",
+			discriminator: "overrun=items measured_items=22 ",
+			spec:          attributionFixtureSpec{members: 4, globalFindings: 7, groupDrivers: 4, multiGroupDrivers: 2, memberDrivers: 1, memberClaims: 3},
+			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec, cohortSizes *[]int) (InvestigationResult, bool) {
+				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(20, time.Second), cohortSizes)
+				result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+				if err != nil {
+					t.Fatalf("Investigate() error = %v, want the claim-depth lever to serve the retried document", err)
+				}
+				if len(*cohortSizes) != 2 || (*cohortSizes)[1] >= (*cohortSizes)[0] || strings.Count(sink.String(), "context fabric claim depth narrowing") != 2 {
+					t.Fatalf("want one retry over a smaller cohort and two claim-depth lines; cohorts=%v\nemitted:\n%s", *cohortSizes, sink.String())
 				}
 				return result, true
 			},

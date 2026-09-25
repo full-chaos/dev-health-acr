@@ -2579,6 +2579,36 @@ func (t SlogEngineTelemetry) RecordFactRowTruncation(ctx context.Context, princi
 	t.logger.InfoContext(ctx, "context fabric fact row truncation", args...)
 }
 
+// RecordClaimDepthNarrowing emits one item-axis claim-depth lever
+// application (CHAOS-6743), at Info. Counts and closed values only.
+// `items_after` is the served document's count when `served=true`, and the
+// one-claim-per-member document's when it declined as `insufficient`.
+func (t SlogEngineTelemetry) RecordClaimDepthNarrowing(ctx context.Context, principal storage.Principal, event ClaimDepthNarrowingEvent) {
+	if t.logger == nil {
+		return
+	}
+	args := []any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"family", string(event.Family),
+		"stage", string(event.Stage),
+		"pass", event.Pass,
+		"axis", string(event.Overrun),
+		"max_items", requestDerivedLogInt(event.MaxItems),
+		"items_before", event.ItemsBefore,
+		"items_after", event.ItemsAfter,
+		"members", event.Members,
+		"claims_before", event.ClaimsBefore,
+		"claims_after", event.ClaimsAfter,
+		"claims_dropped", event.ClaimsBefore - event.ClaimsAfter,
+		"claims_cited", event.ClaimsCited,
+		"per_member_cap", event.PerMemberCap,
+		"served", event.Served,
+		"declined", string(event.Declined),
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric claim depth narrowing", args...)
+}
+
 // RecordFactRetention emits one retention decision, at Info.
 //
 // The anchor fields name the committed resolution subjects the pass admitted

@@ -443,6 +443,10 @@ type PlanTelemetry interface {
 	// other decision lines: a lever that cuts evidence without a line is a
 	// silent cut.
 	RecordFactRowTruncation(ctx context.Context, principal storage.Principal, event FactRowTruncationEvent)
+	// RecordClaimDepthNarrowing (CHAOS-6743) reports ONE application of the
+	// item-axis claim-depth lever: items before/after, members, claims
+	// before/after, the per-member cap, and whether it served or why not.
+	RecordClaimDepthNarrowing(ctx context.Context, principal storage.Principal, event ClaimDepthNarrowingEvent)
 
 	// RecordMembershipCardinality reports the `membership_cardinality`
 	// server step's own result for one served answer: what was counted, how

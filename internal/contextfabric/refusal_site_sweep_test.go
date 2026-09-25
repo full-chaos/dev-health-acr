@@ -35,6 +35,8 @@ import (
 //	fitAssembledResult retry FAILED  (:261)      measured            none (error) n/a
 //	fitAssembledResult ROW LEVER served         measured            none         n/a
 //	fitAssembledResult retry ROW LEVER served   retryMeasured       none         n/a
+//	fitAssembledResult CLAIM DEPTH served       measured            none         n/a
+//	fitAssembledResult retry CLAIM DEPTH served retryMeasured       none         n/a
 //	recordCandidateNarrowing         (:315,:643) served attempt      none         n/a
 //	cardinality / synthesis_input    (engine.go) no measurement      none         n/a
 
