@@ -78,3 +78,33 @@ func TestCHAOS6743EveryCitationSourcePinsItsClaim(t *testing.T) {
 		})
 	}
 }
+
+// A member is identified by kind AND canonical id (the contract's item
+// attribution key). A claim about a subject of another kind that shares a
+// member's id is not a claim about that member and is never cut (codex r1 P1).
+func TestCHAOS6743ClaimDepthKeysMembersByKindAndID(t *testing.T) {
+	t.Parallel()
+	result := chaos6743UnitResult()
+	for index := 0; index < 3; index++ {
+		member := result.Cohort.Members[index].Subject
+		for claim := 0; claim < 3; claim++ {
+			result.ClaimedFacts = append(result.ClaimedFacts, ClaimedFact{
+				ClaimID: fmt.Sprintf("project_%d_%d", index, claim),
+				Subject: SubjectRef{Kind: SubjectProject, CanonicalID: member.CanonicalID},
+			})
+		}
+	}
+	plan := newClaimDepthPlan(result)
+	if plan.declared != 7 || plan.longest != 4 {
+		t.Fatalf("plan = declared %d longest %d, want 7/4: same-id claims of another kind are not member claims", plan.declared, plan.longest)
+	}
+	cut, _ := plan.cut(result.ClaimedFacts, 1)
+	kept := chaos6743Kept(cut)
+	for index := 0; index < 3; index++ {
+		for claim := 0; claim < 3; claim++ {
+			if id := fmt.Sprintf("project_%d_%d", index, claim); !kept[id] {
+				t.Fatalf("%s (a project claim sharing a repository member's id) was cut", id)
+			}
+		}
+	}
+}

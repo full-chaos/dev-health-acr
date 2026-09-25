@@ -37,6 +37,8 @@ const (
 type chaos6743Shape struct {
 	members  int
 	maxItems int
+	// claimsPerMember overrides chaos6743ClaimsPerMember when non-zero.
+	claimsPerMember int
 	// citedPerMember makes a driver cite that many of each member's LAST claims,
 	// so keeping them is not what synthesis order alone would keep.
 	citedPerMember int
@@ -84,7 +86,7 @@ func chaos6743Engine(t *testing.T, calls *int, telemetry *recordingTelemetry, sh
 				status, phase := "green", "active"
 				facts = append(facts, CanonicalFact{
 					Kind: FactStatus, Subject: member.Subject,
-					Fields:         map[string]FactValue{"status": {String: &status}, "phase": {String: &phase}},
+					Fields:         map[string]FactValue{"status": {String: &status}, "phase": {String: &phase}, "owner": {String: &phase}},
 					ObservedAt:     &observed,
 					EvidenceRefIDs: []string{fmt.Sprintf("evidence_%02d", index)},
 					SourceState:    SourceAvailable, Source: "ops", SourceVersion: "ops-v1",
@@ -102,13 +104,18 @@ func chaos6743Engine(t *testing.T, calls *int, telemetry *recordingTelemetry, sh
 			claims := make([]ClaimedFact, 0, chaos6743ClaimsPerMember*len(input.Facts.Facts))
 			var cited []string
 			for index, fact := range input.Facts.Facts {
-				for field, value := range [][2]string{{"status", "green"}, {"phase", "active"}} {
+				fields := [][2]string{{"status", "green"}, {"phase", "active"}, {"owner", "platform"}}
+				perMember := chaos6743ClaimsPerMember
+				if shape.claimsPerMember > 0 {
+					perMember = shape.claimsPerMember
+				}
+				for field, value := range fields[:perMember] {
 					id := fmt.Sprintf("claim_%02d_%d", index, field)
 					claims = append(claims, ClaimedFact{
 						ClaimID: id, Kind: fact.Kind, Subject: fact.Subject, Field: value[0],
 						Value: ScalarValue{String: ptrString(value[1])},
 					})
-					if field >= chaos6743ClaimsPerMember-shape.citedPerMember {
+					if field >= perMember-shape.citedPerMember {
 						cited = append(cited, id)
 					}
 				}
@@ -280,5 +287,92 @@ func TestCHAOS6743CohortHalvesOnlyWhenOneClaimPerMemberStillOverruns(t *testing.
 	}
 	if len(telemetry.claimDepthNarrowings) == 0 || telemetry.claimDepthNarrowings[0].Served || telemetry.claimDepthNarrowings[0].Declined != ClaimDepthInsufficient {
 		t.Fatalf("first claim depth line = %+v, want insufficient", telemetry.claimDepthNarrowings)
+	}
+}
+
+// TestCHAOS6743LadderCapToOneThenHalveThenCapAgain walks the whole ladder with
+// every claim on a real cohort member: 11 members x 3 claims against 14
+// items. Step 1, the first document: the per-member cap falls to 1 and still
+// overruns (11 + 11 > 14), so the lever declines. Step 2: the cohort halves
+// 11 -> 5 and the retry synthesizes over 5 members. Step 3, the retried
+// document (5 + 15 > 14): the cap falls to 1 again and fits (5 + 5). Each
+// step's disclosure and per-member counts are asserted.
+func TestCHAOS6743LadderCapToOneThenHalveThenCapAgain(t *testing.T) {
+	t.Parallel()
+	result, calls, telemetry := chaos6743Investigate(t, chaos6743Shape{members: chaos6743Members, maxItems: 14, claimsPerMember: 3})
+
+	// Step 1: the first document's lever line.
+	if len(telemetry.claimDepthNarrowings) != 2 {
+		t.Fatalf("claim depth lines = %+v, want 2 (first document, retried document)", telemetry.claimDepthNarrowings)
+	}
+	first := telemetry.claimDepthNarrowings[0]
+	if first.Served || first.Declined != ClaimDepthInsufficient || first.Pass != answerPassFirst || first.Members != 11 || first.ClaimsBefore != 33 || first.ClaimsAfter != 11 || first.PerMemberCap != 1 || first.ItemsAfter != 22 {
+		t.Fatalf("step 1 line = %+v, want insufficient at cap 1: 33 -> 11 claims over 11 members, 22 items > 14", first)
+	}
+	// Step 2: the cohort retry ran over half the members.
+	if calls != 2 || result.Cohort == nil || len(result.Cohort.Members) != 5 {
+		t.Fatalf("calls=%d members=%v, want the retry over 5 of 11 members", calls, result.Cohort)
+	}
+	// Step 3: the retried document's lever served at cap 1.
+	second := telemetry.claimDepthNarrowings[1]
+	if !second.Served || second.Pass != answerPassSecond || second.Members != 5 || second.ClaimsBefore != 15 || second.ClaimsAfter != 5 || second.PerMemberCap != 1 || second.ItemsAfter != 10 {
+		t.Fatalf("step 3 line = %+v, want served at cap 1: 15 -> 5 claims over 5 members, 10 items", second)
+	}
+	perMember := map[string]int{}
+	for _, claim := range result.ClaimedFacts {
+		perMember[claim.Subject.CanonicalID]++
+		if claim.Field != "status" {
+			t.Fatalf("claim %s (%s) kept; each member keeps its first claim", claim.ClaimID, claim.Field)
+		}
+	}
+	for _, member := range result.Cohort.Members {
+		if perMember[member.Subject.CanonicalID] != 1 {
+			t.Fatalf("member %s keeps %d claims, want 1", member.Subject.CanonicalID, perMember[member.Subject.CanonicalID])
+		}
+	}
+	if len(perMember) != 5 {
+		t.Fatalf("claims about %d subjects, want exactly the 5 served members", len(perMember))
+	}
+	// The claim cut is disclosed in its exact composed sentence. The cohort
+	// cut is disclosed structurally (complete=false, truncated=true); its
+	// counted sentence needs a resolved membership cardinality, which this
+	// frameless fixture does not produce with or without this lever.
+	claimSentence, _ := contractsv1.ContextFabricClaimDepthLimitation(5, 15, 5, 1)
+	sawClaim := false
+	for _, limitation := range result.Limitations {
+		if limitation == claimSentence {
+			sawClaim = true
+		}
+	}
+	if !sawClaim || result.Cohort.Complete || !result.Cohort.Truncated {
+		t.Fatalf("claim sentence=%v cohort complete=%v truncated=%v; limitations = %q", sawClaim, result.Cohort.Complete, result.Cohort.Truncated, result.Limitations)
+	}
+	var claimRow bool
+	for _, row := range result.Completeness.Outcomes {
+		if row.Impact == contractsv1.ContextFabricAnswerImpactDepth && row.CauseOverrun == contractsv1.ContextFabricBudgetOverrunItems && row.Served == 5 && row.Declared == 15 {
+			claimRow = true
+		}
+	}
+	if !claimRow || result.Status != InvestigationPartial {
+		t.Fatalf("claim row=%v status=%q; outcomes = %+v", claimRow, result.Status, result.Completeness.Outcomes)
+	}
+}
+
+// The planner selects the LARGEST fitting cap, not the floor (codex r1 P3):
+// 11 members x 3 claims against 33 items fits at K=2 (11 + 22), not K=3.
+func TestCHAOS6743PlannerSelectsTheLargestFittingCap(t *testing.T) {
+	t.Parallel()
+	result, calls, telemetry := chaos6743Investigate(t, chaos6743Shape{members: chaos6743Members, maxItems: 33, claimsPerMember: 3})
+	if calls != 1 || len(telemetry.claimDepthNarrowings) != 1 || !telemetry.claimDepthNarrowings[0].Served || telemetry.claimDepthNarrowings[0].PerMemberCap != 2 {
+		t.Fatalf("calls=%d lines=%+v, want one served line at cap 2", calls, telemetry.claimDepthNarrowings)
+	}
+	perMember := map[string]int{}
+	for _, claim := range result.ClaimedFacts {
+		perMember[claim.Subject.CanonicalID]++
+	}
+	for _, member := range result.Cohort.Members {
+		if perMember[member.Subject.CanonicalID] != 2 {
+			t.Fatalf("member %s keeps %d claims, want 2", member.Subject.CanonicalID, perMember[member.Subject.CanonicalID])
+		}
 	}
 }

@@ -62,8 +62,9 @@ type claimDepthAttempt struct {
 
 // claimDepthPlan is the per-member view of one document's claims.
 type claimDepthPlan struct {
-	// member maps a claim index to its member's canonical id; claims about
-	// anything else are absent and always kept.
+	// member maps a claim index to its member's key (kind and canonical id,
+	// claimDepthMemberKey); claims about anything else are absent and always
+	// kept.
 	member map[int]string
 	cited  map[string]bool
 	// citedPerMember counts each member's cited claims.
@@ -83,12 +84,12 @@ func newClaimDepthPlan(result InvestigationResult) claimDepthPlan {
 	}
 	members := map[string]bool{}
 	for _, member := range result.Cohort.Members {
-		members[member.Subject.CanonicalID] = true
+		members[claimDepthMemberKey(member.Subject)] = true
 	}
 	plan.members = len(result.Cohort.Members)
 	perMember := map[string]int{}
 	for index, claim := range result.ClaimedFacts {
-		id := claim.Subject.CanonicalID
+		id := claimDepthMemberKey(claim.Subject)
 		if !members[id] {
 			continue
 		}
@@ -104,6 +105,13 @@ func newClaimDepthPlan(result InvestigationResult) claimDepthPlan {
 		}
 	}
 	return plan
+}
+
+// claimDepthMemberKey identifies a subject by kind AND canonical id -- the
+// key the contract's item attribution uses. An id alone is not an identity:
+// a project and a repository may share one (codex r1 P1, executed).
+func claimDepthMemberKey(subject SubjectRef) string {
+	return string(subject.Kind) + "\x00" + subject.CanonicalID
 }
 
 // citedClaimIDs is every claim id the document's own prose or structure
