@@ -186,8 +186,10 @@ type ContextFabricRequestedEvidenceWindow struct {
 // server-computed, never accepted from the wire and never emitted by a
 // model (it is not part of the interpretation output schema). Present only
 // when a window is genuinely in play for this investigation (axis=current
-// AND the resolved class carries a window at all -- a state_snapshot
-// question, for instance, carries none).
+// AND either the caller stated a window -- the evidence_window field or a
+// trailing phrase in the question, committed whatever the window class -- or
+// the resolved class carries an inferred default: a state_snapshot question
+// with no stated period carries none).
 //
 // Every non-sentinel member carries BOTH Start and End (no partial window
 // is representable, mirroring ContextFabricRequestedEvidenceWindow); the
