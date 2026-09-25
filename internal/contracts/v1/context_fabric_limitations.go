@@ -617,7 +617,8 @@ func IsContextFabricServiceAuthoredLimitation(limitation string) bool {
 		IsContextFabricGroupListOverBoundLimitation(limitation) ||
 		IsContextFabricCohortNarrowingLimitation(limitation) ||
 		IsContextFabricFactRowTruncationLimitation(limitation) ||
-		IsContextFabricClaimDepthLimitation(limitation)
+		IsContextFabricClaimDepthLimitation(limitation) ||
+		IsContextFabricPathDropLimitation(limitation)
 }
 
 // HasContextFabricServiceAuthoredLimitation reports whether any entry is

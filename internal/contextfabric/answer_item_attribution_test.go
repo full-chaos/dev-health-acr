@@ -156,6 +156,10 @@ type attributionFixtureSpec struct {
 	// about EACH cohort member it is handed. They charge the MEMBER bucket,
 	// and they are what the item-axis claim-depth lever cuts.
 	memberClaims int
+	// paths (CHAOS-6558) is how many uncited relationship paths, each ~2 KB,
+	// the graph returns and the document carries. Paths are not charged
+	// items, so the split must not move when the path-drop lever cuts them.
+	paths int
 }
 
 // expect is what the split must be for a document carrying membersMeasured
@@ -277,7 +281,7 @@ func attributionEngine(t *testing.T, spec attributionFixtureSpec, sink *bytes.Bu
 			resolution: SubjectResolution{Candidates: outcomeAssemblyCandidates(spec.candidates), Committed: []SubjectRef{}},
 			context: GraphContext{
 				Cohort: graphCohort,
-				Paths:  []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
+				Paths:  attributionPaths(spec.paths), DriverCandidates: []DriverJudgment{},
 				FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
 				Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 			},
@@ -317,7 +321,7 @@ func attributionEngine(t *testing.T, spec attributionFixtureSpec, sink *bytes.Bu
 			return InvestigationResult{
 				Status: InvestigationComplete, DirectJudgment: "Fine.", CurrentState: "Nominal.",
 				StrongestPressures: []string{}, Drivers: drivers, RemainingWork: findings,
-				ReadinessGaps: []Finding{}, Paths: []RelationshipPath{}, Conflicts: []Finding{},
+				ReadinessGaps: []Finding{}, Paths: cloneSlice(input.Graph.Paths), Conflicts: []Finding{},
 				Limitations: []string{}, EvidenceRefIDs: []string{attributionEvidenceRef}, ClaimedFacts: served,
 				Coverage:            Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 				DeterministicAnswer: "Fine, based on available context.", Warnings: []string{},
@@ -767,6 +771,58 @@ func assembledResultArmCases() []assembledResultArmCase {
 			},
 		},
 		{
+			// CHAOS-6558: the non-row bytes alone overran, the row lever was
+			// insufficient, and the path-drop lever served the FIRST
+			// document. Paths are not items, so the split does not move.
+			name:          "path-drop lever served the assembled result",
+			discriminator: "overrun=bytes measured_items=17 ",
+			spec:          attributionFixtureSpec{members: 3, globalFindings: 6, groupDrivers: 3, multiGroupDrivers: 2, memberDrivers: 1, rowClaims: 2, paths: 10},
+			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec, cohortSizes *[]int) (InvestigationResult, bool) {
+				options := budgetStageOptions(30, 0)
+				options.MaxSerializedBytes = attributionUnboundedBytes(t, spec) - attributionRowBytes(t, spec) - 4000
+				engine, _ := attributionEngine(t, spec, sink, options, cohortSizes)
+				result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+				if err != nil {
+					t.Fatalf("Investigate() error = %v, want the path-drop lever to serve", err)
+				}
+				if len(*cohortSizes) != 1 || !strings.Contains(sink.String(), `msg="context fabric path drop"`) || len(result.Paths) >= spec.paths {
+					t.Fatalf("want one synthesis and a served path drop; cohorts=%v paths=%d\nemitted:\n%s", *cohortSizes, len(result.Paths), sink.String())
+				}
+				return result, true
+			},
+		},
+		{
+			// CHAOS-6558: the first document's minimum answer did not fit
+			// (it carries ~30 KB of warnings no lever drops), so the retry
+			// ran; the path-drop lever served the RETRIED document.
+			name:          "path-drop lever served the re-synthesized result",
+			discriminator: "overrun=bytes measured_items=18 ",
+			spec:          attributionFixtureSpec{members: 4, globalFindings: 7, groupDrivers: 4, multiGroupDrivers: 2, memberDrivers: 1, rowClaims: 2, paths: 10},
+			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec, cohortSizes *[]int) (InvestigationResult, bool) {
+				options := budgetStageOptions(30, time.Second)
+				options.MaxSerializedBytes = attributionUnboundedBytes(t, spec) - attributionRowBytes(t, spec) - 4000
+				engine, _ := attributionEngine(t, spec, sink, options, cohortSizes)
+				original := engine.synthesizer
+				calls := 0
+				engine.synthesizer = synthesizerFunc(func(ctx context.Context, principal storage.Principal, input SynthesisInput) (InvestigationResult, error) {
+					calls++
+					result, err := original.Synthesize(ctx, principal, input)
+					if calls == 1 {
+						result.Warnings = repeatAttributionWarnings(20, 1500)
+					}
+					return result, err
+				})
+				result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+				if err != nil {
+					t.Fatalf("Investigate() error = %v, want the path-drop lever to serve the retried document", err)
+				}
+				if calls != 2 || len(*cohortSizes) != 2 || (*cohortSizes)[1] >= (*cohortSizes)[0] || strings.Count(sink.String(), `msg="context fabric path drop"`) != 2 || len(result.Paths) >= spec.paths {
+					t.Fatalf("synthesis calls=%d cohorts=%v paths=%d, want one retry over a smaller cohort and two path-drop lines\nemitted:\n%s", calls, *cohortSizes, len(result.Paths), sink.String())
+				}
+				return result, true
+			},
+		},
+		{
 			name: "outcome layer served a candidate narrowing",
 			// The arm a review proved I had wrongly declared unreachable.
 			// One member means the cohort cannot be narrowed, so stage three
@@ -787,6 +843,25 @@ func assembledResultArmCases() []assembledResultArmCase {
 			},
 		},
 	}
+}
+
+// attributionPaths is n uncited relationship paths of ~2 KB each (CHAOS-6558).
+func attributionPaths(n int) []RelationshipPath {
+	paths := make([]RelationshipPath, 0, n)
+	for index := 0; index < n; index++ {
+		from := SubjectRef{Kind: SubjectProject, CanonicalID: "a_project", Label: "a_project"}
+		to := SubjectRef{Kind: SubjectRepository, CanonicalID: "repo_path_" + strconv.Itoa(index), Label: "repo_path_" + strconv.Itoa(index)}
+		paths = append(paths, RelationshipPath{
+			PathID: "path_attr_" + strconv.Itoa(1000+index), Nodes: []SubjectRef{from, to},
+			WhyRelevant: strings.Repeat("related work ", 150),
+			Edges: []RelationshipEdge{{
+				Type: contractsv1.ContextFabricRelationshipRelatedTo, From: from, To: to,
+				Derivation: DerivationRuleInferred, EpistemicStatus: EpistemicInferred, EvidenceRefIDs: []string{attributionEvidenceRef},
+			}},
+			EvidenceRefIDs: []string{attributionEvidenceRef},
+		})
+	}
+	return paths
 }
 
 // attributionRowTable is a 30-row table of ~100-byte rows (CHAOS-6558).
