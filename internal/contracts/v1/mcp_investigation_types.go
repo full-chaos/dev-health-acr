@@ -94,11 +94,10 @@ type MCPInvestigateQuestionRequest struct {
 	SubjectHandles []ContextFabricRequestedHandle `json:"subject_handles,omitempty"`
 	// EvidenceWindow and WindowConfirmationMode (CHAOS-3900 W2) mirror the
 	// hosted contract's own TimeContext.EvidenceWindow/Options.WindowConfirmationMode.
-	// Per DP12(b), an explicit evidence_window on THIS surface enters
-	// inferred_default (explicit_unattributed) and can only become
-	// clarification_confirmed through winr_ receipt redemption -- 3900
-	// v5.2 §4's stated-echo clause is deliberately amended for MCP alone
-	// (chris ruling, design brief §2.0/§2.3).
+	// An explicit evidence_window is COMMITTED on this surface like every
+	// other (question_stated, no confirmation turn; CHAOS-6557, chris ruling
+	// 2026-09-25, superseding DP12(b) for the window member). winr_ receipt
+	// redemption remains the path for a window the service proposed.
 	EvidenceWindow         *ContextFabricRequestedEvidenceWindow `json:"evidence_window,omitempty"`
 	WindowConfirmationMode ContextFabricWindowConfirmationMode   `json:"window_confirmation_mode,omitempty"`
 	Scope                  *MCPInvestigationScope                `json:"scope,omitempty"`

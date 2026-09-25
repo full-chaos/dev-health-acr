@@ -587,16 +587,6 @@ func anchorSiteScenarios() []anchorSiteScenario {
 					t.Fatalf("the veto Save's binding = %+v, want unbound after the public veto", on.transitions[1].To)
 				}
 			}},
-		{name: "window_confirmation_required_explicit", site: BudgetAssertWindowConfirmationRequired, reach: AnchorBindingEvaluationNotResolved, zero: unboundZero,
-			run: func(t *testing.T, sink EngineTelemetry, _ *recordingTelemetry, off bool) InvestigationResult {
-				interpreter := &countingInterpreter{interpretation: bootstrapInterpretation()}
-				graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext()}
-				engine := flip(buildWindowGateEngineWithBudget(t, interpreter, graph, newMapResultStore(), maxItems, sink), off)
-				request := validInvestigationRequest()
-				request.Consumer.Surface = "mcp"
-				request.TimeContext.EvidenceWindow = &RequestedEvidenceWindow{RelativeID: RelativeWindowTrailing90D}
-				return mustInvestigate(t, engine, acceptancePrincipal(), request)
-			}},
 		{name: "window_confirmation_required_class_default", site: BudgetAssertWindowConfirmationRequired, reach: AnchorBindingEvaluationWindowGated, zero: heldZero,
 			run: anchorProbeScenario(anchorProbeStep{request: firstTurnRequest("request_site_gate", false), windowed: true, response: identityProvenResponse(probeAlpha)})},
 		{name: "interpreted_time_bound", site: BudgetAssertInterpretedTimeBound, reach: AnchorBindingEvaluationNotResolved, zero: unboundZero,

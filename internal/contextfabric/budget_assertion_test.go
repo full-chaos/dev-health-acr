@@ -462,12 +462,22 @@ func TestEveryFreshResultExitAssertsTheBudget(t *testing.T) {
 
 	t.Run("window_confirmation_required", func(t *testing.T) {
 		telemetry := &recordingTelemetry{}
-		interpreter := &countingInterpreter{interpretation: bootstrapInterpretation()}
+		// A window nothing stated reaches the class-default gate, which persists
+		// the accepted reading, so the interpreter reports a real family outcome.
+		state := validWorkItemTupleSemanticState(t)
+		interpretation := bootstrapInterpretation()
+		interpretation.Shape = ShapeDiscoveredCohort
+		interpretation.SubjectTerms = []string{"Project Alpha"}
+		interpreter := &countingInterpreter{interpretation: interpretation, family: QuestionFamilyOutcome{
+			Family: QuestionFamilyScopedCohortStatus, Source: QuestionFamilySourceModel,
+			Frame: state.Frame, WinningSampleIndex: 0,
+			WinningSample: FamilySample{ModelFamily: QuestionFamilyScopedCohortStatus, ScopeAnchorKind: SubjectProject, ScopeAnchorTerm: "Project Alpha"},
+		}}
 		graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext()}
 		engine := buildWindowGateEngineWithBudget(t, interpreter, graph, newMapResultStore(), maxItems, telemetry)
-		request := validInvestigationRequest()
+		request := validInvestigationRequest() // no window stated: the class-default gate
+		request.Question = "What is the status of the work items in Project Alpha?"
 		request.Consumer.Surface = "mcp"
-		request.TimeContext.EvidenceWindow = &RequestedEvidenceWindow{RelativeID: RelativeWindowTrailing90D}
 		result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
 		if err != nil {
 			t.Fatalf("Investigate() error = %v", err)

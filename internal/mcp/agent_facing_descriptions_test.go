@@ -251,18 +251,22 @@ func TestServerInstructionsAreAnAgentGuide(t *testing.T) {
 		"tool choice":     "Choosing a tool:",
 		"question shapes": "Question shapes that work:",
 		"receipt flow":    "prior_window_receipts",
-		// CHAOS-6557: a stated period still gets a confirmation turn
-		// (DP12(b)/CHAOS-4040); the guide must tell the agent to send the
-		// window receipt back rather than imply the stated period is used.
-		"window confirmation": "send the matching winr_ receipt back in prior_window_receipts",
-		"clarification flow":  "clarification_required",
-		"untrusted content":   "untrusted data",
-		"live authorization":  "re-checked against your credential on every call",
-		"opaque ids":          "opaque",
+		// CHAOS-6557: a stated period (evidence_window or a phrase in the
+		// question) is used as given; only a period the caller did NOT state
+		// is proposed and confirmed with a winr_ receipt.
+		"stated period used as given": "A period you state is used as given and reported back.",
+		"window confirmation":         "Without a period the first answer proposes one and asks you to confirm it: send the matching winr_ receipt back in prior_window_receipts",
+		"clarification flow":          "clarification_required",
+		"untrusted content":           "untrusted data",
+		"live authorization":          "re-checked against your credential on every call",
+		"opaque ids":                  "opaque",
 	} {
 		if !strings.Contains(instructions, phrase) {
 			t.Errorf("instructions lack the %s phrase %q", name, phrase)
 		}
+	}
+	if strings.Contains(instructions, "The first answer then asks you to confirm the window") {
+		t.Error("instructions still say a stated period gets a confirmation turn")
 	}
 	for _, tool := range []string{toolContextForTask, toolSourceEvidence, toolInvestigateQuestion, toolInvestigationResult} {
 		if !strings.Contains(instructions, tool) {
@@ -410,4 +414,26 @@ func resultHasSchemaField(t *testing.T, field string) bool {
 	props, _ := result["properties"].(map[string]any)
 	_, ok := props[field]
 	return ok
+}
+
+// A supplied evidence_window is used as given (no confirmation turn): the
+// embedded request schema an agent reads must say so, not that the service may
+// ask for the window to be confirmed. Schema parity only proves the two copies
+// match; this pins the meaning.
+func TestEvidenceWindowSchemaSaysASuppliedWindowIsUsedAsGiven(t *testing.T) {
+	var schema struct {
+		Properties map[string]struct {
+			Description string `json:"description"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(mustReadSchema(investigateQuestionRequestSchemaFile), &schema); err != nil {
+		t.Fatalf("decode request schema: %v", err)
+	}
+	description := schema.Properties["evidence_window"].Description
+	if !strings.Contains(description, "used as given") {
+		t.Errorf("evidence_window description = %q, want it to say the supplied window is used as given", description)
+	}
+	if strings.Contains(description, "ask you to confirm") {
+		t.Errorf("evidence_window description = %q, still says a supplied window may need confirmation", description)
+	}
 }

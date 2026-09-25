@@ -135,27 +135,19 @@ type ContextFabricWindowProvenance string
 
 const (
 	// ContextFabricWindowInferredDefault: the window carries no caller
-	// AUTHORITY, whether or not a caller supplied a VALUE. Covers TWO
-	// distinct origins (CHAOS-4040 fix, doc corrected: this comment
-	// previously said "no caller-asserted window", omitting the second
-	// origin the sibling QuestionStated const below already documented
-	// correctly): the class-to-default table or a proposal-only
-	// temporal-expression binder span picked this window (no caller
-	// input at all), OR a caller's own bare explicit evidence_window on
-	// MCP entered here per DP12(b) -- present on the wire, but carrying
-	// no decisive authority of its own until confirmed. Always disclosed,
-	// never decisive without either a winr_ confirmation or the §3/W4
-	// window-insensitivity proof (CHAOS-4040 gates both origins out of
-	// every decisive terminal pending it).
+	// AUTHORITY -- the class-to-default table or a prior proposal picked it
+	// (no caller-supplied period at all). Always disclosed, never decisive
+	// without a winr_ confirmation (CHAOS-4040 gates it out of every decisive
+	// terminal). A period the caller SUPPLIED -- the evidence_window field or
+	// a period stated in the question -- is never inferred_default
+	// (CHAOS-6557).
 	ContextFabricWindowInferredDefault ContextFabricWindowProvenance = "inferred_default"
-	// ContextFabricWindowQuestionStated: the caller's own request carried
-	// an explicit evidence_window this canonicalization accepted. On the
-	// hosted/web surface this includes echoing server-disclosed bounds
-	// back per 3900 §4's stated-echo clause; on MCP, per DP12(b), this
-	// provenance is reachable ONLY through winr_ receipt redemption --
-	// MCP's own bare explicit evidence_window field enters at
-	// inferred_default (source explicit_unattributed) and can never
-	// become question_stated by itself.
+	// ContextFabricWindowQuestionStated: the caller supplied the window
+	// itself -- an explicit evidence_window this canonicalization accepted
+	// (on every surface, MCP included, CHAOS-6557; on the hosted/web surface
+	// this includes echoing server-disclosed bounds back per 3900 §4's
+	// stated-echo clause) or a single period stated in the question text.
+	// Committed: decisive, no confirmation turn.
 	ContextFabricWindowQuestionStated ContextFabricWindowProvenance = "question_stated"
 	// ContextFabricWindowClarificationConfirmed: the caller redeemed a
 	// winr_ receipt naming one of this investigation's own prior stored
@@ -194,8 +186,10 @@ type ContextFabricRequestedEvidenceWindow struct {
 // server-computed, never accepted from the wire and never emitted by a
 // model (it is not part of the interpretation output schema). Present only
 // when a window is genuinely in play for this investigation (axis=current
-// AND the resolved class carries a window at all -- a state_snapshot
-// question, for instance, carries none).
+// AND either the caller stated a window -- the evidence_window field or a
+// trailing phrase in the question, committed whatever the window class -- or
+// the resolved class carries an inferred default: a state_snapshot question
+// with no stated period carries none).
 //
 // Every non-sentinel member carries BOTH Start and End (no partial window
 // is representable, mirroring ContextFabricRequestedEvidenceWindow); the

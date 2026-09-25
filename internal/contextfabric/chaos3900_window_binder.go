@@ -161,10 +161,8 @@ func hasWindowRole(question string, span BoundWindowSpan) bool {
 		// the span) and was wrongly refused.
 		return true
 	}
-	for _, prep := range windowRolePrepositions {
-		if _, ok := trimSuffixWord(lowerBefore, prep); ok {
-			return true
-		}
+	if strippedPrecedingPreposition(lowerBefore) {
+		return true
 	}
 	after := question[span.SpanEnd:]
 	// isReuseTerminalPunctuation (answer_reuse.go), NOT a hand-rolled set --
@@ -244,6 +242,13 @@ type WindowBindOutcome struct {
 	// shape proposed the window.
 	Grammar    string
 	SpansBound int
+	// Trailing (CHAOS-6560) is set only when Reason == WindowBindRoutedInferred
+	// and the span states a TRAILING window ("in the last month", "past
+	// quarter", "last 30 days"): the caller's own words fix the bounds, so the
+	// engine may commit it. A bare "last month/quarter/year" (no preposition)
+	// names the previous CALENDAR period, whose bounds the interpreter -- not
+	// this closed grammar -- supplies; it stays a proposal.
+	Trailing bool
 }
 
 // ProposeWindowFromSpans runs the whole W0 binder pipeline over question
@@ -265,5 +270,47 @@ func ProposeWindowFromSpans(question string) WindowBindOutcome {
 	if !hasWindowRole(question, span) {
 		return WindowBindOutcome{Reason: WindowBindSpanUnbound, SpansBound: 1}
 	}
-	return WindowBindOutcome{Reason: WindowBindRoutedInferred, RelativeID: span.RelativeID, Grammar: span.Grammar, SpansBound: 1}
+	return WindowBindOutcome{Reason: WindowBindRoutedInferred, RelativeID: span.RelativeID, Grammar: span.Grammar, SpansBound: 1, Trailing: spanStatesTrailingWindow(question, span)}
+}
+
+// strippedPrecedingPreposition reports whether lowerBefore (lowercased text
+// before a span, article already stripped) ends in a closed temporal
+// preposition.
+func strippedPrecedingPreposition(lowerBefore string) bool {
+	for _, prep := range windowRolePrepositions {
+		if _, ok := trimSuffixWord(lowerBefore, prep); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// spanStatesTrailingWindow (CHAOS-6557) reports whether a bound span states a
+// TRAILING window rather than naming a calendar period. Every grammar entry
+// except the bare "last month|quarter|year" shapes is trailing by its own
+// words ("past month", "last 30 days"); "last month|quarter|year" is trailing
+// only in the article-led forms "in/over/within/during/for the last month" and
+// after "since" -- "for last month", "over last month" and a bare "carried the
+// most work last month" name the previous CALENDAR period.
+func spanStatesTrailingWindow(question string, span BoundWindowSpan) bool {
+	switch span.Grammar {
+	case "trailing_month", "trailing_quarter", "trailing_year":
+	default:
+		return true
+	}
+	if !strings.HasPrefix(strings.ToLower(question[span.SpanStart:span.SpanEnd]), "last") {
+		return true
+	}
+	lowerBefore := strings.ToLower(strings.TrimRightFunc(question[:span.SpanStart], unicode.IsSpace))
+	if _, ok := trimSuffixWord(lowerBefore, "since"); ok {
+		return true
+	}
+	stripped, hadArticle := lowerBefore, false
+	for _, article := range windowRoleArticles {
+		if s, ok := trimSuffixWord(lowerBefore, article); ok {
+			stripped, hadArticle = s, true
+			break
+		}
+	}
+	return hadArticle && strippedPrecedingPreposition(stripped)
 }

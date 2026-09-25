@@ -3073,7 +3073,7 @@ func TestTwoTurnRegimeFromWindowCanonicalization(t *testing.T) {
 		{"request_stated is regime B", contextfabric.WindowCanonicalizationRequestStated, twoTurnRegimeBResolutionProceeded},
 		{"receipt_confirmed is regime B", contextfabric.WindowCanonicalizationReceiptConfirmed, twoTurnRegimeBResolutionProceeded},
 		{"inferred_default is regime B", contextfabric.WindowCanonicalizationInferredDefault, twoTurnRegimeBResolutionProceeded},
-		// codex review round 2 (P3, confirmed): gate 1, the refused-no-
+		// codex review round 2 (P3, confirmed): the refused-no-
 		// clarification outcome, and every Veto* value are neither "the
 		// class-default gate fired" (regime A) nor "resolution proceeded
 		// ordinarily" (regime B) -- see this function's own doc comment,
@@ -3081,7 +3081,6 @@ func TestTwoTurnRegimeFromWindowCanonicalization(t *testing.T) {
 		// so is not simply unreachable the way the others are for turn 1.
 		// All of these must classify as unobserved rather than either
 		// regime.
-		{"gate 1 (explicit-unconfirmed) is unclassified, not regime B", contextfabric.WindowCanonicalizationGatedExplicitUnconfirmed, ""},
 		{"refused-no-clarification is unclassified, not regime B", contextfabric.WindowCanonicalizationGatedRefusedNoClarification, ""},
 		{"veto_unresolved is unclassified, not regime B", contextfabric.WindowCanonicalizationVetoUnresolved, ""},
 		{"veto_conflict is unclassified, not regime B", contextfabric.WindowCanonicalizationVetoConflict, ""},

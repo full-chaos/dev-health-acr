@@ -1362,7 +1362,7 @@ func TestCaptureSkipReasonVocabularyIsClosed(t *testing.T) {
 			t.Fatalf("%q not valid", reason)
 		}
 	}
-	if ValidCaptureSkipReason("unassigned_exit") || ValidCaptureSkipReason("") || len(captureSkipReasons()) != 15 {
+	if ValidCaptureSkipReason("unassigned_exit") || ValidCaptureSkipReason("") || len(captureSkipReasons()) != 14 {
 		t.Fatal("CaptureSkipReason vocabulary membership is not closed")
 	}
 }
@@ -1580,8 +1580,8 @@ func TestConfirmedNeedConsumers_RememberedWindowAppliesWhereTheReceiptDoes(t *te
 }
 
 // TestConfirmedNeedConsumers_LedgerLineOnEveryExit pins the telemetry axis:
-// every exit that follows admission -- the window veto, the explicit-window
-// gate and the structure veto included -- reports the admitted ledger exactly
+// every exit that follows admission -- the window veto and the structure
+// veto included -- reports the admitted ledger exactly
 // once, applying nothing on an exit that ran no consumer; the window decision
 // is reported on those exits too, and a remembered window applied before the
 // structure veto is echoed there as the receipt would be. Controls: the
@@ -1605,10 +1605,6 @@ func TestConfirmedNeedConsumers_LedgerLineOnEveryExit(t *testing.T) {
 			{"window veto", func(r *InvestigationRequest) {
 				r.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: two.result.ResultID, ReceiptID: "winr_needmissing0001"}}
 			}, InvestigationNoMatch},
-			{"explicit window gate", func(r *InvestigationRequest) {
-				r.Consumer = ConsumerInfo{Name: "test", Version: "1.0.0", Surface: "mcp"}
-				r.TimeContext.EvidenceWindow = &contractsv1.ContextFabricRequestedEvidenceWindow{RelativeID: RelativeWindowTrailing30D}
-			}, InvestigationClarificationRequired},
 		} {
 			request := continuingNeedTurn(needTurnRequest("request_need_exit_"+strings.ReplaceAll(cell.name, " ", "_"), true), two.result.ResultID)
 			cell.mutate(&request)
@@ -1674,12 +1670,7 @@ func TestConfirmedNeedConsumers_EarlyExitRetiresExplicitMember(t *testing.T) {
 		contractsv1.ContextFabricStructureNeedSubjectHandle,
 		contractsv1.ContextFabricStructureNeedWindow,
 	} {
-		for _, gate := range []string{"structure_veto", "window_veto", "explicit_window_gate"} {
-			// The explicit-window gate itself states a window, so it cannot
-			// provide a control that changes only whether one was stated.
-			if member == contractsv1.ContextFabricStructureNeedWindow && gate == "explicit_window_gate" {
-				continue
-			}
+		for _, gate := range []string{"structure_veto", "window_veto"} {
 			t.Run(string(member)+"/"+gate, func(t *testing.T) {
 				t.Parallel()
 				for _, stated := range []bool{false, true} {
@@ -1707,16 +1698,12 @@ func TestConfirmedNeedConsumers_EarlyExitRetiresExplicitMember(t *testing.T) {
 							request.TimeContext.EvidenceWindow = validConfirmedWindow()
 						}
 					}
-					status := InvestigationNoMatch
+					const status = InvestigationNoMatch
 					switch gate {
 					case "structure_veto":
 						request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: "result_need_early_parent", ReceiptID: "kindr_missing00001"}}
 					case "window_veto":
 						request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: "result_need_early_parent", ReceiptID: "winr_missing000001"}}
-					case "explicit_window_gate":
-						request.Consumer = ConsumerInfo{Name: "test", Version: "1.0.0", Surface: "mcp"}
-						request.TimeContext.EvidenceWindow = &contractsv1.ContextFabricRequestedEvidenceWindow{RelativeID: RelativeWindowTrailing30D}
-						status = InvestigationClarificationRequired
 					}
 					out := h.turn(request, committingNeedResponse())
 					if out.result.Status != status || len(out.calls) != 0 || soleLedgerEvent(t, out).Outcome != ConfirmedNeedLedgerHit || out.saved == nil {
