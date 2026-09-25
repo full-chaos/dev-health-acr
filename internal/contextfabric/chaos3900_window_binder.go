@@ -254,7 +254,24 @@ type WindowBindOutcome struct {
 	// caller asked about a state at an instant, not a period of activity, so
 	// the span is never an evidence window.
 	PointInTime bool
+	// Calendar () is set when the question names the previous
+	// CALENDAR month, quarter or year with a bare "last month|quarter|year"
+	// that states no trailing window. It is the binder's own deterministic
+	// reading of the phrase: the engine derives the bounds from its own clock,
+	// so the window never depends on what a sampled interpreter said. Reason is
+	// untouched (a non-trailing span stays a proposal off the MCP surface).
+	Calendar CalendarPeriod
 }
+
+// CalendarPeriod is the closed vocabulary of previous-calendar-period phrases.
+type CalendarPeriod string
+
+const (
+	CalendarPeriodNone    CalendarPeriod = ""
+	CalendarPeriodMonth   CalendarPeriod = "month"
+	CalendarPeriodQuarter CalendarPeriod = "quarter"
+	CalendarPeriodYear    CalendarPeriod = "year"
+)
 
 // ProposeWindowFromSpans runs the whole W0 binder pipeline over question
 // (verbatim request.Question, pre-reuse, pre-model, engine-side -- per the
@@ -272,10 +289,12 @@ func ProposeWindowFromSpans(question string) WindowBindOutcome {
 		return WindowBindOutcome{Reason: WindowBindSpanAmbiguous, SpansBound: len(bound)}
 	}
 	span := bound[0]
-	if !hasWindowRole(question, span) {
-		return WindowBindOutcome{Reason: WindowBindSpanUnbound, SpansBound: 1}
+	roleOK := hasWindowRole(question, span)
+	calendar := calendarPeriodOfSpan(question, span, roleOK)
+	if !roleOK {
+		return WindowBindOutcome{Reason: WindowBindSpanUnbound, SpansBound: 1, Calendar: calendar}
 	}
-	return WindowBindOutcome{Reason: WindowBindRoutedInferred, RelativeID: span.RelativeID, Grammar: span.Grammar, SpansBound: 1, Trailing: spanStatesTrailingWindow(question, span), PointInTime: spanIsPointInTime(question, span)}
+	return WindowBindOutcome{Reason: WindowBindRoutedInferred, RelativeID: span.RelativeID, Grammar: span.Grammar, SpansBound: 1, Trailing: spanStatesTrailingWindow(question, span), PointInTime: spanIsPointInTime(question, span), Calendar: calendar}
 }
 
 // strippedPrecedingPreposition reports whether lowerBefore (lowercased text
@@ -343,6 +362,66 @@ func spanIsPointInTime(question string, span BoundWindowSpan) bool {
 	}
 	for _, lead := range windowPointInTimeLeads {
 		if _, ok := trimSuffixWord(lowerBefore, lead); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// calendarPeriodOfSpan () reports which previous CALENDAR period a
+// bound span names: only a bare "last month|quarter|year" that is neither a
+// trailing form (spanStatesTrailingWindow) nor the object of a point-in-time
+// construction. A span that passed the role check qualifies. One that failed it
+// qualifies only when the clause position is the ordinary "...last month and
+// why?" tail (a coordinating conjunction directly after the span). Either way
+// a determiner or possessive directly before the span refuses it: "the Last Year
+// and Beyond project" is a name, and "the last month" is not a calendar period.
+func calendarPeriodOfSpan(question string, span BoundWindowSpan, roleOK bool) CalendarPeriod {
+	var period CalendarPeriod
+	switch span.Grammar {
+	case "trailing_month":
+		period = CalendarPeriodMonth
+	case "trailing_quarter":
+		period = CalendarPeriodQuarter
+	case "trailing_year":
+		period = CalendarPeriodYear
+	default:
+		return CalendarPeriodNone
+	}
+	if spanStatesTrailingWindow(question, span) || spanIsPointInTime(question, span) {
+		return CalendarPeriodNone
+	}
+	if spanPrecededByDeterminer(question, span) {
+		return CalendarPeriodNone
+	}
+	if roleOK || spanFollowedByConjunction(question, span) {
+		return period
+	}
+	return CalendarPeriodNone
+}
+
+var windowConjunctions = []string{"and", "but"}
+
+// spanFollowedByConjunction reports whether the first word after span is a
+// closed coordinating conjunction.
+func spanFollowedByConjunction(question string, span BoundWindowSpan) bool {
+	after := strings.ToLower(strings.TrimLeftFunc(question[span.SpanEnd:], func(r rune) bool { return unicode.IsSpace(r) || r == ',' }))
+	for _, conjunction := range windowConjunctions {
+		if strings.HasPrefix(after, conjunction) && (len(after) == len(conjunction) || !isWindowWordByte(after[len(conjunction)])) {
+			return true
+		}
+	}
+	return false
+}
+
+var windowDeterminers = []string{"the", "a", "an", "this", "that", "our", "their", "my", "your", "his", "her", "its"}
+
+// spanPrecededByDeterminer reports whether the word directly before span is a
+// closed determiner or possessive.
+func spanPrecededByDeterminer(question string, span BoundWindowSpan) bool {
+	lowerBefore := strings.ToLower(strings.TrimRightFunc(question[:span.SpanStart], unicode.IsSpace))
+	for _, determiner := range windowDeterminers {
+		if _, ok := trimSuffixWord(lowerBefore, determiner); ok {
 			return true
 		}
 	}

@@ -122,6 +122,32 @@ func relativeWindowBounds(id RelativeWindowID, now time.Time) (start, end time.T
 	return now.Add(-duration), now, true
 }
 
+// calendarWindowBounds () derives the bounds of the PREVIOUS calendar
+// month, quarter or year relative to now: [first instant of that period, first
+// instant of the period after it). Calendar boundaries are UTC: acr has no
+// per-organization timezone, and every window bound it stores or reports is
+// UTC, so "last month" is the same window for every caller of the same
+// deployment at the same instant. now is the engine's own clock, never a
+// caller-supplied instant.
+func calendarWindowBounds(period CalendarPeriod, now time.Time) (start, end time.Time, ok bool) {
+	now = now.UTC()
+	switch period {
+	case CalendarPeriodMonth:
+		end = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+		start = end.AddDate(0, -1, 0)
+	case CalendarPeriodQuarter:
+		firstMonthOfQuarter := time.Month((int(now.Month())-1)/3*3 + 1)
+		end = time.Date(now.Year(), firstMonthOfQuarter, 1, 0, 0, 0, 0, time.UTC)
+		start = end.AddDate(0, -3, 0)
+	case CalendarPeriodYear:
+		end = time.Date(now.Year(), time.January, 1, 0, 0, 0, 0, time.UTC)
+		start = end.AddDate(-1, 0, 0)
+	default:
+		return time.Time{}, time.Time{}, false
+	}
+	return start, end, true
+}
+
 // withinWindowSkew mirrors futureSkewTolerance's role for the
 // RelativeID-vs-explicit-bounds AGREEMENT check (design brief §1.2): a
 // caller's own clock is not this service's clock, so a caller ECHOING the
@@ -302,6 +328,11 @@ type requestWindowCanonicalization struct {
 	// terminal WITHOUT reuse, WITHOUT interpretation, and WITHOUT any
 	// window inference substituted (see windowVetoReason).
 	Veto windowVetoReason
+	// CalendarCommitted () is set when Effective is the previous
+	// calendar period the BINDER read from a bare "last month|quarter|year" in
+	// the question (MCP surface, current axis, no field window or receipt): the
+	// window was decided before the interpreter ran, from the engine's clock.
+	CalendarCommitted bool
 	// BinderProposal is the proposal-only temporal-expression binder's own
 	// verdict, computed over the verbatim question text -- carried forward
 	// to composeEffectiveWindow regardless of whether a request-side
@@ -394,7 +425,7 @@ func (e *Engine) canonicalizeEvidenceWindow(ctx context.Context, principal stora
 	}
 
 	if request.TimeContext.EvidenceWindow == nil {
-		return requestWindowCanonicalization{BinderProposal: binderProposal}
+		return e.commitBinderCalendarWindow(request, binderProposal)
 	}
 	effective, ok := e.deriveRequestedWindow(*request.TimeContext.EvidenceWindow)
 	if !ok {
@@ -434,6 +465,62 @@ func (e *Engine) canonicalizeEvidenceWindow(ctx context.Context, principal stora
 		KeyEncoding:    windowKeyRederivable,
 		BinderProposal: binderProposal,
 	}
+}
+
+// commitBinderCalendarWindow (, chris ruling 2026-09-25: a bare "last
+// month|quarter|year" is the previous calendar period, a window over current
+// state) commits that window HERE, before the interpreter runs, so it cannot
+// depend on what a sampled interpreter said: the same question at the same
+// instant yields the same window on every call. MCP surface only, like the rest
+// of the period-as-window rule (CHAOS-6557); every other surface keeps a bare
+// calendar phrase as a proposal. The interpretation may still withdraw it
+// (withdrawCalendarCommit): a point-in-time reading or a class that carries no
+// window at all.
+func (e *Engine) commitBinderCalendarWindow(request InvestigationRequest, binderProposal WindowBindOutcome) requestWindowCanonicalization {
+	plain := requestWindowCanonicalization{BinderProposal: binderProposal}
+	if strings.TrimSpace(request.Consumer.Surface) != mcpSurface {
+		return plain
+	}
+	start, end, ok := calendarWindowBounds(binderProposal.Calendar, e.now())
+	if !ok {
+		return plain
+	}
+	effective := contractsv1.ContextFabricEffectiveEvidenceWindow{Start: &start, End: &end, Provenance: WindowQuestionStated}
+	return requestWindowCanonicalization{
+		Effective:         &effective,
+		KeyComponent:      windowKeyComponent(effective, windowKeyFrozen),
+		KeyEncoding:       windowKeyFrozen,
+		CalendarCommitted: true,
+		BinderProposal:    binderProposal,
+	}
+}
+
+// withdrawCalendarCommit reports whether the binder's calendar commitment must
+// be given up once the interpretation is known, and returns canon without it.
+// A commitment is withdrawn when the interpreter read a point in time (an
+// explicit as-of is a genuine historical question: CHAOS-5582's fresh-axis rule
+// governs it) or the interpreted window class carries no window at all (the
+// same "refuse to guess" rule composeEffectiveWindow applies to a trailing
+// phrase), or the frame is a series or a period comparison, which read the
+// stated period on the range axis. A sampled range or current axis never
+// withdraws it.
+func withdrawCalendarCommit(canon requestWindowCanonicalization, interpretation InterpretedQuestion, frame *QuestionFrame) (requestWindowCanonicalization, bool) {
+	if !canon.CalendarCommitted {
+		return canon, false
+	}
+	if periodShapeOf(frame) != periodShapeCurrent {
+		canon.Effective, canon.KeyComponent, canon.KeyEncoding, canon.CalendarCommitted = nil, "", 0, false
+		return canon, true
+	}
+	axis := interpretation.TimeContext.Axis
+	if axis == TemporalCurrent || axis == TemporalRange {
+		outcome := ClassifyWindow(interpretation, interpretation.WindowClass, interpretation.WindowConfidence)
+		if _, carriesWindow := DefaultRelativeID(outcome, windowDefaultPolicy); carriesWindow {
+			return canon, false
+		}
+	}
+	canon.Effective, canon.KeyComponent, canon.KeyEncoding, canon.CalendarCommitted = nil, "", 0, false
+	return canon, true
 }
 
 // deriveRequestedWindow canonicalizes a caller's explicit
@@ -992,6 +1079,10 @@ const (
 	// StatedWindowAxisStatedRange: a series or comparison turn reads its
 	// stated period on the range axis.
 	StatedWindowAxisStatedRange StatedWindowAxisOutcome = "stated_range"
+	// StatedWindowAxisWithdrawn (): the binder's calendar commitment
+	// was given up because the interpreter read a point in time or a class that
+	// carries no window; the fresh axis governs and no window is reported.
+	StatedWindowAxisWithdrawn StatedWindowAxisOutcome = "withdrawn"
 )
 
 // statedWindowAxisOutcomeOf maps the shared axis rule's result onto the stated
@@ -1027,6 +1118,9 @@ func statedWindowOrigin(canon requestWindowCanonicalization, interpretation Inte
 		return ""
 	}
 	if canon.Effective != nil {
+		if canon.CalendarCommitted {
+			return StatedWindowOriginQuestionPhrase
+		}
 		if canon.Effective.Provenance == WindowQuestionStated {
 			return StatedWindowOriginField
 		}
@@ -1050,9 +1144,11 @@ func statedWindowOrigin(canon requestWindowCanonicalization, interpretation Inte
 // range with no period phrase in the question is the interpreter's own
 // invention, not something the caller stated, and is never committed. nil when
 // any of that does not hold (a historical axis the caller asked for, an as-of
-// instant, a range with no usable bounds, another surface).
+// instant, a range with no usable bounds, another surface). A bare calendar
+// phrase the binder read (BindOutcome.Calendar) is never the interpreter's to
+// bound: the binder commits it deterministically before the interpreter runs.
 func interpreterPeriodWindow(canon requestWindowCanonicalization, frame *QuestionFrame, requestAxis TemporalAxis, fresh TimeContext, freshAnswerable bool, surface string) *contractsv1.ContextFabricEffectiveEvidenceWindow {
-	if strings.TrimSpace(surface) != mcpSurface || periodShapeOf(frame) != periodShapeCurrent || !binderNamesAPeriod(canon.BinderProposal) || canon.Effective != nil || canon.Veto != windowVetoNone ||
+	if strings.TrimSpace(surface) != mcpSurface || periodShapeOf(frame) != periodShapeCurrent || !binderNamesAPeriod(canon.BinderProposal) || canon.BinderProposal.Calendar != CalendarPeriodNone || canon.Effective != nil || canon.Veto != windowVetoNone ||
 		requestAxis != TemporalCurrent || !freshAnswerable || fresh.Axis != TemporalRange ||
 		fresh.Start == nil || fresh.End == nil || !fresh.Start.Before(*fresh.End) {
 		return nil

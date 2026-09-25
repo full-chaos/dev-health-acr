@@ -2203,6 +2203,15 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// Admission reads the carrier and decides nothing about the frame; the
 	// composition that does stays below, after the verdict, where it was.
 	// The fresh line above still reports what the interpreter proposed.
+	// : the binder committed a bare calendar phrase's window before
+	// the interpreter ran; the interpretation may only withdraw it (an as-of
+	// reading, a class with no window), never redefine it.
+	if withdrawn, ok := withdrawCalendarCommit(windowCanon, interpretation, familyOutcome.Frame); ok {
+		windowCanon = withdrawn
+		if e.telemetry != nil {
+			e.telemetry.RecordStatedWindowAxis(ctx, principal, request.Consumer.Surface, StatedWindowOriginQuestionPhrase, interpretedTimeBound.Bound.Axis, interpretedTimeBound.Bound.Axis, StatedWindowAxisWithdrawn)
+		}
+	}
 	var periodClamp ReadTimeClamp
 	windowCommitted := windowCanon.Effective != nil
 	if continuation.Observed {
