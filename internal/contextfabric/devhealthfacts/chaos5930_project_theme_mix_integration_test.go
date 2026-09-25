@@ -449,14 +449,14 @@ func TestProjectThemeMixAgainstRealClickHouse(t *testing.T) {
 		seedRepo("repo-mix", orgID)
 		seedRepoOwnership(orgID, "team-mix-owner", "repo-mix")
 		seedWorkUnit("wu-mix", orgID, "repo-mix", 10, map[string]float64{"feature_delivery": 1.0})
-		// team-mix-direct's own investment_metrics_daily row, read by the
-		// SAME provider's team branch in the SAME ReadFacts call as the
-		// project subject above -- proves widening this producer's project
-		// path never makes it skip expansion for a co-requested team root.
-		if err := direct.Exec(ctx, `INSERT INTO investment_metrics_daily (day, team_id, investment_area, project_stream, delivery_units, work_items_completed, prs_merged, churn_loc, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-			date(2026, 9, 18), "team-mix-direct", "product", "growth", uint32(1), uint32(1), uint32(0), uint64(1), at, orgID); err != nil {
-			t.Fatalf("seed direct team investment row: %v", err)
-		}
+		// team-mix-direct owns its own repository with persisted work, so the
+		// SAME provider's team branch serves its canonical mix in the SAME
+		// ReadFacts call as the project subject above -- proves widening this
+		// producer's project path never makes it skip expansion for a
+		// co-requested team root.
+		seedRepo("repo-mix-direct", orgID)
+		seedRepoOwnership(orgID, "team-mix-direct", "repo-mix-direct")
+		seedWorkUnit("wu-mix-direct", orgID, "repo-mix-direct", 10, map[string]float64{"feature_delivery": 1.0})
 
 		provider := findProvider(t, providers, contextfabric.FactInvestment)
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
