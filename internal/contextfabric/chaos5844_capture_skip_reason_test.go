@@ -99,22 +99,6 @@ func TestCaptureSkipReasonWindowVetoed(t *testing.T) {
 	assertCaptureSkipReasonJSON(t, buf, CaptureSkipReasonWindowVetoed)
 }
 
-// TestCaptureSkipReasonWindowConfirmationRequired: an MCP caller's bare
-// explicit evidence_window field is gated before tryReuse and Interpret --
-// no subject resolution of any kind is ever attempted.
-func TestCaptureSkipReasonWindowConfirmationRequired(t *testing.T) {
-	t.Parallel()
-	h := newNeedTurnHarness(t, nil)
-	buf := swapToJSONLedgerTelemetry(h)
-	request := needTurnRequest("request_5844_window_confirmation_required", false)
-	request.Consumer = ConsumerInfo{Name: "test", Version: "1.0.0", Surface: "mcp"}
-	request.TimeContext.EvidenceWindow = &contractsv1.ContextFabricRequestedEvidenceWindow{RelativeID: RelativeWindowTrailing30D}
-	if _, err := h.engine.Investigate(context.Background(), acceptancePrincipal(), request); err != nil {
-		t.Fatalf("Investigate() error = %v", err)
-	}
-	assertCaptureSkipReasonJSON(t, buf, CaptureSkipReasonWindowConfirmationRequired)
-}
-
 // TestCaptureSkipReasonStructureVetoed: a structure receipt that fails
 // pre-Interpret canonicalization short-circuits above tryReuse and
 // Interpret -- no subject resolution of any kind is ever attempted.

@@ -27,7 +27,6 @@ func TestContextFabricEngineTelemetryEmitsCaptureSkipReason(t *testing.T) {
 	reasons := []contextfabric.CaptureSkipReason{
 		contextfabric.CaptureSkipReasonFrameGateRefused,
 		contextfabric.CaptureSkipReasonWindowVetoed,
-		contextfabric.CaptureSkipReasonWindowConfirmationRequired,
 		contextfabric.CaptureSkipReasonStructureVetoed,
 		contextfabric.CaptureSkipReasonReuseValidationError,
 		contextfabric.CaptureSkipReasonReuseBudgetRefused,

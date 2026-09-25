@@ -713,13 +713,10 @@ type EngineTelemetry interface {
 	// NOT the same set as "requests whose result carries StructureNeeds",
 	// and the two differ in both directions:
 	//
-	//   - A gate-1 (explicit-unconfirmed) window terminal composes a
-	//     window-only StructureNeeds and emits NO event. That gate fires
-	//     before Interpret runs, so there is no model-set shape to report
-	//     -- only windowConfirmationRequiredResult's own synthesized
-	//     ShapeOpen placeholder, and reporting that as if it were the
-	//     question's class would be a fabricated reading. It also builds no
-	//     anchor or handle material, so there is no decision to record.
+	//   - A window terminal that fired before Interpret ran (the removed
+	//     CHAOS-4040 gate 1, CHAOS-6557) composed a window-only
+	//     StructureNeeds and emitted NO event: no model-set shape to
+	//     report, no anchor or handle material, so no decision to record.
 	//   - A request whose material is empty (a never-projected org, say)
 	//     emits an event and then composes no StructureNeeds at all,
 	//     because composeStructureNeeds returns nil for empty material.
@@ -732,8 +729,8 @@ type EngineTelemetry interface {
 	// this. Neither is the other's denominator.
 	RecordCohortStructureGate(ctx context.Context, principal storage.Principal, outcome CohortStructureGateOutcome, shape InvestigationShape)
 	// RecordWindowGateOfferDisclosure (CHAOS-4314) reports, once per
-	// window-gated terminal (both windowConfirmationRequiredResult call
-	// sites -- explicit-unconfirmed gate 1 and class-default gate 2), whether
+	// window-gated terminal (the class-default gate 2 call site of
+	// windowConfirmationRequiredResult), whether
 	// the composed StructureNeeds carried a window_expand recommendation.
 	// offered=true is the "window_gated_offered" report-schema split;
 	// offered=false is "window_gated_silent" -- gate 1 and every gate-2
@@ -1640,36 +1637,6 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// here).
 		return e.windowVetoResult(ctx, principal, request, windowCanon.Veto, nil, windowCanon.StaleEntry, binding, nil, e.preInterpretExplicitStructure(request), nil, ancestryRoot(request, receiptsNotYetValidated(), vetoingWindowReceiptID(request, windowCanon.Veto)), e.captureConfirmedNeedLedgerOnly(request, remembered, nil).withAnchorShadow(anchorShadow))
 	}
-	// CHAOS-4040 (sol-max ruling 2026-08-21, "GATE ALL INFERRED WINDOWS
-	// out of decisive terminals"): an MCP bare explicit evidence_window
-	// field resolved here, at precedence step 1, with NO decisive
-	// authority of its own (windowCanon.ExplicitUnconfirmed) -- gated
-	// BEFORE tryReuse and BEFORE Interpret, exactly like a genuine veto
-	// above, so this class of request pays for zero interpreter/graph/
-	// fact/synthesis work (CHAOS-4040's own run-3 acceptance bar). The
-	// OTHER inferred-window origin (no request-side window at all, the
-	// class-table/binder default) cannot be known yet at this point --
-	// see the second gate, after Interpret, below.
-	if windowCanon.ExplicitUnconfirmed {
-		// This gate fires before tryReuse and Interpret -- no subject
-		// resolution of any kind was ever attempted.
-		captureSkipReasonForTelemetry = CaptureSkipReasonWindowConfirmationRequired
-		// CHAOS-3478: nil, not an empty slice -- resolvePriorSubjectHints has
-		// not run yet at this gate (it sits below, after Interpret), so
-		// there is genuinely nothing to echo yet, the same "nothing
-		// attempted" convention structureCanon's own nil argument here
-		// already carries for structure receipts.
-		//
-		// windowExpandUnavailable=false (CHAOS-4336): this gate makes no
-		// claim about the current window's pool content at all -- it
-		// fires BEFORE Interpret/ResolveSubjects ever run, by design (this
-		// function's own doc comment above) -- so there is nothing to be
-		// "unavailable"; the tier-ordering fact composeWindowExpandOption
-		// needs (pickWindowExpandTarget) is available from windowCanon.Effective
-		// alone, unlike gate 2's own offers-only read.
-		return e.windowConfirmationRequiredResult(ctx, principal, request, nil, *windowCanon.Effective, nil, WindowCanonicalizationGatedExplicitUnconfirmed, binding, StructureOfferMaterial{}, false, nil, nil, nil, ancestryRoot(request, receiptsNotYetValidated()), e.captureConfirmedNeedLedgerOnly(request, remembered, nil).withAnchorShadow(anchorShadow))
-	}
-
 	// CHAOS-3900 P1 (pivot-intent design brief §2.1): canonicalize
 	// structure receipts (kindr_/ancr_/handr_) BEFORE tryReuse too, same
 	// ordering discipline and the same reason as canonicalizeEvidenceWindow
@@ -2549,14 +2516,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// alone), so this reordering changes nothing about what it reads, only
 	// when. No-op (returns nil) when e.priorConsultant is nil.
 	priorEntries := e.fetchPriorEntries(ctx, principal, QuestionHash(request.Question))
-	// CHAOS-4040 (sol-max ruling 2026-08-21): precedence step 2 --
-	// windowCanon.Effective is nil here by construction (a non-nil,
-	// ExplicitUnconfirmed Effective already returned at gate 1 above; a
-	// non-nil, confirmed/stated Effective would have kept KeyComponent
-	// non-empty and reached this point unaffected, see the Provenance
-	// switch inside composeEffectiveWindow) -- so ANY inferred_default
-	// this call produces is the class-table/binder default, the SECOND
-	// origin the ruling requires gated, computed EARLY (before
+	// CHAOS-4040 (sol-max ruling 2026-08-21): precedence step 2. A
+	// caller-supplied window (wire field, winr_ receipt) is committed at
+	// step 1 and composeEffectiveWindow returns it unchanged; a period
+	// stated in the question and bound by the binder is committed here
+	// too (CHAOS-6557). Every inferred_default this call produces is
+	// therefore the class-table/prior default, which the ruling requires
+	// gated, computed EARLY (before
 	// ResolveSubjects/DiscoverContext/ReadFacts/Synthesize) instead of at
 	// its pre-CHAOS-4040 position near the end of this function, so a
 	// gated request pays for interpretation only -- CHAOS-4040's own

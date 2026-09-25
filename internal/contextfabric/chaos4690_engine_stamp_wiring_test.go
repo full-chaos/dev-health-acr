@@ -259,7 +259,7 @@ func TestChaos4690_StructureVetoResult_StampsEvidenceRefLabels(t *testing.T) {
 	}
 }
 
-// --- Window confirmation required (window.go's windowConfirmationRequiredResult, gate 1) ---
+// --- Window confirmation required (window.go's windowConfirmationRequiredResult, class-default gate) ---
 
 func TestChaos4690_WindowConfirmationRequiredResult_StampsEvidenceRefLabels(t *testing.T) {
 	t.Parallel()
@@ -268,9 +268,8 @@ func TestChaos4690_WindowConfirmationRequiredResult_StampsEvidenceRefLabels(t *t
 	results := newMapResultStore()
 	engine := buildWindowGateEngine(t, interpreter, graph, results)
 
-	request := validInvestigationRequest()
+	request := validInvestigationRequest() // no window stated: the class-default gate
 	request.Consumer.Surface = "mcp"
-	request.TimeContext.EvidenceWindow = &RequestedEvidenceWindow{RelativeID: RelativeWindowTrailing90D}
 
 	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
 	if err != nil {

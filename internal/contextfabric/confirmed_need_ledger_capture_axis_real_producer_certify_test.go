@@ -80,17 +80,6 @@ func RunCaptureSkipReasonRealProducerScenarioForTest(t *testing.T, scenario stri
 		}
 		return buf.Bytes(), orgID
 
-	case CaptureSkipReasonWindowConfirmationRequired:
-		h := newNeedTurnHarness(t, nil)
-		buf := swapToJSONLedgerTelemetry(h)
-		request := needTurnRequest("request_5802_window_confirmation_required", false)
-		request.Consumer = ConsumerInfo{Name: "test", Version: "1.0.0", Surface: "mcp"}
-		request.TimeContext.EvidenceWindow = &contractsv1.ContextFabricRequestedEvidenceWindow{RelativeID: RelativeWindowTrailing30D}
-		if _, err := h.engine.Investigate(context.Background(), acceptancePrincipal(), request); err != nil {
-			t.Fatalf("Investigate() error = %v", err)
-		}
-		return buf.Bytes(), orgID
-
 	case CaptureSkipReasonStructureVetoed:
 		h := newNeedTurnHarness(t, nil)
 		one := h.turn(needTurnRequest("request_5802_structure_veto_one", false), committingNeedResponse())

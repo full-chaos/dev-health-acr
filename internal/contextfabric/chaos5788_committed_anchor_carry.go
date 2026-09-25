@@ -144,18 +144,11 @@ const (
 	// short-circuits above tryReuse, Interpret and every capability call, so
 	// no subject resolution of any kind was ever attempted.
 	CaptureSkipReasonWindowVetoed CaptureSkipReason = "window_vetoed"
-	// CaptureSkipReasonWindowConfirmationRequired: an MCP caller's bare
-	// explicit evidence_window field has no decisive authority of its own
-	// (windowCanon.ExplicitUnconfirmed, CHAOS-4040 precedence step 1) and
-	// this turn asks the caller to confirm it -- gated before tryReuse and
-	// Interpret, the same "no subject resolution attempted" state the
-	// pre-Interpret window veto is in, for a different reason.
-	CaptureSkipReasonWindowConfirmationRequired CaptureSkipReason = "window_confirmation_required"
 	// CaptureSkipReasonStructureVetoed: a structure receipt (kindr_/ancr_/
 	// handr_) failed pre-Interpret canonicalization (structureCanon.Veto) --
 	// this turn short-circuits above tryReuse, Interpret and every
 	// capability call, the same "no subject resolution attempted" state the
-	// two window gates above are in.
+	// window veto above is in.
 	CaptureSkipReasonStructureVetoed CaptureSkipReason = "structure_vetoed"
 	// CaptureSkipReasonReuseValidationError: tryReuseWithReading found a
 	// matching stored candidate but could not serve it -- a hard
@@ -222,7 +215,6 @@ func captureSkipReasons() []CaptureSkipReason {
 		CaptureSkipReasonGraphNotProjected,
 		CaptureSkipReasonResolutionError,
 		CaptureSkipReasonWindowVetoed,
-		CaptureSkipReasonWindowConfirmationRequired,
 		CaptureSkipReasonStructureVetoed,
 		CaptureSkipReasonReuseValidationError,
 		CaptureSkipReasonReuseBudgetRefused,

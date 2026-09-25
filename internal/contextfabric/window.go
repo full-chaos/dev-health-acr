@@ -205,9 +205,10 @@ const (
 	// investigation at all (non-current axis, or a resolved class that
 	// carries no window, e.g. state_snapshot).
 	WindowCanonicalizationNone WindowCanonicalizationOutcome = "none"
-	// WindowCanonicalizationRequestStated: precedence step 1 resolved a
-	// question_stated window from the wire request (surface-appropriate
-	// per DP12(b)).
+	// WindowCanonicalizationRequestStated: the caller supplied the window --
+	// the wire evidence_window field (precedence step 1) or a period stated
+	// in the question that the binder bound (CHAOS-6557) -- so it is
+	// question_stated and committed, on every surface.
 	WindowCanonicalizationRequestStated WindowCanonicalizationOutcome = "request_stated"
 	// WindowCanonicalizationReceiptConfirmed: precedence step 1 resolved a
 	// clarification_confirmed window via winr_ receipt redemption.
@@ -235,23 +236,16 @@ const (
 	// stale_superseded_offer counter (cf_structure_receipt) rather than
 	// folding a distinguishable failure mode into an existing bucket.
 	WindowCanonicalizationVetoStaleSupersededOffer WindowCanonicalizationOutcome = "veto_stale_superseded_offer"
-	// WindowCanonicalizationGatedExplicitUnconfirmed/GatedClassDefault
-	// (CHAOS-4040, sol-max ruling 2026-08-21: "GATE ALL INFERRED WINDOWS
-	// out of decisive terminals"): the request reached
-	// windowConfirmationRequiredResult -- an inferred window (either
-	// origin) was disclosed and NOT permitted to drive a decisive
-	// terminal. Split by origin, not folded into
-	// WindowCanonicalizationInferredDefault, because that value still
-	// fires on every inferred window regardless of whether the gate
-	// applied (kept for existing consumers) -- these two report
-	// specifically that the gate WAS the reason nothing decisive
-	// happened, and distinguish precedence step 1 (explicit-unconfirmed,
-	// gated before tryReuse/Interpret) from step 2 (class-default, gated
-	// after Interpret) for CHAOS-4040's own run-3 non-vacuity bar
-	// ("at least one explicit-unconfirmed AND one engine-default case
-	// gated").
-	WindowCanonicalizationGatedExplicitUnconfirmed WindowCanonicalizationOutcome = "gated_explicit_unconfirmed"
-	WindowCanonicalizationGatedClassDefault        WindowCanonicalizationOutcome = "gated_class_default"
+	// WindowCanonicalizationGatedClassDefault (CHAOS-4040, sol-max ruling
+	// 2026-08-21: "GATE ALL INFERRED WINDOWS out of decisive terminals"): the
+	// request reached windowConfirmationRequiredResult -- an inferred window
+	// (the class-table default or a prior proposal; a period the caller
+	// SUPPLIED is committed, never gated -- CHAOS-6557) was disclosed and NOT
+	// permitted to drive a decisive terminal. Reported apart from
+	// WindowCanonicalizationInferredDefault, which still fires on every
+	// inferred window regardless of whether the gate applied, because this
+	// value says the gate WAS the reason nothing decisive happened.
+	WindowCanonicalizationGatedClassDefault WindowCanonicalizationOutcome = "gated_class_default"
 	// WindowCanonicalizationGatedRefusedNoClarification (CHAOS-4040) is
 	// windowConfirmationRequiredResult's own AllowClarification=false
 	// path: the caller declined the only thing a confirmation prompt
@@ -290,18 +284,6 @@ type requestWindowCanonicalization struct {
 	// documented correctly -- see that function). nil means step 2
 	// (composeEffectiveWindow, post-Interpret) still decides.
 	Effective *contractsv1.ContextFabricEffectiveEvidenceWindow
-	// ExplicitUnconfirmed (CHAOS-4040) is true iff Effective was resolved
-	// at THIS step (precedence step 1) with Provenance==WindowInferredDefault
-	// -- i.e. the MCP-bare-explicit-field case, never question_stated or
-	// clarification_confirmed. Internal only, no wire/enum exposure (the
-	// closed 3-value ContextFabricWindowProvenance vocabulary is
-	// unchanged -- sol-max ruling: "origin != authority"): distinguishes,
-	// for Investigate's own gating and telemetry, an EXPLICIT-but-
-	// unconfirmed caller window (gated before tryReuse/Interpret) from the
-	// class-table/binder default step 2 alone can produce (gated later,
-	// after Interpret -- see Investigate's own two window-gate call
-	// sites). Always false when Effective is nil.
-	ExplicitUnconfirmed bool
 	// KeyComponent is TimeAxisKeyFor's window fragment for Effective --
 	// "" whenever Effective is nil. An INFERRED default (step 2) never
 	// contributes a KeyComponent; see WindowInferenceVersion's own doc
@@ -406,21 +388,12 @@ func (e *Engine) canonicalizeEvidenceWindow(ctx context.Context, principal stora
 	if request.TimeContext.EvidenceWindow == nil {
 		return requestWindowCanonicalization{BinderProposal: binderProposal}
 	}
-	effective, ok := e.deriveRequestedWindow(*request.TimeContext.EvidenceWindow, request.Consumer)
+	effective, ok := e.deriveRequestedWindow(*request.TimeContext.EvidenceWindow)
 	if !ok {
 		return requestWindowCanonicalization{Veto: windowVetoConfirmationConflict, BinderProposal: binderProposal}
 	}
 	return requestWindowCanonicalization{
 		Effective: &effective,
-		// CHAOS-4040: set purely from the just-derived Provenance -- an
-		// MCP bare explicit field always resolves here (this branch) with
-		// Provenance==inferred_default (windowExplicitProvenance), while a
-		// question_stated/clarification_confirmed value can never reach
-		// this specific branch with that provenance (deriveRequestedWindow
-		// only ever returns inferred_default OR question_stated, and
-		// clarification_confirmed only ever resolves via
-		// resolveWindowReceipts above, a different return path entirely).
-		ExplicitUnconfirmed: effective.Provenance == WindowInferredDefault,
 		// ALWAYS keyed, regardless of Provenance tier -- codex review
 		// finding (W1 round 3), correcting round 1's own fix #5, which had
 		// this backwards. Round 1 reasoned "inferred tier -> no key
@@ -456,17 +429,17 @@ func (e *Engine) canonicalizeEvidenceWindow(ctx context.Context, principal stora
 }
 
 // deriveRequestedWindow canonicalizes a caller's explicit
-// ContextFabricRequestedEvidenceWindow into a server-owned Effective window,
-// applying the DP12(b) surface split (design brief pivot amendment): on
-// MCP, a bare explicit evidence_window carries no decisive authority of its
-// own -- it enters at inferred_default -- while every other surface's
-// stated-echo semantics (3900 §4, untouched by DP12(b)) grant
-// question_stated directly. ok=false means a RelativeID was supplied
-// alongside explicit bounds that disagree with the server's own derivation
-// beyond ordinary clock skew -- a conflict, never a silent preference of
-// one side.
-func (e *Engine) deriveRequestedWindow(requested contractsv1.ContextFabricRequestedEvidenceWindow, consumer ConsumerInfo) (contractsv1.ContextFabricEffectiveEvidenceWindow, bool) {
-	provenance := windowExplicitProvenance(consumer)
+// ContextFabricRequestedEvidenceWindow into a server-owned Effective window.
+// A window the caller supplied is COMMITTED on every surface (CHAOS-6557,
+// chris ruling 2026-09-25): it enters at question_stated, carries decisive
+// authority, and is never gated for confirmation. This replaces DP12(b)'s
+// MCP-only downgrade to inferred_default, which gated a caller's own
+// evidence_window behind a winr_ receipt round trip it had no reason to make.
+// ok=false means a RelativeID was supplied alongside explicit bounds that
+// disagree with the server's own derivation beyond ordinary clock skew -- a
+// conflict, never a silent preference of one side.
+func (e *Engine) deriveRequestedWindow(requested contractsv1.ContextFabricRequestedEvidenceWindow) (contractsv1.ContextFabricEffectiveEvidenceWindow, bool) {
+	provenance := WindowQuestionStated
 	if requested.RelativeID == RelativeWindowAllTime {
 		return contractsv1.ContextFabricEffectiveEvidenceWindow{RelativeID: RelativeWindowAllTime, Provenance: provenance}, true
 	}
@@ -483,19 +456,6 @@ func (e *Engine) deriveRequestedWindow(requested contractsv1.ContextFabricReques
 	}
 	start, end := requested.Start.UTC(), requested.End.UTC()
 	return contractsv1.ContextFabricEffectiveEvidenceWindow{Start: &start, End: &end, Provenance: provenance}, true
-}
-
-// windowExplicitProvenance implements the DP12(b) uniform surface split
-// (pivot-intent design brief, ratified 07:28 08-19): tier is a function of
-// SURFACE alone. MCP's own bare explicit evidence_window field can never
-// itself grant question_stated -- only winr_ receipt redemption
-// (resolveWindowReceipts) can. Every other surface keeps 3900 §4's
-// ratified stated-echo semantics, untouched by this ruling.
-func windowExplicitProvenance(consumer ConsumerInfo) WindowProvenance {
-	if strings.TrimSpace(consumer.Surface) == "mcp" {
-		return WindowInferredDefault
-	}
-	return WindowQuestionStated
 }
 
 // resolveWindowReceipts implements design brief §5's winr_ redemption path:
@@ -782,15 +742,17 @@ func composeEffectiveWindow(interpretation InterpretedQuestion, requestWindow *c
 		// see windowPriorProposal's own doc comment.
 		return nil
 	}
+	provenance := WindowInferredDefault
 	switch {
 	case binderProposal.Reason == WindowBindRoutedInferred:
-		// A guards-passing binder span PROPOSES a RelativeID that
-		// overrides the class table's own pick (design brief §1.2) -- it
-		// still never mints question_stated authority; the provenance
-		// below stays inferred_default either way. Takes priority over any
-		// prior proposal (a deterministic read of THIS question's own text
-		// beats a historical aggregate).
+		// A guards-passing binder span is a period the caller STATED in the
+		// question (single span, role-checked): it overrides the class
+		// table's own pick (design brief §1.2) and, per CHAOS-6557 (chris
+		// ruling 2026-09-25), is COMMITTED -- question_stated, never gated.
+		// Takes priority over any prior proposal (a deterministic read of
+		// THIS question's own text beats a historical aggregate).
 		relativeID = binderProposal.RelativeID
+		provenance = WindowQuestionStated
 	case priorWindow.OK:
 		// CHAOS-3977 P5 (design brief §3.4, DP4(a) site two): a prior may
 		// propose the RelativeID the class table would otherwise guess --
@@ -803,7 +765,7 @@ func composeEffectiveWindow(interpretation InterpretedQuestion, requestWindow *c
 	if relativeID == RelativeWindowAllTime {
 		return &contractsv1.ContextFabricEffectiveEvidenceWindow{
 			RelativeID: relativeID, WindowClass: outcome.Class,
-			Provenance: WindowInferredDefault, Confidence: outcome.Confidence,
+			Provenance: provenance, Confidence: outcome.Confidence,
 		}
 	}
 	start, end, ok := relativeWindowBounds(relativeID, now)
@@ -817,7 +779,7 @@ func composeEffectiveWindow(interpretation InterpretedQuestion, requestWindow *c
 	}
 	return &contractsv1.ContextFabricEffectiveEvidenceWindow{
 		Start: &start, End: &end, RelativeID: relativeID, WindowClass: outcome.Class,
-		Provenance: WindowInferredDefault, Confidence: outcome.Confidence,
+		Provenance: provenance, Confidence: outcome.Confidence,
 	}
 }
 
@@ -825,9 +787,8 @@ func composeEffectiveWindow(interpretation InterpretedQuestion, requestWindow *c
 // EngineTelemetry.RecordWindowCanonicalization, from canonicalization's own
 // veto/effective state and, once available, composeEffectiveWindow's own
 // result. Classified by canon.Effective.Provenance rather than by WHICH
-// step produced it, so an MCP bare explicit evidence_window -- which
-// resolves at precedence step 1 but carries inferred_default provenance
-// per DP12(b) -- is correctly reported as inferred, not as stated.
+// step produced it, so a binder-bound question phrase (resolved after
+// Interpret, CHAOS-6557) reports as stated exactly like the wire field.
 // carried is CHAOS-4360's own signal: true iff resolveCarriedWindow (this
 // call's own Investigate/terminalResult caller) replaced an otherwise
 // inferred_default effective window with one inherited from an earlier turn
@@ -863,6 +824,9 @@ func windowCanonicalizationOutcome(canon requestWindowCanonicalization, effectiv
 		}
 	}
 	if effective != nil {
+		if effective.Provenance == WindowQuestionStated {
+			return WindowCanonicalizationRequestStated
+		}
 		return WindowCanonicalizationInferredDefault
 	}
 	return WindowCanonicalizationNone
@@ -1055,9 +1019,9 @@ func windowCanonicalizationOutcomeForVeto(veto windowVetoReason) WindowCanonical
 // fresh WindowClarification is minted for a NON-veto ambiguous window
 // (that clarification-offer machinery... is W2/W2b)". Present whenever
 // effective is genuinely INFERRED (Provenance == WindowInferredDefault,
-// regardless of which precedence step produced it -- a request-side
-// explicit_unattributed evidence_window on the MCP surface and a
-// class-table/binder default both qualify), so a caller can confirm a
+// regardless of which precedence step produced it -- a class-table or
+// prior-proposal default qualifies; a period the caller supplied does not,
+// CHAOS-6557), so a caller can confirm a
 // window instead of silently trusting the pick. nil when effective is
 // nil (no window in play) or already caller-asserted/confirmed
 // (Provenance != inferred_default -- nothing to disambiguate).
@@ -1358,11 +1322,13 @@ const windowConfirmationRequiredPlaceholderPrompt = "Confirm the evidence window
 
 // windowConfirmationRequiredResult (CHAOS-4040, sol-max ruling 2026-08-21,
 // "GATE ALL INFERRED WINDOWS out of decisive terminals") is the shared
-// confirmation-required terminal BOTH of Investigate's own window gates
-// route to: precedence step 1 (explicit-unconfirmed -- an MCP bare
-// evidence_window field, gated before tryReuse/Interpret) and step 2
-// (class-default -- the class-table/binder default, gated after Interpret,
-// before subject resolution/facts/synthesis). Modeled on terminalResult's
+// confirmation-required terminal Investigate's window gate routes to:
+// precedence step 2 (class-default -- the class-table default, gated after
+// Interpret, before subject resolution/facts/synthesis). Its former step-1
+// sibling (an MCP bare evidence_window field, gated before Interpret) was
+// removed by CHAOS-6557: a caller-supplied window is committed, so the
+// nil-interpretation parameters below are only ever exercised by tests.
+// Modeled on terminalResult's
 // own shape (unresolved.go) -- NOT windowVetoResult above, which
 // hardcodes Status=no_match and carries no offers at all -- because this
 // IS an ordinary disclosure-bearing non-decisive terminal, structurally

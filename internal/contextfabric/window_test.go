@@ -397,21 +397,6 @@ func TestWindowKeyComponent_InjectiveWithinEachEncoding(t *testing.T) {
 	})
 }
 
-// TestWindowExplicitProvenance pins the pivot brief's DP12(b) surface split:
-// tier is a function of SURFACE alone. MCP's bare explicit evidence_window
-// enters inferred; every other surface keeps the 3900 §4 stated-echo grant.
-func TestWindowExplicitProvenance(t *testing.T) {
-	t.Parallel()
-	if got := windowExplicitProvenance(ConsumerInfo{Surface: "mcp"}); got != WindowInferredDefault {
-		t.Errorf("windowExplicitProvenance(mcp) = %q, want %q (DP12(b))", got, WindowInferredDefault)
-	}
-	for _, surface := range []string{"workbench", "web_assertion", ""} {
-		if got := windowExplicitProvenance(ConsumerInfo{Surface: surface}); got != WindowQuestionStated {
-			t.Errorf("windowExplicitProvenance(%q) = %q, want %q (3900 §4 stated-echo, untouched by DP12(b))", surface, got, WindowQuestionStated)
-		}
-	}
-}
-
 // TestComposeEffectiveWindow_NonCurrentAxisNeverCarriesAWindow pins that a
 // window is representable ONLY on the current axis -- an interpreted
 // historical axis must never carry an inferred window disclosure, even when
@@ -429,8 +414,10 @@ func TestComposeEffectiveWindow_NonCurrentAxisNeverCarriesAWindow(t *testing.T) 
 
 // TestComposeEffectiveWindow_BinderProposalOverridesClassTableDefault pins
 // design brief §1.2: a guards-passing binder span's RelativeID overrides the
-// class table's own pick, but the provenance stays inferred_default either
-// way -- a binder proposal never mints question_stated authority.
+// class table's own pick, and (CHAOS-6557, chris ruling 2026-09-25) a period
+// the caller STATED in the question is committed: question_stated, never
+// gated. Without a binder span the same call stays inferred_default (see
+// TestComposeEffectiveWindow_NoBinderSpanStaysInferred).
 func TestComposeEffectiveWindow_BinderProposalOverridesClassTableDefault(t *testing.T) {
 	t.Parallel()
 	interpreted := InterpretedQuestion{
@@ -442,13 +429,35 @@ func TestComposeEffectiveWindow_BinderProposalOverridesClassTableDefault(t *test
 
 	got := composeEffectiveWindow(interpreted, nil, binder, windowPriorProposal{}, now)
 	if got == nil {
-		t.Fatal("composeEffectiveWindow = nil, want an inferred window")
+		t.Fatal("composeEffectiveWindow = nil, want the stated window")
 	}
-	if got.Provenance != WindowInferredDefault {
-		t.Errorf("Provenance = %q, want %q -- a binder proposal never mints question_stated", got.Provenance, WindowInferredDefault)
+	if got.Provenance != WindowQuestionStated {
+		t.Errorf("Provenance = %q, want %q -- a period stated in the question is committed", got.Provenance, WindowQuestionStated)
 	}
 	if got.RelativeID != RelativeWindowTrailing365D {
 		t.Errorf("RelativeID = %q, want the binder's own proposal %q (overriding the class table's own recent_activity_lookup->trailing_30d pick)", got.RelativeID, RelativeWindowTrailing365D)
+	}
+}
+
+// TestComposeEffectiveWindow_NoBinderSpanStaysInferred is the other
+// direction of the test above: with no binder span (or an ambiguous or
+// role-failed one) the class-table default is the only source, and it stays
+// inferred_default.
+func TestComposeEffectiveWindow_NoBinderSpanStaysInferred(t *testing.T) {
+	t.Parallel()
+	interpreted := InterpretedQuestion{
+		Shape: ShapeSingleSubject, RequestedJudgment: "status",
+		TimeContext: TimeContext{Axis: TemporalCurrent},
+	}
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	for _, reason := range []WindowBindReason{WindowBindNoSpan, WindowBindSpanUnbound, WindowBindSpanAmbiguous} {
+		got := composeEffectiveWindow(interpreted, nil, WindowBindOutcome{Reason: reason, SpansBound: 1}, windowPriorProposal{}, now)
+		if got == nil {
+			t.Fatalf("%s: composeEffectiveWindow = nil, want the class-table default", reason)
+		}
+		if got.Provenance != WindowInferredDefault {
+			t.Errorf("%s: Provenance = %q, want %q", reason, got.Provenance, WindowInferredDefault)
+		}
 	}
 }
 
@@ -616,8 +625,9 @@ func TestCHAOS3900_NonCurrentAxisWithWindowReceipt_Vetoes(t *testing.T) {
 
 // TestCHAOS3900_MCPExplicitWindow_StillContributesReuseKeyFragment is the
 // codex review (W1 round 3) fix, correcting round 1's own fix #5: an MCP
-// bare explicit evidence_window is tier=inferred_default under DP12(b) (no
-// DECISIVE authority), but it is still a CALLER-SUPPLIED, arbitrary value
+// bare explicit evidence_window was tier=inferred_default under DP12(b) (no
+// DECISIVE authority; question_stated since CHAOS-6557), and in both tiers
+// it is a CALLER-SUPPLIED, arbitrary value
 // (independent of the question text) and so still MUST contribute its own
 // rel:/abs: reuse-key fragment -- omitting it (round 1's mistake) let two
 // MCP requests for the identical question but DIFFERENT explicit windows
@@ -640,10 +650,10 @@ func TestCHAOS3900_MCPExplicitWindow_StillContributesReuseKeyFragment(t *testing
 		t.Fatalf("canonicalizeEvidenceWindow veto = %q, want none", canon.Veto)
 	}
 	if canon.Effective == nil {
-		t.Fatal("canonicalizeEvidenceWindow.Effective = nil, want a resolved inferred-tier window")
+		t.Fatal("canonicalizeEvidenceWindow.Effective = nil, want a resolved window")
 	}
-	if canon.Effective.Provenance != WindowInferredDefault {
-		t.Errorf("Provenance = %q, want %q (DP12(b): MCP bare explicit window is never decisive)", canon.Effective.Provenance, WindowInferredDefault)
+	if canon.Effective.Provenance != WindowQuestionStated {
+		t.Errorf("Provenance = %q, want %q (CHAOS-6557: a supplied window is committed on MCP too)", canon.Effective.Provenance, WindowQuestionStated)
 	}
 	if want := "rel:trailing_90d"; canon.KeyComponent != want {
 		t.Errorf("KeyComponent = %q, want %q -- a caller-supplied window value must key by its own identity regardless of decisive tier", canon.KeyComponent, want)

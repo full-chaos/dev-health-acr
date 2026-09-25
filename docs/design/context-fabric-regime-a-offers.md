@@ -117,8 +117,10 @@ Three properties the implementation depends on:
   signal promoting a result to the v2 semantic major, and both call sites
   dispatch `schemaVersion` off it.
 
-Gate 1 (explicit-unconfirmed) needs no gate: it fires before `Interpret`
-and never builds anchor or handle material at all.
+There is no gate 1 any more (CHAOS-6557): a window the caller supplies -- the
+`evidence_window` field on any surface, or a single period stated in the
+question -- is committed (`question_stated`) and never gated. Only an inferred
+window (class-table default) reaches the class-default gate above.
 
 **Telemetry denominator, stated exactly.** `RecordCohortStructureGate` fires once per
 `GateOffersByFamily` call (CHAOS-4634; subsumes CHAOS-4579/4531's `GateSubjectAxisOffers`) — once

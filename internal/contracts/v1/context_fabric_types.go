@@ -812,9 +812,9 @@ type ContextFabricInvestigationRequest struct {
 	// offer-shaping only; a decisive outcome still requires the matching
 	// kindr_/handr_ receipt, or -- for kind -- the §2.0 kind-insensitivity
 	// proof); on every other surface (panel/web_assertion) an explicit
-	// value keeps 3900 v5.2's ordinary question_stated rule, mirroring
-	// EvidenceWindow's own per-surface split exactly (windowExplicitProvenance,
-	// window.go). See canonicalizeStructure (structure.go) for the
+	// value keeps 3900 v5.2's ordinary question_stated rule. (EvidenceWindow
+	// no longer splits by surface: a supplied window is committed on every
+	// surface, CHAOS-6557.) See canonicalizeStructure (structure.go) for the
 	// resolution mechanics and the explicit-vs-receipt conflict rule.
 	ExpectedKinds []ContextFabricSubjectKind `json:"expected_kinds,omitempty"`
 	// SubjectHandles names grammar-typed handle values the caller already
