@@ -402,3 +402,16 @@ func TestQueryVersionMovedPastTheHealthFreshnessWindowBump(t *testing.T) {
 		t.Fatalf("QueryVersion = %q, want it moved past %q -- a stored candidate saved under that version never issued the second as-of read a period-delta comparison depends on and must not be served as though it had", devhealthfacts.QueryVersion, versionBeforeThisComparisonShipped)
 	}
 }
+
+// TestQueryVersionMovedPastTheLegacyTeamInvestmentShape pins the CURRENT query
+// version away from the one under which a team's investment fact was the legacy
+// per-day rows. Answer reuse keys on this version: a candidate saved under
+// v15 carries four day rows and reads "no normalized shares", and must never be
+// served for a team whose fact is now the canonical mix.
+func TestQueryVersionMovedPastTheLegacyTeamInvestmentShape(t *testing.T) {
+	t.Parallel()
+	const versionBeforeTheTeamMixShape = "devhealthfacts.clickhouse.v15"
+	if devhealthfacts.QueryVersion == versionBeforeTheTeamMixShape {
+		t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer stored under that version holds the legacy team day rows and would be reused", devhealthfacts.QueryVersion, versionBeforeTheTeamMixShape)
+	}
+}
