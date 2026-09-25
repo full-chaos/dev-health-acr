@@ -385,8 +385,15 @@ func TestNewEngineRequiresAllCoreCapabilities(t *testing.T) {
 // it was called with, so a test can assert a skip was observed without the
 // production code ever having a content-bearing telemetry sink to leak
 // through.
+type statedWindowAxisRecord struct {
+	Surface, Origin       string
+	Interpreted, Executed TemporalAxis
+	Outcome               StatedWindowAxisOutcome
+}
+
 type recordingTelemetry struct {
-	ensembleEvents []InterpretationEnsembleEvent
+	statedWindowAxes []statedWindowAxisRecord
+	ensembleEvents   []InterpretationEnsembleEvent
 	// storedResultAuthorizations records every stored-result decision
 	// verbatim, in emission order.
 	storedResultAuthorizations []StoredResultAuthorization
@@ -753,6 +760,10 @@ func (r *recordingTelemetry) RecordBindingEpochDelta(_ context.Context, _ storag
 func (r *recordingTelemetry) RecordWindowBinderOutcome(_ context.Context, _ storage.Principal, _ string, outcome WindowBindOutcome) {
 	r.windowBinderOutcomes = append(r.windowBinderOutcomes, outcome.Reason)
 	r.windowBinderProposals = append(r.windowBinderProposals, outcome)
+}
+
+func (r *recordingTelemetry) RecordStatedWindowAxis(_ context.Context, _ storage.Principal, surface, origin string, interpretedAxis, executedAxis TemporalAxis, outcome StatedWindowAxisOutcome) {
+	r.statedWindowAxes = append(r.statedWindowAxes, statedWindowAxisRecord{surface, origin, interpretedAxis, executedAxis, outcome})
 }
 
 func (r *recordingTelemetry) RecordWindowGatedForConfirmation(_ context.Context, _ storage.Principal, surface string, origin WindowCanonicalizationOutcome, effective contractsv1.ContextFabricEffectiveEvidenceWindow) {

@@ -793,6 +793,110 @@ func composeEffectiveWindow(interpretation InterpretedQuestion, requestWindow *c
 	}
 }
 
+// questionStatesWindow reports whether the question itself states the
+// evidence window (CHAOS-6557): the binder bound exactly one role-checked
+// span and the interpreted class carries a window at all (the same
+// "refuse to guess" rule composeEffectiveWindow applies). It is the one
+// predicate both the axis decision in Investigate and composeEffectiveWindow's
+// stated-provenance branch read, so the turn that executes on the current
+// axis is exactly the turn that reports a question_stated window.
+func questionStatesWindow(interpretation InterpretedQuestion, binderProposal WindowBindOutcome) bool {
+	if binderProposal.Reason != WindowBindRoutedInferred || !binderProposal.Trailing {
+		return false
+	}
+	outcome := ClassifyWindow(interpretation, interpretation.WindowClass, interpretation.WindowConfidence)
+	_, ok := DefaultRelativeID(outcome, windowDefaultPolicy)
+	return ok
+}
+
+// StatedWindowOrigin values (CHAOS-6557) name where a caller-supplied
+// window came from on the RecordStatedWindowAxis line.
+const (
+	StatedWindowOriginField            = "evidence_window"
+	StatedWindowOriginQuestionPhrase   = "question_phrase"
+	StatedWindowOriginInterpreterRange = "interpreter_range"
+)
+
+// StatedWindowAxisOutcome is the closed outcome vocabulary of the stated
+// window axis decision line: its own type, not ContinuationAxisOutcome, whose
+// "overridden_by_receipt" means a redeemed window receipt.
+type StatedWindowAxisOutcome string
+
+const (
+	StatedWindowAxisAgreed     StatedWindowAxisOutcome = "agreed"
+	StatedWindowAxisOverridden StatedWindowAxisOutcome = "overridden_to_current"
+	StatedWindowAxisVetoed     StatedWindowAxisOutcome = "vetoed"
+)
+
+// statedWindowAxisOutcomeOf maps the shared axis rule's result onto the stated
+// window line's own vocabulary.
+func statedWindowAxisOutcomeOf(outcome ContinuationAxisOutcome) StatedWindowAxisOutcome {
+	switch outcome {
+	case ContinuationAxisOverriddenByReceipt:
+		return StatedWindowAxisOverridden
+	case ContinuationAxisVetoed:
+		return StatedWindowAxisVetoed
+	default:
+		return StatedWindowAxisAgreed
+	}
+}
+
+// mcpSurface is the consumer surface whose published tool contract says
+// "A period when it matters ('over the last quarter', or evidence_window).
+// Without one the service picks a window and reports it": on it a period is
+// ALWAYS an evidence window over current state, never a historical axis.
+const mcpSurface = "mcp"
+
+// statedWindowOrigin returns which channel supplied a window the caller
+// stated on THIS request -- the wire evidence_window field (resolved at
+// precedence step 1 as question_stated) or a binder-bound phrase -- or ""
+// when neither did (an inferred window, a receipt, a carried or remembered
+// one: those keep their own axis rules). MCP surface only (CHAOS-6557, the
+// published tool contract above): other surfaces keep CHAOS-5582's rule that
+// a stated window with no receipt follows the fresh interpretation. A phrase
+// only counts on a current-axis request: a caller who asked for a historical
+// axis keeps it.
+func statedWindowOrigin(canon requestWindowCanonicalization, interpretation InterpretedQuestion, requestAxis TemporalAxis, surface string) string {
+	if strings.TrimSpace(surface) != mcpSurface {
+		return ""
+	}
+	if canon.Effective != nil {
+		if canon.Effective.Provenance == WindowQuestionStated {
+			return StatedWindowOriginField
+		}
+		return ""
+	}
+	if canon.Veto == windowVetoNone && requestAxis == TemporalCurrent && questionStatesWindow(interpretation, canon.BinderProposal) {
+		return StatedWindowOriginQuestionPhrase
+	}
+	return ""
+}
+
+// interpreterPeriodWindow (CHAOS-6557, published MCP tool contract) is the
+// evidence window an MCP turn states when the request is current-axis, no
+// window was supplied or committed from a trailing phrase, the question
+// itself names a period the closed trailing grammar cannot bound (the binder
+// saw exactly one span -- a bare calendar "last month|quarter|year", bound
+// but not trailing, or refused only by its clause position), and the
+// INTERPRETER read that period as a calendar range (prod q2: "last month" ->
+// 2026-08-01..09-01): on this surface a period is an evidence window over
+// current state, bounds from the interpreter, reported as question_stated. A
+// range with no period phrase in the question is the interpreter's own
+// invention, not something the caller stated, and is never committed. nil when
+// any of that does not hold (a historical axis the caller asked for, an as-of
+// instant, a range with no usable bounds, another surface).
+func interpreterPeriodWindow(canon requestWindowCanonicalization, requestAxis TemporalAxis, fresh TimeContext, freshAnswerable bool, surface string) *contractsv1.ContextFabricEffectiveEvidenceWindow {
+	binder := canon.BinderProposal
+	namesAPeriod := binder.SpansBound == 1 && !binder.PointInTime && (binder.Reason == WindowBindSpanUnbound || (binder.Reason == WindowBindRoutedInferred && !binder.Trailing))
+	if strings.TrimSpace(surface) != mcpSurface || !namesAPeriod || canon.Effective != nil || canon.Veto != windowVetoNone ||
+		requestAxis != TemporalCurrent || !freshAnswerable || fresh.Axis != TemporalRange ||
+		fresh.Start == nil || fresh.End == nil || !fresh.Start.Before(*fresh.End) {
+		return nil
+	}
+	start, end := fresh.Start.UTC(), fresh.End.UTC()
+	return &contractsv1.ContextFabricEffectiveEvidenceWindow{Start: &start, End: &end, Provenance: WindowQuestionStated}
+}
+
 // windowCanonicalizationOutcome classifies the FINAL window outcome for
 // EngineTelemetry.RecordWindowCanonicalization, from canonicalization's own
 // veto/effective state and, once available, composeEffectiveWindow's own
