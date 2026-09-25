@@ -71,6 +71,10 @@ VERSION_PKG := github.com/full-chaos/dev-health-acr/internal/version
 # than running the suite twice; gocover-cobertura then converts the Go
 # coverage profile into the Cobertura XML the TestOps ingester's coverage
 # sniffer accepts.
+# CHAOS-6777: every go test target runs its binaries through this wrapper so
+# each package binary gets its own testcontainers session and reaper.
+GOTEST_EXEC := -exec $(CURDIR)/scripts/ci/testcontainers-session-exec.sh
+
 GOTESTSUM_VERSION := v1.13.0
 GOCOVER_COBERTURA_VERSION := v1.5.0
 COVERAGE_DIR ?= .tmp/coverage
@@ -104,7 +108,7 @@ fmt-check:
 	if [ -n "$$files" ]; then echo "Go files need formatting:"; echo "$$files"; exit 1; fi
 
 test:
-	go test -count=1 -timeout $(GOTEST_PLAIN_TIMEOUT) $(GOTEST_PKGS)
+	go test $(GOTEST_EXEC) -count=1 -timeout $(GOTEST_PLAIN_TIMEOUT) $(GOTEST_PKGS)
 
 # The plain suite over the same partition the race suite and CI use: the
 # shared packages in one invocation at the default ceiling, then each isolated
@@ -133,7 +137,7 @@ test-split:
 # is now the coverage-instrumented `test-coverage` run below, while `make
 # test` stays the plain, dependency-free local gate.
 test-race:
-	go test -count=1 -race -shuffle=$(GOTEST_SHUFFLE_SEED) -timeout $(GOTEST_TIMEOUT) $(GOTEST_PKGS)
+	go test $(GOTEST_EXEC) -count=1 -race -shuffle=$(GOTEST_SHUFFLE_SEED) -timeout $(GOTEST_TIMEOUT) $(GOTEST_PKGS)
 
 # CHAOS-4567: the split ci.yml already runs (CHAOS-3974) -- the shared
 # packages under GOTEST_TIMEOUT, the isolated packages under their own,
@@ -178,7 +182,7 @@ test-race-split: test-race-shared test-race-isolated
 
 # Keep randomized order discovery out of the deterministic verification gate.
 test-shuffle-random:
-	go test -count=1 -race -shuffle=on -timeout $(GOTEST_TIMEOUT) $(GOTEST_PKGS)
+	go test $(GOTEST_EXEC) -count=1 -race -shuffle=on -timeout $(GOTEST_TIMEOUT) $(GOTEST_PKGS)
 
 # test-coverage produces machine-readable CI artifacts: JUnit XML for test
 # results, Cobertura XML for coverage, and a gotestsum JSON stream for
@@ -201,7 +205,7 @@ test-coverage:
 	mkdir -p $(COVERAGE_DIR)
 	status=0; \
 	scripts/ci/retry.sh go run gotest.tools/gotestsum@$(GOTESTSUM_VERSION) --junitfile $(COVERAGE_JUNIT) --jsonfile $(COVERAGE_JSON) -- \
-		-count=1 -timeout $(GOTEST_PLAIN_TIMEOUT) -coverprofile=$(COVERAGE_PROFILE) $(GOTEST_PKGS) || status=$$?; \
+		$(GOTEST_EXEC) -count=1 -timeout $(GOTEST_PLAIN_TIMEOUT) -coverprofile=$(COVERAGE_PROFILE) $(GOTEST_PKGS) || status=$$?; \
 	if [ -f $(COVERAGE_PROFILE) ]; then \
 		scripts/ci/retry.sh go run github.com/boumenot/gocover-cobertura@$(GOCOVER_COBERTURA_VERSION) < $(COVERAGE_PROFILE) > $(COVERAGE_COBERTURA) || status=$$?; \
 	fi; \
