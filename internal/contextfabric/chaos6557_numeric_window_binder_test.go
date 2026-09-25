@@ -191,12 +191,18 @@ func TestCHAOS6557_BinderSeparatesTrailingFromCalendarPhrases(t *testing.T) {
 		{"What changed within the last year?", true},
 		{"What changed during the past month?", true},
 		{"What changed in the past month?", true},
+		{"What changed during the last month?", true},
+		{"What changed for the last month?", true},
+		{"What changed since last month?", true},
 		{"What changed over the last 30 days?", true},
 		{"Which teams need attention over the last 90 days?", true},
 		{"Which repository carried the most operational/support work last month and why?", false},
 		{"Which repository carried the most work last month?", false},
 		{"Last month, which team shipped the most?", false},
 		{"What changed last quarter?", false},
+		{"What did the team ship for last month?", false},
+		{"What did the team ship over last month?", false},
+		{"What did the team ship in last month?", false},
 	}
 	for _, tc := range cases {
 		got := ProposeWindowFromSpans(tc.question)

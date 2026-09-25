@@ -285,12 +285,13 @@ func strippedPrecedingPreposition(lowerBefore string) bool {
 	return false
 }
 
-// spanStatesTrailingWindow (CHAOS-6560) reports whether a bound span states a
+// spanStatesTrailingWindow (CHAOS-6557) reports whether a bound span states a
 // TRAILING window rather than naming a calendar period. Every grammar entry
 // except the bare "last month|quarter|year" shapes is trailing by its own
 // words ("past month", "last 30 days"); "last month|quarter|year" is trailing
-// only after a temporal preposition ("in/over/within the last month") and is
-// otherwise the previous calendar period ("carried the most work last month").
+// only in the article-led forms "in/over/within/during/for the last month" and
+// after "since" -- "for last month", "over last month" and a bare "carried the
+// most work last month" name the previous CALENDAR period.
 func spanStatesTrailingWindow(question string, span BoundWindowSpan) bool {
 	switch span.Grammar {
 	case "trailing_month", "trailing_quarter", "trailing_year":
@@ -301,11 +302,15 @@ func spanStatesTrailingWindow(question string, span BoundWindowSpan) bool {
 		return true
 	}
 	lowerBefore := strings.ToLower(strings.TrimRightFunc(question[:span.SpanStart], unicode.IsSpace))
+	if _, ok := trimSuffixWord(lowerBefore, "since"); ok {
+		return true
+	}
+	stripped, hadArticle := lowerBefore, false
 	for _, article := range windowRoleArticles {
-		if stripped, ok := trimSuffixWord(lowerBefore, article); ok {
-			lowerBefore = stripped
+		if s, ok := trimSuffixWord(lowerBefore, article); ok {
+			stripped, hadArticle = s, true
 			break
 		}
 	}
-	return strippedPrecedingPreposition(lowerBefore)
+	return hadArticle && strippedPrecedingPreposition(stripped)
 }

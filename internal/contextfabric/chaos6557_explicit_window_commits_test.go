@@ -199,6 +199,7 @@ func TestCHAOS6557_BareLastMonthIsNeverCommittedAsTrailing(t *testing.T) {
 		"Which repository carried the most operational/support work last month?",
 		"Last month, which repository carried the most operational/support work?",
 		"Which repository carried the most operational/support work last quarter?",
+		"What did the team ship for last month?",
 	} {
 		run := runExplicitWindowCase(t, "mcp", question, nil)
 		if run.result.Status != InvestigationClarificationRequired || run.result.WindowClarification == nil {
