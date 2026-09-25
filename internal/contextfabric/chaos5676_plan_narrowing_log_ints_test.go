@@ -95,7 +95,8 @@ func TestBothNumericLogBarriersLeaveEveryValueUnchanged(t *testing.T) {
 
 // TestEveryMaxItemsLogSiteUsesTheSameBarrier is the CLASS assertion.
 //
-// "max_items" is logged at four sites in this file. They are the same value,
+// "max_items" is logged at five sites in this file (the fifth is the
+// CHAOS-6743 claim-depth line). They are the same value,
 // from the same request option, into the same kind of sink, so they are one
 // class and hold one invariant: every one of them goes through the int-typed
 // barrier. A pin that covered only the line a flow analysis names would pass
@@ -120,8 +121,8 @@ func TestEveryMaxItemsLogSiteUsesTheSameBarrier(t *testing.T) {
 		t.Errorf("telemetry.go logs max_items at %d site(s) but only %d go through the int barrier -- the unwired remainder is the same request-derived value reaching the same kind of sink, which is the entire class",
 			total, wired)
 	}
-	if total != 4 {
-		t.Errorf("telemetry.go has %d max_items site(s), want the 4 this sweep enumerated -- a new one must be wired deliberately, not inherit the count", total)
+	if total != 5 {
+		t.Errorf("telemetry.go has %d max_items site(s), want the 5 this sweep enumerated -- a new one must be wired deliberately, not inherit the count", total)
 	}
 }
 

@@ -354,7 +354,8 @@ func groupReadEngineFixtureConfigured(t *testing.T, telemetry EngineTelemetry, f
 					for index := 0; index < groupReadClaimsPerMember; index++ {
 						claims = append(claims, ClaimedFact{
 							ClaimID: fmt.Sprintf("claim_%s_%d", member.Subject.CanonicalID, index),
-							Kind:    FactMetrics, Subject: member.Subject, Field: "status",
+							// CHAOS-6743: claims about a non-member subject; this fixture exercises the cohort retry.
+							Kind: FactMetrics, Subject: retryFixtureClaimSubject(member.Subject), Field: "status",
 							Value: ScalarValue{String: ptrString("green")},
 						})
 					}

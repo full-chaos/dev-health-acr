@@ -134,7 +134,8 @@ func chaos6561InvestigateWithin(t *testing.T, population, claims, maxItems int, 
 					for claim := 0; claim < claims; claim++ {
 						facts = append(facts, ClaimedFact{
 							ClaimID: "claim_" + member.Subject.CanonicalID + "_" + string(rune('0'+claim)),
-							Kind:    FactStatus, Subject: member.Subject, Field: "status",
+							// CHAOS-6743: claims about a non-member subject; this fixture exercises the cohort retry.
+							Kind: FactStatus, Subject: retryFixtureClaimSubject(member.Subject), Field: "status",
 							Value: ScalarValue{String: ptrString("green")},
 						})
 					}

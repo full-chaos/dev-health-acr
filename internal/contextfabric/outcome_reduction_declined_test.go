@@ -276,6 +276,8 @@ func TestEveryOutcomeReductionDeclinedTokenIsProducedOrDeclaredUnreachable(t *te
 		OutcomeReductionInsufficient:     true,
 		OutcomeReductionNothingReducible: true,
 		OutcomeReductionNotItemsAxis:     true,
+		// TestCHAOS6743CandidateLeverWithNoOutcomeRoomDeclinesAsInvalidResult.
+		OutcomeReductionInvalidResult: true,
 	}
 	vocabulary := OutcomeReductionDeclinedVocabulary()
 	if len(vocabulary) != len(produced)+len(unreachable) {
@@ -345,7 +347,8 @@ func outcomeCohortEngineWithCandidates(t *testing.T, cohort *Cohort, claimsPerMe
 					for claim := 0; claim < claimsPerMember; claim++ {
 						claims = append(claims, ClaimedFact{
 							ClaimID: "claim_" + member.Subject.CanonicalID + "_" + string(rune('0'+claim)),
-							Kind:    FactStatus, Subject: member.Subject, Field: "status",
+							// CHAOS-6743: claims about a non-member subject; this fixture exercises the cohort retry.
+							Kind: FactStatus, Subject: retryFixtureClaimSubject(member.Subject), Field: "status",
 							Value: ScalarValue{String: ptrString("green")},
 						})
 					}

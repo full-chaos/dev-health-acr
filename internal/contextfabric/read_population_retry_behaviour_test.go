@@ -91,7 +91,8 @@ func retryWithMemberFacts(t *testing.T) (InvestigationResult, [][]string) {
 					for claim := 0; claim < 2; claim++ {
 						claims = append(claims, ClaimedFact{
 							ClaimID: "claim_" + member.Subject.CanonicalID + "_" + string(rune('0'+claim)),
-							Kind:    FactStatus, Subject: member.Subject, Field: "status",
+							// CHAOS-6743: claims about a non-member subject; this fixture exercises the cohort retry.
+							Kind: FactStatus, Subject: retryFixtureClaimSubject(member.Subject), Field: "status",
 							Value: ScalarValue{String: ptrString("green")},
 						})
 					}

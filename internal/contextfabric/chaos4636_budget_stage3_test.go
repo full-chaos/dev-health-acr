@@ -38,6 +38,12 @@ func budgetStageCohort(n int) *Cohort {
 func budgetStageEngine(t *testing.T, cohort *Cohort, claimsPerMember int, options EngineOptions, calls *int, telemetry ...*recordingTelemetry) *Engine {
 	t.Helper()
 	graphCohort := cohort
+	// A nil graph cohort is the work-item census path, whose tuple claims must
+	// stay on retained members (census tuples are exempt from the claim lever).
+	claimSubject := retryFixtureClaimSubject
+	if cohort == nil {
+		claimSubject = func(member SubjectRef) SubjectRef { return member }
+	}
 	engine, err := NewEngine(EngineDependencies{
 		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
 			return InterpretedQuestion{
@@ -69,7 +75,7 @@ func budgetStageEngine(t *testing.T, cohort *Cohort, claimsPerMember int, option
 					for claim := 0; claim < claimsPerMember; claim++ {
 						claims = append(claims, ClaimedFact{
 							ClaimID: "claim_" + member.Subject.CanonicalID + "_" + string(rune('0'+claim)),
-							Kind:    FactStatus, Subject: member.Subject, Field: "status",
+							Kind:    FactStatus, Subject: claimSubject(member.Subject), Field: "status",
 							Value: ScalarValue{String: ptrString("green")},
 						})
 					}
@@ -97,6 +103,15 @@ func budgetStageEngine(t *testing.T, cohort *Cohort, claimsPerMember int, option
 }
 
 func ptrString(v string) *string { return &v }
+
+// retryFixtureClaimSubject is the subject a retry fixture's per-member claims
+// are about. CHAOS-6743: per-member claims are cut before the cohort; this
+// fixture exercises the cohort retry, so its claims are about a subject derived
+// from the member that is not itself a cohort member (never cut), while fewer
+// members given to synthesis still yields fewer claims.
+func retryFixtureClaimSubject(member SubjectRef) SubjectRef {
+	return SubjectRef{Kind: member.Kind, CanonicalID: member.CanonicalID + "_detail", Label: member.Label + " detail"}
+}
 
 func budgetStageTelemetry(sinks []*recordingTelemetry) EngineTelemetry {
 	if len(sinks) > 0 && sinks[0] != nil {

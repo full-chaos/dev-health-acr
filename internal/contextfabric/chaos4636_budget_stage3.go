@@ -40,6 +40,11 @@ import (
 // shorter evidence window; (3) the retry's document gets the row lever too.
 // max_serialized_bytes is unchanged by that ruling.
 //
+// CHAOS-6743 added the ITEM-axis allocation rule, members before claims: on an
+// item overrun over a cohort, per-member claims are cut to the largest
+// per-member cap that fits (claim_depth_narrowing.go) before the cohort retry
+// halves the members; the retried document gets that lever too.
+//
 // CHAOS-4735 corrected HOW it names that axis. The first version returned a
 // fixed English sentence per family; it now returns a closed token that the
 // family registry declares, because the engine does not author user language.
@@ -229,6 +234,30 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 			event.OutcomeCompletenessState = rowLever.Result.Completeness.State
 			e.recordPlanNarrowing(ctx, principal, event)
 			return rowLever.Result, firstPass, nil
+		}
+	}
+	// CHAOS-6743 ALLOCATION, members before claims: on an ITEM overrun over a
+	// cohort, cut per-member claims (depth) to the largest per-member cap that
+	// fits BEFORE the cohort retry halves the members (scope). Prod served 5
+	// of 11 repositories to "which repositories does this organization have?"
+	// because halving was the only item lever. Halving now runs only when one
+	// claim per member still overruns.
+	if overrun == contractsv1.ContextFabricBudgetOverrunItems && params.WorkItemCensus == nil {
+		claimLever, claimErr := e.planClaimDepthNarrowing(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts, &firstPass, answerPassSecond, cardinality)
+		if claimErr != nil {
+			return InvestigationResult{}, firstPass, claimErr
+		}
+		e.recordClaimDepthNarrowing(ctx, principal, plan, answerPassFirst, measured, claimLever, budget)
+		if claimLever.Served {
+			members := cohortMemberCount(params.Graph.Cohort)
+			event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult,
+				members, members, grouped, false, overrun, params.GroupedNarrowingBasis)
+			event.recordMeasurement(measured)
+			event.PredictedItems = PredictedItemsForPlan(*plan, members)
+			event.DeadlineReserved = e.synthesisDeadlineReserve > 0
+			event.OutcomeCompletenessState = claimLever.Result.Completeness.State
+			e.recordPlanNarrowing(ctx, principal, event)
+			return claimLever.Result, firstPass, nil
 		}
 	}
 	narrowed := narrowSynthesisInput(params, plan)
@@ -532,6 +561,27 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 			retryRanked := narrowed.Ranked
 			retryPending.CohortRanked = &retryRanked
 			return retryRowLever.Result, retryPending, nil
+		}
+	}
+	// CHAOS-6743: the retried document gets the claim-depth lever too, before
+	// the candidate reduction and any refusal.
+	if retryOverrun == contractsv1.ContextFabricBudgetOverrunItems && params.WorkItemCensus == nil {
+		retryClaimLever, claimErr := e.planClaimDepthNarrowing(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts, &retryPending, answerPassThird, retryCardinality)
+		if claimErr != nil {
+			return InvestigationResult{}, retryPending, claimErr
+		}
+		e.recordClaimDepthNarrowing(ctx, principal, plan, answerPassSecond, retryMeasured, retryClaimLever, budget)
+		if retryClaimLever.Served {
+			event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, false, retryOverrun, narrowed.Basis)
+			event.recordMeasurement(retryMeasured)
+			event.PredictedItems = PredictedItemsForPlan(*plan, after)
+			event.RetryAttempted = true
+			event.DeadlineReserved = e.synthesisDeadlineReserve > 0
+			event.OutcomeCompletenessState = retryClaimLever.Result.Completeness.State
+			e.recordPlanNarrowing(ctx, principal, event)
+			retryRanked := narrowed.Ranked
+			retryPending.CohortRanked = &retryRanked
+			return retryClaimLever.Result, retryPending, nil
 		}
 	}
 	if retryOverrun != contractsv1.ContextFabricBudgetFits {

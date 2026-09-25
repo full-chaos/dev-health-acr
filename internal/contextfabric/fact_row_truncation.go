@@ -71,6 +71,9 @@ const (
 	// FactRowTruncationUnmeasurable: a truncated document could not be
 	// marshaled. A server defect, never counted as an oversized answer.
 	FactRowTruncationUnmeasurable FactRowTruncationDeclined = "unmeasurable"
+	// FactRowTruncationInvalidResult: the truncated document fit but failed
+	// contract validation (e.g. no room left for the disclosure outcome row).
+	FactRowTruncationInvalidResult FactRowTruncationDeclined = "invalid_result"
 )
 
 // factRowTruncationAttempt is one run of the lever.
@@ -511,6 +514,10 @@ func (e *Engine) planFactRowTruncation(
 	// a document announced as cut to fit must actually fit.
 	if servedMeasured.Overrun != contractsv1.ContextFabricBudgetFits || (budget.MaxItems > 0 && !servedMeasured.CertifiedFit()) {
 		attempt.Declined = FactRowTruncationInsufficient
+		return attempt, nil
+	}
+	if !servableLeverResult(truncated) {
+		attempt.Declined = FactRowTruncationInvalidResult
 		return attempt, nil
 	}
 	attempt.Result = truncated

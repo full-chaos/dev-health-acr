@@ -482,6 +482,7 @@ type recordingTelemetry struct {
 	// narrowing dropped rather than inferring it from what survived.
 	factRetentions             []FactRetentionEvent
 	factRowTruncations         []FactRowTruncationEvent
+	claimDepthNarrowings       []ClaimDepthNarrowingEvent
 	membershipCardinalities    []MembershipCardinalityEvent
 	cohortNarrowingDisclosures []CohortNarrowingDisclosureEvent
 	countPopulationScopes      []CountPopulationScopeEvent
@@ -896,6 +897,10 @@ func (r *recordingTelemetry) RecordFactRetention(_ context.Context, _ storage.Pr
 
 func (r *recordingTelemetry) RecordFactRowTruncation(_ context.Context, _ storage.Principal, event FactRowTruncationEvent) {
 	r.factRowTruncations = append(r.factRowTruncations, event)
+}
+
+func (r *recordingTelemetry) RecordClaimDepthNarrowing(_ context.Context, _ storage.Principal, event ClaimDepthNarrowingEvent) {
+	r.claimDepthNarrowings = append(r.claimDepthNarrowings, event)
 }
 
 // RecordMembershipCardinality records the whole event, same list-not-count
