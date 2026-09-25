@@ -1294,6 +1294,15 @@ grouping refusal and the single bounded path into the answer's `Limitations`.
   after the first fix landed.
 
 
+**CHAOS-6559 (2026-09-25): a team's `FactInvestment` is now ONLY the canonical
+theme mix, one standalone fact per team.** The legacy team read
+(`readTeamInvestment`, described below) was removed: on prod the mix was merged
+onto the first per-day legacy row, the model answered from the day rows and
+reported "no normalized shares". A team with no mix gets no fact and the
+provider's reason reads `investment mix unavailable for N of M requested teams`
+with the `work_unit_investments` watermark (max `computed_at`). The paragraph
+below is the history of why the legacy read was never the canonical source.
+
 **The theme-mix producer is a NEW acr fact read, not a reuse of the existing
 `FactInvestment`.** The pre-existing team read (`investment_metrics_daily`,
 `readTeamInvestment`) is fed by a **deprecated** legacy rule set

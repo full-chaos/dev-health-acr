@@ -127,7 +127,13 @@ import (
 // coverage aggregate over recommendations_daily and reports subjects whose
 // rules were evaluated inside the freshness window with none fired as an
 // available read. A candidate saved under v13 reports a clean team as no_data.
-const QueryVersion = "devhealthfacts.clickhouse.v15"
+//
+// v15 -> v16: a team's FactInvestment is only the canonical theme mix, one
+// standalone fact per team; the legacy per-day investment_area/day rows are no
+// longer served for a team and a team without a mix reports "investment mix
+// unavailable" with the watermark. A candidate saved under v15 carries the
+// legacy day rows (and a mix merged onto one of them) and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v16"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

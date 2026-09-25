@@ -22,6 +22,13 @@ func themeMixRow(teamID, teamName string, themes map[string]float64, bugfix floa
 	return []any{uint8(0), "repo-" + teamID, themes, bugfix, uint64(3)}
 }
 
+// watermarkTable answers the freshness read (max computed_at) ahead of the
+// broader work_unit_investments table a test seeds, which would otherwise match
+// the same "FROM work_unit_investments" text. It must be listed BEFORE it.
+func watermarkTable() fakeTable {
+	return fakeTable{match: "max(computed_at)", rows: [][]any{{"2026-09-18 00:00:00.000", uint64(2)}}}
+}
+
 func ownsRepoTable(teamID string) fakeTable {
 	return fakeTable{match: "FROM team_repo_ownership", rows: [][]any{{teamID, "repo-" + teamID}}}
 }
@@ -215,17 +222,12 @@ func TestInvestmentProviderThemeMixQueryErrorReturnsFactReadFailure(t *testing.T
 	}
 }
 
-// TestInvestmentProviderThemeMixMergesOntoExistingLegacyFactNeverShadowed
-// is the codex round-2 RED-first regression guard: a team with BOTH a
-// legacy investment_metrics_daily row (readTeamInvestment) AND canonical
-// theme-mix data must end up with exactly ONE FactInvestment fact carrying
-// BOTH the legacy fields (investment_area) and the canonical fields
-// (theme_feature_delivery) -- never two separate facts. Two separate facts
-// would let synthesis's own evidence-closure check (model_runtime.go's
-// lookupCanonicalFact, first-match by (Kind, Subject)) resolve a claim
-// citing a theme_* field against the WRONG (legacy) fact, which lacks that
-// field, and reject an otherwise-valid claim.
-func TestInvestmentProviderThemeMixMergesOntoExistingLegacyFactNeverShadowed(t *testing.T) {
+// TestInvestmentProviderTeamMixIsStandaloneNeverMergedOntoALegacyDayRow
+// (CHAOS-6559): a team with legacy investment_metrics_daily rows AND canonical
+// mix data gets exactly ONE fact, the mix, carrying no legacy day-row field.
+// The legacy rows are never read for a team: merged onto a day row, the mix was
+// read by the model as that day's attribute and reported as "no shares".
+func TestInvestmentProviderTeamMixIsStandaloneNeverMergedOntoALegacyDayRow(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
 		{match: "FROM investment_metrics_daily", rows: [][]any{investmentRow("CHAOS")}},
@@ -242,15 +244,20 @@ func TestInvestmentProviderThemeMixMergesOntoExistingLegacyFactNeverShadowed(t *
 		t.Fatalf("ReadFacts() error = %v", err)
 	}
 	if len(result.Facts) != 1 {
-		t.Fatalf("facts = %#v, want exactly 1 (legacy + canonical MERGED, never two separate facts)", result.Facts)
+		t.Fatalf("facts = %#v, want exactly 1 (the standalone mix)", result.Facts)
 	}
 	fact := result.Facts[0]
-	if fact.Fields["investment_area"].String == nil || *fact.Fields["investment_area"].String != "product" {
-		t.Fatalf("merged fact lost its legacy investment_area field: %#v", fact.Fields)
+	if _, has := fact.Fields["investment_area"]; has {
+		t.Fatalf("mix fact carries a legacy day-row field: %#v", fact.Fields)
 	}
 	themeField, ok := fact.Fields[contextfabric.FactFieldTheme(contextfabric.ThemeFeatureDelivery)]
 	if !ok || themeField.Number == nil {
-		t.Fatalf("merged fact does not carry the canonical theme_feature_delivery field: %#v", fact.Fields)
+		t.Fatalf("mix fact does not carry the canonical theme_feature_delivery field: %#v", fact.Fields)
+	}
+	for _, query := range client.queries {
+		if strings.Contains(query.statement, "FROM investment_metrics_daily") {
+			t.Fatalf("a team read queried the deprecated investment_metrics_daily: %s", query.statement)
+		}
 	}
 }
 

@@ -60,17 +60,16 @@ func historicalQuery(tc timeAxisCase, timeContext contextfabric.TimeContext) con
 	}
 }
 
-// bindingNames lists the parameter names of the last captured query, so a
+// bindingNames lists the parameter names of every captured query (a provider
+// may issue an unbounded freshness read after its bounded one), so a
 // test can prove the time bound reached ClickHouse as a bound PARAMETER
 // rather than as interpolated text.
 func (c *fakeClient) bindingNames() []string {
-	if len(c.queries) == 0 {
-		return nil
-	}
-	last := c.queries[len(c.queries)-1]
-	names := make([]string, 0, len(last.bindings))
-	for _, binding := range last.bindings {
-		names = append(names, binding.Name)
+	names := make([]string, 0)
+	for _, query := range c.queries {
+		for _, binding := range query.bindings {
+			names = append(names, binding.Name)
+		}
 	}
 	return names
 }
@@ -164,8 +163,10 @@ func TestTierABProvidersAnswerValidTime(t *testing.T) {
 			if !bound {
 				t.Fatalf("bindings = %v, want the requested instant bound as a parameter", client.bindingNames())
 			}
-			if strings.Contains(client.queries[len(client.queries)-1].statement, "2026-03-01") {
-				t.Fatal("the requested instant was interpolated into the statement text; it must only ever be a bound parameter")
+			for _, query := range client.queries {
+				if strings.Contains(query.statement, "2026-03-01") {
+					t.Fatal("the requested instant was interpolated into the statement text; it must only ever be a bound parameter")
+				}
 			}
 		})
 	}
@@ -399,5 +400,18 @@ func TestQueryVersionMovedPastTheHealthFreshnessWindowBump(t *testing.T) {
 	const versionBeforeThisComparisonShipped = "devhealthfacts.clickhouse.v10"
 	if devhealthfacts.QueryVersion == versionBeforeThisComparisonShipped {
 		t.Fatalf("QueryVersion = %q, want it moved past %q -- a stored candidate saved under that version never issued the second as-of read a period-delta comparison depends on and must not be served as though it had", devhealthfacts.QueryVersion, versionBeforeThisComparisonShipped)
+	}
+}
+
+// TestQueryVersionMovedPastTheLegacyTeamInvestmentShape pins the CURRENT query
+// version away from the one under which a team's investment fact was the legacy
+// per-day rows. Answer reuse keys on this version: a candidate saved under
+// v15 carries four day rows and reads "no normalized shares", and must never be
+// served for a team whose fact is now the canonical mix.
+func TestQueryVersionMovedPastTheLegacyTeamInvestmentShape(t *testing.T) {
+	t.Parallel()
+	const versionBeforeTheTeamMixShape = "devhealthfacts.clickhouse.v15"
+	if devhealthfacts.QueryVersion == versionBeforeTheTeamMixShape {
+		t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer stored under that version holds the legacy team day rows and would be reused", devhealthfacts.QueryVersion, versionBeforeTheTeamMixShape)
 	}
 }

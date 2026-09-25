@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -546,15 +547,15 @@ func TestCHAOS3780FindingsAgainstRealClickHouse(t *testing.T) {
 		}
 	})
 
-	t.Run("F4_investment_breaks_same_day_rerun_ties_with_computed_at", func(t *testing.T) {
+	// CHAOS-6559: a team's investment is only the canonical theme mix. The
+	// deprecated investment_metrics_daily rows (and their same-day rerun
+	// tie-break, F4) are no longer read for a team, so a team that has them
+	// but no mix gets no fact and a loud "unavailable" reason instead.
+	t.Run("F4_investment_legacy_daily_rows_never_stand_in_for_a_missing_team_mix", func(t *testing.T) {
 		const orgID = "org-f4-inv"
 		if err := direct.Exec(ctx, `INSERT INTO investment_metrics_daily (day, team_id, investment_area, project_stream, delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-			date(2026, 8, 12), "TEAM1", "product", "growth", uint32(5), uint32(1), uint32(1), uint64(100), 10.0, ts(2026, 8, 12, 8, 0, 0), orgID); err != nil {
-			t.Fatalf("seed stale investment row: %v", err)
-		}
-		if err := direct.Exec(ctx, `INSERT INTO investment_metrics_daily (day, team_id, investment_area, project_stream, delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
 			date(2026, 8, 12), "TEAM1", "product", "growth", uint32(30), uint32(12), uint32(4), uint64(850), 18.5, ts(2026, 8, 12, 20, 0, 0), orgID); err != nil {
-			t.Fatalf("seed fresh investment row: %v", err)
+			t.Fatalf("seed investment row: %v", err)
 		}
 		provider := findProvider(t, providers, contextfabric.FactInvestment)
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
@@ -566,12 +567,11 @@ func TestCHAOS3780FindingsAgainstRealClickHouse(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ReadFacts() error = %v", err)
 		}
-		if len(result.Facts) != 1 {
-			t.Fatalf("facts = %#v, want 1 (same-day rerun collapses to the freshest row)", result.Facts)
+		if len(result.Facts) != 0 {
+			t.Fatalf("facts = %#v, want none: a legacy day row must not stand in for a missing mix", result.Facts)
 		}
-		units := result.Facts[0].Fields["delivery_units"].Integer
-		if units == nil || *units != 30 {
-			t.Fatalf("fields = %#v, want the fresh row's delivery_units=30", result.Facts[0].Fields)
+		if !strings.Contains(result.Reason, "investment mix unavailable for 1 of 1 requested teams") {
+			t.Fatalf("reason = %q, want the unavailable disclosure", result.Reason)
 		}
 	})
 

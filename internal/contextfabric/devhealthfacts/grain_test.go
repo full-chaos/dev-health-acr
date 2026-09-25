@@ -183,8 +183,8 @@ func TestF2_UnrepresentableUnsignedValuesAreOmittedNotWrapped(t *testing.T) {
 		},
 		{
 			name: "investment_metrics_daily.churn_loc", kind: contextfabric.FactInvestment,
-			subject: teamSubject("CHAOS"), match: "FROM investment_metrics_daily",
-			row: []any{"CHAOS", "product", "growth", "2026-02-22", int64(30), int64(12), int64(4), overflow, float64(18.5)},
+			subject: projectSubject("linear", "proj-1"), match: "FROM investment_metrics_daily",
+			row: investmentProjectRollupRow("linear", "proj-1", "team-1", "Team One", "product", "growth", 30, 12, 4, overflow, 18.5),
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {

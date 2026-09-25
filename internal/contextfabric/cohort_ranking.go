@@ -767,12 +767,10 @@ func investmentMixSignal(facts []CanonicalFact, coverage Coverage) (value float6
 	if !familyBatchAdmits(coverage, FactInvestment) {
 		return 0, nil, false, 0, "", false, nil
 	}
-	// A team subject can carry MULTIPLE FactInvestment facts -- one per
-	// legacy (investment_area, project_stream) pair from readTeamInvestment
-	// PLUS one dedicated fact carrying the canonical theme_* fields
-	// (devhealthfacts/investment.go's readTeamThemeMix). findFact's
-	// first-match behavior is not safe here: the theme-carrying fact is not
-	// guaranteed to be first in the list, so this loop finds the fact that
+	// A team subject carries one dedicated FactInvestment fact with the
+	// canonical theme_* fields (devhealthfacts/investment.go's
+	// readTeamThemeMix); a project can carry other investment facts. findFact's
+	// first-match behavior is not safe here, so this loop finds the fact that
 	// actually HAS theme data rather than assuming position.
 	var fact CanonicalFact
 	found := false
