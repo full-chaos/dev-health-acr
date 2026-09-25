@@ -732,7 +732,16 @@ func composeEffectiveWindow(interpretation InterpretedQuestion, requestWindow *c
 	}
 	outcome := ClassifyWindow(interpretation, interpretation.WindowClass, interpretation.WindowConfidence)
 	relativeID, ok := DefaultRelativeID(outcome, windowDefaultPolicy)
-	if !ok {
+	// A period the caller STATED in the question (the binder bound exactly one
+	// role-checked span that states a TRAILING window: "in the last month",
+	// "last 30 days") is not a guess: per CHAOS-6557 (chris ruling
+	// 2026-09-25) it is COMMITTED -- question_stated, never gated -- whatever
+	// window class the interpreter picked, so it is checked BEFORE the class
+	// table's "refuse to guess". A bare "last month/quarter/year" names a
+	// calendar period the closed grammar cannot bound (Trailing=false): it
+	// stays an inferred proposal below.
+	stated := binderProposal.Reason == WindowBindRoutedInferred && binderProposal.Trailing
+	if !ok && !stated {
 		// state_snapshot, or no class could be determined at all --
 		// "refuse to guess" (design brief §2): no window, never a wrong
 		// constraint. A prior proposal is deliberately NOT consulted to
@@ -744,15 +753,16 @@ func composeEffectiveWindow(interpretation InterpretedQuestion, requestWindow *c
 	}
 	provenance := WindowInferredDefault
 	switch {
-	case binderProposal.Reason == WindowBindRoutedInferred:
-		// A guards-passing binder span is a period the caller STATED in the
-		// question (single span, role-checked): it overrides the class
-		// table's own pick (design brief §1.2) and, per CHAOS-6557 (chris
-		// ruling 2026-09-25), is COMMITTED -- question_stated, never gated.
+	case stated:
 		// Takes priority over any prior proposal (a deterministic read of
 		// THIS question's own text beats a historical aggregate).
 		relativeID = binderProposal.RelativeID
 		provenance = WindowQuestionStated
+	case binderProposal.Reason == WindowBindRoutedInferred:
+		// A guards-passing but non-trailing binder span PROPOSES a RelativeID
+		// that overrides the class table's own pick (design brief §1.2) and
+		// still never mints question_stated authority.
+		relativeID = binderProposal.RelativeID
 	case priorWindow.OK:
 		// CHAOS-3977 P5 (design brief §3.4, DP4(a) site two): a prior may
 		// propose the RelativeID the class table would otherwise guess --

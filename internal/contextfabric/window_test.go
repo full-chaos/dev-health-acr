@@ -425,7 +425,7 @@ func TestComposeEffectiveWindow_BinderProposalOverridesClassTableDefault(t *test
 		TimeContext: TimeContext{Axis: TemporalCurrent},
 	}
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
-	binder := WindowBindOutcome{Reason: WindowBindRoutedInferred, RelativeID: RelativeWindowTrailing365D, SpansBound: 1}
+	binder := WindowBindOutcome{Reason: WindowBindRoutedInferred, RelativeID: RelativeWindowTrailing365D, SpansBound: 1, Trailing: true}
 
 	got := composeEffectiveWindow(interpreted, nil, binder, windowPriorProposal{}, now)
 	if got == nil {
@@ -436,6 +436,46 @@ func TestComposeEffectiveWindow_BinderProposalOverridesClassTableDefault(t *test
 	}
 	if got.RelativeID != RelativeWindowTrailing365D {
 		t.Errorf("RelativeID = %q, want the binder's own proposal %q (overriding the class table's own recent_activity_lookup->trailing_30d pick)", got.RelativeID, RelativeWindowTrailing365D)
+	}
+}
+
+// TestComposeEffectiveWindow_NonTrailingBinderProposalStaysInferred: a bound
+// bare "last month/quarter/year" (Trailing=false) still overrides the class
+// table's pick as a PROPOSAL, but names a calendar period the closed grammar
+// cannot bound, so it is never committed (chris 2026-09-25).
+func TestComposeEffectiveWindow_NonTrailingBinderProposalStaysInferred(t *testing.T) {
+	t.Parallel()
+	interpreted := InterpretedQuestion{
+		Shape: ShapeSingleSubject, RequestedJudgment: "status",
+		TimeContext: TimeContext{Axis: TemporalCurrent},
+	}
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	binder := WindowBindOutcome{Reason: WindowBindRoutedInferred, RelativeID: RelativeWindowTrailing365D, SpansBound: 1}
+	got := composeEffectiveWindow(interpreted, nil, binder, windowPriorProposal{}, now)
+	if got == nil || got.Provenance != WindowInferredDefault || got.RelativeID != RelativeWindowTrailing365D {
+		t.Fatalf("composeEffectiveWindow = %#v, want an inferred_default proposal of trailing_365d", got)
+	}
+	// ...and a non-trailing proposal never rescues a class with no default.
+	interpreted.WindowClass = WindowClassStateSnapshot
+	if got := composeEffectiveWindow(interpreted, nil, binder, windowPriorProposal{}, now); got != nil {
+		t.Fatalf("composeEffectiveWindow = %#v, want no window: a non-trailing proposal is not a stated window", got)
+	}
+}
+
+// TestComposeEffectiveWindow_StatedTrailingPhraseCommitsForStateSnapshot: the
+// caller stated the period, so the class table's "refuse to guess" for
+// state_snapshot does not apply.
+func TestComposeEffectiveWindow_StatedTrailingPhraseCommitsForStateSnapshot(t *testing.T) {
+	t.Parallel()
+	interpreted := InterpretedQuestion{
+		Shape: ShapeSingleSubject, RequestedJudgment: "status", WindowClass: WindowClassStateSnapshot,
+		TimeContext: TimeContext{Axis: TemporalCurrent},
+	}
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	binder := WindowBindOutcome{Reason: WindowBindRoutedInferred, RelativeID: RelativeWindowTrailing30D, SpansBound: 1, Trailing: true}
+	got := composeEffectiveWindow(interpreted, nil, binder, windowPriorProposal{}, now)
+	if got == nil || got.Provenance != WindowQuestionStated || got.RelativeID != RelativeWindowTrailing30D || got.Start == nil || got.End == nil {
+		t.Fatalf("composeEffectiveWindow = %#v, want question_stated trailing_30d with bounds", got)
 	}
 }
 

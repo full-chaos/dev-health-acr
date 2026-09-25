@@ -34,6 +34,11 @@ type explicitWindowRun struct {
 
 func runExplicitWindowCase(t *testing.T, surface, question string, field *contractsv1.ContextFabricRequestedEvidenceWindow) explicitWindowRun {
 	t.Helper()
+	return runExplicitWindowCaseWith(t, surface, question, field, bootstrapInterpretation())
+}
+
+func runExplicitWindowCaseWith(t *testing.T, surface, question string, field *contractsv1.ContextFabricRequestedEvidenceWindow, interpretation InterpretedQuestion) explicitWindowRun {
+	t.Helper()
 	project := acceptanceProject()
 	var run explicitWindowRun
 	facts := factReaderFunc(func(_ context.Context, _ storage.Principal, request CanonicalFactRequest) (CanonicalFactBundle, error) {
@@ -45,7 +50,7 @@ func runExplicitWindowCase(t *testing.T, surface, question string, field *contra
 		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
 		context:    bootstrapGraphContext(project),
 	}
-	engine := buildAcceptanceEngine(t, graph, facts, bootstrapInterpretation(), bootstrapDraft(project), newMapResultStore())
+	engine := buildAcceptanceEngine(t, graph, facts, interpretation, bootstrapDraft(project), newMapResultStore())
 
 	request := validInvestigationRequest()
 	request.Question = question
@@ -165,5 +170,48 @@ func TestCHAOS6557_InferredWindowStillClarifies(t *testing.T) {
 				t.Fatal("canonical fact read ran for an unconfirmed inferred window")
 			}
 		})
+	}
+}
+
+// A stated period is not a guess: it commits whatever window class the
+// interpreter picked, including state_snapshot (which has no INFERRED default
+// and used to swallow the binder's stated window before it could commit).
+func TestCHAOS6557_StatedPhraseCommitsForEveryWindowClass(t *testing.T) {
+	t.Parallel()
+	for _, class := range []WindowClass{WindowClassStateSnapshot, WindowClassTrendAssessment, WindowClassRecentActivityLookup, ""} {
+		t.Run(string(class), func(t *testing.T) {
+			t.Parallel()
+			interpretation := bootstrapInterpretation()
+			interpretation.WindowClass = class
+			run := runExplicitWindowCaseWith(t, "mcp", "What is the team investment mix over the last 30 days?", nil, interpretation)
+			assertCommittedWindow(t, run, RelativeWindowTrailing30D)
+		})
+	}
+}
+
+// chris 2026-09-25: "in the last month" is a TRAILING window (committed); a
+// bare "last month" names the previous CALENDAR month, which the closed
+// trailing grammar cannot bound, so it is never committed as trailing_30d:
+// it stays an inferred proposal and the confirmation turn stands.
+func TestCHAOS6557_BareLastMonthIsNeverCommittedAsTrailing(t *testing.T) {
+	t.Parallel()
+	for _, question := range []string{
+		"Which repository carried the most operational/support work last month?",
+		"Last month, which repository carried the most operational/support work?",
+		"Which repository carried the most operational/support work last quarter?",
+	} {
+		run := runExplicitWindowCase(t, "mcp", question, nil)
+		if run.result.Status != InvestigationClarificationRequired || run.result.WindowClarification == nil {
+			t.Fatalf("%q: status=%q window_clarification=%v, want the confirmation turn", question, run.result.Status, run.result.WindowClarification != nil)
+		}
+		if w := run.result.EffectiveEvidenceWindow; w == nil || w.Provenance != WindowInferredDefault {
+			t.Fatalf("%q: EffectiveEvidenceWindow = %#v, want an inferred_default proposal", question, w)
+		}
+	}
+	for _, question := range []string{
+		"Which repository carried the most operational/support work in the last month?",
+		"Which repository carried the most operational/support work over the past month?",
+	} {
+		assertCommittedWindow(t, runExplicitWindowCase(t, "mcp", question, nil), RelativeWindowTrailing30D)
 	}
 }

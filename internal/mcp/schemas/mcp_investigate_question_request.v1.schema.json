@@ -134,7 +134,7 @@
     },
     "evidence_window": {
       "$ref": "#/$defs/RequestedEvidenceWindow",
-      "description": "Optional period the answer should cover. Give either relative_id (trailing_30d, trailing_90d, trailing_365d or all_time) or both start and end. This is your stated intent; the service may still report the window it used and ask you to confirm it (see window_clarification and structure_needs.window_options)."
+      "description": "Optional period the answer should cover. Give either relative_id (trailing_30d, trailing_90d, trailing_365d or all_time) or both start and end. This is your stated intent and is used as given; the service reports the window it used (see effective_evidence_window)."
     },
     "window_confirmation_mode": {
       "$ref": "#/$defs/WindowConfirmationMode",

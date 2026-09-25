@@ -177,3 +177,31 @@ func TestCHAOS6557_WindowTelemetryLinesCarryResolvedWindow(t *testing.T) {
 		}
 	}
 }
+
+// chris 2026-09-25: "in the last month" is trailing; a bare "last month" is
+// the previous calendar month and is never committed by the trailing grammar.
+func TestCHAOS6557_BinderSeparatesTrailingFromCalendarPhrases(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		question string
+		trailing bool
+	}{
+		{"What is the team investment mix in the last month?", true},
+		{"What changed over the last quarter?", true},
+		{"What changed within the last year?", true},
+		{"What changed during the past month?", true},
+		{"What changed in the past month?", true},
+		{"What changed over the last 30 days?", true},
+		{"Which teams need attention over the last 90 days?", true},
+		{"Which repository carried the most operational/support work last month and why?", false},
+		{"Which repository carried the most work last month?", false},
+		{"Last month, which team shipped the most?", false},
+		{"What changed last quarter?", false},
+	}
+	for _, tc := range cases {
+		got := ProposeWindowFromSpans(tc.question)
+		if got.Trailing != tc.trailing {
+			t.Fatalf("ProposeWindowFromSpans(%q) = %#v, want Trailing=%v", tc.question, got, tc.trailing)
+		}
+	}
+}
