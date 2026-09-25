@@ -276,6 +276,8 @@ func TestEveryOutcomeReductionDeclinedTokenIsProducedOrDeclaredUnreachable(t *te
 		OutcomeReductionInsufficient:     true,
 		OutcomeReductionNothingReducible: true,
 		OutcomeReductionNotItemsAxis:     true,
+		// TestCHAOS6743CandidateLeverWithNoOutcomeRoomDeclinesAsInvalidResult.
+		OutcomeReductionInvalidResult: true,
 	}
 	vocabulary := OutcomeReductionDeclinedVocabulary()
 	if len(vocabulary) != len(produced)+len(unreachable) {

@@ -46,6 +46,9 @@ const (
 	ClaimDepthInsufficient ClaimDepthDeclined = "insufficient"
 	// ClaimDepthUnmeasurable: a cut document could not be marshaled.
 	ClaimDepthUnmeasurable ClaimDepthDeclined = "unmeasurable"
+	// ClaimDepthInvalidResult: the cut document fit but failed contract
+	// validation (e.g. no room left for the disclosure outcome row).
+	ClaimDepthInvalidResult ClaimDepthDeclined = "invalid_result"
 )
 
 type claimDepthAttempt struct {
@@ -293,6 +296,10 @@ func (e *Engine) planClaimDepthNarrowing(
 	attempt.Measured = servedMeasured
 	if servedMeasured.Overrun != contractsv1.ContextFabricBudgetFits || !servedMeasured.CertifiedFit() {
 		attempt.Declined = ClaimDepthInsufficient
+		return attempt, nil
+	}
+	if !servableLeverResult(cut) {
+		attempt.Declined = ClaimDepthInvalidResult
 		return attempt, nil
 	}
 	attempt.Result = cut

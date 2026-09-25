@@ -325,6 +325,9 @@ const (
 	// reason so a serialization bug is never counted as an answer that was
 	// too big.
 	OutcomeReductionUnmeasurable OutcomeReductionDeclined = "unmeasurable"
+	// OutcomeReductionInvalidResult: the narrowed document fit but failed
+	// contract validation (e.g. no room left for the disclosure outcome row).
+	OutcomeReductionInvalidResult OutcomeReductionDeclined = "invalid_result"
 )
 
 // OutcomeReductionDeclinedVocabulary is the closed set, for the enumeration
@@ -338,6 +341,7 @@ func OutcomeReductionDeclinedVocabulary() []OutcomeReductionDeclined {
 		OutcomeReductionWouldNotReduce,
 		OutcomeReductionInsufficient,
 		OutcomeReductionUnmeasurable,
+		OutcomeReductionInvalidResult,
 	}
 }
 
@@ -647,12 +651,22 @@ func (e *Engine) planCandidateNarrowing(
 		// overrun" and neither may be announced as a fit.
 		return outcomeNarrowingAttempt{Narrowing: narrowing, Declined: OutcomeReductionInsufficient, Measured: served}, nil
 	}
+	if !servableLeverResult(narrowedResult) {
+		return outcomeNarrowingAttempt{Narrowing: narrowing, Declined: OutcomeReductionInvalidResult, Measured: served}, nil
+	}
 	return outcomeNarrowingAttempt{
 		Result:    narrowedResult,
 		Narrowing: narrowing,
 		Measured:  served,
 		Served:    true,
 	}, nil
+}
+
+// servableLeverResult gates every stage-3 lever before it counts as served.
+// Each lever appends a disclosure outcome row, and a document already at the
+// v1 outcome cap has no room for one: fitting the budget is not enough.
+func servableLeverResult(result InvestigationResult) bool {
+	return result.Validate() == nil
 }
 
 // recordCandidateNarrowing emits the decision-basis event for an attempt
