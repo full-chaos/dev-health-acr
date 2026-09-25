@@ -347,6 +347,17 @@ func (t SlogEngineTelemetry) RecordWindowBinderOutcome(ctx context.Context, prin
 	t.logger.InfoContext(ctx, "context fabric window binder outcome", args...)
 }
 
+// RecordStatedWindowAxis (CHAOS-6557) logs at Info: origin and every axis and
+// outcome value are closed vocabularies, never question text or bounds.
+func (t SlogEngineTelemetry) RecordStatedWindowAxis(ctx context.Context, principal storage.Principal, surface, origin string, interpretedAxis, executedAxis TemporalAxis, outcome ContinuationAxisOutcome) {
+	args := append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID), "surface", SanitizeLogAttr(surface), "origin", SanitizeLogAttr(origin),
+		"interpreted_axis", SanitizeLogAttr(string(interpretedAxis)), "executed_axis", SanitizeLogAttr(string(executedAxis)),
+		"outcome", SanitizeLogAttr(string(outcome)),
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric stated window axis decision", args...)
+}
+
 // RecordWindowGatedForConfirmation (CHAOS-6557) logs at Info: every field
 // is a closed vocabulary member, never question text or bounds.
 func (t SlogEngineTelemetry) RecordWindowGatedForConfirmation(ctx context.Context, principal storage.Principal, surface string, origin WindowCanonicalizationOutcome, effective contractsv1.ContextFabricEffectiveEvidenceWindow) {

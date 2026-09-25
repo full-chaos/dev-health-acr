@@ -607,6 +607,14 @@ type EngineTelemetry interface {
 	// surface is request.Consumer.Surface: the binder is surface-agnostic by
 	// design, so the line names which surface it served.
 	RecordWindowBinderOutcome(ctx context.Context, principal storage.Principal, surface string, outcome WindowBindOutcome)
+	// RecordStatedWindowAxis (CHAOS-6557) reports the axis decision for a
+	// window the CALLER supplied on this request (origin: the evidence_window
+	// field or a question phrase): the axis the interpreter proposed, the axis
+	// the turn executed on, and the closed ContinuationAxisOutcome (agreed /
+	// overridden_by_receipt -- the same rule a receipt-confirmed window uses --
+	// / vetoed). Called once per such turn so a zero override rate is as
+	// visible as a nonzero one.
+	RecordStatedWindowAxis(ctx context.Context, principal storage.Principal, surface, origin string, interpretedAxis, executedAxis TemporalAxis, outcome ContinuationAxisOutcome)
 	// RecordWindowGatedForConfirmation (CHAOS-6557) reports the window a
 	// confirmation-required terminal was gated on: origin (closed
 	// WindowCanonicalizationOutcome), RelativeID, Provenance and
@@ -2145,6 +2153,38 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		if remembered.Outcome == ContinuationAxisOverriddenByReceipt {
 			interpretedTimeBound = resolveInterpretedTimeContext(executedTime, e.now())
 		}
+	} else if statedOrigin := statedWindowOrigin(windowCanon, interpretation, clampedRequestTime.Axis, request.Consumer.Surface); statedOrigin != "" {
+		// CHAOS-6557: on the MCP surface a window the CALLER supplied (the
+		// evidence_window field, or a period stated in the question) is the
+		// caller's time, exactly as a window they confirmed by receipt is. The
+		// interpreter's sampled axis is a diagnostic: prod q2 read "last month"
+		// as a calendar range and the turn resolved on that range axis. Same
+		// rule, same function as the confirmed-window twins above: executed on
+		// the caller's current axis, disclosed by the line below.
+		// Only a sampled RANGE is a period: an explicit as-of instant
+		// ("state as of March 3") is a genuine historical question and
+		// CHAOS-5582's fresh-axis rule still governs it.
+		executedTime, axisOutcome := decideConfirmedWindowAxis(interpretedTimeBound.Bound.Axis == TemporalRange, TemporalCurrent, interpretedTimeBound.Bound, interpretedTimeBound.Answerable(), clampedRequestTime, true)
+		if e.telemetry != nil {
+			e.telemetry.RecordStatedWindowAxis(ctx, principal, request.Consumer.Surface, statedOrigin, interpretedTimeBound.Bound.Axis, executedTime.Axis, axisOutcome)
+		}
+		if axisOutcome == ContinuationAxisOverriddenByReceipt {
+			interpretedTimeBound = resolveInterpretedTimeContext(executedTime, e.now())
+		}
+	} else if period := interpreterPeriodWindow(windowCanon, clampedRequestTime.Axis, interpretedTimeBound.Bound, interpretedTimeBound.Answerable(), request.Consumer.Surface); period != nil {
+		// CHAOS-6557, the published MCP tool contract: a period the
+		// interpreter read as a calendar range is an evidence window over
+		// current state. The window becomes the turn's committed window (frozen
+		// bounds, so its reuse key is its own) and the turn executes on the
+		// caller's current axis instead of resolving on the sampled range.
+		windowCanon.Effective = period
+		windowCanon.KeyComponent = windowKeyComponent(*period, windowKeyFrozen)
+		windowCanon.KeyEncoding = windowKeyFrozen
+		executedTime := TimeContext{Axis: clampedRequestTime.Axis, AsOf: clampedRequestTime.AsOf}
+		if e.telemetry != nil {
+			e.telemetry.RecordStatedWindowAxis(ctx, principal, request.Consumer.Surface, StatedWindowOriginInterpreterRange, interpretedTimeBound.Bound.Axis, executedTime.Axis, ContinuationAxisOverriddenByReceipt)
+		}
+		interpretedTimeBound = resolveInterpretedTimeContext(executedTime, e.now())
 	}
 	if !interpretedTimeBound.Answerable() {
 		// NO APPLIED CONTINUATION REACHES THIS EXIT (CHAOS-5582): `applied`
