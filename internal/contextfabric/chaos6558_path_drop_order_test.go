@@ -1,9 +1,16 @@
 package contextfabric
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 func chaos6558OrderResult(driverEvidence [][]string, driverPaths [][]int, paths int) InvestigationResult {
@@ -44,5 +51,24 @@ func TestCHAOS6558PathDropOrder(t *testing.T) {
 	}
 	if len(result.Paths) != 6 || len(result.Drivers[0].PathIDs) != 2 {
 		t.Fatalf("dropPaths wrote through to its input")
+	}
+}
+
+// The Info line names which paths went, so an order regression is visible
+// there and not only in the returned document.
+func TestCHAOS6558PathDropInfoLineNamesDroppedPathIDs(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	telemetry := NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	telemetry.RecordPathDrop(context.Background(), storage.Principal{OrgID: "org_1"}, PathDropEvent{DroppedPathIDs: []string{"path_b", "path_a"}, Served: true})
+	var line struct {
+		Msg            string   `json:"msg"`
+		DroppedPathIDs []string `json:"dropped_path_ids"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &line); err != nil {
+		t.Fatalf("decode %q: %v", buf.String(), err)
+	}
+	if line.Msg != "context fabric path drop" || strings.Join(line.DroppedPathIDs, ",") != "path_b,path_a" {
+		t.Fatalf("path drop line = %s, want dropped_path_ids [path_b path_a] in drop order", buf.String())
 	}
 }

@@ -2631,6 +2631,7 @@ func (t SlogEngineTelemetry) RecordPathDrop(ctx context.Context, principal stora
 		"paths_dropped", event.PathsBefore - event.PathsAfter,
 		"cited_paths_dropped", event.CitedDropped,
 		"per_table_cap", event.PerTable,
+		"dropped_path_ids", SanitizeLogStrings(event.DroppedPathIDs),
 		"served", event.Served,
 		"declined", string(event.Declined),
 	}

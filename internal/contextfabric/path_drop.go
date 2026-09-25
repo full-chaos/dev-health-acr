@@ -70,6 +70,17 @@ type pathDropAttempt struct {
 	// (every droppable path gone, every table at one row). Set whenever the
 	// lever ran; it is what a refusal must exceed.
 	MinimumBytes int64
+	// DroppedPathIDs names the paths the lever dropped (or would drop, on a
+	// refusal), in drop order.
+	DroppedPathIDs []string
+}
+
+func droppedPathIDs(result InvestigationResult, order []int, count int) []string {
+	ids := make([]string, 0, count)
+	for _, index := range order[:count] {
+		ids = append(ids, result.Paths[index].PathID)
+	}
+	return ids
 }
 
 // pathDropOrder returns the order paths are dropped in, as indices into
@@ -280,6 +291,7 @@ func (e *Engine) planPathDrop(
 	if !floor.fits {
 		attempt.Declined = PathDropInsufficient
 		attempt.PathsAfter = len(result.Paths) - len(order)
+		attempt.DroppedPathIDs = droppedPathIDs(result, order, len(order))
 		attempt.Measured.Measurement = floor.measured.Measurement
 		attempt.Measured.Overrun = floor.measured.Overrun
 		return attempt, nil
@@ -305,6 +317,7 @@ func (e *Engine) planPathDrop(
 		return unmeasurable(err)
 	}
 	attempt.PathsAfter = len(result.Paths) - best
+	attempt.DroppedPathIDs = droppedPathIDs(result, order, best)
 	attempt.CitedDropped = served.citedDropped
 	attempt.PerTable = served.perTable
 	attempt.Measured = served.measured
@@ -336,6 +349,7 @@ type PathDropEvent struct {
 	PathsAfter         int
 	CitedDropped       int
 	PerTable           int
+	DroppedPathIDs     []string
 	Served             bool
 	Declined           PathDropDeclined
 }
@@ -358,6 +372,7 @@ func (e *Engine) recordPathDrop(ctx context.Context, principal storage.Principal
 		PathsAfter:         attempt.PathsAfter,
 		CitedDropped:       attempt.CitedDropped,
 		PerTable:           attempt.PerTable,
+		DroppedPathIDs:     attempt.DroppedPathIDs,
 		Served:             attempt.Served,
 		Declined:           attempt.Declined,
 	})

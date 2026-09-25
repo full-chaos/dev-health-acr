@@ -262,6 +262,9 @@ func TestCHAOS6558NonRowOverrunIsServedByDroppingPaths(t *testing.T) {
 	rowLine := telemetry.factRowTruncations[0]
 	t.Logf("pass 1: %d bytes = %d row bytes + %d non-row; row floor %d; paths %d -> %d (cited dropped %d), per-table cap %d, served %d bytes, minimum answer %d bytes",
 		rowLine.BytesBefore, rowLine.RowBytes, rowLine.BytesBefore-rowLine.RowBytes, rowLine.BytesAfter, line.PathsBefore, line.PathsAfter, line.CitedDropped, line.PerTable, line.BytesAfter, line.MinimumBytes)
+	if want := []string{chaos6558PathID(chaos6558PathCount - 1), chaos6558PathID(chaos6558PathCount - 2)}; strings.Join(line.DroppedPathIDs, ",") != strings.Join(want, ",") {
+		t.Fatalf("dropped_path_ids = %v, want %v (uncited, tail-first)", line.DroppedPathIDs, want)
+	}
 	if !line.Served || line.PathsBefore != chaos6558PathCount || line.PathsAfter != len(result.Paths) || line.MinimumBytes <= 0 || line.MinimumBytes > line.BytesAfter || line.BytesAfter != measured.Bytes && line.BytesAfter > chaos6558PathMaxBytes {
 		t.Fatalf("path drop line = %+v", line)
 	}
