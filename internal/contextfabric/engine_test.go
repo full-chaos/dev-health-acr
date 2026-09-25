@@ -388,7 +388,7 @@ func TestNewEngineRequiresAllCoreCapabilities(t *testing.T) {
 type statedWindowAxisRecord struct {
 	Surface, Origin       string
 	Interpreted, Executed TemporalAxis
-	Outcome               ContinuationAxisOutcome
+	Outcome               StatedWindowAxisOutcome
 }
 
 type recordingTelemetry struct {
@@ -762,7 +762,7 @@ func (r *recordingTelemetry) RecordWindowBinderOutcome(_ context.Context, _ stor
 	r.windowBinderProposals = append(r.windowBinderProposals, outcome)
 }
 
-func (r *recordingTelemetry) RecordStatedWindowAxis(_ context.Context, _ storage.Principal, surface, origin string, interpretedAxis, executedAxis TemporalAxis, outcome ContinuationAxisOutcome) {
+func (r *recordingTelemetry) RecordStatedWindowAxis(_ context.Context, _ storage.Principal, surface, origin string, interpretedAxis, executedAxis TemporalAxis, outcome StatedWindowAxisOutcome) {
 	r.statedWindowAxes = append(r.statedWindowAxes, statedWindowAxisRecord{surface, origin, interpretedAxis, executedAxis, outcome})
 }
 

@@ -610,11 +610,10 @@ type EngineTelemetry interface {
 	// RecordStatedWindowAxis (CHAOS-6557) reports the axis decision for a
 	// window the CALLER supplied on this request (origin: the evidence_window
 	// field or a question phrase): the axis the interpreter proposed, the axis
-	// the turn executed on, and the closed ContinuationAxisOutcome (agreed /
-	// overridden_by_receipt -- the same rule a receipt-confirmed window uses --
-	// / vetoed). Called once per such turn so a zero override rate is as
+	// the turn executed on, and the closed StatedWindowAxisOutcome (agreed /
+	// overridden_to_current / vetoed). Called once per such turn so a zero override rate is as
 	// visible as a nonzero one.
-	RecordStatedWindowAxis(ctx context.Context, principal storage.Principal, surface, origin string, interpretedAxis, executedAxis TemporalAxis, outcome ContinuationAxisOutcome)
+	RecordStatedWindowAxis(ctx context.Context, principal storage.Principal, surface, origin string, interpretedAxis, executedAxis TemporalAxis, outcome StatedWindowAxisOutcome)
 	// RecordWindowGatedForConfirmation (CHAOS-6557) reports the window a
 	// confirmation-required terminal was gated on: origin (closed
 	// WindowCanonicalizationOutcome), RelativeID, Provenance and
@@ -2166,7 +2165,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// CHAOS-5582's fresh-axis rule still governs it.
 		executedTime, axisOutcome := decideConfirmedWindowAxis(interpretedTimeBound.Bound.Axis == TemporalRange, TemporalCurrent, interpretedTimeBound.Bound, interpretedTimeBound.Answerable(), clampedRequestTime, true)
 		if e.telemetry != nil {
-			e.telemetry.RecordStatedWindowAxis(ctx, principal, request.Consumer.Surface, statedOrigin, interpretedTimeBound.Bound.Axis, executedTime.Axis, axisOutcome)
+			e.telemetry.RecordStatedWindowAxis(ctx, principal, request.Consumer.Surface, statedOrigin, interpretedTimeBound.Bound.Axis, executedTime.Axis, statedWindowAxisOutcomeOf(axisOutcome))
 		}
 		if axisOutcome == ContinuationAxisOverriddenByReceipt {
 			interpretedTimeBound = resolveInterpretedTimeContext(executedTime, e.now())
@@ -2182,7 +2181,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		windowCanon.KeyEncoding = windowKeyFrozen
 		executedTime := TimeContext{Axis: clampedRequestTime.Axis, AsOf: clampedRequestTime.AsOf}
 		if e.telemetry != nil {
-			e.telemetry.RecordStatedWindowAxis(ctx, principal, request.Consumer.Surface, StatedWindowOriginInterpreterRange, interpretedTimeBound.Bound.Axis, executedTime.Axis, ContinuationAxisOverriddenByReceipt)
+			e.telemetry.RecordStatedWindowAxis(ctx, principal, request.Consumer.Surface, StatedWindowOriginInterpreterRange, interpretedTimeBound.Bound.Axis, executedTime.Axis, StatedWindowAxisOverridden)
 		}
 		interpretedTimeBound = resolveInterpretedTimeContext(executedTime, e.now())
 	}

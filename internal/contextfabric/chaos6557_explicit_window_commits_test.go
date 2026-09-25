@@ -1,7 +1,12 @@
 package contextfabric
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"log/slog"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -313,14 +318,14 @@ func TestCHAOS6557_BareLastMonthCommitsTheCalendarBoundsOnMCP(t *testing.T) {
 	}
 }
 
-// A period the binder cannot bind ("in July") that the interpreter reads as a
-// calendar range. On MCP that range IS the evidence window: committed
-// (question_stated), bounds from the interpreter, current axis, and the fact
-// read receives the same bounds.
+// A bare calendar phrase ("last quarter") the trailing grammar binds but does
+// not commit, that the interpreter reads as a calendar range. On MCP that range
+// IS the evidence window: committed (question_stated), bounds from the
+// interpreter, current axis, and the fact read receives the same bounds.
 func TestCHAOS6557_InterpreterRangeBecomesTheCommittedWindowOnMCP(t *testing.T) {
 	t.Parallel()
 	interpretation := driftedInterpretation(contractsv1.ContextFabricTemporalRange)
-	run := runExplicitWindowCaseWith(t, "mcp", "Which repository carried the most operational/support work in July?", nil, interpretation)
+	run := runExplicitWindowCaseWith(t, "mcp", "Which repository carried the most operational/support work last quarter?", nil, interpretation)
 	result := run.result
 	if result.Status == InvestigationClarificationRequired || result.WindowClarification != nil {
 		t.Fatalf("status=%q window_clarification=%v, want an answer: the caller stated the period", result.Status, result.WindowClarification != nil)
@@ -377,15 +382,15 @@ func TestCHAOS6557_StatedWindowAxisDecisionIsRecorded(t *testing.T) {
 		want     statedWindowAxisRecord
 	}{
 		{"field drifted", "Which teams need attention?", &contractsv1.ContextFabricRequestedEvidenceWindow{RelativeID: RelativeWindowTrailing30D}, contractsv1.ContextFabricTemporalRange,
-			statedWindowAxisRecord{"mcp", StatedWindowOriginField, TemporalRange, TemporalCurrent, ContinuationAxisOverriddenByReceipt}},
+			statedWindowAxisRecord{"mcp", StatedWindowOriginField, TemporalRange, TemporalCurrent, StatedWindowAxisOverridden}},
 		{"field agreed", "Which teams need attention?", &contractsv1.ContextFabricRequestedEvidenceWindow{RelativeID: RelativeWindowTrailing30D}, contractsv1.ContextFabricTemporalCurrent,
-			statedWindowAxisRecord{"mcp", StatedWindowOriginField, TemporalCurrent, TemporalCurrent, ContinuationAxisAgreed}},
-		{"interpreter range", "Which repository carried the most operational/support work in July?", nil, contractsv1.ContextFabricTemporalRange,
-			statedWindowAxisRecord{"mcp", StatedWindowOriginInterpreterRange, TemporalRange, TemporalCurrent, ContinuationAxisOverriddenByReceipt}},
+			statedWindowAxisRecord{"mcp", StatedWindowOriginField, TemporalCurrent, TemporalCurrent, StatedWindowAxisAgreed}},
+		{"interpreter range", "Which repository carried the most operational/support work last quarter?", nil, contractsv1.ContextFabricTemporalRange,
+			statedWindowAxisRecord{"mcp", StatedWindowOriginInterpreterRange, TemporalRange, TemporalCurrent, StatedWindowAxisOverridden}},
 		{"prod q2 bare last month", "Which repository carried the most operational/support work last month and why?", nil, contractsv1.ContextFabricTemporalRange,
-			statedWindowAxisRecord{"mcp", StatedWindowOriginInterpreterRange, TemporalRange, TemporalCurrent, ContinuationAxisOverriddenByReceipt}},
+			statedWindowAxisRecord{"mcp", StatedWindowOriginInterpreterRange, TemporalRange, TemporalCurrent, StatedWindowAxisOverridden}},
 		{"phrase drifted", "What is the team investment mix in the last month?", nil, contractsv1.ContextFabricTemporalRange,
-			statedWindowAxisRecord{"mcp", StatedWindowOriginQuestionPhrase, TemporalRange, TemporalCurrent, ContinuationAxisOverriddenByReceipt}},
+			statedWindowAxisRecord{"mcp", StatedWindowOriginQuestionPhrase, TemporalRange, TemporalCurrent, StatedWindowAxisOverridden}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -506,5 +511,76 @@ func TestCHAOS6557_BareLastMonthIsNeverCommittedAsTrailing(t *testing.T) {
 		"Which repository carried the most operational/support work over the past month?",
 	} {
 		assertCommittedWindow(t, runExplicitWindowCase(t, "mcp", question, nil), RelativeWindowTrailing30D)
+	}
+}
+
+// A range the interpreter returns for a question that names NO period is the
+// interpreter's own invention, not something the caller stated: nothing is
+// committed, no decision line is emitted, the confirmation turn is unaffected
+// and the historical axis the interpreter chose is honoured exactly as before.
+func TestCHAOS6557_InterpreterRangeWithoutAPeriodPhraseIsNeverCommittedOnMCP(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	project := acceptanceProject()
+	facts := factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+		return bootstrapFactBundle(project), nil
+	})
+	graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}, context: bootstrapGraphContext(project)}
+	engine := buildAcceptanceEngineWithTelemetry(t, graph, facts, driftedInterpretation(contractsv1.ContextFabricTemporalRange), bootstrapDraft(project), newMapResultStore(), telemetry)
+	request := validInvestigationRequest()
+	request.Consumer.Surface = "mcp"
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.EffectiveEvidenceWindow != nil {
+		t.Fatalf("EffectiveEvidenceWindow = %#v, want nil: no period was stated", result.EffectiveEvidenceWindow)
+	}
+	if len(graph.resolveInterpretations) == 0 || graph.resolveInterpretations[0].TimeContext.Axis != TemporalRange {
+		t.Fatalf("resolved interpretations = %#v, want the interpreter's range axis untouched", graph.resolveInterpretations)
+	}
+	if len(telemetry.statedWindowAxes) != 0 {
+		t.Fatalf("stated window axis records = %#v, want none", telemetry.statedWindowAxes)
+	}
+}
+
+// The Info line's closed values are asserted as literals so a renamed or
+// mislabelled outcome (this override is NOT a receipt override) cannot pass by
+// comparing a constant with itself.
+func TestCHAOS6557_StatedWindowAxisLineCarriesItsOwnOutcomeVocabulary(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	telemetry := NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	principal := storage.Principal{OrgID: "org_6560"}
+	for _, outcome := range []StatedWindowAxisOutcome{StatedWindowAxisAgreed, StatedWindowAxisOverridden, StatedWindowAxisVetoed} {
+		telemetry.RecordStatedWindowAxis(context.Background(), principal, "mcp", StatedWindowOriginInterpreterRange, TemporalRange, TemporalCurrent, outcome)
+	}
+	var outcomes []string
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var got map[string]any
+		if err := json.Unmarshal([]byte(line), &got); err != nil {
+			t.Fatalf("line is not JSON: %v", err)
+		}
+		if got["msg"] != "context fabric stated window axis decision" || got["surface"] != "mcp" || got["origin"] != "interpreter_range" ||
+			got["interpreted_axis"] != "range" || got["executed_axis"] != "current" {
+			t.Fatalf("line fields = %#v", got)
+		}
+		outcomes = append(outcomes, got["outcome"].(string))
+	}
+	if want := []string{"agreed", "overridden_to_current", "vetoed"}; !reflect.DeepEqual(outcomes, want) {
+		t.Fatalf("outcomes = %v, want %v", outcomes, want)
+	}
+	for _, from := range []struct {
+		in   ContinuationAxisOutcome
+		want StatedWindowAxisOutcome
+	}{
+		{ContinuationAxisAgreed, StatedWindowAxisAgreed},
+		{ContinuationAxisOverriddenByReceipt, StatedWindowAxisOverridden},
+		{ContinuationAxisVetoed, StatedWindowAxisVetoed},
+		{ContinuationAxisNotEvaluated, StatedWindowAxisAgreed},
+	} {
+		if got := statedWindowAxisOutcomeOf(from.in); got != from.want {
+			t.Fatalf("statedWindowAxisOutcomeOf(%q) = %q, want %q", from.in, got, from.want)
+		}
 	}
 }

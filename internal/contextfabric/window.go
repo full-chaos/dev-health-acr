@@ -817,6 +817,30 @@ const (
 	StatedWindowOriginInterpreterRange = "interpreter_range"
 )
 
+// StatedWindowAxisOutcome is the closed outcome vocabulary of the stated
+// window axis decision line: its own type, not ContinuationAxisOutcome, whose
+// "overridden_by_receipt" means a redeemed window receipt.
+type StatedWindowAxisOutcome string
+
+const (
+	StatedWindowAxisAgreed     StatedWindowAxisOutcome = "agreed"
+	StatedWindowAxisOverridden StatedWindowAxisOutcome = "overridden_to_current"
+	StatedWindowAxisVetoed     StatedWindowAxisOutcome = "vetoed"
+)
+
+// statedWindowAxisOutcomeOf maps the shared axis rule's result onto the stated
+// window line's own vocabulary.
+func statedWindowAxisOutcomeOf(outcome ContinuationAxisOutcome) StatedWindowAxisOutcome {
+	switch outcome {
+	case ContinuationAxisOverriddenByReceipt:
+		return StatedWindowAxisOverridden
+	case ContinuationAxisVetoed:
+		return StatedWindowAxisVetoed
+	default:
+		return StatedWindowAxisAgreed
+	}
+}
+
 // mcpSurface is the consumer surface whose published tool contract says
 // "A period when it matters ('over the last quarter', or evidence_window).
 // Without one the service picks a window and reports it": on it a period is
@@ -850,14 +874,21 @@ func statedWindowOrigin(canon requestWindowCanonicalization, interpretation Inte
 
 // interpreterPeriodWindow (CHAOS-6557, published MCP tool contract) is the
 // evidence window an MCP turn states when the request is current-axis, no
-// window was supplied or bound, and the INTERPRETER read the question's
-// period as a calendar range (prod q2: "last month" -> 2026-08-01..09-01):
-// on this surface a period is a committed evidence window over current state,
-// bounds from the phrase, reported as question_stated. nil when any of that
-// does not hold (a historical axis the caller asked for, an as-of instant, a
-// range with no usable bounds, another surface).
+// window was supplied or committed from a trailing phrase, the question
+// itself names a period the closed trailing grammar cannot bound (the binder
+// saw exactly one span -- a bare calendar "last month|quarter|year", bound
+// but not trailing, or refused only by its clause position), and the
+// INTERPRETER read that period as a calendar range (prod q2: "last month" ->
+// 2026-08-01..09-01): on this surface a period is an evidence window over
+// current state, bounds from the interpreter, reported as question_stated. A
+// range with no period phrase in the question is the interpreter's own
+// invention, not something the caller stated, and is never committed. nil when
+// any of that does not hold (a historical axis the caller asked for, an as-of
+// instant, a range with no usable bounds, another surface).
 func interpreterPeriodWindow(canon requestWindowCanonicalization, requestAxis TemporalAxis, fresh TimeContext, freshAnswerable bool, surface string) *contractsv1.ContextFabricEffectiveEvidenceWindow {
-	if strings.TrimSpace(surface) != mcpSurface || canon.Effective != nil || canon.Veto != windowVetoNone ||
+	binder := canon.BinderProposal
+	namesAPeriod := binder.SpansBound == 1 && (binder.Reason == WindowBindSpanUnbound || (binder.Reason == WindowBindRoutedInferred && !binder.Trailing))
+	if strings.TrimSpace(surface) != mcpSurface || !namesAPeriod || canon.Effective != nil || canon.Veto != windowVetoNone ||
 		requestAxis != TemporalCurrent || !freshAnswerable || fresh.Axis != TemporalRange ||
 		fresh.Start == nil || fresh.End == nil || !fresh.Start.Before(*fresh.End) {
 		return nil

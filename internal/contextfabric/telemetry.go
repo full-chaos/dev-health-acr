@@ -349,7 +349,7 @@ func (t SlogEngineTelemetry) RecordWindowBinderOutcome(ctx context.Context, prin
 
 // RecordStatedWindowAxis (CHAOS-6557) logs at Info: origin and every axis and
 // outcome value are closed vocabularies, never question text or bounds.
-func (t SlogEngineTelemetry) RecordStatedWindowAxis(ctx context.Context, principal storage.Principal, surface, origin string, interpretedAxis, executedAxis TemporalAxis, outcome ContinuationAxisOutcome) {
+func (t SlogEngineTelemetry) RecordStatedWindowAxis(ctx context.Context, principal storage.Principal, surface, origin string, interpretedAxis, executedAxis TemporalAxis, outcome StatedWindowAxisOutcome) {
 	args := append([]any{
 		"org_id", SanitizeLogAttr(principal.OrgID), "surface", SanitizeLogAttr(surface), "origin", SanitizeLogAttr(origin),
 		"interpreted_axis", SanitizeLogAttr(string(interpretedAxis)), "executed_axis", SanitizeLogAttr(string(executedAxis)),
