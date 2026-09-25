@@ -48,6 +48,9 @@ const (
 	PathDropInsufficient PathDropDeclined = "insufficient"
 	// PathDropUnmeasurable: a reduced document could not be marshaled.
 	PathDropUnmeasurable PathDropDeclined = "unmeasurable"
+	// PathDropInvalidResult: the reduced document fit but failed contract
+	// validation (e.g. no room left for the disclosure outcome row).
+	PathDropInvalidResult PathDropDeclined = "invalid_result"
 )
 
 type pathDropAttempt struct {
@@ -307,6 +310,10 @@ func (e *Engine) planPathDrop(
 	attempt.Measured = served.measured
 	if !served.fits {
 		attempt.Declined = PathDropInsufficient
+		return attempt, nil
+	}
+	if !servableLeverResult(served.doc) {
+		attempt.Declined = PathDropInvalidResult
 		return attempt, nil
 	}
 	attempt.Result = served.doc

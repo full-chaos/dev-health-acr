@@ -343,3 +343,24 @@ func TestCHAOS6558PathDropAloneServesAndDisclosesPartial(t *testing.T) {
 		t.Fatalf("no depth/bytes path outcome row; outcomes = %+v", result.Completeness.Outcomes)
 	}
 }
+
+func TestCHAOS6558PathDropLeverWithNoOutcomeRoomNeverServesAnInvalidAnswer(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	telemetry := &recordingTelemetry{}
+	engine := withFullOutcomeRows(chaos6558PathEngine(t, &calls, telemetry, chaos6558PathShape{maxBytes: chaos6558PathMaxBytes}))
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, chaos6558Request())
+	if len(telemetry.pathDrops) == 0 {
+		t.Fatalf("path-drop lever never ran; the shape no longer reaches the seam under test")
+	}
+	assertLeverNeverServesAnInvalidAnswer(t, result, err, telemetry)
+	for _, event := range telemetry.pathDrops {
+		if event.Served {
+			t.Fatalf("path-drop event says served with no outcome room: %+v", event)
+		}
+		if event.Declined == PathDropInvalidResult {
+			return
+		}
+	}
+	t.Fatalf("no path-drop event names %q; events=%+v", PathDropInvalidResult, telemetry.pathDrops)
+}
