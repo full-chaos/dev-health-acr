@@ -2609,6 +2609,36 @@ func (t SlogEngineTelemetry) RecordClaimDepthNarrowing(ctx context.Context, prin
 	t.logger.InfoContext(ctx, "context fabric claim depth narrowing", args...)
 }
 
+// RecordPathDrop emits one path-drop lever application (CHAOS-6558), at
+// Info. `minimum_bytes` is the smallest document the byte levers can make;
+// a byte refusal after this line means the budget is below it.
+func (t SlogEngineTelemetry) RecordPathDrop(ctx context.Context, principal storage.Principal, event PathDropEvent) {
+	if t.logger == nil {
+		return
+	}
+	args := []any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"family", string(event.Family),
+		"stage", string(event.Stage),
+		"pass", event.Pass,
+		"axis", string(event.Overrun),
+		"max_serialized_bytes", SanitizeLogInt(event.MaxSerializedBytes),
+		"bytes_before", event.BytesBefore,
+		"bytes_after", event.BytesAfter,
+		"minimum_bytes", event.MinimumBytes,
+		"paths_before", event.PathsBefore,
+		"paths_after", event.PathsAfter,
+		"paths_dropped", event.PathsBefore - event.PathsAfter,
+		"cited_paths_dropped", event.CitedDropped,
+		"per_table_cap", event.PerTable,
+		"dropped_path_ids", SanitizeLogStrings(event.DroppedPathIDs),
+		"served", event.Served,
+		"declined", string(event.Declined),
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric path drop", args...)
+}
+
 // RecordFactRetention emits one retention decision, at Info.
 //
 // The anchor fields name the committed resolution subjects the pass admitted

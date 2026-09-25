@@ -447,6 +447,10 @@ type PlanTelemetry interface {
 	// item-axis claim-depth lever: items before/after, members, claims
 	// before/after, the per-member cap, and whether it served or why not.
 	RecordClaimDepthNarrowing(ctx context.Context, principal storage.Principal, event ClaimDepthNarrowingEvent)
+	// RecordPathDrop (CHAOS-6558) reports ONE application of the path-drop
+	// lever: bytes before/after, the minimum answer's bytes, paths
+	// before/after, cited paths dropped, the row cap, and served or why not.
+	RecordPathDrop(ctx context.Context, principal storage.Principal, event PathDropEvent)
 
 	// RecordMembershipCardinality reports the `membership_cardinality`
 	// server step's own result for one served answer: what was counted, how
