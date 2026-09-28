@@ -26,3 +26,21 @@ func (r *FactCapabilityRegistry) WithoutScopeExpansion() *FactCapabilityRegistry
 	direct.scopeResolver = NewFactReadScopeResolverWithPolicies(nil, policies)
 	return &direct
 }
+
+// DirectReadFactSource is the fact source the direct read tools read
+// through: this registry with scope expansion OFF. The hosted runtime builds
+// the direct fact reader from it and from nothing else, so a fact reader
+// that cannot say how it reads for the direct path gets no direct reader
+// (fail closed).
+func (r *FactCapabilityRegistry) DirectReadFactSource() CanonicalFactReader {
+	if r == nil {
+		return nil
+	}
+	return r.WithoutScopeExpansion()
+}
+
+// DirectReadFactSourcer is implemented by a fact reader that can hand the
+// direct path a source with scope expansion off.
+type DirectReadFactSourcer interface {
+	DirectReadFactSource() CanonicalFactReader
+}
