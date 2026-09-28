@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"reflect"
@@ -140,5 +141,80 @@ func TestChaos7114PublishedSchemaAcceptsBareForm(t *testing.T) {
 	bad := `{"question":"q","parent_result_id":"` + chaos7114Parent + `","prior_window_receipts":[7]}`
 	if err := contractcheck.ValidateSerialized("", "mcp_investigate_question_request.v1.schema.json", []byte(bad)); err == nil {
 		t.Fatal("schema accepts a numeric receipt entry")
+	}
+}
+
+// A bare receipt without parent_result_id is refused by the handler, so the
+// published schema (what clients validate against) must refuse it too.
+func TestChaos7114PublishedSchemaRequiresParentForBareReceipts(t *testing.T) {
+	for _, tc := range chaos7114Fields {
+		noParent := `{"question":"q","` + tc.field + `":["` + tc.prefix + `aaaaaaaaaaaa"]}`
+		if err := contractcheck.ValidateSerialized("", "mcp_investigate_question_request.v1.schema.json", []byte(noParent)); err == nil {
+			t.Errorf("%s: schema accepts a bare receipt without parent_result_id", tc.field)
+		}
+		withParent := `{"question":"q","parent_result_id":"` + chaos7114Parent + `","` + tc.field + `":["` + tc.prefix + `aaaaaaaaaaaa"]}`
+		if err := contractcheck.ValidateSerialized("", "mcp_investigate_question_request.v1.schema.json", []byte(withParent)); err != nil {
+			t.Errorf("%s: schema refuses a bare receipt with parent_result_id: %v", tc.field, err)
+		}
+		objectNoParent := `{"question":"q","` + tc.field + `":[{"result_id":"result_prior_00000001","receipt_id":"` + tc.prefix + `aaaaaaaaaaaa"}]}`
+		if err := contractcheck.ValidateSerialized("", "mcp_investigate_question_request.v1.schema.json", []byte(objectNoParent)); err != nil {
+			t.Errorf("%s: schema refuses the object form without a parent: %v", tc.field, err)
+		}
+	}
+}
+
+// The normalize and refuse decisions must be diagnosable from the Info/Warn
+// log alone, without ids: a wrong-parent or silently-skipped regression would
+// otherwise still return an answer.
+func chaos7114CallLogged(t *testing.T, args map[string]any) (*mcpsdk.CallToolResult, string) {
+	t.Helper()
+	boot := answerFixtureBootstrap(t, parityResult(), nil)
+	var logs bytes.Buffer
+	cfg, caller := boot.split(&logs)
+	raw, err := json.Marshal(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := handleInvestigateQuestion(ContextWithCaller(context.Background(), caller), cfg, &mcpsdk.CallToolRequest{Params: &mcpsdk.CallToolParamsRaw{Arguments: raw}})
+	if err != nil {
+		t.Fatalf("protocol error: %v", err)
+	}
+	return result, logs.String()
+}
+
+func TestChaos7114NormalizationIsLoggedWithoutIDs(t *testing.T) {
+	bare := "winr_" + strings.Repeat("e", 24)
+	result, logs := chaos7114CallLogged(t, map[string]any{
+		"question": "q", "parent_result_id": chaos7114Parent,
+		"prior_window_receipts": []any{bare, map[string]any{"result_id": "result_other_00000001", "receipt_id": "winr_" + strings.Repeat("f", 24)}},
+	})
+	if result.IsError {
+		t.Fatalf("refused: %s", toolResultText(result))
+	}
+	for _, want := range []string{"investigate_question bare receipts expanded", `"bare_receipts":1`, `"object_receipts":1`, `"prior_window_receipts"`, `"parent_bound":true`} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("log lacks %s: %s", want, logs)
+		}
+	}
+	for _, leak := range []string{bare, chaos7114Parent, "result_other_00000001"} {
+		if strings.Contains(logs, leak) {
+			t.Errorf("log leaks an id (%s): %s", leak, logs)
+		}
+	}
+}
+
+func TestChaos7114RefusalIsLoggedWithoutIDs(t *testing.T) {
+	bare := "kindr_" + strings.Repeat("a", 24)
+	result, logs := chaos7114CallLogged(t, map[string]any{"question": "q", "prior_kind_receipts": []any{bare}})
+	if !result.IsError {
+		t.Fatal("bare receipt without parent was accepted")
+	}
+	for _, want := range []string{"investigate_question bare receipt refused", `"reason":"parent_result_id_missing"`, `"field":"prior_kind_receipts"`} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("log lacks %s: %s", want, logs)
+		}
+	}
+	if strings.Contains(logs, bare) {
+		t.Errorf("log leaks the receipt id: %s", logs)
 	}
 }

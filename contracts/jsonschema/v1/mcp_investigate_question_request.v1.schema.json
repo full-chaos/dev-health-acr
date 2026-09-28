@@ -45,6 +45,45 @@
   "required": [
     "question"
   ],
+  "if": {
+    "properties": {
+      "prior_subject_receipts": {
+        "items": {
+          "type": "object"
+        }
+      },
+      "prior_kind_receipts": {
+        "items": {
+          "type": "object"
+        }
+      },
+      "prior_anchor_receipts": {
+        "items": {
+          "type": "object"
+        }
+      },
+      "prior_handle_receipts": {
+        "items": {
+          "type": "object"
+        }
+      },
+      "prior_window_receipts": {
+        "items": {
+          "type": "object"
+        }
+      },
+      "prior_candidate_receipts": {
+        "items": {
+          "type": "object"
+        }
+      }
+    }
+  },
+  "else": {
+    "required": [
+      "parent_result_id"
+    ]
+  },
   "properties": {
     "question": {
       "type": "string",

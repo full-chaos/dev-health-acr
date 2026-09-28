@@ -59,9 +59,20 @@ func handleInvestigateQuestion(ctx context.Context, cfg *ProcessConfig, req *mcp
 		return refuseWithoutCaller(ctx, cfg, toolInvestigateQuestion), nil
 	}
 
-	args, normalizeErr := expandBareReceiptIDs(rawArgs(req))
+	args, receiptForm, normalizeErr := expandBareReceiptIDs(rawArgs(req))
 	if normalizeErr != nil {
+		// Decision basis for the refusal: the field is one of the six fixed
+		// names, never caller text, and no receipt id is logged.
+		if cfg.diagnostics != nil {
+			cfg.diagnostics.WarnContext(ctx, "investigate_question bare receipt refused", "reason", "parent_result_id_missing", "field", receiptForm.RefusedField, "surface", "investigate_question")
+		}
 		return toolErrorResult(&classifiedError{category: "validation", message: normalizeErr.Error()}), nil
+	}
+	if receiptForm.Bare > 0 && cfg.diagnostics != nil {
+		// Decision basis for the normalization: how many receipts arrived bare
+		// and were bound to parent_result_id versus already carried their own
+		// result_id. Counts and a closed field list only; never ids.
+		cfg.diagnostics.InfoContext(ctx, "investigate_question bare receipts expanded", "bare_receipts", receiptForm.Bare, "object_receipts", receiptForm.Object, "receipt_fields", receiptForm.Fields, "parent_bound", true, "surface", "investigate_question")
 	}
 	var input contractsv1.MCPInvestigateQuestionRequest
 	if err := json.Unmarshal(args, &input); err != nil {
@@ -275,10 +286,11 @@ var priorReceiptFields = []string{
 // the field, because there is no result_id to give it. Everything else
 // (bad JSON, wrong types, wrong prefixes) is left for the normal decode and
 // Validate path, so this function widens the input and refuses nothing else.
-func expandBareReceiptIDs(raw []byte) ([]byte, error) {
+func expandBareReceiptIDs(raw []byte) ([]byte, receiptFormSummary, error) {
+	var summary receiptFormSummary
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &top); err != nil {
-		return raw, nil
+		return raw, summary, nil
 	}
 	var parent string
 	if rawParent, ok := top["parent_result_id"]; ok {
@@ -298,29 +310,43 @@ func expandBareReceiptIDs(raw []byte) ([]byte, error) {
 		for i, entry := range entries {
 			var bare string
 			if err := json.Unmarshal(entry, &bare); err != nil {
+				summary.Object++
 				continue
 			}
 			if parent == "" {
-				return nil, fmt.Errorf("investigate_question: %s has a bare receipt_id string, which needs parent_result_id (the result_id of the answer the receipt came from); pass parent_result_id, or pass {\"result_id\", \"receipt_id\"} objects", field)
+				summary.RefusedField = field
+				return nil, summary, fmt.Errorf("investigate_question: %s has a bare receipt_id string, which needs parent_result_id (the result_id of the answer the receipt came from); pass parent_result_id, or pass {\"result_id\", \"receipt_id\"} objects", field)
 			}
 			object, err := json.Marshal(map[string]string{"result_id": parent, "receipt_id": bare})
 			if err != nil {
-				return nil, err
+				return nil, summary, err
 			}
 			entries[i] = object
+			summary.Bare++
 			fieldChanged = true
 		}
 		if fieldChanged {
 			encoded, err := json.Marshal(entries)
 			if err != nil {
-				return nil, err
+				return nil, summary, err
 			}
 			top[field] = encoded
+			summary.Fields = append(summary.Fields, field)
 			changed = true
 		}
 	}
 	if !changed {
-		return raw, nil
+		return raw, summary, nil
 	}
-	return json.Marshal(top)
+	encoded, err := json.Marshal(top)
+	return encoded, summary, err
+}
+
+// receiptFormSummary is the decision basis of expandBareReceiptIDs, safe to
+// log: counts and closed field names only, never a receipt or result id.
+type receiptFormSummary struct {
+	Bare         int      // bare receipt_id strings bound to parent_result_id
+	Object       int      // entries that already carried their own result_id
+	Fields       []string // fields that contained at least one bare receipt
+	RefusedField string   // the field that made the call refuse (no parent)
 }

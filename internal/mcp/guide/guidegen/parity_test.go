@@ -403,3 +403,14 @@ func TestParityDetectsRemovedRegistryEntries(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-7114: the guide clients read must teach the bare receipt_id form and
+// its parent_result_id condition, matching the tool schema and handler.
+func TestConversationGuideTeachesBareReceiptForm(t *testing.T) {
+	text := buildConversation()
+	for _, want := range []string{"send just the `receipt_id` string", "bound to `parent_result_id`", "without `parent_result_id` is refused"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("conversation guide lacks %q", want)
+		}
+	}
+}
