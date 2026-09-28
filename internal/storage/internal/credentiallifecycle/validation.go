@@ -31,6 +31,7 @@ var knownScopes = map[string]struct{}{
 	"evidence:read": {},
 	"episode:write": {},
 	"context:admin": {},
+	"data:read":     {},
 }
 
 func ValidateCreateInput(input CreateInput) error {

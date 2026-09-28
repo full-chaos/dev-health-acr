@@ -1098,6 +1098,170 @@
           }
         }
       }
+    },
+    "/api/v1/context-fabric/data/catalog": {
+      "get": {
+        "operationId": "readContextFabricDataCatalog",
+        "summary": "Direct data catalogue (data_catalog). CHAOS-7071 (S0) registers the route and its protection chain only: every authorized request answers 501 feature_not_enabled with details.reason not_implemented until the slice that fills it lands.",
+        "x-required-scope": "context:read",
+        "x-required-entitlement": "agent_context_runtime",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestID"
+          },
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "responses": {
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "426": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "501": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/context-fabric/data/subjects": {
+      "post": {
+        "operationId": "findContextFabricDataSubjects",
+        "summary": "Direct subject lookup (find_subjects). CHAOS-7071 (S0) registers the route and its protection chain only: every authorized request answers 501 feature_not_enabled with details.reason not_implemented until the slice that fills it lands.",
+        "x-required-scope": "context:read",
+        "x-required-entitlement": "agent_context_runtime",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestID"
+          },
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "responses": {
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "426": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "501": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/context-fabric/data/facts": {
+      "post": {
+        "operationId": "readContextFabricDataFacts",
+        "summary": "Direct fact read (read_facts). CHAOS-7071 (S0) registers the route and its protection chain only: every authorized request answers 501 feature_not_enabled with details.reason not_implemented until the slice that fills it lands.",
+        "x-required-scope": "context:read",
+        "x-required-entitlement": "agent_context_runtime",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestID"
+          },
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "responses": {
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "426": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "501": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/context-fabric/data/operations": {
+      "post": {
+        "operationId": "runContextFabricDataOperation",
+        "summary": "Registered analytics operation (run_operation). Requires the data:read scope. CHAOS-7071 (S0) registers the route and its protection chain only: every authorized request answers 501 feature_not_enabled with details.reason not_implemented until the slice that fills it lands.",
+        "x-required-scope": "data:read",
+        "x-required-entitlement": "agent_context_runtime",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestID"
+          },
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "responses": {
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "426": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "501": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {

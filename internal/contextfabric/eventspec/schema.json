@@ -74,7 +74,8 @@
         "presence": "required",
         "closed_vocabulary": [
           "context:read",
-          "evidence:read"
+          "evidence:read",
+          "data:read"
         ],
         "applicability": "the requested scopes on an authorize ok line, the granted scopes on a token ok line, empty on every other line"
       },

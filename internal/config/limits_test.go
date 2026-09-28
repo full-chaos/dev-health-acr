@@ -30,6 +30,7 @@ func TestLimitOptionsConfiguresEveryRequestClass(t *testing.T) {
 		limits.RequestClassEvidence,
 		limits.RequestClassSnapshot,
 		limits.RequestClassEpisode,
+		limits.RequestClassData,
 	} {
 		claim, decision, err := manager.Claim(context.Background(), subject, class)
 
@@ -39,6 +40,39 @@ func TestLimitOptionsConfiguresEveryRequestClass(t *testing.T) {
 		}
 		claim.DoneClaim()
 	}
+}
+
+func TestLimitOptionsGiveTheDataClassItsOwnPolicy(t *testing.T) {
+	// The Data class must read ACR_DATA_*, not borrow another class's policy.
+	cfg, err := load(mapLookup(map[string]string{
+		"ACR_DATA_REQUESTS_PER_WINDOW":    "1",
+		"ACR_CONTEXT_REQUESTS_PER_WINDOW": "4",
+		"ACR_LIMIT_WINDOW":                "2m",
+		"ACR_MAXIMUM_RETRY_AFTER":         "2m",
+		"ACR_LOCAL_COMPOSITION_READY":     "true",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := limits.NewManager(cfg.LimitOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject := limits.Subject{OrgID: "org_1", CredentialID: "credential_1"}
+	first, decision, err := manager.Claim(context.Background(), subject, limits.RequestClassData)
+	if err != nil || !decision.Allowed || first == nil {
+		t.Fatalf("first data claim = (%#v, %#v, %v)", first, decision, err)
+	}
+	first.DoneClaim()
+	_, denied, err := manager.Claim(context.Background(), subject, limits.RequestClassData)
+	if err != nil || denied.Allowed || denied.RetryAfter != 2*time.Minute {
+		t.Fatalf("second data claim under ACR_DATA_REQUESTS_PER_WINDOW=1 = (%#v, %v), want denial", denied, err)
+	}
+	contextClaim, contextDecision, err := manager.Claim(context.Background(), subject, limits.RequestClassContext)
+	if err != nil || !contextDecision.Allowed {
+		t.Fatalf("context claim after data denial = (%#v, %#v, %v)", contextClaim, contextDecision, err)
+	}
+	contextClaim.DoneClaim()
 }
 
 func TestLimitOptionsUseIndependentClassPoliciesAndPacketBudgets(t *testing.T) {

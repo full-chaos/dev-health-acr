@@ -5,9 +5,11 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	acrmcp "github.com/full-chaos/dev-health-acr/internal/mcp"
 )
 
@@ -75,6 +77,9 @@ func TestProtectedResourceMetadataAndChallenge(t *testing.T) {
 		}
 		if metadata.Resource != opts.ResourceURL || len(metadata.AuthorizationServers) != 1 || metadata.AuthorizationServers[0] != opts.AuthorizationServer {
 			t.Fatalf("%s: metadata %+v", path, metadata)
+		}
+		if want := []string{auth.ScopeContextRead, auth.ScopeEvidenceRead, auth.ScopeDataRead}; !slices.Equal(metadata.ScopesSupported, want) {
+			t.Fatalf("%s: scopes_supported %v, want %v", path, metadata.ScopesSupported, want)
 		}
 	}
 	for name, header := range map[string]string{"missing": "", "malformed": "Bearer not-an-acr-token"} {

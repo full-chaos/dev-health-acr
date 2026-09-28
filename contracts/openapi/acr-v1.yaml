@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: fddf7c3753bd86b09055f9bb9d4706e3ce5dcf6877df66ce1ab9d84f5b22d144
+# canonical-content-sha256: 5714013793c3b5bf6a0ef81d564948e5e65a87554ab17516ff680acf5889840e
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -312,6 +312,114 @@ paths:
       security:
         -
           bearerAuth: []
+  "/api/v1/context-fabric/data/catalog":
+    get:
+      operationId: "readContextFabricDataCatalog"
+      parameters:
+        -
+          "$ref": "#/components/parameters/RequestID"
+        -
+          "$ref": "#/components/parameters/ClientVersion"
+      responses:
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "426":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "501":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      security:
+        -
+          bearerAuth: []
+      summary: "Direct data catalogue (data_catalog). CHAOS-7071 (S0) registers the route and its protection chain only: every authorized request answers 501 feature_not_enabled with details.reason not_implemented until the slice that fills it lands."
+      x-required-entitlement: "agent_context_runtime"
+      x-required-scope: "context:read"
+  "/api/v1/context-fabric/data/facts":
+    post:
+      operationId: "readContextFabricDataFacts"
+      parameters:
+        -
+          "$ref": "#/components/parameters/RequestID"
+        -
+          "$ref": "#/components/parameters/ClientVersion"
+      responses:
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "426":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "501":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      security:
+        -
+          bearerAuth: []
+      summary: "Direct fact read (read_facts). CHAOS-7071 (S0) registers the route and its protection chain only: every authorized request answers 501 feature_not_enabled with details.reason not_implemented until the slice that fills it lands."
+      x-required-entitlement: "agent_context_runtime"
+      x-required-scope: "context:read"
+  "/api/v1/context-fabric/data/operations":
+    post:
+      operationId: "runContextFabricDataOperation"
+      parameters:
+        -
+          "$ref": "#/components/parameters/RequestID"
+        -
+          "$ref": "#/components/parameters/ClientVersion"
+      responses:
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "426":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "501":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      security:
+        -
+          bearerAuth: []
+      summary: "Registered analytics operation (run_operation). Requires the data:read scope. CHAOS-7071 (S0) registers the route and its protection chain only: every authorized request answers 501 feature_not_enabled with details.reason not_implemented until the slice that fills it lands."
+      x-required-entitlement: "agent_context_runtime"
+      x-required-scope: "data:read"
+  "/api/v1/context-fabric/data/subjects":
+    post:
+      operationId: "findContextFabricDataSubjects"
+      parameters:
+        -
+          "$ref": "#/components/parameters/RequestID"
+        -
+          "$ref": "#/components/parameters/ClientVersion"
+      responses:
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "426":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "501":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      security:
+        -
+          bearerAuth: []
+      summary: "Direct subject lookup (find_subjects). CHAOS-7071 (S0) registers the route and its protection chain only: every authorized request answers 501 feature_not_enabled with details.reason not_implemented until the slice that fills it lands."
+      x-required-entitlement: "agent_context_runtime"
+      x-required-scope: "context:read"
   "/api/v1/context-fabric/investigations":
     post:
       operationId: "createContextFabricInvestigation"

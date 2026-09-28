@@ -20,7 +20,7 @@ import (
 type OAuthConsentAuthority interface {
 	StartForOAuth(ctx context.Context) (OAuthDeviceAuthorization, error)
 	StateForOAuth(ctx context.Context, ref storage.DeviceCodeHash) (OAuthDeviceState, error)
-	ApproveForOAuth(ctx context.Context, principal storage.Principal, ref storage.DeviceCodeHash, repositoryScopes []string) error
+	ApproveForOAuth(ctx context.Context, principal storage.Principal, ref storage.DeviceCodeHash, repositoryScopes, scopes []string) error
 	DenyForOAuth(ctx context.Context, principal storage.Principal, ref storage.DeviceCodeHash) error
 	RedeemForResource(ctx context.Context, ref storage.DeviceCodeHash, resource string, scopes []string) (IssuedCredential, error)
 	// StartDeviceGrant starts a device authorization for RFC 8628's
@@ -123,8 +123,10 @@ func (s *DeviceFlowService) StateForOAuth(ctx context.Context, hash storage.Devi
 // once, with one exception that makes the decision retryable: a record this
 // same user already approved, for the same org and the same repositories, is
 // accepted again (the approval happened, but attaching the authorization code
-// may have failed after it).
-func (s *DeviceFlowService) ApproveForOAuth(ctx context.Context, principal storage.Principal, hash storage.DeviceCodeHash, repositoryScopes []string) error {
+// may have failed after it). scopes is the credential scope set the consent
+// authorizes (oauthApprovalScopes); it must be a known, non-empty set that
+// always holds the default pair.
+func (s *DeviceFlowService) ApproveForOAuth(ctx context.Context, principal storage.Principal, hash storage.DeviceCodeHash, repositoryScopes, scopes []string) error {
 	if err := s.ready(ctx); err != nil {
 		return err
 	}
@@ -135,12 +137,12 @@ func (s *DeviceFlowService) ApproveForOAuth(ctx context.Context, principal stora
 	// An expired record never reaches here: both stores expire it on read
 	// (GetByDeviceCodeHash answers ErrDeviceAuthorizationExpired).
 	if record.State == storage.DeviceAuthorizationStateApproved {
-		if sameOAuthApproval(record, principal, repositoryScopes) {
+		if sameOAuthApproval(record, principal, repositoryScopes) && slices.Equal(record.AuthorizedScopes, scopes) {
 			return nil
 		}
 		return storage.NewDeviceAuthorizationError(storage.DeviceAuthorizationErrorConflict, record.State, 0)
 	}
-	_, err = s.approveUserCodeHash(ctx, principal, record.UserCodeHash, repositoryScopes)
+	_, err = s.approveUserCodeHash(ctx, principal, record.UserCodeHash, repositoryScopes, scopes)
 	return err
 }
 

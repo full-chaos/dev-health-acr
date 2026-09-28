@@ -25,6 +25,13 @@ const (
 	// administering the model provider an organization pays for are
 	// different privilege levels.
 	ScopeContextAdmin = "context:admin"
+	// ScopeDataRead gates the direct data tools of CHAOS-7036 (product
+	// analytics through registered operations, typed row reads). It is a
+	// separate grant from ScopeContextRead so a credential issued before
+	// the direct tools existed never gains them on deploy (decision K4).
+	// An OAuth request gets it only when it names it; it is never part of
+	// the default scope set and no workload role carries it.
+	ScopeDataRead = "data:read"
 )
 
 var (
@@ -43,6 +50,7 @@ var knownScopes = map[string]struct{}{
 	ScopeEvidenceRead: {},
 	ScopeEpisodeWrite: {},
 	ScopeContextAdmin: {},
+	ScopeDataRead:     {},
 }
 
 type CreateCredentialRequest struct {
