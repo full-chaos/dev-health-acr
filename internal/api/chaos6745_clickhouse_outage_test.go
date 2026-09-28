@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -67,5 +68,12 @@ func TestClickHouseOutage_DoesNotBlockAuthOrReadyzOnlyDataRoutes(t *testing.T) {
 		response := httptest.NewRecorder()
 		app.Handler().ServeHTTP(response, contextPacketRequest(t, app, token, hostedContextRequest()))
 		assertErrorResponse(t, response, http.StatusServiceUnavailable, "store_unavailable")
+		var envelope contractsv1.ErrorEnvelope
+		if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		if !envelope.Error.Retryable {
+			t.Fatalf("store_unavailable must be retryable: %#v", envelope)
+		}
 	})
 }
