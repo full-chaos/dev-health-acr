@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedcache"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/genkitruntime"
@@ -212,6 +213,8 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 			storedResultGate = gate
 		}
 	}
+	// CHAOS-7071: the direct-read subject gate and fact reader.
+	directReadGate, directFactReader := buildDirectReads(investigator, request.options.Logger)
 	// Same typed-nil guard: workloadTokenExchange is a concrete
 	// *authverify.WorkloadTokenExchangeService, nil whenever CHAOS-4013 is
 	// unconfigured (see buildWorkloadTokenExchange's doc comment).
@@ -230,6 +233,8 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 			Investigator:               investigator,
 			InvestigationResults:       investigationResults,
 			StoredResultGate:           storedResultGate,
+			DirectReadGate:             directReadGate,
+			DirectFactReader:           directFactReader,
 			OrgModelConfigs:            orgModelConfigs,
 			OrgModelRuntimeEvictor:     orgModelRuntimeEvictor,
 			// CHAOS-3786, codex round-1 P1(b): resultReuseInvalidator is
@@ -1267,4 +1272,36 @@ func oauthRuntime(cfg config.Config, store storage.OAuthStore) *api.OAuthRuntime
 		runtime.ClientMetadata = auth.NewPublicClientMetadataFetcher()
 	}
 	return runtime
+}
+
+// directReadSourcer is the Engine's DirectReadSources method. The assertion
+// below keeps a signature drift from silently turning buildDirectReads into
+// "no gate" (the handlers would fail closed, but the capability would be
+// gone without a build failure).
+type directReadSourcer interface {
+	DirectReadSources() (contextfabric.GraphReader, contextfabric.CanonicalFactReader)
+}
+
+var _ directReadSourcer = (*contextfabric.Engine)(nil)
+
+// buildDirectReads builds the direct-read subject gate and fact reader
+// (CHAOS-7071) over the SAME graph and fact registry the engine reads. Both
+// are nil when the investigator was not composed or its graph cannot
+// authorize subjects; the direct data handlers then fail closed. A composed
+// engine whose graph is not a gate authority is logged loudly: that is a
+// wiring defect, not a configuration choice.
+func buildDirectReads(investigator contextfabric.Investigator, logger *slog.Logger) (*directread.SubjectGate, *directread.FactReader) {
+	engine, ok := investigator.(directReadSourcer)
+	if !ok || storage.IsNil(investigator) {
+		return nil, nil
+	}
+	graph, facts := engine.DirectReadSources()
+	authority, ok := graph.(directread.GraphAuthority)
+	if !ok || storage.IsNil(graph) || storage.IsNil(facts) {
+		if logger != nil {
+			logger.Error("context fabric direct read gate not composed", "reason", "graph_or_facts_unsupported")
+		}
+		return nil, nil
+	}
+	return directread.NewSubjectGate(authority, directread.NewSlogRecorder(logger)), directread.NewFactReader(facts)
 }
