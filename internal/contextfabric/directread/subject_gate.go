@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
@@ -90,6 +91,7 @@ type Recorder interface {
 type SubjectGate struct {
 	graph    GraphAuthority
 	recorder Recorder
+	now      func() time.Time
 }
 
 // NewSubjectGate builds a gate. A nil graph is allowed and makes every
@@ -104,8 +106,11 @@ func NewSubjectGate(graph GraphAuthority, recorder Recorder) *SubjectGate {
 }
 
 // Authorize takes the live decision for requested, for this principal, now.
-// It is called once per request; the returned AuthorizedSubjects is bound to
-// the principal and holds only admitted subjects. It never returns an error:
+// It is called once per request, and again for every read: the returned
+// AuthorizedSubjects is bound to the principal, to the request id ctx carries
+// (observability.WithRequestID; without one the value is refused by every
+// read), expires AuthorizationTTL after issue, is spent by one
+// FactReader.Read, and holds only admitted subjects. It never returns an error:
 // an unavailable decision is a Decision value, and its AuthorizedSubjects is
 // empty.
 func (g *SubjectGate) Authorize(ctx context.Context, principal storage.Principal, requested []contextfabric.SubjectRef) (AuthorizedSubjects, Authorization) {
@@ -122,7 +127,11 @@ func (g *SubjectGate) Authorize(ctx context.Context, principal storage.Principal
 			admitted = append(admitted, gated.Subject)
 		}
 	}
-	return issue(principal, admitted), decision
+	now := time.Now
+	if g.now != nil {
+		now = g.now
+	}
+	return issue(ctx, principal, admitted, now()), decision
 }
 
 func (g *SubjectGate) decide(ctx context.Context, principal storage.Principal, requested []contextfabric.SubjectRef) Authorization {

@@ -4,10 +4,21 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync/atomic"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
+
+// AuthorizationTTL is how long an AuthorizedSubjects value may be presented
+// to FactReader.Read after the gate issued it. A direct tool authorizes and
+// reads in the same request, so this only has to cover that one step. It is
+// short on purpose: authorization is re-checked live every turn (North Star
+// check 18), and a value that outlives its request would carry a decision
+// the graph may no longer support (an ownership edge that has since ended).
+const AuthorizationTTL = 30 * time.Second
 
 // AuthorizedSubjects is the gate's proof that a set of subjects was admitted,
 // live, for one principal. Only SubjectGate.Authorize makes a non-zero value:
@@ -19,6 +30,13 @@ import (
 // credential and repository grant). A read that presents it with any other
 // principal is refused, so a value cannot be carried from one caller or one
 // credential to another.
+//
+// It is also bound to ONE request and ONE read: to the request id on the
+// context the gate decided under (observability.WithRequestID), to its issue
+// time (it expires AuthorizationTTL later), and it is spent by the first
+// FactReader.Read that presents it, copies included. A value can therefore
+// never be replayed after the graph changed: the next read needs a fresh,
+// live gate decision.
 type AuthorizedSubjects struct {
 	grant *subjectGrant
 }
@@ -29,16 +47,32 @@ type subjectGrant struct {
 	credentialID     string
 	repositoryScopes []string
 	subjects         []contextfabric.SubjectRef
+	requestID        string
+	expiresAt        time.Time
+	spent            atomic.Bool
 }
 
-func issue(principal storage.Principal, subjects []contextfabric.SubjectRef) AuthorizedSubjects {
+func issue(ctx context.Context, principal storage.Principal, subjects []contextfabric.SubjectRef, issuedAt time.Time) AuthorizedSubjects {
+	requestID, _ := observability.RequestIDFromContext(ctx)
 	return AuthorizedSubjects{grant: &subjectGrant{
 		orgID:            principal.OrgID,
 		subject:          principal.Subject,
 		credentialID:     principal.CredentialID,
 		repositoryScopes: slices.Clone(principal.RepositoryScopes),
 		subjects:         slices.Clone(subjects),
+		requestID:        string(requestID),
+		expiresAt:        issuedAt.Add(AuthorizationTTL),
 	}}
+}
+
+// issuedFor reports whether the value was issued under the request id that
+// ctx carries. A value issued with no request id matches no request.
+func (a AuthorizedSubjects) issuedFor(ctx context.Context) bool {
+	if a.grant == nil || a.grant.requestID == "" {
+		return false
+	}
+	requestID, ok := observability.RequestIDFromContext(ctx)
+	return ok && string(requestID) == a.grant.requestID
 }
 
 // Subjects returns a copy of the admitted subjects (kind and canonical id
@@ -77,6 +111,16 @@ func (a AuthorizedSubjects) IssuedTo(principal storage.Principal) bool {
 // answer; tools map it to an internal error, not to a subject refusal.
 var ErrUngatedRead = errors.New("direct read without a subject gate decision for this principal")
 
+// ErrAuthorizationExpired is returned when an AuthorizedSubjects value is
+// presented more than AuthorizationTTL after the gate issued it. The tool
+// must take a fresh gate decision; no fact is read.
+var ErrAuthorizationExpired = errors.New("direct read subject gate decision expired; authorize again")
+
+// ErrAuthorizationSpent is returned when an AuthorizedSubjects value (or a
+// copy of it) was already presented to a read. Each read needs its own live
+// gate decision; no fact is read.
+var ErrAuthorizationSpent = errors.New("direct read subject gate decision already used; authorize again")
+
 // FactSource is the fact registry seam
 // (*contextfabric.FactCapabilityRegistry satisfies it).
 type FactSource interface {
@@ -91,6 +135,7 @@ type FactSource interface {
 // outside internal/contextfabric calls ReadFacts itself.
 type FactReader struct {
 	source FactSource
+	now    func() time.Time
 }
 
 // NewFactReader wraps the registry. A nil source makes every read fail.
@@ -105,12 +150,23 @@ func NewFactReader(source FactSource) *FactReader {
 // Subjects, Cohort and Scope are replaced: Subjects by the admitted set,
 // Cohort and Scope by nothing (the registry derives scope itself). A
 // requirement that names a subject outside the admitted set is refused.
+//
+// subjects must have been issued to this principal, under the request id ctx
+// carries, less than AuthorizationTTL ago, and never presented before. The
+// first read that passes those checks spends the value.
 func (r *FactReader) Read(ctx context.Context, principal storage.Principal, subjects AuthorizedSubjects, request contextfabric.CanonicalFactRequest) (contextfabric.CanonicalFactBundle, error) {
-	if !subjects.IssuedTo(principal) || subjects.Len() == 0 {
+	if !subjects.IssuedTo(principal) || subjects.Len() == 0 || !subjects.issuedFor(ctx) {
 		return contextfabric.CanonicalFactBundle{}, ErrUngatedRead
 	}
 	if r == nil || r.source == nil {
 		return contextfabric.CanonicalFactBundle{}, errors.New("direct fact reader has no fact source")
+	}
+	now := time.Now
+	if r.now != nil {
+		now = r.now
+	}
+	if !now().Before(subjects.grant.expiresAt) {
+		return contextfabric.CanonicalFactBundle{}, ErrAuthorizationExpired
 	}
 	admitted := subjects.Subjects()
 	allowed := make(map[string]struct{}, len(admitted))
@@ -123,6 +179,11 @@ func (r *FactReader) Read(ctx context.Context, principal storage.Principal, subj
 				return contextfabric.CanonicalFactBundle{}, ErrUngatedRead
 			}
 		}
+	}
+	// Spent only once every check above passed, so a refused read (a
+	// requirement outside the set) does not burn a good decision.
+	if !subjects.grant.spent.CompareAndSwap(false, true) {
+		return contextfabric.CanonicalFactBundle{}, ErrAuthorizationSpent
 	}
 	request.Subjects = admitted
 	request.Cohort = nil
