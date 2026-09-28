@@ -29,7 +29,7 @@ func AuthorizationLogArgs(principal storage.Principal, decision Authorization) [
 		"refused_kinds", contextfabric.SanitizeLogStrings(append([]string{}, decision.RefusedKinds...)),
 	}
 	if class := decision.ErrorClass(); class != "" {
-		args = append(args, "error_class", class)
+		args = append(args, "error_class", contextfabric.SanitizeLogAttr(class))
 	}
 	return args
 }
