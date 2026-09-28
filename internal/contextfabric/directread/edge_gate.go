@@ -30,31 +30,16 @@ const (
 	EdgeDirectionBoth EdgeDirection = "both"
 )
 
-// EdgeKey is the total keyset order of a direct edge page: the relationship
-// id first, then the stored start and end node identities. relationship_id is
-// the edge's own MERGE key and is unique in a healthy graph; the end nodes
-// break a tie a re-projection with different endpoints could leave, so the
-// order stays total and a page can never skip or repeat an edge.
+// EdgeKey is the keyset position of a direct edge page: the relationship id.
+// It is a total order: relationship_id is the edge's MERGE key and the graph
+// holds a UNIQUE constraint on it (falkorgraph identity.go bootstrapSchema),
+// so no two edges share one and a page can never skip or repeat an edge.
 type EdgeKey struct {
-	RelationshipID  string `json:"r"`
-	FromKind        string `json:"fk"`
-	FromCanonicalID string `json:"fi"`
-	ToKind          string `json:"tk"`
-	ToCanonicalID   string `json:"ti"`
+	RelationshipID string `json:"r"`
 }
 
-// Less orders keys by relationship id, then from kind, from id, to kind, to
-// id: the exact ORDER BY of the graph query.
-func (k EdgeKey) Less(other EdgeKey) bool {
-	a := [5]string{k.RelationshipID, k.FromKind, k.FromCanonicalID, k.ToKind, k.ToCanonicalID}
-	b := [5]string{other.RelationshipID, other.FromKind, other.FromCanonicalID, other.ToKind, other.ToCanonicalID}
-	for i := range a {
-		if a[i] != b[i] {
-			return a[i] < b[i]
-		}
-	}
-	return false
-}
+// Less orders keys by relationship id: the ORDER BY of the graph query.
+func (k EdgeKey) Less(other EdgeKey) bool { return k.RelationshipID < other.RelationshipID }
 
 // EdgePageQuery is one bounded graph read of the edges that touch a set of
 // origin subjects.

@@ -23,7 +23,7 @@ import (
 // fakeEdgeGraph is an organization graph of nodes (the subject gate's
 // fakeGraph) and edges. DirectEdgePage applies the SAME contract the
 // FalkorDB query does -- origins, direction, types, exclusion, strict keyset
-// on the five-part key, Limit+1 -- so the reader's paging logic is tested
+// on the relationship id, Limit+1 -- so the reader's paging logic is tested
 // here and the Cypher is tested live (chaos7074 live tests in falkorgraph).
 type fakeEdgeGraph struct {
 	*fakeGraph
@@ -103,7 +103,7 @@ func edgeBetween(id, relation string, from, to contextfabric.SubjectRef, attribu
 		attrs[k] = v
 	}
 	return EdgeCandidate{
-		Key:          EdgeKey{RelationshipID: id, FromKind: string(from.Kind), FromCanonicalID: from.CanonicalID, ToKind: string(to.Kind), ToCanonicalID: to.CanonicalID},
+		Key:          EdgeKey{RelationshipID: id},
 		RelationType: relation, Attributes: attrs,
 		From: EdgeEnd{Subject: from}, To: EdgeEnd{Subject: to},
 	}
@@ -159,8 +159,7 @@ func readAll(t *testing.T, reader *RelationshipsReader, principal storage.Princi
 // hubGraph: team T with 250 OWNED_BY_TEAM edges in from repositories; 40 of
 // them (every sixth) come from repository nodes of acme/b, which a caller
 // restricted to acme/a cannot see. Relationship ids are not in insertion
-// order, and ten ids are SHARED by two edges with different endpoints (the
-// case the five-part key exists for).
+// order.
 func hubGraph() *fakeEdgeGraph {
 	graph := &fakeEdgeGraph{fakeGraph: graphOfOrgA()}
 	for i := 0; i < 250; i++ {
@@ -171,9 +170,6 @@ func hubGraph() *fakeEdgeGraph {
 		}
 		graph.nodes[graphrank.SubjectKey(repo)] = repos(slug)
 		id := fmt.Sprintf("rel-%03d", (i*37)%250)
-		if i >= 240 {
-			id = fmt.Sprintf("rel-%03d", (i-240)*7) // shares an id with another edge
-		}
 		graph.edges = append(graph.edges, edgeBetween(id, "OWNED_BY_TEAM", repo, teamT, map[string]interface{}{"authorization_repositories": []string{slug}}))
 	}
 	return graph
@@ -200,7 +196,7 @@ func TestChaos7074_T5_PagesJoinToTheFullVisibleSet(t *testing.T) {
 			want := map[string]int{}
 			for i, e := range graph.edges {
 				if tc.visible(i) {
-					want[e.Key.RelationshipID+"|"+e.Key.FromCanonicalID]++
+					want[e.Key.RelationshipID+"|"+e.From.Subject.CanonicalID]++
 				}
 			}
 			got := map[string]int{}

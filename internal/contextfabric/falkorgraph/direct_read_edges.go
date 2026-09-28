@@ -26,10 +26,10 @@ var _ directread.EdgeGraph = (*Adapter)(nil)
 //   - the valid-time predicate is ALWAYS applied, at query.ValidAt, to the
 //     edge and to both end nodes: a current read passes "now", so an ended
 //     edge (valid_to in the past) is never read as current;
-//   - the keyset is the total order (relationship_id, start kind, start id,
-//     end kind, end id), strict ">" on the tuple, and the outer ORDER BY is
-//     that same tuple (the CALL{} wrapper is what makes FalkorDB honor an
-//     ORDER BY over a UNION; see edgesOfNode);
+//   - the keyset is relationship_id, strict ">", and the outer ORDER BY is
+//     the same key (the CALL{} wrapper is what makes FalkorDB honor an
+//     ORDER BY over a UNION; see edgesOfNode). relationship_id carries a
+//     UNIQUE constraint (bootstrapSchema), so the order is total;
 //   - LIMIT is query.Limit+1: the extra row only tells the page that more
 //     follow, and is dropped.
 //
@@ -72,11 +72,7 @@ func (a *Adapter) DirectEdgePage(ctx context.Context, principal storage.Principa
 		}
 		fromEnd, toEnd := directEdgeEnd(from), directEdgeEnd(to)
 		page.Edges = append(page.Edges, directread.EdgeCandidate{
-			Key: directread.EdgeKey{
-				RelationshipID: propStringValue(e.Properties[propRelationshipID]),
-				FromKind:       string(fromEnd.Subject.Kind), FromCanonicalID: fromEnd.Subject.CanonicalID,
-				ToKind: string(toEnd.Subject.Kind), ToCanonicalID: toEnd.Subject.CanonicalID,
-			},
+			Key:          directread.EdgeKey{RelationshipID: propStringValue(e.Properties[propRelationshipID])},
 			RelationType: propStringValue(e.Properties[propRelationType]),
 			Attributes:   copyProperties(e.Properties),
 			From:         fromEnd,
@@ -133,9 +129,8 @@ func directEdgePageCypher(orgID string, query directread.EdgePageQuery) (string,
 			fmt.Sprintf("NOT (b.%[1]s = $xk AND b.%[2]s = $xi)", propKind, propCanonicalID))
 	}
 	if query.After != nil {
-		params["k0"], params["k1"], params["k2"], params["k3"], params["k4"] =
-			query.After.RelationshipID, query.After.FromKind, query.After.FromCanonicalID, query.After.ToKind, query.After.ToCanonicalID
-		filters = append(filters, directEdgeKeysetPredicate())
+		params["after"] = query.After.RelationshipID
+		filters = append(filters, fmt.Sprintf("r.%s > $after", propRelationshipID))
 	}
 	where := strings.Join(filters, " AND ")
 
@@ -152,13 +147,5 @@ func directEdgePageCypher(orgID string, query directread.EdgePageQuery) (string,
 	default:
 		inner = outArm + " UNION " + inArm
 	}
-	order := fmt.Sprintf("r.%[1]s ASC, a.%[2]s ASC, a.%[3]s ASC, b.%[2]s ASC, b.%[3]s ASC", propRelationshipID, propKind, propCanonicalID)
-	return "CALL { " + inner + " } RETURN r, a, b ORDER BY " + order + " LIMIT $lim", params
-}
-
-// directEdgeKeysetPredicate is the strict lexicographic ">" over the
-// five-part edge key, in the ORDER BY's own column order.
-func directEdgeKeysetPredicate() string {
-	return fmt.Sprintf("(r.%[1]s > $k0 OR (r.%[1]s = $k0 AND (a.%[2]s > $k1 OR (a.%[2]s = $k1 AND (a.%[3]s > $k2 OR (a.%[3]s = $k2 AND (b.%[2]s > $k3 OR (b.%[2]s = $k3 AND b.%[3]s > $k4)))))))))",
-		propRelationshipID, propKind, propCanonicalID)
+	return fmt.Sprintf("CALL { %s } RETURN r, a, b ORDER BY r.%s ASC LIMIT $lim", inner, propRelationshipID), params
 }
