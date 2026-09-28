@@ -71,11 +71,15 @@ const (
 	// stored result that cites the Context Fabric evidence ref it was asked
 	// to expand (see ExpandCitedEvidence).
 	StoredResultSurfaceEvidenceExpansion StoredResultSurface = "evidence_expansion"
+	// StoredResultSurfaceFactRootRecheck (CHAOS-7080) is the engine's live
+	// re-check of a turn's committed root subjects before the fact read
+	// (fact_root_recheck.go).
+	StoredResultSurfaceFactRootRecheck StoredResultSurface = "fact_root_recheck"
 )
 
 // StoredResultSurfaceVocabulary is the closed set of surfaces.
-func StoredResultSurfaceVocabulary() [4]StoredResultSurface {
-	return [4]StoredResultSurface{StoredResultSurfaceResultByID, StoredResultSurfacePriorResult, StoredResultSurfaceAnswerReuse, StoredResultSurfaceEvidenceExpansion}
+func StoredResultSurfaceVocabulary() [5]StoredResultSurface {
+	return [5]StoredResultSurface{StoredResultSurfaceResultByID, StoredResultSurfacePriorResult, StoredResultSurfaceAnswerReuse, StoredResultSurfaceEvidenceExpansion, StoredResultSurfaceFactRootRecheck}
 }
 
 // StoredResultDecision is the served outcome.

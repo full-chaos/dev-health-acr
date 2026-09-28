@@ -3104,6 +3104,16 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// Checked on the SUBJECT LIST, not on Committed alone: a subjectless
 	// cohort discovery commits nothing yet has perfectly good subjects to
 	// read facts for, and it must keep running.
+	// CHAOS-7080: the fact registry authorizes no subject, so every
+	// committed root is re-checked, live, against the caller's grant before
+	// any fact is read for it. A refused root is removed from the turn, and
+	// a turn left with no subject ends on the same zero-subject terminal a
+	// resolver refusal gives -- the caller sees no existence signal
+	// (fact_root_recheck.go).
+	resolution, err = e.recheckCommittedRoots(ctx, principal, resolution)
+	if err != nil {
+		return InvestigationResult{}, stageError(StageFactRead, err)
+	}
 	subjects := investigationSubjects(resolution, graphContext.Cohort)
 	if workItemTuple {
 		subjects = workItemTupleSubjects(graphContext.Cohort)
@@ -3301,12 +3311,6 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if !workItemTuple || len(subjects) > 0 {
 		if len(factRequest.Subjects) == 0 {
 			return InvestigationResult{}, stageError(StageFactRead, fmt.Errorf("%w: read canonical facts", ErrNoInvestigationSubjects))
-		}
-		// CHAOS-7080: the fact registry authorizes no subject, so every
-		// committed root is re-checked, live, against the caller's grant
-		// before any fact is read for it (fact_root_recheck.go).
-		if err := e.recheckCommittedRoots(ctx, principal, resolution.Committed); err != nil {
-			return InvestigationResult{}, stageError(StageFactRead, err)
 		}
 		facts, err = e.facts.ReadFacts(ctx, principal, factRequest)
 		// CHAOS-4099 / CHAOS-4089 standing order: every scope-expansion decision

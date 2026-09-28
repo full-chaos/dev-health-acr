@@ -2783,3 +2783,22 @@ func (t SlogEngineTelemetry) RecordRetainedRankingAccounting(ctx context.Context
 	args := append(RetainedRankingAccountingLogArgs(event, principal.OrgID), requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, RetainedRankingAccountingLogMessage, args...)
 }
+
+// FactRootRefusedLogMessage is the Warn line of a fact-root re-check refusal
+// (CHAOS-7080): resolution committed a subject the caller may not see.
+const FactRootRefusedLogMessage = "context fabric fact root refused"
+
+// RecordFactRootRefused implements FactRootRefusalRecorder. Counts and kinds
+// only, never ids or labels.
+func (t SlogEngineTelemetry) RecordFactRootRefused(ctx context.Context, principal storage.Principal, decision StoredResultAuthorization, refused int) {
+	args := []any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"reason", string(decision.Reason),
+		"refused_count", refused,
+		"denied_count", decision.DeniedCount,
+		"absent_count", decision.AbsentCount,
+		"refused_kinds", SanitizeLogStrings(append([]string{}, decision.RefusedKinds...)),
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.WarnContext(ctx, FactRootRefusedLogMessage, args...)
+}

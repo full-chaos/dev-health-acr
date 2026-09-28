@@ -113,7 +113,14 @@ func TestAPriorResultTheCallerMayNotReadBindsLikeAMissingOne(t *testing.T) {
 			if len(graph.asked) == 0 {
 				t.Fatal("the stored-subject decision was never consulted")
 			}
-			decisions := telemetry.storedResultAuthorizations
+			// CHAOS-7080: the turn also writes a fact_root_recheck decision for
+			// its own committed roots; this test is about the prior-result read.
+			var decisions []StoredResultAuthorization
+			for _, decision := range telemetry.storedResultAuthorizations {
+				if decision.Surface == StoredResultSurfacePriorResult {
+					decisions = append(decisions, decision)
+				}
+			}
 			if len(decisions) == 0 {
 				t.Fatal("no stored-result decision reached the trace")
 			}
@@ -137,7 +144,13 @@ func TestAPriorResultTheCallerMayNotReadBindsLikeAMissingOne(t *testing.T) {
 		if reflect.DeepEqual(admitted.SubjectResolution.PriorSubjectReceiptDispositions, missing.SubjectResolution.PriorSubjectReceiptDispositions) {
 			t.Fatal("control: an admitted parent must bind differently from a missing one")
 		}
-		if n := len(telemetry.storedResultAuthorizations); n == 0 || telemetry.storedResultAuthorizations[n-1].Decision != StoredResultAdmitted {
+		var priorDecisions []StoredResultAuthorization
+		for _, decision := range telemetry.storedResultAuthorizations {
+			if decision.Surface == StoredResultSurfacePriorResult {
+				priorDecisions = append(priorDecisions, decision)
+			}
+		}
+		if n := len(priorDecisions); n == 0 || priorDecisions[n-1].Decision != StoredResultAdmitted {
 			t.Fatalf("decisions = %+v", telemetry.storedResultAuthorizations)
 		}
 	})
