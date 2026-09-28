@@ -96,8 +96,8 @@
         "description": "protectedRuntimeHandler(RequestClassAuth, ScopeContextRead, entitlement=false, allowWebAssertions=true): Authenticator.MiddlewareFor(true,...) dispatches on X-ACR-Web-Assertion presence (WebAssertionVerifier) vs Authorization: Bearer (credential-store lookup), then RequireScope(context:read).",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 170,
-          "line_end": 180,
+          "line": 195,
+          "line_end": 205,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -151,8 +151,8 @@
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=false, allowWebAssertions=true).",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 170,
-          "line_end": 180,
+          "line": 195,
+          "line_end": 205,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -208,8 +208,8 @@
         "description": "protectedRuntimeHandler(RequestClassEvidence, ScopeEvidenceRead, entitlement=TRUE (agentContextRuntimeEntitlement), allowWebAssertions=true).",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 170,
-          "line_end": 180,
+          "line": 195,
+          "line_end": 205,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -262,8 +262,8 @@
         "description": "protectedRuntimeHandler(RequestClassEpisode, ScopeEpisodeWrite, entitlement=true, allowWebAssertions=FALSE) -- the only agent-context route that does NOT accept a web assertion; episode writes require a bearer fcacr_ credential.",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 170,
-          "line_end": 180,
+          "line": 195,
+          "line_end": 205,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -308,8 +308,8 @@
         "description": "Handler wraps itself: return a.protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=true) at the end of ContextFabricInvestigationHandler -- deliberately so the nil-investigator 503 check stays INSIDE the authenticated boundary (CHAOS-3755 finding H5: an early-return-unwrapped 503 would let an unauthenticated caller probe configuration state).",
         "anchor": {
           "path": "internal/api/context_fabric_routes.go",
-          "line": 158,
-          "line_end": 158,
+          "line": 165,
+          "line_end": 165,
           "note": "a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead"
         }
       },

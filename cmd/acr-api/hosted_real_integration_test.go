@@ -52,7 +52,7 @@ func TestHostedRuntime_real_binary_serves_and_fails_readiness_safely(t *testing.
 	packet := apiClient.contextPacket(t)
 
 	// Then
-	if ready.Status != "ready" || ready.checkStatus("postgres") != "ready" || ready.checkStatus("clickhouse") != "ready" || ready.checkStatus("entitlement") != "ready" {
+	if ready.Status != "ready" || ready.checkStatus("postgres") != "ready" || ready.checkStatus("entitlement") != "ready" || ready.hasCheck("clickhouse") {
 		t.Fatalf("initial readiness = %#v", ready)
 	}
 	entitlement.RotateToken(t)
@@ -101,10 +101,19 @@ func TestHostedRuntime_real_binary_serves_and_fails_readiness_safely(t *testing.
 	if err := clickhouse.Stop(ctx); err != nil {
 		t.Fatal(err)
 	}
+	// CHAOS-6745: ClickHouse loss must NOT flip /readyz (it would pull the
+	// pod, and the OAuth routes, out of service); the data route degrades
+	// alone with a typed, retryable store_unavailable 503.
 	ready = apiClient.readiness(t)
-	if ready.checkStatus("clickhouse") != "not_ready" || ready.checkStatus("postgres") != "ready" || ready.checkStatus("entitlement") != "ready" {
+	if ready.Status != "ready" || ready.hasCheck("clickhouse") || ready.checkStatus("postgres") != "ready" || ready.checkStatus("entitlement") != "ready" {
 		t.Fatalf("readiness after ClickHouse loss = %#v", ready)
 	}
+	apiClient.requestJSON(t, hostedAPIRequest{method: http.MethodPost, path: "/api/v1/agent-context/context-packets", requestBody: contractsv1.ContextPacketRequest{
+		SchemaVersion: contractsv1.ContextPacketRequestSchema, RequestID: "caller-request-id", Goal: "Investigate seeded CI failure",
+		Repository: contractsv1.RepositoryRef{Slug: hostedIntegrationRepository}, Scope: contractsv1.RequestedScope{Branch: "main"},
+		Options: contractsv1.PacketOptions{MaxItems: 10, MaxOutputTokens: 500, MaxSerializedBytes: 8192},
+		Client:  contractsv1.ClientInfo{Name: "integration", Version: "1.0.0", SidecarVersion: "0.1.0"},
+	}, statuses: []int{http.StatusServiceUnavailable}})
 	if err := postgres.Stop(ctx); err != nil {
 		t.Fatal(err)
 	}
