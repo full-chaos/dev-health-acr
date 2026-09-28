@@ -720,6 +720,23 @@ default_egress_stanzas="$(grep -cE '^\s+- ports:\s*$' <<<"$default_api_np" || tr
 (( falkor_egress_stanzas == default_egress_stanzas + 1 )) \
   || fail_gate "falkordb-workload: setting contextFabric.falkor.addr must add exactly one API egress rule (got $falkor_egress_stanzas vs $default_egress_stanzas)"
 
+# S1a: the ops query service egress rule is API-policy only and gated on
+# networkPolicy.egress.queryInternalPort (0 renders nothing).
+qi_on="$(render --set networkPolicy.egress.queryInternalPort=8095)"
+qi_off="$(render --set networkPolicy.egress.queryInternalPort=0)"
+qi_on_api="$(extract_doc NetworkPolicy 'component: api' 'component: falkordb' <<<"$qi_on")"
+qi_off_api="$(extract_doc NetworkPolicy 'component: api' 'component: falkordb' <<<"$qi_off")"
+grep -Pzq 'protocol: TCP\n\s+port: 8095\n' <<<"$qi_on_api" \
+  || fail_gate "query-egress: queryInternalPort=8095 must add a TCP 8095 egress rule to the API policy"
+if grep -qE 'port: 8095' <<<"$qi_off_api"; then
+  fail_gate "query-egress: queryInternalPort=0 must render no 8095 egress rule"
+fi
+qi_on_count="$(grep -cE '^\s+- ports:\s*$' <<<"$qi_on_api" || true)"
+qi_off_count="$(grep -cE '^\s+- ports:\s*$' <<<"$qi_off_api" || true)"
+(( qi_on_count == qi_off_count + 1 )) \
+  || fail_gate "query-egress: queryInternalPort must add exactly one API egress rule (got $qi_on_count vs $qi_off_count)"
+pass "query-egress: API egress rule is gated on queryInternalPort"
+
 # Operator podLabels must never detach the pod from the selectors: the last
 # (winning) occurrence of the component label must stay falkordb.
 falkordb_override="$(render \
@@ -789,6 +806,8 @@ grep -qE '^\s+value: "/mcp"\s*$' <<<"$mcp_route" || fail_gate "acr-mcp: HTTPRout
 if grep -qE '^\s+value: "?/"?\s*$|/healthz|/readyz' <<<"$mcp_route"; then fail_gate "acr-mcp: HTTPRoute must route only the MCP base path"; fi
 mcp_np="$(extract_mcp_doc NetworkPolicy)"
 grep -qE '^\s+port: 8081\s*$' <<<"$mcp_np" || fail_gate "acr-mcp: NetworkPolicy must admit 8081"
+# S1a: the query service egress rule (default queryInternalPort 8095) is acr-api only.
+if grep -qE 'port: 8095' <<<"$mcp_np"; then fail_gate "query-egress: the acr-mcp policy must not carry the query service egress rule"; fi
 # The route targets a Gateway in gateway-system; the policy must admit that namespace
 # or the route it renders is unreachable.
 grep -qE '^\s+kubernetes.io/metadata.name: "gateway-system"\s*$' <<<"$mcp_np" \

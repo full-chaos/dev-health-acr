@@ -239,6 +239,12 @@ type Config struct {
 	// OAuthClientMetadataDocuments (ACR_OAUTH_CLIENT_METADATA_DOCUMENTS,
 	// default true) accepts client ID metadata documents as client IDs.
 	OAuthClientMetadataDocuments bool
+
+	// dataQueryURL / dataQueryTimeout: internal ops query service call
+	// (ACR_DATA_QUERY_URL, ACR_DATA_QUERY_TIMEOUT); read via the
+	// DataQueryURL / DataQueryTimeout methods. See data_query.go.
+	dataQueryURL     string
+	dataQueryTimeout time.Duration
 }
 
 type lookupEnv func(string) (string, bool)
@@ -373,6 +379,12 @@ func load(lookup lookupEnv) (Config, error) {
 		return Config{}, err
 	}
 	cfg.DevHealthEntitlementMaxResponseBytes = int64(devHealthEntitlementMaxResponseBytes)
+	if cfg.dataQueryURL, err = dataQueryURLValue(lookup); err != nil {
+		return Config{}, err
+	}
+	if cfg.dataQueryTimeout, err = dataQueryTimeoutValue(lookup); err != nil {
+		return Config{}, err
+	}
 	if cfg.RequestControls, err = requestControlsValue(lookup, cfg.RequestsPerMinute); err != nil {
 		return Config{}, err
 	}
