@@ -133,7 +133,12 @@ import (
 // longer served for a team and a team without a mix reports "investment mix
 // unavailable" with the watermark. A candidate saved under v15 carries the
 // legacy day rows (and a mix merged onto one of them) and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v16"
+//
+// v16 -> v17 (CHAOS-7073): the repository/team theme mix excludes superseded
+// work units, reads only the current membership run, and keeps a NULL latest
+// repo_id. A candidate saved under v16 may carry a mix over superseded /
+// out-of-run units or a stale repository and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v17"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

@@ -463,6 +463,42 @@ var ProductionColumns = map[string][]Column{
 		{Name: "computed_at", Type: "DateTime64(3, 'UTC')"},
 		{Name: "org_id", Type: "String"},
 	},
+	// CHAOS-7073: the investment repository/team theme mix scopes its
+	// latest work-unit set the way ops' LatestWorkUnitInvestmentsSource does
+	// (devhealthfacts/investment_membership_scope.go), which reads these
+	// three tables. NOT probed from a live server: the types, positions and
+	// engines are taken from the dev-health-ops ClickHouse migrations that
+	// create them (046/047/049 work_unit_membership and
+	// work_unit_membership_runs, 085 work_unit_supersessions). Re-probe with
+	// the live freshness test when a DSN is available.
+	//
+	// work_unit_membership: 046 created positions 1-10, 047 appended run_id
+	// (11), 049 rebuilt the table with run_id added to the sorting key.
+	// weight/7, is_dominant/8 and categorization_status/9 are unread and
+	// omitted; category_kind/category are declared because they are in the
+	// sorting key.
+	"work_unit_membership": {
+		{Name: "org_id", Type: "String"},
+		{Name: "node_type", Type: "String"},
+		{Name: "node_id", Type: "String"},
+		{Name: "work_unit_id", Type: "String"},
+		{Name: "category_kind", Type: "String"},
+		{Name: "category", Type: "String"},
+		{Name: "computed_at", Type: "DateTime64(3, 'UTC')"},
+		{Name: "run_id", Type: "String"},
+	},
+	"work_unit_membership_runs": {
+		{Name: "org_id", Type: "String"},
+		{Name: "run_id", Type: "String"},
+		{Name: "completed_at", Type: "DateTime64(3, 'UTC')"},
+	},
+	// superseded_by_run_id/3 and superseded_at/4 are not read; superseded_at
+	// is declared because it is the ReplacingMergeTree version column.
+	"work_unit_supersessions": {
+		{Name: "org_id", Type: "String"},
+		{Name: "superseded_work_unit_id", Type: "String"},
+		{Name: "superseded_at", Type: "DateTime64(9, 'UTC')"},
+	},
 	"work_item_team_attributions": {
 		{Name: "org_id", Type: "String"},
 		{Name: "repo_id", Type: "UUID"},
@@ -630,6 +666,11 @@ var EngineFull = map[string]string{
 	"work_items":                           "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, work_item_id) SETTINGS index_granularity = 8192",
 	// CHAOS-4398: read from dev-health-clickhouse-1 on 2026-08-28.
 	"work_unit_investments": "ReplacingMergeTree(computed_at) ORDER BY (org_id, work_unit_id) SETTINGS index_granularity = 8192",
+	// CHAOS-7073: from the ops migrations (see ProductionColumns), not a
+	// live probe.
+	"work_unit_membership":      "ReplacingMergeTree(computed_at) ORDER BY (org_id, node_type, node_id, category_kind, category, run_id) SETTINGS index_granularity = 8192",
+	"work_unit_membership_runs": "ReplacingMergeTree(completed_at) ORDER BY (org_id, run_id) SETTINGS index_granularity = 8192",
+	"work_unit_supersessions":   "ReplacingMergeTree(superseded_at) ORDER BY (org_id, superseded_work_unit_id) SETTINGS index_granularity = 8192",
 }
 
 // DDL renders CREATE TABLE statements for the named tables, in a

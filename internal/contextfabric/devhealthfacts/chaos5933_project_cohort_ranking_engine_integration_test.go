@@ -234,7 +234,7 @@ func runProjectCohortInvestigation(t *testing.T, ctx context.Context, cells []pr
 	for _, statement := range devhealthschema.DDL(
 		"projects", "team_project_ownership", "team_repo_ownership", "teams",
 		"investment_metrics_daily", "capacity_forecasts", "estimate_coverage_metrics_daily",
-		"compounding_risk_daily", "work_unit_investments", "repos", "work_item_team_attributions",
+		"compounding_risk_daily", "work_unit_investments", "work_unit_supersessions", "work_unit_membership_runs", "work_unit_membership", "repos", "work_item_team_attributions",
 		"recommendations_daily", "work_items", "project_membership_transitions",
 	) {
 		if err := direct.Exec(ctx, statement); err != nil {
