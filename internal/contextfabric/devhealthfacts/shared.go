@@ -493,6 +493,7 @@ func newCapability(kind contextfabric.FactKind, name string, subjectKinds []cont
 		Obligations:           factKindObligations(kind),
 		ObservationKey:        factKindObservationKey(kind),
 		SubjectRoles:          []contextfabric.FactRole{contextfabric.FactRoleSubject},
+		Fields:                factKindFields(kind),
 	}
 }
 

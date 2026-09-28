@@ -958,6 +958,14 @@ type CanonicalFactBundle struct {
 	// measured zero). Distinct from ReadSubjects: a completed read of a
 	// subject the producer never evaluated is not evidence of a zero.
 	EvaluatedSubjects FactReadSubjects `json:"-"`
+	// Outcomes is the per-kind outcome ledger (CHAOS-7073,
+	// fact_outcome_ledger.go): the branch, state, planned and queried
+	// subjects, and the provider's own per-subject states. The direct read
+	// tools serve one coverage row per (kind, subject) from it.
+	//
+	// `json:"-"`: read bookkeeping, never part of the evidence a bundle
+	// carries.
+	Outcomes FactOutcomeLedger `json:"-"`
 }
 
 // FactReadSubjects maps a fact kind to the set of subject keys
