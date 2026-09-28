@@ -57,6 +57,12 @@ func TestEmbeddedSchemasMatchCanonicalSource(t *testing.T) {
 		{readFactsResponseSchemaFile, "contracts/jsonschema/v1/mcp_read_facts_response.v1.schema.json"},
 		{recordEpisodeRequestSchemaFile, "contracts/jsonschema/v1/mcp_record_episode_request.v1.schema.json"},
 		{recordEpisodeResponseSchemaFile, "contracts/jsonschema/v1/mcp_record_episode_response.v1.schema.json"},
+		{dataCatalogRequestSchemaFile, "contracts/jsonschema/v1/mcp_data_catalog_request.v1.schema.json"},
+		{dataCatalogResponseSchemaFile, "contracts/jsonschema/v1/mcp_data_catalog_response.v1.schema.json"},
+		{findSubjectsRequestSchemaFile, "contracts/jsonschema/v1/mcp_find_subjects_request.v1.schema.json"},
+		{findSubjectsResponseSchemaFile, "contracts/jsonschema/v1/mcp_find_subjects_response.v1.schema.json"},
+		{runOperationRequestSchemaFile, "contracts/jsonschema/v1/mcp_run_operation_request.v1.schema.json"},
+		{runOperationResponseSchemaFile, "contracts/jsonschema/v1/mcp_run_operation_response.v1.schema.json"},
 	}
 
 	for _, tc := range cases {

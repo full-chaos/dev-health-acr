@@ -20,6 +20,9 @@ var requestSchemaFiles = []string{
 	sourceEvidenceRequestSchemaFile,
 	investigateQuestionRequestSchemaFile,
 	investigationResultRequestSchemaFile,
+	dataCatalogRequestSchemaFile,
+	findSubjectsRequestSchemaFile,
+	runOperationRequestSchemaFile,
 }
 
 func readEmbeddedJSON(t *testing.T, file string) map[string]any {
@@ -173,6 +176,9 @@ func TestRequestSchemaExamplesValidate(t *testing.T) {
 // a description must be more than a one-liner and must name every required
 // input of the tool it describes, so an agent can call the tool from the
 // description alone.
+// dataToolsWithOptionalInputs are the tools whose inputs are all optional.
+var dataToolsWithOptionalInputs = map[string]bool{toolDataCatalog: true, toolFindSubjects: true}
+
 func TestToolDescriptionsNameTheirRequiredInputs(t *testing.T) {
 	var manifest toolManifest
 	data, err := schemaFiles.ReadFile(toolManifestFile)
@@ -196,7 +202,25 @@ func TestToolDescriptionsNameTheirRequiredInputs(t *testing.T) {
 			continue
 		}
 		schemaFile := "schemas/" + tool.InputSchemaRef[strings.LastIndex(tool.InputSchemaRef, "/")+1:]
-		required, _ := readEmbeddedJSON(t, schemaFile)["required"].([]any)
+		schemaDoc := readEmbeddedJSON(t, schemaFile)
+		required, _ := schemaDoc["required"].([]any)
+		if len(required) == 0 && dataToolsWithOptionalInputs[tool.Name] {
+			// CHAOS-7072: data_catalog and find_subjects have no field that
+			// is always required (a top-level anyOf would be refused by
+			// some model APIs), so the description must name every
+			// property instead, and the schema must declare at least one.
+			properties, _ := schemaDoc["properties"].(map[string]any)
+			if len(properties) == 0 {
+				t.Fatalf("%s: request schema declares no property; the measurement did not happen", tool.Name)
+			}
+			for name := range properties {
+				checked++
+				if !strings.Contains(tool.Description, name) {
+					t.Errorf("%s: description does not name input %q", tool.Name, name)
+				}
+			}
+			continue
+		}
 		if len(required) == 0 {
 			t.Fatalf("%s: request schema declares no required input; the measurement did not happen", tool.Name)
 		}
@@ -293,7 +317,7 @@ func TestServerInstructionsNameOnlyRegisteredTools(t *testing.T) {
 	}
 }
 
-var everyToolName = []string{toolContextForTask, toolSourceEvidence, toolInvestigateQuestion, toolInvestigationResult, toolRecordEpisode}
+var everyToolName = []string{toolContextForTask, toolSourceEvidence, toolInvestigateQuestion, toolInvestigationResult, toolRecordEpisode, toolDataCatalog, toolFindSubjects, toolRunOperation}
 
 // TestWireMetadataNamesOnlyRegisteredTools drives the real MCP handshake for a
 // reduced and a full capability set and holds what an agent actually reads
