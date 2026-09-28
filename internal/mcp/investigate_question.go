@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/answerprojection"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -58,8 +59,12 @@ func handleInvestigateQuestion(ctx context.Context, cfg *ProcessConfig, req *mcp
 		return refuseWithoutCaller(ctx, cfg, toolInvestigateQuestion), nil
 	}
 
+	args, normalizeErr := expandBareReceiptIDs(rawArgs(req))
+	if normalizeErr != nil {
+		return toolErrorResult(&classifiedError{category: "validation", message: normalizeErr.Error()}), nil
+	}
 	var input contractsv1.MCPInvestigateQuestionRequest
-	if err := json.Unmarshal(rawArgs(req), &input); err != nil {
+	if err := json.Unmarshal(args, &input); err != nil {
 		return toolErrorResult(&classifiedError{category: "validation", message: "investigate_question arguments are not valid JSON for the declared schema"}), nil
 	}
 	if err := input.Validate(); err != nil {
@@ -254,4 +259,68 @@ func hostedOptions(budget contractsv1.MCPInvestigationBudget, allowClarification
 		// omitted-field state, mapped, not the tool choosing a mode).
 		WindowConfirmationMode: windowConfirmationMode,
 	}
+}
+
+// priorReceiptFields are the six receipt arrays of investigate_question.
+var priorReceiptFields = []string{
+	"prior_subject_receipts", "prior_kind_receipts", "prior_anchor_receipts",
+	"prior_handle_receipts", "prior_window_receipts", "prior_candidate_receipts",
+}
+
+// expandBareReceiptIDs (CHAOS-7114) turns a bare receipt_id string in any
+// prior_*_receipts array into the canonical {result_id, receipt_id} object,
+// taking result_id from parent_result_id. A real client (Claude for Mac)
+// sent the bare form. The object form is passed through unchanged. A bare
+// string without parent_result_id is refused here with a message that names
+// the field, because there is no result_id to give it. Everything else
+// (bad JSON, wrong types, wrong prefixes) is left for the normal decode and
+// Validate path, so this function widens the input and refuses nothing else.
+func expandBareReceiptIDs(raw []byte) ([]byte, error) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		return raw, nil
+	}
+	var parent string
+	if rawParent, ok := top["parent_result_id"]; ok {
+		_ = json.Unmarshal(rawParent, &parent)
+	}
+	changed := false
+	for _, field := range priorReceiptFields {
+		rawField, ok := top[field]
+		if !ok {
+			continue
+		}
+		var entries []json.RawMessage
+		if err := json.Unmarshal(rawField, &entries); err != nil {
+			continue
+		}
+		fieldChanged := false
+		for i, entry := range entries {
+			var bare string
+			if err := json.Unmarshal(entry, &bare); err != nil {
+				continue
+			}
+			if parent == "" {
+				return nil, fmt.Errorf("investigate_question: %s has a bare receipt_id string, which needs parent_result_id (the result_id of the answer the receipt came from); pass parent_result_id, or pass {\"result_id\", \"receipt_id\"} objects", field)
+			}
+			object, err := json.Marshal(map[string]string{"result_id": parent, "receipt_id": bare})
+			if err != nil {
+				return nil, err
+			}
+			entries[i] = object
+			fieldChanged = true
+		}
+		if fieldChanged {
+			encoded, err := json.Marshal(entries)
+			if err != nil {
+				return nil, err
+			}
+			top[field] = encoded
+			changed = true
+		}
+	}
+	if !changed {
+		return raw, nil
+	}
+	return json.Marshal(top)
 }

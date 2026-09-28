@@ -222,6 +222,12 @@ var schemaDefTypeOverrides = map[string]string{
 // schemaDefExemptions names "<document>#<defName>" entries with no Go type,
 // each with the reason.
 var schemaDefExemptions = map[string]string{
+	"mcp_investigate_question_request.v1.schema.json#BareAnchorReceiptID":       "a bare-string node (CHAOS-7114: a receipt_id given as a plain string, expanded to the object form by the MCP handler before decode) -- not an object, so there is no field set for a Go struct to match",
+	"mcp_investigate_question_request.v1.schema.json#BareBoundSubjectReceiptID": "a bare-string node (CHAOS-7114: a receipt_id given as a plain string, expanded to the object form by the MCP handler before decode) -- not an object, so there is no field set for a Go struct to match",
+	"mcp_investigate_question_request.v1.schema.json#BareCandidateReceiptID":    "a bare-string node (CHAOS-7114: a receipt_id given as a plain string, expanded to the object form by the MCP handler before decode) -- not an object, so there is no field set for a Go struct to match",
+	"mcp_investigate_question_request.v1.schema.json#BareHandleReceiptID":       "a bare-string node (CHAOS-7114: a receipt_id given as a plain string, expanded to the object form by the MCP handler before decode) -- not an object, so there is no field set for a Go struct to match",
+	"mcp_investigate_question_request.v1.schema.json#BareKindReceiptID":         "a bare-string node (CHAOS-7114: a receipt_id given as a plain string, expanded to the object form by the MCP handler before decode) -- not an object, so there is no field set for a Go struct to match",
+	"mcp_investigate_question_request.v1.schema.json#BareWindowReceiptID":       "a bare-string node (CHAOS-7114: a receipt_id given as a plain string, expanded to the object form by the MCP handler before decode) -- not an object, so there is no field set for a Go struct to match",
 	// Composition and container nodes: these publish no property set of
 	// their own, so there is no field set for a Go struct to match. Each was
 	// read before being listed.

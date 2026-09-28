@@ -1,0 +1,7 @@
+{
+ "question": "Use the trailing 90 days",
+ "parent_result_id": "res_4d1c9a72",
+ "prior_window_receipts": [
+  "winr_a1b2c3d4"
+ ]
+}
