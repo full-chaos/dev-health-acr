@@ -51,9 +51,13 @@ type Dependencies struct {
 }
 
 type App struct {
-	config               AppConfig
-	capabilities         CapabilitiesProvider
-	readinessChecks      []ReadinessCheck
+	config          AppConfig
+	capabilities    CapabilitiesProvider
+	readinessChecks []ReadinessCheck
+	// dataStoreChecks (CHAOS-6745) are the ClickHouse-backed checks that
+	// gate the ClickHouse-dependent routes ONLY -- never /readyz. See
+	// RuntimeDependencies.DataStoreChecks and requireDataStoresReady.
+	dataStoreChecks      []ReadinessCheck
 	now                  func() time.Time
 	requestID            func() string
 	logger               *slog.Logger
@@ -174,10 +178,23 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 			return nil, errors.New("readiness checks require a name")
 		}
 	}
+	// CHAOS-6745: dataStoreChecks travels separately from ReadinessChecks --
+	// see RuntimeDependencies.DataStoreChecks's doc comment for why it must
+	// never reach /readyz.
+	var dataStoreChecks []ReadinessCheck
+	if deps.Runtime != nil {
+		for _, check := range deps.Runtime.DataStoreChecks {
+			if check == nil || strings.TrimSpace(check.Name()) == "" {
+				return nil, errors.New("data store readiness checks require a name")
+			}
+		}
+		dataStoreChecks = append([]ReadinessCheck(nil), deps.Runtime.DataStoreChecks...)
+	}
 	app := &App{
 		config:               cfg,
 		capabilities:         deps.Capabilities,
 		readinessChecks:      append([]ReadinessCheck(nil), deps.ReadinessChecks...),
+		dataStoreChecks:      dataStoreChecks,
 		now:                  deps.Now,
 		requestID:            deps.RequestID,
 		logger:               logger,

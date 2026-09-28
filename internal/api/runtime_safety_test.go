@@ -69,13 +69,12 @@ func TestRuntimeDependencies_requires_exact_named_readiness_checks(t *testing.T)
 	}
 }
 
-func TestRuntimeDependencies_allows_additional_readiness_checks_beyond_required_three(t *testing.T) {
+func TestRuntimeDependencies_allows_additional_readiness_checks_beyond_required_two(t *testing.T) {
 	// Given
 	app, _ := newHostedTestApp(t, nil, nil, nil, nil, nil)
 	runtime := *app.runtime
 	runtime.ReadinessChecks = []ReadinessCheck{
 		CheckFunc{CheckName: "postgres"},
-		CheckFunc{CheckName: "clickhouse"},
 		CheckFunc{CheckName: "entitlement"},
 		CheckFunc{CheckName: "packet_purge_loop"},
 	}
@@ -85,7 +84,65 @@ func TestRuntimeDependencies_allows_additional_readiness_checks_beyond_required_
 
 	// Then
 	if err != nil {
-		t.Fatalf("runtime rejected an additional readiness check beyond the required three: %v", err)
+		t.Fatalf("runtime rejected an additional readiness check beyond the required two: %v", err)
+	}
+}
+
+// TestRuntimeDependencies_rejects_clickhouse_in_readiness_checks pins
+// CHAOS-6745's actual guard: /readyz (ReadinessChecks) must never carry a
+// clickhouse check, however it is spelled among the others, because it
+// gates the WHOLE pod's routing -- including the OAuth surface, which has
+// no ClickHouse dependency. This is the class-level guard the regression
+// this ticket fixes needs: it must FAIL on the pre-fix shape (clickhouse
+// folded into the same three-check ReadinessChecks list) and PASS once
+// clickhouse moves to DataStoreChecks.
+func TestRuntimeDependencies_rejects_clickhouse_in_readiness_checks(t *testing.T) {
+	// Given
+	app, _ := newHostedTestApp(t, nil, nil, nil, nil, nil)
+	runtime := *app.runtime
+	runtime.ReadinessChecks = []ReadinessCheck{
+		CheckFunc{CheckName: "postgres"},
+		CheckFunc{CheckName: "clickhouse"},
+		CheckFunc{CheckName: "entitlement"},
+	}
+
+	// When
+	err := runtime.validate()
+
+	// Then
+	if err == nil {
+		t.Fatal("runtime accepted a clickhouse check inside ReadinessChecks (/readyz)")
+	}
+}
+
+// TestRuntimeDependencies_requires_exactly_one_clickhouse_data_store_check
+// pins the other half of the same guard: DataStoreChecks must carry
+// exactly one clickhouse check, or the ClickHouse-backed routes would have
+// nothing to gate themselves on at all.
+func TestRuntimeDependencies_requires_exactly_one_clickhouse_data_store_check(t *testing.T) {
+	cases := []struct {
+		name   string
+		checks []ReadinessCheck
+	}{
+		{"empty", nil},
+		{"wrong_name", []ReadinessCheck{CheckFunc{CheckName: "postgres"}}},
+		{"duplicated", []ReadinessCheck{CheckFunc{CheckName: "clickhouse"}, CheckFunc{CheckName: "clickhouse"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given
+			app, _ := newHostedTestApp(t, nil, nil, nil, nil, nil)
+			runtime := *app.runtime
+			runtime.DataStoreChecks = tc.checks
+
+			// When
+			err := runtime.validate()
+
+			// Then
+			if err == nil {
+				t.Fatalf("runtime accepted DataStoreChecks = %v", tc.checks)
+			}
+		})
 	}
 }
 
@@ -96,7 +153,6 @@ func TestRuntimeDependencies_rejects_duplicate_required_readiness_check_names(t 
 	runtime.ReadinessChecks = []ReadinessCheck{
 		CheckFunc{CheckName: "postgres"},
 		CheckFunc{CheckName: "postgres"},
-		CheckFunc{CheckName: "clickhouse"},
 		CheckFunc{CheckName: "entitlement"},
 	}
 
@@ -171,9 +227,15 @@ func TestRuntimeDependencies_rejectsMissingDeviceAuthorizationControls(t *testin
 func exactRuntimeChecks() []ReadinessCheck {
 	return []ReadinessCheck{
 		CheckFunc{CheckName: "postgres"},
-		CheckFunc{CheckName: "clickhouse"},
 		CheckFunc{CheckName: "entitlement"},
 	}
+}
+
+// exactDataStoreChecks (CHAOS-6745) is RuntimeDependencies.DataStoreChecks'
+// own minimal valid fixture -- clickhouse moved here, out of
+// exactRuntimeChecks/ReadinessChecks, because /readyz must never gate on it.
+func exactDataStoreChecks() []ReadinessCheck {
+	return []ReadinessCheck{CheckFunc{CheckName: "clickhouse"}}
 }
 
 type typedNilEntitlement struct{}

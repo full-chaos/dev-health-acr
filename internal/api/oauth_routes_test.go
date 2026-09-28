@@ -80,6 +80,7 @@ func newOAuthTestApp(t *testing.T, oauthRuntime *OAuthRuntime, withWebAssertions
 			DeviceAuthorizations: devices, DeviceVerificationURL: "https://web.example.test/acr/device",
 			DeviceAuthorizationLimiter: NewDeviceAuthorizationLimiter(ClockFunc(clock)),
 			ReadinessChecks:            exactRuntimeChecks(),
+			DataStoreChecks:            exactDataStoreChecks(),
 			OAuth:                      oauthRuntime,
 		},
 	}, slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelInfo})))

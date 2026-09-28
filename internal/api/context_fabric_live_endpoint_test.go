@@ -225,6 +225,7 @@ func newLiveContextFabricTestApp(t *testing.T, investigator contextfabric.Invest
 			DeviceAuthorizations: devices, DeviceVerificationURL: "https://verify.example.test/device",
 			DeviceAuthorizationLimiter: NewDeviceAuthorizationLimiter(ClockFunc(func() time.Time { return now })),
 			ReadinessChecks:            exactRuntimeChecks(),
+			DataStoreChecks:            exactDataStoreChecks(),
 			Investigator:               investigator,
 		},
 	}, testLogger(&bytes.Buffer{}))

@@ -65,7 +65,7 @@ func newHostedTestAppWithUsageTelemetry(t *testing.T, provider CapabilitiesProvi
 		Runtime: &RuntimeDependencies{
 			Credentials: credentials, Audit: audit, Entitlements: entitlements, Assembler: assembler, Evidence: store,
 			DeviceAuthorizations: devices, DeviceVerificationURL: "https://verify.example.test/device", DeviceAuthorizationLimiter: NewDeviceAuthorizationLimiter(ClockFunc(func() time.Time { return now })),
-			ReadinessChecks: exactRuntimeChecks(),
+			ReadinessChecks: exactRuntimeChecks(), DataStoreChecks: exactDataStoreChecks(),
 		},
 	}, testLogger(&bytes.Buffer{}))
 	if err != nil {

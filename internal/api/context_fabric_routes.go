@@ -49,6 +49,13 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			a.handleRuntimeUnavailable(w, r)
 			return
 		}
+		// CHAOS-6745: the SAME after-protectedRuntimeHandler placement rule
+		// as the nil-investigator check above, and for the identical
+		// reason -- an unauthenticated caller must never learn ClickHouse
+		// is down before being authenticated, rate-limited, or audited.
+		if !a.dataStoresReady(w, r) {
+			return
+		}
 		var request contextfabric.InvestigationRequest
 		if err := decodeJSONBody(w, r, a.config.MaxRequestBodyBytes, &request); err != nil {
 			status := http.StatusBadRequest

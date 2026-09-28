@@ -109,8 +109,10 @@ func newRealHostedAPITestServer(t *testing.T) (baseURL, bearerToken string) {
 			DeviceAuthorizationLimiter: api.NewDeviceAuthorizationLimiter(api.ClockFunc(func() time.Time { return now })),
 			ReadinessChecks: []api.ReadinessCheck{
 				api.CheckFunc{CheckName: "postgres", Fn: func(context.Context) error { return nil }},
-				api.CheckFunc{CheckName: "clickhouse", Fn: func(context.Context) error { return nil }},
 				api.CheckFunc{CheckName: "entitlement", Fn: func(context.Context) error { return nil }},
+			},
+			DataStoreChecks: []api.ReadinessCheck{
+				api.CheckFunc{CheckName: "clickhouse", Fn: func(context.Context) error { return nil }},
 			},
 			Investigator: fakeRealRouteInvestigator{},
 		},

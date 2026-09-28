@@ -46,6 +46,16 @@ var (
 	ErrUpstreamInvalidOutput  = errors.New("acr: hosted API's model provider returned an invalid response")
 	ErrInterpretationRejected = errors.New("acr: hosted API rejected the interpreted question against a v1 bound")
 	ErrSynthesisRejected      = errors.New("acr: hosted API rejected the synthesized answer against a v1 bound")
+	// ErrStoreUnavailable (CHAOS-6745) is the data-serving routes'
+	// per-request ClickHouse readiness gate: it is DISTINCT from
+	// ErrUpstreamUnavailable, which covers the hosted API as a whole. A
+	// caller that wants to tell "this one data call needs a store that is
+	// currently down" apart from "the hosted API itself is unreachable or
+	// degraded" needs its own sentinel, since the OAuth/auth surface
+	// (register, device_authorization, token) never returns this code at
+	// all -- it has no ClickHouse dependency and stays up through the
+	// exact outage this code reports for data calls.
+	ErrStoreUnavailable = errors.New("acr: hosted API's data store is temporarily unavailable")
 
 	ErrUnexpectedRedirect        = errors.New("acr: hosted API attempted a redirect, which the client does not follow")
 	ErrResponseTooLarge          = errors.New("acr: hosted API response exceeded the configured size limit")
@@ -78,6 +88,7 @@ var codeSentinels = map[string]error{
 	"upstream_invalid_output": ErrUpstreamInvalidOutput,
 	"interpretation_rejected": ErrInterpretationRejected,
 	"synthesis_rejected":      ErrSynthesisRejected,
+	"store_unavailable":       ErrStoreUnavailable,
 }
 
 // codeSafeMessages maps each recognized hosted error code to a fixed,
@@ -104,6 +115,7 @@ var codeSafeMessages = map[string]string{
 	"upstream_invalid_output": "the hosted API's model provider returned an invalid response",
 	"interpretation_rejected": "the hosted API rejected the interpreted question against a v1 bound",
 	"synthesis_rejected":      "the hosted API rejected the synthesized answer against a v1 bound",
+	"store_unavailable":       "the hosted API's data store is temporarily unavailable",
 }
 
 // unknownCodeSafeMessage is used for a hosted error code this client does

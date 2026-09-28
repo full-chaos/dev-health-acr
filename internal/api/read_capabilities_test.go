@@ -127,7 +127,9 @@ func TestRuntimeReadinessChecksAreRequiredAndExecuted(t *testing.T) {
 	app, _ := newHostedTestApp(t, nil, nil, []string{auth.ScopeContextRead}, nil, nil)
 	ready := httptest.NewRecorder()
 	app.Handler().ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/readyz", nil))
-	if ready.Code != http.StatusOK || len(app.readinessChecks) != 3 {
+	// CHAOS-6745: /readyz gates on postgres + entitlement only -- clickhouse
+	// moved to DataStoreChecks, which never reaches this endpoint.
+	if ready.Code != http.StatusOK || len(app.readinessChecks) != 2 {
 		t.Fatalf("ready status = %d checks=%d", ready.Code, len(app.readinessChecks))
 	}
 	app.readinessChecks[1] = CheckFunc{CheckName: "entitlement", Fn: func(context.Context) error { return errors.New("unavailable") }}

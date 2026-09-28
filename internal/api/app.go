@@ -77,8 +77,17 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", a.handleHealth)
 	mux.HandleFunc("GET /readyz", a.handleReady)
 	mux.Handle("GET /api/v1/agent-context/capabilities", a.protectedRuntimeHandler(limits.RequestClassAuth, auth.ScopeContextRead, false, true, http.HandlerFunc(a.handleCapabilities)))
-	mux.Handle("POST /api/v1/agent-context/context-packets", a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, false, true, http.HandlerFunc(a.handleContextPacket)))
-	mux.Handle("GET /api/v1/agent-context/evidence/{evidence_ref_id}", a.protectedRuntimeHandler(limits.RequestClassEvidence, auth.ScopeEvidenceRead, true, true, http.HandlerFunc(a.handleEvidence)))
+	// context-packets, evidence, and context-fabric investigations are the
+	// only routes that actually read ClickHouse (CHAOS-6745). context-
+	// packets/evidence are wrapped in requireDataStoresReady HERE, inside
+	// protectedRuntimeHandler, so the check runs after auth/scope/limits --
+	// never before them (an unauthenticated caller must not learn a store
+	// is down). ContextFabricInvestigationHandler does the SAME check
+	// itself, inside its own handler body, for the identical reason
+	// (CHAOS-3755 finding H5's rule for the nil-investigator check applies
+	// here too) -- see that function's own comment.
+	mux.Handle("POST /api/v1/agent-context/context-packets", a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, false, true, a.requireDataStoresReady(http.HandlerFunc(a.handleContextPacket))))
+	mux.Handle("GET /api/v1/agent-context/evidence/{evidence_ref_id}", a.protectedRuntimeHandler(limits.RequestClassEvidence, auth.ScopeEvidenceRead, true, true, a.requireDataStoresReady(http.HandlerFunc(a.handleEvidence))))
 	mux.Handle("POST /api/v1/agent-context/episodes", a.protectedRuntimeHandler(limits.RequestClassEpisode, auth.ScopeEpisodeWrite, true, false, http.HandlerFunc(a.handleEpisode)))
 	mux.Handle("POST "+ContextFabricInvestigationsPath, a.ContextFabricInvestigationHandler(a.investigator()))
 	mux.Handle("GET "+ContextFabricInvestigationResultPath, a.ContextFabricInvestigationResultHandler(a.investigationResults(), a.storedResultGate()))
