@@ -237,9 +237,14 @@ func TestReceiptTableMatchesRequestSchema(t *testing.T) {
 		Properties map[string]struct {
 			Items struct {
 				Ref string `json:"$ref"`
+				// CHAOS-7114: each entry is oneOf the object form or a bare receipt_id string.
+				OneOf []struct {
+					Ref string `json:"$ref"`
+				} `json:"oneOf"`
 			} `json:"items"`
 		} `json:"properties"`
 		Defs map[string]struct {
+			Pattern    string `json:"pattern"`
 			Properties map[string]struct {
 				Pattern string `json:"pattern"`
 			} `json:"properties"`
@@ -270,10 +275,20 @@ func TestReceiptTableMatchesRequestSchema(t *testing.T) {
 			t.Errorf("schema field %s is not in the guide", field)
 			continue
 		}
-		def := strings.TrimPrefix(schema.Properties[field].Items.Ref, "#/$defs/")
+		items := schema.Properties[field].Items
+		if len(items.OneOf) != 2 {
+			t.Errorf("field %s: items must be oneOf the object form and the bare receipt_id string", field)
+			continue
+		}
+		def := strings.TrimPrefix(items.OneOf[0].Ref, "#/$defs/")
+		bareDef := strings.TrimPrefix(items.OneOf[1].Ref, "#/$defs/")
 		pattern := schema.Defs[def].Properties["receipt_id"].Pattern
+		barePattern := schema.Defs[bareDef].Pattern
 		if want := "^" + prefix; prefix != "" && pattern != want || prefix == "" && pattern != "" {
 			t.Errorf("field %s: guide prefix %q, schema pattern %q", field, prefix, pattern)
+		}
+		if pattern != barePattern {
+			t.Errorf("field %s: object receipt_id pattern %q differs from bare receipt pattern %q", field, pattern, barePattern)
 		}
 	}
 }
@@ -385,6 +400,17 @@ func TestParityDetectsRemovedRegistryEntries(t *testing.T) {
 		built, err := Build(in)
 		if err == nil && sameFiles(built, embedded) {
 			t.Errorf("planted defect %q went undetected", name)
+		}
+	}
+}
+
+// CHAOS-7114: the guide clients read must teach the bare receipt_id form and
+// its parent_result_id condition, matching the tool schema and handler.
+func TestConversationGuideTeachesBareReceiptForm(t *testing.T) {
+	text := buildConversation()
+	for _, want := range []string{"send just the `receipt_id` string", "bound to `parent_result_id`", "without `parent_result_id` is refused"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("conversation guide lacks %q", want)
 		}
 	}
 }

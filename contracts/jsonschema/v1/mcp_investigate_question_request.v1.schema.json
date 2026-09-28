@@ -45,6 +45,45 @@
   "required": [
     "question"
   ],
+  "if": {
+    "properties": {
+      "prior_subject_receipts": {
+        "items": {
+          "type": "object"
+        }
+      },
+      "prior_kind_receipts": {
+        "items": {
+          "type": "object"
+        }
+      },
+      "prior_anchor_receipts": {
+        "items": {
+          "type": "object"
+        }
+      },
+      "prior_handle_receipts": {
+        "items": {
+          "type": "object"
+        }
+      },
+      "prior_window_receipts": {
+        "items": {
+          "type": "object"
+        }
+      },
+      "prior_candidate_receipts": {
+        "items": {
+          "type": "object"
+        }
+      }
+    }
+  },
+  "else": {
+    "required": [
+      "parent_result_id"
+    ]
+  },
   "properties": {
     "question": {
       "type": "string",
@@ -62,49 +101,91 @@
     },
     "prior_subject_receipts": {
       "type": "array",
-      "description": "Confirms subjects a previous answer committed to, so this turn keeps investigating the same subjects. Take entries from that answer's subject_receipts. Receipts returned by the previous answer. Copy each entry unchanged from that answer, with the result_id it came from.",
+      "description": "Confirms subjects a previous answer committed to, so this turn keeps investigating the same subjects. Take entries from that answer's subject_receipts. Receipts returned by the previous answer. Copy each entry unchanged from that answer, with the result_id it came from. Each entry may also be the bare receipt_id string; then parent_result_id is required and is used as that receipt's result_id.",
       "items": {
-        "$ref": "#/$defs/BoundSubjectReceipt"
+        "oneOf": [
+          {
+            "$ref": "#/$defs/BoundSubjectReceipt"
+          },
+          {
+            "$ref": "#/$defs/BareBoundSubjectReceiptID"
+          }
+        ]
       },
       "maxItems": 20
     },
     "prior_kind_receipts": {
       "type": "array",
-      "description": "Answers a clarification about what kind of thing you meant. Take the receipt_id (starts with kindr_) of the kind option you choose from structure_needs.kind_options. Receipts returned by the previous answer. Copy each entry unchanged from that answer, with the result_id it came from.",
+      "description": "Answers a clarification about what kind of thing you meant. Take the receipt_id (starts with kindr_) of the kind option you choose from structure_needs.kind_options. Receipts returned by the previous answer. Copy each entry unchanged from that answer, with the result_id it came from. Each entry may also be the bare receipt_id string; then parent_result_id is required and is used as that receipt's result_id.",
       "items": {
-        "$ref": "#/$defs/KindBoundReceipt"
+        "oneOf": [
+          {
+            "$ref": "#/$defs/KindBoundReceipt"
+          },
+          {
+            "$ref": "#/$defs/BareKindReceiptID"
+          }
+        ]
       },
       "maxItems": 20
     },
     "prior_anchor_receipts": {
       "type": "array",
-      "description": "Answers a clarification about which named subject you meant. Take the receipt_id (starts with ancr_) of the option you choose from structure_needs.anchor_options. Receipts returned by the previous answer. Copy each entry unchanged from that answer, with the result_id it came from.",
+      "description": "Answers a clarification about which named subject you meant. Take the receipt_id (starts with ancr_) of the option you choose from structure_needs.anchor_options. Receipts returned by the previous answer. Copy each entry unchanged from that answer, with the result_id it came from. Each entry may also be the bare receipt_id string; then parent_result_id is required and is used as that receipt's result_id.",
       "items": {
-        "$ref": "#/$defs/AnchorBoundReceipt"
+        "oneOf": [
+          {
+            "$ref": "#/$defs/AnchorBoundReceipt"
+          },
+          {
+            "$ref": "#/$defs/BareAnchorReceiptID"
+          }
+        ]
       },
       "maxItems": 20
     },
     "prior_handle_receipts": {
       "type": "array",
-      "description": "Confirms an identifier the service offered, such as a pull request number. Take the receipt_id (starts with handr_) of the option you choose from structure_needs.handle_options. Receipts returned by the previous answer. Copy each entry unchanged from that answer, with the result_id it came from.",
+      "description": "Confirms an identifier the service offered, such as a pull request number. Take the receipt_id (starts with handr_) of the option you choose from structure_needs.handle_options. Receipts returned by the previous answer. Copy each entry unchanged from that answer, with the result_id it came from. Each entry may also be the bare receipt_id string; then parent_result_id is required and is used as that receipt's result_id.",
       "items": {
-        "$ref": "#/$defs/HandleBoundReceipt"
+        "oneOf": [
+          {
+            "$ref": "#/$defs/HandleBoundReceipt"
+          },
+          {
+            "$ref": "#/$defs/BareHandleReceiptID"
+          }
+        ]
       },
       "maxItems": 20
     },
     "prior_window_receipts": {
       "type": "array",
-      "description": "Confirms a time window the service offered. Take the receipt_id (starts with winr_) of the option you choose from structure_needs.window_options. Receipts returned by the previous answer. Copy each entry unchanged from that answer, with the result_id it came from.",
+      "description": "Confirms a time window the service offered. Take the receipt_id (starts with winr_) of the option you choose from structure_needs.window_options. Receipts returned by the previous answer. Copy each entry unchanged from that answer, with the result_id it came from. Each entry may also be the bare receipt_id string; then parent_result_id is required and is used as that receipt's result_id.",
       "items": {
-        "$ref": "#/$defs/WindowBoundReceipt"
+        "oneOf": [
+          {
+            "$ref": "#/$defs/WindowBoundReceipt"
+          },
+          {
+            "$ref": "#/$defs/BareWindowReceiptID"
+          }
+        ]
       },
       "maxItems": 20
     },
     "prior_candidate_receipts": {
       "type": "array",
-      "description": "Chooses among candidate subjects the service offered when several matched. Take the receipt_id (starts with candr_) of the option you choose from structure_needs.candidate_options. Receipts returned by the previous answer. Copy each entry unchanged from that answer, with the result_id it came from.",
+      "description": "Chooses among candidate subjects the service offered when several matched. Take the receipt_id (starts with candr_) of the option you choose from structure_needs.candidate_options. Receipts returned by the previous answer. Copy each entry unchanged from that answer, with the result_id it came from. Each entry may also be the bare receipt_id string; then parent_result_id is required and is used as that receipt's result_id.",
       "items": {
-        "$ref": "#/$defs/CandidateBoundReceipt"
+        "oneOf": [
+          {
+            "$ref": "#/$defs/CandidateBoundReceipt"
+          },
+          {
+            "$ref": "#/$defs/BareCandidateReceiptID"
+          }
+        ]
       },
       "maxItems": 20
     },
@@ -565,6 +646,47 @@
         "headless",
         "nudge"
       ]
+    },
+    "BareBoundSubjectReceiptID": {
+      "description": "A bare receipt_id string. It is accepted only when parent_result_id is set in the same call; the receipt then carries parent_result_id as its result_id. It is the receipt_id from the previous answer, unchanged.",
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 256
+    },
+    "BareKindReceiptID": {
+      "description": "A bare receipt_id string. It is accepted only when parent_result_id is set in the same call; the receipt then carries parent_result_id as its result_id. It must start with kindr_.",
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 256,
+      "pattern": "^kindr_"
+    },
+    "BareAnchorReceiptID": {
+      "description": "A bare receipt_id string. It is accepted only when parent_result_id is set in the same call; the receipt then carries parent_result_id as its result_id. It must start with ancr_.",
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 256,
+      "pattern": "^ancr_"
+    },
+    "BareHandleReceiptID": {
+      "description": "A bare receipt_id string. It is accepted only when parent_result_id is set in the same call; the receipt then carries parent_result_id as its result_id. It must start with handr_.",
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 256,
+      "pattern": "^handr_"
+    },
+    "BareWindowReceiptID": {
+      "description": "A bare receipt_id string. It is accepted only when parent_result_id is set in the same call; the receipt then carries parent_result_id as its result_id. It must start with winr_.",
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 256,
+      "pattern": "^winr_"
+    },
+    "BareCandidateReceiptID": {
+      "description": "A bare receipt_id string. It is accepted only when parent_result_id is set in the same call; the receipt then carries parent_result_id as its result_id. It must start with candr_.",
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 256,
+      "pattern": "^candr_"
     }
   }
 }
