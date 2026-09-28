@@ -220,6 +220,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	if err != nil {
 		return nil, closeAfterError(runtime, err)
 	}
+	directRelationships := buildDirectRelationships(investigator, directReadGate, request.options.Logger)
 	// Same typed-nil guard: workloadTokenExchange is a concrete
 	// *authverify.WorkloadTokenExchangeService, nil whenever CHAOS-4013 is
 	// unconfigured (see buildWorkloadTokenExchange's doc comment).
@@ -243,6 +244,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 			DataCatalogue:              dataReads.catalogue,
 			DataOperations:             dataReads.operations,
 			DataSubjects:               dataReads.subjects,
+			DirectRelationships:        directRelationships,
 			OrgModelConfigs:            orgModelConfigs,
 			OrgModelRuntimeEvictor:     orgModelRuntimeEvictor,
 			// CHAOS-3786, codex round-1 P1(b): resultReuseInvalidator is
@@ -1324,4 +1326,25 @@ func buildDirectReads(investigator contextfabric.Investigator, logger *slog.Logg
 		logger.Error("context fabric direct read gate not composed", "reason", "fact_registry_unsupported")
 	}
 	return gate, nil
+}
+
+// buildDirectRelationships builds the read_relationships reader (CHAOS-7074)
+// over the SAME graph the engine reads and the direct-read gate. It is nil
+// when the gate is nil or the graph cannot serve bounded edge pages; a
+// composed gate over a graph that cannot is a wiring defect and is logged
+// loudly.
+func buildDirectRelationships(investigator contextfabric.Investigator, gate *directread.SubjectGate, logger *slog.Logger) *directread.RelationshipsReader {
+	engine, ok := investigator.(directReadSourcer)
+	if !ok || storage.IsNil(investigator) || gate == nil {
+		return nil
+	}
+	graph, _ := engine.DirectReadSources()
+	edges, ok := graph.(directread.EdgeGraph)
+	if !ok || storage.IsNil(graph) {
+		if logger != nil {
+			logger.Error("context fabric direct relationships reader not composed", "reason", "graph_edges_unsupported")
+		}
+		return nil
+	}
+	return directread.NewRelationshipsReader(gate, edges, directread.NewSlogRelationshipsRecorder(logger))
 }
