@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -81,6 +82,13 @@ type RuntimeDependencies struct {
 	// configured and this is nil, the retrieval route fails closed as
 	// unavailable rather than serve an undecided result.
 	StoredResultGate StoredResultAuthorizer
+	// DirectReadGate and DirectFactReader are the shared base of the direct
+	// data tools (CHAOS-7071): the mandatory subject gate every direct read
+	// passes, and the only path from a direct tool to the fact registry.
+	// Both are nil when Context Fabric is not composed; a direct data
+	// handler then fails closed as unavailable, never reads ungated.
+	DirectReadGate   *directread.SubjectGate
+	DirectFactReader *directread.FactReader
 	// OrgModelConfigs is optional (CHAOS-3775) -- same convention as
 	// Investigator. When nil (no ACR_CONTEXT_FABRIC_CREDENTIAL_ENCRYPTION_KEYS
 	// configured), the model-config routes stay registered, authorized, and

@@ -15,6 +15,7 @@ package eventspec
 
 import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread/gatevocab"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -2160,6 +2161,43 @@ var StoredResultAuthorization = Event{
 	},
 }
 
+// The direct-read subject gate vocabularies (CHAOS-7071), each derived from
+// the one array its producer declares.
+var (
+	directReadPrincipalClassArr = gatevocab.PrincipalClassVocabulary()
+	directReadDecisionArr       = gatevocab.DecisionVocabulary()
+	directReadReasonArr         = gatevocab.ReasonVocabulary()
+	directReadErrorClassArr     = gatevocab.ErrorClassVocabulary()
+)
+
+// DirectReadAuthorization records the live subject-gate decision every
+// direct data tool takes before it reads (CHAOS-7036 E.2): the caller's
+// grant class, how many subjects it named, and what each class of refusal
+// came to. denied and absent are one public answer; this line keeps them
+// apart so a refusal is diagnosable from the run's own trace.
+var DirectReadAuthorization = Event{
+	ID: "contextfabric.direct_read_authorization", Msg: gatevocab.AuthorizationLogMessage, Level: LevelInfo,
+	Multiplicity: MultiplicityZeroOrOnePerRequest, Attribution: []string{"org_id"},
+	BoundedAggregation: "one decision per direct read request; counts and kinds only, never ids, labels or repository names",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "principal_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(directReadPrincipalClassArr[:])},
+		{Key: "repository_scope_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(directReadDecisionArr[:])},
+		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(directReadReasonArr[:])},
+		{Key: "subject_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "admitted_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "denied_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "absent_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "ownership_unproven_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "organization_mismatch_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "invalid_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "refused_kinds", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultSubjectKindArr[:])},
+		{Key: "error_class", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the decision is unavailable because a graph read failed", ClosedVocabulary: directReadErrorClassArr[:]},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
 // The evidence-expansion vocabularies, each derived from the one array its
 // producer declares.
 var (
@@ -2637,6 +2675,7 @@ var All = []Event{
 	WorkItemReuse,
 	WorkItemStoredServing,
 	StoredResultAuthorization,
+	DirectReadAuthorization,
 	EvidenceExpansion,
 	CountPopulationScope,
 	FrameValidation,

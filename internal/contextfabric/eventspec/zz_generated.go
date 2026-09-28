@@ -26,6 +26,7 @@ var ByID = map[string]Event{
 	"contextfabric.completeness_authority":         CompletenessAuthority,
 	"contextfabric.confirmed_need_ledger":          ConfirmedNeedLedger,
 	"contextfabric.count_population_scope":         CountPopulationScope,
+	"contextfabric.direct_read_authorization":      DirectReadAuthorization,
 	"contextfabric.evidence_expansion":             EvidenceExpansion,
 	"contextfabric.frame_validation":               FrameValidation,
 	"contextfabric.remembered_window_axis":         RememberedWindowAxis,
@@ -919,6 +920,93 @@ func (f CountPopulationScopeFields) SlogArgs() []any {
 		"reused", f.Reused,
 		"subject_kind", contextfabric.SanitizeLogAttr(f.SubjectKind),
 		"subject_id", contextfabric.SanitizeLogAttr(f.SubjectID),
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// DirectReadAuthorizationFields is contextfabric.direct_read_authorization's generated typed construction interface
+// (CHAOS-5516): one Go field per Field DirectReadAuthorization.Fields declares in spec.go.
+type DirectReadAuthorizationFields struct {
+	OrgID                     string
+	PrincipalClass            string
+	RepositoryScopeCount      int
+	Decision                  string
+	Reason                    string
+	SubjectCount              int
+	AdmittedCount             int
+	DeniedCount               int
+	AbsentCount               int
+	OwnershipUnprovenCount    int
+	OrganizationMismatchCount int
+	InvalidCount              int
+	RefusedKinds              []string
+	ErrorClass                string
+	RequestID                 string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every DirectReadAuthorizationFields uniformly, set ONLY by NewDirectReadAuthorizationFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewDirectReadAuthorizationFields is the generated constructor for DirectReadAuthorizationFields -- every
+// field DirectReadAuthorization.Fields declares is a required parameter.
+func NewDirectReadAuthorizationFields(orgID string, principalClass string, repositoryScopeCount int, decision string, reason string, subjectCount int, admittedCount int, deniedCount int, absentCount int, ownershipUnprovenCount int, organizationMismatchCount int, invalidCount int, refusedKinds []string, errorClass string, requestID string) DirectReadAuthorizationFields {
+	valid := true
+	if refusedKinds == nil {
+		valid = false
+	}
+	return DirectReadAuthorizationFields{
+		OrgID:                     orgID,
+		PrincipalClass:            principalClass,
+		RepositoryScopeCount:      repositoryScopeCount,
+		Decision:                  decision,
+		Reason:                    reason,
+		SubjectCount:              subjectCount,
+		AdmittedCount:             admittedCount,
+		DeniedCount:               deniedCount,
+		AbsentCount:               absentCount,
+		OwnershipUnprovenCount:    ownershipUnprovenCount,
+		OrganizationMismatchCount: organizationMismatchCount,
+		InvalidCount:              invalidCount,
+		RefusedKinds:              refusedKinds,
+		ErrorClass:                errorClass,
+		RequestID:                 requestID,
+		constructed:               valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewDirectReadAuthorizationFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f DirectReadAuthorizationFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns DirectReadAuthorization's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f DirectReadAuthorizationFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"principal_class", contextfabric.SanitizeLogAttr(f.PrincipalClass),
+		"repository_scope_count", f.RepositoryScopeCount,
+		"decision", contextfabric.SanitizeLogAttr(f.Decision),
+		"reason", contextfabric.SanitizeLogAttr(f.Reason),
+		"subject_count", f.SubjectCount,
+		"admitted_count", f.AdmittedCount,
+		"denied_count", f.DeniedCount,
+		"absent_count", f.AbsentCount,
+		"ownership_unproven_count", f.OwnershipUnprovenCount,
+		"organization_mismatch_count", f.OrganizationMismatchCount,
+		"invalid_count", f.InvalidCount,
+		"refused_kinds", contextfabric.SanitizeLogStrings(f.RefusedKinds),
+		"error_class", contextfabric.SanitizeLogAttr(f.ErrorClass),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }

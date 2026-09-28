@@ -596,3 +596,11 @@ func (e *Engine) StoredResultGate() *StoredResultGate {
 	}
 	return e.storedResultGate
 }
+
+// OrganizationSubjectIsCallers is the exported form of the organization-kind
+// rule the stored-result gate applies, for the direct-read subject gate
+// (internal/contextfabric/directread, CHAOS-7071), so both gates share one
+// rule rather than two copies of it.
+func OrganizationSubjectIsCallers(principal storage.Principal, subject SubjectRef) bool {
+	return organizationSubjectIsCallers(principal, subject)
+}

@@ -1534,6 +1534,143 @@
     ]
   },
   {
+    "id": "contextfabric.direct_read_authorization",
+    "msg": "context fabric direct read authorization",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "one decision per direct read request; counts and kinds only, never ids, labels or repository names",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "principal_class",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "unrestricted",
+          "universal",
+          "restricted"
+        ]
+      },
+      {
+        "key": "repository_scope_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "decision",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "admitted",
+          "partial",
+          "denied",
+          "unavailable"
+        ]
+      },
+      {
+        "key": "reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "subjects_admitted",
+          "principal_invalid",
+          "no_subjects",
+          "subject_limit",
+          "organization_mismatch",
+          "subject_denied",
+          "ownership_unproven",
+          "subject_absent",
+          "subject_invalid",
+          "graph_not_projected",
+          "authorizer_missing",
+          "graph_read_failed"
+        ]
+      },
+      {
+        "key": "subject_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "admitted_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "denied_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "absent_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "ownership_unproven_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "organization_mismatch_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "invalid_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "refused_kinds",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "error_class",
+        "type": "string",
+        "presence": "conditional",
+        "closed_vocabulary": [
+          "deadline_exceeded",
+          "canceled",
+          "dependency_unavailable",
+          "graph_error"
+        ],
+        "applicability": "written when the decision is unavailable because a graph read failed"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.evidence_expansion",
     "msg": "context fabric evidence expansion",
     "level": "info",
