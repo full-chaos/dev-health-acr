@@ -225,3 +225,39 @@ func TestChaos7080PerRootDecisionFailureFailsClosed(t *testing.T) {
 		t.Fatalf("per-root failure: err %v, %d reads, want unavailable and no read", err, len(reads))
 	}
 }
+
+// A graph that cannot authorize stored subjects (no StoredSubjectAuthorizer)
+// fails the re-check closed for a restricted caller: the turn is unavailable
+// and no fact is read, never served on an unchecked root. Production passes
+// the FalkorDB adapter, which implements the authorizer; this pins what
+// happens when a composition does not. An unrestricted caller is not
+// re-checked, so the same graph still serves it.
+func TestChaos7080GraphWithoutAuthorizerFailsClosedForRestrictedCaller(t *testing.T) {
+	withAuthorizer, project := chaos7080ProjectGraph(StoredSubjectAdmitted, nil)
+	plain := withAuthorizer.capturingGraphReader
+	if _, ok := GraphReader(plain).(StoredSubjectAuthorizer); ok {
+		t.Fatal("fixture graph must not implement StoredSubjectAuthorizer")
+	}
+	restricted := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"acme/allowed"}}
+	var reads []CanonicalFactRequest
+	telemetry := &recordingTelemetry{}
+	got, err := chaos7080Engine(t, plain, &reads, telemetry).Investigate(context.Background(), restricted, validInvestigationRequest())
+	if !errors.Is(err, ErrUnavailable) || len(reads) != 0 {
+		t.Fatalf("restricted caller, no authorizer: err %v, %d reads, want unavailable and no read", err, len(reads))
+	}
+	if encoded, _ := json.Marshal(got); strings.Contains(string(encoded), project.CanonicalID) {
+		t.Fatalf("restricted caller, no authorizer: result names the root: %s", encoded)
+	}
+	sawMissing := false
+	for _, decision := range telemetry.storedResultAuthorizations {
+		sawMissing = sawMissing || (decision.Surface == StoredResultSurfaceFactRootRecheck && decision.Reason == StoredResultReasonAuthorizerMissing)
+	}
+	if !sawMissing {
+		t.Fatal("restricted caller, no authorizer: no fact_root_recheck authorizer_missing decision line")
+	}
+
+	var unrestrictedReads []CanonicalFactRequest
+	if _, err := chaos7080Engine(t, plain, &unrestrictedReads, &recordingTelemetry{}).Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest()); err != nil || len(unrestrictedReads) == 0 {
+		t.Fatalf("unrestricted caller, no authorizer: err %v, %d reads, want a normal read", err, len(unrestrictedReads))
+	}
+}
