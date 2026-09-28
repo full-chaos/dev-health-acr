@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"net/http"
 	"os"
@@ -108,12 +109,16 @@ func TestHostedRuntime_real_binary_serves_and_fails_readiness_safely(t *testing.
 	if ready.Status != "ready" || ready.hasCheck("clickhouse") || ready.checkStatus("postgres") != "ready" || ready.checkStatus("entitlement") != "ready" {
 		t.Fatalf("readiness after ClickHouse loss = %#v", ready)
 	}
-	apiClient.requestJSON(t, hostedAPIRequest{method: http.MethodPost, path: "/api/v1/agent-context/context-packets", requestBody: contractsv1.ContextPacketRequest{
+	var storeDown map[string]any
+	apiClient.requestJSON(t, hostedAPIRequest{method: http.MethodPost, path: "/api/v1/agent-context/context-packets", responseBody: &storeDown, requestBody: contractsv1.ContextPacketRequest{
 		SchemaVersion: contractsv1.ContextPacketRequestSchema, RequestID: "caller-request-id", Goal: "Investigate seeded CI failure",
 		Repository: contractsv1.RepositoryRef{Slug: hostedIntegrationRepository}, Scope: contractsv1.RequestedScope{Branch: "main"},
 		Options: contractsv1.PacketOptions{MaxItems: 10, MaxOutputTokens: 500, MaxSerializedBytes: 8192},
 		Client:  contractsv1.ClientInfo{Name: "integration", Version: "1.0.0", SidecarVersion: "0.1.0"},
 	}, statuses: []int{http.StatusServiceUnavailable}})
+	if !strings.Contains(fmt.Sprint(storeDown), "store_unavailable") {
+		t.Fatalf("data route after ClickHouse loss = %#v, want typed store_unavailable", storeDown)
+	}
 	if err := postgres.Stop(ctx); err != nil {
 		t.Fatal(err)
 	}
