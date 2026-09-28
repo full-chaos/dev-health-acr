@@ -1534,6 +1534,126 @@
     ]
   },
   {
+    "id": "contextfabric.direct_read",
+    "msg": "context fabric direct read",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "one line per direct read request; closed vocabularies and counts only, never ids, labels or query text",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "tool",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "find_subjects"
+        ]
+      },
+      {
+        "key": "mode",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "list",
+          "name"
+        ]
+      },
+      {
+        "key": "kinds",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "subject_kinds",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "status",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "complete",
+          "partial",
+          "empty",
+          "ambiguous",
+          "invalid_request",
+          "unavailable"
+        ]
+      },
+      {
+        "key": "latency_ms",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "error_class",
+        "type": "string",
+        "presence": "conditional",
+        "closed_vocabulary": [
+          "invalid_request",
+          "deadline_exceeded",
+          "canceled",
+          "dependency_unavailable",
+          "graph_error"
+        ],
+        "applicability": "written when the call ends invalid_request or unavailable"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.direct_read_authorization",
     "msg": "context fabric direct read authorization",
     "level": "info",

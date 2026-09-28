@@ -503,12 +503,12 @@ func findErrorClass(err error) string {
 func FindLogArgs(principal storage.Principal, telemetry FindTelemetry) []any {
 	args := []any{
 		"org_id", contextfabric.SanitizeLogAttr(principal.OrgID),
-		"tool", telemetry.Tool,
-		"mode", telemetry.Mode,
+		"tool", contextfabric.SanitizeLogAttr(telemetry.Tool),
+		"mode", contextfabric.SanitizeLogAttr(telemetry.Mode),
 		"kinds", contextfabric.SanitizeLogStrings(append([]string{}, telemetry.Kinds...)),
 		"subject_kinds", contextfabric.SanitizeLogStrings(append([]string{}, telemetry.SubjectKinds...)),
 		"count", telemetry.Count,
-		"status", telemetry.Status,
+		"status", contextfabric.SanitizeLogAttr(telemetry.Status),
 		"latency_ms", telemetry.LatencyMS,
 	}
 	if telemetry.ErrorClass != "" {

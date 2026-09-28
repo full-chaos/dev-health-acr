@@ -618,6 +618,12 @@ func (x *run) gateAndScope(ctx context.Context, op *OperationPolicy, scope Calle
 				return nil, &resp, nil
 			}
 			granted, err := r.grants.GrantedRepositories(ctx, x.principal)
+			if errors.Is(err, ErrGrantedRepositoriesIncomplete) {
+				// A grant too large to list whole is never served as a
+				// partial scope: the caller names its repositories.
+				resp := x.refuse(RefusalScopeRequired, "the caller's grant is too large to use whole; name the repositories (find_subjects gives their ids)", "")
+				return nil, &resp, nil
+			}
 			if err != nil {
 				return nil, nil, ErrOperationAuthorizationUnavailable
 			}

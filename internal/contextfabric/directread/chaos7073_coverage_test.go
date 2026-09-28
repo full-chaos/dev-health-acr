@@ -379,7 +379,7 @@ func ptrTime(value time.Time) *time.Time { return &value }
 
 func isInvalid(err error) bool {
 	var requestErr *RequestError
-	return errors.As(err, &requestErr) && requestErr.Reason == RefusalInvalidRequest
+	return errors.As(err, &requestErr) && requestErr.Reason == FactsRefusalInvalidRequest
 }
 
 // Kinds with no field declarations are refused by name, never guessed.
@@ -395,7 +395,7 @@ func TestChaos7073UndeclaredKindIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(response.Request.KindsRefused, []RefusedKind{{Kind: "operational_deficiencies", Reason: RefusalKindNotServed}}) {
+	if !slices.Equal(response.Request.KindsRefused, []RefusedKind{{Kind: "operational_deficiencies", Reason: FactsRefusalKindNotServed}}) {
 		t.Errorf("refused kinds %+v", response.Request.KindsRefused)
 	}
 	if _, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(requestContext(), unrestrictedA(), FactsRequest{

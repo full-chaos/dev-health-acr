@@ -584,7 +584,7 @@
       "entitlement_requirement": "agentContextRuntimeEntitlement",
       "disclosure_behavior": "writeError() closed envelope; a subject the caller may not read answers denied_or_not_found, identical for denied and absent.",
       "gaps": [
-        "CHAOS-7071 (S0) registers this route with its full protection chain and a stub handler that answers 501 feature_not_enabled (details.reason=not_implemented); the handler is filled by S1a (data_catalog)."
+        "CHAOS-7072 (S1a) serves data_catalog: the catalogue is built for the caller (grant class decides the operation list; the caller section carries scopes and grant class only, never repository names or grant counts). A caller without data:read sees the operation list with available=false, reason scope_missing_data_read. Unknown sections parameter = 400 invalid_request."
       ]
     },
     {
@@ -629,7 +629,7 @@
       "entitlement_requirement": "agentContextRuntimeEntitlement",
       "disclosure_behavior": "writeError() closed envelope; a subject the caller may not read answers denied_or_not_found, identical for denied and absent.",
       "gaps": [
-        "CHAOS-7071 (S0) registers this route with its full protection chain and a stub handler that answers 501 feature_not_enabled (details.reason=not_implemented); the handler is filled by S1a (find_subjects)."
+        "CHAOS-7072 (S1a) serves find_subjects (modes list and name; owned_by and handle are not built). Every returned subject passes the direct-read subject gate for the caller in the same call; total_known counts admitted subjects only. No graph composed = 503 upstream_unavailable."
       ]
     },
     {
@@ -717,7 +717,7 @@
       "entitlement_requirement": "agentContextRuntimeEntitlement",
       "disclosure_behavior": "writeError() closed envelope; a subject the caller may not read answers denied_or_not_found, identical for denied and absent.",
       "gaps": [
-        "CHAOS-7071 (S0) registers this route with its full protection chain and a stub handler that answers 501 feature_not_enabled (details.reason=not_implemented); the handler is filled by S1a (run_operation). Needs the data:read scope (decision K4), never implied by context:read."
+        "CHAOS-7072 (S1a) serves run_operation over the internal ops query service (four X-DH-Internal-* headers, no Authorization). A policy refusal is HTTP 200 with call=refused and a typed refusal code; 501 feature_not_enabled (details.reason=data_query_not_configured) when ACR_DATA_QUERY_URL is unset or the policy did not load; 503 when the subject gate is unavailable. Needs the data:read scope (decision K4), never implied by context:read."
       ]
     },
     {

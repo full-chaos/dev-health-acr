@@ -215,6 +215,11 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	}
 	// CHAOS-7071: the direct-read subject gate and fact reader.
 	directReadGate, directFactReader := buildDirectReads(investigator, request.options.Logger)
+	// CHAOS-7072 (S1a): data_catalog, find_subjects and run_operation.
+	dataReads, err := buildDataReads(request.config.DataQueryURL(), request.config.DataQueryTimeout(), investigator, directReadGate, request.options.Logger)
+	if err != nil {
+		return nil, closeAfterError(runtime, err)
+	}
 	// Same typed-nil guard: workloadTokenExchange is a concrete
 	// *authverify.WorkloadTokenExchangeService, nil whenever CHAOS-4013 is
 	// unconfigured (see buildWorkloadTokenExchange's doc comment).
@@ -235,6 +240,9 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 			StoredResultGate:           storedResultGate,
 			DirectReadGate:             directReadGate,
 			DirectFactReader:           directFactReader,
+			DataCatalogue:              dataReads.catalogue,
+			DataOperations:             dataReads.operations,
+			DataSubjects:               dataReads.subjects,
 			OrgModelConfigs:            orgModelConfigs,
 			OrgModelRuntimeEvictor:     orgModelRuntimeEvictor,
 			// CHAOS-3786, codex round-1 P1(b): resultReuseInvalidator is

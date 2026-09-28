@@ -2248,6 +2248,40 @@ var OperationRead = Event{
 	},
 }
 
+// The find_subjects vocabularies of the direct read line (CHAOS-7072).
+// directread imports graphrank, which imports this package, so the values
+// are literal here; directread's TestDirectReadEventVocabulariesMatchProducer
+// holds each list equal to the producer's own vocabulary.
+var (
+	directReadTools       = []string{"find_subjects"}
+	directReadModes       = []string{"list", "name"}
+	directReadStatuses    = []string{"complete", "partial", "empty", "ambiguous", "invalid_request", "unavailable"}
+	directReadErrorClass  = []string{"invalid_request", "deadline_exceeded", "canceled", "dependency_unavailable", "graph_error"}
+	directReadSubjectKind = contractsv1.ContextFabricSubjectKindVocabulary()
+)
+
+// DirectRead records one direct read call (CHAOS-7036 design J.3). In slice
+// S1a the only producer is find_subjects: the mode, the requested kinds, the
+// kinds of the admitted subjects returned, how many were returned, the
+// terminal status and the latency. Never an id, a label or the query text.
+var DirectRead = Event{
+	ID: "contextfabric.direct_read", Msg: "context fabric direct read", Level: LevelInfo,
+	Multiplicity: MultiplicityZeroOrOnePerRequest, Attribution: []string{"org_id"},
+	BoundedAggregation: "one line per direct read request; closed vocabularies and counts only, never ids, labels or query text",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "tool", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: directReadTools},
+		{Key: "mode", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: directReadModes},
+		{Key: "kinds", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(directReadSubjectKind[:])},
+		{Key: "subject_kinds", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(directReadSubjectKind[:])},
+		{Key: "count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "status", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: directReadStatuses},
+		{Key: "latency_ms", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "error_class", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call ends invalid_request or unavailable", ClosedVocabulary: directReadErrorClass},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
 // The evidence-expansion vocabularies, each derived from the one array its
 // producer declares.
 var (
@@ -2727,6 +2761,7 @@ var All = []Event{
 	StoredResultAuthorization,
 	DirectReadAuthorization,
 	OperationRead,
+	DirectRead,
 	EvidenceExpansion,
 	CountPopulationScope,
 	FrameValidation,
