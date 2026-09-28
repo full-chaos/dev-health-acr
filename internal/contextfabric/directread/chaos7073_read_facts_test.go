@@ -9,6 +9,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -105,6 +106,12 @@ func newTestFactsReader(t *testing.T, graph GraphAuthority, providers ...context
 	return reader
 }
 
+// requestContext carries a request id: a gate decision is bound to the
+// request it was taken for (CHAOS-7071), as the API middleware binds it.
+func requestContext() context.Context {
+	return observability.WithRequestID(context.Background(), "req_0123456789abcdef0123456789abcdef")
+}
+
 func mustJSON(t *testing.T, value any) string {
 	t.Helper()
 	encoded, err := json.Marshal(value)
@@ -127,7 +134,7 @@ func TestChaos7073EmbeddedSubjectsOfUnseenRepositoryAreWithheld(t *testing.T) {
 		return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable}, nil
 	}}
 	reader := newTestFactsReader(t, graphOfOrgA(), provider)
-	response, err := reader.Read(context.Background(), restrictedToA(), FactsRequest{
+	response, err := reader.Read(requestContext(), restrictedToA(), FactsRequest{
 		Kinds:    []string{"health"},
 		Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ.CanonicalID}},
 	})
@@ -180,7 +187,7 @@ func TestChaos7073EmbeddedGateClauses(t *testing.T) {
 			fact.EvidenceRefIDs = fact.EvidenceRefIDs[:1]
 			return contextfabric.FactProviderResult{Facts: []contextfabric.CanonicalFact{fact}, State: contextfabric.SourceAvailable}, nil
 		}}
-		response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(context.Background(), principal, FactsRequest{
+		response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(requestContext(), principal, FactsRequest{
 			Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ.CanonicalID}}})
 		if err != nil {
 			t.Fatal(err)
@@ -199,7 +206,7 @@ func TestChaos7073EmbeddedGateClauses(t *testing.T) {
 			fact.Fields["risk_breakdown"] = contextfabric.RowsFactValue([]contextfabric.FactValueRow{riskRow("repo", "a", "acme/a", 0.25)})
 			return contextfabric.FactProviderResult{Facts: []contextfabric.CanonicalFact{fact}, State: contextfabric.SourceAvailable}, nil
 		}}
-		response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(context.Background(), principal, FactsRequest{
+		response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(requestContext(), principal, FactsRequest{
 			Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ.CanonicalID}}})
 		if err != nil {
 			t.Fatal(err)
@@ -215,7 +222,7 @@ func TestChaos7073EmbeddedGateClauses(t *testing.T) {
 			t.Errorf("provider read for a refused root: %v", query.Subjects)
 			return contextfabric.FactProviderResult{State: contextfabric.SourceAvailable}, nil
 		}}
-		response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(context.Background(), principal, FactsRequest{
+		response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(requestContext(), principal, FactsRequest{
 			Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectP.CanonicalID}}})
 		if err != nil {
 			t.Fatal(err)
@@ -229,7 +236,7 @@ func TestChaos7073EmbeddedGateClauses(t *testing.T) {
 			return contextfabric.FactProviderResult{Facts: []contextfabric.CanonicalFact{projectQHealth(query.Subjects[0])}, State: contextfabric.SourceAvailable}, nil
 		}}
 		unrestricted := storage.Principal{OrgID: orgA, Subject: "user-2", CredentialID: "cred-2"}
-		response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(context.Background(), unrestricted, FactsRequest{
+		response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(requestContext(), unrestricted, FactsRequest{
 			Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ.CanonicalID}}})
 		if err != nil {
 			t.Fatal(err)
@@ -244,7 +251,7 @@ func TestChaos7073EmbeddedGateClauses(t *testing.T) {
 			graph.authErr = contextfabric.ErrUnavailable // the root decision already ran
 			return contextfabric.FactProviderResult{Facts: []contextfabric.CanonicalFact{projectQHealth(query.Subjects[0])}, State: contextfabric.SourceAvailable}, nil
 		}}
-		response, err := newTestFactsReader(t, graph, provider).Read(context.Background(), principal, FactsRequest{
+		response, err := newTestFactsReader(t, graph, provider).Read(requestContext(), principal, FactsRequest{
 			Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ.CanonicalID}}})
 		if err == nil || len(response.Facts) != 0 {
 			t.Fatalf("embedded gate failure served %d facts, err %v", len(response.Facts), err)
@@ -256,7 +263,7 @@ func TestChaos7073EmbeddedGateClauses(t *testing.T) {
 			fact.Fields["undeclared_probe"] = strValue("should-not-leave")
 			return contextfabric.FactProviderResult{Facts: []contextfabric.CanonicalFact{fact}, State: contextfabric.SourceAvailable}, nil
 		}}
-		response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(context.Background(), principal, FactsRequest{
+		response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(requestContext(), principal, FactsRequest{
 			Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ.CanonicalID}}})
 		if err != nil {
 			t.Fatal(err)
@@ -272,7 +279,7 @@ func TestChaos7073EmbeddedGateClauses(t *testing.T) {
 			return contextfabric.FactProviderResult{Facts: []contextfabric.CanonicalFact{fact}, State: contextfabric.SourceAvailable}, nil
 		}}
 		unrestricted := storage.Principal{OrgID: orgA, Subject: "user-2", CredentialID: "cred-2"}
-		response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(context.Background(), unrestricted, FactsRequest{
+		response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(requestContext(), unrestricted, FactsRequest{
 			Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ.CanonicalID}}})
 		if err != nil {
 			t.Fatal(err)
@@ -288,7 +295,7 @@ func TestChaos7073EmbeddedGateClauses(t *testing.T) {
 		provider := &stubProvider{capability: healthLikeCapability(), read: func(query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
 			return contextfabric.FactProviderResult{Facts: []contextfabric.CanonicalFact{projectQHealth(query.Subjects[0])}, State: contextfabric.SourceAvailable}, nil
 		}}
-		response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(context.Background(), principal, FactsRequest{
+		response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(requestContext(), principal, FactsRequest{
 			Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ.CanonicalID}}, Tables: TablesOmit})
 		if err != nil {
 			t.Fatal(err)

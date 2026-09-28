@@ -43,6 +43,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
+	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -299,7 +300,7 @@ func TestChaos7073OracleO1AgainstRealClickHouse(t *testing.T) {
 		},
 		Window: &directread.RequestWindow{Mode: directread.WindowRange, Start: &start, End: &end},
 	}
-	response, err := reader.Read(ctx, principal, request)
+	response, err := reader.Read(observability.WithRequestID(ctx, "req_00000000000000000000000000000001"), principal, request)
 	if err != nil {
 		t.Fatalf("read_facts: %v", err)
 	}

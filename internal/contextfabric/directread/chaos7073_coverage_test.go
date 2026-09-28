@@ -98,7 +98,7 @@ func TestChaos7073CoveragePerKindAndSubject(t *testing.T) {
 		for _, team := range teams {
 			request.Subjects = append(request.Subjects, RequestSubject{Kind: "team", CanonicalID: team.CanonicalID})
 		}
-		response, err := newTestFactsReader(t, teamGraph(teams...), provider).Read(context.Background(), unrestrictedA(), request)
+		response, err := newTestFactsReader(t, teamGraph(teams...), provider).Read(requestContext(), unrestrictedA(), request)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -125,7 +125,7 @@ func TestChaos7073CoveragePerKindAndSubject(t *testing.T) {
 			}
 			return result, nil
 		}}
-		response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(context.Background(), unrestrictedA(), FactsRequest{
+		response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(requestContext(), unrestrictedA(), FactsRequest{
 			Kinds: []string{"health"},
 			Subjects: []RequestSubject{
 				{Kind: "repository", CanonicalID: repoA.CanonicalID}, {Kind: "repository", CanonicalID: repoB.CanonicalID},
@@ -151,7 +151,7 @@ func TestChaos7073CoveragePerKindAndSubject(t *testing.T) {
 					Kind: contextfabric.FactHealth, Subject: query.Subjects[0], Fields: map[string]contextfabric.FactValue{"repo_count": intValue(1)},
 					EvidenceRefIDs: []string{contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, "a")}, SourceState: state}}}, nil
 			}}
-			response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(context.Background(), unrestrictedA(), FactsRequest{
+			response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(requestContext(), unrestrictedA(), FactsRequest{
 				Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "repository", CanonicalID: repoA.CanonicalID}}})
 			if err != nil {
 				t.Fatal(err)
@@ -168,7 +168,7 @@ func TestChaos7073CoveragePerKindAndSubject(t *testing.T) {
 		provider := &stubProvider{capability: healthLikeCapability(), read: func(contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
 			return contextfabric.FactProviderResult{}, errors.New("clickhouse down")
 		}}
-		response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(context.Background(), unrestrictedA(), FactsRequest{
+		response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(requestContext(), unrestrictedA(), FactsRequest{
 			Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "repository", CanonicalID: repoA.CanonicalID}}})
 		if err != nil {
 			t.Fatal(err)
@@ -219,7 +219,7 @@ func budgetResponse(t *testing.T, maxBytes int) FactsResponse {
 		}
 		return result, nil
 	}}
-	response, err := newTestFactsReader(t, graph, provider).Read(context.Background(), unrestrictedA(), FactsRequest{
+	response, err := newTestFactsReader(t, graph, provider).Read(requestContext(), unrestrictedA(), FactsRequest{
 		Kinds: []string{"health"}, Subjects: subjects, MaxBytes: maxBytes})
 	if err != nil {
 		t.Fatal(err)
@@ -304,7 +304,7 @@ func TestChaos7073DirectPathNeverExpandsScope(t *testing.T) {
 	gate := NewSubjectGate(graphOfOrgA(), nil)
 	reader := NewFactsReader(gate, NewFactReader(engineRegistry.WithoutScopeExpansion()), nil)
 	reader.now = func() time.Time { return time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC) }
-	response, err := reader.Read(context.Background(), unrestrictedA(), FactsRequest{
+	response, err := reader.Read(requestContext(), unrestrictedA(), FactsRequest{
 		Kinds: []string{"metrics"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ.CanonicalID}}})
 	if err != nil {
 		t.Fatal(err)
@@ -338,7 +338,7 @@ func TestChaos7073Window(t *testing.T) {
 	}}
 	reader := newTestFactsReader(t, graphOfOrgA(), provider)
 	base := FactsRequest{Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "repository", CanonicalID: repoA.CanonicalID}}}
-	response, err := reader.Read(context.Background(), unrestrictedA(), base)
+	response, err := reader.Read(requestContext(), unrestrictedA(), base)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +347,7 @@ func TestChaos7073Window(t *testing.T) {
 	}
 	trailing := base
 	trailing.Window = &RequestWindow{Mode: WindowTrailing, Days: 30}
-	response, err = reader.Read(context.Background(), unrestrictedA(), trailing)
+	response, err = reader.Read(requestContext(), unrestrictedA(), trailing)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,7 +369,7 @@ func TestChaos7073Window(t *testing.T) {
 	} {
 		request := base
 		request.Window = window
-		if _, err := reader.Read(context.Background(), unrestrictedA(), request); !isInvalid(err) {
+		if _, err := reader.Read(requestContext(), unrestrictedA(), request); !isInvalid(err) {
 			t.Errorf("%s: err %v, want invalid_request", name, err)
 		}
 	}
@@ -390,7 +390,7 @@ func TestChaos7073UndeclaredKindIsRefused(t *testing.T) {
 		t.Error("undeclared kind was read")
 		return contextfabric.FactProviderResult{State: contextfabric.SourceAvailable}, nil
 	}}
-	response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(context.Background(), unrestrictedA(), FactsRequest{
+	response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(requestContext(), unrestrictedA(), FactsRequest{
 		Kinds: []string{"operational_deficiencies"}, Subjects: []RequestSubject{{Kind: "team", CanonicalID: teamT.CanonicalID}}})
 	if err != nil {
 		t.Fatal(err)
@@ -398,8 +398,42 @@ func TestChaos7073UndeclaredKindIsRefused(t *testing.T) {
 	if !slices.Equal(response.Request.KindsRefused, []RefusedKind{{Kind: "operational_deficiencies", Reason: RefusalKindNotServed}}) {
 		t.Errorf("refused kinds %+v", response.Request.KindsRefused)
 	}
-	if _, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(context.Background(), unrestrictedA(), FactsRequest{
+	if _, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(requestContext(), unrestrictedA(), FactsRequest{
 		Kinds: []string{"no_such_kind"}, Subjects: []RequestSubject{{Kind: "team", CanonicalID: teamT.CanonicalID}}}); !isInvalid(err) {
 		t.Errorf("unknown kind: %v", err)
+	}
+}
+
+// erroringSource is a registry seam that fails with a fixed error.
+type erroringSource struct {
+	err          error
+	capabilities []contextfabric.FactCapability
+}
+
+func (s erroringSource) ReadFacts(context.Context, storage.Principal, contextfabric.CanonicalFactRequest) (contextfabric.CanonicalFactBundle, error) {
+	return contextfabric.CanonicalFactBundle{}, s.err
+}
+
+func (s erroringSource) Capabilities() []contextfabric.FactCapability { return s.capabilities }
+
+// A gate decision refused by the reader is a tool defect (internal), never a
+// subject refusal and never retryable unavailability; a registry failure is
+// unavailability.
+func TestChaos7073ReaderErrorsAreClassified(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want error
+	}{
+		{ErrAuthorizationSpent, ErrFactsInternal},
+		{ErrAuthorizationExpired, ErrFactsInternal},
+		{ErrUngatedRead, ErrFactsInternal},
+		{errors.New("clickhouse down"), ErrFactsUnavailable},
+	} {
+		source := erroringSource{err: tc.err, capabilities: []contextfabric.FactCapability{healthLikeCapability()}}
+		reader := NewFactsReader(NewSubjectGate(graphOfOrgA(), nil), NewFactReader(source), nil)
+		_, err := reader.Read(requestContext(), unrestrictedA(), FactsRequest{Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "repository", CanonicalID: repoA.CanonicalID}}})
+		if !errors.Is(err, tc.want) {
+			t.Errorf("%v: got %v, want %v", tc.err, err, tc.want)
+		}
 	}
 }

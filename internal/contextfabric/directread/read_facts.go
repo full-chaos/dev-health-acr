@@ -363,6 +363,11 @@ func NewFactsReader(gate *SubjectGate, reader *FactReader, recorder FactsRecorde
 // unavailable and serves nothing.
 var ErrFactsUnavailable = errors.New("direct fact read is unavailable")
 
+// ErrFactsInternal is a defect in the tool (a gate decision refused by the
+// reader: ungated, expired or spent). It is an internal error, never a
+// subject refusal and never retryable as unavailability.
+var ErrFactsInternal = errors.New("direct fact read internal error")
+
 // Read serves one read_facts request for principal.
 func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, request FactsRequest) (FactsResponse, error) {
 	started := time.Now()
@@ -437,6 +442,11 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 		response.Status = StatusUnavailable
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return response, err
+		}
+		if errors.Is(err, ErrUngatedRead) || errors.Is(err, ErrAuthorizationExpired) || errors.Is(err, ErrAuthorizationSpent) {
+			// A gate decision this tool took one line above was refused by
+			// the reader: a defect in the tool, never a subject answer.
+			return response, fmt.Errorf("%w: %w", ErrFactsInternal, err)
 		}
 		return response, fmt.Errorf("%w: %w", ErrFactsUnavailable, err)
 	}

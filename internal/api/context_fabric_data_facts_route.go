@@ -55,6 +55,11 @@ func (a *App) contextFabricDataFactsHandler() http.HandlerFunc {
 				writeError(w, r, http.StatusBadRequest, "invalid_request", "The read_facts request is invalid: "+contextfabric.SanitizeLogAttr(requestError.Detail), false, map[string]any{"reason": requestError.Reason})
 				return
 			}
+			if errors.Is(err, directread.ErrFactsInternal) {
+				a.logger.ErrorContext(r.Context(), "read_facts internal error", "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", "gate_decision_refused")
+				writeError(w, r, http.StatusInternalServerError, "internal_error", "The read_facts request failed", false, nil)
+				return
+			}
 			// Cancellation and deadline stay retryable unavailability; the
 			// error text is never echoed.
 			a.logger.WarnContext(r.Context(), "read_facts unavailable", "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", directFactsFailureClass(err))

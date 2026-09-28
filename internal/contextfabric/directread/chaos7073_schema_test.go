@@ -1,7 +1,6 @@
 package directread
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -99,7 +98,7 @@ func TestChaos7073ResponseSchemaAcceptsWhatTheReaderMarshals(t *testing.T) {
 		"truncated by max_bytes":                               {Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ.CanonicalID}}, MaxBytes: MinMaxBytes},
 	} {
 		t.Run(name, func(t *testing.T) {
-			response, err := reader.Read(context.Background(), restrictedToA(), request)
+			response, err := reader.Read(requestContext(), restrictedToA(), request)
 			if err != nil {
 				t.Fatalf("read: %v", err)
 			}
