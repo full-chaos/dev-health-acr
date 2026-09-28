@@ -49,6 +49,7 @@ func newCompletenessAuthorityTestApp(t *testing.T, results contextfabric.Investi
 			DeviceAuthorizations: devices, DeviceVerificationURL: "https://verify.example.test/device",
 			DeviceAuthorizationLimiter: NewDeviceAuthorizationLimiter(ClockFunc(func() time.Time { return now })),
 			ReadinessChecks:            exactRuntimeChecks(),
+			DataStoreChecks:            exactDataStoreChecks(),
 			InvestigationResults:       results,
 			StoredResultGate:           testStoredResultGate(nil),
 		},

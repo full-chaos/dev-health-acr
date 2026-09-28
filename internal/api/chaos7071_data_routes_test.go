@@ -70,7 +70,7 @@ func newChaos7071Harness(t *testing.T, dataRequestsPerWindow int) *chaos7071Harn
 			Credentials: credentials, Audit: audit, Assembler: assembler, Evidence: store,
 			Entitlements:         EntitlementFunc(func(context.Context, string, string) (bool, error) { return *h.entitled, nil }),
 			DeviceAuthorizations: devices, DeviceVerificationURL: "https://verify.example.test/device", DeviceAuthorizationLimiter: NewDeviceAuthorizationLimiter(ClockFunc(clock)),
-			ReadinessChecks: exactRuntimeChecks(),
+			ReadinessChecks: exactRuntimeChecks(), DataStoreChecks: exactDataStoreChecks(),
 		},
 	}, testLogger(&bytes.Buffer{}))
 	if err != nil {

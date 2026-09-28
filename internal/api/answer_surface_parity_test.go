@@ -321,6 +321,7 @@ func newParityHostedAppWithLogs(t *testing.T, investigator contextfabric.Investi
 			DeviceAuthorizations: devices, DeviceVerificationURL: "https://verify.example.test/device",
 			DeviceAuthorizationLimiter: NewDeviceAuthorizationLimiter(ClockFunc(func() time.Time { return now })),
 			ReadinessChecks:            exactRuntimeChecks(),
+			DataStoreChecks:            exactDataStoreChecks(),
 			Investigator:               investigator,
 			InvestigationResults:       results,
 			StoredResultGate:           testStoredResultGate(investigator),

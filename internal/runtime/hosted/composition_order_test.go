@@ -33,17 +33,26 @@ func TestOpen_constructs_checks_then_closes_in_reverse_order(t *testing.T) {
 	if closeErr != nil {
 		t.Fatal(closeErr)
 	}
+	// CHAOS-6745: postgres/entitlement gate startup fatally (livenessChecks,
+	// same as /readyz); clickhouse is checked SEPARATELY, after, and only
+	// logs on failure -- see the matching "clickhouse.check" stage case in
+	// TestOpen_cleans_partial_resources_when_stage_fails for the succeeding
+	// half of that story.
 	want := []string{
 		"postgres.open", "clickhouse.open", "entitlement.open", "episode.new",
-		"postgres.check", "clickhouse.check", "entitlement.check",
+		"postgres.check", "entitlement.check", "clickhouse.check",
 		"entitlement.close", "clickhouse.close", "postgres.close",
 	}
 	if !reflect.DeepEqual(events, want) {
 		t.Fatalf("events = %#v, want %#v", events, want)
 	}
 	checks := runtime.Dependencies.Runtime.ReadinessChecks
-	if len(checks) != 3 || checks[0].Name() != "postgres" || checks[1].Name() != "clickhouse" || checks[2].Name() != "entitlement" {
-		t.Fatalf("readiness checks = %#v, want postgres/clickhouse/entitlement", checks)
+	if len(checks) != 2 || checks[0].Name() != "postgres" || checks[1].Name() != "entitlement" {
+		t.Fatalf("readiness checks = %#v, want postgres/entitlement", checks)
+	}
+	dataStoreChecks := runtime.Dependencies.Runtime.DataStoreChecks
+	if len(dataStoreChecks) != 1 || dataStoreChecks[0].Name() != "clickhouse" {
+		t.Fatalf("data store checks = %#v, want exactly one clickhouse check", dataStoreChecks)
 	}
 	if runtime.Dependencies.Runtime.Episodes == nil {
 		t.Fatal("episode service is nil when explicitly enabled")
@@ -82,6 +91,14 @@ func TestRuntime_Close_isIdempotentAndDoesNotRepeatCloseCalls(t *testing.T) {
 }
 
 func TestOpen_cleans_partial_resources_when_stage_fails(t *testing.T) {
+	// CHAOS-6745: postgres.check then entitlement.check are the fatal
+	// livenessChecks loop -- unchanged shape, new order (postgres,
+	// entitlement; clickhouse no longer sits between them). clickhouse.check
+	// runs AFTER that loop succeeds and is NON-FATAL (logged, not
+	// propagated) -- a pod, and Open() here, must start even when
+	// ClickHouse is down, the same rule /readyz now follows for a running
+	// pod. Its own case is asserted separately below, since it is the one
+	// stage in this table that no longer fails construction at all.
 	tests := []struct {
 		stage string
 		want  []string
@@ -91,8 +108,7 @@ func TestOpen_cleans_partial_resources_when_stage_fails(t *testing.T) {
 		{stage: "entitlement.open", want: []string{"postgres.open", "clickhouse.open", "entitlement.open", "clickhouse.close", "postgres.close"}},
 		{stage: "episode.new", want: []string{"postgres.open", "clickhouse.open", "entitlement.open", "episode.new", "entitlement.close", "clickhouse.close", "postgres.close"}},
 		{stage: "postgres.check", want: []string{"postgres.open", "clickhouse.open", "entitlement.open", "episode.new", "postgres.check", "entitlement.close", "clickhouse.close", "postgres.close"}},
-		{stage: "clickhouse.check", want: []string{"postgres.open", "clickhouse.open", "entitlement.open", "episode.new", "postgres.check", "clickhouse.check", "entitlement.close", "clickhouse.close", "postgres.close"}},
-		{stage: "entitlement.check", want: []string{"postgres.open", "clickhouse.open", "entitlement.open", "episode.new", "postgres.check", "clickhouse.check", "entitlement.check", "entitlement.close", "clickhouse.close", "postgres.close"}},
+		{stage: "entitlement.check", want: []string{"postgres.open", "clickhouse.open", "entitlement.open", "episode.new", "postgres.check", "entitlement.check", "entitlement.close", "clickhouse.close", "postgres.close"}},
 	}
 	for _, test := range tests {
 		t.Run(test.stage, func(t *testing.T) {
@@ -112,6 +128,34 @@ func TestOpen_cleans_partial_resources_when_stage_fails(t *testing.T) {
 				t.Fatalf("events = %#v, want %#v", events, test.want)
 			}
 		})
+	}
+}
+
+// TestOpen_survivesAFailedInitialClickHouseCheck is
+// TestOpen_cleans_partial_resources_when_stage_fails's clickhouse.check
+// case, pulled out on its own: this is CHAOS-6745's actual guard, and it
+// asserts the OPPOSITE of every case above -- construction SUCCEEDS, not
+// fails, because a ClickHouse outage at boot must not stop this pod from
+// starting (the same incident class the ticket fixes for a pod already
+// running). The failure is still observable: it is on the trace as a
+// "clickhouse.check" event, never silently dropped.
+func TestOpen_survivesAFailedInitialClickHouseCheck(t *testing.T) {
+	// Given
+	events := []string{}
+	request := testBuildRequest(t, &events, "clickhouse.check")
+	request.config.EnableEpisodeWriteback = true
+
+	// When
+	runtime, err := open(context.Background(), request)
+
+	// Then
+	if err != nil || runtime == nil {
+		t.Fatalf("runtime = %#v, error = %v; want construction to succeed despite the failed clickhouse check", runtime, err)
+	}
+	t.Cleanup(func() { _ = runtime.Close() })
+	want := []string{"postgres.open", "clickhouse.open", "entitlement.open", "episode.new", "postgres.check", "entitlement.check", "clickhouse.check"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %#v, want %#v", events, want)
 	}
 }
 

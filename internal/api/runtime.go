@@ -107,7 +107,22 @@ type RuntimeDependencies struct {
 	// vouches for. When nil, both handlers skip invalidation entirely --
 	// there is no reuse-capable store to invalidate against.
 	ReuseInvalidator contextfabric.ReuseInvalidator
-	ReadinessChecks  []ReadinessCheck
+	// ReadinessChecks gates /readyz -- the k8s readinessProbe target, which
+	// pulls the WHOLE pod from every Service's endpoints (including the
+	// OAuth/authorization-server routes) the moment any one check fails. It
+	// therefore carries only the dependencies EVERY surface on this pod
+	// needs: postgres and entitlement. ClickHouse does not belong here (see
+	// DataStoreChecks) -- CHAOS-6745: an OAuth login has no ClickHouse
+	// dependency, so a ClickHouse outage must never make the pod
+	// unroutable for it.
+	ReadinessChecks []ReadinessCheck
+	// DataStoreChecks (CHAOS-6745) are checked live, per request, only by
+	// the handlers that actually read ClickHouse (agent-context
+	// context-packets/evidence, context-fabric investigations) -- never by
+	// /readyz. A failing check here degrades those specific calls to a
+	// typed, retryable "store unavailable" error; every other route on the
+	// pod is unaffected.
+	DataStoreChecks []ReadinessCheck
 	// WorkloadTokenExchange is optional (CHAOS-4013): nil means no
 	// Kubernetes TokenReview integration is configured for this
 	// deployment, and the RFC 8693 grant on POST /api/v1/oauth/token
@@ -140,10 +155,14 @@ func (r *RuntimeDependencies) validate() error {
 	if r.WorkloadTokenExchange != nil && storage.IsNil(r.WorkloadTokenExchange) {
 		return errors.New("hosted workload token exchange must not be typed nil")
 	}
-	if len(r.ReadinessChecks) < 3 {
-		return errors.New("hosted read runtime requires postgres, clickhouse, and entitlement readiness checks")
+	// CHAOS-6745: /readyz (r.ReadinessChecks) gates pod-level routing for
+	// EVERY surface on this pod, so it carries only what every surface
+	// needs -- postgres and entitlement, never clickhouse. ClickHouse is
+	// validated separately, below, as r.DataStoreChecks.
+	if len(r.ReadinessChecks) < 2 {
+		return errors.New("hosted read runtime requires postgres and entitlement readiness checks")
 	}
-	required := map[string]bool{"postgres": false, "clickhouse": false, "entitlement": false}
+	required := map[string]bool{"postgres": false, "entitlement": false}
 	for _, check := range r.ReadinessChecks {
 		if storage.IsNil(check) {
 			return errors.New("hosted read runtime readiness checks must not be nil")
@@ -152,17 +171,23 @@ func (r *RuntimeDependencies) validate() error {
 		if name == "" {
 			return errors.New("hosted read runtime readiness checks require a name")
 		}
+		if name == "clickhouse" {
+			return errors.New("hosted read runtime must not gate /readyz on clickhouse -- see DataStoreChecks")
+		}
 		if seen, ok := required[name]; ok {
 			if seen {
-				return errors.New("hosted read runtime readiness checks must not repeat postgres, clickhouse, or entitlement")
+				return errors.New("hosted read runtime readiness checks must not repeat postgres or entitlement")
 			}
 			required[name] = true
 		}
 	}
-	for _, name := range []string{"postgres", "clickhouse", "entitlement"} {
+	for _, name := range []string{"postgres", "entitlement"} {
 		if !required[name] {
 			return fmt.Errorf("hosted read runtime requires a %s readiness check", name)
 		}
+	}
+	if len(r.DataStoreChecks) != 1 || storage.IsNil(r.DataStoreChecks[0]) || strings.TrimSpace(r.DataStoreChecks[0].Name()) != "clickhouse" {
+		return errors.New("hosted read runtime requires exactly one clickhouse data-store check")
 	}
 	return nil
 }

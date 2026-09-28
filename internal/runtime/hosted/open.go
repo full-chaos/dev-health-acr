@@ -94,15 +94,35 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 			return nil, closeAfterError(runtime, fmt.Errorf("initialize episode runtime: %w", err))
 		}
 	}
-	checks := []api.ReadinessCheck{
+	// CHAOS-6745: livenessChecks gate /readyz, the k8s readinessProbe target
+	// that pulls the WHOLE pod from every Service's endpoints -- including
+	// the OAuth/authorization-server routes -- the moment any one check
+	// fails. It therefore carries only what EVERY surface needs (postgres,
+	// entitlement), never clickhouse: an OAuth login has no ClickHouse
+	// dependency, so a ClickHouse outage must not make this pod unroutable
+	// for it. dataStoreChecks (clickhouse) is checked live, per request,
+	// only by the ClickHouse-backed handlers -- see
+	// api.Dependencies.Runtime.DataStoreChecks and its doc comment.
+	livenessChecks := []api.ReadinessCheck{
 		api.CheckFunc{CheckName: "postgres", Fn: postgres.check},
-		api.CheckFunc{CheckName: "clickhouse", Fn: clickhouse.check},
 		api.CheckFunc{CheckName: "entitlement", Fn: entitlement.Check},
 	}
-	for _, check := range checks {
+	for _, check := range livenessChecks {
 		if err := check.Check(ctx); err != nil {
 			return nil, closeAfterError(runtime, fmt.Errorf("initial %s readiness check: %w", check.Name(), err))
 		}
+	}
+	dataStoreChecks := []api.ReadinessCheck{
+		api.CheckFunc{CheckName: "clickhouse", Fn: clickhouse.check},
+	}
+	// A ClickHouse outage at boot must not stop this pod from starting: the
+	// same incident class CHAOS-6745 fixes for a RUNNING pod also applies
+	// to a pod trying to start DURING an outage (a rolling restart or
+	// scale-up would otherwise never recover auth availability either).
+	// Logged loud, never fatal; the identical check runs again before every
+	// ClickHouse-backed request once the pod is up.
+	if err := dataStoreChecks[0].Check(ctx); err != nil {
+		request.options.Logger.WarnContext(ctx, "initial clickhouse readiness check failed; starting anyway, auth surface unaffected", "error", err)
 	}
 
 	manager, err := limits.NewManager(request.config.LimitOptions())
@@ -204,7 +224,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 		EvidenceStoreFactory: clickhouse.factory, ClientIP: clientIP, UsageTelemetry: usageTelemetry,
 		Runtime: &api.RuntimeDependencies{
 			Credentials: postgres.credentials, Audit: postgres.audit, Entitlements: entitlement, Assembler: assembler,
-			Evidence: clickhouse.evidence, Episodes: episodeCreator, ReadinessChecks: checks,
+			Evidence: clickhouse.evidence, Episodes: episodeCreator, ReadinessChecks: livenessChecks, DataStoreChecks: dataStoreChecks,
 			DeviceAuthorizations: postgres.devices, DeviceVerificationURL: request.config.DeviceVerificationURL,
 			DeviceAuthorizationLimiter: api.NewDeviceAuthorizationLimiter(api.ClockFunc(request.options.Now)),
 			Investigator:               investigator,

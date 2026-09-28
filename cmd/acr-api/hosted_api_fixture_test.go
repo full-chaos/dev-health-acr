@@ -28,6 +28,15 @@ func (r readinessDocument) checkStatus(name string) string {
 	return ""
 }
 
+func (r readinessDocument) hasCheck(name string) bool {
+	for _, check := range r.Checks {
+		if check.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 type hostedAPI struct {
 	client  *http.Client
 	baseURL string

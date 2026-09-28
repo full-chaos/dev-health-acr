@@ -1,0 +1,11 @@
+{
+  "schema_version": "error.v1",
+  "request_id": "req_01J0ACR005",
+  "error": {
+    "code": "store_unavailable",
+    "message": "A required data store is temporarily unavailable",
+    "http_status": 503,
+    "retryable": true,
+    "details": {}
+  }
+}

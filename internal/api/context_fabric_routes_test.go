@@ -85,6 +85,7 @@ func newContextFabricTestAppWithResultsAndLogs(t *testing.T, investigator contex
 			DeviceAuthorizations: devices, DeviceVerificationURL: "https://verify.example.test/device",
 			DeviceAuthorizationLimiter: NewDeviceAuthorizationLimiter(ClockFunc(func() time.Time { return now })),
 			ReadinessChecks:            exactRuntimeChecks(),
+			DataStoreChecks:            exactDataStoreChecks(),
 			Investigator:               investigator,
 			InvestigationResults:       results,
 			StoredResultGate:           testStoredResultGate(investigator),

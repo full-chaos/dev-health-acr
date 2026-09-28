@@ -73,8 +73,10 @@ func TestHostedReadRoutesUsePostgresAndClickHouseAdapters(t *testing.T) {
 			DeviceAuthorizations: devices, DeviceVerificationURL: "https://verify.example.test/device", DeviceAuthorizationLimiter: NewDeviceAuthorizationLimiter(ClockFunc(func() time.Time { return now })),
 			ReadinessChecks: []ReadinessCheck{
 				CheckFunc{CheckName: "postgres", Fn: database.PingContext},
-				CheckFunc{CheckName: "clickhouse", Fn: fixtureClickHouseReadiness(clickHouse)},
 				CheckFunc{CheckName: "entitlement"},
+			},
+			DataStoreChecks: []ReadinessCheck{
+				CheckFunc{CheckName: "clickhouse", Fn: fixtureClickHouseReadiness(clickHouse)},
 			},
 		},
 	}, testLogger(&bytes.Buffer{}))
