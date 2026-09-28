@@ -104,6 +104,17 @@ func seedChaos7074(t *testing.T, ctx context.Context, adapter *falkorgraph.Adapt
 	first = append(first, edge("rel_own_edge_denied", "OWNED_BY_TEAM", deniedRepo, team, "acme/b", nil))
 	fixture.deniedEdgeKey = "rel_own_edge_denied|" + deniedRepo.CanonicalID
 	fixture.allCurrent[fixture.deniedEdgeKey] = true
+	// A repository NODE that ended two hours ago, with a current edge to T,
+	// and a current work item w2 whose edge points at it: neither edge is
+	// current, because an end node must be valid too (both node clauses).
+	endedNode := ref(contextfabric.SubjectRepository, "repository:ended-node")
+	endedEntity := entity(endedNode, contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/a"}})
+	endedEntity.ValidTo = &ended
+	entities = append(entities, endedEntity)
+	first = append(first, edge("rel_own_ended_node", "OWNED_BY_TEAM", endedNode, team, "acme/a", nil))
+	work2 := ref(contextfabric.SubjectWorkItem, "work_item.v2:w2")
+	entities = append(entities, entity(work2, contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/a"}}))
+	first = append(first, edge("rel_work2_ended_repo", "BELONGS_TO_REPOSITORY", work2, endedNode, "acme/a", nil))
 	work := ref(contextfabric.SubjectWorkItem, "work_item.v2:w1")
 	entities = append(entities, entity(work, contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/a"}}))
 	first = append(first, edge("rel_work_repo", "BELONGS_TO_REPOSITORY", work, ref(contextfabric.SubjectRepository, "repository:r001"), "acme/a", nil))
@@ -237,6 +248,16 @@ func TestLiveChaos7074DirectEdges(t *testing.T) {
 			t.Fatalf("as_of read inside the window lost the edge: %v", got)
 		}
 	})
+	t.Run("ended end node is not current", func(t *testing.T) {
+		out := directread.RelationshipsRequest{Subject: directread.RelationshipsSubject{Kind: "work_item", CanonicalID: "work_item.v2:w2"}, Direction: "out"}
+		if got, _ := chaos7074ReadAll(t, fixture.reader(), unrestricted, out); len(got) != 0 {
+			t.Fatalf("edge into an ended node served as current: %v", got)
+		}
+		out.AsOf = fixture.now.Add(-3 * time.Hour).Format(time.RFC3339Nano)
+		if got, _ := chaos7074ReadAll(t, fixture.reader(), unrestricted, out); got["rel_work2_ended_repo|work_item.v2:w2"] != 1 {
+			t.Fatalf("as_of inside the node window lost the edge: %v", got)
+		}
+	})
 	t.Run("direction", func(t *testing.T) {
 		out := teamIn
 		out.Direction = "out"
@@ -259,6 +280,18 @@ func TestLiveChaos7074DirectEdges(t *testing.T) {
 			want[key] = true
 		}
 		chaos7074AssertSet(t, got, want)
+	})
+	// r001 has an OWNED_BY_TEAM edge (to T) and a BELONGS_TO_REPOSITORY edge
+	// (from the work item): the type filter keeps exactly the one asked for.
+	t.Run("type filter", func(t *testing.T) {
+		request := directread.RelationshipsRequest{Subject: directread.RelationshipsSubject{Kind: "repository", CanonicalID: "repository:r001"}}
+		got, _ := chaos7074ReadAll(t, fixture.reader(), unrestricted, request)
+		if len(got) != 2 {
+			t.Fatalf("unfiltered r001 edges = %v, want 2", got)
+		}
+		request.Types = []string{"BELONGS_TO_REPOSITORY"}
+		got, _ = chaos7074ReadAll(t, fixture.reader(), unrestricted, request)
+		chaos7074AssertSet(t, got, map[string]bool{"rel_work_repo|work_item.v2:w1": true})
 	})
 	t.Run("another organization reads nothing", func(t *testing.T) {
 		other := storage.Principal{OrgID: orgID + "-other", Subject: "u", CredentialID: "c"}
