@@ -564,8 +564,8 @@
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7071 direct data route (CHAOS-7036 E.5); bearer fcacr_ credential only.",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 170,
-          "line_end": 180,
+          "line": 195,
+          "line_end": 205,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -609,8 +609,8 @@
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7071 direct data route (CHAOS-7036 E.5); bearer fcacr_ credential only.",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 170,
-          "line_end": 180,
+          "line": 195,
+          "line_end": 205,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -654,8 +654,8 @@
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7071 direct data route (CHAOS-7036 E.5); bearer fcacr_ credential only.",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 170,
-          "line_end": 180,
+          "line": 195,
+          "line_end": 205,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -699,8 +699,8 @@
         "description": "protectedRuntimeHandler(RequestClassData, ScopeDataRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7071 direct data route (CHAOS-7036 E.5); bearer fcacr_ credential only.",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 170,
-          "line_end": 180,
+          "line": 195,
+          "line_end": 205,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
