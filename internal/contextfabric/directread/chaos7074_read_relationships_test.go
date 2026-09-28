@@ -86,15 +86,11 @@ func (g *fakeEdgeGraph) DirectEdgePage(_ context.Context, principal storage.Prin
 }
 
 type relRecorder struct {
-	reads   []RelationshipsReadRecord
-	cursors []CursorOutcome
+	reads []RelationshipsReadRecord
 }
 
 func (r *relRecorder) RecordDirectRelationshipsRead(_ context.Context, _ storage.Principal, record RelationshipsReadRecord) {
 	r.reads = append(r.reads, record)
-}
-func (r *relRecorder) RecordDirectCursor(_ context.Context, _ storage.Principal, outcome CursorOutcome) {
-	r.cursors = append(r.cursors, outcome)
 }
 
 func edgeBetween(id, relation string, from, to contextfabric.SubjectRef, attributes map[string]interface{}) EdgeCandidate {
@@ -310,7 +306,7 @@ func TestChaos7074_T5_CursorBindings(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			now = time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC).Add(tc.advance)
-			recorder.cursors = nil
+			recorder.reads = nil
 			calls := graph.pageCalls
 			_, err := reader.Read(relCtx("c-"+tc.name), tc.principal, tc.request())
 			var requestError *RelationshipsRequestError
@@ -320,8 +316,8 @@ func TestChaos7074_T5_CursorBindings(t *testing.T) {
 			if graph.pageCalls != calls {
 				t.Fatal("a refused cursor read the graph")
 			}
-			if len(recorder.cursors) != 1 || recorder.cursors[0] != tc.outcome {
-				t.Fatalf("recorded %v", recorder.cursors)
+			if len(recorder.reads) != 1 || recorder.reads[0].CursorIn != tc.outcome || recorder.reads[0].Status != RelationshipsInvalid {
+				t.Fatalf("recorded %+v", recorder.reads)
 			}
 		})
 	}

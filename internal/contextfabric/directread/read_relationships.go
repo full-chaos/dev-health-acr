@@ -178,10 +178,12 @@ type RelationshipsUntrustedLabel struct {
 	Note   string   `json:"note"`
 }
 
-// RelationshipsRecorder receives every read_relationships outcome.
+// RelationshipsRecorder receives every read_relationships outcome: one
+// record per request, which also carries what the page did with its cursor
+// (design J.3's cursor outcomes, on the same line, so a request writes one
+// line).
 type RelationshipsRecorder interface {
 	RecordDirectRelationshipsRead(ctx context.Context, principal storage.Principal, record RelationshipsReadRecord)
-	RecordDirectCursor(ctx context.Context, principal storage.Principal, outcome CursorOutcome)
 }
 
 // RelationshipsReadRecord is the trace of one read: counts and closed
@@ -201,8 +203,13 @@ type RelationshipsReadRecord struct {
 	EndNodesGated   int
 	EndNodesRefused int
 	TruncatedBy     string
-	FailureClass    gatevocab.RelationshipsFailureClass
-	Latency         time.Duration
+	// CursorIn is what the page did with the cursor it was given (accepted,
+	// expired, stale, invalid, foreign_org), or "" when it had none.
+	CursorIn CursorOutcome
+	// CursorOut is issued when the page returned a next cursor, else "".
+	CursorOut    CursorOutcome
+	FailureClass gatevocab.RelationshipsFailureClass
+	Latency      time.Duration
 }
 
 // RelationshipsReader serves read_relationships. It holds no state across
@@ -376,14 +383,14 @@ func (r *RelationshipsReader) Read(ctx context.Context, principal storage.Princi
 		cursor, cursorErr := decodeRelationshipsCursor(token, principal.OrgID, plan.digest, plan.depth, now)
 		if cursorErr != nil {
 			outcome, _ := cursorOutcomeOf(cursorErr)
-			r.recordCursor(ctx, principal, outcome)
+			record.CursorIn = outcome
 			reason := RelationshipsRefusalInvalidCursor
 			if outcome == CursorExpired {
 				reason = RelationshipsRefusalExpiredCursor
 			}
 			return RelationshipsResponse{}, &RelationshipsRequestError{Reason: reason, Detail: "the cursor does not continue this request; start again without a cursor", Cursor: outcome}
 		}
-		r.recordCursor(ctx, principal, CursorAccepted)
+		record.CursorIn = CursorAccepted
 		hop = cursor.Hop
 		if cursor.After.RelationshipID != "" {
 			position := cursor.After
@@ -474,7 +481,7 @@ func (r *RelationshipsReader) Read(ctx context.Context, principal storage.Princi
 	if next != nil {
 		next.Version, next.OrgDigest, next.RequestDigest, next.IssuedAtUnix = relationshipsCursorVersion, orgDigest(principal.OrgID), plan.digest, r.clock().Unix()
 		response.Page.NextCursor = encodeRelationshipsCursor(*next)
-		r.recordCursor(ctx, principal, CursorIssued)
+		record.CursorOut = CursorIssued
 	}
 	response.Page.Complete = next == nil
 	response.Status = relationshipsStatus(response.Page.Complete, response.TruncatedBy)
@@ -493,12 +500,6 @@ func (r *RelationshipsReader) clock() time.Time {
 		return r.now()
 	}
 	return time.Now()
-}
-
-func (r *RelationshipsReader) recordCursor(ctx context.Context, principal storage.Principal, outcome CursorOutcome) {
-	if r != nil && r.recorder != nil && outcome != "" {
-		r.recorder.RecordDirectCursor(ctx, principal, outcome)
-	}
 }
 
 func (r *RelationshipsReader) baseResponse(plan relationshipsPlan, hop int, validAt time.Time) RelationshipsResponse {

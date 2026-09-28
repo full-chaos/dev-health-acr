@@ -4,10 +4,6 @@ package gatevocab
 // call writes (CHAOS-7074).
 const RelationshipsReadLogMessage = "context fabric direct relationships read"
 
-// CursorLogMessage is the Info line a read_relationships page writes about
-// its cursor: issued, accepted or refused (CHAOS-7074).
-const CursorLogMessage = "context fabric direct cursor"
-
 // RelationshipsStatus is the status of one read_relationships response.
 type RelationshipsStatus string
 

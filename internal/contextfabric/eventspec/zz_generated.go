@@ -28,6 +28,7 @@ var ByID = map[string]Event{
 	"contextfabric.count_population_scope":         CountPopulationScope,
 	"contextfabric.direct_read":                    DirectRead,
 	"contextfabric.direct_read_authorization":      DirectReadAuthorization,
+	"contextfabric.direct_relationships_read":      DirectRelationshipsRead,
 	"contextfabric.evidence_expansion":             EvidenceExpansion,
 	"contextfabric.frame_validation":               FrameValidation,
 	"contextfabric.operation_read":                 OperationRead,
@@ -1084,6 +1085,126 @@ func (f DirectReadAuthorizationFields) SlogArgs() []any {
 		"invalid_count", f.InvalidCount,
 		"refused_kinds", contextfabric.SanitizeLogStrings(f.RefusedKinds),
 		"error_class", contextfabric.SanitizeLogAttr(f.ErrorClass),
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// DirectRelationshipsReadFields is contextfabric.direct_relationships_read's generated typed construction interface
+// (CHAOS-5516): one Go field per Field DirectRelationshipsRead.Fields declares in spec.go.
+type DirectRelationshipsReadFields struct {
+	Tool                    string
+	OrgID                   string
+	PrincipalClass          string
+	Status                  string
+	SubjectKind             string
+	Depth                   int
+	Hop                     int
+	TypeCount               int
+	Direction               string
+	WindowMode              string
+	EdgesExamined           int
+	EdgesReturned           int
+	EdgesNotVisible         int
+	EdgesWithheldReasons    []string
+	EdgesWithheldAttributes int
+	EdgesWithheldSource     int
+	EdgesWithheldTarget     int
+	EvidenceRefsWithheld    int
+	EndNodesGated           int
+	EndNodesRefused         int
+	LatencyMs               int
+	TruncatedBy             string
+	CursorIn                string
+	CursorOut               string
+	FailureClass            string
+	RequestID               string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every DirectRelationshipsReadFields uniformly, set ONLY by NewDirectRelationshipsReadFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewDirectRelationshipsReadFields is the generated constructor for DirectRelationshipsReadFields -- every
+// field DirectRelationshipsRead.Fields declares is a required parameter.
+func NewDirectRelationshipsReadFields(tool string, orgID string, principalClass string, status string, subjectKind string, depth int, hop int, typeCount int, direction string, windowMode string, edgesExamined int, edgesReturned int, edgesNotVisible int, edgesWithheldReasons []string, edgesWithheldAttributes int, edgesWithheldSource int, edgesWithheldTarget int, evidenceRefsWithheld int, endNodesGated int, endNodesRefused int, latencyMs int, truncatedBy string, cursorIn string, cursorOut string, failureClass string, requestID string) DirectRelationshipsReadFields {
+	valid := true
+	if edgesWithheldReasons == nil {
+		valid = false
+	}
+	return DirectRelationshipsReadFields{
+		Tool:                    tool,
+		OrgID:                   orgID,
+		PrincipalClass:          principalClass,
+		Status:                  status,
+		SubjectKind:             subjectKind,
+		Depth:                   depth,
+		Hop:                     hop,
+		TypeCount:               typeCount,
+		Direction:               direction,
+		WindowMode:              windowMode,
+		EdgesExamined:           edgesExamined,
+		EdgesReturned:           edgesReturned,
+		EdgesNotVisible:         edgesNotVisible,
+		EdgesWithheldReasons:    edgesWithheldReasons,
+		EdgesWithheldAttributes: edgesWithheldAttributes,
+		EdgesWithheldSource:     edgesWithheldSource,
+		EdgesWithheldTarget:     edgesWithheldTarget,
+		EvidenceRefsWithheld:    evidenceRefsWithheld,
+		EndNodesGated:           endNodesGated,
+		EndNodesRefused:         endNodesRefused,
+		LatencyMs:               latencyMs,
+		TruncatedBy:             truncatedBy,
+		CursorIn:                cursorIn,
+		CursorOut:               cursorOut,
+		FailureClass:            failureClass,
+		RequestID:               requestID,
+		constructed:             valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewDirectRelationshipsReadFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f DirectRelationshipsReadFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns DirectRelationshipsRead's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f DirectRelationshipsReadFields) SlogArgs() []any {
+	return []any{
+		"tool", contextfabric.SanitizeLogAttr(f.Tool),
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"principal_class", contextfabric.SanitizeLogAttr(f.PrincipalClass),
+		"status", contextfabric.SanitizeLogAttr(f.Status),
+		"subject_kind", contextfabric.SanitizeLogAttr(f.SubjectKind),
+		"depth", f.Depth,
+		"hop", f.Hop,
+		"type_count", f.TypeCount,
+		"direction", contextfabric.SanitizeLogAttr(f.Direction),
+		"window_mode", contextfabric.SanitizeLogAttr(f.WindowMode),
+		"edges_examined", f.EdgesExamined,
+		"edges_returned", f.EdgesReturned,
+		"edges_not_visible", f.EdgesNotVisible,
+		"edges_withheld_reasons", contextfabric.SanitizeLogStrings(f.EdgesWithheldReasons),
+		"edges_withheld_attributes", f.EdgesWithheldAttributes,
+		"edges_withheld_source", f.EdgesWithheldSource,
+		"edges_withheld_target", f.EdgesWithheldTarget,
+		"evidence_refs_withheld", f.EvidenceRefsWithheld,
+		"end_nodes_gated", f.EndNodesGated,
+		"end_nodes_refused", f.EndNodesRefused,
+		"latency_ms", f.LatencyMs,
+		"truncated_by", contextfabric.SanitizeLogAttr(f.TruncatedBy),
+		"cursor_in", contextfabric.SanitizeLogAttr(f.CursorIn),
+		"cursor_out", contextfabric.SanitizeLogAttr(f.CursorOut),
+		"failure_class", contextfabric.SanitizeLogAttr(f.FailureClass),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }
