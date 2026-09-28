@@ -141,6 +141,18 @@ func TestOAuthMetadataDocument(t *testing.T) {
 			t.Errorf("metadata %s = %v, want [%s]", key, metadata[key], value)
 		}
 	}
+	scopes, _ := metadata["scopes_supported"].([]any)
+	wantScopes := []any{auth.ScopeContextRead, auth.ScopeEvidenceRead, auth.ScopeDataRead}
+	if len(scopes) != len(wantScopes) {
+		t.Errorf("metadata scopes_supported = %v, want %v", scopes, wantScopes)
+	} else {
+		for i := range wantScopes {
+			if scopes[i] != wantScopes[i] {
+				t.Errorf("metadata scopes_supported = %v, want %v", scopes, wantScopes)
+				break
+			}
+		}
+	}
 	grantTypes, _ := metadata["grant_types_supported"].([]any)
 	wantGrantTypes := []any{"authorization_code", auth.OAuthDeviceCodeGrantType}
 	if len(grantTypes) != len(wantGrantTypes) || grantTypes[0] != wantGrantTypes[0] || grantTypes[1] != wantGrantTypes[1] {
