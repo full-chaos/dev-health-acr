@@ -196,6 +196,12 @@ func TestCHAOS5952HealthFreshnessWindowAgainstRealClickHouse(t *testing.T) {
 			orgID, "github", teamID, repoID, "acme/"+teamID, "exact", "native", uint8(1), uint16(1), int32(1), epoch, nil, epoch); err != nil {
 			t.Fatalf("seed team_repo_ownership: %v", err)
 		}
+		// CHAOS-7073: an owned repository counts only when repos holds it
+		// (ops teamscope.RepoCondition's catalog check).
+		if err := direct.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`,
+			repoID, orgID, "acme/"+teamID, "github", epoch); err != nil {
+			t.Fatalf("seed repos: %v", err)
+		}
 	}
 
 	// Project rollup: the team's own band is fresh, the repo's own band is

@@ -380,9 +380,11 @@ func (p *InvestmentProvider) teamOwnedRepoMix(ctx context.Context, orgID string,
 }
 
 // readTeamOwnedRepositories reads team -> owned repository ids as of bound.
+// An ownership row with no repo_id is resolved by repository name
+// (ownedRepositoriesSource, CHAOS-7073 K11).
 func (p *InvestmentProvider) readTeamOwnedRepositories(ctx context.Context, orgID string, teamIDs []string, bound factTimeBound) (map[string][]string, error) {
-	statement := withRowLimit(`SELECT DISTINCT team_id, toString(repo_id) FROM team_repo_ownership FINAL
-WHERE org_id = {org_id:String} AND repo_id IS NOT NULL AND team_id IN {ids:Array(String)}` + ownershipValidityPredicate(bound))
+	statement := withRowLimit(`SELECT DISTINCT team_id, repo_key FROM ` +
+		ownedRepositoriesSource(` AND team_id IN {ids:Array(String)}`+ownershipValidityPredicate(bound)))
 	extra := make([]readers.Binding, 0, 2)
 	for _, b := range bound.bindings() {
 		extra = append(extra, readers.Binding{Name: b.Name, Value: b.Value})

@@ -191,6 +191,12 @@ func TestCHAOS4363ProjectRollupsAgainstRealClickHouse(t *testing.T) {
 			orgID, "github", "team-health-a", repoID, "acme/service", "exact", "native", uint8(1), uint16(1), int32(1), ts(2026, 1, 1, 0, 0, 0), nil, ts(2026, 1, 1, 0, 0, 0)); err != nil {
 			t.Fatalf("seed team_repo_ownership: %v", err)
 		}
+		// CHAOS-7073: an owned repository counts only when repos holds it
+		// (ops teamscope.RepoCondition's catalog check).
+		if err := direct.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`,
+			repoID, orgID, "acme/service", "github", ts(2026, 1, 1, 0, 0, 0)); err != nil {
+			t.Fatalf("seed repos: %v", err)
+		}
 		if err := direct.Exec(ctx, `INSERT INTO compounding_risk_daily (org_id, day, scope, scope_id, compounding_risk, severity, computed_at) VALUES (?,?,?,?,?,?,?)`,
 			orgID, recentHealthDay(1), "team", "team-health-a", 0.55, "elevated", ts(2026, 8, 12, 6, 0, 0)); err != nil {
 			t.Fatalf("seed team-scope compounding_risk_daily row: %v", err)
@@ -254,6 +260,12 @@ func TestCHAOS4363ProjectRollupsAgainstRealClickHouse(t *testing.T) {
 		if err := direct.Exec(ctx, `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			orgID, "github", teamID, repoID, repoFullName, "exact", "native", uint8(1), uint16(1), int32(1), ts(2026, 1, 1, 0, 0, 0), nil, ts(2026, 1, 1, 0, 0, 0)); err != nil {
 			t.Fatalf("seed team_repo_ownership: %v", err)
+		}
+		// CHAOS-7073: an owned repository counts only when repos holds it
+		// (ops teamscope.RepoCondition's catalog check).
+		if err := direct.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`,
+			repoID, orgID, repoFullName, "github", ts(2026, 1, 1, 0, 0, 0)); err != nil {
+			t.Fatalf("seed repos: %v", err)
 		}
 	}
 	seedRisk := func(orgID, scope, scopeID, severity string, risk float64, day time.Time) {

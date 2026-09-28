@@ -22,12 +22,13 @@ import (
 
 // chaos7073Fixture seeds one org and reads its repository/team mixes.
 type chaos7073Fixture struct {
-	t        *testing.T
-	ctx      context.Context
-	direct   clickhousedriver.Conn
-	provider contextfabric.FactProvider
-	orgID    string
-	at       time.Time
+	t         *testing.T
+	ctx       context.Context
+	direct    clickhousedriver.Conn
+	providers []contextfabric.FactProvider
+	provider  contextfabric.FactProvider
+	orgID     string
+	at        time.Time
 }
 
 func newCHAOS7073Fixture(t *testing.T, orgID string) *chaos7073Fixture {
@@ -35,9 +36,10 @@ func newCHAOS7073Fixture(t *testing.T, orgID string) *chaos7073Fixture {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
 	createCHAOS5930Tables(t, ctx, direct)
+	providers := devhealthfacts.NewProviders(query)
 	return &chaos7073Fixture{
 		t: t, ctx: ctx, direct: direct, orgID: orgID, at: ts(2026, 9, 18, 0, 0, 0),
-		provider: findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment),
+		providers: providers, provider: findProvider(t, providers, contextfabric.FactInvestment),
 	}
 }
 
@@ -186,7 +188,7 @@ func TestCHAOS7073NoMembershipRunRecordedFiltersNothing(t *testing.T) {
 }
 
 // K16b, the legacy branch: when the latest marker is ops' '__legacy__' one,
-// each node's LATEST run_id = '' membership row decides; an earlier
+// each node's LATEST empty-run_id membership row decides; an earlier
 // grouping of the same node does not.
 func TestCHAOS7073LegacyMembershipRunReadsEachNodesLatestRow(t *testing.T) {
 	f := newCHAOS7073Fixture(t, "org-7073-legacy")
