@@ -84,7 +84,9 @@ func TestCohortPopulationCountsOnlyAuthorizedMembersOfTheCohortKind(t *testing.T
 	// population is 1 -- the cap is 10 and cannot be what the assertion
 	// reads.
 	nodes := []CandidateNode{
-		candidateNode(contextfabric.SubjectTeam, "team_a", "Team A", 0.9, "*"),
+		// CHAOS-7080: the authorized team carries the grant it is admitted
+		// under; a "*" list admits no repository-restricted caller.
+		candidateNode(contextfabric.SubjectTeam, "team_a", "Team A", 0.9, []string{"repo_visible"}),
 		candidateNode(contextfabric.SubjectProject, "project_a", "Project A", 0.9, "*"),
 		candidateNode(contextfabric.SubjectTeam, "team_denied", "Team Denied", 0.9, "repo_the_principal_cannot_read"),
 	}

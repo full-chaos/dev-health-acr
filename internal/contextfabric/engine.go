@@ -3302,6 +3302,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		if len(factRequest.Subjects) == 0 {
 			return InvestigationResult{}, stageError(StageFactRead, fmt.Errorf("%w: read canonical facts", ErrNoInvestigationSubjects))
 		}
+		// CHAOS-7080: the fact registry authorizes no subject, so every
+		// committed root is re-checked, live, against the caller's grant
+		// before any fact is read for it (fact_root_recheck.go).
+		if err := e.recheckCommittedRoots(ctx, principal, resolution.Committed); err != nil {
+			return InvestigationResult{}, stageError(StageFactRead, err)
+		}
 		facts, err = e.facts.ReadFacts(ctx, principal, factRequest)
 		// CHAOS-4099 / CHAOS-4089 standing order: every scope-expansion decision
 		// this read made is reported here, immediately, whether it expanded,

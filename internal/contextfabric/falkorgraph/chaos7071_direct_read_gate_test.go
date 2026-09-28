@@ -49,6 +49,25 @@ func (g *chaos7071Graph) query(_ context.Context, _ string, cypher string, param
 	g.queries = append(g.queries, cypher)
 	org, _ := params["org"].(string)
 	switch {
+	case strings.Contains(cypher, "RETURN p."+propCanonicalID+" AS id"):
+		// CHAOS-7080 project reach: every project's CURRENT OWNED_BY_TEAM
+		// edges and the owning team's repository list.
+		now, _ := params[temporalParamStart].(int64)
+		var rows []row
+		for projectID, edges := range g.ownedBy {
+			if g.find(org, "project", projectID) == nil {
+				continue
+			}
+			for _, edge := range edges {
+				if end, ok := edge.validToNs.(int64); ok && end <= now {
+					continue
+				}
+				if team := g.find(org, "team", edge.teamID); team != nil {
+					rows = append(rows, row{"id": projectID, "repos": team.Properties[propAuthzRepos]})
+				}
+			}
+		}
+		return rows, nil
 	case strings.Contains(cypher, "UNWIND $targets"):
 		var rows []row
 		targets, _ := params["targets"].([]interface{})
@@ -131,7 +150,10 @@ func TestChaos7071DirectReadGateOverTheRealAdapter(t *testing.T) {
 		{ref(contractsv1.ContextFabricSubjectRepository, "repository:a"), directread.SubjectAdmitted},
 		{ref(contractsv1.ContextFabricSubjectRepository, "repository:b"), directread.SubjectDenied},
 		{ref(contractsv1.ContextFabricSubjectRepository, "repository:guessed"), directread.SubjectAbsent},
-		{ref(contractsv1.ContextFabricSubjectProject, "project:p"), directread.SubjectOwnershipUnproven},
+		// CHAOS-7080: the adapter now substitutes the project's live
+		// ownership reach for its "*", so the shared predicate itself
+		// refuses P (reach = B only) before the gate's own reach check.
+		{ref(contractsv1.ContextFabricSubjectProject, "project:p"), directread.SubjectDenied},
 		{ref(contractsv1.ContextFabricSubjectProject, "project:q"), directread.SubjectAdmitted},
 		{ref(contractsv1.ContextFabricSubjectTeam, "team:t"), directread.SubjectAdmitted},
 		{ref(contractsv1.ContextFabricSubjectTeam, "team:u"), directread.SubjectDenied},

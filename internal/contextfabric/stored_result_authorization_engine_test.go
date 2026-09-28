@@ -63,15 +63,27 @@ func TestAPriorResultTheCallerMayNotReadBindsLikeAMissingOne(t *testing.T) {
 		if stored {
 			results[prior.ResultID] = prior
 		}
+		// CHAOS-7080: the engine now re-checks every committed root before
+		// the fact read, so the fixture's resolver commits only what its own
+		// authorizer admits (as the real resolver does): the project when the
+		// graph admits it, otherwise a subject of this turn's own. A fixture
+		// committing the very subject its authorizer refuses would
+		// (correctly) be refused at the re-check -- that contradiction was
+		// never what this test is about.
+		current := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository_current", Label: "current"}
+		committed := []SubjectRef{project}
+		if outcome != StoredSubjectAdmitted {
+			committed = []SubjectRef{current}
+		}
 		graph := &storedSubjectGraph{
 			capturingGraphReader: &capturingGraphReader{
-				resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+				resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: committed},
 				context: GraphContext{
 					Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{}, FactRequirements: []FactRequirement{},
 					EvidenceRefIDs: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 				},
 			},
-			outcomes: map[string]StoredSubjectOutcome{SubjectMapKey(project): outcome},
+			outcomes: map[string]StoredSubjectOutcome{SubjectMapKey(project): outcome, SubjectMapKey(current): StoredSubjectAdmitted},
 		}
 		telemetry := &recordingTelemetry{}
 		engine := mustEngineForPriorReceiptTest(t, graph, &staticResultStore{results: results}, telemetry)

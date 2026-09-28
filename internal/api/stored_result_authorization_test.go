@@ -47,10 +47,14 @@ var storedScopeGrants = map[string][]string{
 // grant semantics (exact slug, owner wildcard, universal) and the projection's
 // attribute convention -- never computed by the code under test.
 var storedResultOracle = map[storedNodeClass]map[string]bool{
-	nodeGrantedRepo:   {storedScopeRepoIn: true, storedScopeOrgWide: true, storedScopeRepoOut: false, storedScopeUniversal: true},
-	nodeOtherRepo:     {storedScopeRepoIn: false, storedScopeOrgWide: false, storedScopeRepoOut: false, storedScopeUniversal: true},
-	nodeNoRepository:  {storedScopeRepoIn: false, storedScopeOrgWide: false, storedScopeRepoOut: false, storedScopeUniversal: true},
-	nodeUniversalAttr: {storedScopeRepoIn: true, storedScopeOrgWide: true, storedScopeRepoOut: true, storedScopeUniversal: true},
+	nodeGrantedRepo:  {storedScopeRepoIn: true, storedScopeOrgWide: true, storedScopeRepoOut: false, storedScopeUniversal: true},
+	nodeOtherRepo:    {storedScopeRepoIn: false, storedScopeOrgWide: false, storedScopeRepoOut: false, storedScopeUniversal: true},
+	nodeNoRepository: {storedScopeRepoIn: false, storedScopeOrgWide: false, storedScopeRepoOut: false, storedScopeUniversal: true},
+	// CHAOS-7080: a "*" repository list proves no repository, so it admits
+	// no repository-restricted caller (exact slug or owner wildcard); only a
+	// universal ("*") grant still sees it. Before CHAOS-7080 every row here
+	// was true -- the wildcard admitted every caller to every such node.
+	nodeUniversalAttr: {storedScopeRepoIn: false, storedScopeOrgWide: false, storedScopeRepoOut: false, storedScopeUniversal: true},
 	nodeAbsent:        {storedScopeRepoIn: false, storedScopeOrgWide: false, storedScopeRepoOut: false, storedScopeUniversal: false},
 	nodeCallerOrg:     {storedScopeRepoIn: true, storedScopeOrgWide: true, storedScopeRepoOut: true, storedScopeUniversal: true},
 	nodeOtherOrg:      {storedScopeRepoIn: false, storedScopeOrgWide: false, storedScopeRepoOut: false, storedScopeUniversal: false},

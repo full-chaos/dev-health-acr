@@ -66,7 +66,7 @@ func TestDirectReadAuthorizationLineCertifiesAgainstItsSpecification(t *testing.
 	certifyLine(t, buffer.Bytes(), map[string]any{
 		"org_id": "org_1", "principal_class": "restricted", "repository_scope_count": 1,
 		"decision": "partial", "reason": "organization_mismatch", "subject_count": 4,
-		"admitted_count": 1, "denied_count": 1, "absent_count": 0, "ownership_unproven_count": 1,
+		"admitted_count": 1, "denied_count": 2, "absent_count": 0, "ownership_unproven_count": 0,
 		"organization_mismatch_count": 1, "invalid_count": 0,
 		"refused_kinds": []any{"organization", "project", "repository"}, "request_id": "req_0123456789abcdef0123456789abcdef",
 	})

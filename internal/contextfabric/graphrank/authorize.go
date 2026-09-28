@@ -1,7 +1,11 @@
 package graphrank
 
 import (
+	"slices"
+	"strings"
+
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -69,7 +73,23 @@ const (
 // replaces backend-specific decoding, so every backend can call this
 // directly.
 func AuthorizedAttributes(principal storage.Principal, requested contextfabric.RequestedScope, attributes map[string]interface{}) bool {
-	if len(principal.RepositoryScopes) > 0 {
+	if len(principal.RepositoryScopes) > 0 && !scopesUnrestricted(principal.RepositoryScopes) && repositoryWildcardAttr(attributes) {
+		// CHAOS-7080: a "*" repository list proves NO repository, so it
+		// admits nothing to a repository-restricted caller. Before this, the
+		// wildcard branch of scopeContainsAttr admitted every restricted
+		// caller to every wildcard node: every project (projection writes a
+		// project's empty repository list as "*"), every pre-CHAOS-4390
+		// team, every node or edge whose repository slug did not resolve,
+		// and every project<->team ownership edge. The one wildcard node a
+		// restricted caller may see is its OWN organization, identified by
+		// the reserved organization scope id in authorization_projects
+		// (only the organization entity may carry it: the contract rejects
+		// it on any other entity). Unrestricted and universal ("*") callers
+		// are unaffected.
+		if !callersOrganizationAttr(principal, attributes) {
+			return false
+		}
+	} else if len(principal.RepositoryScopes) > 0 {
 		allowed := false
 		for _, repository := range principal.RepositoryScopes {
 			if scopeContainsAttr(attributes, authorizationRepositoriesAttr, repository) {
@@ -112,4 +132,24 @@ func anyContainsAttr(attributes map[string]interface{}, key string, values []str
 		}
 	}
 	return false
+}
+
+// repositoryWildcardAttr reports whether a node or edge carries the "*"
+// repository list (graphrank's shared attribute convention; see the top of
+// this file).
+func repositoryWildcardAttr(attributes map[string]interface{}) bool {
+	value, isString := attributes[authorizationRepositoriesAttr].(string)
+	return isString && value == "*"
+}
+
+// callersOrganizationAttr reports whether the attributes are the caller's own
+// organization entity's: its authorization_projects list names the reserved
+// organization scope id of the caller's org.
+func callersOrganizationAttr(principal storage.Principal, attributes map[string]interface{}) bool {
+	orgID := strings.TrimSpace(principal.OrgID)
+	if orgID == "" {
+		return false
+	}
+	projects, isList := attributes[authorizationProjectsAttr].([]string)
+	return isList && slices.Contains(projects, contractsv1.ContextFabricReservedOrganizationScopePrefix+orgID)
 }

@@ -55,7 +55,9 @@ func TestAuthorizeStoredSubjectsInputDomain(t *testing.T) {
 	if len(batches) != 2 || batches[0] != storedSubjectBatch || batches[1] != 2 {
 		t.Fatalf("batches = %v, want [%d 2]", batches, storedSubjectBatch)
 	}
-	want := map[int]contextfabric.StoredSubjectOutcome{0: contextfabric.StoredSubjectAdmitted, 1: contextfabric.StoredSubjectDenied, 2: contextfabric.StoredSubjectAbsent, 3: contextfabric.StoredSubjectAbsent, storedSubjectBatch + 1: contextfabric.StoredSubjectAdmitted}
+	// CHAOS-7080: the last subject's node carries the "*" repository list,
+	// which admits no repository-restricted caller.
+	want := map[int]contextfabric.StoredSubjectOutcome{0: contextfabric.StoredSubjectAdmitted, 1: contextfabric.StoredSubjectDenied, 2: contextfabric.StoredSubjectAbsent, 3: contextfabric.StoredSubjectAbsent, storedSubjectBatch + 1: contextfabric.StoredSubjectDenied}
 	for index, outcome := range want {
 		if outcomes[index] != outcome {
 			t.Errorf("subject %d = %s, want %s", index, outcomes[index], outcome)
@@ -81,7 +83,7 @@ func TestAuthorizeStoredSubjectsInputDomain(t *testing.T) {
 			case "granted":
 				rows = append(rows,
 					row{"n": &node{Properties: map[string]interface{}{propKind: "project", propCanonicalID: "granted", "authorization_repositories": []string{"acme/api"}}}},
-					row{"n": &node{Properties: map[string]interface{}{propKind: "team", propCanonicalID: "granted", "authorization_repositories": "*"}}})
+					row{"n": &node{Properties: map[string]interface{}{propKind: "team", propCanonicalID: "granted", "authorization_repositories": []string{"acme/api"}}}})
 			}
 		}
 		return rows, nil
