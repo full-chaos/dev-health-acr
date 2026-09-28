@@ -85,6 +85,12 @@ func (a *App) Handler() http.Handler {
 	mux.Handle("GET "+ContextFabricOrgModelConfigPath, a.ContextFabricOrgModelConfigGetHandler(a.orgModelConfigs()))
 	mux.Handle("PUT "+ContextFabricOrgModelConfigPath, a.ContextFabricOrgModelConfigPutHandler(a.orgModelConfigs(), a.reuseInvalidator()))
 	mux.Handle("DELETE "+ContextFabricOrgModelConfigPath, a.ContextFabricOrgModelConfigDeleteHandler(a.orgModelConfigs(), a.orgModelRuntimeEvictor(), a.reuseInvalidator()))
+	// CHAOS-7071: direct data routes (CHAOS-7036 E.5). Bearer only (no web
+	// assertions), entitlement required; handlers are stubs until S1a/S2.
+	mux.Handle("GET "+ContextFabricDataCatalogPath, a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, false, a.contextFabricDataCatalogHandler()))
+	mux.Handle("POST "+ContextFabricDataSubjectsPath, a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, false, a.contextFabricDataSubjectsHandler()))
+	mux.Handle("POST "+ContextFabricDataFactsPath, a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, false, a.contextFabricDataFactsHandler()))
+	mux.Handle("POST "+ContextFabricDataOperationsPath, a.protectedRuntimeHandler(limits.RequestClassData, auth.ScopeDataRead, true, false, a.contextFabricDataOperationsHandler()))
 	mux.Handle("POST /api/v1/oauth/device_authorization", a.deviceRuntimeHandler(http.HandlerFunc(a.handleDeviceAuthorization)))
 	mux.Handle("POST /api/v1/oauth/token", http.HandlerFunc(a.handleDeviceToken))
 	mux.Handle("POST /api/v1/oauth/device_approval", a.deviceRuntimeHandler(a.deviceApprovalHandler(http.HandlerFunc(a.handleDeviceApproval))))

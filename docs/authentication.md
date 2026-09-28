@@ -20,9 +20,12 @@ Only the SHA-256 digest is stored. The plaintext token is returned once during c
 context:read
 evidence:read
 episode:write
+data:read
 ```
 
 Permissions are independent. `episode:write` does not imply either read permission. Credentials default to the two read scopes only.
+
+`data:read` (CHAOS-7071, decision K4 of the CHAOS-7036 design) gates the direct data routes that serve product analytics (`POST /api/v1/context-fabric/data/operations`, the `run_operation` tool). It is never implied: `context:read` does not include it, an OAuth request that names no scope does not get it, no workload role carries it, and a credential issued before it existed never gains it. An OAuth client gets it only by asking for it in the `scope` parameter: in the authorization-code flow (the consent page lists it) or in the RFC 8628 device grant (`POST /device_authorization` with `scope=... data:read`). A device approval authorizes the whole requestable set as a ceiling, and the credential carries only the scopes the grant asked for, so a device grant without `data:read` never gets it. The legacy `acr-mcp login` device flow has no scope parameter and always issues the default pair. The catalogue, subject lookup and fact read routes under `/api/v1/context-fabric/data/` need `context:read`.
 
 ## Repository scopes
 

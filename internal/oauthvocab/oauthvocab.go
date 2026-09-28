@@ -90,7 +90,10 @@ func ClientKindVocabulary() []string {
 const (
 	ScopeContextRead  = "context:read"
 	ScopeEvidenceRead = "evidence:read"
+	ScopeDataRead     = "data:read"
 )
 
 // ScopeVocabulary lists every OAuth scope.
-func ScopeVocabulary() []string { return []string{ScopeContextRead, ScopeEvidenceRead} }
+func ScopeVocabulary() []string {
+	return []string{ScopeContextRead, ScopeEvidenceRead, ScopeDataRead}
+}

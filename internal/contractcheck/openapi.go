@@ -111,7 +111,13 @@ func validOpenAPIPath(path string) bool {
 		"/api/v1/context-fabric/investigations/{result_id}",
 		// CHAOS-3775: per-organization BYO LLM provider configuration.
 		// Same distinct surface as the investigation endpoint above.
-		"/api/v1/context-fabric/model-config":
+		"/api/v1/context-fabric/model-config",
+		// CHAOS-7071: the direct data routes of CHAOS-7036 (E.5), listed
+		// one by one for the same reason as above.
+		"/api/v1/context-fabric/data/catalog",
+		"/api/v1/context-fabric/data/subjects",
+		"/api/v1/context-fabric/data/facts",
+		"/api/v1/context-fabric/data/operations":
 		return true
 	default:
 		return false

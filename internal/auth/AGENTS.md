@@ -19,7 +19,7 @@ Owns ACR token lifecycle, repository-scope normalization, authentication middlew
 ## INVARIANTS
 
 - Build `Principal` from credential metadata only; never copy org, repository, permissions, or entitlement from a request payload.
-- Default normalized permissions are `context:read` and `evidence:read`; `episode:write` is explicit opt-in.
+- Default normalized permissions are `context:read` and `evidence:read`; `episode:write` and `data:read` (CHAOS-7071) are explicit opt-in. `data:read` is never part of the OAuth default scope and no workload role carries it; the authorization-code and RFC 8628 device grants issue it only when the request names it.
 - Repository scope is required, lowercased, deduplicated, sorted, and restricted to exact, owner wildcard, or explicit global wildcard forms.
 - Authentication failures for missing, malformed, unknown, revoked, and expired credentials share a safe external response.
 - Store only token hashes. Return plaintext only at creation/rotation and never place it in logs or audit metadata.

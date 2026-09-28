@@ -107,7 +107,7 @@ func withNoStoreFor(resource string, h *HTTPHandler) http.Handler {
 	metadata := sdkauth.ProtectedResourceMetadataHandler(&oauthex.ProtectedResourceMetadata{
 		Resource:               resource,
 		AuthorizationServers:   []string{h.opts.AuthorizationServer},
-		ScopesSupported:        []string{auth.ScopeContextRead, auth.ScopeEvidenceRead},
+		ScopesSupported:        []string{auth.ScopeContextRead, auth.ScopeEvidenceRead, auth.ScopeDataRead},
 		BearerMethodsSupported: []string{"header"},
 		ResourceName:           "Dev Health agent context runtime",
 	})

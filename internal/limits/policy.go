@@ -25,6 +25,11 @@ const (
 	RequestClassEvidence
 	RequestClassSnapshot
 	RequestClassEpisode
+	// RequestClassData is the direct data tools' class (CHAOS-7036 E.5:
+	// run_operation, read_rows). It is separate from Context so product
+	// analytics reads cannot spend the investigation budget, and the other
+	// way round.
+	RequestClassData
 )
 
 type Subject struct {
@@ -60,12 +65,19 @@ type EpisodePolicy struct {
 	Resources                       ResourceBudget
 }
 
+type DataPolicy struct {
+	Window                          time.Duration
+	PerOrgLimit, PerCredentialLimit int
+	Resources                       ResourceBudget
+}
+
 type PolicySet struct {
 	Auth     AuthPolicy
 	Context  ContextPolicy
 	Evidence EvidencePolicy
 	Snapshot SnapshotPolicy
 	Episode  EpisodePolicy
+	Data     DataPolicy
 }
 
 type quotaPolicy struct {
@@ -87,6 +99,8 @@ func (p PolicySet) policy(class RequestClass) (quotaPolicy, error) {
 		policy = quotaPolicy(p.Snapshot)
 	case RequestClassEpisode:
 		policy = quotaPolicy(p.Episode)
+	case RequestClassData:
+		policy = quotaPolicy(p.Data)
 	default:
 		return quotaPolicy{}, ErrInvalidRequestClass
 	}
@@ -107,7 +121,7 @@ func (budget ResourceBudget) allows(usage ResourceUsage) bool {
 }
 
 func (p PolicySet) validate() error {
-	for _, class := range []RequestClass{RequestClassAuth, RequestClassContext, RequestClassEvidence, RequestClassSnapshot, RequestClassEpisode} {
+	for _, class := range []RequestClass{RequestClassAuth, RequestClassContext, RequestClassEvidence, RequestClassSnapshot, RequestClassEpisode, RequestClassData} {
 		if _, err := p.policy(class); err != nil {
 			return err
 		}

@@ -543,6 +543,186 @@
       "gaps": []
     },
     {
+      "id": "GET /api/v1/context-fabric/data/catalog [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "GET",
+      "route": "/api/v1/context-fabric/data/catalog",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 90
+      },
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "acr_client_credential",
+        "internal_svc_acr_token",
+        "acr_workload_identity_exchange"
+      ],
+      "primary_validator": {
+        "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7071 direct data route (CHAOS-7036 E.5); bearer fcacr_ credential only.",
+        "anchor": {
+          "path": "internal/api/runtime.go",
+          "line": 170,
+          "line_end": 180,
+          "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
+        }
+      },
+      "token_shape": {
+        "token_type": "fcacr_ bearer only",
+        "issuer": null,
+        "audience": null,
+        "algorithm": null
+      },
+      "reachable_validators": [],
+      "action": "context_fabric.data.catalog.read",
+      "resource_resolver": "principal.OrgID; every subject id in the request passes the direct-read subject gate (CHAOS-7071) before any read.",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": "agentContextRuntimeEntitlement",
+      "disclosure_behavior": "writeError() closed envelope; a subject the caller may not read answers denied_or_not_found, identical for denied and absent.",
+      "gaps": [
+        "CHAOS-7071 (S0) registers this route with its full protection chain and a stub handler that answers 501 feature_not_enabled (details.reason=not_implemented); the handler is filled by S1a (data_catalog)."
+      ]
+    },
+    {
+      "id": "POST /api/v1/context-fabric/data/subjects [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/api/v1/context-fabric/data/subjects",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 91
+      },
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "acr_client_credential",
+        "internal_svc_acr_token",
+        "acr_workload_identity_exchange"
+      ],
+      "primary_validator": {
+        "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7071 direct data route (CHAOS-7036 E.5); bearer fcacr_ credential only.",
+        "anchor": {
+          "path": "internal/api/runtime.go",
+          "line": 170,
+          "line_end": 180,
+          "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
+        }
+      },
+      "token_shape": {
+        "token_type": "fcacr_ bearer only",
+        "issuer": null,
+        "audience": null,
+        "algorithm": null
+      },
+      "reachable_validators": [],
+      "action": "context_fabric.data.subjects.read",
+      "resource_resolver": "principal.OrgID; every subject id in the request passes the direct-read subject gate (CHAOS-7071) before any read.",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": "agentContextRuntimeEntitlement",
+      "disclosure_behavior": "writeError() closed envelope; a subject the caller may not read answers denied_or_not_found, identical for denied and absent.",
+      "gaps": [
+        "CHAOS-7071 (S0) registers this route with its full protection chain and a stub handler that answers 501 feature_not_enabled (details.reason=not_implemented); the handler is filled by S1a (find_subjects)."
+      ]
+    },
+    {
+      "id": "POST /api/v1/context-fabric/data/facts [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/api/v1/context-fabric/data/facts",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 92
+      },
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "acr_client_credential",
+        "internal_svc_acr_token",
+        "acr_workload_identity_exchange"
+      ],
+      "primary_validator": {
+        "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7071 direct data route (CHAOS-7036 E.5); bearer fcacr_ credential only.",
+        "anchor": {
+          "path": "internal/api/runtime.go",
+          "line": 170,
+          "line_end": 180,
+          "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
+        }
+      },
+      "token_shape": {
+        "token_type": "fcacr_ bearer only",
+        "issuer": null,
+        "audience": null,
+        "algorithm": null
+      },
+      "reachable_validators": [],
+      "action": "context_fabric.data.facts.read",
+      "resource_resolver": "principal.OrgID; every subject id in the request passes the direct-read subject gate (CHAOS-7071) before any read.",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": "agentContextRuntimeEntitlement",
+      "disclosure_behavior": "writeError() closed envelope; a subject the caller may not read answers denied_or_not_found, identical for denied and absent.",
+      "gaps": [
+        "CHAOS-7071 (S0) registers this route with its full protection chain and a stub handler that answers 501 feature_not_enabled (details.reason=not_implemented); the handler is filled by S2 (read_facts)."
+      ]
+    },
+    {
+      "id": "POST /api/v1/context-fabric/data/operations [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/api/v1/context-fabric/data/operations",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 93
+      },
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "acr_client_credential",
+        "internal_svc_acr_token",
+        "acr_workload_identity_exchange"
+      ],
+      "primary_validator": {
+        "description": "protectedRuntimeHandler(RequestClassData, ScopeDataRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7071 direct data route (CHAOS-7036 E.5); bearer fcacr_ credential only.",
+        "anchor": {
+          "path": "internal/api/runtime.go",
+          "line": 170,
+          "line_end": 180,
+          "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
+        }
+      },
+      "token_shape": {
+        "token_type": "fcacr_ bearer only",
+        "issuer": null,
+        "audience": null,
+        "algorithm": null
+      },
+      "reachable_validators": [],
+      "action": "context_fabric.data.operations.read",
+      "resource_resolver": "principal.OrgID; every subject id in the request passes the direct-read subject gate (CHAOS-7071) before any read.",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": "agentContextRuntimeEntitlement",
+      "disclosure_behavior": "writeError() closed envelope; a subject the caller may not read answers denied_or_not_found, identical for denied and absent.",
+      "gaps": [
+        "CHAOS-7071 (S0) registers this route with its full protection chain and a stub handler that answers 501 feature_not_enabled (details.reason=not_implemented); the handler is filled by S1a (run_operation). Needs the data:read scope (decision K4), never implied by context:read."
+      ]
+    },
+    {
       "id": "POST /api/v1/oauth/device_authorization [dev-health-acr-api]",
       "surface_kind": "rest",
       "method": "POST",
@@ -551,7 +731,7 @@
       "service": "dev-health-acr-api",
       "source": {
         "file": "internal/api/app.go",
-        "line": 88
+        "line": 94
       },
       "classification": "public",
       "public_rationale": "First call in the OAuth 2.0 device-authorization grant (RFC 8628); the caller has no credential yet by definition. deviceRuntimeHandler only checks runtime/authenticator presence, no principal.",
@@ -603,7 +783,7 @@
       "service": "dev-health-acr-api",
       "source": {
         "file": "internal/api/app.go",
-        "line": 89
+        "line": 95
       },
       "classification": "public",
       "public_rationale": "Token-issuance endpoint by definition has no principal on entry. Content-Type dispatches to one of two grants (see primary_validator) -- neither requires a pre-existing ACR credential.",
@@ -679,7 +859,7 @@
       "service": "dev-health-acr-api",
       "source": {
         "file": "internal/api/app.go",
-        "line": 90
+        "line": 96
       },
       "classification": "protected",
       "public_rationale": null,
@@ -732,7 +912,7 @@
       "service": "dev-health-acr-api",
       "source": {
         "file": "internal/api/app.go",
-        "line": 91
+        "line": 97
       },
       "classification": "protected",
       "public_rationale": null,
@@ -775,7 +955,7 @@
       "service": "dev-health-acr-api",
       "source": {
         "file": "internal/api/app.go",
-        "line": 92
+        "line": 98
       },
       "classification": "protected",
       "public_rationale": null,
@@ -827,7 +1007,7 @@
       "route": "/.well-known/oauth-authorization-server",
       "source": {
         "file": "internal/api/app.go",
-        "line": 94
+        "line": 100
       },
       "public_rationale": "RFC 8414 authorization server metadata for hosted MCP clients; static configuration, no principal, no org context. Registered only when ACR_OAUTH_ISSUER/ACR_OAUTH_RESOURCES are configured.",
       "primary_validator": {
@@ -861,15 +1041,15 @@
       "route": "/authorize",
       "source": {
         "file": "internal/api/app.go",
-        "line": 95
+        "line": 101
       },
       "public_rationale": "OAuth 2.1 authorization endpoint (authorization code + PKCE S256 + RFC 8707 resource) for hosted MCP clients; the caller has no credential by definition. It only starts a consent and sends the browser (302) to the web consent page with a 256-bit request handle; the handle authorizes nothing by itself -- the decision is made on POST /authorize/consent, which admits only a web assertion for the signed-in user.",
       "primary_validator": {
         "description": "OAuthService.Authorize -- verifies the client (a dynamic registration or a client ID metadata document) and the registered redirect URI before anything is redirectable (exact match, except a loopback URI registered with no port also matches any port on that same scheme/host/path/query -- RFC 8252 \u00a77.3; localhost additionally for client ID metadata document clients only), then requires response_type=code, S256 PKCE, a configured resource and a known scope; only then starts the consent and redirects to the web consent page; rate limited per IP by AllowDeviceCreation.",
         "anchor": {
           "path": "internal/auth/oauth.go",
-          "line": 407,
-          "line_end": 407,
+          "line": 437,
+          "line_end": 437,
           "note": "func (s *OAuthService) Authorize("
         }
       },
@@ -887,7 +1067,7 @@
       "service": "dev-health-acr-api",
       "source": {
         "file": "internal/api/app.go",
-        "line": 96
+        "line": 102
       },
       "classification": "protected",
       "public_rationale": null,
@@ -914,8 +1094,8 @@
           "description": "OAuthService.ApproveConsent/DenyConsent/ConsentRequest -- the handle's request must be undecided and unexpired (10 minutes); approval applies the device approval's org and repository rules (ApproveForOAuth) and issues the code at most once.",
           "anchor": {
             "path": "internal/auth/oauth.go",
-            "line": 686,
-            "line_end": 709
+            "line": 716,
+            "line_end": 739
           },
           "is_intended_validator": true,
           "reachable_but_not_owner": false
@@ -935,8 +1115,8 @@
           "direction": "returned_to_caller",
           "anchor": {
             "path": "internal/auth/oauth.go",
-            "line": 686,
-            "line_end": 709,
+            "line": 716,
+            "line_end": 739,
             "note": "OAuthService.ApproveConsent -- approves the device authorization, then mints the one-time OAuth authorization code via s.store.IssueAuthorizationCode and returns it inside redirect_url"
           },
           "issuer": "acr-api OAuthService",
@@ -967,8 +1147,8 @@
           "description": "OAuthService.ExchangeDeviceCode -- the device_code grant branch (form grant_type=urn:ietf:params:oauth:grant-type:device_code): looks up the device grant's client/resource/scope by the device code's hash, requires the same client_id, then polls the device authorization (PollDeviceGrant) for authorization_pending/slow_down/access_denied/expired_token or a token once approved. Rate limited per IP by the same AllowTokenRequest budget as the authorization_code branch.",
           "anchor": {
             "path": "internal/auth/oauth.go",
-            "line": 911,
-            "line_end": 911,
+            "line": 945,
+            "line_end": 945,
             "note": "func (s *OAuthService) ExchangeDeviceCode("
           },
           "is_intended_validator": true,
@@ -985,15 +1165,15 @@
       "route": "/token",
       "source": {
         "file": "internal/api/app.go",
-        "line": 97
+        "line": 103
       },
       "public_rationale": "OAuth 2.1 token endpoint (authorization_code grant, public clients, no refresh token; CHAOS-6233 added RFC 8628's device_code grant, dispatched by the grant_type form parameter); no principal on entry by definition.",
       "primary_validator": {
         "description": "OAuthService.Exchange -- consumes the code atomically first (a refused exchange spends it), then requires the same client_id and redirect_uri, an S256 code_verifier matching the stored challenge, and a resource equal to the authorized one; redeems the approved device authorization bound to that resource. Rate limited per IP by AllowTokenRequest.",
         "anchor": {
           "path": "internal/auth/oauth.go",
-          "line": 784,
-          "line_end": 784,
+          "line": 818,
+          "line_end": 818,
           "note": "func (s *OAuthService) Exchange("
         }
       },
@@ -1006,8 +1186,8 @@
           "direction": "returned_to_caller",
           "anchor": {
             "path": "internal/auth/device_oauth.go",
-            "line": 189,
-            "line_end": 206,
+            "line": 191,
+            "line_end": 208,
             "note": "DeviceFlowService.RedeemForResource -- redeem mints the fcacr_ credential (30-day expiry) with Resource bound; the authenticator admits it only with a matching X-ACR-Resource header"
           },
           "issuer": "acr credential Service (via DeviceFlowService.redeem)",
@@ -1022,8 +1202,8 @@
           "direction": "returned_to_caller",
           "anchor": {
             "path": "internal/auth/device_oauth.go",
-            "line": 277,
-            "line_end": 277,
+            "line": 279,
+            "line_end": 279,
             "note": "func (s *DeviceFlowService) PollDeviceGrant("
           },
           "issuer": "acr credential Service (via DeviceFlowService.redeem)",
@@ -1053,15 +1233,15 @@
       "route": "/register",
       "source": {
         "file": "internal/api/app.go",
-        "line": 98
+        "line": 104
       },
       "public_rationale": "RFC 7591 dynamic client registration for public MCP clients (DCR fallback to client ID metadata documents); the caller has no credential by definition.",
       "primary_validator": {
         "description": "OAuthService.Register -- public clients only (token_endpoint_auth_method none), grant types limited to authorization_code/refresh_token/urn:ietf:params:oauth:grant-type:device_code (CHAOS-6233 added the device-code grant; refresh_token requests are answered without it), redirect URIs HTTPS or HTTP loopback and required only when the client wants authorization_code -- a client declaring device_code only registers with none, since the device grant has no redirect step. Rate limited per IP by AllowDeviceCreation. Registration grants nothing by itself.",
         "anchor": {
           "path": "internal/auth/oauth.go",
-          "line": 272,
-          "line_end": 272,
+          "line": 302,
+          "line_end": 302,
           "note": "func (s *OAuthService) Register("
         }
       },
@@ -1087,15 +1267,15 @@
       "route": "/device_authorization",
       "source": {
         "file": "internal/api/app.go",
-        "line": 99
+        "line": 105
       },
       "public_rationale": "RFC 8628 device authorization endpoint (CHAOS-6233): starts a device-code grant for a headless/remote MCP client with no browser or redirect of its own; the caller has no credential by definition. It reuses the same device_authorizations row and POST /api/v1/oauth/device_approval approval page an OAuth authorization-code request's browser consent already reuses internally (device_oauth.go), except the raw device_code and user_code leave the server here, as RFC 8628 requires.",
       "primary_validator": {
         "description": "OAuthService.StartDeviceAuthorization -- verifies the client (a dynamic registration or a client ID metadata document), a supported scope and a configured resource exactly like Authorize, then starts a device authorization and records the client/resource/scope /token needs when the client polls back with only the device_code; rate limited per IP by AllowDeviceCreation.",
         "anchor": {
           "path": "internal/auth/oauth.go",
-          "line": 862,
-          "line_end": 862,
+          "line": 896,
+          "line_end": 896,
           "note": "func (s *OAuthService) StartDeviceAuthorization("
         }
       },
@@ -1108,8 +1288,8 @@
           "direction": "returned_to_caller",
           "anchor": {
             "path": "internal/auth/device_oauth.go",
-            "line": 243,
-            "line_end": 243,
+            "line": 245,
+            "line_end": 245,
             "note": "func (s *DeviceFlowService) StartDeviceGrant("
           },
           "issuer": "acr DeviceFlowService",

@@ -28,9 +28,39 @@ import (
 // ordinary opaque fcacr_ bearer with the device flow's org and repository
 // scopes, bound to the resource the request named.
 
-// OAuthScope is the scope an OAuth request gets when it names none: every
-// scope the approval grants.
+// OAuthScope is the scope an OAuth request gets when it names none. It is
+// the pre-CHAOS-7071 grant, unchanged: ScopeDataRead is never implied, so a
+// client that names no scope gets exactly what it got before data:read
+// existed (decision K4: a user consents to data:read explicitly).
 var OAuthScope = ScopeContextRead + " " + ScopeEvidenceRead
+
+// oauthDefaultApprovalScopes is the default pair every approval authorizes.
+// An authorization-code consent adds ScopeDataRead only when the request
+// named it (oauthApprovalScopes).
+var oauthDefaultApprovalScopes = []string{ScopeContextRead, ScopeEvidenceRead}
+
+// deviceApprovalScopes is what a typed-user-code approval authorizes
+// (CHAOS-7100, chris 2026-09-28: "don't block it"). The approval page is
+// keyed by the user code and does not know which scopes the device grant
+// asked for, so the approval authorizes the whole requestable set as a
+// CEILING. The credential still carries only the scopes the grant itself
+// requested: the RFC 8628 poll redeems exactly the grant's normalized
+// scope (default: context + evidence, never data:read), and the legacy
+// device poll redeems the default pair. So a device grant gets data:read
+// only when it asked for it.
+var deviceApprovalScopes = []string{ScopeContextRead, ScopeEvidenceRead, ScopeDataRead}
+
+// oauthApprovalScopes is the scope set a consent approval authorizes for a
+// request's normalized scope: the default set, plus ScopeDataRead when the
+// request named it. Keeping the default set whole (not narrowing it to the
+// request) keeps every pre-CHAOS-7071 approval byte-identical.
+func oauthApprovalScopes(normalizedScope string) []string {
+	scopes := slices.Clone(oauthDefaultApprovalScopes)
+	if slices.Contains(strings.Fields(normalizedScope), ScopeDataRead) {
+		scopes = append(scopes, ScopeDataRead)
+	}
+	return scopes
+}
 
 // oauthScopes are the scopes an OAuth request may ask for, in canonical order.
 var oauthScopes = oauthvocab.ScopeVocabulary()
@@ -691,7 +721,11 @@ func (s *OAuthService) ApproveConsent(ctx context.Context, handle string, princi
 	if err := s.bindConsentUser(ctx, request, principal); err != nil {
 		return OAuthConsentDecision{ClientKind: request.ClientKind}, err
 	}
-	if err := s.devices.ApproveForOAuth(ctx, principal, request.DeviceCodeHash, repositoryScopes); err != nil {
+	scope, ok := NormalizeOAuthScope(request.Scope)
+	if !ok {
+		return OAuthConsentDecision{ClientKind: request.ClientKind}, oauthError("invalid_scope", oauthvocab.OutcomeInvalidScope, false)
+	}
+	if err := s.devices.ApproveForOAuth(ctx, principal, request.DeviceCodeHash, repositoryScopes, oauthApprovalScopes(scope)); err != nil {
 		return OAuthConsentDecision{ClientKind: request.ClientKind}, consentDecisionError(err)
 	}
 	code, err := s.secret(oauthCodeBytes)

@@ -227,7 +227,7 @@ func ValidateDeviceAuthorizationGrant(grant DeviceAuthorizationGrant) error {
 		}
 	}
 	for _, scope := range grant.Scopes {
-		if scope != "context:read" && scope != "evidence:read" {
+		if scope != "context:read" && scope != "evidence:read" && scope != "data:read" {
 			return ErrInvalidDeviceAuthorization
 		}
 	}
