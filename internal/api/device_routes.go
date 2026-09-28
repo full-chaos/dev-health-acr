@@ -160,7 +160,7 @@ func (a *App) handleDeviceApproval(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, contractsv1.DeviceApprovalPreviewResponse{
 			SchemaVersion:      contractsv1.DeviceApprovalPreviewResponseSchema,
 			OrganizationIDHint: preview.OrganizationIDHint,
-			RepositoryHints:    preview.RepositoryHints,
+			RepositoryHints:    preview.RepositoryHints, RequestedScopes: preview.RequestedScopes,
 		})
 		return
 	}

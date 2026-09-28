@@ -79,6 +79,11 @@ type DeviceApprovalPreviewRequest struct {
 type DeviceApprovalPreview struct {
 	OrganizationIDHint string
 	RepositoryHints    []string
+	// RequestedScopes (CHAOS-7106) are the scopes the device grant asked for,
+	// in canonical order: what the RFC 8628 /device_authorization request
+	// named (stored on the grant row), or the default pair when the record has
+	// no grant row (the legacy acr-mcp login flow has no scope parameter).
+	RequestedScopes []string
 }
 
 type DeviceDenialRequest struct {
@@ -167,10 +172,35 @@ func (s *DeviceFlowService) Preview(ctx context.Context, request DeviceApprovalP
 	if len(record.RepositoryHints) > 0 && len(repositoryHints) == 0 {
 		return DeviceApprovalPreview{}, ErrInvalidDeviceFlow
 	}
+	requestedScopes, err := s.requestedScopes(ctx, record.DeviceCodeHash)
+	if err != nil {
+		return DeviceApprovalPreview{}, err
+	}
 	return DeviceApprovalPreview{
 		OrganizationIDHint: record.OrganizationIDHint,
 		RepositoryHints:    repositoryHints,
+		RequestedScopes:    requestedScopes,
 	}, nil
+}
+
+// requestedScopes returns the scopes a device record's grant asked for. A
+// record with no grant row (storage.ErrNotFound) is a legacy device
+// authorization, whose credential is the default pair. Any other lookup
+// failure fails the preview rather than showing a guess: the page must not
+// tell a user less than what they are approving.
+func (s *DeviceFlowService) requestedScopes(ctx context.Context, hash storage.DeviceCodeHash) ([]string, error) {
+	grant, err := s.oauthDeviceGrants.GetDeviceGrant(ctx, hash)
+	if errors.Is(err, storage.ErrNotFound) {
+		return slices.Clone(oauthDefaultApprovalScopes), nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("look up device grant scopes: %w", err)
+	}
+	scopes := strings.Fields(grant.Scope)
+	if len(scopes) == 0 {
+		return slices.Clone(oauthDefaultApprovalScopes), nil
+	}
+	return scopes, nil
 }
 
 func (s *DeviceFlowService) Approve(ctx context.Context, request DeviceApprovalRequest) (storage.DeviceAuthorization, error) {
