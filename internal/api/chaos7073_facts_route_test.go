@@ -73,13 +73,14 @@ func (p chaos7073Provider) ReadFacts(_ context.Context, _ storage.Principal, que
 	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable}, nil
 }
 
-func newChaos7073Reader(t *testing.T, graph directread.GraphAuthority, provider contextfabric.FactProvider) *directread.FactsReader {
+func setChaos7073Reader(t *testing.T, h *chaos7071Harness, graph directread.GraphAuthority, provider contextfabric.FactProvider) {
 	t.Helper()
 	registry, err := contextfabric.NewFactCapabilityRegistry([]contextfabric.FactProvider{provider}, contextfabric.FactRegistryOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return directread.NewFactsReader(directread.NewSubjectGate(graph, nil), directread.NewFactReader(registry.WithoutScopeExpansion()), nil)
+	h.app.runtime.DirectReadGate = directread.NewSubjectGate(graph, nil)
+	h.app.runtime.DirectFactReader = directread.NewFactReader(registry.WithoutScopeExpansion())
 }
 
 func (h *chaos7071Harness) postFacts(token, body string) *httptest.ResponseRecorder {
@@ -110,7 +111,7 @@ func TestChaos7073FactsRouteAnswers(t *testing.T) {
 		}
 	})
 
-	h.app.runtime.DirectFacts = newChaos7073Reader(t, admitAllGraph{absent: map[string]bool{"repository:gone": true}}, chaos7073Provider{})
+	setChaos7073Reader(t, h, admitAllGraph{absent: map[string]bool{"repository:gone": true}}, chaos7073Provider{})
 
 	t.Run("happy path serves the facts document", func(t *testing.T) {
 		response := h.postFacts(token, chaos7073ValidBody)
@@ -173,7 +174,7 @@ func TestChaos7073FactsRouteAnswers(t *testing.T) {
 	}
 
 	t.Run("a provider failure answers 200 with coverage, never a leaked error", func(t *testing.T) {
-		h.app.runtime.DirectFacts = newChaos7073Reader(t, admitAllGraph{}, chaos7073Provider{fail: true})
+		setChaos7073Reader(t, h, admitAllGraph{}, chaos7073Provider{fail: true})
 		response := h.postFacts(token, chaos7073ValidBody)
 		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"outcome":"unavailable"`) {
 			t.Fatalf("a provider failure is coverage, not an error: %d %s", response.Code, response.Body.String())
@@ -184,7 +185,7 @@ func TestChaos7073FactsRouteAnswers(t *testing.T) {
 	})
 
 	t.Run("a graph failure answers 503 without the raw error", func(t *testing.T) {
-		h.app.runtime.DirectFacts = newChaos7073Reader(t, admitAllGraph{bindErr: errors.New("secret-graph-host:6379 refused")}, chaos7073Provider{})
+		setChaos7073Reader(t, h, admitAllGraph{bindErr: errors.New("secret-graph-host:6379 refused")}, chaos7073Provider{})
 		response := h.postFacts(token, chaos7073ValidBody)
 		assertErrorResponse(t, response, http.StatusServiceUnavailable, "upstream_unavailable")
 		if strings.Contains(response.Body.String(), "secret-graph-host") {
@@ -195,7 +196,7 @@ func TestChaos7073FactsRouteAnswers(t *testing.T) {
 
 func TestChaos7073FactsRouteRequiresContextReadScope(t *testing.T) {
 	h := newChaos7071Harness(t, 100)
-	h.app.runtime.DirectFacts = newChaos7073Reader(t, admitAllGraph{}, chaos7073Provider{})
+	setChaos7073Reader(t, h, admitAllGraph{}, chaos7073Provider{})
 	evidenceOnly := h.issue(t, []string{auth.ScopeEvidenceRead}, nil).Token
 	assertErrorResponse(t, h.postFacts(evidenceOnly, chaos7073ValidBody), http.StatusForbidden, "insufficient_scope")
 	assertErrorResponse(t, h.postFacts("", chaos7073ValidBody), http.StatusUnauthorized, "invalid_token")
@@ -220,7 +221,7 @@ func TestChaos7073CapabilitiesAdvertiseReadFactsOnlyWhenComposed(t *testing.T) {
 	if got := tools(); got != "context_for_task,source_evidence" {
 		t.Fatalf("tools without a reader: %s", got)
 	}
-	h.app.runtime.DirectFacts = newChaos7073Reader(t, admitAllGraph{}, chaos7073Provider{})
+	setChaos7073Reader(t, h, admitAllGraph{}, chaos7073Provider{})
 	if got := tools(); got != "context_for_task,read_facts,source_evidence" && got != "context_for_task,source_evidence,read_facts" {
 		t.Fatalf("tools with a reader: %s", got)
 	}
@@ -232,7 +233,7 @@ func TestChaos7073CapabilitiesAdvertiseReadFactsOnlyWhenComposed(t *testing.T) {
 func TestChaos7073FactsRouteRequiresDataStoresReady(t *testing.T) {
 	h := newChaos7071Harness(t, 100)
 	token := h.issue(t, []string{auth.ScopeContextRead}, nil).Token
-	h.app.runtime.DirectFacts = newChaos7073Reader(t, admitAllGraph{}, chaos7073Provider{})
+	setChaos7073Reader(t, h, admitAllGraph{}, chaos7073Provider{})
 	h.app.dataStoreChecks = []ReadinessCheck{
 		CheckFunc{CheckName: "clickhouse", Fn: func(context.Context) error { return errors.New("clickhouse: connection refused") }},
 	}

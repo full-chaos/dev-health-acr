@@ -14,13 +14,15 @@ import (
 // at most 8 kinds and 25 subjects fit far below this.
 const contextFabricDataFactsMaxRequestBytes = 32 << 10
 
-// directFacts returns the composed read_facts reader, or nil. Same nil
-// discipline as investigator(): a.runtime may itself be nil.
+// directFacts returns a read_facts reader over the composed direct-read
+// gate and fact reader, or nil when either is missing (the route then fails
+// closed). It is built per request: it holds no state of its own, and a gate
+// decision is per request anyway (CHAOS-7071).
 func (a *App) directFacts() *directread.FactsReader {
-	if a.runtime == nil || a.runtime.DirectFacts == nil {
+	if a.runtime == nil || a.runtime.DirectReadGate == nil || a.runtime.DirectFactReader == nil {
 		return nil
 	}
-	return a.runtime.DirectFacts
+	return directread.NewFactsReader(a.runtime.DirectReadGate, a.runtime.DirectFactReader, directread.NewSlogFactsRecorder(a.logger))
 }
 
 // contextFabricDataFactsHandler serves read_facts (CHAOS-7073). It runs only

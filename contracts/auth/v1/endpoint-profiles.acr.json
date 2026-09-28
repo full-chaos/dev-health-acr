@@ -667,15 +667,13 @@
       },
       "reachable_validators": [],
       "action": "context_fabric.data.facts.read",
-      "resource_resolver": "principal.OrgID; every subject id in the request passes the direct-read subject gate (CHAOS-7071) before any read.",
+      "resource_resolver": "principal.OrgID; every subject id in the request passes the direct-read subject gate (CHAOS-7071) before any read; every subject a served fact names (table rows, scalars, evidence) passes the same gate (CHAOS-7073 embedded-subject gate) and is removed with a rows_withheld count when refused.",
       "tenant_requirement": "org_scoped",
       "current_state_cache_behavior": null,
       "impersonation_policy": "not_applicable_non_main_app",
       "entitlement_requirement": "agentContextRuntimeEntitlement",
-      "disclosure_behavior": "writeError() closed envelope; a subject the caller may not read answers denied_or_not_found, identical for denied and absent.",
-      "gaps": [
-        "CHAOS-7071 (S0) registers this route with its full protection chain and a stub handler that answers 501 feature_not_enabled (details.reason=not_implemented); the handler is filled by S2 (read_facts)."
-      ]
+      "disclosure_behavior": "writeError() closed envelope; a subject the caller may not read answers denied_or_not_found, identical for denied and absent; a ClickHouse outage answers store_unavailable (requireDataStoresReady, CHAOS-6745) after authentication.",
+      "gaps": []
     },
     {
       "id": "POST /api/v1/context-fabric/data/operations [dev-health-acr-api]",
