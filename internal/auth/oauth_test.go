@@ -115,7 +115,7 @@ func webPrincipal(repositories []string) storage.Principal {
 // consent page would.
 func (h *oauthHarness) approveDevice(t *testing.T, hash storage.DeviceCodeHash, repositories []string) {
 	t.Helper()
-	if err := h.devices.ApproveForOAuth(context.Background(), webPrincipal(repositories), hash, repositories); err != nil {
+	if err := h.devices.ApproveForOAuth(context.Background(), webPrincipal(repositories), hash, repositories, oauthDefaultApprovalScopes); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -663,6 +663,7 @@ func TestNormalizeOAuthScope(t *testing.T) {
 		"context:read": "context:read", "evidence:read": "evidence:read",
 		"evidence:read context:read": "context:read evidence:read", "context:read context:read": "context:read",
 		"context:admin": "!", "context:read episode:write": "!", "CONTEXT:READ": "!", "context:read,evidence:read": "!",
+		"data:read": "data:read", "data:read context:read": "context:read data:read", "DATA:READ": "!",
 	} {
 		got, ok := NormalizeOAuthScope(raw)
 		if want == "!" {
@@ -675,7 +676,7 @@ func TestNormalizeOAuthScope(t *testing.T) {
 			t.Errorf("NormalizeOAuthScope(%q) = %q %v, want %q", raw, got, ok, want)
 		}
 	}
-	if !slices.Equal(oauthvocab.ScopeVocabulary(), []string{ScopeContextRead, ScopeEvidenceRead}) {
+	if !slices.Equal(oauthvocab.ScopeVocabulary(), []string{ScopeContextRead, ScopeEvidenceRead, ScopeDataRead}) {
 		t.Fatalf("oauthvocab scopes %v drifted from the auth scope constants", oauthvocab.ScopeVocabulary())
 	}
 }
@@ -826,11 +827,11 @@ func TestApproveForOAuthResumesOnlyALiveApproval(t *testing.T) {
 	}
 	repos := []string{"org/repo"}
 	h.approveDevice(t, started.DeviceCodeHash, repos)
-	if err := h.devices.ApproveForOAuth(context.Background(), webPrincipal(repos), started.DeviceCodeHash, repos); err != nil {
+	if err := h.devices.ApproveForOAuth(context.Background(), webPrincipal(repos), started.DeviceCodeHash, repos, oauthDefaultApprovalScopes); err != nil {
 		t.Fatalf("same approval again while live = %v, want nil", err)
 	}
 	h.now = h.now.Add(storage.DeviceAuthorizationTTL + time.Second)
-	if err := h.devices.ApproveForOAuth(context.Background(), webPrincipal(repos), started.DeviceCodeHash, repos); err == nil {
+	if err := h.devices.ApproveForOAuth(context.Background(), webPrincipal(repos), started.DeviceCodeHash, repos, oauthDefaultApprovalScopes); err == nil {
 		t.Fatal("an expired approval was accepted again")
 	}
 }

@@ -181,15 +181,15 @@ func (s *DeviceFlowService) Approve(ctx context.Context, request DeviceApprovalR
 	if !ok {
 		return storage.DeviceAuthorization{}, ErrInvalidDeviceFlow
 	}
-	return s.approveUserCodeHash(ctx, request.Principal, storage.HashUserCode(userCode), request.RepositoryScopes)
+	return s.approveUserCodeHash(ctx, request.Principal, storage.HashUserCode(userCode), request.RepositoryScopes, deviceApprovalScopes)
 }
 
 // approveUserCodeHash approves the pending device authorization behind a user
 // code hash for a web-assertion principal. The device approval page (by the
 // typed user code) and the OAuth consent page (by the request's handle) both
 // approve through it, so both apply the same org and repository rules.
-func (s *DeviceFlowService) approveUserCodeHash(ctx context.Context, principal storage.Principal, userCodeHash storage.UserCodeHash, repositoryScopes []string) (storage.DeviceAuthorization, error) {
-	if !validDeviceApprovalPrincipal(principal) {
+func (s *DeviceFlowService) approveUserCodeHash(ctx context.Context, principal storage.Principal, userCodeHash storage.UserCodeHash, repositoryScopes, scopes []string) (storage.DeviceAuthorization, error) {
+	if !validDeviceApprovalPrincipal(principal) || !validApprovalScopes(scopes) {
 		return storage.DeviceAuthorization{}, ErrInvalidDeviceFlow
 	}
 	repositories, err := NormalizeRepositoryScopes(repositoryScopes)
@@ -218,7 +218,7 @@ func (s *DeviceFlowService) approveUserCodeHash(ctx context.Context, principal s
 	record, err = s.store.Approve(ctx, userCodeHash, storage.DeviceAuthorizationGrant{
 		OrgID:                         principal.OrgID,
 		RepositoryScopes:              repositories,
-		Scopes:                        []string{ScopeContextRead, ScopeEvidenceRead},
+		Scopes:                        slices.Clone(scopes),
 		ApprovingSubject:              principal.Subject,
 		ApprovingAuthenticationMethod: storage.AuthenticationMethodWebAssertion,
 	})
@@ -287,4 +287,12 @@ func (DeviceAuthorizationStart) GoString() string { return deviceAuthorizationSt
 
 func (DeviceAuthorizationStart) LogValue() slog.Value {
 	return slog.StringValue(deviceAuthorizationStartRedacted)
+}
+
+// validApprovalScopes: an approval authorizes the default pair, optionally
+// plus ScopeDataRead (CHAOS-7071), in that order. Anything else is a caller
+// defect, refused rather than stored.
+func validApprovalScopes(scopes []string) bool {
+	return slices.Equal(scopes, oauthDefaultApprovalScopes) ||
+		slices.Equal(scopes, append(slices.Clone(oauthDefaultApprovalScopes), ScopeDataRead))
 }

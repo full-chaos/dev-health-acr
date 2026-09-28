@@ -31,7 +31,7 @@ func (s *stubConsentAuthority) StateForOAuth(context.Context, storage.DeviceCode
 	return s.state, s.stateErr
 }
 
-func (s *stubConsentAuthority) ApproveForOAuth(context.Context, storage.Principal, storage.DeviceCodeHash, []string) error {
+func (s *stubConsentAuthority) ApproveForOAuth(context.Context, storage.Principal, storage.DeviceCodeHash, []string, []string) error {
 	s.approvals++
 	return s.approveErr
 }

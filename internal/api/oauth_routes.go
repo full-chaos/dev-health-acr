@@ -77,7 +77,7 @@ func (a *App) handleOAuthMetadata(w http.ResponseWriter, _ *http.Request) {
 		TokenEndpoint:                     issuer + OAuthTokenPath,
 		RegistrationEndpoint:              issuer + OAuthRegisterPath,
 		DeviceAuthorizationEndpoint:       issuer + OAuthDeviceAuthorizationPath,
-		ScopesSupported:                   []string{auth.ScopeContextRead, auth.ScopeEvidenceRead},
+		ScopesSupported:                   []string{auth.ScopeContextRead, auth.ScopeEvidenceRead, auth.ScopeDataRead},
 		ResponseTypesSupported:            []string{"code"},
 		ResponseModesSupported:            []string{"query"},
 		GrantTypesSupported:               []string{"authorization_code", auth.OAuthDeviceCodeGrantType},

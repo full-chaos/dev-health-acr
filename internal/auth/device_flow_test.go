@@ -224,7 +224,9 @@ func TestDeviceFlow_Approve_persistsOrganizationWideGrantEvenWithRepositoryHints
 	require.Equal(t, storage.DeviceAuthorizationStateApproved, approved.State)
 	require.Equal(t, principal.OrgID, approved.AuthorizedOrgID)
 	require.Equal(t, principal.Subject, approved.ApprovingSubject)
-	require.Equal(t, []string{ScopeContextRead, ScopeEvidenceRead}, approved.AuthorizedScopes)
+	// CHAOS-7100: a typed-code approval authorizes the requestable ceiling;
+	// the credential carries only what the device grant requested.
+	require.Equal(t, []string{ScopeContextRead, ScopeEvidenceRead, ScopeDataRead}, approved.AuthorizedScopes)
 	require.Equal(t, storage.AuthenticationMethodWebAssertion, approved.ApprovingAuthenticationMethod)
 	require.Equal(t, storage.CredentialIssuanceProvenanceDeviceAuthorization, approved.IssuanceProvenance)
 	require.Equal(t, []string{"*"}, approved.AuthorizedRepositoryScopes)
