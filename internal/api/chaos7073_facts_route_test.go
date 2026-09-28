@@ -225,3 +225,18 @@ func TestChaos7073CapabilitiesAdvertiseReadFactsOnlyWhenComposed(t *testing.T) {
 		t.Fatalf("tools with a reader: %s", got)
 	}
 }
+
+// CHAOS-6745 placement: the facts route reads ClickHouse, so a ClickHouse
+// outage answers the typed, retryable store_unavailable 503 before any read,
+// and only after authentication (an unauthenticated caller learns nothing).
+func TestChaos7073FactsRouteRequiresDataStoresReady(t *testing.T) {
+	h := newChaos7071Harness(t, 100)
+	token := h.issue(t, []string{auth.ScopeContextRead}, nil).Token
+	h.app.runtime.DirectFacts = newChaos7073Reader(t, admitAllGraph{}, chaos7073Provider{})
+	h.app.dataStoreChecks = []ReadinessCheck{
+		CheckFunc{CheckName: "clickhouse", Fn: func(context.Context) error { return errors.New("clickhouse: connection refused") }},
+	}
+	response := h.postFacts(token, chaos7073ValidBody)
+	assertErrorResponse(t, response, http.StatusServiceUnavailable, "store_unavailable")
+	assertErrorResponse(t, h.postFacts("", chaos7073ValidBody), http.StatusUnauthorized, "invalid_token")
+}
