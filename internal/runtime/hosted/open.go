@@ -215,6 +215,10 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	}
 	// CHAOS-7071: the direct-read subject gate and fact reader.
 	directReadGate, directFactReader := buildDirectReads(investigator, request.options.Logger)
+	var directFacts *directread.FactsReader
+	if directReadGate != nil && directFactReader != nil {
+		directFacts = directread.NewFactsReader(directReadGate, directFactReader, directread.NewSlogFactsRecorder(request.options.Logger))
+	}
 	// Same typed-nil guard: workloadTokenExchange is a concrete
 	// *authverify.WorkloadTokenExchangeService, nil whenever CHAOS-4013 is
 	// unconfigured (see buildWorkloadTokenExchange's doc comment).
@@ -235,6 +239,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 			StoredResultGate:           storedResultGate,
 			DirectReadGate:             directReadGate,
 			DirectFactReader:           directFactReader,
+			DirectFacts:                directFacts,
 			OrgModelConfigs:            orgModelConfigs,
 			OrgModelRuntimeEvictor:     orgModelRuntimeEvictor,
 			// CHAOS-3786, codex round-1 P1(b): resultReuseInvalidator is
@@ -1303,5 +1308,16 @@ func buildDirectReads(investigator contextfabric.Investigator, logger *slog.Logg
 		}
 		return nil, nil
 	}
-	return directread.NewSubjectGate(authority, directread.NewSlogRecorder(logger)), directread.NewFactReader(facts)
+	gate := directread.NewSubjectGate(authority, directread.NewSlogRecorder(logger))
+	// CHAOS-7073: the direct fact reader reads through a registry with the
+	// scope expander OFF (FactCapabilityRegistry.WithoutScopeExpansion):
+	// derived subjects are not proved authorized on the direct path.
+	if registry, ok := facts.(*contextfabric.FactCapabilityRegistry); ok {
+		direct := registry.WithoutScopeExpansion()
+		return gate, directread.NewFactReader(direct)
+	}
+	if logger != nil {
+		logger.Error("context fabric direct read gate not composed", "reason", "fact_registry_unsupported")
+	}
+	return gate, nil
 }
