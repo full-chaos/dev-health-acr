@@ -28,6 +28,8 @@ const (
 	investigateQuestionResponseSchemaFile = "schemas/mcp_investigate_question_response.v1.schema.json"
 	investigationResultRequestSchemaFile  = "schemas/mcp_investigation_result_request.v1.schema.json"
 	investigationResultResponseSchemaFile = "schemas/mcp_investigation_result_response.v1.schema.json"
+	readFactsRequestSchemaFile            = "schemas/mcp_read_facts_request.v1.schema.json"
+	readFactsResponseSchemaFile           = "schemas/mcp_read_facts_response.v1.schema.json"
 	recordEpisodeRequestSchemaFile        = "schemas/mcp_record_episode_request.v1.schema.json"
 	recordEpisodeResponseSchemaFile       = "schemas/mcp_record_episode_response.v1.schema.json"
 	toolManifestFile                      = "schemas/tools.v1.json"

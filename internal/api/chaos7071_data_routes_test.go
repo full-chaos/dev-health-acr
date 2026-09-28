@@ -119,6 +119,18 @@ var chaos7071Routes = []struct {
 	{http.MethodPost, ContextFabricDataOperationsPath, auth.ScopeDataRead},
 }
 
+// assertChaos7071Answer asserts a route's protected-but-unserved answer. The
+// facts route (CHAOS-7073) answers a retryable 503 when no direct facts
+// reader is composed; the other routes still answer the S0 stub.
+func assertChaos7071Answer(t *testing.T, path string, response *httptest.ResponseRecorder) {
+	t.Helper()
+	if path == ContextFabricDataFactsPath {
+		assertErrorResponse(t, response, http.StatusServiceUnavailable, "upstream_unavailable")
+		return
+	}
+	assertChaos7071Stub(t, response)
+}
+
 func assertChaos7071Stub(t *testing.T, response *httptest.ResponseRecorder) {
 	t.Helper()
 	assertErrorResponse(t, response, http.StatusNotImplemented, "feature_not_enabled")
@@ -145,12 +157,12 @@ func TestChaos7071DataRoutesEnforceTheirScope(t *testing.T) {
 		dataResponse := h.call(route.method, route.path, dataOnly)
 		if route.scope == auth.ScopeDataRead {
 			assertErrorResponse(t, legacyResponse, http.StatusForbidden, "insufficient_scope")
-			assertChaos7071Stub(t, dataResponse)
+			assertChaos7071Answer(t, route.path, dataResponse)
 		} else {
-			assertChaos7071Stub(t, legacyResponse)
+			assertChaos7071Answer(t, route.path, legacyResponse)
 			assertErrorResponse(t, dataResponse, http.StatusForbidden, "insufficient_scope")
 		}
-		assertChaos7071Stub(t, h.call(route.method, route.path, both))
+		assertChaos7071Answer(t, route.path, h.call(route.method, route.path, both))
 	}
 }
 
@@ -164,8 +176,8 @@ func TestChaos7071DataRoutesRefuseMissingRevokedAndExpiredCredentials(t *testing
 	expiring := h.issue(t, all, &expiry)
 	for _, route := range chaos7071Routes {
 		assertErrorResponse(t, h.call(route.method, route.path, ""), http.StatusUnauthorized, "invalid_token")
-		assertChaos7071Stub(t, h.call(route.method, route.path, revoked.Token))
-		assertChaos7071Stub(t, h.call(route.method, route.path, expiring.Token))
+		assertChaos7071Answer(t, route.path, h.call(route.method, route.path, revoked.Token))
+		assertChaos7071Answer(t, route.path, h.call(route.method, route.path, expiring.Token))
 	}
 	if _, err := h.service.Revoke(context.Background(), "org_1", revoked.Credential.CredentialID, "test_actor"); err != nil {
 		t.Fatal(err)
@@ -195,7 +207,7 @@ func TestChaos7071OperationsRouteHasItsOwnRateClass(t *testing.T) {
 	token := h.issue(t, []string{auth.ScopeContextRead, auth.ScopeDataRead}, nil).Token
 	assertChaos7071Stub(t, h.call(http.MethodPost, ContextFabricDataOperationsPath, token))
 	assertErrorResponse(t, h.call(http.MethodPost, ContextFabricDataOperationsPath, token), http.StatusTooManyRequests, "rate_limited")
-	assertChaos7071Stub(t, h.call(http.MethodPost, ContextFabricDataFactsPath, token))
+	assertChaos7071Answer(t, ContextFabricDataFactsPath, h.call(http.MethodPost, ContextFabricDataFactsPath, token))
 	assertChaos7071Stub(t, h.call(http.MethodGet, ContextFabricDataCatalogPath, token))
 }
 

@@ -89,6 +89,9 @@ type RuntimeDependencies struct {
 	// handler then fails closed as unavailable, never reads ungated.
 	DirectReadGate   *directread.SubjectGate
 	DirectFactReader *directread.FactReader
+	// DirectFacts serves read_facts (CHAOS-7073), built once over the two
+	// above in hosted composition. Nil fails the route closed as unavailable.
+	DirectFacts *directread.FactsReader
 	// OrgModelConfigs is optional (CHAOS-3775) -- same convention as
 	// Investigator. When nil (no ACR_CONTEXT_FABRIC_CREDENTIAL_ENCRYPTION_KEYS
 	// configured), the model-config routes stay registered, authorized, and

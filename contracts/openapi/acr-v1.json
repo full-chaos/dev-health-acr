@@ -1184,7 +1184,7 @@
     "/api/v1/context-fabric/data/facts": {
       "post": {
         "operationId": "readContextFabricDataFacts",
-        "summary": "Direct fact read (read_facts). CHAOS-7071 (S0) registers the route and its protection chain only: every authorized request answers 501 feature_not_enabled with details.reason not_implemented until the slice that fills it lands.",
+        "summary": "Direct fact read (read_facts, CHAOS-7073). Returns registry facts for canonical subjects the caller may read, one coverage row per (kind, subject). No model runs. An unreadable subject and a missing one give the same answer. Malformed or out-of-bounds requests answer 400 invalid_request; a missing or failed fact reader answers a retryable 503 upstream_unavailable.",
         "x-required-scope": "context:read",
         "x-required-entitlement": "agent_context_runtime",
         "security": [
@@ -1200,7 +1200,30 @@
             "$ref": "#/components/parameters/ClientVersion"
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../jsonschema/v1/mcp_read_facts_request.v1.schema.json"
+              }
+            }
+          }
+        },
         "responses": {
+          "200": {
+            "description": "The acr-data.v1 read_facts document. status is complete, partial, denied or unavailable; read coverage before relying on facts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../jsonschema/v1/mcp_read_facts_response.v1.schema.json"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
           "401": {
             "$ref": "#/components/responses/Error"
           },
@@ -1211,9 +1234,6 @@
             "$ref": "#/components/responses/Error"
           },
           "429": {
-            "$ref": "#/components/responses/Error"
-          },
-          "501": {
             "$ref": "#/components/responses/Error"
           },
           "503": {

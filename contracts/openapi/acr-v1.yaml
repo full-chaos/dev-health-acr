@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 5714013793c3b5bf6a0ef81d564948e5e65a87554ab17516ff680acf5889840e
+# canonical-content-sha256: a1f55b439dcf68d5bba2ea7041c603be92e3a180608caac2f900a49b7fa8ebee
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -347,7 +347,21 @@ paths:
           "$ref": "#/components/parameters/RequestID"
         -
           "$ref": "#/components/parameters/ClientVersion"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              "$ref": "../jsonschema/v1/mcp_read_facts_request.v1.schema.json"
+        required: true
       responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "../jsonschema/v1/mcp_read_facts_response.v1.schema.json"
+          description: "The acr-data.v1 read_facts document. status is complete, partial, denied or unavailable; read coverage before relying on facts."
+        "400":
+          "$ref": "#/components/responses/Error"
         "401":
           "$ref": "#/components/responses/Error"
         "403":
@@ -356,14 +370,12 @@ paths:
           "$ref": "#/components/responses/Error"
         "429":
           "$ref": "#/components/responses/Error"
-        "501":
-          "$ref": "#/components/responses/Error"
         "503":
           "$ref": "#/components/responses/Error"
       security:
         -
           bearerAuth: []
-      summary: "Direct fact read (read_facts). CHAOS-7071 (S0) registers the route and its protection chain only: every authorized request answers 501 feature_not_enabled with details.reason not_implemented until the slice that fills it lands."
+      summary: "Direct fact read (read_facts, CHAOS-7073). Returns registry facts for canonical subjects the caller may read, one coverage row per (kind, subject). No model runs. An unreadable subject and a missing one give the same answer. Malformed or out-of-bounds requests answer 400 invalid_request; a missing or failed fact reader answers a retryable 503 upstream_unavailable."
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "context:read"
   "/api/v1/context-fabric/data/operations":
