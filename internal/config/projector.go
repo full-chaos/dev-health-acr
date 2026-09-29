@@ -231,6 +231,9 @@ func loadProjector(lookup lookupEnv, required requiredStores) (ProjectorConfig, 
 		cfg.PostgresPingTimeout = defaultProjectorPingTimeout
 	}
 	cfg.PostgresStartupAttempts, cfg.PostgresStartupBackoff = hosted.PostgresStartupAttempts, hosted.PostgresStartupBackoff
+	if cfg.PostgresStartupAttempts < 1 || cfg.PostgresStartupBackoff <= 0 {
+		return ProjectorConfig{}, errors.New("ACR_POSTGRES_STARTUP_ATTEMPTS must be at least 1 and ACR_POSTGRES_STARTUP_BACKOFF must be positive")
+	}
 	cfg.RequireBackingStores = hosted.RequireBackingStores
 	cfg.LocalCompositionReady = hosted.LocalCompositionReady
 

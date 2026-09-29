@@ -72,6 +72,7 @@ func TestOpenPriorsDB_clickHouseDSNFileUnreadableIsNeverRead(t *testing.T) {
 	t.Setenv("ACR_ENVIRONMENT", "development")
 	t.Setenv("ACR_POSTGRES_DSN", "postgres://nouser:nopass@127.0.0.1:1/nodb?sslmode=disable")
 	t.Setenv("ACR_POSTGRES_CONNECTION_KIND", "direct")
+	t.Setenv("ACR_POSTGRES_STARTUP_ATTEMPTS", "1")
 	t.Setenv("ACR_CLICKHOUSE_DSN_FILE", t.TempDir()+"/missing-clickhouse.dsn")
 	_, err := openPriorsDB(context.Background())
 	if err == nil {
@@ -96,6 +97,7 @@ func TestOpenPriorsDB_projectionEnabledWithoutOrgIDsDoesNotRefuse(t *testing.T) 
 	t.Setenv("ACR_ENVIRONMENT", "development")
 	t.Setenv("ACR_POSTGRES_DSN", "postgres://nouser:nopass@127.0.0.1:1/nodb?sslmode=disable")
 	t.Setenv("ACR_POSTGRES_CONNECTION_KIND", "direct")
+	t.Setenv("ACR_POSTGRES_STARTUP_ATTEMPTS", "1")
 	t.Setenv("ACR_CONTEXT_FABRIC_PROJECTION_ENABLED", "true")
 	_, err := openPriorsDB(context.Background())
 	if err == nil {
