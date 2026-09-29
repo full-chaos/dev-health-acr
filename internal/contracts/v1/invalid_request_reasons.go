@@ -23,12 +23,3 @@ func IsInvalidRequestReason(reason string) bool {
 	_, ok := invalidRequestReasons[reason]
 	return ok
 }
-
-// InvalidRequestReasons returns the vocabulary members (for drift tests).
-func InvalidRequestReasons() []string {
-	out := make([]string, 0, len(invalidRequestReasons))
-	for reason := range invalidRequestReasons {
-		out = append(out, reason)
-	}
-	return out
-}
