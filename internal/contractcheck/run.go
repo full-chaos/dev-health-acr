@@ -39,6 +39,8 @@ var exampleSchemaPairs = map[string]string{
 	"mcp_investigation_result_response.v1.json":                "mcp_investigation_result_response.v1.schema.json",
 	"mcp_read_facts_request.v1.json":                           "mcp_read_facts_request.v1.schema.json",
 	"mcp_read_facts_response.v1.json":                          "mcp_read_facts_response.v1.schema.json",
+	"mcp_read_relationships_request.v1.json":                   "mcp_read_relationships_request.v1.schema.json",
+	"mcp_read_relationships_response.v1.json":                  "mcp_read_relationships_response.v1.schema.json",
 	"evaluation_demo.v1.json":                                  "evaluation_demo.v1.schema.json",
 	"mcp_data_catalog_request.v1.json":                         "mcp_data_catalog_request.v1.schema.json",
 	"mcp_data_catalog_response.v1.json":                        "mcp_data_catalog_response.v1.schema.json",

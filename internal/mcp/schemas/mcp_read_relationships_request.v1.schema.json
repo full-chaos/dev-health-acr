@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/acr/v1/mcp_read_relationships_request.v1.schema.json",
+  "title": "ACR MCP read_relationships Request v1",
+  "description": "Input for the read_relationships tool: one canonical subject, optional relation types, direction, depth, time point and page controls.",
+  "examples": [
+    {
+      "subject": {
+        "kind": "repository",
+        "canonical_id": "repo-payments-api"
+      },
+      "types": [
+        "BELONGS_TO_PROJECT",
+        "OWNED_BY_TEAM"
+      ],
+      "direction": "both",
+      "depth": 1,
+      "limit": 50
+    }
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "subject"
+  ],
+  "properties": {
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "canonical_id"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Subject kind, as returned by find_subjects."
+        },
+        "canonical_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Canonical id, as returned by find_subjects. Never build or guess one."
+        }
+      },
+      "description": "The one subject whose edges are read. Take it from find_subjects. A subject you may not read and one that does not exist give the same answer."
+    },
+    "types": {
+      "type": "array",
+      "maxItems": 12,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "BELONGS_TO_PROJECT",
+          "BELONGS_TO_PULL_REQUEST",
+          "BELONGS_TO_REPOSITORY",
+          "BLOCKS",
+          "CORRELATED_WITH_INCIDENT",
+          "DOCUMENTED_BY",
+          "DUPLICATES",
+          "HAS_EPISODE",
+          "OWNED_BY_TEAM",
+          "PART_OF",
+          "RELATED_TO",
+          "RELATES_TO"
+        ]
+      },
+      "description": "Relation types to read. Omit it to read every type."
+    },
+    "direction": {
+      "enum": [
+        "out",
+        "in",
+        "both"
+      ],
+      "description": "out follows edges that leave the subject, in follows edges that arrive at it, both follows either. Default both."
+    },
+    "depth": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2,
+      "description": "1 reads the subject's own edges; 2 also reads the edges of its visible neighbours. Default 1."
+    },
+    "as_of": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 time point. Omit it to read current edges."
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100,
+      "description": "Edges per page (1 to 100). Default 50."
+    },
+    "cursor": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "description": "The page.next_cursor of the previous page of the same request. Send the same other fields."
+    }
+  }
+}

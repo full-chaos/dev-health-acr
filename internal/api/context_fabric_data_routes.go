@@ -33,6 +33,10 @@ const ContextFabricDataFactsPath = "/api/v1/context-fabric/data/facts"
 
 const ContextFabricDataOperationsPath = "/api/v1/context-fabric/data/operations"
 
+// ContextFabricDataRelationshipsPath serves read_relationships (CHAOS-7074):
+// context:read, Context class.
+const ContextFabricDataRelationshipsPath = "/api/v1/context-fabric/data/relationships"
+
 // contextFabricDataNotImplementedReason is the details.reason of a stub
 // answer. The error code is the existing feature_not_enabled, so the error
 // contract's closed code set does not change in S0.

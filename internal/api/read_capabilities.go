@@ -69,6 +69,10 @@ func (a *App) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	if entitled && auth.HasScope(principal.Permissions, auth.ScopeDataRead) && a.dataOperations() != nil && a.dataGateComposed() {
 		capabilities.EnabledTools = append(capabilities.EnabledTools, "run_operation")
 	}
+	// CHAOS-7074: read_relationships needs its composed reader.
+	if entitled && capabilities.Permissions.ContextRead && a.directRelationships() != nil {
+		capabilities.EnabledTools = append(capabilities.EnabledTools, "read_relationships")
+	}
 	if entitled && capabilities.Permissions.EpisodeWrite && a.runtime.Episodes != nil {
 		capabilities.EnabledTools = append(capabilities.EnabledTools, "record_episode")
 	}

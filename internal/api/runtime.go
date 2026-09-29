@@ -104,6 +104,10 @@ type RuntimeDependencies struct {
 	DataCatalogue  *directread.Catalogue
 	DataOperations DataOperationRunner
 	DataSubjects   DataSubjectFinder
+	// DirectRelationships serves read_relationships (CHAOS-7074) over the
+	// same gate. Nil when the graph cannot serve bounded edge pages; the
+	// route then fails closed as unavailable.
+	DirectRelationships *directread.RelationshipsReader
 	// OrgModelConfigs is optional (CHAOS-3775) -- same convention as
 	// Investigator. When nil (no ACR_CONTEXT_FABRIC_CREDENTIAL_ENCRYPTION_KEYS
 	// configured), the model-config routes stay registered, authorized, and

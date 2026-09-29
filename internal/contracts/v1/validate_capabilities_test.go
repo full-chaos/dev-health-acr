@@ -66,7 +66,7 @@ func TestCapabilitiesValidateRejectsOtherwiseEmptyValue(t *testing.T) {
 // The test asserts the full closed set rather than only the two new names,
 // so removing an existing name is caught here too.
 func TestCapabilitiesAcceptsTheAnswerToolNames(t *testing.T) {
-	for _, name := range []string{"context_for_task", "source_evidence", "investigate_question", "investigation_result", "record_episode"} {
+	for _, name := range []string{"context_for_task", "source_evidence", "investigate_question", "investigation_result", "read_relationships", "record_episode"} {
 		if !validEnabledTool(name) {
 			t.Errorf("enabled_tools rejects %q, which the hosted API can advertise", name)
 		}

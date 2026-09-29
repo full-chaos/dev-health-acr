@@ -2282,6 +2282,54 @@ var DirectRead = Event{
 	},
 }
 
+// The read_relationships vocabularies (CHAOS-7074), from gatevocab.
+var (
+	directRelationshipsStatusArr   = gatevocab.RelationshipsStatusVocabulary()
+	directRelationshipsWithheldArr = gatevocab.EdgeWithheldReasonVocabulary()
+	directRelationshipsCursorArr   = gatevocab.CursorOutcomeVocabulary()
+	directRelationshipsFailureArr  = gatevocab.RelationshipsFailureClassVocabulary()
+)
+
+// DirectRelationshipsRead records one read_relationships page (CHAOS-7036
+// C.6, E.4, J.3): what the walk examined, what it served, and how many edges
+// each clause of the edge gate withheld. It also carries what the page did
+// with its cursor (design J.3's cursor outcomes), so a request writes one
+// line. Counts and closed vocabularies only: never a subject id, label or
+// relationship id.
+var DirectRelationshipsRead = Event{
+	ID: "contextfabric.direct_relationships_read", Msg: gatevocab.RelationshipsReadLogMessage, Level: LevelInfo,
+	Multiplicity: MultiplicityExactlyOnePerRequest, Attribution: []string{"org_id"},
+	BoundedAggregation: "one line per read_relationships request; counts and closed vocabularies only, never ids, labels or relationship ids",
+	Fields: []Field{
+		{Key: "tool", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"read_relationships"}},
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "principal_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(directReadPrincipalClassArr[:])},
+		{Key: "status", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(directRelationshipsStatusArr[:])},
+		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired, Applicability: "empty when the request was refused before its subject was read"},
+		{Key: "depth", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "hop", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "type_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "direction", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"", "out", "in", "both"}},
+		{Key: "window_mode", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"", "current", "as_of"}},
+		{Key: "edges_examined", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "edges_returned", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "edges_not_visible", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "edges_withheld_reasons", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(directRelationshipsWithheldArr[:])},
+		{Key: "edges_withheld_attributes", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "edges_withheld_source", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "edges_withheld_target", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "evidence_refs_withheld", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "end_nodes_gated", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "end_nodes_refused", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "latency_ms", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "truncated_by", Type: FieldString, Presence: PresenceConditional, Applicability: "written when a bound cut a depth-2 walk", ClosedVocabulary: []string{"frontier_cap", "frontier_scan_cap"}},
+		{Key: "cursor_in", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request carried a cursor", ClosedVocabulary: arrayTokens(directRelationshipsCursorArr[:])},
+		{Key: "cursor_out", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the page returned a next cursor", ClosedVocabulary: []string{"issued"}},
+		{Key: "failure_class", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the read was unavailable or its gate proof was refused", ClosedVocabulary: arrayTokens(directRelationshipsFailureArr[:])},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
 // The evidence-expansion vocabularies, each derived from the one array its
 // producer declares.
 var (
@@ -2760,6 +2808,7 @@ var All = []Event{
 	WorkItemStoredServing,
 	StoredResultAuthorization,
 	DirectReadAuthorization,
+	DirectRelationshipsRead,
 	OperationRead,
 	DirectRead,
 	EvidenceExpansion,

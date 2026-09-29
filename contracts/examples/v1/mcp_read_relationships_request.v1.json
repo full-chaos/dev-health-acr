@@ -1,0 +1,13 @@
+{
+  "subject": {
+    "kind": "repository",
+    "canonical_id": "repo-payments-api"
+  },
+  "types": [
+    "BELONGS_TO_PROJECT",
+    "OWNED_BY_TEAM"
+  ],
+  "direction": "both",
+  "depth": 1,
+  "limit": 50
+}

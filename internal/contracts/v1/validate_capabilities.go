@@ -58,7 +58,7 @@ func validEnabledTool(name string) bool {
 	//
 	// CHAOS-7072 (S1a) added the direct data tools data_catalog,
 	// find_subjects and run_operation (design CHAOS-7036 E.5).
-	case "context_for_task", "source_evidence", "investigate_question", "investigation_result", "read_facts", "record_episode",
+	case "context_for_task", "source_evidence", "investigate_question", "investigation_result", "read_facts", "read_relationships", "record_episode",
 		"data_catalog", "find_subjects", "run_operation":
 		return true
 	default:

@@ -188,6 +188,8 @@ func goVarName(e Event) string {
 		return "OperationRead"
 	case DirectRead.ID:
 		return "DirectRead"
+	case DirectRelationshipsRead.ID:
+		return "DirectRelationshipsRead"
 	case EvidenceExpansion.ID:
 		return "EvidenceExpansion"
 	case CountPopulationScope.ID:

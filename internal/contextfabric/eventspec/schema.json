@@ -1791,6 +1791,205 @@
     ]
   },
   {
+    "id": "contextfabric.direct_relationships_read",
+    "msg": "context fabric direct relationships read",
+    "level": "info",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "one line per read_relationships request; counts and closed vocabularies only, never ids, labels or relationship ids",
+    "fields": [
+      {
+        "key": "tool",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "read_relationships"
+        ]
+      },
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "principal_class",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "unrestricted",
+          "universal",
+          "restricted"
+        ]
+      },
+      {
+        "key": "status",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "complete",
+          "partial",
+          "denied",
+          "unavailable",
+          "invalid"
+        ]
+      },
+      {
+        "key": "subject_kind",
+        "type": "string",
+        "presence": "required",
+        "applicability": "empty when the request was refused before its subject was read"
+      },
+      {
+        "key": "depth",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "hop",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "type_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "direction",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "out",
+          "in",
+          "both"
+        ]
+      },
+      {
+        "key": "window_mode",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "current",
+          "as_of"
+        ]
+      },
+      {
+        "key": "edges_examined",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "edges_returned",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "edges_not_visible",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "edges_withheld_reasons",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "edge_attributes",
+          "source_not_visible",
+          "target_not_visible"
+        ]
+      },
+      {
+        "key": "edges_withheld_attributes",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "edges_withheld_source",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "edges_withheld_target",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "evidence_refs_withheld",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "end_nodes_gated",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "end_nodes_refused",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "latency_ms",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "truncated_by",
+        "type": "string",
+        "presence": "conditional",
+        "closed_vocabulary": [
+          "frontier_cap",
+          "frontier_scan_cap"
+        ],
+        "applicability": "written when a bound cut a depth-2 walk"
+      },
+      {
+        "key": "cursor_in",
+        "type": "string",
+        "presence": "conditional",
+        "closed_vocabulary": [
+          "issued",
+          "accepted",
+          "expired",
+          "stale",
+          "invalid",
+          "foreign_org"
+        ],
+        "applicability": "written when the request carried a cursor"
+      },
+      {
+        "key": "cursor_out",
+        "type": "string",
+        "presence": "conditional",
+        "closed_vocabulary": [
+          "issued"
+        ],
+        "applicability": "written when the page returned a next cursor"
+      },
+      {
+        "key": "failure_class",
+        "type": "string",
+        "presence": "conditional",
+        "closed_vocabulary": [
+          "gate_unavailable",
+          "graph_read",
+          "gate_decision_refused"
+        ],
+        "applicability": "written when the read was unavailable or its gate proof was refused"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.evidence_expansion",
     "msg": "context fabric evidence expansion",
     "level": "info",
@@ -7883,6 +8082,7 @@
           "investigate_question",
           "investigation_result",
           "read_facts",
+          "read_relationships",
           "record_episode",
           "other"
         ]
