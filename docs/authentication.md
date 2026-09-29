@@ -208,4 +208,16 @@ The runtime database role needs `SELECT, INSERT, UPDATE` on
 
 ## Rate limiting
 
-The auth package exposes an attempt/failure limiter and includes a deterministic in-memory implementation for tests and local operation. Production shared rate-limit storage is owned by the platform observability/rate-limit work and must preserve the same pre-lookup attempt ceiling.
+The per-address gate on every authenticated route, including `/mcp` `initialize`, exists against credential guessing. It counts **failed** authentications per client address (missing, malformed, unknown, revoked, expired or resource-mismatched credential, invalid or replayed web assertion). A request with a valid, unexpired credential does not consume it, so any number of valid-token requests from one address succeed. A success does not reset the count: after the limit is reached, every request from that address, valid or not, gets `429` (`rate_limited`, with `Retry-After`) until the window ends.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `ACR_AUTH_FAILURES_PER_WINDOW` | `min(20, ACR_*_REQUESTS_PER_WINDOW default)` | failed authentications per address per window |
+| `ACR_AUTH_LIMIT_WINDOW` (falls back to `ACR_LIMIT_WINDOW`) | `1m` | fixed window; the count resets when the window ends |
+| `ACR_AUTH_MAX_TRACKED_KEYS` | `4096` | tracked addresses; at capacity new addresses are refused until windows expire |
+
+`ACR_AUTH_REQUESTS_PER_WINDOW` no longer limits per-address traffic; it bounds only the per-subject budget of web-assertion sessions.
+
+The auth package includes a deterministic in-memory implementation. Production shared rate-limit storage is owned by the platform observability/rate-limit work and must preserve the same failure-only per-address ceiling.
+
+Proof runs and other scripted clients should reuse one MCP session (one `initialize`, then many `tools/call`) where they can, and should present a valid token: a run that retries with a bad token spends the failure budget for its whole address (a shared proxy or NAT address is shared by every client behind it).

@@ -95,7 +95,13 @@ func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		now := a.now().UTC()
 		ip := a.clientIP(r)
-		if !a.limiter.AllowAttempt(ip, now) || a.limiter.FailureBlocked(ip, now) {
+		// The per-address gate exists against credential guessing, so it
+		// counts FAILED authentications only. A request is never charged
+		// against the address up front: a valid credential does not consume
+		// the budget, and every refusal below reaches RecordFailure. A success
+		// does not reset the count either, so a guessing burst cannot be
+		// laundered through one valid token.
+		if a.limiter.FailureBlocked(ip, now) {
 			a.writeRateLimitError(w, r, a.limiter.RetryAfter(ip, now))
 			return
 		}
