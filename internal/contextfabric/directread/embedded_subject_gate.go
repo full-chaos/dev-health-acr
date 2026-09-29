@@ -281,9 +281,45 @@ func resolveEvidence(subject contextfabric.SubjectRef, id string) (ref embeddedR
 		// Gated by the organization rule (only the caller's own
 		// organization), never assumed own.
 		return embeddedRef{kind: contractsv1.ContextFabricSubjectOrganization, canonical: raw}, true, false
+	// Entity evidence (CHAOS-7120). Each form maps DETERMINISTICALLY to the
+	// canonical id the graph stores for that entity, which is then compared
+	// with the fact's own subject or gated like any other subject -- never
+	// assumed own because the kinds match (codex r1 P1 on CHAOS-7073).
+	case contractsv1.ContextFabricEvidenceEntityWorkItem:
+		return resolveRepoScopedEvidence(subject, raw, identity.KindWorkItem, contractsv1.ContextFabricSubjectWorkItem)
+	case contractsv1.ContextFabricEvidenceEntityCI:
+		return resolveRepoScopedEvidence(subject, raw, identity.KindCIPipelineRun, contractsv1.ContextFabricSubjectCIRun)
+	case contractsv1.ContextFabricEvidenceEntityDeployment:
+		return resolveRepoScopedEvidence(subject, raw, identity.KindDeployment, contractsv1.ContextFabricSubjectDeployment)
+	case contractsv1.ContextFabricEvidenceEntityPullRequest:
+		// "<repo_id>:<number>"; the stored id is "pull_request:<repo_id>:<number>"
+		// (devhealthsource/tables.go queryPullRequests).
+		repo, number, split := strings.Cut(raw, ":")
+		if !split || repo == "" || !decimalDigits(number) {
+			return embeddedRef{}, false, false
+		}
+		return ownOrGated(subject, contractsv1.ContextFabricSubjectPullRequest, "pull_request:"+raw)
+	case contractsv1.ContextFabricEvidenceEntityIncident:
+		// "<incident_id>"; the stored id is "incident:<incident_id>"
+		// (devhealthsource/tables.go queryIncidents).
+		return ownOrGated(subject, contractsv1.ContextFabricSubjectIncident, "incident:"+raw)
+	case contractsv1.ContextFabricEvidenceEntityReview:
+		// "<repo_id>:<review_id>" lacks the pull request number the stored
+		// id carries, so no canonical id can be derived. It is recognised
+		// only as the fact's OWN review, by the subject's own segments; any
+		// other review reference is unresolvable (withheld for a
+		// repository-restricted caller).
+		if subject.Kind == contractsv1.ContextFabricSubjectPullRequestReview {
+			if segments, parsed := identity.Segments(identity.KindPullRequestReview, subject.CanonicalID); parsed && len(segments) == 3 &&
+				segments[0] != "" && segments[2] != "" && raw == segments[0]+":"+segments[2] {
+				return embeddedRef{}, true, true
+			}
+		}
+		return embeddedRef{}, false, false
 	default:
-		// Row-level evidence (a work item, a pull request, a CI run) names a
-		// source row, not a subject the root gate decided: opaque.
+		// Evidence that names no subject the gate can decide (a work item
+		// dependency edge, a commit, a file) is opaque: withheld for a
+		// repository-restricted caller.
 		return embeddedRef{opaque: true}, true, false
 	}
 	canonical, mapped := form.CanonicalSubjectID(raw)
@@ -294,6 +330,42 @@ func resolveEvidence(subject contextfabric.SubjectRef, id string) (ref embeddedR
 		return embeddedRef{}, true, true
 	}
 	return embeddedRef{kind: kind, canonical: canonical}, true, false
+}
+
+// resolveRepoScopedEvidence maps "<repo_id>:<entity_id>" evidence to the
+// v2 canonical id of kind. The repository uuid carries no ':', so the raw
+// value is cut at its FIRST colon; the entity id may contain more.
+func resolveRepoScopedEvidence(subject contextfabric.SubjectRef, raw, kind string, subjectKind contextfabric.SubjectKind) (embeddedRef, bool, bool) {
+	repo, id, split := strings.Cut(raw, ":")
+	if !split || repo == "" || id == "" {
+		return embeddedRef{}, false, false
+	}
+	canonical, omitted, err := identity.Derive(kind, []string{repo, id}, nil)
+	if err != nil || omitted {
+		return embeddedRef{}, false, false
+	}
+	return ownOrGated(subject, subjectKind, canonical)
+}
+
+// ownOrGated reports a reference as the fact's own when it is exactly the
+// fact's subject, and otherwise returns it for the subject gate.
+func ownOrGated(subject contextfabric.SubjectRef, kind contextfabric.SubjectKind, canonical string) (embeddedRef, bool, bool) {
+	if subject.Kind == kind && subject.CanonicalID == canonical {
+		return embeddedRef{}, true, true
+	}
+	return embeddedRef{kind: kind, canonical: canonical}, true, false
+}
+
+func decimalDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func filterFact(fact contextfabric.CanonicalFact, capability contextfabric.FactCapability, allows func(embeddedRef, bool) bool) GatedFact {
