@@ -458,15 +458,28 @@ func TestLoadProjector_rejectsInvalidPostgresStartupRetry(t *testing.T) {
 		for _, bad := range []map[string]string{
 			{"ACR_POSTGRES_STARTUP_ATTEMPTS": "0"},
 			{"ACR_POSTGRES_STARTUP_BACKOFF": "0s"},
+			{"ACR_POSTGRES_STARTUP_ATTEMPTS": "-1"},
+			{"ACR_POSTGRES_STARTUP_BACKOFF": "-1s"},
+			{"ACR_POSTGRES_STARTUP_ATTEMPTS": "abc"},
 		} {
 			env := map[string]string{"ACR_ENVIRONMENT": "development", "ACR_LOCAL_COMPOSITION_READY": "true"}
 			for k, v := range bad {
 				env[k] = v
 			}
 			_, err := load(mapLookup(env))
-			if err == nil || !strings.Contains(err.Error(), "ACR_POSTGRES_STARTUP_ATTEMPTS must be at least 1") {
+			if err == nil || !strings.Contains(err.Error(), "ACR_POSTGRES_STARTUP_ATTEMPTS") {
 				t.Fatalf("%s(%v) error = %v, want a startup retry refusal", name, bad, err)
 			}
+		}
+	}
+}
+
+func TestLoadProjector_unsetPostgresStartupRetryUsesDefaults(t *testing.T) {
+	env := map[string]string{"ACR_ENVIRONMENT": "development", "ACR_LOCAL_COMPOSITION_READY": "true"}
+	for name, req := range map[string]requiredStores{"LoadProjector": requiredStoresAll, "LoadProjectorPriors": requiredStoresPostgresOnly} {
+		cfg, err := loadProjector(mapLookup(env), req)
+		if err != nil || cfg.PostgresStartupAttempts != defaultHostedPostgresStartupAttempts || cfg.PostgresStartupBackoff != defaultHostedPostgresStartupBackoff {
+			t.Fatalf("%s: err=%v attempts=%d backoff=%v, want defaults", name, err, cfg.PostgresStartupAttempts, cfg.PostgresStartupBackoff)
 		}
 	}
 }

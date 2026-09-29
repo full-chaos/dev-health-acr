@@ -162,8 +162,8 @@ func validateHostedRuntime(cfg Config) error {
 		return errors.New("ACR_POSTGRES_MAX_IDLE_CONNS must not exceed ACR_POSTGRES_MAX_OPEN_CONNS")
 	case cfg.PostgresConnMaxLifetime < 0 || cfg.PostgresConnMaxIdleTime < 0 || cfg.PostgresPingTimeout < 0:
 		return errors.New("ACR PostgreSQL pool durations must not be negative")
-	case cfg.PostgresStartupAttempts < 1 || cfg.PostgresStartupBackoff <= 0:
-		return errors.New("ACR_POSTGRES_STARTUP_ATTEMPTS must be at least 1 and ACR_POSTGRES_STARTUP_BACKOFF must be positive")
+	case validatePostgresStartupRetry(cfg.PostgresStartupAttempts, cfg.PostgresStartupBackoff) != nil:
+		return validatePostgresStartupRetry(cfg.PostgresStartupAttempts, cfg.PostgresStartupBackoff)
 	case connectionKindErr != nil:
 		return connectionKindErr
 	default:
@@ -225,4 +225,15 @@ func (c Config) SafeAttributes() []any {
 		"oauth_consent_url_configured", c.OAuthConsentURL != "",
 		"oauth_client_metadata_documents", c.OAuthClientMetadataDocuments,
 	}
+}
+
+// validatePostgresStartupRetry is the ONE check for the startup retry
+// settings, called by every loader that carries them (acr-api, projector,
+// projector priors). Zero-value defaults stay only at the retry helper for
+// direct in-code callers (CHAOS-7184).
+func validatePostgresStartupRetry(attempts int, backoff time.Duration) error {
+	if attempts < 1 || backoff <= 0 {
+		return errors.New("ACR_POSTGRES_STARTUP_ATTEMPTS must be at least 1 and ACR_POSTGRES_STARTUP_BACKOFF must be positive")
+	}
+	return nil
 }
