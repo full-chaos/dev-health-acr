@@ -3041,6 +3041,20 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		e.recordPlanNarrowing(ctx, principal, PlanNarrowingEventFrom(plan, contractsv1.ContextFabricPlanNarrowingCardinality, graphRequest.Options.MaxCohortMembers, clamped, false, false, "", ""))
 		graphRequest.Options.MaxCohortMembers = clamped
 	}
+	// CHAOS-7080: the fact registry authorizes no subject, so every
+	// committed root is re-checked, live, against the caller's grant. It
+	// runs BEFORE graph discovery, so discovery, the graph context
+	// (graphContext.Resolution, paths, drivers, cohort), the fact read and
+	// synthesis are all built from the admitted roots only: a refused root
+	// never reaches any of them (review round 1 found it reaching synthesis
+	// when the re-check ran after discovery). A refused root is removed from
+	// the turn, and a turn left with no subject ends on the same
+	// zero-subject terminal a resolver refusal gives -- the caller sees no
+	// existence signal (fact_root_recheck.go).
+	resolution, err = e.recheckCommittedRoots(ctx, principal, resolution)
+	if err != nil {
+		return InvestigationResult{}, stageError(StageFactRead, err)
+	}
 	var graphContext GraphContext
 	var tupleCensus *WorkItemTupleCensus
 	if workItemTuple {
@@ -3104,16 +3118,6 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// Checked on the SUBJECT LIST, not on Committed alone: a subjectless
 	// cohort discovery commits nothing yet has perfectly good subjects to
 	// read facts for, and it must keep running.
-	// CHAOS-7080: the fact registry authorizes no subject, so every
-	// committed root is re-checked, live, against the caller's grant before
-	// any fact is read for it. A refused root is removed from the turn, and
-	// a turn left with no subject ends on the same zero-subject terminal a
-	// resolver refusal gives -- the caller sees no existence signal
-	// (fact_root_recheck.go).
-	resolution, err = e.recheckCommittedRoots(ctx, principal, resolution)
-	if err != nil {
-		return InvestigationResult{}, stageError(StageFactRead, err)
-	}
 	subjects := investigationSubjects(resolution, graphContext.Cohort)
 	if workItemTuple {
 		subjects = workItemTupleSubjects(graphContext.Cohort)

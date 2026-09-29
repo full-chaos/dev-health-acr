@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +17,7 @@ import (
 // chaos7080Engine is mustEngineForPriorReceiptTest's engine with a fact
 // reader that records every request, so a test can assert which subjects
 // the registry was asked to read.
-func chaos7080Engine(t *testing.T, graph GraphReader, reads *[]CanonicalFactRequest, telemetry EngineTelemetry) *Engine {
+func chaos7080Engine(t *testing.T, graph GraphReader, reads *[]CanonicalFactRequest, telemetry EngineTelemetry, synthesized ...*[]SynthesisInput) *Engine {
 	t.Helper()
 	interpretation := InterpretedQuestion{
 		Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent},
@@ -34,7 +35,10 @@ func chaos7080Engine(t *testing.T, graph GraphReader, reads *[]CanonicalFactRequ
 				Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{},
 			}, nil
 		}),
-		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+		Synthesizer: synthesizerFunc(func(_ context.Context, _ storage.Principal, input SynthesisInput) (InvestigationResult, error) {
+			for _, sink := range synthesized {
+				*sink = append(*sink, input)
+			}
 			return InvestigationResult{
 				Status: InvestigationComplete, DirectJudgment: "Nominal.", CurrentState: "Nominal.",
 				StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{},
@@ -259,5 +263,67 @@ func TestChaos7080GraphWithoutAuthorizerFailsClosedForRestrictedCaller(t *testin
 	var unrestrictedReads []CanonicalFactRequest
 	if _, err := chaos7080Engine(t, plain, &unrestrictedReads, &recordingTelemetry{}).Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest()); err != nil || len(unrestrictedReads) == 0 {
 		t.Fatalf("unrestricted caller, no authorizer: err %v, %d reads, want a normal read", err, len(unrestrictedReads))
+	}
+}
+
+// discoveryRecordingGraph records the resolution every DiscoverContext call
+// is given, and echoes it back as the graph context's resolution the way a
+// real reader would build paths and drivers from it.
+type discoveryRecordingGraph struct {
+	*storedSubjectGraph
+	discovered [][]SubjectRef
+}
+
+func (g *discoveryRecordingGraph) DiscoverContext(ctx context.Context, principal storage.Principal, request GraphDiscoveryRequest) (GraphContext, error) {
+	g.discovered = append(g.discovered, slices.Clone(request.Resolution.Committed))
+	graphContext, err := g.storedSubjectGraph.DiscoverContext(ctx, principal, request)
+	graphContext.Resolution = request.Resolution
+	return graphContext, err
+}
+
+// Review round 1, P1: a refused root must not reach graph discovery or
+// synthesis, not only the served subject list. One denied project and one
+// admitted repository are committed; the project must be absent from the
+// discovery request, the fact read, the synthesis input (its graph context
+// included) and the served result, while the repository is read and
+// synthesized normally.
+func TestChaos7080RefusedRootNeverReachesDiscoveryOrSynthesis(t *testing.T) {
+	restricted := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"acme/allowed"}}
+	inner, project := chaos7080ProjectGraph(StoredSubjectDenied, nil)
+	repo := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:acme/allowed", Label: "acme/allowed"}
+	inner.resolution.Committed = []SubjectRef{project, repo}
+	inner.resolution.Candidates = []SubjectCandidate{
+		{ReceiptID: "receipt_pay00001", Subject: project, State: ResolutionCommitted, MatchReasons: []string{"exact"}, Confidence: 1},
+		{ReceiptID: "receipt_rep00001", Subject: repo, State: ResolutionCommitted, MatchReasons: []string{"exact"}, Confidence: 1},
+	}
+	inner.outcomes[SubjectMapKey(repo)] = StoredSubjectAdmitted
+	graph := &discoveryRecordingGraph{storedSubjectGraph: inner}
+	var reads []CanonicalFactRequest
+	var synthesized []SynthesisInput
+	got, err := chaos7080Engine(t, graph, &reads, &recordingTelemetry{}, &synthesized).Investigate(context.Background(), restricted, validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	mentions := func(value any) bool {
+		encoded, _ := json.Marshal(value)
+		return strings.Contains(string(encoded), project.CanonicalID) || strings.Contains(string(encoded), project.Label)
+	}
+	if len(graph.discovered) != 1 || slices.Contains(graph.discovered[0], project) || !slices.Contains(graph.discovered[0], repo) {
+		t.Fatalf("discovery was given %v, want the admitted repository only", graph.discovered)
+	}
+	if len(reads) == 0 || mentions(reads) {
+		t.Fatalf("fact reads %d, mention refused root %t", len(reads), mentions(reads))
+	}
+	if len(synthesized) != 1 {
+		t.Fatalf("%d synthesis calls, want 1", len(synthesized))
+	}
+	if mentions(synthesized[0]) {
+		t.Fatalf("the synthesis input names the refused root: graph resolution %v", synthesized[0].Graph.Resolution.Committed)
+	}
+	if !slices.Contains(synthesized[0].Graph.Resolution.Committed, repo) {
+		t.Fatalf("the synthesis input lost the admitted repository: %v", synthesized[0].Graph.Resolution.Committed)
+	}
+	if mentions(got) {
+		t.Fatal("the served result names the refused root")
 	}
 }
