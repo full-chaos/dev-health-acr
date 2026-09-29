@@ -265,6 +265,40 @@ func TestChaos3826_DrainLogLevelKeysOnAppliedNotBatches(t *testing.T) {
 	}
 }
 
+// The starvation shape: a source that ends its tick on budget_exceeded with
+// Applied <= 1 still has a backlog. It must be visible at Info; the healthy
+// shape (exhausted, Applied <= 1) stays Debug.
+func TestChaos7179_DrainBudgetExceededLogsAtInfoAndHealthyStaysDebug(t *testing.T) {
+	var buffer bytes.Buffer
+	observer := SlogObserver{Logger: slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelDebug}))}
+	level := func(o DrainOutcome) map[string]any {
+		buffer.Reset()
+		observer.ObserveProjectionDrain(o)
+		var record map[string]any
+		if err := json.Unmarshal(buffer.Bytes(), &record); err != nil {
+			t.Fatalf("log line is not valid JSON: %v (%s)", err, buffer.String())
+		}
+		return record
+	}
+
+	starved := level(DrainOutcome{OrgID: "org_1", Source: "teams_projects", Batches: 1, Applied: 1, YieldReason: DrainYieldBudgetExceeded, Duration: time.Second})
+	if starved["msg"] != "context_fabric: projection tick starved with backlog remaining" || starved["level"] != "INFO" || starved["drain_yield_reason"] != string(DrainYieldBudgetExceeded) {
+		t.Fatalf("budget_exceeded with Applied<=1 must log at INFO with its reason: %v", starved)
+	}
+	progressing := level(DrainOutcome{OrgID: "org_1", Source: "big", Batches: 11, Applied: 11, YieldReason: DrainYieldBudgetExceeded, Duration: time.Second})
+	if progressing["level"] != "INFO" || progressing["msg"] != "context_fabric: projection tick drained multiple batches" {
+		t.Fatalf("budget_exceeded with Applied>1 is the multi-batch drain line, not the starvation line: %v", progressing)
+	}
+	disabled := level(DrainOutcome{OrgID: "org_1", Source: "one_page", Batches: 1, Applied: 1, YieldReason: DrainYieldBudgetExceeded, ExtraDrainDisabled: true, Duration: time.Second})
+	if disabled["level"] != "DEBUG" {
+		t.Fatalf("budget_exceeded with extra draining disabled (negative budget) is by design, must stay DEBUG: %v", disabled)
+	}
+	healthy := level(DrainOutcome{OrgID: "org_1", Source: "teams_projects", Batches: 2, Applied: 1, YieldReason: DrainYieldExhausted, Duration: time.Second})
+	if healthy["level"] != "DEBUG" {
+		t.Fatalf("exhausted with Applied<=1 must stay DEBUG: %v", healthy)
+	}
+}
+
 // SELF-FOUND (lane-3778, pre-round-5): the table above proves that an UNKNOWN
 // error classifies as unclassified, but it does not prove classification keys
 // on sentinel IDENTITY rather than on error TEXT -- every case in it is

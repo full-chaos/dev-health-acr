@@ -111,9 +111,10 @@ type ProjectorConfig struct {
 	PollInterval        time.Duration
 	Concurrency         int
 	// DrainBatchBudget (CHAOS-3826) bounds how many extra batches, beyond
-	// the one every configured source always attempts, one organization's
-	// Tick may pull across all its sources combined before yielding to the
-	// next poll -- see projectionrun.Config.DrainBatchBudget's doc comment.
+	// the one every configured source always attempts, EACH source of one
+	// organization may pull per Tick before yielding to the next poll
+	// (per source, not shared: an organization's tick is bounded by
+	// sources x budget) -- see projectionrun.Config.DrainBatchBudget's doc comment.
 	DrainBatchBudget     int
 	TeamsProjectsEnabled bool
 	// EpisodeWriteback mirrors acr-api's flag of the same name. It gates the
