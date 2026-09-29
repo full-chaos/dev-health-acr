@@ -274,7 +274,7 @@
     },
     "facts": {
       "type": "object",
-      "description": "The facts section. Not served in this release.",
+      "description": "The facts section: the kinds read_facts serves, or a note that it is not available.",
       "additionalProperties": false,
       "required": [
         "served",
@@ -283,11 +283,25 @@
       "properties": {
         "served": {
           "type": "boolean",
-          "description": "False in this release."
+          "description": "True when read_facts is wired in this deployment."
         },
         "note": {
           "type": "string",
           "description": "Where fact reads are served."
+        },
+        "kinds": {
+          "type": "array",
+          "description": "The fact kinds read_facts accepts, read from the registry it validates against. Present when read_facts is served.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "subject_kinds", "fields"],
+            "properties": {
+              "kind": {"type": "string"},
+              "subject_kinds": {"type": "array", "items": {"type": "string"}},
+              "fields": {"type": "array", "items": {"type": "string"}}
+            }
+          }
         }
       }
     },

@@ -1102,7 +1102,7 @@
     "/api/v1/context-fabric/data/catalog": {
       "get": {
         "operationId": "readContextFabricDataCatalog",
-        "summary": "Direct data catalogue (data_catalog), CHAOS-7072 S1a: the operations, subject kinds, relationship types, limits and versions for THIS caller. The sections query parameter (comma list of operations, facts, subjects, relationships, limits) filters; the facts section is not served in this release. A caller without data:read sees the operation list with available=false.",
+        "summary": "Direct data catalogue (data_catalog), CHAOS-7072 S1a: the operations, subject kinds, relationship types, limits and versions for THIS caller. The sections query parameter (comma list of operations, facts, subjects, relationships, limits) filters; the facts section lists the kinds read_facts serves, or says it is not available. A caller without data:read sees the operation list with available=false.",
         "x-required-scope": "context:read",
         "x-required-entitlement": "agent_context_runtime",
         "security": [
@@ -1745,10 +1745,22 @@
             ],
             "properties": {
               "served": {
-                "const": false
+                "type": "boolean"
               },
               "note": {
                 "type": "string"
+              },
+              "kinds": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["kind", "subject_kinds", "fields"],
+                  "properties": {
+                    "kind": {"type": "string"},
+                    "subject_kinds": {"type": "array", "items": {"type": "string"}},
+                    "fields": {"type": "array", "items": {"type": "string"}}
+                  }
+                }
               }
             }
           },
