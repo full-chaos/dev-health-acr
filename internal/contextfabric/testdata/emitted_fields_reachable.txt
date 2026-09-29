@@ -292,8 +292,8 @@ FactRequiredChildren
     leak unresolvable         0
     calls followed            518
     calls accounted           13
-    calls not_a_call          4
-    calls excluded_by_design  58
+    calls not_a_call          5
+    calls excluded_by_design  62
     calls leaked              3
   fields             relationship_type required_child_work_item_id required_child_work_item_ref
 
