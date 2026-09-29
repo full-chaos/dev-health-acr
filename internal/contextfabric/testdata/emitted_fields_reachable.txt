@@ -133,7 +133,7 @@ FactHealth
     calls followed            591
     calls accounted           13
     calls not_a_call          9
-    calls excluded_by_design  145
+    calls excluded_by_design  146
     calls leaked              10
   fields             compounding_risk computed_at daily_health daily_health_omitted_count day norm_value repo_count risk_breakdown risk_breakdown_rows_shown risk_breakdown_rows_total risk_rules rollup_basis scope scope_id scope_name severity severity_as_of severity_basis severity_freshness_window_days severity_unavailable_reason signal team_count weight weighted_contribution
 
@@ -181,7 +181,7 @@ FactInvestment
     calls followed            588
     calls accounted           13
     calls not_a_call          17
-    calls excluded_by_design  203
+    calls excluded_by_design  204
     calls leaked              5
   fields             attribution attribution_basis churn_loc cycle_p50_hours day delivery_units effort_unit_count investment_area investment_mix_source mix_source native_multi_placed_unit_count owned_repository_count owning_team_rollup_work_unit_count population_window project_stream prs_merged repo_count rollup_basis share source spanning_unit_count team_breakdown team_count team_id team_name theme theme_breakdown theme_quality_bugfix weighted_effort work_items_completed work_unit_count work_units_without_repo_link
 
