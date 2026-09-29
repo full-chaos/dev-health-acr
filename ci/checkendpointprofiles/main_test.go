@@ -558,16 +558,16 @@ func TestGateCatchesASyntheticUnownedRoute(t *testing.T) {
 			"func healthzHandler(w http.ResponseWriter, r *http.Request) {}\n"+
 			"func rogueHandler(w http.ResponseWriter, r *http.Request)   {}\n")
 	errs := f.check(t)
-	mustContain(t, errs, "UNOWNED SURFACE", fixtureAppFile+":8")
+	mustContain(t, errs, "UNOWNED SURFACE", "POST /rogue", fixtureAppFile)
 }
 
 func TestGateCatchesAPhantomStaleRow(t *testing.T) {
 	f := minimalValidFixture(t, []map[string]any{
-		minimalValidRow(map[string]any{"source": map[string]any{"file": fixtureAppFile, "line": float64(3)}}),
+		minimalValidRow(nil),
+		minimalValidRow(map[string]any{"id": "GET /gone [dev-health-acr-api]", "route": "/gone"}),
 	})
 	errs := f.check(t)
-	mustContain(t, errs, "PHANTOM ROW")
-	mustContain(t, errs, "UNOWNED SURFACE")
+	mustContain(t, errs, "PHANTOM ROW", "/gone")
 }
 
 func TestGateCatchesADuplicateID(t *testing.T) {
@@ -786,7 +786,9 @@ func TestDiscoveryReportsBothRegistrationsWrittenOnOneLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mustContain(t, errs, "MULTIPLE REGISTRATIONS ON ONE LINE", "/unprofiled")
+	// Symbol addressing (CHAOS-7128) lets both registrations on one line be
+	// profiled; the one with no row is simply unowned.
+	mustContain(t, errs, "UNOWNED SURFACE", "GET /unprofiled")
 }
 
 func TestGateCatchesAProtectedRowWithNoAcceptedCredentialClasses(t *testing.T) {
@@ -808,13 +810,13 @@ func TestGateCatchesAPublicRowWithNoRationale(t *testing.T) {
 func TestGateCatchesContentDriftWhenTheMethodIsSwapped(t *testing.T) {
 	f := minimalValidFixture(t, []map[string]any{minimalValidRow(map[string]any{"method": "POST"})})
 	errs := f.check(t)
-	mustContain(t, errs, "STALE ANCHOR", "content drift")
+	mustContain(t, errs, "PHANTOM ROW", "POST /healthz")
 }
 
 func TestGateCatchesContentDriftWhenTheRoutePathIsSwapped(t *testing.T) {
 	f := minimalValidFixture(t, []map[string]any{minimalValidRow(map[string]any{"route": "/a-different-path"})})
 	errs := f.check(t)
-	mustContain(t, errs, "STALE ANCHOR", "content drift")
+	mustContain(t, errs, "PHANTOM ROW", "/a-different-path")
 }
 
 func TestGateCatchesAStrayTopLevelKey(t *testing.T) {
@@ -1155,55 +1157,54 @@ func TestGateCatchesTheRealCommittedOffByOneAnchorBug(t *testing.T) {
 	mustContain(t, errs, "TRIVIAL ANCHOR", "primary_validator")
 }
 
-func TestGateCatchesAPrimaryValidatorAnchorThatDriftedOntoAnUnrelatedLine(t *testing.T) {
-	// Reproduces the incident shape by line number alone: a later edit
-	// inserts a line above the real primary_validator call, shifting the
-	// declared line number onto an unrelated statement that is real,
-	// in-bounds, and not on the trivial-anchor denylist -- so
-	// checkAnchorExists alone accepts it. The marker (independently
-	// re-located by its own text, not by the declared line) must catch it.
-	root := t.TempDir()
-	writeFile(t, filepath.Join(root, fixtureAppFile),
-		"package api\n"+
-			"\n"+
-			"import \"net/http\"\n"+
-			"\n"+
-			"func Handler(itemCounts Counter) http.Handler {\n"+
-			"	return protectedRuntimeHandler(func(w http.ResponseWriter, r *http.Request) {\n"+
-			"		Items: int64(itemCounts.Total())\n"+
-			"		w.WriteHeader(http.StatusOK)\n"+
-			"	})\n"+
-			"}\n"+
-			"\n"+
-			"func protectedRuntimeHandler(next http.HandlerFunc) http.Handler { return next }\n"+
-			"\n"+
-			"type Counter struct{}\n"+
-			"\n"+
-			"func (Counter) Total() int64 { return 0 }\n",
-	)
-	schemaPath, credentialClassesPath, credentialClassesSchemaPath := seedFixtureSchemaAndCredentialClasses(t, root)
+// CHAOS-7128: rows are anchored by symbol (route+method for the surface, the
+// anchor's note marker for the validator), not by line. A moved line passes;
+// a renamed handler/route fails loudly.
+func TestGateAcceptsAMovedLineBecauseAnchorsAreSymbolNotLine(t *testing.T) {
 	row := minimalValidRow(map[string]any{
+		// source.line and anchor.line are stale hints: the registration
+		// is at line 7, the rows say 3 and 5.
+		"source": map[string]any{"file": fixtureAppFile, "line": float64(3)},
 		"primary_validator": map[string]any{
-			"description": "wraps itself in protectedRuntimeHandler",
-			// Declares line 7 (the resource-usage literal) -- the real
-			// call moved to line 6 when the literal line was inserted
-			// above it. Declares the marker for line 6's true text, so
-			// the drift is detectable by re-locating that text.
+			"description": "mux.HandleFunc directly",
 			"anchor": map[string]any{
-				"path": fixtureAppFile,
-				"line": float64(7),
-				"note": "protectedRuntimeHandler(func(w http.ResponseWriter",
+				"path": fixtureAppFile, "line": float64(5),
+				"note": "mux.HandleFunc(\"GET /healthz\"",
 			},
 		},
 	})
-	inventoryPath := writeInventory(t, root, []map[string]any{row})
-	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t))
+	f := minimalValidFixture(t, []map[string]any{row})
+	if errs := f.check(t); len(errs) != 0 {
+		t.Fatalf("a moved line must pass, got:\n%s", strings.Join(errs, "\n"))
+	}
+}
+
+func TestGateFailsWhenTheAnchoredHandlerMarkerIsRenamed(t *testing.T) {
+	row := minimalValidRow(map[string]any{
+		"primary_validator": map[string]any{
+			"description": "mux.HandleFunc directly",
+			"anchor": map[string]any{
+				"path": fixtureAppFile, "line": float64(7),
+				"note": "mux.HandleFunc(\"GET /healthz\", oldHandlerName)",
+			},
+		},
+	})
+	f := minimalValidFixture(t, []map[string]any{row})
+	errs := f.check(t)
+	mustContain(t, errs, "ANCHOR MARKER NOT FOUND", "oldHandlerName")
+}
+
+func TestGateFailsWhenTheRegisteredRouteIsRenamed(t *testing.T) {
+	f := minimalValidFixture(t, []map[string]any{minimalValidRow(nil)})
+	src, err := os.ReadFile(filepath.Join(f.root, fixtureAppFile))
 	if err != nil {
 		t.Fatal(err)
 	}
-	mustContain(t, errs, "ANCHOR LINE DRIFTED", "primary_validator")
+	writeFile(t, filepath.Join(f.root, fixtureAppFile), strings.ReplaceAll(string(src), "GET /healthz", "GET /healthz-renamed"))
+	errs := f.check(t)
+	mustContain(t, errs, "PHANTOM ROW", "GET /healthz")
+	mustContain(t, errs, "UNOWNED SURFACE", "/healthz-renamed")
 }
-
 func TestGateCatchesAPrimaryValidatorAnchorWithNoMarker(t *testing.T) {
 	f := minimalValidFixture(t, []map[string]any{minimalValidRow(map[string]any{
 		"primary_validator": map[string]any{
@@ -1245,51 +1246,6 @@ func TestGatePassesAPrimaryValidatorAnchorWithAMatchingMarker(t *testing.T) {
 	if len(errs) != 0 {
 		t.Fatalf("expected no errors, got:\n%s", strings.Join(errs, "\n"))
 	}
-}
-
-func TestGateCatchesAPrimaryValidatorAnchorWhoseDeclaredLineWithinAWideRangeIsWrong(t *testing.T) {
-	// The marker check must verify the anchor's own declared START line,
-	// never a wider line..line_end window: a window wide enough to admit a
-	// real multi-line construct is also wide enough to keep matching after
-	// an edit inserts a line ABOVE the construct and shifts it deeper into
-	// that same window, leaving the declared line itself wrong while the
-	// marker is still "somewhere in range".
-	root := t.TempDir()
-	writeFile(t, filepath.Join(root, fixtureAppFile),
-		"package api\n"+ // 1
-			"\n"+ // 2
-			"import \"net/http\"\n"+ // 3
-			"\n"+ // 4
-			"func Handler() http.Handler {\n"+ // 5
-			"	// a line inserted above the real call, shifting it down\n"+ // 6
-			"	return protectedRuntimeHandler(handler)\n"+ // 7
-			"}\n"+ // 8
-			"\n"+
-			"func protectedRuntimeHandler(next http.Handler) http.Handler { return next }\n"+
-			"\n"+
-			"var handler http.Handler\n",
-	)
-	schemaPath, credentialClassesPath, credentialClassesSchemaPath := seedFixtureSchemaAndCredentialClasses(t, root)
-	row := minimalValidRow(map[string]any{
-		"primary_validator": map[string]any{
-			"description": "wraps itself in protectedRuntimeHandler",
-			// Declares line 6 as the start of a range wide enough to still
-			// contain the real call at line 7 -- the declared START itself
-			// is wrong, but a range-wide search would keep passing.
-			"anchor": map[string]any{
-				"path":     fixtureAppFile,
-				"line":     float64(6),
-				"line_end": float64(7),
-				"note":     "protectedRuntimeHandler(handler)",
-			},
-		},
-	})
-	inventoryPath := writeInventory(t, root, []map[string]any{row})
-	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	mustContain(t, errs, "ANCHOR LINE DRIFTED", "primary_validator")
 }
 
 func TestGateAcceptsANonCommentTextCopyOfTheMarkerOnTheDeclaredLine_DocumentedTextMatchLimit(t *testing.T) {

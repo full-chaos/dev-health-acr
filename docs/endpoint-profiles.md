@@ -229,3 +229,14 @@ name:
 - `InvestigationResultStore.Get`'s org-scoping enforcement at the storage
   layer (documented as a binding precondition in `AGENTS.md`, not
   re-traced into `internal/contextfabric/pginvestigation` here).
+
+## Row addressing: symbol, not line (CHAOS-7128)
+
+The acr gate (`ci/checkendpointprofiles`) matches a row to its route by
+`source.file` + `method` + `route`, and a `primary_validator` anchor by its
+`note` marker (a literal call/function substring). The `line` / `line_end`
+values are advisory hints kept for the shared schema: an unrelated edit that
+moves a registration or validator does not break the gate. Renaming or removing
+the route fails as `PHANTOM ROW` + `UNOWNED SURFACE`; renaming the marked
+symbol fails as `ANCHOR MARKER NOT FOUND`; a marker that appears several times
+and not on its declared line fails as `AMBIGUOUS ANCHOR MARKER`.

@@ -60,6 +60,17 @@
 //     once, the marker re-location cannot tell them apart: CHAOS-5652.
 //   - The inventory's declared source_commit and credential_class_source are
 //     NOT verified by this gate: CHAOS-4765.
+//   - CHAOS-7128: rows address a surface by SYMBOL, not line. A row is matched
+//     to a discovered registration by (source.file, method, route); a
+//     primary_validator anchor is located by its `note` marker. The
+//     source.line / anchor.line values remain in the file only because the
+//     ops-owned schema requires them, and are advisory hints: a moved line
+//     passes, a renamed/removed route (PHANTOM ROW + UNOWNED SURFACE) or a
+//     marker that no longer exists (ANCHOR MARKER NOT FOUND) fails loudly.
+//     Two registrations on one line are therefore both profilable
+//     (CHAOS-4774's limitation no longer applies to source rows).
+//   - The inventory's declared source_commit and credential_class_source are
+//     NOT verified by this gate: CHAOS-4765.
 //   - Two registrations on one line cannot both be profiled, because a row
 //     addresses a surface as file:line. They fail closed rather than one being
 //     dropped: CHAOS-4774.
@@ -136,6 +147,20 @@ type discoverReport struct {
 type surfaceKey struct {
 	File string
 	Line int
+}
+
+// routeKey is a REST surface's identity (CHAOS-7128): the registering file
+// plus the mux pattern's method and path. A row is matched to a discovered
+// surface by this key, never by line number, so an unrelated edit that
+// shifts a registration does not invalidate its row, while a renamed or
+// removed route (a changed method or path) fails loudly as PHANTOM ROW +
+// UNOWNED SURFACE. The rows' source.line / anchor.line values stay in the
+// file because the ops-owned schema requires them, but they are advisory
+// hints only.
+type routeKey struct {
+	File   string
+	Method string
+	Path   string
 }
 
 func runDiscovery(root, discovererPath string) (*discoverReport, error) {
@@ -389,15 +414,14 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 	//
 	// Fixing it properly means giving anchors a column, which is a change to
 	// a contract shared by three repos -- CHAOS-4774, not this PR.
-	discoveredKeys := map[surfaceKey]discoveredRoute{}
+	discoveredKeys := map[routeKey]discoveredRoute{}
 	for _, r := range report.Routes {
-		key := surfaceKey{r.File, r.Line}
-		if prev, clash := discoveredKeys[key]; clash {
+		key := routeKey{r.File, r.Method, r.Path}
+		if _, clash := discoveredKeys[key]; clash {
 			errs = append(errs, fmt.Sprintf(
-				"MULTIPLE REGISTRATIONS ON ONE LINE: %s:%d registers both %s %s and %s %s -- "+
-					"a row addresses a surface as file:line, so these cannot both be profiled. "+
-					"Put each registration on its own line (see CHAOS-4774)",
-				r.File, r.Line, prev.Method, prev.Path, r.Method, r.Path,
+				"DUPLICATE REGISTRATION: %s registers %s %s more than once -- a row addresses a surface by "+
+					"method+route, so the duplicate cannot be profiled separately",
+				r.File, r.Method, r.Path,
 			))
 			continue
 		}
@@ -439,7 +463,7 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 	rowsRaw, _ := inventory["rows"].([]any)
 
 	idsSeen := map[string]int{}
-	rowKeys := map[surfaceKey]bool{}
+	rowKeys := map[routeKey]bool{}
 	// Every (file, line) claimed as a row's `source`, mapped to every row id
 	// that claims it -- a discovered surface must be owned by EXACTLY one
 	// row. Codex-verified gap (round 1): two rows with DIFFERENT ids both
@@ -447,7 +471,7 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 	// classifications) previously returned OK -- worse than a missing row,
 	// since both look registered. Not expressible as a JSON Schema
 	// constraint; it's a cross-row uniqueness rule.
-	surfaceOwners := map[surfaceKey][]string{}
+	surfaceOwners := map[routeKey][]string{}
 
 	// Every (file, line) that SOME row's primary_validator anchor legitimately
 	// declares, collected in a pass over every row before any row's marker is
@@ -603,9 +627,10 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 		src := asObject(row["source"])
 		if src != nil {
 			file, _ := asString(src["file"])
-			line, _ := src["line"].(float64)
-			if file != "" && line > 0 {
-				key := surfaceKey{file, int(line)}
+			rowMethod, _ := asString(row["method"])
+			rowRoute, _ := asString(row["route"])
+			if file != "" && rowMethod != "" && rowRoute != "" {
+				key := routeKey{file, rowMethod, rowRoute}
 				rowKeys[key] = true
 				surfaceOwners[key] = append(surfaceOwners[key], id)
 			}
@@ -619,14 +644,14 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 			sorted := append([]string(nil), owners...)
 			sort.Strings(sorted)
 			errs = append(errs, fmt.Sprintf(
-				"DUPLICATE SURFACE OWNERSHIP: rows %v all claim %s:%d -- exactly one row may own a discovered surface",
-				sorted, key.File, key.Line,
+				"DUPLICATE SURFACE OWNERSHIP: rows %v all claim %s %s in %s -- exactly one row may own a discovered surface",
+				sorted, key.Method, key.Path, key.File,
 			))
 		}
 	}
 
 	// 1 & 2. bidirectional surface/row parity.
-	sortedDiscoveredKeys := make([]surfaceKey, 0, len(discoveredKeys))
+	sortedDiscoveredKeys := make([]routeKey, 0, len(discoveredKeys))
 	for k := range discoveredKeys {
 		sortedDiscoveredKeys = append(sortedDiscoveredKeys, k)
 	}
@@ -634,11 +659,14 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 		if sortedDiscoveredKeys[i].File != sortedDiscoveredKeys[j].File {
 			return sortedDiscoveredKeys[i].File < sortedDiscoveredKeys[j].File
 		}
-		return sortedDiscoveredKeys[i].Line < sortedDiscoveredKeys[j].Line
+		if sortedDiscoveredKeys[i].Path != sortedDiscoveredKeys[j].Path {
+			return sortedDiscoveredKeys[i].Path < sortedDiscoveredKeys[j].Path
+		}
+		return sortedDiscoveredKeys[i].Method < sortedDiscoveredKeys[j].Method
 	})
 	for _, key := range sortedDiscoveredKeys {
 		if !rowKeys[key] {
-			errs = append(errs, fmt.Sprintf("UNOWNED SURFACE: rest route at %s:%d has no row in %s. Add an owning row (guardrail G-1).", key.File, key.Line, filepath.Base(inventoryPath)))
+			errs = append(errs, fmt.Sprintf("UNOWNED SURFACE: rest route %s %s in %s (discovered at line %d) has no row in %s. Add an owning row (guardrail G-1).", key.Method, key.Path, key.File, discoveredKeys[key].Line, filepath.Base(inventoryPath)))
 		}
 	}
 
@@ -653,24 +681,16 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 			continue
 		}
 		file, _ := asString(src["file"])
-		lineF, _ := src["line"].(float64)
-		line := int(lineF)
-		key := surfaceKey{file, line}
-		surface, ok := discoveredKeys[key]
+		method, _ := asString(row["method"])
+		route, _ := asString(row["route"])
+		surface, ok := discoveredKeys[routeKey{file, method, route}]
 		if !ok {
-			errs = append(errs, fmt.Sprintf("PHANTOM ROW: row %q references %s:%d which independent discovery did not find there (stale row -- re-anchor or remove)", id, file, line))
+			errs = append(errs, fmt.Sprintf("PHANTOM ROW: row %q claims %s %s in %s which independent discovery did not find (renamed or removed route -- re-key or remove the row)", id, method, route, file))
 			continue
 		}
+		line := surface.Line // discovered line, for messages only
 
 		// 5. content/anchor drift: matched row vs discovered surface.
-		method, _ := asString(row["method"])
-		if method != surface.Method {
-			errs = append(errs, fmt.Sprintf("STALE ANCHOR: row %q claims method=%q but discovery finds %q at %s:%d (content drift)", id, method, surface.Method, file, line))
-		}
-		route, _ := asString(row["route"])
-		if route != surface.Path {
-			errs = append(errs, fmt.Sprintf("STALE ANCHOR: row %q claims route=%q but discovery resolves %q at %s:%d (content drift)", id, route, surface.Path, file, line))
-		}
 		if sk, _ := asString(row["surface_kind"]); sk != "rest" {
 			errs = append(errs, fmt.Sprintf("STALE ANCHOR: row %q claims surface_kind=%q but %s:%d is a REST route (content drift)", id, sk, file, line))
 		}
@@ -879,23 +899,28 @@ func checkPrimaryValidatorAnchorMarker(root, rowID string, anchor map[string]any
 		}
 		return
 	}
-	// The declared line doesn't carry the marker -- find out whether the
-	// marker still exists ANYWHERE ELSE in the file (a drifted-but-recoverable
-	// anchor) or has vanished entirely (a marker naming code that no
-	// longer exists at all, e.g. a renamed function).
+	// The declared line doesn't carry the marker. CHAOS-7128: the line is an
+	// advisory hint, the marker (the handler/call symbol) is the anchor. A
+	// marker found exactly once elsewhere means the line merely moved -- pass;
+	// several occurrences cannot be told apart -- ambiguous; none means the
+	// symbol was renamed or removed -- fail below.
+	var found []int
 	for i, l := range lines {
-		if i+1 == line {
-			continue
+		if i+1 != line && strings.Contains(l, note) {
+			found = append(found, i+1)
 		}
-		if strings.Contains(l, note) {
-			*errs = append(*errs, fmt.Sprintf(
-				"ANCHOR LINE DRIFTED: row %q primary_validator anchor declares %s:%d, but its own "+
-					"marker %q is not there -- it is actually at line %d. Re-anchor to the real line "+
-					"(the marker, not the old line number, is this gate's own source of truth)",
-				rowID, path, line, note, i+1,
-			))
-			return
-		}
+	}
+	if len(found) == 1 {
+		return
+	}
+	if len(found) > 1 {
+		*errs = append(*errs, fmt.Sprintf(
+			"AMBIGUOUS ANCHOR MARKER: row %q primary_validator anchor's marker %q is not on its declared line %s:%d "+
+				"and appears at %d other lines %v -- a substring match cannot tell which is the real validator. "+
+				"Use a longer, more specific marker",
+			rowID, note, path, line, len(found), found,
+		))
+		return
 	}
 	*errs = append(*errs, fmt.Sprintf(
 		"ANCHOR MARKER NOT FOUND: row %q primary_validator anchor's note %q does not appear anywhere "+
