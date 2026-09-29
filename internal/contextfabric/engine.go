@@ -1218,6 +1218,10 @@ type Engine struct {
 	interpreter QuestionInterpreter
 	graph       GraphReader
 	facts       CanonicalFactReader
+	// directFacts is the ungated registry the direct read tools build their
+	// own gate over (DirectReadSources); facts is the same reader wrapped in
+	// the engine's embedded-subject gate (engine_fact_gate.go, CHAOS-7127).
+	directFacts CanonicalFactReader
 	synthesizer AnswerSynthesizer
 	results     InvestigationResultStore
 	// rawResults is the unwrapped store, kept only for optional-capability
@@ -1282,7 +1286,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		results = authorizedResultStore{InvestigationResultStore: dependencies.Results, gate: gate, recorder: recorder}
 	}
 	return &Engine{
-		interpreter: dependencies.Interpreter, graph: dependencies.Graph, facts: dependencies.Facts,
+		interpreter: dependencies.Interpreter, graph: dependencies.Graph, facts: newGatedFactReader(dependencies.Facts, gate, dependencies.Telemetry), directFacts: dependencies.Facts,
 		synthesizer: dependencies.Synthesizer, results: results, rawResults: dependencies.Results, telemetry: dependencies.Telemetry,
 		storedResultGate: gate,
 		reuseGate:        dependencies.ReuseGate, reuseSnapshotter: dependencies.ReuseSnapshotter,

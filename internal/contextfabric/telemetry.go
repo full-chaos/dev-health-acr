@@ -2802,3 +2802,37 @@ func (t SlogEngineTelemetry) RecordFactRootRefused(ctx context.Context, principa
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.WarnContext(ctx, FactRootRefusedLogMessage, args...)
 }
+
+// EngineFactGateLogMessage is the decision line of the engine's
+// embedded-subject gate (CHAOS-7127), one per restricted caller's engine fact
+// read. Counts and closed values only: never the id or label of a withheld
+// subject.
+const EngineFactGateLogMessage = "context fabric engine fact gate"
+
+// RecordEngineFactGate implements EngineFactGateRecorder: Info for a clean or
+// filtered read, Warn for a read that failed closed or removed a field its
+// capability does not declare.
+func (t SlogEngineTelemetry) RecordEngineFactGate(ctx context.Context, principal storage.Principal, decision EngineFactGateDecision) {
+	args := []any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"surface", "engine_fact_read",
+		"decision", SanitizeLogAttr(decision.Decision),
+		"reason", SanitizeLogAttr(decision.Reason),
+		"repository_scope_count", len(principal.RepositoryScopes),
+		"facts_checked", decision.FactsChecked,
+		"facts_undeclared", decision.FactsUndeclared,
+		"facts_withheld_from", decision.FactsWithheldFrom,
+		"references_checked", decision.Report.ReferencesChecked,
+		"references_refused", decision.Report.ReferencesRefused,
+		"rows_withheld", decision.Report.RowsWithheld,
+		"fields_withheld", decision.Report.FieldsWithheld,
+		"evidence_withheld", decision.Report.EvidenceWithheld,
+		"fields_undeclared", decision.Report.FieldsUndeclared,
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	if decision.Decision == "unavailable" || decision.Report.FieldsUndeclared > 0 {
+		t.logger.WarnContext(ctx, EngineFactGateLogMessage, args...)
+		return
+	}
+	t.logger.InfoContext(ctx, EngineFactGateLogMessage, args...)
+}

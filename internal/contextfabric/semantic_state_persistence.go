@@ -110,6 +110,10 @@ func (e *Engine) saveResult(
 	watermark SourceWatermarkSnapshot, epoch RebuildEpoch, timeAxisKey string, graphEpoch int64, parentResultID string,
 	capture semanticStateCapture,
 ) error {
+	// CHAOS-7127: the same grant widening the reuse lookup applies
+	// (reuse_grant_scope.go); this is the engine's only Save, so every saved
+	// row of a restricted caller carries it.
+	timeAxisKey = GrantScopedTimeAxisKey(principal, timeAxisKey)
 	capture, carried := capture.withTurnParentFrom(ctx).attachCarriedParent(result)
 	capture, anchorEvent := capture.attachAnchorBinding(site, result)
 	if anchorEvent == nil && !e.anchorBindingShadowDisabled {

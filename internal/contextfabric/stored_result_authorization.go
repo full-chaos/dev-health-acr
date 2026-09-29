@@ -301,11 +301,7 @@ func (g *StoredResultGate) decide(ctx context.Context, principal storage.Princip
 		decision.Decision, decision.Reason = StoredResultUnavailable, StoredResultReasonAuthorizerMissing
 		return finishStoredResultAuthorization(decision, refused)
 	default:
-		binding, err := g.graph.ResolveInvestigationBinding(ctx, principal)
-		var outcomes []StoredSubjectOutcome
-		if err == nil {
-			outcomes, err = g.subjects.AuthorizeStoredSubjects(ctx, principal, binding, graphSubjects)
-		}
+		outcomes, err := g.graphOutcomes(ctx, principal, graphSubjects)
 		switch {
 		case errors.Is(err, ErrGraphNotProjected):
 			decision.Decision, decision.Reason = StoredResultDenied, StoredResultReasonGraphNotProjected
@@ -362,6 +358,57 @@ func (g *StoredResultGate) decide(ctx context.Context, principal storage.Princip
 		decision.Decision, decision.Reason = StoredResultAdmitted, StoredResultReasonSubjectsAdmitted
 	}
 	return finishStoredResultAuthorization(decision, refused)
+}
+
+// graphOutcomes is the per-node decision over the caller's own graph: the
+// shared predicate, with each project's live ownership reach (the adapter's
+// AuthorizeStoredSubjects). It is the one graph read both the stored-result
+// decision and the engine's embedded-subject gate take.
+func (g *StoredResultGate) graphOutcomes(ctx context.Context, principal storage.Principal, subjects []SubjectRef) ([]StoredSubjectOutcome, error) {
+	binding, err := g.graph.ResolveInvestigationBinding(ctx, principal)
+	if err != nil {
+		return nil, err
+	}
+	return g.subjects.AuthorizeStoredSubjects(ctx, principal, binding, subjects)
+}
+
+// authorizeEmbedded decides subjects a fact names (CHAOS-7127) by the same
+// rules decide applies to a stored result's subjects: an organization only
+// when it is the caller's own, a graph subject only when the caller's graph
+// admits its node. A graph that was never projected admits nothing; any other
+// failure is returned, and the caller fails closed.
+func (g *StoredResultGate) authorizeEmbedded(ctx context.Context, principal storage.Principal, subjects []SubjectRef) ([]SubjectRef, error) {
+	var admitted, graphSubjects []SubjectRef
+	for _, subject := range subjects {
+		if subject.Kind == contractsv1.ContextFabricSubjectOrganization {
+			if organizationSubjectIsCallers(principal, subject) {
+				admitted = append(admitted, subject)
+			}
+			continue
+		}
+		graphSubjects = append(graphSubjects, subject)
+	}
+	if len(graphSubjects) == 0 {
+		return admitted, nil
+	}
+	if g == nil || g.subjects == nil {
+		return nil, errors.New(string(StoredResultReasonAuthorizerMissing))
+	}
+	outcomes, err := g.graphOutcomes(ctx, principal, graphSubjects)
+	switch {
+	case errors.Is(err, ErrGraphNotProjected):
+		return admitted, nil
+	case err != nil:
+		return nil, err
+	case len(outcomes) != len(graphSubjects):
+		return nil, fmt.Errorf("stored subject authorizer returned %d outcomes for %d subjects", len(outcomes), len(graphSubjects))
+	}
+	for index, outcome := range outcomes {
+		if outcome == StoredSubjectAdmitted {
+			admitted = append(admitted, graphSubjects[index])
+		}
+	}
+	return admitted, nil
 }
 
 // refuseKind names a refused subject's kind on the trace. A subject named by

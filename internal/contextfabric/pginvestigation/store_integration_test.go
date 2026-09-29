@@ -446,8 +446,11 @@ func TestStore_EngineReuseGateServesPersistedWorkItemTuple(t *testing.T) {
 	epoch, err := store.SnapshotRebuildEpoch(ctx, principal.OrgID)
 	require.NoError(t, err)
 	const graphEpoch int64 = 7
+	// The principal is repository-restricted, so the engine saves its rows
+	// under the grant-scoped axis key (CHAOS-7127); the row stands in for
+	// one this principal's own earlier turn saved.
 	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch,
-		contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext), testReuseRetrievalIdentity,
+		contextfabric.GrantScopedTimeAxisKey(principal, contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext)), testReuseRetrievalIdentity,
 		testReusePromptVersions, testReuseVersionAuthorities, graphEpoch, "", contextfabric.SemanticStateOf(state)))
 
 	var interpretCalls, factCalls, synthesizeCalls, anchorCalls, membershipCalls int
