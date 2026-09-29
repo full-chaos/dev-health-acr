@@ -199,6 +199,11 @@ type FactCapability struct {
 	// "no estimate declared" (most single-row-per-subject scalar
 	// capabilities); a tabular capability declares its typical row count.
 	EstimatedItems int
+	// Fields declares every scalar field and table column a fact of this
+	// kind may carry, with its type and whether it names another subject
+	// (CHAOS-7073; fact_declarations.go). Empty = the kind is not served by
+	// the direct read tools.
+	Fields []FactFieldDeclaration
 }
 
 func (c FactCapability) Validate() error {
@@ -210,6 +215,9 @@ func (c FactCapability) Validate() error {
 	}
 	if len(c.AllowedParameters) > 32 || !uniqueBoundedParameters(c.AllowedParameters) {
 		return fmt.Errorf("fact capability parameters are invalid")
+	}
+	if err := validateFieldDeclarations(c); err != nil {
+		return err
 	}
 	if c.Timeout < 0 {
 		return fmt.Errorf("fact capability timeout must not be negative")
@@ -554,6 +562,7 @@ func NewFactCapabilityRegistry(providers []FactProvider, options FactRegistryOpt
 		// registration would change the counted observations -- and could
 		// push a subject kind past the bound that was already checked.
 		capability.ObservationKey = copyObservationKeyDeclarations(capability.ObservationKey)
+		capability.Fields = copyFieldDeclarations(capability.Fields)
 		registry.providers[capability.Kind] = registeredFactProvider{capability: capability, provider: provider}
 	}
 	// The exact-cover bound is a property of the WHOLE declaration set, so it
@@ -656,6 +665,7 @@ func (r *FactCapabilityRegistry) Capabilities() []FactCapability {
 		capability.Tables = copyTableDeclarations(capability.Tables)
 		capability.Obligations = copyObligationDeclarations(capability.Obligations)
 		capability.ObservationKey = copyObservationKeyDeclarations(capability.ObservationKey)
+		capability.Fields = copyFieldDeclarations(capability.Fields)
 		capabilities = append(capabilities, capability)
 	}
 	sort.Slice(capabilities, func(i, j int) bool { return factKindOrder(capabilities[i].Kind) < factKindOrder(capabilities[j].Kind) })
@@ -784,6 +794,7 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		Watermarks:        map[FactKind]string{},
 		ReadSubjects:      FactReadSubjects{},
 		EvaluatedSubjects: FactReadSubjects{},
+		Outcomes:          FactOutcomeLedger{},
 	}
 	allowedSubjects := investigationScopeSubjectSet(request)
 	// CHAOS-3783: decide the whole fan-out up front, before any provider is
@@ -930,6 +941,7 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		if !ok {
 			appendFactCoverage(&bundle, planned.Kind, SourceUnconfigured, nil, "", "canonical fact capability is not configured",
 				coverageDetailSpec{Code: contractsv1.ContextFabricCoverageDetailFactUnconfigured})
+			bundle.recordOutcome(planned.Kind, factReadUnconfigured, planned.Subjects, nil, nil)
 			r.recordFactRead(ctx, principal, planned.Kind, factReadUnconfigured, SourceUnconfigured, planned.Subjects, 0, false)
 			continue
 		}
@@ -953,6 +965,7 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 				ScopeGap:       planned.ScopeGap,
 				SupportedKinds: registered.capability.SupportedSubjectKinds,
 			})
+			bundle.recordOutcome(planned.Kind, factReadScopeGap, planned.Subjects, nil, nil)
 			r.recordFactRead(ctx, principal, planned.Kind, factReadScopeGap, gapState, planned.Subjects, 0, false)
 			continue
 		}
@@ -968,6 +981,7 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 				Code:           contractsv1.ContextFabricCoverageDetailFactPruned,
 				SupportedKinds: registered.capability.SupportedSubjectKinds,
 			})
+			bundle.recordOutcome(planned.Kind, factReadPruned, planned.Subjects, nil, nil)
 			r.recordFactRead(ctx, principal, planned.Kind, factReadPruned, SourcePruned, planned.Subjects, 0, false)
 			continue
 		}
@@ -1001,6 +1015,7 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 			// the empty-states rule forbids.
 			appendFactCoverage(&bundle, planned.Kind, state, nil, "", withNarrowingNote(planned, reason),
 				factDetailSpecForRead(planned, registered.capability, true, reason))
+			bundle.recordOutcome(planned.Kind, factReadFailed, planned.Subjects, query.Subjects, nil)
 			r.recordFactRead(ctx, principal, planned.Kind, factReadFailed, state, query.Subjects, 0, false)
 			continue
 		}
@@ -1079,6 +1094,7 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		mergedState := lastCoverageState(&bundle)
 		bundle.ReadSubjects.add(planned.Kind, query.Subjects)
 		r.recordEvaluationCoverage(ctx, principal, planned.Kind, result.Evaluation, len(result.EvaluatedSubjects))
+		bundle.recordOutcome(planned.Kind, factReadCompleted, planned.Subjects, query.Subjects, &result)
 		r.recordFactRead(ctx, principal, planned.Kind, factReadCompleted, mergedState, query.Subjects, factsReturned, mergedState == SourceTruncated)
 	}
 	sortCanonicalFacts(bundle.Facts)

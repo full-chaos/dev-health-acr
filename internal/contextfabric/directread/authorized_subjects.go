@@ -185,6 +185,15 @@ func (r *FactReader) Read(ctx context.Context, principal storage.Principal, subj
 	if !subjects.grant.spent.CompareAndSwap(false, true) {
 		return contextfabric.CanonicalFactBundle{}, ErrAuthorizationSpent
 	}
+	// CHAOS-7073: the gate drops caller labels, but the registry validates
+	// every fact's subject with a non-empty label (ContextFabricSubjectRef
+	// bounds), and providers copy the requested subject verbatim. Without a
+	// label every provider fact is rejected at merge. The label is the
+	// canonical id: never caller text, never a name the caller was not
+	// already holding.
+	for index := range admitted {
+		admitted[index].Label = admitted[index].CanonicalID
+	}
 	request.Subjects = admitted
 	request.Cohort = nil
 	request.Scope = nil

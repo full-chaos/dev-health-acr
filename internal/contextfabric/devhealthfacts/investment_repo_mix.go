@@ -90,6 +90,15 @@ func mixWindowPredicate(i int, b factTimeBound) string {
 // with array functions (no second reference to the latest set); the per-unit
 // ref total is a window function over the already-grouped rows; and the theme
 // and bugfix sums come out of a single aggregation. repos is referenced once.
+//
+// CHAOS-7073 (K16): the latest-row selection matches ops'
+// LatestWorkUnitInvestmentsSource on three points. A superseded work unit
+// (work_unit_supersessions) is excluded; only the work units of the latest
+// complete membership run are read, or every one when no run is recorded
+// (investment_membership_scope.go); and the latest repo_id is taken with
+// argMax over a tuple, so a latest row whose repo_id is NULL stays NULL
+// instead of argMax skipping it and reviving an older row's repository.
+// None of these reads work_unit_investments again.
 func repoMixStatement(bounds []factTimeBound) string {
 	memberships := make([]string, 0, len(bounds))
 	for i, b := range bounds {
@@ -130,7 +139,7 @@ FROM (
 						if(empty(pr_refs) AND repo_id IS NOT NULL, [(toString(repo_id), '', '', '', '')], pr_refs) AS refs
 					FROM (
 						SELECT work_unit_id,
-							argMax(repo_id, computed_at) AS repo_id,
+							(argMax(tuple(repo_id), computed_at)).1 AS repo_id,
 							argMax(from_ts, computed_at) AS from_ts,
 							argMax(to_ts, computed_at) AS to_ts,
 							argMax(effort_value, computed_at) AS effort_value,
@@ -138,7 +147,7 @@ FROM (
 							argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json,
 							argMax(structural_evidence_json, computed_at) AS structural_evidence_json
 						FROM work_unit_investments
-						WHERE org_id = {org_id:String}
+						WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + investmentMembershipScopeFilter() + `
 						GROUP BY work_unit_id
 					)
 				)
@@ -371,9 +380,11 @@ func (p *InvestmentProvider) teamOwnedRepoMix(ctx context.Context, orgID string,
 }
 
 // readTeamOwnedRepositories reads team -> owned repository ids as of bound.
+// An ownership row with no repo_id is resolved by repository name
+// (ownedRepositoriesSource, CHAOS-7073 K11).
 func (p *InvestmentProvider) readTeamOwnedRepositories(ctx context.Context, orgID string, teamIDs []string, bound factTimeBound) (map[string][]string, error) {
-	statement := withRowLimit(`SELECT DISTINCT team_id, toString(repo_id) FROM team_repo_ownership FINAL
-WHERE org_id = {org_id:String} AND repo_id IS NOT NULL AND team_id IN {ids:Array(String)}` + ownershipValidityPredicate(bound))
+	statement := withRowLimit(`SELECT DISTINCT team_id, repo_key FROM ` +
+		ownedRepositoriesSource(` AND team_id IN {ids:Array(String)}`+ownershipValidityPredicate(bound)))
 	extra := make([]readers.Binding, 0, 2)
 	for _, b := range bound.bindings() {
 		extra = append(extra, readers.Binding{Name: b.Name, Value: b.Value})

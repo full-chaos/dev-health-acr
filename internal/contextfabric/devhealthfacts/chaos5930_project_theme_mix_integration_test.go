@@ -43,7 +43,8 @@ func createCHAOS5930Tables(t *testing.T, ctx context.Context, connection clickho
 	t.Helper()
 	for _, statement := range devhealthschema.DDL(
 		"projects", "teams", "team_project_ownership", "team_repo_ownership",
-		"repos", "work_unit_investments", "investment_metrics_daily",
+		"repos", "work_unit_investments", "work_unit_supersessions", "work_unit_membership_runs", "work_unit_membership",
+		"investment_metrics_daily",
 		"work_item_team_attributions", "work_items", "project_membership_transitions",
 	) {
 		if err := connection.Exec(ctx, statement); err != nil {

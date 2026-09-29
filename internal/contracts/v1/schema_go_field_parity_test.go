@@ -156,8 +156,10 @@ var schemaRootTypes = map[string]string{
 // genuinely not served from a struct in this package -- it is not a place to
 // park a disagreement.
 var schemaRootExemptions = map[string]string{
-	"context_fabric_common.v1.schema.json": "a pure $defs library with no root type of its own (the document has no top-level \"type\"); every shape it publishes is anchored through its $defs entries below, so exempting the ROOT removes nothing from coverage",
-	"evaluation_demo.v1.schema.json":       "a demonstration artifact with no Go producer in this package -- nothing under internal/contracts/v1 marshals it, and contractcheck validates it purely as an example/schema pair (internal/contractcheck/run.go registers evaluation_demo.v1.json against it). With no producing struct there is no Go field set to anchor to.",
+	"mcp_read_facts_request.v1.schema.json":  "served from internal/contextfabric/directread (FactsRequest/FactsResponse), not internal/contracts/v1: the response schema is anchored to those Go types by internal/contextfabric/directread/chaos7073_schema_test.go",
+	"mcp_read_facts_response.v1.schema.json": "served from internal/contextfabric/directread (FactsRequest/FactsResponse), not internal/contracts/v1: the response schema is anchored to those Go types by internal/contextfabric/directread/chaos7073_schema_test.go",
+	"context_fabric_common.v1.schema.json":   "a pure $defs library with no root type of its own (the document has no top-level \"type\"); every shape it publishes is anchored through its $defs entries below, so exempting the ROOT removes nothing from coverage",
+	"evaluation_demo.v1.schema.json":         "a demonstration artifact with no Go producer in this package -- nothing under internal/contracts/v1 marshals it, and contractcheck validates it purely as an example/schema pair (internal/contractcheck/run.go registers evaluation_demo.v1.json against it). With no producing struct there is no Go field set to anchor to.",
 }
 
 // schemaDefTypeOverrides binds one "<document>#<defName>" to a Go type name
@@ -228,6 +230,12 @@ var schemaDefExemptions = map[string]string{
 	"mcp_investigate_question_request.v1.schema.json#BareHandleReceiptID":       "a bare-string node (CHAOS-7114: a receipt_id given as a plain string, expanded to the object form by the MCP handler before decode) -- not an object, so there is no field set for a Go struct to match",
 	"mcp_investigate_question_request.v1.schema.json#BareKindReceiptID":         "a bare-string node (CHAOS-7114: a receipt_id given as a plain string, expanded to the object form by the MCP handler before decode) -- not an object, so there is no field set for a Go struct to match",
 	"mcp_investigate_question_request.v1.schema.json#BareWindowReceiptID":       "a bare-string node (CHAOS-7114: a receipt_id given as a plain string, expanded to the object form by the MCP handler before decode) -- not an object, so there is no field set for a Go struct to match",
+	"mcp_read_facts_response.v1.schema.json#ReadFactsSubjectRef":                "sub-object of mcp_read_facts_response.v1, served from directread (see schemaRootExemptions)",
+	"mcp_read_facts_response.v1.schema.json#Provenance":                         "sub-object of mcp_read_facts_response.v1, served from directread (see schemaRootExemptions)",
+	"mcp_read_facts_response.v1.schema.json#ServedFact":                         "sub-object of mcp_read_facts_response.v1, served from directread (see schemaRootExemptions)",
+	"mcp_read_facts_response.v1.schema.json#ServedSubject":                      "sub-object of mcp_read_facts_response.v1, served from directread (see schemaRootExemptions)",
+	"mcp_read_facts_response.v1.schema.json#ServedTable":                        "sub-object of mcp_read_facts_response.v1, served from directread (see schemaRootExemptions)",
+	"mcp_read_facts_response.v1.schema.json#WithheldItem":                       "sub-object of mcp_read_facts_response.v1, served from directread (see schemaRootExemptions)",
 	// Composition and container nodes: these publish no property set of
 	// their own, so there is no field set for a Go struct to match. Each was
 	// read before being listed.

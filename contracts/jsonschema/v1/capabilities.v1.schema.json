@@ -48,6 +48,7 @@
           "source_evidence",
           "investigate_question",
           "investigation_result",
+          "read_facts",
           "record_episode"
         ]
       },

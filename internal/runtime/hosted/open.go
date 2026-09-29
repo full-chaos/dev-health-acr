@@ -1303,5 +1303,17 @@ func buildDirectReads(investigator contextfabric.Investigator, logger *slog.Logg
 		}
 		return nil, nil
 	}
-	return directread.NewSubjectGate(authority, directread.NewSlogRecorder(logger)), directread.NewFactReader(facts)
+	gate := directread.NewSubjectGate(authority, directread.NewSlogRecorder(logger))
+	// CHAOS-7073: the direct fact reader reads through a registry with the
+	// scope expander OFF (FactCapabilityRegistry.WithoutScopeExpansion):
+	// derived subjects are not proved authorized on the direct path.
+	if sourcer, ok := facts.(contextfabric.DirectReadFactSourcer); ok {
+		if direct := sourcer.DirectReadFactSource(); !storage.IsNil(direct) {
+			return gate, directread.NewFactReader(direct)
+		}
+	}
+	if logger != nil {
+		logger.Error("context fabric direct read gate not composed", "reason", "fact_registry_unsupported")
+	}
+	return gate, nil
 }

@@ -15,6 +15,7 @@ const (
 	toolSourceEvidence      = "source_evidence"
 	toolInvestigateQuestion = "investigate_question"
 	toolInvestigationResult = "investigation_result"
+	toolReadFacts           = "read_facts"
 	toolRecordEpisode       = "record_episode"
 )
 
@@ -174,6 +175,15 @@ func newServer(cfg *ProcessConfig, caller *CallerContext, serverVersion string, 
 			},
 		)
 	}
+	// CHAOS-7073: advertise-gated like the answer tools.
+	if hostedToolEnabled(caller, toolReadFacts) {
+		server.AddTool(
+			buildTool(toolReadFacts, "Read facts", readFactsRequestSchemaFile, readFactsResponseSchemaFile),
+			func(ctx context.Context, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+				return handleReadFacts(ctx, cfg, req)
+			},
+		)
+	}
 	registerGuideResources(server)
 	registerInvestigatePrompts(server, caller)
 	if recordEpisodeEnabled(cfg, caller) {
@@ -228,6 +238,9 @@ func serverInstructions(cfg *ProcessConfig, caller *CallerContext) string {
 	}
 	if hostedToolEnabled(caller, toolInvestigationResult) {
 		b.WriteString("- investigation_result: you need the full result behind a previous answer. Pass its result_id.\n")
+	}
+	if hostedToolEnabled(caller, toolReadFacts) {
+		b.WriteString("- read_facts: you have canonical subject ids (as returned by other tools) and want their stored facts, without a model run. Pass kinds, subjects and optionally a window.\n")
 	}
 	b.WriteString("- source_evidence: you want to check or quote one source. Pass an evidence_ref_id returned by another tool, unchanged, with the result_id of the answer that returned it.\n")
 	if recordEpisodeEnabled(cfg, caller) {

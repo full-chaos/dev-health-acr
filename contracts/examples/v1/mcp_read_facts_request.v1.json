@@ -1,0 +1,17 @@
+{
+  "kinds": [
+    "investment_distribution"
+  ],
+  "subjects": [
+    {
+      "kind": "team",
+      "canonical_id": "team-payments"
+    }
+  ],
+  "window": {
+    "mode": "trailing",
+    "days": 30
+  },
+  "tables": "include",
+  "max_bytes": 65536
+}

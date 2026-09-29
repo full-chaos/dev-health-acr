@@ -561,10 +561,9 @@ project_team AS (
 	FROM ` + projectOwnershipJoinSQL(ownershipPredicate) + `
 ),
 project_repo_team AS (
-	SELECT DISTINCT pt.project_provider AS project_provider, pt.project_id AS project_id, tro.repo_id AS repo_id, pt.team_id AS team_id
+	SELECT DISTINCT pt.project_provider AS project_provider, pt.project_id AS project_id, toUUID(tro.repo_key) AS repo_id, pt.team_id AS team_id
 	FROM project_team AS pt
-	INNER JOIN team_repo_ownership AS tro FINAL ON tro.team_id = pt.team_id
-	WHERE tro.org_id = {org_id:String} AND tro.repo_id IS NOT NULL` + ownershipPredicate + `
+	INNER JOIN ` + ownedRepositoriesSource(ownershipPredicate) + ` AS tro ON tro.team_id = pt.team_id
 ),
 project_repo AS (
 	SELECT DISTINCT project_provider, project_id, repo_id FROM project_repo_team

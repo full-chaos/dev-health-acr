@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/acr/v1/mcp_read_facts_request.v1.schema.json",
+  "title": "ACR MCP read_facts Request v1",
+  "description": "Input for the read_facts tool: fact kinds, canonical subjects and an optional window.",
+  "examples": [
+    {
+      "kinds": [
+        "investment_distribution"
+      ],
+      "subjects": [
+        {
+          "kind": "team",
+          "canonical_id": "team-payments"
+        }
+      ],
+      "window": {
+        "mode": "trailing",
+        "days": 30
+      },
+      "tables": "include",
+      "max_bytes": 65536
+    }
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kinds",
+    "subjects"
+  ],
+  "properties": {
+    "kinds": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      },
+      "description": "Fact kinds to read (1 to 8). A kind the server does not serve is refused by name in the response."
+    },
+    "subjects": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 25,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "canonical_id"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "canonical_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "description": "A canonical subject reference, as returned by other tools. Never build or guess one."
+      },
+      "description": "Canonical subjects to read (1 to 25), as returned by other tools. A subject you may not read and one that does not exist give the same answer."
+    },
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "current",
+            "as_of",
+            "range",
+            "trailing"
+          ],
+          "description": "current takes nothing else; as_of takes as_of; range takes start and end; trailing takes days."
+        },
+        "as_of": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Point in time, not in the future. Only with mode as_of."
+        },
+        "start": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Range start. Only with mode range."
+        },
+        "end": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Range end, after start. Only with mode range."
+        },
+        "days": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60,
+          "description": "Trailing days. Only with mode trailing. A range or trailing window spans at most 60 days."
+        }
+      },
+      "description": "Time window. Omit it and each kind answers over its own default period; the response says so."
+    },
+    "tables": {
+      "enum": [
+        "include",
+        "omit",
+        "only"
+      ],
+      "description": "include (default) returns fields and tables; omit returns fields only; only returns tables only."
+    },
+    "max_bytes": {
+      "type": "integer",
+      "minimum": 4096,
+      "maximum": 262144,
+      "default": 65536,
+      "description": "Bound on the serialized response. Facts over the bound are left out and named in truncation; coverage is never cut."
+    }
+  }
+}

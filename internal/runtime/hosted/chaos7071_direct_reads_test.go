@@ -44,9 +44,21 @@ func TestChaos7071BuildDirectReads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("falkorgraph.New (lazy, no server needed): %v", err)
 	}
-	gate, reader := buildDirectReads(chaos7071Investigator{graph: adapter, facts: chaos7071Facts{}}, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+	registry, err := contextfabric.NewFactCapabilityRegistry(nil, contextfabric.FactRegistryOptions{})
+	if err != nil {
+		t.Fatalf("empty registry: %v", err)
+	}
+	gate, reader := buildDirectReads(chaos7071Investigator{graph: adapter, facts: registry}, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
 	if gate == nil || reader == nil {
 		t.Fatal("a composed engine over the production graph adapter built no direct-read gate")
+	}
+	// CHAOS-7073: a fact reader that is not the production registry cannot
+	// be switched to no scope expansion, so the direct fact reader is not
+	// built (fail closed, logged); the subject gate still is.
+	var registryLogs bytes.Buffer
+	gate, reader = buildDirectReads(chaos7071Investigator{graph: adapter, facts: chaos7071Facts{}}, slog.New(slog.NewTextHandler(&registryLogs, nil)))
+	if gate == nil || reader != nil || !strings.Contains(registryLogs.String(), "fact_registry_unsupported") {
+		t.Fatalf("non-registry facts: gate %v reader %v logs %q", gate, reader, registryLogs.String())
 	}
 	if gate, reader := buildDirectReads(nil, nil); gate != nil || reader != nil {
 		t.Fatal("no investigator built a gate")

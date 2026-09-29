@@ -62,7 +62,10 @@ func TestFactReaderReadsOnlyGateAdmittedSubjects(t *testing.T) {
 		t.Fatalf("%d registry reads", len(source.requests))
 	}
 	got := source.requests[0]
-	if !slices.Equal(got.Subjects, []contextfabric.SubjectRef{repoA, teamT}) || got.Cohort != nil || got.Scope != nil {
+	// CHAOS-7073: admitted subjects carry their canonical id as label (the
+	// registry rejects a fact whose subject has no label).
+	labelled := func(ref contextfabric.SubjectRef) contextfabric.SubjectRef { ref.Label = ref.CanonicalID; return ref }
+	if !slices.Equal(got.Subjects, []contextfabric.SubjectRef{labelled(repoA), labelled(teamT)}) || got.Cohort != nil || got.Scope != nil {
 		t.Fatalf("registry request subjects %v cohort %v scope %v", got.Subjects, got.Cohort, got.Scope)
 	}
 }

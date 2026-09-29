@@ -52,6 +52,11 @@ func (a *App) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	if entitled && capabilities.Permissions.ContextRead && a.investigationResults() != nil {
 		capabilities.EnabledTools = append(capabilities.EnabledTools, "investigation_result")
 	}
+	// CHAOS-7073: read_facts needs a composed direct facts reader, exactly as
+	// the answer tools need their composed dependencies.
+	if entitled && capabilities.Permissions.ContextRead && a.directFacts() != nil {
+		capabilities.EnabledTools = append(capabilities.EnabledTools, "read_facts")
+	}
 	if entitled && capabilities.Permissions.EpisodeWrite && a.runtime.Episodes != nil {
 		capabilities.EnabledTools = append(capabilities.EnabledTools, "record_episode")
 	}

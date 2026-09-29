@@ -40,6 +40,11 @@ type chaos7071RecordingFacts struct {
 	requests []contextfabric.CanonicalFactRequest
 }
 
+// DirectReadFactSource: a recording fake has no scope expander, so it is its
+// own direct-read source (CHAOS-7073; production hands the direct path the
+// registry with expansion off).
+func (f *chaos7071RecordingFacts) DirectReadFactSource() contextfabric.CanonicalFactReader { return f }
+
 func (f *chaos7071RecordingFacts) ReadFacts(_ context.Context, _ storage.Principal, request contextfabric.CanonicalFactRequest) (contextfabric.CanonicalFactBundle, error) {
 	f.requests = append(f.requests, request)
 	return contextfabric.CanonicalFactBundle{}, nil

@@ -89,7 +89,7 @@ func (a *App) Handler() http.Handler {
 	// assertions), entitlement required; handlers are stubs until S1a/S2.
 	mux.Handle("GET "+ContextFabricDataCatalogPath, a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, false, a.contextFabricDataCatalogHandler()))
 	mux.Handle("POST "+ContextFabricDataSubjectsPath, a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, false, a.contextFabricDataSubjectsHandler()))
-	mux.Handle("POST "+ContextFabricDataFactsPath, a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, false, a.contextFabricDataFactsHandler()))
+	mux.Handle("POST "+ContextFabricDataFactsPath, a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, false, a.requireDataStoresReady(a.contextFabricDataFactsHandler())))
 	mux.Handle("POST "+ContextFabricDataOperationsPath, a.protectedRuntimeHandler(limits.RequestClassData, auth.ScopeDataRead, true, false, a.contextFabricDataOperationsHandler()))
 	mux.Handle("POST /api/v1/oauth/device_authorization", a.deviceRuntimeHandler(http.HandlerFunc(a.handleDeviceAuthorization)))
 	mux.Handle("POST /api/v1/oauth/token", http.HandlerFunc(a.handleDeviceToken))

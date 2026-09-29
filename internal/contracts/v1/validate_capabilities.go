@@ -55,7 +55,7 @@ func validEnabledTool(name string) bool {
 	// (sidecar.validateCapabilities), so a name the hosted API advertises
 	// but this set omits does not degrade -- it refuses to boot the
 	// sidecar entirely.
-	case "context_for_task", "source_evidence", "investigate_question", "investigation_result", "record_episode":
+	case "context_for_task", "source_evidence", "investigate_question", "investigation_result", "read_facts", "record_episode":
 		return true
 	default:
 		return false
