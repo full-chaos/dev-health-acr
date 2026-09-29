@@ -101,12 +101,21 @@ func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler
 		// the budget, and every refusal below reaches RecordFailure. A success
 		// does not reset the count either, so a guessing burst cannot be
 		// laundered through one valid token.
-		if a.limiter.FailureBlocked(ip, now) {
-			a.writeRateLimitError(w, r, a.limiter.RetryAfter(ip, now))
+		release, admitted := a.limiter.BeginAttempt(ip, now)
+		if !admitted {
+			retryAfter := a.limiter.RetryAfter(ip, now)
+			if retryAfter <= 0 {
+				retryAfter = time.Second
+			}
+			a.writeRateLimitError(w, r, retryAfter)
 			return
 		}
+		// Held only while the credential is being decided (failures are
+		// recorded before the deferred release runs); released before the
+		// wrapped handler so a long handler never occupies the budget.
+		defer release()
 		if len(r.Header.Values(WebAssertionHeader)) > 0 {
-			a.authenticateWebAssertion(w, r, ip, now, allowWebAssertions, next)
+			a.authenticateWebAssertion(w, r, ip, now, allowWebAssertions, release, next)
 			return
 		}
 		raw := extractBearer(r)
@@ -160,6 +169,7 @@ func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler
 			Permissions:      append([]string(nil), credential.Scopes...),
 		}
 		ctx := context.WithValue(r.Context(), principalKey{}, principal)
+		release()
 		response := &responseStatusWriter{ResponseWriter: w}
 		next.ServeHTTP(response, r.WithContext(ctx))
 		if response.successful() {

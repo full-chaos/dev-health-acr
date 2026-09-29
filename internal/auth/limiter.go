@@ -8,14 +8,24 @@ import (
 type AttemptLimiter interface {
 	AllowAttempt(key string, now time.Time) bool
 	FailureBlocked(key string, now time.Time) bool
+	// BeginAttempt atomically admits one authentication attempt against the
+	// failure budget: it refuses when recorded failures plus attempts still
+	// in flight already reach the limit, so concurrent guesses cannot all pass
+	// the check before any of them records its failure. The returned release
+	// must be called once the attempt is decided; it spends nothing, so a
+	// successful attempt leaves the budget untouched.
+	BeginAttempt(key string, now time.Time) (release func(), ok bool)
 	RecordFailure(key string, now time.Time)
 	RetryAfter(key string, now time.Time) time.Duration
 }
 
 type NoopLimiter struct{}
 
-func (NoopLimiter) AllowAttempt(string, time.Time) bool        { return true }
-func (NoopLimiter) FailureBlocked(string, time.Time) bool      { return false }
+func (NoopLimiter) AllowAttempt(string, time.Time) bool   { return true }
+func (NoopLimiter) FailureBlocked(string, time.Time) bool { return false }
+func (NoopLimiter) BeginAttempt(string, time.Time) (func(), bool) {
+	return func() {}, true
+}
 func (NoopLimiter) RecordFailure(string, time.Time)            {}
 func (NoopLimiter) RetryAfter(string, time.Time) time.Duration { return 0 }
 
@@ -32,6 +42,7 @@ type MemoryLimiter struct {
 	maxKeys      int
 	attempts     map[string]fixedWindow
 	failures     map[string]fixedWindow
+	inflight     map[string]int
 }
 
 type MemoryLimiterOptions struct {
@@ -52,7 +63,7 @@ func NewBoundedMemoryLimiter(options MemoryLimiterOptions) *MemoryLimiter {
 	return &MemoryLimiter{
 		Window: options.Window, AttemptLimit: options.AttemptLimit, FailureLimit: options.FailureLimit,
 		maxKeys:  options.MaxTrackedKeys,
-		attempts: make(map[string]fixedWindow), failures: make(map[string]fixedWindow),
+		attempts: make(map[string]fixedWindow), failures: make(map[string]fixedWindow), inflight: make(map[string]int),
 	}
 }
 
@@ -81,6 +92,32 @@ func (l *MemoryLimiter) FailureBlocked(key string, now time.Time) bool {
 	}
 	l.failures[key] = window
 	return l.FailureLimit > 0 && window.Count >= l.FailureLimit
+}
+
+func (l *MemoryLimiter) BeginAttempt(key string, now time.Time) (func(), bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	window, tracked := l.window(l.failures, key, now)
+	if !tracked {
+		return nil, false
+	}
+	l.failures[key] = window
+	if l.FailureLimit > 0 && window.Count+l.inflight[key] >= l.FailureLimit {
+		return nil, false
+	}
+	l.inflight[key]++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			l.mu.Lock()
+			defer l.mu.Unlock()
+			if l.inflight[key] <= 1 {
+				delete(l.inflight, key)
+				return
+			}
+			l.inflight[key]--
+		})
+	}, true
 }
 
 func (l *MemoryLimiter) RecordFailure(key string, now time.Time) {

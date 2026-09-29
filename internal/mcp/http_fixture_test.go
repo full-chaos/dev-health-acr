@@ -96,7 +96,10 @@ type switchLimiter struct{ blocked *atomic.Bool }
 
 func (l switchLimiter) AllowAttempt(string, time.Time) bool   { return true }
 func (l switchLimiter) FailureBlocked(string, time.Time) bool { return l.blocked.Load() }
-func (l switchLimiter) RecordFailure(string, time.Time)       {}
+func (l switchLimiter) BeginAttempt(string, time.Time) (func(), bool) {
+	return func() {}, !l.blocked.Load()
+}
+func (l switchLimiter) RecordFailure(string, time.Time) {}
 func (l switchLimiter) RetryAfter(string, time.Time) time.Duration {
 	return 7 * time.Second
 }
