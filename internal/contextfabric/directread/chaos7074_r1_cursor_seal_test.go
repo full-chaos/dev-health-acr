@@ -178,3 +178,14 @@ func TestChaos7074_R1_TypesBoundedAndUnique(t *testing.T) {
 		}
 	}
 }
+
+// A reader without a sealer (never built by NewRelationshipsReader, but a
+// zero-value reader must not serve) fails closed rather than paging with an
+// unsealed cursor.
+func TestChaos7074_ReaderWithoutSealerFailsClosed(t *testing.T) {
+	graph := hubGraph()
+	reader := &RelationshipsReader{gate: NewSubjectGate(graph, nil), graph: graph}
+	if _, err := reader.Read(relCtx("nosealer"), unrestricted, RelationshipsRequest{Subject: RelationshipsSubject{Kind: "team", CanonicalID: teamT.CanonicalID}, Limit: 1}); !errors.Is(err, ErrRelationshipsUnavailable) {
+		t.Fatalf("err = %v", err)
+	}
+}
