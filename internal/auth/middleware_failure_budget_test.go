@@ -64,3 +64,22 @@ func TestInvalidTokenAttemptsAreLimitedPerAddress(t *testing.T) {
 		t.Fatalf("valid token after exhausted failure budget = %d, want 429", code)
 	}
 }
+
+func TestLockedOutAddressIsRefusedBeforeAnyCredentialLookup(t *testing.T) {
+	now := time.Date(2026, 9, 29, 15, 0, 0, 0, time.UTC)
+	inner := newMemoryCredentialStoreAt(t, now.Add(-time.Hour), memory.NewAuditStore())
+	issued := issueForMiddleware(t, inner, memory.NewAuditStore(), now.Add(-time.Hour), []string{ScopeContextRead}, []string{"owner/repo"}, nil)
+	store := &countingCredentialStore{CredentialStore: inner}
+	authenticator := newTestAuthenticator(t, store, memory.NewAuditStore(), now, NewMemoryLimiter(time.Minute, 100, 2))
+	handler := authenticator.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	bad := TokenPrefix + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	callWithToken(handler, bad)
+	callWithToken(handler, bad)
+	before := store.lookups
+	if code := callWithToken(handler, issued.Token); code != http.StatusTooManyRequests {
+		t.Fatalf("locked-out address = %d, want 429", code)
+	}
+	if store.lookups != before {
+		t.Fatalf("locked-out request hit the credential store: %d -> %d", before, store.lookups)
+	}
+}
