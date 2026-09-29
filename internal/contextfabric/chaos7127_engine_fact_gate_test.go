@@ -306,23 +306,23 @@ func TestCHAOS7127EngineWrapsFactsAndDirectToolsGetTheRegistry(t *testing.T) {
 
 func TestCHAOS7127ReuseKeyCarriesTheGrantOfRestrictedCallersOnly(t *testing.T) {
 	for _, principal := range []storage.Principal{{OrgID: "o"}, {OrgID: "o", RepositoryScopes: []string{"*"}}} {
-		if got := grantScopedTimeAxisKey(principal, "current"); got != "current" {
+		if got := GrantScopedTimeAxisKey(principal, "current"); got != "current" {
 			t.Errorf("%v: key = %q, want unchanged", principal.RepositoryScopes, got)
 		}
 	}
-	a := grantScopedTimeAxisKey(storage.Principal{OrgID: "o", RepositoryScopes: []string{"acme/a", "acme/b"}}, "current")
-	b := grantScopedTimeAxisKey(storage.Principal{OrgID: "o", RepositoryScopes: []string{"acme/b", " acme/a", "acme/a"}}, "current")
-	c := grantScopedTimeAxisKey(storage.Principal{OrgID: "o", RepositoryScopes: []string{"acme/a"}}, "current")
+	a := GrantScopedTimeAxisKey(storage.Principal{OrgID: "o", RepositoryScopes: []string{"acme/a", "acme/b"}}, "current")
+	b := GrantScopedTimeAxisKey(storage.Principal{OrgID: "o", RepositoryScopes: []string{"acme/b", " acme/a", "acme/a"}}, "current")
+	c := GrantScopedTimeAxisKey(storage.Principal{OrgID: "o", RepositoryScopes: []string{"acme/a"}}, "current")
 	if a == "current" || a != b {
 		t.Errorf("same grant in another order keyed differently: %q vs %q", a, b)
 	}
 	if a == c {
 		t.Errorf("different grants share a key: %q", a)
 	}
-	if got := grantScopedTimeAxisKey(storage.Principal{OrgID: "o", RepositoryScopes: []string{"acme/a"}}, ""); got != "" {
+	if got := GrantScopedTimeAxisKey(storage.Principal{OrgID: "o", RepositoryScopes: []string{"acme/a"}}, ""); got != "" {
 		t.Errorf("an unkeyed axis became keyed: %q", got)
 	}
-	if got := grantScopedTimeAxisKey(storage.Principal{OrgID: "o", RepositoryScopes: []string{"acme/a"}}, strings.Repeat("x", 100)); got != "" {
+	if got := GrantScopedTimeAxisKey(storage.Principal{OrgID: "o", RepositoryScopes: []string{"acme/a"}}, strings.Repeat("x", 100)); got != "" {
 		t.Errorf("an over-long key = %q, want never reusable", got)
 	}
 }

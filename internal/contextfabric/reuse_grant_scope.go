@@ -13,7 +13,7 @@ import (
 // (ck_acr_cf_investigation_results_time_axis_key, migration 0013).
 const reuseTimeAxisKeyMaxLength = 128
 
-// grantScopedTimeAxisKey widens the reuse key's time-axis dimension with a
+// GrantScopedTimeAxisKey widens the reuse key's time-axis dimension with a
 // digest of a repository-restricted caller's grant (CHAOS-7127).
 //
 // The engine's embedded-subject gate (engine_fact_gate.go) removes, from a
@@ -31,7 +31,7 @@ const reuseTimeAxisKeyMaxLength = 128
 // A key that would exceed the stored column's bound returns "", which both
 // sides already treat as never reusable (lookup misses; Save stores it as
 // "unkeyed"): fail closed, never a failed Save.
-func grantScopedTimeAxisKey(principal storage.Principal, axisKey string) string {
+func GrantScopedTimeAxisKey(principal storage.Principal, axisKey string) string {
 	if axisKey == "" || classifyStoredResultPrincipalScope(principal) != StoredResultScopeRestricted {
 		return axisKey
 	}
