@@ -187,20 +187,25 @@ func TestAppAuthenticatedHandlerUsesInjectedAttemptLimiter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := func() *http.Request {
+	request := func(bearer string) *http.Request {
 		value := httptest.NewRequest(http.MethodGet, "/evidence", nil)
-		value.Header.Set("Authorization", "Bearer "+token)
+		value.Header.Set("Authorization", "Bearer "+bearer)
 		value.Header.Set("X-Request-ID", "req_0123456789abcdef0123456789abcdef")
 		return value
 	}
 
-	first := httptest.NewRecorder()
-	handler.ServeHTTP(first, request())
-	second := httptest.NewRecorder()
-	handler.ServeHTTP(second, request())
+	// A valid credential does not spend the per-address budget.
+	valid := httptest.NewRecorder()
+	handler.ServeHTTP(valid, request(token))
+	// One failed authentication reaches the injected limiter's failure limit.
+	failed := httptest.NewRecorder()
+	handler.ServeHTTP(failed, request("not-a-token"))
+	// The address is now locked out, even for a valid credential.
+	locked := httptest.NewRecorder()
+	handler.ServeHTTP(locked, request(token))
 
-	if first.Code != http.StatusNoContent || second.Code != http.StatusTooManyRequests {
-		t.Fatalf("statuses = %d, %d", first.Code, second.Code)
+	if valid.Code != http.StatusNoContent || failed.Code != http.StatusUnauthorized || locked.Code != http.StatusTooManyRequests {
+		t.Fatalf("statuses = %d, %d, %d", valid.Code, failed.Code, locked.Code)
 	}
 }
 
