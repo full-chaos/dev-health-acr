@@ -205,7 +205,7 @@ func TestStoredResultGateDecisionTable(t *testing.T) {
 				c.graph.capturingGraphReader = &capturingGraphReader{}
 				graph = c.graph
 			}
-			decision := NewStoredResultGate(graph).Authorize(context.Background(), c.principal, StoredInvestigationResult{Result: c.result}, StoredResultSurfaceResultByID)
+			decision := NewStoredResultGate(graph).Authorize(context.Background(), c.principal, StoredInvestigationResult{Result: c.result, GrantDigest: StoredResultGrantDigest(c.principal)}, StoredResultSurfaceResultByID)
 			if decision.Decision != c.decision || decision.Reason != c.reason {
 				t.Fatalf("decision = %s/%s, want %s/%s (%+v)", decision.Decision, decision.Reason, c.decision, c.reason, decision)
 			}
@@ -254,7 +254,7 @@ func TestStoredResultAuthorizationLogArgsCarryNoIdentity(t *testing.T) {
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project:secret-id", Label: "Secret Label"}
 	graph := &gateGraph{capturingGraphReader: &capturingGraphReader{}, outcomes: map[string]StoredSubjectOutcome{SubjectMapKey(project): StoredSubjectDenied}}
 	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"acme/tools", "acme/web"}}
-	decision := NewStoredResultGate(graph).Authorize(context.Background(), principal, StoredInvestigationResult{Result: gateResult(project)}, StoredResultSurfacePriorResult)
+	decision := NewStoredResultGate(graph).Authorize(context.Background(), principal, StoredInvestigationResult{Result: gateResult(project), GrantDigest: StoredResultGrantDigest(principal)}, StoredResultSurfacePriorResult)
 	args := StoredResultAuthorizationLogArgs(principal, decision)
 	rendered := fmt.Sprint(args...)
 	for _, secret := range []string{project.CanonicalID, project.Label} {
@@ -284,7 +284,7 @@ func TestStoredResultAuthorizationLogArgsCarryNoIdentity(t *testing.T) {
 		t.Error("error_class written for a decision with no plane failure")
 	}
 	graph.readErr = context.DeadlineExceeded
-	failed := NewStoredResultGate(graph).Authorize(context.Background(), principal, StoredInvestigationResult{Result: gateResult(project)}, StoredResultSurfacePriorResult)
+	failed := NewStoredResultGate(graph).Authorize(context.Background(), principal, StoredInvestigationResult{Result: gateResult(project), GrantDigest: StoredResultGrantDigest(principal)}, StoredResultSurfacePriorResult)
 	failedArgs := StoredResultAuthorizationLogArgs(principal, failed)
 	if got := failedArgs[len(failedArgs)-1]; got != "deadline_exceeded" {
 		t.Errorf("error_class = %v", got)

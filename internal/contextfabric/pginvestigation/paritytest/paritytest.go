@@ -1212,3 +1212,45 @@ func RunCitedEvidenceSuite(t *testing.T, newStore func(t *testing.T) contextfabr
 		})
 	}
 }
+
+// RunGrantDigestSuite (CHAOS-7145) is the shared proof that Save records the
+// COMPUTING principal's grant digest on the carrier Get returns, per grant
+// class, identically in both adapters.
+func RunGrantDigestSuite(t *testing.T, newStore func(t *testing.T) contextfabric.InvestigationResultStore) {
+	t.Helper()
+	restrictedA := storage.Principal{OrgID: "org-a", RepositoryScopes: []string{"acme/tools", "acme/web"}}
+	restrictedReordered := storage.Principal{OrgID: "org-a", RepositoryScopes: []string{"acme/web", " acme/tools", "acme/web"}}
+	restrictedB := storage.Principal{OrgID: "org-a", RepositoryScopes: []string{"acme/tools"}}
+	universal := storage.Principal{OrgID: "org-a", RepositoryScopes: []string{"*"}}
+	unrestricted := storage.Principal{OrgID: "org-a"}
+	cases := []struct {
+		name      string
+		principal storage.Principal
+		want      string
+	}{
+		{"restricted", restrictedA, contextfabric.StoredResultGrantDigest(restrictedA)},
+		{"same grant, other order", restrictedReordered, contextfabric.StoredResultGrantDigest(restrictedA)},
+		{"other restricted grant", restrictedB, contextfabric.StoredResultGrantDigest(restrictedB)},
+		{"universal", universal, "open"},
+		{"unrestricted", unrestricted, "open"},
+	}
+	if cases[0].want == cases[2].want || !strings.HasPrefix(cases[0].want, "g:") {
+		t.Fatalf("restricted digests do not separate grants: %q vs %q", cases[0].want, cases[2].want)
+	}
+	for index, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newStore(t)
+			row := result(fmt.Sprintf("result-grant-digest-%d", index), "who computed this?")
+			if err := store.Save(context.Background(), tc.principal, row, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation)); err != nil {
+				t.Fatalf("save: %v", err)
+			}
+			stored, err := store.Get(context.Background(), tc.principal, row.ResultID)
+			if err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			if stored.GrantDigest != tc.want {
+				t.Fatalf("GrantDigest = %q, want %q", stored.GrantDigest, tc.want)
+			}
+		})
+	}
+}

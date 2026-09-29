@@ -21,8 +21,10 @@ type lifetimeTupleReuseGate struct {
 	stored contextfabric.StoredInvestigationResult
 }
 
-func (g lifetimeTupleReuseGate) FindReusable(context.Context, storage.Principal, contextfabric.ReuseKey) (contextfabric.StoredInvestigationResult, bool, contextfabric.ReuseMissReason, error) {
-	return g.stored, true, "", nil
+func (g lifetimeTupleReuseGate) FindReusable(_ context.Context, reader storage.Principal, _ contextfabric.ReuseKey) (contextfabric.StoredInvestigationResult, bool, contextfabric.ReuseMissReason, error) {
+	stored := g.stored
+	stored.GrantDigest = contextfabric.StoredResultGrantDigest(reader) // computed under the reader's own grant
+	return stored, true, "", nil
 }
 
 type lifetimeTupleGraph struct{ calls int }

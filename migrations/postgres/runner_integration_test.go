@@ -94,7 +94,7 @@ import (
 // package doc comment has the full flow). 0042 (CHAOS-6233) is the RFC 8628
 // device-code grant's client/resource/scope binding table,
 // acr.oauth_device_grants, FK'd to acr.device_authorizations. 0043 (CHAOS-6231) binds an OAuth authorization request to the first signed-in web user who opens it (bound_org_id, bound_subject).
-var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43}
+var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44}
 
 func TestEmbeddedRunner_appliesMigrationsInOrder_whenDatabaseIsFresh(t *testing.T) {
 	// Given
@@ -1507,4 +1507,66 @@ func TestRunner_upgradeTo41AcceptsMetadataDocumentClientKind(t *testing.T) {
 	require.NoError(t, insert(strings.Repeat("2", 64), strings.Repeat("b", 64), "metadata_document"))
 	require.NoError(t, insert(strings.Repeat("3", 64), strings.Repeat("c", 64), "dynamic"))
 	require.Error(t, insert(strings.Repeat("4", 64), strings.Repeat("e", 64), "confidential"), "an unknown client kind stays refused")
+}
+
+// TestRunner_upgradeTo44AddsGrantDigestColumn (CHAOS-7145): a database at every
+// migration before 0044, holding a result row, gains the nullable grant_digest
+// column; the pre-existing row reads back NULL (never backfilled -- the grant
+// that computed it cannot be reconstructed); the shape constraint accepts
+// 'open' and 'g:<32 hex>' and refuses anything else.
+func TestRunner_upgradeTo44AddsGrantDigestColumn(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDatabase(t, ctx)
+	pre := fstest.MapFS{}
+	entries, err := fs.ReadDir(Files, ".")
+	require.NoError(t, err)
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".sql") || name >= "0044_" {
+			continue
+		}
+		body, readErr := fs.ReadFile(Files, name)
+		require.NoError(t, readErr)
+		pre[name] = &fstest.MapFile{Data: body}
+	}
+	require.Len(t, pre, 43, "every migration before 0044")
+	released, err := NewRunner(pre)
+	require.NoError(t, err)
+	require.NoError(t, released.Up(ctx, db))
+
+	_, err = db.ExecContext(ctx, `INSERT INTO acr.context_fabric_investigation_results (result_id, org_id, payload, generated_at) VALUES ('result_legacy_0044', 'org-0044', '{}'::jsonb, now())`)
+	require.NoError(t, err)
+
+	latest, err := Embedded()
+	require.NoError(t, err)
+	require.NoError(t, latest.Up(ctx, db))
+	require.Equal(t, expectedMigrationVersions, migrationVersions(t, ctx, latest, db))
+	requireContextFabricInvestigationResultsColumn(t, ctx, db, "grant_digest")
+	requireConstraintExists(t, ctx, db, "ck_acr_cf_investigation_results_grant_digest_shape")
+
+	var legacy sql.NullString
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT grant_digest FROM acr.context_fabric_investigation_results WHERE result_id = 'result_legacy_0044'`).Scan(&legacy))
+	require.False(t, legacy.Valid, "a row written before the column must read back NULL, never backfilled")
+
+	for _, tc := range []struct {
+		value string
+		ok    bool
+	}{
+		{"open", true},
+		{"g:" + strings.Repeat("0f", 16), true},
+		{"", false},
+		{"restricted", false},
+		{"g:" + strings.Repeat("0f", 15), false},
+		{"G:" + strings.Repeat("0f", 16), false},
+		{"g:" + strings.Repeat("zz", 16), false},
+	} {
+		_, err := db.ExecContext(ctx, `UPDATE acr.context_fabric_investigation_results SET grant_digest = $1 WHERE result_id = 'result_legacy_0044'`, tc.value)
+		if tc.ok {
+			require.NoError(t, err, tc.value)
+		} else {
+			require.Error(t, err, tc.value)
+		}
+	}
+	_, err = db.ExecContext(ctx, `UPDATE acr.context_fabric_investigation_results SET grant_digest = NULL WHERE result_id = 'result_legacy_0044'`)
+	require.NoError(t, err, "SQL NULL is the unrecorded digest and is always storable")
 }

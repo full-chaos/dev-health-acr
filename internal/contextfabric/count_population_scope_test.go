@@ -709,12 +709,13 @@ type readingReuseGate struct {
 	anchorKind SubjectKind
 }
 
-func (g readingReuseGate) FindReusable(context.Context, storage.Principal, ReuseKey) (StoredInvestigationResult, bool, ReuseMissReason, error) {
+func (g readingReuseGate) FindReusable(_ context.Context, reader storage.Principal, _ ReuseKey) (StoredInvestigationResult, bool, ReuseMissReason, error) {
 	if g.frame == nil {
-		return StoredInvestigationResult{Result: g.stored, SemanticStateRead: SemanticStateReadAbsent}, true, "", nil
+		return StoredInvestigationResult{Result: g.stored, GrantDigest: StoredResultGrantDigest(reader), SemanticStateRead: SemanticStateReadAbsent}, true, "", nil
 	}
 	return StoredInvestigationResult{
 		Result:            g.stored,
+		GrantDigest:       StoredResultGrantDigest(reader),
 		SemanticState:     &PersistedSemanticState{FramePresent: true, Frame: g.frame, ScopeAnchor: SemanticScopeAnchor{Kind: g.anchorKind}},
 		SemanticStateRead: SemanticStateReadAvailable,
 	}, true, "", nil

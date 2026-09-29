@@ -30,7 +30,7 @@ type retainedRankingSnapshotStore struct {
 	stored cf.StoredInvestigationResult
 }
 
-func (s retainedRankingSnapshotStore) Get(_ context.Context, _ storage.Principal, id string) (cf.StoredInvestigationResult, error) {
+func (s retainedRankingSnapshotStore) Get(_ context.Context, reader storage.Principal, id string) (cf.StoredInvestigationResult, error) {
 	if id != s.stored.Result.ResultID {
 		return cf.StoredInvestigationResult{}, cf.ErrInvestigationResultNotFound
 	}
@@ -40,6 +40,7 @@ func (s retainedRankingSnapshotStore) Get(_ context.Context, _ storage.Principal
 	}
 	var copied cf.StoredInvestigationResult
 	err = json.Unmarshal(data, &copied)
+	copied.GrantDigest = cf.StoredResultGrantDigest(reader) // computed under the reader's own grant
 	return copied, err
 }
 func TestRetainedRankingProductionSnapshotServing(t *testing.T) {
@@ -144,7 +145,7 @@ func TestRetainedRankingProductionSnapshotServing(t *testing.T) {
 					t.Fatal("repeated by-ID serving changed result")
 				}
 				savedAfter, err := store.Get(context.Background(), storage.Principal{OrgID: callerOrgID}, stored.Result.ResultID)
-				if err != nil || !reflect.DeepEqual(savedAfter, stored) {
+				if err != nil || !reflect.DeepEqual(savedAfter, withOwnGrant(stored, storage.Principal{OrgID: callerOrgID})) {
 					t.Fatalf("stored carrier changed: %v", err)
 				}
 				// Exercise the actual TLS route, projection and MCP forwarding.

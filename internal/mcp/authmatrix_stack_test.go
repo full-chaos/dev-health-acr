@@ -319,7 +319,7 @@ func newMatrixStackWith(t *testing.T, investigator func(*memoryinvestigation.Sto
 
 	results := memoryinvestigation.NewStore()
 	seed := func(orgID string, result contractsv1.ContextFabricInvestigationResult) {
-		err := results.Save(context.Background(), storage.Principal{OrgID: orgID}, result, contextfabric.SourceWatermarkSnapshot{}, nil,
+		err := results.Save(context.Background(), storage.Principal{OrgID: orgID, RepositoryScopes: []string{repoWidget}}, result, contextfabric.SourceWatermarkSnapshot{}, nil,
 			contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{},
 			contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation))
 		if err != nil {

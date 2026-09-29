@@ -250,3 +250,10 @@ func TestStore_structureSupersessionClaims(t *testing.T) {
 		})
 	}
 }
+
+// TestStore_grantDigest runs the shared grant-digest cells (CHAOS-7145).
+func TestStore_grantDigest(t *testing.T) {
+	paritytest.RunGrantDigestSuite(t,
+		func(t *testing.T) contextfabric.InvestigationResultStore { return memoryinvestigation.NewStore() },
+	)
+}

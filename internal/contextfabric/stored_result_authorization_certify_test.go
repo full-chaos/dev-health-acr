@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -40,7 +41,7 @@ func TestStoredResultAuthorizationEngineLineCertifiesAgainstItsSpecification(t *
 	result := contextfabric.InvestigationResult{}
 	result.SubjectResolution.Committed = []contextfabric.SubjectRef{member, org}
 	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"acme/tools", "acme/web", "acme/api"}}
-	decision := contextfabric.NewStoredResultGate(graph).Authorize(context.Background(), principal, contextfabric.StoredInvestigationResult{Result: result}, contextfabric.StoredResultSurfacePriorResult)
+	decision := contextfabric.NewStoredResultGate(graph).Authorize(context.Background(), principal, contextfabric.StoredInvestigationResult{Result: result, GrantDigest: contextfabric.StoredResultGrantDigest(principal)}, contextfabric.StoredResultSurfacePriorResult)
 
 	var buffer bytes.Buffer
 	ctx := observability.WithRequestID(context.Background(), "req_0123456789abcdef0123456789abcdef")
@@ -56,5 +57,45 @@ func TestStoredResultAuthorizationEngineLineCertifiesAgainstItsSpecification(t *
 		"group_count": 0, "group_unproven_count": 0, "refused_kinds": []any{"repository"}, "request_id": "req_0123456789abcdef0123456789abcdef",
 	}}); err != nil {
 		t.Fatalf("certify: %v\n%s", err, buffer.String())
+	}
+}
+
+// CHAOS-7145: the grant refusal line, certified from the bytes production wrote
+// for a real cross-principal read. Closed vocabulary only: the reason class,
+// no id, no repository name, no digest.
+func TestStoredResultGrantRefusalLineCertifiesAgainstItsSpecification(t *testing.T) {
+	computedFor := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"acme/tools"}}
+	reader := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"acme/web"}}
+	for _, tc := range []struct {
+		name   string
+		digest string
+		reason string
+	}{
+		{"other grant", contextfabric.StoredResultGrantDigest(computedFor), "grant_mismatch"},
+		{"unrecorded", "", "grant_unrecorded"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decision := contextfabric.NewStoredResultGate(certifyGraph{}).Authorize(context.Background(), reader, contextfabric.StoredInvestigationResult{Result: contextfabric.InvestigationResult{}, GrantDigest: tc.digest}, contextfabric.StoredResultSurfaceResultByID)
+			var buffer bytes.Buffer
+			ctx := observability.WithRequestID(context.Background(), "req_0123456789abcdef0123456789abcdef")
+			contextfabric.NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(&buffer, nil))).RecordStoredResultAuthorization(ctx, reader, decision)
+			parsed, err := certify.Parse(buffer.Bytes())
+			if err != nil {
+				t.Fatalf("certify.Parse(): %v", err)
+			}
+			if _, err := certify.Certify(parsed, certify.Assertion{Event: eventspec.StoredResultAuthorization, Want: map[string]any{
+				"org_id": "org_1", "surface": "result_by_id", "principal_scope": "restricted", "repository_scope_count": 1,
+				"decision": "denied", "reason": tc.reason, "subject_count": 0, "graph_subject_count": 0, "unkinded_subject_count": 0,
+				"admitted_count": 0, "denied_count": 0, "absent_count": 0, "organization_subject_count": 0, "organization_mismatch_count": 0,
+				"group_count": 0, "group_unproven_count": 0, "refused_kinds": []any{}, "request_id": "req_0123456789abcdef0123456789abcdef",
+			}}); err != nil {
+				t.Fatalf("certify: %v\n%s", err, buffer.String())
+			}
+			for _, leak := range []string{"acme", "g:"} {
+				if strings.Contains(buffer.String(), leak) {
+					t.Fatalf("line carries %q: %s", leak, buffer.String())
+				}
+			}
+		})
 	}
 }

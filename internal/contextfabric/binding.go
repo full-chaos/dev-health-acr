@@ -103,6 +103,11 @@ type StoredInvestigationResult struct {
 	// report one leaves it empty, which every reader treats as unavailable
 	// -- an unreported snapshot is never assumed to be absent-but-fine.
 	SemanticStateRead SemanticStateReadStatus
+	// GrantDigest is StoredResultGrantDigest of the principal that computed
+	// the result (CHAOS-7145), or "" for a row saved before it was recorded.
+	// The stored-result gate refuses a restricted reader whose own digest
+	// differs, and one that meets "".
+	GrantDigest string
 }
 
 // ReuseMissReason classifies WHY AnswerReuseGate.FindReusable found no

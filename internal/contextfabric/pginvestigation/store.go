@@ -278,12 +278,12 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 		embedRetrievalIdentity, retrievalPolicyVersion, interpretationPromptVersion, synthesisPromptVersion,
 		queryVersion, canonicalServiceVersion, modelOutputSchemaVersion, identityNormalizationVersion, graphEpochColumn,
 		windowInferenceVersion, commitGateVersion, rankingFormulaVersion, questionFamilyVersion, ownershipRoutingVersion,
-		parentResultIDColumn, semanticStateColumn,
+		parentResultIDColumn, semanticStateColumn, contextfabric.StoredResultGrantDigest(principal),
 	}
 	const insertResultSQL = `
 INSERT INTO acr.context_fabric_investigation_results
-    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key, embed_retrieval_identity, retrieval_policy_version, interpretation_prompt_version, synthesis_prompt_version, query_version, canonical_service_version, model_output_schema_version, identity_normalization_version, graph_epoch, window_inference_version, commit_gate_version, ranking_formula_version, question_family_version, ownership_routing_version, parent_result_id, semantic_state)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
+    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key, embed_retrieval_identity, retrieval_policy_version, interpretation_prompt_version, synthesis_prompt_version, query_version, canonical_service_version, model_output_schema_version, identity_normalization_version, graph_epoch, window_inference_version, commit_gate_version, ranking_formula_version, question_family_version, ownership_routing_version, parent_result_id, semantic_state, grant_digest)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)
 ON CONFLICT (result_id) DO NOTHING`
 
 	// CHAOS-3927 P4 (design brief §2.1): claims is empty for the
@@ -550,13 +550,14 @@ func (s *Store) Get(ctx context.Context, principal storage.Principal, resultID s
 	}
 
 	row := s.db.QueryRowContext(ctx, `
-SELECT payload, graph_epoch, created_at, parent_result_id, semantic_state FROM acr.context_fabric_investigation_results WHERE result_id = $1 AND org_id = $2`, resultID, orgID)
+SELECT payload, graph_epoch, created_at, parent_result_id, semantic_state, grant_digest FROM acr.context_fabric_investigation_results WHERE result_id = $1 AND org_id = $2`, resultID, orgID)
 	var payload []byte
 	var graphEpoch sql.NullInt64
 	var createdAt time.Time
 	var parentResultID sql.NullString
 	var semanticStateColumn []byte
-	switch err := row.Scan(&payload, &graphEpoch, &createdAt, &parentResultID, &semanticStateColumn); {
+	var grantDigest sql.NullString
+	switch err := row.Scan(&payload, &graphEpoch, &createdAt, &parentResultID, &semanticStateColumn, &grantDigest); {
 	case errors.Is(err, sql.ErrNoRows):
 		return contextfabric.StoredInvestigationResult{}, ErrNotFound
 	case err != nil:
@@ -602,7 +603,7 @@ SELECT payload, graph_epoch, created_at, parent_result_id, semantic_state FROM a
 	// why. It never fails the read: the public result is still valid, and it
 	// is the continuation's decision what an unavailable reading means.
 	semanticState, semanticStatus := contextfabric.DecodeSemanticState(semanticStateColumn)
-	return contextfabric.StoredInvestigationResult{Result: result, GraphEpoch: graphEpochPtr, SavedAt: createdAt, ParentResultID: parentResultID.String, SemanticState: semanticState, SemanticStateRead: semanticStatus}, nil
+	return contextfabric.StoredInvestigationResult{Result: result, GraphEpoch: graphEpochPtr, SavedAt: createdAt, ParentResultID: parentResultID.String, GrantDigest: grantDigest.String, SemanticState: semanticState, SemanticStateRead: semanticStatus}, nil
 }
 
 // reuseColumnsFor computes the CHAOS-3782 reuse-key column values Save
@@ -997,7 +998,7 @@ func (s *Store) FindReusable(ctx context.Context, principal storage.Principal, k
 	// pre-migration row holds NULL here and is permanently excluded. See
 	// ReuseKey.OwnershipRoutingVersion's own field doc comment.
 	row := s.db.QueryRowContext(ctx, `
-SELECT payload, source_watermarks, graph_epoch, created_at, parent_result_id, semantic_state
+SELECT payload, source_watermarks, graph_epoch, created_at, parent_result_id, semantic_state, grant_digest
 FROM acr.context_fabric_investigation_results
 WHERE org_id = $1
   AND question_hash = $2
@@ -1041,7 +1042,8 @@ LIMIT 1`,
 	var graphEpoch sql.NullInt64
 	var createdAt time.Time
 	var parentResultID sql.NullString
-	switch err := row.Scan(&payload, &sourceWatermarks, &graphEpoch, &createdAt, &parentResultID, &semanticStateColumn); {
+	var grantDigest sql.NullString
+	switch err := row.Scan(&payload, &sourceWatermarks, &graphEpoch, &createdAt, &parentResultID, &semanticStateColumn, &grantDigest); {
 	case errors.Is(err, sql.ErrNoRows):
 		// CHAOS-3898 v4.1 F5: this ONE payload-bearing SELECT cannot by
 		// itself distinguish "no row matches at all" from "a row matches
@@ -1107,6 +1109,7 @@ LIMIT 1`,
 		GraphEpoch:        graphEpochPtr,
 		SavedAt:           createdAt,
 		ParentResultID:    parentResultID.String,
+		GrantDigest:       grantDigest.String,
 		SemanticState:     semanticState,
 		SemanticStateRead: semanticStatus,
 	}, true, "", nil

@@ -26,7 +26,7 @@ func (f reuseGateFunc) FindReusable(ctx context.Context, principal storage.Princ
 	if !ok {
 		reason = ReuseMissNoCandidate
 	}
-	return StoredInvestigationResult{Result: result, SemanticStateRead: SemanticStateReadAbsent}, ok, reason, err
+	return StoredInvestigationResult{Result: result, GrantDigest: StoredResultGrantDigest(principal), SemanticStateRead: SemanticStateReadAbsent}, ok, reason, err
 }
 
 // failingModelRuntime fails the test immediately if either method is

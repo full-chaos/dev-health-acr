@@ -56,7 +56,7 @@ func TestHistoricalAnswerReachesBothRealSurfacesLabelled(t *testing.T) {
 	result := historicalParityResult(t)
 
 	store := memoryinvestigation.NewStore()
-	if err := store.Save(context.Background(), storage.Principal{OrgID: callerOrgID}, result,
+	if err := store.Save(context.Background(), seedPrincipal(callerOrgID), result,
 		contextfabric.SourceWatermarkSnapshot{}, nil,
 		contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalValidTime, AsOf: result.Temporal.Effective.AsOf}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation)); err != nil {
 		t.Fatalf("seed historical result: %v", err)

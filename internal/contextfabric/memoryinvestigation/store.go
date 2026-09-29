@@ -49,6 +49,8 @@ type entry struct {
 	// chains, which is the exact gap the chain-identity field exists to
 	// close.
 	parentResultID string
+	// grantDigest mirrors pginvestigation's grant_digest column (CHAOS-7145).
+	grantDigest string
 	// semanticState is the snapshot's CANONICAL ENCODING, nil for an absence
 	// -- separate bytes, never an aliased pointer, so a caller that mutates
 	// the snapshot it saved or received cannot reach into this store. Get
@@ -200,7 +202,7 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 		key := structureSupersessionClaimKey{orgID: orgID, priorResultID: claim.priorResultID, member: claim.member}
 		s.claims[key] = resultID
 	}
-	s.results[resultID] = entry{orgID: orgID, payload: payload, parentResultID: strings.TrimSpace(parentResultID), semanticState: semanticColumn}
+	s.results[resultID] = entry{orgID: orgID, payload: payload, parentResultID: strings.TrimSpace(parentResultID), grantDigest: contextfabric.StoredResultGrantDigest(principal), semanticState: semanticColumn}
 	return nil
 }
 
@@ -305,7 +307,7 @@ func (s *Store) Get(ctx context.Context, principal storage.Principal, resultID s
 	// consumer (starting with the §2.2 ingress taint gate) must already
 	// treat that as "cannot prove", never a silent pass.
 	semanticState, semanticStatus := contextfabric.DecodeSemanticState(stored.semanticState)
-	return contextfabric.StoredInvestigationResult{Result: result, ParentResultID: stored.parentResultID, SemanticState: semanticState, SemanticStateRead: semanticStatus}, nil
+	return contextfabric.StoredInvestigationResult{Result: result, ParentResultID: stored.parentResultID, GrantDigest: stored.grantDigest, SemanticState: semanticState, SemanticStateRead: semanticStatus}, nil
 }
 
 // ResultIDsCitingEvidence implements contextfabric.CitedEvidenceLookup: the

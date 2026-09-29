@@ -54,7 +54,7 @@ func TestAnswerSurfaceParityBetweenRealAPIAndRealMCP(t *testing.T) {
 	}
 
 	store := memoryinvestigation.NewStore()
-	if err := store.Save(context.Background(), storage.Principal{OrgID: callerOrgID}, result, contextfabric.SourceWatermarkSnapshot{}, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation)); err != nil {
+	if err := store.Save(context.Background(), seedPrincipal(callerOrgID), result, contextfabric.SourceWatermarkSnapshot{}, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation)); err != nil {
 		t.Fatalf("seed result: %v", err)
 	}
 	investigator := investigatorFunc(func(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
@@ -443,11 +443,11 @@ func (s legacyResultStore) Save(context.Context, storage.Principal, contextfabri
 	return nil
 }
 
-func (s legacyResultStore) Get(_ context.Context, _ storage.Principal, resultID string) (contextfabric.StoredInvestigationResult, error) {
+func (s legacyResultStore) Get(_ context.Context, reader storage.Principal, resultID string) (contextfabric.StoredInvestigationResult, error) {
 	if resultID != s.result.ResultID {
 		return contextfabric.StoredInvestigationResult{}, contextfabric.ErrInvestigationResultNotFound
 	}
-	return contextfabric.StoredInvestigationResult{Result: s.result}, nil
+	return contextfabric.StoredInvestigationResult{Result: s.result, GrantDigest: contextfabric.StoredResultGrantDigest(reader)}, nil
 }
 
 // TestValuesClampedCountsOnlySurvivorsAtTheRealSurfaces is the surface-level

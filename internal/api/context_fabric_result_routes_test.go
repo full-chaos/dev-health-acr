@@ -43,7 +43,7 @@ func seedResult(t *testing.T, store *memoryinvestigation.Store, orgID, resultID 
 	// off" values, and the current-axis key is CHAOS-3781's fixed literal.
 	// These tests seed results to exercise RETRIEVAL, which does not depend
 	// on reuse bookkeeping either way.
-	if err := store.Save(context.Background(), storage.Principal{OrgID: orgID}, result, contextfabric.SourceWatermarkSnapshot{}, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation)); err != nil {
+	if err := store.Save(context.Background(), seedPrincipal(orgID), result, contextfabric.SourceWatermarkSnapshot{}, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation)); err != nil {
 		t.Fatalf("seed result: %v", err)
 	}
 	return result
@@ -264,4 +264,33 @@ func (s *countingResultStore) Save(ctx context.Context, principal storage.Princi
 func (s *countingResultStore) Get(ctx context.Context, principal storage.Principal, resultID string) (contextfabric.StoredInvestigationResult, error) {
 	s.calls++
 	return s.inner.Get(ctx, principal, resultID)
+}
+
+// seedPrincipal is the principal a seeded result was "computed for": the same
+// repository grant the test credential carries (CHAOS-7145), so the caller
+// reading it back is reading a result computed under its own grant.
+func seedPrincipal(orgID string) storage.Principal {
+	return storage.Principal{OrgID: orgID, RepositoryScopes: []string{hostedTestRepository}}
+}
+
+// ownGrantStore serves every stored result as computed under the READER's own
+// grant. Tests that measure a different axis than CHAOS-7145's grant digest
+// (the live subject-admission matrix across several credentials) seed one
+// result and read it under several grants; the digest is decided by its own
+// tests, not by theirs.
+type ownGrantStore struct {
+	contextfabric.InvestigationResultStore
+}
+
+func (s ownGrantStore) Get(ctx context.Context, reader storage.Principal, resultID string) (contextfabric.StoredInvestigationResult, error) {
+	stored, err := s.InvestigationResultStore.Get(ctx, reader, resultID)
+	if err != nil {
+		return stored, err
+	}
+	return withOwnGrant(stored, reader), nil
+}
+
+func withOwnGrant(stored contextfabric.StoredInvestigationResult, reader storage.Principal) contextfabric.StoredInvestigationResult {
+	stored.GrantDigest = contextfabric.StoredResultGrantDigest(reader)
+	return stored
 }
