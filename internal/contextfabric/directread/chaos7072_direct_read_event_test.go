@@ -70,7 +70,7 @@ func TestDirectReadEventVocabulariesMatchProducer(t *testing.T) {
 		"tool":        {FindSubjectsTool},
 		"mode":        func() []string { v := FindModeVocabulary(); return v[:] }(),
 		"status":      statuses,
-		"error_class": {"invalid_request", "deadline_exceeded", "canceled", "dependency_unavailable", "graph_error"},
+		"error_class": {"invalid_request", "scope_required", "deadline_exceeded", "canceled", "dependency_unavailable", "graph_error"},
 	}
 	seen := 0
 	for _, field := range eventspec.DirectRead.Fields {

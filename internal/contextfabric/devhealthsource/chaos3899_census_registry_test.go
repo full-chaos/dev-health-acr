@@ -1,6 +1,7 @@
 package devhealthsource
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -171,8 +172,8 @@ func TestWorkItemAnchorColumns(t *testing.T) {
 	if _, err := BuildCensusDiscriminator(contextfabric.SubjectWorkItem, "", false, contextfabric.SubjectProject, "project:p-1", true); err != nil {
 		t.Fatalf("work_item anchor=project: %v", err)
 	}
-	if _, err := BuildCensusDiscriminator(contextfabric.SubjectWorkItem, "", false, contextfabric.SubjectRepository, "repository:r-1", true); err == nil {
-		t.Fatalf("work_item anchor=repository: want joined_column_discriminator error, got nil")
+	if _, err := BuildCensusDiscriminator(contextfabric.SubjectWorkItem, "", false, contextfabric.SubjectRepository, "repository:r-1", true); !errors.Is(err, graphrank.ErrCensusAnchorUnsupported) {
+		t.Fatalf("work_item anchor=repository: want the typed ErrCensusAnchorUnsupported, got %v", err)
 	}
 }
 
@@ -298,6 +299,25 @@ func TestIdentityColumnIsTheFullCompositeNaturalKey(t *testing.T) {
 			if !strings.Contains(entry.identityColumn, column) {
 				t.Fatalf("kind=%s identityColumn=%q is missing sort-key column %q -- a lossy witness reopens the injectivity trap (v6 stamp)", kind, entry.identityColumn, column)
 			}
+		}
+	}
+}
+
+// CHAOS-7160: find_subjects decides a restricted handle's anchorability from
+// this, before any census.
+func TestCensusAnchorSupported(t *testing.T) {
+	for _, tc := range []struct {
+		kind, anchor contextfabric.SubjectKind
+		want         bool
+	}{
+		{contextfabric.SubjectWorkItem, contextfabric.SubjectRepository, false},
+		{contextfabric.SubjectWorkItem, contextfabric.SubjectProject, true},
+		{contextfabric.SubjectPullRequest, contextfabric.SubjectRepository, true},
+		{contractsv1.ContextFabricSubjectCIRun, contextfabric.SubjectRepository, true},
+		{contextfabric.SubjectTeam, contextfabric.SubjectRepository, false},
+	} {
+		if got := CensusAnchorSupported(tc.kind, tc.anchor); got != tc.want {
+			t.Errorf("CensusAnchorSupported(%s, %s) = %v, want %v", tc.kind, tc.anchor, got, tc.want)
 		}
 	}
 }

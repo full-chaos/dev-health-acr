@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -131,7 +132,20 @@ func TestChaos7126_R1_HandleScopeRequiredRefusal(t *testing.T) {
 	if reason := chaos7074Reason(t, response); reason != "scope_required" {
 		t.Fatalf("reason %q", reason)
 	}
-	if strings.Contains(response.Body.String(), "51") || strings.Contains(response.Body.String(), "50") {
-		t.Fatalf("refusal carries a count: %s", response.Body.String())
+	// Only the caller-facing parts: the envelope also carries a random
+	// request id, whose hex can hold any digit pair (an earlier version of
+	// this check read the whole body and was flaky).
+	var envelope contractsv1.ErrorEnvelope
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	// The refusal is exactly its reason and a fixed sentence: no member and
+	// no digit could carry a count (r1 #701 P3: a "count":1 detail passed the
+	// earlier digit check).
+	if len(envelope.Error.Details) != 1 || envelope.Error.Details["reason"] != "scope_required" {
+		t.Fatalf("refusal details = %v, want exactly {reason: scope_required}", envelope.Error.Details)
+	}
+	if strings.ContainsAny(envelope.Error.Message, "0123456789") {
+		t.Fatalf("refusal message carries a number: %q", envelope.Error.Message)
 	}
 }

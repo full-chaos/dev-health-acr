@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 
@@ -105,6 +106,14 @@ type CensusOutcome struct {
 // any caller that does not set it). A production wiring passes
 // devhealthsource.RunCensus (adapted to this signature); a measurement
 // harness or unit test passes a fake.
+// ErrCensusAnchorUnsupported is the error a CensusFunc returns when the
+// census kind has no base-table column for the requested anchor kind (the
+// joined_column_discriminator refusal; for example a work item cannot be
+// anchored on a repository, because Linear work items carry the zero
+// repo_id). It is a property of the request, not an outage: callers test it
+// with errors.Is (CHAOS-7126 venue re-roll 2).
+var ErrCensusAnchorUnsupported = errors.New("census anchor kind is not supported for this census kind")
+
 type CensusFunc func(ctx context.Context, orgID string, kind CensusKind, handleValue string, handleBound bool, anchorKind contextfabric.SubjectKind, anchorCanonicalID string, anchorBound bool) (CensusOutcome, error)
 
 // KindAttestation is one census kind's own receipt within a round-wide

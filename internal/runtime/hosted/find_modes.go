@@ -44,5 +44,5 @@ func composeFindModes(subjects *directread.SubjectLookup, investigator contextfa
 	if census == nil || nodes == nil {
 		logger.Error("context fabric find_subjects mode not composed", "mode", directread.FindModeHandle, "reason", "census_or_node_read_absent")
 	}
-	subjects.WithOwnershipAndHandles(edges, census, nodes)
+	subjects.WithOwnershipAndHandles(edges, census, nodes).WithCensusAnchorSupport(devhealthsource.CensusAnchorSupported)
 }

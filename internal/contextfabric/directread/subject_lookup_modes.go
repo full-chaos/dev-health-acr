@@ -49,6 +49,22 @@ var ErrFindScopeRequired = errors.New("find_subjects: scope_required")
 // refused (ErrFindScopeRequired), never widened to the organization.
 const MaxHandleGrantRepositories = 50
 
+// CensusAnchorSupport reports whether the census can scope kind to one
+// subject of anchorKind (devhealthsource.CensusAnchorSupported is the
+// production one).
+type CensusAnchorSupport func(kind graphrank.CensusKind, anchorKind contextfabric.SubjectKind) bool
+
+// WithCensusAnchorSupport lets a repository-restricted handle lookup decide,
+// from the handle's kind alone and before any grant listing or census,
+// whether it can be served inside a repository grant (CHAOS-7160 r1). It
+// returns l.
+func (l *SubjectLookup) WithCensusAnchorSupport(support CensusAnchorSupport) *SubjectLookup {
+	if l != nil {
+		l.anchorSupport = support
+	}
+	return l
+}
+
 // WithOwnershipAndHandles composes the owned_by and handle modes. edges
 // serves owned_by (the S3a bounded edge page); census and nodes serve
 // handle (the engine's own census function and a node read for labels). A
@@ -190,6 +206,14 @@ func (l *SubjectLookup) scanHandle(ctx context.Context, principal storage.Princi
 	// callers keep the one organization-wide census.
 	anchors := []contextfabric.SubjectRef{{}}
 	if ClassifyPrincipal(principal) == ClassRestricted {
+		// Decided from the kind, before the grant listing and before any
+		// census: the refusal cannot depend on how many repositories the
+		// grant holds (r1 #701: an empty grant skipped the census and
+		// answered empty). The in-loop check below stays as the backstop
+		// for a lookup composed without this support.
+		if l.anchorSupport != nil && !l.anchorSupport(plan.handle.Kind, contractsv1.ContextFabricSubjectRepository) {
+			return nil, false, fmt.Errorf("%w: %s handles cannot be looked up inside a repository grant", ErrFindScopeRequired, plan.handle.Kind)
+		}
 		granted, err := NewGrantedRepositories(&SubjectLookup{graph: l.graph, gate: l.gate, now: l.now}).GrantedRepositories(ctx, principal)
 		switch {
 		case errors.Is(err, ErrGrantedRepositoriesIncomplete):
@@ -205,6 +229,13 @@ func (l *SubjectLookup) scanHandle(ctx context.Context, principal storage.Princi
 	truncated := false
 	for _, anchor := range anchors {
 		outcome, err := l.census(ctx, principal.OrgID, plan.handle.Kind, plan.handle.Value, true, anchor.Kind, anchor.CanonicalID, anchor.CanonicalID != "")
+		if anchor.CanonicalID != "" && errors.Is(err, graphrank.ErrCensusAnchorUnsupported) {
+			// The census cannot scope this handle kind to a repository (a
+			// work item: Linear work items carry no repository). A
+			// restricted credential is refused by type, never answered from
+			// the organization-wide census and never as an outage.
+			return nil, false, fmt.Errorf("%w: %s handles cannot be looked up inside a repository grant", ErrFindScopeRequired, plan.handle.Kind)
+		}
 		if err != nil {
 			return nil, false, err
 		}
