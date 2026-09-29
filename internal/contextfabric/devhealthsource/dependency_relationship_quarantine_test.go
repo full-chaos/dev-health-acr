@@ -1045,3 +1045,43 @@ func TestQuarantinedEntityDoesNotLeaveItsEdgeBehind(t *testing.T) {
 		t.Fatalf("the healthy work item must still project: %+v", batch.Entities)
 	}
 }
+
+// CHAOS-7189: a peek over an all-quarantined tail neither logs a quarantine
+// line nor records the consumed-progress memo; a real call afterwards still
+// logs and records it exactly as without the peek.
+func TestPeekOverAllQuarantinedTailHasNoSideEffects(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 6, 30, 10, 47, 54, 0, time.UTC)
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	rows := [][]any{
+		unresolvedDependencyRow("WI-1", "EXT-1", "EXTERNAL_ISSUE_KEY", at, created),
+		unresolvedDependencyRow("WI-2", "EXT-2", "EXTERNAL_ISSUE_KEY", at.Add(time.Second), created),
+	}
+	source, err := devhealthsource.NewClickHouseProjectionSource(&fakeClient{tables: dependencyTablesOnly(t, at, rows)})
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+	var buf bytes.Buffer
+	source = source.WithLogger(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	checkpoint := contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName, Cursor: testCursor(t, at.Add(-time.Hour), "")}
+
+	available, err := source.PeekProjectionBatch(context.Background(), checkpoint)
+	if err != nil || available {
+		t.Fatalf("peek: available=%v err=%v, want false", available, err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("peek logged: %s", buf.String())
+	}
+	if _, ok, err := source.ConsumedWithoutPublishing(context.Background(), checkpoint); err != nil || ok {
+		t.Fatalf("peek recorded consumed progress: ok=%v err=%v", ok, err)
+	}
+	if _, available, err := source.NextProjectionBatch(context.Background(), checkpoint); err != nil || available {
+		t.Fatalf("real call: available=%v err=%v", available, err)
+	}
+	if got := strings.Count(buf.String(), quarantineLine); got != 4 {
+		t.Fatalf("real call quarantines = %d, want 4", got)
+	}
+	if _, ok, _ := source.ConsumedWithoutPublishing(context.Background(), checkpoint); !ok {
+		t.Fatal("real call must still record consumed progress")
+	}
+}

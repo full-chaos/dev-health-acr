@@ -310,22 +310,28 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 
 // PeekAvailable reports whether the source would offer a batch at the current
 // checkpoint, WITHOUT applying anything: no claim CAS, no consumed-progress
-// CAS, no backend call, no checkpoint change. It is the same source read
-// RunOnce starts with, so a drain that spent its budget can tell "more work
+// CAS, no backend call, no checkpoint change. known is false when the source
+// does not implement ProjectionPeeker (its read is not proven side-effect
+// free), in which case available is meaningless and the caller must not infer
+// exhaustion. A drain that spent its budget uses this to tell "more work
 // remains" from "the last page was the final one" without a confirming apply.
-func (w *ProjectionWorker) PeekAvailable(ctx context.Context, orgID, sourceName string) (bool, error) {
+func (w *ProjectionWorker) PeekAvailable(ctx context.Context, orgID, sourceName string) (available, known bool, err error) {
+	peeker, ok := w.source.(ProjectionPeeker)
+	if !ok {
+		return false, false, nil
+	}
 	if strings.TrimSpace(orgID) == "" || strings.TrimSpace(sourceName) == "" {
-		return false, markPair(PairStageValidation, errors.New("projection worker requires organization and source"), "")
+		return false, false, markPair(PairStageValidation, errors.New("projection worker requires organization and source"), "")
 	}
 	checkpoint, err := w.checkpoints.LoadProjectionCheckpoint(ctx, orgID, sourceName)
 	if err != nil {
-		return false, markPair(PairStageCheckpointLoad, err, "load projection checkpoint")
+		return false, false, markPair(PairStageCheckpointLoad, err, "load projection checkpoint")
 	}
-	_, available, err := w.source.NextProjectionBatch(ctx, checkpoint)
+	available, err = peeker.PeekProjectionBatch(ctx, checkpoint)
 	if err != nil {
-		return false, fmt.Errorf("read projection batch: %w", markPair(PairStageSourceRead, err, ""))
+		return false, false, fmt.Errorf("peek projection batch: %w", markPair(PairStageSourceRead, err, ""))
 	}
-	return available, nil
+	return available, true, nil
 }
 
 // persistConsumedProgress durably advances the checkpoint over source rows

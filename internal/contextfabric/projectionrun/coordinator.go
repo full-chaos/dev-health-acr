@@ -2732,7 +2732,10 @@ func (c *Coordinator) budgetSpentReason(ctx context.Context, worker *contextfabr
 		// budget to report on, so no extra source read is spent on it.
 		return DrainYieldBudgetExceeded
 	}
-	available, err := worker.PeekAvailable(ctx, orgID, source)
+	available, known, err := worker.PeekAvailable(ctx, orgID, source)
+	if !known && err == nil {
+		return DrainYieldBudgetExceeded // source cannot peek side-effect free: unknown
+	}
 	if err != nil {
 		c.logger.WarnContext(ctx, "projection budget-exit peek failed; reporting budget_exceeded", "org_id", contextfabric.SanitizeLogAttr(orgID), "source", contextfabric.SanitizeLogAttr(source), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
 		return DrainYieldBudgetExceeded

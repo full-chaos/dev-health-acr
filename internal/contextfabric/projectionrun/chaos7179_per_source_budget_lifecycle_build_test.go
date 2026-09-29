@@ -56,7 +56,7 @@ func TestChaos7179_LifecycleTickLargeFirstSourceDoesNotStarveSecondSource(t *tes
 	coordinator.Tick(context.Background())
 
 	require.Equal(t, fairnessSmallPages+1, small.callCount(), "source-small must drain its whole backlog in one tick (pages + exhaustion probe)")
-	require.Equal(t, fairnessBudget+2, big.callCount(), "source-big stays bounded by its own budget (free attempt + budget applying reads, plus one non-applying budget-exit peek)")
+	require.Equal(t, fairnessBudget+1, big.callCount(), "source-big stays bounded by its own budget (free attempt + budget)")
 	reasons := yieldReasons(observer)
 	require.Equal(t, projectionrun.DrainYieldBudgetExceeded, reasons["source-big"])
 	require.Equal(t, projectionrun.DrainYieldExhausted, reasons["source-small"])
@@ -77,7 +77,7 @@ func TestChaos7179_BuildTickLargeFirstSourceDoesNotStarveSecondSource(t *testing
 
 	// Build drains stop at CompleteEnumeration on the last page: no probe call.
 	require.Equal(t, fairnessSmallPages, small.callCount(), "source-small must drain its whole backlog in one build tick")
-	require.Equal(t, fairnessBudget+2, big.callCount(), "source-big stays bounded by its own budget (free attempt + budget applying reads, plus one non-applying budget-exit peek)")
+	require.Equal(t, fairnessBudget+1, big.callCount(), "source-big stays bounded by its own budget (free attempt + budget)")
 	reasons := yieldReasons(observer)
 	require.Equal(t, projectionrun.DrainYieldBudgetExceeded, reasons["source-big"])
 	require.Equal(t, projectionrun.DrainYieldExhausted, reasons["source-small"])

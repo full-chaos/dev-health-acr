@@ -156,9 +156,8 @@ func TestChaos3826_LargeBacklogOrgDoesNotStarveASiblingOrgWithinTheSameTick(t *t
 	if bigCalls <= 1 {
 		t.Fatalf("setup invalid: expected org-big to actually drain multiple batches this tick, got %d calls", bigCalls)
 	}
-	// free attempt + budget applying reads, plus one non-applying budget-exit peek.
-	if bigCalls > budget+2 {
-		t.Fatalf("expected org-big's drain to be bounded by the budget (<=%d calls this tick), got %d -- fairness bound violated", budget+2, bigCalls)
+	if bigCalls > budget+1 { // free attempt + budget
+		t.Fatalf("expected org-big's drain to be bounded by the budget (<=%d calls this tick), got %d -- fairness bound violated", budget+1, bigCalls)
 	}
 }
 
