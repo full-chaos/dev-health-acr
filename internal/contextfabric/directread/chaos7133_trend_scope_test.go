@@ -1,6 +1,7 @@
 package directread_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
@@ -55,10 +56,12 @@ func TestChaos7133_UncheckedPathsFollowTheForcedRepoBinding(t *testing.T) {
 			if len(scope.Constraints) == 0 {
 				t.Fatalf("%s declares unchecked paths %v with no scope constraint keeping them bound", op.Name, scope.UncheckedPaths)
 			}
+			ran := map[string]bool{}
 			for _, tc := range t12Cases(t, op, scope) {
 				if tc.want != directread.RefusalOperationNotServedForCaller {
 					continue
 				}
+				ran[tc.name] = true
 				h := newOpHarness(t, t12Answer(op, scope, true), opHarnessOptions{})
 				all := opMinimalVariables(t, op)
 				for k, v := range tc.vars {
@@ -78,6 +81,18 @@ func TestChaos7133_UncheckedPathsFollowTheForcedRepoBinding(t *testing.T) {
 				}
 				if n := len(h.upstream.requests()); n != 0 {
 					t.Fatalf("%s: refused branch sent %d upstream request(s)", tc.name, n)
+				}
+			}
+			// compoundingRisk: both ways the trend could leave the forced
+			// repoIds (breakout TEAM, teamIds) must have run, by name.
+			if op.Name == "compoundingRisk" {
+				var team, ids bool
+				for name := range ran {
+					team = team || strings.Contains(name, "filter.breakout=TEAM")
+					ids = ids || strings.HasSuffix(name, "filter.teamIds")
+				}
+				if !team || !ids {
+					t.Fatalf("compoundingRisk: breakout TEAM case ran=%v, teamIds case ran=%v (cases %v)", team, ids, ran)
 				}
 			}
 		})
