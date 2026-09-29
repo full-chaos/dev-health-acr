@@ -6,6 +6,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/runtime/hosted"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -78,11 +80,11 @@ func openPriorsDB(ctx context.Context) (*sql.DB, error) {
 	if strings.TrimSpace(cfg.PostgresDSN) == "" {
 		return nil, errors.New("acr-projector priors requires ACR_POSTGRES_DSN")
 	}
-	db, err := runtimepostgres.Open(ctx, runtimepostgres.Config{
+	db, err := hosted.OpenPostgresWithRetry(ctx, runtimepostgres.Config{
 		DSN: cfg.PostgresDSN, PoolerAdminDSN: cfg.PostgresPoolerAdminDSN,
 		MaxOpenConns: cfg.PostgresMaxOpenConns, MaxIdleConns: cfg.PostgresMaxIdleConns, MaxIdleConnsSet: cfg.PostgresMaxIdleConnsConfigured,
 		ConnMaxLifetime: cfg.PostgresConnMaxLifetime, ConnMaxIdleTime: cfg.PostgresConnMaxIdleTime, PingTimeout: cfg.PostgresPingTimeout,
-	})
+	}, cfg.PostgresStartupAttempts, cfg.PostgresStartupBackoff, slog.Default())
 	if err != nil {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}

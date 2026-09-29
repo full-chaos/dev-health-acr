@@ -60,6 +60,8 @@ func runCredentialCLI(ctx context.Context, arguments []string, lookup lookupEnv,
 	if err := validateDeclaredConnectionKind(lookup, poolerAdminDSN); err != nil {
 		return err
 	}
+	// CHAOS-7184: deliberately NO startup retry (unlike acr-api/acr-projector
+	// via hosted.OpenPostgresWithRetry): one-shot, human-run; fail fast.
 	db, err := runtimepostgres.Open(ctx, runtimepostgres.Config{DSN: dsn, PoolerAdminDSN: poolerAdminDSN})
 	if err != nil {
 		return fmt.Errorf("open PostgreSQL for credential command: %w", err)

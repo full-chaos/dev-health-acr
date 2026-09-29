@@ -45,7 +45,9 @@ var (
 	}
 )
 
-func openPostgresWithRetry(ctx context.Context, cfg runtimepostgres.Config, attempts int, backoff time.Duration, logger *slog.Logger) (*sql.DB, error) {
+// OpenPostgresWithRetry is shared by acr-api and acr-projector (CHAOS-7184).
+// The credentials CLI deliberately does not use it (one-shot, human-run).
+func OpenPostgresWithRetry(ctx context.Context, cfg runtimepostgres.Config, attempts int, backoff time.Duration, logger *slog.Logger) (*sql.DB, error) {
 	// Zero value means the default at THIS site: Config literals built
 	// without config.Load (tests, future entrypoints) must still retry.
 	if attempts < 1 {
@@ -120,7 +122,7 @@ func backoffMillis(outcome string, backoff time.Duration) int64 {
 }
 
 func openPostgres(ctx context.Context, cfg config.Config, logger *slog.Logger) (postgresComponents, error) {
-	database, err := openPostgresWithRetry(ctx, runtimepostgres.Config{
+	database, err := OpenPostgresWithRetry(ctx, runtimepostgres.Config{
 		DSN: cfg.PostgresDSN, PoolerAdminDSN: cfg.PostgresPoolerAdminDSN,
 		MaxOpenConns: cfg.PostgresMaxOpenConns, MaxIdleConns: cfg.PostgresMaxIdleConns, MaxIdleConnsSet: cfg.PostgresMaxIdleConnsConfigured,
 		ConnMaxLifetime: cfg.PostgresConnMaxLifetime, ConnMaxIdleTime: cfg.PostgresConnMaxIdleTime, PingTimeout: cfg.PostgresPingTimeout,

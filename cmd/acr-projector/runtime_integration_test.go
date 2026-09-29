@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/stretchr/testify/require"
@@ -60,8 +64,31 @@ func TestOpenRuntimeSurfacesUnreachablePostgres(t *testing.T) {
 	cfg.PostgresDSN = "postgres://acr:acr@127.0.0.1:1/acr?sslmode=disable"
 	cfg.ClickHouseDSN = "clickhouse://redacted"
 
+	cfg.PostgresStartupAttempts, cfg.PostgresStartupBackoff = 1, time.Millisecond
 	_, err = openRuntime(context.Background(), cfg, discardLogger())
 	if err == nil {
 		t.Fatal("expected an error opening an unreachable postgres instance")
 	}
+}
+
+// CHAOS-7184: the projector open path retries like acr-api: N Warn attempt
+// records (closed vocabulary) then an exhaustion error, via the REAL open.
+func TestChaos7184_OpenRuntimeRetriesUnreachablePostgresWithWarnAttempts(t *testing.T) {
+	t.Setenv("ACR_LOCAL_COMPOSITION_READY", "true")
+	cfg, err := config.LoadProjector()
+	require.NoError(t, err)
+	cfg.ProjectionEnabled = true
+	cfg.PostgresDSN = "postgres://acr:acr@127.0.0.1:1/acr?sslmode=disable&connect_timeout=1"
+	cfg.ClickHouseDSN = "clickhouse://redacted"
+	cfg.PostgresPingTimeout = 200 * time.Millisecond
+	cfg.PostgresStartupAttempts, cfg.PostgresStartupBackoff = 3, time.Millisecond
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	_, err = openRuntime(context.Background(), cfg, logger)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "postgres startup failed at attempt 3/3 (postgres_unavailable)")
+	out := buf.String()
+	require.Equal(t, 3, strings.Count(out, "level=WARN msg=\"postgres startup attempt failed\""), out)
+	require.Contains(t, out, "outcome=exhausted")
 }

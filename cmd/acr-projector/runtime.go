@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/runtime/hosted"
 	"log/slog"
 	"os"
 
@@ -57,11 +58,11 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 		return runtime, nil
 	}
 
-	db, err := runtimepostgres.Open(ctx, runtimepostgres.Config{
+	db, err := hosted.OpenPostgresWithRetry(ctx, runtimepostgres.Config{
 		DSN: cfg.PostgresDSN, PoolerAdminDSN: cfg.PostgresPoolerAdminDSN,
 		MaxOpenConns: cfg.PostgresMaxOpenConns, MaxIdleConns: cfg.PostgresMaxIdleConns, MaxIdleConnsSet: cfg.PostgresMaxIdleConnsConfigured,
 		ConnMaxLifetime: cfg.PostgresConnMaxLifetime, ConnMaxIdleTime: cfg.PostgresConnMaxIdleTime, PingTimeout: cfg.PostgresPingTimeout,
-	})
+	}, cfg.PostgresStartupAttempts, cfg.PostgresStartupBackoff, logger)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}

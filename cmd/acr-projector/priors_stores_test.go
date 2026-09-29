@@ -42,6 +42,7 @@ func TestOpenPriorsDB_zeroEnvRefusesNamingPostgresOnly(t *testing.T) {
 func TestOpenPriorsDB_postgresOnlyConfigurationReachesThePostgresOpenPath(t *testing.T) {
 	t.Setenv("ACR_POSTGRES_DSN", "postgres://nouser:nopass@127.0.0.1:1/nodb?sslmode=disable")
 	t.Setenv("ACR_POSTGRES_CONNECTION_KIND", "direct")
+	t.Setenv("ACR_POSTGRES_STARTUP_ATTEMPTS", "1")
 	t.Setenv("ACR_CLICKHOUSE_DSN", "")
 	_, err := openPriorsDB(context.Background())
 	if err == nil {
