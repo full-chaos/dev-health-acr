@@ -101,6 +101,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/parser"
@@ -440,6 +441,8 @@ type Catalogue struct {
 	file      CatalogueFile
 	byName    map[string]*OperationPolicy
 	notServed map[string]NotServedOperation
+	// watch is the optional served-registry check (registry_watch.go).
+	watch atomic.Pointer[RegistryWatch]
 }
 
 var (

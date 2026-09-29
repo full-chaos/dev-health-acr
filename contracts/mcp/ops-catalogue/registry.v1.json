@@ -1,7 +1,7 @@
 {
   "source": {
     "repository": "full-chaos/dev-health-ops",
-    "commit": "9dffd5f77bf9bfc415b68f5236fdc8275e8f6b85",
+    "commit": "cb758a29d89178bd83ca8aaefe95e38bb08cc7fb",
     "tool": "go run ./cmd/registrydump -file internal/queryapi/server/query_route.go",
     "schema_path": "contracts/graphql/v1/schema.graphql"
   },
@@ -196,6 +196,13 @@
       "kind": "query"
     },
     {
+      "operation": "home",
+      "document": "query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {\n  home(orgId: $orgId, filters: $filters, window: $window) {\n    freshness {\n      lastIngestedAt\n      latestSuccessfulSyncAt\n      sources {\n        provider\n        status\n        __typename\n      }\n      coverage {\n        reposCoveredPct\n        prsLinkedToIssuesPct\n        issuesWithCycleStatesPct\n        __typename\n      }\n      __typename\n    }\n    deltas {\n      metric\n      label\n      value\n      unit\n      deltaPct\n      spark {\n        ts\n        value\n        __typename\n      }\n      __typename\n    }\n    reworkThemeAllocation {\n      theme\n      label\n      allocation\n      allocationPct\n      prsMerged\n      churnLoc\n      __typename\n    }\n    summary {\n      id\n      text\n      evidenceLink\n      __typename\n    }\n    tiles {\n      key\n      value {\n        title\n        subtitle\n        link\n        __typename\n      }\n      __typename\n    }\n    constraint {\n      title\n      claim\n      evidence {\n        label\n        link\n        __typename\n      }\n      experiments\n      __typename\n    }\n    events {\n      ts\n      type\n      text\n      link\n      __typename\n    }\n    healthState {\n      status\n      headline\n      summary\n      asOf\n      __typename\n    }\n    signals {\n      id\n      title\n      metric\n      currentValue\n      priorValue\n      delta\n      direction\n      severity\n      confidence\n      affectedScope\n      evidenceCount\n      whyItMatters\n      recommendedAction\n      evidenceRef\n      category\n      scopeEntity {\n        id\n        displayName\n        __typename\n      }\n      __typename\n    }\n    limitingFactor {\n      claim\n      whyItMatters\n      recommendedAction\n      confidence\n      evidenceRef\n      __typename\n    }\n    dataConfidence {\n      level\n      coveragePct\n      connectedSources\n      missingSources\n      caveats\n      __typename\n    }\n    __typename\n  }\n}",
+      "const_name": "registeredHomeDocument",
+      "digest": "9776798e809030868e3a7fc8643b06d122573f03a3c48a7710d86b1842b33554",
+      "kind": "query"
+    },
+    {
       "operation": "hotspots",
       "document": "query Hotspots($input: HotspotsInput!) {\n  hotspots(input: $input) {\n    rows {\n      filePath\n      repoId\n      repoName\n      churnLoc30d\n      churnCommits30d\n      cyclomaticTotal\n      cyclomaticAvg\n      blameConcentration\n      riskScore\n      evidenceUrl\n      __typename\n    }\n    __typename\n  }\n}",
       "const_name": "registeredHotspotsDocument",
@@ -263,6 +270,13 @@
       "document": "query ProductTelemetryPlatformDashboard($input: ProductTelemetryDashboardInput!) {\n  productTelemetryPlatformDashboard(input: $input) {\n    totals {\n      activeOrgs\n      anonymousUsers\n      sessions\n      events\n      __typename\n    }\n    dailyActiveUsers {\n      day\n      activeAnonymousUsers\n      __typename\n    }\n    topRoutes {\n      routePattern\n      events\n      sessions\n      anonymousUsers\n      __typename\n    }\n    featureViews {\n      feature\n      surface\n      views\n      anonymousUsers\n      __typename\n    }\n    filterChanges {\n      view\n      filterKey\n      changes\n      avgValueCount\n      __typename\n    }\n    chartInteractions {\n      chart\n      action\n      surface\n      interactions\n      sessions\n      __typename\n    }\n    clientErrors {\n      routePattern\n      boundary\n      errorClass\n      errors\n      affectedAnonymousUsers\n      __typename\n    }\n    sessionSummary {\n      p50DurationMs\n      p75DurationMs\n      p90DurationMs\n      p95DurationMs\n      avgPagesViewed\n      avgInteractions\n      __typename\n    }\n    topOrgs {\n      orgIdHash\n      events\n      sessions\n      anonymousUsers\n      orgId\n      orgName\n      orgSlug\n      __typename\n    }\n    __typename\n  }\n}",
       "const_name": "registeredProductTelemetryPlatformDashboardDocument",
       "digest": "8e2847048e3b70b0391f45d9cd8804735ea4401b7e78cd614e35e49ca39e348f",
+      "kind": "query"
+    },
+    {
+      "operation": "recommendations",
+      "document": "query Recommendations($orgId: String!, $team: ID!, $window: WindowInput!) {\n  recommendations(orgId: $orgId, team: $team, window: $window) {\n    ruleId\n    teamId\n    orgId\n    computedAt\n    windowStart\n    windowEnd\n    severity\n    title\n    rationale\n    successCriterion\n    evidence {\n      teamId\n      metricTable\n      windowStart\n      windowEnd\n      field\n      value\n      __typename\n    }\n    __typename\n  }\n}",
+      "const_name": "registeredRecommendationsDocument",
+      "digest": "c6261e9cb250f22f909e81c54b0c92e6d9e01aea7c25aa0a96919633e2c33276",
       "kind": "query"
     },
     {
@@ -382,6 +396,13 @@
       "document": "query WorkGraphFlow($orgId: String!, $filters: WorkGraphEdgeFilterInput) {\n  workGraphFlow(orgId: $orgId, filters: $filters) {\n    rows {\n      nodeType\n      inflow\n      outflow\n      __typename\n    }\n    degradedReason\n    __typename\n  }\n}",
       "const_name": "registeredWorkGraphFlowDocument",
       "digest": "99b921280c0e40d6fe3484ee522c13bc025e7bc64604c2e9d615160e80ae1b3d",
+      "kind": "query"
+    },
+    {
+      "operation": "workItemTeamAttributions",
+      "document": "query WorkItemTeamAttributions($orgId: String!, $workItemIds: [String!], $teamId: String) {\n  workItemTeamAttributions(\n    orgId: $orgId\n    workItemIds: $workItemIds\n    teamId: $teamId\n  ) {\n    workItemId\n    provider\n    teamId\n    teamName\n    source\n    confidence\n    isPrimary\n    evidence\n    __typename\n  }\n}",
+      "const_name": "registeredWorkItemTeamAttributionsDocument",
+      "digest": "d1331c8f0d3e1874b32efdf51392e3fe154f445c4d5d64441d5d560d5b21e2a1",
       "kind": "query"
     },
     {

@@ -87,6 +87,13 @@ func buildDataReads(queryURL string, queryTimeout time.Duration, investigator co
 	if err != nil {
 		return dataReads{}, fmt.Errorf("initialize data query client: %w", err)
 	}
+	// CHAOS-7194: compare the served registry with the pinned one. Telemetry
+	// only: a failure never blocks serving and readiness does not depend on it.
+	if watch, werr := directread.NewRegistryWatch(directread.RegistryWatchConfig{Catalogue: out.catalogue, BaseURL: queryURL, Logger: logger}); werr != nil {
+		logger.Warn("context fabric registry check not started", "reason", "invalid_query_url")
+	} else {
+		watch.Start()
+	}
 	runnerGate := gate
 	if runnerGate == nil {
 		runnerGate = directread.NewSubjectGate(nil, directread.NewSlogRecorder(logger))

@@ -369,17 +369,18 @@ func (r *OperationRunner) Run(ctx context.Context, principal storage.Principal, 
 	}
 	x := &run{r: r, principal: principal, start: r.now()}
 	class := CallerClassFor(ClassifyPrincipal(principal))
+	stampedDigest := r.catalogue.StampedSchemaDigest()
 	x.read = OperationRead{
 		Operation:    r.telemetryOperationName(req.Operation),
 		CallerClass:  class,
 		ScopeClass:   ScopeNotReached,
 		Completeness: CompletenessUnknown,
-		SchemaDigest: r.catalogue.SchemaDigest(),
+		SchemaDigest: stampedDigest,
 	}
 	x.resp = OperationResponse{
 		Completeness:     CompletenessUnknown,
 		Operation:        x.read.Operation,
-		Source:           OperationSource{Path: OperationSourcePath, Service: OperationSourceService, SchemaDigest: r.catalogue.SchemaDigest()},
+		Source:           OperationSource{Path: OperationSourcePath, Service: OperationSourceService, SchemaDigest: stampedDigest},
 		Errors:           []OperationError{},
 		Consistency:      OperationConsistency,
 		UntrustedContent: UntrustedContent{Untrusted: true, Fields: []string{"data"}},
