@@ -8,12 +8,13 @@ import (
 type AttemptLimiter interface {
 	AllowAttempt(key string, now time.Time) bool
 	FailureBlocked(key string, now time.Time) bool
-	// BeginAttempt atomically admits one authentication attempt against the
-	// failure budget: it refuses when recorded failures plus attempts still
-	// in flight already reach the limit, so concurrent guesses cannot all pass
-	// the check before any of them records its failure. The returned release
-	// must be called once the attempt is decided; it spends nothing, so a
-	// successful attempt leaves the budget untouched.
+	// BeginAttempt atomically admits one authentication attempt: it refuses
+	// when the address has reached its failure limit, or when too many
+	// attempts from it are still undecided (so a burst of concurrent guesses
+	// cannot all pass the check before the first failure is recorded; the
+	// overshoot is bounded by the in-flight cap). The returned release must be
+	// called once the attempt is decided; it spends nothing, so a successful
+	// attempt leaves the failure budget untouched.
 	BeginAttempt(key string, now time.Time) (release func(), ok bool)
 	RecordFailure(key string, now time.Time)
 	RetryAfter(key string, now time.Time) time.Duration
@@ -40,6 +41,7 @@ type MemoryLimiter struct {
 	AttemptLimit int
 	FailureLimit int
 	maxKeys      int
+	maxInflight  int
 	attempts     map[string]fixedWindow
 	failures     map[string]fixedWindow
 	inflight     map[string]int
@@ -50,7 +52,13 @@ type MemoryLimiterOptions struct {
 	AttemptLimit   int
 	FailureLimit   int
 	MaxTrackedKeys int
+	// MaxInFlight bounds concurrent undecided attempts per address (default
+	// DefaultMaxInFlight). Concurrent guesses can overshoot the failure limit
+	// by at most this many; valid requests are never refused below it.
+	MaxInFlight int
 }
+
+const DefaultMaxInFlight = 64
 
 func NewMemoryLimiter(window time.Duration, attemptLimit, failureLimit int) *MemoryLimiter {
 	return NewBoundedMemoryLimiter(MemoryLimiterOptions{Window: window, AttemptLimit: attemptLimit, FailureLimit: failureLimit, MaxTrackedKeys: 4096})
@@ -60,8 +68,12 @@ func NewBoundedMemoryLimiter(options MemoryLimiterOptions) *MemoryLimiter {
 	if options.MaxTrackedKeys < 1 {
 		options.MaxTrackedKeys = 1
 	}
+	if options.MaxInFlight < 1 {
+		options.MaxInFlight = DefaultMaxInFlight
+	}
 	return &MemoryLimiter{
-		Window: options.Window, AttemptLimit: options.AttemptLimit, FailureLimit: options.FailureLimit,
+		maxInflight: options.MaxInFlight,
+		Window:      options.Window, AttemptLimit: options.AttemptLimit, FailureLimit: options.FailureLimit,
 		maxKeys:  options.MaxTrackedKeys,
 		attempts: make(map[string]fixedWindow), failures: make(map[string]fixedWindow), inflight: make(map[string]int),
 	}
@@ -102,7 +114,14 @@ func (l *MemoryLimiter) BeginAttempt(key string, now time.Time) (func(), bool) {
 		return nil, false
 	}
 	l.failures[key] = window
-	if l.FailureLimit > 0 && window.Count+l.inflight[key] >= l.FailureLimit {
+	if l.FailureLimit > 0 && window.Count >= l.FailureLimit {
+		return nil, false
+	}
+	// Undecided attempts are bounded per address, and the tracked addresses
+	// are bounded like every other limiter map. Below the per-address bound a
+	// valid request is never refused, whatever the failure count.
+	current, tracking := l.inflight[key]
+	if current >= l.maxInflight || (!tracking && len(l.inflight) >= l.maxKeys) {
 		return nil, false
 	}
 	l.inflight[key]++

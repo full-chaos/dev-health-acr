@@ -116,10 +116,10 @@ func (s *gatedCredentialStore) FindByTokenHash(_ context.Context, _ string) (con
 }
 
 func TestConcurrentGuessesCannotCrossTheFailureCeiling(t *testing.T) {
-	const limit, burst = 3, 25
+	const limit, burst, inflightCap = 3, 25, 5
 	now := time.Date(2026, 9, 29, 15, 0, 0, 0, time.UTC)
 	store := &gatedCredentialStore{CredentialStore: newMemoryCredentialStoreAt(t, now.Add(-time.Hour), memory.NewAuditStore()), want: burst, release: make(chan struct{})}
-	authenticator := newTestAuthenticator(t, store, memory.NewAuditStore(), now, NewMemoryLimiter(time.Minute, 1000, limit))
+	authenticator := newTestAuthenticator(t, store, memory.NewAuditStore(), now, NewBoundedMemoryLimiter(MemoryLimiterOptions{Window: time.Minute, AttemptLimit: 1000, FailureLimit: limit, MaxTrackedKeys: 16, MaxInFlight: inflightCap}))
 	handler := authenticator.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
 	bad := TokenPrefix + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 	var wg sync.WaitGroup
@@ -141,15 +141,17 @@ func TestConcurrentGuessesCannotCrossTheFailureCeiling(t *testing.T) {
 			limited++
 		}
 	}
-	if unauthorized != limit || limited != burst-limit {
-		t.Fatalf("concurrent guesses admitted to lookup = %d (limit %d), 429 = %d", unauthorized, limit, limited)
+	if unauthorized != inflightCap || limited != burst-inflightCap {
+		t.Fatalf("concurrent guesses admitted to lookup = %d (in-flight cap %d), 429 = %d", unauthorized, inflightCap, limited)
 	}
 }
 
-func TestConcurrentValidRequestsBelowTheBudgetAreNotRefused(t *testing.T) {
-	handler, token, _, _ := failureBudgetFixture(t, 1000, 20)
+func TestConcurrentValidRequestsAboveTheFailureLimitAreNotRefused(t *testing.T) {
+	// Five simultaneous valid requests with a failure limit of 3: valid
+	// requests are not failures, so none may be refused.
+	handler, token, _, _ := failureBudgetFixture(t, 1000, 3)
 	var wg sync.WaitGroup
-	codes := make([]int, 10)
+	codes := make([]int, 5)
 	for i := range codes {
 		wg.Add(1)
 		go func() {
@@ -176,5 +178,23 @@ func TestSuccessDoesNotResetPriorFailures(t *testing.T) {
 		if code := callWithToken(handler, step.token); code != step.want {
 			t.Fatalf("step %d = %d, want %d", i, code, step.want)
 		}
+	}
+}
+
+func TestInFlightReservationsAreBoundedByTrackedKeys(t *testing.T) {
+	now := time.Date(2026, 9, 29, 15, 0, 0, 0, time.UTC)
+	limiter := NewBoundedMemoryLimiter(MemoryLimiterOptions{Window: time.Minute, FailureLimit: 3, MaxTrackedKeys: 1, MaxInFlight: 4})
+	release, ok := limiter.BeginAttempt("a", now)
+	if !ok {
+		t.Fatal("first address refused")
+	}
+	if _, ok := limiter.BeginAttempt("b", now); ok {
+		t.Fatal("second address admitted past the tracked-key cap while the first is in flight")
+	}
+	release()
+	// The failure map's own window entry for "a" ages out with the window.
+	now = now.Add(time.Minute)
+	if _, ok := limiter.BeginAttempt("b", now); !ok {
+		t.Fatal("address refused after the reservation was released")
 	}
 }
