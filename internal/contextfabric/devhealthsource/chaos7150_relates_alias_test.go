@@ -40,7 +40,7 @@ func TestChaos7150RelatesMapsToRelatesToAndIsNotQuarantined(t *testing.T) {
 				t.Fatalf("direction changed: %s -> %s", edge.From.CanonicalID, edge.To.CanonicalID)
 			}
 			// Same authorization as the RELATES_TO row for the same pair.
-			native := [][]any{dependencyRow("WI-A", "WI-B", "RELATES_TO", at, created)}
+			native := [][]any{dependencyRow("WI-A", "WI-B", "relates_to", at, created)}
 			nativeBatch, _, nativeErr, _ := projectWithQuarantineLog(t, dependencyTablesOnly(t, at, native), testCursor(t, at.Add(-time.Hour), ""))
 			if nativeErr != nil || len(nativeBatch.Relationships) != 1 {
 				t.Fatalf("native row: err=%v", nativeErr)
@@ -56,18 +56,17 @@ func TestChaos7150RelatesMapsToRelatesToAndIsNotQuarantined(t *testing.T) {
 }
 
 // Both spellings of the same pair on one page are one fact: one edge, the
-// redundant row dropped AND counted (never silent). Convergence is exact for
-// the RELATES_TO spelling, the same convention BLOCKED_BY/BLOCKS uses (the
-// mapped type's own spelling derives the id); a lowercase 'relates_to' row
-// keeps its historical raw-spelling id, which is never changed so that no
-// already-projected edge is re-keyed.
+// redundant row dropped AND counted (never silent). The native row is the
+// LOWERCASE 'relates_to' the venue ClickHouse actually holds (measured: the 7
+// stale Jira 'relates' rows each have a live 'relates_to' twin), so this is
+// the real shape, not a hand-picked spelling.
 func TestChaos7150RelatesAndRelatesToOnOnePageCollapseAndCount(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 9, 29, 4, 14, 1, 0, time.UTC)
 	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	rows := [][]any{
 		dependencyRow("WI-A", "WI-B", "relates", at, created),
-		dependencyRow("WI-A", "WI-B", "RELATES_TO", at.Add(time.Second), created),
+		dependencyRow("WI-A", "WI-B", "relates_to", at.Add(time.Second), created),
 	}
 	batch, available, err, observations := projectWithQuarantineLog(t, dependencyTablesOnly(t, at, rows), testCursor(t, at.Add(-time.Hour), ""))
 	if err != nil || !available {

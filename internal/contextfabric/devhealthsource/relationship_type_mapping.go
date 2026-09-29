@@ -43,6 +43,12 @@ var dependencyRelationshipMapping = map[string]struct {
 	// from the opposite side, so From/To must be exchanged for the mapped
 	// type to state the same fact.
 	swapEndpoints bool
+	// identity, when set, is the spelling the relationship id derives from
+	// instead of the mapped type's own. It exists for an alias whose target
+	// is stored in the column under a DIFFERENT spelling than the vocabulary
+	// member's (see RELATES): the id must equal the one the live rows already
+	// carry, or one fact projects as two edges.
+	identity string
 }{
 	"BLOCKED_BY":    {mapped: contractsv1.ContextFabricRelationshipBlocks, swapEndpoints: true},
 	"IS_BLOCKED_BY": {mapped: contractsv1.ContextFabricRelationshipBlocks, swapEndpoints: true},
@@ -58,7 +64,16 @@ var dependencyRelationshipMapping = map[string]struct {
 	// the row keeps its own direction), so it converges on the RELATES_TO
 	// edge. Authorization is unchanged: the edge is a work-item dependency
 	// edge like RELATES_TO, so it is visible only when both ends are admitted.
-	"RELATES": {mapped: contractsv1.ContextFabricRelationshipRelatesTo, swapEndpoints: false},
+	//
+	// Measured on the bigboy venue ClickHouse (org 70d529e0, read-only): all 7
+	// 'relates' rows are Jira (raw 'relates to', last_synced 2026-08-31), and
+	// each of those 7 pairs ALSO has a lowercase 'relates_to' row written on
+	// 2026-09-28 -- the current normalizer's spelling, and the spelling every
+	// projected RELATES_TO edge derives its id from (unmapped values derive the
+	// id from the RAW column value). So the alias derives its id from
+	// "relates_to": the stale 'relates' row lands on the SAME edge id as the
+	// live one, never as a second edge.
+	"RELATES": {mapped: contractsv1.ContextFabricRelationshipRelatesTo, swapEndpoints: false, identity: "relates_to"},
 }
 
 // dependencyRelationshipType translates one raw
@@ -76,6 +91,9 @@ var dependencyRelationshipMapping = map[string]struct {
 func dependencyRelationshipType(raw string) (typ contractsv1.ContextFabricRelationshipType, swapEndpoints bool, identitySpelling string) {
 	upper := strings.ToUpper(strings.TrimSpace(raw))
 	if mapping, ok := dependencyRelationshipMapping[upper]; ok {
+		if mapping.identity != "" {
+			return mapping.mapped, mapping.swapEndpoints, mapping.identity
+		}
 		return mapping.mapped, mapping.swapEndpoints, string(mapping.mapped)
 	}
 	return contractsv1.ContextFabricRelationshipType(upper), false, raw
