@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 )
 
@@ -34,11 +35,19 @@ func (a *App) contextFabricDataCatalogHandler() http.HandlerFunc {
 				scopes = append(scopes, scope)
 			}
 		}
+		// The kinds come from the registry read_facts validates against.
+		facts := a.directFacts()
+		var factCapabilities []contextfabric.FactCapability
+		if facts != nil {
+			factCapabilities = a.runtime.DirectFactReader.Capabilities()
+		}
 		catalog := directread.BuildDataCatalog(a.dataCatalogue(), directread.CatalogCaller{
 			PrincipalClass:     directread.ClassifyPrincipal(principal),
 			Scopes:             scopes,
 			DataRead:           auth.HasScope(principal.Permissions, auth.ScopeDataRead),
 			OperationsServable: a.dataOperations() != nil,
+			FactsServable:      facts != nil,
+			FactCapabilities:   factCapabilities,
 		}, sections)
 		encoded, err := encodeBounded(catalog, contextFabricDataResponseBytes)
 		if err != nil {

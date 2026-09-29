@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 3c87019cca286182981b44a2131950c4694bce4c2b20b35362240e4f9845e71c
+# canonical-content-sha256: 6f2e446f13e18a7990a38239ad81a9d293f1e09988f924c5471f78acb586fbd7
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -353,7 +353,7 @@ paths:
       security:
         -
           bearerAuth: []
-      summary: "Direct data catalogue (data_catalog), CHAOS-7072 S1a: the operations, subject kinds, relationship types, limits and versions for THIS caller. The sections query parameter (comma list of operations, facts, subjects, relationships, limits) filters; the facts section is not served in this release. A caller without data:read sees the operation list with available=false."
+      summary: "Direct data catalogue (data_catalog), CHAOS-7072 S1a: the operations, subject kinds, relationship types, limits and versions for THIS caller. The sections query parameter (comma list of operations, facts, subjects, relationships, limits) filters; the facts section lists the kinds read_facts serves, or says it is not available. A caller without data:read sees the operation list with available=false."
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "context:read"
   "/api/v1/context-fabric/data/facts":
@@ -983,10 +983,30 @@ components:
           const: "acr-data.v1"
         facts:
           properties:
+            kinds:
+              items:
+                additionalProperties: false
+                properties:
+                  fields:
+                    items:
+                      type: "string"
+                    type: "array"
+                  kind:
+                    type: "string"
+                  subject_kinds:
+                    items:
+                      type: "string"
+                    type: "array"
+                required:
+                  - "kind"
+                  - "subject_kinds"
+                  - "fields"
+                type: "object"
+              type: "array"
             note:
               type: "string"
             served:
-              const: false
+              type: "boolean"
           required:
             - "served"
             - "note"

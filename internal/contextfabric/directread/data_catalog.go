@@ -21,8 +21,13 @@ package directread
 //     8 (r5 did not say whether a context:read-only caller sees the list).
 //   - The caller section carries the scopes present and the grant class. It
 //     never carries a repository name, a slug or a count of grants.
-//   - The facts section is not served in S1a; its absence is stated in a
-//     note, never as an empty list.
+//   - The facts section lists the kinds read_facts serves, read from the SAME
+//     capability registry read_facts validates against (CHAOS-7148), never
+//     from a second list. Kinds are not grant-filtered by read_facts (the
+//     subject gate filters subjects), so the list reveals nothing a
+//     restricted caller could not learn from a read_facts refusal. When
+//     read_facts cannot serve any kind the section says so in a note, never as an
+//     empty list.
 //
 // No model is called and nothing is read from a store: the catalogue is a
 // pure function of the policy artifact, the closed vocabularies and the
@@ -32,6 +37,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -53,8 +59,13 @@ func CatalogSectionVocabulary() [5]string {
 	return [5]string{CatalogSectionOperations, CatalogSectionFacts, CatalogSectionSubjects, CatalogSectionRelationships, CatalogSectionLimits}
 }
 
-// CatalogFactsNote is the fixed note of the facts section in S1a.
-const CatalogFactsNote = "facts: served by read_facts (not in this release)"
+// CatalogFactsNote is the fixed note of the facts section when read_facts is
+// not wired in this deployment.
+const CatalogFactsNote = "facts: read_facts is not available in this deployment"
+
+// CatalogFactsServedNote is the fixed note when read_facts serves the kinds
+// listed in the facts section.
+const CatalogFactsServedNote = "facts: served by read_facts; kinds listed are the ones it accepts"
 
 // Reasons an operation entry is not available to this caller now.
 const (
@@ -104,6 +115,13 @@ type CatalogCaller struct {
 	// OperationsServable reports that the query service URL is configured
 	// and the policy artifact loaded (design E.5).
 	OperationsServable bool
+	// FactCapabilities is the registry read_facts serves, or nil when
+	// read_facts is not wired. Only DirectServable kinds are listed.
+	FactCapabilities []contextfabric.FactCapability
+	// FactsServable is true when a read_facts reader object is composed. The
+	// section still says "not available" unless the registry it reads lists
+	// at least one direct-servable kind.
+	FactsServable bool
 }
 
 // DataCatalogRequest selects sections. Empty means all served sections.
@@ -192,10 +210,49 @@ type CatalogRefusedShape struct {
 	Reason    string      `json:"reason"`
 }
 
-// CatalogFacts is the facts section: not served in S1a.
+// CatalogFacts is the facts section: the kinds read_facts serves.
 type CatalogFacts struct {
-	Served bool   `json:"served"`
-	Note   string `json:"note"`
+	Served bool              `json:"served"`
+	Note   string            `json:"note"`
+	Kinds  []CatalogFactKind `json:"kinds,omitempty"`
+}
+
+// CatalogFactKind is one fact kind read_facts accepts.
+type CatalogFactKind struct {
+	Kind         string   `json:"kind"`
+	SubjectKinds []string `json:"subject_kinds"`
+	Fields       []string `json:"fields"`
+}
+
+// buildCatalogFacts derives the facts section from the registry read_facts
+// serves. A kind read_facts refuses (no declared fields) is not listed.
+func buildCatalogFacts(caller CatalogCaller) *CatalogFacts {
+	if !caller.FactsServable {
+		return &CatalogFacts{Served: false, Note: CatalogFactsNote}
+	}
+	kinds := []CatalogFactKind{}
+	for _, capability := range caller.FactCapabilities {
+		if !capability.DirectServable() {
+			continue
+		}
+		entry := CatalogFactKind{Kind: string(capability.Kind), SubjectKinds: []string{}, Fields: []string{}}
+		for _, subject := range capability.SupportedSubjectKinds {
+			entry.SubjectKinds = append(entry.SubjectKinds, string(subject))
+		}
+		for _, field := range capability.Fields {
+			entry.Fields = append(entry.Fields, field.Name)
+		}
+		sort.Strings(entry.SubjectKinds)
+		kinds = append(kinds, entry)
+	}
+	sort.Slice(kinds, func(i, j int) bool { return kinds[i].Kind < kinds[j].Kind })
+	// A reader object with no source, or a source that lists nothing
+	// servable, answers every read_facts call as unavailable or refused:
+	// that is "not available", never "served" with an empty list.
+	if len(kinds) == 0 {
+		return &CatalogFacts{Served: false, Note: CatalogFactsNote}
+	}
+	return &CatalogFacts{Served: true, Note: CatalogFactsServedNote, Kinds: kinds}
 }
 
 // CatalogSubjects is the subjects section.
@@ -367,8 +424,8 @@ func BuildDataCatalog(catalogue *Catalogue, caller CatalogCaller, sections []str
 		case CatalogSectionOperations:
 			out.Operations = buildCatalogOperations(catalogue, caller, class)
 		case CatalogSectionFacts:
-			out.Facts = &CatalogFacts{Served: false, Note: CatalogFactsNote}
-			out.Notes = append(out.Notes, CatalogFactsNote)
+			out.Facts = buildCatalogFacts(caller)
+			out.Notes = append(out.Notes, out.Facts.Note)
 		case CatalogSectionSubjects:
 			out.Subjects = buildCatalogSubjects()
 		case CatalogSectionRelationships:

@@ -205,7 +205,7 @@ func TestDataCatalogSectionsAndStaticParts(t *testing.T) {
 		t.Fatalf("filter: %+v", only)
 	}
 	all := catalogFor(t, ClassUnrestricted, true, true)
-	if all.Facts == nil || all.Facts.Served || all.Facts.Note != CatalogFactsNote {
+	if all.Facts == nil || all.Facts.Served || all.Facts.Note != CatalogFactsNote || len(all.Facts.Kinds) != 0 {
 		t.Fatalf("facts %+v", all.Facts)
 	}
 	if len(all.Relationships.Types) != 12 {

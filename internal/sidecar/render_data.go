@@ -159,6 +159,9 @@ func RenderDataCatalogSummary(raw json.RawMessage, max int) string {
 		} `json:"operations"`
 		Facts *struct {
 			Served bool `json:"served"`
+			Kinds  []struct {
+				Kind string `json:"kind"`
+			} `json:"kinds"`
 		} `json:"facts"`
 		Subjects *struct {
 			Kinds []json.RawMessage `json:"kinds"`
@@ -207,8 +210,16 @@ func RenderDataCatalogSummary(raw json.RawMessage, max int) string {
 			t.line(fmt.Sprintf("(%d more operations in the structured content)", len(ops.Operations)-shown))
 		}
 	}
-	if view.Facts != nil && !view.Facts.Served {
-		t.line("Facts: not served in this release.")
+	if view.Facts != nil {
+		if !view.Facts.Served {
+			t.line("Facts: read_facts is not available in this deployment.")
+		} else {
+			names := make([]string, 0, len(view.Facts.Kinds))
+			for _, k := range view.Facts.Kinds {
+				names = append(names, plainToken(k.Kind))
+			}
+			t.line(fmt.Sprintf("read_facts serves %d fact kinds: %s.", len(names), strings.Join(names, ", ")))
+		}
 	}
 	if view.Subjects != nil {
 		t.line(fmt.Sprintf("Subject kinds: %d.", len(view.Subjects.Kinds)))
