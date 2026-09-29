@@ -449,8 +449,8 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 
 	idsSeen := map[string]int{}
 	rowKeys := map[routeKey]bool{}
-	// Every (file, line) claimed as a row's `source`, mapped to every row id
-	// that claims it -- a discovered surface must be owned by EXACTLY one
+	// Every (file, method, route) claimed as a row's `source`, mapped to every
+	// row id that claims it -- a discovered surface must be owned by EXACTLY one
 	// row. Codex-verified gap (round 1): two rows with DIFFERENT ids both
 	// anchored at the same surface (possibly with conflicting
 	// classifications) previously returned OK -- worse than a missing row,
@@ -842,6 +842,8 @@ func checkPrimaryValidatorAnchorMarker(root, rowID string, anchor map[string]any
 	if line > len(lines) {
 		return // reported elsewhere (checkAnchorExists)
 	}
+	// (CHAOS-7128: the moved-marker search below runs only when the declared
+	// line lacks the marker; when it has it, the line is checked ALONE.)
 	// The marker is checked against its own declared START line ONLY, never
 	// a line..line_end window: a window wide enough to admit a multi-line
 	// construct is also wide enough to keep matching after an edit inserts a
@@ -850,6 +852,16 @@ func checkPrimaryValidatorAnchorMarker(root, rowID string, anchor map[string]any
 	// passing on a marker it never actually verified was there. A single
 	// declared line has exactly one thing to verify; check that one thing.
 	if strings.Contains(lines[line-1], note) {
+		// r2 P1 class: several copies of the marker on ONE line (declared or
+		// sibling-claimed) are several occurrences; one line cannot vouch
+		// for which copy is the validator.
+		if n := strings.Count(lines[line-1], note); n > 1 {
+			*errs = append(*errs, fmt.Sprintf(
+				"AMBIGUOUS ANCHOR MARKER: row %q primary_validator anchor declares %s:%d, whose line carries its marker %q %d times -- "+
+					"a substring match cannot tell which copy is the real validator. Use a longer, more specific marker",
+				rowID, path, line, note, n))
+			return
+		}
 		// The declared line carries the marker. Before trusting that as
 		// proof, check the REST of the file for the same marker text: a
 		// substring match can be fooled by an unrelated copy (a comment, a
@@ -866,10 +878,11 @@ func checkPrimaryValidatorAnchorMarker(root, rowID string, anchor map[string]any
 			if i+1 == line {
 				continue
 			}
-			if !strings.Contains(l, note) {
+			n := strings.Count(l, note)
+			if n == 0 {
 				continue
 			}
-			if claimedAnchorLines[surfaceKey{path, i + 1}] {
+			if claimedAnchorLines[surfaceKey{path, i + 1}] && n == 1 {
 				continue
 			}
 			*errs = append(*errs, fmt.Sprintf(
@@ -890,11 +903,11 @@ func checkPrimaryValidatorAnchorMarker(root, rowID string, anchor map[string]any
 	// several occurrences cannot be told apart -- ambiguous; none means the
 	// symbol was renamed or removed -- fail below.
 	// Count OCCURRENCES, not lines: two copies of the marker on one line are
-	// two occurrences (r1 P1), not one unambiguous anchor. An occurrence on a
-	// line some OTHER row's anchor declares (claimedAnchorLines) is that
-	// sibling's legitimate copy of the marker; only unclaimed occurrences
-	// are ambiguity. A marker that exists only on sibling-claimed lines still
-	// resolves (it exists), but a claimed line carrying extra copies does not.
+	// two occurrences, not one unambiguous anchor (r1 P1), and that holds on
+	// a sibling-claimed line too (r2 P1): a claimed line vouches for exactly
+	// ONE copy. Occurrences on lines some OTHER row's anchor declares are
+	// that sibling's legitimate copy; only unclaimed ones, or extra copies
+	// on any line, are ambiguity.
 	total, unclaimed := 0, 0
 	var unclaimedAt []int
 	for i, l := range lines {
@@ -906,12 +919,13 @@ func checkPrimaryValidatorAnchorMarker(root, rowID string, anchor map[string]any
 			continue
 		}
 		total += n
-		extra := n
-		if claimedAnchorLines[surfaceKey{path, i + 1}] {
-			extra = n - 1
-		}
-		if extra > 0 {
-			unclaimed += extra
+		switch {
+		case n > 1:
+			// several copies on one line, claimed or not: never one anchor.
+			unclaimed += n
+			unclaimedAt = append(unclaimedAt, i+1)
+		case !claimedAnchorLines[surfaceKey{path, i + 1}]:
+			unclaimed++
 			unclaimedAt = append(unclaimedAt, i+1)
 		}
 	}

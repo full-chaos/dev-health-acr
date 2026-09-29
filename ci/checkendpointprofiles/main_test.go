@@ -1225,6 +1225,25 @@ func TestGateRejectsTwoCopiesOfTheMarkerOnOneLine(t *testing.T) {
 	mustContain(t, errs, "AMBIGUOUS ANCHOR MARKER", "2 unclaimed times")
 }
 
+// r2 P1: a sibling-claimed line vouches for ONE copy of the marker, not two.
+func TestGateRejectsTwoMarkerCopiesOnASiblingClaimedLine(t *testing.T) {
+	pv := func(line float64) map[string]any {
+		return map[string]any{"description": "x", "anchor": map[string]any{
+			"path": fixtureAppFile, "line": line, "note": "validatorMarker(h)"}}
+	}
+	rowA := minimalValidRow(map[string]any{"id": "GET /a [dev-health-acr-api]", "route": "/a", "primary_validator": pv(4)})
+	rowB := minimalValidRow(map[string]any{"id": "GET /b [dev-health-acr-api]", "route": "/b", "primary_validator": pv(8)})
+	f := minimalValidFixture(t, []map[string]any{rowA, rowB})
+	writeFile(t, filepath.Join(f.root, fixtureAppFile),
+		"package api\n\nimport \"net/http\"\n\nfunc Handler() http.Handler {\n"+
+			"\tmux := http.NewServeMux()\n"+
+			"\tmux.HandleFunc(\"GET /a\", h)\n"+
+			"\tmux.HandleFunc(\"GET /b\", h); _ = []string{\"validatorMarker(h)\", \"validatorMarker(h)\"}\n"+
+			"\treturn mux\n}\n\nfunc h(w http.ResponseWriter, r *http.Request) {}\n")
+	errs := f.check(t)
+	mustContain(t, errs, "AMBIGUOUS ANCHOR MARKER", "validatorMarker(h)")
+}
+
 // Two sibling rows share one marker whose single occurrence has moved off
 // the shared declared line: both pass (one occurrence, legitimately shared).
 func TestGateAcceptsSiblingRowsSharingOneMovedMarker(t *testing.T) {
