@@ -239,46 +239,8 @@ func TestChaos7120EntityEvidenceIsOwnOrGated(t *testing.T) {
 	}
 }
 
-// resolveEvidence directly: the mapping is exact, a malformed value is
-// unresolvable, and a matching KIND alone never makes a reference own.
-func TestChaos7120ResolveEvidenceMapsEntityFormsExactly(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		subject   contextfabric.SubjectRef
-		id        string
-		wantOK    bool
-		wantOwn   bool
-		wantKind  contextfabric.SubjectKind
-		wantCanon string
-	}{
-		{"own work item", workA1, evidence(contractsv1.ContextFabricEvidenceEntityWorkItem, "a:WA-1"), true, true, "", ""},
-		{"other work item, same kind", workA1, evidence(contractsv1.ContextFabricEvidenceEntityWorkItem, "b:WB-9"), true, false, contractsv1.ContextFabricSubjectWorkItem, workB9.CanonicalID},
-		{"work item id with a colon", workA1, evidence(contractsv1.ContextFabricEvidenceEntityWorkItem, "a:linear:X"), true, false, contractsv1.ContextFabricSubjectWorkItem, derived(identity.KindWorkItem, "a", "linear:X")},
-		{"work item without repository", workA1, evidence(contractsv1.ContextFabricEvidenceEntityWorkItem, "WA-1"), false, false, "", ""},
-		{"own ci run", ciA1, evidence(contractsv1.ContextFabricEvidenceEntityCI, "a:run-1"), true, true, "", ""},
-		{"own deployment", deployA1, evidence(contractsv1.ContextFabricEvidenceEntityDeployment, "a:dep-1"), true, true, "", ""},
-		{"own pull request", pullA1, evidence(contractsv1.ContextFabricEvidenceEntityPullRequest, "a:1"), true, true, "", ""},
-		{"pull request with a non-numeric number", pullA1, evidence(contractsv1.ContextFabricEvidenceEntityPullRequest, "a:x"), false, false, "", ""},
-		{"own incident", incidentA1, evidence(contractsv1.ContextFabricEvidenceEntityIncident, "inc-a"), true, true, "", ""},
-		{"other incident", incidentA1, evidence(contractsv1.ContextFabricEvidenceEntityIncident, "inc-b"), true, false, contractsv1.ContextFabricSubjectIncident, incidentB9.CanonicalID},
-		{"own review", reviewA1, evidence(contractsv1.ContextFabricEvidenceEntityReview, "a:rev-1"), true, true, "", ""},
-		{"other review", reviewA1, evidence(contractsv1.ContextFabricEvidenceEntityReview, "a:rev-2"), false, false, "", ""},
-		{"work item evidence on a repository fact", repoA, evidence(contractsv1.ContextFabricEvidenceEntityWorkItem, "a:WA-1"), true, false, contractsv1.ContextFabricSubjectWorkItem, workA1.CanonicalID},
-	} {
-		ref, ok, own := resolveEvidence(tc.subject, tc.id)
-		if ok != tc.wantOK || own != tc.wantOwn {
-			t.Errorf("%s: ok=%v own=%v, want ok=%v own=%v", tc.name, ok, own, tc.wantOK, tc.wantOwn)
-			continue
-		}
-		if ok && !own && (ref.opaque || ref.kind != tc.wantKind || ref.canonical != tc.wantCanon) {
-			t.Errorf("%s: ref = %+v, want %s %s", tc.name, ref, tc.wantKind, tc.wantCanon)
-		}
-	}
-	// A dependency edge names no subject: opaque.
-	if ref, ok, own := resolveEvidence(workA1, evidence(contractsv1.ContextFabricEvidenceEntityWorkItemDependency, "WB-9:WA-1")); !ok || own || !ref.opaque {
-		t.Errorf("dependency evidence = %+v ok=%v own=%v, want opaque", ref, ok, own)
-	}
-}
+// The resolveEvidence mapping table moved with the gate core to
+// internal/contextfabric (chaos7120_resolve_evidence_test.go, CHAOS-7127).
 
 // CHAOS-7120 codex r1 P1: a CallerScoped field is served with
 // population_scope "caller_authorized_items" and named in
