@@ -36,6 +36,19 @@ func OwnedByKinds() []string { return []string{"project", "repository"} }
 // or no census (handle). The tool answers unavailable.
 var ErrFindModeNotComposed = errors.New("find_subjects mode not composed")
 
+// ErrFindScopeRequired: handle mode cannot serve this repository-restricted
+// caller within its bound (the grant holds more than MaxHandleGrantRepositories
+// readable repositories, or the grant listing is incomplete). A typed
+// refusal that carries no count; the route answers invalid_request with
+// reason scope_required.
+var ErrFindScopeRequired = errors.New("find_subjects: scope_required")
+
+// MaxHandleGrantRepositories bounds the per-repository census a
+// repository-restricted handle lookup runs (one census per granted
+// repository; the census takes one anchor, not a set). Past it the lookup is
+// refused (ErrFindScopeRequired), never widened to the organization.
+const MaxHandleGrantRepositories = 50
+
 // WithOwnershipAndHandles composes the owned_by and handle modes. edges
 // serves owned_by (the S3a bounded edge page); census and nodes serve
 // handle (the engine's own census function and a node read for labels). A
@@ -92,8 +105,10 @@ func planHandle(plan findPlan, handle string) (findPlan, error) {
 // repository or project, through the same gates as read_relationships: the
 // team takes a fresh subject-gate decision (spent here); every end node of
 // every examined edge takes one; every edge passes EdgeGate. A refused team,
-// like a missing one, gives an empty answer. At most MaxFindScanNodes edges
-// are examined; past that the answer is truncated.
+// like a missing one, gives an empty answer. The scan has no edge cap: it is
+// bounded by the team's own repository and project OWNED_BY_TEAM edges (the
+// end-kind filter), and a cap that counted withheld edges would make the
+// status depend on edges the caller may not see (CHAOS-7126 r1 P1).
 func (l *SubjectLookup) scanOwnedBy(ctx context.Context, principal storage.Principal, binding contextfabric.ResolvedGraphBinding, plan findPlan) ([]FoundSubject, bool, error) {
 	if l.edges == nil {
 		return nil, false, fmt.Errorf("%w: owned_by", ErrFindModeNotComposed)
@@ -115,7 +130,6 @@ func (l *SubjectLookup) scanOwnedBy(ctx context.Context, principal storage.Princ
 	seen := map[string]bool{}
 	var out []FoundSubject
 	var after *EdgeKey
-	scanned := 0
 	for {
 		page, err := l.edges.DirectEdgePage(ctx, principal, binding, EdgePageQuery{
 			Origins: []contextfabric.SubjectRef{team}, Types: []string{string(contractsv1.ContextFabricRelationshipOwnedByTeam)},
@@ -141,14 +155,13 @@ func (l *SubjectLookup) scanOwnedBy(ctx context.Context, principal storage.Princ
 			end := servedEnd(owned)
 			out = append(out, FoundSubject{Kind: end.Kind, CanonicalID: end.CanonicalID, Label: end.Label, Match: ""})
 		}
-		scanned += len(page.Edges)
 		if !page.More || len(page.Edges) == 0 {
 			return out, false, nil
 		}
-		if scanned >= MaxFindScanNodes {
-			return out, true, nil
-		}
 		last := page.Edges[len(page.Edges)-1].Key
+		if after != nil && !after.Less(last) {
+			return nil, false, fmt.Errorf("owned_by edge page did not advance")
+		}
 		after = &last
 	}
 }
@@ -169,22 +182,48 @@ func (l *SubjectLookup) scanHandle(ctx context.Context, principal storage.Princi
 	if l.census == nil || l.nodes == nil {
 		return nil, false, fmt.Errorf("%w: handle", ErrFindModeNotComposed)
 	}
-	outcome, err := l.census(ctx, principal.OrgID, plan.handle.Kind, plan.handle.Value, true, "", "", false)
-	if err != nil {
-		return nil, false, err
-	}
-	if outcome.Count == 0 {
-		return nil, false, nil
+	// A repository-restricted caller never reaches the organization-wide
+	// census (CHAOS-7126 r1 P1): its status, truncation and even its timing
+	// would depend on rows the caller may not read. It gets one census per
+	// repository it may read, anchored on that repository, so every row the
+	// census counts is in the caller's own grant. Unrestricted and universal
+	// callers keep the one organization-wide census.
+	anchors := []contextfabric.SubjectRef{{}}
+	if ClassifyPrincipal(principal) == ClassRestricted {
+		granted, err := NewGrantedRepositories(&SubjectLookup{graph: l.graph, gate: l.gate, now: l.now}).GrantedRepositories(ctx, principal)
+		switch {
+		case errors.Is(err, ErrGrantedRepositoriesIncomplete):
+			return nil, false, fmt.Errorf("%w: the grant listing is incomplete", ErrFindScopeRequired)
+		case err != nil:
+			return nil, false, err
+		case len(granted) > MaxHandleGrantRepositories:
+			return nil, false, fmt.Errorf("%w: the grant holds more than %d repositories", ErrFindScopeRequired, MaxHandleGrantRepositories)
+		}
+		anchors = granted
 	}
 	var ids []string
-	switch {
-	case outcome.ClosureMismatch:
-	case outcome.Count == 1 && outcome.SatisfierCanonicalID != "":
-		ids = []string{outcome.SatisfierCanonicalID}
-	case outcome.Count > 1 && !outcome.SatisfierSetClosureMismatch:
-		ids = outcome.SatisfierCanonicalIDs
+	truncated := false
+	for _, anchor := range anchors {
+		outcome, err := l.census(ctx, principal.OrgID, plan.handle.Kind, plan.handle.Value, true, anchor.Kind, anchor.CanonicalID, anchor.CanonicalID != "")
+		if err != nil {
+			return nil, false, err
+		}
+		if outcome.Count == 0 {
+			continue
+		}
+		var named []string
+		switch {
+		case outcome.ClosureMismatch:
+		case outcome.Count == 1 && outcome.SatisfierCanonicalID != "":
+			named = []string{outcome.SatisfierCanonicalID}
+		case outcome.Count > 1 && !outcome.SatisfierSetClosureMismatch:
+			named = outcome.SatisfierCanonicalIDs
+		}
+		if len(named) < outcome.Count {
+			truncated = true
+		}
+		ids = append(ids, named...)
 	}
-	truncated := len(ids) < outcome.Count
 	refs := make([]contextfabric.SubjectRef, 0, len(ids))
 	for _, id := range ids {
 		if id = strings.TrimSpace(id); id != "" {

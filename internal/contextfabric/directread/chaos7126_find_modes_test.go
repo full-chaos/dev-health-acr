@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 	"testing"
 
@@ -18,16 +19,39 @@ import (
 // read for handle labels.
 type modesGraph struct {
 	*fakeEdgeGraph
-	labels map[string]string
+	labels    map[string]string
+	nodeReads int
 }
 
-func (g *modesGraph) ListSubjectsByKind(context.Context, storage.Principal, contextfabric.ResolvedGraphBinding, string, string, int) (LookupPage, error) {
-	return LookupPage{}, nil
+// ListSubjectsByKind lists the fake's nodes of one kind by canonical id (the
+// grant listing a restricted handle lookup takes goes through it).
+func (g *modesGraph) ListSubjectsByKind(_ context.Context, principal storage.Principal, _ contextfabric.ResolvedGraphBinding, kind, after string, pageSize int) (LookupPage, error) {
+	if principal.OrgID != g.org {
+		return LookupPage{}, nil
+	}
+	var ids []string
+	for key, attributes := range g.nodes {
+		k, id, _ := strings.Cut(key, "\x00")
+		if k == kind && id > after {
+			ids = append(ids, id)
+			_ = attributes
+		}
+	}
+	sort.Strings(ids)
+	page := LookupPage{}
+	if len(ids) > pageSize {
+		ids, page.More = ids[:pageSize], true
+	}
+	for _, id := range ids {
+		page.Nodes = append(page.Nodes, LookupNode{Kind: kind, CanonicalID: id, Label: id, Attributes: g.nodes[graphrank.SubjectKey(subject(contextfabric.SubjectKind(kind), id))]})
+	}
+	return page, nil
 }
 func (g *modesGraph) FindSubjectsByExactName(context.Context, storage.Principal, contextfabric.ResolvedGraphBinding, string, []string) (LookupPage, error) {
 	return LookupPage{}, nil
 }
 func (g *modesGraph) ReadSubjectNodes(_ context.Context, principal storage.Principal, _ contextfabric.ResolvedGraphBinding, subjects []contextfabric.SubjectRef) ([]LookupNode, error) {
+	g.nodeReads++
 	var out []LookupNode
 	if principal.OrgID != g.org {
 		return nil, nil
@@ -149,11 +173,12 @@ func handleGraph() *modesGraph {
 type censusCall struct {
 	org, value string
 	kind       graphrank.CensusKind
+	anchor     string
 }
 
 func fixedCensus(outcome graphrank.CensusOutcome, err error, calls *[]censusCall) graphrank.CensusFunc {
-	return func(_ context.Context, org string, kind graphrank.CensusKind, value string, _ bool, _ contextfabric.SubjectKind, _ string, _ bool) (graphrank.CensusOutcome, error) {
-		*calls = append(*calls, censusCall{org: org, kind: kind, value: value})
+	return func(_ context.Context, org string, kind graphrank.CensusKind, value string, _ bool, _ contextfabric.SubjectKind, anchor string, _ bool) (graphrank.CensusOutcome, error) {
+		*calls = append(*calls, censusCall{org: org, kind: kind, value: value, anchor: anchor})
 		return outcome, err
 	}
 }

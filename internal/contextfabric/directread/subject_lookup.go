@@ -355,6 +355,11 @@ func (l *SubjectLookup) Find(ctx context.Context, principal storage.Principal, r
 	default:
 		admitted, truncated, err = l.scanName(ctx, principal, binding, plan)
 	}
+	if errors.Is(err, ErrFindScopeRequired) {
+		// A typed refusal, not an outage: the request is refused for this
+		// caller (invalid_request, reason scope_required).
+		return FindResponse{}, fmt.Errorf("%w: %w", ErrFindInvalidRequest, err)
+	}
 	if err != nil {
 		return l.emptyOrUnavailable(plan, err)
 	}

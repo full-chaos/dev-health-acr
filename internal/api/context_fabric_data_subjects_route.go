@@ -42,7 +42,8 @@ type dataSubjectsResponse struct {
 
 // dataSubjectsUntrustedFields are the members that carry graph or client
 // text: a subject label is a provider name, the query is the client's.
-var dataSubjectsUntrustedFields = []string{"subjects[].label", "request.query", "request.handle"}
+// Every echoed caller-supplied string is listed (CHAOS-7126 r1 P2).
+var dataSubjectsUntrustedFields = []string{"subjects[].label", "request.kind", "request.query", "request.kinds", "request.cursor", "request.owned_by", "request.handle"}
 
 // contextFabricDataSubjectsHandler serves find_subjects (CHAOS-7072, S1a;
 // design C.4). Every returned subject passed the S0 subject gate for this
@@ -72,6 +73,11 @@ func (a *App) contextFabricDataSubjectsHandler() http.HandlerFunc {
 		})
 		if err != nil {
 			switch {
+			case errors.Is(err, directread.ErrFindScopeRequired):
+				// CHAOS-7126 r1: handle mode for a repository-restricted
+				// caller whose grant exceeds the per-repository census bound.
+				// No count of any kind.
+				writeError(w, r, http.StatusBadRequest, "invalid_request", "find_subjects handle mode needs a narrower repository grant for this credential", false, map[string]any{"reason": "scope_required"})
 			case errors.Is(err, directread.ErrFindInvalidRequest):
 				writeError(w, r, http.StatusBadRequest, "invalid_request", "find_subjects request is invalid", false, map[string]any{"reason": "invalid_find_request"})
 			case isDirectReadContractError(err):
