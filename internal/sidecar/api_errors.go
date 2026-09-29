@@ -3,6 +3,7 @@ package sidecar
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -150,6 +151,12 @@ type APIError struct {
 	// not fit the response budget. Every field is a closed token or a
 	// non-negative integer parsed from error.details -- never hosted text.
 	Budget *BudgetRefusal
+	// Reason (CHAOS-7167) is set only for an invalid_request whose
+	// error.details.reason is a closed-shape token (lowercase snake_case,
+	// at most 64 bytes), e.g. scope_required. It is never hosted free text:
+	// a value that is not a token is dropped, so no count, subject, id or
+	// name can ride through it.
+	Reason string
 
 	sentinel error
 }
@@ -224,6 +231,9 @@ func (e *APIError) Error() string {
 	if e.Message != "" {
 		base += " message=" + strconv.Quote(e.Message)
 	}
+	if e.Reason != "" {
+		base += " reason=" + e.Reason
+	}
 	if b := e.Budget; b != nil {
 		if b.Overrun != "" {
 			base += " overrun=" + b.Overrun
@@ -294,6 +304,9 @@ func newAPIError(status int, detail contractsv1.ErrorDetail, requestID, retryAft
 			apiErr.Message = budgetRefusalSafeMessage
 		}
 	}
+	if detail.Code == "invalid_request" {
+		apiErr.Reason = safeReasonToken(detail.Details)
+	}
 	if seconds, ok := parseRetryAfterSeconds(retryAfterHeader); ok {
 		apiErr.RetryAfter = time.Duration(seconds) * time.Second
 	} else if seconds, ok := retryAfterFromDetails(detail.Details); ok {
@@ -346,6 +359,18 @@ func nonNegativeInteger(raw any) (int64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+var reasonTokenPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+
+// safeReasonToken returns error.details.reason only when it is a
+// snake_case token; anything else (free text, ids, numbers) yields "".
+func safeReasonToken(details map[string]any) string {
+	raw, ok := details["reason"].(string)
+	if !ok || !reasonTokenPattern.MatchString(raw) {
+		return ""
+	}
+	return raw
 }
 
 func minimumClientVersion(details map[string]any) string {
