@@ -3,9 +3,10 @@ package sidecar
 import (
 	"errors"
 	"fmt"
-	"regexp"
+	"log/slog"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -152,9 +153,9 @@ type APIError struct {
 	// non-negative integer parsed from error.details -- never hosted text.
 	Budget *BudgetRefusal
 	// Reason (CHAOS-7167) is set only for an invalid_request whose
-	// error.details.reason is a closed-shape token (lowercase snake_case,
-	// at most 64 bytes), e.g. scope_required. It is never hosted free text:
-	// a value that is not a token is dropped, so no count, subject, id or
+	// error.details.reason is a member of
+	// contractsv1's closed invalid_request vocabulary, e.g. scope_required.
+	// It is never hosted free text: a value outside it is dropped, so no count, subject, id or
 	// name can ride through it.
 	Reason string
 
@@ -361,16 +362,27 @@ func nonNegativeInteger(raw any) (int64, bool) {
 	}
 }
 
-var reasonTokenPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+// droppedInvalidRequestReasons counts invalid_request reasons that were
+// present but outside the closed vocabulary and therefore not surfaced.
+var droppedInvalidRequestReasons atomic.Int64
 
-// safeReasonToken returns error.details.reason only when it is a
-// snake_case token; anything else (free text, ids, numbers) yields "".
+// DroppedInvalidRequestReasons returns the drop count (telemetry/tests).
+func DroppedInvalidRequestReasons() int64 { return droppedInvalidRequestReasons.Load() }
+
+// safeReasonToken returns error.details.reason only when it is a member of
+// contractsv1's closed invalid_request vocabulary. Any other value is
+// dropped (never echoed, never logged) and counted.
 func safeReasonToken(details map[string]any) string {
-	raw, ok := details["reason"].(string)
-	if !ok || !reasonTokenPattern.MatchString(raw) {
+	raw, present := details["reason"]
+	if !present {
 		return ""
 	}
-	return raw
+	if reason, ok := raw.(string); ok && contractsv1.IsInvalidRequestReason(reason) {
+		return reason
+	}
+	droppedInvalidRequestReasons.Add(1)
+	slog.Warn("acr invalid_request reason outside the closed vocabulary was dropped", "dropped_total", droppedInvalidRequestReasons.Load())
+	return ""
 }
 
 func minimumClientVersion(details map[string]any) string {

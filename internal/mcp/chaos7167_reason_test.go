@@ -22,6 +22,8 @@ func TestCHAOS7167_InvalidRequestToolErrorSurfacesReasonOnly(t *testing.T) {
 	}{
 		{"scope_required", map[string]any{"reason": "scope_required", "count": 0, "subject_id": "work_item_secret"}, "reason=scope_required", []string{"work_item_secret", "count"}},
 		{"free_text_reason_dropped", map[string]any{"reason": "team Payments has 3 items"}, "", []string{"reason=", "Payments", "3 items"}},
+		{"planted_subject_id_reason_dropped", map[string]any{"reason": "work_item_secret_42"}, "", []string{"reason=", "work_item_secret_42"}},
+		{"non_string_reason_dropped", map[string]any{"reason": 7}, "", []string{"reason="}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -38,6 +40,7 @@ func TestCHAOS7167_InvalidRequestToolErrorSurfacesReasonOnly(t *testing.T) {
 			}
 			caps := validCapabilitiesFixture()
 			caps.EnabledTools = append(caps.EnabledTools, toolReadFacts)
+			before := sidecar.DroppedInvalidRequestReasons()
 			result := callReadFacts(t, &Bootstrap{Config: cfg, Client: client, Capabilities: caps}, readFactsArgs)
 			if !result.IsError {
 				t.Fatal("want a tool error")
@@ -45,6 +48,9 @@ func TestCHAOS7167_InvalidRequestToolErrorSurfacesReasonOnly(t *testing.T) {
 			text := toolResultText(result)
 			if !strings.Contains(text, "code=invalid_request") || !strings.Contains(text, tc.want) {
 				t.Errorf("tool text %q lacks %q", text, tc.want)
+			}
+			if dropped := sidecar.DroppedInvalidRequestReasons() - before; (tc.want == "") != (dropped == 1) {
+				t.Errorf("dropped reasons = %d for want=%q", dropped, tc.want)
 			}
 			for _, a := range tc.absent {
 				if strings.Contains(text, a) {
