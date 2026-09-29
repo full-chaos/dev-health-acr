@@ -890,26 +890,40 @@ func checkPrimaryValidatorAnchorMarker(root, rowID string, anchor map[string]any
 	// several occurrences cannot be told apart -- ambiguous; none means the
 	// symbol was renamed or removed -- fail below.
 	// Count OCCURRENCES, not lines: two copies of the marker on one line are
-	// two occurrences (r1 P1), not one unambiguous anchor.
-	var found []int
-	occurrences := 0
+	// two occurrences (r1 P1), not one unambiguous anchor. An occurrence on a
+	// line some OTHER row's anchor declares (claimedAnchorLines) is that
+	// sibling's legitimate copy of the marker; only unclaimed occurrences
+	// are ambiguity. A marker that exists only on sibling-claimed lines still
+	// resolves (it exists), but a claimed line carrying extra copies does not.
+	total, unclaimed := 0, 0
+	var unclaimedAt []int
 	for i, l := range lines {
-		if i+1 != line {
-			if n := strings.Count(l, note); n > 0 {
-				found = append(found, i+1)
-				occurrences += n
-			}
+		if i+1 == line {
+			continue
+		}
+		n := strings.Count(l, note)
+		if n == 0 {
+			continue
+		}
+		total += n
+		extra := n
+		if claimedAnchorLines[surfaceKey{path, i + 1}] {
+			extra = n - 1
+		}
+		if extra > 0 {
+			unclaimed += extra
+			unclaimedAt = append(unclaimedAt, i+1)
 		}
 	}
-	if occurrences == 1 {
+	if total > 0 && unclaimed <= 1 {
 		return
 	}
-	if occurrences > 1 {
+	if unclaimed > 1 {
 		*errs = append(*errs, fmt.Sprintf(
 			"AMBIGUOUS ANCHOR MARKER: row %q primary_validator anchor's marker %q is not on its declared line %s:%d "+
-				"and appears %d times at lines %v -- a substring match cannot tell which is the real validator. "+
+				"and appears %d unclaimed times at lines %v -- a substring match cannot tell which is the real validator. "+
 				"Use a longer, more specific marker",
-			rowID, note, path, line, occurrences, found,
+			rowID, note, path, line, unclaimed, unclaimedAt,
 		))
 		return
 	}

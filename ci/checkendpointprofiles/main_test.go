@@ -1222,23 +1222,34 @@ func TestGateRejectsTwoCopiesOfTheMarkerOnOneLine(t *testing.T) {
 	writeFile(t, filepath.Join(f.root, fixtureAppFile),
 		string(src)+"var a, b = \"protectedRuntimeHandler(handler)\", \"protectedRuntimeHandler(handler)\"\n")
 	errs := f.check(t)
-	mustContain(t, errs, "AMBIGUOUS ANCHOR MARKER", "2 times")
+	mustContain(t, errs, "AMBIGUOUS ANCHOR MARKER", "2 unclaimed times")
 }
 
-// Two rows sharing one moved marker (single occurrence) both pass.
+// Two sibling rows share one marker whose single occurrence has moved off
+// the shared declared line: both pass (one occurrence, legitimately shared).
 func TestGateAcceptsSiblingRowsSharingOneMovedMarker(t *testing.T) {
-	anchor := func() map[string]any {
+	pv := func() map[string]any {
 		return map[string]any{
 			"description": "shared dispatch",
 			"anchor": map[string]any{
 				"path": fixtureAppFile, "line": float64(5),
-				"note": "mux.HandleFunc(\"GET /healthz\"",
+				"note": "mux.HandleFunc(\"GET /a\"",
 			},
 		}
 	}
-	f := minimalValidFixture(t, []map[string]any{
-		minimalValidRow(map[string]any{"primary_validator": anchor()}),
+	rowA := minimalValidRow(map[string]any{"id": "GET /a [dev-health-acr-api]", "route": "/a", "primary_validator": pv()})
+	rowB := minimalValidRow(map[string]any{
+		"id": "GET /b [dev-health-acr-api]", "route": "/b", "primary_validator": pv(),
 	})
+	f := minimalValidFixture(t, []map[string]any{rowA, rowB})
+	// Fixture registers /healthz; register /a and /b so both rows exist, with
+	// the shared marker text appearing exactly once (on /a's line).
+	writeFile(t, filepath.Join(f.root, fixtureAppFile),
+		"package api\n\nimport \"net/http\"\n\nfunc Handler() http.Handler {\n"+
+			"\tmux := http.NewServeMux()\n"+
+			"\tmux.HandleFunc(\"GET /a\", h)\n"+
+			"\tmux.HandleFunc(\"GET /b\", h)\n\treturn mux\n}\n\nfunc h(w http.ResponseWriter, r *http.Request) {}\n")
+	writeInventory(t, f.root, []map[string]any{rowA, rowB})
 	if errs := f.check(t); len(errs) != 0 {
 		t.Fatalf("got:\n%s", strings.Join(errs, "\n"))
 	}
