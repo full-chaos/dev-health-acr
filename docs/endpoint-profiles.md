@@ -239,7 +239,8 @@ the gate after schema validation (the shared schema still requires it). An
 anchor's `line` / `line_end` are hints for where the symbol is: they must still
 be in-bounds, non-trivial and a valid range, but a moved line does not fail.
 Renaming or removing the route fails as `PHANTOM ROW` + `UNOWNED SURFACE`;
-renaming the marked symbol fails as `ANCHOR MARKER NOT FOUND`. A marker that
-appears several times is `AMBIGUOUS ANCHOR MARKER`: counted per occurrence, so
-two copies on one line are ambiguous; one copy on each line a sibling row
-declares is that sibling's own and is accepted.
+renaming the marked symbol fails as `ANCHOR MARKER NOT FOUND`. Marker rule, one
+invariant per (file, marker): no line may carry the marker twice, and its total
+occurrences in the file must equal the number of distinct sites the rows
+declare for it (rows citing one shared definition line are one site). More is
+`AMBIGUOUS ANCHOR MARKER`; none or fewer is `ANCHOR MARKER NOT FOUND`.

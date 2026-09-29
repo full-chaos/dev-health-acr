@@ -38,22 +38,13 @@
 //     line is the validator.
 //   - primary_validator anchors carry an explicit marker (the anchor's `note`
 //     field: a short, exact, literal substring of the real call/declaration)
-//     that this gate re-locates by text. Since CHAOS-7128 the declared line
-//     is an advisory hint: a marker found exactly once (one OCCURRENCE, not
-//     one line) elsewhere passes as a moved line; none fails, several fail.
-//     When the marker IS on the declared line it is checked there ALONE
-//     (never a wider line..line_end window). A second, UNCLAIMED occurrence of the same
-//     marker text elsewhere in the file (one no row's own anchor accounts
-//     for) is reported rather than trusted, since a substring match cannot
-//     tell which of two occurrences is the real one; two rows that
-//     legitimately share one source line (model-config PUT/DELETE) also
-//     legitimately share one marker and are not flagged against each other.
-//     reachable_validators anchors are not yet covered this way. Like the
-//     name-match limit above, this remains a TEXT match, not proof the
-//     matched text is executable code rather than a comment or string
-//     literal that happens to repeat it -- an edit that moves the real
-//     construct away while leaving a same-named, otherwise-unique comment on
-//     the declared line is indistinguishable from a correct anchor.
+//     that this gate finds by TEXT (CHAOS-7128): the declared line is an
+//     advisory hint and is not compared. One invariant per (file, marker):
+//     no line carries it twice, and its total occurrences equal the number
+//     of distinct sites the rows declare (rows citing one shared definition
+//     line are one site). More = AMBIGUOUS ANCHOR MARKER; none/fewer =
+//     ANCHOR MARKER NOT FOUND. Still a TEXT match, not proof the text is
+//     executable code.
 //   - Two rows whose primary_validator anchors point at the SAME source line
 //     (the model-config PUT/DELETE rows share one dispatch line) necessarily
 //     share one marker too. If both anchors drift onto the same wrong line at
@@ -154,6 +145,13 @@ type surfaceKey struct {
 // UNOWNED SURFACE. The rows' source.line / anchor.line values stay in the
 // file because the ops-owned schema requires them, but they are advisory
 // hints only.
+// markerKey identifies a primary_validator marker: the anchor's file and its
+// literal `note` text (CHAOS-7128).
+type markerKey struct {
+	Path string
+	Note string
+}
+
 type routeKey struct {
 	File   string
 	Method string
@@ -458,14 +456,12 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 	// constraint; it's a cross-row uniqueness rule.
 	surfaceOwners := map[routeKey][]string{}
 
-	// Every (file, line) that SOME row's primary_validator anchor legitimately
-	// declares, collected in a pass over every row before any row's marker is
-	// checked. checkPrimaryValidatorAnchorMarker uses this to tell a genuine
-	// sibling anchor (two rows dispatching through one shared source line,
-	// therefore one shared marker -- the model-config PUT/DELETE rows) from
-	// an unexplained second occurrence of the same text that nothing in the
-	// inventory accounts for.
-	claimedAnchorLines := map[surfaceKey]bool{}
+	// Per (file, marker): the DISTINCT declared lines across every row's
+	// primary_validator anchor -- the number of validator sites the rows
+	// claim (rows citing one shared definition line are one site).
+	// checkPrimaryValidatorAnchorMarker requires the marker's occurrence
+	// count in the file to equal it; the lines themselves are only counted.
+	declaredSites := map[markerKey]map[int]bool{}
 	for _, raw := range rowsRaw {
 		row := asObject(raw)
 		pv := asObject(row["primary_validator"])
@@ -479,7 +475,13 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 		path, _ := asString(a["path"])
 		lineF, _ := a["line"].(float64)
 		if path != "" && lineF >= 1 {
-			claimedAnchorLines[surfaceKey{path, int(lineF)}] = true
+			if note, _ := asString(a["note"]); note != "" {
+				mk := markerKey{path, note}
+				if declaredSites[mk] == nil {
+					declaredSites[mk] = map[int]bool{}
+				}
+				declaredSites[mk][int(lineF)] = true
+			}
 		}
 	}
 
@@ -591,7 +593,7 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 				}
 			} else {
 				checkAnchorExists(root, id, asObject(anchorRaw), &errs, "primary_validator anchor")
-				checkPrimaryValidatorAnchorMarker(root, id, asObject(anchorRaw), claimedAnchorLines, &errs)
+				checkPrimaryValidatorAnchorMarker(root, id, asObject(anchorRaw), declaredSites, &errs)
 			}
 		}
 
@@ -812,7 +814,7 @@ func checkAnchorExists(root, rowID string, anchor map[string]any, errs *[]string
 // class this fix targets is a per-route primary_validator call site, and a
 // second CHAOS ticket can extend the same mechanism there if a future
 // incident shows the need).
-func checkPrimaryValidatorAnchorMarker(root, rowID string, anchor map[string]any, claimedAnchorLines map[surfaceKey]bool, errs *[]string) {
+func checkPrimaryValidatorAnchorMarker(root, rowID string, anchor map[string]any, declaredSites map[markerKey]map[int]bool, errs *[]string) {
 	if anchor == nil {
 		return // reported elsewhere (checkAnchorExists)
 	}
@@ -827,9 +829,8 @@ func checkPrimaryValidatorAnchorMarker(root, rowID string, anchor map[string]any
 		*errs = append(*errs, fmt.Sprintf(
 			"MISSING ANCHOR MARKER: row %q primary_validator anchor (%s:%d) has no note -- "+
 				"every primary_validator anchor must name a short, exact, literal substring "+
-				"(a call expression, a function name) this gate re-locates independently of the "+
-				"declared line, so a future re-anchoring edit that lands on the wrong statement "+
-				"fails loudly instead of passing on whatever text happens to be there",
+				"(a call expression, a function name) this gate finds by text, so a future "+
+				"edit that renames or removes the validator fails loudly",
 			rowID, path, line,
 		))
 		return
@@ -838,114 +839,48 @@ func checkPrimaryValidatorAnchorMarker(root, rowID string, anchor map[string]any
 	if err != nil {
 		return // reported elsewhere (checkAnchorExists)
 	}
-	lines := strings.Split(string(raw), "\n")
-	if line > len(lines) {
-		return // reported elsewhere (checkAnchorExists)
+	// ONE INVARIANT (CHAOS-7128, r1/r2 P1 re-found twice as per-branch
+	// discounting): the declared line is an advisory hint; the marker TEXT is
+	// the anchor. For each (file, marker):
+	//   - no single line may carry the marker more than once (one line cannot
+	//     say which copy is the validator);
+	//   - total occurrences must EQUAL the number of distinct sites the rows
+	//     declare for it (rows citing one shared definition line are one site,
+	//     which is how nine rows can share protectedRuntimeHandler's one
+	//     definition). More = AMBIGUOUS ANCHOR MARKER; none or fewer =
+	//     ANCHOR MARKER NOT FOUND.
+	total, sites := 0, len(declaredSites[markerKey{path, note}])
+	if sites < 1 {
+		sites = 1
 	}
-	// (CHAOS-7128: the moved-marker search below runs only when the declared
-	// line lacks the marker; when it has it, the line is checked ALONE.)
-	// The marker is checked against its own declared START line ONLY, never
-	// a line..line_end window: a window wide enough to admit a multi-line
-	// construct is also wide enough to keep matching after an edit inserts a
-	// line ABOVE the real construct and shifts it deeper into that same
-	// window -- the declared line itself goes stale while the check keeps
-	// passing on a marker it never actually verified was there. A single
-	// declared line has exactly one thing to verify; check that one thing.
-	if strings.Contains(lines[line-1], note) {
-		// r2 P1 class: several copies of the marker on ONE line (declared or
-		// sibling-claimed) are several occurrences; one line cannot vouch
-		// for which copy is the validator.
-		if n := strings.Count(lines[line-1], note); n > 1 {
-			*errs = append(*errs, fmt.Sprintf(
-				"AMBIGUOUS ANCHOR MARKER: row %q primary_validator anchor declares %s:%d, whose line carries its marker %q %d times -- "+
-					"a substring match cannot tell which copy is the real validator. Use a longer, more specific marker",
-				rowID, path, line, note, n))
-			return
-		}
-		// The declared line carries the marker. Before trusting that as
-		// proof, check the REST of the file for the same marker text: a
-		// substring match can be fooled by an unrelated copy (a comment, a
-		// stale string literal) that happens to land on the declared line
-		// while the real construct sits somewhere else entirely -- exactly
-		// the shape a range-wide check let through before this line-only
-		// check existed. An extra occurrence is fine when it belongs to
-		// ANOTHER row's own legitimately declared primary_validator anchor
-		// (two rows dispatching through one shared source line share one
-		// marker on purpose -- see the model-config PUT/DELETE rows); an
-		// extra occurrence nothing in the inventory accounts for means the
-		// match just made cannot be trusted to be the real one.
-		for i, l := range lines {
-			if i+1 == line {
-				continue
-			}
-			n := strings.Count(l, note)
-			if n == 0 {
-				continue
-			}
-			if claimedAnchorLines[surfaceKey{path, i + 1}] && n == 1 {
-				continue
-			}
-			*errs = append(*errs, fmt.Sprintf(
-				"AMBIGUOUS ANCHOR MARKER: row %q primary_validator anchor declares %s:%d, and its "+
-					"marker %q is there, but the SAME text also appears at line %d, which no row's "+
-					"anchor claims -- a substring match cannot tell which occurrence is the real "+
-					"validator. Use a longer, more specific marker, or (if line %d is stale text left "+
-					"behind by an edit) remove it",
-				rowID, path, line, note, i+1, i+1,
-			))
-			return
-		}
-		return
-	}
-	// The declared line doesn't carry the marker. CHAOS-7128: the line is an
-	// advisory hint, the marker (the handler/call symbol) is the anchor. A
-	// marker found exactly once elsewhere means the line merely moved -- pass;
-	// several occurrences cannot be told apart -- ambiguous; none means the
-	// symbol was renamed or removed -- fail below.
-	// Count OCCURRENCES, not lines: two copies of the marker on one line are
-	// two occurrences, not one unambiguous anchor (r1 P1), and that holds on
-	// a sibling-claimed line too (r2 P1): a claimed line vouches for exactly
-	// ONE copy. Occurrences on lines some OTHER row's anchor declares are
-	// that sibling's legitimate copy; only unclaimed ones, or extra copies
-	// on any line, are ambiguity.
-	total, unclaimed := 0, 0
-	var unclaimedAt []int
-	for i, l := range lines {
-		if i+1 == line {
-			continue
-		}
+	var at []int
+	for i, l := range strings.Split(string(raw), "\n") {
 		n := strings.Count(l, note)
 		if n == 0 {
 			continue
 		}
 		total += n
-		switch {
-		case n > 1:
-			// several copies on one line, claimed or not: never one anchor.
-			unclaimed += n
-			unclaimedAt = append(unclaimedAt, i+1)
-		case !claimedAnchorLines[surfaceKey{path, i + 1}]:
-			unclaimed++
-			unclaimedAt = append(unclaimedAt, i+1)
+		at = append(at, i+1)
+		if n > 1 {
+			*errs = append(*errs, fmt.Sprintf(
+				"AMBIGUOUS ANCHOR MARKER: row %q primary_validator marker %q appears %d times on line %d of %s -- "+
+					"one line cannot say which copy is the real validator. Use a longer, more specific marker",
+				rowID, note, n, i+1, path))
+			return
 		}
 	}
-	if total > 0 && unclaimed <= 1 {
-		return
-	}
-	if unclaimed > 1 {
+	switch {
+	case total > sites:
 		*errs = append(*errs, fmt.Sprintf(
-			"AMBIGUOUS ANCHOR MARKER: row %q primary_validator anchor's marker %q is not on its declared line %s:%d "+
-				"and appears %d unclaimed times at lines %v -- a substring match cannot tell which is the real validator. "+
-				"Use a longer, more specific marker",
-			rowID, note, path, line, unclaimed, unclaimedAt,
-		))
-		return
+			"AMBIGUOUS ANCHOR MARKER: row %q primary_validator marker %q appears %d times (lines %v) in %s but the rows declare %d site(s) for it -- "+
+				"a substring match cannot tell which occurrence is the real validator. Use a longer, more specific marker",
+			rowID, note, total, at, path, sites))
+	case total < sites:
+		*errs = append(*errs, fmt.Sprintf(
+			"ANCHOR MARKER NOT FOUND: row %q primary_validator anchor's note %q appears %d time(s) in %s but the rows declare %d site(s) for it -- "+
+				"the marked symbol was renamed or removed",
+			rowID, note, total, path, sites))
 	}
-	*errs = append(*errs, fmt.Sprintf(
-		"ANCHOR MARKER NOT FOUND: row %q primary_validator anchor's note %q does not appear anywhere "+
-			"in %s -- the anchor no longer resolves to anything this gate can verify",
-		rowID, note, path,
-	))
 }
 
 // anchorPathWithinRoot reports whether a repo-relative anchor path stays

@@ -1222,10 +1222,12 @@ func TestGateRejectsTwoCopiesOfTheMarkerOnOneLine(t *testing.T) {
 	writeFile(t, filepath.Join(f.root, fixtureAppFile),
 		string(src)+"var a, b = \"protectedRuntimeHandler(handler)\", \"protectedRuntimeHandler(handler)\"\n")
 	errs := f.check(t)
-	mustContain(t, errs, "AMBIGUOUS ANCHOR MARKER", "2 unclaimed times")
+	mustContain(t, errs, "AMBIGUOUS ANCHOR MARKER", "2 times on line")
 }
 
-// r2 P1: a sibling-claimed line vouches for ONE copy of the marker, not two.
+// r2 P1 fixture: two marker copies on the SIBLING's line; two rows declare two
+// sites and two occurrences exist, but they sit on one line, so the line
+// carrying both copies is ambiguous.
 func TestGateRejectsTwoMarkerCopiesOnASiblingClaimedLine(t *testing.T) {
 	pv := func(line float64) map[string]any {
 		return map[string]any{"description": "x", "anchor": map[string]any{
@@ -1242,6 +1244,46 @@ func TestGateRejectsTwoMarkerCopiesOnASiblingClaimedLine(t *testing.T) {
 			"\treturn mux\n}\n\nfunc h(w http.ResponseWriter, r *http.Request) {}\n")
 	errs := f.check(t)
 	mustContain(t, errs, "AMBIGUOUS ANCHOR MARKER", "validatorMarker(h)")
+}
+
+func markerFixture(t *testing.T, rows [][2]any, body string) fixture {
+	t.Helper()
+	var rs []map[string]any
+	for _, r := range rows {
+		route := r[0].(string)
+		rs = append(rs, minimalValidRow(map[string]any{
+			"id": "GET " + route + " [dev-health-acr-api]", "route": route,
+			"primary_validator": map[string]any{"description": "x", "anchor": map[string]any{
+				"path": fixtureAppFile, "line": r[1], "note": "validatorMarker(h)"}},
+		}))
+	}
+	f := minimalValidFixture(t, rs)
+	writeFile(t, filepath.Join(f.root, fixtureAppFile),
+		"package api\n\nimport \"net/http\"\n\nfunc Handler() http.Handler {\n\tmux := http.NewServeMux()\n"+body+
+			"\treturn mux\n}\n\nfunc h(w http.ResponseWriter, r *http.Request) {}\n")
+	return f
+}
+
+// One invariant (r1+r2 P1 class): total marker occurrences in the file must
+// equal the number of distinct sites the rows declare for it.
+func TestGateMarkerInvariantOneCopyPerRowAnywhereInTheFilePasses(t *testing.T) {
+	f := markerFixture(t, [][2]any{{"/a", float64(5)}, {"/b", float64(9)}},
+		"\tmux.HandleFunc(\"GET /a\", h) // validatorMarker(h)\n\tmux.HandleFunc(\"GET /b\", h) // validatorMarker(h)\n")
+	if errs := f.check(t); len(errs) != 0 {
+		t.Fatalf("got:\n%s", strings.Join(errs, "\n"))
+	}
+}
+
+func TestGateMarkerInvariantThreeOccurrencesForTwoSitesFails(t *testing.T) {
+	f := markerFixture(t, [][2]any{{"/a", float64(7)}, {"/b", float64(8)}},
+		"\tmux.HandleFunc(\"GET /a\", h) // validatorMarker(h)\n\tmux.HandleFunc(\"GET /b\", h) // validatorMarker(h)\n\t// validatorMarker(h)\n")
+	mustContain(t, f.check(t), "AMBIGUOUS ANCHOR MARKER", "3 times")
+}
+
+func TestGateMarkerInvariantFewerOccurrencesThanSitesFails(t *testing.T) {
+	f := markerFixture(t, [][2]any{{"/a", float64(7)}, {"/b", float64(8)}},
+		"\tmux.HandleFunc(\"GET /a\", h) // validatorMarker(h)\n\tmux.HandleFunc(\"GET /b\", h)\n")
+	mustContain(t, f.check(t), "ANCHOR MARKER NOT FOUND", "1 time(s)")
 }
 
 // Two sibling rows share one marker whose single occurrence has moved off
