@@ -17,7 +17,7 @@
   "properties": {
     "status": {
       "type": "string",
-      "description": "complete: the whole set is in this page. partial: more subjects exist beyond this page or a read bound was hit. empty: no subject matched or none is readable to you. ambiguous: a name matched more than one subject.",
+      "description": "complete: the whole set is in this page. partial: more subjects exist beyond this page or a read bound was hit. empty: no subject matched or none is readable to you. ambiguous: a name or a handle matched more than one subject you may read.",
       "enum": [
         "complete",
         "partial",
@@ -52,7 +52,7 @@
           },
           "match": {
             "type": "string",
-            "description": "How the subject matched: exact, alias or provider_key. Empty in list mode.",
+            "description": "How the subject matched: exact, alias or provider_key (name mode; handle mode is provider_key). Empty in list and owned_by modes.",
             "enum": [
               "",
               "exact",
@@ -135,10 +135,12 @@
       "properties": {
         "mode": {
           "type": "string",
-          "description": "list or name.",
+          "description": "list, name, owned_by or handle.",
           "enum": [
             "list",
-            "name"
+            "name",
+            "owned_by",
+            "handle"
           ]
         },
         "kind": {
@@ -163,6 +165,14 @@
         "cursor": {
           "type": "string",
           "description": "Echo of cursor."
+        },
+        "owned_by": {
+          "type": "string",
+          "description": "Echo of owned_by."
+        },
+        "handle": {
+          "type": "string",
+          "description": "Echo of handle. Untrusted text."
         }
       }
     },
