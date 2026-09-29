@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -63,6 +64,15 @@ func (g *fakeEdgeGraph) DirectEdgePage(_ context.Context, principal storage.Prin
 		}
 		if !hit || (len(types) > 0 && !types[e.RelationType]) {
 			continue
+		}
+		if len(query.EndKinds) > 0 {
+			other := e.From.Subject.Kind
+			if origins[from] {
+				other = e.To.Subject.Kind
+			}
+			if !slices.Contains(query.EndKinds, string(other)) {
+				continue
+			}
 		}
 		if query.Exclude != nil {
 			x := graphrank.SubjectKey(*query.Exclude)

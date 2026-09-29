@@ -53,6 +53,11 @@ type EdgePageQuery struct {
 	// empty list reads every type.
 	Types     []string
 	Direction EdgeDirection
+	// EndKinds, when set, keeps only edges whose NON-origin end is one of
+	// these subject kinds (find_subjects owned_by reads repository and
+	// project ends of OWNED_BY_TEAM, not the team's work-item
+	// attributions). Empty keeps every kind.
+	EndKinds []string
 	// After is the exclusive keyset lower bound. Nil starts at the first
 	// edge.
 	After *EdgeKey

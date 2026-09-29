@@ -48,3 +48,12 @@ type SubjectGraph interface {
 
 // MaxLookupPageSize bounds one graph page and one find_subjects page.
 const MaxLookupPageSize = 200
+
+// SubjectNodeReader reads stored Subject nodes by identity, so a candidate
+// id that did not come from a graph read (a find_subjects handle candidate
+// from the census) is served with its stored label. falkorgraph.Adapter
+// implements it. It reads the CALLER's own organization graph; it is not an
+// authorization: every node still goes through the subject gate.
+type SubjectNodeReader interface {
+	ReadSubjectNodes(ctx context.Context, principal storage.Principal, binding contextfabric.ResolvedGraphBinding, subjects []contextfabric.SubjectRef) ([]LookupNode, error)
+}

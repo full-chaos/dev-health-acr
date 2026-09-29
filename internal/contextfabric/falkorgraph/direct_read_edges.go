@@ -140,11 +140,22 @@ func directEdgePageCypher(orgID string, query directread.EdgePageQuery) (string,
 		filters = append(filters, fmt.Sprintf("toString(r.%s) > $after", propRelationshipID))
 	}
 	where := strings.Join(filters, " AND ")
+	outWhere, inWhere := where, where
+	if len(query.EndKinds) > 0 {
+		kinds := make([]interface{}, 0, len(query.EndKinds))
+		for _, kind := range query.EndKinds {
+			kinds = append(kinds, kind)
+		}
+		params["endKinds"] = kinds
+		// The non-origin end: b on the out arm, a on the in arm.
+		outWhere += fmt.Sprintf(" AND b.%s IN $endKinds", propKind)
+		inWhere += fmt.Sprintf(" AND a.%s IN $endKinds", propKind)
+	}
 
 	originNode := fmt.Sprintf("%s {%s:$org, %s:o.k, %s:o.i}", labelSubject, propOrgID, propKind, propCanonicalID)
 	otherNode := fmt.Sprintf("%s {%s:$org}", labelSubject, propOrgID)
-	outArm := fmt.Sprintf("UNWIND $origins AS o MATCH (a:%s)-[r:%s]->(b:%s) WHERE %s RETURN r, a, b", originNode, labelRelation, otherNode, where)
-	inArm := fmt.Sprintf("UNWIND $origins AS o MATCH (a:%s)-[r:%s]->(b:%s) WHERE %s RETURN r, a, b", otherNode, labelRelation, originNode, where)
+	outArm := fmt.Sprintf("UNWIND $origins AS o MATCH (a:%s)-[r:%s]->(b:%s) WHERE %s RETURN r, a, b", originNode, labelRelation, otherNode, outWhere)
+	inArm := fmt.Sprintf("UNWIND $origins AS o MATCH (a:%s)-[r:%s]->(b:%s) WHERE %s RETURN r, a, b", otherNode, labelRelation, originNode, inWhere)
 	var inner string
 	switch query.Direction {
 	case directread.EdgeDirectionOut:

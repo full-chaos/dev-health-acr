@@ -68,7 +68,7 @@ func TestDirectReadEventVocabulariesMatchProducer(t *testing.T) {
 	}
 	want := map[string][]string{
 		"tool":        {FindSubjectsTool},
-		"mode":        {"list", "name"},
+		"mode":        func() []string { v := FindModeVocabulary(); return v[:] }(),
 		"status":      statuses,
 		"error_class": {"invalid_request", "deadline_exceeded", "canceled", "dependency_unavailable", "graph_error"},
 	}
