@@ -440,6 +440,47 @@ paths:
       summary: "Registered analytics operation (run_operation), CHAOS-7072 S1a. Requires the data:read scope. A typed result is HTTP 200: call is served, refused (with refusal.code), operation_unavailable, upstream_error or upstream_timeout. 501 feature_not_enabled with details.reason data_query_not_configured when the internal query service is not configured; 503 when the subject gate is unavailable."
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "data:read"
+  "/api/v1/context-fabric/data/relationships":
+    post:
+      operationId: "readContextFabricDataRelationships"
+      parameters:
+        -
+          "$ref": "#/components/parameters/RequestID"
+        -
+          "$ref": "#/components/parameters/ClientVersion"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              "$ref": "../jsonschema/v1/mcp_read_relationships_request.v1.schema.json"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "../jsonschema/v1/mcp_read_relationships_response.v1.schema.json"
+          description: "The acr-data.v1 read_relationships page. status is complete, partial or denied; follow page.next_cursor until page.complete."
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "426":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "500":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      security:
+        -
+          bearerAuth: []
+      summary: "Direct relationship read (read_relationships, CHAOS-7074). Returns the edges of one canonical subject the caller may read, depth 1 or 2, one keyset page at a time (page.next_cursor). Every end node passes the subject gate and every edge passes the edge gate (its own authorization attributes and both end nodes); a withheld edge is only counted (withheld.edges_not_visible). An edge shows a relation, not a cause. No model runs. A root the caller may not read and a missing one give the same answer (status denied, denied_or_not_found). Malformed requests and refused cursors answer 400 invalid_request; a missing or failed reader answers a retryable 503 upstream_unavailable."
+      x-required-entitlement: "agent_context_runtime"
+      x-required-scope: "context:read"
   "/api/v1/context-fabric/data/subjects":
     post:
       operationId: "findContextFabricDataSubjects"

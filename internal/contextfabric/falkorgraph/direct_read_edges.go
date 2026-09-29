@@ -130,7 +130,14 @@ func directEdgePageCypher(orgID string, query directread.EdgePageQuery) (string,
 	}
 	if query.After != nil {
 		params["after"] = query.After.RelationshipID
-		filters = append(filters, fmt.Sprintf("r.%s > $after", propRelationshipID))
+		// toString() on purpose: a bare `r.relationship_id > $after` lets
+		// FalkorDB answer the range from the relationship_id index over
+		// EVERY edge of the graph and expand endpoints afterwards. On the
+		// local org's real graph (team CHAOS, ~13k in-edges) that plan hit
+		// the 1 s query timeout on the second page; with the index out of
+		// the predicate the match stays anchored on the origin node and a
+		// page takes ~60 ms (CHAOS-7074, measured 2026-09-28).
+		filters = append(filters, fmt.Sprintf("toString(r.%s) > $after", propRelationshipID))
 	}
 	where := strings.Join(filters, " AND ")
 

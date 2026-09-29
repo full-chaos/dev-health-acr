@@ -16,6 +16,7 @@ const (
 	toolInvestigateQuestion = "investigate_question"
 	toolInvestigationResult = "investigation_result"
 	toolReadFacts           = "read_facts"
+	toolReadRelationships   = "read_relationships"
 	toolRecordEpisode       = "record_episode"
 )
 
@@ -185,6 +186,15 @@ func newServer(cfg *ProcessConfig, caller *CallerContext, serverVersion string, 
 		)
 	}
 	registerDataTools(server, cfg, caller)
+	// CHAOS-7074: advertise-gated like the answer tools.
+	if hostedToolEnabled(caller, toolReadRelationships) {
+		server.AddTool(
+			buildTool(toolReadRelationships, "Read relationships", readRelationshipsRequestSchemaFile, readRelationshipsResponseSchemaFile),
+			func(ctx context.Context, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+				return handleReadRelationships(ctx, cfg, req)
+			},
+		)
+	}
 	registerGuideResources(server)
 	registerInvestigatePrompts(server, caller)
 	if recordEpisodeEnabled(cfg, caller) {
@@ -242,6 +252,9 @@ func serverInstructions(cfg *ProcessConfig, caller *CallerContext) string {
 	}
 	if hostedToolEnabled(caller, toolReadFacts) {
 		b.WriteString("- read_facts: you have canonical subject ids (as returned by other tools) and want their stored facts, without a model run. Pass kinds, subjects and optionally a window.\n")
+	}
+	if hostedToolEnabled(caller, toolReadRelationships) {
+		b.WriteString("- read_relationships: you have one canonical subject id (copied from another answer, never built) and want its edges, without a model run. Pass subject and optionally types, direction, depth.\n")
 	}
 	b.WriteString("- source_evidence: you want to check or quote one source. Pass an evidence_ref_id returned by another tool, unchanged, with the result_id of the answer that returned it.\n")
 	if recordEpisodeEnabled(cfg, caller) {

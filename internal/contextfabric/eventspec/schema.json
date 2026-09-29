@@ -8082,6 +8082,7 @@
           "investigate_question",
           "investigation_result",
           "read_facts",
+          "read_relationships",
           "record_episode",
           "other"
         ]

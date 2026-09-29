@@ -721,6 +721,49 @@
       ]
     },
     {
+      "id": "POST /api/v1/context-fabric/data/relationships [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/api/v1/context-fabric/data/relationships",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 94
+      },
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "acr_client_credential",
+        "internal_svc_acr_token",
+        "acr_workload_identity_exchange"
+      ],
+      "primary_validator": {
+        "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7071 direct data route (CHAOS-7036 E.5); bearer fcacr_ credential only.",
+        "anchor": {
+          "path": "internal/api/runtime.go",
+          "line": 203,
+          "line_end": 213,
+          "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
+        }
+      },
+      "token_shape": {
+        "token_type": "fcacr_ bearer only",
+        "issuer": null,
+        "audience": null,
+        "algorithm": null
+      },
+      "reachable_validators": [],
+      "action": "context_fabric.data.relationships.read",
+      "resource_resolver": "principal.OrgID; the root subject passes the direct-read subject gate (CHAOS-7071) before any read; every end node of every examined edge passes the same gate and every edge passes the edge gate (its own authorization attributes AND both end nodes, CHAOS-7074); a withheld edge is counted in withheld.edges_not_visible, never named.",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": "agentContextRuntimeEntitlement",
+      "disclosure_behavior": "writeError() closed envelope; a root the caller may not read answers status denied with denied_or_not_found, identical for denied and absent; a refused cursor answers 400 invalid_request (details.reason invalid_cursor or expired_cursor); a ClickHouse outage answers store_unavailable (requireDataStoresReady, CHAOS-6745) after authentication.",
+      "gaps": []
+    },
+    {
       "id": "POST /api/v1/oauth/device_authorization [dev-health-acr-api]",
       "surface_kind": "rest",
       "method": "POST",

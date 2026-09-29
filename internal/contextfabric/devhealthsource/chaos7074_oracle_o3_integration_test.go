@@ -231,8 +231,16 @@ func o3Path1(t *testing.T, reader *directread.RelationshipsReader, principal sto
 			t.Fatalf("path 1 root denied")
 		}
 		for _, e := range response.Edges {
-			if e.From.Kind != "repository" || e.To.CanonicalID != request.Subject.CanonicalID {
+			// OWNED_BY_TEAM in-edges of a team come from repositories
+			// (team_repo_ownership), projects (team_project_ownership) and
+			// work items (work_item_team_attributions); O3 compares the
+			// repository side (on the local org's real data all three
+			// occur).
+			if e.To.CanonicalID != request.Subject.CanonicalID || e.Type != "OWNED_BY_TEAM" {
 				t.Fatalf("path 1 served a non-ownership edge: %+v", e)
+			}
+			if e.From.Kind != "repository" {
+				continue
 			}
 			// Two sources on one repository are two edges, one repository.
 			// A repeated EDGE is a failure; a repeated repository is not.

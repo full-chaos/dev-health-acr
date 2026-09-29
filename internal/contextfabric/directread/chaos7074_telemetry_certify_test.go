@@ -87,7 +87,7 @@ func TestDirectRelationshipsReadLineCertifiesAgainstItsSpecification(t *testing.
 		"tool": "read_relationships", "org_id": "org_1", "principal_class": "restricted", "status": "partial",
 		"subject_kind": "repository", "depth": 1, "hop": 1, "type_count": 0, "direction": "both", "window_mode": "current",
 		"edges_examined": 3, "edges_returned": 1, "edges_not_visible": 2,
-		"edges_withheld_reasons": []any{"edge_attributes", "source_not_visible"},
+		"edges_withheld_reasons":    []any{"edge_attributes", "source_not_visible"},
 		"edges_withheld_attributes": 1, "edges_withheld_source": 1, "edges_withheld_target": 0,
 		"evidence_refs_withheld": 0, "end_nodes_gated": 3, "end_nodes_refused": 1,
 		"cursor_out": "issued", "request_id": "req_0123456789abcdef0123456789abcdef",
