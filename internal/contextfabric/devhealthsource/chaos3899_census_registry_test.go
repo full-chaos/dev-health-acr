@@ -1,6 +1,7 @@
 package devhealthsource
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -171,8 +172,8 @@ func TestWorkItemAnchorColumns(t *testing.T) {
 	if _, err := BuildCensusDiscriminator(contextfabric.SubjectWorkItem, "", false, contextfabric.SubjectProject, "project:p-1", true); err != nil {
 		t.Fatalf("work_item anchor=project: %v", err)
 	}
-	if _, err := BuildCensusDiscriminator(contextfabric.SubjectWorkItem, "", false, contextfabric.SubjectRepository, "repository:r-1", true); err == nil {
-		t.Fatalf("work_item anchor=repository: want joined_column_discriminator error, got nil")
+	if _, err := BuildCensusDiscriminator(contextfabric.SubjectWorkItem, "", false, contextfabric.SubjectRepository, "repository:r-1", true); !errors.Is(err, graphrank.ErrCensusAnchorUnsupported) {
+		t.Fatalf("work_item anchor=repository: want the typed ErrCensusAnchorUnsupported, got %v", err)
 	}
 }
 

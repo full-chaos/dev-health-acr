@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -92,6 +93,12 @@ func TestChaos7126FindModesOnRealProducers(t *testing.T) {
 			t.Fatalf("seed PR: %v", err)
 		}
 	}
+	// A work item in R1 with ticket key CHAOS-77 (venue re-roll 2: the
+	// census has no repository anchor for work items).
+	if err := direct.Exec(ctx, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"linear:CHAOS-77", o3UUID(orgID+"R1"), orgID, "CHAOS-77 in r1", "open", "", "", "linear", "", now); err != nil {
+		t.Fatalf("seed work item: %v", err)
+	}
 	main, err := devhealthsource.NewClickHouseProjectionSource(query)
 	if err != nil {
 		t.Fatal(err)
@@ -148,6 +155,17 @@ func TestChaos7126FindModesOnRealProducers(t *testing.T) {
 		none, err := lookup.Find(chaos7126Ctx("h-none"), unrestricted, directread.FindRequest{Handle: "PR 999"})
 		if err != nil || none.Status != directread.FindEmpty {
 			t.Fatalf("PR 999: %v %+v", err, none)
+		}
+		// Work items: the org-wide census finds CHAOS-77; a restricted
+		// credential gets the typed scope_required refusal (the census cannot
+		// anchor a work item on a repository), never an outage.
+		item, err := lookup.Find(chaos7126Ctx("h-wi-u"), unrestricted, directread.FindRequest{Handle: "CHAOS-77"})
+		if err != nil || item.Status != directread.FindComplete || len(item.Subjects) != 1 || item.Subjects[0].Kind != "work_item" {
+			t.Fatalf("unrestricted CHAOS-77: %v %+v", err, item)
+		}
+		_, err = lookup.Find(chaos7126Ctx("h-wi-r"), restricted, directread.FindRequest{Handle: "CHAOS-77"})
+		if errors.Is(err, directread.ErrFindUnavailable) || !errors.Is(err, directread.ErrFindScopeRequired) {
+			t.Fatalf("restricted CHAOS-77: want scope_required, got %v", err)
 		}
 	})
 }

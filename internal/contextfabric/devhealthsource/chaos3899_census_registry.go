@@ -426,7 +426,7 @@ func BuildCensusDiscriminator(kind graphrank.CensusKind, handleValue string, han
 	if anchorBound {
 		column, ok := entry.anchorColumns[anchorKind]
 		if !ok {
-			return CensusPredicate{}, fmt.Errorf("devhealthsource: joined_column_discriminator -- %s has no base-table FK column for anchor kind %s", kind, anchorKind)
+			return CensusPredicate{}, fmt.Errorf("%w: devhealthsource: joined_column_discriminator -- %s has no base-table FK column for anchor kind %s", graphrank.ErrCensusAnchorUnsupported, kind, anchorKind)
 		}
 		predicate := projectAnchorPredicate(anchorKind, column, anchorCanonicalID)
 		fragments = append(fragments, predicate.SQL)

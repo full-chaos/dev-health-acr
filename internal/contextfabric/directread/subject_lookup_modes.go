@@ -205,6 +205,13 @@ func (l *SubjectLookup) scanHandle(ctx context.Context, principal storage.Princi
 	truncated := false
 	for _, anchor := range anchors {
 		outcome, err := l.census(ctx, principal.OrgID, plan.handle.Kind, plan.handle.Value, true, anchor.Kind, anchor.CanonicalID, anchor.CanonicalID != "")
+		if anchor.CanonicalID != "" && errors.Is(err, graphrank.ErrCensusAnchorUnsupported) {
+			// The census cannot scope this handle kind to a repository (a
+			// work item: Linear work items carry no repository). A
+			// restricted credential is refused by type, never answered from
+			// the organization-wide census and never as an outage.
+			return nil, false, fmt.Errorf("%w: %s handles cannot be looked up inside a repository grant", ErrFindScopeRequired, plan.handle.Kind)
+		}
 		if err != nil {
 			return nil, false, err
 		}
