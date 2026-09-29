@@ -96,8 +96,8 @@
         "description": "protectedRuntimeHandler(RequestClassAuth, ScopeContextRead, entitlement=false, allowWebAssertions=true): Authenticator.MiddlewareFor(true,...) dispatches on X-ACR-Web-Assertion presence (WebAssertionVerifier) vs Authorization: Bearer (credential-store lookup), then RequireScope(context:read).",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 227,
-          "line_end": 237,
+          "line": 231,
+          "line_end": 241,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -151,8 +151,8 @@
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=false, allowWebAssertions=true).",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 227,
-          "line_end": 237,
+          "line": 231,
+          "line_end": 241,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -208,8 +208,8 @@
         "description": "protectedRuntimeHandler(RequestClassEvidence, ScopeEvidenceRead, entitlement=TRUE (agentContextRuntimeEntitlement), allowWebAssertions=true).",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 227,
-          "line_end": 237,
+          "line": 231,
+          "line_end": 241,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -262,8 +262,8 @@
         "description": "protectedRuntimeHandler(RequestClassEpisode, ScopeEpisodeWrite, entitlement=true, allowWebAssertions=FALSE) -- the only agent-context route that does NOT accept a web assertion; episode writes require a bearer fcacr_ credential.",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 227,
-          "line_end": 237,
+          "line": 231,
+          "line_end": 241,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -564,8 +564,8 @@
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7071 direct data route (CHAOS-7036 E.5); bearer fcacr_ credential only.",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 227,
-          "line_end": 237,
+          "line": 231,
+          "line_end": 241,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -609,8 +609,8 @@
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7071 direct data route (CHAOS-7036 E.5); bearer fcacr_ credential only.",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 227,
-          "line_end": 237,
+          "line": 231,
+          "line_end": 241,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -654,8 +654,8 @@
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7071 direct data route (CHAOS-7036 E.5); bearer fcacr_ credential only.",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 227,
-          "line_end": 237,
+          "line": 231,
+          "line_end": 241,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -697,8 +697,8 @@
         "description": "protectedRuntimeHandler(RequestClassData, ScopeDataRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7071 direct data route (CHAOS-7036 E.5); bearer fcacr_ credential only.",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 227,
-          "line_end": 237,
+          "line": 231,
+          "line_end": 241,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -742,8 +742,8 @@
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7071 direct data route (CHAOS-7036 E.5); bearer fcacr_ credential only.",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 203,
-          "line_end": 213,
+          "line": 231,
+          "line_end": 241,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -772,7 +772,7 @@
       "service": "dev-health-acr-api",
       "source": {
         "file": "internal/api/app.go",
-        "line": 94
+        "line": 95
       },
       "classification": "public",
       "public_rationale": "First call in the OAuth 2.0 device-authorization grant (RFC 8628); the caller has no credential yet by definition. deviceRuntimeHandler only checks runtime/authenticator presence, no principal.",
@@ -824,7 +824,7 @@
       "service": "dev-health-acr-api",
       "source": {
         "file": "internal/api/app.go",
-        "line": 95
+        "line": 96
       },
       "classification": "public",
       "public_rationale": "Token-issuance endpoint by definition has no principal on entry. Content-Type dispatches to one of two grants (see primary_validator) -- neither requires a pre-existing ACR credential.",
@@ -900,7 +900,7 @@
       "service": "dev-health-acr-api",
       "source": {
         "file": "internal/api/app.go",
-        "line": 96
+        "line": 97
       },
       "classification": "protected",
       "public_rationale": null,
@@ -953,7 +953,7 @@
       "service": "dev-health-acr-api",
       "source": {
         "file": "internal/api/app.go",
-        "line": 97
+        "line": 98
       },
       "classification": "protected",
       "public_rationale": null,
@@ -996,7 +996,7 @@
       "service": "dev-health-acr-api",
       "source": {
         "file": "internal/api/app.go",
-        "line": 98
+        "line": 99
       },
       "classification": "protected",
       "public_rationale": null,
@@ -1048,7 +1048,7 @@
       "route": "/.well-known/oauth-authorization-server",
       "source": {
         "file": "internal/api/app.go",
-        "line": 100
+        "line": 101
       },
       "public_rationale": "RFC 8414 authorization server metadata for hosted MCP clients; static configuration, no principal, no org context. Registered only when ACR_OAUTH_ISSUER/ACR_OAUTH_RESOURCES are configured.",
       "primary_validator": {
@@ -1082,7 +1082,7 @@
       "route": "/authorize",
       "source": {
         "file": "internal/api/app.go",
-        "line": 101
+        "line": 102
       },
       "public_rationale": "OAuth 2.1 authorization endpoint (authorization code + PKCE S256 + RFC 8707 resource) for hosted MCP clients; the caller has no credential by definition. It only starts a consent and sends the browser (302) to the web consent page with a 256-bit request handle; the handle authorizes nothing by itself -- the decision is made on POST /authorize/consent, which admits only a web assertion for the signed-in user.",
       "primary_validator": {
@@ -1108,7 +1108,7 @@
       "service": "dev-health-acr-api",
       "source": {
         "file": "internal/api/app.go",
-        "line": 102
+        "line": 103
       },
       "classification": "protected",
       "public_rationale": null,
@@ -1206,7 +1206,7 @@
       "route": "/token",
       "source": {
         "file": "internal/api/app.go",
-        "line": 103
+        "line": 104
       },
       "public_rationale": "OAuth 2.1 token endpoint (authorization_code grant, public clients, no refresh token; CHAOS-6233 added RFC 8628's device_code grant, dispatched by the grant_type form parameter); no principal on entry by definition.",
       "primary_validator": {
@@ -1274,7 +1274,7 @@
       "route": "/register",
       "source": {
         "file": "internal/api/app.go",
-        "line": 104
+        "line": 105
       },
       "public_rationale": "RFC 7591 dynamic client registration for public MCP clients (DCR fallback to client ID metadata documents); the caller has no credential by definition.",
       "primary_validator": {
@@ -1308,7 +1308,7 @@
       "route": "/device_authorization",
       "source": {
         "file": "internal/api/app.go",
-        "line": 105
+        "line": 106
       },
       "public_rationale": "RFC 8628 device authorization endpoint (CHAOS-6233): starts a device-code grant for a headless/remote MCP client with no browser or redirect of its own; the caller has no credential by definition. It reuses the same device_authorizations row and POST /api/v1/oauth/device_approval approval page an OAuth authorization-code request's browser consent already reuses internally (device_oauth.go), except the raw device_code and user_code leave the server here, as RFC 8628 requires.",
       "primary_validator": {
