@@ -1322,6 +1322,83 @@ Promotion, publication, and release revocation are described in
 [release policy](release-policy.md). Test the promoted digest, preserve its
 provenance, and rehearse an application rollback before a production upgrade.
 
+### Projector rebuild on Kubernetes: one-off Job (method of record)
+
+`kubectl exec deploy/dev-health-acr -- acr-projector rebuild` does NOT work
+on the hosted chart: the acr-api pod has no projector configmap (config load
+fails) and the image is distroless (no shell). Run the rebuild as a one-off
+Job built from the projector Deployment's pod template: same image, same
+`envFrom` (projector configmap) and secrets by reference, same labels and
+ServiceAccount, `restartPolicy: Never`, `backoffLimit: 0`. Method of record
+since the 2026-09-29 production v13 rebuild.
+
+Steps (namespace `dev-health`):
+
+1. Scale the projector to 0 (a rebuild needs the per-organization
+   single-flight lock; a running projector gives "locked by another
+   projector"): `kubectl -n dev-health scale deploy/dev-health-acr-projector --replicas=0`
+2. Apply the Job (shape below).
+3. Read its log: `kubectl -n dev-health logs job/acr-projector-rebuild-v13`.
+   Success is exit 0 and `projection organization rebuilt` (no purged count
+   is logged). Job `Complete 1/1` took 4 s in production.
+4. Delete the Job: `kubectl -n dev-health delete job/acr-projector-rebuild-v13`.
+5. Scale the projector to 1, then read back the projector log until
+   `orgs_rebuild_required=0`, `orgs_ok` equals `orgs_configured`, and
+   `tick_complete` is true.
+
+Job shape (secrets by reference only; take the image digest and env from the
+live projector Deployment, do not copy values into a ticket or a doc):
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: acr-projector-rebuild-v13     # name by source version
+  namespace: dev-health
+  labels: { app.kubernetes.io/name: acr, app.kubernetes.io/instance: dev-health-acr, app.kubernetes.io/component: projector }
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: acr, app.kubernetes.io/instance: dev-health-acr, app.kubernetes.io/component: projector }
+    spec:
+      restartPolicy: Never
+      serviceAccountName: dev-health-acr
+      automountServiceAccountToken: false
+      imagePullSecrets: [{ name: ghcr-pull }]
+      securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, fsGroup: 65532, seccompProfile: { type: RuntimeDefault } }
+      volumes: [{ name: tmp, emptyDir: {} }]
+      containers:
+        - name: acr-projector
+          image: <same digest as the projector Deployment>
+          command: ["/usr/local/bin/acr-projector"]
+          args: ["rebuild", "--org", "<organization-id>"]   # prod org: c6a38355-dad6-42e4-8cc9-4c712450827d
+          envFrom: [{ configMapRef: { name: dev-health-acr-projector-config } }]
+          # env: copy the projector Deployment's env block. Secrets stay
+          # secretKeyRef (ACR_POSTGRES_DSN, ACR_CLICKHOUSE_DSN from
+          # acr-runtime; ACR_CONTEXT_FABRIC_EMBED_API_KEY from
+          # acr-model-provider), never literal values.
+          volumeMounts: [{ name: tmp, mountPath: /tmp }]
+          securityContext: { allowPrivilegeEscalation: false, privileged: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+          resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { cpu: "1", memory: 1Gi } }
+```
+
+Duration: the Job itself is seconds (it purges and resets checkpoints). The
+replay after scale-up is the long part: production converged in about 75 min
+(rebuild 12:37Z, converged about 13:52Z); the venue rebuild with teams took
+17 min 35 s. With `ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED=false` the
+rebuild is the legacy in-place purge: graph reads are empty until replay
+ends. Warn users first.
+
+Older builds (before CHAOS-7171, acr #705, per-source drain budget since
+`97162d12`): one drain budget per tick was shared by all sources, so a large
+ClickHouse backlog starved `dev_health_teams_projects` to one page per tick
+after a rebuild. Workaround on those builds only: set
+`ACR_CONTEXT_FABRIC_PROJECTION_DRAIN_BATCH_BUDGET` to a NEGATIVE value (`-1`;
+`0` means the default 500) on the projector, then REMOVE the override once
+the stream is drained and verify the projector env has no such variable.
+
 ### CHAOS-3916 production graph cutover runbook
 
 This is the chris-owned cutover CHAOS-3916 itself deferred ("a separate,
