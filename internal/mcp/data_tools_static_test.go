@@ -408,6 +408,13 @@ func TestDataToolFilesReferenceNoModelSeam(t *testing.T) {
 		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 			continue
 		}
+		// read_facts.go belongs to the read_facts tool, not to these three; it
+		// builds a typed fact request that names the plain data struct
+		// InterpretedQuestion (no model runs). That tool's own checks are its
+		// lane's; the three tools here reach no such file.
+		if strings.HasPrefix(name, "read_facts") {
+			continue
+		}
 		checked++
 		if seams := modelSeams(t, filepath.Join(root, "internal", "contextfabric", "directread", name), true); len(seams) != 0 {
 			t.Errorf("directread/%s reaches a model-facing seam: %v", name, seams)

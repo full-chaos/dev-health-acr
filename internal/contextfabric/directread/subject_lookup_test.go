@@ -105,7 +105,23 @@ func (g *lookupFakeGraph) AuthorizeStoredSubjects(_ context.Context, principal s
 	nodes := map[string][]graphrank.CandidateNode{}
 	for _, node := range g.org(principal.OrgID).nodes {
 		ref := contextfabric.SubjectRef{Kind: contextfabric.SubjectKind(node.Kind), CanonicalID: node.CanonicalID}
-		nodes[graphrank.SubjectKey(ref)] = []graphrank.CandidateNode{{Attributes: node.Attributes}}
+		attributes := node.Attributes
+		// Mirrors falkorgraph's project reach (CHAOS-7080): for a
+		// repository-restricted caller a project's "*" is read as its live
+		// ownership reach.
+		if ClassifyPrincipal(principal) == ClassRestricted && node.Kind == "project" && attributes["authorization_repositories"] == "*" {
+			reach := g.org(principal.OrgID).reach[graphrank.SubjectKey(ref)]
+			if len(reach) == 0 {
+				reach = []string{"acr-context-fabric:no-project-repository-ownership"}
+			}
+			copied := map[string]interface{}{}
+			for key, value := range attributes {
+				copied[key] = value
+			}
+			copied["authorization_repositories"] = slices.Clone(reach)
+			attributes = copied
+		}
+		nodes[graphrank.SubjectKey(ref)] = []graphrank.CandidateNode{{Attributes: attributes}}
 	}
 	return graphrank.AuthorizeStoredSubjectNodes(principal, subjects, nodes), nil
 }

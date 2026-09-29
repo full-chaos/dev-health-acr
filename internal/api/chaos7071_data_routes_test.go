@@ -238,7 +238,7 @@ func TestChaos7071OperationsRouteHasItsOwnRateClass(t *testing.T) {
 	token := h.issue(t, []string{auth.ScopeContextRead, auth.ScopeDataRead}, nil).Token
 	assertChaos7071Reached(t, ContextFabricDataOperationsPath, h.call(http.MethodPost, ContextFabricDataOperationsPath, token))
 	assertErrorResponse(t, h.call(http.MethodPost, ContextFabricDataOperationsPath, token), http.StatusTooManyRequests, "rate_limited")
-	assertChaos7071Stub(t, h.call(http.MethodPost, ContextFabricDataFactsPath, token))
+	assertChaos7071Reached(t, ContextFabricDataFactsPath, h.call(http.MethodPost, ContextFabricDataFactsPath, token))
 	assertChaos7071Reached(t, ContextFabricDataCatalogPath, h.call(http.MethodGet, ContextFabricDataCatalogPath, token))
 }
 
