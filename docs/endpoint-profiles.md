@@ -235,8 +235,9 @@ name:
 The acr gate (`ci/checkendpointprofiles`) matches a row to its route by
 `source.file` + `method` + `route`, and a `primary_validator` anchor by its
 `note` marker (a literal call/function substring). The `line` / `line_end`
-values are advisory hints kept for the shared schema: an unrelated edit that
+values are advisory hints for WHERE the symbol is (they must still be in-bounds,
+non-trivial and a valid range) and are kept for the shared schema: an unrelated edit that
 moves a registration or validator does not break the gate. Renaming or removing
 the route fails as `PHANTOM ROW` + `UNOWNED SURFACE`; renaming the marked
 symbol fails as `ANCHOR MARKER NOT FOUND`; a marker that appears several times
-and not on its declared line fails as `AMBIGUOUS ANCHOR MARKER`.
+(counted per occurrence) and not on its declared line fails as `AMBIGUOUS ANCHOR MARKER`.

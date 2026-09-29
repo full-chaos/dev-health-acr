@@ -38,11 +38,11 @@
 //     line is the validator.
 //   - primary_validator anchors carry an explicit marker (the anchor's `note`
 //     field: a short, exact, literal substring of the real call/declaration)
-//     that this gate re-locates independently of the declared line number,
-//     checked against that declared line ALONE (never a wider line..line_end
-//     window), so a later edit that shifts the declared line onto an
-//     unrelated statement is caught rather than silently passing on whatever
-//     text happens to be there. A second, UNCLAIMED occurrence of the same
+//     that this gate re-locates by text. Since CHAOS-7128 the declared line
+//     is an advisory hint: a marker found exactly once (one OCCURRENCE, not
+//     one line) elsewhere passes as a moved line; none fails, several fail.
+//     When the marker IS on the declared line it is checked there ALONE
+//     (never a wider line..line_end window). A second, UNCLAIMED occurrence of the same
 //     marker text elsewhere in the file (one no row's own anchor accounts
 //     for) is reported rather than trusted, since a substring match cannot
 //     tell which of two occurrences is the real one; two rows that
@@ -71,9 +71,6 @@
 //     (CHAOS-4774's limitation no longer applies to source rows).
 //   - The inventory's declared source_commit and credential_class_source are
 //     NOT verified by this gate: CHAOS-4765.
-//   - Two registrations on one line cannot both be profiled, because a row
-//     addresses a surface as file:line. They fail closed rather than one being
-//     dropped: CHAOS-4774.
 //   - ★ THE BIGGEST ONE, and the one most likely to be misread: this gate does
 //     NOT reconcile a row's SECURITY CLAIM with the code. It checks that a row
 //     exists for every surface, that the row is well-formed and internally
@@ -398,22 +395,10 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 		return nil, err
 	}
 
-	// A row's `source` and its anchors address a surface as file:line -- that
-	// granularity comes from the ops-owned schema, not from this gate. So two
-	// registrations written on ONE line collide here, and only one of them
-	// could ever be owned by a row.
-	//
-	// Merge-gate round 3 (EXECUTED) found the silent half of this: discovery
-	// matched once per line, so the second registration was invisible and an
-	// unprofiled route passed. Discovery now returns both. What is left is a
-	// real, narrow limitation of the ADDRESSING SCHEME rather than of this
-	// parser, and it is reported explicitly: without this, the collision
-	// surfaced as a baffling "content drift" against whichever registration
-	// happened to be written second. Fails closed either way; the difference
-	// is whether the message tells you what is actually wrong.
-	//
-	// Fixing it properly means giving anchors a column, which is a change to
-	// a contract shared by three repos -- CHAOS-4774, not this PR.
+	// CHAOS-7128: a row addresses a surface by (file, method, route), so two
+	// registrations written on ONE line are both profilable and a moved line
+	// never invalidates a row. Only a same method+route registered twice in
+	// one file is a collision (DUPLICATE REGISTRATION below).
 	discoveredKeys := map[routeKey]discoveredRoute{}
 	for _, r := range report.Routes {
 		key := routeKey{r.File, r.Method, r.Path}
@@ -904,21 +889,27 @@ func checkPrimaryValidatorAnchorMarker(root, rowID string, anchor map[string]any
 	// marker found exactly once elsewhere means the line merely moved -- pass;
 	// several occurrences cannot be told apart -- ambiguous; none means the
 	// symbol was renamed or removed -- fail below.
+	// Count OCCURRENCES, not lines: two copies of the marker on one line are
+	// two occurrences (r1 P1), not one unambiguous anchor.
 	var found []int
+	occurrences := 0
 	for i, l := range lines {
-		if i+1 != line && strings.Contains(l, note) {
-			found = append(found, i+1)
+		if i+1 != line {
+			if n := strings.Count(l, note); n > 0 {
+				found = append(found, i+1)
+				occurrences += n
+			}
 		}
 	}
-	if len(found) == 1 {
+	if occurrences == 1 {
 		return
 	}
-	if len(found) > 1 {
+	if occurrences > 1 {
 		*errs = append(*errs, fmt.Sprintf(
 			"AMBIGUOUS ANCHOR MARKER: row %q primary_validator anchor's marker %q is not on its declared line %s:%d "+
-				"and appears at %d other lines %v -- a substring match cannot tell which is the real validator. "+
+				"and appears %d times at lines %v -- a substring match cannot tell which is the real validator. "+
 				"Use a longer, more specific marker",
-			rowID, note, path, line, len(found), found,
+			rowID, note, path, line, occurrences, found,
 		))
 		return
 	}

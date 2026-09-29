@@ -1180,18 +1180,68 @@ func TestGateAcceptsAMovedLineBecauseAnchorsAreSymbolNotLine(t *testing.T) {
 }
 
 func TestGateFailsWhenTheAnchoredHandlerMarkerIsRenamed(t *testing.T) {
+	// The anchored call is renamed IN THE FIXTURE SOURCE (not merely a note
+	// naming something absent), so the marker that used to resolve is gone.
 	row := minimalValidRow(map[string]any{
 		"primary_validator": map[string]any{
 			"description": "mux.HandleFunc directly",
 			"anchor": map[string]any{
 				"path": fixtureAppFile, "line": float64(7),
-				"note": "mux.HandleFunc(\"GET /healthz\", oldHandlerName)",
+				"note": "mux.HandleFunc(\"GET /healthz\", healthzHandler)",
 			},
 		},
 	})
 	f := minimalValidFixture(t, []map[string]any{row})
+	src, err := os.ReadFile(filepath.Join(f.root, fixtureAppFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	renamed := strings.ReplaceAll(string(src), "healthzHandler", "renamedHandler")
+	writeFile(t, filepath.Join(f.root, fixtureAppFile), renamed)
 	errs := f.check(t)
-	mustContain(t, errs, "ANCHOR MARKER NOT FOUND", "oldHandlerName")
+	mustContain(t, errs, "ANCHOR MARKER NOT FOUND", "healthzHandler")
+}
+
+// r1 P1: two copies of the marker on ONE line are two occurrences, not one
+// unambiguous relocation.
+func TestGateRejectsTwoCopiesOfTheMarkerOnOneLine(t *testing.T) {
+	row := minimalValidRow(map[string]any{
+		"primary_validator": map[string]any{
+			"description": "x",
+			"anchor": map[string]any{
+				"path": fixtureAppFile, "line": float64(5),
+				"note": "protectedRuntimeHandler(handler)",
+			},
+		},
+	})
+	f := minimalValidFixture(t, []map[string]any{row})
+	src, err := os.ReadFile(filepath.Join(f.root, fixtureAppFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(f.root, fixtureAppFile),
+		string(src)+"var a, b = \"protectedRuntimeHandler(handler)\", \"protectedRuntimeHandler(handler)\"\n")
+	errs := f.check(t)
+	mustContain(t, errs, "AMBIGUOUS ANCHOR MARKER", "2 times")
+}
+
+// Two rows sharing one moved marker (single occurrence) both pass.
+func TestGateAcceptsSiblingRowsSharingOneMovedMarker(t *testing.T) {
+	anchor := func() map[string]any {
+		return map[string]any{
+			"description": "shared dispatch",
+			"anchor": map[string]any{
+				"path": fixtureAppFile, "line": float64(5),
+				"note": "mux.HandleFunc(\"GET /healthz\"",
+			},
+		}
+	}
+	f := minimalValidFixture(t, []map[string]any{
+		minimalValidRow(map[string]any{"primary_validator": anchor()}),
+	})
+	if errs := f.check(t); len(errs) != 0 {
+		t.Fatalf("got:\n%s", strings.Join(errs, "\n"))
+	}
 }
 
 func TestGateFailsWhenTheRegisteredRouteIsRenamed(t *testing.T) {
