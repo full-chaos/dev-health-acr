@@ -126,7 +126,7 @@ func TestStoredResultIsServedOnlyWhenTheLiveGrantAdmitsEverySubject(t *testing.T
 	}
 
 	logs := &bytes.Buffer{}
-	app, _ := newParityHostedAppWithLogs(t, nil, store, limits.ResourceBudget{MaxItems: 50, MaxTokens: 16_000, MaxBytes: 1 << 20}, logs)
+	app, _ := newParityHostedAppWithLogs(t, nil, ownGrantStore{store}, limits.ResourceBudget{MaxItems: 50, MaxTokens: 16_000, MaxBytes: 1 << 20}, logs)
 	app.runtime.StoredResultGate = contextfabric.NewStoredResultGate(subjectNodeGraph{nodes: nodes})
 	// The enumeration makes far more requests than the default per-minute
 	// allowance; the limiter is not what this test measures.
@@ -253,7 +253,7 @@ func TestStoredResultAuthorizationLineCertifiesAgainstItsSpecification(t *testin
 			result.SubjectResolution.Candidates = []contractsv1.ContextFabricSubjectCandidate{}
 			seedResult3355(t, store, "org_1", result)
 			logs := &bytes.Buffer{}
-			app, token := newParityHostedAppWithLogs(t, nil, store, limits.ResourceBudget{MaxItems: 50, MaxTokens: 16_000, MaxBytes: 1 << 20}, logs)
+			app, token := newParityHostedAppWithLogs(t, nil, ownGrantStore{store}, limits.ResourceBudget{MaxItems: 50, MaxTokens: 16_000, MaxBytes: 1 << 20}, logs)
 			app.runtime.StoredResultGate = contextfabric.NewStoredResultGate(tc.graph)
 			logs.Reset()
 			rec := httptest.NewRecorder()
@@ -323,7 +323,7 @@ func TestAStoredResultNamingAnUngrantedSubjectByIDAloneIsRefused(t *testing.T) {
 			cells = append(cells, cell{member: member, value: target.value, served: target.served, result: result})
 		}
 	}
-	app, _ := newParityHostedAppWithLogs(t, nil, store, limits.ResourceBudget{MaxItems: 50, MaxTokens: 16_000, MaxBytes: 1 << 20}, &bytes.Buffer{})
+	app, _ := newParityHostedAppWithLogs(t, nil, ownGrantStore{store}, limits.ResourceBudget{MaxItems: 50, MaxTokens: 16_000, MaxBytes: 1 << 20}, &bytes.Buffer{})
 	app.runtime.StoredResultGate = contextfabric.NewStoredResultGate(subjectNodeGraph{nodes: nodes})
 	token := storedServingCredential(t, app, []string{hostedTestRepository})
 	for _, c := range cells {

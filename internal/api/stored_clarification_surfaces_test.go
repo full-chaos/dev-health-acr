@@ -207,7 +207,7 @@ func surfaceReading(t *testing.T, frame contextfabric.QuestionFrame) *contextfab
 
 func saveSurfaceRow(t *testing.T, store *memoryinvestigation.Store, result contextfabric.InvestigationResult, semantic contextfabric.SemanticStateWrite) {
 	t.Helper()
-	if err := store.Save(context.Background(), storage.Principal{OrgID: callerOrgID}, result, contextfabric.SourceWatermarkSnapshot{}, nil,
+	if err := store.Save(context.Background(), seedPrincipal(callerOrgID), result, contextfabric.SourceWatermarkSnapshot{}, nil,
 		contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{},
 		contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", semantic); err != nil {
 		t.Fatalf("seed %s: %v", result.ResultID, err)

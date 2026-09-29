@@ -11,7 +11,6 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/memoryinvestigation"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
-	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // THE READ SIDE of the CHAOS-5637 answerability invariant, driven through
@@ -32,7 +31,7 @@ import (
 func seedLegacyUnanswerableClarification(t *testing.T, store *memoryinvestigation.Store, resultID string) contractsv1.ContextFabricInvestigationResult {
 	t.Helper()
 	result := legacyUnanswerableClarificationRow(t, resultID)
-	if err := store.Save(context.Background(), storage.Principal{OrgID: callerOrgID}, result,
+	if err := store.Save(context.Background(), seedPrincipal(callerOrgID), result,
 		contextfabric.SourceWatermarkSnapshot{}, nil,
 		contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}),
 		contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{},
@@ -166,7 +165,7 @@ func TestResultRouteStillServesAnAnswerableClarification(t *testing.T) {
 	if err := contractsv1.ValidateStoredResult(result); err != nil {
 		t.Fatalf("fixture is not a valid stored row: %v", err)
 	}
-	if err := store.Save(context.Background(), storage.Principal{OrgID: callerOrgID}, result,
+	if err := store.Save(context.Background(), seedPrincipal(callerOrgID), result,
 		contextfabric.SourceWatermarkSnapshot{}, nil,
 		contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}),
 		contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{},

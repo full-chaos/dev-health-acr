@@ -43,7 +43,7 @@ func tupleReuseFixture(t *testing.T) (storage.Principal, InvestigationRequest, S
 	}
 	state.WorkItemCensus = &WorkItemTupleCensus{Version: WorkItemTupleCensusVersion, State: WorkItemMembershipCensusExact, Value: 7, Retained: 1, RequestedRepositoryScope: request.RequestedScope.RepositorySlugs, AuthorizationDigest: digest}
 	current := WorkItemMembershipResult{Members: []WorkItemMembershipMember{{CanonicalID: result.Cohort.Members[0].Subject.CanonicalID}}, Census: WorkItemMembershipCensus{State: WorkItemMembershipCensusExact, PopulationMeasured: true, AuthorizedPopulation: 7, ServedMembers: 1}}
-	return principal, request, StoredInvestigationResult{Result: result, SemanticState: state, SemanticStateRead: SemanticStateReadAvailable}, current
+	return principal, request, StoredInvestigationResult{Result: result, GrantDigest: StoredResultGrantDigest(principal), SemanticState: state, SemanticStateRead: SemanticStateReadAvailable}, current
 }
 
 func TestWorkItemTupleReuseFiniteDecisions(t *testing.T) {

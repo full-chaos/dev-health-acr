@@ -192,7 +192,7 @@ func (s *staticResultStore) Save(_ context.Context, _ storage.Principal, result 
 	return nil
 }
 
-func (s *staticResultStore) Get(_ context.Context, _ storage.Principal, resultID string) (StoredInvestigationResult, error) {
+func (s *staticResultStore) Get(_ context.Context, reader storage.Principal, resultID string) (StoredInvestigationResult, error) {
 	s.gotIDs = append(s.gotIDs, resultID)
 	if s.getErr != nil {
 		return StoredInvestigationResult{}, s.getErr
@@ -206,7 +206,8 @@ func (s *staticResultStore) Get(_ context.Context, _ storage.Principal, resultID
 		zero := int64(0)
 		epoch = &zero
 	}
-	stored := StoredInvestigationResult{Result: result, GraphEpoch: epoch, SemanticStateRead: SemanticStateReadAbsent, ParentResultID: s.parents[resultID]}
+	// The fixture stands for "computed under the reader's own grant" (CHAOS-7145).
+	stored := StoredInvestigationResult{Result: result, GrantDigest: StoredResultGrantDigest(reader), GraphEpoch: epoch, SemanticStateRead: SemanticStateReadAbsent, ParentResultID: s.parents[resultID]}
 	if raw, ok := s.legacyStates[resultID]; ok {
 		decoded, status := DecodeSemanticState(raw)
 		stored.SemanticState, stored.SemanticStateRead = decoded, status

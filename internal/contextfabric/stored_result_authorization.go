@@ -114,17 +114,23 @@ const (
 	StoredResultReasonSubjectAbsent        StoredResultAuthorizationReason = "subject_absent"
 	StoredResultReasonGroupUnproven        StoredResultAuthorizationReason = "group_unproven"
 	StoredResultReasonGraphNotProjected    StoredResultAuthorizationReason = "graph_not_projected"
+	// CHAOS-7145: the result was computed under another grant than the
+	// restricted reader's (grant_mismatch), or under no recorded grant at all
+	// -- a row saved before the digest was persisted (grant_unrecorded).
+	StoredResultReasonGrantMismatch   StoredResultAuthorizationReason = "grant_mismatch"
+	StoredResultReasonGrantUnrecorded StoredResultAuthorizationReason = "grant_unrecorded"
 	// Unavailable reasons.
 	StoredResultReasonAuthorizerMissing StoredResultAuthorizationReason = "authorizer_missing"
 	StoredResultReasonGraphReadFailed   StoredResultAuthorizationReason = "graph_read_failed"
 )
 
 // StoredResultAuthorizationReasonVocabulary is the closed set of reasons.
-func StoredResultAuthorizationReasonVocabulary() [10]StoredResultAuthorizationReason {
-	return [10]StoredResultAuthorizationReason{
+func StoredResultAuthorizationReasonVocabulary() [12]StoredResultAuthorizationReason {
+	return [12]StoredResultAuthorizationReason{
 		StoredResultReasonNoSubjects, StoredResultReasonUnrestrictedPrincipal, StoredResultReasonSubjectsAdmitted,
 		StoredResultReasonOrganizationMismatch, StoredResultReasonSubjectDenied, StoredResultReasonSubjectAbsent,
 		StoredResultReasonGroupUnproven, StoredResultReasonGraphNotProjected,
+		StoredResultReasonGrantMismatch, StoredResultReasonGrantUnrecorded,
 		StoredResultReasonAuthorizerMissing, StoredResultReasonGraphReadFailed,
 	}
 }
@@ -247,7 +253,51 @@ func NewStoredResultGate(graph GraphReader) *StoredResultGate {
 // Authorize decides whether stored may be served to principal on surface.
 // The caller writes the decision to the trace.
 func (g *StoredResultGate) Authorize(ctx context.Context, principal storage.Principal, stored StoredInvestigationResult, surface StoredResultSurface) StoredResultAuthorization {
+	if reason, refused := storedResultGrantRefusal(principal, stored); refused {
+		return StoredResultAuthorization{
+			Surface:              surface,
+			PrincipalScope:       classifyStoredResultPrincipalScope(principal),
+			RepositoryScopeCount: len(principal.RepositoryScopes),
+			Decision:             StoredResultDenied,
+			Reason:               reason,
+			RefusedKinds:         []string{},
+		}
+	}
 	return g.decide(ctx, principal, stored.Result, surface)
+}
+
+// storedResultOpenGrantDigest is the digest a result computed for an
+// unrestricted or universal principal carries. It is a recorded value, not
+// NULL: NULL means "saved before the grant was recorded".
+const storedResultOpenGrantDigest = "open"
+
+// StoredResultGrantDigest is the grant digest Save records for the computing
+// principal (CHAOS-7145): the same reuseGrantDigest CHAOS-7127 keys answer
+// reuse with, for a repository-restricted principal; "open" for any other.
+func StoredResultGrantDigest(principal storage.Principal) string {
+	if classifyStoredResultPrincipalScope(principal) != StoredResultScopeRestricted {
+		return storedResultOpenGrantDigest
+	}
+	return "g:" + reuseGrantDigest(principal.RepositoryScopes)
+}
+
+// storedResultGrantRefusal: a restricted reader is served only a result
+// computed under its own grant. A stored result carries no fact rows, but its
+// prose was built from the computing principal's (possibly wider, possibly
+// filtered) fact set. An unrestricted or universal reader is unchanged. A
+// result with no recorded digest (a pre-migration row) is refused to a
+// restricted reader: its computing grant cannot be proven.
+func storedResultGrantRefusal(principal storage.Principal, stored StoredInvestigationResult) (StoredResultAuthorizationReason, bool) {
+	if classifyStoredResultPrincipalScope(principal) != StoredResultScopeRestricted {
+		return "", false
+	}
+	switch {
+	case stored.GrantDigest == "":
+		return StoredResultReasonGrantUnrecorded, true
+	case stored.GrantDigest != StoredResultGrantDigest(principal):
+		return StoredResultReasonGrantMismatch, true
+	}
+	return "", false
 }
 
 func (g *StoredResultGate) decide(ctx context.Context, principal storage.Principal, result InvestigationResult, surface StoredResultSurface) StoredResultAuthorization {

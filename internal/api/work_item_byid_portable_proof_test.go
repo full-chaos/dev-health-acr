@@ -73,8 +73,10 @@ type portableStoredTupleStore struct {
 	stored contextfabric.StoredInvestigationResult
 }
 
-func (s *portableStoredTupleStore) Get(context.Context, storage.Principal, string) (contextfabric.StoredInvestigationResult, error) {
-	return s.stored, nil
+func (s *portableStoredTupleStore) Get(_ context.Context, reader storage.Principal, _ string) (contextfabric.StoredInvestigationResult, error) {
+	stored := s.stored
+	stored.GrantDigest = contextfabric.StoredResultGrantDigest(reader) // computed under the reader's own grant
+	return stored, nil
 }
 
 func portableWorkItemDetail(details []contractsv1.ContextFabricCoverageDetail) *contractsv1.ContextFabricCoverageDetail {

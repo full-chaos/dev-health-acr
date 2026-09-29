@@ -1034,3 +1034,36 @@ SELECT question_hash FROM acr.context_fabric_investigation_results WHERE result_
 	assertReuseColumnsNull("result-0027-already-excluded")
 	assertReuseColumnsPopulated("result-0027-ordinary")
 }
+
+// TestStore_grantDigest runs the shared grant-digest cells against REAL
+// Postgres (CHAOS-7145), and proves a row saved before migration 0044 (NULL
+// grant_digest) reads back as the unrecorded "" digest.
+func TestStore_grantDigest(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	newStore := func(t *testing.T) contextfabric.InvestigationResultStore {
+		store, err := pginvestigation.NewStore(db)
+		require.NoError(t, err)
+		return store
+	}
+	paritytest.RunGrantDigestSuite(t, newStore)
+
+	t.Run("legacy NULL digest reads back unrecorded", func(t *testing.T) {
+		store := newStore(t)
+		principal := storage.Principal{OrgID: "org-legacy", RepositoryScopes: []string{"acme/tools"}}
+		row := paritytest.ValidResult("result-legacy-null-digest", "was this saved before 0044?")
+		require.NoError(t, store.Save(ctx, principal, row, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation)))
+		_, err := db.ExecContext(ctx, `UPDATE acr.context_fabric_investigation_results SET grant_digest = NULL WHERE result_id = $1`, row.ResultID)
+		require.NoError(t, err)
+		stored, err := store.Get(ctx, principal, row.ResultID)
+		require.NoError(t, err)
+		require.Equal(t, "", stored.GrantDigest)
+	})
+
+	t.Run("column shape is enforced", func(t *testing.T) {
+		for _, bad := range []string{"", "g:short", "G:" + strings.Repeat("a", 32), "restricted"} {
+			_, err := db.ExecContext(ctx, `INSERT INTO acr.context_fabric_investigation_results (result_id, org_id, payload, generated_at, grant_digest) VALUES ($1, 'org-shape', '{}'::jsonb, now(), $2)`, "result-shape-"+strings.ReplaceAll(bad, ":", "_"), bad)
+			require.Error(t, err, "grant_digest %q must be refused", bad)
+		}
+	})
+}

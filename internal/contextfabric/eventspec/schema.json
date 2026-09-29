@@ -2103,6 +2103,8 @@
           "subject_absent",
           "group_unproven",
           "graph_not_projected",
+          "grant_mismatch",
+          "grant_unrecorded",
           "authorizer_missing",
           "graph_read_failed"
         ],
@@ -3917,6 +3919,8 @@
           "subject_absent",
           "group_unproven",
           "graph_not_projected",
+          "grant_mismatch",
+          "grant_unrecorded",
           "authorizer_missing",
           "graph_read_failed"
         ]
