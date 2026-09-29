@@ -206,12 +206,25 @@ func subCHAOS7119UnmatchedNameNeverLandsOnTheZeroUUID(t *testing.T, ctx context.
 }
 
 // (f) The duplicate-ID guard: a name row and an id row for the same
-// (repository, team, source) are ONE edge. Two groups here would carry the
-// same RelationshipID, fail batch validation and wedge the organization.
+// (repository, team, source) are ONE edge, from ONE group. Two groups would
+// carry the same RelationshipID. The CHAOS-4874 in-batch pass
+// (dropDuplicateIdentities) already keeps that from rejecting the batch and
+// wedging the organization, by dropping the second item with a
+// duplicate_within_batch quarantine WARN -- so the served edge count alone
+// cannot see a split group. The quarantine line is what does: a correct group
+// key produces none.
 func subCHAOS7119NameAndIDRowsForOneRepositoryAreOneEdge(t *testing.T, ctx context.Context, f *ownershipFixture) {
+	logged := &bytes.Buffer{}
+	f.source.WithLogger(slog.New(slog.NewTextHandler(logged, &slog.HandlerOptions{Level: slog.LevelWarn})))
 	chaos7119Seed(t, ctx, f, time.Now().UTC().Truncate(time.Second))
 	chaos7119AssertOneEdge(t, chaos7119Edges(t, ctx, f), "team-dup", chaos7119RepoB, "acme/repo-b",
 		"a name row and an id row for acme/repo-b")
+	if strings.Contains(logged.String(), "duplicate_within_batch") {
+		t.Fatalf("the source produced a duplicate relationship identity in one batch -- a name row and an id row for one repository split into two groups:\n%s", logged.String())
+	}
+	if !strings.Contains(logged.String(), "repository_team_groups_unresolved=") {
+		t.Fatalf("no repository-ownership telemetry at WARN; the quarantine check above would be measuring a silent logger:\n%s", logged.String())
+	}
 }
 
 // (g) DEFAULT pending chris: a non-NULL repo_id with no repos row keeps its
