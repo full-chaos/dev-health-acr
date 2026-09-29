@@ -19,23 +19,19 @@ import (
 //     the right type and nullability; every declaration is emitted by some
 //     case (or is listed, with a reason, in declaredButNotExercised).
 //   - Rule 4: a missing measurement fails. Every registered provider is a
-//     declared kind with at least one case, or is listed in
-//     notYetDirectServable with no declarations; a kind in neither fails.
+//     declared kind with at least one case; an undeclared kind fails.
 
-// directServableKinds are the kinds declared in this PR.
+// directServableKinds are the declared kinds: the nine aggregate kinds
+// (CHAOS-7073) and the twelve entity kinds (CHAOS-7120). Every registered
+// provider must be one of them; there is no "not yet" list.
 var directServableKinds = []contextfabric.FactKind{
 	contextfabric.FactInvestment, contextfabric.FactHealth, contextfabric.FactMetrics,
 	contextfabric.FactFlow, contextfabric.FactReadiness, contextfabric.FactWorkload,
 	contextfabric.FactLandscape, contextfabric.FactOperationalDeficiencies, contextfabric.FactSourceHealth,
-}
-
-// notYetDirectServable are the kinds that stay without declarations in this
-// PR; the direct read tool refuses them with a typed reason.
-var notYetDirectServable = map[contextfabric.FactKind]bool{
-	contextfabric.FactIdentity: true, contextfabric.FactMembership: true, contextfabric.FactStatus: true,
-	contextfabric.FactWork: true, contextfabric.FactActualCompletion: true, contextfabric.FactBlockers: true,
-	contextfabric.FactRequiredChildren: true, contextfabric.FactPullRequests: true, contextfabric.FactReviews: true,
-	contextfabric.FactContinuousIntegration: true, contextfabric.FactDeployments: true, contextfabric.FactIncidents: true,
+	contextfabric.FactIdentity, contextfabric.FactMembership, contextfabric.FactStatus,
+	contextfabric.FactWork, contextfabric.FactActualCompletion, contextfabric.FactBlockers,
+	contextfabric.FactRequiredChildren, contextfabric.FactPullRequests, contextfabric.FactReviews,
+	contextfabric.FactContinuousIntegration, contextfabric.FactDeployments, contextfabric.FactIncidents,
 }
 
 // declaredButNotExercised lists declarations no case here can reach, with a
@@ -291,6 +287,76 @@ func t4Cases() []t4Case {
 	add(t4Case{name: "investment/project_rollup", kind: contextfabric.FactInvestment, subjects: proj, tables: projectAB})
 	add(t4Case{name: "investment/project_native_over_rollup", kind: contextfabric.FactInvestment, subjects: proj, tables: append(append([]fakeTable{}, projectAB...),
 		fakeTable{match: "unit_span AS", rows: [][]any{nativeMixRow("proj-1", 7)}})})
+
+	// ---- entity kinds (CHAOS-7120)
+	work := []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")}
+	add(t4Case{name: "identity/repository", kind: contextfabric.FactIdentity, subjects: repo, tables: []fakeTable{
+		{match: "FROM repos", rows: [][]any{{"repo-1", "example-org/widget-service", "synthetic"}}},
+	}})
+	add(t4Case{name: "identity/repository_no_labels", kind: contextfabric.FactIdentity, subjects: repo, tables: []fakeTable{
+		{match: "FROM repos", rows: [][]any{{"repo-1", "", ""}}},
+	}})
+	add(t4Case{name: "identity/work_item", kind: contextfabric.FactIdentity, subjects: work, tables: []fakeTable{
+		{match: "FROM work_items", rows: [][]any{{"WIDGET-101", "Investigate checkout flake", "repo-1"}, {"WIDGET-101", "", "repo-1"}}},
+	}})
+	add(t4Case{name: "membership/repository", kind: contextfabric.FactMembership, subjects: repo, tables: []fakeTable{
+		{match: "FROM repos", rows: [][]any{{"repo-1"}}},
+	}})
+	add(t4Case{name: "membership/work_item", kind: contextfabric.FactMembership, subjects: work, tables: []fakeTable{
+		{match: "FROM work_items", rows: [][]any{{"WIDGET-101", "repo-1", "example-org/widget-service"}, {"WIDGET-101", "repo-1", ""}}},
+	}})
+	add(t4Case{name: "status/work_item", kind: contextfabric.FactStatus, subjects: work, tables: []fakeTable{
+		{match: "FROM work_items", rows: [][]any{{"WIDGET-101", "in_progress", "repo-1"}, {"WIDGET-101", "", "repo-1"}}},
+	}})
+	add(t4Case{name: "work/work_item", kind: contextfabric.FactWork, subjects: work, tables: []fakeTable{
+		{match: "FROM work_items", rows: [][]any{{"WIDGET-101", "Investigate checkout flake", "repo-1"}, {"WIDGET-101", "", "repo-1"}}},
+	}})
+	add(t4Case{name: "actual_completion/work_item", kind: contextfabric.FactActualCompletion, subjects: work, tables: []fakeTable{
+		{match: "FROM work_items", rows: [][]any{
+			{"WIDGET-101", uint8(1), time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC), "repo-1"},
+			{"WIDGET-101", uint8(0), time.Unix(0, 0).UTC(), "repo-1"},
+		}},
+	}})
+	add(t4Case{name: "actual_completion/project", kind: contextfabric.FactActualCompletion, subjects: proj, tables: []fakeTable{
+		{match: completionRollupQueryMatch, rows: [][]any{completionRollupRow("linear", "proj-1", 5, 1, 1, 3)}},
+	}})
+	add(t4Case{name: "blockers/work_item", kind: contextfabric.FactBlockers, subjects: work, tables: []fakeTable{
+		{match: "FROM work_item_dependencies", rows: [][]any{
+			{"WIDGET-099", "WIDGET-101", "repo-1", "repo-1", uint64(1)},
+			{"WIDGET-098", "WIDGET-101", "repo-1", "repo-2", uint64(2)},
+		}},
+	}})
+	add(t4Case{name: "required_children/work_item", kind: contextfabric.FactRequiredChildren, subjects: work, tables: []fakeTable{
+		{match: "FROM work_item_dependencies", rows: [][]any{
+			{"WIDGET-101", "WIDGET-200", "related_to", "repo-1", "repo-1", uint64(1)},
+			{"WIDGET-101", "WIDGET-201", "", "repo-1", "", uint64(0)},
+		}},
+	}})
+	add(t4Case{name: "pull_requests/pull_request", kind: contextfabric.FactPullRequests, subjects: []contextfabric.SubjectRef{pullRequestSubject("repo-1", "1042")}, tables: []fakeTable{
+		{match: "FROM git_pull_requests", rows: [][]any{{"repo-1", uint32(1042), "open"}, {"repo-1", uint32(1042), ""}}},
+	}})
+	add(t4Case{name: "reviews/pull_request_review", kind: contextfabric.FactReviews, subjects: []contextfabric.SubjectRef{reviewSubject("repo-1", "review-1")}, tables: []fakeTable{
+		{match: "FROM git_pull_request_reviews", rows: [][]any{{"review-1", "approved", "repo-1"}, {"review-1", "", "repo-1"}}},
+	}})
+	add(t4Case{name: "continuous_integration/ci_pipeline_run", kind: contextfabric.FactContinuousIntegration, subjects: []contextfabric.SubjectRef{ciRunSubject("repo-1", "run-1")}, tables: []fakeTable{
+		{match: "FROM ci_pipeline_runs", rows: [][]any{{"run-1", "success", "repo-1"}, {"run-1", "", "repo-1"}}},
+	}})
+	noDurations := cicdMetricsRow("repo-1")
+	noDurations[4], noDurations[6], noDurations[8] = uint8(0), uint8(0), uint8(0)
+	add(t4Case{name: "continuous_integration/repository", kind: contextfabric.FactContinuousIntegration, subjects: repo, tables: []fakeTable{
+		{match: "FROM cicd_metrics_daily", rows: [][]any{cicdMetricsRow("repo-1"), noDurations}},
+	}})
+	add(t4Case{name: "deployments/deployment", kind: contextfabric.FactDeployments, subjects: []contextfabric.SubjectRef{deploymentSubject("repo-1", "deploy-1")}, tables: []fakeTable{
+		{match: "FROM deployments", rows: [][]any{{"deploy-1", "success", "production", "repo-1"}, {"deploy-1", "", "", "repo-1"}}},
+	}})
+	noDeployDurations := deployMetricsRow("repo-1")
+	noDeployDurations[4], noDeployDurations[5], noDeployDurations[6], noDeployDurations[7] = uint8(0), float64(0), uint8(0), float64(0)
+	add(t4Case{name: "deployments/repository", kind: contextfabric.FactDeployments, subjects: repo, tables: []fakeTable{
+		{match: "FROM deploy_metrics_daily", rows: [][]any{deployMetricsRow("repo-1"), noDeployDurations}},
+	}})
+	add(t4Case{name: "incidents/incident", kind: contextfabric.FactIncidents, subjects: []contextfabric.SubjectRef{incidentSubject("incident-1")}, tables: []fakeTable{
+		{match: "FROM operational_incidents", rows: [][]any{{"incident-1", "open", "high"}, {"incident-1", "", ""}}},
+	}})
 	return cases
 }
 
@@ -472,9 +538,10 @@ func TestCHAOS7073CatalogueTruthEveryEmittedFieldIsDeclaredAndEveryDeclarationIs
 	t4Reverse(observed, directServableKinds, declaredButNotExercised, report)
 }
 
-// TestCHAOS7073EveryRegisteredProviderIsDeclaredOrExplicitlyNotYet is Rule 4:
-// a measurement that did not happen fails.
-func TestCHAOS7073EveryRegisteredProviderIsDeclaredOrExplicitlyNotYet(t *testing.T) {
+// TestCHAOS7073EveryRegisteredProviderIsDeclared is Rule 4: a measurement
+// that did not happen fails. Every registered kind is declared and has a
+// catalogue-truth case (CHAOS-7120 removed the not-yet list).
+func TestCHAOS7073EveryRegisteredProviderIsDeclared(t *testing.T) {
 	cases := t4Cases()
 	perKind := map[contextfabric.FactKind]int{}
 	for _, c := range cases {
@@ -484,8 +551,8 @@ func TestCHAOS7073EveryRegisteredProviderIsDeclaredOrExplicitlyNotYet(t *testing
 	for _, kind := range directServableKinds {
 		direct[kind] = true
 	}
-	if len(directServableKinds) != 9 || len(notYetDirectServable) != 12 {
-		t.Fatalf("expected 9 declared and 12 not-yet kinds, have %d and %d", len(directServableKinds), len(notYetDirectServable))
+	if len(directServableKinds) != 21 || len(direct) != 21 {
+		t.Fatalf("expected 21 distinct declared kinds, have %d (%d distinct)", len(directServableKinds), len(direct))
 	}
 	registered := map[contextfabric.FactKind]bool{}
 	for _, provider := range devhealthfacts.NewProviders(&fakeClient{}) {
@@ -494,28 +561,20 @@ func TestCHAOS7073EveryRegisteredProviderIsDeclaredOrExplicitlyNotYet(t *testing
 		registered[kind] = true
 		declared := len(capability.Fields) > 0
 		switch {
-		case declared && notYetDirectServable[kind]:
-			t.Errorf("%s: declares fields but is listed in notYetDirectServable", kind)
-		case declared && !direct[kind]:
+		case !declared:
+			t.Errorf("%s: registered provider declares no fields; every kind must be declared", kind)
+		case !direct[kind]:
 			t.Errorf("%s: declares fields but is not in the tested directServableKinds list", kind)
-		case declared && perKind[kind] == 0:
+		case perKind[kind] == 0:
 			t.Errorf("%s: declared kind has no catalogue-truth case", kind)
-		case !declared && direct[kind]:
-			t.Errorf("%s: expected declarations, capability has none", kind)
-		case !declared && capability.Fields != nil:
-			t.Errorf("%s: undeclared kind must have Fields == nil", kind)
-		case !declared && !notYetDirectServable[kind]:
-			t.Errorf("%s: no declarations and not listed in notYetDirectServable", kind)
 		}
+	}
+	if len(registered) != 21 {
+		t.Errorf("registered providers = %d kinds, want 21", len(registered))
 	}
 	for kind := range direct {
 		if !registered[kind] {
 			t.Errorf("%s: listed as direct servable but no provider is registered", kind)
-		}
-	}
-	for kind := range notYetDirectServable {
-		if !registered[kind] {
-			t.Errorf("%s: listed in notYetDirectServable but no provider is registered", kind)
 		}
 	}
 }
@@ -558,6 +617,56 @@ func TestCHAOS7073SafetyMarksOnDeclarations(t *testing.T) {
 	}
 	if scopeName, _ := risk.Column("scope_name"); scopeName.SubjectRef != nil {
 		t.Errorf("health risk_breakdown.scope_name is a label and declares no subject reference")
+	}
+}
+
+// TestCHAOS7120SafetyMarksOnEntityDeclarations pins the marks of the twelve
+// entity kinds the direct read gate relies on.
+func TestCHAOS7120SafetyMarksOnEntityDeclarations(t *testing.T) {
+	ref := func(kind contextfabric.FactKind, subject contextfabric.SubjectKind, field string) *contextfabric.FactSubjectRefDeclaration {
+		decl, ok := t4Capability(kind).FieldDeclaration(field, subject)
+		if !ok {
+			t.Fatalf("%s %s %s: not declared", kind, subject, field)
+		}
+		return decl.SubjectRef
+	}
+	for _, tc := range []struct {
+		kind    contextfabric.FactKind
+		subject contextfabric.SubjectKind
+		field   string
+		want    contextfabric.FactSubjectRefDeclaration
+	}{
+		// A bare work_item_id cannot be gated: opaque.
+		{contextfabric.FactBlockers, contextfabric.SubjectWorkItem, "blocked_by_work_item_id", contextfabric.FactSubjectRefDeclaration{Kind: contextfabric.SubjectWorkItem, IDForm: contextfabric.FactSubjectIDOpaque}},
+		{contextfabric.FactRequiredChildren, contextfabric.SubjectWorkItem, "required_child_work_item_id", contextfabric.FactSubjectRefDeclaration{Kind: contextfabric.SubjectWorkItem, IDForm: contextfabric.FactSubjectIDOpaque}},
+		// The canonical id is gated like a work item root.
+		{contextfabric.FactBlockers, contextfabric.SubjectWorkItem, "blocked_by_work_item_ref", contextfabric.FactSubjectRefDeclaration{Kind: contextfabric.SubjectWorkItem, IDForm: contextfabric.FactSubjectIDCanonical}},
+		{contextfabric.FactRequiredChildren, contextfabric.SubjectWorkItem, "required_child_work_item_ref", contextfabric.FactSubjectRefDeclaration{Kind: contextfabric.SubjectWorkItem, IDForm: contextfabric.FactSubjectIDCanonical}},
+		{contextfabric.FactMembership, contextfabric.SubjectWorkItem, "repository_id", contextfabric.FactSubjectRefDeclaration{Kind: contextfabric.SubjectRepository, IDForm: contextfabric.FactSubjectIDRepositoryUUID}},
+		{contextfabric.FactMembership, contextfabric.SubjectRepository, "organization_id", contextfabric.FactSubjectRefDeclaration{Kind: contextfabric.SubjectOrganization, IDForm: contextfabric.FactSubjectIDCanonical}},
+		{contextfabric.FactIdentity, contextfabric.SubjectRepository, "id", contextfabric.FactSubjectRefDeclaration{Kind: contextfabric.SubjectRepository, IDForm: contextfabric.FactSubjectIDRepositoryUUID}},
+	} {
+		got := ref(tc.kind, tc.subject, tc.field)
+		if got == nil || got.Kind != tc.want.Kind || got.IDForm != tc.want.IDForm || got.KindColumn != "" {
+			t.Errorf("%s %s %s: subject ref = %+v, want %+v", tc.kind, tc.subject, tc.field, got, tc.want)
+		}
+	}
+	// Labels and ratios are not scores; no entity field is an aggregate
+	// (actual_completion's project counts are over the caller's own items).
+	entity := directServableKinds[9:]
+	for _, kind := range entity {
+		capability := t4Capability(kind)
+		for _, field := range capability.Fields {
+			if field.Score || field.Aggregate {
+				t.Errorf("%s %s: Score=%v Aggregate=%v, want neither on an entity kind", kind, field.Name, field.Score, field.Aggregate)
+			}
+			if field.Type == contextfabric.FactFieldTable {
+				t.Errorf("%s %s: entity kinds emit no tables", kind, field.Name)
+			}
+		}
+	}
+	if len(entity) != 12 || entity[0] != contextfabric.FactIdentity {
+		t.Fatalf("entity kinds = %v, want the twelve CHAOS-7120 kinds", entity)
 	}
 }
 
