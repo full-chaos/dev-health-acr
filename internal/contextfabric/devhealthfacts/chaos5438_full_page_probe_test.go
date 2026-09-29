@@ -136,7 +136,7 @@ func probeArms() []probeArm {
 			name: "blockers", kind: contextfabric.FactBlockers, match: "FROM work_item_dependencies",
 			subjectsFor: oneWorkItemSubject,
 			rowsFor: perSubject(func(i int) []any {
-				return []any{"BLOCKER-" + strconv.Itoa(i), "WIDGET-101", "repo-1"}
+				return []any{"BLOCKER-" + strconv.Itoa(i), "WIDGET-101", "repo-1", "repo-1", uint64(1)}
 			}),
 		},
 		{
@@ -160,7 +160,7 @@ func probeArms() []probeArm {
 			name: "required_children", kind: contextfabric.FactRequiredChildren, match: "FROM work_item_dependencies",
 			subjectsFor: oneWorkItemSubject,
 			rowsFor: perSubject(func(i int) []any {
-				return []any{"WIDGET-101", "CHILD-" + strconv.Itoa(i), "requires", "repo-1"}
+				return []any{"WIDGET-101", "CHILD-" + strconv.Itoa(i), "requires", "repo-1", "repo-1", uint64(1)}
 			}),
 		},
 	}

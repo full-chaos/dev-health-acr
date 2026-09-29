@@ -15,7 +15,7 @@ import (
 func TestBlockersProviderHappyPath(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM work_item_dependencies", rows: [][]any{{"WIDGET-099", "WIDGET-101", "repo-1"}}},
+		{match: "FROM work_item_dependencies", rows: [][]any{{"WIDGET-099", "WIDGET-101", "repo-1", "repo-9", uint64(1)}}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactBlockers)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
@@ -34,6 +34,43 @@ func TestBlockersProviderHappyPath(t *testing.T) {
 	}
 	if fact.Fields["blocked_by_work_item_id"].String == nil || *fact.Fields["blocked_by_work_item_id"].String != "WIDGET-099" {
 		t.Fatalf("fields = %#v", fact.Fields)
+	}
+	if ref := fact.Fields["blocked_by_work_item_ref"].String; ref == nil || *ref != "work_item.v2:repo-9:WIDGET-099" {
+		t.Fatalf("blocked_by_work_item_ref = %#v, want the blocker's canonical id in its own repository", fact.Fields)
+	}
+}
+
+// TestDependencyCounterpartRefOnlyWhenOneRepository (CHAOS-7120): the
+// counterpart's canonical id is emitted only when its bare id resolves to
+// exactly one repository; an ambiguous or unmatched counterpart gets none.
+func TestDependencyCounterpartRefOnlyWhenOneRepository(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		kind  contextfabric.FactKind
+		row   []any
+		field string
+	}{
+		{"blocker in two repositories", contextfabric.FactBlockers, []any{"WIDGET-099", "WIDGET-101", "repo-1", "repo-9", uint64(2)}, "blocked_by_work_item_ref"},
+		{"blocker unmatched", contextfabric.FactBlockers, []any{"WIDGET-099", "WIDGET-101", "repo-1", "", uint64(0)}, "blocked_by_work_item_ref"},
+		{"child in two repositories", contextfabric.FactRequiredChildren, []any{"WIDGET-101", "WIDGET-200", "requires", "repo-1", "repo-9", uint64(2)}, "required_child_work_item_ref"},
+		{"child unmatched", contextfabric.FactRequiredChildren, []any{"WIDGET-101", "WIDGET-200", "requires", "repo-1", "", uint64(0)}, "required_child_work_item_ref"},
+	} {
+		client := &fakeClient{tables: []fakeTable{{match: "FROM work_item_dependencies", rows: [][]any{tc.row}}}}
+		provider := findProvider(t, devhealthfacts.NewProviders(client), tc.kind)
+		result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Kind: tc.kind, Subjects: []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")},
+		})
+		if err != nil || len(result.Facts) != 1 {
+			t.Fatalf("%s: facts=%d err=%v", tc.name, len(result.Facts), err)
+		}
+		if value, ok := result.Facts[0].Fields[tc.field]; ok {
+			t.Errorf("%s: %s = %#v, want it omitted", tc.name, tc.field, value)
+		}
+		if !strings.Contains(client.queries[0].statement, "uniqExact(repo_id)") {
+			t.Errorf("%s: statement does not resolve the counterpart's repository count", tc.name)
+		}
 	}
 }
 
@@ -89,7 +126,7 @@ func TestBlockersProviderOrgScoped(t *testing.T) {
 func TestRequiredChildrenProviderHappyPath(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM work_item_dependencies", rows: [][]any{{"WIDGET-101", "WIDGET-200", "related_to", "repo-1"}}},
+		{match: "FROM work_item_dependencies", rows: [][]any{{"WIDGET-101", "WIDGET-200", "related_to", "repo-1", "repo-9", uint64(1)}}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactRequiredChildren)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
@@ -108,6 +145,9 @@ func TestRequiredChildrenProviderHappyPath(t *testing.T) {
 	}
 	if fact.Fields["relationship_type"].String == nil || *fact.Fields["relationship_type"].String != "related_to" {
 		t.Fatalf("fields = %#v", fact.Fields)
+	}
+	if ref := fact.Fields["required_child_work_item_ref"].String; ref == nil || *ref != "work_item.v2:repo-9:WIDGET-200" {
+		t.Fatalf("required_child_work_item_ref = %#v, want the child's canonical id in its own repository", fact.Fields)
 	}
 }
 
@@ -153,7 +193,7 @@ const maxFactRowsPerQueryForTest = 200
 func blockerRows(n int) [][]any {
 	rows := make([][]any, n)
 	for i := 0; i < n; i++ {
-		rows[i] = []any{"blocker-" + strconv.Itoa(i), "WIDGET-101", "repo-1"}
+		rows[i] = []any{"blocker-" + strconv.Itoa(i), "WIDGET-101", "repo-1", "repo-1", uint64(1)}
 	}
 	return rows
 }
