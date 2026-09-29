@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/ownershipresolve"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-go/readers"
@@ -1549,15 +1550,35 @@ func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQuery
 // a display value that can be renamed under a stable repo_id. The latest
 // assertion's repo_full_name is still carried out for the label.
 //
-// NULL repo_id (the column is Nullable(UUID)): such a row names no
-// repository node -- a pattern match, or a repository the writer could not
-// resolve -- so it is OMITTED, never resolved by guessing through
-// repo_full_name (a full name is not unique across providers, and picking one
-// would mint an ownership nobody recorded). The omission is counted in the
-// run's repositoryOwnershipLedger and logged; each such group keeps its own
-// row (null_repo_name) so the count is per distinct repository name.
+// NULL repo_id (the column is Nullable(UUID)) -- CHAOS-7119, K11 edge half.
+// Such a row is RESOLVED BY NAME with the one rule the fact reads use
+// (ownershipresolve, a port of ops teamscope RepoCondition): a (provider,
+// lower-cased repo) match in repos for this org makes it an ordinary
+// repository -> team edge to that repository, exactly as if the row had
+// carried the repo_id. A row's own repo_id always wins over its name. This
+// replaces the CHAOS-6561 rule that omitted every such row: the GitHub
+// team-autoimport writer leaves repo_id NULL on ALL its rows, so omission
+// meant those teams had no repository edge at all. Provider stays in the
+// match (a full name is not unique across providers), and the join's
+// `matched` sentinel -- never `r.id IS NOT NULL`, which a ClickHouse LEFT
+// JOIN fills with the zero UUID -- decides whether a name resolved. A row
+// that still resolves to nothing (a glob pattern, a ghost name, a provider
+// mismatch) is OMITTED, never guessed; it keeps an empty repo_key so it is
+// counted in the run's repositoryOwnershipLedger and logged, and still moves
+// the cursor. Unresolved rows collapse per (provider, team, source), so the
+// count is per group, not per repository name.
 //
-// A repo_id with NO repos row still projects: the repository endpoint is the
+// THE GROUP KEY. The group is (provider, resolved repo_key, team, source),
+// nothing else. The CHAOS-6561 key also carried null_repo_name; it is gone
+// from the SQL, the GROUP BY, the row key and the Go scan TOGETHER, because a
+// name-resolved row and an id row for the same (repository, team, source)
+// are the same edge: split into two groups they would emit two relationships
+// with the SAME RelationshipID, and a duplicate id rejects the batch and
+// wedges the organization.
+//
+// A repo_id with NO repos row still projects (CHAOS-7119 keeps this; the
+// fact reads drop such a row, as ops does -- DEFAULT pending a ruling): the
+// repository endpoint is the
 // deterministic `repository:<repo_id>` id queryRepositories mints, so the
 // edge lands on the right node whenever the repository is projected. Its
 // authorization cannot name a slug, so it fails CLOSED to
@@ -1605,7 +1626,25 @@ func repositoryTeamsQuery(ledger *repositoryOwnershipLedger) func(context.Contex
 // grouped column lets two groups tie and the strict `>` drop one).
 const repositoryTeamsWatermark = "greatest(max(o.updated_at), max(o.repo_synced_at))"
 
-var repositoryTeamsRowKey = rowKeySQL("o.provider", "o.repo_key", "o.team_id", "o.source_name", "o.null_repo_name")
+var repositoryTeamsRowKey = rowKeySQL(repositoryTeamsGroupColumns...)
+
+// repositoryTeamsGroupColumns is the GROUP BY of repositoryTeamsStatement and
+// the column list of its row key -- one list, so the two cannot drift
+// (CHAOS-7119 removed null_repo_name from both at once).
+var repositoryTeamsGroupColumns = []string{"o.provider", "o.repo_key", "o.team_id", "o.source_name"}
+
+// repositoryTeamsOwnershipSource is the resolved ownership table the edge
+// reads: the K11 rule from ownershipresolve in its KeepUnresolved mode, with
+// the provenance, validity and watermark columns the edge carries.
+var repositoryTeamsOwnershipSource = ownershipresolve.OwnedRepositoriesSource("", ownershipresolve.Options{
+	OwnershipColumns: []string{"source", "match_type", "is_primary", "specificity", "priority", "valid_from", "valid_to", "updated_at"},
+	Columns: []string{
+		"o.org_id AS org_id", "o.provider AS provider", "o.source AS source", "o.match_type AS match_type",
+		"o.is_primary AS is_primary", "o.specificity AS specificity", "o.priority AS priority",
+		"o.valid_from AS valid_from", "o.valid_to AS valid_to", "o.updated_at AS updated_at",
+	},
+	KeepUnresolved: true,
+})
 
 // repositoryTeamsLatestOrder is the latest-assertion ordering key, identical
 // to queryProjectTeams' and ownedRepositoriesJoinSQL's.
@@ -1616,7 +1655,7 @@ const repositoryTeamsLatestOrder = "(o.valid_from, o.valid_to IS NULL, ifNull(o.
 // last_synced): an alias that shadows the
 // column it reads bound to itself on 24.8 once already in this file's history.
 func repositoryTeamsStatement(cursor cursorState) string {
-	return `SELECT o.repo_key, o.null_repo_name,
+	return `SELECT o.repo_key,
        argMax(o.repo_full_name, ` + repositoryTeamsLatestOrder + `) AS latest_repo_full_name,
        max(o.repo_slug) AS resolved_repo_slug,
        o.team_id, o.source_name, o.provider,
@@ -1629,20 +1668,19 @@ func repositoryTeamsStatement(cursor cursorState) string {
        ifNull(argMax(tuple(o.valid_to), ` + repositoryTeamsLatestOrder + `).1, toDateTime64(0, 3, 'UTC')) AS latest_valid_to,
        ` + repositoryTeamsWatermark + ` AS observed_at
 FROM (
-	SELECT rto.provider AS provider, ifNull(toString(rto.repo_id), '') AS repo_key,
-	       if(isNull(rto.repo_id), rto.repo_full_name, '') AS null_repo_name,
+	SELECT rto.provider AS provider, rto.repo_key AS repo_key,
 	       rto.repo_full_name AS repo_full_name, ifNull(r.repo, '') AS repo_slug,
 	       rto.team_id AS team_id, toString(rto.source) AS source_name,
 	       toString(rto.match_type) AS match_type_name, toUInt8(rto.is_primary) AS is_primary_flag,
 	       toInt64(rto.specificity) AS specificity_value, toInt64(rto.priority) AS priority_value,
 	       rto.valid_from AS valid_from, rto.valid_to AS valid_to, rto.updated_at AS updated_at,
 	       ifNull(r.last_synced, toDateTime64(0, 3, 'UTC')) AS repo_synced_at
-	FROM team_repo_ownership AS rto FINAL
-	LEFT JOIN repos AS r FINAL ON r.id = rto.repo_id AND r.org_id = rto.org_id
+	FROM ` + repositoryTeamsOwnershipSource + ` AS rto
+	LEFT JOIN repos AS r FINAL ON toString(r.id) = rto.repo_key AND r.org_id = rto.org_id
 	INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = rto.team_id
 	WHERE rto.org_id = {org_id:String}
 ) AS o
-GROUP BY o.provider, o.repo_key, o.team_id, o.source_name, o.null_repo_name` + havingSincePredicate(cursor, repositoryTeamsWatermark, repositoryTeamsRowKey) + orderBy(repositoryTeamsWatermark, repositoryTeamsRowKey)
+GROUP BY ` + strings.Join(repositoryTeamsGroupColumns, ", ") + havingSincePredicate(cursor, repositoryTeamsWatermark, repositoryTeamsRowKey) + orderBy(repositoryTeamsWatermark, repositoryTeamsRowKey)
 }
 
 // repositoryOwnershipSourceAsserted is the closed set of team_repo_ownership
@@ -1667,21 +1705,22 @@ func repositoryTeamOwnershipDerivation(source, matchType string) (contractsv1.Co
 
 func queryRepositoryTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, ledger *repositoryOwnershipLedger) ([]candidate, bool, error) {
 	return fetch(ctx, client, repositoryTeamsStatement(cursor), rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
-		var repoKey, nullRepoName, repoFullName, repoSlug, teamID, source, provider, matchType string
+		var repoKey, repoFullName, repoSlug, teamID, source, provider, matchType string
 		var isPrimary, latestIsOpen uint8
 		var specificity, priority int64
 		var validFrom, latestValidTo, observedAt time.Time
-		if err := r.Scan(&repoKey, &nullRepoName, &repoFullName, &repoSlug, &teamID, &source, &provider, &matchType,
+		if err := r.Scan(&repoKey, &repoFullName, &repoSlug, &teamID, &source, &provider, &matchType,
 			&isPrimary, &specificity, &priority, &validFrom, &latestIsOpen, &latestValidTo, &observedAt); err != nil {
 			return nil, err
 		}
 		observedAt, validFrom, latestValidTo = observedAt.UTC(), validFrom.UTC(), latestValidTo.UTC()
 		// The Go half of repositoryTeamsRowKey, same component order.
-		rowSortKey := identity.JoinSegments(provider, repoKey, teamID, source, nullRepoName)
+		rowSortKey := identity.JoinSegments(provider, repoKey, teamID, source)
 		if repoKey == "" {
-			// NULL repo_id: no repository node to point at. Omitted, never
-			// guessed; still a PROGRESS candidate so the cursor moves past it.
-			ledger.recordNullRepoID(provider, nullRepoName, teamID, source)
+			// NULL repo_id that no repos row matches by (provider, name): no
+			// repository node to point at. Omitted, never guessed; still a
+			// PROGRESS candidate so the cursor moves past it.
+			ledger.recordUnresolved(provider, teamID, source)
 			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
 		}
 		authorization := contractsv1.ContextFabricAuthorizationScope{RepositorySlugs: []string{repoSlug}, TeamIDs: []string{teamID}}

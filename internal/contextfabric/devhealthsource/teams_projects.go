@@ -195,7 +195,19 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // rebuild that projects the backlog; ownership rows written afterwards reach
 // the graph on the ordinary incremental tick (team_repo_ownership is now a
 // registered table in teamsProjectsTables, so its watermark is walked).
-const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v12"
+//
+// v12 -> v13 (CHAOS-7119): repository -> team edges now also project
+// ownership rows with a NULL repo_id, resolved by (org, provider,
+// lower(repo)) against repos with the one rule the fact reads use
+// (ownershipresolve, CHAOS-7073 K11). Same unreachable-backlog trap as
+// v8/v10/v11/v12: rows omitted before this deploy carry an updated_at that
+// never moves and is already behind an organization's checkpoint watermark,
+// so incremental catch-up never re-reads them and the name-only teams (every
+// GitHub team-autoimport row) keep having no repository edge. The bump forces
+// the one rebuild that projects that backlog; the steady state after it is
+// rebuild-free (a new row, or a repos row arriving later with a newer
+// last_synced, reaches the graph on the ordinary incremental tick).
+const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v13"
 
 // teamsProjectsTables is this source's bounded coverage. Both tables were
 // already canonical Dev Health data; neither introduces a new ingest path.
@@ -574,17 +586,18 @@ func logTeamAuthorizationTelemetry(ctx context.Context, logger *slog.Logger, org
 // inferred), edges scoped to the orphan sentinel because their repo_id has no
 // repos row (yet: the repos row's last_synced is in queryRepositoryTeams'
 // watermark, so its later arrival re-emits the edge with the real slug), and
-// groups OMITTED because repo_id is NULL. The omission count
-// is what keeps a NULL repo_id from being a silent drop: an operator reading
-// "0 edges" must be able to tell "no ownership data" from "ownership rows the
-// graph cannot represent".
+// groups OMITTED because repo_id is NULL and no repos row matches the name
+// (CHAOS-7119: a NULL repo_id that DOES match by name is an ordinary edge).
+// The omission count is what keeps an unresolved row from being a silent
+// drop: an operator reading "0 edges" must be able to tell "no ownership
+// data" from "ownership rows the graph cannot represent".
 type repositoryOwnershipLedger struct {
-	mu           sync.Mutex
-	asserted     int
-	closed       int
-	inferred     int
-	orphaned     int
-	nullRepoKeys map[string]struct{}
+	mu         sync.Mutex
+	asserted   int
+	closed     int
+	inferred   int
+	orphaned   int
+	unresolved map[string]struct{}
 }
 
 func (l *repositoryOwnershipLedger) recordAsserted(open, inferred bool) {
@@ -611,27 +624,28 @@ func (l *repositoryOwnershipLedger) recordOrphanedRepository() {
 	l.orphaned++
 }
 
-// recordNullRepoID keys on the GROUP (provider, repo name, team, source), so a
-// page boundary re-reading the same group cannot double-count it.
-func (l *repositoryOwnershipLedger) recordNullRepoID(provider, repoFullName, teamID, source string) {
+// recordUnresolved keys on the GROUP (provider, team, source) -- the
+// unresolved rows' group, since their repo_key is empty -- so a page boundary
+// re-reading the same group cannot double-count it.
+func (l *repositoryOwnershipLedger) recordUnresolved(provider, teamID, source string) {
 	if l == nil {
 		return
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.nullRepoKeys == nil {
-		l.nullRepoKeys = map[string]struct{}{}
+	if l.unresolved == nil {
+		l.unresolved = map[string]struct{}{}
 	}
-	l.nullRepoKeys[identity.JoinSegments(provider, repoFullName, teamID, source)] = struct{}{}
+	l.unresolved[identity.JoinSegments(provider, teamID, source)] = struct{}{}
 }
 
-func (l *repositoryOwnershipLedger) counts() (asserted, closed, inferred, orphaned, nullRepo int) {
+func (l *repositoryOwnershipLedger) counts() (asserted, closed, inferred, orphaned, unresolved int) {
 	if l == nil {
 		return 0, 0, 0, 0, 0
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.asserted, l.closed, l.inferred, l.orphaned, len(l.nullRepoKeys)
+	return l.asserted, l.closed, l.inferred, l.orphaned, len(l.unresolved)
 }
 
 // repositoryOwnershipLedgerFor mirrors ledgerFor exactly.
@@ -657,19 +671,19 @@ func logRepositoryOwnershipTelemetry(ctx context.Context, logger *slog.Logger, o
 	if logger == nil {
 		return
 	}
-	asserted, closed, inferred, orphaned, nullRepo := ledger.counts()
+	asserted, closed, inferred, orphaned, unresolved := ledger.counts()
 	logger.InfoContext(ctx, "devhealthsource projected repository ownership edges",
 		"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName,
 		"repository_team_edges_asserted", asserted,
 		"repository_team_edges_closed", closed,
 		"repository_team_edges_inferred", inferred,
 		"repository_team_edges_orphaned_repository", orphaned,
-		"repository_team_rows_omitted_null_repo_id", nullRepo)
-	if nullRepo > 0 || orphaned > 0 {
+		"repository_team_groups_unresolved", unresolved)
+	if unresolved > 0 || orphaned > 0 {
 		logger.WarnContext(ctx, "devhealthsource repository ownership rows the graph cannot fully represent",
 			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName,
-			"reason", "team_repo_ownership.repo_id is NULL (no repository node; omitted) or names no repos row (edge scoped to the orphaned-repository sentinel)",
-			"repository_team_rows_omitted_null_repo_id", nullRepo,
+			"reason", "team_repo_ownership.repo_id is NULL and no repos row matches its (provider, name) (no repository node; omitted), or repo_id names no repos row (edge scoped to the orphaned-repository sentinel)",
+			"repository_team_groups_unresolved", unresolved,
 			"repository_team_edges_orphaned_repository", orphaned)
 	}
 }

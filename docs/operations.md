@@ -533,6 +533,34 @@ prod cutover (which organizations, when) is a separate, chris-owned
 decision. Run `acr-projector rebuild --org <organization-id>` for every
 affected organization once that cutover is ruled.
 
+**A rebuild is likewise REQUIRED after deploying CHAOS-7119**
+(`TeamsProjectsSourceVersion` v12 → v13). The repository → team
+`OWNED_BY_TEAM` edge (`queryRepositoryTeams`, `teams_projects_edges.go`) now
+also projects `team_repo_ownership` rows whose `repo_id` is NULL, resolved by
+(provider, case-insensitive repository name) against `repos` with the same
+rule the fact reads use (`internal/contextfabric/ownershipresolve`, a port of
+ops teamscope `RepoCondition`, CHAOS-7073 K11). Those rows were omitted
+before, and their `updated_at` does not move on deploy, so an organization
+caught up under a v12 checkpoint would never re-read them: every tick is
+refused with `ErrProjectionSourceVersionChanged` (`rebuild_required`, graph
+untouched) until the rebuild runs. After deploying, run for every projected
+organization:
+
+```bash
+acr-projector rebuild --org <organization-id>
+```
+
+Venues: the bigboy venue's rebuild is part of the venue build (run it per
+projected organization as above after the image with v13 is live); the prod
+rebuild is chris's (batched with the prod roll, not per changeset). After
+the rebuild the steady state is rebuild-free: a new ownership row, or a
+`repos` row that arrives later with a newer `last_synced`, reaches the graph
+on the ordinary incremental tick. Not changed by this deploy: a non-NULL
+`repo_id` with no `repos` row still projects to the orphaned-repository
+sentinel (the fact reads drop it; default pending a ruling), and the team
+node's `authorization_repositories` list still carries raw
+`repo_full_name` values (CHAOS-7130).
+
 Crash-resumable: a durable marker (`acr.context_fabric_projection_rebuild_markers`)
 commits before the purge and clears only after every checkpoint is
 confirmed reset. If `acr-projector` crashes mid-rebuild, ordinary `serve`

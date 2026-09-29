@@ -189,7 +189,12 @@ func TestChaos4542_CheckpointMarkerMovedWithTheJoin(t *testing.T) {
 	// organization caught up under v11 would never gain the edge without a
 	// rebuild. TestChaos6561_V11CheckpointForcesARebuild proves the worker
 	// actually refuses the v11 marker.
-	if want := "devhealthsource.teams_projects.v12"; TeamsProjectsSourceVersion != want {
+	//
+	// v12 -> v13 is CHAOS-7119: repository -> team edges now also project
+	// NULL repo_id ownership rows resolved by name (ownershipresolve, K11).
+	// Rows omitted under v12 never move their own updated_at, so only a
+	// rebuild projects them; the same test's v12 case proves the refusal.
+	if want := "devhealthsource.teams_projects.v13"; TeamsProjectsSourceVersion != want {
 		t.Fatalf("TeamsProjectsSourceVersion = %q, want %q -- changing this constant is a deliberate full-rebuild decision, so update this test with the reason in the constant's doc comment", TeamsProjectsSourceVersion, want)
 	}
 }
