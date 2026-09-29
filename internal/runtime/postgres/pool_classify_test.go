@@ -43,15 +43,18 @@ func fakePostgres(t *testing.T, sqlState string) (dsn string, connections *atomi
 }
 
 // CHAOS-7168 review P1: only a transport failure (no server answer) is
-// retryable; EVERY server answer must be ErrRejected.
+// retryable, plus server answers class 08, class 53 and 57P03; every other
+// server answer must be ErrRejected.
 func TestOpen_classifiesServerAnswersByRetryability(t *testing.T) {
 	for state, wantUnavailable := range map[string]bool{
 		"28P01": false, // invalid_password
 		"28000": false, // invalid_authorization_specification
 		"3D000": false, // invalid_catalog_name
-		"57P03": false, // cannot_connect_now: still a server ANSWER, terminal by ruling
-		"53300": false, // too_many_connections
-		"08006": false, // connection_failure reported BY the server
+		"42501": false, // insufficient_privilege
+		"57014": false, // query_canceled: class 57 but NOT 57P03
+		"57P03": true,  // cannot_connect_now (starting up)
+		"53300": true,  // too_many_connections
+		"08006": true,  // connection_failure reported by the server
 	} {
 		dsn, _ := fakePostgres(t, state)
 		_, err := Open(context.Background(), Config{DSN: dsn, PingTimeout: 2 * time.Second})

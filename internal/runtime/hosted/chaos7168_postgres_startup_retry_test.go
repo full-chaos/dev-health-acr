@@ -206,10 +206,19 @@ func TestChaos7168_RealAuthRejectionIsNotRetriedAndIsLogged(t *testing.T) {
 	}
 }
 
-// A server that answers 57P03 (starting up) is still a server ANSWER: terminal
-// by ruling, exactly one connection.
-func TestChaos7168_RealServerAnswerOf57P03IsTerminalByRuling(t *testing.T) {
+// A server that answers 57P03 (starting up) is the case this change exists
+// for: retried to the bound through the real Open, three connections.
+func TestChaos7168_RealServerAnswerOf57P03IsRetriedToTheBound(t *testing.T) {
 	dsn, connections := fakeHostedPostgres(t, "57P03")
+	_, err := openPostgresWithRetry(context.Background(), runtimepostgres.Config{DSN: dsn, PingTimeout: 2 * time.Second}, 3, time.Millisecond, nil)
+	if !errors.Is(err, runtimepostgres.ErrUnavailable) || connections.Load() != 3 {
+		t.Fatalf("want 3 connections and ErrUnavailable, got err=%v conns=%d", err, connections.Load())
+	}
+}
+
+// Any other server answer (here 3D000 missing database) is terminal: one connection.
+func TestChaos7168_RealServerAnswerOf3D000IsTerminal(t *testing.T) {
+	dsn, connections := fakeHostedPostgres(t, "3D000")
 	_, err := openPostgresWithRetry(context.Background(), runtimepostgres.Config{DSN: dsn, PingTimeout: 2 * time.Second}, 3, time.Millisecond, nil)
 	if !errors.Is(err, runtimepostgres.ErrRejected) || connections.Load() != 1 {
 		t.Fatalf("want 1 connection and ErrRejected, got err=%v conns=%d", err, connections.Load())
