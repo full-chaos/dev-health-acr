@@ -302,3 +302,22 @@ func TestIdentityColumnIsTheFullCompositeNaturalKey(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-7160: find_subjects decides a restricted handle's anchorability from
+// this, before any census.
+func TestCensusAnchorSupported(t *testing.T) {
+	for _, tc := range []struct {
+		kind, anchor contextfabric.SubjectKind
+		want         bool
+	}{
+		{contextfabric.SubjectWorkItem, contextfabric.SubjectRepository, false},
+		{contextfabric.SubjectWorkItem, contextfabric.SubjectProject, true},
+		{contextfabric.SubjectPullRequest, contextfabric.SubjectRepository, true},
+		{contractsv1.ContextFabricSubjectCIRun, contextfabric.SubjectRepository, true},
+		{contextfabric.SubjectTeam, contextfabric.SubjectRepository, false},
+	} {
+		if got := CensusAnchorSupported(tc.kind, tc.anchor); got != tc.want {
+			t.Errorf("CensusAnchorSupported(%s, %s) = %v, want %v", tc.kind, tc.anchor, got, tc.want)
+		}
+	}
+}

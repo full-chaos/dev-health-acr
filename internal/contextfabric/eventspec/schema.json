@@ -1640,6 +1640,7 @@
         "presence": "conditional",
         "closed_vocabulary": [
           "invalid_request",
+          "scope_required",
           "deadline_exceeded",
           "canceled",
           "dependency_unavailable",

@@ -405,6 +405,20 @@ var censusKindRegistryEntries = map[graphrank.CensusKind]censusKindRegistryEntry
 // registered handle grammar, a malformed handle value, or an anchor kind
 // with no FK column on this base table (joined_column_discriminator, brief
 // §1.3(1)) are all reported as errors rather than silently degraded.
+// CensusAnchorSupported reports whether a census of kind can be scoped to
+// one subject of anchorKind (the kind's base table has an FK column for it).
+// A work item cannot be anchored on a repository: Linear work items carry the
+// zero repo_id (see the work_item entry). find_subjects uses it to refuse a
+// restricted work-item handle by type before any census runs (CHAOS-7160).
+func CensusAnchorSupported(kind graphrank.CensusKind, anchorKind contextfabric.SubjectKind) bool {
+	entry, ok := censusKindRegistryEntries[kind]
+	if !ok {
+		return false
+	}
+	_, ok = entry.anchorColumns[anchorKind]
+	return ok
+}
+
 func BuildCensusDiscriminator(kind graphrank.CensusKind, handleValue string, handleBound bool, anchorKind contextfabric.SubjectKind, anchorCanonicalID string, anchorBound bool) (CensusPredicate, error) {
 	entry, ok := censusKindRegistryEntries[kind]
 	if !ok {

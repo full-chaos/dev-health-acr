@@ -182,9 +182,10 @@ type SubjectLookup struct {
 	now      func() time.Time
 	// edges, census and nodes serve owned_by and handle (CHAOS-7126);
 	// see WithOwnershipAndHandles.
-	edges  EdgeGraph
-	census graphrank.CensusFunc
-	nodes  SubjectNodeReader
+	edges         EdgeGraph
+	census        graphrank.CensusFunc
+	nodes         SubjectNodeReader
+	anchorSupport CensusAnchorSupport
 }
 
 // NewSubjectLookup builds the read. A nil graph or gate makes every call
@@ -324,6 +325,10 @@ func (l *SubjectLookup) Find(ctx context.Context, principal storage.Principal, r
 		}
 		telemetry.SubjectKinds = sortedKinds(kinds)
 		switch {
+		case errors.Is(err, ErrFindScopeRequired):
+			// The typed refusal keeps its reason on the Info line
+			// (CHAOS-7160 r1).
+			telemetry.Status, telemetry.ErrorClass = "invalid_request", "scope_required"
 		case errors.Is(err, ErrFindInvalidRequest):
 			telemetry.Status, telemetry.ErrorClass = "invalid_request", "invalid_request"
 		case err != nil:

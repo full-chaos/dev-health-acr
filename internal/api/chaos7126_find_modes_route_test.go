@@ -139,10 +139,13 @@ func TestChaos7126_R1_HandleScopeRequiredRefusal(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
 		t.Fatal(err)
 	}
-	details, _ := json.Marshal(envelope.Error.Details)
-	for _, digits := range []string{"50", "51"} {
-		if strings.Contains(envelope.Error.Message, digits) || strings.Contains(string(details), digits) {
-			t.Fatalf("refusal carries a count: %q %s", envelope.Error.Message, details)
-		}
+	// The refusal is exactly its reason and a fixed sentence: no member and
+	// no digit could carry a count (r1 #701 P3: a "count":1 detail passed the
+	// earlier digit check).
+	if len(envelope.Error.Details) != 1 || envelope.Error.Details["reason"] != "scope_required" {
+		t.Fatalf("refusal details = %v, want exactly {reason: scope_required}", envelope.Error.Details)
+	}
+	if strings.ContainsAny(envelope.Error.Message, "0123456789") {
+		t.Fatalf("refusal message carries a number: %q", envelope.Error.Message)
 	}
 }

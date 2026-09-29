@@ -2256,7 +2256,7 @@ var (
 	directReadTools       = []string{"find_subjects"}
 	directReadModes       = []string{"list", "name", "owned_by", "handle"}
 	directReadStatuses    = []string{"complete", "partial", "empty", "ambiguous", "invalid_request", "unavailable"}
-	directReadErrorClass  = []string{"invalid_request", "deadline_exceeded", "canceled", "dependency_unavailable", "graph_error"}
+	directReadErrorClass  = []string{"invalid_request", "scope_required", "deadline_exceeded", "canceled", "dependency_unavailable", "graph_error"}
 	directReadSubjectKind = contractsv1.ContextFabricSubjectKindVocabulary()
 )
 

@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -94,5 +95,31 @@ func TestChaos7126_R1_ComposedLookupServesOwnedBy(t *testing.T) {
 	}
 	if _, err := lookup.Find(ctx, principal, directread.FindRequest{Handle: "PR 1"}); !errors.Is(err, directread.ErrFindUnavailable) {
 		t.Fatalf("handle without a census: %v", err)
+	}
+}
+
+type chaos7160QueryClient struct{ calls int }
+
+func (c *chaos7160QueryClient) Query(context.Context, string, []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+	c.calls++
+	return nil, errors.New("no ClickHouse in this test")
+}
+
+// CHAOS-7160 r1: production composition refuses a restricted work-item
+// handle by type from the kind alone (the census anchor support is wired),
+// even when the credential reads no repository, and runs no ClickHouse query.
+func TestChaos7160_ComposedLookupRefusesRestrictedWorkItemHandle(t *testing.T) {
+	graph := chaos7126Graph{}
+	gate := directread.NewSubjectGate(graph, nil)
+	lookup := directread.NewSubjectLookup(graph, gate, nil)
+	client := &chaos7160QueryClient{}
+	composeFindModes(lookup, chaos7071Investigator{graph: graph, facts: chaos7071Facts{}}, client, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+	principal := storage.Principal{OrgID: "org", Subject: "u", CredentialID: "c", RepositoryScopes: []string{"acme/a"}}
+	ctx := observability.WithRequestID(context.Background(), "req_0123456789abcdef0123456789abcdef")
+	if _, err := lookup.Find(ctx, principal, directread.FindRequest{Handle: "CHAOS-1"}); !errors.Is(err, directread.ErrFindScopeRequired) {
+		t.Fatalf("restricted work-item handle: %v", err)
+	}
+	if client.calls != 0 {
+		t.Fatalf("the refusal ran %d ClickHouse queries", client.calls)
 	}
 }
