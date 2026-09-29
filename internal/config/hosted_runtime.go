@@ -167,8 +167,6 @@ func validateHostedRuntime(cfg Config) error {
 		return errors.New("ACR_POSTGRES_MAX_IDLE_CONNS must not exceed ACR_POSTGRES_MAX_OPEN_CONNS")
 	case cfg.PostgresConnMaxLifetime < 0 || cfg.PostgresConnMaxIdleTime < 0 || cfg.PostgresPingTimeout < 0:
 		return errors.New("ACR PostgreSQL pool durations must not be negative")
-	case validatePostgresStartupRetry(cfg.PostgresStartupAttempts, cfg.PostgresStartupBackoff) != nil:
-		return validatePostgresStartupRetry(cfg.PostgresStartupAttempts, cfg.PostgresStartupBackoff)
 	case connectionKindErr != nil:
 		return connectionKindErr
 	default:

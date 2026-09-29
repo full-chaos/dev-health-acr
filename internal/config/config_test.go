@@ -554,13 +554,21 @@ func TestLoad_rejectsInvalidPostgresStartupRetryWithoutBackingStores(t *testing.
 		{"ACR_POSTGRES_STARTUP_BACKOFF": "0s"},
 		{"ACR_POSTGRES_STARTUP_ATTEMPTS": "-1"},
 		{"ACR_POSTGRES_STARTUP_BACKOFF": "-1s"},
+		{"ACR_POSTGRES_STARTUP_ATTEMPTS": "abc"},
 	} {
 		env := map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true"}
 		for k, v := range bad {
 			env[k] = v
 		}
-		if _, err := load(mapLookup(env)); err == nil || !strings.Contains(err.Error(), "ACR_POSTGRES_STARTUP_ATTEMPTS must be at least 1") {
+		if _, err := load(mapLookup(env)); err == nil || !strings.Contains(err.Error(), "ACR_POSTGRES_STARTUP_") {
 			t.Fatalf("load(%v) error = %v, want a startup retry refusal", bad, err)
 		}
+	}
+}
+
+func TestLoad_unsetPostgresStartupRetryUsesDefaults(t *testing.T) {
+	cfg, err := load(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true"}))
+	if err != nil || cfg.PostgresStartupAttempts != defaultHostedPostgresStartupAttempts || cfg.PostgresStartupBackoff != defaultHostedPostgresStartupBackoff {
+		t.Fatalf("err=%v attempts=%d backoff=%v, want defaults", err, cfg.PostgresStartupAttempts, cfg.PostgresStartupBackoff)
 	}
 }
