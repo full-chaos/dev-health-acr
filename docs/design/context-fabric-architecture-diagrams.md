@@ -544,6 +544,25 @@ repository↔team edge" statements above are superseded by this; there is
 still no repository↔project edge, and the CHAOS-4363 ClickHouse join is
 unchanged.
 
+**Update (2026-09-29, CHAOS-7119): NULL `repo_id` rows resolve by name.**
+The sentence above about NULL `repo_id` is superseded. The edge now reads
+`team_repo_ownership` through `internal/contextfabric/ownershipresolve`, the
+one rule the fact reads also use (CHAOS-7073 K11, a port of ops teamscope
+`RepoCondition`): a row's own `repo_id` wins; otherwise a (provider,
+case-insensitive name) match in `repos`, proven by the join's `matched`
+sentinel, makes the row an ordinary edge to that repository, scoped to the
+repository's own slug. A row that still resolves to nothing (glob, ghost
+name, provider mismatch) is omitted and counted per (provider, team, source)
+group (`repository_team_groups_unresolved`). The group key is
+(provider, resolved repo_id, team_id, source) -- `null_repo_name` left the
+SQL, GROUP BY, row key and scan together, so a name row and an id row for
+one repository are one edge, never a duplicate RelationshipID. A `repo_id`
+with no `repos` row keeps the orphaned-repository sentinel (the fact reads
+drop it; default pending a ruling). `TeamsProjectsSourceVersion` moved
+v12 → v13: one rebuild per projected organization (operations.md). The team
+node's `authorization_repositories` list is unchanged (raw names;
+CHAOS-7130).
+
 **Stale doc comment found (report only, no Go edit per this lane's scope):**
 `internal/contextfabric/devhealthsource/teams_projects.go:54` and
 `internal/contextfabric/devhealthsource/clickhouse.go:29` both assert,
