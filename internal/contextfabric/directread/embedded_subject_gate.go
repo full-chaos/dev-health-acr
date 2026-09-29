@@ -2,14 +2,9 @@ package directread
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"sort"
-	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
-	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -48,37 +43,21 @@ import (
 //
 // Aggregate scalars (K2) are NOT recomputed: the caller receives them
 // labelled with their aggregate scope (read_facts.go).
+//
+// The filter itself is contextfabric.FilterEmbeddedSubjects, shared with the
+// investigation engine's fact read (CHAOS-7127); this type supplies the
+// direct path's decision: the root SubjectGate.
 
 // ErrEmbeddedGateUnavailable is returned when the subject gate cannot decide
 // the embedded references. The tool answers unavailable; nothing is served.
-var ErrEmbeddedGateUnavailable = errors.New("embedded subject gate is unavailable")
+var ErrEmbeddedGateUnavailable = contextfabric.ErrEmbeddedSubjectGateUnavailable
 
 // GatedFact is one fact after the embedded-subject gate.
-type GatedFact struct {
-	Fact contextfabric.CanonicalFact
-	// FieldsWithheld names scalars removed because they named an unseen
-	// subject; FieldsUndeclared names fields removed because the capability
-	// does not declare them.
-	FieldsWithheld   []string
-	FieldsUndeclared []string
-	// RowsWithheld counts removed rows per table field; ColumnsUndeclared
-	// names undeclared columns removed per table field.
-	RowsWithheld      map[string]int
-	ColumnsUndeclared map[string][]string
-	// EvidenceWithheld counts removed evidence references.
-	EvidenceWithheld int
-}
+type GatedFact = contextfabric.EmbeddedGatedFact
 
 // EmbeddedReport is the gate's count summary for telemetry. It carries
 // counts only, never ids.
-type EmbeddedReport struct {
-	ReferencesChecked int
-	ReferencesRefused int
-	RowsWithheld      int
-	FieldsWithheld    int
-	FieldsUndeclared  int
-	EvidenceWithheld  int
-}
+type EmbeddedReport = contextfabric.EmbeddedSubjectReport
 
 // EmbeddedSubjectGate filters facts through the subject gate.
 type EmbeddedSubjectGate struct {
@@ -91,14 +70,6 @@ func NewEmbeddedSubjectGate(gate *SubjectGate) *EmbeddedSubjectGate {
 	return &EmbeddedSubjectGate{gate: gate}
 }
 
-type embeddedRef struct {
-	kind      contextfabric.SubjectKind
-	canonical string
-	opaque    bool
-}
-
-func (r embeddedRef) key() string { return string(r.kind) + "\x00" + r.canonical }
-
 // Filter applies the gate to facts read for roots. capabilities are the
 // registry's declarations by kind. The roots value must have been issued to
 // principal by the subject gate.
@@ -106,351 +77,16 @@ func (g *EmbeddedSubjectGate) Filter(ctx context.Context, principal storage.Prin
 	if !roots.IssuedTo(principal) || roots.Len() == 0 {
 		return nil, EmbeddedReport{}, ErrUngatedRead
 	}
-	restricted := ClassifyPrincipal(principal) == ClassRestricted
-	admitted := map[string]bool{}
-	for _, root := range roots.Subjects() {
-		admitted[string(root.Kind)+"\x00"+root.CanonicalID] = true
-	}
-	// Pass 1: collect every reference the facts name.
-	pending := map[string]contextfabric.SubjectRef{}
-	var report EmbeddedReport
-	visit := func(fact contextfabric.CanonicalFact, ref embeddedRef, ok bool) {
-		report.ReferencesChecked++
-		if !ok || ref.opaque {
-			return
-		}
-		if _, decided := admitted[ref.key()]; decided {
-			return
-		}
-		pending[ref.key()] = contextfabric.SubjectRef{Kind: ref.kind, CanonicalID: ref.canonical}
-	}
-	for _, fact := range facts {
-		capability := capabilities[fact.Kind]
-		forEachReference(fact, capability, visit)
-	}
-	if len(pending) > 0 {
-		if g == nil || g.gate == nil {
-			return nil, report, ErrEmbeddedGateUnavailable
-		}
-		keys := make([]string, 0, len(pending))
-		for key := range pending {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for start := 0; start < len(keys); start += MaxSubjectsPerRequest {
-			end := min(start+MaxSubjectsPerRequest, len(keys))
-			batch := make([]contextfabric.SubjectRef, 0, end-start)
-			for _, key := range keys[start:end] {
-				batch = append(batch, pending[key])
-			}
+	var authorize contextfabric.EmbeddedSubjectAuthorizeFunc
+	if g != nil && g.gate != nil {
+		authorize = func(ctx context.Context, batch []contextfabric.SubjectRef) ([]contextfabric.SubjectRef, error) {
 			granted, decision := g.gate.Authorize(ctx, principal, batch)
 			if decision.Decision == DecisionUnavailable {
-				return nil, report, fmt.Errorf("%w: %s", ErrEmbeddedGateUnavailable, decision.Reason)
+				return nil, fmt.Errorf("%s", decision.Reason)
 			}
-			for _, subject := range batch {
-				admitted[string(subject.Kind)+"\x00"+subject.CanonicalID] = false
-			}
-			for _, subject := range granted.Subjects() {
-				admitted[string(subject.Kind)+"\x00"+subject.CanonicalID] = true
-			}
+			return granted.Subjects(), nil
 		}
 	}
-	allows := func(ref embeddedRef, ok bool) bool {
-		if !ok || ref.opaque {
-			return !restricted
-		}
-		return admitted[ref.key()]
-	}
-	// Pass 2: remove what names a refused subject or is undeclared.
-	out := make([]GatedFact, 0, len(facts))
-	for _, fact := range facts {
-		capability := capabilities[fact.Kind]
-		gated := filterFact(fact, capability, allows)
-		report.RowsWithheld += sumCounts(gated.RowsWithheld)
-		report.FieldsWithheld += len(gated.FieldsWithheld)
-		report.FieldsUndeclared += len(gated.FieldsUndeclared)
-		for _, columns := range gated.ColumnsUndeclared {
-			report.FieldsUndeclared += len(columns)
-		}
-		report.EvidenceWithheld += gated.EvidenceWithheld
-		out = append(out, gated)
-	}
-	for key, ok := range admitted {
-		if !ok && pending[key].CanonicalID != "" {
-			report.ReferencesRefused++
-		}
-	}
-	return out, report, nil
-}
-
-func sumCounts(counts map[string]int) int {
-	total := 0
-	for _, n := range counts {
-		total += n
-	}
-	return total
-}
-
-// forEachReference calls visit for every declared reference in fact:
-// scalar fields, table cells and evidence references.
-func forEachReference(fact contextfabric.CanonicalFact, capability contextfabric.FactCapability, visit func(contextfabric.CanonicalFact, embeddedRef, bool)) {
-	for name, value := range fact.Fields {
-		declaration, declared := capability.FieldDeclaration(name, fact.Subject.Kind)
-		if !declared {
-			continue
-		}
-		if declaration.SubjectRef != nil && value.String != nil {
-			ref, ok := resolveReference(*declaration.SubjectRef, nil, *value.String)
-			visit(fact, ref, ok)
-		}
-		if declaration.Type == contextfabric.FactFieldTable {
-			for _, row := range value.Rows {
-				for column, cell := range row.Fields {
-					columnDeclaration, ok := declaration.Column(column)
-					if !ok || columnDeclaration.SubjectRef == nil || cell.String == nil {
-						continue
-					}
-					ref, resolved := resolveReference(*columnDeclaration.SubjectRef, row.Fields, *cell.String)
-					visit(fact, ref, resolved)
-				}
-			}
-		}
-	}
-	for _, id := range fact.EvidenceRefIDs {
-		ref, ok, own := resolveEvidence(fact.Subject, id)
-		if own {
-			continue
-		}
-		visit(fact, ref, ok)
-	}
-}
-
-func resolveReference(declaration contextfabric.FactSubjectRefDeclaration, row map[string]contextfabric.FactValue, raw string) (embeddedRef, bool) {
-	kind, form, ok := declaration.Resolve(row)
-	if !ok {
-		return embeddedRef{}, false
-	}
-	if form == contextfabric.FactSubjectIDOpaque {
-		return embeddedRef{kind: kind, opaque: true}, true
-	}
-	canonical, ok := form.CanonicalSubjectID(raw)
-	if !ok {
-		return embeddedRef{}, false
-	}
-	return embeddedRef{kind: kind, canonical: canonical}, true
-}
-
-// resolveEvidence maps an evidence reference to a subject. own is true when
-// the reference is the fact's own subject (a provider cites the subject it
-// answered for), which the root gate already admitted.
-func resolveEvidence(subject contextfabric.SubjectRef, id string) (ref embeddedRef, ok bool, own bool) {
-	rest, found := strings.CutPrefix(id, contractsv1.ContextFabricEvidenceRefPrefix)
-	if !found {
-		return embeddedRef{}, false, false
-	}
-	entity, raw, found := strings.Cut(rest, ":")
-	if !found || raw == "" {
-		return embeddedRef{}, false, false
-	}
-	var kind contextfabric.SubjectKind
-	var form contextfabric.FactSubjectIDForm
-	switch contractsv1.ContextFabricEvidenceEntityType(entity) {
-	case contractsv1.ContextFabricEvidenceEntityRepository:
-		kind, form = contractsv1.ContextFabricSubjectRepository, contextfabric.FactSubjectIDRepositoryUUID
-	case contractsv1.ContextFabricEvidenceEntityTeam:
-		kind, form = contractsv1.ContextFabricSubjectTeam, contextfabric.FactSubjectIDTeamID
-	case contractsv1.ContextFabricEvidenceEntityProject:
-		// A project's evidence id is its "<provider>:<id>" key; its
-		// canonical id is derived from the same two segments. The
-		// reference is compared with the fact's subject by that derived
-		// id and otherwise gated like any other project -- never assumed
-		// to be the fact's own because the kinds match (codex r1 P1).
-		provider, id, split := strings.Cut(raw, ":")
-		if !split || provider == "" || id == "" {
-			return embeddedRef{}, false, false
-		}
-		canonical, omitted, err := identity.Derive(identity.KindProject, []string{provider, id}, nil)
-		if err != nil || omitted {
-			return embeddedRef{}, false, false
-		}
-		if subject.Kind == contractsv1.ContextFabricSubjectProject && canonical == subject.CanonicalID {
-			return embeddedRef{}, true, true
-		}
-		return embeddedRef{kind: contractsv1.ContextFabricSubjectProject, canonical: canonical}, true, false
-	case contractsv1.ContextFabricEvidenceEntityOrganization:
-		// Gated by the organization rule (only the caller's own
-		// organization), never assumed own.
-		return embeddedRef{kind: contractsv1.ContextFabricSubjectOrganization, canonical: raw}, true, false
-	// Entity evidence (CHAOS-7120). Each form maps DETERMINISTICALLY to the
-	// canonical id the graph stores for that entity, which is then compared
-	// with the fact's own subject or gated like any other subject -- never
-	// assumed own because the kinds match (codex r1 P1 on CHAOS-7073).
-	case contractsv1.ContextFabricEvidenceEntityWorkItem:
-		return resolveRepoScopedEvidence(subject, raw, identity.KindWorkItem, contractsv1.ContextFabricSubjectWorkItem)
-	case contractsv1.ContextFabricEvidenceEntityCI:
-		return resolveRepoScopedEvidence(subject, raw, identity.KindCIPipelineRun, contractsv1.ContextFabricSubjectCIRun)
-	case contractsv1.ContextFabricEvidenceEntityDeployment:
-		return resolveRepoScopedEvidence(subject, raw, identity.KindDeployment, contractsv1.ContextFabricSubjectDeployment)
-	case contractsv1.ContextFabricEvidenceEntityPullRequest:
-		// "<repo_id>:<number>"; the stored id is "pull_request:<repo_id>:<number>"
-		// (devhealthsource/tables.go queryPullRequests).
-		repo, number, split := strings.Cut(raw, ":")
-		if !split || repo == "" || !decimalDigits(number) {
-			return embeddedRef{}, false, false
-		}
-		return ownOrGated(subject, contractsv1.ContextFabricSubjectPullRequest, "pull_request:"+raw)
-	case contractsv1.ContextFabricEvidenceEntityIncident:
-		// "<incident_id>"; the stored id is "incident:<incident_id>"
-		// (devhealthsource/tables.go queryIncidents).
-		return ownOrGated(subject, contractsv1.ContextFabricSubjectIncident, "incident:"+raw)
-	case contractsv1.ContextFabricEvidenceEntityReview:
-		// "<repo_id>:<review_id>" lacks the pull request number the stored
-		// id carries, so no canonical id can be derived. It is recognised
-		// only as the fact's OWN review, by the subject's own segments; any
-		// other review reference is unresolvable (withheld for a
-		// repository-restricted caller).
-		if subject.Kind == contractsv1.ContextFabricSubjectPullRequestReview {
-			if segments, parsed := identity.Segments(identity.KindPullRequestReview, subject.CanonicalID); parsed && len(segments) == 3 &&
-				segments[0] != "" && segments[2] != "" && raw == segments[0]+":"+segments[2] {
-				return embeddedRef{}, true, true
-			}
-		}
-		return embeddedRef{}, false, false
-	default:
-		// Evidence that names no subject the gate can decide (a work item
-		// dependency edge, a commit, a file) is opaque: withheld for a
-		// repository-restricted caller.
-		return embeddedRef{opaque: true}, true, false
-	}
-	canonical, mapped := form.CanonicalSubjectID(raw)
-	if !mapped {
-		return embeddedRef{}, false, false
-	}
-	if kind == subject.Kind && canonical == subject.CanonicalID {
-		return embeddedRef{}, true, true
-	}
-	return embeddedRef{kind: kind, canonical: canonical}, true, false
-}
-
-// resolveRepoScopedEvidence maps "<repo_id>:<entity_id>" evidence to the
-// v2 canonical id of kind. The repository uuid carries no ':', so the raw
-// value is cut at its FIRST colon; the entity id may contain more.
-func resolveRepoScopedEvidence(subject contextfabric.SubjectRef, raw, kind string, subjectKind contextfabric.SubjectKind) (embeddedRef, bool, bool) {
-	repo, id, split := strings.Cut(raw, ":")
-	if !split || repo == "" || id == "" {
-		return embeddedRef{}, false, false
-	}
-	canonical, omitted, err := identity.Derive(kind, []string{repo, id}, nil)
-	if err != nil || omitted {
-		return embeddedRef{}, false, false
-	}
-	return ownOrGated(subject, subjectKind, canonical)
-}
-
-// ownOrGated reports a reference as the fact's own when it is exactly the
-// fact's subject, and otherwise returns it for the subject gate.
-func ownOrGated(subject contextfabric.SubjectRef, kind contextfabric.SubjectKind, canonical string) (embeddedRef, bool, bool) {
-	if subject.Kind == kind && subject.CanonicalID == canonical {
-		return embeddedRef{}, true, true
-	}
-	return embeddedRef{kind: kind, canonical: canonical}, true, false
-}
-
-func decimalDigits(value string) bool {
-	if value == "" {
-		return false
-	}
-	for _, r := range value {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
-}
-
-func filterFact(fact contextfabric.CanonicalFact, capability contextfabric.FactCapability, allows func(embeddedRef, bool) bool) GatedFact {
-	gated := GatedFact{
-		RowsWithheld:      map[string]int{},
-		ColumnsUndeclared: map[string][]string{},
-	}
-	fields := make(map[string]contextfabric.FactValue, len(fact.Fields))
-	for name, value := range fact.Fields {
-		declaration, declared := capability.FieldDeclaration(name, fact.Subject.Kind)
-		if !declared {
-			gated.FieldsUndeclared = append(gated.FieldsUndeclared, name)
-			continue
-		}
-		if declaration.SubjectRef != nil && value.String != nil {
-			ref, ok := resolveReference(*declaration.SubjectRef, nil, *value.String)
-			if !allows(ref, ok) {
-				gated.FieldsWithheld = append(gated.FieldsWithheld, name)
-				continue
-			}
-		}
-		if declaration.Type == contextfabric.FactFieldTable && value.Rows != nil {
-			value = filterTable(name, declaration, value, allows, &gated)
-		}
-		fields[name] = value
-	}
-	sort.Strings(gated.FieldsUndeclared)
-	sort.Strings(gated.FieldsWithheld)
-	evidence := make([]string, 0, len(fact.EvidenceRefIDs))
-	for _, id := range fact.EvidenceRefIDs {
-		ref, ok, own := resolveEvidence(fact.Subject, id)
-		if !own && !allows(ref, ok) {
-			gated.EvidenceWithheld++
-			continue
-		}
-		evidence = append(evidence, id)
-	}
-	fact.Fields = fields
-	fact.EvidenceRefIDs = evidence
-	gated.Fact = fact
-	return gated
-}
-
-func filterTable(name string, declaration contextfabric.FactFieldDeclaration, value contextfabric.FactValue, allows func(embeddedRef, bool) bool, gated *GatedFact) contextfabric.FactValue {
-	undeclared := map[string]struct{}{}
-	rows := make([]contextfabric.FactValueRow, 0, len(value.Rows))
-	for _, row := range value.Rows {
-		keep := true
-		cells := make(map[string]contextfabric.FactValue, len(row.Fields))
-		for column, cell := range row.Fields {
-			columnDeclaration, ok := declaration.Column(column)
-			if !ok {
-				undeclared[column] = struct{}{}
-				continue
-			}
-			if columnDeclaration.SubjectRef != nil && !cell.Null {
-				raw := ""
-				if cell.String != nil {
-					raw = *cell.String
-				}
-				ref, resolved := resolveReference(*columnDeclaration.SubjectRef, row.Fields, raw)
-				if !allows(ref, resolved) {
-					keep = false
-					break
-				}
-			}
-			cells[column] = cell
-		}
-		if !keep {
-			gated.RowsWithheld[name]++
-			continue
-		}
-		rows = append(rows, contextfabric.FactValueRow{Fields: cells})
-	}
-	if len(undeclared) > 0 {
-		for column := range undeclared {
-			gated.ColumnsUndeclared[name] = append(gated.ColumnsUndeclared[name], column)
-		}
-		sort.Strings(gated.ColumnsUndeclared[name])
-	}
-	out := contextfabric.FactValue{Rows: rows}
-	if value.Table != nil {
-		table := *value.Table
-		table.Rows = rows
-		out.Table = &table
-	}
-	return out
+	restricted := ClassifyPrincipal(principal) == ClassRestricted
+	return contextfabric.FilterEmbeddedSubjects(ctx, contextfabric.EmbeddedFilterOptions{Restricted: restricted, BatchSize: MaxSubjectsPerRequest}, roots.Subjects(), facts, capabilities, authorize)
 }

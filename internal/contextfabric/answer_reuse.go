@@ -517,6 +517,10 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 	// condition 6 re-resolves every subject against the candidate's own
 	// stored Interpretation.
 	timeAxisKey := composeTimeAxisKey(TimeAxisKeyFor(effectiveTimeContext), windowKey)
+	// CHAOS-7127: a restricted caller's answers are built from gated facts;
+	// its key carries its grant, so no answer is reused across grants. The
+	// same widening runs in saveResult.
+	timeAxisKey = grantScopedTimeAxisKey(principal, timeAxisKey)
 	if timeAxisKey == "" {
 		// A historical context missing its own required bounds. Fail
 		// closed rather than key it as anything -- see TimeAxisKeyFor.
