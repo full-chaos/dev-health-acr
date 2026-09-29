@@ -75,7 +75,8 @@ func isTransportFailure(err error) bool {
 		errors.Is(err, context.DeadlineExceeded),
 		errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF),
 		errors.Is(err, syscall.ECONNREFUSED), errors.Is(err, syscall.ECONNRESET),
-		errors.Is(err, syscall.EPIPE), errors.Is(err, syscall.ETIMEDOUT):
+		errors.Is(err, syscall.EPIPE), errors.Is(err, syscall.ETIMEDOUT),
+		errors.Is(err, syscall.EHOSTUNREACH), errors.Is(err, syscall.ENETUNREACH):
 		return true
 	}
 	return false
