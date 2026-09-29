@@ -172,12 +172,13 @@ func (o SlogObserver) ObserveProjectionDrain(outcome DrainOutcome) {
 		logger.Info("context_fabric: projection tick drained multiple batches", attrs...)
 		return
 	}
-	// A source that ends its tick on budget_exceeded still had work available:
-	// a backlog. With Applied <= 1 that is the starvation shape (a source
+	// budget_exceeded means work was still available: a backlog. With
+	// Applied > 1 that is healthy progress (the multi-batch line above); with
+	// Applied <= 1 it is the starvation shape (a source
 	// pulling one page per tick while its backlog stays), which must be
 	// visible at Info. Closed vocabulary only: the reason attr above.
-	if outcome.YieldReason == DrainYieldBudgetExceeded {
-		logger.Info("context_fabric: projection tick yielded with backlog remaining", attrs...)
+	if outcome.YieldReason == DrainYieldBudgetExceeded && outcome.Applied <= 1 {
+		logger.Info("context_fabric: projection tick starved with backlog remaining", attrs...)
 		return
 	}
 	logger.Debug("context_fabric: projection tick drain summary", attrs...)

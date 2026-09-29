@@ -282,8 +282,12 @@ func TestChaos7179_DrainBudgetExceededLogsAtInfoAndHealthyStaysDebug(t *testing.
 	}
 
 	starved := level(DrainOutcome{OrgID: "org_1", Source: "teams_projects", Batches: 1, Applied: 1, YieldReason: DrainYieldBudgetExceeded, Duration: time.Second})
-	if starved["level"] != "INFO" || starved["drain_yield_reason"] != string(DrainYieldBudgetExceeded) {
+	if starved["msg"] != "context_fabric: projection tick starved with backlog remaining" || starved["level"] != "INFO" || starved["drain_yield_reason"] != string(DrainYieldBudgetExceeded) {
 		t.Fatalf("budget_exceeded with Applied<=1 must log at INFO with its reason: %v", starved)
+	}
+	progressing := level(DrainOutcome{OrgID: "org_1", Source: "big", Batches: 11, Applied: 11, YieldReason: DrainYieldBudgetExceeded, Duration: time.Second})
+	if progressing["level"] != "INFO" || progressing["msg"] != "context_fabric: projection tick drained multiple batches" {
+		t.Fatalf("budget_exceeded with Applied>1 is the multi-batch drain line, not the starvation line: %v", progressing)
 	}
 	healthy := level(DrainOutcome{OrgID: "org_1", Source: "teams_projects", Batches: 2, Applied: 1, YieldReason: DrainYieldExhausted, Duration: time.Second})
 	if healthy["level"] != "DEBUG" {
