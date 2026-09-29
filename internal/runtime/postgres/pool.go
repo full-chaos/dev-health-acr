@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -23,6 +24,28 @@ const (
 // ErrUnavailable is returned (by identity, message unchanged) when the
 // PostgreSQL ping fails; callers classify with errors.Is, never by text.
 var ErrUnavailable = errors.New("PostgreSQL is unavailable")
+
+// ErrRejected is returned when the server answered the connection attempt
+// with a permanent SQLSTATE (authentication failed, database missing, role
+// not permitted, ...). Retrying cannot fix it, so callers must not.
+var ErrRejected = errors.New("PostgreSQL rejected the connection")
+
+// classifyPingError separates "could not reach / server not ready" (retryable:
+// no server answer, or SQLSTATE class 08 connection exception, 53 insufficient
+// resources, 57 operator intervention such as 57P03 starting up) from a
+// permanent server answer. The cause text is dropped on purpose: it can carry
+// role and database names.
+func classifyPingError(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && len(pgErr.Code) >= 2 {
+		switch pgErr.Code[:2] {
+		case "08", "53", "57":
+			return ErrUnavailable
+		}
+		return ErrRejected
+	}
+	return ErrUnavailable
+}
 
 var ErrTransactionPooler = errors.New("PostgreSQL transaction pooler is not supported")
 
@@ -54,7 +77,7 @@ func Open(ctx context.Context, config Config) (*sql.DB, error) {
 	defer cancel()
 	if err := db.PingContext(pingContext); err != nil {
 		db.Close()
-		return nil, ErrUnavailable
+		return nil, classifyPingError(err)
 	}
 	if config.PoolerAdminDSN != "" {
 		probe := poolerProbe{adminDSN: config.PoolerAdminDSN, database: parsed.Database, user: parsed.User, timeout: config.PingTimeout}

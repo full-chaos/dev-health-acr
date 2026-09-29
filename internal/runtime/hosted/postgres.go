@@ -64,17 +64,52 @@ func openPostgresWithRetry(ctx context.Context, cfg runtimepostgres.Config, atte
 			return database, nil
 		}
 		lastErr = err
-		if !errors.Is(err, runtimepostgres.ErrUnavailable) || attempt == attempts {
-			break
+		retryable := errors.Is(err, runtimepostgres.ErrUnavailable)
+		outcome := postgresStartupOutcomeRetrying
+		switch {
+		case !retryable:
+			outcome = postgresStartupOutcomeNotRetryable
+		case attempt == attempts:
+			outcome = postgresStartupOutcomeExhausted
 		}
+		// One Warn per FAILED attempt, including the terminal one, so the
+		// log line count always equals the number of attempts the server saw.
 		if logger != nil {
-			logger.WarnContext(ctx, postgresStartupAttemptEvent, "attempt", attempt, "max_attempts", attempts, "backoff_ms", backoff.Milliseconds(), "failure_class", postgresStartupFailureClass)
+			logger.WarnContext(ctx, postgresStartupAttemptEvent, "attempt", attempt, "max_attempts", attempts, "outcome", outcome, "failure_class", postgresFailureClass(err), "backoff_ms", backoffMillis(outcome, backoff))
+		}
+		if outcome != postgresStartupOutcomeRetrying {
+			break
 		}
 		if serr := postgresOpenSleep(ctx, backoff); serr != nil {
 			return nil, lastErr
 		}
 	}
 	return nil, lastErr
+}
+
+// Closed vocabularies for the startup attempt event.
+const (
+	postgresStartupOutcomeRetrying     = "retrying"
+	postgresStartupOutcomeExhausted    = "exhausted"
+	postgresStartupOutcomeNotRetryable = "not_retryable"
+)
+
+func postgresFailureClass(err error) string {
+	switch {
+	case errors.Is(err, runtimepostgres.ErrUnavailable):
+		return "postgres_unavailable"
+	case errors.Is(err, runtimepostgres.ErrRejected):
+		return "postgres_rejected"
+	default:
+		return "postgres_other"
+	}
+}
+
+func backoffMillis(outcome string, backoff time.Duration) int64 {
+	if outcome != postgresStartupOutcomeRetrying {
+		return 0
+	}
+	return backoff.Milliseconds()
 }
 
 func openPostgres(ctx context.Context, cfg config.Config, logger *slog.Logger) (postgresComponents, error) {

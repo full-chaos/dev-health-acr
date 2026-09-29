@@ -5,8 +5,15 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net"
+	"reflect"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgproto3"
 
 	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
 )
@@ -104,5 +111,105 @@ func TestChaos7168_RealOpenErrorSurvivesWrappingAndIsRetried(t *testing.T) {
 	cfg := runtimepostgres.Config{DSN: "postgres://u:p@127.0.0.1:1/db?sslmode=disable&connect_timeout=1", PingTimeout: 500 * time.Millisecond}
 	if _, err := openPostgresWithRetry(context.Background(), cfg, 3, time.Millisecond, nil); !errors.Is(err, runtimepostgres.ErrUnavailable) || calls != 3 {
 		t.Fatalf("want 3 attempts and ErrUnavailable through the chain, got err=%v calls=%d", err, calls)
+	}
+}
+
+type captureHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *captureHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r)
+	return nil
+}
+func (h *captureHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *captureHandler) WithGroup(string) slog.Handler      { return h }
+
+func attemptEvents(h *captureHandler) (outcomes, classes []string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, r := range h.records {
+		if r.Message != postgresStartupAttemptEvent {
+			continue
+		}
+		r.Attrs(func(a slog.Attr) bool {
+			switch a.Key {
+			case "outcome":
+				outcomes = append(outcomes, a.Value.String())
+			case "failure_class":
+				classes = append(classes, a.Value.String())
+			}
+			return true
+		})
+	}
+	return outcomes, classes
+}
+
+// Review P1: the terminal attempt is a FAILED attempt and must be logged, so
+// the number of events equals the number of attempts the server saw.
+func TestChaos7168_EveryFailedAttemptIsLoggedIncludingTheTerminalOne(t *testing.T) {
+	stubPostgresOpen(t, func(context.Context, runtimepostgres.Config) (*sql.DB, error) {
+		return nil, runtimepostgres.ErrUnavailable
+	})
+	h := &captureHandler{}
+	_, err := openPostgresWithRetry(context.Background(), runtimepostgres.Config{}, 3, time.Millisecond, slog.New(h))
+	outcomes, classes := attemptEvents(h)
+	if err == nil || !reflect.DeepEqual(outcomes, []string{"retrying", "retrying", "exhausted"}) || !reflect.DeepEqual(classes, []string{"postgres_unavailable", "postgres_unavailable", "postgres_unavailable"}) {
+		t.Fatalf("want 3 events retrying,retrying,exhausted; got err=%v outcomes=%v classes=%v", err, outcomes, classes)
+	}
+}
+
+// fakeHostedPostgres answers every connection with a fatal ErrorResponse.
+func fakeHostedPostgres(t *testing.T, sqlState string) (dsn string, connections *atomic.Int32) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	connections = &atomic.Int32{}
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			connections.Add(1)
+			go func() {
+				defer conn.Close()
+				backend := pgproto3.NewBackend(conn, conn)
+				if _, err := backend.ReceiveStartupMessage(); err != nil {
+					return
+				}
+				backend.Send(&pgproto3.ErrorResponse{Severity: "FATAL", Code: sqlState, Message: "fake"})
+				_ = backend.Flush()
+			}()
+		}
+	}()
+	return "postgres://u:p@" + listener.Addr().String() + "/db?sslmode=disable", connections
+}
+
+// Review P1: a credential rejection through the REAL Open must not be retried
+// (the server must see exactly one connection) and must be logged once.
+func TestChaos7168_RealAuthRejectionIsNotRetriedAndIsLogged(t *testing.T) {
+	dsn, connections := fakeHostedPostgres(t, "28P01")
+	h := &captureHandler{}
+	_, err := openPostgresWithRetry(context.Background(), runtimepostgres.Config{DSN: dsn, PingTimeout: 2 * time.Second}, 3, time.Millisecond, slog.New(h))
+	outcomes, classes := attemptEvents(h)
+	if !errors.Is(err, runtimepostgres.ErrRejected) || connections.Load() != 1 || !reflect.DeepEqual(outcomes, []string{"not_retryable"}) || !reflect.DeepEqual(classes, []string{"postgres_rejected"}) {
+		t.Fatalf("want 1 connection, ErrRejected, one not_retryable event; got err=%v conns=%d outcomes=%v classes=%v", err, connections.Load(), outcomes, classes)
+	}
+}
+
+// A server that is starting up (57P03) IS retried through the real Open.
+func TestChaos7168_RealStartingUpAnswerIsRetriedToTheBound(t *testing.T) {
+	dsn, connections := fakeHostedPostgres(t, "57P03")
+	_, err := openPostgresWithRetry(context.Background(), runtimepostgres.Config{DSN: dsn, PingTimeout: 2 * time.Second}, 3, time.Millisecond, nil)
+	if !errors.Is(err, runtimepostgres.ErrUnavailable) || connections.Load() != 3 {
+		t.Fatalf("want 3 connections and ErrUnavailable, got err=%v conns=%d", err, connections.Load())
 	}
 }
