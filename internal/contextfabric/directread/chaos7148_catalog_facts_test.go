@@ -1,6 +1,7 @@
 package directread
 
 import (
+	"slices"
 	"sort"
 	"testing"
 
@@ -41,8 +42,17 @@ func TestChaos7148CatalogFactKindsEqualWhatReadFactsServes(t *testing.T) {
 	listed := map[string]bool{}
 	for _, entry := range catalog.Facts.Kinds {
 		listed[entry.Kind] = true
-		if len(entry.Fields) == 0 || len(entry.SubjectKinds) == 0 {
-			t.Fatalf("kind %s lists no fields or subject kinds: %+v", entry.Kind, entry)
+		capability := byKind[contextfabric.FactKind(entry.Kind)]
+		var wantFields, wantSubjects []string
+		for _, field := range capability.Fields {
+			wantFields = append(wantFields, field.Name)
+		}
+		for _, subject := range capability.SupportedSubjectKinds {
+			wantSubjects = append(wantSubjects, string(subject))
+		}
+		sort.Strings(wantSubjects)
+		if len(wantFields) == 0 || len(wantSubjects) == 0 || !slices.Equal(entry.Fields, wantFields) || !slices.Equal(entry.SubjectKinds, wantSubjects) {
+			t.Fatalf("kind %s entry %+v differs from its declaration fields=%v subjects=%v", entry.Kind, entry, wantFields, wantSubjects)
 		}
 	}
 	// read_facts side: ask its own validate about every registered kind.
@@ -92,9 +102,14 @@ func TestChaos7148CatalogFactsSectionIsTheSameForEveryGrantClass(t *testing.T) {
 		t.Fatalf("restricted %d kinds vs unrestricted %d", len(restricted.Kinds), len(unrestricted.Kinds))
 	}
 	for i := range restricted.Kinds {
-		if restricted.Kinds[i].Kind != unrestricted.Kinds[i].Kind {
-			t.Fatalf("kind %d differs", i)
+		if !slices.Equal(restricted.Kinds[i].Fields, unrestricted.Kinds[i].Fields) || restricted.Kinds[i].Kind != unrestricted.Kinds[i].Kind || !slices.Equal(restricted.Kinds[i].SubjectKinds, unrestricted.Kinds[i].SubjectKinds) {
+			t.Fatalf("kind %d differs between grant classes", i)
 		}
+	}
+	// A caller without data:read sees the same facts section.
+	noData := BuildDataCatalog(nil, CatalogCaller{PrincipalClass: ClassRestricted, Scopes: []string{"context:read"}, FactsServable: true, FactCapabilities: capabilities}, []string{CatalogSectionFacts}).Facts
+	if len(noData.Kinds) != len(unrestricted.Kinds) || !noData.Served {
+		t.Fatalf("no-data:read caller sees %+v", noData)
 	}
 }
 
@@ -103,8 +118,14 @@ func TestChaos7148CatalogSaysNotAvailableOnlyWhenReadFactsIsNotWired(t *testing.
 	if catalog.Facts.Served || catalog.Facts.Note != CatalogFactsNote || len(catalog.Facts.Kinds) != 0 {
 		t.Fatalf("unwired: %+v", catalog.Facts)
 	}
+	// A composed reader whose registry lists nothing servable answers every
+	// read_facts call as unavailable or refused: never "served".
 	empty := factsCatalogFor(ClassUnrestricted, nil, true)
-	if !empty.Facts.Served {
-		t.Fatalf("wired reader with an empty registry must still say served: %+v", empty.Facts)
+	if empty.Facts.Served || empty.Facts.Note != CatalogFactsNote || len(empty.Facts.Kinds) != 0 {
+		t.Fatalf("reader with no servable kind must say not available: %+v", empty.Facts)
+	}
+	noFields := []contextfabric.FactCapability{{Kind: contextfabric.FactHealth}}
+	if got := factsCatalogFor(ClassUnrestricted, noFields, true).Facts; got.Served {
+		t.Fatalf("a kind with no declared fields is refused by read_facts, so it cannot make the section served: %+v", got)
 	}
 }

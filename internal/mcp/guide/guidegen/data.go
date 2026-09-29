@@ -120,7 +120,7 @@ var DataExamples = []DataExample{
 	},
 	{
 		Title: "Where does the organization put its effort, by theme?",
-		Note:  "Investment is served here only org-wide, by theme, subcategory or work type. A team or repository investment shape is refused with `basis_dependent_shape`: use `read_facts` when it ships (it is not in this release). Do not work around the refusal.",
+		Note:  "Investment is served here only org-wide, by theme, subcategory or work type. A team or repository investment shape is refused with `basis_dependent_shape`: use `read_facts` if your `tools/list` offers it (the `facts` section of `data_catalog` lists its kinds). Do not work around the refusal.",
 		Calls: []DataExampleCall{
 			{Tool: "run_operation", Args: `{"operation":"catalogValues","variables":{"dimension":"THEME"}}`, Comment: "the theme values that exist"},
 			{Tool: "run_operation", Args: `{"operation":"investmentBreakdown","variables":{"batch":{"breakdowns":[{"dimension":"THEME","measure":"COUNT","dateRange":{"startDate":"2026-06-29","endDate":"2026-09-28"},"topN":10}]}}}`, Comment: "the org-wide mix by theme"},

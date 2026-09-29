@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 )
 
 // CHAOS-7148: the data_catalog route and the read_facts route agree. With no
@@ -38,6 +39,17 @@ func TestChaos7148CatalogAgreesWithReadFactsRoute(t *testing.T) {
 	}
 	if h.postFacts(token, chaos7073ValidBody).Code != http.StatusServiceUnavailable {
 		t.Fatal("read_facts must be 503 with no reader")
+	}
+
+	// A composed reader object with no fact source: read_facts answers 503,
+	// so the catalog must not say served.
+	h.app.runtime.DirectReadGate = directread.NewSubjectGate(admitAllGraph{}, nil)
+	h.app.runtime.DirectFactReader = directread.NewFactReader(nil)
+	if got := facts(); got["served"] != false || got["kinds"] != nil {
+		t.Fatalf("reader without a source but catalog says served: %v", got)
+	}
+	if h.postFacts(token, chaos7073ValidBody).Code != http.StatusServiceUnavailable {
+		t.Fatal("read_facts must be 503 for a reader without a source")
 	}
 
 	setChaos7073Reader(t, h, admitAllGraph{}, chaos7073Provider{})

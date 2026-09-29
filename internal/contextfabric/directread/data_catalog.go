@@ -26,7 +26,7 @@ package directread
 //     from a second list. Kinds are not grant-filtered by read_facts (the
 //     subject gate filters subjects), so the list reveals nothing a
 //     restricted caller could not learn from a read_facts refusal. When
-//     read_facts is not wired the section says so in a note, never as an
+//     read_facts cannot serve any kind the section says so in a note, never as an
 //     empty list.
 //
 // No model is called and nothing is read from a store: the catalogue is a
@@ -118,8 +118,9 @@ type CatalogCaller struct {
 	// FactCapabilities is the registry read_facts serves, or nil when
 	// read_facts is not wired. Only DirectServable kinds are listed.
 	FactCapabilities []contextfabric.FactCapability
-	// FactsServable is true when read_facts is wired (a reader over the
-	// registry exists), even if it lists no direct-servable kind.
+	// FactsServable is true when a read_facts reader object is composed. The
+	// section still says "not available" unless the registry it reads lists
+	// at least one direct-servable kind.
 	FactsServable bool
 }
 
@@ -245,6 +246,12 @@ func buildCatalogFacts(caller CatalogCaller) *CatalogFacts {
 		kinds = append(kinds, entry)
 	}
 	sort.Slice(kinds, func(i, j int) bool { return kinds[i].Kind < kinds[j].Kind })
+	// A reader object with no source, or a source that lists nothing
+	// servable, answers every read_facts call as unavailable or refused:
+	// that is "not available", never "served" with an empty list.
+	if len(kinds) == 0 {
+		return &CatalogFacts{Served: false, Note: CatalogFactsNote}
+	}
 	return &CatalogFacts{Served: true, Note: CatalogFactsServedNote, Kinds: kinds}
 }
 

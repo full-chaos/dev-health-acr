@@ -1754,6 +1754,7 @@
                 "type": "array",
                 "items": {
                   "type": "object",
+                  "additionalProperties": false,
                   "required": ["kind", "subject_kinds", "fields"],
                   "properties": {
                     "kind": {"type": "string"},

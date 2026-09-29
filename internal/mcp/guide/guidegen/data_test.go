@@ -80,21 +80,21 @@ func TestDataGuideSaysWhichWayAndCarriesTheRules(t *testing.T) {
 		"If you are a model, plan the reads yourself",
 		"`run_operation` needs the `data:read` scope",
 		"More data tools are planned; none is named here until it ships.",
-		"use `read_facts` when it ships (it is not in this release)",
+		"use `read_facts` if your `tools/list` offers it (the `facts` section of `data_catalog` lists its kinds)",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the guide lacks %q", want)
 		}
 	}
 	// Only what exists is a callable: read_facts / read_relationships appear
-	// only in the "when it ships" sentence.
+	// only in the "if your tools/list offers it" sentence.
 	for _, tool := range []string{"read_relationships", "graphql_query", "read_rows", "plan_investigation"} {
 		if strings.Contains(text, tool) {
 			t.Errorf("the guide names %s, which does not exist in this release", tool)
 		}
 	}
 	if strings.Count(text, "read_facts") != 1 {
-		t.Errorf("read_facts appears %d times; it may appear once, as not yet shipped", strings.Count(text, "read_facts"))
+		t.Errorf("read_facts appears %d times; it may appear once, as offered only when tools/list lists it", strings.Count(text, "read_facts"))
 	}
 	if !strings.Contains(embeddedFiles(t)[FileQuestions], "`acr://guide/data`") {
 		t.Error("the questions guide does not point to acr://guide/data")

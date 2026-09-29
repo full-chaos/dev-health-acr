@@ -99,6 +99,6 @@
   ]
  },
  "notes": [
-  "facts: served by read_facts (not in this release)"
+  "facts: read_facts is not available in this deployment"
  ]
 }
