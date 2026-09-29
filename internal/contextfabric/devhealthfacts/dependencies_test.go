@@ -309,6 +309,11 @@ func TestRequiredChildrenProviderDedupesTwinRowsByCanonicalRelation(t *testing.T
 		t.Fatalf("ReadFacts() error = %v", err)
 	}
 	// relates+relates_to on WIDGET-200 -> 1; WIDGET-300 -> 1; distinct 'requires' -> 1; blocked_by -> 1, raw spelling kept.
+	// The surviving twin of an inverted pair is the first row the query returns,
+	// so the query must order them (CHAOS-7177 r2 P2): the fake ignores SQL.
+	if len(client.queries) == 0 || !strings.Contains(client.queries[0].statement, "ORDER BY d.target_work_item_id, lower(ifNull(d.relationship_type, ''))\nLIMIT") {
+		t.Fatalf("required-children query is not deterministically ordered: %#v", client.queries)
+	}
 	perTarget := map[string]int{}
 	relByTarget := map[string]string{}
 	for _, fact := range result.Facts {

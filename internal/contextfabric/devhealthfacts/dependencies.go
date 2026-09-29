@@ -228,7 +228,8 @@ FROM work_item_dependencies AS d FINAL
 INNER JOIN work_items AS s FINAL ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
 `+counterpartRepositoryJoinSQL("d.target_work_item_id")+`
 WHERE d.org_id = {org_id:String} AND concat(toString(s.repo_id), ':', d.source_work_item_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) != '`+blockerRelationshipType+`'
-  AND d.source_work_item_id IN `+authorized+` AND d.target_work_item_id IN `+authorized), settings)
+  AND d.source_work_item_id IN `+authorized+` AND d.target_work_item_id IN `+authorized+`
+ORDER BY d.target_work_item_id, lower(ifNull(d.relationship_type, ''))`), settings)
 	rowCount := 0
 	seenRelations := map[string]struct{}{}
 	scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadWorkItemRequiredChildren", statement, orgID, ids, func(row readers.RowScanner) error {
