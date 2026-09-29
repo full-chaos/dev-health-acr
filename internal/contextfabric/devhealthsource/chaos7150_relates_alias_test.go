@@ -102,6 +102,21 @@ func TestChaos7150RelatesMapsOnTheUnresolvedTargetBranch(t *testing.T) {
 	if len(batch.Relationships) != 1 || batch.Relationships[0].Type != contractsv1.ContextFabricRelationshipRelatesTo {
 		t.Fatalf("relationships: %+v", batch.Relationships)
 	}
+	edge := batch.Relationships[0]
+	// The id converges with the live lowercase relates_to row on this branch
+	// too, and the evidence ref keeps the RAW source spelling.
+	native := [][]any{unresolvedDependencyRow("WI-1", "EXT-1", "relates_to", at, created)}
+	nativeBatch, _, nativeErr, _ := projectWithQuarantineLog(t, dependencyTablesOnly(t, at, native), testCursor(t, at.Add(-time.Hour), ""))
+	if nativeErr != nil || len(nativeBatch.Relationships) != 1 {
+		t.Fatalf("native row: err=%v", nativeErr)
+	}
+	if edge.RelationshipID != nativeBatch.Relationships[0].RelationshipID {
+		t.Fatalf("unresolved branch: relates and relates_to must converge: %q vs %q", edge.RelationshipID, nativeBatch.Relationships[0].RelationshipID)
+	}
+	wantRef := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItemDependency, "repo-1:WI-1:EXT-1:relates")
+	if len(edge.EvidenceRefIDs) != 1 || edge.EvidenceRefIDs[0] != wantRef {
+		t.Fatalf("evidence ref must keep the raw spelling: got %v want %q", edge.EvidenceRefIDs, wantRef)
+	}
 }
 
 // The quarantine stays loud for a genuinely unknown type: the alias is one
