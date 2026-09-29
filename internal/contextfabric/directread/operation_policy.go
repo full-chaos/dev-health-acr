@@ -917,6 +917,13 @@ func (f *responseFilter) object(path string, obj map[string]any) map[string]any 
 func (f *responseFilter) value(path string, value any) (any, bool) {
 	leaf, isLeaf := f.op.outputs[path]
 	if leaf == LeafJSON {
+		// A free-JSON leaf is a written exception for a flat band -> number
+		// map (ops investment/response.go:34,46). Anything richer could carry
+		// a person field the path allowlist cannot see, so it is removed.
+		if value != nil && !flatNumberMap(value) {
+			f.remove(path)
+			return nil, false
+		}
 		return value, true
 	}
 	switch v := value.(type) {
@@ -1022,4 +1029,25 @@ func knownCallerClass(v CallerClass) bool {
 func knownConstraintKind(v ConstraintKind) bool {
 	vocab := ConstraintKindVocabulary()
 	return slices.Contains(vocab[:], v)
+}
+
+// flatNumberMap reports whether v is a JSON object whose keys are not
+// person-named and whose values are all numbers or null (depth one). It is
+// the only shape a free-JSON output leaf may have.
+func flatNumberMap(v any) bool {
+	obj, ok := v.(map[string]any)
+	if !ok {
+		return false
+	}
+	for key, value := range obj {
+		if IsPersonNamed(key) {
+			return false
+		}
+		switch value.(type) {
+		case nil, json.Number, float64:
+		default:
+			return false
+		}
+	}
+	return true
 }
