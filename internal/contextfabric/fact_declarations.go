@@ -171,8 +171,15 @@ type FactFieldDeclaration struct {
 	// Aggregate marks a scalar computed over every repository a team or
 	// project reaches (decision K2): a restricted caller gets it labelled,
 	// never recomputed.
-	Aggregate bool                    `json:"aggregate,omitempty"`
-	Columns   []FactColumnDeclaration `json:"columns,omitempty"`
+	Aggregate bool `json:"aggregate,omitempty"`
+	// CallerScoped marks a scalar the provider computes over only the items
+	// THIS caller is authorized for (the work-item authorization rule in
+	// SQL), so a repository-restricted caller receives its own subset, not
+	// the subject's whole population. It is served with a population-scope
+	// label, never unlabelled (CHAOS-7120 codex r1 P1). Mutually exclusive
+	// with Aggregate.
+	CallerScoped bool                    `json:"caller_scoped,omitempty"`
+	Columns      []FactColumnDeclaration `json:"columns,omitempty"`
 }
 
 // AppliesTo reports whether the declaration covers facts about kind.
@@ -286,6 +293,9 @@ func validateFieldDeclarations(capability FactCapability) error {
 		}
 		if err := validateSubjectRefDeclaration(field.SubjectRef, nil); err != nil {
 			return fmt.Errorf("fact field %s: %w", field.Name, err)
+		}
+		if field.Aggregate && field.CallerScoped {
+			return fmt.Errorf("fact field %s cannot be both aggregate and caller scoped", field.Name)
 		}
 		if field.Score {
 			if _, ok := tables[field.DriversTable]; !ok || field.DriversTable == "" {

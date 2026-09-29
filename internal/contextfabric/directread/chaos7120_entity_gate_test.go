@@ -279,3 +279,37 @@ func TestChaos7120ResolveEvidenceMapsEntityFormsExactly(t *testing.T) {
 		t.Errorf("dependency evidence = %+v ok=%v own=%v, want opaque", ref, ok, own)
 	}
 }
+
+// CHAOS-7120 codex r1 P1: a CallerScoped field is served with
+// population_scope "caller_authorized_items" and named in
+// population_scoped_fields; an unscoped fact carries no label.
+func TestChaos7120CallerScopedFieldsAreLabelled(t *testing.T) {
+	capability := contextfabric.FactCapability{
+		Kind: contextfabric.FactActualCompletion, Name: "completion_test", Version: "test.v1",
+		SupportedSubjectKinds: []contextfabric.SubjectKind{contractsv1.ContextFabricSubjectRepository},
+		RequiresEvidence:      true, Dimension: contextfabric.HealthDimensionCodeOwnershipRisk,
+		SubjectRoles: []contextfabric.FactRole{contextfabric.FactRoleSubject},
+		Fields: []contextfabric.FactFieldDeclaration{
+			{Name: "work_item_count", Type: contextfabric.FactFieldInteger, CallerScoped: true},
+			{Name: "rollup_basis", Type: contextfabric.FactFieldString},
+		},
+	}
+	provider := &stubProvider{capability: capability, read: func(query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+		return contextfabric.FactProviderResult{State: contextfabric.SourceAvailable, Facts: []contextfabric.CanonicalFact{{
+			Kind: contextfabric.FactActualCompletion, Subject: query.Subjects[0],
+			Fields:         map[string]contextfabric.FactValue{"work_item_count": intValue(2), "rollup_basis": strValue("x")},
+			EvidenceRefIDs: []string{contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, "a")}, SourceState: contextfabric.SourceAvailable}}}, nil
+	}}
+	response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(requestContext(), restrictedToA(), FactsRequest{
+		Kinds: []string{"actual_completion"}, Subjects: []RequestSubject{{Kind: "repository", CanonicalID: repoA.CanonicalID}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Facts) != 1 {
+		t.Fatalf("facts %d", len(response.Facts))
+	}
+	fact := response.Facts[0]
+	if fact.PopulationScope != "caller_authorized_items" || len(fact.PopulationScopedFields) != 1 || fact.PopulationScopedFields[0] != "work_item_count" {
+		t.Errorf("population label = %q %v, want caller_authorized_items over [work_item_count]", fact.PopulationScope, fact.PopulationScopedFields)
+	}
+}

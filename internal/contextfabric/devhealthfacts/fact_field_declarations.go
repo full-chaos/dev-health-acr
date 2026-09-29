@@ -56,6 +56,11 @@ func fTable(name string, columns ...columnDecl) fieldDecl {
 
 func declNullable(d fieldDecl) fieldDecl { d.Nullable = true; return d }
 func declFresh(d fieldDecl) fieldDecl    { d.Freshness = true; return d }
+
+// declCallerScoped marks a count computed over the caller's authorized items
+// only; it is served with a population-scope label.
+func declCallerScoped(d fieldDecl) fieldDecl { d.CallerScoped = true; return d }
+
 func declAggregate(d fieldDecl) fieldDecl {
 	d.Aggregate = true
 	return d
@@ -228,15 +233,18 @@ func actualCompletionFields() []fieldDecl {
 		// authorized for (the provider applies the work-item authorization
 		// rule in SQL), not over every item the project reaches: they are
 		// not Aggregate, and a restricted caller gets its own population.
+		// They are CallerScoped: served with population_scope
+		// "caller_authorized_items" so a client never reads a restricted
+		// caller's subset as the project-wide ratio (codex r1 P1).
 		declOn(declProjectOnly,
 			fStr("rollup_basis"),
 			fStr("member_kind"),
-			fInt("work_item_count", "count"),
-			fInt("cancelled_count", "count"),
-			fInt("unknown_status_count", "count"),
-			fInt("counted_work_items", "count"),
-			fInt("completed_count", "count"),
-			fNum("completion_ratio", "ratio"),
+			declCallerScoped(fInt("work_item_count", "count")),
+			declCallerScoped(fInt("cancelled_count", "count")),
+			declCallerScoped(fInt("unknown_status_count", "count")),
+			declCallerScoped(fInt("counted_work_items", "count")),
+			declCallerScoped(fInt("completed_count", "count")),
+			declCallerScoped(fNum("completion_ratio", "ratio")),
 			fStr("archived_items"),
 		),
 	)
