@@ -94,8 +94,12 @@ type DrainOutcome struct {
 	// Batches == 2 from the mandatory confirm-exhausted attempt.
 	Applied     int
 	YieldReason DrainYieldReason
-	Duration    time.Duration
-	At          time.Time
+	// ExtraDrainDisabled is true when the configured drain budget is zero
+	// (Config.DrainBatchBudget < 0): one attempt per tick is the design, so
+	// budget_exceeded with Applied <= 1 is not starvation.
+	ExtraDrainDisabled bool
+	Duration           time.Duration
+	At                 time.Time
 }
 
 type noopObserver struct{}
@@ -177,7 +181,7 @@ func (o SlogObserver) ObserveProjectionDrain(outcome DrainOutcome) {
 	// Applied <= 1 it is the starvation shape (a source
 	// pulling one page per tick while its backlog stays), which must be
 	// visible at Info. Closed vocabulary only: the reason attr above.
-	if outcome.YieldReason == DrainYieldBudgetExceeded && outcome.Applied <= 1 {
+	if outcome.YieldReason == DrainYieldBudgetExceeded && outcome.Applied <= 1 && !outcome.ExtraDrainDisabled {
 		logger.Info("context_fabric: projection tick starved with backlog remaining", attrs...)
 		return
 	}
@@ -2457,7 +2461,7 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 	if batches > 0 {
 		c.observer.ObserveProjectionDrain(DrainOutcome{
 			OrgID: orgID, Source: source, Batches: batches, Applied: applied, YieldReason: reason,
-			Duration: c.now().Sub(started), At: c.now(),
+			Duration: c.now().Sub(started), At: c.now(), ExtraDrainDisabled: c.drainBudget <= 0,
 		})
 	}
 	// The build phase reports its pair outcome under exactly the steady-state
@@ -2859,7 +2863,7 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 	if batches > 0 {
 		c.observer.ObserveProjectionDrain(DrainOutcome{
 			OrgID: orgID, Source: source, Batches: batches, Applied: applied, YieldReason: reason,
-			Duration: c.now().Sub(started), At: c.now(),
+			Duration: c.now().Sub(started), At: c.now(), ExtraDrainDisabled: c.drainBudget <= 0,
 		})
 	}
 	// The drain's own last error, handed to scope.observe -- which decides

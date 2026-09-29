@@ -289,6 +289,10 @@ func TestChaos7179_DrainBudgetExceededLogsAtInfoAndHealthyStaysDebug(t *testing.
 	if progressing["level"] != "INFO" || progressing["msg"] != "context_fabric: projection tick drained multiple batches" {
 		t.Fatalf("budget_exceeded with Applied>1 is the multi-batch drain line, not the starvation line: %v", progressing)
 	}
+	disabled := level(DrainOutcome{OrgID: "org_1", Source: "one_page", Batches: 1, Applied: 1, YieldReason: DrainYieldBudgetExceeded, ExtraDrainDisabled: true, Duration: time.Second})
+	if disabled["level"] != "DEBUG" {
+		t.Fatalf("budget_exceeded with extra draining disabled (negative budget) is by design, must stay DEBUG: %v", disabled)
+	}
 	healthy := level(DrainOutcome{OrgID: "org_1", Source: "teams_projects", Batches: 2, Applied: 1, YieldReason: DrainYieldExhausted, Duration: time.Second})
 	if healthy["level"] != "DEBUG" {
 		t.Fatalf("exhausted with Applied<=1 must stay DEBUG: %v", healthy)

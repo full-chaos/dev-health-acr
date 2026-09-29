@@ -82,3 +82,23 @@ func TestChaos7179_BuildTickLargeFirstSourceDoesNotStarveSecondSource(t *testing
 	require.Equal(t, projectionrun.DrainYieldBudgetExceeded, reasons["source-big"])
 	require.Equal(t, projectionrun.DrainYieldExhausted, reasons["source-small"])
 }
+
+// Disabled extra draining (negative budget) yields budget_exceeded after the
+// one mandatory attempt by design; the coordinator must flag it so the
+// observer does not report starvation.
+func TestChaos7179_NegativeBudgetFlagsExtraDrainDisabledOnTheOutcome(t *testing.T) {
+	t.Parallel()
+	source := &fakeSource{name: "source-one", pages: 1}
+	observer := &recordingObserver{}
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:  []string{"org-1"},
+		Sources: []projectionrun.SourcePair{{Name: "source-one", Source: source}},
+		Backend: newFakeBackend(), Checkpoints: newFakeCheckpointStore(), RebuildMarkers: newFakeRebuildMarker(),
+		Observer: observer, Logger: discardLogger(), DrainBatchBudget: -1,
+	})
+	require.NoError(t, err)
+	coordinator.Tick(context.Background())
+	drains := observer.snapshot()
+	require.Len(t, drains, 1)
+	require.True(t, drains[0].ExtraDrainDisabled)
+}
