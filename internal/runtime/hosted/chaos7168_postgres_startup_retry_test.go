@@ -237,3 +237,52 @@ func TestChaos7168_UnreachableServerLogsThreeEventsAndErrorCarriesAttemptAndClas
 		t.Fatalf("got err=%v outcomes=%v classes=%v", err, outcomes, classes)
 	}
 }
+
+func fakeHostedRaw(t *testing.T, handler func(net.Conn)) (dsnHostPort string, connections *atomic.Int32) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	connections = &atomic.Int32{}
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			connections.Add(1)
+			go func() { defer conn.Close(); handler(conn) }()
+		}
+	}()
+	return listener.Addr().String(), connections
+}
+
+// Review round 2 P1: a server that refuses TLS negotiation answered; it is
+// terminal (one connection, ErrRejected, class postgres_rejected). A
+// connection that closes mid startup is retried to the bound.
+func TestChaos7168_ServerTLSRefusalIsTerminalAndMidStartupCloseIsRetried(t *testing.T) {
+	hp, conns := fakeHostedRaw(t, func(c net.Conn) {
+		buf := make([]byte, 64)
+		_ = c.SetReadDeadline(time.Now().Add(time.Second))
+		_, _ = c.Read(buf)
+		_, _ = c.Write([]byte("N"))
+	})
+	h := &captureHandler{}
+	_, err := openPostgresWithRetry(context.Background(), runtimepostgres.Config{DSN: "postgres://u:p@" + hp + "/db?sslmode=require", PingTimeout: 2 * time.Second}, 3, time.Millisecond, slog.New(h))
+	outcomes, classes := attemptEvents(h)
+	if !errors.Is(err, runtimepostgres.ErrRejected) || conns.Load() != 1 || !reflect.DeepEqual(outcomes, []string{"not_retryable"}) || !reflect.DeepEqual(classes, []string{"postgres_rejected"}) {
+		t.Fatalf("TLS refusal: err=%v conns=%d outcomes=%v classes=%v", err, conns.Load(), outcomes, classes)
+	}
+	hp2, conns2 := fakeHostedRaw(t, func(c net.Conn) {
+		buf := make([]byte, 64)
+		_ = c.SetReadDeadline(time.Now().Add(time.Second))
+		_, _ = c.Read(buf)
+	})
+	_, err = openPostgresWithRetry(context.Background(), runtimepostgres.Config{DSN: "postgres://u:p@" + hp2 + "/db?sslmode=disable", PingTimeout: 2 * time.Second}, 3, time.Millisecond, nil)
+	// database/sql may itself re-dial a bad connection inside one ping, so the server can see more than one connection per attempt.
+	if !errors.Is(err, runtimepostgres.ErrUnavailable) || conns2.Load() < 3 || !strings.Contains(err.Error(), "attempt 3/3") {
+		t.Fatalf("mid-startup close: err=%v conns=%d", err, conns2.Load())
+	}
+}

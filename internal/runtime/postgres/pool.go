@@ -5,7 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -32,12 +35,20 @@ var ErrUnavailable = errors.New("PostgreSQL is unavailable")
 var ErrRejected = errors.New("PostgreSQL rejected the connection")
 
 // classifyPingError: retryable (ErrUnavailable) means the server is not yet
-// usable -- the transport failed (dial, refused, reset, DNS, ping deadline: no
-// server answer) OR the server answered with SQLSTATE class 08 (connection
-// exception), class 53 (insufficient resources, e.g. 53300 too many
-// connections) or exactly 57P03 (cannot_connect_now: starting up). EVERY other
-// server answer (*pgconn.PgError: 28xxx auth, 3D000 missing database, 42xxx,
-// other 57xxx, ...) is terminal (ErrRejected). The cause text is dropped on
+// usable, decided POSITIVELY:
+//   - no server answer: a transport failure -- dial, connection refused or
+//     reset, DNS, a read/write/ping deadline, or the connection closing mid
+//     startup (EOF);
+//   - a server answer of SQLSTATE class 08 (connection exception), class 53
+//     (insufficient resources, e.g. 53300 too many connections) or exactly
+//     57P03 (cannot_connect_now: starting up).
+//
+// Everything else is terminal (ErrRejected): every other *pgconn.PgError
+// (28xxx auth, 3D000 missing database, 42xxx, other 57xxx, ...) AND any
+// non-transport error that is not a server answer either (the server refusing
+// TLS negotiation, a TLS alert or certificate failure, a malformed or
+// unexpected protocol response) -- retrying a persistent configuration or
+// protocol incompatibility cannot fix it. The cause text is dropped on
 // purpose: it can carry role and database names.
 func classifyPingError(err error) error {
 	var pgErr *pgconn.PgError
@@ -47,7 +58,27 @@ func classifyPingError(err error) error {
 		}
 		return ErrRejected
 	}
-	return ErrUnavailable
+	if isTransportFailure(err) {
+		return ErrUnavailable
+	}
+	return ErrRejected
+}
+
+func isTransportFailure(err error) bool {
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Op == "remote error" {
+		return false // a TLS alert from the peer, wrapped as an OpError by crypto/tls
+	}
+	var netErr net.Error
+	switch {
+	case errors.As(err, &netErr),
+		errors.Is(err, context.DeadlineExceeded),
+		errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF),
+		errors.Is(err, syscall.ECONNREFUSED), errors.Is(err, syscall.ECONNRESET),
+		errors.Is(err, syscall.EPIPE), errors.Is(err, syscall.ETIMEDOUT):
+		return true
+	}
+	return false
 }
 
 var ErrTransactionPooler = errors.New("PostgreSQL transaction pooler is not supported")
