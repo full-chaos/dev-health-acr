@@ -220,6 +220,10 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	if err != nil {
 		return nil, closeAfterError(runtime, err)
 	}
+	// CHAOS-7126: find_subjects owned_by and handle.
+	if lookup, ok := dataReads.subjects.(*directread.SubjectLookup); ok {
+		composeFindModes(lookup, investigator, clickhouse.queryClient, request.options.Logger)
+	}
 	directRelationships := buildDirectRelationships(investigator, directReadGate, directread.CursorKeyring{ActiveKID: request.config.EvidenceIDActiveKID, Keys: request.config.EvidenceIDKeys}, request.options.Logger)
 	// Same typed-nil guard: workloadTokenExchange is a concrete
 	// *authverify.WorkloadTokenExchangeService, nil whenever CHAOS-4013 is

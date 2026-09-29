@@ -119,6 +119,11 @@ func seedChaos7074(t *testing.T, ctx context.Context, adapter *falkorgraph.Adapt
 	work := ref(contextfabric.SubjectWorkItem, "work_item.v2:w1")
 	entities = append(entities, entity(work, contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/a"}}))
 	first = append(first, edge("rel_work_repo", "BELONGS_TO_REPOSITORY", work, ref(contextfabric.SubjectRepository, "repository:r001"), "acme/a", nil))
+	// A work-item TEAM ATTRIBUTION edge of the same type (CHAOS-7126: the
+	// owned_by end-kind filter must drop it).
+	first = append(first, edge("rel_own_attr_w1", "OWNED_BY_TEAM", work, team, "acme/a", nil))
+	fixture.allCurrent["rel_own_attr_w1|"+work.CanonicalID] = true
+	fixture.restrictedCurrent["rel_own_attr_w1|"+work.CanonicalID] = true
 
 	for index, batch := range [][]contextfabric.RelationshipProjection{nil, first, second} {
 		b := contextfabric.ProjectionBatch{
@@ -314,6 +319,39 @@ func TestLiveChaos7074DirectEdges(t *testing.T) {
 		request.Types = []string{"BELONGS_TO_REPOSITORY"}
 		got, _ = chaos7074ReadAll(t, fixture.reader(), unrestricted, request)
 		chaos7074AssertSet(t, got, map[string]bool{"rel_work_repo|work_item.v2:w1": true})
+	})
+	// CHAOS-7126: the end-kind filter keeps only the non-origin ends of the
+	// asked kinds (the work-item attribution edge of the same type is not
+	// read), on both arms.
+	t.Run("end kinds filter", func(t *testing.T) {
+		binding, err := adapter.ResolveInvestigationBinding(ctx, unrestricted)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, direction := range []directread.EdgeDirection{directread.EdgeDirectionIn, directread.EdgeDirectionBoth} {
+			page, err := adapter.DirectEdgePage(ctx, unrestricted, binding, directread.EdgePageQuery{
+				Origins: []contextfabric.SubjectRef{{Kind: contextfabric.SubjectTeam, CanonicalID: "team:T"}}, Types: []string{"OWNED_BY_TEAM"},
+				Direction: direction, EndKinds: []string{"repository", "project"}, Limit: 1000, ValidAt: time.Now().UTC(),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(page.Edges) != len(fixture.allCurrent)-1 {
+				t.Fatalf("%s: %d edges, want %d", direction, len(page.Edges), len(fixture.allCurrent)-1)
+			}
+			for _, e := range page.Edges {
+				if e.From.Subject.Kind != contextfabric.SubjectRepository {
+					t.Fatalf("%s: end kind filter let through %+v", direction, e.From.Subject)
+				}
+			}
+		}
+		out, err := adapter.DirectEdgePage(ctx, unrestricted, binding, directread.EdgePageQuery{
+			Origins: []contextfabric.SubjectRef{{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_item.v2:w1"}}, Direction: directread.EdgeDirectionOut,
+			EndKinds: []string{"team"}, Limit: 10, ValidAt: time.Now().UTC(),
+		})
+		if err != nil || len(out.Edges) != 1 || out.Edges[0].To.Subject.Kind != contextfabric.SubjectTeam {
+			t.Fatalf("out arm end kind: %v %+v", err, out)
+		}
 	})
 	t.Run("another organization reads nothing", func(t *testing.T) {
 		other := storage.Principal{OrgID: orgID + "-other", Subject: "u", CredentialID: "c"}

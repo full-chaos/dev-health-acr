@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -74,14 +75,21 @@ func TestChaos7074_R1_CursorCannotBeEdited(t *testing.T) {
 		refused("renewed past its TTL", renew)
 		now = time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
 	}
-	for _, index := range []int{0, len(good) / 2, len(good) - 1} {
-		flipped := []byte(good)
-		if flipped[index] == 'A' {
-			flipped[index] = 'B'
-		} else {
-			flipped[index] = 'A'
-		}
-		refused("flipped byte", string(flipped))
+	// A changed kid, and a changed byte anywhere in the sealed payload
+	// (nonce, ciphertext, tag). The payload is edited as BYTES and
+	// re-encoded: editing a base64 character can land in the unused low bits
+	// of the last character, which decodes to the same bytes and made an
+	// earlier version of this check flaky (CHAOS-7126 r1 run).
+	kid, payload, _ := strings.Cut(good, ".")
+	refused("changed kid", kid+"x."+payload)
+	raw, err := base64.RawURLEncoding.DecodeString(payload)
+	if err != nil {
+		t.Fatalf("payload does not decode: %v", err)
+	}
+	for _, index := range []int{0, len(raw) / 2, len(raw) - 1} {
+		edited := append([]byte{}, raw...)
+		edited[index] ^= 0x01
+		refused(fmt.Sprintf("byte %d flipped", index), kid+"."+base64.RawURLEncoding.EncodeToString(edited))
 	}
 }
 

@@ -12,18 +12,25 @@ import (
 	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-// find_subjects, slice S1a (CHAOS-7036 C.4, E.2, G). Two modes only:
+// find_subjects (CHAOS-7036 C.4, E.2, G). Four modes:
 //
 //   - list: subjects of one kind, ordered by canonical id, keyset cursor.
 //   - name: subjects whose label, alias or provider key equals a query
 //     exactly, for the requested kinds.
+//   - owned_by (CHAOS-7126): the repositories and projects a team owns, each
+//     read through the OWNED_BY_TEAM edge and the edge gate
+//     (subject_lookup_modes.go).
+//   - handle (CHAOS-7126): a PR number, work-item key or CI run id, bound by
+//     the engine's handle grammar and looked up by the engine's census
+//     (subject_lookup_modes.go).
 //
-// The modes owned_by and handle are not built. The vector arm is off (K6):
+// The vector arm is off (K6):
 // no read here calls an embedding model or an interpreter, and SubjectGraph
 // has no method that could.
 //
@@ -109,6 +116,10 @@ type FindRequest struct {
 	Kinds  []string
 	Limit  int
 	Cursor string
+	// OwnedBy is owned_by mode: a team canonical id.
+	OwnedBy string
+	// Handle is handle mode: a handle such as "PR 532" or "CHAOS-123".
+	Handle string
 }
 
 // FoundSubject is one admitted subject.
@@ -169,6 +180,11 @@ type SubjectLookup struct {
 	gate     *SubjectGate
 	recorder FindRecorder
 	now      func() time.Time
+	// edges, census and nodes serve owned_by and handle (CHAOS-7126);
+	// see WithOwnershipAndHandles.
+	edges  EdgeGraph
+	census graphrank.CensusFunc
+	nodes  SubjectNodeReader
 }
 
 // NewSubjectLookup builds the read. A nil graph or gate makes every call
@@ -200,7 +216,10 @@ func decodeFindCursor(cursor string) (string, error) {
 
 type findPlan struct {
 	list   bool
+	mode   string
 	kind   string
+	owner  string
+	handle graphrank.BoundHandle
 	query  string
 	kinds  []string
 	limit  int
@@ -248,17 +267,35 @@ func planFind(request FindRequest) (findPlan, error) {
 	if len(plan.kinds) > MaxFindKinds {
 		return plan, fmt.Errorf("%w: at most %d kinds", ErrFindInvalidRequest, MaxFindKinds)
 	}
+	owner, handle := strings.TrimSpace(request.OwnedBy), strings.TrimSpace(request.Handle)
+	modes := 0
+	for _, set := range []bool{plan.query != "", owner != "", handle != ""} {
+		if set {
+			modes++
+		}
+	}
+	if modes > 1 {
+		return plan, fmt.Errorf("%w: query, owned_by and handle are separate modes", ErrFindInvalidRequest)
+	}
 	switch {
+	case owner != "":
+		return planOwnedBy(plan, owner)
+	case handle != "":
+		return planHandle(plan, handle)
 	case plan.query == "":
 		if strings.TrimSpace(request.Kind) == "" || len(request.Kinds) > 0 {
 			return plan, fmt.Errorf("%w: list mode needs exactly one kind; name mode needs a query", ErrFindInvalidRequest)
 		}
 		plan.list = true
+		plan.mode = FindModeList
 		plan.kind = plan.kinds[0]
 	case utf8.RuneCountInString(plan.query) > MaxFindQueryRunes:
 		return plan, fmt.Errorf("%w: query is too long", ErrFindInvalidRequest)
 	case len(plan.kinds) == 0:
 		plan.kinds = DefaultLookupNameKinds()
+	}
+	if !plan.list {
+		plan.mode = FindModeName
 	}
 	return plan, nil
 }
@@ -274,9 +311,9 @@ func (l *SubjectLookup) Find(ctx context.Context, principal storage.Principal, r
 		if l == nil || l.recorder == nil {
 			return
 		}
-		telemetry := FindTelemetry{Tool: FindSubjectsTool, Mode: "name", Kinds: sortedKinds(plan.kinds), Count: len(response.Subjects), Status: string(response.Status)}
-		if plan.list {
-			telemetry.Mode = "list"
+		telemetry := FindTelemetry{Tool: FindSubjectsTool, Mode: plan.mode, Kinds: sortedKinds(plan.kinds), Count: len(response.Subjects), Status: string(response.Status)}
+		if telemetry.Mode == "" {
+			telemetry.Mode = FindModeName
 		}
 		if latency := l.now().Sub(started); latency > 0 {
 			telemetry.LatencyMS = latency.Milliseconds()
@@ -308,10 +345,20 @@ func (l *SubjectLookup) Find(ctx context.Context, principal storage.Principal, r
 
 	var admitted []FoundSubject
 	var truncated bool
-	if plan.list {
+	switch plan.mode {
+	case FindModeList:
 		admitted, truncated, err = l.scanList(ctx, principal, binding, plan)
-	} else {
+	case FindModeOwnedBy:
+		admitted, truncated, err = l.scanOwnedBy(ctx, principal, binding, plan)
+	case FindModeHandle:
+		admitted, truncated, err = l.scanHandle(ctx, principal, binding, plan)
+	default:
 		admitted, truncated, err = l.scanName(ctx, principal, binding, plan)
+	}
+	if errors.Is(err, ErrFindScopeRequired) {
+		// A typed refusal, not an outage: the request is refused for this
+		// caller (invalid_request, reason scope_required).
+		return FindResponse{}, fmt.Errorf("%w: %w", ErrFindInvalidRequest, err)
 	}
 	if err != nil {
 		return l.emptyOrUnavailable(plan, err)
@@ -457,10 +504,16 @@ func buildFindResponse(plan findPlan, admitted []FoundSubject, truncated bool) F
 		response.Page.NextCursor = EncodeFindCursor(pageSubjects[len(pageSubjects)-1].CanonicalID)
 	}
 	switch {
-	case len(pageSubjects) == 0:
+	case len(pageSubjects) == 0 && !truncated:
 		response.Status = FindEmpty
 		response.SearchedKinds = append([]string{}, plan.kinds...)
-	case !plan.list && total > 1:
+	case len(pageSubjects) == 0:
+		// A read bound was hit before any readable subject was found: that
+		// is not "none exists" (CHAOS-7126: a handle census over its
+		// budget names no satisfier).
+		response.Status = FindPartial
+		response.SearchedKinds = append([]string{}, plan.kinds...)
+	case (plan.mode == FindModeName || plan.mode == FindModeHandle) && total > 1:
 		response.Status = FindAmbiguous
 	case remaining > 0 || truncated:
 		response.Status = FindPartial

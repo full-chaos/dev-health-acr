@@ -1942,6 +1942,16 @@
           "cursor": {
             "type": "string",
             "description": "Opaque keyset position from page.next_cursor. It carries no permission."
+          },
+          "owned_by": {
+            "type": "string",
+            "maxLength": 1024,
+            "description": "owned_by mode: a team canonical_id; returns the repositories and projects the team owns (CHAOS-7126)."
+          },
+          "handle": {
+            "type": "string",
+            "maxLength": 1024,
+            "description": "handle mode: one pull request number, work item key or CI run id (CHAOS-7126). Matches the caller may not read are neither returned nor counted."
           }
         }
       },

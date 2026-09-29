@@ -55,6 +55,11 @@ type MCPFindSubjectsRequest struct {
 	Kinds  []string `json:"kinds,omitempty"`
 	Limit  int      `json:"limit,omitempty"`
 	Cursor string   `json:"cursor,omitempty"`
+	// OwnedBy is owned_by mode (CHAOS-7126): a team canonical id.
+	OwnedBy string `json:"owned_by,omitempty"`
+	// Handle is handle mode (CHAOS-7126): one pull request number, work
+	// item key or CI run id, for example "PR 532".
+	Handle string `json:"handle,omitempty"`
 }
 
 // MCPRunOperationRequest is the input of run_operation. Variables is an open
@@ -116,10 +121,22 @@ func (r MCPFindSubjectsRequest) Validate() error {
 	if utf8.RuneCountInString(r.Cursor) > MCPFindSubjectsCursorMax {
 		return fmt.Errorf("find_subjects cursor is too long")
 	}
-	if strings.TrimSpace(r.Query) == "" {
-		if strings.TrimSpace(r.Kind) == "" || len(r.Kinds) > 0 {
-			return fmt.Errorf("find_subjects needs a query (name mode) or exactly one kind and no kinds (list mode)")
+	if utf8.RuneCountInString(r.OwnedBy) > MCPFindSubjectsQueryMax || utf8.RuneCountInString(r.Handle) > MCPFindSubjectsQueryMax {
+		return fmt.Errorf("find_subjects owned_by and handle are too long")
+	}
+	modes := 0
+	for _, value := range []string{r.Query, r.OwnedBy, r.Handle} {
+		if strings.TrimSpace(value) != "" {
+			modes++
 		}
+	}
+	switch {
+	case modes > 1:
+		return fmt.Errorf("find_subjects takes one of query, owned_by and handle")
+	case strings.TrimSpace(r.Handle) != "" && (strings.TrimSpace(r.Kind) != "" || len(r.Kinds) > 0):
+		return fmt.Errorf("find_subjects handle mode takes no kind; the handle names it")
+	case modes == 0 && (strings.TrimSpace(r.Kind) == "" || len(r.Kinds) > 0):
+		return fmt.Errorf("find_subjects needs a query (name mode), owned_by, handle, or exactly one kind and no kinds (list mode)")
 	}
 	return nil
 }

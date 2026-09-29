@@ -2254,7 +2254,7 @@ var OperationRead = Event{
 // holds each list equal to the producer's own vocabulary.
 var (
 	directReadTools       = []string{"find_subjects"}
-	directReadModes       = []string{"list", "name"}
+	directReadModes       = []string{"list", "name", "owned_by", "handle"}
 	directReadStatuses    = []string{"complete", "partial", "empty", "ambiguous", "invalid_request", "unavailable"}
 	directReadErrorClass  = []string{"invalid_request", "deadline_exceeded", "canceled", "dependency_unavailable", "graph_error"}
 	directReadSubjectKind = contractsv1.ContextFabricSubjectKindVocabulary()

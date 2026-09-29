@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://contracts.fullchaos.dev/acr/v1/mcp_find_subjects_request.v1.schema.json",
   "title": "ACR MCP find_subjects Request v1",
-  "description": "Input for the find_subjects tool. Two modes. List: pass kind alone to list the subjects of one kind. Name: pass query (and optionally kinds) to find subjects whose name, alias or provider key equals the query exactly. Neither is refused. Every subject returned is one your credential may read.",
+  "description": "Input for the find_subjects tool. Four modes. List: pass kind alone to list the subjects of one kind. Name: pass query (and optionally kinds) to find subjects whose name, alias or provider key equals the query exactly. owned_by: pass a team canonical_id to list the repositories and projects the team owns (optionally kind or kinds, repository or project). handle: pass one pull request number, work item key or CI run id, for example \"PR 532\"; the handle names the kind. Every subject returned is one your credential may read.",
   "examples": [
     {
       "kind": "repository"
@@ -12,6 +12,12 @@
       "kinds": [
         "repository"
       ]
+    },
+    {
+      "owned_by": "team:CHAOS"
+    },
+    {
+      "handle": "PR 532"
     }
   ],
   "type": "object",
@@ -82,6 +88,18 @@
       "description": "List mode: the next_cursor of the previous page, exactly as returned. It is a position, not permission: every page is checked again for your credential. Opaque: do not build or parse it.",
       "minLength": 1,
       "maxLength": 700
+    },
+    "owned_by": {
+      "type": "string",
+      "description": "owned_by mode: the canonical_id of a team (copy it from another answer; never build one). Returns the repositories and projects the team owns now, each through the edge gate. A team you may not read gives the same empty answer as one that does not exist.",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "handle": {
+      "type": "string",
+      "description": "handle mode: exactly one pull request number (\"PR 532\"), work item key (only the key prefix this server recognises) or CI run id (\"run 18234567\"). A pull request number is per repository, so several subjects can match: the answer is then ambiguous with the ones you may read. Matches you may not read are not returned and not counted.",
+      "minLength": 1,
+      "maxLength": 256
     }
   }
 }

@@ -1562,7 +1562,9 @@
         "presence": "required",
         "closed_vocabulary": [
           "list",
-          "name"
+          "name",
+          "owned_by",
+          "handle"
         ]
       },
       {

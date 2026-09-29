@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
@@ -12,21 +13,25 @@ import (
 // dataSubjectsRequest is find_subjects' wire request (design C.4; S1a modes
 // list and name only). Unknown fields are refused by the strict decoder.
 type dataSubjectsRequest struct {
-	Kind   string   `json:"kind,omitempty"`
-	Query  string   `json:"query,omitempty"`
-	Kinds  []string `json:"kinds,omitempty"`
-	Limit  int      `json:"limit,omitempty"`
-	Cursor string   `json:"cursor,omitempty"`
+	Kind    string   `json:"kind,omitempty"`
+	Query   string   `json:"query,omitempty"`
+	Kinds   []string `json:"kinds,omitempty"`
+	Limit   int      `json:"limit,omitempty"`
+	Cursor  string   `json:"cursor,omitempty"`
+	OwnedBy string   `json:"owned_by,omitempty"`
+	Handle  string   `json:"handle,omitempty"`
 }
 
 // dataSubjectsEcho repeats the effective request.
 type dataSubjectsEcho struct {
-	Mode   string   `json:"mode"`
-	Kind   string   `json:"kind,omitempty"`
-	Query  string   `json:"query,omitempty"`
-	Kinds  []string `json:"kinds,omitempty"`
-	Limit  int      `json:"limit"`
-	Cursor string   `json:"cursor,omitempty"`
+	Mode    string   `json:"mode"`
+	Kind    string   `json:"kind,omitempty"`
+	Query   string   `json:"query,omitempty"`
+	Kinds   []string `json:"kinds,omitempty"`
+	Limit   int      `json:"limit"`
+	Cursor  string   `json:"cursor,omitempty"`
+	OwnedBy string   `json:"owned_by,omitempty"`
+	Handle  string   `json:"handle,omitempty"`
 }
 
 type dataSubjectsResponse struct {
@@ -37,7 +42,8 @@ type dataSubjectsResponse struct {
 
 // dataSubjectsUntrustedFields are the members that carry graph or client
 // text: a subject label is a provider name, the query is the client's.
-var dataSubjectsUntrustedFields = []string{"subjects[].label", "request.query"}
+// Every echoed caller-supplied string is listed (CHAOS-7126 r1 P2).
+var dataSubjectsUntrustedFields = []string{"subjects[].label", "request.kind", "request.query", "request.kinds", "request.cursor", "request.owned_by", "request.handle"}
 
 // contextFabricDataSubjectsHandler serves find_subjects (CHAOS-7072, S1a;
 // design C.4). Every returned subject passed the S0 subject gate for this
@@ -63,9 +69,15 @@ func (a *App) contextFabricDataSubjectsHandler() http.HandlerFunc {
 		}
 		response, err := lookup.Find(r.Context(), principal, directread.FindRequest{
 			Kind: request.Kind, Query: request.Query, Kinds: request.Kinds, Limit: request.Limit, Cursor: request.Cursor,
+			OwnedBy: request.OwnedBy, Handle: request.Handle,
 		})
 		if err != nil {
 			switch {
+			case errors.Is(err, directread.ErrFindScopeRequired):
+				// CHAOS-7126 r1: handle mode for a repository-restricted
+				// caller whose grant exceeds the per-repository census bound.
+				// No count of any kind.
+				writeError(w, r, http.StatusBadRequest, "invalid_request", "find_subjects handle mode needs a narrower repository grant for this credential", false, map[string]any{"reason": "scope_required"})
 			case errors.Is(err, directread.ErrFindInvalidRequest):
 				writeError(w, r, http.StatusBadRequest, "invalid_request", "find_subjects request is invalid", false, map[string]any{"reason": "invalid_find_request"})
 			case isDirectReadContractError(err):
@@ -75,9 +87,14 @@ func (a *App) contextFabricDataSubjectsHandler() http.HandlerFunc {
 			}
 			return
 		}
-		echo := dataSubjectsEcho{Mode: "name", Kind: request.Kind, Query: request.Query, Kinds: request.Kinds, Limit: effectiveFindLimit(request.Limit), Cursor: request.Cursor}
-		if request.Query == "" {
-			echo.Mode = "list"
+		echo := dataSubjectsEcho{Mode: directread.FindModeName, Kind: request.Kind, Query: request.Query, Kinds: request.Kinds, Limit: effectiveFindLimit(request.Limit), Cursor: request.Cursor, OwnedBy: request.OwnedBy, Handle: request.Handle}
+		switch {
+		case strings.TrimSpace(request.OwnedBy) != "":
+			echo.Mode = directread.FindModeOwnedBy
+		case strings.TrimSpace(request.Handle) != "":
+			echo.Mode = directread.FindModeHandle
+		case request.Query == "":
+			echo.Mode = directread.FindModeList
 		}
 		encoded, err := encodeBounded(dataSubjectsResponse{
 			FindResponse: response, Request: echo,
