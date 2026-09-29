@@ -36,3 +36,22 @@ func TestChaos7126FindSubjectsRequestModes(t *testing.T) {
 		}
 	}
 }
+
+// The find_subjects limit maximum is 200 (chris ruling 2026-09-29; the
+// design value 25 is only the default). The MCP request REFUSES 201; it does
+// not clamp.
+func TestFindSubjectsLimitMaxIs200AndRefusesAbove(t *testing.T) {
+	if MCPFindSubjectsLimitMax != 200 {
+		t.Fatalf("limit max %d, want 200", MCPFindSubjectsLimitMax)
+	}
+	for _, limit := range []int{0, 25, 200} {
+		if err := (MCPFindSubjectsRequest{Kind: "repository", Limit: limit}).Validate(); err != nil {
+			t.Errorf("limit %d refused: %v", limit, err)
+		}
+	}
+	for _, limit := range []int{201, 1000, -1} {
+		if err := (MCPFindSubjectsRequest{Kind: "repository", Limit: limit}).Validate(); err == nil {
+			t.Errorf("limit %d accepted", limit)
+		}
+	}
+}
