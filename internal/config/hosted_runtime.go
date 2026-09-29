@@ -12,6 +12,12 @@ import (
 
 const defaultHostedPostgresPingTimeout = 5 * time.Second
 
+// CHAOS-7168: bounded startup retry on PostgreSQL reachability.
+const (
+	defaultHostedPostgresStartupAttempts = 5
+	defaultHostedPostgresStartupBackoff  = 2 * time.Second
+)
+
 // loadHostedRuntimeValues loads the Postgres/ClickHouse/backing-store knobs
 // shared by acr-api (Config) and acr-projector (ProjectorConfig).
 //
@@ -85,6 +91,12 @@ func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, defaultRequireStores
 	if cfg.PostgresPingTimeout, err = durationValue(lookup, "ACR_POSTGRES_PING_TIMEOUT", defaultHostedPostgresPingTimeout); err != nil {
 		return err
 	}
+	if cfg.PostgresStartupAttempts, err = intValue(lookup, "ACR_POSTGRES_STARTUP_ATTEMPTS", defaultHostedPostgresStartupAttempts); err != nil {
+		return err
+	}
+	if cfg.PostgresStartupBackoff, err = durationValue(lookup, "ACR_POSTGRES_STARTUP_BACKOFF", defaultHostedPostgresStartupBackoff); err != nil {
+		return err
+	}
 	if cfg.RequireBackingStores, err = boolValue(lookup, "ACR_REQUIRE_BACKING_STORES", defaultRequireStores); err != nil {
 		return err
 	}
@@ -150,6 +162,8 @@ func validateHostedRuntime(cfg Config) error {
 		return errors.New("ACR_POSTGRES_MAX_IDLE_CONNS must not exceed ACR_POSTGRES_MAX_OPEN_CONNS")
 	case cfg.PostgresConnMaxLifetime < 0 || cfg.PostgresConnMaxIdleTime < 0 || cfg.PostgresPingTimeout < 0:
 		return errors.New("ACR PostgreSQL pool durations must not be negative")
+	case cfg.PostgresStartupAttempts < 1 || cfg.PostgresStartupBackoff < 0:
+		return errors.New("ACR_POSTGRES_STARTUP_ATTEMPTS must be at least 1 and ACR_POSTGRES_STARTUP_BACKOFF must not be negative")
 	case connectionKindErr != nil:
 		return connectionKindErr
 	default:

@@ -19,14 +19,13 @@ const defaultPostgresReadinessTimeout = 5 * time.Second
 
 // CHAOS-7168: acr-api crashed twice at startup right after the helm migrate
 // hook ("PostgreSQL is unavailable", prod 2026-09-29 12:28:42Z) before going
-// Ready. Only the reachability failure is retried, bounded, with one loud
-// line per attempt; config/validation errors fail at once.
+// Ready. Only runtimepostgres.ErrUnavailable (classified with errors.Is,
+// never by message) is retried, bounded by config (ACR_POSTGRES_STARTUP_
+// ATTEMPTS / _BACKOFF, default 5 x 2s), one closed-vocabulary Warn per
+// attempt. Config/validation errors fail at once.
 const (
-	postgresOpenAttempts = 5
-	postgresOpenBackoff  = 2 * time.Second
-	// postgresUnavailableMessage is runtimepostgres.Open's fixed, secret-free
-	// reachability failure text.
-	postgresUnavailableMessage = "PostgreSQL is unavailable"
+	postgresStartupAttemptEvent = "postgres startup attempt failed"
+	postgresStartupFailureClass = "postgres_unavailable"
 )
 
 // postgresOpenFn/postgresOpenSleep are test seams.
@@ -44,24 +43,27 @@ var (
 	}
 )
 
-func openPostgresWithRetry(ctx context.Context, cfg runtimepostgres.Config, logger *slog.Logger) (*sql.DB, error) {
+func openPostgresWithRetry(ctx context.Context, cfg runtimepostgres.Config, attempts int, backoff time.Duration, logger *slog.Logger) (*sql.DB, error) {
+	if attempts < 1 {
+		attempts = 1
+	}
 	var lastErr error
-	for attempt := 1; attempt <= postgresOpenAttempts; attempt++ {
+	for attempt := 1; attempt <= attempts; attempt++ {
 		database, err := postgresOpenFn(ctx, cfg)
 		if err == nil {
 			if attempt > 1 && logger != nil {
-				logger.InfoContext(ctx, "postgres connected after retry", "attempt", attempt, "max_attempts", postgresOpenAttempts)
+				logger.InfoContext(ctx, "postgres connected after startup retry", "attempt", attempt, "max_attempts", attempts)
 			}
 			return database, nil
 		}
 		lastErr = err
-		if err.Error() != postgresUnavailableMessage || attempt == postgresOpenAttempts {
+		if !errors.Is(err, runtimepostgres.ErrUnavailable) || attempt == attempts {
 			break
 		}
 		if logger != nil {
-			logger.WarnContext(ctx, "postgres unavailable at startup; retrying", "attempt", attempt, "max_attempts", postgresOpenAttempts, "backoff_ms", postgresOpenBackoff.Milliseconds(), "failure_class", "postgres_unavailable")
+			logger.WarnContext(ctx, postgresStartupAttemptEvent, "attempt", attempt, "max_attempts", attempts, "backoff_ms", backoff.Milliseconds(), "failure_class", postgresStartupFailureClass)
 		}
-		if serr := postgresOpenSleep(ctx, postgresOpenBackoff); serr != nil {
+		if serr := postgresOpenSleep(ctx, backoff); serr != nil {
 			return nil, lastErr
 		}
 	}
@@ -73,7 +75,7 @@ func openPostgres(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 		DSN: cfg.PostgresDSN, PoolerAdminDSN: cfg.PostgresPoolerAdminDSN,
 		MaxOpenConns: cfg.PostgresMaxOpenConns, MaxIdleConns: cfg.PostgresMaxIdleConns, MaxIdleConnsSet: cfg.PostgresMaxIdleConnsConfigured,
 		ConnMaxLifetime: cfg.PostgresConnMaxLifetime, ConnMaxIdleTime: cfg.PostgresConnMaxIdleTime, PingTimeout: cfg.PostgresPingTimeout,
-	}, logger)
+	}, cfg.PostgresStartupAttempts, cfg.PostgresStartupBackoff, logger)
 	if err != nil {
 		return postgresComponents{}, err
 	}

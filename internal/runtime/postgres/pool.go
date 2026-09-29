@@ -20,6 +20,10 @@ const (
 	defaultConnMaxIdle  = 5 * time.Minute
 )
 
+// ErrUnavailable is returned (by identity, message unchanged) when the
+// PostgreSQL ping fails; callers classify with errors.Is, never by text.
+var ErrUnavailable = errors.New("PostgreSQL is unavailable")
+
 var ErrTransactionPooler = errors.New("PostgreSQL transaction pooler is not supported")
 
 type Config struct {
@@ -50,7 +54,7 @@ func Open(ctx context.Context, config Config) (*sql.DB, error) {
 	defer cancel()
 	if err := db.PingContext(pingContext); err != nil {
 		db.Close()
-		return nil, errors.New("PostgreSQL is unavailable")
+		return nil, ErrUnavailable
 	}
 	if config.PoolerAdminDSN != "" {
 		probe := poolerProbe{adminDSN: config.PoolerAdminDSN, database: parsed.Database, user: parsed.User, timeout: config.PingTimeout}

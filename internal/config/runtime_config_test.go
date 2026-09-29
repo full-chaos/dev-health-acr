@@ -359,3 +359,24 @@ func TestLoad_rejectsNonAbsoluteDeviceVerificationURL(t *testing.T) {
 		})
 	}
 }
+
+func TestLoad_postgresStartupRetryDefaultsOverridesAndBounds(t *testing.T) {
+	cfg, err := load(mapLookup(completeRuntimeEnvironment()))
+	if err != nil || cfg.PostgresStartupAttempts != 5 || cfg.PostgresStartupBackoff != 2*time.Second {
+		t.Fatalf("defaults: err=%v attempts=%d backoff=%s", err, cfg.PostgresStartupAttempts, cfg.PostgresStartupBackoff)
+	}
+	values := completeRuntimeEnvironment()
+	values["ACR_POSTGRES_STARTUP_ATTEMPTS"] = "9"
+	values["ACR_POSTGRES_STARTUP_BACKOFF"] = "500ms"
+	cfg, err = load(mapLookup(values))
+	if err != nil || cfg.PostgresStartupAttempts != 9 || cfg.PostgresStartupBackoff != 500*time.Millisecond {
+		t.Fatalf("overrides: err=%v attempts=%d backoff=%s", err, cfg.PostgresStartupAttempts, cfg.PostgresStartupBackoff)
+	}
+	for k, v := range map[string]string{"ACR_POSTGRES_STARTUP_ATTEMPTS": "0", "ACR_POSTGRES_STARTUP_BACKOFF": "-1s"} {
+		values := completeRuntimeEnvironment()
+		values[k] = v
+		if _, err := load(mapLookup(values)); err == nil {
+			t.Fatalf("%s=%s must be rejected", k, v)
+		}
+	}
+}

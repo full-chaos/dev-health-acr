@@ -103,6 +103,8 @@ type Config struct {
 	PostgresConnMaxLifetime        time.Duration
 	PostgresConnMaxIdleTime        time.Duration
 	PostgresPingTimeout            time.Duration
+	PostgresStartupAttempts        int
+	PostgresStartupBackoff         time.Duration
 	RequireBackingStores           bool
 	LocalCompositionReady          bool
 	EnableEpisodeWriteback         bool

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -25,11 +26,11 @@ func TestChaos7168_OpenPostgresRetriesTransientUnavailable(t *testing.T) {
 	stubPostgresOpen(t, func(context.Context, runtimepostgres.Config) (*sql.DB, error) {
 		calls++
 		if calls <= 2 {
-			return nil, errors.New("PostgreSQL is unavailable")
+			return nil, runtimepostgres.ErrUnavailable
 		}
 		return &sql.DB{}, nil
 	})
-	if _, err := openPostgresWithRetry(context.Background(), runtimepostgres.Config{}, nil); err != nil || calls != 3 {
+	if _, err := openPostgresWithRetry(context.Background(), runtimepostgres.Config{}, 5, 0, nil); err != nil || calls != 3 {
 		t.Fatalf("want success on attempt 3, got err=%v calls=%d", err, calls)
 	}
 }
@@ -38,17 +39,42 @@ func TestChaos7168_OpenPostgresIsBoundedAndSkipsNonTransient(t *testing.T) {
 	calls := 0
 	stubPostgresOpen(t, func(context.Context, runtimepostgres.Config) (*sql.DB, error) {
 		calls++
-		return nil, errors.New("PostgreSQL is unavailable")
+		return nil, runtimepostgres.ErrUnavailable
 	})
-	if _, err := openPostgresWithRetry(context.Background(), runtimepostgres.Config{}, nil); err == nil || calls != postgresOpenAttempts {
-		t.Fatalf("want bounded %d attempts and error, got err=%v calls=%d", postgresOpenAttempts, err, calls)
+	if _, err := openPostgresWithRetry(context.Background(), runtimepostgres.Config{}, 5, 0, nil); err == nil || calls != 5 {
+		t.Fatalf("want bounded %d attempts and error, got err=%v calls=%d", 5, err, calls)
 	}
 	calls = 0
 	stubPostgresOpen(t, func(context.Context, runtimepostgres.Config) (*sql.DB, error) {
 		calls++
 		return nil, errors.New("invalid PostgreSQL configuration")
 	})
-	if _, err := openPostgresWithRetry(context.Background(), runtimepostgres.Config{}, nil); err == nil || calls != 1 {
+	if _, err := openPostgresWithRetry(context.Background(), runtimepostgres.Config{}, 5, 0, nil); err == nil || calls != 1 {
 		t.Fatalf("config error must not retry, got err=%v calls=%d", err, calls)
+	}
+}
+
+// A message-only match must NOT retry: a different error value carrying the
+// same text is not the reachability sentinel.
+func TestChaos7168_OpenPostgresClassifiesByErrorIdentityNotMessage(t *testing.T) {
+	calls := 0
+	stubPostgresOpen(t, func(context.Context, runtimepostgres.Config) (*sql.DB, error) {
+		calls++
+		return nil, errors.New("PostgreSQL is unavailable")
+	})
+	if _, err := openPostgresWithRetry(context.Background(), runtimepostgres.Config{}, 5, 0, nil); err == nil || calls != 1 {
+		t.Fatalf("message-only match must not retry, got err=%v calls=%d", err, calls)
+	}
+}
+
+// A wrapped sentinel is still retried, and the configured count is honored.
+func TestChaos7168_OpenPostgresHonorsConfiguredAttemptsAndWrappedSentinel(t *testing.T) {
+	calls := 0
+	stubPostgresOpen(t, func(context.Context, runtimepostgres.Config) (*sql.DB, error) {
+		calls++
+		return nil, fmt.Errorf("dial: %w", runtimepostgres.ErrUnavailable)
+	})
+	if _, err := openPostgresWithRetry(context.Background(), runtimepostgres.Config{}, 3, 0, nil); err == nil || calls != 3 {
+		t.Fatalf("want 3 attempts, got err=%v calls=%d", err, calls)
 	}
 }
