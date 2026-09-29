@@ -56,11 +56,11 @@ const (
 	// DrainYieldExhausted: the source reported no further batch available,
 	// or reached a terminal build-completion mode -- ordinary steady state.
 	DrainYieldExhausted DrainYieldReason = "exhausted"
-	// DrainYieldBudgetExceeded: more work MAY remain (the drain stopped on its
-	// budget without a confirming empty probe, so an exact-fit last page is
-	// indistinguishable from a backlog unless the batch completed enumeration)
-	// and this source's own per-tick drain budget (Config.DrainBatchBudget, applied
-	// to each source separately, not shared) was spent.
+	// DrainYieldBudgetExceeded: this source's own per-tick drain budget
+	// (Config.DrainBatchBudget, applied to each source separately, not shared)
+	// was spent and a non-applying peek at budget 0 found a further batch
+	// available. When the peek itself fails, or extra draining is disabled, the
+	// reason is reported without that proof: work MAY remain.
 	// The next Tick resumes from the checkpoint this tick's last batch
 	// advanced to -- no work is lost, only deferred.
 	DrainYieldBudgetExceeded DrainYieldReason = "budget_exceeded"
@@ -178,8 +178,8 @@ func (o SlogObserver) ObserveProjectionDrain(outcome DrainOutcome) {
 		logger.Info("context_fabric: projection tick drained multiple batches", attrs...)
 		return
 	}
-	// budget_exceeded means work MAY remain (an exact-fit last page reports it
-	// too, without a confirming probe). With
+	// budget_exceeded means a further batch was available at budget 0 (or the
+	// peek that would prove it failed). With
 	// Applied > 1 that is healthy progress (the multi-batch line above); with
 	// Applied <= 1 it is the starvation shape (a source
 	// pulling one page per tick while its backlog stays), which must be
