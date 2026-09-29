@@ -220,7 +220,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	if err != nil {
 		return nil, closeAfterError(runtime, err)
 	}
-	directRelationships := buildDirectRelationships(investigator, directReadGate, request.options.Logger)
+	directRelationships := buildDirectRelationships(investigator, directReadGate, directread.CursorKeyring{ActiveKID: request.config.EvidenceIDActiveKID, Keys: request.config.EvidenceIDKeys}, request.options.Logger)
 	// Same typed-nil guard: workloadTokenExchange is a concrete
 	// *authverify.WorkloadTokenExchangeService, nil whenever CHAOS-4013 is
 	// unconfigured (see buildWorkloadTokenExchange's doc comment).
@@ -1333,7 +1333,7 @@ func buildDirectReads(investigator contextfabric.Investigator, logger *slog.Logg
 // when the gate is nil or the graph cannot serve bounded edge pages; a
 // composed gate over a graph that cannot is a wiring defect and is logged
 // loudly.
-func buildDirectRelationships(investigator contextfabric.Investigator, gate *directread.SubjectGate, logger *slog.Logger) *directread.RelationshipsReader {
+func buildDirectRelationships(investigator contextfabric.Investigator, gate *directread.SubjectGate, keyring directread.CursorKeyring, logger *slog.Logger) *directread.RelationshipsReader {
 	engine, ok := investigator.(directReadSourcer)
 	if !ok || storage.IsNil(investigator) || gate == nil {
 		return nil
@@ -1346,5 +1346,14 @@ func buildDirectRelationships(investigator contextfabric.Investigator, gate *dir
 		}
 		return nil
 	}
-	return directread.NewRelationshipsReader(gate, edges, directread.NewSlogRelationshipsRecorder(logger))
+	// The cursor key derives from the evidence identifier keyring
+	// (directread.CursorKeyring); without a usable one there is no reader.
+	reader, err := directread.NewRelationshipsReader(gate, edges, directread.NewSlogRelationshipsRecorder(logger), keyring)
+	if err != nil {
+		if logger != nil {
+			logger.Error("context fabric direct relationships reader not composed", "reason", "cursor_keyring_unusable")
+		}
+		return nil
+	}
+	return reader
 }

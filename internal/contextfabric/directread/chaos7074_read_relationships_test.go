@@ -3,7 +3,6 @@ package directread
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -117,7 +116,10 @@ var (
 
 func newRelReader(graph *fakeEdgeGraph, now *time.Time) (*RelationshipsReader, *relRecorder) {
 	recorder := &relRecorder{}
-	reader := NewRelationshipsReader(NewSubjectGate(graph, nil), graph, recorder)
+	reader, err := NewRelationshipsReader(NewSubjectGate(graph, nil), graph, recorder, testCursorKeyring())
+	if err != nil {
+		panic(err)
+	}
 	if now != nil {
 		reader.now = func() time.Time { return *now }
 		reader.gate.now = reader.now
@@ -249,9 +251,13 @@ func TestChaos7074_T5_PositionAdvancesPastAWithheldTail(t *testing.T) {
 	}
 }
 
-func decodeCursorForTest(t *testing.T, token string) relationshipsCursor {
+func testCursorKeyring() CursorKeyring {
+	return CursorKeyring{ActiveKID: "k1", Keys: map[string][]byte{"k1": []byte("0123456789abcdef0123456789abcdef-test-cursor-key")}}
+}
+
+func decodeCursorForTest(t *testing.T, sealer *cursorSealer, token string) relationshipsCursor {
 	t.Helper()
-	raw, err := base64.RawURLEncoding.DecodeString(token)
+	raw, err := sealer.open(token)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,9 +282,13 @@ func TestChaos7074_T5_CursorBindings(t *testing.T) {
 	}
 	good := first.Page.NextCursor
 	reencode := func(mutate func(*relationshipsCursor)) string {
-		c := decodeCursorForTest(t, good)
+		c := decodeCursorForTest(t, reader.sealer, good)
 		mutate(&c)
-		return encodeRelationshipsCursor(c)
+		token, err := encodeRelationshipsCursor(reader.sealer, c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return token
 	}
 	cases := []struct {
 		name      string

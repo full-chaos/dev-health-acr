@@ -66,8 +66,12 @@ func TestDirectRelationshipsReadLineCertifiesAgainstItsSpecification(t *testing.
 	principal := storage.Principal{OrgID: "org_1", Subject: "u", CredentialID: "c", RepositoryScopes: []string{"acme/inside-repo"}}
 	ctx := observability.WithRequestID(context.Background(), "req_0123456789abcdef0123456789abcdef")
 	var buffer bytes.Buffer
-	reader := directread.NewRelationshipsReader(directread.NewSubjectGate(graph, nil), graph,
-		directread.NewSlogRelationshipsRecorder(slog.New(slog.NewJSONHandler(&buffer, nil))))
+	reader, err := directread.NewRelationshipsReader(directread.NewSubjectGate(graph, nil), graph,
+		directread.NewSlogRelationshipsRecorder(slog.New(slog.NewJSONHandler(&buffer, nil))),
+		directread.CursorKeyring{ActiveKID: "k1", Keys: map[string][]byte{"k1": []byte("0123456789abcdef0123456789abcdef-test-cursor-key")}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	response, err := reader.Read(ctx, principal, directread.RelationshipsRequest{
 		Subject: directread.RelationshipsSubject{Kind: "repository", CanonicalID: root.CanonicalID}, Limit: 3,
 	})

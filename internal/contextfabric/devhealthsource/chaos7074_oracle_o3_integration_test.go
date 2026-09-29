@@ -293,7 +293,10 @@ func TestChaos7074OracleO3OwnedRepositories(t *testing.T) {
 	o3Project(t, ctx, source, adapter, orgID)
 	o3Project(t, ctx, source, adapter, otherOrg)
 
-	reader := directread.NewRelationshipsReader(directread.NewSubjectGate(adapter, nil), adapter, nil)
+	reader, err := directread.NewRelationshipsReader(directread.NewSubjectGate(adapter, nil), adapter, nil, o3CursorKeyring())
+	if err != nil {
+		t.Fatal(err)
+	}
 	principal := storage.Principal{OrgID: orgID, Subject: "oracle", CredentialID: "oracle"}
 	for _, team := range []string{"T1", "T2"} {
 		t.Run(team, func(t *testing.T) {
@@ -320,4 +323,8 @@ func TestChaos7074OracleO3OwnedRepositories(t *testing.T) {
 	if len(all) != 7 {
 		t.Fatalf("T1 current population = %d, want 7 (R1 R2 R5 R6 R7 R8 R9 + none of R3 R4); fixture drifted", len(all))
 	}
+}
+
+func o3CursorKeyring() directread.CursorKeyring {
+	return directread.CursorKeyring{ActiveKID: "k1", Keys: map[string][]byte{"k1": []byte("0123456789abcdef0123456789abcdef-test-cursor-key")}}
 }

@@ -218,17 +218,23 @@ type RelationshipsReader struct {
 	gate     *SubjectGate
 	graph    EdgeGraph
 	recorder RelationshipsRecorder
+	sealer   *cursorSealer
 	now      func() time.Time
 }
 
 // NewRelationshipsReader composes the reader. A nil gate or graph makes every
-// read unavailable (fail closed).
-func NewRelationshipsReader(gate *SubjectGate, graph EdgeGraph, recorder RelationshipsRecorder) *RelationshipsReader {
-	reader := &RelationshipsReader{gate: gate, recorder: recorder}
+// read unavailable (fail closed). A keyring that cannot seal cursors
+// (CursorKeyring) is a composition error: no reader, the route fails closed.
+func NewRelationshipsReader(gate *SubjectGate, graph EdgeGraph, recorder RelationshipsRecorder, keyring CursorKeyring) (*RelationshipsReader, error) {
+	sealer, err := newCursorSealer(keyring)
+	if err != nil {
+		return nil, err
+	}
+	reader := &RelationshipsReader{gate: gate, recorder: recorder, sealer: sealer}
 	if !storage.IsNil(graph) {
 		reader.graph = graph
 	}
-	return reader
+	return reader, nil
 }
 
 type relationshipsPlan struct {
@@ -283,15 +289,20 @@ func planRelationships(request RelationshipsRequest) (relationshipsPlan, error) 
 	plan := relationshipsPlan{root: contextfabric.SubjectRef{Kind: kind, CanonicalID: id}}
 	vocabulary := relationshipTypeVocabulary()
 	seen := map[string]struct{}{}
+	// The published schema: at most 12 items, unique (CHAOS-7074 r1 P3).
+	if len(request.Types) > len(vocabulary) {
+		return relationshipsPlan{}, relInvalid("types holds at most %d values", len(vocabulary))
+	}
 	for _, raw := range request.Types {
 		t := strings.TrimSpace(raw)
 		if _, ok := vocabulary[t]; !ok {
 			return relationshipsPlan{}, relInvalid("types holds a value outside the relationship vocabulary")
 		}
-		if _, dup := seen[t]; !dup {
-			seen[t] = struct{}{}
-			plan.types = append(plan.types, t)
+		if _, dup := seen[t]; dup {
+			return relationshipsPlan{}, relInvalid("types holds a value twice")
 		}
+		seen[t] = struct{}{}
+		plan.types = append(plan.types, t)
 	}
 	sort.Strings(plan.types)
 	switch EdgeDirection(strings.TrimSpace(request.Direction)) {
@@ -380,7 +391,10 @@ func (r *RelationshipsReader) Read(ctx context.Context, principal storage.Princi
 	hop := 1
 	var after *EdgeKey
 	if token := strings.TrimSpace(request.Cursor); token != "" {
-		cursor, cursorErr := decodeRelationshipsCursor(token, principal.OrgID, plan.digest, plan.depth, now)
+		if r == nil || r.sealer == nil {
+			return RelationshipsResponse{}, ErrRelationshipsUnavailable
+		}
+		cursor, cursorErr := decodeRelationshipsCursor(r.sealer, token, principal.OrgID, plan.digest, plan.depth, now)
 		if cursorErr != nil {
 			outcome, _ := cursorOutcomeOf(cursorErr)
 			record.CursorIn = outcome
@@ -404,7 +418,7 @@ func (r *RelationshipsReader) Read(ctx context.Context, principal storage.Princi
 	}
 	response = r.baseResponse(plan, hop, validAt)
 
-	if r == nil || r.gate == nil || r.graph == nil {
+	if r == nil || r.gate == nil || r.graph == nil || r.sealer == nil {
 		record.FailureClass = gatevocab.RelationshipsFailureGate
 		return RelationshipsResponse{}, ErrRelationshipsUnavailable
 	}
@@ -480,7 +494,12 @@ func (r *RelationshipsReader) Read(ctx context.Context, principal storage.Princi
 	}
 	if next != nil {
 		next.Version, next.OrgDigest, next.RequestDigest, next.IssuedAtUnix = relationshipsCursorVersion, orgDigest(principal.OrgID), plan.digest, r.clock().Unix()
-		response.Page.NextCursor = encodeRelationshipsCursor(*next)
+		token, sealErr := encodeRelationshipsCursor(r.sealer, *next)
+		if sealErr != nil {
+			record.FailureClass = gatevocab.RelationshipsFailureGate
+			return RelationshipsResponse{}, fmt.Errorf("%w: %w", ErrRelationshipsUnavailable, sealErr)
+		}
+		response.Page.NextCursor = token
 		record.CursorOut = CursorIssued
 	}
 	response.Page.Complete = next == nil

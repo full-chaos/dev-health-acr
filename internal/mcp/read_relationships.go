@@ -50,9 +50,12 @@ func (in readRelationshipsInput) validate() error {
 	if len(in.Types) > readRelationshipsMaxTypes {
 		return fmt.Errorf("types must hold at most %d items", readRelationshipsMaxTypes)
 	}
-	for _, t := range in.Types {
+	for index, t := range in.Types {
 		if !slices.Contains(readRelationshipsTypes, t) {
 			return fmt.Errorf("types holds a value outside the relationship vocabulary")
+		}
+		if slices.Contains(in.Types[:index], t) {
+			return fmt.Errorf("types holds a value twice")
 		}
 	}
 	switch in.Direction {

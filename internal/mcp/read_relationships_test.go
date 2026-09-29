@@ -229,3 +229,15 @@ func relationshipsJSONEqual(a, b any) bool {
 	y, _ := json.Marshal(b)
 	return string(x) == string(y)
 }
+
+// r1 P3: the tool refuses a repeated type before calling the hosted API.
+func TestReadRelationshipsRefusesARepeatedType(t *testing.T) {
+	input := readRelationshipsInput{Subject: readRelationshipsSubjectInput{Kind: "repository", CanonicalID: "repository:a"}, Types: []string{"BLOCKS", "BLOCKS"}}
+	if err := input.validate(); err == nil {
+		t.Fatal("a repeated type was accepted")
+	}
+	input.Types = []string{"BLOCKS", "PART_OF"}
+	if err := input.validate(); err != nil {
+		t.Fatalf("distinct types refused: %v", err)
+	}
+}

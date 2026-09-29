@@ -83,7 +83,11 @@ func chaos7074RouteGraph() chaos7074Graph {
 func setChaos7074Reader(h *chaos7071Harness, graph chaos7074Graph) {
 	gate := directread.NewSubjectGate(graph, nil)
 	h.app.runtime.DirectReadGate = gate
-	h.app.runtime.DirectRelationships = directread.NewRelationshipsReader(gate, graph, nil)
+	reader, err := directread.NewRelationshipsReader(gate, graph, nil, directread.CursorKeyring{ActiveKID: "k1", Keys: map[string][]byte{"k1": []byte("0123456789abcdef0123456789abcdef-test-cursor-key")}})
+	if err != nil {
+		panic(err)
+	}
+	h.app.runtime.DirectRelationships = reader
 }
 
 func (h *chaos7071Harness) postRelationships(token, body string) *httptest.ResponseRecorder {

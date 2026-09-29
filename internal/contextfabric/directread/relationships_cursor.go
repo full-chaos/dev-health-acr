@@ -2,11 +2,10 @@ package directread
 
 import (
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"strings"
+	"fmt"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread/gatevocab"
@@ -33,11 +32,13 @@ const RelationshipsCursorTTL = 15 * time.Minute
 
 // relationshipsCursor is the position of the next page. It is NOT a
 // permission: every page runs the subject gate on the root and on every end
-// node again (design E.1: no step uses a cursor as permission). So it is not
-// signed; a tampered cursor can only move the position inside a walk the
-// caller is already allowed to read. It is bound to the organization, to the
-// request (so a cursor cannot continue a different walk), to a version and to
-// an issue time.
+// node again (design E.1: no step uses a cursor as permission). It is bound
+// to the organization, to the request (so a cursor cannot continue a
+// different walk), to a version and to an issue time, and it is SEALED
+// (cursorSealer, AES-256-GCM): its position is the last EXAMINED edge, which
+// may be one the caller may not see, so the caller must not read it, and no
+// field may be edited (CHAOS-7074 r1 P1: an unsealed cursor named a withheld
+// relationship id and could be edited to skip edges or outlive its TTL).
 type relationshipsCursor struct {
 	Version       int     `json:"v"`
 	Hop           int     `json:"h"`
@@ -65,22 +66,21 @@ func orgDigest(orgID string) string {
 	return hex.EncodeToString(sum[:12])
 }
 
-func encodeRelationshipsCursor(cursor relationshipsCursor) string {
+func encodeRelationshipsCursor(sealer *cursorSealer, cursor relationshipsCursor) (string, error) {
 	raw, err := json.Marshal(cursor)
 	if err != nil {
-		// A struct of strings and ints always marshals.
-		panic("read_relationships cursor encode: " + err.Error())
+		return "", fmt.Errorf("read_relationships cursor encode: %w", err)
 	}
-	return base64.RawURLEncoding.EncodeToString(raw)
+	return sealer.seal(raw)
 }
 
 // decodeRelationshipsCursor checks, in this order: shape and version, the
 // organization, the request, the expiry, the hop. Each refusal has its own
 // outcome for the trace; the caller sees invalid_request.
-func decodeRelationshipsCursor(token, orgID, requestDigest string, depth int, now time.Time) (relationshipsCursor, error) {
-	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(token))
+func decodeRelationshipsCursor(sealer *cursorSealer, token, orgID, requestDigest string, depth int, now time.Time) (relationshipsCursor, error) {
+	raw, err := sealer.open(token)
 	if err != nil {
-		return relationshipsCursor{}, &cursorError{CursorInvalid}
+		return relationshipsCursor{}, err
 	}
 	var cursor relationshipsCursor
 	if err := json.Unmarshal(raw, &cursor); err != nil || cursor.Version != relationshipsCursorVersion {

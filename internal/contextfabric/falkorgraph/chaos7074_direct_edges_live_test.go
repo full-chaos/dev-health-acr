@@ -3,6 +3,7 @@ package falkorgraph_test
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"sort"
@@ -136,8 +137,16 @@ func seedChaos7074(t *testing.T, ctx context.Context, adapter *falkorgraph.Adapt
 	return fixture
 }
 
+func chaos7074CursorKeyring() directread.CursorKeyring {
+	return directread.CursorKeyring{ActiveKID: "k1", Keys: map[string][]byte{"k1": []byte("0123456789abcdef0123456789abcdef-test-cursor-key")}}
+}
+
 func (f *chaos7074Fixture) reader() *directread.RelationshipsReader {
-	return directread.NewRelationshipsReader(directread.NewSubjectGate(f.adapter, nil), f.adapter, nil)
+	reader, err := directread.NewRelationshipsReader(directread.NewSubjectGate(f.adapter, nil), f.adapter, nil, chaos7074CursorKeyring())
+	if err != nil {
+		panic(err)
+	}
+	return reader
 }
 
 func chaos7074ReadAll(t *testing.T, reader *directread.RelationshipsReader, principal storage.Principal, request directread.RelationshipsRequest) (map[string]int, []directread.RelationshipsResponse) {
@@ -211,6 +220,19 @@ func TestLiveChaos7074DirectEdges(t *testing.T) {
 	})
 	t.Run("T5 pages join, restricted", func(t *testing.T) {
 		got, pages := chaos7074ReadAll(t, fixture.reader(), restricted, teamIn)
+		// r1 P1, repro 2 (permanent): no cursor of this walk, which withholds
+		// 21 edges, lets the caller read any relationship id.
+		for index, page := range pages {
+			readable := page.Page.NextCursor
+			for _, part := range strings.Split(page.Page.NextCursor, ".") {
+				if raw, err := base64.RawURLEncoding.DecodeString(part); err == nil {
+					readable += "\n" + string(raw)
+				}
+			}
+			if strings.Contains(readable, "rel_own_") {
+				t.Fatalf("page %d next_cursor reveals a relationship id: %q", index, readable)
+			}
+		}
 		chaos7074AssertSet(t, got, fixture.restrictedCurrent)
 		withheld := 0
 		for _, page := range pages {
