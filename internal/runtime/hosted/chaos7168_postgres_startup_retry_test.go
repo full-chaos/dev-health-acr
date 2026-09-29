@@ -78,3 +78,31 @@ func TestChaos7168_OpenPostgresHonorsConfiguredAttemptsAndWrappedSentinel(t *tes
 		t.Fatalf("want 3 attempts, got err=%v calls=%d", err, calls)
 	}
 }
+
+// Zero attempts/backoff (a Config literal that never went through config.Load)
+// must mean the default at the retry site, not a single attempt.
+func TestChaos7168_ZeroValueMeansDefaultAttemptsAtTheRetrySite(t *testing.T) {
+	calls := 0
+	stubPostgresOpen(t, func(context.Context, runtimepostgres.Config) (*sql.DB, error) {
+		calls++
+		return nil, runtimepostgres.ErrUnavailable
+	})
+	if _, err := openPostgresWithRetry(context.Background(), runtimepostgres.Config{}, 0, 0, nil); err == nil || calls != defaultPostgresStartupAttempts {
+		t.Fatalf("zero attempts must retry %d times, got err=%v calls=%d", defaultPostgresStartupAttempts, err, calls)
+	}
+}
+
+// The error the REAL runtimepostgres.Open returns for an unreachable server,
+// wrapped in a %w chain, must still be classified as retryable.
+func TestChaos7168_RealOpenErrorSurvivesWrappingAndIsRetried(t *testing.T) {
+	calls := 0
+	stubPostgresOpen(t, func(ctx context.Context, cfg runtimepostgres.Config) (*sql.DB, error) {
+		calls++
+		_, err := runtimepostgres.Open(ctx, cfg)
+		return nil, fmt.Errorf("open postgres: %w", err)
+	})
+	cfg := runtimepostgres.Config{DSN: "postgres://u:p@127.0.0.1:1/db?sslmode=disable&connect_timeout=1", PingTimeout: 500 * time.Millisecond}
+	if _, err := openPostgresWithRetry(context.Background(), cfg, 3, time.Millisecond, nil); !errors.Is(err, runtimepostgres.ErrUnavailable) || calls != 3 {
+		t.Fatalf("want 3 attempts and ErrUnavailable through the chain, got err=%v calls=%d", err, calls)
+	}
+}

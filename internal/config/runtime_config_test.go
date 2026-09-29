@@ -372,7 +372,7 @@ func TestLoad_postgresStartupRetryDefaultsOverridesAndBounds(t *testing.T) {
 	if err != nil || cfg.PostgresStartupAttempts != 9 || cfg.PostgresStartupBackoff != 500*time.Millisecond {
 		t.Fatalf("overrides: err=%v attempts=%d backoff=%s", err, cfg.PostgresStartupAttempts, cfg.PostgresStartupBackoff)
 	}
-	for k, v := range map[string]string{"ACR_POSTGRES_STARTUP_ATTEMPTS": "0", "ACR_POSTGRES_STARTUP_BACKOFF": "-1s"} {
+	for k, v := range map[string]string{"ACR_POSTGRES_STARTUP_ATTEMPTS": "0", "ACR_POSTGRES_STARTUP_BACKOFF": "0s"} {
 		values := completeRuntimeEnvironment()
 		values[k] = v
 		if _, err := load(mapLookup(values)); err == nil {

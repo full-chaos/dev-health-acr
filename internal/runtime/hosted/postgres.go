@@ -24,8 +24,10 @@ const defaultPostgresReadinessTimeout = 5 * time.Second
 // ATTEMPTS / _BACKOFF, default 5 x 2s), one closed-vocabulary Warn per
 // attempt. Config/validation errors fail at once.
 const (
-	postgresStartupAttemptEvent = "postgres startup attempt failed"
-	postgresStartupFailureClass = "postgres_unavailable"
+	defaultPostgresStartupAttempts = 5
+	defaultPostgresStartupBackoff  = 2 * time.Second
+	postgresStartupAttemptEvent    = "postgres startup attempt failed"
+	postgresStartupFailureClass    = "postgres_unavailable"
 )
 
 // postgresOpenFn/postgresOpenSleep are test seams.
@@ -44,8 +46,13 @@ var (
 )
 
 func openPostgresWithRetry(ctx context.Context, cfg runtimepostgres.Config, attempts int, backoff time.Duration, logger *slog.Logger) (*sql.DB, error) {
+	// Zero value means the default at THIS site: Config literals built
+	// without config.Load (tests, future entrypoints) must still retry.
 	if attempts < 1 {
-		attempts = 1
+		attempts = defaultPostgresStartupAttempts
+	}
+	if backoff <= 0 {
+		backoff = defaultPostgresStartupBackoff
 	}
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
