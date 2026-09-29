@@ -1286,6 +1286,29 @@ func TestGateMarkerInvariantFewerOccurrencesThanSitesFails(t *testing.T) {
 	mustContain(t, f.check(t), "ANCHOR MARKER NOT FOUND", "1 time(s)")
 }
 
+// r3 P1: the same physical file addressed through an alias path must be ONE
+// bucket: two rows (one via "./") declare two sites, the file holds one
+// occurrence -> NOT FOUND (1 time for 2 sites), not a silent pass.
+func TestGateMarkerPathAliasIsOneBucket(t *testing.T) {
+	f := markerFixture(t, [][2]any{{"/a", float64(7)}, {"/b", float64(8)}},
+		"\tmux.HandleFunc(\"GET /a\", h) // validatorMarker(h)\n\tmux.HandleFunc(\"GET /b\", h)\n")
+	// rewrite row /b's anchor path to an alias of the same file
+	raw, err := os.ReadFile(f.inventoryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alias := "internal/api/./app.go"
+	var inv map[string]any
+	if err := json.Unmarshal(raw, &inv); err != nil {
+		t.Fatal(err)
+	}
+	rows := inv["rows"].([]any)
+	rows[1].(map[string]any)["primary_validator"].(map[string]any)["anchor"].(map[string]any)["path"] = alias
+	writeJSON(t, f.inventoryPath, inv)
+	errs := f.check(t)
+	mustContain(t, errs, "ANCHOR MARKER NOT FOUND", "1 time(s)", "2 site(s)")
+}
+
 // Two sibling rows share one marker whose single occurrence has moved off
 // the shared declared line: both pass (one occurrence, legitimately shared).
 func TestGateAcceptsSiblingRowsSharingOneMovedMarker(t *testing.T) {

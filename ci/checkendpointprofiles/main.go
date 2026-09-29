@@ -219,6 +219,20 @@ func asArray(v any) []any {
 	return a
 }
 
+// asCanonicalPath reads a repo-relative path field and canonicalizes it
+// (filepath.ToSlash(filepath.Clean)) so `internal/api/./app.go` and
+// `internal/api/app.go` are ONE key for site counting, marker occurrences
+// and route ownership (r3 P1). Cleaning never hides an escape: ".." prefixes
+// and absolute paths survive Clean and are still rejected by
+// anchorPathWithinRoot / checkAnchorExists.
+func asCanonicalPath(v any) (string, bool) {
+	s, ok := asString(v)
+	if !ok || s == "" {
+		return s, ok
+	}
+	return filepath.ToSlash(filepath.Clean(s)), true
+}
+
 func asString(v any) (string, bool) {
 	s, ok := v.(string)
 	return s, ok
@@ -472,7 +486,7 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 		if a == nil {
 			continue
 		}
-		path, _ := asString(a["path"])
+		path, _ := asCanonicalPath(a["path"])
 		lineF, _ := a["line"].(float64)
 		if path != "" && lineF >= 1 {
 			if note, _ := asString(a["note"]); note != "" {
@@ -613,7 +627,7 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 		// source anchor.
 		src := asObject(row["source"])
 		if src != nil {
-			file, _ := asString(src["file"])
+			file, _ := asCanonicalPath(src["file"])
 			rowMethod, _ := asString(row["method"])
 			rowRoute, _ := asString(row["route"])
 			if file != "" && rowMethod != "" && rowRoute != "" {
@@ -667,7 +681,7 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 		if src == nil {
 			continue
 		}
-		file, _ := asString(src["file"])
+		file, _ := asCanonicalPath(src["file"])
 		method, _ := asString(row["method"])
 		route, _ := asString(row["route"])
 		surface, ok := discoveredKeys[routeKey{file, method, route}]
@@ -818,7 +832,7 @@ func checkPrimaryValidatorAnchorMarker(root, rowID string, anchor map[string]any
 	if anchor == nil {
 		return // reported elsewhere (checkAnchorExists)
 	}
-	path, _ := asString(anchor["path"])
+	path, _ := asCanonicalPath(anchor["path"])
 	lineF, _ := anchor["line"].(float64)
 	line := int(lineF)
 	if path == "" || line < 1 || !anchorPathWithinRoot(root, path) {
