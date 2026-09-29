@@ -29,10 +29,14 @@ const (
 	MCPDataCatalogSectionsMax = 5
 	MCPFindSubjectsKindsMax   = 8
 	MCPFindSubjectsQueryMax   = 256
-	MCPFindSubjectsLimitMax   = 200
-	MCPFindSubjectsCursorMax  = 700
-	MCPRunOperationNameMax    = 64
-	MCPRunOperationMaxBytes   = 262144
+	// MCPFindSubjectsLimitMax is 200, not the design value 25 (25 is the
+	// default page). Ruled by chris 2026-09-29: client agents page through
+	// subject lists and 25 forced extra round trips. The MCP tool REFUSES a
+	// larger limit; the direct HTTP route clamps it to the same maximum.
+	MCPFindSubjectsLimitMax  = 200
+	MCPFindSubjectsCursorMax = 700
+	MCPRunOperationNameMax   = 64
+	MCPRunOperationMaxBytes  = 262144
 )
 
 // MCPDataCatalogSectionVocabulary is the closed set of data_catalog sections.
