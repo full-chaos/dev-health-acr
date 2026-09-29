@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 0484097a8e5d1a377cf0b0252f00508d6b003adb8c5a036d16dca91739d08cd8
+# canonical-content-sha256: 2be42987c1e5e0c838f6b4c3cc1432f2b1c2c08ed0a11b7dd325046aa9bacaad
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
