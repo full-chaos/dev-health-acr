@@ -278,6 +278,28 @@ func (s *ClickHouseProjectionSource) NextProjectionBatch(ctx context.Context, ch
 	return s.plan(checkpoint.Cursor).nextBatch(ctx, checkpoint)
 }
 
+// PeekProjectionBatch implements contextfabric.ProjectionPeeker. It runs the
+// same paging engine as NextProjectionBatch against the same checkpoint, on a
+// plan with every side effect removed: no consumed-progress memo is recorded
+// or dropped, and no quarantine, normalization, orphan or batch telemetry is
+// emitted. Only the ClickHouse reads happen. A later NextProjectionBatch at
+// the same checkpoint therefore serves exactly the page it would have served
+// without the peek.
+func (s *ClickHouseProjectionSource) PeekProjectionBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (bool, error) {
+	if s == nil {
+		return false, fmt.Errorf("devhealthsource: source is not configured")
+	}
+	plan := s.plan(checkpoint.Cursor)
+	plan.logger = nil
+	plan.observe = nil
+	plan.observeQuarantine = nil
+	plan.observeNormalization = nil
+	plan.recordConsumed = nil
+	plan.dropConsumed = nil
+	_, available, err := plan.nextBatch(ctx, checkpoint)
+	return available, err
+}
+
 // CurrentProjectionSourceVersion implements contextfabric.ProjectionSourceVersion
 // (CHAOS-3887) so a per-tick freshness signal can be computed for a dormant
 // organization -- one with no new ClickHouse rows since its last checkpoint,

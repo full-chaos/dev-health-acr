@@ -308,6 +308,32 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 	}, nil
 }
 
+// PeekAvailable reports whether the source would offer a batch at the current
+// checkpoint, WITHOUT applying anything: no claim CAS, no consumed-progress
+// CAS, no backend call, no checkpoint change. known is false when the source
+// does not implement ProjectionPeeker (its read is not proven side-effect
+// free), in which case available is meaningless and the caller must not infer
+// exhaustion. A drain that spent its budget uses this to tell "more work
+// remains" from "the last page was the final one" without a confirming apply.
+func (w *ProjectionWorker) PeekAvailable(ctx context.Context, orgID, sourceName string) (available, known bool, err error) {
+	peeker, ok := w.source.(ProjectionPeeker)
+	if !ok {
+		return false, false, nil
+	}
+	if strings.TrimSpace(orgID) == "" || strings.TrimSpace(sourceName) == "" {
+		return false, false, markPair(PairStageValidation, errors.New("projection worker requires organization and source"), "")
+	}
+	checkpoint, err := w.checkpoints.LoadProjectionCheckpoint(ctx, orgID, sourceName)
+	if err != nil {
+		return false, false, markPair(PairStageCheckpointLoad, err, "load projection checkpoint")
+	}
+	available, err = peeker.PeekProjectionBatch(ctx, checkpoint)
+	if err != nil {
+		return false, false, fmt.Errorf("peek projection batch: %w", markPair(PairStageSourceRead, err, ""))
+	}
+	return available, true, nil
+}
+
 // persistConsumedProgress durably advances the checkpoint over source rows
 // that were consumed but proved unpublishable -- see ProjectionProgress for
 // why this cannot be done with a batch, and for the safety argument.

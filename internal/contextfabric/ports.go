@@ -1376,6 +1376,18 @@ type ProjectionSource interface {
 	NextProjectionBatch(context.Context, ProjectionCheckpoint) (ProjectionBatch, bool, error)
 }
 
+// ProjectionPeeker is an OPTIONAL capability a ProjectionSource implements only
+// when it can answer "would NextProjectionBatch offer a batch at this
+// checkpoint?" with NO side effects: no consumed-progress memo, no ledger or
+// census state, no telemetry or log lines beyond the read itself. The
+// projection coordinator uses it once, when a source's drain budget is spent,
+// to tell an exact-fit last page (exhausted) from a real backlog
+// (budget_exceeded). A source that does not implement it keeps the
+// conservative budget_exceeded reason: the answer is unknown, never guessed.
+type ProjectionPeeker interface {
+	PeekProjectionBatch(context.Context, ProjectionCheckpoint) (available bool, err error)
+}
+
 // ProjectionSourceEnablement is an OPTIONAL capability (CHAOS-3898 S2a-2,
 // design brief §3.3/item 5's BuildCompletionDisabledAtFreeze) a
 // ProjectionSource may implement to report whether it is currently

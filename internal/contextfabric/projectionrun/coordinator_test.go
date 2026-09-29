@@ -77,6 +77,23 @@ type fakeSource struct {
 	// default and instead set Config.DrainBatchBudget: -1 (see e.g.
 	// TestCoordinatorSkipsAnOrganizationLockedByAnotherReplica).
 	pages int
+	// peeks counts PeekProjectionBatch calls (CHAOS-7189). A peek is
+	// side-effect free: it never touches calls, so calls keeps counting only
+	// the reads RunOnce makes.
+	peeks atomic.Int32
+}
+
+// PeekProjectionBatch implements contextfabric.ProjectionPeeker with the same
+// availability rule as NextProjectionBatch, without counting as a call.
+func (f *fakeSource) PeekProjectionBatch(_ context.Context, checkpoint contextfabric.ProjectionCheckpoint) (bool, error) {
+	f.peeks.Add(1)
+	if f.err != nil {
+		return false, f.err
+	}
+	if f.dormant {
+		return false, nil
+	}
+	return !(f.pages > 0 && len(checkpoint.Cursor) >= f.pages), nil
 }
 
 func (f *fakeSource) NextProjectionBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {

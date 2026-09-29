@@ -56,11 +56,11 @@ const (
 	// DrainYieldExhausted: the source reported no further batch available,
 	// or reached a terminal build-completion mode -- ordinary steady state.
 	DrainYieldExhausted DrainYieldReason = "exhausted"
-	// DrainYieldBudgetExceeded: more work MAY remain (the drain stopped on its
-	// budget without a confirming empty probe, so an exact-fit last page is
-	// indistinguishable from a backlog unless the batch completed enumeration)
-	// and this source's own per-tick drain budget (Config.DrainBatchBudget, applied
-	// to each source separately, not shared) was spent.
+	// DrainYieldBudgetExceeded: this source's own per-tick drain budget
+	// (Config.DrainBatchBudget, applied to each source separately, not shared)
+	// was spent and a non-applying peek at budget 0 found a further batch
+	// available. When the peek itself fails, or extra draining is disabled, the
+	// reason is reported without that proof: work MAY remain.
 	// The next Tick resumes from the checkpoint this tick's last batch
 	// advanced to -- no work is lost, only deferred.
 	DrainYieldBudgetExceeded DrainYieldReason = "budget_exceeded"
@@ -178,8 +178,8 @@ func (o SlogObserver) ObserveProjectionDrain(outcome DrainOutcome) {
 		logger.Info("context_fabric: projection tick drained multiple batches", attrs...)
 		return
 	}
-	// budget_exceeded means work MAY remain (an exact-fit last page reports it
-	// too, without a confirming probe). With
+	// budget_exceeded means a further batch was available at budget 0 (or the
+	// peek that would prove it failed). With
 	// Applied > 1 that is healthy progress (the multi-batch line above); with
 	// Applied <= 1 it is the starvation shape (a source
 	// pulling one page per tick while its backlog stays), which must be
@@ -2437,7 +2437,7 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 			break
 		}
 		if budget == nil || *budget <= 0 {
-			reason = DrainYieldBudgetExceeded
+			reason = c.budgetSpentReason(ctx, worker, orgID, source, run.CompleteEnumeration)
 			break
 		}
 		*budget--
@@ -2716,6 +2716,50 @@ func (c *Coordinator) recoverFromDivergenceLifecycle(scope *orgScope, orgID stri
 		"org_id_hash", contextfabric.SanitizeLogAttr(hash))
 }
 
+// budgetSpentReason picks the yield reason once a source's drain budget is
+// spent right after an applied batch. A batch that completed enumeration says
+// nothing remains. Otherwise ONE non-applying peek asks the source whether a
+// further batch exists: available -> budget_exceeded, not available ->
+// exhausted. The peek is not an apply: it never advances the checkpoint and
+// never counts against the budget, so the per-source apply bound is unchanged.
+// A peek that errors is unknown, so the conservative budget_exceeded stands.
+func (c *Coordinator) budgetSpentReason(ctx context.Context, worker *contextfabric.ProjectionWorker, orgID, source string, complete bool) DrainYieldReason {
+	if complete {
+		return DrainYieldExhausted
+	}
+	if c.drainBudget <= 0 {
+		// Extra draining is disabled: the one-batch-per-tick pacing has no
+		// budget to report on, so no extra source read is spent on it.
+		return DrainYieldBudgetExceeded
+	}
+	available, known, err := worker.PeekAvailable(ctx, orgID, source)
+	if !known && err == nil {
+		return DrainYieldBudgetExceeded // source cannot peek side-effect free: unknown
+	}
+	if err != nil {
+		c.logger.WarnContext(ctx, "projection budget-exit peek failed; reporting budget_exceeded", "org_id", contextfabric.SanitizeLogAttr(orgID), "source", contextfabric.SanitizeLogAttr(source), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
+		return DrainYieldBudgetExceeded
+	}
+	if !available {
+		return DrainYieldExhausted
+	}
+	return DrainYieldBudgetExceeded
+}
+
+func (c *Coordinator) budgetSpentReasonFor(ctx context.Context, orgID, source string, checkpoints contextfabric.ProjectionCheckpointStore, complete bool) DrainYieldReason {
+	if complete {
+		return DrainYieldExhausted
+	}
+	if c.drainBudget <= 0 {
+		return DrainYieldBudgetExceeded
+	}
+	worker, err := c.workerFor(source, checkpoints)
+	if err != nil {
+		return DrainYieldBudgetExceeded
+	}
+	return c.budgetSpentReason(ctx, worker, orgID, source, false)
+}
+
 // runPairOnce attempts exactly ONE RunOnce call for (orgID, source),
 // gated by the due()/recordBackoff per-pair schedule -- the same
 // single-attempt body this function always was before CHAOS-3826.
@@ -2860,11 +2904,7 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 		case budget == nil || *budget <= 0:
 			// budget_exceeded claims work remains. A batch that itself
 			// completed enumeration says none does.
-			if pairComplete {
-				reason = DrainYieldExhausted
-			} else {
-				reason = DrainYieldBudgetExceeded
-			}
+			reason = c.budgetSpentReasonFor(ctx, orgID, source, checkpoints, pairComplete)
 		default:
 			*budget--
 			continue
