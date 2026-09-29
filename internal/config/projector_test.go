@@ -446,3 +446,40 @@ func TestProjectorEpisodeWritebackDefaultsOffAndIsSettable(t *testing.T) {
 		t.Fatal("an explicit true must enable the episodes source")
 	}
 }
+
+// CHAOS-7184 r1 P1: the projector loaders must reject an invalid startup
+// retry setting like acr-api's validator, not let the helper silently
+// substitute defaults.
+func TestLoadProjector_rejectsInvalidPostgresStartupRetry(t *testing.T) {
+	for name, load := range map[string]func(lookupEnv) (ProjectorConfig, error){
+		"LoadProjector":       func(l lookupEnv) (ProjectorConfig, error) { return loadProjector(l, requiredStoresAll) },
+		"LoadProjectorPriors": func(l lookupEnv) (ProjectorConfig, error) { return loadProjector(l, requiredStoresPostgresOnly) },
+	} {
+		for _, bad := range []map[string]string{
+			{"ACR_POSTGRES_STARTUP_ATTEMPTS": "0"},
+			{"ACR_POSTGRES_STARTUP_BACKOFF": "0s"},
+			{"ACR_POSTGRES_STARTUP_ATTEMPTS": "-1"},
+			{"ACR_POSTGRES_STARTUP_BACKOFF": "-1s"},
+			{"ACR_POSTGRES_STARTUP_ATTEMPTS": "abc"},
+		} {
+			env := map[string]string{"ACR_ENVIRONMENT": "development", "ACR_LOCAL_COMPOSITION_READY": "true"}
+			for k, v := range bad {
+				env[k] = v
+			}
+			_, err := load(mapLookup(env))
+			if err == nil || !strings.Contains(err.Error(), "ACR_POSTGRES_STARTUP_ATTEMPTS") {
+				t.Fatalf("%s(%v) error = %v, want a startup retry refusal", name, bad, err)
+			}
+		}
+	}
+}
+
+func TestLoadProjector_unsetPostgresStartupRetryUsesDefaults(t *testing.T) {
+	env := map[string]string{"ACR_ENVIRONMENT": "development", "ACR_LOCAL_COMPOSITION_READY": "true"}
+	for name, req := range map[string]requiredStores{"LoadProjector": requiredStoresAll, "LoadProjectorPriors": requiredStoresPostgresOnly} {
+		cfg, err := loadProjector(mapLookup(env), req)
+		if err != nil || cfg.PostgresStartupAttempts != defaultHostedPostgresStartupAttempts || cfg.PostgresStartupBackoff != defaultHostedPostgresStartupBackoff {
+			t.Fatalf("%s: err=%v attempts=%d backoff=%v, want defaults", name, err, cfg.PostgresStartupAttempts, cfg.PostgresStartupBackoff)
+		}
+	}
+}

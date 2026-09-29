@@ -38,7 +38,7 @@ func TestChaos7168_OpenPostgresRetriesTransientUnavailable(t *testing.T) {
 		}
 		return &sql.DB{}, nil
 	})
-	if _, err := openPostgresWithRetry(context.Background(), runtimepostgres.Config{}, 5, 0, nil); err != nil || calls != 3 {
+	if _, err := OpenPostgresWithRetry(context.Background(), runtimepostgres.Config{}, 5, 0, nil); err != nil || calls != 3 {
 		t.Fatalf("want success on attempt 3, got err=%v calls=%d", err, calls)
 	}
 }
@@ -49,7 +49,7 @@ func TestChaos7168_OpenPostgresIsBoundedAndSkipsNonTransient(t *testing.T) {
 		calls++
 		return nil, runtimepostgres.ErrUnavailable
 	})
-	if _, err := openPostgresWithRetry(context.Background(), runtimepostgres.Config{}, 5, 0, nil); err == nil || calls != 5 {
+	if _, err := OpenPostgresWithRetry(context.Background(), runtimepostgres.Config{}, 5, 0, nil); err == nil || calls != 5 {
 		t.Fatalf("want bounded %d attempts and error, got err=%v calls=%d", 5, err, calls)
 	}
 	calls = 0
@@ -57,7 +57,7 @@ func TestChaos7168_OpenPostgresIsBoundedAndSkipsNonTransient(t *testing.T) {
 		calls++
 		return nil, errors.New("invalid PostgreSQL configuration")
 	})
-	if _, err := openPostgresWithRetry(context.Background(), runtimepostgres.Config{}, 5, 0, nil); err == nil || calls != 1 {
+	if _, err := OpenPostgresWithRetry(context.Background(), runtimepostgres.Config{}, 5, 0, nil); err == nil || calls != 1 {
 		t.Fatalf("config error must not retry, got err=%v calls=%d", err, calls)
 	}
 }
@@ -70,7 +70,7 @@ func TestChaos7168_OpenPostgresClassifiesByErrorIdentityNotMessage(t *testing.T)
 		calls++
 		return nil, errors.New("PostgreSQL is unavailable")
 	})
-	if _, err := openPostgresWithRetry(context.Background(), runtimepostgres.Config{}, 5, 0, nil); err == nil || calls != 1 {
+	if _, err := OpenPostgresWithRetry(context.Background(), runtimepostgres.Config{}, 5, 0, nil); err == nil || calls != 1 {
 		t.Fatalf("message-only match must not retry, got err=%v calls=%d", err, calls)
 	}
 }
@@ -82,7 +82,7 @@ func TestChaos7168_OpenPostgresHonorsConfiguredAttemptsAndWrappedSentinel(t *tes
 		calls++
 		return nil, fmt.Errorf("dial: %w", runtimepostgres.ErrUnavailable)
 	})
-	if _, err := openPostgresWithRetry(context.Background(), runtimepostgres.Config{}, 3, 0, nil); err == nil || calls != 3 {
+	if _, err := OpenPostgresWithRetry(context.Background(), runtimepostgres.Config{}, 3, 0, nil); err == nil || calls != 3 {
 		t.Fatalf("want 3 attempts, got err=%v calls=%d", err, calls)
 	}
 }
@@ -95,7 +95,7 @@ func TestChaos7168_ZeroValueMeansDefaultAttemptsAtTheRetrySite(t *testing.T) {
 		calls++
 		return nil, runtimepostgres.ErrUnavailable
 	})
-	if _, err := openPostgresWithRetry(context.Background(), runtimepostgres.Config{}, 0, 0, nil); err == nil || calls != defaultPostgresStartupAttempts {
+	if _, err := OpenPostgresWithRetry(context.Background(), runtimepostgres.Config{}, 0, 0, nil); err == nil || calls != defaultPostgresStartupAttempts {
 		t.Fatalf("zero attempts must retry %d times, got err=%v calls=%d", defaultPostgresStartupAttempts, err, calls)
 	}
 }
@@ -110,17 +110,21 @@ func TestChaos7168_RealOpenErrorSurvivesWrappingAndIsRetried(t *testing.T) {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	})
 	cfg := runtimepostgres.Config{DSN: "postgres://u:p@127.0.0.1:1/db?sslmode=disable&connect_timeout=1", PingTimeout: 500 * time.Millisecond}
-	if _, err := openPostgresWithRetry(context.Background(), cfg, 3, time.Millisecond, nil); !errors.Is(err, runtimepostgres.ErrUnavailable) || calls != 3 {
+	if _, err := OpenPostgresWithRetry(context.Background(), cfg, 3, time.Millisecond, nil); !errors.Is(err, runtimepostgres.ErrUnavailable) || calls != 3 {
 		t.Fatalf("want 3 attempts and ErrUnavailable through the chain, got err=%v calls=%d", err, calls)
 	}
 }
 
+// captureHandler mirrors production's default Info threshold (zero value of
+// min is slog.LevelInfo): a Warn->Debug downgrade of the attempt log is
+// invisible to it (CHAOS-7184).
 type captureHandler struct {
 	mu      sync.Mutex
+	min     slog.Level
 	records []slog.Record
 }
 
-func (h *captureHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *captureHandler) Enabled(_ context.Context, l slog.Level) bool { return l >= h.min }
 func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -157,7 +161,7 @@ func TestChaos7168_EveryFailedAttemptIsLoggedIncludingTheTerminalOne(t *testing.
 		return nil, runtimepostgres.ErrUnavailable
 	})
 	h := &captureHandler{}
-	_, err := openPostgresWithRetry(context.Background(), runtimepostgres.Config{}, 3, time.Millisecond, slog.New(h))
+	_, err := OpenPostgresWithRetry(context.Background(), runtimepostgres.Config{}, 3, time.Millisecond, slog.New(h))
 	outcomes, classes := attemptEvents(h)
 	if err == nil || !reflect.DeepEqual(outcomes, []string{"retrying", "retrying", "exhausted"}) || !reflect.DeepEqual(classes, []string{"postgres_unavailable", "postgres_unavailable", "postgres_unavailable"}) {
 		t.Fatalf("want 3 events retrying,retrying,exhausted; got err=%v outcomes=%v classes=%v", err, outcomes, classes)
@@ -199,7 +203,7 @@ func fakeHostedPostgres(t *testing.T, sqlState string) (dsn string, connections 
 func TestChaos7168_RealAuthRejectionIsNotRetriedAndIsLogged(t *testing.T) {
 	dsn, connections := fakeHostedPostgres(t, "28P01")
 	h := &captureHandler{}
-	_, err := openPostgresWithRetry(context.Background(), runtimepostgres.Config{DSN: dsn, PingTimeout: 2 * time.Second}, 3, time.Millisecond, slog.New(h))
+	_, err := OpenPostgresWithRetry(context.Background(), runtimepostgres.Config{DSN: dsn, PingTimeout: 2 * time.Second}, 3, time.Millisecond, slog.New(h))
 	outcomes, classes := attemptEvents(h)
 	if !errors.Is(err, runtimepostgres.ErrRejected) || connections.Load() != 1 || !reflect.DeepEqual(outcomes, []string{"not_retryable"}) || !reflect.DeepEqual(classes, []string{"postgres_rejected"}) {
 		t.Fatalf("want 1 connection, ErrRejected, one not_retryable event; got err=%v conns=%d outcomes=%v classes=%v", err, connections.Load(), outcomes, classes)
@@ -210,7 +214,7 @@ func TestChaos7168_RealAuthRejectionIsNotRetriedAndIsLogged(t *testing.T) {
 // for: retried to the bound through the real Open, three connections.
 func TestChaos7168_RealServerAnswerOf57P03IsRetriedToTheBound(t *testing.T) {
 	dsn, connections := fakeHostedPostgres(t, "57P03")
-	_, err := openPostgresWithRetry(context.Background(), runtimepostgres.Config{DSN: dsn, PingTimeout: 2 * time.Second}, 3, time.Millisecond, nil)
+	_, err := OpenPostgresWithRetry(context.Background(), runtimepostgres.Config{DSN: dsn, PingTimeout: 2 * time.Second}, 3, time.Millisecond, nil)
 	if !errors.Is(err, runtimepostgres.ErrUnavailable) || connections.Load() != 3 {
 		t.Fatalf("want 3 connections and ErrUnavailable, got err=%v conns=%d", err, connections.Load())
 	}
@@ -219,7 +223,7 @@ func TestChaos7168_RealServerAnswerOf57P03IsRetriedToTheBound(t *testing.T) {
 // Any other server answer (here 3D000 missing database) is terminal: one connection.
 func TestChaos7168_RealServerAnswerOf3D000IsTerminal(t *testing.T) {
 	dsn, connections := fakeHostedPostgres(t, "3D000")
-	_, err := openPostgresWithRetry(context.Background(), runtimepostgres.Config{DSN: dsn, PingTimeout: 2 * time.Second}, 3, time.Millisecond, nil)
+	_, err := OpenPostgresWithRetry(context.Background(), runtimepostgres.Config{DSN: dsn, PingTimeout: 2 * time.Second}, 3, time.Millisecond, nil)
 	if !errors.Is(err, runtimepostgres.ErrRejected) || connections.Load() != 1 {
 		t.Fatalf("want 1 connection and ErrRejected, got err=%v conns=%d", err, connections.Load())
 	}
@@ -230,7 +234,7 @@ func TestChaos7168_RealServerAnswerOf3D000IsTerminal(t *testing.T) {
 func TestChaos7168_UnreachableServerLogsThreeEventsAndErrorCarriesAttemptAndClass(t *testing.T) {
 	h := &captureHandler{}
 	cfg := runtimepostgres.Config{DSN: "postgres://u:p@127.0.0.1:1/db?sslmode=disable", PingTimeout: 500 * time.Millisecond}
-	_, err := openPostgresWithRetry(context.Background(), cfg, 3, time.Millisecond, slog.New(h))
+	_, err := OpenPostgresWithRetry(context.Background(), cfg, 3, time.Millisecond, slog.New(h))
 	outcomes, classes := attemptEvents(h)
 	if err == nil || !errors.Is(err, runtimepostgres.ErrUnavailable) || !strings.Contains(err.Error(), "attempt 3/3 (postgres_unavailable)") ||
 		!reflect.DeepEqual(outcomes, []string{"retrying", "retrying", "exhausted"}) || len(classes) != 3 {
@@ -270,7 +274,7 @@ func TestChaos7168_ServerTLSRefusalIsTerminalAndMidStartupCloseIsRetried(t *test
 		_, _ = c.Write([]byte("N"))
 	})
 	h := &captureHandler{}
-	_, err := openPostgresWithRetry(context.Background(), runtimepostgres.Config{DSN: "postgres://u:p@" + hp + "/db?sslmode=require", PingTimeout: 2 * time.Second}, 3, time.Millisecond, slog.New(h))
+	_, err := OpenPostgresWithRetry(context.Background(), runtimepostgres.Config{DSN: "postgres://u:p@" + hp + "/db?sslmode=require", PingTimeout: 2 * time.Second}, 3, time.Millisecond, slog.New(h))
 	outcomes, classes := attemptEvents(h)
 	if !errors.Is(err, runtimepostgres.ErrRejected) || conns.Load() != 1 || !reflect.DeepEqual(outcomes, []string{"not_retryable"}) || !reflect.DeepEqual(classes, []string{"postgres_rejected"}) {
 		t.Fatalf("TLS refusal: err=%v conns=%d outcomes=%v classes=%v", err, conns.Load(), outcomes, classes)
@@ -280,9 +284,35 @@ func TestChaos7168_ServerTLSRefusalIsTerminalAndMidStartupCloseIsRetried(t *test
 		_ = c.SetReadDeadline(time.Now().Add(time.Second))
 		_, _ = c.Read(buf)
 	})
-	_, err = openPostgresWithRetry(context.Background(), runtimepostgres.Config{DSN: "postgres://u:p@" + hp2 + "/db?sslmode=disable", PingTimeout: 2 * time.Second}, 3, time.Millisecond, nil)
+	_, err = OpenPostgresWithRetry(context.Background(), runtimepostgres.Config{DSN: "postgres://u:p@" + hp2 + "/db?sslmode=disable", PingTimeout: 2 * time.Second}, 3, time.Millisecond, nil)
 	// database/sql may itself re-dial a bad connection inside one ping, so the server can see more than one connection per attempt.
 	if !errors.Is(err, runtimepostgres.ErrUnavailable) || conns2.Load() < 3 || !strings.Contains(err.Error(), "attempt 3/3") {
 		t.Fatalf("mid-startup close: err=%v conns=%d", err, conns2.Load())
+	}
+}
+
+// CHAOS-7184: every attempt record must be Warn and visible at Info; nothing
+// below Info is captured, so a Warn->Debug downgrade drops the count to 0.
+func TestChaos7184_AttemptRecordsAreWarnVisibleAtInfo(t *testing.T) {
+	stubPostgresOpen(t, func(context.Context, runtimepostgres.Config) (*sql.DB, error) {
+		return nil, runtimepostgres.ErrUnavailable
+	})
+	h := &captureHandler{}
+	if _, err := OpenPostgresWithRetry(context.Background(), runtimepostgres.Config{}, 3, time.Millisecond, slog.New(h)); err == nil {
+		t.Fatal("want exhaustion error")
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	warns := 0
+	for _, r := range h.records {
+		if r.Level < slog.LevelInfo {
+			t.Fatalf("Info-level handler captured %v record %q", r.Level, r.Message)
+		}
+		if r.Message == postgresStartupAttemptEvent && r.Level == slog.LevelWarn {
+			warns++
+		}
+	}
+	if warns != 3 {
+		t.Fatalf("want 3 Warn attempt records visible at Info, got %d", warns)
 	}
 }

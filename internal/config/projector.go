@@ -66,6 +66,8 @@ type ProjectorConfig struct {
 	PostgresConnMaxLifetime        time.Duration
 	PostgresConnMaxIdleTime        time.Duration
 	PostgresPingTimeout            time.Duration
+	PostgresStartupAttempts        int
+	PostgresStartupBackoff         time.Duration
 	RequireBackingStores           bool
 	// LocalCompositionReady mirrors Config.LocalCompositionReady (dictation
 	// 811): the explicit dev opt-out allowing RequireBackingStores to
@@ -229,6 +231,7 @@ func loadProjector(lookup lookupEnv, required requiredStores) (ProjectorConfig, 
 	if cfg.PostgresPingTimeout <= 0 {
 		cfg.PostgresPingTimeout = defaultProjectorPingTimeout
 	}
+	cfg.PostgresStartupAttempts, cfg.PostgresStartupBackoff = hosted.PostgresStartupAttempts, hosted.PostgresStartupBackoff
 	cfg.RequireBackingStores = hosted.RequireBackingStores
 	cfg.LocalCompositionReady = hosted.LocalCompositionReady
 

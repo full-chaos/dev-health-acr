@@ -545,3 +545,30 @@ func TestLoad_rejectsIncoherentPairEvenAtDurationsMaximum(t *testing.T) {
 		t.Fatalf("load() error = %v, want an ACR_WRITE_TIMEOUT/ACR_REQUEST_TIMEOUT coherence error even at the maximum representable ACR_REQUEST_TIMEOUT (not silently accepted via integer overflow)", err)
 	}
 }
+
+// CHAOS-7184 r2 P1: acr-api's loader must reject an invalid startup retry
+// setting even in storeless development mode.
+func TestLoad_rejectsInvalidPostgresStartupRetryWithoutBackingStores(t *testing.T) {
+	for _, bad := range []map[string]string{
+		{"ACR_POSTGRES_STARTUP_ATTEMPTS": "0"},
+		{"ACR_POSTGRES_STARTUP_BACKOFF": "0s"},
+		{"ACR_POSTGRES_STARTUP_ATTEMPTS": "-1"},
+		{"ACR_POSTGRES_STARTUP_BACKOFF": "-1s"},
+		{"ACR_POSTGRES_STARTUP_ATTEMPTS": "abc"},
+	} {
+		env := map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true"}
+		for k, v := range bad {
+			env[k] = v
+		}
+		if _, err := load(mapLookup(env)); err == nil || !strings.Contains(err.Error(), "ACR_POSTGRES_STARTUP_") {
+			t.Fatalf("load(%v) error = %v, want a startup retry refusal", bad, err)
+		}
+	}
+}
+
+func TestLoad_unsetPostgresStartupRetryUsesDefaults(t *testing.T) {
+	cfg, err := load(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true"}))
+	if err != nil || cfg.PostgresStartupAttempts != defaultHostedPostgresStartupAttempts || cfg.PostgresStartupBackoff != defaultHostedPostgresStartupBackoff {
+		t.Fatalf("err=%v attempts=%d backoff=%v, want defaults", err, cfg.PostgresStartupAttempts, cfg.PostgresStartupBackoff)
+	}
+}
