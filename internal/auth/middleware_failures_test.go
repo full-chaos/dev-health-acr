@@ -82,7 +82,7 @@ func TestAuthenticatorTreatsExactExpiryAsExpired(t *testing.T) {
 func TestAuthenticatorRateLimitsBeforeCredentialLookup(t *testing.T) {
 	now := time.Date(2026, 7, 10, 15, 0, 0, 0, time.UTC)
 	store := &countingCredentialStore{CredentialStore: newMemoryCredentialStore(t)}
-	authenticator := newTestAuthenticator(t, store, memory.NewAuditStore(), now, NewMemoryLimiter(time.Minute, 1, 5))
+	authenticator := newTestAuthenticator(t, store, memory.NewAuditStore(), now, NewMemoryLimiter(time.Minute, 5, 1))
 	handler := authenticator.Middleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	request := func() *http.Request {
 		r := httptest.NewRequest(http.MethodGet, "/", nil)

@@ -8,7 +8,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-func (a *Authenticator) authenticateWebAssertion(w http.ResponseWriter, r *http.Request, ip string, now time.Time, allow bool, next http.Handler) {
+func (a *Authenticator) authenticateWebAssertion(w http.ResponseWriter, r *http.Request, ip string, now time.Time, allow bool, release func(), next http.Handler) {
 	if !allow || a.webAssertions == nil || len(r.Header.Values("Authorization")) != 0 {
 		a.recordUnknownFailure(r, ip, "invalid_web_assertion", now)
 		a.writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
@@ -31,6 +31,7 @@ func (a *Authenticator) authenticateWebAssertion(w http.ResponseWriter, r *http.
 		return
 	}
 	ctx := context.WithValue(r.Context(), principalKey{}, principal)
+	release()
 	response := &responseStatusWriter{ResponseWriter: w}
 	next.ServeHTTP(response, r.WithContext(ctx))
 	if response.successful() {

@@ -12,6 +12,7 @@ const (
 	defaultMaxTrackedOrganizations = 1024
 	defaultMaxCredentialsPerOrg    = 128
 	defaultAuthTrackedKeys         = 4096
+	defaultAuthMaxInFlight         = 64
 )
 
 type ClassLimitConfig struct {
@@ -20,14 +21,17 @@ type ClassLimitConfig struct {
 }
 
 type RequestControlsConfig struct {
-	Auth                    ClassLimitConfig
-	Context                 ClassLimitConfig
-	Evidence                ClassLimitConfig
-	Snapshot                ClassLimitConfig
-	Episode                 ClassLimitConfig
-	Data                    ClassLimitConfig
-	AuthFailures            int
-	AuthTrackedKeys         int
+	Auth            ClassLimitConfig
+	Context         ClassLimitConfig
+	Evidence        ClassLimitConfig
+	Snapshot        ClassLimitConfig
+	Episode         ClassLimitConfig
+	Data            ClassLimitConfig
+	AuthFailures    int
+	AuthTrackedKeys int
+	// AuthMaxInFlight bounds concurrent undecided authentication attempts per
+	// client address; 0 means the limiter default (64).
+	AuthMaxInFlight         int
 	PerOrgConcurrency       int
 	MaxTrackedOrganizations int
 	MaxCredentialsPerOrg    int
@@ -56,7 +60,7 @@ func requestControlsValue(lookup lookupEnv, fallback int) (RequestControlsConfig
 			return RequestControlsConfig{}, err
 		}
 	}
-	values := make([]int, 5)
+	values := make([]int, 6)
 	for index, value := range []struct {
 		key      string
 		fallback int
@@ -66,6 +70,7 @@ func requestControlsValue(lookup lookupEnv, fallback int) (RequestControlsConfig
 		{"ACR_PER_ORG_CONCURRENCY", min(8, fallback)},
 		{"ACR_MAX_TRACKED_ORGANIZATIONS", defaultMaxTrackedOrganizations},
 		{"ACR_MAX_CREDENTIALS_PER_ORG", defaultMaxCredentialsPerOrg},
+		{"ACR_AUTH_MAX_IN_FLIGHT", defaultAuthMaxInFlight},
 	} {
 		values[index], err = intValue(lookup, value.key, value.fallback)
 		if err != nil {
@@ -96,7 +101,7 @@ func requestControlsValue(lookup lookupEnv, fallback int) (RequestControlsConfig
 	return RequestControlsConfig{
 		Auth: classes[0], Context: classes[1], Evidence: classes[2], Snapshot: classes[3], Episode: classes[4], Data: classes[5],
 		AuthFailures: values[0], AuthTrackedKeys: values[1], PerOrgConcurrency: values[2],
-		MaxTrackedOrganizations: values[3], MaxCredentialsPerOrg: values[4], StateRetention: stateRetention,
+		MaxTrackedOrganizations: values[3], MaxCredentialsPerOrg: values[4], AuthMaxInFlight: values[5], StateRetention: stateRetention,
 		ConcurrencyRetryAfter: concurrencyRetry, MaximumRetryAfter: maximumRetry,
 	}, nil
 }
@@ -112,7 +117,7 @@ func (c RequestControlsConfig) validate() error {
 			return fmt.Errorf("ACR_%s limit window and requests must be positive", entry.name)
 		}
 	}
-	if c.AuthFailures < 1 || c.AuthTrackedKeys < 1 || c.PerOrgConcurrency < 1 || c.MaxTrackedOrganizations < 1 || c.MaxCredentialsPerOrg < 1 {
+	if c.AuthFailures < 1 || c.AuthTrackedKeys < 1 || c.PerOrgConcurrency < 1 || c.MaxTrackedOrganizations < 1 || c.MaxCredentialsPerOrg < 1 || c.AuthMaxInFlight < 0 {
 		return errors.New("ACR request-control counts must be positive")
 	}
 	if c.StateRetention <= 0 || c.ConcurrencyRetryAfter <= 0 || c.MaximumRetryAfter <= 0 || c.ConcurrencyRetryAfter > c.MaximumRetryAfter {
