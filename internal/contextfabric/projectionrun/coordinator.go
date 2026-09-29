@@ -56,11 +56,12 @@ const (
 	// DrainYieldExhausted: the source reported no further batch available,
 	// or reached a terminal build-completion mode -- ordinary steady state.
 	DrainYieldExhausted DrainYieldReason = "exhausted"
-	// DrainYieldBudgetExceeded: more work MAY remain (the drain stopped on its
-	// budget without a confirming empty probe, so an exact-fit last page is
-	// indistinguishable from a backlog unless the batch completed enumeration)
-	// and this source's own per-tick drain budget (Config.DrainBatchBudget, applied
-	// to each source separately, not shared) was spent.
+	// DrainYieldBudgetExceeded: more work was available and this source's own
+	// per-tick drain budget (Config.DrainBatchBudget, applied to each source
+	// separately, not shared) was spent. The drain makes one confirming
+	// attempt beyond the budget, so this reason means that attempt applied a
+	// batch (or, with extra draining disabled, that no probe was made). An
+	// exact-fit budget reports exhausted instead.
 	// The next Tick resumes from the checkpoint this tick's last batch
 	// advanced to -- no work is lost, only deferred.
 	DrainYieldBudgetExceeded DrainYieldReason = "budget_exceeded"
@@ -178,8 +179,8 @@ func (o SlogObserver) ObserveProjectionDrain(outcome DrainOutcome) {
 		logger.Info("context_fabric: projection tick drained multiple batches", attrs...)
 		return
 	}
-	// budget_exceeded means work MAY remain (an exact-fit last page reports it
-	// too, without a confirming probe). With
+	// budget_exceeded means work was known to remain (the confirming attempt
+	// beyond the budget applied a batch). With
 	// Applied > 1 that is healthy progress (the multi-batch line above); with
 	// Applied <= 1 it is the starvation shape (a source
 	// pulling one page per tick while its backlog stays), which must be
@@ -2347,6 +2348,7 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 	// terminal source outage read healthy under build while the identical
 	// shape counted as a failure under steady state.
 	var lastErr error
+	confirming := false
 	progressStale := false
 	for {
 		// ONE clock read decides both "may it attempt" and "is it withheld by
@@ -2436,9 +2438,23 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 			reason = DrainYieldContextDone
 			break
 		}
-		if budget == nil || *budget <= 0 {
-			reason = DrainYieldBudgetExceeded
+		if confirming {
+			// The confirming attempt: applied means work existed beyond the
+			// budget (known), not applied means the budget was an exact fit.
+			if run.Applied {
+				reason = DrainYieldBudgetExceeded
+			} else {
+				reason = DrainYieldExhausted
+			}
 			break
+		}
+		if budget == nil || *budget <= 0 {
+			if budget == nil || c.drainBudget <= 0 {
+				reason = DrainYieldBudgetExceeded // extra draining disabled by config
+				break
+			}
+			confirming = true
+			continue
 		}
 		*budget--
 	}
@@ -2788,6 +2804,7 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 	batches, applied := 0, 0
 	reason := DrainYieldExhausted
 	var lastErr error
+	confirming := false
 	for {
 		pairEvaluated, pairApplied, pairErr, pairStale, pairWithheld, pairComplete := c.runPairOnce(ctx, orgID, source, checkpoints)
 		if !pairEvaluated {
@@ -2857,14 +2874,34 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 			reason = DrainYieldExhausted
 		case ctx.Err() != nil:
 			reason = DrainYieldContextDone
-		case budget == nil || *budget <= 0:
-			// budget_exceeded claims work remains. A batch that itself
-			// completed enumeration says none does.
+		case confirming:
+			// The confirming attempt below applied a batch: work existed
+			// beyond the budget, so budget_exceeded is KNOWN true -- unless
+			// that batch itself claims the source has nothing more.
 			if pairComplete {
 				reason = DrainYieldExhausted
 			} else {
 				reason = DrainYieldBudgetExceeded
 			}
+		case budget == nil || *budget <= 0:
+			if pairComplete {
+				// The applied batch itself claims the source has nothing more.
+				reason = DrainYieldExhausted
+				break
+			}
+			if budget == nil || c.drainBudget <= 0 {
+				// Extra draining disabled by config: one attempt per tick
+				// is the design; nothing is known about a backlog.
+				reason = DrainYieldBudgetExceeded
+				break
+			}
+			// Budget spent on a page that did not claim completion. Make ONE
+			// confirming attempt beyond it (total calls: budget+2; the same
+			// attempt every dry drain makes): an
+			// empty result means the budget was an exact fit (exhausted), an
+			// applied batch proves work existed beyond it (budget_exceeded).
+			confirming = true
+			continue
 		default:
 			*budget--
 			continue
