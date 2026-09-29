@@ -206,3 +206,13 @@ func EntityTableSubjectKindsForTest() map[string][]contractsv1.ContextFabricSubj
 func SetOrgSourceClockForTest(source *ClickHouseOrgSource, now func() time.Time) {
 	source.now = now
 }
+
+// RepositoryTeamsStatementForTest renders queryRepositoryTeams' statement
+// from scratch (CHAOS-7119 group-key parity test).
+func RepositoryTeamsStatementForTest() string { return repositoryTeamsStatement(cursorState{}) }
+
+// RepositoryTeamsGroupColumnsForTest is the edge's GROUP BY / row-key column
+// list (CHAOS-7119).
+func RepositoryTeamsGroupColumnsForTest() []string {
+	return append([]string(nil), repositoryTeamsGroupColumns...)
+}

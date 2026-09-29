@@ -10,7 +10,7 @@ import (
 )
 
 // The default rendering filters to resolved, existing repositories; the graph
-// edge's mode keeps every row and marks the unresolved ones with ”. Both
+// edge's mode keeps every row and marks the unresolved ones with an empty repo_key. Both
 // share the same resolution clauses, which is the point of the package.
 func TestKeepUnresolvedChangesOnlyTheFilter(t *testing.T) {
 	facts := ownershipresolve.OwnedRepositoriesSource("", ownershipresolve.Options{})

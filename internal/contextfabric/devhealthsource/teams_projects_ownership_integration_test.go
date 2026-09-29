@@ -441,6 +441,16 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 		{"the row-key SQL agrees with Go byte for byte", "30000000-0000-4000-8000-000000000013", subRowKeySQLAgreesWithGoByteForByte},
 		{"two groups sharing a project id get distinct cursor keys", "30000000-0000-4000-8000-000000000014", subTwoGroupsSharingAProjectIDGetDistinctCursorKeys},
 		{"a repository->team edge is re-emitted when its repos row arrives", "30000000-0000-4000-8000-000000000016", subRepositoryTeamEdgeReemittedWhenReposRowArrives},
+		// CHAOS-7119: NULL repo_id ownership rows resolved by name in the edge.
+		{"CHAOS-7119 a NULL repo_id name resolves case-insensitively", "30000000-0000-4000-8000-000000000017", subCHAOS7119NameResolvesCaseInsensitively},
+		{"CHAOS-7119 a provider mismatch does not resolve", "30000000-0000-4000-8000-000000000018", subCHAOS7119ProviderMismatchDoesNotResolve},
+		{"CHAOS-7119 a ghost name is omitted and counted", "30000000-0000-4000-8000-000000000019", subCHAOS7119GhostNameIsOmittedAndCounted},
+		{"CHAOS-7119 a row's own repo_id wins over its name", "30000000-0000-4000-8000-00000000001a", subCHAOS7119OwnIDWinsOverName},
+		{"CHAOS-7119 an unmatched name never lands on the zero UUID", "30000000-0000-4000-8000-00000000001b", subCHAOS7119UnmatchedNameNeverLandsOnTheZeroUUID},
+		{"CHAOS-7119 a name row and an id row for one repository are one edge", "30000000-0000-4000-8000-00000000001c", subCHAOS7119NameAndIDRowsForOneRepositoryAreOneEdge},
+		{"CHAOS-7119 an orphan repo_id keeps the sentinel edge", "30000000-0000-4000-8000-00000000001d", subCHAOS7119OrphanIDKeepsTheSentinelEdge},
+		{"CHAOS-7119 a late repos row resolves the name once", "30000000-0000-4000-8000-00000000001e", subCHAOS7119LateReposRowResolvesTheNameOnce},
+		{"CHAOS-7119 pagination over name and id rows is exact", "30000000-0000-4000-8000-00000000001f", subCHAOS7119PaginationOverNameAndIDRowsIsExact},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {

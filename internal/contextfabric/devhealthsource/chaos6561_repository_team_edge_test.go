@@ -27,23 +27,25 @@ import (
 
 // repositoryTeamsMarker is the substring that routes a fake query to the
 // repository<->team producer. It must NOT match queryTeams' own
-// team_repo_ownership join (`FROM team_repo_ownership FINAL`), or a fixture
-// would feed ownership rows into the team scan.
-const repositoryTeamsMarker = "FROM team_repo_ownership AS rto FINAL"
+// team_repo_ownership join (`FROM team_repo_ownership FINAL`, which the
+// CHAOS-7119 resolved source also contains), or a fixture would feed
+// ownership rows into the team scan -- so it names a column alias only
+// repositoryTeamsStatement selects.
+const repositoryTeamsMarker = "AS latest_repo_full_name"
 
 // repositoryTeamRow mirrors queryRepositoryTeams' SELECT list exactly.
 type repositoryTeamFixture struct {
-	repoKey, nullRepoName, repoFullName, repoSlug string
-	teamID, source, provider, matchType           string
-	isPrimary                                     uint8
-	specificity, priority                         int64
-	validFrom                                     time.Time
-	latestIsOpen                                  uint8
-	latestValidTo, observedAt                     time.Time
+	repoKey, repoFullName, repoSlug     string
+	teamID, source, provider, matchType string
+	isPrimary                           uint8
+	specificity, priority               int64
+	validFrom                           time.Time
+	latestIsOpen                        uint8
+	latestValidTo, observedAt           time.Time
 }
 
 func (f repositoryTeamFixture) row() []any {
-	return []any{f.repoKey, f.nullRepoName, f.repoFullName, f.repoSlug, f.teamID, f.source, f.provider, f.matchType,
+	return []any{f.repoKey, f.repoFullName, f.repoSlug, f.teamID, f.source, f.provider, f.matchType,
 		f.isPrimary, f.specificity, f.priority, f.validFrom, f.latestIsOpen, f.latestValidTo, f.observedAt}
 }
 
@@ -242,16 +244,17 @@ func TestChaos6561_ClosedLatestAssertionEndsTheEdge(t *testing.T) {
 	}
 }
 
-// (d) A NULL repo_id row names no repository node, so it is OMITTED -- and
-// the omission is counted and logged, never silent. A row whose repo_id has
+// (d) An UNRESOLVED row (NULL repo_id and no repos row matching its
+// provider/name, so the SQL hands it back with an empty repo_key -- CHAOS-7119)
+// names no repository node, so it is OMITTED -- and the omission is counted
+// and logged, never silent. A row whose repo_id has
 // no repos row still projects (the repository endpoint is a deterministic
 // id) but is scoped fail-closed to the orphan sentinel, and counted.
-func TestChaos6561_NullRepoIDIsOmittedAndLogged(t *testing.T) {
+func TestChaos6561_UnresolvedRowIsOmittedAndLogged(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	valid := openRepositoryTeam(repoGitHubID, "full-chaos/dev-health-ops", "gh:ops-team", "github", "native", at)
 	nullRepo := openRepositoryTeam("", "full-chaos/*", "gh:ops-team", "github", "inferred", at.Add(time.Second))
-	nullRepo.nullRepoName = "full-chaos/*"
 	nullRepo.repoSlug = ""
 	orphan := openRepositoryTeam(repoGitLabID, "full.chaos/gone", "gl:full.chaos", "gitlab", "native", at.Add(2*time.Second))
 	orphan.repoSlug = ""
@@ -272,7 +275,7 @@ func TestChaos6561_NullRepoIDIsOmittedAndLogged(t *testing.T) {
 	}
 	text := logged.String()
 	for _, want := range []string{
-		"repository_team_rows_omitted_null_repo_id=1",
+		"repository_team_groups_unresolved=1",
 		"repository_team_edges_orphaned_repository=1",
 		"repository_team_edges_asserted=2",
 	} {
@@ -290,6 +293,9 @@ func TestChaos6561_NullRepoIDIsOmittedAndLogged(t *testing.T) {
 // rows' updated_at will not move just because a producer now reads them, so
 // only a forced rebuild projects the backlog. The worker must refuse the
 // incremental advance under the v11 marker, and accept the current one.
+// CHAOS-7119 (v12 -> v13): the same holds for an organization caught up under
+// v12, whose NULL repo_id rows were omitted and are now resolved by name --
+// the v12 marker must force the rebuild too.
 func TestChaos6561_V11CheckpointForcesARebuild(t *testing.T) {
 	t.Parallel()
 	const deployedBefore = "devhealthsource.teams_projects.v11"
@@ -303,6 +309,7 @@ func TestChaos6561_V11CheckpointForcesARebuild(t *testing.T) {
 		wantRebuild bool
 	}{
 		{"v11 marker forces a rebuild", deployedBefore, true},
+		{"v12 marker forces a rebuild (CHAOS-7119 name resolution)", "devhealthsource.teams_projects.v12", true},
 		{"current marker advances", devhealthsource.TeamsProjectsSourceVersion, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -361,4 +368,28 @@ func (s *singleCheckpointStore) LoadProjectionCheckpoint(context.Context, string
 func (s *singleCheckpointStore) CompareAndSwapProjectionCheckpoint(_ context.Context, _ contextfabric.ProjectionCheckpoint, next contextfabric.ProjectionCheckpoint) error {
 	s.checkpoint = next
 	return nil
+}
+
+// TestChaos7119GroupKeyCarriesNoNameColumn pins the CHAOS-7119 lockstep
+// removal: the edge groups on (provider, repo_key, team, source) and nothing
+// else, and the row key is built from that same list. A name column in the
+// group (null_repo_name, or repo_full_name) would split a name-resolved row
+// and an id row for one repository into two groups with ONE RelationshipID.
+func TestChaos7119GroupKeyCarriesNoNameColumn(t *testing.T) {
+	t.Parallel()
+	columns := devhealthsource.RepositoryTeamsGroupColumnsForTest()
+	want := []string{"o.provider", "o.repo_key", "o.team_id", "o.source_name"}
+	if strings.Join(columns, ",") != strings.Join(want, ",") {
+		t.Fatalf("group columns = %v, want %v", columns, want)
+	}
+	statement := devhealthsource.RepositoryTeamsStatementForTest()
+	if !strings.Contains(statement, "GROUP BY "+strings.Join(want, ", ")+" ") && !strings.Contains(statement, "GROUP BY "+strings.Join(want, ", ")+"\n") {
+		t.Fatalf("statement GROUP BY is not exactly %v:\n%s", want, statement)
+	}
+	if strings.Contains(statement, "null_repo_name") {
+		t.Fatalf("statement still carries null_repo_name:\n%s", statement)
+	}
+	if want := devhealthsource.RowKeySQLForTest(want...); !strings.Contains(statement, want) {
+		t.Fatalf("statement row key is not rowKeySQL(%v):\n%s", columns, statement)
+	}
 }
