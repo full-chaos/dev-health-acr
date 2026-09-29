@@ -3,6 +3,7 @@ package ownershipresolve_test
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -56,6 +57,38 @@ func TestExtraColumnsAreAppended(t *testing.T) {
 // TestNoSecondInlineCopyOfTheRule is the drift guard: the name-resolution
 // clause must live here only. A second inline copy in the fact reads or the
 // graph producer is exactly the divergence CHAOS-7119 removed.
+var (
+	whitespace        = regexp.MustCompile(`\s+`)
+	inlineRuleClauses = []*regexp.Regexp{
+		regexp.MustCompile(`lower\([a-z_][a-z0-9_]*\.repo\)=lower\(`),
+		regexp.MustCompile(`(^|[^0-9.])1as` + "`?" + `matched([^a-z0-9_]|$)`),
+	}
+)
+
+// TestInlineRuleGuardFindsReformattedCopies proves the guard's matcher on
+// the reformatted variants the r1 review planted, and on the canonical text.
+func TestInlineRuleGuardFindsReformattedCopies(t *testing.T) {
+	for _, variant := range []string{
+		"lower(r.repo) = lower(o.repo_full_name)",
+		"lower ( r.repo ) = lower ( o.repo_full_name )",
+		"LOWER(rr.repo)=LOWER(x)",
+		"SELECT 1 AS matched",
+		"SELECT 1 AS\n\tmatched,",
+	} {
+		normalized := strings.ToLower(whitespace.ReplaceAllString(variant, ""))
+		found := false
+		for _, clause := range inlineRuleClauses {
+			found = found || clause.MatchString(normalized)
+		}
+		if !found {
+			t.Errorf("guard misses %q", variant)
+		}
+	}
+	if normalized := strings.ToLower(whitespace.ReplaceAllString("SELECT 11 AS unmatched_rows", "")); inlineRuleClauses[1].MatchString(normalized) {
+		t.Error("guard matches an unrelated alias")
+	}
+}
+
 func TestNoSecondInlineCopyOfTheRule(t *testing.T) {
 	for _, dir := range []string{"../devhealthfacts", "../devhealthsource"} {
 		entries, err := os.ReadDir(dir)
@@ -73,9 +106,13 @@ func TestNoSecondInlineCopyOfTheRule(t *testing.T) {
 				t.Fatalf("read %s: %v", name, err)
 			}
 			scanned++
-			for _, clause := range []string{"lower(r.repo) = lower(", "1 AS matched"} {
-				if strings.Contains(string(body), clause) {
-					t.Errorf("%s/%s carries an inline copy of %q; use ownershipresolve", dir, name, clause)
+			// Compared with whitespace removed and case folded, and with any
+			// table alias, so a reformatted copy ("lower ( rr.repo )",
+			// "1 AS\n matched") is still found (codex r1 P3 on #698).
+			normalized := strings.ToLower(whitespace.ReplaceAllString(string(body), ""))
+			for _, clause := range inlineRuleClauses {
+				if clause.MatchString(normalized) {
+					t.Errorf("%s/%s carries an inline copy of %s; use ownershipresolve", dir, name, clause)
 				}
 			}
 		}
