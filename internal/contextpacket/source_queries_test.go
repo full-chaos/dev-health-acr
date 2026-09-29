@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/dependencyrelation"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 )
 
@@ -143,5 +144,28 @@ func TestAIWorkflowRunsSourceQuery_usesRunIDForBlankCompositeLabel(t *testing.T)
 	// Then
 	if !usesRunIDForBlankComposite {
 		t.Fatal("ai_workflow_runs.v1 must use its real run ID when descriptive fields are blank")
+	}
+}
+
+// CHAOS-7177: the dependency evidence id is per (source, target, canonical
+// relation): twin alias rows collapse to one evidence row (else the locator
+// re-query sees two rows for one id and answers not found) while distinct
+// relations of one pair keep distinct ids.
+func TestWorkItemDependenciesSourceQueryIdentityIsTheCanonicalRelation(t *testing.T) {
+	t.Parallel()
+	var statement string
+	for _, q := range contextpacket.SourceQueryCatalogV1 {
+		if q.ID == "work_item_dependencies.v1" {
+			statement = q.Statement
+		}
+	}
+	key := dependencyrelation.KeySQL("d.relationship_type")
+	for _, want := range []string{
+		"d.source_work_item_id, ':', d.target_work_item_id, ':', " + key + ") evidence_ref_id",
+		"ORDER BY d.source_work_item_id, d.target_work_item_id, " + key + ", d.last_synced DESC, d.relationship_type ASC LIMIT 1 BY d.source_work_item_id, d.target_work_item_id, " + key,
+	} {
+		if !strings.Contains(statement, want) {
+			t.Fatalf("work_item_dependencies.v1 missing %q: %s", want, statement)
+		}
 	}
 }

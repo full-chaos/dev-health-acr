@@ -2,9 +2,9 @@ package devhealthfacts
 
 import (
 	"context"
-	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/dependencyrelation"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -126,10 +126,12 @@ FROM work_item_dependencies AS d FINAL
 INNER JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
 `+counterpartRepositoryJoinSQL("d.source_work_item_id")+`
 WHERE d.org_id = {org_id:String} AND concat(toString(t.repo_id), ':', d.target_work_item_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) = '`+blockerRelationshipType+`'
-  AND d.target_work_item_id IN `+authorized+` AND d.source_work_item_id IN `+authorized), settings)
+  AND d.target_work_item_id IN `+authorized+` AND d.source_work_item_id IN `+authorized+`
+ORDER BY toString(t.repo_id), d.target_work_item_id, d.source_work_item_id
+LIMIT 1 BY toString(t.repo_id), d.target_work_item_id, d.source_work_item_id`), settings)
 	rowCount := 0
+	seenBlockers := map[string]struct{}{}
 	scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadWorkItemBlockers", statement, orgID, ids, func(row readers.RowScanner) error {
-		rowCount++
 		var sourceID, targetID, targetRepoID, sourceRepoID string
 		var sourceRepoCount uint64
 		if err := row.Scan(&sourceID, &targetID, &targetRepoID, &sourceRepoID, &sourceRepoCount); err != nil {
@@ -139,6 +141,15 @@ WHERE d.org_id = {org_id:String} AND concat(toString(t.repo_id), ':', d.target_w
 		if !ok {
 			return nil
 		}
+		// CHAOS-7177: the predicate above is case-insensitive, and the table key
+		// carries the raw type, so 'blocks' and 'BLOCKS' rows for one pair both
+		// survive FINAL. One pair blocks once.
+		blockKey := targetRepoID + "\x00" + targetID + "\x00" + sourceID
+		if _, dup := seenBlockers[blockKey]; dup {
+			return nil
+		}
+		seenBlockers[blockKey] = struct{}{}
+		rowCount++
 		if !budget.admit() {
 			return nil
 		}
@@ -149,7 +160,7 @@ WHERE d.org_id = {org_id:String} AND concat(toString(t.repo_id), ':', d.target_w
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactBlockers, Subject: subject,
 			Fields:         fields,
-			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItemDependency, sourceID+":"+targetID)},
+			EvidenceRefIDs: []string{dependencyEvidenceRefID(sourceID, targetID, dependencyrelation.Key(blockerRelationshipType))},
 		})
 		return nil
 	}, authorizationBindings...)
@@ -217,10 +228,12 @@ FROM work_item_dependencies AS d FINAL
 INNER JOIN work_items AS s FINAL ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
 `+counterpartRepositoryJoinSQL("d.target_work_item_id")+`
 WHERE d.org_id = {org_id:String} AND concat(toString(s.repo_id), ':', d.source_work_item_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) != '`+blockerRelationshipType+`'
-  AND d.source_work_item_id IN `+authorized+` AND d.target_work_item_id IN `+authorized), settings)
+  AND d.source_work_item_id IN `+authorized+` AND d.target_work_item_id IN `+authorized+`
+ORDER BY toString(s.repo_id), d.source_work_item_id, d.target_work_item_id, `+dependencyrelation.KeySQL("d.relationship_type")+`, lower(ifNull(d.relationship_type, ''))
+LIMIT 1 BY toString(s.repo_id), d.source_work_item_id, d.target_work_item_id, `+dependencyrelation.KeySQL("d.relationship_type")), settings)
 	rowCount := 0
+	seenRelations := map[string]struct{}{}
 	scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadWorkItemRequiredChildren", statement, orgID, ids, func(row readers.RowScanner) error {
-		rowCount++
 		var sourceID, targetID, relationshipType, sourceRepoID, targetRepoID string
 		var targetRepoCount uint64
 		if err := row.Scan(&sourceID, &targetID, &relationshipType, &sourceRepoID, &targetRepoID, &targetRepoCount); err != nil {
@@ -230,6 +243,21 @@ WHERE d.org_id = {org_id:String} AND concat(toString(s.repo_id), ':', d.source_w
 		if !ok {
 			return nil
 		}
+		// CHAOS-7177: resolve the row's type through the projector's alias
+		// table so a stale 'relates' row and a live 'relates_to' row for one
+		// pair yield ONE fact. Dedupe before admit(): a twin must not spend
+		// output budget.
+		relationKey := dependencyrelation.Key(relationshipType)
+		emittedType := dependencyrelation.EmittedSpelling(relationshipType)
+		// Empty and whitespace-only types share one key too (':fwd').
+		dedupeKey := sourceRepoID + "\x00" + sourceID + "\x00" + targetID + "\x00" + relationKey
+		if _, dup := seenRelations[dedupeKey]; dup {
+			return nil
+		}
+		seenRelations[dedupeKey] = struct{}{}
+		// Count DISTINCT relations only: the SQL already collapses twins before
+		// the probe limit, and a Go-side twin must not read as truncation.
+		rowCount++
 		if !budget.admit() {
 			return nil
 		}
@@ -237,12 +265,12 @@ WHERE d.org_id = {org_id:String} AND concat(toString(s.repo_id), ':', d.source_w
 		if ref, ok := counterpartWorkItemRef(targetRepoID, targetRepoCount, targetID); ok {
 			fields["required_child_work_item_ref"] = contextfabric.StringFactValue(ref)
 		}
-		if relationshipType != "" {
-			fields["relationship_type"] = contextfabric.StringFactValue(strings.ToLower(relationshipType))
+		if emittedType != "" {
+			fields["relationship_type"] = contextfabric.StringFactValue(emittedType)
 		}
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactRequiredChildren, Subject: subject, Fields: fields,
-			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItemDependency, sourceID+":"+targetID)},
+			EvidenceRefIDs: []string{dependencyEvidenceRefID(sourceID, targetID, relationKey)},
 		})
 		return nil
 	}, authorizationBindings...)
@@ -253,4 +281,12 @@ WHERE d.org_id = {org_id:String} AND concat(toString(s.repo_id), ':', d.source_w
 	state, emptyReason := currentAxisReadState(len(facts))
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: budget.truncated()}
 	return result, nil
+}
+
+// dependencyEvidenceRefID is the evidence identity of ONE dependency relation:
+// (source, target, canonical relation key). It must equal the evidence_ref_id
+// the work_item_dependencies.v1 catalog query derives (CHAOS-7177), or a fact
+// would cite a row the locator resolves to another relation of the pair.
+func dependencyEvidenceRefID(sourceID, targetID, relationKey string) string {
+	return evidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItemDependency, sourceID+":"+targetID+":"+relationKey)
 }

@@ -3,6 +3,8 @@ package devhealthfacts_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/dependencyrelation"
 	"strconv"
 	"strings"
 	"testing"
@@ -283,5 +285,168 @@ func TestBlockersProviderNotTruncatedBelowLimit(t *testing.T) {
 	}
 	if result.Truncated {
 		t.Fatalf("result.Truncated = true, want false when the row count is below the limit")
+	}
+}
+
+// CHAOS-7177: a stale 'relates' row and a live 'relates_to' row for one pair
+// (7 Jira pairs on the bigboy venue) state ONE relation.
+func TestRequiredChildrenProviderDedupesTwinRowsByCanonicalRelation(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM work_item_dependencies", rows: [][]any{
+			{"WIDGET-101", "WIDGET-200", "relates", "repo-1", "repo-9", uint64(1)},
+			{"WIDGET-101", "WIDGET-200", "relates_to", "repo-1", "repo-9", uint64(1)},
+			{"WIDGET-101", "WIDGET-300", "relates_to", "repo-1", "repo-9", uint64(1)},
+			{"WIDGET-101", "WIDGET-200", "requires", "repo-1", "repo-9", uint64(1)},
+			{"WIDGET-101", "WIDGET-400", "blocked_by", "repo-1", "repo-9", uint64(1)},
+			{"WIDGET-101", "WIDGET-400", "IS_BLOCKED_BY", "repo-1", "repo-9", uint64(1)},
+		}},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactRequiredChildren)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactRequiredChildren, Subjects: []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	// Twins are collapsed IN SQL, before the probe LIMIT (CHAOS-7177 r3 P1), and the
+	// survivor is chosen by ORDER BY: the fake ignores SQL, so pin the shape.
+	stmt := ""
+	if len(client.queries) > 0 {
+		stmt = client.queries[0].statement
+	}
+	key := dependencyrelation.KeySQL("d.relationship_type")
+	if !strings.Contains(stmt, "ORDER BY toString(s.repo_id), d.source_work_item_id, d.target_work_item_id, "+key+", lower(ifNull(d.relationship_type, ''))\nLIMIT 1 BY toString(s.repo_id), d.source_work_item_id, d.target_work_item_id, "+key+"\nLIMIT 201") {
+		t.Fatalf("required-children query does not order and dedupe by canonical key before the probe limit")
+	}
+	type wire struct{ rel, evidence string }
+	byTarget := map[string][]wire{}
+	for _, fact := range result.Facts {
+		id := *fact.Fields["required_child_work_item_id"].String
+		byTarget[id] = append(byTarget[id], wire{*fact.Fields["relationship_type"].String, fact.EvidenceRefIDs[0]})
+	}
+	// WIDGET-200: alias twin -> ONE relates_to fact, plus the distinct 'requires' relation;
+	// the two facts must cite DISTINCT evidence ids (identity = canonical relation, not the pair).
+	if got := byTarget["WIDGET-200"]; len(got) != 2 || got[0].rel != "relates_to" || got[1].rel != "requires" || got[0].evidence == got[1].evidence {
+		t.Fatalf("WIDGET-200 = %#v, want relates_to and requires with distinct evidence ids", got)
+	}
+	if got := byTarget["WIDGET-300"]; len(got) != 1 || got[0].rel != "relates_to" {
+		t.Fatalf("WIDGET-300 = %#v", got)
+	}
+	// WIDGET-400: BLOCKED_BY + IS_BLOCKED_BY are one relation, emitted with ONE fixed spelling.
+	if got := byTarget["WIDGET-400"]; len(got) != 1 || got[0].rel != "blocked_by" {
+		t.Fatalf("WIDGET-400 = %#v, want one blocked_by fact", got)
+	}
+	if len(result.Facts) != 4 {
+		t.Fatalf("facts = %d, want 4: %v", len(result.Facts), byTarget)
+	}
+}
+
+// CHAOS-7177 r2: the wire output for an inverted pair must not depend on which
+// raw row arrives first.
+func TestRequiredChildrenProviderInvertedAliasOutputIsRowOrderIndependent(t *testing.T) {
+	t.Parallel()
+	read := func(first, second string) (string, string) {
+		client := &fakeClient{tables: []fakeTable{{match: "FROM work_item_dependencies", rows: [][]any{
+			{"WIDGET-101", "WIDGET-400", first, "repo-1", "repo-9", uint64(1)},
+			{"WIDGET-101", "WIDGET-400", second, "repo-1", "repo-9", uint64(1)},
+		}}}}
+		provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactRequiredChildren)
+		result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Kind: contextfabric.FactRequiredChildren, Subjects: []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")},
+		})
+		if err != nil || len(result.Facts) != 1 {
+			t.Fatalf("err=%v facts=%d, want 1", err, len(result.Facts))
+		}
+		return *result.Facts[0].Fields["relationship_type"].String, result.Facts[0].EvidenceRefIDs[0]
+	}
+	relA, evA := read("BLOCKED_BY", "IS_BLOCKED_BY")
+	relB, evB := read("IS_BLOCKED_BY", "BLOCKED_BY")
+	if relA != relB || evA != evB || relA != "blocked_by" {
+		t.Fatalf("order-dependent output: (%q,%q) vs (%q,%q)", relA, evA, relB, evB)
+	}
+}
+
+// CHAOS-7177: 'blocks' and 'BLOCKS' rows for one pair both survive FINAL (the
+// raw type is part of the table key) and the predicate is case-insensitive.
+func TestBlockersProviderDedupesCaseVariantRows(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM work_item_dependencies", rows: [][]any{
+			{"WIDGET-200", "WIDGET-101", "repo-1", "repo-9", uint64(1)},
+			{"WIDGET-200", "WIDGET-101", "repo-1", "repo-9", uint64(1)},
+			{"WIDGET-300", "WIDGET-101", "repo-1", "repo-9", uint64(1)},
+		}},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactBlockers)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactBlockers, Subjects: []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(result.Facts) != 2 {
+		t.Fatalf("blocker facts = %d, want 2 (WIDGET-200 once, WIDGET-300 once)", len(result.Facts))
+	}
+}
+
+// CHAOS-7177 r3 P1: empty and whitespace-only types share one key, so they dedupe too.
+func TestRequiredChildrenProviderDedupesEmptyRelationTypes(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM work_item_dependencies", rows: [][]any{
+		{"WIDGET-101", "WIDGET-200", "", "repo-1", "repo-9", uint64(1)},
+		{"WIDGET-101", "WIDGET-200", " ", "repo-1", "repo-9", uint64(1)},
+	}}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactRequiredChildren)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactRequiredChildren, Subjects: []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")},
+	})
+	if err != nil || len(result.Facts) != 1 {
+		t.Fatalf("err=%v facts=%d, want 1", err, len(result.Facts))
+	}
+	if _, ok := result.Facts[0].Fields["relationship_type"]; ok {
+		t.Fatalf("empty type emitted a relationship_type field: %#v", result.Facts[0].Fields)
+	}
+}
+
+// CHAOS-7177 r3 P1: a twin row must not consume a probe slot or read as truncation.
+func TestRequiredChildrenProviderTwinDoesNotReadAsTruncation(t *testing.T) {
+	t.Parallel()
+	rows := [][]any{}
+	for i := 0; i < 199; i++ {
+		rows = append(rows, []any{"WIDGET-101", fmt.Sprintf("WIDGET-%03d", 200+i), "requires", "repo-1", "repo-9", uint64(1)})
+	}
+	rows = append(rows,
+		[]any{"WIDGET-101", "WIDGET-999", "relates", "repo-1", "repo-9", uint64(1)},
+		[]any{"WIDGET-101", "WIDGET-999", "relates_to", "repo-1", "repo-9", uint64(1)},
+	)
+	client := &fakeClient{tables: []fakeTable{{match: "FROM work_item_dependencies", rows: rows}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactRequiredChildren)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactRequiredChildren, Subjects: []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")},
+	})
+	if err != nil || len(result.Facts) != 200 || result.Truncated {
+		t.Fatalf("err=%v facts=%d truncated=%v, want 200 distinct facts, not truncated", err, len(result.Facts), result.Truncated)
+	}
+}
+
+// The blockers query collapses case variants in SQL before its probe LIMIT too.
+func TestBlockersProviderQueryDedupesBeforeProbeLimit(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM work_item_dependencies", rows: nil}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactBlockers)
+	if _, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactBlockers, Subjects: []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(client.queries[0].statement, "ORDER BY toString(t.repo_id), d.target_work_item_id, d.source_work_item_id\nLIMIT 1 BY toString(t.repo_id), d.target_work_item_id, d.source_work_item_id\nLIMIT 201") {
+		t.Fatal("blockers query does not dedupe per pair before the probe limit")
 	}
 }
