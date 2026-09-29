@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -205,11 +206,25 @@ func TestChaos7168_RealAuthRejectionIsNotRetriedAndIsLogged(t *testing.T) {
 	}
 }
 
-// A server that is starting up (57P03) IS retried through the real Open.
-func TestChaos7168_RealStartingUpAnswerIsRetriedToTheBound(t *testing.T) {
+// A server that answers 57P03 (starting up) is still a server ANSWER: terminal
+// by ruling, exactly one connection.
+func TestChaos7168_RealServerAnswerOf57P03IsTerminalByRuling(t *testing.T) {
 	dsn, connections := fakeHostedPostgres(t, "57P03")
 	_, err := openPostgresWithRetry(context.Background(), runtimepostgres.Config{DSN: dsn, PingTimeout: 2 * time.Second}, 3, time.Millisecond, nil)
-	if !errors.Is(err, runtimepostgres.ErrUnavailable) || connections.Load() != 3 {
-		t.Fatalf("want 3 connections and ErrUnavailable, got err=%v conns=%d", err, connections.Load())
+	if !errors.Is(err, runtimepostgres.ErrRejected) || connections.Load() != 1 {
+		t.Fatalf("want 1 connection and ErrRejected, got err=%v conns=%d", err, connections.Load())
+	}
+}
+
+// Unreachable server through the REAL Open: three attempts, three WARN events,
+// and an exhaustion error that carries the attempt count and class.
+func TestChaos7168_UnreachableServerLogsThreeEventsAndErrorCarriesAttemptAndClass(t *testing.T) {
+	h := &captureHandler{}
+	cfg := runtimepostgres.Config{DSN: "postgres://u:p@127.0.0.1:1/db?sslmode=disable", PingTimeout: 500 * time.Millisecond}
+	_, err := openPostgresWithRetry(context.Background(), cfg, 3, time.Millisecond, slog.New(h))
+	outcomes, classes := attemptEvents(h)
+	if err == nil || !errors.Is(err, runtimepostgres.ErrUnavailable) || !strings.Contains(err.Error(), "attempt 3/3 (postgres_unavailable)") ||
+		!reflect.DeepEqual(outcomes, []string{"retrying", "retrying", "exhausted"}) || len(classes) != 3 {
+		t.Fatalf("got err=%v outcomes=%v classes=%v", err, outcomes, classes)
 	}
 }

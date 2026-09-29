@@ -25,23 +25,21 @@ const (
 // PostgreSQL ping fails; callers classify with errors.Is, never by text.
 var ErrUnavailable = errors.New("PostgreSQL is unavailable")
 
-// ErrRejected is returned when the server answered the connection attempt
-// with a permanent SQLSTATE (authentication failed, database missing, role
-// not permitted, ...). Retrying cannot fix it, so callers must not.
+// ErrRejected is returned when a PostgreSQL server ANSWERED the connection
+// attempt with an error (authentication failed, database missing, role not
+// permitted, starting up, ...). Only transport failures are retryable, so
+// callers must not retry this.
 var ErrRejected = errors.New("PostgreSQL rejected the connection")
 
-// classifyPingError separates "could not reach / server not ready" (retryable:
-// no server answer, or SQLSTATE class 08 connection exception, 53 insufficient
-// resources, 57 operator intervention such as 57P03 starting up) from a
-// permanent server answer. The cause text is dropped on purpose: it can carry
-// role and database names.
+// classifyPingError: retryable (ErrUnavailable) means the transport failed --
+// dial, refused, reset, DNS, or the ping deadline -- i.e. NO PostgreSQL server
+// answer. ANY server answer (*pgconn.PgError, every SQLSTATE: 28P01 bad
+// password, 3D000 missing database, 57P03 starting up, ...) is terminal
+// (ErrRejected). The cause text is dropped on purpose: it can carry role and
+// database names.
 func classifyPingError(err error) error {
 	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && len(pgErr.Code) >= 2 {
-		switch pgErr.Code[:2] {
-		case "08", "53", "57":
-			return ErrUnavailable
-		}
+	if errors.As(err, &pgErr) {
 		return ErrRejected
 	}
 	return ErrUnavailable

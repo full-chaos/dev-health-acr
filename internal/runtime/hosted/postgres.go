@@ -55,7 +55,14 @@ func openPostgresWithRetry(ctx context.Context, cfg runtimepostgres.Config, atte
 		backoff = defaultPostgresStartupBackoff
 	}
 	var lastErr error
+	lastAttempt := 0
+	// terminal wraps the last error with the attempt count and class so the
+	// process's final error line is self-describing at Info and above.
+	terminal := func() error {
+		return fmt.Errorf("postgres startup failed at attempt %d/%d (%s): %w", lastAttempt, attempts, postgresFailureClass(lastErr), lastErr)
+	}
 	for attempt := 1; attempt <= attempts; attempt++ {
+		lastAttempt = attempt
 		database, err := postgresOpenFn(ctx, cfg)
 		if err == nil {
 			if attempt > 1 && logger != nil {
@@ -81,10 +88,10 @@ func openPostgresWithRetry(ctx context.Context, cfg runtimepostgres.Config, atte
 			break
 		}
 		if serr := postgresOpenSleep(ctx, backoff); serr != nil {
-			return nil, lastErr
+			return nil, terminal()
 		}
 	}
-	return nil, lastErr
+	return nil, terminal()
 }
 
 // Closed vocabularies for the startup attempt event.
