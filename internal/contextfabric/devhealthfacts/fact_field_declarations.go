@@ -1,6 +1,9 @@
 package devhealthfacts
 
-import "github.com/full-chaos/dev-health-acr/internal/contextfabric"
+import (
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+)
 
 // Field declarations for direct fact reads (CHAOS-7073). factKindFields
 // returns what a fact of one kind may carry: every scalar field and table
@@ -8,8 +11,9 @@ import "github.com/full-chaos/dev-health-acr/internal/contextfabric"
 // name ANOTHER subject (those go through the subject gate before a direct
 // read leaves acr-api).
 //
-// A kind with no entry here is not served by the direct read tools
-// (notYetDirectServable in chaos7073_field_declarations_test.go lists them).
+// Every registered kind has an entry here (CHAOS-7120 declared the twelve
+// entity kinds); a kind with none is not served by the direct read tools,
+// and chaos7073_field_declarations_test.go fails on it.
 // The catalogue-truth test drives every provider and fails when a provider
 // emits a field or column that is not declared here, or when a declaration
 // is never emitted.
@@ -29,6 +33,9 @@ var (
 	declRepositoryOnly = []contextfabric.SubjectKind{contextfabric.SubjectRepository}
 	declTeamProject    = []contextfabric.SubjectKind{contextfabric.SubjectTeam, contextfabric.SubjectProject}
 	declRepoTeam       = []contextfabric.SubjectKind{contextfabric.SubjectRepository, contextfabric.SubjectTeam}
+	declWorkItemOnly   = []contextfabric.SubjectKind{contextfabric.SubjectWorkItem}
+	declCIRunOnly      = []contextfabric.SubjectKind{contractsv1.ContextFabricSubjectCIRun}
+	declDeploymentOnly = []contextfabric.SubjectKind{contextfabric.SubjectDeployment}
 )
 
 type fieldDecl = contextfabric.FactFieldDeclaration
@@ -49,6 +56,11 @@ func fTable(name string, columns ...columnDecl) fieldDecl {
 
 func declNullable(d fieldDecl) fieldDecl { d.Nullable = true; return d }
 func declFresh(d fieldDecl) fieldDecl    { d.Freshness = true; return d }
+
+// declCallerScoped marks a count computed over the caller's authorized items
+// only; it is served with a population-scope label.
+func declCallerScoped(d fieldDecl) fieldDecl { d.CallerScoped = true; return d }
+
 func declAggregate(d fieldDecl) fieldDecl {
 	d.Aggregate = true
 	return d
@@ -95,6 +107,22 @@ var (
 	// declWorkScopeRef: a provider work scope (work_items.project_id), not a graph
 	// id; the gate cannot resolve it, so it is opaque.
 	declWorkScopeRef = &contextfabric.FactSubjectRefDeclaration{Kind: contextfabric.SubjectProject, IDForm: contextfabric.FactSubjectIDOpaque}
+	// declRepositoryRef: a repos.id uuid ("repository:"+uuid is the stored
+	// canonical id).
+	declRepositoryRef = &contextfabric.FactSubjectRefDeclaration{Kind: contextfabric.SubjectRepository, IDForm: contextfabric.FactSubjectIDRepositoryUUID}
+	// declOrganizationRef: an organization id; the gate admits only the
+	// caller's own organization.
+	declOrganizationRef = &contextfabric.FactSubjectRefDeclaration{Kind: contextfabric.SubjectOrganization, IDForm: contextfabric.FactSubjectIDCanonical}
+	// declWorkItemRef: a stored work item canonical id
+	// ("work_item.v2:<repo_id>:<work_item_id>"); the gate decides it exactly
+	// as it decides a work item root.
+	declWorkItemRef = &contextfabric.FactSubjectRefDeclaration{Kind: contextfabric.SubjectWorkItem, IDForm: contextfabric.FactSubjectIDCanonical}
+	// declBareWorkItemRef: a bare work_items.work_item_id. It carries no
+	// repository and is not unique across repositories, so no canonical id
+	// can be derived from the value alone: opaque (withheld for a
+	// repository-restricted caller). The same row carries the canonical id
+	// in a declWorkItemRef field when the provider could resolve it.
+	declBareWorkItemRef = &contextfabric.FactSubjectRefDeclaration{Kind: contextfabric.SubjectWorkItem, IDForm: contextfabric.FactSubjectIDOpaque}
 	// declHealthScopeRef: risk_breakdown.scope_id names a team or a repository
 	// depending on the row's scope column.
 	declHealthScopeRef = &contextfabric.FactSubjectRefDeclaration{
@@ -130,6 +158,30 @@ func factKindFields(kind contextfabric.FactKind) []contextfabric.FactFieldDeclar
 		return deficiencyFields()
 	case contextfabric.FactSourceHealth:
 		return sourceHealthFields()
+	case contextfabric.FactIdentity:
+		return identityFields()
+	case contextfabric.FactMembership:
+		return membershipFields()
+	case contextfabric.FactStatus:
+		return statusFields()
+	case contextfabric.FactWork:
+		return workFields()
+	case contextfabric.FactActualCompletion:
+		return actualCompletionFields()
+	case contextfabric.FactBlockers:
+		return blockersFields()
+	case contextfabric.FactRequiredChildren:
+		return requiredChildrenFields()
+	case contextfabric.FactPullRequests:
+		return pullRequestFields()
+	case contextfabric.FactReviews:
+		return reviewFields()
+	case contextfabric.FactContinuousIntegration:
+		return continuousIntegrationFields()
+	case contextfabric.FactDeployments:
+		return deploymentFields()
+	case contextfabric.FactIncidents:
+		return incidentFields()
 	default:
 		return nil
 	}
@@ -141,6 +193,120 @@ func declJoin(groups ...[]fieldDecl) []fieldDecl {
 		out = append(out, group...)
 	}
 	return out
+}
+
+// ---- entity kinds (CHAOS-7120). Each fact is about one admitted root; its
+// evidence reference is mapped to the root's canonical id by the embedded
+// gate (directread/embedded_subject_gate.go resolveEvidence).
+
+func identityFields() []fieldDecl {
+	return declJoin(
+		// id is the subject's own repos.id; declared as a reference so the
+		// gate checks it against the admitted root rather than trusting it.
+		declOn(declRepositoryOnly, declRef(declRepositoryRef, fStr("id")), declNullable(fStr("name")), fStr("provider")),
+		// id is the subject's own bare work_item_id (the provider matches the
+		// row to the subject on repo_id + work_item_id), not another subject.
+		declOn(declWorkItemOnly, fStr("id"), declNullable(fStr("title"))),
+	)
+}
+
+func membershipFields() []fieldDecl {
+	return declJoin(
+		declOn(declRepositoryOnly, declRef(declOrganizationRef, fStr("organization_id"))),
+		// repository_id is the work item's own repository. A repo-less item
+		// (the zero uuid) or an orphaned one has no repository node, so the
+		// gate withholds the id for every caller; repository_name is then
+		// null or the orphan's last slug.
+		declOn(declWorkItemOnly, declRef(declRepositoryRef, fStr("repository_id")), declNullable(fStr("repository_name"))),
+	)
+}
+
+func statusFields() []fieldDecl { return []fieldDecl{declNullable(fStr("status"))} }
+
+func workFields() []fieldDecl { return []fieldDecl{declNullable(fStr("title"))} }
+
+func actualCompletionFields() []fieldDecl {
+	return declJoin(
+		// completed_at is the event time of the completion, not freshness.
+		declOn(declWorkItemOnly, fBool("completed"), fStr("completed_at")),
+		// The project counts are computed over the work items the CALLER is
+		// authorized for (the provider applies the work-item authorization
+		// rule in SQL), not over every item the project reaches: they are
+		// not Aggregate, and a restricted caller gets its own population.
+		// They are CallerScoped: served with population_scope
+		// "caller_authorized_items" so a client never reads a restricted
+		// caller's subset as the project-wide ratio (codex r1 P1).
+		declOn(declProjectOnly,
+			fStr("rollup_basis"),
+			fStr("member_kind"),
+			declCallerScoped(fInt("work_item_count", "count")),
+			declCallerScoped(fInt("cancelled_count", "count")),
+			declCallerScoped(fInt("unknown_status_count", "count")),
+			declCallerScoped(fInt("counted_work_items", "count")),
+			declCallerScoped(fInt("completed_count", "count")),
+			declCallerScoped(fNum("completion_ratio", "ratio")),
+			fStr("archived_items"),
+		),
+	)
+}
+
+func blockersFields() []fieldDecl {
+	return []fieldDecl{
+		declRef(declBareWorkItemRef, fStr("blocked_by_work_item_id")),
+		// Emitted only when the blocking item resolves to exactly one
+		// repository; gated like a work item root.
+		declRef(declWorkItemRef, fStr("blocked_by_work_item_ref")),
+	}
+}
+
+func requiredChildrenFields() []fieldDecl {
+	return []fieldDecl{
+		declRef(declBareWorkItemRef, fStr("required_child_work_item_id")),
+		// Emitted only when the child resolves to exactly one repository;
+		// gated like a work item root.
+		declRef(declWorkItemRef, fStr("required_child_work_item_ref")),
+		fStr("relationship_type"),
+	}
+}
+
+func pullRequestFields() []fieldDecl { return []fieldDecl{declNullable(fStr("state"))} }
+
+func reviewFields() []fieldDecl { return []fieldDecl{declNullable(fStr("state"))} }
+
+func continuousIntegrationFields() []fieldDecl {
+	return declJoin(
+		declOn(declCIRunOnly, declNullable(fStr("status"))),
+		// success_rate is a raw ratio, not a judged score.
+		declOn(declRepositoryOnly,
+			declFresh(fStr("day")),
+			fInt("pipelines_count", "count"),
+			fNum("success_rate", "ratio"),
+			fNum("avg_duration_minutes", "minutes"),
+			fNum("p90_duration_minutes", "minutes"),
+			fNum("avg_queue_minutes", "minutes"),
+		),
+	)
+}
+
+func deploymentFields() []fieldDecl {
+	return declJoin(
+		// environment is a provider label, not a subject reference.
+		declOn(declDeploymentOnly, declNullable(fStr("status")), fStr("environment")),
+		declOn(declRepositoryOnly,
+			declFresh(fStr("day")),
+			fInt("deployments_count", "count"),
+			fInt("failed_deployments_count", "count"),
+			fNum("deploy_time_p50_hours", "hours"),
+			fNum("lead_time_p50_hours", "hours"),
+		),
+	)
+}
+
+func incidentFields() []fieldDecl {
+	// severity is the source's own label, not a computed score (the same
+	// ruling as operational_deficiencies.severity); it is omitted on a
+	// historical read.
+	return []fieldDecl{declNullable(fStr("status")), fStr("severity")}
 }
 
 func sourceHealthFields() []fieldDecl {

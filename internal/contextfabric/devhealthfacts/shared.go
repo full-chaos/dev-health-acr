@@ -138,7 +138,12 @@ import (
 // work units, reads only the current membership run, and keeps a NULL latest
 // repo_id. A candidate saved under v16 may carry a mix over superseded /
 // out-of-run units or a stale repository and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v17"
+//
+// v17 -> v18 (CHAOS-7120): blockers and required_children facts also carry
+// the counterpart work item's canonical id (blocked_by_work_item_ref /
+// required_child_work_item_ref) when it resolves to one repository. A
+// candidate saved under v17 lacks that field and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v18"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

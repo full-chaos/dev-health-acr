@@ -427,7 +427,7 @@
               "null"
             ]
           },
-          "description": "Declared scalar fields. Integers are strings; numbers are rounded to 6 places."
+          "description": "Declared scalar fields. Integers are strings; numbers are copied unrounded."
         },
         "tables": {
           "type": "object",
@@ -440,6 +440,16 @@
           "description": "Set on a team or project fact whose aggregate fields cover repositories outside your grant: labelled, never recomputed."
         },
         "aggregate_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "population_scope": {
+          "type": "string",
+          "description": "Set when population_scoped_fields are computed over only the items you are authorized for: with a repository-restricted credential they cover your subset, not the subject's whole population."
+        },
+        "population_scoped_fields": {
           "type": "array",
           "items": {
             "type": "string"

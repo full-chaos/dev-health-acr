@@ -511,6 +511,53 @@ func TestWorkItemAuthorizationPathsThroughEverySQLReader(t *testing.T) {
 				t.Fatalf("%s for %v = %q, want %q", tc.kind, tc.principal.RepositoryScopes, got, tc.want)
 			}
 		}
+		// CHAOS-7120: the counterpart's canonical id is emitted when its bare
+		// id resolves to exactly one repository, and never for
+		// linear:shared-id, which exists in two.
+		derive := func(repo, item string) string {
+			id, omitted, err := identity.Derive(identity.KindWorkItem, []string{repo, item}, nil)
+			if err != nil || omitted {
+				t.Fatalf("derive %s: %v", item, err)
+			}
+			return id
+		}
+		wantRefs := map[string]string{
+			"linear:p-both":    derive(zeroRepositoryID, "linear:p-both"),
+			"linear:secret":    derive(authzPathsRepoN, "linear:secret"),
+			"linear:shared-id": "",
+		}
+		for _, arm := range []struct {
+			kind           contextfabric.FactKind
+			idField, field string
+			provider       interface {
+				ReadFacts(context.Context, storage.Principal, contextfabric.FactQuery) (contextfabric.FactProviderResult, error)
+			}
+		}{
+			{contextfabric.FactBlockers, "blocked_by_work_item_id", "blocked_by_work_item_ref", newBlockersProvider(fixture.query)},
+			{contextfabric.FactRequiredChildren, "required_child_work_item_id", "required_child_work_item_ref", newRequiredChildrenProvider(fixture.query)},
+		} {
+			result, err := arm.provider.ReadFacts(ctx, authzPathsPrincipal(), contextfabric.FactQuery{Time: current, Kind: arm.kind, Subjects: []contextfabric.SubjectRef{subject}})
+			if err != nil {
+				t.Fatalf("%s ReadFacts: %v", arm.kind, err)
+			}
+			if len(result.Facts) != len(wantRefs) {
+				t.Fatalf("%s facts = %d, want %d", arm.kind, len(result.Facts), len(wantRefs))
+			}
+			for _, fact := range result.Facts {
+				id := *fact.Fields[arm.idField].String
+				want, known := wantRefs[id]
+				if !known {
+					t.Fatalf("%s: unexpected counterpart %q", arm.kind, id)
+				}
+				got := ""
+				if value, ok := fact.Fields[arm.field]; ok && value.String != nil {
+					got = *value.String
+				}
+				if got != want {
+					t.Fatalf("%s %s: %s = %q, want %q", arm.kind, id, arm.field, got, want)
+				}
+			}
+		}
 	})
 
 	t.Run("the scope expansion's read ceiling is enforced and classified", func(t *testing.T) {

@@ -26,6 +26,42 @@ import (
 // honest choice here.
 const blockerRelationshipType = "blocks"
 
+// The counterpart's canonical work item id (CHAOS-7120). A dependency row
+// names the OTHER work item by its bare work_item_id, which carries no
+// repository and is not unique across repositories, so the direct read gate
+// cannot decide it. Both providers therefore also resolve the counterpart's
+// repository and emit its canonical "work_item.v2:<repo_id>:<work_item_id>"
+// id beside the bare one (blocked_by_work_item_ref /
+// required_child_work_item_ref), which the gate decides exactly like a work
+// item root. The bare-id field is kept unchanged, so the engine and any
+// stored answer read the same value as before; the direct read tool declares
+// it opaque.
+//
+// The id is emitted only when the bare id resolves to exactly ONE
+// repository in the organization: with two, which one the row means is not
+// knowable from the row, and guessing would name a subject the row may not
+// mean. The LEFT JOIN's unmatched default (count 0) also emits nothing.
+const counterpartRepositoryColumnsSQL = `ifNull(c.counterpart_repo_id, ''), toUInt64(ifNull(c.counterpart_repo_count, 0))`
+
+func counterpartRepositoryJoinSQL(counterpartColumn string) string {
+	return `LEFT JOIN (SELECT work_item_id, toString(any(repo_id)) AS counterpart_repo_id, uniqExact(repo_id) AS counterpart_repo_count
+  FROM work_items FINAL WHERE org_id = {org_id:String} GROUP BY work_item_id) AS c ON c.work_item_id = ` + counterpartColumn
+}
+
+// counterpartWorkItemRef returns the counterpart's canonical work item id,
+// or false when the bare id does not resolve to exactly one repository or
+// the id cannot be derived.
+func counterpartWorkItemRef(repoID string, repoCount uint64, workItemID string) (string, bool) {
+	if repoCount != 1 || repoID == "" || workItemID == "" {
+		return "", false
+	}
+	canonical, omitted, err := identity.Derive(identity.KindWorkItem, []string{repoID, workItemID}, nil)
+	if err != nil || omitted {
+		return "", false
+	}
+	return canonical, true
+}
+
 // BlockersProvider implements contextfabric.FactProvider for FactBlockers:
 // for a work item subject, every work_item_dependencies row where that
 // subject is the target and relationship_type is blockerRelationshipType --
@@ -85,16 +121,18 @@ func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	if settingsErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item blockers", settingsErr)
 	}
-	statement := readers.WithSettings(withRowProbeLimit(`SELECT d.source_work_item_id, d.target_work_item_id, toString(t.repo_id)
+	statement := readers.WithSettings(withRowProbeLimit(`SELECT d.source_work_item_id, d.target_work_item_id, toString(t.repo_id), `+counterpartRepositoryColumnsSQL+`
 FROM work_item_dependencies AS d FINAL
 INNER JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
+`+counterpartRepositoryJoinSQL("d.source_work_item_id")+`
 WHERE d.org_id = {org_id:String} AND concat(toString(t.repo_id), ':', d.target_work_item_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) = '`+blockerRelationshipType+`'
   AND d.target_work_item_id IN `+authorized+` AND d.source_work_item_id IN `+authorized), settings)
 	rowCount := 0
 	scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadWorkItemBlockers", statement, orgID, ids, func(row readers.RowScanner) error {
 		rowCount++
-		var sourceID, targetID, targetRepoID string
-		if err := row.Scan(&sourceID, &targetID, &targetRepoID); err != nil {
+		var sourceID, targetID, targetRepoID, sourceRepoID string
+		var sourceRepoCount uint64
+		if err := row.Scan(&sourceID, &targetID, &targetRepoID, &sourceRepoID, &sourceRepoCount); err != nil {
 			return err
 		}
 		subject, ok := bySubject[targetRepoID+":"+targetID]
@@ -104,9 +142,13 @@ WHERE d.org_id = {org_id:String} AND concat(toString(t.repo_id), ':', d.target_w
 		if !budget.admit() {
 			return nil
 		}
+		fields := map[string]contextfabric.FactValue{"blocked_by_work_item_id": contextfabric.StringFactValue(sourceID)}
+		if ref, ok := counterpartWorkItemRef(sourceRepoID, sourceRepoCount, sourceID); ok {
+			fields["blocked_by_work_item_ref"] = contextfabric.StringFactValue(ref)
+		}
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactBlockers, Subject: subject,
-			Fields:         map[string]contextfabric.FactValue{"blocked_by_work_item_id": contextfabric.StringFactValue(sourceID)},
+			Fields:         fields,
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItemDependency, sourceID+":"+targetID)},
 		})
 		return nil
@@ -170,16 +212,18 @@ func (p *RequiredChildrenProvider) ReadFacts(ctx context.Context, principal stor
 	if settingsErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item required children", settingsErr)
 	}
-	statement := readers.WithSettings(withRowProbeLimit(`SELECT d.source_work_item_id, d.target_work_item_id, ifNull(d.relationship_type, ''), toString(s.repo_id)
+	statement := readers.WithSettings(withRowProbeLimit(`SELECT d.source_work_item_id, d.target_work_item_id, ifNull(d.relationship_type, ''), toString(s.repo_id), `+counterpartRepositoryColumnsSQL+`
 FROM work_item_dependencies AS d FINAL
 INNER JOIN work_items AS s FINAL ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
+`+counterpartRepositoryJoinSQL("d.target_work_item_id")+`
 WHERE d.org_id = {org_id:String} AND concat(toString(s.repo_id), ':', d.source_work_item_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) != '`+blockerRelationshipType+`'
   AND d.source_work_item_id IN `+authorized+` AND d.target_work_item_id IN `+authorized), settings)
 	rowCount := 0
 	scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadWorkItemRequiredChildren", statement, orgID, ids, func(row readers.RowScanner) error {
 		rowCount++
-		var sourceID, targetID, relationshipType, sourceRepoID string
-		if err := row.Scan(&sourceID, &targetID, &relationshipType, &sourceRepoID); err != nil {
+		var sourceID, targetID, relationshipType, sourceRepoID, targetRepoID string
+		var targetRepoCount uint64
+		if err := row.Scan(&sourceID, &targetID, &relationshipType, &sourceRepoID, &targetRepoID, &targetRepoCount); err != nil {
 			return err
 		}
 		subject, ok := bySubject[sourceRepoID+":"+sourceID]
@@ -190,6 +234,9 @@ WHERE d.org_id = {org_id:String} AND concat(toString(s.repo_id), ':', d.source_w
 			return nil
 		}
 		fields := map[string]contextfabric.FactValue{"required_child_work_item_id": contextfabric.StringFactValue(targetID)}
+		if ref, ok := counterpartWorkItemRef(targetRepoID, targetRepoCount, targetID); ok {
+			fields["required_child_work_item_ref"] = contextfabric.StringFactValue(ref)
+		}
 		if relationshipType != "" {
 			fields["relationship_type"] = contextfabric.StringFactValue(strings.ToLower(relationshipType))
 		}

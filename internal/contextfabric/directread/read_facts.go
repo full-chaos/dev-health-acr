@@ -209,6 +209,12 @@ type ServedFact struct {
 	// restricted caller's grant (decision K2): never recomputed, labelled.
 	AggregateScope  string   `json:"aggregate_scope,omitempty"`
 	AggregateFields []string `json:"aggregate_fields,omitempty"`
+	// PopulationScope labels a fact whose PopulationScopedFields are
+	// computed over only the items the caller is authorized for
+	// ("caller_authorized_items"): a repository-restricted caller receives
+	// its own subset, never the subject's whole population (CHAOS-7120).
+	PopulationScope        string   `json:"population_scope,omitempty"`
+	PopulationScopedFields []string `json:"population_scoped_fields,omitempty"`
 	// AttributionBasis names how an investment fact attributes effort
 	// (decision K10).
 	AttributionBasis string         `json:"attribution_basis,omitempty"`
@@ -675,9 +681,15 @@ func serveFact(item GatedFact, capability contextfabric.FactCapability, plan rea
 		if declaration.Aggregate && (fact.Subject.Kind == contractsv1.ContextFabricSubjectTeam || fact.Subject.Kind == contractsv1.ContextFabricSubjectProject) {
 			served.AggregateFields = append(served.AggregateFields, name)
 		}
+		if declaration.CallerScoped {
+			served.PopulationScopedFields = append(served.PopulationScopedFields, name)
+		}
 	}
 	if len(served.AggregateFields) > 0 {
 		served.AggregateScope = "all_owned_repositories"
+	}
+	if len(served.PopulationScopedFields) > 0 {
+		served.PopulationScope = "caller_authorized_items"
 	}
 	if fact.Kind == contextfabric.FactInvestment {
 		served.AttributionBasis = investmentAttributionBasis(fact)
