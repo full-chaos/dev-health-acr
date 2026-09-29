@@ -126,3 +126,23 @@ func TestLimitConfigRejectsFractionalCapabilityRate(t *testing.T) {
 		t.Fatal("fractional requests-per-minute capability was accepted")
 	}
 }
+
+func TestAuthMaxInFlightDefaultsOverridesAndRejectsNegative(t *testing.T) {
+	base := map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true"}
+	cfg, err := load(mapLookup(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RequestControls.AuthMaxInFlight != 64 {
+		t.Fatalf("default = %d, want 64", cfg.RequestControls.AuthMaxInFlight)
+	}
+	base["ACR_AUTH_MAX_IN_FLIGHT"] = "7"
+	cfg, err = load(mapLookup(base))
+	if err != nil || cfg.RequestControls.AuthMaxInFlight != 7 {
+		t.Fatalf("override = %d, %v", cfg.RequestControls.AuthMaxInFlight, err)
+	}
+	base["ACR_AUTH_MAX_IN_FLIGHT"] = "-1"
+	if _, err = load(mapLookup(base)); err == nil {
+		t.Fatal("negative in-flight cap was accepted")
+	}
+}

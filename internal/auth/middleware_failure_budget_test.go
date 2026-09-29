@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -89,48 +90,62 @@ func TestLockedOutAddressIsRefusedBeforeAnyCredentialLookup(t *testing.T) {
 	}
 }
 
-// gatedCredentialStore holds every lookup until `want` lookups are in flight
-// (or a timeout), so concurrent guesses all pass the address gate before any
-// of them records its failure.
+// gatedCredentialStore holds every lookup until the test releases it, so
+// concurrent guesses are all undecided at the same time.
 type gatedCredentialStore struct {
 	storage.CredentialStore
 	mu      sync.Mutex
 	arrived int
-	want    int
 	release chan struct{}
-	once    sync.Once
 }
 
 func (s *gatedCredentialStore) FindByTokenHash(_ context.Context, _ string) (contractsv1.ClientCredential, error) {
 	s.mu.Lock()
 	s.arrived++
-	if s.arrived >= s.want {
-		s.once.Do(func() { close(s.release) })
-	}
 	s.mu.Unlock()
 	select {
 	case <-s.release:
-	case <-time.After(300 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 	}
 	return contractsv1.ClientCredential{}, storage.ErrNotFound
 }
 
 func TestConcurrentGuessesCannotCrossTheFailureCeiling(t *testing.T) {
-	const limit, burst, inflightCap = 3, 25, 5
+	const limit, burst, inflightCap = 3, 100, 64
 	now := time.Date(2026, 9, 29, 15, 0, 0, 0, time.UTC)
-	store := &gatedCredentialStore{CredentialStore: newMemoryCredentialStoreAt(t, now.Add(-time.Hour), memory.NewAuditStore()), want: burst, release: make(chan struct{})}
-	authenticator := newTestAuthenticator(t, store, memory.NewAuditStore(), now, NewBoundedMemoryLimiter(MemoryLimiterOptions{Window: time.Minute, AttemptLimit: 1000, FailureLimit: limit, MaxTrackedKeys: 16, MaxInFlight: inflightCap}))
+	store := &gatedCredentialStore{CredentialStore: newMemoryCredentialStoreAt(t, now.Add(-time.Hour), memory.NewAuditStore()), release: make(chan struct{})}
+	authenticator := newTestAuthenticator(t, store, memory.NewAuditStore(), now, NewBoundedMemoryLimiter(MemoryLimiterOptions{Window: time.Minute, AttemptLimit: 1000, FailureLimit: limit, MaxTrackedKeys: 16}))
 	handler := authenticator.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
 	bad := TokenPrefix + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 	var wg sync.WaitGroup
+	var refused atomic.Int64
 	codes := make([]int, burst)
 	for i := range codes {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			codes[i] = callWithToken(handler, bad)
+			if codes[i] == http.StatusTooManyRequests {
+				refused.Add(1)
+			}
 		}()
 	}
+	// Wait until every request is either parked in the store or refused, then
+	// let the parked lookups resolve.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		store.mu.Lock()
+		parked := store.arrived
+		store.mu.Unlock()
+		if parked == inflightCap && refused.Load() == burst-inflightCap {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("burst did not settle: parked=%d refused=%d", parked, refused.Load())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(store.release)
 	wg.Wait()
 	unauthorized, limited := 0, 0
 	for _, code := range codes {
@@ -143,6 +158,20 @@ func TestConcurrentGuessesCannotCrossTheFailureCeiling(t *testing.T) {
 	}
 	if unauthorized != inflightCap || limited != burst-inflightCap {
 		t.Fatalf("concurrent guesses admitted to lookup = %d (in-flight cap %d), 429 = %d", unauthorized, inflightCap, limited)
+	}
+	// Once the burst has resolved the address is over its failure limit: the
+	// next guess is refused before any credential lookup.
+	store.mu.Lock()
+	before := store.arrived
+	store.mu.Unlock()
+	if code := callWithToken(handler, bad); code != http.StatusTooManyRequests {
+		t.Fatalf("guess after the burst = %d, want 429", code)
+	}
+	store.mu.Lock()
+	after := store.arrived
+	store.mu.Unlock()
+	if after != before {
+		t.Fatalf("locked-out guess reached the credential store: %d -> %d", before, after)
 	}
 }
 
@@ -178,6 +207,20 @@ func TestSuccessDoesNotResetPriorFailures(t *testing.T) {
 		if code := callWithToken(handler, step.token); code != step.want {
 			t.Fatalf("step %d = %d, want %d", i, code, step.want)
 		}
+	}
+}
+
+func TestManyAddressesInFlightAreBoundedByTheTrackedKeyCap(t *testing.T) {
+	now := time.Date(2026, 9, 29, 15, 0, 0, 0, time.UTC)
+	limiter := NewBoundedMemoryLimiter(MemoryLimiterOptions{Window: time.Minute, FailureLimit: 3, MaxTrackedKeys: 1})
+	admitted := 0
+	for i := 0; i < 25; i++ {
+		if _, ok := limiter.BeginAttempt(fmt.Sprintf("192.0.2.%d", i), now); ok {
+			admitted++
+		}
+	}
+	if admitted != 1 {
+		t.Fatalf("addresses in flight with tracked-key cap 1 = %d, want 1", admitted)
 	}
 }
 

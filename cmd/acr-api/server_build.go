@@ -121,7 +121,7 @@ func developmentDependencies(cfg config.Config, serviceVersion string, logger *s
 	}
 	authAttempts := auth.NewBoundedMemoryLimiter(auth.MemoryLimiterOptions{
 		Window: cfg.RequestControls.Auth.Window, AttemptLimit: cfg.RequestControls.Auth.Requests,
-		FailureLimit: cfg.RequestControls.AuthFailures, MaxTrackedKeys: cfg.RequestControls.AuthTrackedKeys,
+		FailureLimit: cfg.RequestControls.AuthFailures, MaxTrackedKeys: cfg.RequestControls.AuthTrackedKeys, MaxInFlight: cfg.RequestControls.AuthMaxInFlight,
 	})
 	hooks := observability.NewHooks(observability.NewSlogSink(logger), nil)
 	capabilities := api.StaticCapabilitiesProvider{Value: contractsv1.Capabilities{

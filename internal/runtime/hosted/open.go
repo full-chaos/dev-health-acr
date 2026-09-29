@@ -149,7 +149,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	}, Now: request.options.Now}
 	authAttempts := auth.NewBoundedMemoryLimiter(auth.MemoryLimiterOptions{
 		Window: request.config.RequestControls.Auth.Window, AttemptLimit: request.config.RequestControls.Auth.Requests,
-		FailureLimit: request.config.RequestControls.AuthFailures, MaxTrackedKeys: request.config.RequestControls.AuthTrackedKeys,
+		FailureLimit: request.config.RequestControls.AuthFailures, MaxTrackedKeys: request.config.RequestControls.AuthTrackedKeys, MaxInFlight: request.config.RequestControls.AuthMaxInFlight,
 	})
 	// CHAOS-3775: composed independently of the investigator/graph gating
 	// below -- see buildOrgModelConfigStore's doc comment -- so a customer
