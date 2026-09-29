@@ -57,8 +57,8 @@ const (
 	// or reached a terminal build-completion mode -- ordinary steady state.
 	DrainYieldExhausted DrainYieldReason = "exhausted"
 	// DrainYieldBudgetExceeded: more work was available but this
-	// organization's per-tick drain budget (Config.DrainBatchBudget,
-	// shared across every source the organization projects) was spent.
+	// source's own per-tick drain budget (Config.DrainBatchBudget, applied
+	// to each source separately, not shared) was spent.
 	// The next Tick resumes from the checkpoint this tick's last batch
 	// advanced to -- no work is lost, only deferred.
 	DrainYieldBudgetExceeded DrainYieldReason = "budget_exceeded"
@@ -170,6 +170,14 @@ func (o SlogObserver) ObserveProjectionDrain(outcome DrainOutcome) {
 	}
 	if outcome.Applied > 1 {
 		logger.Info("context_fabric: projection tick drained multiple batches", attrs...)
+		return
+	}
+	// A source that ends its tick on budget_exceeded still had work available:
+	// a backlog. With Applied <= 1 that is the starvation shape (a source
+	// pulling one page per tick while its backlog stays), which must be
+	// visible at Info. Closed vocabulary only: the reason attr above.
+	if outcome.YieldReason == DrainYieldBudgetExceeded {
+		logger.Info("context_fabric: projection tick yielded with backlog remaining", attrs...)
 		return
 	}
 	logger.Debug("context_fabric: projection tick drain summary", attrs...)
@@ -2296,9 +2304,9 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 // cadence); once a batch applies and the build is still non-terminal
 // (classifyBuildCompletion's pending case -- more pages remain), the next
 // batch is fetched immediately under the SAME org lock instead of waiting
-// a full poll interval, bounded by budget (shared across every source
-// this organization's build tick drains -- see the call site and
-// runPair's doc comment for the fairness rationale). RecordSourceProgress
+// a full poll interval, bounded by budget (this source's own counter;
+// the call site hands each required source a fresh one -- see runPair's
+// doc comment for the fairness rationale). RecordSourceProgress
 // is durably upserted after every applied batch, not only at the end, so
 // a mid-drain failure never loses credit for the batches that DID apply.
 //
