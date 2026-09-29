@@ -2,6 +2,7 @@ package hosted
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -16,12 +17,63 @@ import (
 
 const defaultPostgresReadinessTimeout = 5 * time.Second
 
+// CHAOS-7168: acr-api crashed twice at startup right after the helm migrate
+// hook ("PostgreSQL is unavailable", prod 2026-09-29 12:28:42Z) before going
+// Ready. Only the reachability failure is retried, bounded, with one loud
+// line per attempt; config/validation errors fail at once.
+const (
+	postgresOpenAttempts = 5
+	postgresOpenBackoff  = 2 * time.Second
+	// postgresUnavailableMessage is runtimepostgres.Open's fixed, secret-free
+	// reachability failure text.
+	postgresUnavailableMessage = "PostgreSQL is unavailable"
+)
+
+// postgresOpenFn/postgresOpenSleep are test seams.
+var (
+	postgresOpenFn    = runtimepostgres.Open
+	postgresOpenSleep = func(ctx context.Context, d time.Duration) error {
+		t := time.NewTimer(d)
+		defer t.Stop()
+		select {
+		case <-t.C:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+)
+
+func openPostgresWithRetry(ctx context.Context, cfg runtimepostgres.Config, logger *slog.Logger) (*sql.DB, error) {
+	var lastErr error
+	for attempt := 1; attempt <= postgresOpenAttempts; attempt++ {
+		database, err := postgresOpenFn(ctx, cfg)
+		if err == nil {
+			if attempt > 1 && logger != nil {
+				logger.InfoContext(ctx, "postgres connected after retry", "attempt", attempt, "max_attempts", postgresOpenAttempts)
+			}
+			return database, nil
+		}
+		lastErr = err
+		if err.Error() != postgresUnavailableMessage || attempt == postgresOpenAttempts {
+			break
+		}
+		if logger != nil {
+			logger.WarnContext(ctx, "postgres unavailable at startup; retrying", "attempt", attempt, "max_attempts", postgresOpenAttempts, "backoff_ms", postgresOpenBackoff.Milliseconds(), "failure_class", "postgres_unavailable")
+		}
+		if serr := postgresOpenSleep(ctx, postgresOpenBackoff); serr != nil {
+			return nil, lastErr
+		}
+	}
+	return nil, lastErr
+}
+
 func openPostgres(ctx context.Context, cfg config.Config, logger *slog.Logger) (postgresComponents, error) {
-	database, err := runtimepostgres.Open(ctx, runtimepostgres.Config{
+	database, err := openPostgresWithRetry(ctx, runtimepostgres.Config{
 		DSN: cfg.PostgresDSN, PoolerAdminDSN: cfg.PostgresPoolerAdminDSN,
 		MaxOpenConns: cfg.PostgresMaxOpenConns, MaxIdleConns: cfg.PostgresMaxIdleConns, MaxIdleConnsSet: cfg.PostgresMaxIdleConnsConfigured,
 		ConnMaxLifetime: cfg.PostgresConnMaxLifetime, ConnMaxIdleTime: cfg.PostgresConnMaxIdleTime, PingTimeout: cfg.PostgresPingTimeout,
-	})
+	}, logger)
 	if err != nil {
 		return postgresComponents{}, err
 	}
