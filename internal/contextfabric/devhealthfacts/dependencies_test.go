@@ -285,3 +285,34 @@ func TestBlockersProviderNotTruncatedBelowLimit(t *testing.T) {
 		t.Fatalf("result.Truncated = true, want false when the row count is below the limit")
 	}
 }
+
+// CHAOS-7177: a stale 'relates' row and a live 'relates_to' row for one pair
+// (7 Jira pairs on the bigboy venue) state ONE relation.
+func TestRequiredChildrenProviderDedupesTwinRowsByCanonicalRelation(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM work_item_dependencies", rows: [][]any{
+			{"WIDGET-101", "WIDGET-200", "relates", "repo-1", "repo-9", uint64(1)},
+			{"WIDGET-101", "WIDGET-200", "relates_to", "repo-1", "repo-9", uint64(1)},
+			{"WIDGET-101", "WIDGET-300", "relates_to", "repo-1", "repo-9", uint64(1)},
+			{"WIDGET-101", "WIDGET-200", "requires", "repo-1", "repo-9", uint64(1)},
+		}},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactRequiredChildren)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactRequiredChildren, Subjects: []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	// relates+relates_to on WIDGET-200 -> 1; WIDGET-300 -> 1; distinct 'requires' relation -> 1.
+	if len(result.Facts) != 3 {
+		t.Fatalf("facts = %d, want 3 (twin collapsed): %#v", len(result.Facts), result.Facts)
+	}
+	for _, fact := range result.Facts {
+		if rel := fact.Fields["relationship_type"].String; rel != nil && *rel == "relates" {
+			t.Fatalf("alias spelling leaked: %#v", fact.Fields)
+		}
+	}
+}

@@ -111,3 +111,16 @@ func orientDependencyEndpoints(from, to contractsv1.ContextFabricSubjectRef, swa
 	}
 	return from, to
 }
+
+// CanonicalDependencyRelationship is the exported view of
+// dependencyRelationshipType for readers outside this package (CHAOS-7177:
+// devhealthfacts.RequiredChildrenProvider). It returns the canonical
+// relationship type and whether the row names it from the opposite side.
+// Two work_item_dependencies rows with the same endpoints and the same
+// (type, swapEndpoints) pair state one relation, e.g. a stale 'relates' row
+// and a live 'relates_to' row. It is a thin wrapper: there is one alias
+// table, dependencyRelationshipMapping.
+func CanonicalDependencyRelationship(raw string) (typ contractsv1.ContextFabricRelationshipType, swapEndpoints bool) {
+	typ, swapEndpoints, _ = dependencyRelationshipType(raw)
+	return typ, swapEndpoints
+}

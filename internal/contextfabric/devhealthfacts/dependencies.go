@@ -2,9 +2,11 @@ package devhealthfacts
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -219,6 +221,7 @@ INNER JOIN work_items AS s FINAL ON s.org_id = d.org_id AND s.work_item_id = d.s
 WHERE d.org_id = {org_id:String} AND concat(toString(s.repo_id), ':', d.source_work_item_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) != '`+blockerRelationshipType+`'
   AND d.source_work_item_id IN `+authorized+` AND d.target_work_item_id IN `+authorized), settings)
 	rowCount := 0
+	seenRelations := map[string]struct{}{}
 	scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadWorkItemRequiredChildren", statement, orgID, ids, func(row readers.RowScanner) error {
 		rowCount++
 		var sourceID, targetID, relationshipType, sourceRepoID, targetRepoID string
@@ -230,6 +233,20 @@ WHERE d.org_id = {org_id:String} AND concat(toString(s.repo_id), ':', d.source_w
 		if !ok {
 			return nil
 		}
+		// CHAOS-7177: resolve the row's type through the projector's alias
+		// table so a stale 'relates' row and a live 'relates_to' row for one
+		// pair yield ONE fact. Dedupe before admit(): a twin must not spend
+		// output budget.
+		canonicalType := ""
+		if relationshipType != "" {
+			typ, swap := devhealthsource.CanonicalDependencyRelationship(relationshipType)
+			canonicalType = strings.ToLower(string(typ))
+			key := sourceRepoID + "\x00" + sourceID + "\x00" + targetID + "\x00" + canonicalType + "\x00" + strconv.FormatBool(swap)
+			if _, dup := seenRelations[key]; dup {
+				return nil
+			}
+			seenRelations[key] = struct{}{}
+		}
 		if !budget.admit() {
 			return nil
 		}
@@ -237,8 +254,8 @@ WHERE d.org_id = {org_id:String} AND concat(toString(s.repo_id), ':', d.source_w
 		if ref, ok := counterpartWorkItemRef(targetRepoID, targetRepoCount, targetID); ok {
 			fields["required_child_work_item_ref"] = contextfabric.StringFactValue(ref)
 		}
-		if relationshipType != "" {
-			fields["relationship_type"] = contextfabric.StringFactValue(strings.ToLower(relationshipType))
+		if canonicalType != "" {
+			fields["relationship_type"] = contextfabric.StringFactValue(canonicalType)
 		}
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactRequiredChildren, Subject: subject, Fields: fields,
