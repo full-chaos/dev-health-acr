@@ -97,6 +97,11 @@ func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, defaultRequireStores
 	if cfg.PostgresStartupBackoff, err = durationValue(lookup, "ACR_POSTGRES_STARTUP_BACKOFF", defaultHostedPostgresStartupBackoff); err != nil {
 		return err
 	}
+	// Unconditional (also with backing stores off): every loader that
+	// carries these settings goes through here (CHAOS-7184).
+	if err = validatePostgresStartupRetry(cfg.PostgresStartupAttempts, cfg.PostgresStartupBackoff); err != nil {
+		return err
+	}
 	if cfg.RequireBackingStores, err = boolValue(lookup, "ACR_REQUIRE_BACKING_STORES", defaultRequireStores); err != nil {
 		return err
 	}

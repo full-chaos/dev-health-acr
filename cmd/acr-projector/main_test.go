@@ -111,6 +111,7 @@ func TestRebuildFullStoresConfigurationPassesConfigurationAndReachesRuntimeOpen(
 	// doc comment), so a canonical environment for it also needs the org
 	// allowlist -- unrelated to this fix, just what rebuild always required.
 	t.Setenv("ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS", "org-1")
+	t.Setenv("ACR_POSTGRES_STARTUP_ATTEMPTS", "1")
 	err := run([]string{"rebuild", "--org", "org-1"})
 	if err == nil {
 		t.Fatal("run(rebuild) unexpectedly succeeded against unreachable DSNs")
@@ -130,6 +131,7 @@ func TestRollbackFullStoresConfigurationPassesConfigurationAndReachesRuntimeOpen
 	t.Setenv("ACR_CLICKHOUSE_DSN", "https://nouser:nopass@127.0.0.1:1")
 	// rollback forces cfg.ProjectionEnabled=true itself, same as rebuild.
 	t.Setenv("ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS", "org-1")
+	t.Setenv("ACR_POSTGRES_STARTUP_ATTEMPTS", "1")
 	err := run([]string{"rollback", "--org", "org-1"})
 	if err == nil {
 		t.Fatal("run(rollback) unexpectedly succeeded against unreachable DSNs")
