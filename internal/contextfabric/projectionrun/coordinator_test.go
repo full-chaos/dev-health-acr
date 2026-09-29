@@ -94,7 +94,9 @@ func (f *fakeSource) NextProjectionBatch(ctx context.Context, checkpoint context
 	if f.dormant {
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
-	if f.pages > 0 && int(f.calls.Load()) > f.pages {
+	// Stateless in the checkpoint (each applied page appends one "n" to the
+	// cursor), so a non-applying peek never consumes a page.
+	if f.pages > 0 && len(checkpoint.Cursor) >= f.pages {
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
 	next := checkpoint.Cursor + "n"

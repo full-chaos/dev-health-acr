@@ -43,9 +43,10 @@ func TestChaos7171_LargeFirstSourceBacklogDoesNotStarveSecondSourceWithinATick(t
 	if got := small.calls.Load(); got != smallPages+1 {
 		t.Fatalf("source-small must drain its whole backlog in one tick (%d calls: pages + exhaustion probe), got %d calls", smallPages+1, got)
 	}
-	// The big source is still bounded by its own budget: free attempt + budget.
-	if got := big.calls.Load(); got != budget+1 {
-		t.Fatalf("source-big must stay bounded by its own budget (%d calls), got %d", budget+1, got)
+	// The big source is still bounded by its own budget: free attempt + budget
+	// applying reads, plus one non-applying budget-exit peek.
+	if got := big.calls.Load(); got != budget+2 {
+		t.Fatalf("source-big must stay bounded by its own budget (%d calls), got %d", budget+2, got)
 	}
 	reasons := map[string]projectionrun.DrainYieldReason{}
 	for _, d := range observer.snapshot() {

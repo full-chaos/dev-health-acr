@@ -308,6 +308,26 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 	}, nil
 }
 
+// PeekAvailable reports whether the source would offer a batch at the current
+// checkpoint, WITHOUT applying anything: no claim CAS, no consumed-progress
+// CAS, no backend call, no checkpoint change. It is the same source read
+// RunOnce starts with, so a drain that spent its budget can tell "more work
+// remains" from "the last page was the final one" without a confirming apply.
+func (w *ProjectionWorker) PeekAvailable(ctx context.Context, orgID, sourceName string) (bool, error) {
+	if strings.TrimSpace(orgID) == "" || strings.TrimSpace(sourceName) == "" {
+		return false, markPair(PairStageValidation, errors.New("projection worker requires organization and source"), "")
+	}
+	checkpoint, err := w.checkpoints.LoadProjectionCheckpoint(ctx, orgID, sourceName)
+	if err != nil {
+		return false, markPair(PairStageCheckpointLoad, err, "load projection checkpoint")
+	}
+	_, available, err := w.source.NextProjectionBatch(ctx, checkpoint)
+	if err != nil {
+		return false, fmt.Errorf("read projection batch: %w", markPair(PairStageSourceRead, err, ""))
+	}
+	return available, nil
+}
+
 // persistConsumedProgress durably advances the checkpoint over source rows
 // that were consumed but proved unpublishable -- see ProjectionProgress for
 // why this cannot be done with a batch, and for the safety argument.
