@@ -199,9 +199,9 @@ const (
 	defaultMaxBackoff   = 5 * time.Minute
 	baseBackoff         = 5 * time.Second
 	// defaultDrainBatchBudget (CHAOS-3826) is how many EXTRA batches (beyond
-	// the one every configured source always attempts each tick) one
-	// organization's Tick may pull across all its sources combined before
-	// yielding. 500 extra batches at the 200-row page cap is 100,000 rows
+	// the one every configured source always attempts each tick) EACH
+	// source of one organization's Tick may pull before yielding
+	// (CHAOS-7171: per source, not shared across sources). 500 extra batches at the 200-row page cap is 100,000 rows
 	// per tick -- comfortably drains the ~36k-subject trial organization
 	// that motivated this ticket (~180 batches) in a single tick, while
 	// still bounding a much larger organization's tick so it cannot starve
@@ -1064,6 +1064,7 @@ func (c *Coordinator) performRebuild(ctx context.Context, orgID string) error {
 	if err := c.rebuildMarkers.CompleteRebuild(ctx, orgID); err != nil {
 		return fmt.Errorf("projectionrun: clear rebuild marker: %w", err)
 	}
+	c.logger.InfoContext(ctx, "projection checkpoints reset", "org_id", contextfabric.SanitizeLogAttr(orgID), "sources", len(c.sourceNames))
 	c.logger.InfoContext(ctx, "projection organization rebuilt", "org_id", contextfabric.SanitizeLogAttr(orgID))
 	return nil
 }
@@ -1971,7 +1972,6 @@ func (c *Coordinator) runOrgLegacy(scope *orgScope, orgID string) {
 	}
 
 	evaluated, stale, sourceFailed := false, false, false
-	budget := c.drainBudget // CHAOS-3826: shared across every source this org drains this tick
 	pairBrokeAny := false
 	for _, source := range c.sourceNames {
 		if scope.done() {
@@ -1980,6 +1980,10 @@ func (c *Coordinator) runOrgLegacy(scope *orgScope, orgID string) {
 			// run() has already observed the truncation.
 			return
 		}
+		// CHAOS-7171: each source gets its OWN drain budget. One budget shared
+		// across sources let a large first source (clickhouse) starve every
+		// later source (teams_projects) down to one page per tick.
+		budget := c.drainBudget
 		var pairEvaluated, pairStale, pairFailed, pairWithheld, pairBroke bool
 		var pairStage contextfabric.PairStage
 		_ = scope.run(func(ctx context.Context) error {
@@ -2066,7 +2070,6 @@ func (c *Coordinator) runOrgLifecycle(scope *orgScope, orgID string) {
 	}
 
 	evaluated, stale, sourceFailed := false, false, false
-	budget := c.drainBudget // CHAOS-3826: shared across every source this org drains this tick
 	pairBrokeAny := false
 	for _, source := range c.sourceNames {
 		if scope.done() {
@@ -2075,6 +2078,10 @@ func (c *Coordinator) runOrgLifecycle(scope *orgScope, orgID string) {
 			// run() has already observed the truncation.
 			return
 		}
+		// CHAOS-7171: each source gets its OWN drain budget. One budget shared
+		// across sources let a large first source (clickhouse) starve every
+		// later source (teams_projects) down to one page per tick.
+		budget := c.drainBudget
 		var pairEvaluated, pairStale, pairFailed, pairWithheld, pairBroke bool
 		var pairStage contextfabric.PairStage
 		_ = scope.run(func(ctx context.Context) error {
@@ -2184,12 +2191,9 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 	// c.sourceNames and never reaching it -- the exact "a source that
 	// cannot report exhaustion MUST fail the flip gate, never silently
 	// pass" rule (design brief §9 item 3) applies here too.
-	// CHAOS-3826: one shared budget across every required source's
-	// in-tick drain this organization's build tick performs -- see
-	// runPair's doc comment for the fairness rationale, which applies
-	// identically here (a large-backlog build must not starve other
-	// organizations' next tick).
-	budget := c.drainBudget
+	// CHAOS-3826/7171: every required source's in-tick drain gets its own
+	// budget (see runOrgLegacy), so a large-backlog source cannot starve a
+	// sibling source; the org's tick stays bounded by sources x budget.
 	for _, source := range row.RequiredSources {
 		if scope.done() {
 			return
@@ -2210,6 +2214,7 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 			}
 			continue
 		}
+		budget := c.drainBudget // CHAOS-7171: per-source, see runOrgLegacy
 		var buildEvaluated, buildFailed, buildWithheld, buildBroke bool
 		var buildStage contextfabric.PairStage
 		_ = scope.run(func(ctx context.Context) error {
@@ -2753,11 +2758,10 @@ func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, che
 // the per-tick fleet aggregate: evaluated is true when this pair was
 // actually checked this tick (it was due), and stale is true when the
 // LAST attempt's check found a producer-identity drift pending rebuild.
-// budget is a POINTER shared across every source this organization's
-// Tick evaluates (see runOrgLegacy/runOrgLifecycle's call sites): a
-// large-backlog source cannot starve its sibling sources' first attempt,
-// and bounding the total across all of them keeps this ORGANIZATION's
-// runOrg call bounded, so it cannot starve other organizations dispatched
+// budget is a POINTER to a per-source counter (CHAOS-7171: runOrgLegacy/
+// runOrgLifecycle hand each source a fresh c.drainBudget; a shared counter
+// let the first source starve later ones). Bounding each source keeps this
+// ORGANIZATION's runOrg call bounded (sources x budget), so it cannot starve other organizations dispatched
 // in the same Tick (Tick.wg.Wait blocks the next poll on every dispatched
 // runOrg returning). The 200-row page cap (batch size) is unchanged --
 // only the inter-batch idle inside one tick is removed.
