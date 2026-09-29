@@ -26,7 +26,11 @@ import (
 // gatedFactReader. For a restricted caller, every declared subject reference
 // in the returned facts is decided by the StoredResultGate's per-node rule
 // (the same decision the root re-check takes) and filtered by the shared
-// FilterEmbeddedSubjects, the same filter the direct read tools apply.
+// FilterEmbeddedSubjects, the same filter the direct read tools apply --
+// including its rule 1: a field or table column the capability does not
+// declare is removed and counted, because an undeclared column can carry a
+// subject reference the gate cannot see (codex r1 P2). Engine-composed
+// fields (period delta) are added after this read, so they are unaffected.
 // Unrestricted and universal callers are unchanged: the shared predicate
 // applies no repository check to them.
 
@@ -50,8 +54,9 @@ const (
 // EngineFactGateDecision is one engine fact-read gate decision. Counts only;
 // never the id or label of a withheld subject.
 type EngineFactGateDecision struct {
-	// Decision: "filtered" (something was withheld), "clean" (nothing named
-	// an unseen subject) or "unavailable" (the read failed closed).
+	// Decision: "filtered" (something was withheld or an undeclared field
+	// was removed), "clean" (nothing named an unseen subject and every field
+	// was declared) or "unavailable" (the read failed closed).
 	Decision          string
 	Reason            string
 	FactsChecked      int
@@ -140,7 +145,7 @@ func (r *gatedFactReader) filter(ctx context.Context, principal storage.Principa
 			return r.gate.authorizeEmbedded(ctx, principal, batch)
 		}
 	}
-	gated, report, err := FilterEmbeddedSubjects(ctx, EmbeddedFilterOptions{Restricted: true, KeepUndeclared: true}, requestRoots(request), declared, capabilities, authorize)
+	gated, report, err := FilterEmbeddedSubjects(ctx, EmbeddedFilterOptions{Restricted: true}, requestRoots(request), declared, capabilities, authorize)
 	decision.Report = report
 	if err != nil {
 		decision.Decision, decision.Reason = "unavailable", "authorization_failed"
@@ -158,8 +163,14 @@ func (r *gatedFactReader) filter(ctx context.Context, principal storage.Principa
 		}
 		out[declaredAt[position]] = fact
 	}
-	if decision.FactsWithheldFrom > 0 {
+	switch {
+	case decision.FactsWithheldFrom > 0:
 		decision.Decision, decision.Reason = "filtered", "unseen_subjects_withheld"
+	case report.FieldsUndeclared > 0:
+		// A declared kind emitted a field or column its capability does not
+		// declare: removed, never served, and logged at Warn (a catalogue
+		// defect, since the catalogue-truth test forbids it).
+		decision.Decision, decision.Reason = "filtered", "undeclared_fields_removed"
 	}
 	return out, decision, nil
 }

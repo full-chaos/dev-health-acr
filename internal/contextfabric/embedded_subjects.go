@@ -95,13 +95,6 @@ type EmbeddedFilterOptions struct {
 	// Restricted is true for a repository-restricted caller: an unresolvable
 	// or opaque reference is then refused (rule 4).
 	Restricted bool
-	// KeepUndeclared keeps fields and columns the capability does not declare
-	// instead of removing them (rule 1). The direct tools never set it: their
-	// response is the declared catalogue. The engine sets it: its fact bundle
-	// also carries registry-composed fields no capability declares, and a
-	// declared kind's provider emits only declared fields (the catalogue-truth
-	// test), so every subject reference a provider emits is still decided.
-	KeepUndeclared bool
 	// BatchSize bounds one authorize call; zero means one call.
 	BatchSize int
 }
@@ -173,7 +166,7 @@ func FilterEmbeddedSubjects(ctx context.Context, options EmbeddedFilterOptions, 
 	// Pass 2: remove what names a refused subject or is undeclared.
 	out := make([]EmbeddedGatedFact, 0, len(facts))
 	for _, fact := range facts {
-		gated := filterFact(fact, capabilities[fact.Kind], allows, options.KeepUndeclared)
+		gated := filterFact(fact, capabilities[fact.Kind], allows)
 		report.RowsWithheld += sumCounts(gated.RowsWithheld)
 		report.FieldsWithheld += len(gated.FieldsWithheld)
 		report.FieldsUndeclared += len(gated.FieldsUndeclared)
@@ -386,7 +379,7 @@ func decimalDigits(value string) bool {
 	return true
 }
 
-func filterFact(fact CanonicalFact, capability FactCapability, allows func(embeddedRef, bool) bool, keepUndeclared bool) EmbeddedGatedFact {
+func filterFact(fact CanonicalFact, capability FactCapability, allows func(embeddedRef, bool) bool) EmbeddedGatedFact {
 	gated := EmbeddedGatedFact{
 		RowsWithheld:      map[string]int{},
 		ColumnsUndeclared: map[string][]string{},
@@ -395,10 +388,6 @@ func filterFact(fact CanonicalFact, capability FactCapability, allows func(embed
 	for name, value := range fact.Fields {
 		declaration, declared := capability.FieldDeclaration(name, fact.Subject.Kind)
 		if !declared {
-			if keepUndeclared {
-				fields[name] = value
-				continue
-			}
 			gated.FieldsUndeclared = append(gated.FieldsUndeclared, name)
 			continue
 		}
@@ -410,7 +399,7 @@ func filterFact(fact CanonicalFact, capability FactCapability, allows func(embed
 			}
 		}
 		if declaration.Type == FactFieldTable && (value.Rows != nil || value.Table != nil) {
-			value = filterTable(name, declaration, value, allows, &gated, keepUndeclared)
+			value = filterTable(name, declaration, value, allows, &gated)
 		}
 		fields[name] = value
 	}
@@ -431,7 +420,7 @@ func filterFact(fact CanonicalFact, capability FactCapability, allows func(embed
 	return gated
 }
 
-func filterTable(name string, declaration FactFieldDeclaration, value FactValue, allows func(embeddedRef, bool) bool, gated *EmbeddedGatedFact, keepUndeclared bool) FactValue {
+func filterTable(name string, declaration FactFieldDeclaration, value FactValue, allows func(embeddedRef, bool) bool, gated *EmbeddedGatedFact) FactValue {
 	undeclared := map[string]struct{}{}
 	source := tableRows(value)
 	rows := make([]FactValueRow, 0, len(source))
@@ -441,10 +430,6 @@ func filterTable(name string, declaration FactFieldDeclaration, value FactValue,
 		for column, cell := range row.Fields {
 			columnDeclaration, ok := declaration.Column(column)
 			if !ok {
-				if keepUndeclared {
-					cells[column] = cell
-					continue
-				}
 				undeclared[column] = struct{}{}
 				continue
 			}

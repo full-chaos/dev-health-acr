@@ -159,13 +159,13 @@ func TestCHAOS7127GateWithholdsUngrantedRepositoryRowsAndEvidence(t *testing.T) 
 	if got := fact.Fields[FactFieldAggregateScope]; got.String == nil || *got.String != AggregateScopeAllOwnedRepositories {
 		t.Errorf("aggregate_scope = %+v", got)
 	}
-	if _, ok := fact.Fields["composed_sum"]; !ok {
-		t.Errorf("an undeclared, registry-composed field was removed on the engine path")
+	if _, ok := fact.Fields["composed_sum"]; ok {
+		t.Errorf("an undeclared field was served on the engine path")
 	}
 	if strings.Contains(run.logs, chaos7127Private) || strings.Contains(run.logs, "acme/private") {
 		t.Errorf("decision line names the withheld subject: %s", run.logs)
 	}
-	for _, want := range []string{EngineFactGateLogMessage, "decision=filtered", "rows_withheld=1", "evidence_withheld=1", "references_refused=1"} {
+	for _, want := range []string{EngineFactGateLogMessage, "decision=filtered", "rows_withheld=1", "evidence_withheld=1", "references_refused=1", "fields_undeclared=1"} {
 		if !strings.Contains(run.logs, want) {
 			t.Errorf("decision line lacks %q: %s", want, run.logs)
 		}
@@ -176,6 +176,7 @@ func TestCHAOS7127GateWithholdsUngrantedRepositoryRowsAndEvidence(t *testing.T) 
 // sent to the graph again, and a clean read adds no label.
 func TestCHAOS7127GateDoesNotRedecideRootsAndLabelsNothingClean(t *testing.T) {
 	clean := chaos7127HealthFact()
+	delete(clean.Fields, "composed_sum")
 	clean.Fields["risk_breakdown"] = TableFactValue(FactTable{Rows: []FactValueRow{chaos7127Row("repo", chaos7127Allowed, "acme/allowed", 0.3)}})
 	clean.EvidenceRefIDs = []string{contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, chaos7127Allowed)}
 	run := runChaos7127Gate(t, chaos7127Restricted, &chaos7127Inner{facts: []CanonicalFact{clean}}, chaos7127Graph(nil))
@@ -430,5 +431,38 @@ func TestCHAOS7127GateLabelsTheAggregateOnlyWhenOneIsCarried(t *testing.T) {
 	}
 	if got := fields["risk_breakdown"+FactFieldRowsWithheldByGrantSuffix]; got.Integer == nil || *got.Integer != 1 {
 		t.Errorf("rows withheld = %+v, want 1", got)
+	}
+}
+
+// codex r1 P2: a declared table carrying columns its capability does not
+// declare (here a repository id and name with no subject reference) must not
+// carry them to a restricted caller. They are removed, counted, and the
+// decision is logged at Warn -- never a clean line.
+func TestCHAOS7127GateRemovesUndeclaredSubjectColumns(t *testing.T) {
+	fact := chaos7127HealthFact()
+	delete(fact.Fields, "composed_sum")
+	fact.EvidenceRefIDs = nil
+	risk := 0.9
+	fact.Fields["risk_breakdown"] = TableFactValue(FactTable{Rows: []FactValueRow{{Fields: map[string]FactValue{
+		"repository_id": StringFactValue(chaos7127Private), "repository_name": StringFactValue("acme/private"), "risk": {Number: &risk},
+	}}}})
+	run := runChaos7127Gate(t, chaos7127Restricted, &chaos7127Inner{facts: []CanonicalFact{fact}}, chaos7127Graph(nil))
+	if run.err != nil {
+		t.Fatal(run.err)
+	}
+	for _, row := range run.bundle.Facts[0].Fields["risk_breakdown"].Rows {
+		for column, cell := range row.Fields {
+			if cell.String != nil && (strings.Contains(*cell.String, chaos7127Private) || *cell.String == "acme/private") {
+				t.Errorf("undeclared column %s served %q", column, *cell.String)
+			}
+		}
+	}
+	for _, want := range []string{"level=WARN", "decision=filtered", "reason=undeclared_fields_removed", "fields_undeclared=2"} {
+		if !strings.Contains(run.logs, want) {
+			t.Errorf("decision line lacks %q: %s", want, run.logs)
+		}
+	}
+	if strings.Contains(run.logs, "acme/private") || strings.Contains(run.logs, chaos7127Private) {
+		t.Errorf("decision line names the withheld subject")
 	}
 }

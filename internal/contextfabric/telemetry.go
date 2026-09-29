@@ -2810,7 +2810,8 @@ func (t SlogEngineTelemetry) RecordFactRootRefused(ctx context.Context, principa
 const EngineFactGateLogMessage = "context fabric engine fact gate"
 
 // RecordEngineFactGate implements EngineFactGateRecorder: Info for a clean or
-// filtered read, Warn for a read that failed closed.
+// filtered read, Warn for a read that failed closed or removed a field its
+// capability does not declare.
 func (t SlogEngineTelemetry) RecordEngineFactGate(ctx context.Context, principal storage.Principal, decision EngineFactGateDecision) {
 	args := []any{
 		"org_id", SanitizeLogAttr(principal.OrgID),
@@ -2826,9 +2827,10 @@ func (t SlogEngineTelemetry) RecordEngineFactGate(ctx context.Context, principal
 		"rows_withheld", decision.Report.RowsWithheld,
 		"fields_withheld", decision.Report.FieldsWithheld,
 		"evidence_withheld", decision.Report.EvidenceWithheld,
+		"fields_undeclared", decision.Report.FieldsUndeclared,
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
-	if decision.Decision == "unavailable" {
+	if decision.Decision == "unavailable" || decision.Report.FieldsUndeclared > 0 {
 		t.logger.WarnContext(ctx, EngineFactGateLogMessage, args...)
 		return
 	}
