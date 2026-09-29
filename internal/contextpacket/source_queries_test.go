@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/dependencyrelation"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 )
 
@@ -146,10 +147,11 @@ func TestAIWorkflowRunsSourceQuery_usesRunIDForBlankCompositeLabel(t *testing.T)
 	}
 }
 
-// CHAOS-7177: the dependency evidence id is per (source, target), so twin rows
-// (a stale 'relates' and a live 'relates_to') must collapse to one evidence
-// row or the locator re-query sees two rows for one id and answers not found.
-func TestWorkItemDependenciesSourceQueryDedupesPerEvidenceID(t *testing.T) {
+// CHAOS-7177: the dependency evidence id is per (source, target, canonical
+// relation): twin alias rows collapse to one evidence row (else the locator
+// re-query sees two rows for one id and answers not found) while distinct
+// relations of one pair keep distinct ids.
+func TestWorkItemDependenciesSourceQueryIdentityIsTheCanonicalRelation(t *testing.T) {
 	t.Parallel()
 	var statement string
 	for _, q := range contextpacket.SourceQueryCatalogV1 {
@@ -157,8 +159,13 @@ func TestWorkItemDependenciesSourceQueryDedupesPerEvidenceID(t *testing.T) {
 			statement = q.Statement
 		}
 	}
-	if !strings.Contains(statement, "LIMIT 1 BY d.source_work_item_id, d.target_work_item_id") ||
-		!strings.Contains(statement, "ORDER BY d.source_work_item_id, d.target_work_item_id, d.last_synced DESC, d.relationship_type ASC") {
-		t.Fatalf("work_item_dependencies.v1 does not deterministically dedupe per evidence id: %s", statement)
+	key := dependencyrelation.KeySQL("d.relationship_type")
+	for _, want := range []string{
+		"d.source_work_item_id, ':', d.target_work_item_id, ':', " + key + ") evidence_ref_id",
+		"ORDER BY d.source_work_item_id, d.target_work_item_id, " + key + ", d.last_synced DESC, d.relationship_type ASC LIMIT 1 BY d.source_work_item_id, d.target_work_item_id, " + key,
+	} {
+		if !strings.Contains(statement, want) {
+			t.Fatalf("work_item_dependencies.v1 missing %q: %s", want, statement)
+		}
 	}
 }

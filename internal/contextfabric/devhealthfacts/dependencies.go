@@ -2,11 +2,9 @@ package devhealthfacts
 
 import (
 	"context"
-	"strconv"
-	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/dependencyrelation"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -160,7 +158,7 @@ WHERE d.org_id = {org_id:String} AND concat(toString(t.repo_id), ':', d.target_w
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactBlockers, Subject: subject,
 			Fields:         fields,
-			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItemDependency, sourceID+":"+targetID)},
+			EvidenceRefIDs: []string{dependencyEvidenceRefID(sourceID, targetID, dependencyrelation.Key(blockerRelationshipType))},
 		})
 		return nil
 	}, authorizationBindings...)
@@ -247,18 +245,11 @@ ORDER BY d.target_work_item_id, lower(ifNull(d.relationship_type, ''))`), settin
 		// table so a stale 'relates' row and a live 'relates_to' row for one
 		// pair yield ONE fact. Dedupe before admit(): a twin must not spend
 		// output budget.
-		canonicalType, emittedType := "", ""
+		relationKey := dependencyrelation.Key(relationshipType)
+		emittedType := ""
 		if relationshipType != "" {
-			typ, swap := devhealthsource.CanonicalDependencyRelationship(relationshipType)
-			canonicalType = strings.ToLower(string(typ)) + "\x00" + strconv.FormatBool(swap)
-			emittedType = strings.ToLower(string(typ))
-			if swap {
-				// An inverted spelling (BLOCKED_BY) names the relation from the
-				// other side: keep the raw spelling on the wire. The dedupe key
-				// stays canonical, so BLOCKED_BY and IS_BLOCKED_BY still collapse.
-				emittedType = strings.ToLower(strings.TrimSpace(relationshipType))
-			}
-			key := sourceRepoID + "\x00" + sourceID + "\x00" + targetID + "\x00" + canonicalType
+			emittedType = dependencyrelation.EmittedSpelling(relationshipType)
+			key := sourceRepoID + "\x00" + sourceID + "\x00" + targetID + "\x00" + relationKey
 			if _, dup := seenRelations[key]; dup {
 				return nil
 			}
@@ -276,7 +267,7 @@ ORDER BY d.target_work_item_id, lower(ifNull(d.relationship_type, ''))`), settin
 		}
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactRequiredChildren, Subject: subject, Fields: fields,
-			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItemDependency, sourceID+":"+targetID)},
+			EvidenceRefIDs: []string{dependencyEvidenceRefID(sourceID, targetID, relationKey)},
 		})
 		return nil
 	}, authorizationBindings...)
@@ -287,4 +278,12 @@ ORDER BY d.target_work_item_id, lower(ifNull(d.relationship_type, ''))`), settin
 	state, emptyReason := currentAxisReadState(len(facts))
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: budget.truncated()}
 	return result, nil
+}
+
+// dependencyEvidenceRefID is the evidence identity of ONE dependency relation:
+// (source, target, canonical relation key). It must equal the evidence_ref_id
+// the work_item_dependencies.v1 catalog query derives (CHAOS-7177), or a fact
+// would cite a row the locator resolves to another relation of the pair.
+func dependencyEvidenceRefID(sourceID, targetID, relationKey string) string {
+	return evidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItemDependency, sourceID+":"+targetID+":"+relationKey)
 }

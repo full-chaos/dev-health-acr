@@ -308,37 +308,57 @@ func TestRequiredChildrenProviderDedupesTwinRowsByCanonicalRelation(t *testing.T
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
 	}
-	// relates+relates_to on WIDGET-200 -> 1; WIDGET-300 -> 1; distinct 'requires' -> 1; blocked_by -> 1, raw spelling kept.
-	// The surviving twin of an inverted pair is the first row the query returns,
-	// so the query must order them (CHAOS-7177 r2 P2): the fake ignores SQL.
+	// The surviving twin is the first row the query returns, so the query must
+	// order them (CHAOS-7177 r2 P2): the fake ignores SQL.
 	if len(client.queries) == 0 || !strings.Contains(client.queries[0].statement, "ORDER BY d.target_work_item_id, lower(ifNull(d.relationship_type, ''))\nLIMIT") {
 		t.Fatalf("required-children query is not deterministically ordered: %#v", client.queries)
 	}
-	perTarget := map[string]int{}
-	relByTarget := map[string]string{}
+	type wire struct{ rel, evidence string }
+	byTarget := map[string][]wire{}
 	for _, fact := range result.Facts {
 		id := *fact.Fields["required_child_work_item_id"].String
-		perTarget[id+"/"+*fact.Fields["relationship_type"].String]++
-		relByTarget[id+"/"+*fact.Fields["relationship_type"].String] = *fact.Fields["relationship_type"].String
+		byTarget[id] = append(byTarget[id], wire{*fact.Fields["relationship_type"].String, fact.EvidenceRefIDs[0]})
 	}
-	// Each (target, emitted spelling) exactly once: canonical 'relates_to' for the alias twin,
-	// raw lower-cased spelling for the inverted row, and BLOCKED_BY/IS_BLOCKED_BY collapsed.
-	for _, want := range []string{"WIDGET-200/relates_to", "WIDGET-300/relates_to", "WIDGET-200/requires"} {
-		if perTarget[want] != 1 {
-			t.Fatalf("%s count = %d, want 1: %v", want, perTarget[want], perTarget)
+	// WIDGET-200: alias twin -> ONE relates_to fact, plus the distinct 'requires' relation;
+	// the two facts must cite DISTINCT evidence ids (identity = canonical relation, not the pair).
+	if got := byTarget["WIDGET-200"]; len(got) != 2 || got[0].rel != "relates_to" || got[1].rel != "requires" || got[0].evidence == got[1].evidence {
+		t.Fatalf("WIDGET-200 = %#v, want relates_to and requires with distinct evidence ids", got)
+	}
+	if got := byTarget["WIDGET-300"]; len(got) != 1 || got[0].rel != "relates_to" {
+		t.Fatalf("WIDGET-300 = %#v", got)
+	}
+	// WIDGET-400: BLOCKED_BY + IS_BLOCKED_BY are one relation, emitted with ONE fixed spelling.
+	if got := byTarget["WIDGET-400"]; len(got) != 1 || got[0].rel != "blocked_by" {
+		t.Fatalf("WIDGET-400 = %#v, want one blocked_by fact", got)
+	}
+	if len(result.Facts) != 4 {
+		t.Fatalf("facts = %d, want 4: %v", len(result.Facts), byTarget)
+	}
+}
+
+// CHAOS-7177 r2: the wire output for an inverted pair must not depend on which
+// raw row arrives first.
+func TestRequiredChildrenProviderInvertedAliasOutputIsRowOrderIndependent(t *testing.T) {
+	t.Parallel()
+	read := func(first, second string) (string, string) {
+		client := &fakeClient{tables: []fakeTable{{match: "FROM work_item_dependencies", rows: [][]any{
+			{"WIDGET-101", "WIDGET-400", first, "repo-1", "repo-9", uint64(1)},
+			{"WIDGET-101", "WIDGET-400", second, "repo-1", "repo-9", uint64(1)},
+		}}}}
+		provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactRequiredChildren)
+		result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Kind: contextfabric.FactRequiredChildren, Subjects: []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")},
+		})
+		if err != nil || len(result.Facts) != 1 {
+			t.Fatalf("err=%v facts=%d, want 1", err, len(result.Facts))
 		}
+		return *result.Facts[0].Fields["relationship_type"].String, result.Facts[0].EvidenceRefIDs[0]
 	}
-	inverted := 0
-	for key, n := range perTarget {
-		if strings.HasPrefix(key, "WIDGET-400/") {
-			inverted += n
-		}
-	}
-	if inverted != 1 {
-		t.Fatalf("WIDGET-400 facts = %d, want 1 (BLOCKED_BY and IS_BLOCKED_BY are one relation): %v", inverted, perTarget)
-	}
-	if len(result.Facts) != 4 || perTarget["WIDGET-200/relates"] != 0 {
-		t.Fatalf("facts = %d, alias leaked: %v", len(result.Facts), perTarget)
+	relA, evA := read("BLOCKED_BY", "IS_BLOCKED_BY")
+	relB, evB := read("IS_BLOCKED_BY", "BLOCKED_BY")
+	if relA != relB || evA != evB || relA != "blocked_by" {
+		t.Fatalf("order-dependent output: (%q,%q) vs (%q,%q)", relA, evA, relB, evB)
 	}
 }
 
