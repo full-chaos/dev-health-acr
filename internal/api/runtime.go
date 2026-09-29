@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -81,6 +82,28 @@ type RuntimeDependencies struct {
 	// configured and this is nil, the retrieval route fails closed as
 	// unavailable rather than serve an undecided result.
 	StoredResultGate StoredResultAuthorizer
+	// DirectReadGate and DirectFactReader are the shared base of the direct
+	// data tools (CHAOS-7071): the mandatory subject gate every direct read
+	// passes, and the only path from a direct tool to the fact registry.
+	// Both are nil when Context Fabric is not composed; a direct data
+	// handler then fails closed as unavailable, never reads ungated.
+	DirectReadGate   *directread.SubjectGate
+	DirectFactReader *directread.FactReader
+	// DataCatalogue, DataOperations and DataSubjects are the S1a direct
+	// data tools (CHAOS-7072), each optional and independent -- same
+	// convention as Investigator: an absent one never fails composition.
+	//
+	// DataCatalogue is the loaded operation policy artifact; nil when it
+	// was not loaded (data_catalog then lists no operation and says
+	// data_query_not_configured). DataOperations is the run_operation
+	// runner; nil unless the internal query service URL is configured AND
+	// the catalogue loaded (design E.5): the operations route then answers
+	// feature_not_enabled with reason data_query_not_configured.
+	// DataSubjects is the find_subjects lookup; nil when no graph is
+	// composed: the subjects route then answers 503.
+	DataCatalogue  *directread.Catalogue
+	DataOperations DataOperationRunner
+	DataSubjects   DataSubjectFinder
 	// OrgModelConfigs is optional (CHAOS-3775) -- same convention as
 	// Investigator. When nil (no ACR_CONTEXT_FABRIC_CREDENTIAL_ENCRYPTION_KEYS
 	// configured), the model-config routes stay registered, authorized, and
@@ -151,6 +174,15 @@ func (r *RuntimeDependencies) validate() error {
 	}
 	if r.InvestigationResults != nil && storage.IsNil(r.InvestigationResults) {
 		return errors.New("hosted context fabric investigation result store must not be typed nil")
+	}
+	if r.DataOperations != nil && storage.IsNil(r.DataOperations) {
+		return errors.New("hosted data operation runner must not be typed nil")
+	}
+	if r.DataSubjects != nil && storage.IsNil(r.DataSubjects) {
+		return errors.New("hosted data subject lookup must not be typed nil")
+	}
+	if r.DataOperations != nil && r.DataCatalogue == nil {
+		return errors.New("hosted data operation runner requires its loaded catalogue")
 	}
 	if r.WorkloadTokenExchange != nil && storage.IsNil(r.WorkloadTokenExchange) {
 		return errors.New("hosted workload token exchange must not be typed nil")

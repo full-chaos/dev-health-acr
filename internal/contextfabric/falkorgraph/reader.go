@@ -81,6 +81,12 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 	if err != nil {
 		return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, nil, nil, err
 	}
+	// CHAOS-7080: a repository-restricted caller's reads see each project's
+	// live ownership reach in place of its "*" (project_reach.go).
+	ctx, err = a.withProjectReach(ctx, key, principal)
+	if err != nil {
+		return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, nil, nil, err
+	}
 	// One fence verification per resolution, not per term (codex round-2
 	// R2-1). Scoped to this call and never shared across requests.
 	fence := &resolutionFence{}
@@ -513,6 +519,12 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// request.Binding, never re-resolved here (effectiveKey's fallback is
 	// for a direct/test caller only).
 	key, err := a.effectiveKey(ctx, principal.OrgID, request.Binding)
+	if err != nil {
+		return contextfabric.GraphContext{}, err
+	}
+	// CHAOS-7080: a repository-restricted caller's reads see each project's
+	// live ownership reach in place of its "*" (project_reach.go).
+	ctx, err = a.withProjectReach(ctx, key, principal)
 	if err != nil {
 		return contextfabric.GraphContext{}, err
 	}

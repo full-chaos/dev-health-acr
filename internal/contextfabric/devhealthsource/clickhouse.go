@@ -618,6 +618,14 @@ const zeroRepositoryID = "00000000-0000-0000-0000-000000000000"
 const (
 	noRepositorySentinel       = "acr-context-fabric:no-repository"
 	orphanedRepositorySentinel = "acr-context-fabric:orphaned-repository"
+	// unresolvedRepositorySentinel (CHAOS-7080) is repoAuthorization's value
+	// for a row whose repository slug did not resolve (a LEFT JOIN to repos
+	// that found no row). Before CHAOS-7080 such a row got RepositorySlugs
+	// [""], which graphrank.UniqueSorted drops, so falkorgraph's
+	// authorizationValue wrote the "*" wildcard: every repository-restricted
+	// principal could see it. Same authorization consequence as the two
+	// sentinels above.
+	unresolvedRepositorySentinel = "acr-context-fabric:unresolved-repository"
 )
 
 // repoAuthorization is every OTHER producer's authorization builder
@@ -628,6 +636,9 @@ const (
 // queryWorkItemHierarchy), whose LEFT JOIN can legitimately find no repos
 // match, route through workItemAuthorization below instead.
 func repoAuthorization(repoSlug string) contractsv1.ContextFabricAuthorizationScope {
+	if strings.TrimSpace(repoSlug) == "" {
+		return contractsv1.ContextFabricAuthorizationScope{RepositorySlugs: []string{unresolvedRepositorySentinel}}
+	}
 	return contractsv1.ContextFabricAuthorizationScope{RepositorySlugs: []string{repoSlug}}
 }
 

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/acr/v1/mcp_run_operation_request.v1.schema.json",
+  "title": "ACR MCP run_operation Request v1",
+  "description": "Input for the run_operation tool. Names one allowlisted operation and its variables. You send no query text. The organization always comes from your credential, never from a variable.",
+  "examples": [
+    {
+      "operation": "compoundingRisk",
+      "variables": {
+        "filter": {
+          "breakout": "REPO",
+          "repoIds": [
+            "repository:7b9583ee-1111-4222-8333-444455556666"
+          ]
+        }
+      },
+      "max_bytes": 32768
+    }
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "operation"
+  ],
+  "properties": {
+    "operation": {
+      "type": "string",
+      "description": "The operation name exactly as data_catalog lists it, for example compoundingRisk, hotspots, securityAlerts, catalogValues or capacityForecasts. An unknown name is refused.",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z][A-Za-z0-9]*$"
+    },
+    "variables": {
+      "type": "object",
+      "description": "The operation's variables, shaped as data_catalog shows their paths, for example {\"filter\":{\"breakout\":\"REPO\",\"repoIds\":[\"repository:...\"]}}. Repository and team ids are canonical ids taken from find_subjects or from a response: never build one. A variable that is not listed for the operation is refused. Omit it for an operation that needs none.",
+      "additionalProperties": true
+    },
+    "max_bytes": {
+      "type": "integer",
+      "description": "Upper bound for the size of the returned data in bytes. The default is 32768 and the largest is 262144. Data over the bound is refused with response_budget, never cut: ask for less (a shorter window, a lower limit) instead.",
+      "minimum": 1,
+      "maximum": 262144
+    }
+  }
+}

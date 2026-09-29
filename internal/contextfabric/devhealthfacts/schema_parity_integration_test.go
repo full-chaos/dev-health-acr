@@ -54,7 +54,7 @@ var factSchemaTables = []string{
 	// CHAOS-4398: readTeamThemeMix's canonical theme-mix source (never
 	// investment_metrics_daily, above -- see that reader's own doc
 	// comment).
-	"work_unit_investments", "work_item_team_attributions",
+	"work_unit_investments", "work_item_team_attributions", "work_unit_supersessions", "work_unit_membership_runs", "work_unit_membership",
 	// The shared work-item authorization relation joins the project
 	// ownership chain and the issue-to-pull-request links into every
 	// work-item reader's statement.

@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 5714013793c3b5bf6a0ef81d564948e5e65a87554ab17516ff680acf5889840e
+# canonical-content-sha256: 0484097a8e5d1a377cf0b0252f00508d6b003adb8c5a036d16dca91739d08cd8
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -320,7 +320,22 @@ paths:
           "$ref": "#/components/parameters/RequestID"
         -
           "$ref": "#/components/parameters/ClientVersion"
+        -
+          description: "Comma list of sections; empty = all. An unknown section is 400 invalid_request."
+          in: "query"
+          name: "sections"
+          required: false
+          schema:
+            type: "string"
       responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/DataCatalogResponse"
+          description: "The catalogue for the caller."
+        "400":
+          "$ref": "#/components/responses/Error"
         "401":
           "$ref": "#/components/responses/Error"
         "403":
@@ -329,6 +344,8 @@ paths:
           "$ref": "#/components/responses/Error"
         "429":
           "$ref": "#/components/responses/Error"
+        "500":
+          "$ref": "#/components/responses/Error"
         "501":
           "$ref": "#/components/responses/Error"
         "503":
@@ -336,7 +353,7 @@ paths:
       security:
         -
           bearerAuth: []
-      summary: "Direct data catalogue (data_catalog). CHAOS-7071 (S0) registers the route and its protection chain only: every authorized request answers 501 feature_not_enabled with details.reason not_implemented until the slice that fills it lands."
+      summary: "Direct data catalogue (data_catalog), CHAOS-7072 S1a: the operations, subject kinds, relationship types, limits and versions for THIS caller. The sections query parameter (comma list of operations, facts, subjects, relationships, limits) filters; the facts section is not served in this release. A caller without data:read sees the operation list with available=false."
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "context:read"
   "/api/v1/context-fabric/data/facts":
@@ -347,7 +364,21 @@ paths:
           "$ref": "#/components/parameters/RequestID"
         -
           "$ref": "#/components/parameters/ClientVersion"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              "$ref": "../jsonschema/v1/mcp_read_facts_request.v1.schema.json"
+        required: true
       responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "../jsonschema/v1/mcp_read_facts_response.v1.schema.json"
+          description: "The acr-data.v1 read_facts document. status is complete, partial, denied or unavailable; read coverage before relying on facts."
+        "400":
+          "$ref": "#/components/responses/Error"
         "401":
           "$ref": "#/components/responses/Error"
         "403":
@@ -356,14 +387,12 @@ paths:
           "$ref": "#/components/responses/Error"
         "429":
           "$ref": "#/components/responses/Error"
-        "501":
-          "$ref": "#/components/responses/Error"
         "503":
           "$ref": "#/components/responses/Error"
       security:
         -
           bearerAuth: []
-      summary: "Direct fact read (read_facts). CHAOS-7071 (S0) registers the route and its protection chain only: every authorized request answers 501 feature_not_enabled with details.reason not_implemented until the slice that fills it lands."
+      summary: "Direct fact read (read_facts, CHAOS-7073). Returns registry facts for canonical subjects the caller may read, one coverage row per (kind, subject). No model runs. An unreadable subject and a missing one give the same answer. Malformed or out-of-bounds requests answer 400 invalid_request; a missing or failed fact reader answers a retryable 503 upstream_unavailable."
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "context:read"
   "/api/v1/context-fabric/data/operations":
@@ -374,14 +403,32 @@ paths:
           "$ref": "#/components/parameters/RequestID"
         -
           "$ref": "#/components/parameters/ClientVersion"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/DataOperationRequest"
+        required: true
       responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/DataOperationResponse"
+          description: "Terminal typed result."
+        "400":
+          "$ref": "#/components/responses/Error"
         "401":
           "$ref": "#/components/responses/Error"
         "403":
           "$ref": "#/components/responses/Error"
+        "413":
+          "$ref": "#/components/responses/Error"
         "426":
           "$ref": "#/components/responses/Error"
         "429":
+          "$ref": "#/components/responses/Error"
+        "500":
           "$ref": "#/components/responses/Error"
         "501":
           "$ref": "#/components/responses/Error"
@@ -390,7 +437,7 @@ paths:
       security:
         -
           bearerAuth: []
-      summary: "Registered analytics operation (run_operation). Requires the data:read scope. CHAOS-7071 (S0) registers the route and its protection chain only: every authorized request answers 501 feature_not_enabled with details.reason not_implemented until the slice that fills it lands."
+      summary: "Registered analytics operation (run_operation), CHAOS-7072 S1a. Requires the data:read scope. A typed result is HTTP 200: call is served, refused (with refusal.code), operation_unavailable, upstream_error or upstream_timeout. 501 feature_not_enabled with details.reason data_query_not_configured when the internal query service is not configured; 503 when the subject gate is unavailable."
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "data:read"
   "/api/v1/context-fabric/data/subjects":
@@ -401,14 +448,32 @@ paths:
           "$ref": "#/components/parameters/RequestID"
         -
           "$ref": "#/components/parameters/ClientVersion"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/DataSubjectsRequest"
+        required: true
       responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/DataSubjectsResponse"
+          description: "Admitted subjects, one page."
+        "400":
+          "$ref": "#/components/responses/Error"
         "401":
           "$ref": "#/components/responses/Error"
         "403":
           "$ref": "#/components/responses/Error"
+        "413":
+          "$ref": "#/components/responses/Error"
         "426":
           "$ref": "#/components/responses/Error"
         "429":
+          "$ref": "#/components/responses/Error"
+        "500":
           "$ref": "#/components/responses/Error"
         "501":
           "$ref": "#/components/responses/Error"
@@ -417,7 +482,7 @@ paths:
       security:
         -
           bearerAuth: []
-      summary: "Direct subject lookup (find_subjects). CHAOS-7071 (S0) registers the route and its protection chain only: every authorized request answers 501 feature_not_enabled with details.reason not_implemented until the slice that fills it lands."
+      summary: "Direct subject lookup (find_subjects), CHAOS-7072 S1a: mode list (kind) or name (query, kinds). Every subject returned passed the direct-read subject gate for the caller in the same call; total_known counts admitted subjects only. 503 when no graph is composed."
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "context:read"
   "/api/v1/context-fabric/investigations":
@@ -853,6 +918,585 @@ components:
             "$ref": "../jsonschema/v1/error.v1.schema.json"
       description: "Structured safe error"
   schemas:
+    DataCatalogResponse:
+      additionalProperties: false
+      properties:
+        caller:
+          additionalProperties: false
+          properties:
+            grant_class:
+              enum:
+                - "unrestricted"
+                - "restricted"
+            scopes:
+              items:
+                type: "string"
+              type: "array"
+          required:
+            - "scopes"
+            - "grant_class"
+          type: "object"
+        consistency:
+          const: "best_effort"
+        contract_version:
+          const: "acr-data.v1"
+        facts:
+          properties:
+            note:
+              type: "string"
+            served:
+              const: false
+          required:
+            - "served"
+            - "note"
+          type: "object"
+        limits:
+          additionalProperties:
+            type: "integer"
+          type: "object"
+        notes:
+          items:
+            type: "string"
+          type: "array"
+        operations:
+          properties:
+            available:
+              type: "boolean"
+            caller_class:
+              enum:
+                - "unrestricted"
+                - "restricted"
+            not_served:
+              items:
+                properties:
+                  code:
+                    type: "string"
+                  name:
+                    type: "string"
+                  reason:
+                    type: "string"
+                required:
+                  - "name"
+                  - "code"
+                  - "reason"
+                type: "object"
+              type: "array"
+            operations:
+              items:
+                properties:
+                  available:
+                    type: "boolean"
+                  cost_class:
+                    enum:
+                      - "compute"
+                      - "analytics_batch"
+                      - "list"
+                      - "series"
+                      - "catalog"
+                  deadline_seconds:
+                    minimum: 1
+                    type: "integer"
+                  disclosure_fields:
+                    items:
+                      type: "string"
+                    type: "array"
+                  document_digest:
+                    type: "string"
+                  forced_variable:
+                    type: "string"
+                  max_in_flight_per_org:
+                    minimum: 1
+                    type: "integer"
+                  name:
+                    type: "string"
+                  notes:
+                    items:
+                      type: "string"
+                    type: "array"
+                  purpose:
+                    maxLength: 200
+                    type: "string"
+                  reason:
+                    enum:
+                      - "scope_missing_data_read"
+                      - "data_query_not_configured"
+                  response_root:
+                    type: "string"
+                  scope_class:
+                    enum:
+                      - "org_wide"
+                      - "forced_grant"
+                  scope_variables:
+                    items:
+                      type: "string"
+                    type: "array"
+                  variables:
+                    items:
+                      properties:
+                        default:
+                          type: "string"
+                        enum_values:
+                          items:
+                            type: "string"
+                          type: "array"
+                        max:
+                          type: "integer"
+                        max_items:
+                          type: "integer"
+                        max_length:
+                          type: "integer"
+                        min:
+                          type: "integer"
+                        path:
+                          type: "string"
+                        subject_kind:
+                          type: "string"
+                        type:
+                          type: "string"
+                      required:
+                        - "path"
+                        - "type"
+                      type: "object"
+                    type: "array"
+                required:
+                  - "name"
+                  - "purpose"
+                  - "available"
+                  - "scope_class"
+                  - "scope_variables"
+                  - "cost_class"
+                  - "response_root"
+                  - "disclosure_fields"
+                  - "deadline_seconds"
+                  - "document_digest"
+                  - "variables"
+                type: "object"
+              type: "array"
+            reason:
+              enum:
+                - "scope_missing_data_read"
+                - "data_query_not_configured"
+            refused_shapes:
+              items:
+                properties:
+                  code:
+                    type: "string"
+                  operation:
+                    type: "string"
+                  path:
+                    type: "string"
+                  reason:
+                    type: "string"
+                  value:
+                    type: "string"
+                required:
+                  - "operation"
+                  - "path"
+                  - "value"
+                  - "code"
+                  - "reason"
+                type: "object"
+              type: "array"
+          required:
+            - "caller_class"
+            - "available"
+            - "operations"
+            - "not_served"
+            - "refused_shapes"
+          type: "object"
+        relationships:
+          properties:
+            note:
+              type: "string"
+            types:
+              items:
+                properties:
+                  produced:
+                    type: "boolean"
+                  source_kinds:
+                    items:
+                      type: "string"
+                    type: "array"
+                  target_kinds:
+                    items:
+                      type: "string"
+                    type: "array"
+                  type:
+                    type: "string"
+                required:
+                  - "type"
+                  - "source_kinds"
+                  - "target_kinds"
+                  - "produced"
+                type: "object"
+              type: "array"
+          required:
+            - "note"
+            - "types"
+          type: "object"
+        sections:
+          items:
+            enum:
+              - "operations"
+              - "facts"
+              - "subjects"
+              - "relationships"
+              - "limits"
+          type: "array"
+        subjects:
+          properties:
+            kinds:
+              items:
+                properties:
+                  default_name_kind:
+                    type: "boolean"
+                  kind:
+                    type: "string"
+                  listable:
+                    type: "boolean"
+                required:
+                  - "kind"
+                  - "listable"
+                  - "default_name_kind"
+                type: "object"
+              type: "array"
+          required:
+            - "kinds"
+          type: "object"
+        untrusted_content:
+          properties:
+            fields:
+              items:
+                type: "string"
+              type: "array"
+            notice:
+              type: "string"
+            untrusted:
+              const: true
+          required:
+            - "untrusted"
+            - "notice"
+            - "fields"
+          type: "object"
+        versions:
+          properties:
+            catalogue_contract:
+              type: "string"
+            contract:
+              type: "string"
+            ops_repository:
+              type: "string"
+            ops_source_sha:
+              type: "string"
+            schema_digest:
+              type: "string"
+          required:
+            - "contract"
+            - "catalogue_contract"
+            - "ops_repository"
+            - "ops_source_sha"
+            - "schema_digest"
+          type: "object"
+      required:
+        - "contract_version"
+        - "sections"
+        - "versions"
+        - "caller"
+        - "consistency"
+        - "untrusted_content"
+      type: "object"
+    DataOperationRequest:
+      additionalProperties: false
+      properties:
+        max_bytes:
+          description: "Budget for the serialized data; 0 = 32768, values above 262144 are clamped."
+          maximum: 262144
+          minimum: 0
+          type: "integer"
+        operation:
+          description: "A served operation name from data_catalog."
+          type: "string"
+        variables:
+          description: "Allowlisted variable paths only; orgId is never a client variable."
+          type: "object"
+      required:
+        - "operation"
+      type: "object"
+    DataOperationResponse:
+      properties:
+        call:
+          enum:
+            - "served"
+            - "refused"
+            - "operation_unavailable"
+            - "upstream_error"
+            - "upstream_timeout"
+        completeness:
+          enum:
+            - "declared_complete"
+            - "declared_partial"
+            - "unknown"
+        consistency:
+          const: "best_effort"
+        data:
+          description: "The fixed shape of the registered document, after the output allowlist. Untrusted content."
+          type: "object"
+        effective_scope:
+          properties:
+            forced_by_grant:
+              type: "boolean"
+            repo_ids:
+              items:
+                type: "string"
+              type: "array"
+          required:
+            - "repo_ids"
+            - "forced_by_grant"
+          type: "object"
+        errors:
+          items:
+            properties:
+              class:
+                enum:
+                  - "graphql_errors"
+                  - "decode"
+                  - "http_status"
+                  - "transport"
+                  - "canceled"
+                  - "timeout"
+                  - "not_found"
+                  - "concurrency_wait"
+            required:
+              - "class"
+            type: "object"
+          type: "array"
+        operation:
+          type: "string"
+        page:
+          properties:
+            max_bytes:
+              type: "integer"
+            returned_bytes:
+              type: "integer"
+          required:
+            - "returned_bytes"
+            - "max_bytes"
+          type: "object"
+        refusal:
+          properties:
+            code:
+              enum:
+                - "unknown_operation"
+                - "variable_not_allowed"
+                - "variable_out_of_range"
+                - "person_scope_not_served"
+                - "basis_dependent_shape"
+                - "no_granted_scope"
+                - "operation_not_served_for_caller"
+                - "response_budget"
+                - "invalid_request"
+                - "scope_required"
+                - "row_outside_grant"
+                - "policy_stale"
+                - "denied_or_not_found"
+            max_bytes:
+              type: "integer"
+            measured_bytes:
+              type: "integer"
+            path:
+              type: "string"
+            reason:
+              type: "string"
+          required:
+            - "code"
+            - "reason"
+          type: "object"
+        request:
+          properties:
+            max_bytes:
+              type: "integer"
+            operation:
+              type: "string"
+            variables:
+              type: "object"
+          required:
+            - "operation"
+            - "max_bytes"
+          type: "object"
+        result:
+          enum:
+            - "data"
+            - "empty_unverified"
+            - "empty_declared"
+        source:
+          properties:
+            document_digest:
+              type: "string"
+            path:
+              const: "graphql"
+            schema_digest:
+              type: "string"
+            service:
+              type: "string"
+          required:
+            - "path"
+            - "service"
+            - "schema_digest"
+          type: "object"
+        untrusted_content:
+          properties:
+            fields:
+              items:
+                type: "string"
+              type: "array"
+            untrusted:
+              const: true
+          required:
+            - "untrusted"
+            - "fields"
+          type: "object"
+      required:
+        - "call"
+        - "completeness"
+        - "operation"
+        - "source"
+        - "errors"
+        - "page"
+        - "consistency"
+        - "untrusted_content"
+        - "request"
+      type: "object"
+    DataSubjectsRequest:
+      additionalProperties: false
+      properties:
+        cursor:
+          description: "Opaque keyset position from page.next_cursor. It carries no permission."
+          type: "string"
+        kind:
+          description: "List mode: exactly one subject kind."
+          type: "string"
+        kinds:
+          items:
+            type: "string"
+          maxItems: 8
+          type: "array"
+        limit:
+          description: "Page size; 0 = 25, capped at 200."
+          minimum: 0
+          type: "integer"
+        query:
+          description: "Name mode: exact label, alias or provider key (at most 256 characters)."
+          maxLength: 1024
+          type: "string"
+      type: "object"
+    DataSubjectsResponse:
+      properties:
+        consistency:
+          const: "best_effort"
+        page:
+          properties:
+            complete:
+              type: "boolean"
+            next_cursor:
+              type: "string"
+            returned:
+              type: "integer"
+          required:
+            - "returned"
+            - "complete"
+          type: "object"
+        population:
+          properties:
+            kind:
+              type: "string"
+            returned:
+              type: "integer"
+            total_known:
+              type: "integer"
+            truncated:
+              type: "boolean"
+          required:
+            - "returned"
+            - "total_known"
+            - "truncated"
+          type: "object"
+        request:
+          properties:
+            cursor:
+              type: "string"
+            kind:
+              type: "string"
+            kinds:
+              items:
+                type: "string"
+              type: "array"
+            limit:
+              type: "integer"
+            mode:
+              enum:
+                - "list"
+                - "name"
+            query:
+              type: "string"
+          required:
+            - "mode"
+            - "limit"
+          type: "object"
+        searched_kinds:
+          items:
+            type: "string"
+          type: "array"
+        status:
+          enum:
+            - "complete"
+            - "partial"
+            - "empty"
+            - "ambiguous"
+        subjects:
+          items:
+            properties:
+              canonical_id:
+                type: "string"
+              kind:
+                type: "string"
+              label:
+                type: "string"
+              match:
+                enum:
+                  - "exact"
+                  - "alias"
+                  - "provider_key"
+            required:
+              - "kind"
+              - "canonical_id"
+              - "label"
+              - "match"
+            type: "object"
+          type: "array"
+        untrusted_content:
+          properties:
+            fields:
+              items:
+                type: "string"
+              type: "array"
+            notice:
+              type: "string"
+            untrusted:
+              const: true
+          required:
+            - "untrusted"
+            - "notice"
+            - "fields"
+          type: "object"
+      required:
+        - "status"
+        - "subjects"
+        - "population"
+        - "page"
+        - "consistency"
+        - "request"
+        - "untrusted_content"
+      type: "object"
     HealthResponse:
       additionalProperties: false
       properties:

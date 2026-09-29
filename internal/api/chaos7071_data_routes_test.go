@@ -30,7 +30,7 @@ type chaos7071Harness struct {
 	entitled *bool
 }
 
-func newChaos7071Harness(t *testing.T, dataRequestsPerWindow int) *chaos7071Harness {
+func newChaos7071Harness(t *testing.T, dataRequestsPerWindow int, configure ...func(*RuntimeDependencies)) *chaos7071Harness {
 	t.Helper()
 	now := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
 	entitled := true
@@ -64,14 +64,18 @@ func newChaos7071Harness(t *testing.T, dataRequestsPerWindow int) *chaos7071Harn
 		Now: clock, ServiceVersion: "test", MinimumSidecarVersion: "0.1.0",
 		Observer: observability.NewAssemblyObserver(hooks), StoreBackend: contextpacket.StoreBackendMemory,
 	})
+	runtimeDeps := &RuntimeDependencies{
+		Credentials: credentials, Audit: audit, Assembler: assembler, Evidence: store,
+		Entitlements:         EntitlementFunc(func(context.Context, string, string) (bool, error) { return *h.entitled, nil }),
+		DeviceAuthorizations: devices, DeviceVerificationURL: "https://verify.example.test/device", DeviceAuthorizationLimiter: NewDeviceAuthorizationLimiter(ClockFunc(clock)),
+		ReadinessChecks: exactRuntimeChecks(), DataStoreChecks: exactDataStoreChecks(),
+	}
+	for _, apply := range configure {
+		apply(runtimeDeps)
+	}
 	h.app, err = NewApp(AppConfig{ServiceName: "acr", ServiceVersion: "test", RequestTimeout: time.Second}, Dependencies{
 		Capabilities: StaticCapabilitiesProvider{Now: clock, Value: hostedCapabilities()}, Observability: &hooks, Limits: manager, Now: clock,
-		Runtime: &RuntimeDependencies{
-			Credentials: credentials, Audit: audit, Assembler: assembler, Evidence: store,
-			Entitlements:         EntitlementFunc(func(context.Context, string, string) (bool, error) { return *h.entitled, nil }),
-			DeviceAuthorizations: devices, DeviceVerificationURL: "https://verify.example.test/device", DeviceAuthorizationLimiter: NewDeviceAuthorizationLimiter(ClockFunc(clock)),
-			ReadinessChecks: exactRuntimeChecks(), DataStoreChecks: exactDataStoreChecks(),
-		},
+		Runtime: runtimeDeps,
 	}, testLogger(&bytes.Buffer{}))
 	if err != nil {
 		t.Fatal(err)
@@ -81,8 +85,15 @@ func newChaos7071Harness(t *testing.T, dataRequestsPerWindow int) *chaos7071Harn
 
 func (h *chaos7071Harness) issue(t *testing.T, scopes []string, expiresAt *time.Time) auth.IssuedCredential {
 	t.Helper()
+	return h.issueFor(t, scopes, []string{hostedTestRepository}, expiresAt)
+}
+
+// issueFor issues a credential with an explicit repository grant (nil = an
+// unrestricted credential).
+func (h *chaos7071Harness) issueFor(t *testing.T, scopes, repositories []string, expiresAt *time.Time) auth.IssuedCredential {
+	t.Helper()
 	issued, err := h.service.Create(context.Background(), auth.CreateCredentialRequest{
-		OrgID: "org_1", Name: "chaos7071", RepositoryScopes: []string{hostedTestRepository}, Scopes: scopes, CreatedBy: "test_actor", ExpiresAt: expiresAt,
+		OrgID: "org_1", Name: "chaos7071", RepositoryScopes: repositories, Scopes: scopes, CreatedBy: "test_actor", ExpiresAt: expiresAt,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -119,6 +130,38 @@ var chaos7071Routes = []struct {
 	{http.MethodPost, ContextFabricDataOperationsPath, auth.ScopeDataRead},
 }
 
+// assertChaos7071Reached asserts the request passed the whole protection
+// chain and reached the route's handler. With no data dependencies composed
+// (this harness's default), each S1a handler answers its fail-closed state
+// (CHAOS-7072): the catalogue serves (no operation listed, operations
+// unavailable), find_subjects answers 503 (no graph), run_operation answers
+// 501 data_query_not_configured. The facts route is still the S0 stub.
+func assertChaos7071Reached(t *testing.T, path string, response *httptest.ResponseRecorder) {
+	t.Helper()
+	switch path {
+	case ContextFabricDataCatalogPath:
+		if response.Code != http.StatusOK {
+			t.Fatalf("catalog status %d body %s", response.Code, response.Body.String())
+		}
+	case ContextFabricDataSubjectsPath:
+		assertErrorResponse(t, response, http.StatusServiceUnavailable, "upstream_unavailable")
+	case ContextFabricDataOperationsPath:
+		assertErrorResponse(t, response, http.StatusNotImplemented, "feature_not_enabled")
+		var envelope contractsv1.ErrorEnvelope
+		if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		if envelope.Error.Details["reason"] != contextFabricDataNotConfiguredReason || envelope.Error.Retryable {
+			t.Fatalf("operations envelope %#v", envelope.Error)
+		}
+	case ContextFabricDataFactsPath:
+		// CHAOS-7073: no direct facts reader composed answers a retryable 503.
+		assertErrorResponse(t, response, http.StatusServiceUnavailable, "upstream_unavailable")
+	default:
+		assertChaos7071Stub(t, response)
+	}
+}
+
 func assertChaos7071Stub(t *testing.T, response *httptest.ResponseRecorder) {
 	t.Helper()
 	assertErrorResponse(t, response, http.StatusNotImplemented, "feature_not_enabled")
@@ -145,12 +188,12 @@ func TestChaos7071DataRoutesEnforceTheirScope(t *testing.T) {
 		dataResponse := h.call(route.method, route.path, dataOnly)
 		if route.scope == auth.ScopeDataRead {
 			assertErrorResponse(t, legacyResponse, http.StatusForbidden, "insufficient_scope")
-			assertChaos7071Stub(t, dataResponse)
+			assertChaos7071Reached(t, route.path, dataResponse)
 		} else {
-			assertChaos7071Stub(t, legacyResponse)
+			assertChaos7071Reached(t, route.path, legacyResponse)
 			assertErrorResponse(t, dataResponse, http.StatusForbidden, "insufficient_scope")
 		}
-		assertChaos7071Stub(t, h.call(route.method, route.path, both))
+		assertChaos7071Reached(t, route.path, h.call(route.method, route.path, both))
 	}
 }
 
@@ -164,8 +207,8 @@ func TestChaos7071DataRoutesRefuseMissingRevokedAndExpiredCredentials(t *testing
 	expiring := h.issue(t, all, &expiry)
 	for _, route := range chaos7071Routes {
 		assertErrorResponse(t, h.call(route.method, route.path, ""), http.StatusUnauthorized, "invalid_token")
-		assertChaos7071Stub(t, h.call(route.method, route.path, revoked.Token))
-		assertChaos7071Stub(t, h.call(route.method, route.path, expiring.Token))
+		assertChaos7071Reached(t, route.path, h.call(route.method, route.path, revoked.Token))
+		assertChaos7071Reached(t, route.path, h.call(route.method, route.path, expiring.Token))
 	}
 	if _, err := h.service.Revoke(context.Background(), "org_1", revoked.Credential.CredentialID, "test_actor"); err != nil {
 		t.Fatal(err)
@@ -193,10 +236,10 @@ func TestChaos7071DataRoutesRequireTheEntitlement(t *testing.T) {
 func TestChaos7071OperationsRouteHasItsOwnRateClass(t *testing.T) {
 	h := newChaos7071Harness(t, 1)
 	token := h.issue(t, []string{auth.ScopeContextRead, auth.ScopeDataRead}, nil).Token
-	assertChaos7071Stub(t, h.call(http.MethodPost, ContextFabricDataOperationsPath, token))
+	assertChaos7071Reached(t, ContextFabricDataOperationsPath, h.call(http.MethodPost, ContextFabricDataOperationsPath, token))
 	assertErrorResponse(t, h.call(http.MethodPost, ContextFabricDataOperationsPath, token), http.StatusTooManyRequests, "rate_limited")
-	assertChaos7071Stub(t, h.call(http.MethodPost, ContextFabricDataFactsPath, token))
-	assertChaos7071Stub(t, h.call(http.MethodGet, ContextFabricDataCatalogPath, token))
+	assertChaos7071Reached(t, ContextFabricDataFactsPath, h.call(http.MethodPost, ContextFabricDataFactsPath, token))
+	assertChaos7071Reached(t, ContextFabricDataCatalogPath, h.call(http.MethodGet, ContextFabricDataCatalogPath, token))
 }
 
 // Existing behaviour is unchanged: a token that also holds data:read gets a

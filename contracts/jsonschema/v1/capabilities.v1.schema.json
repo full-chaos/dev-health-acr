@@ -48,7 +48,11 @@
           "source_evidence",
           "investigate_question",
           "investigation_result",
-          "record_episode"
+          "read_facts",
+          "record_episode",
+          "data_catalog",
+          "find_subjects",
+          "run_operation"
         ]
       },
       "uniqueItems": true

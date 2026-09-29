@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/acr/v1/mcp_data_catalog_request.v1.schema.json",
+  "title": "ACR MCP data_catalog Request v1",
+  "description": "Input for the data_catalog tool. Every field is optional. No sections means every section.",
+  "examples": [
+    {
+      "sections": [
+        "operations",
+        "limits"
+      ]
+    }
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "sections": {
+      "type": "array",
+      "description": "Which catalogue sections to return. Omit it for all of them: operations (the allowlisted run_operation operations for your credential, with variables, scope rules and limits), facts (not served in this release), subjects (subject kinds), relationships (relationship types and their end kinds) and limits (size and page bounds).",
+      "items": {
+        "type": "string",
+        "enum": [
+          "operations",
+          "facts",
+          "subjects",
+          "relationships",
+          "limits"
+        ]
+      },
+      "minItems": 1,
+      "maxItems": 5,
+      "uniqueItems": true
+    }
+  }
+}

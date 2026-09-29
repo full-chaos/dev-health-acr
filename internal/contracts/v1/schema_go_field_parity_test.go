@@ -134,6 +134,9 @@ var schemaRootTypes = map[string]string{
 	"mcp_investigate_question_response.v1.schema.json":             "MCPInvestigateQuestionResponse",
 	"mcp_investigation_result_request.v1.schema.json":              "MCPInvestigationResultRequest",
 	"mcp_investigation_result_response.v1.schema.json":             "MCPInvestigationResultResponse",
+	"mcp_data_catalog_request.v1.schema.json":                      "MCPDataCatalogRequest",
+	"mcp_find_subjects_request.v1.schema.json":                     "MCPFindSubjectsRequest",
+	"mcp_run_operation_request.v1.schema.json":                     "MCPRunOperationRequest",
 	"mcp_record_episode_request.v1.schema.json":                    "MCPRecordEpisodeRequest",
 	"mcp_record_episode_response.v1.schema.json":                   "MCPRecordEpisodeResponse",
 	"mcp_source_evidence_request.v1.schema.json":                   "MCPSourceEvidenceRequest",
@@ -156,8 +159,13 @@ var schemaRootTypes = map[string]string{
 // genuinely not served from a struct in this package -- it is not a place to
 // park a disagreement.
 var schemaRootExemptions = map[string]string{
-	"context_fabric_common.v1.schema.json": "a pure $defs library with no root type of its own (the document has no top-level \"type\"); every shape it publishes is anchored through its $defs entries below, so exempting the ROOT removes nothing from coverage",
-	"evaluation_demo.v1.schema.json":       "a demonstration artifact with no Go producer in this package -- nothing under internal/contracts/v1 marshals it, and contractcheck validates it purely as an example/schema pair (internal/contractcheck/run.go registers evaluation_demo.v1.json against it). With no producing struct there is no Go field set to anchor to.",
+	"mcp_read_facts_request.v1.schema.json":     "served from internal/contextfabric/directread (FactsRequest/FactsResponse), not internal/contracts/v1: the response schema is anchored to those Go types by internal/contextfabric/directread/chaos7073_schema_test.go",
+	"mcp_read_facts_response.v1.schema.json":    "served from internal/contextfabric/directread (FactsRequest/FactsResponse), not internal/contracts/v1: the response schema is anchored to those Go types by internal/contextfabric/directread/chaos7073_schema_test.go",
+	"mcp_data_catalog_response.v1.schema.json":  "the response is the hosted API JSON passed through unchanged; its Go types live in internal/contextfabric/directread (and the route envelope in internal/api), which import contracts/v1, so no type here can serve it without an import cycle. It is anchored by a real-producer schema test instead: internal/api/chaos7072_data_schema_test.go marshals the real routes' answers and validates them against this document, both ways (every real field is published, every published required field is emitted)",
+	"mcp_find_subjects_response.v1.schema.json": "the response is the hosted API JSON passed through unchanged; its Go types live in internal/contextfabric/directread (and the route envelope in internal/api), which import contracts/v1, so no type here can serve it without an import cycle. It is anchored by a real-producer schema test instead: internal/api/chaos7072_data_schema_test.go marshals the real routes' answers and validates them against this document, both ways (every real field is published, every published required field is emitted)",
+	"mcp_run_operation_response.v1.schema.json": "the response is the hosted API JSON passed through unchanged; its Go types live in internal/contextfabric/directread (and the route envelope in internal/api), which import contracts/v1, so no type here can serve it without an import cycle. It is anchored by a real-producer schema test instead: internal/api/chaos7072_data_schema_test.go marshals the real routes' answers and validates them against this document, both ways (every real field is published, every published required field is emitted)",
+	"context_fabric_common.v1.schema.json":      "a pure $defs library with no root type of its own (the document has no top-level \"type\"); every shape it publishes is anchored through its $defs entries below, so exempting the ROOT removes nothing from coverage",
+	"evaluation_demo.v1.schema.json":            "a demonstration artifact with no Go producer in this package -- nothing under internal/contracts/v1 marshals it, and contractcheck validates it purely as an example/schema pair (internal/contractcheck/run.go registers evaluation_demo.v1.json against it). With no producing struct there is no Go field set to anchor to.",
 }
 
 // schemaDefTypeOverrides binds one "<document>#<defName>" to a Go type name
@@ -222,6 +230,18 @@ var schemaDefTypeOverrides = map[string]string{
 // schemaDefExemptions names "<document>#<defName>" entries with no Go type,
 // each with the reason.
 var schemaDefExemptions = map[string]string{
+	"mcp_investigate_question_request.v1.schema.json#BareAnchorReceiptID":       "a bare-string node (CHAOS-7114: a receipt_id given as a plain string, expanded to the object form by the MCP handler before decode) -- not an object, so there is no field set for a Go struct to match",
+	"mcp_investigate_question_request.v1.schema.json#BareBoundSubjectReceiptID": "a bare-string node (CHAOS-7114: a receipt_id given as a plain string, expanded to the object form by the MCP handler before decode) -- not an object, so there is no field set for a Go struct to match",
+	"mcp_investigate_question_request.v1.schema.json#BareCandidateReceiptID":    "a bare-string node (CHAOS-7114: a receipt_id given as a plain string, expanded to the object form by the MCP handler before decode) -- not an object, so there is no field set for a Go struct to match",
+	"mcp_investigate_question_request.v1.schema.json#BareHandleReceiptID":       "a bare-string node (CHAOS-7114: a receipt_id given as a plain string, expanded to the object form by the MCP handler before decode) -- not an object, so there is no field set for a Go struct to match",
+	"mcp_investigate_question_request.v1.schema.json#BareKindReceiptID":         "a bare-string node (CHAOS-7114: a receipt_id given as a plain string, expanded to the object form by the MCP handler before decode) -- not an object, so there is no field set for a Go struct to match",
+	"mcp_investigate_question_request.v1.schema.json#BareWindowReceiptID":       "a bare-string node (CHAOS-7114: a receipt_id given as a plain string, expanded to the object form by the MCP handler before decode) -- not an object, so there is no field set for a Go struct to match",
+	"mcp_read_facts_response.v1.schema.json#ReadFactsSubjectRef":                "sub-object of mcp_read_facts_response.v1, served from directread (see schemaRootExemptions)",
+	"mcp_read_facts_response.v1.schema.json#Provenance":                         "sub-object of mcp_read_facts_response.v1, served from directread (see schemaRootExemptions)",
+	"mcp_read_facts_response.v1.schema.json#ServedFact":                         "sub-object of mcp_read_facts_response.v1, served from directread (see schemaRootExemptions)",
+	"mcp_read_facts_response.v1.schema.json#ServedSubject":                      "sub-object of mcp_read_facts_response.v1, served from directread (see schemaRootExemptions)",
+	"mcp_read_facts_response.v1.schema.json#ServedTable":                        "sub-object of mcp_read_facts_response.v1, served from directread (see schemaRootExemptions)",
+	"mcp_read_facts_response.v1.schema.json#WithheldItem":                       "sub-object of mcp_read_facts_response.v1, served from directread (see schemaRootExemptions)",
 	// Composition and container nodes: these publish no property set of
 	// their own, so there is no field set for a Go struct to match. Each was
 	// read before being listed.

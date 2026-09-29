@@ -462,6 +462,28 @@ deployment/review edges from `devhealthsource/tables.go`; project→team from
 end-to-end but this org's live graph currently has zero incident nodes —
 absence of evidence, not absence of a code path.
 
+**Wildcard authorization closed (2026-09-28, CHAOS-7080):** the shared
+predicate `graphrank.AuthorizedAttributes` no longer admits a node or edge
+whose `authorization_repositories` is the `"*"` wildcard to a
+repository-restricted caller (a specific repository list, including an owner
+wildcard such as `acme/*`). Unrestricted callers (no list) and universal
+callers (`*`) are unchanged. The one wildcard node a restricted caller keeps is
+its own organization, identified by the reserved organization scope id in
+`authorization_projects`. Before this, every project node (projection writes a
+project's empty repository list as `"*"`), every pre-CHAOS-4390 team, every
+project→team `OWNED_BY_TEAM` edge, and every node whose repository slug did
+not resolve was visible to every restricted caller, and the engine then read
+the project's facts (including other repositories' names and risk) for it.
+Projects stay visible to a restricted caller through ownership:
+`falkorgraph` substitutes, on each read of a principal-bearing adapter call,
+the project's live ownership reach (the union of the repository lists of the
+teams its current `OWNED_BY_TEAM` edges name) for its `"*"`
+(`falkorgraph/project_reach.go`). The engine re-checks every committed root
+against the same decision before the fact read
+(`contextfabric/fact_root_recheck.go`). An unresolved repository slug is now
+projected as a sentinel list that admits no repository, never as `"*"`
+(`devhealthsource.repoAuthorization`).
+
 **Team authorization (2026-08-28, CHAOS-4390, MERGED #313) and cohort
 retrieval (CHAOS-4395, IN FLIGHT, not yet merged as of this writing):** team
 nodes' `authorization_repositories` is now derived from `team_repo_ownership`
@@ -595,9 +617,9 @@ source for the SAME kind).
 | deployments | `deployments` (per-deployment status/environment); **+`deploy_metrics_daily`** (repository aggregate, CHAOS-4347) | deployment, **repository** |
 | incidents | `operational_incidents` (`status`: member state and drivers) | incident |
 | metrics | `repo_metrics_daily` — **own raw query (not `readers.ReadRepositoryMetrics`, which collapses to one row), `daily_metrics` per-day Rows table over the caller's own evidence window (explicit Start/End verbatim, else the platform's 90-day default policy width — CHAOS-4418)**; **+`team_metrics_daily`** (team, direct, still one-row scalar); **+`team_project_ownership` ⋈ `team_metrics_daily`** (project, summed-counts rollup, CHAOS-4347) | repository, **team, project** |
-| health | `compounding_risk_daily` — scalar `severity`/`compounding_risk` **+ `risk_rules` Rows table, one row per formula component (churn/complexity/ownership/review norm × weight, CHAOS-4418)**, repository and team; **+`team_project_ownership` ⋈ `compounding_risk_daily` (team layer) and +`team_project_ownership` ⋈ `team_repo_ownership` ⋈ `compounding_risk_daily` (repo layer, one hop further), both landing in one `risk_breakdown` Rows table (project, CHAOS-4363)** | repository, team, **project** |
+| health | `compounding_risk_daily` — scalar `severity`/`compounding_risk` **+ `risk_rules` Rows table, one row per formula component (churn/complexity/ownership/review norm × weight, CHAOS-4418)**, repository and team; **+`team_project_ownership` ⋈ `compounding_risk_daily` (team layer) and +`team_project_ownership` ⋈ `team_repo_ownership` ⋈ `compounding_risk_daily` (repo layer, one hop further), both landing in one `risk_breakdown` Rows table (project, CHAOS-4363); the repo layer resolves an ownership row with no `repo_id` by repository name (CHAOS-7073, `ownedRepositoriesSource`)** | repository, team, **project** |
 | workload | `capacity_forecasts`; **+`team_project_ownership` ⋈ `capacity_forecasts`, per-team `team_breakdown` Rows, never summed/averaged (project, CHAOS-4363)** | team, **project** |
-| investment | `investment_metrics_daily`; **+`team_project_ownership` ⋈ `investment_metrics_daily`, per-team `team_breakdown` Rows, never summed across (investment_area, project_stream) (project, CHAOS-4363)**; **+`work_unit_investments` ⋈ `work_item_team_attributions` (CHAOS-4398), the CANONICAL 5-theme distribution — `theme_*`/`theme_quality_bugfix`/`prior_theme_*` SCALAR fields on the SAME team fact, never `investment_metrics_daily`'s deprecated legacy taxonomy; see §7**; **CHAOS-6559: the team mix is now the SUM of its OWNED repositories' mixes (`team_repo_ownership`, once per repo per team), no work-item majority vote, plus a declared `theme_breakdown` table (allocation_breakdown)**; **+repository scope (CHAOS-6560): `work_unit_investments` effort split across the repos of its PR refs by PR-ref share (partition; unresolvable refs null-carrying; `repo_id` fallback when no PR ref), emitted as `theme_*` scalars + a declared `theme_breakdown` table with source/attribution provenance** | team, **project**, **repository** |
+| investment | `investment_metrics_daily`; **+`team_project_ownership` ⋈ `investment_metrics_daily`, per-team `team_breakdown` Rows, never summed across (investment_area, project_stream) (project, CHAOS-4363)**; **+`work_unit_investments` ⋈ `work_item_team_attributions` (CHAOS-4398), the CANONICAL 5-theme distribution — `theme_*`/`theme_quality_bugfix`/`prior_theme_*` SCALAR fields on the SAME team fact, never `investment_metrics_daily`'s deprecated legacy taxonomy; see §7**; **CHAOS-6559: the team mix is now the SUM of its OWNED repositories' mixes (`team_repo_ownership`, once per repo per team), no work-item majority vote, plus a declared `theme_breakdown` table (allocation_breakdown)**; **+repository scope (CHAOS-6560): `work_unit_investments` effort split across the repos of its PR refs by PR-ref share (partition; unresolvable refs null-carrying; `repo_id` fallback when no PR ref), emitted as `theme_*` scalars + a declared `theme_breakdown` table with source/attribution provenance**; **CHAOS-7073: the repository/team mix reads the latest work-unit set ops' `LatestWorkUnitInvestmentsSource` reads (superseded units excluded via `work_unit_supersessions`, only the latest complete membership run, a NULL latest `repo_id` kept NULL), and a `team_repo_ownership` row with no `repo_id` resolves by (provider, lower-cased name) against `repos` as ops `teamscope.RepoCondition` does (`ownedRepositoriesSource`, also used by the project theme mix)** | team, **project**, **repository** |
 | readiness | `estimate_coverage_metrics_daily`; **+`team_project_ownership` ⋈ `estimate_coverage_metrics_daily`, per-team `team_breakdown` Rows, never summed across work scopes (project, CHAOS-4363)** | team, **project** |
 | operational_deficiencies | `recommendations_daily` | team |
 | source_health | `backfill_log` | organization |

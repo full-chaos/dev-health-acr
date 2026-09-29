@@ -35,7 +35,8 @@ func buildConversation() string {
 	b.WriteString("## Clarification\n\n")
 	b.WriteString("When `status` is `clarification_required`, or an answer carries `structure_needs`, ACR offers choices for one more input. ")
 	b.WriteString("`structure_needs.missing` names what is missing. Each offer (kind, anchor, handle, window, candidate) carries a `receipt_id`. ")
-	b.WriteString("To choose an offer, ask again and send `{result_id, receipt_id}` in the matching field. `result_id` is the id of the answer that made the offer.\n\n")
+	b.WriteString("To choose an offer, ask again and send `{result_id, receipt_id}` in the matching field. `result_id` is the id of the answer that made the offer. ")
+	b.WriteString("When you also set `parent_result_id` to that answer, you may send just the `receipt_id` string instead. It is bound to `parent_result_id`. A bare `receipt_id` without `parent_result_id` is refused.\n\n")
 	b.WriteString("| Request field | `receipt_id` prefix | Offer appears in |\n|---|---|---|\n")
 	for _, receipt := range Receipts {
 		prefix := "any"

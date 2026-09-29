@@ -1534,6 +1534,263 @@
     ]
   },
   {
+    "id": "contextfabric.direct_read",
+    "msg": "context fabric direct read",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "one line per direct read request; closed vocabularies and counts only, never ids, labels or query text",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "tool",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "find_subjects"
+        ]
+      },
+      {
+        "key": "mode",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "list",
+          "name"
+        ]
+      },
+      {
+        "key": "kinds",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "subject_kinds",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "status",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "complete",
+          "partial",
+          "empty",
+          "ambiguous",
+          "invalid_request",
+          "unavailable"
+        ]
+      },
+      {
+        "key": "latency_ms",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "error_class",
+        "type": "string",
+        "presence": "conditional",
+        "closed_vocabulary": [
+          "invalid_request",
+          "deadline_exceeded",
+          "canceled",
+          "dependency_unavailable",
+          "graph_error"
+        ],
+        "applicability": "written when the call ends invalid_request or unavailable"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.direct_read_authorization",
+    "msg": "context fabric direct read authorization",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "one decision per direct read request; counts and kinds only, never ids, labels or repository names",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "principal_class",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "unrestricted",
+          "universal",
+          "restricted"
+        ]
+      },
+      {
+        "key": "repository_scope_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "decision",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "admitted",
+          "partial",
+          "denied",
+          "unavailable"
+        ]
+      },
+      {
+        "key": "reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "subjects_admitted",
+          "principal_invalid",
+          "no_subjects",
+          "subject_limit",
+          "organization_mismatch",
+          "subject_denied",
+          "ownership_unproven",
+          "subject_absent",
+          "subject_invalid",
+          "graph_not_projected",
+          "authorizer_missing",
+          "graph_read_failed"
+        ]
+      },
+      {
+        "key": "subject_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "admitted_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "denied_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "absent_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "ownership_unproven_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "organization_mismatch_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "invalid_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "refused_kinds",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "error_class",
+        "type": "string",
+        "presence": "conditional",
+        "closed_vocabulary": [
+          "deadline_exceeded",
+          "canceled",
+          "dependency_unavailable",
+          "graph_error"
+        ],
+        "applicability": "written when the decision is unavailable because a graph read failed"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.evidence_expansion",
     "msg": "context fabric evidence expansion",
     "level": "info",
@@ -2566,6 +2823,171 @@
     ]
   },
   {
+    "id": "contextfabric.operation_read",
+    "msg": "context fabric operation read",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "one line per run_operation request; closed vocabularies, counts and digests only",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "operation",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "caller_class",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "unrestricted",
+          "restricted"
+        ]
+      },
+      {
+        "key": "scope_class",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "org_wide",
+          "client_scope",
+          "forced_grant",
+          "not_reached"
+        ]
+      },
+      {
+        "key": "decision",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "served",
+          "refused",
+          "operation_unavailable",
+          "upstream_error",
+          "upstream_timeout",
+          "authorization_unavailable"
+        ]
+      },
+      {
+        "key": "forced_by_grant",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "variables_rejected",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "rows_checked",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "rows_foreign",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "paths_removed",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "completeness",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "declared_complete",
+          "declared_partial",
+          "unknown"
+        ]
+      },
+      {
+        "key": "bytes",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "latency_ms",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "schema_digest",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "document_digest",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the operation is a served catalogue operation"
+      },
+      {
+        "key": "result",
+        "type": "string",
+        "presence": "conditional",
+        "closed_vocabulary": [
+          "data",
+          "empty_unverified",
+          "empty_declared"
+        ],
+        "applicability": "written when the call is served"
+      },
+      {
+        "key": "refusal_code",
+        "type": "string",
+        "presence": "conditional",
+        "closed_vocabulary": [
+          "unknown_operation",
+          "variable_not_allowed",
+          "variable_out_of_range",
+          "person_scope_not_served",
+          "basis_dependent_shape",
+          "no_granted_scope",
+          "operation_not_served_for_caller",
+          "response_budget",
+          "invalid_request",
+          "scope_required",
+          "row_outside_grant",
+          "policy_stale",
+          "denied_or_not_found"
+        ],
+        "applicability": "written when the call is refused"
+      },
+      {
+        "key": "error_class",
+        "type": "string",
+        "presence": "conditional",
+        "closed_vocabulary": [
+          "graphql_errors",
+          "decode",
+          "http_status",
+          "transport",
+          "canceled",
+          "timeout",
+          "not_found",
+          "concurrency_wait"
+        ],
+        "applicability": "written when the call ends upstream_error, upstream_timeout or operation_unavailable"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.remembered_window_axis",
     "msg": "context fabric remembered window axis",
     "level": "info",
@@ -3251,7 +3673,8 @@
           "result_by_id",
           "prior_result",
           "answer_reuse",
-          "evidence_expansion"
+          "evidence_expansion",
+          "fact_root_recheck"
         ]
       },
       {
@@ -7459,6 +7882,7 @@
           "source_evidence",
           "investigate_question",
           "investigation_result",
+          "read_facts",
           "record_episode",
           "other"
         ]

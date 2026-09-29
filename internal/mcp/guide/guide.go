@@ -24,6 +24,7 @@ const (
 	URIQuestions    = "acr://guide/questions"
 	URIVocabulary   = "acr://guide/vocabulary"
 	URIConversation = "acr://guide/conversation"
+	URIData         = "acr://guide/data"
 )
 
 var resources = []Resource{
@@ -38,6 +39,10 @@ var resources = []Resource{
 	{
 		URI: URIConversation, File: "conversation.md", Name: "guide-conversation", Title: "Follow-ups, clarification, and evidence",
 		Description: "How to answer a clarification with receipts, confirm a window, carry a conversation, fetch a stored result, and expand evidence.",
+	},
+	{
+		URI: URIData, File: "data.md", Name: "guide-data", Title: "Plan the reads yourself: the data tools",
+		Description: "How to use data_catalog, find_subjects and run_operation: the rules, the operation list for each caller class and four worked examples. Read before you plan a data investigation.",
 	},
 }
 

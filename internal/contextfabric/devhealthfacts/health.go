@@ -639,9 +639,8 @@ FROM (
 	SELECT concat(p.provider, ':', p.id) AS project_key, 'repo' AS scope, tro.repo_key AS scope_id, tro.repo_full_name AS scope_name, toString(cr.severity) AS severity, toUInt8(isNotNull(cr.compounding_risk)) AS has_risk, toFloat64(ifNull(cr.compounding_risk, 0)) AS risk, toString(cr.computed_at) AS computed_at, toString(cr.day) AS day, toUInt8(` + freshnessIsKnownSQL("cr.severity") + `) AS is_known, toUInt8(` + freshnessIsKnownSQL("cr.severity") + ` AND ` + freshnessIsFreshSQL("cr.day", timeBound) + `) AS is_fresh
 	FROM ` + projectOwnershipJoinSQL(ownershipPredicate) + `
 	INNER JOIN (
-		SELECT team_id, toString(repo_id) AS repo_key, repo_full_name
-		FROM team_repo_ownership FINAL
-		WHERE org_id = {org_id:String} AND repo_id IS NOT NULL` + ownershipPredicate + `
+		SELECT team_id, repo_key, repo_full_name
+		FROM ` + ownedRepositoriesSource(ownershipPredicate) + `
 		GROUP BY team_id, repo_key, repo_full_name
 	) AS tro ON tro.team_id = p.team_id
 	INNER JOIN (` + compoundingRiskLatestSubquery("repo", timeBound) + `) AS cr ON cr.scope_id = tro.repo_key AND cr.rn = 1
@@ -956,9 +955,8 @@ FROM (
 	SELECT concat(p.provider, ':', p.id) AS project_key, cr.day AS day, cr.severity AS severity, cr.compounding_risk AS risk
 	FROM ` + projectOwnershipJoinSQL(ownershipPredicate) + `
 	INNER JOIN (
-		SELECT team_id, toString(repo_id) AS repo_key
-		FROM team_repo_ownership FINAL
-		WHERE org_id = {org_id:String} AND repo_id IS NOT NULL` + ownershipPredicate + `
+		SELECT team_id, repo_key
+		FROM ` + ownedRepositoriesSource(ownershipPredicate) + `
 		GROUP BY team_id, repo_key
 	) AS tro ON tro.team_id = p.team_id
 	INNER JOIN (` + compoundingRiskDailySubquery("repo", timeBound) + `) AS cr ON cr.scope_id = tro.repo_key AND cr.rn = 1
@@ -1066,9 +1064,8 @@ FROM (
 		SELECT concat(p.provider, ':', p.id) AS project_key, 'repo' AS scope, tro.repo_key AS scope_id, cr.severity AS severity, cr.day AS day
 		FROM ` + projectOwnershipJoinSQL(ownershipPredicate) + `
 		INNER JOIN (
-			SELECT team_id, toString(repo_id) AS repo_key
-			FROM team_repo_ownership FINAL
-			WHERE org_id = {org_id:String} AND repo_id IS NOT NULL` + ownershipPredicate + `
+			SELECT team_id, repo_key
+			FROM ` + ownedRepositoriesSource(ownershipPredicate) + `
 			GROUP BY team_id, repo_key
 		) AS tro ON tro.team_id = p.team_id
 		INNER JOIN (` + compoundingRiskLatestSubquery("repo", timeBound) + `) AS cr ON cr.scope_id = tro.repo_key AND cr.rn = 1

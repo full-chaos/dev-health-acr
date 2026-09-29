@@ -34,10 +34,17 @@ func TestWildcardAuthorizesAnUnrelatedTeamForARepositoryScopedPrincipal(t *testi
 	unrelatedPrincipal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"acme/unrelated-repo"}}
 	ownerPrincipal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"acme/team-repo"}}
 
-	t.Run("RED: empty RepositorySlugs (pre-fix shape) authorizes an unrelated principal", func(t *testing.T) {
+	// CHAOS-7080: this branch used to DOCUMENT the bug (the pre-CHAOS-4390
+	// "*" shape authorized an unrelated principal). Since CHAOS-7080 the
+	// shared predicate itself admits a "*" node to no repository-restricted
+	// caller, so a team still carrying the old shape is denied too.
+	t.Run("CHAOS-7080: empty RepositorySlugs (pre-4390 shape) no longer authorizes an unrelated principal", func(t *testing.T) {
 		attrs := subjectAuthorizationAttrsForTest(contextfabric.AuthorizationScope{TeamIDs: []string{"team_x"}})
-		if !graphrank.AuthorizedAttributes(unrelatedPrincipal, contextfabric.RequestedScope{}, attrs) {
-			t.Fatal("expected the wildcard convention to (wrongly) authorize an unrelated principal -- this branch documents the bug, not the fix")
+		if attrs["authorization_repositories"] != "*" {
+			t.Fatalf("precondition: projection writes an empty list as the wildcard, got %v", attrs["authorization_repositories"])
+		}
+		if graphrank.AuthorizedAttributes(unrelatedPrincipal, contextfabric.RequestedScope{}, attrs) {
+			t.Fatal("a wildcard team must not authorize a repository-restricted principal")
 		}
 	})
 

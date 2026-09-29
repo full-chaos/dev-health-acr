@@ -300,7 +300,7 @@ func newWithAPI(config Config, client conn) (*Adapter, error) {
 		return nil, err
 	}
 	return &Adapter{
-		api: client, config: config, now: time.Now,
+		api: projectReachConn{conn: client}, config: config, now: time.Now,
 		bootstrapDone: make(map[string]bool), observedKeys: make(map[string]string),
 	}, nil
 }

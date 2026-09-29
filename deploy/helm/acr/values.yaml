@@ -41,6 +41,10 @@ config:
   # it is intentionally NOT an operator knob and is rejected under config.
   # (no addr key here)
   requestTimeout: "15s"
+  # Internal ops query service base URL (ACR_DATA_QUERY_URL); empty = feature
+  # off. Per-call deadline (ACR_DATA_QUERY_TIMEOUT) must be within 1s..55s.
+  dataQueryUrl: ""
+  dataQueryTimeout: ""
   readHeaderTimeout: "5s"
   readTimeout: "20s"
   writeTimeout: "20s"
@@ -584,6 +588,10 @@ networkPolicy:
     postgresPort: 5432
     clickhousePort: 9000
     entitlementPort: 8000
+    # Ops query service internal listener (acr-api egress only). The port is
+    # reserved as DHO_QUERY_INTERNAL_PORT: 8095 in GWC's draft, NOT final
+    # until their merge (design r5 text says 8091). Set 0 to render no rule.
+    queryInternalPort: 8095
     # FalkorDB graph backend port. Rendered into the API egress only when
     # contextFabric.falkor.addr is set (acr-api's optional Investigator and
     # acr-projector share the same endpoint contract); an unconfigured

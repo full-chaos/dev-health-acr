@@ -25,8 +25,12 @@ func themeMixRow(teamID, teamName string, themes map[string]float64, bugfix floa
 // watermarkTable answers the freshness read (max computed_at) ahead of the
 // broader work_unit_investments table a test seeds, which would otherwise match
 // the same "FROM work_unit_investments" text. It must be listed BEFORE it.
+// watermarkTable matches the watermark statement only. CHAOS-7073: the theme
+// mix statement now also contains max(computed_at) (the legacy membership
+// per-node max), so a bare "max(computed_at)" match would answer the mix read
+// with watermark rows.
 func watermarkTable() fakeTable {
-	return fakeTable{match: "max(computed_at)", rows: [][]any{{"2026-09-18 00:00:00.000", uint64(2)}}}
+	return fakeTable{match: "SELECT toString(max(computed_at)), count() FROM work_unit_investments", rows: [][]any{{"2026-09-18 00:00:00.000", uint64(2)}}}
 }
 
 func ownsRepoTable(teamID string) fakeTable {

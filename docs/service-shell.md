@@ -23,6 +23,8 @@ The default listen address is `127.0.0.1:8080` (dictation 811: loopback-only, so
 | `ACR_ADDR` | `127.0.0.1:8080` | HTTP listen address (loopback-only by default -- dictation 811) |
 | `ACR_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
 | `ACR_REQUEST_TIMEOUT` | `15s` | Per-request context deadline |
+| `ACR_DATA_QUERY_URL` | empty (off) | Internal ops query service base URL (`POST <url>/query`); absolute http(s), no userinfo/query/fragment |
+| `ACR_DATA_QUERY_TIMEOUT` | `30s` | Per-call deadline to the query service; rejected at load outside 1s..55s |
 | `ACR_READ_HEADER_TIMEOUT` | `5s` | HTTP header timeout |
 | `ACR_READ_TIMEOUT` | `20s` | HTTP read timeout |
 | `ACR_WRITE_TIMEOUT` | `20s` | HTTP write timeout — must stay >= `ACR_REQUEST_TIMEOUT` + 5s (CHAOS-4330); rejected at startup otherwise |

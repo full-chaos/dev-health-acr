@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -154,6 +155,23 @@ type projectCohortGraph struct {
 	members []contextfabric.SubjectRef
 }
 
+// AuthorizeStoredSubjects is the fixture's side of the CHAOS-7080 fact-root
+// re-check. Production passes the FalkorDB adapter, which implements it; a
+// graph without it fails the re-check closed. The fixture's anchor carries
+// authorization_repositories ["acme/allowed"], so it admits exactly the
+// callers whose grant names that repository.
+func (*projectCohortGraph) AuthorizeStoredSubjects(_ context.Context, p storage.Principal, _ contextfabric.ResolvedGraphBinding, subjects []contextfabric.SubjectRef) ([]contextfabric.StoredSubjectOutcome, error) {
+	outcome := contextfabric.StoredSubjectDenied
+	if slices.Contains(p.RepositoryScopes, "acme/allowed") {
+		outcome = contextfabric.StoredSubjectAdmitted
+	}
+	outcomes := make([]contextfabric.StoredSubjectOutcome, len(subjects))
+	for i := range outcomes {
+		outcomes[i] = outcome
+	}
+	return outcomes, nil
+}
+
 func (*projectCohortGraph) ResolveInvestigationBinding(context.Context, storage.Principal) (contextfabric.ResolvedGraphBinding, error) {
 	return contextfabric.ResolvedGraphBinding{GraphKey: "cohort-proof", Epoch: 1}, nil
 }
@@ -216,7 +234,7 @@ func runProjectCohortInvestigation(t *testing.T, ctx context.Context, cells []pr
 	for _, statement := range devhealthschema.DDL(
 		"projects", "team_project_ownership", "team_repo_ownership", "teams",
 		"investment_metrics_daily", "capacity_forecasts", "estimate_coverage_metrics_daily",
-		"compounding_risk_daily", "work_unit_investments", "repos", "work_item_team_attributions",
+		"compounding_risk_daily", "work_unit_investments", "work_unit_supersessions", "work_unit_membership_runs", "work_unit_membership", "repos", "work_item_team_attributions",
 		"recommendations_daily", "work_items", "project_membership_transitions",
 	) {
 		if err := direct.Exec(ctx, statement); err != nil {
