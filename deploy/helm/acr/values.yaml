@@ -487,6 +487,13 @@ acrMcp:
   # MCP endpoint path served by the pod and matched by the HTTPRoute. The probe
   # paths /healthz and /readyz are fixed by the binary.
   basePath: /mcp
+  # Proxies in front of acr-mcp (ingress controller and any node/tunnel source
+  # address) whose X-Forwarded-For the per-address failure gate believes.
+  # Empty keys the gate on the peer address (every caller behind one ingress
+  # shares one bucket) and logs a startup Warn. acr-api needs the acr-mcp pod
+  # range in its own trusted proxies (config.trustedProxyCidrs / extraEnv
+  # ACR_TRUSTED_PROXY_CIDRS) for the forwarded caller address to count there.
+  trustedProxyCidrs: []
   # OAuth discovery (RFC 9728): set both to advertise acr-api as the
   # authorization server. resourceUrl is this endpoint's public URL and must
   # end in basePath; authorizationServer is config.oauth.issuer.

@@ -52,6 +52,13 @@ const (
 	HTTPAuthUpstreamUnavailable     = eventspec.MCPHTTPAuthUpstreamUnavailable
 )
 
+// Gate decisions of the edge failure gate.
+const (
+	HTTPGateAdmitted      = eventspec.MCPHTTPGateAdmitted
+	HTTPGateFailureBudget = eventspec.MCPHTTPGateFailureBudget
+	HTTPGateCapacity      = eventspec.MCPHTTPGateCapacity
+)
+
 // HTTPAuthOutcomeVocabulary lists every auth outcome, admitted first.
 func HTTPAuthOutcomeVocabulary() []string { return eventspec.MCPHTTPAuthOutcomeVocabulary() }
 
@@ -149,6 +156,9 @@ type HTTPHandlerOptions struct {
 	// ServeOptions. Both empty leaves it off.
 	ResourceURL         string
 	AuthorizationServer string
+	// EdgeGate configures the per-address failure gate (see edge_gate.go).
+	// The zero value means the acr-api defaults.
+	EdgeGate EdgeGateOptions
 }
 
 // HTTPHandler is the hosted, stateless Streamable HTTP MCP endpoint plus its
@@ -165,6 +175,7 @@ type HTTPHandler struct {
 	refKey    []byte
 	inFlight  atomic.Int64
 	readiness readinessTracker
+	gate      *edgeGate
 }
 
 // ErrHTTPOptionsInvalid reports an unusable handler configuration.
@@ -194,7 +205,15 @@ func NewHTTPHandler(cfg *ProcessConfig, opts HTTPHandlerOptions) (*HTTPHandler, 
 	if _, err := rand.Read(key); err != nil {
 		return nil, err
 	}
+	gate, err := newEdgeGate(opts.EdgeGate)
+	if err != nil {
+		return nil, ErrHTTPOptionsInvalid
+	}
+	if len(opts.EdgeGate.TrustedProxyCIDRs) == 0 {
+		cfg.Diagnostics().Warn("edge gate keys on the peer address; set " + TrustedProxyCIDRsEnvironment + " behind a proxy")
+	}
 	h := &HTTPHandler{
+		gate:   gate,
 		cfg:    cfg,
 		opts:   opts,
 		logger: cfg.Diagnostics(),
@@ -448,6 +467,23 @@ func (h *HTTPHandler) serveMCP(w http.ResponseWriter, r *http.Request) {
 		h.emitRequestLine(r.Context(), line, record, r.Header.Get("Mcp-Protocol-Version"), r.Header.Get("Mcp-Method"))
 	}()
 
+	// The failure gate runs before the shape check so missing and malformed
+	// bearers are counted like every other failed authentication. The
+	// reservation is released the moment the credential is decided, never at
+	// the end of the response: MCP responses can be long-lived streams.
+	now := h.now()
+	ip := h.gate.clientIP(r)
+	line.clientIP = ip
+	line.gateDecision = HTTPGateAdmitted
+	release, admitted := h.gate.limiter.BeginAttempt(ip, now)
+	if !admitted {
+		line.authOutcome = HTTPAuthRateLimited
+		line.gateDecision = h.gate.refusalReason(ip, now)
+		h.writeAuthRefusal(recorder, r.URL.Path, HTTPAuthRateLimited, h.gate.retryAfter(ip, now))
+		return
+	}
+	defer release()
+
 	bearer, presented := bearerFromRequest(r)
 	if presented && auth.IsTokenShapeValid(bearer) {
 		line.principalClass = PrincipalClassBearer
@@ -460,19 +496,24 @@ func (h *HTTPHandler) serveMCP(w http.ResponseWriter, r *http.Request) {
 		line.authOutcome = HTTPAuthMalformedBearer
 	}
 	if line.authOutcome != HTTPAuthAdmitted {
+		h.gate.limiter.RecordFailure(ip, now)
 		h.writeAuthRefusal(recorder, r.URL.Path, line.authOutcome, 0)
 		return
 	}
 
-	resolveCtx, cancel := context.WithTimeout(r.Context(), h.opts.ResolveTimeout)
+	resolveCtx, cancel := context.WithTimeout(sidecar.ContextWithForwardedClient(r.Context(), ip), h.opts.ResolveTimeout)
 	caller, err := ResolveCaller(resolveCtx, h.cfg, CallerCredential{Bearer: bearer})
 	cancel()
 	if err != nil {
 		outcome, retryAfter := classifyResolveFailure(err)
 		line.authOutcome = outcome
+		if outcome == HTTPAuthInvalidCredential || outcome == HTTPAuthMalformedBearer {
+			h.gate.limiter.RecordFailure(ip, now)
+		}
 		h.writeAuthRefusal(recorder, r.URL.Path, outcome, retryAfter)
 		return
 	}
+	release()
 
 	server := NewServerForCaller(h.cfg, caller, h.opts.Identity.Version)
 	server.AddReceivingMiddleware(recordMiddleware(record))
@@ -488,6 +529,8 @@ type requestLine struct {
 	status         int
 	latency        time.Duration
 	inFlight       int64
+	clientIP       string
+	gateDecision   string
 }
 
 // emitRequestLine writes the one line every MCP request produces, on every
@@ -540,6 +583,8 @@ func (h *HTTPHandler) emitRequestLine(ctx context.Context, line requestLine, rec
 		args = append(args, "principal_ref", line.principalRef)
 	}
 	args = append(args,
+		"client_ip", line.clientIP,
+		"gate_decision", line.gateDecision,
 		"auth_outcome", line.authOutcome,
 		"result_class", result,
 		"status", line.status,

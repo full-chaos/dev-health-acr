@@ -37,6 +37,16 @@ const (
 	// server that mints credentials for this resource (the acr-api public
 	// origin).
 	AuthorizationServerEnvironment = "ACR_MCP_AUTHORIZATION_SERVER"
+	// TrustedProxyCIDRsEnvironment lists the proxies (comma-separated CIDRs)
+	// whose X-Forwarded-For the edge failure gate believes. Empty: the gate
+	// keys on the peer address.
+	TrustedProxyCIDRsEnvironment = "ACR_MCP_TRUSTED_PROXY_CIDRS"
+	// The edge gate reads the same limit settings as acr-api.
+	AuthFailuresEnvironment            = "ACR_AUTH_FAILURES_PER_WINDOW"
+	AuthTrackedKeysEnvironment         = "ACR_AUTH_MAX_TRACKED_KEYS"
+	AuthMaxInFlightEnvironment         = "ACR_AUTH_MAX_IN_FLIGHT"
+	AuthLimitWindowEnvironment         = "ACR_AUTH_LIMIT_WINDOW"
+	AuthLimitWindowFallbackEnvironment = "ACR_LIMIT_WINDOW"
 )
 
 // Defaults of the serve contract.
@@ -76,6 +86,24 @@ type ServeOptions struct {
 	// set by the command, never read from the environment here. nil serves
 	// without export and writes no export line.
 	Telemetry *otelexport.Exporter
+	// TrustedProxyCIDRs is a comma-separated CIDR list (see
+	// TrustedProxyCIDRsEnvironment). The Auth* settings size the per-address
+	// failed-authentication gate; zero takes the acr-api default.
+	TrustedProxyCIDRs string
+	AuthFailures      int
+	AuthTrackedKeys   int
+	AuthMaxInFlight   int
+	AuthWindow        time.Duration
+}
+
+func (o ServeOptions) edgeGate() EdgeGateOptions {
+	gate := EdgeGateOptions{FailureLimit: o.AuthFailures, Window: o.AuthWindow, MaxTrackedKeys: o.AuthTrackedKeys, MaxInFlight: o.AuthMaxInFlight}
+	for _, part := range strings.Split(o.TrustedProxyCIDRs, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			gate.TrustedProxyCIDRs = append(gate.TrustedProxyCIDRs, part)
+		}
+	}
+	return gate
 }
 
 // ErrServeOptionInvalid reports a serve setting that is out of range or
@@ -134,6 +162,12 @@ func ServeOptionsFromEnvironment(lookup func(string) (string, bool)) (ServeOptio
 		set(HTTPBasePathEnvironment, func(v string) error { opts.BasePath = v; return nil }),
 		set(ResourceURLEnvironment, func(v string) error { opts.ResourceURL = v; return nil }),
 		set(AuthorizationServerEnvironment, func(v string) error { opts.AuthorizationServer = v; return nil }),
+		set(TrustedProxyCIDRsEnvironment, func(v string) error { opts.TrustedProxyCIDRs = v; return nil }),
+		set(AuthFailuresEnvironment, positiveInt(&opts.AuthFailures)),
+		set(AuthTrackedKeysEnvironment, positiveInt(&opts.AuthTrackedKeys)),
+		set(AuthMaxInFlightEnvironment, positiveInt(&opts.AuthMaxInFlight)),
+		set(AuthLimitWindowFallbackEnvironment, positiveDuration(&opts.AuthWindow)),
+		set(AuthLimitWindowEnvironment, positiveDuration(&opts.AuthWindow)),
 		set(HTTPMaxBodyBytesEnvironment, func(v string) error {
 			n, err := strconv.ParseInt(v, 10, 64)
 			opts.MaxBodyBytes = n
@@ -152,6 +186,32 @@ func ServeOptionsFromEnvironment(lookup func(string) (string, bool)) (ServeOptio
 		return ServeOptions{}, err
 	}
 	return opts, nil
+}
+
+func positiveInt(target *int) func(string) error {
+	return func(v string) error {
+		n, err := strconv.Atoi(v)
+		if err == nil && n < 1 {
+			err = errors.New("must be positive")
+		}
+		if err == nil {
+			*target = n
+		}
+		return err
+	}
+}
+
+func positiveDuration(target *time.Duration) func(string) error {
+	return func(v string) error {
+		d, err := time.ParseDuration(v)
+		if err == nil && d <= 0 {
+			err = errors.New("must be positive")
+		}
+		if err == nil {
+			*target = d
+		}
+		return err
+	}
 }
 
 func firstServeOptionError(errs []error) error {
@@ -194,6 +254,9 @@ func (o ServeOptions) Validate() error {
 	}
 	if o.MaxBodyBytes <= 0 || o.MaxBodyBytes > maxHTTPMaxBodyBytes {
 		return &ErrServeOptionInvalid{Setting: HTTPMaxBodyBytesEnvironment}
+	}
+	if _, err := newEdgeGate(o.edgeGate()); err != nil {
+		return &ErrServeOptionInvalid{Setting: TrustedProxyCIDRsEnvironment}
 	}
 	return validateOAuthDiscovery(o)
 }
@@ -321,6 +384,7 @@ func serveHandlerOptions(cfg *ProcessConfig, identity version.Info, opts ServeOp
 		ResolveTimeout:      cfg.Config.Timeout,
 		ResourceURL:         opts.ResourceURL,
 		AuthorizationServer: opts.AuthorizationServer,
+		EdgeGate:            opts.edgeGate(),
 	}
 }
 

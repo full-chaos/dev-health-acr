@@ -382,6 +382,7 @@
             "authorizationServer": { "type": "string" }
           }
         },
+        "trustedProxyCidrs": { "type": "array", "items": { "type": "string" }, "description": "CIDRs of the proxies in front of acr-mcp whose X-Forwarded-For the edge failure gate believes (ACR_MCP_TRUSTED_PROXY_CIDRS). Empty: the gate keys on the peer address." },
         "logLevel": { "type": "string", "enum": ["debug", "info", "warn", "error"] },
         "apiTimeout": { "type": "string" },
         "http": {
