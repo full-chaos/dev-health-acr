@@ -3,8 +3,10 @@ package sidecar
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -150,6 +152,12 @@ type APIError struct {
 	// not fit the response budget. Every field is a closed token or a
 	// non-negative integer parsed from error.details -- never hosted text.
 	Budget *BudgetRefusal
+	// Reason (CHAOS-7167) is set only for an invalid_request whose
+	// error.details.reason is a member of
+	// contractsv1's closed invalid_request vocabulary, e.g. scope_required.
+	// It is never hosted free text: a value outside it is dropped, so no count, subject, id or
+	// name can ride through it.
+	Reason string
 
 	sentinel error
 }
@@ -224,6 +232,9 @@ func (e *APIError) Error() string {
 	if e.Message != "" {
 		base += " message=" + strconv.Quote(e.Message)
 	}
+	if e.Reason != "" {
+		base += " reason=" + e.Reason
+	}
 	if b := e.Budget; b != nil {
 		if b.Overrun != "" {
 			base += " overrun=" + b.Overrun
@@ -294,6 +305,9 @@ func newAPIError(status int, detail contractsv1.ErrorDetail, requestID, retryAft
 			apiErr.Message = budgetRefusalSafeMessage
 		}
 	}
+	if detail.Code == "invalid_request" {
+		apiErr.Reason = safeReasonToken(detail.Details)
+	}
 	if seconds, ok := parseRetryAfterSeconds(retryAfterHeader); ok {
 		apiErr.RetryAfter = time.Duration(seconds) * time.Second
 	} else if seconds, ok := retryAfterFromDetails(detail.Details); ok {
@@ -346,6 +360,29 @@ func nonNegativeInteger(raw any) (int64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// droppedInvalidRequestReasons counts invalid_request reasons that were
+// present but outside the closed vocabulary and therefore not surfaced.
+var droppedInvalidRequestReasons atomic.Int64
+
+// DroppedInvalidRequestReasons returns the drop count (telemetry/tests).
+func DroppedInvalidRequestReasons() int64 { return droppedInvalidRequestReasons.Load() }
+
+// safeReasonToken returns error.details.reason only when it is a member of
+// contractsv1's closed invalid_request vocabulary. Any other value is
+// dropped (never echoed, never logged) and counted.
+func safeReasonToken(details map[string]any) string {
+	raw, present := details["reason"]
+	if !present {
+		return ""
+	}
+	if reason, ok := raw.(string); ok && contractsv1.IsInvalidRequestReason(reason) {
+		return reason
+	}
+	droppedInvalidRequestReasons.Add(1)
+	slog.Warn("acr invalid_request reason outside the closed vocabulary was dropped", "dropped_total", droppedInvalidRequestReasons.Load())
+	return ""
 }
 
 func minimumClientVersion(details map[string]any) string {
