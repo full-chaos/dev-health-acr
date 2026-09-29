@@ -38,31 +38,30 @@
 //     line is the validator.
 //   - primary_validator anchors carry an explicit marker (the anchor's `note`
 //     field: a short, exact, literal substring of the real call/declaration)
-//     that this gate re-locates independently of the declared line number,
-//     checked against that declared line ALONE (never a wider line..line_end
-//     window), so a later edit that shifts the declared line onto an
-//     unrelated statement is caught rather than silently passing on whatever
-//     text happens to be there. A second, UNCLAIMED occurrence of the same
-//     marker text elsewhere in the file (one no row's own anchor accounts
-//     for) is reported rather than trusted, since a substring match cannot
-//     tell which of two occurrences is the real one; two rows that
-//     legitimately share one source line (model-config PUT/DELETE) also
-//     legitimately share one marker and are not flagged against each other.
-//     reachable_validators anchors are not yet covered this way. Like the
-//     name-match limit above, this remains a TEXT match, not proof the
-//     matched text is executable code rather than a comment or string
-//     literal that happens to repeat it -- an edit that moves the real
-//     construct away while leaving a same-named, otherwise-unique comment on
-//     the declared line is indistinguishable from a correct anchor.
+//     that this gate finds by TEXT (CHAOS-7128): the declared line is an
+//     advisory hint and is not compared. One invariant per (file, marker):
+//     no line carries it twice, and its total occurrences equal the number
+//     of distinct sites the rows declare (rows citing one shared definition
+//     line are one site). More = AMBIGUOUS ANCHOR MARKER; none/fewer =
+//     ANCHOR MARKER NOT FOUND. Still a TEXT match, not proof the text is
+//     executable code.
 //   - Two rows whose primary_validator anchors point at the SAME source line
 //     (the model-config PUT/DELETE rows share one dispatch line) necessarily
 //     share one marker too. If both anchors drift onto the same wrong line at
 //     once, the marker re-location cannot tell them apart: CHAOS-5652.
 //   - The inventory's declared source_commit and credential_class_source are
 //     NOT verified by this gate: CHAOS-4765.
-//   - Two registrations on one line cannot both be profiled, because a row
-//     addresses a surface as file:line. They fail closed rather than one being
-//     dropped: CHAOS-4774.
+//   - CHAOS-7128: rows address a surface by SYMBOL, not line. A row is matched
+//     to a discovered registration by (source.file, method, route); a
+//     primary_validator anchor is located by its `note` marker. The
+//     source.line / anchor.line values remain in the file only because the
+//     ops-owned schema requires them, and are advisory hints: a moved line
+//     passes, a renamed/removed route (PHANTOM ROW + UNOWNED SURFACE) or a
+//     marker that no longer exists (ANCHOR MARKER NOT FOUND) fails loudly.
+//     Two registrations on one line are therefore both profilable
+//     (CHAOS-4774's limitation no longer applies to source rows).
+//   - The inventory's declared source_commit and credential_class_source are
+//     NOT verified by this gate: CHAOS-4765.
 //   - ★ THE BIGGEST ONE, and the one most likely to be misread: this gate does
 //     NOT reconcile a row's SECURITY CLAIM with the code. It checks that a row
 //     exists for every surface, that the row is well-formed and internally
@@ -138,6 +137,27 @@ type surfaceKey struct {
 	Line int
 }
 
+// routeKey is a REST surface's identity (CHAOS-7128): the registering file
+// plus the mux pattern's method and path. A row is matched to a discovered
+// surface by this key, never by line number, so an unrelated edit that
+// shifts a registration does not invalidate its row, while a renamed or
+// removed route (a changed method or path) fails loudly as PHANTOM ROW +
+// UNOWNED SURFACE. The rows' source.line / anchor.line values stay in the
+// file because the ops-owned schema requires them, but they are advisory
+// hints only.
+// markerKey identifies a primary_validator marker: the anchor's file and its
+// literal `note` text (CHAOS-7128).
+type markerKey struct {
+	Path string
+	Note string
+}
+
+type routeKey struct {
+	File   string
+	Method string
+	Path   string
+}
+
 func runDiscovery(root, discovererPath string) (*discoverReport, error) {
 	tmp, err := os.CreateTemp("", "acr-discover-*.json")
 	if err != nil {
@@ -197,6 +217,20 @@ func asObject(v any) map[string]any {
 func asArray(v any) []any {
 	a, _ := v.([]any)
 	return a
+}
+
+// asCanonicalPath reads a repo-relative path field and canonicalizes it
+// (filepath.ToSlash(filepath.Clean)) so `internal/api/./app.go` and
+// `internal/api/app.go` are ONE key for site counting, marker occurrences
+// and route ownership (r3 P1). Cleaning never hides an escape: ".." prefixes
+// and absolute paths survive Clean and are still rejected by
+// anchorPathWithinRoot / checkAnchorExists.
+func asCanonicalPath(v any) (string, bool) {
+	s, ok := asString(v)
+	if !ok || s == "" {
+		return s, ok
+	}
+	return filepath.ToSlash(filepath.Clean(s)), true
 }
 
 func asString(v any) (string, bool) {
@@ -373,31 +407,18 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 		return nil, err
 	}
 
-	// A row's `source` and its anchors address a surface as file:line -- that
-	// granularity comes from the ops-owned schema, not from this gate. So two
-	// registrations written on ONE line collide here, and only one of them
-	// could ever be owned by a row.
-	//
-	// Merge-gate round 3 (EXECUTED) found the silent half of this: discovery
-	// matched once per line, so the second registration was invisible and an
-	// unprofiled route passed. Discovery now returns both. What is left is a
-	// real, narrow limitation of the ADDRESSING SCHEME rather than of this
-	// parser, and it is reported explicitly: without this, the collision
-	// surfaced as a baffling "content drift" against whichever registration
-	// happened to be written second. Fails closed either way; the difference
-	// is whether the message tells you what is actually wrong.
-	//
-	// Fixing it properly means giving anchors a column, which is a change to
-	// a contract shared by three repos -- CHAOS-4774, not this PR.
-	discoveredKeys := map[surfaceKey]discoveredRoute{}
+	// CHAOS-7128: a row addresses a surface by (file, method, route), so two
+	// registrations written on ONE line are both profilable and a moved line
+	// never invalidates a row. Only a same method+route registered twice in
+	// one file is a collision (DUPLICATE REGISTRATION below).
+	discoveredKeys := map[routeKey]discoveredRoute{}
 	for _, r := range report.Routes {
-		key := surfaceKey{r.File, r.Line}
-		if prev, clash := discoveredKeys[key]; clash {
+		key := routeKey{r.File, r.Method, r.Path}
+		if _, clash := discoveredKeys[key]; clash {
 			errs = append(errs, fmt.Sprintf(
-				"MULTIPLE REGISTRATIONS ON ONE LINE: %s:%d registers both %s %s and %s %s -- "+
-					"a row addresses a surface as file:line, so these cannot both be profiled. "+
-					"Put each registration on its own line (see CHAOS-4774)",
-				r.File, r.Line, prev.Method, prev.Path, r.Method, r.Path,
+				"DUPLICATE REGISTRATION: %s registers %s %s more than once -- a row addresses a surface by "+
+					"method+route, so the duplicate cannot be profiled separately",
+				r.File, r.Method, r.Path,
 			))
 			continue
 		}
@@ -439,24 +460,22 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 	rowsRaw, _ := inventory["rows"].([]any)
 
 	idsSeen := map[string]int{}
-	rowKeys := map[surfaceKey]bool{}
-	// Every (file, line) claimed as a row's `source`, mapped to every row id
-	// that claims it -- a discovered surface must be owned by EXACTLY one
+	rowKeys := map[routeKey]bool{}
+	// Every (file, method, route) claimed as a row's `source`, mapped to every
+	// row id that claims it -- a discovered surface must be owned by EXACTLY one
 	// row. Codex-verified gap (round 1): two rows with DIFFERENT ids both
 	// anchored at the same surface (possibly with conflicting
 	// classifications) previously returned OK -- worse than a missing row,
 	// since both look registered. Not expressible as a JSON Schema
 	// constraint; it's a cross-row uniqueness rule.
-	surfaceOwners := map[surfaceKey][]string{}
+	surfaceOwners := map[routeKey][]string{}
 
-	// Every (file, line) that SOME row's primary_validator anchor legitimately
-	// declares, collected in a pass over every row before any row's marker is
-	// checked. checkPrimaryValidatorAnchorMarker uses this to tell a genuine
-	// sibling anchor (two rows dispatching through one shared source line,
-	// therefore one shared marker -- the model-config PUT/DELETE rows) from
-	// an unexplained second occurrence of the same text that nothing in the
-	// inventory accounts for.
-	claimedAnchorLines := map[surfaceKey]bool{}
+	// Per (file, marker): the DISTINCT declared lines across every row's
+	// primary_validator anchor -- the number of validator sites the rows
+	// claim (rows citing one shared definition line are one site).
+	// checkPrimaryValidatorAnchorMarker requires the marker's occurrence
+	// count in the file to equal it; the lines themselves are only counted.
+	declaredSites := map[markerKey]map[int]bool{}
 	for _, raw := range rowsRaw {
 		row := asObject(raw)
 		pv := asObject(row["primary_validator"])
@@ -467,10 +486,16 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 		if a == nil {
 			continue
 		}
-		path, _ := asString(a["path"])
+		path, _ := asCanonicalPath(a["path"])
 		lineF, _ := a["line"].(float64)
 		if path != "" && lineF >= 1 {
-			claimedAnchorLines[surfaceKey{path, int(lineF)}] = true
+			if note, _ := asString(a["note"]); note != "" {
+				mk := markerKey{path, note}
+				if declaredSites[mk] == nil {
+					declaredSites[mk] = map[int]bool{}
+				}
+				declaredSites[mk][int(lineF)] = true
+			}
 		}
 	}
 
@@ -582,7 +607,7 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 				}
 			} else {
 				checkAnchorExists(root, id, asObject(anchorRaw), &errs, "primary_validator anchor")
-				checkPrimaryValidatorAnchorMarker(root, id, asObject(anchorRaw), claimedAnchorLines, &errs)
+				checkPrimaryValidatorAnchorMarker(root, id, asObject(anchorRaw), declaredSites, &errs)
 			}
 		}
 
@@ -602,10 +627,11 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 		// source anchor.
 		src := asObject(row["source"])
 		if src != nil {
-			file, _ := asString(src["file"])
-			line, _ := src["line"].(float64)
-			if file != "" && line > 0 {
-				key := surfaceKey{file, int(line)}
+			file, _ := asCanonicalPath(src["file"])
+			rowMethod, _ := asString(row["method"])
+			rowRoute, _ := asString(row["route"])
+			if file != "" && rowMethod != "" && rowRoute != "" {
+				key := routeKey{file, rowMethod, rowRoute}
 				rowKeys[key] = true
 				surfaceOwners[key] = append(surfaceOwners[key], id)
 			}
@@ -619,14 +645,14 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 			sorted := append([]string(nil), owners...)
 			sort.Strings(sorted)
 			errs = append(errs, fmt.Sprintf(
-				"DUPLICATE SURFACE OWNERSHIP: rows %v all claim %s:%d -- exactly one row may own a discovered surface",
-				sorted, key.File, key.Line,
+				"DUPLICATE SURFACE OWNERSHIP: rows %v all claim %s %s in %s -- exactly one row may own a discovered surface",
+				sorted, key.Method, key.Path, key.File,
 			))
 		}
 	}
 
 	// 1 & 2. bidirectional surface/row parity.
-	sortedDiscoveredKeys := make([]surfaceKey, 0, len(discoveredKeys))
+	sortedDiscoveredKeys := make([]routeKey, 0, len(discoveredKeys))
 	for k := range discoveredKeys {
 		sortedDiscoveredKeys = append(sortedDiscoveredKeys, k)
 	}
@@ -634,11 +660,14 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 		if sortedDiscoveredKeys[i].File != sortedDiscoveredKeys[j].File {
 			return sortedDiscoveredKeys[i].File < sortedDiscoveredKeys[j].File
 		}
-		return sortedDiscoveredKeys[i].Line < sortedDiscoveredKeys[j].Line
+		if sortedDiscoveredKeys[i].Path != sortedDiscoveredKeys[j].Path {
+			return sortedDiscoveredKeys[i].Path < sortedDiscoveredKeys[j].Path
+		}
+		return sortedDiscoveredKeys[i].Method < sortedDiscoveredKeys[j].Method
 	})
 	for _, key := range sortedDiscoveredKeys {
 		if !rowKeys[key] {
-			errs = append(errs, fmt.Sprintf("UNOWNED SURFACE: rest route at %s:%d has no row in %s. Add an owning row (guardrail G-1).", key.File, key.Line, filepath.Base(inventoryPath)))
+			errs = append(errs, fmt.Sprintf("UNOWNED SURFACE: rest route %s %s in %s (discovered at line %d) has no row in %s. Add an owning row (guardrail G-1).", key.Method, key.Path, key.File, discoveredKeys[key].Line, filepath.Base(inventoryPath)))
 		}
 	}
 
@@ -652,25 +681,17 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 		if src == nil {
 			continue
 		}
-		file, _ := asString(src["file"])
-		lineF, _ := src["line"].(float64)
-		line := int(lineF)
-		key := surfaceKey{file, line}
-		surface, ok := discoveredKeys[key]
+		file, _ := asCanonicalPath(src["file"])
+		method, _ := asString(row["method"])
+		route, _ := asString(row["route"])
+		surface, ok := discoveredKeys[routeKey{file, method, route}]
 		if !ok {
-			errs = append(errs, fmt.Sprintf("PHANTOM ROW: row %q references %s:%d which independent discovery did not find there (stale row -- re-anchor or remove)", id, file, line))
+			errs = append(errs, fmt.Sprintf("PHANTOM ROW: row %q claims %s %s in %s which independent discovery did not find (renamed or removed route -- re-key or remove the row)", id, method, route, file))
 			continue
 		}
+		line := surface.Line // discovered line, for messages only
 
 		// 5. content/anchor drift: matched row vs discovered surface.
-		method, _ := asString(row["method"])
-		if method != surface.Method {
-			errs = append(errs, fmt.Sprintf("STALE ANCHOR: row %q claims method=%q but discovery finds %q at %s:%d (content drift)", id, method, surface.Method, file, line))
-		}
-		route, _ := asString(row["route"])
-		if route != surface.Path {
-			errs = append(errs, fmt.Sprintf("STALE ANCHOR: row %q claims route=%q but discovery resolves %q at %s:%d (content drift)", id, route, surface.Path, file, line))
-		}
 		if sk, _ := asString(row["surface_kind"]); sk != "rest" {
 			errs = append(errs, fmt.Sprintf("STALE ANCHOR: row %q claims surface_kind=%q but %s:%d is a REST route (content drift)", id, sk, file, line))
 		}
@@ -807,11 +828,11 @@ func checkAnchorExists(root, rowID string, anchor map[string]any, errs *[]string
 // class this fix targets is a per-route primary_validator call site, and a
 // second CHAOS ticket can extend the same mechanism there if a future
 // incident shows the need).
-func checkPrimaryValidatorAnchorMarker(root, rowID string, anchor map[string]any, claimedAnchorLines map[surfaceKey]bool, errs *[]string) {
+func checkPrimaryValidatorAnchorMarker(root, rowID string, anchor map[string]any, declaredSites map[markerKey]map[int]bool, errs *[]string) {
 	if anchor == nil {
 		return // reported elsewhere (checkAnchorExists)
 	}
-	path, _ := asString(anchor["path"])
+	path, _ := asCanonicalPath(anchor["path"])
 	lineF, _ := anchor["line"].(float64)
 	line := int(lineF)
 	if path == "" || line < 1 || !anchorPathWithinRoot(root, path) {
@@ -822,9 +843,8 @@ func checkPrimaryValidatorAnchorMarker(root, rowID string, anchor map[string]any
 		*errs = append(*errs, fmt.Sprintf(
 			"MISSING ANCHOR MARKER: row %q primary_validator anchor (%s:%d) has no note -- "+
 				"every primary_validator anchor must name a short, exact, literal substring "+
-				"(a call expression, a function name) this gate re-locates independently of the "+
-				"declared line, so a future re-anchoring edit that lands on the wrong statement "+
-				"fails loudly instead of passing on whatever text happens to be there",
+				"(a call expression, a function name) this gate finds by text, so a future "+
+				"edit that renames or removes the validator fails loudly",
 			rowID, path, line,
 		))
 		return
@@ -833,75 +853,48 @@ func checkPrimaryValidatorAnchorMarker(root, rowID string, anchor map[string]any
 	if err != nil {
 		return // reported elsewhere (checkAnchorExists)
 	}
-	lines := strings.Split(string(raw), "\n")
-	if line > len(lines) {
-		return // reported elsewhere (checkAnchorExists)
+	// ONE INVARIANT (CHAOS-7128, r1/r2 P1 re-found twice as per-branch
+	// discounting): the declared line is an advisory hint; the marker TEXT is
+	// the anchor. For each (file, marker):
+	//   - no single line may carry the marker more than once (one line cannot
+	//     say which copy is the validator);
+	//   - total occurrences must EQUAL the number of distinct sites the rows
+	//     declare for it (rows citing one shared definition line are one site,
+	//     which is how nine rows can share protectedRuntimeHandler's one
+	//     definition). More = AMBIGUOUS ANCHOR MARKER; none or fewer =
+	//     ANCHOR MARKER NOT FOUND.
+	total, sites := 0, len(declaredSites[markerKey{path, note}])
+	if sites < 1 {
+		sites = 1
 	}
-	// The marker is checked against its own declared START line ONLY, never
-	// a line..line_end window: a window wide enough to admit a multi-line
-	// construct is also wide enough to keep matching after an edit inserts a
-	// line ABOVE the real construct and shifts it deeper into that same
-	// window -- the declared line itself goes stale while the check keeps
-	// passing on a marker it never actually verified was there. A single
-	// declared line has exactly one thing to verify; check that one thing.
-	if strings.Contains(lines[line-1], note) {
-		// The declared line carries the marker. Before trusting that as
-		// proof, check the REST of the file for the same marker text: a
-		// substring match can be fooled by an unrelated copy (a comment, a
-		// stale string literal) that happens to land on the declared line
-		// while the real construct sits somewhere else entirely -- exactly
-		// the shape a range-wide check let through before this line-only
-		// check existed. An extra occurrence is fine when it belongs to
-		// ANOTHER row's own legitimately declared primary_validator anchor
-		// (two rows dispatching through one shared source line share one
-		// marker on purpose -- see the model-config PUT/DELETE rows); an
-		// extra occurrence nothing in the inventory accounts for means the
-		// match just made cannot be trusted to be the real one.
-		for i, l := range lines {
-			if i+1 == line {
-				continue
-			}
-			if !strings.Contains(l, note) {
-				continue
-			}
-			if claimedAnchorLines[surfaceKey{path, i + 1}] {
-				continue
-			}
-			*errs = append(*errs, fmt.Sprintf(
-				"AMBIGUOUS ANCHOR MARKER: row %q primary_validator anchor declares %s:%d, and its "+
-					"marker %q is there, but the SAME text also appears at line %d, which no row's "+
-					"anchor claims -- a substring match cannot tell which occurrence is the real "+
-					"validator. Use a longer, more specific marker, or (if line %d is stale text left "+
-					"behind by an edit) remove it",
-				rowID, path, line, note, i+1, i+1,
-			))
-			return
-		}
-		return
-	}
-	// The declared line doesn't carry the marker -- find out whether the
-	// marker still exists ANYWHERE ELSE in the file (a drifted-but-recoverable
-	// anchor) or has vanished entirely (a marker naming code that no
-	// longer exists at all, e.g. a renamed function).
-	for i, l := range lines {
-		if i+1 == line {
+	var at []int
+	for i, l := range strings.Split(string(raw), "\n") {
+		n := strings.Count(l, note)
+		if n == 0 {
 			continue
 		}
-		if strings.Contains(l, note) {
+		total += n
+		at = append(at, i+1)
+		if n > 1 {
 			*errs = append(*errs, fmt.Sprintf(
-				"ANCHOR LINE DRIFTED: row %q primary_validator anchor declares %s:%d, but its own "+
-					"marker %q is not there -- it is actually at line %d. Re-anchor to the real line "+
-					"(the marker, not the old line number, is this gate's own source of truth)",
-				rowID, path, line, note, i+1,
-			))
+				"AMBIGUOUS ANCHOR MARKER: row %q primary_validator marker %q appears %d times on line %d of %s -- "+
+					"one line cannot say which copy is the real validator. Use a longer, more specific marker",
+				rowID, note, n, i+1, path))
 			return
 		}
 	}
-	*errs = append(*errs, fmt.Sprintf(
-		"ANCHOR MARKER NOT FOUND: row %q primary_validator anchor's note %q does not appear anywhere "+
-			"in %s -- the anchor no longer resolves to anything this gate can verify",
-		rowID, note, path,
-	))
+	switch {
+	case total > sites:
+		*errs = append(*errs, fmt.Sprintf(
+			"AMBIGUOUS ANCHOR MARKER: row %q primary_validator marker %q appears %d times (lines %v) in %s but the rows declare %d site(s) for it -- "+
+				"a substring match cannot tell which occurrence is the real validator. Use a longer, more specific marker",
+			rowID, note, total, at, path, sites))
+	case total < sites:
+		*errs = append(*errs, fmt.Sprintf(
+			"ANCHOR MARKER NOT FOUND: row %q primary_validator anchor's note %q appears %d time(s) in %s but the rows declare %d site(s) for it -- "+
+				"the marked symbol was renamed or removed",
+			rowID, note, total, path, sites))
+	}
 }
 
 // anchorPathWithinRoot reports whether a repo-relative anchor path stays
