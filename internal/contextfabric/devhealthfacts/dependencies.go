@@ -241,6 +241,12 @@ WHERE d.org_id = {org_id:String} AND concat(toString(s.repo_id), ':', d.source_w
 		if relationshipType != "" {
 			typ, swap := devhealthsource.CanonicalDependencyRelationship(relationshipType)
 			canonicalType = strings.ToLower(string(typ))
+			if swap {
+				// An inverted spelling (BLOCKED_BY) names the relation from the
+				// other side: keep the raw spelling on the wire, the swap flag
+				// still keeps it out of the forward relation's dedupe key.
+				canonicalType = strings.ToLower(strings.TrimSpace(relationshipType))
+			}
 			key := sourceRepoID + "\x00" + sourceID + "\x00" + targetID + "\x00" + canonicalType + "\x00" + strconv.FormatBool(swap)
 			if _, dup := seenRelations[key]; dup {
 				return nil

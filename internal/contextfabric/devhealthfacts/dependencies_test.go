@@ -296,6 +296,7 @@ func TestRequiredChildrenProviderDedupesTwinRowsByCanonicalRelation(t *testing.T
 			{"WIDGET-101", "WIDGET-200", "relates_to", "repo-1", "repo-9", uint64(1)},
 			{"WIDGET-101", "WIDGET-300", "relates_to", "repo-1", "repo-9", uint64(1)},
 			{"WIDGET-101", "WIDGET-200", "requires", "repo-1", "repo-9", uint64(1)},
+			{"WIDGET-101", "WIDGET-400", "blocked_by", "repo-1", "repo-9", uint64(1)},
 		}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactRequiredChildren)
@@ -306,9 +307,16 @@ func TestRequiredChildrenProviderDedupesTwinRowsByCanonicalRelation(t *testing.T
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
 	}
-	// relates+relates_to on WIDGET-200 -> 1; WIDGET-300 -> 1; distinct 'requires' relation -> 1.
-	if len(result.Facts) != 3 {
-		t.Fatalf("facts = %d, want 3 (twin collapsed): %#v", len(result.Facts), result.Facts)
+	// relates+relates_to on WIDGET-200 -> 1; WIDGET-300 -> 1; distinct 'requires' -> 1; blocked_by -> 1, raw spelling kept.
+	for _, fact := range result.Facts {
+		if id := fact.Fields["required_child_work_item_id"].String; id != nil && *id == "WIDGET-400" {
+			if rel := fact.Fields["relationship_type"].String; rel == nil || *rel != "blocked_by" {
+				t.Fatalf("inverted spelling changed: %#v", fact.Fields)
+			}
+		}
+	}
+	if len(result.Facts) != 4 {
+		t.Fatalf("facts = %d, want 4 (twin collapsed): %#v", len(result.Facts), result.Facts)
 	}
 	for _, fact := range result.Facts {
 		if rel := fact.Fields["relationship_type"].String; rel != nil && *rel == "relates" {
