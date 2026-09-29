@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -259,18 +260,27 @@ func resolveEvidence(subject contextfabric.SubjectRef, id string) (ref embeddedR
 	case contractsv1.ContextFabricEvidenceEntityTeam:
 		kind, form = contractsv1.ContextFabricSubjectTeam, contextfabric.FactSubjectIDTeamID
 	case contractsv1.ContextFabricEvidenceEntityProject:
-		// A project's evidence id is its "<provider>:<id>" key, not its
-		// canonical id, so it cannot be compared. Providers cite a project
-		// only on the project's own fact; anything else is opaque.
-		if subject.Kind == contractsv1.ContextFabricSubjectProject {
+		// A project's evidence id is its "<provider>:<id>" key; its
+		// canonical id is derived from the same two segments. The
+		// reference is compared with the fact's subject by that derived
+		// id and otherwise gated like any other project -- never assumed
+		// to be the fact's own because the kinds match (codex r1 P1).
+		provider, id, split := strings.Cut(raw, ":")
+		if !split || provider == "" || id == "" {
+			return embeddedRef{}, false, false
+		}
+		canonical, omitted, err := identity.Derive(identity.KindProject, []string{provider, id}, nil)
+		if err != nil || omitted {
+			return embeddedRef{}, false, false
+		}
+		if subject.Kind == contractsv1.ContextFabricSubjectProject && canonical == subject.CanonicalID {
 			return embeddedRef{}, true, true
 		}
-		return embeddedRef{kind: contractsv1.ContextFabricSubjectProject, opaque: true}, true, false
+		return embeddedRef{kind: contractsv1.ContextFabricSubjectProject, canonical: canonical}, true, false
 	case contractsv1.ContextFabricEvidenceEntityOrganization:
-		if subject.Kind == contractsv1.ContextFabricSubjectOrganization {
-			return embeddedRef{}, true, true
-		}
-		return embeddedRef{kind: contractsv1.ContextFabricSubjectOrganization, opaque: true}, true, false
+		// Gated by the organization rule (only the caller's own
+		// organization), never assumed own.
+		return embeddedRef{kind: contractsv1.ContextFabricSubjectOrganization, canonical: raw}, true, false
 	default:
 		// Row-level evidence (a work item, a pull request, a CI run) names a
 		// source row, not a subject the root gate decided: opaque.

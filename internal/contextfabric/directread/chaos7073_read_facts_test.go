@@ -3,11 +3,14 @@ package directread
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -94,6 +97,32 @@ func projectQHealth(subject contextfabric.SubjectRef) contextfabric.CanonicalFac
 	}
 }
 
+// Production project ids are "project.v2:<provider>:<id>" and project
+// evidence cites "<provider>:<id>". projectQ7073 is project Q in that form
+// (evidence jira:Q), owned by team T (repositories A and B); hiddenProject7073
+// (evidence jira:private) is owned by team U only, so it reaches only B.
+var (
+	projectQ7073      = mustProject("jira", "Q")
+	hiddenProject7073 = mustProject("jira", "private")
+)
+
+func mustProject(provider, id string) contextfabric.SubjectRef {
+	canonical, omitted, err := identity.Derive(identity.KindProject, []string{provider, id}, nil)
+	if err != nil || omitted {
+		panic(fmt.Sprintf("derive project id: %v", err))
+	}
+	return subject(contractsv1.ContextFabricSubjectProject, canonical)
+}
+
+func graph7073() *fakeGraph {
+	graph := graphOfOrgA()
+	graph.nodes[graphrank.SubjectKey(projectQ7073)] = graph.nodes[graphrank.SubjectKey(projectQ)]
+	graph.reach[graphrank.SubjectKey(projectQ7073)] = graph.reach[graphrank.SubjectKey(projectQ)]
+	graph.nodes[graphrank.SubjectKey(hiddenProject7073)] = map[string]interface{}{"authorization_repositories": "*", "authorization_projects": []string{hiddenProject7073.CanonicalID}}
+	graph.reach[graphrank.SubjectKey(hiddenProject7073)] = []string{"acme/b"}
+	return graph
+}
+
 func newTestFactsReader(t *testing.T, graph GraphAuthority, providers ...contextfabric.FactProvider) *FactsReader {
 	t.Helper()
 	registry, err := contextfabric.NewFactCapabilityRegistry(providers, contextfabric.FactRegistryOptions{})
@@ -133,10 +162,10 @@ func TestChaos7073EmbeddedSubjectsOfUnseenRepositoryAreWithheld(t *testing.T) {
 		}
 		return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable}, nil
 	}}
-	reader := newTestFactsReader(t, graphOfOrgA(), provider)
+	reader := newTestFactsReader(t, graph7073(), provider)
 	response, err := reader.Read(requestContext(), restrictedToA(), FactsRequest{
 		Kinds:    []string{"health"},
-		Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ.CanonicalID}},
+		Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ7073.CanonicalID}},
 	})
 	if err != nil {
 		t.Fatalf("read: %v", err)
@@ -187,8 +216,8 @@ func TestChaos7073EmbeddedGateClauses(t *testing.T) {
 			fact.EvidenceRefIDs = fact.EvidenceRefIDs[:1]
 			return contextfabric.FactProviderResult{Facts: []contextfabric.CanonicalFact{fact}, State: contextfabric.SourceAvailable}, nil
 		}}
-		response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(requestContext(), principal, FactsRequest{
-			Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ.CanonicalID}}})
+		response, err := newTestFactsReader(t, graph7073(), provider).Read(requestContext(), principal, FactsRequest{
+			Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ7073.CanonicalID}}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -206,8 +235,8 @@ func TestChaos7073EmbeddedGateClauses(t *testing.T) {
 			fact.Fields["risk_breakdown"] = contextfabric.RowsFactValue([]contextfabric.FactValueRow{riskRow("repo", "a", "acme/a", 0.25)})
 			return contextfabric.FactProviderResult{Facts: []contextfabric.CanonicalFact{fact}, State: contextfabric.SourceAvailable}, nil
 		}}
-		response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(requestContext(), principal, FactsRequest{
-			Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ.CanonicalID}}})
+		response, err := newTestFactsReader(t, graph7073(), provider).Read(requestContext(), principal, FactsRequest{
+			Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ7073.CanonicalID}}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -222,7 +251,7 @@ func TestChaos7073EmbeddedGateClauses(t *testing.T) {
 			t.Errorf("provider read for a refused root: %v", query.Subjects)
 			return contextfabric.FactProviderResult{State: contextfabric.SourceAvailable}, nil
 		}}
-		response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(requestContext(), principal, FactsRequest{
+		response, err := newTestFactsReader(t, graph7073(), provider).Read(requestContext(), principal, FactsRequest{
 			Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectP.CanonicalID}}})
 		if err != nil {
 			t.Fatal(err)
@@ -231,13 +260,38 @@ func TestChaos7073EmbeddedGateClauses(t *testing.T) {
 			t.Errorf("project P: status %q refused %v, want denied with denied_or_not_found", response.Status, response.Request.SubjectsRefused)
 		}
 	})
+	t.Run("evidence naming another project is gated, never assumed own", func(t *testing.T) {
+		provider := &stubProvider{capability: healthLikeCapability(), read: func(query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+			fact := projectQHealth(query.Subjects[0])
+			fact.Fields["risk_breakdown"] = contextfabric.RowsFactValue([]contextfabric.FactValueRow{riskRow("repo", "a", "acme/a", 0.25)})
+			fact.EvidenceRefIDs = []string{
+				contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityProject, "jira:Q"),
+				contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityProject, "jira:private"),
+				contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityOrganization, orgB),
+			}
+			return contextfabric.FactProviderResult{Facts: []contextfabric.CanonicalFact{fact}, State: contextfabric.SourceAvailable}, nil
+		}}
+		response, err := newTestFactsReader(t, graph7073(), provider).Read(requestContext(), principal, FactsRequest{
+			Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ7073.CanonicalID}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded := mustJSON(t, response)
+		if strings.Contains(encoded, "jira:private") || strings.Contains(encoded, orgB) {
+			t.Errorf("hidden project or foreign organization evidence served: %s", encoded)
+		}
+		keys := response.Facts[0].Provenance.NaturalKeys
+		if len(keys) != 1 || keys[0] != (NaturalKey{Entity: "project", ID: "jira:Q"}) {
+			t.Errorf("natural keys = %v, want only the fact's own project", keys)
+		}
+	})
 	t.Run("unrestricted caller sees every row", func(t *testing.T) {
 		provider := &stubProvider{capability: healthLikeCapability(), read: func(query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
 			return contextfabric.FactProviderResult{Facts: []contextfabric.CanonicalFact{projectQHealth(query.Subjects[0])}, State: contextfabric.SourceAvailable}, nil
 		}}
 		unrestricted := storage.Principal{OrgID: orgA, Subject: "user-2", CredentialID: "cred-2"}
-		response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(requestContext(), unrestricted, FactsRequest{
-			Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ.CanonicalID}}})
+		response, err := newTestFactsReader(t, graph7073(), provider).Read(requestContext(), unrestricted, FactsRequest{
+			Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ7073.CanonicalID}}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -246,13 +300,13 @@ func TestChaos7073EmbeddedGateClauses(t *testing.T) {
 		}
 	})
 	t.Run("graph failure on embedded references fails the read closed", func(t *testing.T) {
-		graph := graphOfOrgA()
+		graph := graph7073()
 		provider := &stubProvider{capability: healthLikeCapability(), read: func(query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
 			graph.authErr = contextfabric.ErrUnavailable // the root decision already ran
 			return contextfabric.FactProviderResult{Facts: []contextfabric.CanonicalFact{projectQHealth(query.Subjects[0])}, State: contextfabric.SourceAvailable}, nil
 		}}
 		response, err := newTestFactsReader(t, graph, provider).Read(requestContext(), principal, FactsRequest{
-			Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ.CanonicalID}}})
+			Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ7073.CanonicalID}}})
 		if err == nil || len(response.Facts) != 0 {
 			t.Fatalf("embedded gate failure served %d facts, err %v", len(response.Facts), err)
 		}
@@ -263,8 +317,8 @@ func TestChaos7073EmbeddedGateClauses(t *testing.T) {
 			fact.Fields["undeclared_probe"] = strValue("should-not-leave")
 			return contextfabric.FactProviderResult{Facts: []contextfabric.CanonicalFact{fact}, State: contextfabric.SourceAvailable}, nil
 		}}
-		response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(requestContext(), principal, FactsRequest{
-			Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ.CanonicalID}}})
+		response, err := newTestFactsReader(t, graph7073(), provider).Read(requestContext(), principal, FactsRequest{
+			Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ7073.CanonicalID}}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -279,8 +333,8 @@ func TestChaos7073EmbeddedGateClauses(t *testing.T) {
 			return contextfabric.FactProviderResult{Facts: []contextfabric.CanonicalFact{fact}, State: contextfabric.SourceAvailable}, nil
 		}}
 		unrestricted := storage.Principal{OrgID: orgA, Subject: "user-2", CredentialID: "cred-2"}
-		response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(requestContext(), unrestricted, FactsRequest{
-			Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ.CanonicalID}}})
+		response, err := newTestFactsReader(t, graph7073(), provider).Read(requestContext(), unrestricted, FactsRequest{
+			Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ7073.CanonicalID}}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -295,8 +349,8 @@ func TestChaos7073EmbeddedGateClauses(t *testing.T) {
 		provider := &stubProvider{capability: healthLikeCapability(), read: func(query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
 			return contextfabric.FactProviderResult{Facts: []contextfabric.CanonicalFact{projectQHealth(query.Subjects[0])}, State: contextfabric.SourceAvailable}, nil
 		}}
-		response, err := newTestFactsReader(t, graphOfOrgA(), provider).Read(requestContext(), principal, FactsRequest{
-			Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ.CanonicalID}}, Tables: TablesOmit})
+		response, err := newTestFactsReader(t, graph7073(), provider).Read(requestContext(), principal, FactsRequest{
+			Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectQ7073.CanonicalID}}, Tables: TablesOmit})
 		if err != nil {
 			t.Fatal(err)
 		}

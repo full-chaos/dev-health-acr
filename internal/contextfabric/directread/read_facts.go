@@ -469,9 +469,6 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 			key := string(item.Fact.Kind) + "\x00" + subjectKey(item.Fact.Subject)
 			withheldBySubject[key] = append(withheldBySubject[key], withheld...)
 		}
-		for _, table := range served.Tables {
-			record.RowsReturned += len(table.Rows)
-		}
 		response.Facts = append(response.Facts, served)
 	}
 	response.Coverage = coverageRows(plan, admitted.Subjects(), bundle, capabilities, response.Facts, withheldBySubject)
@@ -481,7 +478,14 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 	if response.Truncation != nil {
 		record.TruncatedBy = response.Truncation.TruncatedBy
 	}
+	// Counted AFTER the budget: a fact the budget withheld served no rows
+	// (codex r1 P1).
 	record.FactsReturned = len(response.Facts)
+	for _, fact := range response.Facts {
+		for _, table := range fact.Tables {
+			record.RowsReturned += len(table.Rows)
+		}
+	}
 	if encoded, err := json.Marshal(response); err == nil {
 		record.Bytes = len(encoded)
 	}

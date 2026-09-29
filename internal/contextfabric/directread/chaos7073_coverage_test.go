@@ -437,3 +437,58 @@ func TestChaos7073ReaderErrorsAreClassified(t *testing.T) {
 		}
 	}
 }
+
+type capturingFactsRecorder struct{ records []FactsReadRecord }
+
+func (r *capturingFactsRecorder) RecordDirectFactsRead(_ context.Context, _ storage.Principal, record FactsReadRecord) {
+	r.records = append(r.records, record)
+}
+
+// The read record counts what the response SERVED: facts and rows after the
+// byte budget, never before it (codex r1 P1: 30 rows logged, 0 served).
+func TestChaos7073ReadRecordCountsServedRowsAfterBudget(t *testing.T) {
+	for _, budget := range []int{MinMaxBytes, 16384, MaxMaxBytes} {
+		recorder := &capturingFactsRecorder{}
+		graph := graphOfOrgA()
+		var subjects []RequestSubject
+		for index := 0; index < 20; index++ {
+			id := "repository:r" + string(rune('a'+index))
+			graph.nodes[graphrank.SubjectKey(subject(contractsv1.ContextFabricSubjectRepository, id))] = repos("acme/r")
+			subjects = append(subjects, RequestSubject{Kind: "repository", CanonicalID: id})
+		}
+		provider := &stubProvider{capability: healthLikeCapability(), read: func(query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+			result := contextfabric.FactProviderResult{State: contextfabric.SourceAvailable}
+			for _, s := range query.Subjects {
+				var rows []contextfabric.FactValueRow
+				for index := 0; index < 30; index++ {
+					rows = append(rows, riskRow("repo", strings.TrimPrefix(s.CanonicalID, "repository:"), strings.Repeat("n", 40), 0.1))
+				}
+				result.Facts = append(result.Facts, contextfabric.CanonicalFact{Kind: contextfabric.FactHealth, Subject: s,
+					Fields: map[string]contextfabric.FactValue{"risk_breakdown": contextfabric.RowsFactValue(rows)}, EvidenceRefIDs: []string{contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, strings.TrimPrefix(s.CanonicalID, "repository:"))}, SourceState: contextfabric.SourceAvailable})
+			}
+			return result, nil
+		}}
+		registry, err := contextfabric.NewFactCapabilityRegistry([]contextfabric.FactProvider{provider}, contextfabric.FactRegistryOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		reader := NewFactsReader(NewSubjectGate(graph, nil), NewFactReader(registry.WithoutScopeExpansion()), recorder)
+		response, err := reader.Read(requestContext(), unrestrictedA(), FactsRequest{Kinds: []string{"health"}, Subjects: subjects, MaxBytes: budget})
+		if err != nil {
+			t.Fatal(err)
+		}
+		served := 0
+		for _, fact := range response.Facts {
+			for _, table := range fact.Tables {
+				served += len(table.Rows)
+			}
+		}
+		if len(recorder.records) != 1 {
+			t.Fatalf("records = %d", len(recorder.records))
+		}
+		record := recorder.records[0]
+		if record.RowsReturned != served || record.FactsReturned != len(response.Facts) {
+			t.Errorf("budget %d: record rows %d facts %d, served rows %d facts %d", budget, record.RowsReturned, record.FactsReturned, served, len(response.Facts))
+		}
+	}
+}
