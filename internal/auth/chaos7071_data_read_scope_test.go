@@ -134,3 +134,47 @@ func TestChaos7100LegacyDevicePollNeverGetsDataRead(t *testing.T) {
 		t.Fatalf("legacy device credential scopes %v", issued.Credential.Scopes)
 	}
 }
+
+// CHAOS-7106: the typed-code approval page's lookup (Preview) reports the
+// scopes the device grant asked for. A legacy device authorization (acr-mcp
+// login's JSON flow) has no grant row and no scope parameter, so it shows the
+// default pair.
+func TestChaos7106PreviewReportsRequestedScopes(t *testing.T) {
+	for requested, want := range map[string][]string{
+		"":                       {ScopeContextRead, ScopeEvidenceRead},
+		"data:read":              {ScopeDataRead},
+		"context:read data:read": {ScopeContextRead, ScopeDataRead},
+	} {
+		h := newOAuthHarness(t)
+		clientID := h.register(t)
+		started, err := h.oauth.StartDeviceAuthorization(context.Background(), OAuthDeviceAuthorizationRequest{ClientID: clientID, Scope: requested})
+		if err != nil {
+			t.Fatalf("requested %q: start: %v", requested, err)
+		}
+		preview, err := h.devices.Preview(context.Background(), DeviceApprovalPreviewRequest{Principal: webPrincipal([]string{"org/repo"}), UserCode: started.UserCode})
+		if err != nil {
+			t.Fatalf("requested %q: preview: %v", requested, err)
+		}
+		if !slices.Equal(preview.RequestedScopes, want) {
+			t.Fatalf("requested %q: preview scopes %v, want %v", requested, preview.RequestedScopes, want)
+		}
+	}
+}
+
+func TestChaos7106LegacyDevicePreviewShowsDefaultScopes(t *testing.T) {
+	h := newOAuthHarness(t)
+	started, err := h.devices.Start(context.Background(), DeviceAuthorizationHints{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := h.devices.Preview(context.Background(), DeviceApprovalPreviewRequest{Principal: webPrincipal([]string{"org/repo"}), UserCode: started.UserCode})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(preview.RequestedScopes, []string{ScopeContextRead, ScopeEvidenceRead}) {
+		t.Fatalf("legacy preview scopes %v, want the default pair", preview.RequestedScopes)
+	}
+	if preview.RequestedScopesSource != PreviewScopesLegacyDefault {
+		t.Fatalf("legacy preview source %q, want %q", preview.RequestedScopesSource, PreviewScopesLegacyDefault)
+	}
+}

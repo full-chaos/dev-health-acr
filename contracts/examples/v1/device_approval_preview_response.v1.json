@@ -1,5 +1,6 @@
 {
   "schema_version": "device_approval_preview_response.v1",
   "organization_id_hint": "org_fullchaos",
-  "repository_hints": ["full-chaos/dev-health-acr"]
+  "repository_hints": ["full-chaos/dev-health-acr"],
+  "requested_scopes": ["context:read", "data:read"]
 }

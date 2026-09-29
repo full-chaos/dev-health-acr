@@ -738,8 +738,8 @@
         "description": "deviceRuntimeHandler -- no auth check beyond runtime readiness; protected only by allowDeviceRequest's per-IP rate limiter.",
         "anchor": {
           "path": "internal/api/device_routes.go",
-          "line": 266,
-          "line_end": 266,
+          "line": 268,
+          "line_end": 268,
           "note": "func (a *App) deviceRuntimeHandler(next http.Handler) http.Handler {"
         }
       },
@@ -759,8 +759,8 @@
           "direction": "returned_to_caller",
           "anchor": {
             "path": "internal/auth/device_flow.go",
-            "line": 113,
-            "line_end": 145,
+            "line": 134,
+            "line_end": 166,
             "note": "DeviceFlowService.Start -- mints device_code + user_code via s.store.Create"
           },
           "issuer": "acr DeviceFlowService",
@@ -868,8 +868,8 @@
         "description": "deviceApprovalHandler requires X-ACR-Web-Assertion EXACTLY (exactly one header) AND explicitly rejects if Authorization is ALSO present, at the route-wrapper level itself (in addition to the same check inside authenticateWebAssertion) -- a double belt-and-braces enforcement of the CHAOS-3271 double-header rejection pattern. RequireScope(credential:issue).",
         "anchor": {
           "path": "internal/api/device_routes.go",
-          "line": 244,
-          "line_end": 244,
+          "line": 246,
+          "line_end": 246,
           "note": "func (a *App) deviceApprovalHandler(next http.Handler) http.Handler {"
         }
       },
@@ -923,8 +923,8 @@
         "description": "selfLifecycleHandler = authenticator.Middleware (bearer only, allowWebAssertions=false) + ProtectedHandler(rate limit only) -- NO RequireScope call. Self-service rotation only needs a valid credential; it operates on the CALLER'S OWN principal.CredentialID, so no additional scope check is layered on.",
         "anchor": {
           "path": "internal/api/device_routes.go",
-          "line": 259,
-          "line_end": 259,
+          "line": 261,
+          "line_end": 261,
           "note": "func (a *App) selfLifecycleHandler(next http.Handler) http.Handler {"
         }
       },
@@ -966,8 +966,8 @@
         "description": "Same selfLifecycleHandler as rotate -- bearer only, no explicit scope requirement.",
         "anchor": {
           "path": "internal/api/device_routes.go",
-          "line": 259,
-          "line_end": 259,
+          "line": 261,
+          "line_end": 261,
           "note": "func (a *App) selfLifecycleHandler(next http.Handler) http.Handler {"
         }
       },
@@ -1076,8 +1076,8 @@
         "description": "deviceApprovalHandler (the same wrapper as device_approval) requires X-ACR-Web-Assertion EXACTLY (exactly one header) and rejects if Authorization is also present, then RequireScope(credential:issue): only the web, acting for its signed-in user, can read or decide a request; the browser that holds the handle cannot.",
         "anchor": {
           "path": "internal/api/device_routes.go",
-          "line": 244,
-          "line_end": 244,
+          "line": 246,
+          "line_end": 246,
           "note": "func (a *App) deviceApprovalHandler(next http.Handler) http.Handler {"
         }
       },

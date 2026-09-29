@@ -76,7 +76,32 @@ func (r DeviceApprovalPreviewResponse) Validate() error {
 	if r.SchemaVersion != DeviceApprovalPreviewResponseSchema {
 		return fmt.Errorf("device approval preview response violates v1 bounds")
 	}
+	if err := validateDevicePreviewRequestedScopes(r.RequestedScopes); err != nil {
+		return err
+	}
 	return validateDeviceAuthorizationHints(r.OrganizationIDHint, r.RepositoryHints)
+}
+
+// validateDevicePreviewRequestedScopes (CHAOS-7106) mirrors the schema: up to
+// three unique values from the closed device-grant scope set. Absent is fine.
+func validateDevicePreviewRequestedScopes(scopes []string) error {
+	if scopes == nil {
+		return nil
+	}
+	if len(scopes) == 0 || len(scopes) > 3 {
+		return fmt.Errorf("device approval preview response violates v1 bounds")
+	}
+	seen := make(map[string]struct{}, len(scopes))
+	for _, scope := range scopes {
+		if scope != "context:read" && scope != "evidence:read" && scope != "data:read" {
+			return fmt.Errorf("device approval preview response violates v1 bounds")
+		}
+		if _, dup := seen[scope]; dup {
+			return fmt.Errorf("device approval preview response violates v1 bounds")
+		}
+		seen[scope] = struct{}{}
+	}
+	return nil
 }
 
 func (r CredentialRotateRequest) Validate() error {

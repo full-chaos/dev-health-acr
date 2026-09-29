@@ -140,6 +140,9 @@ type DeviceApprovalPreviewResponse struct {
 	SchemaVersion      string   `json:"schema_version"`
 	OrganizationIDHint string   `json:"organization_id_hint,omitempty"`
 	RepositoryHints    []string `json:"repository_hints,omitempty"`
+	// RequestedScopes (CHAOS-7106) are the scopes the device grant asked for,
+	// so the approval page can show them beside the user code.
+	RequestedScopes []string `json:"requested_scopes,omitempty"`
 }
 
 type CredentialRotateRequest struct {

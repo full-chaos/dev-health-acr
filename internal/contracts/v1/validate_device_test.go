@@ -313,3 +313,25 @@ func TestDeviceContractFixtures_validate(t *testing.T) {
 		})
 	}
 }
+
+func TestChaos7106PreviewResponseRequestedScopesBounds(t *testing.T) {
+	base := DeviceApprovalPreviewResponse{SchemaVersion: DeviceApprovalPreviewResponseSchema}
+	for name, tc := range map[string]struct {
+		scopes []string
+		ok     bool
+	}{
+		"absent":        {nil, true},
+		"one":           {[]string{"data:read"}, true},
+		"all three":     {[]string{"context:read", "evidence:read", "data:read"}, true},
+		"empty list":    {[]string{}, false},
+		"unknown scope": {[]string{"episode:write"}, false},
+		"duplicate":     {[]string{"data:read", "data:read"}, false},
+		"too many":      {[]string{"context:read", "evidence:read", "data:read", "context:read"}, false},
+	} {
+		response := base
+		response.RequestedScopes = tc.scopes
+		if err := response.Validate(); (err == nil) != tc.ok {
+			t.Errorf("%s: Validate() = %v, want ok=%v", name, err, tc.ok)
+		}
+	}
+}
