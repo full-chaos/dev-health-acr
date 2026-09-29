@@ -59,7 +59,9 @@ func kindCensusScope(r row, key string, denied bool) row {
 	if denied {
 		r[key].(*node).Properties["authorization_repositories"] = []string{"repo-denied"}
 	} else {
-		r[key].(*node).Properties["authorization_repositories"] = "*"
+		// CHAOS-7080: an admitted fixture node carries the grant it is
+		// admitted under. A "*" list admits no repository-restricted caller.
+		r[key].(*node).Properties["authorization_repositories"] = []string{"repo-allowed"}
 	}
 	return r
 }

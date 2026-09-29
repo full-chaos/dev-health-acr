@@ -42,6 +42,21 @@ func (g *fakeGraph) AuthorizeStoredSubjects(_ context.Context, principal storage
 	if principal.OrgID == g.org {
 		for _, subject := range subjects {
 			if attributes, ok := g.nodes[graphrank.SubjectKey(subject)]; ok {
+				// Mirrors falkorgraph's projectReachConn (CHAOS-7080): for a
+				// repository-restricted caller a project's "*" is read as its
+				// live ownership reach.
+				if restricted := ClassifyPrincipal(principal) == ClassRestricted; restricted && subject.Kind == contractsv1.ContextFabricSubjectProject && attributes["authorization_repositories"] == "*" {
+					reach := g.reach[graphrank.SubjectKey(subject)]
+					if len(reach) == 0 {
+						reach = []string{"acr-context-fabric:no-project-repository-ownership"}
+					}
+					copied := map[string]interface{}{}
+					for key, value := range attributes {
+						copied[key] = value
+					}
+					copied["authorization_repositories"] = slices.Clone(reach)
+					attributes = copied
+				}
 				nodes[graphrank.SubjectKey(subject)] = []graphrank.CandidateNode{{Attributes: attributes}}
 			}
 		}
@@ -161,11 +176,11 @@ func TestSubjectGateRestrictedCallerMatrix(t *testing.T) {
 		repoA:    SubjectAdmitted,             // inside the grant
 		repoB:    SubjectDenied,               // node predicate
 		guessed:  SubjectAbsent,               // existence lookup
-		projectP: SubjectOwnershipUnproven,    // project wildcard is not enough; reaches only B
+		projectP: SubjectDenied,               // project wildcard is not enough; its live reach is only B
 		projectQ: SubjectAdmitted,             // reaches A through team T
 		teamT:    SubjectAdmitted,             // owns A
 		teamU:    SubjectDenied,               // node predicate (owns only B)
-		teamW:    SubjectOwnershipUnproven,    // wildcard team: predicate admits, ownership does not
+		teamW:    SubjectDenied,               // wildcard team: the predicate admits no restricted caller (CHAOS-7080)
 		workA:    SubjectAdmitted,             // inside the grant
 		workB:    SubjectDenied,               // node predicate
 		ownOrg:   SubjectAdmitted,             // caller's own org, bare id
@@ -187,7 +202,7 @@ func TestSubjectGateRestrictedCallerMatrix(t *testing.T) {
 	if decision.Decision != DecisionPartial || decision.Reason != ReasonOrganizationMismatch {
 		t.Fatalf("decision %s/%s, want partial/organization_mismatch", decision.Decision, decision.Reason)
 	}
-	if decision.AdmittedCount != 6 || decision.DeniedCount != 3 || decision.AbsentCount != 1 || decision.OwnershipUnprovenCount != 2 || decision.OrganizationMismatchCount != 1 || decision.SubjectCount != 13 {
+	if decision.AdmittedCount != 6 || decision.DeniedCount != 5 || decision.AbsentCount != 1 || decision.OwnershipUnprovenCount != 0 || decision.OrganizationMismatchCount != 1 || decision.SubjectCount != 13 {
 		t.Fatalf("counts %+v", decision)
 	}
 	if !slices.Equal(decision.RefusedKinds, []string{"organization", "project", "repository", "team", "work_item"}) {

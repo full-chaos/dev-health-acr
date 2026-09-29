@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -512,6 +513,23 @@ type freshLiveGraph struct {
 	t                 *testing.T
 	project           string
 	resolve, discover int
+}
+
+// AuthorizeStoredSubjects is the fixture's side of the CHAOS-7080 fact-root
+// re-check. Production passes the FalkorDB adapter, which implements it; a
+// graph without it fails the re-check closed. The fixture's anchor carries
+// authorization_repositories ["acme/allowed"], so it admits exactly the
+// callers whose grant names that repository.
+func (*freshLiveGraph) AuthorizeStoredSubjects(_ context.Context, p storage.Principal, _ contextfabric.ResolvedGraphBinding, subjects []contextfabric.SubjectRef) ([]contextfabric.StoredSubjectOutcome, error) {
+	outcome := contextfabric.StoredSubjectDenied
+	if slices.Contains(p.RepositoryScopes, "acme/allowed") {
+		outcome = contextfabric.StoredSubjectAdmitted
+	}
+	outcomes := make([]contextfabric.StoredSubjectOutcome, len(subjects))
+	for i := range outcomes {
+		outcomes[i] = outcome
+	}
+	return outcomes, nil
 }
 
 func (*freshLiveGraph) ResolveInvestigationBinding(context.Context, storage.Principal) (contextfabric.ResolvedGraphBinding, error) {

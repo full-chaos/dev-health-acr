@@ -462,6 +462,28 @@ deployment/review edges from `devhealthsource/tables.go`; project→team from
 end-to-end but this org's live graph currently has zero incident nodes —
 absence of evidence, not absence of a code path.
 
+**Wildcard authorization closed (2026-09-28, CHAOS-7080):** the shared
+predicate `graphrank.AuthorizedAttributes` no longer admits a node or edge
+whose `authorization_repositories` is the `"*"` wildcard to a
+repository-restricted caller (a specific repository list, including an owner
+wildcard such as `acme/*`). Unrestricted callers (no list) and universal
+callers (`*`) are unchanged. The one wildcard node a restricted caller keeps is
+its own organization, identified by the reserved organization scope id in
+`authorization_projects`. Before this, every project node (projection writes a
+project's empty repository list as `"*"`), every pre-CHAOS-4390 team, every
+project→team `OWNED_BY_TEAM` edge, and every node whose repository slug did
+not resolve was visible to every restricted caller, and the engine then read
+the project's facts (including other repositories' names and risk) for it.
+Projects stay visible to a restricted caller through ownership:
+`falkorgraph` substitutes, on each read of a principal-bearing adapter call,
+the project's live ownership reach (the union of the repository lists of the
+teams its current `OWNED_BY_TEAM` edges name) for its `"*"`
+(`falkorgraph/project_reach.go`). The engine re-checks every committed root
+against the same decision before the fact read
+(`contextfabric/fact_root_recheck.go`). An unresolved repository slug is now
+projected as a sentinel list that admits no repository, never as `"*"`
+(`devhealthsource.repoAuthorization`).
+
 **Team authorization (2026-08-28, CHAOS-4390, MERGED #313) and cohort
 retrieval (CHAOS-4395, IN FLIGHT, not yet merged as of this writing):** team
 nodes' `authorization_repositories` is now derived from `team_repo_ownership`

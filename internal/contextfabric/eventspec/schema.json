@@ -3388,7 +3388,8 @@
           "result_by_id",
           "prior_result",
           "answer_reuse",
-          "evidence_expansion"
+          "evidence_expansion",
+          "fact_root_recheck"
         ]
       },
       {
