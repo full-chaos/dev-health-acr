@@ -84,7 +84,23 @@ type DeviceApprovalPreview struct {
 	// named (stored on the grant row), or the default pair when the record has
 	// no grant row (the legacy acr-mcp login flow has no scope parameter).
 	RequestedScopes []string
+	// RequestedScopesSource says where RequestedScopes came from (closed
+	// vocabulary, safe to log): PreviewScopesFromGrant (the scopes the grant
+	// named), PreviewScopesGrantDefault (the grant named none, so the default
+	// pair), or PreviewScopesLegacyDefault (no grant row: the legacy flow).
+	RequestedScopesSource string
 }
+
+const (
+	PreviewScopesFromGrant     = "grant"
+	PreviewScopesGrantDefault  = "grant_default"
+	PreviewScopesLegacyDefault = "legacy_default"
+)
+
+// ErrDeviceGrantLookup marks a preview that failed because the device grant
+// could not be read (a storage failure, not "no such grant"). The route logs
+// it as a decision; the wrapped cause is never logged or returned.
+var ErrDeviceGrantLookup = errors.New("device grant scope lookup failed")
 
 type DeviceDenialRequest struct {
 	Principal storage.Principal
@@ -172,14 +188,15 @@ func (s *DeviceFlowService) Preview(ctx context.Context, request DeviceApprovalP
 	if len(record.RepositoryHints) > 0 && len(repositoryHints) == 0 {
 		return DeviceApprovalPreview{}, ErrInvalidDeviceFlow
 	}
-	requestedScopes, err := s.requestedScopes(ctx, record.DeviceCodeHash)
+	requestedScopes, scopesSource, err := s.requestedScopes(ctx, record.DeviceCodeHash)
 	if err != nil {
 		return DeviceApprovalPreview{}, err
 	}
 	return DeviceApprovalPreview{
-		OrganizationIDHint: record.OrganizationIDHint,
-		RepositoryHints:    repositoryHints,
-		RequestedScopes:    requestedScopes,
+		OrganizationIDHint:    record.OrganizationIDHint,
+		RepositoryHints:       repositoryHints,
+		RequestedScopes:       requestedScopes,
+		RequestedScopesSource: scopesSource,
 	}, nil
 }
 
@@ -188,19 +205,19 @@ func (s *DeviceFlowService) Preview(ctx context.Context, request DeviceApprovalP
 // authorization, whose credential is the default pair. Any other lookup
 // failure fails the preview rather than showing a guess: the page must not
 // tell a user less than what they are approving.
-func (s *DeviceFlowService) requestedScopes(ctx context.Context, hash storage.DeviceCodeHash) ([]string, error) {
+func (s *DeviceFlowService) requestedScopes(ctx context.Context, hash storage.DeviceCodeHash) ([]string, string, error) {
 	grant, err := s.oauthDeviceGrants.GetDeviceGrant(ctx, hash)
 	if errors.Is(err, storage.ErrNotFound) {
-		return slices.Clone(oauthDefaultApprovalScopes), nil
+		return slices.Clone(oauthDefaultApprovalScopes), PreviewScopesLegacyDefault, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("look up device grant scopes: %w", err)
+		return nil, "", fmt.Errorf("%w: %w", ErrDeviceGrantLookup, err)
 	}
 	scopes := strings.Fields(grant.Scope)
 	if len(scopes) == 0 {
-		return slices.Clone(oauthDefaultApprovalScopes), nil
+		return slices.Clone(oauthDefaultApprovalScopes), PreviewScopesGrantDefault, nil
 	}
-	return scopes, nil
+	return scopes, PreviewScopesFromGrant, nil
 }
 
 func (s *DeviceFlowService) Approve(ctx context.Context, request DeviceApprovalRequest) (storage.DeviceAuthorization, error) {

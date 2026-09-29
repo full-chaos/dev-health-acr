@@ -174,4 +174,7 @@ func TestChaos7106LegacyDevicePreviewShowsDefaultScopes(t *testing.T) {
 	if !slices.Equal(preview.RequestedScopes, []string{ScopeContextRead, ScopeEvidenceRead}) {
 		t.Fatalf("legacy preview scopes %v, want the default pair", preview.RequestedScopes)
 	}
+	if preview.RequestedScopesSource != PreviewScopesLegacyDefault {
+		t.Fatalf("legacy preview source %q, want %q", preview.RequestedScopesSource, PreviewScopesLegacyDefault)
+	}
 }

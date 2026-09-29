@@ -154,9 +154,11 @@ func (a *App) handleDeviceApproval(w http.ResponseWriter, r *http.Request) {
 		}
 		preview, err := a.deviceFlow.Preview(r.Context(), auth.DeviceApprovalPreviewRequest{Principal: principal, UserCode: previewRequest.UserCode})
 		if err != nil {
+			a.logDevicePreviewFailure(r, err)
 			a.writeDeviceApprovalError(w, r, err)
 			return
 		}
+		a.logDevicePreview(r, preview)
 		writeJSON(w, http.StatusOK, contractsv1.DeviceApprovalPreviewResponse{
 			SchemaVersion:      contractsv1.DeviceApprovalPreviewResponseSchema,
 			OrganizationIDHint: preview.OrganizationIDHint,
