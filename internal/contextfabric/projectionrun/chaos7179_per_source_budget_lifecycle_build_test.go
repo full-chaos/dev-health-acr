@@ -102,3 +102,38 @@ func TestChaos7179_NegativeBudgetFlagsExtraDrainDisabledOnTheOutcome(t *testing.
 	require.Len(t, drains, 1)
 	require.True(t, drains[0].ExtraDrainDisabled)
 }
+
+// A budget-0 drain whose single applied batch completed enumeration has no
+// backlog: the yield reason must be exhausted, never budget_exceeded (which
+// the observer reports as starvation). Red on the pre-fix runPair.
+func TestChaos7179_TerminalPageWithNoExtraBudgetYieldsExhaustedNotBudgetExceeded(t *testing.T) {
+	t.Parallel()
+	source := &lifecycleFakeSource{name: "source-one", pages: 1}
+	observer := &recordingObserver{}
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:  []string{"org-1"},
+		Sources: []projectionrun.SourcePair{{Name: "source-one", Source: source}},
+		Backend: newFakeBackend(), Checkpoints: newFakeCheckpointStore(), RebuildMarkers: newFakeRebuildMarker(),
+		Observer: observer, Logger: discardLogger(), DrainBatchBudget: -1,
+	})
+	require.NoError(t, err)
+	coordinator.Tick(context.Background())
+	require.Equal(t, projectionrun.DrainYieldExhausted, yieldReasons(observer)["source-one"])
+}
+
+// A source with pages remaining and a budget spent still reports
+// budget_exceeded (the backlog is real).
+func TestChaos7179_UnfinishedSourceWithSpentBudgetStillYieldsBudgetExceeded(t *testing.T) {
+	t.Parallel()
+	source := &lifecycleFakeSource{name: "source-one", pages: 50}
+	observer := &recordingObserver{}
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:  []string{"org-1"},
+		Sources: []projectionrun.SourcePair{{Name: "source-one", Source: source}},
+		Backend: newFakeBackend(), Checkpoints: newFakeCheckpointStore(), RebuildMarkers: newFakeRebuildMarker(),
+		Observer: observer, Logger: discardLogger(), DrainBatchBudget: 1,
+	})
+	require.NoError(t, err)
+	coordinator.Tick(context.Background())
+	require.Equal(t, projectionrun.DrainYieldBudgetExceeded, yieldReasons(observer)["source-one"])
+}

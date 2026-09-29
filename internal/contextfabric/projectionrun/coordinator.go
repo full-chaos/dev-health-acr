@@ -2725,21 +2725,21 @@ func (c *Coordinator) recoverFromDivergenceLifecycle(scope *orgScope, orgID stri
 // F2) can classify cancellation by inspecting THIS error's own identity
 // rather than the ambient ctx.Err(), which could coincidentally be set by
 // an unrelated cancellation and mislabel a genuine backend error.
-func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, checkpoints contextfabric.ProjectionCheckpointStore) (evaluated, applied bool, err error, stale, withheldByBackoff bool) {
+func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, checkpoints contextfabric.ProjectionCheckpointStore) (evaluated, applied bool, err error, stale, withheldByBackoff, complete bool) {
 	key := orgID + "\x00" + source
 	// ONE clock read decides both "may it attempt" and "is it withheld by its
 	// own failure backoff" -- see dueState's own doc comment for the race two
 	// reads opened.
 	due, withheld := c.dueState(key)
 	if !due {
-		return false, false, nil, false, withheld
+		return false, false, nil, false, withheld, false
 	}
 	started := c.now()
 	worker, werr := c.workerFor(source, checkpoints)
 	if werr != nil {
 		c.recordBackoff(key, werr)
 		c.logger.WarnContext(ctx, "projection worker construction failed", "org_id", contextfabric.SanitizeLogAttr(orgID), "source", contextfabric.SanitizeLogAttr(source), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(werr)))
-		return true, false, werr, false, false
+		return true, false, werr, false, false, false
 	}
 	run, runErr := worker.RunOnce(ctx, orgID, source)
 	outcome := Outcome{OrgID: orgID, Source: source, Run: run, Err: runErr, Duration: c.now().Sub(started), At: c.now()}
@@ -2747,7 +2747,7 @@ func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, che
 	c.observer.ObserveProjectionOutcome(outcome)
 	if runErr != nil {
 		c.logger.WarnContext(ctx, "projection pair failed", "org_id", contextfabric.SanitizeLogAttr(orgID), "source", contextfabric.SanitizeLogAttr(source), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(runErr)), "duration_ms", outcome.Duration.Milliseconds())
-		return true, false, runErr, false, false
+		return true, false, runErr, false, false, false
 	}
 	if run.Applied {
 		c.logger.InfoContext(ctx, "projection batch applied", "org_id", contextfabric.SanitizeLogAttr(orgID), "source", contextfabric.SanitizeLogAttr(source), "batch_id", contextfabric.SanitizeLogAttr(run.BatchID), "backend_watermark", contextfabric.SanitizeLogAttr(run.BackendWatermark), "duration_ms", outcome.Duration.Milliseconds())
@@ -2757,7 +2757,9 @@ func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, che
 	// ever compared checkpoint SourceVersion against a batch's SourceVersion
 	// INSIDE the available==true branch, so a dormant organization (no new
 	// rows, available=false, no error) got no freshness signal at all.
-	return true, run.Applied, nil, c.emitProjectionFreshness(ctx, orgID, source), false
+	// complete: the applied batch itself claims the source has nothing more, so
+	// a drain that stops here has no backlog whatever its budget says.
+	return true, run.Applied, nil, c.emitProjectionFreshness(ctx, orgID, source), false, run.Applied && run.CompleteEnumeration
 }
 
 // runPair drains (org, source)'s pending batches within THIS tick
@@ -2784,7 +2786,7 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 	reason := DrainYieldExhausted
 	var lastErr error
 	for {
-		pairEvaluated, pairApplied, pairErr, pairStale, pairWithheld := c.runPairOnce(ctx, orgID, source, checkpoints)
+		pairEvaluated, pairApplied, pairErr, pairStale, pairWithheld, pairComplete := c.runPairOnce(ctx, orgID, source, checkpoints)
 		if !pairEvaluated {
 			if batches == 0 {
 				// Nothing ran at all. If the pair is serving its own
@@ -2853,7 +2855,13 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 		case ctx.Err() != nil:
 			reason = DrainYieldContextDone
 		case budget == nil || *budget <= 0:
-			reason = DrainYieldBudgetExceeded
+			// budget_exceeded claims work remains. A batch that itself
+			// completed enumeration says none does.
+			if pairComplete {
+				reason = DrainYieldExhausted
+			} else {
+				reason = DrainYieldBudgetExceeded
+			}
 		default:
 			*budget--
 			continue
