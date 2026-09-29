@@ -104,9 +104,18 @@ func Resolve(raw string) (typ contractsv1.ContextFabricRelationshipType, swapEnd
 
 // Key is the canonical relation key of a raw spelling: canonical type plus
 // direction. Two rows for one pair with the same Key state one relation.
+//
+// Key normalizes ASCII-only (trim of " \t\n\v\f\r", ASCII case folding), which
+// is exactly what KeySQL does in ClickHouse (replaceRegexpAll [[:space:]],
+// upper/lower are byte-wise). Go's Unicode-aware TrimSpace/ToLower would key
+// 'ς' or NBSP-wrapped spellings differently from SQL, and a fact would cite an
+// evidence id the catalog never produces (CHAOS-7177 r3).
 func Key(raw string) string {
-	typ, swap, _ := Resolve(raw)
-	return keyOf(strings.ToLower(string(typ)), swap)
+	trimmed := asciiTrim(raw)
+	if m, ok := mapping[asciiUpper(trimmed)]; ok {
+		return keyOf(strings.ToLower(string(m.mapped)), m.swapEndpoints)
+	}
+	return keyOf(asciiLower(trimmed), false)
 }
 
 func keyOf(lowerType string, swap bool) string {
@@ -118,16 +127,40 @@ func keyOf(lowerType string, swap bool) string {
 
 // EmittedSpelling is the relationship_type value a fact carries: the
 // canonical type lower-cased; for a swapped row the fixed inverse spelling of
-// that alias family, never the raw survivor.
+// that alias family, never the raw survivor. Empty for an empty raw type.
 func EmittedSpelling(raw string) string {
-	typ, swap, _ := Resolve(raw)
-	if swap {
-		upper := strings.ToUpper(strings.TrimSpace(raw))
-		if m, ok := mapping[upper]; ok && m.inverse != "" {
+	trimmed := asciiTrim(raw)
+	if m, ok := mapping[asciiUpper(trimmed)]; ok {
+		if m.swapEndpoints && m.inverse != "" {
 			return m.inverse
 		}
+		return strings.ToLower(string(m.mapped))
 	}
-	return strings.ToLower(string(typ))
+	return asciiLower(trimmed)
+}
+
+const asciiSpace = " \t\n\v\f\r"
+
+func asciiTrim(s string) string { return strings.Trim(s, asciiSpace) }
+
+func asciiUpper(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if c >= 'a' && c <= 'z' {
+			b[i] = c - 'a' + 'A'
+		}
+	}
+	return string(b)
+}
+
+func asciiLower(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if c >= 'A' && c <= 'Z' {
+			b[i] = c - 'A' + 'a'
+		}
+	}
+	return string(b)
 }
 
 // KeySQL renders Key as a ClickHouse expression over column (a String or
@@ -143,8 +176,8 @@ func KeySQL(column string) string {
 	var b strings.Builder
 	b.WriteString("multiIf(")
 	for _, k := range keys {
-		typ, swap, _ := Resolve(k)
-		fmt.Fprintf(&b, "%s = '%s', '%s', ", trimmed, k, keyOf(strings.ToLower(string(typ)), swap))
+		m := mapping[k]
+		fmt.Fprintf(&b, "%s = '%s', '%s', ", trimmed, k, keyOf(strings.ToLower(string(m.mapped)), m.swapEndpoints))
 	}
 	fmt.Fprintf(&b, "concat(lower(replaceRegexpAll(ifNull(%s, ''), '^[[:space:]]+|[[:space:]]+$', '')), ':fwd'))", column)
 	return b.String()

@@ -3,6 +3,8 @@ package devhealthfacts_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/dependencyrelation"
 	"strconv"
 	"strings"
 	"testing"
@@ -308,10 +310,15 @@ func TestRequiredChildrenProviderDedupesTwinRowsByCanonicalRelation(t *testing.T
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
 	}
-	// The surviving twin is the first row the query returns, so the query must
-	// order them (CHAOS-7177 r2 P2): the fake ignores SQL.
-	if len(client.queries) == 0 || !strings.Contains(client.queries[0].statement, "ORDER BY d.target_work_item_id, lower(ifNull(d.relationship_type, ''))\nLIMIT") {
-		t.Fatalf("required-children query is not deterministically ordered: %#v", client.queries)
+	// Twins are collapsed IN SQL, before the probe LIMIT (CHAOS-7177 r3 P1), and the
+	// survivor is chosen by ORDER BY: the fake ignores SQL, so pin the shape.
+	stmt := ""
+	if len(client.queries) > 0 {
+		stmt = client.queries[0].statement
+	}
+	key := dependencyrelation.KeySQL("d.relationship_type")
+	if !strings.Contains(stmt, "ORDER BY toString(s.repo_id), d.source_work_item_id, d.target_work_item_id, "+key+", lower(ifNull(d.relationship_type, ''))\nLIMIT 1 BY toString(s.repo_id), d.source_work_item_id, d.target_work_item_id, "+key+"\nLIMIT 201") {
+		t.Fatalf("required-children query does not order and dedupe by canonical key before the probe limit")
 	}
 	type wire struct{ rel, evidence string }
 	byTarget := map[string][]wire{}
@@ -383,5 +390,63 @@ func TestBlockersProviderDedupesCaseVariantRows(t *testing.T) {
 	}
 	if len(result.Facts) != 2 {
 		t.Fatalf("blocker facts = %d, want 2 (WIDGET-200 once, WIDGET-300 once)", len(result.Facts))
+	}
+}
+
+// CHAOS-7177 r3 P1: empty and whitespace-only types share one key, so they dedupe too.
+func TestRequiredChildrenProviderDedupesEmptyRelationTypes(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM work_item_dependencies", rows: [][]any{
+		{"WIDGET-101", "WIDGET-200", "", "repo-1", "repo-9", uint64(1)},
+		{"WIDGET-101", "WIDGET-200", " ", "repo-1", "repo-9", uint64(1)},
+	}}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactRequiredChildren)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactRequiredChildren, Subjects: []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")},
+	})
+	if err != nil || len(result.Facts) != 1 {
+		t.Fatalf("err=%v facts=%d, want 1", err, len(result.Facts))
+	}
+	if _, ok := result.Facts[0].Fields["relationship_type"]; ok {
+		t.Fatalf("empty type emitted a relationship_type field: %#v", result.Facts[0].Fields)
+	}
+}
+
+// CHAOS-7177 r3 P1: a twin row must not consume a probe slot or read as truncation.
+func TestRequiredChildrenProviderTwinDoesNotReadAsTruncation(t *testing.T) {
+	t.Parallel()
+	rows := [][]any{}
+	for i := 0; i < 199; i++ {
+		rows = append(rows, []any{"WIDGET-101", fmt.Sprintf("WIDGET-%03d", 200+i), "requires", "repo-1", "repo-9", uint64(1)})
+	}
+	rows = append(rows,
+		[]any{"WIDGET-101", "WIDGET-999", "relates", "repo-1", "repo-9", uint64(1)},
+		[]any{"WIDGET-101", "WIDGET-999", "relates_to", "repo-1", "repo-9", uint64(1)},
+	)
+	client := &fakeClient{tables: []fakeTable{{match: "FROM work_item_dependencies", rows: rows}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactRequiredChildren)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactRequiredChildren, Subjects: []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")},
+	})
+	if err != nil || len(result.Facts) != 200 || result.Truncated {
+		t.Fatalf("err=%v facts=%d truncated=%v, want 200 distinct facts, not truncated", err, len(result.Facts), result.Truncated)
+	}
+}
+
+// The blockers query collapses case variants in SQL before its probe LIMIT too.
+func TestBlockersProviderQueryDedupesBeforeProbeLimit(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM work_item_dependencies", rows: nil}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactBlockers)
+	if _, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactBlockers, Subjects: []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(client.queries[0].statement, "ORDER BY toString(t.repo_id), d.target_work_item_id, d.source_work_item_id\nLIMIT 1 BY toString(t.repo_id), d.target_work_item_id, d.source_work_item_id\nLIMIT 201") {
+		t.Fatal("blockers query does not dedupe per pair before the probe limit")
 	}
 }

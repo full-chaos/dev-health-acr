@@ -126,11 +126,12 @@ FROM work_item_dependencies AS d FINAL
 INNER JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
 `+counterpartRepositoryJoinSQL("d.source_work_item_id")+`
 WHERE d.org_id = {org_id:String} AND concat(toString(t.repo_id), ':', d.target_work_item_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) = '`+blockerRelationshipType+`'
-  AND d.target_work_item_id IN `+authorized+` AND d.source_work_item_id IN `+authorized), settings)
+  AND d.target_work_item_id IN `+authorized+` AND d.source_work_item_id IN `+authorized+`
+ORDER BY toString(t.repo_id), d.target_work_item_id, d.source_work_item_id
+LIMIT 1 BY toString(t.repo_id), d.target_work_item_id, d.source_work_item_id`), settings)
 	rowCount := 0
 	seenBlockers := map[string]struct{}{}
 	scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadWorkItemBlockers", statement, orgID, ids, func(row readers.RowScanner) error {
-		rowCount++
 		var sourceID, targetID, targetRepoID, sourceRepoID string
 		var sourceRepoCount uint64
 		if err := row.Scan(&sourceID, &targetID, &targetRepoID, &sourceRepoID, &sourceRepoCount); err != nil {
@@ -148,6 +149,7 @@ WHERE d.org_id = {org_id:String} AND concat(toString(t.repo_id), ':', d.target_w
 			return nil
 		}
 		seenBlockers[blockKey] = struct{}{}
+		rowCount++
 		if !budget.admit() {
 			return nil
 		}
@@ -227,11 +229,11 @@ INNER JOIN work_items AS s FINAL ON s.org_id = d.org_id AND s.work_item_id = d.s
 `+counterpartRepositoryJoinSQL("d.target_work_item_id")+`
 WHERE d.org_id = {org_id:String} AND concat(toString(s.repo_id), ':', d.source_work_item_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) != '`+blockerRelationshipType+`'
   AND d.source_work_item_id IN `+authorized+` AND d.target_work_item_id IN `+authorized+`
-ORDER BY d.target_work_item_id, lower(ifNull(d.relationship_type, ''))`), settings)
+ORDER BY toString(s.repo_id), d.source_work_item_id, d.target_work_item_id, `+dependencyrelation.KeySQL("d.relationship_type")+`, lower(ifNull(d.relationship_type, ''))
+LIMIT 1 BY toString(s.repo_id), d.source_work_item_id, d.target_work_item_id, `+dependencyrelation.KeySQL("d.relationship_type")), settings)
 	rowCount := 0
 	seenRelations := map[string]struct{}{}
 	scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadWorkItemRequiredChildren", statement, orgID, ids, func(row readers.RowScanner) error {
-		rowCount++
 		var sourceID, targetID, relationshipType, sourceRepoID, targetRepoID string
 		var targetRepoCount uint64
 		if err := row.Scan(&sourceID, &targetID, &relationshipType, &sourceRepoID, &targetRepoID, &targetRepoCount); err != nil {
@@ -246,15 +248,16 @@ ORDER BY d.target_work_item_id, lower(ifNull(d.relationship_type, ''))`), settin
 		// pair yield ONE fact. Dedupe before admit(): a twin must not spend
 		// output budget.
 		relationKey := dependencyrelation.Key(relationshipType)
-		emittedType := ""
-		if relationshipType != "" {
-			emittedType = dependencyrelation.EmittedSpelling(relationshipType)
-			key := sourceRepoID + "\x00" + sourceID + "\x00" + targetID + "\x00" + relationKey
-			if _, dup := seenRelations[key]; dup {
-				return nil
-			}
-			seenRelations[key] = struct{}{}
+		emittedType := dependencyrelation.EmittedSpelling(relationshipType)
+		// Empty and whitespace-only types share one key too (':fwd').
+		dedupeKey := sourceRepoID + "\x00" + sourceID + "\x00" + targetID + "\x00" + relationKey
+		if _, dup := seenRelations[dedupeKey]; dup {
+			return nil
 		}
+		seenRelations[dedupeKey] = struct{}{}
+		// Count DISTINCT relations only: the SQL already collapses twins before
+		// the probe limit, and a Go-side twin must not read as truncation.
+		rowCount++
 		if !budget.admit() {
 			return nil
 		}

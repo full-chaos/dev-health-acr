@@ -17,6 +17,12 @@ func TestKeyAndEmittedSpelling(t *testing.T) {
 		{"BLOCKS", "blocks:fwd", "blocks"},
 		{"requires", "requires:fwd", "requires"},
 		{"", ":fwd", ""},
+		{" \t ", ":fwd", ""},
+		// ASCII-only normalization, byte-for-byte what KeySQL does in ClickHouse:
+		// 'ς' and NBSP-wrapped spellings must NOT be Unicode-folded/trimmed (CHAOS-7177 r3).
+		{"ς", "ς:fwd", "ς"},
+		{"\u00a0requires\u00a0", "\u00a0requires\u00a0:fwd", "\u00a0requires\u00a0"},
+		{"Requires", "requires:fwd", "requires"},
 	} {
 		if got := Key(tc.raw); got != tc.key {
 			t.Errorf("Key(%q) = %q, want %q", tc.raw, got, tc.key)
