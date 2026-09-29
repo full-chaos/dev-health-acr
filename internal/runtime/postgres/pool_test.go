@@ -107,3 +107,15 @@ func newTestPostgresDSN(t *testing.T, ctx context.Context) string {
 	require.NoError(t, err)
 	return dsn
 }
+
+// Real PostgreSQL container: a wrong password is a server answer (28P01) and
+// must classify as ErrRejected, never as retryable ErrUnavailable.
+func TestOpen_wrongPasswordAgainstRealPostgreSQLIsRejectedNotUnavailable(t *testing.T) {
+	ctx := context.Background()
+	dsn := newTestPostgresDSN(t, ctx)
+	bad := strings.Replace(dsn, "postgres://acr:acr@", "postgres://acr:wrong-password@", 1)
+	require.NotEqual(t, dsn, bad, "test DSN shape changed; password corruption did not apply")
+	_, err := Open(ctx, Config{DSN: bad, PingTimeout: 2 * time.Second})
+	require.ErrorIs(t, err, ErrRejected)
+	require.NotErrorIs(t, err, ErrUnavailable)
+}
