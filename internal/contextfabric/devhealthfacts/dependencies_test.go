@@ -297,6 +297,7 @@ func TestRequiredChildrenProviderDedupesTwinRowsByCanonicalRelation(t *testing.T
 			{"WIDGET-101", "WIDGET-300", "relates_to", "repo-1", "repo-9", uint64(1)},
 			{"WIDGET-101", "WIDGET-200", "requires", "repo-1", "repo-9", uint64(1)},
 			{"WIDGET-101", "WIDGET-400", "blocked_by", "repo-1", "repo-9", uint64(1)},
+			{"WIDGET-101", "WIDGET-400", "IS_BLOCKED_BY", "repo-1", "repo-9", uint64(1)},
 		}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactRequiredChildren)
@@ -308,19 +309,54 @@ func TestRequiredChildrenProviderDedupesTwinRowsByCanonicalRelation(t *testing.T
 		t.Fatalf("ReadFacts() error = %v", err)
 	}
 	// relates+relates_to on WIDGET-200 -> 1; WIDGET-300 -> 1; distinct 'requires' -> 1; blocked_by -> 1, raw spelling kept.
+	perTarget := map[string]int{}
+	relByTarget := map[string]string{}
 	for _, fact := range result.Facts {
-		if id := fact.Fields["required_child_work_item_id"].String; id != nil && *id == "WIDGET-400" {
-			if rel := fact.Fields["relationship_type"].String; rel == nil || *rel != "blocked_by" {
-				t.Fatalf("inverted spelling changed: %#v", fact.Fields)
-			}
+		id := *fact.Fields["required_child_work_item_id"].String
+		perTarget[id+"/"+*fact.Fields["relationship_type"].String]++
+		relByTarget[id+"/"+*fact.Fields["relationship_type"].String] = *fact.Fields["relationship_type"].String
+	}
+	// Each (target, emitted spelling) exactly once: canonical 'relates_to' for the alias twin,
+	// raw lower-cased spelling for the inverted row, and BLOCKED_BY/IS_BLOCKED_BY collapsed.
+	for _, want := range []string{"WIDGET-200/relates_to", "WIDGET-300/relates_to", "WIDGET-200/requires"} {
+		if perTarget[want] != 1 {
+			t.Fatalf("%s count = %d, want 1: %v", want, perTarget[want], perTarget)
 		}
 	}
-	if len(result.Facts) != 4 {
-		t.Fatalf("facts = %d, want 4 (twin collapsed): %#v", len(result.Facts), result.Facts)
-	}
-	for _, fact := range result.Facts {
-		if rel := fact.Fields["relationship_type"].String; rel != nil && *rel == "relates" {
-			t.Fatalf("alias spelling leaked: %#v", fact.Fields)
+	inverted := 0
+	for key, n := range perTarget {
+		if strings.HasPrefix(key, "WIDGET-400/") {
+			inverted += n
 		}
+	}
+	if inverted != 1 {
+		t.Fatalf("WIDGET-400 facts = %d, want 1 (BLOCKED_BY and IS_BLOCKED_BY are one relation): %v", inverted, perTarget)
+	}
+	if len(result.Facts) != 4 || perTarget["WIDGET-200/relates"] != 0 {
+		t.Fatalf("facts = %d, alias leaked: %v", len(result.Facts), perTarget)
+	}
+}
+
+// CHAOS-7177: 'blocks' and 'BLOCKS' rows for one pair both survive FINAL (the
+// raw type is part of the table key) and the predicate is case-insensitive.
+func TestBlockersProviderDedupesCaseVariantRows(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM work_item_dependencies", rows: [][]any{
+			{"WIDGET-200", "WIDGET-101", "repo-1", "repo-9", uint64(1)},
+			{"WIDGET-200", "WIDGET-101", "repo-1", "repo-9", uint64(1)},
+			{"WIDGET-300", "WIDGET-101", "repo-1", "repo-9", uint64(1)},
+		}},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactBlockers)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactBlockers, Subjects: []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(result.Facts) != 2 {
+		t.Fatalf("blocker facts = %d, want 2 (WIDGET-200 once, WIDGET-300 once)", len(result.Facts))
 	}
 }

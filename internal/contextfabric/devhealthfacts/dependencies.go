@@ -130,6 +130,7 @@ INNER JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = d.t
 WHERE d.org_id = {org_id:String} AND concat(toString(t.repo_id), ':', d.target_work_item_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) = '`+blockerRelationshipType+`'
   AND d.target_work_item_id IN `+authorized+` AND d.source_work_item_id IN `+authorized), settings)
 	rowCount := 0
+	seenBlockers := map[string]struct{}{}
 	scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadWorkItemBlockers", statement, orgID, ids, func(row readers.RowScanner) error {
 		rowCount++
 		var sourceID, targetID, targetRepoID, sourceRepoID string
@@ -141,6 +142,14 @@ WHERE d.org_id = {org_id:String} AND concat(toString(t.repo_id), ':', d.target_w
 		if !ok {
 			return nil
 		}
+		// CHAOS-7177: the predicate above is case-insensitive, and the table key
+		// carries the raw type, so 'blocks' and 'BLOCKS' rows for one pair both
+		// survive FINAL. One pair blocks once.
+		blockKey := targetRepoID + "\x00" + targetID + "\x00" + sourceID
+		if _, dup := seenBlockers[blockKey]; dup {
+			return nil
+		}
+		seenBlockers[blockKey] = struct{}{}
 		if !budget.admit() {
 			return nil
 		}
@@ -237,17 +246,18 @@ WHERE d.org_id = {org_id:String} AND concat(toString(s.repo_id), ':', d.source_w
 		// table so a stale 'relates' row and a live 'relates_to' row for one
 		// pair yield ONE fact. Dedupe before admit(): a twin must not spend
 		// output budget.
-		canonicalType := ""
+		canonicalType, emittedType := "", ""
 		if relationshipType != "" {
 			typ, swap := devhealthsource.CanonicalDependencyRelationship(relationshipType)
-			canonicalType = strings.ToLower(string(typ))
+			canonicalType = strings.ToLower(string(typ)) + "\x00" + strconv.FormatBool(swap)
+			emittedType = strings.ToLower(string(typ))
 			if swap {
 				// An inverted spelling (BLOCKED_BY) names the relation from the
-				// other side: keep the raw spelling on the wire, the swap flag
-				// still keeps it out of the forward relation's dedupe key.
-				canonicalType = strings.ToLower(strings.TrimSpace(relationshipType))
+				// other side: keep the raw spelling on the wire. The dedupe key
+				// stays canonical, so BLOCKED_BY and IS_BLOCKED_BY still collapse.
+				emittedType = strings.ToLower(strings.TrimSpace(relationshipType))
 			}
-			key := sourceRepoID + "\x00" + sourceID + "\x00" + targetID + "\x00" + canonicalType + "\x00" + strconv.FormatBool(swap)
+			key := sourceRepoID + "\x00" + sourceID + "\x00" + targetID + "\x00" + canonicalType
 			if _, dup := seenRelations[key]; dup {
 				return nil
 			}
@@ -260,8 +270,8 @@ WHERE d.org_id = {org_id:String} AND concat(toString(s.repo_id), ':', d.source_w
 		if ref, ok := counterpartWorkItemRef(targetRepoID, targetRepoCount, targetID); ok {
 			fields["required_child_work_item_ref"] = contextfabric.StringFactValue(ref)
 		}
-		if canonicalType != "" {
-			fields["relationship_type"] = contextfabric.StringFactValue(canonicalType)
+		if emittedType != "" {
+			fields["relationship_type"] = contextfabric.StringFactValue(emittedType)
 		}
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactRequiredChildren, Subject: subject, Fields: fields,

@@ -145,3 +145,20 @@ func TestAIWorkflowRunsSourceQuery_usesRunIDForBlankCompositeLabel(t *testing.T)
 		t.Fatal("ai_workflow_runs.v1 must use its real run ID when descriptive fields are blank")
 	}
 }
+
+// CHAOS-7177: the dependency evidence id is per (source, target), so twin rows
+// (a stale 'relates' and a live 'relates_to') must collapse to one evidence
+// row or the locator re-query sees two rows for one id and answers not found.
+func TestWorkItemDependenciesSourceQueryDedupesPerEvidenceID(t *testing.T) {
+	t.Parallel()
+	var statement string
+	for _, q := range contextpacket.SourceQueryCatalogV1 {
+		if q.ID == "work_item_dependencies.v1" {
+			statement = q.Statement
+		}
+	}
+	if !strings.Contains(statement, "LIMIT 1 BY d.source_work_item_id, d.target_work_item_id") ||
+		!strings.Contains(statement, "ORDER BY d.source_work_item_id, d.target_work_item_id, d.last_synced DESC, d.relationship_type ASC") {
+		t.Fatalf("work_item_dependencies.v1 does not deterministically dedupe per evidence id: %s", statement)
+	}
+}
