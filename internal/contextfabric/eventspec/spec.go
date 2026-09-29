@@ -2198,6 +2198,90 @@ var DirectReadAuthorization = Event{
 	},
 }
 
+// The run_operation vocabularies (CHAOS-7072). directread imports graphrank,
+// which imports this package, so the values are literal here;
+// directread's TestOperationReadEventVocabulariesMatchProducer holds each
+// list equal to the producer's own vocabulary function.
+var (
+	operationReadCallerClasses = []string{"unrestricted", "restricted"}
+	operationReadScopeClasses  = []string{"org_wide", "client_scope", "forced_grant", "not_reached"}
+	operationReadDecisions     = []string{"served", "refused", "operation_unavailable", "upstream_error", "upstream_timeout", "authorization_unavailable"}
+	operationReadCompleteness  = []string{"declared_complete", "declared_partial", "unknown"}
+	operationReadResults       = []string{"data", "empty_unverified", "empty_declared"}
+	operationReadRefusalCodes  = []string{
+		"unknown_operation", "variable_not_allowed", "variable_out_of_range", "person_scope_not_served",
+		"basis_dependent_shape", "no_granted_scope", "operation_not_served_for_caller", "response_budget",
+		"invalid_request", "scope_required", "row_outside_grant", "policy_stale", "denied_or_not_found",
+	}
+	operationReadErrorClasses = []string{"graphql_errors", "decode", "http_status", "transport", "canceled", "timeout", "not_found", "concurrency_wait"}
+)
+
+// OperationRead records one run_operation call (CHAOS-7036 design J.3): the
+// operation, the caller and scope class, the terminal decision, and the
+// edge counts that must stay zero (rows_foreign, paths_removed). The
+// operation is a catalogue name or "unknown"; a client-supplied name is
+// never written. No subject id, row value, variable value or credential.
+var OperationRead = Event{
+	ID: "contextfabric.operation_read", Msg: "context fabric operation read", Level: LevelInfo,
+	Multiplicity: MultiplicityZeroOrOnePerRequest, Attribution: []string{"org_id"},
+	BoundedAggregation: "one line per run_operation request; closed vocabularies, counts and digests only",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "operation", Type: FieldString, Presence: PresenceRequired},
+		{Key: "caller_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: operationReadCallerClasses},
+		{Key: "scope_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: operationReadScopeClasses},
+		{Key: "decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: operationReadDecisions},
+		{Key: "forced_by_grant", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "variables_rejected", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "rows_checked", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "rows_foreign", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "paths_removed", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "completeness", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: operationReadCompleteness},
+		{Key: "bytes", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "latency_ms", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "schema_digest", Type: FieldString, Presence: PresenceRequired},
+		{Key: "document_digest", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the operation is a served catalogue operation"},
+		{Key: "result", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call is served", ClosedVocabulary: operationReadResults},
+		{Key: "refusal_code", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call is refused", ClosedVocabulary: operationReadRefusalCodes},
+		{Key: "error_class", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call ends upstream_error, upstream_timeout or operation_unavailable", ClosedVocabulary: operationReadErrorClasses},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// The find_subjects vocabularies of the direct read line (CHAOS-7072).
+// directread imports graphrank, which imports this package, so the values
+// are literal here; directread's TestDirectReadEventVocabulariesMatchProducer
+// holds each list equal to the producer's own vocabulary.
+var (
+	directReadTools       = []string{"find_subjects"}
+	directReadModes       = []string{"list", "name"}
+	directReadStatuses    = []string{"complete", "partial", "empty", "ambiguous", "invalid_request", "unavailable"}
+	directReadErrorClass  = []string{"invalid_request", "deadline_exceeded", "canceled", "dependency_unavailable", "graph_error"}
+	directReadSubjectKind = contractsv1.ContextFabricSubjectKindVocabulary()
+)
+
+// DirectRead records one direct read call (CHAOS-7036 design J.3). In slice
+// S1a the only producer is find_subjects: the mode, the requested kinds, the
+// kinds of the admitted subjects returned, how many were returned, the
+// terminal status and the latency. Never an id, a label or the query text.
+var DirectRead = Event{
+	ID: "contextfabric.direct_read", Msg: "context fabric direct read", Level: LevelInfo,
+	Multiplicity: MultiplicityZeroOrOnePerRequest, Attribution: []string{"org_id"},
+	BoundedAggregation: "one line per direct read request; closed vocabularies and counts only, never ids, labels or query text",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "tool", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: directReadTools},
+		{Key: "mode", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: directReadModes},
+		{Key: "kinds", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(directReadSubjectKind[:])},
+		{Key: "subject_kinds", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(directReadSubjectKind[:])},
+		{Key: "count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "status", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: directReadStatuses},
+		{Key: "latency_ms", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "error_class", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call ends invalid_request or unavailable", ClosedVocabulary: directReadErrorClass},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
 // The evidence-expansion vocabularies, each derived from the one array its
 // producer declares.
 var (
@@ -2676,6 +2760,8 @@ var All = []Event{
 	WorkItemStoredServing,
 	StoredResultAuthorization,
 	DirectReadAuthorization,
+	OperationRead,
+	DirectRead,
 	EvidenceExpansion,
 	CountPopulationScope,
 	FrameValidation,

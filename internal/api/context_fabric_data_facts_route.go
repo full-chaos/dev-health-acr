@@ -47,7 +47,7 @@ func (a *App) contextFabricDataFactsHandler() http.HandlerFunc {
 		}
 		var request directread.FactsRequest
 		if err := decodeJSONBody(w, r, contextFabricDataFactsMaxRequestBytes, &request); err != nil {
-			writeError(w, r, http.StatusBadRequest, "invalid_request", "The read_facts request is not valid JSON for its declared shape", false, map[string]any{"reason": directread.RefusalInvalidRequest})
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "The read_facts request is not valid JSON for its declared shape", false, map[string]any{"reason": directread.FactsRefusalInvalidRequest})
 			return
 		}
 		response, err := reader.Read(r.Context(), principal, request)

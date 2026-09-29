@@ -1,0 +1,12 @@
+{
+ "operation": "compoundingRisk",
+ "variables": {
+  "filter": {
+   "breakout": "REPO",
+   "repoIds": [
+    "repository:7b9583ee-1111-4222-8333-444455556666"
+   ]
+  }
+ },
+ "max_bytes": 32768
+}

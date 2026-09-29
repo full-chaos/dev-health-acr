@@ -256,7 +256,7 @@ func TestChaos7073EmbeddedGateClauses(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if response.Status != StatusDenied || len(response.Request.SubjectsRefused) != 1 || response.Request.SubjectsRefused[0].Answer != RefusalDeniedOrNotFound {
+		if response.Status != StatusDenied || len(response.Request.SubjectsRefused) != 1 || response.Request.SubjectsRefused[0].Answer != FactsRefusalDeniedOrNotFound {
 			t.Errorf("project P: status %q refused %v, want denied with denied_or_not_found", response.Status, response.Request.SubjectsRefused)
 		}
 	})

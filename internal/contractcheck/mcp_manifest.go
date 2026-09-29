@@ -36,6 +36,9 @@ func (c *repositoryCheck) validateMCP() error {
 		"investigate_question": false,
 		"investigation_result": false,
 		"read_facts":           false,
+		"data_catalog":         false,
+		"find_subjects":        false,
+		"run_operation":        false,
 		"record_episode":       false,
 	}
 	for index, raw := range tools {

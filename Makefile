@@ -247,9 +247,14 @@ vet:
 
 contract-write:
 	go run ./cmd/contractcheck -write
+	go run ./cmd/operationpolicy
 
 contract-test:
 	go run ./cmd/contractcheck
+# CHAOS-7036 S1a: contracts/mcp/operations.v1.json (and its embedded copy
+# under internal/contextfabric/directread) must equal a fresh generation from
+# the vendored ops catalogue in contracts/mcp/ops-catalogue/.
+	go run ./cmd/operationpolicy -check
 # The Go-struct-to-schema anchor lives in a Go test rather than in
 # contractcheck, because it needs go/types over internal/contracts/v1 and
 # contractcheck is a dependency-light offline binary. It runs here too so the

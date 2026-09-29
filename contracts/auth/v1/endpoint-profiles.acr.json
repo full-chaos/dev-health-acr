@@ -96,8 +96,8 @@
         "description": "protectedRuntimeHandler(RequestClassAuth, ScopeContextRead, entitlement=false, allowWebAssertions=true): Authenticator.MiddlewareFor(true,...) dispatches on X-ACR-Web-Assertion presence (WebAssertionVerifier) vs Authorization: Bearer (credential-store lookup), then RequireScope(context:read).",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 203,
-          "line_end": 213,
+          "line": 227,
+          "line_end": 237,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -151,8 +151,8 @@
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=false, allowWebAssertions=true).",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 203,
-          "line_end": 213,
+          "line": 227,
+          "line_end": 237,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -208,8 +208,8 @@
         "description": "protectedRuntimeHandler(RequestClassEvidence, ScopeEvidenceRead, entitlement=TRUE (agentContextRuntimeEntitlement), allowWebAssertions=true).",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 203,
-          "line_end": 213,
+          "line": 227,
+          "line_end": 237,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -262,8 +262,8 @@
         "description": "protectedRuntimeHandler(RequestClassEpisode, ScopeEpisodeWrite, entitlement=true, allowWebAssertions=FALSE) -- the only agent-context route that does NOT accept a web assertion; episode writes require a bearer fcacr_ credential.",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 203,
-          "line_end": 213,
+          "line": 227,
+          "line_end": 237,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -564,8 +564,8 @@
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7071 direct data route (CHAOS-7036 E.5); bearer fcacr_ credential only.",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 203,
-          "line_end": 213,
+          "line": 227,
+          "line_end": 237,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -584,7 +584,7 @@
       "entitlement_requirement": "agentContextRuntimeEntitlement",
       "disclosure_behavior": "writeError() closed envelope; a subject the caller may not read answers denied_or_not_found, identical for denied and absent.",
       "gaps": [
-        "CHAOS-7071 (S0) registers this route with its full protection chain and a stub handler that answers 501 feature_not_enabled (details.reason=not_implemented); the handler is filled by S1a (data_catalog)."
+        "CHAOS-7072 (S1a) serves data_catalog: the catalogue is built for the caller (grant class decides the operation list; the caller section carries scopes and grant class only, never repository names or grant counts). A caller without data:read sees the operation list with available=false, reason scope_missing_data_read. Unknown sections parameter = 400 invalid_request."
       ]
     },
     {
@@ -609,8 +609,8 @@
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7071 direct data route (CHAOS-7036 E.5); bearer fcacr_ credential only.",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 203,
-          "line_end": 213,
+          "line": 227,
+          "line_end": 237,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -629,7 +629,7 @@
       "entitlement_requirement": "agentContextRuntimeEntitlement",
       "disclosure_behavior": "writeError() closed envelope; a subject the caller may not read answers denied_or_not_found, identical for denied and absent.",
       "gaps": [
-        "CHAOS-7071 (S0) registers this route with its full protection chain and a stub handler that answers 501 feature_not_enabled (details.reason=not_implemented); the handler is filled by S1a (find_subjects)."
+        "CHAOS-7072 (S1a) serves find_subjects (modes list and name; owned_by and handle are not built). Every returned subject passes the direct-read subject gate for the caller in the same call; total_known counts admitted subjects only. No graph composed = 503 upstream_unavailable."
       ]
     },
     {
@@ -654,8 +654,8 @@
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7071 direct data route (CHAOS-7036 E.5); bearer fcacr_ credential only.",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 203,
-          "line_end": 213,
+          "line": 227,
+          "line_end": 237,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -697,8 +697,8 @@
         "description": "protectedRuntimeHandler(RequestClassData, ScopeDataRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7071 direct data route (CHAOS-7036 E.5); bearer fcacr_ credential only.",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 203,
-          "line_end": 213,
+          "line": 227,
+          "line_end": 237,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -717,7 +717,7 @@
       "entitlement_requirement": "agentContextRuntimeEntitlement",
       "disclosure_behavior": "writeError() closed envelope; a subject the caller may not read answers denied_or_not_found, identical for denied and absent.",
       "gaps": [
-        "CHAOS-7071 (S0) registers this route with its full protection chain and a stub handler that answers 501 feature_not_enabled (details.reason=not_implemented); the handler is filled by S1a (run_operation). Needs the data:read scope (decision K4), never implied by context:read."
+        "CHAOS-7072 (S1a) serves run_operation over the internal ops query service (four X-DH-Internal-* headers, no Authorization). A policy refusal is HTTP 200 with call=refused and a typed refusal code; 501 feature_not_enabled (details.reason=data_query_not_configured) when ACR_DATA_QUERY_URL is unset or the policy did not load; 503 when the subject gate is unavailable. Needs the data:read scope (decision K4), never implied by context:read."
       ]
     },
     {

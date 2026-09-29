@@ -63,6 +63,15 @@ spec:
         - protocol: TCP
           port: {{ .Values.networkPolicy.egress.clickhousePort }}
     {{- end }}
+    {{- /* S1a: acr-api calls the ops query service internal listener
+         (POST <ACR_DATA_QUERY_URL>/query). Port-only like the rules above;
+         0/unset renders no rule. This policy selects acr-api only; acr-mcp
+         has its own policy and never dials the query service. */}}
+    {{- if .Values.networkPolicy.egress.queryInternalPort }}
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.egress.queryInternalPort }}
+    {{- end }}
     {{- /* CHAOS-4055: acr-api's optional Investigator dials FalkorDB on the
          same endpoint contract as acr-projector; without this rule a
          configured contextFabric.falkor.addr was unreachable from the API

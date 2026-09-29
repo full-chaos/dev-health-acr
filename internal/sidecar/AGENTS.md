@@ -13,6 +13,7 @@ Hardened local STDIO MCP client: HTTPS-only API boundary, credential precedence 
 | Task | Location | Notes |
 |------|----------|-------|
 | API client setup/calls | `api_client*.go` | HTTPS enforcement, redirect refusal, bearer token handling |
+| Direct data client and text | `api_client_data.go`, `render_data.go` | `DataCatalog`, `FindSubjects`, `RunOperation` return the hosted JSON verbatim (`json.RawMessage`, checked for shape only); `Render*Summary` builds the 4 KiB bounded, untrusted-marked text. Model-free: links no engine, model or embedding package (`internal/mcp/data_tools_static_test.go`) |
 | Configuration parsing | `config*.go` | Bounded values, safe error messages (never expose raw values) |
 | Credential resolution/persistence | `credential*.go` | Precedence: env > explicit/default keyring > explicit/default file; shape validation and atomic fallback |
 | Credential enumeration for logout | `credential_material.go` | `CollectCredentialMaterial` (all locations, fail-closed) and `DistinctCredentialTokens` |

@@ -57,6 +57,18 @@ func (a *App) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	if entitled && capabilities.Permissions.ContextRead && a.directFacts() != nil {
 		capabilities.EnabledTools = append(capabilities.EnabledTools, "read_facts")
 	}
+	// CHAOS-7072 (S1a, design E.5): the direct data tools, each advertised
+	// only when this deployment can serve it for this caller. data_catalog
+	// and find_subjects need context:read and a composed graph (the lookup);
+	// run_operation needs the separate data:read scope AND a runner, which
+	// exists only when the internal query service URL is configured and the
+	// operation policy loaded, AND the subject gate over a real graph.
+	if entitled && capabilities.Permissions.ContextRead && a.dataSubjects() != nil {
+		capabilities.EnabledTools = append(capabilities.EnabledTools, "data_catalog", "find_subjects")
+	}
+	if entitled && auth.HasScope(principal.Permissions, auth.ScopeDataRead) && a.dataOperations() != nil && a.dataGateComposed() {
+		capabilities.EnabledTools = append(capabilities.EnabledTools, "run_operation")
+	}
 	if entitled && capabilities.Permissions.EpisodeWrite && a.runtime.Episodes != nil {
 		capabilities.EnabledTools = append(capabilities.EnabledTools, "record_episode")
 	}

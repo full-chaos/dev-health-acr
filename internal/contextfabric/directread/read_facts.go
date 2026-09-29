@@ -104,9 +104,9 @@ const (
 
 // Refusal reasons (typed request errors).
 const (
-	RefusalInvalidRequest   = "invalid_request"
-	RefusalKindNotServed    = "kind_not_served"
-	RefusalDeniedOrNotFound = "denied_or_not_found"
+	FactsRefusalInvalidRequest   = "invalid_request"
+	FactsRefusalKindNotServed    = "kind_not_served"
+	FactsRefusalDeniedOrNotFound = "denied_or_not_found"
 )
 
 // FactsRequest is the read_facts request.
@@ -142,7 +142,7 @@ type RequestError struct {
 func (e *RequestError) Error() string { return e.Reason + ": " + e.Detail }
 
 func invalid(format string, args ...any) error {
-	return &RequestError{Reason: RefusalInvalidRequest, Detail: fmt.Sprintf(format, args...)}
+	return &RequestError{Reason: FactsRefusalInvalidRequest, Detail: fmt.Sprintf(format, args...)}
 }
 
 // FactsResponse is the read_facts response.
@@ -418,7 +418,7 @@ func (r *FactsReader) Read(ctx context.Context, principal storage.Principal, req
 			response.Request.Subjects = append(response.Request.Subjects, ref)
 			continue
 		}
-		response.Request.SubjectsRefused = append(response.Request.SubjectsRefused, RefusedSubject{Kind: ref.Kind, CanonicalID: ref.CanonicalID, Answer: RefusalDeniedOrNotFound})
+		response.Request.SubjectsRefused = append(response.Request.SubjectsRefused, RefusedSubject{Kind: ref.Kind, CanonicalID: ref.CanonicalID, Answer: FactsRefusalDeniedOrNotFound})
 	}
 	record.AdmittedCount = admitted.Len()
 	if admitted.Len() == 0 || len(plan.kinds) == 0 {
@@ -525,7 +525,7 @@ func (r *FactsReader) validate(request FactsRequest, capabilities map[contextfab
 		case !ok:
 			return plan, invalid("kind %q is not a fact kind", name)
 		case !capability.DirectServable():
-			plan.echo.KindsRefused = append(plan.echo.KindsRefused, RefusedKind{Kind: name, Reason: RefusalKindNotServed})
+			plan.echo.KindsRefused = append(plan.echo.KindsRefused, RefusedKind{Kind: name, Reason: FactsRefusalKindNotServed})
 		default:
 			plan.kinds = append(plan.kinds, kind)
 			plan.echo.Kinds = append(plan.echo.Kinds, name)

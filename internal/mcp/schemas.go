@@ -32,6 +32,12 @@ const (
 	readFactsResponseSchemaFile           = "schemas/mcp_read_facts_response.v1.schema.json"
 	recordEpisodeRequestSchemaFile        = "schemas/mcp_record_episode_request.v1.schema.json"
 	recordEpisodeResponseSchemaFile       = "schemas/mcp_record_episode_response.v1.schema.json"
+	dataCatalogRequestSchemaFile          = "schemas/mcp_data_catalog_request.v1.schema.json"
+	dataCatalogResponseSchemaFile         = "schemas/mcp_data_catalog_response.v1.schema.json"
+	findSubjectsRequestSchemaFile         = "schemas/mcp_find_subjects_request.v1.schema.json"
+	findSubjectsResponseSchemaFile        = "schemas/mcp_find_subjects_response.v1.schema.json"
+	runOperationRequestSchemaFile         = "schemas/mcp_run_operation_request.v1.schema.json"
+	runOperationResponseSchemaFile        = "schemas/mcp_run_operation_response.v1.schema.json"
 	toolManifestFile                      = "schemas/tools.v1.json"
 )
 

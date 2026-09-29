@@ -39,6 +39,12 @@ type Inputs struct {
 	// UnproducedRenderKinds are render kinds a family may name that no
 	// producer builds today.
 	UnproducedRenderKinds []string
+	// DataOperations and DataNotServed are the direct data operations
+	// catalogue (CHAOS-7072): the run_operation names with their purpose and
+	// which caller classes they are served to, and the registered documents
+	// that are not served with their refusal code.
+	DataOperations []DataOperationRow
+	DataNotServed  []DataNotServedRow
 }
 
 // FromRegistries reads the live registries.
@@ -84,5 +90,6 @@ func FromRegistries() Inputs {
 		string(contractsv1.ContextFabricInvestigationClarificationRequired),
 		string(contractsv1.ContextFabricInvestigationNoMatch),
 	}
+	in.DataOperations, in.DataNotServed = dataRegistryRows()
 	return in
 }

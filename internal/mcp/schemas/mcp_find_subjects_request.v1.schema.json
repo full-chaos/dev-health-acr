@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/acr/v1/mcp_find_subjects_request.v1.schema.json",
+  "title": "ACR MCP find_subjects Request v1",
+  "description": "Input for the find_subjects tool. Two modes. List: pass kind alone to list the subjects of one kind. Name: pass query (and optionally kinds) to find subjects whose name, alias or provider key equals the query exactly. Neither is refused. Every subject returned is one your credential may read.",
+  "examples": [
+    {
+      "kind": "repository"
+    },
+    {
+      "query": "acme/payments",
+      "kinds": [
+        "repository"
+      ]
+    }
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "type": "string",
+      "description": "List mode: the subject kind to list, for example repository, team or project. Listing returns one page ordered by canonical_id; pass the returned next_cursor as cursor for the next page. In name mode it adds this kind to the kinds searched.",
+      "enum": [
+        "organization",
+        "team",
+        "project",
+        "repository",
+        "work_item",
+        "pull_request",
+        "deployment",
+        "incident",
+        "document",
+        "decision",
+        "episode",
+        "metric",
+        "pull_request_review",
+        "ci_pipeline_run",
+        "work_item_ref"
+      ]
+    },
+    "query": {
+      "type": "string",
+      "description": "Name mode: the exact name, alias or provider key of the subject you look for (case-insensitive), for example a repository slug such as acme/payments. It is an exact match, not a search phrase.",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "kinds": {
+      "type": "array",
+      "description": "Name mode: the subject kinds to search. Omit it to search repository, project and team. At most 8. Do not send kinds in list mode.",
+      "items": {
+        "type": "string",
+        "enum": [
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      "minItems": 1,
+      "maxItems": 8,
+      "uniqueItems": true
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Page size, 1 to 200. The default is 25. A larger value is lowered to 200.",
+      "minimum": 1,
+      "maximum": 200
+    },
+    "cursor": {
+      "type": "string",
+      "description": "List mode: the next_cursor of the previous page, exactly as returned. It is a position, not permission: every page is checked again for your credential. Opaque: do not build or parse it.",
+      "minLength": 1,
+      "maxLength": 700
+    }
+  }
+}

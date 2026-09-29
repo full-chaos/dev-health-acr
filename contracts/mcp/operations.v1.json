@@ -1,0 +1,5572 @@
+{
+  "contract": "acr.mcp.operations.v1",
+  "generator": "cmd/operationpolicy",
+  "source": {
+    "repository": "full-chaos/dev-health-ops",
+    "commit": "9dffd5f77bf9bfc415b68f5236fdc8275e8f6b85",
+    "tool": "go run ./cmd/registrydump -file internal/queryapi/server/query_route.go",
+    "schema_digest": "sha256:d5ba09b1f460953482518ae4f5653ba6350b085bdc39621c5888756741118117",
+    "registry_sha256": "d90c184bf7d6418e25bc7b56b4a3680402b27acd4d27b333f51bd14f58a82b93",
+    "registry_rows": 55
+  },
+  "person_name_tokens": [
+    "actor",
+    "assignee",
+    "author",
+    "committer",
+    "createdby",
+    "developer",
+    "email",
+    "identity",
+    "login",
+    "maintainer",
+    "reviewer",
+    "user"
+  ],
+  "operations": [
+    {
+      "name": "acrRepositoryScopes",
+      "document_operation_name": "ACRRepositoryScopes",
+      "kind": "query",
+      "digest": "1fe3d5c84c8c047b57cdaf71a71370583d615156e78dcb8991b8f954fae41773",
+      "document_text": "query ACRRepositoryScopes($orgId: String!) {\n  catalog(orgId: $orgId, dimension: REPO) {\n    values {\n      value\n      count\n      __typename\n    }\n    __typename\n  }\n}",
+      "cost_class": "catalog",
+      "deadline_seconds": 30,
+      "variables": [
+        {
+          "path": "orgId",
+          "type": "String!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "acr_principal_org"
+        }
+      ],
+      "person_variables": [],
+      "constraints": [],
+      "scopes": [
+        {
+          "caller": "unrestricted",
+          "served": true,
+          "basis": "[ops] analytics/catalog.go:110-133 lists every well-formed org repository slug, max 100 else an ops error (RM §4, V)"
+        },
+        {
+          "caller": "restricted",
+          "served": false,
+          "refusal": {
+            "code": "operation_not_served_for_caller",
+            "reason": "no grant logic in ops and values are lowercased owner/name slugs, not uuids, so no row id check is possible ([ops] analytics/catalog.go:119,206-232; RM §4: design pointer 'keeps granted repositories' is STALE)"
+          },
+          "basis": "no grant logic in ops and values are lowercased owner/name slugs, not uuids, so no row id check is possible ([ops] analytics/catalog.go:119,206-232; RM §4: design pointer 'keeps granted repositories' is STALE)"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "catalog.values[*].value",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "catalog.values[*].count",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "catalog.values[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "catalog.__typename",
+          "type": "String",
+          "leaf": "typename"
+        }
+      ],
+      "withheld_outputs": [],
+      "disclosure": []
+    },
+    {
+      "name": "capacityForecast",
+      "document_operation_name": "CapacityForecast",
+      "kind": "query",
+      "digest": "b4fb8f075aba9954714f10f7f4451242d969548d6392d778dae1177759f80780",
+      "document_text": "query CapacityForecast($orgId: String!, $input: CapacityForecastInput) {\n  capacityForecast(orgId: $orgId, input: $input) {\n    forecastId\n    computedAt\n    teamId\n    workScopeId\n    backlogSize\n    targetItems\n    targetDate\n    p50Date\n    p85Date\n    p95Date\n    p50Days\n    p85Days\n    p95Days\n    p50Items\n    p85Items\n    p95Items\n    throughputMean\n    throughputStddev\n    historyDays\n    insufficientHistory\n    highVariance\n    __typename\n  }\n}",
+      "cost_class": "compute",
+      "deadline_seconds": 30,
+      "max_in_flight_per_org": 1,
+      "variables": [
+        {
+          "path": "orgId",
+          "type": "String!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "acr_principal_org"
+        },
+        {
+          "path": "input",
+          "type": "CapacityForecastInput",
+          "kind": "object",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "input.teamId",
+          "type": "String",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "subject": {
+            "kind": "team",
+            "acr_prefix": "team:",
+            "ops_form": "bare_id"
+          }
+        },
+        {
+          "path": "input.workScopeId",
+          "type": "String",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "work scope id form between acr and ops is UNCONFIRMED (POLICY-ARTIFACT-v0)"
+          }
+        },
+        {
+          "path": "input.targetItems",
+          "type": "Int",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "min": 1,
+          "max": 100000
+        },
+        {
+          "path": "input.targetDate",
+          "type": "Date",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "input.historyDays",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "90",
+          "allowed": true,
+          "source": "client",
+          "min": 1,
+          "max": 180
+        },
+        {
+          "path": "input.simulations",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "10000",
+          "allowed": true,
+          "source": "client",
+          "min": 1,
+          "max": 10000
+        }
+      ],
+      "person_variables": [],
+      "constraints": [
+        {
+          "kind": "max_days_ahead",
+          "path": "input.targetDate",
+          "max_days": 365,
+          "code": "variable_out_of_range",
+          "reason": "targetDate at most 365 days ahead (design D.6)"
+        }
+      ],
+      "scopes": [
+        {
+          "caller": "unrestricted",
+          "served": true,
+          "basis": "[ops] capacityforecast/clickhouse.go:47-61 apply teamId (RM §16)"
+        },
+        {
+          "caller": "restricted",
+          "served": false,
+          "refusal": {
+            "code": "operation_not_served_for_caller",
+            "reason": "no repository scope; team aggregate with compute cost ([ops] capacityforecast/clickhouse.go:47-61; capacityforecast.go:130; RM §16); REFUSED until the K2 team path is read"
+          },
+          "basis": "no repository scope; team aggregate with compute cost ([ops] capacityforecast/clickhouse.go:47-61; capacityforecast.go:130; RM §16); REFUSED until the K2 team path is read"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "capacityForecast.forecastId",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.computedAt",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.teamId",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.workScopeId",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.backlogSize",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.targetItems",
+          "type": "Int",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.targetDate",
+          "type": "Date",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.p50Date",
+          "type": "Date",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.p85Date",
+          "type": "Date",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.p95Date",
+          "type": "Date",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.p50Days",
+          "type": "Int",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.p85Days",
+          "type": "Int",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.p95Days",
+          "type": "Int",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.p50Items",
+          "type": "Int",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.p85Items",
+          "type": "Int",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.p95Items",
+          "type": "Int",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.throughputMean",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.throughputStddev",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.historyDays",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.insufficientHistory",
+          "type": "Boolean!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.highVariance",
+          "type": "Boolean!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.__typename",
+          "type": "String",
+          "leaf": "typename"
+        }
+      ],
+      "withheld_outputs": [],
+      "disclosure": [],
+      "notes": [
+        "non-deterministic: a random seed per call, no seed argument (capacityforecast.go:139-148; A1.1)",
+        "null result = no history or no target, indistinguishable (capacityforecast.go:229-260)"
+      ]
+    },
+    {
+      "name": "capacityForecasts",
+      "document_operation_name": "CapacityForecasts",
+      "kind": "query",
+      "digest": "43890adbbf75ac3ad71c29f728a82e35d035c3f2c701f0ced116559fa28b6c20",
+      "document_text": "query CapacityForecasts($orgId: String!, $filters: CapacityForecastFilterInput) {\n  capacityForecasts(orgId: $orgId, filters: $filters) {\n    edges {\n      node {\n        forecastId\n        computedAt\n        teamId\n        workScopeId\n        backlogSize\n        targetItems\n        targetDate\n        p50Date\n        p85Date\n        p95Date\n        p50Days\n        p85Days\n        p95Days\n        p50Items\n        p85Items\n        p95Items\n        throughputMean\n        throughputStddev\n        historyDays\n        insufficientHistory\n        highVariance\n        __typename\n      }\n      cursor\n      __typename\n    }\n    pageInfo {\n      hasNextPage\n      hasPreviousPage\n      startCursor\n      endCursor\n      __typename\n    }\n    totalCount\n    __typename\n  }\n}",
+      "cost_class": "list",
+      "deadline_seconds": 30,
+      "variables": [
+        {
+          "path": "orgId",
+          "type": "String!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "acr_principal_org"
+        },
+        {
+          "path": "filters",
+          "type": "CapacityForecastFilterInput",
+          "kind": "object",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "filters.teamId",
+          "type": "String",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "subject": {
+            "kind": "team",
+            "acr_prefix": "team:",
+            "ops_form": "bare_id"
+          }
+        },
+        {
+          "path": "filters.workScopeId",
+          "type": "String",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "work scope id form between acr and ops is UNCONFIRMED (POLICY-ARTIFACT-v0)"
+          }
+        },
+        {
+          "path": "filters.fromDate",
+          "type": "Date",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "filters.toDate",
+          "type": "Date",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "filters.limit",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "10",
+          "allowed": true,
+          "source": "client",
+          "min": 1,
+          "max": 200
+        }
+      ],
+      "person_variables": [],
+      "constraints": [
+        {
+          "kind": "window_max_days",
+          "path": "filters.fromDate",
+          "other": "filters.toDate",
+          "max_days": 90,
+          "code": "variable_out_of_range",
+          "reason": "window longer than the design D.6 clamp"
+        }
+      ],
+      "scopes": [
+        {
+          "caller": "unrestricted",
+          "served": true,
+          "basis": "[ops] capacityforecast.go:398-421 apply teamId and the dates; limit has no ops clamp (:423-454; A1.1) (RM §15)"
+        },
+        {
+          "caller": "restricted",
+          "served": false,
+          "refusal": {
+            "code": "operation_not_served_for_caller",
+            "reason": "no repository scope; team aggregates ([ops] capacityforecast.go:398-421; RM §15); REFUSED until the K2 team path is read"
+          },
+          "basis": "no repository scope; team aggregates ([ops] capacityforecast.go:398-421; RM §15); REFUSED until the K2 team path is read"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "capacityForecasts.edges[*].node.forecastId",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.edges[*].node.computedAt",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.edges[*].node.teamId",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.edges[*].node.workScopeId",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.edges[*].node.backlogSize",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.edges[*].node.targetItems",
+          "type": "Int",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.edges[*].node.targetDate",
+          "type": "Date",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.edges[*].node.p50Date",
+          "type": "Date",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.edges[*].node.p85Date",
+          "type": "Date",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.edges[*].node.p95Date",
+          "type": "Date",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.edges[*].node.p50Days",
+          "type": "Int",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.edges[*].node.p85Days",
+          "type": "Int",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.edges[*].node.p95Days",
+          "type": "Int",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.edges[*].node.p50Items",
+          "type": "Int",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.edges[*].node.p85Items",
+          "type": "Int",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.edges[*].node.p95Items",
+          "type": "Int",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.edges[*].node.throughputMean",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.edges[*].node.throughputStddev",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.edges[*].node.historyDays",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.edges[*].node.insufficientHistory",
+          "type": "Boolean!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.edges[*].node.highVariance",
+          "type": "Boolean!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.edges[*].node.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "capacityForecasts.edges[*].cursor",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.edges[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "capacityForecasts.pageInfo.hasNextPage",
+          "type": "Boolean!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.pageInfo.hasPreviousPage",
+          "type": "Boolean!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.pageInfo.startCursor",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.pageInfo.endCursor",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.pageInfo.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "capacityForecasts.totalCount",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.__typename",
+          "type": "String",
+          "leaf": "typename"
+        }
+      ],
+      "withheld_outputs": [],
+      "disclosure": []
+    },
+    {
+      "name": "catalogValues",
+      "document_operation_name": "CatalogValues",
+      "kind": "query",
+      "digest": "d069072e06541e799679f355cb343a6408d660d17f1e7a33659063b423017fba",
+      "document_text": "query CatalogValues($orgId: String!, $dimension: DimensionInput!) {\n  catalog(orgId: $orgId, dimension: $dimension) {\n    values {\n      value\n      count\n      __typename\n    }\n    __typename\n  }\n}",
+      "cost_class": "catalog",
+      "deadline_seconds": 30,
+      "variables": [
+        {
+          "path": "orgId",
+          "type": "String!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "acr_principal_org"
+        },
+        {
+          "path": "dimension",
+          "type": "DimensionInput!",
+          "kind": "enum",
+          "enum": [
+            "TEAM",
+            "REPO",
+            "AUTHOR",
+            "WORK_TYPE",
+            "THEME",
+            "SUBCATEGORY"
+          ],
+          "allowed": true,
+          "source": "client",
+          "allowed_values": [
+            "TEAM",
+            "REPO",
+            "WORK_TYPE",
+            "THEME",
+            "SUBCATEGORY"
+          ],
+          "refused_values": [
+            {
+              "value": "AUTHOR",
+              "code": "person_scope_not_served",
+              "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+            }
+          ]
+        }
+      ],
+      "person_variables": [
+        {
+          "path": "dimension",
+          "value": "AUTHOR"
+        }
+      ],
+      "constraints": [],
+      "scopes": [
+        {
+          "caller": "unrestricted",
+          "served": true,
+          "basis": "[ops] analytics/catalog.go:110-199: org-wide values, no filter variable in the document; THEME, SUBCATEGORY, WORK_TYPE are org-wide investment counts with no scope filter (K14-A, RM §5)"
+        },
+        {
+          "caller": "restricted",
+          "served": false,
+          "refusal": {
+            "code": "operation_not_served_for_caller",
+            "reason": "the document has no filter variable, so every value is org-wide; REPO values are slugs and TEAM values are team ids of the whole org ([ops] analytics/catalog.go:110-162; RM §5)"
+          },
+          "basis": "the document has no filter variable, so every value is org-wide; REPO values are slugs and TEAM values are team ids of the whole org ([ops] analytics/catalog.go:110-162; RM §5)"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "catalog.values[*].value",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "catalog.values[*].count",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "catalog.values[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "catalog.__typename",
+          "type": "String",
+          "leaf": "typename"
+        }
+      ],
+      "withheld_outputs": [],
+      "disclosure": []
+    },
+    {
+      "name": "cognitiveLoad",
+      "document_operation_name": "CognitiveLoad",
+      "kind": "query",
+      "digest": "dcdfb2692addf52ed6117162963c698b628af37d01d08e4a8724f90388d8427d",
+      "document_text": "query CognitiveLoad($input: CognitiveLoadInput!) {\n  cognitiveLoad(input: $input) {\n    orgId\n    teamId\n    totalDays\n    signals {\n      day\n      prInterruptionLoad\n      contextSpreadCount\n      reviewRequestLoad\n      afterHoursCommitRatio\n      weekendCommitRatio\n      __typename\n    }\n    __typename\n  }\n}",
+      "cost_class": "series",
+      "deadline_seconds": 30,
+      "variables": [
+        {
+          "path": "input",
+          "type": "CognitiveLoadInput!",
+          "kind": "object",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "input.orgId",
+          "type": "String!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "acr_principal_org"
+        },
+        {
+          "path": "input.sinceDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "input.untilDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "input.teamId",
+          "type": "String",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "subject": {
+            "kind": "team",
+            "acr_prefix": "team:",
+            "ops_form": "bare_id"
+          }
+        },
+        {
+          "path": "input.repoId",
+          "type": "String",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "a repository-only read returns org-wide team ratios ([ops] cognitiveload/cognitiveload.go:178-195,343-356; RM §7, design D.3)"
+          }
+        }
+      ],
+      "person_variables": [],
+      "constraints": [
+        {
+          "kind": "required",
+          "path": "input.teamId",
+          "code": "scope_required",
+          "reason": "cognitiveLoad is served only with a team id ([ops] cognitiveload/cognitiveload.go:119-141; design D.3)"
+        },
+        {
+          "kind": "window_max_days",
+          "path": "input.sinceDate",
+          "other": "input.untilDate",
+          "max_days": 90,
+          "code": "variable_out_of_range",
+          "reason": "window longer than the design D.6 clamp"
+        }
+      ],
+      "scopes": [
+        {
+          "caller": "unrestricted",
+          "served": true,
+          "basis": "[ops] cognitiveload/cognitiveload.go:119-141,468-473 read team_cognitive_load_daily by team id (RM §7, V)"
+        },
+        {
+          "caller": "restricted",
+          "served": false,
+          "refusal": {
+            "code": "operation_not_served_for_caller",
+            "reason": "rows carry no repository id; the repository-only path mixes scope ([ops] cognitiveload/cognitiveload.go:178-195; RM §7)"
+          },
+          "basis": "rows carry no repository id; the repository-only path mixes scope ([ops] cognitiveload/cognitiveload.go:178-195; RM §7)"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "cognitiveLoad.orgId",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "cognitiveLoad.teamId",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "cognitiveLoad.totalDays",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "cognitiveLoad.signals[*].day",
+          "type": "Date!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "cognitiveLoad.signals[*].prInterruptionLoad",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "cognitiveLoad.signals[*].contextSpreadCount",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "cognitiveLoad.signals[*].reviewRequestLoad",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "cognitiveLoad.signals[*].afterHoursCommitRatio",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "cognitiveLoad.signals[*].weekendCommitRatio",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "cognitiveLoad.signals[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "cognitiveLoad.__typename",
+          "type": "String",
+          "leaf": "typename"
+        }
+      ],
+      "withheld_outputs": [],
+      "disclosure": []
+    },
+    {
+      "name": "complexityTimeseries",
+      "document_operation_name": "ComplexityTimeseries",
+      "kind": "query",
+      "digest": "c74c904d99fe75a770cdacd5371112b46d9c2dcc0d8aef3dd2da108415c4aaf7",
+      "document_text": "query ComplexityTimeseries($input: ComplexityTimeseriesInput!) {\n  complexityTimeseries(input: $input) {\n    points {\n      date\n      scopeId\n      scopeName\n      locTotal\n      cyclomaticPerKloc\n      cyclomaticTotal\n      cyclomaticAvg\n      highComplexityFunctions\n      veryHighComplexityFunctions\n      __typename\n    }\n    totalScope\n    __typename\n  }\n}",
+      "cost_class": "series",
+      "deadline_seconds": 30,
+      "variables": [
+        {
+          "path": "input",
+          "type": "ComplexityTimeseriesInput!",
+          "kind": "object",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "input.orgId",
+          "type": "String!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "acr_principal_org"
+        },
+        {
+          "path": "input.sinceUtc",
+          "type": "DateTime!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "input.untilUtc",
+          "type": "DateTime!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "input.granularity",
+          "type": "TimeGranularity!",
+          "kind": "enum",
+          "enum": [
+            "DAY",
+            "WEEK"
+          ],
+          "allowed": true,
+          "source": "client",
+          "allowed_values": [
+            "DAY",
+            "WEEK"
+          ]
+        },
+        {
+          "path": "input.scope",
+          "type": "ComplexityScope!",
+          "kind": "enum",
+          "enum": [
+            "REPO",
+            "FILE"
+          ],
+          "allowed": true,
+          "source": "client",
+          "allowed_values": [
+            "REPO",
+            "FILE"
+          ]
+        },
+        {
+          "path": "input.repoIds",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "max_items": 200,
+          "subject": {
+            "kind": "repository",
+            "acr_prefix": "repository:",
+            "ops_form": "bare_uuid"
+          }
+        },
+        {
+          "path": "input.teamIds",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: [ops] graph/schema.resolvers.go:1033 does not pass TeamIds (RM §6, design D.3)"
+          }
+        },
+        {
+          "path": "input.limit",
+          "type": "Int",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "min": 1,
+          "max": 200
+        }
+      ],
+      "person_variables": [],
+      "constraints": [
+        {
+          "kind": "window_max_days",
+          "path": "input.sinceUtc",
+          "other": "input.untilUtc",
+          "max_days": 90,
+          "code": "variable_out_of_range",
+          "reason": "window longer than the design D.6 clamp"
+        }
+      ],
+      "scopes": [
+        {
+          "caller": "unrestricted",
+          "served": true,
+          "basis": "[ops] complexitytimeseries/complexitytimeseries.go:151-156,222-225 apply repoIds (RM §6)"
+        },
+        {
+          "caller": "restricted",
+          "served": false,
+          "refusal": {
+            "code": "operation_not_served_for_caller",
+            "reason": "empty repoIds in REPO scope returns the top-N repositories, repoIds are truncated to limit, and the FILE scope id is composite ([ops] complexitytimeseries/complexitytimeseries.go:139-144,223-244,455; RM §6); kept refused in S1a (POLICY-ARTIFACT-v0)"
+          },
+          "basis": "empty repoIds in REPO scope returns the top-N repositories, repoIds are truncated to limit, and the FILE scope id is composite ([ops] complexitytimeseries/complexitytimeseries.go:139-144,223-244,455; RM §6); kept refused in S1a (POLICY-ARTIFACT-v0)"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "complexityTimeseries.points[*].date",
+          "type": "Date!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "complexityTimeseries.points[*].scopeId",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "complexityTimeseries.points[*].scopeName",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "complexityTimeseries.points[*].locTotal",
+          "type": "Int",
+          "leaf": "scalar"
+        },
+        {
+          "path": "complexityTimeseries.points[*].cyclomaticPerKloc",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "complexityTimeseries.points[*].cyclomaticTotal",
+          "type": "Int",
+          "leaf": "scalar"
+        },
+        {
+          "path": "complexityTimeseries.points[*].cyclomaticAvg",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "complexityTimeseries.points[*].highComplexityFunctions",
+          "type": "Int",
+          "leaf": "scalar"
+        },
+        {
+          "path": "complexityTimeseries.points[*].veryHighComplexityFunctions",
+          "type": "Int",
+          "leaf": "scalar"
+        },
+        {
+          "path": "complexityTimeseries.points[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "complexityTimeseries.totalScope",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "complexityTimeseries.__typename",
+          "type": "String",
+          "leaf": "typename"
+        }
+      ],
+      "withheld_outputs": [],
+      "disclosure": [],
+      "notes": [
+        "totalScope counts the returned points only, not a true total (complexitytimeseries.go:501-508)"
+      ]
+    },
+    {
+      "name": "compoundingRisk",
+      "document_operation_name": "CompoundingRisk",
+      "kind": "query",
+      "digest": "2b50958a4670a434bbfe46be7344486488d3a278e62b09b257252441e962bb67",
+      "document_text": "query CompoundingRisk($orgId: String!, $filter: CompoundingRiskFilterInput = null) {\n  compoundingRisk(orgId: $orgId, filter: $filter) {\n    orgId\n    breakout\n    generatedAt\n    rows {\n      day\n      scope\n      scopeId\n      scopeLabel\n      score\n      severity\n      computedAt\n      components {\n        churnNorm\n        complexityNorm\n        ownershipNorm\n        reviewNorm\n        reworkChurn\n        complexityDelta\n        ownershipGini\n        singleOwnerRatio\n        reviewLatencyP90h\n        __typename\n      }\n      weights {\n        churn\n        complexity\n        ownership\n        review\n        __typename\n      }\n      thresholds {\n        elevated\n        high\n        __typename\n      }\n      __typename\n    }\n    trend {\n      day\n      score\n      severity\n      __typename\n    }\n    __typename\n  }\n}",
+      "cost_class": "series",
+      "deadline_seconds": 30,
+      "variables": [
+        {
+          "path": "orgId",
+          "type": "String!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "acr_principal_org"
+        },
+        {
+          "path": "filter",
+          "type": "CompoundingRiskFilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "filter.day",
+          "type": "Date",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "filter.breakout",
+          "type": "CompoundingRiskScope!",
+          "kind": "enum",
+          "enum": [
+            "REPO",
+            "TEAM"
+          ],
+          "default": "REPO",
+          "allowed": true,
+          "source": "client",
+          "allowed_values": [
+            "REPO",
+            "TEAM"
+          ]
+        },
+        {
+          "path": "filter.repoIds",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "max_items": 200,
+          "subject": {
+            "kind": "repository",
+            "acr_prefix": "repository:",
+            "ops_form": "bare_uuid"
+          }
+        },
+        {
+          "path": "filter.teamIds",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "max_items": 200,
+          "subject": {
+            "kind": "team",
+            "acr_prefix": "team:",
+            "ops_form": "bare_id"
+          }
+        },
+        {
+          "path": "filter.trendDays",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "30",
+          "allowed": true,
+          "source": "client",
+          "min": 1,
+          "max": 90
+        }
+      ],
+      "person_variables": [],
+      "constraints": [
+        {
+          "kind": "requires_value",
+          "path": "filter.repoIds",
+          "other": "filter.breakout",
+          "values": [
+            "REPO"
+          ],
+          "other_default": "REPO",
+          "code": "variable_not_allowed",
+          "reason": "repoIds applies only with breakout REPO; under TEAM it feeds only the fallback and the trend ([ops] compoundingrisk/resolve.go:242,300,341-356; RM §1)"
+        },
+        {
+          "kind": "requires_value",
+          "path": "filter.teamIds",
+          "other": "filter.breakout",
+          "values": [
+            "TEAM"
+          ],
+          "other_default": "REPO",
+          "code": "variable_not_allowed",
+          "reason": "teamIds is ignored under breakout REPO ([ops] compoundingrisk/resolve.go:283-298,354; RM §1)"
+        }
+      ],
+      "scopes": [
+        {
+          "caller": "unrestricted",
+          "served": true,
+          "basis": "[ops] compoundingrisk/resolve.go:273,284,354 apply repoIds under REPO; read.go:75-81 (RM §1, V)"
+        },
+        {
+          "caller": "restricted",
+          "served": true,
+          "forced_variable_path": "filter.repoIds",
+          "subject_kind": "repository",
+          "row_id_paths": [
+            "compoundingRisk.rows[*].scopeId"
+          ],
+          "unchecked_paths": [
+            "compoundingRisk.trend"
+          ],
+          "constraints": [
+            {
+              "kind": "requires_value",
+              "other": "filter.breakout",
+              "values": [
+                "REPO"
+              ],
+              "other_default": "REPO",
+              "code": "operation_not_served_for_caller",
+              "reason": "breakout TEAM reads by team ids only and carries no repository id per row ([ops] compoundingrisk/resolve.go:300; read.go:117,217; RM §1; GWC A1.4 request 10: acr refuses)"
+            },
+            {
+              "kind": "empty_or_absent",
+              "path": "filter.teamIds",
+              "code": "operation_not_served_for_caller",
+              "reason": "team ids are not served to a repository-restricted caller (design D.3, K15)"
+            }
+          ],
+          "basis": "forced filter.repoIds (non-null; [] = nothing, read.go:64,86,150) + row check on rows[*].scopeId = toString(repos.id) (read.go:77,297); trend has no id and follows repoIds (resolve.go:341-356), so it is covered by the forced filter, not by a row check (RM §1)"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "compoundingRisk.orgId",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "compoundingRisk.breakout",
+          "type": "CompoundingRiskScope!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "compoundingRisk.generatedAt",
+          "type": "DateTime!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "compoundingRisk.rows[*].day",
+          "type": "Date!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "compoundingRisk.rows[*].scope",
+          "type": "CompoundingRiskScope!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "compoundingRisk.rows[*].scopeId",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "compoundingRisk.rows[*].scopeLabel",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "compoundingRisk.rows[*].score",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "compoundingRisk.rows[*].severity",
+          "type": "CompoundingRiskSeverity!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "compoundingRisk.rows[*].computedAt",
+          "type": "DateTime!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "compoundingRisk.rows[*].components.churnNorm",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "compoundingRisk.rows[*].components.complexityNorm",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "compoundingRisk.rows[*].components.ownershipNorm",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "compoundingRisk.rows[*].components.reviewNorm",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "compoundingRisk.rows[*].components.reworkChurn",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "compoundingRisk.rows[*].components.complexityDelta",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "compoundingRisk.rows[*].components.ownershipGini",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "compoundingRisk.rows[*].components.singleOwnerRatio",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "compoundingRisk.rows[*].components.reviewLatencyP90h",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "compoundingRisk.rows[*].components.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "compoundingRisk.rows[*].weights.churn",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "compoundingRisk.rows[*].weights.complexity",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "compoundingRisk.rows[*].weights.ownership",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "compoundingRisk.rows[*].weights.review",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "compoundingRisk.rows[*].weights.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "compoundingRisk.rows[*].thresholds.elevated",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "compoundingRisk.rows[*].thresholds.high",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "compoundingRisk.rows[*].thresholds.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "compoundingRisk.rows[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "compoundingRisk.trend[*].day",
+          "type": "Date!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "compoundingRisk.trend[*].score",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "compoundingRisk.trend[*].severity",
+          "type": "CompoundingRiskSeverity!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "compoundingRisk.trend[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "compoundingRisk.__typename",
+          "type": "String",
+          "leaf": "typename"
+        }
+      ],
+      "withheld_outputs": [],
+      "disclosure": []
+    },
+    {
+      "name": "hotspots",
+      "document_operation_name": "Hotspots",
+      "kind": "query",
+      "digest": "6ccfcc785f38dc4a2d3ef5c9bdc2a00e76c02ccf58d11fd1198d2d321165e781",
+      "document_text": "query Hotspots($input: HotspotsInput!) {\n  hotspots(input: $input) {\n    rows {\n      filePath\n      repoId\n      repoName\n      churnLoc30d\n      churnCommits30d\n      cyclomaticTotal\n      cyclomaticAvg\n      blameConcentration\n      riskScore\n      evidenceUrl\n      __typename\n    }\n    __typename\n  }\n}",
+      "cost_class": "list",
+      "deadline_seconds": 30,
+      "variables": [
+        {
+          "path": "input",
+          "type": "HotspotsInput!",
+          "kind": "object",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "input.orgId",
+          "type": "String!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "acr_principal_org"
+        },
+        {
+          "path": "input.sinceUtc",
+          "type": "DateTime!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "input.untilUtc",
+          "type": "DateTime!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "input.repoIds",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "max_items": 200,
+          "subject": {
+            "kind": "repository",
+            "acr_prefix": "repository:",
+            "ops_form": "bare_uuid"
+          }
+        },
+        {
+          "path": "input.teamIds",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: [ops] graph/schema.resolvers.go:1063 passes only RepoIds (RM §2, design D.3)"
+          }
+        },
+        {
+          "path": "input.limit",
+          "type": "Int",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "min": 1,
+          "max": 200
+        }
+      ],
+      "person_variables": [],
+      "constraints": [
+        {
+          "kind": "window_max_days",
+          "path": "input.sinceUtc",
+          "other": "input.untilUtc",
+          "max_days": 90,
+          "code": "variable_out_of_range",
+          "reason": "window longer than the design D.6 clamp"
+        }
+      ],
+      "scopes": [
+        {
+          "caller": "unrestricted",
+          "served": true,
+          "basis": "[ops] hotspots/hotspots.go:245-254 apply repoIds; graph/schema.resolvers.go:1063 (RM §2, V)"
+        },
+        {
+          "caller": "restricted",
+          "served": true,
+          "forced_variable_path": "input.repoIds",
+          "subject_kind": "repository",
+          "row_id_paths": [
+            "hotspots.rows[*].repoId"
+          ],
+          "basis": "forced input.repoIds + row check on rows[*].repoId = toString(repo_id) ([ops] hotspots/hotspots.go:228,375). Empty or null repoIds means ALL repositories (:245), so an empty grant intersection must end before dispatch with no_granted_scope (RM §2)"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "hotspots.rows[*].filePath",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "hotspots.rows[*].repoId",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "hotspots.rows[*].repoName",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "hotspots.rows[*].churnLoc30d",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "hotspots.rows[*].churnCommits30d",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "hotspots.rows[*].cyclomaticTotal",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "hotspots.rows[*].cyclomaticAvg",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "hotspots.rows[*].blameConcentration",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "hotspots.rows[*].riskScore",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "hotspots.rows[*].evidenceUrl",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "hotspots.rows[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "hotspots.__typename",
+          "type": "String",
+          "leaf": "typename"
+        }
+      ],
+      "withheld_outputs": [],
+      "disclosure": []
+    },
+    {
+      "name": "investmentBreakdown",
+      "document_operation_name": "InvestmentBreakdown",
+      "kind": "query",
+      "digest": "964b2e867a1e37c09382552eb0af394758fa10d68081a560ebc0f36c28cc3501",
+      "document_text": "query InvestmentBreakdown($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    evidenceQualityDistribution\n    evidenceQualityStats {\n      mean\n      stddev\n      total\n      bandCounts\n      __typename\n    }\n    __typename\n  }\n}",
+      "cost_class": "analytics_batch",
+      "deadline_seconds": 30,
+      "variables": [
+        {
+          "path": "orgId",
+          "type": "String!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "acr_principal_org"
+        },
+        {
+          "path": "batch",
+          "type": "AnalyticsRequestInput!",
+          "kind": "object",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.timeseries",
+          "type": "[TimeseriesRequestInput!]!",
+          "kind": "object",
+          "default": "[]",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "timeseries is not selected by the document; it would cost work that is never returned (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.timeseries[*].dimension",
+          "type": "DimensionInput!",
+          "kind": "enum",
+          "enum": [
+            "TEAM",
+            "REPO",
+            "AUTHOR",
+            "WORK_TYPE",
+            "THEME",
+            "SUBCATEGORY"
+          ],
+          "allowed": false,
+          "source": "none",
+          "refused_values": [
+            {
+              "value": "AUTHOR",
+              "code": "person_scope_not_served",
+              "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+            }
+          ],
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "timeseries is not selected by the document; it would cost work that is never returned (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.timeseries[*].measure",
+          "type": "MeasureInput!",
+          "kind": "enum",
+          "enum": [
+            "COUNT",
+            "CHURN_LOC",
+            "PR_REWORK_RATIO",
+            "CYCLE_TIME_HOURS",
+            "THROUGHPUT",
+            "PIPELINE_SUCCESS_RATE",
+            "PIPELINE_FAILURE_RATE",
+            "PIPELINE_DURATION_P95",
+            "PIPELINE_QUEUE_TIME",
+            "PIPELINE_RERUN_RATE",
+            "TEST_PASS_RATE",
+            "TEST_FAILURE_RATE",
+            "TEST_FLAKE_RATE",
+            "TEST_SUITE_DURATION_P95",
+            "COVERAGE_LINE_PCT",
+            "COVERAGE_BRANCH_PCT",
+            "COVERAGE_DELTA_PCT",
+            "FLAG_FRICTION_DELTA",
+            "FLAG_ERROR_RATE_DELTA",
+            "FLAG_COVERAGE_RATIO",
+            "FLAG_ACTIVATION_RATE"
+          ],
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "timeseries is not selected by the document; it would cost work that is never returned (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.timeseries[*].interval",
+          "type": "BucketIntervalInput!",
+          "kind": "enum",
+          "enum": [
+            "DAY",
+            "WEEK",
+            "MONTH"
+          ],
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "timeseries is not selected by the document; it would cost work that is never returned (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.timeseries[*].dateRange",
+          "type": "DateRangeInput!",
+          "kind": "object",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "timeseries is not selected by the document; it would cost work that is never returned (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.timeseries[*].dateRange.startDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "timeseries is not selected by the document; it would cost work that is never returned (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.timeseries[*].dateRange.endDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "timeseries is not selected by the document; it would cost work that is never returned (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.breakdowns",
+          "type": "[BreakdownRequestInput!]!",
+          "kind": "object",
+          "default": "[]",
+          "allowed": true,
+          "source": "client",
+          "max_items": 1
+        },
+        {
+          "path": "batch.breakdowns[*].dimension",
+          "type": "DimensionInput!",
+          "kind": "enum",
+          "enum": [
+            "TEAM",
+            "REPO",
+            "AUTHOR",
+            "WORK_TYPE",
+            "THEME",
+            "SUBCATEGORY"
+          ],
+          "allowed": true,
+          "source": "client",
+          "allowed_values": [
+            "THEME",
+            "SUBCATEGORY",
+            "WORK_TYPE"
+          ],
+          "refused_values": [
+            {
+              "value": "AUTHOR",
+              "code": "person_scope_not_served",
+              "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+            },
+            {
+              "value": "TEAM",
+              "code": "basis_dependent_shape",
+              "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A): team vote join, [ops] analytics/investment.go:598-605"
+            },
+            {
+              "value": "REPO",
+              "code": "basis_dependent_shape",
+              "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A): repository allocation source, [ops] analytics/investment.go:574-578; refused until oracle O4"
+            }
+          ]
+        },
+        {
+          "path": "batch.breakdowns[*].measure",
+          "type": "MeasureInput!",
+          "kind": "enum",
+          "enum": [
+            "COUNT",
+            "CHURN_LOC",
+            "PR_REWORK_RATIO",
+            "CYCLE_TIME_HOURS",
+            "THROUGHPUT",
+            "PIPELINE_SUCCESS_RATE",
+            "PIPELINE_FAILURE_RATE",
+            "PIPELINE_DURATION_P95",
+            "PIPELINE_QUEUE_TIME",
+            "PIPELINE_RERUN_RATE",
+            "TEST_PASS_RATE",
+            "TEST_FAILURE_RATE",
+            "TEST_FLAKE_RATE",
+            "TEST_SUITE_DURATION_P95",
+            "COVERAGE_LINE_PCT",
+            "COVERAGE_BRANCH_PCT",
+            "COVERAGE_DELTA_PCT",
+            "FLAG_FRICTION_DELTA",
+            "FLAG_ERROR_RATE_DELTA",
+            "FLAG_COVERAGE_RATIO",
+            "FLAG_ACTIVATION_RATE"
+          ],
+          "allowed": true,
+          "source": "client",
+          "allowed_values": [
+            "COUNT",
+            "CHURN_LOC",
+            "PR_REWORK_RATIO",
+            "CYCLE_TIME_HOURS",
+            "THROUGHPUT",
+            "PIPELINE_SUCCESS_RATE",
+            "PIPELINE_FAILURE_RATE",
+            "PIPELINE_DURATION_P95",
+            "PIPELINE_QUEUE_TIME",
+            "PIPELINE_RERUN_RATE",
+            "TEST_PASS_RATE",
+            "TEST_FAILURE_RATE",
+            "TEST_FLAKE_RATE",
+            "TEST_SUITE_DURATION_P95",
+            "COVERAGE_LINE_PCT",
+            "COVERAGE_BRANCH_PCT",
+            "COVERAGE_DELTA_PCT",
+            "FLAG_FRICTION_DELTA",
+            "FLAG_ERROR_RATE_DELTA",
+            "FLAG_COVERAGE_RATIO",
+            "FLAG_ACTIVATION_RATE"
+          ]
+        },
+        {
+          "path": "batch.breakdowns[*].dateRange",
+          "type": "DateRangeInput!",
+          "kind": "object",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.breakdowns[*].dateRange.startDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.breakdowns[*].dateRange.endDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.breakdowns[*].topN",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "10",
+          "allowed": true,
+          "source": "client",
+          "min": 1,
+          "max": 100
+        },
+        {
+          "path": "batch.sankey",
+          "type": "SankeyRequestInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.path",
+          "type": "[DimensionInput!]!",
+          "kind": "enum",
+          "enum": [
+            "TEAM",
+            "REPO",
+            "AUTHOR",
+            "WORK_TYPE",
+            "THEME",
+            "SUBCATEGORY"
+          ],
+          "allowed": false,
+          "source": "none",
+          "refused_values": [
+            {
+              "value": "AUTHOR",
+              "code": "person_scope_not_served",
+              "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+            }
+          ],
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.measure",
+          "type": "MeasureInput!",
+          "kind": "enum",
+          "enum": [
+            "COUNT",
+            "CHURN_LOC",
+            "PR_REWORK_RATIO",
+            "CYCLE_TIME_HOURS",
+            "THROUGHPUT",
+            "PIPELINE_SUCCESS_RATE",
+            "PIPELINE_FAILURE_RATE",
+            "PIPELINE_DURATION_P95",
+            "PIPELINE_QUEUE_TIME",
+            "PIPELINE_RERUN_RATE",
+            "TEST_PASS_RATE",
+            "TEST_FAILURE_RATE",
+            "TEST_FLAKE_RATE",
+            "TEST_SUITE_DURATION_P95",
+            "COVERAGE_LINE_PCT",
+            "COVERAGE_BRANCH_PCT",
+            "COVERAGE_DELTA_PCT",
+            "FLAG_FRICTION_DELTA",
+            "FLAG_ERROR_RATE_DELTA",
+            "FLAG_COVERAGE_RATIO",
+            "FLAG_ACTIVATION_RATE"
+          ],
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.dateRange",
+          "type": "DateRangeInput!",
+          "kind": "object",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.dateRange.startDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.dateRange.endDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.maxNodes",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "100",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.maxEdges",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "500",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.useInvestment",
+          "type": "Boolean",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix",
+          "type": "FlowMatrixRequestInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.dimension",
+          "type": "DimensionInput!",
+          "kind": "enum",
+          "enum": [
+            "TEAM",
+            "REPO",
+            "AUTHOR",
+            "WORK_TYPE",
+            "THEME",
+            "SUBCATEGORY"
+          ],
+          "allowed": false,
+          "source": "none",
+          "refused_values": [
+            {
+              "value": "AUTHOR",
+              "code": "person_scope_not_served",
+              "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+            }
+          ],
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.measure",
+          "type": "MeasureInput!",
+          "kind": "enum",
+          "enum": [
+            "COUNT",
+            "CHURN_LOC",
+            "PR_REWORK_RATIO",
+            "CYCLE_TIME_HOURS",
+            "THROUGHPUT",
+            "PIPELINE_SUCCESS_RATE",
+            "PIPELINE_FAILURE_RATE",
+            "PIPELINE_DURATION_P95",
+            "PIPELINE_QUEUE_TIME",
+            "PIPELINE_RERUN_RATE",
+            "TEST_PASS_RATE",
+            "TEST_FAILURE_RATE",
+            "TEST_FLAKE_RATE",
+            "TEST_SUITE_DURATION_P95",
+            "COVERAGE_LINE_PCT",
+            "COVERAGE_BRANCH_PCT",
+            "COVERAGE_DELTA_PCT",
+            "FLAG_FRICTION_DELTA",
+            "FLAG_ERROR_RATE_DELTA",
+            "FLAG_COVERAGE_RATIO",
+            "FLAG_ACTIVATION_RATE"
+          ],
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.dateRange",
+          "type": "DateRangeInput!",
+          "kind": "object",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.dateRange.startDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.dateRange.endDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.maxNodes",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "100",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.maxEdges",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "500",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.useInvestment",
+          "type": "Boolean",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.useInvestment",
+          "type": "Boolean",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "acr_forced",
+          "forced_value": true
+        },
+        {
+          "path": "batch.filters",
+          "type": "FilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.filters.scope",
+          "type": "ScopeFilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.filters.scope.level",
+          "type": "ScopeLevelInput!",
+          "kind": "enum",
+          "enum": [
+            "ORG",
+            "TEAM",
+            "REPO",
+            "SERVICE",
+            "DEVELOPER"
+          ],
+          "default": "ORG",
+          "allowed": true,
+          "source": "client",
+          "allowed_values": [
+            "ORG"
+          ],
+          "refused_values": [
+            {
+              "value": "DEVELOPER",
+              "code": "person_scope_not_served",
+              "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+            },
+            {
+              "value": "TEAM",
+              "code": "basis_dependent_shape",
+              "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A): needsTeamJoin, [ops] analytics/investment.go:534-539, investmentquality.go:231-245"
+            },
+            {
+              "value": "REPO",
+              "code": "basis_dependent_shape",
+              "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A): repository filter translation, [ops] analytics/filtertranslation.go:49-51,213-214"
+            },
+            {
+              "value": "SERVICE",
+              "code": "variable_not_allowed",
+              "reason": "scope level SERVICE applies no filter at the data layer ([ops] analytics/filtertranslation.go:55-57)"
+            }
+          ]
+        },
+        {
+          "path": "batch.filters.scope.ids",
+          "type": "[String!]!",
+          "kind": "scalar",
+          "default": "[]",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.filters.who",
+          "type": "WhoFilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "not on the variable allowlist of InvestmentBreakdown"
+          }
+        },
+        {
+          "path": "batch.filters.who.developers",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "person_scope_not_served",
+            "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+          }
+        },
+        {
+          "path": "batch.filters.who.roles",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: [ops] analytics/filters.go:23 only (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.filters.what",
+          "type": "WhatFilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "not on the variable allowlist of InvestmentBreakdown"
+          }
+        },
+        {
+          "path": "batch.filters.what.repos",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.filters.what.services",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: [ops] analytics/repofilters.go:158 pass-through only (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.filters.why",
+          "type": "WhyFilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.filters.why.workCategory",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "max_items": 20,
+          "max_length": 128
+        },
+        {
+          "path": "batch.filters.why.issueType",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: RM §8-9"
+          }
+        },
+        {
+          "path": "batch.filters.how",
+          "type": "HowFilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: flowStage, [ops] analytics/filtertranslation.go:151-158 (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.filters.how.flowStage",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: flowStage, [ops] analytics/filtertranslation.go:151-158 (RM §8-9)"
+          }
+        }
+      ],
+      "person_variables": [
+        {
+          "path": "batch.timeseries[*].dimension",
+          "value": "AUTHOR"
+        },
+        {
+          "path": "batch.breakdowns[*].dimension",
+          "value": "AUTHOR"
+        },
+        {
+          "path": "batch.sankey.path",
+          "value": "AUTHOR"
+        },
+        {
+          "path": "batch.flowMatrix.dimension",
+          "value": "AUTHOR"
+        },
+        {
+          "path": "batch.filters.scope.level",
+          "value": "DEVELOPER"
+        },
+        {
+          "path": "batch.filters.who.developers"
+        }
+      ],
+      "constraints": [
+        {
+          "kind": "empty_or_absent",
+          "path": "batch.filters.scope.ids",
+          "code": "basis_dependent_shape",
+          "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A): scope must be absent or ORG with no ids"
+        },
+        {
+          "kind": "requires_value",
+          "path": "batch.filters.scope",
+          "other": "batch.filters.scope.level",
+          "values": [
+            "ORG"
+          ],
+          "other_default": "ORG",
+          "code": "basis_dependent_shape",
+          "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A): scope level must be ORG"
+        },
+        {
+          "kind": "window_max_days",
+          "path": "batch.breakdowns[*].dateRange.startDate",
+          "other": "batch.breakdowns[*].dateRange.endDate",
+          "max_days": 3650,
+          "code": "variable_out_of_range",
+          "reason": "window longer than the design D.6 clamp"
+        }
+      ],
+      "scopes": [
+        {
+          "caller": "unrestricted",
+          "served": true,
+          "basis": "basis-free shape only: [ops] analytics/investment.go:573-582,598 reads the latest work unit investments with no team join and no repository allocation (K14-A, V)"
+        },
+        {
+          "caller": "restricted",
+          "served": false,
+          "refusal": {
+            "code": "operation_not_served_for_caller",
+            "reason": "K14-A: forced scope inside the nested analytics batch is not proved; team and repository investment comes from read_facts (kind investment)"
+          },
+          "basis": "K14-A: forced scope inside the nested analytics batch is not proved; team and repository investment comes from read_facts (kind investment)"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "analytics.breakdowns[*].dimension",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.breakdowns[*].measure",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.breakdowns[*].items[*].key",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.breakdowns[*].items[*].value",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.breakdowns[*].items[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "analytics.breakdowns[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "analytics.evidenceQualityDistribution",
+          "type": "JSON",
+          "leaf": "json",
+          "exception": "aggregate evidence-quality band counts, no person field ([ops] analytics/investmentquality.go; RM §8-9); computed only with useInvestment=true, which acr forces"
+        },
+        {
+          "path": "analytics.evidenceQualityStats.mean",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.evidenceQualityStats.stddev",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.evidenceQualityStats.total",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.evidenceQualityStats.bandCounts",
+          "type": "JSON!",
+          "leaf": "json",
+          "exception": "aggregate evidence-quality band counts, no person field ([ops] analytics/investmentquality.go; RM §8-9)"
+        },
+        {
+          "path": "analytics.evidenceQualityStats.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "analytics.__typename",
+          "type": "String",
+          "leaf": "typename"
+        }
+      ],
+      "withheld_outputs": [],
+      "disclosure": []
+    },
+    {
+      "name": "investmentFull",
+      "document_operation_name": "InvestmentFull",
+      "kind": "query",
+      "digest": "663e516c6152c81e28780d27809fcbe5aeae8c92b07d34b19978b7d59913cb3d",
+      "document_text": "query InvestmentFull($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    sankey {\n      nodes {\n        id\n        label\n        dimension\n        value\n        __typename\n      }\n      edges {\n        source\n        target\n        value\n        __typename\n      }\n      coverage {\n        teamCoverage\n        repoCoverage\n        __typename\n      }\n      unit\n      __typename\n    }\n    __typename\n  }\n}",
+      "cost_class": "analytics_batch",
+      "deadline_seconds": 30,
+      "variables": [
+        {
+          "path": "orgId",
+          "type": "String!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "acr_principal_org"
+        },
+        {
+          "path": "batch",
+          "type": "AnalyticsRequestInput!",
+          "kind": "object",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.timeseries",
+          "type": "[TimeseriesRequestInput!]!",
+          "kind": "object",
+          "default": "[]",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "timeseries is not selected by the document; it would cost work that is never returned (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.timeseries[*].dimension",
+          "type": "DimensionInput!",
+          "kind": "enum",
+          "enum": [
+            "TEAM",
+            "REPO",
+            "AUTHOR",
+            "WORK_TYPE",
+            "THEME",
+            "SUBCATEGORY"
+          ],
+          "allowed": false,
+          "source": "none",
+          "refused_values": [
+            {
+              "value": "AUTHOR",
+              "code": "person_scope_not_served",
+              "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+            }
+          ],
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "timeseries is not selected by the document; it would cost work that is never returned (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.timeseries[*].measure",
+          "type": "MeasureInput!",
+          "kind": "enum",
+          "enum": [
+            "COUNT",
+            "CHURN_LOC",
+            "PR_REWORK_RATIO",
+            "CYCLE_TIME_HOURS",
+            "THROUGHPUT",
+            "PIPELINE_SUCCESS_RATE",
+            "PIPELINE_FAILURE_RATE",
+            "PIPELINE_DURATION_P95",
+            "PIPELINE_QUEUE_TIME",
+            "PIPELINE_RERUN_RATE",
+            "TEST_PASS_RATE",
+            "TEST_FAILURE_RATE",
+            "TEST_FLAKE_RATE",
+            "TEST_SUITE_DURATION_P95",
+            "COVERAGE_LINE_PCT",
+            "COVERAGE_BRANCH_PCT",
+            "COVERAGE_DELTA_PCT",
+            "FLAG_FRICTION_DELTA",
+            "FLAG_ERROR_RATE_DELTA",
+            "FLAG_COVERAGE_RATIO",
+            "FLAG_ACTIVATION_RATE"
+          ],
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "timeseries is not selected by the document; it would cost work that is never returned (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.timeseries[*].interval",
+          "type": "BucketIntervalInput!",
+          "kind": "enum",
+          "enum": [
+            "DAY",
+            "WEEK",
+            "MONTH"
+          ],
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "timeseries is not selected by the document; it would cost work that is never returned (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.timeseries[*].dateRange",
+          "type": "DateRangeInput!",
+          "kind": "object",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "timeseries is not selected by the document; it would cost work that is never returned (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.timeseries[*].dateRange.startDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "timeseries is not selected by the document; it would cost work that is never returned (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.timeseries[*].dateRange.endDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "timeseries is not selected by the document; it would cost work that is never returned (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.breakdowns",
+          "type": "[BreakdownRequestInput!]!",
+          "kind": "object",
+          "default": "[]",
+          "allowed": true,
+          "source": "client",
+          "max_items": 1
+        },
+        {
+          "path": "batch.breakdowns[*].dimension",
+          "type": "DimensionInput!",
+          "kind": "enum",
+          "enum": [
+            "TEAM",
+            "REPO",
+            "AUTHOR",
+            "WORK_TYPE",
+            "THEME",
+            "SUBCATEGORY"
+          ],
+          "allowed": true,
+          "source": "client",
+          "allowed_values": [
+            "THEME",
+            "SUBCATEGORY",
+            "WORK_TYPE"
+          ],
+          "refused_values": [
+            {
+              "value": "AUTHOR",
+              "code": "person_scope_not_served",
+              "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+            },
+            {
+              "value": "TEAM",
+              "code": "basis_dependent_shape",
+              "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A): team vote join, [ops] analytics/investment.go:598-605"
+            },
+            {
+              "value": "REPO",
+              "code": "basis_dependent_shape",
+              "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A): repository allocation source, [ops] analytics/investment.go:574-578; refused until oracle O4"
+            }
+          ]
+        },
+        {
+          "path": "batch.breakdowns[*].measure",
+          "type": "MeasureInput!",
+          "kind": "enum",
+          "enum": [
+            "COUNT",
+            "CHURN_LOC",
+            "PR_REWORK_RATIO",
+            "CYCLE_TIME_HOURS",
+            "THROUGHPUT",
+            "PIPELINE_SUCCESS_RATE",
+            "PIPELINE_FAILURE_RATE",
+            "PIPELINE_DURATION_P95",
+            "PIPELINE_QUEUE_TIME",
+            "PIPELINE_RERUN_RATE",
+            "TEST_PASS_RATE",
+            "TEST_FAILURE_RATE",
+            "TEST_FLAKE_RATE",
+            "TEST_SUITE_DURATION_P95",
+            "COVERAGE_LINE_PCT",
+            "COVERAGE_BRANCH_PCT",
+            "COVERAGE_DELTA_PCT",
+            "FLAG_FRICTION_DELTA",
+            "FLAG_ERROR_RATE_DELTA",
+            "FLAG_COVERAGE_RATIO",
+            "FLAG_ACTIVATION_RATE"
+          ],
+          "allowed": true,
+          "source": "client",
+          "allowed_values": [
+            "COUNT",
+            "CHURN_LOC",
+            "PR_REWORK_RATIO",
+            "CYCLE_TIME_HOURS",
+            "THROUGHPUT",
+            "PIPELINE_SUCCESS_RATE",
+            "PIPELINE_FAILURE_RATE",
+            "PIPELINE_DURATION_P95",
+            "PIPELINE_QUEUE_TIME",
+            "PIPELINE_RERUN_RATE",
+            "TEST_PASS_RATE",
+            "TEST_FAILURE_RATE",
+            "TEST_FLAKE_RATE",
+            "TEST_SUITE_DURATION_P95",
+            "COVERAGE_LINE_PCT",
+            "COVERAGE_BRANCH_PCT",
+            "COVERAGE_DELTA_PCT",
+            "FLAG_FRICTION_DELTA",
+            "FLAG_ERROR_RATE_DELTA",
+            "FLAG_COVERAGE_RATIO",
+            "FLAG_ACTIVATION_RATE"
+          ]
+        },
+        {
+          "path": "batch.breakdowns[*].dateRange",
+          "type": "DateRangeInput!",
+          "kind": "object",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.breakdowns[*].dateRange.startDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.breakdowns[*].dateRange.endDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.breakdowns[*].topN",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "10",
+          "allowed": true,
+          "source": "client",
+          "min": 1,
+          "max": 100
+        },
+        {
+          "path": "batch.sankey",
+          "type": "SankeyRequestInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.path",
+          "type": "[DimensionInput!]!",
+          "kind": "enum",
+          "enum": [
+            "TEAM",
+            "REPO",
+            "AUTHOR",
+            "WORK_TYPE",
+            "THEME",
+            "SUBCATEGORY"
+          ],
+          "allowed": false,
+          "source": "none",
+          "refused_values": [
+            {
+              "value": "AUTHOR",
+              "code": "person_scope_not_served",
+              "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+            }
+          ],
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.measure",
+          "type": "MeasureInput!",
+          "kind": "enum",
+          "enum": [
+            "COUNT",
+            "CHURN_LOC",
+            "PR_REWORK_RATIO",
+            "CYCLE_TIME_HOURS",
+            "THROUGHPUT",
+            "PIPELINE_SUCCESS_RATE",
+            "PIPELINE_FAILURE_RATE",
+            "PIPELINE_DURATION_P95",
+            "PIPELINE_QUEUE_TIME",
+            "PIPELINE_RERUN_RATE",
+            "TEST_PASS_RATE",
+            "TEST_FAILURE_RATE",
+            "TEST_FLAKE_RATE",
+            "TEST_SUITE_DURATION_P95",
+            "COVERAGE_LINE_PCT",
+            "COVERAGE_BRANCH_PCT",
+            "COVERAGE_DELTA_PCT",
+            "FLAG_FRICTION_DELTA",
+            "FLAG_ERROR_RATE_DELTA",
+            "FLAG_COVERAGE_RATIO",
+            "FLAG_ACTIVATION_RATE"
+          ],
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.dateRange",
+          "type": "DateRangeInput!",
+          "kind": "object",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.dateRange.startDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.dateRange.endDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.maxNodes",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "100",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.maxEdges",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "500",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.useInvestment",
+          "type": "Boolean",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix",
+          "type": "FlowMatrixRequestInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.dimension",
+          "type": "DimensionInput!",
+          "kind": "enum",
+          "enum": [
+            "TEAM",
+            "REPO",
+            "AUTHOR",
+            "WORK_TYPE",
+            "THEME",
+            "SUBCATEGORY"
+          ],
+          "allowed": false,
+          "source": "none",
+          "refused_values": [
+            {
+              "value": "AUTHOR",
+              "code": "person_scope_not_served",
+              "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+            }
+          ],
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.measure",
+          "type": "MeasureInput!",
+          "kind": "enum",
+          "enum": [
+            "COUNT",
+            "CHURN_LOC",
+            "PR_REWORK_RATIO",
+            "CYCLE_TIME_HOURS",
+            "THROUGHPUT",
+            "PIPELINE_SUCCESS_RATE",
+            "PIPELINE_FAILURE_RATE",
+            "PIPELINE_DURATION_P95",
+            "PIPELINE_QUEUE_TIME",
+            "PIPELINE_RERUN_RATE",
+            "TEST_PASS_RATE",
+            "TEST_FAILURE_RATE",
+            "TEST_FLAKE_RATE",
+            "TEST_SUITE_DURATION_P95",
+            "COVERAGE_LINE_PCT",
+            "COVERAGE_BRANCH_PCT",
+            "COVERAGE_DELTA_PCT",
+            "FLAG_FRICTION_DELTA",
+            "FLAG_ERROR_RATE_DELTA",
+            "FLAG_COVERAGE_RATIO",
+            "FLAG_ACTIVATION_RATE"
+          ],
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.dateRange",
+          "type": "DateRangeInput!",
+          "kind": "object",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.dateRange.startDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.dateRange.endDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.maxNodes",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "100",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.maxEdges",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "500",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.useInvestment",
+          "type": "Boolean",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.useInvestment",
+          "type": "Boolean",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "acr_forced",
+          "forced_value": true
+        },
+        {
+          "path": "batch.filters",
+          "type": "FilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.filters.scope",
+          "type": "ScopeFilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.filters.scope.level",
+          "type": "ScopeLevelInput!",
+          "kind": "enum",
+          "enum": [
+            "ORG",
+            "TEAM",
+            "REPO",
+            "SERVICE",
+            "DEVELOPER"
+          ],
+          "default": "ORG",
+          "allowed": true,
+          "source": "client",
+          "allowed_values": [
+            "ORG"
+          ],
+          "refused_values": [
+            {
+              "value": "DEVELOPER",
+              "code": "person_scope_not_served",
+              "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+            },
+            {
+              "value": "TEAM",
+              "code": "basis_dependent_shape",
+              "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A): needsTeamJoin, [ops] analytics/investment.go:534-539, investmentquality.go:231-245"
+            },
+            {
+              "value": "REPO",
+              "code": "basis_dependent_shape",
+              "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A): repository filter translation, [ops] analytics/filtertranslation.go:49-51,213-214"
+            },
+            {
+              "value": "SERVICE",
+              "code": "variable_not_allowed",
+              "reason": "scope level SERVICE applies no filter at the data layer ([ops] analytics/filtertranslation.go:55-57)"
+            }
+          ]
+        },
+        {
+          "path": "batch.filters.scope.ids",
+          "type": "[String!]!",
+          "kind": "scalar",
+          "default": "[]",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.filters.who",
+          "type": "WhoFilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "not on the variable allowlist of InvestmentFull"
+          }
+        },
+        {
+          "path": "batch.filters.who.developers",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "person_scope_not_served",
+            "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+          }
+        },
+        {
+          "path": "batch.filters.who.roles",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: [ops] analytics/filters.go:23 only (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.filters.what",
+          "type": "WhatFilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "not on the variable allowlist of InvestmentFull"
+          }
+        },
+        {
+          "path": "batch.filters.what.repos",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.filters.what.services",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: [ops] analytics/repofilters.go:158 pass-through only (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.filters.why",
+          "type": "WhyFilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.filters.why.workCategory",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "max_items": 20,
+          "max_length": 128
+        },
+        {
+          "path": "batch.filters.why.issueType",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: RM §8-9"
+          }
+        },
+        {
+          "path": "batch.filters.how",
+          "type": "HowFilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: flowStage, [ops] analytics/filtertranslation.go:151-158 (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.filters.how.flowStage",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: flowStage, [ops] analytics/filtertranslation.go:151-158 (RM §8-9)"
+          }
+        }
+      ],
+      "person_variables": [
+        {
+          "path": "batch.timeseries[*].dimension",
+          "value": "AUTHOR"
+        },
+        {
+          "path": "batch.breakdowns[*].dimension",
+          "value": "AUTHOR"
+        },
+        {
+          "path": "batch.sankey.path",
+          "value": "AUTHOR"
+        },
+        {
+          "path": "batch.flowMatrix.dimension",
+          "value": "AUTHOR"
+        },
+        {
+          "path": "batch.filters.scope.level",
+          "value": "DEVELOPER"
+        },
+        {
+          "path": "batch.filters.who.developers"
+        }
+      ],
+      "constraints": [
+        {
+          "kind": "empty_or_absent",
+          "path": "batch.filters.scope.ids",
+          "code": "basis_dependent_shape",
+          "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A): scope must be absent or ORG with no ids"
+        },
+        {
+          "kind": "requires_value",
+          "path": "batch.filters.scope",
+          "other": "batch.filters.scope.level",
+          "values": [
+            "ORG"
+          ],
+          "other_default": "ORG",
+          "code": "basis_dependent_shape",
+          "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A): scope level must be ORG"
+        },
+        {
+          "kind": "window_max_days",
+          "path": "batch.breakdowns[*].dateRange.startDate",
+          "other": "batch.breakdowns[*].dateRange.endDate",
+          "max_days": 3650,
+          "code": "variable_out_of_range",
+          "reason": "window longer than the design D.6 clamp"
+        }
+      ],
+      "scopes": [
+        {
+          "caller": "unrestricted",
+          "served": true,
+          "basis": "basis-free shape only: [ops] analytics/investment.go:573-582,598 reads the latest work unit investments with no team join and no repository allocation (K14-A, V)"
+        },
+        {
+          "caller": "restricted",
+          "served": false,
+          "refusal": {
+            "code": "operation_not_served_for_caller",
+            "reason": "K14-A: forced scope inside the nested analytics batch is not proved; team and repository investment comes from read_facts (kind investment)"
+          },
+          "basis": "K14-A: forced scope inside the nested analytics batch is not proved; team and repository investment comes from read_facts (kind investment)"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "analytics.breakdowns[*].dimension",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.breakdowns[*].measure",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.breakdowns[*].items[*].key",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.breakdowns[*].items[*].value",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.breakdowns[*].items[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "analytics.breakdowns[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "analytics.sankey.nodes[*].id",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.sankey.nodes[*].label",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.sankey.nodes[*].dimension",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.sankey.nodes[*].value",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.sankey.nodes[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "analytics.sankey.edges[*].source",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.sankey.edges[*].target",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.sankey.edges[*].value",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.sankey.edges[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "analytics.sankey.coverage.teamCoverage",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.sankey.coverage.repoCoverage",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.sankey.coverage.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "analytics.sankey.unit",
+          "type": "SankeyValueUnit!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.sankey.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "analytics.__typename",
+          "type": "String",
+          "leaf": "typename"
+        }
+      ],
+      "withheld_outputs": [],
+      "disclosure": [
+        {
+          "path": "analytics.sankey.coverage.teamCoverage",
+          "rule": "partial_when_below_one"
+        },
+        {
+          "path": "analytics.sankey.coverage.repoCoverage",
+          "rule": "partial_when_below_one"
+        }
+      ],
+      "notes": [
+        "batch.sankey is refused in S1a (K14-A), so sankey is always null and the coverage disclosure never fires; completeness stays unknown"
+      ]
+    },
+    {
+      "name": "securityAlerts",
+      "document_operation_name": "SecurityAlerts",
+      "kind": "query",
+      "digest": "c7660e4db9d230cee45deb465db15fb795965bf66a1cefd2a8f51555dac376cf",
+      "document_text": "query SecurityAlerts($orgId: String!, $filters: SecurityAlertFilterInput, $pagination: SecurityPaginationInput) {\n  securityAlerts(orgId: $orgId, filters: $filters, pagination: $pagination) {\n    edges {\n      node {\n        alertId\n        repoId\n        repoName\n        repoUrl\n        source\n        severity\n        state\n        packageName\n        cveId\n        url\n        title\n        description\n        createdAt\n        fixedAt\n        dismissedAt\n        __typename\n      }\n      cursor\n      __typename\n    }\n    totalCount\n    pageInfo {\n      hasNextPage\n      hasPreviousPage\n      startCursor\n      endCursor\n      __typename\n    }\n    __typename\n  }\n}",
+      "cost_class": "list",
+      "deadline_seconds": 30,
+      "variables": [
+        {
+          "path": "orgId",
+          "type": "String!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "acr_principal_org"
+        },
+        {
+          "path": "filters",
+          "type": "SecurityAlertFilterInput",
+          "kind": "object",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "filters.repoIds",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "max_items": 200,
+          "subject": {
+            "kind": "repository",
+            "acr_prefix": "repository:",
+            "ops_form": "bare_uuid"
+          }
+        },
+        {
+          "path": "filters.severities",
+          "type": "[SecuritySeverityInput!]",
+          "kind": "enum",
+          "enum": [
+            "LOW",
+            "MEDIUM",
+            "HIGH",
+            "CRITICAL",
+            "UNKNOWN"
+          ],
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "allowed_values": [
+            "LOW",
+            "MEDIUM",
+            "HIGH",
+            "CRITICAL",
+            "UNKNOWN"
+          ],
+          "max_items": 5
+        },
+        {
+          "path": "filters.sources",
+          "type": "[SecuritySourceInput!]",
+          "kind": "enum",
+          "enum": [
+            "DEPENDABOT",
+            "CODE_SCANNING",
+            "ADVISORY",
+            "GITLAB_VULNERABILITY",
+            "GITLAB_DEPENDENCY"
+          ],
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "allowed_values": [
+            "DEPENDABOT",
+            "CODE_SCANNING",
+            "ADVISORY",
+            "GITLAB_VULNERABILITY",
+            "GITLAB_DEPENDENCY"
+          ],
+          "max_items": 5
+        },
+        {
+          "path": "filters.states",
+          "type": "[SecurityStateInput!]",
+          "kind": "enum",
+          "enum": [
+            "OPEN",
+            "FIXED",
+            "DISMISSED",
+            "DETECTED",
+            "CONFIRMED",
+            "RESOLVED"
+          ],
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "allowed_values": [
+            "OPEN",
+            "FIXED",
+            "DISMISSED",
+            "DETECTED",
+            "CONFIRMED",
+            "RESOLVED"
+          ],
+          "max_items": 6
+        },
+        {
+          "path": "filters.since",
+          "type": "Date",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "filters.until",
+          "type": "Date",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "filters.openOnly",
+          "type": "Boolean!",
+          "kind": "scalar",
+          "default": "false",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "filters.search",
+          "type": "String",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "max_length": 200
+        },
+        {
+          "path": "pagination",
+          "type": "SecurityPaginationInput",
+          "kind": "object",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "pagination.first",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "50",
+          "allowed": true,
+          "source": "client",
+          "min": 1,
+          "max": 200
+        },
+        {
+          "path": "pagination.after",
+          "type": "String",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "max_length": 64
+        }
+      ],
+      "person_variables": [],
+      "constraints": [
+        {
+          "kind": "window_max_days",
+          "path": "filters.since",
+          "other": "filters.until",
+          "max_days": 90,
+          "allow_open_start": true,
+          "code": "variable_out_of_range",
+          "reason": "window longer than the design D.6 clamp"
+        }
+      ],
+      "scopes": [
+        {
+          "caller": "unrestricted",
+          "served": true,
+          "basis": "[ops] security/filter.go:61-64 apply repoIds (uuid only); alerts.go:99-113 page (RM §3, V)"
+        },
+        {
+          "caller": "restricted",
+          "served": true,
+          "forced_variable_path": "filters.repoIds",
+          "subject_kind": "repository",
+          "row_id_paths": [
+            "securityAlerts.edges[*].node.repoId"
+          ],
+          "basis": "forced filters.repoIds (uuid only, [ops] security/filter.go:62) + row check on edges[*].node.repoId = toString(sa.repo_id) (alerts.go:116,156). null or [] = all repositories, so an empty intersection ends before dispatch (RM §3)"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "securityAlerts.edges[*].node.alertId",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityAlerts.edges[*].node.repoId",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityAlerts.edges[*].node.repoName",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityAlerts.edges[*].node.repoUrl",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityAlerts.edges[*].node.source",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityAlerts.edges[*].node.severity",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityAlerts.edges[*].node.state",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityAlerts.edges[*].node.packageName",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityAlerts.edges[*].node.cveId",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityAlerts.edges[*].node.url",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityAlerts.edges[*].node.title",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityAlerts.edges[*].node.description",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityAlerts.edges[*].node.createdAt",
+          "type": "DateTime!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityAlerts.edges[*].node.fixedAt",
+          "type": "DateTime",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityAlerts.edges[*].node.dismissedAt",
+          "type": "DateTime",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityAlerts.edges[*].node.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "securityAlerts.edges[*].cursor",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityAlerts.edges[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "securityAlerts.totalCount",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityAlerts.pageInfo.hasNextPage",
+          "type": "Boolean!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityAlerts.pageInfo.hasPreviousPage",
+          "type": "Boolean!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityAlerts.pageInfo.startCursor",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityAlerts.pageInfo.endCursor",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityAlerts.pageInfo.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "securityAlerts.__typename",
+          "type": "String",
+          "leaf": "typename"
+        }
+      ],
+      "withheld_outputs": [],
+      "disclosure": [],
+      "notes": [
+        "filters.since is optional (allow_open_start): an alert list is state, and pagination.first <= 200 bounds the cost; ops has no max on first (alerts.go:99-103)"
+      ]
+    },
+    {
+      "name": "securityOverview",
+      "document_operation_name": "SecurityOverview",
+      "kind": "query",
+      "digest": "3b76c20e6950094356311d84f4288a7ce9e1e936c60c2b867b6e083f2d709884",
+      "document_text": "query SecurityOverview($orgId: String!, $filters: SecurityAlertFilterInput) {\n  securityOverview(orgId: $orgId, filters: $filters) {\n    kpis {\n      openTotal\n      critical\n      high\n      meanDaysToFix30d\n      openDelta30d\n      __typename\n    }\n    severityBreakdown {\n      severity\n      count\n      __typename\n    }\n    topRepos {\n      repoId\n      repoName\n      repoUrl\n      count\n      __typename\n    }\n    trend {\n      day\n      opened\n      fixed\n      __typename\n    }\n    __typename\n  }\n}",
+      "cost_class": "series",
+      "deadline_seconds": 30,
+      "variables": [
+        {
+          "path": "orgId",
+          "type": "String!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "acr_principal_org"
+        },
+        {
+          "path": "filters",
+          "type": "SecurityAlertFilterInput",
+          "kind": "object",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "filters.repoIds",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "max_items": 200,
+          "subject": {
+            "kind": "repository",
+            "acr_prefix": "repository:",
+            "ops_form": "bare_uuid"
+          }
+        },
+        {
+          "path": "filters.severities",
+          "type": "[SecuritySeverityInput!]",
+          "kind": "enum",
+          "enum": [
+            "LOW",
+            "MEDIUM",
+            "HIGH",
+            "CRITICAL",
+            "UNKNOWN"
+          ],
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "allowed_values": [
+            "LOW",
+            "MEDIUM",
+            "HIGH",
+            "CRITICAL",
+            "UNKNOWN"
+          ],
+          "max_items": 5
+        },
+        {
+          "path": "filters.sources",
+          "type": "[SecuritySourceInput!]",
+          "kind": "enum",
+          "enum": [
+            "DEPENDABOT",
+            "CODE_SCANNING",
+            "ADVISORY",
+            "GITLAB_VULNERABILITY",
+            "GITLAB_DEPENDENCY"
+          ],
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "allowed_values": [
+            "DEPENDABOT",
+            "CODE_SCANNING",
+            "ADVISORY",
+            "GITLAB_VULNERABILITY",
+            "GITLAB_DEPENDENCY"
+          ],
+          "max_items": 5
+        },
+        {
+          "path": "filters.states",
+          "type": "[SecurityStateInput!]",
+          "kind": "enum",
+          "enum": [
+            "OPEN",
+            "FIXED",
+            "DISMISSED",
+            "DETECTED",
+            "CONFIRMED",
+            "RESOLVED"
+          ],
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "allowed_values": [
+            "OPEN",
+            "FIXED",
+            "DISMISSED",
+            "DETECTED",
+            "CONFIRMED",
+            "RESOLVED"
+          ],
+          "max_items": 6
+        },
+        {
+          "path": "filters.since",
+          "type": "Date",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "filters.until",
+          "type": "Date",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "filters.openOnly",
+          "type": "Boolean!",
+          "kind": "scalar",
+          "default": "false",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "filters.search",
+          "type": "String",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "max_length": 200
+        }
+      ],
+      "person_variables": [],
+      "constraints": [
+        {
+          "kind": "window_max_days",
+          "path": "filters.since",
+          "other": "filters.until",
+          "max_days": 90,
+          "allow_open_start": true,
+          "code": "variable_out_of_range",
+          "reason": "window longer than the design D.6 clamp"
+        }
+      ],
+      "scopes": [
+        {
+          "caller": "unrestricted",
+          "served": true,
+          "basis": "[ops] security/overview.go:49-179 apply the shared repoIds filter (filter.go:61-64; RM §10)"
+        },
+        {
+          "caller": "restricted",
+          "served": false,
+          "refusal": {
+            "code": "operation_not_served_for_caller",
+            "reason": "kpis, severityBreakdown and trend are aggregates with no row id ([ops] security/overview.go:49-70,97-106,159-179; RM §10)"
+          },
+          "basis": "kpis, severityBreakdown and trend are aggregates with no row id ([ops] security/overview.go:49-70,97-106,159-179; RM §10)"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "securityOverview.kpis.openTotal",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityOverview.kpis.critical",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityOverview.kpis.high",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityOverview.kpis.meanDaysToFix30d",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityOverview.kpis.openDelta30d",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityOverview.kpis.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "securityOverview.severityBreakdown[*].severity",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityOverview.severityBreakdown[*].count",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityOverview.severityBreakdown[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "securityOverview.topRepos[*].repoId",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityOverview.topRepos[*].repoName",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityOverview.topRepos[*].repoUrl",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityOverview.topRepos[*].count",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityOverview.topRepos[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "securityOverview.trend[*].day",
+          "type": "Date!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityOverview.trend[*].opened",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityOverview.trend[*].fixed",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "securityOverview.trend[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "securityOverview.__typename",
+          "type": "String",
+          "leaf": "typename"
+        }
+      ],
+      "withheld_outputs": [],
+      "disclosure": [],
+      "notes": [
+        "trend and the 30-day KPIs use fixed windows from now (overview.go:169,176); the filter window does not move them",
+        "cost class not named by design D.6; series chosen (aggregate over fixed windows)"
+      ]
+    },
+    {
+      "name": "throughputForecast",
+      "document_operation_name": "ThroughputForecast",
+      "kind": "query",
+      "digest": "fc08dea094ec832290b4f528141eacb5bbc463beea45794cf205fe43952379f9",
+      "document_text": "query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {\n  throughputForecast(orgId: $orgId, input: $input) {\n    forecastId\n    computedAt\n    teamId\n    workScopeId\n    backlogSize\n    historyWeeks\n    p50Weeks\n    p75Weeks\n    p90Weeks\n    insufficientHistory\n    rollingWindows {\n      windowWeeks\n      meanWeeklyThroughput\n      sampleCount\n      insufficientHistory\n      __typename\n    }\n    primaryRisk {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    wipCongestion {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    staleWip {\n      p50AgeHours\n      p90AgeHours\n      __typename\n    }\n    estimateCoverage {\n      ratio\n      estimatedCount\n      unestimatedCount\n      backlogSize\n      __typename\n    }\n    reviewBottleneck {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    incidentLoad {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    __typename\n  }\n}",
+      "cost_class": "series",
+      "deadline_seconds": 30,
+      "variables": [
+        {
+          "path": "orgId",
+          "type": "String!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "acr_principal_org"
+        },
+        {
+          "path": "input",
+          "type": "ThroughputForecastInput!",
+          "kind": "object",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "input.teamIds",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "max_items": 200,
+          "subject": {
+            "kind": "team",
+            "acr_prefix": "team:",
+            "ops_form": "bare_id"
+          }
+        },
+        {
+          "path": "input.workScopeId",
+          "type": "String",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "work scope id form between acr and ops is UNCONFIRMED (POLICY-ARTIFACT-v0)"
+          }
+        },
+        {
+          "path": "input.backlogSize",
+          "type": "Int",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "min": 0,
+          "max": 100000
+        },
+        {
+          "path": "input.historyWeeks",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "12",
+          "allowed": true,
+          "source": "client",
+          "min": 1,
+          "max": 12
+        }
+      ],
+      "person_variables": [],
+      "constraints": [],
+      "scopes": [
+        {
+          "caller": "unrestricted",
+          "served": true,
+          "basis": "[ops] throughputforecast clickhouse.go:44-63 apply teamIds (RM §14)"
+        },
+        {
+          "caller": "restricted",
+          "served": false,
+          "refusal": {
+            "code": "operation_not_served_for_caller",
+            "reason": "no repository scope; reviewBottleneck and incidentLoad are org-wide ([ops] throughputforecast/resolve.go:145-152; clickhouse.go:395-411,492-510; RM §14); REFUSED until the K2 team path is read"
+          },
+          "basis": "no repository scope; reviewBottleneck and incidentLoad are org-wide ([ops] throughputforecast/resolve.go:145-152; clickhouse.go:395-411,492-510; RM §14); REFUSED until the K2 team path is read"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "throughputForecast.forecastId",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.computedAt",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.teamId",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.workScopeId",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.backlogSize",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.historyWeeks",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.p50Weeks",
+          "type": "Int",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.p75Weeks",
+          "type": "Int",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.p90Weeks",
+          "type": "Int",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.insufficientHistory",
+          "type": "Boolean!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.rollingWindows[*].windowWeeks",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.rollingWindows[*].meanWeeklyThroughput",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.rollingWindows[*].sampleCount",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.rollingWindows[*].insufficientHistory",
+          "type": "Boolean!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.rollingWindows[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "throughputForecast.primaryRisk.kind",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.primaryRisk.score",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.primaryRisk.label",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.primaryRisk.value",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.primaryRisk.threshold",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.primaryRisk.active",
+          "type": "Boolean!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.primaryRisk.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "throughputForecast.wipCongestion.kind",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.wipCongestion.score",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.wipCongestion.label",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.wipCongestion.value",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.wipCongestion.threshold",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.wipCongestion.active",
+          "type": "Boolean!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.wipCongestion.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "throughputForecast.staleWip.p50AgeHours",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.staleWip.p90AgeHours",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.staleWip.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "throughputForecast.estimateCoverage.ratio",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.estimateCoverage.estimatedCount",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.estimateCoverage.unestimatedCount",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.estimateCoverage.backlogSize",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.estimateCoverage.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "throughputForecast.reviewBottleneck.kind",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.reviewBottleneck.score",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.reviewBottleneck.label",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.reviewBottleneck.value",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.reviewBottleneck.threshold",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.reviewBottleneck.active",
+          "type": "Boolean!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.reviewBottleneck.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "throughputForecast.incidentLoad.kind",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.incidentLoad.score",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.incidentLoad.label",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.incidentLoad.value",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.incidentLoad.threshold",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.incidentLoad.active",
+          "type": "Boolean!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.incidentLoad.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "throughputForecast.__typename",
+          "type": "String",
+          "leaf": "typename"
+        }
+      ],
+      "withheld_outputs": [],
+      "disclosure": [
+        {
+          "path": "throughputForecast.insufficientHistory",
+          "rule": "partial_when_true"
+        }
+      ],
+      "notes": [
+        "reviewBottleneck and incidentLoad stay org-wide even with teamIds (RM §14)"
+      ]
+    },
+    {
+      "name": "workGraphArtifacts",
+      "document_operation_name": "WorkGraphArtifacts",
+      "kind": "query",
+      "digest": "43bec17bb952ded61589e1a271a63030cb66577911047afed8d6d58be97131b0",
+      "document_text": "query WorkGraphArtifacts($orgId: String!, $filters: WorkGraphEdgeFilterInput) {\n  workGraphArtifacts(orgId: $orgId, filters: $filters) {\n    rows {\n      nodeType\n      nodeId\n      displayName\n      degree\n      evidence\n      __typename\n    }\n    degradedReason\n    __typename\n  }\n}",
+      "cost_class": "list",
+      "deadline_seconds": 30,
+      "variables": [
+        {
+          "path": "orgId",
+          "type": "String!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "acr_principal_org"
+        },
+        {
+          "path": "filters",
+          "type": "WorkGraphEdgeFilterInput",
+          "kind": "object",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "filters.repoIds",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "max_items": 200,
+          "subject": {
+            "kind": "repository",
+            "acr_prefix": "repository:",
+            "ops_form": "bare_uuid"
+          }
+        },
+        {
+          "path": "filters.sourceType",
+          "type": "WorkGraphNodeTypeInput",
+          "kind": "enum",
+          "enum": [
+            "ISSUE",
+            "PR",
+            "COMMIT",
+            "FILE",
+            "RELEASE",
+            "FEATURE_FLAG",
+            "AI_WORKFLOW_RUN",
+            "DIFF",
+            "REVIEW_OUTCOME",
+            "DEPLOYMENT",
+            "INCIDENT"
+          ],
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: [ops] workgraph/flow.go:70 and artifacts.go:103 build the WHERE with includeEdgeFilters=false (RM §12, §13)"
+          }
+        },
+        {
+          "path": "filters.targetType",
+          "type": "WorkGraphNodeTypeInput",
+          "kind": "enum",
+          "enum": [
+            "ISSUE",
+            "PR",
+            "COMMIT",
+            "FILE",
+            "RELEASE",
+            "FEATURE_FLAG",
+            "AI_WORKFLOW_RUN",
+            "DIFF",
+            "REVIEW_OUTCOME",
+            "DEPLOYMENT",
+            "INCIDENT"
+          ],
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: [ops] workgraph/flow.go:70 and artifacts.go:103 (RM §12, §13)"
+          }
+        },
+        {
+          "path": "filters.edgeType",
+          "type": "WorkGraphEdgeTypeInput",
+          "kind": "enum",
+          "enum": [
+            "BLOCKS",
+            "RELATES",
+            "DUPLICATES",
+            "IS_BLOCKED_BY",
+            "IS_RELATED_TO",
+            "IS_DUPLICATE_OF",
+            "PARENT_OF",
+            "CHILD_OF",
+            "REFERENCES",
+            "IMPLEMENTS",
+            "FIXES",
+            "CONTAINS",
+            "TOUCHES",
+            "INTRODUCED_BY",
+            "CONFIG_CHANGED_BY",
+            "GUARDS",
+            "IMPACTS",
+            "HAS_AI_WORKFLOW",
+            "GENERATES",
+            "HAS_REVIEW_OUTCOME",
+            "DEPLOYS",
+            "LINKED_INCIDENT"
+          ],
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: [ops] workgraph/flow.go:70 and artifacts.go:103 (RM §12, §13)"
+          }
+        },
+        {
+          "path": "filters.edgeTypes",
+          "type": "[WorkGraphEdgeTypeInput!]",
+          "kind": "enum",
+          "enum": [
+            "BLOCKS",
+            "RELATES",
+            "DUPLICATES",
+            "IS_BLOCKED_BY",
+            "IS_RELATED_TO",
+            "IS_DUPLICATE_OF",
+            "PARENT_OF",
+            "CHILD_OF",
+            "REFERENCES",
+            "IMPLEMENTS",
+            "FIXES",
+            "CONTAINS",
+            "TOUCHES",
+            "INTRODUCED_BY",
+            "CONFIG_CHANGED_BY",
+            "GUARDS",
+            "IMPACTS",
+            "HAS_AI_WORKFLOW",
+            "GENERATES",
+            "HAS_REVIEW_OUTCOME",
+            "DEPLOYS",
+            "LINKED_INCIDENT"
+          ],
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: [ops] workgraph/flow.go:70 and artifacts.go:103 (RM §12, §13)"
+          }
+        },
+        {
+          "path": "filters.nodeId",
+          "type": "String",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: [ops] workgraph/flow.go:70 and artifacts.go:103 (RM §12, §13)"
+          }
+        },
+        {
+          "path": "filters.theme",
+          "type": "String",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "max_length": 128
+        },
+        {
+          "path": "filters.subcategory",
+          "type": "String",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "max_length": 128
+        },
+        {
+          "path": "filters.allowScopedPartial",
+          "type": "Boolean!",
+          "kind": "scalar",
+          "default": "false",
+          "allowed": true,
+          "source": "acr_forced",
+          "forced_value": false
+        },
+        {
+          "path": "filters.limit",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "1000",
+          "allowed": true,
+          "source": "client",
+          "min": 1,
+          "max": 200
+        }
+      ],
+      "person_variables": [],
+      "constraints": [],
+      "scopes": [
+        {
+          "caller": "unrestricted",
+          "served": true,
+          "basis": "[ops] workgraph/artifacts.go:78-82,103 apply repoIds and limit (RM §13)"
+        },
+        {
+          "caller": "restricted",
+          "served": false,
+          "refusal": {
+            "code": "operation_not_served_for_caller",
+            "reason": "rows carry no repository id; node ids are opaque except PR ids ([ops] workgraph/artifacts.go:103-105; RM §13)"
+          },
+          "basis": "rows carry no repository id; node ids are opaque except PR ids ([ops] workgraph/artifacts.go:103-105; RM §13)"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "workGraphArtifacts.rows[*].nodeType",
+          "type": "WorkGraphNodeType!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workGraphArtifacts.rows[*].nodeId",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workGraphArtifacts.rows[*].displayName",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workGraphArtifacts.rows[*].degree",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workGraphArtifacts.rows[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "workGraphArtifacts.degradedReason",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workGraphArtifacts.__typename",
+          "type": "String",
+          "leaf": "typename"
+        }
+      ],
+      "withheld_outputs": [
+        {
+          "path": "workGraphArtifacts.rows[*].evidence",
+          "reason": "free text evidence string; not all producers were read and it may carry person content (RM §11, §13; design D.3: evidence is not an allowed output path)"
+        }
+      ],
+      "disclosure": [
+        {
+          "path": "workGraphArtifacts.degradedReason",
+          "rule": "partial_when_non_null"
+        }
+      ]
+    },
+    {
+      "name": "workGraphEdges",
+      "document_operation_name": "WorkGraphEdges",
+      "kind": "query",
+      "digest": "42839ae99e07329399e3522607463e12e5e8a53267578ea80a1d6c6c518a43e0",
+      "document_text": "query WorkGraphEdges($orgId: String!, $filters: WorkGraphEdgeFilterInput) {\n  workGraphEdges(orgId: $orgId, filters: $filters) {\n    edges {\n      edgeId\n      sourceType\n      sourceId\n      sourceDisplayName\n      targetType\n      targetId\n      targetDisplayName\n      edgeType\n      provenance\n      confidence\n      evidence\n      repoId\n      provider\n      theme\n      subcategory\n      __typename\n    }\n    totalCount\n    pageInfo {\n      hasNextPage\n      hasPreviousPage\n      startCursor\n      endCursor\n      __typename\n    }\n    degradedReason\n    __typename\n  }\n}",
+      "cost_class": "list",
+      "deadline_seconds": 30,
+      "variables": [
+        {
+          "path": "orgId",
+          "type": "String!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "acr_principal_org"
+        },
+        {
+          "path": "filters",
+          "type": "WorkGraphEdgeFilterInput",
+          "kind": "object",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "filters.repoIds",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "max_items": 200,
+          "subject": {
+            "kind": "repository",
+            "acr_prefix": "repository:",
+            "ops_form": "bare_uuid"
+          }
+        },
+        {
+          "path": "filters.sourceType",
+          "type": "WorkGraphNodeTypeInput",
+          "kind": "enum",
+          "enum": [
+            "ISSUE",
+            "PR",
+            "COMMIT",
+            "FILE",
+            "RELEASE",
+            "FEATURE_FLAG",
+            "AI_WORKFLOW_RUN",
+            "DIFF",
+            "REVIEW_OUTCOME",
+            "DEPLOYMENT",
+            "INCIDENT"
+          ],
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "allowed_values": [
+            "ISSUE",
+            "PR",
+            "COMMIT",
+            "FILE",
+            "RELEASE",
+            "FEATURE_FLAG",
+            "AI_WORKFLOW_RUN",
+            "DIFF",
+            "REVIEW_OUTCOME",
+            "DEPLOYMENT",
+            "INCIDENT"
+          ]
+        },
+        {
+          "path": "filters.targetType",
+          "type": "WorkGraphNodeTypeInput",
+          "kind": "enum",
+          "enum": [
+            "ISSUE",
+            "PR",
+            "COMMIT",
+            "FILE",
+            "RELEASE",
+            "FEATURE_FLAG",
+            "AI_WORKFLOW_RUN",
+            "DIFF",
+            "REVIEW_OUTCOME",
+            "DEPLOYMENT",
+            "INCIDENT"
+          ],
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "allowed_values": [
+            "ISSUE",
+            "PR",
+            "COMMIT",
+            "FILE",
+            "RELEASE",
+            "FEATURE_FLAG",
+            "AI_WORKFLOW_RUN",
+            "DIFF",
+            "REVIEW_OUTCOME",
+            "DEPLOYMENT",
+            "INCIDENT"
+          ]
+        },
+        {
+          "path": "filters.edgeType",
+          "type": "WorkGraphEdgeTypeInput",
+          "kind": "enum",
+          "enum": [
+            "BLOCKS",
+            "RELATES",
+            "DUPLICATES",
+            "IS_BLOCKED_BY",
+            "IS_RELATED_TO",
+            "IS_DUPLICATE_OF",
+            "PARENT_OF",
+            "CHILD_OF",
+            "REFERENCES",
+            "IMPLEMENTS",
+            "FIXES",
+            "CONTAINS",
+            "TOUCHES",
+            "INTRODUCED_BY",
+            "CONFIG_CHANGED_BY",
+            "GUARDS",
+            "IMPACTS",
+            "HAS_AI_WORKFLOW",
+            "GENERATES",
+            "HAS_REVIEW_OUTCOME",
+            "DEPLOYS",
+            "LINKED_INCIDENT"
+          ],
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "allowed_values": [
+            "BLOCKS",
+            "RELATES",
+            "DUPLICATES",
+            "IS_BLOCKED_BY",
+            "IS_RELATED_TO",
+            "IS_DUPLICATE_OF",
+            "PARENT_OF",
+            "CHILD_OF",
+            "REFERENCES",
+            "IMPLEMENTS",
+            "FIXES",
+            "CONTAINS",
+            "TOUCHES",
+            "INTRODUCED_BY",
+            "CONFIG_CHANGED_BY",
+            "GUARDS",
+            "IMPACTS",
+            "HAS_AI_WORKFLOW",
+            "GENERATES",
+            "HAS_REVIEW_OUTCOME",
+            "DEPLOYS",
+            "LINKED_INCIDENT"
+          ]
+        },
+        {
+          "path": "filters.edgeTypes",
+          "type": "[WorkGraphEdgeTypeInput!]",
+          "kind": "enum",
+          "enum": [
+            "BLOCKS",
+            "RELATES",
+            "DUPLICATES",
+            "IS_BLOCKED_BY",
+            "IS_RELATED_TO",
+            "IS_DUPLICATE_OF",
+            "PARENT_OF",
+            "CHILD_OF",
+            "REFERENCES",
+            "IMPLEMENTS",
+            "FIXES",
+            "CONTAINS",
+            "TOUCHES",
+            "INTRODUCED_BY",
+            "CONFIG_CHANGED_BY",
+            "GUARDS",
+            "IMPACTS",
+            "HAS_AI_WORKFLOW",
+            "GENERATES",
+            "HAS_REVIEW_OUTCOME",
+            "DEPLOYS",
+            "LINKED_INCIDENT"
+          ],
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "allowed_values": [
+            "BLOCKS",
+            "RELATES",
+            "DUPLICATES",
+            "IS_BLOCKED_BY",
+            "IS_RELATED_TO",
+            "IS_DUPLICATE_OF",
+            "PARENT_OF",
+            "CHILD_OF",
+            "REFERENCES",
+            "IMPLEMENTS",
+            "FIXES",
+            "CONTAINS",
+            "TOUCHES",
+            "INTRODUCED_BY",
+            "CONFIG_CHANGED_BY",
+            "GUARDS",
+            "IMPACTS",
+            "HAS_AI_WORKFLOW",
+            "GENERATES",
+            "HAS_REVIEW_OUTCOME",
+            "DEPLOYS",
+            "LINKED_INCIDENT"
+          ],
+          "max_items": 22
+        },
+        {
+          "path": "filters.nodeId",
+          "type": "String",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "max_length": 256
+        },
+        {
+          "path": "filters.theme",
+          "type": "String",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "max_length": 128
+        },
+        {
+          "path": "filters.subcategory",
+          "type": "String",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "max_length": 128
+        },
+        {
+          "path": "filters.allowScopedPartial",
+          "type": "Boolean!",
+          "kind": "scalar",
+          "default": "false",
+          "allowed": true,
+          "source": "acr_forced",
+          "forced_value": false
+        },
+        {
+          "path": "filters.limit",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "1000",
+          "allowed": true,
+          "source": "client",
+          "min": 1,
+          "max": 200
+        }
+      ],
+      "person_variables": [],
+      "constraints": [],
+      "scopes": [
+        {
+          "caller": "unrestricted",
+          "served": true,
+          "basis": "[ops] workgraph/scope.go:66-136, edges.go:158-182 apply repoIds (RM §11)"
+        },
+        {
+          "caller": "restricted",
+          "served": false,
+          "refusal": {
+            "code": "operation_not_served_for_caller",
+            "reason": "one repository id per edge (argMax winner) does not prove both ends; dependency edges carry none ([ops] workgraph/edges.go:182,195,252-254,304; RM §11, design D.3)"
+          },
+          "basis": "one repository id per edge (argMax winner) does not prove both ends; dependency edges carry none ([ops] workgraph/edges.go:182,195,252-254,304; RM §11, design D.3)"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "workGraphEdges.edges[*].edgeId",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workGraphEdges.edges[*].sourceType",
+          "type": "WorkGraphNodeType!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workGraphEdges.edges[*].sourceId",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workGraphEdges.edges[*].sourceDisplayName",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workGraphEdges.edges[*].targetType",
+          "type": "WorkGraphNodeType!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workGraphEdges.edges[*].targetId",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workGraphEdges.edges[*].targetDisplayName",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workGraphEdges.edges[*].edgeType",
+          "type": "WorkGraphEdgeType!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workGraphEdges.edges[*].provenance",
+          "type": "WorkGraphProvenance!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workGraphEdges.edges[*].confidence",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workGraphEdges.edges[*].repoId",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workGraphEdges.edges[*].provider",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workGraphEdges.edges[*].theme",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workGraphEdges.edges[*].subcategory",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workGraphEdges.edges[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "workGraphEdges.totalCount",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workGraphEdges.pageInfo.hasNextPage",
+          "type": "Boolean!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workGraphEdges.pageInfo.hasPreviousPage",
+          "type": "Boolean!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workGraphEdges.pageInfo.startCursor",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workGraphEdges.pageInfo.endCursor",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workGraphEdges.pageInfo.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "workGraphEdges.degradedReason",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workGraphEdges.__typename",
+          "type": "String",
+          "leaf": "typename"
+        }
+      ],
+      "withheld_outputs": [
+        {
+          "path": "workGraphEdges.edges[*].evidence",
+          "reason": "free text evidence string; not all producers were read and it may carry person content (RM §11, §13; design D.3: evidence is not an allowed output path)"
+        }
+      ],
+      "disclosure": [
+        {
+          "path": "workGraphEdges.degradedReason",
+          "rule": "partial_when_non_null"
+        }
+      ],
+      "notes": [
+        "allowScopedPartial is forced false: partial mode would be invisible, isPartial is not selected (RM §11)",
+        "sourceDisplayName/targetDisplayName can be PR or incident titles (free text, displaynames.go:129,286)"
+      ]
+    },
+    {
+      "name": "workGraphFlow",
+      "document_operation_name": "WorkGraphFlow",
+      "kind": "query",
+      "digest": "99b921280c0e40d6fe3484ee522c13bc025e7bc64604c2e9d615160e80ae1b3d",
+      "document_text": "query WorkGraphFlow($orgId: String!, $filters: WorkGraphEdgeFilterInput) {\n  workGraphFlow(orgId: $orgId, filters: $filters) {\n    rows {\n      nodeType\n      inflow\n      outflow\n      __typename\n    }\n    degradedReason\n    __typename\n  }\n}",
+      "cost_class": "list",
+      "deadline_seconds": 30,
+      "variables": [
+        {
+          "path": "orgId",
+          "type": "String!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "acr_principal_org"
+        },
+        {
+          "path": "filters",
+          "type": "WorkGraphEdgeFilterInput",
+          "kind": "object",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "filters.repoIds",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "max_items": 200,
+          "subject": {
+            "kind": "repository",
+            "acr_prefix": "repository:",
+            "ops_form": "bare_uuid"
+          }
+        },
+        {
+          "path": "filters.sourceType",
+          "type": "WorkGraphNodeTypeInput",
+          "kind": "enum",
+          "enum": [
+            "ISSUE",
+            "PR",
+            "COMMIT",
+            "FILE",
+            "RELEASE",
+            "FEATURE_FLAG",
+            "AI_WORKFLOW_RUN",
+            "DIFF",
+            "REVIEW_OUTCOME",
+            "DEPLOYMENT",
+            "INCIDENT"
+          ],
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: [ops] workgraph/flow.go:70 and artifacts.go:103 build the WHERE with includeEdgeFilters=false (RM §12, §13)"
+          }
+        },
+        {
+          "path": "filters.targetType",
+          "type": "WorkGraphNodeTypeInput",
+          "kind": "enum",
+          "enum": [
+            "ISSUE",
+            "PR",
+            "COMMIT",
+            "FILE",
+            "RELEASE",
+            "FEATURE_FLAG",
+            "AI_WORKFLOW_RUN",
+            "DIFF",
+            "REVIEW_OUTCOME",
+            "DEPLOYMENT",
+            "INCIDENT"
+          ],
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: [ops] workgraph/flow.go:70 and artifacts.go:103 (RM §12, §13)"
+          }
+        },
+        {
+          "path": "filters.edgeType",
+          "type": "WorkGraphEdgeTypeInput",
+          "kind": "enum",
+          "enum": [
+            "BLOCKS",
+            "RELATES",
+            "DUPLICATES",
+            "IS_BLOCKED_BY",
+            "IS_RELATED_TO",
+            "IS_DUPLICATE_OF",
+            "PARENT_OF",
+            "CHILD_OF",
+            "REFERENCES",
+            "IMPLEMENTS",
+            "FIXES",
+            "CONTAINS",
+            "TOUCHES",
+            "INTRODUCED_BY",
+            "CONFIG_CHANGED_BY",
+            "GUARDS",
+            "IMPACTS",
+            "HAS_AI_WORKFLOW",
+            "GENERATES",
+            "HAS_REVIEW_OUTCOME",
+            "DEPLOYS",
+            "LINKED_INCIDENT"
+          ],
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: [ops] workgraph/flow.go:70 and artifacts.go:103 (RM §12, §13)"
+          }
+        },
+        {
+          "path": "filters.edgeTypes",
+          "type": "[WorkGraphEdgeTypeInput!]",
+          "kind": "enum",
+          "enum": [
+            "BLOCKS",
+            "RELATES",
+            "DUPLICATES",
+            "IS_BLOCKED_BY",
+            "IS_RELATED_TO",
+            "IS_DUPLICATE_OF",
+            "PARENT_OF",
+            "CHILD_OF",
+            "REFERENCES",
+            "IMPLEMENTS",
+            "FIXES",
+            "CONTAINS",
+            "TOUCHES",
+            "INTRODUCED_BY",
+            "CONFIG_CHANGED_BY",
+            "GUARDS",
+            "IMPACTS",
+            "HAS_AI_WORKFLOW",
+            "GENERATES",
+            "HAS_REVIEW_OUTCOME",
+            "DEPLOYS",
+            "LINKED_INCIDENT"
+          ],
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: [ops] workgraph/flow.go:70 and artifacts.go:103 (RM §12, §13)"
+          }
+        },
+        {
+          "path": "filters.nodeId",
+          "type": "String",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: [ops] workgraph/flow.go:70 and artifacts.go:103 (RM §12, §13)"
+          }
+        },
+        {
+          "path": "filters.theme",
+          "type": "String",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "max_length": 128
+        },
+        {
+          "path": "filters.subcategory",
+          "type": "String",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "max_length": 128
+        },
+        {
+          "path": "filters.allowScopedPartial",
+          "type": "Boolean!",
+          "kind": "scalar",
+          "default": "false",
+          "allowed": true,
+          "source": "acr_forced",
+          "forced_value": false
+        },
+        {
+          "path": "filters.limit",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "1000",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: [ops] workgraph/flow.go applies no limit (RM §12)"
+          }
+        }
+      ],
+      "person_variables": [],
+      "constraints": [],
+      "scopes": [
+        {
+          "caller": "unrestricted",
+          "served": true,
+          "basis": "[ops] workgraph/flow.go:47-58,70 apply repoIds (RM §12)"
+        },
+        {
+          "caller": "restricted",
+          "served": false,
+          "refusal": {
+            "code": "operation_not_served_for_caller",
+            "reason": "rows carry no id of any kind ([ops] workgraph/flow.go:70; RM §12)"
+          },
+          "basis": "rows carry no id of any kind ([ops] workgraph/flow.go:70; RM §12)"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "workGraphFlow.rows[*].nodeType",
+          "type": "WorkGraphNodeType!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workGraphFlow.rows[*].inflow",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workGraphFlow.rows[*].outflow",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workGraphFlow.rows[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "workGraphFlow.degradedReason",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workGraphFlow.__typename",
+          "type": "String",
+          "leaf": "typename"
+        }
+      ],
+      "withheld_outputs": [],
+      "disclosure": [
+        {
+          "path": "workGraphFlow.degradedReason",
+          "rule": "partial_when_non_null"
+        }
+      ],
+      "notes": [
+        "cost class not named by design D.6; list chosen (same source as workGraphEdges)"
+      ]
+    }
+  ],
+  "not_served": [
+    {
+      "name": "aiAttributedPrs",
+      "kind": "query",
+      "digest": "6ed54ebe5a535e28c16c1e903f64eda9fbbc32577465ccebe7fa30e2075f2f3e",
+      "code": "unknown_operation",
+      "reason": "reviewer and author data (design D.3)"
+    },
+    {
+      "name": "aiAttributionOverview",
+      "kind": "query",
+      "digest": "ed60bc0ddeb514d39c3ed1c655e65d0c414e5e5ab05e33928a99f527972cda0a",
+      "code": "unknown_operation",
+      "reason": "AI analytics: later slice (design D.3)"
+    },
+    {
+      "name": "aiComparison",
+      "kind": "query",
+      "digest": "4e0ad7f190e95a7eaa2d19cd4e1ccb8c76379d6f66662efebd23fa11cd3d743a",
+      "code": "unknown_operation",
+      "reason": "AI analytics: later slice (design D.3)"
+    },
+    {
+      "name": "aiGovernanceSummary",
+      "kind": "query",
+      "digest": "ba73e66057e6dfc659ad198a9a90cd3f7827e31486cf850324d9655e486c86fa",
+      "code": "unknown_operation",
+      "reason": "AI analytics: later slice (design D.3)"
+    },
+    {
+      "name": "aiImpactSummary",
+      "kind": "query",
+      "digest": "7e84d73b35104dd2ec3ece19c163cd8247c4637aa93df3b5f1449394c4539328",
+      "code": "unknown_operation",
+      "reason": "AI analytics: later slice (design D.3)"
+    },
+    {
+      "name": "aiOpportunities",
+      "kind": "query",
+      "digest": "fad9b02c4e8a4a7023bf9a7ba988a04346473cdd9d840ec76d611f92e1b5af2e",
+      "code": "unknown_operation",
+      "reason": "AI analytics: later slice (design D.3)"
+    },
+    {
+      "name": "aiReviewLoad",
+      "kind": "query",
+      "digest": "4a160089d82bb30f486e81dcc4fb0ef20b97efac29166f0d04e8b03cf06a1697",
+      "code": "unknown_operation",
+      "reason": "AI analytics: later slice (design D.3)"
+    },
+    {
+      "name": "aiRiskBreakdown",
+      "kind": "query",
+      "digest": "ae1e4ac101539ef16b83174aeb3556b5a574e607e1a37b98c328b418b8af06ae",
+      "code": "unknown_operation",
+      "reason": "AI analytics: later slice (design D.3)"
+    },
+    {
+      "name": "aiWorkflowDrilldown",
+      "kind": "query",
+      "digest": "42bfc78e3f533b51578eb3575c027a61f9c81bfc9a7bf843c4c2f9979972fea4",
+      "code": "unknown_operation",
+      "reason": "AI analytics: later slice (design D.3)"
+    },
+    {
+      "name": "busFactor",
+      "kind": "query",
+      "digest": "1b3480a8830f9eed583e47174b7759740a7f34182c2a7a8d92f28eb1c2253cb7",
+      "code": "unknown_operation",
+      "reason": "ranked persons: topMaintainers { author sharePercent } ([ops] server/query_route.go:1029; design D.3, K18: a person-free document comes by the GWC batch)"
+    },
+    {
+      "name": "cloneSavedReport",
+      "kind": "mutation",
+      "digest": "0db93d48c1faea4909edfa9dec53c159c9f3238c2abc59cd7fdd06bba1ceeb63",
+      "code": "unknown_operation",
+      "reason": "mutation: the MCP surface is read-only; never served (design D.3)"
+    },
+    {
+      "name": "connectorsDataHealth",
+      "kind": "query",
+      "digest": "0e43d67d571539081b2006ae8b2148dd4ea31c959be22be1db9e927083060baa",
+      "code": "unknown_operation",
+      "reason": "operator or superuser view (design D.3)"
+    },
+    {
+      "name": "createSavedReport",
+      "kind": "mutation",
+      "digest": "2834bc84c1a065ef44dff96e02f6e5d2ca55608053f96a52366eac429aafc0f0",
+      "code": "unknown_operation",
+      "reason": "mutation: the MCP surface is read-only; never served (design D.3)"
+    },
+    {
+      "name": "dataHealthIdentity",
+      "kind": "query",
+      "digest": "a31987266aad8c1e9eb7cb1b572cc45aecc417f566773e9b5ba6e1bf10ec1a94",
+      "code": "unknown_operation",
+      "reason": "operator or superuser view (design D.3)"
+    },
+    {
+      "name": "deleteSavedReport",
+      "kind": "mutation",
+      "digest": "fe44dd6224b877667edab9f8420bde4fe70239e95e9311ca2d541522296c0207",
+      "code": "unknown_operation",
+      "reason": "mutation: the MCP surface is read-only; never served (design D.3)"
+    },
+    {
+      "name": "experiments",
+      "kind": "query",
+      "digest": "133cf72191722912e8833ee46a1670c89d74c06dc9a174bfefb7c137fd74bfe5",
+      "code": "unknown_operation",
+      "reason": "operator or superuser view (design D.3)"
+    },
+    {
+      "name": "featureFlagEvents",
+      "kind": "query",
+      "digest": "e5e5fd3aba6d00c5413407046dfa68acadeb72c6ff1bb5f40b983bd0ddc3b632",
+      "code": "unknown_operation",
+      "reason": "feature flag operation: later slice (design D.3)"
+    },
+    {
+      "name": "featureFlagTimeseries",
+      "kind": "query",
+      "digest": "fc959cbdfd1faa9aa8e5baa553709369e94318977713df958d346953319b28ff",
+      "code": "unknown_operation",
+      "reason": "feature flag operation: later slice (design D.3)"
+    },
+    {
+      "name": "featureFlags",
+      "kind": "query",
+      "digest": "06ca28a0517a34c0f5a6cc25b193da7b5682bea5192ae93e5a79edc7e7742208",
+      "code": "unknown_operation",
+      "reason": "feature flag operation: later slice (design D.3)"
+    },
+    {
+      "name": "flowMatrix",
+      "kind": "query",
+      "digest": "77c998975b27c6d14f0927c167464edaa01d702a3b1960b7a2f5bfd746f213c2",
+      "code": "unknown_operation",
+      "reason": "turns an execution error into an empty result with no error ([ops] analytics/resolve.go:549-556; design D.3)"
+    },
+    {
+      "name": "improveOpportunities",
+      "kind": "query",
+      "digest": "8890d7aeddfebaa9683d6c8834c82b059e345af1dbf42db14eebba840fcd87d2",
+      "code": "unknown_operation",
+      "reason": "not in slice 1: no resolver path read in step 0 (default REFUSED, design D.4)"
+    },
+    {
+      "name": "mappingCoverageHealth",
+      "kind": "query",
+      "digest": "f87ebae2df502280d389cfd3bf6452e2e1ef8ed6965280f5ba809350ac6a0d01",
+      "code": "unknown_operation",
+      "reason": "operator or superuser view (design D.3)"
+    },
+    {
+      "name": "metricLineage",
+      "kind": "query",
+      "digest": "4d93b59c335d6b8e5709f60bf4186030aa1b6b454c438e73c9177c675ccd705d",
+      "code": "unknown_operation",
+      "reason": "operator or superuser view (design D.3)"
+    },
+    {
+      "name": "operatingReview",
+      "kind": "query",
+      "digest": "c376a5dc191fd8d8759578ccd9dffaffadcd621bdc0625fe62c4c08619f3363e",
+      "code": "unknown_operation",
+      "reason": "its investment part reads investment_metrics_daily, neither the acr basis nor the canonical mix ([ops] operatingreview/operatingreview.go:840; K14 ruling, table K14-A)"
+    },
+    {
+      "name": "pr",
+      "kind": "query",
+      "digest": "564852769ff2397df5c7c0364ee6d1cf7ef0172e62566d575c2b9d5c9e77d577",
+      "code": "unknown_operation",
+      "reason": "reviewer and author data (design D.3)"
+    },
+    {
+      "name": "productTelemetryDashboard",
+      "kind": "query",
+      "digest": "3bcefc8f84200705229f8195e785682bf9adbfc01e60c4e775d0ff9d36954707",
+      "code": "unknown_operation",
+      "reason": "operator or superuser view (design D.3)"
+    },
+    {
+      "name": "productTelemetryPlatformDashboard",
+      "kind": "query",
+      "digest": "8e2847048e3b70b0391f45d9cd8804735ea4401b7e78cd614e35e49ca39e348f",
+      "code": "unknown_operation",
+      "reason": "operator or superuser view (design D.3)"
+    },
+    {
+      "name": "releaseImpact",
+      "kind": "query",
+      "digest": "0d11e4442ba732c441246bf7c04c8585a391761187b0d20ebf26bcb4bbce1b4c",
+      "code": "unknown_operation",
+      "reason": "no scope rule or no honest status yet (design D.3)"
+    },
+    {
+      "name": "reportRuns",
+      "kind": "query",
+      "digest": "16fbdefaa0f4f095d43b934b5fefb3eaed5878aeb20685303aba6f3a67c4a8de",
+      "code": "unknown_operation",
+      "reason": "user-owned product object (design D.3)"
+    },
+    {
+      "name": "reviewEdges",
+      "kind": "query",
+      "digest": "4a759f9e3d3e903b03a3aae8039b3bdca2ed69b3af25a0b20f01c1da55d97123",
+      "code": "unknown_operation",
+      "reason": "reviewer and author data (design D.3)"
+    },
+    {
+      "name": "savedReport",
+      "kind": "query",
+      "digest": "02fc81f826285965c94a564e490d1dec4e4831079bb3788ff7f742dd06aa6a22",
+      "code": "unknown_operation",
+      "reason": "user-owned product object (design D.3)"
+    },
+    {
+      "name": "savedReports",
+      "kind": "query",
+      "digest": "095ac91596b0baea1b8100074d7f8c0beb39291c999274d1e978444e8d25f6a5",
+      "code": "unknown_operation",
+      "reason": "user-owned product object (design D.3)"
+    },
+    {
+      "name": "testOpsCoverage",
+      "kind": "query",
+      "digest": "404b55a3066388c00846a9330032aafdaff6f3441cca5258217ade4fb845ecac",
+      "code": "unknown_operation",
+      "reason": "no scope rule or no honest status yet (design D.3)"
+    },
+    {
+      "name": "testOpsPipeline",
+      "kind": "query",
+      "digest": "f380dda5b10c60b0887b888f4612bfd204409c1913b3e06458540a0295048df5",
+      "code": "unknown_operation",
+      "reason": "no scope rule or no honest status yet (design D.3)"
+    },
+    {
+      "name": "testOpsTest",
+      "kind": "query",
+      "digest": "20eeea67bfc1cfa0f809188878476a0fe40565bc583009151e1f7c8cf2f3be5c",
+      "code": "unknown_operation",
+      "reason": "no scope rule or no honest status yet (design D.3)"
+    },
+    {
+      "name": "testopsRisk",
+      "kind": "query",
+      "digest": "de0e6a96f2f917aa3a785993b5b35c4f003f974d638097f5702b3b8a56fa0bf7",
+      "code": "unknown_operation",
+      "reason": "no scope rule or no honest status yet (design D.3)"
+    },
+    {
+      "name": "triggerReport",
+      "kind": "mutation",
+      "digest": "5f66c4926885418905c7418445bfbaef1bf8c4847ebb37252026a7e98e44d047",
+      "code": "unknown_operation",
+      "reason": "mutation: the MCP surface is read-only; never served (design D.3)"
+    },
+    {
+      "name": "updateSavedReport",
+      "kind": "mutation",
+      "digest": "276ea75cf12ec0ecde5a75bdbfbb0a8a11c4ec9fc613a0f80fcd6b7a8ccc050f",
+      "code": "unknown_operation",
+      "reason": "mutation: the MCP surface is read-only; never served (design D.3)"
+    },
+    {
+      "name": "workUnitTeamAttributions",
+      "kind": "query",
+      "digest": "7cc3fdf36c47ce6efef38ca790480b5835963c747712e94a46f614f28c3e225d",
+      "code": "unknown_operation",
+      "reason": "source can be a membership source; memberCount; evidence is free JSON (design D.3)"
+    }
+  ]
+}

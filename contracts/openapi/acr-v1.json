@@ -1102,7 +1102,7 @@
     "/api/v1/context-fabric/data/catalog": {
       "get": {
         "operationId": "readContextFabricDataCatalog",
-        "summary": "Direct data catalogue (data_catalog). CHAOS-7071 (S0) registers the route and its protection chain only: every authorized request answers 501 feature_not_enabled with details.reason not_implemented until the slice that fills it lands.",
+        "summary": "Direct data catalogue (data_catalog), CHAOS-7072 S1a: the operations, subject kinds, relationship types, limits and versions for THIS caller. The sections query parameter (comma list of operations, facts, subjects, relationships, limits) filters; the facts section is not served in this release. A caller without data:read sees the operation list with available=false.",
         "x-required-scope": "context:read",
         "x-required-entitlement": "agent_context_runtime",
         "security": [
@@ -1116,9 +1116,31 @@
           },
           {
             "$ref": "#/components/parameters/ClientVersion"
+          },
+          {
+            "name": "sections",
+            "in": "query",
+            "required": false,
+            "description": "Comma list of sections; empty = all. An unknown section is 400 invalid_request.",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
+          "200": {
+            "description": "The catalogue for the caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataCatalogResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
           "401": {
             "$ref": "#/components/responses/Error"
           },
@@ -1129,6 +1151,9 @@
             "$ref": "#/components/responses/Error"
           },
           "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
             "$ref": "#/components/responses/Error"
           },
           "501": {
@@ -1143,7 +1168,7 @@
     "/api/v1/context-fabric/data/subjects": {
       "post": {
         "operationId": "findContextFabricDataSubjects",
-        "summary": "Direct subject lookup (find_subjects). CHAOS-7071 (S0) registers the route and its protection chain only: every authorized request answers 501 feature_not_enabled with details.reason not_implemented until the slice that fills it lands.",
+        "summary": "Direct subject lookup (find_subjects), CHAOS-7072 S1a: mode list (kind) or name (query, kinds). Every subject returned passed the direct-read subject gate for the caller in the same call; total_known counts admitted subjects only. 503 when no graph is composed.",
         "x-required-scope": "context:read",
         "x-required-entitlement": "agent_context_runtime",
         "security": [
@@ -1160,10 +1185,26 @@
           }
         ],
         "responses": {
+          "200": {
+            "description": "Admitted subjects, one page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataSubjectsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
           "401": {
             "$ref": "#/components/responses/Error"
           },
           "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
             "$ref": "#/components/responses/Error"
           },
           "426": {
@@ -1172,11 +1213,24 @@
           "429": {
             "$ref": "#/components/responses/Error"
           },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
           "501": {
             "$ref": "#/components/responses/Error"
           },
           "503": {
             "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DataSubjectsRequest"
+              }
+            }
           }
         }
       }
@@ -1245,7 +1299,7 @@
     "/api/v1/context-fabric/data/operations": {
       "post": {
         "operationId": "runContextFabricDataOperation",
-        "summary": "Registered analytics operation (run_operation). Requires the data:read scope. CHAOS-7071 (S0) registers the route and its protection chain only: every authorized request answers 501 feature_not_enabled with details.reason not_implemented until the slice that fills it lands.",
+        "summary": "Registered analytics operation (run_operation), CHAOS-7072 S1a. Requires the data:read scope. A typed result is HTTP 200: call is served, refused (with refusal.code), operation_unavailable, upstream_error or upstream_timeout. 501 feature_not_enabled with details.reason data_query_not_configured when the internal query service is not configured; 503 when the subject gate is unavailable.",
         "x-required-scope": "data:read",
         "x-required-entitlement": "agent_context_runtime",
         "security": [
@@ -1262,10 +1316,26 @@
           }
         ],
         "responses": {
+          "200": {
+            "description": "Terminal typed result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataOperationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
           "401": {
             "$ref": "#/components/responses/Error"
           },
           "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
             "$ref": "#/components/responses/Error"
           },
           "426": {
@@ -1274,11 +1344,24 @@
           "429": {
             "$ref": "#/components/responses/Error"
           },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
           "501": {
             "$ref": "#/components/responses/Error"
           },
           "503": {
             "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DataOperationRequest"
+              }
+            }
           }
         }
       }
@@ -1350,6 +1433,829 @@
                     "not_ready"
                   ]
                 }
+              }
+            }
+          }
+        }
+      },
+      "DataCatalogResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "contract_version",
+          "sections",
+          "versions",
+          "caller",
+          "consistency",
+          "untrusted_content"
+        ],
+        "properties": {
+          "contract_version": {
+            "const": "acr-data.v1"
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "operations",
+                "facts",
+                "subjects",
+                "relationships",
+                "limits"
+              ]
+            }
+          },
+          "operations": {
+            "type": "object",
+            "required": [
+              "caller_class",
+              "available",
+              "operations",
+              "not_served",
+              "refused_shapes"
+            ],
+            "properties": {
+              "caller_class": {
+                "enum": [
+                  "unrestricted",
+                  "restricted"
+                ]
+              },
+              "available": {
+                "type": "boolean"
+              },
+              "reason": {
+                "enum": [
+                  "scope_missing_data_read",
+                  "data_query_not_configured"
+                ]
+              },
+              "operations": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "purpose",
+                    "available",
+                    "scope_class",
+                    "scope_variables",
+                    "cost_class",
+                    "response_root",
+                    "disclosure_fields",
+                    "deadline_seconds",
+                    "document_digest",
+                    "variables"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "purpose": {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    "available": {
+                      "type": "boolean"
+                    },
+                    "reason": {
+                      "enum": [
+                        "scope_missing_data_read",
+                        "data_query_not_configured"
+                      ]
+                    },
+                    "scope_class": {
+                      "enum": [
+                        "org_wide",
+                        "forced_grant"
+                      ]
+                    },
+                    "forced_variable": {
+                      "type": "string"
+                    },
+                    "scope_variables": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "cost_class": {
+                      "enum": [
+                        "compute",
+                        "analytics_batch",
+                        "list",
+                        "series",
+                        "catalog"
+                      ]
+                    },
+                    "response_root": {
+                      "type": "string"
+                    },
+                    "disclosure_fields": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "deadline_seconds": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "max_in_flight_per_org": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "document_digest": {
+                      "type": "string"
+                    },
+                    "variables": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "path",
+                          "type"
+                        ],
+                        "properties": {
+                          "path": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "enum_values": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "default": {
+                            "type": "string"
+                          },
+                          "min": {
+                            "type": "integer"
+                          },
+                          "max": {
+                            "type": "integer"
+                          },
+                          "max_items": {
+                            "type": "integer"
+                          },
+                          "max_length": {
+                            "type": "integer"
+                          },
+                          "subject_kind": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "notes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "not_served": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "code",
+                    "reason"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "refused_shapes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "operation",
+                    "path",
+                    "value",
+                    "code",
+                    "reason"
+                  ],
+                  "properties": {
+                    "operation": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "facts": {
+            "type": "object",
+            "required": [
+              "served",
+              "note"
+            ],
+            "properties": {
+              "served": {
+                "const": false
+              },
+              "note": {
+                "type": "string"
+              }
+            }
+          },
+          "subjects": {
+            "type": "object",
+            "required": [
+              "kinds"
+            ],
+            "properties": {
+              "kinds": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "kind",
+                    "listable",
+                    "default_name_kind"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "type": "string"
+                    },
+                    "listable": {
+                      "type": "boolean"
+                    },
+                    "default_name_kind": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "relationships": {
+            "type": "object",
+            "required": [
+              "note",
+              "types"
+            ],
+            "properties": {
+              "note": {
+                "type": "string"
+              },
+              "types": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "type",
+                    "source_kinds",
+                    "target_kinds",
+                    "produced"
+                  ],
+                  "properties": {
+                    "type": {
+                      "type": "string"
+                    },
+                    "source_kinds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "target_kinds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "produced": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "limits": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          },
+          "versions": {
+            "type": "object",
+            "required": [
+              "contract",
+              "catalogue_contract",
+              "ops_repository",
+              "ops_source_sha",
+              "schema_digest"
+            ],
+            "properties": {
+              "contract": {
+                "type": "string"
+              },
+              "catalogue_contract": {
+                "type": "string"
+              },
+              "ops_repository": {
+                "type": "string"
+              },
+              "ops_source_sha": {
+                "type": "string"
+              },
+              "schema_digest": {
+                "type": "string"
+              }
+            }
+          },
+          "caller": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "scopes",
+              "grant_class"
+            ],
+            "properties": {
+              "scopes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "grant_class": {
+                "enum": [
+                  "unrestricted",
+                  "restricted"
+                ]
+              }
+            }
+          },
+          "consistency": {
+            "const": "best_effort"
+          },
+          "untrusted_content": {
+            "type": "object",
+            "required": [
+              "untrusted",
+              "notice",
+              "fields"
+            ],
+            "properties": {
+              "untrusted": {
+                "const": true
+              },
+              "notice": {
+                "type": "string"
+              },
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "DataSubjectsRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "List mode: exactly one subject kind."
+          },
+          "query": {
+            "type": "string",
+            "maxLength": 1024,
+            "description": "Name mode: exact label, alias or provider key (at most 256 characters)."
+          },
+          "kinds": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "type": "string"
+            }
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Page size; 0 = 25, capped at 200."
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque keyset position from page.next_cursor. It carries no permission."
+          }
+        }
+      },
+      "DataSubjectsResponse": {
+        "type": "object",
+        "required": [
+          "status",
+          "subjects",
+          "population",
+          "page",
+          "consistency",
+          "request",
+          "untrusted_content"
+        ],
+        "properties": {
+          "status": {
+            "enum": [
+              "complete",
+              "partial",
+              "empty",
+              "ambiguous"
+            ]
+          },
+          "subjects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "kind",
+                "canonical_id",
+                "label",
+                "match"
+              ],
+              "properties": {
+                "kind": {
+                  "type": "string"
+                },
+                "canonical_id": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "match": {
+                  "enum": [
+                    "exact",
+                    "alias",
+                    "provider_key"
+                  ]
+                }
+              }
+            }
+          },
+          "population": {
+            "type": "object",
+            "required": [
+              "returned",
+              "total_known",
+              "truncated"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "returned": {
+                "type": "integer"
+              },
+              "total_known": {
+                "type": "integer"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            }
+          },
+          "page": {
+            "type": "object",
+            "required": [
+              "returned",
+              "complete"
+            ],
+            "properties": {
+              "returned": {
+                "type": "integer"
+              },
+              "complete": {
+                "type": "boolean"
+              },
+              "next_cursor": {
+                "type": "string"
+              }
+            }
+          },
+          "searched_kinds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "consistency": {
+            "const": "best_effort"
+          },
+          "request": {
+            "type": "object",
+            "required": [
+              "mode",
+              "limit"
+            ],
+            "properties": {
+              "mode": {
+                "enum": [
+                  "list",
+                  "name"
+                ]
+              },
+              "kind": {
+                "type": "string"
+              },
+              "query": {
+                "type": "string"
+              },
+              "kinds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "limit": {
+                "type": "integer"
+              },
+              "cursor": {
+                "type": "string"
+              }
+            }
+          },
+          "untrusted_content": {
+            "type": "object",
+            "required": [
+              "untrusted",
+              "notice",
+              "fields"
+            ],
+            "properties": {
+              "untrusted": {
+                "const": true
+              },
+              "notice": {
+                "type": "string"
+              },
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "DataOperationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "operation"
+        ],
+        "properties": {
+          "operation": {
+            "type": "string",
+            "description": "A served operation name from data_catalog."
+          },
+          "variables": {
+            "type": "object",
+            "description": "Allowlisted variable paths only; orgId is never a client variable."
+          },
+          "max_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 262144,
+            "description": "Budget for the serialized data; 0 = 32768, values above 262144 are clamped."
+          }
+        }
+      },
+      "DataOperationResponse": {
+        "type": "object",
+        "required": [
+          "call",
+          "completeness",
+          "operation",
+          "source",
+          "errors",
+          "page",
+          "consistency",
+          "untrusted_content",
+          "request"
+        ],
+        "properties": {
+          "call": {
+            "enum": [
+              "served",
+              "refused",
+              "operation_unavailable",
+              "upstream_error",
+              "upstream_timeout"
+            ]
+          },
+          "completeness": {
+            "enum": [
+              "declared_complete",
+              "declared_partial",
+              "unknown"
+            ]
+          },
+          "result": {
+            "enum": [
+              "data",
+              "empty_unverified",
+              "empty_declared"
+            ]
+          },
+          "operation": {
+            "type": "string"
+          },
+          "refusal": {
+            "type": "object",
+            "required": [
+              "code",
+              "reason"
+            ],
+            "properties": {
+              "code": {
+                "enum": [
+                  "unknown_operation",
+                  "variable_not_allowed",
+                  "variable_out_of_range",
+                  "person_scope_not_served",
+                  "basis_dependent_shape",
+                  "no_granted_scope",
+                  "operation_not_served_for_caller",
+                  "response_budget",
+                  "invalid_request",
+                  "scope_required",
+                  "row_outside_grant",
+                  "policy_stale",
+                  "denied_or_not_found"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "measured_bytes": {
+                "type": "integer"
+              },
+              "max_bytes": {
+                "type": "integer"
+              }
+            }
+          },
+          "source": {
+            "type": "object",
+            "required": [
+              "path",
+              "service",
+              "schema_digest"
+            ],
+            "properties": {
+              "path": {
+                "const": "graphql"
+              },
+              "service": {
+                "type": "string"
+              },
+              "schema_digest": {
+                "type": "string"
+              },
+              "document_digest": {
+                "type": "string"
+              }
+            }
+          },
+          "effective_scope": {
+            "type": "object",
+            "required": [
+              "repo_ids",
+              "forced_by_grant"
+            ],
+            "properties": {
+              "repo_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "forced_by_grant": {
+                "type": "boolean"
+              }
+            }
+          },
+          "data": {
+            "type": "object",
+            "description": "The fixed shape of the registered document, after the output allowlist. Untrusted content."
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "class"
+              ],
+              "properties": {
+                "class": {
+                  "enum": [
+                    "graphql_errors",
+                    "decode",
+                    "http_status",
+                    "transport",
+                    "canceled",
+                    "timeout",
+                    "not_found",
+                    "concurrency_wait"
+                  ]
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "object",
+            "required": [
+              "returned_bytes",
+              "max_bytes"
+            ],
+            "properties": {
+              "returned_bytes": {
+                "type": "integer"
+              },
+              "max_bytes": {
+                "type": "integer"
+              }
+            }
+          },
+          "consistency": {
+            "const": "best_effort"
+          },
+          "untrusted_content": {
+            "type": "object",
+            "required": [
+              "untrusted",
+              "fields"
+            ],
+            "properties": {
+              "untrusted": {
+                "const": true
+              },
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "request": {
+            "type": "object",
+            "required": [
+              "operation",
+              "max_bytes"
+            ],
+            "properties": {
+              "operation": {
+                "type": "string"
+              },
+              "max_bytes": {
+                "type": "integer"
+              },
+              "variables": {
+                "type": "object"
               }
             }
           }

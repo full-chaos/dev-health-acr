@@ -49,7 +49,10 @@
           "investigate_question",
           "investigation_result",
           "read_facts",
-          "record_episode"
+          "record_episode",
+          "data_catalog",
+          "find_subjects",
+          "run_operation"
         ]
       },
       "uniqueItems": true

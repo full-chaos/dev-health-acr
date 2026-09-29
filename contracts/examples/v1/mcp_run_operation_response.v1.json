@@ -1,0 +1,58 @@
+{
+ "call": "served",
+ "completeness": "unknown",
+ "result": "data",
+ "operation": "compoundingRisk",
+ "source": {
+  "path": "graphql",
+  "service": "dho query-api",
+  "schema_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "document_digest": "0000000000000000000000000000000000000000000000000000000000000000"
+ },
+ "effective_scope": {
+  "repo_ids": [
+   "7b9583ee-1111-4222-8333-444455556666"
+  ],
+  "forced_by_grant": true
+ },
+ "data": {
+  "compoundingRisk": {
+   "breakout": "REPO",
+   "rows": [
+    {
+     "day": "2026-09-27",
+     "scope": "REPO",
+     "scopeId": "7b9583ee-1111-4222-8333-444455556666",
+     "scopeLabel": "acme/payments",
+     "score": 0.42,
+     "severity": "ELEVATED"
+    }
+   ],
+   "trend": []
+  }
+ },
+ "errors": [],
+ "page": {
+  "returned_bytes": 310,
+  "max_bytes": 32768
+ },
+ "consistency": "best_effort",
+ "untrusted_content": {
+  "untrusted": true,
+  "fields": [
+   "data"
+  ]
+ },
+ "request": {
+  "operation": "compoundingRisk",
+  "max_bytes": 32768,
+  "variables": {
+   "filter": {
+    "breakout": "REPO",
+    "repoIds": [
+     "repository:7b9583ee-1111-4222-8333-444455556666"
+    ]
+   }
+  }
+ }
+}
