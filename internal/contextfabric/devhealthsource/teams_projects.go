@@ -1105,6 +1105,9 @@ func (s *TeamsProjectsSource) WithOverlap(d time.Duration) (*TeamsProjectsSource
 	return s, nil
 }
 
+// Overlap is the trailing re-read window this source walks once caught up.
+func (s *TeamsProjectsSource) Overlap() time.Duration { return s.overlap }
+
 func (s *TeamsProjectsSource) overlapDuration() time.Duration { return s.overlap }
 func (s *TeamsProjectsSource) windowMemo() *windowMemo        { return s.window }
 

@@ -246,6 +246,9 @@ func (s *ClickHouseProjectionSource) WithOverlap(d time.Duration) (*ClickHousePr
 	return s, nil
 }
 
+// Overlap is the trailing re-read window this source walks once caught up.
+func (s *ClickHouseProjectionSource) Overlap() time.Duration { return s.overlap }
+
 func (s *ClickHouseProjectionSource) overlapDuration() time.Duration { return s.overlap }
 func (s *ClickHouseProjectionSource) windowMemo() *windowMemo        { return s.window }
 
