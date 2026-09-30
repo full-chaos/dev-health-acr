@@ -3,13 +3,11 @@ package contextpacket_test
 import (
 	"context"
 	"errors"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -177,74 +175,20 @@ func TestSourceRowLookupsBindNoGrant(t *testing.T) {
 	}
 }
 
-// organizationScopedStatements is every statement of the packet catalog
-// (context_for_task reads all of them; the source-row route reads nine) and
-// every statement of source_rows.go.
-func organizationScopedStatements(t *testing.T) map[string]string {
-	t.Helper()
-	statements := sourceRowStatements(t)
-	for _, query := range contextpacket.SourceQueryCatalogV1 {
-		statements[query.ID] = query.Statement
-	}
-	return statements
-}
-
-var (
-	tableAliasPattern = regexp.MustCompile(`(?:FROM|JOIN)\s+([a-z_]+)(?:\s+AS\s+([a-z]+))?`)
-	orgBindingPattern = regexp.MustCompile(`(?:toString\()?(?:([a-z]+)\.)?org_id\)?\s*=\s*\{org_id:String\}`)
-	orgJoinPattern    = regexp.MustCompile(`(?:toString\()?([a-z]+)\.org_id\)?\s*=\s*(?:toString\()?([a-z]+)\.org_id\)?`)
-)
-
-// CHAOS-7226 codex r1 P1: every table of every catalog and source-row
-// statement is scoped to the caller's organization, directly ({org_id}
-// binding) or through an org_id join to a table that is. ops mints
-// repos.id deterministically from the repository name (providersync
-// repositoryIdentity), so two organizations syncing one repository share its
-// UUID, and a join on repo_id alone admits the other organization's rows. A
-// table devhealthschema does not declare is held to the rule too (the ops
-// schema gives every one of them org_id: git_commits and git_commit_stats
-// since ops migration 027); only a declared table without org_id is exempt.
+// CHAOS-7226 codex r1 P1, over the source-row statements: every table of
+// every statement source_rows.go adds (the repository lookup, the three
+// discoveries, the dependency locator and the two source-row-only row
+// statements) is scoped to the caller's organization, by the same sweep
+// CHAOS-7237 holds every catalog statement to
+// (TestEveryCatalogStatementScopesEveryTableToTheOrganization).
 func TestSourceRowReadsScopeEveryTableToTheOrganization(t *testing.T) {
-	statements := organizationScopedStatements(t)
-	if len(statements) != len(contextpacket.SourceQueryCatalogV1)+len(sourceRowStatements(t)) {
-		t.Fatalf("statement ids collide: %d statements", len(statements))
-	}
-	for name, statement := range statements {
-		constrained := map[string]bool{}
-		unaliasedConstrained := false
-		for _, match := range orgBindingPattern.FindAllStringSubmatch(statement, -1) {
-			if match[1] == "" {
-				unaliasedConstrained = true
-			} else {
-				constrained[match[1]] = true
-			}
-		}
-		for changed := true; changed; {
-			changed = false
-			for _, match := range orgJoinPattern.FindAllStringSubmatch(statement, -1) {
-				a, b := match[1], match[2]
-				if constrained[a] != constrained[b] {
-					constrained[a], constrained[b], changed = true, true, true
-				}
-			}
-		}
-		tables := tableAliasPattern.FindAllStringSubmatch(statement, -1)
-		if len(tables) == 0 {
+	for name, statement := range sourceRowStatements(t) {
+		violations, parsed := orgScopeViolations(statement)
+		if !parsed {
 			t.Fatalf("%s: no table found: the sweep matched nothing", name)
 		}
-		for _, table := range tables {
-			columns, declared := devhealthschema.ProductionColumns[table[1]]
-			hasOrg := !declared
-			for _, column := range columns {
-				hasOrg = hasOrg || column.Name == "org_id"
-			}
-			if !hasOrg {
-				continue
-			}
-			alias := table[2]
-			if (alias == "" && !unaliasedConstrained) || (alias != "" && !constrained[alias]) {
-				t.Errorf("%s: table %s (alias %q) is not scoped to the organization: another organization's rows can join\n%s", name, table[1], alias, statement)
-			}
+		for _, violation := range violations {
+			t.Errorf("%s: %s is not scoped to the organization: another organization's rows can join\n%s", name, violation, statement)
 		}
 	}
 }
