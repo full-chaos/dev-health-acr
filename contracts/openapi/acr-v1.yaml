@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 6e3e244d22612d4eae8157d0bbb6a2134f086c0649be1b1e9c0f8ef3a3b8772b
+# canonical-content-sha256: a95e1a5cbdd742a1bb06c896e4afb0ecf274f3d99a2fe81cb9e55e08cfdd9d04
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -1506,7 +1506,17 @@ components:
           type: "object"
         request:
           properties:
+            anchor:
+              description: "Echo of the handle-mode anchor. The id is untrusted text."
+              properties:
+                id:
+                  type: "string"
+                kind:
+                  type: "string"
+              type: "object"
             cursor:
+              type: "string"
+            handle:
               type: "string"
             kind:
               type: "string"
@@ -1520,6 +1530,10 @@ components:
               enum:
                 - "list"
                 - "name"
+                - "owned_by"
+                - "handle"
+            owned_by:
+              type: "string"
             query:
               type: "string"
           required:

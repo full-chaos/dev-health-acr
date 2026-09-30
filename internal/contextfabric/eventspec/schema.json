@@ -1656,7 +1656,7 @@
           "admitted",
           "refused"
         ],
-        "applicability": "written when a handle-mode anchor reached the subject gate (CHAOS-7158): the true gate decision, server side only"
+        "applicability": "written when a handle-mode anchor was given and a gate decision is available (absent when the gate is unavailable) (CHAOS-7158): the true gate decision, server side only"
       },
       {
         "key": "request_id",

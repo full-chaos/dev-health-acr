@@ -2087,7 +2087,9 @@
               "mode": {
                 "enum": [
                   "list",
-                  "name"
+                  "name",
+                  "owned_by",
+                  "handle"
                 ]
               },
               "kind": {
@@ -2107,6 +2109,24 @@
               },
               "cursor": {
                 "type": "string"
+              },
+              "owned_by": {
+                "type": "string"
+              },
+              "handle": {
+                "type": "string"
+              },
+              "anchor": {
+                "type": "object",
+                "description": "Echo of the handle-mode anchor. The id is untrusted text.",
+                "properties": {
+                  "kind": {
+                    "type": "string"
+                  },
+                  "id": {
+                    "type": "string"
+                  }
+                }
               }
             }
           },

@@ -154,6 +154,30 @@ func TestChaos7158_HandleAnchor(t *testing.T) {
 		}
 	})
 
+	t.Run("a refused anchor answers independently of its own rows", func(t *testing.T) {
+		// The census returns a HIT (closure mismatch, and a stale id) and the
+		// node reader fails. A readable anchor would answer partial or 503;
+		// a refused or missing anchor must answer exactly like a matchless
+		// one: empty 200, with no node read of its census ids (ruling A:
+		// reading a refused anchor's rows would make refused-with-rows
+		// differ from refused-without-rows).
+		hit := graphrank.CensusOutcome{Count: 3, ClosureMismatch: true, SatisfierCanonicalID: prB.CanonicalID}
+		for _, anchor := range []*contractsv1.MCPFindSubjectsAnchor{
+			anchorOf(contractsv1.ContextFabricSubjectRepository, repoB.CanonicalID),
+			anchorOf(contractsv1.ContextFabricSubjectRepository, "repository:nope"),
+		} {
+			var calls []censusCall
+			reader := &failingNodeReader{}
+			g := handleGraph()
+			lookup := NewSubjectLookup(g, NewSubjectGate(g, nil), nil).
+				WithOwnershipAndHandles(g, fixedCensus(hit, nil, &calls), reader).WithCensusAnchorSupport(anchorSupportFixture)
+			response, err := lookup.Find(relCtx("rows-"+anchor.ID), restrictedA, FindRequest{Handle: "PR 532", Anchor: anchor})
+			if err != nil || response.Status != FindEmpty || response.Population.Truncated || reader.reads != 0 || len(calls) != 1 {
+				t.Errorf("%s: err=%v status=%s truncated=%v node reads=%d census=%d, want empty 200, 0 node reads, 1 census", anchor.ID, err, response.Status, response.Population.Truncated, reader.reads, len(calls))
+			}
+		}
+	})
+
 	t.Run("server-side telemetry records the true anchor decision, never a caller-visible one", func(t *testing.T) {
 		record := func(name string, anchor *contractsv1.MCPFindSubjectsAnchor, census graphrank.CensusFunc) FindTelemetry {
 			recorder := &capturingFindRecorderInternal{}
@@ -188,4 +212,11 @@ type capturingFindRecorderInternal struct{ calls []FindTelemetry }
 
 func (r *capturingFindRecorderInternal) RecordFindSubjects(_ context.Context, _ storage.Principal, telemetry FindTelemetry) {
 	r.calls = append(r.calls, telemetry)
+}
+
+type failingNodeReader struct{ reads int }
+
+func (r *failingNodeReader) ReadSubjectNodes(context.Context, storage.Principal, contextfabric.ResolvedGraphBinding, []contextfabric.SubjectRef) ([]LookupNode, error) {
+	r.reads++
+	return nil, errors.New("graph node read failed")
 }
