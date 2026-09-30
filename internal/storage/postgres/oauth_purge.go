@@ -108,7 +108,7 @@ func (s *OAuthStore) PurgeExpired(ctx context.Context, now time.Time, requestGra
 	if limit <= 0 {
 		return OAuthPurgeResult{}, nil
 	}
-	if requestGrace <= 0 || clientIdle <= requestGrace {
+	if requestGrace <= 0 || clientIdle < requestGrace {
 		return OAuthPurgeResult{}, storage.ErrInvalidOAuthClient
 	}
 	now = now.UTC()

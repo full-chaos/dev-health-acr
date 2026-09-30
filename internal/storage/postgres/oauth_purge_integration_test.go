@@ -318,8 +318,55 @@ func TestOAuthStore_PurgeExpired_inputAndInvariants(t *testing.T) {
 	result, err := f.store.PurgeExpired(f.ctx, now, oauthPurgeGrace, oauthPurgeIdle, 0)
 	require.NoError(t, err)
 	require.Equal(t, OAuthPurgeResult{}, result, "a non-positive batch limit deletes nothing")
-	for _, windows := range [][2]time.Duration{{0, oauthPurgeIdle}, {-time.Hour, oauthPurgeIdle}, {oauthPurgeGrace, oauthPurgeGrace}, {oauthPurgeGrace, 0}} {
+	for _, windows := range [][2]time.Duration{{0, oauthPurgeIdle}, {-time.Hour, oauthPurgeIdle}, {oauthPurgeGrace, oauthPurgeGrace - time.Second}, {oauthPurgeGrace, 0}} {
 		_, err = f.store.PurgeExpired(f.ctx, now, windows[0], windows[1], 10)
 		require.ErrorIs(t, err, storage.ErrInvalidOAuthClient, "grace=%v idle=%v", windows[0], windows[1])
 	}
+	_, err = f.store.PurgeExpired(f.ctx, now, oauthPurgeGrace, oauthPurgeGrace, 10)
+	require.NoError(t, err, "an idle window equal to the request grace is valid (it is the default)")
+}
+
+// With the default windows (request grace == client idle window == 30d) "idle
+// for 30 days" is exact: request rows are the only record of when a client
+// last asked to authorize, and they are kept as long as the idle window.
+func TestOAuthStore_PurgeExpired_defaultWindowsMeasureIdlenessExactly(t *testing.T) {
+	// Given: a purge 100 days after t0 with grace == idle == 30d
+	f := newOAuthPurgeFixture(t)
+	const window = 30 * 24 * time.Hour
+	purgeAt := f.t0.Add(100 * 24 * time.Hour)
+	credentialEnd := purgeAt.Add(24 * time.Hour)
+	day := 24 * time.Hour
+
+	// registered 40 days ago, last request 2 days ago (e.g. a client authorizing
+	// again, or one whose credential has no traceable link): must survive
+	usedRecently := f.client(0xe1, purgeAt.Add(-40*day))
+	recent := f.request(usedRecently, f.device(), purgeAt.Add(-2*day))
+	// registered 40 days ago, last request 29 days ago: still inside the window
+	insideWindow := f.client(0xe2, purgeAt.Add(-40*day))
+	inside := f.request(insideWindow, f.device(), purgeAt.Add(-29*day))
+	// registered 40 days ago, last request 31 days ago, no live credential: idle, purged
+	idleSince31 := f.client(0xe3, purgeAt.Add(-40*day))
+	old := f.request(idleSince31, f.device(), purgeAt.Add(-31*day))
+	// same last request age, but its credential is still live: kept with its request
+	liveDevice, _ := f.redeemedDevice(&credentialEnd)
+	liveClient := f.client(0xe4, purgeAt.Add(-40*day))
+	live := f.request(liveClient, liveDevice, purgeAt.Add(-31*day))
+	// registered 10 days ago, no request yet: young, kept
+	young := f.client(0xe5, purgeAt.Add(-10*day))
+
+	// When
+	result, err := f.store.PurgeExpired(f.ctx, purgeAt, window, window, 500)
+	require.NoError(t, err)
+
+	// Then
+	require.Equal(t, OAuthPurgeResult{Requests: 1, Clients: 1}, result)
+	require.True(t, f.clientExists(usedRecently), "a client with a request 2 days ago is not idle")
+	require.True(t, f.requestExists(recent))
+	require.True(t, f.clientExists(insideWindow), "a request 29 days ago is inside the 30 day window")
+	require.True(t, f.requestExists(inside))
+	require.False(t, f.requestExists(old), "a request older than the window is purged")
+	require.False(t, f.clientExists(idleSince31), "last request 31 days ago and no live credential: idle")
+	require.True(t, f.requestExists(live), "the request linking a client to a live credential is kept")
+	require.True(t, f.clientExists(liveClient))
+	require.True(t, f.clientExists(young))
 }

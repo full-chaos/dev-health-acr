@@ -212,18 +212,19 @@ OAuth login is configured, acr-api runs one purge at startup (a missing
 statement:
 
 - An authorization request is deleted `ACR_OAUTH_REQUEST_PURGE_GRACE` (default
-  `24h`) after its own expiry, unless the device authorization behind it
+  `720h`) after its own expiry, unless the device authorization behind it
   redeemed a credential that is still unrevoked and unexpired; such a request
   is kept until that credential ends.
 - A dynamically registered client is deleted when it was registered more than
   `ACR_OAUTH_CLIENT_IDLE_TTL` (default `720h`) ago and has no request row left,
   no device grant created inside that window, and no live credential obtained
-  through a device grant of its own. `ACR_OAUTH_CLIENT_IDLE_TTL` must be longer
-  than `ACR_OAUTH_REQUEST_PURGE_GRACE`; both must be positive. Because request
-  rows go after the grace, the idle test sees a client's last request only for
-  that long: a client whose last request never produced a credential is
-  eligible about one grace after that request. Raise the grace to `720h` to
-  measure idleness over the whole window.
+  through a device grant of its own. Request rows are the only record of when a
+  client last asked to authorize, so they are kept as long as the idle window
+  (the defaults are equal): a client used inside the last 30 days is never
+  purged, and one whose last request is older than that, with no live
+  credential, is. Both values must be positive and `ACR_OAUTH_CLIENT_IDLE_TTL`
+  must not be shorter than `ACR_OAUTH_REQUEST_PURGE_GRACE`; a shorter request
+  grace makes the idle test see a client's last request only for that long.
 - Client ID metadata document clients are never stored, so they are never
   purged. Credentials are not touched: a live credential never depends on its
   client row.

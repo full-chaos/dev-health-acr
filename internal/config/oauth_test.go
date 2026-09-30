@@ -13,7 +13,7 @@ func TestValidateOAuthConfigDomain(t *testing.T) {
 		OAuthIssuer: "https://acr.example.test", OAuthResources: []string{"https://mcp.example.test/mcp"},
 		OAuthConsentURL:      "https://www.example.test/acr/authorize",
 		WebAssertionJWKSFile: "/run/jwks.json", RequireBackingStores: true,
-		OAuthRequestPurgeGrace: 24 * time.Hour, OAuthClientIdleTTL: 30 * 24 * time.Hour,
+		OAuthRequestPurgeGrace: 30 * 24 * time.Hour, OAuthClientIdleTTL: 30 * 24 * time.Hour,
 	}
 	for _, tc := range []struct {
 		name   string
@@ -51,9 +51,10 @@ func TestValidateOAuthConfigDomain(t *testing.T) {
 		{"no hosted runtime", func(c *Config) { c.RequireBackingStores = false }, "requires the hosted runtime"},
 		{"purge grace zero", func(c *Config) { c.OAuthRequestPurgeGrace = 0 }, "ACR_OAUTH_REQUEST_PURGE_GRACE must be a positive"},
 		{"purge grace negative", func(c *Config) { c.OAuthRequestPurgeGrace = -time.Hour }, "ACR_OAUTH_REQUEST_PURGE_GRACE must be a positive"},
-		{"idle ttl zero", func(c *Config) { c.OAuthClientIdleTTL = 0 }, "ACR_OAUTH_CLIENT_IDLE_TTL must be longer"},
-		{"idle ttl equals grace", func(c *Config) { c.OAuthClientIdleTTL = c.OAuthRequestPurgeGrace }, "ACR_OAUTH_CLIENT_IDLE_TTL must be longer"},
-		{"idle ttl just above grace", func(c *Config) { c.OAuthClientIdleTTL = c.OAuthRequestPurgeGrace + time.Second }, ""},
+		{"idle ttl zero", func(c *Config) { c.OAuthClientIdleTTL = 0 }, "ACR_OAUTH_CLIENT_IDLE_TTL must not be shorter"},
+		{"idle ttl just below grace", func(c *Config) { c.OAuthClientIdleTTL = c.OAuthRequestPurgeGrace - time.Second }, "ACR_OAUTH_CLIENT_IDLE_TTL must not be shorter"},
+		{"idle ttl equals grace", func(c *Config) { c.OAuthClientIdleTTL = c.OAuthRequestPurgeGrace }, ""},
+		{"idle ttl above grace", func(c *Config) { c.OAuthClientIdleTTL = c.OAuthRequestPurgeGrace + time.Second }, ""},
 		{"purge windows unchecked while oauth is off", func(c *Config) {
 			c.OAuthIssuer, c.OAuthResources, c.OAuthConsentURL = "", nil, ""
 			c.OAuthRequestPurgeGrace, c.OAuthClientIdleTTL = 0, 0
@@ -112,10 +113,10 @@ func TestConsentPageURLAgreesWithTheAuthCheck(t *testing.T) {
 }
 
 // CHAOS-6191: the purge windows are parsed at this one site, default to
-// 24h / 30d, and a malformed value fails startup (never falls back).
+// 30d / 30d (so the client idle window is exact), and a malformed value fails startup (never falls back).
 func TestLoad_oauthPurgeWindowsParse(t *testing.T) {
 	cfg, err := load(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true"}))
-	if err != nil || cfg.OAuthRequestPurgeGrace != 24*time.Hour || cfg.OAuthClientIdleTTL != 30*24*time.Hour {
+	if err != nil || cfg.OAuthRequestPurgeGrace != 30*24*time.Hour || cfg.OAuthClientIdleTTL != 30*24*time.Hour {
 		t.Fatalf("defaults: grace=%v idle=%v err=%v", cfg.OAuthRequestPurgeGrace, cfg.OAuthClientIdleTTL, err)
 	}
 	cfg, err = load(mapLookup(map[string]string{
