@@ -36,6 +36,16 @@ const SourceRowQueryVersionV1 = "dev-health-source-rows.v1"
 // rather than served from a partial list.
 const maxSourceRowRepositories = 64
 
+// OrganizationRowQueriesV1 are the row statements of the organization-level
+// kinds (CHAOS-7227: teams and projects, authorized by ownership). They are
+// not in the packet catalog, whose statements are repository-scoped and are
+// the packet path's full read set; they have its column shape and bind the
+// organization only.
+var OrganizationRowQueriesV1 = []SourceQuery{
+	{"teams.v1", "teams", EvidenceScopeRepo, standardColumns + ` SELECT concat('` + contractsv1.ContextFabricEvidenceRefPrefix + string(contractsv1.ContextFabricEvidenceEntityTeam) + `:', t.id) evidence_ref_id, 'dev_health' system, 'team' entity_type, t.id entity_id, if(lengthUTF8(t.name) BETWEEN 1 AND 1000, t.name, concat('team ', t.id)) display_label, '' safe_uri, 'native' provenance, 1.0 confidence, concat('provider=', t.provider, ', active=', toString(t.is_active)) citation, t.updated_at observed_at FROM teams AS t FINAL WHERE t.org_id = {org_id:String} )`},
+	{"projects.v1", "projects", EvidenceScopeRepo, standardColumns + ` SELECT concat('` + contractsv1.ContextFabricEvidenceRefPrefix + string(contractsv1.ContextFabricEvidenceEntityProject) + `:', p.provider, ':', p.id) evidence_ref_id, 'dev_health' system, 'project' entity_type, concat(p.provider, ':', p.id) entity_id, if(lengthUTF8(p.name) BETWEEN 1 AND 1000, p.name, concat('project ', p.id)) display_label, '' safe_uri, 'native' provenance, 1.0 confidence, concat('state=', toString(p.state), ', active=', toString(p.is_active)) citation, p.updated_at observed_at FROM projects AS p FINAL WHERE p.org_id = {org_id:String} )`},
+}
+
 // RepositoryByIDQueryV1 looks one repository of the organization up by id.
 const RepositoryByIDQueryV1 = `SELECT toString(id), repo FROM repos FINAL WHERE org_id = {org_id:String} AND id = {repo_id:UUID} ORDER BY repo ASC LIMIT 2`
 
@@ -72,11 +82,23 @@ type SourceRowRead struct {
 
 // SourceRowQueryIDs lists every statement id ResolveSourceRow accepts.
 func SourceRowQueryIDs() []string {
-	ids := make([]string, 0, len(SourceQueryCatalogV1))
+	ids := make([]string, 0, len(SourceQueryCatalogV1)+len(OrganizationRowQueriesV1))
 	for _, query := range SourceQueryCatalogV1 {
 		ids = append(ids, query.ID)
 	}
+	for _, query := range OrganizationRowQueriesV1 {
+		ids = append(ids, query.ID)
+	}
 	return ids
+}
+
+func organizationRowQuery(id string) *SourceQuery {
+	for index := range OrganizationRowQueriesV1 {
+		if OrganizationRowQueriesV1[index].ID == id {
+			return &OrganizationRowQueriesV1[index]
+		}
+	}
+	return nil
 }
 
 func sourceRowQuery(id string) *SourceQuery {
@@ -133,6 +155,25 @@ func (r *CatalogClickHouseRows) ResolveSourceRow(ctx context.Context, orgID stri
 	bindings := append(plan.Bindings(), ClickHouseBinding{Name: "evidence_locator", Value: read.Locator})
 	statement := `SELECT * FROM (` + query.Statement + `) WHERE evidence_ref_id = {evidence_locator:String} LIMIT 2`
 	return r.queryEvidenceReferences(ctx, scope.RepoSlug, query.ID, statement, bindings, 3)
+}
+
+// ResolveOrganizationRow reads the organization-level row whose evidence id
+// is read.Locator (an OrganizationRowQueriesV1 statement), up to two (the
+// caller refuses two as ambiguous). It binds the organization and the
+// locator only.
+func (r *CatalogClickHouseRows) ResolveOrganizationRow(ctx context.Context, orgID string, read SourceRowRead) (_ []EvidenceReference, err error) {
+	completeObservation := beginStoreQueryObservation(ctx, r.assemblyObserver(), StoreOperationEvidence)
+	defer func() { completeObservation(err) }()
+	query := organizationRowQuery(read.QueryID)
+	if r == nil || r.client == nil || query == nil {
+		return nil, fmt.Errorf("%w: %q", ErrUnknownSourceRowQuery, read.QueryID)
+	}
+	if read.Locator == "" {
+		return nil, storage.ErrNotFound
+	}
+	bindings := []ClickHouseBinding{{Name: "org_id", Value: orgID}, {Name: "evidence_locator", Value: read.Locator}}
+	statement := `SELECT * FROM (` + query.Statement + `) WHERE evidence_ref_id = {evidence_locator:String} LIMIT 2`
+	return r.queryEvidenceReferences(ctx, "", query.ID, statement, bindings, 3)
 }
 
 func (r *CatalogClickHouseRows) queryRepositories(ctx context.Context, statement string, bindings []ClickHouseBinding) ([]contractsv1.ResolvedScope, error) {

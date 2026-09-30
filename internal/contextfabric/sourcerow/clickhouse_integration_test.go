@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/dependencyrelation"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/sourcerow"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -150,7 +151,8 @@ func seedIntegration(t *testing.T, ctx context.Context, direct clickhousedriver.
 			('%[1]s', 'jira:FOR-1', 'jira', 'FOREIGN item', 'open', %[2]s, %[2]s, 'jira:FOR-0', %[2]s, '%[3]s'),
 			('%[1]s', 'jira:FOR-0', 'jira', 'FOREIGN parent', 'open', %[2]s, %[2]s, '', %[2]s, '%[3]s')`, grantedID, now, foreignOrg),
 		fmt.Sprintf(`INSERT INTO work_item_dependencies (source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, org_id) VALUES ('jira:ABC-1', 'jira:ABC-0', 'blocks', 'Blocks', %[1]s, '%[2]s'), ('jira:FOR-1', 'jira:FOR-0', 'blocks', 'Blocks', %[1]s, '%[2]s')`, now, foreignOrg),
-		fmt.Sprintf(`INSERT INTO teams (id, name, updated_at, org_id, provider, is_active) VALUES ('team-b', 'Team B', %s, '%s', 'jira', 1)`, now, foreignOrg),
+		fmt.Sprintf(`INSERT INTO teams (id, name, updated_at, org_id, provider, is_active) VALUES ('team-b', 'Team B', %[1]s, '%[2]s', 'jira', 1), ('team-a', 'FOREIGN Team A', %[1]s, '%[2]s', 'jira', 1)`, now, foreignOrg),
+		fmt.Sprintf(`INSERT INTO projects (id, org_id, provider, name, is_active, state, url, updated_at) VALUES ('PROJ-1', '%[2]s', 'jira', 'FOREIGN project', 1, 'active', '', %[1]s), ('PROJ-F', '%[2]s', 'jira', 'FOREIGN only project', 1, 'active', '', %[1]s), ('PROJ-1', '%[3]s', 'jira', 'Own project', 1, 'active', '', %[1]s)`, now, foreignOrg, integrationOrg),
 		fmt.Sprintf(`INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, team_id, source, is_primary, confidence, computed_at) VALUES ('%s', '00000000-0000-0000-0000-000000000000', 'jira:FOR-1', 'team-b', 'native_team', 1, 'high', %s)`, foreignOrg, now),
 		fmt.Sprintf(`INSERT INTO operational_incidents (org_id, source_version_at, id, observed_at, last_synced, service_id, title, started_at, is_deleted) VALUES ('%s', %s, 'INC-F', %s, %s, 'svc-f', 'FOREIGN outage', %s, 0)`, foreignOrg, past, past, past, past),
 		fmt.Sprintf(`INSERT INTO operational_service_repository_mappings (org_id, source_version_at, id, relationship_provenance, relationship_confidence, service_id, repo_id, valid_from, is_active) VALUES ('%s', %s, 'map-f', 'native', 0.9, 'svc-f', '%s', %s, 1)`, foreignOrg, past, grantedID, past),
@@ -191,7 +193,7 @@ func TestSourceRowsAgainstClickHouse(t *testing.T) {
 	query, direct := startClickHouse(t, ctx)
 	seedIntegration(t, ctx, direct)
 	recorder := &recordingClient{inner: query}
-	resolve, err := sourcerow.New(contextpacket.NewCatalogClickHouseRows(recorder), contextpacket.NewEvidenceResolver(contextpacket.EvidenceResolverOptions{}))
+	resolve, err := sourcerow.New(contextpacket.NewCatalogClickHouseRows(recorder), contextpacket.NewEvidenceResolver(contextpacket.EvidenceResolverOptions{}), admitAllSubjects{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +212,12 @@ func TestSourceRowsAgainstClickHouse(t *testing.T) {
 		{contractsv1.ContextFabricEvidenceEntityDeployment, grantedID + ":dep-1", "production deployment"},
 		{contractsv1.ContextFabricEvidenceEntityIncident, "INC-1", "Outage"},
 		{contractsv1.ContextFabricEvidenceEntityIncident, "INC-2", "Second outage"},
+		// CHAOS-7227: organization-level rows (the gate here admits every
+		// subject; the gate itself is tested with the route).
+		{contractsv1.ContextFabricEvidenceEntityTeam, "team-a", "Team A"},
+		{contractsv1.ContextFabricEvidenceEntityProject, "jira:PROJ-1", "Own project"},
 	} {
+		orgLevel := tc.kind == contractsv1.ContextFabricEvidenceEntityTeam || tc.kind == contractsv1.ContextFabricEvidenceEntityProject
 		for _, principal := range []storage.Principal{granted, orgWide} {
 			expanded, decision := resolve.ResolveSourceRow(ctx, principal, string(tc.kind), tc.id)
 			if decision.Reason != contextfabric.SourceRowServed {
@@ -219,7 +226,7 @@ func TestSourceRowsAgainstClickHouse(t *testing.T) {
 			if err := expanded.Validate(); err != nil {
 				t.Fatalf("%s: invalid expansion: %v", tc.kind, err)
 			}
-			if expanded.Evidence.EvidenceRefID != contractsv1.EvidenceRefID(tc.kind, tc.id) || expanded.Structured["repository"] != grantedRep {
+			if expanded.Evidence.EvidenceRefID != contractsv1.EvidenceRefID(tc.kind, tc.id) || (!orgLevel && expanded.Structured["repository"] != grantedRep) {
 				t.Fatalf("%s: %+v %v", tc.kind, expanded.Evidence, expanded.Structured)
 			}
 			if tc.label != "" && expanded.Evidence.Source.DisplayLabel != tc.label {
@@ -246,6 +253,8 @@ func TestSourceRowsAgainstClickHouse(t *testing.T) {
 		{contractsv1.ContextFabricEvidenceEntityCI, grantedID + ":FOREIGN-CI-990"},
 		{contractsv1.ContextFabricEvidenceEntityDeployment, grantedID + ":FOREIGN-DEP-990"},
 		{contractsv1.ContextFabricEvidenceEntityIncident, "INC-F"},
+		{contractsv1.ContextFabricEvidenceEntityTeam, "team-b"},
+		{contractsv1.ContextFabricEvidenceEntityProject, "jira:PROJ-F"},
 	} {
 		for _, principal := range []storage.Principal{granted, orgWide} {
 			if _, decision := resolve.ResolveSourceRow(ctx, principal, string(foreign.kind), foreign.id); decision.Reason != contextfabric.SourceRowNoRow {
@@ -345,4 +354,16 @@ func TestSourceRowsAgainstClickHouse(t *testing.T) {
 	if !reflect.DeepEqual(refusedLog, recorder.log) {
 		t.Fatalf("statements differ:\n refused %v\n absent  %v", refusedLog, recorder.log)
 	}
+}
+
+// admitAllSubjects is a subject gate that admits every subject: the
+// ClickHouse test proves the organization-level row statements, not the gate.
+type admitAllSubjects struct{}
+
+func (admitAllSubjects) Authorize(_ context.Context, _ storage.Principal, requested []contextfabric.SubjectRef) (directread.AuthorizedSubjects, directread.Authorization) {
+	authorization := directread.Authorization{Decision: directread.DecisionAdmitted}
+	for _, subject := range requested {
+		authorization.Outcomes = append(authorization.Outcomes, directread.GatedSubject{Subject: subject, Outcome: directread.SubjectAdmitted})
+	}
+	return directread.AuthorizedSubjects{}, authorization
 }

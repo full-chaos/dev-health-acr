@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/sourcerow"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -33,12 +35,14 @@ type world struct {
 	repos      map[string]string
 	discovered map[string][]contractsv1.ResolvedScope
 	rows       map[string][]contextpacket.EvidenceReference
+	orgRows    map[string][]contextpacket.EvidenceReference
 	fail       map[string]error
 	calls      []string
+	gate       sourcerow.SubjectGate
 }
 
 func newWorld() *world {
-	return &world{repos: map[string]string{}, discovered: map[string][]contractsv1.ResolvedScope{}, rows: map[string][]contextpacket.EvidenceReference{}, fail: map[string]error{}}
+	return &world{repos: map[string]string{}, discovered: map[string][]contractsv1.ResolvedScope{}, rows: map[string][]contextpacket.EvidenceReference{}, orgRows: map[string][]contextpacket.EvidenceReference{}, fail: map[string]error{}}
 }
 
 func scope(id, slug string) contractsv1.ResolvedScope {
@@ -62,6 +66,14 @@ func (w *world) SourceRowRepositories(_ context.Context, org string, discovery c
 		return nil, err
 	}
 	return append([]contractsv1.ResolvedScope{}, w.discovered[string(discovery)+"|"+entityID]...), nil
+}
+
+func (w *world) ResolveOrganizationRow(_ context.Context, org string, read contextpacket.SourceRowRead) ([]contextpacket.EvidenceReference, error) {
+	w.calls = append(w.calls, fmt.Sprintf("org_row(%s,%s,%s)", org, read.QueryID, read.Locator))
+	if err := w.fail["org_row"]; err != nil {
+		return nil, err
+	}
+	return w.orgRows[read.QueryID+"|"+read.Locator], nil
 }
 
 func (w *world) ResolveSourceRow(_ context.Context, org string, target contractsv1.ResolvedScope, read contextpacket.SourceRowRead) ([]contextpacket.EvidenceReference, error) {
@@ -88,7 +100,7 @@ func (w *world) addRow(repoID, queryID, locator string, reference contextpacket.
 
 func resolver(t *testing.T, w *world) *sourcerow.Resolver {
 	t.Helper()
-	r, err := sourcerow.New(w, contextpacket.NewEvidenceResolver(contextpacket.EvidenceResolverOptions{Now: func() time.Time { return observedAt.Add(time.Hour) }}))
+	r, err := sourcerow.New(w, contextpacket.NewEvidenceResolver(contextpacket.EvidenceResolverOptions{Now: func() time.Time { return observedAt.Add(time.Hour) }}), w.gate)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,11 +399,11 @@ func TestRecordKindsReadNothing(t *testing.T) {
 }
 
 func TestNewRequiresRowsAndExpander(t *testing.T) {
-	if _, err := sourcerow.New(nil, contextpacket.NewEvidenceResolver(contextpacket.EvidenceResolverOptions{})); err == nil {
+	if _, err := sourcerow.New(nil, contextpacket.NewEvidenceResolver(contextpacket.EvidenceResolverOptions{}), nil); err == nil {
 		t.Fatal("nil rows accepted")
 	}
 	var typedNil *contextpacket.EvidenceResolver
-	if _, err := sourcerow.New(newWorld(), typedNil); err == nil {
+	if _, err := sourcerow.New(newWorld(), typedNil, nil); err == nil {
 		t.Fatal("typed-nil expander accepted")
 	}
 }
@@ -414,5 +426,165 @@ func TestAnInvalidRowIsNamedNotRetried(t *testing.T) {
 	cancel()
 	if _, decision := resolver(t, w).ResolveSourceRow(canceled, restricted, "ci", grantedID+":run-1"); decision.Reason != contextfabric.SourceRowUnavailable {
 		t.Fatalf("canceled: %+v", decision)
+	}
+}
+
+// fakeGate answers the subject gate with a fixed outcome per canonical id
+// (absent when unlisted) and records every request, into the world's call
+// log so gate and row reads interleave in one sequence.
+type fakeGate struct {
+	world    *world
+	outcomes map[string]directread.SubjectOutcome
+	decision directread.Decision
+	err      error
+}
+
+func (g *fakeGate) Authorize(_ context.Context, principal storage.Principal, requested []contextfabric.SubjectRef) (directread.AuthorizedSubjects, directread.Authorization) {
+	for _, subject := range requested {
+		g.world.calls = append(g.world.calls, fmt.Sprintf("gate(%s,%s,%s)", principal.OrgID, subject.Kind, subject.CanonicalID))
+	}
+	if g.decision == directread.DecisionUnavailable {
+		return directread.AuthorizedSubjects{}, directread.Authorization{Decision: directread.DecisionUnavailable, Reason: directread.ReasonGraphReadFailed, Err: g.err}
+	}
+	authorization := directread.Authorization{Decision: directread.DecisionDenied}
+	for _, subject := range requested {
+		outcome, ok := g.outcomes[subject.CanonicalID]
+		if !ok {
+			outcome = directread.SubjectAbsent
+		}
+		if outcome == directread.SubjectAdmitted {
+			authorization.Decision = directread.DecisionAdmitted
+		}
+		authorization.Outcomes = append(authorization.Outcomes, directread.GatedSubject{Subject: subject, Outcome: outcome})
+	}
+	return directread.AuthorizedSubjects{}, authorization
+}
+
+const (
+	// An Atlassian team ARI: a team id holds ':' freely (it is the whole id).
+	teamID = "ari:cloud:identity::team/abc"
+	// A provider-composite project id: the provider splits at the FIRST ':'.
+	projectID = "gitlab:org-1:gitlab:71133891"
+)
+
+func projectCanonical(t *testing.T) string {
+	t.Helper()
+	canonical, omitted, err := identity.Derive(identity.KindProject, []string{"gitlab", "org-1:gitlab:71133891"}, nil)
+	if err != nil || omitted {
+		t.Fatalf("derive project: %v %v", err, omitted)
+	}
+	return canonical
+}
+
+func orgRow(queryID, locator, entityType, entityID string) contextpacket.EvidenceReference {
+	row := catalogRow(queryID, locator, entityType, entityID, "")
+	row.RepoSlug = ""
+	return row
+}
+
+// CHAOS-7227: a team or project row is served when the direct data tools'
+// subject gate admits the subject, and read by its organization-level key.
+func TestOwnershipKindsAreServedThroughTheSubjectGate(t *testing.T) {
+	for _, tc := range []struct {
+		kind, id, query, subjectKind, canonical string
+	}{
+		{"team", teamID, "teams.v1", "team", contextfabric.TeamCanonicalID(teamID)},
+		{"project", projectID, "projects.v1", "project", projectCanonical(t)},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			w := newWorld()
+			w.gate = &fakeGate{world: w, outcomes: map[string]directread.SubjectOutcome{tc.canonical: directread.SubjectAdmitted}}
+			locator := "acr:v1:" + tc.kind + ":" + tc.id
+			w.orgRows[tc.query+"|"+locator] = []contextpacket.EvidenceReference{orgRow(tc.query, locator, tc.kind, tc.id)}
+			expanded, decision := resolver(t, w).ResolveSourceRow(context.Background(), restricted, tc.kind, tc.id)
+			if decision.Reason != contextfabric.SourceRowServed || decision.Grammar != contextfabric.SourceRowGrammarOrgKeyed || decision.Repositories != 1 || decision.Admitted != 1 || decision.Rows != 1 {
+				t.Fatalf("decision = %+v, calls %v", decision, w.calls)
+			}
+			want := []string{
+				fmt.Sprintf("gate(%s,%s,%s)", orgID, tc.subjectKind, tc.canonical),
+				fmt.Sprintf("org_row(%s,%s,%s)", orgID, tc.query, locator),
+			}
+			if !reflect.DeepEqual(w.calls, want) {
+				t.Fatalf("calls = %v, want %v", w.calls, want)
+			}
+			if err := expanded.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			if expanded.Evidence.EvidenceRefID != locator || expanded.Evidence.Metadata["record"] != "source_row" || expanded.Structured["subject"] != tc.canonical {
+				t.Fatalf("expanded = %+v %v", expanded.Evidence, expanded.Structured)
+			}
+			if _, has := expanded.Structured["repository"]; has {
+				t.Fatalf("an organization-level row names a repository: %v", expanded.Structured)
+			}
+		})
+	}
+}
+
+// P7: the gate is the whole authorization. Every refused outcome (denied by
+// the node check, absent, ownership unproven, invalid) is one no_row that
+// reads no row, and the refused and absent subjects run the same calls.
+func TestOwnershipRefusalReadsNoRow(t *testing.T) {
+	canonical := contextfabric.TeamCanonicalID(teamID)
+	var baseline []string
+	for _, outcome := range []directread.SubjectOutcome{directread.SubjectAbsent, directread.SubjectDenied, directread.SubjectOwnershipUnproven, directread.SubjectInvalid} {
+		w := newWorld()
+		w.gate = &fakeGate{world: w, outcomes: map[string]directread.SubjectOutcome{canonical: outcome}}
+		locator := "acr:v1:team:" + teamID
+		w.orgRows["teams.v1|"+locator] = []contextpacket.EvidenceReference{orgRow("teams.v1", locator, "team", teamID)}
+		expanded, decision := resolver(t, w).ResolveSourceRow(context.Background(), restricted, "team", teamID)
+		if decision.Reason != contextfabric.SourceRowNoRow || decision.Admitted != 0 || decision.Rows != 0 || expanded.SchemaVersion != "" {
+			t.Fatalf("%s: decision %+v", outcome, decision)
+		}
+		if baseline == nil {
+			baseline = w.calls
+		} else if !reflect.DeepEqual(w.calls, baseline) {
+			t.Fatalf("%s: calls %v differ from absent %v", outcome, w.calls, baseline)
+		}
+		for _, call := range w.calls {
+			if strings.HasPrefix(call, "org_row(") {
+				t.Fatalf("%s: a refused subject read its row: %v", outcome, w.calls)
+			}
+		}
+	}
+}
+
+// A gate that cannot decide is a retryable 503, never a no_row; no gate
+// composed keeps the kinds on the record without a read.
+func TestOwnershipGateUnavailableOrAbsent(t *testing.T) {
+	boom := errors.New("graph down")
+	w := newWorld()
+	w.gate = &fakeGate{world: w, decision: directread.DecisionUnavailable, err: boom}
+	if _, decision := resolver(t, w).ResolveSourceRow(context.Background(), restricted, "project", projectID); decision.Reason != contextfabric.SourceRowUnavailable || !errors.Is(decision.Err, boom) {
+		t.Fatalf("unavailable: %+v", decision)
+	}
+	w = newWorld()
+	if _, decision := resolver(t, w).ResolveSourceRow(context.Background(), restricted, "team", teamID); decision.Reason != contextfabric.SourceRowBackendAbsent || decision.Query != "teams.v1" || len(w.calls) != 0 {
+		t.Fatalf("no gate: %+v, calls %v", decision, w.calls)
+	}
+	w = newWorld()
+	w.gate = &fakeGate{world: w, outcomes: map[string]directread.SubjectOutcome{contextfabric.TeamCanonicalID(teamID): directread.SubjectAdmitted}}
+	w.fail["org_row"] = boom
+	if _, decision := resolver(t, w).ResolveSourceRow(context.Background(), restricted, "team", teamID); decision.Reason != contextfabric.SourceRowUnavailable {
+		t.Fatalf("row read failed: %+v", decision)
+	}
+}
+
+// The project grammar is injective only with a colon-free provider; any id
+// that does not split into one is malformed and asks the gate nothing.
+func TestOwnershipMalformedIdsAskNothing(t *testing.T) {
+	for _, id := range []string{"nocolon", "Jira:x", ":x", "jira:", "ji ra:x", "ji:ra:x:"} {
+		w := newWorld()
+		w.gate = &fakeGate{world: w}
+		_, decision := resolver(t, w).ResolveSourceRow(context.Background(), unrestricted, "project", id)
+		if id == "ji:ra:x:" {
+			// provider "ji", project id "ra:x:": well-formed.
+			if decision.Reason == contextfabric.SourceRowIDMalformed {
+				t.Fatalf("%q refused as malformed", id)
+			}
+			continue
+		}
+		if decision.Reason != contextfabric.SourceRowIDMalformed || len(w.calls) != 0 {
+			t.Fatalf("%q: %+v, calls %v", id, decision, w.calls)
+		}
 	}
 }

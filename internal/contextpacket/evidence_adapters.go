@@ -36,6 +36,9 @@ var catalogEvidenceAdapters = map[string]providerEvidenceAdapter{
 	"deployment_incident_provenance.v1": {structuredKey: "edge_id", expectedType: "deployment_incident_edge"},
 	"file_hotspots.v1":                  {structuredKey: "file_path", expectedType: "file_hotspot"},
 	"file_complexity.v1":                {structuredKey: "file_path", expectedType: "file_complexity"},
+	// Organization-level rows (OrganizationRowQueriesV1, CHAOS-7227).
+	"teams.v1":    {structuredKey: "team_id", expectedType: "team"},
+	"projects.v1": {structuredKey: "project_id", expectedType: "project"},
 }
 
 func evidenceAdapterFor(evidence contractsv1.EvidenceRef) (evidenceAdapter, bool) {

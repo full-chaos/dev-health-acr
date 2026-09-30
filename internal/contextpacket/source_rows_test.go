@@ -25,6 +25,9 @@ func sourceRowStatements(t *testing.T) map[string]string {
 		}
 		statements[string(discovery)] = statement
 	}
+	for _, query := range contextpacket.OrganizationRowQueriesV1 {
+		statements[query.ID] = query.Statement
+	}
 	return statements
 }
 
@@ -56,17 +59,48 @@ func TestSourceRowStatementsCarryNoGrant(t *testing.T) {
 	}
 }
 
-// A source row is read only through a packet catalog statement: the same
-// label, citation and provenance the packet gives the row.
-func TestSourceRowQueryIDsAreTheCatalog(t *testing.T) {
+// A repository-level source row is read through its packet catalog
+// statement (the same label, citation and provenance the packet gives it);
+// an organization-level row through an OrganizationRowQueriesV1 statement,
+// which the packet catalog does not carry (it is the packet's read set).
+func TestSourceRowQueryIDsAreTheCatalogAndTheOrganizationRows(t *testing.T) {
 	ids := contextpacket.SourceRowQueryIDs()
-	if len(ids) != len(contextpacket.SourceQueryCatalogV1) {
-		t.Fatalf("SourceRowQueryIDs = %d ids, catalog = %d", len(ids), len(contextpacket.SourceQueryCatalogV1))
+	want := []string{}
+	for _, query := range contextpacket.SourceQueryCatalogV1 {
+		want = append(want, query.ID)
 	}
-	for index, query := range contextpacket.SourceQueryCatalogV1 {
-		if ids[index] != query.ID {
-			t.Fatalf("id %d = %s, want %s", index, ids[index], query.ID)
+	for _, query := range contextpacket.OrganizationRowQueriesV1 {
+		for _, catalog := range contextpacket.SourceQueryCatalogV1 {
+			if catalog.ID == query.ID {
+				t.Fatalf("%s is also a packet catalog query", query.ID)
+			}
 		}
+		want = append(want, query.ID)
+	}
+	if strings.Join(ids, ",") != strings.Join(want, ",") {
+		t.Fatalf("SourceRowQueryIDs = %v, want %v", ids, want)
+	}
+}
+
+// The organization-level read binds the organization and the locator only.
+func TestResolveOrganizationRowBindsOrganizationAndLocator(t *testing.T) {
+	observed := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	client := &recordingClient{rows: [][]any{{"acr:v1:team:team-a", "dev_health", "team", "team-a", "Team A", "", "native", 1.0, "provider=jira, active=1", observed}}}
+	rows := contextpacket.NewCatalogClickHouseRows(client)
+	references, err := rows.ResolveOrganizationRow(context.Background(), "org_1", contextpacket.SourceRowRead{QueryID: "teams.v1", Locator: "acr:v1:team:team-a"})
+	if err != nil || len(references) != 1 || references[0].Evidence.SourceVersion != "teams.v1" {
+		t.Fatalf("references = %+v, err %v", references, err)
+	}
+	if len(client.bindings[0]) != 2 {
+		t.Fatalf("bindings = %v", client.bindings[0])
+	}
+	for name, want := range map[string]any{"org_id": "org_1", "evidence_locator": "acr:v1:team:team-a"} {
+		if got, ok := sourceRowBinding(client.bindings[0], name); !ok || got != want {
+			t.Fatalf("binding %s = %v", name, got)
+		}
+	}
+	if _, err := rows.ResolveOrganizationRow(context.Background(), "org_1", contextpacket.SourceRowRead{QueryID: "pull_requests.v1", Locator: "x"}); !errors.Is(err, contextpacket.ErrUnknownSourceRowQuery) {
+		t.Fatalf("a repository statement was accepted as an organization row: %v", err)
 	}
 }
 
@@ -166,8 +200,8 @@ func TestSourceRowLookupsBindNoGrant(t *testing.T) {
 }
 
 // CHAOS-7226 codex r1 P1, over the source-row statements: every table of
-// every statement source_rows.go adds (the repository lookup and the
-// incident discovery) is scoped to the caller's organization, by the same sweep
+// every statement source_rows.go adds (the repository lookup, the incident
+// discovery and the team/project rows) is scoped to the caller's organization, by the same sweep
 // CHAOS-7237 holds every catalog statement to
 // (TestEveryCatalogStatementScopesEveryTableToTheOrganization).
 func TestSourceRowReadsScopeEveryTableToTheOrganization(t *testing.T) {

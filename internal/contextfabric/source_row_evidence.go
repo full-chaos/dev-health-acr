@@ -41,6 +41,10 @@ const (
 	// SourceRowRouteRowRepository: the id carries no repository; the row
 	// names the repositories it maps to.
 	SourceRowRouteRowRepository SourceRowRoute = "row_repository"
+	// SourceRowRouteOwnership: the id names an organization-level row (a
+	// team, a project) authorized by OWNERSHIP through the direct data
+	// tools' subject gate (directread.SubjectGate), never by membership.
+	SourceRowRouteOwnership SourceRowRoute = "ownership"
 )
 
 // SourceRowPlan is the route of one entity type and the statement that reads
@@ -56,8 +60,9 @@ type SourceRowPlan struct {
 //   - organization: no canonical organization table exists.
 //   - episode: an approved agent episode lives in ACR Postgres and is not
 //     durable truth (AGENTS.md).
-//   - team, project, project-team: ownership-derived authorization, a
-//     separate change (CHAOS-6180 part B).
+//   - project-team (CHAOS-7227 scope): <provider>:<project>:<team> joins two
+//     colon-capable ids, and team_project_ownership is keyed by more than
+//     the pair, so one ref is not one row (CHAOS-7252).
 //   - work-item-dependency, work-item-hierarchy, work-item-team (CHAOS-7226
 //     r2 P1 class): their producers join TWO colon-capable ids with ':'
 //     (<src>:<tgt>:<key>, <repo>:<src>:<tgt>:<type>, <repo>:<child>:<parent>,
@@ -92,13 +97,13 @@ var sourceRowPlans = map[contractsv1.ContextFabricEvidenceEntityType]SourceRowPl
 	contractsv1.ContextFabricEvidenceEntityHotspot:            {Route: SourceRowRouteRecord},
 	contractsv1.ContextFabricEvidenceEntityIncident:           {Route: SourceRowRouteRowRepository, Query: "incidents.v1"},
 	contractsv1.ContextFabricEvidenceEntityOrganization:       {Route: SourceRowRouteRecord},
-	contractsv1.ContextFabricEvidenceEntityProject:            {Route: SourceRowRouteRecord},
+	contractsv1.ContextFabricEvidenceEntityProject:            {Route: SourceRowRouteOwnership, Query: "projects.v1"},
 	contractsv1.ContextFabricEvidenceEntityProjectTeam:        {Route: SourceRowRouteRecord},
 	contractsv1.ContextFabricEvidenceEntityPullRequest:        {Route: SourceRowRouteRepository, Query: "pull_requests.v1"},
 	contractsv1.ContextFabricEvidenceEntityRepository:         {Route: SourceRowRouteRepository, Query: "repository_freshness.v1"},
 	contractsv1.ContextFabricEvidenceEntityReview:             {Route: SourceRowRouteRepository, Query: "pull_request_reviews.v1"},
 	contractsv1.ContextFabricEvidenceEntityReviewOutcome:      {Route: SourceRowRouteRecord},
-	contractsv1.ContextFabricEvidenceEntityTeam:               {Route: SourceRowRouteRecord},
+	contractsv1.ContextFabricEvidenceEntityTeam:               {Route: SourceRowRouteOwnership, Query: "teams.v1"},
 	contractsv1.ContextFabricEvidenceEntityWorkItem:           {Route: SourceRowRouteRepository, Query: "work_items.v1"},
 	contractsv1.ContextFabricEvidenceEntityWorkItemDependency: {Route: SourceRowRouteRecord},
 	contractsv1.ContextFabricEvidenceEntityWorkItemHierarchy:  {Route: SourceRowRouteRecord},
@@ -187,11 +192,14 @@ const (
 	// SourceRowGrammarRowAnchored: the id alone; the row names its
 	// repositories.
 	SourceRowGrammarRowAnchored = "row_anchored"
+	// SourceRowGrammarOrgKeyed: the id is an organization-level row key (a
+	// team id; a project's <provider>:<id>).
+	SourceRowGrammarOrgKeyed = "org_keyed"
 )
 
 // SourceRowGrammarVocabulary is the closed set of grammars.
-func SourceRowGrammarVocabulary() [2]string {
-	return [2]string{SourceRowGrammarRepoAnchored, SourceRowGrammarRowAnchored}
+func SourceRowGrammarVocabulary() [3]string {
+	return [3]string{SourceRowGrammarRepoAnchored, SourceRowGrammarRowAnchored, SourceRowGrammarOrgKeyed}
 }
 
 // SourceRowDecision records what decided one source-row resolution. It
@@ -203,7 +211,9 @@ type SourceRowDecision struct {
 	// Grammar is the grammar of the served row, else of the last one tried.
 	Grammar string
 	// Repositories is how many repositories the lookups returned, before
-	// the caller's grant; Admitted is how many of them the grant admits.
+	// the caller's grant; Admitted is how many of them the grant admits. On
+	// the ownership route they count the subject the gate found (1 unless it
+	// is absent) and admitted.
 	Repositories int
 	Admitted     int
 	// Rows is how many rows the row reads returned.

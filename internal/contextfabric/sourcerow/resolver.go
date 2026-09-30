@@ -1,6 +1,7 @@
 // Package sourcerow expands a Context Fabric evidence ref to the Dev Health
-// row its id names (CHAOS-6180, option S), authorized by the caller's
-// repository grant.
+// row its id names (CHAOS-6180, option S): a repository-level row authorized
+// by the caller's repository grant, or a team or project row authorized by
+// ownership through the direct data tools' subject gate (CHAOS-7227).
 //
 // Authorization is the one the direct data tools use (read_facts,
 // run_operation): graphrank.AuthorizedAttributes over the row's repository
@@ -24,10 +25,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -38,6 +42,15 @@ type Rows interface {
 	RepositoryByID(ctx context.Context, orgID, repoID string) ([]contractsv1.ResolvedScope, error)
 	SourceRowRepositories(ctx context.Context, orgID string, discovery contextpacket.SourceRowDiscovery, entityID string) ([]contractsv1.ResolvedScope, error)
 	ResolveSourceRow(ctx context.Context, orgID string, scope contractsv1.ResolvedScope, read contextpacket.SourceRowRead) ([]contextpacket.EvidenceReference, error)
+	ResolveOrganizationRow(ctx context.Context, orgID string, read contextpacket.SourceRowRead) ([]contextpacket.EvidenceReference, error)
+}
+
+// SubjectGate is the direct data tools' subject authorization
+// (*directread.SubjectGate): the ONE decision read_facts, run_operation,
+// find_subjects and read_relationships take for a team or a project, derived
+// from repository OWNERSHIP, never from membership (CHAOS-7227).
+type SubjectGate interface {
+	Authorize(ctx context.Context, principal storage.Principal, requested []contextfabric.SubjectRef) (directread.AuthorizedSubjects, directread.Authorization)
 }
 
 // Expander turns a catalog row into an expansion:
@@ -50,14 +63,21 @@ type Expander interface {
 type Resolver struct {
 	rows     Rows
 	expander Expander
+	gate     SubjectGate
 }
 
-// New returns a resolver. Both arguments are required.
-func New(rows Rows, expander Expander) (*Resolver, error) {
+// New returns a resolver. rows and expander are required. gate may be nil
+// (no graph composed): the ownership kinds then stay on the persisted record
+// (backend_absent).
+func New(rows Rows, expander Expander, gate SubjectGate) (*Resolver, error) {
 	if storage.IsNil(rows) || storage.IsNil(expander) {
 		return nil, errors.New("sourcerow: rows and expander are required")
 	}
-	return &Resolver{rows: rows, expander: expander}, nil
+	resolver := &Resolver{rows: rows, expander: expander}
+	if !storage.IsNil(gate) {
+		resolver.gate = gate
+	}
+	return resolver, nil
 }
 
 var _ contextfabric.SourceRowResolver = (*Resolver)(nil)
@@ -112,6 +132,8 @@ func (r *Resolver) ResolveSourceRow(ctx context.Context, principal storage.Princ
 		}
 		read := contextpacket.SourceRowRead{QueryID: plan.Query, Locator: contractsv1.ContextFabricEvidenceRefPrefix + entityType + ":" + entityID}
 		targets, err = r.discoveredTargets(ctx, principal, discovery, entityID, read, contextfabric.SourceRowGrammarRowAnchored, &decision)
+	case contextfabric.SourceRowRouteOwnership:
+		return r.ownershipRow(ctx, principal, entityType, entityID, plan, decision)
 	default:
 		decision.Reason = contextfabric.SourceRowKindOnRecord
 		return contractsv1.ExpandedEvidence{}, decision
@@ -232,6 +254,8 @@ func (r *Resolver) discoveredTargets(ctx context.Context, principal storage.Prin
 type found struct {
 	target    target
 	reference contextpacket.EvidenceReference
+	// subject is the gated subject of an ownership row.
+	subject contextfabric.SubjectRef
 }
 
 // readTargets reads every target and serves exactly one distinct row. A
@@ -315,12 +339,109 @@ func (r *Resolver) expand(ctx context.Context, entityType, entityID string, row 
 		structured[key] = value
 	}
 	structured["entity_type"] = entityType
-	structured["repository_id"] = row.target.scope.RepoID
-	structured["repository"] = row.target.scope.RepoSlug
+	if row.target.scope.RepoID != "" {
+		structured["repository_id"] = row.target.scope.RepoID
+		structured["repository"] = row.target.scope.RepoSlug
+	}
+	if row.subject.CanonicalID != "" {
+		structured["subject"] = row.subject.CanonicalID
+	}
 	structured["id_grammar"] = row.target.grammar
 	expanded.Structured = structured
 	if err := expanded.Validate(); err != nil {
 		return contractsv1.ExpandedEvidence{}, fmt.Errorf("validate source row expansion: %w", err)
 	}
 	return expanded, nil
+}
+
+// providerPattern is the colon-free provider segment of a project id. With it
+// the project grammar <provider>:<project id> splits at its first ':' and is
+// injective, whatever the project id holds.
+var providerPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+
+// ownershipSubject maps a team or project ref id to the graph subject the
+// gate decides and the row's catalog evidence id. false: the id does not fit
+// the kind's grammar.
+func ownershipSubject(entityType, entityID string) (contextfabric.SubjectRef, string, bool) {
+	locator := contractsv1.ContextFabricEvidenceRefPrefix + entityType + ":" + entityID
+	switch contractsv1.ContextFabricEvidenceEntityType(entityType) {
+	case contractsv1.ContextFabricEvidenceEntityTeam:
+		return contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: contextfabric.TeamCanonicalID(entityID)}, locator, true
+	case contractsv1.ContextFabricEvidenceEntityProject:
+		provider, projectID, found := strings.Cut(entityID, ":")
+		if !found || projectID == "" || !providerPattern.MatchString(provider) {
+			return contextfabric.SubjectRef{}, "", false
+		}
+		canonicalID, omitted, err := identity.Derive(identity.KindProject, []string{provider, projectID}, nil)
+		if err != nil || omitted || canonicalID == "" {
+			return contextfabric.SubjectRef{}, "", false
+		}
+		return contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: canonicalID}, locator, true
+	}
+	return contextfabric.SubjectRef{}, "", false
+}
+
+// ownershipRow serves a team or project row the subject gate admits. The
+// gate is the whole authorization: denied, absent and ownership-unproven
+// subjects are one no_row, and none of them reads ClickHouse. The gate takes
+// the same graph reads for an absent subject and for one its node check
+// denies (its ownership reach runs only after node admission), so a
+// restricted caller's refusal and an absent subject run the same work.
+func (r *Resolver) ownershipRow(ctx context.Context, principal storage.Principal, entityType, entityID string, plan contextfabric.SourceRowPlan, decision contextfabric.SourceRowDecision) (contractsv1.ExpandedEvidence, contextfabric.SourceRowDecision) {
+	subject, locator, ok := ownershipSubject(entityType, entityID)
+	if !ok {
+		decision.Reason = contextfabric.SourceRowIDMalformed
+		return contractsv1.ExpandedEvidence{}, decision
+	}
+	decision.Grammar = contextfabric.SourceRowGrammarOrgKeyed
+	if r.gate == nil {
+		decision.Reason = contextfabric.SourceRowBackendAbsent
+		return contractsv1.ExpandedEvidence{}, decision
+	}
+	_, authorization := r.gate.Authorize(ctx, principal, []contextfabric.SubjectRef{subject})
+	if authorization.Decision == directread.DecisionUnavailable {
+		decision.Reason, decision.Err = contextfabric.SourceRowUnavailable, authorization.Err
+		if decision.Err == nil {
+			decision.Err = fmt.Errorf("sourcerow: subject gate unavailable: %s", authorization.Reason)
+		}
+		return contractsv1.ExpandedEvidence{}, decision
+	}
+	outcome := directread.SubjectOutcome("")
+	if len(authorization.Outcomes) == 1 {
+		outcome = authorization.Outcomes[0].Outcome
+	}
+	if outcome != directread.SubjectAbsent && outcome != directread.SubjectInvalid && outcome != "" {
+		decision.Repositories = 1
+	}
+	if outcome != directread.SubjectAdmitted {
+		decision.Reason = contextfabric.SourceRowNoRow
+		return contractsv1.ExpandedEvidence{}, decision
+	}
+	decision.Admitted = 1
+	read := contextpacket.SourceRowRead{QueryID: plan.Query, Locator: locator}
+	references, err := r.rows.ResolveOrganizationRow(ctx, principal.OrgID, read)
+	if err != nil && !errors.Is(err, storage.ErrNotFound) {
+		decision.Reason, decision.Err = contextfabric.SourceRowUnavailable, err
+		return contractsv1.ExpandedEvidence{}, decision
+	}
+	decision.Rows = len(references)
+	switch len(references) {
+	case 0:
+		decision.Reason = contextfabric.SourceRowNoRow
+		return contractsv1.ExpandedEvidence{}, decision
+	case 1:
+	default:
+		decision.Reason = contextfabric.SourceRowAmbiguous
+		return contractsv1.ExpandedEvidence{}, decision
+	}
+	expanded, err := r.expand(ctx, entityType, entityID, found{target: target{read: read, grammar: contextfabric.SourceRowGrammarOrgKeyed}, reference: references[0], subject: subject})
+	if err != nil {
+		decision.Reason, decision.Err = contextfabric.SourceRowInvalid, err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			decision.Reason, decision.Err = contextfabric.SourceRowUnavailable, ctxErr
+		}
+		return contractsv1.ExpandedEvidence{}, decision
+	}
+	decision.Reason = contextfabric.SourceRowServed
+	return expanded, decision
 }

@@ -16,8 +16,8 @@ import (
 
 // The plan table is total over the closed evidence-entity vocabulary, names
 // only statements contextpacket declares, and routes exactly the kinds
-// CHAOS-7226 ruled after r2 (7 source kinds, 17 on the record). A kind moved
-// between routes must move here too.
+// CHAOS-7226 ruled after r2 plus CHAOS-7227's team and project (9 source
+// kinds, 15 on the record). A kind moved between routes must move here too.
 func TestSourceRowPlansAreTotal(t *testing.T) {
 	plans := contextfabric.SourceRowPlans()
 	vocabulary := contractsv1.ContextFabricEvidenceEntityTypeVocabulary()
@@ -33,6 +33,8 @@ func TestSourceRowPlansAreTotal(t *testing.T) {
 		contractsv1.ContextFabricEvidenceEntityCI:          contextfabric.SourceRowRouteRepository,
 		contractsv1.ContextFabricEvidenceEntityDeployment:  contextfabric.SourceRowRouteRepository,
 		contractsv1.ContextFabricEvidenceEntityIncident:    contextfabric.SourceRowRouteRowRepository,
+		contractsv1.ContextFabricEvidenceEntityTeam:        contextfabric.SourceRowRouteOwnership,
+		contractsv1.ContextFabricEvidenceEntityProject:     contextfabric.SourceRowRouteOwnership,
 	}
 	records := 0
 	for _, kind := range vocabulary {
@@ -62,8 +64,8 @@ func TestSourceRowPlansAreTotal(t *testing.T) {
 			}
 		}
 	}
-	if records != 17 || len(want) != 7 {
-		t.Fatalf("records = %d, source kinds = %d; want 17 and 7", records, len(want))
+	if records != 15 || len(want) != 9 {
+		t.Fatalf("records = %d, source kinds = %d; want 15 and 9", records, len(want))
 	}
 	if got := contextfabric.SourceRowPlanFor("not-a-kind"); got.Route != contextfabric.SourceRowRouteRecord {
 		t.Fatalf("an unregistered segment routes to %s", got.Route)
