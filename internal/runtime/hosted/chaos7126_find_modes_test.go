@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"log/slog"
 	"strings"
 	"testing"
@@ -121,5 +122,37 @@ func TestChaos7160_ComposedLookupRefusesRestrictedWorkItemHandle(t *testing.T) {
 	}
 	if client.calls != 0 {
 		t.Fatalf("the refusal ran %d ClickHouse queries", client.calls)
+	}
+}
+
+// CHAOS-7158 r2 P3: the production composition refuses a kind/anchor pair the
+// census cannot scope (a work item on a repository, a PR or CI run on a
+// project) as invalid_find_request for an unrestricted caller, with no
+// ClickHouse query, against the REAL census support matrix. NOT pinned here:
+// which layer refuses. Without the WithCensusAnchorSupport wiring the census
+// discriminator refuses the same pair (ErrCensusAnchorUnsupported), so the
+// observable answer is the same; the wiring only moves the refusal ahead of
+// the gate and binding reads.
+func TestChaos7158_ComposedLookupRefusesUnsupportedAnchorPairs(t *testing.T) {
+	graph := chaos7126Graph{}
+	gate := directread.NewSubjectGate(graph, nil)
+	lookup := directread.NewSubjectLookup(graph, gate, nil)
+	client := &chaos7160QueryClient{}
+	composeFindModes(lookup, chaos7071Investigator{graph: graph, facts: chaos7071Facts{}}, client, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+	principal := storage.Principal{OrgID: "org", Subject: "u", CredentialID: "c"}
+	ctx := observability.WithRequestID(context.Background(), "req_0123456789abcdef0123456789abcdef")
+	repo := &contractsv1.MCPFindSubjectsAnchor{Kind: "repository", ID: "repository:a"}
+	project := &contractsv1.MCPFindSubjectsAnchor{Kind: "project", ID: "project:q"}
+	for name, request := range map[string]directread.FindRequest{
+		"work item on a repository": {Handle: "CHAOS-1", Anchor: repo},
+		"PR on a project":           {Handle: "PR 532", Anchor: project},
+		"CI run on a project":       {Handle: "run 18234567", Anchor: project},
+	} {
+		if _, err := lookup.Find(ctx, principal, request); !errors.Is(err, directread.ErrFindInvalidRequest) {
+			t.Errorf("%s: err = %v, want invalid_find_request", name, err)
+		}
+	}
+	if client.calls != 0 {
+		t.Fatalf("the static refusals ran %d ClickHouse queries", client.calls)
 	}
 }

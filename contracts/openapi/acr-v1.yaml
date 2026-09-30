@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 6f2e446f13e18a7990a38239ad81a9d293f1e09988f924c5471f78acb586fbd7
+# canonical-content-sha256: a95e1a5cbdd742a1bb06c896e4afb0ecf274f3d99a2fe81cb9e55e08cfdd9d04
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -1430,6 +1430,21 @@ components:
     DataSubjectsRequest:
       additionalProperties: false
       properties:
+        anchor:
+          additionalProperties: false
+          description: "handle mode only: a repository (for a pull request number or CI run id) or a project (for a work item key) that narrows the handle to one subject. Any other pairing is refused. kind and id come together. The anchor is checked for your credential like any subject; one you may not read, or that does not exist, gives the same empty answer as an anchor with no match."
+          properties:
+            id:
+              maxLength: 256
+              minLength: 1
+              type: "string"
+            kind:
+              description: "repository or project."
+              type: "string"
+          required:
+            - "kind"
+            - "id"
+          type: "object"
         cursor:
           description: "Opaque keyset position from page.next_cursor. It carries no permission."
           type: "string"
@@ -1491,7 +1506,17 @@ components:
           type: "object"
         request:
           properties:
+            anchor:
+              description: "Echo of the handle-mode anchor. The id is untrusted text."
+              properties:
+                id:
+                  type: "string"
+                kind:
+                  type: "string"
+              type: "object"
             cursor:
+              type: "string"
+            handle:
               type: "string"
             kind:
               type: "string"
@@ -1505,6 +1530,10 @@ components:
               enum:
                 - "list"
                 - "name"
+                - "owned_by"
+                - "handle"
+            owned_by:
+              type: "string"
             query:
               type: "string"
           required:

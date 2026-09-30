@@ -173,6 +173,11 @@
         "handle": {
           "type": "string",
           "description": "Echo of handle. Untrusted text."
+        },
+        "anchor": {
+          "type": "object",
+          "description": "Echo of anchor. The id is untrusted text.",
+          "properties": {"kind": {"type": "string"}, "id": {"type": "string"}}
         }
       }
     },

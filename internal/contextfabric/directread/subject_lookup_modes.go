@@ -219,7 +219,31 @@ func (l *SubjectLookup) scanHandle(ctx context.Context, principal storage.Princi
 	// census counts is in the caller's own grant. Unrestricted and universal
 	// callers keep the one organization-wide census.
 	anchors := []contextfabric.SubjectRef{{}}
-	if ClassifyPrincipal(principal) == ClassRestricted {
+	anchorRefused := false
+	if plan.anchor != nil {
+		// CHAOS-7158: one census, bound to the anchor. The anchor takes a
+		// subject-gate decision like any candidate; a refused, unreadable or
+		// missing anchor answers exactly like an anchor with no match (empty,
+		// no count, no reason) and runs the same census. A restricted caller needs one census, not one
+		// per granted repository; its candidates are still gated below.
+		proof, decision := l.gate.Authorize(ctx, principal, []contextfabric.SubjectRef{*plan.anchor})
+		if decision.Decision == DecisionUnavailable {
+			return nil, false, fmt.Errorf("subject gate unavailable: %w", gateError(decision))
+		}
+		anchorRefused = proof.Len() == 0
+		if plan.anchorDecision != nil {
+			*plan.anchorDecision = "admitted"
+			if anchorRefused {
+				*plan.anchorDecision = "refused"
+			}
+		}
+		if !anchorRefused {
+			if err := proof.consume(ctx, principal, l.clock()); err != nil {
+				return nil, false, fmt.Errorf("%w: %w", ErrUngatedRead, err)
+			}
+		}
+		anchors = []contextfabric.SubjectRef{*plan.anchor}
+	} else if ClassifyPrincipal(principal) == ClassRestricted {
 		// Decided from the kind, before the grant listing and before any
 		// census: the refusal cannot depend on how many repositories the
 		// grant holds (r1 #701: an empty grant skipped the census and
@@ -243,6 +267,9 @@ func (l *SubjectLookup) scanHandle(ctx context.Context, principal storage.Princi
 	truncated := false
 	for _, anchor := range anchors {
 		outcome, err := l.census(ctx, principal.OrgID, plan.handle.Kind, plan.handle.Value, true, anchor.Kind, anchor.CanonicalID, anchor.CanonicalID != "")
+		if plan.anchor != nil && errors.Is(err, graphrank.ErrCensusAnchorUnsupported) {
+			return nil, false, fmt.Errorf("%w: a %s handle cannot be anchored on a %s", ErrFindInvalidRequest, plan.handle.Kind, plan.anchor.Kind)
+		}
 		if anchor.CanonicalID != "" && errors.Is(err, graphrank.ErrCensusAnchorUnsupported) {
 			// The census cannot scope this handle kind to a repository (a
 			// work item: Linear work items carry no repository). A
@@ -252,6 +279,13 @@ func (l *SubjectLookup) scanHandle(ctx context.Context, principal storage.Princi
 		}
 		if err != nil {
 			return nil, false, err
+		}
+		if anchorRefused {
+			// A refused or missing anchor runs the same census as a readable
+			// one and discards only the OUTCOME: a census error above answers
+			// the same unavailable for all three anchor states (codex r2 P1),
+			// and no response, status or timing seam tells them apart.
+			return nil, false, nil
 		}
 		if outcome.Count == 0 {
 			continue

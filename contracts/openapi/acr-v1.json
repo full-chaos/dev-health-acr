@@ -1965,6 +1965,16 @@
             "type": "string",
             "maxLength": 1024,
             "description": "handle mode: one pull request number, work item key or CI run id (CHAOS-7126). Matches the caller may not read are neither returned nor counted."
+          },
+          "anchor": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "handle mode only: a repository (for a pull request number or CI run id) or a project (for a work item key) that narrows the handle to one subject. Any other pairing is refused. kind and id come together. The anchor is checked for your credential like any subject; one you may not read, or that does not exist, gives the same empty answer as an anchor with no match.",
+            "required": ["kind", "id"],
+            "properties": {
+              "kind": {"type": "string", "description": "repository or project."},
+              "id": {"type": "string", "minLength": 1, "maxLength": 256}
+            }
           }
         }
       },
@@ -2077,7 +2087,9 @@
               "mode": {
                 "enum": [
                   "list",
-                  "name"
+                  "name",
+                  "owned_by",
+                  "handle"
                 ]
               },
               "kind": {
@@ -2097,6 +2109,24 @@
               },
               "cursor": {
                 "type": "string"
+              },
+              "owned_by": {
+                "type": "string"
+              },
+              "handle": {
+                "type": "string"
+              },
+              "anchor": {
+                "type": "object",
+                "description": "Echo of the handle-mode anchor. The id is untrusted text.",
+                "properties": {
+                  "kind": {
+                    "type": "string"
+                  },
+                  "id": {
+                    "type": "string"
+                  }
+                }
               }
             }
           },

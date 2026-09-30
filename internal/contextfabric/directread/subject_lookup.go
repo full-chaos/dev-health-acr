@@ -120,6 +120,9 @@ type FindRequest struct {
 	OwnedBy string
 	// Handle is handle mode: a handle such as "PR 532" or "CHAOS-123".
 	Handle string
+	// Anchor is the optional handle-mode anchor (CHAOS-7158): a repository or
+	// project that narrows the handle to one subject.
+	Anchor *contractsv1.MCPFindSubjectsAnchor
 }
 
 // FoundSubject is one admitted subject.
@@ -167,6 +170,10 @@ type FindTelemetry struct {
 	Status       string
 	LatencyMS    int64
 	ErrorClass   string
+	// Anchor is the true server-side decision on a handle-mode anchor
+	// (CHAOS-7158): "admitted" or "refused" (a refused, unreadable or missing
+	// anchor). Empty without an anchor. It never reaches the caller.
+	Anchor string
 }
 
 // FindRecorder receives one FindTelemetry per call.
@@ -228,6 +235,11 @@ type findPlan struct {
 	// hasKeyToken: the handle holds a work-item-key-shaped token of any
 	// prefix (CHAOS-7200).
 	hasKeyToken bool
+	// anchor is the validated handle-mode anchor (CHAOS-7158), or nil.
+	anchor *contextfabric.SubjectRef
+	// anchorDecision receives the gate decision on the anchor for telemetry
+	// (a pointer, so the value copies of the plan share it).
+	anchorDecision *string
 }
 
 func planFind(request FindRequest) (findPlan, error) {
@@ -272,6 +284,19 @@ func planFind(request FindRequest) (findPlan, error) {
 		return plan, fmt.Errorf("%w: at most %d kinds", ErrFindInvalidRequest, MaxFindKinds)
 	}
 	owner, handle := strings.TrimSpace(request.OwnedBy), strings.TrimSpace(request.Handle)
+	if request.Anchor != nil {
+		// CHAOS-7158: the anchor is handle mode only, both fields, and a
+		// repository or project. Shape only: existence is never checked here.
+		id := strings.TrimSpace(request.Anchor.ID)
+		rawRunes := utf8.RuneCountInString(request.Anchor.ID)
+		kind := contractsv1.ContextFabricSubjectKind(request.Anchor.Kind)
+		if handle == "" || id == "" || rawRunes > MaxFindQueryRunes ||
+			(kind != contractsv1.ContextFabricSubjectRepository && kind != contractsv1.ContextFabricSubjectProject) {
+			return plan, fmt.Errorf("%w: anchor is a repository or project id and only for handle mode", ErrFindInvalidRequest)
+		}
+		plan.anchor = &contextfabric.SubjectRef{Kind: kind, CanonicalID: id}
+		plan.anchorDecision = new(string)
+	}
 	modes := 0
 	for _, set := range []bool{plan.query != "", owner != "", handle != ""} {
 		if set {
@@ -327,6 +352,9 @@ func (l *SubjectLookup) Find(ctx context.Context, principal storage.Principal, r
 			kinds = append(kinds, subject.Kind)
 		}
 		telemetry.SubjectKinds = sortedKinds(kinds)
+		if plan.anchorDecision != nil {
+			telemetry.Anchor = *plan.anchorDecision
+		}
 		switch {
 		case errors.Is(err, ErrFindScopeRequired):
 			// The typed refusal keeps its reason on the Info line
@@ -355,6 +383,12 @@ func (l *SubjectLookup) Find(ctx context.Context, principal storage.Principal, r
 	}
 	if l == nil || l.graph == nil || l.gate == nil {
 		return FindResponse{}, fmt.Errorf("%w: no graph or gate", ErrFindUnavailable)
+	}
+
+	if plan.anchor != nil && l.anchorSupport != nil && !l.anchorSupport(plan.handle.Kind, plan.anchor.Kind) {
+		// A pair the census cannot scope is a static refusal, the same for
+		// every caller (CHAOS-7158).
+		return FindResponse{}, fmt.Errorf("%w: a %s handle cannot be anchored on a %s", ErrFindInvalidRequest, plan.handle.Kind, plan.anchor.Kind)
 	}
 
 	binding, bindErr := l.graph.ResolveInvestigationBinding(ctx, principal)
@@ -585,6 +619,9 @@ func FindLogArgs(principal storage.Principal, telemetry FindTelemetry) []any {
 	}
 	if telemetry.ErrorClass != "" {
 		args = append(args, "error_class", contextfabric.SanitizeLogAttr(telemetry.ErrorClass))
+	}
+	if telemetry.Anchor != "" {
+		args = append(args, "anchor", contextfabric.SanitizeLogAttr(telemetry.Anchor))
 	}
 	return args
 }

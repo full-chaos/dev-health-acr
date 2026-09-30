@@ -71,6 +71,7 @@ func TestDirectReadEventVocabulariesMatchProducer(t *testing.T) {
 		"mode":        func() []string { v := FindModeVocabulary(); return v[:] }(),
 		"status":      statuses,
 		"error_class": {"invalid_request", "scope_required", "deadline_exceeded", "canceled", "dependency_unavailable", "graph_error"},
+		"anchor":      {"admitted", "refused"},
 	}
 	seen := 0
 	for _, field := range eventspec.DirectRead.Fields {

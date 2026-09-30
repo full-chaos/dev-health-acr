@@ -13,25 +13,27 @@ import (
 // dataSubjectsRequest is find_subjects' wire request (design C.4; S1a modes
 // list and name only). Unknown fields are refused by the strict decoder.
 type dataSubjectsRequest struct {
-	Kind    string   `json:"kind,omitempty"`
-	Query   string   `json:"query,omitempty"`
-	Kinds   []string `json:"kinds,omitempty"`
-	Limit   int      `json:"limit,omitempty"`
-	Cursor  string   `json:"cursor,omitempty"`
-	OwnedBy string   `json:"owned_by,omitempty"`
-	Handle  string   `json:"handle,omitempty"`
+	Kind    string                             `json:"kind,omitempty"`
+	Query   string                             `json:"query,omitempty"`
+	Kinds   []string                           `json:"kinds,omitempty"`
+	Limit   int                                `json:"limit,omitempty"`
+	Cursor  string                             `json:"cursor,omitempty"`
+	OwnedBy string                             `json:"owned_by,omitempty"`
+	Handle  string                             `json:"handle,omitempty"`
+	Anchor  *contractsv1.MCPFindSubjectsAnchor `json:"anchor,omitempty"`
 }
 
 // dataSubjectsEcho repeats the effective request.
 type dataSubjectsEcho struct {
-	Mode    string   `json:"mode"`
-	Kind    string   `json:"kind,omitempty"`
-	Query   string   `json:"query,omitempty"`
-	Kinds   []string `json:"kinds,omitempty"`
-	Limit   int      `json:"limit"`
-	Cursor  string   `json:"cursor,omitempty"`
-	OwnedBy string   `json:"owned_by,omitempty"`
-	Handle  string   `json:"handle,omitempty"`
+	Mode    string                             `json:"mode"`
+	Kind    string                             `json:"kind,omitempty"`
+	Query   string                             `json:"query,omitempty"`
+	Kinds   []string                           `json:"kinds,omitempty"`
+	Limit   int                                `json:"limit"`
+	Cursor  string                             `json:"cursor,omitempty"`
+	OwnedBy string                             `json:"owned_by,omitempty"`
+	Handle  string                             `json:"handle,omitempty"`
+	Anchor  *contractsv1.MCPFindSubjectsAnchor `json:"anchor,omitempty"`
 }
 
 type dataSubjectsResponse struct {
@@ -43,7 +45,7 @@ type dataSubjectsResponse struct {
 // dataSubjectsUntrustedFields are the members that carry graph or client
 // text: a subject label is a provider name, the query is the client's.
 // Every echoed caller-supplied string is listed (CHAOS-7126 r1 P2).
-var dataSubjectsUntrustedFields = []string{"subjects[].label", "request.kind", "request.query", "request.kinds", "request.cursor", "request.owned_by", "request.handle"}
+var dataSubjectsUntrustedFields = []string{"subjects[].label", "request.kind", "request.query", "request.kinds", "request.cursor", "request.owned_by", "request.handle", "request.anchor"}
 
 // contextFabricDataSubjectsHandler serves find_subjects (CHAOS-7072, S1a;
 // design C.4). Every returned subject passed the S0 subject gate for this
@@ -69,7 +71,7 @@ func (a *App) contextFabricDataSubjectsHandler() http.HandlerFunc {
 		}
 		response, err := lookup.Find(r.Context(), principal, directread.FindRequest{
 			Kind: request.Kind, Query: request.Query, Kinds: request.Kinds, Limit: request.Limit, Cursor: request.Cursor,
-			OwnedBy: request.OwnedBy, Handle: request.Handle,
+			OwnedBy: request.OwnedBy, Handle: request.Handle, Anchor: request.Anchor,
 		})
 		if err != nil {
 			switch {
@@ -87,7 +89,7 @@ func (a *App) contextFabricDataSubjectsHandler() http.HandlerFunc {
 			}
 			return
 		}
-		echo := dataSubjectsEcho{Mode: directread.FindModeName, Kind: request.Kind, Query: request.Query, Kinds: request.Kinds, Limit: effectiveFindLimit(request.Limit), Cursor: request.Cursor, OwnedBy: request.OwnedBy, Handle: request.Handle}
+		echo := dataSubjectsEcho{Mode: directread.FindModeName, Kind: request.Kind, Query: request.Query, Kinds: request.Kinds, Limit: effectiveFindLimit(request.Limit), Cursor: request.Cursor, OwnedBy: request.OwnedBy, Handle: request.Handle, Anchor: request.Anchor}
 		switch {
 		case strings.TrimSpace(request.OwnedBy) != "":
 			echo.Mode = directread.FindModeOwnedBy
