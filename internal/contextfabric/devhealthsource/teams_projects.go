@@ -639,12 +639,16 @@ func logTeamAuthorizationTelemetry(ctx context.Context, logger *slog.Logger, org
 	sort.Strings(ids)
 	for _, id := range ids {
 		owned := large[id]
-		failClosed := owned > contractsv1.ContextFabricEntityAuthorizationRepositoryMax
+		overBound := owned > contractsv1.ContextFabricEntityAuthorizationRepositoryMax
+		reason := ""
+		if overBound {
+			reason = quarantineAuthorizationRepositoriesExceeded
+		}
 		logger.WarnContext(ctx, "devhealthsource team owns more repositories than the generic authorization bound",
 			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName,
 			"team_id", contextfabric.SanitizeLogAttr(id), "owned_repositories", owned,
 			"generic_bound", 200, "entity_bound", contractsv1.ContextFabricEntityAuthorizationRepositoryMax,
-			"quarantined_fail_closed", failClosed)
+			"fail_closed_sentinel", overBound, "reason", reason)
 	}
 }
 
@@ -666,47 +670,6 @@ type repositoryOwnershipLedger struct {
 	inferred   int
 	orphaned   int
 	unresolved map[string]struct{}
-	// suppressed (CHAOS-7139): edge row keys withheld because their team is
-	// above the entity authorization bound, keyed by team id; logged holds the
-	// count last reported so a page re-read cannot double-count or re-log.
-	suppressed map[string]map[string]struct{}
-	logged     map[string]int
-}
-
-func (l *repositoryOwnershipLedger) recordSuppressed(teamID, rowKey string) {
-	if l == nil {
-		return
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.suppressed == nil {
-		l.suppressed = map[string]map[string]struct{}{}
-	}
-	if l.suppressed[teamID] == nil {
-		l.suppressed[teamID] = map[string]struct{}{}
-	}
-	l.suppressed[teamID][rowKey] = struct{}{}
-}
-
-// newSuppressed returns teams whose suppressed-edge count grew since last
-// reported (team id -> cumulative count) and marks them reported.
-func (l *repositoryOwnershipLedger) newSuppressed() map[string]int {
-	if l == nil {
-		return nil
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.logged == nil {
-		l.logged = map[string]int{}
-	}
-	out := map[string]int{}
-	for team, keys := range l.suppressed {
-		if len(keys) != l.logged[team] {
-			out[team] = len(keys)
-			l.logged[team] = len(keys)
-		}
-	}
-	return out
 }
 
 func (l *repositoryOwnershipLedger) recordAsserted(open, inferred bool) {
@@ -779,19 +742,6 @@ func (s *TeamsProjectsSource) repositoryOwnershipLedgerFor(orgID string, fromScr
 func logRepositoryOwnershipTelemetry(ctx context.Context, logger *slog.Logger, orgID string, ledger *repositoryOwnershipLedger) {
 	if logger == nil {
 		return
-	}
-	suppressed := ledger.newSuppressed()
-	suppressedTeams := make([]string, 0, len(suppressed))
-	for team := range suppressed {
-		suppressedTeams = append(suppressedTeams, team)
-	}
-	sort.Strings(suppressedTeams)
-	for _, team := range suppressedTeams {
-		logger.WarnContext(ctx, "devhealthsource repository->team edges withheld for a team above the entity authorization bound",
-			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName,
-			"team_id", contextfabric.SanitizeLogAttr(team), "edges_withheld", suppressed[team],
-			"entity_bound", contractsv1.ContextFabricEntityAuthorizationRepositoryMax,
-			"quarantine_reason", quarantineAuthorizationRepositoriesExceeded)
 	}
 	asserted, closed, inferred, orphaned, unresolved := ledger.counts()
 	logger.InfoContext(ctx, "devhealthsource projected repository ownership edges",
@@ -1299,7 +1249,21 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 // contains '/') or with either work-item sentinel.
 const noTeamOwnershipSentinel = "acr-context-fabric:no-team-repository-ownership"
 
-const ownedRepositoriesAggregateSQL = `SELECT team_id, groupUniqArrayIf(repo_full_name, latest_is_open) AS repos, max(updated_at) AS latest_update
+// overBoundTeamOwnershipSentinel (CHAOS-7139) is the RepositorySlugs value
+// queryTeams uses for a team whose CURRENT owned-repository list is above the
+// entity authorization bound (contracts/v1
+// ContextFabricEntityAuthorizationRepositoryMax). The team entity is still
+// PROJECTED -- so its OWNED_BY_TEAM edges never point at an unwritten node and
+// no cursor state is involved -- but fails closed: like noTeamOwnershipSentinel
+// it can match no real "owner/repo" slug (always contains '/'), so every
+// repository-scoped principal is denied the team node while an unrestricted
+// principal still sees it. A loud Warn per run names the team and count. When
+// the team drops back within the bound, its team watermark advances on the
+// ownership change and the real list is re-projected.
+const overBoundTeamOwnershipSentinel = "acr-context-fabric:team-repository-ownership-over-bound"
+
+const ownedRepositoriesJoinSQL = `LEFT JOIN (
+	SELECT team_id, groupUniqArrayIf(repo_full_name, latest_is_open) AS repos, max(updated_at) AS latest_update
 	FROM (
 		SELECT team_id, repo_full_name, max(updated_at) AS updated_at,
 			argMax(tuple(valid_to), (valid_from, valid_to IS NULL, ifNull(valid_to, toDateTime64(0, 3, 'UTC')))).1 IS NULL AS latest_is_open
@@ -1307,20 +1271,8 @@ const ownedRepositoriesAggregateSQL = `SELECT team_id, groupUniqArrayIf(repo_ful
 		WHERE org_id = {org_id:String} AND valid_from <= now64(3)
 		GROUP BY team_id, repo_full_name
 	)
-	GROUP BY team_id`
-
-const ownedRepositoriesJoinSQL = `LEFT JOIN (
-` + ownedRepositoriesAggregateSQL + `
+	GROUP BY team_id
 ) AS tro ON tro.team_id = tm.id`
-
-// overBoundTeamsStatement (CHAOS-7139) lists the teams whose CURRENT owned
-// repository list is above the entity authorization bound: exactly the teams
-// queryTeams' entity is quarantined for (same aggregate, same length). Their
-// OWNED_BY_TEAM edges are suppressed so no edge points at a team node that is
-// never written.
-const overBoundTeamsStatement = `SELECT team_id FROM (
-` + ownedRepositoriesAggregateSQL + `
-) WHERE length(repos) > {entity_bound:UInt32}`
 
 // queryTeamsEffectiveUpdatedAtExpr is the SQL expression queryTeams uses as
 // BOTH its cursor/pagination watermark (sincePredicate/orderBy) and its
@@ -1376,6 +1328,9 @@ WHERE tm.org_id = {org_id:String}` + sincePredicate(cursor, queryTeamsEffectiveU
 		repositorySlugs := ownedRepos
 		if !hasOwnedRepositories {
 			repositorySlugs = []string{noTeamOwnershipSentinel}
+		}
+		if len(ownedRepos) > contractsv1.ContextFabricEntityAuthorizationRepositoryMax {
+			repositorySlugs = []string{overBoundTeamOwnershipSentinel}
 		}
 		label := name
 		if label == "" {

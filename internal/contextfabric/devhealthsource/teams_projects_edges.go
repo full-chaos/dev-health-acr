@@ -1703,33 +1703,7 @@ func repositoryTeamOwnershipDerivation(source, matchType string) (contractsv1.Co
 	return contractsv1.ContextFabricDerivationRuleInferred, contractsv1.ContextFabricEpistemicInferred
 }
 
-// overBoundTeamIDs reads the teams whose team ENTITY is quarantined for an
-// authorization list above the entity bound (CHAOS-7139).
-func overBoundTeamIDs(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string) (map[string]struct{}, error) {
-	rows, err := client.Query(ctx, overBoundTeamsStatement, []contextpacket.ClickHouseBinding{
-		{Name: "org_id", Value: orgID},
-		{Name: "entity_bound", Value: uint32(contractsv1.ContextFabricEntityAuthorizationRepositoryMax)},
-	})
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[string]struct{}{}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		out[id] = struct{}{}
-	}
-	return out, rows.Err()
-}
-
 func queryRepositoryTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, ledger *repositoryOwnershipLedger) ([]candidate, bool, error) {
-	overBound, err := overBoundTeamIDs(ctx, client, orgID)
-	if err != nil {
-		return nil, false, err
-	}
 	return fetch(ctx, client, repositoryTeamsStatement(cursor), rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var repoKey, repoFullName, repoSlug, teamID, source, provider, matchType string
 		var isPrimary, latestIsOpen uint8
@@ -1742,14 +1716,6 @@ func queryRepositoryTeams(ctx context.Context, client contextpacket.ClickHouseQu
 		observedAt, validFrom, latestValidTo = observedAt.UTC(), validFrom.UTC(), latestValidTo.UTC()
 		// The Go half of repositoryTeamsRowKey, same component order.
 		rowSortKey := identity.JoinSegments(provider, repoKey, teamID, source)
-		if _, withheld := overBound[teamID]; withheld {
-			// CHAOS-7139: this team's entity fails closed (authorization list
-			// above the entity bound); an edge to a team node that is never
-			// written would be stubbed by the graph. Still a PROGRESS
-			// candidate so the cursor moves past it, and counted + logged.
-			ledger.recordSuppressed(teamID, rowSortKey)
-			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
-		}
 		if repoKey == "" {
 			// NULL repo_id that no repos row matches by (provider, name): no
 			// repository node to point at. Omitted, never guessed; still a

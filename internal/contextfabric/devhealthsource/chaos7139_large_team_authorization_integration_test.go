@@ -19,7 +19,9 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 func chaos7139SeedTeam(t *testing.T, ctx context.Context, f *ownershipFixture, team, prefix string, n int, at time.Time) {
@@ -37,14 +39,19 @@ type chaos7139Result struct {
 	entities map[string]contractsv1.ContextFabricEntityProjection
 	edges    map[string]int
 	logs     string
+	cursor   string
 }
 
 func chaos7139Run(t *testing.T, ctx context.Context, f *ownershipFixture) chaos7139Result {
 	t.Helper()
+	return chaos7139RunFrom(t, ctx, f, "")
+}
+
+func chaos7139RunFrom(t *testing.T, ctx context.Context, f *ownershipFixture, cursor string) chaos7139Result {
+	t.Helper()
 	logged := &bytes.Buffer{}
 	f.source.WithLogger(slog.New(slog.NewTextHandler(logged, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	res := chaos7139Result{entities: map[string]contractsv1.ContextFabricEntityProjection{}, edges: map[string]int{}}
-	cursor := ""
 	for page := 0; ; page++ {
 		if page > 200 {
 			t.Fatalf("source did not converge within 200 pages")
@@ -72,6 +79,7 @@ func chaos7139Run(t *testing.T, ctx context.Context, f *ownershipFixture) chaos7
 		}
 	}
 	res.logs = logged.String()
+	res.cursor = cursor
 	return res
 }
 
@@ -112,41 +120,87 @@ func subCHAOS7139LargeTeamsKeepEntityAndAllEdges(t *testing.T, ctx context.Conte
 	}
 }
 
-// A team above the widened bound (5000) fails closed with a DISTINCT reason;
-// only its own entity and edges drop -- valid teams sharing the pages keep
-// theirs (a mixed page does not lose its valid rows).
-func subCHAOS7139TeamAboveEntityBoundFailsClosedAlone(t *testing.T, ctx context.Context, f *ownershipFixture) {
+// A team above the entity bound (5000) is NOT quarantined: its entity is
+// projected with the dedicated fail-closed sentinel (so no edge dangles and no
+// cursor state is involved), every edge is emitted, the Warn names the team,
+// and a repository-restricted principal whose repository has an OWNED_BY_TEAM
+// edge to it is still denied the team node. Valid teams beside it are intact.
+func subCHAOS7139TeamAboveEntityBoundIsProjectedFailClosed(t *testing.T, ctx context.Context, f *ownershipFixture) {
 	at := time.Now().UTC().Truncate(time.Second)
 	over := contractsv1.ContextFabricEntityAuthorizationRepositoryMax + 1
 	chaos7139SeedTeam(t, ctx, f, "team-huge", "acme/huge-", over, at)
 	chaos7139SeedTeam(t, ctx, f, "team-w450", "acme/w450-", 450, at)
-	chaos7139SeedTeam(t, ctx, f, "team-small", "acme/small-", 3, at)
 	res := chaos7139Run(t, ctx, f)
-	if _, ok := res.entities["team-huge"]; ok {
-		t.Fatalf("team-huge (%d repos) must fail closed, but its entity was projected", over)
+	huge, ok := res.entities["team-huge"]
+	if !ok {
+		t.Fatalf("team-huge (%d repos) entity must be projected (fail closed via sentinel), not quarantined\n%s", over, res.logs)
 	}
-	if !strings.Contains(res.logs, "quarantine_reason=authorization_repositories_exceeded") {
-		t.Errorf("missing distinct quarantine reason:\n%s", res.logs)
+	if got := huge.Authorization.RepositorySlugs; len(got) != 1 || got[0] != devhealthsource.OverBoundTeamOwnershipSentinelForTest() {
+		t.Fatalf("team-huge authorization repositories = %d entries, want exactly the over-bound sentinel", len(got))
 	}
-	if !strings.Contains(res.logs, fmt.Sprintf("owned_repositories=%d", over)) || !strings.Contains(res.logs, "quarantined_fail_closed=true") {
-		t.Errorf("missing fail-closed Warn with team id and count:\n%s", res.logs)
+	if got := res.edges["team-huge"]; got != over {
+		t.Errorf("team-huge: %d edges, want all %d (a projected node, edges must not be withheld)", got, over)
 	}
-	for team, want := range map[string]int{"team-w450": 450, "team-small": 3} {
-		if _, ok := res.entities[team]; !ok {
-			t.Errorf("%s: valid team entity lost because of another team's quarantine", team)
+	if strings.Contains(res.logs, "quarantine_reason=") {
+		t.Errorf("no item may be quarantined:\n%s", res.logs)
+	}
+	for _, want := range []string{"team_id=team-huge", fmt.Sprintf("owned_repositories=%d", over), "fail_closed_sentinel=true", "reason=authorization_repositories_exceeded"} {
+		if !strings.Contains(res.logs, want) {
+			t.Errorf("missing loud Warn field %q:\n%s", want, res.logs)
 		}
-		if got := res.edges[team]; got != want {
-			t.Errorf("%s: %d edges, want %d", team, got, want)
+	}
+	if n := strings.Count(res.logs, fmt.Sprintf("owned_repositories=%d", over)); n != 1 {
+		t.Errorf("over-bound Warn emitted %d times, want once per run", n)
+	}
+	// A repository-restricted principal scoped to one of team-huge's own
+	// repositories must be denied the team node (fail closed) -- and would be
+	// admitted by the real list, which is the red plant.
+	restricted := storage.Principal{OrgID: f.orgID, RepositoryScopes: []string{"acme/huge-7"}}
+	attrs := map[string]interface{}{"authorization_repositories": huge.Authorization.RepositorySlugs}
+	if graphrank.AuthorizedAttributes(restricted, contextfabric.RequestedScope{}, attrs) {
+		t.Errorf("a restricted principal owning acme/huge-7 was admitted to the over-bound team node")
+	}
+	if w := res.entities["team-w450"]; len(w.Authorization.RepositorySlugs) != 450 || res.edges["team-w450"] != 450 {
+		t.Errorf("team-w450 beside the over-bound team lost data: %d slugs, %d edges", len(w.Authorization.RepositorySlugs), res.edges["team-w450"])
+	}
+}
+
+// Cross-back: a team at 5001 (sentinel) that drops to 5000 by an ownership
+// close is re-projected with its REAL list, edges intact. Proves the team
+// watermark advances on an ownership-only change (no team row touched).
+func subCHAOS7139TeamCrossesBackUnderTheBound(t *testing.T, ctx context.Context, f *ownershipFixture) {
+	seedAt := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Second)
+	over := contractsv1.ContextFabricEntityAuthorizationRepositoryMax + 1
+	chaos7139SeedTeam(t, ctx, f, "team-cross", "acme/cross-", over, seedAt)
+	first := chaos7139Run(t, ctx, f)
+	if got := first.entities["team-cross"].Authorization.RepositorySlugs; len(got) != 1 || got[0] != devhealthsource.OverBoundTeamOwnershipSentinelForTest() {
+		t.Fatalf("precondition: team-cross must start on the sentinel, got %d entries", len(got))
+	}
+	if first.edges["team-cross"] != over {
+		t.Fatalf("precondition: %d edges, want %d", first.edges["team-cross"], over)
+	}
+	// Close ONE ownership: a later assertion for the same (team, repo, source)
+	// with valid_to in the past (latest assertion wins; the team row itself is
+	// untouched).
+	closedFrom, closedTo, updated := seedAt.Add(time.Minute), seedAt.Add(2*time.Minute), time.Now().UTC().Add(-time.Second).Truncate(time.Second)
+	mustExec(t, ctx, f.direct, `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		f.orgID, "github", "team-cross", nil, "acme/cross-0", "exact", "native", uint8(1), uint16(100), int32(0), closedFrom, closedTo, updated)
+	second := chaos7139RunFrom(t, ctx, f, first.cursor)
+	e, ok := second.entities["team-cross"]
+	if !ok {
+		t.Fatalf("team-cross was not re-projected after the ownership close (team watermark did not advance)\n%s", second.logs)
+	}
+	if got := len(e.Authorization.RepositorySlugs); got != contractsv1.ContextFabricEntityAuthorizationRepositoryMax {
+		t.Errorf("after crossing back: %d authorization repositories, want the real list of %d", got, contractsv1.ContextFabricEntityAuthorizationRepositoryMax)
+	}
+	for _, s := range e.Authorization.RepositorySlugs {
+		if s == devhealthsource.OverBoundTeamOwnershipSentinelForTest() {
+			t.Fatal("the over-bound sentinel survived crossing back under the bound")
 		}
 	}
-	// The over-bound team's edges must be withheld too: an edge on a later
-	// page would otherwise reach the graph against a never-written team node
-	// (codex r1 P1: 4943 edges emitted before this).
-	if got := res.edges["team-huge"]; got != 0 {
-		t.Errorf("team-huge: %d edges projected for a quarantined team entity, want 0", got)
-	}
-	if !strings.Contains(res.logs, "edges_withheld=") || !strings.Contains(res.logs, "team_id=team-huge") {
-		t.Errorf("withheld edges must stay visible (team id + count):\n%s", res.logs)
+	// Edges were never withheld: the first run already emitted all of them.
+	if first.edges["team-cross"] != over {
+		t.Errorf("edges lost")
 	}
 }
 
@@ -168,7 +222,7 @@ func subCHAOS7139TeamAtEntityBoundKeepsEveryEdge(t *testing.T, ctx context.Conte
 	if got := res.edges["team-max"]; got != n {
 		t.Errorf("%d edges, want %d", got, n)
 	}
-	if strings.Contains(res.logs, "edges_withheld=") {
-		t.Errorf("edges withheld for a team at the bound:\n%s", res.logs)
+	if strings.Contains(res.logs, devhealthsource.OverBoundTeamOwnershipSentinelForTest()) || strings.Contains(res.logs, "fail_closed_sentinel=true") {
+		t.Errorf("a team AT the bound must not be sentinel-scoped:\n%s", res.logs)
 	}
 }
