@@ -110,6 +110,63 @@ type QueryError struct {
 	// (errors[].extensions.code MCP_READ_BUDGET_EXCEEDED, CHAOS-7085/7091):
 	// the closed reason (ReadBudgetReasonVocabulary), never upstream text.
 	ReadBudget ReadBudgetReason
+	// ListenerRefusal is set, on the MCP listener client only, when a
+	// non-2xx answer carries the listener's typed refusal
+	// (errors[].extensions.code MCP_REFUSED, ops PR #3425): the closed class
+	// of its reason (ListenerRefusalClassVocabulary), never upstream text.
+	ListenerRefusal ListenerRefusalClass
+}
+
+// MCPRefusedCode is the extensions.code of every other MCP listener refusal.
+const MCPRefusedCode = "MCP_REFUSED"
+
+// ListenerRefusalClass is the closed class of an MCP listener refusal.
+type ListenerRefusalClass string
+
+const (
+	// ListenerRefusalCarrier: the identity carrier was refused
+	// (invalid_org, no_carrier, authorization_header, elevated_claim). acr
+	// never sends such a request, so it is an acr defect or a tampered hop.
+	ListenerRefusalCarrier ListenerRefusalClass = "carrier_refused"
+	// ListenerRefusalQuery: the listener refused the query itself (a cap,
+	// the allowlist, the document, the org arguments). acr refuses all of
+	// these before the wire, so it is a drift between acr and the listener.
+	ListenerRefusalQuery ListenerRefusalClass = "listener_refused"
+)
+
+// ListenerRefusalClassVocabulary is the closed set of listener refusal
+// classes.
+func ListenerRefusalClassVocabulary() [2]ListenerRefusalClass {
+	return [2]ListenerRefusalClass{ListenerRefusalCarrier, ListenerRefusalQuery}
+}
+
+// listenerRefusalOf classifies an MCP_REFUSED answer by its reason. Only
+// the closed carrier reasons are named; any other reason is the query
+// class. A body without MCP_REFUSED yields "".
+func listenerRefusalOf(body []byte) ListenerRefusalClass {
+	var answer struct {
+		Errors []struct {
+			Extensions struct {
+				Code   string `json:"code"`
+				Reason string `json:"reason"`
+			} `json:"extensions"`
+		} `json:"errors"`
+	}
+	if json.Unmarshal(body, &answer) != nil {
+		return ""
+	}
+	for _, e := range answer.Errors {
+		if e.Extensions.Code != MCPRefusedCode {
+			continue
+		}
+		switch e.Extensions.Reason {
+		case "invalid_org", "no_carrier", "authorization_header", "elevated_claim":
+			return ListenerRefusalCarrier
+		default:
+			return ListenerRefusalQuery
+		}
+	}
+	return ""
 }
 
 // MCPReadBudgetExceededCode is the extensions.code GWC's MCP listener sets
@@ -121,13 +178,14 @@ type ReadBudgetReason string
 
 const (
 	ReadBudgetBytes   ReadBudgetReason = "bytes_ceiling"
+	ReadBudgetRows    ReadBudgetReason = "rows_ceiling"
 	ReadBudgetTime    ReadBudgetReason = "time_ceiling"
 	ReadBudgetUnknown ReadBudgetReason = "unknown"
 )
 
 // ReadBudgetReasonVocabulary is the closed set of read-budget reasons.
-func ReadBudgetReasonVocabulary() [3]ReadBudgetReason {
-	return [3]ReadBudgetReason{ReadBudgetBytes, ReadBudgetTime, ReadBudgetUnknown}
+func ReadBudgetReasonVocabulary() [4]ReadBudgetReason {
+	return [4]ReadBudgetReason{ReadBudgetBytes, ReadBudgetRows, ReadBudgetTime, ReadBudgetUnknown}
 }
 
 // ReadBudgetOf reads a GraphQL error list for the listener's read-budget
@@ -151,7 +209,7 @@ func ReadBudgetOf(body []byte) ReadBudgetReason {
 			continue
 		}
 		switch ReadBudgetReason(e.Extensions.Reason) {
-		case ReadBudgetBytes, ReadBudgetTime:
+		case ReadBudgetBytes, ReadBudgetRows, ReadBudgetTime:
 			return ReadBudgetReason(e.Extensions.Reason)
 		default:
 			return ReadBudgetUnknown
@@ -371,6 +429,7 @@ func (c *HTTPQueryClient) Execute(ctx context.Context, call QueryCall) (QueryRes
 		if c.readsTypedRefusals {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 			qerr.ReadBudget = ReadBudgetOf(body)
+			qerr.ListenerRefusal = listenerRefusalOf(body)
 		}
 		drain(resp.Body)
 		return QueryResult{}, qerr

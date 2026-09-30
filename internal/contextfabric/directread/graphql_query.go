@@ -92,13 +92,14 @@ func GraphQLRefusalCodes() []RefusalCode {
 
 // Fixed vocabulary of graphql_query.
 const (
-	GraphQLListenerMCP       = "mcp"
-	GraphQLQueryLogMessage   = "context fabric graphql query"
-	GraphQLRowsForeignLog    = "context fabric graphql query refused a row outside the grant"
-	GraphQLPathsRemovedLog   = "context fabric graphql query removed unselected response paths"
-	graphqlRebuiltOperation  = "AcrGraphQLQuery"
-	graphqlUnknownRootField  = "unknown"
-	graphqlTelemetryRootsMax = 8
+	GraphQLListenerMCP        = "mcp"
+	GraphQLQueryLogMessage    = "context fabric graphql query"
+	GraphQLRowsForeignLog     = "context fabric graphql query refused a row outside the grant"
+	GraphQLPathsRemovedLog    = "context fabric graphql query removed unselected response paths"
+	GraphQLListenerRefusedLog = "context fabric graphql query was refused by the MCP listener"
+	graphqlRebuiltOperation   = "AcrGraphQLQuery"
+	graphqlUnknownRootField   = "unknown"
+	graphqlTelemetryRootsMax  = 8
 )
 
 // GraphQLRequest is graphql_query's input.
@@ -143,6 +144,13 @@ type GraphQLRefusal struct {
 // time_ceiling read-budget refusal.
 const UpstreamAcrDeadline UpstreamErrorClass = "acr_deadline"
 
+// graphql_query error classes for a typed MCP listener refusal (ops PR
+// #3425): the identity carrier, or the query, was refused by the listener.
+const (
+	UpstreamCarrierRefused  UpstreamErrorClass = "carrier_refused"
+	UpstreamListenerRefused UpstreamErrorClass = "listener_refused"
+)
+
 // GraphQLUpstreamErrorClasses is the closed set of graphql_query upstream
 // error classes: run_operation's, with timeout replaced by acr_deadline.
 func GraphQLUpstreamErrorClasses() []UpstreamErrorClass {
@@ -152,7 +160,7 @@ func GraphQLUpstreamErrorClasses() []UpstreamErrorClass {
 			out = append(out, c)
 		}
 	}
-	return append(out, UpstreamAcrDeadline)
+	return append(out, UpstreamAcrDeadline, UpstreamCarrierRefused, UpstreamListenerRefused)
 }
 
 // GraphQLResponse is graphql_query's answer (design D.7 vocabulary).
@@ -313,7 +321,9 @@ func (r *GraphQLRunner) Run(ctx context.Context, principal storage.Principal, re
 	if r == nil || r.policy == nil || r.edge == nil || r.client == nil {
 		return GraphQLResponse{}, ErrGraphQLRunnerNotConfigured
 	}
-	if strings.TrimSpace(principal.OrgID) == "" {
+	// The listener refuses an empty or padded org header (401 invalid_org):
+	// acr never sends one; such a principal ends here, before any work.
+	if strings.TrimSpace(principal.OrgID) == "" || principal.OrgID != strings.TrimSpace(principal.OrgID) {
 		return GraphQLResponse{}, ErrOperationPrincipalInvalid
 	}
 	start := r.now()
@@ -664,12 +674,24 @@ func buildSelTree(name string, f *ast.Field) *selNode {
 	}
 	for _, sel := range f.SelectionSet {
 		child := sel.(*ast.Field)
-		if n.child(child.Name) != nil {
-			continue // a repeated field merges (OverlappingFieldsCanBeMerged held it)
-		}
-		n.children = append(n.children, buildSelTree(child.Name, child))
+		n.merge(buildSelTree(child.Name, child))
 	}
 	return n
+}
+
+// merge adds a child selection, merging a repeated field's sub-selections
+// recursively (GraphQL field merging: `values { value } values { count }`
+// selects both value and count; OverlappingFieldsCanBeMerged held that the
+// two are mergeable).
+func (n *selNode) merge(child *selNode) {
+	existing := n.child(child.name)
+	if existing == nil {
+		n.children = append(n.children, child)
+		return
+	}
+	for _, grandchild := range child.children {
+		existing.merge(grandchild)
+	}
 }
 
 // leafPaths lists the generalized leaf paths ("a.b[*].c") of a selection.
@@ -1216,6 +1238,20 @@ func (x *gqlRun) mapCallError(err error, maxBytes int) GraphQLResponse {
 	var qe *QueryError
 	if errors.As(err, &qe) && qe.ReadBudget != "" {
 		return x.readBudget(qe.ReadBudget)
+	}
+	if qe != nil && qe.ListenerRefusal != "" {
+		// acr refuses before the wire whatever the listener refuses, so a
+		// listener refusal is a defect or a drift: loud, never passed through.
+		class := UpstreamListenerRefused
+		if qe.ListenerRefusal == ListenerRefusalCarrier {
+			class = UpstreamCarrierRefused
+		}
+		x.r.logger.Error(GraphQLListenerRefusedLog,
+			"org_id", contextfabric.SanitizeLogAttr(x.principal.OrgID),
+			"error_class", contextfabric.SanitizeLogAttr(string(class)),
+			"status", qe.StatusCode,
+		)
+		return x.upstream(CallUpstreamError, class)
 	}
 	switch QueryErrorClassOf(err) {
 	case QueryErrorNotFound:

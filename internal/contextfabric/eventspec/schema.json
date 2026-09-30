@@ -3228,6 +3228,8 @@
           "transport",
           "canceled",
           "acr_deadline",
+          "carrier_refused",
+          "listener_refused",
           "not_found",
           "concurrency_wait"
         ],
@@ -3239,6 +3241,7 @@
         "presence": "conditional",
         "closed_vocabulary": [
           "bytes_ceiling",
+          "rows_ceiling",
           "time_ceiling",
           "unknown"
         ],

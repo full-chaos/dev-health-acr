@@ -2,6 +2,7 @@ package directread_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -725,7 +726,7 @@ func TestGraphQLTwoRootsOfOneCappedOperationDoNotWaitOnEachOther(t *testing.T) {
 func TestGraphQLReadBudgetRefusalIsTyped(t *testing.T) {
 	for _, status := range []int{200, 400, 422} {
 		for reason, want := range map[string]directread.ReadBudgetReason{
-			"bytes_ceiling": directread.ReadBudgetBytes, "time_ceiling": directread.ReadBudgetTime,
+			"bytes_ceiling": directread.ReadBudgetBytes, "rows_ceiling": directread.ReadBudgetRows, "time_ceiling": directread.ReadBudgetTime,
 			"": directread.ReadBudgetUnknown, "free text 5368709120": directread.ReadBudgetUnknown,
 		} {
 			t.Run(fmt.Sprintf("%d/%q", status, reason), func(t *testing.T) {
@@ -830,4 +831,91 @@ func TestGraphQLFieldCapCountsTheRowIDsAcrAdds(t *testing.T) {
 	h.wantServed(t, h.run(t, opUnrestricted(opOrgA), q, nil))
 	h.listener.reset()
 	h.wantRefused(t, h.run(t, opRestrictedA(), q, nil), directread.RefusalQueryLimitExceeded)
+}
+
+// ops PR #3425: a typed MCP listener refusal (MCP_REFUSED with a reason)
+// is never passed through. A carrier reason (invalid_org, no_carrier,
+// authorization_header, elevated_claim) is upstream_error / carrier_refused;
+// any other (a cap, the allowlist, the org arguments) is upstream_error /
+// listener_refused; both ERROR-logged. A disabled root (404
+// root_field_not_enabled) is operation_unavailable.
+func TestGraphQLListenerRefusalsMapToClosedClasses(t *testing.T) {
+	cases := []struct {
+		status int
+		reason string
+		call   directread.CallStatus
+		class  directread.UpstreamErrorClass
+	}{
+		{401, "invalid_org", directread.CallUpstreamError, directread.UpstreamCarrierRefused},
+		{401, "no_carrier", directread.CallUpstreamError, directread.UpstreamCarrierRefused},
+		{401, "authorization_header", directread.CallUpstreamError, directread.UpstreamCarrierRefused},
+		{403, "elevated_claim", directread.CallUpstreamError, directread.UpstreamCarrierRefused},
+		{400, "depth_limit", directread.CallUpstreamError, directread.UpstreamListenerRefused},
+		{403, "root_field_not_allowed", directread.CallUpstreamError, directread.UpstreamListenerRefused},
+		{403, "invalid_org_argument", directread.CallUpstreamError, directread.UpstreamListenerRefused},
+		{404, "root_field_not_enabled", directread.CallOperationUnavailable, directread.UpstreamNotFound},
+	}
+	for _, tc := range cases {
+		t.Run(tc.reason, func(t *testing.T) {
+			h := newGQLHarness(t, gqlHarnessOptions{fake: func(cfg *fakeMCPConfig) { cfg.RefuseStatus, cfg.RefuseReason = tc.status, tc.reason }})
+			resp := h.run(t, opUnrestricted(opOrgA), `{ catalog(dimension: TEAM) { values { value } } }`, nil)
+			if resp.Call != tc.call || len(resp.Errors) != 1 || resp.Errors[0].Class != tc.class || resp.Data != nil {
+				t.Fatalf("want %s/%s, got %+v", tc.call, tc.class, resp)
+			}
+			raw, _ := json.Marshal(resp)
+			if strings.Contains(string(raw), tc.reason) && tc.class != directread.UpstreamNotFound {
+				t.Fatalf("the listener reason passed through: %s", raw)
+			}
+			if tc.class != directread.UpstreamNotFound && !strings.Contains(h.logs.String(), `"level":"ERROR","msg":"`+directread.GraphQLListenerRefusedLog+`"`) {
+				t.Fatalf("no ERROR line for the listener refusal:\n%s", h.logs.String())
+			}
+		})
+	}
+}
+
+// acr never sends an empty or padded org header (the listener's 401
+// invalid_org): such a principal is refused before any work, zero requests.
+func TestGraphQLNeverSendsAnEmptyOrPaddedOrg(t *testing.T) {
+	h := newGQLHarness(t, gqlHarnessOptions{})
+	for _, org := range []string{"", "   ", " " + opOrgA, opOrgA + " ", opOrgA + "\t"} {
+		p := opUnrestricted(opOrgA)
+		p.OrgID = org
+		if _, err := h.runner.Run(t.Context(), p, directread.GraphQLRequest{Query: `{ catalog(dimension: TEAM) { values { value } } }`}); !errors.Is(err, directread.ErrOperationPrincipalInvalid) {
+			t.Fatalf("org %q: err %v", org, err)
+		}
+	}
+	if n := len(h.listener.requests()); n != 0 {
+		t.Fatalf("%d requests sent for an invalid org", n)
+	}
+}
+
+// r1 P2: a repeated field's sub-selections are merged, not dropped, at every
+// depth: both paths are sent and both come back.
+func TestGraphQLRepeatedSelectionsAreMerged(t *testing.T) {
+	h := newGQLHarness(t, gqlHarnessOptions{})
+	resp := h.run(t, opUnrestricted(opOrgA), `{ catalog(dimension: TEAM) { values { value } values { count } values { value __typename } } }`, nil)
+	h.wantServed(t, resp)
+	sent := h.listener.requests()[0].Query
+	for _, field := range []string{"value", "count", "__typename"} {
+		if !strings.Contains(sent, field) {
+			t.Fatalf("the sent query dropped %s:\n%s", field, sent)
+		}
+	}
+	if strings.Count(sent, "values") != 1 {
+		t.Fatalf("the repeated field was not merged:\n%s", sent)
+	}
+	row := gqlDecode(t, resp.Data)["catalog"].(map[string]any)["values"].([]any)[0].(map[string]any)
+	for _, field := range []string{"value", "count", "__typename"} {
+		if _, ok := row[field]; !ok {
+			t.Fatalf("the answer lacks %s: %v", field, row)
+		}
+	}
+	// Two levels deep.
+	h.listener.reset()
+	deep := `{ securityAlerts { edges { node { alertId } } edges { node { repoId } cursor } } }`
+	resp = h.run(t, opUnrestricted(opOrgA), deep, nil)
+	h.wantServed(t, resp)
+	if sent := h.listener.requests()[0].Query; !strings.Contains(sent, "alertId") || !strings.Contains(sent, "repoId") || !strings.Contains(sent, "cursor") {
+		t.Fatalf("a nested repeated selection was dropped:\n%s", sent)
+	}
 }

@@ -73,6 +73,11 @@ type fakeMCPConfig struct {
 	ReadBudgetReason string
 	// Delay, when set, holds every answer this long (acr deadline tests).
 	Delay time.Duration
+	// Refuse, when set, answers every admitted request with this listener
+	// refusal (status and reason), as a drift between acr and the listener
+	// would.
+	RefuseStatus int
+	RefuseReason string
 }
 
 type fakeMCPRecord struct {
@@ -112,13 +117,19 @@ func (l *fakeMCPListener) refuse(w http.ResponseWriter, reason string) {
 	l.refuseStatus(w, http.StatusBadRequest, reason)
 }
 
+// refuseStatus answers in the listener's own refusal shape (ops PR #3425
+// writeMCPRefusal): errors[0].extensions {code MCP_REFUSED, reason}.
 func (l *fakeMCPListener) refuseStatus(w http.ResponseWriter, status int, reason string) {
 	l.mu.Lock()
 	l.refused = append(l.refused, reason)
 	l.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_, _ = fmt.Fprintf(w, `{"errors":[{"message":%q}]}`, reason)
+	code := reason
+	if i := strings.IndexByte(code, ' '); i >= 0 {
+		code = code[:i]
+	}
+	_, _ = fmt.Fprintf(w, `{"errors":[{"message":%q,"extensions":{"code":"MCP_REFUSED","reason":%q}}]}`, reason, code)
 }
 
 func (l *fakeMCPListener) serve(w http.ResponseWriter, r *http.Request) {
@@ -132,7 +143,7 @@ func (l *fakeMCPListener) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, ok := r.Header["Authorization"]; ok {
-		l.refuse(w, "authorization header present")
+		l.refuseStatus(w, http.StatusUnauthorized, "authorization_header")
 		return
 	}
 	for _, h := range []string{directread.HeaderInternalOrgID, directread.HeaderInternalRole, directread.HeaderInternalSuperuser, directread.HeaderInternalImpersonationActive} {
@@ -141,8 +152,8 @@ func (l *fakeMCPListener) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if r.Header.Get(directread.HeaderInternalOrgID) == "" {
-		l.refuse(w, "empty org")
+	if org := r.Header.Get(directread.HeaderInternalOrgID); org == "" || org != strings.TrimSpace(org) {
+		l.refuseStatus(w, http.StatusUnauthorized, "invalid_org")
 		return
 	}
 	elevated := r.Header.Get(directread.HeaderInternalSuperuser) != "false" || r.Header.Get(directread.HeaderInternalImpersonationActive) != "false"
@@ -241,6 +252,10 @@ func (l *fakeMCPListener) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	case complexity > lim.MaxComplexity:
 		l.refuse(w, "complexity over the cap")
+		return
+	}
+	if l.cfg.RefuseStatus != 0 {
+		l.refuseStatus(w, l.cfg.RefuseStatus, l.cfg.RefuseReason)
 		return
 	}
 	if l.cfg.Delay > 0 {

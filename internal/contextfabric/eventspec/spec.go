@@ -2260,8 +2260,8 @@ var (
 		"query_invalid", "operation_type_not_allowed", "root_field_not_allowed", "field_not_allowed",
 		"fragment_not_allowed", "directive_not_allowed", "query_limit_exceeded", "read_budget_exceeded",
 	}
-	graphqlQueryErrorClasses = []string{"graphql_errors", "decode", "http_status", "transport", "canceled", "acr_deadline", "not_found", "concurrency_wait"}
-	graphqlQueryReadBudgets  = []string{"bytes_ceiling", "time_ceiling", "unknown"}
+	graphqlQueryErrorClasses = []string{"graphql_errors", "decode", "http_status", "transport", "canceled", "acr_deadline", "carrier_refused", "listener_refused", "not_found", "concurrency_wait"}
+	graphqlQueryReadBudgets  = []string{"bytes_ceiling", "rows_ceiling", "time_ceiling", "unknown"}
 	graphqlQueryOperations   = []string{
 		"acrRepositoryScopes", "capacityForecast", "capacityForecasts", "catalogValues", "cognitiveLoad",
 		"complexityTimeseries", "compoundingRisk", "hotspots", "investmentBreakdown", "investmentFull",
