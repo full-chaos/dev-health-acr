@@ -85,7 +85,6 @@ var GraphQLRules = []string{
 	"`read_budget_exceeded` means the data service stopped the query at its bytes or time ceiling (`refusal.read_budget`): select fewer fields or narrow the window, scope or limit.",
 }
 
-
 // DataRules are the rules for a client that plans the reads itself (design
 // H, "Rules for A"). The server instructions carry the same rules in fewer
 // words.
