@@ -646,13 +646,19 @@ func parseJUnit(data []byte) (junitDoc, error) {
 // testActions is the CLOSED set of Action values a go-test.json line may carry
 // (a value outside it is an error, never silently dropped: a failure event
 // carrying an Action this tool does not know is exactly the one that vanishes
-// from the listing). Sources, both read from the toolchain:
-//   - test2json's own vocabulary (cmd/internal/test2json): start, run, pause,
-//     cont, pass, bench, fail, output, skip, plus attr and artifacts (Go 1.25+,
-//     written for t.Attr and t.ArtifactDir);
-//   - `go test -json`'s build events (`go help buildjson`): build-output and
-//     build-fail. A package that fails to build writes these AND a package
-//     `fail` event, so they carry no failure of their own.
+// from the listing). Sources, both read from the Go toolchain this repo builds
+// with (go1.27.0), and observed on a real gotestsum v1.13.0 run:
+//   - test2json's own vocabulary, $GOROOT/src/cmd/internal/test2json/test2json.go
+//     (the Event.Action values it writes): start, run, pause, cont, pass, bench,
+//     fail, output, skip, plus `attr` and `artifacts` (Go 1.25+, written for
+//     t.Attr and t.ArtifactDir; see the `case "artifacts"` / `case "attr"` in
+//     that file's line handler);
+//   - `go test -json`'s build events, documented in `go help buildjson`
+//     ($GOROOT/src/cmd/go/internal/help/helpdoc.go, "build-output" and
+//     "build-fail"; emitted by $GOROOT/src/cmd/go/internal/load/printer.go).
+//     A package that fails to build writes these AND a package `fail` event, so
+//     they carry no failure of their own; gotestsum writes them to
+//     go-test.json unchanged (see testdata/gotestsum-failing-run/go-test.json).
 var testActions = map[string]bool{
 	"start": true, "run": true, "pause": true, "cont": true, "pass": true, "bench": true,
 	"fail": true, "output": true, "skip": true, "attr": true, "artifacts": true,
