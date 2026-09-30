@@ -14,7 +14,7 @@ package devhealthfacts_test
 //	proj-3  owned by team-1 AND team-2      (a project with two owning teams)
 //	proj-4  owned by team-4, whose repo has no work        -> no row
 //	proj-5  owned by team-5, which owns no repository       -> no row, only votes
-//	proj-6  owned by team-6 until yesterday                 -> a row only as of an earlier instant
+//	proj-6  owned by team-6 until yesterday and by team-1 until two days ago -> a row only as of an earlier instant
 //	r7      owned by team-1 until two days ago (team-1 itself is a current owner)
 //	r-shared is owned by team-1 AND team-2: one unit, three projects
 //
@@ -138,6 +138,9 @@ func seedCHAOS7257Parity(t *testing.T, ctx context.Context, direct clickhousedri
 	ownsProject("team-4", "proj-4", long, nil)
 	ownsProject("team-5", "proj-5", long, nil)
 	ownsProject("team-6", "proj-6", long, at.Add(-day))
+	// team-1 ALSO owned proj-6, until two days ago: its repositories reach
+	// proj-6 only in a window that ends while that ownership held.
+	ownsProject("team-1", "proj-6", long, at.Add(-2*day))
 	for _, label := range []string{"r1a", "r1b", "r2a", "r-shared", "r4", "r6"} {
 		repo(label, "github")
 	}
@@ -302,7 +305,7 @@ func TestProjectRollupSinglePassMatchesTheMultiReferenceOracleAgainstRealClickHo
 		{"range over the last 10 days", devhealthfacts.ProjectMixWindow{Active: true, HasStart: true, Start: at.Add(-10 * day), End: at}, []string{"linear:proj-1", "linear:proj-2", "linear:proj-3"}},
 		{"point in time before proj-6's ownership ended", devhealthfacts.ProjectMixWindow{Active: true, End: at.Add(-50 * day)}, []string{"linear:proj-6"}},
 		{"range around the old work", devhealthfacts.ProjectMixWindow{Active: true, HasStart: true, Start: at.Add(-70 * day), End: at.Add(-50 * day)}, []string{"linear:proj-6"}},
-		{"range over the old unit", devhealthfacts.ProjectMixWindow{Active: true, HasStart: true, Start: at.Add(-45 * day), End: at.Add(-30 * day)}, []string{"linear:proj-1", "linear:proj-3"}},
+		{"range over the old unit", devhealthfacts.ProjectMixWindow{Active: true, HasStart: true, Start: at.Add(-45 * day), End: at.Add(-30 * day)}, []string{"linear:proj-1", "linear:proj-3", "linear:proj-6"}},
 	}
 	for _, tc := range windows {
 		t.Run(tc.name, func(t *testing.T) {
