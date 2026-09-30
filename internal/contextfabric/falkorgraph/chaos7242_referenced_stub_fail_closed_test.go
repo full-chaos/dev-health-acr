@@ -188,3 +188,21 @@ func TestReferencedTeamAndProjectStubsFailClosedUntilTheEntityArrives(t *testing
 		}
 	})
 }
+
+// A stub created by an EARLIER build keeps its pre-fix scope: the stub MERGE
+// writes attrs ON CREATE only and ON MATCH only re-applies the kind label, so
+// re-projecting on top of an old graph does not heal it (codex #740 r1, executed
+// on a live FalkorDB with a stub seeded at ["acme/r"]). This pins that fact and
+// the operational answer: the heal is a REBUILD (the org graph is deleted / a
+// fresh epoch graph is built), which teams_projects v16 makes mandatory.
+func TestLegacyReferencedStubIsNotHealedByReprojectionOnTop(t *testing.T) {
+	adapter, writes := capturingAdapter(t)
+	team := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: "team:legacy", Label: "legacy"}
+	if err := adapter.projectRelationship(context.Background(), "key", "org-1", ownershipEdge(team, "acme/r")); err != nil {
+		t.Fatal(err)
+	}
+	cypher := (*writes)[len(*writes)-1].cypher
+	if !strings.Contains(cypher, "ON MATCH SET b:") || strings.Contains(cypher, "ON MATCH SET b +=") {
+		t.Fatalf("the stub MERGE must only re-apply the label ON MATCH (attrs ON CREATE only); a change here changes the rebuild requirement:\n%s", cypher)
+	}
+}

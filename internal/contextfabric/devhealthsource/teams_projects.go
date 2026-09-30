@@ -231,7 +231,18 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // team node keeps its old raw list until its entity is re-projected, and its
 // team row / ownership rows carry an updated_at already behind the checkpoint
 // watermark, so only a full rebuild replaces it.
-const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v15"
+//
+// v15 -> v16 (CHAOS-7242): falkorgraph's referenced team/project endpoint stubs
+// no longer inherit a relationship's one-repository authorization scope (they
+// carry a fail-closed sentinel until the canonical entity merges). The stub
+// MERGE writes attrs ON CREATE only, so a stub created by an earlier build
+// keeps its old scope in a graph that is merely re-projected on top. A
+// rebuild starts from an EMPTY graph (legacy: PurgeOrganization deletes the
+// org graph, projectionrun/coordinator.go performRebuild; lifecycle: a
+// build-aside epoch graph, beginLifecycleBuild), so it is the operational
+// heal; the bump makes the deploy REQUIRE that rebuild
+// (ErrProjectionSourceVersionChanged until the org is rebuilt).
+const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v16"
 
 // teamsProjectsTables is this source's bounded coverage. Both tables were
 // already canonical Dev Health data; neither introduces a new ingest path.
