@@ -178,7 +178,7 @@ func TestSourceRowReadsScopeEveryTableToTheOrganization(t *testing.T) {
 			continue
 		}
 		for _, violation := range report.Violations {
-			t.Errorf("%s: %s is not scoped to the organization: another organization's rows can join\n%s", name, violation, statement)
+			t.Errorf("%s: %s: another organization's rows can be read\n%s", name, violation, statement)
 		}
 	}
 }

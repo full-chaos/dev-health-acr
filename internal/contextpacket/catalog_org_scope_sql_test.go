@@ -260,6 +260,9 @@ type sqlScope struct {
 	refs        []*sqlRef
 	ctes        map[string]bool
 	constrained map[*sqlRef]bool
+	// tokens of the FROM/JOIN table expressions ([start, end) in the block's
+	// items): their names are table aliases, not expression aliases.
+	tableTokens [][2]int
 }
 
 func (sc *sqlScope) find(qual string) (*sqlRef, *sqlScope) {
@@ -293,6 +296,30 @@ type orgScopeReport struct {
 
 // analyzeOrgScope reads one statement. It errors on a shape it cannot read
 // and when the statement reads no table at all.
+//
+// The grammar it accepts, per query (one SELECT, or SELECT sides joined by
+// UNION/EXCEPT/INTERSECT):
+//
+//	query   := [WITH item {, item}] SELECT [DISTINCT|ALL] item {, item}
+//	           [FROM table {(, | join) table [ON expr]}]
+//	           [PREWHERE expr] [WHERE expr] [any other clause, read for names only]
+//	table   := name [. name] [[AS] alias] [FINAL] [SAMPLE ...]   -- a base table
+//	         | ( query ) [[AS] alias]                            -- a derived table
+//	join    := [GLOBAL|ANY|ALL|ASOF|SEMI|ANTI] [INNER|LEFT|RIGHT|FULL|CROSS] [OUTER] JOIN
+//	item    := expr [AS name | name]
+//
+// A statement outside it is an error: JOIN ... USING, ARRAY JOIN, a table
+// function, a name used twice in one scope, an AS that names nothing, an empty
+// SELECT item, an unterminated string, parameter or bracket, no table at all.
+//
+// What it decides. A table is scoped to the organization when a top-level AND
+// conjunct of its own scope's WHERE (or of a join's ON that keeps the rows of
+// the bound side) is `[alias.]org_id = {org_id:String}`, or an equality of two
+// org_id columns that reaches such a table; OR, NOT, a function, CASE, the
+// SELECT list, a string and a comment bind nothing. Aliases resolve per scope,
+// innermost first. Deny by default: an alias that can rebind a column name (see
+// aliasViolations) is a violation, because a rebound name makes the predicate
+// above mean something else.
 func analyzeOrgScope(statement string) (orgScopeReport, error) {
 	toks, err := tokenizeSQL(statement)
 	if err != nil {
@@ -355,6 +382,7 @@ func analyzeBlock(items []sqlNode, parent *sqlScope, report *orgScopeReport) err
 	}
 	sc := &sqlScope{parent: parent, ctes: map[string]bool{}, constrained: map[*sqlRef]bool{}}
 	i := 0
+	withEnd := 0 // items[0:withEnd] is the WITH clause, when there is one
 	if items[0].isKw("WITH") {
 		j := 1
 		for j < len(items) && !items[j].isKw("SELECT") {
@@ -366,15 +394,20 @@ func analyzeBlock(items []sqlNode, parent *sqlScope, report *orgScopeReport) err
 		if j == len(items) {
 			return fmt.Errorf("WITH without SELECT")
 		}
-		i = j
+		i, withEnd = j, j
 	}
 	if !items[i].isKw("SELECT") {
 		return fmt.Errorf("a query block does not start with SELECT")
 	}
 	i++
+	if i < len(items) && items[i].isKw("DISTINCT", "ALL") {
+		i++
+	}
+	selectStart := i
 	for i < len(items) && !items[i].isKw("FROM") && !isTerminator(items[i]) {
 		i++
 	}
+	selectEnd := i
 	var joins []sqlJoin
 	if i < len(items) && items[i].isKw("FROM") {
 		var err error
@@ -489,6 +522,11 @@ func analyzeBlock(items []sqlNode, parent *sqlScope, report *orgScopeReport) err
 		}
 		report.Violations = append(report.Violations, "table "+r.name+" (alias \""+alias+"\")")
 	}
+	aliases, err := scopeAliases(items, withEnd, selectStart, selectEnd, sc)
+	if err != nil {
+		return err
+	}
+	report.Violations = append(report.Violations, aliasViolations(items, aliases, withEnd, selectStart, selectEnd, sc)...)
 	return findSubqueries(items, sc, report)
 }
 
@@ -501,6 +539,7 @@ func parseFrom(items []sqlNode, i int, sc *sqlScope) ([]sqlJoin, int, error) {
 		if err != nil {
 			return nil, at, err
 		}
+		sc.tableTokens = append(sc.tableTokens, [2]int{at, next})
 		return ref, next, sc.add(ref)
 	}
 	_, i, err := read(i)
@@ -558,6 +597,213 @@ func (sc *sqlScope) add(r *sqlRef) error {
 	}
 	sc.refs = append(sc.refs, r)
 	return nil
+}
+
+// sqlAlias is a name a scope defines for an expression: `expr AS name`, or the
+// implicit `expr name` of a SELECT item.
+type sqlAlias struct {
+	name string
+	// item is the SELECT item index that defines it (-1 for an alias inside a
+	// WITH, a function argument or another clause).
+	item int
+}
+
+// scopeAliases lists every expression alias the scope defines. Deny by default:
+// an `AS` that does not name something, or an empty SELECT item, is an error.
+func scopeAliases(items []sqlNode, withEnd, selectStart, selectEnd int, sc *sqlScope) ([]sqlAlias, error) {
+	var out []sqlAlias
+	skipped := func(i int) bool {
+		for _, r := range sc.tableTokens {
+			if i >= r[0] && i < r[1] {
+				return true
+			}
+		}
+		return false
+	}
+	// `AS name` anywhere: the WITH, the SELECT list, a function argument, a
+	// filter, a GROUP BY. A table expression's own alias is not one.
+	var scan func(nodes []sqlNode, item int, offset int) error // offset >= 0: nodes are items[offset:] and table tokens are skipped
+	scan = func(nodes []sqlNode, item int, offset int) error {
+		for i := 0; i < len(nodes); i++ {
+			if offset >= 0 && skipped(offset+i) {
+				continue
+			}
+			n := nodes[i]
+			if n.group {
+				if n.isSubquery() {
+					continue // its own scope
+				}
+				if err := scan(n.children, item, -1); err != nil {
+					return err
+				}
+				continue
+			}
+			if !n.isKw("AS") {
+				continue
+			}
+			switch {
+			case i+1 < len(nodes) && nodes[i+1].isIdent():
+				out = append(out, sqlAlias{name: nodes[i+1].tok.text, item: item})
+				i++
+			case i+1 < len(nodes) && nodes[i+1].isSubquery():
+				// `WITH name AS (SELECT ...)`: a table-like name, not a column alias.
+			default:
+				return fmt.Errorf("an AS that names nothing the sweep can read")
+			}
+		}
+		return nil
+	}
+	if withEnd > 0 {
+		if err := scan(items[1:withEnd], -1, -1); err != nil {
+			return nil, err
+		}
+	}
+	// SELECT items: split at the commas of the list.
+	itemNo, start := 0, selectStart
+	for i := selectStart; i <= selectEnd; i++ {
+		if i < selectEnd && !items[i].isPunct(",") {
+			continue
+		}
+		part := items[start:i]
+		if len(part) == 0 {
+			return nil, fmt.Errorf("an empty SELECT item")
+		}
+		if err := scan(part, itemNo, -1); err != nil {
+			return nil, err
+		}
+		// The implicit alias: `expr name`, where name ends an expression that
+		// something precedes (a group, a literal, a parameter or a name).
+		if n := len(part); n >= 2 && part[n-1].isIdent() && !part[n-1].isKw(sqlNotAnAlias...) {
+			prev := part[n-2]
+			endsAnExpression := prev.group || (!prev.tok.quoted && prev.tok.kind != sqlPunct && !prev.isKw(sqlOperatorWords...)) || prev.tok.quoted
+			if endsAnExpression && !prev.isKw("AS") {
+				out = append(out, sqlAlias{name: part[n-1].tok.text, item: itemNo})
+			}
+		}
+		itemNo++
+		start = i + 1
+	}
+	// Everything after the SELECT list, minus the table expressions.
+	if err := scan(items[selectEnd:], -1, selectEnd); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+var (
+	// words that end an expression without naming it
+	sqlNotAnAlias = []string{"NULL", "TRUE", "FALSE", "ASC", "DESC", "END", "FINAL", "DISTINCT"}
+	// words after which a name is an operand, not an alias
+	sqlOperatorWords = []string{"AND", "OR", "NOT", "IN", "IS", "LIKE", "ILIKE", "BETWEEN", "ELSE", "THEN", "WHEN", "CASE", "DISTINCT", "GLOBAL", "INTERVAL"}
+)
+
+// aliasViolations denies every alias that can rebind a column name. In
+// ClickHouse an alias replaces a same-named column reference throughout its
+// scope (prefer_column_name_to_alias = 0), so `{org_id:String} AS org_id`
+// makes `WHERE org_id = {org_id:String}` compare a parameter with itself.
+//
+//   - An alias named org_id is refused in every scope, wherever it is defined.
+//   - An alias that names a column of a table the scope reads (from the
+//     declared schema), or that could name one of a table whose columns are not
+//     declared, is refused when the scope also uses that name as an unqualified
+//     column anywhere else. Used only qualified (`i.observed_at`), the name
+//     cannot be rebound, and the catalog's `... i.observed_at) observed_at`
+//     stays clean.
+func aliasViolations(items []sqlNode, aliases []sqlAlias, withEnd, selectStart, selectEnd int, sc *sqlScope) []string {
+	columnOf := map[string]string{} // column name -> table, for the declared tables
+	undeclared := false
+	for _, r := range sc.refs {
+		if !r.base {
+			continue
+		}
+		columns, declared := devhealthschema.ProductionColumns[r.name]
+		if !declared {
+			undeclared = true
+			continue
+		}
+		for _, c := range columns {
+			if _, ok := columnOf[c.Name]; !ok {
+				columnOf[c.Name] = r.name
+			}
+		}
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, a := range aliases {
+		var why string
+		table, isColumn := columnOf[a.name]
+		switch {
+		case a.name == "org_id":
+			why = "rebinds the organization column"
+		case !isColumn && !undeclared:
+			continue
+		case !usedAsColumn(items, a, withEnd, selectStart, selectEnd, sc):
+			continue
+		case isColumn:
+			why = "shadows a column of " + table + " that the scope also reads"
+		default:
+			why = "rebinds a name the scope also reads, and a table it reads has no declared columns"
+		}
+		msg := "alias \"" + a.name + "\" " + why
+		if !seen[msg] {
+			seen[msg] = true
+			out = append(out, msg)
+		}
+	}
+	return out
+}
+
+// usedAsColumn reports whether the alias's name is used unqualified anywhere in
+// the scope outside the SELECT item that defines it, its WITH and the table
+// expressions: in another SELECT item, a filter, a join condition, a GROUP BY.
+func usedAsColumn(items []sqlNode, a sqlAlias, withEnd, selectStart, selectEnd int, sc *sqlScope) bool {
+	skipped := func(i int) bool {
+		for _, r := range sc.tableTokens {
+			if i >= r[0] && i < r[1] {
+				return true
+			}
+		}
+		return false
+	}
+	var uses func(nodes []sqlNode) bool
+	uses = func(nodes []sqlNode) bool {
+		for i, n := range nodes {
+			if n.group {
+				if !n.isSubquery() && uses(n.children) {
+					return true
+				}
+				continue
+			}
+			if !n.isIdent() || n.tok.text != a.name {
+				continue
+			}
+			afterDot := i > 0 && nodes[i-1].isPunct(".")
+			beforeDot := i+1 < len(nodes) && nodes[i+1].isPunct(".")
+			if !afterDot && !beforeDot {
+				return true
+			}
+		}
+		return false
+	}
+	// the SELECT items other than the one that defines the alias
+	itemNo, start := 0, selectStart
+	for i := selectStart; i <= selectEnd; i++ {
+		if i < selectEnd && !items[i].isPunct(",") {
+			continue
+		}
+		if itemNo != a.item && uses(items[start:i]) {
+			return true
+		}
+		itemNo++
+		start = i + 1
+	}
+	rest := make([]sqlNode, 0, len(items)-selectEnd)
+	for i := selectEnd; i < len(items); i++ {
+		if !skipped(i) {
+			rest = append(rest, items[i])
+		}
+	}
+	return uses(rest)
 }
 
 // findSubqueries analyses every subquery group below items, at any depth, as

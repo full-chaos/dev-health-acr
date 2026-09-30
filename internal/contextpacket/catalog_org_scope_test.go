@@ -58,7 +58,7 @@ func TestEveryCatalogStatementScopesEveryTableToTheOrganization(t *testing.T) {
 			t.Errorf("%s: the reader found tables %v, the text search found %v: the sweep skipped part of the statement", query.ID, got, want)
 		}
 		for _, violation := range report.Violations {
-			t.Errorf("%s: %s is not scoped to the organization: another organization's rows can join\n%s", query.ID, violation, query.Statement)
+			t.Errorf("%s: %s: another organization's rows can be read\n%s", query.ID, violation, query.Statement)
 		}
 	}
 }
@@ -163,6 +163,28 @@ func TestOrgScopeSweepIsStructural(t *testing.T) {
 		{name: "comma FROM before a JOIN", sql: `SELECT 1 FROM repos AS r, git_commits AS c INNER JOIN git_commit_stats AS s ON s.commit_hash = c.hash WHERE r.org_id = ` + orgScopeBound + ` AND c.org_id = r.org_id`, want: []string{`table git_commit_stats (alias "s")`}},
 		{name: "comma FROM with every table bound", sql: `SELECT 1 FROM repos AS r, git_commits AS c, git_commit_stats AS s WHERE r.org_id = ` + orgScopeBound + ` AND c.org_id = r.org_id AND s.org_id = c.org_id`},
 		{name: "commas in the select list and in a function call are not tables", sql: `SELECT r.id, concat(r.repo, 'x'), if(r.id = 1, 2, 3) FROM repos AS r WHERE r.org_id = ` + orgScopeBound},
+
+		// ---- an alias can rebind a column name (r1 P1): deny by default
+		{name: "a SELECT alias rebinds org_id (the r1 probe)", sql: `SELECT repo, {org_id:String} AS org_id FROM repos FINAL WHERE org_id = ` + orgScopeBound, want: []string{`alias "org_id" rebinds the organization column`}},
+		{name: "an implicit alias rebinds org_id", sql: `SELECT {org_id:String} org_id FROM repos WHERE org_id = ` + orgScopeBound, want: []string{`alias "org_id" rebinds the organization column`}},
+		{name: "a WITH alias rebinds org_id", sql: `WITH {org_id:String} AS org_id SELECT 1 FROM repos WHERE org_id = ` + orgScopeBound, want: []string{`alias "org_id" rebinds the organization column`}},
+		{name: "an alias in a function argument rebinds org_id", sql: `SELECT 1 FROM repos WHERE org_id = ` + orgScopeBound + ` AND toString({org_id:String} AS org_id) != ''`, want: []string{`alias "org_id" rebinds the organization column`}},
+		{name: "an alias of the qualified column is still org_id", sql: `SELECT r.org_id AS org_id FROM repos AS r WHERE r.org_id = ` + orgScopeBound, want: []string{`alias "org_id" rebinds the organization column`}},
+		{name: "an alias in a subquery scope rebinds org_id there", sql: `SELECT 1 FROM repos AS r WHERE r.org_id = ` + orgScopeBound + ` AND EXISTS (SELECT 1 AS org_id FROM git_commits AS c WHERE c.org_id = ` + orgScopeBound + `)`, want: []string{`alias "org_id" rebinds the organization column`}},
+		{name: "an alias named org_id on a derived-table select", sql: `SELECT org_id FROM (SELECT {org_id:String} AS org_id FROM repos WHERE org_id = ` + orgScopeBound + `)`, want: []string{`alias "org_id" rebinds the organization column`}},
+		{name: "a declared column shadowed and used unqualified", sql: `SELECT toString(id) AS repo FROM repos WHERE org_id = ` + orgScopeBound + ` AND repo = 'x'`, want: []string{`alias "repo" shadows a column of repos that the scope also reads`}},
+		{name: "a declared column shadowed and used in another SELECT item", sql: `SELECT toString(id) AS repo, upper(repo) FROM repos WHERE org_id = ` + orgScopeBound, want: []string{`alias "repo" shadows a column of repos that the scope also reads`}},
+		{name: "a declared column shadowed but only used qualified", sql: `SELECT r.repo AS repo FROM repos AS r WHERE r.org_id = ` + orgScopeBound},
+		{name: "a declared column aliased and never read again", sql: `SELECT toString(id) id FROM repos WHERE org_id = ` + orgScopeBound},
+		{name: "an undeclared table: an alias read again unqualified", sql: `SELECT c.hash AS sha FROM git_commits AS c WHERE c.org_id = ` + orgScopeBound + ` AND sha = 'x'`, want: []string{`alias "sha" rebinds a name the scope also reads, and a table it reads has no declared columns`}},
+		{name: "an undeclared table: an alias never read again", sql: `SELECT c.hash AS sha FROM git_commits AS c WHERE c.org_id = ` + orgScopeBound},
+		{name: "an alias that only renames a name the derived table exposes", sql: `SELECT toFloat64(confidence) confidence FROM (SELECT 1.0 confidence FROM repos WHERE org_id = ` + orgScopeBound + `)`},
+		{name: "a table alias equal to a column name is not an expression alias", sql: `SELECT 1 FROM git_commits AS c INNER JOIN repos AS repo ON repo.id = c.repo_id AND repo.org_id = c.org_id WHERE c.org_id = ` + orgScopeBound},
+		{name: "CAST ... AS Type is not an alias of a column", sql: `SELECT CAST(r.id AS String) FROM repos AS r WHERE r.org_id = ` + orgScopeBound},
+		{name: "operators and IS NULL at the end of an item are not aliases", sql: `SELECT r.id IS NULL, r.id + 1, r.repo = 'x' AND r.id != 2 FROM repos AS r WHERE r.org_id = ` + orgScopeBound},
+		{name: "an AS that names nothing", sql: `SELECT 1 AS FROM repos WHERE org_id = ` + orgScopeBound, wantErr: "an AS that names nothing"},
+		{name: "an AS followed by a group", sql: `SELECT 1 AS (2) FROM repos WHERE org_id = ` + orgScopeBound, wantErr: "an AS that names nothing"},
+		{name: "an empty SELECT item", sql: `SELECT , 1 FROM repos WHERE org_id = ` + orgScopeBound, wantErr: "an empty SELECT item"},
 
 		// ---- outer joins: an ON keeps the rows of the preserved side
 		{name: "left join: a binding of the preserved left table in ON", sql: `SELECT 1 FROM repos AS r LEFT JOIN git_commits AS c ON c.repo_id = r.id AND r.org_id = ` + orgScopeBound + ` AND c.org_id = ` + orgScopeBound, want: []string{`table repos (alias "r")`}},
