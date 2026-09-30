@@ -478,7 +478,18 @@ jobs:
           make coverage-cobertura
       - name: List every shard's failed tests
         if: ${{ !cancelled() }}
-        run: go run ./ci/mergetestreports failures -dir .tmp/unit-shards -expect 4 -summary "$GITHUB_STEP_SUMMARY"
+        run: go run ./ci/mergetestreports failures -dir .tmp/unit-shards -expect 4 -summary "$GITHUB_STEP_SUMMARY" -report .tmp/coverage/failures.json
+      # The behaviour check. The steps above are text a later edit can disable,
+      # gate off, or replace with `true` while this job still reads green;
+      # this one recomputes testcase / suite counts from the raw shard files
+      # with a parser of its own and compares them, the merged coverage profile
+      # and the failure listing with the files the steps above actually wrote.
+      # A merge that never ran, ran on fewer shards, or produced something other
+      # than the sum fails HERE. (scripts/ci/test-workflow-contract.sh still
+      # greps for every step as a second line, and cannot see any of this.)
+      - name: Verify the merged reports against the shards
+        if: ${{ !cancelled() }}
+        run: go run ./ci/mergetestreports crosscheck -dir .tmp/unit-shards -expect 4 -junit .tmp/coverage/junit.xml -cover .tmp/coverage/cover.out -cobertura .tmp/coverage/coverage.xml -failures .tmp/coverage/failures.json
       # actions/upload-artifact v7.0.1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: ${{ !cancelled() }}

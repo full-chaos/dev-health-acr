@@ -5,11 +5,12 @@
 // Each `unit` shard uploads one intermediate artifact, go-unit-shard-<i>,
 // holding that shard's cover.out (Go coverage profile), junit.xml (gotestsum
 // JUnit) and go-test.json (gotestsum's test2json stream). The `reports` job
-// downloads all of them into one directory and runs this tool three times:
+// downloads all of them into one directory and runs this tool four times:
 //
-//	mergetestreports coverage -dir D -expect N -out merged/cover.out
-//	mergetestreports junit    -dir D -expect N -out merged/junit.xml
-//	mergetestreports failures -dir D -expect N [-summary FILE]
+//	mergetestreports coverage   -dir D -expect N -out merged/cover.out
+//	mergetestreports junit      -dir D -expect N -out merged/junit.xml
+//	mergetestreports failures   -dir D -expect N [-summary FILE] [-report FILE]
+//	mergetestreports crosscheck -dir D -expect N -junit ... -cover ... -cobertura ... -failures FILE
 //
 // `coverage` concatenates the profiles under ONE `mode:` header, merging any
 // block that appears in more than one shard (max for `set`, sum for `count`
@@ -24,13 +25,25 @@
 //
 // `failures` reads EVERY shard's go-test.json and lists every failed package
 // and test across all of them, so one place shows the whole run's failures
-// rather than the first failure of whichever shard the reader opened.
+// rather than the first failure of whichever shard the reader opened. -report
+// writes what it read as JSON for `crosscheck`.
 //
-// The tool never guesses at absent input. A missing shard, an extra shard, an
-// empty file, a malformed profile, two shards that both claim one test suite,
-// or two profiles in different coverage modes is an error, not a partial
-// merge: a merged report that silently covers 3 of 4 shards reads exactly like
-// a complete one, which is the failure this whole job exists to prevent.
+// `crosscheck` is the reports job's behaviour check: it recomputes testcase and
+// suite counts from the raw shard files with a parser of its own and compares
+// them, the merged coverage profile and the failure listing with the merged
+// files the job wrote, so a merge that never ran, ran on fewer shards, or
+// produced something other than the sum fails there.
+//
+// The tool fails closed on all malformed input, never guessing at it. A missing
+// shard, an extra shard, a shard directory whose name is not the canonical
+// decimal index (1, not 01), an empty file, a malformed profile, two shards
+// that both claim one test suite, two profiles in different coverage modes, a
+// go-test.json line that is not a test2json event, a JUnit root whose totals
+// are absent, non-integer, or not the sum of its suites, or a JUnit file with
+// more than one root, is an error and not a partial merge: a merged report that
+// silently covers 3 of 4 shards, or states a total nobody measured, reads
+// exactly like a correct one, which is the failure this whole job exists to
+// prevent.
 package main
 
 import (
@@ -62,13 +75,14 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: mergetestreports coverage|junit|failures -dir DIR -expect N [-out FILE] [-summary FILE]")
+		fmt.Fprintln(stderr, "usage: mergetestreports coverage|junit|failures|crosscheck -dir DIR -expect N [flags]")
 		return 2
 	}
 	cmd, rest := args[0], args[1:]
 	var (
-		dir, out, summary string
-		expect            int
+		dir, out, summary, report string
+		expect                    int
+		cc                        crosscheckInputs
 	)
 	fs := flag.NewFlagSet("mergetestreports "+cmd, flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -79,19 +93,23 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fs.StringVar(&out, "out", "", "merged report to write")
 	case "failures":
 		fs.StringVar(&summary, "summary", "", "optional file to append a markdown failure summary to (GITHUB_STEP_SUMMARY)")
+		fs.StringVar(&report, "report", "", "optional JSON file recording what was read, for crosscheck")
+	case "crosscheck":
+		fs.StringVar(&cc.junit, "junit", "", "merged junit.xml to check")
+		fs.StringVar(&cc.cover, "cover", "", "merged cover.out to check")
+		fs.StringVar(&cc.cobertura, "cobertura", "", "Cobertura coverage.xml built from the merged profile")
+		fs.StringVar(&cc.failures, "failures", "", "JSON failure report written by `failures -report`")
 	default:
-		fmt.Fprintf(stderr, "mergetestreports: unknown command %q (want coverage, junit or failures)\n", cmd)
+		fmt.Fprintf(stderr, "mergetestreports: unknown command %q (want coverage, junit, failures or crosscheck)\n", cmd)
 		return 2
 	}
 	if err := fs.Parse(rest); err != nil {
 		return 2
 	}
-	if dir == "" || expect < 1 || (cmd != "failures" && out == "") {
-		fmt.Fprintf(stderr, "mergetestreports %s: -dir and -expect (>=1) are required", cmd)
-		if cmd != "failures" {
-			fmt.Fprint(stderr, ", and so is -out")
-		}
-		fmt.Fprintln(stderr)
+	needOut := cmd == "coverage" || cmd == "junit"
+	if dir == "" || expect < 1 || (needOut && out == "") ||
+		(cmd == "crosscheck" && (cc.junit == "" || cc.cover == "" || cc.cobertura == "" || cc.failures == "")) {
+		fmt.Fprintf(stderr, "mergetestreports %s: -dir and -expect (>=1) are required, and so is every output flag the command reads (-out; or -junit -cover -cobertura -failures)\n", cmd)
 		return 2
 	}
 
@@ -102,7 +120,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "junit":
 		err = runJUnit(dir, expect, out, stdout)
 	case "failures":
-		err = runFailures(dir, expect, summary, stdout)
+		err = runFailures(dir, expect, summary, report, stdout)
+	case "crosscheck":
+		cc.dir, cc.expect = dir, expect
+		err = runCrosscheck(cc, stdout)
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "mergetestreports %s: %v\n", cmd, err)
@@ -124,10 +145,13 @@ func shardFiles(dir string, expect int, name string) ([]string, error) {
 		if !strings.HasPrefix(e.Name(), shardArtifactPrefix) {
 			continue
 		}
-		idx, convErr := strconv.Atoi(strings.TrimPrefix(e.Name(), shardArtifactPrefix))
-		if convErr != nil || idx < 1 || idx > expect {
-			return nil, fmt.Errorf("unexpected shard directory %q in %s: the unit matrix has %d shard(s), so only %s1..%s%d may exist "+
-				"(the matrix grew or shrank without the reports job's -expect following it)",
+		suffix := strings.TrimPrefix(e.Name(), shardArtifactPrefix)
+		idx, convErr := strconv.Atoi(suffix)
+		// strconv.Itoa(idx) != suffix rejects 01 (and +1): two artifacts must
+		// never map to one shard index, or one of them is silently ignored.
+		if convErr != nil || idx < 1 || idx > expect || strconv.Itoa(idx) != suffix {
+			return nil, fmt.Errorf("unexpected shard directory %q in %s: the unit matrix has %d shard(s), so only %s1..%s%d may exist, spelt as a plain decimal "+
+				"(the matrix grew or shrank without the reports job's -expect following it, or two artifacts name one shard)",
 				e.Name(), dir, expect, shardArtifactPrefix, shardArtifactPrefix, expect)
 		}
 		seen[idx] = true
@@ -350,41 +374,76 @@ func runJUnit(dir string, expect int, out string, stdout io.Writer) error {
 	return nil
 }
 
-// junitRootAttrs are the <testsuites> attributes that are totals across
-// children and therefore add up across shards.
-var junitRootAttrs = []string{"tests", "failures", "errors", "skipped", "disabled", "time"}
+// junitCountAttrs are the counters that must add up: a <testsuites> root states
+// each as a total, and it has to equal the sum over the suites it contains.
+// tests, failures and errors are always present on a gotestsum root; skipped
+// and disabled only when the writer emits them (gotestsum puts `skipped` on the
+// suites and not on the root, so a root without it is complete, not malformed).
+var (
+	junitRequiredCounts = []string{"tests", "failures", "errors"}
+	junitOptionalCounts = []string{"skipped", "disabled"}
+)
+
+// junitSuite is one direct <testsuite> child of a <testsuites> root: its name,
+// its counters, and the exact bytes it was written with.
+type junitSuite struct {
+	name   string
+	counts map[string]int
+	raw    []byte
+}
+
+// junitDoc is one parsed shard report.
+type junitDoc struct {
+	rootCounts map[string]int
+	rootTime   float64
+	suites     []junitSuite
+}
 
 // mergeJUnit merges JUnit <testsuites> documents into one. Child <testsuite>
-// elements are copied verbatim from the shard's own bytes.
+// elements are copied verbatim from the shard's own bytes. Every shard report
+// must be internally consistent -- root totals present, integers, and equal to
+// the sum over its own suites -- or the merge is refused: a merged total built
+// on a root nobody checked would be a number that was never measured.
 func mergeJUnit(names []string, docs [][]byte) ([]byte, junitStats, error) {
 	var st junitStats
-	totals := map[string]float64{}
-	present := map[string]bool{}
+	rootTotals := map[string]int{}
+	presentOpt := map[string]bool{}
+	var timeTotal float64
 	suiteOwner := map[string]string{}
 	var children [][]byte
 	for di, data := range docs {
 		name := names[di]
-		rootAttrs, kids, suiteNames, err := splitTestsuites(data)
+		doc, err := parseJUnit(data)
 		if err != nil {
 			return nil, st, fmt.Errorf("%s: %w", name, err)
 		}
-		for _, a := range junitRootAttrs {
-			if v, ok := rootAttrs[a]; ok {
-				f, convErr := strconv.ParseFloat(v, 64)
-				if convErr != nil {
-					return nil, st, fmt.Errorf("%s: <testsuites %s=%q> is not a number", name, a, v)
-				}
-				totals[a] += f
-				present[a] = true
+		for _, a := range append(append([]string{}, junitRequiredCounts...), junitOptionalCounts...) {
+			want, ok := doc.rootCounts[a]
+			if !ok {
+				continue
+			}
+			sum := 0
+			for _, s := range doc.suites {
+				sum += s.counts[a]
+			}
+			if want != sum {
+				return nil, st, fmt.Errorf("%s: <testsuites %s=%d> but its %d suite(s) add up to %d -- the report is truncated or hand-edited, and a merged total built on it would be wrong",
+					name, a, want, len(doc.suites), sum)
+			}
+			rootTotals[a] += want
+			if a == "skipped" || a == "disabled" {
+				presentOpt[a] = true
 			}
 		}
-		for _, sn := range suiteNames {
-			if prev, dup := suiteOwner[sn]; dup {
-				return nil, st, fmt.Errorf("test suite %q is in both %s and %s -- the shards overlap, so its tests ran twice", sn, prev, name)
+		timeTotal += doc.rootTime
+		for _, s := range doc.suites {
+			if prev, dup := suiteOwner[s.name]; dup {
+				return nil, st, fmt.Errorf("test suite %q is in both %s and %s -- the shards overlap, so its tests ran twice", s.name, prev, name)
 			}
-			suiteOwner[sn] = name
+			suiteOwner[s.name] = name
+			st.skipped += s.counts["skipped"]
+			children = append(children, s.raw)
 		}
-		children = append(children, kids...)
 		st.shards++
 	}
 	if len(children) == 0 {
@@ -392,17 +451,15 @@ func mergeJUnit(names []string, docs [][]byte) ([]byte, junitStats, error) {
 	}
 	var buf bytes.Buffer
 	buf.WriteString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<testsuites")
-	for _, a := range junitRootAttrs {
-		if !present[a] {
-			continue
-		}
-		if a == "time" {
-			fmt.Fprintf(&buf, " time=\"%f\"", totals[a])
-		} else {
-			fmt.Fprintf(&buf, " %s=\"%d\"", a, int(totals[a]))
+	for _, a := range junitRequiredCounts {
+		fmt.Fprintf(&buf, " %s=\"%d\"", a, rootTotals[a])
+	}
+	for _, a := range junitOptionalCounts {
+		if presentOpt[a] {
+			fmt.Fprintf(&buf, " %s=\"%d\"", a, rootTotals[a])
 		}
 	}
-	buf.WriteString(">\n")
+	fmt.Fprintf(&buf, " time=\"%f\">\n", timeTotal)
 	for _, c := range children {
 		buf.WriteString("\t")
 		buf.Write(c)
@@ -410,24 +467,43 @@ func mergeJUnit(names []string, docs [][]byte) ([]byte, junitStats, error) {
 	}
 	buf.WriteString("</testsuites>\n")
 	st.suites = len(children)
-	st.tests, st.failures = int(totals["tests"]), int(totals["failures"])
-	st.errors, st.skipped, st.time = int(totals["errors"]), int(totals["skipped"]), totals["time"]
+	st.tests, st.failures, st.errors = rootTotals["tests"], rootTotals["failures"], rootTotals["errors"]
+	st.time = timeTotal
 	return buf.Bytes(), st, nil
 }
 
-// splitTestsuites parses one JUnit document whose root is <testsuites> and
-// returns the root's attributes, the raw bytes of each direct <testsuite>
-// child, and each child's name.
-func splitTestsuites(data []byte) (map[string]string, [][]byte, []string, error) {
+// countAttr reads a non-negative integer attribute. An absent attribute is
+// (0, false, nil); a present one that is not a canonical integer is an error.
+func countAttr(attrs []xml.Attr, name string) (n int, present bool, err error) {
+	for _, a := range attrs {
+		if a.Name.Local != name {
+			continue
+		}
+		n, convErr := strconv.Atoi(a.Value)
+		if convErr != nil || n < 0 || strconv.Itoa(n) != a.Value {
+			return 0, true, fmt.Errorf("%s=%q is not a non-negative integer", name, a.Value)
+		}
+		return n, true, nil
+	}
+	return 0, false, nil
+}
+
+// parseJUnit parses one JUnit document whose single root is <testsuites>. It
+// fails closed on everything a well-formed gotestsum report never contains: a
+// second root or trailing content, a root without tests/failures/errors/time,
+// a counter that is not an integer, a suite without a name.
+func parseJUnit(data []byte) (junitDoc, error) {
+	doc := junitDoc{rootCounts: map[string]int{}}
 	dec := xml.NewDecoder(bytes.NewReader(data))
 	dec.Strict = true
 	var (
-		rootAttrs = map[string]string{}
-		kids      [][]byte
-		names     []string
 		depth     int
-		sawRoot   bool
+		rootSeen  bool
+		rootDone  bool
+		sawTime   bool
 		kidStart  int64
+		kidName   string
+		kidCounts map[string]int
 	)
 	for {
 		before := dec.InputOffset()
@@ -436,47 +512,90 @@ func splitTestsuites(data []byte) (map[string]string, [][]byte, []string, error)
 			break
 		}
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("malformed XML: %w", err)
+			return doc, fmt.Errorf("malformed XML: %w", err)
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
+			if rootDone {
+				return doc, fmt.Errorf("more than one root element: a second <%s> follows the closed <testsuites> -- two documents were concatenated, and their totals would silently overwrite each other", t.Name.Local)
+			}
 			depth++
-			switch {
-			case depth == 1:
+			switch depth {
+			case 1:
 				if t.Name.Local != "testsuites" {
-					return nil, nil, nil, fmt.Errorf("root element is <%s>, want <testsuites>", t.Name.Local)
+					return doc, fmt.Errorf("root element is <%s>, want <testsuites>", t.Name.Local)
 				}
-				sawRoot = true
-				for _, a := range t.Attr {
-					rootAttrs[a.Name.Local] = a.Value
-				}
-			case depth == 2:
-				if t.Name.Local != "testsuite" {
-					return nil, nil, nil, fmt.Errorf("unexpected <%s> directly under <testsuites>", t.Name.Local)
-				}
-				kidStart = before
-				sn := ""
-				for _, a := range t.Attr {
-					if a.Name.Local == "name" {
-						sn = a.Value
+				rootSeen = true
+				for _, a := range append(append([]string{}, junitRequiredCounts...), junitOptionalCounts...) {
+					n, ok, cerr := countAttr(t.Attr, a)
+					if cerr != nil {
+						return doc, fmt.Errorf("<testsuites %w", cerr)
+					}
+					if ok {
+						doc.rootCounts[a] = n
 					}
 				}
-				if sn == "" {
-					return nil, nil, nil, errors.New("a <testsuite> has no name attribute")
+				for _, a := range junitRequiredCounts {
+					if _, ok := doc.rootCounts[a]; !ok {
+						return doc, fmt.Errorf("<testsuites> has no %s attribute -- its total cannot be checked against its suites", a)
+					}
 				}
-				names = append(names, sn)
+				for _, a := range t.Attr {
+					if a.Name.Local == "time" {
+						f, ferr := strconv.ParseFloat(a.Value, 64)
+						if ferr != nil || f < 0 {
+							return doc, fmt.Errorf("<testsuites time=%q> is not a non-negative number", a.Value)
+						}
+						doc.rootTime, sawTime = f, true
+					}
+				}
+				if !sawTime {
+					return doc, errors.New("<testsuites> has no time attribute")
+				}
+			case 2:
+				if t.Name.Local != "testsuite" {
+					return doc, fmt.Errorf("unexpected <%s> directly under <testsuites>", t.Name.Local)
+				}
+				kidStart, kidName, kidCounts = before, "", map[string]int{}
+				for _, a := range t.Attr {
+					if a.Name.Local == "name" {
+						kidName = a.Value
+					}
+				}
+				if kidName == "" {
+					return doc, errors.New("a <testsuite> has no name attribute")
+				}
+				for _, a := range append(append([]string{}, junitRequiredCounts...), junitOptionalCounts...) {
+					n, ok, cerr := countAttr(t.Attr, a)
+					if cerr != nil {
+						return doc, fmt.Errorf("<testsuite name=%q> %w", kidName, cerr)
+					}
+					if ok {
+						kidCounts[a] = n
+					}
+				}
+				if _, ok := kidCounts["tests"]; !ok {
+					return doc, fmt.Errorf("<testsuite name=%q> has no tests attribute", kidName)
+				}
 			}
 		case xml.EndElement:
 			if depth == 2 {
-				kids = append(kids, bytes.Clone(data[kidStart:dec.InputOffset()]))
+				doc.suites = append(doc.suites, junitSuite{name: kidName, counts: kidCounts, raw: bytes.Clone(data[kidStart:dec.InputOffset()])})
 			}
 			depth--
+			if depth == 0 {
+				rootDone = true
+			}
+		case xml.CharData:
+			if rootDone && len(bytes.TrimSpace(t)) > 0 {
+				return doc, errors.New("content after the closing </testsuites>")
+			}
 		}
 	}
-	if !sawRoot {
-		return nil, nil, nil, errors.New("no <testsuites> root element")
+	if !rootSeen {
+		return doc, errors.New("no <testsuites> root element")
 	}
-	return rootAttrs, kids, names, nil
+	return doc, nil
 }
 
 // --- failures ---------------------------------------------------------------
@@ -488,18 +607,22 @@ type testEvent struct {
 	Test    string `json:"Test"`
 }
 
+// failureReport is what the `failures` command found, and what `crosscheck`
+// reads back from -report to prove the listing really covered every shard.
 type failureReport struct {
-	// failed maps "package" or "package/Test" to the shard indices that saw it fail.
-	failed    map[string][]int
-	perShard  []shardEvents
-	malformed int
+	Shards   int           `json:"shards"`
+	PerShard []shardEvents `json:"per_shard"`
+	// Failed maps "package" or "package/Test" to the shard indices that saw it fail.
+	Failed map[string][]int `json:"failed"`
 }
 
 type shardEvents struct {
-	shard, events, failed int
+	Shard  int `json:"shard"`
+	Events int `json:"events"`
+	Failed int `json:"failed"`
 }
 
-func runFailures(dir string, expect int, summary string, stdout io.Writer) error {
+func runFailures(dir string, expect int, summary, report string, stdout io.Writer) error {
 	paths, err := shardFiles(dir, expect, "go-test.json")
 	if err != nil {
 		return err
@@ -512,26 +635,32 @@ func runFailures(dir string, expect int, summary string, stdout io.Writer) error
 	if err != nil {
 		return err
 	}
-	keys := make([]string, 0, len(rep.failed))
-	for k := range rep.failed {
+	keys := make([]string, 0, len(rep.Failed))
+	for k := range rep.Failed {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	for _, s := range rep.perShard {
-		fmt.Fprintf(stdout, "shard %d: %d test events, %d failed test(s)/package(s)\n", s.shard, s.events, s.failed)
-	}
-	if rep.malformed > 0 {
-		fmt.Fprintf(stdout, "note: %d line(s) across the shards' go-test.json were not test2json events and were skipped\n", rep.malformed)
+	for _, s := range rep.PerShard {
+		fmt.Fprintf(stdout, "shard %d: %d test events, %d failed test(s)/package(s)\n", s.Shard, s.Events, s.Failed)
 	}
 	for _, k := range keys {
-		fmt.Fprintf(stdout, "FAIL %s (shard %s)\n", k, joinInts(rep.failed[k]))
+		fmt.Fprintf(stdout, "FAIL %s (shard %s)\n", k, joinInts(rep.Failed[k]))
 	}
-	fmt.Fprintf(stdout, "%d failed test(s)/package(s) across %d shard(s)\n", len(keys), len(rep.perShard))
+	fmt.Fprintf(stdout, "%d failed test(s)/package(s) across %d shard(s)\n", len(keys), rep.Shards)
+	if report != "" {
+		b, mErr := json.MarshalIndent(rep, "", "  ")
+		if mErr != nil {
+			return mErr
+		}
+		if err := writeFile(report, append(b, '\n')); err != nil {
+			return err
+		}
+	}
 	if summary != "" {
 		var md strings.Builder
-		fmt.Fprintf(&md, "### unit: %d failed test(s)/package(s) across %d shards\n\n", len(keys), len(rep.perShard))
+		fmt.Fprintf(&md, "### unit: %d failed test(s)/package(s) across %d shards\n\n", len(keys), rep.Shards)
 		for _, k := range keys {
-			fmt.Fprintf(&md, "- `%s` (shard %s)\n", k, joinInts(rep.failed[k]))
+			fmt.Fprintf(&md, "- `%s` (shard %s)\n", k, joinInts(rep.Failed[k]))
 		}
 		f, err := os.OpenFile(summary, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		if err != nil {
@@ -548,31 +677,38 @@ func runFailures(dir string, expect int, summary string, stdout io.Writer) error
 	return nil
 }
 
+// collectFailures reads every shard's test2json stream. It fails closed: a line
+// that is not a test2json event -- the one line that would have said which test
+// failed could be exactly the one that is mangled -- is an error, not a note.
 func collectFailures(streams [][]byte) (failureReport, error) {
-	rep := failureReport{failed: map[string][]int{}}
+	rep := failureReport{Failed: map[string][]int{}}
 	for i, raw := range streams {
 		shard := i + 1
-		se := shardEvents{shard: shard}
+		se := shardEvents{Shard: shard}
 		seen := map[string]bool{}
 		r := bufio.NewReaderSize(bytes.NewReader(raw), 1<<20)
+		lineNo := 0
 		for {
 			line, err := r.ReadBytes('\n')
+			if len(line) > 0 {
+				lineNo++
+			}
 			if len(bytes.TrimSpace(line)) > 0 {
 				var ev testEvent
 				if jerr := json.Unmarshal(line, &ev); jerr != nil || ev.Action == "" {
-					rep.malformed++
-				} else {
-					se.events++
-					if ev.Action == "fail" {
-						key := ev.Package
-						if ev.Test != "" {
-							key += "/" + ev.Test
-						}
-						if key != "" && !seen[key] {
-							seen[key] = true
-							rep.failed[key] = append(rep.failed[key], shard)
-							se.failed++
-						}
+					return rep, fmt.Errorf("shard %d: go-test.json line %d is not a test2json event (%q) -- a failure event could be the mangled line, so the listing would silently omit it",
+						shard, lineNo, truncate(strings.TrimSpace(string(line))))
+				}
+				se.Events++
+				if ev.Action == "fail" {
+					key := ev.Package
+					if ev.Test != "" {
+						key += "/" + ev.Test
+					}
+					if key != "" && !seen[key] {
+						seen[key] = true
+						rep.Failed[key] = append(rep.Failed[key], shard)
+						se.Failed++
 					}
 				}
 			}
@@ -583,11 +719,12 @@ func collectFailures(streams [][]byte) (failureReport, error) {
 				return rep, err
 			}
 		}
-		if se.events == 0 {
+		if se.Events == 0 {
 			return rep, fmt.Errorf("shard %d: go-test.json holds no test2json events -- the failure analysis for this shard did not happen", shard)
 		}
-		rep.perShard = append(rep.perShard, se)
+		rep.PerShard = append(rep.PerShard, se)
 	}
+	rep.Shards = len(rep.PerShard)
 	return rep, nil
 }
 
@@ -597,4 +734,187 @@ func joinInts(v []int) string {
 		parts[i] = strconv.Itoa(n)
 	}
 	return strings.Join(parts, ",")
+}
+
+// --- crosscheck -------------------------------------------------------------
+
+// crosscheckInputs names the merged outputs the reports job produced.
+type crosscheckInputs struct {
+	dir                               string
+	expect                            int
+	junit, cover, cobertura, failures string
+}
+
+// countElements counts start elements with the given local name, with a
+// decoder of its own: it shares no code with parseJUnit, so a defect in the
+// merge's parser cannot make both sides of the comparison wrong the same way.
+func countElements(data []byte, local string) (int, error) {
+	dec := xml.NewDecoder(bytes.NewReader(data))
+	n := 0
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			return n, nil
+		}
+		if err != nil {
+			return 0, err
+		}
+		if se, ok := tok.(xml.StartElement); ok && se.Name.Local == local {
+			n++
+		}
+	}
+}
+
+// coberturaFacts reads the two counters off a Cobertura <coverage> root.
+func coberturaFacts(data []byte) (valid, covered int, err error) {
+	dec := xml.NewDecoder(bytes.NewReader(data))
+	for {
+		tok, tErr := dec.Token()
+		if tErr == io.EOF {
+			return 0, 0, errors.New("no <coverage> root element")
+		}
+		if tErr != nil {
+			return 0, 0, tErr
+		}
+		se, ok := tok.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		if se.Name.Local != "coverage" {
+			return 0, 0, fmt.Errorf("root element is <%s>, want <coverage>", se.Name.Local)
+		}
+		var vOK, cOK bool
+		for _, a := range se.Attr {
+			switch a.Name.Local {
+			case "lines-valid":
+				valid, err = strconv.Atoi(a.Value)
+				vOK = err == nil
+			case "lines-covered":
+				covered, err = strconv.Atoi(a.Value)
+				cOK = err == nil
+			}
+		}
+		if !vOK || !cOK {
+			return 0, 0, errors.New("<coverage> has no integer lines-valid / lines-covered")
+		}
+		return valid, covered, nil
+	}
+}
+
+// runCrosscheck is the reports job's BEHAVIOUR check. Everything else in the
+// job is a step that could have been disabled, skipped by a condition, or
+// replaced with `true` while the job still reads green; this recomputes the
+// answer from the raw shard inputs and compares it with the merged files the
+// job actually wrote, so a merge that did not run, ran on fewer shards, or
+// produced something other than the sum fails here.
+func runCrosscheck(in crosscheckInputs, stdout io.Writer) error {
+	var problems []string
+	bad := func(format string, a ...any) { problems = append(problems, fmt.Sprintf(format, a...)) }
+
+	// JUnit: testcase and suite element counts, counted independently of the
+	// merge, must be the same in the merged file as across the shards, and the
+	// merged root must state them.
+	jPaths, err := shardFiles(in.dir, in.expect, "junit.xml")
+	if err != nil {
+		return err
+	}
+	jRaws, err := readAll(jPaths)
+	if err != nil {
+		return err
+	}
+	var wantCases, wantSuites, wantFailures int
+	for i, raw := range jRaws {
+		c, cErr := countElements(raw, "testcase")
+		s, sErr := countElements(raw, "testsuite")
+		doc, pErr := parseJUnit(raw)
+		if err := errors.Join(cErr, sErr, pErr); err != nil {
+			return fmt.Errorf("shard %d junit.xml: %w", i+1, err)
+		}
+		wantCases += c
+		wantSuites += s
+		wantFailures += doc.rootCounts["failures"]
+	}
+	mergedJ, err := os.ReadFile(in.junit)
+	if err != nil {
+		return fmt.Errorf("merged junit %s was not produced: %w", in.junit, err)
+	}
+	gotCases, cErr := countElements(mergedJ, "testcase")
+	gotSuites, sErr := countElements(mergedJ, "testsuite")
+	mDoc, pErr := parseJUnit(mergedJ)
+	if err := errors.Join(cErr, sErr, pErr); err != nil {
+		return fmt.Errorf("merged junit %s: %w", in.junit, err)
+	}
+	if gotCases != wantCases {
+		bad("merged junit has %d testcase(s), the %d shards have %d", gotCases, in.expect, wantCases)
+	}
+	if gotSuites != wantSuites {
+		bad("merged junit has %d suite(s), the %d shards have %d", gotSuites, in.expect, wantSuites)
+	}
+	if mDoc.rootCounts["tests"] != wantCases {
+		bad("merged junit root says tests=%d but the shards hold %d testcase(s)", mDoc.rootCounts["tests"], wantCases)
+	}
+	if mDoc.rootCounts["failures"] != wantFailures {
+		bad("merged junit root says failures=%d but the shards report %d", mDoc.rootCounts["failures"], wantFailures)
+	}
+
+	// Coverage: the merged profile must be exactly what merging the shards now
+	// gives, and the Cobertura built from it must state some covered code.
+	cPaths, err := shardFiles(in.dir, in.expect, "cover.out")
+	if err != nil {
+		return err
+	}
+	cRaws, err := readAll(cPaths)
+	if err != nil {
+		return err
+	}
+	fresh, _, err := mergeCoverage(cPaths, cRaws)
+	if err != nil {
+		return err
+	}
+	mergedC, err := os.ReadFile(in.cover)
+	if err != nil {
+		return fmt.Errorf("merged coverage profile %s was not produced: %w", in.cover, err)
+	}
+	if !bytes.Equal(mergedC, fresh) {
+		bad("merged coverage profile %s is not the merge of the %d shards' profiles", in.cover, in.expect)
+	}
+	cob, err := os.ReadFile(in.cobertura)
+	if err != nil {
+		return fmt.Errorf("cobertura report %s was not produced: %w", in.cobertura, err)
+	}
+	valid, covered, cbErr := coberturaFacts(cob)
+	switch {
+	case cbErr != nil:
+		bad("cobertura report %s: %v", in.cobertura, cbErr)
+	case valid < 1 || covered < 0 || covered > valid:
+		bad("cobertura report %s states lines-covered=%d of lines-valid=%d", in.cobertura, covered, valid)
+	}
+
+	// Failure listing: it must exist and must have read every shard.
+	fb, err := os.ReadFile(in.failures)
+	if err != nil {
+		return fmt.Errorf("failure report %s was not produced: %w", in.failures, err)
+	}
+	var rep failureReport
+	if err := json.Unmarshal(fb, &rep); err != nil {
+		return fmt.Errorf("failure report %s: %w", in.failures, err)
+	}
+	if rep.Shards != in.expect || len(rep.PerShard) != in.expect {
+		bad("the failure listing read %d shard(s) (%d entries), want %d", rep.Shards, len(rep.PerShard), in.expect)
+	}
+	for _, s := range rep.PerShard {
+		if s.Events < 1 {
+			bad("the failure listing read no events from shard %d", s.Shard)
+		}
+	}
+	if wantFailures > 0 && len(rep.Failed) == 0 {
+		bad("the shards report %d failure(s) in JUnit but the failure listing names none", wantFailures)
+	}
+
+	if len(problems) > 0 {
+		return fmt.Errorf("the merged reports do not match the shards:\n  - %s", strings.Join(problems, "\n  - "))
+	}
+	fmt.Fprintf(stdout, "crosscheck OK: %d shards, %d testcases in %d suites, %d failure(s), coverage %d/%d lines, failure listing read %d shards\n",
+		in.expect, wantCases, wantSuites, wantFailures, covered, valid, rep.Shards)
+	return nil
 }

@@ -444,7 +444,7 @@ check_reports_job() {
     printf 'unit job has no shard matrix to size the reports job'"'"'s -expect against\n' >&2
     return 1
   fi
-  for sub in junit coverage failures; do
+  for sub in junit coverage failures crosscheck; do
     call="$(grep -E "mergetestreports $sub( |\$)" <<<"$reports_block" | head -n1 || true)"
     if [ -z "$call" ]; then
       printf 'reports never runs mergetestreports %s\n' "$sub" >&2
@@ -459,6 +459,12 @@ check_reports_job() {
     fi
   done
 
+  # The behaviour check reads what `failures` wrote: the two must name the same file.
+  if ! grep -qE 'mergetestreports failures .*-report \.tmp/coverage/failures\.json' <<<"$reports_block" \
+     || ! grep -qE 'mergetestreports crosscheck .*-failures \.tmp/coverage/failures\.json' <<<"$reports_block"; then
+    printf 'reports: failures must write -report .tmp/coverage/failures.json and crosscheck must read it with -failures\n' >&2
+    status=1
+  fi
   for want in go-coverage go-junit; do
     if ! grep -qE "^ {10}name: $want *\$" <<<"$reports_block"; then
       printf 'reports does not publish an artifact named exactly %s\n' "$want" >&2
@@ -873,6 +879,27 @@ assert_check_fails 'changed only the coverage merge'"'"'s -expect' check_reports
 # The unit matrix changes size and the reports job does not follow.
 assert_check_fails 'shrank the unit matrix to 3 shards while reports still expects 4' \
   check_reports_job "$unit_mismatched_shards"
+
+# The behaviour step deleted: only the greps would be left standing guard.
+reports_without_crosscheck="$tmpdir/reports-without-crosscheck.yml"
+awk '
+  /Verify the merged reports against the shards/ { skip=1 }
+  skip && /^      # actions\/upload-artifact/ { skip=0 }
+  !skip { print }
+' "$workflow" > "$reports_without_crosscheck"
+cmp -s "$workflow" "$reports_without_crosscheck" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_without_crosscheck did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'deleted the crosscheck step from the reports job' check_reports_job "$reports_without_crosscheck"
+
+reports_crosscheck_expect_drift="$tmpdir/reports-crosscheck-expect-drift.yml"
+sed 's/mergetestreports crosscheck -dir .tmp\/unit-shards -expect 4/mergetestreports crosscheck -dir .tmp\/unit-shards -expect 3/' \
+  "$workflow" > "$reports_crosscheck_expect_drift"
+cmp -s "$workflow" "$reports_crosscheck_expect_drift" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_crosscheck_expect_drift did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'changed only the crosscheck step'"'"'s -expect' check_reports_job "$reports_crosscheck_expect_drift"
+
+reports_failures_without_report="$tmpdir/reports-failures-without-report.yml"
+sed 's/ -report .tmp\/coverage\/failures.json//' "$workflow" > "$reports_failures_without_report"
+cmp -s "$workflow" "$reports_failures_without_report" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_failures_without_report did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'stopped the failures step writing the report the crosscheck reads' check_reports_job "$reports_failures_without_report"
 
 reports_coverage_renamed="$tmpdir/reports-coverage-renamed.yml"
 sed 's/^\( \{10\}\)name: go-coverage$/\1name: go-coverage-merged/' "$workflow" > "$reports_coverage_renamed"

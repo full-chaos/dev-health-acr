@@ -301,7 +301,7 @@ func TestMergeJUnitKeepsFailureBodiesAndSkippedElements(t *testing.T) {
 
 func TestMergeJUnitCarriesSkippedTotalOnlyWhenAShardHasIt(t *testing.T) {
 	a := "<testsuites tests=\"1\" failures=\"0\" errors=\"0\" skipped=\"1\" time=\"1\">\n" +
-		"<testsuite tests=\"1\" name=\"a\"></testsuite>\n</testsuites>"
+		"<testsuite tests=\"1\" skipped=\"1\" name=\"a\"></testsuite>\n</testsuites>"
 	b := "<testsuites tests=\"1\" failures=\"0\" errors=\"0\" time=\"1\">\n" +
 		"<testsuite tests=\"1\" name=\"b\"></testsuite>\n</testsuites>"
 	out, st, err := mergeJUnit([]string{"a", "b"}, [][]byte{[]byte(a), []byte(b)})
@@ -352,25 +352,24 @@ func TestCollectFailuresReadsEveryShard(t *testing.T) {
 	s2 := `{"Action":"pass","Package":"p/b","Test":"TestY"}` + "\n" +
 		`{"Action":"pass","Package":"p/b"}` + "\n"
 	s3 := `{"Action":"fail","Package":"p/c","Test":"TestZ"}` + "\n" +
-		`{"Action":"fail","Package":"p/c","Test":"TestZ"}` + "\n" + // duplicate event, counted once
-		"not json at all\n"
+		`{"Action":"fail","Package":"p/c","Test":"TestZ"}` + "\n" // duplicate event, counted once
 	rep, err := collectFailures([][]byte{[]byte(s1), []byte(s2), []byte(s3)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := rep.failed["p/a/TestX"]; len(got) != 1 || got[0] != 1 {
-		t.Fatalf("p/a/TestX: %v", rep.failed)
+	if got := rep.Failed["p/a/TestX"]; len(got) != 1 || got[0] != 1 {
+		t.Fatalf("p/a/TestX: %v", rep.Failed)
 	}
-	if _, ok := rep.failed["p/a"]; !ok {
-		t.Fatalf("a package-level failure was dropped: %v", rep.failed)
+	if _, ok := rep.Failed["p/a"]; !ok {
+		t.Fatalf("a package-level failure was dropped: %v", rep.Failed)
 	}
-	if got := rep.failed["p/c/TestZ"]; len(got) != 1 || got[0] != 3 {
-		t.Fatalf("a failure in the LAST shard must be reported, not only the first shard's: %v", rep.failed)
+	if got := rep.Failed["p/c/TestZ"]; len(got) != 1 || got[0] != 3 {
+		t.Fatalf("a failure in the LAST shard must be reported, not only the first shard's: %v", rep.Failed)
 	}
-	if _, ok := rep.failed["p/b/TestY"]; ok {
-		t.Fatalf("a passing test was reported as failed: %v", rep.failed)
+	if _, ok := rep.Failed["p/b/TestY"]; ok {
+		t.Fatalf("a passing test was reported as failed: %v", rep.Failed)
 	}
-	if rep.malformed != 1 || len(rep.perShard) != 3 {
+	if rep.Shards != 3 || len(rep.PerShard) != 3 {
 		t.Fatalf("report = %+v", rep)
 	}
 }
@@ -456,5 +455,318 @@ func TestRunRejectsBadUsage(t *testing.T) {
 		if code := run(args, &so, &se); code == 0 {
 			t.Fatalf("args %v exited 0", args)
 		}
+	}
+}
+
+// --- fail closed (CHAOS-3895 r1) ---------------------------------------------
+//
+// The class: the merger accepted malformed input silently. Each guard below has
+// a plant that the previous behaviour let through.
+
+func TestShardFilesRefusesTwoArtifactsForOneShardIndex(t *testing.T) {
+	// strconv.Atoi maps "01" to 1; without the canonical-spelling rule the
+	// second artifact for shard 1 was ignored, not refused.
+	dir := writeShards(t, "cover.out", "x", "x")
+	extra := filepath.Join(dir, shardArtifactPrefix+"01")
+	if err := os.MkdirAll(extra, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(extra, "cover.out"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := shardFiles(dir, 2, "cover.out")
+	mustFail(t, err, "plain decimal")
+}
+
+func TestShardFilesRefusesOtherNonCanonicalShardNames(t *testing.T) {
+	for _, name := range []string{"+1", "1.zip", "1 ", "x", "", "0", "3"} {
+		dir := writeShards(t, "cover.out", "x", "x")
+		if err := os.MkdirAll(filepath.Join(dir, shardArtifactPrefix+name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := shardFiles(dir, 2, "cover.out"); err == nil {
+			t.Fatalf("shard directory suffix %q was accepted", name)
+		}
+	}
+}
+
+func TestCollectFailuresRefusesAnyLineThatIsNotAnEvent(t *testing.T) {
+	// A valid failure, then a mangled line: the mangled one could have been the
+	// failure. Also an event with no Action, and JSON that is not an object.
+	valid := `{"Action":"fail","Package":"p/a","Test":"TestX"}` + "\n"
+	for name, tail := range map[string]string{
+		"not json":         "not-json\n",
+		"truncated json":   `{"Action":"fail","Package":"p/b","Te` + "\n",
+		"no action":        `{"Package":"p/b"}` + "\n",
+		"json array":       `["fail"]` + "\n",
+		"json string":      `"fail"` + "\n",
+		"trailing garbage": `{"Action":"pass"} junk` + "\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := collectFailures([][]byte{[]byte(valid + tail)})
+			mustFail(t, err, "line 2 is not a test2json event")
+		})
+	}
+}
+
+func TestMergeJUnitRefusesRootTotalsThatAreMissingOrNotIntegers(t *testing.T) {
+	suite := "<testsuite tests=\"2\" failures=\"1\" name=\"a\"></testsuite>"
+	root := func(attrs string) string { return "<testsuites " + attrs + ">" + suite + "</testsuites>" }
+	cases := map[string]string{
+		"tests missing":      root(`failures="1" errors="0" time="1"`),
+		"failures missing":   root(`tests="2" errors="0" time="1"`),
+		"errors missing":     root(`tests="2" failures="1" time="1"`),
+		"time missing":       root(`tests="2" failures="1" errors="0"`),
+		"tests fractional":   root(`tests="1.5" failures="1" errors="0" time="1"`),
+		"tests negative":     root(`tests="-2" failures="1" errors="0" time="1"`),
+		"tests padded":       root(`tests="02" failures="1" errors="0" time="1"`),
+		"tests empty":        root(`tests="" failures="1" errors="0" time="1"`),
+		"time not a number":  root(`tests="2" failures="1" errors="0" time="soon"`),
+		"skipped fractional": root(`tests="2" failures="1" errors="0" skipped="0.5" time="1"`),
+		"tests below suites": root(`tests="1" failures="1" errors="0" time="1"`),
+		"tests above suites": root(`tests="3" failures="1" errors="0" time="1"`),
+		"failures mismatch":  root(`tests="2" failures="0" errors="0" time="1"`),
+		"errors mismatch":    root(`tests="2" failures="1" errors="4" time="1"`),
+		"skipped mismatch":   root(`tests="2" failures="1" errors="0" skipped="3" time="1"`),
+		// Consistent but impossible: root and suite agree on a negative count, so
+		// only the non-negative rule (not the sum rule) can refuse it.
+		"negative but summing": "<testsuites tests=\"-1\" failures=\"0\" errors=\"0\" time=\"1\"><testsuite tests=\"-1\" failures=\"0\" name=\"a\"></testsuite></testsuites>",
+		"suite tests missing":  "<testsuites tests=\"0\" failures=\"0\" errors=\"0\" time=\"1\"><testsuite name=\"a\"></testsuite></testsuites>",
+		"suite tests bad":      "<testsuites tests=\"0\" failures=\"0\" errors=\"0\" time=\"1\"><testsuite tests=\"one\" name=\"a\"></testsuite></testsuites>",
+		"suite failures bad":   "<testsuites tests=\"1\" failures=\"0\" errors=\"0\" time=\"1\"><testsuite tests=\"1\" failures=\"-1\" name=\"a\"></testsuite></testsuites>",
+	}
+	// The unmutated root is valid: the plants above are the only difference.
+	if _, _, err := mergeJUnit([]string{"ok"}, [][]byte{[]byte(root(`tests="2" failures="1" errors="0" time="1"`))}); err != nil {
+		t.Fatalf("control document was refused: %v", err)
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, _, err := mergeJUnit([]string{"a"}, [][]byte{[]byte(body)}); err == nil {
+				t.Fatalf("accepted %q", body)
+			}
+		})
+	}
+}
+
+func TestMergeJUnitRefusesMoreThanOneRoot(t *testing.T) {
+	a := gotestsumDoc(1, 0, "1.000000", gotestsumSuite("example.com/m/a", 1, 0))
+	b := gotestsumDoc(5, 0, "9.000000", gotestsumSuite("example.com/m/b", 5, 0))
+	// Second root whose totals are exactly the combined sum: the totals-versus-
+	// suites rule alone would accept this, so only the one-root rule refuses it.
+	summing := gotestsumDoc(1, 0, "1.000000", gotestsumSuite("example.com/m/a", 1, 0)) +
+		gotestsumDoc(6, 0, "9.000000", gotestsumSuite("example.com/m/b", 5, 0))
+	for name, body := range map[string]string{
+		"two documents": a + b,
+		"two documents whose second root sums both": summing,
+		"stray element": a + "<extra/>",
+		"trailing text": a + "trailing text",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, _, err := mergeJUnit([]string{"a"}, [][]byte{[]byte(body)}); err == nil {
+				t.Fatalf("accepted %s", name)
+			}
+		})
+	}
+	// Whitespace and a trailing comment after the root are not a second root.
+	if _, _, err := mergeJUnit([]string{"a"}, [][]byte{[]byte(a + "\n\n<!-- end -->\n")}); err != nil {
+		t.Fatalf("trailing whitespace/comment refused: %v", err)
+	}
+}
+
+func TestMergeJUnitCountsSkippedFromSuitesWhenTheRootCarriesNone(t *testing.T) {
+	// gotestsum puts `skipped` on suites, never on the root: the real shards of
+	// main run 36716154379 hold 40 skipped tests and a root with no skipped
+	// attribute. The summary must say 40, not the root's absence.
+	suite := "<testsuite tests=\"3\" failures=\"0\" skipped=\"2\" name=\"a\"></testsuite>"
+	doc := "<testsuites tests=\"3\" failures=\"0\" errors=\"0\" time=\"1\">" + suite + "</testsuites>"
+	out, st, err := mergeJUnit([]string{"a"}, [][]byte{[]byte(doc)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.skipped != 2 {
+		t.Fatalf("skipped = %d, want 2 (from the suite)", st.skipped)
+	}
+	if strings.Contains(string(out), "skipped=\"2\" time") {
+		t.Fatalf("root grew a skipped attribute the source root never had: %s", out)
+	}
+}
+
+// --- crosscheck --------------------------------------------------------------
+
+// crosscheckFixture lays out N shards, runs the three merge commands through
+// run() exactly as the workflow does, writes a Cobertura file, and returns the
+// crosscheck arguments. Each negative test then damages one merged file.
+type crosscheckFixture struct {
+	dir, out string
+	args     []string
+}
+
+func newCrosscheckFixture(t *testing.T) crosscheckFixture {
+	t.Helper()
+	sa := gotestsumSuite("example.com/m/a", 3, 1)
+	sb := gotestsumSuite("example.com/m/b", 2, 0)
+	dir := t.TempDir()
+	shards := map[string]map[string]string{
+		"1": {
+			"cover.out":    profA,
+			"junit.xml":    gotestsumDoc(3, 1, "1.500000", sa),
+			"go-test.json": `{"Action":"fail","Package":"example.com/m/a","Test":"TestBad0"}` + "\n",
+		},
+		"2": {
+			"cover.out":    profB,
+			"junit.xml":    gotestsumDoc(2, 0, "1.500000", sb),
+			"go-test.json": `{"Action":"pass","Package":"example.com/m/b"}` + "\n",
+		},
+	}
+	for idx, files := range shards {
+		for name, body := range files {
+			p := filepath.Join(dir, shardArtifactPrefix+idx, name)
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	out := t.TempDir()
+	var so, se bytes.Buffer
+	for _, args := range [][]string{
+		{"junit", "-dir", dir, "-expect", "2", "-out", filepath.Join(out, "junit.xml")},
+		{"coverage", "-dir", dir, "-expect", "2", "-out", filepath.Join(out, "cover.out")},
+		{"failures", "-dir", dir, "-expect", "2", "-report", filepath.Join(out, "failures.json")},
+	} {
+		if code := run(args, &so, &se); code != 0 {
+			t.Fatalf("%v exited %d: %s", args, code, se.String())
+		}
+	}
+	if err := os.WriteFile(filepath.Join(out, "coverage.xml"),
+		[]byte(`<?xml version="1.0"?><coverage line-rate="0.5" lines-covered="2" lines-valid="4"></coverage>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return crosscheckFixture{dir: dir, out: out, args: []string{
+		"crosscheck", "-dir", dir, "-expect", "2",
+		"-junit", filepath.Join(out, "junit.xml"), "-cover", filepath.Join(out, "cover.out"),
+		"-cobertura", filepath.Join(out, "coverage.xml"), "-failures", filepath.Join(out, "failures.json"),
+	}}
+}
+
+func (f crosscheckFixture) run(t *testing.T) (int, string) {
+	t.Helper()
+	var so, se bytes.Buffer
+	code := run(f.args, &so, &se)
+	return code, so.String() + se.String()
+}
+
+func (f crosscheckFixture) rewrite(t *testing.T, name string, fn func(string) string) {
+	t.Helper()
+	p := filepath.Join(f.out, name)
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutated := fn(string(b))
+	if mutated == string(b) {
+		t.Fatalf("mutation of %s changed nothing", name)
+	}
+	if err := os.WriteFile(p, []byte(mutated), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCrosscheckPassesOnACorrectMerge(t *testing.T) {
+	f := newCrosscheckFixture(t)
+	code, out := f.run(t)
+	if code != 0 || !strings.Contains(out, "crosscheck OK: 2 shards, 5 testcases in 2 suites, 1 failure(s)") {
+		t.Fatalf("exit %d: %s", code, out)
+	}
+}
+
+func TestCrosscheckFailsWhenTheMergedReportsDoNotMatchTheShards(t *testing.T) {
+	cases := []struct {
+		name string
+		want string
+		do   func(t *testing.T, f crosscheckFixture)
+	}{
+		{"a suite dropped from the merged junit", "merged junit has", func(t *testing.T, f crosscheckFixture) {
+			f.rewrite(t, "junit.xml", func(s string) string {
+				i := strings.Index(s, "\t<testsuite tests=\"2\"")
+				j := i + strings.Index(s[i:], "</testsuite>\n") + len("</testsuite>\n")
+				return s[:i] + s[j:]
+			})
+		}},
+		{"a testcase dropped from a merged suite with every stated total intact", "merged junit has", func(t *testing.T, f crosscheckFixture) {
+			f.rewrite(t, "junit.xml", func(s string) string {
+				i := strings.Index(s, "\t\t<testcase classname=\"example.com/m/b\" name=\"TestOK1\"")
+				j := i + strings.Index(s[i:], "</testcase>\n") + len("</testcase>\n")
+				return s[:i] + s[j:]
+			})
+		}},
+		{"the merged junit root total is wrong", "merged junit root says tests=", func(t *testing.T, f crosscheckFixture) {
+			// Suite content intact, only the stated total edited.
+			f.rewrite(t, "junit.xml", func(s string) string { return strings.Replace(s, `<testsuites tests="5"`, `<testsuites tests="4"`, 1) })
+		}},
+		{"the merged junit root failures are wrong", "merged junit root says failures=", func(t *testing.T, f crosscheckFixture) {
+			f.rewrite(t, "junit.xml", func(s string) string { return strings.Replace(s, `failures="1" errors`, `failures="0" errors`, 1) })
+		}},
+		{"the merged coverage profile is not the merge", "is not the merge", func(t *testing.T, f crosscheckFixture) {
+			f.rewrite(t, "cover.out", func(s string) string { return strings.Replace(s, "b/b.go:5.1,6.2 1 1", "b/b.go:5.1,6.2 1 0", 1) })
+		}},
+		{"the cobertura report covers nothing", "lines-covered=", func(t *testing.T, f crosscheckFixture) {
+			f.rewrite(t, "coverage.xml", func(s string) string { return strings.Replace(s, `lines-valid="4"`, `lines-valid="0"`, 1) })
+		}},
+		{"the cobertura report is not cobertura", "cobertura report", func(t *testing.T, f crosscheckFixture) {
+			f.rewrite(t, "coverage.xml", func(s string) string { return strings.Replace(s, "<coverage", "<report", 1) })
+		}},
+		{"the failure listing read fewer shards", "failure listing read", func(t *testing.T, f crosscheckFixture) {
+			f.rewrite(t, "failures.json", func(s string) string { return strings.Replace(s, `"shards": 2`, `"shards": 1`, 1) })
+		}},
+		{"the failure listing names no failure although junit has one", "names none", func(t *testing.T, f crosscheckFixture) {
+			f.rewrite(t, "failures.json", func(s string) string {
+				return strings.Replace(s, `"example.com/m/a/TestBad0": [
+      1
+    ]`, ``, 1)
+			})
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newCrosscheckFixture(t)
+			c.do(t, f)
+			code, out := f.run(t)
+			if code == 0 {
+				t.Fatalf("crosscheck passed: %s", out)
+			}
+			if !strings.Contains(out, c.want) {
+				t.Fatalf("output %q does not contain %q", out, c.want)
+			}
+		})
+	}
+}
+
+func TestCrosscheckFailsWhenAMergeStepNeverRan(t *testing.T) {
+	// The disabled-step case the grep guard cannot see: the step's text is in
+	// the workflow, but its output does not exist.
+	for _, name := range []string{"junit.xml", "cover.out", "coverage.xml", "failures.json"} {
+		t.Run(name, func(t *testing.T) {
+			f := newCrosscheckFixture(t)
+			if err := os.Remove(filepath.Join(f.out, name)); err != nil {
+				t.Fatal(err)
+			}
+			code, out := f.run(t)
+			if code == 0 || !strings.Contains(out, "was not produced") {
+				t.Fatalf("exit %d: %s", code, out)
+			}
+		})
+	}
+}
+
+func TestCrosscheckFailsWhenAShardIsMissing(t *testing.T) {
+	f := newCrosscheckFixture(t)
+	if err := os.RemoveAll(filepath.Join(f.dir, shardArtifactPrefix+"2")); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := f.run(t); code == 0 || !strings.Contains(out, "shard 2 of 2 is missing") {
+		t.Fatalf("exit %d: %s", code, out)
 	}
 }
