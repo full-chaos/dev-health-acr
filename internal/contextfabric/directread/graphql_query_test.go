@@ -26,6 +26,11 @@ func TestGraphQLRootPolicyIsDerivedFromTheCatalogue(t *testing.T) {
 	}
 	cat := policy.Catalogue()
 	want := map[string][]string{}
+	excluded := map[string]bool{}
+	for _, name := range directread.GraphQLDesignExcludedRoots() {
+		excluded[name] = true
+	}
+	servedRoots := map[string]bool{}
 	for _, class := range directread.CallerClassVocabulary() {
 		for _, op := range cat.Operations(class) {
 			doc, err := parser.ParseQuery(&ast.Source{Input: op.DocumentText})
@@ -33,6 +38,10 @@ func TestGraphQLRootPolicyIsDerivedFromTheCatalogue(t *testing.T) {
 				t.Fatal(err)
 			}
 			root := doc.Operations[0].SelectionSet[0].(*ast.Field).Name
+			servedRoots[root] = true
+			if excluded[root] {
+				continue // design D.8: not a graphql_query root
+			}
 			if !slices.Contains(want[root], op.Name) {
 				want[root] = append(want[root], op.Name)
 			}
@@ -53,6 +62,16 @@ func TestGraphQLRootPolicyIsDerivedFromTheCatalogue(t *testing.T) {
 	for _, refused := range policy.RefusedRootFields() {
 		if _, ok := got[refused]; ok {
 			t.Errorf("root %s both allowed and refused", refused)
+		}
+	}
+	// The design exclusion cannot go stale: each excluded root is still a
+	// served run_operation root, and is refused by graphql_query.
+	for name := range excluded {
+		if !servedRoots[name] {
+			t.Errorf("design-excluded root %s is no longer a served run_operation root: drop it from the exclusion", name)
+		}
+		if !slices.Contains(policy.RefusedRootFields(), name) {
+			t.Errorf("design-excluded root %s is not refused", name)
 		}
 	}
 	for _, name := range []string{"busFactor", "pr", "reviewEdges", "savedReports", "dataHealth", "productTelemetryDashboard"} {

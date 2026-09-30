@@ -235,5 +235,10 @@
     "testopsRisk",
     "workItemTeamAttributions",
     "workUnitTeamAttributions"
+  ],
+  "design_excluded_roots": [
+    "home",
+    "recommendations",
+    "workItemTeamAttributions"
   ]
 }

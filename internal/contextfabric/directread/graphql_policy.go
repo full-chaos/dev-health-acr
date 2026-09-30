@@ -89,6 +89,33 @@ func EmbeddedOpsSchema() []byte {
 	return []byte(file.SDL)
 }
 
+// graphqlDesignExcludedRoots are served run_operation roots that are NOT
+// graphql_query roots: design r5 D.8 excludes "the 3 resolvers that panic"
+// from the free-form root allowlist, and GWC's MCP listener ceiling (ops
+// PR #3425, mcpRootFieldAllowlist) leaves out the same three on purpose.
+// They stay served through run_operation (CHAOS-7202). Widening needs a
+// listener ceiling change first; a test holds this set to roots that are
+// still served, so it cannot silently go stale.
+var graphqlDesignExcludedRoots = map[string]string{
+	"home":                     "design r5 D.8: not a graphql_query root (served by run_operation only); outside the MCP listener ceiling",
+	"recommendations":          "design r5 D.8: not a graphql_query root (served by run_operation only); outside the MCP listener ceiling",
+	"workItemTeamAttributions": "design r5 D.8: not a graphql_query root (served by run_operation only); outside the MCP listener ceiling",
+}
+
+// GraphQLDesignExcludedRoots returns the served run_operation roots that
+// graphql_query excludes by design, sorted.
+func GraphQLDesignExcludedRoots() []string {
+	return sortedSet(boolSet(graphqlDesignExcludedRoots))
+}
+
+func boolSet[T any](m map[string]T) map[string]bool {
+	out := make(map[string]bool, len(m))
+	for k := range m {
+		out[k] = true
+	}
+	return out
+}
+
 // GraphQLLimits are the query caps acr applies before the wire. GWC's MCP
 // listener (CHAOS-7085) has its own caps (depth 10, aliases 15, complexity
 // 150 in gqlgen's default metric: one per selected field); acr's are at
@@ -245,6 +272,9 @@ func NewGraphQLPolicy(cat *Catalogue, sdl []byte, limits GraphQLLimits) (*GraphQ
 		cand, field, err := deriveCandidate(schema, op)
 		if err != nil {
 			return nil, policyErr("operation %q: %v", op.Name, err)
+		}
+		if _, excluded := graphqlDesignExcludedRoots[field]; excluded {
+			continue
 		}
 		root := p.roots[field]
 		if root == nil {
@@ -516,6 +546,9 @@ type graphqlRootsFile struct {
 	OperationTypes    []string            `json:"operation_types"`
 	Roots             []graphqlRootsEntry `json:"roots"`
 	RefusedRootFields []string            `json:"refused_root_fields"`
+	// DesignExcludedRoots are served run_operation roots that are not
+	// graphql_query roots (design D.8), a subset of RefusedRootFields.
+	DesignExcludedRoots []string `json:"design_excluded_roots"`
 }
 
 type graphqlRootsEntry struct {
@@ -531,14 +564,15 @@ type graphqlRootsEntry struct {
 // derived policy: the allowlist GWC's MCP listener must admit.
 func (p *GraphQLPolicy) RootsFileJSON(generator string) ([]byte, error) {
 	file := graphqlRootsFile{
-		Contract:          GraphQLRootsContract,
-		Generator:         generator,
-		SchemaDigest:      p.catalogue.SchemaDigest(),
-		OperationsSource:  "contracts/mcp/operations.v1.json",
-		Limits:            p.limits,
-		CostWeights:       map[CostClass]int{},
-		OperationTypes:    []string{"query"},
-		RefusedRootFields: p.RefusedRootFields(),
+		Contract:            GraphQLRootsContract,
+		Generator:           generator,
+		SchemaDigest:        p.catalogue.SchemaDigest(),
+		OperationsSource:    "contracts/mcp/operations.v1.json",
+		Limits:              p.limits,
+		CostWeights:         map[CostClass]int{},
+		OperationTypes:      []string{"query"},
+		RefusedRootFields:   p.RefusedRootFields(),
+		DesignExcludedRoots: GraphQLDesignExcludedRoots(),
 	}
 	for _, class := range CostClassVocabulary() {
 		file.CostWeights[class] = GraphQLCostWeight(class)

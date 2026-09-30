@@ -80,9 +80,16 @@ func TestGraphQLQueryEventVocabulariesMatchProducer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The operations a graphql_query root can map to: the candidates of the
+	// derived root policy (design-excluded roots never appear).
+	policy, err := directread.DefaultGraphQLPolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = cat
 	var ops []string
-	for _, op := range cat.Operations(directread.CallerUnrestricted) {
-		ops = append(ops, op.Name)
+	for _, root := range policy.Roots() {
+		ops = append(ops, root.Operations()...)
 	}
 	var classes, budgets []string
 	for _, c := range directread.GraphQLUpstreamErrorClasses() {
