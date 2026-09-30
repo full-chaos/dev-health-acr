@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check test test-split test-race test-race-shared test-race-isolated test-race-split test-shuffle-random test-coverage isolated-timeout crosscompile hosted-integration clients-real vet contract-write contract-test codegraph-contract shard-plan canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract
+.PHONY: fmt fmt-check test test-split test-race test-race-shared test-race-isolated test-race-split test-shuffle-random test-coverage coverage-cobertura isolated-timeout crosscompile hosted-integration clients-real vet contract-write contract-test codegraph-contract shard-plan canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract
 
 RELEASE_OUTPUT ?= .tmp/release
 RELEASE_VERSION ?=
@@ -210,6 +210,15 @@ test-coverage:
 		scripts/ci/retry.sh go run github.com/boumenot/gocover-cobertura@$(GOCOVER_COBERTURA_VERSION) < $(COVERAGE_PROFILE) > $(COVERAGE_COBERTURA) || status=$$?; \
 	fi; \
 	exit $$status
+
+# CHAOS-3895: convert the coverage profile at $(COVERAGE_PROFILE) to Cobertura
+# XML. In CI's `reports` job that profile is the MERGE of every unit shard's
+# (ci/mergetestreports), so Cobertura is produced once, from one profile;
+# the gocover-cobertura version is the same pin test-coverage uses. The
+# converter runs under `sh -c` so each retry reopens its input and output
+# instead of resuming a stdin the failed attempt already consumed.
+coverage-cobertura:
+	scripts/ci/retry.sh sh -c 'go run github.com/boumenot/gocover-cobertura@$(GOCOVER_COBERTURA_VERSION) < "$$1" > "$$2"' cobertura $(COVERAGE_PROFILE) $(COVERAGE_COBERTURA)
 
 # CHAOS-6220: single source of truth for "what plain (non -race) -timeout
 # budget does an ISOLATED package (scripts/ci/test-shard.sh isolated) need,"

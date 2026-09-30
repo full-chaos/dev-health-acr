@@ -408,21 +408,94 @@ jobs:
             .Output
           ' .tmp/coverage/go-test.json
           exit 1
+      # CHAOS-3895: the shard's raw reports go up as ONE intermediate artifact,
+      # go-unit-shard-<i>, for the `reports` job below to merge. They are not the
+      # published reports: the published names `go-coverage` and `go-junit` are
+      # written once, by `reports`, because a matrix job that uploaded under
+      # those names would collide across its own legs. The per-shard Cobertura
+      # the shards used to upload (go-coverage-shard-<i>) is dropped: `reports`
+      # converts the MERGED profile once, so the shard copies had no reader.
+      # cover.out is what gets merged (Cobertura XML cannot be concatenated);
+      # go-test.json feeds the cross-shard failure listing. `if: always()` so a
+      # failing shard still hands `reports` what it produced.
       # actions/upload-artifact v7.0.1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
-          name: go-coverage-shard-${{ matrix.shard }}
-          path: .tmp/coverage/coverage.xml
+          name: go-unit-shard-${{ matrix.shard }}
+          path: |
+            .tmp/coverage/cover.out
+            .tmp/coverage/junit.xml
+            .tmp/coverage/go-test.json
+          # The reports live under the dot-directory .tmp/; upload-artifact
+          # drops hidden paths by default (see container-oci-scan below).
+          include-hidden-files: true
           if-no-files-found: warn
+          retention-days: 7
+
+  # CHAOS-3895: merge the unit shards' reports back into the single
+  # `go-coverage` (Cobertura) and `go-junit` artifacts the ruleset-facing
+  # contract has always been. All merging is ci/mergetestreports (Go; this
+  # repo carries no Python) and the Cobertura conversion is the same pinned
+  # gocover-cobertura `make test-coverage` uses, run once over the merged
+  # profile. The tool refuses a partial merge -- a missing or extra shard, an
+  # empty report, a suite present in two shards -- because a merged report
+  # covering 3 of 4 shards reads exactly like a complete one. -expect must equal
+  # the unit matrix size; scripts/ci/test-workflow-contract.sh proves it does.
+  #
+  # `if: !cancelled()` (not `success()`): when a shard's tests fail this job
+  # must still publish the merged JUnit showing WHAT failed. It stays skipped
+  # only if `unit` never ran (its own upstream failed), and `verify` reads that
+  # as a failed lane. Each merge step carries its own `if: !cancelled()` so a
+  # coverage problem cannot hide the JUnit merge or the failure listing.
+  reports:
+    name: reports (merged go-coverage and go-junit)
+    needs: unit
+    if: ${{ !cancelled() && needs.unit.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.0'
+          cache: true
+      # actions/download-artifact v8.0.1. One directory per artifact
+      # (merge-multiple is left false), which is the layout the merge tool reads.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: go-unit-shard-*
+          path: .tmp/unit-shards
+      - name: Merge JUnit reports
+        run: go run ./ci/mergetestreports junit -dir .tmp/unit-shards -expect 4 -out .tmp/coverage/junit.xml
+      - name: Merge coverage profiles and convert to Cobertura once
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          go run ./ci/mergetestreports coverage -dir .tmp/unit-shards -expect 4 -out .tmp/coverage/cover.out
+          make coverage-cobertura
+      - name: List every shard's failed tests
+        if: ${{ !cancelled() }}
+        run: go run ./ci/mergetestreports failures -dir .tmp/unit-shards -expect 4 -summary "$GITHUB_STEP_SUMMARY"
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: ${{ !cancelled() }}
+        with:
+          name: go-coverage
+          path: .tmp/coverage/coverage.xml
+          include-hidden-files: true
+          if-no-files-found: error
           retention-days: 90
       # actions/upload-artifact v7.0.1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        if: always()
+        if: ${{ !cancelled() }}
         with:
-          name: go-junit-shard-${{ matrix.shard }}
+          name: go-junit
           path: .tmp/coverage/junit.xml
-          if-no-files-found: warn
+          include-hidden-files: true
+          if-no-files-found: error
           retention-days: 90
 
   # Runner-routing contract: race shards stay HOSTED-ONLY for now. Routed
@@ -1128,6 +1201,7 @@ jobs:
       - lint
       - docs-mermaid
       - unit
+      - reports
       - race
       - race-devhealthschema
       - race-devhealthfacts
