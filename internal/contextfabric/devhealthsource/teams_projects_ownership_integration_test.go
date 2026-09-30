@@ -451,6 +451,9 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 		{"CHAOS-7119 an orphan repo_id keeps the sentinel edge", "30000000-0000-4000-8000-00000000001d", subCHAOS7119OrphanIDKeepsTheSentinelEdge},
 		{"CHAOS-7119 a late repos row resolves the name once", "30000000-0000-4000-8000-00000000001e", subCHAOS7119LateReposRowResolvesTheNameOnce},
 		{"CHAOS-7119 pagination over name and id rows is exact", "30000000-0000-4000-8000-00000000001f", subCHAOS7119PaginationOverNameAndIDRowsIsExact},
+		// CHAOS-7139: a team above the generic 200 authorization bound.
+		{"CHAOS-7139 teams of 201 and 450 repositories keep their entity and every edge", "30000000-0000-4000-8000-000000000020", subCHAOS7139LargeTeamsKeepEntityAndAllEdges},
+		{"CHAOS-7139 a team above the entity bound fails closed alone", "30000000-0000-4000-8000-000000000021", subCHAOS7139TeamAboveEntityBoundFailsClosedAlone},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {

@@ -3692,6 +3692,77 @@
         }
       ]
     },
+    "EntityAuthorizationScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository_slugs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^[^|]*$"
+          },
+          "maxItems": 5000,
+          "uniqueItems": true
+        },
+        "project_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[^|]*$"
+          },
+          "maxItems": 200,
+          "uniqueItems": true
+        },
+        "team_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[^|]*$"
+          },
+          "maxItems": 200,
+          "uniqueItems": true
+        }
+      },
+      "anyOf": [
+        {
+          "properties": {
+            "repository_slugs": {
+              "minItems": 1
+            }
+          },
+          "required": [
+            "repository_slugs"
+          ]
+        },
+        {
+          "properties": {
+            "project_ids": {
+              "minItems": 1
+            }
+          },
+          "required": [
+            "project_ids"
+          ]
+        },
+        {
+          "properties": {
+            "team_ids": {
+              "minItems": 1
+            }
+          },
+          "required": [
+            "team_ids"
+          ]
+        }
+      ]
+    },
     "EntityProjection": {
       "type": "object",
       "additionalProperties": false,
@@ -3749,7 +3820,7 @@
           }
         },
         "authorization": {
-          "$ref": "#/$defs/AuthorizationScope"
+          "$ref": "#/$defs/EntityAuthorizationScope"
         },
         "evidence_ref_ids": {
           "type": "array",

@@ -194,7 +194,7 @@ func TestChaos4542_CheckpointMarkerMovedWithTheJoin(t *testing.T) {
 	// NULL repo_id ownership rows resolved by name (ownershipresolve, K11).
 	// Rows omitted under v12 never move their own updated_at, so only a
 	// rebuild projects them; the same test's v12 case proves the refusal.
-	if want := "devhealthsource.teams_projects.v13"; TeamsProjectsSourceVersion != want {
+	if want := "devhealthsource.teams_projects.v14"; TeamsProjectsSourceVersion != want {
 		t.Fatalf("TeamsProjectsSourceVersion = %q, want %q -- changing this constant is a deliberate full-rebuild decision, so update this test with the reason in the constant's doc comment", TeamsProjectsSourceVersion, want)
 	}
 }

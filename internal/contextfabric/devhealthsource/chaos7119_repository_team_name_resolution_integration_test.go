@@ -280,10 +280,10 @@ func subCHAOS7119LateReposRowResolvesTheNameOnce(t *testing.T, ctx context.Conte
 // The repositories are spread over five teams (90 each) on purpose. queryTeams'
 // authorization_repositories list (untouched here; CHAOS-7130) counts raw
 // repo_full_name values, so 90 name rows plus 45 differently-cased id rows is
-// 135 entries. A team over the v1 contract bound (200) has its team ENTITY
-// quarantined, and every edge on the same page is dropped with it
-// (endpoint_entity_quarantined) -- a pre-existing limit of that list, not of
-// this edge, found while writing this case and reported separately.
+// 135 entries. Before CHAOS-7139 a team over the generic contract bound (200)
+// had its team ENTITY quarantined and every edge on the same page dropped
+// with it (endpoint_entity_quarantined); the entity bound is now 5000, and
+// this case keeps its 90-per-team spread only to stay independent of that.
 func subCHAOS7119PaginationOverNameAndIDRowsIsExact(t *testing.T, ctx context.Context, f *ownershipFixture) {
 	const n = 450
 	at := time.Now().UTC().Truncate(time.Second)

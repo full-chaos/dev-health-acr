@@ -22,6 +22,11 @@ const (
 	quarantineOversizeScalar          = "oversize_scalar"
 	quarantineUnrepresentableInstant  = "unrepresentable_instant"
 	quarantineContractBoundViolation  = "contract_bound_violation"
+	// quarantineAuthorizationRepositoriesExceeded (CHAOS-7139) marks an entity
+	// whose authorization repository list is above the widened entity bound
+	// (ContextFabricEntityAuthorizationRepositoryMax): fail closed, distinct
+	// from a generic bound violation so a huge team is attributable.
+	quarantineAuthorizationRepositoriesExceeded = "authorization_repositories_exceeded"
 	// quarantineOrphanedDependent marks an item that was VALID on its own
 	// but existed solely to support another item that was quarantined.
 	// Distinct from every other token: nothing is wrong with this item, and
@@ -104,6 +109,9 @@ func validateCandidateItem(c candidate) (kind string, err error) {
 func quarantineReason(c candidate, err error) string {
 	if errors.Is(err, contractsv1.ErrContextFabricUnknownRelationshipType) {
 		return quarantineUnknownRelationshipType
+	}
+	if errors.Is(err, contractsv1.ErrEntityAuthorizationRepositoriesExceeded) {
+		return quarantineAuthorizationRepositoriesExceeded
 	}
 	switch {
 	case c.entity != nil:

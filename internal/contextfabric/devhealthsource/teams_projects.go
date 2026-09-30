@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -207,7 +208,15 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // the one rebuild that projects that backlog; the steady state after it is
 // rebuild-free (a new row, or a repos row arriving later with a newer
 // last_synced, reaches the graph on the ordinary incremental tick).
-const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v13"
+//
+// v13 -> v14 (CHAOS-7139): a team owning more than 200 repositories was
+// quarantined (entity authorization list above the generic 200 bound) and its
+// team_repo_ownership edges dropped as endpoint_entity_quarantined. The
+// entity bound is now 5000 (contracts/v1 ContextFabricEntityAuthorizationRepositoryMax).
+// Those teams' rows carry an updated_at already behind the checkpoint
+// watermark, so incremental catch-up never re-reads them; the bump forces the
+// one rebuild that projects them.
+const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v14"
 
 // teamsProjectsTables is this source's bounded coverage. Both tables were
 // already canonical Dev Health data; neither introduces a new ingest path.
@@ -521,6 +530,38 @@ type teamAuthorizationLedger struct {
 	mu       sync.Mutex
 	admitted int
 	denied   int
+	// large (CHAOS-7139) holds teams whose owned-repository list is above the
+	// generic 200 bound (team id -> count), so an operator can see a big team
+	// is being projected under the widened entity bound, or (count above
+	// ContextFabricEntityAuthorizationRepositoryMax) will fail closed.
+	large map[string]int
+}
+
+// recordLarge notes a team whose owned-repository count exceeds the generic
+// authorization bound.
+func (l *teamAuthorizationLedger) recordLarge(teamID string, owned int) {
+	if l == nil || owned <= 200 {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.large == nil {
+		l.large = map[string]int{}
+	}
+	l.large[teamID] = owned
+}
+
+func (l *teamAuthorizationLedger) largeTeams() map[string]int {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make(map[string]int, len(l.large))
+	for k, v := range l.large {
+		out[k] = v
+	}
+	return out
 }
 
 func (l *teamAuthorizationLedger) record(hasOwnedRepositories bool) {
@@ -578,6 +619,23 @@ func logTeamAuthorizationTelemetry(ctx context.Context, logger *slog.Logger, org
 		"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName,
 		"teams_admitted_by_ownership", admitted,
 		"teams_denied_no_ownership_data", denied)
+	// CHAOS-7139: one Warn per team above the generic 200 bound. Team id and
+	// counts only (ids are canonical, never names). Sorted for stable output.
+	large := ledger.largeTeams()
+	ids := make([]string, 0, len(large))
+	for id := range large {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		owned := large[id]
+		failClosed := owned > contractsv1.ContextFabricEntityAuthorizationRepositoryMax
+		logger.WarnContext(ctx, "devhealthsource team owns more repositories than the generic authorization bound",
+			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName,
+			"team_id", contextfabric.SanitizeLogAttr(id), "owned_repositories", owned,
+			"generic_bound", 200, "entity_bound", contractsv1.ContextFabricEntityAuthorizationRepositoryMax,
+			"quarantined_fail_closed", failClosed)
+	}
 }
 
 // repositoryOwnershipLedger (CHAOS-6561) accumulates queryRepositoryTeams'
@@ -1234,6 +1292,7 @@ WHERE tm.org_id = {org_id:String}` + sincePredicate(cursor, queryTeamsEffectiveU
 		observedAt = observedAt.UTC()
 		hasOwnedRepositories := len(ownedRepos) > 0
 		teamAuth.record(hasOwnedRepositories)
+		teamAuth.recordLarge(id, len(ownedRepos))
 		// CHAOS-4390: an empty ownedRepos here must NOT reach
 		// ContextFabricAuthorizationScope as a bare empty list -- see
 		// noTeamOwnershipSentinel's own doc comment for why that would
