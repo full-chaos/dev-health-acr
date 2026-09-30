@@ -277,6 +277,12 @@ type fakeOAuthPurger struct {
 	calls  []fakeOAuthPurgeCall
 	result storagepostgres.OAuthPurgeResult
 	err    error
+
+	// remaining and remainingErr script CountPurgeRemaining; remainingCalls
+	// records each probe, so a test can prove a failed purge is not probed.
+	remaining      storagepostgres.OAuthPurgeRemaining
+	remainingErr   error
+	remainingCalls []fakeOAuthPurgeCall
 }
 
 type fakeOAuthPurgeCall struct {
@@ -289,6 +295,13 @@ func (f *fakeOAuthPurger) PurgeExpired(_ context.Context, _ time.Time, requestGr
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, fakeOAuthPurgeCall{requestGrace: requestGrace, clientIdle: clientIdle, limit: limit})
 	return f.result, f.err
+}
+
+func (f *fakeOAuthPurger) CountPurgeRemaining(_ context.Context, _ time.Time, requestGrace, clientIdle time.Duration, limit int) (storagepostgres.OAuthPurgeRemaining, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.remainingCalls = append(f.remainingCalls, fakeOAuthPurgeCall{requestGrace: requestGrace, clientIdle: clientIdle, limit: limit})
+	return f.remaining, f.remainingErr
 }
 
 func oauthConfiguredTestConfig() config.Config {
@@ -406,21 +419,81 @@ func TestOAuthPurgeFunc_logsOneCountLineOnEveryTick(t *testing.T) {
 	if total, err := purge(context.Background(), time.Now(), 5); total != 0 || err != nil {
 		t.Fatalf("empty tick: total=%d err=%v", total, err)
 	}
-	oneLine("requests=0", "clients=0")
+	oneLine("requests=0", "clients=0", "requests_remaining=0", "clients_remaining=0")
 
 	// A tick that deleted rows logs the two counts.
 	purger.result = storagepostgres.OAuthPurgeResult{Requests: 3, Clients: 2}
 	if total, err := purge(context.Background(), time.Now(), 5); total != 5 || err != nil {
 		t.Fatalf("delete tick: total=%d err=%v", total, err)
 	}
-	oneLine("requests=3", "clients=2")
+	oneLine("requests=3", "clients=2", "requests_remaining=0", "clients_remaining=0")
 
-	// A tick that deleted requests and then failed reports the failure and still logs what was deleted.
+	// A tick that deleted requests and then failed reports the failure and still
+	// logs what was deleted; the database just failed, so it is not probed and
+	// the line carries no remaining (an unmeasured count is absent, never zero).
 	wantErr := errors.New("client statement failed")
 	purger.result, purger.err = storagepostgres.OAuthPurgeResult{Requests: 1}, wantErr
+	probes := len(purger.remainingCalls)
 	total, err := purge(context.Background(), time.Now(), 5)
 	if total != 1 || !errors.Is(err, wantErr) {
 		t.Fatalf("partial-failure tick: total=%d err=%v", total, err)
 	}
 	oneLine("requests=1", "clients=0")
+	if strings.Contains(logs.String(), "remaining") || len(purger.remainingCalls) != probes {
+		t.Fatalf("a failed purge was probed or logged remaining: calls %d -> %d, logs %q", probes, len(purger.remainingCalls), logs.String())
+	}
+}
+
+// CHAOS-7249: a tick that skipped every eligible row must not read like a tick
+// that found nothing. Both delete zero rows; only the remaining counts differ,
+// and the line carries them.
+func TestOAuthPurgeFunc_skippedEverythingIsVisibleNextToEmpty(t *testing.T) {
+	tick := func(remaining storagepostgres.OAuthPurgeRemaining) string {
+		var logs bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
+		purger := &fakeOAuthPurger{remaining: remaining}
+		if _, err := oauthPurgeFunc(purger, 2*time.Hour, time.Hour, logger)(context.Background(), time.Now(), 500); err != nil {
+			t.Fatal(err)
+		}
+		want := fakeOAuthPurgeCall{requestGrace: 2 * time.Hour, clientIdle: time.Hour, limit: 500}
+		if len(purger.remainingCalls) != 1 || purger.remainingCalls[0] != want {
+			t.Fatalf("probe calls = %#v, want exactly [%#v] (the purge's own windows and batch limit)", purger.remainingCalls, want)
+		}
+		return strings.TrimSpace(logs.String())
+	}
+
+	empty := tick(storagepostgres.OAuthPurgeRemaining{})
+	skipped := tick(storagepostgres.OAuthPurgeRemaining{Requests: 4, Clients: 2})
+
+	for _, line := range []string{empty, skipped} {
+		if !strings.Contains(line, "requests=0 clients=0") {
+			t.Fatalf("both ticks deleted nothing, line = %q", line)
+		}
+	}
+	if !strings.Contains(empty, "requests_remaining=0 clients_remaining=0") {
+		t.Fatalf("empty tick line = %q, want remaining 0/0", empty)
+	}
+	if !strings.Contains(skipped, "requests_remaining=4 clients_remaining=2") {
+		t.Fatalf("skipped-everything tick line = %q, want remaining 4/2", skipped)
+	}
+}
+
+// A probe that fails fails the tick through the tick loop's redacted warning
+// (the error is returned, not swallowed), and the line still reports what the
+// purge deleted, without a remaining the probe never produced.
+func TestOAuthPurgeFunc_failedProbeFailsTheTick(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	wantErr := errors.New("count statement failed")
+	purger := &fakeOAuthPurger{result: storagepostgres.OAuthPurgeResult{Requests: 2, Clients: 1}, remainingErr: wantErr}
+
+	total, err := oauthPurgeFunc(purger, 2*time.Hour, time.Hour, logger)(context.Background(), time.Now(), 5)
+
+	if total != 3 || !errors.Is(err, wantErr) {
+		t.Fatalf("total=%d err=%v; want 3 deleted and the probe error", total, err)
+	}
+	line := strings.TrimSpace(logs.String())
+	if !strings.Contains(line, "requests=2 clients=1") || strings.Contains(line, "remaining") {
+		t.Fatalf("line = %q, want the deleted counts and no remaining", line)
+	}
 }

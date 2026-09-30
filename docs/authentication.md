@@ -237,9 +237,21 @@ statement:
 - Client ID metadata document clients are never stored, so they are never
   purged. Credentials are not touched: a live credential never depends on its
   client row.
-- Every tick logs one `oauth purge` line at Info with the two deleted-row
-  counts, zeros included (the loop's heartbeat: a missing line means the loop
-  stopped); a failed tick also logs a fixed warning without the error text.
+- Every tick logs one `oauth purge` line at Info, zeros included (the loop's
+  heartbeat: a missing line means the loop stopped): `requests` and `clients`
+  are the rows the tick deleted, and `requests_remaining` and
+  `clients_remaining` are the rows that are still eligible after it, each
+  counted up to one batch plus one (`501` means more than one batch). A tick
+  that found nothing reads `0 0 0 0`. A tick that deleted nothing while
+  `*_remaining` is above zero skipped rows it should have taken (they are held
+  by a concurrent flow, or the delete stopped matching what the purge selects):
+  one such line is a busy flow, the same line every tick is a defect. Above
+  zero after a full batch is an ordinary backlog and drains over the next ticks.
+  A tick whose purge failed logs the deleted counts without `*_remaining` (the
+  database just failed, so it is not asked again); the failure itself is a
+  fixed warning without the error text. The remaining count shares the purge's
+  own eligibility rules, so it shows a delete that misses rows the rules
+  select, not a rule that is wrong.
 
 ## Rate limiting
 

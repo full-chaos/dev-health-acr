@@ -134,22 +134,37 @@ func startOAuthPurgeLoop(ctx context.Context, purge packetPurgeFunc, now func() 
 // uses it (an interface so the tick's logging is testable without a database).
 type oauthPurger interface {
 	PurgeExpired(ctx context.Context, now time.Time, requestGrace, clientIdle time.Duration, limit int) (storagepostgres.OAuthPurgeResult, error)
+	CountPurgeRemaining(ctx context.Context, now time.Time, requestGrace, clientIdle time.Duration, limit int) (storagepostgres.OAuthPurgeRemaining, error)
 }
 
 // oauthPurgeFunc adapts an oauthPurger to a packetPurgeFunc with the
 // configured windows. EVERY tick that reaches the database logs exactly one
-// info line carrying the two row counts (never an id, client name or URI),
-// zeros included: the line is the loop's heartbeat, so a loop that stopped, or
-// one whose predicate silently selects nothing, is visible at Info as a missing
-// line or as counts that stay zero while the tables grow. The count line is
-// written before an error is returned, so a tick that deleted requests and
-// then failed on the client statement is still visible; the failure itself is
-// reported by the tick loop's fixed redacted warning.
+// info line (never an id, client name or URI), zeros included: the line is the
+// loop's heartbeat, so a loop that stopped is a missing line.
+//
+// The line carries the deleted counts (requests, clients) and, after a purge
+// that did not fail, how many rows are STILL eligible (requests_remaining,
+// clients_remaining; each capped at the batch limit + 1). That pair is what
+// tells a tick that found nothing (deleted 0, remaining 0) from one that
+// skipped everything it should have taken (deleted 0, remaining > 0: rows
+// held by a concurrent flow, or a delete that stopped matching what the
+// predicate selects); remaining > 0 after a full batch is an ordinary backlog.
+// The line is written before an error is returned, so a tick that deleted
+// requests and then failed on the client statement is still visible, without
+// remaining (the database just failed, so it is not probed); a failed probe
+// fails the tick too, through the same redacted warning.
 func oauthPurgeFunc(purger oauthPurger, requestGrace, clientIdle time.Duration, logger *slog.Logger) packetPurgeFunc {
 	return func(ctx context.Context, before time.Time, limit int) (int, error) {
 		result, err := purger.PurgeExpired(ctx, before, requestGrace, clientIdle, limit)
+		attrs := []any{"requests", result.Requests, "clients", result.Clients}
+		if err == nil {
+			var remaining storagepostgres.OAuthPurgeRemaining
+			if remaining, err = purger.CountPurgeRemaining(ctx, before, requestGrace, clientIdle, limit); err == nil {
+				attrs = append(attrs, "requests_remaining", remaining.Requests, "clients_remaining", remaining.Clients)
+			}
+		}
 		if logger != nil {
-			logger.InfoContext(ctx, "oauth purge", "requests", result.Requests, "clients", result.Clients)
+			logger.InfoContext(ctx, "oauth purge", attrs...)
 		}
 		return result.Requests + result.Clients, err
 	}

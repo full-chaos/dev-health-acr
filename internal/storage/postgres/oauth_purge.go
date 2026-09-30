@@ -25,9 +25,23 @@ import (
 // purge never deletes a client that link still reaches.
 const liveOAuthCredentialClause = `cc.revoked_at IS NULL AND (cc.expires_at IS NULL OR cc.expires_at > $3)`
 
-// purgeExpiredOAuthRequestsSQL deletes one bounded batch of /authorize
-// requests past expires_at + grace ($1), except a request whose
-// device authorization redeemed a credential that is live at $3.
+// expiredOAuthRequestPredicate selects an /authorize request past
+// expires_at + grace ($1) whose device authorization did not redeem a
+// credential that is live at $3. It is the ONE definition of "eligible": the
+// request purge deletes by it and the remaining-eligible probe counts by it,
+// so the two cannot drift.
+const expiredOAuthRequestPredicate = `
+      r.expires_at < $1
+      AND NOT EXISTS (
+          SELECT 1
+          FROM acr.device_authorizations d
+          JOIN acr.client_credentials cc ON cc.credential_id = d.redeemed_credential_id
+          WHERE d.device_code_hash = r.device_code_hash
+            AND ` + liveOAuthCredentialClause + `
+      )`
+
+// purgeExpiredOAuthRequestsSQL deletes one bounded batch of the requests
+// expiredOAuthRequestPredicate selects.
 //
 // No table references acr.oauth_authorization_requests, and its only foreign
 // key (device_code_hash -> acr.device_authorizations ON DELETE CASCADE) runs
@@ -37,14 +51,7 @@ const liveOAuthCredentialClause = `cc.revoked_at IS NULL AND (cc.expires_at IS N
 const purgeExpiredOAuthRequestsSQL = `
 WITH expired AS (
     SELECT r.handle_hash FROM acr.oauth_authorization_requests r
-    WHERE r.expires_at < $1
-      AND NOT EXISTS (
-          SELECT 1
-          FROM acr.device_authorizations d
-          JOIN acr.client_credentials cc ON cc.credential_id = d.redeemed_credential_id
-          WHERE d.device_code_hash = r.device_code_hash
-            AND ` + liveOAuthCredentialClause + `
-      )
+    WHERE` + expiredOAuthRequestPredicate + `
     ORDER BY r.expires_at, r.handle_hash
     LIMIT $2
     FOR UPDATE OF r SKIP LOCKED
@@ -103,10 +110,37 @@ DELETE FROM acr.oauth_clients c
 WHERE c.client_id = ANY($2::text[])
   AND` + idleOAuthClientPredicate
 
+// The remaining-eligible probes (CHAOS-7249) count, WITHOUT locking, the rows
+// the two purge statements' own predicates still select. They read at most
+// $2 rows each (the requests through ix_acr_oauth_authorization_requests_expiry),
+// so their cost is bounded by the batch limit, never by table size.
+const countExpiredOAuthRequestsSQL = `
+SELECT count(*) FROM (
+    SELECT 1 FROM acr.oauth_authorization_requests r
+    WHERE` + expiredOAuthRequestPredicate + `
+    LIMIT $2
+) eligible`
+
+const countIdleOAuthClientsSQL = `
+SELECT count(*) FROM (
+    SELECT 1 FROM acr.oauth_clients c
+    WHERE` + idleOAuthClientPredicate + `
+    LIMIT $2
+) eligible`
+
 // OAuthPurgeResult counts the rows one PurgeExpired call deleted.
 type OAuthPurgeResult struct {
 	Requests int
 	Clients  int
+}
+
+// validateOAuthPurgeWindows refuses the windows PurgeExpired and
+// CountPurgeRemaining must never run with (see PurgeExpired).
+func validateOAuthPurgeWindows(requestGrace, clientIdle time.Duration) error {
+	if requestGrace <= 0 || clientIdle <= 0 || requestGrace < clientIdle {
+		return storage.ErrInvalidOAuthClient
+	}
+	return nil
 }
 
 // PurgeExpired deletes up to limit expired authorization requests, then up
@@ -126,8 +160,8 @@ func (s *OAuthStore) PurgeExpired(ctx context.Context, now time.Time, requestGra
 	if limit <= 0 {
 		return OAuthPurgeResult{}, nil
 	}
-	if requestGrace <= 0 || clientIdle <= 0 || requestGrace < clientIdle {
-		return OAuthPurgeResult{}, storage.ErrInvalidOAuthClient
+	if err := validateOAuthPurgeWindows(requestGrace, clientIdle); err != nil {
+		return OAuthPurgeResult{}, err
 	}
 	now = now.UTC()
 	var result OAuthPurgeResult
@@ -192,4 +226,42 @@ func (s *OAuthStore) purgeIdleOAuthClients(ctx context.Context, cutoff time.Time
 		return 0, fmt.Errorf("purge idle oauth clients commit: %w", sanitizeDatabaseError(err))
 	}
 	return int(deleted), nil
+}
+
+// OAuthPurgeRemaining counts the rows that are STILL purge-eligible, each
+// capped at limit+1 (so a value above limit means "more than one batch").
+type OAuthPurgeRemaining struct {
+	Requests int
+	Clients  int
+}
+
+// CountPurgeRemaining reports how many authorization requests and idle
+// dynamic clients PurgeExpired would still select at now, with the same
+// windows (CHAOS-7249). Called right after a PurgeExpired, it is what the
+// purge tick logs next to the deleted counts: deleted=0 with remaining=0 is an
+// empty tick, deleted=0 with remaining>0 is a tick that skipped rows it should
+// have taken (rows held by a concurrent flow, or a broken delete), and
+// remaining>0 after a full batch is an ordinary backlog. It takes no lock and
+// reads at most limit+1 rows per table. It shares the purge statements'
+// predicates, so it cannot see a rule that is wrong in the predicate itself;
+// it sees any way the DELETE fails to take what the predicate selects.
+func (s *OAuthStore) CountPurgeRemaining(ctx context.Context, now time.Time, requestGrace, clientIdle time.Duration, limit int) (OAuthPurgeRemaining, error) {
+	if err := s.ready(ctx); err != nil {
+		return OAuthPurgeRemaining{}, err
+	}
+	if limit <= 0 {
+		return OAuthPurgeRemaining{}, nil
+	}
+	if err := validateOAuthPurgeWindows(requestGrace, clientIdle); err != nil {
+		return OAuthPurgeRemaining{}, err
+	}
+	now = now.UTC()
+	var remaining OAuthPurgeRemaining
+	if err := s.DB.QueryRowContext(ctx, countExpiredOAuthRequestsSQL, now.Add(-requestGrace), limit+1, now).Scan(&remaining.Requests); err != nil {
+		return OAuthPurgeRemaining{}, fmt.Errorf("count remaining oauth authorization requests: %w", sanitizeDatabaseError(err))
+	}
+	if err := s.DB.QueryRowContext(ctx, countIdleOAuthClientsSQL, now.Add(-clientIdle), limit+1, now).Scan(&remaining.Clients); err != nil {
+		return OAuthPurgeRemaining{}, fmt.Errorf("count remaining idle oauth clients: %w", sanitizeDatabaseError(err))
+	}
+	return remaining, nil
 }
