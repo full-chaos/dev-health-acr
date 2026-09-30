@@ -375,3 +375,20 @@ func TestEvidenceRouteWarnsOnceOnAnInvalidRow(t *testing.T) {
 		}
 	}
 }
+
+// codex r1 P2 (dependency id with trailing relation whitespace): the route
+// refuses a ref with surrounding whitespace before either path runs, as it
+// did before this change, so no source read happens and the answer is the
+// same not-found as an unknown ref. Only a producer that minted such a ref
+// could hit it (follow-up: the graph producer's raw relationship type).
+func TestEvidenceRouteRefusesASurroundingWhitespaceRefBeforeAnyRead(t *testing.T) {
+	ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItemDependency, sourceRowGrantedRepoID+":jira:ABC-1:jira:ABC-0:blocks ")
+	tables := newSourceRowTables()
+	logs := &bytes.Buffer{}
+	app, token := sourceRowApp(t, tables, nil, logs)
+	rec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rec, evidenceRequest(t, token, ref))
+	if rec.Code != http.StatusNotFound || len(tables.reads) != 0 {
+		t.Fatalf("status %d, reads %v", rec.Code, tables.reads)
+	}
+}

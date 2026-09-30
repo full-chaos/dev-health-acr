@@ -3,11 +3,13 @@ package contextpacket_test
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -172,5 +174,73 @@ func TestSourceRowLookupsBindNoGrant(t *testing.T) {
 	}
 	if _, err := rows.SourceRowRepositories(ctx, "org_1", contextpacket.SourceRowDiscovery("nope"), "x"); !errors.Is(err, contextpacket.ErrUnknownSourceRowQuery) {
 		t.Fatalf("unknown discovery err = %v", err)
+	}
+}
+
+// sourceRowReadStatements is every statement a source-row expansion runs:
+// the lookups of source_rows.go and the catalog statement of every kind the
+// plans route (contextfabric cannot be imported here, so the list is
+// explicit; contextfabric's TestSourceRowPlansAreTotal pins the same set).
+func sourceRowReadStatements(t *testing.T) map[string]string {
+	t.Helper()
+	statements := sourceRowStatements(t)
+	for _, id := range []string{"repository_freshness.v1", "work_items.v1", "work_item_dependencies.v1", "pull_requests.v1", "pull_request_reviews.v1", "ci_pipeline_runs.v1", "deployments.v1", "incidents.v1", "deployment_incident_provenance.v1"} {
+		statements[id] = catalogQuery(t, id).Statement
+	}
+	return statements
+}
+
+var (
+	tableAliasPattern = regexp.MustCompile(`(?:FROM|JOIN)\s+([a-z_]+)(?:\s+AS\s+([a-z]+))?\s+FINAL`)
+	orgBindingPattern = regexp.MustCompile(`(?:toString\()?(?:([a-z]+)\.)?org_id\)?\s*=\s*\{org_id:String\}`)
+	orgJoinPattern    = regexp.MustCompile(`(?:toString\()?([a-z]+)\.org_id\)?\s*=\s*(?:toString\()?([a-z]+)\.org_id\)?`)
+)
+
+// CHAOS-7226 codex r1 P1: every table a source-row read touches is scoped to
+// the caller's organization, directly ({org_id} binding) or through an
+// org_id join to a table that is. A repository UUID is keyed (org_id, id), so
+// a join on repo_id alone admits another organization's rows. Tables the
+// declared schema gives no org_id are exempt (none today).
+func TestSourceRowReadsScopeEveryTableToTheOrganization(t *testing.T) {
+	for name, statement := range sourceRowReadStatements(t) {
+		constrained := map[string]bool{}
+		unaliasedConstrained := false
+		for _, match := range orgBindingPattern.FindAllStringSubmatch(statement, -1) {
+			if match[1] == "" {
+				unaliasedConstrained = true
+			} else {
+				constrained[match[1]] = true
+			}
+		}
+		for changed := true; changed; {
+			changed = false
+			for _, match := range orgJoinPattern.FindAllStringSubmatch(statement, -1) {
+				a, b := match[1], match[2]
+				if constrained[a] != constrained[b] {
+					constrained[a], constrained[b], changed = true, true, true
+				}
+			}
+		}
+		tables := tableAliasPattern.FindAllStringSubmatch(statement, -1)
+		if len(tables) == 0 {
+			t.Fatalf("%s: no table found: the sweep matched nothing", name)
+		}
+		for _, table := range tables {
+			columns, declared := devhealthschema.ProductionColumns[table[1]]
+			if !declared {
+				t.Fatalf("%s reads %s, which devhealthschema does not declare", name, table[1])
+			}
+			hasOrg := false
+			for _, column := range columns {
+				hasOrg = hasOrg || column.Name == "org_id"
+			}
+			if !hasOrg {
+				continue
+			}
+			alias := table[2]
+			if (alias == "" && !unaliasedConstrained) || (alias != "" && !constrained[alias]) {
+				t.Errorf("%s: table %s (alias %q) is not scoped to the organization: another organization's rows can join\n%s", name, table[1], alias, statement)
+			}
+		}
 	}
 }

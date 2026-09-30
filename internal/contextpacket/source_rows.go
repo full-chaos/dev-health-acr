@@ -55,7 +55,8 @@ type SourceRowDiscovery string
 
 const (
 	// SourceRowDiscoveryIncident: the repositories an incident's service
-	// maps to (the incidents.v1 join).
+	// maps to NOW (the incidents.v1 join and its mapping validity window,
+	// so an expired mapping never takes a place in the bounded list).
 	SourceRowDiscoveryIncident SourceRowDiscovery = "incident_repositories"
 	// SourceRowDiscoveryDeploymentIncident: the repository of a
 	// deployment-incident edge.
@@ -67,7 +68,7 @@ const (
 )
 
 var sourceRowDiscoveryStatements = map[SourceRowDiscovery]string{
-	SourceRowDiscoveryIncident:           `SELECT DISTINCT toString(r.id), r.repo FROM operational_incidents AS i FINAL INNER JOIN operational_service_repository_mappings AS m FINAL ON i.org_id = m.org_id AND i.service_id = m.service_id INNER JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id WHERE i.org_id = {org_id:String} AND m.org_id = {org_id:String} AND i.id = {entity_id:String} AND i.is_deleted = 0 AND m.is_active = 1 ORDER BY r.repo ASC LIMIT 65`,
+	SourceRowDiscoveryIncident:           `SELECT DISTINCT toString(r.id), r.repo FROM operational_incidents AS i FINAL INNER JOIN operational_service_repository_mappings AS m FINAL ON i.org_id = m.org_id AND i.service_id = m.service_id INNER JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id WHERE i.org_id = {org_id:String} AND m.org_id = {org_id:String} AND i.id = {entity_id:String} AND i.is_deleted = 0 AND m.is_active = 1 AND m.valid_from <= now64(6) AND (m.valid_to IS NULL OR m.valid_to > now64(6)) ORDER BY r.repo ASC LIMIT 65`,
 	SourceRowDiscoveryDeploymentIncident: `SELECT DISTINCT toString(r.id), r.repo FROM work_graph_deployment_incident_edges AS e FINAL INNER JOIN repos AS r FINAL ON r.id = e.repo_id AND r.org_id = toString(e.org_id) WHERE toString(e.org_id) = {org_id:String} AND e.edge_id = {entity_id:String} ORDER BY r.repo ASC LIMIT 65`,
 	SourceRowDiscoveryDependency:         `SELECT DISTINCT toString(r.id), r.repo FROM work_item_dependencies AS d FINAL INNER JOIN work_items AS w FINAL ON d.source_work_item_id = w.work_item_id INNER JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id WHERE d.org_id = {org_id:String} AND w.org_id = {org_id:String} AND concat(d.source_work_item_id, ':', d.target_work_item_id, ':', ` + dependencyRelationKeySQL + `) = {entity_id:String} ORDER BY r.repo ASC LIMIT 65`,
 }
