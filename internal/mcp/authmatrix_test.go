@@ -720,7 +720,7 @@ func newMatrixEndpoint(t *testing.T, s *matrixStack) *endpoint {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := acrmcp.NewHTTPHandler(cfg, acrmcp.HTTPHandlerOptions{BasePath: "/mcp", Identity: testIdentity, MaxRequestBodyBytes: 1 << 20, ResolveTimeout: matrixRigDeadline})
+	handler, err := acrmcp.NewHTTPHandler(cfg, acrmcp.HTTPHandlerOptions{BasePath: "/mcp", Identity: testIdentity, MaxRequestBodyBytes: 1 << 20, ResolveTimeout: matrixRigDeadline, EdgeGate: acrmcp.EdgeGateOptions{FailureLimit: 1 << 20, MaxInFlight: 1 << 20}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1270,7 +1270,7 @@ func TestAuthMatrixRefusesARevokedOrExpiredRowTheStoreStillReturns(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := acrmcp.NewHTTPHandler(cfg, acrmcp.HTTPHandlerOptions{BasePath: "/mcp", Identity: testIdentity, MaxRequestBodyBytes: 1 << 20, ResolveTimeout: 5 * time.Second})
+	handler, err := acrmcp.NewHTTPHandler(cfg, acrmcp.HTTPHandlerOptions{BasePath: "/mcp", Identity: testIdentity, MaxRequestBodyBytes: 1 << 20, ResolveTimeout: 5 * time.Second, EdgeGate: acrmcp.EdgeGateOptions{FailureLimit: 1 << 20, MaxInFlight: 1 << 20}})
 	if err != nil {
 		t.Fatal(err)
 	}

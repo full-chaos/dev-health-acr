@@ -168,3 +168,35 @@ func perMinute(class ClassLimitConfig) int {
 	}
 	return int((int64(class.Requests) * int64(time.Minute)) / int64(class.Window))
 }
+
+// AuthGateLimits are the per-address failed-authentication limits. acr-api
+// builds its limiter from them (through Config.RequestControls) and acr-mcp's
+// edge gate reads them through AuthGateLimitsFromEnvironment: one parse site,
+// so the two gates cannot disagree on the fallback chain
+// (ACR_AUTH_FAILURES_PER_WINDOW, else min(20, ACR_REQUESTS_PER_MINUTE);
+// ACR_AUTH_LIMIT_WINDOW, else ACR_LIMIT_WINDOW, else 1m).
+type AuthGateLimits struct {
+	FailureLimit   int
+	Window         time.Duration
+	MaxTrackedKeys int
+	MaxInFlight    int
+}
+
+// AuthGateLimitsFromEnvironment resolves the limits from lookup with exactly
+// the resolution acr-api's Load applies. A malformed or non-positive value is
+// an error, never a silent default.
+func AuthGateLimitsFromEnvironment(lookup func(string) (string, bool)) (AuthGateLimits, error) {
+	requestsPerMinute, err := intValue(lookupEnv(lookup), "ACR_REQUESTS_PER_MINUTE", defaultRequestsPerMinute)
+	if err != nil {
+		return AuthGateLimits{}, err
+	}
+	controls, err := requestControlsValue(lookupEnv(lookup), requestsPerMinute)
+	if err != nil {
+		return AuthGateLimits{}, err
+	}
+	limits := AuthGateLimits{FailureLimit: controls.AuthFailures, Window: controls.Auth.Window, MaxTrackedKeys: controls.AuthTrackedKeys, MaxInFlight: controls.AuthMaxInFlight}
+	if limits.FailureLimit < 1 || limits.Window <= 0 || limits.MaxTrackedKeys < 1 || limits.MaxInFlight < 0 {
+		return AuthGateLimits{}, errors.New("ACR authentication gate limits must be positive")
+	}
+	return limits, nil
+}

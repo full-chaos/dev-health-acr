@@ -37,6 +37,9 @@ type Client struct {
 	baseURL    *url.URL
 	cfg        Config
 	credential CredentialSource
+	// forwardedClient, when set, is sent as X-Forwarded-For on every call
+	// (see WithForwardedClient).
+	forwardedClient string
 }
 
 // NewClient builds a Client from a validated Config. credentialSource may
