@@ -350,26 +350,33 @@
       "properties": {
         "max_drivers": {
           "type": "integer",
-          "description": "Maximum number of principal drivers to return, 1 to 50.",
-          "minimum": 1,
+          "description": "Maximum number of principal drivers to return, 1 to 50. 0 means not set (the default applies).",
+          "minimum": 0,
           "maximum": 50
         },
         "max_cohort_members": {
           "type": "integer",
-          "description": "Maximum number of members to list when the answer is about a cohort, 1 to 250.",
-          "minimum": 1,
+          "description": "Maximum number of members to list when the answer is about a cohort, 1 to 250. 0 means not set (the default applies).",
+          "minimum": 0,
           "maximum": 250
         },
         "max_evidence_refs": {
           "type": "integer",
-          "description": "Maximum number of evidence references to return, 1 to 500.",
-          "minimum": 1,
+          "description": "Maximum number of evidence references to return, 1 to 500. 0 means not set (the default applies).",
+          "minimum": 0,
           "maximum": 500
         },
         "max_serialized_bytes": {
           "type": "integer",
-          "description": "Byte ceiling for the whole serialized response, 8192 to 1048576. Content that does not fit is dropped, never truncated into invalid JSON.",
-          "minimum": 8192,
+          "description": "Byte ceiling for the whole serialized response, 8192 to 1048576. Content that does not fit is dropped, never truncated into invalid JSON. 0 means not set (the default applies).",
+          "anyOf": [
+            {
+              "const": 0
+            },
+            {
+              "minimum": 8192
+            }
+          ],
           "maximum": 1048576
         }
       }

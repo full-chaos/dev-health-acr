@@ -79,8 +79,8 @@
     },
     "limit": {
       "type": "integer",
-      "description": "Page size, 1 to 200. The default is 25. A larger value is refused.",
-      "minimum": 1,
+      "description": "Page size, 1 to 200. The default is 25. A larger value is refused. 0 means not set (the default applies).",
+      "minimum": 0,
       "maximum": 200
     },
     "cursor": {

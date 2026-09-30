@@ -90,8 +90,8 @@
         },
         "time_window_days": {
           "type": "integer",
-          "description": "How many trailing days of history to consider, from 1 to 365. Optional; omitted uses the service default.",
-          "minimum": 1,
+          "description": "How many trailing days of history to consider, from 1 to 365. Optional; omitted uses the service default. 0 means not set (the default applies).",
+          "minimum": 0,
           "maximum": 365
         },
         "include_changed_files": {
@@ -107,20 +107,34 @@
       "properties": {
         "max_items": {
           "type": "integer",
-          "description": "Maximum number of ranked context items, 1 to 50.",
-          "minimum": 1,
+          "description": "Maximum number of ranked context items, 1 to 50. 0 means not set (the default applies).",
+          "minimum": 0,
           "maximum": 50
         },
         "max_output_tokens": {
           "type": "integer",
-          "description": "Approximate token ceiling for the packet, 500 to 16000.",
-          "minimum": 500,
+          "description": "Approximate token ceiling for the packet, 500 to 16000. 0 means not set (the default applies).",
+          "anyOf": [
+            {
+              "const": 0
+            },
+            {
+              "minimum": 500
+            }
+          ],
           "maximum": 16000
         },
         "max_serialized_bytes": {
           "type": "integer",
-          "description": "Byte ceiling for the whole serialized response, 8192 to 1048576. Content that does not fit is dropped, never cut mid-document.",
-          "minimum": 8192,
+          "description": "Byte ceiling for the whole serialized response, 8192 to 1048576. Content that does not fit is dropped, never cut mid-document. 0 means not set (the default applies).",
+          "anyOf": [
+            {
+              "const": 0
+            },
+            {
+              "minimum": 8192
+            }
+          ],
           "maximum": 1048576
         }
       }

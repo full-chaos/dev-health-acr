@@ -507,6 +507,8 @@ func TestRequestSchemasAgreeWithValidateOnBounds(t *testing.T) {
 		{findSubjectsRequestSchemaFile, input{"query": "acme/a", "kinds": []string{"repository", "team"}}, true},
 		{findSubjectsRequestSchemaFile, input{"query": strings.Repeat("x", 257)}, false},
 		{runOperationRequestSchemaFile, input{"operation": "hotspots"}, true},
+		{runOperationRequestSchemaFile, input{"operation": "hotspots", "max_bytes": 0}, true},
+		{runOperationRequestSchemaFile, input{"operation": "hotspots", "max_bytes": -1}, false},
 		{runOperationRequestSchemaFile, input{"operation": "hotspots", "max_bytes": 262144}, true},
 		{runOperationRequestSchemaFile, input{"operation": "hotspots", "max_bytes": 262145}, false},
 		{runOperationRequestSchemaFile, input{"operation": "1hotspots"}, false},
