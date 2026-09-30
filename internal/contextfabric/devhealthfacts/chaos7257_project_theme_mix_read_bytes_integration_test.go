@@ -289,7 +289,56 @@ ORDER BY event_time_microseconds`, mark)
 		}
 		out = append(out, s)
 	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read query_log rows (measurement did not happen): %v", err)
+	}
 	return out
+}
+
+// lane7257Diagnose is a TEMPORARY lane diagnostic: on a measurement miss it
+// dumps what the server holds, so a hosted failure names its own cause.
+func lane7257Diagnose(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, mark time.Time, facts int, reason string) {
+	t.Helper()
+	t.Logf("DIAG mark=%s loc=%q facts=%d reason=%q", mark.Format(time.RFC3339Nano), mark.Location().String(), facts, reason)
+	dump := func(label, statement string, args ...any) {
+		rows, err := direct.Query(ctx, statement, args...)
+		if err != nil {
+			t.Logf("DIAG %s: query error: %v", label, err)
+			return
+		}
+		defer rows.Close()
+		n := 0
+		for rows.Next() {
+			var a, b, c, d, e string
+			if err := rows.Scan(&a, &b, &c, &d, &e); err != nil {
+				t.Logf("DIAG %s: scan error: %v", label, err)
+				return
+			}
+			n++
+			t.Logf("DIAG %s[%d] %s | %s | %s | %s | %s", label, n, a, b, c, d, e)
+		}
+		if err := rows.Err(); err != nil {
+			t.Logf("DIAG %s: rows error: %v", label, err)
+		}
+		t.Logf("DIAG %s: %d rows", label, n)
+	}
+	dump("now", `SELECT toString(now64(6)), timezone(), currentDatabase(), version(), ''`)
+	dump("dblog", `SELECT toString(event_time_microseconds), toString(type), toString(query_kind), arrayStringConcat(tables, ','), substring(query, 1, 80) FROM system.query_log
+WHERE current_database = currentDatabase() AND query_kind = 'Select' ORDER BY event_time_microseconds DESC LIMIT 12`)
+	dump("anydb", `SELECT toString(event_time_microseconds), toString(type), current_database, arrayStringConcat(tables, ','), substring(query, 1, 80) FROM system.query_log
+WHERE event_time > now() - 120 AND query LIKE '%project_team%' ORDER BY event_time_microseconds DESC LIMIT 12`)
+	dump("errors", `SELECT name, toString(value), toString(last_error_time), toString(code), substring(last_error_message, 1, 400) FROM system.errors WHERE last_error_time > now() - 900 ORDER BY last_error_time DESC LIMIT 20`)
+	dump("logstate", `SELECT toString(count()), toString(max(event_time_microseconds)), toString(countIf(type = 'ExceptionBeforeStart' AND event_time > now() - 120)), toString(countIf(current_database = currentDatabase())), '' FROM system.query_log`)
+	dump("events", `SELECT event, toString(value), '', '', '' FROM system.events WHERE event ILIKE '%SystemLog%' OR event ILIKE '%Log%Flush%'`)
+	dump("textlog", `SELECT toString(event_time_microseconds), toString(level), logger_name, toString(thread_name), substring(message, 1, 400) FROM system.text_log
+WHERE event_time > now() - 900 AND level <= 'Warning' ORDER BY event_time_microseconds DESC LIMIT 40`)
+	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
+		t.Logf("DIAG reflush: %v", err)
+	}
+	t.Logf("DIAG after second flush: statementsSince=%d", len(statementsSince(t, ctx, direct, mark)))
+	for i, l := range sharedClickHouseDeathBuf.tail() {
+		t.Logf("DIAG container[%d] %s", i, l)
+	}
 }
 
 // serverNow is the server's own clock, so a query_log window never depends on
@@ -339,6 +388,7 @@ func TestProjectThemeMixFitsTheClickHouseByteBudgetAgainstRealClickHouse(t *test
 		t.Fatalf("ReadFacts under max_bytes_to_read=%d failed: %v\nserver: %s", chaos7257ProdMaxBytesToRead, err, lastServerException(ctx, direct))
 	}
 	if len(statements) == 0 {
+		lane7257Diagnose(t, ctx, direct, mark, len(result.Facts), result.Reason) // LANE DIAGNOSTIC (temporary)
 		t.Fatal("measurement did not happen: query_log holds no statement over work_unit_investments")
 	}
 	// Every project is served complete: a mix source and the five shares.
