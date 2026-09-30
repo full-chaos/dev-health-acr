@@ -110,11 +110,11 @@ func (a *App) handleEvidence(w http.ResponseWriter, r *http.Request) {
 	writeEncodedJSON(w, http.StatusOK, encoded)
 }
 
-// expandContextFabricEvidence serves an acr:v1:<type>:<id> evidence ref from
-// the stored investigation results citing it (contextfabric.
-// ExpandCitedEvidence). Every outcome emits one classified decision line,
-// and the decisive stored-result authorization is traced like the
-// result-by-id route's own.
+// expandContextFabricEvidence serves an acr:v1:<type>:<id> evidence ref: the
+// source row its id names when the caller may read it (CHAOS-6180), else the
+// stored investigation results citing it (contextfabric.ExpandEvidence).
+// Every outcome emits one classified decision line, and the decisive
+// stored-result authorization is traced like the result-by-id route's own.
 func (a *App) expandContextFabricEvidence(w http.ResponseWriter, r *http.Request, principal storage.Principal, referenceID string) (contractsv1.ExpandedEvidence, bool) {
 	results := a.investigationResults()
 	var lookup contextfabric.CitedEvidenceLookup
@@ -139,7 +139,11 @@ func (a *App) expandContextFabricEvidence(w http.ResponseWriter, r *http.Request
 	if authorizer := a.storedResultGate(); authorizer != nil {
 		gate = authorizer
 	}
-	expanded, decision := contextfabric.ExpandCitedEvidence(r.Context(), principal, referenceID, lookup, results, gate, a.now())
+	var source contextfabric.SourceRowResolver
+	if a.runtime != nil {
+		source = a.runtime.SourceRows
+	}
+	expanded, decision := contextfabric.ExpandEvidence(r.Context(), principal, referenceID, source, lookup, results, gate, a.now())
 	requestID := contextfabric.SanitizeLogAttr(RequestID(r.Context()))
 	if decision.Authorization != nil {
 		args := contextfabric.StoredResultAuthorizationLogArgs(principal, *decision.Authorization)
@@ -149,6 +153,11 @@ func (a *App) expandContextFabricEvidence(w http.ResponseWriter, r *http.Request
 	args := contextfabric.EvidenceExpansionLogArgs(principal, decision)
 	args = append(args, "request_id", requestID)
 	a.logger.InfoContext(r.Context(), contextfabric.EvidenceExpansionLogMessage, args...)
+	if decision.Source.Reason == contextfabric.SourceRowInvalid {
+		a.logger.WarnContext(r.Context(), contextfabric.SourceRowInvalidLogMessage,
+			"org_id", contextfabric.SanitizeLogAttr(principal.OrgID), "entity_type", contextfabric.SanitizeLogAttr(decision.EntityType),
+			"source_query", contextfabric.SanitizeLogAttr(decision.Source.Query), "request_id", requestID)
+	}
 	if err := decision.ServingError(); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			a.writeEvidenceNotFound(w, r, principal)

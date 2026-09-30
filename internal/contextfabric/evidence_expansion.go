@@ -113,14 +113,21 @@ const (
 	EvidenceExpansionAuthorizationUnavailable EvidenceExpansionReason = "authorization_unavailable"
 	// EvidenceExpansionInvalid: the built expansion failed the contract.
 	EvidenceExpansionInvalid EvidenceExpansionReason = "expansion_invalid"
+	// EvidenceExpansionSourceRowServed: the source row the ref names was
+	// served (CHAOS-6180); no stored result was read.
+	EvidenceExpansionSourceRowServed EvidenceExpansionReason = "source_row_served"
+	// EvidenceExpansionSourceRowUnavailable: a source-row read failed, so
+	// the persisted record was not tried either.
+	EvidenceExpansionSourceRowUnavailable EvidenceExpansionReason = "source_row_unavailable"
 )
 
 // EvidenceExpansionReasonVocabulary is the closed set of reasons.
-func EvidenceExpansionReasonVocabulary() [9]EvidenceExpansionReason {
-	return [9]EvidenceExpansionReason{
+func EvidenceExpansionReasonVocabulary() [11]EvidenceExpansionReason {
+	return [11]EvidenceExpansionReason{
 		EvidenceExpansionServed, EvidenceExpansionMalformedRef, EvidenceExpansionLookupUnavailable,
 		EvidenceExpansionLookupFailed, EvidenceExpansionNotCited, EvidenceExpansionResultUnreadable,
 		EvidenceExpansionAuthorizationDenied, EvidenceExpansionAuthorizationUnavailable, EvidenceExpansionInvalid,
+		EvidenceExpansionSourceRowServed, EvidenceExpansionSourceRowUnavailable,
 	}
 }
 
@@ -149,18 +156,22 @@ type EvidenceExpansionDecision struct {
 	// one, else the first unavailable one, else the first denied one. Nil
 	// when no citing result reached the gate.
 	Authorization *StoredResultAuthorization
-	Err           error
+	// Source is the source-row resolution that ran first (CHAOS-6180).
+	Source SourceRowDecision
+	Err    error
 }
 
 // Found reports whether the caller receives the expansion.
-func (d EvidenceExpansionDecision) Found() bool { return d.Reason == EvidenceExpansionServed }
+func (d EvidenceExpansionDecision) Found() bool {
+	return d.Reason == EvidenceExpansionServed || d.Reason == EvidenceExpansionSourceRowServed
+}
 
 // ServingError maps the decision onto the evidence route's error classes:
 // nil when served; storage.ErrNotFound for every outcome a caller must not
 // be able to tell apart from an unknown ref; ErrUnavailable otherwise.
 func (d EvidenceExpansionDecision) ServingError() error {
 	switch d.Reason {
-	case EvidenceExpansionServed:
+	case EvidenceExpansionServed, EvidenceExpansionSourceRowServed:
 		return nil
 	case EvidenceExpansionMalformedRef, EvidenceExpansionLookupUnavailable, EvidenceExpansionNotCited, EvidenceExpansionAuthorizationDenied:
 		return storage.ErrNotFound
@@ -466,6 +477,20 @@ func EvidenceExpansionLogArgs(principal storage.Principal, decision EvidenceExpa
 	}
 	if decision.Authorization != nil {
 		args = append(args, "authorization_reason", string(decision.Authorization.Reason))
+	}
+	source := decision.Source
+	if source.Reason == "" {
+		source.Reason = SourceRowBackendAbsent
+	}
+	args = append(args, "source_reason", string(source.Reason))
+	if source.Query != "" {
+		args = append(args, "source_query", SanitizeLogAttr(source.Query))
+	}
+	if source.Read() {
+		if source.Grammar != "" {
+			args = append(args, "source_grammar", SanitizeLogAttr(source.Grammar))
+		}
+		args = append(args, "source_repositories", source.Repositories, "source_admitted", source.Admitted, "source_rows", source.Rows)
 	}
 	if decision.Err != nil {
 		args = append(args, "error_class", SanitizeLogAttr(evidenceExpansionErrorClass(decision.Err)))
