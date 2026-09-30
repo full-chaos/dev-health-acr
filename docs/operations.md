@@ -563,14 +563,16 @@ node's `authorization_repositories` list still carried raw
 
 **A rebuild is likewise REQUIRED after deploying CHAOS-7130**
 (`TeamsProjectsSourceVersion` v14 → v15). The team node's
-`authorization_repositories` list is now built from RESOLVED ownership (the
-`ownershipresolve` rule the repository → team edge and the fact reads share,
-canonical `repos.repo` slug), grouped per (team, provider, repository, source)
-and listing a repository when any source's latest assertion is open: ghost,
-glob and wrong-provider names leave the list; a team left with no resolved
-open ownership is denied (no-ownership sentinel). Already-projected team nodes
-keep the old raw list until their entity is re-projected, which only a full
-rebuild forces.
+`authorization_repositories` list is now DERIVED FROM the repository → team
+edge's own rows (`repositoryTeamsGroupedSQL`: per (provider, resolved
+repository, team, source) latest assertion, the `ownershipresolve` rule,
+canonical `repos.repo` slug), aggregated per team and listing a repository when
+any stream's latest assertion is open, so list and open edges cannot disagree.
+Ghost, glob and wrong-provider names leave the list; a team left with no
+resolved open ownership is denied (no-ownership sentinel). The "currently
+owned" arm (`valid_from <= now`) now applies to the edge too: future-dated
+assertions are no longer projected as edges. Already-projected team nodes keep
+the old raw list, and old future-dated edges remain, until a full rebuild.
 
 Crash-resumable: a durable marker (`acr.context_fabric_projection_rebuild_markers`)
 commits before the purge and clears only after every checkpoint is

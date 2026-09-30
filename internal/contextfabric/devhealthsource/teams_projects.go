@@ -12,7 +12,6 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/ownershipresolve"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -224,8 +223,11 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // wrong-provider names leave the list, case variants and name+id duplicates
 // collapse to one slug. Admission changes in BOTH directions vs v14: narrows
 // (canonical slug / repo_id-wins / ghost, glob and wrong-provider names) and
-// widens where one source stays open after another closes (any-source-open per
-// (team, provider, repository, source), equal to the open edge set). An already-projected
+// widens where one source stays open after another closes (the list is now
+// derived from the edge's own per-(provider, repository, team, source) latest
+// rows, so it equals the open edge set). The edge also stops reading
+// future-dated assertions (the as-of-now arm moved into the shared source).
+// An already-projected
 // team node keeps its old raw list until its entity is re-projected, and its
 // team row / ownership rows carry an updated_at already behind the checkpoint
 // watermark, so only a full rebuild replaces it.
@@ -1213,14 +1215,18 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 // "latest assertion by (valid_from, valid_to IS NULL, valid_to) wins" rule
 // -- verified live against this ClickHouse version there, not re-derived
 // here -- and only keep the repository when THAT latest assertion is open.
-// CHAOS-7130 (supersedes the earlier cross-source collapse): the latest
-// assertion is taken per (team, provider, resolved repository, SOURCE) --
-// ownershipGroupKey, the ONE grouping the edge also derives -- exactly like the
-// repository->team edge's group key, and the repository is listed when ANY
-// source's latest assertion is open -- so the list EQUALS the set of open
-// edges. Basis: CHAOS-2600 (AGENTS.md) -- manual mappings are fallback only,
-// never overrides, never outranking native facts: a later manual close must
-// not cancel an open native assertion.
+// CHAOS-7130 (supersedes the per-(team, repo_full_name) collapse above): the
+// list is NOT a second derivation of "what is currently owned". It aggregates,
+// per team, the SAME per-(provider, resolved repository, team, source) latest
+// assertion rows the repository->team edge projects
+// (repositoryTeamsGroupedSQL: same ownership source and filters incl.
+// valid_from <= now64(3), same latest order, same open predicate), keeps the
+// resolved canonical slug of every row whose latest assertion is open, and so
+// equals the set of open edges by construction. Basis for any-source-open:
+// CHAOS-2600 (AGENTS.md) -- manual mappings are fallback only, never
+// overrides, never outranking native facts: a later manual close must not
+// cancel an open native assertion. Three earlier rounds (#733 r1-r3) each
+// found a disagreement between two hand-written derivations; there is now one.
 //
 // Codex round-2 finding (HIGH): the outer aggregation used to filter to
 // `WHERE latest_is_open` BEFORE computing `latest_update`, so a repository
@@ -1278,37 +1284,12 @@ const noTeamOwnershipSentinel = "acr-context-fabric:no-team-repository-ownership
 const overBoundTeamOwnershipSentinel = "acr-context-fabric:team-repository-ownership-over-bound"
 
 var ownedRepositoriesJoinSQL = `LEFT JOIN (
-	SELECT res.team_id AS team_id, groupUniqArrayIf(res.canonical_slug, res.latest_is_open) AS repos,
-		greatest(max(res.ownership_updated_at), max(res.repo_synced_at)) AS latest_update
-	FROM (
-		SELECT a.team_id AS team_id, a.repo_key AS repo_key, a.ownership_updated_at AS ownership_updated_at,
-			a.latest_is_open AS latest_is_open, rr.repo AS canonical_slug, rr.last_synced AS repo_synced_at
-		FROM (
-			SELECT ro.team_id AS team_id, ro.repo_key AS repo_key, ro.source AS source, ro.provider AS provider, max(ro.updated_at) AS ownership_updated_at,
-				argMax(tuple(ro.valid_to), (ro.valid_from, ro.valid_to IS NULL, ifNull(ro.valid_to, toDateTime64(0, 3, 'UTC')))).1 IS NULL AS latest_is_open
-			FROM ` + teamAuthorizationOwnershipSource + ` AS ro
-			GROUP BY ` + strings.Join(ownershipGroupColumns("ro", nil), ", ") + `
-		) AS a
-		INNER JOIN (SELECT id, repo, last_synced FROM repos FINAL WHERE org_id = {org_id:String}) AS rr
-			ON toString(rr.id) = a.repo_key
-	) AS res
-	GROUP BY res.team_id
+	SELECT g.owning_team_id AS team_id,
+		groupUniqArrayIf(g.resolved_repo_slug, g.latest_is_open != 0 AND g.resolved_repo_slug != '') AS repos,
+		max(g.observed_at) AS latest_update
+	FROM (` + repositoryTeamsGroupedSQL() + `) AS g
+	GROUP BY g.owning_team_id
 ) AS tro ON tro.team_id = tm.id`
-
-// teamAuthorizationOwnershipSource (CHAOS-7130) is the resolved ownership
-// table the team's authorization list is built from: the SAME K11 rule the
-// repository->team edge (repositoryTeamsOwnershipSource) and the fact reads use
-// (ownershipresolve), in its strict mode -- an ownership row counts only if it
-// resolves to a repository present in repos for this organization (own repo_id
-// wins, else provider + lower-cased name). A ghost name, a glob and a
-// wrong-provider name therefore never reach authorization_repositories, and a
-// case variant / name row + id row for one repository collapse to ONE
-// canonical slug (repos.repo). "Currently owned" keeps the non-timebound
-// validity arm (valid_from <= now64(3)), as before.
-var teamAuthorizationOwnershipSource = ownershipresolve.OwnedRepositoriesSource(" AND valid_from <= now64(3)", ownershipresolve.Options{
-	OwnershipColumns: []string{"source", "valid_from", "valid_to", "updated_at"},
-	Columns:          []string{"o.provider AS provider", "o.source AS source", "o.valid_from AS valid_from", "o.valid_to AS valid_to", "o.updated_at AS updated_at"},
-})
 
 // queryTeamsEffectiveUpdatedAtExpr is the SQL expression queryTeams uses as
 // BOTH its cursor/pagination watermark (sincePredicate/orderBy) and its
