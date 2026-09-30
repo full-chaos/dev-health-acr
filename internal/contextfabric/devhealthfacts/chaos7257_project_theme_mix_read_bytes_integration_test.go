@@ -190,9 +190,9 @@ func seedCHAOS7257ProdShape(t *testing.T, ctx context.Context, direct clickhouse
 			}
 		}
 	}
-	for what, batch := range map[string]clickhousedriver.Batch{"work_unit_investments": wui, "work_item_team_attributions": wita, "work_items": items, "work_unit_membership": members} {
+	for i, batch := range []clickhousedriver.Batch{wui, wita, items, members} {
 		if err := batch.Send(); err != nil {
-			t.Fatalf("send %s: %v", what, err)
+			t.Fatalf("send batch %d of 4 (units, attributions, work items, membership): %v", i, err)
 		}
 	}
 	exec("run-1", `INSERT INTO work_unit_membership_runs (org_id, run_id, completed_at) VALUES (?,?,?)`, orgID, "run-1", at.Add(-48*time.Hour))
