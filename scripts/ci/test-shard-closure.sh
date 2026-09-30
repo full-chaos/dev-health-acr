@@ -226,7 +226,7 @@ for job in race unit; do
   else
     shape='round-robin plus the isolated packages'
   fi
-  printf 'PASS: %s shards %s of %s cover all %s packages exactly once [%s]\n' \
+  printf 'PASS: %s legs %s (round-robin total %s) cover all %s packages exactly once [%s]\n' \
     "$job" "$shard_indices" "$total" "$package_count" "$shape"
 
   check_no_heavy_collision "$job" "$total" "$with_isolated" "$shard_indices" heavy_packages
@@ -259,6 +259,95 @@ for job in race unit; do
 done
 
 printf 'PASS: every closure control was correctly rejected\n'
+
+# CHAOS-7282: the unit matrix's dedicated leg(s). Each unit_dedicated package
+# (test-shard.sh --print-unit-dedicated-packages) must be emitted by EXACTLY the
+# leg(s) the workflow's matrix lists beyond the round-robin total, alone, and by
+# no round-robin leg. The union check above already fails if the package is in
+# no leg; this additionally fails if a dedicated package is ALSO round-robined
+# (double coverage that the duplicate check would report, but with a less
+# direct message) or shares its leg with another package (the contention the
+# dedicated leg exists to remove).
+unit_meta="$(job_shard_union unit "$tmpdir/union.unit.check")"
+unit_total="$(printf '%s' "$unit_meta" | cut -f1)"
+unit_indices="$(printf '%s' "$unit_meta" | cut -f3)"
+unit_dedicated_raw="$("$repo_root/scripts/ci/test-shard.sh" --print-unit-dedicated-packages)"
+mapfile -t unit_dedicated < <(printf '%s\n' "$unit_dedicated_raw" | tr ' ' '\n' | grep -v '^$')
+
+check_unit_dedicated_legs() {
+  local total="$1" matrix_csv="$2"
+  shift 2
+  local -a want=("$@") idx_list=()
+  mapfile -t idx_list < <(printf '%s' "$matrix_csv" | tr ',' '\n')
+  local i pkg leg_out idx rr_out
+  for ((i = 0; i < ${#want[@]}; i++)); do
+    pkg="${want[$i]}"
+    idx=$((total + 1 + i))
+    case ",$matrix_csv," in
+      *",$idx,"*) ;;
+      *)
+        printf '%s: unit matrix [%s] has no dedicated leg %s for %s\n' "${0##*/}" "$matrix_csv" "$idx" "$pkg" >&2
+        return 1
+        ;;
+    esac
+    leg_out="$("$repo_root/scripts/ci/test-shard.sh" --with-isolated "$idx" "$total")"
+    if [ "$leg_out" != "$pkg" ]; then
+      printf '%s: unit leg %s must run exactly %s alone, got: %s\n' "${0##*/}" "$idx" "$pkg" "$leg_out" >&2
+      return 1
+    fi
+    for idx in "${idx_list[@]}"; do
+      [ "$idx" -le "$total" ] || continue
+      rr_out="$("$repo_root/scripts/ci/test-shard.sh" --with-isolated "$idx" "$total")"
+      case " $rr_out " in
+        *" $pkg "*)
+          printf '%s: dedicated package %s is also in round-robin leg %s/%s\n' "${0##*/}" "$pkg" "$idx" "$total" >&2
+          return 1
+          ;;
+      esac
+    done
+  done
+}
+
+# CHAOS-7282 review P2: the dedicated list must name devhealthfacts ITSELF, not
+# merely "some isolated package". Every other check here is shape-only, so
+# swapping the list entry for another isolated package (say devhealthsource)
+# would leave them all green while devhealthfacts went back to round-robin.
+devhealthfacts_pkg_suffix="/internal/contextfabric/devhealthfacts"
+assert_dedicated_names_devhealthfacts() {
+  local p
+  for p in "$@"; do
+    case "$p" in *"$devhealthfacts_pkg_suffix") return 0 ;; esac
+  done
+  printf '%s: unit_dedicated_packages does not name %s: %s\n' "${0##*/}" "$devhealthfacts_pkg_suffix" "${*:-<empty>}" >&2
+  return 1
+}
+assert_dedicated_names_devhealthfacts "${unit_dedicated[@]}"
+check_unit_dedicated_legs "$unit_total" "$unit_indices" "${unit_dedicated[@]}"
+printf 'PASS: unit dedicated leg(s) run alone and outside the round-robin: %s\n' "${unit_dedicated[*]:-none}"
+
+# Controls: the same check must reject a matrix missing the dedicated leg and a
+# dedicated list naming a package that a round-robin leg actually carries.
+if [ "${#unit_dedicated[@]}" -lt 1 ]; then
+  printf '%s: unit_dedicated_packages is empty; CHAOS-7282 requires devhealthfacts to have its own leg\n' "${0##*/}" >&2
+  exit 1
+fi
+if check_unit_dedicated_legs "$unit_total" "$(seq -s, 1 "$unit_total")" "${unit_dedicated[@]}" >/dev/null 2>&1; then
+  printf 'CONTROL FAILED: check_unit_dedicated_legs accepted a unit matrix without the dedicated leg\n' >&2
+  exit 1
+fi
+printf 'CONTROL OK: check_unit_dedicated_legs rejects a matrix with no dedicated leg\n'
+substitute_pkg="$("$repo_root/scripts/ci/test-shard.sh" isolated | tr ' ' '\n' | grep -v "$devhealthfacts_pkg_suffix\$" | grep -v '^$' | head -n1)"
+if assert_dedicated_names_devhealthfacts "$substitute_pkg" >/dev/null 2>&1; then
+  printf 'CONTROL FAILED: assert_dedicated_names_devhealthfacts accepted %s in its place\n' "$substitute_pkg" >&2
+  exit 1
+fi
+printf 'CONTROL OK: assert_dedicated_names_devhealthfacts rejects substitute %s\n' "$substitute_pkg"
+round_robin_pkg="$("$repo_root/scripts/ci/test-shard.sh" --with-isolated 1 "$unit_total" | tr ' ' '\n' | head -n1)"
+if check_unit_dedicated_legs "$unit_total" "$unit_indices" "$round_robin_pkg" >/dev/null 2>&1; then
+  printf 'CONTROL FAILED: check_unit_dedicated_legs accepted round-robin package %s as a dedicated leg\n' "$round_robin_pkg" >&2
+  exit 1
+fi
+printf 'CONTROL OK: check_unit_dedicated_legs rejects round-robin package %s posing as dedicated\n' "$round_robin_pkg"
 
 # check_no_heavy_collision's own controls: the real 4-shard layout passing
 # proves nothing about whether the check can actually see a violation.

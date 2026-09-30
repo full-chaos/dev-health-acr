@@ -30,6 +30,10 @@ set -euo pipefail
 #   unit matrix must keep covering it, or sharding `unit` would quietly drop
 #   a package from the non-race suite. Never use this form for a -race job.
 #
+#   CHAOS-7282: indices total+1..total+N (N = len(unit_dedicated_packages)) are
+#   the dedicated legs: each prints ONLY its one package and is never part of
+#   the round-robin over legs 1..total. Only valid with --with-isolated.
+#
 # Usage: test-shard.sh isolated
 #   Prints the packages in isolated_packages (below) instead of sharding.
 #
@@ -149,6 +153,26 @@ dedicated_isolated_packages=(
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 )
 
+# CHAOS-7282: unit_dedicated_packages is a SUBSET of isolated_packages naming
+# the package(s) the plain (non-race) `unit` matrix gives their OWN matrix leg
+# instead of round-robining them. `--with-isolated <index> <total>` shards the
+# remaining packages across legs 1..total; leg total+K (K = 1-based position in
+# this list) emits ONLY that one package. The `unit` matrix in ci.yml is
+# therefore `[1..total+len(unit_dedicated_packages)]`, and
+# scripts/ci/test-shard-closure.sh proves -- by really calling every leg --
+# that the union of all legs is exactly `go list ./...`, so a dedicated package
+# that silently drops out of every leg fails that proof.
+# Why: devhealthfacts runs as ONE serial test binary (445 tests, one shared
+# ClickHouse container, per-test wall summing to ~816s of ~866s on main
+# cdc7222a/#735) and shared a leg -- and a runner's CPU -- with sibling
+# packages. A package that alone spends most of a 900s budget tripped
+# `panic: test timed out after 15m0s` on any new serial container test
+# (#734, run 36737416152). Alone on a runner it gets its own budget
+# (GOTEST_DEVHEALTHFACTS_TIMEOUT in the Makefile).
+unit_dedicated_packages=(
+  "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+)
+
 # heavy_exceptions names a package HEAVY (see is_heavy_package below) despite
 # not carrying the package-scoped-shared-container pattern that function
 # looks for. internal/storage/postgres starts a FRESH testcontainer per test
@@ -188,6 +212,8 @@ usage() {
   printf '  membership (e.g. does my shard carry one), never to select what a\n' >&2
   printf '  job runs -- see the flag'"'"'s own comment in main() for why it is not\n' >&2
   printf '  named as a bare "isolated*" subcommand\n' >&2
+  printf 'usage: %s --print-unit-dedicated-packages\n' "${0##*/}" >&2
+  printf '  prints unit_dedicated_packages, the --with-isolated dedicated legs (total+1..)\n' >&2
   printf 'usage: %s heavy\n' "${0##*/}" >&2
   printf '  prints the packages round-robin gives their own shard (see is_heavy_package)\n' >&2
 }
@@ -308,6 +334,27 @@ assert_dedicated_subset_of_isolated() {
   done
 }
 
+is_unit_dedicated() {
+  local pkg="$1" candidate
+  for candidate in "${unit_dedicated_packages[@]}"; do
+    [ "$pkg" = "$candidate" ] && return 0
+  done
+  return 1
+}
+
+# Every unit_dedicated_packages entry must be an isolated_packages entry and
+# exist in the module (assert_hand_list_exists is called for it in main()).
+assert_unit_dedicated_subset_of_isolated() {
+  local entry
+  for entry in "${unit_dedicated_packages[@]}"; do
+    if ! is_isolated "$entry"; then
+      printf '%s: unit_dedicated_packages entry is not also in isolated_packages: %s\n' \
+        "${0##*/}" "$entry" >&2
+      exit 1
+    fi
+  done
+}
+
 is_heavy_exception() {
   local pkg="$1" candidate
   for candidate in "${heavy_exceptions[@]}"; do
@@ -395,6 +442,16 @@ main() {
     return 0
   fi
 
+  # CHAOS-7282: the unit matrix's dedicated legs, one package per leg, in leg
+  # order (leg total+1 first). Flag-shaped for the same reason as
+  # --print-isolated-packages: a listing for a caller to size its matrix
+  # against, never a "this job runs that selection" invocation.
+  if [ "$#" -eq 1 ] && [ "$1" = "--print-unit-dedicated-packages" ]; then
+    assert_unit_dedicated_subset_of_isolated
+    printf '%s\n' "${unit_dedicated_packages[*]}"
+    return 0
+  fi
+
   # isolated_packages minus dedicated_isolated_packages -- the
   # isolated package(s) meant to share ONE combined job/invocation
   # (race-devhealthschema in ci.yml).
@@ -469,10 +526,21 @@ main() {
     exit 2
   fi
 
-  if [ "$index" -gt "$total" ]; then
-    printf '%s: index (%s) must be <= total (%s)\n' "${0##*/}" "$index" "$total" >&2
+  # CHAOS-7282: with --with-isolated only, indices total+1..total+N are the
+  # unit matrix's dedicated legs (unit_dedicated_packages); everywhere else
+  # the index must stay within 1..total.
+  local dedicated_leg=""
+  local max_index="$total"
+  if [ "$include_isolated" -eq 1 ]; then
+    max_index=$((total + ${#unit_dedicated_packages[@]}))
+  fi
+  if [ "$index" -gt "$max_index" ]; then
+    printf '%s: index (%s) must be <= %s\n' "${0##*/}" "$index" "$max_index" >&2
     usage
     exit 2
+  fi
+  if [ "$index" -gt "$total" ]; then
+    dedicated_leg="${unit_dedicated_packages[$((index - total - 1))]}"
   fi
 
   compute_all_packages
@@ -491,6 +559,16 @@ main() {
   # into a shard here while its own CI job also claims it.
   assert_dedicated_subset_of_isolated
 
+  # CHAOS-7282: same discipline for unit_dedicated_packages -- it must exist
+  # and be isolated, or its dedicated leg would test nothing while the
+  # round-robin below (which skips it) also covers nothing.
+  assert_hand_list_exists unit_dedicated_packages unit_dedicated_packages
+  assert_unit_dedicated_subset_of_isolated
+  if [ -n "$dedicated_leg" ]; then
+    printf '%s\n' "$dedicated_leg"
+    return 0
+  fi
+
   # CHAOS-5653: same discipline as isolated_packages, for heavy_exceptions --
   # a renamed or removed package left there would silently stop being
   # separated from anything, with the guarantee this fix promises quietly
@@ -508,6 +586,10 @@ main() {
   local -a heavy=() light=()
   for pkg in "${all_packages[@]}"; do
     if [ "$include_isolated" -eq 0 ] && is_isolated "$pkg"; then
+      continue
+    fi
+    # CHAOS-7282: a unit-dedicated package has its own leg (index > total).
+    if [ "$include_isolated" -eq 1 ] && is_unit_dedicated "$pkg"; then
       continue
     fi
     if is_heavy_package "$pkg"; then

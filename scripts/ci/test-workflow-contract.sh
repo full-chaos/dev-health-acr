@@ -329,8 +329,14 @@ check_go_cache() {
 # `total` the script is invoked with runs a partition that is not a partition,
 # and every job still reports success. The check is written once and applied
 # to each sharded job by name.
+#
+# CHAOS-7282: an optional third argument names how many EXTRA matrix indices
+# the job carries beyond `total` -- the unit matrix's dedicated legs, which
+# test-shard.sh serves at indices total+1..total+N. The matrix must then be
+# exactly 1..total+N, so a dedicated leg deleted from the matrix (its package
+# silently running nowhere) fails here as well as in test-shard-closure.sh.
 check_shard_agreement() {
-  local file="$1" job="$2"
+  local file="$1" job="$2" extra="${3:-0}"
   local block shard_line shard_inside shard_count shard_call total
   block="$(job_block "$file" "$job")"
 
@@ -349,9 +355,9 @@ check_shard_agreement() {
   fi
   total="$(printf '%s\n' "$shard_call" | grep -oE '[0-9]+' | tail -n1 || true)"
 
-  if [ -z "$total" ] || [ "$shard_count" != "$total" ]; then
-    printf '%s matrix has %s shard(s) but test-shard.sh is called with total=%s\n' \
-      "$job" "$shard_count" "${total:-<none>}" >&2
+  if [ -z "$total" ] || [ "$shard_count" != "$((total + extra))" ]; then
+    printf '%s matrix has %s shard(s) but test-shard.sh is called with total=%s (+%s dedicated leg(s))\n' \
+      "$job" "$shard_count" "${total:-<none>}" "$extra" >&2
     return 1
   fi
 
@@ -360,11 +366,11 @@ check_shard_agreement() {
   # silently dropping that shard's packages from the suite with every job
   # still green. Require the matrix to be exactly the set 1..total.
   local expected actual
-  expected="$(seq 1 "$total" | LC_ALL=C sort)"
+  expected="$(seq 1 "$((total + extra))" | LC_ALL=C sort)"
   actual="$(printf '%s' "$shard_inside" | tr ',' '\n' | tr -d '[:blank:]' | grep -v '^$' | LC_ALL=C sort)"
   if [ "$expected" != "$actual" ]; then
     printf '%s matrix indices must be exactly 1..%s, got: %s\n' \
-      "$job" "$total" "$(printf '%s' "$shard_inside" | tr -d '[:space:]')" >&2
+      "$job" "$((total + extra))" "$(printf '%s' "$shard_inside" | tr -d '[:space:]')" >&2
     return 1
   fi
 }
@@ -382,8 +388,9 @@ check_race_shard_agreement() {
 # runtime union check would agree with it, because it reads the shape out of
 # this same invocation.
 check_unit_shard_agreement() {
-  local file="$1" block shard_call
-  check_shard_agreement "$file" unit || return 1
+  local file="$1" block shard_call dedicated
+  dedicated="$("$repo_root/scripts/ci/test-shard.sh" --print-unit-dedicated-packages | wc -w | tr -d ' ')"
+  check_shard_agreement "$file" unit "$dedicated" || return 1
 
   block="$(job_block "$file" unit)"
   shard_call="$(printf '%s\n' "$block" | grep -E '^[[:space:]]*[a-z_]+="?\$\(scripts/ci/test-shard\.sh' | head -n1 || true)"
@@ -942,11 +949,26 @@ unit_mismatched_shards="$tmpdir/unit-mismatched-shards.yml"
 awk '
   /^  unit:/ { in_unit=1 }
   in_unit && /^  [A-Za-z0-9_-]+:/ && !/^  unit:/ { in_unit=0 }
-  in_unit && /shard: \[1, 2, 3, 4\]/ { sub(/shard: \[1, 2, 3, 4\]/, "shard: [1, 2, 3]") }
+  in_unit && /shard: \[1, 2, 3, 4, 5\]/ { sub(/shard: \[1, 2, 3, 4, 5\]/, "shard: [1, 2, 3]") }
   { print }
 ' "$workflow" > "$unit_mismatched_shards"
 assert_check_fails 'shrank the unit matrix to 3 shards without updating test-shard.sh total' \
   check_unit_shard_agreement "$unit_mismatched_shards"
+
+# (i2b) CHAOS-7282: delete ONLY the dedicated leg (5) from the unit matrix.
+# The remaining [1, 2, 3, 4] still equals the round-robin total, so a check
+# that only compared matrix size to `total` would accept it -- and
+# devhealthfacts would run in no leg at all with every job green.
+unit_drops_dedicated_leg="$tmpdir/unit-drops-dedicated-leg.yml"
+awk '
+  /^  unit:/ { in_unit=1 }
+  in_unit && /^  [A-Za-z0-9_-]+:/ && !/^  unit:/ { in_unit=0 }
+  in_unit && /shard: \[1, 2, 3, 4, 5\]/ { sub(/shard: \[1, 2, 3, 4, 5\]/, "shard: [1, 2, 3, 4]") }
+  { print }
+' "$workflow" > "$unit_drops_dedicated_leg"
+cmp -s "$workflow" "$unit_drops_dedicated_leg" && { printf 'NEGATIVE CONTROL SETUP FAILED: unit_drops_dedicated_leg did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'removed the unit matrix'"'"'s dedicated leg (shard 5), leaving the round-robin legs intact' \
+  check_unit_shard_agreement "$unit_drops_dedicated_leg"
 
 # (i3) drop --with-isolated from the unit job's invocation. The matrix still
 # agrees with the total, so the shape check above is the only thing standing
@@ -987,13 +1009,13 @@ assert_check_fails 'gated the reports job on success(), so a failing shard skips
 
 # One subcommand's -expect edited alone.
 reports_expect_drift="$tmpdir/reports-expect-drift.yml"
-sed 's/mergetestreports coverage -dir .tmp\/unit-shards -expect 4/mergetestreports coverage -dir .tmp\/unit-shards -expect 3/' \
+sed 's/mergetestreports coverage -dir .tmp\/unit-shards -expect 5/mergetestreports coverage -dir .tmp\/unit-shards -expect 4/' \
   "$workflow" > "$reports_expect_drift"
 cmp -s "$workflow" "$reports_expect_drift" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_expect_drift did not change the workflow\n' >&2; exit 1; }
 assert_check_fails 'changed only the coverage merge'"'"'s -expect' check_reports_job "$reports_expect_drift"
 
 # The unit matrix changes size and the reports job does not follow.
-assert_check_fails 'shrank the unit matrix to 3 shards while reports still expects 4' \
+assert_check_fails 'shrank the unit matrix to 3 shards while reports still expects 5' \
   check_reports_job "$unit_mismatched_shards"
 
 # The behaviour step deleted: only the greps would be left standing guard.
@@ -1007,7 +1029,7 @@ cmp -s "$workflow" "$reports_without_crosscheck" && { printf 'NEGATIVE CONTROL S
 assert_check_fails 'deleted the crosscheck step from the reports job' check_reports_job "$reports_without_crosscheck"
 
 reports_crosscheck_expect_drift="$tmpdir/reports-crosscheck-expect-drift.yml"
-sed 's/mergetestreports crosscheck -dir .tmp\/unit-shards -expect 4/mergetestreports crosscheck -dir .tmp\/unit-shards -expect 3/' \
+sed 's/mergetestreports crosscheck -dir .tmp\/unit-shards -expect 5/mergetestreports crosscheck -dir .tmp\/unit-shards -expect 4/' \
   "$workflow" > "$reports_crosscheck_expect_drift"
 cmp -s "$workflow" "$reports_crosscheck_expect_drift" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_crosscheck_expect_drift did not change the workflow\n' >&2; exit 1; }
 assert_check_fails 'changed only the crosscheck step'"'"'s -expect' check_reports_job "$reports_crosscheck_expect_drift"
