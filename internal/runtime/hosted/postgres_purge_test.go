@@ -3,12 +3,16 @@ package hosted
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-acr/internal/config"
+	storagepostgres "github.com/full-chaos/dev-health-acr/internal/storage/postgres"
 )
 
 func TestRunPurgeTickLoop_invokesBoundedPurgeOnEachTick(t *testing.T) {
@@ -263,5 +267,148 @@ func TestPacketPurgeSlogObserver_logsOnlyTheFixedRedactedMessage(t *testing.T) {
 	output := buf.String()
 	if !strings.Contains(output, packetPurgeFailureMessage) {
 		t.Fatalf("log output = %q, want it to contain %q", output, packetPurgeFailureMessage)
+	}
+}
+
+// fakeOAuthPurger records every PurgeExpired call and answers a scripted
+// result, standing in for *storagepostgres.OAuthStore.
+type fakeOAuthPurger struct {
+	mu     sync.Mutex
+	calls  []fakeOAuthPurgeCall
+	result storagepostgres.OAuthPurgeResult
+	err    error
+}
+
+type fakeOAuthPurgeCall struct {
+	requestGrace, clientIdle time.Duration
+	limit                    int
+}
+
+func (f *fakeOAuthPurger) PurgeExpired(_ context.Context, _ time.Time, requestGrace, clientIdle time.Duration, limit int) (storagepostgres.OAuthPurgeResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, fakeOAuthPurgeCall{requestGrace: requestGrace, clientIdle: clientIdle, limit: limit})
+	return f.result, f.err
+}
+
+func oauthConfiguredTestConfig() config.Config {
+	return config.Config{
+		OAuthIssuer: "https://acr.example.test", OAuthResources: []string{"https://mcp.example.test/mcp"},
+		OAuthConsentURL:        "https://www.example.test/acr/authorize",
+		OAuthRequestPurgeGrace: 36 * time.Hour, OAuthClientIdleTTL: 45 * 24 * time.Hour,
+	}
+}
+
+// CHAOS-6191: a deployment without the OAuth login never runs the purge, so a
+// runtime role that was never granted DELETE on the OAuth tables still starts.
+func TestStartConfiguredOAuthPurge_unconfiguredNeverPurges(t *testing.T) {
+	// Given
+	purger := &fakeOAuthPurger{err: errors.New("permission denied for table acr.oauth_clients")}
+
+	// When
+	closeLoop, err := startConfiguredOAuthPurge(context.Background(), config.Config{}, purger, nil)
+
+	// Then
+	if err != nil || closeLoop == nil {
+		t.Fatalf("unconfigured: err = %v, closer present = %t; want no error and a no-op closer", err, closeLoop != nil)
+	}
+	if closeErr := closeLoop(); closeErr != nil {
+		t.Fatalf("no-op closer error = %v", closeErr)
+	}
+	purger.mu.Lock()
+	defer purger.mu.Unlock()
+	if len(purger.calls) != 0 {
+		t.Fatalf("purge ran %d time(s) with OAuth unconfigured; want 0", len(purger.calls))
+	}
+}
+
+// Configured, the initial purge runs before startup returns with the
+// configured windows and the bounded batch, and a failure (a missing DELETE
+// grant) fails startup instead of being retried silently.
+func TestStartConfiguredOAuthPurge_configuredPurgesAtStartupWithConfigWindows(t *testing.T) {
+	// Given
+	cfg := oauthConfiguredTestConfig()
+	purger := &fakeOAuthPurger{}
+
+	// When
+	closeLoop, err := startConfiguredOAuthPurge(context.Background(), cfg, purger, nil)
+
+	// Then
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = closeLoop() })
+	purger.mu.Lock()
+	defer purger.mu.Unlock()
+	want := fakeOAuthPurgeCall{requestGrace: 36 * time.Hour, clientIdle: 45 * 24 * time.Hour, limit: defaultOAuthPurgeBatchLimit}
+	if len(purger.calls) != 1 || purger.calls[0] != want {
+		t.Fatalf("startup purge calls = %#v, want exactly [%#v]", purger.calls, want)
+	}
+}
+
+func TestStartConfiguredOAuthPurge_missingDeleteGrantFailsStartup(t *testing.T) {
+	// Given
+	wantErr := errors.New("permission denied for table acr.oauth_clients")
+	purger := &fakeOAuthPurger{err: wantErr}
+
+	// When
+	closeLoop, err := startConfiguredOAuthPurge(context.Background(), oauthConfiguredTestConfig(), purger, nil)
+
+	// Then
+	if !errors.Is(err, wantErr) || closeLoop != nil {
+		t.Fatalf("error = %v, closer present = %t; want %v and no closer", err, closeLoop != nil, wantErr)
+	}
+}
+
+// Non-positive windows (a Config built without config.Load) are refused by the
+// store's own input check at the initial purge, so they fail startup rather
+// than deleting everything; the check runs before any statement.
+func TestStartConfiguredOAuthPurge_zeroWindowsFailStartupBeforeAnyDelete(t *testing.T) {
+	// Given
+	database := sql.OpenDB(idleConnector{})
+	t.Cleanup(func() { _ = database.Close() })
+	store, err := storagepostgres.NewOAuthStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := oauthConfiguredTestConfig()
+	cfg.OAuthRequestPurgeGrace, cfg.OAuthClientIdleTTL = 0, 0
+
+	// When
+	closeLoop, err := startConfiguredOAuthPurge(context.Background(), cfg, store, nil)
+
+	// Then
+	if err == nil || closeLoop != nil {
+		t.Fatalf("zero windows: err = %v, closer present = %t; want a startup error", err, closeLoop != nil)
+	}
+}
+
+func TestOAuthPurgeFunc_logsOneCountLineOnlyWhenRowsWereDeleted(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	purger := &fakeOAuthPurger{}
+	purge := oauthPurgeFunc(purger, time.Hour, 2*time.Hour, logger)
+
+	// An empty tick logs nothing.
+	if total, err := purge(context.Background(), time.Now(), 5); total != 0 || err != nil || logs.Len() != 0 {
+		t.Fatalf("empty tick: total=%d err=%v log=%q", total, err, logs.String())
+	}
+
+	// A tick that deleted rows logs one line with the two counts and nothing else.
+	purger.result = storagepostgres.OAuthPurgeResult{Requests: 3, Clients: 2}
+	total, err := purge(context.Background(), time.Now(), 5)
+	line := strings.TrimSpace(logs.String())
+	if total != 5 || err != nil || strings.Count(line, "\n") != 0 ||
+		!strings.Contains(line, `msg="oauth purge"`) || !strings.Contains(line, "requests=3") || !strings.Contains(line, "clients=2") {
+		t.Fatalf("delete tick: total=%d err=%v log=%q", total, err, line)
+	}
+
+	// A tick that deleted requests and then failed reports the failure and still logs what was deleted.
+	logs.Reset()
+	wantErr := errors.New("client statement failed")
+	purger.result, purger.err = storagepostgres.OAuthPurgeResult{Requests: 1}, wantErr
+	total, err = purge(context.Background(), time.Now(), 5)
+	if total != 1 || !errors.Is(err, wantErr) || !strings.Contains(logs.String(), "requests=1") {
+		t.Fatalf("partial-failure tick: total=%d err=%v log=%q", total, err, logs.String())
 	}
 }

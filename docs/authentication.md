@@ -201,10 +201,34 @@ Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
   `slow_down`). Codes, handles, verifiers, client IDs, device codes, user
   codes, redirect URIs, state and tokens are never logged.
 
-The runtime database role needs `SELECT, INSERT, UPDATE` on
+The runtime database role needs `SELECT, INSERT, UPDATE, DELETE` on
 `acr.oauth_clients` and `acr.oauth_authorization_requests`, and
 `SELECT, INSERT` on `acr.oauth_device_grants`
-(`deploy/compose/acr-db-init.sh runtime-acl`).
+(`deploy/compose/acr-db-init.sh runtime-acl`; on Kubernetes the
+`acr-migrate grant-runtime-acl` pre-install/pre-upgrade hook adds `DELETE` and
+the device-grant privileges). `DELETE` is for the purge loop below: when the
+OAuth login is configured, acr-api runs one purge at startup (a missing
+`DELETE` fails startup) and then one every 5 minutes, at most 500 rows per
+statement:
+
+- An authorization request is deleted `ACR_OAUTH_REQUEST_PURGE_GRACE` (default
+  `24h`) after its own expiry, unless the device authorization behind it
+  redeemed a credential that is still unrevoked and unexpired; such a request
+  is kept until that credential ends.
+- A dynamically registered client is deleted when it was registered more than
+  `ACR_OAUTH_CLIENT_IDLE_TTL` (default `720h`) ago and has no request row left,
+  no device grant created inside that window, and no live credential obtained
+  through a device grant of its own. `ACR_OAUTH_CLIENT_IDLE_TTL` must be longer
+  than `ACR_OAUTH_REQUEST_PURGE_GRACE`; both must be positive. Because request
+  rows go after the grace, the idle test sees a client's last request only for
+  that long: a client whose last request never produced a credential is
+  eligible about one grace after that request. Raise the grace to `720h` to
+  measure idleness over the whole window.
+- Client ID metadata document clients are never stored, so they are never
+  purged. Credentials are not touched: a live credential never depends on its
+  client row.
+- Each non-empty tick logs one `oauth purge` line with the two row counts; a
+  failed tick logs a fixed line without the error text.
 
 ## Rate limiting
 

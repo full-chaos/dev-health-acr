@@ -187,6 +187,13 @@ func openPostgres(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 			return fail(errors.Join(fmt.Errorf("purge expired workload credentials: %w", err), stopPurgeLoop()))
 		}
 	}
+	// CHAOS-6191: gated on the OAuth login being configured (see
+	// startConfiguredOAuthPurge); its initial purge proves DELETE on both
+	// OAuth tables, so a missing grant fails startup loudly.
+	stopOAuthPurgeLoop, err := startConfiguredOAuthPurge(ctx, cfg, oauth, logger)
+	if err != nil {
+		return fail(errors.Join(fmt.Errorf("purge expired oauth rows: %w", err), stopPurgeLoop(), stopWorkloadCredentialPurgeLoop()))
+	}
 	readinessTimeout := cfg.PostgresPingTimeout
 	if readinessTimeout <= 0 {
 		readinessTimeout = defaultPostgresReadinessTimeout
@@ -200,7 +207,7 @@ func openPostgres(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 			return checkPostgresRuntime(checkContext, database, runner, cfg.EnableEpisodeWriteback)
 		},
 		close: func() error {
-			return errors.Join(stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), database.Close())
+			return errors.Join(stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), stopOAuthPurgeLoop(), database.Close())
 		},
 	}, nil
 }

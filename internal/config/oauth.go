@@ -4,6 +4,16 @@ import (
 	"errors"
 	"net/url"
 	"strings"
+	"time"
+)
+
+const (
+	// defaultOAuthRequestPurgeGrace and defaultOAuthClientIdleTTL are the
+	// CHAOS-6191 purge windows. The request grace is forensic slack: a
+	// request is redeemable only until its expires_at (10 minutes after
+	// creation) plus the 2 minute authorization code TTL.
+	defaultOAuthRequestPurgeGrace = 24 * time.Hour
+	defaultOAuthClientIdleTTL     = 30 * 24 * time.Hour
 )
 
 // oauthResources splits the comma-separated ACR_OAUTH_RESOURCES value.
@@ -60,6 +70,15 @@ func validateOAuthConfig(c Config) error {
 	}
 	if !c.RequireBackingStores {
 		return errors.New("ACR_OAUTH_ISSUER requires the hosted runtime (ACR_REQUIRE_BACKING_STORES)")
+	}
+	// CHAOS-6191: the purge windows must be positive, and the client idle
+	// window must outlast the request grace, or a client could be purged
+	// while a request row it still owns is being kept.
+	if c.OAuthRequestPurgeGrace <= 0 {
+		return errors.New("ACR_OAUTH_REQUEST_PURGE_GRACE must be a positive duration")
+	}
+	if c.OAuthClientIdleTTL <= c.OAuthRequestPurgeGrace {
+		return errors.New("ACR_OAUTH_CLIENT_IDLE_TTL must be longer than ACR_OAUTH_REQUEST_PURGE_GRACE")
 	}
 	return nil
 }
