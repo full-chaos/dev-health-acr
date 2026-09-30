@@ -2,10 +2,12 @@ package devhealthfacts
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/full-chaos/dev-health-go/readers"
 )
 
@@ -69,4 +71,62 @@ func NewInstrumentedProviders(client contextpacket.ClickHouseQueryClient, instr 
 		wrapped[i] = instrumentedProvider{inner: provider, instr: instr}
 	}
 	return wrapped
+}
+
+// ReadBudgetExceededMessage is the log message of the Warn line
+// NewBudgetWarningInstrumentation writes, and ReadBudgetExceededReason its
+// closed reason value (CHAOS-7257).
+const (
+	ReadBudgetExceededMessage = "devhealthfacts.read_budget_exceeded"
+	ReadBudgetExceededReason  = "read_budget_exceeded"
+)
+
+// budgetWarningInstrumentation decorates a readers.Instrumentation so a
+// ClickHouse read-budget exception (Code 307 TOO_MANY_BYTES, 158
+// TOO_MANY_ROWS) on any readers.QueryOrgScopedNamed statement is ALSO logged at
+// Warn, with a closed reason and the statement id.
+//
+// Why: before this, the roll-up statement that exceeded max_bytes_to_read on
+// prod (CHAOS-7257) surfaced only as readers.SlogInstrumentation's Info line
+// with error_class=query_error -- the same class as a network blip -- and as
+// "devhealthfacts: query project theme mix failed" to the caller. A statement
+// that outgrew its read budget fails again on every identical retry, so it is
+// a defect to page on, not a transient to retry; this line is what an alert
+// keys on.
+//
+// Only closed values are logged: the reason, the reader name (the statement
+// id, a constant chosen at each call site), and the numeric ClickHouse code.
+// Never the exception text (it carries query fragments and byte counts), never
+// a row, an org id or a subject id.
+type budgetWarningInstrumentation struct {
+	next   readers.Instrumentation
+	logger *slog.Logger
+}
+
+// NewBudgetWarningInstrumentation wraps next (nil = no other instrumentation)
+// so a read-budget exception is logged at Warn through logger (nil =
+// slog.Default()) in addition to whatever next records.
+func NewBudgetWarningInstrumentation(next readers.Instrumentation, logger *slog.Logger) readers.Instrumentation {
+	if next == nil {
+		next = readers.NoopInstrumentation{}
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return budgetWarningInstrumentation{next: next, logger: logger}
+}
+
+// StartQuery implements readers.Instrumentation.
+func (b budgetWarningInstrumentation) StartQuery(ctx context.Context, reader string, orgScoped bool) (context.Context, func(error)) {
+	ctx, finish := b.next.StartQuery(ctx, reader, orgScoped)
+	return ctx, func(err error) {
+		if code, exceeded := runtimeclickhouse.QueryBudgetExceededCode(err); exceeded {
+			b.logger.LogAttrs(ctx, slog.LevelWarn, ReadBudgetExceededMessage,
+				slog.String("reason", ReadBudgetExceededReason),
+				slog.String("reader", contextfabric.SanitizeLogAttr(reader)),
+				slog.Int("clickhouse_code", int(code)),
+			)
+		}
+		finish(err)
+	}
 }

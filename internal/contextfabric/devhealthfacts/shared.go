@@ -149,7 +149,16 @@ import (
 // membership run; the roll-up keeps a NULL latest repo_id. A candidate saved
 // under v18 may carry a project mix over superseded / out-of-run units and must
 // not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v19"
+//
+// v19 -> v20 (CHAOS-7257): the project theme-mix statements (owning-team
+// roll-up and project-native) read work_unit_investments once, inside
+// acr-api's max_bytes_to_read. Under v19 they scanned it three times and, on a
+// production-sized table, answered ClickHouse Code 307 -- so a candidate saved
+// under v19 for a project investment question may hold the degraded answer
+// ("query project theme mix failed") that answer reuse serves for Partial and
+// Degraded results too, and must not be reused. The rows the statements return
+// are unchanged (chaos7257_*_parity_integration_test.go).
+const QueryVersion = "devhealthfacts.clickhouse.v20"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

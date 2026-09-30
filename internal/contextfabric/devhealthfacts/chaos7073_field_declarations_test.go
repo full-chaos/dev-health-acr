@@ -280,13 +280,13 @@ func t4Cases() []t4Case {
 			investmentProjectRollupRow("linear", "proj-1", "team-1", "Team One", "product", "growth", 30, 12, 4, 850, 18.5),
 			nullStream,
 		}},
-		{match: "project_evidence_attributed AS", rows: [][]any{
+		{match: "project_link AS", rows: [][]any{
 			{"linear:proj-1", 60.0, 20.0, 10.0, 6.0, 4.0, 1.0, uint64(9), uint64(2), uint64(2), uint64(3)},
 		}},
 	}
 	add(t4Case{name: "investment/project_rollup", kind: contextfabric.FactInvestment, subjects: proj, tables: projectAB})
 	add(t4Case{name: "investment/project_native_over_rollup", kind: contextfabric.FactInvestment, subjects: proj, tables: append(append([]fakeTable{}, projectAB...),
-		fakeTable{match: "unit_span AS", rows: [][]any{nativeMixRow("proj-1", 7)}})})
+		fakeTable{match: "AS project_count", rows: [][]any{nativeMixRow("proj-1", 7)}})})
 
 	// ---- entity kinds (CHAOS-7120)
 	work := []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")}

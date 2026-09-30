@@ -33,3 +33,38 @@ func TestRepoMixStatementReadsWorkUnitInvestmentsOnce(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-7257: the project roll-up and project-native statements name
+// work_unit_investments exactly once, for every time bound. A second textual
+// reference (a CTE used twice inlines twice) is a second scan of the table: it
+// is what read 65.83 MiB against the 64 MiB max_bytes_to_read on prod. This is
+// the cheap static guard; the byte measurement on a real ClickHouse is
+// chaos7257_project_theme_mix_read_bytes_integration_test.go.
+func TestProjectMixStatementsReadWorkUnitInvestmentsOnce(t *testing.T) {
+	t.Parallel()
+	start := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	for name, bound := range map[string]factTimeBound{
+		"current axis":  {},
+		"range":         {active: true, hasStart: true, start: start, end: end},
+		"point in time": {active: true, end: end},
+	} {
+		for statementName, statement := range map[string]string{
+			"roll-up": projectRollupMixStatement(bound),
+			"native":  projectNativeMixStatement(bound, maxFactRowsProbe),
+		} {
+			if got := strings.Count(statement, "FROM work_unit_investments"); got != 1 {
+				t.Errorf("%s / %s: statement reads work_unit_investments %d times, want 1", statementName, name, got)
+			}
+			// Any other mention (a table alias, a join) would be a second reader.
+			if got := strings.Count(statement, "work_unit_investments"); got != 1 {
+				t.Errorf("%s / %s: statement names work_unit_investments %d times, want 1", statementName, name, got)
+			}
+			for _, cte := range []string{"latest AS", "windowed AS", "repo_linked AS", "evidence_resolved AS", "unit_issue AS", "resolved AS"} {
+				if strings.Contains(statement, cte) {
+					t.Errorf("%s / %s: statement still defines the %q CTE of the multi-reference form", statementName, name, cte)
+				}
+			}
+		}
+	}
+}
