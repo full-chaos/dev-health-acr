@@ -34,7 +34,11 @@
 // files the job wrote, so a merge that never ran, ran on fewer shards, or
 // produced something other than the sum fails there. The failed-test set is
 // re-derived from every shard's raw go-test.json AND from the merged JUnit, and
-// both must equal the listing `failures` wrote.
+// both must equal the listing `failures` wrote; a failed test's identity is the
+// (package, test) PAIR, never a joined string (see failKey). The Cobertura
+// document is decoded whole (a truncated one is an error), its root counters are
+// checked against its own class-level <line> elements, and it is tied to the
+// merged profile by what holds exactly on real data (see checkCobertura).
 //
 // The tool fails closed on all malformed input, never guessing at it. A missing
 // shard, an extra shard, a shard directory whose name is not the canonical
@@ -680,12 +684,24 @@ type failureEntry struct {
 	Shards  []int  `json:"shards"`
 }
 
-func (e failureEntry) key() string {
-	if e.Test == "" {
-		return e.Package
+// failKey is a failed test's IDENTITY: the (package, test) pair itself. It is
+// a struct on purpose. A `package + "/" + test` string is not unique -- the pair
+// (example.org/m, TestX/TestY) and the pair (example.org/m/TestX, TestY) are two
+// different failures with one joined name -- and any map keyed by it collapses
+// them (CHAOS-3895 r3 P1, executed). The joined form exists only for display.
+type failKey struct{ Package, Test string }
+
+func (k failKey) String() string {
+	if k.Test == "" {
+		return k.Package
 	}
-	return e.Package + "/" + e.Test
+	return k.Package + "/" + k.Test
 }
+
+func (e failureEntry) id() failKey { return failKey{e.Package, e.Test} }
+
+// key is the display name of the entry (see failKey: never an identity).
+func (e failureEntry) key() string { return e.id().String() }
 
 // failureReport is what the `failures` command found, and what `crosscheck`
 // reads back from -report.
@@ -757,11 +773,11 @@ func runFailures(dir string, expect int, summary, report string, stdout io.Write
 // test failed could be exactly the one that is mangled or new.
 func collectFailures(streams [][]byte) (failureReport, error) {
 	rep := failureReport{}
-	byKey := map[string]*failureEntry{}
+	byKey := map[failKey]*failureEntry{}
 	for i, raw := range streams {
 		shard := i + 1
 		se := shardEvents{Shard: shard}
-		seen := map[string]bool{}
+		seen := map[failKey]bool{}
 		r := bufio.NewReaderSize(bytes.NewReader(raw), 1<<20)
 		lineNo := 0
 		for {
@@ -781,8 +797,7 @@ func collectFailures(streams [][]byte) (failureReport, error) {
 				}
 				se.Events++
 				if ev.Action == "fail" && ev.Package != "" {
-					e := failureEntry{Package: ev.Package, Test: ev.Test}
-					k := e.key()
+					k := failKey{ev.Package, ev.Test}
 					if !seen[k] {
 						seen[k] = true
 						if byKey[k] == nil {
@@ -806,11 +821,16 @@ func collectFailures(streams [][]byte) (failureReport, error) {
 		rep.PerShard = append(rep.PerShard, se)
 	}
 	rep.Shards = len(rep.PerShard)
-	keys := make([]string, 0, len(byKey))
+	keys := make([]failKey, 0, len(byKey))
 	for k := range byKey {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys)
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Package != keys[j].Package {
+			return keys[i].Package < keys[j].Package
+		}
+		return keys[i].Test < keys[j].Test
+	})
 	for _, k := range keys {
 		rep.Failed = append(rep.Failed, *byKey[k])
 	}
@@ -854,13 +874,14 @@ func countElements(data []byte, local string) (int, error) {
 	}
 }
 
-// failedSet is the normalised set of failures, as "package" or "package/Test"
-// keys. A package-level failure is dropped when a test in that package failed
+// failedSet is the normalised set of failures, as structured (package, test)
+// identities (see failKey; a package-level failure has an empty Test). A
+// package-level failure is dropped when a test in that package failed
 // too (the package fails BECAUSE its test did, and JUnit records only the
 // test); what remains at package level is a package that failed with no failed
 // test -- a build failure, a TestMain exit -- which JUnit records as a
 // synthetic testcase with no classname under that package's suite.
-type failedSet map[string]bool
+type failedSet map[failKey]bool
 
 func normalizeFailed(pairs [][2]string) failedSet {
 	withTest := map[string]bool{}
@@ -873,9 +894,9 @@ func normalizeFailed(pairs [][2]string) failedSet {
 	for _, p := range pairs {
 		switch {
 		case p[1] != "":
-			out[p[0]+"/"+p[1]] = true
+			out[failKey{p[0], p[1]}] = true
 		case !withTest[p[0]]:
-			out[p[0]] = true
+			out[failKey{p[0], ""}] = true
 		}
 	}
 	return out
@@ -975,15 +996,17 @@ func junitFailedPairs(data []byte) ([][2]string, error) {
 	}
 }
 
+// diffSets lists, for display, the failures only in a and only in b (the
+// comparison itself is on the structured keys).
 func diffSets(a, b failedSet) (onlyA, onlyB []string) {
 	for k := range a {
 		if !b[k] {
-			onlyA = append(onlyA, k)
+			onlyA = append(onlyA, k.String())
 		}
 	}
 	for k := range b {
 		if !a[k] {
-			onlyB = append(onlyB, k)
+			onlyB = append(onlyB, k.String())
 		}
 	}
 	sort.Strings(onlyA)
@@ -991,39 +1014,185 @@ func diffSets(a, b failedSet) (onlyA, onlyB []string) {
 	return
 }
 
-// coberturaFacts reads the two counters off a Cobertura <coverage> root.
-func coberturaFacts(data []byte) (valid, covered int, err error) {
+// coberturaDoc is what a WHOLE Cobertura document states and holds.
+type coberturaDoc struct {
+	rootValid, rootCovered int             // the <coverage> root's counters
+	valid, covered         int             // recomputed from the class-level <line> elements
+	files                  map[string]bool // every class's filename
+	fileHit                map[string]bool // filename -> some class-level line of it has hits > 0
+}
+
+// parseCobertura decodes a Cobertura document to its END: a truncated or
+// malformed document is an error, never a document whose opening tag was
+// enough. It recomputes the line counts itself from the class-level
+// <line number hits> elements -- lines under <class><lines>, NOT the method
+// lines, which repeat them (measured on the real report of run 36729729427:
+// 212314 <line> elements, 106157 of them class-level, == the root's
+// lines-valid) -- so the root counters are a claim to check, not a source.
+func parseCobertura(data []byte) (coberturaDoc, error) {
+	doc := coberturaDoc{files: map[string]bool{}, fileHit: map[string]bool{}}
 	dec := xml.NewDecoder(bytes.NewReader(data))
+	dec.Strict = true
+	var (
+		path      []string
+		rootSeen  bool
+		rootDone  bool
+		curFile   string
+		rootValid = -1
+		rootCov   = -1
+	)
 	for {
-		tok, tErr := dec.Token()
-		if tErr == io.EOF {
-			return 0, 0, errors.New("no <coverage> root element")
+		tok, err := dec.Token()
+		if err == io.EOF {
+			break
 		}
-		if tErr != nil {
-			return 0, 0, tErr
+		if err != nil {
+			return doc, fmt.Errorf("malformed or truncated XML: %w", err)
 		}
-		se, ok := tok.(xml.StartElement)
-		if !ok {
-			continue
-		}
-		if se.Name.Local != "coverage" {
-			return 0, 0, fmt.Errorf("root element is <%s>, want <coverage>", se.Name.Local)
-		}
-		var vOK, cOK bool
-		for _, a := range se.Attr {
-			switch a.Name.Local {
-			case "lines-valid":
-				valid, err = strconv.Atoi(a.Value)
-				vOK = err == nil
-			case "lines-covered":
-				covered, err = strconv.Atoi(a.Value)
-				cOK = err == nil
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if rootDone {
+				return doc, fmt.Errorf("more than one root element: a second <%s> follows the closed <coverage>", t.Name.Local)
+			}
+			path = append(path, t.Name.Local)
+			switch {
+			case len(path) == 1:
+				if t.Name.Local != "coverage" {
+					return doc, fmt.Errorf("root element is <%s>, want <coverage>", t.Name.Local)
+				}
+				rootSeen = true
+				for _, a := range t.Attr {
+					switch a.Name.Local {
+					case "lines-valid":
+						if n, cerr := strconv.Atoi(a.Value); cerr == nil && n >= 0 {
+							rootValid = n
+						}
+					case "lines-covered":
+						if n, cerr := strconv.Atoi(a.Value); cerr == nil && n >= 0 {
+							rootCov = n
+						}
+					}
+				}
+				if rootValid < 0 || rootCov < 0 {
+					return doc, errors.New("<coverage> has no non-negative integer lines-valid / lines-covered")
+				}
+				doc.rootValid, doc.rootCovered = rootValid, rootCov
+			case t.Name.Local == "class":
+				curFile = ""
+				for _, a := range t.Attr {
+					if a.Name.Local == "filename" {
+						curFile = a.Value
+					}
+				}
+				if curFile == "" {
+					return doc, errors.New("a <class> has no filename attribute")
+				}
+				doc.files[curFile] = true
+			case t.Name.Local == "line" && len(path) >= 3 && path[len(path)-2] == "lines" && path[len(path)-3] == "class":
+				hits := -1
+				hasNumber := false
+				for _, a := range t.Attr {
+					switch a.Name.Local {
+					case "number":
+						hasNumber = true
+					case "hits":
+						if n, cerr := strconv.Atoi(a.Value); cerr == nil && n >= 0 {
+							hits = n
+						}
+					}
+				}
+				if !hasNumber || hits < 0 {
+					return doc, fmt.Errorf("a class-level <line> of %s has no number or no non-negative integer hits", curFile)
+				}
+				doc.valid++
+				if hits > 0 {
+					doc.covered++
+					doc.fileHit[curFile] = true
+				}
+			}
+		case xml.EndElement:
+			path = path[:len(path)-1]
+			if len(path) == 0 {
+				rootDone = true
+			}
+		case xml.CharData:
+			if rootDone && len(bytes.TrimSpace(t)) > 0 {
+				return doc, errors.New("content after the closing </coverage>")
 			}
 		}
-		if !vOK || !cOK {
-			return 0, 0, errors.New("<coverage> has no integer lines-valid / lines-covered")
+	}
+	if !rootSeen {
+		return doc, errors.New("no <coverage> root element")
+	}
+	return doc, nil
+}
+
+// profileFileHits reads which source files a coverage profile holds and whether
+// any of a file's blocks was hit. A profile is what `mergeCoverage` wrote, so a
+// line that is not a record is an error.
+func profileFileHits(profile []byte) (map[string]bool, error) {
+	out := map[string]bool{}
+	for n, line := range strings.Split(string(profile), "\n") {
+		line = strings.TrimRight(line, "\r")
+		if line == "" || strings.HasPrefix(line, "mode: ") {
+			continue
 		}
-		return valid, covered, nil
+		m := coverRecordRE.FindStringSubmatch(line)
+		if m == nil {
+			return nil, fmt.Errorf("profile line %d is not a coverage record", n+1)
+		}
+		count, err := strconv.Atoi(m[7])
+		if err != nil {
+			return nil, err
+		}
+		out[m[1]] = out[m[1]] || count > 0
+	}
+	return out, nil
+}
+
+// checkCobertura is the Cobertura half of crosscheck: the document must decode
+// whole; its root counters must equal what its own <line> elements say; and it
+// must agree with the MERGED PROFILE it was built from on what can be compared
+// exactly. Exact equality of the line counts with counts derived from the
+// profile is NOT derivable (gocover-cobertura maps whole function ranges by AST
+// and drops class-less files: on run 36729729427 the profile has 106275 distinct
+// lines, 106208 of them in files that have a class, against the report's
+// 106157), so the profile link is what holds exactly on real data: every class
+// is a file of the profile, and per file "some line was hit" is the same in both
+// (0 disagreements over the real run's 824 classed files).
+func checkCobertura(doc coberturaDoc, profile map[string]bool, path string, bad func(string, ...any)) {
+	if doc.rootValid != doc.valid {
+		bad("cobertura report %s states lines-valid=%d but its class-level <line> elements number %d", path, doc.rootValid, doc.valid)
+	}
+	if doc.rootCovered != doc.covered {
+		bad("cobertura report %s states lines-covered=%d but %d of its class-level <line> elements have hits", path, doc.rootCovered, doc.covered)
+	}
+	if doc.valid < 1 {
+		bad("cobertura report %s holds no class-level lines", path)
+	}
+	var orphan, disagree []string
+	for cf := range doc.files {
+		var match string
+		for pf := range profile {
+			if pf == cf || strings.HasSuffix(pf, "/"+cf) {
+				match = pf
+				break
+			}
+		}
+		switch {
+		case match == "":
+			orphan = append(orphan, cf)
+		case profile[match] != doc.fileHit[cf]:
+			disagree = append(disagree, cf)
+		}
+	}
+	sort.Strings(orphan)
+	sort.Strings(disagree)
+	if len(orphan) > 0 {
+		bad("cobertura report %s has class file(s) that are not in the merged profile: %v", path, head(orphan))
+	}
+	if len(disagree) > 0 {
+		bad("cobertura report %s disagrees with the merged profile on whether file(s) were hit: %v", path, head(disagree))
 	}
 }
 
@@ -1164,19 +1333,22 @@ func runCrosscheck(in crosscheckInputs, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("cobertura report %s was not produced: %w", in.cobertura, err)
 	}
-	valid, covered, cbErr := coberturaFacts(cob)
-	switch {
-	case cbErr != nil:
+	cDoc, cbErr := parseCobertura(cob)
+	if cbErr != nil {
 		bad("cobertura report %s: %v", in.cobertura, cbErr)
-	case valid < 1 || covered < 0 || covered > valid:
-		bad("cobertura report %s states lines-covered=%d of lines-valid=%d", in.cobertura, covered, valid)
+	} else {
+		pHits, pErr := profileFileHits(mergedC)
+		if pErr != nil {
+			return fmt.Errorf("merged coverage profile %s: %w", in.cover, pErr)
+		}
+		checkCobertura(cDoc, pHits, in.cobertura, bad)
 	}
 
 	if len(problems) > 0 {
 		return fmt.Errorf("the merged reports do not match the shards:\n  - %s", strings.Join(problems, "\n  - "))
 	}
-	fmt.Fprintf(stdout, "crosscheck OK: %d shards, %d testcases in %d suites, %d failure element(s), %d failed test(s)/package(s) agreed by go-test.json, JUnit and the listing, coverage %d/%d lines, failure listing read %d shards\n",
-		in.expect, wantCases, wantSuites, wantFailElems, len(fromRaw), covered, valid, rep.Shards)
+	fmt.Fprintf(stdout, "crosscheck OK: %d shards, %d testcases in %d suites, %d failure element(s), %d failed test(s)/package(s) agreed by go-test.json, JUnit and the listing, coverage %d/%d lines (its own <line> elements and the merged profile agree), failure listing read %d shards\n",
+		in.expect, wantCases, wantSuites, wantFailElems, len(fromRaw), cDoc.covered, cDoc.valid, rep.Shards)
 	return nil
 }
 

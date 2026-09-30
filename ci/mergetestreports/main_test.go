@@ -702,7 +702,7 @@ func newCrosscheckFixture(t *testing.T) crosscheckFixture {
 		}
 	}
 	if err := os.WriteFile(filepath.Join(out, "coverage.xml"),
-		[]byte(`<?xml version="1.0"?><coverage line-rate="0.5" lines-covered="2" lines-valid="4"></coverage>`), 0o644); err != nil {
+		[]byte(coberturaFixture()), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return crosscheckFixture{dir: dir, out: out, args: []string{
@@ -794,8 +794,8 @@ func TestCrosscheckFailsWhenTheMergedReportsDoNotMatchTheShards(t *testing.T) {
 		{"the merged coverage profile is not the merge", "is not the merge", func(t *testing.T, f crosscheckFixture) {
 			f.rewrite(t, "cover.out", func(s string) string { return strings.Replace(s, "b/b.go:5.1,6.2 1 1", "b/b.go:5.1,6.2 1 0", 1) })
 		}},
-		{"the cobertura report covers nothing", "lines-covered=", func(t *testing.T, f crosscheckFixture) {
-			f.rewrite(t, "coverage.xml", func(s string) string { return strings.Replace(s, `lines-valid="4"`, `lines-valid="0"`, 1) })
+		{"the cobertura report states no valid lines", "states lines-valid=", func(t *testing.T, f crosscheckFixture) {
+			f.rewrite(t, "coverage.xml", func(s string) string { return strings.Replace(s, `lines-valid="7"`, `lines-valid="0"`, 1) })
 		}},
 		{"the cobertura report is not cobertura", "cobertura report", func(t *testing.T, f crosscheckFixture) {
 			f.rewrite(t, "coverage.xml", func(s string) string { return strings.Replace(s, "<coverage", "<report", 1) })
@@ -909,7 +909,7 @@ func TestCollectFailuresAcceptsTheToolchainsWholeActionVocabulary(t *testing.T) 
 
 func TestNormalizeFailedDropsAPackageThatFailedBecauseATestDid(t *testing.T) {
 	got := normalizeFailed([][2]string{{"p/a", "TestX"}, {"p/a", ""}, {"p/b", ""}})
-	if len(got) != 2 || !got["p/a/TestX"] || !got["p/b"] || got["p/a"] {
+	if len(got) != 2 || !got[failKey{"p/a", "TestX"}] || !got[failKey{"p/b", ""}] || got[failKey{"p/a", ""}] {
 		t.Fatalf("normalised = %v", got)
 	}
 }
@@ -958,7 +958,7 @@ func realFailingFixture(t *testing.T) crosscheckFixture {
 		}
 	}
 	if err := os.WriteFile(filepath.Join(out, "coverage.xml"),
-		[]byte(`<?xml version="1.0"?><coverage line-rate="0.5" lines-covered="2" lines-valid="4"></coverage>`), 0o644); err != nil {
+		[]byte(coberturaFixture()), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return crosscheckFixture{dir: dir, out: out, args: []string{
@@ -1012,4 +1012,238 @@ func TestCrosscheckFailsWhenARealFailingRunLosesAPackageLevelFailure(t *testing.
 	if code == 0 || !strings.Contains(out, "merged JUnit differs from the raw go-test.json") {
 		t.Fatalf("exit %d: %s", code, out)
 	}
+}
+
+// --- r3: structured failure identity and a whole-document Cobertura check ---------
+
+// coberturaFixture is a Cobertura report consistent with profA + profB: the
+// shape gocover-cobertura writes (per class, <methods> whose lines REPEAT the
+// class-level <lines>), two classes, a/a.go with lines 10-12 hit and 14-15 not,
+// b/b.go with lines 5-6 hit: 7 valid lines, 5 covered.
+func coberturaFixture() string {
+	class := func(file string, lines [][2]int) string {
+		var ls strings.Builder
+		for _, l := range lines {
+			ls.WriteString(`<line number="` + strconv.Itoa(l[0]) + `" hits="` + strconv.Itoa(l[1]) + `"></line>`)
+		}
+		return `<class name="-" filename="` + file + `"><methods><method name="f"><lines>` + ls.String() +
+			`</lines></method></methods><lines>` + ls.String() + `</lines></class>`
+	}
+	return `<?xml version="1.0" encoding="UTF-8"?>` + "\n" +
+		`<coverage line-rate="0.7" branch-rate="0" lines-covered="5" lines-valid="7" branches-covered="0" branches-valid="0" complexity="0">` +
+		`<sources><source>/src</source></sources><packages><package name="example.com/m"><classes>` +
+		class("a/a.go", [][2]int{{10, 1}, {11, 1}, {12, 1}, {14, 0}, {15, 0}}) +
+		class("b/b.go", [][2]int{{5, 1}, {6, 1}}) +
+		`</classes></package></packages></coverage>` + "\n"
+}
+
+func TestParseCoberturaCountsOnlyClassLevelLines(t *testing.T) {
+	doc, err := parseCobertura([]byte(coberturaFixture()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 14 <line> elements in the document, 7 of them class-level.
+	if n := strings.Count(coberturaFixture(), "<line "); n != 14 {
+		t.Fatalf("fixture has %d <line> elements, want 14", n)
+	}
+	if doc.valid != 7 || doc.covered != 5 || doc.rootValid != 7 || doc.rootCovered != 5 || len(doc.files) != 2 {
+		t.Fatalf("doc = %+v", doc)
+	}
+}
+
+func TestCrosscheckFailsOnACoberturaDocumentItDidNotFullyParseOrCannotTrust(t *testing.T) {
+	good := coberturaFixture()
+	cases := []struct {
+		name, want string
+		cob        string
+	}{
+		// The r3 repros.
+		{"opening tag only", "truncated", `<coverage lines-valid="2" lines-covered="2">`},
+		{"truncated mid-document", "truncated", good[:len(good)/2]},
+		{"covered counter zero although lines have hits", "states lines-covered=0 but 5", strings.Replace(good, `lines-covered="5"`, `lines-covered="0"`, 1)},
+		// Its own counters against its own lines.
+		{"valid counter too large", "states lines-valid=8 but its class-level", strings.Replace(good, `lines-valid="7"`, `lines-valid="8"`, 1)},
+		{"root counts the method lines too", "states lines-valid=14", strings.Replace(strings.Replace(good, `lines-valid="7"`, `lines-valid="14"`, 1), `lines-covered="5"`, `lines-covered="10"`, 1)},
+		// The document's shape.
+		{"second root", "more than one root", good + `<coverage lines-valid="0" lines-covered="0"></coverage>`},
+		{"trailing text", "after the closing", good + "trailing"},
+		{"a class-level line without hits", "no number or no non-negative integer hits", strings.Replace(good, `<line number="6" hits="1"></line></lines></class>`, `<line number="6"></line></lines></class>`, 1)},
+		{"an unknown entity (strict decoding)", "malformed", strings.Replace(good, `filename="a/a.go"`, `filename="a/&bogus;.go"`, 1)},
+		{"a consistent document with no class lines at all", "holds no class-level lines", `<coverage lines-valid="0" lines-covered="0"><packages></packages></coverage>`},
+		{"a class without filename", "no filename", strings.Replace(good, `<class name="-" filename="b/b.go">`, `<class name="-">`, 1)},
+		{"root counters absent", "no non-negative integer lines-valid", strings.Replace(good, ` lines-valid="7"`, ``, 1)},
+		{"not a coverage document", "root element is <report>", strings.Replace(strings.Replace(good, "<coverage", "<report", 1), "</coverage>", "</report>", 1)},
+		// Against the merged profile it was built from.
+		{"a class file the profile does not hold", "not in the merged profile", strings.Replace(good, `</classes>`, `<class name="-" filename="c/c.go"><lines><line number="1" hits="1"></line></lines></class></classes>`, 1) + ""},
+	}
+	// The consistent-but-foreign case needs its own root counters to match its lines.
+	cases[len(cases)-1].cob = strings.Replace(strings.Replace(cases[len(cases)-1].cob, `lines-valid="7"`, `lines-valid="8"`, 1), `lines-covered="5"`, `lines-covered="6"`, 1)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newCrosscheckFixture(t)
+			f.rewrite(t, "coverage.xml", func(string) string { return c.cob })
+			code, out := f.run(t)
+			if code == 0 || !strings.Contains(out, c.want) {
+				t.Fatalf("exit %d, want %q in: %s", code, c.want, out)
+			}
+		})
+	}
+	// A report whose counters ARE consistent but whose b/b.go lines were never
+	// hit, while the profile says b.go has a hit block: only the profile link sees it.
+	t.Run("consistent counters but a file the profile hit has no hits", func(t *testing.T) {
+		f := newCrosscheckFixture(t)
+		bad := strings.ReplaceAll(good, `<line number="5" hits="1"></line>`, `<line number="5" hits="0"></line>`)
+		bad = strings.ReplaceAll(bad, `<line number="6" hits="1"></line>`, `<line number="6" hits="0"></line>`)
+		bad = strings.Replace(bad, `lines-covered="5"`, `lines-covered="3"`, 1)
+		f.rewrite(t, "coverage.xml", func(string) string { return bad })
+		code, out := f.run(t)
+		if code == 0 || !strings.Contains(out, "disagrees with the merged profile on whether file(s) were hit: [b/b.go]") {
+			t.Fatalf("exit %d: %s", code, out)
+		}
+	})
+	t.Run("a correct report passes", func(t *testing.T) {
+		f := newCrosscheckFixture(t)
+		if code, out := f.run(t); code != 0 {
+			t.Fatalf("exit %d: %s", code, out)
+		}
+	})
+}
+
+// --- the identity of a failed test is the (package, test) PAIR ---
+
+// The r3 repro: go test -json over `.` and `./TestX` in one module yields the
+// failures (example.org/m, TestX/TestY/sub) and (example.org/m/TestX, TestY/sub),
+// whose joined names are identical.
+func collidingPairs() (a, b [2]string) {
+	return [2]string{"example.org/m", "TestX/TestY/sub"}, [2]string{"example.org/m/TestX", "TestY/sub"}
+}
+
+func TestCollectFailuresKeepsTwoFailuresWhoseJoinedNamesCollide(t *testing.T) {
+	a, b := collidingPairs()
+	s1 := `{"Action":"fail","Package":"` + a[0] + `","Test":"` + a[1] + `"}` + "\n"
+	s2 := `{"Action":"fail","Package":"` + b[0] + `","Test":"` + b[1] + `"}` + "\n"
+	rep, err := collectFailures([][]byte{[]byte(s1), []byte(s2)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Failed) != 2 {
+		t.Fatalf("two different failures collapsed into %d listing entr(ies): %+v", len(rep.Failed), rep.Failed)
+	}
+	// Same pair seen twice in ONE shard still counts once, and in two shards lists both shards.
+	rep, err = collectFailures([][]byte{[]byte(s1 + s1), []byte(s1), []byte(s2)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Failed) != 2 {
+		t.Fatalf("got %+v", rep.Failed)
+	}
+	for _, e := range rep.Failed {
+		if e.Package == a[0] && (len(e.Shards) != 2 || e.Shards[0] != 1 || e.Shards[1] != 2) {
+			t.Fatalf("entry %+v", e)
+		}
+	}
+}
+
+func TestNormalizeFailedKeepsTwoFailuresWhoseJoinedNamesCollide(t *testing.T) {
+	a, b := collidingPairs()
+	if got := normalizeFailed([][2]string{a, b}); len(got) != 2 {
+		t.Fatalf("normalised to %d identities: %v", len(got), got)
+	}
+}
+
+// collidingFixture lays out two shards whose go-test.json and JUnit carry BOTH
+// colliding failures (shard 1 the first, shard 2 the second) and runs the three
+// merges, so crosscheck can be run on it and on damaged copies.
+func collidingFixture(t *testing.T) crosscheckFixture {
+	t.Helper()
+	a, b := collidingPairs()
+	suite := func(pkg, test string) string {
+		return "\t<testsuite tests=\"1\" failures=\"1\" time=\"0.1\" name=\"" + pkg + "\">\n" +
+			"\t\t<testcase classname=\"" + pkg + "\" name=\"" + test + "\" time=\"0\">\n\t\t\t<failure message=\"Failed\" type=\"\">x</failure>\n\t\t</testcase>\n\t</testsuite>\n"
+	}
+	shards := map[string]map[string]string{
+		"1": {"cover.out": profA, "junit.xml": gotestsumDoc(1, 1, "0.1", suite(a[0], a[1])),
+			"go-test.json": `{"Action":"fail","Package":"` + a[0] + `","Test":"` + a[1] + `"}` + "\n"},
+		"2": {"cover.out": profB, "junit.xml": gotestsumDoc(1, 1, "0.1", suite(b[0], b[1])),
+			"go-test.json": `{"Action":"fail","Package":"` + b[0] + `","Test":"` + b[1] + `"}` + "\n"},
+	}
+	return fixtureFrom(t, shards)
+}
+
+func TestCrosscheckPassesWhenBothCollidingFailuresAreEverywhere(t *testing.T) {
+	f := collidingFixture(t)
+	if code, out := f.run(t); code != 0 || !strings.Contains(out, "2 failed test(s)/package(s) agreed") {
+		t.Fatalf("exit %d: %s", code, out)
+	}
+}
+
+func TestCrosscheckFailsWhenOneOfTwoCollidingFailuresIsMissingFromTheListingOrTheJUnit(t *testing.T) {
+	_, b := collidingPairs()
+	t.Run("missing from the listing", func(t *testing.T) {
+		f := collidingFixture(t)
+		f.editFailures(t, func(r *failureReport) {
+			var keep []failureEntry
+			for _, e := range r.Failed {
+				if e.Package != b[0] {
+					keep = append(keep, e)
+				}
+			}
+			r.Failed = keep
+		})
+		code, out := f.run(t)
+		if code == 0 || !strings.Contains(out, "failure listing differs") {
+			t.Fatalf("exit %d: %s", code, out)
+		}
+	})
+	t.Run("missing from the merged JUnit", func(t *testing.T) {
+		f := collidingFixture(t)
+		f.rewrite(t, "junit.xml", func(s string) string {
+			i := strings.Index(s, "\t<testsuite tests=\"1\" failures=\"1\" time=\"0.1\" name=\""+b[0]+"\"")
+			j := i + strings.Index(s[i:], "</testsuite>\n") + len("</testsuite>\n")
+			return s[:i] + s[j:]
+		})
+		code, out := f.run(t)
+		if code == 0 || !strings.Contains(out, "differs from the raw go-test.json") {
+			t.Fatalf("exit %d: %s", code, out)
+		}
+	})
+}
+
+// fixtureFrom lays out shards (index -> file name -> body), runs the three merge
+// commands through run() exactly as the workflow does, writes the consistent
+// Cobertura, and returns the crosscheck arguments.
+func fixtureFrom(t *testing.T, shards map[string]map[string]string) crosscheckFixture {
+	t.Helper()
+	dir := t.TempDir()
+	for idx, files := range shards {
+		for name, body := range files {
+			p := filepath.Join(dir, shardArtifactPrefix+idx, name)
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	n := strconv.Itoa(len(shards))
+	out := t.TempDir()
+	var so, se bytes.Buffer
+	for _, args := range [][]string{
+		{"junit", "-dir", dir, "-expect", n, "-out", filepath.Join(out, "junit.xml")},
+		{"coverage", "-dir", dir, "-expect", n, "-out", filepath.Join(out, "cover.out")},
+		{"failures", "-dir", dir, "-expect", n, "-report", filepath.Join(out, "failures.json")},
+	} {
+		if code := run(args, &so, &se); code != 0 {
+			t.Fatalf("%v exited %d: %s", args, code, se.String())
+		}
+	}
+	if err := os.WriteFile(filepath.Join(out, "coverage.xml"), []byte(coberturaFixture()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return crosscheckFixture{dir: dir, out: out, args: []string{
+		"crosscheck", "-dir", dir, "-expect", n,
+		"-junit", filepath.Join(out, "junit.xml"), "-cover", filepath.Join(out, "cover.out"),
+		"-cobertura", filepath.Join(out, "coverage.xml"), "-failures", filepath.Join(out, "failures.json"),
+	}}
 }
