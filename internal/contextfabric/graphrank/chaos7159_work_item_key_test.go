@@ -1,6 +1,9 @@
 package graphrank
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // CHAOS-7159 / CHAOS-7200: the any-prefix key grammar. BindWorkItemKey binds
 // only a whole key; HasWorkItemKeyToken scans text; BindHandles (free text)
@@ -26,7 +29,7 @@ func TestWorkItemKeyAnyPrefixGrammar(t *testing.T) {
 		{"Δ-123", false, false, 0},
 		{"", false, false, 0},
 	} {
-		if _, ok := BindWorkItemKey(tc.text); ok != tc.exact {
+		if key, ok := BindWorkItemKey(tc.text); ok != tc.exact || ok && key.Value != strings.ToUpper(tc.text) {
 			t.Errorf("BindWorkItemKey(%q) = %v, want %v", tc.text, ok, tc.exact)
 		}
 		if got := HasWorkItemKeyToken(tc.text); got != tc.has {
