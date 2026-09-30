@@ -497,7 +497,11 @@ func buildCatalogOperations(catalogue *Catalogue, caller CatalogCaller, class Ca
 	if reason != "" {
 		section.Available, section.Reason = false, reason
 	}
-	if catalogue == nil {
+	// No detail for a caller run_operation cannot serve (CHAOS-7075 class
+	// sweep of the pr2 r1 P1): without data:read, or without a composed
+	// runner, the section says why and lists no operation, variable,
+	// not-served entry or refused shape.
+	if catalogue == nil || reason != "" {
 		return section
 	}
 	served := map[string]bool{}

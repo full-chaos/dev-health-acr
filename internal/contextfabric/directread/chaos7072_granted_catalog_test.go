@@ -173,17 +173,14 @@ func TestDataCatalogEveryServedOperationHasAPurpose(t *testing.T) {
 }
 
 func TestDataCatalogAvailabilityAndCaller(t *testing.T) {
+	// CHAOS-7075 class sweep: an unavailable section names the reason and
+	// carries no operation detail (was: the list, marked unavailable).
 	noData := catalogFor(t, ClassUnrestricted, false, true)
-	if noData.Operations.Available || noData.Operations.Reason != CatalogUnavailableScopeMissing || len(noData.Operations.Operations) != 19 {
+	if noData.Operations.Available || noData.Operations.Reason != CatalogUnavailableScopeMissing || len(noData.Operations.Operations) != 0 {
 		t.Fatalf("no data:read: %+v", noData.Operations)
 	}
-	for _, op := range noData.Operations.Operations {
-		if op.Available || op.Reason != CatalogUnavailableScopeMissing {
-			t.Fatalf("entry %s available without data:read", op.Name)
-		}
-	}
 	off := catalogFor(t, ClassUnrestricted, true, false)
-	if off.Operations.Available || off.Operations.Reason != CatalogUnavailableQueryNotConfigure {
+	if off.Operations.Available || off.Operations.Reason != CatalogUnavailableQueryNotConfigure || len(off.Operations.Operations) != 0 {
 		t.Fatalf("not configured: %+v", off.Operations)
 	}
 	// The caller section: scopes and grant class only.
