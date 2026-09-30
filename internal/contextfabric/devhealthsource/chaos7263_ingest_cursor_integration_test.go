@@ -330,9 +330,10 @@ SELECT concat('WI-burst-', leftPad(toString(number), 5, '0')), ?, ?, concat('iss
 		h := newHarness(t, "72630000-0000-4000-8000-00000000000d", "72630000-0000-4000-8000-0000000000ad", 15*time.Minute, logs)
 		burst := now.Add(-5 * time.Minute)
 		first := seedBurstMidPass(t, h, logs, 1300, burst)
-		// Behind the stopped pass's position (page 2 of a pass that already
-		// read pages 1-5), landing after the pass went past it.
-		h.workItem("WI-burst-00300-late", now.Add(-3*time.Hour), burst)
+		// Behind the stopped pass's position (page 1 of a pass that already
+		// read pages 1-5) and behind the frontier's own stamp, landing after
+		// the pass went past it.
+		h.workItem("WI-burst-00300-late", now.Add(-3*time.Hour), burst.Add(-time.Second))
 		restarted, err := devhealthsource.NewClickHouseProjectionSource(query)
 		if err != nil {
 			t.Fatal(err)
