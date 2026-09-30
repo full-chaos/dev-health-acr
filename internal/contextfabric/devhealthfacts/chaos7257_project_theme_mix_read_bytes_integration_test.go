@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	clickhousedriverv2 "github.com/ClickHouse/clickhouse-go/v2"
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -201,6 +202,45 @@ func seedCHAOS7257ProdShape(t *testing.T, ctx context.Context, direct clickhouse
 	return shape
 }
 
+// newScopedCHAOS7257Client gives the calling test a database of its own on the
+// package's ONE shared ClickHouse container (chaos5270_shared_container_test.go)
+// and a query client and native connection bound to it. The statements under
+// test name their tables unqualified, so the tables (and `SYSTEM STOP MERGES`,
+// and the query_log filter on currentDatabase()) are private to the test while
+// the container boot -- about 10-15s each, which is what this package's serial
+// wall time is made of -- is paid once for the whole package. tune adjusts the
+// production query client's Options (the ClickHouse limits acr-api sets).
+func newScopedCHAOS7257Client(t *testing.T, tune func(*runtimeclickhouse.Options)) (*runtimeclickhouse.Client, clickhousedriver.Conn) {
+	t.Helper()
+	ctx := context.Background()
+	_, shared := sharedClickHouseFixture(t)
+	addr := sharedClickHouseAddrFor(t)
+	database := "t7257_" + strings.ToLower(strings.ReplaceAll(sanitizeOrgSuffix(t.Name()), "-", "_"))
+	if err := shared.Exec(ctx, "CREATE DATABASE "+database); err != nil {
+		t.Fatalf("create database %s: %v", database, err)
+	}
+	direct, err := clickhousedriverv2.Open(&clickhousedriverv2.Options{
+		Addr: []string{addr}, Auth: clickhousedriverv2.Auth{Database: database, Username: "acr", Password: "acr"}, DialTimeout: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("open native connection to %s: %v", database, err)
+	}
+	options := runtimeclickhouse.Options{DSN: "clickhouse://acr:acr@" + addr + "/" + database, DialTimeout: 10 * time.Second}
+	if tune != nil {
+		tune(&options)
+	}
+	query, err := runtimeclickhouse.NewClickHouseQueryClientWithOptions(options)
+	if err != nil {
+		t.Fatalf("open production query client on %s: %v", database, err)
+	}
+	t.Cleanup(func() {
+		logCleanupErr("close scoped query client", query.Close())
+		logCleanupErr("close scoped native connection", direct.Close())
+		logCleanupErr("drop scoped database", shared.Exec(context.Background(), "DROP DATABASE IF EXISTS "+database+" SYNC"))
+	})
+	return query, direct
+}
+
 func createCHAOS7257Tables(t *testing.T, ctx context.Context, direct clickhousedriver.Conn) {
 	t.Helper()
 	for _, statement := range devhealthschema.DDL(
@@ -264,8 +304,9 @@ func serverNow(t *testing.T, ctx context.Context, direct clickhousedriver.Conn) 
 }
 
 func TestProjectThemeMixFitsTheClickHouseByteBudgetAgainstRealClickHouse(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(o *runtimeclickhouse.Options) {
+	query, direct := newScopedCHAOS7257Client(t, func(o *runtimeclickhouse.Options) {
 		cap := chaos7257ProdMaxBytesToRead
 		o.MaxBytesToRead = &cap
 		rows := uint(1_000_000)

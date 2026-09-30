@@ -105,8 +105,9 @@ func TestBudgetWarningInstrumentationLogsClosedReasonAndStatementIDOnly(t *testi
 // provider fails the read (as prod did), and the wired instrumentation says
 // why -- once, at Warn, with the statement id.
 func TestReadBudgetExceededOnRealClickHouseIsLoggedAtWarn(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(o *runtimeclickhouse.Options) {
+	query, direct := newScopedCHAOS7257Client(t, func(o *runtimeclickhouse.Options) {
 		tiny := uint64(1024) // far below one granule of work_unit_investments
 		o.MaxBytesToRead = &tiny
 	})

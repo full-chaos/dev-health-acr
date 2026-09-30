@@ -179,8 +179,9 @@ func seedCHAOS7257Native(t *testing.T, ctx context.Context, direct clickhousedri
 }
 
 func TestProjectNativeSinglePassMatchesTheMultiReferenceOracleAgainstRealClickHouse(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	query, direct := newScopedCHAOS7257Client(t, nil)
 	createCHAOS7257Tables(t, ctx, direct)
 	const orgID = "org-7257-native"
 	at := seedCHAOS7257Native(t, ctx, direct, orgID)

@@ -288,8 +288,9 @@ func seedCHAOS7257Parity(t *testing.T, ctx context.Context, direct clickhousedri
 }
 
 func TestProjectRollupSinglePassMatchesTheMultiReferenceOracleAgainstRealClickHouse(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	query, direct := newScopedCHAOS7257Client(t, nil)
 	createCHAOS7257Tables(t, ctx, direct)
 	const orgID = "org-7257-parity"
 	at := seedCHAOS7257Parity(t, ctx, direct, orgID)

@@ -30,15 +30,6 @@ import (
 // requires a real server evaluating the real query text.
 func newCHAOS3780IntegrationClient(t *testing.T, ctx context.Context) (query *runtimeclickhouse.Client, direct clickhousedriver.Conn) {
 	t.Helper()
-	return newCHAOS3780IntegrationClientWithOptions(t, ctx, nil)
-}
-
-// newCHAOS3780IntegrationClientWithOptions is newCHAOS3780IntegrationClient
-// with a hook over the production query client's Options, so a test can run
-// under the exact ClickHouse limits acr-api sets (CHAOS-7257:
-// max_bytes_to_read) instead of the library defaults.
-func newCHAOS3780IntegrationClientWithOptions(t *testing.T, ctx context.Context, tune func(*runtimeclickhouse.Options)) (query *runtimeclickhouse.Client, direct clickhousedriver.Conn) {
-	t.Helper()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: chfixture.Image, ExposedPorts: []string{"9000/tcp"},
@@ -86,13 +77,9 @@ func newCHAOS3780IntegrationClientWithOptions(t *testing.T, ctx context.Context,
 		time.Sleep(500 * time.Millisecond)
 	}
 
-	options := runtimeclickhouse.Options{
+	query, err = runtimeclickhouse.NewClickHouseQueryClientWithOptions(runtimeclickhouse.Options{
 		DSN: "clickhouse://acr:acr@" + addr + "/default", DialTimeout: 10 * time.Second,
-	}
-	if tune != nil {
-		tune(&options)
-	}
-	query, err = runtimeclickhouse.NewClickHouseQueryClientWithOptions(options)
+	})
 	if err != nil {
 		t.Fatalf("open production ClickHouse query client: %v", err)
 	}
