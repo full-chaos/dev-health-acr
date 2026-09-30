@@ -24,7 +24,7 @@ const (
 	artifactPath     = "contracts/mcp/operations.v1.json"
 	embeddedCopyPath = "internal/contextfabric/directread/operations.v1.json"
 	// CHAOS-7075: the SDL copy graphql_query embeds, and its root allowlist.
-	embeddedSchemaPath = "internal/contextfabric/directread/ops_schema.graphql"
+	embeddedSchemaPath = "internal/contextfabric/directread/ops_schema.v1.json"
 	graphqlRootsPath   = "contracts/mcp/graphql_roots.v1.json"
 	generatorName      = "cmd/operationpolicy"
 	defaultDeadlineS   = 30

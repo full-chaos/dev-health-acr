@@ -25,7 +25,8 @@
 //	go run ./cmd/operationpolicy -check   # fail if any differs from a fresh generation
 //
 // It also writes the embedded SDL copy graphql_query validates against
-// (internal/contextfabric/directread/ops_schema.graphql) and the graphql_query
+// (internal/contextfabric/directread/ops_schema.v1.json, a JSON wrapper: the
+// container build context admits only .go and .json under internal/) and the graphql_query
 // root allowlist (contracts/mcp/graphql_roots.v1.json), derived from the
 // generated artifact by directread.NewGraphQLPolicy (CHAOS-7075).
 package main
@@ -105,10 +106,14 @@ func generateAll(in inputs) (map[string][]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("render %s: %w", graphqlRootsPath, err)
 	}
+	schemaFile, err := directread.EncodeOpsSchemaFile(in.SDL, schemaPath)
+	if err != nil {
+		return nil, fmt.Errorf("render %s: %w", embeddedSchemaPath, err)
+	}
 	return map[string][]byte{
 		artifactPath:       artifact,
 		embeddedCopyPath:   artifact,
-		embeddedSchemaPath: bytes.Clone(in.SDL),
+		embeddedSchemaPath: schemaFile,
 		graphqlRootsPath:   roots,
 	}, nil
 }

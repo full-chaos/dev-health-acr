@@ -47,12 +47,47 @@ import (
 // GraphQLRootsContract is the contract name of graphql_roots.v1.json.
 const GraphQLRootsContract = "acr.mcp.graphql_roots.v1"
 
-//go:embed ops_schema.graphql
-var embeddedOpsSchema []byte
+// OpsSchemaContract is the contract name of the embedded SDL wrapper.
+const OpsSchemaContract = "acr.mcp.ops_schema.v1"
 
-// EmbeddedOpsSchema returns a copy of the embedded ops SDL (a byte-identical
-// copy of contracts/mcp/ops-catalogue/schema.graphql).
-func EmbeddedOpsSchema() []byte { return bytes.Clone(embeddedOpsSchema) }
+// The embedded ops SDL: a JSON wrapper (ops_schema.v1.json, written by
+// cmd/operationpolicy) around a byte-identical copy of
+// contracts/mcp/ops-catalogue/schema.graphql. JSON, because the container
+// build context admits only .go and .json under internal/.
+//
+//go:embed ops_schema.v1.json
+var embeddedOpsSchemaFile []byte
+
+// OpsSchemaFile is the wire shape of ops_schema.v1.json.
+type OpsSchemaFile struct {
+	Contract     string `json:"contract"`
+	Source       string `json:"source"`
+	SchemaDigest string `json:"schema_digest"`
+	SDL          string `json:"sdl"`
+}
+
+// EncodeOpsSchemaFile renders ops_schema.v1.json for an SDL.
+func EncodeOpsSchemaFile(sdl []byte, source string) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	err := enc.Encode(OpsSchemaFile{Contract: OpsSchemaContract, Source: source, SchemaDigest: SchemaDigestOf(sdl), SDL: string(sdl)})
+	return buf.Bytes(), err
+}
+
+// EmbeddedOpsSchema returns a copy of the embedded ops SDL bytes. A wrapper
+// that does not decode, names another contract or whose digest does not
+// recompute yields nil, and every derivation over it fails closed.
+func EmbeddedOpsSchema() []byte {
+	var file OpsSchemaFile
+	dec := json.NewDecoder(bytes.NewReader(embeddedOpsSchemaFile))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&file); err != nil || file.Contract != OpsSchemaContract || SchemaDigestOf([]byte(file.SDL)) != file.SchemaDigest {
+		return nil
+	}
+	return []byte(file.SDL)
+}
 
 // GraphQLLimits are the query caps acr applies before the wire. GWC's MCP
 // listener (CHAOS-7085) has its own caps (depth 10, aliases 15, complexity
@@ -170,7 +205,7 @@ func DefaultGraphQLPolicy() (*GraphQLPolicy, error) {
 			defaultGraphQLPolicyErr = err
 			return
 		}
-		defaultGraphQLPolicy, defaultGraphQLPolicyErr = NewGraphQLPolicy(cat, embeddedOpsSchema, DefaultGraphQLLimits())
+		defaultGraphQLPolicy, defaultGraphQLPolicyErr = NewGraphQLPolicy(cat, EmbeddedOpsSchema(), DefaultGraphQLLimits())
 	})
 	return defaultGraphQLPolicy, defaultGraphQLPolicyErr
 }
