@@ -36,10 +36,14 @@
 //   - Multi-mount route collapse in the discovery half: CHAOS-4760.
 //   - Anchor CONTENT verification is a name match, not a proof that the named
 //     line is the validator.
-//   - primary_validator anchors carry an explicit marker (the anchor's `note`
-//     field: a short, exact, literal substring of the real call/declaration)
-//     that this gate finds by TEXT (CHAOS-7128): the declared line is an
-//     advisory hint and is not compared. One invariant per (file, marker):
+//   - Every anchor (primary_validator, reachable_validators[], issued_credential[])
+//     carries an explicit marker (the anchor's `note` field: a short, exact,
+//     literal substring of the real call/declaration -- or the first
+//     backticked span of a longer note) that this gate finds by TEXT
+//     (CHAOS-7128, extended to all three kinds by CHAOS-7245): the declared
+//     line is an advisory hint and is not compared, and the triviality and
+//     function-identity checks run at the marker's own site rather than at the
+//     declared line. One invariant per (file, marker):
 //     no line carries it twice, and its total occurrences equal the number
 //     of distinct sites the rows declare (rows citing one shared definition
 //     line are one site). More = AMBIGUOUS ANCHOR MARKER; none/fewer =
@@ -56,7 +60,8 @@
 //     primary_validator anchor is located by its `note` marker. The
 //     source.line / anchor.line values remain in the file only because the
 //     ops-owned schema requires them, and are advisory hints: a moved line
-//     passes, a renamed/removed route (PHANTOM ROW + UNOWNED SURFACE) or a
+//     passes (CHAOS-7245: nothing reads the file's content at a declared
+//     line), a renamed/removed route (PHANTOM ROW + UNOWNED SURFACE) or a
 //     marker that no longer exists (ANCHOR MARKER NOT FOUND) fails loudly.
 //     Two registrations on one line are therefore both profilable
 //     (CHAOS-4774's limitation no longer applies to source rows).
@@ -471,26 +476,22 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 	surfaceOwners := map[routeKey][]string{}
 
 	// Per (file, marker): the DISTINCT declared lines across every row's
-	// primary_validator anchor -- the number of validator sites the rows
-	// claim (rows citing one shared definition line are one site).
-	// checkPrimaryValidatorAnchorMarker requires the marker's occurrence
-	// count in the file to equal it; the lines themselves are only counted.
+	// anchors of every kind (primary_validator, reachable_validators,
+	// issued_credential) -- the number of sites the rows claim (rows citing
+	// one shared definition line are one site). checkAnchorMarker requires
+	// the marker's occurrence count in the file to equal it; the lines
+	// themselves are only counted and ranked, never compared with the file.
 	declaredSites := map[markerKey]map[int]bool{}
 	for _, raw := range rowsRaw {
-		row := asObject(raw)
-		pv := asObject(row["primary_validator"])
-		if pv == nil {
-			continue
-		}
-		a := asObject(pv["anchor"])
-		if a == nil {
-			continue
-		}
-		path, _ := asCanonicalPath(a["path"])
-		lineF, _ := a["line"].(float64)
-		if path != "" && lineF >= 1 {
-			if note, _ := asString(a["note"]); note != "" {
-				mk := markerKey{path, note}
+		for _, a := range rowAnchorObjects(asObject(raw)) {
+			path, _ := asCanonicalPath(a["path"])
+			lineF, _ := a["line"].(float64)
+			if path == "" || lineF < 1 {
+				continue
+			}
+			note, _ := asString(a["note"])
+			if marker := anchorMarker(note); marker != "" {
+				mk := markerKey{path, marker}
 				if declaredSites[mk] == nil {
 					declaredSites[mk] = map[int]bool{}
 				}
@@ -560,7 +561,8 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 					} else {
 						anchorObj := asObject(anchorRaw)
 						checkAnchorExists(root, id, anchorObj, &errs, "issued_credential anchor")
-						checkIssuedCredentialAnchorIdentity(root, id, entryIdx, anchorObj, entry, &errs)
+						site := checkAnchorMarker(root, id, "issued_credential", anchorObj, declaredSites, &errs)
+						checkIssuedCredentialAnchorIdentity(root, id, entryIdx, anchorObj, entry, site, &errs)
 					}
 				}
 			}
@@ -607,7 +609,7 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 				}
 			} else {
 				checkAnchorExists(root, id, asObject(anchorRaw), &errs, "primary_validator anchor")
-				checkPrimaryValidatorAnchorMarker(root, id, asObject(anchorRaw), declaredSites, &errs)
+				checkAnchorMarker(root, id, "primary_validator", asObject(anchorRaw), declaredSites, &errs)
 			}
 		}
 
@@ -620,7 +622,9 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 					errs = append(errs, fmt.Sprintf("UNSTATED NULL: row %q reachable_validators[%d] has anchor=null and no gaps entry explaining it", id, rvIdx))
 				}
 			} else {
-				checkAnchorExists(root, id, asObject(anchorRaw), &errs, fmt.Sprintf("reachable_validators[%d] anchor", rvIdx))
+				rvLabel := fmt.Sprintf("reachable_validators[%d]", rvIdx)
+				checkAnchorExists(root, id, asObject(anchorRaw), &errs, rvLabel+" anchor")
+				checkAnchorMarker(root, id, rvLabel, asObject(anchorRaw), declaredSites, &errs)
 			}
 		}
 
@@ -751,15 +755,22 @@ func checkAnchorExists(root, rowID string, anchor map[string]any, errs *[]string
 		return
 	}
 	full := filepath.Join(root, path)
-	raw, err := os.ReadFile(full)
-	if err != nil {
+	if info, err := os.Stat(full); err != nil || !info.Mode().IsRegular() {
 		*errs = append(*errs, fmt.Sprintf("STALE ANCHOR: row %q %s references missing file %s", rowID, label, path))
 		return
 	}
-	lines := strings.Split(string(raw), "\n")
+	// CHAOS-7245: this check is deliberately blind to the FILE'S CONTENT at the
+	// declared line. `line` / `line_end` are advisory hints (the ops schema
+	// requires them), so an unrelated edit that shifts the anchored symbol
+	// must not fail them: bounds against the file length and the triviality
+	// of the declared line both did, and each unrelated 4-line insertion above
+	// protectedRuntimeHandler failed ten rows as TRIVIAL ANCHOR. What the
+	// anchor points AT is decided by its marker, at the marker's own site --
+	// checkAnchorMarker. What is left here is the part of a hint that is wrong
+	// whatever the file says: not a positive line, or a reversed range.
 	line := int(lineF)
-	if line < 1 || line > len(lines) {
-		*errs = append(*errs, fmt.Sprintf("STALE ANCHOR: row %q %s references %s:%d but the file only has %d lines", rowID, label, path, line, len(lines)))
+	if line < 1 {
+		*errs = append(*errs, fmt.Sprintf("STALE ANCHOR: row %q %s in %s has line=%d, which is not a line number", rowID, label, path, line))
 		return
 	}
 	// Merge-gate round 2 (EXECUTED): only the START line was validated, and
@@ -779,79 +790,109 @@ func checkAnchorExists(root, rowID string, anchor map[string]any, errs *[]string
 					"a reversed range is silently clamped by readers, so it reads as verified while describing nothing",
 				rowID, label, int(endF), line, path,
 			))
-		case int(endF) > len(lines):
-			*errs = append(*errs, fmt.Sprintf(
-				"INVALID ANCHOR RANGE: row %q %s has line_end=%d but %s only has %d lines",
-				rowID, label, int(endF), path, len(lines),
-			))
 		}
-	}
-	if isTrivialAnchorLine(lines[line-1]) {
-		*errs = append(*errs, fmt.Sprintf(
-			"TRIVIAL ANCHOR: row %q %s references %s:%d, which is a placeholder/no-op line, not a real validator or mint site",
-			rowID, label, path, line,
-		))
 	}
 }
 
-// checkPrimaryValidatorAnchorMarker requires a primary_validator anchor to
-// carry its own machine-checkable identity marker (anchor.note, already a
-// schema-legal free-string field) and verifies that marker is the ONE thing
-// resolving the anchor to real content -- never the declared line number by
-// itself. This is the CHAOS-5652 fix for a real, committed defect
-// isTrivialAnchorLine's own denylist approach cannot catch by construction:
-// a re-anchoring edit (CHAOS-5637, #519) shifted the real
-// `return a.protectedRuntimeHandler(...)` call for the
-// "GET /api/v1/context-fabric/investigations/{result_id}" row from line 185
-// to its new home at line 228 -- and line 185, at the time, held
-// `Items: int64(itemCounts.Total()),`, a plausible-looking resource-usage
-// struct field literal, not a comment, not blank, not in any denylist
-// shape. A human happened to re-anchor it correctly in the same PR; nothing
-// in this gate would have caught it if they had not. A denylist can only
-// rule out shapes someone already thought of (the doc comment on
-// trivialAnchorLines already states this); a marker the anchor's own author
-// commits to, and this gate independently re-locates on every run, is a
-// POSITIVE check instead -- it does not matter whether the wrong line looks
-// trivial or looks like ordinary business logic, only whether the marker
-// text is actually there.
+// anchorMarker returns the literal source text an anchor is located by: the
+// first backtick-quoted span of its `note` when it has one (the rest of the
+// note is prose for the reader), otherwise the whole note. A note with no
+// backticks is therefore its own marker, which is what every primary_validator
+// anchor has always done.
+func anchorMarker(note string) string {
+	if open := strings.IndexByte(note, '`'); open >= 0 {
+		if n := strings.IndexByte(note[open+1:], '`'); n > 0 {
+			return note[open+1 : open+1+n]
+		}
+	}
+	return note
+}
+
+// rowAnchorObjects returns every anchor object a row carries, of every kind
+// the gate locates by marker: primary_validator, reachable_validators[] and
+// issued_credential[]. A null or absent anchor is skipped (the "null needs a
+// gaps entry" rules report it elsewhere).
+func rowAnchorObjects(row map[string]any) []map[string]any {
+	var out []map[string]any
+	add := func(v any) {
+		if a := asObject(v); a != nil {
+			out = append(out, a)
+		}
+	}
+	if pv := asObject(row["primary_validator"]); pv != nil {
+		add(pv["anchor"])
+	}
+	for _, rv := range asArray(row["reachable_validators"]) {
+		if o := asObject(rv); o != nil {
+			add(o["anchor"])
+		}
+	}
+	for _, ic := range asArray(row["issued_credential"]) {
+		if o := asObject(ic); o != nil {
+			add(o["anchor"])
+		}
+	}
+	return out
+}
+
+// checkAnchorMarker requires every anchor -- primary_validator,
+// reachable_validators[] and issued_credential[] alike -- to carry its own
+// machine-checkable identity marker (anchor.note, already a schema-legal
+// free-string field; see anchorMarker for which part of the note is the
+// marker) and locates the anchor by that TEXT, never by the declared line
+// number. It returns the source line the anchor resolves to, or 0 when it does
+// not resolve (the reason is in errs, or reported by checkAnchorExists).
 //
-// Scoped to primary_validator only, matching the SAME per-anchor-type
-// precision discipline checkIssuedCredentialAnchorIdentity already
-// established (its own doc comment measured why generalizing a narrative-
-// description-matching check to primary_validator/reachable_validators
-// produces a 31.3%/100% false-miss rate): a NEW, purpose-built field
-// checked by exact substring is a different, much stronger claim than
-// matching prose, and does not inherit that measurement. reachable_validators
-// is intentionally left on the existing checkAnchorExists/isTrivialAnchorLine
-// path for now (all of acr's own reachable_validators anchors point at ONE
-// shared, already-precise citation, web_assertion_middleware.go:11-16; the
-// class this fix targets is a per-route primary_validator call site, and a
-// second CHAOS ticket can extend the same mechanism there if a future
-// incident shows the need).
-func checkPrimaryValidatorAnchorMarker(root, rowID string, anchor map[string]any, declaredSites map[markerKey]map[int]bool, errs *[]string) {
+// This is the CHAOS-5652 fix for a real, committed defect isTrivialAnchorLine's
+// own denylist approach cannot catch by construction: a re-anchoring edit
+// (CHAOS-5637, #519) shifted the real `return a.protectedRuntimeHandler(...)`
+// call for the "GET /api/v1/context-fabric/investigations/{result_id}" row from
+// line 185 to its new home at line 228 -- and line 185, at the time, held
+// `Items: int64(itemCounts.Total()),`, a plausible-looking resource-usage
+// struct field literal, not a comment, not blank, not in any denylist shape. A
+// denylist can only rule out shapes someone already thought of; a marker the
+// anchor's own author commits to, and this gate independently re-locates on
+// every run, is a POSITIVE check instead -- it does not matter whether the
+// wrong line looks trivial or looks like ordinary business logic, only whether
+// the marker text is actually there.
+//
+// CHAOS-7245 extends that from primary_validator to every anchor kind, and moves
+// the remaining content checks off the declared line and onto the marker's
+// site. Measured on this tree at 1a1ef01e: inserting four comment lines at the
+// top of any single anchored file failed the gate for 10 of the 13 anchored
+// files (TRIVIAL ANCHOR, and ANCHOR CONTENT MISMATCH for issued_credential),
+// because reachable_validators and issued_credential anchors had no marker and
+// their content checks read whatever the declared line then held. The
+// per-kind precision discipline that once kept these two kinds off the marker
+// path (checkIssuedCredentialAnchorIdentity's measurement: matching row PROSE
+// against code produces false misses) does not apply to an exact-substring
+// marker, which is a different and much stronger claim than matching prose.
+func checkAnchorMarker(root, rowID, label string, anchor map[string]any, declaredSites map[markerKey]map[int]bool, errs *[]string) int {
 	if anchor == nil {
-		return // reported elsewhere (checkAnchorExists)
+		return 0 // reported elsewhere (checkAnchorExists)
 	}
 	path, _ := asCanonicalPath(anchor["path"])
 	lineF, _ := anchor["line"].(float64)
 	line := int(lineF)
 	if path == "" || line < 1 || !anchorPathWithinRoot(root, path) {
-		return // reported elsewhere
+		return 0 // reported elsewhere
 	}
 	note, _ := asString(anchor["note"])
-	if strings.TrimSpace(note) == "" {
+	marker := anchorMarker(note)
+	if strings.TrimSpace(marker) == "" {
 		*errs = append(*errs, fmt.Sprintf(
-			"MISSING ANCHOR MARKER: row %q primary_validator anchor (%s:%d) has no note -- "+
-				"every primary_validator anchor must name a short, exact, literal substring "+
-				"(a call expression, a function name) this gate finds by text, so a future "+
-				"edit that renames or removes the validator fails loudly",
-			rowID, path, line,
+			"MISSING ANCHOR MARKER: row %q %s anchor (%s:%d) has no note -- "+
+				"every anchor must name a short, exact, literal substring "+
+				"(a call expression, a function declaration; in a longer note, the first `backticked` span) "+
+				"this gate finds by text, so a future edit that renames or removes the symbol fails loudly "+
+				"and one that merely moves it does not",
+			rowID, label, path, line,
 		))
-		return
+		return 0
 	}
 	raw, err := os.ReadFile(filepath.Join(root, path))
 	if err != nil {
-		return // reported elsewhere (checkAnchorExists)
+		return 0 // reported elsewhere (checkAnchorExists)
 	}
 	// ONE INVARIANT (CHAOS-7128, r1/r2 P1 re-found twice as per-branch
 	// discounting): the declared line is an advisory hint; the marker TEXT is
@@ -863,13 +904,16 @@ func checkPrimaryValidatorAnchorMarker(root, rowID string, anchor map[string]any
 	//     which is how nine rows can share protectedRuntimeHandler's one
 	//     definition). More = AMBIGUOUS ANCHOR MARKER; none or fewer =
 	//     ANCHOR MARKER NOT FOUND.
-	total, sites := 0, len(declaredSites[markerKey{path, note}])
+	declared := declaredSites[markerKey{path, marker}]
+	sites := len(declared)
 	if sites < 1 {
 		sites = 1
 	}
+	lines := strings.Split(string(raw), "\n")
+	total := 0
 	var at []int
-	for i, l := range strings.Split(string(raw), "\n") {
-		n := strings.Count(l, note)
+	for i, l := range lines {
+		n := strings.Count(l, marker)
 		if n == 0 {
 			continue
 		}
@@ -877,24 +921,52 @@ func checkPrimaryValidatorAnchorMarker(root, rowID string, anchor map[string]any
 		at = append(at, i+1)
 		if n > 1 {
 			*errs = append(*errs, fmt.Sprintf(
-				"AMBIGUOUS ANCHOR MARKER: row %q primary_validator marker %q appears %d times on line %d of %s -- "+
+				"AMBIGUOUS ANCHOR MARKER: row %q %s marker %q appears %d times on line %d of %s -- "+
 					"one line cannot say which copy is the real validator. Use a longer, more specific marker",
-				rowID, note, n, i+1, path))
-			return
+				rowID, label, marker, n, i+1, path))
+			return 0
 		}
 	}
 	switch {
 	case total > sites:
 		*errs = append(*errs, fmt.Sprintf(
-			"AMBIGUOUS ANCHOR MARKER: row %q primary_validator marker %q appears %d times (lines %v) in %s but the rows declare %d site(s) for it -- "+
+			"AMBIGUOUS ANCHOR MARKER: row %q %s marker %q appears %d times (lines %v) in %s but the rows declare %d site(s) for it -- "+
 				"a substring match cannot tell which occurrence is the real validator. Use a longer, more specific marker",
-			rowID, note, total, at, path, sites))
+			rowID, label, marker, total, at, path, sites))
+		return 0
 	case total < sites:
 		*errs = append(*errs, fmt.Sprintf(
-			"ANCHOR MARKER NOT FOUND: row %q primary_validator anchor's note %q appears %d time(s) in %s but the rows declare %d site(s) for it -- "+
+			"ANCHOR MARKER NOT FOUND: row %q %s anchor's marker %q appears %d time(s) in %s but the rows declare %d site(s) for it -- "+
 				"the marked symbol was renamed or removed",
-			rowID, note, total, path, sites))
+			rowID, label, marker, total, path, sites))
+		return 0
 	}
+
+	// The marker's own site is what the content checks look at. A marker that
+	// resolves to a placeholder/no-op line describes nothing (a bare `})`, a
+	// comment); the declared line is not consulted.
+	for _, l := range at {
+		if isTrivialAnchorLine(lines[l-1]) {
+			*errs = append(*errs, fmt.Sprintf(
+				"TRIVIAL ANCHOR: row %q %s marker %q resolves to %s:%d, which is a placeholder/no-op line, not a real validator or mint site",
+				rowID, label, marker, path, l))
+			return 0
+		}
+	}
+	// This anchor's own site among the marker's: the k-th smallest declared
+	// line for the marker is the k-th smallest located line. A pure shift moves
+	// every site and every declared hint alike, so the order is preserved; only
+	// a real reordering of the sites changes the pairing.
+	rank := 0
+	for d := range declared {
+		if d < line {
+			rank++
+		}
+	}
+	if rank >= len(at) {
+		rank = 0
+	}
+	return at[rank]
 }
 
 // anchorPathWithinRoot reports whether a repo-relative anchor path stays
@@ -985,19 +1057,17 @@ func mentionsWord(text, name string) bool {
 // Reports (not silently passes) when no function/method name can be
 // established at all, and when one is found but named nowhere in the
 // row's own text -- "say so in the message rather than passing."
-func checkIssuedCredentialAnchorIdentity(root, rowID string, entryIdx int, anchor, entry map[string]any, errs *[]string) {
-	if anchor == nil {
-		return // reported elsewhere (checkAnchorExists / schema validation)
+//
+// CHAOS-7245: `site` is the line the anchor's MARKER resolved to
+// (checkAnchorMarker), not the declared line, so a pure shift of the file
+// cannot make this read the wrong function. site == 0 means the marker did not
+// resolve, which is reported there.
+func checkIssuedCredentialAnchorIdentity(root, rowID string, entryIdx int, anchor, entry map[string]any, site int, errs *[]string) {
+	if anchor == nil || site < 1 {
+		return // reported elsewhere (checkAnchorExists / checkAnchorMarker / schema validation)
 	}
 	path, _ := asString(anchor["path"])
-	lineF, _ := anchor["line"].(float64)
-	lineEndF, ok := anchor["line_end"].(float64)
-	line := int(lineF)
-	lineEnd := line
-	if ok {
-		lineEnd = int(lineEndF)
-	}
-	if path == "" || line < 1 {
+	if path == "" {
 		return // reported elsewhere
 	}
 	raw, err := os.ReadFile(filepath.Join(root, path))
@@ -1005,10 +1075,10 @@ func checkIssuedCredentialAnchorIdentity(root, rowID string, entryIdx int, ancho
 		return // reported elsewhere (checkAnchorExists)
 	}
 	lines := strings.Split(string(raw), "\n")
-	if line > len(lines) {
-		return // reported elsewhere
+	if site > len(lines) {
+		return // unreachable: the site was found in this same file
 	}
-	name := funcNameNear(lines, line, lineEnd)
+	name := funcNameNear(lines, site, site)
 	note, _ := asString(anchor["note"])
 	issuer, _ := asString(entry["issuer"])
 	haystack := note + " " + issuer
@@ -1016,7 +1086,7 @@ func checkIssuedCredentialAnchorIdentity(root, rowID string, entryIdx int, ancho
 		*errs = append(*errs, fmt.Sprintf(
 			"ANCHOR CONTENT UNVERIFIED: row %q issued_credential entry %d anchors %s:%d, "+
 				"but no function/method declaration could be found there or nearby -- cannot confirm this is the mint site",
-			rowID, entryIdx, path, line,
+			rowID, entryIdx, path, site,
 		))
 		return
 	}
@@ -1024,7 +1094,7 @@ func checkIssuedCredentialAnchorIdentity(root, rowID string, entryIdx int, ancho
 		*errs = append(*errs, fmt.Sprintf(
 			"ANCHOR CONTENT MISMATCH: row %q issued_credential entry %d anchors %s:%d "+
 				"(function %q), but neither anchor.note nor issuer names it -- re-anchor to the real mint site or update the note",
-			rowID, entryIdx, path, line, name,
+			rowID, entryIdx, path, site, name,
 		))
 	}
 }

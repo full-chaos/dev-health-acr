@@ -230,17 +230,34 @@ name:
   layer (documented as a binding precondition in `AGENTS.md`, not
   re-traced into `internal/contextfabric/pginvestigation` here).
 
-## Row addressing: symbol, not line (CHAOS-7128)
+## Row addressing: symbol, not line (CHAOS-7128, CHAOS-7245)
 
 The acr gate (`ci/checkendpointprofiles`) matches a row to its route by
-`source.file` + `method` + `route`, and a `primary_validator` anchor by its
-`note` marker (a literal call/function substring). `source.line` is ignored by
-the gate after schema validation (the shared schema still requires it). An
-anchor's `line` / `line_end` are hints for where the symbol is: they must still
-be in-bounds, non-trivial and a valid range, but a moved line does not fail.
-Renaming or removing the route fails as `PHANTOM ROW` + `UNOWNED SURFACE`;
-renaming the marked symbol fails as `ANCHOR MARKER NOT FOUND`. Marker rule, one
-invariant per (file, marker): no line may carry the marker twice, and its total
-occurrences in the file must equal the number of distinct sites the rows
-declare for it (rows citing one shared definition line are one site). More is
-`AMBIGUOUS ANCHOR MARKER`; none or fewer is `ANCHOR MARKER NOT FOUND`.
+`source.file` + `method` + `route`, and every anchor -- `primary_validator`,
+each `reachable_validators[]` and each `issued_credential[]` -- by its `note`
+marker. `source.line` is ignored by the gate after schema validation (the
+shared schema still requires it). An anchor's `line` / `line_end` are hints for
+where the symbol was: the gate checks only that `line` is a positive number and
+that `line_end` is not before it, never the file's content at that line, so
+moving the symbol (an unrelated edit above it) does not fail and needs no
+re-anchoring. Renaming or removing the route fails as `PHANTOM ROW` +
+`UNOWNED SURFACE`; renaming the marked symbol fails as `ANCHOR MARKER NOT
+FOUND`.
+
+The marker is the anchor's `note` when the note has no backticks (a literal
+call or declaration), or the first backtick-quoted span of a longer note, so a
+note can keep its prose after the marker: `` `func (s *S) Start(` -- mints the
+device code ``. An anchor with no marker fails as `MISSING ANCHOR MARKER`.
+Marker rule, one invariant per (file, marker) across all anchor kinds: no line
+may carry the marker twice, and its total occurrences in the file must equal
+the number of distinct sites the rows declare for it (rows citing one shared
+definition line are one site). More is `AMBIGUOUS ANCHOR MARKER`; none or
+fewer is `ANCHOR MARKER NOT FOUND`.
+
+The content checks run at the marker's own site, not at the declared line: a
+marker that resolves to a placeholder or comment line is `TRIVIAL ANCHOR`, and
+an `issued_credential` anchor's enclosing function (found from the marker) must
+be named by its note or issuer, else `ANCHOR CONTENT MISMATCH`. When several
+anchors cite one marker at several sites, the k-th smallest declared line is
+paired with the k-th located site, so a shift keeps the pairing and only a real
+reordering changes it.

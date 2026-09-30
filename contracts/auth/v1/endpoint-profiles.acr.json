@@ -113,7 +113,8 @@
           "anchor": {
             "path": "internal/auth/web_assertion_middleware.go",
             "line": 11,
-            "line_end": 16
+            "line_end": 16,
+            "note": "func (a *Authenticator) authenticateWebAssertion("
           },
           "is_intended_validator": true,
           "reachable_but_not_owner": false
@@ -168,7 +169,8 @@
           "anchor": {
             "path": "internal/auth/web_assertion_middleware.go",
             "line": 11,
-            "line_end": 16
+            "line_end": 16,
+            "note": "func (a *Authenticator) authenticateWebAssertion("
           },
           "is_intended_validator": true,
           "reachable_but_not_owner": false
@@ -225,7 +227,8 @@
           "anchor": {
             "path": "internal/auth/web_assertion_middleware.go",
             "line": 11,
-            "line_end": 16
+            "line_end": 16,
+            "note": "func (a *Authenticator) authenticateWebAssertion("
           },
           "is_intended_validator": true,
           "reachable_but_not_owner": false
@@ -325,7 +328,8 @@
           "anchor": {
             "path": "internal/auth/web_assertion_middleware.go",
             "line": 11,
-            "line_end": 16
+            "line_end": 16,
+            "note": "func (a *Authenticator) authenticateWebAssertion("
           },
           "is_intended_validator": true,
           "reachable_but_not_owner": false
@@ -380,7 +384,8 @@
           "anchor": {
             "path": "internal/auth/web_assertion_middleware.go",
             "line": 11,
-            "line_end": 16
+            "line_end": 16,
+            "note": "func (a *Authenticator) authenticateWebAssertion("
           },
           "is_intended_validator": true,
           "reachable_but_not_owner": false
@@ -437,7 +442,8 @@
           "anchor": {
             "path": "internal/auth/web_assertion_middleware.go",
             "line": 11,
-            "line_end": 16
+            "line_end": 16,
+            "note": "func (a *Authenticator) authenticateWebAssertion("
           },
           "is_intended_validator": true,
           "reachable_but_not_owner": false
@@ -849,7 +855,7 @@
             "path": "internal/auth/device_flow.go",
             "line": 134,
             "line_end": 166,
-            "note": "DeviceFlowService.Start -- mints device_code + user_code via s.store.Create"
+            "note": "`func (s *DeviceFlowService) Start(` -- mints device_code + user_code via s.store.Create"
           },
           "issuer": "acr DeviceFlowService",
           "audience": null,
@@ -909,7 +915,7 @@
             "path": "internal/auth/device_poll.go",
             "line": 95,
             "line_end": 171,
-            "note": "device_code grant path (JSON body, handleDeviceCodeToken -> deviceFlow.Poll -> redeem): mints the fcacr_ credential on approved-device redemption"
+            "note": "`func (s *DeviceFlowService) Poll(` -- device_code grant path (JSON body, handleDeviceCodeToken -> deviceFlow.Poll -> redeem): mints the fcacr_ credential on approved-device redemption"
           },
           "issuer": "acr credential Service (via DeviceFlowService.redeem)",
           "audience": null,
@@ -925,7 +931,7 @@
             "path": "internal/auth/workload_access_token_issuer.go",
             "line": 42,
             "line_end": 65,
-            "note": "token-exchange grant path (form-urlencoded RFC 8693, handleTokenExchange -> authverify.WorkloadTokenExchangeService.Exchange -> serviceAccessTokenIssuer.Issue, wired in internal/runtime/hosted/workload_token_exchange.go:93-97): mints an fcacr_ credential tagged CredentialIssuanceProvenanceWorkloadExchange"
+            "note": "`func (s *serviceAccessTokenIssuer) Issue(` -- token-exchange grant path (form-urlencoded RFC 8693, handleTokenExchange -> authverify.WorkloadTokenExchangeService.Exchange -> serviceAccessTokenIssuer.Issue, wired in internal/runtime/hosted/workload_token_exchange.go:93-97): mints an fcacr_ credential tagged CredentialIssuanceProvenanceWorkloadExchange"
           },
           "issuer": "acr serviceAccessTokenIssuer (via authverify.WorkloadTokenExchangeService, dev-health-go v0.5.5 -- see docs/endpoint-profiles.md 'authverify anchor')",
           "audience": null,
@@ -972,8 +978,9 @@
           "description": "Route-level check (device_routes.go:224) duplicates authenticateWebAssertion's own check (web_assertion_middleware.go:12) -- belt-and-braces, not a second DIFFERENT validator with different scope.",
           "anchor": {
             "path": "internal/api/device_routes.go",
-            "line": 229,
-            "line_end": 229
+            "line": 253,
+            "line_end": 253,
+            "note": "len(r.Header.Values(auth.WebAssertionHeader)) != 1 || len(r.Header.Values(\"Authorization\")) != 0"
           },
           "is_intended_validator": true,
           "reachable_but_not_owner": false
@@ -1181,7 +1188,8 @@
           "anchor": {
             "path": "internal/auth/oauth.go",
             "line": 721,
-            "line_end": 744
+            "line_end": 744,
+            "note": "func (s *OAuthService) ApproveConsent("
           },
           "is_intended_validator": true,
           "reachable_but_not_owner": false
@@ -1203,7 +1211,7 @@
             "path": "internal/auth/oauth.go",
             "line": 721,
             "line_end": 744,
-            "note": "OAuthService.ApproveConsent -- approves the device authorization, then mints the one-time OAuth authorization code via s.store.IssueAuthorizationCode and returns it inside redirect_url"
+            "note": "`func (s *OAuthService) ApproveConsent(` -- approves the device authorization, then mints the one-time OAuth authorization code via s.store.IssueAuthorizationCode and returns it inside redirect_url"
           },
           "issuer": "acr-api OAuthService",
           "audience": null,
@@ -1274,7 +1282,7 @@
             "path": "internal/auth/device_oauth.go",
             "line": 191,
             "line_end": 208,
-            "note": "DeviceFlowService.RedeemForResource -- redeem mints the fcacr_ credential (30-day expiry) with Resource bound; the authenticator admits it only with a matching X-ACR-Resource header"
+            "note": "`func (s *DeviceFlowService) RedeemForResource(` -- redeem mints the fcacr_ credential (30-day expiry) with Resource bound; the authenticator admits it only with a matching X-ACR-Resource header"
           },
           "issuer": "acr credential Service (via DeviceFlowService.redeem)",
           "audience": "bound resource (X-ACR-Resource)",
