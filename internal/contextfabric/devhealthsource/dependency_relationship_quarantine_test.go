@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -73,10 +74,11 @@ func projectWithQuarantineLog(t *testing.T, tables []fakeTable, cursor string) (
 	t.Helper()
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	source, err := devhealthsource.NewClickHouseProjectionSource(&fakeClient{tables: tables})
-	if err != nil {
-		t.Fatalf("new source: %v", err)
-	}
+	// CHAOS-7263: one long-lived source per table set, like production. The
+	// overlap re-read keeps a per-process memo of rows already judged; a fresh
+	// source per call would model a restart (one re-judge of the tail) rather
+	// than the steady state these tests are about.
+	source := quarantineSourceFor(t, tables)
 	source = source.WithLogger(logger)
 	batch, available, batchErr := source.NextProjectionBatch(context.Background(),
 		contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName, Cursor: cursor})
@@ -93,6 +95,30 @@ func projectWithQuarantineLog(t *testing.T, tables []fakeTable, cursor string) (
 		observations = append(observations, entry)
 	}
 	return batch, available, batchErr, observations
+}
+
+var (
+	quarantineSourcesMu sync.Mutex
+	quarantineSources   = map[*fakeTable]*devhealthsource.ClickHouseProjectionSource{}
+)
+
+func quarantineSourceFor(t *testing.T, tables []fakeTable) *devhealthsource.ClickHouseProjectionSource {
+	t.Helper()
+	quarantineSourcesMu.Lock()
+	defer quarantineSourcesMu.Unlock()
+	if len(tables) > 0 {
+		if source, ok := quarantineSources[&tables[0]]; ok {
+			return source
+		}
+	}
+	source, err := devhealthsource.NewClickHouseProjectionSource(&fakeClient{tables: tables})
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+	if len(tables) > 0 {
+		quarantineSources[&tables[0]] = source
+	}
+	return source
 }
 
 func dependencyTablesOnly(t *testing.T, at time.Time, rows [][]any) []fakeTable {

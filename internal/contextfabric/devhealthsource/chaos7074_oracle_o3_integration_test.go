@@ -118,7 +118,7 @@ func o3Seed(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, org
 		}
 	}
 	for _, team := range []string{"T1", "T2"} {
-		exec("team "+team, `INSERT INTO teams VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, team, team+" name", "", now, orgID, "github", team, []string{}, uint8(1))
+		exec("team "+team, `INSERT INTO teams (id, name, description, updated_at, org_id, provider, native_team_key, project_keys, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, team, team+" name", "", now, orgID, "github", team, []string{}, uint8(1))
 	}
 	for i := 1; i <= 12; i++ {
 		if i == 9 {

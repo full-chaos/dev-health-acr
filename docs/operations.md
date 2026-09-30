@@ -574,6 +574,24 @@ owned" arm (`valid_from <= now`) now applies to the edge too: future-dated
 assertions are no longer projected as edges. Already-projected team nodes keep
 the old raw list, and old future-dated edges remain, until a full rebuild.
 
+**Projection cursor space (CHAOS-7263).** The shared projection cursor
+(`devhealthsource`) is positioned on each row's INGEST time (the `last_synced`
+/ `computed_at` stamp ops writes when it normalizes the row), not on the row's
+provider-stamped `updated_at`, so a row that lands after the cursor passed but
+carries an old provider timestamp (a backfill, a newly connected project) is no
+longer skipped. The exposed `ObservedAt` on entities and edges stays the
+provider time. No operator action is required at deploy: a cursor saved before
+this change carries no position space and is read as a reset, i.e. ONE idempotent
+full re-read per organization and source (a one-time read/write spike), which
+also recovers rows the old cursor skipped. A trailing overlap window
+(`ACR_CONTEXT_FABRIC_PROJECTOR_OVERLAP`, default `15m`, must be `> 0`) is
+re-read once the source is caught up, so a row whose ingest stamp landed just
+behind the cursor is still projected; a row that lands later than the window
+after its stamp is not (rebuild). Two tables still key on their old column until
+ops adds an ingest stamp: `team_project_ownership` and the
+`project_membership_presence` view (cursor-unsound for late-stamped rows, the
+same hazard as before).
+
 Crash-resumable: a durable marker (`acr.context_fabric_projection_rebuild_markers`)
 commits before the purge and clears only after every checkpoint is
 confirmed reset. If `acr-projector` crashes mid-rebuild, ordinary `serve`

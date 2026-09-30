@@ -378,7 +378,7 @@ func TestPipelineInvariantsOverGeneratedCandidates(t *testing.T) {
 		}
 		// The cursor comes from every candidate CONSUMED, never the survivors.
 		last := gen.candidates[len(gen.candidates)-1]
-		wantCursor, encErr := encodeCursor(cursorState{Since: last.observedAt, After: last.sortKey})
+		wantCursor, encErr := encodeCursor(cursorState{Since: last.position(), After: last.sortKey})
 		if encErr != nil {
 			fail("encode cursor: %v", encErr)
 		}

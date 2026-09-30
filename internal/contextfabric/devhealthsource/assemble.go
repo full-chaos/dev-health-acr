@@ -65,6 +65,11 @@ type sourcePlan struct {
 	// quarantine (item_quarantine.go), with a closed reason token. Optional.
 	observeQuarantine func(quarantineObservation)
 
+	// overlap and window (CHAOS-7263) bound the caught-up trailing re-read
+	// (overlap.go). overlap <= 0 or a nil window disables it.
+	overlap time.Duration
+	window  *windowMemo
+
 	// observeNormalization is called once per token per item repaired by
 	// producer-side normalization (item_normalization.go), with a closed
 	// reason token from a vocabulary DISJOINT from observeQuarantine's.
@@ -116,6 +121,15 @@ func (p sourcePlan) nextBatch(ctx context.Context, checkpoint contextfabric.Proj
 	state, err := decodeCursor(checkpoint.Cursor)
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, false, err
+	}
+	if state.Space != cursorSpaceIngest {
+		// A cursor saved before the ingest-time position space (CHAOS-7263):
+		// its Since is provider/updated_at time and means nothing here. Re-read
+		// from the start under the ORIGINAL cursor string (the worker requires
+		// batch.Cursor == checkpoint.Cursor); the batch's NextCursor is in the
+		// new space. Idempotent, and it recovers rows the old space skipped.
+		state = cursorState{}
+		p.window.reset(orgID)
 	}
 	return p.pagedBatch(ctx, orgID, checkpoint.Cursor, state, false)
 }
@@ -198,6 +212,7 @@ func (p sourcePlan) fullSnapshot(ctx context.Context, orgID string) (contextfabr
 		// all-unprojectable candidate set reachable. It bites hardest on a
 		// source with no seed candidate (TeamsProjectsSource), where nothing
 		// guarantees at least one valid item.
+		p.window.record(orgID, all, p.overlap)
 		noteConsumedFrom(p, orgID, all)
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
@@ -206,6 +221,7 @@ func (p sourcePlan) fullSnapshot(ctx context.Context, orgID string) (contextfabr
 		return contextfabric.ProjectionBatch{}, false, err
 	}
 	p.forgetConsumed(orgID)
+	p.window.record(orgID, all, p.overlap)
 	p.observeBatch(ctx, batch, all)
 	return batch, true, nil
 }
@@ -237,7 +253,9 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 			includeSeed = false
 		}
 		if len(all) == 0 {
-			return contextfabric.ProjectionBatch{}, false, nil
+			// Caught up: re-read the trailing overlap window for rows that
+			// landed behind the frontier (CHAOS-7263).
+			return p.overlapBatch(ctx, orgID, cursor, state, skips > 0)
 		}
 		sortCandidates(all)
 		all = truncateToCompleteRows(all, incrementalBatchCap)
@@ -260,6 +278,7 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 			// an earlier iteration no longer describes it -- see
 			// forgetConsumed for the invariant.
 			p.forgetConsumed(orgID)
+			p.window.record(orgID, all, p.overlap)
 			p.observeBatch(ctx, batch, all)
 			return batch, true, nil
 		}
@@ -271,7 +290,9 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 		// to carry its own cursor. Skip past it in-process instead and keep
 		// looking for real content, bounded so one tick cannot spin.
 		last := all[len(all)-1]
-		state = cursorState{Since: last.observedAt, After: last.sortKey}
+		state = cursorState{Since: last.position(), After: last.sortKey}
+		// Consumed (and judged): the overlap re-read must not re-judge them.
+		p.window.record(orgID, all, p.overlap)
 		noteConsumedFrom(p, orgID, all)
 		if skips >= maxOmittedPageSkips {
 			return contextfabric.ProjectionBatch{}, false, nil
@@ -288,7 +309,7 @@ func noteConsumedFrom(p sourcePlan, orgID string, consumed []candidate) {
 		return
 	}
 	last := consumed[len(consumed)-1]
-	if encoded, err := encodeCursor(cursorState{Since: last.observedAt, After: last.sortKey}); err == nil {
+	if encoded, err := encodeCursor(cursorState{Since: last.position(), After: last.sortKey}); err == nil {
 		p.noteConsumed(orgID, encoded)
 	}
 }
