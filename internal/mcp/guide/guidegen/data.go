@@ -85,13 +85,6 @@ var GraphQLRules = []string{
 	"`read_budget_exceeded` means the data service stopped the query at its bytes or time ceiling (`refusal.read_budget`): select fewer fields or narrow the window, scope or limit.",
 }
 
-// GraphQLExample is the guide's graphql_query example. A test runs it
-// through the real graphql_query runner and requires it to be served.
-var GraphQLExample = DataExampleCall{
-	Tool:    "graphql_query",
-	Args:    `{"query":"query($ids: [String!]) { hotspots(input: {sinceUtc: \"2026-08-29T00:00:00Z\", untilUtc: \"2026-09-28T00:00:00Z\", repoIds: $ids, limit: 20}) { rows { repoId filePath riskScore } } }","variables":{"ids":["repository:7b9583ee-1111-4222-8333-444455556666"]}}`,
-	Comment: "The riskiest files of one repository in a 30-day window: exactly three fields per row.",
-}
 
 // DataRules are the rules for a client that plans the reads itself (design
 // H, "Rules for A"). The server instructions carry the same rules in fewer
@@ -209,33 +202,17 @@ func buildData(in Inputs) (string, error) {
 		b.WriteString("- " + rule + "\n")
 	}
 
-	b.WriteString("\n## Operations\n\n")
-	b.WriteString("`run_operation` names, generated from the operations catalogue. The last two columns show which credentials may run each one: an unrestricted credential, and a credential restricted to some repositories (acr limits the scope to your grant). `data_catalog` shows the exact list, variables and limits for your own credential.\n\n")
-	b.WriteString("| Operation | What it returns | Unrestricted | Repository-restricted |\n|---|---|---|---|\n")
-	for _, op := range in.DataOperations {
-		fmt.Fprintf(&b, "| `%s` | %s | %s | %s |\n", op.Name, op.Purpose, yesNoCell(op.Unrestricted), yesNoCell(op.Restricted))
-	}
-	if len(in.DataNotServed) > 0 {
-		b.WriteString("\nRegistered but not served (each with its refusal code): ")
-		names := make([]string, 0, len(in.DataNotServed))
-		for _, ns := range in.DataNotServed {
-			names = append(names, fmt.Sprintf("`%s` (%s)", ns.Name, ns.Code))
-		}
-		b.WriteString(strings.Join(names, ", ") + ".\n")
-	}
+	// No operation or root-field list here (CHAOS-7075 class sweep): this
+	// resource is the same for every caller, so the lists live only in
+	// data_catalog, which is gated by scope and by the composed runners.
+	b.WriteString("\n## Which operations and fields\n\n")
+	b.WriteString("This guide lists no operation and no root field: what you may run depends on your credential. `data_catalog` (section `operations` for `run_operation`, section `schema` for `graphql_query`) gives the exact list, arguments, allowed fields and limits for your own credential, or says why a tool is not available to you.\n")
 
 	b.WriteString("\n## Free-form queries: graphql_query\n\n")
 	b.WriteString("`graphql_query` runs one GraphQL query you write over the allowed part of the product analytics schema. The same rules as `run_operation` apply to every argument; the difference is that you choose the fields. Read `data_catalog` section `schema` first: it lists, for your credential, the root fields, each argument's allowed input paths, the fixed arguments, the allowed output paths, and an SDL text of only those.\n\n")
 	for _, rule := range GraphQLRules {
 		b.WriteString("- " + rule + "\n")
 	}
-	if len(in.GraphQLRoots) > 0 {
-		b.WriteString("\n| Root field | Operation policies | Unrestricted | Repository-restricted |\n|---|---|---|---|\n")
-		for _, root := range in.GraphQLRoots {
-			fmt.Fprintf(&b, "| `%s` | %s | yes | %s |\n", root.Field, "`"+strings.Join(root.Operations, "`, `")+"`", yesNoCell(root.Restricted))
-		}
-	}
-	fmt.Fprintf(&b, "\nExample (a sample id; use the ids `find_subjects` returns):\n\n1. `graphql_query` `%s`\n   - %s\n", GraphQLExample.Args, GraphQLExample.Comment)
 
 	b.WriteString("\n## Worked examples\n\n")
 	b.WriteString("The ids and dates below are samples. Use the ids `find_subjects` returns and dates you compute from today.\n")
