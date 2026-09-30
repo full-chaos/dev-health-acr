@@ -1119,3 +1119,22 @@ func TestGraphQLEveryListenerRefusalReasonIsMapped(t *testing.T) {
 		t.Fatalf("the table covers %d of the %d known listener reasons", covered, len(known))
 	}
 }
+
+// r3 P2 (lead ruling): a root response key used twice is refused before
+// any planning, with the closed repeated_root_key reason and zero requests
+// -- not the late rebuilt-query query_invalid.
+func TestGraphQLRepeatedRootKeyIsRefusedWithItsOwnReason(t *testing.T) {
+	h := newGQLHarness(t, gqlHarnessOptions{})
+	for _, q := range []string{
+		`{ a: catalog(dimension: TEAM) { values { value } } a: catalog(dimension: TEAM) { values { count } } }`,
+		`{ catalog(dimension: TEAM) { values { value } } catalog(dimension: TEAM) { values { count } } }`,
+		`{ a: catalog(dimension: TEAM) { values { value } } a: catalog(dimension: REPO) { values { value } } }`,
+	} {
+		h.listener.reset()
+		resp := h.run(t, opUnrestricted(opOrgA), q, nil)
+		h.wantRefused(t, resp, directread.RefusalQueryInvalid)
+		if resp.Refusal.Reason != directread.GraphQLRepeatedRootKeyReason {
+			t.Fatalf("reason %q, want the repeated_root_key reason", resp.Refusal.Reason)
+		}
+	}
+}

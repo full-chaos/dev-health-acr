@@ -59,6 +59,10 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
+// GraphQLRepeatedRootKeyReason is the refusal reason of a query that uses
+// one root response key twice.
+const GraphQLRepeatedRootKeyReason = "repeated_root_key: select each root once; put all fields in one selection"
+
 // graphql_query refusal codes, in addition to run_operation's.
 const (
 	RefusalQueryInvalid            RefusalCode = "query_invalid"
@@ -433,6 +437,7 @@ func (x *gqlRun) execute(ctx context.Context, req GraphQLRequest) (GraphQLRespon
 	// V2: the syntax walk and the root allowlist, before any schema work.
 	var syn syntax
 	roots := make([]rootSel, 0, len(opDef.SelectionSet))
+	rootKeys := map[string]bool{}
 	for _, sel := range opDef.SelectionSet {
 		f, ok := sel.(*ast.Field)
 		if !ok {
@@ -446,6 +451,13 @@ func (x *gqlRun) execute(ctx context.Context, req GraphQLRequest) (GraphQLRespon
 		if !ok {
 			return x.refuse(RefusalRootFieldNotAllowed, "root field is not on the allowlist; data_catalog section schema lists the allowed root fields", ""), nil
 		}
+		// A root response key that appears twice is refused (r3 P2, lead
+		// ruling): select each root once and put all its fields in one
+		// selection. Root-level merging is a follow-up.
+		if rootKeys[f.Alias] {
+			return x.refuse(RefusalQueryInvalid, GraphQLRepeatedRootKeyReason, f.Alias), nil
+		}
+		rootKeys[f.Alias] = true
 		if len(f.Directives) > 0 {
 			return x.refuse(RefusalDirectiveNotAllowed, "directives are not served", ""), nil
 		}
