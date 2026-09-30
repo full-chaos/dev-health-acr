@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,12 +37,15 @@ import (
 //	Contract: equal MULTISETS of repository ids (a repeated id on path 1 is
 //	        a failure, not a set collapse), every leaf tagged {"t","v"}.
 //
-// Named difference class: null_repo_id. An ownership row with no repo_id has
-// no repository node, so the producer omits its edge (the K11 edge side is
-// CHAOS-7119, not built). Path 2 counts those rows apart and the test asserts
-// the count, so the class is exercised; when CHAOS-7119 lands, path 1 gains
-// ids path 2's non-null set does not hold and this oracle FAILS -- by design,
-// so the class is moved deliberately and never silently.
+// NULL repo_id rows (CHAOS-7119 landed, CHAOS-7164). An ownership row with no
+// repo_id resolves by (org, provider, lower-cased name) against repos, and the
+// producer emits an ordinary repository -> team edge for it. Path 2 applies
+// the same rule on its own (a repos lookup in Go, not the shared SQL): a NULL
+// row whose name matches a repos row counts as that repository (fixture: T1
+// "Acme/R11", mixed case on purpose), so the oracle compares the name-resolved
+// edge. The remaining named class is null_repo_id: a NULL row whose name
+// matches no repos row (fixture: T1 "acme/ghost") has no repository node, the
+// producer omits it, and path 2 counts it apart; the test asserts both counts.
 //
 // Acceptance gate (planted by hand against the production code; see the PR
 // body for each run): P1 a current read that returns ended edges; P2 a
@@ -144,17 +148,32 @@ func o3Seed(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, org
 	own("T1", 7, "acme/r7", "exact", "native", longAgo, nil)                   // open
 	own("T1", 8, "acme/r8", "exact", "provider_access", longAgo, nil)          // open
 	own("T1", 9, "acme/r9", "exact", "native", longAgo, nil)                   // open, no repos row (orphan slug)
-	own("T1", 0, "acme/ghost", "exact", "native", longAgo, nil)                // NULL repo_id: named class
+	own("T1", 0, "acme/ghost", "exact", "native", longAgo, nil)                // NULL repo_id, no repos row: named class (unresolvable)
+	own("T1", 0, "Acme/R11", "exact", "native", longAgo, nil)                  // NULL repo_id, resolves by name to R11 (case-insensitive)
 	own("T2", 1, "acme/r1", "exact", "native", longAgo, nil)                   // another team
 	own("T2", 10, "acme/r10", "exact", "native", longAgo, nil)                 // another team
 }
 
 // o3Population is path 2.
-func o3Population(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID, teamID string) (ids []string, nullRepoID int) {
+func o3Population(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID, teamID string) (ids []string, nullRepoID, nameResolved int) {
 	t.Helper()
+	repoRows, err := direct.Query(ctx, `SELECT provider, lower(repo), toString(id) FROM repos FINAL WHERE org_id = ?`, orgID)
+	if err != nil {
+		t.Fatalf("path 2 repos query: %v", err)
+	}
+	byName := map[string]string{}
+	for repoRows.Next() {
+		var provider, name, id string
+		if err := repoRows.Scan(&provider, &name, &id); err != nil {
+			t.Fatal(err)
+		}
+		byName[provider+"\x00"+name] = id
+	}
+	repoRows.Close()
 	rows, err := direct.Query(ctx, `
-SELECT repo_key FROM (
-  SELECT ifNull(toString(repo_id), '') AS repo_key,
+SELECT provider, repo_key, repo_name FROM (
+  SELECT provider, ifNull(toString(repo_id), '') AS repo_key,
+         if(isNull(repo_id), repo_full_name, '') AS repo_name,
          min(valid_from) AS first_from,
          argMax(tuple(valid_to), (valid_from, valid_to IS NULL, ifNull(valid_to, toDateTime64(0, 3, 'UTC')))).1 AS latest_to
   FROM team_repo_ownership FINAL
@@ -168,13 +187,18 @@ WHERE first_from <= now64(3) AND (latest_to IS NULL OR latest_to > now64(3))`, o
 	defer rows.Close()
 	seen := map[string]bool{}
 	for rows.Next() {
-		var key string
-		if err := rows.Scan(&key); err != nil {
+		var provider, key, name string
+		if err := rows.Scan(&provider, &key, &name); err != nil {
 			t.Fatal(err)
 		}
 		if key == "" {
-			nullRepoID++
-			continue
+			resolved, ok := byName[provider+"\x00"+strings.ToLower(name)]
+			if !ok {
+				nullRepoID++
+				continue
+			}
+			key = resolved
+			nameResolved++
 		}
 		id := "repository:" + key
 		if !seen[id] {
@@ -185,7 +209,7 @@ WHERE first_from <= now64(3) AND (latest_to IS NULL OR latest_to > now64(3))`, o
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	return ids, nullRepoID
+	return ids, nullRepoID, nameResolved
 }
 
 // o3Project drains the real producer into the real graph.
@@ -300,7 +324,7 @@ func TestChaos7074OracleO3OwnedRepositories(t *testing.T) {
 	principal := storage.Principal{OrgID: orgID, Subject: "oracle", CredentialID: "oracle"}
 	for _, team := range []string{"T1", "T2"} {
 		t.Run(team, func(t *testing.T) {
-			want, nullRepoID := o3Population(t, ctx, direct, orgID, team)
+			want, nullRepoID, nameResolved := o3Population(t, ctx, direct, orgID, team)
 			got := o3Path1(t, reader, principal, team)
 			if o3Tagged(got) != o3Tagged(want) {
 				t.Fatalf("O3 unnamed difference for %s:\n path 1 read_relationships = %s\n path 2 team_repo_ownership = %s", team, o3Tagged(got), o3Tagged(want))
@@ -310,18 +334,23 @@ func TestChaos7074OracleO3OwnedRepositories(t *testing.T) {
 			if nullRepoID != wantNull {
 				t.Fatalf("null_repo_id rows for %s = %d, want %d", team, nullRepoID, wantNull)
 			}
+			// The name-resolved rows, asserted so the by-name rule is exercised.
+			wantNamed := map[string]int{"T1": 1, "T2": 0}[team]
+			if nameResolved != wantNamed {
+				t.Fatalf("name-resolved NULL repo_id rows for %s = %d, want %d", team, nameResolved, wantNamed)
+			}
 			if len(want) == 0 {
 				t.Fatalf("path 2 is empty for %s: the oracle compared nothing", team)
 			}
-			t.Logf("O3 %s: %d repositories equal on both paths; null_repo_id=%d (named, CHAOS-7119)", team, len(want), nullRepoID)
+			t.Logf("O3 %s: %d repositories equal on both paths; name_resolved=%d null_repo_id=%d (named)", team, len(want), nameResolved, nullRepoID)
 		})
 	}
 	// The fixture must make the comparison non-trivial: T1 must hold ended
 	// and superseded ownership that path 2 excludes, and more repositories
 	// than one page.
-	all, _ := o3Population(t, ctx, direct, orgID, "T1")
-	if len(all) != 7 {
-		t.Fatalf("T1 current population = %d, want 7 (R1 R2 R5 R6 R7 R8 R9 + none of R3 R4); fixture drifted", len(all))
+	all, _, _ := o3Population(t, ctx, direct, orgID, "T1")
+	if len(all) != 8 {
+		t.Fatalf("T1 current population = %d, want 8 (R1 R2 R5 R6 R7 R8 R9 + R11 by name; none of R3 R4); fixture drifted", len(all))
 	}
 }
 

@@ -116,7 +116,7 @@ func TestChaos7126FindModesOnRealProducers(t *testing.T) {
 	restricted := storage.Principal{OrgID: orgID, Subject: "u", CredentialID: "c", RepositoryScopes: []string{"acme/r1"}}
 
 	t.Run("owned_by equals the ownership population", func(t *testing.T) {
-		want, _ := o3Population(t, ctx, direct, orgID, "T1")
+		want, _, _ := o3Population(t, ctx, direct, orgID, "T1")
 		sort.Strings(want)
 		response, err := lookup.Find(chaos7126Ctx("owned-u"), unrestricted, directread.FindRequest{OwnedBy: contextfabric.TeamCanonicalID("T1"), Limit: 200})
 		if err != nil {
