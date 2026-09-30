@@ -107,6 +107,18 @@ func subOwnershipWindowTakesTheLatestAssertion(t *testing.T, ctx context.Context
 	}
 }
 
+// seedResolvableRepo (CHAOS-7130) writes the repos row an ownership name must
+// resolve to: the team authorization list is built from RESOLVED ownership
+// (ownershipresolve), so a fixture that names a repository without a repos
+// row is a ghost and is (correctly) absent from the list.
+func seedResolvableRepo(t *testing.T, ctx context.Context, fixture *ownershipFixture, orgID, name string) {
+	t.Helper()
+	if err := fixture.direct.Exec(ctx, `INSERT INTO repos (id, repo, ref, created_at, tags, last_synced, org_id, provider) VALUES (generateUUIDv4(), ?, NULL, ?, NULL, ?, ?, 'github')`,
+		name, ownershipFirstSeen, ownershipFirstSeen, orgID); err != nil {
+		t.Fatalf("seed repos %s: %v", name, err)
+	}
+}
+
 // subTeamAuthorizationCarriesCurrentOwnedRepositories is CHAOS-4390.
 // queryTeams previously left Authorization.RepositorySlugs empty for every
 // team, which falkorgraph's shared authorizationValue convention encodes as
@@ -119,6 +131,9 @@ func subOwnershipWindowTakesTheLatestAssertion(t *testing.T, ctx context.Context
 // into the authorization list, exactly like ownershipValidityPredicate's
 // "currently active" rule everywhere else in this package.
 func subTeamAuthorizationCarriesCurrentOwnedRepositories(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+	for _, n := range []string{"acme/repo-open", "acme/repo-closed", "acme/repo-future"} {
+		seedResolvableRepo(t, ctx, fixture, fixture.orgID, n)
+	}
 	seedRepoOwnership := func(repoFullName string, validFrom time.Time, validTo any) {
 		if err := fixture.direct.Exec(ctx,
 			`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -156,6 +171,7 @@ func subTeamAuthorizationCarriesCurrentOwnedRepositories(t *testing.T, ctx conte
 // open row even though the org's most recent assertion revoked it. This
 // seeds exactly that sequence and proves the repository is excluded.
 func subTeamAuthorizationCollapsesStaleOpenAssertion(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+	seedResolvableRepo(t, ctx, fixture, fixture.orgID, "acme/revoked-repo")
 	seed := func(validFrom time.Time, validTo any) {
 		if err := fixture.direct.Exec(ctx,
 			`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -190,6 +206,7 @@ func subTeamAuthorizationCollapsesStaleOpenAssertion(t *testing.T, ctx context.C
 // subsequent incremental page (starting from the converged cursor)
 // re-selects the team with the new repository present.
 func subTeamAuthorizationRefreshedByOwnershipOnlyChange(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+	seedResolvableRepo(t, ctx, fixture, fixture.orgID, "acme/freshly-granted-repo")
 	cursor := ""
 	for page := 0; page < 10; page++ {
 		batch, available, err := fixture.source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{
@@ -258,6 +275,7 @@ func subTeamAuthorizationRefreshedByOwnershipOnlyChange(t *testing.T, ctx contex
 // revoke the team's ONLY open repository, converge again -- and proves
 // the team is re-emitted with the repository excluded.
 func subTeamAuthorizationRefreshedByRevokingLastOpenRepository(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+	seedResolvableRepo(t, ctx, fixture, fixture.orgID, "acme/only-repo")
 	seed := func(validFrom time.Time, validTo any, updatedAt time.Time) {
 		if err := fixture.direct.Exec(ctx,
 			`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -347,6 +365,11 @@ func subTeamAuthorizationOwnershipJoinScopedToOneOrganization(t *testing.T, ctx 
 		"TEAM-GITHUB", "TEAM-GITHUB name", "", at, otherOrg, "github", "TEAM-GITHUB", []string{}, uint8(1))
 	mustSeed(otherOrg, `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		otherOrg, "github", "TEAM-GITHUB", nil, "acme/other-org-repo", "exact", "native", uint8(1), uint16(1), int32(1), ownershipFirstSeen, nil, ownershipFirstSeen)
+
+	// The other org's repository resolves THERE (repos row in that org), so
+	// only org scoping keeps it out of this org's list.
+	mustSeed(otherOrg, `INSERT INTO repos (id, repo, ref, created_at, tags, last_synced, org_id, provider) VALUES (generateUUIDv4(), ?, NULL, ?, NULL, ?, ?, 'github')`,
+		"acme/other-org-repo", ownershipFirstSeen, ownershipFirstSeen, otherOrg)
 
 	batch := fixture.project(t, ctx)
 	entity := entityByCanonicalID(t, batch, "team:TEAM-GITHUB")
@@ -455,6 +478,9 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 		{"CHAOS-7139 teams of 201 and 450 repositories keep their entity and every edge", "30000000-0000-4000-8000-000000000020", subCHAOS7139LargeTeamsKeepEntityAndAllEdges},
 		{"CHAOS-7139 a team above the entity bound is projected fail closed", "30000000-0000-4000-8000-000000000021", subCHAOS7139TeamAboveEntityBoundIsProjectedFailClosed},
 		{"CHAOS-7139 a team crossing back under the bound is re-projected with its real list", "30000000-0000-4000-8000-000000000023", subCHAOS7139TeamCrossesBackUnderTheBound},
+		// CHAOS-7130: the team authorization list is built from resolved ownership.
+		{"CHAOS-7130 the team list uses resolved ownership and equals the edge set", "30000000-0000-4000-8000-000000000024", subCHAOS7130TeamListUsesResolvedOwnership},
+		{"CHAOS-7130 a late repos row re-projects the team", "30000000-0000-4000-8000-000000000025", subCHAOS7130LateReposRowReprojectsTheTeam},
 		{"CHAOS-7139 a team at exactly the entity bound keeps every edge", "30000000-0000-4000-8000-000000000022", subCHAOS7139TeamAtEntityBoundKeepsEveryEdge},
 	}
 	for _, testCase := range cases {

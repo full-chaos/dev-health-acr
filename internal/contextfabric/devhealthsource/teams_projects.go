@@ -12,6 +12,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/ownershipresolve"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -216,7 +217,16 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // Those teams' rows carry an updated_at already behind the checkpoint
 // watermark, so incremental catch-up never re-reads them; the bump forces the
 // one rebuild that projects them.
-const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v14"
+//
+// v14 -> v15 (CHAOS-7130): the team's authorization_repositories list is now
+// built from RESOLVED ownership (ownershipresolve strict mode, canonical repos
+// slug) instead of the raw repo_full_name values -- ghost names, globs and
+// wrong-provider names leave the list, case variants and name+id duplicates
+// collapse to one slug. Narrows admission, never widens. An already-projected
+// team node keeps its old raw list until its entity is re-projected, and its
+// team row / ownership rows carry an updated_at already behind the checkpoint
+// watermark, so only a full rebuild replaces it.
+const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v15"
 
 // teamsProjectsTables is this source's bounded coverage. Both tables were
 // already canonical Dev Health data; neither introduces a new ingest path.
@@ -1262,17 +1272,38 @@ const noTeamOwnershipSentinel = "acr-context-fabric:no-team-repository-ownership
 // ownership change and the real list is re-projected.
 const overBoundTeamOwnershipSentinel = "acr-context-fabric:team-repository-ownership-over-bound"
 
-const ownedRepositoriesJoinSQL = `LEFT JOIN (
-	SELECT team_id, groupUniqArrayIf(repo_full_name, latest_is_open) AS repos, max(updated_at) AS latest_update
+var ownedRepositoriesJoinSQL = `LEFT JOIN (
+	SELECT res.team_id AS team_id, groupUniqArrayIf(res.canonical_slug, res.latest_is_open) AS repos,
+		greatest(max(res.ownership_updated_at), max(res.repo_synced_at)) AS latest_update
 	FROM (
-		SELECT team_id, repo_full_name, max(updated_at) AS updated_at,
-			argMax(tuple(valid_to), (valid_from, valid_to IS NULL, ifNull(valid_to, toDateTime64(0, 3, 'UTC')))).1 IS NULL AS latest_is_open
-		FROM team_repo_ownership FINAL
-		WHERE org_id = {org_id:String} AND valid_from <= now64(3)
-		GROUP BY team_id, repo_full_name
-	)
-	GROUP BY team_id
+		SELECT a.team_id AS team_id, a.repo_key AS repo_key, a.ownership_updated_at AS ownership_updated_at,
+			a.latest_is_open AS latest_is_open, rr.repo AS canonical_slug, rr.last_synced AS repo_synced_at
+		FROM (
+			SELECT ro.team_id AS team_id, ro.repo_key AS repo_key, max(ro.updated_at) AS ownership_updated_at,
+				argMax(tuple(ro.valid_to), (ro.valid_from, ro.valid_to IS NULL, ifNull(ro.valid_to, toDateTime64(0, 3, 'UTC')))).1 IS NULL AS latest_is_open
+			FROM ` + teamAuthorizationOwnershipSource + ` AS ro
+			GROUP BY ro.team_id, ro.repo_key
+		) AS a
+		INNER JOIN (SELECT id, repo, last_synced FROM repos FINAL WHERE org_id = {org_id:String}) AS rr
+			ON toString(rr.id) = a.repo_key
+	) AS res
+	GROUP BY res.team_id
 ) AS tro ON tro.team_id = tm.id`
+
+// teamAuthorizationOwnershipSource (CHAOS-7130) is the resolved ownership
+// table the team's authorization list is built from: the SAME K11 rule the
+// repository->team edge (repositoryTeamsOwnershipSource) and the fact reads use
+// (ownershipresolve), in its strict mode -- an ownership row counts only if it
+// resolves to a repository present in repos for this organization (own repo_id
+// wins, else provider + lower-cased name). A ghost name, a glob and a
+// wrong-provider name therefore never reach authorization_repositories, and a
+// case variant / name row + id row for one repository collapse to ONE
+// canonical slug (repos.repo). "Currently owned" keeps the non-timebound
+// validity arm (valid_from <= now64(3)), as before.
+var teamAuthorizationOwnershipSource = ownershipresolve.OwnedRepositoriesSource(" AND valid_from <= now64(3)", ownershipresolve.Options{
+	OwnershipColumns: []string{"valid_from", "valid_to", "updated_at"},
+	Columns:          []string{"o.valid_from AS valid_from", "o.valid_to AS valid_to", "o.updated_at AS updated_at"},
+})
 
 // queryTeamsEffectiveUpdatedAtExpr is the SQL expression queryTeams uses as
 // BOTH its cursor/pagination watermark (sincePredicate/orderBy) and its
