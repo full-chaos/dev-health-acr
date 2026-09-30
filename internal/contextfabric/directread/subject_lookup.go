@@ -281,8 +281,9 @@ func planFind(request FindRequest) (findPlan, error) {
 		// CHAOS-7158: the anchor is handle mode only, both fields, and a
 		// repository or project. Shape only: existence is never checked here.
 		id := strings.TrimSpace(request.Anchor.ID)
+		rawRunes := utf8.RuneCountInString(request.Anchor.ID)
 		kind := contractsv1.ContextFabricSubjectKind(request.Anchor.Kind)
-		if handle == "" || id == "" || utf8.RuneCountInString(id) > MaxFindQueryRunes ||
+		if handle == "" || id == "" || rawRunes > MaxFindQueryRunes ||
 			(kind != contractsv1.ContextFabricSubjectRepository && kind != contractsv1.ContextFabricSubjectProject) {
 			return plan, fmt.Errorf("%w: anchor is a repository or project id and only for handle mode", ErrFindInvalidRequest)
 		}

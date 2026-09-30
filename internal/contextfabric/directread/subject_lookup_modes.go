@@ -261,12 +261,6 @@ func (l *SubjectLookup) scanHandle(ctx context.Context, principal storage.Princi
 	truncated := false
 	for _, anchor := range anchors {
 		outcome, err := l.census(ctx, principal.OrgID, plan.handle.Kind, plan.handle.Value, true, anchor.Kind, anchor.CanonicalID, anchor.CanonicalID != "")
-		if anchorRefused {
-			// A refused or missing anchor runs the same census as a readable
-			// one and discards the outcome, error included: no response,
-			// status or timing seam tells the two apart (codex r1 P1).
-			return nil, false, nil
-		}
 		if plan.anchor != nil && errors.Is(err, graphrank.ErrCensusAnchorUnsupported) {
 			return nil, false, fmt.Errorf("%w: a %s handle cannot be anchored on a %s", ErrFindInvalidRequest, plan.handle.Kind, plan.anchor.Kind)
 		}
@@ -279,6 +273,13 @@ func (l *SubjectLookup) scanHandle(ctx context.Context, principal storage.Princi
 		}
 		if err != nil {
 			return nil, false, err
+		}
+		if anchorRefused {
+			// A refused or missing anchor runs the same census as a readable
+			// one and discards only the OUTCOME: a census error above answers
+			// the same unavailable for all three anchor states (codex r2 P1),
+			// and no response, status or timing seam tells them apart.
+			return nil, false, nil
 		}
 		if outcome.Count == 0 {
 			continue

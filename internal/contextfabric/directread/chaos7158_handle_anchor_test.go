@@ -3,6 +3,7 @@ package directread
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -123,6 +124,31 @@ func TestChaos7158_HandleAnchor(t *testing.T) {
 		_, err := newLookup(&calls).Find(relCtx("wi-restricted"), restrictedA, FindRequest{Handle: "CHAOS-42", Anchor: project})
 		if !errors.Is(err, ErrFindScopeRequired) || len(calls) != 0 {
 			t.Fatalf("restricted work item with anchor: err=%v calls=%d, want scope_required and no census", err, len(calls))
+		}
+	})
+
+	t.Run("a census error answers the same for a refused, missing and readable anchor", func(t *testing.T) {
+		boom := errors.New("clickhouse down")
+		for name, anchor := range map[string]*contractsv1.MCPFindSubjectsAnchor{
+			"refused":  anchorOf(contractsv1.ContextFabricSubjectRepository, repoB.CanonicalID),
+			"missing":  anchorOf(contractsv1.ContextFabricSubjectRepository, "repository:nope"),
+			"readable": anchorOf(contractsv1.ContextFabricSubjectRepository, repoA.CanonicalID),
+		} {
+			var calls []censusCall
+			lookup := newModesLookup(handleGraph(), fixedCensus(graphrank.CensusOutcome{}, boom, &calls)).WithCensusAnchorSupport(anchorSupportFixture)
+			_, err := lookup.Find(relCtx("err-"+name), restrictedA, FindRequest{Handle: "PR 532", Anchor: anchor})
+			if !errors.Is(err, ErrFindUnavailable) || len(calls) != 1 {
+				t.Errorf("%s: err=%v calls=%d, want unavailable after one census (codex r2 P1)", name, err, len(calls))
+			}
+		}
+	})
+
+	t.Run("the anchor id bound counts the raw text, not the trimmed one", func(t *testing.T) {
+		padded := strings.Repeat(" ", 300) + repoA.CanonicalID + strings.Repeat(" ", 300)
+		var calls []censusCall
+		_, err := newLookup(&calls).Find(relCtx("long"), unrestricted, FindRequest{Handle: "PR 532", Anchor: anchorOf(contractsv1.ContextFabricSubjectRepository, padded)})
+		if !errors.Is(err, ErrFindInvalidRequest) || len(calls) != 0 {
+			t.Fatalf("err=%v calls=%d, want a static refusal", err, len(calls))
 		}
 	})
 }
