@@ -1,10 +1,12 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -124,6 +126,22 @@ func collectBoundaries(node map[string]any) []int64 {
 // still probed at the handler's real bound.
 var integerBoundGrid = []int64{2, 3, 49, 50, 51, 59, 60, 61, 99, 100, 101, 199, 200, 201, 249, 250, 251, 364, 365, 366, 499, 500, 501, 4095, 4096, 4097, 8191, 8192, 8193, 15999, 16000, 16001, 262143, 262144, 262145, 1048575, 1048576, 1048577}
 
+// integerSpellings are values in unusual notations. Each is decided on its
+// value: 0 and 1 and their exact spellings (the round 2 reproductions among
+// them), out-of-range and fractional spellings that both sides must refuse.
+// (Not here: 1e-999999999 and 1.000...0001. They are not integers, but the
+// schema validator reads a number as a float64, which underflows the first to 0
+// and rounds the second to 1, so its verdict on them is not exact;
+// TestClassifyIntegerDecidesOnTheExactValue pins the exact decision.)
+var integerSpellings = []string{
+	"0e31", "10000000000000000000000000000000e-31", "1.000000000000000000000000000000000000000000",
+	"0e999999999", "0e-999999999", "0.000e5", "-0e5", "-0", "0e0",
+	"1e-0", "1.0e0", "1." + strings.Repeat("0", 60) + "e0", "1" + strings.Repeat("0", 31) + "e-31",
+	"10e-1", "100e-2", "0.1e1", "1E+0", "1e+0", "1.0E-0",
+	"1e400", "1e999999999", "1e-1", "0.5e1", "1" + strings.Repeat("0", 1000),
+	"1." + strings.Repeat("0", 999),
+}
+
 // integerCells is the value set for one field, as JSON text: the values the
 // class is about (0, integral floats, fractions, a string, a boolean), and each
 // stated boundary with its neighbours and its integral-float spelling. null is
@@ -145,10 +163,16 @@ func integerCells(f publishedIntegerField) []string {
 	for _, b := range integerBoundGrid {
 		add(strconv.FormatInt(b, 10))
 	}
+	// The notation axis: a schema-valid integer can be spelled with any number
+	// of digits, zeros and any exponent, and the decision is on the value.
+	for _, spelling := range integerSpellings {
+		add(spelling)
+	}
 	for _, b := range f.boundaries {
 		for _, v := range []int64{b - 1, b, b + 1} {
 			add(strconv.FormatInt(v, 10))
 		}
+		add(strconv.FormatInt(b, 10) + "." + strings.Repeat("0", 999)) // a 1000-digit spelling of the bound
 		add(strconv.FormatInt(b, 10) + ".0")
 		add(strconv.FormatInt(b-1, 10) + ".0")
 		add(strconv.FormatInt(b+1, 10) + ".0")
@@ -201,14 +225,19 @@ func cloneJSON(v any) any {
 	return out
 }
 
-func TestEveryPublishedIntegerFieldIsHandledAsItsSchemaSays(t *testing.T) {
+// newIntegerToolSession starts a hosted-mode server that advertises every data
+// and answer tool, over an in-memory MCP session. The hosted API it talks to
+// answers {} to everything and counts the requests that reach it. diagnostics
+// receives the server's JSON log at Debug.
+func newIntegerToolSession(t *testing.T, diagnostics io.Writer) (*mcpsdk.ClientSession, *atomic.Int64) {
+	t.Helper()
 	var hostedCalls atomic.Int64
 	hosted := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hostedCalls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{}`))
 	}))
-	defer hosted.Close()
+	t.Cleanup(hosted.Close)
 
 	cfg := fixtureConfig(t, hosted)
 	client, err := sidecar.NewClient(cfg, fixedCredentialSource(fixtureToken(0xAB)))
@@ -221,9 +250,14 @@ func TestEveryPublishedIntegerFieldIsHandledAsItsSchemaSays(t *testing.T) {
 		toolReadFacts, toolReadRelationships, toolDataCatalog, toolFindSubjects, toolRunOperation, toolGraphQLQuery,
 	}
 	boot := &Bootstrap{Config: cfg, Client: client, Capabilities: caps}
-	processConfig, caller := boot.split(io.Discard)
+	processConfig, caller := boot.split(diagnostics)
 	processConfig.transport = TransportHTTP
-	session := connectedClientForCaller(t, processConfig, caller)
+	processConfig.diagnostics = newDiagnosticsLogger(diagnostics, slog.LevelDebug)
+	return connectedClientForCaller(t, processConfig, caller), &hostedCalls
+}
+
+func TestEveryPublishedIntegerFieldIsHandledAsItsSchemaSays(t *testing.T) {
+	session, hostedCalls := newIntegerToolSession(t, io.Discard)
 
 	listed, err := session.ListTools(context.Background(), nil)
 	if err != nil {
@@ -295,7 +329,9 @@ func TestEveryPublishedIntegerFieldIsHandledAsItsSchemaSays(t *testing.T) {
 			data, _ := json.Marshal(args)
 			var value any
 			if err := json.Unmarshal(data, &value); err != nil {
-				t.Fatal(err)
+				// A number beyond float64 (1e400): it cannot satisfy any
+				// maximum a schema states, so the schema refuses it.
+				return false
 			}
 			return resolved.Validate(value) == nil
 		}
@@ -315,7 +351,7 @@ func TestEveryPublishedIntegerFieldIsHandledAsItsSchemaSays(t *testing.T) {
 					accepted++
 				}
 				if bySchema != byCall {
-					t.Errorf("%s = %s: the published schema %s it, tools/call %s it (%s)", name, cell, verdict(bySchema), verdict(byCall), lastOutcome)
+					t.Errorf("%s = %.70s (%d chars): the published schema %s it, tools/call %s it (%.120s)", name, cell, len(cell), verdict(bySchema), verdict(byCall), lastOutcome)
 				}
 			}
 			if accepted == 0 {
@@ -335,4 +371,54 @@ func verdict(accepted bool) string {
 		return "accepts"
 	}
 	return "refuses"
+}
+
+// Each integer decision is one Debug record: the tool, the field and the
+// decision, and never the literal the client sent.
+func TestIntegerMiddlewareLogsEachDecisionAtDebugWithoutTheLiteral(t *testing.T) {
+	var log bytes.Buffer
+	session, _ := newIntegerToolSession(t, &log)
+	call := func(tool string, args string) {
+		t.Helper()
+		if _, err := session.CallTool(context.Background(), &mcpsdk.CallToolParams{Name: tool, Arguments: json.RawMessage(args)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	call(toolRunOperation, `{"operation":"hotspots","max_bytes":4097.0}`)
+	call(toolRunOperation, `{"operation":"hotspots","max_bytes":1e999999999}`)
+	call(toolReadFacts, `{"kinds":["health"],"subjects":[{"kind":"team","canonical_id":"team:1"}],"window":{"mode":"trailing","days":1.5},"max_bytes":8192}`)
+
+	type record struct {
+		Msg      string `json:"msg"`
+		Level    string `json:"level"`
+		Tool     string `json:"tool"`
+		Field    string `json:"field"`
+		Decision string `json:"decision"`
+	}
+	got := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(log.String()), "\n") {
+		var r record
+		if err := json.Unmarshal([]byte(line), &r); err != nil || r.Msg != "mcp integer argument decided" {
+			continue
+		}
+		if r.Level != "DEBUG" {
+			t.Errorf("a decision was logged at %s, want DEBUG", r.Level)
+		}
+		got[r.Tool+" "+r.Field+" "+r.Decision] = "seen"
+	}
+	for _, want := range []string{
+		"run_operation max_bytes rewritten",
+		"run_operation max_bytes refused-range",
+		"read_facts window.days refused-nonintegral",
+		"read_facts max_bytes passed",
+	} {
+		if got[want] == "" {
+			t.Errorf("no Debug record %q in %v", want, got)
+		}
+	}
+	for _, literal := range []string{"4097.0", "1e999999999", "1.5"} {
+		if strings.Contains(log.String(), literal) {
+			t.Errorf("the log carries the literal %q", literal)
+		}
+	}
 }
