@@ -32,18 +32,26 @@
 // suite counts from the raw shard files with a parser of its own and compares
 // them, the merged coverage profile and the failure listing with the merged
 // files the job wrote, so a merge that never ran, ran on fewer shards, or
-// produced something other than the sum fails there.
+// produced something other than the sum fails there. The failed-test set is
+// re-derived from every shard's raw go-test.json AND from the merged JUnit, and
+// both must equal the listing `failures` wrote.
 //
 // The tool fails closed on all malformed input, never guessing at it. A missing
 // shard, an extra shard, a shard directory whose name is not the canonical
 // decimal index (1, not 01), an empty file, a malformed profile, two shards
 // that both claim one test suite, two profiles in different coverage modes, a
-// go-test.json line that is not a test2json event, a JUnit root whose totals
-// are absent, non-integer, or not the sum of its suites, or a JUnit file with
-// more than one root, is an error and not a partial merge: a merged report that
-// silently covers 3 of 4 shards, or states a total nobody measured, reads
-// exactly like a correct one, which is the failure this whole job exists to
-// prevent.
+// go-test.json line that is not a test2json event or whose Action is outside
+// the closed set (testActions), a JUnit root whose totals are absent,
+// non-integer, or not what the document holds (see the table above
+// junitRequiredCounts), or a JUnit file with more than one root, is an error and
+// not a partial merge: a merged report that silently covers 3 of 4 shards, or
+// states a total nobody measured, reads exactly like a correct one, which is the
+// failure this whole job exists to prevent.
+//
+// What "not what the document holds" means was MEASURED against gotestsum
+// v1.13.0 on a failing run, because a literal "root = sum of suites" refuses it:
+// see the table above junitRequiredCounts, and the real failing-run fixture in
+// testdata/gotestsum-failing-run.
 package main
 
 import (
@@ -374,18 +382,33 @@ func runJUnit(dir string, expect int, out string, stdout io.Writer) error {
 	return nil
 }
 
-// junitCountAttrs are the counters that must add up: a <testsuites> root states
-// each as a total, and it has to equal the sum over the suites it contains.
-// tests, failures and errors are always present on a gotestsum root; skipped
-// and disabled only when the writer emits them (gotestsum puts `skipped` on the
-// suites and not on the root, so a root without it is complete, not malformed).
+// What a <testsuites> root's totals must be, MEASURED against gotestsum v1.13.0
+// on a run with passing, failing, panicking, skipped, build-failed and
+// TestMain-failing packages (not assumed):
+//
+//	tests     the sum of the suites' tests attributes (also the number of
+//	          real testcases; a synthetic per-package failure testcase is not
+//	          counted, so tests can be LESS than the testcase elements)
+//	failures  the number of <failure> elements in the whole document. NOT the
+//	          sum of the suites' failures attributes: a package-level failure
+//	          (a build failure, a TestMain exit) is a synthetic testcase under
+//	          a suite whose own failures attribute says 0, while the root counts
+//	          it. A literal "root = sum of suites" rule would refuse exactly the
+//	          failing runs whose merged report matters most.
+//	errors    an integer; it is 1 for a build failure with no <error> element
+//	          anywhere, so it is required and summed but not checked against
+//	          the suites.
+//	skipped / disabled  optional (gotestsum writes skipped only on suites);
+//	          when a root carries one it equals the sum of the suites'.
+//	time      a number.
 var (
 	junitRequiredCounts = []string{"tests", "failures", "errors"}
 	junitOptionalCounts = []string{"skipped", "disabled"}
 )
 
-// junitSuite is one direct <testsuite> child of a <testsuites> root: its name,
-// its counters, and the exact bytes it was written with.
+// junitSuite is one direct <testsuite> child of a <testsuites> root: its name
+// (empty for the nameless suite gotestsum writes for a build failure), its
+// counters, and the exact bytes it was written with.
 type junitSuite struct {
 	name   string
 	counts map[string]int
@@ -394,16 +417,17 @@ type junitSuite struct {
 
 // junitDoc is one parsed shard report.
 type junitDoc struct {
-	rootCounts map[string]int
-	rootTime   float64
-	suites     []junitSuite
+	rootCounts   map[string]int
+	rootTime     float64
+	suites       []junitSuite
+	failureElems int // <failure> elements anywhere in the document
 }
 
 // mergeJUnit merges JUnit <testsuites> documents into one. Child <testsuite>
 // elements are copied verbatim from the shard's own bytes. Every shard report
-// must be internally consistent -- root totals present, integers, and equal to
-// the sum over its own suites -- or the merge is refused: a merged total built
-// on a root nobody checked would be a number that was never measured.
+// must be internally consistent (see the table above) or the merge is refused:
+// a merged total built on a root nobody checked would be a number that was
+// never measured.
 func mergeJUnit(names []string, docs [][]byte) ([]byte, junitStats, error) {
 	var st junitStats
 	rootTotals := map[string]int{}
@@ -418,29 +442,43 @@ func mergeJUnit(names []string, docs [][]byte) ([]byte, junitStats, error) {
 			return nil, st, fmt.Errorf("%s: %w", name, err)
 		}
 		for _, a := range append(append([]string{}, junitRequiredCounts...), junitOptionalCounts...) {
-			want, ok := doc.rootCounts[a]
+			got, ok := doc.rootCounts[a]
 			if !ok {
 				continue
 			}
-			sum := 0
-			for _, s := range doc.suites {
-				sum += s.counts[a]
+			var want int
+			switch a {
+			case "errors":
+				rootTotals[a] += got
+				continue
+			case "failures":
+				want = doc.failureElems
+			default:
+				for _, s := range doc.suites {
+					want += s.counts[a]
+				}
 			}
-			if want != sum {
-				return nil, st, fmt.Errorf("%s: <testsuites %s=%d> but its %d suite(s) add up to %d -- the report is truncated or hand-edited, and a merged total built on it would be wrong",
-					name, a, want, len(doc.suites), sum)
+			if got != want {
+				what := fmt.Sprintf("its %d suite(s) add up to %d", len(doc.suites), want)
+				if a == "failures" {
+					what = fmt.Sprintf("the document holds %d <failure> element(s)", want)
+				}
+				return nil, st, fmt.Errorf("%s: <testsuites %s=%d> but %s -- the report is truncated or hand-edited, and a merged total built on it would be wrong",
+					name, a, got, what)
 			}
-			rootTotals[a] += want
+			rootTotals[a] += got
 			if a == "skipped" || a == "disabled" {
 				presentOpt[a] = true
 			}
 		}
 		timeTotal += doc.rootTime
 		for _, s := range doc.suites {
-			if prev, dup := suiteOwner[s.name]; dup {
-				return nil, st, fmt.Errorf("test suite %q is in both %s and %s -- the shards overlap, so its tests ran twice", s.name, prev, name)
+			if s.name != "" {
+				if prev, dup := suiteOwner[s.name]; dup {
+					return nil, st, fmt.Errorf("test suite %q is in both %s and %s -- the shards overlap, so its tests ran twice", s.name, prev, name)
+				}
+				suiteOwner[s.name] = name
 			}
-			suiteOwner[s.name] = name
 			st.skipped += s.counts["skipped"]
 			children = append(children, s.raw)
 		}
@@ -491,7 +529,8 @@ func countAttr(attrs []xml.Attr, name string) (n int, present bool, err error) {
 // parseJUnit parses one JUnit document whose single root is <testsuites>. It
 // fails closed on everything a well-formed gotestsum report never contains: a
 // second root or trailing content, a root without tests/failures/errors/time,
-// a counter that is not an integer, a suite without a name.
+// a counter that is not an integer, a suite with no name attribute (an EMPTY
+// name is legal: gotestsum writes one for a build failure).
 func parseJUnit(data []byte) (junitDoc, error) {
 	doc := junitDoc{rootCounts: map[string]int{}}
 	dec := xml.NewDecoder(bytes.NewReader(data))
@@ -520,6 +559,9 @@ func parseJUnit(data []byte) (junitDoc, error) {
 				return doc, fmt.Errorf("more than one root element: a second <%s> follows the closed <testsuites> -- two documents were concatenated, and their totals would silently overwrite each other", t.Name.Local)
 			}
 			depth++
+			if t.Name.Local == "failure" && depth >= 4 {
+				doc.failureElems++
+			}
 			switch depth {
 			case 1:
 				if t.Name.Local != "testsuites" {
@@ -557,12 +599,13 @@ func parseJUnit(data []byte) (junitDoc, error) {
 					return doc, fmt.Errorf("unexpected <%s> directly under <testsuites>", t.Name.Local)
 				}
 				kidStart, kidName, kidCounts = before, "", map[string]int{}
+				hasName := false
 				for _, a := range t.Attr {
 					if a.Name.Local == "name" {
-						kidName = a.Value
+						kidName, hasName = a.Value, true
 					}
 				}
-				if kidName == "" {
+				if !hasName {
 					return doc, errors.New("a <testsuite> has no name attribute")
 				}
 				for _, a := range append(append([]string{}, junitRequiredCounts...), junitOptionalCounts...) {
@@ -600,6 +643,22 @@ func parseJUnit(data []byte) (junitDoc, error) {
 
 // --- failures ---------------------------------------------------------------
 
+// testActions is the CLOSED set of Action values a go-test.json line may carry
+// (a value outside it is an error, never silently dropped: a failure event
+// carrying an Action this tool does not know is exactly the one that vanishes
+// from the listing). Sources, both read from the toolchain:
+//   - test2json's own vocabulary (cmd/internal/test2json): start, run, pause,
+//     cont, pass, bench, fail, output, skip, plus attr and artifacts (Go 1.25+,
+//     written for t.Attr and t.ArtifactDir);
+//   - `go test -json`'s build events (`go help buildjson`): build-output and
+//     build-fail. A package that fails to build writes these AND a package
+//     `fail` event, so they carry no failure of their own.
+var testActions = map[string]bool{
+	"start": true, "run": true, "pause": true, "cont": true, "pass": true, "bench": true,
+	"fail": true, "output": true, "skip": true, "attr": true, "artifacts": true,
+	"build-output": true, "build-fail": true,
+}
+
 // testEvent is the subset of a test2json event this tool reads.
 type testEvent struct {
 	Action  string `json:"Action"`
@@ -607,13 +666,27 @@ type testEvent struct {
 	Test    string `json:"Test"`
 }
 
+// failureEntry is one failed test (Package + Test) or one failed package with
+// no test named (Test == ""), with the shards that saw it fail.
+type failureEntry struct {
+	Package string `json:"package"`
+	Test    string `json:"test,omitempty"`
+	Shards  []int  `json:"shards"`
+}
+
+func (e failureEntry) key() string {
+	if e.Test == "" {
+		return e.Package
+	}
+	return e.Package + "/" + e.Test
+}
+
 // failureReport is what the `failures` command found, and what `crosscheck`
-// reads back from -report to prove the listing really covered every shard.
+// reads back from -report.
 type failureReport struct {
-	Shards   int           `json:"shards"`
-	PerShard []shardEvents `json:"per_shard"`
-	// Failed maps "package" or "package/Test" to the shard indices that saw it fail.
-	Failed map[string][]int `json:"failed"`
+	Shards   int            `json:"shards"`
+	PerShard []shardEvents  `json:"per_shard"`
+	Failed   []failureEntry `json:"failed"`
 }
 
 type shardEvents struct {
@@ -635,18 +708,13 @@ func runFailures(dir string, expect int, summary, report string, stdout io.Write
 	if err != nil {
 		return err
 	}
-	keys := make([]string, 0, len(rep.Failed))
-	for k := range rep.Failed {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
 	for _, s := range rep.PerShard {
 		fmt.Fprintf(stdout, "shard %d: %d test events, %d failed test(s)/package(s)\n", s.Shard, s.Events, s.Failed)
 	}
-	for _, k := range keys {
-		fmt.Fprintf(stdout, "FAIL %s (shard %s)\n", k, joinInts(rep.Failed[k]))
+	for _, e := range rep.Failed {
+		fmt.Fprintf(stdout, "FAIL %s (shard %s)\n", e.key(), joinInts(e.Shards))
 	}
-	fmt.Fprintf(stdout, "%d failed test(s)/package(s) across %d shard(s)\n", len(keys), rep.Shards)
+	fmt.Fprintf(stdout, "%d failed test(s)/package(s) across %d shard(s)\n", len(rep.Failed), rep.Shards)
 	if report != "" {
 		b, mErr := json.MarshalIndent(rep, "", "  ")
 		if mErr != nil {
@@ -658,9 +726,9 @@ func runFailures(dir string, expect int, summary, report string, stdout io.Write
 	}
 	if summary != "" {
 		var md strings.Builder
-		fmt.Fprintf(&md, "### unit: %d failed test(s)/package(s) across %d shards\n\n", len(keys), rep.Shards)
-		for _, k := range keys {
-			fmt.Fprintf(&md, "- `%s` (shard %s)\n", k, joinInts(rep.Failed[k]))
+		fmt.Fprintf(&md, "### unit: %d failed test(s)/package(s) across %d shards\n\n", len(rep.Failed), rep.Shards)
+		for _, e := range rep.Failed {
+			fmt.Fprintf(&md, "- `%s` (shard %s)\n", e.key(), joinInts(e.Shards))
 		}
 		f, err := os.OpenFile(summary, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		if err != nil {
@@ -678,10 +746,12 @@ func runFailures(dir string, expect int, summary, report string, stdout io.Write
 }
 
 // collectFailures reads every shard's test2json stream. It fails closed: a line
-// that is not a test2json event -- the one line that would have said which test
-// failed could be exactly the one that is mangled -- is an error, not a note.
+// that is not an event, an event with no Action, or an Action outside
+// testActions is an error, not a note -- the one line that would have said which
+// test failed could be exactly the one that is mangled or new.
 func collectFailures(streams [][]byte) (failureReport, error) {
-	rep := failureReport{Failed: map[string][]int{}}
+	rep := failureReport{}
+	byKey := map[string]*failureEntry{}
 	for i, raw := range streams {
 		shard := i + 1
 		se := shardEvents{Shard: shard}
@@ -699,15 +769,20 @@ func collectFailures(streams [][]byte) (failureReport, error) {
 					return rep, fmt.Errorf("shard %d: go-test.json line %d is not a test2json event (%q) -- a failure event could be the mangled line, so the listing would silently omit it",
 						shard, lineNo, truncate(strings.TrimSpace(string(line))))
 				}
+				if !testActions[ev.Action] {
+					return rep, fmt.Errorf("shard %d: go-test.json line %d has Action %q, which is not a known test2json/go-test action -- an unknown action could be carrying a failure, so the listing would silently omit it",
+						shard, lineNo, ev.Action)
+				}
 				se.Events++
-				if ev.Action == "fail" {
-					key := ev.Package
-					if ev.Test != "" {
-						key += "/" + ev.Test
-					}
-					if key != "" && !seen[key] {
-						seen[key] = true
-						rep.Failed[key] = append(rep.Failed[key], shard)
+				if ev.Action == "fail" && ev.Package != "" {
+					e := failureEntry{Package: ev.Package, Test: ev.Test}
+					k := e.key()
+					if !seen[k] {
+						seen[k] = true
+						if byKey[k] == nil {
+							byKey[k] = &failureEntry{Package: ev.Package, Test: ev.Test}
+						}
+						byKey[k].Shards = append(byKey[k].Shards, shard)
 						se.Failed++
 					}
 				}
@@ -725,6 +800,14 @@ func collectFailures(streams [][]byte) (failureReport, error) {
 		rep.PerShard = append(rep.PerShard, se)
 	}
 	rep.Shards = len(rep.PerShard)
+	keys := make([]string, 0, len(byKey))
+	for k := range byKey {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		rep.Failed = append(rep.Failed, *byKey[k])
+	}
 	return rep, nil
 }
 
@@ -763,6 +846,143 @@ func countElements(data []byte, local string) (int, error) {
 			n++
 		}
 	}
+}
+
+// failedSet is the normalised set of failures, as "package" or "package/Test"
+// keys. A package-level failure is dropped when a test in that package failed
+// too (the package fails BECAUSE its test did, and JUnit records only the
+// test); what remains at package level is a package that failed with no failed
+// test -- a build failure, a TestMain exit -- which JUnit records as a
+// synthetic testcase with no classname under that package's suite.
+type failedSet map[string]bool
+
+func normalizeFailed(pairs [][2]string) failedSet {
+	withTest := map[string]bool{}
+	for _, p := range pairs {
+		if p[1] != "" {
+			withTest[p[0]] = true
+		}
+	}
+	out := failedSet{}
+	for _, p := range pairs {
+		switch {
+		case p[1] != "":
+			out[p[0]+"/"+p[1]] = true
+		case !withTest[p[0]]:
+			out[p[0]] = true
+		}
+	}
+	return out
+}
+
+// rawFailedPairs re-derives the failed (package, test) pairs from one raw
+// go-test.json with a decoder of its own (a generic map, not testEvent) and its
+// own check of the closed Action set.
+func rawFailedPairs(raw []byte, shard int) ([][2]string, error) {
+	var out [][2]string
+	sc := bufio.NewScanner(bytes.NewReader(raw))
+	sc.Buffer(make([]byte, 0, 1<<20), 1<<26)
+	for n := 1; sc.Scan(); n++ {
+		line := bytes.TrimSpace(sc.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		var ev map[string]any
+		if err := json.Unmarshal(line, &ev); err != nil {
+			return nil, fmt.Errorf("shard %d go-test.json line %d: %w", shard, n, err)
+		}
+		action, _ := ev["Action"].(string)
+		if !testActions[action] {
+			return nil, fmt.Errorf("shard %d go-test.json line %d: Action %q is not a known action", shard, n, action)
+		}
+		if action != "fail" {
+			continue
+		}
+		pkg, _ := ev["Package"].(string)
+		test, _ := ev["Test"].(string)
+		if pkg != "" {
+			out = append(out, [2]string{pkg, test})
+		}
+	}
+	return out, sc.Err()
+}
+
+// junitFailedPairs re-derives the failed (package, test) pairs from a JUnit
+// document with a token loop of its own: every testcase with a <failure>
+// child (the element gotestsum writes; it writes no <error>). A testcase with no classname is gotestsum's synthetic
+// per-package failure and stands for the enclosing suite's package.
+func junitFailedPairs(data []byte) ([][2]string, error) {
+	dec := xml.NewDecoder(bytes.NewReader(data))
+	var (
+		out       [][2]string
+		suite     string
+		classname string
+		name      string
+		inCase    bool
+		failed    bool
+	)
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			return out, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "testsuite":
+				suite = ""
+				for _, a := range t.Attr {
+					if a.Name.Local == "name" {
+						suite = a.Value
+					}
+				}
+			case "testcase":
+				inCase, failed, classname, name = true, false, "", ""
+				for _, a := range t.Attr {
+					switch a.Name.Local {
+					case "classname":
+						classname = a.Value
+					case "name":
+						name = a.Value
+					}
+				}
+			case "failure":
+				if inCase {
+					failed = true
+				}
+			}
+		case xml.EndElement:
+			if t.Name.Local == "testcase" && inCase {
+				if failed {
+					if classname == "" {
+						out = append(out, [2]string{suite, ""})
+					} else {
+						out = append(out, [2]string{classname, name})
+					}
+				}
+				inCase = false
+			}
+		}
+	}
+}
+
+func diffSets(a, b failedSet) (onlyA, onlyB []string) {
+	for k := range a {
+		if !b[k] {
+			onlyA = append(onlyA, k)
+		}
+	}
+	for k := range b {
+		if !a[k] {
+			onlyB = append(onlyB, k)
+		}
+	}
+	sort.Strings(onlyA)
+	sort.Strings(onlyB)
+	return
 }
 
 // coberturaFacts reads the two counters off a Cobertura <coverage> root.
@@ -807,13 +1027,17 @@ func coberturaFacts(data []byte) (valid, covered int, err error) {
 // answer from the raw shard inputs and compares it with the merged files the
 // job actually wrote, so a merge that did not run, ran on fewer shards, or
 // produced something other than the sum fails here.
+//
+// The failure listing is compared THREE ways: the failed set re-derived from
+// every shard's raw go-test.json, the failed set re-derived from the merged
+// JUnit, and the listing the `failures` command wrote must all be equal.
 func runCrosscheck(in crosscheckInputs, stdout io.Writer) error {
 	var problems []string
 	bad := func(format string, a ...any) { problems = append(problems, fmt.Sprintf(format, a...)) }
 
-	// JUnit: testcase and suite element counts, counted independently of the
-	// merge, must be the same in the merged file as across the shards, and the
-	// merged root must state them.
+	// JUnit: element counts, counted independently of the merge, must be the
+	// same in the merged file as across the shards, and the merged root must
+	// state the shards' totals.
 	jPaths, err := shardFiles(in.dir, in.expect, "junit.xml")
 	if err != nil {
 		return err
@@ -822,7 +1046,7 @@ func runCrosscheck(in crosscheckInputs, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	var wantCases, wantSuites, wantFailures int
+	var wantCases, wantSuites, wantFailElems, wantTests int
 	for i, raw := range jRaws {
 		c, cErr := countElements(raw, "testcase")
 		s, sErr := countElements(raw, "testsuite")
@@ -832,7 +1056,8 @@ func runCrosscheck(in crosscheckInputs, stdout io.Writer) error {
 		}
 		wantCases += c
 		wantSuites += s
-		wantFailures += doc.rootCounts["failures"]
+		wantFailElems += doc.failureElems
+		wantTests += doc.rootCounts["tests"]
 	}
 	mergedJ, err := os.ReadFile(in.junit)
 	if err != nil {
@@ -850,11 +1075,62 @@ func runCrosscheck(in crosscheckInputs, stdout io.Writer) error {
 	if gotSuites != wantSuites {
 		bad("merged junit has %d suite(s), the %d shards have %d", gotSuites, in.expect, wantSuites)
 	}
-	if mDoc.rootCounts["tests"] != wantCases {
-		bad("merged junit root says tests=%d but the shards hold %d testcase(s)", mDoc.rootCounts["tests"], wantCases)
+	if mDoc.rootCounts["tests"] != wantTests {
+		bad("merged junit root says tests=%d but the shards state %d", mDoc.rootCounts["tests"], wantTests)
 	}
-	if mDoc.rootCounts["failures"] != wantFailures {
-		bad("merged junit root says failures=%d but the shards report %d", mDoc.rootCounts["failures"], wantFailures)
+	if mDoc.rootCounts["failures"] != wantFailElems {
+		bad("merged junit root says failures=%d but the shards hold %d <failure> element(s)", mDoc.rootCounts["failures"], wantFailElems)
+	}
+
+	// Failures: raw go-test.json of every shard == merged JUnit == the listing.
+	tPaths, err := shardFiles(in.dir, in.expect, "go-test.json")
+	if err != nil {
+		return err
+	}
+	tRaws, err := readAll(tPaths)
+	if err != nil {
+		return err
+	}
+	var rawPairs [][2]string
+	for i, raw := range tRaws {
+		p, rErr := rawFailedPairs(raw, i+1)
+		if rErr != nil {
+			return rErr
+		}
+		rawPairs = append(rawPairs, p...)
+	}
+	fromRaw := normalizeFailed(rawPairs)
+	jPairs, err := junitFailedPairs(mergedJ)
+	if err != nil {
+		return fmt.Errorf("merged junit %s: %w", in.junit, err)
+	}
+	fromJUnit := normalizeFailed(jPairs)
+	fb, err := os.ReadFile(in.failures)
+	if err != nil {
+		return fmt.Errorf("failure report %s was not produced: %w", in.failures, err)
+	}
+	var rep failureReport
+	if err := json.Unmarshal(fb, &rep); err != nil {
+		return fmt.Errorf("failure report %s: %w", in.failures, err)
+	}
+	var listed [][2]string
+	for _, e := range rep.Failed {
+		listed = append(listed, [2]string{e.Package, e.Test})
+	}
+	fromListing := normalizeFailed(listed)
+	if a, b := diffSets(fromRaw, fromListing); len(a)+len(b) > 0 {
+		bad("the failure listing differs from the raw go-test.json of the shards: only in the raw events %v, only in the listing %v", head(a), head(b))
+	}
+	if a, b := diffSets(fromRaw, fromJUnit); len(a)+len(b) > 0 {
+		bad("the merged JUnit differs from the raw go-test.json of the shards: failed only in go-test.json %v, only in the JUnit %v", head(a), head(b))
+	}
+	if rep.Shards != in.expect || len(rep.PerShard) != in.expect {
+		bad("the failure listing read %d shard(s) (%d entries), want %d", rep.Shards, len(rep.PerShard), in.expect)
+	}
+	for _, s := range rep.PerShard {
+		if s.Events < 1 {
+			bad("the failure listing read no events from shard %d", s.Shard)
+		}
 	}
 
 	// Coverage: the merged profile must be exactly what merging the shards now
@@ -890,31 +1166,18 @@ func runCrosscheck(in crosscheckInputs, stdout io.Writer) error {
 		bad("cobertura report %s states lines-covered=%d of lines-valid=%d", in.cobertura, covered, valid)
 	}
 
-	// Failure listing: it must exist and must have read every shard.
-	fb, err := os.ReadFile(in.failures)
-	if err != nil {
-		return fmt.Errorf("failure report %s was not produced: %w", in.failures, err)
-	}
-	var rep failureReport
-	if err := json.Unmarshal(fb, &rep); err != nil {
-		return fmt.Errorf("failure report %s: %w", in.failures, err)
-	}
-	if rep.Shards != in.expect || len(rep.PerShard) != in.expect {
-		bad("the failure listing read %d shard(s) (%d entries), want %d", rep.Shards, len(rep.PerShard), in.expect)
-	}
-	for _, s := range rep.PerShard {
-		if s.Events < 1 {
-			bad("the failure listing read no events from shard %d", s.Shard)
-		}
-	}
-	if wantFailures > 0 && len(rep.Failed) == 0 {
-		bad("the shards report %d failure(s) in JUnit but the failure listing names none", wantFailures)
-	}
-
 	if len(problems) > 0 {
 		return fmt.Errorf("the merged reports do not match the shards:\n  - %s", strings.Join(problems, "\n  - "))
 	}
-	fmt.Fprintf(stdout, "crosscheck OK: %d shards, %d testcases in %d suites, %d failure(s), coverage %d/%d lines, failure listing read %d shards\n",
-		in.expect, wantCases, wantSuites, wantFailures, covered, valid, rep.Shards)
+	fmt.Fprintf(stdout, "crosscheck OK: %d shards, %d testcases in %d suites, %d failure element(s), %d failed test(s)/package(s) agreed by go-test.json, JUnit and the listing, coverage %d/%d lines, failure listing read %d shards\n",
+		in.expect, wantCases, wantSuites, wantFailElems, len(fromRaw), covered, valid, rep.Shards)
 	return nil
+}
+
+// head trims a list to its first few entries for a readable message.
+func head(v []string) []string {
+	if len(v) > 5 {
+		return append(append([]string{}, v[:5]...), fmt.Sprintf("... (%d more)", len(v)-5))
+	}
+	return v
 }

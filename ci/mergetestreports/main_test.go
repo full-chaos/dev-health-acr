@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"encoding/xml"
 	"os"
 	"path/filepath"
@@ -357,19 +358,27 @@ func TestCollectFailuresReadsEveryShard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := rep.Failed["p/a/TestX"]; len(got) != 1 || got[0] != 1 {
-		t.Fatalf("p/a/TestX: %v", rep.Failed)
+	find := func(pkg, test string) *failureEntry {
+		for i := range rep.Failed {
+			if rep.Failed[i].Package == pkg && rep.Failed[i].Test == test {
+				return &rep.Failed[i]
+			}
+		}
+		return nil
 	}
-	if _, ok := rep.Failed["p/a"]; !ok {
-		t.Fatalf("a package-level failure was dropped: %v", rep.Failed)
+	if e := find("p/a", "TestX"); e == nil || len(e.Shards) != 1 || e.Shards[0] != 1 {
+		t.Fatalf("p/a/TestX: %+v", rep.Failed)
 	}
-	if got := rep.Failed["p/c/TestZ"]; len(got) != 1 || got[0] != 3 {
-		t.Fatalf("a failure in the LAST shard must be reported, not only the first shard's: %v", rep.Failed)
+	if find("p/a", "") == nil {
+		t.Fatalf("a package-level failure was dropped: %+v", rep.Failed)
 	}
-	if _, ok := rep.Failed["p/b/TestY"]; ok {
-		t.Fatalf("a passing test was reported as failed: %v", rep.Failed)
+	if e := find("p/c", "TestZ"); e == nil || len(e.Shards) != 1 || e.Shards[0] != 3 {
+		t.Fatalf("a failure in the LAST shard must be reported, not only the first shard's: %+v", rep.Failed)
 	}
-	if rep.Shards != 3 || len(rep.PerShard) != 3 {
+	if find("p/b", "TestY") != nil {
+		t.Fatalf("a passing test was reported as failed: %+v", rep.Failed)
+	}
+	if rep.Shards != 3 || len(rep.PerShard) != 3 || len(rep.Failed) != 3 {
 		t.Fatalf("report = %+v", rep)
 	}
 }
@@ -510,7 +519,9 @@ func TestCollectFailuresRefusesAnyLineThatIsNotAnEvent(t *testing.T) {
 }
 
 func TestMergeJUnitRefusesRootTotalsThatAreMissingOrNotIntegers(t *testing.T) {
-	suite := "<testsuite tests=\"2\" failures=\"1\" name=\"a\"></testsuite>"
+	suite := "<testsuite tests=\"2\" failures=\"1\" name=\"a\">" +
+		"<testcase classname=\"a\" name=\"T1\"></testcase>" +
+		"<testcase classname=\"a\" name=\"T2\"><failure message=\"x\"></failure></testcase></testsuite>"
 	root := func(attrs string) string { return "<testsuites " + attrs + ">" + suite + "</testsuites>" }
 	cases := map[string]string{
 		"tests missing":      root(`failures="1" errors="0" time="1"`),
@@ -526,7 +537,7 @@ func TestMergeJUnitRefusesRootTotalsThatAreMissingOrNotIntegers(t *testing.T) {
 		"tests below suites": root(`tests="1" failures="1" errors="0" time="1"`),
 		"tests above suites": root(`tests="3" failures="1" errors="0" time="1"`),
 		"failures mismatch":  root(`tests="2" failures="0" errors="0" time="1"`),
-		"errors mismatch":    root(`tests="2" failures="1" errors="4" time="1"`),
+		"failures too many":  root(`tests="2" failures="2" errors="0" time="1"`),
 		"skipped mismatch":   root(`tests="2" failures="1" errors="0" skipped="3" time="1"`),
 		// Consistent but impossible: root and suite agree on a negative count, so
 		// only the non-negative rule (not the sum rule) can refuse it.
@@ -545,6 +556,56 @@ func TestMergeJUnitRefusesRootTotalsThatAreMissingOrNotIntegers(t *testing.T) {
 				t.Fatalf("accepted %q", body)
 			}
 		})
+	}
+}
+
+// gotestsum v1.13.0 on a run with a build failure and a TestMain exit writes a
+// nameless suite, a root failures total that counts synthetic per-package
+// failure testcases the suites' own failures attributes do not, and an errors
+// total with no <error> element anywhere. The merge must ACCEPT that (it is the
+// failing run whose report matters most) and still state the right totals.
+func TestMergeJUnitAcceptsARealGotestsumFailingRun(t *testing.T) {
+	failing := readFixture(t, "junit.xml")
+	passing := gotestsumDoc(2, 0, "1.000000", gotestsumSuite("example.com/m/z", 2, 0))
+	out, st, err := mergeJUnit([]string{"failing", "passing"}, [][]byte{failing, []byte(passing)})
+	if err != nil {
+		t.Fatalf("a real gotestsum failing run was refused: %v", err)
+	}
+	// root: tests 5+2, failures 5 (one per <failure> element), errors 1.
+	if st.tests != 7 || st.failures != 5 || st.errors != 1 || st.suites != 6 {
+		t.Fatalf("stats = %+v\n%s", st, out)
+	}
+	if !strings.Contains(string(out), `<testsuites tests="7" failures="5" errors="1"`) {
+		t.Fatalf("merged root:\n%s", out[:200])
+	}
+	// The nameless suite is legal in every shard: two shards may each carry one.
+	if _, _, err := mergeJUnit([]string{"a", "b"}, [][]byte{failing, failing2(t)}); err != nil {
+		t.Fatalf("a nameless suite in two shards was refused: %v", err)
+	}
+}
+
+// failing2 is the failing-run fixture with every named suite renamed, so only
+// the nameless suite is shared between the two documents.
+func failing2(t *testing.T) []byte {
+	t.Helper()
+	s := string(readFixture(t, "junit.xml"))
+	s = strings.ReplaceAll(s, "ex.test/m/", "ex.test/n/")
+	return []byte(s)
+}
+
+func readFixture(t *testing.T, name string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("testdata", "gotestsum-failing-run", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestMergeJUnitRefusesASuiteWithNoNameAttributeButAcceptsAnEmptyOne(t *testing.T) {
+	empty := "<testsuites tests=\"0\" failures=\"0\" errors=\"0\" time=\"0\"><testsuite tests=\"0\" name=\"\"></testsuite></testsuites>"
+	if _, _, err := mergeJUnit([]string{"a"}, [][]byte{[]byte(empty)}); err != nil {
+		t.Fatalf("an empty suite name was refused: %v", err)
 	}
 }
 
@@ -658,6 +719,27 @@ func (f crosscheckFixture) run(t *testing.T) (int, string) {
 	return code, so.String() + se.String()
 }
 
+func (f crosscheckFixture) editFailures(t *testing.T, fn func(*failureReport)) {
+	t.Helper()
+	p := filepath.Join(f.out, "failures.json")
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r failureReport
+	if err := json.Unmarshal(b, &r); err != nil {
+		t.Fatal(err)
+	}
+	fn(&r)
+	nb, err := json.MarshalIndent(r, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, nb, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func (f crosscheckFixture) rewrite(t *testing.T, name string, fn func(string) string) {
 	t.Helper()
 	p := filepath.Join(f.out, name)
@@ -677,7 +759,7 @@ func (f crosscheckFixture) rewrite(t *testing.T, name string, fn func(string) st
 func TestCrosscheckPassesOnACorrectMerge(t *testing.T) {
 	f := newCrosscheckFixture(t)
 	code, out := f.run(t)
-	if code != 0 || !strings.Contains(out, "crosscheck OK: 2 shards, 5 testcases in 2 suites, 1 failure(s)") {
+	if code != 0 || !strings.Contains(out, "crosscheck OK: 2 shards, 5 testcases in 2 suites, 1 failure element(s), 1 failed test(s)/package(s) agreed by go-test.json, JUnit and the listing") {
 		t.Fatalf("exit %d: %s", code, out)
 	}
 }
@@ -721,12 +803,36 @@ func TestCrosscheckFailsWhenTheMergedReportsDoNotMatchTheShards(t *testing.T) {
 		{"the failure listing read fewer shards", "failure listing read", func(t *testing.T, f crosscheckFixture) {
 			f.rewrite(t, "failures.json", func(s string) string { return strings.Replace(s, `"shards": 2`, `"shards": 1`, 1) })
 		}},
-		{"the failure listing names no failure although junit has one", "names none", func(t *testing.T, f crosscheckFixture) {
-			f.rewrite(t, "failures.json", func(s string) string {
-				return strings.Replace(s, `"example.com/m/a/TestBad0": [
-      1
-    ]`, ``, 1)
+		{"the failure listing names no failure although go-test.json and junit have one", "failure listing differs", func(t *testing.T, f crosscheckFixture) {
+			f.editFailures(t, func(r *failureReport) { r.Failed = nil })
+		}},
+		{"the failure listing names a failure nothing else has", "failure listing differs", func(t *testing.T, f crosscheckFixture) {
+			f.editFailures(t, func(r *failureReport) {
+				r.Failed = append(r.Failed, failureEntry{Package: "example.com/m/b", Test: "TestInvented", Shards: []int{2}})
 			})
+		}},
+		{"a shard's go-test.json gains a failure the merge never saw", "differs from the raw go-test.json", func(t *testing.T, f crosscheckFixture) {
+			p := filepath.Join(f.dir, shardArtifactPrefix+"2", "go-test.json")
+			b, err := os.ReadFile(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, append(b, []byte(`{"Action":"fail","Package":"example.com/m/b","Test":"TestLate"}`+"\n")...), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"the merged junit loses a failure element but keeps its counts consistent", "merged JUnit differs from the raw go-test.json", func(t *testing.T, f crosscheckFixture) {
+			f.rewrite(t, "junit.xml", func(s string) string {
+				i := strings.Index(s, "\t\t\t<failure")
+				j := i + strings.Index(s[i:], "</failure>\n") + len("</failure>\n")
+				return s[:i] + s[j:]
+			})
+		}},
+		{"a failure event with an unknown Action in a shard", "not a known action", func(t *testing.T, f crosscheckFixture) {
+			p := filepath.Join(f.dir, shardArtifactPrefix+"1", "go-test.json")
+			if err := os.WriteFile(p, []byte(`{"Action":"fail","Package":"example.com/m/a","Test":"TestBad0"}`+"\n"+`{"Action":"mystery","Package":"example.com/m/a","Test":"TestB"}`+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
 		}},
 	}
 	for _, c := range cases {
@@ -767,6 +873,143 @@ func TestCrosscheckFailsWhenAShardIsMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 	if code, out := f.run(t); code == 0 || !strings.Contains(out, "shard 2 of 2 is missing") {
+		t.Fatalf("exit %d: %s", code, out)
+	}
+}
+
+// --- closed action vocabulary and the real failing-run fixture (r2) ---------------
+
+func TestCollectFailuresRefusesAnUnknownAction(t *testing.T) {
+	// The r2 P1 repro: a failure-shaped event whose Action is not in the closed
+	// set used to be counted as an event and silently dropped from the listing.
+	s := `{"Action":"fail","Package":"example/a","Test":"TestA"}` + "\n" +
+		`{"Action":"mystery","Package":"example/a","Test":"TestB"}` + "\n"
+	_, err := collectFailures([][]byte{[]byte(s)})
+	mustFail(t, err, `Action "mystery"`)
+}
+
+func TestCollectFailuresAcceptsTheToolchainsWholeActionVocabulary(t *testing.T) {
+	// test2json's actions, its Go 1.25+ additions, and `go test -json`'s build
+	// events (which carry ImportPath, not Package).
+	var b strings.Builder
+	for _, a := range []string{"start", "run", "pause", "cont", "pass", "bench", "output", "skip", "attr", "artifacts"} {
+		b.WriteString(`{"Action":"` + a + `","Package":"p/a","Test":"T"}` + "\n")
+	}
+	b.WriteString(`{"ImportPath":"p/b [p/b.test]","Action":"build-output","Output":"x"}` + "\n")
+	b.WriteString(`{"ImportPath":"p/b [p/b.test]","Action":"build-fail"}` + "\n")
+	b.WriteString(`{"Action":"fail","Package":"p/b"}` + "\n")
+	rep, err := collectFailures([][]byte{[]byte(b.String())})
+	if err != nil {
+		t.Fatalf("a known action was refused: %v", err)
+	}
+	if len(rep.Failed) != 1 || rep.Failed[0].key() != "p/b" {
+		t.Fatalf("failed = %+v, want only the package that failed to build", rep.Failed)
+	}
+}
+
+func TestNormalizeFailedDropsAPackageThatFailedBecauseATestDid(t *testing.T) {
+	got := normalizeFailed([][2]string{{"p/a", "TestX"}, {"p/a", ""}, {"p/b", ""}})
+	if len(got) != 2 || !got["p/a/TestX"] || !got["p/b"] || got["p/a"] {
+		t.Fatalf("normalised = %v", got)
+	}
+}
+
+// realFailingFixture lays out two shards: shard 1 is a REAL gotestsum v1.13.0
+// junit.xml + go-test.json (testdata/gotestsum-failing-run, generated -- not
+// hand-written -- by `gotestsum --junitfile --jsonfile ./...` over a four-package
+// module: a package with a passing, a failing-with-subtest and a skipped test; a
+// package that fails to build; a package whose TestMain exits 1; a package with
+// a panicking test), shard 2 is a small passing run.
+func realFailingFixture(t *testing.T) crosscheckFixture {
+	t.Helper()
+	dir := t.TempDir()
+	files := map[string]map[string]string{
+		"1": {
+			"cover.out":    profA,
+			"junit.xml":    string(readFixture(t, "junit.xml")),
+			"go-test.json": string(readFixture(t, "go-test.json")),
+		},
+		"2": {
+			"cover.out":    profB,
+			"junit.xml":    gotestsumDoc(2, 0, "1.000000", gotestsumSuite("example.com/m/z", 2, 0)),
+			"go-test.json": `{"Action":"pass","Package":"example.com/m/z"}` + "\n",
+		},
+	}
+	for idx, fs := range files {
+		for name, body := range fs {
+			p := filepath.Join(dir, shardArtifactPrefix+idx, name)
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	out := t.TempDir()
+	var so, se bytes.Buffer
+	for _, args := range [][]string{
+		{"junit", "-dir", dir, "-expect", "2", "-out", filepath.Join(out, "junit.xml")},
+		{"coverage", "-dir", dir, "-expect", "2", "-out", filepath.Join(out, "cover.out")},
+		{"failures", "-dir", dir, "-expect", "2", "-report", filepath.Join(out, "failures.json")},
+	} {
+		if code := run(args, &so, &se); code != 0 {
+			t.Fatalf("%v exited %d: %s", args, code, se.String())
+		}
+	}
+	if err := os.WriteFile(filepath.Join(out, "coverage.xml"),
+		[]byte(`<?xml version="1.0"?><coverage line-rate="0.5" lines-covered="2" lines-valid="4"></coverage>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return crosscheckFixture{dir: dir, out: out, args: []string{
+		"crosscheck", "-dir", dir, "-expect", "2",
+		"-junit", filepath.Join(out, "junit.xml"), "-cover", filepath.Join(out, "cover.out"),
+		"-cobertura", filepath.Join(out, "coverage.xml"), "-failures", filepath.Join(out, "failures.json"),
+	}}
+}
+
+func TestCrosscheckPassesOnARealGotestsumFailingRun(t *testing.T) {
+	f := realFailingFixture(t)
+	code, out := f.run(t)
+	if code != 0 {
+		t.Fatalf("a real failing run failed its own crosscheck: %s", out)
+	}
+	// 3 failed tests + 2 packages that failed with no failed test (build failure,
+	// TestMain exit) agreed by go-test.json, the JUnit and the listing.
+	if !strings.Contains(out, "5 failed test(s)/package(s) agreed") {
+		t.Fatalf("output: %s", out)
+	}
+	var rep failureReport
+	b, err := os.ReadFile(filepath.Join(f.out, "failures.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &rep); err != nil {
+		t.Fatal(err)
+	}
+	keys := map[string]bool{}
+	for _, e := range rep.Failed {
+		keys[e.key()] = true
+	}
+	for _, want := range []string{"ex.test/m/a/TestFail", "ex.test/m/a/TestFail/sub", "ex.test/m/d/TestPanic", "ex.test/m/b", "ex.test/m/c"} {
+		if !keys[want] {
+			t.Fatalf("listing lacks %s: %v", want, keys)
+		}
+	}
+}
+
+func TestCrosscheckFailsWhenARealFailingRunLosesAPackageLevelFailure(t *testing.T) {
+	f := realFailingFixture(t)
+	// The synthetic TestMain failure of the build-failed package vanishes from
+	// the merged JUnit (counts elsewhere untouched): go-test.json still says the
+	// package failed.
+	f.rewrite(t, "junit.xml", func(s string) string {
+		i := strings.Index(s, `<testcase classname="" name="TestMain"`)
+		j := i + strings.Index(s[i:], "</testcase>\n") + len("</testcase>\n")
+		return s[:i] + s[j:]
+	})
+	code, out := f.run(t)
+	if code == 0 || !strings.Contains(out, "merged JUnit differs from the raw go-test.json") {
 		t.Fatalf("exit %d: %s", code, out)
 	}
 }

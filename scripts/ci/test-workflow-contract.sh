@@ -668,6 +668,121 @@ check_testcontainers_needs_mirror_preflight() {
   return "$status"
 }
 
+# The steps of the reports job are PARSED, not grepped: a step whose text is
+# present but which never runs (a false `if:`, `continue-on-error`, a command
+# replaced by `true` with the old text left in a comment, `|| true` appended)
+# reads green to a grep. Each step must carry exactly the allowed keys, the
+# allowed `if:`, and exactly the expected command; the job itself may carry
+# only the allowed keys and the exact `if:`.
+#
+# step_block prints one step of the job block piped in on stdin: its
+# `      - name: NAME` line through the line before the next step or comment at
+# step indent.
+step_block() {
+  awk -v n="$1" '
+    $0 == "      - name: " n { grab=1; print; next }
+    grab && /^      (- |#)/ { grab=0 }
+    grab { print }
+  '
+}
+
+# assert_step JOB_BLOCK NAME EXPECTED_IF EXPECTED_RUN
+#   EXPECTED_IF   the exact `if:` line body ("" = the step must have none)
+#   EXPECTED_RUN  the exact command; a value containing a newline is compared
+#                 with the step's `run: |` block, one line per line.
+assert_step() {
+  local block="$1" name="$2" want_if="$3" want_run="$4"
+  local step keys key ifs runs run_text want_line
+  step="$(printf '%s\n' "$block" | step_block "$name")"
+  if [ -z "$step" ]; then
+    printf 'reports has no step named "%s"\n' "$name" >&2
+    return 1
+  fi
+  keys="$(grep -oE '^ {8}[a-z-]+:' <<<"$step" | tr -d ' :' || true)"
+  for key in $keys; do
+    case "$key" in
+      if | run) ;;
+      *)
+        printf 'reports step "%s" carries key "%s", which can make it not run or not fail the job (allowed: if, run)\n' "$name" "$key" >&2
+        return 1
+        ;;
+    esac
+  done
+  ifs="$(grep -E '^ {8}if:' <<<"$step" || true)"
+  if [ -n "$want_if" ]; then
+    want_line="        if: $want_if"
+    if [ "$ifs" != "$want_line" ]; then
+      printf 'reports step "%s" has condition [%s], want exactly [%s]\n' "$name" "${ifs:-<none>}" "$want_line" >&2
+      return 1
+    fi
+  elif [ -n "$ifs" ]; then
+    printf 'reports step "%s" has a condition [%s]; it must run whenever the job does\n' "$name" "$ifs" >&2
+    return 1
+  fi
+  runs="$(grep -cE '^ {8}run:' <<<"$step" || true)"
+  if [ "$runs" != 1 ]; then
+    printf 'reports step "%s" has %s run: keys, want exactly 1\n' "$name" "$runs" >&2
+    return 1
+  fi
+  case "$want_run" in
+    *$'\n'*)
+      run_text="$(awk '/^ {8}run: \|$/ { g=1; next } g' <<<"$step" | sed -E 's/^ {10}//')"
+      if [ "$run_text" != "$want_run" ]; then
+        printf 'reports step "%s" runs a different script than expected\n--- got:\n%s\n--- want:\n%s\n' "$name" "$run_text" "$want_run" >&2
+        return 1
+      fi
+      ;;
+    *)
+      want_line="        run: $want_run"
+      if [ "$(grep -E '^ {8}run:' <<<"$step")" != "$want_line" ]; then
+        printf 'reports step "%s" does not run exactly the expected command [%s]\n' "$name" "$want_run" >&2
+        return 1
+      fi
+      ;;
+  esac
+}
+
+check_reports_steps() {
+  local file="$1" block matrix_line n status=0 key keys tool cancelled
+  if ! list_jobs "$file" | grep -qx reports; then
+    printf 'no reports job\n' >&2
+    return 1
+  fi
+  block="$(job_block "$file" reports)"
+  matrix_line="$(job_block "$file" unit | grep -E 'shard: *\[' | head -n1 || true)"
+  n="$(printf '%s' "$matrix_line" | sed -E 's/.*\[([^]]*)\].*/\1/' | awk -F',' '{print NF}')"
+  tool='go run ./ci/mergetestreports'
+  cancelled="\${{ !cancelled() }}"
+
+  # Job level: only these keys, and this exact condition.
+  keys="$(grep -oE '^ {4}[a-z-]+:' <<<"$block" | tr -d ' :' || true)"
+  for key in $keys; do
+    case "$key" in
+      name | needs | if | runs-on | steps) ;;
+      *)
+        printf 'reports job carries key "%s" (allowed: name, needs, if, runs-on, steps)\n' "$key" >&2
+        status=1
+        ;;
+    esac
+  done
+  if ! grep -qxF "    if: \${{ !cancelled() && needs.unit.result != 'skipped' }}" <<<"$block"; then
+    printf 'reports job condition is not exactly the not-cancelled-and-unit-not-skipped expression\n' >&2
+    status=1
+  fi
+
+  assert_step "$block" 'Merge JUnit reports' '' \
+    "$tool junit -dir .tmp/unit-shards -expect $n -out .tmp/coverage/junit.xml" || status=1
+  assert_step "$block" 'Merge coverage profiles and convert to Cobertura once' "$cancelled" \
+    "set -euo pipefail
+$tool coverage -dir .tmp/unit-shards -expect $n -out .tmp/coverage/cover.out
+make coverage-cobertura" || status=1
+  assert_step "$block" "List every shard's failed tests" "$cancelled" \
+    "$tool failures -dir .tmp/unit-shards -expect $n -summary \"\$GITHUB_STEP_SUMMARY\" -report .tmp/coverage/failures.json" || status=1
+  assert_step "$block" 'Verify the merged reports against the shards' "$cancelled" \
+    "$tool crosscheck -dir .tmp/unit-shards -expect $n -junit .tmp/coverage/junit.xml -cover .tmp/coverage/cover.out -cobertura .tmp/coverage/coverage.xml -failures .tmp/coverage/failures.json" || status=1
+  return "$status"
+}
+
 run_all_checks() {
   local file="$1"
   check_verify_job_exists "$file"
@@ -679,6 +794,7 @@ run_all_checks() {
   check_race_shard_agreement "$file"
   check_unit_shard_agreement "$file"
   check_reports_job "$file"
+  check_reports_steps "$file"
   check_container_oci_scan_same_job "$file"
   check_isolated_devhealthschema_job "$file"
   check_endpoint_profile_gate_step "$file"
@@ -900,6 +1016,54 @@ reports_failures_without_report="$tmpdir/reports-failures-without-report.yml"
 sed 's/ -report .tmp\/coverage\/failures.json//' "$workflow" > "$reports_failures_without_report"
 cmp -s "$workflow" "$reports_failures_without_report" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_failures_without_report did not change the workflow\n' >&2; exit 1; }
 assert_check_fails 'stopped the failures step writing the report the crosscheck reads' check_reports_job "$reports_failures_without_report"
+
+# The parsed-step controls: each leaves the step's TEXT in the file and changes
+# only whether it runs, which is all a grep cannot see.
+reports_crosscheck_if_false="$tmpdir/reports-crosscheck-if-false.yml"
+awk '
+  /Verify the merged reports against the shards/ { in_step=1 }
+  in_step && /^ {8}if: / { sub(/if: .*/, "if: ${{ false }}"); in_step=0 }
+  { print }
+' "$workflow" > "$reports_crosscheck_if_false"
+cmp -s "$workflow" "$reports_crosscheck_if_false" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_crosscheck_if_false did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'set the crosscheck step condition to false (text intact, never runs)' check_reports_steps "$reports_crosscheck_if_false"
+
+reports_crosscheck_true="$tmpdir/reports-crosscheck-true.yml"
+sed 's|^        run: go run ./ci/mergetestreports crosscheck |        run: true # go run ./ci/mergetestreports crosscheck |' "$workflow" > "$reports_crosscheck_true"
+cmp -s "$workflow" "$reports_crosscheck_true" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_crosscheck_true did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'replaced the crosscheck command with true plus a comment holding the old command' check_reports_steps "$reports_crosscheck_true"
+
+reports_crosscheck_or_true="$tmpdir/reports-crosscheck-or-true.yml"
+sed 's|^\( *run: go run ./ci/mergetestreports crosscheck .*failures.json\)$|\1 \|\| true|' "$workflow" > "$reports_crosscheck_or_true"
+cmp -s "$workflow" "$reports_crosscheck_or_true" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_crosscheck_or_true did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'appended || true to the crosscheck command' check_reports_steps "$reports_crosscheck_or_true"
+
+reports_crosscheck_continue="$tmpdir/reports-crosscheck-continue.yml"
+awk '{ print } /Verify the merged reports against the shards/ { print "        continue-on-error: true" }' "$workflow" > "$reports_crosscheck_continue"
+assert_check_fails 'added continue-on-error: true to the crosscheck step' check_reports_steps "$reports_crosscheck_continue"
+
+reports_failures_true="$tmpdir/reports-failures-true.yml"
+sed 's|^        run: go run ./ci/mergetestreports failures .*$|        run: true|' "$workflow" > "$reports_failures_true"
+cmp -s "$workflow" "$reports_failures_true" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_failures_true did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'replaced the failures command with true' check_reports_steps "$reports_failures_true"
+
+reports_junit_gated="$tmpdir/reports-junit-gated.yml"
+awk '{ print } /- name: Merge JUnit reports/ { print "        if: ${{ false }}" }' "$workflow" > "$reports_junit_gated"
+assert_check_fails 'gated the JUnit merge step off' check_reports_steps "$reports_junit_gated"
+
+reports_coverage_true="$tmpdir/reports-coverage-true.yml"
+sed 's|^          go run ./ci/mergetestreports coverage .*$|          true|' "$workflow" > "$reports_coverage_true"
+cmp -s "$workflow" "$reports_coverage_true" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_coverage_true did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'replaced the coverage merge command inside its script with true' check_reports_steps "$reports_coverage_true"
+
+reports_job_continue="$tmpdir/reports-job-continue.yml"
+awk '{ print } /^  reports:$/ { print "    continue-on-error: true" }' "$workflow" > "$reports_job_continue"
+assert_check_fails 'added continue-on-error: true to the reports job' check_reports_steps "$reports_job_continue"
+
+reports_job_if_true="$tmpdir/reports-job-if-true.yml"
+sed "s/^    if: \\\${{ !cancelled() && needs.unit.result != 'skipped' }}\$/    if: \\\${{ !cancelled() \&\& needs.unit.result != 'skipped' \&\& false }}/" "$workflow" > "$reports_job_if_true"
+cmp -s "$workflow" "$reports_job_if_true" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_job_if_true did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'made the reports job condition always false' check_reports_steps "$reports_job_if_true"
 
 reports_coverage_renamed="$tmpdir/reports-coverage-renamed.yml"
 sed 's/^\( \{10\}\)name: go-coverage$/\1name: go-coverage-merged/' "$workflow" > "$reports_coverage_renamed"
