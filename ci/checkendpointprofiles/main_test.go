@@ -909,11 +909,10 @@ func TestGateAcceptsAFullyPopulatedIssuedCredentialRow(t *testing.T) {
 			map[string]any{
 				"class_id":  "acr_client_credential",
 				"direction": "returned_to_caller",
-				// The marker (first backticked span of the note) resolves to
-				// line 7, inside func Handler() (declared at line 5) -- the
-				// prose after it names Handler so the content-identity check
-				// passes.
-				"anchor":           map[string]any{"path": fixtureAppFile, "line": float64(7), "note": "`mux.HandleFunc(\"GET /healthz\"` -- Handler wires up the route"},
+				// Two markers: the enclosing function (func Handler, declared at
+				// line 5) and the mint call inside its body; the prose after
+				// them is for the reader.
+				"anchor":           map[string]any{"path": fixtureAppFile, "line": float64(7), "note": "`func Handler(` `mux.HandleFunc(` -- Handler wires up the route"},
 				"issuer":           "acr",
 				"audience":         nil,
 				"algorithm":        nil,
@@ -1064,7 +1063,7 @@ func TestGateReadsIssuedCredentialDirectionAndExposureReachabilityLive(t *testin
 			map[string]any{
 				"class_id":  "acr_client_credential",
 				"direction": "minted_to_broker",
-				"anchor":    map[string]any{"path": fixtureAppFile, "line": float64(7), "note": "`mux.HandleFunc(\"GET /healthz\"` -- Handler mints it"},
+				"anchor":    map[string]any{"path": fixtureAppFile, "line": float64(7), "note": "`func Handler(` `mux.HandleFunc(` -- Handler mints it"},
 			},
 		},
 		"exposure": map[string]any{"reachability": "edge_and_direct", "source": "fixture"},
@@ -1097,10 +1096,12 @@ func TestGateCatchesDuplicateSurfaceOwnership(t *testing.T) {
 	mustContain(t, errs, "DUPLICATE SURFACE OWNERSHIP", fixtureAppFile)
 }
 
-func TestGateCatchesATrivialIssuedCredentialAnchor(t *testing.T) {
-	// Codex round-1 P2, EXECUTED repro: an issued_credential anchor
-	// mutated to an unrelated line (real file, in-bounds -- passes the
-	// existence/bounds check) was accepted as a mint site.
+func TestGateRejectsAnIssuedAnchorWhoseMarkersAreNotCodeNodes(t *testing.T) {
+	// Codex round-1 P2, EXECUTED repro: an issued_credential anchor mutated to
+	// an unrelated line (real file, in-bounds) was accepted as a mint site.
+	// Line 1 of the fixture app.go is "package api" -- a real line, never a mint
+	// site. CHAOS-7245: a marker must START a call or `func` declaration in the
+	// parsed source, so a marker that is a package clause names no construct.
 	f := minimalValidFixture(t, []map[string]any{minimalValidRow(map[string]any{
 		"classification":              "protected",
 		"public_rationale":            nil,
@@ -1109,28 +1110,22 @@ func TestGateCatchesATrivialIssuedCredentialAnchor(t *testing.T) {
 			map[string]any{
 				"class_id":  "acr_client_credential",
 				"direction": "returned_to_caller",
-				// line 1 of the fixture app.go is "package api" -- a
-				// real line, but never a mint site. CHAOS-7245: the check
-				// now runs at the MARKER's site, so the marker is what
-				// resolves to it (the declared line is only a hint).
-				"anchor": map[string]any{"path": fixtureAppFile, "line": float64(1), "note": "package api"},
+				"anchor":    map[string]any{"path": fixtureAppFile, "line": float64(1), "note": "`package api` `mint(`"},
 			},
 		},
 		"gaps": []any{},
 	})})
-	errs := f.check(t)
-	mustContain(t, errs, "TRIVIAL ANCHOR", "issued_credential")
+	mustContain(t, f.check(t), "ANCHOR MARKER NOT A CODE NODE", "issued_credential", "package api")
 }
 
 func TestGateCatchesTheRealCommittedOffByOneAnchorBug(t *testing.T) {
 	// Coordinator-verified real defect (2026-09-01): the committed
 	// POST /api/v1/context-fabric/investigations row anchored its
-	// primary_validator at context_fabric_routes.go:156, which is `})` --
-	// the close of the handler literal, one line off the actual
-	// `return a.protectedRuntimeHandler(...)` at line 157. Fixed in the
-	// data; this is the regression guard, reproducing the EXACT bug shape
-	// (a `})` line immediately preceding the real return statement) against
-	// a synthetic fixture so it can never silently reappear.
+	// primary_validator at context_fabric_routes.go:156, which is `})` -- the
+	// close of the handler literal, one line off the actual
+	// `return a.protectedRuntimeHandler(...)` at line 157. This reproduces the
+	// EXACT bug shape (a `})` line immediately preceding the real return
+	// statement) against a synthetic fixture so it can never silently reappear.
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, fixtureAppFile),
 		"package api\n"+
@@ -1159,26 +1154,24 @@ func TestGateCatchesTheRealCommittedOffByOneAnchorBug(t *testing.T) {
 		}
 		return errs
 	}
-	// The exact bug's line hint: one line above the real
-	// `return protectedRuntimeHandler(handler)` call, at the bare "})" that
-	// closes the inner handler literal instead.
+	// The exact bug's line hint: one line above the real call, at the bare "})".
 	//
-	// CHAOS-7245: the declared line is an advisory hint and is no longer read
-	// for content, so the same hint is HARMLESS when the anchor's marker names
-	// the real call (a bad hint cannot make a right anchor wrong, and a good
-	// hint cannot make a wrong one right)...
-	// (This fixture registers no route, so a PHANTOM ROW is expected and is
-	// not what is under test: only anchor errors are counted.)
-	for _, e := range run(map[string]any{"path": fixtureAppFile, "line": float64(8), "note": "return protectedRuntimeHandler(handler)"}) {
+	// CHAOS-7245: the declared line is an advisory hint and is not read for
+	// content, so the same hint is HARMLESS when the anchor's marker names the
+	// real call (a bad hint cannot make a right anchor wrong, and a good hint
+	// cannot make a wrong one right)...
+	// (This fixture registers no route, so a PHANTOM ROW is expected and is not
+	// what is under test: only anchor errors are counted.)
+	for _, e := range run(map[string]any{"path": fixtureAppFile, "line": float64(8), "note": "protectedRuntimeHandler(handler)"}) {
 		if strings.Contains(e, "ANCHOR") {
 			t.Fatalf("a stale line hint with a marker that resolves must not raise an anchor error, got: %s", e)
 		}
 	}
-	// ...but the same anchor with NO marker is exactly the shape the bug
-	// hid in, and is refused...
+	// ...but the same anchor with NO marker is exactly the shape the bug hid
+	// in, and is refused...
 	mustContain(t, run(map[string]any{"path": fixtureAppFile, "line": float64(8)}), "MISSING ANCHOR MARKER", "primary_validator")
-	// ...and so is a marker that itself resolves onto the `})` line.
-	mustContain(t, run(map[string]any{"path": fixtureAppFile, "line": float64(9), "note": "\t})"}), "TRIVIAL ANCHOR", "primary_validator", "app.go:8")
+	// ...and so is a marker that is the `})` line itself: it starts no call.
+	mustContain(t, run(map[string]any{"path": fixtureAppFile, "line": float64(9), "note": "\t})"}), "ANCHOR MARKER NOT A CODE NODE", "primary_validator")
 }
 
 // CHAOS-7128: rows are anchored by symbol (route+method for the surface, the
@@ -1229,6 +1222,8 @@ func TestGateFailsWhenTheAnchoredHandlerMarkerIsRenamed(t *testing.T) {
 // r1 P1: two copies of the marker on ONE line are two occurrences, not one
 // unambiguous relocation.
 func TestGateRejectsTwoCopiesOfTheMarkerOnOneLine(t *testing.T) {
+	// r1 P1: two calls on ONE line are two sites, not one unambiguous
+	// relocation.
 	row := minimalValidRow(map[string]any{
 		"primary_validator": map[string]any{
 			"description": "x",
@@ -1244,15 +1239,18 @@ func TestGateRejectsTwoCopiesOfTheMarkerOnOneLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(f.root, fixtureAppFile),
-		string(src)+"var a, b = \"protectedRuntimeHandler(handler)\", \"protectedRuntimeHandler(handler)\"\n")
+		string(src)+"func init() { protectedRuntimeHandler(handler); protectedRuntimeHandler(handler) }\n")
 	errs := f.check(t)
-	mustContain(t, errs, "AMBIGUOUS ANCHOR MARKER", "2 times on line")
+	mustContain(t, errs, "AMBIGUOUS ANCHOR MARKER", "two nodes on line")
 }
 
 // r2 P1 fixture: two marker copies on the SIBLING's line; two rows declare two
 // sites and two occurrences exist, but they sit on one line, so the line
 // carrying both copies is ambiguous.
 func TestGateRejectsTwoMarkerCopiesOnASiblingClaimedLine(t *testing.T) {
+	// r2 P1 fixture: two marker calls on the SIBLING's line; two rows declare
+	// two sites and two exist, but they sit on one line, so the line carrying
+	// both is ambiguous.
 	pv := func(line float64) map[string]any {
 		return map[string]any{"description": "x", "anchor": map[string]any{
 			"path": fixtureAppFile, "line": line, "note": "validatorMarker(h)"}}
@@ -1264,7 +1262,7 @@ func TestGateRejectsTwoMarkerCopiesOnASiblingClaimedLine(t *testing.T) {
 		"package api\n\nimport \"net/http\"\n\nfunc Handler() http.Handler {\n"+
 			"\tmux := http.NewServeMux()\n"+
 			"\tmux.HandleFunc(\"GET /a\", h)\n"+
-			"\tmux.HandleFunc(\"GET /b\", h); _ = []string{\"validatorMarker(h)\", \"validatorMarker(h)\"}\n"+
+			"\tmux.HandleFunc(\"GET /b\", h); validatorMarker(h); validatorMarker(h)\n"+
 			"\treturn mux\n}\n\nfunc h(w http.ResponseWriter, r *http.Request) {}\n")
 	errs := f.check(t)
 	mustContain(t, errs, "AMBIGUOUS ANCHOR MARKER", "validatorMarker(h)")
@@ -1292,7 +1290,7 @@ func markerFixture(t *testing.T, rows [][2]any, body string) fixture {
 // equal the number of distinct sites the rows declare for it.
 func TestGateMarkerInvariantOneCopyPerRowAnywhereInTheFilePasses(t *testing.T) {
 	f := markerFixture(t, [][2]any{{"/a", float64(5)}, {"/b", float64(9)}},
-		"\tmux.HandleFunc(\"GET /a\", h) // validatorMarker(h)\n\tmux.HandleFunc(\"GET /b\", h) // validatorMarker(h)\n")
+		"\tmux.HandleFunc(\"GET /a\", h)\n\tvalidatorMarker(h)\n\tmux.HandleFunc(\"GET /b\", h)\n\tvalidatorMarker(h)\n")
 	if errs := f.check(t); len(errs) != 0 {
 		t.Fatalf("got:\n%s", strings.Join(errs, "\n"))
 	}
@@ -1300,14 +1298,14 @@ func TestGateMarkerInvariantOneCopyPerRowAnywhereInTheFilePasses(t *testing.T) {
 
 func TestGateMarkerInvariantThreeOccurrencesForTwoSitesFails(t *testing.T) {
 	f := markerFixture(t, [][2]any{{"/a", float64(7)}, {"/b", float64(8)}},
-		"\tmux.HandleFunc(\"GET /a\", h) // validatorMarker(h)\n\tmux.HandleFunc(\"GET /b\", h) // validatorMarker(h)\n\t// validatorMarker(h)\n")
-	mustContain(t, f.check(t), "AMBIGUOUS ANCHOR MARKER", "3 times")
+		"\tmux.HandleFunc(\"GET /a\", h)\n\tvalidatorMarker(h)\n\tmux.HandleFunc(\"GET /b\", h)\n\tvalidatorMarker(h)\n\tvalidatorMarker(h)\n")
+	mustContain(t, f.check(t), "AMBIGUOUS ANCHOR MARKER", "3 nodes")
 }
 
 func TestGateMarkerInvariantFewerOccurrencesThanSitesFails(t *testing.T) {
 	f := markerFixture(t, [][2]any{{"/a", float64(7)}, {"/b", float64(8)}},
-		"\tmux.HandleFunc(\"GET /a\", h) // validatorMarker(h)\n\tmux.HandleFunc(\"GET /b\", h)\n")
-	mustContain(t, f.check(t), "ANCHOR MARKER NOT FOUND", "1 time(s)")
+		"\tmux.HandleFunc(\"GET /a\", h)\n\tvalidatorMarker(h)\n\tmux.HandleFunc(\"GET /b\", h)\n")
+	mustContain(t, f.check(t), "ANCHOR MARKER NOT FOUND", "1 node(s)")
 }
 
 // r3 P1: the same physical file addressed through an alias path must be ONE
@@ -1315,7 +1313,7 @@ func TestGateMarkerInvariantFewerOccurrencesThanSitesFails(t *testing.T) {
 // occurrence -> NOT FOUND (1 time for 2 sites), not a silent pass.
 func TestGateMarkerPathAliasIsOneBucket(t *testing.T) {
 	f := markerFixture(t, [][2]any{{"/a", float64(7)}, {"/b", float64(8)}},
-		"\tmux.HandleFunc(\"GET /a\", h) // validatorMarker(h)\n\tmux.HandleFunc(\"GET /b\", h)\n")
+		"\tmux.HandleFunc(\"GET /a\", h)\n\tvalidatorMarker(h)\n\tmux.HandleFunc(\"GET /b\", h)\n")
 	// rewrite row /b's anchor path to an alias of the same file
 	raw, err := os.ReadFile(f.inventoryPath)
 	if err != nil {
@@ -1330,7 +1328,7 @@ func TestGateMarkerPathAliasIsOneBucket(t *testing.T) {
 	rows[1].(map[string]any)["primary_validator"].(map[string]any)["anchor"].(map[string]any)["path"] = alias
 	writeJSON(t, f.inventoryPath, inv)
 	errs := f.check(t)
-	mustContain(t, errs, "ANCHOR MARKER NOT FOUND", "1 time(s)", "2 site(s)")
+	mustContain(t, errs, "ANCHOR MARKER NOT FOUND", "1 node(s)", "2 site(s)")
 }
 
 // Two sibling rows share one marker whose single occurrence has moved off
@@ -1417,18 +1415,69 @@ func TestGatePassesAPrimaryValidatorAnchorWithAMatchingMarker(t *testing.T) {
 	}
 }
 
-func TestGateAcceptsANonCommentTextCopyOfTheMarkerOnTheDeclaredLine_DocumentedTextMatchLimit(t *testing.T) {
-	// Documents a KNOWN, disclosed limit rather than proving a gap closed: a
-	// text match on the declared line is not proof the matched text is
-	// executable code. A string literal (not a `//` comment, so the
-	// pre-existing trivial-anchor denylist does not catch it either) that
-	// happens to repeat the marker's exact text on the row's own declared
-	// line is indistinguishable from a real anchor by this check, the same
-	// way the pre-existing issued_credential name-match cannot tell a real
-	// mint call from a same-named comment. This guards against a FUTURE
-	// tightening accidentally rejecting the legitimate case two real rows
-	// already rely on (model-config PUT/DELETE share one source line and
-	// therefore one marker).
+func TestGateRejectsAMarkerThatSurvivesOnlyAsTextNotAsTheCall(t *testing.T) {
+	// The CHAOS-7245 r1 P2 repro, committed: the security-surface call is
+	// REMOVED and its exact marker text is left behind where a text search
+	// still finds it -- in a string literal on the row's own declared line, in a
+	// comment, and as the argument of an unrelated call. The route stays
+	// discoverable and the marker count stays valid, so a text-presence marker
+	// passed this; a marker that must START the call it names does not.
+	base := func(replacement string) string {
+		return "package api\n" + // 1
+			"\n" + // 2
+			"import \"net/http\"\n" + // 3
+			"\n" + // 4
+			"func Handler() http.Handler {\n" + // 5
+			replacement + // 6
+			"	mux := http.NewServeMux()\n" +
+			"	mux.HandleFunc(\"GET /healthz\", healthzHandler)\n" +
+			"	return mux\n" +
+			"}\n" +
+			"\n" +
+			"func healthzHandler(w http.ResponseWriter, r *http.Request) {}\n" +
+			"\n" +
+			"func protectedRuntimeHandler(next http.Handler) http.Handler { return next }\n" +
+			"func other(s string) {}\n"
+	}
+	cases := map[string]string{
+		"string literal":      "	var historicalNote = \"protectedRuntimeHandler(handler) used to be called here\"\n	_ = historicalNote\n",
+		"comment":             "	// protectedRuntimeHandler(handler) used to be called here\n",
+		"argument to another": "	other(\"protectedRuntimeHandler(handler)\")\n",
+		"different callee":    "	notProtectedRuntimeHandler(handler)\n",
+		"raw string":          "	_ = `protectedRuntimeHandler(handler)`\n",
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			writeFile(t, filepath.Join(root, fixtureAppFile), base(body))
+			schemaPath, credentialClassesPath, credentialClassesSchemaPath := seedFixtureSchemaAndCredentialClasses(t, root)
+			row := minimalValidRow(map[string]any{
+				"source": map[string]any{"file": fixtureAppFile, "line": float64(9)},
+				"primary_validator": map[string]any{
+					"description": "no longer wraps itself in protectedRuntimeHandler",
+					// The declared line is the leftover text's own line.
+					"anchor": map[string]any{"path": fixtureAppFile, "line": float64(6), "note": "protectedRuntimeHandler(handler)"},
+				},
+			})
+			inventoryPath := writeInventory(t, root, []map[string]any{row})
+			errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if name == "different callee" {
+				// Not even text: the callee differs, so nothing but a not-found.
+				mustContain(t, errs, "ANCHOR MARKER", "primary_validator")
+				return
+			}
+			mustContain(t, errs, "ANCHOR MARKER NOT A CODE NODE", "primary_validator")
+		})
+	}
+}
+
+func TestGateIgnoresALeftoverCopyOfTheMarkerInAStringWhenTheRealCallExists(t *testing.T) {
+	// A leftover copy of the marker's text (a string) beside the real call is no
+	// longer ambiguous: only the call is a site. (Before CHAOS-7245 r1 the two
+	// were two "occurrences" and the gate could not tell which was real.)
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, fixtureAppFile),
 		"package api\n"+ // 1
@@ -1440,7 +1489,7 @@ func TestGateAcceptsANonCommentTextCopyOfTheMarkerOnTheDeclaredLine_DocumentedTe
 			"	_ = historicalNote\n"+ // 7
 			"	mux := http.NewServeMux()\n"+ // 8
 			"	mux.HandleFunc(\"GET /healthz\", healthzHandler)\n"+ // 9
-			"	return mux\n"+ // 10
+			"	return protectedRuntimeHandler(handler)\n"+ // 10 -- the real call
 			"}\n"+ // 11
 			"\n"+
 			"func healthzHandler(w http.ResponseWriter, r *http.Request) {}\n"+
@@ -1451,68 +1500,8 @@ func TestGateAcceptsANonCommentTextCopyOfTheMarkerOnTheDeclaredLine_DocumentedTe
 	row := minimalValidRow(map[string]any{
 		"source": map[string]any{"file": fixtureAppFile, "line": float64(9)},
 		"primary_validator": map[string]any{
-			"description": "no longer wraps itself in protectedRuntimeHandler",
-			// Declares the string-literal line -- the real call was
-			// removed, but its name lives on in leftover text on the
-			// declared line.
-			"anchor": map[string]any{
-				"path": fixtureAppFile,
-				"line": float64(6),
-				"note": "protectedRuntimeHandler(handler)",
-			},
-		},
-	})
-	inventoryPath := writeInventory(t, root, []map[string]any{row})
-	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(errs) != 0 {
-		t.Fatalf("expected no errors (marker is genuinely present on the declared line, even "+
-			"though it is a comment, not code -- see KNOWN LIMITS: a text match is not a proof "+
-			"of executable code), got:\n%s", strings.Join(errs, "\n"))
-	}
-}
-
-func TestGateCatchesAPrimaryValidatorMarkerThatAlsoAppearsUnexplainedElsewhere(t *testing.T) {
-	// The exact shape a range-wide check let through: the declared line
-	// carries only a leftover copy of the marker, and the real call sits at
-	// an UNCLAIMED line elsewhere in the file (no other row's anchor claims
-	// it). Neither occurrence alone tells this gate which is real, so
-	// finding both must fail loudly instead of trusting the declared one.
-	root := t.TempDir()
-	writeFile(t, filepath.Join(root, fixtureAppFile),
-		"package api\n"+ // 1
-			"\n"+ // 2
-			"import \"net/http\"\n"+ // 3
-			"\n"+ // 4
-			"func Handler() http.Handler {\n"+ // 5
-			"	var historicalNote = \"protectedRuntimeHandler(handler) used to be called here\"\n"+ // 6
-			"	_ = historicalNote\n"+ // 7
-			"	mux := http.NewServeMux()\n"+ // 8
-			"	mux.HandleFunc(\"GET /healthz\", healthzHandler)\n"+ // 9
-			"	return protectedRuntimeHandler(handler)\n"+ // 10 -- the real, unclaimed call
-			"}\n"+ // 11
-			"\n"+
-			"func healthzHandler(w http.ResponseWriter, r *http.Request) {}\n"+
-			"\n"+
-			"func protectedRuntimeHandler(next http.Handler) http.Handler { return next }\n"+
-			"\n"+
-			"var mux2 = http.NewServeMux()\n",
-	)
-	schemaPath, credentialClassesPath, credentialClassesSchemaPath := seedFixtureSchemaAndCredentialClasses(t, root)
-	row := minimalValidRow(map[string]any{
-		"source": map[string]any{"file": fixtureAppFile, "line": float64(9)},
-		"primary_validator": map[string]any{
 			"description": "wraps itself in protectedRuntimeHandler",
-			// Declares the string-literal line, not the real call at line
-			// 10 -- and no OTHER row's anchor claims line 10, so it is
-			// unexplained, not a sibling.
-			"anchor": map[string]any{
-				"path": fixtureAppFile,
-				"line": float64(6),
-				"note": "protectedRuntimeHandler(handler)",
-			},
+			"anchor":      map[string]any{"path": fixtureAppFile, "line": float64(6), "note": "protectedRuntimeHandler(handler)"},
 		},
 	})
 	inventoryPath := writeInventory(t, root, []map[string]any{row})
@@ -1520,7 +1509,11 @@ func TestGateCatchesAPrimaryValidatorMarkerThatAlsoAppearsUnexplainedElsewhere(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	mustContain(t, errs, "AMBIGUOUS ANCHOR MARKER", "primary_validator")
+	for _, e := range errs {
+		if strings.Contains(e, "ANCHOR") {
+			t.Fatalf("the real call is the only site; got: %s", e)
+		}
+	}
 }
 
 func TestGateAcceptsTwoRowsThatLegitimatelyShareOnePrimaryValidatorMarker(t *testing.T) {
@@ -1579,44 +1572,11 @@ func TestGateAcceptsTwoRowsThatLegitimatelyShareOnePrimaryValidatorMarker(t *tes
 	}
 }
 
-func TestGateCatchesAnIssuedCredentialAnchorWithNoExtractableFunctionName(t *testing.T) {
-	// Coordinator ruling (2026-09-01): "where [content] cannot be
-	// established, say so in the message rather than passing." An anchor
-	// landing on a line with no function/method declaration at or near it
-	// (here: a bare import line, no enclosing func at all in this tiny
-	// fixture) must be reported, not silently accepted just because the
-	// file exists and the line is in bounds.
-	root := t.TempDir()
-	writeFile(t, filepath.Join(root, fixtureAppFile), "package api\n\nimport \"net/http\"\n")
-	schemaPath, credentialClassesPath, credentialClassesSchemaPath := seedFixtureSchemaAndCredentialClasses(t, root)
-	row := minimalValidRow(map[string]any{
-		"classification":              "protected",
-		"public_rationale":            nil,
-		"accepted_credential_classes": []any{"acr_client_credential"},
-		"issued_credential": []any{
-			map[string]any{
-				"class_id":  "acr_client_credential",
-				"direction": "returned_to_caller",
-				"anchor":    map[string]any{"path": fixtureAppFile, "line": float64(3), "note": "import \"net/http\""},
-			},
-		},
-		"gaps": []any{},
-	})
-	inventoryPath := writeInventory(t, root, []map[string]any{row})
-	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	mustContain(t, errs, "ANCHOR CONTENT UNVERIFIED", "issued_credential")
-}
-
-func TestGateCatchesAnIssuedCredentialAnchorWhoseNoteNamesTheWrongFunction(t *testing.T) {
-	// The core of the coordinator's fix: existence + in-bounds + non-trivial
-	// is not enough. An anchor pointing at a REAL function declaration that
-	// the row's own note/issuer never mentions is exactly the shape of the
-	// real committed bug (an anchor near, but not at, the right site) --
-	// this is the direct EXECUTED repro for the new content check, distinct
-	// from the trivial-line and no-extractable-name cases above.
+func TestGateRejectsAnIssuedAnchorWhoseFirstMarkerIsNotAFuncDeclaration(t *testing.T) {
+	// The first marker of an issued_credential anchor must anchor the enclosing
+	// FUNCTION. A call marker resolves (it is a real call) but is not a function
+	// with a body that can hold a mint call, and the gate says so rather than
+	// passing.
 	f := minimalValidFixture(t, []map[string]any{minimalValidRow(map[string]any{
 		"classification":              "protected",
 		"public_rationale":            nil,
@@ -1625,21 +1585,19 @@ func TestGateCatchesAnIssuedCredentialAnchorWhoseNoteNamesTheWrongFunction(t *te
 			map[string]any{
 				"class_id":  "acr_client_credential",
 				"direction": "returned_to_caller",
-				// The marker resolves to line 6, inside "func Handler()
-				// http.Handler {" -- a real function, but the prose after the
-				// marker names something else.
-				"anchor": map[string]any{"path": fixtureAppFile, "line": float64(6), "note": "`mux := http.NewServeMux()` -- signs the token in mintCredential"},
+				"anchor":    map[string]any{"path": fixtureAppFile, "line": float64(7), "note": "`mux.HandleFunc(` `http.NewServeMux(`"},
 			},
 		},
 		"gaps": []any{},
 	})})
-	errs := f.check(t)
-	mustContain(t, errs, "ANCHOR CONTENT MISMATCH", "Handler")
+	mustContain(t, f.check(t), "ANCHOR CONTENT UNVERIFIED", "issued_credential")
 }
 
-func TestGateAcceptsAnIssuedCredentialAnchorWhoseIssuerFieldNamesTheFunction(t *testing.T) {
-	// The content check accepts a match via EITHER anchor.note or
-	// entry.issuer -- not note exclusively.
+func TestGateRejectsAnIssuedAnchorWhoseMintCallIsNotInsideTheAnchoredFunction(t *testing.T) {
+	// Existence is not enough: the row anchors func healthzHandler, but the call
+	// its second marker names (http.NewServeMux) is made in Handler, not there.
+	// This is the shape of the real committed bug (an anchor near, but not at,
+	// the right site), now checked on the AST: enclosing function AND mint call.
 	f := minimalValidFixture(t, []map[string]any{minimalValidRow(map[string]any{
 		"classification":              "protected",
 		"public_rationale":            nil,
@@ -1648,16 +1606,12 @@ func TestGateAcceptsAnIssuedCredentialAnchorWhoseIssuerFieldNamesTheFunction(t *
 			map[string]any{
 				"class_id":  "acr_client_credential",
 				"direction": "returned_to_caller",
-				"anchor":    map[string]any{"path": fixtureAppFile, "line": float64(6), "note": "mux := http.NewServeMux()"},
-				"issuer":    "acr Handler",
+				"anchor":    map[string]any{"path": fixtureAppFile, "line": float64(11), "note": "`func healthzHandler(` `http.NewServeMux(` -- signs the token in mintCredential"},
 			},
 		},
 		"gaps": []any{},
 	})})
-	errs := f.check(t)
-	if len(errs) != 0 {
-		t.Fatalf("expected no errors, got:\n%s", strings.Join(errs, "\n"))
-	}
+	mustContain(t, f.check(t), "ANCHOR CONTENT MISMATCH", "healthzHandler", "http.NewServeMux(")
 }
 
 func TestGateCatchesAnUnresolvedRegistration(t *testing.T) {
@@ -1785,11 +1739,11 @@ func anchorKindsRow() map[string]any {
 		"issued_credential": []any{map[string]any{
 			"class_id":  "acr_client_credential",
 			"direction": "returned_to_caller",
-			// Marker = first backticked span; the prose after it names the
-			// enclosing function, as the identity check requires.
+			// Two markers: the enclosing function, then the mint call inside
+			// its body; the prose after them is for the reader.
 			"anchor": map[string]any{
-				"path": fixtureAppFile, "line": float64(8), "line_end": float64(8),
-				"note": "`return mux` -- Handler returns the mux",
+				"path": fixtureAppFile, "line": float64(5), "line_end": float64(9),
+				"note": "`func Handler(` `http.NewServeMux(` -- Handler builds the mux",
 			},
 		}},
 		"gaps": []any{},
@@ -1825,12 +1779,12 @@ func TestGateTreatsTheDeclaredLineAsAnAdvisoryHintEvenWhenItIsPastTheEndOfTheFil
 }
 
 func TestGateFailsWhenTheMarkedSymbolOfAnyAnchorKindChanges(t *testing.T) {
-	// The pair to the shift test above: the SAME row, but the marked text is
-	// really renamed or removed in the source. Each kind must fail on its own
+	// The pair to the shift test above: the SAME row, but the marked construct
+	// is really renamed or removed in the source. Each kind must fail on its own
 	// label, so a check that only covers one kind cannot pass this table.
 	cases := []struct {
-		kind, label string
-		mutate      func(string) string
+		name, want string
+		mutate     func(string) string
 	}{
 		{"primary_validator", "primary_validator", func(s string) string {
 			return strings.Replace(s, "mux.HandleFunc(\"GET /healthz\", healthzHandler)", "mux.HandleFunc(\"GET /healthz\", healthzHandler2)", 1)
@@ -1838,12 +1792,15 @@ func TestGateFailsWhenTheMarkedSymbolOfAnyAnchorKindChanges(t *testing.T) {
 		{"reachable_validators", "reachable_validators[0]", func(s string) string {
 			return strings.Replace(s, "func healthzHandler(", "func renamedHandler(", 1)
 		}},
-		{"issued_credential", "issued_credential", func(s string) string {
-			return strings.Replace(s, "\treturn mux\n", "\treturn  mux\n", 1)
+		{"issued function renamed", "issued_credential", func(s string) string {
+			return strings.Replace(s, "func Handler(", "func RenamedHandler(", 1)
+		}},
+		{"issued mint call renamed", "issued_credential", func(s string) string {
+			return strings.Replace(s, "http.NewServeMux()", "http.NewServeMuxV2()", 1)
 		}},
 	}
 	for _, c := range cases {
-		t.Run(c.kind, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			f := minimalValidFixture(t, []map[string]any{anchorKindsRow()})
 			p := filepath.Join(f.root, fixtureAppFile)
 			raw, err := os.ReadFile(p)
@@ -1855,7 +1812,13 @@ func TestGateFailsWhenTheMarkedSymbolOfAnyAnchorKindChanges(t *testing.T) {
 				t.Fatal("mutation did not change the fixture source")
 			}
 			writeFile(t, p, mutated)
-			mustContain(t, f.check(t), "ANCHOR MARKER NOT FOUND", c.label)
+			errs := f.check(t)
+			for _, e := range errs {
+				if strings.Contains(e, c.want) && (strings.Contains(e, "ANCHOR MARKER NOT FOUND") || strings.Contains(e, "ANCHOR CONTENT MISMATCH")) {
+					return
+				}
+			}
+			t.Fatalf("expected a marker-not-found or content-mismatch error for %s, got:\n%s", c.want, strings.Join(errs, "\n"))
 		})
 	}
 }
@@ -1881,29 +1844,27 @@ func TestGateFailsWhenAnyAnchorKindHasNoMarker(t *testing.T) {
 }
 
 func TestGateFailsWhenAnIssuedMarkerMovesIntoAnotherFunction(t *testing.T) {
-	// A move that a shift is NOT: the marked call still exists, exactly once,
-	// but now sits in a different function than the row's prose names. The
-	// identity check follows the marker's site, so it sees Other, not Handler.
+	// A move that a shift is NOT: the mint call still exists, exactly once, but
+	// now sits in a different function than the one the row anchors.
 	f := minimalValidFixture(t, []map[string]any{anchorKindsRow()})
 	writeFile(t, filepath.Join(f.root, fixtureAppFile),
 		"package api\n\nimport \"net/http\"\n\n"+
 			"func Handler() http.Handler {\n"+
-			"	mux := http.NewServeMux()\n"+
+			"	mux := http.NewServeMux2()\n"+
 			"	mux.HandleFunc(\"GET /healthz\", healthzHandler)\n"+
-			"	return nil\n"+
+			"	return mux\n"+
 			"}\n\n"+
 			"func healthzHandler(w http.ResponseWriter, r *http.Request) {}\n\n"+
-			"func Other() http.Handler {\n"+
-			"	return mux\n"+
+			"func Other() {\n"+
+			"	_ = http.NewServeMux()\n"+
 			"}\n")
-	mustContain(t, f.check(t), "ANCHOR CONTENT MISMATCH", "Other")
+	mustContain(t, f.check(t), "ANCHOR CONTENT MISMATCH", "Handler", "http.NewServeMux(")
 }
 
-func TestGateResolvesEachSiteOfASharedMarkerByRank(t *testing.T) {
-	// Two anchors cite one marker at two sites (the same call in two
-	// functions). Each is paired with its own site by order, so a shift that
-	// moves both keeps the pairing; swapping which prose names which function
-	// is a real error and is reported for both.
+func TestGateAcceptsTwoIssuedEntriesMintedByOneFunctionAndChecksEachMintCall(t *testing.T) {
+	// One function mints two credentials: two entries cite the same func marker
+	// (from different hint lines) with a different mint call each. Both pass,
+	// through a shift; and removing ONE mint call fails that entry alone.
 	src := "package api\n\nimport \"net/http\"\n\n" +
 		"func Handler() http.Handler {\n" +
 		"	mux := http.NewServeMux()\n" +
@@ -1911,41 +1872,77 @@ func TestGateResolvesEachSiteOfASharedMarkerByRank(t *testing.T) {
 		"	return mux\n" +
 		"}\n\n" +
 		"func healthzHandler(w http.ResponseWriter, r *http.Request) {}\n\n" +
-		"func mintAlpha() string {\n" + // 13
-		"	return signToken()\n" + // 14
-		"}\n\n" +
-		"func mintBeta() string {\n" + // 17
-		"	return signToken()\n" + // 18
+		"func mintBoth() {\n" +
+		"	signAccess()\n" +
+		"	signRefresh()\n" +
 		"}\n"
-	entry := func(line int, prose string) map[string]any {
+	entry := func(line int, mint string) map[string]any {
 		return map[string]any{
 			"class_id": "acr_client_credential", "direction": "returned_to_caller",
-			"anchor": map[string]any{"path": fixtureAppFile, "line": float64(line), "note": "`return signToken()` -- " + prose},
+			"anchor": map[string]any{"path": fixtureAppFile, "line": float64(line), "note": "`func mintBoth(` `" + mint + "` -- mints"},
 		}
 	}
-	build := func(alphaProse, betaProse string) fixture {
+	build := func(source string) fixture {
 		row := minimalValidRow(map[string]any{
 			"classification":              "protected",
 			"public_rationale":            nil,
 			"accepted_credential_classes": []any{"acr_client_credential"},
-			"issued_credential":           []any{entry(14, alphaProse), entry(18, betaProse)},
+			"issued_credential":           []any{entry(13, "signAccess("), entry(20, "signRefresh(")},
 			"gaps":                        []any{},
 		})
 		f := minimalValidFixture(t, []map[string]any{row})
-		writeFile(t, filepath.Join(f.root, fixtureAppFile), src)
+		writeFile(t, filepath.Join(f.root, fixtureAppFile), source)
 		return f
 	}
 	for _, n := range []int{0, 3} {
-		f := build("mintAlpha mints", "mintBeta mints")
+		f := build(src)
 		shiftFixtureSource(t, filepath.Join(f.root, fixtureAppFile), n)
 		if errs := f.check(t); len(errs) != 0 {
-			t.Fatalf("shift %d: each anchor must resolve to its own site, got:\n%s", n, strings.Join(errs, "\n"))
+			t.Fatalf("shift %d: got:\n%s", n, strings.Join(errs, "\n"))
 		}
 	}
-	swapped := build("mintBeta mints", "mintAlpha mints")
-	errs := swapped.check(t)
-	mustContain(t, errs, "ANCHOR CONTENT MISMATCH", "mintAlpha")
-	mustContain(t, errs, "ANCHOR CONTENT MISMATCH", "mintBeta")
+	dropped := build(strings.Replace(src, "	signRefresh()\n", "", 1))
+	errs := dropped.check(t)
+	mustContain(t, errs, "ANCHOR CONTENT MISMATCH", "signRefresh(")
+	for _, e := range errs {
+		if strings.Contains(e, "signAccess(") {
+			t.Fatalf("the surviving mint call must not be reported: %s", e)
+		}
+	}
+}
+
+func TestGateRefusesAnIssuedMintCallCalledTwiceInsideTheFunction(t *testing.T) {
+	src := "package api\n\nimport \"net/http\"\n\n" +
+		"func Handler() http.Handler {\n" +
+		"	mux := http.NewServeMux()\n" +
+		"	mux.HandleFunc(\"GET /healthz\", healthzHandler)\n" +
+		"	return mux\n" +
+		"}\n\n" +
+		"func healthzHandler(w http.ResponseWriter, r *http.Request) {}\n\n" +
+		"func mintTwice() {\n" +
+		"	sign()\n" +
+		"	sign()\n" +
+		"}\n"
+	row := minimalValidRow(map[string]any{
+		"classification":              "protected",
+		"public_rationale":            nil,
+		"accepted_credential_classes": []any{"acr_client_credential"},
+		"issued_credential": []any{map[string]any{
+			"class_id": "acr_client_credential", "direction": "returned_to_caller",
+			"anchor": map[string]any{"path": fixtureAppFile, "line": float64(13), "note": "`func mintTwice(` `sign(` -- mints"},
+		}},
+		"gaps": []any{},
+	})
+	f := minimalValidFixture(t, []map[string]any{row})
+	writeFile(t, filepath.Join(f.root, fixtureAppFile), src)
+	mustContain(t, f.check(t), "AMBIGUOUS ANCHOR MARKER", "sign(", "2 times")
+}
+
+func TestGateRefusesAnIssuedAnchorWithNoMintMarker(t *testing.T) {
+	row := anchorKindsRow()
+	asObject(asObject(asArray(row["issued_credential"])[0])["anchor"])["note"] = "`func Handler(` -- no mint call named"
+	f := minimalValidFixture(t, []map[string]any{row})
+	mustContain(t, f.check(t), "MISSING ANCHOR MARKER", "names no mint call")
 }
 
 func TestGateRefusesAnAnchorWhoseLineIsNotALineNumber(t *testing.T) {
@@ -1956,19 +1953,21 @@ func TestGateRefusesAnAnchorWhoseLineIsNotALineNumber(t *testing.T) {
 	mustContain(t, f.check(t), "STALE ANCHOR", "line=0")
 }
 
-func TestAnchorMarkerIsTheFirstBacktickedSpanElseTheWholeNote(t *testing.T) {
-	cases := map[string]string{
-		"func (a *App) protectedRuntimeHandler(":           "func (a *App) protectedRuntimeHandler(",
-		"`func (s *S) Start(` -- mints it":                 "func (s *S) Start(",
-		"prose first `return x` then `return y`":           "return x",
-		"an unterminated `backtick is the whole note":      "an unterminated `backtick is the whole note",
-		"an empty `` span is the whole note":               "an empty `` span is the whole note",
-		"":                                                 "",
-		"mux.HandleFunc(\"GET /healthz\", healthzHandler)": "mux.HandleFunc(\"GET /healthz\", healthzHandler)",
+func TestAnchorMarkersAreTheBacktickedSpansElseTheWholeNote(t *testing.T) {
+	cases := []struct{ note, marker, mint string }{
+		{"func (a *App) protectedRuntimeHandler(", "func (a *App) protectedRuntimeHandler(", ""},
+		{"`func (s *S) Start(` -- mints it", "func (s *S) Start(", ""},
+		{"`func (s *S) Start(` `s.store.Create(` -- mints it", "func (s *S) Start(", "s.store.Create("},
+		{"`a(` `b(` `c(` third span is prose", "a(", "b("},
+		{"prose first `return x` then `return y`", "return x", "return y"},
+		{"an unterminated `backtick is the whole note", "an unterminated `backtick is the whole note", ""},
+		{"an empty `` span is the whole note", "an empty `` span is the whole note", ""},
+		{"", "", ""},
+		{"mux.HandleFunc(\"GET /healthz\", healthzHandler)", "mux.HandleFunc(\"GET /healthz\", healthzHandler)", ""},
 	}
-	for note, want := range cases {
-		if got := anchorMarker(note); got != want {
-			t.Errorf("anchorMarker(%q) = %q, want %q", note, got, want)
+	for _, c := range cases {
+		if m, mint := anchorMarkers(c.note); m != c.marker || mint != c.mint {
+			t.Errorf("anchorMarkers(%q) = (%q, %q), want (%q, %q)", c.note, m, mint, c.marker, c.mint)
 		}
 	}
 }
@@ -2059,33 +2058,38 @@ func anchoredRealFiles(t *testing.T, root string) []string {
 func TestRealTreeSurvivesAPureLineShiftOfEveryAnchoredFile(t *testing.T) {
 	// The incident, on the real tree: an unrelated addition above an anchored
 	// symbol. Measured on 1a1ef01e, inserting FOUR comment lines at the top of
-	// any one of 10 of the 13 anchored files failed this gate. Every anchored
-	// file is shifted at once here, by 1 and by 4 lines, and the gate must not
-	// notice.
+	// any one of 10 of the 13 anchored files failed this gate. Each anchored
+	// file is shifted ALONE, by 1, 4 and 7 lines (a file per gate run, so a
+	// failure names the file), and the gate must not notice.
 	schemaPath, ccPath, ccSchemaPath := realTreeOpsInputs(t)
-	for _, n := range []int{1, 4} {
-		root := copyRealSourceTree(t)
-		files := anchoredRealFiles(t, root)
-		if len(files) < 10 {
-			t.Fatalf("expected the real inventory to anchor into 10+ files, found %d: %v", len(files), files)
-		}
-		for _, f := range files {
-			shiftFixtureSource(t, filepath.Join(root, f), n)
-		}
-		inventoryPath := filepath.Join(root, "contracts", "auth", "v1", "endpoint-profiles.acr.json")
-		errs, err := check(root, inventoryPath, schemaPath, ccPath, ccSchemaPath, realDiscovererPath(t))
+	root := copyRealSourceTree(t)
+	files := anchoredRealFiles(t, root)
+	if len(files) < 10 {
+		t.Fatalf("expected the real inventory to anchor into 10+ files, found %d: %v", len(files), files)
+	}
+	inventoryPath := filepath.Join(root, "contracts", "auth", "v1", "endpoint-profiles.acr.json")
+	for _, f := range files {
+		orig, err := os.ReadFile(filepath.Join(root, f))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(errs) != 0 {
-			t.Fatalf("a pure shift of %d line(s) in every anchored file must pass, got %d violation(s):\n%s", n, len(errs), strings.Join(errs, "\n"))
+		for _, n := range []int{1, 4, 7} {
+			shiftFixtureSource(t, filepath.Join(root, f), n)
+			errs, err := check(root, inventoryPath, schemaPath, ccPath, ccSchemaPath, realDiscovererPath(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(errs) != 0 {
+				t.Fatalf("a pure shift of %d line(s) in %s must pass, got %d violation(s):\n%s", n, f, len(errs), strings.Join(errs, "\n"))
+			}
+			writeFile(t, filepath.Join(root, f), string(orig))
 		}
 	}
 }
 
 func TestRealTreeStillFailsWhenAnAnchoredSymbolIsRenamed(t *testing.T) {
-	// The pair to the shift proof: the symbol the ten protectedRuntimeHandler
-	// rows are marked by is really renamed, and the gate says so.
+	// The pair to the shift proof: the symbol the protectedRuntimeHandler rows
+	// are marked by is really renamed, and the gate says so.
 	schemaPath, ccPath, ccSchemaPath := realTreeOpsInputs(t)
 	root := copyRealSourceTree(t)
 	p := filepath.Join(root, "internal", "api", "runtime.go")
@@ -2104,4 +2108,91 @@ func TestRealTreeStillFailsWhenAnAnchoredSymbolIsRenamed(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustContain(t, errs, "ANCHOR MARKER NOT FOUND", "protectedRuntimeHandler(", "internal/api/runtime.go")
+}
+
+func TestRealTreeRejectsAWrapperRemovedWithItsMarkerTextLeftInAStringLiteral(t *testing.T) {
+	// The CHAOS-7245 r1 P2 reviewer repro, on the real tree: remove a route's
+	// protectedRuntimeHandler(...) wrapper, keep the exact marker text in a
+	// (non-comment) string literal. The route stays discoverable and a text
+	// search for the marker still finds exactly one copy; the gate must fail.
+	schemaPath, ccPath, ccSchemaPath := realTreeOpsInputs(t)
+	root := copyRealSourceTree(t)
+	p := filepath.Join(root, "internal", "api", "context_fabric_routes.go")
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := "return a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, true, handler)"
+	mutated := strings.Replace(string(raw), call, "_ = \"a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, true, handler)\"\n\treturn handler", 1)
+	if mutated == string(raw) {
+		t.Fatal("the wrapper call was not found in the real context_fabric_routes.go; the fixture for this proof is stale")
+	}
+	writeFile(t, p, mutated)
+	inventoryPath := filepath.Join(root, "contracts", "auth", "v1", "endpoint-profiles.acr.json")
+	errs, err := check(root, inventoryPath, schemaPath, ccPath, ccSchemaPath, realDiscovererPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, errs, "ANCHOR MARKER NOT A CODE NODE", "internal/api/context_fabric_routes.go")
+}
+
+// A marker is a call that opens with its callee's full name, or a whole `func`
+// header: a bare prefix that would also match a longer name is not a marker.
+func TestGateRefusesMarkersThatCouldMatchALongerName(t *testing.T) {
+	single := "package api\n\nimport \"net/http\"\n\nfunc Handler() http.Handler {\n" +
+		"\tmux := http.NewServeMux()\n" +
+		"\tmux.HandleFunc(\"GET /healthz\", func(w http.ResponseWriter, r *http.Request) {})\n" +
+		"\treturn mux\n}\n"
+	row := func(note string) map[string]any {
+		return minimalValidRow(map[string]any{
+			"primary_validator": map[string]any{"description": "x", "anchor": map[string]any{
+				"path": fixtureAppFile, "line": float64(7), "note": note}},
+		})
+	}
+	anchorErrs := func(note string) []string {
+		f := minimalValidFixture(t, []map[string]any{row(note)})
+		writeFile(t, filepath.Join(f.root, fixtureAppFile), single)
+		var out []string
+		for _, e := range f.check(t) {
+			if strings.Contains(e, "ANCHOR") {
+				out = append(out, e)
+			}
+		}
+		return out
+	}
+	// Controls: the full callee opening a call anchors, as does the full header.
+	for _, ok := range []string{"mux.HandleFunc(", "func Handler("} {
+		if errs := anchorErrs(ok); len(errs) != 0 {
+			t.Fatalf("control marker %q must anchor, got:\n%s", ok, strings.Join(errs, "\n"))
+		}
+	}
+	// `mux.Handle` is a prefix of `mux.HandleFunc(`: without a `(` closing the
+	// callee it would anchor the wrong call. `func ` alone is a prefix of every
+	// declaration (this file has exactly one, so only the shape rule refuses it).
+	for _, bad := range []string{"mux.Handle", "mux.HandleFunc", "func ", "func"} {
+		if len(anchorErrs(bad)) == 0 {
+			t.Fatalf("marker %q was accepted", bad)
+		}
+	}
+}
+
+func TestGateRefusesAnIssuedMintMarkerThatIsADeclaration(t *testing.T) {
+	row := anchorKindsRow()
+	asObject(asObject(asArray(row["issued_credential"])[0])["anchor"])["note"] = "`func Handler(` `func healthzHandler(` -- a declaration is not a mint call"
+	f := minimalValidFixture(t, []map[string]any{row})
+	mustContain(t, f.check(t), "ANCHOR CONTENT UNVERIFIED", "must be a call, not a declaration")
+}
+
+func TestGateRefusesAnIssuedFunctionWithNoBody(t *testing.T) {
+	// A body-less declaration (implemented elsewhere, e.g. in assembly) has no
+	// body to hold a mint call: reported, not a crash.
+	row := anchorKindsRow()
+	asObject(asObject(asArray(row["issued_credential"])[0])["anchor"])["note"] = "`func externalMint(` `sign(` -- implemented elsewhere"
+	f := minimalValidFixture(t, []map[string]any{row})
+	src, err := os.ReadFile(filepath.Join(f.root, fixtureAppFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(f.root, fixtureAppFile), string(src)+"\nfunc externalMint()\n")
+	mustContain(t, f.check(t), "ANCHOR CONTENT UNVERIFIED", "with a body")
 }

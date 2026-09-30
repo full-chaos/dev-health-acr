@@ -234,30 +234,41 @@ name:
 
 The acr gate (`ci/checkendpointprofiles`) matches a row to its route by
 `source.file` + `method` + `route`, and every anchor -- `primary_validator`,
-each `reachable_validators[]` and each `issued_credential[]` -- by its `note`
-marker. `source.line` is ignored by the gate after schema validation (the
-shared schema still requires it). An anchor's `line` / `line_end` are hints for
-where the symbol was: the gate checks only that `line` is a positive number and
-that `line_end` is not before it, never the file's content at that line, so
-moving the symbol (an unrelated edit above it) does not fail and needs no
-re-anchoring. Renaming or removing the route fails as `PHANTOM ROW` +
-`UNOWNED SURFACE`; renaming the marked symbol fails as `ANCHOR MARKER NOT
-FOUND`.
+each `reachable_validators[]` and each `issued_credential[]` -- by a marker in
+its `note`, found in the PARSED Go source as an AST node. `source.line` is
+ignored by the gate after schema validation (the shared schema still requires
+it). An anchor's `line` / `line_end` are hints for where the symbol was: the
+gate checks only that `line` is a positive number and that `line_end` is not
+before it, never the file's content at that line, so moving the symbol (an
+unrelated edit above it) does not fail and needs no re-anchoring. Renaming or
+removing the route fails as `PHANTOM ROW` + `UNOWNED SURFACE`; renaming the
+marked symbol fails as `ANCHOR MARKER NOT FOUND`.
 
-The marker is the anchor's `note` when the note has no backticks (a literal
-call or declaration), or the first backtick-quoted span of a longer note, so a
-note can keep its prose after the marker: `` `func (s *S) Start(` -- mints the
-device code ``. An anchor with no marker fails as `MISSING ANCHOR MARKER`.
+The marker is the source text that opens the anchored construct: either a
+whole `func` header prefix (`func (a *App) protectedRuntimeHandler(`), or a
+call that opens with its full callee (`a.protectedRuntimeHandler(limits.`).
+It must be a prefix of the source of a function declaration or call expression
+at that node's start. Text in a string literal, in a comment, in another
+call's arguments, or a name that only shares a prefix (`mux.Handle` against
+`mux.HandleFunc(`) is not an anchor: a wrapper removed with its text left in a
+string fails as `ANCHOR MARKER NOT A CODE NODE`. When a note has backticks the
+marker is the first backtick-quoted span and the rest is prose: `` `func (s *S)
+Start(` `s.store.Create(` -- mints the device code ``. An anchor with no marker
+fails as `MISSING ANCHOR MARKER`.
+
+An `issued_credential` anchor carries two markers, both required: the
+enclosing `func` declaration, then the call that mints the credential, which
+must appear exactly once inside that function's body (`ANCHOR CONTENT MISMATCH`
+if it is not there, `AMBIGUOUS ANCHOR MARKER` if it is there twice).
+
 Marker rule, one invariant per (file, marker) across all anchor kinds: no line
-may carry the marker twice, and its total occurrences in the file must equal
-the number of distinct sites the rows declare for it (rows citing one shared
-definition line are one site). More is `AMBIGUOUS ANCHOR MARKER`; none or
-fewer is `ANCHOR MARKER NOT FOUND`.
+may hold two of its sites, and the number of sites in the file must equal the
+number of distinct sites the rows declare for it (rows citing one shared
+definition line are one site; a `func` declaration is always one site). More is
+`AMBIGUOUS ANCHOR MARKER`; none or fewer is `ANCHOR MARKER NOT FOUND`.
 
-The content checks run at the marker's own site, not at the declared line: a
-marker that resolves to a placeholder or comment line is `TRIVIAL ANCHOR`, and
-an `issued_credential` anchor's enclosing function (found from the marker) must
-be named by its note or issuer, else `ANCHOR CONTENT MISMATCH`. When several
-anchors cite one marker at several sites, the k-th smallest declared line is
-paired with the k-th located site, so a shift keeps the pairing and only a real
-reordering changes it.
+What this does not prove (CHAOS-4780): a row anchored at a shared definition,
+such as the ten rows marked by `protectedRuntimeHandler`'s declaration, shows
+that the wrapper exists, not that a given route is wrapped by it. Rows whose
+marker is the route's own call (`a.protectedRuntimeHandler(...)` in the route's
+handler builder) do fail if that call is removed.
