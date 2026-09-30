@@ -260,9 +260,22 @@ An `issued_credential` anchor carries two markers, both required: the
 enclosing `func` declaration, then the call that mints the credential, which
 must appear exactly once in that function's body, called by the function itself
 (`ANCHOR CONTENT MISMATCH` if it is not there, or if the only call sits inside a
-func literal nested in the body, which the function may never invoke;
-`AMBIGUOUS ANCHOR MARKER` if it is there twice). A call in a nested literal
-beside the function's own call is not counted as a second site.
+func literal nested in the body; `AMBIGUOUS ANCHOR MARKER` if it is there
+twice). Any call inside a nested func literal is not counted, whatever the
+literal does with it: an uncalled literal, and also one that is invoked
+immediately, deferred, or started with `go`. A call in a nested literal beside
+the function's own call is not counted as a second site.
+
+This check is lexical, not a control-flow proof: a direct call in the anchored
+function's body counts whatever branch it sits in, so a call under a condition
+that can never hold (or one the function returns before reaching) is not
+caught. That is the same CHAOS-4780 class as the reachability limits below;
+CHAOS-7280 carries this one too.
+
+Anchors are plain function and method declarations. A generic function
+declaration (`func f[T any](...)`) is not supported as an anchor: its marker
+does not resolve and the gate refuses it (`ANCHOR MARKER NOT A CODE NODE`), which fails
+closed.
 
 Marker rule, one invariant per (file, marker) across all anchor kinds: no line
 may hold two of its sites, and the number of sites in the file must equal the
@@ -290,4 +303,5 @@ gate):
   a marker to the handler builder needs a new row field, which is a schema and
   scope change; it is tracked as CHAOS-7280 (CHAOS-4780 class), not done here.
 - A mint call in an `issued_credential` anchor is bound to its function, but
-  whether that function is reached is not judged either.
+  whether that function is reached, or whether control flow reaches the call
+  inside it, is not judged either (see the lexical-check paragraph above).

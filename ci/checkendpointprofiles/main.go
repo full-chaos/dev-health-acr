@@ -52,8 +52,12 @@
 //     distinct sites the rows declare (rows citing one shared definition line
 //     are one site; a `func` declaration is always one). More = AMBIGUOUS
 //     ANCHOR MARKER; none/fewer = ANCHOR MARKER NOT FOUND. The mint call must
-//     be the anchored function's OWN call: a call in a nested func literal does
-//     not count. Still not proof (reachability is out of scope, CHAOS-4780):
+//     be the anchored function's OWN call: any call inside a nested func literal
+//     does not count (an uncalled, immediately invoked, deferred or go literal
+//     alike). The check is LEXICAL: a direct call counts whatever branch it sits
+//     in, so a call under a condition that cannot hold is not caught. Generic
+//     function declarations are not supported as anchors (refused, fail closed).
+//     Still not proof (reachability is out of scope, CHAOS-4780):
 //     a row anchored at a SHARED definition (the ten rows marked by
 //     protectedRuntimeHandler's declaration, the six by
 //     authenticateWebAssertion's) shows the definition exists, not that a
