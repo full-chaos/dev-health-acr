@@ -178,8 +178,10 @@ func (o SlogObserver) ObserveProjectionDrain(outcome DrainOutcome) {
 		logger.Info("context_fabric: projection tick drained multiple batches", attrs...)
 		return
 	}
-	// budget_exceeded means a further batch was available at budget 0 (or the
-	// peek that would prove it failed). With
+	// budget_exceeded means work MAY remain: a peeker proved a further batch
+	// at budget 0, or nothing proved otherwise (the peek failed, or the source
+	// has no peeker -- the default for sources other than ClickHouse -- so the
+	// answer is unknown, not a confirmed backlog). With
 	// Applied > 1 that is healthy progress (the multi-batch line above); with
 	// Applied <= 1 it is the starvation shape (a source
 	// pulling one page per tick while its backlog stays), which must be
