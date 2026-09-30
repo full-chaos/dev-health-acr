@@ -1354,6 +1354,733 @@
       "disclosure": []
     },
     {
+      "name": "home",
+      "document_operation_name": "Home",
+      "kind": "query",
+      "digest": "9776798e809030868e3a7fc8643b06d122573f03a3c48a7710d86b1842b33554",
+      "document_text": "query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {\n  home(orgId: $orgId, filters: $filters, window: $window) {\n    freshness {\n      lastIngestedAt\n      latestSuccessfulSyncAt\n      sources {\n        provider\n        status\n        __typename\n      }\n      coverage {\n        reposCoveredPct\n        prsLinkedToIssuesPct\n        issuesWithCycleStatesPct\n        __typename\n      }\n      __typename\n    }\n    deltas {\n      metric\n      label\n      value\n      unit\n      deltaPct\n      spark {\n        ts\n        value\n        __typename\n      }\n      __typename\n    }\n    reworkThemeAllocation {\n      theme\n      label\n      allocation\n      allocationPct\n      prsMerged\n      churnLoc\n      __typename\n    }\n    summary {\n      id\n      text\n      evidenceLink\n      __typename\n    }\n    tiles {\n      key\n      value {\n        title\n        subtitle\n        link\n        __typename\n      }\n      __typename\n    }\n    constraint {\n      title\n      claim\n      evidence {\n        label\n        link\n        __typename\n      }\n      experiments\n      __typename\n    }\n    events {\n      ts\n      type\n      text\n      link\n      __typename\n    }\n    healthState {\n      status\n      headline\n      summary\n      asOf\n      __typename\n    }\n    signals {\n      id\n      title\n      metric\n      currentValue\n      priorValue\n      delta\n      direction\n      severity\n      confidence\n      affectedScope\n      evidenceCount\n      whyItMatters\n      recommendedAction\n      evidenceRef\n      category\n      scopeEntity {\n        id\n        displayName\n        __typename\n      }\n      __typename\n    }\n    limitingFactor {\n      claim\n      whyItMatters\n      recommendedAction\n      confidence\n      evidenceRef\n      __typename\n    }\n    dataConfidence {\n      level\n      coveragePct\n      connectedSources\n      missingSources\n      caveats\n      __typename\n    }\n    __typename\n  }\n}",
+      "cost_class": "series",
+      "deadline_seconds": 30,
+      "variables": [
+        {
+          "path": "orgId",
+          "type": "String!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "acr_principal_org"
+        },
+        {
+          "path": "filters",
+          "type": "FilterInput",
+          "kind": "object",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "home is served org-wide only: the filters input (scope, who, what, why, how) can name persons and teams and is not applied by acr in this slice (CHAOS-7202)"
+          }
+        },
+        {
+          "path": "filters.scope",
+          "type": "ScopeFilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "home is served org-wide only: the filters input (scope, who, what, why, how) can name persons and teams and is not applied by acr in this slice (CHAOS-7202)"
+          }
+        },
+        {
+          "path": "filters.scope.level",
+          "type": "ScopeLevelInput!",
+          "kind": "enum",
+          "enum": [
+            "ORG",
+            "TEAM",
+            "REPO",
+            "SERVICE",
+            "DEVELOPER"
+          ],
+          "default": "ORG",
+          "allowed": false,
+          "source": "none",
+          "refused_values": [
+            {
+              "value": "DEVELOPER",
+              "code": "person_scope_not_served",
+              "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+            }
+          ],
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "home is served org-wide only: the filters input (scope, who, what, why, how) can name persons and teams and is not applied by acr in this slice (CHAOS-7202)"
+          }
+        },
+        {
+          "path": "filters.scope.ids",
+          "type": "[String!]!",
+          "kind": "scalar",
+          "default": "[]",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "home is served org-wide only: the filters input (scope, who, what, why, how) can name persons and teams and is not applied by acr in this slice (CHAOS-7202)"
+          }
+        },
+        {
+          "path": "filters.who",
+          "type": "WhoFilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "home is served org-wide only: the filters input (scope, who, what, why, how) can name persons and teams and is not applied by acr in this slice (CHAOS-7202)"
+          }
+        },
+        {
+          "path": "filters.who.developers",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "person_scope_not_served",
+            "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+          }
+        },
+        {
+          "path": "filters.who.roles",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "home is served org-wide only: the filters input (scope, who, what, why, how) can name persons and teams and is not applied by acr in this slice (CHAOS-7202)"
+          }
+        },
+        {
+          "path": "filters.what",
+          "type": "WhatFilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "home is served org-wide only: the filters input (scope, who, what, why, how) can name persons and teams and is not applied by acr in this slice (CHAOS-7202)"
+          }
+        },
+        {
+          "path": "filters.what.repos",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "home is served org-wide only: the filters input (scope, who, what, why, how) can name persons and teams and is not applied by acr in this slice (CHAOS-7202)"
+          }
+        },
+        {
+          "path": "filters.what.services",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "home is served org-wide only: the filters input (scope, who, what, why, how) can name persons and teams and is not applied by acr in this slice (CHAOS-7202)"
+          }
+        },
+        {
+          "path": "filters.why",
+          "type": "WhyFilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "home is served org-wide only: the filters input (scope, who, what, why, how) can name persons and teams and is not applied by acr in this slice (CHAOS-7202)"
+          }
+        },
+        {
+          "path": "filters.why.workCategory",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "home is served org-wide only: the filters input (scope, who, what, why, how) can name persons and teams and is not applied by acr in this slice (CHAOS-7202)"
+          }
+        },
+        {
+          "path": "filters.why.issueType",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "home is served org-wide only: the filters input (scope, who, what, why, how) can name persons and teams and is not applied by acr in this slice (CHAOS-7202)"
+          }
+        },
+        {
+          "path": "filters.how",
+          "type": "HowFilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "home is served org-wide only: the filters input (scope, who, what, why, how) can name persons and teams and is not applied by acr in this slice (CHAOS-7202)"
+          }
+        },
+        {
+          "path": "filters.how.flowStage",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "home is served org-wide only: the filters input (scope, who, what, why, how) can name persons and teams and is not applied by acr in this slice (CHAOS-7202)"
+          }
+        },
+        {
+          "path": "window",
+          "type": "HomeWindowInput",
+          "kind": "object",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "window.rangeDays",
+          "type": "Int",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "min": 1,
+          "max": 90
+        },
+        {
+          "path": "window.compareDays",
+          "type": "Int",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "min": 1,
+          "max": 90
+        },
+        {
+          "path": "window.startDate",
+          "type": "Date",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "home takes rangeDays and compareDays only; explicit dates are not served (CHAOS-7202)"
+          }
+        },
+        {
+          "path": "window.endDate",
+          "type": "Date",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "home takes rangeDays and compareDays only; explicit dates are not served (CHAOS-7202)"
+          }
+        }
+      ],
+      "person_variables": [
+        {
+          "path": "filters.scope.level",
+          "value": "DEVELOPER"
+        },
+        {
+          "path": "filters.who.developers"
+        }
+      ],
+      "constraints": [],
+      "scopes": [
+        {
+          "caller": "unrestricted",
+          "served": true,
+          "basis": "[ops] graph/schema.resolvers.go:275-291 home.BuildResponse over the authorized org, default scope level org, no repository filter (CHAOS-7202)"
+        },
+        {
+          "caller": "restricted",
+          "served": false,
+          "refusal": {
+            "code": "operation_not_served_for_caller",
+            "reason": "org-wide composite: freshness, deltas, tiles, signals and dataConfidence carry no repository id per row, so no row check is possible ([ops] graph/schema.resolvers.go:275-291; home_translate.go:44-73; CHAOS-7202)"
+          },
+          "basis": "org-wide composite: freshness, deltas, tiles, signals and dataConfidence carry no repository id per row, so no row check is possible ([ops] graph/schema.resolvers.go:275-291; home_translate.go:44-73; CHAOS-7202)"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "home.freshness.lastIngestedAt",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.freshness.latestSuccessfulSyncAt",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.freshness.sources[*].provider",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.freshness.sources[*].status",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.freshness.sources[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "home.freshness.coverage.reposCoveredPct",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.freshness.coverage.prsLinkedToIssuesPct",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.freshness.coverage.issuesWithCycleStatesPct",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.freshness.coverage.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "home.freshness.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "home.deltas[*].metric",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.deltas[*].label",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.deltas[*].value",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.deltas[*].unit",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.deltas[*].deltaPct",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.deltas[*].spark[*].ts",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.deltas[*].spark[*].value",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.deltas[*].spark[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "home.deltas[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "home.reworkThemeAllocation[*].theme",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.reworkThemeAllocation[*].label",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.reworkThemeAllocation[*].allocation",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.reworkThemeAllocation[*].allocationPct",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.reworkThemeAllocation[*].prsMerged",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.reworkThemeAllocation[*].churnLoc",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.reworkThemeAllocation[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "home.summary[*].id",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.summary[*].text",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.summary[*].evidenceLink",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.summary[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "home.tiles[*].key",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.tiles[*].value.title",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.tiles[*].value.subtitle",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.tiles[*].value.link",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.tiles[*].value.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "home.tiles[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "home.constraint.title",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.constraint.claim",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.constraint.evidence[*].label",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.constraint.evidence[*].link",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.constraint.evidence[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "home.constraint.experiments[*]",
+          "type": "[String!]!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.constraint.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "home.events[*].ts",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.events[*].type",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.events[*].text",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.events[*].link",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.events[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "home.healthState.status",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.healthState.headline",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.healthState.summary",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.healthState.asOf",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.healthState.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "home.signals[*].id",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.signals[*].title",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.signals[*].metric",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.signals[*].currentValue",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.signals[*].priorValue",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.signals[*].delta",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.signals[*].direction",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.signals[*].severity",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.signals[*].confidence",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.signals[*].affectedScope",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.signals[*].evidenceCount",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.signals[*].whyItMatters",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.signals[*].recommendedAction",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.signals[*].evidenceRef",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.signals[*].category",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.signals[*].scopeEntity.id",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.signals[*].scopeEntity.displayName",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.signals[*].scopeEntity.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "home.signals[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "home.limitingFactor.claim",
+          "type": "String!",
+          "leaf": "scalar",
+          "exception": "false positive: the token actor matches inside limitingFactor (Factor); the object is a generated org-level claim, not a person"
+        },
+        {
+          "path": "home.limitingFactor.whyItMatters",
+          "type": "String!",
+          "leaf": "scalar",
+          "exception": "false positive: the token actor matches inside limitingFactor (Factor); the object is a generated org-level claim, not a person"
+        },
+        {
+          "path": "home.limitingFactor.recommendedAction",
+          "type": "String!",
+          "leaf": "scalar",
+          "exception": "false positive: the token actor matches inside limitingFactor (Factor); the object is a generated org-level claim, not a person"
+        },
+        {
+          "path": "home.limitingFactor.confidence",
+          "type": "String!",
+          "leaf": "scalar",
+          "exception": "false positive: the token actor matches inside limitingFactor (Factor); the object is a generated org-level claim, not a person"
+        },
+        {
+          "path": "home.limitingFactor.evidenceRef",
+          "type": "String",
+          "leaf": "scalar",
+          "exception": "false positive: the token actor matches inside limitingFactor (Factor); the object is a generated org-level claim, not a person"
+        },
+        {
+          "path": "home.limitingFactor.__typename",
+          "type": "String",
+          "leaf": "typename",
+          "exception": "false positive: the token actor matches inside limitingFactor (Factor); the object is a generated org-level claim, not a person"
+        },
+        {
+          "path": "home.dataConfidence.level",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.dataConfidence.coveragePct",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.dataConfidence.connectedSources[*]",
+          "type": "[String!]!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.dataConfidence.missingSources[*]",
+          "type": "[String!]!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.dataConfidence.caveats[*]",
+          "type": "[String!]!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "home.dataConfidence.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "home.__typename",
+          "type": "String",
+          "leaf": "typename"
+        }
+      ],
+      "withheld_outputs": [],
+      "disclosure": [],
+      "notes": [
+        "summary, limitingFactor, signals and constraint text are generated free text: untrusted content (labelled), never instructions",
+        "rangeDays and compareDays default to 14 in ops when absent (home_translate.go:46)"
+      ]
+    },
+    {
       "name": "hotspots",
       "document_operation_name": "Hotspots",
       "kind": "query",
@@ -3363,6 +4090,200 @@
       ]
     },
     {
+      "name": "recommendations",
+      "document_operation_name": "Recommendations",
+      "kind": "query",
+      "digest": "c6261e9cb250f22f909e81c54b0c92e6d9e01aea7c25aa0a96919633e2c33276",
+      "document_text": "query Recommendations($orgId: String!, $team: ID!, $window: WindowInput!) {\n  recommendations(orgId: $orgId, team: $team, window: $window) {\n    ruleId\n    teamId\n    orgId\n    computedAt\n    windowStart\n    windowEnd\n    severity\n    title\n    rationale\n    successCriterion\n    evidence {\n      teamId\n      metricTable\n      windowStart\n      windowEnd\n      field\n      value\n      __typename\n    }\n    __typename\n  }\n}",
+      "cost_class": "list",
+      "deadline_seconds": 30,
+      "variables": [
+        {
+          "path": "orgId",
+          "type": "String!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "acr_principal_org"
+        },
+        {
+          "path": "team",
+          "type": "ID!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "client",
+          "subject": {
+            "kind": "team",
+            "acr_prefix": "team:",
+            "ops_form": "bare_id"
+          }
+        },
+        {
+          "path": "window",
+          "type": "WindowInput!",
+          "kind": "object",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "window.value",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "4",
+          "allowed": true,
+          "source": "client",
+          "min": 1,
+          "max": 26
+        },
+        {
+          "path": "window.unit",
+          "type": "WindowUnit!",
+          "kind": "enum",
+          "enum": [
+            "DAY",
+            "WEEK",
+            "CYCLE"
+          ],
+          "default": "WEEK",
+          "allowed": true,
+          "source": "client",
+          "allowed_values": [
+            "DAY",
+            "WEEK",
+            "CYCLE"
+          ]
+        }
+      ],
+      "person_variables": [],
+      "constraints": [
+        {
+          "kind": "required",
+          "path": "team",
+          "code": "scope_required",
+          "reason": "recommendations is served only with a team id ([ops] recommendations/recommendations.go:335-345; CHAOS-7202)"
+        },
+        {
+          "kind": "required",
+          "path": "window",
+          "code": "scope_required",
+          "reason": "a window object is required (WindowInput! in the SDL); its value and unit default to 4 WEEK ([ops] recommendations/recommendations.go:90-125; CHAOS-7202)"
+        }
+      ],
+      "scopes": [
+        {
+          "caller": "unrestricted",
+          "served": true,
+          "basis": "[ops] recommendations/recommendations.go:335-360 read the stored recommendation rows by team id and org (CHAOS-7202)"
+        },
+        {
+          "caller": "restricted",
+          "served": false,
+          "refusal": {
+            "code": "operation_not_served_for_caller",
+            "reason": "rows carry a team id and evidence rows, no repository id; team ids are not served to a repository-restricted caller ([ops] recommendations/recommendations.go:335-360; design D.3, K15; CHAOS-7202)"
+          },
+          "basis": "rows carry a team id and evidence rows, no repository id; team ids are not served to a repository-restricted caller ([ops] recommendations/recommendations.go:335-360; design D.3, K15; CHAOS-7202)"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "recommendations[*].ruleId",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "recommendations[*].teamId",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "recommendations[*].orgId",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "recommendations[*].computedAt",
+          "type": "DateTime!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "recommendations[*].windowStart",
+          "type": "Date!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "recommendations[*].windowEnd",
+          "type": "Date!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "recommendations[*].severity",
+          "type": "Severity!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "recommendations[*].title",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "recommendations[*].rationale",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "recommendations[*].successCriterion",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "recommendations[*].evidence[*].teamId",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "recommendations[*].evidence[*].metricTable",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "recommendations[*].evidence[*].windowStart",
+          "type": "Date!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "recommendations[*].evidence[*].windowEnd",
+          "type": "Date!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "recommendations[*].evidence[*].field",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "recommendations[*].evidence[*].value",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "recommendations[*].evidence[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "recommendations[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        }
+      ],
+      "withheld_outputs": [],
+      "disclosure": [],
+      "notes": [
+        "acr refuses window.value outside 1..26 (at most 26 cycles = 364 days); ops applies no upper limit; value and unit default to 4 WEEK as in the SDL; DAY/WEEK/CYCLE = 1/7/14 days (recommendations.go:96-112)",
+        "an ops query failure answers an empty list, indistinguishable from no recommendations (recommendations.go:346-350)"
+      ]
+    },
+    {
       "name": "securityAlerts",
       "document_operation_name": "SecurityAlerts",
       "kind": "query",
@@ -5292,6 +6213,116 @@
       "notes": [
         "cost class not named by design D.6; list chosen (same source as workGraphEdges)"
       ]
+    },
+    {
+      "name": "workItemTeamAttributions",
+      "document_operation_name": "WorkItemTeamAttributions",
+      "kind": "query",
+      "digest": "d1331c8f0d3e1874b32efdf51392e3fe154f445c4d5d64441d5d560d5b21e2a1",
+      "document_text": "query WorkItemTeamAttributions($orgId: String!, $workItemIds: [String!], $teamId: String) {\n  workItemTeamAttributions(\n    orgId: $orgId\n    workItemIds: $workItemIds\n    teamId: $teamId\n  ) {\n    workItemId\n    provider\n    teamId\n    teamName\n    source\n    confidence\n    isPrimary\n    evidence\n    __typename\n  }\n}",
+      "cost_class": "list",
+      "deadline_seconds": 30,
+      "variables": [
+        {
+          "path": "orgId",
+          "type": "String!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "acr_principal_org"
+        },
+        {
+          "path": "workItemIds",
+          "type": "[String!]",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "client",
+          "max_items": 200,
+          "max_length": 256
+        },
+        {
+          "path": "teamId",
+          "type": "String",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "client",
+          "subject": {
+            "kind": "team",
+            "acr_prefix": "team:",
+            "ops_form": "bare_id"
+          }
+        }
+      ],
+      "person_variables": [],
+      "constraints": [],
+      "scopes": [
+        {
+          "caller": "unrestricted",
+          "served": true,
+          "basis": "[ops] graph/schema.resolvers.go:654-693 workgraph.ResolveWorkItemTeamAttributions: the stored work_item_team_attributions rows as facts with source, confidence, isPrimary and evidence; acr adds no attribution logic (CHAOS-7202; AGENTS.md team-attribution contract)"
+        },
+        {
+          "caller": "restricted",
+          "served": false,
+          "refusal": {
+            "code": "operation_not_served_for_caller",
+            "reason": "rows carry a work item id and a team id, no repository id, so a granted-repository row check is not possible ([ops] graph/schema.resolvers.go:654-693; design D.3, K15; CHAOS-7202)"
+          },
+          "basis": "rows carry a work item id and a team id, no repository id, so a granted-repository row check is not possible ([ops] graph/schema.resolvers.go:654-693; design D.3, K15; CHAOS-7202)"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "workItemTeamAttributions[*].workItemId",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workItemTeamAttributions[*].provider",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workItemTeamAttributions[*].teamId",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workItemTeamAttributions[*].teamName",
+          "type": "String",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workItemTeamAttributions[*].source",
+          "type": "TeamAttributionSource!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workItemTeamAttributions[*].confidence",
+          "type": "TeamAttributionConfidence!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workItemTeamAttributions[*].isPrimary",
+          "type": "Boolean!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workItemTeamAttributions[*].evidence",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "workItemTeamAttributions[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        }
+      ],
+      "withheld_outputs": [],
+      "disclosure": [],
+      "notes": [
+        "team = project/repository ownership only; rows are raw attribution facts with provenance (source, confidence, evidence)",
+        "workItemIds and teamId both absent reads every attribution row of the org: bounded by the response byte cap"
+      ]
     }
   ],
   "not_served": [
@@ -5436,13 +6467,6 @@
       "reason": "turns an execution error into an empty result with no error ([ops] analytics/resolve.go:549-556; design D.3)"
     },
     {
-      "name": "home",
-      "kind": "query",
-      "digest": "9776798e809030868e3a7fc8643b06d122573f03a3c48a7710d86b1842b33554",
-      "code": "unknown_operation",
-      "reason": "no scope rule or no honest status yet (design D.3)"
-    },
-    {
       "name": "improveOpportunities",
       "kind": "query",
       "digest": "8890d7aeddfebaa9683d6c8834c82b059e345af1dbf42db14eebba840fcd87d2",
@@ -5490,13 +6514,6 @@
       "digest": "8e2847048e3b70b0391f45d9cd8804735ea4401b7e78cd614e35e49ca39e348f",
       "code": "unknown_operation",
       "reason": "operator or superuser view (design D.3)"
-    },
-    {
-      "name": "recommendations",
-      "kind": "query",
-      "digest": "c6261e9cb250f22f909e81c54b0c92e6d9e01aea7c25aa0a96919633e2c33276",
-      "code": "unknown_operation",
-      "reason": "no scope rule or no honest status yet (design D.3)"
     },
     {
       "name": "releaseImpact",
@@ -5574,13 +6591,6 @@
       "digest": "276ea75cf12ec0ecde5a75bdbfbb0a8a11c4ec9fc613a0f80fcd6b7a8ccc050f",
       "code": "unknown_operation",
       "reason": "mutation: the MCP surface is read-only; never served (design D.3)"
-    },
-    {
-      "name": "workItemTeamAttributions",
-      "kind": "query",
-      "digest": "d1331c8f0d3e1874b32efdf51392e3fe154f445c4d5d64441d5d560d5b21e2a1",
-      "code": "unknown_operation",
-      "reason": "no scope rule or no honest status yet (design D.3)"
     },
     {
       "name": "workUnitTeamAttributions",

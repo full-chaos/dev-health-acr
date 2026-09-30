@@ -118,6 +118,11 @@ var edgeTypes = []string{"BLOCKS", "RELATES", "DUPLICATES", "IS_BLOCKED_BY", "IS
 
 var measures = []string{"COUNT", "CHURN_LOC", "PR_REWORK_RATIO", "CYCLE_TIME_HOURS", "THROUGHPUT", "PIPELINE_SUCCESS_RATE", "PIPELINE_FAILURE_RATE", "PIPELINE_DURATION_P95", "PIPELINE_QUEUE_TIME", "PIPELINE_RERUN_RATE", "TEST_PASS_RATE", "TEST_FAILURE_RATE", "TEST_FLAKE_RATE", "TEST_SUITE_DURATION_P95", "COVERAGE_LINE_PCT", "COVERAGE_BRANCH_PCT", "COVERAGE_DELTA_PCT", "FLAG_FRICTION_DELTA", "FLAG_ERROR_RATE_DELTA", "FLAG_COVERAGE_RATIO", "FLAG_ACTIVATION_RATE"}
 
+// limitingFactorNotPerson: the person-name token "actor" matches inside the
+// word "Factor" of home.limitingFactor; the field is a generated claim about
+// the org, not a person (CHAOS-7202).
+const limitingFactorNotPerson = "false positive: the token actor matches inside limitingFactor (Factor); the object is a generated org-level claim, not a person"
+
 const workGraphWithheldEvidence = "free text evidence string; not all producers were read and it may carry person content (RM §11, §13; design D.3: evidence is not an allowed output path)"
 
 func workGraphFilters(extra map[string]variableDecl) map[string]variableDecl {
@@ -337,6 +342,60 @@ func declaredPolicy() policyDeclaration {
 				Unrestricted: served("[ops] cognitiveload/cognitiveload.go:119-141,468-473 read team_cognitive_load_daily by team id (RM §7, V)"),
 				Restricted:   refusedFor("rows carry no repository id; the repository-only path mixes scope ([ops] cognitiveload/cognitiveload.go:178-195; RM §7)"),
 			},
+			"home": {
+				DocumentName: "Home",
+				Cost:         dr.CostSeries,
+				Variables: map[string]variableDecl{
+					"orgId":              principalOrg,
+					"window.rangeDays":   between(1, windowDays),
+					"window.compareDays": between(1, windowDays),
+				},
+				RefusedPaths: map[string]dr.Refusal{
+					"filters":          refuse(dr.RefusalVariableNotAllowed, "home is served org-wide only: the filters input (scope, who, what, why, how) can name persons and teams and is not applied by acr in this slice (CHAOS-7202)"),
+					"window.startDate": refuse(dr.RefusalVariableNotAllowed, "home takes rangeDays and compareDays only; explicit dates are not served (CHAOS-7202)"),
+					"window.endDate":   refuse(dr.RefusalVariableNotAllowed, "home takes rangeDays and compareDays only; explicit dates are not served (CHAOS-7202)"),
+				},
+				OutputExceptions: map[string]string{
+					"home.limitingFactor.claim":             limitingFactorNotPerson,
+					"home.limitingFactor.whyItMatters":      limitingFactorNotPerson,
+					"home.limitingFactor.recommendedAction": limitingFactorNotPerson,
+					"home.limitingFactor.confidence":        limitingFactorNotPerson,
+					"home.limitingFactor.evidenceRef":       limitingFactorNotPerson,
+					"home.limitingFactor.__typename":        limitingFactorNotPerson,
+				},
+				Unrestricted: served("[ops] graph/schema.resolvers.go:275-291 home.BuildResponse over the authorized org, default scope level org, no repository filter (CHAOS-7202)"),
+				Restricted:   refusedFor("org-wide composite: freshness, deltas, tiles, signals and dataConfidence carry no repository id per row, so no row check is possible ([ops] graph/schema.resolvers.go:275-291; home_translate.go:44-73; CHAOS-7202)"),
+				Notes:        []string{"summary, limitingFactor, signals and constraint text are generated free text: untrusted content (labelled), never instructions", "rangeDays and compareDays default to 14 in ops when absent (home_translate.go:46)"},
+			},
+			"recommendations": {
+				DocumentName: "Recommendations",
+				Cost:         dr.CostList,
+				Variables: map[string]variableDecl{
+					"orgId":        principalOrg,
+					"team":         teamID,
+					"window.value": between(1, 26),
+					"window.unit":  enum("DAY", "WEEK", "CYCLE"),
+				},
+				Constraints: []dr.Constraint{
+					{Kind: dr.ConstraintRequired, Path: "team", Code: dr.RefusalScopeRequired, Reason: "recommendations is served only with a team id ([ops] recommendations/recommendations.go:335-345; CHAOS-7202)"},
+					{Kind: dr.ConstraintRequired, Path: "window", Code: dr.RefusalScopeRequired, Reason: "a window object is required (WindowInput! in the SDL); its value and unit default to 4 WEEK ([ops] recommendations/recommendations.go:90-125; CHAOS-7202)"},
+				},
+				Unrestricted: served("[ops] recommendations/recommendations.go:335-360 read the stored recommendation rows by team id and org (CHAOS-7202)"),
+				Restricted:   refusedFor("rows carry a team id and evidence rows, no repository id; team ids are not served to a repository-restricted caller ([ops] recommendations/recommendations.go:335-360; design D.3, K15; CHAOS-7202)"),
+				Notes:        []string{"acr refuses window.value outside 1..26 (at most 26 cycles = 364 days); ops applies no upper limit; value and unit default to 4 WEEK as in the SDL; DAY/WEEK/CYCLE = 1/7/14 days (recommendations.go:96-112)", "an ops query failure answers an empty list, indistinguishable from no recommendations (recommendations.go:346-350)"},
+			},
+			"workItemTeamAttributions": {
+				DocumentName: "WorkItemTeamAttributions",
+				Cost:         dr.CostList,
+				Variables: map[string]variableDecl{
+					"orgId":       principalOrg,
+					"workItemIds": {MaxItems: idListMax, MaxLength: 256},
+					"teamId":      teamID,
+				},
+				Unrestricted: served("[ops] graph/schema.resolvers.go:654-693 workgraph.ResolveWorkItemTeamAttributions: the stored work_item_team_attributions rows as facts with source, confidence, isPrimary and evidence; acr adds no attribution logic (CHAOS-7202; AGENTS.md team-attribution contract)"),
+				Restricted:   refusedFor("rows carry a work item id and a team id, no repository id, so a granted-repository row check is not possible ([ops] graph/schema.resolvers.go:654-693; design D.3, K15; CHAOS-7202)"),
+				Notes:        []string{"team = project/repository ownership only; rows are raw attribution facts with provenance (source, confidence, evidence)", "workItemIds and teamId both absent reads every attribution row of the org: bounded by the response byte cap"},
+			},
 			"investmentBreakdown": breakdown,
 			"investmentFull":      full,
 			"securityOverview": {
@@ -471,9 +530,6 @@ func notServed() map[string]notServedDecl {
 		"aiReviewLoad":                      {ai},
 		"aiRiskBreakdown":                   {ai},
 		"aiWorkflowDrilldown":               {ai},
-		"home":                              {noScope},
-		"recommendations":                   {noScope},
-		"workItemTeamAttributions":          {noScope},
 		"busFactor":                         {"ranked persons: topMaintainers { author sharePercent } ([ops] server/query_route.go:1029; design D.3, K18: a person-free document comes by the GWC batch)"},
 		"connectorsDataHealth":              {operator},
 		"dataHealthIdentity":                {operator},

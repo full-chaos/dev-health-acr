@@ -473,7 +473,7 @@ func TestChaos7072SubjectsRoute(t *testing.T) {
 }
 
 // The catalogue for a restricted credential lists exactly the 3 operations
-// served to that class; for an unrestricted credential, 16. Both list the
+// served to that class; for an unrestricted credential, 19. Both list the
 // mutation and the K14-A shape as not served, and the caller section never
 // carries a repository name.
 func TestChaos7072CatalogPerCallerClass(t *testing.T) {
@@ -484,7 +484,7 @@ func TestChaos7072CatalogPerCallerClass(t *testing.T) {
 		token string
 		want  int
 		class string
-	}{{restricted, 3, "restricted"}, {unrestricted, 16, "unrestricted"}} {
+	}{{restricted, 3, "restricted"}, {unrestricted, 19, "unrestricted"}} {
 		response := h.get(ContextFabricDataCatalogPath, tc.token)
 		body := decodeC7072(t, response)
 		operations := body["operations"].(map[string]any)
