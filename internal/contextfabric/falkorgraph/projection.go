@@ -202,6 +202,28 @@ func referencedSubjectStubMergeCypher(alias, kindLabelValue, attrsParam string) 
 	)
 }
 
+// referencedEndpointStubSentinel (CHAOS-7242) is the authorization_repositories
+// value a REFERENCED stub of a team or project carries until its canonical
+// entity merges. Like devhealthsource's noTeamOwnershipSentinel it can match no
+// real "owner/repo" slug (no '/'), and it is a non-empty list (never the "*"
+// wildcard), so every repository-scoped principal is DENIED the stub while an
+// unrestricted principal still sees it. The entity's own write
+// (projectEntity: `SET n += attrs`) overwrites it with the entity's decision.
+const referencedEndpointStubSentinel = "acr-context-fabric:unresolved-referenced-endpoint"
+
+// stubFailsClosed reports whether a REFERENCED stub of this kind must not
+// inherit the referencing record's authorization scope. Only kinds whose
+// canonical entity a producer ALWAYS projects (team and project, from the
+// teams / projects tables) fail closed: an ownership edge carries the scope of
+// ONE repository, and copying it onto a team/project stub admitted a principal
+// scoped to that repository to the node before (or without) its entity
+// (codex #724 r3). Other kinds keep the pre-existing behaviour: entity-less
+// stubs of those kinds (repository, work item, ...) would otherwise become
+// invisible; measuring per kind is a follow-up before widening.
+func stubFailsClosed(kind contextfabric.SubjectKind) bool {
+	return kind == contextfabric.SubjectTeam || kind == contextfabric.SubjectProject
+}
+
 // subjectMergeAttrs builds the SET n += $attrs payload for a subject node.
 // Cypher's SET n += $map only ever touches the keys present in $map (verified
 // live: docs/design/context-fabric-falkordb-adapter.md §4.3), so "does this
@@ -217,6 +239,11 @@ func subjectMergeAttrs(subject contextfabric.SubjectRef, authorization contextfa
 		propAuthzTeams:    authorizationValue(authorization.TeamIDs),
 		propEvidenceRefs:  graphrank.UniqueSorted(evidence),
 		propSourceVersion: sourceVersion,
+	}
+	if entityOwned == nil && stubFailsClosed(subject.Kind) {
+		// CHAOS-7242: a referenced team/project stub asserts identity and NO
+		// authorization; the canonical entity write decides it.
+		attrs[propAuthzRepos] = []string{referencedEndpointStubSentinel}
 	}
 	if !observedAt.IsZero() {
 		attrs[propObservedAt] = observedAt.UTC().Format(time.RFC3339Nano)

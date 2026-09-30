@@ -231,7 +231,30 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // team node keeps its old raw list until its entity is re-projected, and its
 // team row / ownership rows carry an updated_at already behind the checkpoint
 // watermark, so only a full rebuild replaces it.
-const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v15"
+//
+// v15 -> v16 (CHAOS-7242): falkorgraph's referenced team/project endpoint stubs
+// no longer inherit a relationship's one-repository authorization scope (they
+// carry a fail-closed sentinel until the canonical entity merges). The stub
+// MERGE writes attrs ON CREATE only, so a stub created by an earlier build
+// keeps its old scope in a graph that is merely re-projected on top. A
+// REBUILD starts from an EMPTY graph (legacy: PurgeOrganization deletes the org
+// graph, projectionrun/coordinator.go performRebuild; lifecycle: a build-aside
+// epoch graph, beginLifecycleBuild), so it is the heal.
+//
+// What the bump actually forces: the next teams/projects batch this source
+// produces under v16 is refused with ErrProjectionSourceVersionChanged
+// (projector.go) until the org is rebuilt. It does NOT make the graph epoch
+// activation check the source version, so it does not cover (a) a lifecycle
+// ROLLBACK that restores a pre-v16 grace epoch, (b) a resumed build that flips
+// with a source already marked terminal at a pre-v16 version, or (c) a dormant
+// or disabled teams/projects source, which produces no batch for the guard to
+// refuse (freshness only logs that a rebuild is required). All three return to
+// the pre-#740 baseline (legacy stubs keep their old scope); the class fix (an
+// activation-time version guard on flip/resume/rollback) is lifecycle work,
+// follow-up filed separately. Operationally: after the forced rebuild, prove the
+// active epoch's recorded source version and retire the pre-v16 grace epoch
+// (RUNBOOK-REV21-7242); roll back across v16 by helm rollback only.
+const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v16"
 
 // teamsProjectsTables is this source's bounded coverage. Both tables were
 // already canonical Dev Health data; neither introduces a new ingest path.
