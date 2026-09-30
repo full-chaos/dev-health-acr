@@ -287,14 +287,14 @@ func TestT13EveryPersonVariableRefusedAtTheEdge(t *testing.T) {
 
 // ---------------------------------------------------------------- T2
 
-// TestT2OrgIsolationEveryOperation: two organizations, all 16 operations.
+// TestT2OrgIsolationEveryOperation: two organizations, all 19 operations.
 // The orgId variable and X-DH-Internal-Org-Id are always the principal's
 // organization; the service never sees the other one.
 func TestT2OrgIsolationEveryOperation(t *testing.T) {
 	cat, _ := directread.DefaultCatalogue()
 	ops := cat.Operations(directread.CallerUnrestricted)
-	if len(ops) != 16 {
-		t.Fatalf("unrestricted catalogue has %d operations, want 16", len(ops))
+	if len(ops) != 19 {
+		t.Fatalf("unrestricted catalogue has %d operations, want 19", len(ops))
 	}
 	for _, op := range ops {
 		var orgPaths []string

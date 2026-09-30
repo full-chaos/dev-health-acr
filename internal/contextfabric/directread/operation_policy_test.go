@@ -96,8 +96,8 @@ func TestEmbeddedCopyIsByteIdenticalToContract(t *testing.T) {
 
 func TestCatalogueServesSixteenAndThree(t *testing.T) {
 	cat := loadDefault(t)
-	if got := len(cat.Operations(CallerUnrestricted)); got != 16 {
-		t.Fatalf("unrestricted caller: %d operations, want 16", got)
+	if got := len(cat.Operations(CallerUnrestricted)); got != 19 {
+		t.Fatalf("unrestricted caller: %d operations, want 19", got)
 	}
 	var restricted []string
 	for _, op := range cat.Operations(CallerRestricted) {
