@@ -316,3 +316,17 @@ func TestForwardedClientRidesEveryToolCall(t *testing.T) {
 		t.Fatalf("acr-api saw only %d distinct routes %v; every tool must reach it (capabilities + %d tools)", len(paths), paths, len(calls))
 	}
 }
+
+// The deployed ingress shape (compute-full-forwarded-for=false): one entry,
+// the real client, from a trusted ingress peer.
+func TestEdgeGateResolvesTheRealClientFromTheSingleEntryIngressChain(t *testing.T) {
+	hosted := newHostedAPI(t)
+	e := newEndpointWithGate(t, hosted, acrmcp.EdgeGateOptions{TrustedProxyCIDRs: []string{"127.0.0.0/8", "::1/128", "10.42.0.1/32"}})
+	valid := hosted.issue(readScopes, []string{repoPlain}, nil)
+	if status := gateStatus(t, e, valid.token, "203.0.113.52"); status != http.StatusOK {
+		t.Fatalf("status %d", status)
+	}
+	if seen := hosted.forwardedFor(); len(seen) != 1 || seen[0] != "203.0.113.52" {
+		t.Fatalf("acr-api saw X-Forwarded-For %v, want [203.0.113.52]", seen)
+	}
+}
