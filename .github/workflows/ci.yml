@@ -263,11 +263,20 @@ jobs:
     # union of these four shards is exactly `go list ./...` with nothing
     # doubled, and that the comparison saying so can actually reject a union
     # with a package missing.
+    # CHAOS-7282: legs 1-4 are the round-robin (`--with-isolated N 4`); leg 5
+    # is NOT a fifth round-robin slice but the dedicated leg scripts/ci/
+    # test-shard.sh hands total+1 -- internal/contextfabric/devhealthfacts
+    # alone (unit_dedicated_packages). That package is one serial binary that
+    # measured 866-869s wall against a 900s ceiling while sharing a runner
+    # with sibling packages; alone it gets GOTEST_DEVHEALTHFACTS_TIMEOUT
+    # (Makefile) via the same `make isolated-timeout` lookup below.
+    # test-shard-closure.sh calls every leg 1-5 and requires their union to be
+    # exactly `go list ./...`, so the package cannot silently leave every leg.
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
-    name: unit (shard ${{ matrix.shard }} of 4)
+        shard: [1, 2, 3, 4, 5]
+    name: unit (shard ${{ matrix.shard }} of 5)
     runs-on: ubuntu-latest
     # mirror-preflight is a single job again (the ARC pool is gone), so a
     # plain `needs:` is correct: the default skip-cascade now does the right
@@ -469,16 +478,16 @@ jobs:
           pattern: go-unit-shard-*
           path: .tmp/unit-shards
       - name: Merge JUnit reports
-        run: go run ./ci/mergetestreports junit -dir .tmp/unit-shards -expect 4 -out .tmp/coverage/junit.xml
+        run: go run ./ci/mergetestreports junit -dir .tmp/unit-shards -expect 5 -out .tmp/coverage/junit.xml
       - name: Merge coverage profiles and convert to Cobertura once
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
-          go run ./ci/mergetestreports coverage -dir .tmp/unit-shards -expect 4 -out .tmp/coverage/cover.out
+          go run ./ci/mergetestreports coverage -dir .tmp/unit-shards -expect 5 -out .tmp/coverage/cover.out
           make coverage-cobertura
       - name: List every shard's failed tests
         if: ${{ !cancelled() }}
-        run: go run ./ci/mergetestreports failures -dir .tmp/unit-shards -expect 4 -summary "$GITHUB_STEP_SUMMARY" -report .tmp/coverage/failures.json
+        run: go run ./ci/mergetestreports failures -dir .tmp/unit-shards -expect 5 -summary "$GITHUB_STEP_SUMMARY" -report .tmp/coverage/failures.json
       # The behaviour check. The steps above are text a later edit can disable,
       # gate off, or replace with `true` while this job still reads green;
       # this one recomputes testcase / suite counts from the raw shard files
@@ -489,7 +498,7 @@ jobs:
       # greps for every step as a second line, and cannot see any of this.)
       - name: Verify the merged reports against the shards
         if: ${{ !cancelled() }}
-        run: go run ./ci/mergetestreports crosscheck -dir .tmp/unit-shards -expect 4 -junit .tmp/coverage/junit.xml -cover .tmp/coverage/cover.out -cobertura .tmp/coverage/coverage.xml -failures .tmp/coverage/failures.json
+        run: go run ./ci/mergetestreports crosscheck -dir .tmp/unit-shards -expect 5 -junit .tmp/coverage/junit.xml -cover .tmp/coverage/cover.out -cobertura .tmp/coverage/coverage.xml -failures .tmp/coverage/failures.json
       # actions/upload-artifact v7.0.1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: ${{ !cancelled() }}

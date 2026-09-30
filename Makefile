@@ -63,6 +63,16 @@ GOTEST_CONTEXTFABRIC_TIMEOUT ?= 750s
 # re-measured from its first hosted run (race-devhealthsource prints it and
 # fails past 85% of this budget) and this number retuned from that evidence.
 GOTEST_DEVHEALTHSOURCE_TIMEOUT ?= 600s
+# CHAOS-7282: internal/contextfabric/devhealthfacts' plain (non-race) budget,
+# used by its own `unit` matrix leg (scripts/ci/test-shard.sh unit-dedicated
+# legs; ci.yml). The package is ONE serial test binary: 445 tests, one shared
+# ClickHouse container, per-test wall summing to 816s of an 866s package wall
+# on main cdc7222a (869s on #735) -- measured while sharing a runner with
+# sibling packages, against the old 900s ceiling (34s of margin). 1800s is
+# >= 2x that worst measured wall; it is a ceiling for a hung binary, not a
+# target. The hosted dedicated leg prints its own duration and the budget
+# must be retuned from that evidence (see the CHAOS-7282 PR).
+GOTEST_DEVHEALTHFACTS_TIMEOUT ?= 1800s
 VERSION_PKG := github.com/full-chaos/dev-health-acr/internal/version
 
 # Pinned exact versions (not @latest) so the coverage/JUnit toolchain is
@@ -122,6 +132,7 @@ test-split:
 		case "$$pkg" in \
 			*/internal/contextfabric) timeout="$(GOTEST_CONTEXTFABRIC_TIMEOUT)" ;; \
 			*/internal/contextfabric/devhealthsource) timeout="$(GOTEST_DEVHEALTHSOURCE_TIMEOUT)" ;; \
+			*/internal/contextfabric/devhealthfacts) timeout="$(GOTEST_DEVHEALTHFACTS_TIMEOUT)" ;; \
 			*) timeout="$(GOTEST_ISOLATED_TIMEOUT)" ;; \
 		esac; \
 		echo "test-split: $$pkg (GOTEST_PLAIN_TIMEOUT=$$timeout)"; \
@@ -233,6 +244,7 @@ isolated-timeout:
 	@case "$(PKG)" in \
 		*/internal/contextfabric) echo "$(GOTEST_CONTEXTFABRIC_TIMEOUT)" ;; \
 		*/internal/contextfabric/devhealthsource) echo "$(GOTEST_DEVHEALTHSOURCE_TIMEOUT)" ;; \
+		*/internal/contextfabric/devhealthfacts) echo "$(GOTEST_DEVHEALTHFACTS_TIMEOUT)" ;; \
 		*) echo "$(GOTEST_ISOLATED_TIMEOUT)" ;; \
 	esac
 
