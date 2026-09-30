@@ -219,12 +219,9 @@ func producerGrammars() []producerGrammar {
 		{kind: contractsv1.ContextFabricEvidenceEntityAIArtifact, shape: "sql/1", onRecord: noSourceRow, sites: sites(catalog)},
 		{kind: contractsv1.ContextFabricEvidenceEntityReviewOutcome, shape: "sql/1", onRecord: noSourceRow, sites: sites(catalog)},
 
-		// RETIRED (CHAOS-7252): no Go producer mints them any more; their
-		// packet catalog locators remain (ev2 handles clients hold hash
-		// them), and both fail -- the dependency join of three ids, and
-		// edge_id, which is not the edge table's key.
-		{kind: contractsv1.ContextFabricEvidenceEntityWorkItemDependency, shape: "sql/3", retired: true, sites: sites(catalog)},
-		{kind: contractsv1.ContextFabricEvidenceEntityDeploymentIncident, shape: "sql/1", retired: true, rowQuery: "deployment_incident_provenance.v1", keyColumns: []string{"edge_id"}, sites: sites(catalog)},
+		// RETIRED (CHAOS-7252): no producer mints them any more. The packet
+		// catalog's two locators (CHAOS-7261) now render the ".v2" grammar
+		// below, so ev2 handles hash an injective locator.
 
 		// The ".v2" successors: minted by evidenceref.Mint, read by the SQL
 		// evidenceref.SQL renders from the same grammar.
@@ -235,7 +232,7 @@ func producerGrammars() []producerGrammar {
 		{kind: contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, shape: "sqlmint/3", rowQuery: "work_item_dependencies.v2",
 			keyColumns:    []string{"source_work_item_id", "target_work_item_id", "relation_key"},
 			keyExceptions: map[string]string{"relationship_type": "relation_key (CHAOS-7177), as above"},
-			sites:         sites(sourceRows)},
+			sites:         sites(sourceRows, catalog)},
 		{kind: contractsv1.ContextFabricEvidenceEntityWorkItemHierarchyV2, shape: "mint/3", repoAnchored: true, rowQuery: "work_item_hierarchy.v2",
 			keyColumns: []string{"repo_id", "work_item_id", "parent_id"}, sites: sites(source + "tables.go|queryWorkItemHierarchy")},
 		{kind: contractsv1.ContextFabricEvidenceEntityWorkItemHierarchyV2, shape: "sqlmint/3", repoAnchored: true, rowQuery: "work_item_hierarchy.v2",
@@ -247,7 +244,7 @@ func producerGrammars() []producerGrammar {
 		{kind: contractsv1.ContextFabricEvidenceEntityDeploymentIncidentV2, shape: "mint/4", repoAnchored: true, rowQuery: "deployment_incident_edges.v2",
 			keyColumns: []string{"repo_id", "deployment_id", "incident_id", "source"}, sites: sites(source + "tables.go|queryDeploymentIncidentEdges")},
 		{kind: contractsv1.ContextFabricEvidenceEntityDeploymentIncidentV2, shape: "sqlmint/4", repoAnchored: true, rowQuery: "deployment_incident_edges.v2",
-			keyColumns: []string{"repo_id", "deployment_id", "incident_id", "source"}, sites: sites(sourceRows)},
+			keyColumns: []string{"repo_id", "deployment_id", "incident_id", "source"}, sites: sites(sourceRows, catalog)},
 		{kind: contractsv1.ContextFabricEvidenceEntityProjectTeamV2, shape: "mint/4", keyByColumns: true,
 			keyColumns:    []string{"provider", "project_id", "team_id", "source"},
 			keyExceptions: map[string]string{"valid_from": "the ref names the projector's ownership GROUP: every assertion of (provider, project, team, source) aggregated"},
