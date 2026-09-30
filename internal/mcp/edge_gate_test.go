@@ -330,3 +330,54 @@ func TestEdgeGateResolvesTheRealClientFromTheSingleEntryIngressChain(t *testing.
 		t.Fatalf("acr-api saw X-Forwarded-For %v, want [203.0.113.52]", seen)
 	}
 }
+
+// refusingLimiter refuses every attempt with a fixed decision.
+type refusingLimiter struct {
+	auth.AttemptLimiter
+	decision auth.AttemptDecision
+}
+
+func (r refusingLimiter) BeginAttemptDecision(string, time.Time) (func(), auth.AttemptDecision) {
+	return nil, r.decision
+}
+func (r refusingLimiter) BeginAttempt(string, time.Time) (func(), bool) { return nil, false }
+func (r refusingLimiter) RetryAfter(string, time.Time) time.Duration    { return time.Second }
+
+// gate_decision names the bound that refused, one value per limiter refusal
+// (CHAOS-7196 item 2: capacity is no longer reported as failure_budget).
+func TestEdgeGateLogsWhichBoundRefused(t *testing.T) {
+	for refusal, want := range map[auth.AttemptRefusal]string{
+		auth.RefusalFailureBudget: "failure_budget", auth.RefusalInFlight: "in_flight",
+		auth.RefusalTrackedKeys: "tracked_keys", auth.RefusalUnspecified: "unspecified",
+	} {
+		hosted := newHostedAPI(t)
+		e := newEndpointWithGate(t, hosted, acrmcp.EdgeGateOptions{Limiter: refusingLimiter{decision: auth.AttemptDecision{Refusal: refusal}}})
+		if status := gateStatus(t, e, "junk", ""); status != http.StatusTooManyRequests {
+			t.Fatalf("%s: status %d, want 429", refusal, status)
+		}
+		var last map[string]any
+		for _, line := range bytes.Split(bytes.TrimSpace(e.logs.Bytes()), []byte("\n")) {
+			var entry map[string]any
+			if json.Unmarshal(line, &entry) == nil && entry["msg"] == acrmcp.HTTPRequestLogMessage {
+				last = entry
+			}
+		}
+		if last == nil || last["gate_decision"] != want || last["auth_outcome"] != "rate_limited" {
+			t.Fatalf("%s: request line = %v, want gate_decision=%s", refusal, last, want)
+		}
+	}
+}
+
+// Through the real limiter: a full tracked-key table is logged as
+// tracked_keys, not as an exhausted failure budget.
+func TestEdgeGateTrackedKeyExhaustionIsNotLoggedAsFailureBudget(t *testing.T) {
+	hosted := newHostedAPI(t)
+	e := newEndpointWithGate(t, hosted, acrmcp.EdgeGateOptions{MaxTrackedKeys: 1, TrustedProxyCIDRs: []string{"127.0.0.0/8", "::1/128"}})
+	gateStatus(t, e, "junk", "203.0.113.80")
+	if status := gateStatus(t, e, "junk", "203.0.113.81"); status != http.StatusTooManyRequests {
+		t.Fatalf("status %d, want 429 (table full)", status)
+	}
+	if !strings.Contains(string(e.logs.Bytes()), `"gate_decision":"tracked_keys"`) {
+		t.Fatalf("no tracked_keys decision in %s", e.logs.Bytes())
+	}
+}

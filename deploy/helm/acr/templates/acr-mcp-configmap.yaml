@@ -31,6 +31,16 @@ data:
   ACR_API_ALLOW_INSECURE_INTERNAL_HTTP: "true"
   {{- end }}
   ACR_LOG_LEVEL: {{ $m.logLevel | quote }}
+  {{- /* The edge failure gate must resolve the same limits as acr-api (CHAOS-7196):
+       ACR_REQUESTS_PER_MINUTE is the fallback of the failure limit; explicit
+       ACR_AUTH_* / ACR_LIMIT_WINDOW literals set through deployment.extraEnv
+       for acr-api are mirrored here so one value configures both. */}}
+  ACR_REQUESTS_PER_MINUTE: {{ .Values.config.requestsPerMinute | quote }}
+  {{- range $e := .Values.deployment.extraEnv }}
+  {{- if and (hasKey $e "value") (or (hasPrefix "ACR_AUTH_" $e.name) (eq $e.name "ACR_LIMIT_WINDOW")) }}
+  {{ $e.name }}: {{ $e.value | toString | quote }}
+  {{- end }}
+  {{- end }}
   {{- if $m.trustedProxyCidrs }}
   ACR_MCP_TRUSTED_PROXY_CIDRS: {{ join "," $m.trustedProxyCidrs | quote }}
   {{- end }}

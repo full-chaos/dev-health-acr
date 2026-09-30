@@ -101,8 +101,11 @@ func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler
 		// the budget, and every refusal below reaches RecordFailure. A success
 		// does not reset the count either, so a guessing burst cannot be
 		// laundered through one valid token.
-		release, admitted := a.limiter.BeginAttempt(ip, now)
-		if !admitted {
+		release, decision := BeginAttemptDecision(a.limiter, ip, now)
+		if !decision.Admitted() {
+			// Three different bounds answer with the same 429; the log line
+			// is where an operator tells them apart.
+			a.logger.InfoContext(r.Context(), "ACR authentication attempt refused", "reason", string(decision.Refusal), "in_flight", decision.InFlight, "remote_ip", logsanitize.SanitizeLogAttr(ip), "request_id", logsanitize.SanitizeLogAttr(requestID(r)))
 			retryAfter := a.limiter.RetryAfter(ip, now)
 			if retryAfter <= 0 {
 				retryAfter = time.Second

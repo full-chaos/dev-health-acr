@@ -69,13 +69,20 @@ func newEdgeGate(o EdgeGateOptions) (*edgeGate, error) {
 
 func (g *edgeGate) clientIP(r *http.Request) string { return g.resolver(r) }
 
-// refusalReason names which bound refused an address after BeginAttempt said
-// no: the failure budget, or capacity (in-flight or tracked-address table).
-func (g *edgeGate) refusalReason(ip string, now time.Time) string {
-	if g.limiter.FailureBlocked(ip, now) {
-		return HTTPGateFailureBudget
+// begin admits one attempt and, when refused, names the bound that refused it.
+func (g *edgeGate) begin(ip string, now time.Time) (func(), string) {
+	release, decision := auth.BeginAttemptDecision(g.limiter, ip, now)
+	switch decision.Refusal {
+	case auth.RefusalNone:
+		return release, HTTPGateAdmitted
+	case auth.RefusalFailureBudget:
+		return nil, HTTPGateFailureBudget
+	case auth.RefusalInFlight:
+		return nil, HTTPGateInFlight
+	case auth.RefusalTrackedKeys:
+		return nil, HTTPGateTrackedKeys
 	}
-	return HTTPGateCapacity
+	return nil, HTTPGateUnspecified
 }
 
 func (g *edgeGate) retryAfter(ip string, now time.Time) time.Duration {
