@@ -82,6 +82,10 @@ type RuntimeDependencies struct {
 	// configured and this is nil, the retrieval route fails closed as
 	// unavailable rather than serve an undecided result.
 	StoredResultGate StoredResultAuthorizer
+	// SourceRows expands a Context Fabric evidence ref to the Dev Health row
+	// its id names (CHAOS-6180), before the persisted-record path. Optional:
+	// nil (no ClickHouse composed) leaves every ref on the persisted record.
+	SourceRows contextfabric.SourceRowResolver
 	// DirectReadGate and DirectFactReader are the shared base of the direct
 	// data tools (CHAOS-7071): the mandatory subject gate every direct read
 	// passes, and the only path from a direct tool to the fact registry.

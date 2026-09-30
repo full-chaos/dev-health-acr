@@ -73,6 +73,15 @@ func TestTrialDataSeedTeamRepoOwnershipSatisfiesCurrentPredicate(t *testing.T) {
 		t.Fatalf("execute rendered team-repo-ownership-seed.sql: %v\n%s", err, rendered)
 	}
 
+	// CHAOS-7130: the team authorization list is built from RESOLVED ownership,
+	// so each seeded name must resolve to a repos row of the same provider
+	// (the trial store's repos table carries them; this fixture has none).
+	if err := direct.Exec(ctx, `INSERT INTO repos (id, repo, ref, created_at, tags, last_synced, org_id, provider)
+SELECT generateUUIDv4(), repo_full_name, NULL, now64(3), NULL, now64(3), org_id, provider
+FROM (SELECT DISTINCT org_id, provider, repo_full_name FROM team_repo_ownership WHERE org_id = ?)`, orgID); err != nil {
+		t.Fatalf("seed repos rows for the seeded ownership names: %v", err)
+	}
+
 	source, err := devhealthsource.NewTeamsProjectsSource(query, true)
 	if err != nil {
 		t.Fatalf("new teams/projects source: %v", err)

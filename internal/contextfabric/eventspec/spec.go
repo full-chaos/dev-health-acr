@@ -2398,6 +2398,8 @@ var DirectRelationshipsRead = Event{
 var (
 	evidenceExpansionReasonArr     = contextfabric.EvidenceExpansionReasonVocabulary()
 	evidenceExpansionEntityTypeArr = contractsv1.ContextFabricEvidenceEntityTypeVocabulary()
+	sourceRowReasonArr             = contextfabric.SourceRowReasonVocabulary()
+	sourceRowGrammarArr            = contextfabric.SourceRowGrammarVocabulary()
 )
 
 // EvidenceExpansion records every expansion of a Context Fabric evidence ref
@@ -2407,6 +2409,13 @@ var (
 // result-by-id serving rules withheld, and the one
 // reason that decided the outcome. A ref that cannot be served is never a
 // silent not-found: its reason names why.
+//
+// CHAOS-6180: the source-row resolution runs first and is recorded on the
+// same line: its closed reason, the statement it planned, the id grammar, how
+// many repositories the lookups returned and how many of them the caller's
+// grant admits, and how many rows the reads returned. The counts tell an
+// out-of-grant row (repositories > admitted) from an absent one in the trace,
+// never on the wire.
 var EvidenceExpansion = Event{
 	ID: "contextfabric.evidence_expansion", Msg: contextfabric.EvidenceExpansionLogMessage, Level: LevelInfo,
 	Multiplicity: MultiplicityExactlyOnePerRequest, Attribution: []string{"org_id"},
@@ -2423,7 +2432,13 @@ var EvidenceExpansion = Event{
 		{Key: "unavailable_count", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "withheld_count", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "authorization_reason", Type: FieldString, Presence: PresenceConditional, Applicability: "written when a citing result reached the stored-result authorization", ClosedVocabulary: arrayTokens(storedResultReasonArr[:])},
-		{Key: "error_class", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the search, a read, the authorization or the built expansion failed", ClosedVocabulary: []string{"deadline_exceeded", "canceled", "dependency_unavailable", "internal"}},
+		{Key: "source_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(sourceRowReasonArr[:])},
+		{Key: "source_query", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the ref's kind has a source-row statement", ClosedVocabulary: contextfabric.SourceRowQueryVocabulary()},
+		{Key: "source_grammar", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the source-row resolver read the source and chose an id grammar", ClosedVocabulary: sourceRowGrammarArr[:]},
+		{Key: "source_repositories", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the source-row resolver read the source"},
+		{Key: "source_admitted", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the source-row resolver read the source"},
+		{Key: "source_rows", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the source-row resolver read the source"},
+		{Key: "error_class", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the search, a read, the authorization, a source-row read or the built expansion failed", ClosedVocabulary: []string{"deadline_exceeded", "canceled", "dependency_unavailable", "internal"}},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }
