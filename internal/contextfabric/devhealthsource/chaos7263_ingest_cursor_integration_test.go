@@ -215,6 +215,25 @@ func TestCHAOS7263IngestTimeCursor(t *testing.T) {
 		}
 	})
 
+	// The memo is per process. A projector that restarts with a saved cursor
+	// starts its first pass at (frontier - 2*overlap), so a row that landed
+	// behind the frontier while no process was walking is still found.
+	t.Run("a restarted projector finds a row that landed behind the saved cursor while it was down", func(t *testing.T) {
+		h := newHarness(t, "72630000-0000-4000-8000-00000000000b", "72630000-0000-4000-8000-0000000000ab", 15*time.Minute, nil)
+		h.workItem("WI-frontier", now.Add(-time.Hour), now.Add(-10*time.Minute))
+		first := h.drain("")
+		h.workItem("WI-landed-while-down", now.Add(-3*time.Hour), now.Add(-15*time.Minute))
+		restarted, err := devhealthsource.NewClickHouseProjectionSource(query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		restarted.SetClockForTest(func() time.Time { return now })
+		h.src = restarted
+		if second := h.drain(first.cursor); second.items[title("WI-landed-while-down")].Subject.Label == "" {
+			t.Fatalf("the restarted source did not re-read the window behind the saved cursor (%d items)", len(second.items))
+		}
+	})
+
 	// PeekProjectionBatch must stay side-effect free: a peek that walks the
 	// window may not mark a late row as emitted, or the next real tick skips
 	// a row no batch ever carried.
