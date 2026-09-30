@@ -417,7 +417,7 @@ func BuildDataCatalog(catalogue *Catalogue, caller CatalogCaller, sections []str
 		source := catalogue.Source()
 		out.Versions.OpsRepository = source.Repository
 		out.Versions.OpsSourceSHA = source.Commit
-		out.Versions.SchemaDigest = catalogue.SchemaDigest()
+		out.Versions.SchemaDigest = catalogue.StampedSchemaDigest()
 	}
 	for _, section := range sections {
 		switch section {

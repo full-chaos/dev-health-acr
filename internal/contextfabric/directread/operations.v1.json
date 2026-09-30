@@ -3,11 +3,11 @@
   "generator": "cmd/operationpolicy",
   "source": {
     "repository": "full-chaos/dev-health-ops",
-    "commit": "9dffd5f77bf9bfc415b68f5236fdc8275e8f6b85",
+    "commit": "cb758a29d89178bd83ca8aaefe95e38bb08cc7fb",
     "tool": "go run ./cmd/registrydump -file internal/queryapi/server/query_route.go",
-    "schema_digest": "sha256:d5ba09b1f460953482518ae4f5653ba6350b085bdc39621c5888756741118117",
-    "registry_sha256": "d90c184bf7d6418e25bc7b56b4a3680402b27acd4d27b333f51bd14f58a82b93",
-    "registry_rows": 55
+    "schema_digest": "sha256:dd83956f18b52a3acf89e73e1f25b0dcf25df706d90eca49c5b66f8b8994f779",
+    "registry_sha256": "25786efd92fb390eb9188f547b71dc0b5a0d012bdba94d372fd20483d5738439",
+    "registry_rows": 58
   },
   "person_name_tokens": [
     "actor",
@@ -5436,6 +5436,13 @@
       "reason": "turns an execution error into an empty result with no error ([ops] analytics/resolve.go:549-556; design D.3)"
     },
     {
+      "name": "home",
+      "kind": "query",
+      "digest": "9776798e809030868e3a7fc8643b06d122573f03a3c48a7710d86b1842b33554",
+      "code": "unknown_operation",
+      "reason": "no scope rule or no honest status yet (design D.3)"
+    },
+    {
       "name": "improveOpportunities",
       "kind": "query",
       "digest": "8890d7aeddfebaa9683d6c8834c82b059e345af1dbf42db14eebba840fcd87d2",
@@ -5483,6 +5490,13 @@
       "digest": "8e2847048e3b70b0391f45d9cd8804735ea4401b7e78cd614e35e49ca39e348f",
       "code": "unknown_operation",
       "reason": "operator or superuser view (design D.3)"
+    },
+    {
+      "name": "recommendations",
+      "kind": "query",
+      "digest": "c6261e9cb250f22f909e81c54b0c92e6d9e01aea7c25aa0a96919633e2c33276",
+      "code": "unknown_operation",
+      "reason": "no scope rule or no honest status yet (design D.3)"
     },
     {
       "name": "releaseImpact",
@@ -5560,6 +5574,13 @@
       "digest": "276ea75cf12ec0ecde5a75bdbfbb0a8a11c4ec9fc613a0f80fcd6b7a8ccc050f",
       "code": "unknown_operation",
       "reason": "mutation: the MCP surface is read-only; never served (design D.3)"
+    },
+    {
+      "name": "workItemTeamAttributions",
+      "kind": "query",
+      "digest": "d1331c8f0d3e1874b32efdf51392e3fe154f445c4d5d64441d5d560d5b21e2a1",
+      "code": "unknown_operation",
+      "reason": "no scope rule or no honest status yet (design D.3)"
     },
     {
       "name": "workUnitTeamAttributions",
