@@ -44,6 +44,9 @@ func TestCHAOS7263IngestTimeCursor(t *testing.T) {
 		if logs != nil {
 			src.WithLogger(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
 		}
+		// The clock dates overlap passes; pinning it makes every window edge
+		// below exact.
+		src.SetClockForTest(func() time.Time { return now })
 		mustExec(t, ctx, direct, `INSERT INTO repos (id, repo, ref, created_at, tags, last_synced, org_id, provider) VALUES (?,?,?,?,?,?,?,?)`, repoID, "acme/probe-"+orgID[len(orgID)-2:], nil, now, nil, now.Add(-3*time.Hour), orgID, "linear")
 		return &ingestHarness{t: t, ctx: ctx, direct: direct, src: src, source: devhealthsource.SourceName, orgID: orgID, repo: repoID}
 	}
@@ -173,22 +176,42 @@ func TestCHAOS7263IngestTimeCursor(t *testing.T) {
 		}
 	})
 
-	// The window is [frontier - overlap, frontier]: the lower edge itself is
-	// inside, one millisecond (the column's precision) below it is not.
+	// The window's lower edge is (start of the last completed pass - overlap -
+	// clock slack), slack = overlap: with the clock pinned at now, 2*overlap
+	// behind now once the first caught-up tick has completed a pass. The edge
+	// itself is inside, one millisecond (the column's precision) below it is
+	// not.
 	t.Run("overlap boundary: the window's lower edge is inclusive, one tick below it is not", func(t *testing.T) {
 		const overlap = 15 * time.Minute
 		h := newHarness(t, "72630000-0000-4000-8000-000000000005", "72630000-0000-4000-8000-0000000000a5", overlap, nil)
-		frontier := now.Add(-10 * time.Minute)
-		h.workItem("WI-frontier", now.Add(-time.Hour), frontier)
+		h.workItem("WI-frontier", now.Add(-time.Hour), now.Add(-10*time.Minute))
 		first := h.drain("")
-		h.workItem("WI-at-edge", now.Add(-4*time.Hour), frontier.Add(-overlap))
-		h.workItem("WI-below-edge", now.Add(-4*time.Hour), frontier.Add(-overlap-time.Millisecond))
+		edge := now.Add(-2 * overlap)
+		h.workItem("WI-at-edge", now.Add(-4*time.Hour), edge)
+		h.workItem("WI-below-edge", now.Add(-4*time.Hour), edge.Add(-time.Millisecond))
 		second := h.drain(first.cursor)
 		if _, ok := second.items[title("WI-at-edge")]; !ok {
-			t.Fatalf("a row stamped exactly at frontier-overlap was not re-read: %v", second.items)
+			t.Fatalf("a row stamped exactly at the window's lower edge was not re-read: %v", second.items)
 		}
 		if _, ok := second.items[title("WI-below-edge")]; ok {
 			t.Fatalf("a row stamped 1ms below the window was re-read: the window is wider than documented")
+		}
+	})
+
+	// A quiet organization's window closes once a pass starts more than
+	// 2*overlap after the frontier: nothing behind the frontier can still land
+	// within the bound, and the walk stops costing reads.
+	t.Run("overlap: a quiet organization's window closes after the bound", func(t *testing.T) {
+		const overlap = 15 * time.Minute
+		h := newHarness(t, "72630000-0000-4000-8000-00000000000a", "72630000-0000-4000-8000-0000000000aa", overlap, nil)
+		frontier := now.Add(-3 * time.Hour)
+		h.workItem("WI-old-frontier", now.Add(-4*time.Hour), frontier)
+		first := h.drain("")
+		// Stamped just behind the frontier but landing now, hours later: far
+		// outside the bound, so a closed window does not re-read it.
+		h.workItem("WI-hours-late", now.Add(-5*time.Hour), frontier.Add(-time.Minute))
+		if second := h.drain(first.cursor); len(second.items) != 0 {
+			t.Fatalf("a closed window re-read a row landing hours after its stamp: %v", second.items)
 		}
 	})
 
@@ -276,48 +299,47 @@ func TestCHAOS7263IngestTimeCursor(t *testing.T) {
 		}
 	})
 
-	// A window busier than one read: the client's max_result_rows is 1,000
-	// and throws past it, so the window must be walked page by page at the
-	// ordinary page size, never read in one oversized statement. A late row
-	// near the window's start is found; one deeper than the walk bound is the
-	// documented limit and is logged.
-	t.Run("overlap over a window holding more than 1,000 rows: no read error, late row found, depth bound logged", func(t *testing.T) {
+	// A window busier than one read. The client's max_result_rows is 1,000
+	// and throws past it, so the window is walked page by page at the
+	// ordinary page size, never in one oversized statement. A tick walks at
+	// most a few pages; a deeper window is NOT cut off there: the walk stops
+	// at the last fully read row and resumes from it on the next call, so a
+	// late row at any depth is found (lossless). The planted window is 1,300
+	// rows (7 pages) with late rows on pages 1, 3 and 7.
+	t.Run("overlap over a window deeper than one tick's walk: no read error, every late row found at any depth", func(t *testing.T) {
 		logs := &bytes.Buffer{}
 		h := newHarness(t, "72630000-0000-4000-8000-000000000006", "72630000-0000-4000-8000-0000000000a6", 15*time.Minute, logs)
 		burst := now.Add(-5 * time.Minute)
 		mustExec(t, ctx, direct, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at, last_synced)
-SELECT concat('WI-burst-', leftPad(toString(number), 5, '0')), ?, ?, concat('issue WI-burst-', toString(number)), 'open', '', '', 'linear', '', ?, ? FROM numbers(1100)`,
+SELECT concat('WI-burst-', leftPad(toString(number), 5, '0')), ?, ?, concat('issue WI-burst-', toString(number)), 'open', '', '', 'linear', '', ?, ? FROM numbers(1300)`,
 			h.repo, h.orgID, now.Add(-time.Hour), burst)
 		first := h.drain("")
-		if got := len(first.items); got != 1100 {
-			t.Fatalf("first drain projected %d work items, want 1100", got)
+		if got := len(first.items); got != 1300 {
+			t.Fatalf("first drain projected %d work items, want 1300", got)
 		}
-		// Caught up over a 1,100-row window: must not fail, must emit nothing.
+		// Caught up over a 1,300-row window: no error, nothing re-emitted, and
+		// the walk says it stopped short of the window's end.
 		if again := h.drain(first.cursor); len(again.batches) != 0 {
 			t.Fatalf("a caught-up tick over a seen window emitted %d batches", len(again.batches))
 		}
-		// Late, inside the window, BEFORE the burst: on the first page walked.
-		h.workItem("WI-late-shallow", now.Add(-3*time.Hour), burst.Add(-time.Minute))
-		// Late, at the burst's own instant, sorting between burst rows 500 and
-		// 501: BEHIND the frontier, on the window's third page -- found only if
-		// the walk steps past pages whose rows were all seen.
-		h.workItem("WI-burst-00500-late", now.Add(-3*time.Hour), burst)
-		// Late, at the burst's own instant, sorting between burst rows 1,050
-		// and 1,051 -- BEHIND the frontier (the last burst row) and deeper
-		// into the window than the walk bound reaches.
-		h.workItem("WI-burst-01050-late", now.Add(-3*time.Hour), burst)
+		if !strings.Contains(logs.String(), "overlap window pass continues on the next tick") {
+			t.Errorf("a walk stopped short of the window's end must be logged; logs:\n%s", logs.String())
+		}
+		// Late rows, all BEHIND the frontier (the last burst row): before the
+		// burst (page 1), between burst rows 500 and 501 (page 3), and between
+		// burst rows 1,250 and 1,251 (page 7, deeper than one tick walks).
+		late := []string{"WI-late-shallow", "WI-burst-00500-late", "WI-burst-01250-late"}
+		h.workItem(late[0], now.Add(-3*time.Hour), burst.Add(-time.Minute))
+		h.workItem(late[1], now.Add(-3*time.Hour), burst)
+		h.workItem(late[2], now.Add(-3*time.Hour), burst)
 		second := h.drain(first.cursor)
-		if _, ok := second.items[title("WI-late-shallow")]; !ok {
-			t.Fatalf("a late row on the window's first page was not projected: %v", len(second.items))
+		for _, id := range late {
+			if _, ok := second.items[title(id)]; !ok {
+				t.Errorf("late row %s was not projected (%d items in the drain): the window walk skipped rows", id, len(second.items))
+			}
 		}
-		if _, ok := second.items[title("WI-burst-00500-late")]; !ok {
-			t.Fatalf("a late row on the window's third page was not projected: the walk did not step past seen pages")
-		}
-		if _, ok := second.items[title("WI-burst-01050-late")]; ok {
-			t.Fatalf("a late row deeper than the walk bound was projected: the bound this test documents is gone -- update the bound's docs")
-		}
-		if !strings.Contains(logs.String(), "overlap window walk stopped at its depth bound") {
-			t.Fatalf("hitting the window's depth bound must be logged; logs:\n%s", logs.String())
+		if second.cursor != first.cursor {
+			t.Fatalf("the window walk moved the cursor (%q -> %q)", first.cursor, second.cursor)
 		}
 	})
 }

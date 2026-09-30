@@ -128,6 +128,9 @@ func (p sourcePlan) nextBatch(ctx context.Context, checkpoint contextfabric.Proj
 	}
 	p.windowScope = windowScopeFor(orgID, checkpoint.Epoch)
 	if checkpoint.Cursor == "" {
+		// From scratch (first run, or a rebuild's reset checkpoint): what
+		// this process emitted before describes a graph that is gone.
+		p.window.reset(p.windowScope)
 		return p.fullSnapshot(ctx, orgID)
 	}
 	state, err := decodeCursor(checkpoint.Cursor)

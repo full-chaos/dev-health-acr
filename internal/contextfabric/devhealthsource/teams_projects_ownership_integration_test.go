@@ -1514,6 +1514,33 @@ func subRetractionOnlyFollowsMaxRaisingProjectWrites(t *testing.T, ctx context.C
 	// partition max. The ambiguity is real; the retraction does not happen.
 	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', ?, 'aaa', 1, 'started', '', ?)`,
 		"AAA-WATERMARK", fixture.orgID, "WM-KEY", at.Add(time.Hour))
+	// The colliding project creates a NEW group behind the cursor whose only
+	// output is a no-op tombstone (its edge was never projected). The overlap
+	// walk emits it once without moving the cursor; it must not repeat, so the
+	// source is quiet again within three ticks.
+	quiet, tombstoneBatches := false, 0
+	for tick := 0; tick < 3 && !quiet; tick++ {
+		batch, available, err := fixture.source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{
+			OrgID: fixture.orgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: cursor,
+		})
+		if err != nil {
+			t.Fatalf("tick %d: %v", tick, err)
+		}
+		if !available {
+			quiet = true
+			break
+		}
+		if batch.NextCursor != cursor || len(batch.Entities) != 0 || len(batch.Relationships) != 0 || hasTombstone(batch, edge) {
+			t.Fatalf("tick %d: want only a non-advancing batch of no-op tombstones, got next=%q entities=%d relationships=%d tombstones=%d", tick, batch.NextCursor, len(batch.Entities), len(batch.Relationships), len(batch.Tombstones))
+		}
+		tombstoneBatches++
+	}
+	if tombstoneBatches == 0 {
+		t.Fatal("the overlap walk never re-read the colliding project's new group: this case no longer exercises a tombstone-only overlap batch")
+	}
+	if !quiet {
+		t.Fatal("the tombstone-only overlap batch kept coming back: the walk did not go quiet within 3 ticks")
+	}
 	afterLowWrite, retracted := drainUntil(t, ctx, fixture, cursor, func(b contextfabric.ProjectionBatch) bool { return hasTombstone(b, edge) })
 	if retracted {
 		t.Fatalf("%q WAS retracted after a projects-side write below the partition max. That is better than documented -- but the design note, this comment and the follow-up ticket all say it cannot happen, and a limitation that has silently been fixed is a lie in the documentation. Re-check the watermark and update all three.", edge)

@@ -585,16 +585,19 @@ this change carries no position space and is read as a reset, i.e. ONE idempoten
 full re-read per organization and source (a one-time read/write spike), which
 also recovers rows the old cursor skipped. A trailing overlap window
 (`ACR_CONTEXT_FABRIC_PROJECTOR_OVERLAP`, default `15m`, must be `> 0`) is
-re-read once the source is caught up, so a row whose ingest stamp landed just
-behind the cursor is still projected; a row that lands later than the window
-after its stamp is not (rebuild). The window is walked in ordinary 200-row pages,
-at most 5 pages per caught-up tick (the ClickHouse client's `max_result_rows`
-is 1,000 and a larger read would fail the tick); a late row deeper into a busier
-window is not re-read, and the projector logs `devhealthsource overlap window
-walk stopped at its depth bound` when that bound is hit. After a projector
-restart the first caught-up tick re-emits the window once (idempotent). Two
-tables still key on their old column until
-ops adds an ingest stamp: `team_project_ownership` and the
+walked once the source is caught up, so a row whose ingest stamp landed just
+behind the cursor is still projected, without moving the cursor. The walk runs
+in passes of ordinary 200-row pages (the ClickHouse client's `max_result_rows`
+is 1,000 and a larger read would fail the tick), at most 5 pages per call; a
+pass that does not reach the window's end stops at the last fully read row and
+resumes there on the next tick, logging `devhealthsource overlap window pass
+continues on the next tick`, so depth never drops a row, it only delays it.
+After a full pass the window's lower edge moves to (pass start - 2 x overlap),
+so a row that lands more than about 2 x overlap after its own ingest stamp is
+not re-read (a rebuild recovers it), and a quiet organization's window closes
+by itself. After a projector restart the first caught-up ticks re-emit the
+window once (idempotent). Two tables still key on their old column until ops
+adds an ingest stamp: `team_project_ownership` and the
 `project_membership_presence` view (cursor-unsound for late-stamped rows, the
 same hazard as before).
 

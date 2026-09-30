@@ -229,3 +229,7 @@ func OwnedRepositoriesJoinSQLForTest() string { return ownedRepositoriesJoinSQL 
 
 // RepositoryTeamsGroupedSQLForTest exposes the shared derivation (CHAOS-7130).
 func RepositoryTeamsGroupedSQLForTest() string { return repositoryTeamsGroupedSQL() }
+
+// SetClockForTest pins the source's clock, which dates overlap-window passes
+// (overlap.go), so a window edge can be asserted to the millisecond.
+func (s *ClickHouseProjectionSource) SetClockForTest(now func() time.Time) { s.now = now }
