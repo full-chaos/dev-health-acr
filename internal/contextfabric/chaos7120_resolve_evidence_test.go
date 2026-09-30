@@ -71,8 +71,14 @@ func TestChaos7120ResolveEvidenceMapsEntityFormsExactly(t *testing.T) {
 			t.Errorf("%s: ref = %+v, want %s %s", tc.name, ref, tc.wantKind, tc.wantCanon)
 		}
 	}
-	// A dependency edge names no subject: opaque.
-	if ref, ok, own := resolveEvidence(workA1_7120, evidence7120(contractsv1.ContextFabricEvidenceEntityWorkItemDependency, "WB-9:WA-1")); !ok || own || !ref.opaque {
-		t.Errorf("dependency evidence = %+v ok=%v own=%v, want opaque", ref, ok, own)
+	// A dependency edge names no subject: opaque -- the ".v2" ref producers
+	// mint now (CHAOS-7252) and the retired one stored results still hold.
+	for _, id := range []string{
+		evidence7120(contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, "WB-9:WA-1:blocks%3Afwd"),
+		contractsv1.ContextFabricEvidenceRefPrefix + string(contractsv1.ContextFabricEvidenceEntityWorkItemDependency) + ":WB-9:WA-1",
+	} {
+		if ref, ok, own := resolveEvidence(workA1_7120, id); !ok || own || !ref.opaque {
+			t.Errorf("dependency evidence %q = %+v ok=%v own=%v, want opaque", id, ref, ok, own)
+		}
 	}
 }

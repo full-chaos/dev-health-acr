@@ -2,10 +2,12 @@ package devhealthsource_test
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/evidenceref"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -104,7 +106,8 @@ func TestChaos7150RelatesMapsOnTheUnresolvedTargetBranch(t *testing.T) {
 	}
 	edge := batch.Relationships[0]
 	// The id converges with the live lowercase relates_to row on this branch
-	// too, and the evidence ref keeps the RAW source spelling.
+	// too, and so does the evidence ref: it names the canonical relation
+	// (CHAOS-7252, folding CHAOS-7238), not the raw source spelling.
 	native := [][]any{unresolvedDependencyRow("WI-1", "EXT-1", "relates_to", at, created)}
 	nativeBatch, _, nativeErr, _ := projectWithQuarantineLog(t, dependencyTablesOnly(t, at, native), testCursor(t, at.Add(-time.Hour), ""))
 	if nativeErr != nil || len(nativeBatch.Relationships) != 1 {
@@ -113,9 +116,9 @@ func TestChaos7150RelatesMapsOnTheUnresolvedTargetBranch(t *testing.T) {
 	if edge.RelationshipID != nativeBatch.Relationships[0].RelationshipID {
 		t.Fatalf("unresolved branch: relates and relates_to must converge: %q vs %q", edge.RelationshipID, nativeBatch.Relationships[0].RelationshipID)
 	}
-	wantRef := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItemDependency, "repo-1:WI-1:EXT-1:relates")
-	if len(edge.EvidenceRefIDs) != 1 || edge.EvidenceRefIDs[0] != wantRef {
-		t.Fatalf("evidence ref must keep the raw spelling: got %v want %q", edge.EvidenceRefIDs, wantRef)
+	wantRef, _ := evidenceref.Mint(contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, "WI-1", "EXT-1", "relates_to:fwd")
+	if len(edge.EvidenceRefIDs) != 1 || edge.EvidenceRefIDs[0] != wantRef || !reflect.DeepEqual(nativeBatch.Relationships[0].EvidenceRefIDs, []string{wantRef}) {
+		t.Fatalf("evidence ref must name the canonical relation: got %v and %v, want %q", edge.EvidenceRefIDs, nativeBatch.Relationships[0].EvidenceRefIDs, wantRef)
 	}
 }
 

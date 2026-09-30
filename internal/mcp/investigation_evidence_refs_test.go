@@ -35,12 +35,26 @@ func (c *citingInvestigator) Investigate(ctx context.Context, principal storage.
 	return result, err
 }
 
+// citingQuestion asks for room for one ref per kind: the default answer
+// budget (25 refs) is below the vocabulary's 29 since CHAOS-7252, and a
+// driver whose citations do not all fit is dropped whole.
+func citingQuestion() map[string]any {
+	return map[string]any{"question": "what is the status of the project?", "budget": map[string]any{"max_evidence_refs": contractsv1.ContextFabricEvidenceEntityTypeCount}}
+}
+
 // citedEvidenceRefs is one ref per evidence-entity kind, built by the one
 // production constructor.
 func citedEvidenceRefs() []string {
 	var refs []string
 	for _, kind := range contractsv1.ContextFabricEvidenceEntityTypeVocabulary() {
-		refs = append(refs, contractsv1.EvidenceRefID(kind, "example-org/matrix:"+string(kind)+"-0001"))
+		id := "example-org/matrix:" + string(kind) + "-0001"
+		if _, retired := contractsv1.RetiredEvidenceEntityType(kind); retired {
+			// A retired kind is never minted any more (CHAOS-7252), but a
+			// stored result may still cite one.
+			refs = append(refs, contractsv1.ContextFabricEvidenceRefPrefix+string(kind)+":"+id)
+			continue
+		}
+		refs = append(refs, contractsv1.EvidenceRefID(kind, id))
 	}
 	return refs
 }
@@ -97,7 +111,7 @@ func structuredOf(t *testing.T, id string, reply rpcReply) map[string]any {
 // in front of a real acr-api.
 func TestInvestigationEvidenceRefsExpandThroughSourceEvidence(t *testing.T) {
 	target := citingTarget(t)
-	answer := structuredOf(t, "investigate", target.callRaw(t, "A", "cites-investigate", "investigate_question", map[string]any{"question": "what is the status of the project?"}))
+	answer := structuredOf(t, "investigate", target.callRaw(t, "A", "cites-investigate", "investigate_question", citingQuestion()))
 	refs := collectEvidenceRefs(answer)
 	if len(refs) == 0 {
 		t.Fatal("the answer carried no evidence_ref_ids; nothing to expand")
@@ -142,7 +156,7 @@ func TestInvestigationEvidenceRefsExpandThroughSourceEvidence(t *testing.T) {
 // repository the cited subject does not live in.
 func TestInvestigationEvidenceRefsStayDeniedForOtherCallers(t *testing.T) {
 	target := citingTarget(t)
-	answer := structuredOf(t, "investigate", target.callRaw(t, "A", "cites-investigate", "investigate_question", map[string]any{"question": "what is the status of the project?"}))
+	answer := structuredOf(t, "investigate", target.callRaw(t, "A", "cites-investigate", "investigate_question", citingQuestion()))
 	refs := collectEvidenceRefs(answer)
 	if len(refs) == 0 {
 		t.Fatal("the answer carried no evidence_ref_ids")

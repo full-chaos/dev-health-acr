@@ -18,7 +18,7 @@ func sourceRowStatements(t *testing.T) map[string]string {
 	statements := map[string]string{
 		"repository_by_id": contextpacket.RepositoryByIDQueryV1,
 	}
-	for _, discovery := range []contextpacket.SourceRowDiscovery{contextpacket.SourceRowDiscoveryIncident} {
+	for _, discovery := range []contextpacket.SourceRowDiscovery{contextpacket.SourceRowDiscoveryIncident, contextpacket.SourceRowDiscoveryWorkItem} {
 		statement, ok := contextpacket.SourceRowDiscoveryStatement(discovery)
 		if !ok {
 			t.Fatalf("discovery %s has no statement", discovery)
@@ -26,6 +26,9 @@ func sourceRowStatements(t *testing.T) map[string]string {
 		statements[string(discovery)] = statement
 	}
 	for _, query := range contextpacket.OrganizationRowQueriesV1 {
+		statements[query.ID] = query.Statement
+	}
+	for _, query := range contextpacket.SourceRowOnlyQueriesV2 {
 		statements[query.ID] = query.Statement
 	}
 	return statements
@@ -61,24 +64,37 @@ func TestSourceRowStatementsCarryNoGrant(t *testing.T) {
 
 // A repository-level source row is read through its packet catalog
 // statement (the same label, citation and provenance the packet gives it);
-// an organization-level row through an OrganizationRowQueriesV1 statement,
-// which the packet catalog does not carry (it is the packet's read set).
-func TestSourceRowQueryIDsAreTheCatalogAndTheOrganizationRows(t *testing.T) {
+// an organization-level row through an OrganizationRowQueriesV1 statement;
+// a ".v2" row (CHAOS-7252) through its SourceRowOnlyQueriesV2 statement. The
+// packet catalog carries neither of the latter (it is the packet's read set),
+// and no source-row-only id shadows a catalog id.
+func TestSourceRowQueryIDsAreTheCatalogTheOrganizationRowsAndTheV2Rows(t *testing.T) {
 	ids := contextpacket.SourceRowQueryIDs()
 	want := []string{}
+	catalog := map[string]bool{}
 	for _, query := range contextpacket.SourceQueryCatalogV1 {
 		want = append(want, query.ID)
+		catalog[query.ID] = true
 	}
 	for _, query := range contextpacket.OrganizationRowQueriesV1 {
-		for _, catalog := range contextpacket.SourceQueryCatalogV1 {
-			if catalog.ID == query.ID {
-				t.Fatalf("%s is also a packet catalog query", query.ID)
-			}
+		if catalog[query.ID] {
+			t.Fatalf("%s is also a packet catalog query", query.ID)
+		}
+		want = append(want, query.ID)
+	}
+	for _, query := range contextpacket.SourceRowOnlyQueriesV2 {
+		if catalog[query.ID] {
+			t.Fatalf("%s is also a packet catalog query", query.ID)
 		}
 		want = append(want, query.ID)
 	}
 	if strings.Join(ids, ",") != strings.Join(want, ",") {
 		t.Fatalf("SourceRowQueryIDs = %v, want %v", ids, want)
+	}
+	for _, id := range ids {
+		if got := contextpacket.CatalogSourceQuery(id); got != catalog[id] {
+			t.Fatalf("CatalogSourceQuery(%s) = %v", id, got)
+		}
 	}
 }
 

@@ -16,8 +16,10 @@ import (
 
 // The plan table is total over the closed evidence-entity vocabulary, names
 // only statements contextpacket declares, and routes exactly the kinds
-// CHAOS-7226 ruled after r2 plus CHAOS-7227's team and project (9 source
-// kinds, 15 on the record). A kind moved between routes must move here too.
+// CHAOS-7226 ruled after r2, CHAOS-7227's team and project, and the four
+// ".v2" kinds CHAOS-7252 re-admits (13 source kinds, 16 on the record: the
+// five retired kinds, project-team.v2 until its own change, and the 10
+// kinds with no source row). A kind moved between routes must move here too.
 func TestSourceRowPlansAreTotal(t *testing.T) {
 	plans := contextfabric.SourceRowPlans()
 	vocabulary := contractsv1.ContextFabricEvidenceEntityTypeVocabulary()
@@ -35,6 +37,11 @@ func TestSourceRowPlansAreTotal(t *testing.T) {
 		contractsv1.ContextFabricEvidenceEntityIncident:    contextfabric.SourceRowRouteRowRepository,
 		contractsv1.ContextFabricEvidenceEntityTeam:        contextfabric.SourceRowRouteOwnership,
 		contractsv1.ContextFabricEvidenceEntityProject:     contextfabric.SourceRowRouteOwnership,
+		// CHAOS-7252: the injective ".v2" grammars.
+		contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2: contextfabric.SourceRowRouteEncoded,
+		contractsv1.ContextFabricEvidenceEntityWorkItemHierarchyV2:  contextfabric.SourceRowRouteEncoded,
+		contractsv1.ContextFabricEvidenceEntityWorkItemTeamV2:       contextfabric.SourceRowRouteEncoded,
+		contractsv1.ContextFabricEvidenceEntityDeploymentIncidentV2: contextfabric.SourceRowRouteEncoded,
 	}
 	records := 0
 	for _, kind := range vocabulary {
@@ -64,8 +71,15 @@ func TestSourceRowPlansAreTotal(t *testing.T) {
 			}
 		}
 	}
-	if records != 15 || len(want) != 9 {
-		t.Fatalf("records = %d, source kinds = %d; want 15 and 9", records, len(want))
+	if records != 16 || len(want) != 13 {
+		t.Fatalf("records = %d, source kinds = %d; want 16 and 13", records, len(want))
+	}
+	// Every retired kind stays on the record, forever: its refs sit in stored
+	// results and no source row is read for a bare-':' join.
+	for _, kind := range vocabulary {
+		if _, retired := contractsv1.RetiredEvidenceEntityType(kind); retired && plans[kind].Route != contextfabric.SourceRowRouteRecord {
+			t.Fatalf("retired %s is routed to %s", kind, plans[kind].Route)
+		}
 	}
 	if got := contextfabric.SourceRowPlanFor("not-a-kind"); got.Route != contextfabric.SourceRowRouteRecord {
 		t.Fatalf("an unregistered segment routes to %s", got.Route)

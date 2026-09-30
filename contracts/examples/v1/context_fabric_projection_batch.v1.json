@@ -270,7 +270,7 @@
       "derivation": "rule_inferred",
       "epistemic_status": "source_asserted",
       "evidence_ref_ids": [
-        "acr:v1:work-item-team:00000000-0000-0000-0000-000000000000:linear:CHAOS-3802:CHAOS"
+        "acr:v1:work-item-team.v2:00000000-0000-0000-0000-000000000000:linear%3ACHAOS-3802:CHAOS:native_team"
       ],
       "from": {
         "canonical_id": "work_item.v2:00000000-0000-0000-0000-000000000000:linear%3ACHAOS-3802",
@@ -304,7 +304,7 @@
       "derivation": "rule_inferred",
       "epistemic_status": "inferred",
       "evidence_ref_ids": [
-        "acr:v1:work-item-team:cd620f84-2602-8dea-7809-8d1f11825cf4:gl:42:gl:full.chaos"
+        "acr:v1:work-item-team.v2:00000000-0000-0000-0000-000000000000:gl%3A42:gl%3Afull.chaos:project_ownership"
       ],
       "from": {
         "canonical_id": "work_item.v2:cd620f84-2602-8dea-7809-8d1f11825cf4:gl%3A42",
@@ -341,7 +341,7 @@
       "derivation": "rule_inferred",
       "epistemic_status": "source_asserted",
       "evidence_ref_ids": [
-        "acr:v1:project-team:github:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891:gl:full.chaos"
+        "acr:v1:project-team.v2:github:70d529e0-3c06-4597-8480-794fd02328b6%3Agitlab%3A71133891:gl%3Afull.chaos:native"
       ],
       "from": {
         "canonical_id": "project.v2:github:70d529e0-3c06-4597-8480-794fd02328b6%3Agitlab%3A71133891",

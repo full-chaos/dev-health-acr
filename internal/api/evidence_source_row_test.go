@@ -398,7 +398,9 @@ func TestEvidenceRouteWarnsOnceOnAnInvalidRow(t *testing.T) {
 // same not-found as an unknown ref. Only a producer that minted such a ref
 // could hit it (follow-up: the graph producer's raw relationship type).
 func TestEvidenceRouteRefusesASurroundingWhitespaceRefBeforeAnyRead(t *testing.T) {
-	ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItemDependency, sourceRowGrantedRepoID+":jira:ABC-1:jira:ABC-0:blocks ")
+	// A retired-kind ref as a stored result may still hold it (CHAOS-7252:
+	// no producer mints the kind any more, so it is spelled out here).
+	ref := contractsv1.ContextFabricEvidenceRefPrefix + string(contractsv1.ContextFabricEvidenceEntityWorkItemDependency) + ":" + sourceRowGrantedRepoID + ":jira:ABC-1:jira:ABC-0:blocks "
 	tables := newSourceRowTables()
 	logs := &bytes.Buffer{}
 	app, token := sourceRowApp(t, tables, nil, logs)

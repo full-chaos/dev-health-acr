@@ -2048,6 +2048,7 @@
           "complexity",
           "deployment",
           "deployment-incident",
+          "deployment-incident.v2",
           "episode",
           "graph",
           "hotspot",
@@ -2055,6 +2056,7 @@
           "organization",
           "project",
           "project-team",
+          "project-team.v2",
           "pull-request",
           "repository",
           "review",
@@ -2062,8 +2064,11 @@
           "team",
           "work-item",
           "work-item-dependency",
+          "work-item-dependency.v2",
           "work-item-hierarchy",
+          "work-item-hierarchy.v2",
           "work-item-team",
+          "work-item-team.v2",
           "unregistered"
         ]
       },
@@ -2144,13 +2149,17 @@
         "closed_vocabulary": [
           "ci_pipeline_runs.v1",
           "deployments.v1",
+          "deployment_incident_edges.v2",
           "incidents.v1",
           "projects.v1",
           "pull_requests.v1",
           "repository_freshness.v1",
           "pull_request_reviews.v1",
           "teams.v1",
-          "work_items.v1"
+          "work_items.v1",
+          "work_item_dependencies.v2",
+          "work_item_hierarchy.v2",
+          "work_item_teams.v2"
         ],
         "applicability": "written when the ref's kind has a source-row statement"
       },
@@ -2161,7 +2170,8 @@
         "closed_vocabulary": [
           "repo_anchored",
           "row_anchored",
-          "org_keyed"
+          "org_keyed",
+          "encoded"
         ],
         "applicability": "written when the source-row resolver read the source and chose an id grammar"
       },

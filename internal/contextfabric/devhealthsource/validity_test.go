@@ -451,7 +451,7 @@ func TestF4_DeploymentIncidentEdgeDerivesItsWindowFromBothEndpoints(t *testing.T
 		if table.match == "FROM work_graph_deployment_incident_edges AS e" {
 			tables[index].rows = [][]any{{"edge-1", "deploy-1", "incident-1", "example-org/widget-service", at,
 				uint8(1), deployStarted, uint8(1), deployFinished,
-				uint8(1), incidentStarted, uint8(1), incidentResolved, "repo-1"}}
+				uint8(1), incidentStarted, uint8(1), incidentResolved, "repo-1", "native"}}
 			continue
 		}
 		tables[index].rows = nil
@@ -474,7 +474,7 @@ func TestF4_DeploymentIncidentEdgeStaysUnboundedWhenEndpointsDoNotResolve(t *tes
 	for index, table := range tables {
 		if table.match == "FROM work_graph_deployment_incident_edges AS e" {
 			tables[index].rows = [][]any{{"edge-1", "deploy-1", "incident-1", "example-org/widget-service", at,
-				uint8(0), zeroTime, uint8(0), zeroTime, uint8(0), zeroTime, uint8(0), zeroTime, "repo-1"}}
+				uint8(0), zeroTime, uint8(0), zeroTime, uint8(0), zeroTime, uint8(0), zeroTime, "repo-1", "native"}}
 			continue
 		}
 		tables[index].rows = nil

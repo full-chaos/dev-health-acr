@@ -5,6 +5,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/dependencyrelation"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/evidenceref"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -284,9 +285,12 @@ LIMIT 1 BY toString(s.repo_id), d.source_work_item_id, d.target_work_item_id, `+
 }
 
 // dependencyEvidenceRefID is the evidence identity of ONE dependency relation:
-// (source, target, canonical relation key). It must equal the evidence_ref_id
-// the work_item_dependencies.v1 catalog query derives (CHAOS-7177), or a fact
-// would cite a row the locator resolves to another relation of the pair.
+// (source, target, canonical relation key), each component escaped
+// (CHAOS-7252: work item ids and relation keys hold ':', so a bare-':' join
+// named two relations). It is the same string the projection mints for the
+// relation and the one the source-row statement work_item_dependencies.v2
+// derives, so the ref expands to exactly this relation.
 func dependencyEvidenceRefID(sourceID, targetID, relationKey string) string {
-	return evidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItemDependency, sourceID+":"+targetID+":"+relationKey)
+	ref, _ := evidenceref.Mint(contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, sourceID, targetID, relationKey)
+	return ref
 }

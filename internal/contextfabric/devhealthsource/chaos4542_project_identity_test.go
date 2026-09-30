@@ -194,7 +194,13 @@ func TestChaos4542_CheckpointMarkerMovedWithTheJoin(t *testing.T) {
 	// NULL repo_id ownership rows resolved by name (ownershipresolve, K11).
 	// Rows omitted under v12 never move their own updated_at, so only a
 	// rebuild projects them; the same test's v12 case proves the refusal.
-	if want := "devhealthsource.teams_projects.v16"; TeamsProjectsSourceVersion != want {
+	//
+	// v16 -> v17 is CHAOS-7252: work item -> team and project -> team edges
+	// cite ".v2" evidence refs (escaped components; the attribution row's
+	// full key; the ownership group with its source). Already-projected
+	// edges carry the retired bare-':' refs, and their rows' own timestamps
+	// do not move, so only the rebuild re-mints them.
+	if want := "devhealthsource.teams_projects.v17"; TeamsProjectsSourceVersion != want {
 		t.Fatalf("TeamsProjectsSourceVersion = %q, want %q -- changing this constant is a deliberate full-rebuild decision, so update this test with the reason in the constant's doc comment", TeamsProjectsSourceVersion, want)
 	}
 }
