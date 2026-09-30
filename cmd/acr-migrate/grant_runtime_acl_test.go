@@ -80,6 +80,19 @@ func TestGrantRuntimeACL_deviceGrantsRoundTrip(t *testing.T) {
 	require.Error(t, err, "the runtime role must NOT be able to write acr.oauth_device_grants before grant-runtime-acl runs")
 	require.Contains(t, err.Error(), "permission denied", "the pre-fix failure must be a real Postgres permission-denied error, not some other class")
 
+	// CHAOS-6191, RED: before grant-runtime-acl the runtime role can DELETE from
+	// neither OAuth table the purge loop sweeps (checked as privileges, not by
+	// deleting rows, so no fixture rows are needed).
+	oauthPurgeTables := []string{"acr.oauth_clients", "acr.oauth_authorization_requests"}
+	hasPrivilege := func(table, privilege string) bool {
+		var granted bool
+		require.NoError(t, rawDB.QueryRowContext(ctx, `SELECT has_table_privilege('acr_mcp_runtime_test', $1, $2)`, table, privilege).Scan(&granted))
+		return granted
+	}
+	for _, table := range oauthPurgeTables {
+		require.False(t, hasPrivilege(table, "DELETE"), "%s: the runtime role must not hold DELETE before grant-runtime-acl runs", table)
+	}
+
 	// runtimeDSN only needs to parse -- grant-runtime-acl never dials it,
 	// it just reads the embedded username (see grantRuntimeACL's doc
 	// comment). An unreachable host proves this.
@@ -96,6 +109,15 @@ func TestGrantRuntimeACL_deviceGrantsRoundTrip(t *testing.T) {
 	// Then it succeeds and reports the role it granted.
 	require.NoError(t, grantErr)
 	require.Contains(t, grantOutput.String(), "acr_mcp_runtime_test")
+	require.Contains(t, grantOutput.String(), "granted DELETE on acr.oauth_clients, acr.oauth_authorization_requests to acr_mcp_runtime_test")
+
+	// CHAOS-6191, GREEN: DELETE, and nothing else, on the two purge tables.
+	for _, table := range oauthPurgeTables {
+		require.True(t, hasPrivilege(table, "DELETE"), "%s: grant-runtime-acl must give the runtime role DELETE for the OAuth purge loop", table)
+		for _, privilege := range []string{"INSERT", "UPDATE", "TRUNCATE"} {
+			require.False(t, hasPrivilege(table, privilege), "%s: grant-runtime-acl must grant DELETE only, not %s", table, privilege)
+		}
+	}
 
 	// GREEN: the SAME runtime-role connection can now INSERT and SELECT a
 	// real device grant row.
@@ -124,6 +146,9 @@ func TestGrantRuntimeACL_deviceGrantsRoundTrip(t *testing.T) {
 		migrationDSNEnvironment: migrationDSN,
 		runtimeDSNEnvironment:   runtimeDSN,
 	}), &secondGrantOutput), "grant-runtime-acl must be idempotent when the grant already exists")
+	for _, table := range oauthPurgeTables {
+		require.True(t, hasPrivilege(table, "DELETE"), "%s: DELETE must survive a re-run", table)
+	}
 
 	// Still exactly SELECT, INSERT afterward -- re-running never widens the
 	// ACL.

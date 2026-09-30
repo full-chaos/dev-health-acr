@@ -241,6 +241,17 @@ type Config struct {
 	// OAuthClientMetadataDocuments (ACR_OAUTH_CLIENT_METADATA_DOCUMENTS,
 	// default true) accepts client ID metadata documents as client IDs.
 	OAuthClientMetadataDocuments bool
+	// OAuthRequestPurgeGrace (ACR_OAUTH_REQUEST_PURGE_GRACE, default 720h,
+	// CHAOS-6191) is how long an /authorize request row is kept after its
+	// expires_at before the purge loop may delete it (never shorter than
+	// OAuthClientIdleTTL). A request that redeemed a still-live credential is
+	// kept regardless.
+	OAuthRequestPurgeGrace time.Duration
+	// OAuthClientIdleTTL (ACR_OAUTH_CLIENT_IDLE_TTL, default 720h = 30d,
+	// CHAOS-6191) is how long a dynamically registered client must have
+	// existed, with no request and no live credential, before the purge
+	// loop may delete it. OAuthRequestPurgeGrace must not be shorter than it.
+	OAuthClientIdleTTL time.Duration
 
 	// dataQueryURL / dataQueryTimeout: internal ops query service call
 	// (ACR_DATA_QUERY_URL, ACR_DATA_QUERY_TIMEOUT); read via the
@@ -338,6 +349,12 @@ func load(lookup lookupEnv) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.OAuthClientMetadataDocuments, err = boolValue(lookup, "ACR_OAUTH_CLIENT_METADATA_DOCUMENTS", true); err != nil {
+		return Config{}, err
+	}
+	if cfg.OAuthRequestPurgeGrace, err = durationValue(lookup, "ACR_OAUTH_REQUEST_PURGE_GRACE", defaultOAuthRequestPurgeGrace); err != nil {
+		return Config{}, err
+	}
+	if cfg.OAuthClientIdleTTL, err = durationValue(lookup, "ACR_OAUTH_CLIENT_IDLE_TTL", defaultOAuthClientIdleTTL); err != nil {
 		return Config{}, err
 	}
 

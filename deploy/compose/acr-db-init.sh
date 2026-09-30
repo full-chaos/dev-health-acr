@@ -165,12 +165,13 @@ GRANT SELECT, INSERT, UPDATE ON TABLE acr.device_authorizations TO :"runtime_use
 -- OAuth 2.1 authorization-code login (migration 0040): dynamically
 -- registered clients and pending/completed /authorize requests, both
 -- read and written on the hosted request path exactly like
--- device_authorizations immediately above.
+-- device_authorizations immediately above. DELETE (CHAOS-6191) is the
+-- bounded purge loop's: expired requests, and idle dynamic clients.
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.oauth_clients FROM :"runtime_user";
-GRANT SELECT, INSERT, UPDATE ON TABLE acr.oauth_clients TO :"runtime_user";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE acr.oauth_clients TO :"runtime_user";
 
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.oauth_authorization_requests FROM :"runtime_user";
-GRANT SELECT, INSERT, UPDATE ON TABLE acr.oauth_authorization_requests TO :"runtime_user";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE acr.oauth_authorization_requests TO :"runtime_user";
 
 -- RFC 8628 device authorization grant (CHAOS-6233, migration 0042): the
 -- client/resource/scope POST /device_authorization stores alongside its

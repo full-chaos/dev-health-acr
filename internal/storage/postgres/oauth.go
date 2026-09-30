@@ -23,6 +23,10 @@ type OAuthStoreOptions struct {
 type OAuthStore struct {
 	DB  *sql.DB
 	now func() time.Time
+	// afterClientLock is a test seam, nil in production: purgeIdleOAuthClients
+	// calls it between locking its candidate clients and re-checking them, so a
+	// test can commit a request inside exactly that window.
+	afterClientLock func()
 }
 
 func NewOAuthStore(db *sql.DB) (*OAuthStore, error) {
@@ -49,6 +53,28 @@ const oauthAuthorizationRequestColumns = `
 	handle_hash, device_code_hash, client_id, client_kind, redirect_uri,
 	code_challenge, resource, scope, state, created_at, expires_at,
 	code_hash, code_expires_at, consumed_at, bound_org_id, bound_subject`
+
+// createOAuthAuthorizationRequestSQL inserts a request only while its dynamic
+// client's row exists (locked FOR KEY SHARE, which conflicts with the purge's
+// FOR UPDATE); a metadata-document request has no client row to check.
+const createOAuthAuthorizationRequestSQL = `
+WITH client AS (
+    SELECT 1 FROM acr.oauth_clients WHERE client_id = $3::text AND $4::text = 'dynamic' FOR KEY SHARE
+)
+INSERT INTO acr.oauth_authorization_requests (` + oauthAuthorizationRequestColumns + `)
+SELECT $1::text, $2::text, $3::text, $4::text, $5::text, $6::text, $7::text, $8::text, $9::text,
+       $10::timestamptz, $11::timestamptz, NULL, NULL, NULL, NULL, NULL
+WHERE $4::text <> 'dynamic' OR EXISTS (SELECT 1 FROM client)`
+
+// createOAuthDeviceGrantSQL is createOAuthAuthorizationRequestSQL's twin for
+// device grants.
+const createOAuthDeviceGrantSQL = `
+WITH client AS (
+    SELECT 1 FROM acr.oauth_clients WHERE client_id = $2::text AND $3::text = 'dynamic' FOR KEY SHARE
+)
+INSERT INTO acr.oauth_device_grants (` + oauthDeviceGrantColumns + `)
+SELECT $1::text, $2::text, $3::text, $4::text, $5::text, $6::timestamptz, $7::timestamptz
+WHERE $3::text <> 'dynamic' OR EXISTS (SELECT 1 FROM client)`
 
 const oauthDeviceGrantColumns = `device_code_hash, client_id, client_kind, resource, scope, created_at, expires_at`
 
@@ -101,9 +127,12 @@ func (s *OAuthStore) CreateAuthorizationRequest(ctx context.Context, request sto
 	if err := storage.ValidateOAuthAuthorizationRequest(request); err != nil {
 		return storage.OAuthAuthorizationRequest{}, err
 	}
-	_, err := s.DB.ExecContext(ctx, `
-INSERT INTO acr.oauth_authorization_requests (`+oauthAuthorizationRequestColumns+`)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULL, NULL, NULL, NULL, NULL)`,
+	// The client row is locked FOR KEY SHARE inside the same statement that
+	// inserts the request: a concurrent idle-client purge either skips the
+	// locked row (SKIP LOCKED) or, having locked it first, makes this SELECT
+	// return nothing once it commits, so a stored request can never point at a
+	// purged client. A metadata-document client has no row and inserts as-is.
+	result, err := s.DB.ExecContext(ctx, createOAuthAuthorizationRequestSQL,
 		request.HandleHash.String(), request.DeviceCodeHash.String(), request.ClientID, request.ClientKind,
 		request.RedirectURI, request.CodeChallenge, request.Resource, request.Scope, request.State,
 		request.CreatedAt, request.ExpiresAt,
@@ -114,6 +143,12 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULL, NULL, NULL, NULL, NU
 			return storage.OAuthAuthorizationRequest{}, sanitized
 		}
 		return storage.OAuthAuthorizationRequest{}, fmt.Errorf("create oauth authorization request: %w", sanitized)
+	}
+	if inserted, rowsErr := result.RowsAffected(); rowsErr != nil || inserted != 1 {
+		if rowsErr != nil {
+			return storage.OAuthAuthorizationRequest{}, fmt.Errorf("create oauth authorization request rows affected: %w", sanitizeDatabaseError(rowsErr))
+		}
+		return storage.OAuthAuthorizationRequest{}, storage.ErrOAuthClientGone
 	}
 	return storage.CloneOAuthAuthorizationRequest(request), nil
 }
@@ -241,9 +276,7 @@ func (s *OAuthStore) CreateDeviceGrant(ctx context.Context, grant storage.OAuthD
 	if err := storage.ValidateOAuthDeviceGrant(grant); err != nil {
 		return storage.OAuthDeviceGrant{}, err
 	}
-	_, err := s.DB.ExecContext(ctx, `
-INSERT INTO acr.oauth_device_grants (`+oauthDeviceGrantColumns+`)
-VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+	result, err := s.DB.ExecContext(ctx, createOAuthDeviceGrantSQL,
 		grant.DeviceCodeHash.String(), grant.ClientID, grant.ClientKind, grant.Resource, grant.Scope,
 		grant.CreatedAt, grant.ExpiresAt,
 	)
@@ -253,6 +286,12 @@ VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 			return storage.OAuthDeviceGrant{}, sanitized
 		}
 		return storage.OAuthDeviceGrant{}, fmt.Errorf("create oauth device grant: %w", sanitized)
+	}
+	if inserted, rowsErr := result.RowsAffected(); rowsErr != nil || inserted != 1 {
+		if rowsErr != nil {
+			return storage.OAuthDeviceGrant{}, fmt.Errorf("create oauth device grant rows affected: %w", sanitizeDatabaseError(rowsErr))
+		}
+		return storage.OAuthDeviceGrant{}, storage.ErrOAuthClientGone
 	}
 	return grant, nil
 }

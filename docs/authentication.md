@@ -201,10 +201,45 @@ Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
   `slow_down`). Codes, handles, verifiers, client IDs, device codes, user
   codes, redirect URIs, state and tokens are never logged.
 
-The runtime database role needs `SELECT, INSERT, UPDATE` on
+The runtime database role needs `SELECT, INSERT, UPDATE, DELETE` on
 `acr.oauth_clients` and `acr.oauth_authorization_requests`, and
 `SELECT, INSERT` on `acr.oauth_device_grants`
-(`deploy/compose/acr-db-init.sh runtime-acl`).
+(`deploy/compose/acr-db-init.sh runtime-acl`; on Kubernetes the
+`acr-migrate grant-runtime-acl` pre-install/pre-upgrade hook adds `DELETE` and
+the device-grant privileges). `DELETE` is for the purge loop below: when the
+OAuth login is configured, acr-api runs one purge at startup (a missing
+`DELETE` fails startup) and then one every 5 minutes, at most 500 rows per
+statement:
+
+- An authorization request is deleted `ACR_OAUTH_REQUEST_PURGE_GRACE` (default
+  `720h`) after its own expiry, unless the device authorization behind it
+  redeemed a credential that is still unrevoked and unexpired; such a request
+  is kept until that credential ends.
+- A dynamically registered client is deleted when it was registered more than
+  `ACR_OAUTH_CLIENT_IDLE_TTL` (default `720h`) ago and has no request row left,
+  no device grant created inside that window, and no live credential obtained
+  through a device grant of its own. Request rows are the only record of when a
+  client last asked to authorize, so they are kept at least as long as the idle
+  window (the defaults are equal): a client used inside the last 30 days is never
+  purged, and one whose last request is older than that, with no live
+  credential, is. Both values must be positive and `ACR_OAUTH_REQUEST_PURGE_GRACE`
+  must not be shorter than `ACR_OAUTH_CLIENT_IDLE_TTL` (startup refuses the
+  other order): with a shorter grace, a client used inside the idle window
+  would lose its request rows, and then the client.
+- The purge and the routes that store a request or a device grant for a
+  dynamic client are safe against each other. The route stores the row only
+  while the client's row exists (it locks that row in the same statement), and
+  the purge skips a locked client and re-checks its candidates under a fresh
+  snapshot before deleting. If the purge removed the client between the route
+  resolving it and storing the row, the route answers `invalid_client`, exactly
+  as for a client that was never registered, and the client registers again;
+  no row is ever stored for a purged client.
+- Client ID metadata document clients are never stored, so they are never
+  purged. Credentials are not touched: a live credential never depends on its
+  client row.
+- Every tick logs one `oauth purge` line at Info with the two deleted-row
+  counts, zeros included (the loop's heartbeat: a missing line means the loop
+  stopped); a failed tick also logs a fixed warning without the error text.
 
 ## Rate limiting
 

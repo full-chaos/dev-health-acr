@@ -31,13 +31,16 @@ import (
 // this DSN's Secret reference for acr-api/acr-mcp (acr.validateCredentials),
 // so this reuses that same reference rather than adding a new one.
 //
-// The grant list here deliberately covers ONLY acr.oauth_device_grants --
-// the one table CHAOS-6277 found missing its Kubernetes grant.
+// The grant list here deliberately covers acr.oauth_device_grants -- the
+// one table CHAOS-6277 found missing its Kubernetes grant -- plus, since
+// CHAOS-6191, DELETE alone on acr.oauth_clients and
+// acr.oauth_authorization_requests for the bounded OAuth purge loop.
 // oauth_clients and oauth_authorization_requests (migration 0040) were both
-// independently confirmed already correctly granted on trial and prod when
-// this ticket was filed; every other migration between 0038 and 0042 either
-// predates this range or only alters existing tables (0041), so no other
-// table needs the same fix here (see this PR's RISK-NOTES).
+// independently confirmed already correctly granted SELECT, INSERT, UPDATE
+// on trial and prod when CHAOS-6277 was filed, so only the new privilege is
+// added here; every other migration between 0038 and 0042 either predates
+// this range or only alters existing tables (0041), so no other table needs
+// the same fix here (see CHAOS-6277's RISK-NOTES).
 //
 // A bare, repeatable GRANT (not REVOKE-then-GRANT) makes this idempotent
 // AND safe to run against a role that is already serving live traffic:
@@ -93,8 +96,19 @@ func grantRuntimeACL(ctx context.Context, db *sql.DB, runtimeDSN string, output 
 		)); err != nil {
 			return fmt.Errorf("grant acr.oauth_device_grants privileges to %s: %w", role, err)
 		}
+		// CHAOS-6191: DELETE for the OAuth purge loop, also a bare
+		// repeatable GRANT (idempotent; never narrows a live role).
+		if _, err := db.ExecContext(ctx, fmt.Sprintf(
+			`GRANT DELETE ON TABLE acr.oauth_clients, acr.oauth_authorization_requests TO %s`,
+			quotedRole,
+		)); err != nil {
+			return fmt.Errorf("grant DELETE on acr.oauth_clients and acr.oauth_authorization_requests to %s: %w", role, err)
+		}
 	}
 	role := strings.Join(roles, ", ")
-	_, err = fmt.Fprintf(output, "granted SELECT, INSERT on acr.oauth_device_grants to %s\n", role)
+	if _, err = fmt.Fprintf(output, "granted SELECT, INSERT on acr.oauth_device_grants to %s\n", role); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(output, "granted DELETE on acr.oauth_clients, acr.oauth_authorization_requests to %s\n", role)
 	return err
 }

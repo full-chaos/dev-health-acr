@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/url"
 	"slices"
 	"strings"
@@ -131,6 +132,14 @@ type OAuthDeviceGrant struct {
 	ExpiresAt      time.Time
 }
 
+// ErrOAuthClientGone is returned by CreateAuthorizationRequest and
+// CreateDeviceGrant when the request names a dynamic client whose registration
+// no longer exists (the idle-client purge removed it between the caller
+// resolving the client and storing the row). Nothing is stored. It wraps
+// ErrNotFound, and callers answer it exactly as they answer a client ID that
+// was never registered: the client registers again.
+var ErrOAuthClientGone = fmt.Errorf("%w: oauth client is no longer registered", ErrNotFound)
+
 // OAuthStore persists dynamic clients, authorization requests and device
 // grants.
 type OAuthStore interface {
@@ -140,7 +149,11 @@ type OAuthStore interface {
 	// GetClient returns a dynamic client or ErrNotFound.
 	GetClient(ctx context.Context, clientID string) (OAuthClient, error)
 	// CreateAuthorizationRequest stores a new pending request. A duplicate
-	// handle or device code hash is ErrConflict.
+	// handle or device code hash is ErrConflict. A request for a dynamic
+	// client stores only while that client's row still exists, else
+	// ErrOAuthClientGone (the PostgreSQL adapter locks the client row in the
+	// same statement, so a concurrent idle-client purge cannot delete it
+	// between the check and the insert).
 	CreateAuthorizationRequest(context.Context, OAuthAuthorizationRequest) (OAuthAuthorizationRequest, error)
 	// GetAuthorizationRequest returns the request with this handle or
 	// ErrNotFound. Expired requests are still returned; callers decide.
@@ -160,7 +173,8 @@ type OAuthStore interface {
 	// ErrOAuthAuthorizationCodeUnavailable.
 	ConsumeAuthorizationCode(context.Context, OAuthSecretHash) (OAuthAuthorizationRequest, error)
 	// CreateDeviceGrant stores a new device-code grant. A duplicate device
-	// code hash is ErrConflict.
+	// code hash is ErrConflict. The client rule of CreateAuthorizationRequest
+	// applies: ErrOAuthClientGone when a dynamic client's row is gone.
 	CreateDeviceGrant(context.Context, OAuthDeviceGrant) (OAuthDeviceGrant, error)
 	// GetDeviceGrant returns the grant for this device code hash or
 	// ErrNotFound. Expired grants are still returned; callers decide.

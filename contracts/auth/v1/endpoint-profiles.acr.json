@@ -1180,8 +1180,8 @@
           "description": "OAuthService.ApproveConsent/DenyConsent/ConsentRequest -- the handle's request must be undecided and unexpired (10 minutes); approval applies the device approval's org and repository rules (ApproveForOAuth) and issues the code at most once.",
           "anchor": {
             "path": "internal/auth/oauth.go",
-            "line": 716,
-            "line_end": 739
+            "line": 721,
+            "line_end": 744
           },
           "is_intended_validator": true,
           "reachable_but_not_owner": false
@@ -1201,8 +1201,8 @@
           "direction": "returned_to_caller",
           "anchor": {
             "path": "internal/auth/oauth.go",
-            "line": 716,
-            "line_end": 739,
+            "line": 721,
+            "line_end": 744,
             "note": "OAuthService.ApproveConsent -- approves the device authorization, then mints the one-time OAuth authorization code via s.store.IssueAuthorizationCode and returns it inside redirect_url"
           },
           "issuer": "acr-api OAuthService",
@@ -1210,7 +1210,7 @@
           "algorithm": null,
           "lifetime_seconds": 120,
           "key_source": null,
-          "verified_by": "acr:internal/auth/oauth.go:708"
+          "verified_by": "acr:internal/auth/oauth.go:713"
         }
       ]
     },
@@ -1233,8 +1233,8 @@
           "description": "OAuthService.ExchangeDeviceCode -- the device_code grant branch (form grant_type=urn:ietf:params:oauth:grant-type:device_code): looks up the device grant's client/resource/scope by the device code's hash, requires the same client_id, then polls the device authorization (PollDeviceGrant) for authorization_pending/slow_down/access_denied/expired_token or a token once approved. Rate limited per IP by the same AllowTokenRequest budget as the authorization_code branch.",
           "anchor": {
             "path": "internal/auth/oauth.go",
-            "line": 945,
-            "line_end": 945,
+            "line": 953,
+            "line_end": 953,
             "note": "func (s *OAuthService) ExchangeDeviceCode("
           },
           "is_intended_validator": true,
@@ -1258,8 +1258,8 @@
         "description": "OAuthService.Exchange -- consumes the code atomically first (a refused exchange spends it), then requires the same client_id and redirect_uri, an S256 code_verifier matching the stored challenge, and a resource equal to the authorized one; redeems the approved device authorization bound to that resource. Rate limited per IP by AllowTokenRequest.",
         "anchor": {
           "path": "internal/auth/oauth.go",
-          "line": 818,
-          "line_end": 818,
+          "line": 823,
+          "line_end": 823,
           "note": "func (s *OAuthService) Exchange("
         }
       },
@@ -1360,8 +1360,8 @@
         "description": "OAuthService.StartDeviceAuthorization -- verifies the client (a dynamic registration or a client ID metadata document), a supported scope and a configured resource exactly like Authorize, then starts a device authorization and records the client/resource/scope /token needs when the client polls back with only the device_code; rate limited per IP by AllowDeviceCreation.",
         "anchor": {
           "path": "internal/auth/oauth.go",
-          "line": 896,
-          "line_end": 896,
+          "line": 901,
+          "line_end": 901,
           "note": "func (s *OAuthService) StartDeviceAuthorization("
         }
       },
@@ -1383,7 +1383,7 @@
           "algorithm": null,
           "lifetime_seconds": null,
           "key_source": null,
-          "verified_by": "acr:internal/auth/oauth.go:787"
+          "verified_by": "acr:internal/auth/oauth.go:792"
         }
       ]
     }
