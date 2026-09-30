@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="5" failures="5" errors="1" time="0.015035">
+	<testsuite tests="0" failures="0" time="0.000000" name="" timestamp="0001-01-01T00:00:00Z">
+		<properties>
+			<property name="go.version" value="go1.27.0 linux/arm64"></property>
+		</properties>
+	</testsuite>
+	<testsuite tests="4" failures="2" skipped="1" time="0.011000" name="ex.test/m/a" timestamp="2026-09-30T16:15:00Z">
+		<properties>
+			<property name="go.version" value="go1.27.0 linux/arm64"></property>
+		</properties>
+		<testcase classname="ex.test/m/a" name="TestFail/sub" time="0.000000">
+			<failure message="Failed" type="">=== RUN   TestFail/sub&#xA;    a_test.go:7: boom&#xA;--- FAIL: TestFail/sub (0.00s)&#xA;</failure>
+		</testcase>
+		<testcase classname="ex.test/m/a" name="TestFail" time="0.000000">
+			<failure message="Failed" type="">=== RUN   TestFail&#xA;--- FAIL: TestFail (0.00s)&#xA;</failure>
+		</testcase>
+		<testcase classname="ex.test/m/a" name="TestSkip" time="0.000000">
+			<skipped message="=== RUN   TestSkip&#xA;    a_test.go:9: nope&#xA;--- SKIP: TestSkip (0.00s)&#xA;"></skipped>
+		</testcase>
+		<testcase classname="ex.test/m/a" name="TestOK" time="0.000000"></testcase>
+	</testsuite>
+	<testsuite tests="0" failures="0" time="0.000000" name="ex.test/m/b" timestamp="2026-09-30T16:15:00Z">
+		<properties>
+			<property name="go.version" value="go1.27.0 linux/arm64"></property>
+		</properties>
+		<testcase classname="" name="TestMain" time="0.000000">
+			<failure message="Failed" type="">FAIL&#x9;ex.test/m/b [build failed]&#xA;</failure>
+		</testcase>
+	</testsuite>
+	<testsuite tests="0" failures="0" time="0.008000" name="ex.test/m/c" timestamp="2026-09-30T16:15:00Z">
+		<properties>
+			<property name="go.version" value="go1.27.0 linux/arm64"></property>
+		</properties>
+		<testcase classname="" name="TestMain" time="0.000000">
+			<failure message="Failed" type="">exit status 1&#xA;FAIL&#x9;ex.test/m/c&#x9;0.008s&#xA;</failure>
+		</testcase>
+	</testsuite>
+	<testsuite tests="1" failures="1" time="0.011000" name="ex.test/m/d" timestamp="2026-09-30T16:15:00Z">
+		<properties>
+			<property name="go.version" value="go1.27.0 linux/arm64"></property>
+		</properties>
+		<testcase classname="ex.test/m/d" name="TestPanic" time="0.000000">
+			<failure message="Failed" type="">=== RUN   TestPanic&#xA;--- FAIL: TestPanic (0.00s)&#xA;panic: kaboom [recovered, repanicked]&#xA;&#xA;goroutine 7 [running]:&#xA;testing.tRunner.func1.2({0x29e8d0, 0x15f430})&#xA;&#x9;/usr/local/go/src/testing/testing.go:2123 +0x1a0&#xA;testing.tRunner.func1()&#xA;&#x9;/usr/local/go/src/testing/testing.go:2126 +0x2c8&#xA;panic({0x29e8d0?, 0x15f430?})&#xA;&#x9;/usr/local/go/src/runtime/panic.go:859 +0x120&#xA;ex.test/m/d.TestPanic(0x6cf343470248?)&#xA;&#x9;/work/ex/d/d_test.go:5 +0x2c&#xA;testing.tRunner(0x6cf343470248, 0x2befd0)&#xA;&#x9;/usr/local/go/src/testing/testing.go:2193 +0xc4&#xA;created by testing.(*T).Run in goroutine 1&#xA;&#x9;/usr/local/go/src/testing/testing.go:2258 +0x3b8&#xA;</failure>
+		</testcase>
+	</testsuite>
+</testsuites>

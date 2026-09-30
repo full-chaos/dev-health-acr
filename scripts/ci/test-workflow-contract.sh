@@ -397,6 +397,106 @@ check_unit_shard_agreement() {
   esac
 }
 
+# CHAOS-3895: the `unit` shards do not publish `go-coverage` / `go-junit`
+# themselves (a matrix job uploading under one name collides across its own
+# legs). Each uploads an intermediate go-unit-shard-<i>, and the `reports` job
+# merges them with ci/mergetestreports and publishes the two names. Every link
+# of that chain is a bare string no compiler reads, and each way of breaking one
+# leaves the run green:
+#   - `reports` deleted, or not gated on `unit`: no merged report exists.
+#   - -expect disagreeing with the unit matrix: a matrix that shrank while
+#     -expect stayed put fails at run time only as a "missing shard"; this
+#     check names the real cause, and catches a -expect edited alone.
+#   - the published names drifting: `go-coverage` and `go-junit` are the
+#     artifact contract, so a rename is a contract change, not a refactor.
+#   - the intermediate name or its file list drifting from what the merge tool
+#     reads (its shardArtifactPrefix; cover.out, junit.xml, go-test.json).
+#   - `if: !cancelled()` lost: the merged JUnit is then not published in
+#     exactly the run where it is needed, the one with a failing shard.
+check_reports_job() {
+  local file="$1" status=0
+  local reports_block unit_block prefix matrix_line matrix_count sub call expect want
+  if ! list_jobs "$file" | grep -qx reports; then
+    printf 'no reports job: the unit shards reports are never merged into go-coverage or go-junit\n' >&2
+    return 1
+  fi
+  reports_block="$(job_block "$file" reports)"
+  unit_block="$(job_block "$file" unit)"
+
+  prefix="$(grep -oE 'shardArtifactPrefix = "[^"]+"' "$repo_root/ci/mergetestreports/main.go" | head -n1 | sed -E 's/.*"([^"]+)"/\1/' || true)"
+  if [ -z "$prefix" ]; then
+    printf 'cannot read shardArtifactPrefix from ci/mergetestreports/main.go\n' >&2
+    return 1
+  fi
+
+  if ! grep -qE '^ {4}needs: *unit *$' <<<"$reports_block"; then
+    printf 'reports does not declare "needs: unit", so it could run before the shards have uploaded\n' >&2
+    status=1
+  fi
+  if ! grep -qE '^ {4}if: .*!cancelled\(\)' <<<"$reports_block"; then
+    printf 'reports has no if: condition with !cancelled(): a failing unit shard would then skip the merged JUnit that shows what failed\n' >&2
+    status=1
+  fi
+
+  matrix_line="$(grep -E 'shard: *\[' <<<"$unit_block" | head -n1 || true)"
+  matrix_count="$(printf '%s' "$matrix_line" | sed -E 's/.*\[([^]]*)\].*/\1/' | awk -F',' '{print NF}')"
+  if [ -z "$matrix_line" ]; then
+    printf 'unit job has no shard matrix to size the reports job'"'"'s -expect against\n' >&2
+    return 1
+  fi
+  for sub in junit coverage failures crosscheck; do
+    call="$(grep -E "mergetestreports $sub( |\$)" <<<"$reports_block" | head -n1 || true)"
+    if [ -z "$call" ]; then
+      printf 'reports never runs mergetestreports %s\n' "$sub" >&2
+      status=1
+      continue
+    fi
+    expect="$(grep -oE -- '-expect [0-9]+' <<<"$call" | awk '{print $2}' | head -n1 || true)"
+    if [ "$expect" != "$matrix_count" ]; then
+      printf 'reports runs mergetestreports %s with -expect %s but the unit matrix has %s shard(s)\n' \
+        "$sub" "${expect:-<none>}" "$matrix_count" >&2
+      status=1
+    fi
+  done
+
+  # The behaviour check reads what `failures` wrote: the two must name the same file.
+  if ! grep -qE 'mergetestreports failures .*-report \.tmp/coverage/failures\.json' <<<"$reports_block" \
+     || ! grep -qE 'mergetestreports crosscheck .*-failures \.tmp/coverage/failures\.json' <<<"$reports_block"; then
+    printf 'reports: failures must write -report .tmp/coverage/failures.json and crosscheck must read it with -failures\n' >&2
+    status=1
+  fi
+  for want in go-coverage go-junit; do
+    if ! grep -qE "^ {10}name: $want *\$" <<<"$reports_block"; then
+      printf 'reports does not publish an artifact named exactly %s\n' "$want" >&2
+      status=1
+    fi
+    if grep -qE "^ {10}name: $want *\$" <<<"$unit_block"; then
+      printf 'the unit matrix uploads an artifact named %s from every leg; that name belongs to the merged report\n' "$want" >&2
+      status=1
+    fi
+  done
+
+  if ! grep -qE "^ {10}name: ${prefix}\\\$\\{\\{ matrix\\.shard \\}\\} *\$" <<<"$unit_block"; then
+    printf 'unit does not upload its intermediate artifact as %s followed by the matrix shard index (the prefix ci/mergetestreports reads)\n' "$prefix" >&2
+    status=1
+  fi
+  for want in cover.out junit.xml go-test.json; do
+    if ! grep -qE "^ {12}\\.tmp/coverage/${want//./\\.} *\$" <<<"$unit_block"; then
+      printf 'unit'"'"'s intermediate artifact does not carry .tmp/coverage/%s, which the merge reads\n' "$want" >&2
+      status=1
+    fi
+  done
+  if ! grep -qF "pattern: ${prefix}*" <<<"$reports_block"; then
+    printf 'reports does not download pattern %s*\n' "$prefix" >&2
+    status=1
+  fi
+  if grep -qE 'merge-multiple: *true' <<<"$reports_block"; then
+    printf 'reports downloads with merge-multiple: true, which flattens the per-shard directories the merge tool requires\n' >&2
+    status=1
+  fi
+  return "$status"
+}
+
 # The endpoint-profile contract gate is the one CI step that runs the
 # real-tree auth-surface proof, and the proof's own fail-closed branch keys
 # on the ACR_CONTRACT_GATE marker this step sets. That makes deleting or
@@ -568,6 +668,121 @@ check_testcontainers_needs_mirror_preflight() {
   return "$status"
 }
 
+# The steps of the reports job are PARSED, not grepped: a step whose text is
+# present but which never runs (a false `if:`, `continue-on-error`, a command
+# replaced by `true` with the old text left in a comment, `|| true` appended)
+# reads green to a grep. Each step must carry exactly the allowed keys, the
+# allowed `if:`, and exactly the expected command; the job itself may carry
+# only the allowed keys and the exact `if:`.
+#
+# step_block prints one step of the job block piped in on stdin: its
+# `      - name: NAME` line through the line before the next step or comment at
+# step indent.
+step_block() {
+  awk -v n="$1" '
+    $0 == "      - name: " n { grab=1; print; next }
+    grab && /^      (- |#)/ { grab=0 }
+    grab { print }
+  '
+}
+
+# assert_step JOB_BLOCK NAME EXPECTED_IF EXPECTED_RUN
+#   EXPECTED_IF   the exact `if:` line body ("" = the step must have none)
+#   EXPECTED_RUN  the exact command; a value containing a newline is compared
+#                 with the step's `run: |` block, one line per line.
+assert_step() {
+  local block="$1" name="$2" want_if="$3" want_run="$4"
+  local step keys key ifs runs run_text want_line
+  step="$(printf '%s\n' "$block" | step_block "$name")"
+  if [ -z "$step" ]; then
+    printf 'reports has no step named "%s"\n' "$name" >&2
+    return 1
+  fi
+  keys="$(grep -oE '^ {8}[a-z-]+:' <<<"$step" | tr -d ' :' || true)"
+  for key in $keys; do
+    case "$key" in
+      if | run) ;;
+      *)
+        printf 'reports step "%s" carries key "%s", which can make it not run or not fail the job (allowed: if, run)\n' "$name" "$key" >&2
+        return 1
+        ;;
+    esac
+  done
+  ifs="$(grep -E '^ {8}if:' <<<"$step" || true)"
+  if [ -n "$want_if" ]; then
+    want_line="        if: $want_if"
+    if [ "$ifs" != "$want_line" ]; then
+      printf 'reports step "%s" has condition [%s], want exactly [%s]\n' "$name" "${ifs:-<none>}" "$want_line" >&2
+      return 1
+    fi
+  elif [ -n "$ifs" ]; then
+    printf 'reports step "%s" has a condition [%s]; it must run whenever the job does\n' "$name" "$ifs" >&2
+    return 1
+  fi
+  runs="$(grep -cE '^ {8}run:' <<<"$step" || true)"
+  if [ "$runs" != 1 ]; then
+    printf 'reports step "%s" has %s run: keys, want exactly 1\n' "$name" "$runs" >&2
+    return 1
+  fi
+  case "$want_run" in
+    *$'\n'*)
+      run_text="$(awk '/^ {8}run: \|$/ { g=1; next } g' <<<"$step" | sed -E 's/^ {10}//')"
+      if [ "$run_text" != "$want_run" ]; then
+        printf 'reports step "%s" runs a different script than expected\n--- got:\n%s\n--- want:\n%s\n' "$name" "$run_text" "$want_run" >&2
+        return 1
+      fi
+      ;;
+    *)
+      want_line="        run: $want_run"
+      if [ "$(grep -E '^ {8}run:' <<<"$step")" != "$want_line" ]; then
+        printf 'reports step "%s" does not run exactly the expected command [%s]\n' "$name" "$want_run" >&2
+        return 1
+      fi
+      ;;
+  esac
+}
+
+check_reports_steps() {
+  local file="$1" block matrix_line n status=0 key keys tool cancelled
+  if ! list_jobs "$file" | grep -qx reports; then
+    printf 'no reports job\n' >&2
+    return 1
+  fi
+  block="$(job_block "$file" reports)"
+  matrix_line="$(job_block "$file" unit | grep -E 'shard: *\[' | head -n1 || true)"
+  n="$(printf '%s' "$matrix_line" | sed -E 's/.*\[([^]]*)\].*/\1/' | awk -F',' '{print NF}')"
+  tool='go run ./ci/mergetestreports'
+  cancelled="\${{ !cancelled() }}"
+
+  # Job level: only these keys, and this exact condition.
+  keys="$(grep -oE '^ {4}[a-z-]+:' <<<"$block" | tr -d ' :' || true)"
+  for key in $keys; do
+    case "$key" in
+      name | needs | if | runs-on | steps) ;;
+      *)
+        printf 'reports job carries key "%s" (allowed: name, needs, if, runs-on, steps)\n' "$key" >&2
+        status=1
+        ;;
+    esac
+  done
+  if ! grep -qxF "    if: \${{ !cancelled() && needs.unit.result != 'skipped' }}" <<<"$block"; then
+    printf 'reports job condition is not exactly the not-cancelled-and-unit-not-skipped expression\n' >&2
+    status=1
+  fi
+
+  assert_step "$block" 'Merge JUnit reports' '' \
+    "$tool junit -dir .tmp/unit-shards -expect $n -out .tmp/coverage/junit.xml" || status=1
+  assert_step "$block" 'Merge coverage profiles and convert to Cobertura once' "$cancelled" \
+    "set -euo pipefail
+$tool coverage -dir .tmp/unit-shards -expect $n -out .tmp/coverage/cover.out
+make coverage-cobertura" || status=1
+  assert_step "$block" "List every shard's failed tests" "$cancelled" \
+    "$tool failures -dir .tmp/unit-shards -expect $n -summary \"\$GITHUB_STEP_SUMMARY\" -report .tmp/coverage/failures.json" || status=1
+  assert_step "$block" 'Verify the merged reports against the shards' "$cancelled" \
+    "$tool crosscheck -dir .tmp/unit-shards -expect $n -junit .tmp/coverage/junit.xml -cover .tmp/coverage/cover.out -cobertura .tmp/coverage/coverage.xml -failures .tmp/coverage/failures.json" || status=1
+  return "$status"
+}
+
 run_all_checks() {
   local file="$1"
   check_verify_job_exists "$file"
@@ -578,6 +793,8 @@ run_all_checks() {
   check_main_runs_get_a_verdict "$file"
   check_race_shard_agreement "$file"
   check_unit_shard_agreement "$file"
+  check_reports_job "$file"
+  check_reports_steps "$file"
   check_container_oci_scan_same_job "$file"
   check_isolated_devhealthschema_job "$file"
   check_endpoint_profile_gate_step "$file"
@@ -740,6 +957,156 @@ unit_without_isolated="$tmpdir/unit-without-isolated.yml"
 sed 's|test-shard\.sh --with-isolated|test-shard.sh|' "$workflow" > "$unit_without_isolated"
 assert_check_fails 'dropped --with-isolated from the unit job'"'"'s test-shard.sh invocation' \
   check_unit_shard_agreement "$unit_without_isolated"
+
+# (r) CHAOS-3895: each link of the unit-shards -> reports -> go-coverage/go-junit
+# chain is a bare string, so each gets its own mutation. All of them leave the
+# workflow otherwise valid, so a red here is the reports check and nothing else.
+reports_job_removed="$tmpdir/reports-job-removed.yml"
+awk '
+  /^  reports:/ { skip=1 }
+  skip && /^  [A-Za-z0-9_-]+:/ && !/^  reports:/ { skip=0 }
+  !skip { print }
+' "$workflow" > "$reports_job_removed"
+assert_check_fails 'removed the reports job' check_reports_job "$reports_job_removed"
+
+reports_without_needs="$tmpdir/reports-without-needs.yml"
+awk '
+  /^  reports:/ { in_job=1 }
+  in_job && /^  [A-Za-z0-9_-]+:/ && !/^  reports:/ { in_job=0 }
+  in_job && /^ {4}needs: unit *$/ { next }
+  { print }
+' "$workflow" > "$reports_without_needs"
+assert_check_fails 'dropped needs: unit from the reports job' check_reports_job "$reports_without_needs"
+
+reports_success_only="$tmpdir/reports-success-only.yml"
+sed "s/^    if: \\\${{ !cancelled() && needs.unit.result != 'skipped' }}\$/    if: \\\${{ success() }}/" \
+  "$workflow" > "$reports_success_only"
+cmp -s "$workflow" "$reports_success_only" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_success_only did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'gated the reports job on success(), so a failing shard skips the merged JUnit' \
+  check_reports_job "$reports_success_only"
+
+# One subcommand's -expect edited alone.
+reports_expect_drift="$tmpdir/reports-expect-drift.yml"
+sed 's/mergetestreports coverage -dir .tmp\/unit-shards -expect 4/mergetestreports coverage -dir .tmp\/unit-shards -expect 3/' \
+  "$workflow" > "$reports_expect_drift"
+cmp -s "$workflow" "$reports_expect_drift" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_expect_drift did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'changed only the coverage merge'"'"'s -expect' check_reports_job "$reports_expect_drift"
+
+# The unit matrix changes size and the reports job does not follow.
+assert_check_fails 'shrank the unit matrix to 3 shards while reports still expects 4' \
+  check_reports_job "$unit_mismatched_shards"
+
+# The behaviour step deleted: only the greps would be left standing guard.
+reports_without_crosscheck="$tmpdir/reports-without-crosscheck.yml"
+awk '
+  /Verify the merged reports against the shards/ { skip=1 }
+  skip && /^      # actions\/upload-artifact/ { skip=0 }
+  !skip { print }
+' "$workflow" > "$reports_without_crosscheck"
+cmp -s "$workflow" "$reports_without_crosscheck" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_without_crosscheck did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'deleted the crosscheck step from the reports job' check_reports_job "$reports_without_crosscheck"
+
+reports_crosscheck_expect_drift="$tmpdir/reports-crosscheck-expect-drift.yml"
+sed 's/mergetestreports crosscheck -dir .tmp\/unit-shards -expect 4/mergetestreports crosscheck -dir .tmp\/unit-shards -expect 3/' \
+  "$workflow" > "$reports_crosscheck_expect_drift"
+cmp -s "$workflow" "$reports_crosscheck_expect_drift" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_crosscheck_expect_drift did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'changed only the crosscheck step'"'"'s -expect' check_reports_job "$reports_crosscheck_expect_drift"
+
+reports_failures_without_report="$tmpdir/reports-failures-without-report.yml"
+sed 's/ -report .tmp\/coverage\/failures.json//' "$workflow" > "$reports_failures_without_report"
+cmp -s "$workflow" "$reports_failures_without_report" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_failures_without_report did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'stopped the failures step writing the report the crosscheck reads' check_reports_job "$reports_failures_without_report"
+
+# The parsed-step controls: each leaves the step's TEXT in the file and changes
+# only whether it runs, which is all a grep cannot see.
+reports_crosscheck_if_false="$tmpdir/reports-crosscheck-if-false.yml"
+awk '
+  /Verify the merged reports against the shards/ { in_step=1 }
+  in_step && /^ {8}if: / { sub(/if: .*/, "if: ${{ false }}"); in_step=0 }
+  { print }
+' "$workflow" > "$reports_crosscheck_if_false"
+cmp -s "$workflow" "$reports_crosscheck_if_false" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_crosscheck_if_false did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'set the crosscheck step condition to false (text intact, never runs)' check_reports_steps "$reports_crosscheck_if_false"
+
+reports_crosscheck_true="$tmpdir/reports-crosscheck-true.yml"
+sed 's|^        run: go run ./ci/mergetestreports crosscheck |        run: true # go run ./ci/mergetestreports crosscheck |' "$workflow" > "$reports_crosscheck_true"
+cmp -s "$workflow" "$reports_crosscheck_true" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_crosscheck_true did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'replaced the crosscheck command with true plus a comment holding the old command' check_reports_steps "$reports_crosscheck_true"
+
+reports_crosscheck_or_true="$tmpdir/reports-crosscheck-or-true.yml"
+sed 's|^\( *run: go run ./ci/mergetestreports crosscheck .*failures.json\)$|\1 \|\| true|' "$workflow" > "$reports_crosscheck_or_true"
+cmp -s "$workflow" "$reports_crosscheck_or_true" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_crosscheck_or_true did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'appended || true to the crosscheck command' check_reports_steps "$reports_crosscheck_or_true"
+
+reports_crosscheck_continue="$tmpdir/reports-crosscheck-continue.yml"
+awk '{ print } /Verify the merged reports against the shards/ { print "        continue-on-error: true" }' "$workflow" > "$reports_crosscheck_continue"
+assert_check_fails 'added continue-on-error: true to the crosscheck step' check_reports_steps "$reports_crosscheck_continue"
+
+reports_failures_true="$tmpdir/reports-failures-true.yml"
+sed 's|^        run: go run ./ci/mergetestreports failures .*$|        run: true|' "$workflow" > "$reports_failures_true"
+cmp -s "$workflow" "$reports_failures_true" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_failures_true did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'replaced the failures command with true' check_reports_steps "$reports_failures_true"
+
+reports_junit_gated="$tmpdir/reports-junit-gated.yml"
+awk '{ print } /- name: Merge JUnit reports/ { print "        if: ${{ false }}" }' "$workflow" > "$reports_junit_gated"
+assert_check_fails 'gated the JUnit merge step off' check_reports_steps "$reports_junit_gated"
+
+reports_coverage_true="$tmpdir/reports-coverage-true.yml"
+sed 's|^          go run ./ci/mergetestreports coverage .*$|          true|' "$workflow" > "$reports_coverage_true"
+cmp -s "$workflow" "$reports_coverage_true" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_coverage_true did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'replaced the coverage merge command inside its script with true' check_reports_steps "$reports_coverage_true"
+
+reports_job_continue="$tmpdir/reports-job-continue.yml"
+awk '{ print } /^  reports:$/ { print "    continue-on-error: true" }' "$workflow" > "$reports_job_continue"
+assert_check_fails 'added continue-on-error: true to the reports job' check_reports_steps "$reports_job_continue"
+
+reports_job_if_true="$tmpdir/reports-job-if-true.yml"
+sed "s/^    if: \\\${{ !cancelled() && needs.unit.result != 'skipped' }}\$/    if: \\\${{ !cancelled() \&\& needs.unit.result != 'skipped' \&\& false }}/" "$workflow" > "$reports_job_if_true"
+cmp -s "$workflow" "$reports_job_if_true" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_job_if_true did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'made the reports job condition always false' check_reports_steps "$reports_job_if_true"
+
+reports_coverage_renamed="$tmpdir/reports-coverage-renamed.yml"
+sed 's/^\( \{10\}\)name: go-coverage$/\1name: go-coverage-merged/' "$workflow" > "$reports_coverage_renamed"
+cmp -s "$workflow" "$reports_coverage_renamed" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_coverage_renamed did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'renamed the published go-coverage artifact' check_reports_job "$reports_coverage_renamed"
+
+reports_junit_renamed="$tmpdir/reports-junit-renamed.yml"
+sed 's/^\( \{10\}\)name: go-junit$/\1name: go-junit-merged/' "$workflow" > "$reports_junit_renamed"
+cmp -s "$workflow" "$reports_junit_renamed" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_junit_renamed did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'renamed the published go-junit artifact' check_reports_job "$reports_junit_renamed"
+
+# A matrix leg uploading under the published name: four legs, one name.
+unit_uploads_published_name="$tmpdir/unit-uploads-published-name.yml"
+sed 's/^\( \{10\}\)name: go-unit-shard-\${{ matrix.shard }}$/\1name: go-junit/' "$workflow" > "$unit_uploads_published_name"
+cmp -s "$workflow" "$unit_uploads_published_name" && { printf 'NEGATIVE CONTROL SETUP FAILED: unit_uploads_published_name did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'made every unit leg upload under the published go-junit name' \
+  check_reports_job "$unit_uploads_published_name"
+
+unit_prefix_drift="$tmpdir/unit-prefix-drift.yml"
+sed 's/^\( \{10\}\)name: go-unit-shard-\${{ matrix.shard }}$/\1name: go-unit-part-${{ matrix.shard }}/' "$workflow" > "$unit_prefix_drift"
+cmp -s "$workflow" "$unit_prefix_drift" && { printf 'NEGATIVE CONTROL SETUP FAILED: unit_prefix_drift did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'renamed the unit shard artifact away from the merge tool'"'"'s prefix' \
+  check_reports_job "$unit_prefix_drift"
+
+unit_drops_go_test_json="$tmpdir/unit-drops-go-test-json.yml"
+awk '/^ {12}\.tmp\/coverage\/go-test\.json *$/ { next } { print }' "$workflow" > "$unit_drops_go_test_json"
+cmp -s "$workflow" "$unit_drops_go_test_json" && { printf 'NEGATIVE CONTROL SETUP FAILED: unit_drops_go_test_json did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'stopped uploading go-test.json from the unit shards' check_reports_job "$unit_drops_go_test_json"
+
+unit_drops_cover_out="$tmpdir/unit-drops-cover-out.yml"
+awk '/^ {12}\.tmp\/coverage\/cover\.out *$/ { next } { print }' "$workflow" > "$unit_drops_cover_out"
+cmp -s "$workflow" "$unit_drops_cover_out" && { printf 'NEGATIVE CONTROL SETUP FAILED: unit_drops_cover_out did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'stopped uploading cover.out from the unit shards' check_reports_job "$unit_drops_cover_out"
+
+reports_wrong_pattern="$tmpdir/reports-wrong-pattern.yml"
+sed 's/^\( \{10\}\)pattern: go-unit-shard-\*$/\1pattern: go-unit-*/' "$workflow" > "$reports_wrong_pattern"
+cmp -s "$workflow" "$reports_wrong_pattern" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_wrong_pattern did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'pointed the reports download at a different pattern' check_reports_job "$reports_wrong_pattern"
+
+reports_flattens_shards="$tmpdir/reports-flattens-shards.yml"
+awk '{ print } /^ {10}pattern: go-unit-shard-\*$/ { print "          merge-multiple: true" }' "$workflow" > "$reports_flattens_shards"
+cmp -s "$workflow" "$reports_flattens_shards" && { printf 'NEGATIVE CONTROL SETUP FAILED: reports_flattens_shards did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'set merge-multiple: true on the reports download' check_reports_job "$reports_flattens_shards"
 
 # (j) remove the race-devhealthschema job so the isolated package's dedicated
 # scope silently disappears while test-shard.sh still excludes it from the
