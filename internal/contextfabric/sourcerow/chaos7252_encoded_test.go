@@ -354,3 +354,45 @@ func TestEncodedSpecsMatchThePlans(t *testing.T) {
 		t.Fatalf("routed %d, specs %d", routed, len(specs))
 	}
 }
+
+// #742's served-row = authorized-subject rule, for the ".v2" kinds: the row
+// a read returns re-mints (evidenceref.Mint over the components its
+// statement rendered from its own columns) to exactly the requested ref, and
+// a row whose id names another tuple -- or, where the id names the row's
+// repository, another repository than the admitted one -- is refused as
+// no_row, never served under the requested ref.
+func TestEncodedRowMustReMintToTheRequestedRef(t *testing.T) {
+	for _, tc := range encodedCases() {
+		t.Run(string(tc.kind), func(t *testing.T) {
+			ref, id := mustMint(t, tc.kind, tc.values...)
+			served := newWorld()
+			tc.seed(served)
+			served.addRow(grantedID, tc.query, ref, catalogRow(tc.query, ref, entityTypes[tc.kind], id, grantedRep))
+			if _, decision := resolver(t, served).ResolveSourceRow(context.Background(), unrestricted, string(tc.kind), id); decision.Reason != contextfabric.SourceRowServed || decision.SubjectMismatch {
+				t.Fatalf("the matching row: %+v", decision)
+			}
+			// The same locator, but the row's own id names another tuple.
+			other := append([]string(nil), tc.values...)
+			other[len(other)-1] += "-other"
+			_, otherID := mustMint(t, tc.kind, other...)
+			mismatched := newWorld()
+			tc.seed(mismatched)
+			mismatched.addRow(grantedID, tc.query, ref, catalogRow(tc.query, ref, entityTypes[tc.kind], otherID, grantedRep))
+			if _, decision := resolver(t, mismatched).ResolveSourceRow(context.Background(), unrestricted, string(tc.kind), id); decision.Reason != contextfabric.SourceRowNoRow || !decision.SubjectMismatch {
+				t.Fatalf("a row naming another tuple: %+v", decision)
+			}
+		})
+	}
+	// A repository-anchored ".v2" row whose own repository is not the one the
+	// grant admitted is refused too.
+	kind := contractsv1.ContextFabricEvidenceEntityWorkItemHierarchyV2
+	ref, id := mustMint(t, kind, grantedID, "c", "p")
+	_, foreignID := mustMint(t, kind, secretID, "c", "p")
+	w := newWorld()
+	w.repos[grantedID] = grantedRep
+	w.discovered[workItemDiscovery+"|p"] = []contractsv1.ResolvedScope{scope(grantedID, grantedRep)}
+	w.addRow(grantedID, "work_item_hierarchy.v2", ref, catalogRow("work_item_hierarchy.v2", ref, entityTypes[kind], foreignID, grantedRep))
+	if _, decision := resolver(t, w).ResolveSourceRow(context.Background(), unrestricted, string(kind), id); decision.Reason != contextfabric.SourceRowNoRow || !decision.SubjectMismatch {
+		t.Fatalf("a row of another repository: %+v", decision)
+	}
+}

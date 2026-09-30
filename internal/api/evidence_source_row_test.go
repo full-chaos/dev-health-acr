@@ -292,7 +292,7 @@ func TestEvidenceRouteTracesEverySourceRowReason(t *testing.T) {
 		contextfabric.SourceRowServed: {contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityPullRequest, sourceRowGrantedRepoID+":532"), func() *sourceRowTables {
 			return newSourceRowTables().withPullRequest(sourceRowGrantedRepoID, hostedTestRepository)
 		}, http.StatusOK},
-		contextfabric.SourceRowKindOnRecord:  {contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityProjectTeam, "jira:PROJ-1:team-a"), newSourceRowTables, http.StatusNotFound},
+		contextfabric.SourceRowKindOnRecord:  {contractsv1.ContextFabricEvidenceRefPrefix + string(contractsv1.ContextFabricEvidenceEntityProjectTeam) + ":jira:PROJ-1:team-a", newSourceRowTables, http.StatusNotFound}, // a retired kind a stored result may still cite (CHAOS-7252)
 		contextfabric.SourceRowIDMalformed:   {contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityPullRequest, "532"), newSourceRowTables, http.StatusNotFound},
 		contextfabric.SourceRowNoRow:         {contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityPullRequest, sourceRowGrantedRepoID+":9"), newSourceRowTables, http.StatusNotFound},
 		contextfabric.SourceRowAmbiguous:     {contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityPullRequest, sourceRowGrantedRepoID+":532"), func() *sourceRowTables { return ambiguousTables() }, http.StatusNotFound},

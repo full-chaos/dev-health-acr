@@ -122,6 +122,12 @@ type SourceRowRead struct {
 	Components []string
 }
 
+// workItemsSourceFamily is the source family of the work item statements,
+// read off the catalog's own dependency statement rather than spelled a
+// second time: the ".v2" rows belong to the same family as their catalog
+// siblings.
+var workItemsSourceFamily = catalogSourceQuery("work_item_dependencies.v1").Source
+
 // SourceRowOnlyQueriesV2 are the row statements of the ".v2" kinds
 // (CHAOS-7252). Each has the catalog's column shape and bindings plus
 // component_1..n, and returns at most one row: the table key (or, for a
@@ -132,14 +138,14 @@ var SourceRowOnlyQueriesV2 = []SourceQuery{
 	// relationship_type values sharing one key, CHAOS-7177) are ONE relation:
 	// the catalog's representative is served (latest last_synced, then the
 	// raw type).
-	{"work_item_dependencies.v2", "work_items", EvidenceScopeRepo, standardColumns + ` SELECT ` +
+	{"work_item_dependencies.v2", workItemsSourceFamily, EvidenceScopeRepo, standardColumns + ` SELECT ` +
 		evidenceref.SQL(contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, "d.source_work_item_id", "d.target_work_item_id", dependencyRelationKeySQL) + ` evidence_ref_id, 'dev_health' system, 'work_item_dependency' entity_type, ` +
 		evidenceref.IDSQL(contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, "d.source_work_item_id", "d.target_work_item_id", dependencyRelationKeySQL) + ` entity_id, concat(d.source_work_item_id, ' ', d.relationship_type, ' ', d.target_work_item_id) display_label, '' safe_uri, 'native' provenance, 1.0 confidence, if(lengthUTF8(ifNull(d.relationship_type_raw, '')) BETWEEN 1 AND 2000, ifNull(d.relationship_type_raw, ''), concat('dependency=', d.source_work_item_id, ' -> ', d.target_work_item_id)) citation, d.last_synced observed_at FROM work_item_dependencies AS d FINAL WHERE d.org_id = {org_id:String} AND d.source_work_item_id = {component_1:String} AND d.target_work_item_id = {component_2:String} AND ` + dependencyRelationKeySQL + ` = {component_3:String} AND d.source_work_item_id IN (SELECT work_item_id FROM work_items FINAL WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID} AND work_item_id = {component_1:String}) ORDER BY d.last_synced DESC, d.relationship_type ASC LIMIT 1 )`},
 	// The child work_items row (org, repo, work item) naming this parent;
 	// the parent must be a work item of the organization (the projector's
 	// resolvability rule), checked without a join that fans out when the
 	// parent id lives in several repositories.
-	{"work_item_hierarchy.v2", "work_items", EvidenceScopeRepo, standardColumns + ` SELECT ` +
+	{"work_item_hierarchy.v2", workItemsSourceFamily, EvidenceScopeRepo, standardColumns + ` SELECT ` +
 		evidenceref.SQL(contractsv1.ContextFabricEvidenceEntityWorkItemHierarchyV2, "c.repo_id", "c.work_item_id", "c.parent_id") + ` evidence_ref_id, 'dev_health' system, 'work_item_hierarchy' entity_type, ` +
 		evidenceref.IDSQL(contractsv1.ContextFabricEvidenceEntityWorkItemHierarchyV2, "c.repo_id", "c.work_item_id", "c.parent_id") + ` entity_id, concat(c.work_item_id, ' part of ', c.parent_id) display_label, '' safe_uri, 'native' provenance, 1.0 confidence, concat('child=', c.work_item_id, ', parent=', c.parent_id) citation, c.updated_at observed_at FROM work_items AS c FINAL WHERE c.org_id = {org_id:String} AND c.repo_id = {repo_id:UUID} AND c.work_item_id = {component_2:String} AND c.parent_id = {component_3:String} AND c.parent_id != '' AND c.parent_id != c.work_item_id AND c.parent_id IN (SELECT work_item_id FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id = {component_3:String}) )`},
 	// The primary work_item_team_attributions row by its full key; its work
@@ -147,7 +153,7 @@ var SourceRowOnlyQueriesV2 = []SourceQuery{
 	// organization (the projector's joins). Provenance follows the
 	// projector's epistemic split (CHAOS-4101): a native_team row is the
 	// provider's own assertion, every other source is Ops' inference.
-	{"work_item_teams.v2", "work_items", EvidenceScopeRepo, standardColumns + ` SELECT ` +
+	{"work_item_teams.v2", workItemsSourceFamily, EvidenceScopeRepo, standardColumns + ` SELECT ` +
 		evidenceref.SQL(contractsv1.ContextFabricEvidenceEntityWorkItemTeamV2, "a.repo_id", "a.work_item_id", "ifNull(a.team_id, '')", "toString(a.source)") + ` evidence_ref_id, 'dev_health' system, 'work_item_team' entity_type, ` +
 		evidenceref.IDSQL(contractsv1.ContextFabricEvidenceEntityWorkItemTeamV2, "a.repo_id", "a.work_item_id", "ifNull(a.team_id, '')", "toString(a.source)") + ` entity_id, concat(a.work_item_id, ' owned by team ', ifNull(a.team_id, '')) display_label, '' safe_uri, if(toString(a.source) = 'native_team', 'native', 'heuristic') provenance, 1.0 confidence, concat('source=', toString(a.source), ', confidence=', toString(a.confidence)) citation, a.computed_at observed_at FROM work_item_team_attributions AS a FINAL WHERE a.org_id = {org_id:String} AND toString(a.repo_id) = {component_1:String} AND a.work_item_id = {component_2:String} AND ifNull(a.team_id, '') = {component_3:String} AND toString(a.source) = {component_4:String} AND a.is_primary = 1 AND ifNull(a.team_id, '') != '' AND a.work_item_id IN (SELECT work_item_id FROM work_items FINAL WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID} AND work_item_id = {component_2:String}) AND ifNull(a.team_id, '') IN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND id = {component_3:String}) )`},
 	// The work_graph_deployment_incident_edges row by its full key (org,

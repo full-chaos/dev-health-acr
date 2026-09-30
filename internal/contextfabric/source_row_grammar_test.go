@@ -65,6 +65,11 @@ type producerGrammar struct {
 	keyByColumns  bool
 	keyColumns    []string
 	keyExceptions map[string]string
+	// providerFirst: the first component is a project provider, a closed
+	// colon-free enum (CHAOS-7227: the project statements read only
+	// providers matching ^[a-z][a-z0-9_-]*$, and the resolver refuses any
+	// other), so a project id splits at its first ':'.
+	providerFirst bool
 	// retired: a pre-CHAOS-7252 grammar of a retired kind.
 	retired bool
 	// fixture: a constant id in a test harness compiled into production
@@ -85,7 +90,8 @@ func (g producerGrammar) arityAndMint(t *testing.T) (int, func([]string) string)
 	switch form {
 	case "concat", "sql":
 		// A bare ':' join. A catalog locator ("sql") is read inside the
-		// one repository its statement binds, so it is repo-anchored.
+		// one repository its statement binds, so it is repo-anchored; an
+		// organization row statement names its table through rowQuery.
 		if g.repoAnchored && form == "concat" {
 			return n - 1, func(c []string) string { return strings.Join(append([]string{grammarRepoID}, c...), ":") }
 		}
@@ -127,6 +133,8 @@ const (
 	source     = "internal/contextfabric/devhealthsource/"
 	catalog    = "internal/contextpacket/source_queries.go|SourceQueryCatalogV1"
 	sourceRows = "internal/contextpacket/source_rows.go|SourceRowOnlyQueriesV2"
+	// organizationRows: the team and project row statements (CHAOS-7227).
+	organizationRows = "internal/contextpacket/source_rows.go|OrganizationRowQueriesV1"
 )
 
 func sites(keys ...string) map[string]int {
@@ -144,7 +152,6 @@ func sites(keys ...string) map[string]int {
 
 const (
 	noSourceRow  = "no Context Fabric producer mints this kind: a packet catalog locator inside ev2 handles only"
-	ownershipB   = "ownership-derived authorization: CHAOS-7227 (source-row expansion for team and project)"
 	projectTeamB = "the project-team.v2 source-row read (the projector's group SQL, unrestricted callers only): the CHAOS-7252 sub-issue"
 )
 
@@ -176,21 +183,24 @@ func producerGrammars() []producerGrammar {
 		{kind: contractsv1.ContextFabricEvidenceEntityIncident, shape: "concat/1", rowQuery: "incidents.v1", keyColumns: []string{"id"}, sites: sites(facts+"incidents.go|ReadFacts", source+"tables.go|queryIncidents")},
 		{kind: contractsv1.ContextFabricEvidenceEntityIncident, shape: "sql/1", sites: sites(catalog)},
 
-		// team, project: ownership kinds (CHAOS-7227).
-		{kind: contractsv1.ContextFabricEvidenceEntityTeam, shape: "concat/1", onRecord: ownershipB, sites: sites(
+		// team, project: organization rows authorized by ownership through
+		// the subject gate (CHAOS-7227).
+		{kind: contractsv1.ContextFabricEvidenceEntityTeam, shape: "concat/1", rowQuery: "teams.v1", keyColumns: []string{"id"}, sites: sites(
 			"internal/contextfabric/chaos5990_period_delta.go|periodDeltaSubjectEvidenceRef", facts+"deficiencies.go|ReadFacts",
 			facts+"flow.go|readProjectFlow", facts+"flow.go|readTeamFlow", facts+"health.go|ReadFacts", facts+"health.go|readProjectHealth*2",
 			facts+"investment.go|readProjectInvestment", facts+"investment.go|readTeamThemeMix", facts+"landscape.go|readProjectLandscape",
 			facts+"landscape.go|readTeamLandscape", facts+"metrics.go|readProjectMetrics", facts+"metrics.go|readTeamMetrics",
 			facts+"readiness.go|readProjectReadiness", facts+"readiness.go|readTeamReadiness", facts+"workload.go|readProjectWorkload*2",
 			facts+"workload.go|readTeamWorkload", source+"teams_projects.go|queryTeams", source+"teams_projects_edges.go|queryRepositoryTeams")},
+		{kind: contractsv1.ContextFabricEvidenceEntityTeam, shape: "sql/1", rowQuery: "teams.v1", keyColumns: []string{"id"}, sites: sites(organizationRows)},
 		{kind: contractsv1.ContextFabricEvidenceEntityTeam, shape: "literal", fixture: true, sites: sites("internal/contextfabric/pginvestigation/paritytest/paritytest.go|RunCitedEvidenceSuite")},
-		// A project's id is "<provider>:<project id>"; the facts pass the
-		// joined key in one variable. The provider holds no ':' only by the
-		// data (a closed provider set), which is CHAOS-7227's to argue.
-		{kind: contractsv1.ContextFabricEvidenceEntityProject, shape: "concat/2", onRecord: ownershipB, sites: sites(
+		// A project's id is "<provider>:<project id>", the provider a closed
+		// colon-free enum (CHAOS-7227). The facts pass the joined key in one
+		// variable (concat/1 below: one opaque operand carrying both).
+		{kind: contractsv1.ContextFabricEvidenceEntityProject, shape: "concat/2", providerFirst: true, rowQuery: "projects.v1", keyColumns: []string{"provider", "id"}, sites: sites(
 			"internal/contextfabric/chaos5990_period_delta.go|periodDeltaSubjectEvidenceRef", source+"teams_projects.go|queryProjects")},
-		{kind: contractsv1.ContextFabricEvidenceEntityProject, shape: "concat/1", onRecord: ownershipB, sites: sites(
+		{kind: contractsv1.ContextFabricEvidenceEntityProject, shape: "sql/2", providerFirst: true, rowQuery: "projects.v1", keyColumns: []string{"provider", "id"}, sites: sites(organizationRows)},
+		{kind: contractsv1.ContextFabricEvidenceEntityProject, shape: "concat/1", rowQuery: "projects.v1", keyColumns: []string{"provider", "id"}, sites: sites(
 			facts+"flow.go|readProjectFlow", facts+"health.go|readProjectHealth", facts+"investment.go|mergeProjectInvestmentFact",
 			facts+"investment.go|readProjectInvestment", facts+"landscape.go|readProjectLandscape", facts+"metrics.go|readProjectMetrics",
 			facts+"readiness.go|readProjectReadiness", facts+"workitems.go|readProjectActualCompletion", facts+"workload.go|readProjectWorkload")},
@@ -250,9 +260,12 @@ func producerGrammars() []producerGrammar {
 // ari:cloud:..., blocks:fwd, a literal "%3A").
 var grammarComponents = []string{"a", "b", "a:b", "b:a", ":", "a:", ":b", "%", "%3A", "%25"}
 
+// grammarProviders are project provider values: a closed, colon-free enum.
+var grammarProviders = []string{"jira", "linear", "gitlab"}
+
 // collision returns two distinct component tuples that mint the same id, or
 // false when the grammar is injective over the component set.
-func collision(arity int, mint func([]string) string) ([]string, []string, bool) {
+func collision(arity int, mint func([]string) string, first []string) ([]string, []string, bool) {
 	seen := map[string][]string{}
 	var walk func(prefix []string) ([]string, []string, bool)
 	walk = func(prefix []string) ([]string, []string, bool) {
@@ -264,7 +277,11 @@ func collision(arity int, mint func([]string) string) ([]string, []string, bool)
 			seen[id] = append([]string(nil), prefix...)
 			return nil, nil, false
 		}
-		for _, value := range grammarComponents {
+		values := grammarComponents
+		if len(prefix) == 0 && first != nil {
+			values = first
+		}
+		for _, value := range values {
 			if a, b, found := walk(append(prefix, value)); found {
 				return a, b, true
 			}
@@ -328,7 +345,11 @@ func rowTable(t *testing.T, g producerGrammar) string {
 	switch {
 	case g.rowQuery != "":
 		var statement string
-		for _, query := range append(append([]contextpacket.SourceQuery(nil), contextpacket.SourceQueryCatalogV1...), contextpacket.SourceRowOnlyQueriesV2...) {
+		statements := append(append([]contextpacket.SourceQuery(nil), contextpacket.SourceQueryCatalogV1...), contextpacket.SourceRowOnlyQueriesV2...)
+		for _, query := range contextpacket.OrganizationRowQueriesV1 {
+			statements = append(statements, query.SourceQuery)
+		}
+		for _, query := range statements {
 			if query.ID == g.rowQuery {
 				statement = query.Statement
 			}
@@ -394,7 +415,11 @@ func keyGaps(t *testing.T, g producerGrammar) []string {
 func passes(t *testing.T, g producerGrammar) (bool, string) {
 	t.Helper()
 	arity, mint := g.arityAndMint(t)
-	if a, b, found := collision(arity, mint); found {
+	var first []string
+	if g.providerFirst {
+		first = grammarProviders
+	}
+	if a, b, found := collision(arity, mint, first); found {
 		return false, fmt.Sprintf("not injective: %q and %q both mint %q", a, b, mint(a))
 	}
 	anchored := g.repoAnchored || strings.HasPrefix(g.shape, "sql/")
