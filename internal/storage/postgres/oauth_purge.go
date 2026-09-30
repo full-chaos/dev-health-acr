@@ -111,9 +111,16 @@ WHERE c.client_id = ANY($2::text[])
   AND` + idleOAuthClientPredicate
 
 // The remaining-eligible probes (CHAOS-7249) count, WITHOUT locking, the rows
-// the two purge statements' own predicates still select. They read at most
-// $2 rows each (the requests through ix_acr_oauth_authorization_requests_expiry),
-// so their cost is bounded by the batch limit, never by table size.
+// the two purge statements' own predicates still select, stopping at $2. A LIMIT
+// caps the rows a statement RETURNS, not the rows it EXAMINES: what keeps the
+// probes and the purge statements off the whole table is the index each reads in
+// order, ix_acr_oauth_authorization_requests_expiry (migration 0040) for
+// requests and ix_acr_oauth_clients_created (migration 0045) for clients. Rows
+// younger than the cutoff (every registration inside the idle window, which is
+// what unauthenticated registration grows) are never read; the work grows with
+// the rows past the cutoff that are still KEPT (a request backing a live
+// credential, a client older than the window that is still in use), not with the
+// table. TestOAuthPurgeStatements_readABoundedNumberOfBuffers pins this.
 const countExpiredOAuthRequestsSQL = `
 SELECT count(*) FROM (
     SELECT 1 FROM acr.oauth_authorization_requests r
@@ -242,9 +249,11 @@ type OAuthPurgeRemaining struct {
 // empty tick, deleted=0 with remaining>0 is a tick that skipped rows it should
 // have taken (rows held by a concurrent flow, or a broken delete), and
 // remaining>0 after a full batch is an ordinary backlog. It takes no lock and
-// reads at most limit+1 rows per table. It shares the purge statements'
-// predicates, so it cannot see a rule that is wrong in the predicate itself;
-// it sees any way the DELETE fails to take what the predicate selects.
+// stops after limit+1 eligible rows per table, reading in index order (see the
+// probe statements above for what bounds its work). It shares the purge
+// statements' predicates, so it cannot see a rule that is wrong in the
+// predicate itself; it sees any way the DELETE fails to take what the
+// predicate selects.
 func (s *OAuthStore) CountPurgeRemaining(ctx context.Context, now time.Time, requestGrace, clientIdle time.Duration, limit int) (OAuthPurgeRemaining, error) {
 	if err := s.ready(ctx); err != nil {
 		return OAuthPurgeRemaining{}, err
