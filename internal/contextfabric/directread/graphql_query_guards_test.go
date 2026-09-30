@@ -919,3 +919,18 @@ func TestGraphQLRepeatedSelectionsAreMerged(t *testing.T) {
 		t.Fatalf("a nested repeated selection was dropped:\n%s", sent)
 	}
 }
+
+// r1 P2-a disposition: the merge runs before every check, so a withheld or
+// person-named field hidden in a repeated selection is refused before the
+// wire (the checks see the merged tree), and the same response key with
+// different arguments is refused by the SDL rule OverlappingFieldsCanBeMerged.
+func TestGraphQLChecksSeeTheMergedTree(t *testing.T) {
+	h := newGQLHarness(t, gqlHarnessOptions{})
+	resp := h.run(t, opUnrestricted(opOrgA), `{ workGraphEdges(filters: {limit: 5}) { edges { edgeId } edges { evidence } } }`, nil)
+	h.wantRefused(t, resp, directread.RefusalFieldNotAllowed)
+	if !strings.Contains(resp.Refusal.Reason, "withheld") {
+		t.Fatalf("reason %q", resp.Refusal.Reason)
+	}
+	h.listener.reset()
+	h.wantRefused(t, h.run(t, opUnrestricted(opOrgA), `{ catalog(dimension: TEAM) { values { value } values { value } } a: catalog(dimension: TEAM) { values { value } } a: catalog(dimension: REPO) { values { value } } }`, nil), directread.RefusalQueryInvalid)
+}
