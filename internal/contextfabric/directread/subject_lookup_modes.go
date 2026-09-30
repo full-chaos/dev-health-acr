@@ -231,6 +231,12 @@ func (l *SubjectLookup) scanHandle(ctx context.Context, principal storage.Princi
 			return nil, false, fmt.Errorf("subject gate unavailable: %w", gateError(decision))
 		}
 		anchorRefused = proof.Len() == 0
+		if plan.anchorDecision != nil {
+			*plan.anchorDecision = "admitted"
+			if anchorRefused {
+				*plan.anchorDecision = "refused"
+			}
+		}
 		if !anchorRefused {
 			if err := proof.consume(ctx, principal, l.clock()); err != nil {
 				return nil, false, fmt.Errorf("%w: %w", ErrUngatedRead, err)

@@ -1649,6 +1649,16 @@
         "applicability": "written when the call ends invalid_request or unavailable"
       },
       {
+        "key": "anchor",
+        "type": "string",
+        "presence": "conditional",
+        "closed_vocabulary": [
+          "admitted",
+          "refused"
+        ],
+        "applicability": "written when a handle-mode anchor reached the subject gate (CHAOS-7158): the true gate decision, server side only"
+      },
+      {
         "key": "request_id",
         "type": "string",
         "presence": "conditional",

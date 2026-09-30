@@ -1,8 +1,10 @@
 package directread
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -151,4 +153,39 @@ func TestChaos7158_HandleAnchor(t *testing.T) {
 			t.Fatalf("err=%v calls=%d, want a static refusal", err, len(calls))
 		}
 	})
+
+	t.Run("server-side telemetry records the true anchor decision, never a caller-visible one", func(t *testing.T) {
+		record := func(name string, anchor *contractsv1.MCPFindSubjectsAnchor, census graphrank.CensusFunc) FindTelemetry {
+			recorder := &capturingFindRecorderInternal{}
+			g := handleGraph()
+			gate := NewSubjectGate(g, nil)
+			lookup := NewSubjectLookup(g, gate, recorder).WithOwnershipAndHandles(g, census, g).WithCensusAnchorSupport(anchorSupportFixture)
+			_, _ = lookup.Find(relCtx("tel-"+name), restrictedA, FindRequest{Handle: "PR 532", Anchor: anchor})
+			if len(recorder.calls) != 1 {
+				t.Fatalf("%s: %d telemetry records", name, len(recorder.calls))
+			}
+			return recorder.calls[0]
+		}
+		var sink []censusCall
+		none := fixedCensus(graphrank.CensusOutcome{}, nil, &sink)
+		boom := fixedCensus(graphrank.CensusOutcome{}, errors.New("clickhouse down"), &sink)
+		refused := record("refused", anchorOf(contractsv1.ContextFabricSubjectRepository, repoB.CanonicalID), none)
+		matchless := record("matchless", anchorOf(contractsv1.ContextFabricSubjectRepository, repoA.CanonicalID), none)
+		refusedDown := record("refused-down", anchorOf(contractsv1.ContextFabricSubjectRepository, repoB.CanonicalID), boom)
+		if refused.Anchor != "refused" || matchless.Anchor != "admitted" || refusedDown.Anchor != "refused" {
+			t.Fatalf("anchor decisions: refused=%q matchless=%q refused-under-outage=%q", refused.Anchor, matchless.Anchor, refusedDown.Anchor)
+		}
+		if refusedDown.Status != "unavailable" || refused.Status != matchless.Status {
+			t.Fatalf("statuses: outage=%q refused=%q matchless=%q", refusedDown.Status, refused.Status, matchless.Status)
+		}
+		if got := FindLogArgs(restrictedA, refused); !slices.Contains(got, any("refused")) {
+			t.Fatalf("the log line omits the anchor decision: %v", got)
+		}
+	})
+}
+
+type capturingFindRecorderInternal struct{ calls []FindTelemetry }
+
+func (r *capturingFindRecorderInternal) RecordFindSubjects(_ context.Context, _ storage.Principal, telemetry FindTelemetry) {
+	r.calls = append(r.calls, telemetry)
 }

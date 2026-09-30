@@ -2278,6 +2278,7 @@ var DirectRead = Event{
 		{Key: "status", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: directReadStatuses},
 		{Key: "latency_ms", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "error_class", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call ends invalid_request or unavailable", ClosedVocabulary: directReadErrorClass},
+		{Key: "anchor", Type: FieldString, Presence: PresenceConditional, Applicability: "written when a handle-mode anchor reached the subject gate (CHAOS-7158): the true gate decision, server side only", ClosedVocabulary: []string{"admitted", "refused"}},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }
