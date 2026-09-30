@@ -376,6 +376,17 @@ func containsVariable(v *ast.Value) bool {
 // variable reference is resolved from vars; an absent one is reported with
 // errAbsentVariable.
 func astValueJSON(v *ast.Value, vars map[string]any) (any, error) {
+	// GraphQL list coercion: a single literal in a list position is a list
+	// of one (the validator attached the position's type).
+	if v.ExpectedType != nil && v.ExpectedType.Elem != nil && v.Kind != ast.ListValue && v.Kind != ast.Variable && v.Kind != ast.NullValue {
+		elem := *v
+		elem.ExpectedType = v.ExpectedType.Elem
+		item, err := astValueJSON(&elem, vars)
+		if err != nil {
+			return nil, err
+		}
+		return []any{item}, nil
+	}
 	switch v.Kind {
 	case ast.Variable:
 		value, ok := vars[v.Raw]

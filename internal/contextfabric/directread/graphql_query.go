@@ -496,6 +496,12 @@ func (x *gqlRun) execute(ctx context.Context, req GraphQLRequest) (GraphQLRespon
 	if errs := validator.Validate(r.policy.schema, doc, clientValidationRules()...); len(errs) > 0 {
 		return x.refuse(RefusalQueryInvalid, "query does not validate against the served schema", ""), nil
 	}
+	// Literal kinds (r2 P2): ValuesOfCorrectType is not in the client rules
+	// (acr sets orgId and forced fields), so each literal is checked here
+	// against the type the SDL gives its position.
+	if !literalKindsMatch(opDef) {
+		return x.refuse(RefusalQueryInvalid, "a literal does not match the type of its argument", ""), nil
+	}
 	for i := range roots {
 		roots[i].node = buildSelTree(roots[i].field, opDef.SelectionSet[i].(*ast.Field))
 	}
@@ -600,6 +606,9 @@ func (x *gqlRun) execute(ctx context.Context, req GraphQLRequest) (GraphQLRespon
 	if reason := ReadBudgetOf(result.Body); reason != "" {
 		return x.readBudget(reason), nil
 	}
+	if class := listenerRefusalOf(result.Body); class != "" {
+		return x.listenerRefused(class, result.StatusCode), nil
+	}
 	data, class9, ok := parseGraphQLAnswer(result.Body)
 	if !ok {
 		return x.upstream(CallUpstreamError, class9), nil
@@ -636,6 +645,82 @@ func (x *gqlRun) rootFieldName(name string) string {
 		return name
 	}
 	return graphqlUnknownRootField
+}
+
+// literalKindsMatch walks every argument value (and variable default) of
+// the validated operation and checks each literal against the SDL type the
+// validator attached to its position: an enum position takes an enum
+// literal, a String/ID/custom scalar position a string, Int an integer,
+// Float an integer or a float, Boolean a boolean. null and variables are
+// left to the rebuilt-query check.
+func literalKindsMatch(op *ast.OperationDefinition) bool {
+	var value func(v *ast.Value) bool
+	value = func(v *ast.Value) bool {
+		if v == nil || v.Kind == ast.Variable || v.Kind == ast.NullValue {
+			return true
+		}
+		if v.ExpectedType != nil && v.ExpectedType.Elem != nil && v.Kind != ast.ListValue {
+			// A single value in a list position is coerced to a list: check
+			// it against the element type.
+			elem := *v
+			elem.ExpectedType = v.ExpectedType.Elem
+			return value(&elem)
+		}
+		switch v.Kind {
+		case ast.ListValue, ast.ObjectValue:
+			for _, c := range v.Children {
+				if !value(c.Value) {
+					return false
+				}
+			}
+			return true
+		}
+		def := v.Definition
+		if def == nil {
+			return false // a literal the validator could not type is not sent
+		}
+		switch def.Kind {
+		case ast.Enum:
+			return v.Kind == ast.EnumValue
+		case ast.Scalar:
+			switch def.Name {
+			case "Int":
+				return v.Kind == ast.IntValue
+			case "Float":
+				return v.Kind == ast.IntValue || v.Kind == ast.FloatValue
+			case "Boolean":
+				return v.Kind == ast.BooleanValue
+			default: // String, ID, custom scalars (Date, DateTime, JSON)
+				return v.Kind == ast.StringValue || v.Kind == ast.BlockValue
+			}
+		default:
+			return false
+		}
+	}
+	for _, d := range op.VariableDefinitions {
+		if !value(d.DefaultValue) {
+			return false
+		}
+	}
+	var walk func(set ast.SelectionSet) bool
+	walk = func(set ast.SelectionSet) bool {
+		for _, sel := range set {
+			f, ok := sel.(*ast.Field)
+			if !ok {
+				continue
+			}
+			for _, a := range f.Arguments {
+				if !value(a.Value) {
+					return false
+				}
+			}
+			if !walk(f.SelectionSet) {
+				return false
+			}
+		}
+		return true
+	}
+	return walk(op.SelectionSet)
 }
 
 // walkSyntax checks one selection set below a root field.
@@ -773,7 +858,10 @@ type plannedRoot struct {
 type candidateOutcome struct {
 	refusal *Refusal
 	path    string
-	stage   int // 0 caller class, 1 fixed literal, 2 argument binding, 3 selection, 4 variables, 5 constraints
+	stage   int // 1 fixed literal, 2 argument binding, 3 selection, 4 variables, 5 constraints, 6 caller class
+	// terminal: the candidate admits the shape but refuses the caller
+	// class; the search ends with its refusal.
+	terminal bool
 }
 
 func (x *gqlRun) planRoot(ctx context.Context, index int, root rootSel, vars map[string]any) (plannedRoot, *GraphQLResponse, error) {
@@ -787,6 +875,10 @@ func (x *gqlRun) planRoot(ctx context.Context, index int, root rootSel, vars map
 		if outcome == nil {
 			return x.finishRoot(ctx, index, root, cand, scope, tree, subjects, leaves)
 		}
+		if outcome.terminal {
+			resp := x.refuse(outcome.refusal.Code, outcome.refusal.Reason, outcome.path)
+			return plannedRoot{}, &resp, nil
+		}
 		if best == nil || outcome.stage > best.stage {
 			best = outcome
 		}
@@ -798,13 +890,9 @@ func (x *gqlRun) planRoot(ctx context.Context, index int, root rootSel, vars map
 func (x *gqlRun) tryCandidate(cand *rootCandidate, root rootSel, leaves []string, vars map[string]any) (map[string]any, []subjectUse, CallerScope, *candidateOutcome) {
 	op := cand.op
 	scope := op.Scope(x.class)
-	if !scope.Served {
-		refusal := scope.Refusal
-		if refusal == nil {
-			refusal = &Refusal{Code: RefusalOperationNotServedForCaller, Reason: "root field is not served to this caller class"}
-		}
-		return nil, nil, scope, &candidateOutcome{refusal: refusal, stage: 0}
-	}
+	// The caller-class rule is checked LAST (r2 P2): a candidate that
+	// admits the shape but refuses the class is terminal, so a stricter
+	// candidate's refusal never falls through to a less strict sibling.
 	// Arguments: a literal argument is fixed (stage 1); every other argument
 	// must bind a document variable (stage 2). A candidate that passes the
 	// literals got further than one that does not.
@@ -862,11 +950,18 @@ func (x *gqlRun) tryCandidate(cand *rootCandidate, root rootSel, leaves []string
 	}
 	// 7e': constraints, the caller class's first.
 	constraints := op.Constraints
-	if x.class == CallerRestricted {
+	if x.class == CallerRestricted && scope.Served {
 		constraints = append(append([]Constraint{}, scope.Constraints...), op.Constraints...)
 	}
 	if refusal := checkConstraints(tree, constraints, x.r.now()); refusal != nil {
 		return nil, nil, scope, &candidateOutcome{refusal: refusal, stage: 5}
+	}
+	if !scope.Served {
+		refusal := scope.Refusal
+		if refusal == nil {
+			refusal = &Refusal{Code: RefusalOperationNotServedForCaller, Reason: "root field is not served to this caller class"}
+		}
+		return nil, nil, scope, &candidateOutcome{refusal: refusal, stage: 6, terminal: true}
 	}
 	return tree, subjects, scope, nil
 }
@@ -1234,24 +1329,29 @@ func (x *gqlRun) readBudget(reason ReadBudgetReason) GraphQLResponse {
 	return resp
 }
 
+// listenerRefused maps a typed MCP listener refusal (any HTTP status). acr
+// refuses before the wire whatever the listener refuses, so it is a defect
+// or a drift: loud, never passed through.
+func (x *gqlRun) listenerRefused(refusal ListenerRefusalClass, status int) GraphQLResponse {
+	class := UpstreamListenerRefused
+	if refusal == ListenerRefusalCarrier {
+		class = UpstreamCarrierRefused
+	}
+	x.r.logger.Error(GraphQLListenerRefusedLog,
+		"org_id", contextfabric.SanitizeLogAttr(x.principal.OrgID),
+		"error_class", contextfabric.SanitizeLogAttr(string(class)),
+		"status", status,
+	)
+	return x.upstream(CallUpstreamError, class)
+}
+
 func (x *gqlRun) mapCallError(err error, maxBytes int) GraphQLResponse {
 	var qe *QueryError
 	if errors.As(err, &qe) && qe.ReadBudget != "" {
 		return x.readBudget(qe.ReadBudget)
 	}
 	if qe != nil && qe.ListenerRefusal != "" {
-		// acr refuses before the wire whatever the listener refuses, so a
-		// listener refusal is a defect or a drift: loud, never passed through.
-		class := UpstreamListenerRefused
-		if qe.ListenerRefusal == ListenerRefusalCarrier {
-			class = UpstreamCarrierRefused
-		}
-		x.r.logger.Error(GraphQLListenerRefusedLog,
-			"org_id", contextfabric.SanitizeLogAttr(x.principal.OrgID),
-			"error_class", contextfabric.SanitizeLogAttr(string(class)),
-			"status", qe.StatusCode,
-		)
-		return x.upstream(CallUpstreamError, class)
+		return x.listenerRefused(qe.ListenerRefusal, qe.StatusCode)
 	}
 	switch QueryErrorClassOf(err) {
 	case QueryErrorNotFound:

@@ -854,6 +854,9 @@ func TestGraphQLListenerRefusalsMapToClosedClasses(t *testing.T) {
 		{403, "root_field_not_allowed", directread.CallUpstreamError, directread.UpstreamListenerRefused},
 		{403, "invalid_org_argument", directread.CallUpstreamError, directread.UpstreamListenerRefused},
 		{404, "root_field_not_enabled", directread.CallOperationUnavailable, directread.UpstreamNotFound},
+		// r2 P2: the same typed envelope on a 2xx answer.
+		{200, "elevated_claim", directread.CallUpstreamError, directread.UpstreamCarrierRefused},
+		{200, "depth_limit", directread.CallUpstreamError, directread.UpstreamListenerRefused},
 	}
 	for _, tc := range cases {
 		t.Run(tc.reason, func(t *testing.T) {
@@ -933,4 +936,81 @@ func TestGraphQLChecksSeeTheMergedTree(t *testing.T) {
 	}
 	h.listener.reset()
 	h.wantRefused(t, h.run(t, opUnrestricted(opOrgA), `{ catalog(dimension: TEAM) { values { value } values { value } } a: catalog(dimension: TEAM) { values { value } } a: catalog(dimension: REPO) { values { value } } }`, nil), directread.RefusalQueryInvalid)
+}
+
+// r2 P2: each literal must match the SDL type of its position (the client
+// rules leave out ValuesOfCorrectType so acr can set orgId): an enum as a
+// string, a string as an enum, an integer as a string or a boolean as a
+// string is refused before the wire; a single value in a list position is
+// still accepted (GraphQL list coercion).
+func TestGraphQLLiteralKindsMustMatchTheirPosition(t *testing.T) {
+	h := newGQLHarness(t, gqlHarnessOptions{})
+	window := `sinceUtc: "2026-09-21T00:00:00Z", untilUtc: "2026-09-28T00:00:00Z"`
+	for name, q := range map[string]string{
+		"enum as string":         `{ catalog(dimension: "TEAM") { values { value } } }`,
+		"string as enum":         `{ hotspots(input: {sinceUtc: TODAY, untilUtc: "2026-09-28T00:00:00Z"}) { rows { filePath } } }`,
+		"int as string":          `{ hotspots(input: {` + window + `, limit: "5"}) { rows { filePath } } }`,
+		"enum in list as string": `{ securityAlerts(filters: {severities: ["HIGH"]}) { edges { node { alertId } } } }`,
+		"bool as string":         `{ securityAlerts(filters: {openOnly: "true"}) { edges { node { alertId } } } }`,
+		"default enum as string": `query($d: DimensionInput = "TEAM") { catalog(dimension: $d) { values { value } } }`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			h.listener.reset()
+			h.wantRefused(t, h.run(t, opUnrestricted(opOrgA), q, nil), directread.RefusalQueryInvalid)
+		})
+	}
+	h.listener.reset()
+	h.wantServed(t, h.run(t, opUnrestricted(opOrgA), `{ securityAlerts(filters: {severities: HIGH, openOnly: true}) { edges { node { alertId } } } }`, nil))
+}
+
+// r2 P2: a stricter candidate that admits the shape but refuses the caller
+// class ends the search with its refusal; it never falls through to a less
+// strict sibling served to the class. A shape only the served sibling
+// admits is not ambiguous and is served by it.
+func TestGraphQLStricterClassRefusalIsTerminal(t *testing.T) {
+	cat := syntheticCatalogue(t, []synthSpec{
+		{from: "hotspots", name: "aHotspotsServed"},
+		{from: "hotspots", name: "zHotspotsStrict", edit: func(op map[string]any) {
+			refuseRestricted(op)
+			dropOutput("hotspots.rows[*].riskScore")(op)
+		}},
+	})
+	policy, err := directread.NewGraphQLPolicy(cat, directread.EmbeddedOpsSchema(), directread.DefaultGraphQLLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := policy.Roots()[0].Operations(); !slices.Equal(got, []string{"zHotspotsStrict", "aHotspotsServed"}) {
+		t.Fatalf("order %v", got)
+	}
+	cfg := defaultFakeMCPConfig(t)
+	cfg.Roots = map[string]bool{"hotspots": true}
+	listener := newFakeMCPListener(t, policy, cfg)
+	client, err := directread.NewHTTPGraphQLClient(listener.server.URL, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner, err := directread.NewGraphQLRunner(directread.GraphQLRunnerConfig{Policy: policy, Gate: directread.NewSubjectGate(newOpGraph(), nil), Client: client, Grants: opDefaultGrants(), Now: func() time.Time { return opNow }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	window := `sinceUtc: "2026-09-21T00:00:00Z", untilUtc: "2026-09-28T00:00:00Z"`
+	both, err := runner.Run(t.Context(), opRestrictedA(), directread.GraphQLRequest{Query: `{ hotspots(input: {` + window + `}) { rows { filePath } } }`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if both.Call != directread.CallRefused || both.Refusal.Code != directread.RefusalOperationNotServedForCaller || len(listener.requests()) != 0 {
+		t.Fatalf("ambiguous shape fell through to the served sibling: %+v (%d requests)", both, len(listener.requests()))
+	}
+	only, err := runner.Run(t.Context(), opRestrictedA(), directread.GraphQLRequest{Query: `{ hotspots(input: {` + window + `}) { rows { filePath riskScore } } }`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if only.Call != directread.CallServed || only.RootFields[0].Operation != "aHotspotsServed" {
+		t.Fatalf("a shape only the served sibling admits: %+v", only)
+	}
+	// An unrestricted caller is served by the stricter candidate.
+	unres, err := runner.Run(t.Context(), opUnrestricted(opOrgA), directread.GraphQLRequest{Query: `{ hotspots(input: {` + window + `}) { rows { filePath } } }`})
+	if err != nil || unres.Call != directread.CallServed || unres.RootFields[0].Operation != "zHotspotsStrict" {
+		t.Fatalf("unrestricted: %v %+v", err, unres)
+	}
 }
