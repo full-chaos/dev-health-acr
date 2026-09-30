@@ -225,6 +225,9 @@ type findPlan struct {
 	kinds  []string
 	limit  int
 	cursor string
+	// hasKeyToken: the handle holds a work-item-key-shaped token of any
+	// prefix (CHAOS-7200).
+	hasKeyToken bool
 }
 
 func planFind(request FindRequest) (findPlan, error) {
@@ -336,13 +339,18 @@ func (l *SubjectLookup) Find(ctx context.Context, principal storage.Principal, r
 		}
 		l.recorder.RecordFindSubjects(ctx, principal, telemetry)
 	}()
+	// CHAOS-7200: for a repository-restricted caller the authorization
+	// refusal precedes every existence-derived step. A handle holding a
+	// work-item-key-shaped token is refused as scope_required whether or not
+	// its prefix is registered, before binding and before any upstream call,
+	// with the same telemetry kind, so a known and an unknown prefix cannot
+	// be told apart (reason, message, telemetry, calls). Shape rejections
+	// (kind given, mixed modes, too long) stay first, for everyone.
+	if plan.mode == FindModeHandle && plan.hasKeyToken && (planErr == nil || errors.Is(planErr, errFindHandleBoundCount)) && ClassifyPrincipal(principal) == ClassRestricted {
+		plan.kinds = []string{string(contractsv1.ContextFabricSubjectWorkItem)}
+		return FindResponse{}, fmt.Errorf("%w: %w: work_item handles cannot be looked up inside a repository grant", ErrFindInvalidRequest, ErrFindScopeRequired)
+	}
 	if planErr != nil {
-		if errors.Is(planErr, errFindKeyPrefixUnbound) && ClassifyPrincipal(principal) == ClassRestricted {
-			// CHAOS-7200: for a restricted caller the authorization refusal
-			// precedes any existence-derived validation (prefix existence),
-			// so an unknown prefix answers exactly like a known one.
-			planErr = fmt.Errorf("%w: %w: %s handles cannot be looked up inside a repository grant", ErrFindInvalidRequest, ErrFindScopeRequired, "work_item")
-		}
 		return FindResponse{}, planErr
 	}
 	if l == nil || l.graph == nil || l.gate == nil {

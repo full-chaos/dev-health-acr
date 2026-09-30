@@ -206,9 +206,24 @@ type handleGrammarEntry struct {
 //     CHAOS-3896"/"run 532" all fail to bind here -- a ticket key or PR
 //     number can never collide with this pattern, restoring the
 //     disjointness the other two entries already have by construction).
+//
+// workItemKeyNumber is the shared tail of every work-item key ("-<digits>" on
+// a word boundary). The registered CHAOS pattern and the any-prefix key scan
+// (HasWorkItemKeyToken) are both built from it, so the key SHAPE is defined
+// in one place (CHAOS-7200).
+const workItemKeyNumber = `-\d+\b`
+
+var workItemKeyAnyPrefix = regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9]*` + workItemKeyNumber)
+
+// HasWorkItemKeyToken reports whether text holds a key-shaped token of ANY
+// prefix, using the same boundaries as the registered work_item_ticket_key
+// pattern. It answers on SHAPE alone: whether the prefix is registered is
+// existence-derived and must not be observable to a restricted caller.
+func HasWorkItemKeyToken(text string) bool { return workItemKeyAnyPrefix.MatchString(text) }
+
 var handleGrammarRegistry = []handleGrammarEntry{
 	{name: "pull_request_number", kind: contextfabric.SubjectPullRequest, pattern: regexp.MustCompile(`(?i)\b(?:PR|pull\s+request)\s*#?\s*(\d+)\b`), valueGroup: 1, valuePattern: regexp.MustCompile(`^\d+$`), sourceColumn: "git_pull_requests.number"},
-	{name: "work_item_ticket_key", kind: contextfabric.SubjectWorkItem, pattern: regexp.MustCompile(`\bCHAOS-\d+\b`), valueGroup: 0, valuePattern: regexp.MustCompile(`^CHAOS-\d+$`), sourceColumn: "work_items.work_item_id"},
+	{name: "work_item_ticket_key", kind: contextfabric.SubjectWorkItem, pattern: regexp.MustCompile(`\bCHAOS` + workItemKeyNumber), valueGroup: 0, valuePattern: regexp.MustCompile(`^CHAOS-\d+$`), sourceColumn: "work_items.work_item_id"},
 	{name: "ci_run_id", kind: contractsv1.ContextFabricSubjectCIRun, pattern: regexp.MustCompile(`(?i)\b(?:CI\s+pipeline|CI\s+run|pipeline\s+run|pipeline|run)\b\s*#?\s*(\d{4,})\b`), valueGroup: 1, valuePattern: regexp.MustCompile(`^\d{4,}$`), sourceColumn: "ci_pipeline_runs.run_id"},
 }
 
