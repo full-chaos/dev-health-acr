@@ -78,6 +78,22 @@ func TestCHAOS7202RecommendationsServesTheSDLWindowDefaults(t *testing.T) {
 		raw, _ := json.Marshal(resp)
 		t.Fatalf("window:{} must be served (SDL defaults), got %s", raw)
 	}
+	// CHAOS-7224: served is not enough. The SDL declares `window: WindowInput!`,
+	// so ops answers only when the upstream variables still carry the window
+	// object. An edge that dropped the empty object would leave the fake
+	// upstream answering happily and ops refusing the real call.
+	vars := h.upstream.requests()[0].variables()
+	window, present := opLookup(vars, "window")
+	obj, isObject := window.(map[string]any)
+	if !present || !isObject || obj == nil {
+		t.Fatalf("upstream variables must carry window as an object for window:{}, got %#v (present=%v) in %#v", window, present, vars)
+	}
+	if len(obj) != 0 {
+		t.Fatalf("window:{} must reach ops as {} so the SDL defaults (4 WEEK) apply, got %#v", obj)
+	}
+	if team, _ := opLookup(vars, "team"); team == nil || team == "" {
+		t.Fatalf("upstream variables lost team: %#v", vars)
+	}
 }
 
 func TestCHAOS7202PolicyMatrixRefusals(t *testing.T) {
