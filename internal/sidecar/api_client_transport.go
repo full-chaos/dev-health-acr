@@ -79,8 +79,8 @@ func (c *Client) callWithHeaders(ctx context.Context, method, subPath string, re
 	// it is told about by a trusted proxy. A multi-caller transport (acr-mcp)
 	// states the resolved caller address here; no caller-supplied header is
 	// ever relayed.
-	if ip, ok := ForwardedClientFromContext(ctx); ok {
-		req.Header.Set("X-Forwarded-For", ip)
+	if c.forwardedClient != "" {
+		req.Header.Set("X-Forwarded-For", c.forwardedClient)
 	}
 	req.Header.Set("Accept", "application/json")
 	if c.cfg.ClientVersion != "" {

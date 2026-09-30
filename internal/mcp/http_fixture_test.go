@@ -64,6 +64,16 @@ type hostedAPI struct {
 	mu        sync.Mutex
 	seen      map[string][]string
 	forwarded []string
+	calls     []forwardedCall
+}
+
+// forwardedCall is one acr-api request and the X-Forwarded-For it carried.
+type forwardedCall struct{ path, forwardedFor string }
+
+func (h *hostedAPI) forwardedCalls() []forwardedCall {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Clone(h.calls)
 }
 
 // recordForwarded notes the X-Forwarded-For each capabilities request arrived
@@ -72,6 +82,7 @@ func (h *hostedAPI) recordForwarded(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.mu.Lock()
 		h.forwarded = append(h.forwarded, r.Header.Get("X-Forwarded-For"))
+		h.calls = append(h.calls, forwardedCall{r.URL.Path, r.Header.Get("X-Forwarded-For")})
 		h.mu.Unlock()
 		next.ServeHTTP(w, r)
 	})
@@ -170,7 +181,15 @@ func newHostedAPIWith(t *testing.T, opts hostedOptions) *hostedAPI {
 		w.WriteHeader(status)
 	})
 	mux.Handle("GET /api/v1/agent-context/capabilities", h.recordForwarded(authenticator.Middleware(authenticator.RequireScope(auth.ScopeContextRead, http.HandlerFunc(h.capabilities)))))
-	mux.Handle("GET /api/v1/agent-context/evidence/{id}", authenticator.Middleware(authenticator.RequireScope(auth.ScopeEvidenceRead, http.HandlerFunc(h.evidence))))
+	// Any other hosted route: recorded, then refused. A tool call that reaches
+	// acr-api is observed on the wire whatever the route answers.
+	mux.Handle("/api/", h.recordForwarded(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeHostedJSON(w, http.StatusNotFound, contractsv1.ErrorEnvelope{
+			SchemaVersion: contractsv1.ErrorSchema, RequestID: "req_fixture",
+			Error: contractsv1.ErrorDetail{Code: "not_found", Message: "not found", HTTPStatus: http.StatusNotFound},
+		})
+	})))
+	mux.Handle("GET /api/v1/agent-context/evidence/{id}", h.recordForwarded(authenticator.Middleware(authenticator.RequireScope(auth.ScopeEvidenceRead, http.HandlerFunc(h.evidence)))))
 	h.server = httptest.NewTLSServer(mux)
 	t.Cleanup(h.server.Close)
 

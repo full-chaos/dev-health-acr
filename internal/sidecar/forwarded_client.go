@@ -1,28 +1,26 @@
 package sidecar
 
 import (
-	"context"
+	"errors"
 	"net/netip"
 )
 
-type forwardedClientKey struct{}
-
-// ContextWithForwardedClient records the resolved address of the end caller
-// on ctx. Every hosted API call made with that context states it as its
-// X-Forwarded-For value, so the hosted API's per-address gate keys on the
-// caller and not on this process. A value that is not an IP literal is
-// dropped: nothing free-form reaches the wire.
-func ContextWithForwardedClient(ctx context.Context, address string) context.Context {
+// WithForwardedClient derives a client that states address (the resolved end
+// caller, an IP literal) as the X-Forwarded-For of EVERY hosted API call it
+// makes, so the hosted API's per-address gate keys on the caller and not on
+// this process. It is a property of the per-request client, not of a context:
+// tool handlers run on a context the transport does not control, and a
+// context-carried address was lost after authentication. A value that is not
+// an IP literal is refused: nothing free-form reaches the wire.
+func (c *Client) WithForwardedClient(address string) (*Client, error) {
+	if c == nil {
+		return nil, errors.New("acr: a base client is required")
+	}
 	parsed, err := netip.ParseAddr(address)
 	if err != nil {
-		return ctx
+		return nil, errors.New("acr: the forwarded client address is not an IP literal")
 	}
-	return context.WithValue(ctx, forwardedClientKey{}, parsed.Unmap().String())
-}
-
-// ForwardedClientFromContext returns the address ContextWithForwardedClient
-// recorded.
-func ForwardedClientFromContext(ctx context.Context) (string, bool) {
-	value, ok := ctx.Value(forwardedClientKey{}).(string)
-	return value, ok && value != ""
+	derived := *c
+	derived.forwardedClient = parsed.Unmap().String()
+	return &derived, nil
 }

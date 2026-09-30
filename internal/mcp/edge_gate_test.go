@@ -2,7 +2,9 @@ package mcp_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"net/http"
 	"strings"
 	"sync"
@@ -276,5 +278,41 @@ func TestEdgeGateResolvesTheRealClientFromTheThreeEntryIngressChain(t *testing.T
 	})
 	if got[http.StatusUnauthorized] != 20 || got[http.StatusTooManyRequests] != 5 {
 		t.Fatalf("spoofed left entry x25 = %v, want one bucket for 203.0.113.51", got)
+	}
+}
+
+// The resolved caller address rides EVERY acr-api call made for a request,
+// not only the capabilities probe: each tool call below reaches acr-api and
+// must carry it, else its failures land in the acr-mcp peer bucket.
+func TestForwardedClientRidesEveryToolCall(t *testing.T) {
+	hosted := newHostedAPI(t)
+	e := newEndpointWithGate(t, hosted, acrmcp.EdgeGateOptions{TrustedProxyCIDRs: []string{"127.0.0.0/8", "::1/128"}})
+	caller := hosted.issue(readScopes, []string{repoAnswers}, nil)
+	const client = "203.0.113.60"
+	session := connectClient(t, e, &headerTransport{bearer: caller.token, headers: http.Header{"X-Forwarded-For": {client}}})
+	calls := []struct {
+		tool string
+		args map[string]any
+	}{
+		{"context_for_task", map[string]any{"goal": "inspect", "repository": map[string]any{"slug": "acme/plain"}}},
+		{"source_evidence", map[string]any{"evidence_ref_id": "ev_1"}},
+		{"investigation_result", map[string]any{"result_id": "res_00001"}},
+		{"investigate_question", map[string]any{"question": "what is blocking the payments project?"}},
+	}
+	for _, c := range calls {
+		_, err := session.CallTool(context.Background(), &mcpsdk.CallToolParams{Name: c.tool, Arguments: c.args})
+		if err != nil {
+			t.Fatalf("%s: %v", c.tool, err)
+		}
+	}
+	paths := map[string]bool{}
+	for _, call := range hosted.forwardedCalls() {
+		if call.forwardedFor != client {
+			t.Errorf("acr-api call %s carried X-Forwarded-For %q, want %q", call.path, call.forwardedFor, client)
+		}
+		paths[call.path] = true
+	}
+	if len(paths) < len(calls)+1 {
+		t.Fatalf("acr-api saw only %d distinct routes %v; every tool must reach it (capabilities + %d tools)", len(paths), paths, len(calls))
 	}
 }

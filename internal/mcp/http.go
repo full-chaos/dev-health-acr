@@ -501,8 +501,8 @@ func (h *HTTPHandler) serveMCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resolveCtx, cancel := context.WithTimeout(sidecar.ContextWithForwardedClient(r.Context(), ip), h.opts.ResolveTimeout)
-	caller, err := ResolveCaller(resolveCtx, h.cfg, CallerCredential{Bearer: bearer})
+	resolveCtx, cancel := context.WithTimeout(r.Context(), h.opts.ResolveTimeout)
+	caller, err := ResolveCaller(resolveCtx, h.cfg, CallerCredential{Bearer: bearer, ClientAddress: ip})
 	cancel()
 	if err != nil {
 		outcome, retryAfter := classifyResolveFailure(err)
