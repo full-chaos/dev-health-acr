@@ -184,7 +184,7 @@ func TestExpandEvidenceRefusesAMislabeledSourceRow(t *testing.T) {
 // A record kind never reaches the resolver; a missing resolver says so.
 func TestExpandEvidenceSkipsTheResolverForRecordKindsAndAbsence(t *testing.T) {
 	source := &fakeSource{}
-	_, decision, lookup := expand(source, "acr:v1:team:team-a")
+	_, decision, lookup := expand(source, "acr:v1:project-team:jira:PROJ-1:team-a")
 	if source.calls != 0 || decision.Source.Reason != contextfabric.SourceRowKindOnRecord || lookup.searches != 1 {
 		t.Fatalf("record kind: calls %d, decision %+v", source.calls, decision)
 	}
