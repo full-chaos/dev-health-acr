@@ -251,6 +251,10 @@ func TestChaos7075RealGraphQLAnswersValidateAgainstThePublishedSchemas(t *testin
 		return `{"errors":[{"message":"x","extensions":{"code":"MCP_READ_BUDGET_EXCEEDED","reason":"bytes_ceiling"}}],"data":null}`
 	}
 	check("read budget", unrestricted, graphqlBody(c7075Hotspots, ""))
+	h.upstream.respond = func(map[string]any) string {
+		return `{"errors":[{"message":"x","extensions":{"code":"MCP_READ_BUDGET_EXCEEDED","reason":"rows_ceiling"}}],"data":null}`
+	}
+	check("read budget rows", unrestricted, graphqlBody(c7075Hotspots, ""))
 	h.upstream.respond = func(map[string]any) string { return `{"errors":[{"message":"boom secret"}],"data":null}` }
 	check("upstream error", unrestricted, graphqlBody(c7075Hotspots, ""))
 	h.upstream.respond = hotspotsRowsAnswer("hotspots")

@@ -102,6 +102,7 @@
           "description": "For read_budget_exceeded: which ceiling of the data service was hit.",
           "enum": [
             "bytes_ceiling",
+            "rows_ceiling",
             "time_ceiling",
             "unknown"
           ]
@@ -227,7 +228,7 @@
         "properties": {
           "class": {
             "type": "string",
-            "description": "Safe error class. acr_deadline: acr's own deadline ended the call before the data service answered.",
+            "description": "Safe error class. acr_deadline: acr's own deadline ended the call before the data service answered. carrier_refused and listener_refused: the data service refused acr's identity carrier or query (a defect or drift on the service path, not something to retry).",
             "enum": [
               "graphql_errors",
               "decode",
@@ -235,6 +236,8 @@
               "transport",
               "canceled",
               "acr_deadline",
+              "carrier_refused",
+              "listener_refused",
               "not_found",
               "concurrency_wait"
             ]
