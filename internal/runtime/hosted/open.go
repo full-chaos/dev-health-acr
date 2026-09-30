@@ -228,7 +228,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	// CHAOS-6180: source-row expansion of Context Fabric evidence refs, on
 	// the same ClickHouse client. Nil without one: every ref then stays on
 	// the persisted-record path.
-	sourceRows := buildSourceRows(clickhouse.queryClient, assemblyObserver, expansionObserver, request.options.Logger)
+	sourceRows := buildSourceRows(clickhouse.queryClient, assemblyObserver, expansionObserver, directReadGate, request.options.Logger)
 	// Same typed-nil guard: workloadTokenExchange is a concrete
 	// *authverify.WorkloadTokenExchangeService, nil whenever CHAOS-4013 is
 	// unconfigured (see buildWorkloadTokenExchange's doc comment).

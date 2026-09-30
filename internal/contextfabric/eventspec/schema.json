@@ -2145,9 +2145,11 @@
           "ci_pipeline_runs.v1",
           "deployments.v1",
           "incidents.v1",
+          "projects.v1",
           "pull_requests.v1",
           "repository_freshness.v1",
           "pull_request_reviews.v1",
+          "teams.v1",
           "work_items.v1"
         ],
         "applicability": "written when the ref's kind has a source-row statement"
@@ -2158,7 +2160,8 @@
         "presence": "conditional",
         "closed_vocabulary": [
           "repo_anchored",
-          "row_anchored"
+          "row_anchored",
+          "org_keyed"
         ],
         "applicability": "written when the source-row resolver read the source and chose an id grammar"
       },
