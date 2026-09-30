@@ -18,7 +18,13 @@ import (
 // orgScopeTableOracle is an independent, deliberately dumb table finder. The
 // reader must find exactly the tables it finds in every catalog statement, so
 // a statement shape the reader silently skips cannot pass as "no violation".
-var orgScopeTableOracle = regexp.MustCompile(`(?:FROM|JOIN)\s+([a-z_]+)`)
+var (
+	orgScopeTableOracle = regexp.MustCompile(`(?:FROM|JOIN)\s+([a-z_]+)`)
+	// A comma-joined table (`FROM a AS x FINAL, b AS y FINAL`) follows the first
+	// table of a FROM; the first-table pattern above never sees it.
+	orgScopeCommaOracle = regexp.MustCompile(`(?:FROM|JOIN)\s+[a-z_]+(?:\s+(?:AS\s+[a-z_]+|FINAL))*((?:\s*,\s*[a-z_]+(?:\s+(?:AS\s+[a-z_]+|FINAL))*)+)`)
+	orgScopeCommaTable  = regexp.MustCompile(`,\s*([a-z_]+)`)
+)
 
 // CHAOS-7237: every table of every packet catalog statement is scoped to the
 // caller's organization. ops mints repos.id deterministically from the
@@ -39,6 +45,11 @@ func TestEveryCatalogStatementScopesEveryTableToTheOrganization(t *testing.T) {
 		var want []string
 		for _, m := range orgScopeTableOracle.FindAllStringSubmatch(query.Statement, -1) {
 			want = append(want, m[1])
+		}
+		for _, m := range orgScopeCommaOracle.FindAllStringSubmatch(query.Statement, -1) {
+			for _, c := range orgScopeCommaTable.FindAllStringSubmatch(m[1], -1) {
+				want = append(want, c[1])
+			}
 		}
 		got := slices.Clone(report.Tables)
 		slices.Sort(want)
@@ -138,6 +149,20 @@ func TestOrgScopeSweepIsStructural(t *testing.T) {
 		{name: "a parenthesised UNION side", sql: `SELECT 1 FROM ((SELECT 1 FROM repos WHERE org_id = ` + orgScopeBound + `) UNION ALL (SELECT 1 FROM git_commits))`, want: []string{`table git_commits (alias "")`}},
 		{name: "an unscoped CTE body", sql: `WITH x AS (SELECT id FROM repos) SELECT 1 FROM x`, want: []string{`table repos (alias "")`}},
 		{name: "a table that shadows a CTE name is a table", sql: `WITH repos AS (SELECT 1 AS id FROM git_commits WHERE org_id = ` + orgScopeBound + `) SELECT 1 FROM git_commits AS c, repos`, want: []string{`table git_commits (alias "c")`}},
+
+		// ---- comma-separated FROM tables (#731 r3): every table of the list is read
+		{name: "comma FROM: the second table has no binding", sql: `SELECT 1 FROM git_commits AS c FINAL, git_commit_stats AS s FINAL WHERE c.org_id = ` + orgScopeBound, want: []string{`table git_commit_stats (alias "s")`}},
+		{name: "comma FROM: the first table has no binding", sql: `SELECT 1 FROM git_commits AS c FINAL, git_commit_stats AS s FINAL WHERE s.org_id = ` + orgScopeBound, want: []string{`table git_commits (alias "c")`}},
+		{name: "comma FROM: unaliased tables, one bound by its name", sql: `SELECT 1 FROM git_commits, git_commit_stats WHERE git_commits.org_id = ` + orgScopeBound, want: []string{`table git_commit_stats (alias "")`}},
+		{name: "comma FROM: an unqualified binding is ambiguous", sql: `SELECT 1 FROM git_commits AS c, git_commit_stats AS s WHERE org_id = ` + orgScopeBound, want: []string{`table git_commits (alias "c")`, `table git_commit_stats (alias "s")`}},
+		{name: "comma FROM: the third table has no binding", sql: `SELECT 1 FROM repos AS r, git_commits AS c, git_commit_stats AS s WHERE r.org_id = ` + orgScopeBound + ` AND c.org_id = r.org_id`, want: []string{`table git_commit_stats (alias "s")`}},
+		{name: "comma FROM: linked only by a non-org equality", sql: `SELECT 1 FROM git_commits AS c, git_commit_stats AS s WHERE c.org_id = ` + orgScopeBound + ` AND s.repo_id = c.repo_id`, want: []string{`table git_commit_stats (alias "s")`}},
+		{name: "comma FROM: an OR defeats both bindings", sql: `SELECT 1 FROM git_commits AS c, git_commit_stats AS s WHERE c.org_id = ` + orgScopeBound + ` OR s.org_id = ` + orgScopeBound, want: []string{`table git_commits (alias "c")`, `table git_commit_stats (alias "s")`}},
+		{name: "comma FROM after a scoped derived table", sql: `SELECT 1 FROM (SELECT id FROM repos WHERE org_id = ` + orgScopeBound + `) AS x, git_commits AS c WHERE c.repo_id = x.id`, want: []string{`table git_commits (alias "c")`}},
+		{name: "comma FROM inside a subquery", sql: `SELECT 1 FROM repos AS r WHERE r.org_id = ` + orgScopeBound + ` AND EXISTS (SELECT 1 FROM git_commits AS c, git_commit_stats AS s WHERE c.org_id = ` + orgScopeBound + `)`, want: []string{`table git_commit_stats (alias "s")`}},
+		{name: "comma FROM before a JOIN", sql: `SELECT 1 FROM repos AS r, git_commits AS c INNER JOIN git_commit_stats AS s ON s.commit_hash = c.hash WHERE r.org_id = ` + orgScopeBound + ` AND c.org_id = r.org_id`, want: []string{`table git_commit_stats (alias "s")`}},
+		{name: "comma FROM with every table bound", sql: `SELECT 1 FROM repos AS r, git_commits AS c, git_commit_stats AS s WHERE r.org_id = ` + orgScopeBound + ` AND c.org_id = r.org_id AND s.org_id = c.org_id`},
+		{name: "commas in the select list and in a function call are not tables", sql: `SELECT r.id, concat(r.repo, 'x'), if(r.id = 1, 2, 3) FROM repos AS r WHERE r.org_id = ` + orgScopeBound},
 
 		// ---- outer joins: an ON keeps the rows of the preserved side
 		{name: "left join: a binding of the preserved left table in ON", sql: `SELECT 1 FROM repos AS r LEFT JOIN git_commits AS c ON c.repo_id = r.id AND r.org_id = ` + orgScopeBound + ` AND c.org_id = ` + orgScopeBound, want: []string{`table repos (alias "r")`}},
