@@ -236,6 +236,35 @@ func TestEpochActivationGuard_LivePathsNeverActivateAnOlderSourceVersion(t *test
 		require.Equal(t, 0, committed, "the restricted principal must stay denied")
 	})
 
+	// The production rollback pair. The NEW binary's rollback onto a grace
+	// epoch recorded at the OLD version is refused; the documented way back
+	// across a version bump is to run the OLD binary again (helm rollback),
+	// whose source reports the version the grace epoch recorded -- so its
+	// rollback passes and serves exactly the pre-bump baseline.
+	t.Run("rollback_by_old_binary_passes_new_binary_refuses", func(t *testing.T) {
+		h := harness(t, "org-7283-rollback-pair")
+		old := h.coordinator(0, projectionrun.SourcePair{Name: epochGuardSource, Source: oldTeamSource(1)})
+		old.Tick(ctx)
+		next := h.coordinator(0, projectionrun.SourcePair{Name: epochGuardSource, Source: newTeamSource(1)})
+		require.NoError(t, next.Rebuild(ctx, h.org))
+		tickUntilStatus(t, ctx, next, lifecycle, h.org, contextfabric.LifecycleStatusGrace, 5)
+
+		require.ErrorIs(t, next.Rollback(ctx, h.org), contextfabric.ErrEpochSourceVersionStale, "the NEW binary must refuse the OLD-version grace epoch")
+		row, recorded, committed := h.observe("after NEW binary rollback")
+		require.Equal(t, contextfabric.LifecycleStatusGrace, row.Status)
+		require.Equal(t, int64(1), row.ActiveEpoch)
+		require.Equal(t, epochGuardNewVersion, recorded)
+		require.Equal(t, 0, committed)
+
+		oldAgain := h.coordinator(0, projectionrun.SourcePair{Name: epochGuardSource, Source: oldTeamSource(1)})
+		require.NoError(t, oldAgain.Rollback(ctx, h.org), "the OLD binary's version matches the grace epoch, so its rollback passes")
+		row, recorded, committed = h.observe("after OLD binary rollback")
+		require.Equal(t, contextfabric.LifecycleStatusServing, row.Status)
+		require.Equal(t, int64(0), row.ActiveEpoch)
+		require.Equal(t, epochGuardOldVersion, recorded)
+		require.Equal(t, 1, committed, "the OLD binary serves its own baseline again")
+	})
+
 	// Rollback control: an epoch recorded under the binary's OWN version is
 	// still a legal rollback target -- the guard is not a blanket refusal.
 	t.Run("rollback_same_version_still_allowed", func(t *testing.T) {
