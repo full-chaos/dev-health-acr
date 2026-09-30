@@ -103,6 +103,10 @@ func subCHAOS7139LargeTeamsKeepEntityAndAllEdges(t *testing.T, ctx context.Conte
 			t.Errorf("missing large-team Warn field %q:\n%s", want, res.logs)
 		}
 	}
+	// Once per run: a multi-page catch-up must not repeat the Warn per page.
+	if n := strings.Count(res.logs, "owned_repositories=450"); n != 1 {
+		t.Errorf("large-team Warn for team-w450 emitted %d times, want exactly once per run:\n%s", n, res.logs)
+	}
 	if strings.Contains(res.logs, "team_id=team-small") {
 		t.Errorf("small team must not be warned about:\n%s", res.logs)
 	}
@@ -135,9 +139,36 @@ func subCHAOS7139TeamAboveEntityBoundFailsClosedAlone(t *testing.T, ctx context.
 			t.Errorf("%s: %d edges, want %d", team, got, want)
 		}
 	}
-	// NOT asserted: team-huge's edges. Quarantine drops only the edges that
-	// share the entity's page (endpoint_entity_quarantined); edges on other
-	// pages still reach the graph against a never-written team node. That
-	// residual pre-dates this change and only affects a team above 5000
-	// repositories (recorded in the PR RISK-NOTES).
+	// The over-bound team's edges must be withheld too: an edge on a later
+	// page would otherwise reach the graph against a never-written team node
+	// (codex r1 P1: 4943 edges emitted before this).
+	if got := res.edges["team-huge"]; got != 0 {
+		t.Errorf("team-huge: %d edges projected for a quarantined team entity, want 0", got)
+	}
+	if !strings.Contains(res.logs, "edges_withheld=") || !strings.Contains(res.logs, "team_id=team-huge") {
+		t.Errorf("withheld edges must stay visible (team id + count):\n%s", res.logs)
+	}
+}
+
+// A team at EXACTLY the entity bound keeps its entity and every edge; one
+// repository more (the case above) loses both. Pins both sides of the edge
+// suppression's threshold on real ClickHouse.
+func subCHAOS7139TeamAtEntityBoundKeepsEveryEdge(t *testing.T, ctx context.Context, f *ownershipFixture) {
+	at := time.Now().UTC().Truncate(time.Second)
+	n := contractsv1.ContextFabricEntityAuthorizationRepositoryMax
+	chaos7139SeedTeam(t, ctx, f, "team-max", "acme/max-", n, at)
+	res := chaos7139Run(t, ctx, f)
+	e, ok := res.entities["team-max"]
+	if !ok {
+		t.Fatalf("team-max (%d repos, exactly the bound) entity not projected\n%s", n, res.logs)
+	}
+	if got := len(e.Authorization.RepositorySlugs); got != n {
+		t.Errorf("authorization repositories %d, want %d", got, n)
+	}
+	if got := res.edges["team-max"]; got != n {
+		t.Errorf("%d edges, want %d", got, n)
+	}
+	if strings.Contains(res.logs, "edges_withheld=") {
+		t.Errorf("edges withheld for a team at the bound:\n%s", res.logs)
+	}
 }

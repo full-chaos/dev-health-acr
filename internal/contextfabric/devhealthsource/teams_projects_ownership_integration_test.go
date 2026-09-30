@@ -454,6 +454,7 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 		// CHAOS-7139: a team above the generic 200 authorization bound.
 		{"CHAOS-7139 teams of 201 and 450 repositories keep their entity and every edge", "30000000-0000-4000-8000-000000000020", subCHAOS7139LargeTeamsKeepEntityAndAllEdges},
 		{"CHAOS-7139 a team above the entity bound fails closed alone", "30000000-0000-4000-8000-000000000021", subCHAOS7139TeamAboveEntityBoundFailsClosedAlone},
+		{"CHAOS-7139 a team at exactly the entity bound keeps every edge", "30000000-0000-4000-8000-000000000022", subCHAOS7139TeamAtEntityBoundKeepsEveryEdge},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
