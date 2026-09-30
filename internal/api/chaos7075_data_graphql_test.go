@@ -196,14 +196,24 @@ func TestChaos7075CatalogSchemaSectionPerCallerClass(t *testing.T) {
 	if refusedRoots := r["refused_root_fields"].([]any); !slices.ContainsFunc(refusedRoots, func(v any) bool { return v == "catalog" }) {
 		t.Fatalf("catalog not listed as refused for a restricted caller: %v", refusedRoots)
 	}
-	if c := section(contextOnly, h); c["available"] != false || c["reason"] != "scope_missing_data_read" {
+	noDetail := func(label string, s map[string]any) {
+		t.Helper()
+		if len(s["roots"].([]any)) != 0 || s["sdl"] != "" || len(s["refused_root_fields"].([]any)) != 0 {
+			t.Fatalf("%s: an unavailable section carries schema detail: roots=%d sdl=%d refused=%d", label, len(s["roots"].([]any)), len(s["sdl"].(string)), len(s["refused_root_fields"].([]any)))
+		}
+	}
+	c := section(contextOnly, h)
+	if c["available"] != false || c["reason"] != "scope_missing_data_read" {
 		t.Fatalf("no data:read: %v %v", c["available"], c["reason"])
 	}
+	noDetail("no data:read", c)
 	off := newC7075Harness(t, c7075Options{noGraphQL: true})
 	offToken := off.issueFor(t, c7072Data, c7072AllRepos, nil).Token
-	if o := section(offToken, off); o["available"] != false || o["reason"] != "data_graphql_not_configured" {
+	o := section(offToken, off)
+	if o["available"] != false || o["reason"] != "data_graphql_not_configured" {
 		t.Fatalf("no runner: %v %v", o["available"], o["reason"])
 	}
+	noDetail("no runner", o)
 	// Every argument path the section lists for hotspots is one the runner
 	// accepts; orgId is never listed.
 	for _, root := range u["roots"].([]any) {
@@ -246,6 +256,12 @@ func TestChaos7075RealGraphQLAnswersValidateAgainstThePublishedSchemas(t *testin
 	check("fragment", unrestricted, graphqlBody(`fragment F on Query { __typename } { ...F }`, ""))
 	check("foreign id", restricted, graphqlBody(`{ hotspots(input: {sinceUtc: "2026-09-21T00:00:00Z", untilUtc: "2026-09-28T00:00:00Z", repoIds: ["repository:`+c7072RepoB+`"]}) { rows { filePath } } }`, ""))
 	check("over budget", unrestricted, graphqlBody(c7075Hotspots, `"max_bytes":10`))
+	h.upstream.respond = hotspotsRowsAnswer("hotspots", c7072RepoA)
+	check("max_bytes 0 = default", unrestricted, graphqlBody(c7075Hotspots, `"max_bytes":0`))
+	// pr2 r1 P1: max_bytes 0 is a valid MCP request (the default), as the
+	// Go validator and the OpenAPI say.
+	request := dataSchemaFor(t, "mcp_graphql_query_request.v1.schema.json")
+	assertValidAgainstSchema(t, request, "request/max_bytes 0", []byte(graphqlBody(c7075Hotspots, `"max_bytes":0`)))
 	check("class refused", restricted, graphqlBody(`{ catalog(dimension: TEAM) { values { value } } }`, ""))
 	h.upstream.respond = func(map[string]any) string {
 		return `{"errors":[{"message":"x","extensions":{"code":"MCP_READ_BUDGET_EXCEEDED","reason":"bytes_ceiling"}}],"data":null}`

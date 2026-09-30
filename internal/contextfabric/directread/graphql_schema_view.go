@@ -69,7 +69,10 @@ func BuildCatalogSchema(policy *GraphQLPolicy, class CallerClass, servable, data
 	case !dataRead:
 		section.Available, section.Reason = false, CatalogUnavailableScopeMissing
 	}
-	if policy == nil {
+	// No detail at all for a caller graphql_query cannot serve (pr2 r1
+	// P1): without data:read, or without a composed runner, the section
+	// says why and lists nothing -- no root, argument, path or SDL.
+	if policy == nil || !section.Available {
 		return section
 	}
 	section.SchemaDigest = policy.catalogue.StampedSchemaDigest()
