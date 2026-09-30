@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"sort"
 	"strings"
@@ -159,7 +160,7 @@ func TestCHAOS7263IngestTimeCursor(t *testing.T) {
 		// The caught-up tick at the end of the first drain walks a window
 		// whose rows the paged read just emitted: it must emit nothing again.
 		for i, b := range first.batches {
-			if b.NextCursor == b.Cursor {
+			if keysetPosition(t, b.NextCursor) == keysetPosition(t, b.Cursor) {
 				t.Fatalf("first drain batch %d is an overlap re-emission of rows the paged read already emitted", i)
 			}
 		}
@@ -170,8 +171,8 @@ func TestCHAOS7263IngestTimeCursor(t *testing.T) {
 		if _, ok := second.items[title("WI-late")]; !ok {
 			t.Fatalf("a row stamped inside the overlap that landed after the cursor passed was NOT projected: %v", second.items)
 		}
-		if second.cursor != first.cursor {
-			t.Fatalf("the overlap batch moved the cursor (%q -> %q); it must not", first.cursor, second.cursor)
+		if keysetPosition(t, second.cursor) != keysetPosition(t, first.cursor) {
+			t.Fatalf("the overlap batch moved the cursor position (%q -> %q); it must not", first.cursor, second.cursor)
 		}
 		// Idempotent: the same window is not re-emitted while nothing new lands.
 		third := h.drain(second.cursor)
@@ -307,9 +308,100 @@ SELECT ?, ?, concat('dep-', leftPad(toString(number), 3, '0')), 'success', 'prod
 		if second.items[title("WI-past-the-cut-late")].Subject.Label == "" {
 			t.Fatalf("a late row past a page cut back across tables was not projected (%d items): the pass ended at the cut", len(second.items))
 		}
-		if second.cursor != first.cursor {
-			t.Fatalf("the window walk moved the cursor (%q -> %q)", first.cursor, second.cursor)
+		if keysetPosition(t, second.cursor) != keysetPosition(t, first.cursor) {
+			t.Fatalf("the window walk moved the cursor position (%q -> %q)", first.cursor, second.cursor)
 		}
+	})
+
+	// The emitted-row memo may only advance when the DURABLE checkpoint does.
+	// The real worker applies a batch after the source built it; when the
+	// apply fails, the checkpoint stays where it was, and the retry from that
+	// checkpoint must carry the same rows again. One case per path that notes
+	// rows as emitted: the overlap window of each source (rows behind the
+	// frontier, which only the walk re-reads), the paged read (rows beyond
+	// the frontier) and the from-scratch snapshot.
+	applyFailsOnce := func(t *testing.T, src contextfabric.ProjectionSource, orgID, source string, drainFirst bool, land func(), want func(contractsv1.ContextFabricEntityProjection) bool) {
+		t.Helper()
+		checkpoints := &memoryCheckpoints{checkpoint: contextfabric.ProjectionCheckpoint{OrgID: orgID, Source: source}}
+		backend := &failingBackend{}
+		worker, err := contextfabric.NewProjectionWorker(src, backend, checkpoints, contextfabric.ProjectionWorkerOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for tick := 0; drainFirst; tick++ {
+			if tick == 30 {
+				t.Fatal("precondition: the first drain did not go quiet within 30 ticks")
+			}
+			run, err := worker.RunOnce(ctx, orgID, source)
+			if err != nil {
+				t.Fatalf("first drain tick %d: %v", tick, err)
+			}
+			drainFirst = run.Applied
+		}
+		land()
+		before := checkpoints.checkpoint
+		backend.applied, backend.failNext = nil, 1
+		if _, err := worker.RunOnce(ctx, orgID, source); err == nil {
+			t.Fatal("precondition: the planted apply failure did not happen")
+		}
+		if checkpoints.checkpoint.Cursor != before.Cursor {
+			t.Fatalf("precondition: a failed apply moved the durable cursor (%q -> %q)", before.Cursor, checkpoints.checkpoint.Cursor)
+		}
+		run, err := worker.RunOnce(ctx, orgID, source)
+		if err != nil {
+			t.Fatalf("retry: %v", err)
+		}
+		for _, b := range backend.applied {
+			for _, e := range b.Entities {
+				if want(e) {
+					return
+				}
+			}
+		}
+		t.Fatalf("the retry at the unchanged durable checkpoint did not re-emit the row whose batch failed to apply (retry applied=%v, %d batches applied)", run.Applied, len(backend.applied))
+	}
+	isWorkItem := func(id string) func(contractsv1.ContextFabricEntityProjection) bool {
+		return func(e contractsv1.ContextFabricEntityProjection) bool { return e.Subject.Label == title(id) }
+	}
+	t.Run("a failed apply does not consume a late row: overlap window", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t, "72630000-0000-4000-8000-000000000021", "72630000-0000-4000-8000-0000000000b8", 15*time.Minute, nil)
+		h.workItem("WI-frontier", now.Add(-time.Hour), now.Add(-10*time.Minute))
+		applyFailsOnce(t, h.src, h.orgID, h.source, true, func() {
+			h.workItem("WI-late", now.Add(-3*time.Hour), now.Add(-20*time.Minute))
+		}, isWorkItem("WI-late"))
+	})
+	t.Run("a failed apply does not consume a late row: teams/projects overlap window", func(t *testing.T) {
+		t.Parallel()
+		const orgID = "72630000-0000-4000-8000-000000000022"
+		src, err := devhealthsource.NewTeamsProjectsSource(query, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		recent := time.Now().UTC().Add(-10 * time.Minute)
+		mustExec(t, ctx, direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at, last_synced) VALUES (?, ?, 'linear', ?, ?, 1, 'started', '', ?, ?)`,
+			"P-anchor", orgID, "ANCHOR", "anchor project", recent, recent)
+		applyFailsOnce(t, src, orgID, devhealthsource.TeamsProjectsSourceName, true, func() {
+			mustExec(t, ctx, direct, `INSERT INTO teams (id, name, description, updated_at, last_synced, org_id, provider, native_team_key, project_keys, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				"T-late", "late team", "", recent.Add(-72*time.Hour), recent.Add(-10*time.Minute), orgID, "linear", "T-late", []string{}, uint8(1))
+		}, func(e contractsv1.ContextFabricEntityProjection) bool {
+			return e.Subject.Kind == contractsv1.ContextFabricSubjectTeam && e.Subject.Label == "late team"
+		})
+	})
+	t.Run("a failed apply does not consume a row: paged read", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t, "72630000-0000-4000-8000-000000000023", "72630000-0000-4000-8000-0000000000b9", 15*time.Minute, nil)
+		h.workItem("WI-frontier", now.Add(-time.Hour), now.Add(-10*time.Minute))
+		applyFailsOnce(t, h.src, h.orgID, h.source, true, func() {
+			h.workItem("WI-new", now.Add(-time.Minute), now.Add(-time.Minute))
+		}, isWorkItem("WI-new"))
+	})
+	t.Run("a failed apply does not consume a row: from-scratch snapshot", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t, "72630000-0000-4000-8000-000000000024", "72630000-0000-4000-8000-0000000000ba", 15*time.Minute, nil)
+		applyFailsOnce(t, h.src, h.orgID, h.source, false, func() {
+			h.workItem("WI-first", now.Add(-time.Hour), now.Add(-10*time.Minute))
+		}, isWorkItem("WI-first"))
 	})
 
 	// The memo is per process. A projector that restarts with a saved cursor
@@ -381,7 +473,7 @@ SELECT concat('WI-burst-', leftPad(toString(number), 5, '0')), ?, ?, concat('iss
 		if err != nil || !ok {
 			t.Fatalf("next tick: ok=%v err=%v", ok, err)
 		}
-		if b.NextCursor == first.cursor {
+		if keysetPosition(t, b.NextCursor) == keysetPosition(t, first.cursor) {
 			t.Fatal("the first batch after a mid-window pass did not advance the cursor: the pass is holding the frontier")
 		}
 		var sawNew bool
@@ -419,8 +511,8 @@ SELECT concat('WI-burst-', leftPad(toString(number), 5, '0')), ?, ?, concat('iss
 		if second.items[title("WI-burst-00300-late")].Subject.Label == "" {
 			t.Fatalf("the restarted source did not re-read the part of the window the old pass had passed (%d items)", len(second.items))
 		}
-		if second.cursor != first.cursor {
-			t.Fatalf("the re-read moved the cursor (%q -> %q)", first.cursor, second.cursor)
+		if keysetPosition(t, second.cursor) != keysetPosition(t, first.cursor) {
+			t.Fatalf("the re-read moved the cursor position (%q -> %q)", first.cursor, second.cursor)
 		}
 	})
 
@@ -469,7 +561,7 @@ SELECT concat('T-', leftPad(toString(number), 4, '0')), concat('team ', toString
 				t.Fatalf("%d of 250 teams projected", teams)
 			}
 			for i, b := range got.batches {
-				if b.NextCursor == b.Cursor {
+				if keysetPosition(t, b.NextCursor) == keysetPosition(t, b.Cursor) {
 					t.Fatalf("batch %d did not advance the cursor", i)
 				}
 			}
@@ -608,8 +700,8 @@ SELECT concat('WI-burst-', leftPad(toString(number), 5, '0')), ?, ?, concat('iss
 				t.Errorf("late row %s was not projected (%d items in the drain): the window walk skipped rows", id, len(second.items))
 			}
 		}
-		if second.cursor != first.cursor {
-			t.Fatalf("the window walk moved the cursor (%q -> %q)", first.cursor, second.cursor)
+		if keysetPosition(t, second.cursor) != keysetPosition(t, first.cursor) {
+			t.Fatalf("the window walk moved the cursor position (%q -> %q)", first.cursor, second.cursor)
 		}
 	})
 }
@@ -623,4 +715,19 @@ type countingQueryClient struct {
 func (c *countingQueryClient) Query(ctx context.Context, statement string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
 	c.statements++
 	return c.inner.Query(ctx, statement, bindings)
+}
+
+// failingBackend fails the next failNext applies (a transient graph write
+// failure), then applies like recordingBackend.
+type failingBackend struct {
+	recordingBackend
+	failNext int
+}
+
+func (b *failingBackend) ApplyProjectionBatch(ctx context.Context, batch contextfabric.ProjectionBatch) (contextfabric.ProjectionReceipt, error) {
+	if b.failNext > 0 {
+		b.failNext--
+		return contextfabric.ProjectionReceipt{}, errors.New("simulated transient graph failure")
+	}
+	return b.recordingBackend.ApplyProjectionBatch(ctx, batch)
 }

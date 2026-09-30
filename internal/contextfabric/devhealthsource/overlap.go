@@ -18,9 +18,14 @@ import (
 // stamped just before the cursor can still land after the cursor passed it.
 // A bounded overlap closes that: once the source is caught up it walks a
 // trailing window behind the frontier and emits the rows it has not already
-// emitted (late arrivals) WITHOUT moving the cursor. Writes are idempotent
-// MERGEs, so re-emitting is safe; a per-process memo keeps a caught-up tick
-// from re-emitting the same window forever (a restart re-emits it once).
+// emitted (late arrivals) WITHOUT moving the cursor position. Writes are
+// idempotent MERGEs, so re-emitting is safe; a per-process memo keeps a
+// caught-up tick from re-emitting the same window forever (a restart
+// re-emits it once). A window batch's rows enter that memo only when the
+// durable checkpoint shows the batch applied: its NextCursor keeps the
+// position and carries an ack of the batch, which the worker persists only
+// after the backend applied it (windowMemo.settle). A failed apply leaves
+// the checkpoint without the ack, and the retry walks the same rows again.
 //
 // THE WALK IS LOSSLESS IN DEPTH. The window is walked in PASSES, page by page
 // at the ordinary page size, at most overlapWindowPagesPerCall pages per call.
@@ -72,6 +77,18 @@ type windowMemo struct {
 type windowScope struct {
 	seen map[string]time.Time // row key -> position
 	windowPass
+	// pending is the window batch this scope emitted last, not yet known to
+	// be applied (settle decides on the next call).
+	pending *pendingWindow
+}
+
+// pendingWindow is an emitted window batch whose rows are not yet "seen":
+// the pass as it stood before the batch was built, and the batch's rows.
+type pendingWindow struct {
+	ack     string
+	before  windowPass
+	rows    []candidate
+	overlap time.Duration
 }
 
 // windowPass is the pass state overlapBatch reads and writes as one value.
@@ -113,7 +130,10 @@ func (m *windowMemo) record(scope string, all []candidate, overlap time.Duration
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	sc := m.scopeLocked(scope)
+	m.scopeLocked(scope).recordLocked(all, overlap)
+}
+
+func (sc *windowScope) recordLocked(all []candidate, overlap time.Duration) {
 	newest := time.Time{}
 	for _, c := range all {
 		sc.seen[rowMemoKey(c)] = c.position()
@@ -130,6 +150,43 @@ func (m *windowMemo) record(scope string, all []candidate, overlap time.Duration
 			delete(sc.seen, k)
 		}
 	}
+}
+
+// hold notes a window batch that was just emitted. Its rows stay unseen
+// until settle learns the batch was applied.
+func (m *windowMemo) hold(scope string, pending pendingWindow) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.scopeLocked(scope).pending = &pending
+}
+
+// settle resolves the scope's pending window batch against the cursor the
+// caller brings from its durable checkpoint. That cursor carries the batch's
+// ack exactly when the worker persisted the batch's NextCursor, which it does
+// only after the backend applied the batch: then the rows are emitted and
+// count as seen. Any other cursor means the batch never landed (the apply
+// failed, or nothing applied it): the pass goes back to where it stood before
+// that batch, so the retry walks the same rows again. A memo mutation is not
+// a commit; the durable checkpoint is.
+func (m *windowMemo) settle(scope, ack string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sc := m.scopes[scope]
+	if sc == nil || sc.pending == nil {
+		return
+	}
+	if ack != "" && ack == sc.pending.ack {
+		sc.recordLocked(sc.pending.rows, sc.pending.overlap)
+	} else {
+		sc.windowPass = sc.pending.before
+	}
+	sc.pending = nil
 }
 
 func (m *windowMemo) unseen(scope string, all []candidate) []candidate {
@@ -187,6 +244,10 @@ func (m *windowMemo) snapshot() *windowMemo {
 	out := newWindowMemo()
 	for scope, sc := range m.scopes {
 		copied := &windowScope{seen: make(map[string]time.Time, len(sc.seen)), windowPass: sc.windowPass}
+		if sc.pending != nil {
+			pending := *sc.pending
+			copied.pending = &pending
+		}
 		for k, at := range sc.seen {
 			copied.seen[k] = at
 		}
@@ -209,7 +270,7 @@ func (m *windowMemo) reset(scope string) {
 // and emit the first page's worth of rows not yet emitted. Pages whose rows
 // were all emitted already are stepped over in-process (the same keyset step
 // pagedBatch uses for an omitted page). See the header for the pass rules.
-func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, state cursorState, advanced bool) (contextfabric.ProjectionBatch, bool, error) {
+func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, state cursorState) (contextfabric.ProjectionBatch, bool, error) {
 	if p.overlap <= 0 || p.window == nil || state.Since.IsZero() {
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
@@ -218,6 +279,7 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 	// times and this process's clock, which dates the passes.
 	slack := p.overlap
 	pass := p.window.pass(p.windowScope)
+	before := pass
 	if pass.low.IsZero() {
 		edge := state.Since
 		if now.Before(edge) {
@@ -309,33 +371,37 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 	p.window.setPass(p.windowScope, pass)
 	normalizeCandidates(all, p.observeNormalization)
 	items := partitionProjectableCandidates(all, p.observeQuarantine)
-	// Whatever this pass consumed is now "seen": rows that are only
-	// quarantined must not be re-judged every tick.
-	p.window.record(p.windowScope, all, p.overlap)
 	if !carriesPayload(items) {
+		// Nothing to apply: rows that are only quarantined count as seen
+		// now, so they are not re-judged every tick.
+		p.window.record(p.windowScope, all, p.overlap)
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
 	batch, err := buildBatch(orgID, p.source, p.version, cursor, all, items, false, false, p.clock())
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, false, err
 	}
-	// The window batch must NOT move the cursor backwards (its rows sit behind
-	// the frontier): keep the frontier the caller reached.
-	next := cursor
-	if advanced {
-		if encoded, err := encodeCursor(state); err == nil {
-			next = encoded
-		}
-	}
-	digest := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%d", cursor, next, len(all))))
+	// The window batch must NOT move the cursor position backwards (its rows
+	// sit behind the frontier): NextCursor keeps the position the caller
+	// reached and carries this batch's ack, which is deterministic in the
+	// checkpoint cursor and the rows, so a retry of an unapplied batch is the
+	// same batch again.
+	digest := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d", cursor, len(all))))
 	for _, c := range all {
 		digest = sha256.Sum256(append(digest[:], []byte(rowMemoKey(c))...))
 	}
+	frontier := state
+	frontier.Ack = hex.EncodeToString(digest[:8])
+	next, err := encodeCursor(frontier)
+	if err != nil {
+		return contextfabric.ProjectionBatch{}, false, err
+	}
 	batch.NextCursor = next
-	batch.BatchID = deterministicBatchID(orgID, p.source, cursor, next+"|overlap|"+hex.EncodeToString(digest[:8]))
+	batch.BatchID = deterministicBatchID(orgID, p.source, cursor, next+"|overlap")
 	if err := batch.Validate(); err != nil {
 		return contextfabric.ProjectionBatch{}, false, fmt.Errorf("%w: devhealthsource: built an invalid overlap batch: %w", contextfabric.ErrInvalidResult, err)
 	}
+	p.window.hold(p.windowScope, pendingWindow{ack: frontier.Ack, before: before, rows: all, overlap: p.overlap})
 	p.forgetConsumed(orgID)
 	p.observeBatch(ctx, batch, all)
 	return batch, true, nil

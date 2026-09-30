@@ -586,7 +586,11 @@ full re-read per organization and source (a one-time read/write spike), which
 also recovers rows the old cursor skipped. A trailing overlap window
 (`ACR_CONTEXT_FABRIC_PROJECTOR_OVERLAP`, default `15m`, must be `> 0`) is
 walked once the source is caught up, so a row whose ingest stamp landed just
-behind the cursor is still projected, without moving the cursor. The walk runs
+behind the cursor is still projected, without moving the cursor position. Such
+a window batch's next cursor keeps the position and carries an acknowledgment
+of the batch; its rows count as emitted only once the worker has persisted
+that cursor, i.e. after the graph applied the batch, so a failed apply
+re-emits the same batch on the retry. The walk runs
 in passes of ordinary 200-row pages (the ClickHouse client's `max_result_rows`
 is 1,000 and a larger read would fail the tick), at most 5 pages per call; a
 pass that does not reach the window's end stops at the last fully read row and

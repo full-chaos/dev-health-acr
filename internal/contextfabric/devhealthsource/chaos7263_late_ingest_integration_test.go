@@ -11,7 +11,11 @@ package devhealthsource_test
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,20 +51,62 @@ type drained struct {
 }
 
 // requireCursorProgress is the paging invariant every drain loop in this
-// package asserts. A batch either moves the cursor, or it is a trailing
-// overlap batch: rows re-read behind an unchanged frontier (overlap.go). The
-// second kind is legitimate exactly once per content; the SAME non-advancing
-// batch twice is a walk that would re-emit it forever, which is the stall
-// the old "every batch advances" check existed to catch.
+// package asserts. A batch either moves the cursor position, or it is a
+// trailing overlap batch: rows re-read behind an unchanged frontier
+// (overlap.go), whose NextCursor keeps the position and only acknowledges
+// the batch. The second kind is legitimate exactly once per content; the
+// SAME rows in a non-advancing batch twice is a walk that would re-emit them
+// forever, which is the stall the old "every batch advances" check existed
+// to catch. Content, not the batch id: the id follows the cursor string,
+// which carries the previous acknowledgment.
 func requireCursorProgress(t *testing.T, where, cursor string, batch contextfabric.ProjectionBatch, replays map[string]bool) {
 	t.Helper()
-	if batch.NextCursor != cursor {
+	if keysetPosition(t, batch.NextCursor) != keysetPosition(t, cursor) {
 		return
 	}
-	if replays[batch.BatchID] {
-		t.Fatalf("%s: the same non-advancing batch %s was emitted twice -- projection would loop forever", where, batch.BatchID)
+	key := batchContentKey(batch)
+	if replays[key] {
+		t.Fatalf("%s: the same non-advancing batch (%s) was emitted twice -- projection would loop forever", where, batch.BatchID)
 	}
-	replays[batch.BatchID] = true
+	replays[key] = true
+}
+
+// keysetPosition is the keyset position a cursor names, read from its JSON
+// (since, after). An empty cursor is the empty position.
+func keysetPosition(t *testing.T, cursor string) string {
+	t.Helper()
+	if cursor == "" {
+		return ""
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		t.Fatalf("decode cursor %q: %v", cursor, err)
+	}
+	var position struct {
+		Since time.Time `json:"since"`
+		After string    `json:"after"`
+	}
+	if err := json.Unmarshal(raw, &position); err != nil {
+		t.Fatalf("decode cursor %q: %v", cursor, err)
+	}
+	return position.Since.UTC().Format(time.RFC3339Nano) + "|" + position.After
+}
+
+// batchContentKey names what a batch writes: its entities, relationships
+// and tombstones, by id.
+func batchContentKey(batch contextfabric.ProjectionBatch) string {
+	var ids []string
+	for _, e := range batch.Entities {
+		ids = append(ids, "entity "+e.Subject.CanonicalID)
+	}
+	for _, r := range batch.Relationships {
+		ids = append(ids, "relationship "+r.RelationshipID)
+	}
+	for _, tomb := range batch.Tombstones {
+		ids = append(ids, "tombstone "+tomb.CanonicalID)
+	}
+	sort.Strings(ids)
+	return strings.Join(ids, "\n")
 }
 
 // drain pages until the source reports nothing available.

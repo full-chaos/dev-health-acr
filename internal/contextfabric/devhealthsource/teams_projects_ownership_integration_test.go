@@ -1516,7 +1516,8 @@ func subRetractionOnlyFollowsMaxRaisingProjectWrites(t *testing.T, ctx context.C
 		"AAA-WATERMARK", fixture.orgID, "WM-KEY", at.Add(time.Hour))
 	// The colliding project creates a NEW group behind the cursor whose only
 	// output is a no-op tombstone (its edge was never projected). The overlap
-	// walk emits it once without moving the cursor; it must not repeat, so the
+	// walk emits it once without moving the cursor position; once acknowledged
+	// (its NextCursor, as the worker persists it) it must not repeat, so the
 	// source is quiet again within three ticks.
 	quiet, tombstoneBatches := false, 0
 	for tick := 0; tick < 3 && !quiet; tick++ {
@@ -1530,9 +1531,10 @@ func subRetractionOnlyFollowsMaxRaisingProjectWrites(t *testing.T, ctx context.C
 			quiet = true
 			break
 		}
-		if batch.NextCursor != cursor || len(batch.Entities) != 0 || len(batch.Relationships) != 0 || hasTombstone(batch, edge) {
+		if keysetPosition(t, batch.NextCursor) != keysetPosition(t, cursor) || len(batch.Entities) != 0 || len(batch.Relationships) != 0 || hasTombstone(batch, edge) {
 			t.Fatalf("tick %d: want only a non-advancing batch of no-op tombstones, got next=%q entities=%d relationships=%d tombstones=%d", tick, batch.NextCursor, len(batch.Entities), len(batch.Relationships), len(batch.Tombstones))
 		}
+		cursor = batch.NextCursor
 		tombstoneBatches++
 	}
 	if tombstoneBatches == 0 {

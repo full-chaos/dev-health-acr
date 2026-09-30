@@ -148,6 +148,8 @@ func (p sourcePlan) nextBatch(ctx context.Context, checkpoint contextfabric.Proj
 		state = cursorState{}
 		p.window.reset(p.windowScope)
 	}
+	p.window.settle(p.windowScope, state.Ack)
+	state.Ack = ""
 	return p.pagedBatch(ctx, orgID, checkpoint.Cursor, state, false)
 }
 
@@ -272,7 +274,7 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 		if len(all) == 0 {
 			// Caught up: re-read the trailing overlap window for rows that
 			// landed behind the frontier (CHAOS-7263).
-			return p.overlapBatch(ctx, orgID, cursor, state, skips > 0)
+			return p.overlapBatch(ctx, orgID, cursor, state)
 		}
 		sortCandidates(all)
 		all = truncateToCompleteRows(all, incrementalBatchCap)

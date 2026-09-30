@@ -18,6 +18,13 @@ type cursorState struct {
 	// before it existed carry none (provider/updated_at time) and are decoded
 	// as a reset by sourcePlan.nextBatch.
 	Space string `json:"space,omitempty"`
+	// Ack (CHAOS-7263) names the overlap-window batch this cursor
+	// acknowledges. A window batch does not move the position (Since/After);
+	// its NextCursor carries its own ack instead. The worker persists
+	// NextCursor only after the backend applied the batch, so the next call's
+	// checkpoint carries the ack exactly when that batch landed, and only
+	// then do its rows count as emitted (windowMemo.settle).
+	Ack string `json:"ack,omitempty"`
 }
 
 func decodeCursor(raw string) (cursorState, error) {
