@@ -64,8 +64,9 @@ func TestBeginAttemptDecisionNamesTheBoundThatRefused(t *testing.T) {
 	}
 }
 
-// A limiter that cannot say which bound refused is reported as such, except
-// that an exhausted failure budget is always named.
+// A limiter that cannot say which bound refused is reported as unspecified,
+// never guessed: FailureBlocked is also true for an address the failure table
+// cannot track, so a full table must not read as an exhausted budget.
 type plainLimiter struct{ blocked, budget bool }
 
 func (plainLimiter) AllowAttempt(string, time.Time) bool     { return true }
@@ -76,16 +77,53 @@ func (p plainLimiter) BeginAttempt(string, time.Time) (func(), bool) {
 func (plainLimiter) RecordFailure(string, time.Time)            {}
 func (plainLimiter) RetryAfter(string, time.Time) time.Duration { return 0 }
 
-func TestBeginAttemptDecisionFallbackForLimitersWithoutReasons(t *testing.T) {
+func TestBeginAttemptDecisionNeverGuessesForLimitersWithoutReasons(t *testing.T) {
 	now := time.Now()
 	if _, d := BeginAttemptDecision(plainLimiter{}, "a", now); !d.Admitted() {
 		t.Fatalf("%+v", d)
 	}
-	if _, d := BeginAttemptDecision(plainLimiter{blocked: true, budget: true}, "a", now); d.Refusal != RefusalFailureBudget {
-		t.Fatalf("%+v", d)
+	// FailureBlocked true (as for a full failure table) must NOT read as failure_budget.
+	for _, l := range []plainLimiter{{blocked: true, budget: true}, {blocked: true}} {
+		if _, d := BeginAttemptDecision(l, "a", now); d.Refusal != RefusalUnspecified || !d.FirstRefusal {
+			t.Fatalf("%+v -> %+v, want unspecified", l, d)
+		}
 	}
-	if _, d := BeginAttemptDecision(plainLimiter{blocked: true}, "a", now); d.Refusal != RefusalUnspecified {
-		t.Fatalf("%+v", d)
+}
+
+// The first failure_budget refusal of an address in a window is reported as
+// first; the retries of the locked-out address are not; a new window is first
+// again. Other bounds are always first.
+func TestFailureBudgetRefusalIsFirstOncePerWindow(t *testing.T) {
+	now := time.Date(2026, 9, 29, 15, 0, 0, 0, time.UTC)
+	limiter := NewBoundedMemoryLimiter(MemoryLimiterOptions{Window: time.Minute, FailureLimit: 1, MaxTrackedKeys: 8})
+	limiter.RecordFailure("a", now)
+	for i := 0; i < 5; i++ {
+		_, d := limiter.BeginAttemptDecision("a", now.Add(time.Duration(i)*time.Second))
+		if d.Refusal != RefusalFailureBudget || d.FirstRefusal != (i == 0) {
+			t.Fatalf("refusal %d = %+v, want failure_budget with FirstRefusal=%v", i, d, i == 0)
+		}
+	}
+	// A different address has its own flag.
+	limiter.RecordFailure("b", now)
+	if _, d := limiter.BeginAttemptDecision("b", now); !d.FirstRefusal {
+		t.Fatalf("second address's first refusal = %+v", d)
+	}
+	// New window: the address is admitted again, locks out again, and its first refusal is first.
+	later := now.Add(2 * time.Minute)
+	if _, d := limiter.BeginAttemptDecision("a", later); !d.Admitted() {
+		t.Fatalf("after the window: %+v", d)
+	}
+	limiter.RecordFailure("a", later)
+	if _, d := limiter.BeginAttemptDecision("a", later); d.Refusal != RefusalFailureBudget || !d.FirstRefusal {
+		t.Fatalf("first refusal of the new window = %+v", d)
+	}
+	// in_flight is never suppressed.
+	inflight := NewBoundedMemoryLimiter(MemoryLimiterOptions{Window: time.Minute, FailureLimit: 9, MaxTrackedKeys: 8, MaxInFlight: 1})
+	inflight.BeginAttemptDecision("a", now)
+	for i := 0; i < 3; i++ {
+		if _, d := inflight.BeginAttemptDecision("a", now); d.Refusal != RefusalInFlight || !d.FirstRefusal {
+			t.Fatalf("in_flight refusal %d = %+v", i, d)
+		}
 	}
 }
 
@@ -200,4 +238,58 @@ func TestAuthenticatorLogsWhichBoundRefusedTheAttempt(t *testing.T) {
 			t.Fatalf("lines = %v", got)
 		}
 	})
+}
+
+// 25 refusals of one locked-out address in one window: one Info line, 24
+// Debug; a new window logs Info again (P2-4: the retry rate must not set the
+// Info volume).
+func TestRefusalLineIsInfoOncePerWindowThenDebug(t *testing.T) {
+	now := time.Date(2026, 9, 29, 15, 0, 0, 0, time.UTC)
+	bad := TokenPrefix + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	logs := &syncBuf{}
+	clock := now
+	store := newMemoryCredentialStoreAt(t, now.Add(-time.Hour), memory.NewAuditStore())
+	a, err := NewAuthenticator(store, memory.NewAuditStore(), AuthenticatorOptions{
+		Now: func() time.Time { return clock }, Limiter: NewBoundedMemoryLimiter(MemoryLimiterOptions{Window: time.Minute, FailureLimit: 1, MaxTrackedKeys: 8}),
+		Logger: slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.Close() })
+	handler := a.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	call := func() int {
+		request := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+		request.RemoteAddr = "192.0.2.10:4000"
+		request.Header.Set("Authorization", "Bearer "+bad)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response.Code
+	}
+	call() // the one failure that uses the budget
+	for i := 0; i < 25; i++ {
+		if code := call(); code != http.StatusTooManyRequests {
+			t.Fatalf("refusal %d = %d", i, code)
+		}
+	}
+	count := func() (info, debug int) {
+		for _, m := range refusalLines(logs) {
+			switch m["level"] {
+			case "INFO":
+				info++
+			case "DEBUG":
+				debug++
+			}
+		}
+		return
+	}
+	if info, debug := count(); info != 1 || debug != 24 {
+		t.Fatalf("25 refusals in one window: info=%d debug=%d, want 1 and 24", info, debug)
+	}
+	clock = now.Add(2 * time.Minute)
+	call() // uses the new window's budget
+	call() // refused
+	if info, debug := count(); info != 2 || debug != 24 {
+		t.Fatalf("after a new window: info=%d debug=%d, want 2 and 24", info, debug)
+	}
 }

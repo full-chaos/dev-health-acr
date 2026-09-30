@@ -800,21 +800,31 @@ for token in 'ACR_MCP_TRANSPORT: "http"' 'ACR_MCP_HTTP_BASE_PATH: "/mcp"' 'ACR_A
 done
 if grep -qE 'TOKEN|PASSWORD|SECRET|DSN' <<<"$mcp_cm"; then fail_gate "acr-mcp: ConfigMap carries a credential-shaped key"; fi
 # CHAOS-7196: the edge failure gate resolves the same limit inputs as acr-api.
-# The ConfigMap carries ACR_REQUESTS_PER_MINUTE and mirrors ONLY literal
-# ACR_AUTH_* / ACR_LIMIT_WINDOW entries of deployment.extraEnv: no proxy trust
-# list (acr-mcp has its own), no unrelated setting, no secret reference.
+# The ConfigMap mirrors EXACTLY the gate inputs (ACR_REQUESTS_PER_MINUTE,
+# ACR_LIMIT_WINDOW and the ACR_AUTH_* limit settings) and only as literals,
+# with a deployment.extraEnv literal winning as it does for acr-api: no proxy
+# trust list (acr-mcp has its own), no unrelated setting, and no other
+# ACR_AUTH_* name (a secret-shaped one must never land in this ConfigMap).
 grep -qF 'ACR_REQUESTS_PER_MINUTE: "' <<<"$mcp_cm" || fail_gate "acr-mcp: ConfigMap is missing ACR_REQUESTS_PER_MINUTE"
 mirror_render="$(render --set acrMcp.enabled=true --set-string "acrMcp.image.reference=${mcp_image}" \
-  --set-json 'deployment.extraEnv=[{"name":"ACR_TRUSTED_PROXY_CIDRS","value":"10.42.0.0/24"},{"name":"ACR_POSTGRES_MAX_OPEN_CONNS","value":"40"},{"name":"ACR_AUTH_FAILURES_PER_WINDOW","value":"7"},{"name":"ACR_LIMIT_WINDOW","value":"2m"},{"name":"ACR_AUTH_FROM_SECRET","valueFrom":{"secretKeyRef":{"name":"s","key":"k"}}}]')"
+  --set-json 'deployment.extraEnv=[{"name":"ACR_TRUSTED_PROXY_CIDRS","value":"10.42.0.0/24"},{"name":"ACR_POSTGRES_MAX_OPEN_CONNS","value":"40"},{"name":"ACR_AUTH_FAILURES_PER_WINDOW","value":"7"},{"name":"ACR_LIMIT_WINDOW","value":"2m"},{"name":"ACR_REQUESTS_PER_MINUTE","value":"5"},{"name":"ACR_AUTH_PRIVATE_KEY","value":"PLACEHOLDER_NOT_A_SECRET"},{"name":"ACR_AUTH_FROM_SECRET","valueFrom":{"secretKeyRef":{"name":"s","key":"k"}}}]')"
 mirror_cm="$(extract_doc ConfigMap '  name: [^\n]*-mcp-config\n' <<<"$mirror_render")"
 [[ -n "$mirror_cm" ]] || fail_gate "acr-mcp: extraEnv mirror render is missing the acr-mcp ConfigMap"
-for token in 'ACR_AUTH_FAILURES_PER_WINDOW: "7"' 'ACR_LIMIT_WINDOW: "2m"'; do
+for token in 'ACR_AUTH_FAILURES_PER_WINDOW: "7"' 'ACR_LIMIT_WINDOW: "2m"' 'ACR_REQUESTS_PER_MINUTE: "5"'; do
   grep -qF "$token" <<<"$mirror_cm" || fail_gate "acr-mcp: ConfigMap does not mirror $token from deployment.extraEnv"
 done
-for absent in ACR_TRUSTED_PROXY_CIDRS ACR_POSTGRES_MAX_OPEN_CONNS ACR_AUTH_FROM_SECRET; do
-  if grep -qF "$absent" <<<"$mirror_cm"; then fail_gate "acr-mcp: ConfigMap mirrored $absent from deployment.extraEnv (only literal ACR_AUTH_* / ACR_LIMIT_WINDOW may be mirrored)"; fi
+if [[ "$(grep -c 'ACR_REQUESTS_PER_MINUTE' <<<"$mirror_cm")" != 1 ]]; then fail_gate "acr-mcp: ConfigMap carries ACR_REQUESTS_PER_MINUTE more than once"; fi
+for absent in ACR_TRUSTED_PROXY_CIDRS ACR_POSTGRES_MAX_OPEN_CONNS ACR_AUTH_PRIVATE_KEY PLACEHOLDER_NOT_A_SECRET ACR_AUTH_FROM_SECRET; do
+  if grep -qF "$absent" <<<"$mirror_cm"; then fail_gate "acr-mcp: ConfigMap mirrored $absent from deployment.extraEnv (only the exact failure-gate inputs may be mirrored)"; fi
 done
-pass "acr-mcp: ConfigMap mirrors only the failure-gate limit inputs of deployment.extraEnv"
+pass "acr-mcp: ConfigMap mirrors exactly the failure-gate inputs of deployment.extraEnv (override wins, nothing else copied)"
+set +e
+mirror_ref_out="$(render --set acrMcp.enabled=true --set-string "acrMcp.image.reference=${mcp_image}" \
+  --set-json 'deployment.extraEnv=[{"name":"ACR_AUTH_MAX_IN_FLIGHT","valueFrom":{"secretKeyRef":{"name":"s","key":"k"}}}]' 2>&1)"
+mirror_ref_status=$?
+set -e
+if [[ $mirror_ref_status -eq 0 ]] || ! grep -qF 'acr-mcp-gate-env' <<<"$mirror_ref_out"; then fail_gate "acr-mcp: a valueFrom entry for a mirrored gate input must fail the render naming acr-mcp-gate-env"; fi
+pass "acr-mcp: a valueFrom gate input fails closed (cannot be mirrored)"
 mcp_svc="$(extract_mcp_doc Service)"
 grep -qE '^\s+port: 8081\s*$' <<<"$mcp_svc" || fail_gate "acr-mcp: Service must expose 8081"
 mcp_route="$(extract_mcp_doc HTTPRoute)"

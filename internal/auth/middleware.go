@@ -105,7 +105,14 @@ func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler
 		if !decision.Admitted() {
 			// Three different bounds answer with the same 429; the log line
 			// is where an operator tells them apart.
-			a.logger.InfoContext(r.Context(), "ACR authentication attempt refused", "reason", string(decision.Refusal), "in_flight", decision.InFlight, "remote_ip", logsanitize.SanitizeLogAttr(ip), "request_id", logsanitize.SanitizeLogAttr(requestID(r)))
+			// Only the first failure_budget refusal per address per window is
+			// Info; the retries of a locked-out address are Debug so the
+			// retry rate does not set the Info volume.
+			level := slog.LevelInfo
+			if !decision.FirstRefusal {
+				level = slog.LevelDebug
+			}
+			a.logger.Log(r.Context(), level, "ACR authentication attempt refused", "reason", string(decision.Refusal), "in_flight", decision.InFlight, "remote_ip", logsanitize.SanitizeLogAttr(ip), "request_id", logsanitize.SanitizeLogAttr(requestID(r)))
 			retryAfter := a.limiter.RetryAfter(ip, now)
 			if retryAfter <= 0 {
 				retryAfter = time.Second

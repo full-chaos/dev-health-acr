@@ -44,6 +44,12 @@ const (
 type AttemptDecision struct {
 	Refusal  AttemptRefusal
 	InFlight int
+	// FirstRefusal is true for every refusal except a repeat failure_budget
+	// refusal of the same address in the same window: once an address is
+	// locked out every retry is refused, and a caller that logs each refusal
+	// at full level would let the retry rate set the log volume. The flag lives
+	// on the limiter's existing per-address window entry (no second map).
+	FirstRefusal bool
 }
 
 // Admitted reports whether the attempt was admitted.
@@ -56,9 +62,9 @@ type DecisionLimiter interface {
 }
 
 // BeginAttemptDecision admits one attempt on any limiter, naming the refusal
-// when the limiter can (DecisionLimiter) and RefusalUnspecified when it
-// cannot, except that a refusal with the failure budget reached is always
-// named as such.
+// when the limiter can (DecisionLimiter). A limiter that cannot say is
+// reported as RefusalUnspecified: FailureBlocked is also true for an address
+// the failure table cannot track, so it is never used to guess the bound.
 func BeginAttemptDecision(limiter AttemptLimiter, key string, now time.Time) (func(), AttemptDecision) {
 	if decider, ok := limiter.(DecisionLimiter); ok {
 		return decider.BeginAttemptDecision(key, now)
@@ -67,10 +73,7 @@ func BeginAttemptDecision(limiter AttemptLimiter, key string, now time.Time) (fu
 	if admitted {
 		return release, AttemptDecision{}
 	}
-	if limiter.FailureBlocked(key, now) {
-		return nil, AttemptDecision{Refusal: RefusalFailureBudget}
-	}
-	return nil, AttemptDecision{Refusal: RefusalUnspecified}
+	return nil, AttemptDecision{Refusal: RefusalUnspecified, FirstRefusal: true}
 }
 
 type NoopLimiter struct{}
@@ -86,6 +89,9 @@ func (NoopLimiter) RetryAfter(string, time.Time) time.Duration { return 0 }
 type fixedWindow struct {
 	Started time.Time
 	Count   int
+	// RefusalLogged: a failure_budget refusal has been reported for this
+	// address in this window (failures map only; a new window starts false).
+	RefusalLogged bool
 }
 
 type MemoryLimiter struct {
@@ -170,21 +176,24 @@ func (l *MemoryLimiter) BeginAttemptDecision(key string, now time.Time) (func(),
 	defer l.mu.Unlock()
 	window, tracked := l.window(l.failures, key, now)
 	if !tracked {
-		return nil, AttemptDecision{Refusal: RefusalTrackedKeys, InFlight: l.inflight[key]}
+		return nil, AttemptDecision{Refusal: RefusalTrackedKeys, InFlight: l.inflight[key], FirstRefusal: true}
 	}
 	l.failures[key] = window
 	if l.FailureLimit > 0 && window.Count >= l.FailureLimit {
-		return nil, AttemptDecision{Refusal: RefusalFailureBudget, InFlight: l.inflight[key]}
+		first := !window.RefusalLogged
+		window.RefusalLogged = true
+		l.failures[key] = window
+		return nil, AttemptDecision{Refusal: RefusalFailureBudget, InFlight: l.inflight[key], FirstRefusal: first}
 	}
 	// Undecided attempts are bounded per address, and the tracked addresses
 	// are bounded like every other limiter map. Below the per-address bound a
 	// valid request is never refused, whatever the failure count.
 	current, tracking := l.inflight[key]
 	if current >= l.maxInflight {
-		return nil, AttemptDecision{Refusal: RefusalInFlight, InFlight: current}
+		return nil, AttemptDecision{Refusal: RefusalInFlight, InFlight: current, FirstRefusal: true}
 	}
 	if !tracking && len(l.inflight) >= l.maxKeys {
-		return nil, AttemptDecision{Refusal: RefusalTrackedKeys, InFlight: current}
+		return nil, AttemptDecision{Refusal: RefusalTrackedKeys, InFlight: current, FirstRefusal: true}
 	}
 	l.inflight[key]++
 	var once sync.Once
