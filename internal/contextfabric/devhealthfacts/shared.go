@@ -143,7 +143,13 @@ import (
 // the counterpart work item's canonical id (blocked_by_work_item_ref /
 // required_child_work_item_ref) when it resolves to one repository. A
 // candidate saved under v17 lacks that field and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v18"
+//
+// v18 -> v19 (CHAOS-7124): the project theme mix (owning-team roll-up and
+// project-native) excludes superseded work units and reads only the current
+// membership run; the roll-up keeps a NULL latest repo_id. A candidate saved
+// under v18 may carry a project mix over superseded / out-of-run units and must
+// not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v19"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
