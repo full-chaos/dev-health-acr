@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -44,28 +45,19 @@ func (r *recordingActivationTelemetry) snapshot() []contextfabric.EpochActivatio
 	return append([]contextfabric.EpochActivationRefusal(nil), r.refusals...)
 }
 
-// unreadableCheckpoints fails LoadProjectionCheckpoint for one source while
-// armed, and passes everything else through to the real store.
+// unreadableCheckpoints fails ListProjectionCheckpoints while armed -- the
+// candidate epoch's rows cannot be read -- and passes everything else
+// through to the real view.
 type unreadableCheckpoints struct {
 	contextfabric.ProjectionCheckpointStore
-	source string
-	armed  *atomic.Bool
+	armed *atomic.Bool
 }
 
-func (u unreadableCheckpoints) LoadProjectionCheckpoint(ctx context.Context, orgID, source string) (contextfabric.ProjectionCheckpoint, error) {
-	if u.armed.Load() && source == u.source {
-		return contextfabric.ProjectionCheckpoint{}, errors.New("checkpoint store unavailable")
-	}
-	return u.ProjectionCheckpointStore.LoadProjectionCheckpoint(ctx, orgID, source)
-}
-
-// ListProjectionCheckpointSources passes through to the real view, or fails
-// while armed when source is "" (the list itself is what is unavailable).
-func (u unreadableCheckpoints) ListProjectionCheckpointSources(ctx context.Context, orgID string) ([]string, error) {
-	if u.armed.Load() && u.source == "" {
+func (u unreadableCheckpoints) ListProjectionCheckpoints(ctx context.Context, orgID string) ([]contextfabric.ProjectionCheckpoint, error) {
+	if u.armed.Load() {
 		return nil, errors.New("checkpoint store unavailable")
 	}
-	return u.ProjectionCheckpointStore.(contextfabric.ProjectionCheckpointSourceLister).ListProjectionCheckpointSources(ctx, orgID)
+	return u.ProjectionCheckpointStore.(contextfabric.ProjectionCheckpointLister).ListProjectionCheckpoints(ctx, orgID)
 }
 
 // cancellingCheckpoints cancels the caller's context the moment the guard
@@ -76,16 +68,16 @@ type cancellingCheckpoints struct {
 	cancel context.CancelFunc
 }
 
-func (c cancellingCheckpoints) ListProjectionCheckpointSources(ctx context.Context, orgID string) ([]string, error) {
+func (c cancellingCheckpoints) ListProjectionCheckpoints(ctx context.Context, orgID string) ([]contextfabric.ProjectionCheckpoint, error) {
 	if c.armed.Load() {
 		c.cancel()
 		return nil, ctx.Err()
 	}
-	return c.ProjectionCheckpointStore.(contextfabric.ProjectionCheckpointSourceLister).ListProjectionCheckpointSources(ctx, orgID)
+	return c.ProjectionCheckpointStore.(contextfabric.ProjectionCheckpointLister).ListProjectionCheckpoints(ctx, orgID)
 }
 
 // unlistableCheckpoints is a checkpoint view that cannot say which sources it
-// holds: it deliberately does NOT implement ProjectionCheckpointSourceLister.
+// holds: it deliberately does NOT implement ProjectionCheckpointLister.
 type unlistableCheckpoints struct {
 	inner contextfabric.ProjectionCheckpointStore
 }
@@ -374,6 +366,55 @@ func TestEpochActivationGuard_Clauses(t *testing.T) {
 		require.Equal(t, epochGuardOldVersion, refusals[0].RecordedSourceVersion)
 	})
 
+	// Versions are opaque identities, compared byte for byte (codex #749 r2):
+	// a recorded version that differs from the binary's only by trailing
+	// whitespace is a different producer identity, and RunOnce would refuse
+	// its next batch too.
+	for i, padded := range []string{epochGuardNewVersion + " ", " "} {
+		t.Run(fmt.Sprintf("whitespace_padded_recorded_version_is_refused/%d", i), func(t *testing.T) {
+			r := rig(t, fmt.Sprintf("org-guard-padded-version-%d", i))
+			telemetry := &recordingActivationTelemetry{}
+			binary := r.coordinator(guardCoordinatorOptions{telemetry: telemetry}, projectionrun.SourcePair{Name: epochGuardSource, Source: versioned(epochGuardNewVersion, 1)})
+			require.NoError(t, binary.Rebuild(ctx, r.org))
+			tickUntilStatus(t, ctx, binary, lifecycle, r.org, contextfabric.LifecycleStatusGrace, 5)
+			require.NoError(t, checkpoints.CompareAndSwapProjectionCheckpoint(ctx,
+				contextfabric.ProjectionCheckpoint{OrgID: r.org, Source: epochGuardSource},
+				contextfabric.ProjectionCheckpoint{OrgID: r.org, Source: epochGuardSource, Cursor: "p", SourceVersion: padded, UpdatedAt: time.Now().UTC()}))
+
+			err := binary.Rollback(ctx, r.org)
+			require.ErrorIs(t, err, contextfabric.ErrEpochSourceVersionStale)
+			require.Equal(t, int64(1), r.row().ActiveEpoch)
+			require.Equal(t, []contextfabric.EpochActivationRefusal{{
+				OrgID: r.org, Transition: contextfabric.LifecycleTransitionRollback, ActiveEpoch: 1, CandidateEpoch: 0,
+				Source: epochGuardSource, Reason: contextfabric.EpochActivationRefusedSourceVersion,
+				RecordedSourceVersion: padded, CurrentSourceVersion: epochGuardNewVersion,
+			}}, telemetry.snapshot())
+		})
+	}
+
+	// A row is judged under the exact name it was stored with (codex #749
+	// r2): a padded name no configured source carries cannot be reloaded
+	// under a trimmed name and read as "never recorded".
+	t.Run("padded_source_name_row_is_refused", func(t *testing.T) {
+		r := rig(t, "org-guard-padded-name")
+		telemetry := &recordingActivationTelemetry{}
+		binary := r.coordinator(guardCoordinatorOptions{telemetry: telemetry}, projectionrun.SourcePair{Name: epochGuardSource, Source: versioned(epochGuardNewVersion, 1)})
+		require.NoError(t, binary.Rebuild(ctx, r.org))
+		tickUntilStatus(t, ctx, binary, lifecycle, r.org, contextfabric.LifecycleStatusGrace, 5)
+		const padded = " retired_teams_projects "
+		require.NoError(t, checkpoints.CompareAndSwapProjectionCheckpoint(ctx,
+			contextfabric.ProjectionCheckpoint{OrgID: r.org, Source: padded},
+			contextfabric.ProjectionCheckpoint{OrgID: r.org, Source: padded, Cursor: "p", SourceVersion: epochGuardOldVersion, UpdatedAt: time.Now().UTC()}))
+
+		err := binary.Rollback(ctx, r.org)
+		require.ErrorIs(t, err, contextfabric.ErrEpochSourceVersionStale)
+		require.Equal(t, int64(1), r.row().ActiveEpoch)
+		require.Equal(t, []contextfabric.EpochActivationRefusal{{
+			OrgID: r.org, Transition: contextfabric.LifecycleTransitionRollback, ActiveEpoch: 1, CandidateEpoch: 0,
+			Source: padded, Reason: contextfabric.EpochActivationRefusedSourceNotConfigured, RecordedSourceVersion: epochGuardOldVersion,
+		}}, telemetry.snapshot())
+	})
+
 	// Unlistable is a wiring defect, not a stale version: a rollback onto a
 	// view that cannot list is refused, and says which of the two it is.
 	t.Run("unlistable_rollback_target_is_refused_not_stale", func(t *testing.T) {
@@ -439,7 +480,7 @@ func TestEpochActivationGuard_Clauses(t *testing.T) {
 		next := r.coordinator(guardCoordinatorOptions{
 			telemetry: telemetry, logger: slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelDebug})),
 			epochViews: func(epoch int64) contextfabric.ProjectionCheckpointStore {
-				return unreadableCheckpoints{ProjectionCheckpointStore: checkpoints.ForEpoch(epoch), source: epochGuardSource, armed: armed}
+				return unreadableCheckpoints{ProjectionCheckpointStore: checkpoints.ForEpoch(epoch), armed: armed}
 			},
 		},
 			projectionrun.SourcePair{Name: epochGuardSource, Source: versioned(epochGuardNewVersion, 1)},
@@ -450,11 +491,11 @@ func TestEpochActivationGuard_Clauses(t *testing.T) {
 		refusals := telemetry.snapshot()
 		require.Len(t, refusals, 1)
 		require.Equal(t, contextfabric.EpochActivationRefusedCheckpointUnreadable, refusals[0].Reason)
-		require.Equal(t, epochGuardSource, refusals[0].Source)
+		require.Empty(t, refusals[0].Source, "the epoch's rows as a whole could not be read")
 		summary := freshnessSummary(t, &buffer)
 		require.Equal(t, float64(1), summaryNumber(t, summary, "orgs_pair_failed"), "an unreadable checkpoint is a broken pair, never a quiet backoff")
 		require.Equal(t, float64(0), summaryNumber(t, summary, "orgs_backoff"))
-		require.Contains(t, pairFailedNames(t, summary), epochGuardSource+":checkpoint_load")
+		require.Contains(t, pairFailedNames(t, summary), "epoch_checkpoint_sources:checkpoint_load")
 
 		armed.Store(false)
 		next.Tick(ctx)
@@ -468,7 +509,7 @@ func TestEpochActivationGuard_Clauses(t *testing.T) {
 		armed := &atomic.Bool{}
 		telemetry := &recordingActivationTelemetry{}
 		binary := r.coordinator(guardCoordinatorOptions{
-			telemetry: telemetry, checkpoints: unreadableCheckpoints{ProjectionCheckpointStore: checkpoints, source: "", armed: armed},
+			telemetry: telemetry, checkpoints: unreadableCheckpoints{ProjectionCheckpointStore: checkpoints, armed: armed},
 		}, projectionrun.SourcePair{Name: epochGuardSource, Source: versioned(epochGuardNewVersion, 1)})
 		binary.Tick(ctx)
 		require.NoError(t, binary.Rebuild(ctx, r.org))
@@ -482,7 +523,7 @@ func TestEpochActivationGuard_Clauses(t *testing.T) {
 		refusals := telemetry.snapshot()
 		require.Len(t, refusals, 1)
 		require.Equal(t, contextfabric.EpochActivationRefusedCheckpointUnreadable, refusals[0].Reason)
-		require.Empty(t, refusals[0].Source, "the list itself failed, not one source")
+		require.Empty(t, refusals[0].Source, "the rows as a whole could not be read, not one source")
 
 		armed.Store(false)
 		require.NoError(t, binary.Rollback(ctx, r.org))
@@ -510,27 +551,5 @@ func TestEpochActivationGuard_Clauses(t *testing.T) {
 		require.NotErrorIs(t, err, contextfabric.ErrLifecycleTransitionRefused)
 		require.Empty(t, telemetry.snapshot(), "a cancelled read is truncation, not a refusal")
 		require.Equal(t, int64(1), r.row().ActiveEpoch)
-	})
-
-	t.Run("unreadable_rollback_target_fails_closed", func(t *testing.T) {
-		r := rig(t, "org-guard-unreadable-rollback")
-		armed := &atomic.Bool{}
-		binary := r.coordinator(guardCoordinatorOptions{
-			checkpoints: unreadableCheckpoints{ProjectionCheckpointStore: checkpoints, source: epochGuardSource, armed: armed},
-		}, projectionrun.SourcePair{Name: epochGuardSource, Source: versioned(epochGuardNewVersion, 1)})
-		binary.Tick(ctx)
-		require.NoError(t, binary.Rebuild(ctx, r.org))
-		tickUntilStatus(t, ctx, binary, lifecycle, r.org, contextfabric.LifecycleStatusGrace, 5)
-
-		armed.Store(true)
-		err := binary.Rollback(ctx, r.org)
-		require.Error(t, err)
-		require.NotErrorIs(t, err, contextfabric.ErrLifecycleTransitionRefused, "an unreadable checkpoint is retryable, not a permanent refusal")
-		require.Equal(t, contextfabric.LifecycleStatusGrace, r.row().Status)
-		require.Equal(t, int64(1), r.row().ActiveEpoch)
-
-		armed.Store(false)
-		require.NoError(t, binary.Rollback(ctx, r.org))
-		require.Equal(t, int64(0), r.row().ActiveEpoch)
 	})
 }

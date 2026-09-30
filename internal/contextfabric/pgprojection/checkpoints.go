@@ -270,23 +270,25 @@ func (v epochCheckpointView) CompareAndSwapProjectionCheckpoint(ctx context.Cont
 	return v.store.CompareAndSwapProjectionCheckpointForEpoch(ctx, expected, updated)
 }
 
-func (v epochCheckpointView) ListProjectionCheckpointSources(ctx context.Context, orgID string) ([]string, error) {
-	return v.store.ListProjectionCheckpointSourcesForEpoch(ctx, orgID, v.epoch)
+func (v epochCheckpointView) ListProjectionCheckpoints(ctx context.Context, orgID string) ([]contextfabric.ProjectionCheckpoint, error) {
+	return v.store.ListProjectionCheckpointsForEpoch(ctx, orgID, v.epoch)
 }
 
 var _ contextfabric.ProjectionCheckpointStore = epochCheckpointView{}
 
-// ListProjectionCheckpointSources lists the sources holding an epoch-0
-// checkpoint row for orgID -- see ListProjectionCheckpointSourcesForEpoch.
-func (s *CheckpointStore) ListProjectionCheckpointSources(ctx context.Context, orgID string) ([]string, error) {
-	return s.ListProjectionCheckpointSourcesForEpoch(ctx, orgID, 0)
+// ListProjectionCheckpoints lists every epoch-0 checkpoint row for orgID --
+// see ListProjectionCheckpointsForEpoch.
+func (s *CheckpointStore) ListProjectionCheckpoints(ctx context.Context, orgID string) ([]contextfabric.ProjectionCheckpoint, error) {
+	return s.ListProjectionCheckpointsForEpoch(ctx, orgID, 0)
 }
 
-// ListProjectionCheckpointSourcesForEpoch lists, sorted, every source that
-// holds a checkpoint row for (orgID, epoch). The epoch activation guard
-// (projectionrun.Coordinator) reads it so a source the running binary no
-// longer configures cannot hide data in an epoch about to become active.
-func (s *CheckpointStore) ListProjectionCheckpointSourcesForEpoch(ctx context.Context, orgID string, epoch int64) ([]string, error) {
+// ListProjectionCheckpointsForEpoch lists, sorted by source, every checkpoint
+// row for (orgID, epoch), each exactly as stored: the source name and the
+// source version are returned untouched (no trimming), because the epoch
+// activation guard (projectionrun.Coordinator) judges what the epoch
+// recorded, and a normalized name or version could hide a row or make two
+// different producer identities compare equal.
+func (s *CheckpointStore) ListProjectionCheckpointsForEpoch(ctx context.Context, orgID string, epoch int64) ([]contextfabric.ProjectionCheckpoint, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("pgprojection: checkpoint store is not configured")
 	}
@@ -295,31 +297,32 @@ func (s *CheckpointStore) ListProjectionCheckpointSourcesForEpoch(ctx context.Co
 		return nil, errors.New("pgprojection: organization and a non-negative epoch are required")
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT source
+SELECT source, cursor, source_version, backend_watermark, updated_at, rows_applied
 FROM acr.context_fabric_projection_checkpoints
 WHERE org_id = $1 AND epoch = $2
 ORDER BY source ASC`, orgID, epoch)
 	if err != nil {
-		return nil, fmt.Errorf("list projection checkpoint sources: %w", sanitizeError(err))
+		return nil, fmt.Errorf("list projection checkpoints: %w", sanitizeError(err))
 	}
 	defer rows.Close()
-	var sources []string
+	var out []contextfabric.ProjectionCheckpoint
 	for rows.Next() {
-		var source string
-		if err := rows.Scan(&source); err != nil {
-			return nil, fmt.Errorf("list projection checkpoint sources: %w", sanitizeError(err))
+		checkpoint := contextfabric.ProjectionCheckpoint{OrgID: orgID, Epoch: epoch}
+		if err := rows.Scan(&checkpoint.Source, &checkpoint.Cursor, &checkpoint.SourceVersion, &checkpoint.BackendWatermark, &checkpoint.UpdatedAt, &checkpoint.RowsApplied); err != nil {
+			return nil, fmt.Errorf("list projection checkpoints: %w", sanitizeError(err))
 		}
-		sources = append(sources, source)
+		checkpoint.UpdatedAt = checkpoint.UpdatedAt.UTC()
+		out = append(out, checkpoint)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list projection checkpoint sources: %w", sanitizeError(err))
+		return nil, fmt.Errorf("list projection checkpoints: %w", sanitizeError(err))
 	}
-	return sources, nil
+	return out, nil
 }
 
 var (
-	_ contextfabric.ProjectionCheckpointSourceLister = (*CheckpointStore)(nil)
-	_ contextfabric.ProjectionCheckpointSourceLister = epochCheckpointView{}
+	_ contextfabric.ProjectionCheckpointLister = (*CheckpointStore)(nil)
+	_ contextfabric.ProjectionCheckpointLister = epochCheckpointView{}
 )
 
 func sanitizeError(err error) error {

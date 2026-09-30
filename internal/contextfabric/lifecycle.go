@@ -362,24 +362,25 @@ const (
 	// capability) -- nothing can vouch for the recorded data.
 	EpochActivationRefusedSourceVersionUnknown EpochActivationRefusalReason = "source_version_unknown"
 	// EpochActivationRefusedCheckpointUnreadable: the candidate epoch's
-	// checkpoint for the source (or, with an empty Source, the list of the
-	// epoch's checkpoint sources) could not be read, so the guard cannot
-	// prove the epoch is current. Fail closed; the next attempt re-reads.
+	// checkpoint rows could not be read, so the guard cannot prove the epoch
+	// is current. Fail closed; the next attempt re-reads.
 	EpochActivationRefusedCheckpointUnreadable EpochActivationRefusalReason = "checkpoint_unreadable"
 	// EpochActivationRefusedSourcesUnlistable: the candidate epoch's
-	// checkpoint view cannot list which sources it holds checkpoints for
-	// (it does not implement ProjectionCheckpointSourceLister), so a source
-	// the running binary no longer configures could hide in it. Fail closed.
+	// checkpoint view cannot list its checkpoint rows (it does not
+	// implement ProjectionCheckpointLister), so nothing the epoch recorded
+	// can be checked. Fail closed.
 	EpochActivationRefusedSourcesUnlistable EpochActivationRefusalReason = "checkpoint_sources_unlistable"
 )
 
-// ProjectionCheckpointSourceLister is the capability the epoch activation
-// guard needs from an epoch's checkpoint view: every source that holds a
-// checkpoint row for orgID in that view's epoch, so the guard also checks
-// sources the running binary no longer configures.
-// pgprojection.CheckpointStore (epoch 0) and its ForEpoch views implement it.
-type ProjectionCheckpointSourceLister interface {
-	ListProjectionCheckpointSources(ctx context.Context, orgID string) ([]string, error)
+// ProjectionCheckpointLister is the capability the epoch activation guard
+// needs from an epoch's checkpoint view: every checkpoint row the view's
+// epoch holds for orgID, each exactly as stored (source name and source
+// version untouched), so the guard judges the epoch's own record of who
+// wrote into it -- including sources the running binary no longer
+// configures. pgprojection.CheckpointStore (epoch 0) and its ForEpoch views
+// implement it.
+type ProjectionCheckpointLister interface {
+	ListProjectionCheckpoints(ctx context.Context, orgID string) ([]ProjectionCheckpoint, error)
 }
 
 // EpochActivationRefusal is one cf_epoch_activation_refused signal: every
