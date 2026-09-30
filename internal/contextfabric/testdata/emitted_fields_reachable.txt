@@ -170,7 +170,7 @@ FactIncidents
   fields             severity status
 
 FactInvestment
-  reached_funcs      103
+  reached_funcs      104
   dynamic_key_sites  7
   leaked_call_sites  6
     leak interface_method     5
@@ -178,7 +178,7 @@ FactInvestment
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         1
-    calls followed            596
+    calls followed            601
     calls accounted           13
     calls not_a_call          17
     calls excluded_by_design  211

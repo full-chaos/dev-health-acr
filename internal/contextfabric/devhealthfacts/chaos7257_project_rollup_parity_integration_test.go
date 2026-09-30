@@ -31,13 +31,16 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/full-chaos/dev-health-go/readers"
 )
@@ -89,6 +92,34 @@ func rollupRowsDiffer(want, got []rollupRow) error {
 		}
 	}
 	return nil
+}
+
+// rawMapSQL renders a Map(String, Float64) value from its key/value ENTRIES,
+// so a fixture can hold what a Go map cannot: a key twice, an empty map. The
+// column is Map(String, Float64), which ClickHouse fills with whatever entries
+// the writer sent; a duplicate key is a valid value of the type.
+func rawMapSQL(entries ...any) string {
+	parts := make([]string, 0, len(entries)/2)
+	for i := 0; i+1 < len(entries); i += 2 {
+		parts = append(parts, fmt.Sprintf("('%s', %v)", entries[i].(string), entries[i+1].(float64)))
+	}
+	return "CAST([" + strings.Join(parts, ", ") + "], 'Map(String, Float64)')"
+}
+
+// insertRawUnit inserts one work_unit_investments row whose theme and
+// subcategory maps are given as raw SQL expressions (see rawMapSQL). repoLabel
+// "" is a NULL repo_id.
+func insertRawUnit(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID, id, repoLabel string, effort float64, themesSQL, subSQL, evidence string, from, to, computedAt time.Time) {
+	t.Helper()
+	var repoID any
+	if repoLabel != "" {
+		repoID = repoUUID(repoLabel)
+	}
+	if err := direct.Exec(ctx, `INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id)
+SELECT ?, ?, ?, toUUIDOrNull(?), ?, `+themesSQL+`, `+subSQL+`, ?, ?, ?`,
+		id, from, to, repoID, effort, evidence, computedAt, orgID); err != nil {
+		t.Fatalf("seed raw unit %s: %v", id, err)
+	}
 }
 
 func seedCHAOS7257Parity(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID string) time.Time {
@@ -244,12 +275,23 @@ func seedCHAOS7257Parity(t *testing.T, ctx context.Context, direct clickhousedri
 	for k := 0; k < 6; k++ {
 		unit(fmt.Sprintf("wu-t3-%d", k), version{computedAt: at, effort: 5, themes: themes(fd, 1.0), evidence: evidence([]string{fmt.Sprintf("linear:T3-%d", k)})})
 	}
+	// Maps a Go map cannot hold (raw entries): a theme key TWICE (the old
+	// statement summed every entry of the key, effort x (0.2 + 0.3)), an empty
+	// map, and a duplicated bugfix key. wu-dupnull has no repo_id: it is reached
+	// only by its evidence vote (team-1).
+	dupThemes := rawMapSQL(fd, 0.2, fd, 0.3, rk, 0.5)
+	dupSub := rawMapSQL(readers.BugfixSubcategoryKey, 0.1, readers.BugfixSubcategoryKey, 0.4, "other", 0.5)
+	insertRawUnit(t, ctx, direct, orgID, "wu-dup", "r1b", 10, dupThemes, dupSub, `{"issues":[],"prs":[]}`, from, to, at)
+	insertRawUnit(t, ctx, direct, orgID, "wu-emptyraw", "r2a", 6, rawMapSQL(), rawMapSQL(), `{"issues":[],"prs":[]}`, from, to, at)
+	insertRawUnit(t, ctx, direct, orgID, "wu-dupnull", "", 5, dupThemes, dupSub, evidence(nil, pr("r1a", 30)), from, to, at)
+
 	attribute := func(workItem, teamID string, primary uint8, computedAt time.Time) {
 		exec("attribution "+workItem, `INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, team_id, team_name, source, is_primary, confidence, computed_at) VALUES (?,?,?,?,?,?,?,?,?)`,
 			orgID, "00000000-0000-0000-0000-000000000000", workItem, teamID, teamID, "linked_issue", primary, "high", computedAt)
 	}
 	attribute("ghpr:acme/r1a#7", "team-1", 1, at)
 	attribute("ghpr:acme/r1a#8", "team-1", 1, at)
+	attribute("ghpr:acme/r1a#30", "team-1", 1, at)
 	attribute("ghpr:acme/r2a#9", "team-2", 1, at)
 	attribute("gitlab:acme/gl!3", "team-5", 1, at)
 	attribute("linear:X-1", "team-2", 1, at)
@@ -278,7 +320,7 @@ func seedCHAOS7257Parity(t *testing.T, ctx context.Context, direct clickhousedri
 	exec("member out", `INSERT INTO work_unit_membership (org_id, node_type, node_id, work_unit_id, category_kind, category, computed_at, run_id) VALUES (?,?,?,?,?,?,?,?)`,
 		orgID, "issue", "ISS-out", "wu-out", "theme", "risk", at.Add(-2*day), "run-1")
 	for _, id := range []string{"wu-1", "wu-2", "wu-3", "wu-4", "wu-5", "wu-sup", "wu-empty", "wu-zero", "wu-old", "wu-span", "wu-r6", "wu-moved",
-		"wu-n1", "wu-n2", "wu-n3", "wu-n4", "wu-n5", "wu-n6", "wu-n7", "wu-n8", "wu-n9", "wu-n10", "wu-r7",
+		"wu-n1", "wu-n2", "wu-n3", "wu-n4", "wu-n5", "wu-n6", "wu-n7", "wu-n8", "wu-n9", "wu-n10", "wu-r7", "wu-dup", "wu-emptyraw", "wu-dupnull",
 		"wu-t3-0", "wu-t3-1", "wu-t3-2", "wu-t3-3", "wu-t3-4", "wu-t3-5"} {
 		exec("member "+id, `INSERT INTO work_unit_membership (org_id, node_type, node_id, work_unit_id, category_kind, category, computed_at, run_id) VALUES (?,?,?,?,?,?,?,?)`,
 			orgID, "issue", "ISS-"+id, id, "theme", "feature_delivery", at.Add(-day), "run-2")
@@ -330,9 +372,9 @@ func TestProjectRollupSinglePassMatchesTheMultiReferenceOracleAgainstRealClickHo
 	// than turning the parity check into a comparison of two empty answers.
 	oracle := runRollupStatement(t, ctx, query, "OracleProjectRollup", devhealthfacts.OracleProjectRollupStatement(devhealthfacts.ProjectMixWindow{}), orgID, ids, devhealthfacts.ProjectMixWindow{})
 	want := map[string]struct{ units, repos, teams, excluded uint64 }{
-		"linear:proj-1": {7, 3, 1, 2}, // wu-1,2,3,empty,5,old,span; votes: n1, n10 (team-1)
-		"linear:proj-2": {3, 2, 1, 5}, // wu-4,zero,5;               votes: n2, n6, n7, n8, moved (team-2 wins the ties)
-		"linear:proj-3": {9, 4, 2, 7}, // both teams' units, r-shared once; every team-1/team-2 vote
+		"linear:proj-1": {8, 3, 1, 3},  // wu-1,2,3,empty,5,old,span,dup; votes: n1, n10, dupnull (team-1)
+		"linear:proj-2": {4, 2, 1, 5},  // wu-4,zero,5,emptyraw;           votes: n2, n6, n7, n8, moved (team-2 wins the ties)
+		"linear:proj-3": {11, 4, 2, 8}, // both teams' units, r-shared once; every team-1/team-2 vote
 	}
 	for _, r := range oracle {
 		w, ok := want[r.Key]
@@ -341,6 +383,63 @@ func TestProjectRollupSinglePassMatchesTheMultiReferenceOracleAgainstRealClickHo
 		}
 		if r.WorkUnits != w.units || r.Repos != w.repos || r.Teams != w.teams || r.Excluded != w.excluded {
 			t.Errorf("oracle %s = units %d repos %d teams %d excluded %d, want %+v", r.Key, r.WorkUnits, r.Repos, r.Teams, r.Excluded, w)
+		}
+	}
+}
+
+// The served share of a work unit whose theme map holds a key twice. The
+// owning-team roll-up summed every entry of a key (effort x (0.2 + 0.3) for
+// feature_delivery here); a lookup reads one entry, and the served share moved
+// (0.5 -> 0.29 or 0.43). Executed through the provider, so what is asserted is
+// the SERVED fact, not a statement's row.
+func TestProjectRollupDuplicateThemeKeysServeTheSummedShareAgainstRealClickHouse(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	query, direct := newScopedCHAOS7257Client(t, nil)
+	createCHAOS7257Tables(t, ctx, direct)
+	const orgID = "org-7257-dupkeys"
+	at := ts(2026, 9, 18, 0, 0, 0)
+	for _, statement := range []struct {
+		what, sql string
+		args      []any
+	}{
+		{"project", `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`, []any{"proj-d", orgID, "linear", nil, "Project d", uint8(1), "active", "", at}},
+		{"team", `INSERT INTO teams (id, name, description, updated_at, org_id, provider, project_keys, is_active) VALUES (?, ?, NULL, ?, ?, ?, [], ?)`, []any{"team-d", "team-d", at, orgID, "linear", uint8(1)}},
+		{"project ownership", `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`, []any{orgID, "linear", "team-d", "proj-d", nil, "native", at.Add(-24 * time.Hour), nil, at}},
+		{"repo", `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`, []any{repoUUID("rd"), orgID, "acme/rd", "github", at}},
+		{"repo ownership", `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`, []any{orgID, "linear", "team-d", repoUUID("rd"), "acme/rd", "exact", "native", uint8(1), uint16(100), int32(0), at.Add(-24 * time.Hour), nil, at}},
+	} {
+		if err := direct.Exec(ctx, statement.sql, statement.args...); err != nil {
+			t.Fatalf("seed %s: %v", statement.what, err)
+		}
+	}
+	insertRawUnit(t, ctx, direct, orgID, "wu-dup", "rd", 10, rawMapSQL("feature_delivery", 0.2, "feature_delivery", 0.3, "risk", 0.5), rawMapSQL(), `{"issues":[],"prs":[]}`, at, at, at)
+
+	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
+	result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactInvestment,
+		Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-d")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts: %v", err)
+	}
+	var fact *contextfabric.CanonicalFact
+	for i := range result.Facts {
+		if _, ok := result.Facts[i].Fields["theme_feature_delivery"]; ok {
+			fact = &result.Facts[i]
+		}
+	}
+	if fact == nil {
+		t.Fatalf("no fact carries the theme mix: %#v", result.Facts)
+	}
+	for theme, want := range map[string]float64{"theme_feature_delivery": 0.5, "theme_risk": 0.5} {
+		number := fact.Fields[theme].Number
+		if number == nil {
+			t.Errorf("%s absent, want %v", theme, want)
+			continue
+		}
+		if got := *number; math.Abs(got-want) > 1e-9 {
+			t.Errorf("%s = %v, want %v (effort 10 x (0.2 + 0.3) feature_delivery, x 0.5 risk: the entries of a repeated key are summed)", theme, got, want)
 		}
 	}
 }

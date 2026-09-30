@@ -22,8 +22,10 @@ import (
 //  1. latest + window: the one read of work_unit_investments (argMax per work
 //     unit, scoped like ops' LatestWorkUnitInvestmentsSource), then the window
 //     overlap predicate.
-//  2. per-unit derivation: the five theme scalars and the bugfix share are read
-//     out of the two Map columns here and the maps go no further; only a unit
+//  2. per-unit derivation: the five theme scalars (each the SUM of every entry
+//     of its key, as the expansion it replaces summed them; the bugfix share is
+//     a lookup, as before) and the bugfix share are read out of the two Map
+//     columns here and the maps go no further; only a unit
 //     with no repo_id keeps its evidence refs (the repo-keyed arm never needs
 //     them, and the evidence arm only counts units whose repo_id IS NULL).
 //  3. evidence vote: a unit with refs is expanded one row per ref (LEFT ARRAY
@@ -58,6 +60,17 @@ import (
 // project_key), probed at maxFactRowsProbe (withRowProbeLimit) rather than a
 // plain LIMIT, so a project population sitting exactly at the served cap is
 // distinguishable from one that overflowed it.
+// themeEntrySumSQL is the sum of EVERY entry of theme in the row's theme map.
+// The column is Map(String, Float64) and ClickHouse fills it with whatever
+// entries the writer sent, so a key can appear twice; the statement this one
+// replaced expanded the map (ARRAY JOIN over its entries) and summed each
+// matching entry. A lookup (map['theme']) reads ONE entry and moves the served
+// share, so the lookup is not used for the themes here. An empty map, or one
+// without the key, sums to 0.
+func themeEntrySumSQL(theme string) string {
+	return "arraySum(arrayMap(kv -> kv.2, arrayFilter(kv -> kv.1 = '" + theme + "', CAST(theme_distribution_json AS Array(Tuple(String, Float64))))))"
+}
+
 func projectRollupMixStatement(timeBound factTimeBound) string {
 	ownershipPredicate := ownershipValidityPredicate(timeBound)
 	rangePredicate := themeInvestmentRangePredicate(timeBound, "from_ts", "to_ts")
@@ -155,11 +168,11 @@ FROM (
 						unit.bugfix_share AS bugfix_share, evidence_ref
 					FROM (
 						SELECT work_unit_id, repo_id, effort_value,
-							theme_distribution_json['` + contextfabric.ThemeFeatureDelivery + `'] AS theme_feature_delivery,
-							theme_distribution_json['` + contextfabric.ThemeOperational + `'] AS theme_operational,
-							theme_distribution_json['` + contextfabric.ThemeMaintenance + `'] AS theme_maintenance,
-							theme_distribution_json['` + contextfabric.ThemeQuality + `'] AS theme_quality,
-							theme_distribution_json['` + contextfabric.ThemeRisk + `'] AS theme_risk,
+							` + themeEntrySumSQL(contextfabric.ThemeFeatureDelivery) + ` AS theme_feature_delivery,
+							` + themeEntrySumSQL(contextfabric.ThemeOperational) + ` AS theme_operational,
+							` + themeEntrySumSQL(contextfabric.ThemeMaintenance) + ` AS theme_maintenance,
+							` + themeEntrySumSQL(contextfabric.ThemeQuality) + ` AS theme_quality,
+							` + themeEntrySumSQL(contextfabric.ThemeRisk) + ` AS theme_risk,
 							ifNull(subcategory_distribution_json['` + readers.BugfixSubcategoryKey + `'], 0.0) AS bugfix_share,
 							if(repo_id IS NULL,
 								arrayDistinct(arrayConcat(
