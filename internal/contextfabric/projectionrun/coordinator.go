@@ -835,6 +835,17 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 		sources[pair.Name] = pair.Source
 		sourceNames = append(sourceNames, pair.Name)
 	}
+	// CHAOS-7283: the epoch activation guard verifies each source's recorded
+	// version against the version the source reports. A source without that
+	// capability cannot be verified, so say so once, loudly, at startup.
+	if cfg.Lifecycle != nil {
+		for _, name := range sourceNames {
+			if _, ok := sources[name].(contextfabric.ProjectionSourceVersion); !ok {
+				cfg.Logger.Warn("context_fabric: source reports no current version; the epoch activation guard cannot verify it",
+					"source", contextfabric.SanitizeLogAttr(name))
+			}
+		}
+	}
 	// CHAOS-6182: the static allowlist is BOTH the initial effective set and
 	// a permanent floor. A deployment that configures discovery and nothing
 	// else starts with an empty effective set and picks its organizations up
@@ -936,6 +947,17 @@ func (c *Coordinator) Rollback(ctx context.Context, orgID string) error {
 	if !found || row.Status != contextfabric.LifecycleStatusGrace {
 		return fmt.Errorf("%w: organization is not currently in a rollback-eligible grace window", contextfabric.ErrLifecycleTransitionRefused)
 	}
+	if row.GraceEpoch == nil {
+		return fmt.Errorf("%w: the grace window retains no epoch to roll back to", contextfabric.ErrLifecycleTransitionRefused)
+	}
+	// Rollback re-activates the epoch the flip retained. That epoch was
+	// built by whatever binary ran then; if it recorded a source version
+	// other than this binary's, restoring it serves data projected under
+	// retired producer logic (CHAOS-7242 r2: a pre-fix epoch that admits a
+	// restricted principal the current epoch denies).
+	if err := c.guardEpochActivation(ctx, orgID, contextfabric.LifecycleTransitionRollback, row.ActiveEpoch, *row.GraceEpoch, nil); err != nil {
+		return fmt.Errorf("projectionrun: rollback: %w", err)
+	}
 	rolled, err := c.lifecycle.Rollback(ctx, orgID, row.ActiveEpoch, c.now())
 	if err != nil {
 		return fmt.Errorf("projectionrun: rollback: %w", err)
@@ -1028,6 +1050,140 @@ func (c *Coordinator) invalidateEpochResolution(ctx context.Context, orgID strin
 	if c.lifecycleTelem != nil {
 		c.lifecycleTelem.RecordEpochResolverInvalidation(ctx, orgID, transition)
 	}
+}
+
+// guardEpochActivation is the ONE activation guard (CHAOS-7283). Both
+// lifecycle transitions that move the active epoch -- Flip (runBuildTick)
+// and Rollback -- call it, under the organization lock, immediately before
+// the CAS that would activate candidateEpoch. It refuses unless every source
+// the candidate epoch holds data from recorded the SAME version the running
+// binary's source reports now:
+//
+//   - recorded "": the source never claimed a version in that epoch, so it
+//     wrote nothing there (RunOnce claims the version BEFORE any apply, and
+//     a reset clears both together). Nothing stale to serve; allowed.
+//   - the source is not configured in this binary: data from a producer this
+//     binary does not run. Refused (source_not_configured).
+//   - the source reports no current version (it does not implement
+//     contextfabric.ProjectionSourceVersion): unverifiable. Allowed, with a
+//     Warn -- every production source implements the capability, and
+//     NewCoordinator warns at startup for one that does not.
+//   - recorded != current: refused (source_version_mismatch). Not only
+//     "older": a version string is an opaque producer identity, the same
+//     rule ProjectionWorker.RunOnce applies to a batch, and an epoch from a
+//     NEWER binary is just as unservable by this one (its next batch would
+//     be refused).
+//   - the checkpoint cannot be read: refused (checkpoint_unreadable), fail
+//     closed; the returned error is NOT ErrLifecycleTransitionRefused, so
+//     the next attempt re-reads instead of treating it as permanent.
+//
+// Every refusing source is logged at Warn and emitted as
+// cf_epoch_activation_refused with every input of the decision, so a trace
+// of the tick (or the rollback) rebuilds why nothing was activated. The
+// sources checked are every configured source plus, for a flip, every name
+// frozen into the build's RequiredSources that is no longer configured.
+func (c *Coordinator) guardEpochActivation(ctx context.Context, orgID string, transition contextfabric.LifecycleTransition, activeEpoch, candidateEpoch int64, required []string) error {
+	checkpoints := c.checkpointsForEpoch(candidateEpoch)
+	var refusals []contextfabric.EpochActivationRefusal
+	var readErrs []error
+	checked := 0
+	for _, source := range c.epochActivationSources(required) {
+		checked++
+		refusal := contextfabric.EpochActivationRefusal{
+			OrgID: orgID, Transition: transition, ActiveEpoch: activeEpoch, CandidateEpoch: candidateEpoch, Source: source,
+		}
+		checkpoint, err := checkpoints.LoadProjectionCheckpoint(ctx, orgID, source)
+		if err != nil {
+			refusal.Reason = contextfabric.EpochActivationRefusedCheckpointUnreadable
+			refusals = append(refusals, refusal)
+			readErrs = append(readErrs, err)
+			continue
+		}
+		recorded := strings.TrimSpace(checkpoint.SourceVersion)
+		if recorded == "" {
+			continue
+		}
+		refusal.RecordedSourceVersion = recorded
+		projectionSource, configured := c.sources[source]
+		if !configured {
+			refusal.Reason = contextfabric.EpochActivationRefusedSourceNotConfigured
+			refusals = append(refusals, refusal)
+			continue
+		}
+		current := strings.TrimSpace(currentSourceVersion(projectionSource))
+		if current == "" {
+			c.logger.WarnContext(ctx, "context_fabric: epoch activation guard cannot verify a source that reports no current version; allowing it",
+				"org_id", contextfabric.SanitizeLogAttr(orgID), "transition", contextfabric.SanitizeLogAttr(string(transition)),
+				"candidate_epoch", candidateEpoch, "source", contextfabric.SanitizeLogAttr(source),
+				"recorded_source_version", contextfabric.SanitizeLogAttr(recorded))
+			continue
+		}
+		if recorded != current {
+			refusal.Reason = contextfabric.EpochActivationRefusedSourceVersion
+			refusal.CurrentSourceVersion = current
+			refusals = append(refusals, refusal)
+		}
+	}
+	if len(refusals) == 0 {
+		c.logger.DebugContext(ctx, "context_fabric: epoch activation guard passed",
+			"org_id", contextfabric.SanitizeLogAttr(orgID), "transition", contextfabric.SanitizeLogAttr(string(transition)),
+			"active_epoch", activeEpoch, "candidate_epoch", candidateEpoch, "sources_checked", checked)
+		return nil
+	}
+	stale := 0
+	for _, refusal := range refusals {
+		if refusal.Reason != contextfabric.EpochActivationRefusedCheckpointUnreadable {
+			stale++
+		}
+		c.logger.WarnContext(ctx, "context_fabric: graph epoch activation refused; the candidate epoch holds data recorded under a source version this binary does not run -- rebuild the organization",
+			"org_id", contextfabric.SanitizeLogAttr(orgID), "transition", contextfabric.SanitizeLogAttr(string(refusal.Transition)),
+			"active_epoch", refusal.ActiveEpoch, "candidate_epoch", refusal.CandidateEpoch,
+			"source", contextfabric.SanitizeLogAttr(refusal.Source), "reason", contextfabric.SanitizeLogAttr(string(refusal.Reason)),
+			"recorded_source_version", contextfabric.SanitizeLogAttr(refusal.RecordedSourceVersion),
+			"current_source_version", contextfabric.SanitizeLogAttr(refusal.CurrentSourceVersion))
+		if c.lifecycleTelem != nil {
+			c.lifecycleTelem.RecordEpochActivationRefused(ctx, refusal)
+		}
+	}
+	if stale > 0 {
+		return fmt.Errorf("%w: %w: %d source(s) of epoch %d", contextfabric.ErrLifecycleTransitionRefused, contextfabric.ErrEpochSourceVersionStale, stale, candidateEpoch)
+	}
+	return fmt.Errorf("projectionrun: epoch activation guard could not read epoch %d checkpoints: %w", candidateEpoch, errors.Join(readErrs...))
+}
+
+// epochActivationSources is the source set guardEpochActivation checks:
+// every configured source, then every RequiredSources name no longer
+// configured (a build frozen by an earlier binary can hold data from a
+// source this one dropped).
+func (c *Coordinator) epochActivationSources(required []string) []string {
+	out := append([]string(nil), c.sourceNames...)
+	for _, name := range required {
+		if _, configured := c.sources[name]; configured {
+			continue
+		}
+		seen := false
+		for _, existing := range out {
+			if existing == name {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// checkpointsForEpoch is the checkpoint view that holds epoch's recorded
+// source versions: Config.Checkpoints for epoch 0 (the legacy row set, the
+// same convention runOrgLifecycle and resolveOrgCheckpoints use), the
+// epoch-scoped view otherwise.
+func (c *Coordinator) checkpointsForEpoch(epoch int64) contextfabric.ProjectionCheckpointStore {
+	if epoch == 0 || c.epochCheckpoints == nil {
+		return c.checkpoints
+	}
+	return c.epochCheckpoints(epoch)
 }
 
 // performRebuild is the crash-resumable rebuild sequence, callable either as
@@ -2269,6 +2425,26 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 		return nil
 	})
 
+	// Every flip -- a fresh build, a build this process resumed from an
+	// earlier binary, a source that went dormant or was disabled mid-build --
+	// passes the activation guard first. A source that reached a terminal
+	// mode without a batch (skipped above as already terminal, exhausted
+	// with nothing to read, disabled) never met RunOnce's own version check,
+	// so the epoch's recorded versions are checked here, where they are
+	// about to become what every reader resolves.
+	guardErr := scope.run(func(ctx context.Context) error {
+		return c.guardEpochActivation(ctx, orgID, contextfabric.LifecycleTransitionFlip, row.ActiveEpoch, targetEpoch, row.RequiredSources)
+	})
+	if guardErr != nil {
+		// A stale epoch is a rebuild-required organization, exactly like a
+		// steady-state producer drift. An unreadable checkpoint decided
+		// nothing: the build keeps its backoff bucket and the next tick
+		// re-reads. Either way nothing flips.
+		if errors.Is(guardErr, contextfabric.ErrEpochSourceVersionStale) {
+			signals.stale = true
+		}
+		return
+	}
 	var flipped contextfabric.OrgGraphLifecycle
 	err = scope.run(func(ctx context.Context) error {
 		var e error

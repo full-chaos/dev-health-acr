@@ -288,3 +288,28 @@ func TestEpisodesProjectionSourceEnabledUnreadableStillFailsClassified(t *testin
 		t.Fatalf("enabled source with unreadable table must fail with ErrUnavailable, got: %v", err)
 	}
 }
+
+// TestEpisodesProjectionSourceReportsTheVersionItsBatchesRecord pins the
+// capability the epoch activation guard verifies against: the version the
+// source reports as current is exactly the version its own batches record in
+// every checkpoint. A mismatch would refuse every epoch the source ever
+// built; an empty one would leave the source unverifiable.
+func TestEpisodesProjectionSourceReportsTheVersionItsBatchesRecord(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	source, err := devhealthsource.NewEpisodesProjectionSource(&fakeEpisodeRows{rows: []storage.EpisodeProjectionRecord{
+		{EpisodeID: "ep-7283", RepoSlug: "example-org/widget-service", Goal: "pin version", Outcome: "succeeded", Summary: "pinned", StartedAt: at, EndedAt: at.Add(time.Minute), CreatedAt: at, UpdatedAt: at, RedactionState: "active"},
+	}})
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+	batch, available, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.EpisodesSourceName})
+	if err != nil || !available {
+		t.Fatalf("next projection batch: available=%v err=%v", available, err)
+	}
+	var versioned contextfabric.ProjectionSourceVersion = source
+	current := versioned.CurrentProjectionSourceVersion()
+	if current == "" || current != batch.SourceVersion {
+		t.Fatalf("CurrentProjectionSourceVersion() = %q, batch records %q; want the same non-empty version", current, batch.SourceVersion)
+	}
+}
