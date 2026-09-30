@@ -42,8 +42,8 @@ data:
   {{- $mirrored := list "ACR_REQUESTS_PER_MINUTE" "ACR_LIMIT_WINDOW" "ACR_AUTH_LIMIT_WINDOW" "ACR_AUTH_FAILURES_PER_WINDOW" "ACR_AUTH_MAX_TRACKED_KEYS" "ACR_AUTH_MAX_IN_FLIGHT" }}
   {{- range $e := .Values.deployment.extraEnv }}
   {{- if has $e.name $mirrored }}
-  {{- if not (hasKey $e "value") }}
-  {{- fail (printf "acr-mcp-gate-env: deployment.extraEnv %s must be a literal value: the acr-mcp edge failure gate reads the same setting and cannot mirror a valueFrom reference" $e.name) }}
+  {{- if or (hasKey $e "valueFrom") (not (hasKey $e "value")) (not (kindIs "string" $e.value)) }}
+  {{- fail (printf "acr-mcp-gate-env: deployment.extraEnv %s must be a string literal value (no valueFrom, even alongside a value): the acr-mcp edge failure gate reads the same setting and cannot mirror a reference or a non-string" $e.name) }}
   {{- end }}
   {{- $_ := set $gate $e.name ($e.value | toString) }}
   {{- end }}

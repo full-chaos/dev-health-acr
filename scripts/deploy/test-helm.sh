@@ -818,13 +818,27 @@ for absent in ACR_TRUSTED_PROXY_CIDRS ACR_POSTGRES_MAX_OPEN_CONNS ACR_AUTH_PRIVA
   if grep -qF "$absent" <<<"$mirror_cm"; then fail_gate "acr-mcp: ConfigMap mirrored $absent from deployment.extraEnv (only the exact failure-gate inputs may be mirrored)"; fi
 done
 pass "acr-mcp: ConfigMap mirrors exactly the failure-gate inputs of deployment.extraEnv (override wins, nothing else copied)"
-set +e
-mirror_ref_out="$(render --set acrMcp.enabled=true --set-string "acrMcp.image.reference=${mcp_image}" \
-  --set-json 'deployment.extraEnv=[{"name":"ACR_AUTH_MAX_IN_FLIGHT","valueFrom":{"secretKeyRef":{"name":"s","key":"k"}}}]' 2>&1)"
-mirror_ref_status=$?
-set -e
-if [[ $mirror_ref_status -eq 0 ]] || ! grep -qF 'acr-mcp-gate-env' <<<"$mirror_ref_out"; then fail_gate "acr-mcp: a valueFrom entry for a mirrored gate input must fail the render naming acr-mcp-gate-env"; fi
-pass "acr-mcp: a valueFrom gate input fails closed (cannot be mirrored)"
+# Every mirrored name: present positively, and each unusable shape fails closed.
+for gate_name in ACR_REQUESTS_PER_MINUTE ACR_LIMIT_WINDOW ACR_AUTH_LIMIT_WINDOW ACR_AUTH_FAILURES_PER_WINDOW ACR_AUTH_MAX_TRACKED_KEYS ACR_AUTH_MAX_IN_FLIGHT; do
+  each_render="$(render --set acrMcp.enabled=true --set-string "acrMcp.image.reference=${mcp_image}" \
+    --set-json "deployment.extraEnv=[{\"name\":\"${gate_name}\",\"value\":\"9\"}]")"
+  each_cm="$(extract_doc ConfigMap '  name: [^\n]*-mcp-config\n' <<<"$each_render")"
+  grep -qF "${gate_name}: \"9\"" <<<"$each_cm" || fail_gate "acr-mcp: ConfigMap does not mirror ${gate_name} from deployment.extraEnv"
+  for shape in \
+    '"valueFrom":{"secretKeyRef":{"name":"s","key":"k"}}' \
+    '"value":"","valueFrom":{"secretKeyRef":{"name":"s","key":"k"}}' \
+    '"value":7'; do
+    set +e
+    shape_out="$(render --set acrMcp.enabled=true --set-string "acrMcp.image.reference=${mcp_image}" \
+      --set-json "deployment.extraEnv=[{\"name\":\"${gate_name}\",${shape}}]" 2>&1)"
+    shape_status=$?
+    set -e
+    if [[ $shape_status -eq 0 ]] || ! grep -qF 'acr-mcp-gate-env' <<<"$shape_out"; then
+      fail_gate "acr-mcp: extraEnv ${gate_name} with ${shape} must fail the render naming acr-mcp-gate-env"
+    fi
+  done
+done
+pass "acr-mcp: every mirrored gate input is mirrored as a string literal and fails closed on valueFrom / hybrid / non-string"
 mcp_svc="$(extract_mcp_doc Service)"
 grep -qE '^\s+port: 8081\s*$' <<<"$mcp_svc" || fail_gate "acr-mcp: Service must expose 8081"
 mcp_route="$(extract_mcp_doc HTTPRoute)"
