@@ -13,8 +13,10 @@ import (
 // ExpandCitedEvidence (option R) serves an acr:v1:<type>:<id> ref from the
 // stored investigation result that cited it: the persisted record, never the
 // row the id names. ExpandEvidence first tries that ROW. A SourceRowResolver
-// reads it from the Dev Health tables and authorizes it per kind (the
-// caller's repository grant for every kind this file routes today). When it
+// reads it from the Dev Health tables and authorizes it per kind: the
+// caller's repository grant for a repository-level kind, and the direct data
+// tools' subject gate (directread.SubjectGate, OWNERSHIP reach) for a team or
+// a project (CHAOS-7227). When it
 // finds no row the caller may read, the persisted-record path runs exactly as
 // before, so a row that is out of the caller's grant and a row that does not
 // exist reach the same record path with the same result.
@@ -180,6 +182,12 @@ const (
 // statement only, never an id.
 const SourceRowInvalidLogMessage = "context fabric source row invalid"
 
+// SourceRowSubjectMismatchLogMessage is the one Warn line each subject
+// mismatch emits (#742 r1 P1 class): a read returned a row whose own columns
+// name another subject than the one authorized, a catalog statement or
+// grammar defect. It carries the kind and the statement only, never an id.
+const SourceRowSubjectMismatchLogMessage = "context fabric source row subject mismatch"
+
 // SourceRowReasonVocabulary is the closed set of reasons.
 func SourceRowReasonVocabulary() [8]SourceRowReason {
 	return [8]SourceRowReason{SourceRowServed, SourceRowKindOnRecord, SourceRowIDMalformed, SourceRowNoRow, SourceRowAmbiguous, SourceRowUnavailable, SourceRowInvalid, SourceRowBackendAbsent}
@@ -218,7 +226,12 @@ type SourceRowDecision struct {
 	Admitted     int
 	// Rows is how many rows the row reads returned.
 	Rows int
-	Err  error
+	// SubjectMismatch: the one row read is not the subject the ref names and
+	// the grant or gate authorized (its subject recomputed from its own
+	// columns differs). Reason is then SourceRowNoRow; the route logs
+	// SourceRowSubjectMismatchLogMessage once.
+	SubjectMismatch bool
+	Err             error
 }
 
 // Read reports whether the resolver ran any read.

@@ -18,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec/certify"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/memoryinvestigation"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/sourcerow"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -42,7 +43,7 @@ type sourceRowTables struct {
 	reads []string
 	// orgRows are organization-level rows by (query, locator); gate is the
 	// subject gate the resolver is built with (nil: none composed).
-	orgRows map[string][]contextpacket.EvidenceReference
+	orgRows map[string][]contextpacket.OrganizationRowReference
 	gate    sourcerow.SubjectGate
 }
 
@@ -67,7 +68,7 @@ func (s *sourceRowTables) DependencyLocators(_ context.Context, orgID, repoID, k
 	return nil, s.err
 }
 
-func (s *sourceRowTables) ResolveOrganizationRow(_ context.Context, orgID string, read contextpacket.SourceRowRead) ([]contextpacket.EvidenceReference, error) {
+func (s *sourceRowTables) ResolveOrganizationRow(_ context.Context, orgID string, read contextpacket.SourceRowRead) ([]contextpacket.OrganizationRowReference, error) {
 	s.reads = append(s.reads, "org_row:"+orgID+":"+read.QueryID+":"+read.Locator)
 	if s.err != nil {
 		return nil, s.err
@@ -439,16 +440,55 @@ func TestEvidenceRouteWarnsUnscopedOnlyOnThePersistedRecordPath(t *testing.T) {
 	}
 }
 
-// ownershipGraph is the graph side of the REAL directread.SubjectGate: a
-// team node carries its ownership-derived repository list (CHAOS-4390), the
-// node check is the shared predicate, and the ownership reach is the team's
-// own list. Every call is recorded.
+// ownershipGraph is the graph side of the REAL directread.SubjectGate, built
+// from ONE ownership data set the way production projects it (#742 r1 P3):
+//
+//   - owned is each team's CURRENT team_repo_ownership. devhealthsource
+//     queryTeams writes it as the team node's authorization_repositories
+//     (CHAOS-4390; a team with none carries the no-ownership sentinel), and
+//     falkorgraph OwnershipReachedRepositories reads that same list as the
+//     team's reach. So a team's node list and its reach are one list.
+//   - ownedBy is each project's CURRENT OWNED_BY_TEAM edges. Its reach is
+//     the union of its owning teams' lists, and falkorgraph's node check
+//     reads a project with that same reach in place of its stored "*"
+//     (withProjectReach, CHAOS-7080), so a project's node list is its reach
+//     too.
+//
+// Membership is no input: the gate cannot see it (the producer builds the
+// team list from team_repo_ownership, never team_memberships: devhealthsource
+// subTeamAuthorizationCarriesCurrentOwnedRepositories). Every call is
+// recorded.
 type ownershipGraph struct {
-	nodes map[string][]string
-	// reach, when set for a subject, is its OWNERSHIP reach where it differs
-	// from the node's list; otherwise the node's list is the reach.
-	reach map[string][]string
-	calls []string
+	owned   map[string][]string
+	ownedBy map[string][]string
+	calls   []string
+}
+
+// noTeamOwnershipSentinel mirrors devhealthsource's list for a team with no
+// ownership rows: it matches no real slug.
+const noTeamOwnershipSentinel = "acr-context-fabric:no-team-repository-ownership"
+
+func (g *ownershipGraph) nodeRepositories(canonical string) ([]string, bool) {
+	_, team := g.owned[canonical]
+	_, project := g.ownedBy[canonical]
+	if !team && !project {
+		return nil, false
+	}
+	if repos := g.reachedRepositories(canonical); len(repos) > 0 {
+		return repos, true
+	}
+	return []string{noTeamOwnershipSentinel}, true
+}
+
+func (g *ownershipGraph) reachedRepositories(canonical string) []string {
+	if repos, ok := g.owned[canonical]; ok {
+		return append([]string{}, repos...)
+	}
+	reached := []string{}
+	for _, team := range g.ownedBy[canonical] {
+		reached = append(reached, g.owned[team]...)
+	}
+	return reached
 }
 
 func (g *ownershipGraph) ResolveInvestigationBinding(context.Context, storage.Principal) (contextfabric.ResolvedGraphBinding, error) {
@@ -460,7 +500,7 @@ func (g *ownershipGraph) AuthorizeStoredSubjects(_ context.Context, principal st
 	outcomes := make([]contextfabric.StoredSubjectOutcome, len(subjects))
 	for index, subject := range subjects {
 		g.calls = append(g.calls, "authorize:"+subject.CanonicalID)
-		repos, found := g.nodes[subject.CanonicalID]
+		repos, found := g.nodeRepositories(subject.CanonicalID)
 		switch {
 		case !found:
 			outcomes[index] = contextfabric.StoredSubjectAbsent
@@ -477,10 +517,7 @@ func (g *ownershipGraph) OwnershipReachedRepositories(_ context.Context, _ stora
 	reached := make([][]string, len(subjects))
 	for index, subject := range subjects {
 		g.calls = append(g.calls, "reach:"+subject.CanonicalID)
-		reached[index] = g.nodes[subject.CanonicalID]
-		if repos, ok := g.reach[subject.CanonicalID]; ok {
-			reached[index] = repos
-		}
+		reached[index] = g.reachedRepositories(subject.CanonicalID)
 	}
 	return reached, nil
 }
@@ -488,15 +525,26 @@ func (g *ownershipGraph) OwnershipReachedRepositories(_ context.Context, _ stora
 // withTeam seeds one team row and gives the tables a real subject gate over
 // graph.
 func (s *sourceRowTables) withTeam(teamID string, graph *ownershipGraph) *sourceRowTables {
+	return s.withOrganizationRow("teams.v1", "team", teamID, "Widget team", graph, teamID)
+}
+
+// withProject seeds one project row whose OWN columns are (provider, id) and
+// gives the tables a real subject gate over graph. Its evidence id is the
+// statement's concatenation, <provider>:<id>.
+func (s *sourceRowTables) withProject(provider, projectID string, graph *ownershipGraph) *sourceRowTables {
+	return s.withOrganizationRow("projects.v1", "project", provider+":"+projectID, "Widget project", graph, provider, projectID)
+}
+
+func (s *sourceRowTables) withOrganizationRow(queryID, kind, entityID, label string, graph *ownershipGraph, key ...string) *sourceRowTables {
 	if s.orgRows == nil {
-		s.orgRows = map[string][]contextpacket.EvidenceReference{}
+		s.orgRows = map[string][]contextpacket.OrganizationRowReference{}
 	}
-	locator := "acr:v1:team:" + teamID
-	s.orgRows["teams.v1|"+locator] = []contextpacket.EvidenceReference{{Excerpt: "provider=jira, active=1", Evidence: contractsv1.EvidenceRef{
-		SchemaVersion: contractsv1.EvidenceRefSchema, EvidenceRefID: locator, SourceVersion: "teams.v1",
-		Source:     contractsv1.EvidenceSource{System: "dev_health", EntityType: "team", EntityID: teamID, DisplayLabel: "Widget team"},
+	locator := contractsv1.ContextFabricEvidenceRefPrefix + kind + ":" + entityID
+	s.orgRows[queryID+"|"+locator] = []contextpacket.OrganizationRowReference{{Key: key, Reference: contextpacket.EvidenceReference{Excerpt: "provider=jira, active=1", Evidence: contractsv1.EvidenceRef{
+		SchemaVersion: contractsv1.EvidenceRefSchema, EvidenceRefID: locator, SourceVersion: queryID,
+		Source:     contractsv1.EvidenceSource{System: "dev_health", EntityType: kind, EntityID: entityID, DisplayLabel: label},
 		Provenance: "native", Confidence: 1, Citation: "provider=jira, active=1", ObservedAt: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), Availability: contractsv1.EvidenceAvailable,
-	}}}
+	}}}}
 	s.gate = directread.NewSubjectGate(graph, nil)
 	return s
 }
@@ -505,7 +553,7 @@ func (s *sourceRowTables) withTeam(teamID string, graph *ownershipGraph) *source
 // ownership: the team owns a repository in the caller's grant.
 func TestEvidenceRouteServesAnOwnedTeamRow(t *testing.T) {
 	ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, "team-widget")
-	graph := &ownershipGraph{nodes: map[string][]string{contextfabric.TeamCanonicalID("team-widget"): {hostedTestRepository}}}
+	graph := &ownershipGraph{owned: map[string][]string{contextfabric.TeamCanonicalID("team-widget"): {hostedTestRepository}}}
 	logs := &bytes.Buffer{}
 	app, token := sourceRowApp(t, newSourceRowTables().withTeam("team-widget", graph), nil, logs)
 	logs.Reset()
@@ -551,8 +599,8 @@ func TestEvidenceRouteRefusesAnUnownedTeamLikeAnAbsentOne(t *testing.T) {
 		app.Handler().ServeHTTP(rec, request)
 		return rec, tables
 	}
-	unowned := &ownershipGraph{nodes: map[string][]string{contextfabric.TeamCanonicalID("team-secret"): {sourceRowSecretSlug}}}
-	absent := &ownershipGraph{nodes: map[string][]string{}}
+	unowned := &ownershipGraph{owned: map[string][]string{contextfabric.TeamCanonicalID("team-secret"): {sourceRowSecretSlug}}}
+	absent := &ownershipGraph{}
 	refused, refusedTables := serve(unowned)
 	missing, missingTables := serve(absent)
 	if refused.Code != http.StatusNotFound || missing.Code != http.StatusNotFound {
@@ -569,25 +617,107 @@ func TestEvidenceRouteRefusesAnUnownedTeamLikeAnAbsentOne(t *testing.T) {
 	}
 }
 
-// CHAOS-7227 "never membership": a team whose node list names the caller's
-// repository (the shape a membership-derived list would give: the members
-// work in widget-service) but which OWNS no repository of the grant is
-// refused. The gate's ownership reach, not the node list, decides, and a
-// refused team reads no row.
-func TestEvidenceRouteRefusesATeamTheCallerReachesOnlyByMembership(t *testing.T) {
-	canonical := contextfabric.TeamCanonicalID("team-members")
-	graph := &ownershipGraph{
-		nodes: map[string][]string{canonical: {hostedTestRepository}},
-		reach: map[string][]string{canonical: {sourceRowSecretSlug}},
+// CHAOS-7227: a project is decided by the repositories its OWNED_BY_TEAM
+// teams own. One whose owning team owns only a repository outside the grant
+// is refused and reads no row; one whose owning team owns the caller's
+// repository is served. (#742 r1 P3: this replaces a team case whose node
+// list and reach came from two data sets, a state production cannot build.)
+func TestEvidenceRouteDecidesAProjectByItsOwningTeams(t *testing.T) {
+	canonical := projectCanonicalID(t, "jira", "WID")
+	ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityProject, "jira:WID")
+	for _, tc := range []struct {
+		name   string
+		owns   string
+		status int
+		reads  int
+		calls  []string
+	}{
+		// Refused at the node check (its list is the reach); the reach read
+		// runs only after node admission.
+		{"owning team owns only an out-of-grant repository", sourceRowSecretSlug, http.StatusNotFound, 0, []string{"binding", "authorize:" + canonical}},
+		{"owning team owns the caller's repository", hostedTestRepository, http.StatusOK, 1, []string{"binding", "authorize:" + canonical, "reach:" + canonical}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			team := contextfabric.TeamCanonicalID("team-widget")
+			graph := &ownershipGraph{owned: map[string][]string{team: {tc.owns}}, ownedBy: map[string][]string{canonical: {team}}}
+			tables := newSourceRowTables().withProject("jira", "WID", graph)
+			app, token := sourceRowApp(t, tables, nil, &bytes.Buffer{})
+			rec := httptest.NewRecorder()
+			app.Handler().ServeHTTP(rec, evidenceRequest(t, token, ref))
+			if rec.Code != tc.status || len(tables.reads) != tc.reads {
+				t.Fatalf("status %d, reads %v", rec.Code, tables.reads)
+			}
+			if !reflect.DeepEqual(graph.calls, tc.calls) {
+				t.Fatalf("graph calls = %v, want %v", graph.calls, tc.calls)
+			}
+		})
 	}
-	tables := newSourceRowTables().withTeam("team-members", graph)
-	app, token := sourceRowApp(t, tables, nil, &bytes.Buffer{})
-	rec := httptest.NewRecorder()
-	app.Handler().ServeHTTP(rec, evidenceRequest(t, token, contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, "team-members")))
-	if rec.Code != http.StatusNotFound || len(tables.reads) != 0 {
-		t.Fatalf("status %d, reads %v: a membership-shaped team was served", rec.Code, tables.reads)
+}
+
+func projectCanonicalID(t *testing.T, provider, projectID string) string {
+	t.Helper()
+	canonical, omitted, err := identity.Derive(identity.KindProject, []string{provider, projectID}, nil)
+	if err != nil || omitted {
+		t.Fatalf("derive project: %v %v", err, omitted)
 	}
-	if want := []string{"binding", "authorize:" + canonical, "reach:" + canonical}; !reflect.DeepEqual(graph.calls, want) {
-		t.Fatalf("graph calls = %v, want %v", graph.calls, want)
+	return canonical
+}
+
+// #742 r1 P1 (executed by the reviewer): ref acme:linear:SECRET splits as
+// provider "acme", project "linear:SECRET", and the gate admits THAT subject;
+// the row its locator matches is the project (provider "acme:linear", id
+// "SECRET"), another subject. The route refuses it with the bytes of an absent
+// project and logs one Warn line with the kind and statement, no id.
+func TestEvidenceRouteRefusesARowOfAnotherSubject(t *testing.T) {
+	decoy := projectCanonicalID(t, "acme", "linear:SECRET")
+	team := contextfabric.TeamCanonicalID("team-widget")
+	graph := &ownershipGraph{owned: map[string][]string{team: {hostedTestRepository}}, ownedBy: map[string][]string{decoy: {team}}}
+	ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityProject, "acme:linear:SECRET")
+	serve := func(tables *sourceRowTables) (*httptest.ResponseRecorder, *bytes.Buffer) {
+		logs := &bytes.Buffer{}
+		app, token := sourceRowApp(t, tables, nil, logs)
+		logs.Reset()
+		rec := httptest.NewRecorder()
+		request := evidenceRequest(t, token, ref)
+		request.Header.Set("X-Request-ID", "req_7227000000000000000000000000cafe")
+		app.Handler().ServeHTTP(rec, request)
+		return rec, logs
+	}
+	mismatched, logs := serve(newSourceRowTables().withProject("acme:linear", "SECRET", graph))
+	absent, absentLogs := serve(newSourceRowTables().withProject("acme", "other", graph))
+	if mismatched.Code != http.StatusNotFound || !bytes.Equal(mismatched.Body.Bytes(), absent.Body.Bytes()) || !reflect.DeepEqual(mismatched.Header(), absent.Header()) {
+		t.Fatalf("mismatch %d %s, absent %d %s", mismatched.Code, mismatched.Body.String(), absent.Code, absent.Body.String())
+	}
+	var warns []map[string]any
+	for _, line := range bytes.Split(logs.Bytes(), []byte("\n")) {
+		var entry map[string]any
+		if json.Unmarshal(line, &entry) == nil && entry["msg"] == contextfabric.SourceRowSubjectMismatchLogMessage {
+			warns = append(warns, entry)
+		}
+	}
+	if len(warns) != 1 {
+		t.Fatalf("warn lines = %d, want 1:\n%s", len(warns), logs.String())
+	}
+	warn := warns[0]
+	if warn["level"] != "WARN" || warn["entity_type"] != "project" || warn["source_query"] != "projects.v1" || warn["org_id"] != "org_1" {
+		t.Fatalf("warn = %v", warn)
+	}
+	line, _ := json.Marshal(warn)
+	for _, id := range []string{"SECRET", "acme", "linear"} {
+		if bytes.Contains(line, []byte(id)) {
+			t.Fatalf("warn line carries id %q: %s", id, line)
+		}
+	}
+	if bytes.Contains(absentLogs.Bytes(), []byte(contextfabric.SourceRowSubjectMismatchLogMessage)) {
+		t.Fatalf("an absent row warned:\n%s", absentLogs.String())
+	}
+	parsed, err := certify.Parse(logs.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := certify.Certify(parsed, certify.Assertion{Event: eventspec.EvidenceExpansion, Want: map[string]any{
+		"org_id": "org_1", "entity_type": "project", "source_reason": "no_row", "source_query": "projects.v1", "source_admitted": 1, "source_rows": 1,
+	}}); err != nil {
+		t.Fatalf("certify: %v\n%s", err, logs.String())
 	}
 }

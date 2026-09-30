@@ -19,6 +19,16 @@
 // hosted route answers both through the same persisted-record path. The one
 // difference left is ClickHouse's own time for a lookup that finds a
 // repository and one that does not.
+//
+// Served row = authorized subject (#742 r1 P1 class). A read selects its row
+// by a string the statement concatenates from the row's columns, and a
+// concatenation can match a row of another subject. So after the read, the
+// resolver recomputes the row's subject from the row's own columns with the
+// producer's function (contractsv1.EvidenceRefID; for a team or a project
+// also the canonical id the gate decided) and serves the row only when it is
+// the subject the ref names and the grant or the gate admitted. A mismatch is
+// refused as no_row (the persisted record answers) and flagged for one Warn
+// line.
 package sourcerow
 
 import (
@@ -42,7 +52,7 @@ type Rows interface {
 	RepositoryByID(ctx context.Context, orgID, repoID string) ([]contractsv1.ResolvedScope, error)
 	SourceRowRepositories(ctx context.Context, orgID string, discovery contextpacket.SourceRowDiscovery, entityID string) ([]contractsv1.ResolvedScope, error)
 	ResolveSourceRow(ctx context.Context, orgID string, scope contractsv1.ResolvedScope, read contextpacket.SourceRowRead) ([]contextpacket.EvidenceReference, error)
-	ResolveOrganizationRow(ctx context.Context, orgID string, read contextpacket.SourceRowRead) ([]contextpacket.EvidenceReference, error)
+	ResolveOrganizationRow(ctx context.Context, orgID string, read contextpacket.SourceRowRead) ([]contextpacket.OrganizationRowReference, error)
 }
 
 // SubjectGate is the direct data tools' subject authorization
@@ -254,8 +264,10 @@ func (r *Resolver) discoveredTargets(ctx context.Context, principal storage.Prin
 type found struct {
 	target    target
 	reference contextpacket.EvidenceReference
-	// subject is the gated subject of an ownership row.
+	// subject is the gated subject of an ownership row, and key the row's own
+	// key column values (OrganizationRowQuery.KeyColumns).
 	subject contextfabric.SubjectRef
+	key     []string
 }
 
 // readTargets reads every target and serves exactly one distinct row. A
@@ -298,6 +310,10 @@ func (r *Resolver) readTargets(ctx context.Context, principal storage.Principal,
 		return contractsv1.ExpandedEvidence{}, decision
 	}
 	decision.Grammar = rows[0].target.grammar
+	if !rowNamesSubject(entityType, entityID, rows[0]) {
+		decision.Reason, decision.SubjectMismatch = contextfabric.SourceRowNoRow, true
+		return contractsv1.ExpandedEvidence{}, decision
+	}
 	expanded, err := r.expand(ctx, entityType, entityID, rows[0])
 	if err != nil {
 		decision.Reason, decision.Err = contextfabric.SourceRowInvalid, err
@@ -434,7 +450,12 @@ func (r *Resolver) ownershipRow(ctx context.Context, principal storage.Principal
 		decision.Reason = contextfabric.SourceRowAmbiguous
 		return contractsv1.ExpandedEvidence{}, decision
 	}
-	expanded, err := r.expand(ctx, entityType, entityID, found{target: target{read: read, grammar: contextfabric.SourceRowGrammarOrgKeyed}, reference: references[0], subject: subject})
+	row := found{target: target{read: read, grammar: contextfabric.SourceRowGrammarOrgKeyed}, reference: references[0].Reference, subject: subject, key: references[0].Key}
+	if !rowNamesSubject(entityType, entityID, row) {
+		decision.Reason, decision.SubjectMismatch = contextfabric.SourceRowNoRow, true
+		return contractsv1.ExpandedEvidence{}, decision
+	}
+	expanded, err := r.expand(ctx, entityType, entityID, row)
 	if err != nil {
 		decision.Reason, decision.Err = contextfabric.SourceRowInvalid, err
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -444,4 +465,64 @@ func (r *Resolver) ownershipRow(ctx context.Context, principal storage.Principal
 	}
 	decision.Reason = contextfabric.SourceRowServed
 	return expanded, decision
+}
+
+// rowNamesSubject recomputes the subject of the row a read returned from the
+// row's own columns, with the producer's functions, and reports whether it is
+// the subject the ref names and the grant or gate authorized (#742 r1 P1
+// class). The row must carry the catalog id that was read, its ref re-minted
+// with contractsv1.EvidenceRefID (the producer's call) must equal the
+// requested ref, and a team or project row's canonical id must equal the one
+// the subject gate decided. A repository-level row's repository is the one
+// its statement bound (repo_id), which the grant admitted.
+func rowNamesSubject(entityType, entityID string, row found) bool {
+	evidence := row.reference.Evidence
+	if evidence.EvidenceRefID == "" || evidence.EvidenceRefID != row.target.read.Locator {
+		return false
+	}
+	kind := contractsv1.ContextFabricEvidenceEntityType(entityType)
+	rowID := evidence.Source.EntityID
+	var minted string
+	switch kind {
+	case contractsv1.ContextFabricEvidenceEntityRepository:
+		if rowID == "" || rowID != row.target.scope.RepoID {
+			return false
+		}
+		minted = contractsv1.EvidenceRefID(kind, rowID)
+	case contractsv1.ContextFabricEvidenceEntityWorkItem, contractsv1.ContextFabricEvidenceEntityPullRequest,
+		contractsv1.ContextFabricEvidenceEntityReview, contractsv1.ContextFabricEvidenceEntityCI,
+		contractsv1.ContextFabricEvidenceEntityDeployment:
+		if rowID == "" || row.target.scope.RepoID == "" {
+			return false
+		}
+		minted = contractsv1.EvidenceRefID(kind, row.target.scope.RepoID+":"+rowID)
+	case contractsv1.ContextFabricEvidenceEntityIncident:
+		if rowID == "" {
+			return false
+		}
+		minted = contractsv1.EvidenceRefID(kind, rowID)
+	case contractsv1.ContextFabricEvidenceEntityTeam:
+		// TeamCanonicalID is a prefix, so with the re-minted ref below this
+		// equality is implied; it is kept as the gate-side statement.
+		if len(row.key) != 1 || row.key[0] == "" || row.subject.Kind != contextfabric.SubjectTeam ||
+			contextfabric.TeamCanonicalID(row.key[0]) != row.subject.CanonicalID {
+			return false
+		}
+		minted = contractsv1.EvidenceRefID(kind, row.key[0])
+	case contractsv1.ContextFabricEvidenceEntityProject:
+		// The re-minted ref alone cannot tell (acme:linear, SECRET) from
+		// (acme, linear:SECRET): both serialize to acme:linear:SECRET. The
+		// canonical id, derived from the row's own (provider, id), does.
+		if len(row.key) != 2 || row.key[1] == "" || row.subject.Kind != contextfabric.SubjectProject {
+			return false
+		}
+		canonicalID, omitted, err := identity.Derive(identity.KindProject, row.key, nil)
+		if err != nil || omitted || canonicalID == "" || canonicalID != row.subject.CanonicalID {
+			return false
+		}
+		minted = contractsv1.EvidenceRefID(kind, row.key[0]+":"+row.key[1])
+	default:
+		return false
+	}
+	return minted == contractsv1.ContextFabricEvidenceRefPrefix+entityType+":"+entityID
 }

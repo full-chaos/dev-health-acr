@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -36,14 +38,33 @@ const SourceRowQueryVersionV1 = "dev-health-source-rows.v1"
 // rather than served from a partial list.
 const maxSourceRowRepositories = 64
 
-// OrganizationRowQueriesV1 are the row statements of the organization-level
-// kinds (CHAOS-7227: teams and projects, authorized by ownership). They are
-// not in the packet catalog, whose statements are repository-scoped and are
-// the packet path's full read set; they have its column shape and bind the
-// organization only.
-var OrganizationRowQueriesV1 = []SourceQuery{
-	{"teams.v1", "teams", EvidenceScopeRepo, standardColumns + ` SELECT concat('` + contractsv1.ContextFabricEvidenceRefPrefix + string(contractsv1.ContextFabricEvidenceEntityTeam) + `:', t.id) evidence_ref_id, 'dev_health' system, 'team' entity_type, t.id entity_id, if(lengthUTF8(t.name) BETWEEN 1 AND 1000, t.name, concat('team ', t.id)) display_label, '' safe_uri, 'native' provenance, 1.0 confidence, concat('provider=', t.provider, ', active=', toString(t.is_active)) citation, t.updated_at observed_at FROM teams AS t FINAL WHERE t.org_id = {org_id:String} )`},
-	{"projects.v1", "projects", EvidenceScopeRepo, standardColumns + ` SELECT concat('` + contractsv1.ContextFabricEvidenceRefPrefix + string(contractsv1.ContextFabricEvidenceEntityProject) + `:', p.provider, ':', p.id) evidence_ref_id, 'dev_health' system, 'project' entity_type, concat(p.provider, ':', p.id) entity_id, if(lengthUTF8(p.name) BETWEEN 1 AND 1000, p.name, concat('project ', p.id)) display_label, '' safe_uri, 'native' provenance, 1.0 confidence, concat('state=', toString(p.state), ', active=', toString(p.is_active)) citation, p.updated_at observed_at FROM projects AS p FINAL WHERE p.org_id = {org_id:String} )`},
+// OrganizationRowQuery is the row statement of an organization-level kind
+// (CHAOS-7227: teams and projects, authorized by ownership). It returns the
+// catalog's ten columns and then KeyColumns: the row's OWN identity columns,
+// from which the caller recomputes the row's canonical subject and requires
+// it to equal the subject the gate authorized (#742 r1 P1: the locator
+// concatenates provider and id, so a string match alone can reach a row of a
+// different subject).
+type OrganizationRowQuery struct {
+	SourceQuery
+	KeyColumns []string
+}
+
+// organizationProviderPattern is the colon-free provider grammar a project
+// ref splits on (sourcerow providerPattern); a row whose provider breaks it
+// is never read as a source row.
+const organizationProviderPattern = `^[a-z][a-z0-9_-]*$`
+
+func organizationColumns(keys ...string) string {
+	return `SELECT evidence_ref_id, system, entity_type, entity_id, display_label, safe_uri, provenance, toFloat64(confidence) confidence, citation, observed_at, ` + strings.Join(keys, ", ") + ` FROM (`
+}
+
+// OrganizationRowQueriesV1 are the organization-level row statements. They
+// are not in the packet catalog, whose statements are repository-scoped and
+// are the packet path's full read set; they bind the organization only.
+var OrganizationRowQueriesV1 = []OrganizationRowQuery{
+	{SourceQuery{"teams.v1", "teams", EvidenceScopeRepo, organizationColumns("key_id") + ` SELECT concat('` + contractsv1.ContextFabricEvidenceRefPrefix + string(contractsv1.ContextFabricEvidenceEntityTeam) + `:', t.id) evidence_ref_id, 'dev_health' system, 'team' entity_type, t.id entity_id, if(lengthUTF8(t.name) BETWEEN 1 AND 1000, t.name, concat('team ', t.id)) display_label, '' safe_uri, 'native' provenance, 1.0 confidence, concat('provider=', t.provider, ', active=', toString(t.is_active)) citation, t.updated_at observed_at, t.id key_id FROM teams AS t FINAL WHERE t.org_id = {org_id:String} )`}, []string{"id"}},
+	{SourceQuery{"projects.v1", "projects", EvidenceScopeRepo, organizationColumns("key_provider", "key_id") + ` SELECT concat('` + contractsv1.ContextFabricEvidenceRefPrefix + string(contractsv1.ContextFabricEvidenceEntityProject) + `:', p.provider, ':', p.id) evidence_ref_id, 'dev_health' system, 'project' entity_type, concat(p.provider, ':', p.id) entity_id, if(lengthUTF8(p.name) BETWEEN 1 AND 1000, p.name, concat('project ', p.id)) display_label, '' safe_uri, 'native' provenance, 1.0 confidence, concat('state=', toString(p.state), ', active=', toString(p.is_active)) citation, p.updated_at observed_at, p.provider key_provider, p.id key_id FROM projects AS p FINAL WHERE p.org_id = {org_id:String} AND match(p.provider, '` + organizationProviderPattern + `') )`}, []string{"provider", "id"}},
 }
 
 // RepositoryByIDQueryV1 looks one repository of the organization up by id.
@@ -92,7 +113,7 @@ func SourceRowQueryIDs() []string {
 	return ids
 }
 
-func organizationRowQuery(id string) *SourceQuery {
+func organizationRowQuery(id string) *OrganizationRowQuery {
 	for index := range OrganizationRowQueriesV1 {
 		if OrganizationRowQueriesV1[index].ID == id {
 			return &OrganizationRowQueriesV1[index]
@@ -157,11 +178,18 @@ func (r *CatalogClickHouseRows) ResolveSourceRow(ctx context.Context, orgID stri
 	return r.queryEvidenceReferences(ctx, scope.RepoSlug, query.ID, statement, bindings, 3)
 }
 
+// OrganizationRowReference is one organization-level row: the evidence and
+// the row's own key column values, in the statement's KeyColumns order.
+type OrganizationRowReference struct {
+	Reference EvidenceReference
+	Key       []string
+}
+
 // ResolveOrganizationRow reads the organization-level row whose evidence id
 // is read.Locator (an OrganizationRowQueriesV1 statement), up to two (the
-// caller refuses two as ambiguous). It binds the organization and the
-// locator only.
-func (r *CatalogClickHouseRows) ResolveOrganizationRow(ctx context.Context, orgID string, read SourceRowRead) (_ []EvidenceReference, err error) {
+// caller refuses two as ambiguous), with the row's own key columns. It binds
+// the organization and the locator only.
+func (r *CatalogClickHouseRows) ResolveOrganizationRow(ctx context.Context, orgID string, read SourceRowRead) (_ []OrganizationRowReference, err error) {
 	completeObservation := beginStoreQueryObservation(ctx, r.assemblyObserver(), StoreOperationEvidence)
 	defer func() { completeObservation(err) }()
 	query := organizationRowQuery(read.QueryID)
@@ -173,7 +201,35 @@ func (r *CatalogClickHouseRows) ResolveOrganizationRow(ctx context.Context, orgI
 	}
 	bindings := []ClickHouseBinding{{Name: "org_id", Value: orgID}, {Name: "evidence_locator", Value: read.Locator}}
 	statement := `SELECT * FROM (` + query.Statement + `) WHERE evidence_ref_id = {evidence_locator:String} LIMIT 2`
-	return r.queryEvidenceReferences(ctx, "", query.ID, statement, bindings, 3)
+	rows, err := r.client.Query(ctx, statement, bindings)
+	if err != nil {
+		return nil, fmt.Errorf("resolve organization row: %w", err)
+	}
+	defer rows.Close()
+	references := []OrganizationRowReference{}
+	for rows.Next() {
+		var id, system, entityType, entityID, label, safeURI, provenance, citation string
+		var confidence float64
+		var observedAt time.Time
+		key := make([]string, len(query.KeyColumns))
+		destinations := []any{&id, &system, &entityType, &entityID, &label, &safeURI, &provenance, &confidence, &citation, &observedAt}
+		for index := range key {
+			destinations = append(destinations, &key[index])
+		}
+		if err := rows.Scan(destinations...); err != nil {
+			return nil, fmt.Errorf("scan organization row: %w", err)
+		}
+		evidence := contractsv1.EvidenceRef{
+			SchemaVersion: contractsv1.EvidenceRefSchema, EvidenceRefID: id, SourceVersion: query.ID,
+			Source:     contractsv1.EvidenceSource{System: system, EntityType: entityType, EntityID: entityID, DisplayLabel: label, SafeURI: safeURI},
+			Provenance: provenance, Confidence: confidence, Citation: citation, ObservedAt: observedAt.UTC(), Availability: contractsv1.EvidenceAvailable,
+		}
+		references = append(references, OrganizationRowReference{Reference: EvidenceReference{Evidence: evidence, Excerpt: citation}, Key: key})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate organization row: %w", err)
+	}
+	return references, nil
 }
 
 func (r *CatalogClickHouseRows) queryRepositories(ctx context.Context, statement string, bindings []ClickHouseBinding) ([]contractsv1.ResolvedScope, error) {

@@ -160,6 +160,11 @@ func (a *App) expandContextFabricEvidence(w http.ResponseWriter, r *http.Request
 			"org_id", contextfabric.SanitizeLogAttr(principal.OrgID), "entity_type", contextfabric.SanitizeLogAttr(decision.EntityType),
 			"source_query", contextfabric.SanitizeLogAttr(decision.Source.Query), "request_id", requestID)
 	}
+	if decision.Source.SubjectMismatch {
+		a.logger.WarnContext(r.Context(), contextfabric.SourceRowSubjectMismatchLogMessage,
+			"org_id", contextfabric.SanitizeLogAttr(principal.OrgID), "entity_type", contextfabric.SanitizeLogAttr(decision.EntityType),
+			"source_query", contextfabric.SanitizeLogAttr(decision.Source.Query), "request_id", requestID)
+	}
 	if err := decision.ServingError(); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			a.writeEvidenceNotFound(w, r, principal)

@@ -85,10 +85,10 @@ func TestSourceRowQueryIDsAreTheCatalogAndTheOrganizationRows(t *testing.T) {
 // The organization-level read binds the organization and the locator only.
 func TestResolveOrganizationRowBindsOrganizationAndLocator(t *testing.T) {
 	observed := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
-	client := &recordingClient{rows: [][]any{{"acr:v1:team:team-a", "dev_health", "team", "team-a", "Team A", "", "native", 1.0, "provider=jira, active=1", observed}}}
+	client := &recordingClient{rows: [][]any{{"acr:v1:team:team-a", "dev_health", "team", "team-a", "Team A", "", "native", 1.0, "provider=jira, active=1", observed, "team-a"}}}
 	rows := contextpacket.NewCatalogClickHouseRows(client)
 	references, err := rows.ResolveOrganizationRow(context.Background(), "org_1", contextpacket.SourceRowRead{QueryID: "teams.v1", Locator: "acr:v1:team:team-a"})
-	if err != nil || len(references) != 1 || references[0].Evidence.SourceVersion != "teams.v1" {
+	if err != nil || len(references) != 1 || references[0].Reference.Evidence.SourceVersion != "teams.v1" || strings.Join(references[0].Key, "|") != "team-a" {
 		t.Fatalf("references = %+v, err %v", references, err)
 	}
 	if len(client.bindings[0]) != 2 {
@@ -213,5 +213,24 @@ func TestSourceRowReadsScopeEveryTableToTheOrganization(t *testing.T) {
 		for _, violation := range violations {
 			t.Errorf("%s: %s is not scoped to the organization: another organization's rows can join\n%s", name, violation, statement)
 		}
+	}
+}
+
+// #742 r1 P1: an organization-level statement returns the row's own key
+// columns after the catalog's ten, and the project statement reads only rows
+// whose provider fits the colon-free grammar the ref splits on.
+func TestOrganizationRowQueriesReturnTheirKeyColumns(t *testing.T) {
+	want := map[string]string{"teams.v1": "id", "projects.v1": "provider,id"}
+	for _, query := range contextpacket.OrganizationRowQueriesV1 {
+		if strings.Join(query.KeyColumns, ",") != want[query.ID] {
+			t.Fatalf("%s key columns = %v, want %s", query.ID, query.KeyColumns, want[query.ID])
+		}
+		if !strings.Contains(query.Statement, "org_id = {org_id:String}") {
+			t.Fatalf("%s is not organization-scoped", query.ID)
+		}
+	}
+	project := contextpacket.OrganizationRowQueriesV1[1]
+	if project.ID != "projects.v1" || !strings.Contains(project.Statement, `match(p.provider, '^[a-z][a-z0-9_-]*$')`) {
+		t.Fatalf("projects.v1 does not enforce the provider grammar: %s", project.Statement)
 	}
 }

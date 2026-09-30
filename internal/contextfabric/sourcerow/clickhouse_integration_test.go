@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/dependencyrelation"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/sourcerow"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -366,4 +367,60 @@ func (admitAllSubjects) Authorize(_ context.Context, _ storage.Principal, reques
 		authorization.Outcomes = append(authorization.Outcomes, directread.GatedSubject{Subject: subject, Outcome: directread.SubjectAdmitted})
 	}
 	return directread.AuthorizedSubjects{}, authorization
+}
+
+// onlySubjects admits the listed canonical ids and finds no other subject.
+type onlySubjects map[string]bool
+
+func (g onlySubjects) Authorize(_ context.Context, _ storage.Principal, requested []contextfabric.SubjectRef) (directread.AuthorizedSubjects, directread.Authorization) {
+	authorization := directread.Authorization{Decision: directread.DecisionDenied}
+	for _, subject := range requested {
+		outcome := directread.SubjectAbsent
+		if g[subject.CanonicalID] {
+			outcome, authorization.Decision = directread.SubjectAdmitted, directread.DecisionAdmitted
+		}
+		authorization.Outcomes = append(authorization.Outcomes, directread.GatedSubject{Subject: subject, Outcome: outcome})
+	}
+	return directread.AuthorizedSubjects{}, authorization
+}
+
+// #742 r1 P1, the reviewer's executed repro on the real engine. The ref
+// acme:linear:SECRET splits as provider "acme", project "linear:SECRET"; the
+// gate admits THAT subject (project.v2:acme:linear%3ASECRET) and nothing else.
+// projects.v1's evidence id concatenates provider ':' id, so the project
+// (provider "acme:linear", id "SECRET"), another subject the gate never
+// admitted, matches the same locator. It must not be served: the statement
+// reads only providers of the colon-free grammar, and the resolver recomputes
+// the row's canonical id from its own columns and requires the gated one.
+// Once the admitted subject's own row exists, it alone is served.
+func TestSourceRowServesOnlyTheGatedProjectAgainstClickHouse(t *testing.T) {
+	ctx := context.Background()
+	query, direct := startClickHouse(t, ctx)
+	seedIntegration(t, ctx, direct)
+	decoy, omitted, err := identity.Derive(identity.KindProject, []string{"acme", "linear:SECRET"}, nil)
+	if err != nil || omitted {
+		t.Fatalf("derive: %v %v", err, omitted)
+	}
+	resolve, err := sourcerow.New(contextpacket.NewCatalogClickHouseRows(query), contextpacket.NewEvidenceResolver(contextpacket.EvidenceResolverOptions{}), onlySubjects{decoy: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := "'2026-09-01 12:00:00.000'"
+	exec(t, ctx, direct, fmt.Sprintf(`INSERT INTO projects (id, org_id, provider, name, is_active, state, url, updated_at) VALUES ('SECRET', '%s', 'acme:linear', 'SECRET project', 1, 'active', '', %s)`, integrationOrg, now))
+	restricted := storage.Principal{OrgID: integrationOrg, RepositoryScopes: []string{grantedRep}}
+	orgWide := storage.Principal{OrgID: integrationOrg}
+	for _, principal := range []storage.Principal{restricted, orgWide} {
+		expanded, decision := resolve.ResolveSourceRow(ctx, principal, "project", "acme:linear:SECRET")
+		if decision.Reason == contextfabric.SourceRowServed || expanded.SchemaVersion != "" {
+			t.Fatalf("served the project (acme:linear, SECRET) for a gate that admitted %s: %+v %+v", decoy, decision, expanded.Evidence)
+		}
+		if decision.Reason != contextfabric.SourceRowNoRow || decision.Admitted != 1 {
+			t.Fatalf("decision = %+v", decision)
+		}
+	}
+	exec(t, ctx, direct, fmt.Sprintf(`INSERT INTO projects (id, org_id, provider, name, is_active, state, url, updated_at) VALUES ('linear:SECRET', '%s', 'acme', 'Gated project', 1, 'active', '', %s)`, integrationOrg, now))
+	expanded, decision := resolve.ResolveSourceRow(ctx, restricted, "project", "acme:linear:SECRET")
+	if decision.Reason != contextfabric.SourceRowServed || decision.Rows != 1 || expanded.Structured["subject"] != decoy || expanded.Evidence.Source.DisplayLabel != "Gated project" {
+		t.Fatalf("the gated project's own row: %+v %+v %v", decision, expanded.Evidence, expanded.Structured)
+	}
 }

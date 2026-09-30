@@ -35,14 +35,14 @@ type world struct {
 	repos      map[string]string
 	discovered map[string][]contractsv1.ResolvedScope
 	rows       map[string][]contextpacket.EvidenceReference
-	orgRows    map[string][]contextpacket.EvidenceReference
+	orgRows    map[string][]contextpacket.OrganizationRowReference
 	fail       map[string]error
 	calls      []string
 	gate       sourcerow.SubjectGate
 }
 
 func newWorld() *world {
-	return &world{repos: map[string]string{}, discovered: map[string][]contractsv1.ResolvedScope{}, rows: map[string][]contextpacket.EvidenceReference{}, orgRows: map[string][]contextpacket.EvidenceReference{}, fail: map[string]error{}}
+	return &world{repos: map[string]string{}, discovered: map[string][]contractsv1.ResolvedScope{}, rows: map[string][]contextpacket.EvidenceReference{}, orgRows: map[string][]contextpacket.OrganizationRowReference{}, fail: map[string]error{}}
 }
 
 func scope(id, slug string) contractsv1.ResolvedScope {
@@ -68,7 +68,7 @@ func (w *world) SourceRowRepositories(_ context.Context, org string, discovery c
 	return append([]contractsv1.ResolvedScope{}, w.discovered[string(discovery)+"|"+entityID]...), nil
 }
 
-func (w *world) ResolveOrganizationRow(_ context.Context, org string, read contextpacket.SourceRowRead) ([]contextpacket.EvidenceReference, error) {
+func (w *world) ResolveOrganizationRow(_ context.Context, org string, read contextpacket.SourceRowRead) ([]contextpacket.OrganizationRowReference, error) {
 	w.calls = append(w.calls, fmt.Sprintf("org_row(%s,%s,%s)", org, read.QueryID, read.Locator))
 	if err := w.fail["org_row"]; err != nil {
 		return nil, err
@@ -476,10 +476,21 @@ func projectCanonical(t *testing.T) string {
 	return canonical
 }
 
-func orgRow(queryID, locator, entityType, entityID string) contextpacket.EvidenceReference {
+// orgRow is an organization-level row with its key columns: a team's id, a
+// project's (provider, id) split at the first ':' as the table holds them.
+func orgRow(queryID, locator, entityType, entityID string) contextpacket.OrganizationRowReference {
+	key := []string{entityID}
+	if entityType == "project" {
+		provider, id, _ := strings.Cut(entityID, ":")
+		key = []string{provider, id}
+	}
+	return orgRowWithKey(queryID, locator, entityType, entityID, key...)
+}
+
+func orgRowWithKey(queryID, locator, entityType, entityID string, key ...string) contextpacket.OrganizationRowReference {
 	row := catalogRow(queryID, locator, entityType, entityID, "")
 	row.RepoSlug = ""
-	return row
+	return contextpacket.OrganizationRowReference{Reference: row, Key: key}
 }
 
 // CHAOS-7227: a team or project row is served when the direct data tools'
@@ -495,7 +506,7 @@ func TestOwnershipKindsAreServedThroughTheSubjectGate(t *testing.T) {
 			w := newWorld()
 			w.gate = &fakeGate{world: w, outcomes: map[string]directread.SubjectOutcome{tc.canonical: directread.SubjectAdmitted}}
 			locator := "acr:v1:" + tc.kind + ":" + tc.id
-			w.orgRows[tc.query+"|"+locator] = []contextpacket.EvidenceReference{orgRow(tc.query, locator, tc.kind, tc.id)}
+			w.orgRows[tc.query+"|"+locator] = []contextpacket.OrganizationRowReference{orgRow(tc.query, locator, tc.kind, tc.id)}
 			expanded, decision := resolver(t, w).ResolveSourceRow(context.Background(), restricted, tc.kind, tc.id)
 			if decision.Reason != contextfabric.SourceRowServed || decision.Grammar != contextfabric.SourceRowGrammarOrgKeyed || decision.Repositories != 1 || decision.Admitted != 1 || decision.Rows != 1 {
 				t.Fatalf("decision = %+v, calls %v", decision, w.calls)
@@ -530,7 +541,7 @@ func TestOwnershipRefusalReadsNoRow(t *testing.T) {
 		w := newWorld()
 		w.gate = &fakeGate{world: w, outcomes: map[string]directread.SubjectOutcome{canonical: outcome}}
 		locator := "acr:v1:team:" + teamID
-		w.orgRows["teams.v1|"+locator] = []contextpacket.EvidenceReference{orgRow("teams.v1", locator, "team", teamID)}
+		w.orgRows["teams.v1|"+locator] = []contextpacket.OrganizationRowReference{orgRow("teams.v1", locator, "team", teamID)}
 		expanded, decision := resolver(t, w).ResolveSourceRow(context.Background(), restricted, "team", teamID)
 		if decision.Reason != contextfabric.SourceRowNoRow || decision.Admitted != 0 || decision.Rows != 0 || expanded.SchemaVersion != "" {
 			t.Fatalf("%s: decision %+v", outcome, decision)
@@ -586,5 +597,96 @@ func TestOwnershipMalformedIdsAskNothing(t *testing.T) {
 		if decision.Reason != contextfabric.SourceRowIDMalformed || len(w.calls) != 0 {
 			t.Fatalf("%q: %+v, calls %v", id, decision, w.calls)
 		}
+	}
+}
+
+// #742 r1 P1 class: the served row must BE the subject the grant or the gate
+// authorized. The read selects a row by a string the statement concatenates
+// from the row's columns; each case below is a row that matches that string
+// but whose own columns name another subject. Every one is refused as no_row
+// with SubjectMismatch, after the one read, and never expanded.
+func TestServedRowMustBeTheAuthorizedSubject(t *testing.T) {
+	// The reviewer's executed repro: ref acme:linear:SECRET parses as
+	// provider "acme", project "linear:SECRET"; the gate admits THAT
+	// subject, and the row the locator matches is provider "acme:linear",
+	// project "SECRET", another subject.
+	decoy, omitted, err := identity.Derive(identity.KindProject, []string{"acme", "linear:SECRET"}, nil)
+	if err != nil || omitted {
+		t.Fatalf("derive decoy: %v %v", err, omitted)
+	}
+	for _, tc := range []struct {
+		name, kind, id, query, canonical string
+		row                              contextpacket.OrganizationRowReference
+	}{
+		{"project provider holds a colon", "project", "acme:linear:SECRET", "projects.v1", decoy,
+			orgRowWithKey("projects.v1", "acr:v1:project:acme:linear:SECRET", "project", "acme:linear:SECRET", "acme:linear", "SECRET")},
+		{"project key of another project", "project", projectID, "projects.v1", "",
+			orgRowWithKey("projects.v1", "acr:v1:project:"+projectID, "project", projectID, "gitlab", "other")},
+		{"project provider outside the grammar", "project", projectID, "projects.v1", "",
+			orgRowWithKey("projects.v1", "acr:v1:project:"+projectID, "project", projectID, "GitLab", "org-1:gitlab:71133891")},
+		{"team key of another team", "team", teamID, "teams.v1", contextfabric.TeamCanonicalID(teamID),
+			orgRowWithKey("teams.v1", "acr:v1:team:"+teamID, "team", teamID, "team-b")},
+		{"team row carries another evidence id", "team", teamID, "teams.v1", contextfabric.TeamCanonicalID(teamID),
+			orgRowWithKey("teams.v1", "acr:v1:team:team-b", "team", teamID, teamID)},
+		{"team row without its key", "team", teamID, "teams.v1", contextfabric.TeamCanonicalID(teamID),
+			orgRowWithKey("teams.v1", "acr:v1:team:"+teamID, "team", teamID)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			canonical := tc.canonical
+			if canonical == "" {
+				canonical = projectCanonical(t)
+			}
+			w := newWorld()
+			w.gate = &fakeGate{world: w, outcomes: map[string]directread.SubjectOutcome{canonical: directread.SubjectAdmitted}}
+			locator := "acr:v1:" + tc.kind + ":" + tc.id
+			w.orgRows[tc.query+"|"+locator] = []contextpacket.OrganizationRowReference{tc.row}
+			expanded, decision := resolver(t, w).ResolveSourceRow(context.Background(), restricted, tc.kind, tc.id)
+			if decision.Reason != contextfabric.SourceRowNoRow || !decision.SubjectMismatch || decision.Admitted != 1 || decision.Rows != 1 || expanded.SchemaVersion != "" {
+				t.Fatalf("decision = %+v, expanded %+v, calls %v", decision, expanded.Evidence, w.calls)
+			}
+		})
+	}
+	for _, tc := range repoKindCases() {
+		t.Run(string(tc.kind)+" row names another id", func(t *testing.T) {
+			w := newWorld()
+			w.repos[grantedID] = grantedRep
+			w.addRow(grantedID, tc.query, tc.locator, catalogRow(tc.query, tc.locator, tc.entityType, "another-row", grantedRep))
+			expanded, decision := resolver(t, w).ResolveSourceRow(context.Background(), restricted, string(tc.kind), tc.id)
+			if decision.Reason != contextfabric.SourceRowNoRow || !decision.SubjectMismatch || decision.Rows != 1 || expanded.SchemaVersion != "" {
+				t.Fatalf("decision = %+v, calls %v", decision, w.calls)
+			}
+		})
+		t.Run(string(tc.kind)+" row carries another evidence id", func(t *testing.T) {
+			w := newWorld()
+			w.repos[grantedID] = grantedRep
+			entityID := strings.TrimPrefix(tc.locator, "acr:v1:"+string(tc.kind)+":")
+			w.addRow(grantedID, tc.query, tc.locator, catalogRow(tc.query, tc.locator+"x", tc.entityType, entityID, grantedRep))
+			if _, decision := resolver(t, w).ResolveSourceRow(context.Background(), restricted, string(tc.kind), tc.id); decision.Reason != contextfabric.SourceRowNoRow || !decision.SubjectMismatch {
+				t.Fatalf("decision = %+v", decision)
+			}
+		})
+	}
+	t.Run("incident row names another incident", func(t *testing.T) {
+		w := newWorld()
+		w.discovered[string(contextpacket.SourceRowDiscoveryIncident)+"|INC-1"] = []contractsv1.ResolvedScope{scope(grantedID, grantedRep)}
+		w.addRow(grantedID, "incidents.v1", "acr:v1:incident:INC-1", catalogRow("incidents.v1", "acr:v1:incident:INC-1", "incident", "INC-2", grantedRep))
+		if _, decision := resolver(t, w).ResolveSourceRow(context.Background(), restricted, "incident", "INC-1"); decision.Reason != contextfabric.SourceRowNoRow || !decision.SubjectMismatch || decision.Rows != 1 {
+			t.Fatalf("decision = %+v, calls %v", decision, w.calls)
+		}
+	})
+}
+
+// A served row and every refusal before the row read carry no mismatch flag:
+// only a row read that returned another subject sets it.
+func TestSubjectMismatchIsSetOnlyByAMismatchedRow(t *testing.T) {
+	w := newWorld()
+	w.gate = &fakeGate{world: w, outcomes: map[string]directread.SubjectOutcome{contextfabric.TeamCanonicalID(teamID): directread.SubjectAdmitted}}
+	locator := "acr:v1:team:" + teamID
+	w.orgRows["teams.v1|"+locator] = []contextpacket.OrganizationRowReference{orgRow("teams.v1", locator, "team", teamID)}
+	if _, decision := resolver(t, w).ResolveSourceRow(context.Background(), restricted, "team", teamID); decision.Reason != contextfabric.SourceRowServed || decision.SubjectMismatch {
+		t.Fatalf("served: %+v", decision)
+	}
+	if _, decision := resolver(t, w).ResolveSourceRow(context.Background(), restricted, "team", "team-absent"); decision.Reason != contextfabric.SourceRowNoRow || decision.SubjectMismatch {
+		t.Fatalf("absent: %+v", decision)
 	}
 }
