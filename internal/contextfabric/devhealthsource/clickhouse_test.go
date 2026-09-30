@@ -113,9 +113,9 @@ func applyCursor(rows [][]any, cursorOf func(row []any) (time.Time, string), bin
 	var after string
 	for _, binding := range bindings {
 		switch binding.Name {
-		case "since":
-			if value, ok := binding.Value.(time.Time); ok {
-				since = value
+		case "since_us":
+			if value, ok := binding.Value.(int64); ok {
+				since = time.UnixMicro(value).UTC()
 			}
 		case "after":
 			if value, ok := binding.Value.(string); ok {

@@ -20,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 func TestCHAOS7263IngestTimeCursor(t *testing.T) {
@@ -346,6 +347,56 @@ SELECT concat('WI-burst-', leftPad(toString(number), 5, '0')), ?, ?, concat('iss
 			t.Fatalf("the re-read moved the cursor (%q -> %q)", first.cursor, second.cursor)
 		}
 	})
+
+	// An ingest-time cursor makes equal timestamps the normal case: one sync
+	// batch stamps thousands of rows with one last_synced. The keyset is
+	// (ingest stamp, row key) with a strict key tie-breaker, and the bound is
+	// sent at the column's full (microsecond) precision -- a bound truncated
+	// to milliseconds re-reads every row of that millisecond on every page,
+	// so a page of 201 rows sharing one millisecond repeats forever.
+	// teams.last_synced is DateTime64(6).
+	for _, tc := range []struct {
+		name  string
+		orgID string
+		stamp string // microseconds since epoch, per row (number = 0..999)
+	}{
+		{"1,000 rows sharing one microsecond-exact ingest stamp", "72630000-0000-4000-8000-00000000000e", "?"},
+		{"1,000 rows whose ingest stamps differ only in microseconds", "72630000-0000-4000-8000-00000000000f", "? + number"},
+	} {
+		t.Run("equal ingest stamps page to the end: "+tc.name, func(t *testing.T) {
+			src, err := devhealthsource.NewTeamsProjectsSource(query, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			base := now.Add(-5 * time.Minute).Truncate(time.Millisecond).Add(123 * time.Microsecond)
+			mustExec(t, ctx, direct, `INSERT INTO teams (id, name, description, updated_at, last_synced, org_id, provider, native_team_key, project_keys, is_active)
+SELECT concat('T-', leftPad(toString(number), 4, '0')), concat('team ', toString(number)), '', ?, fromUnixTimestamp64Micro(`+tc.stamp+`, 'UTC'), ?, 'linear', concat('T-', toString(number)), [], 1 FROM numbers(1000)`,
+				now.Add(-24*time.Hour), base.UnixMicro(), tc.orgID)
+			var distinct, total uint64
+			if err := direct.QueryRow(ctx, `SELECT uniqExact(last_synced), count() FROM teams FINAL WHERE org_id = ?`, tc.orgID).Scan(&distinct, &total); err != nil {
+				t.Fatal(err)
+			}
+			if total != 1000 || (tc.stamp == "?" && distinct != 1) || (tc.stamp != "?" && distinct != 1000) {
+				t.Fatalf("precondition: %d rows, %d distinct stamps", total, distinct)
+			}
+			h := &ingestHarness{t: t, ctx: ctx, direct: direct, src: src, source: devhealthsource.TeamsProjectsSourceName, orgID: tc.orgID}
+			got := h.drain("")
+			teams := 0
+			for _, e := range got.all {
+				if e.Subject.Kind == contractsv1.ContextFabricSubjectTeam {
+					teams++
+				}
+			}
+			if teams != 1000 {
+				t.Fatalf("%d of 1000 teams projected", teams)
+			}
+			for i, b := range got.batches {
+				if b.NextCursor == b.Cursor {
+					t.Fatalf("batch %d did not advance the cursor", i)
+				}
+			}
+		})
+	}
 
 	// PeekProjectionBatch must stay side-effect free: a peek that walks the
 	// window may not mark a late row as emitted, or the next real tick skips

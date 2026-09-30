@@ -62,11 +62,11 @@ func (r *statementRecorder) Query(_ context.Context, statement string, _ []conte
 // sincePredicate/havingSincePredicate + orderBy, and checks both agree.
 func cursorExpression(t *testing.T, table, statement string) string {
 	t.Helper()
-	const gt = " > {since:DateTime64(6,'UTC')} OR ("
-	const eq = " = {since:DateTime64(6,'UTC')} AND toString("
+	gt := " > " + sinceBoundSQL + " OR ("
+	eq := " = " + sinceBoundSQL + " AND toString("
 	i := strings.LastIndex(statement, gt)
 	if i < 0 {
-		t.Fatalf("%s: statement carries no keyset predicate:\n%s", table, statement)
+		t.Fatalf("%s: statement carries no keyset predicate with the microsecond-exact bound:\n%s", table, statement)
 	}
 	rest := statement[i+len(gt):]
 	j := strings.Index(rest, eq)

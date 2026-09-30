@@ -114,12 +114,27 @@ func ProjectedSubjectKinds() []contractsv1.ContextFabricSubjectKind {
 // the wrong column for every table except repos itself) causes rows to be
 // skipped or replayed whenever two rows share the same timestampExpr
 // value, which is common (bulk syncs land in the same second).
+//
+// CHAOS-7263: the bound is sent as an Int64 of MICROSECONDS and rebuilt in
+// SQL (sinceBoundSQL), never as a bound time value: the driver sends a
+// DateTime64 parameter at millisecond precision, and against a DateTime64(6)
+// cursor column (teams.last_synced, operational_incidents.last_synced) a
+// truncated bound re-reads every row of its millisecond on every page. With
+// an ingest-time cursor, one sync batch stamping hundreds of rows with one
+// value is the normal case, so a page of rows sharing one millisecond
+// repeated forever. Executed: 1,000 teams sharing one microsecond-exact
+// stamp, and 1,000 differing only in microseconds, each stalled on page 2
+// with the truncated bound (chaos7263_ingest_cursor_integration_test.go).
 func sincePredicate(cursor cursorState, timestampExpr, rowKeyExpr string) string {
 	if cursor.Since.IsZero() && cursor.After == "" {
 		return ""
 	}
-	return fmt.Sprintf(" AND (%s > {since:DateTime64(6,'UTC')} OR (%s = {since:DateTime64(6,'UTC')} AND toString(%s) > {after:String}))", timestampExpr, timestampExpr, rowKeyExpr)
+	return fmt.Sprintf(" AND (%s > %s OR (%s = %s AND toString(%s) > {after:String}))", timestampExpr, sinceBoundSQL, timestampExpr, sinceBoundSQL, rowKeyExpr)
 }
+
+// sinceBoundSQL is the keyset bound at full DateTime64(6) precision, from the
+// since_us binding (rowLimitBindings).
+const sinceBoundSQL = "fromUnixTimestamp64Micro({since_us:Int64}, 'UTC')"
 
 // orderBy is sincePredicate's ORDER BY counterpart: the same
 // (timestampExpr, rowKeyExpr) pair, so the rows this query returns are in
@@ -154,7 +169,7 @@ func rowLimitBindings(orgID string, cursor cursorState, limit int) []contextpack
 		since = time.Unix(0, 0).UTC()
 	}
 	return []contextpacket.ClickHouseBinding{
-		{Name: "org_id", Value: orgID}, {Name: "since", Value: since}, {Name: "after", Value: cursor.After},
+		{Name: "org_id", Value: orgID}, {Name: "since_us", Value: since.UnixMicro()}, {Name: "after", Value: cursor.After},
 		{Name: "row_limit", Value: uint32(limit) + 1},
 	}
 }
