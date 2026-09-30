@@ -560,8 +560,14 @@ one repository are one edge, never a duplicate RelationshipID. A `repo_id`
 with no `repos` row keeps the orphaned-repository sentinel (the fact reads
 drop it; default pending a ruling). `TeamsProjectsSourceVersion` moved
 v12 → v13: one rebuild per projected organization (operations.md). The team
-node's `authorization_repositories` list is unchanged (raw names;
-CHAOS-7130).
+node's `authorization_repositories` list was raw names at v13; since v15
+(CHAOS-7130) it is DERIVED FROM the repository -> team edge's own rows: the
+per-(provider, resolved repository, team, source) latest assertion
+(`repositoryTeamsGroupedSQL`: one `ownershipresolve` source with the
+`valid_from <= now` arm, one latest order, one open predicate), aggregated per
+team, canonical `repos.repo` slug, listed when any stream's latest is open. It
+equals the set of open repository -> team edges by construction; future-dated
+assertions are ignored by both.
 
 **Stale doc comment found (report only, no Go edit per this lane's scope):**
 `internal/contextfabric/devhealthsource/teams_projects.go:54` and

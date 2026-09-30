@@ -100,6 +100,7 @@ func TestEvidenceRouteExpandsContextFabricRefsWithAClassifiedDecision(t *testing
 		want   map[string]any
 	}
 	otherRepo := subjectNodeGraph{grant: []string{"other-org/secret-service"}}
+	sourceRowRef := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityPullRequest, sourceRowGrantedRepoID+":532")
 	cells := []cell{
 		{name: "served", ref: cited, status: http.StatusOK, reason: contextfabric.EvidenceExpansionServed, entity: "repository",
 			want: merge(counts(1, 1, 0, 1, 0, 0), map[string]any{"authorization_reason": "subjects_admitted"})},
@@ -134,6 +135,18 @@ func TestEvidenceRouteExpandsContextFabricRefsWithAClassifiedDecision(t *testing
 			}, want: merge(counts(1, 1, 0, 0, 0, 1), map[string]any{"authorization_reason": "graph_read_failed", "error_class": "internal"})},
 		{name: "expansion invalid", ref: oversized, status: http.StatusServiceUnavailable, reason: contextfabric.EvidenceExpansionInvalid, entity: contextfabric.EvidenceExpansionUnregisteredType,
 			want: merge(counts(1, 1, 0, 1, 0, 0), map[string]any{"authorization_reason": "subjects_admitted", "error_class": "internal"})},
+		// CHAOS-6180: the source row serves first; a failed source read is a
+		// 503 without the record.
+		{name: "source row served", ref: sourceRowRef, status: http.StatusOK, reason: contextfabric.EvidenceExpansionSourceRowServed, entity: "pull-request",
+			setup: func(app *App, _ *memoryinvestigation.Store) {
+				app.runtime.SourceRows = testSourceRows(t, newSourceRowTables().withPullRequest(sourceRowGrantedRepoID, hostedTestRepository))
+			}, want: merge(counts(0, 0, 0, 0, 0, 0), map[string]any{"source_reason": "served"})},
+		{name: "source row unavailable", ref: sourceRowRef, status: http.StatusServiceUnavailable, reason: contextfabric.EvidenceExpansionSourceRowUnavailable, entity: "pull-request",
+			setup: func(app *App, _ *memoryinvestigation.Store) {
+				tables := newSourceRowTables()
+				tables.err = errors.New("clickhouse down")
+				app.runtime.SourceRows = testSourceRows(t, tables)
+			}, want: merge(counts(0, 0, 0, 0, 0, 0), map[string]any{"source_reason": "unavailable", "error_class": "internal"})},
 	}
 	executed := map[contextfabric.EvidenceExpansionReason]bool{}
 	for _, tc := range cells {
@@ -151,7 +164,7 @@ func TestEvidenceRouteExpandsContextFabricRefsWithAClassifiedDecision(t *testing
 			if rec.Code != tc.status {
 				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.status, rec.Body.String())
 			}
-			if tc.status == http.StatusOK {
+			if tc.reason == contextfabric.EvidenceExpansionServed {
 				var expanded contractsv1.ExpandedEvidence
 				if err := json.Unmarshal(rec.Body.Bytes(), &expanded); err != nil {
 					t.Fatal(err)

@@ -216,7 +216,22 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // Those teams' rows carry an updated_at already behind the checkpoint
 // watermark, so incremental catch-up never re-reads them; the bump forces the
 // one rebuild that projects them.
-const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v14"
+//
+// v14 -> v15 (CHAOS-7130): the team's authorization_repositories list is now
+// built from RESOLVED ownership (ownershipresolve strict mode, canonical repos
+// slug) instead of the raw repo_full_name values -- ghost names, globs and
+// wrong-provider names leave the list, case variants and name+id duplicates
+// collapse to one slug. Admission changes in BOTH directions vs v14: narrows
+// (canonical slug / repo_id-wins / ghost, glob and wrong-provider names) and
+// widens where one source stays open after another closes (the list is now
+// derived from the edge's own per-(provider, repository, team, source) latest
+// rows, so it equals the open edge set). The edge also stops reading
+// future-dated assertions (the as-of-now arm moved into the shared source).
+// An already-projected
+// team node keeps its old raw list until its entity is re-projected, and its
+// team row / ownership rows carry an updated_at already behind the checkpoint
+// watermark, so only a full rebuild replaces it.
+const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v15"
 
 // teamsProjectsTables is this source's bounded coverage. Both tables were
 // already canonical Dev Health data; neither introduces a new ingest path.
@@ -1195,17 +1210,23 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 // though the org's LATEST assertion revoked it. The inner subquery below
 // resolves this exactly the way queryProjectTeams' own FIRST/SECOND finding
 // notes already established for team_project_ownership: collapse to ONE
-// row per (team_id, repo_full_name) using the SAME NULL-preserving
+// row per (team_id, repo_full_name) [CHAOS-7130: now per (team_id, resolved
+// repository, SOURCE), below] using the SAME NULL-preserving
 // "latest assertion by (valid_from, valid_to IS NULL, valid_to) wins" rule
 // -- verified live against this ClickHouse version there, not re-derived
 // here -- and only keep the repository when THAT latest assertion is open.
-// Collapsed across `source` too (unlike queryProjectTeams' edge, which
-// keeps one edge per source): this producer only needs a flat "is the team
-// currently authorized for this repository at all" boolean, not a
-// per-source relationship identity, so the most recent assertion from ANY
-// source is authoritative for that boolean, same as queryTeams' own FINAL
-// collapse of the teams table itself never splits by anything narrower
-// than the team's own row.
+// CHAOS-7130 (supersedes the per-(team, repo_full_name) collapse above): the
+// list is NOT a second derivation of "what is currently owned". It aggregates,
+// per team, the SAME per-(provider, resolved repository, team, source) latest
+// assertion rows the repository->team edge projects
+// (repositoryTeamsGroupedSQL: same ownership source and filters incl.
+// valid_from <= now64(3), same latest order, same open predicate), keeps the
+// resolved canonical slug of every row whose latest assertion is open, and so
+// equals the set of open edges by construction. Basis for any-source-open:
+// CHAOS-2600 (AGENTS.md) -- manual mappings are fallback only, never
+// overrides, never outranking native facts: a later manual close must not
+// cancel an open native assertion. Three earlier rounds (#733 r1-r3) each
+// found a disagreement between two hand-written derivations; there is now one.
 //
 // Codex round-2 finding (HIGH): the outer aggregation used to filter to
 // `WHERE latest_is_open` BEFORE computing `latest_update`, so a repository
@@ -1262,16 +1283,12 @@ const noTeamOwnershipSentinel = "acr-context-fabric:no-team-repository-ownership
 // ownership change and the real list is re-projected.
 const overBoundTeamOwnershipSentinel = "acr-context-fabric:team-repository-ownership-over-bound"
 
-const ownedRepositoriesJoinSQL = `LEFT JOIN (
-	SELECT team_id, groupUniqArrayIf(repo_full_name, latest_is_open) AS repos, max(updated_at) AS latest_update
-	FROM (
-		SELECT team_id, repo_full_name, max(updated_at) AS updated_at,
-			argMax(tuple(valid_to), (valid_from, valid_to IS NULL, ifNull(valid_to, toDateTime64(0, 3, 'UTC')))).1 IS NULL AS latest_is_open
-		FROM team_repo_ownership FINAL
-		WHERE org_id = {org_id:String} AND valid_from <= now64(3)
-		GROUP BY team_id, repo_full_name
-	)
-	GROUP BY team_id
+var ownedRepositoriesJoinSQL = `LEFT JOIN (
+	SELECT g.owning_team_id AS team_id,
+		groupUniqArrayIf(g.resolved_repo_slug, g.latest_is_open != 0 AND g.resolved_repo_slug != '') AS repos,
+		max(g.observed_at) AS latest_update
+	FROM (` + repositoryTeamsGroupedSQL() + `) AS g
+	GROUP BY g.owning_team_id
 ) AS tro ON tro.team_id = tm.id`
 
 // queryTeamsEffectiveUpdatedAtExpr is the SQL expression queryTeams uses as

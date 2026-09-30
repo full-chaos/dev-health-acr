@@ -1227,6 +1227,12 @@ type EvidenceExpansionFields struct {
 	UnavailableCount    int
 	WithheldCount       int
 	AuthorizationReason string
+	SourceReason        string
+	SourceQuery         string
+	SourceGrammar       string
+	SourceRepositories  int
+	SourceAdmitted      int
+	SourceRows          int
 	ErrorClass          string
 	RequestID           string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
@@ -1242,7 +1248,7 @@ type EvidenceExpansionFields struct {
 
 // NewEvidenceExpansionFields is the generated constructor for EvidenceExpansionFields -- every
 // field EvidenceExpansion.Fields declares is a required parameter.
-func NewEvidenceExpansionFields(orgID string, reason string, entityType string, candidateCount int, citingCount int, unreadableCount int, admittedCount int, deniedCount int, unavailableCount int, withheldCount int, authorizationReason string, errorClass string, requestID string) EvidenceExpansionFields {
+func NewEvidenceExpansionFields(orgID string, reason string, entityType string, candidateCount int, citingCount int, unreadableCount int, admittedCount int, deniedCount int, unavailableCount int, withheldCount int, authorizationReason string, sourceReason string, sourceQuery string, sourceGrammar string, sourceRepositories int, sourceAdmitted int, sourceRows int, errorClass string, requestID string) EvidenceExpansionFields {
 	return EvidenceExpansionFields{
 		OrgID:               orgID,
 		Reason:              reason,
@@ -1255,6 +1261,12 @@ func NewEvidenceExpansionFields(orgID string, reason string, entityType string, 
 		UnavailableCount:    unavailableCount,
 		WithheldCount:       withheldCount,
 		AuthorizationReason: authorizationReason,
+		SourceReason:        sourceReason,
+		SourceQuery:         sourceQuery,
+		SourceGrammar:       sourceGrammar,
+		SourceRepositories:  sourceRepositories,
+		SourceAdmitted:      sourceAdmitted,
+		SourceRows:          sourceRows,
 		ErrorClass:          errorClass,
 		RequestID:           requestID,
 		constructed:         true,
@@ -1285,6 +1297,12 @@ func (f EvidenceExpansionFields) SlogArgs() []any {
 		"unavailable_count", f.UnavailableCount,
 		"withheld_count", f.WithheldCount,
 		"authorization_reason", contextfabric.SanitizeLogAttr(f.AuthorizationReason),
+		"source_reason", contextfabric.SanitizeLogAttr(f.SourceReason),
+		"source_query", contextfabric.SanitizeLogAttr(f.SourceQuery),
+		"source_grammar", contextfabric.SanitizeLogAttr(f.SourceGrammar),
+		"source_repositories", f.SourceRepositories,
+		"source_admitted", f.SourceAdmitted,
+		"source_rows", f.SourceRows,
 		"error_class", contextfabric.SanitizeLogAttr(f.ErrorClass),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}

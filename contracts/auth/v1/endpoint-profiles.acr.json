@@ -96,8 +96,8 @@
         "description": "protectedRuntimeHandler(RequestClassAuth, ScopeContextRead, entitlement=false, allowWebAssertions=true): Authenticator.MiddlewareFor(true,...) dispatches on X-ACR-Web-Assertion presence (WebAssertionVerifier) vs Authorization: Bearer (credential-store lookup), then RequireScope(context:read).",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 236,
-          "line_end": 246,
+          "line": 240,
+          "line_end": 250,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -151,8 +151,8 @@
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=false, allowWebAssertions=true).",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 236,
-          "line_end": 246,
+          "line": 240,
+          "line_end": 250,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -208,8 +208,8 @@
         "description": "protectedRuntimeHandler(RequestClassEvidence, ScopeEvidenceRead, entitlement=TRUE (agentContextRuntimeEntitlement), allowWebAssertions=true).",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 236,
-          "line_end": 246,
+          "line": 240,
+          "line_end": 250,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -262,8 +262,8 @@
         "description": "protectedRuntimeHandler(RequestClassEpisode, ScopeEpisodeWrite, entitlement=true, allowWebAssertions=FALSE) -- the only agent-context route that does NOT accept a web assertion; episode writes require a bearer fcacr_ credential.",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 236,
-          "line_end": 246,
+          "line": 240,
+          "line_end": 250,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -564,8 +564,8 @@
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7071 direct data route (CHAOS-7036 E.5); bearer fcacr_ credential only.",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 236,
-          "line_end": 246,
+          "line": 240,
+          "line_end": 250,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -609,8 +609,8 @@
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7071 direct data route (CHAOS-7036 E.5); bearer fcacr_ credential only.",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 236,
-          "line_end": 246,
+          "line": 240,
+          "line_end": 250,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -654,8 +654,8 @@
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7071 direct data route (CHAOS-7036 E.5); bearer fcacr_ credential only.",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 236,
-          "line_end": 246,
+          "line": 240,
+          "line_end": 250,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -697,8 +697,8 @@
         "description": "protectedRuntimeHandler(RequestClassData, ScopeDataRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7071 direct data route (CHAOS-7036 E.5); bearer fcacr_ credential only.",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 236,
-          "line_end": 246,
+          "line": 240,
+          "line_end": 250,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -742,8 +742,8 @@
         "description": "protectedRuntimeHandler(RequestClassData, ScopeDataRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7075 graphql_query direct data route (CHAOS-7036 D.8, E.5); bearer fcacr_ credential only.",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 236,
-          "line_end": 246,
+          "line": 240,
+          "line_end": 250,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
@@ -787,8 +787,8 @@
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=FALSE) -- CHAOS-7071 direct data route (CHAOS-7036 E.5); bearer fcacr_ credential only.",
         "anchor": {
           "path": "internal/api/runtime.go",
-          "line": 236,
-          "line_end": 246,
+          "line": 240,
+          "line_end": 250,
           "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },

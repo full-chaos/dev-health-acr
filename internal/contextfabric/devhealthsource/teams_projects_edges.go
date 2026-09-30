@@ -1636,7 +1636,12 @@ var repositoryTeamsGroupColumns = []string{"o.provider", "o.repo_key", "o.team_i
 // repositoryTeamsOwnershipSource is the resolved ownership table the edge
 // reads: the K11 rule from ownershipresolve in its KeepUnresolved mode, with
 // the provenance, validity and watermark columns the edge carries.
-var repositoryTeamsOwnershipSource = ownershipresolve.OwnedRepositoriesSource("", ownershipresolve.Options{
+//
+// CHAOS-7130: the "currently owned" arm (valid_from <= now64(3)) lives HERE,
+// in the ONE source both the edge and the team authorization list read, so a
+// future-dated assertion is ignored identically by both (before v15 the edge
+// read it unfiltered while the list filtered it: codex #733 r3).
+var repositoryTeamsOwnershipSource = ownershipresolve.OwnedRepositoriesSource(" AND valid_from <= now64(3)", ownershipresolve.Options{
 	OwnershipColumns: []string{"source", "match_type", "is_primary", "specificity", "priority", "valid_from", "valid_to", "updated_at"},
 	Columns: []string{
 		"o.org_id AS org_id", "o.provider AS provider", "o.source AS source", "o.match_type AS match_type",
@@ -1655,10 +1660,21 @@ const repositoryTeamsLatestOrder = "(o.valid_from, o.valid_to IS NULL, ifNull(o.
 // last_synced): an alias that shadows the
 // column it reads bound to itself on 24.8 once already in this file's history.
 func repositoryTeamsStatement(cursor cursorState) string {
+	return repositoryTeamsGroupedSQL() + havingSincePredicate(cursor, repositoryTeamsWatermark, repositoryTeamsRowKey) + orderBy(repositoryTeamsWatermark, repositoryTeamsRowKey)
+}
+
+// repositoryTeamsGroupedSQL is the per-(provider, repo, team, source) latest
+// assertion rows, WITHOUT cursor/paging: the ONE derivation. The edge pages it
+// (repositoryTeamsStatement) and the team authorization list aggregates it per
+// team (ownedRepositoriesJoinSQL) -- same ownership source, same filters, same
+// latest order, same open predicate -- so the two can never disagree on what
+// is currently owned (CHAOS-7130; codex #733 r1-r3 found three separate
+// disagreements between two hand-written derivations).
+func repositoryTeamsGroupedSQL() string {
 	return `SELECT o.repo_key,
        argMax(o.repo_full_name, ` + repositoryTeamsLatestOrder + `) AS latest_repo_full_name,
        max(o.repo_slug) AS resolved_repo_slug,
-       o.team_id, o.source_name, o.provider,
+       o.team_id AS owning_team_id, o.source_name, o.provider,
        argMax(o.match_type_name, ` + repositoryTeamsLatestOrder + `) AS latest_match_type,
        argMax(o.is_primary_flag, ` + repositoryTeamsLatestOrder + `) AS latest_is_primary,
        argMax(o.specificity_value, ` + repositoryTeamsLatestOrder + `) AS latest_specificity,
@@ -1680,7 +1696,7 @@ FROM (
 	INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = rto.team_id
 	WHERE rto.org_id = {org_id:String}
 ) AS o
-GROUP BY ` + strings.Join(repositoryTeamsGroupColumns, ", ") + havingSincePredicate(cursor, repositoryTeamsWatermark, repositoryTeamsRowKey) + orderBy(repositoryTeamsWatermark, repositoryTeamsRowKey)
+GROUP BY ` + strings.Join(repositoryTeamsGroupColumns, ", ")
 }
 
 // repositoryOwnershipSourceAsserted is the closed set of team_repo_ownership

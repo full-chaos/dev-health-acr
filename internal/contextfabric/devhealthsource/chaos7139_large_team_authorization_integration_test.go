@@ -38,8 +38,11 @@ FROM numbers(?)`, f.orgID, team, prefix, at, at, n)
 type chaos7139Result struct {
 	entities map[string]contractsv1.ContextFabricEntityProjection
 	edges    map[string]int
-	logs     string
-	cursor   string
+	// openEdgeSlugs (CHAOS-7130): per team, the repository slugs of its OPEN
+	// OWNED_BY_TEAM edges, the set the team authorization list must equal.
+	openEdgeSlugs map[string][]string
+	logs          string
+	cursor        string
 }
 
 func chaos7139Run(t *testing.T, ctx context.Context, f *ownershipFixture) chaos7139Result {
@@ -51,7 +54,7 @@ func chaos7139RunFrom(t *testing.T, ctx context.Context, f *ownershipFixture, cu
 	t.Helper()
 	logged := &bytes.Buffer{}
 	f.source.WithLogger(slog.New(slog.NewTextHandler(logged, &slog.HandlerOptions{Level: slog.LevelInfo})))
-	res := chaos7139Result{entities: map[string]contractsv1.ContextFabricEntityProjection{}, edges: map[string]int{}}
+	res := chaos7139Result{entities: map[string]contractsv1.ContextFabricEntityProjection{}, edges: map[string]int{}, openEdgeSlugs: map[string][]string{}}
 	for page := 0; ; page++ {
 		if page > 200 {
 			t.Fatalf("source did not converge within 200 pages")
@@ -74,7 +77,16 @@ func chaos7139RunFrom(t *testing.T, ctx context.Context, f *ownershipFixture, cu
 		}
 		for _, r := range batch.Relationships {
 			if r.Type == contractsv1.ContextFabricRelationshipOwnedByTeam && r.From.Kind == contractsv1.ContextFabricSubjectRepository {
-				res.edges[strings.TrimPrefix(r.To.CanonicalID, "team:")]++
+				team := strings.TrimPrefix(r.To.CanonicalID, "team:")
+				res.edges[team]++
+				// Open = currently valid (valid_from not in the future) and not
+				// closed; the orphaned-repository sentinel edge names no
+				// repository and is not an authorization repository.
+				now := time.Now().UTC()
+				if r.ValidTo == nil && (r.ValidFrom == nil || !r.ValidFrom.After(now)) && len(r.Authorization.RepositorySlugs) == 1 &&
+					r.Authorization.RepositorySlugs[0] != "acr-context-fabric:orphaned-repository" {
+					res.openEdgeSlugs[team] = append(res.openEdgeSlugs[team], r.Authorization.RepositorySlugs[0])
+				}
 			}
 		}
 	}
