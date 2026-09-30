@@ -648,7 +648,7 @@ func logTeamAuthorizationTelemetry(ctx context.Context, logger *slog.Logger, org
 			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName,
 			"team_id", contextfabric.SanitizeLogAttr(id), "owned_repositories", owned,
 			"generic_bound", 200, "entity_bound", contractsv1.ContextFabricEntityAuthorizationRepositoryMax,
-			"fail_closed_sentinel", overBound, "reason", reason)
+			"fail_closed_sentinel", overBound, "reason", contextfabric.SanitizeLogAttr(reason))
 	}
 }
 
