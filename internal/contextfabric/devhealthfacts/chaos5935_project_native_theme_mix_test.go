@@ -55,9 +55,11 @@ func nativePhasedTables(groups ...[]nativePhasedUnit) []fakeTable {
 	var ids, pUnit, pProvider, pProject []string
 	var pMulti []uint8
 	var effort, fd, op, zero, bugfix []float64
+	var versions []int64
 	for _, units := range groups {
 		for _, u := range units {
 			ids = append(ids, u.id)
+			versions = append(versions, 1)
 			effort, fd, op, zero, bugfix = append(effort, u.effort), append(fd, u.fd), append(op, u.op), append(zero, 0.0), append(bugfix, u.bg)
 			pUnit, pProvider, pProject, pMulti = append(pUnit, u.id), append(pProvider, "linear"), append(pProject, u.project), append(pMulti, u.multi)
 			if u.other {
@@ -66,8 +68,8 @@ func nativePhasedTables(groups ...[]nativePhasedUnit) []fakeTable {
 		}
 	}
 	return []fakeTable{
-		{match: "AS unit_ids", rows: [][]any{{ids, int64(1)}}},
-		{match: "groupArray(project_provider)", rows: [][]any{{pUnit, pProvider, pProject, pMulti}}},
+		{match: "AS unit_ids", rows: [][]any{{ids, versions}}},
+		{match: "groupArray(multi_placed)", rows: [][]any{{pUnit, pProvider, pProject, pMulti}}},
 		{match: "groupArray(theme_feature_delivery)", rows: [][]any{{ids, effort, fd, op, zero, zero, zero}}},
 		{match: "groupArray(bugfix_share)", rows: [][]any{{ids, bugfix}}},
 	}
@@ -185,7 +187,7 @@ func TestProjectNativeThemeMixProbeRowIsEvidenceOfTruncationNeverServed(t *testi
 func TestProjectNativeThemeMixReadFailureIsReported(t *testing.T) {
 	t.Parallel()
 	tables := nativePhasedTables(nativeMixUnits("a", 1))
-	tables[1] = fakeTable{match: "groupArray(project_provider)", err: errors.New("boom")} // the placement phase fails
+	tables[1] = fakeTable{match: "groupArray(multi_placed)", err: errors.New("boom")} // the placement phase fails
 	client := &fakeClient{tables: tables}
 	if _, err := readNativeMix(t, client, "a"); err == nil || !strings.Contains(err.Error(), "query project native theme mix") {
 		t.Fatalf("err = %v, want the native read named", err)

@@ -25,11 +25,13 @@ import (
 //
 // Phase 0 (projectMixScopeStatement) reads the narrow columns plus the
 // membership scope and returns ONE row: the latest-version unit ids that pass
-// the supersession filter, the membership run and the window, and the snapshot
-// (the newest computed_at it saw). Every later phase reads only the columns it
-// needs, restricted to those ids, at `computed_at <= snapshot`, so a version
-// written after phase 0 is invisible to every phase and all phases see one
-// version per unit. The membership scope is read once, in phase 0.
+// the supersession filter, the membership run and the window, each with the
+// computed_at of the version it selected. Every later phase reads only the
+// columns it needs, restricted to exactly those (unit, version) pairs, so a
+// version written after phase 0, whatever its date, is invisible to every phase
+// and all phases see one version per unit. The membership scope is read once, in
+// phase 0; so is the roll-up's project -> repository / team link table, handed
+// to the later phases as bound data.
 //
 //	roll-up:  repo arm      repo_id, effort, theme map, subcategory map
 //	          evidence arm  repo_id, structural_evidence_json
@@ -45,29 +47,44 @@ import (
 // projectNativeMixStatement) as the parity oracle of
 // chaos7271_project_mix_phased_integration_test.go.
 
-// projectMixPinnedFilter restricts a phase to phase 0's unit set and snapshot.
+// projectMixPinnedFilter restricts a phase to EXACTLY the (work unit, version)
+// pairs phase 0 selected: the unit's computed_at, in whole milliseconds (the
+// column is DateTime64(3)), must be the one phase 0 saw. A newer version, or a
+// version dated between the unit's selected one and the newest one, is invisible
+// to every phase.
 const projectMixPinnedFilter = `
-                              AND computed_at <= fromUnixTimestamp64Milli({snapshot_ms:Int64}, 'UTC')
-                              AND work_unit_id IN (SELECT arrayJoin(JSONExtract({unit_json:String}, 'Array(String)')))`
+                              AND (work_unit_id, toUnixTimestamp64Milli(computed_at)) IN (
+                                  SELECT pin.1, pin.2
+                                  FROM (SELECT arrayJoin(JSONExtract({pin_json:String}, 'Array(Tuple(String, Int64))')) AS pin)
+                              )`
+
+// projectMixBoundLinkCTE is the project -> owned repository / owning team link
+// table phase 0 captured, bound as data: a phase never re-derives ownership, so
+// one answer never mixes two ownership states.
+const projectMixBoundLinkCTE = `project_link AS (
+	SELECT link.1 AS project_provider, link.2 AS project_id, link.3 AS link_kind, link.4 AS link_key, link.5 AS link_teams
+	FROM (SELECT arrayJoin(JSONExtract({link_json:String}, 'Array(Tuple(String, String, String, String, Array(String)))')) AS link)
+)`
 
 type projectMixScope struct {
 	unitIDs    []string
-	snapshotMs int64
+	versionsMs []int64 // versionsMs[i] is the computed_at, in ms, of unitIDs[i]'s selected version
 }
 
 func (s projectMixScope) bindings() []readers.Binding {
-	// The ids travel as ONE JSON string, not an Array(String) parameter: the
-	// server parses an array parameter literal element by element and, on 40,000
-	// ids, runs past the client's 10s timeout; a string parameter is constant
-	// work. JSON also keeps any id that contains a separator intact.
-	encoded, err := json.Marshal(s.unitIDs)
+	// The pairs travel as ONE JSON string, not an Array parameter: the server
+	// parses an array parameter literal element by element and, on 40,000 ids,
+	// runs past the client's 10s timeout; a string parameter is constant work.
+	// JSON also keeps any id that contains a separator intact.
+	pins := make([][]any, 0, len(s.unitIDs))
+	for i, id := range s.unitIDs {
+		pins = append(pins, []any{id, s.versionsMs[i]})
+	}
+	encoded, err := json.Marshal(pins)
 	if err != nil {
 		encoded = []byte("[]")
 	}
-	return []readers.Binding{
-		{Name: "unit_json", Value: string(encoded)},
-		{Name: "snapshot_ms", Value: s.snapshotMs},
-	}
+	return []readers.Binding{{Name: "pin_json", Value: string(encoded)}}
 }
 
 // projectMixBetweenPhasesKey carries a test hook run after phase 0 and before
@@ -81,7 +98,7 @@ func projectMixBetweenPhases(ctx context.Context) {
 }
 
 func projectMixScopeStatement(timeBound factTimeBound) string {
-	return `SELECT groupArray(work_unit_id) AS unit_ids, toUnixTimestamp64Milli(max(latest_at)) AS snapshot_ms FROM (
+	return `SELECT groupArray(work_unit_id) AS unit_ids, groupArray(toUnixTimestamp64Milli(latest_at)) AS version_ms FROM (
     SELECT work_unit_id, max(computed_at) AS latest_at,
         argMax(from_ts, computed_at) AS from_ts,
         argMax(to_ts, computed_at) AS to_ts
@@ -99,8 +116,11 @@ func readProjectMixScope(ctx context.Context, client contextpacket.ClickHouseQue
 		extra = append(extra, readers.Binding{Name: b.Name, Value: b.Value})
 	}
 	err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectMixScope", projectMixScopeStatement(timeBound), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
-		return row.Scan(&scope.unitIDs, &scope.snapshotMs)
+		return row.Scan(&scope.unitIDs, &scope.versionsMs)
 	}, extra...)
+	if err == nil && len(scope.versionsMs) != len(scope.unitIDs) {
+		err = fmt.Errorf("project mix scope arrays disagree: %d ids, %d versions", len(scope.unitIDs), len(scope.versionsMs))
+	}
 	return scope, err
 }
 
@@ -132,12 +152,53 @@ project_link AS (
 )`
 }
 
+// projectMixLinkStatement returns ONE row of parallel arrays: the roll-up's
+// project_link rows (project, link kind, link key, link teams) as ownership
+// stands now. Phase 0 reads it once; the later phases are handed the result.
+func projectMixLinkStatement(timeBound factTimeBound) string {
+	return `SELECT * FROM (
+WITH ` + projectLinkCTEs(ownershipValidityPredicate(timeBound)) + `
+SELECT groupArray(project_provider), groupArray(project_id), groupArray(link_kind), groupArray(link_key), groupArray(link_teams)
+FROM project_link
+)`
+}
+
+func readProjectMixLinks(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound) (string, error) {
+	var provider, project, kind, key []string
+	var teams [][]string
+	extra := make([]readers.Binding, 0, 2)
+	for _, b := range timeBound.bindings() {
+		extra = append(extra, readers.Binding{Name: b.Name, Value: b.Value})
+	}
+	if err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectMixLinks", projectMixLinkStatement(timeBound), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		return row.Scan(&provider, &project, &kind, &key, &teams)
+	}, extra...); err != nil {
+		return "", err
+	}
+	if len(project) != len(provider) || len(kind) != len(provider) || len(key) != len(provider) || len(teams) != len(provider) {
+		return "", fmt.Errorf("project mix link arrays disagree: %d/%d/%d/%d/%d", len(provider), len(project), len(kind), len(key), len(teams))
+	}
+	links := make([][]any, 0, len(provider))
+	for i := range provider {
+		t := teams[i]
+		if t == nil {
+			t = []string{}
+		}
+		links = append(links, []any{provider[i], project[i], kind[i], key[i], t})
+	}
+	encoded, err := json.Marshal(links)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
 // projectRollupRepoThemesStatement is the roll-up's counted mix: the units with
 // a repo_id, joined to the project's owned repositories. It reads the theme map
 // and neither structural_evidence_json nor the subcategory map.
-func projectRollupRepoThemesStatement(timeBound factTimeBound) string {
+func projectRollupRepoThemesStatement() string {
 	return withRowProbeLimit(`SELECT * FROM (
-WITH ` + projectLinkCTEs(ownershipValidityPredicate(timeBound)) + `
+WITH ` + projectMixBoundLinkCTE + `
 SELECT
 	concat(l.project_provider, ':', l.project_id) AS project_key,
 	sumIf(u.theme_feature_delivery * u.effort_value, l.link_kind = 'repo') AS feature_delivery,
@@ -178,9 +239,9 @@ ORDER BY project_key`)
 // is the same population and the same join as projectRollupRepoThemesStatement
 // and reads the subcategory map instead of the theme map, so no statement reads
 // both maps.
-func projectRollupRepoBugfixStatement(timeBound factTimeBound) string {
+func projectRollupRepoBugfixStatement() string {
 	return withRowProbeLimit(`SELECT * FROM (
-WITH ` + projectLinkCTEs(ownershipValidityPredicate(timeBound)) + `
+WITH ` + projectMixBoundLinkCTE + `
 SELECT
 	concat(l.project_provider, ':', l.project_id) AS project_key,
 	sumIf(u.bugfix_share * u.effort_value, l.link_kind = 'repo') AS bugfix_weighted
@@ -209,9 +270,9 @@ ORDER BY project_key`)
 // repo_id that the owning teams' evidence vote reaches
 // (work_units_without_repo_link). It does not read the theme or subcategory
 // maps: that arm never carried a theme value.
-func projectRollupEvidenceArmStatement(timeBound factTimeBound) string {
+func projectRollupEvidenceArmStatement() string {
 	return withRowProbeLimit(`SELECT * FROM (
-WITH ` + projectLinkCTEs(ownershipValidityPredicate(timeBound)) + `,
+WITH ` + projectMixBoundLinkCTE + `,
 repo_lookup AS (
 	SELECT toString(id) AS repo_uuid,
 		argMax(repo, last_synced) AS repo,
@@ -294,13 +355,14 @@ func readProjectRollupMixRows(ctx context.Context, client contextpacket.ClickHou
 	if len(scope.unitIDs) == 0 {
 		return nil, nil
 	}
-	projectMixBetweenPhases(ctx)
-	extra := append([]readers.Binding{}, scope.bindings()...)
-	for _, b := range timeBound.bindings() {
-		extra = append(extra, readers.Binding{Name: b.Name, Value: b.Value})
+	linkJSON, err := readProjectMixLinks(ctx, client, orgID, ids, timeBound)
+	if err != nil {
+		return nil, err
 	}
+	projectMixBetweenPhases(ctx)
+	extra := append(scope.bindings(), readers.Binding{Name: "link_json", Value: linkJSON})
 	var rows []projectRollupMixRow
-	if err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectThemeMix", projectRollupRepoThemesStatement(timeBound), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+	if err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectThemeMix", projectRollupRepoThemesStatement(), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		var r projectRollupMixRow
 		if scanErr := row.Scan(&r.ProjectKey, &r.FeatureDelivery, &r.Operational, &r.Maintenance, &r.Quality, &r.Risk, &r.WorkUnits, &r.Repos, &r.Teams); scanErr != nil {
 			return scanErr
@@ -311,7 +373,7 @@ func readProjectRollupMixRows(ctx context.Context, client contextpacket.ClickHou
 		return nil, err
 	}
 	bugfix := map[string]float64{}
-	if err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectThemeMixBugfix", projectRollupRepoBugfixStatement(timeBound), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+	if err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectThemeMixBugfix", projectRollupRepoBugfixStatement(), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		var key string
 		var weighted float64
 		if scanErr := row.Scan(&key, &weighted); scanErr != nil {
@@ -323,7 +385,7 @@ func readProjectRollupMixRows(ctx context.Context, client contextpacket.ClickHou
 		return nil, err
 	}
 	excluded := map[string]uint64{}
-	if err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectThemeMixEvidenceArm", projectRollupEvidenceArmStatement(timeBound), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+	if err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectThemeMixEvidenceArm", projectRollupEvidenceArmStatement(), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		var key string
 		var n uint64
 		if scanErr := row.Scan(&key, &n); scanErr != nil {

@@ -39,11 +39,11 @@ func TestProjectMixPhasesReadOneSnapshotAgainstRealClickHouse(t *testing.T) {
 		land func(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID string, snapshot time.Time)
 	}{
 		{"a version one millisecond newer (same second) than a unit the scope saw", func(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID string, snapshot time.Time) {
-			insertVersionAtMilli(t, ctx, direct, orgID, "wu-1", repoUUID("r1a"), `{"issues":[],"prs":[]}`, snapshot.Add(time.Millisecond))
+			insertVersionAtMilli(t, ctx, direct, orgID, "wu-1", repoUUID("r1a"), `{"issues":[],"prs":[]}`, 1_000_000, snapshot.Add(time.Millisecond))
 			insertNativeVersion(t, ctx, direct, orgID, "nu-1", snapshot.Add(time.Millisecond))
 		}},
 		{"a unit the scope did not see, dated before the snapshot", func(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID string, snapshot time.Time) {
-			insertVersionAtMilli(t, ctx, direct, orgID, "wu-late", repoUUID("r1a"), `{"issues":[],"prs":[]}`, snapshot.Add(-time.Hour))
+			insertVersionAtMilli(t, ctx, direct, orgID, "wu-late", repoUUID("r1a"), `{"issues":[],"prs":[]}`, 1_000_000, snapshot.Add(-time.Hour))
 			insertNativeVersion(t, ctx, direct, orgID, "nu-late", snapshot.Add(-time.Hour))
 			// In the current membership run, so a read AFTER this write does see
 			// both units (the control); only the phases' unit set keeps them out.
@@ -173,20 +173,21 @@ func nativeRowsOf(rows []readers.ProjectThemeMixRow) []nativeRow {
 // the column's own precision (whole milliseconds, fromUnixTimestamp64Milli): a
 // time.Time through the driver's positional `?` is rendered in whole seconds
 // and would land the version a fraction of a second early. effort 1e6 and
-// feature_delivery 1.0 make a version that reached a phase move the mix.
-func insertVersionAtMilli(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID, id, repoID, evidence string, computedAt time.Time) {
+// feature_delivery 1.0 make a version that reached a phase move the mix (effort
+// is a parameter so a pinned unit can start small).
+func insertVersionAtMilli(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID, id, repoID, evidence string, effort float64, computedAt time.Time) {
 	t.Helper()
 	from := computedAt.Add(-72 * time.Hour).Truncate(time.Second)
 	if err := direct.Exec(ctx, `INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id)
-SELECT ?, ?, ?, toUUIDOrNull(?), 1000000.0, map('feature_delivery', 1.0), map(), ?, fromUnixTimestamp64Milli(?, 'UTC'), ?`,
-		id, from, from, repoID, evidence, computedAt.UnixMilli(), orgID); err != nil {
+SELECT ?, ?, ?, toUUIDOrNull(?), ?, map('feature_delivery', 1.0), map(), ?, fromUnixTimestamp64Milli(?, 'UTC'), ?`,
+		id, from, from, repoID, effort, evidence, computedAt.UnixMilli(), orgID); err != nil {
 		t.Fatalf("insert version of %s: %v", id, err)
 	}
 }
 
 func insertNativeVersion(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID, id string, computedAt time.Time) {
 	t.Helper()
-	insertVersionAtMilli(t, ctx, direct, orgID, id, "", `{"issues":["linear:A-1"],"prs":[]}`, computedAt)
+	insertVersionAtMilli(t, ctx, direct, orgID, id, "", `{"issues":["linear:A-1"],"prs":[]}`, 1_000_000, computedAt)
 }
 
 // newestVersion is the largest computed_at in the table: the snapshot the
@@ -198,4 +199,120 @@ func newestVersion(t *testing.T, ctx context.Context, direct clickhousedriver.Co
 		t.Fatalf("read newest computed_at: %v", err)
 	}
 	return newest
+}
+
+func insertMembership(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID, id string, at time.Time) {
+	t.Helper()
+	if err := direct.Exec(ctx, `INSERT INTO work_unit_membership (org_id, node_type, node_id, work_unit_id, category_kind, category, computed_at, run_id) VALUES (?,?,?,?,?,?,?,?)`,
+		orgID, "issue", "ISS-"+id, id, "theme", "feature_delivery", at.Add(-24*time.Hour), "run-2"); err != nil {
+		t.Fatalf("insert membership %s: %v", id, err)
+	}
+}
+
+// A version dated AFTER a selected unit's own version but BEFORE the newest
+// version phase 0 saw must not replace the selected one. A bound of "at or
+// before the newest computed_at" lets it in: the pin is the exact (unit,
+// version) pair. Both mixes; the control reads after the write and must move.
+func TestProjectMixPhasesReadTheSelectedVersionNotABackdatedOneAgainstRealClickHouse(t *testing.T) {
+	t.Parallel()
+	window := devhealthfacts.ProjectMixWindow{}
+	t.Run("roll-up", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		query, direct := newScopedCHAOS7257Client(t, nil)
+		createCHAOS7257Tables(t, ctx, direct)
+		const orgID = "org-7271-backdated-rollup"
+		at := seedCHAOS7257Parity(t, ctx, direct, orgID)
+		insertVersionAtMilli(t, ctx, direct, orgID, "wu-pin", repoUUID("r1a"), `{"issues":[],"prs":[]}`, 7, at.Add(-time.Hour))
+		insertMembership(t, ctx, direct, orgID, "wu-pin", at)
+		ids := []string{"linear:proj-1", "linear:proj-2", "linear:proj-3"}
+		baseline := runRollupPhased(t, ctx, query, orgID, ids, window)
+		hooked, err := devhealthfacts.RunProjectRollupMix(devhealthfacts.WithProjectMixBetweenPhases(ctx, func() {
+			insertVersionAtMilli(t, ctx, direct, orgID, "wu-pin", repoUUID("r1a"), `{"issues":[],"prs":[]}`, 1_000_000, at.Add(-30*time.Minute))
+		}), query, orgID, ids, window)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := rollupRowsDiffer(baseline, rollupRowsOf(hooked)); err != nil {
+			t.Fatalf("a backdated version reached a later phase: %v", err)
+		}
+		if err := rollupRowsDiffer(baseline, runRollupPhased(t, ctx, query, orgID, ids, window)); err == nil {
+			t.Fatal("control: the same write read AFTER it left the answer unchanged, so the case above proves nothing")
+		}
+	})
+	t.Run("native", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		query, direct := newScopedCHAOS7257Client(t, nil)
+		createCHAOS7257Tables(t, ctx, direct)
+		const orgID = "org-7271-backdated-native"
+		at := seedCHAOS7257Native(t, ctx, direct, orgID)
+		insertVersionAtMilli(t, ctx, direct, orgID, "nu-pin", "", `{"issues":["linear:A-1"],"prs":[]}`, 7, at.Add(-time.Hour))
+		insertMembership(t, ctx, direct, orgID, "nu-pin", at)
+		ids := []string{"linear:n-p1", "linear:n-p2", "linear:n-p3"}
+		baseline := runNativePhased(t, ctx, query, orgID, ids, window, 201)
+		hooked, err := devhealthfacts.RunProjectNativeMix(devhealthfacts.WithProjectMixBetweenPhases(ctx, func() {
+			insertNativeVersion(t, ctx, direct, orgID, "nu-pin", at.Add(-30*time.Minute))
+		}), query, orgID, ids, window, 201)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := nativeRowsDiffer(baseline, nativeRowsOf(hooked)); err != nil {
+			t.Fatalf("a backdated version reached a later phase: %v", err)
+		}
+		if err := nativeRowsDiffer(baseline, runNativePhased(t, ctx, query, orgID, ids, window, 201)); err == nil {
+			t.Fatal("control: the same write read AFTER it left the answer unchanged, so the case above proves nothing")
+		}
+	})
+}
+
+// An ownership change between phases must not reach the roll-up: its phases are
+// handed the project -> repository / team links phase 0 read, so one answer
+// never mixes two ownership states.
+func TestProjectRollupPhasesReadOneOwnershipStateAgainstRealClickHouse(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	query, direct := newScopedCHAOS7257Client(t, nil)
+	createCHAOS7257Tables(t, ctx, direct)
+	const orgID = "org-7271-ownership"
+	at := seedCHAOS7257Parity(t, ctx, direct, orgID)
+	window := devhealthfacts.ProjectMixWindow{}
+	ids := []string{"linear:proj-1", "linear:proj-2", "linear:proj-3"}
+	baseline := runRollupPhased(t, ctx, query, orgID, ids, window)
+	hooked, err := devhealthfacts.RunProjectRollupMix(devhealthfacts.WithProjectMixBetweenPhases(ctx, func() {
+		if err := direct.Exec(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+			orgID, "linear", "team-2", "proj-1", nil, "native", at.Add(-100*24*time.Hour), nil, at); err != nil {
+			t.Fatalf("insert ownership: %v", err)
+		}
+	}), query, orgID, ids, window)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rollupRowsDiffer(baseline, rollupRowsOf(hooked)); err != nil {
+		t.Fatalf("an ownership change between the phases reached a later phase: %v", err)
+	}
+	if err := rollupRowsDiffer(baseline, runRollupPhased(t, ctx, query, orgID, ids, window)); err == nil {
+		t.Fatal("control: the same ownership row read AFTER it left the answer unchanged, so the case above proves nothing")
+	}
+}
+
+// The native read keeps the old statement's ORDER BY project_key LIMIT n: with
+// two projects reached and a limit of one, the first by key is returned.
+func TestProjectNativePhasedReadHonoursTheRowLimitAgainstRealClickHouse(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	query, direct := newScopedCHAOS7257Client(t, nil)
+	createCHAOS7257Tables(t, ctx, direct)
+	const orgID = "org-7271-limit"
+	seedCHAOS7257Native(t, ctx, direct, orgID)
+	ids := []string{"linear:n-p1", "linear:n-p2", "linear:n-p3"}
+	window := devhealthfacts.ProjectMixWindow{}
+	oracle := runNativeStatement(t, ctx, query, "OracleProjectNative", devhealthfacts.OracleProjectNativeStatement(window, 1), orgID, ids, window)
+	got := runNativePhased(t, ctx, query, orgID, ids, window, 1)
+	if len(oracle) != 1 || len(got) != 1 {
+		t.Fatalf("limit 1: oracle %d rows, phased %d rows, want 1 each", len(oracle), len(got))
+	}
+	if err := nativeRowsDiffer(oracle, got); err != nil {
+		t.Fatal(err)
+	}
 }

@@ -88,9 +88,9 @@ func TestPhasedProjectMixStatementsReadOneWideColumnGroupEach(t *testing.T) {
 			wide      string // the one wide column the phase reads; "" = none
 		}{
 			"scope":            {projectMixScopeStatement(bound), ""},
-			"roll-up themes":   {projectRollupRepoThemesStatement(bound), "theme_distribution_json"},
-			"roll-up bugfix":   {projectRollupRepoBugfixStatement(bound), "subcategory_distribution_json"},
-			"roll-up evidence": {projectRollupEvidenceArmStatement(bound), "structural_evidence_json"},
+			"roll-up themes":   {projectRollupRepoThemesStatement(), "theme_distribution_json"},
+			"roll-up bugfix":   {projectRollupRepoBugfixStatement(), "subcategory_distribution_json"},
+			"roll-up evidence": {projectRollupEvidenceArmStatement(), "structural_evidence_json"},
 			"native placement": {projectNativePlacementStatement(), "structural_evidence_json"},
 			"native themes":    {projectNativeThemeValuesStatement(), "theme_distribution_json"},
 			"native bugfix":    {projectNativeBugfixValuesStatement(), "subcategory_distribution_json"},
@@ -104,8 +104,11 @@ func TestPhasedProjectMixStatementsReadOneWideColumnGroupEach(t *testing.T) {
 					t.Errorf("%s / %s: reads %s = %v, want %v (one wide column group per phase)", name, boundName, column, named, column == c.wide)
 				}
 			}
-			if name != "scope" && (!strings.Contains(c.statement, "computed_at <= fromUnixTimestamp64Milli({snapshot_ms:Int64}") || !strings.Contains(c.statement, "work_unit_id IN (SELECT arrayJoin(JSONExtract({unit_json:String}")) {
-				t.Errorf("%s / %s: phase is not pinned to the scope's snapshot and unit set", name, boundName)
+			if name != "scope" && !strings.Contains(c.statement, "(work_unit_id, toUnixTimestamp64Milli(computed_at)) IN (") {
+				t.Errorf("%s / %s: phase is not pinned to the exact (unit, version) pairs of the scope", name, boundName)
+			}
+			if strings.HasPrefix(name, "roll-up") && (strings.Contains(c.statement, "team_project_ownership") || !strings.Contains(c.statement, "{link_json:String}")) {
+				t.Errorf("%s / %s: phase re-derives ownership instead of reading the link table the scope captured", name, boundName)
 			}
 		}
 	}
