@@ -219,7 +219,24 @@ func (l *SubjectLookup) scanHandle(ctx context.Context, principal storage.Princi
 	// census counts is in the caller's own grant. Unrestricted and universal
 	// callers keep the one organization-wide census.
 	anchors := []contextfabric.SubjectRef{{}}
-	if ClassifyPrincipal(principal) == ClassRestricted {
+	if plan.anchor != nil {
+		// CHAOS-7158: one census, bound to the anchor. The anchor takes a
+		// subject-gate decision like any candidate; a refused, unreadable or
+		// missing anchor answers exactly like an anchor with no match (empty,
+		// no count, no reason). A restricted caller needs one census, not one
+		// per granted repository; its candidates are still gated below.
+		proof, decision := l.gate.Authorize(ctx, principal, []contextfabric.SubjectRef{*plan.anchor})
+		if decision.Decision == DecisionUnavailable {
+			return nil, false, fmt.Errorf("subject gate unavailable: %w", gateError(decision))
+		}
+		if proof.Len() == 0 {
+			return nil, false, nil
+		}
+		if err := proof.consume(ctx, principal, l.clock()); err != nil {
+			return nil, false, fmt.Errorf("%w: %w", ErrUngatedRead, err)
+		}
+		anchors = []contextfabric.SubjectRef{*plan.anchor}
+	} else if ClassifyPrincipal(principal) == ClassRestricted {
 		// Decided from the kind, before the grant listing and before any
 		// census: the refusal cannot depend on how many repositories the
 		// grant holds (r1 #701: an empty grant skipped the census and
@@ -243,6 +260,9 @@ func (l *SubjectLookup) scanHandle(ctx context.Context, principal storage.Princi
 	truncated := false
 	for _, anchor := range anchors {
 		outcome, err := l.census(ctx, principal.OrgID, plan.handle.Kind, plan.handle.Value, true, anchor.Kind, anchor.CanonicalID, anchor.CanonicalID != "")
+		if plan.anchor != nil && errors.Is(err, graphrank.ErrCensusAnchorUnsupported) {
+			return nil, false, fmt.Errorf("%w: a %s handle cannot be anchored on a %s", ErrFindInvalidRequest, plan.handle.Kind, plan.anchor.Kind)
+		}
 		if anchor.CanonicalID != "" && errors.Is(err, graphrank.ErrCensusAnchorUnsupported) {
 			// The census cannot scope this handle kind to a repository (a
 			// work item: Linear work items carry no repository). A

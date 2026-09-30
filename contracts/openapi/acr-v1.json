@@ -1965,6 +1965,16 @@
             "type": "string",
             "maxLength": 1024,
             "description": "handle mode: one pull request number, work item key or CI run id (CHAOS-7126). Matches the caller may not read are neither returned nor counted."
+          },
+          "anchor": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "handle mode only: a repository or project that narrows a pull request number or CI run id to one subject (a work item key: project only). kind and id come together. The anchor is checked for your credential like any subject; one you may not read, or that does not exist, gives the same empty answer as an anchor with no match.",
+            "required": ["kind", "id"],
+            "properties": {
+              "kind": {"type": "string", "description": "repository or project."},
+              "id": {"type": "string", "minLength": 1, "maxLength": 1024}
+            }
           }
         }
       },

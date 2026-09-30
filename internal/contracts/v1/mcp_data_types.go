@@ -64,6 +64,16 @@ type MCPFindSubjectsRequest struct {
 	// Handle is handle mode (CHAOS-7126): one pull request number, work
 	// item key or CI run id, for example "PR 532".
 	Handle string `json:"handle,omitempty"`
+	// Anchor is an optional handle-mode anchor (CHAOS-7158): a repository or
+	// project canonical id that narrows a PR number or CI run id (a work item
+	// key: project only) to one subject. Kind and id come together.
+	Anchor *MCPFindSubjectsAnchor `json:"anchor,omitempty"`
+}
+
+// MCPFindSubjectsAnchor is the optional handle-mode anchor (CHAOS-7158).
+type MCPFindSubjectsAnchor struct {
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
 }
 
 // MCPRunOperationRequest is the input of run_operation. Variables is an open
@@ -127,6 +137,17 @@ func (r MCPFindSubjectsRequest) Validate() error {
 	}
 	if utf8.RuneCountInString(r.OwnedBy) > MCPFindSubjectsQueryMax || utf8.RuneCountInString(r.Handle) > MCPFindSubjectsQueryMax {
 		return fmt.Errorf("find_subjects owned_by and handle are too long")
+	}
+	if r.Anchor != nil {
+		if strings.TrimSpace(r.Handle) == "" {
+			return fmt.Errorf("find_subjects anchor is only for handle mode")
+		}
+		if r.Anchor.Kind != string(ContextFabricSubjectRepository) && r.Anchor.Kind != string(ContextFabricSubjectProject) {
+			return fmt.Errorf("find_subjects anchor kind must be repository or project")
+		}
+		if id := strings.TrimSpace(r.Anchor.ID); id == "" || utf8.RuneCountInString(r.Anchor.ID) > MCPFindSubjectsQueryMax {
+			return fmt.Errorf("find_subjects anchor id must be 1 to %d characters", MCPFindSubjectsQueryMax)
+		}
 	}
 	modes := 0
 	for _, value := range []string{r.Query, r.OwnedBy, r.Handle} {

@@ -55,3 +55,27 @@ func TestFindSubjectsLimitMaxIs200AndRefusesAbove(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-7158: the handle-mode anchor is repository or project only, needs both
+// fields, and only rides on a handle.
+func TestChaos7158_FindSubjectsAnchorValidation(t *testing.T) {
+	anchor := func(kind, id string) *MCPFindSubjectsAnchor { return &MCPFindSubjectsAnchor{Kind: kind, ID: id} }
+	for _, tc := range []struct {
+		name    string
+		request MCPFindSubjectsRequest
+		ok      bool
+	}{
+		{"repository", MCPFindSubjectsRequest{Handle: "PR 532", Anchor: anchor("repository", "repository:a")}, true},
+		{"project", MCPFindSubjectsRequest{Handle: "CHAOS-1", Anchor: anchor("project", "project:q")}, true},
+		{"no anchor", MCPFindSubjectsRequest{Handle: "PR 532"}, true},
+		{"team kind", MCPFindSubjectsRequest{Handle: "PR 532", Anchor: anchor("team", "team:t")}, false},
+		{"empty id", MCPFindSubjectsRequest{Handle: "PR 532", Anchor: anchor("repository", " ")}, false},
+		{"empty kind", MCPFindSubjectsRequest{Handle: "PR 532", Anchor: anchor("", "repository:a")}, false},
+		{"without handle", MCPFindSubjectsRequest{Query: "x", Anchor: anchor("repository", "repository:a")}, false},
+		{"list mode", MCPFindSubjectsRequest{Kind: "repository", Anchor: anchor("repository", "repository:a")}, false},
+	} {
+		if err := tc.request.Validate(); (err == nil) != tc.ok {
+			t.Errorf("%s: err = %v, want ok=%v", tc.name, err, tc.ok)
+		}
+	}
+}

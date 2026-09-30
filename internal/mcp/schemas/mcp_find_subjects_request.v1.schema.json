@@ -100,6 +100,16 @@
       "description": "handle mode: exactly one pull request number (\"PR 532\"), work item key of any prefix (a letter, up to 31 letters or digits, a dash, digits; your organization's own work items decide whether it exists) or CI run id (\"run 18234567\"). A pull request number is per repository, so several subjects can match: the answer is then ambiguous with the ones you may read. Matches you may not read are not returned and not counted.",
       "minLength": 1,
       "maxLength": 256
+    },
+    "anchor": {
+      "type": "object",
+      "description": "handle mode only: a repository or project that narrows a pull request number or CI run id to one subject (a work item key: project only). kind and id come together. The anchor is checked for your credential like any subject; one you may not read, or that does not exist, gives the same empty answer as an anchor with no match.",
+      "additionalProperties": false,
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": {"type": "string", "description": "The anchor subject kind: repository or project."},
+        "id": {"type": "string", "minLength": 1, "maxLength": 256, "description": "The canonical_id of the repository or project (copy it from another answer; never build one)."}
+      }
     }
   }
 }

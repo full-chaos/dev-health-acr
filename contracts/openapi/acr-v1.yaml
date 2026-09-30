@@ -1430,6 +1430,21 @@ components:
     DataSubjectsRequest:
       additionalProperties: false
       properties:
+        anchor:
+          additionalProperties: false
+          description: "handle mode only: a repository or project that narrows a pull request number or CI run id to one subject (a work item key: project only). kind and id come together. The anchor is checked for your credential like any subject; one you may not read, or that does not exist, gives the same empty answer as an anchor with no match."
+          properties:
+            id:
+              maxLength: 1024
+              minLength: 1
+              type: "string"
+            kind:
+              description: "repository or project."
+              type: "string"
+          required:
+            - "kind"
+            - "id"
+          type: "object"
         cursor:
           description: "Opaque keyset position from page.next_cursor. It carries no permission."
           type: "string"
