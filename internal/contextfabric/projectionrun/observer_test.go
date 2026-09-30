@@ -266,7 +266,8 @@ func TestChaos3826_DrainLogLevelKeysOnAppliedNotBatches(t *testing.T) {
 }
 
 // The starvation shape: a source that ends its tick on budget_exceeded with
-// Applied <= 1 still has a backlog. It must be visible at Info; the healthy
+// Applied <= 1 may still have work (proven by a peeker, or unknown when the
+// source has no peeker). It must be visible at Info; the healthy
 // shape (exhausted, Applied <= 1) stays Debug.
 func TestChaos7179_DrainBudgetExceededLogsAtInfoAndHealthyStaysDebug(t *testing.T) {
 	var buffer bytes.Buffer
