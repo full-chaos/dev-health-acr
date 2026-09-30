@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/otelexport"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 	"github.com/full-chaos/dev-health-acr/internal/version"
@@ -37,6 +38,15 @@ const (
 	// server that mints credentials for this resource (the acr-api public
 	// origin).
 	AuthorizationServerEnvironment = "ACR_MCP_AUTHORIZATION_SERVER"
+	// TrustedProxyCIDRsEnvironment lists the proxies (comma-separated CIDRs)
+	// whose X-Forwarded-For the edge failure gate believes. Empty: the gate
+	// keys on the peer address.
+	TrustedProxyCIDRsEnvironment = "ACR_MCP_TRUSTED_PROXY_CIDRS"
+	// AuthLimitsSetting names the gate limits in a startup refusal: they are
+	// read by internal/config (ACR_AUTH_FAILURES_PER_WINDOW,
+	// ACR_AUTH_LIMIT_WINDOW, ACR_LIMIT_WINDOW, ACR_AUTH_MAX_TRACKED_KEYS,
+	// ACR_AUTH_MAX_IN_FLIGHT, ACR_REQUESTS_PER_MINUTE), the loader acr-api uses.
+	AuthLimitsSetting = "ACR_AUTH_LIMITS"
 )
 
 // Defaults of the serve contract.
@@ -76,6 +86,24 @@ type ServeOptions struct {
 	// set by the command, never read from the environment here. nil serves
 	// without export and writes no export line.
 	Telemetry *otelexport.Exporter
+	// TrustedProxyCIDRs is a comma-separated CIDR list (see
+	// TrustedProxyCIDRsEnvironment). The Auth* settings size the per-address
+	// failed-authentication gate; zero takes the acr-api default.
+	TrustedProxyCIDRs string
+	AuthFailures      int
+	AuthTrackedKeys   int
+	AuthMaxInFlight   int
+	AuthWindow        time.Duration
+}
+
+func (o ServeOptions) edgeGate() EdgeGateOptions {
+	gate := EdgeGateOptions{FailureLimit: o.AuthFailures, Window: o.AuthWindow, MaxTrackedKeys: o.AuthTrackedKeys, MaxInFlight: o.AuthMaxInFlight}
+	for _, part := range strings.Split(o.TrustedProxyCIDRs, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			gate.TrustedProxyCIDRs = append(gate.TrustedProxyCIDRs, part)
+		}
+	}
+	return gate
 }
 
 // ErrServeOptionInvalid reports a serve setting that is out of range or
@@ -134,6 +162,7 @@ func ServeOptionsFromEnvironment(lookup func(string) (string, bool)) (ServeOptio
 		set(HTTPBasePathEnvironment, func(v string) error { opts.BasePath = v; return nil }),
 		set(ResourceURLEnvironment, func(v string) error { opts.ResourceURL = v; return nil }),
 		set(AuthorizationServerEnvironment, func(v string) error { opts.AuthorizationServer = v; return nil }),
+		set(TrustedProxyCIDRsEnvironment, func(v string) error { opts.TrustedProxyCIDRs = v; return nil }),
 		set(HTTPMaxBodyBytesEnvironment, func(v string) error {
 			n, err := strconv.ParseInt(v, 10, 64)
 			opts.MaxBodyBytes = n
@@ -151,6 +180,12 @@ func ServeOptionsFromEnvironment(lookup func(string) (string, bool)) (ServeOptio
 	if err := firstServeOptionError(steps); err != nil {
 		return ServeOptions{}, err
 	}
+	// The gate limits come from the loader acr-api uses (one parse site).
+	shared, err := config.AuthGateLimitsFromEnvironment(lookup)
+	if err != nil {
+		return ServeOptions{}, &ErrServeOptionInvalid{Setting: AuthLimitsSetting}
+	}
+	opts.AuthFailures, opts.AuthWindow, opts.AuthTrackedKeys, opts.AuthMaxInFlight = shared.FailureLimit, shared.Window, shared.MaxTrackedKeys, shared.MaxInFlight
 	return opts, nil
 }
 
@@ -194,6 +229,9 @@ func (o ServeOptions) Validate() error {
 	}
 	if o.MaxBodyBytes <= 0 || o.MaxBodyBytes > maxHTTPMaxBodyBytes {
 		return &ErrServeOptionInvalid{Setting: HTTPMaxBodyBytesEnvironment}
+	}
+	if _, err := newEdgeGate(o.edgeGate()); err != nil {
+		return &ErrServeOptionInvalid{Setting: TrustedProxyCIDRsEnvironment}
 	}
 	return validateOAuthDiscovery(o)
 }
@@ -321,6 +359,7 @@ func serveHandlerOptions(cfg *ProcessConfig, identity version.Info, opts ServeOp
 		ResolveTimeout:      cfg.Config.Timeout,
 		ResourceURL:         opts.ResourceURL,
 		AuthorizationServer: opts.AuthorizationServer,
+		EdgeGate:            opts.edgeGate(),
 	}
 }
 

@@ -75,6 +75,13 @@ func (c *Client) callWithHeaders(ctx context.Context, method, subPath string, re
 		}
 	}
 	req.Header.Set("Authorization", "Bearer "+credential.Token)
+	// The hosted API keys its per-address failure gate on the client address
+	// it is told about by a trusted proxy. A multi-caller transport (acr-mcp)
+	// states the resolved caller address here; no caller-supplied header is
+	// ever relayed.
+	if c.forwardedClient != "" {
+		req.Header.Set("X-Forwarded-For", c.forwardedClient)
+	}
 	req.Header.Set("Accept", "application/json")
 	if c.cfg.ClientVersion != "" {
 		req.Header.Set("X-ACR-Client-Version", c.cfg.ClientVersion)

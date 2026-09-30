@@ -141,6 +141,13 @@ type CallerCredential struct {
 	// leaves it nil: the hosted API is then the authenticating authority,
 	// and no second credential store or token format exists here.
 	Principal *storage.Principal
+
+	// ClientAddress is the resolved address of the end caller (an IP
+	// literal). When set, the caller's hosted API client states it as
+	// X-Forwarded-For on EVERY call made for this request, the capabilities
+	// probe and every tool call alike, so the hosted per-address gate keys on
+	// the caller. A value that is not an IP literal is ignored.
+	ClientAddress string
 }
 
 // CallerContext is the request-scoped half of a running sidecar: one
@@ -229,6 +236,9 @@ func ResolveCaller(ctx context.Context, cfg *ProcessConfig, credential CallerCre
 	}
 	if err != nil {
 		return nil, newProbeError(err)
+	}
+	if forwarded, forwardErr := client.WithForwardedClient(credential.ClientAddress); forwardErr == nil {
+		client = forwarded
 	}
 	capabilities, err := client.Capabilities(ctx)
 	if err != nil {

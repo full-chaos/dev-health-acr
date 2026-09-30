@@ -31,6 +31,9 @@ data:
   ACR_API_ALLOW_INSECURE_INTERNAL_HTTP: "true"
   {{- end }}
   ACR_LOG_LEVEL: {{ $m.logLevel | quote }}
+  {{- if $m.trustedProxyCidrs }}
+  ACR_MCP_TRUSTED_PROXY_CIDRS: {{ join "," $m.trustedProxyCidrs | quote }}
+  {{- end }}
   {{- with include "acr.otelEnv" (dict "root" $ "name" $.Values.otel.serviceNames.mcp) }}
   {{- . | nindent 2 }}
   {{- end }}

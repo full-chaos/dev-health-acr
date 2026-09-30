@@ -32,6 +32,21 @@ const (
 	MCPHTTPAuthUpstreamUnavailable     = "upstream_unavailable"
 )
 
+// Gate decisions of the per-address edge failure gate.
+const (
+	MCPHTTPGateAdmitted      = "admitted"
+	MCPHTTPGateFailureBudget = "failure_budget"
+	MCPHTTPGateCapacity      = "capacity"
+)
+
+// MCPHTTPGateDecisionVocabulary lists every gate decision, admitted first.
+// failure_budget: the address reached its failed-authentication limit;
+// capacity: too many undecided attempts from the address, or the tracked
+// address table is full.
+func MCPHTTPGateDecisionVocabulary() []string {
+	return []string{MCPHTTPGateAdmitted, MCPHTTPGateFailureBudget, MCPHTTPGateCapacity}
+}
+
 // MCPHTTPAuthOutcomeVocabulary lists every auth outcome, admitted first.
 func MCPHTTPAuthOutcomeVocabulary() []string {
 	return []string{
@@ -169,6 +184,8 @@ var MCPHTTPRequest = Event{
 		{Key: "tool", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: MCPHTTPToolVocabulary()},
 		{Key: "principal_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: MCPPrincipalClassVocabulary()},
 		{Key: "principal_ref", Type: FieldString, Presence: PresenceConditional, Applicability: "written when principal_class=bearer; an opaque per-process keyed digest, never the credential or its store hash"},
+		{Key: "client_ip", Type: FieldString, Presence: PresenceRequired},
+		{Key: "gate_decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: MCPHTTPGateDecisionVocabulary()},
 		{Key: "auth_outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: MCPHTTPAuthOutcomeVocabulary()},
 		{Key: "result_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: MCPHTTPResultClassVocabulary()},
 		{Key: "status", Type: FieldInt, Presence: PresenceRequired},

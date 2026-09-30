@@ -2,6 +2,7 @@ package graphrank
 
 import (
 	"regexp"
+	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -206,9 +207,46 @@ type handleGrammarEntry struct {
 //     CHAOS-3896"/"run 532" all fail to bind here -- a ticket key or PR
 //     number can never collide with this pattern, restoring the
 //     disjointness the other two entries already have by construction).
+//
+// workItemKeyNumber is the shared tail of every work-item key ("-<digits>" on
+// a word boundary). The registered CHAOS pattern and the any-prefix key scan
+// (HasWorkItemKeyToken) are both built from it, so the key SHAPE is defined
+// in one place (CHAOS-7200).
+const workItemKeyNumber = `-\d+\b`
+
+// workItemKeyPrefixShape bounds an any-prefix key's prefix (closed, bounded:
+// a letter then up to 31 letters/digits). It is SHAPE only; the org's own
+// census decides whether such a key exists (CHAOS-7159).
+const workItemKeyPrefixShape = `[A-Za-z][A-Za-z0-9]{0,31}`
+
+var workItemKeyAnyPrefix = regexp.MustCompile(`\b` + workItemKeyPrefixShape + workItemKeyNumber)
+var workItemKeyExact = regexp.MustCompile(`^` + workItemKeyPrefixShape + workItemKeyNumber + `$`)
+
+// BindWorkItemKey binds text ONLY when the whole text is one shape-valid
+// work-item key of ANY prefix (the bound value is upper-cased) (CHAOS-7159). It serves find_subjects handle
+// mode alone: existence is left to the org's census over
+// work_items.work_item_id, so no per-org prefix list is kept. It is NOT part
+// of handleGrammarRegistry: free-text binding (BindHandles), structure offers
+// and redemption (ValidateHandleGrammar) keep the registered CHAOS grammar.
+func BindWorkItemKey(text string) (BoundHandle, bool) {
+	if !workItemKeyExact.MatchString(text) {
+		return BoundHandle{}, false
+	}
+	// Tracker project keys are canonically upper case (Jira and Linear match
+	// them case-insensitively) while the census compares the stored key
+	// exactly, so the bound value is upper-cased (codex r1 P2).
+	return BoundHandle{Kind: contextfabric.SubjectWorkItem, Grammar: "work_item_key_any_prefix", Value: strings.ToUpper(text), SpanStart: 0, SpanEnd: len(text)}, true
+}
+
+// HasWorkItemKeyToken reports whether text holds a key-shaped token of ANY
+// prefix, using the same boundaries as the registered work_item_ticket_key
+// pattern. It answers on SHAPE alone: whether the prefix is registered is
+// existence-derived and must not be observable to a restricted caller.
+func HasWorkItemKeyToken(text string) bool { return workItemKeyAnyPrefix.MatchString(text) }
+
 var handleGrammarRegistry = []handleGrammarEntry{
 	{name: "pull_request_number", kind: contextfabric.SubjectPullRequest, pattern: regexp.MustCompile(`(?i)\b(?:PR|pull\s+request)\s*#?\s*(\d+)\b`), valueGroup: 1, valuePattern: regexp.MustCompile(`^\d+$`), sourceColumn: "git_pull_requests.number"},
-	{name: "work_item_ticket_key", kind: contextfabric.SubjectWorkItem, pattern: regexp.MustCompile(`\bCHAOS-\d+\b`), valueGroup: 0, valuePattern: regexp.MustCompile(`^CHAOS-\d+$`), sourceColumn: "work_items.work_item_id"},
+	{name: "work_item_ticket_key", kind: contextfabric.SubjectWorkItem, pattern: regexp.MustCompile(`\bCHAOS` + workItemKeyNumber), valueGroup: 0, valuePattern: regexp.MustCompile(`^CHAOS-\d+$`), sourceColumn: "work_items.work_item_id"},
 	{name: "ci_run_id", kind: contractsv1.ContextFabricSubjectCIRun, pattern: regexp.MustCompile(`(?i)\b(?:CI\s+pipeline|CI\s+run|pipeline\s+run|pipeline|run)\b\s*#?\s*(\d{4,})\b`), valueGroup: 1, valuePattern: regexp.MustCompile(`^\d{4,}$`), sourceColumn: "ci_pipeline_runs.run_id"},
 }
 

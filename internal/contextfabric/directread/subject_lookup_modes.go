@@ -100,6 +100,10 @@ func planOwnedBy(plan findPlan, owner string) (findPlan, error) {
 	return plan, nil
 }
 
+// errFindHandleBoundCount marks the "handle must name exactly one ..." shape
+// failure. Internal: Find maps it per caller class (CHAOS-7200).
+var errFindHandleBoundCount = errors.New("find_subjects: handle bound count")
+
 func planHandle(plan findPlan, handle string) (findPlan, error) {
 	plan.mode = FindModeHandle
 	if len(plan.kinds) > 0 {
@@ -109,8 +113,18 @@ func planHandle(plan findPlan, handle string) (findPlan, error) {
 		return plan, fmt.Errorf("%w: handle is too long", ErrFindInvalidRequest)
 	}
 	bound := graphrank.BindHandles(handle)
+	if len(bound) == 0 {
+		// CHAOS-7159: one whole-text key of any prefix; the org census
+		// decides existence (registry and free-text grammar unchanged).
+		if key, ok := graphrank.BindWorkItemKey(handle); ok {
+			bound = []graphrank.BoundHandle{key}
+		}
+	}
+	// Key SHAPE, any prefix (one grammar: graphrank). Find refuses a
+	// repository-restricted caller on it before any binding or upstream call.
+	plan.hasKeyToken = graphrank.HasWorkItemKeyToken(handle)
 	if len(bound) != 1 {
-		return plan, fmt.Errorf("%w: handle must name exactly one pull request number, work item key or CI run id", ErrFindInvalidRequest)
+		return plan, fmt.Errorf("%w: %w: handle must name exactly one pull request number, work item key or CI run id", ErrFindInvalidRequest, errFindHandleBoundCount)
 	}
 	plan.handle = bound[0]
 	plan.kinds = []string{string(bound[0].Kind)}

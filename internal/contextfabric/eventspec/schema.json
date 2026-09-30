@@ -8110,6 +8110,21 @@
         "applicability": "written when principal_class=bearer; an opaque per-process keyed digest, never the credential or its store hash"
       },
       {
+        "key": "client_ip",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "gate_decision",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "admitted",
+          "failure_budget",
+          "capacity"
+        ]
+      },
+      {
         "key": "auth_outcome",
         "type": "string",
         "presence": "required",
