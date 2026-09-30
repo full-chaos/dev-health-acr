@@ -105,6 +105,11 @@ func TestAcrDbInit_RuntimeRoleRunsTheOAuthPurge(t *testing.T) {
 	// Then: it ran (no permission error) and deleted exactly the eligible rows
 	require.NoError(t, err, "the runtime role must hold every privilege the OAuth purge statements need")
 	require.Equal(t, storagepostgres.OAuthPurgeResult{Requests: 1, Clients: 2}, result)
+	// The remaining-eligible probe the purge tick logs (CHAOS-7249) needs no
+	// privilege beyond the SELECTs the purge already holds.
+	remaining, err := runtimeStore.CountPurgeRemaining(ctx, purgeAt, 30*24*time.Hour, 30*24*time.Hour, 500)
+	require.NoError(t, err, "the runtime role must be able to run the remaining-eligible probe")
+	require.Equal(t, storagepostgres.OAuthPurgeRemaining{}, remaining)
 	exists := func(table, column, value string) bool {
 		var count int
 		require.NoError(t, h.migrationDB.QueryRowContext(ctx, fmt.Sprintf(`SELECT count(*) FROM acr.%s WHERE %s = $1`, table, column), value).Scan(&count))
