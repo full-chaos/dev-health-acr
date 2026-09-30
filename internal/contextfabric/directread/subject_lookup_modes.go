@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -100,6 +101,14 @@ func planOwnedBy(plan findPlan, owner string) (findPlan, error) {
 	return plan, nil
 }
 
+// errFindKeyPrefixUnbound marks a shape-valid work-item key whose prefix the
+// handle grammar does not know. Internal: Find maps it per caller class.
+var errFindKeyPrefixUnbound = errors.New("find_subjects: key prefix not bound")
+
+// workItemKeyShape is the SHAPE of a work-item key (letters/digits prefix,
+// dash, digits), independent of which prefixes exist.
+var workItemKeyShape = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]*-\d+$`)
+
 func planHandle(plan findPlan, handle string) (findPlan, error) {
 	plan.mode = FindModeHandle
 	if len(plan.kinds) > 0 {
@@ -109,6 +118,14 @@ func planHandle(plan findPlan, handle string) (findPlan, error) {
 		return plan, fmt.Errorf("%w: handle is too long", ErrFindInvalidRequest)
 	}
 	bound := graphrank.BindHandles(handle)
+	if len(bound) == 0 && workItemKeyShape.MatchString(handle) {
+		// A well-formed <PREFIX>-<n> key the grammar does not bind (an
+		// unknown key prefix). Whether the prefix exists is
+		// existence-derived, so Find refuses a repository-restricted
+		// caller with scope_required before this validation shows
+		// (CHAOS-7200); every other caller keeps invalid_find_request.
+		return plan, fmt.Errorf("%w: %w", ErrFindInvalidRequest, errFindKeyPrefixUnbound)
+	}
 	if len(bound) != 1 {
 		return plan, fmt.Errorf("%w: handle must name exactly one pull request number, work item key or CI run id", ErrFindInvalidRequest)
 	}

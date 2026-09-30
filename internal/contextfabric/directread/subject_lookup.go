@@ -337,6 +337,12 @@ func (l *SubjectLookup) Find(ctx context.Context, principal storage.Principal, r
 		l.recorder.RecordFindSubjects(ctx, principal, telemetry)
 	}()
 	if planErr != nil {
+		if errors.Is(planErr, errFindKeyPrefixUnbound) && ClassifyPrincipal(principal) == ClassRestricted {
+			// CHAOS-7200: for a restricted caller the authorization refusal
+			// precedes any existence-derived validation (prefix existence),
+			// so an unknown prefix answers exactly like a known one.
+			planErr = fmt.Errorf("%w: %w: %s handles cannot be looked up inside a repository grant", ErrFindInvalidRequest, ErrFindScopeRequired, "work_item")
+		}
 		return FindResponse{}, planErr
 	}
 	if l == nil || l.graph == nil || l.gate == nil {
