@@ -799,6 +799,22 @@ for token in 'ACR_MCP_TRANSPORT: "http"' 'ACR_MCP_HTTP_BASE_PATH: "/mcp"' 'ACR_A
   grep -qF "$token" <<<"$mcp_cm" || fail_gate "acr-mcp: ConfigMap is missing $token"
 done
 if grep -qE 'TOKEN|PASSWORD|SECRET|DSN' <<<"$mcp_cm"; then fail_gate "acr-mcp: ConfigMap carries a credential-shaped key"; fi
+# CHAOS-7196: the edge failure gate resolves the same limit inputs as acr-api.
+# The ConfigMap carries ACR_REQUESTS_PER_MINUTE and mirrors ONLY literal
+# ACR_AUTH_* / ACR_LIMIT_WINDOW entries of deployment.extraEnv: no proxy trust
+# list (acr-mcp has its own), no unrelated setting, no secret reference.
+grep -qF 'ACR_REQUESTS_PER_MINUTE: "' <<<"$mcp_cm" || fail_gate "acr-mcp: ConfigMap is missing ACR_REQUESTS_PER_MINUTE"
+mirror_render="$(render --set acrMcp.enabled=true --set-string "acrMcp.image.reference=${mcp_image}" \
+  --set-json 'deployment.extraEnv=[{"name":"ACR_TRUSTED_PROXY_CIDRS","value":"10.42.0.0/24"},{"name":"ACR_POSTGRES_MAX_OPEN_CONNS","value":"40"},{"name":"ACR_AUTH_FAILURES_PER_WINDOW","value":"7"},{"name":"ACR_LIMIT_WINDOW","value":"2m"},{"name":"ACR_AUTH_FROM_SECRET","valueFrom":{"secretKeyRef":{"name":"s","key":"k"}}}]')"
+mirror_cm="$(extract_doc ConfigMap '  name: [^\n]*-mcp-config\n' <<<"$mirror_render")"
+[[ -n "$mirror_cm" ]] || fail_gate "acr-mcp: extraEnv mirror render is missing the acr-mcp ConfigMap"
+for token in 'ACR_AUTH_FAILURES_PER_WINDOW: "7"' 'ACR_LIMIT_WINDOW: "2m"'; do
+  grep -qF "$token" <<<"$mirror_cm" || fail_gate "acr-mcp: ConfigMap does not mirror $token from deployment.extraEnv"
+done
+for absent in ACR_TRUSTED_PROXY_CIDRS ACR_POSTGRES_MAX_OPEN_CONNS ACR_AUTH_FROM_SECRET; do
+  if grep -qF "$absent" <<<"$mirror_cm"; then fail_gate "acr-mcp: ConfigMap mirrored $absent from deployment.extraEnv (only literal ACR_AUTH_* / ACR_LIMIT_WINDOW may be mirrored)"; fi
+done
+pass "acr-mcp: ConfigMap mirrors only the failure-gate limit inputs of deployment.extraEnv"
 mcp_svc="$(extract_mcp_doc Service)"
 grep -qE '^\s+port: 8081\s*$' <<<"$mcp_svc" || fail_gate "acr-mcp: Service must expose 8081"
 mcp_route="$(extract_mcp_doc HTTPRoute)"
