@@ -39,6 +39,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -105,6 +106,177 @@ type QueryError struct {
 	// StatusCode is the HTTP status for QueryErrorNotFound and
 	// QueryErrorHTTPStatus, else 0.
 	StatusCode int
+	// ReadBudget is set, on the MCP listener client only, when a non-2xx
+	// answer carries the listener's typed read-budget refusal
+	// (errors[].extensions.code MCP_READ_BUDGET_EXCEEDED, CHAOS-7085/7091):
+	// the closed reason (ReadBudgetReasonVocabulary), never upstream text.
+	ReadBudget ReadBudgetReason
+	// ListenerRefusal is set, on the MCP listener client only, when a
+	// non-2xx answer carries the listener's typed refusal
+	// (errors[].extensions.code MCP_REFUSED, ops PR #3425): the closed class
+	// of its reason (ListenerRefusalClassVocabulary), never upstream text.
+	ListenerRefusal ListenerRefusalClass
+	// ListenerReason is the listener's refusal reason when it is one of
+	// the closed MCPListenerRefusalReasons, else "unknown" (logging only).
+	ListenerReason string
+}
+
+// mcpListenerReasons is the MCP listener's closed refusal vocabulary (ops
+// PR #3425 at c33b9f280, extensions.reason under code MCP_REFUSED), each
+// with acr's class. carrier: the identity carrier or the org it names was
+// refused (the 401 set, elevated_claim, and the two org-argument reasons,
+// since acr sets every org value itself). precheck: acr validates exactly
+// this before the wire, so the listener refusing it means acr's own check
+// failed (logged as acr_precheck_gap). The rest are listener_refused.
+var mcpListenerReasons = map[string]struct {
+	class    ListenerRefusalClass
+	precheck bool
+}{
+	// 401
+	"authorization_header": {ListenerRefusalCarrier, false},
+	"no_carrier":           {ListenerRefusalCarrier, false},
+	"missing_header":       {ListenerRefusalCarrier, false},
+	"duplicate_header":     {ListenerRefusalCarrier, false},
+	"not_a_boolean":        {ListenerRefusalCarrier, false},
+	"invalid_org":          {ListenerRefusalCarrier, false},
+	// 403
+	"elevated_claim":         {ListenerRefusalCarrier, false},
+	"invalid_org_argument":   {ListenerRefusalCarrier, true},
+	"org_mismatch":           {ListenerRefusalCarrier, true},
+	"root_field_not_allowed": {ListenerRefusalQuery, true},
+	// 405, 413, 415
+	"method_not_allowed": {ListenerRefusalQuery, false},
+	"not_a_query":        {ListenerRefusalQuery, true},
+	"body_too_large":     {ListenerRefusalQuery, true},
+	"content_type":       {ListenerRefusalQuery, false},
+	// 400
+	"bad_body":                {ListenerRefusalQuery, false},
+	"unknown_body_field":      {ListenerRefusalQuery, false},
+	"invalid_document":        {ListenerRefusalQuery, true},
+	"operation_count":         {ListenerRefusalQuery, true},
+	"operation_name_mismatch": {ListenerRefusalQuery, false},
+	"introspection":           {ListenerRefusalQuery, true},
+	"depth_limit":             {ListenerRefusalQuery, true},
+	"alias_limit":             {ListenerRefusalQuery, true},
+	"invalid_variables":       {ListenerRefusalQuery, true},
+	"complexity_limit":        {ListenerRefusalQuery, true},
+}
+
+// MCPListenerRefusalReasons lists the listener's MCP_REFUSED reasons acr
+// knows (404 root_field_not_enabled and off_mcp_listener are read from the
+// status as operation_unavailable; the 422 ceilings are the read budget).
+func MCPListenerRefusalReasons() []string {
+	out := make([]string, 0, len(mcpListenerReasons))
+	for r := range mcpListenerReasons {
+		out = append(out, r)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ListenerRefusalIsPrecheckGap reports whether a known listener reason is
+// one acr checks itself before the wire.
+func ListenerRefusalIsPrecheckGap(reason string) bool {
+	return mcpListenerReasons[reason].precheck
+}
+
+// MCPRefusedCode is the extensions.code of every other MCP listener refusal.
+const MCPRefusedCode = "MCP_REFUSED"
+
+// ListenerRefusalClass is the closed class of an MCP listener refusal.
+type ListenerRefusalClass string
+
+const (
+	// ListenerRefusalCarrier: the identity carrier was refused
+	// (invalid_org, no_carrier, authorization_header, elevated_claim). acr
+	// never sends such a request, so it is an acr defect or a tampered hop.
+	ListenerRefusalCarrier ListenerRefusalClass = "carrier_refused"
+	// ListenerRefusalQuery: the listener refused the query itself (a cap,
+	// the allowlist, the document, the org arguments). acr refuses all of
+	// these before the wire, so it is a drift between acr and the listener.
+	ListenerRefusalQuery ListenerRefusalClass = "listener_refused"
+)
+
+// ListenerRefusalClassVocabulary is the closed set of listener refusal
+// classes.
+func ListenerRefusalClassVocabulary() [2]ListenerRefusalClass {
+	return [2]ListenerRefusalClass{ListenerRefusalCarrier, ListenerRefusalQuery}
+}
+
+// listenerRefusalOf classifies an MCP_REFUSED answer by its reason with the
+// closed map; an unknown reason is the query class, reported as "unknown".
+// A body without MCP_REFUSED yields "", "".
+func listenerRefusalOf(body []byte) (ListenerRefusalClass, string) {
+	var answer struct {
+		Errors []struct {
+			Extensions struct {
+				Code   string `json:"code"`
+				Reason string `json:"reason"`
+			} `json:"extensions"`
+		} `json:"errors"`
+	}
+	if json.Unmarshal(body, &answer) != nil {
+		return "", ""
+	}
+	for _, e := range answer.Errors {
+		if e.Extensions.Code != MCPRefusedCode {
+			continue
+		}
+		if known, ok := mcpListenerReasons[e.Extensions.Reason]; ok {
+			return known.class, e.Extensions.Reason
+		}
+		return ListenerRefusalQuery, "unknown"
+	}
+	return "", ""
+}
+
+// MCPReadBudgetExceededCode is the extensions.code GWC's MCP listener sets
+// when a query breaches its ClickHouse bytes-read or time ceiling.
+const MCPReadBudgetExceededCode = "MCP_READ_BUDGET_EXCEEDED"
+
+// ReadBudgetReason is the closed sub-value of a read-budget refusal.
+type ReadBudgetReason string
+
+const (
+	ReadBudgetBytes   ReadBudgetReason = "bytes_ceiling"
+	ReadBudgetRows    ReadBudgetReason = "rows_ceiling"
+	ReadBudgetTime    ReadBudgetReason = "time_ceiling"
+	ReadBudgetUnknown ReadBudgetReason = "unknown"
+)
+
+// ReadBudgetReasonVocabulary is the closed set of read-budget reasons.
+func ReadBudgetReasonVocabulary() [4]ReadBudgetReason {
+	return [4]ReadBudgetReason{ReadBudgetBytes, ReadBudgetRows, ReadBudgetTime, ReadBudgetUnknown}
+}
+
+// ReadBudgetOf reads a GraphQL error list for the listener's read-budget
+// code and returns its closed reason (extensions.reason bytes_ceiling or
+// time_ceiling; anything else is unknown), or "" when the code is absent.
+// Nothing else of the body is kept.
+func ReadBudgetOf(body []byte) ReadBudgetReason {
+	var answer struct {
+		Errors []struct {
+			Extensions struct {
+				Code   string `json:"code"`
+				Reason string `json:"reason"`
+			} `json:"extensions"`
+		} `json:"errors"`
+	}
+	if json.Unmarshal(body, &answer) != nil {
+		return ""
+	}
+	for _, e := range answer.Errors {
+		if e.Extensions.Code != MCPReadBudgetExceededCode {
+			continue
+		}
+		switch ReadBudgetReason(e.Extensions.Reason) {
+		case ReadBudgetBytes, ReadBudgetRows, ReadBudgetTime:
+			return ReadBudgetReason(e.Extensions.Reason)
+		default:
+			return ReadBudgetUnknown
+		}
+	}
+	return ""
 }
 
 func (e *QueryError) Error() string { return "query service call failed: " + string(e.Class) }
@@ -140,9 +312,13 @@ type QueryClient interface {
 
 // HTTPQueryClient is the production QueryClient.
 type HTTPQueryClient struct {
-	endpoint string
-	timeout  time.Duration
-	client   *http.Client
+	endpoint  string
+	userAgent string
+	// readsTypedRefusals: the MCP listener client reads a bounded error
+	// body to recognise the read-budget refusal.
+	readsTypedRefusals bool
+	timeout            time.Duration
+	client             *http.Client
 }
 
 // ErrQueryClientConfig is returned by NewHTTPQueryClient for an unusable
@@ -154,6 +330,49 @@ var ErrQueryClientConfig = errors.New("query service client: invalid configurati
 // transport keeps connections alive and bounds every phase; it uses no
 // proxy from the environment and follows no redirect.
 func NewHTTPQueryClient(baseURL string, timeout time.Duration) (*HTTPQueryClient, error) {
+	return newHTTPQueryClient(baseURL, timeout, queryEndpointPath, queryClientUserAgent)
+}
+
+// Endpoint paths of the two internal listeners.
+const (
+	// queryEndpointPath is the registered-document route (run_operation).
+	queryEndpointPath = "/query"
+	// GraphQLListenerPath is the route of GWC's MCP listener (CHAOS-7085:
+	// its own port, 8092 in the prod Service, POST /query only).
+	GraphQLListenerPath    = "/query"
+	graphqlClientUserAgent = "acr-api-graphql-query"
+)
+
+// NewHTTPGraphQLClient builds the graphql_query client for GWC's MCP
+// listener at baseURL (config.DataGraphQLURL). Every rule of
+// NewHTTPQueryClient holds: the four identity headers built from the call
+// alone, no Authorization header, superuser and impersonation "false", the
+// 16 KiB body limit, no proxy, no redirect.
+func NewHTTPGraphQLClient(baseURL string, timeout time.Duration) (*HTTPQueryClient, error) {
+	c, err := newHTTPQueryClient(baseURL, timeout, GraphQLListenerPath, graphqlClientUserAgent)
+	if err != nil {
+		return nil, err
+	}
+	c.readsTypedRefusals = true
+	return c, nil
+}
+
+// NewHTTPGraphQLClientWithHTTP is NewHTTPGraphQLClient over a
+// caller-supplied *http.Client. The redirect rule is applied to a copy.
+func NewHTTPGraphQLClientWithHTTP(baseURL string, timeout time.Duration, httpClient *http.Client) (*HTTPQueryClient, error) {
+	c, err := NewHTTPGraphQLClient(baseURL, timeout)
+	if err != nil {
+		return nil, err
+	}
+	if httpClient != nil {
+		copied := *httpClient
+		copied.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		c.client = &copied
+	}
+	return c, nil
+}
+
+func newHTTPQueryClient(baseURL string, timeout time.Duration, path, userAgent string) (*HTTPQueryClient, error) {
 	u, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return nil, ErrQueryClientConfig
@@ -161,7 +380,7 @@ func NewHTTPQueryClient(baseURL string, timeout time.Duration) (*HTTPQueryClient
 	if timeout <= 0 {
 		return nil, ErrQueryClientConfig
 	}
-	u.Path = strings.TrimSuffix(u.Path, "/") + "/query"
+	u.Path = strings.TrimSuffix(u.Path, "/") + path
 	transport := &http.Transport{
 		Proxy:                 nil,
 		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
@@ -177,8 +396,9 @@ func NewHTTPQueryClient(baseURL string, timeout time.Duration) (*HTTPQueryClient
 		DisableCompression: true,
 	}
 	return &HTTPQueryClient{
-		endpoint: u.String(),
-		timeout:  timeout,
+		endpoint:  u.String(),
+		userAgent: userAgent,
+		timeout:   timeout,
 		client: &http.Client{
 			Transport: transport,
 			CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -248,7 +468,7 @@ func (c *HTTPQueryClient) Execute(ctx context.Context, call QueryCall) (QueryRes
 	req.Header = http.Header{}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", queryClientUserAgent)
+	req.Header.Set("User-Agent", c.userAgent)
 	req.Header.Set(HeaderInternalOrgID, call.OrgID)
 	req.Header.Set(HeaderInternalRole, InternalRoleLeast)
 	req.Header.Set(HeaderInternalSuperuser, internalSuperuserValue)
@@ -266,8 +486,14 @@ func (c *HTTPQueryClient) Execute(ctx context.Context, call QueryCall) (QueryRes
 		drain(resp.Body)
 		return QueryResult{}, &QueryError{Class: QueryErrorNotFound, StatusCode: resp.StatusCode}
 	case resp.StatusCode < 200 || resp.StatusCode > 299:
+		qerr := &QueryError{Class: QueryErrorHTTPStatus, StatusCode: resp.StatusCode}
+		if c.readsTypedRefusals {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+			qerr.ReadBudget = ReadBudgetOf(body)
+			qerr.ListenerRefusal, qerr.ListenerReason = listenerRefusalOf(body)
+		}
 		drain(resp.Body)
-		return QueryResult{}, &QueryError{Class: QueryErrorHTTPStatus, StatusCode: resp.StatusCode}
+		return QueryResult{}, qerr
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, MaxQueryResponseBytes+1))
 	if err != nil {

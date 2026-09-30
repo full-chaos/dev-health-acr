@@ -31,6 +31,7 @@ var ByID = map[string]Event{
 	"contextfabric.direct_relationships_read":      DirectRelationshipsRead,
 	"contextfabric.evidence_expansion":             EvidenceExpansion,
 	"contextfabric.frame_validation":               FrameValidation,
+	"contextfabric.graphql_query":                  GraphQLQuery,
 	"contextfabric.operation_read":                 OperationRead,
 	"contextfabric.remembered_window_axis":         RememberedWindowAxis,
 	"contextfabric.requirement_outcome_transition": RequirementOutcomeTransition,
@@ -1648,6 +1649,126 @@ func (f FrameValidationFields) SlogArgs() []any {
 		"requirement_computed_input_kind_landscape", f.RequirementComputedInputKindLandscape,
 		"requirement_computed_step_server_executed", f.RequirementComputedStepServerExecuted,
 		"requirement_computed_step_declared_only", f.RequirementComputedStepDeclaredOnly,
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// GraphQLQueryFields is contextfabric.graphql_query's generated typed construction interface
+// (CHAOS-5516): one Go field per Field GraphQLQuery.Fields declares in spec.go.
+type GraphQLQueryFields struct {
+	OrgID         string
+	CallerClass   string
+	ScopeClass    string
+	Decision      string
+	RootFields    []string
+	Operations    []string
+	RootCount     int
+	AliasCount    int
+	Depth         int
+	FieldCount    int
+	Complexity    int
+	ForcedByGrant bool
+	RowsChecked   int
+	RowsForeign   int
+	PathsRemoved  int
+	Completeness  string
+	Bytes         int
+	LatencyMs     int
+	SchemaDigest  string
+	QueryDigest   string
+	Result        string
+	RefusalCode   string
+	ErrorClass    string
+	ReadBudget    string
+	RequestID     string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every GraphQLQueryFields uniformly, set ONLY by NewGraphQLQueryFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewGraphQLQueryFields is the generated constructor for GraphQLQueryFields -- every
+// field GraphQLQuery.Fields declares is a required parameter.
+func NewGraphQLQueryFields(orgID string, callerClass string, scopeClass string, decision string, rootFields []string, operations []string, rootCount int, aliasCount int, depth int, fieldCount int, complexity int, forcedByGrant bool, rowsChecked int, rowsForeign int, pathsRemoved int, completeness string, bytes int, latencyMs int, schemaDigest string, queryDigest string, result string, refusalCode string, errorClass string, readBudget string, requestID string) GraphQLQueryFields {
+	valid := true
+	if rootFields == nil {
+		valid = false
+	}
+	if operations == nil {
+		valid = false
+	}
+	return GraphQLQueryFields{
+		OrgID:         orgID,
+		CallerClass:   callerClass,
+		ScopeClass:    scopeClass,
+		Decision:      decision,
+		RootFields:    rootFields,
+		Operations:    operations,
+		RootCount:     rootCount,
+		AliasCount:    aliasCount,
+		Depth:         depth,
+		FieldCount:    fieldCount,
+		Complexity:    complexity,
+		ForcedByGrant: forcedByGrant,
+		RowsChecked:   rowsChecked,
+		RowsForeign:   rowsForeign,
+		PathsRemoved:  pathsRemoved,
+		Completeness:  completeness,
+		Bytes:         bytes,
+		LatencyMs:     latencyMs,
+		SchemaDigest:  schemaDigest,
+		QueryDigest:   queryDigest,
+		Result:        result,
+		RefusalCode:   refusalCode,
+		ErrorClass:    errorClass,
+		ReadBudget:    readBudget,
+		RequestID:     requestID,
+		constructed:   valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewGraphQLQueryFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f GraphQLQueryFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns GraphQLQuery's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f GraphQLQueryFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"caller_class", contextfabric.SanitizeLogAttr(f.CallerClass),
+		"scope_class", contextfabric.SanitizeLogAttr(f.ScopeClass),
+		"decision", contextfabric.SanitizeLogAttr(f.Decision),
+		"root_fields", contextfabric.SanitizeLogStrings(f.RootFields),
+		"operations", contextfabric.SanitizeLogStrings(f.Operations),
+		"root_count", f.RootCount,
+		"alias_count", f.AliasCount,
+		"depth", f.Depth,
+		"field_count", f.FieldCount,
+		"complexity", f.Complexity,
+		"forced_by_grant", f.ForcedByGrant,
+		"rows_checked", f.RowsChecked,
+		"rows_foreign", f.RowsForeign,
+		"paths_removed", f.PathsRemoved,
+		"completeness", contextfabric.SanitizeLogAttr(f.Completeness),
+		"bytes", f.Bytes,
+		"latency_ms", f.LatencyMs,
+		"schema_digest", contextfabric.SanitizeLogAttr(f.SchemaDigest),
+		"query_digest", contextfabric.SanitizeLogAttr(f.QueryDigest),
+		"result", contextfabric.SanitizeLogAttr(f.Result),
+		"refusal_code", contextfabric.SanitizeLogAttr(f.RefusalCode),
+		"error_class", contextfabric.SanitizeLogAttr(f.ErrorClass),
+		"read_budget", contextfabric.SanitizeLogAttr(f.ReadBudget),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }

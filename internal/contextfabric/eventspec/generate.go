@@ -186,6 +186,8 @@ func goVarName(e Event) string {
 		return "DirectReadAuthorization"
 	case OperationRead.ID:
 		return "OperationRead"
+	case GraphQLQuery.ID:
+		return "GraphQLQuery"
 	case DirectRead.ID:
 		return "DirectRead"
 	case DirectRelationshipsRead.ID:
