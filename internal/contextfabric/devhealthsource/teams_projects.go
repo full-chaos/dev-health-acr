@@ -222,7 +222,10 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // built from RESOLVED ownership (ownershipresolve strict mode, canonical repos
 // slug) instead of the raw repo_full_name values -- ghost names, globs and
 // wrong-provider names leave the list, case variants and name+id duplicates
-// collapse to one slug. Narrows admission, never widens. An already-projected
+// collapse to one slug. Admission changes in BOTH directions vs v14: narrows
+// (canonical slug / repo_id-wins / ghost, glob and wrong-provider names) and
+// widens where one source stays open after another closes (any-source-open per
+// (team, provider, repository, source), equal to the open edge set). An already-projected
 // team node keeps its old raw list until its entity is re-projected, and its
 // team row / ownership rows carry an updated_at already behind the checkpoint
 // watermark, so only a full rebuild replaces it.
@@ -1211,7 +1214,8 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 // -- verified live against this ClickHouse version there, not re-derived
 // here -- and only keep the repository when THAT latest assertion is open.
 // CHAOS-7130 (supersedes the earlier cross-source collapse): the latest
-// assertion is taken per (team, resolved repository, SOURCE), exactly like the
+// assertion is taken per (team, provider, resolved repository, SOURCE) --
+// ownershipGroupKey, the ONE grouping the edge also derives -- exactly like the
 // repository->team edge's group key, and the repository is listed when ANY
 // source's latest assertion is open -- so the list EQUALS the set of open
 // edges. Basis: CHAOS-2600 (AGENTS.md) -- manual mappings are fallback only,
@@ -1280,10 +1284,10 @@ var ownedRepositoriesJoinSQL = `LEFT JOIN (
 		SELECT a.team_id AS team_id, a.repo_key AS repo_key, a.ownership_updated_at AS ownership_updated_at,
 			a.latest_is_open AS latest_is_open, rr.repo AS canonical_slug, rr.last_synced AS repo_synced_at
 		FROM (
-			SELECT ro.team_id AS team_id, ro.repo_key AS repo_key, ro.source AS source, max(ro.updated_at) AS ownership_updated_at,
+			SELECT ro.team_id AS team_id, ro.repo_key AS repo_key, ro.source AS source, ro.provider AS provider, max(ro.updated_at) AS ownership_updated_at,
 				argMax(tuple(ro.valid_to), (ro.valid_from, ro.valid_to IS NULL, ifNull(ro.valid_to, toDateTime64(0, 3, 'UTC')))).1 IS NULL AS latest_is_open
 			FROM ` + teamAuthorizationOwnershipSource + ` AS ro
-			GROUP BY ro.team_id, ro.repo_key, ro.source
+			GROUP BY ` + strings.Join(ownershipGroupColumns("ro", nil), ", ") + `
 		) AS a
 		INNER JOIN (SELECT id, repo, last_synced FROM repos FINAL WHERE org_id = {org_id:String}) AS rr
 			ON toString(rr.id) = a.repo_key
@@ -1303,7 +1307,7 @@ var ownedRepositoriesJoinSQL = `LEFT JOIN (
 // validity arm (valid_from <= now64(3)), as before.
 var teamAuthorizationOwnershipSource = ownershipresolve.OwnedRepositoriesSource(" AND valid_from <= now64(3)", ownershipresolve.Options{
 	OwnershipColumns: []string{"source", "valid_from", "valid_to", "updated_at"},
-	Columns:          []string{"o.source AS source", "o.valid_from AS valid_from", "o.valid_to AS valid_to", "o.updated_at AS updated_at"},
+	Columns:          []string{"o.provider AS provider", "o.source AS source", "o.valid_from AS valid_from", "o.valid_to AS valid_to", "o.updated_at AS updated_at"},
 })
 
 // queryTeamsEffectiveUpdatedAtExpr is the SQL expression queryTeams uses as

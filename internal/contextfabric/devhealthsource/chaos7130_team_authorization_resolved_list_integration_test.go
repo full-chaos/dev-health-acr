@@ -9,6 +9,7 @@ import (
 	"context"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,6 +59,28 @@ func subCHAOS7130TeamListUsesResolvedOwnership(t *testing.T, ctx context.Context
 	mustExec(t, ctx, f.direct,
 		`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		f.orgID, "github", "team-conflict", nil, "acme/repo-b", "exact", "manual", uint8(1), uint16(100), int32(0), at.Add(-time.Minute), at.Add(-30*time.Second), at)
+	// One case per grouping dimension (ownershipGroupKey: provider, repository,
+	// team, source). Provider: open github + LATER closed gitlab, same explicit
+	// repo_id (codex #733 r2 seed): the gitlab close must not cancel the github
+	// assertion. Repository: two repos, one closed -> only the open one listed.
+	// Team: the same repository open for team-dimA, closed for team-dimB.
+	closeRow := func(team, provider, name string, repoID any) {
+		mustExec(t, ctx, f.direct,
+			`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			f.orgID, provider, team, repoID, name, "exact", "native", uint8(1), uint16(100), int32(0), at.Add(-time.Minute), at.Add(-30*time.Second), at)
+	}
+	chaos7119Team(t, ctx, f, "team-dimprov", at)
+	chaos7119Own(t, ctx, f, "team-dimprov", "github", "acme/repo-b", chaos7119RepoB, at.Add(-time.Hour))
+	closeRow("team-dimprov", "gitlab", "acme/repo-b", chaos7119RepoB)
+	chaos7119Team(t, ctx, f, "team-dimrepo", at)
+	chaos7119Own(t, ctx, f, "team-dimrepo", "github", "acme/repo-b", nil, at.Add(-time.Hour))
+	chaos7119Own(t, ctx, f, "team-dimrepo", "github", "acme/repo-k", nil, at.Add(-time.Hour))
+	closeRow("team-dimrepo", "github", "acme/repo-k", nil)
+	chaos7119Team(t, ctx, f, "team-dimA", at)
+	chaos7119Team(t, ctx, f, "team-dimB", at)
+	chaos7119Own(t, ctx, f, "team-dimA", "github", "acme/repo-k", nil, at.Add(-time.Hour))
+	chaos7119Own(t, ctx, f, "team-dimB", "github", "acme/repo-k", nil, at.Add(-time.Hour))
+	closeRow("team-dimB", "github", "acme/repo-k", nil)
 	// Orphan repo_id (no repos row): the edge keeps a sentinel edge, the list drops it.
 	chaos7119Team(t, ctx, f, "team-orphan", at)
 	chaos7119Own(t, ctx, f, "team-orphan", "github", "acme/orphan", chaos7119Orphan, at)
@@ -79,6 +102,10 @@ func subCHAOS7130TeamListUsesResolvedOwnership(t *testing.T, ctx context.Context
 		"team-conflict":  {"acme/repo-b"},
 		"team-orphan":    sentinel,
 		"team-future":    sentinel,
+		"team-dimprov":   {"acme/repo-b"},
+		"team-dimrepo":   {"acme/repo-b"},
+		"team-dimA":      {"acme/repo-k"},
+		"team-dimB":      sentinel,
 	} {
 		if _, ok := res.entities[team]; !ok {
 			t.Fatalf("%s: team entity not projected", team)
@@ -130,5 +157,29 @@ func subCHAOS7130LateReposRowReprojectsTheTeam(t *testing.T, ctx context.Context
 	}
 	if got := chaos7130List(second, "team-late"); !reflect.DeepEqual(got, []string{"acme/late"}) {
 		t.Errorf("after the repos row: %v, want [acme/late]", got)
+	}
+}
+
+// The team list and the repository->team edge derive their latest-assertion
+// GROUP BY from ONE list (ownershipGroupKey): a hand-written second list is
+// what let the list omit provider (codex #733 r2).
+func TestCHAOS7130ListAndEdgeShareTheOwnershipGroupKey(t *testing.T) {
+	t.Parallel()
+	key := devhealthsource.OwnershipGroupKeyForTest()
+	if !reflect.DeepEqual(key, []string{"provider", "repo_key", "team_id", "source"}) {
+		t.Fatalf("ownershipGroupKey = %v; a dimension change must be a deliberate, reviewed edit", key)
+	}
+	list := devhealthsource.OwnedRepositoriesJoinSQLForTest()
+	for _, dimension := range key {
+		if !strings.Contains(list, "ro."+dimension) {
+			t.Errorf("team list statement does not group by %q", dimension)
+		}
+	}
+	if !strings.Contains(list, "GROUP BY ro.provider, ro.repo_key, ro.team_id, ro.source") {
+		t.Errorf("team list GROUP BY is not derived from ownershipGroupKey:\n%s", list)
+	}
+	edge := devhealthsource.RepositoryTeamsGroupColumnsForTest()
+	if !reflect.DeepEqual(edge, []string{"o.provider", "o.repo_key", "o.team_id", "o.source_name"}) {
+		t.Errorf("edge group columns = %v, not the shared key (source renamed source_name)", edge)
 	}
 }

@@ -1631,7 +1631,31 @@ var repositoryTeamsRowKey = rowKeySQL(repositoryTeamsGroupColumns...)
 // repositoryTeamsGroupColumns is the GROUP BY of repositoryTeamsStatement and
 // the column list of its row key -- one list, so the two cannot drift
 // (CHAOS-7119 removed null_repo_name from both at once).
-var repositoryTeamsGroupColumns = []string{"o.provider", "o.repo_key", "o.team_id", "o.source_name"}
+var repositoryTeamsGroupColumns = ownershipGroupColumns("o", map[string]string{"source": "source_name"})
+
+// ownershipGroupKey (CHAOS-7130) is the ONE definition of the dimensions the
+// ownership latest-assertion is grouped by: provider, resolved repository,
+// team, source. The repository->team edge (repositoryTeamsGroupColumns) and the
+// team authorization list (ownedRepositoriesJoinSQL) both derive their GROUP BY
+// from it, so the list can never again disagree with the open-edge set on what
+// one assertion stream IS (codex #733 r2: the list omitted provider). A test
+// pins both statements to this list.
+var ownershipGroupKey = []string{"provider", "repo_key", "team_id", "source"}
+
+// ownershipGroupColumns renders ownershipGroupKey over a table alias, with
+// per-dimension column renames (the edge's inner select calls source
+// "source_name").
+func ownershipGroupColumns(alias string, rename map[string]string) []string {
+	columns := make([]string, 0, len(ownershipGroupKey))
+	for _, dimension := range ownershipGroupKey {
+		column := dimension
+		if renamed, ok := rename[dimension]; ok {
+			column = renamed
+		}
+		columns = append(columns, alias+"."+column)
+	}
+	return columns
+}
 
 // repositoryTeamsOwnershipSource is the resolved ownership table the edge
 // reads: the K11 rule from ownershipresolve in its KeepUnresolved mode, with

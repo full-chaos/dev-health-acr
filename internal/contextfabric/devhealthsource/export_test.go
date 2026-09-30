@@ -222,3 +222,10 @@ func RepositoryTeamsGroupColumnsForTest() []string {
 func OverBoundTeamOwnershipSentinelForTest() string {
 	return overBoundTeamOwnershipSentinel
 }
+
+// OwnedRepositoriesJoinSQLForTest exposes the team authorization list's join
+// statement (CHAOS-7130 grouping-key parity test).
+func OwnedRepositoriesJoinSQLForTest() string { return ownedRepositoriesJoinSQL }
+
+// OwnershipGroupKeyForTest exposes the shared grouping dimensions.
+func OwnershipGroupKeyForTest() []string { return append([]string(nil), ownershipGroupKey...) }

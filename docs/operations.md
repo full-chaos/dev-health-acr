@@ -558,8 +558,19 @@ the rebuild the steady state is rebuild-free: a new ownership row, or a
 on the ordinary incremental tick. Not changed by this deploy: a non-NULL
 `repo_id` with no `repos` row still projects to the orphaned-repository
 sentinel (the fact reads drop it; default pending a ruling), and the team
-node's `authorization_repositories` list still carries raw
-`repo_full_name` values (CHAOS-7130).
+node's `authorization_repositories` list still carried raw
+`repo_full_name` values at v13 (CHAOS-7130 changes that at v15, below).
+
+**A rebuild is likewise REQUIRED after deploying CHAOS-7130**
+(`TeamsProjectsSourceVersion` v14 → v15). The team node's
+`authorization_repositories` list is now built from RESOLVED ownership (the
+`ownershipresolve` rule the repository → team edge and the fact reads share,
+canonical `repos.repo` slug), grouped per (team, provider, repository, source)
+and listing a repository when any source's latest assertion is open: ghost,
+glob and wrong-provider names leave the list; a team left with no resolved
+open ownership is denied (no-ownership sentinel). Already-projected team nodes
+keep the old raw list until their entity is re-projected, which only a full
+rebuild forces.
 
 Crash-resumable: a durable marker (`acr.context_fabric_projection_rebuild_markers`)
 commits before the purge and clears only after every checkpoint is
