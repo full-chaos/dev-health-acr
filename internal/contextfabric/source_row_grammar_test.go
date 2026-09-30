@@ -2,6 +2,7 @@ package contextfabric_test
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/evidenceref"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -49,10 +51,18 @@ type producerGrammar struct {
 	sites map[string]int
 	// repoAnchored: the id's first component is the repository UUID.
 	repoAnchored bool
-	// table and keyColumns locate the row: the id must carry every ORDER BY
-	// column of table but org_id (keyExceptions names the ones it carries in
-	// another form, and why).
-	table         string
+	// rowQuery names the statement that reads the row (a packet catalog or
+	// source-row-only statement id); the row's table is DERIVED from its
+	// FROM clause, never written here (a test naming several declared
+	// tables as literals would be a second physical source, which
+	// devhealthschema's TestNoSecondPhysicalSourceOutsideTheDeclaration
+	// forbids). keyByColumns instead derives the table as the ONE declared
+	// table whose key is exactly keyColumns plus the exception columns (a
+	// kind whose read is not built yet). The id must carry every ORDER BY
+	// column of that table but org_id (keyExceptions names the ones it
+	// carries in another form, and why).
+	rowQuery      string
+	keyByColumns  bool
 	keyColumns    []string
 	keyExceptions map[string]string
 	// retired: a pre-CHAOS-7252 grammar of a retired kind.
@@ -163,11 +173,11 @@ func producerGrammars() []producerGrammar {
 		{kind: contractsv1.ContextFabricEvidenceEntityDeployment, shape: "concat/2", repoAnchored: true, sites: sites(facts+"deployments.go|readDeploymentStatus", source+"tables.go|queryDeployments")},
 		{kind: contractsv1.ContextFabricEvidenceEntityDeployment, shape: "sql/1", sites: sites(catalog)},
 		// incident: the id alone, keyed (org_id, id).
-		{kind: contractsv1.ContextFabricEvidenceEntityIncident, shape: "concat/1", table: "operational_incidents", keyColumns: []string{"id"}, sites: sites(facts+"incidents.go|ReadFacts", source+"tables.go|queryIncidents")},
+		{kind: contractsv1.ContextFabricEvidenceEntityIncident, shape: "concat/1", rowQuery: "incidents.v1", keyColumns: []string{"id"}, sites: sites(facts+"incidents.go|ReadFacts", source+"tables.go|queryIncidents")},
 		{kind: contractsv1.ContextFabricEvidenceEntityIncident, shape: "sql/1", sites: sites(catalog)},
 
 		// team, project: ownership kinds (CHAOS-7227).
-		{kind: contractsv1.ContextFabricEvidenceEntityTeam, shape: "concat/1", table: "teams", keyColumns: []string{"id"}, onRecord: ownershipB, sites: sites(
+		{kind: contractsv1.ContextFabricEvidenceEntityTeam, shape: "concat/1", onRecord: ownershipB, sites: sites(
 			"internal/contextfabric/chaos5990_period_delta.go|periodDeltaSubjectEvidenceRef", facts+"deficiencies.go|ReadFacts",
 			facts+"flow.go|readProjectFlow", facts+"flow.go|readTeamFlow", facts+"health.go|ReadFacts", facts+"health.go|readProjectHealth*2",
 			facts+"investment.go|readProjectInvestment", facts+"investment.go|readTeamThemeMix", facts+"landscape.go|readProjectLandscape",
@@ -180,7 +190,7 @@ func producerGrammars() []producerGrammar {
 		// data (a closed provider set), which is CHAOS-7227's to argue.
 		{kind: contractsv1.ContextFabricEvidenceEntityProject, shape: "concat/2", onRecord: ownershipB, sites: sites(
 			"internal/contextfabric/chaos5990_period_delta.go|periodDeltaSubjectEvidenceRef", source+"teams_projects.go|queryProjects")},
-		{kind: contractsv1.ContextFabricEvidenceEntityProject, shape: "concat/1", table: "projects", keyColumns: []string{"provider", "id"}, onRecord: ownershipB, sites: sites(
+		{kind: contractsv1.ContextFabricEvidenceEntityProject, shape: "concat/1", onRecord: ownershipB, sites: sites(
 			facts+"flow.go|readProjectFlow", facts+"health.go|readProjectHealth", facts+"investment.go|mergeProjectInvestmentFact",
 			facts+"investment.go|readProjectInvestment", facts+"landscape.go|readProjectLandscape", facts+"metrics.go|readProjectMetrics",
 			facts+"readiness.go|readProjectReadiness", facts+"workitems.go|readProjectActualCompletion", facts+"workload.go|readProjectWorkload")},
@@ -204,31 +214,31 @@ func producerGrammars() []producerGrammar {
 		// them), and both fail -- the dependency join of three ids, and
 		// edge_id, which is not the edge table's key.
 		{kind: contractsv1.ContextFabricEvidenceEntityWorkItemDependency, shape: "sql/3", retired: true, sites: sites(catalog)},
-		{kind: contractsv1.ContextFabricEvidenceEntityDeploymentIncident, shape: "sql/1", retired: true, table: "work_graph_deployment_incident_edges", keyColumns: []string{"edge_id"}, sites: sites(catalog)},
+		{kind: contractsv1.ContextFabricEvidenceEntityDeploymentIncident, shape: "sql/1", retired: true, rowQuery: "deployment_incident_provenance.v1", keyColumns: []string{"edge_id"}, sites: sites(catalog)},
 
 		// The ".v2" successors: minted by evidenceref.Mint, read by the SQL
 		// evidenceref.SQL renders from the same grammar.
-		{kind: contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, shape: "mint/3", table: "work_item_dependencies",
+		{kind: contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, shape: "mint/3", rowQuery: "work_item_dependencies.v2",
 			keyColumns:    []string{"source_work_item_id", "target_work_item_id", "relation_key"},
 			keyExceptions: map[string]string{"relationship_type": "relation_key: the raw spellings sharing one dependencyrelation.Key are one relation (CHAOS-7177); the read serves the catalog's representative"},
 			sites:         sites(facts+"dependencies.go|dependencyEvidenceRefID", source+"tables.go|queryWorkItemDependencies")},
-		{kind: contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, shape: "sqlmint/3", table: "work_item_dependencies",
+		{kind: contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, shape: "sqlmint/3", rowQuery: "work_item_dependencies.v2",
 			keyColumns:    []string{"source_work_item_id", "target_work_item_id", "relation_key"},
 			keyExceptions: map[string]string{"relationship_type": "relation_key (CHAOS-7177), as above"},
 			sites:         sites(sourceRows)},
-		{kind: contractsv1.ContextFabricEvidenceEntityWorkItemHierarchyV2, shape: "mint/3", repoAnchored: true, table: "work_items",
+		{kind: contractsv1.ContextFabricEvidenceEntityWorkItemHierarchyV2, shape: "mint/3", repoAnchored: true, rowQuery: "work_item_hierarchy.v2",
 			keyColumns: []string{"repo_id", "work_item_id", "parent_id"}, sites: sites(source + "tables.go|queryWorkItemHierarchy")},
-		{kind: contractsv1.ContextFabricEvidenceEntityWorkItemHierarchyV2, shape: "sqlmint/3", repoAnchored: true, table: "work_items",
+		{kind: contractsv1.ContextFabricEvidenceEntityWorkItemHierarchyV2, shape: "sqlmint/3", repoAnchored: true, rowQuery: "work_item_hierarchy.v2",
 			keyColumns: []string{"repo_id", "work_item_id", "parent_id"}, sites: sites(sourceRows)},
-		{kind: contractsv1.ContextFabricEvidenceEntityWorkItemTeamV2, shape: "mint/4", table: "work_item_team_attributions",
+		{kind: contractsv1.ContextFabricEvidenceEntityWorkItemTeamV2, shape: "mint/4", rowQuery: "work_item_teams.v2",
 			keyColumns: []string{"repo_id", "work_item_id", "team_id", "source"}, sites: sites(source + "teams_projects_edges.go|queryWorkItemTeams")},
-		{kind: contractsv1.ContextFabricEvidenceEntityWorkItemTeamV2, shape: "sqlmint/4", table: "work_item_team_attributions",
+		{kind: contractsv1.ContextFabricEvidenceEntityWorkItemTeamV2, shape: "sqlmint/4", rowQuery: "work_item_teams.v2",
 			keyColumns: []string{"repo_id", "work_item_id", "team_id", "source"}, sites: sites(sourceRows)},
-		{kind: contractsv1.ContextFabricEvidenceEntityDeploymentIncidentV2, shape: "mint/4", repoAnchored: true, table: "work_graph_deployment_incident_edges",
+		{kind: contractsv1.ContextFabricEvidenceEntityDeploymentIncidentV2, shape: "mint/4", repoAnchored: true, rowQuery: "deployment_incident_edges.v2",
 			keyColumns: []string{"repo_id", "deployment_id", "incident_id", "source"}, sites: sites(source + "tables.go|queryDeploymentIncidentEdges")},
-		{kind: contractsv1.ContextFabricEvidenceEntityDeploymentIncidentV2, shape: "sqlmint/4", repoAnchored: true, table: "work_graph_deployment_incident_edges",
+		{kind: contractsv1.ContextFabricEvidenceEntityDeploymentIncidentV2, shape: "sqlmint/4", repoAnchored: true, rowQuery: "deployment_incident_edges.v2",
 			keyColumns: []string{"repo_id", "deployment_id", "incident_id", "source"}, sites: sites(sourceRows)},
-		{kind: contractsv1.ContextFabricEvidenceEntityProjectTeamV2, shape: "mint/4", table: "team_project_ownership",
+		{kind: contractsv1.ContextFabricEvidenceEntityProjectTeamV2, shape: "mint/4", keyByColumns: true,
 			keyColumns:    []string{"provider", "project_id", "team_id", "source"},
 			keyExceptions: map[string]string{"valid_from": "the ref names the projector's ownership GROUP: every assertion of (provider, project, team, source) aggregated"},
 			onRecord:      projectTeamB, sites: sites(source + "teams_projects_edges.go|queryProjectTeams")},
@@ -308,15 +318,67 @@ func normalizeKeyColumns(columns []string) []string {
 	return out
 }
 
+var fromTable = regexp.MustCompile(`FROM ([a-z_]+)`)
+
+// rowTable derives the entry's row table: from its statement's FROM clause
+// (the first declared table it reads), or as the one declared table keyed
+// exactly by its key and exception columns; "" when it has neither.
+func rowTable(t *testing.T, g producerGrammar) string {
+	t.Helper()
+	switch {
+	case g.rowQuery != "":
+		var statement string
+		for _, query := range append(append([]contextpacket.SourceQuery(nil), contextpacket.SourceQueryCatalogV1...), contextpacket.SourceRowOnlyQueriesV2...) {
+			if query.ID == g.rowQuery {
+				statement = query.Statement
+			}
+		}
+		for _, match := range fromTable.FindAllStringSubmatch(statement, -1) {
+			if _, declared := devhealthschema.EngineFull[match[1]]; declared {
+				return match[1]
+			}
+		}
+		t.Fatalf("%s %s: statement %q reads no declared table", g.kind, g.shape, g.rowQuery)
+	case g.keyByColumns:
+		want := map[string]bool{"org_id": true}
+		for _, column := range g.keyColumns {
+			want[column] = true
+		}
+		for column := range g.keyExceptions {
+			want[column] = true
+		}
+		var found []string
+		for table := range devhealthschema.EngineFull {
+			columns := orderByColumns(table)
+			if len(columns) != len(want) {
+				continue
+			}
+			match := true
+			for _, column := range columns {
+				match = match && want[column]
+			}
+			if match {
+				found = append(found, table)
+			}
+		}
+		if len(found) != 1 {
+			t.Fatalf("%s %s: %d declared tables are keyed %v: %v", g.kind, g.shape, len(found), want, found)
+		}
+		return found[0]
+	}
+	return ""
+}
+
 // keyGaps lists the table's key columns (org_id aside) the grammar neither
 // carries nor names as an exception.
-func keyGaps(g producerGrammar) []string {
+func keyGaps(t *testing.T, g producerGrammar) []string {
+	t.Helper()
 	carried := map[string]bool{}
 	for _, column := range g.keyColumns {
 		carried[column] = true
 	}
 	var gaps []string
-	for _, column := range orderByColumns(g.table) {
+	for _, column := range orderByColumns(rowTable(t, g)) {
 		if column == "org_id" || carried[column] {
 			continue
 		}
@@ -336,16 +398,17 @@ func passes(t *testing.T, g producerGrammar) (bool, string) {
 		return false, fmt.Sprintf("not injective: %q and %q both mint %q", a, b, mint(a))
 	}
 	anchored := g.repoAnchored || strings.HasPrefix(g.shape, "sql/")
+	table := rowTable(t, g)
 	switch {
-	case anchored && g.table == "":
+	case anchored && table == "":
 		return true, ""
-	case g.table == "":
+	case table == "":
 		return false, "row-anchored with no single-row key"
-	case len(orderByColumns(g.table)) == 0:
-		t.Fatalf("%s %s: no ORDER BY key parsed for %s", g.kind, g.shape, g.table)
+	case len(orderByColumns(table)) == 0:
+		t.Fatalf("%s %s: no ORDER BY key parsed for %s", g.kind, g.shape, table)
 	}
-	if gaps := keyGaps(g); len(gaps) > 0 {
-		return false, fmt.Sprintf("does not carry key columns %v of %s: %s", gaps, g.table, devhealthschema.EngineFull[g.table])
+	if gaps := keyGaps(t, g); len(gaps) > 0 {
+		return false, fmt.Sprintf("does not carry key columns %v of %s: %s", gaps, table, devhealthschema.EngineFull[table])
 	}
 	return true, ""
 }
@@ -416,7 +479,7 @@ func TestSourceRowKeyCheckSeesADroppedKeyColumn(t *testing.T) {
 			t.Fatalf("the real grammar fails: %s", why)
 		}
 		g.keyColumns = []string{"repo_id", "deployment_id", "incident_id"}
-		if gaps := keyGaps(g); len(gaps) != 1 || gaps[0] != "source" {
+		if gaps := keyGaps(t, g); len(gaps) != 1 || gaps[0] != "source" {
 			t.Fatalf("a grammar without source: gaps %v, want [source]", gaps)
 		}
 		if ok, _ := passes(t, g); ok {
@@ -434,7 +497,7 @@ func TestSourceRowCollisionSearchSeesABareJoin(t *testing.T) {
 	if ok, _ := passes(t, bare); ok {
 		t.Fatal("a bare ':' join of three ids passed")
 	}
-	escaped := producerGrammar{kind: contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, shape: "mint/3", table: "work_item_dependencies",
+	escaped := producerGrammar{kind: contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, shape: "mint/3", rowQuery: "work_item_dependencies.v2",
 		keyColumns: []string{"source_work_item_id", "target_work_item_id", "relationship_type"}}
 	if ok, why := passes(t, escaped); !ok {
 		t.Fatalf("the escaped grammar fails: %s", why)
