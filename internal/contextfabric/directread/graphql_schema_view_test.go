@@ -57,6 +57,32 @@ func TestGraphQLSchemaSectionListsWhatTheRunnerAdmits(t *testing.T) {
 				}
 			}
 		}
+		// Reverse: every output path the runner admits for this class (the
+		// union of the served candidates' allowlists) is listed, and every
+		// root served to the class is in the section.
+		listed := map[string]map[string]bool{}
+		for _, root := range section.Roots {
+			listed[root.Field] = map[string]bool{}
+			for _, p := range root.OutputPaths {
+				listed[root.Field][p] = true
+			}
+		}
+		for field, ops := range gqlRootOps(t, h.policy) {
+			for _, op := range ops {
+				if !op.Scope(class.caller).Served {
+					continue
+				}
+				if listed[field] == nil {
+					t.Errorf("%s: root %s is served to the class but missing from the section", class.name, field)
+					continue
+				}
+				for _, out := range op.Outputs {
+					if !listed[field][out.Path] {
+						t.Errorf("%s: admitted path %s of %s is missing from the section", class.name, out.Path, field)
+					}
+				}
+			}
+		}
 		if served < 20 {
 			t.Fatalf("%s: only %d listed paths were served; the measurement did not happen", class.name, served)
 		}
