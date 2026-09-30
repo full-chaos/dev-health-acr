@@ -31,8 +31,8 @@ func TestDataGuideOperationTableIsTheCatalogue(t *testing.T) {
 		entry[1] = true
 		served[op.Name] = entry
 	}
-	if len(served) != 16 {
-		t.Fatalf("the catalogue serves %d operations, expected 16", len(served))
+	if len(served) != 19 {
+		t.Fatalf("the catalogue serves %d operations, expected 19", len(served))
 	}
 	text := embeddedFiles(t)[FileData]
 	rows := 0

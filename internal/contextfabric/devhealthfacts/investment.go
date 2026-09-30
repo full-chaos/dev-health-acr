@@ -539,7 +539,7 @@ func (p *InvestmentProvider) readProjectThemeMix(ctx context.Context, orgID stri
 	statement := withRowProbeLimit(`SELECT * FROM (
 WITH latest AS (
 	SELECT work_unit_id,
-		argMax(repo_id, computed_at) AS repo_id,
+		(argMax(tuple(repo_id), computed_at)).1 AS repo_id,
 		argMax(from_ts, computed_at) AS from_ts,
 		argMax(to_ts, computed_at) AS to_ts,
 		argMax(effort_value, computed_at) AS effort_value,
@@ -547,7 +547,7 @@ WITH latest AS (
 		argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json,
 		argMax(structural_evidence_json, computed_at) AS structural_evidence_json
 	FROM work_unit_investments
-	WHERE org_id = {org_id:String}
+	WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + investmentMembershipScopeFilter() + `
 	GROUP BY work_unit_id
 ),
 windowed AS (
@@ -840,7 +840,7 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	rows, err := readers.ReadProjectThemeMixWithRowLimit(ctx, p.facts.client, orgID, ids, timeBound.neutral(), maxFactRowsProbe)
+	rows, err := readProjectNativeThemeMixRows(ctx, p.facts.client, orgID, ids, timeBound, maxFactRowsProbe)
 	if err != nil {
 		return 0, err
 	}
