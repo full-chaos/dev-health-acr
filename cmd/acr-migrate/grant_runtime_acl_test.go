@@ -80,10 +80,10 @@ func TestGrantRuntimeACL_deviceGrantsRoundTrip(t *testing.T) {
 	require.Error(t, err, "the runtime role must NOT be able to write acr.oauth_device_grants before grant-runtime-acl runs")
 	require.Contains(t, err.Error(), "permission denied", "the pre-fix failure must be a real Postgres permission-denied error, not some other class")
 
-	// CHAOS-6191, RED: before grant-runtime-acl the runtime role can DELETE from
-	// neither OAuth table the purge loop sweeps (checked as privileges, not by
+	// CHAOS-6191/CHAOS-7229, RED: before grant-runtime-acl the runtime role can DELETE from
+	// none of the tables the OAuth purge loop sweeps (checked as privileges, not by
 	// deleting rows, so no fixture rows are needed).
-	oauthPurgeTables := []string{"acr.oauth_clients", "acr.oauth_authorization_requests"}
+	oauthPurgeTables := []string{"acr.oauth_clients", "acr.oauth_authorization_requests", "acr.device_authorizations"}
 	hasPrivilege := func(table, privilege string) bool {
 		var granted bool
 		require.NoError(t, rawDB.QueryRowContext(ctx, `SELECT has_table_privilege('acr_mcp_runtime_test', $1, $2)`, table, privilege).Scan(&granted))
@@ -110,6 +110,7 @@ func TestGrantRuntimeACL_deviceGrantsRoundTrip(t *testing.T) {
 	require.NoError(t, grantErr)
 	require.Contains(t, grantOutput.String(), "acr_mcp_runtime_test")
 	require.Contains(t, grantOutput.String(), "granted DELETE on acr.oauth_clients, acr.oauth_authorization_requests to acr_mcp_runtime_test")
+	require.Contains(t, grantOutput.String(), "granted DELETE on acr.device_authorizations to acr_mcp_runtime_test")
 
 	// CHAOS-6191, GREEN: DELETE, and nothing else, on the two purge tables.
 	for _, table := range oauthPurgeTables {

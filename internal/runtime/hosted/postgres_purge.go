@@ -22,8 +22,9 @@ const (
 	defaultWorkloadCredentialPurgeInterval   = time.Minute
 	defaultWorkloadCredentialPurgeBatchLimit = 500
 
-	// The OAuth rows (acr.oauth_authorization_requests and dynamically
-	// registered acr.oauth_clients, CHAOS-6191) grow only as fast as the
+	// The OAuth rows (acr.oauth_authorization_requests, dynamically
+	// registered acr.oauth_clients, CHAOS-6191, and the expired
+	// acr.device_authorizations behind them, CHAOS-7229) grow only as fast as the
 	// rate-limited /authorize and /register routes are used, so the sweep
 	// runs at the packet snapshot cadence (one heartbeat line per tick).
 	defaultOAuthPurgeInterval   = 5 * time.Minute
@@ -124,8 +125,9 @@ func startWorkloadCredentialPurgeLoop(ctx context.Context, purge packetPurgeFunc
 const oauthPurgeFailureMessage = "oauth purge tick failed; retrying on next tick"
 
 // startOAuthPurgeLoop is startPacketPurgeLoop's twin for CHAOS-6191: expired
-// acr.oauth_authorization_requests and idle dynamic acr.oauth_clients. Its
-// initial purge proves DELETE on both tables.
+// acr.oauth_authorization_requests and idle dynamic acr.oauth_clients, and
+// (CHAOS-7229) expired acr.device_authorizations. Its initial purge proves
+// DELETE on all three tables.
 func startOAuthPurgeLoop(ctx context.Context, purge packetPurgeFunc, now func() time.Time, observe packetPurgeFailureObserver) (func() error, error) {
 	return startBoundedPurgeLoop(ctx, purge, now, observe, defaultOAuthPurgeInterval, defaultOAuthPurgeBatchLimit, oauthPurgeFailureMessage)
 }
@@ -142,9 +144,10 @@ type oauthPurger interface {
 // info line (never an id, client name or URI), zeros included: the line is the
 // loop's heartbeat, so a loop that stopped is a missing line.
 //
-// The line carries the deleted counts (requests, clients) and, after a purge
-// that did not fail, how many rows are STILL eligible (requests_remaining,
-// clients_remaining; each capped at the batch limit + 1). That pair is what
+// The line carries the deleted counts (requests, clients, device_authorizations)
+// and, after a purge that did not fail, how many rows are STILL eligible
+// (requests_remaining, clients_remaining, device_authorizations_remaining; each
+// capped at the batch limit + 1). That pair is what
 // tells a tick that found nothing (deleted 0, remaining 0) from one that
 // skipped everything it should have taken (deleted 0, remaining > 0: rows
 // held by a concurrent flow, or a delete that stopped matching what the
@@ -156,17 +159,17 @@ type oauthPurger interface {
 func oauthPurgeFunc(purger oauthPurger, requestGrace, clientIdle time.Duration, logger *slog.Logger) packetPurgeFunc {
 	return func(ctx context.Context, before time.Time, limit int) (int, error) {
 		result, err := purger.PurgeExpired(ctx, before, requestGrace, clientIdle, limit)
-		attrs := []any{"requests", result.Requests, "clients", result.Clients}
+		attrs := []any{"requests", result.Requests, "clients", result.Clients, "device_authorizations", result.DeviceAuthorizations}
 		if err == nil {
 			var remaining storagepostgres.OAuthPurgeRemaining
 			if remaining, err = purger.CountPurgeRemaining(ctx, before, requestGrace, clientIdle, limit); err == nil {
-				attrs = append(attrs, "requests_remaining", remaining.Requests, "clients_remaining", remaining.Clients)
+				attrs = append(attrs, "requests_remaining", remaining.Requests, "clients_remaining", remaining.Clients, "device_authorizations_remaining", remaining.DeviceAuthorizations)
 			}
 		}
 		if logger != nil {
 			logger.InfoContext(ctx, "oauth purge", attrs...)
 		}
-		return result.Requests + result.Clients, err
+		return result.Requests + result.Clients + result.DeviceAuthorizations, err
 	}
 }
 

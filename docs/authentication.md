@@ -202,8 +202,8 @@ Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
   codes, redirect URIs, state and tokens are never logged.
 
 The runtime database role needs `SELECT, INSERT, UPDATE, DELETE` on
-`acr.oauth_clients` and `acr.oauth_authorization_requests`, and
-`SELECT, INSERT` on `acr.oauth_device_grants`
+`acr.oauth_clients`, `acr.oauth_authorization_requests` and
+`acr.device_authorizations`, and `SELECT, INSERT` on `acr.oauth_device_grants`
 (`deploy/compose/acr-db-init.sh runtime-acl`; on Kubernetes the
 `acr-migrate grant-runtime-acl` pre-install/pre-upgrade hook adds `DELETE` and
 the device-grant privileges). `DELETE` is for the purge loop below: when the
@@ -226,6 +226,21 @@ statement:
   must not be shorter than `ACR_OAUTH_CLIENT_IDLE_TTL` (startup refuses the
   other order): with a shorter grace, a client used inside the idle window
   would lose its request rows, and then the client.
+- A device authorization is deleted when it is past its own expiry plus
+  `ACR_OAUTH_REQUEST_PURGE_GRACE` (default `720h`), in any state: the state
+  column is written lazily (only when a poll, approval or redemption touches the
+  row), so an abandoned `/authorize` row stays `pending` forever and a state
+  filter would keep almost every row. It is kept while a credential it redeemed
+  is still unrevoked and unexpired (for that credential's life), and while any
+  request behind it is inside the request grace or any device grant behind it
+  was created inside that window. Deleting it deletes those request and device
+  grant rows with it (`ON DELETE CASCADE`), so this is what bounds
+  `acr.oauth_device_grants`, which had no purge. The runtime role needs `DELETE`
+  on `acr.device_authorizations` only; the cascade runs as the tables' owner. It
+  waits at most 5 seconds for a row lock it cannot skip (a cascade into a row
+  another transaction holds) and then fails the tick instead of hanging it. This
+  purge runs with the OAuth login: a deployment that has not configured it keeps
+  the device authorizations of the plain CLI device flow.
 - The purge and the routes that store a request or a device grant for a
   dynamic client are safe against each other. The route stores the row only
   while the client's row exists (it locks that row in the same statement), and
@@ -238,11 +253,12 @@ statement:
   purged. Credentials are not touched: a live credential never depends on its
   client row.
 - Every tick logs one `oauth purge` line at Info, zeros included (the loop's
-  heartbeat: a missing line means the loop stopped): `requests` and `clients`
-  are the rows the tick deleted, and `requests_remaining` and
-  `clients_remaining` are the rows that are still eligible after it, each
-  counted up to one batch plus one (`501` means more than one batch). A tick
-  that found nothing reads `0 0 0 0`. A tick that deleted nothing while
+  heartbeat: a missing line means the loop stopped): `requests`, `clients` and
+  `device_authorizations` are the rows the tick deleted, and
+  `requests_remaining`, `clients_remaining` and `device_authorizations_remaining`
+  are the rows that are still eligible after it, each counted up to one batch
+  plus one (`501` means more than one batch). A tick that found nothing reads
+  `0` in all six. A tick that deleted nothing while
   `*_remaining` is above zero skipped rows it should have taken (they are held
   by a concurrent flow, or the delete stopped matching what the purge selects):
   one such line is a busy flow, the same line every tick is a defect. Above

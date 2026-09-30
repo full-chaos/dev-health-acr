@@ -84,8 +84,8 @@ func TestAcrDbInit_RuntimeRoleRunsTheOAuthPurge(t *testing.T) {
 		return handle
 	}
 
-	expiredClient, liveRequestClient, idleClient, liveGrantClient := clientID(0xd1), clientID(0xd2), clientID(0xd3), clientID(0xd4)
-	for _, id := range []string{expiredClient, liveRequestClient, idleClient, liveGrantClient} {
+	expiredClient, liveRequestClient, idleClient, liveGrantClient, deadGrantClient := clientID(0xd1), clientID(0xd2), clientID(0xd3), clientID(0xd4), clientID(0xd5)
+	for _, id := range []string{expiredClient, liveRequestClient, idleClient, liveGrantClient, deadGrantClient} {
 		register(id)
 	}
 	expiredRequest := request(expiredClient, newDevice(false))
@@ -96,15 +96,31 @@ func TestAcrDbInit_RuntimeRoleRunsTheOAuthPurge(t *testing.T) {
 		Resource: "https://example.com/resource", Scope: "context:read", CreatedAt: t0, ExpiresAt: t0.Add(storage.DeviceAuthorizationTTL),
 	})
 	require.NoError(t, err)
+	// CHAOS-7229: a device authorization whose credential was revoked, with a
+	// device grant behind it. The runtime role has no DELETE on
+	// acr.oauth_device_grants; the purge takes the grant only through the
+	// device authorization's ON DELETE CASCADE.
+	deadGrantDevice := newDevice(true)
+	deadCredential := fmt.Sprintf("cred_runtime_purge_%d", serial)
+	_, err = h.migrationDB.ExecContext(ctx, `UPDATE acr.client_credentials SET revoked_at = $2 WHERE credential_id = $1`, deadCredential, t0.Add(time.Hour))
+	require.NoError(t, err)
+	_, err = seed.CreateDeviceGrant(ctx, storage.OAuthDeviceGrant{
+		DeviceCodeHash: deadGrantDevice, ClientID: deadGrantClient, ClientKind: storage.OAuthClientKindDynamic,
+		Resource: "https://example.com/resource", Scope: "context:read", CreatedAt: t0, ExpiresAt: t0.Add(storage.DeviceAuthorizationTTL),
+	})
+	require.NoError(t, err)
 
 	// When: the purge runs as the restricted runtime role
 	runtimeStore, err := storagepostgres.NewOAuthStore(h.runtimeDB)
 	require.NoError(t, err)
+	_, err = h.runtimeDB.ExecContext(ctx, `DELETE FROM acr.oauth_device_grants WHERE device_code_hash = $1`, deadGrantDevice.String())
+	require.Error(t, err, "the runtime role must NOT be able to delete a device grant directly")
+	require.Contains(t, err.Error(), "permission denied")
 	result, err := runtimeStore.PurgeExpired(ctx, purgeAt, 30*24*time.Hour, 30*24*time.Hour, 500)
 
 	// Then: it ran (no permission error) and deleted exactly the eligible rows
 	require.NoError(t, err, "the runtime role must hold every privilege the OAuth purge statements need")
-	require.Equal(t, storagepostgres.OAuthPurgeResult{Requests: 1, Clients: 2}, result)
+	require.Equal(t, storagepostgres.OAuthPurgeResult{Requests: 1, Clients: 3, DeviceAuthorizations: 2}, result)
 	// The remaining-eligible probe the purge tick logs (CHAOS-7249) needs no
 	// privilege beyond the SELECTs the purge already holds.
 	remaining, err := runtimeStore.CountPurgeRemaining(ctx, purgeAt, 30*24*time.Hour, 30*24*time.Hour, 500)
@@ -121,4 +137,11 @@ func TestAcrDbInit_RuntimeRoleRunsTheOAuthPurge(t *testing.T) {
 	require.False(t, exists("oauth_clients", "client_id", idleClient))
 	require.True(t, exists("oauth_clients", "client_id", liveRequestClient))
 	require.True(t, exists("oauth_clients", "client_id", liveGrantClient), "a client whose device grant holds a live credential is kept")
+	require.False(t, exists("oauth_clients", "client_id", deadGrantClient), "a client whose only credential was revoked is idle")
+
+	// CHAOS-7229: through the runtime role's DELETE on device_authorizations alone
+	require.False(t, exists("device_authorizations", "device_code_hash", deadGrantDevice.String()), "the revoked credential's device authorization is purged")
+	require.False(t, exists("oauth_device_grants", "device_code_hash", deadGrantDevice.String()), "and its device grant goes with it by cascade, without the role holding DELETE on it")
+	require.True(t, exists("oauth_device_grants", "device_code_hash", grantDevice.String()), "a device grant behind a live credential is kept")
+	require.True(t, exists("device_authorizations", "device_code_hash", grantDevice.String()))
 }

@@ -159,8 +159,12 @@ REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE ac
 GRANT SELECT, INSERT, UPDATE ON TABLE acr.agent_episodes TO :"runtime_user";
 \endif
 
+-- DELETE (CHAOS-7229) is the OAuth purge loop's: device authorizations past
+-- expires_at + grace that back no live credential. Deleting one cascades to its
+-- oauth_authorization_requests and oauth_device_grants rows as the tables'
+-- owner, so those two need no DELETE for it.
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.device_authorizations FROM :"runtime_user";
-GRANT SELECT, INSERT, UPDATE ON TABLE acr.device_authorizations TO :"runtime_user";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE acr.device_authorizations TO :"runtime_user";
 
 -- OAuth 2.1 authorization-code login (migration 0040): dynamically
 -- registered clients and pending/completed /authorize requests, both

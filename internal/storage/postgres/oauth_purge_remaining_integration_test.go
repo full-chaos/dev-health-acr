@@ -47,17 +47,18 @@ func TestOAuthStore_CountPurgeRemaining_countsWhatThePurgeWouldTake(t *testing.T
 	f.request(liveClient, liveDevice, f.t0)
 
 	// When / Then: before the purge, one request and one client are eligible
-	require.Equal(t, OAuthPurgeRemaining{Requests: 1, Clients: 1}, f.remaining(purgeAt, 500))
+	require.Equal(t, OAuthPurgeRemaining{Requests: 1, Clients: 1, DeviceAuthorizations: 1}, f.remaining(purgeAt, 500))
 
 	// And: the purge takes them (the client whose request just went, too), and nothing is left
-	require.Equal(t, OAuthPurgeResult{Requests: 1, Clients: 2}, f.purge(purgeAt, 500))
+	require.Equal(t, OAuthPurgeResult{Requests: 1, Clients: 2, DeviceAuthorizations: 1}, f.purge(purgeAt, 500))
 	require.Equal(t, OAuthPurgeRemaining{}, f.remaining(purgeAt, 500))
 }
 
 // Each count reads at most limit+1 rows, so it is bounded by the batch limit
 // and a value above limit means "more than one batch".
 func TestOAuthStore_CountPurgeRemaining_isCappedAtOneBatchPlusOne(t *testing.T) {
-	// Given: 6 expired requests (on a young client) and 6 idle clients, limit 2
+	// Given: 6 expired requests (on a young client, each on its own device
+	// authorization) and 6 idle clients
 	f := newOAuthPurgeFixture(t)
 	purgeAt := f.t0.Add(40 * 24 * time.Hour)
 	requestClient := f.client(0xe6, purgeAt.Add(-time.Hour))
@@ -69,13 +70,8 @@ func TestOAuthStore_CountPurgeRemaining_isCappedAtOneBatchPlusOne(t *testing.T) 
 	}
 
 	// When / Then: 6 of each are eligible; the count stops at limit+1 = 3
-	require.Equal(t, OAuthPurgeRemaining{Requests: 3, Clients: 3}, f.remaining(purgeAt, 2))
-	require.Equal(t, OAuthPurgeRemaining{Requests: 6, Clients: 6}, f.remaining(purgeAt, 500))
-
-	// And: a purge of one batch leaves more than a batch behind, still capped
-	require.Equal(t, OAuthPurgeResult{Requests: 2, Clients: 2}, f.purge(purgeAt, 2))
-	require.Equal(t, OAuthPurgeRemaining{Requests: 3, Clients: 3}, f.remaining(purgeAt, 2))
-	require.Equal(t, OAuthPurgeRemaining{Requests: 4, Clients: 4}, f.remaining(purgeAt, 500))
+	require.Equal(t, OAuthPurgeRemaining{Requests: 3, Clients: 3, DeviceAuthorizations: 3}, f.remaining(purgeAt, 2))
+	require.Equal(t, OAuthPurgeRemaining{Requests: 6, Clients: 6, DeviceAuthorizations: 6}, f.remaining(purgeAt, 500))
 }
 
 // The tick that motivates the count: every eligible row is held by a concurrent
@@ -84,7 +80,8 @@ func TestOAuthStore_CountPurgeRemaining_isCappedAtOneBatchPlusOne(t *testing.T) 
 // not wait on the locks either. Once the locks are gone the next purge takes
 // them and the count drops to zero.
 func TestOAuthStore_CountPurgeRemaining_reportsRowsThePurgeSkippedBecauseTheyWereLocked(t *testing.T) {
-	// Given: 2 expired requests on a young client and 2 idle clients, all locked by another transaction
+	// Given: 2 expired requests on a young client, their 2 device authorizations,
+	// and 2 idle clients, all locked by another transaction
 	f := newOAuthPurgeFixture(t)
 	purgeAt := f.t0.Add(40 * 24 * time.Hour)
 	requestClient := f.client(0xf7, purgeAt.Add(-time.Hour))
@@ -97,6 +94,8 @@ func TestOAuthStore_CountPurgeRemaining_reportsRowsThePurgeSkippedBecauseTheyWer
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback() }()
 	_, err = tx.ExecContext(f.ctx, `SELECT 1 FROM acr.oauth_authorization_requests WHERE client_id = $1 FOR UPDATE`, requestClient)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(f.ctx, `SELECT 1 FROM acr.device_authorizations FOR UPDATE`)
 	require.NoError(t, err)
 	_, err = tx.ExecContext(f.ctx, `SELECT 1 FROM acr.oauth_clients WHERE client_id = ANY($1::text[]) FOR KEY SHARE`, []string{idleA, idleB})
 	require.NoError(t, err)
@@ -113,11 +112,11 @@ func TestOAuthStore_CountPurgeRemaining_reportsRowsThePurgeSkippedBecauseTheyWer
 
 	// Then: nothing deleted, everything still eligible: the two ticks are told apart
 	require.Equal(t, OAuthPurgeResult{}, result)
-	require.Equal(t, OAuthPurgeRemaining{Requests: 2, Clients: 2}, remaining)
+	require.Equal(t, OAuthPurgeRemaining{Requests: 2, Clients: 2, DeviceAuthorizations: 2}, remaining)
 
 	// And: released, the next purge takes them and nothing remains
 	require.NoError(t, tx.Commit())
-	require.Equal(t, OAuthPurgeResult{Requests: 2, Clients: 2}, f.purge(purgeAt, 500))
+	require.Equal(t, OAuthPurgeResult{Requests: 2, Clients: 2, DeviceAuthorizations: 2}, f.purge(purgeAt, 500))
 	require.Equal(t, OAuthPurgeRemaining{}, f.remaining(purgeAt, 500))
 }
 

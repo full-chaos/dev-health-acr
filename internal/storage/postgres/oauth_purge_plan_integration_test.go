@@ -82,12 +82,17 @@ FROM generate_series(1, $2::int) i`, young, seeded)
 	require.NoError(t, err)
 	require.Equal(t, seeded, f.count("acr.oauth_clients"))
 	require.Equal(t, seeded, f.count("acr.oauth_authorization_requests"))
+	require.Equal(t, seeded, f.count("acr.device_authorizations"))
 
 	clientCutoff := purgeAt.Add(-oauthPurgeIdle)
 	requestCutoff := purgeAt.Add(-oauthPurgeGrace)
 	ids := make([]string, 500)
 	for i := range ids {
 		ids[i] = "acrc_00000000000000000000000000000000"
+	}
+	deviceIDs := make([]string, 500)
+	for i := range deviceIDs {
+		deviceIDs[i] = "0000000000000000000000000000000000000000000000000000000000000000"
 	}
 	statements := []struct {
 		name  string
@@ -99,6 +104,9 @@ FROM generate_series(1, $2::int) i`, young, seeded)
 		{"idle client remaining probe", countIdleOAuthClientsSQL, []any{clientCutoff, 501, purgeAt}},
 		{"expired request purge", purgeExpiredOAuthRequestsSQL, []any{requestCutoff, 500, purgeAt}},
 		{"expired request remaining probe", countExpiredOAuthRequestsSQL, []any{requestCutoff, 501, purgeAt}},
+		{"expired device authorization candidates (purge select)", selectExpiredDeviceAuthorizationsSQL, []any{requestCutoff, 500, purgeAt}},
+		{"expired device authorization recheck (purge delete)", deleteExpiredDeviceAuthorizationsSQL, []any{requestCutoff, deviceIDs, purgeAt}},
+		{"expired device authorization remaining probe", countExpiredDeviceAuthorizationsSQL, []any{requestCutoff, 501, purgeAt}},
 	}
 
 	// Then: none scans a seeded table, and each reads a bounded number of buffers
@@ -110,7 +118,7 @@ FROM generate_series(1, $2::int) i`, young, seeded)
 			// A scan the plan never executed (the inner side of an anti join
 			// that no outer row reached) reads nothing.
 			if node.NodeType == "Seq Scan" && node.ActualLoops > 0 {
-				require.NotContainsf(t, []string{"oauth_clients", "oauth_authorization_requests"}, node.RelationName,
+				require.NotContainsf(t, []string{"oauth_clients", "oauth_authorization_requests", "device_authorizations"}, node.RelationName,
 					"%s: scans %s instead of reading it through an index", statement.name, node.RelationName)
 			}
 		})
