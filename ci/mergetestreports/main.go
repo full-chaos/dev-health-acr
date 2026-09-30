@@ -48,7 +48,7 @@
 // the closed set (testActions), a JUnit root whose totals are absent,
 // non-integer, or not what the document holds (see the table above
 // junitRequiredCounts), or a JUnit file with more than one root, is an error and
-// not a partial merge: a merged report that silently covers 3 of 4 shards, or
+// not a partial merge: a merged report that silently covers all but one shard, or
 // states a total nobody measured, reads exactly like a correct one, which is the
 // failure this whole job exists to prevent.
 //
@@ -171,7 +171,7 @@ func shardFiles(dir string, expect int, name string) ([]string, error) {
 	paths := make([]string, 0, expect)
 	for i := 1; i <= expect; i++ {
 		if !seen[i] {
-			return nil, fmt.Errorf("shard %d of %d is missing: no %s%d directory in %s -- its unit job did not upload, so any merge would silently omit a quarter of the suite",
+			return nil, fmt.Errorf("shard %d of %d is missing: no %s%d directory in %s -- its unit job did not upload, so any merge would silently omit that shard's share of the suite",
 				i, expect, shardArtifactPrefix, i, dir)
 		}
 		p := filepath.Join(dir, shardArtifactPrefix+strconv.Itoa(i), name)

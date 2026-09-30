@@ -226,7 +226,7 @@ for job in race unit; do
   else
     shape='round-robin plus the isolated packages'
   fi
-  printf 'PASS: %s shards %s of %s cover all %s packages exactly once [%s]\n' \
+  printf 'PASS: %s legs %s (round-robin total %s) cover all %s packages exactly once [%s]\n' \
     "$job" "$shard_indices" "$total" "$package_count" "$shape"
 
   check_no_heavy_collision "$job" "$total" "$with_isolated" "$shard_indices" heavy_packages
@@ -308,6 +308,20 @@ check_unit_dedicated_legs() {
   done
 }
 
+# CHAOS-7282 review P2: the dedicated list must name devhealthfacts ITSELF, not
+# merely "some isolated package". Every other check here is shape-only, so
+# swapping the list entry for another isolated package (say devhealthsource)
+# would leave them all green while devhealthfacts went back to round-robin.
+devhealthfacts_pkg_suffix="/internal/contextfabric/devhealthfacts"
+assert_dedicated_names_devhealthfacts() {
+  local p
+  for p in "$@"; do
+    case "$p" in *"$devhealthfacts_pkg_suffix") return 0 ;; esac
+  done
+  printf '%s: unit_dedicated_packages does not name %s: %s\n' "${0##*/}" "$devhealthfacts_pkg_suffix" "${*:-<empty>}" >&2
+  return 1
+}
+assert_dedicated_names_devhealthfacts "${unit_dedicated[@]}"
 check_unit_dedicated_legs "$unit_total" "$unit_indices" "${unit_dedicated[@]}"
 printf 'PASS: unit dedicated leg(s) run alone and outside the round-robin: %s\n' "${unit_dedicated[*]:-none}"
 
@@ -322,6 +336,12 @@ if check_unit_dedicated_legs "$unit_total" "$(seq -s, 1 "$unit_total")" "${unit_
   exit 1
 fi
 printf 'CONTROL OK: check_unit_dedicated_legs rejects a matrix with no dedicated leg\n'
+substitute_pkg="$("$repo_root/scripts/ci/test-shard.sh" isolated | tr ' ' '\n' | grep -v "$devhealthfacts_pkg_suffix\$" | grep -v '^$' | head -n1)"
+if assert_dedicated_names_devhealthfacts "$substitute_pkg" >/dev/null 2>&1; then
+  printf 'CONTROL FAILED: assert_dedicated_names_devhealthfacts accepted %s in its place\n' "$substitute_pkg" >&2
+  exit 1
+fi
+printf 'CONTROL OK: assert_dedicated_names_devhealthfacts rejects substitute %s\n' "$substitute_pkg"
 round_robin_pkg="$("$repo_root/scripts/ci/test-shard.sh" --with-isolated 1 "$unit_total" | tr ' ' '\n' | head -n1)"
 if check_unit_dedicated_legs "$unit_total" "$unit_indices" "$round_robin_pkg" >/dev/null 2>&1; then
   printf 'CONTROL FAILED: check_unit_dedicated_legs accepted round-robin package %s as a dedicated leg\n' "$round_robin_pkg" >&2

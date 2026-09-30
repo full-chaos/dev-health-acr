@@ -365,7 +365,7 @@ jobs:
         id: go-tests
         run: |
           packages="$(scripts/ci/test-shard.sh --with-isolated ${{ matrix.shard }} 4)"
-          printf 'unit shard %s/4 packages:\n%s\n' '${{ matrix.shard }}' "$packages"
+          printf 'unit leg %s of ${{ strategy.job-total }} packages:\n%s\n' '${{ matrix.shard }}' "$packages"
           # CHAOS-6220: --with-isolated round-robins scripts/ci/test-shard.sh's
           # isolated_packages IN like any other package (unlike the race
           # matrix below, which excludes them), so one of them --
@@ -383,7 +383,7 @@ jobs:
             case " $packages " in
               *" $isolated_pkg "*)
                 pkg_timeout="$(make -s isolated-timeout PKG="$isolated_pkg")"
-                printf 'unit shard %s/4 carries isolated package %s -> GOTEST_PLAIN_TIMEOUT=%s\n' \
+                printf 'unit leg %s of ${{ strategy.job-total }} carries isolated package %s -> GOTEST_PLAIN_TIMEOUT=%s\n' \
                   '${{ matrix.shard }}' "$isolated_pkg" "$pkg_timeout"
                 pkg_secs="${pkg_timeout%s}"
                 cur_secs="${isolated_timeout%s}"
@@ -449,7 +449,7 @@ jobs:
   # gocover-cobertura `make test-coverage` uses, run once over the merged
   # profile. The tool refuses a partial merge -- a missing or extra shard, an
   # empty report, a suite present in two shards -- because a merged report
-  # covering 3 of 4 shards reads exactly like a complete one. -expect must equal
+  # covering all but one shard reads exactly like a complete one. -expect must equal
   # the unit matrix size; scripts/ci/test-workflow-contract.sh proves it does.
   #
   # `if: !cancelled()` (not `success()`): when a shard's tests fail this job
