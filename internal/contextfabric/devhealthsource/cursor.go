@@ -14,6 +14,10 @@ import (
 type cursorState struct {
 	Since time.Time `json:"since"`
 	After string    `json:"after"`
+	// Space (CHAOS-7263) names the position space Since is in. Cursors saved
+	// before it existed carry none (provider/updated_at time) and are decoded
+	// as a reset by sourcePlan.nextBatch.
+	Space string `json:"space,omitempty"`
 }
 
 func decodeCursor(raw string) (cursorState, error) {
@@ -32,6 +36,7 @@ func decodeCursor(raw string) (cursorState, error) {
 }
 
 func encodeCursor(state cursorState) (string, error) {
+	state.Space = cursorSpaceIngest
 	encoded, err := json.Marshal(state)
 	if err != nil {
 		return "", fmt.Errorf("devhealthsource: encode cursor: %w", err)

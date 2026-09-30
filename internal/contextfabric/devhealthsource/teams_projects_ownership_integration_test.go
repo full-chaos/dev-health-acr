@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"reflect"
 	"sort"
@@ -361,7 +362,7 @@ func subTeamAuthorizationOwnershipJoinScopedToOneOrganization(t *testing.T, ctx 
 	at := ownershipLaterAssertion
 	// A DIFFERENT organization, with a team carrying the SAME id and a
 	// repository owned only there.
-	mustSeed(otherOrg, `INSERT INTO teams VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	mustSeed(otherOrg, `INSERT INTO teams (id, name, description, updated_at, org_id, provider, native_team_key, project_keys, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"TEAM-GITHUB", "TEAM-GITHUB name", "", at, otherOrg, "github", "TEAM-GITHUB", []string{}, uint8(1))
 	mustSeed(otherOrg, `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		otherOrg, "github", "TEAM-GITHUB", nil, "acme/other-org-repo", "exact", "native", uint8(1), uint16(1), int32(1), ownershipFirstSeen, nil, ownershipFirstSeen)
@@ -505,11 +506,11 @@ func newOwnershipFixture(t *testing.T, ctx context.Context, query contextpacket.
 		}
 	}
 	seedTeam := func(id, provider string) {
-		mustSeed("teams "+id, `INSERT INTO teams VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		mustSeed("teams "+id, `INSERT INTO teams (id, name, description, updated_at, org_id, provider, native_team_key, project_keys, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, id+" name", "", at, orgID, provider, id, []string{}, uint8(1))
 	}
 	seedProject := func(id, provider, key string) {
-		mustSeed("projects "+id, `INSERT INTO projects VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		mustSeed("projects "+id, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, orgID, provider, key, id+" name", uint8(1), "started", "", at)
 	}
 	seedOwnership := func(provider, teamID, projectID, key string, validFrom time.Time, validTo any) {
@@ -679,6 +680,7 @@ func subAmbiguousRowsDoNotStallPagination(t *testing.T, ctx context.Context, fix
 	wantEdge := devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-BEYOND", "TEAM-GITHUB", "native")
 	cursor := ""
 	found := false
+	replays := map[string]bool{}
 	for page := 0; page < 40; page++ {
 		batch, available, err := fixture.source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{
 			OrgID: fixture.orgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: cursor,
@@ -689,9 +691,7 @@ func subAmbiguousRowsDoNotStallPagination(t *testing.T, ctx context.Context, fix
 		if !available {
 			break
 		}
-		if batch.NextCursor == cursor {
-			t.Fatalf("page %d: cursor did not advance past a page of omitted rows -- projection would repeat this page forever", page)
-		}
+		requireCursorProgress(t, fmt.Sprintf("page %d (a page of omitted rows must not repeat forever)", page), cursor, batch, replays)
 		cursor = batch.NextCursor
 		if hasRelationship(batch, wantEdge) {
 			found = true
@@ -727,10 +727,10 @@ func (f *ownershipFixture) seedAmbiguousBlockThenValidEdge(t *testing.T, ctx con
 	// something to report -- but the STALL this test exists for is driven by
 	// an omission path that still exists, which is the difference between a
 	// test and a decoration.
-	mustExec(t, ctx, f.direct, `INSERT INTO projects
+	mustExec(t, ctx, f.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at)
 SELECT concat('P-AMBIG-A-', repeat('x', 232), toString(number)), ?, 'github', concat('BULK-', toString(number)), 'bulk a', 1, 'started', '', ?
 FROM numbers(150)`, f.orgID, early)
-	mustExec(t, ctx, f.direct, `INSERT INTO projects
+	mustExec(t, ctx, f.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at)
 SELECT concat('P-AMBIG-B-', repeat('x', 232), toString(number)), ?, 'github', concat('BULK-', toString(number)), 'bulk b', 1, 'started', '', ?
 FROM numbers(150)`, f.orgID, early)
 	mustExec(t, ctx, f.direct, `INSERT INTO team_project_ownership
@@ -739,7 +739,7 @@ FROM numbers(150)`, f.orgID, block, block)
 
 	// Also early, so the page holding the ambiguous block cannot be rescued
 	// by this project's own entity candidate.
-	mustExec(t, ctx, f.direct, `INSERT INTO projects VALUES (?, ?, 'github', 'BEYOND-KEY', 'beyond', 1, 'started', '', ?)`,
+	mustExec(t, ctx, f.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', 'BEYOND-KEY', 'beyond', 1, 'started', '', ?)`,
 		"PROJ-BEYOND", f.orgID, early)
 	mustExec(t, ctx, f.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, 'BEYOND-KEY', 'native', ?, NULL, ?)`,
 		f.orgID, "PROJ-BEYOND", beyond, beyond)
@@ -775,7 +775,7 @@ func mustExec(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, s
 // closure, so a live owner is never hidden by a simultaneous close.
 func subTiedOwnershipAssertionsResolveDeterministically(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
 	at := ownershipLaterAssertion
-	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', 'TIE-KEY', 'tie', 1, 'started', '', ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', 'TIE-KEY', 'tie', 1, 'started', '', ?)`,
 		"PROJ-TIE", fixture.orgID, at)
 	// Same instant, same group after collapse; one closes, one leaves open.
 	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', 'ownership-row-closed', 'TIE-KEY', 'native', ?, ?, ?)`,
@@ -813,15 +813,15 @@ func subAmbiguityGuardIsScopedToOneOrganization(t *testing.T, ctx context.Contex
 
 	// The OTHER organization's project and ownership, sharing this
 	// organization's provider and project_key.
-	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', 'CROSS-ORG-KEY', 'other org project', 1, 'started', '', ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', 'CROSS-ORG-KEY', 'other org project', 1, 'started', '', ?)`,
 		"PROJ-OTHER-ORG", otherOrg, at)
-	mustExec(t, ctx, fixture.direct, `INSERT INTO teams VALUES (?, ?, '', ?, ?, 'github', ?, ?, 1)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO teams (id, name, description, updated_at, org_id, provider, native_team_key, project_keys, is_active) VALUES (?, ?, '', ?, ?, 'github', ?, ?, 1)`,
 		"TEAM-OTHER-ORG", "other org team", at, otherOrg, "TEAM-OTHER-ORG", []string{})
 	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-OTHER-ORG', ?, 'CROSS-ORG-KEY', 'native', ?, NULL, ?)`,
 		otherOrg, "PROJ-OTHER-ORG", ownershipFirstSeen, at)
 
 	// This organization's own project under the SAME (provider, project_key).
-	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', 'CROSS-ORG-KEY', 'this org project', 1, 'started', '', ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', 'CROSS-ORG-KEY', 'this org project', 1, 'started', '', ?)`,
 		"PROJ-THIS-ORG", fixture.orgID, at)
 	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, 'CROSS-ORG-KEY', 'native', ?, NULL, ?)`,
 		fixture.orgID, "PROJ-THIS-ORG", ownershipFirstSeen, at)
@@ -1055,7 +1055,7 @@ func (f *ownershipFixture) seedOversizedAmbiguousBlock(t *testing.T, ctx context
 	// test would converge for the wrong reason.
 	const keys = 5200
 	for _, half := range []string{"A", "B"} {
-		mustExec(t, ctx, f.direct, `INSERT INTO projects
+		mustExec(t, ctx, f.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at)
 SELECT concat('P-BOUND-`+half+`-', repeat('x', 232), toString(number)), ?, 'github', concat('BOUND-', toString(number)), 'bulk', 1, 'started', '', ?
 FROM numbers(?)`, f.orgID, early, uint64(keys))
 	}
@@ -1063,7 +1063,7 @@ FROM numbers(?)`, f.orgID, early, uint64(keys))
 SELECT ?, 'github', 'TEAM-GITHUB', concat('P-BOUND-A-', repeat('x', 232), toString(number)), concat('BOUND-', toString(number)), 'native', ?, NULL, ?
 FROM numbers(?)`, f.orgID, block, block, uint64(keys))
 
-	mustExec(t, ctx, f.direct, `INSERT INTO projects VALUES (?, ?, 'github', 'PAST-BOUND-KEY', 'past bound', 1, 'started', '', ?)`,
+	mustExec(t, ctx, f.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', 'PAST-BOUND-KEY', 'past bound', 1, 'started', '', ?)`,
 		"PROJ-PAST-BOUND", f.orgID, early)
 	mustExec(t, ctx, f.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, 'PAST-BOUND-KEY', 'native', ?, NULL, ?)`,
 		f.orgID, "PROJ-PAST-BOUND", beyond, beyond)
@@ -1093,7 +1093,7 @@ FROM numbers(?)`, f.orgID, block, block, uint64(keys))
 func subTwoIDSpaceRowsYieldExactlyOneEdge(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
 	const projectID = "PROJ-DUAL-SPACE"
 	const projectKey = "DUAL-KEY"
-	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', ?, ?, 1, 'started', '', ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', ?, ?, 1, 'started', '', ?)`,
 		projectID, fixture.orgID, projectKey, projectID+" name", ownershipLaterAssertion)
 	// Key-shaped: project_id holds the project KEY (the legacy/GitLab shape).
 	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
@@ -1152,12 +1152,12 @@ func subEmptyKeyProjectsEachKeepTheirOwnEdge(t *testing.T, ctx context.Context, 
 		"6241316a-85be-42ce-b243-8e41f2b18c8d",
 		"7c1f0b52-0d33-4a7e-9f21-1b6a5d0e4c77",
 	}
-	mustExec(t, ctx, fixture.direct, `INSERT INTO teams VALUES (?, ?, '', ?, ?, 'linear', ?, [], 1)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO teams (id, name, description, updated_at, org_id, provider, native_team_key, project_keys, is_active) VALUES (?, ?, '', ?, ?, 'linear', ?, [], 1)`,
 		teamID, teamID+" name", ownershipLaterAssertion, fixture.orgID, teamID)
 	for _, projectID := range projectIDs {
 		// NULL project_key on BOTH rows: the real Linear shape after
 		// CHAOS-4530, not an empty string standing in for it.
-		mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'linear', NULL, ?, 1, 'started', '', ?)`,
+		mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'linear', NULL, ?, 1, 'started', '', ?)`,
 			projectID, fixture.orgID, projectID+" name", ownershipLaterAssertion)
 		mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'linear', ?, ?, NULL, 'native', ?, NULL, ?)`,
 			fixture.orgID, teamID, projectID, ownershipFirstSeen, ownershipLaterAssertion)
@@ -1213,6 +1213,7 @@ func hasTombstone(batch contextfabric.ProjectionBatch, canonicalID string) bool 
 // walk that never finds the edge fails rather than passing quietly.
 func drainUntil(t *testing.T, ctx context.Context, fixture *ownershipFixture, cursor string, found func(contextfabric.ProjectionBatch) bool) (string, bool) {
 	t.Helper()
+	replays := map[string]bool{}
 	for page := 0; page < 40; page++ {
 		batch, available, err := fixture.source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{
 			OrgID: fixture.orgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: cursor,
@@ -1223,9 +1224,7 @@ func drainUntil(t *testing.T, ctx context.Context, fixture *ownershipFixture, cu
 		if !available {
 			return cursor, false
 		}
-		if batch.NextCursor == cursor {
-			t.Fatalf("page %d: cursor did not advance", page)
-		}
+		requireCursorProgress(t, fmt.Sprintf("page %d", page), cursor, batch, replays)
 		cursor = batch.NextCursor
 		assertUniqueRelationshipIDs(t, batch)
 		if found(batch) {
@@ -1243,14 +1242,14 @@ func subRetractsAnEdgeWhoseKeyBecomesAmbiguous(t *testing.T, ctx context.Context
 	at := ownershipLaterAssertion.Add(72 * time.Hour)
 	// GitLab-shaped: the key is in project_id AND project_key, and while it
 	// names exactly one project both arms resolve it.
-	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', ?, 'retract me', 1, 'started', '', ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', ?, 'retract me', 1, 'started', '', ?)`,
 		"PROJ-RETRACT-KEY", fixture.orgID, "RETRACT-KEY", at)
 	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
 		fixture.orgID, "RETRACT-KEY", "RETRACT-KEY", ownershipFirstSeen, at)
 	// The CONTROL rides the same ticks: an ordinary project whose ownership
 	// is untouched by any of this. Retracting everything is the cheapest way
 	// to pass the assertions below, and this is what refuses it.
-	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', ?, 'keep me', 1, 'started', '', ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', ?, 'keep me', 1, 'started', '', ?)`,
 		"PROJ-KEEP", fixture.orgID, "KEEP-KEY", at)
 	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
 		fixture.orgID, "PROJ-KEEP", "KEEP-KEY", ownershipFirstSeen, at)
@@ -1265,7 +1264,7 @@ func subRetractsAnEdgeWhoseKeyBecomesAmbiguous(t *testing.T, ctx context.Context
 
 	// THE ONLY MUTATION: a second project starts answering to the same key.
 	// team_project_ownership is not touched at all -- that is the point.
-	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', ?, 'the collision', 1, 'started', '', ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', ?, 'the collision', 1, 'started', '', ?)`,
 		"PROJ-RETRACT-OTHER", fixture.orgID, "RETRACT-KEY", at.Add(time.Hour))
 
 	cursor, ok = drainUntil(t, ctx, fixture, cursor, func(b contextfabric.ProjectionBatch) bool { return hasTombstone(b, edge) })
@@ -1314,7 +1313,7 @@ func subRetractsAnEdgeWhoseKeyBecomesAmbiguous(t *testing.T, ctx context.Context
 // never an edge here".
 func subRetractsAnEdgeWhoseAmbiguousKeyArrivesViaProjectRef(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
 	at := ownershipLaterAssertion.Add(72 * time.Hour)
-	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', ?, 'retract me via ref', 1, 'started', '', ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', ?, 'retract me via ref', 1, 'started', '', ?)`,
 		"PROJ-RETRACT-REF", fixture.orgID, "RETRACT-REF-KEY", at)
 	// project_key NULL on purpose: the row's ONLY tie to the project is
 	// project_id, which carries the key-shaped value, exactly the GitLab
@@ -1324,7 +1323,7 @@ func subRetractsAnEdgeWhoseAmbiguousKeyArrivesViaProjectRef(t *testing.T, ctx co
 	// The CONTROL rides the same ticks: an ordinary, unambiguous project_id
 	// match with the same NULL-project_key shape, so a false-positive fix
 	// that started matching every empty-project_key row shows up here.
-	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', ?, 'keep me too', 1, 'started', '', ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', ?, 'keep me too', 1, 'started', '', ?)`,
 		"PROJ-KEEP-REF", fixture.orgID, "KEEP-REF-KEY", at)
 	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, NULL, 'native', ?, NULL, ?)`,
 		fixture.orgID, "PROJ-KEEP-REF", ownershipFirstSeen, at)
@@ -1339,7 +1338,7 @@ func subRetractsAnEdgeWhoseAmbiguousKeyArrivesViaProjectRef(t *testing.T, ctx co
 
 	// THE ONLY MUTATION: a second project starts answering to the same key.
 	// team_project_ownership is not touched at all.
-	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', ?, 'the collision', 1, 'started', '', ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', ?, 'the collision', 1, 'started', '', ?)`,
 		"PROJ-RETRACT-REF-OTHER", fixture.orgID, "RETRACT-REF-KEY", at.Add(time.Hour))
 
 	cursor, ok = drainUntil(t, ctx, fixture, cursor, func(b contextfabric.ProjectionBatch) bool { return hasTombstone(b, edge) })
@@ -1380,7 +1379,7 @@ func subRetractsAnEdgeWhoseAmbiguousKeyArrivesViaProjectRef(t *testing.T, ctx co
 // winner.
 func subRetractsAnEdgeWhoseIdentityStartsConflicting(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
 	at := ownershipLaterAssertion.Add(72 * time.Hour)
-	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', '', 'the id side', 1, 'started', '', ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', '', 'the id side', 1, 'started', '', ?)`,
 		"PROJ-CONFLICT-A", fixture.orgID, at)
 	// project_key names nothing yet, so only the id arm resolves and the edge
 	// is clean.
@@ -1395,7 +1394,7 @@ func subRetractsAnEdgeWhoseIdentityStartsConflicting(t *testing.T, ctx context.C
 
 	// THE ONLY MUTATION: a DIFFERENT project starts answering to the key this
 	// ownership row carries. The row itself is untouched.
-	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', ?, 'the key side', 1, 'started', '', ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', ?, 'the key side', 1, 'started', '', ?)`,
 		"PROJ-CONFLICT-B", fixture.orgID, "CONFLICT-KEY", at.Add(time.Hour))
 
 	if _, ok = drainUntil(t, ctx, fixture, cursor, func(b contextfabric.ProjectionBatch) bool { return hasTombstone(b, edge) }); !ok {
@@ -1414,9 +1413,9 @@ func subRetractsAnEdgeWhoseIdentityStartsConflicting(t *testing.T, ctx context.C
 // churn rather than of healing.
 func subRetractionIsIdempotentAcrossAReRun(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
 	at := ownershipLaterAssertion.Add(72 * time.Hour)
-	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', ?, 'one', 1, 'started', '', ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', ?, 'one', 1, 'started', '', ?)`,
 		"PROJ-IDEMPOTENT-A", fixture.orgID, "IDEMPOTENT-KEY", at)
-	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', ?, 'two', 1, 'started', '', ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', ?, 'two', 1, 'started', '', ?)`,
 		"PROJ-IDEMPOTENT-B", fixture.orgID, "IDEMPOTENT-KEY", at)
 	// Already ambiguous when this row arrives: the NEVER-PROJECTED ordering.
 	// The retraction must still be emitted (the producer cannot know it is
@@ -1500,7 +1499,7 @@ func subRetractionOnlyFollowsMaxRaisingProjectWrites(t *testing.T, ctx context.C
 	future := at.AddDate(5, 0, 0)
 	// The future-dated project pins the SOURCE-WIDE cursor five years ahead,
 	// through queryProjects, before this producer is even consulted.
-	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', ?, 'zzz', 1, 'started', '', ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', ?, 'zzz', 1, 'started', '', ?)`,
 		"ZZZ-WATERMARK", fixture.orgID, "WM-KEY", future)
 	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
 		fixture.orgID, "WM-KEY", "WM-KEY", ownershipFirstSeen, at)
@@ -1513,7 +1512,7 @@ func subRetractionOnlyFollowsMaxRaisingProjectWrites(t *testing.T, ctx context.C
 
 	// HALF ONE: a colliding project whose updated_at does NOT raise the
 	// partition max. The ambiguity is real; the retraction does not happen.
-	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', ?, 'aaa', 1, 'started', '', ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', ?, 'aaa', 1, 'started', '', ?)`,
 		"AAA-WATERMARK", fixture.orgID, "WM-KEY", at.Add(time.Hour))
 	afterLowWrite, retracted := drainUntil(t, ctx, fixture, cursor, func(b contextfabric.ProjectionBatch) bool { return hasTombstone(b, edge) })
 	if retracted {
@@ -1523,7 +1522,7 @@ func subRetractionOnlyFollowsMaxRaisingProjectWrites(t *testing.T, ctx context.C
 	// HALF TWO: a write that DOES raise the max. The same ambiguity, still
 	// present, must now be retracted -- otherwise half one is measuring a
 	// broken mechanism rather than a known bound.
-	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', ?, 'aaa', 1, 'started', '', ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', ?, 'aaa', 1, 'started', '', ?)`,
 		"AAA-WATERMARK", fixture.orgID, "WM-KEY", future.Add(time.Hour))
 	if _, ok := drainUntil(t, ctx, fixture, afterLowWrite, func(b contextfabric.ProjectionBatch) bool { return hasTombstone(b, edge) }); !ok {
 		t.Fatalf("%q was not retracted even after a projects-side write that RAISES the partition max -- then the bound is not 'max-raising only', the retraction is simply not working for this shape", edge)
@@ -1645,11 +1644,11 @@ func subTwoGroupsSharingAProjectIDGetDistinctCursorKeys(t *testing.T, ctx contex
 	at := ownershipLaterAssertion.Add(96 * time.Hour)
 	// ONE team for both arms: the parent key omits provider, so the pair must
 	// share project id, team and source to collide on it.
-	mustExec(t, ctx, fixture.direct, `INSERT INTO teams VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO teams (id, name, description, updated_at, org_id, provider, native_team_key, project_keys, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"TEAM-SHARED", "shared", "", at, fixture.orgID, "github", "TEAM-SHARED", []string{}, uint8(1))
-	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', ?, 'gh', 1, 'started', '', ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', ?, 'gh', 1, 'started', '', ?)`,
 		"SHARED-ID", fixture.orgID, "GH-KEY", at)
-	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'gitlab', ?, 'gl', 1, 'started', '', ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'gitlab', ?, 'gl', 1, 'started', '', ?)`,
 		"SHARED-ID", fixture.orgID, "GL-KEY", at)
 	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-SHARED', ?, ?, 'native', ?, NULL, ?)`,
 		fixture.orgID, "SHARED-ID", "GH-KEY", ownershipFirstSeen, at)
@@ -1672,6 +1671,7 @@ func subTwoGroupsSharingAProjectIDGetDistinctCursorKeys(t *testing.T, ctx contex
 		t.Fatal("the two edges share a relationship id, so this fixture cannot tell them apart")
 	}
 	seen := map[string]bool{}
+	replays := map[string]bool{}
 	cursor := ""
 	for page := 0; page < 40; page++ {
 		batch, available, err := fixture.source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{
@@ -1683,9 +1683,7 @@ func subTwoGroupsSharingAProjectIDGetDistinctCursorKeys(t *testing.T, ctx contex
 		if !available {
 			break
 		}
-		if batch.NextCursor == cursor {
-			t.Fatalf("page %d: cursor did not advance", page)
-		}
+		requireCursorProgress(t, fmt.Sprintf("page %d", page), cursor, batch, replays)
 		cursor = batch.NextCursor
 		for _, relationship := range batch.Relationships {
 			seen[relationship.RelationshipID] = true

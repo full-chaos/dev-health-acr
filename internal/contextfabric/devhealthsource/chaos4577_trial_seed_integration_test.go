@@ -37,7 +37,7 @@ func TestTrialDataSeedTeamRepoOwnershipSatisfiesCurrentPredicate(t *testing.T) {
 
 	const orgID = "40000000-0000-4000-8000-000000000001"
 	seedTeam := func(id string) {
-		if err := direct.Exec(ctx, `INSERT INTO teams VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		if err := direct.Exec(ctx, `INSERT INTO teams (id, name, description, updated_at, org_id, provider, native_team_key, project_keys, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, id+" name", "", time.Now().UTC(), orgID, "github", id, []string{}, uint8(1)); err != nil {
 			t.Fatalf("seed team %s: %v", id, err)
 		}

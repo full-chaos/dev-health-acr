@@ -151,6 +151,10 @@ type ClickHouseProjectionSource struct {
 	now    func() time.Time
 	logger *slog.Logger
 
+	// overlap and window (CHAOS-7263): the trailing late-arrival re-read.
+	overlap time.Duration
+	window  *windowMemo
+
 	// consumedMu guards consumed, which memoises the furthest cursor a
 	// NextProjectionBatch call proved holds nothing publishable, per
 	// organization. ConsumedWithoutPublishing hands it to the worker.
@@ -225,8 +229,22 @@ func NewClickHouseProjectionSource(client contextpacket.ClickHouseQueryClient) (
 	if client == nil {
 		return nil, fmt.Errorf("devhealthsource: clickhouse query client is required")
 	}
-	return &ClickHouseProjectionSource{client: client, now: time.Now, logger: slog.Default()}, nil
+	return &ClickHouseProjectionSource{client: client, now: time.Now, logger: slog.Default(), overlap: defaultReprojectOverlap, window: newWindowMemo()}, nil
 }
+
+// WithOverlap sets the trailing re-read window once caught up (CHAOS-7263;
+// see overlap.go). It must be > 0: a zero window would silently disable the
+// late-arrival recovery.
+func (s *ClickHouseProjectionSource) WithOverlap(d time.Duration) (*ClickHouseProjectionSource, error) {
+	if d <= 0 {
+		return nil, fmt.Errorf("devhealthsource: projection overlap must be > 0, got %s", d)
+	}
+	s.overlap = d
+	return s, nil
+}
+
+func (s *ClickHouseProjectionSource) overlapDuration() time.Duration { return s.overlap }
+func (s *ClickHouseProjectionSource) windowMemo() *windowMemo        { return s.window }
 
 // WithLogger overrides the default logger (slog.Default()) with one the
 // caller actually wires to its output (CHAOS-3785 codex round-2 finding
@@ -249,7 +267,17 @@ func (s *ClickHouseProjectionSource) WithLogger(logger *slog.Logger) *ClickHouse
 // entity, relationship, episode, or tombstone is set; a candidate with NONE
 // of them is a progress marker (see progressCandidate).
 type candidate struct {
-	observedAt   time.Time
+	observedAt time.Time
+	// cursorAt (CHAOS-7263) is the candidate's position in the ONE shared
+	// projection cursor: the row's INGEST time (the column ops stamps when it
+	// normalizes the row), which is monotonic with the moment the row landed.
+	// observedAt stays the row's own (often provider-stamped) timestamp and is
+	// the ONLY value exposed as freshness (entity/relationship ObservedAt): a
+	// row's provider updated_at can be older than the cursor when it lands
+	// (backfill, newly connected provider), and keying the cursor on it skipped
+	// such rows forever. Zero means observedAt (tables whose cursor column is
+	// already an ingest stamp).
+	cursorAt     time.Time
 	sortKey      string
 	entity       *contractsv1.ContextFabricEntityProjection
 	relationship *contractsv1.ContextFabricRelationshipProjection
@@ -338,6 +366,8 @@ func (s *ClickHouseProjectionSource) plan(fromCursor string) sourcePlan {
 			// every real Dev Health timestamp we ever project.
 			return []candidate{organizationCandidate(orgID, organizationAnchorTime)}
 		},
+		overlap:              s.overlapDuration(),
+		window:               s.windowMemo(),
 		observe:              s.logOrphanedWorkItems,
 		observeQuarantine:    quarantineLogger(s.logger, SourceName),
 		observeNormalization: normalizationLogger(s.logger, SourceName),
@@ -439,14 +469,22 @@ func (s *ClickHouseProjectionSource) logOrphanedWorkItems(ctx context.Context, b
 // the same page forever -- reporting "caught up" while every valid row beyond
 // the block stayed unreachable (CHAOS-3802 codex round-2 F1). Cursor
 // advancement must follow raw rows consumed, never candidates emitted.
+// position is the candidate's place in the shared cursor space.
+func (c candidate) position() time.Time {
+	if !c.cursorAt.IsZero() {
+		return c.cursorAt
+	}
+	return c.observedAt
+}
+
 func progressCandidate(observedAt time.Time, sortKey string) candidate {
 	return candidate{observedAt: observedAt, sortKey: sortKey}
 }
 
 func sortCandidates(all []candidate) {
 	sort.SliceStable(all, func(i, j int) bool {
-		if !all[i].observedAt.Equal(all[j].observedAt) {
-			return all[i].observedAt.Before(all[j].observedAt)
+		if !all[i].position().Equal(all[j].position()) {
+			return all[i].position().Before(all[j].position())
 		}
 		return all[i].sortKey < all[j].sortKey
 	})
@@ -475,7 +513,7 @@ func truncateToCompleteRows(all []candidate, maxRows int) []candidate {
 	}
 	rows := 0
 	for i, c := range all {
-		if i == 0 || !c.observedAt.Equal(all[i-1].observedAt) || c.sortKey != all[i-1].sortKey {
+		if i == 0 || !c.position().Equal(all[i-1].position()) || c.sortKey != all[i-1].sortKey {
 			rows++
 			if rows > maxRows {
 				return all[:i]
@@ -497,7 +535,7 @@ func truncateToCompleteRows(all []candidate, maxRows int) []candidate {
 // bad data is, which is the failure this quarantine exists to end.
 func buildBatch(orgID, source, version, cursor string, cursorSource, items []candidate, fullSnapshot, completeEnumeration bool, generatedAt time.Time) (contextfabric.ProjectionBatch, error) {
 	last := cursorSource[len(cursorSource)-1]
-	nextCursor, err := encodeCursor(cursorState{Since: last.observedAt, After: last.sortKey})
+	nextCursor, err := encodeCursor(cursorState{Since: last.position(), After: last.sortKey})
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, err
 	}

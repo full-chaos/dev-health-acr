@@ -195,6 +195,38 @@ func fetch(ctx context.Context, client contextpacket.ClickHouseQueryClient, stat
 	return result, truncated, nil
 }
 
+// trailingCursorScanner appends the row's INGEST timestamp (the statement's
+// LAST selected column) to whatever the producer's own scan reads, so a
+// producer needs no change to its scan list (CHAOS-7263).
+type trailingCursorScanner struct {
+	contextpacket.ClickHouseRowScanner
+	at *time.Time
+}
+
+func (t trailingCursorScanner) Scan(dest ...any) error {
+	return t.ClickHouseRowScanner.Scan(append(dest[:len(dest):len(dest)], t.at)...)
+}
+
+// fetchIngest is fetch for a producer whose statement selects the row's
+// INGEST timestamp as its LAST column and paginates on it (CHAOS-7263): every
+// candidate the row yields takes that timestamp as its cursor position, while
+// its exposed observedAt is untouched.
+func fetchIngest(ctx context.Context, client contextpacket.ClickHouseQueryClient, statement string, bindings []contextpacket.ClickHouseBinding, limit int, scan func(contextpacket.ClickHouseRowScanner) ([]candidate, error)) ([]candidate, bool, error) {
+	return fetch(ctx, client, statement, bindings, limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+		var ingestAt time.Time
+		items, err := scan(trailingCursorScanner{ClickHouseRowScanner: r, at: &ingestAt})
+		if err != nil {
+			return nil, err
+		}
+		for i := range items {
+			if items[i].cursorAt.IsZero() && !ingestAt.IsZero() {
+				items[i].cursorAt = ingestAt.UTC()
+			}
+		}
+		return items, nil
+	})
+}
+
 func queryRepositories(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	statement := `SELECT toString(id), repo, ifNull(provider, ''), last_synced, created_at, ifNull(tags, '') FROM repos FINAL
 WHERE org_id = {org_id:String}` + sincePredicate(cursor, "last_synced", "id") + orderBy("last_synced", "id")
@@ -266,10 +298,10 @@ func queryWorkItems(ctx context.Context, client contextpacket.ClickHouseQueryCli
 	const rowKey = "concat(toString(w.repo_id), ':', w.work_item_id)"
 	statement := `SELECT w.work_item_id, toString(w.repo_id), ifNull(r.repo, ''), ifNull(w.title, ''), ifNull(w.status, ''), ifNull(w.url, ''), w.updated_at,
        w.created_at, ` + nullableTimestamp("coalesce(w.completed_at, w.closed_at)") + `,
-       ifNull(w.type, ''), ifNull(w.native_team_key, ''), ifNull(w.project_name, ''), w.labels
+       ifNull(w.type, ''), ifNull(w.native_team_key, ''), ifNull(w.project_name, ''), w.labels, w.last_synced
 FROM work_items AS w FINAL LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
-WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "w.updated_at", rowKey) + orderBy("w.updated_at", rowKey)
-	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "w.last_synced", rowKey) + orderBy("w.last_synced", rowKey)
+	return fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var workItemID, repoID, repoSlug, title, status, url string
 		var itemType, teamKey, projectName string
 		var labels []string
@@ -418,10 +450,10 @@ func queryDeployments(ctx context.Context, client contextpacket.ClickHouseQueryC
 	const rowKey = "concat(toString(d.repo_id), ':', d.deployment_id)"
 	statement := `SELECT toString(d.repo_id), r.repo, d.deployment_id, ifNull(d.status, ''), ifNull(d.environment, ''), ` + timestampExpr + `,
        ` + nullableTimestamp("coalesce(d.started_at, d.deployed_at)") + `, ` + nullableTimestamp("d.finished_at") + `,
-       ifNull(d.release_ref, '')
+       ifNull(d.release_ref, ''), d.last_synced
 FROM deployments AS d FINAL INNER JOIN repos AS r FINAL ON r.id = d.repo_id AND r.org_id = d.org_id
-WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, rowKey) + orderBy(timestampExpr, rowKey)
-	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowKey) + orderBy("d.last_synced", rowKey)
+	return fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var repoID, repoSlug, deploymentID, status, environment string
 		var releaseRef string
 		var observedAt, startedAt, finishedAt time.Time
@@ -481,12 +513,12 @@ func queryIncidents(ctx context.Context, client contextpacket.ClickHouseQueryCli
        ifNull(i.normalized_status, ifNull(i.raw_status, '')), ifNull(i.normalized_severity, ifNull(i.raw_severity, '')),
        ` + timestampExpr + `, i.is_deleted,
        ` + nullableTimestamp("i.started_at") + `, ` + nullableTimestamp("coalesce(i.resolved_at, i.deleted_at)") + `,
-       ifNull(i.description, '')
+       ifNull(i.description, ''), i.last_synced
 FROM operational_incidents AS i FINAL
 INNER JOIN operational_service_repository_mappings AS m FINAL ON i.org_id = m.org_id AND i.service_id = m.service_id AND m.is_active = 1
 INNER JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
-WHERE i.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, "i.id") + orderBy(timestampExpr, "i.id")
-	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+WHERE i.org_id = {org_id:String}` + sincePredicate(cursor, "i.last_synced", "i.id") + orderBy("i.last_synced", "i.id")
+	return fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var incidentID, repoID, repoSlug, title, status, severity, description string
 		var observedAt, startedAt, endedAt time.Time
 		var isDeleted, hasStarted, hasEnded uint8
@@ -806,12 +838,12 @@ func queryWorkItemHierarchy(ctx context.Context, client contextpacket.ClickHouse
 	const rowKey = "concat(toString(c.repo_id), ':', c.work_item_id)"
 	statement := `SELECT c.work_item_id, c.parent_id, toString(c.repo_id), ifNull(r.repo, ''), c.updated_at,
        c.created_at, ` + nullableTimestamp("coalesce(c.completed_at, c.closed_at)") + `,
-       p.created_at, ` + nullableTimestamp("coalesce(p.completed_at, p.closed_at)") + `, toString(p.repo_id)
+       p.created_at, ` + nullableTimestamp("coalesce(p.completed_at, p.closed_at)") + `, toString(p.repo_id), c.last_synced
 FROM work_items AS c FINAL
 INNER JOIN work_items AS p FINAL ON p.org_id = c.org_id AND p.work_item_id = c.parent_id
 LEFT JOIN repos AS r FINAL ON r.id = c.repo_id AND r.org_id = c.org_id
-WHERE c.org_id = {org_id:String} AND c.parent_id != '' AND c.parent_id != c.work_item_id` + sincePredicate(cursor, "c.updated_at", rowKey) + orderBy("c.updated_at", rowKey)
-	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+WHERE c.org_id = {org_id:String} AND c.parent_id != '' AND c.parent_id != c.work_item_id` + sincePredicate(cursor, "c.last_synced", rowKey) + orderBy("c.last_synced", rowKey)
+	return fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var childID, parentID, repoID, repoSlug, parentRepoID string
 		var observedAt, childCreatedAt, childEndedAt, parentCreatedAt, parentEndedAt time.Time
 		var childHasEnded, parentHasEnded uint8
@@ -895,13 +927,13 @@ WHERE c.org_id = {org_id:String} AND c.parent_id != '' AND c.parent_id != c.work
 func queryDeploymentIncidentEdges(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	statement := `SELECT e.edge_id, e.deployment_id, e.incident_id, r.repo, e.observed_at,
        ` + nullableTimestamp("coalesce(d.started_at, d.deployed_at)") + `, ` + nullableTimestamp("d.finished_at") + `,
-       ` + nullableTimestamp("i.started_at") + `, ` + nullableTimestamp("coalesce(i.resolved_at, i.deleted_at)") + `, toString(e.repo_id), toString(e.source)
+       ` + nullableTimestamp("i.started_at") + `, ` + nullableTimestamp("coalesce(i.resolved_at, i.deleted_at)") + `, toString(e.repo_id), toString(e.source), e.computed_at
 FROM work_graph_deployment_incident_edges AS e FINAL
 INNER JOIN repos AS r FINAL ON r.id = e.repo_id AND r.org_id = toString(e.org_id)
 LEFT JOIN deployments AS d FINAL ON d.org_id = toString(e.org_id) AND d.deployment_id = e.deployment_id AND d.repo_id = e.repo_id
 LEFT JOIN operational_incidents AS i FINAL ON i.org_id = toString(e.org_id) AND i.id = e.incident_id
-WHERE toString(e.org_id) = {org_id:String} AND e.deployment_id != '' AND e.incident_id NOT IN ('', 'none')` + sincePredicate(cursor, "e.observed_at", "e.edge_id") + orderBy("e.observed_at", "e.edge_id")
-	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+WHERE toString(e.org_id) = {org_id:String} AND e.deployment_id != '' AND e.incident_id NOT IN ('', 'none')` + sincePredicate(cursor, "e.computed_at", "e.edge_id") + orderBy("e.computed_at", "e.edge_id")
+	return fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var edgeID, deploymentID, incidentID, repoSlug, repoID, source string
 		var observedAt, deployStartedAt, deployFinishedAt, incidentStartedAt, incidentEndedAt time.Time
 		var hasDeployStart, hasDeployEnd, hasIncidentStart, hasIncidentEnd uint8
@@ -971,12 +1003,12 @@ func queryPullRequestReviews(ctx context.Context, client contextpacket.ClickHous
 	const rowKey = "concat(toString(r.repo_id), ':', toString(r.number), ':', r.review_id)"
 	statement := `SELECT r.review_id, toString(r.repo_id), r.number, ifNull(r.state, ''), r.submitted_at, repo.repo,
        p.created_at, ` + nullableTimestamp("coalesce(p.merged_at, p.closed_at)") + `,
-       ifNull(p.title, '')
+       ifNull(p.title, ''), r.last_synced
 FROM git_pull_request_reviews AS r FINAL
 INNER JOIN git_pull_requests AS p FINAL ON r.repo_id = p.repo_id AND r.number = p.number AND r.org_id = p.org_id
 INNER JOIN repos AS repo FINAL ON repo.id = r.repo_id AND repo.org_id = r.org_id
-WHERE r.org_id = {org_id:String}` + sincePredicate(cursor, "r.submitted_at", rowKey) + orderBy("r.submitted_at", rowKey)
-	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+WHERE r.org_id = {org_id:String}` + sincePredicate(cursor, "r.last_synced", rowKey) + orderBy("r.last_synced", rowKey)
+	return fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var reviewID, repoID, state, repoSlug, pullRequestTitle string
 		var rawNumber uint32
 		var observedAt, pullRequestCreatedAt, pullRequestEndedAt time.Time
@@ -1054,11 +1086,11 @@ func queryCIRuns(ctx context.Context, client contextpacket.ClickHouseQueryClient
 	const rowKey = "concat(toString(c.repo_id), ':', c.run_id)"
 	statement := `SELECT c.run_id, toString(c.repo_id), ifNull(c.branch, ''), ifNull(c.status, ''), repo.repo, ` + timestampExpr + `,
        c.started_at, ` + nullableTimestamp("c.finished_at") + `,
-       ifNull(c.pipeline_name, '')
+       ifNull(c.pipeline_name, ''), c.last_synced
 FROM ci_pipeline_runs AS c FINAL
 INNER JOIN repos AS repo FINAL ON repo.id = c.repo_id AND repo.org_id = c.org_id
-WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, rowKey) + orderBy(timestampExpr, rowKey)
-	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, "c.last_synced", rowKey) + orderBy("c.last_synced", rowKey)
+	return fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var runID, repoID, branch, status, repoSlug, pipelineName string
 		var observedAt, startedAt, finishedAt time.Time
 		var hasFinished uint8

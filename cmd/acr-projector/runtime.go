@@ -188,6 +188,9 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 		return nil, errors.Join(err, runtime.Close())
 	}
 	clickhouseSource.WithLogger(logger)
+	if _, err := clickhouseSource.WithOverlap(cfg.Overlap); err != nil {
+		return nil, errors.Join(err, runtime.Close())
+	}
 	episodesSource, err := newEpisodesSource(episodeRows, cfg.EpisodeWriteback)
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
@@ -197,6 +200,9 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 		return nil, errors.Join(err, runtime.Close())
 	}
 	teamsProjectsSource.WithLogger(logger)
+	if _, err := teamsProjectsSource.WithOverlap(cfg.Overlap); err != nil {
+		return nil, errors.Join(err, runtime.Close())
+	}
 
 	// CHAOS-6182: organization auto-discovery. Constructed ONLY when the
 	// operator opted in -- a nil projectionrun.Config.OrgSource leaves the

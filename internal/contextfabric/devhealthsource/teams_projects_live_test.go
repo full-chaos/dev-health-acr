@@ -2,6 +2,7 @@ package devhealthsource_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -63,6 +64,7 @@ func TestTeamsProjectsSourceAgainstLiveClickHouse(t *testing.T) {
 	kinds := map[contractsv1.ContextFabricSubjectKind]int{}
 	types := map[contractsv1.ContextFabricRelationshipType]int{}
 	cursor := ""
+	replays := map[string]bool{}
 	for page := 0; page < 64; page++ {
 		batch, available, err := source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{OrgID: orgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: cursor})
 		if err != nil {
@@ -77,9 +79,7 @@ func TestTeamsProjectsSourceAgainstLiveClickHouse(t *testing.T) {
 		for _, relationship := range batch.Relationships {
 			types[relationship.Type]++
 		}
-		if batch.NextCursor == cursor {
-			t.Fatalf("page %d: cursor did not advance (%q) -- projection would loop forever", page, cursor)
-		}
+		requireCursorProgress(t, fmt.Sprintf("page %d", page), cursor, batch, replays)
 		cursor = batch.NextCursor
 	}
 
