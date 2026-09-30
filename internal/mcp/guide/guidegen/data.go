@@ -78,6 +78,7 @@ func dataGraphQLRoots() []DataGraphQLRootRow {
 var GraphQLRules = []string{
 	"Queries only: no mutation, subscription, fragment, directive or introspection (`__schema`, `__type`). Aliases only on root fields (at most 5), at most 5 root fields, depth 10, 150 fields, 8192 bytes of text.",
 	"Never send `orgId`: acr sets it from your credential, inside input objects too.",
+	"Select each root once and put all its fields in one selection: a root response key used twice is refused (`query_invalid`, `repeated_root_key`).",
 	"Select only fields the schema section lists. An unlisted field is refused (`field_not_allowed`) before anything is sent; person-named and free-text evidence fields are never listed.",
 	"For a credential restricted to some repositories, acr limits each root to your grant and adds the row id field when you select a row list without it; `root_fields[].added_paths` names it.",
 	"acr rebuilds the query text it sends from your validated query; your text is never forwarded. `source.query_digest` names what was sent.",
