@@ -9,15 +9,17 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"testing"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 )
 
@@ -42,7 +44,12 @@ import (
 type publishedIntegerField struct {
 	path       []string // object keys; "[]" is a list element
 	boundaries []int64  // every minimum, maximum and const stated at the field
+	// zeroDefault: the published description says 0 means the default.
+	zeroDefault bool
 }
+
+// zeroDefaultPhrase is how a published integer field says 0 is the default.
+var zeroDefaultPhrase = regexp.MustCompile(`\b0 (means not set|or absent means the default)`)
 
 // discoverPublishedIntegerFields walks a decoded schema the way a validator does:
 // properties, items, local $refs and the allOf/anyOf/oneOf branches.
@@ -72,7 +79,8 @@ func discoverPublishedIntegerFields(root, node map[string]any, at []string, seen
 	}
 	var out []publishedIntegerField
 	if node["type"] == "integer" {
-		out = append(out, publishedIntegerField{path: append([]string{}, at...), boundaries: collectBoundaries(node)})
+		description, _ := node["description"].(string)
+		out = append(out, publishedIntegerField{path: append([]string{}, at...), boundaries: collectBoundaries(node), zeroDefault: zeroDefaultPhrase.MatchString(description)})
 	}
 	if props, ok := node["properties"].(map[string]any); ok {
 		names := make([]string, 0, len(props))
@@ -225,17 +233,58 @@ func cloneJSON(v any) any {
 	return out
 }
 
-// newIntegerToolSession starts a hosted-mode server that advertises every data
-// and answer tool, over an in-memory MCP session. The hosted API it talks to
-// answers {} to everything and counts the requests that reach it. diagnostics
-// receives the server's JSON log at Debug.
-func newIntegerToolSession(t *testing.T, diagnostics io.Writer) (*mcpsdk.ClientSession, *atomic.Int64) {
+// integerToolRig is a hosted-mode MCP server that advertises every data and
+// answer tool, over an in-memory session, in front of a hosted API that answers
+// every tool's route with a valid response and records what it was sent.
+type integerToolRig struct {
+	session *mcpsdk.ClientSession
+	mu      sync.Mutex
+	calls   int
+	path    string
+	body    []byte
+}
+
+// last returns how many requests reached the hosted API and the last one.
+func (r *integerToolRig) last() (int, string, []byte) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls, r.path, r.body
+}
+
+// newIntegerToolRig starts the rig. diagnostics receives the server's JSON log
+// at Debug.
+func newIntegerToolRig(t *testing.T, diagnostics io.Writer) *integerToolRig {
 	t.Helper()
-	var hostedCalls atomic.Int64
+	rig := &integerToolRig{}
+	readFacts, readRelationships := readFactsExample(t), readRelationshipsExample(t)
 	hosted := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hostedCalls.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{}`))
+		raw, _ := io.ReadAll(r.Body)
+		rig.mu.Lock()
+		rig.calls++
+		rig.path, rig.body = r.URL.Path, raw
+		rig.mu.Unlock()
+		switch r.URL.Path {
+		case "/api/v1/context-fabric/data/catalog":
+			dtRaw(w, http.StatusOK, dtCatalogBody)
+		case "/api/v1/context-fabric/data/subjects":
+			dtRaw(w, http.StatusOK, dtFindBody)
+		case "/api/v1/context-fabric/data/operations":
+			dtRaw(w, http.StatusOK, dtOpBody)
+		case "/api/v1/context-fabric/data/graphql":
+			dtRaw(w, http.StatusOK, dtGQLBody)
+		case "/api/v1/context-fabric/data/facts":
+			dtRaw(w, http.StatusOK, string(readFacts))
+		case "/api/v1/context-fabric/data/relationships":
+			dtRaw(w, http.StatusOK, string(readRelationships))
+		case "/api/v1/context-fabric/investigations":
+			writeJSONFixture(t, w, http.StatusOK, parityResult())
+		case "/api/v1/agent-context/context-packets":
+			var received contractsv1.ContextPacketRequest
+			_ = json.Unmarshal(raw, &received)
+			writeJSONFixture(t, w, http.StatusOK, validContextPacketFixture(received.RequestID))
+		default:
+			writeErrorFixture(t, w, http.StatusNotFound, "not_found", false)
+		}
 	}))
 	t.Cleanup(hosted.Close)
 
@@ -253,11 +302,13 @@ func newIntegerToolSession(t *testing.T, diagnostics io.Writer) (*mcpsdk.ClientS
 	processConfig, caller := boot.split(diagnostics)
 	processConfig.transport = TransportHTTP
 	processConfig.diagnostics = newDiagnosticsLogger(diagnostics, slog.LevelDebug)
-	return connectedClientForCaller(t, processConfig, caller), &hostedCalls
+	rig.session = connectedClientForCaller(t, processConfig, caller)
+	return rig
 }
 
 func TestEveryPublishedIntegerFieldIsHandledAsItsSchemaSays(t *testing.T) {
-	session, hostedCalls := newIntegerToolSession(t, io.Discard)
+	rig := newIntegerToolRig(t, io.Discard)
+	session := rig.session
 
 	listed, err := session.ListTools(context.Background(), nil)
 	if err != nil {
@@ -309,13 +360,17 @@ func TestEveryPublishedIntegerFieldIsHandledAsItsSchemaSays(t *testing.T) {
 		// call returns whether the request got past argument handling: the
 		// hosted API was reached. Anything the handler refuses (decode,
 		// validation) never gets there.
+		// call returns whether the request was ANSWERED: it reached the hosted API
+		// and the tool result is not an error. The hosted API answers every route
+		// with a valid response, so an error result is a refusal of the request
+		// (decode, validation, a bound), never a stub artefact.
 		var lastOutcome string // what the last call answered, for a failure message
 		call := func(args map[string]any) bool {
 			data, err := json.Marshal(args)
 			if err != nil {
 				t.Fatal(err)
 			}
-			before := hostedCalls.Load()
+			before, _, _ := rig.last()
 			result, callErr := session.CallTool(context.Background(), &mcpsdk.CallToolParams{Name: tool.Name, Arguments: json.RawMessage(data)})
 			lastOutcome = fmt.Sprintf("error=%v", callErr)
 			if callErr == nil && result != nil && len(result.Content) > 0 {
@@ -323,7 +378,8 @@ func TestEveryPublishedIntegerFieldIsHandledAsItsSchemaSays(t *testing.T) {
 					lastOutcome = fmt.Sprintf("isError=%v text=%q", result.IsError, text.Text)
 				}
 			}
-			return callErr == nil && hostedCalls.Load() > before
+			after, _, _ := rig.last()
+			return callErr == nil && result != nil && !result.IsError && after > before
 		}
 		schemaAccepts := func(args map[string]any) bool {
 			data, _ := json.Marshal(args)
@@ -377,7 +433,7 @@ func verdict(accepted bool) string {
 // decision, and never the literal the client sent.
 func TestIntegerMiddlewareLogsEachDecisionAtDebugWithoutTheLiteral(t *testing.T) {
 	var log bytes.Buffer
-	session, _ := newIntegerToolSession(t, &log)
+	session := newIntegerToolRig(t, &log).session
 	call := func(tool string, args string) {
 		t.Helper()
 		if _, err := session.CallTool(context.Background(), &mcpsdk.CallToolParams{Name: tool, Arguments: json.RawMessage(args)}); err != nil {
@@ -421,4 +477,124 @@ func TestIntegerMiddlewareLogsEachDecisionAtDebugWithoutTheLiteral(t *testing.T)
 			t.Errorf("the log carries the literal %q", literal)
 		}
 	}
+}
+
+// A field whose published schema says 0 means the default is left out of the
+// request the server forwards, never forwarded as 0: the hosted route may treat
+// a 0 as a value (a trailing window of 0 days) where omission means "not set".
+// The set of such fields is read from the published descriptions, not listed.
+//
+// Where a handler forwards the field at the path it arrived at (read_facts,
+// read_relationships, the data tools), the zero must be gone from that path.
+// Where it maps the field elsewhere and fills its own default (context_for_task
+// sends budget.* as options.*), no key of that name may carry a 0 anywhere.
+func TestZeroDefaultIntegerFieldsAreOmittedFromTheForwardedRequest(t *testing.T) {
+	rig := newIntegerToolRig(t, io.Discard)
+	listed, err := rig.session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parse := func(body []byte) any {
+		var node any
+		if err := json.Unmarshal(body, &node); err != nil {
+			t.Fatalf("the forwarded body is not JSON: %v: %s", err, body)
+		}
+		return node
+	}
+	// present reports whether a value sits at path.
+	present := func(node any, path []string) bool {
+		for _, key := range path {
+			obj, ok := node.(map[string]any)
+			if !ok {
+				return false
+			}
+			if node, ok = obj[key]; !ok {
+				return false
+			}
+		}
+		return true
+	}
+	// valuesNamed collects the value of every key called name, at any depth.
+	var valuesNamed func(node any, name string) []any
+	valuesNamed = func(node any, name string) []any {
+		var out []any
+		switch n := node.(type) {
+		case map[string]any:
+			for k, v := range n {
+				if k == name {
+					out = append(out, v)
+				}
+				out = append(out, valuesNamed(v, name)...)
+			}
+		case []any:
+			for _, v := range n {
+				out = append(out, valuesNamed(v, name)...)
+			}
+		}
+		return out
+	}
+	checked := 0
+	for _, tool := range listed.Tools {
+		encoded, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var raw map[string]any
+		if err := json.Unmarshal(encoded, &raw); err != nil {
+			t.Fatal(err)
+		}
+		examples, _ := raw["examples"].([]any)
+		if len(examples) == 0 {
+			continue
+		}
+		base := examples[0].(map[string]any)
+		if tool.Name == toolContextForTask {
+			base = cloneJSON(base).(map[string]any)
+			base["repository"] = map[string]any{"slug": "acme/billing"}
+		}
+		for _, field := range discoverPublishedIntegerFields(raw, raw, nil, map[string]bool{}) {
+			if !field.zeroDefault {
+				continue
+			}
+			name := tool.Name + " " + strings.Join(field.path, ".")
+			key := field.path[len(field.path)-1]
+			answer := func(value string) []byte {
+				t.Helper()
+				data, err := json.Marshal(instanceWith(base, field.path, value))
+				if err != nil {
+					t.Fatal(err)
+				}
+				before, _, _ := rig.last()
+				result, callErr := rig.session.CallTool(context.Background(), &mcpsdk.CallToolParams{Name: tool.Name, Arguments: json.RawMessage(data)})
+				after, _, body := rig.last()
+				if callErr != nil || result == nil || result.IsError || after <= before {
+					t.Fatalf("%s = %s: the call was not answered (err=%v, isError=%v, reached=%v)", name, value, callErr, result != nil && result.IsError, after > before)
+				}
+				return body
+			}
+			// The control: a nonzero value is forwarded, so the checks below can
+			// fail. It says whether the handler keeps the field at its path.
+			control := parse(answer(strconv.FormatInt(field.boundaries[len(field.boundaries)-1], 10)))
+			sameSpot := present(control, field.path)
+			if !sameSpot && len(valuesNamed(control, key)) == 0 {
+				t.Fatalf("%s: the forwarded request does not carry the field under any path, so a zero could not be seen in it", name)
+			}
+			for _, zero := range []string{"0", "0.0", "-0", "0e31", "0." + strings.Repeat("0", 400)} {
+				body := parse(answer(zero))
+				if sameSpot && present(body, field.path) {
+					t.Errorf("%s = %.30s: the forwarded request still carries the field at its path: %v", name, zero, body)
+				}
+				for _, v := range valuesNamed(body, key) {
+					if n, isNumber := v.(float64); isNumber && n == 0 {
+						t.Errorf("%s = %.30s: the forwarded request carries %q as 0: %v", name, zero, key, body)
+					}
+				}
+			}
+			checked++
+		}
+	}
+	if checked < 12 {
+		t.Fatalf("only %d zero-default fields were derived from the published descriptions", checked)
+	}
+	t.Logf("checked %d zero-default fields: never forwarded as 0", checked)
 }

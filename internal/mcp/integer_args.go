@@ -42,6 +42,19 @@ import (
 // keys, with "[]" for a list element.
 type integerField struct {
 	path []string
+	// zeroDefault: the published schema says 0 means the default ("0 means not
+	// set", "0 or absent means the default"). A zero at such a field is
+	// omitted from the request the handler forwards, never forwarded as 0: a
+	// hosted route that treats 0 as a value, not as "not set", would refuse it.
+	zeroDefault bool
+}
+
+// zeroMeansDefault reads the phrase a published integer field uses to say that
+// 0 is the default: "0 means not set (the default applies)" or "0 or absent
+// means the default".
+func zeroMeansDefault(description any) bool {
+	text, _ := description.(string)
+	return strings.Contains(text, "0 means not set") || strings.Contains(text, "0 or absent means the default")
 }
 
 var integerFieldsByTool sync.Map // tool name -> []integerField
@@ -82,7 +95,7 @@ func collectIntegerFields(root, node map[string]any, at []string, refs map[strin
 	}
 	var out []integerField
 	if isIntegerType(node["type"]) {
-		out = append(out, integerField{path: append([]string{}, at...)})
+		out = append(out, integerField{path: append([]string{}, at...), zeroDefault: zeroMeansDefault(node["description"])})
 	}
 	if props, ok := node["properties"].(map[string]any); ok {
 		for name, sub := range props {
@@ -151,6 +164,9 @@ const (
 	// decisionRewritten: an integral number in another spelling, written as the
 	// integer it is.
 	decisionRewritten integerDecision = "rewritten"
+	// decisionOmitted: a zero at a field whose schema says 0 means the default;
+	// dropped from the forwarded request.
+	decisionOmitted integerDecision = "omitted"
 	// decisionRefusedRange: an integral number outside the int64 range; left
 	// as it is, and the handler's decode refuses it (as the schema's maximum
 	// does).
@@ -212,19 +228,24 @@ func normalizeIntegerArguments(tool string, raw []byte) ([]byte, []integerDecisi
 	changed := false
 	for _, field := range fields {
 		name := strings.Join(field.path, ".")
-		visitAt(tree, field.path, func(v any) (any, bool) {
+		visitAt(tree, field.path, func(v any) (any, visitAction) {
 			number, isNumber := v.(json.Number)
 			if !isNumber {
 				decisions = append(decisions, integerDecisionRecord{name, decisionPassed})
-				return v, false
+				return v, visitKeep
 			}
 			canonical, decision := classifyInteger(number.String())
+			if field.zeroDefault && (decision == decisionPassed || decision == decisionRewritten) && canonical == "0" {
+				decisions = append(decisions, integerDecisionRecord{name, decisionOmitted})
+				changed = true
+				return nil, visitDelete
+			}
 			decisions = append(decisions, integerDecisionRecord{name, decision})
 			if decision == decisionRewritten {
 				changed = true
-				return json.Number(canonical), true
+				return json.Number(canonical), visitReplace
 			}
-			return v, false
+			return v, visitKeep
 		})
 	}
 	if !changed {
@@ -239,9 +260,18 @@ func normalizeIntegerArguments(tool string, raw []byte) ([]byte, []integerDecisi
 	return bytes.TrimRight(out.Bytes(), "\n"), decisions
 }
 
+// visitAction is what fn asks visitAt to do with the value it was given.
+type visitAction int
+
+const (
+	visitKeep visitAction = iota
+	visitReplace
+	visitDelete // only an object key can be dropped; a list element is kept
+)
+
 // visitAt calls fn for every value at path in tree ("[]" walks every element
-// of a list) and stores the replacement when fn returns one.
-func visitAt(tree any, p []string, fn func(v any) (any, bool)) {
+// of a list) and applies the action fn returns.
+func visitAt(tree any, p []string, fn func(v any) (any, visitAction)) {
 	if len(p) == 0 {
 		return
 	}
@@ -253,8 +283,11 @@ func visitAt(tree any, p []string, fn func(v any) (any, bool)) {
 			return
 		}
 		if len(rest) == 0 {
-			if replacement, replaced := fn(child); replaced {
+			switch replacement, action := fn(child); action {
+			case visitReplace:
 				node[head] = replacement
+			case visitDelete:
+				delete(node, head)
 			}
 			return
 		}
@@ -265,7 +298,7 @@ func visitAt(tree any, p []string, fn func(v any) (any, bool)) {
 		}
 		for i, element := range node {
 			if len(rest) == 0 {
-				if replacement, replaced := fn(element); replaced {
+				if replacement, action := fn(element); action == visitReplace {
 					node[i] = replacement
 				}
 				continue

@@ -25,7 +25,10 @@ func TestNormalizeIntegerArgumentsChangesOnlyIntegerFields(t *testing.T) {
 		{name: "an integral float above the bound is still only rewritten", tool: toolRunOperation, in: `{"operation":"hotspots","max_bytes":262145.0}`, want: `{"max_bytes":262145,"operation":"hotspots"}`},
 		{name: "a nested integer field", tool: toolReadFacts, in: `{"kinds":["health"],"subjects":[{"kind":"team","canonical_id":"team:1"}],"window":{"mode":"trailing","days":7.0}}`, want: `{"kinds":["health"],"subjects":[{"canonical_id":"team:1","kind":"team"}],"window":{"days":7,"mode":"trailing"}}`},
 		{name: "a nested integer above the bound is only rewritten", tool: toolReadFacts, in: `{"window":{"days":61.0}}`, want: `{"window":{"days":61}}`},
-		{name: "read_facts takes 0 as the default", tool: toolReadFacts, in: `{"kinds":["health"],"max_bytes":0.0}`, want: `{"kinds":["health"],"max_bytes":0}`},
+		{name: "a zero at a zero-default field is left out, not forwarded", tool: toolReadFacts, in: `{"kinds":["health"],"max_bytes":0.0}`, want: `{"kinds":["health"]}`},
+		{name: "a zero in an integer literal is left out too", tool: toolReadFacts, in: `{"kinds":["health"],"max_bytes":0}`, want: `{"kinds":["health"]}`},
+		{name: "a nested zero is left out and the object stays", tool: toolReadFacts, in: `{"window":{"mode":"trailing","days":0}}`, want: `{"window":{"mode":"trailing"}}`},
+		{name: "a nonzero at a zero-default field stays", tool: toolReadFacts, in: `{"max_bytes":4096,"window":{"days":7}}`},
 		{name: "a number outside an integer field keeps its exact text", tool: toolRunOperation, in: `{"operation":"hotspots","variables":{"score":1.0,"big":12345678901234567890},"max_bytes":8192.0}`, want: `{"max_bytes":8192,"operation":"hotspots","variables":{"big":12345678901234567890,"score":1.0}}`},
 		{name: "html characters are not escaped on the way out", tool: toolRunOperation, in: `{"operation":"hotspots","variables":{"q":"a<b&c"},"max_bytes":8192.0}`, want: `{"max_bytes":8192,"operation":"hotspots","variables":{"q":"a<b&c"}}`},
 		{name: "a string in an integer field is the handler's to refuse", tool: toolRunOperation, in: `{"operation":"hotspots","max_bytes":"1"}`},
@@ -33,7 +36,7 @@ func TestNormalizeIntegerArgumentsChangesOnlyIntegerFields(t *testing.T) {
 		{name: "trailing data is not laundered away", tool: toolRunOperation, in: `{"operation":"hotspots","max_bytes":1.0} garbage`},
 		{name: "not an object", tool: toolRunOperation, in: `[1.0]`},
 		{name: "an exponent too large to expand is left for the handler", tool: toolRunOperation, in: `{"operation":"hotspots","max_bytes":1e400}`},
-		{name: "a long integral spelling is decided on its value", tool: toolRunOperation, in: `{"operation":"hotspots","max_bytes":0e31}`, want: `{"max_bytes":0,"operation":"hotspots"}`},
+		{name: "a long integral spelling is decided on its value", tool: toolRunOperation, in: `{"operation":"hotspots","max_bytes":0e31}`, want: `{"operation":"hotspots"}`},
 		{name: "mantissa zeros fold into the exponent", tool: toolRunOperation, in: `{"operation":"hotspots","max_bytes":10000000000000000000000000000000e-31}`, want: `{"max_bytes":1,"operation":"hotspots"}`},
 		{name: "a fraction of zeros is an integer however many", tool: toolRunOperation, in: `{"operation":"hotspots","max_bytes":1.` + strings.Repeat("0", 1000) + `}`, want: `{"max_bytes":1,"operation":"hotspots"}`},
 		{name: "a tool without integer fields", tool: toolDataCatalog, in: `{"sections":["limits"]}`},
@@ -137,6 +140,10 @@ func TestNormalizeIntegerArgumentsReportsEveryDecision(t *testing.T) {
 	}
 	_, decisions = normalizeIntegerArguments(toolRunOperation, []byte(`{"max_bytes":1e999999999}`))
 	if len(decisions) != 1 || decisions[0].decision != decisionRefusedRange {
+		t.Fatalf("decisions = %#v", decisions)
+	}
+	_, decisions = normalizeIntegerArguments(toolFindSubjects, []byte(`{"limit":0.0}`))
+	if len(decisions) != 1 || decisions[0].decision != decisionOmitted {
 		t.Fatalf("decisions = %#v", decisions)
 	}
 }

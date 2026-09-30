@@ -103,7 +103,7 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 60,
-          "description": "Trailing days. Only with mode trailing. A range or trailing window spans at most 60 days. 0 means not set (the default applies)."
+          "description": "Trailing days. Only with mode trailing. A range or trailing window spans at most 60 days. 0 means not set, the same as leaving it out: a trailing window needs days from 1 to 60."
         }
       },
       "description": "Time window. Omit it and each kind answers over its own default period; the response says so."
