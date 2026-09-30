@@ -32,19 +32,22 @@ const (
 	MCPHTTPAuthUpstreamUnavailable     = "upstream_unavailable"
 )
 
-// Gate decisions of the per-address edge failure gate.
+// Gate decisions of the per-address edge failure gate: admitted, or which
+// bound refused. failure_budget: the address reached its failed-authentication
+// limit; in_flight: too many undecided attempts from the address;
+// tracked_keys: the tracked-address table is full; unspecified: a limiter
+// that cannot say.
 const (
 	MCPHTTPGateAdmitted      = "admitted"
 	MCPHTTPGateFailureBudget = "failure_budget"
-	MCPHTTPGateCapacity      = "capacity"
+	MCPHTTPGateInFlight      = "in_flight"
+	MCPHTTPGateTrackedKeys   = "tracked_keys"
+	MCPHTTPGateUnspecified   = "unspecified"
 )
 
 // MCPHTTPGateDecisionVocabulary lists every gate decision, admitted first.
-// failure_budget: the address reached its failed-authentication limit;
-// capacity: too many undecided attempts from the address, or the tracked
-// address table is full.
 func MCPHTTPGateDecisionVocabulary() []string {
-	return []string{MCPHTTPGateAdmitted, MCPHTTPGateFailureBudget, MCPHTTPGateCapacity}
+	return []string{MCPHTTPGateAdmitted, MCPHTTPGateFailureBudget, MCPHTTPGateInFlight, MCPHTTPGateTrackedKeys, MCPHTTPGateUnspecified}
 }
 
 // MCPHTTPAuthOutcomeVocabulary lists every auth outcome, admitted first.

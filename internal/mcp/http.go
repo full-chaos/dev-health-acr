@@ -56,7 +56,9 @@ const (
 const (
 	HTTPGateAdmitted      = eventspec.MCPHTTPGateAdmitted
 	HTTPGateFailureBudget = eventspec.MCPHTTPGateFailureBudget
-	HTTPGateCapacity      = eventspec.MCPHTTPGateCapacity
+	HTTPGateInFlight      = eventspec.MCPHTTPGateInFlight
+	HTTPGateTrackedKeys   = eventspec.MCPHTTPGateTrackedKeys
+	HTTPGateUnspecified   = eventspec.MCPHTTPGateUnspecified
 )
 
 // HTTPAuthOutcomeVocabulary lists every auth outcome, admitted first.
@@ -474,11 +476,10 @@ func (h *HTTPHandler) serveMCP(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	ip := h.gate.clientIP(r)
 	line.clientIP = ip
-	line.gateDecision = HTTPGateAdmitted
-	release, admitted := h.gate.limiter.BeginAttempt(ip, now)
-	if !admitted {
+	release, gateDecision := h.gate.begin(ip, now)
+	line.gateDecision = gateDecision
+	if gateDecision != HTTPGateAdmitted {
 		line.authOutcome = HTTPAuthRateLimited
-		line.gateDecision = h.gate.refusalReason(ip, now)
 		h.writeAuthRefusal(recorder, r.URL.Path, HTTPAuthRateLimited, h.gate.retryAfter(ip, now))
 		return
 	}

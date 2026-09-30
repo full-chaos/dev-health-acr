@@ -799,6 +799,46 @@ for token in 'ACR_MCP_TRANSPORT: "http"' 'ACR_MCP_HTTP_BASE_PATH: "/mcp"' 'ACR_A
   grep -qF "$token" <<<"$mcp_cm" || fail_gate "acr-mcp: ConfigMap is missing $token"
 done
 if grep -qE 'TOKEN|PASSWORD|SECRET|DSN' <<<"$mcp_cm"; then fail_gate "acr-mcp: ConfigMap carries a credential-shaped key"; fi
+# CHAOS-7196: the edge failure gate resolves the same limit inputs as acr-api.
+# The ConfigMap mirrors EXACTLY the gate inputs (ACR_REQUESTS_PER_MINUTE,
+# ACR_LIMIT_WINDOW and the ACR_AUTH_* limit settings) and only as literals,
+# with a deployment.extraEnv literal winning as it does for acr-api: no proxy
+# trust list (acr-mcp has its own), no unrelated setting, and no other
+# ACR_AUTH_* name (a secret-shaped one must never land in this ConfigMap).
+grep -qF 'ACR_REQUESTS_PER_MINUTE: "' <<<"$mcp_cm" || fail_gate "acr-mcp: ConfigMap is missing ACR_REQUESTS_PER_MINUTE"
+mirror_render="$(render --set acrMcp.enabled=true --set-string "acrMcp.image.reference=${mcp_image}" \
+  --set-json 'deployment.extraEnv=[{"name":"ACR_TRUSTED_PROXY_CIDRS","value":"10.42.0.0/24"},{"name":"ACR_POSTGRES_MAX_OPEN_CONNS","value":"40"},{"name":"ACR_AUTH_FAILURES_PER_WINDOW","value":"7"},{"name":"ACR_LIMIT_WINDOW","value":"2m"},{"name":"ACR_REQUESTS_PER_MINUTE","value":"5"},{"name":"ACR_AUTH_PRIVATE_KEY","value":"PLACEHOLDER_NOT_A_SECRET"},{"name":"ACR_AUTH_FROM_SECRET","valueFrom":{"secretKeyRef":{"name":"s","key":"k"}}}]')"
+mirror_cm="$(extract_doc ConfigMap '  name: [^\n]*-mcp-config\n' <<<"$mirror_render")"
+[[ -n "$mirror_cm" ]] || fail_gate "acr-mcp: extraEnv mirror render is missing the acr-mcp ConfigMap"
+for token in 'ACR_AUTH_FAILURES_PER_WINDOW: "7"' 'ACR_LIMIT_WINDOW: "2m"' 'ACR_REQUESTS_PER_MINUTE: "5"'; do
+  grep -qF "$token" <<<"$mirror_cm" || fail_gate "acr-mcp: ConfigMap does not mirror $token from deployment.extraEnv"
+done
+if [[ "$(grep -c 'ACR_REQUESTS_PER_MINUTE' <<<"$mirror_cm")" != 1 ]]; then fail_gate "acr-mcp: ConfigMap carries ACR_REQUESTS_PER_MINUTE more than once"; fi
+for absent in ACR_TRUSTED_PROXY_CIDRS ACR_POSTGRES_MAX_OPEN_CONNS ACR_AUTH_PRIVATE_KEY PLACEHOLDER_NOT_A_SECRET ACR_AUTH_FROM_SECRET; do
+  if grep -qF "$absent" <<<"$mirror_cm"; then fail_gate "acr-mcp: ConfigMap mirrored $absent from deployment.extraEnv (only the exact failure-gate inputs may be mirrored)"; fi
+done
+pass "acr-mcp: ConfigMap mirrors exactly the failure-gate inputs of deployment.extraEnv (override wins, nothing else copied)"
+# Every mirrored name: present positively, and each unusable shape fails closed.
+for gate_name in ACR_REQUESTS_PER_MINUTE ACR_LIMIT_WINDOW ACR_AUTH_LIMIT_WINDOW ACR_AUTH_FAILURES_PER_WINDOW ACR_AUTH_MAX_TRACKED_KEYS ACR_AUTH_MAX_IN_FLIGHT; do
+  each_render="$(render --set acrMcp.enabled=true --set-string "acrMcp.image.reference=${mcp_image}" \
+    --set-json "deployment.extraEnv=[{\"name\":\"${gate_name}\",\"value\":\"9\"}]")"
+  each_cm="$(extract_doc ConfigMap '  name: [^\n]*-mcp-config\n' <<<"$each_render")"
+  grep -qF "${gate_name}: \"9\"" <<<"$each_cm" || fail_gate "acr-mcp: ConfigMap does not mirror ${gate_name} from deployment.extraEnv"
+  for shape in \
+    '"valueFrom":{"secretKeyRef":{"name":"s","key":"k"}}' \
+    '"value":"","valueFrom":{"secretKeyRef":{"name":"s","key":"k"}}' \
+    '"value":7'; do
+    set +e
+    shape_out="$(render --set acrMcp.enabled=true --set-string "acrMcp.image.reference=${mcp_image}" \
+      --set-json "deployment.extraEnv=[{\"name\":\"${gate_name}\",${shape}}]" 2>&1)"
+    shape_status=$?
+    set -e
+    if [[ $shape_status -eq 0 ]] || ! grep -qF 'acr-mcp-gate-env' <<<"$shape_out"; then
+      fail_gate "acr-mcp: extraEnv ${gate_name} with ${shape} must fail the render naming acr-mcp-gate-env"
+    fi
+  done
+done
+pass "acr-mcp: every mirrored gate input is mirrored as a string literal and fails closed on valueFrom / hybrid / non-string"
 mcp_svc="$(extract_mcp_doc Service)"
 grep -qE '^\s+port: 8081\s*$' <<<"$mcp_svc" || fail_gate "acr-mcp: Service must expose 8081"
 mcp_route="$(extract_mcp_doc HTTPRoute)"

@@ -8121,7 +8121,9 @@
         "closed_vocabulary": [
           "admitted",
           "failure_budget",
-          "capacity"
+          "in_flight",
+          "tracked_keys",
+          "unspecified"
         ]
       },
       {

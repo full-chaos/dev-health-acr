@@ -31,6 +31,26 @@ data:
   ACR_API_ALLOW_INSECURE_INTERNAL_HTTP: "true"
   {{- end }}
   ACR_LOG_LEVEL: {{ $m.logLevel | quote }}
+  {{- /* The edge failure gate must resolve the same limit inputs as acr-api
+       (CHAOS-7196). Exactly these names are mirrored, and only as literals:
+       ACR_REQUESTS_PER_MINUTE (from config.requestsPerMinute, overridden by a
+       deployment.extraEnv literal exactly as acr-api sees it) and the gate
+       limit settings below. Any other extraEnv entry is never copied into this
+       non-secret ConfigMap. A valueFrom entry for a mirrored name cannot be
+       mirrored, so it fails the render rather than letting the two diverge. */}}
+  {{- $gate := dict "ACR_REQUESTS_PER_MINUTE" (.Values.config.requestsPerMinute | toString) }}
+  {{- $mirrored := list "ACR_REQUESTS_PER_MINUTE" "ACR_LIMIT_WINDOW" "ACR_AUTH_LIMIT_WINDOW" "ACR_AUTH_FAILURES_PER_WINDOW" "ACR_AUTH_MAX_TRACKED_KEYS" "ACR_AUTH_MAX_IN_FLIGHT" }}
+  {{- range $e := .Values.deployment.extraEnv }}
+  {{- if has $e.name $mirrored }}
+  {{- if or (hasKey $e "valueFrom") (not (hasKey $e "value")) (not (kindIs "string" $e.value)) }}
+  {{- fail (printf "acr-mcp-gate-env: deployment.extraEnv %s must be a string literal value (no valueFrom, even alongside a value): the acr-mcp edge failure gate reads the same setting and cannot mirror a reference or a non-string" $e.name) }}
+  {{- end }}
+  {{- $_ := set $gate $e.name ($e.value | toString) }}
+  {{- end }}
+  {{- end }}
+  {{- range $name := keys $gate | sortAlpha }}
+  {{ $name }}: {{ index $gate $name | quote }}
+  {{- end }}
   {{- if $m.trustedProxyCidrs }}
   ACR_MCP_TRUSTED_PROXY_CIDRS: {{ join "," $m.trustedProxyCidrs | quote }}
   {{- end }}
