@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/otelexport"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 	"github.com/full-chaos/dev-health-acr/internal/version"
@@ -41,12 +42,11 @@ const (
 	// whose X-Forwarded-For the edge failure gate believes. Empty: the gate
 	// keys on the peer address.
 	TrustedProxyCIDRsEnvironment = "ACR_MCP_TRUSTED_PROXY_CIDRS"
-	// The edge gate reads the same limit settings as acr-api.
-	AuthFailuresEnvironment            = "ACR_AUTH_FAILURES_PER_WINDOW"
-	AuthTrackedKeysEnvironment         = "ACR_AUTH_MAX_TRACKED_KEYS"
-	AuthMaxInFlightEnvironment         = "ACR_AUTH_MAX_IN_FLIGHT"
-	AuthLimitWindowEnvironment         = "ACR_AUTH_LIMIT_WINDOW"
-	AuthLimitWindowFallbackEnvironment = "ACR_LIMIT_WINDOW"
+	// AuthLimitsSetting names the gate limits in a startup refusal: they are
+	// read by internal/config (ACR_AUTH_FAILURES_PER_WINDOW,
+	// ACR_AUTH_LIMIT_WINDOW, ACR_LIMIT_WINDOW, ACR_AUTH_MAX_TRACKED_KEYS,
+	// ACR_AUTH_MAX_IN_FLIGHT, ACR_REQUESTS_PER_MINUTE), the loader acr-api uses.
+	AuthLimitsSetting = "ACR_AUTH_LIMITS"
 )
 
 // Defaults of the serve contract.
@@ -163,11 +163,6 @@ func ServeOptionsFromEnvironment(lookup func(string) (string, bool)) (ServeOptio
 		set(ResourceURLEnvironment, func(v string) error { opts.ResourceURL = v; return nil }),
 		set(AuthorizationServerEnvironment, func(v string) error { opts.AuthorizationServer = v; return nil }),
 		set(TrustedProxyCIDRsEnvironment, func(v string) error { opts.TrustedProxyCIDRs = v; return nil }),
-		set(AuthFailuresEnvironment, positiveInt(&opts.AuthFailures)),
-		set(AuthTrackedKeysEnvironment, positiveInt(&opts.AuthTrackedKeys)),
-		set(AuthMaxInFlightEnvironment, positiveInt(&opts.AuthMaxInFlight)),
-		set(AuthLimitWindowFallbackEnvironment, positiveDuration(&opts.AuthWindow)),
-		set(AuthLimitWindowEnvironment, positiveDuration(&opts.AuthWindow)),
 		set(HTTPMaxBodyBytesEnvironment, func(v string) error {
 			n, err := strconv.ParseInt(v, 10, 64)
 			opts.MaxBodyBytes = n
@@ -185,33 +180,13 @@ func ServeOptionsFromEnvironment(lookup func(string) (string, bool)) (ServeOptio
 	if err := firstServeOptionError(steps); err != nil {
 		return ServeOptions{}, err
 	}
+	// The gate limits come from the loader acr-api uses (one parse site).
+	shared, err := config.AuthGateLimitsFromEnvironment(lookup)
+	if err != nil {
+		return ServeOptions{}, &ErrServeOptionInvalid{Setting: AuthLimitsSetting}
+	}
+	opts.AuthFailures, opts.AuthWindow, opts.AuthTrackedKeys, opts.AuthMaxInFlight = shared.FailureLimit, shared.Window, shared.MaxTrackedKeys, shared.MaxInFlight
 	return opts, nil
-}
-
-func positiveInt(target *int) func(string) error {
-	return func(v string) error {
-		n, err := strconv.Atoi(v)
-		if err == nil && n < 1 {
-			err = errors.New("must be positive")
-		}
-		if err == nil {
-			*target = n
-		}
-		return err
-	}
-}
-
-func positiveDuration(target *time.Duration) func(string) error {
-	return func(v string) error {
-		d, err := time.ParseDuration(v)
-		if err == nil && d <= 0 {
-			err = errors.New("must be positive")
-		}
-		if err == nil {
-			*target = d
-		}
-		return err
-	}
 }
 
 func firstServeOptionError(errs []error) error {

@@ -38,7 +38,7 @@ func TestServeEnvironmentEdgeGateSettings(t *testing.T) {
 		t.Fatalf("window = %v, want the ACR_LIMIT_WINDOW fallback", opts.AuthWindow)
 	}
 	blank, err := acrmcp.ServeOptionsFromEnvironment(envLookup(map[string]string{"ACR_MCP_TRUSTED_PROXY_CIDRS": "  ", "ACR_AUTH_FAILURES_PER_WINDOW": ""}))
-	if err != nil || blank.TrustedProxyCIDRs != "" || blank.AuthFailures != 0 {
+	if err != nil || blank.TrustedProxyCIDRs != "" || blank.AuthFailures != 20 || blank.AuthWindow != time.Minute {
 		t.Fatalf("blank values = %+v, %v; want the defaults", blank, err)
 	}
 }
@@ -52,9 +52,21 @@ func TestServeEnvironmentRefusesBadEdgeGateSettings(t *testing.T) {
 	} {
 		_, err := acrmcp.ServeOptionsFromEnvironment(envLookup(map[string]string{name: value}))
 		var invalid *acrmcp.ErrServeOptionInvalid
-		if !errors.As(err, &invalid) || invalid.Setting != name {
-			t.Errorf("%s=%q: err = %v, want ErrServeOptionInvalid naming the setting", name, value, err)
+		if !errors.As(err, &invalid) || invalid.Setting != acrmcp.AuthLimitsSetting {
+			t.Errorf("%s=%q: err = %v, want ErrServeOptionInvalid naming %s", name, value, err, acrmcp.AuthLimitsSetting)
 		}
+	}
+}
+
+// A handler built with no explicit gate settings takes the shared loader's
+// resolution of the process environment: ACR_REQUESTS_PER_MINUTE=5 lowers the
+// edge limit to 5 exactly as it lowers acr-api's (CHAOS-7201 r2).
+func TestEdgeGateDefaultFollowsTheSharedLimitsLoader(t *testing.T) {
+	t.Setenv("ACR_REQUESTS_PER_MINUTE", "5")
+	e := newEndpoint(t, newHostedAPI(t))
+	got := burst(t, e, 8, func(int) string { return "junk" }, noXFF)
+	if got[http.StatusUnauthorized] != 5 || got[http.StatusTooManyRequests] != 3 {
+		t.Fatalf("ACR_REQUESTS_PER_MINUTE=5 x8 = %v, want 5 x 401 then 3 x 429", got)
 	}
 }
 

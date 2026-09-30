@@ -173,7 +173,8 @@ func TestParseServeArgs(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := acrmcp.ServeOptions{Transport: "stdio", Listen: "127.0.0.1:7000", BasePath: "/x", ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second,
-		WriteTimeout: 4 * time.Second, IdleTimeout: 5 * time.Second, ShutdownTimeout: 6 * time.Second, MaxBodyBytes: 4096}
+		WriteTimeout: 4 * time.Second, IdleTimeout: 5 * time.Second, ShutdownTimeout: 6 * time.Second, MaxBodyBytes: 4096,
+		AuthFailures: 20, AuthWindow: time.Minute, AuthTrackedKeys: 4096, AuthMaxInFlight: 64}
 	if opts != want {
 		t.Fatalf("flags: %#v, want %#v", opts, want)
 	}
