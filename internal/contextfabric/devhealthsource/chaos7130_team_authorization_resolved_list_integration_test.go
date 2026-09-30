@@ -51,6 +51,21 @@ func subCHAOS7130TeamListUsesResolvedOwnership(t *testing.T, ctx context.Context
 	chaos7119Own(t, ctx, f, "team-dup", "github", "acme/repo-b", chaos7119RepoB, at)
 	chaos7119Own(t, ctx, f, "team-provider", "gitlab", "acme/repo-k", nil, at)
 	chaos7119Own(t, ctx, f, "team-ghostonly", "github", "acme/ghost2", nil, at)
+	// Source conflict (CHAOS-2600: a later manual close never cancels an open
+	// native assertion): native open + a LATER manual close for one repository.
+	chaos7119Team(t, ctx, f, "team-conflict", at)
+	chaos7119Own(t, ctx, f, "team-conflict", "github", "acme/repo-b", nil, at.Add(-time.Hour))
+	mustExec(t, ctx, f.direct,
+		`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		f.orgID, "github", "team-conflict", nil, "acme/repo-b", "exact", "manual", uint8(1), uint16(100), int32(0), at.Add(-time.Minute), at.Add(-30*time.Second), at)
+	// Orphan repo_id (no repos row): the edge keeps a sentinel edge, the list drops it.
+	chaos7119Team(t, ctx, f, "team-orphan", at)
+	chaos7119Own(t, ctx, f, "team-orphan", "github", "acme/orphan", chaos7119Orphan, at)
+	// Future-valid assertion: not currently owned, so not listed.
+	chaos7119Team(t, ctx, f, "team-future", at)
+	mustExec(t, ctx, f.direct,
+		`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		f.orgID, "github", "team-future", nil, "acme/repo-k", "exact", "native", uint8(1), uint16(100), int32(0), at.Add(24*time.Hour), nil, at)
 
 	res := chaos7139Run(t, ctx, f)
 	sentinel := []string{devhealthsource.NoTeamOwnershipSentinelForTest()}
@@ -61,6 +76,9 @@ func subCHAOS7130TeamListUsesResolvedOwnership(t *testing.T, ctx context.Context
 		"team-dup":       {"acme/repo-b"},
 		"team-provider":  sentinel,
 		"team-ghostonly": sentinel,
+		"team-conflict":  {"acme/repo-b"},
+		"team-orphan":    sentinel,
+		"team-future":    sentinel,
 	} {
 		if _, ok := res.entities[team]; !ok {
 			t.Fatalf("%s: team entity not projected", team)

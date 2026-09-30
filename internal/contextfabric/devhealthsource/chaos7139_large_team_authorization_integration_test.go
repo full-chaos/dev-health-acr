@@ -79,7 +79,12 @@ func chaos7139RunFrom(t *testing.T, ctx context.Context, f *ownershipFixture, cu
 			if r.Type == contractsv1.ContextFabricRelationshipOwnedByTeam && r.From.Kind == contractsv1.ContextFabricSubjectRepository {
 				team := strings.TrimPrefix(r.To.CanonicalID, "team:")
 				res.edges[team]++
-				if r.ValidTo == nil && len(r.Authorization.RepositorySlugs) == 1 {
+				// Open = currently valid (valid_from not in the future) and not
+				// closed; the orphaned-repository sentinel edge names no
+				// repository and is not an authorization repository.
+				now := time.Now().UTC()
+				if r.ValidTo == nil && (r.ValidFrom == nil || !r.ValidFrom.After(now)) && len(r.Authorization.RepositorySlugs) == 1 &&
+					r.Authorization.RepositorySlugs[0] != "acr-context-fabric:orphaned-repository" {
 					res.openEdgeSlugs[team] = append(res.openEdgeSlugs[team], r.Authorization.RepositorySlugs[0])
 				}
 			}
