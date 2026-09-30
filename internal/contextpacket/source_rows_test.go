@@ -172,11 +172,12 @@ func TestSourceRowLookupsBindNoGrant(t *testing.T) {
 // (TestEveryCatalogStatementScopesEveryTableToTheOrganization).
 func TestSourceRowReadsScopeEveryTableToTheOrganization(t *testing.T) {
 	for name, statement := range sourceRowStatements(t) {
-		violations, parsed := orgScopeViolations(statement)
-		if !parsed {
-			t.Fatalf("%s: no table found: the sweep matched nothing", name)
+		report, err := analyzeOrgScope(statement)
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
 		}
-		for _, violation := range violations {
+		for _, violation := range report.Violations {
 			t.Errorf("%s: %s is not scoped to the organization: another organization's rows can join\n%s", name, violation, statement)
 		}
 	}
