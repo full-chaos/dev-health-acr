@@ -234,6 +234,81 @@ func TestCHAOS7263IngestTimeCursor(t *testing.T) {
 		}
 	})
 
+	// seedBurst lands n work items at one ingest instant and drains them, then
+	// runs one caught-up tick so a pass over the burst stops mid-window.
+	seedBurstMidPass := func(t *testing.T, h *ingestHarness, logs *bytes.Buffer, n int, at time.Time) drained {
+		t.Helper()
+		mustExec(t, ctx, direct, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at, last_synced)
+SELECT concat('WI-burst-', leftPad(toString(number), 5, '0')), ?, ?, concat('issue WI-burst-', toString(number)), 'open', '', '', 'linear', '', ?, ? FROM numbers(?)`,
+			h.repo, h.orgID, now.Add(-time.Hour), at, n)
+		first := h.drain("")
+		if got := len(first.items); got != n {
+			t.Fatalf("first drain projected %d work items, want %d", got, n)
+		}
+		if again := h.drain(first.cursor); len(again.batches) != 0 {
+			t.Fatalf("a caught-up tick over a seen window emitted %d batches", len(again.batches))
+		}
+		if !strings.Contains(logs.String(), "overlap window pass continues on the next tick") {
+			t.Fatalf("precondition: the pass did not stop mid-window; logs:\n%s", logs.String())
+		}
+		return first
+	}
+
+	// A pass that spans many ticks must not hold the frontier: a normal new
+	// row lands beyond it and is projected on the next tick, the cursor moves,
+	// and the pass still finishes the window afterwards.
+	t.Run("the frontier keeps advancing while an overlap pass is mid-window", func(t *testing.T) {
+		logs := &bytes.Buffer{}
+		h := newHarness(t, "72630000-0000-4000-8000-00000000000c", "72630000-0000-4000-8000-0000000000ac", 15*time.Minute, logs)
+		burst := now.Add(-5 * time.Minute)
+		first := seedBurstMidPass(t, h, logs, 1300, burst)
+		h.workItem("WI-burst-01250-late", now.Add(-3*time.Hour), burst)    // behind the frontier, page 7
+		h.workItem("WI-new", now.Add(-time.Minute), now.Add(-time.Minute)) // beyond the frontier
+		b, ok, err := h.src.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{OrgID: h.orgID, Source: devhealthsource.SourceName, Cursor: first.cursor})
+		if err != nil || !ok {
+			t.Fatalf("next tick: ok=%v err=%v", ok, err)
+		}
+		if b.NextCursor == first.cursor {
+			t.Fatal("the first batch after a mid-window pass did not advance the cursor: the pass is holding the frontier")
+		}
+		var sawNew bool
+		for _, e := range b.Entities {
+			sawNew = sawNew || e.Subject.Label == title("WI-new")
+		}
+		if !sawNew {
+			t.Fatal("the new row beyond the frontier was not in the first batch of the next tick")
+		}
+		if rest := h.drain(b.NextCursor); rest.items[title("WI-burst-01250-late")].Subject.Label == "" {
+			t.Fatalf("after the frontier moved, the pass did not go on to find the late row on page 7 (%d items)", len(rest.items))
+		}
+	})
+
+	// The pass position lives in memory only. A projector that restarts
+	// mid-pass must restart the pass from the window's start (re-read), never
+	// resume past rows it cannot prove it read.
+	t.Run("a restart mid-pass re-reads the window from its start", func(t *testing.T) {
+		logs := &bytes.Buffer{}
+		h := newHarness(t, "72630000-0000-4000-8000-00000000000d", "72630000-0000-4000-8000-0000000000ad", 15*time.Minute, logs)
+		burst := now.Add(-5 * time.Minute)
+		first := seedBurstMidPass(t, h, logs, 1300, burst)
+		// Behind the stopped pass's position (page 2 of a pass that already
+		// read pages 1-5), landing after the pass went past it.
+		h.workItem("WI-burst-00300-late", now.Add(-3*time.Hour), burst)
+		restarted, err := devhealthsource.NewClickHouseProjectionSource(query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		restarted.SetClockForTest(func() time.Time { return now })
+		h.src = restarted
+		second := h.drain(first.cursor)
+		if second.items[title("WI-burst-00300-late")].Subject.Label == "" {
+			t.Fatalf("the restarted source did not re-read the part of the window the old pass had passed (%d items)", len(second.items))
+		}
+		if second.cursor != first.cursor {
+			t.Fatalf("the re-read moved the cursor (%q -> %q)", first.cursor, second.cursor)
+		}
+	})
+
 	// PeekProjectionBatch must stay side-effect free: a peek that walks the
 	// window may not mark a late row as emitted, or the next real tick skips
 	// a row no batch ever carried.
