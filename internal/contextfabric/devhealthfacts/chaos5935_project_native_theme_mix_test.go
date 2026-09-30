@@ -30,7 +30,7 @@ func readNativeMix(t *testing.T, client *fakeClient, projects ...string) (contex
 
 func TestProjectNativeThemeMixFromScannedRow(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "unit_span AS", rows: [][]any{nativeMixRow("a", 7)}}}}
+	client := &fakeClient{tables: []fakeTable{{match: "AS project_count", rows: [][]any{nativeMixRow("a", 7)}}}}
 	result, err := readNativeMix(t, client, "a")
 	if err != nil {
 		t.Fatalf("ReadFacts: %v", err)
@@ -60,7 +60,7 @@ func TestProjectNativeThemeMixIgnoresARowWithNoEffortOrNoWeight(t *testing.T) {
 	t.Parallel()
 	noEffort := []any{"linear:a", 6.0, 4.0, 0.0, 0.0, 0.0, 1.0, uint64(9), uint64(0), uint64(2), uint64(0)}
 	noWeight := []any{"linear:b", 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, uint64(3), uint64(3), uint64(0), uint64(0)}
-	client := &fakeClient{tables: []fakeTable{{match: "unit_span AS", rows: [][]any{noEffort, noWeight}}}}
+	client := &fakeClient{tables: []fakeTable{{match: "AS project_count", rows: [][]any{noEffort, noWeight}}}}
 	result, err := readNativeMix(t, client, "a", "b")
 	if err != nil {
 		t.Fatalf("ReadFacts: %v", err)
@@ -72,13 +72,13 @@ func TestProjectNativeThemeMixIgnoresARowWithNoEffortOrNoWeight(t *testing.T) {
 
 func TestProjectNativeThemeMixIsBoundToTheOrganizationAndRequestedProjects(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "unit_span AS", rows: nil}}}
+	client := &fakeClient{tables: []fakeTable{{match: "AS project_count", rows: nil}}}
 	if _, err := readNativeMix(t, client, "a", "b"); err != nil {
 		t.Fatalf("ReadFacts: %v", err)
 	}
 	var native *capturedQuery
 	for i := range client.queries {
-		if strings.Contains(client.queries[i].statement, "unit_span AS") {
+		if strings.Contains(client.queries[i].statement, "AS project_count") {
 			native = &client.queries[i]
 		}
 	}
@@ -110,7 +110,7 @@ func TestProjectNativeThemeMixProbeRowIsEvidenceOfTruncationNeverServed(t *testi
 		projects = append(projects, project)
 		rows = append(rows, nativeMixRow(project, 1))
 	}
-	client := &fakeClient{tables: []fakeTable{{match: "unit_span AS", rows: rows}}}
+	client := &fakeClient{tables: []fakeTable{{match: "AS project_count", rows: rows}}}
 	result, err := readNativeMix(t, client, projects...)
 	if err != nil {
 		t.Fatalf("ReadFacts: %v", err)
@@ -125,7 +125,7 @@ func TestProjectNativeThemeMixProbeRowIsEvidenceOfTruncationNeverServed(t *testi
 
 func TestProjectNativeThemeMixReadFailureIsReported(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "unit_span AS", err: errors.New("boom")}}}
+	client := &fakeClient{tables: []fakeTable{{match: "AS project_count", err: errors.New("boom")}}}
 	if _, err := readNativeMix(t, client, "a"); err == nil || !strings.Contains(err.Error(), "query project native theme mix") {
 		t.Fatalf("err = %v, want the native read named", err)
 	}
@@ -136,7 +136,7 @@ func TestProjectNativeThemeMixReadFailureIsReported(t *testing.T) {
 func TestProjectNativeThemeMixDisclosesMultiPlacedUnitsWithoutAMix(t *testing.T) {
 	t.Parallel()
 	onlyMultiPlaced := []any{"linear:a", 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, uint64(3), uint64(0), uint64(0), uint64(2)}
-	client := &fakeClient{tables: []fakeTable{{match: "unit_span AS", rows: [][]any{onlyMultiPlaced}}}}
+	client := &fakeClient{tables: []fakeTable{{match: "AS project_count", rows: [][]any{onlyMultiPlaced}}}}
 	result, err := readNativeMix(t, client, "a")
 	if err != nil {
 		t.Fatalf("ReadFacts: %v", err)
