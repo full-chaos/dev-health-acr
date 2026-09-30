@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -236,4 +237,45 @@ func TestCheckpointStore_isolatesCheckpointsPerOrganizationAndSource(t *testing.
 	require.Equal(t, "cursor-org-1-dev_health_clickhouse", orgOneClickHouse.Cursor)
 	require.Equal(t, "cursor-org-1-dev_health_episodes", orgOneEpisodes.Cursor)
 	require.Equal(t, "cursor-org-2-dev_health_clickhouse", orgTwoClickHouse.Cursor)
+}
+
+// TestCheckpointStore_listsTheSourcesOfOneEpochOnly pins the capability the
+// epoch activation guard reads: the sources holding a checkpoint row for one
+// (organization, epoch), sorted, and nothing from another epoch or org.
+func TestCheckpointStore_listsTheSourcesOfOneEpochOnly(t *testing.T) {
+	ctx := context.Background()
+	store, err := pgprojection.NewCheckpointStore(newCheckpointTestDatabase(t, ctx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := func(view contextfabric.ProjectionCheckpointStore, org, source string) {
+		t.Helper()
+		if err := view.CompareAndSwapProjectionCheckpoint(ctx, contextfabric.ProjectionCheckpoint{OrgID: org, Source: source},
+			contextfabric.ProjectionCheckpoint{OrgID: org, Source: source, Cursor: "c1", SourceVersion: "v1"}); err != nil {
+			t.Fatalf("write %s/%s: %v", org, source, err)
+		}
+	}
+	write(store, "org-1", "zeta")
+	write(store, "org-1", "alpha")
+	write(store.ForEpoch(2), "org-1", "beta")
+	write(store, "org-2", "gamma")
+
+	epoch0, err := store.ListProjectionCheckpointSources(ctx, "org-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(epoch0, ","); got != "alpha,zeta" {
+		t.Fatalf("epoch 0 sources = %q, want alpha,zeta", got)
+	}
+	epoch2, err := store.ForEpoch(2).(contextfabric.ProjectionCheckpointSourceLister).ListProjectionCheckpointSources(ctx, "org-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(epoch2, ","); got != "beta" {
+		t.Fatalf("epoch 2 sources = %q, want beta", got)
+	}
+	none, err := store.ForEpoch(3).(contextfabric.ProjectionCheckpointSourceLister).ListProjectionCheckpointSources(ctx, "org-1")
+	if err != nil || len(none) != 0 {
+		t.Fatalf("an epoch with no rows lists %v, %v; want nothing", none, err)
+	}
 }

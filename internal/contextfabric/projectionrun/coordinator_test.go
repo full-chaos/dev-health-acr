@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -337,6 +338,22 @@ func (s *fakeCheckpointStore) LoadProjectionCheckpoint(_ context.Context, org, s
 		return cp, nil
 	}
 	return contextfabric.ProjectionCheckpoint{OrgID: org, Source: source}, nil
+}
+
+// ListProjectionCheckpointSources implements
+// contextfabric.ProjectionCheckpointSourceLister, which the epoch activation
+// guard requires of every checkpoint view it reads.
+func (s *fakeCheckpointStore) ListProjectionCheckpointSources(_ context.Context, org string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var sources []string
+	for _, cp := range s.data {
+		if cp.OrgID == org {
+			sources = append(sources, cp.Source)
+		}
+	}
+	sort.Strings(sources)
+	return sources, nil
 }
 
 func (s *fakeCheckpointStore) CompareAndSwapProjectionCheckpoint(_ context.Context, expected, updated contextfabric.ProjectionCheckpoint) error {

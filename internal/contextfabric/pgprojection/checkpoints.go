@@ -270,7 +270,57 @@ func (v epochCheckpointView) CompareAndSwapProjectionCheckpoint(ctx context.Cont
 	return v.store.CompareAndSwapProjectionCheckpointForEpoch(ctx, expected, updated)
 }
 
+func (v epochCheckpointView) ListProjectionCheckpointSources(ctx context.Context, orgID string) ([]string, error) {
+	return v.store.ListProjectionCheckpointSourcesForEpoch(ctx, orgID, v.epoch)
+}
+
 var _ contextfabric.ProjectionCheckpointStore = epochCheckpointView{}
+
+// ListProjectionCheckpointSources lists the sources holding an epoch-0
+// checkpoint row for orgID -- see ListProjectionCheckpointSourcesForEpoch.
+func (s *CheckpointStore) ListProjectionCheckpointSources(ctx context.Context, orgID string) ([]string, error) {
+	return s.ListProjectionCheckpointSourcesForEpoch(ctx, orgID, 0)
+}
+
+// ListProjectionCheckpointSourcesForEpoch lists, sorted, every source that
+// holds a checkpoint row for (orgID, epoch). The epoch activation guard
+// (projectionrun.Coordinator) reads it so a source the running binary no
+// longer configures cannot hide data in an epoch about to become active.
+func (s *CheckpointStore) ListProjectionCheckpointSourcesForEpoch(ctx context.Context, orgID string, epoch int64) ([]string, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("pgprojection: checkpoint store is not configured")
+	}
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" || epoch < 0 {
+		return nil, errors.New("pgprojection: organization and a non-negative epoch are required")
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT source
+FROM acr.context_fabric_projection_checkpoints
+WHERE org_id = $1 AND epoch = $2
+ORDER BY source ASC`, orgID, epoch)
+	if err != nil {
+		return nil, fmt.Errorf("list projection checkpoint sources: %w", sanitizeError(err))
+	}
+	defer rows.Close()
+	var sources []string
+	for rows.Next() {
+		var source string
+		if err := rows.Scan(&source); err != nil {
+			return nil, fmt.Errorf("list projection checkpoint sources: %w", sanitizeError(err))
+		}
+		sources = append(sources, source)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list projection checkpoint sources: %w", sanitizeError(err))
+	}
+	return sources, nil
+}
+
+var (
+	_ contextfabric.ProjectionCheckpointSourceLister = (*CheckpointStore)(nil)
+	_ contextfabric.ProjectionCheckpointSourceLister = epochCheckpointView{}
+)
 
 func sanitizeError(err error) error {
 	if err == nil {

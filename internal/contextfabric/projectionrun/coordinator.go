@@ -836,12 +836,13 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 		sourceNames = append(sourceNames, pair.Name)
 	}
 	// CHAOS-7283: the epoch activation guard verifies each source's recorded
-	// version against the version the source reports. A source without that
-	// capability cannot be verified, so say so once, loudly, at startup.
+	// version against the version the source reports, and refuses a source
+	// without that capability. Say so once, loudly, at startup, before the
+	// first refused flip does.
 	if cfg.Lifecycle != nil {
 		for _, name := range sourceNames {
 			if _, ok := sources[name].(contextfabric.ProjectionSourceVersion); !ok {
-				cfg.Logger.Warn("context_fabric: source reports no current version; the epoch activation guard cannot verify it",
+				cfg.Logger.Warn("context_fabric: source reports no current version; the epoch activation guard will refuse to activate any epoch holding its data",
 					"source", contextfabric.SanitizeLogAttr(name))
 			}
 		}
@@ -955,7 +956,7 @@ func (c *Coordinator) Rollback(ctx context.Context, orgID string) error {
 	// other than this binary's, restoring it serves data projected under
 	// retired producer logic (CHAOS-7242 r2: a pre-fix epoch that admits a
 	// restricted principal the current epoch denies).
-	if err := c.guardEpochActivation(ctx, orgID, contextfabric.LifecycleTransitionRollback, row.ActiveEpoch, *row.GraceEpoch, nil); err != nil {
+	if _, err := c.guardEpochActivation(ctx, orgID, contextfabric.LifecycleTransitionRollback, row.ActiveEpoch, *row.GraceEpoch); err != nil {
 		return fmt.Errorf("projectionrun: rollback: %w", err)
 	}
 	rolled, err := c.lifecycle.Rollback(ctx, orgID, row.ActiveEpoch, c.now())
@@ -1057,41 +1058,62 @@ func (c *Coordinator) invalidateEpochResolution(ctx context.Context, orgID strin
 // and Rollback -- call it, under the organization lock, immediately before
 // the CAS that would activate candidateEpoch. It refuses unless every source
 // the candidate epoch holds data from recorded the SAME version the running
-// binary's source reports now:
+// binary's source reports now. Fail closed throughout: anything the guard
+// cannot prove current is refused.
+//
+// The sources checked are every source that holds a checkpoint row in the
+// candidate epoch (ProjectionCheckpointSourceLister) -- the epoch's own
+// record of who wrote into it, so a source this binary dropped cannot hide
+// data in a build or a grace epoch -- plus every configured source (one
+// without a row reads as never recorded). For each:
 //
 //   - recorded "": the source never claimed a version in that epoch, so it
 //     wrote nothing there (RunOnce claims the version BEFORE any apply, and
 //     a reset clears both together). Nothing stale to serve; allowed.
-//   - the source is not configured in this binary: data from a producer this
-//     binary does not run. Refused (source_not_configured).
-//   - the source reports no current version (it does not implement
-//     contextfabric.ProjectionSourceVersion): unverifiable. Allowed, with a
-//     Warn -- every production source implements the capability, and
+//   - the source is not configured in this binary: refused
+//     (source_not_configured).
+//   - the source reports no current version (blank, or no
+//     contextfabric.ProjectionSourceVersion capability): refused
+//     (source_version_unknown). Every production source reports one;
 //     NewCoordinator warns at startup for one that does not.
 //   - recorded != current: refused (source_version_mismatch). Not only
 //     "older": a version string is an opaque producer identity, the same
 //     rule ProjectionWorker.RunOnce applies to a batch, and an epoch from a
-//     NEWER binary is just as unservable by this one (its next batch would
-//     be refused).
-//   - the checkpoint cannot be read: refused (checkpoint_unreadable), fail
-//     closed; the returned error is NOT ErrLifecycleTransitionRefused, so
-//     the next attempt re-reads instead of treating it as permanent.
+//     NEWER binary is just as unservable by this one.
+//   - the checkpoint (or the epoch's source list) cannot be read: refused
+//     (checkpoint_unreadable). The error is NOT ErrLifecycleTransitionRefused,
+//     so the next attempt re-reads instead of treating it as permanent.
+//   - the view cannot list its sources at all: refused
+//     (checkpoint_sources_unlistable), a wiring defect.
 //
-// Every refusing source is logged at Warn and emitted as
-// cf_epoch_activation_refused with every input of the decision, so a trace
-// of the tick (or the rollback) rebuilds why nothing was activated. The
-// sources checked are every configured source plus, for a flip, every name
-// frozen into the build's RequiredSources that is no longer configured.
-func (c *Coordinator) guardEpochActivation(ctx context.Context, orgID string, transition contextfabric.LifecycleTransition, activeEpoch, candidateEpoch int64, required []string) error {
+// A version refusal returns ErrLifecycleTransitionRefused wrapping
+// ErrEpochSourceVersionStale. Every refusal is logged at Warn and emitted as
+// cf_epoch_activation_refused with every input of the decision, and the
+// refusals are returned so a flip can place the organization in the tick
+// summary bucket that names why.
+func (c *Coordinator) guardEpochActivation(ctx context.Context, orgID string, transition contextfabric.LifecycleTransition, activeEpoch, candidateEpoch int64) ([]contextfabric.EpochActivationRefusal, error) {
 	checkpoints := c.checkpointsForEpoch(candidateEpoch)
+	base := contextfabric.EpochActivationRefusal{OrgID: orgID, Transition: transition, ActiveEpoch: activeEpoch, CandidateEpoch: candidateEpoch}
 	var refusals []contextfabric.EpochActivationRefusal
 	var readErrs []error
+	var listed []string
+	if lister, ok := checkpoints.(contextfabric.ProjectionCheckpointSourceLister); !ok {
+		refusal := base
+		refusal.Reason = contextfabric.EpochActivationRefusedSourcesUnlistable
+		refusals = append(refusals, refusal)
+	} else if sources, err := lister.ListProjectionCheckpointSources(ctx, orgID); err != nil {
+		refusal := base
+		refusal.Reason = contextfabric.EpochActivationRefusedCheckpointUnreadable
+		refusals = append(refusals, refusal)
+		readErrs = append(readErrs, err)
+	} else {
+		listed = sources
+	}
 	checked := 0
-	for _, source := range c.epochActivationSources(required) {
+	for _, source := range c.epochActivationSources(listed) {
 		checked++
-		refusal := contextfabric.EpochActivationRefusal{
-			OrgID: orgID, Transition: transition, ActiveEpoch: activeEpoch, CandidateEpoch: candidateEpoch, Source: source,
-		}
+		refusal := base
+		refusal.Source = source
 		checkpoint, err := checkpoints.LoadProjectionCheckpoint(ctx, orgID, source)
 		if err != nil {
 			refusal.Reason = contextfabric.EpochActivationRefusedCheckpointUnreadable
@@ -1111,31 +1133,38 @@ func (c *Coordinator) guardEpochActivation(ctx context.Context, orgID string, tr
 			continue
 		}
 		current := strings.TrimSpace(currentSourceVersion(projectionSource))
-		if current == "" {
-			c.logger.WarnContext(ctx, "context_fabric: epoch activation guard cannot verify a source that reports no current version; allowing it",
-				"org_id", contextfabric.SanitizeLogAttr(orgID), "transition", contextfabric.SanitizeLogAttr(string(transition)),
-				"candidate_epoch", candidateEpoch, "source", contextfabric.SanitizeLogAttr(source),
-				"recorded_source_version", contextfabric.SanitizeLogAttr(recorded))
-			continue
-		}
-		if recorded != current {
+		switch {
+		case current == "":
+			refusal.Reason = contextfabric.EpochActivationRefusedSourceVersionUnknown
+			refusals = append(refusals, refusal)
+		case recorded != current:
 			refusal.Reason = contextfabric.EpochActivationRefusedSourceVersion
 			refusal.CurrentSourceVersion = current
 			refusals = append(refusals, refusal)
 		}
 	}
+	if len(readErrs) > 0 && ctx.Err() != nil {
+		// The reads failed because the caller's context ended (a tick cut
+		// short, a shutdown): that is truncation, not a verdict about the
+		// epoch. Nothing activates, and no refusal is claimed.
+		return nil, fmt.Errorf("projectionrun: epoch activation guard: %w", ctx.Err())
+	}
 	if len(refusals) == 0 {
 		c.logger.DebugContext(ctx, "context_fabric: epoch activation guard passed",
 			"org_id", contextfabric.SanitizeLogAttr(orgID), "transition", contextfabric.SanitizeLogAttr(string(transition)),
 			"active_epoch", activeEpoch, "candidate_epoch", candidateEpoch, "sources_checked", checked)
-		return nil
+		return nil, nil
 	}
-	stale := 0
+	stale, unlistable := 0, false
 	for _, refusal := range refusals {
-		if refusal.Reason != contextfabric.EpochActivationRefusedCheckpointUnreadable {
+		switch refusal.Reason {
+		case contextfabric.EpochActivationRefusedCheckpointUnreadable:
+		case contextfabric.EpochActivationRefusedSourcesUnlistable:
+			unlistable = true
+		default:
 			stale++
 		}
-		c.logger.WarnContext(ctx, "context_fabric: graph epoch activation refused; the candidate epoch holds data recorded under a source version this binary does not run -- rebuild the organization",
+		c.logger.WarnContext(ctx, "context_fabric: graph epoch activation refused; the candidate epoch cannot be proven to hold only data recorded under this binary's source versions -- rebuild the organization, or fix the checkpoint read",
 			"org_id", contextfabric.SanitizeLogAttr(orgID), "transition", contextfabric.SanitizeLogAttr(string(refusal.Transition)),
 			"active_epoch", refusal.ActiveEpoch, "candidate_epoch", refusal.CandidateEpoch,
 			"source", contextfabric.SanitizeLogAttr(refusal.Source), "reason", contextfabric.SanitizeLogAttr(string(refusal.Reason)),
@@ -1145,22 +1174,27 @@ func (c *Coordinator) guardEpochActivation(ctx context.Context, orgID string, tr
 			c.lifecycleTelem.RecordEpochActivationRefused(ctx, refusal)
 		}
 	}
-	if stale > 0 {
-		return fmt.Errorf("%w: %w: %d source(s) of epoch %d", contextfabric.ErrLifecycleTransitionRefused, contextfabric.ErrEpochSourceVersionStale, stale, candidateEpoch)
+	switch {
+	case stale > 0:
+		return refusals, fmt.Errorf("%w: %w: %d source(s) of epoch %d", contextfabric.ErrLifecycleTransitionRefused, contextfabric.ErrEpochSourceVersionStale, stale, candidateEpoch)
+	case unlistable:
+		return refusals, fmt.Errorf("%w: epoch %d checkpoints cannot list their sources", contextfabric.ErrLifecycleTransitionRefused, candidateEpoch)
+	default:
+		return refusals, fmt.Errorf("projectionrun: epoch activation guard could not read epoch %d checkpoints: %w", candidateEpoch, errors.Join(readErrs...))
 	}
-	return fmt.Errorf("projectionrun: epoch activation guard could not read epoch %d checkpoints: %w", candidateEpoch, errors.Join(readErrs...))
 }
 
-// epochActivationSources is the source set guardEpochActivation checks:
-// every configured source, then every RequiredSources name no longer
-// configured (a build frozen by an earlier binary can hold data from a
-// source this one dropped).
-func (c *Coordinator) epochActivationSources(required []string) []string {
+// epochCheckpointSourcesName names, on the tick summary, a refusal about the
+// candidate epoch's source list rather than one source's checkpoint.
+const epochCheckpointSourcesName = "epoch_checkpoint_sources"
+
+// epochActivationSources is the source set guardEpochActivation checks, each
+// name once: every configured source, then every source listed in the
+// candidate epoch's checkpoints that is not configured (an earlier binary's
+// build or grace epoch can hold data from a source this one dropped).
+func (c *Coordinator) epochActivationSources(listed []string) []string {
 	out := append([]string(nil), c.sourceNames...)
-	for _, name := range required {
-		if _, configured := c.sources[name]; configured {
-			continue
-		}
+	for _, name := range listed {
 		seen := false
 		for _, existing := range out {
 			if existing == name {
@@ -2355,6 +2389,10 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 	for _, p := range progress {
 		byName[p.Source] = p
 	}
+	// brokenThisTick names the sources whose build pair already recorded a
+	// pair failure this tick, so the activation guard below does not count
+	// the same outage twice.
+	brokenThisTick := make(map[string]bool)
 
 	// Iterates row.RequiredSources -- the set FROZEN at BeginBuild -- not
 	// c.sourceNames (today's live config). A source added to configuration
@@ -2408,6 +2446,9 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 		// tick one with the source still broken.
 		signals.pairBroke = signals.pairBroke || buildBroke
 		signals.sourceFailed = signals.sourceFailed || buildFailed || buildWithheld
+		if buildBroke {
+			brokenThisTick[source] = true
+		}
 		scope.recordPair(func(truncated bool) {
 			scope.stats.recordBuildPairOutcome(source, buildEvaluated, buildFailed, buildWithheld, truncated)
 			if buildBroke {
@@ -2432,16 +2473,37 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 	// with nothing to read, disabled) never met RunOnce's own version check,
 	// so the epoch's recorded versions are checked here, where they are
 	// about to become what every reader resolves.
+	var refusals []contextfabric.EpochActivationRefusal
 	guardErr := scope.run(func(ctx context.Context) error {
-		return c.guardEpochActivation(ctx, orgID, contextfabric.LifecycleTransitionFlip, row.ActiveEpoch, targetEpoch, row.RequiredSources)
+		var e error
+		refusals, e = c.guardEpochActivation(ctx, orgID, contextfabric.LifecycleTransitionFlip, row.ActiveEpoch, targetEpoch)
+		return e
 	})
 	if guardErr != nil {
-		// A stale epoch is a rebuild-required organization, exactly like a
-		// steady-state producer drift. An unreadable checkpoint decided
-		// nothing: the build keeps its backoff bucket and the next tick
-		// re-reads. Either way nothing flips.
+		// Nothing flips, and the tick summary says why. A stale epoch is a
+		// rebuild-required organization, exactly like a steady-state
+		// producer drift. A checkpoint the guard could not read (or list)
+		// is a failure of the pair's checkpoint load, not of the source and
+		// not staleness: it is named "source:checkpoint_load" on the line
+		// and moves the organization to the pair-failed bucket.
 		if errors.Is(guardErr, contextfabric.ErrEpochSourceVersionStale) {
 			signals.stale = true
+		}
+		for _, refusal := range refusals {
+			if refusal.Reason != contextfabric.EpochActivationRefusedCheckpointUnreadable && refusal.Reason != contextfabric.EpochActivationRefusedSourcesUnlistable {
+				continue
+			}
+			if brokenThisTick[refusal.Source] {
+				continue
+			}
+			name := refusal.Source
+			if name == "" {
+				name = epochCheckpointSourcesName
+			}
+			signals.pairBroke = true
+			scope.recordPair(func(bool) {
+				scope.stats.recordPairFailure(name, contextfabric.PairStageCheckpointLoad)
+			})
 		}
 		return
 	}

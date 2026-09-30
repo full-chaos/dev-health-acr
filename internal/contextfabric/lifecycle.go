@@ -356,11 +356,31 @@ const (
 	// data from a source the running binary does not configure at all, so
 	// no current version exists to compare against.
 	EpochActivationRefusedSourceNotConfigured EpochActivationRefusalReason = "source_not_configured"
+	// EpochActivationRefusedSourceVersionUnknown: the candidate epoch
+	// records a version for the source, but the running binary's source
+	// reports no current version (blank, or no ProjectionSourceVersion
+	// capability) -- nothing can vouch for the recorded data.
+	EpochActivationRefusedSourceVersionUnknown EpochActivationRefusalReason = "source_version_unknown"
 	// EpochActivationRefusedCheckpointUnreadable: the candidate epoch's
-	// checkpoint for the source could not be read, so the guard cannot
+	// checkpoint for the source (or, with an empty Source, the list of the
+	// epoch's checkpoint sources) could not be read, so the guard cannot
 	// prove the epoch is current. Fail closed; the next attempt re-reads.
 	EpochActivationRefusedCheckpointUnreadable EpochActivationRefusalReason = "checkpoint_unreadable"
+	// EpochActivationRefusedSourcesUnlistable: the candidate epoch's
+	// checkpoint view cannot list which sources it holds checkpoints for
+	// (it does not implement ProjectionCheckpointSourceLister), so a source
+	// the running binary no longer configures could hide in it. Fail closed.
+	EpochActivationRefusedSourcesUnlistable EpochActivationRefusalReason = "checkpoint_sources_unlistable"
 )
+
+// ProjectionCheckpointSourceLister is the capability the epoch activation
+// guard needs from an epoch's checkpoint view: every source that holds a
+// checkpoint row for orgID in that view's epoch, so the guard also checks
+// sources the running binary no longer configures.
+// pgprojection.CheckpointStore (epoch 0) and its ForEpoch views implement it.
+type ProjectionCheckpointSourceLister interface {
+	ListProjectionCheckpointSources(ctx context.Context, orgID string) ([]string, error)
+}
 
 // EpochActivationRefusal is one cf_epoch_activation_refused signal: every
 // input the guard decided from, so a reader can rebuild the decision from

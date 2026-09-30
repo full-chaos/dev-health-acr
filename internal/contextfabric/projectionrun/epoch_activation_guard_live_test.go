@@ -265,6 +265,31 @@ func TestEpochActivationGuard_LivePathsNeverActivateAnOlderSourceVersion(t *test
 		require.Equal(t, 1, committed, "the OLD binary serves its own baseline again")
 	})
 
+	// Rollback onto a grace epoch whose data came from a source this binary
+	// no longer configures at all (codex #749 r1): the guard reads the
+	// epoch's own checkpoint rows, so the dropped source cannot hide there.
+	t.Run("rollback_dropped_source", func(t *testing.T) {
+		h := harness(t, "org-7283-rollback-dropped")
+		const retired = "retired_teams_projects"
+		old := h.coordinator(0, projectionrun.SourcePair{Name: retired, Source: oldTeamSource(1)})
+		old.Tick(ctx)
+		retiredCheckpoint, err := checkpoints.LoadProjectionCheckpointForEpoch(ctx, h.org, 0, retired)
+		require.NoError(t, err)
+		require.Equal(t, epochGuardOldVersion, retiredCheckpoint.SourceVersion)
+		require.Equal(t, 1, h.committed(), "precondition: the OLD epoch admits the restricted principal")
+
+		next := h.coordinator(0, projectionrun.SourcePair{Name: epochGuardSource, Source: newTeamSource(1)})
+		require.NoError(t, next.Rebuild(ctx, h.org))
+		tickUntilStatus(t, ctx, next, lifecycle, h.org, contextfabric.LifecycleStatusGrace, 5)
+		require.Equal(t, 0, h.committed(), "precondition: the NEW epoch denies the restricted principal")
+
+		rollbackErr := next.Rollback(ctx, h.org)
+		row, _, committed := h.observe("after NEW binary rollback onto a dropped source's epoch")
+		require.ErrorIs(t, rollbackErr, contextfabric.ErrEpochSourceVersionStale)
+		require.Equal(t, int64(1), row.ActiveEpoch)
+		require.Equal(t, 0, committed)
+	})
+
 	// Rollback control: an epoch recorded under the binary's OWN version is
 	// still a legal rollback target -- the guard is not a blanket refusal.
 	t.Run("rollback_same_version_still_allowed", func(t *testing.T) {
