@@ -254,3 +254,27 @@ func TestEdgeGateWarnsAtStartupWhenNoProxyIsTrusted(t *testing.T) {
 		t.Fatalf("no startup warning in %s", e.logs.Bytes())
 	}
 }
+
+// The production shape behind ingress-nginx with use-forwarded-headers and
+// compute-full-forwarded-for: "<client-supplied>, <real client>, <node hop>",
+// peer = the ingress. With the ingress and node hop trusted, the walk from the
+// right lands on the real client; the spoofed left entry never wins.
+func TestEdgeGateResolvesTheRealClientFromTheThreeEntryIngressChain(t *testing.T) {
+	hosted := newHostedAPI(t)
+	e := newEndpointWithGate(t, hosted, acrmcp.EdgeGateOptions{TrustedProxyCIDRs: []string{"127.0.0.0/8", "::1/128", "10.42.0.1/32"}})
+	valid := hosted.issue(readScopes, []string{repoPlain}, nil)
+	if status := gateStatus(t, e, valid.token, "6.6.6.6, 203.0.113.50, 10.42.0.1"); status != http.StatusOK {
+		t.Fatalf("status %d", status)
+	}
+	seen := hosted.forwardedFor()
+	if len(seen) != 1 || seen[0] != "203.0.113.50" {
+		t.Fatalf("acr-api saw X-Forwarded-For %v, want [203.0.113.50]", seen)
+	}
+	// Varying the spoofed left entry does not mint new buckets.
+	got := burst(t, e, 25, func(int) string { return "junk" }, func(i int) string {
+		return "6.6.6." + string(rune('0'+i%10)) + ", 203.0.113.51, 10.42.0.1"
+	})
+	if got[http.StatusUnauthorized] != 20 || got[http.StatusTooManyRequests] != 5 {
+		t.Fatalf("spoofed left entry x25 = %v, want one bucket for 203.0.113.51", got)
+	}
+}
