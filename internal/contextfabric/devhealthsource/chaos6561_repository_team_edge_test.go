@@ -27,11 +27,11 @@ import (
 
 // repositoryTeamsMarker is the substring that routes a fake query to the
 // repository<->team producer. It must NOT match queryTeams' own
-// team_repo_ownership join (`FROM team_repo_ownership FINAL`, which the
-// CHAOS-7119 resolved source also contains), or a fixture would feed
-// ownership rows into the team scan -- so it names a column alias only
-// repositoryTeamsStatement selects.
-const repositoryTeamsMarker = "AS latest_repo_full_name"
+// team_repo_ownership join (which since CHAOS-7130 embeds the edge's grouped
+// derivation, `AS latest_repo_full_name` included), or a fixture would feed
+// ownership rows into the team scan -- so it names the ORDER BY only the
+// paged edge statement (not the embedded grouped SQL) carries.
+const repositoryTeamsMarker = "ORDER BY greatest(max(o.updated_at)"
 
 // repositoryTeamRow mirrors queryRepositoryTeams' SELECT list exactly.
 type repositoryTeamFixture struct {
@@ -310,6 +310,7 @@ func TestChaos6561_V11CheckpointForcesARebuild(t *testing.T) {
 	}{
 		{"v11 marker forces a rebuild", deployedBefore, true},
 		{"v12 marker forces a rebuild (CHAOS-7119 name resolution)", "devhealthsource.teams_projects.v12", true},
+		{"v14 marker forces a rebuild (CHAOS-7130 resolved team authorization list)", "devhealthsource.teams_projects.v14", true},
 		{"current marker advances", devhealthsource.TeamsProjectsSourceVersion, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
