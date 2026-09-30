@@ -76,6 +76,15 @@ func mustReadSchema(name string) json.RawMessage {
 // defect, since the manifest is embedded and checked by
 // schemas_parity_test.go).
 func manifestEntry(name string) toolManifestEntry {
+	entry, ok := lookupManifestEntry(name)
+	if !ok {
+		panic(fmt.Sprintf("mcp: embedded tool manifest has no entry for %q", name))
+	}
+	return entry
+}
+
+// lookupManifestEntry is manifestEntry without the panic, for the request path.
+func lookupManifestEntry(name string) (toolManifestEntry, bool) {
 	data, err := schemaFiles.ReadFile(toolManifestFile)
 	if err != nil {
 		panic(fmt.Sprintf("mcp: embedded tool manifest missing: %v", err))
@@ -86,8 +95,8 @@ func manifestEntry(name string) toolManifestEntry {
 	}
 	for _, entry := range manifest.Tools {
 		if entry.Name == name {
-			return entry
+			return entry, true
 		}
 	}
-	panic(fmt.Sprintf("mcp: embedded tool manifest has no entry for %q", name))
+	return toolManifestEntry{}, false
 }
