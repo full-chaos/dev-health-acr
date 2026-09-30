@@ -1014,3 +1014,23 @@ func TestGraphQLStricterClassRefusalIsTerminal(t *testing.T) {
 		t.Fatalf("unrestricted: %v %+v", err, unres)
 	}
 }
+
+// r2 P2 (a) on the real catalogue: both overlapping roots refuse a
+// restricted caller in their stricter candidate, and that refusal is the
+// answer (its own reason text), with zero upstream requests.
+func TestGraphQLRealOverlapClassRefusalIsTheStricterCandidates(t *testing.T) {
+	h := newGQLHarness(t, gqlHarnessOptions{})
+	batch := `{breakdowns: [{dimension: THEME, measure: COUNT, dateRange: {startDate: "2026-09-01", endDate: "2026-09-28"}}]}`
+	for _, tc := range []struct{ query, strict string }{
+		{`{ catalog(dimension: REPO) { values { value } } }`, "acrRepositoryScopes"},
+		{`{ analytics(batch: ` + batch + `) { breakdowns { dimension } } }`, "investmentBreakdown"},
+	} {
+		h.listener.reset()
+		resp := h.run(t, opRestrictedA(), tc.query, nil)
+		h.wantRefused(t, resp, directread.RefusalOperationNotServedForCaller)
+		op, _ := h.policy.Catalogue().Lookup(tc.strict)
+		if want := op.Scope(directread.CallerRestricted).Refusal.Reason; resp.Refusal.Reason != want {
+			t.Fatalf("%s: refusal reason %q is not the stricter candidate's %q", tc.strict, resp.Refusal.Reason, want)
+		}
+	}
+}
