@@ -26,20 +26,19 @@ const (
 
 var observedAt = time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 
-// world is a fake ClickHouse: repositories by id, discovery results, the
-// dependency locator map, and catalog rows by (repo, query, locator). Every
+// world is a fake ClickHouse: repositories by id, discovery results, and
+// catalog rows by (repo, query, locator). Every
 // call is recorded with all its arguments.
 type world struct {
 	repos      map[string]string
 	discovered map[string][]contractsv1.ResolvedScope
-	locators   map[string][]string
 	rows       map[string][]contextpacket.EvidenceReference
 	fail       map[string]error
 	calls      []string
 }
 
 func newWorld() *world {
-	return &world{repos: map[string]string{}, discovered: map[string][]contractsv1.ResolvedScope{}, locators: map[string][]string{}, rows: map[string][]contextpacket.EvidenceReference{}, fail: map[string]error{}}
+	return &world{repos: map[string]string{}, discovered: map[string][]contractsv1.ResolvedScope{}, rows: map[string][]contextpacket.EvidenceReference{}, fail: map[string]error{}}
 }
 
 func scope(id, slug string) contractsv1.ResolvedScope {
@@ -63,11 +62,6 @@ func (w *world) SourceRowRepositories(_ context.Context, org string, discovery c
 		return nil, err
 	}
 	return append([]contractsv1.ResolvedScope{}, w.discovered[string(discovery)+"|"+entityID]...), nil
-}
-
-func (w *world) DependencyLocators(_ context.Context, org, repoID, key string) ([]string, error) {
-	w.calls = append(w.calls, fmt.Sprintf("dependency_locators(%s,%s,%s)", org, repoID, key))
-	return w.locators[repoID+"|"+key], nil
 }
 
 func (w *world) ResolveSourceRow(_ context.Context, org string, target contractsv1.ResolvedScope, read contextpacket.SourceRowRead) ([]contextpacket.EvidenceReference, error) {
@@ -136,10 +130,6 @@ func repoKindCases() []repoKindCase {
 		{kind: contractsv1.ContextFabricEvidenceEntityCI, id: grantedID + ":run:77", query: "ci_pipeline_runs.v1", locator: "acr:v1:ci:run:77", entityType: "ci_pipeline_run"},
 		// devhealthsource/tables.go:458, devhealthfacts/deployments.go:117
 		{kind: contractsv1.ContextFabricEvidenceEntityDeployment, id: grantedID + ":dep-1", query: "deployments.v1", locator: "acr:v1:deployment:dep-1", entityType: "deployment"},
-		// devhealthsource/tables.go:847
-		{kind: contractsv1.ContextFabricEvidenceEntityWorkItemHierarchy, id: grantedID + ":jira:ABC-2:jira:ABC-1", query: "work_item_hierarchy.v1", locator: "acr:v1:work-item-hierarchy:jira:ABC-2:jira:ABC-1", entityType: "work_item_hierarchy"},
-		// devhealthsource/teams_projects_edges.go:624
-		{kind: contractsv1.ContextFabricEvidenceEntityWorkItemTeam, id: grantedID + ":jira:ABC-1:team-a", query: "work_item_teams.v1", locator: "acr:v1:work-item-team:jira:ABC-1:team-a", entityType: "work_item_team"},
 	}
 }
 
@@ -253,19 +243,6 @@ func TestRefusalRunsTheSameReadsAsAbsence(t *testing.T) {
 			w.discovered[string(contextpacket.SourceRowDiscoveryIncident)+"|INC-7"] = []contractsv1.ResolvedScope{scope(secretID, secretRep)}
 			w.addRow(secretID, "incidents.v1", "acr:v1:incident:INC-7", catalogRow("incidents.v1", "acr:v1:incident:INC-7", "incident", "INC-7", secretRep))
 		}},
-		{"row-anchored deployment incident", "deployment-incident", "edge-7", func(w *world) {
-			w.discovered[string(contextpacket.SourceRowDiscoveryDeploymentIncident)+"|edge-7"] = []contractsv1.ResolvedScope{scope(secretID, secretRep)}
-			w.addRow(secretID, "deployment_incident_provenance.v1", "acr:v1:deployment-incident:edge-7", catalogRow("deployment_incident_provenance.v1", "acr:v1:deployment-incident:edge-7", "deployment_incident_edge", "edge-7", secretRep))
-		}},
-		{"dependency, graph grammar", "work-item-dependency", secretID + ":jira:SEC-1:jira:SEC-2:blocks", func(w *world) {
-			w.repos[secretID] = secretRep
-			w.locators[secretID+"|jira:SEC-1:jira:SEC-2:blocks"] = []string{"acr:v1:work-item-dependency:jira:SEC-1:jira:SEC-2:blocks:fwd"}
-			w.addRow(secretID, "work_item_dependencies.v1", "acr:v1:work-item-dependency:jira:SEC-1:jira:SEC-2:blocks:fwd", catalogRow("work_item_dependencies.v1", "acr:v1:work-item-dependency:jira:SEC-1:jira:SEC-2:blocks:fwd", "work_item_dependency", "jira:SEC-1:jira:SEC-2:blocks:fwd", secretRep))
-		}},
-		{"dependency, pair grammar", "work-item-dependency", "jira:SEC-1:jira:SEC-2:blocks:fwd", func(w *world) {
-			w.discovered[string(contextpacket.SourceRowDiscoveryDependency)+"|jira:SEC-1:jira:SEC-2:blocks:fwd"] = []contractsv1.ResolvedScope{scope(secretID, secretRep)}
-			w.addRow(secretID, "work_item_dependencies.v1", "acr:v1:work-item-dependency:jira:SEC-1:jira:SEC-2:blocks:fwd", catalogRow("work_item_dependencies.v1", "acr:v1:work-item-dependency:jira:SEC-1:jira:SEC-2:blocks:fwd", "work_item_dependency", "jira:SEC-1:jira:SEC-2:blocks:fwd", secretRep))
-		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -315,70 +292,6 @@ func TestIncidentIsServedFromAnAdmittedRepository(t *testing.T) {
 	expanded, decision = resolver(t, w).ResolveSourceRow(context.Background(), unrestricted, "incident", "INC-1")
 	if decision.Reason != contextfabric.SourceRowServed || expanded.Structured["repository"] != grantedRep || len(w.calls) != 2 {
 		t.Fatalf("decision = %+v, structured %v, calls %v", decision, expanded.Structured, w.calls)
-	}
-}
-
-// Both producer grammars of a dependency reach the same row: devhealthsource
-// mints <repo>:<source>:<target>:<relationship type>
-// (devhealthsource/tables.go:637), devhealthfacts and the catalog mint
-// <source>:<target>:<relation key> (devhealthfacts/dependencies.go:291). The
-// work item ids hold ':' and are never split.
-func TestDependencyResolvesBothProducerGrammars(t *testing.T) {
-	const pair = "jira:ABC-1:jira:ABC-2:blocks:fwd"
-	locator := "acr:v1:work-item-dependency:" + pair
-	seed := func() *world {
-		w := newWorld()
-		w.repos[grantedID] = grantedRep
-		w.locators[grantedID+"|jira:ABC-1:jira:ABC-2:Blocks"] = []string{locator}
-		w.discovered[string(contextpacket.SourceRowDiscoveryDependency)+"|"+pair] = []contractsv1.ResolvedScope{scope(grantedID, grantedRep)}
-		w.addRow(grantedID, "work_item_dependencies.v1", locator, catalogRow("work_item_dependencies.v1", locator, "work_item_dependency", pair, grantedRep))
-		return w
-	}
-	graphID := grantedID + ":jira:ABC-1:jira:ABC-2:Blocks"
-	w := seed()
-	expanded, decision := resolver(t, w).ResolveSourceRow(context.Background(), restricted, "work-item-dependency", graphID)
-	if decision.Reason != contextfabric.SourceRowServed || decision.Grammar != contextfabric.SourceRowGrammarRepoAnchored {
-		t.Fatalf("graph grammar: %+v, calls %v", decision, w.calls)
-	}
-	assertSourceRowExpansion(t, expanded, "acr:v1:work-item-dependency:"+graphID, "work-item-dependency", grantedID, grantedRep, "work_item_dependencies.v1")
-	w = seed()
-	expanded, decision = resolver(t, w).ResolveSourceRow(context.Background(), restricted, "work-item-dependency", pair)
-	if decision.Reason != contextfabric.SourceRowServed || decision.Grammar != contextfabric.SourceRowGrammarPairKey {
-		t.Fatalf("pair grammar: %+v, calls %v", decision, w.calls)
-	}
-	assertSourceRowExpansion(t, expanded, locator, "work-item-dependency", grantedID, grantedRep, "work_item_dependencies.v1")
-	// The pair grammar never takes the repository lookup (no UUID prefix).
-	for _, call := range w.calls {
-		if strings.HasPrefix(call, "repository_by_id") || strings.HasPrefix(call, "dependency_locators") {
-			t.Fatalf("pair grammar ran %s", call)
-		}
-	}
-}
-
-// P4: two grammars that name two DIFFERENT rows are refused as ambiguous;
-// the same row reached by both is served once.
-func TestDependencyRefusesTwoDistinctRows(t *testing.T) {
-	// An id both grammars can read: it opens with a UUID, and the pair
-	// grammar's source work item id happens to be that UUID.
-	id := grantedID + ":jira:X-1:blocks:fwd"
-	graphLocator := "acr:v1:work-item-dependency:jira:X-1:x:blocks:fwd"
-	pairLocator := "acr:v1:work-item-dependency:" + id
-	w := newWorld()
-	w.repos[grantedID] = grantedRep
-	w.locators[grantedID+"|jira:X-1:blocks:fwd"] = []string{graphLocator}
-	w.discovered[string(contextpacket.SourceRowDiscoveryDependency)+"|"+id] = []contractsv1.ResolvedScope{scope(grantedID, grantedRep)}
-	w.addRow(grantedID, "work_item_dependencies.v1", graphLocator, catalogRow("work_item_dependencies.v1", graphLocator, "work_item_dependency", "a", grantedRep))
-	w.addRow(grantedID, "work_item_dependencies.v1", pairLocator, catalogRow("work_item_dependencies.v1", pairLocator, "work_item_dependency", "b", grantedRep))
-	expanded, decision := resolver(t, w).ResolveSourceRow(context.Background(), restricted, "work-item-dependency", id)
-	if decision.Reason != contextfabric.SourceRowAmbiguous || decision.Rows != 2 || expanded.SchemaVersion != "" {
-		t.Fatalf("decision = %+v", decision)
-	}
-	// The same row through both grammars is one row.
-	w.rows = map[string][]contextpacket.EvidenceReference{}
-	w.locators[grantedID+"|jira:X-1:blocks:fwd"] = []string{pairLocator}
-	w.addRow(grantedID, "work_item_dependencies.v1", pairLocator, catalogRow("work_item_dependencies.v1", pairLocator, "work_item_dependency", "b", grantedRep))
-	if _, decision := resolver(t, w).ResolveSourceRow(context.Background(), restricted, "work-item-dependency", id); decision.Reason != contextfabric.SourceRowServed {
-		t.Fatalf("one row through two grammars: %+v", decision)
 	}
 }
 

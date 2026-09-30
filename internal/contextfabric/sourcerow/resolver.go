@@ -37,7 +37,6 @@ import (
 type Rows interface {
 	RepositoryByID(ctx context.Context, orgID, repoID string) ([]contractsv1.ResolvedScope, error)
 	SourceRowRepositories(ctx context.Context, orgID string, discovery contextpacket.SourceRowDiscovery, entityID string) ([]contractsv1.ResolvedScope, error)
-	DependencyLocators(ctx context.Context, orgID, repoID, entityKey string) ([]string, error)
 	ResolveSourceRow(ctx context.Context, orgID string, scope contractsv1.ResolvedScope, read contextpacket.SourceRowRead) ([]contextpacket.EvidenceReference, error)
 }
 
@@ -106,14 +105,13 @@ func (r *Resolver) ResolveSourceRow(ctx context.Context, principal storage.Princ
 		targets, err = r.repositoryTargets(ctx, principal, repoID, read, &decision)
 	case contextfabric.SourceRowRouteRowRepository:
 		decision.Grammar = contextfabric.SourceRowGrammarRowAnchored
-		discovery := contextpacket.SourceRowDiscoveryIncident
-		if entityType == string(contractsv1.ContextFabricEvidenceEntityDeploymentIncident) {
-			discovery = contextpacket.SourceRowDiscoveryDeploymentIncident
+		discovery, ok := rowDiscoveries[contractsv1.ContextFabricEvidenceEntityType(entityType)]
+		if !ok {
+			decision.Reason = contextfabric.SourceRowKindOnRecord
+			return contractsv1.ExpandedEvidence{}, decision
 		}
 		read := contextpacket.SourceRowRead{QueryID: plan.Query, Locator: contractsv1.ContextFabricEvidenceRefPrefix + entityType + ":" + entityID}
 		targets, err = r.discoveredTargets(ctx, principal, discovery, entityID, read, contextfabric.SourceRowGrammarRowAnchored, &decision)
-	case contextfabric.SourceRowRouteDependency:
-		targets, err = r.dependencyTargets(ctx, principal, entityType, entityID, plan.Query, &decision)
 	default:
 		decision.Reason = contextfabric.SourceRowKindOnRecord
 		return contractsv1.ExpandedEvidence{}, decision
@@ -130,6 +128,14 @@ func (r *Resolver) ResolveSourceRow(ctx context.Context, principal storage.Princ
 }
 
 var errSaturated = errors.New("sourcerow: row maps to more repositories than the bound")
+
+// rowDiscoveries names the repository discovery of each row-anchored kind.
+// Only a kind whose id is its table's key within the organization may be
+// here: its repositories are then all mappings of ONE row, and the grant
+// filter never chooses between distinct rows (CHAOS-7226 r2 P1 class).
+var rowDiscoveries = map[contractsv1.ContextFabricEvidenceEntityType]contextpacket.SourceRowDiscovery{
+	contractsv1.ContextFabricEvidenceEntityIncident: contextpacket.SourceRowDiscoveryIncident,
+}
 
 // splitRepositoryID splits <repo UUID>:<rest>. A repository id is the UUID
 // alone. The UUID has a fixed length, so rest may hold ':' freely.
@@ -222,44 +228,6 @@ func (r *Resolver) discoveredTargets(ctx context.Context, principal storage.Prin
 	return targets, nil
 }
 
-// dependencyTargets resolves both producer grammars of a dependency id. The
-// pair-key grammar (<source>:<target>:<relation key>, devhealthfacts and the
-// catalog) always runs; the repo-anchored grammar (<repo>:<source>:<target>:
-// <relationship type>, devhealthsource) runs too when the id opens with a
-// repository UUID. Neither splits the work item ids: each matches the whole
-// key in SQL.
-func (r *Resolver) dependencyTargets(ctx context.Context, principal storage.Principal, entityType, entityID, queryID string, decision *contextfabric.SourceRowDecision) ([]target, error) {
-	var targets []target
-	if repoID, rest, ok := splitRepositoryID(entityType, entityID); ok {
-		decision.Grammar = contextfabric.SourceRowGrammarRepoAnchored
-		scopes, err := r.rows.RepositoryByID(ctx, principal.OrgID, repoID)
-		if err != nil {
-			return nil, err
-		}
-		if len(scopes) > 1 {
-			decision.Repositories += len(scopes)
-			return nil, errSaturated
-		}
-		for _, scope := range admitted(principal, scopes, decision) {
-			locators, err := r.rows.DependencyLocators(ctx, principal.OrgID, scope.RepoID, rest)
-			if err != nil {
-				return nil, err
-			}
-			for _, locator := range locators {
-				targets = append(targets, target{scope: scope, read: contextpacket.SourceRowRead{QueryID: queryID, Locator: locator}, grammar: contextfabric.SourceRowGrammarRepoAnchored})
-			}
-		}
-	}
-	decision.Grammar = contextfabric.SourceRowGrammarPairKey
-	pair, err := r.discoveredTargets(ctx, principal, contextpacket.SourceRowDiscoveryDependency, entityID,
-		contextpacket.SourceRowRead{QueryID: queryID, Locator: contractsv1.ContextFabricEvidenceRefPrefix + entityType + ":" + entityID},
-		contextfabric.SourceRowGrammarPairKey, decision)
-	if err != nil {
-		return nil, err
-	}
-	return append(targets, pair...), nil
-}
-
 // found is one read that returned exactly one row.
 type found struct {
 	target    target
@@ -267,8 +235,9 @@ type found struct {
 }
 
 // readTargets reads every target and serves exactly one distinct row. A
-// row-repository kind (an incident mapped to several repositories) is the
-// same row in each; the first readable repository, in slug order, serves it.
+// row-repository kind (an incident mapped to several repositories) is ONE row
+// (its id is the table key within the organization), the same in each; the
+// first readable repository, in slug order, serves it.
 func (r *Resolver) readTargets(ctx context.Context, principal storage.Principal, entityType, entityID string, route contextfabric.SourceRowRoute, targets []target, decision contextfabric.SourceRowDecision) (contractsv1.ExpandedEvidence, contextfabric.SourceRowDecision) {
 	var rows []found
 	seen := map[string]bool{}

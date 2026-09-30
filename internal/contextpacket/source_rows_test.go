@@ -16,18 +16,14 @@ import (
 func sourceRowStatements(t *testing.T) map[string]string {
 	t.Helper()
 	statements := map[string]string{
-		"repository_by_id":   contextpacket.RepositoryByIDQueryV1,
-		"dependency_locator": contextpacket.DependencyLocatorQueryV1,
+		"repository_by_id": contextpacket.RepositoryByIDQueryV1,
 	}
-	for _, discovery := range []contextpacket.SourceRowDiscovery{contextpacket.SourceRowDiscoveryIncident, contextpacket.SourceRowDiscoveryDeploymentIncident, contextpacket.SourceRowDiscoveryDependency} {
+	for _, discovery := range []contextpacket.SourceRowDiscovery{contextpacket.SourceRowDiscoveryIncident} {
 		statement, ok := contextpacket.SourceRowDiscoveryStatement(discovery)
 		if !ok {
 			t.Fatalf("discovery %s has no statement", discovery)
 		}
 		statements[string(discovery)] = statement
-	}
-	for _, query := range contextpacket.SourceRowOnlyQueriesV1 {
-		statements[query.ID] = query.Statement
 	}
 	return statements
 }
@@ -60,19 +56,17 @@ func TestSourceRowStatementsCarryNoGrant(t *testing.T) {
 	}
 }
 
-// The source-row-only statements are not in the packet catalog: adding them
-// there would change every context packet's read set.
-func TestSourceRowOnlyQueriesStayOutOfThePacketCatalog(t *testing.T) {
-	for _, query := range contextpacket.SourceRowOnlyQueriesV1 {
-		for _, catalog := range contextpacket.SourceQueryCatalogV1 {
-			if catalog.ID == query.ID {
-				t.Fatalf("%s is also a packet catalog query", query.ID)
-			}
-		}
-	}
+// A source row is read only through a packet catalog statement: the same
+// label, citation and provenance the packet gives the row.
+func TestSourceRowQueryIDsAreTheCatalog(t *testing.T) {
 	ids := contextpacket.SourceRowQueryIDs()
-	if len(ids) != len(contextpacket.SourceQueryCatalogV1)+len(contextpacket.SourceRowOnlyQueriesV1) {
-		t.Fatalf("SourceRowQueryIDs = %d ids", len(ids))
+	if len(ids) != len(contextpacket.SourceQueryCatalogV1) {
+		t.Fatalf("SourceRowQueryIDs = %d ids, catalog = %d", len(ids), len(contextpacket.SourceQueryCatalogV1))
+	}
+	for index, query := range contextpacket.SourceQueryCatalogV1 {
+		if ids[index] != query.ID {
+			t.Fatalf("id %d = %s, want %s", index, ids[index], query.ID)
+		}
 	}
 }
 
@@ -157,14 +151,10 @@ func TestSourceRowLookupsBindNoGrant(t *testing.T) {
 	if _, err := rows.SourceRowRepositories(ctx, "org_1", contextpacket.SourceRowDiscoveryIncident, "INC-1"); err != nil {
 		t.Fatal(err)
 	}
-	client.rows = [][]any{{"acr:v1:work-item-dependency:a:b:blocks:fwd"}}
-	if _, err := rows.DependencyLocators(ctx, "org_1", "20000000-0000-4000-8000-000000000002", "a:b:blocks"); err != nil {
-		t.Fatal(err)
-	}
 	for index, bindings := range client.bindings {
 		for _, binding := range bindings {
 			switch binding.Name {
-			case "org_id", "repo_id", "entity_id", "entity_key":
+			case "org_id", "repo_id", "entity_id":
 			default:
 				t.Fatalf("lookup %d binds %q", index, binding.Name)
 			}
@@ -176,9 +166,8 @@ func TestSourceRowLookupsBindNoGrant(t *testing.T) {
 }
 
 // CHAOS-7226 codex r1 P1, over the source-row statements: every table of
-// every statement source_rows.go adds (the repository lookup, the three
-// discoveries, the dependency locator and the two source-row-only row
-// statements) is scoped to the caller's organization, by the same sweep
+// every statement source_rows.go adds (the repository lookup and the
+// incident discovery) is scoped to the caller's organization, by the same sweep
 // CHAOS-7237 holds every catalog statement to
 // (TestEveryCatalogStatementScopesEveryTableToTheOrganization).
 func TestSourceRowReadsScopeEveryTableToTheOrganization(t *testing.T) {

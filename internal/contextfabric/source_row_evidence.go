@@ -41,9 +41,6 @@ const (
 	// SourceRowRouteRowRepository: the id carries no repository; the row
 	// names the repositories it maps to.
 	SourceRowRouteRowRepository SourceRowRoute = "row_repository"
-	// SourceRowRouteDependency: two producer grammars for one kind, both
-	// resolved (see SourceRowGrammarRepoAnchored and SourceRowGrammarPairKey).
-	SourceRowRouteDependency SourceRowRoute = "dependency"
 )
 
 // SourceRowPlan is the route of one entity type and the statement that reads
@@ -61,6 +58,22 @@ type SourceRowPlan struct {
 //     durable truth (AGENTS.md).
 //   - team, project, project-team: ownership-derived authorization, a
 //     separate change (CHAOS-6180 part B).
+//   - work-item-dependency, work-item-hierarchy, work-item-team (CHAOS-7226
+//     r2 P1 class): their producers join TWO colon-capable ids with ':'
+//     (<src>:<tgt>:<key>, <repo>:<src>:<tgt>:<type>, <repo>:<child>:<parent>,
+//     <repo>:<work item>:<team>), so one ref string can name two rows, and
+//     a lookup by that string serves whichever one is left or admitted.
+//     A source row is read only for a grammar that is injective: the
+//     fixed-length repository UUID plus ONE opaque id, or the id alone
+//     (TestSourceRowGrammarsAreInjective). They return once their producers
+//     mint an injective grammar.
+//   - deployment-incident (same class): its id is edge_id, a hash of
+//     (deployment_id, incident_id) without the repository, and the table is
+//     keyed (org_id, deployment_id, incident_id, source); deployment ids
+//     collide across repositories, so one edge_id can be two rows in two
+//     repositories and the grant filter would choose between them. A
+//     row-anchored kind is read only when its id is its table's key within
+//     the organization (incident: operational_incidents (org_id, id)).
 //   - commit, commit-file, graph, hotspot, complexity, ai-run, ai-artifact,
 //     review-outcome: no Context Fabric producer mints them. They occur only
 //     as packet-catalog locators inside ev2 handles, so an acr:v1 ref of
@@ -73,7 +86,7 @@ var sourceRowPlans = map[contractsv1.ContextFabricEvidenceEntityType]SourceRowPl
 	contractsv1.ContextFabricEvidenceEntityCommitFile:         {Route: SourceRowRouteRecord},
 	contractsv1.ContextFabricEvidenceEntityComplexity:         {Route: SourceRowRouteRecord},
 	contractsv1.ContextFabricEvidenceEntityDeployment:         {Route: SourceRowRouteRepository, Query: "deployments.v1"},
-	contractsv1.ContextFabricEvidenceEntityDeploymentIncident: {Route: SourceRowRouteRowRepository, Query: "deployment_incident_provenance.v1"},
+	contractsv1.ContextFabricEvidenceEntityDeploymentIncident: {Route: SourceRowRouteRecord},
 	contractsv1.ContextFabricEvidenceEntityEpisode:            {Route: SourceRowRouteRecord},
 	contractsv1.ContextFabricEvidenceEntityGraph:              {Route: SourceRowRouteRecord},
 	contractsv1.ContextFabricEvidenceEntityHotspot:            {Route: SourceRowRouteRecord},
@@ -87,9 +100,9 @@ var sourceRowPlans = map[contractsv1.ContextFabricEvidenceEntityType]SourceRowPl
 	contractsv1.ContextFabricEvidenceEntityReviewOutcome:      {Route: SourceRowRouteRecord},
 	contractsv1.ContextFabricEvidenceEntityTeam:               {Route: SourceRowRouteRecord},
 	contractsv1.ContextFabricEvidenceEntityWorkItem:           {Route: SourceRowRouteRepository, Query: "work_items.v1"},
-	contractsv1.ContextFabricEvidenceEntityWorkItemDependency: {Route: SourceRowRouteDependency, Query: "work_item_dependencies.v1"},
-	contractsv1.ContextFabricEvidenceEntityWorkItemHierarchy:  {Route: SourceRowRouteRepository, Query: "work_item_hierarchy.v1"},
-	contractsv1.ContextFabricEvidenceEntityWorkItemTeam:       {Route: SourceRowRouteRepository, Query: "work_item_teams.v1"},
+	contractsv1.ContextFabricEvidenceEntityWorkItemDependency: {Route: SourceRowRouteRecord},
+	contractsv1.ContextFabricEvidenceEntityWorkItemHierarchy:  {Route: SourceRowRouteRecord},
+	contractsv1.ContextFabricEvidenceEntityWorkItemTeam:       {Route: SourceRowRouteRecord},
 }
 
 // SourceRowPlanFor returns the plan of an entity type segment. A segment
@@ -174,14 +187,11 @@ const (
 	// SourceRowGrammarRowAnchored: the id alone; the row names its
 	// repositories.
 	SourceRowGrammarRowAnchored = "row_anchored"
-	// SourceRowGrammarPairKey: the dependency id
-	// <source>:<target>:<relation key> of devhealthfacts and the catalog.
-	SourceRowGrammarPairKey = "pair_key"
 )
 
 // SourceRowGrammarVocabulary is the closed set of grammars.
-func SourceRowGrammarVocabulary() [3]string {
-	return [3]string{SourceRowGrammarRepoAnchored, SourceRowGrammarRowAnchored, SourceRowGrammarPairKey}
+func SourceRowGrammarVocabulary() [2]string {
+	return [2]string{SourceRowGrammarRepoAnchored, SourceRowGrammarRowAnchored}
 }
 
 // SourceRowDecision records what decided one source-row resolution. It

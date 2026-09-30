@@ -128,13 +128,6 @@ func (a *App) expandContextFabricEvidence(w http.ResponseWriter, r *http.Request
 	if scoped != "" && lookup != nil {
 		lookup = contextfabric.ResultScopedCitedEvidenceLookup{ResultID: scoped}
 	}
-	if scoped == "" {
-		// Deprecated: the ref names its subject, so this read may return the
-		// citation of a result other than the answer the caller holds.
-		a.logger.WarnContext(r.Context(), "context fabric evidence expansion without result_id is deprecated: unscoped read may cite a different result",
-			"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "org_id", contextfabric.SanitizeLogAttr(principal.OrgID),
-			"evidence_ref_id", contextfabric.SanitizeLogAttr(referenceID))
-	}
 	var gate contextfabric.StoredResultAuthorizer
 	if authorizer := a.storedResultGate(); authorizer != nil {
 		gate = authorizer
@@ -144,6 +137,15 @@ func (a *App) expandContextFabricEvidence(w http.ResponseWriter, r *http.Request
 		source = a.runtime.SourceRows
 	}
 	expanded, decision := contextfabric.ExpandEvidence(r.Context(), principal, referenceID, source, lookup, results, gate, a.now())
+	if scoped == "" && decision.PersistedRecordConsulted() {
+		// Deprecated: the ref names its subject, so a persisted-record read
+		// may return the citation of a result other than the answer the
+		// caller holds. A source row does not depend on a result, so it
+		// never warns (CHAOS-7226 r2 P3).
+		a.logger.WarnContext(r.Context(), "context fabric evidence expansion without result_id is deprecated: unscoped read may cite a different result",
+			"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "org_id", contextfabric.SanitizeLogAttr(principal.OrgID),
+			"evidence_ref_id", contextfabric.SanitizeLogAttr(referenceID))
+	}
 	requestID := contextfabric.SanitizeLogAttr(RequestID(r.Context()))
 	if decision.Authorization != nil {
 		args := contextfabric.StoredResultAuthorizationLogArgs(principal, *decision.Authorization)

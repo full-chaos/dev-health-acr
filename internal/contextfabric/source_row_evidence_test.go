@@ -16,7 +16,7 @@ import (
 
 // The plan table is total over the closed evidence-entity vocabulary, names
 // only statements contextpacket declares, and routes exactly the kinds
-// CHAOS-6180 part A ruled (11 source kinds, 13 on the record). A kind moved
+// CHAOS-7226 ruled after r2 (7 source kinds, 17 on the record). A kind moved
 // between routes must move here too.
 func TestSourceRowPlansAreTotal(t *testing.T) {
 	plans := contextfabric.SourceRowPlans()
@@ -26,17 +26,13 @@ func TestSourceRowPlansAreTotal(t *testing.T) {
 	}
 	queries := contextpacket.SourceRowQueryIDs()
 	want := map[contractsv1.ContextFabricEvidenceEntityType]contextfabric.SourceRowRoute{
-		contractsv1.ContextFabricEvidenceEntityRepository:         contextfabric.SourceRowRouteRepository,
-		contractsv1.ContextFabricEvidenceEntityWorkItem:           contextfabric.SourceRowRouteRepository,
-		contractsv1.ContextFabricEvidenceEntityPullRequest:        contextfabric.SourceRowRouteRepository,
-		contractsv1.ContextFabricEvidenceEntityReview:             contextfabric.SourceRowRouteRepository,
-		contractsv1.ContextFabricEvidenceEntityCI:                 contextfabric.SourceRowRouteRepository,
-		contractsv1.ContextFabricEvidenceEntityDeployment:         contextfabric.SourceRowRouteRepository,
-		contractsv1.ContextFabricEvidenceEntityWorkItemHierarchy:  contextfabric.SourceRowRouteRepository,
-		contractsv1.ContextFabricEvidenceEntityWorkItemTeam:       contextfabric.SourceRowRouteRepository,
-		contractsv1.ContextFabricEvidenceEntityIncident:           contextfabric.SourceRowRouteRowRepository,
-		contractsv1.ContextFabricEvidenceEntityDeploymentIncident: contextfabric.SourceRowRouteRowRepository,
-		contractsv1.ContextFabricEvidenceEntityWorkItemDependency: contextfabric.SourceRowRouteDependency,
+		contractsv1.ContextFabricEvidenceEntityRepository:  contextfabric.SourceRowRouteRepository,
+		contractsv1.ContextFabricEvidenceEntityWorkItem:    contextfabric.SourceRowRouteRepository,
+		contractsv1.ContextFabricEvidenceEntityPullRequest: contextfabric.SourceRowRouteRepository,
+		contractsv1.ContextFabricEvidenceEntityReview:      contextfabric.SourceRowRouteRepository,
+		contractsv1.ContextFabricEvidenceEntityCI:          contextfabric.SourceRowRouteRepository,
+		contractsv1.ContextFabricEvidenceEntityDeployment:  contextfabric.SourceRowRouteRepository,
+		contractsv1.ContextFabricEvidenceEntityIncident:    contextfabric.SourceRowRouteRowRepository,
 	}
 	records := 0
 	for _, kind := range vocabulary {
@@ -66,8 +62,8 @@ func TestSourceRowPlansAreTotal(t *testing.T) {
 			}
 		}
 	}
-	if records != 13 || len(want) != 11 {
-		t.Fatalf("records = %d, source kinds = %d; want 13 and 11", records, len(want))
+	if records != 17 || len(want) != 7 {
+		t.Fatalf("records = %d, source kinds = %d; want 17 and 7", records, len(want))
 	}
 	if got := contextfabric.SourceRowPlanFor("not-a-kind"); got.Route != contextfabric.SourceRowRouteRecord {
 		t.Fatalf("an unregistered segment routes to %s", got.Route)

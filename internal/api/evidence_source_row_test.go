@@ -392,3 +392,34 @@ func TestEvidenceRouteRefusesASurroundingWhitespaceRefBeforeAnyRead(t *testing.T
 		t.Fatalf("status %d, reads %v", rec.Code, tables.reads)
 	}
 }
+
+// CHAOS-7226 r2 P3: the unscoped (no result_id) deprecation warning names a
+// persisted-record risk, so it is written only when that path decided the
+// expansion, never for a served source row.
+func TestEvidenceRouteWarnsUnscopedOnlyOnThePersistedRecordPath(t *testing.T) {
+	const deprecation = "context fabric evidence expansion without result_id is deprecated"
+	ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityPullRequest, sourceRowGrantedRepoID+":532")
+	for _, tc := range []struct {
+		name   string
+		tables *sourceRowTables
+		status int
+		warns  bool
+	}{
+		{"served source row", newSourceRowTables().withPullRequest(sourceRowGrantedRepoID, hostedTestRepository), http.StatusOK, false},
+		{"no row, record path", newSourceRowTables(), http.StatusNotFound, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := &bytes.Buffer{}
+			app, token := sourceRowApp(t, tc.tables, nil, logs)
+			logs.Reset()
+			rec := httptest.NewRecorder()
+			app.Handler().ServeHTTP(rec, evidenceRequest(t, token, ref))
+			if rec.Code != tc.status {
+				t.Fatalf("status = %d, want %d", rec.Code, tc.status)
+			}
+			if got := bytes.Contains(logs.Bytes(), []byte(deprecation)); got != tc.warns {
+				t.Fatalf("deprecation warned = %v, want %v:\n%s", got, tc.warns, logs.String())
+			}
+		})
+	}
+}

@@ -161,6 +161,20 @@ type EvidenceExpansionDecision struct {
 	Err    error
 }
 
+// PersistedRecordConsulted reports whether the persisted-record path
+// (ExpandCitedEvidence) decided this expansion: false when the source row
+// was served, when a source read failed, or when a served source row failed
+// the contract.
+func (d EvidenceExpansionDecision) PersistedRecordConsulted() bool {
+	switch {
+	case d.Reason == EvidenceExpansionSourceRowServed, d.Reason == EvidenceExpansionSourceRowUnavailable:
+		return false
+	case d.Reason == EvidenceExpansionInvalid && d.Source.Reason == SourceRowServed:
+		return false
+	}
+	return true
+}
+
 // Found reports whether the caller receives the expansion.
 func (d EvidenceExpansionDecision) Found() bool {
 	return d.Reason == EvidenceExpansionServed || d.Reason == EvidenceExpansionSourceRowServed

@@ -23,12 +23,13 @@ import (
 )
 
 // The source-row statements against a real ClickHouse holding only the
-// tables devhealthschema declares, seeded with one row for each of the 11
-// source kinds the way the producers read them (both dependency grammars
-// included). It proves the SQL (the repository lookup, the three
-// discoveries, the dependency locator, both source-row-only statements and
-// the nine catalog statements the plans name, each filtered to one evidence
-// id) and, on the real engine:
+// tables devhealthschema declares, seeded with one row for each of the 7
+// source kinds the way the producers read them, and rows of the excluded
+// kinds. It proves the SQL (the repository lookup, the incident discovery
+// and the seven catalog statements the plans name, each filtered to one
+// evidence id) and, on the real engine:
+//   - the excluded kinds (non-injective grammar or non-key id; r2 P1) are
+//     never read as a source row, codex r2's collision seed included;
 //   - organization isolation: another organization's rows under a
 //     colliding repository UUID are never served (codex r1 P1);
 //   - an expired incident mapping never crowds out a current one (r1 P2);
@@ -163,6 +164,14 @@ func seedIntegration(t *testing.T, ctx context.Context, direct clickhousedriver.
 		// c0ffee (the same hash under the same repository UUID) and f0e1gn.
 		fmt.Sprintf(`INSERT INTO git_commits (org_id, repo_id, hash, message, author_when, committer_when, parents, last_synced) VALUES ('%[1]s', '%[3]s', 'c0ffee', 'own commit', %[4]s, %[4]s, 1, %[4]s), ('%[2]s', '%[3]s', 'c0ffee', 'FOREIGN commit', %[4]s, %[4]s, 1, %[4]s), ('%[2]s', '%[3]s', 'f0e1gn', 'FOREIGN only', %[4]s, %[4]s, 1, %[4]s)`, integrationOrg, foreignOrg, grantedID, now),
 		fmt.Sprintf(`INSERT INTO git_commit_stats (org_id, repo_id, commit_hash, file_path, additions, deletions, last_synced) VALUES ('%[1]s', '%[3]s', 'c0ffee', 'main.go', 1, 2, %[4]s), ('%[2]s', '%[3]s', 'c0ffee', 'main.go', 7, 8, %[4]s), ('%[2]s', '%[3]s', 'f0e1gn', 'secret.go', 9, 9, %[4]s)`, integrationOrg, foreignOrg, grantedID, now),
+		// The collider-left case: the hierarchy ref <repo>:jira:P:Q:jira:R was
+		// minted for child jira:P:Q under parent jira:R, which is gone; the
+		// only row left is child jira:P under parent Q:jira:R, whose
+		// serialization is the same string.
+		fmt.Sprintf(`INSERT INTO work_items (repo_id, work_item_id, provider, title, status, created_at, updated_at, parent_id, last_synced, org_id) VALUES ('%[1]s', 'jira:P', 'jira', 'Collider child', 'open', %[2]s, %[2]s, 'Q:jira:R', %[2]s, '%[3]s'), ('%[1]s', 'Q:jira:R', 'jira', 'Collider parent', 'open', %[2]s, %[2]s, '', %[2]s, '%[3]s')`, grantedID, now, integrationOrg),
+		// codex r2's collision seed: two dependencies, one ref string.
+		fmt.Sprintf(`INSERT INTO work_items (repo_id, work_item_id, provider, title, status, created_at, updated_at, parent_id, last_synced, org_id) VALUES ('%[1]s', 'jira:A:B', 'jira', 'Grant source', 'open', %[3]s, %[3]s, '', %[3]s, '%[4]s'), ('%[2]s', 'jira:A', 'jira', 'Secret source', 'open', %[3]s, %[3]s, '', %[3]s, '%[4]s')`, grantedID, secretID, now, integrationOrg),
+		fmt.Sprintf(`INSERT INTO work_item_dependencies (source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, org_id) VALUES ('jira:A:B', 'jira:C', 'blocks', 'Grant dependency', %[1]s, '%[2]s'), ('jira:A', 'B:jira:C', 'blocks', 'Secret dependency', %[1]s, '%[2]s')`, now, integrationOrg),
 		// INC-2's service maps to 65 repositories through mappings that
 		// expired, and to grantedID through a current one.
 		fmt.Sprintf(`INSERT INTO repos (id, repo, created_at, last_synced, org_id, provider) SELECT toUUID(concat('50000000-0000-4000-8000-', leftPad(toString(number), 12, '0'))), concat('acme/expired-', leftPad(toString(number), 3, '0')), %s, %s, '%s', 'github' FROM numbers(65)`, now, now, integrationOrg),
@@ -186,7 +195,6 @@ func TestSourceRowsAgainstClickHouse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pair := "jira:ABC-1:jira:ABC-0:" + dependencyrelation.Key("blocks")
 	granted := storage.Principal{OrgID: integrationOrg, RepositoryScopes: []string{grantedRep}}
 	orgWide := storage.Principal{OrgID: integrationOrg}
 	for _, tc := range []struct {
@@ -200,13 +208,8 @@ func TestSourceRowsAgainstClickHouse(t *testing.T) {
 		{contractsv1.ContextFabricEvidenceEntityReview, grantedID + ":rev-9", "PR #532 review"},
 		{contractsv1.ContextFabricEvidenceEntityCI, grantedID + ":run-1", "CI run-1"},
 		{contractsv1.ContextFabricEvidenceEntityDeployment, grantedID + ":dep-1", "production deployment"},
-		{contractsv1.ContextFabricEvidenceEntityWorkItemHierarchy, grantedID + ":jira:ABC-1:jira:ABC-0", "jira:ABC-1 part of jira:ABC-0"},
-		{contractsv1.ContextFabricEvidenceEntityWorkItemTeam, grantedID + ":jira:ABC-1:team-a", "jira:ABC-1 owned by team team-a"},
-		{contractsv1.ContextFabricEvidenceEntityWorkItemDependency, grantedID + ":jira:ABC-1:jira:ABC-0:blocks", ""},
-		{contractsv1.ContextFabricEvidenceEntityWorkItemDependency, pair, ""},
 		{contractsv1.ContextFabricEvidenceEntityIncident, "INC-1", "Outage"},
 		{contractsv1.ContextFabricEvidenceEntityIncident, "INC-2", "Second outage"},
-		{contractsv1.ContextFabricEvidenceEntityDeploymentIncident, "edge-1", "dep-1 linked to INC-1"},
 	} {
 		for _, principal := range []storage.Principal{granted, orgWide} {
 			expanded, decision := resolve.ResolveSourceRow(ctx, principal, string(tc.kind), tc.id)
@@ -242,12 +245,7 @@ func TestSourceRowsAgainstClickHouse(t *testing.T) {
 		{contractsv1.ContextFabricEvidenceEntityReview, grantedID + ":FOREIGN-REVIEW-990"},
 		{contractsv1.ContextFabricEvidenceEntityCI, grantedID + ":FOREIGN-CI-990"},
 		{contractsv1.ContextFabricEvidenceEntityDeployment, grantedID + ":FOREIGN-DEP-990"},
-		{contractsv1.ContextFabricEvidenceEntityWorkItemHierarchy, grantedID + ":jira:FOR-1:jira:FOR-0"},
-		{contractsv1.ContextFabricEvidenceEntityWorkItemTeam, grantedID + ":jira:FOR-1:team-b"},
-		{contractsv1.ContextFabricEvidenceEntityWorkItemDependency, grantedID + ":jira:FOR-1:jira:FOR-0:blocks"},
-		{contractsv1.ContextFabricEvidenceEntityWorkItemDependency, "jira:FOR-1:jira:FOR-0:" + dependencyrelation.Key("blocks")},
 		{contractsv1.ContextFabricEvidenceEntityIncident, "INC-F"},
-		{contractsv1.ContextFabricEvidenceEntityDeploymentIncident, "edge-f"},
 	} {
 		for _, principal := range []storage.Principal{granted, orgWide} {
 			if _, decision := resolve.ResolveSourceRow(ctx, principal, string(foreign.kind), foreign.id); decision.Reason != contextfabric.SourceRowNoRow {
@@ -295,6 +293,37 @@ func TestSourceRowsAgainstClickHouse(t *testing.T) {
 	// them and one current mapping, and only the current one is a candidate.
 	if _, decision := resolve.ResolveSourceRow(ctx, granted, "incident", "INC-2"); decision.Reason != contextfabric.SourceRowServed || decision.Repositories != 1 {
 		t.Fatalf("INC-2 behind expired mappings: %+v", decision)
+	}
+
+	// CHAOS-7226 r2 P1 (codex's seed, a real-ClickHouse regression): the
+	// dependency pair ref <source>:<target>:<relation key> is not injective.
+	// jira:A:B -> jira:C (acme/api) and jira:A -> B:jira:C (other-org/secret)
+	// both serialize to the same ref; before this change the grant filter
+	// turned the two candidates into one and served acme/api's row for a ref
+	// that may have come from the other. A kind whose grammar is not
+	// injective, or whose id is not its table key, is never read as a
+	// source row: the persisted record answers it. Rows of every excluded
+	// kind exist here, and none is served: not even when the ref's own row is
+	// gone and a collider is the ONLY row its string matches.
+	collision := "jira:A:B:jira:C:" + dependencyrelation.Key("blocks")
+	for _, excluded := range []struct {
+		kind contractsv1.ContextFabricEvidenceEntityType
+		id   string
+	}{
+		{contractsv1.ContextFabricEvidenceEntityWorkItemDependency, collision},
+		// Its own row is gone and the collider is the only match.
+		{contractsv1.ContextFabricEvidenceEntityWorkItemHierarchy, grantedID + ":jira:P:Q:jira:R"},
+		{contractsv1.ContextFabricEvidenceEntityWorkItemDependency, "jira:ABC-1:jira:ABC-0:" + dependencyrelation.Key("blocks")},
+		{contractsv1.ContextFabricEvidenceEntityWorkItemDependency, grantedID + ":jira:ABC-1:jira:ABC-0:blocks"},
+		{contractsv1.ContextFabricEvidenceEntityWorkItemHierarchy, grantedID + ":jira:ABC-1:jira:ABC-0"},
+		{contractsv1.ContextFabricEvidenceEntityWorkItemTeam, grantedID + ":jira:ABC-1:team-a"},
+		{contractsv1.ContextFabricEvidenceEntityDeploymentIncident, "edge-1"},
+	} {
+		for _, principal := range []storage.Principal{granted, orgWide} {
+			if _, decision := resolve.ResolveSourceRow(ctx, principal, string(excluded.kind), excluded.id); decision.Reason != contextfabric.SourceRowKindOnRecord {
+				t.Fatalf("%s %s: a non-injective or non-key id was read as a source row: %+v", excluded.kind, excluded.id, decision)
+			}
+		}
 	}
 
 	// Equal refusal on the real engine: the out-of-grant work item, then the
