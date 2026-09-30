@@ -2,6 +2,7 @@ package graphrank
 
 import (
 	"regexp"
+	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -213,7 +214,29 @@ type handleGrammarEntry struct {
 // in one place (CHAOS-7200).
 const workItemKeyNumber = `-\d+\b`
 
-var workItemKeyAnyPrefix = regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9]*` + workItemKeyNumber)
+// workItemKeyPrefixShape bounds an any-prefix key's prefix (closed, bounded:
+// a letter then up to 31 letters/digits). It is SHAPE only; the org's own
+// census decides whether such a key exists (CHAOS-7159).
+const workItemKeyPrefixShape = `[A-Za-z][A-Za-z0-9]{0,31}`
+
+var workItemKeyAnyPrefix = regexp.MustCompile(`\b` + workItemKeyPrefixShape + workItemKeyNumber)
+var workItemKeyExact = regexp.MustCompile(`^` + workItemKeyPrefixShape + workItemKeyNumber + `$`)
+
+// BindWorkItemKey binds text ONLY when the whole text is one shape-valid
+// work-item key of ANY prefix (the bound value is upper-cased) (CHAOS-7159). It serves find_subjects handle
+// mode alone: existence is left to the org's census over
+// work_items.work_item_id, so no per-org prefix list is kept. It is NOT part
+// of handleGrammarRegistry: free-text binding (BindHandles), structure offers
+// and redemption (ValidateHandleGrammar) keep the registered CHAOS grammar.
+func BindWorkItemKey(text string) (BoundHandle, bool) {
+	if !workItemKeyExact.MatchString(text) {
+		return BoundHandle{}, false
+	}
+	// Tracker project keys are canonically upper case (Jira and Linear match
+	// them case-insensitively) while the census compares the stored key
+	// exactly, so the bound value is upper-cased (codex r1 P2).
+	return BoundHandle{Kind: contextfabric.SubjectWorkItem, Grammar: "work_item_key_any_prefix", Value: strings.ToUpper(text), SpanStart: 0, SpanEnd: len(text)}, true
+}
 
 // HasWorkItemKeyToken reports whether text holds a key-shaped token of ANY
 // prefix, using the same boundaries as the registered work_item_ticket_key

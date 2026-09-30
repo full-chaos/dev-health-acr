@@ -97,7 +97,7 @@
     },
     "handle": {
       "type": "string",
-      "description": "handle mode: exactly one pull request number (\"PR 532\"), work item key (only the key prefix this server recognises) or CI run id (\"run 18234567\"). A pull request number is per repository, so several subjects can match: the answer is then ambiguous with the ones you may read. Matches you may not read are not returned and not counted.",
+      "description": "handle mode: exactly one pull request number (\"PR 532\"), work item key of any prefix (a letter, up to 31 letters or digits, a dash, digits; your organization's own work items decide whether it exists) or CI run id (\"run 18234567\"). A pull request number is per repository, so several subjects can match: the answer is then ambiguous with the ones you may read. Matches you may not read are not returned and not counted.",
       "minLength": 1,
       "maxLength": 256
     }

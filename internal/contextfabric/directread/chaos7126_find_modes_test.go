@@ -252,7 +252,7 @@ func TestChaos7126_HandleCensusStates(t *testing.T) {
 func TestChaos7126_HandleGrammarAndComposition(t *testing.T) {
 	var calls []censusCall
 	lookup := newModesLookup(handleGraph(), fixedCensus(graphrank.CensusOutcome{}, nil, &calls))
-	for _, handle := range []string{"payments", "PR 1 and PR 2", "COVID-19"} {
+	for _, handle := range []string{"payments", "PR 1 and PR 2", "COVID-x"} { // CHAOS-7159: "COVID-19" is now a shape-valid key; the census decides
 		if _, err := lookup.Find(relCtx("g-"+handle), unrestricted, FindRequest{Handle: handle}); !errors.Is(err, ErrFindInvalidRequest) {
 			t.Fatalf("%q accepted: %v", handle, err)
 		}
