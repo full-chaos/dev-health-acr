@@ -56,7 +56,9 @@ func producerGrammars() []producerGrammar {
 		// the table is keyed (org_id, deployment_id, incident_id, source).
 		{kind: contractsv1.ContextFabricEvidenceEntityDeploymentIncident, site: "devhealthsource/tables.go:927", arity: 1, table: "work_graph_deployment_incident_edges", idColumn: "edge_id", mint: func(c []string) string { return c[0] }},
 		{kind: contractsv1.ContextFabricEvidenceEntityWorkItemDependency, site: "devhealthsource/tables.go:637", arity: 3, repoAnchored: true, mint: func(c []string) string { return repo(c[0] + ":" + c[1] + ":" + c[2]) }},
-		{kind: contractsv1.ContextFabricEvidenceEntityWorkItemDependency, site: "devhealthfacts/dependencies.go:291", arity: 3, table: "work_item_dependencies", idColumn: "source_work_item_id", mint: func(c []string) string { return c[0] + ":" + c[1] + ":" + c[2] }},
+		// Row-anchored with NO single-row key: the id spans three columns of
+		// the dependency table (and fails injectivity before that matters).
+		{kind: contractsv1.ContextFabricEvidenceEntityWorkItemDependency, site: "devhealthfacts/dependencies.go:291", arity: 3, mint: func(c []string) string { return c[0] + ":" + c[1] + ":" + c[2] }},
 		{kind: contractsv1.ContextFabricEvidenceEntityWorkItemHierarchy, site: "devhealthsource/tables.go:847", arity: 2, repoAnchored: true, mint: func(c []string) string { return repo(c[0] + ":" + c[1]) }},
 		{kind: contractsv1.ContextFabricEvidenceEntityWorkItemTeam, site: "devhealthsource/teams_projects_edges.go:624", arity: 2, repoAnchored: true, mint: func(c []string) string { return repo(c[0] + ":" + c[1]) }},
 	}
@@ -110,7 +112,12 @@ func TestSourceRowGrammarsAreInjective(t *testing.T) {
 			ok = false
 			t.Logf("%s (%s) is not injective: %q and %q both mint %q", g.kind, g.site, a, b, g.mint(a))
 		}
-		if !g.repoAnchored && !organizationKeyed(g.table, g.idColumn) {
+		switch {
+		case g.repoAnchored:
+		case g.table == "":
+			ok = false
+			t.Logf("%s (%s) is row-anchored with no single-row key", g.kind, g.site)
+		case !organizationKeyed(g.table, g.idColumn):
 			ok = false
 			t.Logf("%s (%s) is row-anchored but %s is not keyed (org_id, %s): %s", g.kind, g.site, g.table, g.idColumn, devhealthschema.EngineFull[g.table])
 		}
