@@ -19,6 +19,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 )
 
 func TestCHAOS7263IngestTimeCursor(t *testing.T) {
@@ -154,6 +155,13 @@ func TestCHAOS7263IngestTimeCursor(t *testing.T) {
 		h := newHarness(t, "72630000-0000-4000-8000-000000000003", "72630000-0000-4000-8000-0000000000a3", 15*time.Minute, nil)
 		h.workItem("WI-frontier", now.Add(-time.Hour), now.Add(-10*time.Minute))
 		first := h.drain("")
+		// The caught-up tick at the end of the first drain walks a window
+		// whose rows the paged read just emitted: it must emit nothing again.
+		for i, b := range first.batches {
+			if b.NextCursor == b.Cursor {
+				t.Fatalf("first drain batch %d is an overlap re-emission of rows the paged read already emitted", i)
+			}
+		}
 		// A slower writer stamped this row inside the 15m overlap, but its
 		// insert only lands now, after the cursor passed.
 		h.workItem("WI-late", now.Add(-3*time.Hour), now.Add(-25*time.Minute+10*time.Second))
@@ -187,8 +195,22 @@ func TestCHAOS7263IngestTimeCursor(t *testing.T) {
 		h.workItem("WI-frontier", now.Add(-time.Hour), now.Add(-10*time.Minute))
 		first := h.drain("")
 		edge := now.Add(-2 * overlap)
-		h.workItem("WI-at-edge", now.Add(-4*time.Hour), edge)
-		h.workItem("WI-below-edge", now.Add(-4*time.Hour), edge.Add(-time.Millisecond))
+		// Millisecond-exact ingest stamps: a positional time.Time binding is
+		// sent at whole-second precision, which would put "1 ms below" a full
+		// second below and make this case pass for the wrong reason.
+		atMilli := func(id string, at time.Time) {
+			mustExec(t, ctx, direct, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at, last_synced) VALUES (?, ?, ?, ?, 'open', '', '', 'linear', '', ?, fromUnixTimestamp64Milli(?, 'UTC'))`,
+				id, h.repo, h.orgID, title(id), now.Add(-4*time.Hour), at.UnixMilli())
+		}
+		atMilli("WI-at-edge", edge)
+		atMilli("WI-below-edge", edge.Add(-time.Millisecond))
+		var belowStored string
+		if err := direct.QueryRow(ctx, `SELECT toString(last_synced) FROM work_items FINAL WHERE org_id = ? AND work_item_id = 'WI-below-edge'`, h.orgID).Scan(&belowStored); err != nil {
+			t.Fatal(err)
+		}
+		if want := edge.Add(-time.Millisecond).UTC().Format("2006-01-02 15:04:05.000"); belowStored != want {
+			t.Fatalf("precondition: WI-below-edge stored at %s, want %s", belowStored, want)
+		}
 		second := h.drain(first.cursor)
 		if _, ok := second.items[title("WI-at-edge")]; !ok {
 			t.Fatalf("a row stamped exactly at the window's lower edge was not re-read: %v", second.items)
@@ -204,14 +226,30 @@ func TestCHAOS7263IngestTimeCursor(t *testing.T) {
 	t.Run("overlap: a quiet organization's window closes after the bound", func(t *testing.T) {
 		const overlap = 15 * time.Minute
 		h := newHarness(t, "72630000-0000-4000-8000-00000000000a", "72630000-0000-4000-8000-0000000000aa", overlap, nil)
+		counting := &countingQueryClient{inner: query}
+		counted, err := devhealthsource.NewClickHouseProjectionSource(counting)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if counted, err = counted.WithOverlap(overlap); err != nil {
+			t.Fatal(err)
+		}
+		counted.SetClockForTest(func() time.Time { return now })
+		h.src = counted
 		frontier := now.Add(-3 * time.Hour)
 		h.workItem("WI-old-frontier", now.Add(-4*time.Hour), frontier)
 		first := h.drain("")
 		// Stamped just behind the frontier but landing now, hours later: far
 		// outside the bound, so a closed window does not re-read it.
 		h.workItem("WI-hours-late", now.Add(-5*time.Hour), frontier.Add(-time.Minute))
+		counting.statements = 0
 		if second := h.drain(first.cursor); len(second.items) != 0 {
 			t.Fatalf("a closed window re-read a row landing hours after its stamp: %v", second.items)
+		}
+		// A closed window costs nothing: the idle tick runs the paged read
+		// (one statement per table) and no window statement at all.
+		if tables := len(devhealthsource.EntityTableNamesForTest()); counting.statements != tables {
+			t.Fatalf("an idle tick over a closed window ran %d statements, want %d (the paged read only)", counting.statements, tables)
 		}
 	})
 
@@ -419,13 +457,19 @@ SELECT concat('WI-burst-', leftPad(toString(number), 5, '0')), ?, ?, concat('iss
 		if !strings.Contains(logs.String(), "overlap window pass continues on the next tick") {
 			t.Errorf("a walk stopped short of the window's end must be logged; logs:\n%s", logs.String())
 		}
-		// Late rows, all BEHIND the frontier (the last burst row): before the
-		// burst (page 1), between burst rows 500 and 501 (page 3), and between
-		// burst rows 1,250 and 1,251 (page 7, deeper than one tick walks).
-		late := []string{"WI-late-shallow", "WI-burst-00500-late", "WI-burst-01250-late"}
+		// First ONLY a deep late row, between burst rows 1,250 and 1,251
+		// (page 7): nothing unseen sits on pages 1-5, so it is reached only if
+		// the pass RESUMES where the previous tick stopped rather than
+		// restarting from the window's start.
+		h.workItem("WI-burst-01250-late", now.Add(-3*time.Hour), burst)
+		if deep := h.drain(first.cursor); deep.items[title("WI-burst-01250-late")].Subject.Label == "" {
+			t.Fatalf("a late row on page 7 behind five seen pages was not projected: the pass restarted instead of resuming (%d items)", len(deep.items))
+		}
+		// Then late rows before the burst (page 1) and between burst rows 500
+		// and 501 (page 3), all BEHIND the frontier (the last burst row).
+		late := []string{"WI-late-shallow", "WI-burst-00500-late"}
 		h.workItem(late[0], now.Add(-3*time.Hour), burst.Add(-time.Minute))
 		h.workItem(late[1], now.Add(-3*time.Hour), burst)
-		h.workItem(late[2], now.Add(-3*time.Hour), burst)
 		second := h.drain(first.cursor)
 		for _, id := range late {
 			if _, ok := second.items[title(id)]; !ok {
@@ -436,4 +480,15 @@ SELECT concat('WI-burst-', leftPad(toString(number), 5, '0')), ?, ?, concat('iss
 			t.Fatalf("the window walk moved the cursor (%q -> %q)", first.cursor, second.cursor)
 		}
 	})
+}
+
+// countingQueryClient counts the statements a source sends through it.
+type countingQueryClient struct {
+	inner      contextpacket.ClickHouseQueryClient
+	statements int
+}
+
+func (c *countingQueryClient) Query(ctx context.Context, statement string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+	c.statements++
+	return c.inner.Query(ctx, statement, bindings)
 }
