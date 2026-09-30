@@ -105,37 +105,59 @@ type QueryError struct {
 	// StatusCode is the HTTP status for QueryErrorNotFound and
 	// QueryErrorHTTPStatus, else 0.
 	StatusCode int
-	// ReadBudgetExceeded is set, on the MCP listener client only, when a
-	// non-2xx answer carries the listener's typed read-budget refusal
-	// (errors[].extensions.code MCP_READ_BUDGET_EXCEEDED, CHAOS-7085/7091).
-	// It is a flag, never upstream text.
-	ReadBudgetExceeded bool
+	// ReadBudget is set, on the MCP listener client only, when a non-2xx
+	// answer carries the listener's typed read-budget refusal
+	// (errors[].extensions.code MCP_READ_BUDGET_EXCEEDED, CHAOS-7085/7091):
+	// the closed reason (ReadBudgetReasonVocabulary), never upstream text.
+	ReadBudget ReadBudgetReason
 }
 
 // MCPReadBudgetExceededCode is the extensions.code GWC's MCP listener sets
 // when a query breaches its ClickHouse bytes-read or time ceiling.
 const MCPReadBudgetExceededCode = "MCP_READ_BUDGET_EXCEEDED"
 
-// HasReadBudgetExceeded reports whether a GraphQL error list carries the
-// listener's read-budget code. Only that one code is recognised; nothing of
-// the body is kept.
-func HasReadBudgetExceeded(body []byte) bool {
+// ReadBudgetReason is the closed sub-value of a read-budget refusal.
+type ReadBudgetReason string
+
+const (
+	ReadBudgetBytes   ReadBudgetReason = "bytes_ceiling"
+	ReadBudgetTime    ReadBudgetReason = "time_ceiling"
+	ReadBudgetUnknown ReadBudgetReason = "unknown"
+)
+
+// ReadBudgetReasonVocabulary is the closed set of read-budget reasons.
+func ReadBudgetReasonVocabulary() [3]ReadBudgetReason {
+	return [3]ReadBudgetReason{ReadBudgetBytes, ReadBudgetTime, ReadBudgetUnknown}
+}
+
+// ReadBudgetOf reads a GraphQL error list for the listener's read-budget
+// code and returns its closed reason (extensions.reason bytes_ceiling or
+// time_ceiling; anything else is unknown), or "" when the code is absent.
+// Nothing else of the body is kept.
+func ReadBudgetOf(body []byte) ReadBudgetReason {
 	var answer struct {
 		Errors []struct {
 			Extensions struct {
-				Code string `json:"code"`
+				Code   string `json:"code"`
+				Reason string `json:"reason"`
 			} `json:"extensions"`
 		} `json:"errors"`
 	}
 	if json.Unmarshal(body, &answer) != nil {
-		return false
+		return ""
 	}
 	for _, e := range answer.Errors {
-		if e.Extensions.Code == MCPReadBudgetExceededCode {
-			return true
+		if e.Extensions.Code != MCPReadBudgetExceededCode {
+			continue
+		}
+		switch ReadBudgetReason(e.Extensions.Reason) {
+		case ReadBudgetBytes, ReadBudgetTime:
+			return ReadBudgetReason(e.Extensions.Reason)
+		default:
+			return ReadBudgetUnknown
 		}
 	}
-	return false
+	return ""
 }
 
 func (e *QueryError) Error() string { return "query service call failed: " + string(e.Class) }
@@ -348,7 +370,7 @@ func (c *HTTPQueryClient) Execute(ctx context.Context, call QueryCall) (QueryRes
 		qerr := &QueryError{Class: QueryErrorHTTPStatus, StatusCode: resp.StatusCode}
 		if c.readsTypedRefusals {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-			qerr.ReadBudgetExceeded = HasReadBudgetExceeded(body)
+			qerr.ReadBudget = ReadBudgetOf(body)
 		}
 		drain(resp.Body)
 		return QueryResult{}, qerr

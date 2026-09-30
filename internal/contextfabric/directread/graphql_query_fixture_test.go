@@ -32,6 +32,8 @@ type gqlHarnessOptions struct {
 	fake     func(cfg *fakeMCPConfig)
 	noGrants bool
 	recorder directread.GraphQLQueryRecorder
+	// clientTimeout is the MCP listener client's deadline (default 5 s).
+	clientTimeout time.Duration
 }
 
 func newGQLHarness(t *testing.T, opts gqlHarnessOptions) *gqlHarness {
@@ -51,7 +53,11 @@ func newGQLHarness(t *testing.T, opts gqlHarnessOptions) *gqlHarness {
 		opts.fake(&cfg)
 	}
 	listener := newFakeMCPListener(t, policy, cfg)
-	client, err := directread.NewHTTPGraphQLClient(listener.server.URL, 5*time.Second)
+	timeout := opts.clientTimeout
+	if timeout == 0 {
+		timeout = 5 * time.Second
+	}
+	client, err := directread.NewHTTPGraphQLClient(listener.server.URL, timeout)
 	if err != nil {
 		t.Fatalf("NewHTTPGraphQLClient: %v", err)
 	}

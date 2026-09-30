@@ -1679,6 +1679,7 @@ type GraphQLQueryFields struct {
 	Result        string
 	RefusalCode   string
 	ErrorClass    string
+	ReadBudget    string
 	RequestID     string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every GraphQLQueryFields uniformly, set ONLY by NewGraphQLQueryFields below. A caller
@@ -1693,7 +1694,7 @@ type GraphQLQueryFields struct {
 
 // NewGraphQLQueryFields is the generated constructor for GraphQLQueryFields -- every
 // field GraphQLQuery.Fields declares is a required parameter.
-func NewGraphQLQueryFields(orgID string, callerClass string, scopeClass string, decision string, rootFields []string, operations []string, rootCount int, aliasCount int, depth int, fieldCount int, complexity int, forcedByGrant bool, rowsChecked int, rowsForeign int, pathsRemoved int, completeness string, bytes int, latencyMs int, schemaDigest string, queryDigest string, result string, refusalCode string, errorClass string, requestID string) GraphQLQueryFields {
+func NewGraphQLQueryFields(orgID string, callerClass string, scopeClass string, decision string, rootFields []string, operations []string, rootCount int, aliasCount int, depth int, fieldCount int, complexity int, forcedByGrant bool, rowsChecked int, rowsForeign int, pathsRemoved int, completeness string, bytes int, latencyMs int, schemaDigest string, queryDigest string, result string, refusalCode string, errorClass string, readBudget string, requestID string) GraphQLQueryFields {
 	valid := true
 	if rootFields == nil {
 		valid = false
@@ -1725,6 +1726,7 @@ func NewGraphQLQueryFields(orgID string, callerClass string, scopeClass string, 
 		Result:        result,
 		RefusalCode:   refusalCode,
 		ErrorClass:    errorClass,
+		ReadBudget:    readBudget,
 		RequestID:     requestID,
 		constructed:   valid,
 	}
@@ -1766,6 +1768,7 @@ func (f GraphQLQueryFields) SlogArgs() []any {
 		"result", contextfabric.SanitizeLogAttr(f.Result),
 		"refusal_code", contextfabric.SanitizeLogAttr(f.RefusalCode),
 		"error_class", contextfabric.SanitizeLogAttr(f.ErrorClass),
+		"read_budget", contextfabric.SanitizeLogAttr(f.ReadBudget),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }

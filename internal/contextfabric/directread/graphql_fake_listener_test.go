@@ -36,6 +36,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -66,8 +67,12 @@ type fakeMCPConfig struct {
 	// Status, when set, replaces the whole answer.
 	Status func() (int, string)
 	// ReadBudget, when set, answers every admitted query with the typed
-	// read-budget refusal at this HTTP status (200 or 4xx).
-	ReadBudget int
+	// read-budget refusal at this HTTP status (200 or 4xx), with
+	// extensions.reason ReadBudgetReason (bytes_ceiling or time_ceiling).
+	ReadBudget       int
+	ReadBudgetReason string
+	// Delay, when set, holds every answer this long (acr deadline tests).
+	Delay time.Duration
 }
 
 type fakeMCPRecord struct {
@@ -238,10 +243,13 @@ func (l *fakeMCPListener) serve(w http.ResponseWriter, r *http.Request) {
 		l.refuse(w, "complexity over the cap")
 		return
 	}
+	if l.cfg.Delay > 0 {
+		time.Sleep(l.cfg.Delay)
+	}
 	if l.cfg.ReadBudget != 0 {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(l.cfg.ReadBudget)
-		_, _ = io.WriteString(w, `{"errors":[{"message":"read budget exceeded: 5368709120 bytes","extensions":{"code":"`+directread.MCPReadBudgetExceededCode+`"}}],"data":null}`)
+		_, _ = io.WriteString(w, `{"errors":[{"message":"read budget exceeded: 5368709120 bytes","extensions":{"code":"`+directread.MCPReadBudgetExceededCode+`","reason":"`+l.cfg.ReadBudgetReason+`"}}],"data":null}`)
 		return
 	}
 	if l.cfg.Status != nil {

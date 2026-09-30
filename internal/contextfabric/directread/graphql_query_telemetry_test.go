@@ -84,7 +84,14 @@ func TestGraphQLQueryEventVocabulariesMatchProducer(t *testing.T) {
 	for _, op := range cat.Operations(directread.CallerUnrestricted) {
 		ops = append(ops, op.Name)
 	}
-	want := map[string][]string{"refusal_code": codes, "operations": ops}
+	var classes, budgets []string
+	for _, c := range directread.GraphQLUpstreamErrorClasses() {
+		classes = append(classes, string(c))
+	}
+	for _, b := range directread.ReadBudgetReasonVocabulary() {
+		budgets = append(budgets, string(b))
+	}
+	want := map[string][]string{"refusal_code": codes, "operations": ops, "error_class": classes, "read_budget": budgets}
 	seen := 0
 	for _, field := range eventspec.GraphQLQuery.Fields {
 		expected, ok := want[field.Key]
@@ -107,7 +114,7 @@ func TestGraphQLQueryEventVocabulariesMatchProducer(t *testing.T) {
 		t.Fatalf("message %q vs spec %q", directread.GraphQLQueryLogMessage, eventspec.GraphQLQuery.Msg)
 	}
 	// The shared vocabularies are run_operation's own lists.
-	for _, key := range []string{"caller_class", "scope_class", "decision", "completeness", "result", "error_class"} {
+	for _, key := range []string{"caller_class", "scope_class", "decision", "completeness", "result"} {
 		var a, b []string
 		for _, f := range eventspec.GraphQLQuery.Fields {
 			if f.Key == key {

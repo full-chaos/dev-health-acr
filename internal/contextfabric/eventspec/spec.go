@@ -2260,7 +2260,9 @@ var (
 		"query_invalid", "operation_type_not_allowed", "root_field_not_allowed", "field_not_allowed",
 		"fragment_not_allowed", "directive_not_allowed", "query_limit_exceeded", "read_budget_exceeded",
 	}
-	graphqlQueryOperations = []string{
+	graphqlQueryErrorClasses = []string{"graphql_errors", "decode", "http_status", "transport", "canceled", "acr_deadline", "not_found", "concurrency_wait"}
+	graphqlQueryReadBudgets  = []string{"bytes_ceiling", "time_ceiling", "unknown"}
+	graphqlQueryOperations   = []string{
 		"acrRepositoryScopes", "capacityForecast", "capacityForecasts", "catalogValues", "cognitiveLoad",
 		"complexityTimeseries", "compoundingRisk", "hotspots", "investmentBreakdown", "investmentFull",
 		"securityAlerts", "securityOverview", "throughputForecast", "workGraphArtifacts", "workGraphEdges",
@@ -2302,7 +2304,8 @@ var GraphQLQuery = Event{
 		{Key: "query_digest", Type: FieldString, Presence: PresenceConditional, Applicability: "written when acr rebuilt a query (every root passed the policy)"},
 		{Key: "result", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call is served", ClosedVocabulary: operationReadResults},
 		{Key: "refusal_code", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call is refused", ClosedVocabulary: graphqlQueryRefusalCodes},
-		{Key: "error_class", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call ends upstream_error, upstream_timeout or operation_unavailable", ClosedVocabulary: operationReadErrorClasses},
+		{Key: "error_class", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call ends upstream_error, upstream_timeout or operation_unavailable; acr_deadline = acr's own deadline cut the call before the listener answered", ClosedVocabulary: graphqlQueryErrorClasses},
+		{Key: "read_budget", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the listener refused the query on its read budget (refusal_code read_budget_exceeded)", ClosedVocabulary: graphqlQueryReadBudgets},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }

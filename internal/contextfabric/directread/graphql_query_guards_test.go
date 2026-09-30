@@ -719,21 +719,47 @@ func TestGraphQLTwoRootsOfOneCappedOperationDoNotWaitOnEachOther(t *testing.T) {
 }
 
 // The listener's typed read-budget refusal (MCP_READ_BUDGET_EXCEEDED), at
-// HTTP 200 or 4xx, becomes the closed refusal read_budget_exceeded; no
-// upstream text is passed through.
+// HTTP 200 or 4xx, with reason bytes_ceiling or time_ceiling (or anything
+// else = unknown), becomes the closed refusal read_budget_exceeded with the
+// closed read_budget sub-value; no upstream text is passed through.
 func TestGraphQLReadBudgetRefusalIsTyped(t *testing.T) {
 	for _, status := range []int{200, 400, 422} {
-		t.Run(fmt.Sprint(status), func(t *testing.T) {
-			h := newGQLHarness(t, gqlHarnessOptions{fake: func(cfg *fakeMCPConfig) { cfg.ReadBudget = status }})
-			resp := h.run(t, opUnrestricted(opOrgA), `{ catalog(dimension: TEAM) { values { value } } }`, nil)
-			if resp.Call != directread.CallRefused || resp.Refusal == nil || resp.Refusal.Code != directread.RefusalReadBudgetExceeded || resp.Data != nil {
-				t.Fatalf("want read_budget_exceeded, got %+v", resp)
-			}
-			raw, _ := json.Marshal(resp)
-			if strings.Contains(string(raw), "5368709120") || strings.Contains(string(raw), directread.MCPReadBudgetExceededCode) {
-				t.Fatalf("upstream text passed through: %s", raw)
-			}
-		})
+		for reason, want := range map[string]directread.ReadBudgetReason{
+			"bytes_ceiling": directread.ReadBudgetBytes, "time_ceiling": directread.ReadBudgetTime,
+			"": directread.ReadBudgetUnknown, "free text 5368709120": directread.ReadBudgetUnknown,
+		} {
+			t.Run(fmt.Sprintf("%d/%q", status, reason), func(t *testing.T) {
+				h := newGQLHarness(t, gqlHarnessOptions{fake: func(cfg *fakeMCPConfig) { cfg.ReadBudget, cfg.ReadBudgetReason = status, reason }})
+				resp := h.run(t, opUnrestricted(opOrgA), `{ catalog(dimension: TEAM) { values { value } } }`, nil)
+				if resp.Call != directread.CallRefused || resp.Refusal == nil || resp.Refusal.Code != directread.RefusalReadBudgetExceeded || resp.Data != nil {
+					t.Fatalf("want read_budget_exceeded, got %+v", resp)
+				}
+				if resp.Refusal.ReadBudget != want {
+					t.Fatalf("read_budget %q, want %q", resp.Refusal.ReadBudget, want)
+				}
+				raw, _ := json.Marshal(resp)
+				if strings.Contains(string(raw), "5368709120") || strings.Contains(string(raw), directread.MCPReadBudgetExceededCode) {
+					t.Fatalf("upstream text passed through: %s", raw)
+				}
+				if !strings.Contains(h.logs.String(), `"read_budget":"`+string(want)+`"`) {
+					t.Fatalf("telemetry line lacks read_budget %s:\n%s", want, h.logs.String())
+				}
+			})
+		}
+	}
+}
+
+// acr's own deadline cutting the call first (a client timeout at or below
+// the listener's 10 s ClickHouse limit) is upstream_timeout with the
+// distinct error class acr_deadline, never a read-budget refusal.
+func TestGraphQLAcrDeadlineIsADistinctErrorClass(t *testing.T) {
+	h := newGQLHarness(t, gqlHarnessOptions{clientTimeout: 200 * time.Millisecond, fake: func(cfg *fakeMCPConfig) { cfg.Delay = time.Second }})
+	resp := h.run(t, opUnrestricted(opOrgA), `{ catalog(dimension: TEAM) { values { value } } }`, nil)
+	if resp.Call != directread.CallUpstreamTimeout || len(resp.Errors) != 1 || resp.Errors[0].Class != directread.UpstreamAcrDeadline || resp.Refusal != nil {
+		t.Fatalf("want upstream_timeout/acr_deadline, got %+v", resp)
+	}
+	if !strings.Contains(h.logs.String(), `"error_class":"acr_deadline"`) {
+		t.Fatalf("telemetry line lacks acr_deadline:\n%s", h.logs.String())
 	}
 }
 

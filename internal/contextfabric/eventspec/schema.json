@@ -3227,11 +3227,22 @@
           "http_status",
           "transport",
           "canceled",
-          "timeout",
+          "acr_deadline",
           "not_found",
           "concurrency_wait"
         ],
-        "applicability": "written when the call ends upstream_error, upstream_timeout or operation_unavailable"
+        "applicability": "written when the call ends upstream_error, upstream_timeout or operation_unavailable; acr_deadline = acr's own deadline cut the call before the listener answered"
+      },
+      {
+        "key": "read_budget",
+        "type": "string",
+        "presence": "conditional",
+        "closed_vocabulary": [
+          "bytes_ceiling",
+          "time_ceiling",
+          "unknown"
+        ],
+        "applicability": "written when the listener refused the query on its read budget (refusal_code read_budget_exceeded)"
       },
       {
         "key": "request_id",

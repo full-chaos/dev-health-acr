@@ -131,12 +131,36 @@ type GraphQLRootResult struct {
 	AddedPaths []string `json:"added_paths"`
 }
 
+// GraphQLRefusal is run_operation's typed refusal plus the closed
+// read-budget reason (set only with read_budget_exceeded).
+type GraphQLRefusal struct {
+	OperationRefusal
+	ReadBudget ReadBudgetReason `json:"read_budget,omitempty"`
+}
+
+// UpstreamAcrDeadline is graphql_query's error class for a call acr's own
+// deadline cut (a transport timeout), distinct from the listener's
+// time_ceiling read-budget refusal.
+const UpstreamAcrDeadline UpstreamErrorClass = "acr_deadline"
+
+// GraphQLUpstreamErrorClasses is the closed set of graphql_query upstream
+// error classes: run_operation's, with timeout replaced by acr_deadline.
+func GraphQLUpstreamErrorClasses() []UpstreamErrorClass {
+	out := []UpstreamErrorClass{}
+	for _, c := range UpstreamErrorClassVocabulary() {
+		if c != UpstreamTimeout {
+			out = append(out, c)
+		}
+	}
+	return append(out, UpstreamAcrDeadline)
+}
+
 // GraphQLResponse is graphql_query's answer (design D.7 vocabulary).
 type GraphQLResponse struct {
 	Call             CallStatus          `json:"call"`
 	Completeness     Completeness        `json:"completeness"`
 	Result           ResultState         `json:"result,omitempty"`
-	Refusal          *OperationRefusal   `json:"refusal,omitempty"`
+	Refusal          *GraphQLRefusal     `json:"refusal,omitempty"`
 	Source           GraphQLSource       `json:"source"`
 	RootFields       []GraphQLRootResult `json:"root_fields"`
 	Data             json.RawMessage     `json:"data,omitempty"`
@@ -177,6 +201,7 @@ type GraphQLQueryRead struct {
 	Latency       time.Duration
 	SchemaDigest  string
 	QueryDigest   string
+	ReadBudget    ReadBudgetReason
 }
 
 // GraphQLRunnerConfig wires the runner.
@@ -262,7 +287,7 @@ type gqlRun struct {
 
 func (x *gqlRun) refuse(code RefusalCode, reason, path string) GraphQLResponse {
 	x.resp.Call = CallRefused
-	x.resp.Refusal = &OperationRefusal{Code: code, Reason: reason, Path: safeRefusalPath(path)}
+	x.resp.Refusal = &GraphQLRefusal{OperationRefusal: OperationRefusal{Code: code, Reason: reason, Path: safeRefusalPath(path)}}
 	x.resp.Data = nil
 	x.resp.RootFields = []GraphQLRootResult{}
 	x.read.Decision = string(CallRefused)
@@ -562,8 +587,8 @@ func (x *gqlRun) execute(ctx context.Context, req GraphQLRequest) (GraphQLRespon
 	if err != nil {
 		return x.mapCallError(err, maxBytes), nil
 	}
-	if HasReadBudgetExceeded(result.Body) {
-		return x.readBudget(), nil
+	if reason := ReadBudgetOf(result.Body); reason != "" {
+		return x.readBudget(reason), nil
 	}
 	data, class9, ok := parseGraphQLAnswer(result.Body)
 	if !ok {
@@ -1179,20 +1204,27 @@ func edgeGrantSet(effective *EffectiveScope) map[string]bool {
 }
 
 // mapCallError is run_operation's D.7 mapping of an internal-call failure.
-func (x *gqlRun) readBudget() GraphQLResponse {
-	return x.refuse(RefusalReadBudgetExceeded, "the query service refused the query on its read budget (bytes read or time); select fewer fields or narrow the window, the scope or the limit argument", "")
+func (x *gqlRun) readBudget(reason ReadBudgetReason) GraphQLResponse {
+	resp := x.refuse(RefusalReadBudgetExceeded, "the query service refused the query on its read budget (bytes read or time); select fewer fields or narrow the window, the scope or the limit argument", "")
+	resp.Refusal.ReadBudget = reason
+	x.resp = resp
+	x.read.ReadBudget = reason
+	return resp
 }
 
 func (x *gqlRun) mapCallError(err error, maxBytes int) GraphQLResponse {
 	var qe *QueryError
-	if errors.As(err, &qe) && qe.ReadBudgetExceeded {
-		return x.readBudget()
+	if errors.As(err, &qe) && qe.ReadBudget != "" {
+		return x.readBudget(qe.ReadBudget)
 	}
 	switch QueryErrorClassOf(err) {
 	case QueryErrorNotFound:
 		return x.upstream(CallOperationUnavailable, UpstreamNotFound)
 	case QueryErrorTimeout:
-		return x.upstream(CallUpstreamTimeout, UpstreamTimeout)
+		// acr's own deadline cut the call before the listener answered
+		// (ACR_DATA_QUERY_TIMEOUT or the operation deadline), distinct from
+		// the listener's time_ceiling refusal.
+		return x.upstream(CallUpstreamTimeout, UpstreamAcrDeadline)
 	case QueryErrorCanceled:
 		return x.upstream(CallUpstreamError, UpstreamCanceled)
 	case QueryErrorRequestInvalid:
@@ -1256,6 +1288,9 @@ func GraphQLQueryLogArgs(principal storage.Principal, read GraphQLQueryRead) []a
 	}
 	if read.ErrorClass != "" {
 		args = append(args, "error_class", contextfabric.SanitizeLogAttr(string(read.ErrorClass)))
+	}
+	if read.ReadBudget != "" {
+		args = append(args, "read_budget", contextfabric.SanitizeLogAttr(string(read.ReadBudget)))
 	}
 	return args
 }
