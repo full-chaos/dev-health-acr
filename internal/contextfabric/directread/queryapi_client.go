@@ -105,6 +105,37 @@ type QueryError struct {
 	// StatusCode is the HTTP status for QueryErrorNotFound and
 	// QueryErrorHTTPStatus, else 0.
 	StatusCode int
+	// ReadBudgetExceeded is set, on the MCP listener client only, when a
+	// non-2xx answer carries the listener's typed read-budget refusal
+	// (errors[].extensions.code MCP_READ_BUDGET_EXCEEDED, CHAOS-7085/7091).
+	// It is a flag, never upstream text.
+	ReadBudgetExceeded bool
+}
+
+// MCPReadBudgetExceededCode is the extensions.code GWC's MCP listener sets
+// when a query breaches its ClickHouse bytes-read or time ceiling.
+const MCPReadBudgetExceededCode = "MCP_READ_BUDGET_EXCEEDED"
+
+// HasReadBudgetExceeded reports whether a GraphQL error list carries the
+// listener's read-budget code. Only that one code is recognised; nothing of
+// the body is kept.
+func HasReadBudgetExceeded(body []byte) bool {
+	var answer struct {
+		Errors []struct {
+			Extensions struct {
+				Code string `json:"code"`
+			} `json:"extensions"`
+		} `json:"errors"`
+	}
+	if json.Unmarshal(body, &answer) != nil {
+		return false
+	}
+	for _, e := range answer.Errors {
+		if e.Extensions.Code == MCPReadBudgetExceededCode {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *QueryError) Error() string { return "query service call failed: " + string(e.Class) }
@@ -140,9 +171,13 @@ type QueryClient interface {
 
 // HTTPQueryClient is the production QueryClient.
 type HTTPQueryClient struct {
-	endpoint string
-	timeout  time.Duration
-	client   *http.Client
+	endpoint  string
+	userAgent string
+	// readsTypedRefusals: the MCP listener client reads a bounded error
+	// body to recognise the read-budget refusal.
+	readsTypedRefusals bool
+	timeout            time.Duration
+	client             *http.Client
 }
 
 // ErrQueryClientConfig is returned by NewHTTPQueryClient for an unusable
@@ -154,6 +189,49 @@ var ErrQueryClientConfig = errors.New("query service client: invalid configurati
 // transport keeps connections alive and bounds every phase; it uses no
 // proxy from the environment and follows no redirect.
 func NewHTTPQueryClient(baseURL string, timeout time.Duration) (*HTTPQueryClient, error) {
+	return newHTTPQueryClient(baseURL, timeout, queryEndpointPath, queryClientUserAgent)
+}
+
+// Endpoint paths of the two internal listeners.
+const (
+	// queryEndpointPath is the registered-document route (run_operation).
+	queryEndpointPath = "/query"
+	// GraphQLListenerPath is the route of GWC's MCP listener (CHAOS-7085:
+	// its own port, 8092 in the prod Service, POST /query only).
+	GraphQLListenerPath    = "/query"
+	graphqlClientUserAgent = "acr-api-graphql-query"
+)
+
+// NewHTTPGraphQLClient builds the graphql_query client for GWC's MCP
+// listener at baseURL (config.DataGraphQLURL). Every rule of
+// NewHTTPQueryClient holds: the four identity headers built from the call
+// alone, no Authorization header, superuser and impersonation "false", the
+// 16 KiB body limit, no proxy, no redirect.
+func NewHTTPGraphQLClient(baseURL string, timeout time.Duration) (*HTTPQueryClient, error) {
+	c, err := newHTTPQueryClient(baseURL, timeout, GraphQLListenerPath, graphqlClientUserAgent)
+	if err != nil {
+		return nil, err
+	}
+	c.readsTypedRefusals = true
+	return c, nil
+}
+
+// NewHTTPGraphQLClientWithHTTP is NewHTTPGraphQLClient over a
+// caller-supplied *http.Client. The redirect rule is applied to a copy.
+func NewHTTPGraphQLClientWithHTTP(baseURL string, timeout time.Duration, httpClient *http.Client) (*HTTPQueryClient, error) {
+	c, err := NewHTTPGraphQLClient(baseURL, timeout)
+	if err != nil {
+		return nil, err
+	}
+	if httpClient != nil {
+		copied := *httpClient
+		copied.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		c.client = &copied
+	}
+	return c, nil
+}
+
+func newHTTPQueryClient(baseURL string, timeout time.Duration, path, userAgent string) (*HTTPQueryClient, error) {
 	u, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return nil, ErrQueryClientConfig
@@ -161,7 +239,7 @@ func NewHTTPQueryClient(baseURL string, timeout time.Duration) (*HTTPQueryClient
 	if timeout <= 0 {
 		return nil, ErrQueryClientConfig
 	}
-	u.Path = strings.TrimSuffix(u.Path, "/") + "/query"
+	u.Path = strings.TrimSuffix(u.Path, "/") + path
 	transport := &http.Transport{
 		Proxy:                 nil,
 		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
@@ -177,8 +255,9 @@ func NewHTTPQueryClient(baseURL string, timeout time.Duration) (*HTTPQueryClient
 		DisableCompression: true,
 	}
 	return &HTTPQueryClient{
-		endpoint: u.String(),
-		timeout:  timeout,
+		endpoint:  u.String(),
+		userAgent: userAgent,
+		timeout:   timeout,
 		client: &http.Client{
 			Transport: transport,
 			CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -248,7 +327,7 @@ func (c *HTTPQueryClient) Execute(ctx context.Context, call QueryCall) (QueryRes
 	req.Header = http.Header{}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", queryClientUserAgent)
+	req.Header.Set("User-Agent", c.userAgent)
 	req.Header.Set(HeaderInternalOrgID, call.OrgID)
 	req.Header.Set(HeaderInternalRole, InternalRoleLeast)
 	req.Header.Set(HeaderInternalSuperuser, internalSuperuserValue)
@@ -266,8 +345,13 @@ func (c *HTTPQueryClient) Execute(ctx context.Context, call QueryCall) (QueryRes
 		drain(resp.Body)
 		return QueryResult{}, &QueryError{Class: QueryErrorNotFound, StatusCode: resp.StatusCode}
 	case resp.StatusCode < 200 || resp.StatusCode > 299:
+		qerr := &QueryError{Class: QueryErrorHTTPStatus, StatusCode: resp.StatusCode}
+		if c.readsTypedRefusals {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+			qerr.ReadBudgetExceeded = HasReadBudgetExceeded(body)
+		}
 		drain(resp.Body)
-		return QueryResult{}, &QueryError{Class: QueryErrorHTTPStatus, StatusCode: resp.StatusCode}
+		return QueryResult{}, qerr
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, MaxQueryResponseBytes+1))
 	if err != nil {

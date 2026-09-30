@@ -1,0 +1,239 @@
+{
+  "contract": "acr.mcp.graphql_roots.v1",
+  "generator": "cmd/operationpolicy",
+  "schema_digest": "sha256:dd83956f18b52a3acf89e73e1f25b0dcf25df706d90eca49c5b66f8b8994f779",
+  "operations_source": "contracts/mcp/operations.v1.json",
+  "limits": {
+    "max_query_bytes": 8192,
+    "max_depth": 10,
+    "max_aliases": 5,
+    "max_root_fields": 5,
+    "max_fields": 150,
+    "max_complexity": 10,
+    "max_compute_roots": 1
+  },
+  "cost_weights": {
+    "analytics_batch": 4,
+    "catalog": 1,
+    "compute": 10,
+    "list": 2,
+    "series": 2
+  },
+  "operation_types": [
+    "query"
+  ],
+  "roots": [
+    {
+      "field": "analytics",
+      "operations": [
+        "investmentBreakdown",
+        "investmentFull"
+      ],
+      "cost_class": "analytics_batch",
+      "arguments": [
+        "batch",
+        "orgId"
+      ],
+      "fixed_arguments": [],
+      "restricted_served": false
+    },
+    {
+      "field": "capacityForecast",
+      "operations": [
+        "capacityForecast"
+      ],
+      "cost_class": "compute",
+      "arguments": [
+        "input",
+        "orgId"
+      ],
+      "fixed_arguments": [],
+      "restricted_served": false
+    },
+    {
+      "field": "capacityForecasts",
+      "operations": [
+        "capacityForecasts"
+      ],
+      "cost_class": "list",
+      "arguments": [
+        "filters",
+        "orgId"
+      ],
+      "fixed_arguments": [],
+      "restricted_served": false
+    },
+    {
+      "field": "catalog",
+      "operations": [
+        "acrRepositoryScopes",
+        "catalogValues"
+      ],
+      "cost_class": "catalog",
+      "arguments": [
+        "dimension",
+        "orgId"
+      ],
+      "fixed_arguments": [],
+      "restricted_served": false
+    },
+    {
+      "field": "cognitiveLoad",
+      "operations": [
+        "cognitiveLoad"
+      ],
+      "cost_class": "series",
+      "arguments": [
+        "input"
+      ],
+      "fixed_arguments": [],
+      "restricted_served": false
+    },
+    {
+      "field": "complexityTimeseries",
+      "operations": [
+        "complexityTimeseries"
+      ],
+      "cost_class": "series",
+      "arguments": [
+        "input"
+      ],
+      "fixed_arguments": [],
+      "restricted_served": false
+    },
+    {
+      "field": "compoundingRisk",
+      "operations": [
+        "compoundingRisk"
+      ],
+      "cost_class": "series",
+      "arguments": [
+        "filter",
+        "orgId"
+      ],
+      "fixed_arguments": [],
+      "restricted_served": true
+    },
+    {
+      "field": "hotspots",
+      "operations": [
+        "hotspots"
+      ],
+      "cost_class": "list",
+      "arguments": [
+        "input"
+      ],
+      "fixed_arguments": [],
+      "restricted_served": true
+    },
+    {
+      "field": "securityAlerts",
+      "operations": [
+        "securityAlerts"
+      ],
+      "cost_class": "list",
+      "arguments": [
+        "filters",
+        "orgId",
+        "pagination"
+      ],
+      "fixed_arguments": [],
+      "restricted_served": true
+    },
+    {
+      "field": "securityOverview",
+      "operations": [
+        "securityOverview"
+      ],
+      "cost_class": "series",
+      "arguments": [
+        "filters",
+        "orgId"
+      ],
+      "fixed_arguments": [],
+      "restricted_served": false
+    },
+    {
+      "field": "throughputForecast",
+      "operations": [
+        "throughputForecast"
+      ],
+      "cost_class": "series",
+      "arguments": [
+        "input",
+        "orgId"
+      ],
+      "fixed_arguments": [],
+      "restricted_served": false
+    },
+    {
+      "field": "workGraphArtifacts",
+      "operations": [
+        "workGraphArtifacts"
+      ],
+      "cost_class": "list",
+      "arguments": [
+        "filters",
+        "orgId"
+      ],
+      "fixed_arguments": [],
+      "restricted_served": false
+    },
+    {
+      "field": "workGraphEdges",
+      "operations": [
+        "workGraphEdges"
+      ],
+      "cost_class": "list",
+      "arguments": [
+        "filters",
+        "orgId"
+      ],
+      "fixed_arguments": [],
+      "restricted_served": false
+    },
+    {
+      "field": "workGraphFlow",
+      "operations": [
+        "workGraphFlow"
+      ],
+      "cost_class": "list",
+      "arguments": [
+        "filters",
+        "orgId"
+      ],
+      "fixed_arguments": [],
+      "restricted_served": false
+    }
+  ],
+  "refused_root_fields": [
+    "aiAttributedPrs",
+    "aiAttributionOverview",
+    "aiComparison",
+    "aiGovernanceSummary",
+    "aiImpactSummary",
+    "aiOpportunities",
+    "aiReviewLoad",
+    "aiRiskBreakdown",
+    "aiWorkflowDrilldown",
+    "busFactor",
+    "dataHealth",
+    "experiments",
+    "featureFlagEvents",
+    "featureFlags",
+    "home",
+    "improveOpportunities",
+    "operatingReview",
+    "pr",
+    "productTelemetryDashboard",
+    "productTelemetryPlatformDashboard",
+    "recommendations",
+    "reportRuns",
+    "reviewEdges",
+    "savedReport",
+    "savedReports",
+    "testopsRisk",
+    "workItemTeamAttributions",
+    "workUnitTeamAttributions"
+  ]
+}

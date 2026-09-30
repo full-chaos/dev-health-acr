@@ -21,8 +21,13 @@
 //
 // Usage:
 //
-//	go run ./cmd/operationpolicy          # write both artifact copies
-//	go run ./cmd/operationpolicy -check   # fail if either differs from a fresh generation
+//	go run ./cmd/operationpolicy          # write every generated file
+//	go run ./cmd/operationpolicy -check   # fail if any differs from a fresh generation
+//
+// It also writes the embedded SDL copy graphql_query validates against
+// (internal/contextfabric/directread/ops_schema.graphql) and the graphql_query
+// root allowlist (contracts/mcp/graphql_roots.v1.json), derived from the
+// generated artifact by directread.NewGraphQLPolicy (CHAOS-7075).
 package main
 
 import (
@@ -33,6 +38,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 )
 
 func main() {
@@ -50,11 +57,12 @@ func run(root string, check bool) error {
 	if err != nil {
 		return err
 	}
-	out, err := generate(in)
+	outputs, err := generateAll(in)
 	if err != nil {
 		return err
 	}
-	for _, rel := range []string{artifactPath, embeddedCopyPath} {
+	for _, rel := range outputPaths {
+		out := outputs[rel]
 		path := filepath.Join(root, rel)
 		if check {
 			committed, err := os.ReadFile(path)
@@ -71,6 +79,38 @@ func run(root string, check bool) error {
 		}
 	}
 	return nil
+}
+
+// outputPaths are every file generation writes, in write order.
+var outputPaths = []string{artifactPath, embeddedCopyPath, embeddedSchemaPath, graphqlRootsPath}
+
+// generateAll builds every output: the operation policy artifact and its
+// embedded copy, the embedded SDL copy graphql_query validates against, and
+// the graphql_query root allowlist derived from the SAME artifact (CHAOS-7075,
+// one fact).
+func generateAll(in inputs) (map[string][]byte, error) {
+	artifact, err := generate(in)
+	if err != nil {
+		return nil, err
+	}
+	cat, err := directread.LoadCatalogue(artifact)
+	if err != nil {
+		return nil, fmt.Errorf("generated artifact does not load: %w", err)
+	}
+	policy, err := directread.NewGraphQLPolicy(cat, in.SDL, directread.DefaultGraphQLLimits())
+	if err != nil {
+		return nil, fmt.Errorf("derive the graphql_query root policy: %w", err)
+	}
+	roots, err := policy.RootsFileJSON(generatorName)
+	if err != nil {
+		return nil, fmt.Errorf("render %s: %w", graphqlRootsPath, err)
+	}
+	return map[string][]byte{
+		artifactPath:       artifact,
+		embeddedCopyPath:   artifact,
+		embeddedSchemaPath: bytes.Clone(in.SDL),
+		graphqlRootsPath:   roots,
+	}, nil
 }
 
 func readInputs(root string) (inputs, error) {

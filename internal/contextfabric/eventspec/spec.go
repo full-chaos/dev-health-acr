@@ -2248,6 +2248,65 @@ var OperationRead = Event{
 	},
 }
 
+// The graphql_query vocabularies (CHAOS-7075). Literal for the same import
+// reason as run_operation's; directread's
+// TestGraphQLQueryEventVocabulariesMatchProducer holds each list equal to
+// the producer's own vocabulary function.
+var (
+	graphqlQueryRefusalCodes = []string{
+		"variable_not_allowed", "variable_out_of_range", "person_scope_not_served",
+		"basis_dependent_shape", "no_granted_scope", "operation_not_served_for_caller", "response_budget",
+		"invalid_request", "scope_required", "row_outside_grant", "policy_stale", "denied_or_not_found",
+		"query_invalid", "operation_type_not_allowed", "root_field_not_allowed", "field_not_allowed",
+		"fragment_not_allowed", "directive_not_allowed", "query_limit_exceeded", "read_budget_exceeded",
+	}
+	graphqlQueryOperations = []string{
+		"acrRepositoryScopes", "capacityForecast", "capacityForecasts", "catalogValues", "cognitiveLoad",
+		"complexityTimeseries", "compoundingRisk", "hotspots", "investmentBreakdown", "investmentFull",
+		"securityAlerts", "securityOverview", "throughputForecast", "workGraphArtifacts", "workGraphEdges",
+		"workGraphFlow",
+	}
+)
+
+// GraphQLQuery records one graphql_query call (CHAOS-7036 design D.8, J.3;
+// CHAOS-7075): the caller and scope class, the terminal decision, the root
+// fields (ops SDL Query field names, else "unknown"), the served operation
+// policies they mapped to, the query shape (root, alias, depth, field and
+// complexity counts), and the edge counts that must stay zero. Never the
+// query text, a variable value, a subject id, a row value or a credential;
+// query_digest is the sha256 of the text acr rebuilt and sent.
+var GraphQLQuery = Event{
+	ID: "contextfabric.graphql_query", Msg: "context fabric graphql query", Level: LevelInfo,
+	Multiplicity: MultiplicityZeroOrOnePerRequest, Attribution: []string{"org_id"},
+	BoundedAggregation: "one line per graphql_query request; closed vocabularies, SDL field names, counts and digests only",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "caller_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: operationReadCallerClasses},
+		{Key: "scope_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: operationReadScopeClasses},
+		{Key: "decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: operationReadDecisions},
+		{Key: "root_fields", Type: FieldStringSlice, Presence: PresenceRequired},
+		{Key: "operations", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: graphqlQueryOperations},
+		{Key: "root_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "alias_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "depth", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "field_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "complexity", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "forced_by_grant", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "rows_checked", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "rows_foreign", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "paths_removed", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "completeness", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: operationReadCompleteness},
+		{Key: "bytes", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "latency_ms", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "schema_digest", Type: FieldString, Presence: PresenceRequired},
+		{Key: "query_digest", Type: FieldString, Presence: PresenceConditional, Applicability: "written when acr rebuilt a query (every root passed the policy)"},
+		{Key: "result", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call is served", ClosedVocabulary: operationReadResults},
+		{Key: "refusal_code", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call is refused", ClosedVocabulary: graphqlQueryRefusalCodes},
+		{Key: "error_class", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call ends upstream_error, upstream_timeout or operation_unavailable", ClosedVocabulary: operationReadErrorClasses},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
 // The find_subjects vocabularies of the direct read line (CHAOS-7072).
 // directread imports graphrank, which imports this package, so the values
 // are literal here; directread's TestDirectReadEventVocabulariesMatchProducer
@@ -2810,6 +2869,7 @@ var All = []Event{
 	DirectReadAuthorization,
 	DirectRelationshipsRead,
 	OperationRead,
+	GraphQLQuery,
 	DirectRead,
 	EvidenceExpansion,
 	CountPopulationScope,

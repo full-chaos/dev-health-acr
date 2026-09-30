@@ -19,13 +19,16 @@ import (
 
 // Vendored input and generated output paths, relative to the repository root.
 const (
-	registryPath      = "contracts/mcp/ops-catalogue/registry.v1.json"
-	schemaPath        = "contracts/mcp/ops-catalogue/schema.graphql"
-	artifactPath      = "contracts/mcp/operations.v1.json"
-	embeddedCopyPath  = "internal/contextfabric/directread/operations.v1.json"
-	generatorName     = "cmd/operationpolicy"
-	defaultDeadlineS  = 30
-	unlistedReasonFmt = "not on the variable allowlist of %s"
+	registryPath     = "contracts/mcp/ops-catalogue/registry.v1.json"
+	schemaPath       = "contracts/mcp/ops-catalogue/schema.graphql"
+	artifactPath     = "contracts/mcp/operations.v1.json"
+	embeddedCopyPath = "internal/contextfabric/directread/operations.v1.json"
+	// CHAOS-7075: the SDL copy graphql_query embeds, and its root allowlist.
+	embeddedSchemaPath = "internal/contextfabric/directread/ops_schema.graphql"
+	graphqlRootsPath   = "contracts/mcp/graphql_roots.v1.json"
+	generatorName      = "cmd/operationpolicy"
+	defaultDeadlineS   = 30
+	unlistedReasonFmt  = "not on the variable allowlist of %s"
 )
 
 // registryFile is the vendored ops registrydump output.
