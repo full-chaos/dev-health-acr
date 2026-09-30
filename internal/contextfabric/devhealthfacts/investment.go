@@ -527,8 +527,6 @@ func (p *InvestmentProvider) readProjectThemeMix(ctx context.Context, orgID stri
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	statement := projectRollupMixStatement(timeBound)
-
 	// readers.QueryOrgScopedNamed, never p.facts.query: this is genuinely
 	// raw SQL (not a readers.ReadXxx call), but it must still report
 	// through the SAME readers.Instrumentation hook NewInstrumentedProviders
@@ -546,18 +544,16 @@ func (p *InvestmentProvider) readProjectThemeMix(ctx context.Context, orgID stri
 	// "ReadProjectThemeMix" names the reader for attribution -- distinct
 	// from "ReadTeamThemeMix" (dev-health-go's own reader for the team
 	// subject), never conflated with that reader's own instrumentation.
-	extraBindings := make([]readers.Binding, 0, 2)
-	for _, b := range timeBound.bindings() {
-		extraBindings = append(extraBindings, readers.Binding{Name: b.Name, Value: b.Value})
+	// CHAOS-7271: phased reads (investment_project_mix_phased.go); every
+	// phase reports through readers.QueryOrgScopedNamed.
+	mixRows, readErr := readProjectRollupMixRows(ctx, p.facts.client, orgID, ids, timeBound)
+	if readErr != nil {
+		return 0, readErr
 	}
-	scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadProjectThemeMix", statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+	serve := func(mix projectRollupMixRow) error {
 		rowCount++
-		var projectKey string
-		var featureDelivery, operational, maintenance, quality, risk, bugfixWeighted float64
-		var workUnits, repoCount, teamCount, excludedNoRepoLink uint64
-		if scanErr := row.Scan(&projectKey, &featureDelivery, &operational, &maintenance, &quality, &risk, &bugfixWeighted, &workUnits, &repoCount, &teamCount, &excludedNoRepoLink); scanErr != nil {
-			return scanErr
-		}
+		projectKey, featureDelivery, operational, maintenance, quality, risk, bugfixWeighted := mix.ProjectKey, mix.FeatureDelivery, mix.Operational, mix.Maintenance, mix.Quality, mix.Risk, mix.BugfixWeighted
+		workUnits, repoCount, teamCount, excludedNoRepoLink := mix.WorkUnits, mix.Repos, mix.Teams, mix.ExcludedNoRepoLink
 		// The probe row (maxFactRowsProbe = maxFactRowsPerQuery+1) is
 		// counted toward rowCount, so ReadFacts' rowCount>maxFactRowsPerQuery
 		// check reports Truncated, but it must not itself be served -- an
@@ -627,9 +623,11 @@ func (p *InvestmentProvider) readProjectThemeMix(ctx context.Context, orgID stri
 		// exists -- see this function's own doc comment for why.
 		mergeProjectInvestmentFact(facts, subject, projectKey, fields, nil)
 		return nil
-	}, extraBindings...)
-	if scanErr != nil {
-		return rowCount, scanErr
+	}
+	for _, mix := range mixRows {
+		if serveErr := serve(mix); serveErr != nil {
+			return rowCount, serveErr
+		}
 	}
 	return rowCount, nil
 }

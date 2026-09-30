@@ -183,7 +183,7 @@ func TestThemeMixReadsScanWorkUnitInvestmentsOnceAgainstRealClickHouse(t *testin
 func lastServerException(ctx context.Context, direct clickhousedriver.Conn) string {
 	_ = direct.Exec(ctx, `SYSTEM FLUSH LOGS`)
 	var text string
-	if err := direct.QueryRow(ctx, `SELECT exception FROM system.query_log WHERE type IN ('ExceptionBeforeStart','ExceptionWhileProcessing') ORDER BY event_time_microseconds DESC LIMIT 1`).Scan(&text); err != nil {
+	if err := direct.QueryRow(ctx, `SELECT concat(exception, ' || read_bytes=', toString(read_bytes), ' || ', substring(query, 1, 240)) FROM system.query_log WHERE type IN ('ExceptionBeforeStart','ExceptionWhileProcessing') ORDER BY event_time_microseconds DESC LIMIT 1`).Scan(&text); err != nil {
 		return "no server exception recorded: " + err.Error()
 	}
 	return text

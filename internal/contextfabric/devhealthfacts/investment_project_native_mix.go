@@ -24,22 +24,7 @@ func readProjectNativeThemeMixRows(ctx context.Context, client contextpacket.Cli
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	statement := projectNativeMixStatement(timeBound, rowLimit)
-
-	extra := append(append([]readers.Binding{}, timeBound.neutral().Bindings()...), readers.Binding{Name: "bugfix_key", Value: readers.BugfixSubcategoryKey})
-	var rows []readers.ProjectThemeMixRow
-	err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectThemeMix", statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
-		var r readers.ProjectThemeMixRow
-		if scanErr := row.Scan(&r.ProjectSubjectKey, &r.FeatureDelivery, &r.Operational, &r.Maintenance, &r.Quality, &r.Risk, &r.BugfixWeighted, &r.WorkUnits, &r.EffortUnits, &r.SpanningUnits, &r.MultiPlacedUnits); scanErr != nil {
-			return scanErr
-		}
-		rows = append(rows, r)
-		return nil
-	}, extra...)
-	if err != nil {
-		return nil, err
-	}
-	return rows, nil
+	return readProjectNativeMixRows(ctx, client, orgID, ids, timeBound, rowLimit)
 }
 
 // projectNativeMixStatement is the project-native mix, one pass over

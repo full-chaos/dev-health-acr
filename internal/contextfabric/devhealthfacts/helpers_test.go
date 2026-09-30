@@ -119,6 +119,10 @@ func (s *fakeScanner) Scan(dest ...any) error {
 			*value = row[index].(float64)
 		case *[]string:
 			*value = row[index].([]string)
+		case *[]float64:
+			*value = row[index].([]float64)
+		case *[]uint8:
+			*value = row[index].([]uint8)
 		case *map[string]float64:
 			*value = row[index].(map[string]float64)
 		default:

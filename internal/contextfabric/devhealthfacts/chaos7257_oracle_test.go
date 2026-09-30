@@ -6,9 +6,11 @@ package devhealthfacts
 // replaced against the one it introduced, on the same seeded ClickHouse.
 
 import (
+	"context"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-go/readers"
 )
 
@@ -277,4 +279,26 @@ LEFT JOIN unit_span AS s ON s.work_unit_id = a.work_unit_id
 GROUP BY a.project_provider, a.project_id
 ORDER BY project_key
 )`, rowLimit)
+}
+
+// CHAOS-7271: the phased production path, exported for the differential tests.
+
+// ProjectRollupMixRow is one row of the phased roll-up read.
+type ProjectRollupMixRow = projectRollupMixRow
+
+// RunProjectRollupMix runs the roll-up mix exactly as readProjectThemeMix does.
+func RunProjectRollupMix(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, w ProjectMixWindow) ([]ProjectRollupMixRow, error) {
+	return readProjectRollupMixRows(ctx, client, orgID, ids, w.bound())
+}
+
+// RunProjectNativeMix runs the native mix exactly as readProjectNativeThemeMix does.
+func RunProjectNativeMix(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, w ProjectMixWindow, rowLimit int) ([]readers.ProjectThemeMixRow, error) {
+	return readProjectNativeThemeMixRows(ctx, client, orgID, ids, w.bound(), rowLimit)
+}
+
+// WithProjectMixBetweenPhases returns a context whose hook runs after phase 0 of
+// a project mix read and before its next phase: the instant a writer can land a
+// version the read must not see.
+func WithProjectMixBetweenPhases(ctx context.Context, hook func()) context.Context {
+	return context.WithValue(ctx, projectMixBetweenPhasesKey{}, hook)
 }

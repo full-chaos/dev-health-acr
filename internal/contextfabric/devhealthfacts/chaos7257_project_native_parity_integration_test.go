@@ -60,6 +60,21 @@ func runNativeStatement(t *testing.T, ctx context.Context, query *runtimeclickho
 	return out
 }
 
+// runNativePhased is the native read production runs (CHAOS-7271: phased).
+func runNativePhased(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, orgID string, ids []string, w devhealthfacts.ProjectMixWindow, rowLimit int) []nativeRow {
+	t.Helper()
+	rows, err := devhealthfacts.RunProjectNativeMix(ctx, query, orgID, ids, w, rowLimit)
+	if err != nil {
+		t.Fatalf("phased native: %v", err)
+	}
+	var out []nativeRow
+	for _, r := range rows {
+		out = append(out, nativeRow{Key: r.ProjectSubjectKey, Themes: [5]float64{r.FeatureDelivery, r.Operational, r.Maintenance, r.Quality, r.Risk},
+			Bugfix: r.BugfixWeighted, WorkUnits: r.WorkUnits, EffortUnits: r.EffortUnits, Spanning: r.SpanningUnits, MultiPlaced: r.MultiPlacedUnits})
+	}
+	return out
+}
+
 func nativeRowsDiffer(want, got []nativeRow) error {
 	toRollup := func(rows []nativeRow) []rollupRow {
 		out := make([]rollupRow, len(rows))
@@ -209,7 +224,7 @@ func TestProjectNativeSinglePassMatchesTheMultiReferenceOracleAgainstRealClickHo
 	for _, tc := range windows {
 		t.Run(tc.name, func(t *testing.T) {
 			oracle := runNativeStatement(t, ctx, query, "OracleProjectNative", devhealthfacts.OracleProjectNativeStatement(tc.window, rowLimit), orgID, ids, tc.window)
-			got := runNativeStatement(t, ctx, query, "ProjectNative", devhealthfacts.ProjectNativeStatement(tc.window, rowLimit), orgID, ids, tc.window)
+			got := runNativePhased(t, ctx, query, orgID, ids, tc.window, rowLimit)
 			keys := make([]string, 0, len(oracle))
 			for _, r := range oracle {
 				keys = append(keys, r.Key)
