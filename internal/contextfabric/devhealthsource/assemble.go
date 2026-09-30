@@ -179,7 +179,7 @@ func (p sourcePlan) fullSnapshot(ctx context.Context, orgID string) (contextfabr
 	var all []candidate
 	oversized := false
 	for _, table := range p.tables {
-		rows, truncated, err := table.query(ctx, p.client, orgID, cursorState{}, snapshotPerQueryCap)
+		rows, truncated, err := readTable(ctx, table, p.client, orgID, cursorState{}, snapshotPerQueryCap)
 		if err != nil {
 			logTableReadFailure(ctx, p.logger, p.source, orgID, table.name, err)
 			return contextfabric.ProjectionBatch{}, false, &tableReadError{table: table.name, cause: err}
@@ -260,7 +260,7 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 	for skips := 0; ; skips++ {
 		var all []candidate
 		for _, table := range p.tables {
-			rows, _, err := table.query(ctx, p.client, orgID, state, incrementalBatchCap)
+			rows, _, err := readTable(ctx, table, p.client, orgID, state, incrementalBatchCap)
 			if err != nil {
 				logTableReadFailure(ctx, p.logger, p.source, orgID, table.name, err)
 				return contextfabric.ProjectionBatch{}, false, &tableReadError{table: table.name, cause: err}

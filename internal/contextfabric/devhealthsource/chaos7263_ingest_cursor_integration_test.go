@@ -404,6 +404,35 @@ SELECT ?, ?, concat('dep-', leftPad(toString(number), 3, '0')), 'success', 'prod
 		}, isWorkItem("WI-first"))
 	})
 
+	// The emitted-row memo identifies a row by its TABLE as well as its
+	// position: the shared keyset orders rows of every table by (ingest stamp,
+	// row key), and two tables can hold rows with the same pair. A repository
+	// row is drained; then an incident lands late whose id is that
+	// repository's id, with the same ingest stamp. It is a different row and
+	// must be projected.
+	t.Run("a late row is not suppressed by another table's row at the same position", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t, "72630000-0000-4000-8000-000000000025", "72630000-0000-4000-8000-0000000000bb", 15*time.Minute, nil)
+		const sharedID = "72630000-0000-4000-8000-0000000000bc"
+		stamp := now.Add(-10 * time.Minute)
+		mustExec(t, ctx, direct, `INSERT INTO repos (id, repo, ref, created_at, tags, last_synced, org_id, provider) VALUES (?,?,?,?,?,?,?,?)`, sharedID, "acme/shared-id", nil, now, nil, stamp, h.orgID, "linear")
+		mustExec(t, ctx, direct, `INSERT INTO operational_service_repository_mappings (org_id, service_id, repo_id, is_active) VALUES (?, ?, ?, ?)`, h.orgID, "svc-shared", h.repo, uint8(1))
+		first := h.drain("")
+		var sawRepo bool
+		for _, e := range first.all {
+			sawRepo = sawRepo || (e.Subject.Kind == contractsv1.ContextFabricSubjectRepository && strings.Contains(e.Subject.CanonicalID, sharedID))
+		}
+		if !sawRepo {
+			t.Fatalf("precondition: the repository %s was not projected", sharedID)
+		}
+		mustExec(t, ctx, direct, `INSERT INTO operational_incidents (id, org_id, service_id, title, normalized_status, raw_status, normalized_severity, raw_severity, started_at, source_event_at, observed_at, is_deleted, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			sharedID, h.orgID, "svc-shared", "shared-id incident", "resolved", "resolved", "low", "low", now.Add(-3*time.Hour), now.Add(-3*time.Hour), now.Add(-3*time.Hour), uint8(0), stamp)
+		second := h.drain(first.cursor)
+		if _, ok := second.entityOfKind(t, contractsv1.ContextFabricSubjectIncident); !ok {
+			t.Fatalf("a late incident whose (ingest stamp, row id) equals an already emitted repository row was suppressed (%d batches)", len(second.batches))
+		}
+	})
+
 	// The memo is per process. A projector that restarts with a saved cursor
 	// starts its first pass at (frontier - 2*overlap), so a row that landed
 	// behind the frontier while no process was walking is still found.

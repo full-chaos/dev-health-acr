@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 )
 
 // CHAOS-7263: the projection cursor keys on each row's INGEST time. Ingest
@@ -108,8 +109,21 @@ func windowScopeFor(orgID string, epoch int64) string {
 
 func newWindowMemo() *windowMemo { return &windowMemo{scopes: map[string]*windowScope{}} }
 
+// rowMemoKey is a row's identity in the memo, and in a window batch's ack:
+// its table, position and row key. Position and row key alone collide across
+// tables (the keyset shares one order across all of them).
 func rowMemoKey(c candidate) string {
-	return strconv.FormatInt(c.position().UnixNano(), 10) + "|" + c.sortKey
+	return c.table + "\x00" + strconv.FormatInt(c.position().UnixNano(), 10) + "|" + c.sortKey
+}
+
+// readTable runs one producer and labels its candidates with the table they
+// came from (rowMemoKey).
+func readTable(ctx context.Context, table entityTable, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
+	rows, truncated, err := table.query(ctx, client, orgID, cursor, limit)
+	for i := range rows {
+		rows[i].table = table.name
+	}
+	return rows, truncated, err
 }
 
 func (m *windowMemo) scopeLocked(scope string) *windowScope {
@@ -333,7 +347,7 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 		// (empty) read is needed to learn that.
 		more := false
 		for _, table := range tables {
-			rows, truncated, err := table.query(ctx, p.client, orgID, pass.walk, incrementalBatchCap)
+			rows, truncated, err := readTable(ctx, table, p.client, orgID, pass.walk, incrementalBatchCap)
 			if err != nil {
 				logTableReadFailure(ctx, p.logger, p.source, orgID, table.name, err)
 				return contextfabric.ProjectionBatch{}, false, &tableReadError{table: table.name, cause: err}

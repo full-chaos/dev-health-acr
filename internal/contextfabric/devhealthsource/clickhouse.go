@@ -283,8 +283,14 @@ type candidate struct {
 	// (backfill, newly connected provider), and keying the cursor on it skipped
 	// such rows forever. Zero means observedAt (tables whose cursor column is
 	// already an ingest stamp).
-	cursorAt     time.Time
-	sortKey      string
+	cursorAt time.Time
+	sortKey  string
+	// table (CHAOS-7263) is the producer registry entry (entityTable.name)
+	// the candidate was read from, set by every read loop. The shared keyset
+	// orders rows of all tables by (position, sortKey), and two tables can
+	// hold rows with the same pair, so a row's identity in the overlap
+	// memo is (table, position, sortKey). Empty for synthesized candidates.
+	table        string
 	entity       *contractsv1.ContextFabricEntityProjection
 	relationship *contractsv1.ContextFabricRelationshipProjection
 	episode      *contractsv1.ContextFabricEpisodeProjection
