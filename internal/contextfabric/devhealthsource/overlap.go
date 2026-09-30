@@ -44,11 +44,19 @@ const overlapWindowMaxPages = 5
 // recovers rows the old cursor space skipped.
 const cursorSpaceIngest = "ingest.v1"
 
-// windowMemo remembers, per organization, the rows this process has emitted
-// near the frontier so the overlap re-read only emits NEW rows.
+// windowMemo remembers, per scope (organization and epoch, windowScopeFor),
+// the rows this process has emitted near the frontier so the overlap re-read
+// only emits NEW rows.
 type windowMemo struct {
 	mu   sync.Mutex
-	seen map[string]map[string]time.Time // org -> row key -> position
+	seen map[string]map[string]time.Time // scope -> row key -> position
+}
+
+// windowScopeFor keys the memo by organization AND checkpoint epoch: the
+// serving graph and a build-aside graph of one organization are drained by
+// the same source, and each must receive a late row on its own.
+func windowScopeFor(orgID string, epoch int64) string {
+	return orgID + "\x00" + strconv.FormatInt(epoch, 10)
 }
 
 func newWindowMemo() *windowMemo { return &windowMemo{seen: map[string]map[string]time.Time{}} }
@@ -59,16 +67,16 @@ func rowMemoKey(c candidate) string {
 
 // record notes every candidate as emitted and prunes entries older than
 // 2*overlap behind the newest recorded position.
-func (m *windowMemo) record(orgID string, all []candidate, overlap time.Duration) {
+func (m *windowMemo) record(scope string, all []candidate, overlap time.Duration) {
 	if m == nil || len(all) == 0 {
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	rows := m.seen[orgID]
+	rows := m.seen[scope]
 	if rows == nil {
 		rows = map[string]time.Time{}
-		m.seen[orgID] = rows
+		m.seen[scope] = rows
 	}
 	newest := time.Time{}
 	for _, c := range all {
@@ -85,13 +93,13 @@ func (m *windowMemo) record(orgID string, all []candidate, overlap time.Duration
 	}
 }
 
-func (m *windowMemo) unseen(orgID string, all []candidate) []candidate {
+func (m *windowMemo) unseen(scope string, all []candidate) []candidate {
 	if m == nil {
 		return all
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	rows := m.seen[orgID]
+	rows := m.seen[scope]
 	out := make([]candidate, 0, len(all))
 	for _, c := range all {
 		if _, ok := rows[rowMemoKey(c)]; !ok {
@@ -101,12 +109,35 @@ func (m *windowMemo) unseen(orgID string, all []candidate) []candidate {
 	return out
 }
 
-func (m *windowMemo) reset(orgID string) {
+// snapshot returns an independent copy of the memo. A side-effect-free read
+// (PeekProjectionBatch) runs the same engine against the copy: the overlap
+// walk still sees what this process emitted, but whatever the peek "emits"
+// and resets lands in the copy and is discarded. Recording into the shared
+// memo there would mark late rows as emitted without any batch carrying
+// them, and the next real tick would skip them.
+func (m *windowMemo) snapshot() *windowMemo {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := newWindowMemo()
+	for org, rows := range m.seen {
+		copied := make(map[string]time.Time, len(rows))
+		for k, at := range rows {
+			copied[k] = at
+		}
+		out.seen[org] = copied
+	}
+	return out
+}
+
+func (m *windowMemo) reset(scope string) {
 	if m == nil {
 		return
 	}
 	m.mu.Lock()
-	delete(m.seen, orgID)
+	delete(m.seen, scope)
 	m.mu.Unlock()
 }
 
@@ -131,7 +162,11 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 			return contextfabric.ProjectionBatch{}, false, nil
 		}
 		var pageRows []candidate
-		for _, table := range p.tables {
+		tables := p.tables
+		if p.windowTables != nil {
+			tables = p.windowTables
+		}
+		for _, table := range tables {
 			rows, _, err := table.query(ctx, p.client, orgID, walk, incrementalBatchCap)
 			if err != nil {
 				logTableReadFailure(ctx, p.logger, p.source, orgID, table.name, err)
@@ -144,7 +179,7 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 		}
 		sortCandidates(pageRows)
 		pageRows = truncateToCompleteRows(pageRows, incrementalBatchCap)
-		if all = p.window.unseen(orgID, pageRows); len(all) > 0 {
+		if all = p.window.unseen(p.windowScope, pageRows); len(all) > 0 {
 			break
 		}
 		last := pageRows[len(pageRows)-1]
@@ -154,7 +189,7 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 	items := partitionProjectableCandidates(all, p.observeQuarantine)
 	// Whatever this pass consumed is now "seen": rows that are only
 	// quarantined must not be re-judged every tick.
-	p.window.record(orgID, all, p.overlap)
+	p.window.record(p.windowScope, all, p.overlap)
 	if !carriesPayload(items) {
 		return contextfabric.ProjectionBatch{}, false, nil
 	}

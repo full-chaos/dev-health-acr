@@ -21,20 +21,21 @@ import (
 
 // ingestCursorColumns is the declared cursor expression per table, with the
 // ops writer that stamps it (file:line in the ops repository).
+// devhealthschema:not-a-production-replica these keys are table NAMES matched against the producer registries; no column, type or engine is declared here.
 var ingestCursorColumns = map[string]struct{ expr, writer string }{
-	"repos":                                {"last_synced", "providersync github_prs_route.go / repos upsert: last_synced = normalizedAt"},
-	"work_items":                           {"w.last_synced", "migrations/clickhouse/009_raw_work_items.sql:24; providersync/linear_work_items_route.go:883, gitlab_work_items_rows.go:232"},
+	"repos":                                {"last_synced", "internal/providersync/stored_version.go:365 repos upsert; streamhandlers/external_clickhouse.go:185 (unchanged)"},
+	"work_items":                           {"w.last_synced", "migrations/clickhouse/009_raw_work_items.sql:26; providersync/linear_work_items_route.go:883, gitlab_work_items_rows.go:232"},
 	"work_items_hierarchy":                 {"c.last_synced", "same column as work_items"},
-	"git_pull_requests":                    {"p.last_synced", "providersync/github_prs_route.go:394"},
+	"git_pull_requests":                    {"p.last_synced", "providersync/github_prs_route.go:394 (unchanged)"},
 	"deployments":                          {"d.last_synced", "providersync/github_deployments_route.go:303"},
-	"operational_incidents":                {"i.last_synced", "providersync/pagerduty_incidents_route.go:1008, gitlab_incidents_route.go:402"},
-	"work_item_dependencies":               {"d.last_synced", "ops metrics job stamps the write time"},
+	"operational_incidents":                {"i.last_synced", "providersync/pagerduty_incidents_route.go:1009, gitlab_incidents_route.go:402"},
+	"work_item_dependencies":               {"d.last_synced", "providersync/github_work_items_direct_effects_clickhouse.go:466 (unchanged)"},
 	"work_graph_deployment_incident_edges": {"e.computed_at", "migrations/clickhouse/037_ai_workgraph.sql:122 DEFAULT now64()"},
 	"git_pull_request_reviews":             {"r.last_synced", "providersync/github_pr_reviews.go:58"},
 	"ci_pipeline_runs":                     {"c.last_synced", "metrics/sinks/clickhouse/ci.py:116-134"},
 	"teams":                                {queryTeamsIngestExpr, "teams.last_synced (011_ensure_teams.sql:8 DEFAULT now()) or the team_repo_ownership write-time watermark"},
 	"projects":                             {"last_synced", "migrations/clickhouse/051_team_attribution_dimensions.sql:13 DEFAULT now64(3)"},
-	"work_item_team_attributions":          {"a.computed_at", "the attribution compute job stamps computed_at"},
+	"work_item_team_attributions":          {"a.computed_at", "migrations/clickhouse/051_team_attribution_dimensions.sql:89 ReplacingMergeTree(computed_at) (unchanged)"},
 	"team_repo_ownership":                  {repositoryTeamsWatermark, "updated_at = write time on every writer (team_repo_ownership_derivation_clickhouse.go:89,692; github_team_catalog.go:269; linear_reference_catalog_route.go:487) folded with repos.last_synced"},
 }
 
@@ -135,5 +136,28 @@ func TestEveryProjectedTablePagesOnItsIngestColumnOrIsDisclosed(t *testing.T) {
 	}
 	if len(cursorUnsoundTables) != 2 {
 		t.Errorf("the disclosed exemption list has %d tables, want exactly the 2 without an ingest column", len(cursorUnsoundTables))
+	}
+}
+
+// Both sources refuse a non-positive overlap: a zero window would silently
+// turn the late-arrival re-read off.
+func TestWithOverlapRefusesANonPositiveWindow(t *testing.T) {
+	for _, d := range []time.Duration{0, -time.Nanosecond, -15 * time.Minute} {
+		if _, err := (&ClickHouseProjectionSource{}).WithOverlap(d); err == nil {
+			t.Errorf("ClickHouseProjectionSource.WithOverlap(%s) accepted", d)
+		}
+		if _, err := (&TeamsProjectsSource{}).WithOverlap(d); err == nil {
+			t.Errorf("TeamsProjectsSource.WithOverlap(%s) accepted", d)
+		}
+	}
+	for _, d := range []time.Duration{time.Nanosecond, defaultReprojectOverlap} {
+		src, err := (&ClickHouseProjectionSource{}).WithOverlap(d)
+		if err != nil || src.overlap != d {
+			t.Errorf("ClickHouseProjectionSource.WithOverlap(%s) = %v, overlap %s", d, err, src.overlap)
+		}
+		teams, err := (&TeamsProjectsSource{}).WithOverlap(d)
+		if err != nil || teams.overlap != d {
+			t.Errorf("TeamsProjectsSource.WithOverlap(%s) = %v, overlap %s", d, err, teams.overlap)
+		}
 	}
 }

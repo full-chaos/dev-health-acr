@@ -316,8 +316,10 @@ func (s *ClickHouseProjectionSource) NextProjectionBatch(ctx context.Context, ch
 // PeekProjectionBatch implements contextfabric.ProjectionPeeker. It runs the
 // same paging engine as NextProjectionBatch against the same checkpoint, on a
 // plan with every side effect removed: no consumed-progress memo is recorded
-// or dropped, and no quarantine, normalization, orphan or batch telemetry is
-// emitted. Only the ClickHouse reads happen. A later NextProjectionBatch at
+// or dropped, no quarantine, normalization, orphan or batch telemetry is
+// emitted, and the overlap window's emitted-row memo is a discarded copy (a
+// peek that "emits" a late row must not mark it emitted). Only the ClickHouse
+// reads happen. A later NextProjectionBatch at
 // the same checkpoint therefore serves exactly the page it would have served
 // without the peek.
 func (s *ClickHouseProjectionSource) PeekProjectionBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (bool, error) {
@@ -331,6 +333,7 @@ func (s *ClickHouseProjectionSource) PeekProjectionBatch(ctx context.Context, ch
 	plan.observeNormalization = nil
 	plan.recordConsumed = nil
 	plan.dropConsumed = nil
+	plan.window = plan.window.snapshot()
 	_, available, err := plan.nextBatch(ctx, checkpoint)
 	return available, err
 }

@@ -66,13 +66,19 @@ func requireCursorProgress(t *testing.T, where, cursor string, batch contextfabr
 // drain pages until the source reports nothing available.
 func (h *ingestHarness) drain(cursor string) drained {
 	h.t.Helper()
+	return h.drainEpoch(cursor, 0)
+}
+
+// drainEpoch is drain against one graph epoch's checkpoint.
+func (h *ingestHarness) drainEpoch(cursor string, epoch int64) drained {
+	h.t.Helper()
 	out := drained{
 		items: map[string]contractsv1.ContextFabricEntityProjection{}, all: map[string]contractsv1.ContextFabricEntityProjection{},
 		relationships: map[contractsv1.ContextFabricRelationshipType][]contractsv1.ContextFabricRelationshipProjection{},
 	}
 	replays := map[string]bool{}
 	for i := 0; i < 60; i++ {
-		b, ok, err := h.src.NextProjectionBatch(h.ctx, contextfabric.ProjectionCheckpoint{OrgID: h.orgID, Source: h.source, Cursor: cursor})
+		b, ok, err := h.src.NextProjectionBatch(h.ctx, contextfabric.ProjectionCheckpoint{OrgID: h.orgID, Source: h.source, Epoch: epoch, Cursor: cursor})
 		if err != nil {
 			h.t.Fatalf("NextProjectionBatch: %v", err)
 		}

@@ -1204,6 +1204,7 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 		source:         TeamsProjectsSourceName,
 		version:        TeamsProjectsSourceVersion,
 		tables:         teamsProjectsTables(ledger, presence, teamAuth, repoOwnership),
+		windowTables:   teamsProjectsTables(&ambiguityLedger{}, &presenceTelemetryLedger{}, &teamAuthorizationLedger{}, &repositoryOwnershipLedger{}),
 		logger:         s.logger,
 		now:            s.now,
 		overlap:        s.overlapDuration(),

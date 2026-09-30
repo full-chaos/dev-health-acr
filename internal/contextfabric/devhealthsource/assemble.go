@@ -66,9 +66,20 @@ type sourcePlan struct {
 	observeQuarantine func(quarantineObservation)
 
 	// overlap and window (CHAOS-7263) bound the caught-up trailing re-read
-	// (overlap.go). overlap <= 0 or a nil window disables it.
-	overlap time.Duration
-	window  *windowMemo
+	// (overlap.go). overlap <= 0 or a nil window disables it. windowScope is
+	// the memo key nextBatch derives from the checkpoint: organization AND
+	// epoch, because a build-aside rebuild drains the same organization into
+	// a second graph through this same source, and a row emitted into one
+	// epoch's graph has not been emitted into the other's.
+	overlap     time.Duration
+	window      *windowMemo
+	windowScope string
+	// windowTables, when set, is the table set the overlap walk reads instead
+	// of tables: the same producers bound to throwaway run telemetry. The
+	// walk re-reads rows the paged path already read and counted; counting
+	// them again on every caught-up tick would grow cumulative counters
+	// (rows read, edges asserted) while nothing happened.
+	windowTables []entityTable
 
 	// observeNormalization is called once per token per item repaired by
 	// producer-side normalization (item_normalization.go), with a closed
@@ -115,6 +126,7 @@ func (p sourcePlan) nextBatch(ctx context.Context, checkpoint contextfabric.Proj
 	if orgID == "" {
 		return contextfabric.ProjectionBatch{}, false, fmt.Errorf("devhealthsource: organization is required")
 	}
+	p.windowScope = windowScopeFor(orgID, checkpoint.Epoch)
 	if checkpoint.Cursor == "" {
 		return p.fullSnapshot(ctx, orgID)
 	}
@@ -129,7 +141,7 @@ func (p sourcePlan) nextBatch(ctx context.Context, checkpoint contextfabric.Proj
 		// batch.Cursor == checkpoint.Cursor); the batch's NextCursor is in the
 		// new space. Idempotent, and it recovers rows the old space skipped.
 		state = cursorState{}
-		p.window.reset(orgID)
+		p.window.reset(p.windowScope)
 	}
 	return p.pagedBatch(ctx, orgID, checkpoint.Cursor, state, false)
 }
@@ -212,7 +224,7 @@ func (p sourcePlan) fullSnapshot(ctx context.Context, orgID string) (contextfabr
 		// all-unprojectable candidate set reachable. It bites hardest on a
 		// source with no seed candidate (TeamsProjectsSource), where nothing
 		// guarantees at least one valid item.
-		p.window.record(orgID, all, p.overlap)
+		p.window.record(p.windowScope, all, p.overlap)
 		noteConsumedFrom(p, orgID, all)
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
@@ -221,7 +233,7 @@ func (p sourcePlan) fullSnapshot(ctx context.Context, orgID string) (contextfabr
 		return contextfabric.ProjectionBatch{}, false, err
 	}
 	p.forgetConsumed(orgID)
-	p.window.record(orgID, all, p.overlap)
+	p.window.record(p.windowScope, all, p.overlap)
 	p.observeBatch(ctx, batch, all)
 	return batch, true, nil
 }
@@ -278,7 +290,7 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 			// an earlier iteration no longer describes it -- see
 			// forgetConsumed for the invariant.
 			p.forgetConsumed(orgID)
-			p.window.record(orgID, all, p.overlap)
+			p.window.record(p.windowScope, all, p.overlap)
 			p.observeBatch(ctx, batch, all)
 			return batch, true, nil
 		}
@@ -292,7 +304,7 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 		last := all[len(all)-1]
 		state = cursorState{Since: last.position(), After: last.sortKey}
 		// Consumed (and judged): the overlap re-read must not re-judge them.
-		p.window.record(orgID, all, p.overlap)
+		p.window.record(p.windowScope, all, p.overlap)
 		noteConsumedFrom(p, orgID, all)
 		if skips >= maxOmittedPageSkips {
 			return contextfabric.ProjectionBatch{}, false, nil
