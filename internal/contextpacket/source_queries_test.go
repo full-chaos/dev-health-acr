@@ -5,7 +5,9 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/dependencyrelation"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/evidenceref"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 func TestDeploymentsSourceQuery_usesTruthfulCitationWhenReleaseReferenceIsEmpty(t *testing.T) {
@@ -161,7 +163,7 @@ func TestWorkItemDependenciesSourceQueryIdentityIsTheCanonicalRelation(t *testin
 	}
 	key := dependencyrelation.KeySQL("d.relationship_type")
 	for _, want := range []string{
-		"d.source_work_item_id, ':', d.target_work_item_id, ':', " + key + ") evidence_ref_id",
+		evidenceref.SQL(contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, "d.source_work_item_id", "d.target_work_item_id", key) + " evidence_ref_id",
 		"ORDER BY d.source_work_item_id, d.target_work_item_id, " + key + ", d.last_synced DESC, d.relationship_type ASC LIMIT 1 BY d.source_work_item_id, d.target_work_item_id, " + key,
 	} {
 		if !strings.Contains(statement, want) {
