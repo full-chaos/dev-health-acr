@@ -230,17 +230,78 @@ name:
   layer (documented as a binding precondition in `AGENTS.md`, not
   re-traced into `internal/contextfabric/pginvestigation` here).
 
-## Row addressing: symbol, not line (CHAOS-7128)
+## Row addressing: symbol, not line (CHAOS-7128, CHAOS-7245)
 
 The acr gate (`ci/checkendpointprofiles`) matches a row to its route by
-`source.file` + `method` + `route`, and a `primary_validator` anchor by its
-`note` marker (a literal call/function substring). `source.line` is ignored by
-the gate after schema validation (the shared schema still requires it). An
-anchor's `line` / `line_end` are hints for where the symbol is: they must still
-be in-bounds, non-trivial and a valid range, but a moved line does not fail.
-Renaming or removing the route fails as `PHANTOM ROW` + `UNOWNED SURFACE`;
-renaming the marked symbol fails as `ANCHOR MARKER NOT FOUND`. Marker rule, one
-invariant per (file, marker): no line may carry the marker twice, and its total
-occurrences in the file must equal the number of distinct sites the rows
-declare for it (rows citing one shared definition line are one site). More is
+`source.file` + `method` + `route`, and every anchor -- `primary_validator`,
+each `reachable_validators[]` and each `issued_credential[]` -- by a marker in
+its `note`, found in the PARSED Go source as an AST node. `source.line` is
+ignored by the gate after schema validation (the shared schema still requires
+it). An anchor's `line` / `line_end` are hints for where the symbol was: the
+gate checks only that `line` is a positive number and that `line_end` is not
+before it, never the file's content at that line, so moving the symbol (an
+unrelated edit above it) does not fail and needs no re-anchoring. Renaming or
+removing the route fails as `PHANTOM ROW` + `UNOWNED SURFACE`; renaming the
+marked symbol fails as `ANCHOR MARKER NOT FOUND`.
+
+The marker is the source text that opens the anchored construct: either a
+whole `func` header prefix (`func (a *App) protectedRuntimeHandler(`), or a
+call that opens with its full callee (`a.protectedRuntimeHandler(limits.`).
+It must be a prefix of the source of a function declaration or call expression
+at that node's start. Text in a string literal, in a comment, in another
+call's arguments, or a name that only shares a prefix (`mux.Handle` against
+`mux.HandleFunc(`) is not an anchor: a wrapper removed with its text left in a
+string fails as `ANCHOR MARKER NOT A CODE NODE`. When a note has backticks the
+marker is the first backtick-quoted span and the rest is prose: `` `func (s *S)
+Start(` `s.store.Create(` -- mints the device code ``. An anchor with no marker
+fails as `MISSING ANCHOR MARKER`.
+
+An `issued_credential` anchor carries two markers, both required: the
+enclosing `func` declaration, then the call that mints the credential, which
+must appear exactly once in that function's body, called by the function itself
+(`ANCHOR CONTENT MISMATCH` if it is not there, or if the only call sits inside a
+func literal nested in the body; `AMBIGUOUS ANCHOR MARKER` if it is there
+twice). Any call inside a nested func literal is not counted, whatever the
+literal does with it: an uncalled literal, and also one that is invoked
+immediately, deferred, or started with `go`. A call in a nested literal beside
+the function's own call is not counted as a second site.
+
+This check is lexical, not a control-flow proof: a direct call in the anchored
+function's body counts whatever branch it sits in, so a call under a condition
+that can never hold (or one the function returns before reaching) is not
+caught. That is the same CHAOS-4780 class as the reachability limits below;
+CHAOS-7280 carries this one too.
+
+Anchors are plain function and method declarations. A generic function
+declaration (`func f[T any](...)`) is not supported as an anchor: its marker
+does not resolve and the gate refuses it (`ANCHOR MARKER NOT A CODE NODE`), which fails
+closed.
+
+Marker rule, one invariant per (file, marker) across all anchor kinds: no line
+may hold two of its sites, and the number of sites in the file must equal the
+number of distinct sites the rows declare for it (rows citing one shared
+definition line are one site; a `func` declaration is always one site). More is
 `AMBIGUOUS ANCHOR MARKER`; none or fewer is `ANCHOR MARKER NOT FOUND`.
+
+What this does not prove (CHAOS-4780, reachability is out of scope for this
+gate):
+
+- A row anchored at a shared definition shows that the definition exists, not
+  that a given route uses it. That covers the ten rows marked by
+  `protectedRuntimeHandler`'s declaration, and the six rows marked by
+  `authenticateWebAssertion`'s declaration (the reachable validator of
+  `GET /api/v1/agent-context/capabilities`, `POST /api/v1/agent-context/context-packets`,
+  `GET /api/v1/agent-context/evidence/{evidence_ref_id}`,
+  `POST /api/v1/context-fabric/investigations`,
+  `GET /api/v1/context-fabric/investigations/{result_id}` and
+  `GET /api/v1/context-fabric/model-config`): removing the call to either from
+  the code that dispatches through it leaves the declaration, and the gate green.
+- A route's own-call marker (`a.protectedRuntimeHandler(...)` in its handler
+  builder) is located in the file, not bound to the route's handler builder: the
+  route fails if that call is removed or renamed, but moving the call to another
+  function in the same file, one the route no longer uses, is not caught. Binding
+  a marker to the handler builder needs a new row field, which is a schema and
+  scope change; it is tracked as CHAOS-7280 (CHAOS-4780 class), not done here.
+- A mint call in an `issued_credential` anchor is bound to its function, but
+  whether that function is reached, or whether control flow reaches the call
+  inside it, is not judged either (see the lexical-check paragraph above).
