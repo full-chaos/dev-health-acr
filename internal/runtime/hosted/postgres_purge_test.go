@@ -383,32 +383,44 @@ func TestStartConfiguredOAuthPurge_zeroWindowsFailStartupBeforeAnyDelete(t *test
 	}
 }
 
-func TestOAuthPurgeFunc_logsOneCountLineOnlyWhenRowsWereDeleted(t *testing.T) {
+func TestOAuthPurgeFunc_logsOneCountLineOnEveryTick(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	purger := &fakeOAuthPurger{}
 	purge := oauthPurgeFunc(purger, time.Hour, 2*time.Hour, logger)
-
-	// An empty tick logs nothing.
-	if total, err := purge(context.Background(), time.Now(), 5); total != 0 || err != nil || logs.Len() != 0 {
-		t.Fatalf("empty tick: total=%d err=%v log=%q", total, err, logs.String())
+	oneLine := func(want ...string) {
+		t.Helper()
+		line := strings.TrimSpace(logs.String())
+		if strings.Count(line, "\n") != 0 || !strings.Contains(line, `msg="oauth purge"`) {
+			t.Fatalf("want exactly one oauth purge line, got %q", line)
+		}
+		for _, fragment := range want {
+			if !strings.Contains(line, fragment) {
+				t.Fatalf("line %q lacks %q", line, fragment)
+			}
+		}
+		logs.Reset()
 	}
 
-	// A tick that deleted rows logs one line with the two counts and nothing else.
+	// An empty tick is the loop's heartbeat: one line, both counts zero.
+	if total, err := purge(context.Background(), time.Now(), 5); total != 0 || err != nil {
+		t.Fatalf("empty tick: total=%d err=%v", total, err)
+	}
+	oneLine("requests=0", "clients=0")
+
+	// A tick that deleted rows logs the two counts.
 	purger.result = storagepostgres.OAuthPurgeResult{Requests: 3, Clients: 2}
-	total, err := purge(context.Background(), time.Now(), 5)
-	line := strings.TrimSpace(logs.String())
-	if total != 5 || err != nil || strings.Count(line, "\n") != 0 ||
-		!strings.Contains(line, `msg="oauth purge"`) || !strings.Contains(line, "requests=3") || !strings.Contains(line, "clients=2") {
-		t.Fatalf("delete tick: total=%d err=%v log=%q", total, err, line)
+	if total, err := purge(context.Background(), time.Now(), 5); total != 5 || err != nil {
+		t.Fatalf("delete tick: total=%d err=%v", total, err)
 	}
+	oneLine("requests=3", "clients=2")
 
 	// A tick that deleted requests and then failed reports the failure and still logs what was deleted.
-	logs.Reset()
 	wantErr := errors.New("client statement failed")
 	purger.result, purger.err = storagepostgres.OAuthPurgeResult{Requests: 1}, wantErr
-	total, err = purge(context.Background(), time.Now(), 5)
-	if total != 1 || !errors.Is(err, wantErr) || !strings.Contains(logs.String(), "requests=1") {
-		t.Fatalf("partial-failure tick: total=%d err=%v log=%q", total, err, logs.String())
+	total, err := purge(context.Background(), time.Now(), 5)
+	if total != 1 || !errors.Is(err, wantErr) {
+		t.Fatalf("partial-failure tick: total=%d err=%v", total, err)
 	}
+	oneLine("requests=1", "clients=0")
 }

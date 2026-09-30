@@ -228,8 +228,9 @@ statement:
 - Client ID metadata document clients are never stored, so they are never
   purged. Credentials are not touched: a live credential never depends on its
   client row.
-- Each non-empty tick logs one `oauth purge` line with the two row counts; a
-  failed tick logs a fixed line without the error text.
+- Every tick logs one `oauth purge` line at Info with the two deleted-row
+  counts, zeros included (the loop's heartbeat: a missing line means the loop
+  stopped); a failed tick also logs a fixed warning without the error text.
 
 ## Rate limiting
 

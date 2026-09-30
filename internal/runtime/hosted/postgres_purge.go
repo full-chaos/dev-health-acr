@@ -25,7 +25,7 @@ const (
 	// The OAuth rows (acr.oauth_authorization_requests and dynamically
 	// registered acr.oauth_clients, CHAOS-6191) grow only as fast as the
 	// rate-limited /authorize and /register routes are used, so the sweep
-	// runs at the packet snapshot cadence.
+	// runs at the packet snapshot cadence (one heartbeat line per tick).
 	defaultOAuthPurgeInterval   = 5 * time.Minute
 	defaultOAuthPurgeBatchLimit = 500
 )
@@ -137,19 +137,21 @@ type oauthPurger interface {
 }
 
 // oauthPurgeFunc adapts an oauthPurger to a packetPurgeFunc with the
-// configured windows. A tick that deleted anything logs exactly one info line
-// carrying the two row counts (never an id, client name or URI); an empty
-// tick logs nothing. The count line is written before an error is returned,
-// so a tick that deleted requests and then failed on the client statement is
-// still visible.
+// configured windows. EVERY tick that reaches the database logs exactly one
+// info line carrying the two row counts (never an id, client name or URI),
+// zeros included: the line is the loop's heartbeat, so a loop that stopped, or
+// one whose predicate silently selects nothing, is visible at Info as a missing
+// line or as counts that stay zero while the tables grow. The count line is
+// written before an error is returned, so a tick that deleted requests and
+// then failed on the client statement is still visible; the failure itself is
+// reported by the tick loop's fixed redacted warning.
 func oauthPurgeFunc(purger oauthPurger, requestGrace, clientIdle time.Duration, logger *slog.Logger) packetPurgeFunc {
 	return func(ctx context.Context, before time.Time, limit int) (int, error) {
 		result, err := purger.PurgeExpired(ctx, before, requestGrace, clientIdle, limit)
-		total := result.Requests + result.Clients
-		if total > 0 && logger != nil {
+		if logger != nil {
 			logger.InfoContext(ctx, "oauth purge", "requests", result.Requests, "clients", result.Clients)
 		}
-		return total, err
+		return result.Requests + result.Clients, err
 	}
 }
 
