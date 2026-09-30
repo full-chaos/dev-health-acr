@@ -42,7 +42,7 @@ var resources = []Resource{
 	},
 	{
 		URI: URIData, File: "data.md", Name: "guide-data", Title: "Plan the reads yourself: the data tools",
-		Description: "How to use data_catalog, find_subjects and run_operation: the rules, the operation list for each caller class and four worked examples. Read before you plan a data investigation.",
+		Description: "How to use data_catalog, find_subjects, run_operation and graphql_query: the rules, the operation and root field lists for each caller class and worked examples. Read before you plan a data investigation.",
 	},
 }
 

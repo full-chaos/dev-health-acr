@@ -104,6 +104,11 @@ type RuntimeDependencies struct {
 	DataCatalogue  *directread.Catalogue
 	DataOperations DataOperationRunner
 	DataSubjects   DataSubjectFinder
+	// DataGraphQL is the graphql_query runner (CHAOS-7075); nil unless
+	// ACR_DATA_GRAPHQL_URL is configured and the root policy derived: the
+	// graphql route then answers feature_not_enabled with reason
+	// data_graphql_not_configured.
+	DataGraphQL DataGraphQLRunner
 	// DirectRelationships serves read_relationships (CHAOS-7074) over the
 	// same gate. Nil when the graph cannot serve bounded edge pages; the
 	// route then fails closed as unavailable.

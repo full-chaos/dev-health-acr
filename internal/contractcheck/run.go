@@ -48,6 +48,8 @@ var exampleSchemaPairs = map[string]string{
 	"mcp_find_subjects_response.v1.json":                       "mcp_find_subjects_response.v1.schema.json",
 	"mcp_run_operation_request.v1.json":                        "mcp_run_operation_request.v1.schema.json",
 	"mcp_run_operation_response.v1.json":                       "mcp_run_operation_response.v1.schema.json",
+	"mcp_graphql_query_request.v1.json":                        "mcp_graphql_query_request.v1.schema.json",
+	"mcp_graphql_query_response.v1.json":                       "mcp_graphql_query_response.v1.schema.json",
 	"device_authorization_request.v1.json":                     "device_authorization_request.v1.schema.json",
 	"device_authorization_response.v1.json":                    "device_authorization_response.v1.schema.json",
 	"device_token_request.v1.json":                             "device_token_request.v1.schema.json",

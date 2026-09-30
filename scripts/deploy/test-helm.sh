@@ -737,6 +737,26 @@ qi_off_count="$(grep -cE '^\s+- ports:\s*$' <<<"$qi_off_api" || true)"
   || fail_gate "query-egress: queryInternalPort must add exactly one API egress rule (got $qi_on_count vs $qi_off_count)"
 pass "query-egress: API egress rule is gated on queryInternalPort"
 
+# CHAOS-7075: GWC's MCP listener egress rule (graphql_query) is API-policy
+# only, default off (queryMcpPort 0), and one rule when set.
+qm_on="$(render --set networkPolicy.egress.queryMcpPort=8092)"
+qm_on_api="$(extract_doc NetworkPolicy 'component: api' 'component: falkordb' <<<"$qm_on")"
+grep -Pzq 'protocol: TCP\n\s+port: 8092\n' <<<"$qm_on_api" \
+  || fail_gate "query-mcp-egress: queryMcpPort=8092 must add a TCP 8092 egress rule to the API policy"
+if grep -qE 'port: 8092' <<<"$default_api_np"; then
+  fail_gate "query-mcp-egress: the default render (queryMcpPort 0) must carry no 8092 egress rule"
+fi
+qm_on_count="$(grep -cE '^\s+- ports:\s*$' <<<"$qm_on_api" || true)"
+qm_off_count="$(grep -cE '^\s+- ports:\s*$' <<<"$default_api_np" || true)"
+(( qm_on_count == qm_off_count + 1 )) \
+  || fail_gate "query-mcp-egress: queryMcpPort must add exactly one API egress rule (got $qm_on_count vs $qm_off_count)"
+grep -q 'ACR_DATA_GRAPHQL_URL' <<<"$(render --set config.dataGraphqlUrl=http://mcp.example:8092)" \
+  || fail_gate "query-mcp-egress: config.dataGraphqlUrl must render ACR_DATA_GRAPHQL_URL"
+if grep -q 'ACR_DATA_GRAPHQL_URL' "$rendered"; then
+  fail_gate "query-mcp-egress: the default render must not set ACR_DATA_GRAPHQL_URL"
+fi
+pass "query-mcp-egress: API egress rule and URL are gated on queryMcpPort / dataGraphqlUrl"
+
 # Operator podLabels must never detach the pod from the selectors: the last
 # (winning) occurrence of the component label must stay falkordb.
 falkordb_override="$(render \

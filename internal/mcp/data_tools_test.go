@@ -36,6 +36,7 @@ type dtHosted struct {
 	catalog func(w http.ResponseWriter, r *http.Request)
 	subject func(w http.ResponseWriter, r *http.Request)
 	operate func(w http.ResponseWriter, r *http.Request)
+	graphql func(w http.ResponseWriter, r *http.Request)
 	calls   atomic.Int64
 	last    struct {
 		path, auth, query string
@@ -55,6 +56,7 @@ func newDTHosted(t *testing.T) *dtHosted {
 	h.catalog = func(w http.ResponseWriter, r *http.Request) { dtRaw(w, http.StatusOK, dtCatalogBody) }
 	h.subject = func(w http.ResponseWriter, r *http.Request) { dtRaw(w, http.StatusOK, dtFindBody) }
 	h.operate = func(w http.ResponseWriter, r *http.Request) { dtRaw(w, http.StatusOK, dtOpBody) }
+	h.graphql = func(w http.ResponseWriter, r *http.Request) { dtRaw(w, http.StatusOK, dtGQLBody) }
 	h.server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.calls.Add(1)
 		h.last.path, h.last.auth, h.last.query = r.URL.Path, r.Header.Get("Authorization"), r.URL.RawQuery
@@ -71,6 +73,8 @@ func newDTHosted(t *testing.T) *dtHosted {
 			h.subject(w, r)
 		case "/api/v1/context-fabric/data/operations":
 			h.operate(w, r)
+		case "/api/v1/context-fabric/data/graphql":
+			h.graphql(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -108,6 +112,8 @@ func dtCall(t *testing.T, boot *Bootstrap, tool, args string) *mcpsdk.CallToolRe
 		result, err = handleFindSubjects(ctx, cfg, req)
 	case toolRunOperation:
 		result, err = handleRunOperation(ctx, cfg, req)
+	case toolGraphQLQuery:
+		result, err = handleGraphQLQuery(ctx, cfg, req)
 	default:
 		t.Fatalf("unknown tool %s", tool)
 	}
@@ -475,7 +481,7 @@ func TestDataGuideResourceIsRegisteredAndReadable(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := read.Contents[0].Text
-	for _, want := range []string{"## Operations", "## Worked examples", "compoundingRisk", "`investigate_question` is for our own engine's narrative answers"} {
+	for _, want := range []string{"## Which operations and fields", "## Worked examples", "compoundingRisk", "`investigate_question` is for our own engine's narrative answers"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("guide lacks %q", want)
 		}

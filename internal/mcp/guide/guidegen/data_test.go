@@ -17,53 +17,38 @@ import (
 // REAL operation runner and policy, so an example the runner would refuse
 // cannot ship.
 
-func TestDataGuideOperationTableIsTheCatalogue(t *testing.T) {
-	catalogue, err := directread.DefaultCatalogue()
-	if err != nil {
-		t.Fatal(err)
-	}
-	served := map[string][2]bool{}
-	for _, op := range catalogue.Operations(directread.CallerUnrestricted) {
-		served[op.Name] = [2]bool{true, false}
-	}
-	for _, op := range catalogue.Operations(directread.CallerRestricted) {
-		entry := served[op.Name]
-		entry[1] = true
-		served[op.Name] = entry
-	}
-	if len(served) != 19 {
-		t.Fatalf("the catalogue serves %d operations, expected 19", len(served))
-	}
+// CHAOS-7075 class sweep: the guide is the same for every caller, so it
+// lists no run_operation operation, no not-served document and no
+// graphql_query root; it points to data_catalog (gated) for the lists.
+func TestDataGuideListsNoOperationOrRoot(t *testing.T) {
 	text := embeddedFiles(t)[FileData]
-	rows := 0
+	in := FromRegistries()
+	if len(in.DataOperations) < 16 || len(in.GraphQLRoots) < 14 {
+		t.Fatalf("registries hold %d operations and %d roots; the check measured nothing", len(in.DataOperations), len(in.GraphQLRoots))
+	}
 	for _, line := range strings.Split(text, "\n") {
-		cells := strings.Split(line, "|")
-		if len(cells) < 6 || !strings.HasPrefix(strings.TrimSpace(cells[1]), "`") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "|") {
 			continue
 		}
-		name := strings.Trim(strings.TrimSpace(cells[1]), "`")
-		want, ok := served[name]
-		if !ok {
-			t.Errorf("the guide lists %q, which the runner does not serve", name)
-			continue
+		for _, op := range in.DataOperations {
+			if strings.Contains(line, "`"+op.Name+"`") {
+				t.Errorf("a guide table lists the operation %s: %s", op.Name, line)
+			}
 		}
-		rows++
-		if got := strings.TrimSpace(cells[3]); got != yesNoCell(want[0]) {
-			t.Errorf("%s unrestricted: guide %q, catalogue %v", name, got, want[0])
-		}
-		if got := strings.TrimSpace(cells[4]); got != yesNoCell(want[1]) {
-			t.Errorf("%s restricted: guide %q, catalogue %v", name, got, want[1])
-		}
-		if directread.OperationPurpose(name) == "" || !strings.Contains(line, directread.OperationPurpose(name)) {
-			t.Errorf("%s: purpose missing from the guide row", name)
+		for _, root := range in.GraphQLRoots {
+			if strings.Contains(line, "`"+root.Field+"`") {
+				t.Errorf("a guide table lists the root %s: %s", root.Field, line)
+			}
 		}
 	}
-	if rows != len(served) {
-		t.Fatalf("the guide table has %d operation rows, the catalogue serves %d", rows, len(served))
+	for _, ns := range in.DataNotServed {
+		if strings.Contains(text, "`"+ns.Name+"` (") {
+			t.Errorf("the guide lists the not-served document %s", ns.Name)
+		}
 	}
-	for _, ns := range catalogue.NotServed() {
-		if !strings.Contains(text, "`"+ns.Name+"` ("+string(ns.Code)+")") {
-			t.Errorf("not-served %s (%s) is missing from the guide", ns.Name, ns.Code)
+	for _, want := range []string{"This guide lists no operation and no root field", "section `operations` for `run_operation`, section `schema` for `graphql_query`"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the guide lacks %q", want)
 		}
 	}
 }
@@ -78,7 +63,7 @@ func TestDataGuideSaysWhichWayAndCarriesTheRules(t *testing.T) {
 	for _, want := range []string{
 		"`investigate_question` is for our own engine's narrative answers",
 		"If you are a model, plan the reads yourself",
-		"`run_operation` needs the `data:read` scope",
+		"`run_operation` and `graphql_query` need the `data:read` scope",
 		"More data tools are planned; none is named here until it ships.",
 		"use `read_facts` if your `tools/list` offers it (the `facts` section of `data_catalog` lists its kinds)",
 	} {
@@ -88,7 +73,8 @@ func TestDataGuideSaysWhichWayAndCarriesTheRules(t *testing.T) {
 	}
 	// Only what exists is a callable: read_facts / read_relationships appear
 	// only in the "if your tools/list offers it" sentence.
-	for _, tool := range []string{"read_relationships", "graphql_query", "read_rows", "plan_investigation"} {
+	// graphql_query ships with CHAOS-7075 and is named.
+	for _, tool := range []string{"read_relationships", "read_rows", "plan_investigation"} {
 		if strings.Contains(text, tool) {
 			t.Errorf("the guide names %s, which does not exist in this release", tool)
 		}

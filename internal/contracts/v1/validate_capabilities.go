@@ -57,9 +57,10 @@ func validEnabledTool(name string) bool {
 	// sidecar entirely.
 	//
 	// CHAOS-7072 (S1a) added the direct data tools data_catalog,
-	// find_subjects and run_operation (design CHAOS-7036 E.5).
+	// find_subjects and run_operation (design CHAOS-7036 E.5); CHAOS-7075
+	// added graphql_query (design D.8).
 	case "context_for_task", "source_evidence", "investigate_question", "investigation_result", "read_facts", "read_relationships", "record_episode",
-		"data_catalog", "find_subjects", "run_operation":
+		"data_catalog", "find_subjects", "run_operation", "graphql_query":
 		return true
 	default:
 		return false

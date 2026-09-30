@@ -91,6 +91,7 @@ func (a *App) Handler() http.Handler {
 	mux.Handle("POST "+ContextFabricDataSubjectsPath, a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, false, a.requireDataStoresReady(a.contextFabricDataSubjectsHandler())))
 	mux.Handle("POST "+ContextFabricDataFactsPath, a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, false, a.requireDataStoresReady(a.contextFabricDataFactsHandler())))
 	mux.Handle("POST "+ContextFabricDataOperationsPath, a.protectedRuntimeHandler(limits.RequestClassData, auth.ScopeDataRead, true, false, a.requireDataStoresReady(a.contextFabricDataOperationsHandler())))
+	mux.Handle("POST "+ContextFabricDataGraphQLPath, a.protectedRuntimeHandler(limits.RequestClassData, auth.ScopeDataRead, true, false, a.requireDataStoresReady(a.contextFabricDataGraphQLHandler())))
 	mux.Handle("POST "+ContextFabricDataRelationshipsPath, a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, false, a.requireDataStoresReady(a.contextFabricDataRelationshipsHandler())))
 	mux.Handle("POST /api/v1/oauth/device_authorization", a.deviceRuntimeHandler(http.HandlerFunc(a.handleDeviceAuthorization)))
 	mux.Handle("POST /api/v1/oauth/token", http.HandlerFunc(a.handleDeviceToken))

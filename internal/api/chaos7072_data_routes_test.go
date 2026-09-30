@@ -520,12 +520,12 @@ func TestChaos7072CatalogPerCallerClass(t *testing.T) {
 			t.Fatalf("%s: facts note %v", tc.class, body["facts"])
 		}
 	}
-	// A caller without data:read sees the list, marked unavailable.
+	// A caller without data:read learns only that the section is not
+	// available and why: no operation detail (CHAOS-7075 class sweep).
 	contextOnly := h.issueFor(t, c7072Context, c7072AllRepos, nil).Token
 	body := decodeC7072(t, h.get(ContextFabricDataCatalogPath+"?sections=operations", contextOnly))
 	operations := body["operations"].(map[string]any)
-	first := operations["operations"].([]any)[0].(map[string]any)
-	if operations["available"] != false || first["available"] != false || first["reason"] != "scope_missing_data_read" {
+	if operations["available"] != false || operations["reason"] != "scope_missing_data_read" || len(operations["operations"].([]any)) != 0 || len(operations["not_served"].([]any)) != 0 || len(operations["refused_shapes"].([]any)) != 0 {
 		t.Fatalf("no-data:read catalogue %v", operations)
 	}
 	if _, ok := body["subjects"]; ok {

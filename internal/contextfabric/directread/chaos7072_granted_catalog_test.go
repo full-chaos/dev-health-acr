@@ -117,7 +117,7 @@ func catalogFor(t *testing.T, class PrincipalClass, dataRead, servable bool, sec
 	if err != nil {
 		t.Fatal(err)
 	}
-	return BuildDataCatalog(cat, CatalogCaller{PrincipalClass: class, Scopes: []string{"context:read", "data:read"}, DataRead: dataRead, OperationsServable: servable}, parsed)
+	return BuildDataCatalog(cat, CatalogCaller{PrincipalClass: class, Scopes: []string{"context:read", "data:read"}, DataRead: dataRead, OperationsServable: servable, GateComposed: true}, parsed)
 }
 
 func TestDataCatalogOperationsPerCallerClass(t *testing.T) {
@@ -173,23 +173,20 @@ func TestDataCatalogEveryServedOperationHasAPurpose(t *testing.T) {
 }
 
 func TestDataCatalogAvailabilityAndCaller(t *testing.T) {
+	// CHAOS-7075 class sweep: an unavailable section names the reason and
+	// carries no operation detail (was: the list, marked unavailable).
 	noData := catalogFor(t, ClassUnrestricted, false, true)
-	if noData.Operations.Available || noData.Operations.Reason != CatalogUnavailableScopeMissing || len(noData.Operations.Operations) != 19 {
+	if noData.Operations.Available || noData.Operations.Reason != CatalogUnavailableScopeMissing || len(noData.Operations.Operations) != 0 {
 		t.Fatalf("no data:read: %+v", noData.Operations)
 	}
-	for _, op := range noData.Operations.Operations {
-		if op.Available || op.Reason != CatalogUnavailableScopeMissing {
-			t.Fatalf("entry %s available without data:read", op.Name)
-		}
-	}
 	off := catalogFor(t, ClassUnrestricted, true, false)
-	if off.Operations.Available || off.Operations.Reason != CatalogUnavailableQueryNotConfigure {
+	if off.Operations.Available || off.Operations.Reason != CatalogUnavailableQueryNotConfigure || len(off.Operations.Operations) != 0 {
 		t.Fatalf("not configured: %+v", off.Operations)
 	}
 	// The caller section: scopes and grant class only.
 	cat, _ := DefaultCatalogue()
 	sections, _ := ParseCatalogSections("")
-	built := BuildDataCatalog(cat, CatalogCaller{PrincipalClass: ClassRestricted, Scopes: []string{"data:read", "context:read", "acme/secret-repo", "data:read"}, DataRead: true, OperationsServable: true}, sections)
+	built := BuildDataCatalog(cat, CatalogCaller{PrincipalClass: ClassRestricted, Scopes: []string{"data:read", "context:read", "acme/secret-repo", "data:read"}, DataRead: true, OperationsServable: true, GateComposed: true}, sections)
 	encoded, _ := json.Marshal(built.Caller)
 	if string(encoded) != `{"scopes":["context:read","data:read"],"grant_class":"restricted"}` {
 		t.Fatalf("caller section %s", encoded)

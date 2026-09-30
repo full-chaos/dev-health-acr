@@ -455,7 +455,8 @@ func (x *gqlRun) execute(ctx context.Context, req GraphQLRequest) (GraphQLRespon
 		// ruling): select each root once and put all its fields in one
 		// selection. Root-level merging is a follow-up.
 		if rootKeys[f.Alias] {
-			return x.refuse(RefusalQueryInvalid, GraphQLRepeatedRootKeyReason, f.Alias), nil
+			// No path: the key is a client-chosen alias, never echoed (pr2 r3).
+			return x.refuse(RefusalQueryInvalid, GraphQLRepeatedRootKeyReason, ""), nil
 		}
 		rootKeys[f.Alias] = true
 		if len(f.Directives) > 0 {

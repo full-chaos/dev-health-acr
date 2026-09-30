@@ -29,17 +29,17 @@ func TestChaos7072BuildDataReads(t *testing.T) {
 	}
 
 	// No URL: catalogue and subjects, no runner.
-	reads, err := buildDataReads("", 30*time.Second, engine, gate, logger)
+	reads, err := buildDataReads("", "", 30*time.Second, engine, gate, logger)
 	if err != nil || reads.catalogue == nil || reads.subjects == nil || reads.operations != nil {
 		t.Fatalf("no URL: %+v %v", reads, err)
 	}
 	// URL: all three.
-	reads, err = buildDataReads("http://query-api.internal:8091", 30*time.Second, engine, gate, logger)
+	reads, err = buildDataReads("http://query-api.internal:8091", "", 30*time.Second, engine, gate, logger)
 	if err != nil || reads.catalogue == nil || reads.subjects == nil || reads.operations == nil {
 		t.Fatalf("URL: %+v %v", reads, err)
 	}
 	// URL, no graph: a runner (its gate fails closed) and no subjects.
-	reads, err = buildDataReads("http://query-api.internal:8091", 30*time.Second, nil, nil, logger)
+	reads, err = buildDataReads("http://query-api.internal:8091", "", 30*time.Second, nil, nil, logger)
 	if err != nil || reads.operations == nil || reads.subjects != nil {
 		t.Fatalf("URL, no graph: %+v %v", reads, err)
 	}
@@ -48,11 +48,11 @@ func TestChaos7072BuildDataReads(t *testing.T) {
 	saved := dataReadsCatalogue
 	t.Cleanup(func() { dataReadsCatalogue = saved })
 	dataReadsCatalogue = func() (*directread.Catalogue, error) { return nil, directread.ErrCatalogueInvalid }
-	if _, err := buildDataReads("http://query-api.internal:8091", 30*time.Second, engine, gate, logger); !errors.Is(err, directread.ErrCatalogueInvalid) {
+	if _, err := buildDataReads("http://query-api.internal:8091", "", 30*time.Second, engine, gate, logger); !errors.Is(err, directread.ErrCatalogueInvalid) {
 		t.Fatalf("configured URL with a bad policy started: %v", err)
 	}
 	var logs bytes.Buffer
-	reads, err = buildDataReads("", 30*time.Second, engine, gate, slog.New(slog.NewTextHandler(&logs, nil)))
+	reads, err = buildDataReads("", "", 30*time.Second, engine, gate, slog.New(slog.NewTextHandler(&logs, nil)))
 	if err != nil || reads.catalogue != nil || reads.operations != nil {
 		t.Fatalf("no URL, bad policy: %+v %v", reads, err)
 	}

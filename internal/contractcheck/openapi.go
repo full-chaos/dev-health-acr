@@ -118,7 +118,8 @@ func validOpenAPIPath(path string) bool {
 		"/api/v1/context-fabric/data/subjects",
 		"/api/v1/context-fabric/data/facts",
 		"/api/v1/context-fabric/data/relationships",
-		"/api/v1/context-fabric/data/operations":
+		"/api/v1/context-fabric/data/operations",
+		"/api/v1/context-fabric/data/graphql":
 		return true
 	default:
 		return false

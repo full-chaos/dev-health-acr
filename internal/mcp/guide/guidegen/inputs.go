@@ -44,7 +44,9 @@ type Inputs struct {
 	// which caller classes they are served to, and the registered documents
 	// that are not served with their refusal code.
 	DataOperations []DataOperationRow
-	DataNotServed  []DataNotServedRow
+	// GraphQLRoots are the graphql_query root fields (CHAOS-7075).
+	GraphQLRoots  []DataGraphQLRootRow
+	DataNotServed []DataNotServedRow
 }
 
 // FromRegistries reads the live registries.
@@ -91,5 +93,6 @@ func FromRegistries() Inputs {
 		string(contractsv1.ContextFabricInvestigationNoMatch),
 	}
 	in.DataOperations, in.DataNotServed = dataRegistryRows()
+	in.GraphQLRoots = dataGraphQLRoots()
 	return in
 }

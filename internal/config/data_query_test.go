@@ -79,3 +79,29 @@ func TestDataQueryRejectsOutOfRangeTimeout(t *testing.T) {
 		}
 	}
 }
+
+// ACR_DATA_GRAPHQL_URL (CHAOS-7075) is read at the one parse site with the
+// ACR_DATA_QUERY_URL rules: empty = off; a bad value fails load without
+// echoing it.
+func TestDataGraphQLURL(t *testing.T) {
+	cfg, err := load(dataQueryEnv(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DataGraphQLURL() != "" {
+		t.Fatalf("DataGraphQLURL = %q, want empty (feature off)", cfg.DataGraphQLURL())
+	}
+	cfg, err = load(dataQueryEnv(map[string]string{"ACR_DATA_GRAPHQL_URL": "http://dev-health-ops-query-api-mcp.dev-health.svc:8092"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DataGraphQLURL() != "http://dev-health-ops-query-api-mcp.dev-health.svc:8092" {
+		t.Fatalf("DataGraphQLURL = %q", cfg.DataGraphQLURL())
+	}
+	for _, bad := range []string{"ftp://h:8092", "http://user:secret@h:8092", "http://h:8092?x=1", "http://h:8092#f", "not a url"} {
+		_, err := load(dataQueryEnv(map[string]string{"ACR_DATA_GRAPHQL_URL": bad}))
+		if err == nil || !strings.Contains(err.Error(), "ACR_DATA_GRAPHQL_URL") || strings.Contains(err.Error(), "secret") {
+			t.Fatalf("%q: err %v", bad, err)
+		}
+	}
+}

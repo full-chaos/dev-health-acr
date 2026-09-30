@@ -55,8 +55,8 @@ const (
 )
 
 // CatalogSectionVocabulary is the closed set of catalog sections.
-func CatalogSectionVocabulary() [5]string {
-	return [5]string{CatalogSectionOperations, CatalogSectionFacts, CatalogSectionSubjects, CatalogSectionRelationships, CatalogSectionLimits}
+func CatalogSectionVocabulary() [6]string {
+	return [6]string{CatalogSectionOperations, CatalogSectionFacts, CatalogSectionSubjects, CatalogSectionRelationships, CatalogSectionLimits, CatalogSectionSchema}
 }
 
 // CatalogFactsNote is the fixed note of the facts section when read_facts is
@@ -71,6 +71,10 @@ const CatalogFactsServedNote = "facts: served by read_facts; kinds listed are th
 const (
 	CatalogUnavailableScopeMissing      = "scope_missing_data_read"
 	CatalogUnavailableQueryNotConfigure = "data_query_not_configured"
+	// CatalogUnavailableGateMissing: the runner exists but no subject gate
+	// over a real graph is composed, so the route answers 503 and the tool
+	// is not advertised (CHAOS-7075 pr2 r2).
+	CatalogUnavailableGateMissing = "subject_gate_unavailable"
 )
 
 // DataCatalogUntrustedNotice is the fixed label every direct data answer
@@ -121,6 +125,13 @@ type CatalogCaller struct {
 	// FactCapabilities is the registry read_facts serves, or nil when
 	// read_facts is not wired. Only DirectServable kinds are listed.
 	FactCapabilities []contextfabric.FactCapability
+	// GraphQL is the graphql_query root policy (nil when it did not derive)
+	// and GraphQLServable reports its runner is composed (CHAOS-7075).
+	GraphQL         *GraphQLPolicy
+	GraphQLServable bool
+	// GateComposed reports the subject gate over a real graph; without it
+	// run_operation and graphql_query cannot authorize a subject.
+	GateComposed bool
 	// FactsServable is true when a read_facts reader object is composed. The
 	// section still says "not available" unless the registry it reads lists
 	// at least one direct-servable kind.
@@ -141,6 +152,7 @@ type DataCatalog struct {
 	Subjects         *CatalogSubjects      `json:"subjects,omitempty"`
 	Relationships    *CatalogRelationships `json:"relationships,omitempty"`
 	Limits           *CatalogLimits        `json:"limits,omitempty"`
+	Schema           *CatalogSchema        `json:"schema,omitempty"`
 	Versions         CatalogVersions       `json:"versions"`
 	Caller           CatalogCallerView     `json:"caller"`
 	Consistency      string                `json:"consistency"`
@@ -433,6 +445,8 @@ func BuildDataCatalog(catalogue *Catalogue, caller CatalogCaller, sections []str
 			out.Subjects = buildCatalogSubjects()
 		case CatalogSectionRelationships:
 			out.Relationships = buildCatalogRelationships()
+		case CatalogSectionSchema:
+			out.Schema = BuildCatalogSchema(caller.GraphQL, class, caller.GraphQLServable, caller.GateComposed, caller.DataRead)
 		case CatalogSectionLimits:
 			out.Limits = &CatalogLimits{
 				MaxBytesDefault: DefaultOperationMaxBytes, MaxBytesCap: MaxOperationMaxBytes,
@@ -484,13 +498,19 @@ func buildCatalogOperations(catalogue *Catalogue, caller CatalogCaller, class Ca
 	switch {
 	case catalogue == nil || !caller.OperationsServable:
 		reason = CatalogUnavailableQueryNotConfigure
+	case !caller.GateComposed:
+		reason = CatalogUnavailableGateMissing
 	case !caller.DataRead:
 		reason = CatalogUnavailableScopeMissing
 	}
 	if reason != "" {
 		section.Available, section.Reason = false, reason
 	}
-	if catalogue == nil {
+	// No detail for a caller run_operation cannot serve (CHAOS-7075 class
+	// sweep of the pr2 r1 P1): without data:read, or without a composed
+	// runner, the section says why and lists no operation, variable,
+	// not-served entry or refused shape.
+	if catalogue == nil || reason != "" {
 		return section
 	}
 	served := map[string]bool{}

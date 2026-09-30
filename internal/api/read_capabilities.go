@@ -69,6 +69,11 @@ func (a *App) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	if entitled && auth.HasScope(principal.Permissions, auth.ScopeDataRead) && a.dataOperations() != nil && a.dataGateComposed() {
 		capabilities.EnabledTools = append(capabilities.EnabledTools, "run_operation")
 	}
+	// CHAOS-7075: graphql_query, the same rule as run_operation over its own
+	// runner (ACR_DATA_GRAPHQL_URL configured and the root policy derived).
+	if entitled && auth.HasScope(principal.Permissions, auth.ScopeDataRead) && a.dataGraphQL() != nil && a.dataGateComposed() {
+		capabilities.EnabledTools = append(capabilities.EnabledTools, "graphql_query")
+	}
 	// CHAOS-7074: read_relationships needs its composed reader.
 	if entitled && capabilities.Permissions.ContextRead && a.directRelationships() != nil {
 		capabilities.EnabledTools = append(capabilities.EnabledTools, "read_relationships")

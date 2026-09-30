@@ -26,7 +26,7 @@ import (
 // forbids a direct reference). A test in internal/mcp holds each equal to
 // its directread source.
 const (
-	MCPDataCatalogSectionsMax = 5
+	MCPDataCatalogSectionsMax = 6
 	MCPFindSubjectsKindsMax   = 8
 	MCPFindSubjectsQueryMax   = 256
 	// MCPFindSubjectsLimitMax is 200, not the design value 25 (25 is the
@@ -37,11 +37,14 @@ const (
 	MCPFindSubjectsCursorMax = 700
 	MCPRunOperationNameMax   = 64
 	MCPRunOperationMaxBytes  = 262144
+	// MCPGraphQLQueryMaxBytes bounds the graphql_query text (directread
+	// DefaultGraphQLLimits().MaxQueryBytes).
+	MCPGraphQLQueryMaxBytes = 8192
 )
 
 // MCPDataCatalogSectionVocabulary is the closed set of data_catalog sections.
-func MCPDataCatalogSectionVocabulary() [5]string {
-	return [5]string{"operations", "facts", "subjects", "relationships", "limits"}
+func MCPDataCatalogSectionVocabulary() [6]string {
+	return [6]string{"operations", "facts", "subjects", "relationships", "limits", "schema"}
 }
 
 // MCPDataCatalogRequest is the input of data_catalog. Every field is
@@ -83,6 +86,26 @@ type MCPRunOperationRequest struct {
 	Operation string         `json:"operation"`
 	Variables map[string]any `json:"variables,omitempty"`
 	MaxBytes  int            `json:"max_bytes,omitempty"`
+}
+
+// MCPGraphQLQueryRequest is the input of graphql_query (CHAOS-7075).
+// Variables is an open object here: the hosted root policy owns the
+// argument allowlist and refuses anything it does not list.
+type MCPGraphQLQueryRequest struct {
+	Query     string         `json:"query"`
+	Variables map[string]any `json:"variables,omitempty"`
+	MaxBytes  int            `json:"max_bytes,omitempty"`
+}
+
+// Validate applies the schema's bounds to a graphql_query request.
+func (r MCPGraphQLQueryRequest) Validate() error {
+	if len(r.Query) < 1 || len(r.Query) > MCPGraphQLQueryMaxBytes {
+		return fmt.Errorf("graphql_query requires a query of 1 to %d bytes", MCPGraphQLQueryMaxBytes)
+	}
+	if r.MaxBytes < 0 || r.MaxBytes > MCPRunOperationMaxBytes {
+		return fmt.Errorf("graphql_query max_bytes must be between 1 and %d", MCPRunOperationMaxBytes)
+	}
+	return nil
 }
 
 // Validate applies the schema's bounds to a data_catalog request.

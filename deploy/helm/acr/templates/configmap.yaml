@@ -20,6 +20,9 @@ data:
   {{- with .Values.config.dataQueryTimeout }}
   ACR_DATA_QUERY_TIMEOUT: {{ . | quote }}
   {{- end }}
+  {{- with .Values.config.dataGraphqlUrl }}
+  ACR_DATA_GRAPHQL_URL: {{ . | quote }}
+  {{- end }}
   ACR_READ_HEADER_TIMEOUT: {{ .Values.config.readHeaderTimeout | quote }}
   ACR_READ_TIMEOUT: {{ .Values.config.readTimeout | quote }}
   ACR_WRITE_TIMEOUT: {{ .Values.config.writeTimeout | quote }}

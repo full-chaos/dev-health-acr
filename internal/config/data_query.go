@@ -12,6 +12,11 @@ import (
 const (
 	envDataQueryURL     = "ACR_DATA_QUERY_URL"
 	envDataQueryTimeout = "ACR_DATA_QUERY_TIMEOUT"
+	// envDataGraphQLURL is GWC's MCP listener base URL for graphql_query
+	// (CHAOS-7085: its own port, POST <url>/query; prod Service
+	// http://dev-health-ops-query-api-mcp.dev-health.svc:8092). Empty =
+	// graphql_query off. The per-call deadline is ACR_DATA_QUERY_TIMEOUT.
+	envDataGraphQLURL = "ACR_DATA_GRAPHQL_URL"
 
 	defaultDataQueryTimeout = 30 * time.Second
 	minDataQueryTimeout     = time.Second
@@ -29,6 +34,23 @@ func (c Config) DataQueryTimeout() time.Duration {
 		return defaultDataQueryTimeout
 	}
 	return c.dataQueryTimeout
+}
+
+// DataGraphQLURL returns GWC's MCP listener base URL (ACR_DATA_GRAPHQL_URL).
+// Empty means graphql_query is off.
+func (c Config) DataGraphQLURL() string { return c.dataGraphQLURL }
+
+// dataGraphQLURLValue reads and validates the MCP listener URL with the
+// same rules as ACR_DATA_QUERY_URL. The value is never echoed.
+func dataGraphQLURLValue(lookup lookupEnv) (string, error) {
+	raw := stringValue(lookup, envDataGraphQLURL, "")
+	if raw == "" {
+		return "", nil
+	}
+	if err := validateDataQueryURL(raw); err != nil {
+		return "", fmt.Errorf("%s: %w", envDataGraphQLURL, err)
+	}
+	return raw, nil
 }
 
 // dataQueryURLValue reads and validates the base URL. The value is never

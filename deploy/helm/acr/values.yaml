@@ -45,6 +45,11 @@ config:
   # off. Per-call deadline (ACR_DATA_QUERY_TIMEOUT) must be within 1s..55s.
   dataQueryUrl: ""
   dataQueryTimeout: ""
+  # GWC's MCP listener base URL for graphql_query (ACR_DATA_GRAPHQL_URL,
+  # CHAOS-7075/7085: its own port, POST <url>/query; prod Service
+  # http://dev-health-ops-query-api-mcp.dev-health.svc:8092). Empty = the
+  # tool is off. Shares dataQueryTimeout. Needs networkPolicy.egress.queryMcpPort.
+  dataGraphqlUrl: ""
   readHeaderTimeout: "5s"
   readTimeout: "20s"
   writeTimeout: "20s"
@@ -599,6 +604,9 @@ networkPolicy:
     # reserved as DHO_QUERY_INTERNAL_PORT: 8095 in GWC's draft, NOT final
     # until their merge (design r5 text says 8091). Set 0 to render no rule.
     queryInternalPort: 8095
+    # GWC's MCP listener (graphql_query, CHAOS-7085; acr-api egress only).
+    # 0 renders no rule; the values roll sets 8092 with dataGraphqlUrl.
+    queryMcpPort: 0
     # FalkorDB graph backend port. Rendered into the API egress only when
     # contextFabric.falkor.addr is set (acr-api's optional Investigator and
     # acr-projector share the same endpoint contract); an unconfigured

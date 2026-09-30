@@ -373,6 +373,94 @@ func RenderOperationSummary(raw json.RawMessage, max int) string {
 	return t.String()
 }
 
+// RenderGraphQLSummary is the bounded, untrusted-marked text block of a
+// graphql_query answer (CHAOS-7075): the status fields, the refusal (with
+// its read-budget reason), the roots and their operations, and the data
+// shape. It adds nothing to the structured content.
+func RenderGraphQLSummary(raw json.RawMessage, max int) string {
+	var view struct {
+		Call         string `json:"call"`
+		Completeness string `json:"completeness"`
+		Result       string `json:"result"`
+		Refusal      *struct {
+			Code       string `json:"code"`
+			Reason     string `json:"reason"`
+			Path       string `json:"path"`
+			ReadBudget string `json:"read_budget"`
+		} `json:"refusal"`
+		RootFields []struct {
+			Key            string `json:"key"`
+			Field          string `json:"field"`
+			Operation      string `json:"operation"`
+			Completeness   string `json:"completeness"`
+			EffectiveScope *struct {
+				RepoIDs       []string `json:"repo_ids"`
+				ForcedByGrant bool     `json:"forced_by_grant"`
+			} `json:"effective_scope"`
+			AddedPaths []string `json:"added_paths"`
+		} `json:"root_fields"`
+		Data   json.RawMessage `json:"data"`
+		Errors []struct {
+			Class string `json:"class"`
+		} `json:"errors"`
+		Page struct {
+			ReturnedBytes int `json:"returned_bytes"`
+			MaxBytes      int `json:"max_bytes"`
+		} `json:"page"`
+	}
+	if err := json.Unmarshal(raw, &view); err != nil {
+		return unreadableDataText()
+	}
+	t := newDataText(max)
+	result := view.Result
+	if result == "" {
+		result = "none"
+	}
+	t.line(fmt.Sprintf("graphql_query: call=%s; completeness=%s; result=%s.", plainToken(view.Call), plainToken(view.Completeness), plainToken(result)))
+	if view.Completeness == "unknown" {
+		t.line("Completeness unknown means unknown: do not call this complete.")
+	}
+	switch view.Result {
+	case "empty_unverified":
+		t.line("Empty and unverified: this is not proof of no data, and not healthy.")
+	case "empty_declared":
+		t.line("Empty, and the payload declared itself complete.")
+	}
+	if view.Refusal != nil {
+		line := fmt.Sprintf("Refused: code=%s; reason: %s", plainToken(view.Refusal.Code), plainToken(view.Refusal.Reason))
+		if view.Refusal.Path != "" {
+			line += " (path " + plainToken(view.Refusal.Path) + ")"
+		}
+		if view.Refusal.ReadBudget != "" {
+			line += " (read budget " + plainToken(view.Refusal.ReadBudget) + ")"
+		}
+		t.line(line)
+		t.line("A refusal is terminal and typed: change the query, do not retry it unchanged.")
+	}
+	if len(view.Errors) > 0 {
+		classes := make([]string, 0, len(view.Errors))
+		for _, e := range view.Errors {
+			classes = append(classes, plainToken(e.Class))
+		}
+		t.line("Upstream error classes: " + strings.Join(classes, ", ") + ".")
+	}
+	for _, root := range view.RootFields {
+		line := fmt.Sprintf("Root %s: field %s, policy %s, completeness %s", plainToken(root.Key), plainToken(root.Field), plainToken(root.Operation), plainToken(root.Completeness))
+		if root.EffectiveScope != nil {
+			line += fmt.Sprintf(", %d repositories, forced by your grant: %t", len(root.EffectiveScope.RepoIDs), root.EffectiveScope.ForcedByGrant)
+		}
+		if len(root.AddedPaths) > 0 {
+			line += fmt.Sprintf(", %d row id path(s) added", len(root.AddedPaths))
+		}
+		t.line(line + ".")
+	}
+	t.line(fmt.Sprintf("Data size: %d bytes of at most %d.", view.Page.ReturnedBytes, view.Page.MaxBytes))
+	if len(view.Data) > 0 && !bytes.Equal(bytes.TrimSpace(view.Data), []byte("null")) {
+		renderOperationData(t, view.Data)
+	}
+	return t.String()
+}
+
 // renderOperationData adds the shape of data and its first rows.
 func renderOperationData(t *dataText, data json.RawMessage) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
