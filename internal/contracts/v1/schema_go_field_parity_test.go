@@ -180,6 +180,9 @@ var schemaDefTypeOverrides = map[string]string{
 	// type serves all of them; the property sets are identical and only the
 	// pattern differs, so binding each to that type is exactly right and
 	// makes a field added to the Go struct fail against all five at once.
+	// CHAOS-7139: the entity-projection authorization scope, same shape as
+	// AuthorizationScope with repository_slugs widened to 5000.
+	"context_fabric_common.v1.schema.json#EntityAuthorizationScope":         "ContextFabricAuthorizationScope",
 	"context_fabric_common.v1.schema.json#AnchorBoundReceipt":               "ContextFabricBoundSubjectReceipt",
 	"context_fabric_common.v1.schema.json#CandidateBoundReceipt":            "ContextFabricBoundSubjectReceipt",
 	"context_fabric_common.v1.schema.json#HandleBoundReceipt":               "ContextFabricBoundSubjectReceipt",

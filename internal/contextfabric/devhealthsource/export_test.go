@@ -216,3 +216,9 @@ func RepositoryTeamsStatementForTest() string { return repositoryTeamsStatement(
 func RepositoryTeamsGroupColumnsForTest() []string {
 	return append([]string(nil), repositoryTeamsGroupColumns...)
 }
+
+// OverBoundTeamOwnershipSentinelForTest exposes overBoundTeamOwnershipSentinel
+// (CHAOS-7139) so tests assert the literal production emits.
+func OverBoundTeamOwnershipSentinelForTest() string {
+	return overBoundTeamOwnershipSentinel
+}

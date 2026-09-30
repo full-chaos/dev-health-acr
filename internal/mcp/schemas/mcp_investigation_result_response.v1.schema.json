@@ -1080,6 +1080,77 @@
           },
           "type": "object"
         },
+        "EntityAuthorizationScope": {
+          "additionalProperties": false,
+          "anyOf": [
+            {
+              "properties": {
+                "repository_slugs": {
+                  "minItems": 1
+                }
+              },
+              "required": [
+                "repository_slugs"
+              ]
+            },
+            {
+              "properties": {
+                "project_ids": {
+                  "minItems": 1
+                }
+              },
+              "required": [
+                "project_ids"
+              ]
+            },
+            {
+              "properties": {
+                "team_ids": {
+                  "minItems": 1
+                }
+              },
+              "required": [
+                "team_ids"
+              ]
+            }
+          ],
+          "properties": {
+            "project_ids": {
+              "items": {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[^|]*$",
+                "type": "string"
+              },
+              "maxItems": 200,
+              "type": "array",
+              "uniqueItems": true
+            },
+            "repository_slugs": {
+              "items": {
+                "maxLength": 512,
+                "minLength": 1,
+                "pattern": "^[^|]*$",
+                "type": "string"
+              },
+              "maxItems": 5000,
+              "type": "array",
+              "uniqueItems": true
+            },
+            "team_ids": {
+              "items": {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[^|]*$",
+                "type": "string"
+              },
+              "maxItems": 200,
+              "type": "array",
+              "uniqueItems": true
+            }
+          },
+          "type": "object"
+        },
         "BoundSubjectReceipt": {
           "additionalProperties": false,
           "properties": {
@@ -3001,7 +3072,7 @@
               "uniqueItems": true
             },
             "authorization": {
-              "$ref": "#/$defs/context_fabric_common.v1/$defs/AuthorizationScope"
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/EntityAuthorizationScope"
             },
             "evidence_ref_ids": {
               "items": {

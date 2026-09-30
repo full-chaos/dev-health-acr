@@ -82,8 +82,37 @@ func (b ContextFabricProjectionBatch) Validate() error {
 // that match on it.
 func errUnrepresentableInstant(err error) error { return err }
 
+// ContextFabricEntityAuthorizationRepositoryMax bounds
+// RepositorySlugs on an ENTITY projection's authorization scope (CHAOS-7139).
+// An entity is one node carrying one authorization list, so a team owning
+// more than the generic 200 repositories cannot be split across batches; the
+// bound is widened for that one field instead. Every other scope (request
+// forced-scope, relationships, contents, episodes, ProjectIDs, TeamIDs)
+// stays at 200. Fail closed: an entity above this bound is rejected with a
+// distinct reason, never truncated (truncation would silently
+// under-authorize).
+const ContextFabricEntityAuthorizationRepositoryMax = 5000
+
+const contextFabricAuthorizationScopeMax = 200
+
+// ErrEntityAuthorizationRepositoriesExceeded marks an entity whose repository
+// authorization list is above ContextFabricEntityAuthorizationRepositoryMax.
+var ErrEntityAuthorizationRepositoriesExceeded = fmt.Errorf("entity authorization repository list exceeds v1 bound of %d", ContextFabricEntityAuthorizationRepositoryMax)
+
 func (s ContextFabricAuthorizationScope) Validate() error {
-	if len(s.RepositorySlugs) > 200 || len(s.ProjectIDs) > 200 || len(s.TeamIDs) > 200 || !uniqueTrimmedStrings(s.RepositorySlugs, 512) || !uniqueTrimmedStrings(s.ProjectIDs, 256) || !uniqueTrimmedStrings(s.TeamIDs, 256) {
+	return s.validateWithRepositoryMax(contextFabricAuthorizationScopeMax)
+}
+
+// validateEntity is Validate with the widened entity repository bound.
+func (s ContextFabricAuthorizationScope) validateEntity() error {
+	if len(s.RepositorySlugs) > ContextFabricEntityAuthorizationRepositoryMax {
+		return ErrEntityAuthorizationRepositoriesExceeded
+	}
+	return s.validateWithRepositoryMax(ContextFabricEntityAuthorizationRepositoryMax)
+}
+
+func (s ContextFabricAuthorizationScope) validateWithRepositoryMax(repositoryMax int) error {
+	if len(s.RepositorySlugs) > repositoryMax || len(s.ProjectIDs) > contextFabricAuthorizationScopeMax || len(s.TeamIDs) > contextFabricAuthorizationScopeMax || !uniqueTrimmedStrings(s.RepositorySlugs, 512) || !uniqueTrimmedStrings(s.ProjectIDs, 256) || !uniqueTrimmedStrings(s.TeamIDs, 256) {
 		return fmt.Errorf("authorization scope violates v1 bounds")
 	}
 	if len(s.RepositorySlugs)+len(s.ProjectIDs)+len(s.TeamIDs) == 0 {
@@ -116,7 +145,7 @@ func (e ContextFabricEntityProjection) Validate() error {
 	if containsSeparatorCharacter(e.Aliases) || containsSeparatorCharacter(e.PreviousNames) || containsSeparatorCharacter(e.ProviderAliases) {
 		return fmt.Errorf("entity alias, previous name, or provider alias must not contain '|'")
 	}
-	if err := e.Authorization.Validate(); err != nil {
+	if err := e.Authorization.validateEntity(); err != nil {
 		return fmt.Errorf("authorization: %w", err)
 	}
 	if err := validateReservedOrganizationScope(e.Subject.Kind, e.Authorization); err != nil {
