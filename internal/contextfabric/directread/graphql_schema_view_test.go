@@ -3,6 +3,9 @@ package directread_test
 import (
 	"testing"
 
+	"github.com/vektah/gqlparser/v2"
+	"github.com/vektah/gqlparser/v2/ast"
+
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -22,9 +25,14 @@ func TestGraphQLSchemaSectionListsWhatTheRunnerAdmits(t *testing.T) {
 		{"unrestricted", directread.CallerUnrestricted, opUnrestricted(opOrgA)},
 		{"restricted", directread.CallerRestricted, opRestrictedA()},
 	} {
-		section := directread.BuildCatalogSchema(h.policy, class.caller, true, true)
+		section := directread.BuildCatalogSchema(h.policy, class.caller, true, true, true)
 		if !section.Available {
 			t.Fatalf("%s: section unavailable: %s", class.name, section.Reason)
+		}
+		// pr2 r2: the SDL is self-contained and parses (every referenced
+		// input type, enum and scalar is declared).
+		if _, err := gqlparser.LoadSchema(&ast.Source{Name: "section", Input: section.SDL}); err != nil {
+			t.Fatalf("%s: the section SDL does not parse: %v", class.name, err)
 		}
 		served := 0
 		for _, root := range section.Roots {

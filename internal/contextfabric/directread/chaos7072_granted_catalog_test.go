@@ -117,7 +117,7 @@ func catalogFor(t *testing.T, class PrincipalClass, dataRead, servable bool, sec
 	if err != nil {
 		t.Fatal(err)
 	}
-	return BuildDataCatalog(cat, CatalogCaller{PrincipalClass: class, Scopes: []string{"context:read", "data:read"}, DataRead: dataRead, OperationsServable: servable}, parsed)
+	return BuildDataCatalog(cat, CatalogCaller{PrincipalClass: class, Scopes: []string{"context:read", "data:read"}, DataRead: dataRead, OperationsServable: servable, GateComposed: true}, parsed)
 }
 
 func TestDataCatalogOperationsPerCallerClass(t *testing.T) {
@@ -186,7 +186,7 @@ func TestDataCatalogAvailabilityAndCaller(t *testing.T) {
 	// The caller section: scopes and grant class only.
 	cat, _ := DefaultCatalogue()
 	sections, _ := ParseCatalogSections("")
-	built := BuildDataCatalog(cat, CatalogCaller{PrincipalClass: ClassRestricted, Scopes: []string{"data:read", "context:read", "acme/secret-repo", "data:read"}, DataRead: true, OperationsServable: true}, sections)
+	built := BuildDataCatalog(cat, CatalogCaller{PrincipalClass: ClassRestricted, Scopes: []string{"data:read", "context:read", "acme/secret-repo", "data:read"}, DataRead: true, OperationsServable: true, GateComposed: true}, sections)
 	encoded, _ := json.Marshal(built.Caller)
 	if string(encoded) != `{"scopes":["context:read","data:read"],"grant_class":"restricted"}` {
 		t.Fatalf("caller section %s", encoded)

@@ -3,6 +3,9 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -122,6 +125,13 @@ func TestChaos7075GraphQLRouteProtectionAndStates(t *testing.T) {
 	noGate := newC7075Harness(t, c7075Options{noGraph: true})
 	noGateToken := noGate.issueFor(t, c7072Data, c7072AllRepos, nil).Token
 	assertErrorResponse(t, noGate.post(ContextFabricDataGraphQLPath, noGateToken, graphqlBody(c7075Hotspots, "")), http.StatusServiceUnavailable, "upstream_unavailable")
+	// pr2 r2: the catalog agrees with the route: no gate = no schema or
+	// operation detail, reason subject_gate_unavailable.
+	body := decodeC7072(t, noGate.get(ContextFabricDataCatalogPath+"?sections=schema", noGateToken))
+	sec := body["schema"].(map[string]any)
+	if sec["available"] != false || sec["reason"] != "subject_gate_unavailable" || len(sec["roots"].([]any)) != 0 || sec["sdl"] != "" {
+		t.Fatalf("no gate: schema section %v %v roots=%d", sec["available"], sec["reason"], len(sec["roots"].([]any)))
+	}
 }
 
 // graphql_query is advertised exactly when run_operation's rule holds for
@@ -286,4 +296,51 @@ func TestChaos7075RealGraphQLAnswersValidateAgainstThePublishedSchemas(t *testin
 		t.Fatalf("only %d real answers were validated", answers)
 	}
 	_ = auth.ScopeDataRead
+}
+
+// pr2 r2: the OpenAPI graphql_query response is as closed as the JSON
+// Schema: every object the schema closes (additionalProperties:false) is
+// closed at the same path in the OpenAPI component.
+func TestChaos7075OpenAPIGraphQLResponseIsAsClosedAsTheSchema(t *testing.T) {
+	read := func(parts ...string) map[string]any {
+		t.Helper()
+		_, thisFile, _, _ := runtime.Caller(0)
+		raw, err := os.ReadFile(filepath.Join(append([]string{filepath.Dir(thisFile), "..", ".."}, parts...)...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out map[string]any
+		if err := json.Unmarshal(raw, &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	schema := read("contracts", "jsonschema", "v1", "mcp_graphql_query_response.v1.schema.json")
+	openapi := read("contracts", "openapi", "acr-v1.json")
+	component := openapi["components"].(map[string]any)["schemas"].(map[string]any)["DataGraphQLResponse"].(map[string]any)
+	closed := 0
+	var walk func(s, o map[string]any, path string)
+	walk = func(s, o map[string]any, path string) {
+		if s["additionalProperties"] == false {
+			closed++
+			if o == nil || o["additionalProperties"] != false {
+				t.Errorf("%s: closed in the JSON Schema, open in the OpenAPI", path)
+			}
+		}
+		sp, _ := s["properties"].(map[string]any)
+		op, _ := o["properties"].(map[string]any)
+		for name, child := range sp {
+			cs, _ := child.(map[string]any)
+			co, _ := op[name].(map[string]any)
+			walk(cs, co, path+"."+name)
+		}
+		if items, ok := s["items"].(map[string]any); ok {
+			oi, _ := o["items"].(map[string]any)
+			walk(items, oi, path+"[]")
+		}
+	}
+	walk(schema, component, "response")
+	if closed < 5 {
+		t.Fatalf("only %d closed objects compared", closed)
+	}
 }

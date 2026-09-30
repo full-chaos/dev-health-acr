@@ -58,7 +58,7 @@
         },
         "reason": {
           "type": "string",
-          "description": "Why run_operation is not available now: scope_missing_data_read or data_query_not_configured."
+          "description": "Why run_operation is not available now: scope_missing_data_read, data_query_not_configured or subject_gate_unavailable."
         },
         "operations": {
           "type": "array",
@@ -501,7 +501,8 @@
           "type": "string",
           "enum": [
             "scope_missing_data_read",
-            "data_graphql_not_configured"
+            "data_graphql_not_configured",
+            "subject_gate_unavailable"
           ],
           "description": "Why graphql_query is not available."
         },

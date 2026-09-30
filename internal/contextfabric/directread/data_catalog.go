@@ -71,6 +71,10 @@ const CatalogFactsServedNote = "facts: served by read_facts; kinds listed are th
 const (
 	CatalogUnavailableScopeMissing      = "scope_missing_data_read"
 	CatalogUnavailableQueryNotConfigure = "data_query_not_configured"
+	// CatalogUnavailableGateMissing: the runner exists but no subject gate
+	// over a real graph is composed, so the route answers 503 and the tool
+	// is not advertised (CHAOS-7075 pr2 r2).
+	CatalogUnavailableGateMissing = "subject_gate_unavailable"
 )
 
 // DataCatalogUntrustedNotice is the fixed label every direct data answer
@@ -125,6 +129,9 @@ type CatalogCaller struct {
 	// and GraphQLServable reports its runner is composed (CHAOS-7075).
 	GraphQL         *GraphQLPolicy
 	GraphQLServable bool
+	// GateComposed reports the subject gate over a real graph; without it
+	// run_operation and graphql_query cannot authorize a subject.
+	GateComposed bool
 	// FactsServable is true when a read_facts reader object is composed. The
 	// section still says "not available" unless the registry it reads lists
 	// at least one direct-servable kind.
@@ -439,7 +446,7 @@ func BuildDataCatalog(catalogue *Catalogue, caller CatalogCaller, sections []str
 		case CatalogSectionRelationships:
 			out.Relationships = buildCatalogRelationships()
 		case CatalogSectionSchema:
-			out.Schema = BuildCatalogSchema(caller.GraphQL, class, caller.GraphQLServable, caller.DataRead)
+			out.Schema = BuildCatalogSchema(caller.GraphQL, class, caller.GraphQLServable, caller.GateComposed, caller.DataRead)
 		case CatalogSectionLimits:
 			out.Limits = &CatalogLimits{
 				MaxBytesDefault: DefaultOperationMaxBytes, MaxBytesCap: MaxOperationMaxBytes,
@@ -491,6 +498,8 @@ func buildCatalogOperations(catalogue *Catalogue, caller CatalogCaller, class Ca
 	switch {
 	case catalogue == nil || !caller.OperationsServable:
 		reason = CatalogUnavailableQueryNotConfigure
+	case !caller.GateComposed:
+		reason = CatalogUnavailableGateMissing
 	case !caller.DataRead:
 		reason = CatalogUnavailableScopeMissing
 	}

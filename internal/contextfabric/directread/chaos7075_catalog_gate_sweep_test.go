@@ -27,7 +27,7 @@ func TestDataCatalogGatedSectionsEmitNoDetailWhenUnavailable(t *testing.T) {
 	capabilities := []contextfabric.FactCapability{{Kind: "health", SupportedSubjectKinds: []contextfabric.SubjectKind{"repository"}, Fields: []contextfabric.FactFieldDeclaration{{Name: "severity"}}}}
 	full := CatalogCaller{
 		PrincipalClass: ClassUnrestricted, Scopes: []string{"context:read", "data:read"}, DataRead: true,
-		OperationsServable: true, GraphQL: policy, GraphQLServable: true, FactsServable: true, FactCapabilities: capabilities,
+		OperationsServable: true, GraphQL: policy, GraphQLServable: true, GateComposed: true, FactsServable: true, FactCapabilities: capabilities,
 	}
 	rows := []struct {
 		name    string
@@ -37,8 +37,10 @@ func TestDataCatalogGatedSectionsEmitNoDetailWhenUnavailable(t *testing.T) {
 	}{
 		{"operations/no data:read", CatalogSectionOperations, func(c *CatalogCaller) { c.DataRead = false }, operationsEmpty},
 		{"operations/no runner", CatalogSectionOperations, func(c *CatalogCaller) { c.OperationsServable = false }, operationsEmpty},
+		{"operations/no gate", CatalogSectionOperations, func(c *CatalogCaller) { c.GateComposed = false }, operationsEmpty},
 		{"schema/no data:read", CatalogSectionSchema, func(c *CatalogCaller) { c.DataRead = false }, schemaEmpty},
 		{"schema/no runner", CatalogSectionSchema, func(c *CatalogCaller) { c.GraphQLServable = false }, schemaEmpty},
+		{"schema/no gate", CatalogSectionSchema, func(c *CatalogCaller) { c.GateComposed = false }, schemaEmpty},
 		{"schema/no policy", CatalogSectionSchema, func(c *CatalogCaller) { c.GraphQL = nil }, schemaEmpty},
 		{"facts/no reader", CatalogSectionFacts, func(c *CatalogCaller) { c.FactsServable = false }, factsEmpty},
 		{"facts/reader serves nothing", CatalogSectionFacts, func(c *CatalogCaller) { c.FactCapabilities = nil }, factsEmpty},
@@ -63,7 +65,7 @@ func TestDataCatalogGatedSectionsEmitNoDetailWhenUnavailable(t *testing.T) {
 	for _, section := range []string{CatalogSectionSubjects, CatalogSectionRelationships, CatalogSectionLimits} {
 		with := BuildDataCatalog(cat, full, []string{section})
 		without := full
-		without.DataRead, without.OperationsServable, without.GraphQLServable = false, false, false
+		without.DataRead, without.OperationsServable, without.GraphQLServable, without.GateComposed = false, false, false, false
 		other := BuildDataCatalog(cat, without, []string{section})
 		a, _ := json.Marshal([]any{with.Subjects, with.Relationships, with.Limits})
 		b, _ := json.Marshal([]any{other.Subjects, other.Relationships, other.Limits})

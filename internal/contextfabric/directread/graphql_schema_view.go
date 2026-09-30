@@ -61,11 +61,13 @@ type CatalogSchemaArgument struct {
 
 // BuildCatalogSchema builds the section. policy may be nil (it did not
 // derive): the section then lists nothing and says not configured.
-func BuildCatalogSchema(policy *GraphQLPolicy, class CallerClass, servable, dataRead bool) *CatalogSchema {
+func BuildCatalogSchema(policy *GraphQLPolicy, class CallerClass, servable, gate, dataRead bool) *CatalogSchema {
 	section := &CatalogSchema{CallerClass: class, Available: true, Roots: []CatalogSchemaRoot{}, RefusedRootFields: []string{}}
 	switch {
 	case policy == nil || !servable:
 		section.Available, section.Reason = false, CatalogUnavailableGraphQLNotConfigured
+	case !gate:
+		section.Available, section.Reason = false, CatalogUnavailableGateMissing
 	case !dataRead:
 		section.Available, section.Reason = false, CatalogUnavailableScopeMissing
 	}
@@ -77,7 +79,9 @@ func BuildCatalogSchema(policy *GraphQLPolicy, class CallerClass, servable, data
 	}
 	section.SchemaDigest = policy.catalogue.StampedSchemaDigest()
 	section.Limits = policy.limits
-	types := map[string]map[string]string{} // object type -> field -> SDL type
+	types := map[string]map[string]string{}  // object type -> field -> SDL type
+	inputs := map[string]map[string]string{} // input type -> allowed field -> SDL type
+	enums := map[string]map[string]bool{}    // enum -> values to print (empty = all)
 	var queryLines []string
 	for _, root := range policy.Roots() {
 		var served []*rootCandidate
@@ -159,10 +163,11 @@ func BuildCatalogSchema(policy *GraphQLPolicy, class CallerClass, servable, data
 		section.Roots = append(section.Roots, entry)
 		queryLines = append(queryLines, sdlRootLine(policy.schema, root.Field, entry.Arguments))
 		collectOutputTypes(policy.schema, root.Field, entry.OutputPaths, types)
+		collectInputTypes(policy.schema, root.Field, entry.Arguments, inputs, enums)
 	}
 	section.RefusedRootFields = append(section.RefusedRootFields, policy.RefusedRootFields()...)
 	sort.Strings(section.RefusedRootFields)
-	section.SDL = printAllowedSDL(queryLines, types)
+	section.SDL = printAllowedSDL(policy.schema, queryLines, types, inputs, enums)
 	return section
 }
 
@@ -234,12 +239,125 @@ func collectOutputTypes(schema *ast.Schema, root string, paths []string, types m
 	}
 }
 
-func printAllowedSDL(queryLines []string, types map[string]map[string]string) string {
+// collectInputTypes records, per input object type, the fields the allowed
+// argument paths reach, and the enum values a path or a fixed literal
+// admits.
+func collectInputTypes(schema *ast.Schema, root string, args []CatalogSchemaArgument, inputs map[string]map[string]string, enums map[string]map[string]bool) {
+	def := schema.Query.Fields.ForName(root)
+	for _, arg := range args {
+		argDef := def.Arguments.ForName(arg.Name)
+		if argDef == nil {
+			continue
+		}
+		if arg.Fixed != "" {
+			addEnumValues(schema, argDef.Type.Name(), []string{arg.Fixed}, enums)
+			continue
+		}
+		for _, p := range arg.Paths {
+			segs := strings.Split(strings.ReplaceAll(p.Path, "[*]", ""), ".")
+			typeName := argDef.Type.Name()
+			for _, seg := range segs[1:] {
+				typ := schema.Types[typeName]
+				if typ == nil || typ.Kind != ast.InputObject {
+					break
+				}
+				field := typ.Fields.ForName(seg)
+				if field == nil {
+					break
+				}
+				if inputs[typeName] == nil {
+					inputs[typeName] = map[string]string{}
+				}
+				inputs[typeName][seg] = field.Type.String()
+				typeName = field.Type.Name()
+			}
+			addEnumValues(schema, typeName, p.EnumValues, enums)
+		}
+	}
+}
+
+// addEnumValues records values of an enum type (none = every value).
+func addEnumValues(schema *ast.Schema, typeName string, values []string, enums map[string]map[string]bool) {
+	typ := schema.Types[typeName]
+	if typ == nil || typ.Kind != ast.Enum {
+		return
+	}
+	if enums[typeName] == nil {
+		enums[typeName] = map[string]bool{}
+	}
+	if len(values) == 0 {
+		for _, v := range typ.EnumValues {
+			enums[typeName][v.Name] = true
+		}
+		return
+	}
+	for _, v := range values {
+		enums[typeName][v] = true
+	}
+}
+
+// printAllowedSDL prints a self-contained SDL of the allowed part: the
+// custom scalars and enums it references, the input types with their
+// allowed fields, Query, and the output types with their allowed fields.
+func printAllowedSDL(schema *ast.Schema, queryLines []string, types, inputs map[string]map[string]string, enums map[string]map[string]bool) string {
+	scalars := map[string]bool{}
+	note := func(typeText string) {
+		name := strings.Trim(typeText, "[]!")
+		typ := schema.Types[name]
+		if typ == nil {
+			return
+		}
+		switch typ.Kind {
+		case ast.Scalar:
+			switch name {
+			case "Int", "Float", "String", "Boolean", "ID":
+			default:
+				scalars[name] = true
+			}
+		case ast.Enum:
+			if enums[name] == nil {
+				addEnumValues(schema, name, nil, enums)
+			}
+		}
+	}
+	for _, fields := range types {
+		for _, t := range fields {
+			note(t)
+		}
+	}
+	for _, fields := range inputs {
+		for _, t := range fields {
+			note(t)
+		}
+	}
+	for _, line := range queryLines {
+		for _, part := range strings.FieldsFunc(line, func(r rune) bool { return r == '(' || r == ')' || r == ',' || r == ':' || r == ' ' || r == '=' }) {
+			note(part)
+		}
+	}
 	var b strings.Builder
 	b.WriteString("# The allowed part of the ops schema for this credential (graphql_query).\n")
 	b.WriteString("# orgId is set by acr from your credential; do not send it. __typename is allowed where listed.\n")
 	b.WriteString("# A type's fields are the union over the roots; each root's output_paths is the exact allowlist.\n")
-	b.WriteString("type Query {\n")
+	for _, name := range sortedKeysOf(scalars) {
+		b.WriteString("\nscalar " + name + "\n")
+	}
+	for _, name := range sortedKeysOf(enums) {
+		b.WriteString("\nenum " + name + " {\n")
+		for _, v := range sortedKeysOf(enums[name]) {
+			b.WriteString("  " + v + "\n")
+		}
+		b.WriteString("}\n")
+	}
+	for _, name := range sortedKeysOf(inputs) {
+		b.WriteString("\ninput " + name + " {\n")
+		fields := inputs[name]
+		for _, f := range sortedKeysOf(fields) {
+			b.WriteString("  " + f + ": " + fields[f] + "\n")
+		}
+		b.WriteString("}\n")
+	}
+	b.WriteString("\ntype Query {\n")
 	for _, line := range queryLines {
 		b.WriteString(line + "\n")
 	}

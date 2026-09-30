@@ -50,6 +50,7 @@ func (a *App) contextFabricDataCatalogHandler() http.HandlerFunc {
 		catalog := directread.BuildDataCatalog(a.dataCatalogue(), directread.CatalogCaller{
 			GraphQL:            graphqlPolicy,
 			GraphQLServable:    a.dataGraphQL() != nil,
+			GateComposed:       a.dataGateComposed(),
 			PrincipalClass:     directread.ClassifyPrincipal(principal),
 			Scopes:             scopes,
 			DataRead:           auth.HasScope(principal.Permissions, auth.ScopeDataRead),

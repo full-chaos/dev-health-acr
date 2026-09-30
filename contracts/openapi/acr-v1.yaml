@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: f489526b6473f63aa76c6bc18b2d2787442295c3999a4b62ebe472e83e3d740e
+# canonical-content-sha256: 0b34c645230f1ea64ad3a850203a53097dc81bcad16b9156b91f3805ad8b8855
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -1126,6 +1126,7 @@ components:
                     enum:
                       - "scope_missing_data_read"
                       - "data_query_not_configured"
+                      - "subject_gate_unavailable"
                   response_root:
                     type: "string"
                   scope_class:
@@ -1182,6 +1183,7 @@ components:
               enum:
                 - "scope_missing_data_read"
                 - "data_query_not_configured"
+                - "subject_gate_unavailable"
             refused_shapes:
               items:
                 properties:
@@ -1257,6 +1259,7 @@ components:
               enum:
                 - "scope_missing_data_read"
                 - "data_graphql_not_configured"
+                - "subject_gate_unavailable"
             refused_root_fields:
               items:
                 type: "string"
@@ -1370,6 +1373,7 @@ components:
         - "query"
       type: "object"
     DataGraphQLResponse:
+      additionalProperties: false
       properties:
         call:
           enum:
@@ -1390,6 +1394,7 @@ components:
           type: "object"
         errors:
           items:
+            additionalProperties: false
             properties:
               class:
                 enum:
@@ -1408,6 +1413,7 @@ components:
             type: "object"
           type: "array"
         page:
+          additionalProperties: false
           properties:
             max_bytes:
               type: "integer"
@@ -1418,6 +1424,7 @@ components:
             - "max_bytes"
           type: "object"
         refusal:
+          additionalProperties: false
           properties:
             code:
               enum:
@@ -1460,6 +1467,7 @@ components:
             - "reason"
           type: "object"
         request:
+          additionalProperties: false
           properties:
             max_bytes:
               type: "integer"
@@ -1473,6 +1481,7 @@ components:
             - "empty_declared"
         root_fields:
           items:
+            additionalProperties: false
             properties:
               added_paths:
                 items:
@@ -1484,6 +1493,7 @@ components:
                   - "declared_partial"
                   - "unknown"
               effective_scope:
+                additionalProperties: false
                 properties:
                   forced_by_grant:
                     type: "boolean"
@@ -1511,6 +1521,7 @@ components:
             type: "object"
           type: "array"
         source:
+          additionalProperties: false
           properties:
             listener:
               const: "mcp"
@@ -1529,6 +1540,7 @@ components:
             - "schema_digest"
           type: "object"
         untrusted_content:
+          additionalProperties: false
           properties:
             fields:
               items:
