@@ -25,6 +25,7 @@ func TestOAuthStore_uniqueViolationsKeepTheirErrorClass(t *testing.T) {
 	require.NoError(t, err)
 	store, err := NewOAuthStoreWithOptions(db, OAuthStoreOptions{Now: func() time.Time { return now }})
 	require.NoError(t, err)
+	registerOAuthClientsPG(t, ctx, store)
 
 	requireClass := func(t *testing.T, err error) {
 		t.Helper()

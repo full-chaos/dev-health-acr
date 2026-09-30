@@ -502,6 +502,11 @@ func (s *OAuthService) Authorize(ctx context.Context, request OAuthAuthorizeRequ
 		CodeChallenge: request.CodeChallenge, Resource: resource, Scope: scope, State: request.State,
 		CreatedAt: now, ExpiresAt: device.ExpiresAt,
 	})
+	if errors.Is(err, storage.ErrOAuthClientGone) {
+		// The idle-client purge removed the client after it was resolved above:
+		// answer as for a client that was never registered (it registers again).
+		return OAuthAuthorization{}, oauthError("invalid_client", oauthvocab.OutcomeInvalidClient, false)
+	}
 	if err != nil {
 		return OAuthAuthorization{}, fmt.Errorf("%w: store authorization request: %w", ErrOAuthUnavailable, err)
 	}
@@ -918,6 +923,9 @@ func (s *OAuthService) StartDeviceAuthorization(ctx context.Context, request OAu
 		DeviceCodeHash: start.DeviceCodeHash, ClientID: client.ClientID, ClientKind: client.Kind,
 		Resource: resource, Scope: scope, CreatedAt: now, ExpiresAt: start.ExpiresAt,
 	})
+	if errors.Is(err, storage.ErrOAuthClientGone) {
+		return OAuthDeviceAuthorizationStart{ClientKind: client.Kind}, oauthError("invalid_client", oauthvocab.OutcomeInvalidClient, false)
+	}
 	if err != nil {
 		return OAuthDeviceAuthorizationStart{ClientKind: client.Kind}, fmt.Errorf("%w: store device grant: %w", ErrOAuthUnavailable, err)
 	}

@@ -11,8 +11,9 @@ const (
 	// defaultOAuthRequestPurgeGrace and defaultOAuthClientIdleTTL are the
 	// CHAOS-6191 purge windows, equal so that "idle for the client TTL" is
 	// exact: request rows are the only record of when a client last asked to
-	// authorize, so they are kept as long as the client idle window, and a
-	// client is collected only once its last request row has gone.
+	// authorize, so they are kept at least as long as the client idle window
+	// (grace >= idle is enforced), and a client is collected only once its last
+	// request row has gone.
 	defaultOAuthRequestPurgeGrace = 30 * 24 * time.Hour
 	defaultOAuthClientIdleTTL     = 30 * 24 * time.Hour
 )
@@ -72,15 +73,19 @@ func validateOAuthConfig(c Config) error {
 	if !c.RequireBackingStores {
 		return errors.New("ACR_OAUTH_ISSUER requires the hosted runtime (ACR_REQUIRE_BACKING_STORES)")
 	}
-	// CHAOS-6191: the purge windows must be positive, and the client idle
-	// window must not be shorter than the request grace: request rows are the
-	// only record of a client's last authorization request, so a shorter idle
-	// window would judge "no request in N days" on rows already purged.
+	// CHAOS-6191: the purge windows must be positive, and the request grace
+	// must not be shorter than the client idle window: request rows are the
+	// only record of a client's last authorization request, so a shorter grace
+	// would judge "no request in N days" on rows already purged, and a client
+	// used inside the idle window could lose its rows and then the client.
 	if c.OAuthRequestPurgeGrace <= 0 {
 		return errors.New("ACR_OAUTH_REQUEST_PURGE_GRACE must be a positive duration")
 	}
-	if c.OAuthClientIdleTTL < c.OAuthRequestPurgeGrace {
-		return errors.New("ACR_OAUTH_CLIENT_IDLE_TTL must not be shorter than ACR_OAUTH_REQUEST_PURGE_GRACE")
+	if c.OAuthClientIdleTTL <= 0 {
+		return errors.New("ACR_OAUTH_CLIENT_IDLE_TTL must be a positive duration")
+	}
+	if c.OAuthRequestPurgeGrace < c.OAuthClientIdleTTL {
+		return errors.New("ACR_OAUTH_REQUEST_PURGE_GRACE must not be shorter than ACR_OAUTH_CLIENT_IDLE_TTL")
 	}
 	return nil
 }

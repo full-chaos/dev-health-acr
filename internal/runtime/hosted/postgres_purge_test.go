@@ -295,7 +295,7 @@ func oauthConfiguredTestConfig() config.Config {
 	return config.Config{
 		OAuthIssuer: "https://acr.example.test", OAuthResources: []string{"https://mcp.example.test/mcp"},
 		OAuthConsentURL:        "https://www.example.test/acr/authorize",
-		OAuthRequestPurgeGrace: 36 * time.Hour, OAuthClientIdleTTL: 45 * 24 * time.Hour,
+		OAuthRequestPurgeGrace: 45 * 24 * time.Hour, OAuthClientIdleTTL: 36 * time.Hour,
 	}
 }
 
@@ -340,7 +340,7 @@ func TestStartConfiguredOAuthPurge_configuredPurgesAtStartupWithConfigWindows(t 
 	t.Cleanup(func() { _ = closeLoop() })
 	purger.mu.Lock()
 	defer purger.mu.Unlock()
-	want := fakeOAuthPurgeCall{requestGrace: 36 * time.Hour, clientIdle: 45 * 24 * time.Hour, limit: defaultOAuthPurgeBatchLimit}
+	want := fakeOAuthPurgeCall{requestGrace: 45 * 24 * time.Hour, clientIdle: 36 * time.Hour, limit: defaultOAuthPurgeBatchLimit}
 	if len(purger.calls) != 1 || purger.calls[0] != want {
 		t.Fatalf("startup purge calls = %#v, want exactly [%#v]", purger.calls, want)
 	}
@@ -387,7 +387,7 @@ func TestOAuthPurgeFunc_logsOneCountLineOnEveryTick(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	purger := &fakeOAuthPurger{}
-	purge := oauthPurgeFunc(purger, time.Hour, 2*time.Hour, logger)
+	purge := oauthPurgeFunc(purger, 2*time.Hour, time.Hour, logger)
 	oneLine := func(want ...string) {
 		t.Helper()
 		line := strings.TrimSpace(logs.String())

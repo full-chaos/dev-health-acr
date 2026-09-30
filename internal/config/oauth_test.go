@@ -51,10 +51,13 @@ func TestValidateOAuthConfigDomain(t *testing.T) {
 		{"no hosted runtime", func(c *Config) { c.RequireBackingStores = false }, "requires the hosted runtime"},
 		{"purge grace zero", func(c *Config) { c.OAuthRequestPurgeGrace = 0 }, "ACR_OAUTH_REQUEST_PURGE_GRACE must be a positive"},
 		{"purge grace negative", func(c *Config) { c.OAuthRequestPurgeGrace = -time.Hour }, "ACR_OAUTH_REQUEST_PURGE_GRACE must be a positive"},
-		{"idle ttl zero", func(c *Config) { c.OAuthClientIdleTTL = 0 }, "ACR_OAUTH_CLIENT_IDLE_TTL must not be shorter"},
-		{"idle ttl just below grace", func(c *Config) { c.OAuthClientIdleTTL = c.OAuthRequestPurgeGrace - time.Second }, "ACR_OAUTH_CLIENT_IDLE_TTL must not be shorter"},
-		{"idle ttl equals grace", func(c *Config) { c.OAuthClientIdleTTL = c.OAuthRequestPurgeGrace }, ""},
-		{"idle ttl above grace", func(c *Config) { c.OAuthClientIdleTTL = c.OAuthRequestPurgeGrace + time.Second }, ""},
+		{"idle ttl zero", func(c *Config) { c.OAuthClientIdleTTL = 0 }, "ACR_OAUTH_CLIENT_IDLE_TTL must be a positive"},
+		{"idle ttl negative", func(c *Config) { c.OAuthClientIdleTTL = -time.Hour }, "ACR_OAUTH_CLIENT_IDLE_TTL must be a positive"},
+		{"grace just below idle ttl", func(c *Config) { c.OAuthRequestPurgeGrace = c.OAuthClientIdleTTL - time.Second }, "ACR_OAUTH_REQUEST_PURGE_GRACE must not be shorter"},
+		{"grace 1h idle ttl 2h", func(c *Config) { c.OAuthRequestPurgeGrace, c.OAuthClientIdleTTL = time.Hour, 2*time.Hour }, "ACR_OAUTH_REQUEST_PURGE_GRACE must not be shorter"},
+		{"grace equals idle ttl", func(c *Config) { c.OAuthRequestPurgeGrace = c.OAuthClientIdleTTL }, ""},
+		{"grace above idle ttl", func(c *Config) { c.OAuthRequestPurgeGrace = c.OAuthClientIdleTTL + time.Second }, ""},
+		{"grace 2h idle ttl 1h", func(c *Config) { c.OAuthRequestPurgeGrace, c.OAuthClientIdleTTL = 2*time.Hour, time.Hour }, ""},
 		{"purge windows unchecked while oauth is off", func(c *Config) {
 			c.OAuthIssuer, c.OAuthResources, c.OAuthConsentURL = "", nil, ""
 			c.OAuthRequestPurgeGrace, c.OAuthClientIdleTTL = 0, 0
@@ -121,10 +124,10 @@ func TestLoad_oauthPurgeWindowsParse(t *testing.T) {
 	}
 	cfg, err = load(mapLookup(map[string]string{
 		"ACR_LOCAL_COMPOSITION_READY":   "true",
-		"ACR_OAUTH_REQUEST_PURGE_GRACE": "48h",
-		"ACR_OAUTH_CLIENT_IDLE_TTL":     "1440h",
+		"ACR_OAUTH_REQUEST_PURGE_GRACE": "1440h",
+		"ACR_OAUTH_CLIENT_IDLE_TTL":     "48h",
 	}))
-	if err != nil || cfg.OAuthRequestPurgeGrace != 48*time.Hour || cfg.OAuthClientIdleTTL != 1440*time.Hour {
+	if err != nil || cfg.OAuthRequestPurgeGrace != 1440*time.Hour || cfg.OAuthClientIdleTTL != 48*time.Hour {
 		t.Fatalf("overrides: grace=%v idle=%v err=%v", cfg.OAuthRequestPurgeGrace, cfg.OAuthClientIdleTTL, err)
 	}
 	for _, key := range []string{"ACR_OAUTH_REQUEST_PURGE_GRACE", "ACR_OAUTH_CLIENT_IDLE_TTL"} {

@@ -57,6 +57,18 @@ func validOAuthDeviceGrantPG(now time.Time, deviceCodeHash storage.DeviceCodeHas
 	}
 }
 
+// registerOAuthClientsPG registers the dynamic clients the request and grant
+// fixtures name (0xcd and 0xef): a request or device grant for a dynamic client
+// is only stored while that client's row exists.
+func registerOAuthClientsPG(t *testing.T, ctx context.Context, store *OAuthStore) {
+	t.Helper()
+	for _, seed := range []byte{0xcd, 0xef} {
+		client := validOAuthClientPG(dynamicOAuthClientIDPG(seed))
+		_, err := store.RegisterClient(ctx, client)
+		require.NoError(t, err)
+	}
+}
+
 func TestOAuthStore_DeviceGrantLifecycle(t *testing.T) {
 	// Given
 	ctx := context.Background()
@@ -68,6 +80,7 @@ func TestOAuthStore_DeviceGrantLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	store, err := NewOAuthStoreWithOptions(db, OAuthStoreOptions{Now: func() time.Time { return now }})
 	require.NoError(t, err)
+	registerOAuthClientsPG(t, ctx, store)
 	device, err := deviceStore.Create(ctx, storage.DeviceAuthorizationCreateInput{
 		DeviceCodeHash: storage.HashDeviceCode("device-grant-lifecycle"),
 		UserCodeHash:   storage.HashUserCode("DEVGRANT"),
@@ -172,6 +185,7 @@ func TestOAuthStore_AuthorizationRequestIssueAndConsumeLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	store, err := NewOAuthStoreWithOptions(db, OAuthStoreOptions{Now: func() time.Time { return now }})
 	require.NoError(t, err)
+	registerOAuthClientsPG(t, ctx, store)
 	device, err := deviceStore.Create(ctx, storage.DeviceAuthorizationCreateInput{
 		DeviceCodeHash: storage.HashDeviceCode("lifecycle-device"),
 		UserCodeHash:   storage.HashUserCode("LIFECYCL"),
@@ -220,6 +234,7 @@ func TestOAuthStore_IssueAuthorizationCode_conflictsAndNotFound(t *testing.T) {
 	require.NoError(t, err)
 	store, err := NewOAuthStoreWithOptions(db, OAuthStoreOptions{Now: func() time.Time { return now }})
 	require.NoError(t, err)
+	registerOAuthClientsPG(t, ctx, store)
 
 	// unknown handle
 	_, err = store.IssueAuthorizationCode(ctx, storage.HashOAuthSecret("unknown-handle-pg"), storage.HashOAuthSecret("code-a"), now.Add(time.Minute))
@@ -264,6 +279,7 @@ func TestOAuthStore_ConsumeAuthorizationCode_unavailableCases(t *testing.T) {
 	require.NoError(t, err)
 	store, err := NewOAuthStoreWithOptions(db, OAuthStoreOptions{Now: func() time.Time { return now }})
 	require.NoError(t, err)
+	registerOAuthClientsPG(t, ctx, store)
 
 	// unknown code
 	_, err = store.ConsumeAuthorizationCode(ctx, storage.HashOAuthSecret("never-issued-pg-code"))
@@ -301,6 +317,7 @@ func TestOAuthStore_ConsumeAuthorizationCode_concurrentConsumersExactlyOneSuccee
 	require.NoError(t, err)
 	store, err := NewOAuthStoreWithOptions(db, OAuthStoreOptions{Now: func() time.Time { return now }})
 	require.NoError(t, err)
+	registerOAuthClientsPG(t, ctx, store)
 	device, err := deviceStore.Create(ctx, storage.DeviceAuthorizationCreateInput{
 		DeviceCodeHash: storage.HashDeviceCode("concurrent-device"),
 		UserCodeHash:   storage.HashUserCode("CONCURR1"),
@@ -464,6 +481,7 @@ func TestOAuthStore_BindAuthorizationRequestUser_firstUserWinsUnderConcurrency(t
 	require.NoError(t, err)
 	store, err := NewOAuthStoreWithOptions(db, OAuthStoreOptions{Now: func() time.Time { return now }})
 	require.NoError(t, err)
+	registerOAuthClientsPG(t, ctx, store)
 	device, err := deviceStore.Create(ctx, storage.DeviceAuthorizationCreateInput{
 		DeviceCodeHash: storage.HashDeviceCode("bind-device"),
 		UserCodeHash:   storage.HashUserCode("BINDCODE"),

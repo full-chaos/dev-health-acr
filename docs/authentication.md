@@ -219,12 +219,21 @@ statement:
   `ACR_OAUTH_CLIENT_IDLE_TTL` (default `720h`) ago and has no request row left,
   no device grant created inside that window, and no live credential obtained
   through a device grant of its own. Request rows are the only record of when a
-  client last asked to authorize, so they are kept as long as the idle window
-  (the defaults are equal): a client used inside the last 30 days is never
+  client last asked to authorize, so they are kept at least as long as the idle
+  window (the defaults are equal): a client used inside the last 30 days is never
   purged, and one whose last request is older than that, with no live
-  credential, is. Both values must be positive and `ACR_OAUTH_CLIENT_IDLE_TTL`
-  must not be shorter than `ACR_OAUTH_REQUEST_PURGE_GRACE`; a shorter request
-  grace makes the idle test see a client's last request only for that long.
+  credential, is. Both values must be positive and `ACR_OAUTH_REQUEST_PURGE_GRACE`
+  must not be shorter than `ACR_OAUTH_CLIENT_IDLE_TTL` (startup refuses the
+  other order): with a shorter grace, a client used inside the idle window
+  would lose its request rows, and then the client.
+- The purge and the routes that store a request or a device grant for a
+  dynamic client are safe against each other. The route stores the row only
+  while the client's row exists (it locks that row in the same statement), and
+  the purge skips a locked client and re-checks its candidates under a fresh
+  snapshot before deleting. If the purge removed the client between the route
+  resolving it and storing the row, the route answers `invalid_client`, exactly
+  as for a client that was never registered, and the client registers again;
+  no row is ever stored for a purged client.
 - Client ID metadata document clients are never stored, so they are never
   purged. Credentials are not touched: a live credential never depends on its
   client row.

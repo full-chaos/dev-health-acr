@@ -243,13 +243,14 @@ type Config struct {
 	OAuthClientMetadataDocuments bool
 	// OAuthRequestPurgeGrace (ACR_OAUTH_REQUEST_PURGE_GRACE, default 720h,
 	// CHAOS-6191) is how long an /authorize request row is kept after its
-	// expires_at before the purge loop may delete it. A request that
-	// redeemed a still-live credential is kept regardless.
+	// expires_at before the purge loop may delete it (never shorter than
+	// OAuthClientIdleTTL). A request that redeemed a still-live credential is
+	// kept regardless.
 	OAuthRequestPurgeGrace time.Duration
 	// OAuthClientIdleTTL (ACR_OAUTH_CLIENT_IDLE_TTL, default 720h = 30d,
 	// CHAOS-6191) is how long a dynamically registered client must have
 	// existed, with no request and no live credential, before the purge
-	// loop may delete it. Must not be shorter than OAuthRequestPurgeGrace.
+	// loop may delete it. OAuthRequestPurgeGrace must not be shorter than it.
 	OAuthClientIdleTTL time.Duration
 
 	// dataQueryURL / dataQueryTimeout: internal ops query service call

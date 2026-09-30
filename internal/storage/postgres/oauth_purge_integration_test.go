@@ -25,7 +25,8 @@ type oauthPurgeFixture struct {
 }
 
 const (
-	oauthPurgeGrace = 24 * time.Hour
+	// the defaults: request grace == client idle window
+	oauthPurgeGrace = 30 * 24 * time.Hour
 	oauthPurgeIdle  = 30 * 24 * time.Hour
 )
 
@@ -159,25 +160,25 @@ func (f *oauthPurgeFixture) purge(now time.Time, limit int) OAuthPurgeResult {
 // expires_at + grace AND its device authorization did not redeem a credential
 // that is still live. A revoked or expired credential does not keep it.
 func TestOAuthStore_PurgeExpired_requests(t *testing.T) {
-	// Given: a purge 10 days after t0 (a 30-day credential issued at t0 is live)
+	// Given: a purge 50 days after t0 (a credential issued at t0 that ends at t0+60d is live)
 	f := newOAuthPurgeFixture(t)
-	purgeAt := f.t0.Add(10 * 24 * time.Hour)
-	thirtyDays := f.t0.Add(30 * 24 * time.Hour)
+	purgeAt := f.t0.Add(50 * 24 * time.Hour)
+	credentialEnd := f.t0.Add(60 * 24 * time.Hour)
 	client := f.client(0xa1, f.t0)
 
 	old := f.request(client, f.device(), f.t0)
 	fresh := f.request(client, f.device(), purgeAt.Add(-time.Hour))
 	justInsideGrace := f.request(client, f.device(), purgeAt.Add(-oauthPurgeGrace).Add(-storage.DeviceAuthorizationTTL).Add(time.Minute))
 
-	liveDevice, _ := f.redeemedDevice(&thirtyDays)
+	liveDevice, _ := f.redeemedDevice(&credentialEnd)
 	live := f.request(client, liveDevice, f.t0)
 	noExpiryDevice, _ := f.redeemedDevice(nil)
 	noExpiry := f.request(client, noExpiryDevice, f.t0)
 
-	revokedDevice, revokedCredential := f.redeemedDevice(&thirtyDays)
+	revokedDevice, revokedCredential := f.redeemedDevice(&credentialEnd)
 	f.revoke(revokedCredential)
 	revoked := f.request(client, revokedDevice, f.t0)
-	expiredDevice, expiredCredential := f.redeemedDevice(&thirtyDays)
+	expiredDevice, expiredCredential := f.redeemedDevice(&credentialEnd)
 	f.expireCredential(expiredCredential, f.t0.Add(24*time.Hour))
 	expired := f.request(client, expiredDevice, f.t0)
 
@@ -205,7 +206,7 @@ func TestOAuthStore_PurgeExpired_requests(t *testing.T) {
 	// (with fresh and inside-grace, which are past the grace by then); a
 	// credential with no expiry is live forever, so its request never does,
 	// and while it stays the client is not idle.
-	afterCredential := thirtyDays.Add(oauthPurgeGrace)
+	afterCredential := credentialEnd.Add(oauthPurgeGrace)
 	require.Equal(t, OAuthPurgeResult{Requests: 3, Clients: 0}, f.purge(afterCredential, 500))
 	require.False(t, f.requestExists(live))
 	require.True(t, f.requestExists(noExpiry))
@@ -271,16 +272,18 @@ func TestOAuthStore_PurgeExpired_clients(t *testing.T) {
 	require.Equal(t, OAuthPurgeResult{}, f.purge(purgeAt, 500))
 
 	// And: when the credential ends, the client follows within the grace.
-	// 46 days after t0 the two live-credential clients and the recent-request
-	// client are collectable (their requests aged past the grace, requests
-	// first); "young" and "recent-grant" are still inside the 30-day window.
+	// 75 days after t0 the credential has ended and every remaining request is
+	// past the 30 day grace (requests first), and every remaining client's last
+	// activity is older than the 30 day idle window: all five are collected.
 	afterCredential := credentialEnd.Add(oauthPurgeGrace).Add(time.Hour)
-	require.Equal(t, OAuthPurgeResult{Requests: 2, Clients: 3}, f.purge(afterCredential, 500))
-	for name, id := range map[string]string{"recent-request": withRecentRequest, "live-via-request": liveThroughRequest, "live-via-grant": liveThroughGrant} {
-		require.Falsef(t, f.clientExists(id), "%s: purged once its credential ended and its requests aged out", name)
+	require.Equal(t, OAuthPurgeResult{Requests: 2, Clients: 5}, f.purge(afterCredential, 500))
+	for name, id := range map[string]string{
+		"recent-request": withRecentRequest, "live-via-request": liveThroughRequest, "live-via-grant": liveThroughGrant,
+		"young": young, "recent-grant": recentGrant,
+	} {
+		require.Falsef(t, f.clientExists(id), "%s: purged once its credential ended and its activity aged out", name)
 	}
-	require.True(t, f.clientExists(young))
-	require.True(t, f.clientExists(recentGrant))
+	require.Equal(t, 0, f.count("acr.oauth_clients"))
 }
 
 func TestOAuthStore_PurgeExpired_batchIsBounded(t *testing.T) {
@@ -318,12 +321,17 @@ func TestOAuthStore_PurgeExpired_inputAndInvariants(t *testing.T) {
 	result, err := f.store.PurgeExpired(f.ctx, now, oauthPurgeGrace, oauthPurgeIdle, 0)
 	require.NoError(t, err)
 	require.Equal(t, OAuthPurgeResult{}, result, "a non-positive batch limit deletes nothing")
-	for _, windows := range [][2]time.Duration{{0, oauthPurgeIdle}, {-time.Hour, oauthPurgeIdle}, {oauthPurgeGrace, oauthPurgeGrace - time.Second}, {oauthPurgeGrace, 0}} {
+	for _, windows := range [][2]time.Duration{
+		{0, oauthPurgeIdle}, {-time.Hour, oauthPurgeIdle}, {oauthPurgeGrace, 0}, {oauthPurgeGrace, -time.Hour},
+		{oauthPurgeIdle - time.Second, oauthPurgeIdle}, {time.Hour, 2 * time.Hour},
+	} {
 		_, err = f.store.PurgeExpired(f.ctx, now, windows[0], windows[1], 10)
 		require.ErrorIs(t, err, storage.ErrInvalidOAuthClient, "grace=%v idle=%v", windows[0], windows[1])
 	}
 	_, err = f.store.PurgeExpired(f.ctx, now, oauthPurgeGrace, oauthPurgeGrace, 10)
 	require.NoError(t, err, "an idle window equal to the request grace is valid (it is the default)")
+	_, err = f.store.PurgeExpired(f.ctx, now, 2*time.Hour, time.Hour, 10)
+	require.NoError(t, err, "a request grace longer than the idle window is valid")
 }
 
 // With the default windows (request grace == client idle window == 30d) "idle

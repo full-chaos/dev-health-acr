@@ -91,7 +91,7 @@ func TestOpenPostgres_oauthPurgeAtStartupThroughTheRealConstructor(t *testing.T)
 		PostgresDSN: runtimeDSN,
 		OAuthIssuer: "https://acr.example.test", OAuthResources: []string{"https://mcp.example.test/mcp"},
 		OAuthConsentURL:        "https://www.example.test/acr/authorize",
-		OAuthRequestPurgeGrace: time.Hour, OAuthClientIdleTTL: 2 * time.Hour,
+		OAuthRequestPurgeGrace: 2 * time.Hour, OAuthClientIdleTTL: time.Hour,
 	}
 	newLogger := func() (*slog.Logger, *bytes.Buffer) {
 		var logs bytes.Buffer

@@ -100,7 +100,7 @@ func TestAcrDbInit_RuntimeRoleRunsTheOAuthPurge(t *testing.T) {
 	// When: the purge runs as the restricted runtime role
 	runtimeStore, err := storagepostgres.NewOAuthStore(h.runtimeDB)
 	require.NoError(t, err)
-	result, err := runtimeStore.PurgeExpired(ctx, purgeAt, 24*time.Hour, 30*24*time.Hour, 500)
+	result, err := runtimeStore.PurgeExpired(ctx, purgeAt, 30*24*time.Hour, 30*24*time.Hour, 500)
 
 	// Then: it ran (no permission error) and deleted exactly the eligible rows
 	require.NoError(t, err, "the runtime role must hold every privilege the OAuth purge statements need")
