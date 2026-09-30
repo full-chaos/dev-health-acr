@@ -258,8 +258,11 @@ fails as `MISSING ANCHOR MARKER`.
 
 An `issued_credential` anchor carries two markers, both required: the
 enclosing `func` declaration, then the call that mints the credential, which
-must appear exactly once inside that function's body (`ANCHOR CONTENT MISMATCH`
-if it is not there, `AMBIGUOUS ANCHOR MARKER` if it is there twice).
+must appear exactly once in that function's body, called by the function itself
+(`ANCHOR CONTENT MISMATCH` if it is not there, or if the only call sits inside a
+func literal nested in the body, which the function may never invoke;
+`AMBIGUOUS ANCHOR MARKER` if it is there twice). A call in a nested literal
+beside the function's own call is not counted as a second site.
 
 Marker rule, one invariant per (file, marker) across all anchor kinds: no line
 may hold two of its sites, and the number of sites in the file must equal the
@@ -267,8 +270,24 @@ number of distinct sites the rows declare for it (rows citing one shared
 definition line are one site; a `func` declaration is always one site). More is
 `AMBIGUOUS ANCHOR MARKER`; none or fewer is `ANCHOR MARKER NOT FOUND`.
 
-What this does not prove (CHAOS-4780): a row anchored at a shared definition,
-such as the ten rows marked by `protectedRuntimeHandler`'s declaration, shows
-that the wrapper exists, not that a given route is wrapped by it. Rows whose
-marker is the route's own call (`a.protectedRuntimeHandler(...)` in the route's
-handler builder) do fail if that call is removed.
+What this does not prove (CHAOS-4780, reachability is out of scope for this
+gate):
+
+- A row anchored at a shared definition shows that the definition exists, not
+  that a given route uses it. That covers the ten rows marked by
+  `protectedRuntimeHandler`'s declaration, and the six rows marked by
+  `authenticateWebAssertion`'s declaration (the reachable validator of
+  `GET /api/v1/agent-context/capabilities`, `POST /api/v1/agent-context/context-packets`,
+  `GET /api/v1/agent-context/evidence/{evidence_ref_id}`,
+  `POST /api/v1/context-fabric/investigations`,
+  `GET /api/v1/context-fabric/investigations/{result_id}` and
+  `GET /api/v1/context-fabric/model-config`): removing the call to either from
+  the code that dispatches through it leaves the declaration, and the gate green.
+- A route's own-call marker (`a.protectedRuntimeHandler(...)` in its handler
+  builder) is located in the file, not bound to the route's handler builder: the
+  route fails if that call is removed or renamed, but moving the call to another
+  function in the same file, one the route no longer uses, is not caught. Binding
+  a marker to the handler builder needs a new row field, which is a schema and
+  scope change; it is tracked as a follow-up (CHAOS-4780 class), not done here.
+- A mint call in an `issued_credential` anchor is bound to its function, but
+  whether that function is reached is not judged either.

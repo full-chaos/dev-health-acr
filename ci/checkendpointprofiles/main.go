@@ -51,10 +51,15 @@
 //     holds two of its sites, and its site count equals the number of
 //     distinct sites the rows declare (rows citing one shared definition line
 //     are one site; a `func` declaration is always one). More = AMBIGUOUS
-//     ANCHOR MARKER; none/fewer = ANCHOR MARKER NOT FOUND. Still not proof:
+//     ANCHOR MARKER; none/fewer = ANCHOR MARKER NOT FOUND. The mint call must
+//     be the anchored function's OWN call: a call in a nested func literal does
+//     not count. Still not proof (reachability is out of scope, CHAOS-4780):
 //     a row anchored at a SHARED definition (the ten rows marked by
-//     protectedRuntimeHandler's declaration) shows the wrapper exists, not
-//     that a given route is wrapped by it: CHAOS-4780.
+//     protectedRuntimeHandler's declaration, the six by
+//     authenticateWebAssertion's) shows the definition exists, not that a
+//     given route uses it; and a route's OWN-call marker is located in the
+//     file, not bound to the route's handler builder, so moving that call to
+//     another function in the same file is not caught (follow-up ticket).
 //   - Two rows whose primary_validator anchors point at the SAME source line
 //     (the model-config PUT/DELETE rows share one dispatch line) necessarily
 //     share one marker too. If both anchors drift onto the same wrong line at
@@ -1085,8 +1090,38 @@ func checkAnchorMarker(root, rowID, label string, anchor map[string]any, declare
 	return &site
 }
 
+// directCallOffsets returns the source offset of every call expression whose
+// INNERMOST enclosing function is decl: calls in decl's own body, at any depth
+// of blocks and expressions, but not calls inside a func literal within it.
+func directCallOffsets(sf *sourceFile, decl *ast.FuncDecl) map[int]bool {
+	out := map[int]bool{}
+	lits := 0
+	var stack []ast.Node
+	ast.Inspect(decl.Body, func(n ast.Node) bool {
+		if n == nil { // post-order: leave the node pushed last
+			if _, wasLit := stack[len(stack)-1].(*ast.FuncLit); wasLit {
+				lits--
+			}
+			stack = stack[:len(stack)-1]
+			return true
+		}
+		stack = append(stack, n)
+		switch x := n.(type) {
+		case *ast.FuncLit:
+			lits++
+		case *ast.CallExpr:
+			if lits == 0 {
+				out[sf.offset(x.Pos())] = true
+			}
+		}
+		return true
+	})
+	return out
+}
+
 // checkMintCall requires the issued_credential anchor's mint call to exist
-// exactly once inside the body of the function its first marker anchored.
+// exactly once in the body of the function its first marker anchored, called by
+// that function itself (see directCallOffsets).
 func checkMintCall(rowID, path, fnMarker, mint string, sf *sourceFile, fn codeSite, errs *[]string) {
 	decl, ok := fn.node.(*ast.FuncDecl)
 	if !ok || decl.Body == nil {
@@ -1099,19 +1134,34 @@ func checkMintCall(rowID, path, fnMarker, mint string, sf *sourceFile, fn codeSi
 		*errs = append(*errs, fmt.Sprintf("ANCHOR CONTENT UNVERIFIED: row %q issued_credential mint marker %q must be a call, not a declaration", rowID, mint))
 		return
 	}
-	lo, hi := sf.offset(decl.Body.Lbrace), sf.offset(decl.Body.Rbrace)
+	// A mint site counts only when the anchored function ITSELF makes the call:
+	// its innermost enclosing function node is decl. A call in a func literal
+	// nested in the body is not, however much source it shares with the body: an
+	// uncalled literal (`_ = func() { s.store.Create(...) }`) compiles and leaves
+	// the function no longer minting (CHAOS-7245 r2). Reachability of the
+	// literal is not judged (CHAOS-4780); a call in a literal is simply not the
+	// function's own.
+	direct := directCallOffsets(sf, decl)
 	var inside []codeSite
+	nested := 0
+	lo, hi := sf.offset(decl.Body.Lbrace), sf.offset(decl.Body.Rbrace)
 	for _, s := range sf.sites(mint) {
-		if s.off > lo && s.off < hi {
+		switch {
+		case direct[s.off]:
 			inside = append(inside, s)
+		case s.off > lo && s.off < hi:
+			nested++
 		}
 	}
 	switch {
 	case len(inside) == 0:
+		why := "renamed, removed, or moved out of the function the row anchors"
+		if nested > 0 {
+			why = fmt.Sprintf("only made inside a nested func literal (%d call(s)), which is not the function's own call", nested)
+		}
 		*errs = append(*errs, fmt.Sprintf(
-			"ANCHOR CONTENT MISMATCH: row %q issued_credential mint call %q is not called inside %s (%s:%d) -- "+
-				"the credential-minting call was renamed, removed, or moved out of the function the row anchors",
-			rowID, mint, decl.Name.Name, path, fn.line))
+			"ANCHOR CONTENT MISMATCH: row %q issued_credential mint call %q is not called directly in the body of %s (%s:%d) -- the credential-minting call is %s",
+			rowID, mint, decl.Name.Name, path, fn.line, why))
 	case len(inside) > 1:
 		*errs = append(*errs, fmt.Sprintf(
 			"AMBIGUOUS ANCHOR MARKER: row %q issued_credential mint call %q is called %d times inside %s (%s:%d) -- use a longer, more specific mint marker",

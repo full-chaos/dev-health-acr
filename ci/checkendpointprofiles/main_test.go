@@ -2196,3 +2196,93 @@ func TestGateRefusesAnIssuedFunctionWithNoBody(t *testing.T) {
 	writeFile(t, filepath.Join(f.root, fixtureAppFile), string(src)+"\nfunc externalMint()\n")
 	mustContain(t, f.check(t), "ANCHOR CONTENT UNVERIFIED", "with a body")
 }
+
+// CHAOS-7245 r2 P1: a mint call must be the anchored function's OWN call. The
+// reviewer moved `s.store.Create(...)` in DeviceFlowService.Start into an
+// uncalled func literal; it compiles, the function no longer stores the record,
+// and a source-offset-in-body check still saw the call "inside".
+func TestGateRejectsAMintCallMovedIntoAFuncLiteralTheFunctionNeverCalls(t *testing.T) {
+	src := func(body string) string {
+		return "package api\n\nimport \"net/http\"\n\n" +
+			"func Handler() http.Handler {\n" +
+			"	mux := http.NewServeMux()\n" +
+			"	mux.HandleFunc(\"GET /healthz\", healthzHandler)\n" +
+			"	return mux\n" +
+			"}\n\n" +
+			"func healthzHandler(w http.ResponseWriter, r *http.Request) {}\n\n" +
+			"func mintFn() {\n" + body + "}\n"
+	}
+	build := func(source string) fixture {
+		row := minimalValidRow(map[string]any{
+			"classification":              "protected",
+			"public_rationale":            nil,
+			"accepted_credential_classes": []any{"acr_client_credential"},
+			"issued_credential": []any{map[string]any{
+				"class_id": "acr_client_credential", "direction": "returned_to_caller",
+				"anchor": map[string]any{"path": fixtureAppFile, "line": float64(13), "note": "`func mintFn(` `sign(` -- mints"},
+			}},
+			"gaps": []any{},
+		})
+		f := minimalValidFixture(t, []map[string]any{row})
+		writeFile(t, filepath.Join(f.root, fixtureAppFile), source)
+		return f
+	}
+	anchorErrs := func(f fixture) []string {
+		var out []string
+		for _, e := range f.check(t) {
+			if strings.Contains(e, "ANCHOR") {
+				out = append(out, e)
+			}
+		}
+		return out
+	}
+	// Control: the function calls the mint itself.
+	if errs := anchorErrs(build(src("\tsign()\n"))); len(errs) != 0 {
+		t.Fatalf("control: a direct mint call must pass, got:\n%s", strings.Join(errs, "\n"))
+	}
+	// The same call inside a func literal the function never invokes, and inside
+	// a literal nested two deep.
+	for name, body := range map[string]string{
+		"uncalled literal": "\t_ = func() {\n\t\tsign()\n\t}\n",
+		"nested literals":  "\t_ = func() {\n\t\t_ = func() {\n\t\t\tsign()\n\t\t}\n\t}\n",
+		"deferred literal": "\tdefer func() { sign() }()\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			mustContain(t, build(src(body)).check(t), "ANCHOR CONTENT MISMATCH", "nested func literal", "mintFn")
+		})
+	}
+	// A literal that comes BEFORE the function's own call must not leave the
+	// walk thinking it is still inside the literal.
+	if errs := anchorErrs(build(src("\t_ = func() {}\n\tsign()\n"))); len(errs) != 0 {
+		t.Fatalf("a direct call after an (empty) literal must pass, got:\n%s", strings.Join(errs, "\n"))
+	}
+	// A literal's call beside the function's own call is not a second mint
+	// site: the function's own call is the one exact site.
+	if errs := anchorErrs(build(src("\tsign()\n\t_ = func() {\n\t\tsign()\n\t}\n"))); len(errs) != 0 {
+		t.Fatalf("a direct call plus a literal's call must pass (one own call), got:\n%s", strings.Join(errs, "\n"))
+	}
+}
+
+func TestRealTreeRejectsAMintCallMovedIntoAnUncalledFuncLiteral(t *testing.T) {
+	// The reviewer's mutation shape on the real tree: the redeem call that
+	// DeviceFlowService.Poll mints through moves into a literal it never calls.
+	schemaPath, ccPath, ccSchemaPath := realTreeOpsInputs(t)
+	root := copyRealSourceTree(t)
+	p := filepath.Join(root, "internal", "auth", "device_poll.go")
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := "return s.redeem(ctx, record, \"\", nil)"
+	mutated := strings.Replace(string(raw), call, "_ = func() (IssuedCredential, error) { "+call+" }\n\t\treturn IssuedCredential{}, nil", 1)
+	if mutated == string(raw) {
+		t.Fatal("the mint call was not found in the real device_poll.go; the fixture for this proof is stale")
+	}
+	writeFile(t, p, mutated)
+	inventoryPath := filepath.Join(root, "contracts", "auth", "v1", "endpoint-profiles.acr.json")
+	errs, err := check(root, inventoryPath, schemaPath, ccPath, ccSchemaPath, realDiscovererPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, errs, "ANCHOR CONTENT MISMATCH", "nested func literal", "Poll")
+}
