@@ -103,7 +103,7 @@
     },
     "anchor": {
       "type": "object",
-      "description": "handle mode only: a repository or project that narrows a pull request number or CI run id to one subject (a work item key: project only). kind and id come together. The anchor is checked for your credential like any subject; one you may not read, or that does not exist, gives the same empty answer as an anchor with no match.",
+      "description": "handle mode only: a repository (for a pull request number or CI run id) or a project (for a work item key) that narrows the handle to one subject. Any other pairing is refused. kind and id come together. The anchor is checked for your credential like any subject; one you may not read, or that does not exist, gives the same empty answer as an anchor with no match.",
       "additionalProperties": false,
       "required": ["kind", "id"],
       "properties": {

@@ -219,21 +219,22 @@ func (l *SubjectLookup) scanHandle(ctx context.Context, principal storage.Princi
 	// census counts is in the caller's own grant. Unrestricted and universal
 	// callers keep the one organization-wide census.
 	anchors := []contextfabric.SubjectRef{{}}
+	anchorRefused := false
 	if plan.anchor != nil {
 		// CHAOS-7158: one census, bound to the anchor. The anchor takes a
 		// subject-gate decision like any candidate; a refused, unreadable or
 		// missing anchor answers exactly like an anchor with no match (empty,
-		// no count, no reason). A restricted caller needs one census, not one
+		// no count, no reason) and runs the same census. A restricted caller needs one census, not one
 		// per granted repository; its candidates are still gated below.
 		proof, decision := l.gate.Authorize(ctx, principal, []contextfabric.SubjectRef{*plan.anchor})
 		if decision.Decision == DecisionUnavailable {
 			return nil, false, fmt.Errorf("subject gate unavailable: %w", gateError(decision))
 		}
-		if proof.Len() == 0 {
-			return nil, false, nil
-		}
-		if err := proof.consume(ctx, principal, l.clock()); err != nil {
-			return nil, false, fmt.Errorf("%w: %w", ErrUngatedRead, err)
+		anchorRefused = proof.Len() == 0
+		if !anchorRefused {
+			if err := proof.consume(ctx, principal, l.clock()); err != nil {
+				return nil, false, fmt.Errorf("%w: %w", ErrUngatedRead, err)
+			}
 		}
 		anchors = []contextfabric.SubjectRef{*plan.anchor}
 	} else if ClassifyPrincipal(principal) == ClassRestricted {
@@ -260,6 +261,12 @@ func (l *SubjectLookup) scanHandle(ctx context.Context, principal storage.Princi
 	truncated := false
 	for _, anchor := range anchors {
 		outcome, err := l.census(ctx, principal.OrgID, plan.handle.Kind, plan.handle.Value, true, anchor.Kind, anchor.CanonicalID, anchor.CanonicalID != "")
+		if anchorRefused {
+			// A refused or missing anchor runs the same census as a readable
+			// one and discards the outcome, error included: no response,
+			// status or timing seam tells the two apart (codex r1 P1).
+			return nil, false, nil
+		}
 		if plan.anchor != nil && errors.Is(err, graphrank.ErrCensusAnchorUnsupported) {
 			return nil, false, fmt.Errorf("%w: a %s handle cannot be anchored on a %s", ErrFindInvalidRequest, plan.handle.Kind, plan.anchor.Kind)
 		}

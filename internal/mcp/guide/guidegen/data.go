@@ -160,7 +160,7 @@ func buildData(in Inputs) (string, error) {
 
 	b.WriteString("## The flow\n\n")
 	b.WriteString("1. `data_catalog`: what you may ask, for your credential (operations, variables, limits, refused shapes).\n")
-	b.WriteString("2. `find_subjects`: names to ids, a list of one kind, the repositories and projects a team owns (`owned_by`), or a PR number, work item key or CI run id to its id (`handle`; an optional `anchor` {kind: repository or project, id} narrows an ambiguous PR number to one repository or project; an anchor you may not read gives the same empty answer as one with no match). Ids come from here or from a response. Never build one.\n")
+	b.WriteString("2. `find_subjects`: names to ids, a list of one kind, the repositories and projects a team owns (`owned_by`), or a PR number, work item key or CI run id to its id (`handle`; an optional `anchor` {kind, id} narrows the handle: a repository for a PR number or CI run id, a project for a work item key; an anchor you may not read gives the same empty answer as one with no match). Ids come from here or from a response. Never build one.\n")
 	b.WriteString("3. `run_operation`: one allowlisted operation with its variables. You send no query text.\n")
 	b.WriteString("4. You join the answers, compare, rank and explain.\n\n")
 	b.WriteString("Read each answer in this order: `call` (served, refused, operation_unavailable, upstream_error, upstream_timeout), `completeness`, `result`, then `data`. A refusal is a typed answer, not a failure: read `refusal.code`, change the request, and do not retry it unchanged. `response_budget` means the data was over `max_bytes` and was not cut: ask for less.\n\n")

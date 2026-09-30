@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: a88341edb574fec1f321a94a7b654564920c53fff4a3fcceee29d6dc5f4e01a5
+# canonical-content-sha256: 6e3e244d22612d4eae8157d0bbb6a2134f086c0649be1b1e9c0f8ef3a3b8772b
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -1432,10 +1432,10 @@ components:
       properties:
         anchor:
           additionalProperties: false
-          description: "handle mode only: a repository or project that narrows a pull request number or CI run id to one subject (a work item key: project only). kind and id come together. The anchor is checked for your credential like any subject; one you may not read, or that does not exist, gives the same empty answer as an anchor with no match."
+          description: "handle mode only: a repository (for a pull request number or CI run id) or a project (for a work item key) that narrows the handle to one subject. Any other pairing is refused. kind and id come together. The anchor is checked for your credential like any subject; one you may not read, or that does not exist, gives the same empty answer as an anchor with no match."
           properties:
             id:
-              maxLength: 1024
+              maxLength: 256
               minLength: 1
               type: "string"
             kind:

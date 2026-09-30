@@ -15,13 +15,14 @@ func anchorOf(kind contractsv1.ContextFabricSubjectKind, id string) *contractsv1
 	return &contractsv1.MCPFindSubjectsAnchor{Kind: string(kind), ID: id}
 }
 
-// anchorSupportFixture mirrors the production census scope: PR and CI-run
-// handles anchor on a repository or a project; a work item on a project only.
+// anchorSupportFixture mirrors the production census registry
+// (devhealthsource chaos3899_census_registry.go anchorColumns): PR and CI-run
+// handles anchor on a repository only; a work item on a project only.
 func anchorSupportFixture(kind graphrank.CensusKind, anchorKind contextfabric.SubjectKind) bool {
 	if kind == contractsv1.ContextFabricSubjectWorkItem {
 		return anchorKind == contractsv1.ContextFabricSubjectProject
 	}
-	return anchorKind == contractsv1.ContextFabricSubjectRepository || anchorKind == contractsv1.ContextFabricSubjectProject
+	return anchorKind == contractsv1.ContextFabricSubjectRepository
 }
 
 // CHAOS-7158: an optional repository or project anchor narrows a handle to
@@ -78,8 +79,8 @@ func TestChaos7158_HandleAnchor(t *testing.T) {
 		if refused != missing || refused != matchless {
 			t.Fatalf("anchor states are distinguishable:\nrefused   %s\nmissing   %s\nmatchless %s", refused, missing, matchless)
 		}
-		if len(refusedCalls) != 0 || len(missingCalls) != 0 || len(matchlessCalls) != 1 {
-			t.Fatalf("census calls refused=%d missing=%d matchless=%d, want 0 0 1", len(refusedCalls), len(missingCalls), len(matchlessCalls))
+		if len(refusedCalls) != 1 || len(missingCalls) != 1 || len(matchlessCalls) != 1 {
+			t.Fatalf("census calls refused=%d missing=%d matchless=%d, want 1 1 1 (same execution, codex r1 P1)", len(refusedCalls), len(missingCalls), len(matchlessCalls))
 		}
 	})
 
@@ -90,6 +91,7 @@ func TestChaos7158_HandleAnchor(t *testing.T) {
 			req  FindRequest
 		}{
 			{"work item on a repository", FindRequest{Handle: "CHAOS-42", Anchor: repo}},
+			{"PR on a project", FindRequest{Handle: "PR 532", Anchor: anchorOf(contractsv1.ContextFabricSubjectProject, projectQ.CanonicalID)}},
 			{"team anchor", FindRequest{Handle: "PR 532", Anchor: anchorOf(contractsv1.ContextFabricSubjectTeam, "team:t")}},
 			{"empty id", FindRequest{Handle: "PR 532", Anchor: anchorOf(contractsv1.ContextFabricSubjectRepository, " ")}},
 			{"no handle", FindRequest{Query: "x", Anchor: repo}},
