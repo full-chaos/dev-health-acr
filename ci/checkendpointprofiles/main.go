@@ -59,7 +59,7 @@
 //     authenticateWebAssertion's) shows the definition exists, not that a
 //     given route uses it; and a route's OWN-call marker is located in the
 //     file, not bound to the route's handler builder, so moving that call to
-//     another function in the same file is not caught (follow-up ticket).
+//     another function in the same file is not caught (CHAOS-7280).
 //   - Two rows whose primary_validator anchors point at the SAME source line
 //     (the model-config PUT/DELETE rows share one dispatch line) necessarily
 //     share one marker too. If both anchors drift onto the same wrong line at

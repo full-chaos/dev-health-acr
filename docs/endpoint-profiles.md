@@ -288,6 +288,6 @@ gate):
   route fails if that call is removed or renamed, but moving the call to another
   function in the same file, one the route no longer uses, is not caught. Binding
   a marker to the handler builder needs a new row field, which is a schema and
-  scope change; it is tracked as a follow-up (CHAOS-4780 class), not done here.
+  scope change; it is tracked as CHAOS-7280 (CHAOS-4780 class), not done here.
 - A mint call in an `issued_credential` anchor is bound to its function, but
   whether that function is reached is not judged either.
