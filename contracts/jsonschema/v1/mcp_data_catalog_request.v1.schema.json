@@ -16,7 +16,7 @@
   "properties": {
     "sections": {
       "type": "array",
-      "description": "Which catalogue sections to return. Omit it for all of them: operations (the allowlisted run_operation operations for your credential, with variables, scope rules and limits), facts (the fact kinds read_facts serves), subjects (subject kinds), relationships (relationship types and their end kinds) and limits (size and page bounds).",
+      "description": "Which catalogue sections to return. Omit it for all of them: operations (the allowlisted run_operation operations for your credential, with variables, scope rules and limits), facts (the fact kinds read_facts serves), subjects (subject kinds), relationships (relationship types and their end kinds) limits (size and page bounds) and schema (the allowed part of the ops GraphQL schema that graphql_query accepts for your credential).",
       "items": {
         "type": "string",
         "enum": [
@@ -24,11 +24,12 @@
           "facts",
           "subjects",
           "relationships",
-          "limits"
+          "limits",
+          "schema"
         ]
       },
       "minItems": 1,
-      "maxItems": 5,
+      "maxItems": 6,
       "uniqueItems": true
     }
   }

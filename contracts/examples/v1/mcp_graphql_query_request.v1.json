@@ -1,0 +1,9 @@
+{
+ "query": "query($ids: [String!]) { hotspots(input: {sinceUtc: \"2026-09-01T00:00:00Z\", untilUtc: \"2026-09-28T00:00:00Z\", repoIds: $ids, limit: 20}) { rows { repoId filePath riskScore } } }",
+ "variables": {
+  "ids": [
+   "repository:7b9583ee-1111-4222-8333-444455556666"
+  ]
+ },
+ "max_bytes": 32768
+}

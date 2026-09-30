@@ -25,6 +25,7 @@ const (
 	dataCatalogPath    = "/api/v1/context-fabric/data/catalog"
 	dataSubjectsPath   = "/api/v1/context-fabric/data/subjects"
 	dataOperationsPath = "/api/v1/context-fabric/data/operations"
+	dataGraphQLPath    = "/api/v1/context-fabric/data/graphql"
 
 	// dataContractVersion is the contract family a data catalogue answer
 	// must name.
@@ -95,6 +96,27 @@ func (c *Client) RunOperation(ctx context.Context, request contractsv1.MCPRunOpe
 	}
 	if err := requireDataObject(body, "call", "completeness", "operation", "source", "errors", "page", "consistency", "untrusted_content", "request"); err != nil {
 		return nil, fmt.Errorf("%w: run operation: %w", ErrInvalidResponse, err)
+	}
+	return body, nil
+}
+
+// GraphQLQuery runs one validated free-form query through the hosted data
+// route (CHAOS-7075). Same rules as RunOperation: data:read, and every
+// typed result (refused, upstream_*) is a 200 answer returned as is.
+func (c *Client) GraphQLQuery(ctx context.Context, request contractsv1.MCPGraphQLQueryRequest) (json.RawMessage, error) {
+	if err := request.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid graphql_query request: %w", err)
+	}
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		return nil, fmt.Errorf("encode graphql_query request: %w", err)
+	}
+	var body json.RawMessage
+	if err := c.call(ctx, http.MethodPost, dataGraphQLPath, encoded, &body); err != nil {
+		return nil, err
+	}
+	if err := requireDataObject(body, "call", "completeness", "source", "root_fields", "errors", "page", "consistency", "untrusted_content", "request"); err != nil {
+		return nil, fmt.Errorf("%w: graphql query: %w", ErrInvalidResponse, err)
 	}
 	return body, nil
 }

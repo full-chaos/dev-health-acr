@@ -19,6 +19,9 @@ type dataReads struct {
 	catalogue  *directread.Catalogue
 	operations api.DataOperationRunner
 	subjects   api.DataSubjectFinder
+	// graphql is the graphql_query runner (CHAOS-7075); nil unless the MCP
+	// listener URL is configured and the catalogue and root policy loaded.
+	graphql api.DataGraphQLRunner
 }
 
 // dataReadsCatalogue is the policy loader; a variable so a test can plant a
@@ -44,7 +47,14 @@ var dataReadsCatalogue = directread.DefaultCatalogue
 //     (GrantedRepositories) when the graph exists.
 //
 // No partial composition is silent: every absent part is logged once.
-func buildDataReads(queryURL string, queryTimeout time.Duration, investigator contextfabric.Investigator, gate *directread.SubjectGate, logger *slog.Logger) (dataReads, error) {
+//
+// graphql_query (CHAOS-7075) needs graphqlURL (GWC's MCP listener) AND the
+// loaded catalogue AND the root policy derived from it; a URL with a policy
+// that does not derive FAILS STARTUP, like the operations URL. It shares
+// the query timeout and, when composed, the grant listing.
+var dataReadsGraphQLPolicy = directread.DefaultGraphQLPolicy
+
+func buildDataReads(queryURL, graphqlURL string, queryTimeout time.Duration, investigator contextfabric.Investigator, gate *directread.SubjectGate, logger *slog.Logger) (dataReads, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -79,6 +89,9 @@ func buildDataReads(queryURL string, queryTimeout time.Duration, investigator co
 		logger.Warn("context fabric direct data subjects not composed", "reason", "graph_or_gate_absent")
 	}
 
+	if err := out.composeGraphQL(graphqlURL, queryTimeout, gate, grants, logger); err != nil {
+		return dataReads{}, err
+	}
 	if !configured || out.catalogue == nil {
 		logger.Info("context fabric direct data composition", "decision", "operations_off", "reason", "data_query_not_configured")
 		return out, nil
@@ -107,4 +120,36 @@ func buildDataReads(queryURL string, queryTimeout time.Duration, investigator co
 	out.operations = runner
 	logger.Info("context fabric direct data composition", "decision", "loaded", "schema_digest", out.catalogue.SchemaDigest())
 	return out, nil
+}
+
+// composeGraphQL builds the graphql_query runner when its URL is set.
+func (out *dataReads) composeGraphQL(graphqlURL string, queryTimeout time.Duration, gate *directread.SubjectGate, grants directread.GrantedRepositories, logger *slog.Logger) error {
+	if strings.TrimSpace(graphqlURL) == "" {
+		logger.Info("context fabric direct data composition", "decision", "graphql_off", "reason", "data_graphql_not_configured")
+		return nil
+	}
+	if out.catalogue == nil {
+		return fmt.Errorf("initialize graphql_query: the operation catalogue did not load")
+	}
+	policy, err := dataReadsGraphQLPolicy()
+	if err != nil {
+		return fmt.Errorf("initialize graphql_query root policy: %w", err)
+	}
+	client, err := directread.NewHTTPGraphQLClient(graphqlURL, queryTimeout)
+	if err != nil {
+		return fmt.Errorf("initialize graphql_query client: %w", err)
+	}
+	runnerGate := gate
+	if runnerGate == nil {
+		runnerGate = directread.NewSubjectGate(nil, directread.NewSlogRecorder(logger))
+	}
+	runner, err := directread.NewGraphQLRunner(directread.GraphQLRunnerConfig{
+		Policy: policy, Gate: runnerGate, Client: client, Grants: grants, Logger: logger,
+	})
+	if err != nil {
+		return fmt.Errorf("initialize graphql_query runner: %w", err)
+	}
+	out.graphql = runner
+	logger.Info("context fabric direct data composition", "decision", "graphql_loaded", "schema_digest", policy.Catalogue().SchemaDigest())
+	return nil
 }

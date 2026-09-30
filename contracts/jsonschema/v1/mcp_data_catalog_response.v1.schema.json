@@ -27,7 +27,8 @@
           "facts",
           "subjects",
           "relationships",
-          "limits"
+          "limits",
+          "schema"
         ]
       }
     },
@@ -295,11 +296,27 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["kind", "subject_kinds", "fields"],
+            "required": [
+              "kind",
+              "subject_kinds",
+              "fields"
+            ],
             "properties": {
-              "kind": {"type": "string"},
-              "subject_kinds": {"type": "array", "items": {"type": "string"}},
-              "fields": {"type": "array", "items": {"type": "string"}}
+              "kind": {
+                "type": "string"
+              },
+              "subject_kinds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
             }
           }
         }
@@ -451,6 +468,209 @@
         "granted_repositories_max": {
           "type": "integer",
           "description": "Most granted repositories a restricted credential can carry."
+        }
+      }
+    },
+    "schema": {
+      "type": "object",
+      "description": "The allowed part of the ops GraphQL schema for your credential: the root fields graphql_query accepts, each argument's allowed input paths, the fixed arguments, the allowed output paths, and an SDL text of only those. Anything not listed is refused.",
+      "additionalProperties": false,
+      "required": [
+        "caller_class",
+        "available",
+        "schema_digest",
+        "limits",
+        "roots",
+        "refused_root_fields",
+        "sdl"
+      ],
+      "properties": {
+        "caller_class": {
+          "type": "string",
+          "enum": [
+            "unrestricted",
+            "restricted"
+          ],
+          "description": "Your grant class."
+        },
+        "available": {
+          "type": "boolean",
+          "description": "False when graphql_query cannot serve you; see reason."
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "scope_missing_data_read",
+            "data_graphql_not_configured"
+          ],
+          "description": "Why graphql_query is not available."
+        },
+        "schema_digest": {
+          "type": "string",
+          "description": "Digest of the ops schema this view was derived from."
+        },
+        "limits": {
+          "type": "object",
+          "description": "Query caps acr applies before sending.",
+          "additionalProperties": {
+            "type": "integer"
+          }
+        },
+        "roots": {
+          "type": "array",
+          "description": "Root fields served to your grant class.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "field",
+              "operations",
+              "cost_class",
+              "scope_class",
+              "row_id_paths",
+              "arguments",
+              "output_paths"
+            ],
+            "properties": {
+              "field": {
+                "type": "string",
+                "description": "The root field."
+              },
+              "operations": {
+                "type": "array",
+                "description": "The operation policies this root runs under.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "cost_class": {
+                "type": "string",
+                "enum": [
+                  "compute",
+                  "analytics_batch",
+                  "list",
+                  "series",
+                  "catalog"
+                ],
+                "description": "Cost class."
+              },
+              "scope_class": {
+                "type": "string",
+                "enum": [
+                  "org_wide",
+                  "client_scope",
+                  "forced_grant",
+                  "not_reached"
+                ],
+                "description": "forced_grant: acr limits the root to your granted repositories."
+              },
+              "forced_argument": {
+                "type": "string",
+                "description": "The argument path acr sets to your grant."
+              },
+              "row_id_paths": {
+                "type": "array",
+                "description": "Row id paths acr checks against your grant (added to your selection when missing).",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "arguments": {
+                "type": "array",
+                "description": "Arguments. orgId is set by acr and has no paths.",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "name",
+                    "type",
+                    "paths"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "description": "Argument name."
+                    },
+                    "type": {
+                      "type": "string",
+                      "description": "GraphQL type."
+                    },
+                    "fixed": {
+                      "type": "string",
+                      "description": "The only value this argument may take."
+                    },
+                    "paths": {
+                      "type": "array",
+                      "description": "Allowed input paths under the argument.",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "path",
+                          "type"
+                        ],
+                        "properties": {
+                          "path": {
+                            "type": "string",
+                            "description": "The input path under the argument, for example input.repoIds."
+                          },
+                          "type": {
+                            "type": "string",
+                            "description": "GraphQL type of the path."
+                          },
+                          "enum_values": {
+                            "type": "array",
+                            "description": "The allowed enum values.",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "default": {
+                            "type": "string",
+                            "description": "The SDL default."
+                          },
+                          "min": {
+                            "type": "integer"
+                          },
+                          "max": {
+                            "type": "integer"
+                          },
+                          "max_items": {
+                            "type": "integer"
+                          },
+                          "max_length": {
+                            "type": "integer"
+                          },
+                          "subject_kind": {
+                            "type": "string",
+                            "description": "The canonical subject kind of an id path; take ids from find_subjects."
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "output_paths": {
+                "type": "array",
+                "description": "Allowed selection paths; [*] marks a list.",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "refused_root_fields": {
+          "type": "array",
+          "description": "Root fields of the ops schema that are refused for your grant class.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sdl": {
+          "type": "string",
+          "description": "The allowed schema as GraphQL SDL text."
         }
       }
     },

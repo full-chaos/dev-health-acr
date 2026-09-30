@@ -20,6 +20,7 @@ const (
 	toolDataCatalog  = "data_catalog"
 	toolFindSubjects = "find_subjects"
 	toolRunOperation = "run_operation"
+	toolGraphQLQuery = "graphql_query"
 )
 
 // registerDataTools adds the direct data tools this caller was granted.
@@ -48,6 +49,14 @@ func registerDataTools(server *mcpsdk.Server, cfg *ProcessConfig, caller *Caller
 			},
 		)
 	}
+	if hostedToolEnabled(caller, toolGraphQLQuery) {
+		server.AddTool(
+			buildTool(toolGraphQLQuery, "GraphQL query", graphqlQueryRequestSchemaFile, graphqlQueryResponseSchemaFile),
+			func(ctx context.Context, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+				return handleGraphQLQuery(ctx, cfg, req)
+			},
+		)
+	}
 }
 
 // rawToolResult returns the hosted API JSON as structured content, byte for
@@ -68,7 +77,8 @@ func dataToolsInstructions(caller *CallerContext) string {
 	catalog := hostedToolEnabled(caller, toolDataCatalog)
 	find := hostedToolEnabled(caller, toolFindSubjects)
 	run := hostedToolEnabled(caller, toolRunOperation)
-	if !catalog && !find && !run {
+	gql := hostedToolEnabled(caller, toolGraphQLQuery)
+	if !catalog && !find && !run && !gql {
 		return ""
 	}
 	var b strings.Builder
@@ -82,6 +92,9 @@ func dataToolsInstructions(caller *CallerContext) string {
 	}
 	if run {
 		b.WriteString("- run_operation: product analytics and lists, by allowlisted operation name.\n")
+	}
+	if gql {
+		b.WriteString("- graphql_query: one GraphQL query over the allowed schema (data_catalog section schema), selecting exactly the fields you need. Queries only; never send orgId.\n")
 	}
 	b.WriteString("More data tools are planned.\n")
 	if hostedToolEnabled(caller, toolInvestigateQuestion) {

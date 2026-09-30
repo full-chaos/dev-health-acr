@@ -72,6 +72,14 @@ spec:
         - protocol: TCP
           port: {{ .Values.networkPolicy.egress.queryInternalPort }}
     {{- end }}
+    {{- /* CHAOS-7075: acr-api calls GWC's MCP listener for graphql_query
+         (POST <ACR_DATA_GRAPHQL_URL>/query, CHAOS-7085). Port-only; 0/unset
+         renders no rule. */}}
+    {{- if .Values.networkPolicy.egress.queryMcpPort }}
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.egress.queryMcpPort }}
+    {{- end }}
     {{- /* CHAOS-4055: acr-api's optional Investigator dials FalkorDB on the
          same endpoint contract as acr-projector; without this rule a
          configured contextFabric.falkor.addr was unreachable from the API

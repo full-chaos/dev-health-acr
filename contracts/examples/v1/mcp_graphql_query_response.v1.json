@@ -1,0 +1,53 @@
+{
+ "call": "served",
+ "completeness": "unknown",
+ "result": "data",
+ "source": {
+  "path": "graphql",
+  "service": "dho query-api",
+  "listener": "mcp",
+  "schema_digest": "sha256:dd83956f18b52a3acf89e73e1f25b0dcf25df706d90eca49c5b66f8b8994f779",
+  "query_digest": "3f1c0a9d6b2e4f7a8c5d1e0b9a8f7e6d5c4b3a2918f7e6d5c4b3a29180f7e6d5"
+ },
+ "root_fields": [
+  {
+   "key": "hotspots",
+   "field": "hotspots",
+   "operation": "hotspots",
+   "completeness": "unknown",
+   "effective_scope": {
+    "repo_ids": [
+     "repository:7b9583ee-1111-4222-8333-444455556666"
+    ],
+    "forced_by_grant": false
+   },
+   "added_paths": []
+  }
+ ],
+ "data": {
+  "hotspots": {
+   "rows": [
+    {
+     "repoId": "7b9583ee-1111-4222-8333-444455556666",
+     "filePath": "internal/api/app.go",
+     "riskScore": 0.82
+    }
+   ]
+  }
+ },
+ "errors": [],
+ "page": {
+  "returned_bytes": 112,
+  "max_bytes": 32768
+ },
+ "consistency": "best_effort",
+ "untrusted_content": {
+  "untrusted": true,
+  "fields": [
+   "data"
+  ]
+ },
+ "request": {
+  "max_bytes": 32768
+ }
+}

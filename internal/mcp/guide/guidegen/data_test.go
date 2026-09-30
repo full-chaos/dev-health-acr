@@ -35,8 +35,17 @@ func TestDataGuideOperationTableIsTheCatalogue(t *testing.T) {
 		t.Fatalf("the catalogue serves %d operations, expected 19", len(served))
 	}
 	text := embeddedFiles(t)[FileData]
+	// The operation table is the "## Operations" section; the graphql_query
+	// root table (CHAOS-7075) has its own section and test.
+	operations := text
+	if i := strings.Index(operations, "\n## Operations\n"); i >= 0 {
+		operations = operations[i+1:]
+		if j := strings.Index(operations[3:], "\n## "); j >= 0 {
+			operations = operations[:j+3]
+		}
+	}
 	rows := 0
-	for _, line := range strings.Split(text, "\n") {
+	for _, line := range strings.Split(operations, "\n") {
 		cells := strings.Split(line, "|")
 		if len(cells) < 6 || !strings.HasPrefix(strings.TrimSpace(cells[1]), "`") {
 			continue
@@ -78,7 +87,7 @@ func TestDataGuideSaysWhichWayAndCarriesTheRules(t *testing.T) {
 	for _, want := range []string{
 		"`investigate_question` is for our own engine's narrative answers",
 		"If you are a model, plan the reads yourself",
-		"`run_operation` needs the `data:read` scope",
+		"`run_operation` and `graphql_query` need the `data:read` scope",
 		"More data tools are planned; none is named here until it ships.",
 		"use `read_facts` if your `tools/list` offers it (the `facts` section of `data_catalog` lists its kinds)",
 	} {
@@ -88,7 +97,8 @@ func TestDataGuideSaysWhichWayAndCarriesTheRules(t *testing.T) {
 	}
 	// Only what exists is a callable: read_facts / read_relationships appear
 	// only in the "if your tools/list offers it" sentence.
-	for _, tool := range []string{"read_relationships", "graphql_query", "read_rows", "plan_investigation"} {
+	// graphql_query ships with CHAOS-7075 and is named.
+	for _, tool := range []string{"read_relationships", "read_rows", "plan_investigation"} {
 		if strings.Contains(text, tool) {
 			t.Errorf("the guide names %s, which does not exist in this release", tool)
 		}

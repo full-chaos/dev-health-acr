@@ -204,6 +204,8 @@ func TestNoPersonDataInAnyDataToolDefinition(t *testing.T) {
 		"FindRequest":       reflect.TypeOf(contractsv1.MCPFindSubjectsRequest{}),
 		"CatalogRequest":    reflect.TypeOf(contractsv1.MCPDataCatalogRequest{}),
 		"OperationRequest":  reflect.TypeOf(contractsv1.MCPRunOperationRequest{}),
+		"GraphQLResponse":   reflect.TypeOf(directread.GraphQLResponse{}),
+		"GraphQLRequest":    reflect.TypeOf(contractsv1.MCPGraphQLQueryRequest{}),
 	} {
 		var inspected int
 		all = append(all, structHits(typ, name, map[reflect.Type]bool{}, &inspected)...)
@@ -214,7 +216,7 @@ func TestNoPersonDataInAnyDataToolDefinition(t *testing.T) {
 	}
 
 	// 3. The six published tool schemas.
-	for _, file := range []string{dataCatalogRequestSchemaFile, dataCatalogResponseSchemaFile, findSubjectsRequestSchemaFile, findSubjectsResponseSchemaFile, runOperationRequestSchemaFile, runOperationResponseSchemaFile} {
+	for _, file := range []string{dataCatalogRequestSchemaFile, dataCatalogResponseSchemaFile, findSubjectsRequestSchemaFile, findSubjectsResponseSchemaFile, runOperationRequestSchemaFile, runOperationResponseSchemaFile, graphqlQueryRequestSchemaFile, graphqlQueryResponseSchemaFile} {
 		var inspected int
 		all = append(all, schemaPropertyHits(readEmbeddedJSON(t, file), file, &inspected)...)
 		if inspected < 1 {
@@ -388,7 +390,7 @@ func modelSeams(t *testing.T, path string, rootAllowed bool) []string {
 func TestDataToolFilesReferenceNoModelSeam(t *testing.T) {
 	root := findRepoRoot(t)
 	files := []string{
-		"internal/mcp/data_catalog.go", "internal/mcp/find_subjects.go", "internal/mcp/run_operation.go", "internal/mcp/data_tools.go",
+		"internal/mcp/data_catalog.go", "internal/mcp/find_subjects.go", "internal/mcp/run_operation.go", "internal/mcp/graphql_query.go", "internal/mcp/data_tools.go",
 		"internal/sidecar/api_client_data.go", "internal/sidecar/render_data.go",
 	}
 	for _, rel := range files {

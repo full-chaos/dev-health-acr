@@ -33,6 +33,10 @@ const ContextFabricDataFactsPath = "/api/v1/context-fabric/data/facts"
 
 const ContextFabricDataOperationsPath = "/api/v1/context-fabric/data/operations"
 
+// ContextFabricDataGraphQLPath serves graphql_query (CHAOS-7075): data:read,
+// Data class, like run_operation.
+const ContextFabricDataGraphQLPath = "/api/v1/context-fabric/data/graphql"
+
 // ContextFabricDataRelationshipsPath serves read_relationships (CHAOS-7074):
 // context:read, Context class.
 const ContextFabricDataRelationshipsPath = "/api/v1/context-fabric/data/relationships"
@@ -70,6 +74,12 @@ type DataOperationRunner interface {
 	Run(ctx context.Context, principal storage.Principal, request directread.OperationRequest) (directread.OperationResponse, error)
 }
 
+// DataGraphQLRunner is graphql_query's pipeline (*directread.GraphQLRunner
+// implements it).
+type DataGraphQLRunner interface {
+	Run(ctx context.Context, principal storage.Principal, request directread.GraphQLRequest) (directread.GraphQLResponse, error)
+}
+
 // DataSubjectFinder is find_subjects' read (*directread.SubjectLookup
 // implements it).
 type DataSubjectFinder interface {
@@ -97,6 +107,24 @@ func (a *App) dataOperations() DataOperationRunner {
 // answers 503 and run_operation is not advertised.
 func (a *App) dataGateComposed() bool {
 	return a.runtime != nil && a.runtime.DirectReadGate != nil
+}
+
+// dataGraphQL returns the graphql_query runner only when it can serve: a
+// runner AND the loaded catalogue. Never a typed nil.
+func (a *App) dataGraphQL() DataGraphQLRunner {
+	if a.runtime == nil || a.runtime.DataCatalogue == nil || storage.IsNil(a.runtime.DataGraphQL) {
+		return nil
+	}
+	return a.runtime.DataGraphQL
+}
+
+// contextFabricDataGraphQLNotConfiguredReason is the details.reason of the
+// graphql route when graphql_query cannot serve: ACR_DATA_GRAPHQL_URL is
+// unset or the root policy did not derive.
+const contextFabricDataGraphQLNotConfiguredReason = "data_graphql_not_configured"
+
+func writeContextFabricDataGraphQLNotConfigured(w http.ResponseWriter, r *http.Request) {
+	writeError(w, r, http.StatusNotImplemented, "feature_not_enabled", "Direct GraphQL queries are not configured in this deployment", false, map[string]any{"reason": contextFabricDataGraphQLNotConfiguredReason})
 }
 
 func (a *App) dataSubjects() DataSubjectFinder {

@@ -55,8 +55,8 @@ const (
 )
 
 // CatalogSectionVocabulary is the closed set of catalog sections.
-func CatalogSectionVocabulary() [5]string {
-	return [5]string{CatalogSectionOperations, CatalogSectionFacts, CatalogSectionSubjects, CatalogSectionRelationships, CatalogSectionLimits}
+func CatalogSectionVocabulary() [6]string {
+	return [6]string{CatalogSectionOperations, CatalogSectionFacts, CatalogSectionSubjects, CatalogSectionRelationships, CatalogSectionLimits, CatalogSectionSchema}
 }
 
 // CatalogFactsNote is the fixed note of the facts section when read_facts is
@@ -121,6 +121,10 @@ type CatalogCaller struct {
 	// FactCapabilities is the registry read_facts serves, or nil when
 	// read_facts is not wired. Only DirectServable kinds are listed.
 	FactCapabilities []contextfabric.FactCapability
+	// GraphQL is the graphql_query root policy (nil when it did not derive)
+	// and GraphQLServable reports its runner is composed (CHAOS-7075).
+	GraphQL         *GraphQLPolicy
+	GraphQLServable bool
 	// FactsServable is true when a read_facts reader object is composed. The
 	// section still says "not available" unless the registry it reads lists
 	// at least one direct-servable kind.
@@ -141,6 +145,7 @@ type DataCatalog struct {
 	Subjects         *CatalogSubjects      `json:"subjects,omitempty"`
 	Relationships    *CatalogRelationships `json:"relationships,omitempty"`
 	Limits           *CatalogLimits        `json:"limits,omitempty"`
+	Schema           *CatalogSchema        `json:"schema,omitempty"`
 	Versions         CatalogVersions       `json:"versions"`
 	Caller           CatalogCallerView     `json:"caller"`
 	Consistency      string                `json:"consistency"`
@@ -433,6 +438,8 @@ func BuildDataCatalog(catalogue *Catalogue, caller CatalogCaller, sections []str
 			out.Subjects = buildCatalogSubjects()
 		case CatalogSectionRelationships:
 			out.Relationships = buildCatalogRelationships()
+		case CatalogSectionSchema:
+			out.Schema = BuildCatalogSchema(caller.GraphQL, class, caller.GraphQLServable, caller.DataRead)
 		case CatalogSectionLimits:
 			out.Limits = &CatalogLimits{
 				MaxBytesDefault: DefaultOperationMaxBytes, MaxBytesCap: MaxOperationMaxBytes,

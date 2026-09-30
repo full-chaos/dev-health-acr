@@ -63,6 +63,9 @@ func TestForwardedClientIsSentOnEveryClientCall(t *testing.T) {
 		"ReadDirectRelationships": func() { _, _ = client.ReadDirectRelationships(ctx, raw) },
 		"RecordEpisode":           func() { _, _ = client.RecordEpisode(ctx, validAgentEpisodeCreate()) },
 		"RunOperation":            func() { _, _ = client.RunOperation(ctx, contractsv1.MCPRunOperationRequest{Operation: "hotspots"}) },
+		"GraphQLQuery": func() {
+			_, _ = client.GraphQLQuery(ctx, contractsv1.MCPGraphQLQueryRequest{Query: "{ hotspots { rows { filePath } } }"})
+		},
 	}
 	// Not caller-scoped calls: derivation helpers, the unauthenticated
 	// liveness probe, and the credential lifecycle commands (CLI only, never

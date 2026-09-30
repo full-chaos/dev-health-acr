@@ -54,6 +54,44 @@ func dataRegistryRows() ([]DataOperationRow, []DataNotServedRow) {
 	return ops, notServed
 }
 
+// DataGraphQLRootRow is one graphql_query root field, generated from the
+// root policy graphql_query itself derives (directread.DefaultGraphQLPolicy).
+type DataGraphQLRootRow struct {
+	Field      string
+	Operations []string
+	Restricted bool
+}
+
+func dataGraphQLRoots() []DataGraphQLRootRow {
+	policy, err := directread.DefaultGraphQLPolicy()
+	if err != nil {
+		panic(fmt.Sprintf("guidegen: the graphql_query root policy does not derive: %v", err))
+	}
+	var out []DataGraphQLRootRow
+	for _, root := range policy.Roots() {
+		out = append(out, DataGraphQLRootRow{Field: root.Field, Operations: root.Operations(), Restricted: root.RootServedTo(directread.CallerRestricted)})
+	}
+	return out
+}
+
+// GraphQLRules are the graphql_query rules (CHAOS-7075, design D.8).
+var GraphQLRules = []string{
+	"Queries only: no mutation, subscription, fragment, directive or introspection (`__schema`, `__type`). Aliases only on root fields (at most 5), at most 5 root fields, depth 10, 150 fields, 8192 bytes of text.",
+	"Never send `orgId`: acr sets it from your credential, inside input objects too.",
+	"Select only fields the schema section lists. An unlisted field is refused (`field_not_allowed`) before anything is sent; person-named and free-text evidence fields are never listed.",
+	"For a credential restricted to some repositories, acr limits each root to your grant and adds the row id field when you select a row list without it; `root_fields[].added_paths` names it.",
+	"acr rebuilds the query text it sends from your validated query; your text is never forwarded. `source.query_digest` names what was sent.",
+	"`read_budget_exceeded` means the data service stopped the query at its bytes or time ceiling (`refusal.read_budget`): select fewer fields or narrow the window, scope or limit.",
+}
+
+// GraphQLExample is the guide's graphql_query example. A test runs it
+// through the real graphql_query runner and requires it to be served.
+var GraphQLExample = DataExampleCall{
+	Tool:    "graphql_query",
+	Args:    `{"query":"query($ids: [String!]) { hotspots(input: {sinceUtc: \"2026-08-29T00:00:00Z\", untilUtc: \"2026-09-28T00:00:00Z\", repoIds: $ids, limit: 20}) { rows { repoId filePath riskScore } } }","variables":{"ids":["repository:7b9583ee-1111-4222-8333-444455556666"]}}`,
+	Comment: "The riskiest files of one repository in a 30-day window: exactly three fields per row.",
+}
+
 // DataRules are the rules for a client that plans the reads itself (design
 // H, "Rules for A"). The server instructions carry the same rules in fewer
 // words.
@@ -156,12 +194,12 @@ func buildData(in Inputs) (string, error) {
 	b.WriteString("## Which way\n\n")
 	b.WriteString("- If you are a model, plan the reads yourself with `data_catalog`, `find_subjects` and `run_operation`. You choose the reads and you do the comparison, ranking, charting and explanation. These tools call no model on our side.\n")
 	b.WriteString("- `investigate_question` is for our own engine's narrative answers (Ask Dev, and callers with no model of their own). It runs a model on our side. Use it only when you want the engine's answer.\n")
-	b.WriteString("- A tool appears in `tools/list` only when the hosted API enables it for your credential. `run_operation` needs the `data:read` scope. More data tools are planned; none is named here until it ships.\n\n")
+	b.WriteString("- A tool appears in `tools/list` only when the hosted API enables it for your credential. `run_operation` and `graphql_query` need the `data:read` scope. More data tools are planned; none is named here until it ships.\n\n")
 
 	b.WriteString("## The flow\n\n")
 	b.WriteString("1. `data_catalog`: what you may ask, for your credential (operations, variables, limits, refused shapes).\n")
 	b.WriteString("2. `find_subjects`: names to ids, a list of one kind, the repositories and projects a team owns (`owned_by`), or a PR number, work item key or CI run id to its id (`handle`; an optional `anchor` {kind, id} narrows the handle: a repository for a PR number or CI run id, a project for a work item key; an anchor you may not read gives the same empty answer as one with no match). Ids come from here or from a response. Never build one.\n")
-	b.WriteString("3. `run_operation`: one allowlisted operation with its variables. You send no query text.\n")
+	b.WriteString("3. `run_operation`: one allowlisted operation with its variables. You send no query text. Or `graphql_query`: one GraphQL query over the allowed schema (`data_catalog` section `schema`), selecting exactly the fields you need.\n")
 	b.WriteString("4. You join the answers, compare, rank and explain.\n\n")
 	b.WriteString("Read each answer in this order: `call` (served, refused, operation_unavailable, upstream_error, upstream_timeout), `completeness`, `result`, then `data`. A refusal is a typed answer, not a failure: read `refusal.code`, change the request, and do not retry it unchanged. `response_budget` means the data was over `max_bytes` and was not cut: ask for less.\n\n")
 
@@ -184,6 +222,19 @@ func buildData(in Inputs) (string, error) {
 		}
 		b.WriteString(strings.Join(names, ", ") + ".\n")
 	}
+
+	b.WriteString("\n## Free-form queries: graphql_query\n\n")
+	b.WriteString("`graphql_query` runs one GraphQL query you write over the allowed part of the product analytics schema. The same rules as `run_operation` apply to every argument; the difference is that you choose the fields. Read `data_catalog` section `schema` first: it lists, for your credential, the root fields, each argument's allowed input paths, the fixed arguments, the allowed output paths, and an SDL text of only those.\n\n")
+	for _, rule := range GraphQLRules {
+		b.WriteString("- " + rule + "\n")
+	}
+	if len(in.GraphQLRoots) > 0 {
+		b.WriteString("\n| Root field | Operation policies | Unrestricted | Repository-restricted |\n|---|---|---|---|\n")
+		for _, root := range in.GraphQLRoots {
+			fmt.Fprintf(&b, "| `%s` | %s | yes | %s |\n", root.Field, "`"+strings.Join(root.Operations, "`, `")+"`", yesNoCell(root.Restricted))
+		}
+	}
+	fmt.Fprintf(&b, "\nExample (a sample id; use the ids `find_subjects` returns):\n\n1. `graphql_query` `%s`\n   - %s\n", GraphQLExample.Args, GraphQLExample.Comment)
 
 	b.WriteString("\n## Worked examples\n\n")
 	b.WriteString("The ids and dates below are samples. Use the ids `find_subjects` returns and dates you compute from today.\n")

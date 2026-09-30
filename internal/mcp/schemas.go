@@ -40,6 +40,8 @@ const (
 	findSubjectsResponseSchemaFile        = "schemas/mcp_find_subjects_response.v1.schema.json"
 	runOperationRequestSchemaFile         = "schemas/mcp_run_operation_request.v1.schema.json"
 	runOperationResponseSchemaFile        = "schemas/mcp_run_operation_response.v1.schema.json"
+	graphqlQueryRequestSchemaFile         = "schemas/mcp_graphql_query_request.v1.schema.json"
+	graphqlQueryResponseSchemaFile        = "schemas/mcp_graphql_query_response.v1.schema.json"
 	toolManifestFile                      = "schemas/tools.v1.json"
 )
 

@@ -699,7 +699,11 @@
               "schema": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["grant_type", "subject_token", "subject_token_type"],
+                "required": [
+                  "grant_type",
+                  "subject_token",
+                  "subject_token_type"
+                ],
                 "properties": {
                   "grant_type": {
                     "const": "urn:ietf:params:oauth:grant-type:token-exchange"
@@ -1429,6 +1433,76 @@
           }
         }
       }
+    },
+    "/api/v1/context-fabric/data/graphql": {
+      "post": {
+        "operationId": "runContextFabricDataGraphQLQuery",
+        "summary": "Validated free-form GraphQL query (graphql_query), CHAOS-7075 S1b. Requires the data:read scope. acr validates the query against the allowed schema (data_catalog section schema) and sends only its own rebuilt text to the MCP listener. A typed result is HTTP 200: call is served, refused (with refusal.code), operation_unavailable, upstream_error or upstream_timeout. 501 feature_not_enabled with details.reason data_graphql_not_configured when the MCP listener is not configured; 503 when the subject gate is unavailable.",
+        "x-required-scope": "data:read",
+        "x-required-entitlement": "agent_context_runtime",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestID"
+          },
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Terminal typed result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataGraphQLResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "426": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "501": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DataGraphQLRequest"
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1525,7 +1599,8 @@
                 "facts",
                 "subjects",
                 "relationships",
-                "limits"
+                "limits",
+                "schema"
               ]
             }
           },
@@ -1755,11 +1830,27 @@
                 "items": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": ["kind", "subject_kinds", "fields"],
+                  "required": [
+                    "kind",
+                    "subject_kinds",
+                    "fields"
+                  ],
                   "properties": {
-                    "kind": {"type": "string"},
-                    "subject_kinds": {"type": "array", "items": {"type": "string"}},
-                    "fields": {"type": "array", "items": {"type": "string"}}
+                    "kind": {
+                      "type": "string"
+                    },
+                    "subject_kinds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "fields": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
                   }
                 }
               }
@@ -1923,6 +2014,60 @@
             "type": "array",
             "items": {
               "type": "string"
+            }
+          },
+          "schema": {
+            "type": "object",
+            "description": "graphql_query: the allowed part of the ops schema for this credential (CHAOS-7075).",
+            "required": [
+              "caller_class",
+              "available",
+              "schema_digest",
+              "limits",
+              "roots",
+              "refused_root_fields",
+              "sdl"
+            ],
+            "properties": {
+              "caller_class": {
+                "enum": [
+                  "unrestricted",
+                  "restricted"
+                ]
+              },
+              "available": {
+                "type": "boolean"
+              },
+              "reason": {
+                "enum": [
+                  "scope_missing_data_read",
+                  "data_graphql_not_configured"
+                ]
+              },
+              "schema_digest": {
+                "type": "string"
+              },
+              "limits": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "integer"
+                }
+              },
+              "roots": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              },
+              "refused_root_fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "sdl": {
+                "type": "string"
+              }
             }
           }
         }
@@ -2373,6 +2518,278 @@
               },
               "variables": {
                 "type": "object"
+              }
+            }
+          }
+        }
+      },
+      "DataGraphQLRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192,
+            "description": "One GraphQL query operation over the allowed schema. No mutation, subscription, fragment, directive or introspection; aliases on root fields only; orgId is never a client argument."
+          },
+          "variables": {
+            "type": "object",
+            "description": "Values for the variables the query declares."
+          },
+          "max_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 262144,
+            "description": "Budget for the serialized data; 0 = 32768, values above 262144 are clamped."
+          }
+        }
+      },
+      "DataGraphQLResponse": {
+        "type": "object",
+        "required": [
+          "call",
+          "completeness",
+          "source",
+          "errors",
+          "page",
+          "consistency",
+          "untrusted_content",
+          "request",
+          "root_fields"
+        ],
+        "properties": {
+          "call": {
+            "enum": [
+              "served",
+              "refused",
+              "operation_unavailable",
+              "upstream_error",
+              "upstream_timeout"
+            ]
+          },
+          "completeness": {
+            "enum": [
+              "declared_complete",
+              "declared_partial",
+              "unknown"
+            ]
+          },
+          "result": {
+            "enum": [
+              "data",
+              "empty_unverified",
+              "empty_declared"
+            ]
+          },
+          "refusal": {
+            "type": "object",
+            "required": [
+              "code",
+              "reason"
+            ],
+            "properties": {
+              "code": {
+                "enum": [
+                  "variable_not_allowed",
+                  "variable_out_of_range",
+                  "person_scope_not_served",
+                  "basis_dependent_shape",
+                  "no_granted_scope",
+                  "operation_not_served_for_caller",
+                  "response_budget",
+                  "invalid_request",
+                  "scope_required",
+                  "row_outside_grant",
+                  "policy_stale",
+                  "denied_or_not_found",
+                  "query_invalid",
+                  "operation_type_not_allowed",
+                  "root_field_not_allowed",
+                  "field_not_allowed",
+                  "fragment_not_allowed",
+                  "directive_not_allowed",
+                  "query_limit_exceeded",
+                  "read_budget_exceeded"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "measured_bytes": {
+                "type": "integer"
+              },
+              "max_bytes": {
+                "type": "integer"
+              },
+              "read_budget": {
+                "enum": [
+                  "bytes_ceiling",
+                  "time_ceiling",
+                  "unknown"
+                ]
+              }
+            }
+          },
+          "source": {
+            "type": "object",
+            "required": [
+              "path",
+              "service",
+              "listener",
+              "schema_digest"
+            ],
+            "properties": {
+              "path": {
+                "const": "graphql"
+              },
+              "service": {
+                "type": "string"
+              },
+              "schema_digest": {
+                "type": "string"
+              },
+              "listener": {
+                "const": "mcp"
+              },
+              "query_digest": {
+                "type": "string"
+              }
+            }
+          },
+          "data": {
+            "type": "object",
+            "description": "Keyed by the client's root response keys; only the selected allowed fields. Untrusted content."
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "class"
+              ],
+              "properties": {
+                "class": {
+                  "enum": [
+                    "graphql_errors",
+                    "decode",
+                    "http_status",
+                    "transport",
+                    "canceled",
+                    "acr_deadline",
+                    "not_found",
+                    "concurrency_wait"
+                  ]
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "object",
+            "required": [
+              "returned_bytes",
+              "max_bytes"
+            ],
+            "properties": {
+              "returned_bytes": {
+                "type": "integer"
+              },
+              "max_bytes": {
+                "type": "integer"
+              }
+            }
+          },
+          "consistency": {
+            "const": "best_effort"
+          },
+          "untrusted_content": {
+            "type": "object",
+            "required": [
+              "untrusted",
+              "fields"
+            ],
+            "properties": {
+              "untrusted": {
+                "const": true
+              },
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "request": {
+            "type": "object",
+            "required": [
+              "max_bytes"
+            ],
+            "properties": {
+              "max_bytes": {
+                "type": "integer"
+              }
+            }
+          },
+          "root_fields": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "key",
+                "field",
+                "operation",
+                "completeness",
+                "effective_scope",
+                "added_paths"
+              ],
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "operation": {
+                  "type": "string"
+                },
+                "completeness": {
+                  "enum": [
+                    "declared_complete",
+                    "declared_partial",
+                    "unknown"
+                  ]
+                },
+                "effective_scope": {
+                  "type": "object",
+                  "required": [
+                    "repo_ids",
+                    "forced_by_grant"
+                  ],
+                  "properties": {
+                    "repo_ids": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "forced_by_grant": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "added_paths": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
               }
             }
           }

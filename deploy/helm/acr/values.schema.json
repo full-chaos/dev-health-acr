@@ -193,6 +193,7 @@
         "requestTimeout": { "type": "string" },
         "dataQueryUrl": { "type": "string" },
         "dataQueryTimeout": { "type": "string" },
+        "dataGraphqlUrl": { "type": "string" },
         "readHeaderTimeout": { "type": "string" },
         "readTimeout": { "type": "string" },
         "writeTimeout": { "type": "string" },
@@ -494,6 +495,7 @@
             "clickhousePort": { "type": "integer", "minimum": 1, "maximum": 65535 },
             "entitlementPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
             "queryInternalPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
+            "queryMcpPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
             "falkorPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
             "kubernetesAPIPort": { "type": "integer", "minimum": 1, "maximum": 65535 }
           }

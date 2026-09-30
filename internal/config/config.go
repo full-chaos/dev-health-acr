@@ -247,6 +247,9 @@ type Config struct {
 	// DataQueryURL / DataQueryTimeout methods. See data_query.go.
 	dataQueryURL     string
 	dataQueryTimeout time.Duration
+	// dataGraphQLURL: GWC's MCP listener for graphql_query
+	// (ACR_DATA_GRAPHQL_URL, CHAOS-7075); read via DataGraphQLURL.
+	dataGraphQLURL string
 }
 
 type lookupEnv func(string) (string, bool)
@@ -385,6 +388,9 @@ func load(lookup lookupEnv) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.dataQueryTimeout, err = dataQueryTimeoutValue(lookup); err != nil {
+		return Config{}, err
+	}
+	if cfg.dataGraphQLURL, err = dataGraphQLURLValue(lookup); err != nil {
 		return Config{}, err
 	}
 	if cfg.RequestControls, err = requestControlsValue(lookup, cfg.RequestsPerMinute); err != nil {

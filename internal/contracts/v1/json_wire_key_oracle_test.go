@@ -398,7 +398,7 @@ var contractRootExemplars = []any{
 	MCPContextForTaskRequest{}, MCPContextForTaskResponse{},
 	MCPInvestigateQuestionRequest{}, MCPInvestigateQuestionResponse{},
 	MCPInvestigationResultRequest{}, MCPInvestigationResultResponse{},
-	MCPDataCatalogRequest{}, MCPFindSubjectsRequest{}, MCPRunOperationRequest{},
+	MCPDataCatalogRequest{}, MCPFindSubjectsRequest{}, MCPRunOperationRequest{}, MCPGraphQLQueryRequest{},
 	MCPRecordEpisodeRequest{}, MCPRecordEpisodeResponse{},
 	MCPSourceEvidenceRequest{}, MCPSourceEvidenceResponse{},
 	OAuthDeviceErrorResponse{}, OAuthTokenExchangeErrorResponse{},

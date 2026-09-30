@@ -53,6 +53,7 @@
           "data_catalog",
           "find_subjects",
           "run_operation",
+          "graphql_query",
           "read_relationships"
         ]
       },

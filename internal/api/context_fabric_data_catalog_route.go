@@ -41,7 +41,15 @@ func (a *App) contextFabricDataCatalogHandler() http.HandlerFunc {
 		if facts != nil {
 			factCapabilities = a.runtime.DirectFactReader.Capabilities()
 		}
+		// The graphql_query root policy is derived from the embedded catalogue;
+		// a derivation failure lists no root and says not configured.
+		graphqlPolicy, gerr := directread.DefaultGraphQLPolicy()
+		if gerr != nil {
+			graphqlPolicy = nil
+		}
 		catalog := directread.BuildDataCatalog(a.dataCatalogue(), directread.CatalogCaller{
+			GraphQL:            graphqlPolicy,
+			GraphQLServable:    a.dataGraphQL() != nil,
 			PrincipalClass:     directread.ClassifyPrincipal(principal),
 			Scopes:             scopes,
 			DataRead:           auth.HasScope(principal.Permissions, auth.ScopeDataRead),
