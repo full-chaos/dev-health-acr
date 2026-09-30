@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/google/jsonschema-go/jsonschema"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -19,30 +18,25 @@ import (
 // integer is a NUMBER WITHOUT A FRACTIONAL PART: 0.0, 1.0 and 1e2 are integers
 // to a schema-validating client. encoding/json refuses them for a Go int field,
 // so a request the schema (and the tools/list a client validates against)
-// allowed was refused by the handler decode. The other way round, a handler
-// that reads a zero as "not set" (a Go int with omitempty cannot tell 0 from an
-// absent field) accepted an explicit 0 that the schema's minimum refuses.
+// allowed was refused by the handler decode.
 //
-// integerArgumentsMiddleware closes both once, for every tool, at the one place
+// integerArgumentsMiddleware closes that once, for every tool, at the one place
 // every tools/call passes: at each path a tool's OWN published input schema
-// types as integer it (1) writes an integral number given with a fraction or an
-// exponent as an integer, and (2) refuses a number the field's schema does not
-// allow. So the server follows the schema for integers, and the schema is the
-// contract.
+// types as integer it writes an integral number given with a fraction or an
+// exponent as an integer, before any handler decodes.
 //
-// Nothing else changes. Only numbers at those paths are looked at: a string,
-// null or boolean is left to the handler decode, and every number elsewhere
-// (free-form variables keep their exact text) is untouched. Arguments that need
-// no rewrite are passed on byte for byte.
+// Nothing else changes, and no bound is enforced here: the handlers' own
+// validators refuse what they refuse, and TestEveryPublishedIntegerFieldIs
+// HandledAsItsSchemaSays holds them to the schema. Only numbers at those paths
+// are looked at: a fraction (1.5), a number outside the int64 range, a string,
+// null or a boolean is left as it is for the handler decode to refuse, and every
+// number elsewhere (free-form variables keep their exact text) is untouched.
+// Arguments that need no rewrite are passed on byte for byte.
 
 // integerField is one place a tool's input schema declares an integer: object
 // keys, with "[]" for a list element.
 type integerField struct {
 	path []string
-	// schema validates the value the field may hold. It is nil when the field
-	// sits under allOf/anyOf/oneOf, where the branch alone does not decide
-	// validity: such a field is only normalized, never refused.
-	schema *jsonschema.Resolved
 }
 
 var integerFieldsByTool sync.Map // tool name -> []integerField
@@ -59,7 +53,7 @@ func integerFieldsOf(tool string) []integerField {
 		if data, err := schemaFiles.ReadFile("schemas/" + path.Base(entry.InputSchemaRef)); err == nil {
 			var root map[string]any
 			if err := json.Unmarshal(data, &root); err == nil {
-				fields = collectIntegerFields(root, root, nil, false, map[string]bool{})
+				fields = collectIntegerFields(root, root, nil, map[string]bool{})
 			}
 		}
 	}
@@ -69,7 +63,7 @@ func integerFieldsOf(tool string) []integerField {
 
 // collectIntegerFields walks a schema node the way a validator does: object
 // properties, array items, local $refs and the allOf/anyOf/oneOf branches.
-func collectIntegerFields(root, node map[string]any, at []string, viaBranch bool, refs map[string]bool) []integerField {
+func collectIntegerFields(root, node map[string]any, at []string, refs map[string]bool) []integerField {
 	if ref, ok := node["$ref"].(string); ok {
 		target, ok := resolveLocalRef(root, ref)
 		if !ok || refs[ref] {
@@ -79,62 +73,32 @@ func collectIntegerFields(root, node map[string]any, at []string, viaBranch bool
 		for k := range refs {
 			next[k] = true
 		}
-		return collectIntegerFields(root, target, at, viaBranch, next)
+		return collectIntegerFields(root, target, at, next)
 	}
 	var out []integerField
 	if isIntegerType(node["type"]) {
-		field := integerField{path: append([]string{}, at...)}
-		if !viaBranch {
-			field.schema = compileIntegerNode(root, node)
-		}
-		out = append(out, field)
+		out = append(out, integerField{path: append([]string{}, at...)})
 	}
 	if props, ok := node["properties"].(map[string]any); ok {
 		for name, sub := range props {
 			if subNode, ok := sub.(map[string]any); ok {
-				out = append(out, collectIntegerFields(root, subNode, append(append([]string{}, at...), name), viaBranch, refs)...)
+				out = append(out, collectIntegerFields(root, subNode, append(append([]string{}, at...), name), refs)...)
 			}
 		}
 	}
 	if items, ok := node["items"].(map[string]any); ok {
-		out = append(out, collectIntegerFields(root, items, append(append([]string{}, at...), "[]"), viaBranch, refs)...)
+		out = append(out, collectIntegerFields(root, items, append(append([]string{}, at...), "[]"), refs)...)
 	}
 	for _, keyword := range []string{"allOf", "anyOf", "oneOf"} {
 		if branches, ok := node[keyword].([]any); ok {
 			for _, branch := range branches {
 				if branchNode, ok := branch.(map[string]any); ok {
-					out = append(out, collectIntegerFields(root, branchNode, at, true, refs)...)
+					out = append(out, collectIntegerFields(root, branchNode, at, refs)...)
 				}
 			}
 		}
 	}
 	return out
-}
-
-// compileIntegerNode compiles one integer property on its own, with the
-// document's $defs so a local $ref inside it still resolves. A node that does
-// not compile is not enforced (it is still normalized).
-func compileIntegerNode(root, node map[string]any) *jsonschema.Resolved {
-	doc := make(map[string]any, len(node)+1)
-	for k, v := range node {
-		doc[k] = v
-	}
-	if defs, ok := root["$defs"]; ok {
-		doc["$defs"] = defs
-	}
-	data, err := json.Marshal(doc)
-	if err != nil {
-		return nil
-	}
-	var schema jsonschema.Schema
-	if err := json.Unmarshal(data, &schema); err != nil {
-		return nil
-	}
-	resolved, err := schema.Resolve(nil)
-	if err != nil {
-		return nil
-	}
-	return resolved
 }
 
 func isIntegerType(v any) bool {
@@ -172,85 +136,66 @@ func resolveLocalRef(root map[string]any, ref string) (map[string]any, bool) {
 	return target, ok
 }
 
-// integerArgumentsMiddleware applies checkIntegerArguments to every tools/call.
-// A number the schema refuses is answered as a validation tool error, the same
-// category the handlers use, and never reaches a handler.
+// integerArgumentsMiddleware applies normalizeIntegerArguments to every
+// tools/call.
 func integerArgumentsMiddleware() mcpsdk.Middleware {
 	return func(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 		return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
-			if method != "tools/call" {
-				return next(ctx, method, req)
+			if method == "tools/call" {
+				if call, ok := req.(*mcpsdk.CallToolRequest); ok && call.Params != nil && len(call.Params.Arguments) > 0 {
+					call.Params.Arguments = normalizeIntegerArguments(call.Params.Name, call.Params.Arguments)
+				}
 			}
-			call, ok := req.(*mcpsdk.CallToolRequest)
-			if !ok || call.Params == nil || len(call.Params.Arguments) == 0 {
-				return next(ctx, method, req)
-			}
-			arguments, refused := checkIntegerArguments(call.Params.Name, call.Params.Arguments)
-			if refused != "" {
-				return toolErrorResult(&classifiedError{category: "validation", message: call.Params.Name + " arguments failed schema validation: " + refused + " is not an integer the input schema allows"}), nil
-			}
-			call.Params.Arguments = arguments
 			return next(ctx, method, req)
 		}
 	}
 }
 
-// checkIntegerArguments returns raw with every integral number at an integer
-// field of the tool's schema written as an integer, and the path of the first
-// number the field's schema refuses ("" when none). It returns raw itself when
-// nothing needs to change or the arguments are not a single JSON object.
-func checkIntegerArguments(tool string, raw []byte) ([]byte, string) {
+// normalizeIntegerArguments returns raw with every integral number at an
+// integer field of the tool's schema written as an integer. It returns raw
+// itself when nothing needs to change or the arguments are not a single JSON
+// object.
+func normalizeIntegerArguments(tool string, raw []byte) []byte {
 	fields := integerFieldsOf(tool)
 	if len(fields) == 0 {
-		return raw, ""
+		return raw
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	var tree any
 	if err := decoder.Decode(&tree); err != nil {
-		return raw, ""
+		return raw
 	}
 	if _, isObject := tree.(map[string]any); !isObject {
-		return raw, ""
+		return raw
 	}
 	if _, err := decoder.Token(); err != io.EOF {
-		return raw, "" // trailing data: the handler decode reports it
+		return raw // trailing data: the handler decode reports it
 	}
-	changed, refused := false, ""
+	changed := false
 	for _, field := range fields {
 		visitAt(tree, field.path, func(v any) (any, bool) {
 			number, isNumber := v.(json.Number)
 			if !isNumber {
-				return v, false // a string, null or boolean is the handler's to refuse
+				return v, false
 			}
-			text := number.String()
-			replaced := false
-			if integral, ok := integralText(text); ok && integral != text {
-				text, replaced = integral, true
-			}
-			if field.schema != nil && refused == "" {
-				f, err := strconv.ParseFloat(text, 64)
-				if err != nil || field.schema.Validate(f) != nil {
-					refused = strings.Join(field.path, ".")
-				}
-			}
-			if replaced {
+			if integral, ok := integralText(number.String()); ok && integral != number.String() {
 				changed = true
-				return json.Number(text), true
+				return json.Number(integral), true
 			}
 			return v, false
 		})
 	}
-	if refused != "" || !changed {
-		return raw, refused
+	if !changed {
+		return raw
 	}
 	var out bytes.Buffer
 	encoder := json.NewEncoder(&out)
 	encoder.SetEscapeHTML(false)
 	if err := encoder.Encode(tree); err != nil {
-		return raw, ""
+		return raw
 	}
-	return bytes.TrimRight(out.Bytes(), "\n"), ""
+	return bytes.TrimRight(out.Bytes(), "\n")
 }
 
 // visitAt calls fn for every value at path in tree ("[]" walks every element

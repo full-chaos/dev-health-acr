@@ -119,6 +119,11 @@ func collectBoundaries(node map[string]any) []int64 {
 	return out
 }
 
+// integerBoundGrid holds every bound the published integer fields use, each
+// with its neighbours, so a schema that lost or moved a floor or a ceiling is
+// still probed at the handler's real bound.
+var integerBoundGrid = []int64{2, 3, 49, 50, 51, 59, 60, 61, 99, 100, 101, 199, 200, 201, 249, 250, 251, 364, 365, 366, 499, 500, 501, 4095, 4096, 4097, 8191, 8192, 8193, 15999, 16000, 16001, 262143, 262144, 262145, 1048575, 1048576, 1048577}
+
 // integerCells is the value set for one field, as JSON text: the values the
 // class is about (0, integral floats, fractions, a string, a boolean), and each
 // stated boundary with its neighbours and its integral-float spelling. null is
@@ -134,6 +139,11 @@ func integerCells(f publishedIntegerField) []string {
 			seen[text] = true
 			cells = append(cells, text)
 		}
+	}
+	// The handlers state bounds the schema might not (that is the drift this
+	// test hunts), so the grid also straddles every bound any tool publishes.
+	for _, b := range integerBoundGrid {
+		add(strconv.FormatInt(b, 10))
 	}
 	for _, b := range f.boundaries {
 		for _, v := range []int64{b - 1, b, b + 1} {
