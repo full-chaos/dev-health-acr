@@ -245,8 +245,8 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 				p.logger.WarnContext(ctx, "devhealthsource overlap window pass continues on the next tick; late rows deeper in the window are not skipped, only delayed",
 					"source", contextfabric.SanitizeLogAttr(p.source), "org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)),
 					"pages_this_call", overlapWindowPagesPerCall, "page_rows", incrementalBatchCap,
-					"window_low", pass.low.UTC().Format(time.RFC3339Nano), "resume_after", pass.walk.Since.UTC().Format(time.RFC3339Nano),
-					"frontier", state.Since.UTC().Format(time.RFC3339Nano), "pass_age_seconds", int64(now.Sub(pass.passStart).Seconds()))
+					"window_low", contextfabric.SanitizeLogAttr(pass.low.UTC().Format(time.RFC3339Nano)), "resume_after", contextfabric.SanitizeLogAttr(pass.walk.Since.UTC().Format(time.RFC3339Nano)),
+					"frontier", contextfabric.SanitizeLogAttr(state.Since.UTC().Format(time.RFC3339Nano)), "pass_age_seconds", int64(now.Sub(pass.passStart).Seconds()))
 			}
 			return contextfabric.ProjectionBatch{}, false, nil
 		}
