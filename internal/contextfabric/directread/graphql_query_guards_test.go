@@ -1138,3 +1138,15 @@ func TestGraphQLRepeatedRootKeyIsRefusedWithItsOwnReason(t *testing.T) {
 		}
 	}
 }
+
+// pr2 r3 P2: no refusal echoes a client-chosen alias (the repeated root key
+// is named only by the fixed reason, not by its alias).
+func TestGraphQLRefusalsNeverEchoAClientAlias(t *testing.T) {
+	h := newGQLHarness(t, gqlHarnessOptions{})
+	resp := h.run(t, opUnrestricted(opOrgA), `{ PrivateMarker: catalog(dimension: TEAM) { values { value } } PrivateMarker: catalog(dimension: TEAM) { values { count } } }`, nil)
+	h.wantRefused(t, resp, directread.RefusalQueryInvalid)
+	raw, _ := json.Marshal(resp)
+	if strings.Contains(string(raw), "PrivateMarker") {
+		t.Fatalf("a refusal echoes the client alias: %s", raw)
+	}
+}

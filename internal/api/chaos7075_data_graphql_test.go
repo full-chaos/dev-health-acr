@@ -109,6 +109,10 @@ func TestChaos7075GraphQLRouteProtectionAndStates(t *testing.T) {
 	if sent := h.upstream.bodies[0]["query"].(string); !strings.HasPrefix(sent, "query AcrGraphQLQuery") {
 		t.Fatalf("the client text reached the listener: %s", sent)
 	}
+	// pr2 r3 P2: the route never echoes a client alias.
+	if raw := h.post(ContextFabricDataGraphQLPath, unrestricted, graphqlBody(`{ PrivateMarker: catalog(dimension: TEAM) { values { value } } PrivateMarker: catalog(dimension: TEAM) { values { count } } }`, "")).Body.String(); strings.Contains(raw, "PrivateMarker") || !strings.Contains(raw, "repeated_root_key") {
+		t.Fatalf("the route echoes a client alias: %s", raw)
+	}
 	refused := decodeC7072(t, h.post(ContextFabricDataGraphQLPath, unrestricted, graphqlBody(`mutation { deleteSavedReport(orgId: "o", id: "x") }`, "")))
 	if refused["call"] != "refused" || refused["refusal"].(map[string]any)["code"] != "operation_type_not_allowed" || h.upstream.count() != 1 {
 		t.Fatalf("refused: %v", refused)

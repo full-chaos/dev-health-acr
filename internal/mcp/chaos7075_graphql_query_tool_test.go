@@ -89,3 +89,17 @@ func TestGraphQLQueryToolForwardsAndReturnsTheAnswerVerbatim(t *testing.T) {
 		}
 	}
 }
+
+// pr2 r3 P2: the MCP text summary of a refusal never carries a client
+// alias, because the hosted answer carries none.
+func TestGraphQLQueryToolSummaryCarriesNoClientAlias(t *testing.T) {
+	h := newDTHosted(t)
+	h.graphql = func(w http.ResponseWriter, _ *http.Request) {
+		dtRaw(w, http.StatusOK, `{"call":"refused","completeness":"unknown","refusal":{"code":"query_invalid","reason":"repeated_root_key: select each root once; put all fields in one selection"},"source":{"path":"graphql","service":"dho query-api","listener":"mcp","schema_digest":"sha256:0"},"root_fields":[],"errors":[],"page":{"returned_bytes":0,"max_bytes":32768},"consistency":"best_effort","untrusted_content":{"untrusted":true,"fields":["data"]},"request":{"max_bytes":32768}}`)
+	}
+	boot := h.boot(t, toolGraphQLQuery)
+	r := dtCall(t, boot, toolGraphQLQuery, `{"query":"{ PrivateMarker: catalog(dimension: TEAM) { values { value } } PrivateMarker: catalog(dimension: TEAM) { values { count } } }"}`)
+	if text := dtText(t, r); strings.Contains(text, "PrivateMarker") || !strings.Contains(text, "repeated_root_key") {
+		t.Fatalf("summary: %s", text)
+	}
+}
