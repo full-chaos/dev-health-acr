@@ -152,8 +152,11 @@ type ClickHouseProjectionSource struct {
 	logger *slog.Logger
 
 	// overlap and window (CHAOS-7263): the trailing late-arrival re-read.
-	overlap time.Duration
-	window  *windowMemo
+	// windowPages is the pages-per-call bound of the window walk; zero means
+	// overlapWindowPagesPerCall. Only tests set it (export_test.go).
+	overlap     time.Duration
+	window      *windowMemo
+	windowPages int
 
 	// consumedMu guards consumed, which memoises the furthest cursor a
 	// NextProjectionBatch call proved holds nothing publishable, per
@@ -371,6 +374,7 @@ func (s *ClickHouseProjectionSource) plan(fromCursor string) sourcePlan {
 		},
 		overlap:              s.overlapDuration(),
 		window:               s.windowMemo(),
+		windowPagesPerCall:   s.windowPages,
 		observe:              s.logOrphanedWorkItems,
 		observeQuarantine:    quarantineLogger(s.logger, SourceName),
 		observeNormalization: normalizationLogger(s.logger, SourceName),

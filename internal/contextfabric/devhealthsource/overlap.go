@@ -26,11 +26,15 @@ import (
 // at the ordinary page size, at most overlapWindowPagesPerCall pages per call.
 // A pass that does not reach the window's end in one call stops at the last
 // fully read row and resumes from exactly there on the next call (logged);
-// it never skips the rest of the window and never restarts short of it. When
-// a pass reaches the end, the window's lower edge moves up to (that pass's
-// start - overlap - clock slack): a row stamped below that edge could only
-// still be unseen if it landed more than overlap (+ slack) after its stamp,
-// which is the documented bound. So a quiet organization's window closes on
+// it never skips the rest of the window and never restarts short of it. A page
+// on which no table had rows past its LIMIT is the window's end, so a window
+// smaller than one page costs one statement per table. A pass this call
+// started ends the call when it completes; a pass resumed from an earlier
+// call is followed at once by a new pass (rows may have landed behind it
+// while it was paused). When a pass reaches the end, the window's lower edge
+// moves up to (that pass's start - overlap - clock slack): a row stamped below
+// that edge could only still be unseen if it landed more than overlap
+// (+ slack) after its stamp, which is the documented bound. So a quiet organization's window closes on
 // its own once the passes outrun the frontier, and costs nothing after that.
 //
 // The lower edge of the FIRST pass in a scope (process start, or a new epoch)
@@ -224,6 +228,11 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 	start := func() {
 		pass.walking, pass.passStart, pass.walk = true, now, cursorState{Since: pass.low}
 	}
+	// A pass resumed from an earlier call may have been passed by rows that
+	// landed behind its position meanwhile, so when it completes a new pass
+	// starts at once. A pass started by THIS call has not: when it completes,
+	// the call ends and the next tick starts the next pass.
+	resumed := pass.walking
 	if !pass.walking {
 		if pass.low.After(state.Since) {
 			// Closed: nothing at or behind the frontier can still land late.
@@ -236,51 +245,66 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 	if p.windowTables != nil {
 		tables = p.windowTables
 	}
+	pagesPerCall := overlapWindowPagesPerCall
+	if p.windowPagesPerCall > 0 {
+		pagesPerCall = p.windowPagesPerCall
+	}
 	completed := false
 	var all []candidate
 	for page := 0; ; page++ {
-		if page == overlapWindowPagesPerCall {
+		if page == pagesPerCall {
 			p.window.setPass(p.windowScope, pass)
 			if p.logger != nil {
 				p.logger.WarnContext(ctx, "devhealthsource overlap window pass continues on the next tick; late rows deeper in the window are not skipped, only delayed",
 					"source", contextfabric.SanitizeLogAttr(p.source), "org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)),
-					"pages_this_call", overlapWindowPagesPerCall, "page_rows", incrementalBatchCap,
+					"pages_this_call", pagesPerCall, "page_rows", incrementalBatchCap,
 					"window_low", contextfabric.SanitizeLogAttr(pass.low.UTC().Format(time.RFC3339Nano)), "resume_after", contextfabric.SanitizeLogAttr(pass.walk.Since.UTC().Format(time.RFC3339Nano)),
 					"frontier", contextfabric.SanitizeLogAttr(state.Since.UTC().Format(time.RFC3339Nano)), "pass_age_seconds", int64(now.Sub(pass.passStart).Seconds()))
 			}
 			return contextfabric.ProjectionBatch{}, false, nil
 		}
 		var pageRows []candidate
+		// more: some row beyond this page may still lie in the window. Each
+		// table reports whether it had rows past its LIMIT (fetch); the
+		// merged page is also cut back to complete rows. When neither
+		// happened, this page reached the window's end and no further
+		// (empty) read is needed to learn that.
+		more := false
 		for _, table := range tables {
-			rows, _, err := table.query(ctx, p.client, orgID, pass.walk, incrementalBatchCap)
+			rows, truncated, err := table.query(ctx, p.client, orgID, pass.walk, incrementalBatchCap)
 			if err != nil {
 				logTableReadFailure(ctx, p.logger, p.source, orgID, table.name, err)
 				return contextfabric.ProjectionBatch{}, false, &tableReadError{table: table.name, cause: err}
 			}
+			more = more || truncated
 			pageRows = append(pageRows, rows...)
 		}
-		if len(pageRows) == 0 {
-			// The pass reached the window's end: every row that could land
-			// late with a stamp below (pass start - overlap - slack) has.
-			if edge := pass.passStart.Add(-p.overlap - slack); edge.After(pass.low) {
-				pass.low = edge
+		if len(pageRows) > 0 {
+			sortCandidates(pageRows)
+			complete := truncateToCompleteRows(pageRows, incrementalBatchCap)
+			more = more || len(complete) < len(pageRows)
+			pageRows = complete
+			last := pageRows[len(pageRows)-1]
+			pass.walk = cursorState{Since: last.position(), After: last.sortKey}
+			if all = p.window.unseen(p.windowScope, pageRows); len(all) > 0 {
+				break
 			}
-			pass.walking = false
-			if completed || pass.low.After(state.Since) {
-				p.window.setPass(p.windowScope, pass)
-				return contextfabric.ProjectionBatch{}, false, nil
-			}
-			completed = true
-			start()
+		}
+		if more {
 			continue
 		}
-		sortCandidates(pageRows)
-		pageRows = truncateToCompleteRows(pageRows, incrementalBatchCap)
-		last := pageRows[len(pageRows)-1]
-		pass.walk = cursorState{Since: last.position(), After: last.sortKey}
-		if all = p.window.unseen(p.windowScope, pageRows); len(all) > 0 {
-			break
+		// The pass reached the window's end: every row that could land
+		// late with a stamp below (pass start - overlap - slack) has.
+		if edge := pass.passStart.Add(-p.overlap - slack); edge.After(pass.low) {
+			pass.low = edge
 		}
+		pass.walking = false
+		if completed || !resumed || pass.low.After(state.Since) {
+			p.window.setPass(p.windowScope, pass)
+			return contextfabric.ProjectionBatch{}, false, nil
+		}
+		completed = true
+		start()
 	}
 	p.window.setPass(p.windowScope, pass)
 	normalizeCandidates(all, p.observeNormalization)

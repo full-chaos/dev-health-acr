@@ -74,6 +74,8 @@ type sourcePlan struct {
 	overlap     time.Duration
 	window      *windowMemo
 	windowScope string
+	// windowPagesPerCall overrides overlapWindowPagesPerCall when > 0.
+	windowPagesPerCall int
 	// windowTables, when set, is the table set the overlap walk reads instead
 	// of tables: the same producers bound to throwaway run telemetry. The
 	// walk re-reads rows the paged path already read and counted; counting

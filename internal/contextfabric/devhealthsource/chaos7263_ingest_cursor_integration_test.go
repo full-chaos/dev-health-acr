@@ -25,12 +25,10 @@ import (
 
 func TestCHAOS7263IngestTimeCursor(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
-	for _, st := range productionSchemaDDL() {
-		if err := direct.Exec(ctx, st); err != nil {
-			t.Fatal(err)
-		}
-	}
+	// The package's shared org-scoped container (orgIsolationClickHouseFixture,
+	// productionSchemaDDL's tables): no container start of its own. Every
+	// case below uses its own organization.
+	query, direct := orgIsolationClickHouseFixture(t)
 	createProjectMembershipPresenceView(t, ctx, direct)
 	now := time.Now().UTC().Truncate(time.Second)
 	newHarness := func(t *testing.T, orgID, repoID string, overlap time.Duration, logs *bytes.Buffer) *ingestHarness {
@@ -79,6 +77,7 @@ func TestCHAOS7263IngestTimeCursor(t *testing.T) {
 	// clock and must restart from zero (idempotent full re-read) under the
 	// ORIGINAL cursor string, which the worker requires as batch.Cursor.
 	t.Run("the cursor space field: only the canonical value resumes, every other shape resets", func(t *testing.T) {
+		t.Parallel()
 		h := newHarness(t, "72630000-0000-4000-8000-000000000002", "72630000-0000-4000-8000-0000000000a2", 0, nil)
 		h.workItem("WI-a", now.Add(-48*time.Hour), now.Add(-2*time.Hour))
 		h.workItem("WI-b", now.Add(-24*time.Hour), now.Add(-time.Hour))
@@ -153,6 +152,7 @@ func TestCHAOS7263IngestTimeCursor(t *testing.T) {
 	})
 
 	t.Run("overlap: a row stamped just BEHIND the frontier that lands after the cursor passed is projected once, cursor unchanged; idempotent", func(t *testing.T) {
+		t.Parallel()
 		h := newHarness(t, "72630000-0000-4000-8000-000000000003", "72630000-0000-4000-8000-0000000000a3", 15*time.Minute, nil)
 		h.workItem("WI-frontier", now.Add(-time.Hour), now.Add(-10*time.Minute))
 		first := h.drain("")
@@ -191,6 +191,7 @@ func TestCHAOS7263IngestTimeCursor(t *testing.T) {
 	// itself is inside, one millisecond (the column's precision) below it is
 	// not.
 	t.Run("overlap boundary: the window's lower edge is inclusive, one tick below it is not", func(t *testing.T) {
+		t.Parallel()
 		const overlap = 15 * time.Minute
 		h := newHarness(t, "72630000-0000-4000-8000-000000000005", "72630000-0000-4000-8000-0000000000a5", overlap, nil)
 		h.workItem("WI-frontier", now.Add(-time.Hour), now.Add(-10*time.Minute))
@@ -225,6 +226,7 @@ func TestCHAOS7263IngestTimeCursor(t *testing.T) {
 	// 2*overlap after the frontier: nothing behind the frontier can still land
 	// within the bound, and the walk stops costing reads.
 	t.Run("overlap: a quiet organization's window closes after the bound", func(t *testing.T) {
+		t.Parallel()
 		const overlap = 15 * time.Minute
 		h := newHarness(t, "72630000-0000-4000-8000-00000000000a", "72630000-0000-4000-8000-0000000000aa", overlap, nil)
 		counting := &countingQueryClient{inner: query}
@@ -254,10 +256,67 @@ func TestCHAOS7263IngestTimeCursor(t *testing.T) {
 		}
 	})
 
+	// An idle tick over an OPEN window costs the paged read and one walk
+	// page: a window smaller than one page ends on that page (every table
+	// reports its end, so no empty read is needed to learn it), and a pass
+	// this tick started is not walked a second time in the same tick.
+	t.Run("an idle tick over an open window reads it once", func(t *testing.T) {
+		t.Parallel()
+		const overlap = 15 * time.Minute
+		h := newHarness(t, "72630000-0000-4000-8000-000000000010", "72630000-0000-4000-8000-0000000000ae", overlap, nil)
+		counting := &countingQueryClient{inner: query}
+		counted, err := devhealthsource.NewClickHouseProjectionSource(counting)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if counted, err = counted.WithOverlap(overlap); err != nil {
+			t.Fatal(err)
+		}
+		counted.SetClockForTest(func() time.Time { return now })
+		h.src = counted
+		h.workItem("WI-frontier", now.Add(-time.Hour), now.Add(-10*time.Minute))
+		first := h.drain("")
+		counting.statements = 0
+		if again := h.drain(first.cursor); len(again.batches) != 0 {
+			t.Fatalf("an idle tick emitted %d batches", len(again.batches))
+		}
+		if tables := len(devhealthsource.EntityTableNamesForTest()); counting.statements != 2*tables {
+			t.Fatalf("an idle tick over an open one-row window ran %d statements, want %d (the paged read and one walk page)", counting.statements, 2*tables)
+		}
+	})
+
+	// A page ends the window only when no table had rows past its LIMIT AND
+	// the merged page was not cut back: two tables of 150 window rows each
+	// fit their own LIMIT, but their 300 merged rows do not fit one page.
+	// The rows past the cut must still be walked.
+	t.Run("a window page cut back across tables does not end the pass", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t, "72630000-0000-4000-8000-000000000020", "72630000-0000-4000-8000-0000000000af", 15*time.Minute, nil)
+		mustExec(t, ctx, direct, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at, last_synced)
+SELECT concat('WI-early-', leftPad(toString(number), 3, '0')), ?, ?, concat('issue WI-early-', toString(number)), 'open', '', '', 'linear', '', ?, ? FROM numbers(150)`,
+			h.repo, h.orgID, now.Add(-time.Hour), now.Add(-8*time.Minute))
+		mustExec(t, ctx, direct, `INSERT INTO deployments (repo_id, org_id, deployment_id, status, environment, deployed_at, started_at, last_synced)
+SELECT ?, ?, concat('dep-', leftPad(toString(number), 3, '0')), 'success', 'prod', ?, ?, ? FROM numbers(150)`,
+			h.repo, h.orgID, now.Add(-time.Hour), now.Add(-time.Hour), now.Add(-7*time.Minute))
+		h.workItem("WI-frontier", now.Add(-time.Hour), now.Add(-5*time.Minute))
+		first := h.drain("")
+		// Behind the frontier and behind all 300 burst rows: the merged
+		// window order puts it at position 301, on the second page.
+		h.workItem("WI-past-the-cut-late", now.Add(-3*time.Hour), now.Add(-6*time.Minute))
+		second := h.drain(first.cursor)
+		if second.items[title("WI-past-the-cut-late")].Subject.Label == "" {
+			t.Fatalf("a late row past a page cut back across tables was not projected (%d items): the pass ended at the cut", len(second.items))
+		}
+		if second.cursor != first.cursor {
+			t.Fatalf("the window walk moved the cursor (%q -> %q)", first.cursor, second.cursor)
+		}
+	})
+
 	// The memo is per process. A projector that restarts with a saved cursor
 	// starts its first pass at (frontier - 2*overlap), so a row that landed
 	// behind the frontier while no process was walking is still found.
 	t.Run("a restarted projector finds a row that landed behind the saved cursor while it was down", func(t *testing.T) {
+		t.Parallel()
 		h := newHarness(t, "72630000-0000-4000-8000-00000000000b", "72630000-0000-4000-8000-0000000000ab", 15*time.Minute, nil)
 		h.workItem("WI-frontier", now.Add(-time.Hour), now.Add(-10*time.Minute))
 		first := h.drain("")
@@ -273,10 +332,24 @@ func TestCHAOS7263IngestTimeCursor(t *testing.T) {
 		}
 	})
 
-	// seedBurst lands n work items at one ingest instant and drains them, then
-	// runs one caught-up tick so a pass over the burst stops mid-window.
+	// A pass that spans several calls needs a window deeper than one call's
+	// walk. Production walks overlapWindowPagesPerCall (5) pages of 200 rows
+	// per call; the cases below lower that to windowPagesPerCall so a 500-row
+	// burst (3 pages) already spans calls -- the same walk at a fraction of
+	// the rows. (A window over 1,000 rows against the client's real
+	// max_result_rows is exercised by the ownership suite's 5,000-repository
+	// team cases.)
+	const windowPagesPerCall, burstRows = 2, 500
+	lowerWalk := func(h *ingestHarness) {
+		h.src.(*devhealthsource.ClickHouseProjectionSource).SetWindowPagesPerCallForTest(windowPagesPerCall)
+	}
+
+	// seedBurstMidPass lands n work items at one ingest instant and drains
+	// them, then runs one caught-up tick so a pass over the burst stops
+	// mid-window.
 	seedBurstMidPass := func(t *testing.T, h *ingestHarness, logs *bytes.Buffer, n int, at time.Time) drained {
 		t.Helper()
+		lowerWalk(h)
 		mustExec(t, ctx, direct, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at, last_synced)
 SELECT concat('WI-burst-', leftPad(toString(number), 5, '0')), ?, ?, concat('issue WI-burst-', toString(number)), 'open', '', '', 'linear', '', ?, ? FROM numbers(?)`,
 			h.repo, h.orgID, now.Add(-time.Hour), at, n)
@@ -297,11 +370,12 @@ SELECT concat('WI-burst-', leftPad(toString(number), 5, '0')), ?, ?, concat('iss
 	// row lands beyond it and is projected on the next tick, the cursor moves,
 	// and the pass still finishes the window afterwards.
 	t.Run("the frontier keeps advancing while an overlap pass is mid-window", func(t *testing.T) {
+		t.Parallel()
 		logs := &bytes.Buffer{}
 		h := newHarness(t, "72630000-0000-4000-8000-00000000000c", "72630000-0000-4000-8000-0000000000ac", 15*time.Minute, logs)
 		burst := now.Add(-5 * time.Minute)
-		first := seedBurstMidPass(t, h, logs, 1300, burst)
-		h.workItem("WI-burst-01250-late", now.Add(-3*time.Hour), burst)    // behind the frontier, page 7
+		first := seedBurstMidPass(t, h, logs, burstRows, burst)
+		h.workItem("WI-burst-00450-late", now.Add(-3*time.Hour), burst)    // behind the frontier, page 3
 		h.workItem("WI-new", now.Add(-time.Minute), now.Add(-time.Minute)) // beyond the frontier
 		b, ok, err := h.src.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{OrgID: h.orgID, Source: devhealthsource.SourceName, Cursor: first.cursor})
 		if err != nil || !ok {
@@ -317,8 +391,8 @@ SELECT concat('WI-burst-', leftPad(toString(number), 5, '0')), ?, ?, concat('iss
 		if !sawNew {
 			t.Fatal("the new row beyond the frontier was not in the first batch of the next tick")
 		}
-		if rest := h.drain(b.NextCursor); rest.items[title("WI-burst-01250-late")].Subject.Label == "" {
-			t.Fatalf("after the frontier moved, the pass did not go on to find the late row on page 7 (%d items)", len(rest.items))
+		if rest := h.drain(b.NextCursor); rest.items[title("WI-burst-00450-late")].Subject.Label == "" {
+			t.Fatalf("after the frontier moved, the pass did not go on to find the late row on page 3 (%d items)", len(rest.items))
 		}
 	})
 
@@ -326,12 +400,13 @@ SELECT concat('WI-burst-', leftPad(toString(number), 5, '0')), ?, ?, concat('iss
 	// mid-pass must restart the pass from the window's start (re-read), never
 	// resume past rows it cannot prove it read.
 	t.Run("a restart mid-pass re-reads the window from its start", func(t *testing.T) {
+		t.Parallel()
 		logs := &bytes.Buffer{}
 		h := newHarness(t, "72630000-0000-4000-8000-00000000000d", "72630000-0000-4000-8000-0000000000ad", 15*time.Minute, logs)
 		burst := now.Add(-5 * time.Minute)
-		first := seedBurstMidPass(t, h, logs, 1300, burst)
+		first := seedBurstMidPass(t, h, logs, burstRows, burst)
 		// Behind the stopped pass's position (page 1 of a pass that already
-		// read pages 1-5) and behind the frontier's own stamp, landing after
+		// read pages 1-2) and behind the frontier's own stamp, landing after
 		// the pass went past it.
 		h.workItem("WI-burst-00300-late", now.Add(-3*time.Hour), burst.Add(-time.Second))
 		restarted, err := devhealthsource.NewClickHouseProjectionSource(query)
@@ -355,29 +430,31 @@ SELECT concat('WI-burst-', leftPad(toString(number), 5, '0')), ?, ?, concat('iss
 	// sent at the column's full (microsecond) precision -- a bound truncated
 	// to milliseconds re-reads every row of that millisecond on every page,
 	// so a page of 201 rows sharing one millisecond repeats forever.
-	// teams.last_synced is DateTime64(6).
+	// teams.last_synced is DateTime64(6). 250 rows is the smallest shape that
+	// needs a second page (200 rows per page) inside one millisecond.
 	for _, tc := range []struct {
 		name  string
 		orgID string
-		stamp string // microseconds since epoch, per row (number = 0..999)
+		stamp string // microseconds since epoch, per row (number = 0..249)
 	}{
-		{"1,000 rows sharing one microsecond-exact ingest stamp", "72630000-0000-4000-8000-00000000000e", "?"},
-		{"1,000 rows whose ingest stamps differ only in microseconds", "72630000-0000-4000-8000-00000000000f", "? + number"},
+		{"250 rows sharing one microsecond-exact ingest stamp", "72630000-0000-4000-8000-00000000000e", "?"},
+		{"250 rows whose ingest stamps differ only in microseconds", "72630000-0000-4000-8000-00000000000f", "? + number"},
 	} {
 		t.Run("equal ingest stamps page to the end: "+tc.name, func(t *testing.T) {
+			t.Parallel()
 			src, err := devhealthsource.NewTeamsProjectsSource(query, true)
 			if err != nil {
 				t.Fatal(err)
 			}
 			base := now.Add(-5 * time.Minute).Truncate(time.Millisecond).Add(123 * time.Microsecond)
 			mustExec(t, ctx, direct, `INSERT INTO teams (id, name, description, updated_at, last_synced, org_id, provider, native_team_key, project_keys, is_active)
-SELECT concat('T-', leftPad(toString(number), 4, '0')), concat('team ', toString(number)), '', ?, fromUnixTimestamp64Micro(`+tc.stamp+`, 'UTC'), ?, 'linear', concat('T-', toString(number)), [], 1 FROM numbers(1000)`,
+SELECT concat('T-', leftPad(toString(number), 4, '0')), concat('team ', toString(number)), '', ?, fromUnixTimestamp64Micro(`+tc.stamp+`, 'UTC'), ?, 'linear', concat('T-', toString(number)), [], 1 FROM numbers(250)`,
 				now.Add(-24*time.Hour), base.UnixMicro(), tc.orgID)
 			var distinct, total uint64
 			if err := direct.QueryRow(ctx, `SELECT uniqExact(last_synced), count() FROM teams FINAL WHERE org_id = ?`, tc.orgID).Scan(&distinct, &total); err != nil {
 				t.Fatal(err)
 			}
-			if total != 1000 || (tc.stamp == "?" && distinct != 1) || (tc.stamp != "?" && distinct != 1000) {
+			if total != 250 || (tc.stamp == "?" && distinct != 1) || (tc.stamp != "?" && distinct != 250) {
 				t.Fatalf("precondition: %d rows, %d distinct stamps", total, distinct)
 			}
 			h := &ingestHarness{t: t, ctx: ctx, direct: direct, src: src, source: devhealthsource.TeamsProjectsSourceName, orgID: tc.orgID}
@@ -388,8 +465,8 @@ SELECT concat('T-', leftPad(toString(number), 4, '0')), concat('team ', toString
 					teams++
 				}
 			}
-			if teams != 1000 {
-				t.Fatalf("%d of 1000 teams projected", teams)
+			if teams != 250 {
+				t.Fatalf("%d of 250 teams projected", teams)
 			}
 			for i, b := range got.batches {
 				if b.NextCursor == b.Cursor {
@@ -403,6 +480,7 @@ SELECT concat('T-', leftPad(toString(number), 4, '0')), concat('team ', toString
 	// window may not mark a late row as emitted, or the next real tick skips
 	// a row no batch ever carried.
 	t.Run("a peek does not consume a late row in the overlap window", func(t *testing.T) {
+		t.Parallel()
 		h := newHarness(t, "72630000-0000-4000-8000-000000000007", "72630000-0000-4000-8000-0000000000a7", 15*time.Minute, nil)
 		h.workItem("WI-frontier", now.Add(-time.Hour), now.Add(-10*time.Minute))
 		first := h.drain("")
@@ -424,6 +502,7 @@ SELECT concat('T-', leftPad(toString(number), 4, '0')), concat('team ', toString
 	// epoch through the same source: a late row emitted into one epoch's graph
 	// must still reach the other's.
 	t.Run("each graph epoch receives a late row on its own", func(t *testing.T) {
+		t.Parallel()
 		h := newHarness(t, "72630000-0000-4000-8000-000000000008", "72630000-0000-4000-8000-0000000000a8", 15*time.Minute, nil)
 		h.workItem("WI-frontier", now.Add(-time.Hour), now.Add(-10*time.Minute))
 		serving, building := h.drainEpoch("", 1), h.drainEpoch("", 2)
@@ -441,6 +520,7 @@ SELECT concat('T-', leftPad(toString(number), 4, '0')), concat('team ', toString
 	// already read and counted; counting them again on every caught-up tick
 	// would make the counters grow while nothing happens.
 	t.Run("caught-up ticks do not inflate the teams/projects run telemetry", func(t *testing.T) {
+		t.Parallel()
 		const orgID, repoID = "72630000-0000-4000-8000-000000000009", "72630000-0000-4000-8000-0000000000a9"
 		logs := &bytes.Buffer{}
 		src, err := devhealthsource.NewTeamsProjectsSource(query, true)
@@ -473,35 +553,35 @@ SELECT concat('T-', leftPad(toString(number), 4, '0')), concat('team ', toString
 		if before != "1" {
 			t.Fatalf("asserted edges after the first drain = %s, want 1", before)
 		}
-		for tick := 0; tick < 3; tick++ {
-			if again := h.drain(first.cursor); len(again.batches) != 0 {
-				t.Fatalf("idle tick %d emitted %d batches", tick, len(again.batches))
-			}
+		if again := h.drain(first.cursor); len(again.batches) != 0 {
+			t.Fatalf("an idle tick emitted %d batches", len(again.batches))
 		}
 		if after := lastAsserted(); after != before {
-			t.Fatalf("repository_team_edges_asserted grew from %s to %s over idle ticks: the overlap re-read is counted again every tick", before, after)
+			t.Fatalf("repository_team_edges_asserted grew from %s to %s over an idle tick: the overlap re-read is counted again every tick", before, after)
 		}
 	})
 
-	// A window busier than one read. The client's max_result_rows is 1,000
-	// and throws past it, so the window is walked page by page at the
-	// ordinary page size, never in one oversized statement. A tick walks at
-	// most a few pages; a deeper window is NOT cut off there: the walk stops
-	// at the last fully read row and resumes from it on the next call, so a
-	// late row at any depth is found (lossless). The planted window is 1,300
-	// rows (7 pages) with late rows on pages 1, 3 and 7.
+	// A window busier than one call's walk. The window is walked page by page
+	// at the ordinary page size (the client's max_result_rows is 1,000 and
+	// throws past it), and a call walks at most a few pages; a deeper window
+	// is NOT cut off there: the walk stops at the last fully read row and
+	// resumes from it on the next call, so a late row at any depth is found
+	// (lossless). With the walk lowered to 2 pages per call, the planted
+	// window is 500 rows (3 pages) with late rows on pages 1, 2 and 3.
 	t.Run("overlap over a window deeper than one tick's walk: no read error, every late row found at any depth", func(t *testing.T) {
+		t.Parallel()
 		logs := &bytes.Buffer{}
 		h := newHarness(t, "72630000-0000-4000-8000-000000000006", "72630000-0000-4000-8000-0000000000a6", 15*time.Minute, logs)
+		lowerWalk(h)
 		burst := now.Add(-5 * time.Minute)
 		mustExec(t, ctx, direct, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at, last_synced)
-SELECT concat('WI-burst-', leftPad(toString(number), 5, '0')), ?, ?, concat('issue WI-burst-', toString(number)), 'open', '', '', 'linear', '', ?, ? FROM numbers(1300)`,
-			h.repo, h.orgID, now.Add(-time.Hour), burst)
+SELECT concat('WI-burst-', leftPad(toString(number), 5, '0')), ?, ?, concat('issue WI-burst-', toString(number)), 'open', '', '', 'linear', '', ?, ? FROM numbers(?)`,
+			h.repo, h.orgID, now.Add(-time.Hour), burst, burstRows)
 		first := h.drain("")
-		if got := len(first.items); got != 1300 {
-			t.Fatalf("first drain projected %d work items, want 1300", got)
+		if got := len(first.items); got != burstRows {
+			t.Fatalf("first drain projected %d work items, want %d", got, burstRows)
 		}
-		// Caught up over a 1,300-row window: no error, nothing re-emitted, and
+		// Caught up over a 3-page window: no error, nothing re-emitted, and
 		// the walk says it stopped short of the window's end.
 		if again := h.drain(first.cursor); len(again.batches) != 0 {
 			t.Fatalf("a caught-up tick over a seen window emitted %d batches", len(again.batches))
@@ -509,17 +589,17 @@ SELECT concat('WI-burst-', leftPad(toString(number), 5, '0')), ?, ?, concat('iss
 		if !strings.Contains(logs.String(), "overlap window pass continues on the next tick") {
 			t.Errorf("a walk stopped short of the window's end must be logged; logs:\n%s", logs.String())
 		}
-		// First ONLY a deep late row, between burst rows 1,250 and 1,251
-		// (page 7): nothing unseen sits on pages 1-5, so it is reached only if
-		// the pass RESUMES where the previous tick stopped rather than
-		// restarting from the window's start.
-		h.workItem("WI-burst-01250-late", now.Add(-3*time.Hour), burst)
-		if deep := h.drain(first.cursor); deep.items[title("WI-burst-01250-late")].Subject.Label == "" {
-			t.Fatalf("a late row on page 7 behind five seen pages was not projected: the pass restarted instead of resuming (%d items)", len(deep.items))
+		// First ONLY a deep late row, between burst rows 450 and 451 (page 3):
+		// nothing unseen sits on pages 1-2, so it is reached only if the pass
+		// RESUMES where the previous tick stopped rather than restarting from
+		// the window's start.
+		h.workItem("WI-burst-00450-late", now.Add(-3*time.Hour), burst)
+		if deep := h.drain(first.cursor); deep.items[title("WI-burst-00450-late")].Subject.Label == "" {
+			t.Fatalf("a late row on page 3 behind two seen pages was not projected: the pass restarted instead of resuming (%d items)", len(deep.items))
 		}
-		// Then late rows before the burst (page 1) and between burst rows 500
-		// and 501 (page 3), all BEHIND the frontier (the last burst row).
-		late := []string{"WI-late-shallow", "WI-burst-00500-late"}
+		// Then late rows before the burst (page 1) and between burst rows 250
+		// and 251 (page 2), all BEHIND the frontier (the last burst row).
+		late := []string{"WI-late-shallow", "WI-burst-00250-late"}
 		h.workItem(late[0], now.Add(-3*time.Hour), burst.Add(-time.Minute))
 		h.workItem(late[1], now.Add(-3*time.Hour), burst)
 		second := h.drain(first.cursor)

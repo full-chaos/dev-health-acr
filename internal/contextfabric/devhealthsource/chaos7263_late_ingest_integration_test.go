@@ -131,12 +131,10 @@ func requireProviderTime(t *testing.T, what string, got, provider time.Time) {
 
 func TestCHAOS7263LateIngestedRowsAreProjected(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
-	for _, st := range productionSchemaDDL() {
-		if err := direct.Exec(ctx, st); err != nil {
-			t.Fatal(err)
-		}
-	}
+	// The package's shared org-scoped container (orgIsolationClickHouseFixture,
+	// productionSchemaDDL's tables): no container start of its own. Every
+	// case below uses its own organization.
+	query, direct := orgIsolationClickHouseFixture(t)
 	createProjectMembershipPresenceView(t, ctx, direct)
 	now := time.Now().UTC().Truncate(time.Second)
 	hourAgo := now.Add(-time.Hour)
@@ -166,6 +164,7 @@ func TestCHAOS7263LateIngestedRowsAreProjected(t *testing.T) {
 	}
 
 	t.Run("work_items: a backfilled work item", func(t *testing.T) {
+		t.Parallel()
 		h := devHealth(t, "72630000-0000-4000-8000-000000000011", "72630000-0000-4000-8000-0000000000b1")
 		first := h.drain("")
 		if _, ok := first.items["issue WI-anchor"]; !ok {
@@ -181,6 +180,7 @@ func TestCHAOS7263LateIngestedRowsAreProjected(t *testing.T) {
 	})
 
 	t.Run("work_items_hierarchy: a backfilled parent link", func(t *testing.T) {
+		t.Parallel()
 		h := devHealth(t, "72630000-0000-4000-8000-000000000012", "72630000-0000-4000-8000-0000000000b2")
 		first := h.drain("")
 		// The parent was projected with the anchor; the child (and so the
@@ -196,6 +196,7 @@ func TestCHAOS7263LateIngestedRowsAreProjected(t *testing.T) {
 	})
 
 	t.Run("deployments: a backfilled deployment", func(t *testing.T) {
+		t.Parallel()
 		h := devHealth(t, "72630000-0000-4000-8000-000000000013", "72630000-0000-4000-8000-0000000000b3")
 		first := h.drain("")
 		mustExec(t, ctx, direct, `INSERT INTO deployments (repo_id, org_id, deployment_id, status, environment, deployed_at, started_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -208,6 +209,7 @@ func TestCHAOS7263LateIngestedRowsAreProjected(t *testing.T) {
 	})
 
 	t.Run("operational_incidents: a backfilled incident", func(t *testing.T) {
+		t.Parallel()
 		h := devHealth(t, "72630000-0000-4000-8000-000000000014", "72630000-0000-4000-8000-0000000000b4")
 		mustExec(t, ctx, direct, `INSERT INTO operational_service_repository_mappings (org_id, service_id, repo_id, is_active) VALUES (?, ?, ?, ?)`, h.orgID, "svc-late", h.repo, uint8(1))
 		first := h.drain("")
@@ -221,6 +223,7 @@ func TestCHAOS7263LateIngestedRowsAreProjected(t *testing.T) {
 	})
 
 	t.Run("work_graph_deployment_incident_edges: a late-computed edge", func(t *testing.T) {
+		t.Parallel()
 		h := devHealth(t, "72630000-0000-4000-8000-000000000015", "72630000-0000-4000-8000-0000000000b5")
 		mustExec(t, ctx, direct, `INSERT INTO operational_service_repository_mappings (org_id, service_id, repo_id, is_active) VALUES (?, ?, ?, ?)`, h.orgID, "svc-edge", h.repo, uint8(1))
 		mustExec(t, ctx, direct, `INSERT INTO deployments (repo_id, org_id, deployment_id, status, environment, deployed_at, started_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -238,6 +241,7 @@ func TestCHAOS7263LateIngestedRowsAreProjected(t *testing.T) {
 	})
 
 	t.Run("git_pull_request_reviews: a backfilled review", func(t *testing.T) {
+		t.Parallel()
 		h := devHealth(t, "72630000-0000-4000-8000-000000000016", "72630000-0000-4000-8000-0000000000b6")
 		mustExec(t, ctx, direct, `INSERT INTO git_pull_requests (repo_id, number, title, state, created_at, org_id, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 			h.repo, uint32(7), "pr seven", "open", old, h.orgID, hourAgo.Add(-time.Minute))
@@ -252,6 +256,7 @@ func TestCHAOS7263LateIngestedRowsAreProjected(t *testing.T) {
 	})
 
 	t.Run("ci_pipeline_runs: a backfilled CI run", func(t *testing.T) {
+		t.Parallel()
 		h := devHealth(t, "72630000-0000-4000-8000-000000000017", "72630000-0000-4000-8000-0000000000b7")
 		first := h.drain("")
 		mustExec(t, ctx, direct, `INSERT INTO ci_pipeline_runs (run_id, repo_id, org_id, branch, status, started_at, finished_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -264,6 +269,7 @@ func TestCHAOS7263LateIngestedRowsAreProjected(t *testing.T) {
 	})
 
 	t.Run("teams: a team whose provider updated_at is old", func(t *testing.T) {
+		t.Parallel()
 		h := teamsProjects(t, "72630000-0000-4000-8000-000000000018")
 		first := h.drain("")
 		if _, ok := first.entityOfKind(t, contractsv1.ContextFabricSubjectProject); !ok {
@@ -279,6 +285,7 @@ func TestCHAOS7263LateIngestedRowsAreProjected(t *testing.T) {
 	})
 
 	t.Run("projects: a project whose provider updated_at is old", func(t *testing.T) {
+		t.Parallel()
 		h := teamsProjects(t, "72630000-0000-4000-8000-000000000019")
 		first := h.drain("")
 		mustExec(t, ctx, direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at, last_synced) VALUES (?, ?, 'linear', ?, ?, 1, 'started', '', ?, ?)`,

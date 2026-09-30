@@ -233,3 +233,9 @@ func RepositoryTeamsGroupedSQLForTest() string { return repositoryTeamsGroupedSQ
 // SetClockForTest pins the source's clock, which dates overlap-window passes
 // (overlap.go), so a window edge can be asserted to the millisecond.
 func (s *ClickHouseProjectionSource) SetClockForTest(now func() time.Time) { s.now = now }
+
+// SetWindowPagesPerCallForTest lowers how many window pages one call walks,
+// so a pass that spans several calls needs a window of a few pages instead
+// of more than overlapWindowPagesPerCall (1,000+ rows). The walk logic is the
+// same; only the per-call bound changes.
+func (s *ClickHouseProjectionSource) SetWindowPagesPerCallForTest(n int) { s.windowPages = n }

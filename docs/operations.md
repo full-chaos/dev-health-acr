@@ -592,7 +592,10 @@ is 1,000 and a larger read would fail the tick), at most 5 pages per call; a
 pass that does not reach the window's end stops at the last fully read row and
 resumes there on the next tick, logging `devhealthsource overlap window pass
 continues on the next tick`, so depth never drops a row, it only delays it.
-After a full pass the window's lower edge moves to (pass start - 2 x overlap),
+One tick walks one pass at most (plus a new pass when a pass resumed from an
+earlier tick completes); a page on which every table reports its end closes
+the pass, so an idle tick over a window smaller than one page costs one extra
+statement per table. After a full pass the window's lower edge moves to (pass start - 2 x overlap),
 so a row that lands more than about 2 x overlap after its own ingest stamp is
 not re-read (a rebuild recovers it), and a quiet organization's window closes
 by itself. After a projector restart the first caught-up ticks re-emit the
