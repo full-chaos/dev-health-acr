@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -278,5 +279,30 @@ func TestRegistryWatch_invalid_base_url(t *testing.T) {
 		if _, err := NewRegistryWatch(RegistryWatchConfig{Catalogue: cat, BaseURL: u}); err == nil {
 			t.Fatalf("accepted %q", u)
 		}
+	}
+}
+
+// Golden fixture: the live prod query-api GET /registry document captured
+// 2026-09-30 00:21Z at ops cb758a29 (HTTP 200, 6916 bytes). The real served
+// format must decode and match the re-pinned catalogue with zero drift.
+func TestRegistryWatch_live_prod_registry_golden_matches_pin(t *testing.T) {
+	golden, err := os.ReadFile("testdata/query_registry_cb758a29.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newRegistryFixture(t)
+	f.set(200, golden)
+	w, cat, buf := newWatch(t, f, nil)
+	w.Start()
+	w.Wait()
+	const want = "sha256:dd83956f18b52a3acf89e73e1f25b0dcf25df706d90eca49c5b66f8b8994f779"
+	if got := cat.StampedSchemaDigest(); got != want || cat.SchemaDigest() != want {
+		t.Fatalf("stamp %s pinned %s, want %s", got, cat.SchemaDigest(), want)
+	}
+	if ws := warns(buf.String()); len(ws) != 0 {
+		t.Fatalf("drift against the live document: %q", ws)
+	}
+	if !strings.Contains(buf.String(), "registry digest match") || !strings.Contains(buf.String(), "operations=58") {
+		t.Fatalf("no match line with 58 ops: %s", buf)
 	}
 }
