@@ -516,22 +516,31 @@ const (
 	ContextFabricEvidenceEntityComplexity         ContextFabricEvidenceEntityType = "complexity"
 	ContextFabricEvidenceEntityDeployment         ContextFabricEvidenceEntityType = "deployment"
 	ContextFabricEvidenceEntityDeploymentIncident ContextFabricEvidenceEntityType = "deployment-incident"
-	ContextFabricEvidenceEntityEpisode            ContextFabricEvidenceEntityType = "episode"
-	ContextFabricEvidenceEntityGraph              ContextFabricEvidenceEntityType = "graph"
-	ContextFabricEvidenceEntityHotspot            ContextFabricEvidenceEntityType = "hotspot"
-	ContextFabricEvidenceEntityIncident           ContextFabricEvidenceEntityType = "incident"
-	ContextFabricEvidenceEntityOrganization       ContextFabricEvidenceEntityType = "organization"
-	ContextFabricEvidenceEntityProject            ContextFabricEvidenceEntityType = "project"
-	ContextFabricEvidenceEntityProjectTeam        ContextFabricEvidenceEntityType = "project-team"
-	ContextFabricEvidenceEntityPullRequest        ContextFabricEvidenceEntityType = "pull-request"
-	ContextFabricEvidenceEntityRepository         ContextFabricEvidenceEntityType = "repository"
-	ContextFabricEvidenceEntityReview             ContextFabricEvidenceEntityType = "review"
-	ContextFabricEvidenceEntityReviewOutcome      ContextFabricEvidenceEntityType = "review-outcome"
-	ContextFabricEvidenceEntityTeam               ContextFabricEvidenceEntityType = "team"
-	ContextFabricEvidenceEntityWorkItem           ContextFabricEvidenceEntityType = "work-item"
-	ContextFabricEvidenceEntityWorkItemDependency ContextFabricEvidenceEntityType = "work-item-dependency"
-	ContextFabricEvidenceEntityWorkItemHierarchy  ContextFabricEvidenceEntityType = "work-item-hierarchy"
-	ContextFabricEvidenceEntityWorkItemTeam       ContextFabricEvidenceEntityType = "work-item-team"
+	// The five ".v2" kinds (CHAOS-7252) replace the five retired kinds above
+	// and below whose ids joined colon-capable components with a bare ':'.
+	// Their id segments are escaped (EncodedEvidenceEntityType), so one ref
+	// names one row; see internal/contextfabric/evidenceref.
+	ContextFabricEvidenceEntityDeploymentIncidentV2 ContextFabricEvidenceEntityType = "deployment-incident.v2"
+	ContextFabricEvidenceEntityEpisode              ContextFabricEvidenceEntityType = "episode"
+	ContextFabricEvidenceEntityGraph                ContextFabricEvidenceEntityType = "graph"
+	ContextFabricEvidenceEntityHotspot              ContextFabricEvidenceEntityType = "hotspot"
+	ContextFabricEvidenceEntityIncident             ContextFabricEvidenceEntityType = "incident"
+	ContextFabricEvidenceEntityOrganization         ContextFabricEvidenceEntityType = "organization"
+	ContextFabricEvidenceEntityProject              ContextFabricEvidenceEntityType = "project"
+	ContextFabricEvidenceEntityProjectTeam          ContextFabricEvidenceEntityType = "project-team"
+	ContextFabricEvidenceEntityProjectTeamV2        ContextFabricEvidenceEntityType = "project-team.v2"
+	ContextFabricEvidenceEntityPullRequest          ContextFabricEvidenceEntityType = "pull-request"
+	ContextFabricEvidenceEntityRepository           ContextFabricEvidenceEntityType = "repository"
+	ContextFabricEvidenceEntityReview               ContextFabricEvidenceEntityType = "review"
+	ContextFabricEvidenceEntityReviewOutcome        ContextFabricEvidenceEntityType = "review-outcome"
+	ContextFabricEvidenceEntityTeam                 ContextFabricEvidenceEntityType = "team"
+	ContextFabricEvidenceEntityWorkItem             ContextFabricEvidenceEntityType = "work-item"
+	ContextFabricEvidenceEntityWorkItemDependency   ContextFabricEvidenceEntityType = "work-item-dependency"
+	ContextFabricEvidenceEntityWorkItemHierarchy    ContextFabricEvidenceEntityType = "work-item-hierarchy"
+	ContextFabricEvidenceEntityWorkItemTeam         ContextFabricEvidenceEntityType = "work-item-team"
+	ContextFabricEvidenceEntityWorkItemDependencyV2 ContextFabricEvidenceEntityType = "work-item-dependency.v2"
+	ContextFabricEvidenceEntityWorkItemHierarchyV2  ContextFabricEvidenceEntityType = "work-item-hierarchy.v2"
+	ContextFabricEvidenceEntityWorkItemTeamV2       ContextFabricEvidenceEntityType = "work-item-team.v2"
 )
 
 // contextFabricEvidenceEntityTypes is the closed evidence-entity-type
@@ -549,6 +558,7 @@ var contextFabricEvidenceEntityTypes = [...]ContextFabricEvidenceEntityType{
 	ContextFabricEvidenceEntityComplexity,
 	ContextFabricEvidenceEntityDeployment,
 	ContextFabricEvidenceEntityDeploymentIncident,
+	ContextFabricEvidenceEntityDeploymentIncidentV2,
 	ContextFabricEvidenceEntityEpisode,
 	ContextFabricEvidenceEntityGraph,
 	ContextFabricEvidenceEntityHotspot,
@@ -556,6 +566,7 @@ var contextFabricEvidenceEntityTypes = [...]ContextFabricEvidenceEntityType{
 	ContextFabricEvidenceEntityOrganization,
 	ContextFabricEvidenceEntityProject,
 	ContextFabricEvidenceEntityProjectTeam,
+	ContextFabricEvidenceEntityProjectTeamV2,
 	ContextFabricEvidenceEntityPullRequest,
 	ContextFabricEvidenceEntityRepository,
 	ContextFabricEvidenceEntityReview,
@@ -563,8 +574,45 @@ var contextFabricEvidenceEntityTypes = [...]ContextFabricEvidenceEntityType{
 	ContextFabricEvidenceEntityTeam,
 	ContextFabricEvidenceEntityWorkItem,
 	ContextFabricEvidenceEntityWorkItemDependency,
+	ContextFabricEvidenceEntityWorkItemDependencyV2,
 	ContextFabricEvidenceEntityWorkItemHierarchy,
+	ContextFabricEvidenceEntityWorkItemHierarchyV2,
 	ContextFabricEvidenceEntityWorkItemTeam,
+	ContextFabricEvidenceEntityWorkItemTeamV2,
+}
+
+// contextFabricRetiredEvidenceEntityTypes are vocabulary members no producer
+// may mint any more (CHAOS-7252). Their ids joined two or more colon-capable
+// components with a bare ':', so one ref string could name two rows. Refs of
+// these kinds already sit in stored results and client transcripts, so the
+// kinds stay in the vocabulary (labels, trace values, the persisted-record
+// route) -- but EvidenceRefID refuses them, and each has a ".v2" successor.
+var contextFabricRetiredEvidenceEntityTypes = map[ContextFabricEvidenceEntityType]ContextFabricEvidenceEntityType{
+	ContextFabricEvidenceEntityDeploymentIncident: ContextFabricEvidenceEntityDeploymentIncidentV2,
+	ContextFabricEvidenceEntityProjectTeam:        ContextFabricEvidenceEntityProjectTeamV2,
+	ContextFabricEvidenceEntityWorkItemDependency: ContextFabricEvidenceEntityWorkItemDependencyV2,
+	ContextFabricEvidenceEntityWorkItemHierarchy:  ContextFabricEvidenceEntityWorkItemHierarchyV2,
+	ContextFabricEvidenceEntityWorkItemTeam:       ContextFabricEvidenceEntityWorkItemTeamV2,
+}
+
+// RetiredEvidenceEntityType reports whether entityType is retired for
+// minting, and names its ".v2" successor.
+func RetiredEvidenceEntityType(entityType ContextFabricEvidenceEntityType) (successor ContextFabricEvidenceEntityType, retired bool) {
+	successor, retired = contextFabricRetiredEvidenceEntityTypes[entityType]
+	return successor, retired
+}
+
+// EncodedEvidenceEntityType reports whether entityType's id is a list of
+// ':'-joined segments, each escaped by the identity segment codec ('%' ->
+// "%25" first, then ':' -> "%3A"), so that every ':' in the id is a
+// separator. Exactly the ".v2" successors of the retired kinds.
+func EncodedEvidenceEntityType(entityType ContextFabricEvidenceEntityType) bool {
+	for _, successor := range contextFabricRetiredEvidenceEntityTypes {
+		if successor == entityType {
+			return true
+		}
+	}
+	return false
 }
 
 // ContextFabricEvidenceEntityTypeCount is the size of the closed
@@ -602,6 +650,9 @@ func ContextFabricEvidenceEntityTypeVocabulary() [ContextFabricEvidenceEntityTyp
 func EvidenceRefID(entityType ContextFabricEvidenceEntityType, id string) string {
 	if !validEvidenceEntityType(entityType) {
 		panic("contracts: EvidenceRefID called with an entity type outside the closed vocabulary: " + string(entityType) + " -- add it to contextFabricEvidenceEntityTypes and contextFabricEvidenceEntityLabels in the SAME change")
+	}
+	if successor, retired := contextFabricRetiredEvidenceEntityTypes[entityType]; retired {
+		panic("contracts: EvidenceRefID called with the retired entity type " + string(entityType) + " -- mint its successor " + string(successor) + " through internal/contextfabric/evidenceref (CHAOS-7252)")
 	}
 	return ContextFabricEvidenceRefPrefix + string(entityType) + ":" + id
 }

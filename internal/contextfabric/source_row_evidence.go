@@ -47,6 +47,11 @@ const (
 	// team, a project) authorized by OWNERSHIP through the direct data
 	// tools' subject gate (directread.SubjectGate), never by membership.
 	SourceRowRouteOwnership SourceRowRoute = "ownership"
+	// SourceRowRouteEncoded: the id is an evidenceref grammar (a ".v2" kind,
+	// CHAOS-7252) that names one row; the row is read in one repository the
+	// caller may read, and every other subject the row names must be
+	// readable to the caller too (the read_relationships edge gate).
+	SourceRowRouteEncoded SourceRowRoute = "encoded"
 )
 
 // SourceRowPlan is the route of one entity type and the statement that reads
@@ -62,54 +67,51 @@ type SourceRowPlan struct {
 //   - organization: no canonical organization table exists.
 //   - episode: an approved agent episode lives in ACR Postgres and is not
 //     durable truth (AGENTS.md).
-//   - project-team (CHAOS-7227 scope): <provider>:<project>:<team> joins two
-//     colon-capable ids, and team_project_ownership is keyed by more than
-//     the pair, so one ref is not one row (CHAOS-7252).
-//   - work-item-dependency, work-item-hierarchy, work-item-team (CHAOS-7226
-//     r2 P1 class): their producers join TWO colon-capable ids with ':'
-//     (<src>:<tgt>:<key>, <repo>:<src>:<tgt>:<type>, <repo>:<child>:<parent>,
-//     <repo>:<work item>:<team>), so one ref string can name two rows, and
-//     a lookup by that string serves whichever one is left or admitted.
-//     A source row is read only for a grammar that is injective: the
-//     fixed-length repository UUID plus ONE opaque id, or the id alone
-//     (TestSourceRowGrammarsAreInjective). They return once their producers
-//     mint an injective grammar.
-//   - deployment-incident (same class): its id is edge_id, a hash of
-//     (deployment_id, incident_id) without the repository, and the table is
-//     keyed (org_id, deployment_id, incident_id, source); deployment ids
-//     collide across repositories, so one edge_id can be two rows in two
-//     repositories and the grant filter would choose between them. A
-//     row-anchored kind is read only when its id is its table's key within
-//     the organization (incident: operational_incidents (org_id, id)).
+//   - work-item-dependency, work-item-hierarchy, work-item-team,
+//     deployment-incident, project-team: RETIRED (CHAOS-7252). Their
+//     producers joined two colon-capable ids with a bare ':' (or, for
+//     deployment-incident, cited edge_id, a hash without the repository or
+//     the source), so one ref string could name two rows (CHAOS-7226 r2 P1).
+//     Refs of these kinds stay in stored results and are served from the
+//     persisted record only, forever; no producer mints them any more
+//     (contractsv1.RetiredEvidenceEntityType), and their ".v2" successors
+//     carry an injective grammar (internal/contextfabric/evidenceref).
+//   - project-team.v2: minted, but its source-row read (the projector's
+//     ownership group, unrestricted callers only) is a separate change.
 //   - commit, commit-file, graph, hotspot, complexity, ai-run, ai-artifact,
 //     review-outcome: no Context Fabric producer mints them. They occur only
 //     as packet-catalog locators inside ev2 handles, so an acr:v1 ref of
 //     these kinds reaches a caller only from a legacy stored result.
 var sourceRowPlans = map[contractsv1.ContextFabricEvidenceEntityType]SourceRowPlan{
-	contractsv1.ContextFabricEvidenceEntityAIArtifact:         {Route: SourceRowRouteRecord},
-	contractsv1.ContextFabricEvidenceEntityAIRun:              {Route: SourceRowRouteRecord},
-	contractsv1.ContextFabricEvidenceEntityCI:                 {Route: SourceRowRouteRepository, Query: "ci_pipeline_runs.v1"},
-	contractsv1.ContextFabricEvidenceEntityCommit:             {Route: SourceRowRouteRecord},
-	contractsv1.ContextFabricEvidenceEntityCommitFile:         {Route: SourceRowRouteRecord},
-	contractsv1.ContextFabricEvidenceEntityComplexity:         {Route: SourceRowRouteRecord},
-	contractsv1.ContextFabricEvidenceEntityDeployment:         {Route: SourceRowRouteRepository, Query: "deployments.v1"},
-	contractsv1.ContextFabricEvidenceEntityDeploymentIncident: {Route: SourceRowRouteRecord},
-	contractsv1.ContextFabricEvidenceEntityEpisode:            {Route: SourceRowRouteRecord},
-	contractsv1.ContextFabricEvidenceEntityGraph:              {Route: SourceRowRouteRecord},
-	contractsv1.ContextFabricEvidenceEntityHotspot:            {Route: SourceRowRouteRecord},
-	contractsv1.ContextFabricEvidenceEntityIncident:           {Route: SourceRowRouteRowRepository, Query: "incidents.v1"},
-	contractsv1.ContextFabricEvidenceEntityOrganization:       {Route: SourceRowRouteRecord},
-	contractsv1.ContextFabricEvidenceEntityProject:            {Route: SourceRowRouteOwnership, Query: "projects.v1"},
-	contractsv1.ContextFabricEvidenceEntityProjectTeam:        {Route: SourceRowRouteRecord},
-	contractsv1.ContextFabricEvidenceEntityPullRequest:        {Route: SourceRowRouteRepository, Query: "pull_requests.v1"},
-	contractsv1.ContextFabricEvidenceEntityRepository:         {Route: SourceRowRouteRepository, Query: "repository_freshness.v1"},
-	contractsv1.ContextFabricEvidenceEntityReview:             {Route: SourceRowRouteRepository, Query: "pull_request_reviews.v1"},
-	contractsv1.ContextFabricEvidenceEntityReviewOutcome:      {Route: SourceRowRouteRecord},
-	contractsv1.ContextFabricEvidenceEntityTeam:               {Route: SourceRowRouteOwnership, Query: "teams.v1"},
-	contractsv1.ContextFabricEvidenceEntityWorkItem:           {Route: SourceRowRouteRepository, Query: "work_items.v1"},
-	contractsv1.ContextFabricEvidenceEntityWorkItemDependency: {Route: SourceRowRouteRecord},
-	contractsv1.ContextFabricEvidenceEntityWorkItemHierarchy:  {Route: SourceRowRouteRecord},
-	contractsv1.ContextFabricEvidenceEntityWorkItemTeam:       {Route: SourceRowRouteRecord},
+	contractsv1.ContextFabricEvidenceEntityAIArtifact:           {Route: SourceRowRouteRecord},
+	contractsv1.ContextFabricEvidenceEntityAIRun:                {Route: SourceRowRouteRecord},
+	contractsv1.ContextFabricEvidenceEntityCI:                   {Route: SourceRowRouteRepository, Query: "ci_pipeline_runs.v1"},
+	contractsv1.ContextFabricEvidenceEntityCommit:               {Route: SourceRowRouteRecord},
+	contractsv1.ContextFabricEvidenceEntityCommitFile:           {Route: SourceRowRouteRecord},
+	contractsv1.ContextFabricEvidenceEntityComplexity:           {Route: SourceRowRouteRecord},
+	contractsv1.ContextFabricEvidenceEntityDeployment:           {Route: SourceRowRouteRepository, Query: "deployments.v1"},
+	contractsv1.ContextFabricEvidenceEntityDeploymentIncident:   {Route: SourceRowRouteRecord},
+	contractsv1.ContextFabricEvidenceEntityDeploymentIncidentV2: {Route: SourceRowRouteEncoded, Query: "deployment_incident_edges.v2"},
+	contractsv1.ContextFabricEvidenceEntityEpisode:              {Route: SourceRowRouteRecord},
+	contractsv1.ContextFabricEvidenceEntityGraph:                {Route: SourceRowRouteRecord},
+	contractsv1.ContextFabricEvidenceEntityHotspot:              {Route: SourceRowRouteRecord},
+	contractsv1.ContextFabricEvidenceEntityIncident:             {Route: SourceRowRouteRowRepository, Query: "incidents.v1"},
+	contractsv1.ContextFabricEvidenceEntityOrganization:         {Route: SourceRowRouteRecord},
+	contractsv1.ContextFabricEvidenceEntityProject:              {Route: SourceRowRouteOwnership, Query: "projects.v1"},
+	contractsv1.ContextFabricEvidenceEntityProjectTeam:          {Route: SourceRowRouteRecord},
+	contractsv1.ContextFabricEvidenceEntityProjectTeamV2:        {Route: SourceRowRouteRecord},
+	contractsv1.ContextFabricEvidenceEntityPullRequest:          {Route: SourceRowRouteRepository, Query: "pull_requests.v1"},
+	contractsv1.ContextFabricEvidenceEntityRepository:           {Route: SourceRowRouteRepository, Query: "repository_freshness.v1"},
+	contractsv1.ContextFabricEvidenceEntityReview:               {Route: SourceRowRouteRepository, Query: "pull_request_reviews.v1"},
+	contractsv1.ContextFabricEvidenceEntityReviewOutcome:        {Route: SourceRowRouteRecord},
+	contractsv1.ContextFabricEvidenceEntityTeam:                 {Route: SourceRowRouteOwnership, Query: "teams.v1"},
+	contractsv1.ContextFabricEvidenceEntityWorkItem:             {Route: SourceRowRouteRepository, Query: "work_items.v1"},
+	contractsv1.ContextFabricEvidenceEntityWorkItemDependency:   {Route: SourceRowRouteRecord},
+	contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2: {Route: SourceRowRouteEncoded, Query: "work_item_dependencies.v2"},
+	contractsv1.ContextFabricEvidenceEntityWorkItemHierarchy:    {Route: SourceRowRouteRecord},
+	contractsv1.ContextFabricEvidenceEntityWorkItemHierarchyV2:  {Route: SourceRowRouteEncoded, Query: "work_item_hierarchy.v2"},
+	contractsv1.ContextFabricEvidenceEntityWorkItemTeam:         {Route: SourceRowRouteRecord},
+	contractsv1.ContextFabricEvidenceEntityWorkItemTeamV2:       {Route: SourceRowRouteEncoded, Query: "work_item_teams.v2"},
 }
 
 // SourceRowPlanFor returns the plan of an entity type segment. A segment
@@ -203,11 +205,13 @@ const (
 	// SourceRowGrammarOrgKeyed: the id is an organization-level row key (a
 	// team id; a project's <provider>:<id>).
 	SourceRowGrammarOrgKeyed = "org_keyed"
+	// SourceRowGrammarEncoded: an evidenceref grammar (CHAOS-7252).
+	SourceRowGrammarEncoded = "encoded"
 )
 
 // SourceRowGrammarVocabulary is the closed set of grammars.
-func SourceRowGrammarVocabulary() [3]string {
-	return [3]string{SourceRowGrammarRepoAnchored, SourceRowGrammarRowAnchored, SourceRowGrammarOrgKeyed}
+func SourceRowGrammarVocabulary() [4]string {
+	return [4]string{SourceRowGrammarRepoAnchored, SourceRowGrammarRowAnchored, SourceRowGrammarOrgKeyed, SourceRowGrammarEncoded}
 }
 
 // SourceRowDecision records what decided one source-row resolution. It

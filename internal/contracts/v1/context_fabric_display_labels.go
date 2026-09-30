@@ -105,6 +105,13 @@ var contextFabricEvidenceEntityLabels = map[ContextFabricEvidenceEntityType]stri
 	ContextFabricEvidenceEntityWorkItemHierarchy: "Work item hierarchy",
 	ContextFabricEvidenceEntityProjectTeam:       "Project/team link",
 	ContextFabricEvidenceEntityWorkItemTeam:      "Work item/team link",
+	// The ".v2" successors (CHAOS-7252) name the same things as the kinds
+	// they replace, so they read the same.
+	ContextFabricEvidenceEntityWorkItemDependencyV2: "Work item dependency",
+	ContextFabricEvidenceEntityDeploymentIncidentV2: "Deployment/incident link",
+	ContextFabricEvidenceEntityWorkItemHierarchyV2:  "Work item hierarchy",
+	ContextFabricEvidenceEntityProjectTeamV2:        "Project/team link",
+	ContextFabricEvidenceEntityWorkItemTeamV2:       "Work item/team link",
 }
 
 // humanizeVocabularyToken is the deterministic transform for a token from
@@ -194,7 +201,25 @@ func ContextFabricEvidenceRefLabel(refID string) (string, bool) {
 	if id == "" {
 		return label, true
 	}
+	if EncodedEvidenceEntityType(ContextFabricEvidenceEntityType(entityType)) {
+		id = decodedEvidenceID(id)
+	}
 	return clampLabel(label + ": " + id), true
+}
+
+// decodedEvidenceID renders an encoded (".v2") id for display: each
+// ':'-separated segment unescaped, rejoined with ':', so the label reads as
+// the unescaped ids did before CHAOS-7252. Display only: a label is never
+// parsed or compared. It mirrors identity.DecodeSegment ("%3A" -> ':' first,
+// then "%25" -> '%'); TestDecodedEvidenceIDMatchesTheIdentityCodec pins the
+// two against each other, since contracts/v1 imports nothing internal.
+func decodedEvidenceID(id string) string {
+	segments := strings.Split(id, ":")
+	for index, segment := range segments {
+		segment = strings.ReplaceAll(segment, "%3A", ":")
+		segments[index] = strings.ReplaceAll(segment, "%25", "%")
+	}
+	return strings.Join(segments, ":")
 }
 
 // countPhrase renders a detail's structured Count for a label — the ONLY

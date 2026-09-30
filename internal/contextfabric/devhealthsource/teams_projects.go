@@ -254,7 +254,13 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // follow-up filed separately. Operationally: after the forced rebuild, prove the
 // active epoch's recorded source version and retire the pre-v16 grace epoch
 // (RUNBOOK-REV21-7242); roll back across v16 by helm rollback only.
-const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v16"
+//
+// v16 -> v17 (CHAOS-7252): work item -> team and project -> team edges cite
+// ".v2" evidence refs (the attribution row's full key; the ownership group
+// with its source), each component escaped, instead of the retired bare-':'
+// joins. Already-projected edges carry the retired refs; the bump forces the
+// rebuild that re-mints them.
+const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v17"
 
 // teamsProjectsTables is this source's bounded coverage. Both tables were
 // already canonical Dev Health data; neither introduces a new ingest path.

@@ -39,6 +39,12 @@ var catalogEvidenceAdapters = map[string]providerEvidenceAdapter{
 	// Organization-level rows (OrganizationRowQueriesV1, CHAOS-7227).
 	"teams.v1":    {structuredKey: "team_id", expectedType: "team"},
 	"projects.v1": {structuredKey: "project_id", expectedType: "project"},
+	// Source-row-only statements (SourceRowOnlyQueriesV2, CHAOS-7252): the
+	// structured id is the ".v2" ref's id segment.
+	"work_item_dependencies.v2":    {structuredKey: "dependency_id", expectedType: "work_item_dependency"},
+	"work_item_hierarchy.v2":       {structuredKey: "hierarchy_id", expectedType: "work_item_hierarchy"},
+	"work_item_teams.v2":           {structuredKey: "work_item_team_id", expectedType: "work_item_team"},
+	"deployment_incident_edges.v2": {structuredKey: "deployment_incident_id", expectedType: "deployment_incident_edge"},
 }
 
 func evidenceAdapterFor(evidence contractsv1.EvidenceRef) (evidenceAdapter, bool) {

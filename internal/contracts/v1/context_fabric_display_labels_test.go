@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"strings"
 	"testing"
 )
@@ -89,6 +90,16 @@ func TestEvidenceEntityLabelsAreTotal(t *testing.T) {
 // silently mislabeled as Commit.
 func TestEvidenceRefIDIsTypedAndTotal(t *testing.T) {
 	for _, entityType := range ContextFabricEvidenceEntityTypeVocabulary() {
+		if _, retired := RetiredEvidenceEntityType(entityType); retired {
+			// Retired kinds are refused at mint time
+			// (TestEvidenceRefIDRefusesRetiredKinds) and labeled from the
+			// stored refs that still carry them.
+			ref := ContextFabricEvidenceRefPrefix + string(entityType) + ":x"
+			if label, known := ContextFabricEvidenceRefLabel(ref); !known || label != contextFabricEvidenceEntityLabels[entityType]+": x" {
+				t.Errorf("retired %q labels as (%q, %v)", entityType, label, known)
+			}
+			continue
+		}
 		ref := EvidenceRefID(entityType, "x")
 		label, known := ContextFabricEvidenceRefLabel(ref)
 		if !known {
@@ -230,5 +241,61 @@ func TestEvidenceRefLabelClampsAtMaxLengthRef(t *testing.T) {
 		if err := validateEvidenceRefLabels(result); err != nil {
 			t.Fatalf("derived label for a contract-valid ref must validate, got: %v", err)
 		}
+	}
+}
+
+// CHAOS-7252: the five retired kinds (bare-':' joins of colon-capable ids)
+// cannot be minted any more; each names an encoded ".v2" successor that
+// can. Red before the retirement guard: EvidenceRefID minted them silently.
+func TestEvidenceRefIDRefusesRetiredKinds(t *testing.T) {
+	retired := 0
+	for _, entityType := range ContextFabricEvidenceEntityTypeVocabulary() {
+		successor, isRetired := RetiredEvidenceEntityType(entityType)
+		if !isRetired {
+			continue
+		}
+		retired++
+		if !EncodedEvidenceEntityType(successor) || !validEvidenceEntityType(successor) {
+			t.Errorf("%q names successor %q, which is not an encoded vocabulary member", entityType, successor)
+		}
+		func() {
+			defer func() {
+				message, _ := recover().(string)
+				if !strings.Contains(message, string(entityType)) || !strings.Contains(message, string(successor)) {
+					t.Errorf("EvidenceRefID(%q) did not refuse the retired kind naming its successor: %q", entityType, message)
+				}
+			}()
+			_ = EvidenceRefID(entityType, "x")
+		}()
+		if EvidenceRefID(successor, "x") != ContextFabricEvidenceRefPrefix+string(successor)+":x" {
+			t.Errorf("successor %q does not mint", successor)
+		}
+	}
+	if retired != 5 {
+		t.Fatalf("%d retired kinds, want 5", retired)
+	}
+}
+
+// D5 (CHAOS-7252): an encoded (".v2") id labels as its unescaped segments,
+// so a label reads as the ids did before the escaping. contracts/v1 carries
+// its own two-line decode (it imports nothing internal); this pins it to the
+// identity codec it mirrors over the codec's adversarial values, and pins
+// that a non-encoded kind's id is shown verbatim.
+func TestDecodedEvidenceIDMatchesTheIdentityCodec(t *testing.T) {
+	values := []string{"", "a", ":", "%", "%3A", "%25", "%3a", "%%3A", "%253A", "a:b", "jira:A:B", "ari:cloud:identity::team/1", "é:ü"}
+	for _, first := range values {
+		for _, second := range values {
+			id := identity.JoinSegments(first, second)
+			if got, want := decodedEvidenceID(id), first+":"+second; got != want {
+				t.Errorf("decodedEvidenceID(%q) = %q, want %q", id, got, want)
+			}
+		}
+	}
+	label, known := ContextFabricEvidenceRefLabel("acr:v1:work-item-dependency.v2:jira%3AA%3AB:jira%3AC:blocks%3Afwd")
+	if !known || label != "Work item dependency: jira:A:B:jira:C:blocks:fwd" {
+		t.Errorf("encoded label = (%q, %v)", label, known)
+	}
+	if label, _ := ContextFabricEvidenceRefLabel("acr:v1:work-item:repo:jira%3AA"); label != "Work item: repo:jira%3AA" {
+		t.Errorf("a non-encoded kind's id was decoded: %q", label)
 	}
 }

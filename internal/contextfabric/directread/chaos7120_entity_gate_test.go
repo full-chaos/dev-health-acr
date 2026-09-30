@@ -113,7 +113,7 @@ func TestChaos7120BlockerInUnseenRepositoryIsWithheld(t *testing.T) {
 			"blocked_by_work_item_ref": strValue(workB9.CanonicalID),
 		},
 		EvidenceRefIDs: []string{
-			evidence(contractsv1.ContextFabricEvidenceEntityWorkItemDependency, "WB-9:WA-1"),
+			evidence(contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, "WB-9:WA-1:blocks%3Afwd"),
 			evidence(contractsv1.ContextFabricEvidenceEntityWorkItem, "b:WB-9"),
 			evidence(contractsv1.ContextFabricEvidenceEntityWorkItem, "a:WA-1"),
 		},

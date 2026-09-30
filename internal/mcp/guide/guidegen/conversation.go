@@ -67,7 +67,7 @@ func buildConversation() string {
 	b.WriteString("`source_evidence` takes one `evidence_ref_id` from an answer's `evidence_ref_ids` and returns provenance and a bounded excerpt. ")
 	b.WriteString("Also pass that answer's `result_id` with every reference it returned: a reference names its subject, not its answer, and some are refused without it. ")
 	b.WriteString("Authorization is checked live on every call. ")
-	b.WriteString("Where the reference names a source row you may read (a repository, work item, pull request, review, CI run, deployment, incident, team, or project), the expansion is that row as it is now: `source.system` is `dev_health` and `metadata.row_state` is `current`, so the row may be newer than the answer that cited it. ")
+	b.WriteString("Where the reference names a source row you may read (a repository, work item, pull request, review, CI run, deployment, incident, team, project, or one of the work item dependency, work item hierarchy, work item/team and deployment/incident links whose kind ends in `.v2`), the expansion is that row as it is now: `source.system` is `dev_health` and `metadata.row_state` is `current`, so the row may be newer than the answer that cited it. ")
 	b.WriteString("Otherwise it is the answer's persisted evidence record: `source.system` is `acr-investigation-record`.\n\n")
 
 	b.WriteString("## Trust\n\n")

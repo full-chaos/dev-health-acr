@@ -312,6 +312,7 @@ func TestChaos6561_V11CheckpointForcesARebuild(t *testing.T) {
 		{"v12 marker forces a rebuild (CHAOS-7119 name resolution)", "devhealthsource.teams_projects.v12", true},
 		{"v14 marker forces a rebuild (CHAOS-7130 resolved team authorization list)", "devhealthsource.teams_projects.v14", true},
 		{"v15 marker forces a rebuild (CHAOS-7242 legacy stubs keep their pre-fix scope on top of an old graph)", "devhealthsource.teams_projects.v15", true},
+		{"v16 marker forces a rebuild (CHAOS-7252 edges cite retired bare-':' evidence refs)", "devhealthsource.teams_projects.v16", true},
 		{"current marker advances", devhealthsource.TeamsProjectsSourceVersion, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

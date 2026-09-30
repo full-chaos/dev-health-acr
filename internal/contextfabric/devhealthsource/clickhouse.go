@@ -95,7 +95,14 @@ const SourceName = "dev_health_clickhouse"
 // (v2, CHAOS-3779 codex round-2 H2 residual: queryWorkItemDependencies'
 // RelationshipID began embedding relationship_type (previously (source,
 // target) only), and queryWorkItemHierarchy was a new producer.)
-const ClickHouseSourceVersion = "devhealthsource.clickhouse.v6"
+//
+// (v7, CHAOS-7252: the work-item-dependency, work-item-hierarchy and
+// deployment-incident edges cite ".v2" evidence refs -- escaped components,
+// the dependency's canonical relation key (CHAOS-7238), the deployment
+// incident row's full key -- instead of the retired bare-':' joins. Every
+// already-projected edge still carries a retired ref that no producer mints
+// any more; the rebuild (acr-projector rebuild --org) re-projects them.)
+const ClickHouseSourceVersion = "devhealthsource.clickhouse.v7"
 
 // Bounds keep a single batch inside ContextFabricProjectionBatch's v1 caps
 // (1000 entities, 5000 relationships) with headroom for the episode and

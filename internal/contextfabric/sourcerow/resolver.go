@@ -40,6 +40,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/evidenceref"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -144,6 +145,27 @@ func (r *Resolver) ResolveSourceRow(ctx context.Context, principal storage.Princ
 		targets, err = r.discoveredTargets(ctx, principal, discovery, entityID, read, contextfabric.SourceRowGrammarRowAnchored, &decision)
 	case contextfabric.SourceRowRouteOwnership:
 		return r.ownershipRow(ctx, principal, entityType, entityID, plan, decision)
+	case contextfabric.SourceRowRouteEncoded:
+		decision.Grammar = contextfabric.SourceRowGrammarEncoded
+		kind := contractsv1.ContextFabricEvidenceEntityType(entityType)
+		spec, ok := encodedSpecs[kind]
+		if !ok {
+			decision.Reason = contextfabric.SourceRowKindOnRecord
+			return contractsv1.ExpandedEvidence{}, decision
+		}
+		values, ok := evidenceref.Parse(kind, entityID)
+		// A repository segment the lookup binds as a UUID must be the
+		// canonical text every producer mints (toString(UUID)): anything else
+		// is refused here, before a read, never sent to ClickHouse.
+		if ok && spec.anchorByID {
+			ok = evidenceref.CanonicalUUID(values[spec.anchorSegment])
+		}
+		if !ok {
+			decision.Reason = contextfabric.SourceRowIDMalformed
+			return contractsv1.ExpandedEvidence{}, decision
+		}
+		read := contextpacket.SourceRowRead{QueryID: plan.Query, Locator: contractsv1.ContextFabricEvidenceRefPrefix + entityType + ":" + entityID, Components: values}
+		targets, err = r.encodedTargets(ctx, principal, spec, values, read, &decision)
 	default:
 		decision.Reason = contextfabric.SourceRowKindOnRecord
 		return contractsv1.ExpandedEvidence{}, decision
@@ -273,7 +295,8 @@ type found struct {
 // readTargets reads every target and serves exactly one distinct row. A
 // row-repository kind (an incident mapped to several repositories) is ONE row
 // (its id is the table key within the organization), the same in each; the
-// first readable repository, in slug order, serves it.
+// first readable repository, in slug order, serves it. An encoded kind's
+// targets are likewise all readings of the ONE row its id names.
 func (r *Resolver) readTargets(ctx context.Context, principal storage.Principal, entityType, entityID string, route contextfabric.SourceRowRoute, targets []target, decision contextfabric.SourceRowDecision) (contractsv1.ExpandedEvidence, contextfabric.SourceRowDecision) {
 	var rows []found
 	seen := map[string]bool{}
@@ -297,7 +320,7 @@ func (r *Resolver) readTargets(ctx context.Context, principal storage.Principal,
 		}
 		seen[key] = true
 		rows = append(rows, found{target: candidate, reference: references[0]})
-		if route == contextfabric.SourceRowRouteRowRepository {
+		if route == contextfabric.SourceRowRouteRowRepository || route == contextfabric.SourceRowRouteEncoded {
 			break
 		}
 	}
@@ -347,8 +370,10 @@ func (r *Resolver) expand(ctx context.Context, entityType, entityID string, row 
 	metadata["row_state"] = "current"
 	metadata["row_observed_at"] = evidence.ObservedAt.UTC().Format("2006-01-02T15:04:05.000Z07:00")
 	metadata["source_query"] = row.target.read.QueryID
-	metadata["source_query_version"] = contextpacket.SourceRowQueryVersionV1
-	metadata["catalog_version"] = contextpacket.SourceQueryCatalogVersionV1
+	metadata["source_query_version"] = contextpacket.SourceRowQueryVersion
+	if contextpacket.CatalogSourceQuery(row.target.read.QueryID) {
+		metadata["catalog_version"] = contextpacket.SourceQueryCatalogVersionV1
+	}
 	expanded.Evidence.Metadata = metadata
 	structured := make(map[string]any, len(expanded.Structured)+4)
 	for key, value := range expanded.Structured {
@@ -471,8 +496,8 @@ func (r *Resolver) ownershipRow(ctx context.Context, principal storage.Principal
 // row's own columns, with the producer's functions, and reports whether it is
 // the subject the ref names and the grant or gate authorized (#742 r1 P1
 // class). The row must carry the catalog id that was read, its ref re-minted
-// with contractsv1.EvidenceRefID (the producer's call) must equal the
-// requested ref, and a team or project row's canonical id must equal the one
+// with contractsv1.EvidenceRefID (the producer's call; evidenceref.Mint for a
+// ".v2" kind) must equal the requested ref, and a team or project row's canonical id must equal the one
 // the subject gate decided. A repository-level row's repository is the one
 // its statement bound (repo_id), which the grant admitted.
 func rowNamesSubject(entityType, entityID string, row found) bool {
@@ -522,7 +547,167 @@ func rowNamesSubject(entityType, entityID string, row found) bool {
 		}
 		minted = contractsv1.EvidenceRefID(kind, row.key[0]+":"+row.key[1])
 	default:
-		return false
+		// A ".v2" row (CHAOS-7252): its id is the statement's rendering of
+		// the row's own columns (evidenceref.IDSQL). It must parse as the
+		// kind's grammar and re-mint through the producers' function
+		// (evidenceref.Mint) to the requested ref, and where the id names
+		// the row's repository, that repository must be the one the grant
+		// admitted (the read's repo_id).
+		spec, encoded := encodedSpecs[kind]
+		if !encoded || rowID == "" {
+			return false
+		}
+		values, parsed := evidenceref.Parse(kind, rowID)
+		if !parsed || (spec.anchorByID && values[spec.anchorSegment] != row.target.scope.RepoID) {
+			return false
+		}
+		minted, _ = evidenceref.Mint(kind, values...)
 	}
 	return minted == contractsv1.ContextFabricEvidenceRefPrefix+entityType+":"+entityID
+}
+
+// endpoint is one subject an encoded row names besides the repository it is
+// read in, found by a discovery over one id segment.
+type endpoint struct {
+	discovery contextpacket.SourceRowDiscovery
+	segment   int
+	// optional: an endpoint the discovery finds nothing for does not
+	// refuse the row. Only the dependency target is optional: the projector
+	// stubs a target with no work item row and authorizes the edge by its
+	// source alone (devhealthsource queryWorkItemDependencies, §1.5).
+	optional bool
+}
+
+// encodedSpec is how one ".v2" kind's row is authorized and located
+// (CHAOS-7252). The decision is the read_relationships edge gate: the edge's
+// own repository and each endpoint must be readable to the caller. An
+// endpoint that lives in several repositories is readable when one of them
+// is, which is exactly "at least one projected edge of this row is visible"
+// -- the grant never chooses between rows, because every target is the ONE
+// row the id names.
+type encodedSpec struct {
+	// The repositories the row may be read in: the one a UUID segment names
+	// (anchorByID), or those a discovery over a segment finds.
+	anchorByID      bool
+	anchorSegment   int
+	anchorDiscovery contextpacket.SourceRowDiscovery
+	endpoints       []endpoint
+	// wildcardOnly: the row names a subject this resolver cannot decide yet
+	// -- a team, whose ownership-derived gate CHAOS-7227 composes -- so the
+	// row is served only to a caller that a "*" repository list admits
+	// (unrestricted and "*" callers), and every repository-restricted caller
+	// is refused (fail closed; strictly stronger than the edge gate).
+	wildcardOnly bool
+}
+
+var encodedSpecs = map[contractsv1.ContextFabricEvidenceEntityType]encodedSpec{
+	// (source, target, relation key): read where the source work item
+	// lives; the target, when it resolves, must be readable too.
+	contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2: {
+		anchorDiscovery: contextpacket.SourceRowDiscoveryWorkItem, anchorSegment: 0,
+		endpoints: []endpoint{{discovery: contextpacket.SourceRowDiscoveryWorkItem, segment: 1, optional: true}},
+	},
+	// (child repository, child, parent): read in the child's repository;
+	// the parent must be a readable work item.
+	contractsv1.ContextFabricEvidenceEntityWorkItemHierarchyV2: {
+		anchorByID: true, anchorSegment: 0,
+		endpoints: []endpoint{{discovery: contextpacket.SourceRowDiscoveryWorkItem, segment: 2}},
+	},
+	// (attribution repo_id, work item, team, source): read where the work
+	// item lives (the attribution's own repo_id is mostly the zero UUID);
+	// the team is decided fail closed until CHAOS-7227.
+	contractsv1.ContextFabricEvidenceEntityWorkItemTeamV2: {
+		anchorDiscovery: contextpacket.SourceRowDiscoveryWorkItem, anchorSegment: 1,
+		wildcardOnly: true,
+	},
+	// (repository, deployment, incident, source): read in the repository
+	// the row names (the edge and its deployment); the incident must be
+	// readable through a current service mapping. An incident no service
+	// maps has no readable repository and is refused.
+	contractsv1.ContextFabricEvidenceEntityDeploymentIncidentV2: {
+		anchorByID: true, anchorSegment: 0,
+		endpoints: []endpoint{{discovery: contextpacket.SourceRowDiscoveryIncident, segment: 2}},
+	},
+}
+
+// EncodedKinds lists the kinds with an encoded source-row spec, for the plan
+// totality tests.
+func EncodedKinds() []contractsv1.ContextFabricEvidenceEntityType {
+	kinds := make([]contractsv1.ContextFabricEvidenceEntityType, 0, len(encodedSpecs))
+	for kind := range encodedSpecs {
+		kinds = append(kinds, kind)
+	}
+	return kinds
+}
+
+// admitsWildcard is the direct data tools' decision for a node whose
+// repository list is "*" (CHAOS-7080): unrestricted and "*" callers only.
+func admitsWildcard(principal storage.Principal) bool {
+	return graphrank.AuthorizedAttributes(principal, contextfabric.RequestedScope{}, map[string]interface{}{"authorization_repositories": []string{"*"}})
+}
+
+// encodedTargets runs every lookup of an encoded row -- the read
+// repositories, then each endpoint, always all of them and in this order, so
+// a refused row and an absent one run the same reads -- then decides the
+// grant in Go and returns the repositories the row may be read in.
+func (r *Resolver) encodedTargets(ctx context.Context, principal storage.Principal, spec encodedSpec, values []string, read contextpacket.SourceRowRead, decision *contextfabric.SourceRowDecision) ([]target, error) {
+	var anchors []contractsv1.ResolvedScope
+	var err error
+	if spec.anchorByID {
+		anchors, err = r.rows.RepositoryByID(ctx, principal.OrgID, values[spec.anchorSegment])
+		if err == nil && len(anchors) > 1 {
+			decision.Repositories += len(anchors)
+			return nil, errSaturated
+		}
+	} else {
+		anchors, err = r.discover(ctx, principal, spec.anchorDiscovery, values[spec.anchorSegment], decision)
+	}
+	if err != nil {
+		return nil, err
+	}
+	found := make([][]contractsv1.ResolvedScope, len(spec.endpoints))
+	for index, end := range spec.endpoints {
+		if found[index], err = r.discover(ctx, principal, end.discovery, values[end.segment], decision); err != nil {
+			return nil, err
+		}
+	}
+	readable := make([]contractsv1.ResolvedScope, 0, len(anchors))
+	for _, scope := range admitted(principal, anchors, decision) {
+		if strings.TrimSpace(scope.RepoSlug) != "" {
+			readable = append(readable, scope)
+		}
+	}
+	allowed := len(readable) > 0
+	for index, end := range spec.endpoints {
+		admittedEnds := admitted(principal, found[index], decision)
+		if len(found[index]) == 0 {
+			allowed = allowed && end.optional
+			continue
+		}
+		allowed = allowed && len(admittedEnds) > 0
+	}
+	if spec.wildcardOnly && !admitsWildcard(principal) {
+		allowed = false
+	}
+	if !allowed {
+		return nil, nil
+	}
+	targets := make([]target, 0, len(readable))
+	for _, scope := range readable {
+		targets = append(targets, target{scope: scope, read: read, grammar: contextfabric.SourceRowGrammarEncoded})
+	}
+	return targets, nil
+}
+
+// discover runs one repository discovery and refuses a saturated list.
+func (r *Resolver) discover(ctx context.Context, principal storage.Principal, discovery contextpacket.SourceRowDiscovery, entityID string, decision *contextfabric.SourceRowDecision) ([]contractsv1.ResolvedScope, error) {
+	scopes, err := r.rows.SourceRowRepositories(ctx, principal.OrgID, discovery, entityID)
+	if err != nil {
+		return nil, err
+	}
+	if len(scopes) > contextpacket.MaxSourceRowRepositories() {
+		decision.Repositories += len(scopes)
+		return nil, errSaturated
+	}
+	return scopes, nil
 }

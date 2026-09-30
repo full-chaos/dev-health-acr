@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/evidenceref"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/ownershipresolve"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -590,16 +591,16 @@ WHERE 1 = 1` + sincePredicate(cursor, "observed_at", rowKey) + orderBy("observed
 // would be meaningless.
 func queryWorkItemTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	rowKey := rowKeySQL("toString(w.repo_id)", "a.work_item_id")
-	statement := `SELECT a.work_item_id, ifNull(a.team_id, ''), toString(a.source), toString(a.confidence), toString(w.repo_id), ifNull(r.repo, ''), a.computed_at
+	statement := `SELECT a.work_item_id, ifNull(a.team_id, ''), toString(a.source), toString(a.confidence), toString(w.repo_id), ifNull(r.repo, ''), a.computed_at, toString(a.repo_id)
 FROM work_item_team_attributions AS a FINAL
 INNER JOIN (SELECT work_item_id, repo_id, org_id FROM work_items FINAL WHERE org_id = {org_id:String}) AS w ON w.work_item_id = a.work_item_id AND w.org_id = a.org_id
 INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = ifNull(a.team_id, '')
 LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
 WHERE a.org_id = {org_id:String} AND a.is_primary = 1 AND ifNull(a.team_id, '') != ''` + sincePredicate(cursor, "a.computed_at", rowKey) + orderBy("a.computed_at", rowKey)
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
-		var workItemID, teamID, source, confidence, repoID, repoSlug string
+		var workItemID, teamID, source, confidence, repoID, repoSlug, attributionRepoID string
 		var observedAt time.Time
-		if err := r.Scan(&workItemID, &teamID, &source, &confidence, &repoID, &repoSlug, &observedAt); err != nil {
+		if err := r.Scan(&workItemID, &teamID, &source, &confidence, &repoID, &repoSlug, &observedAt, &attributionRepoID); err != nil {
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
@@ -612,6 +613,11 @@ WHERE a.org_id = {org_id:String} AND a.is_primary = 1 AND ifNull(a.team_id, '') 
 			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
 		}
 		derivation, epistemicStatus := workItemTeamAttributionDerivation(source)
+		// CHAOS-7252: the ref is the attribution row's full key -- its OWN
+		// repo_id (usually the zero UUID; the work item's repository
+		// authorizes the edge instead), the work item, the team and the
+		// source -- each escaped. Team ids are Atlassian ARIs with ':'.
+		workItemTeamRef, _ := evidenceref.Mint(contractsv1.ContextFabricEvidenceEntityWorkItemTeamV2, attributionRepoID, workItemID, teamID, source)
 		relationship := contractsv1.ContextFabricRelationshipProjection{
 			RelationshipID:  workItemTeamRelationshipID(workItemCanonicalID, teamID),
 			Type:            contractsv1.ContextFabricRelationshipOwnedByTeam,
@@ -621,7 +627,7 @@ WHERE a.org_id = {org_id:String} AND a.is_primary = 1 AND ifNull(a.team_id, '') 
 			Derivation:      derivation,
 			EpistemicStatus: epistemicStatus,
 			Authorization:   workItemAuthorization(repoID, repoSlug),
-			EvidenceRefIDs:  []string{contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItemTeam, repoID+":"+workItemID+":"+teamID)},
+			EvidenceRefIDs:  []string{workItemTeamRef},
 			ObservedAt:      observedAt,
 			SourceVersion:   TeamsProjectsSourceVersion,
 		}
@@ -1490,6 +1496,10 @@ func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQuery
 		// longer fire, and a guard that cannot fire is a false claim that
 		// something is being guarded. recordAmbiguousProjectKeys carries the
 		// telemetry instead.
+		// CHAOS-7252: the ref names the ownership GROUP this edge is --
+		// (provider, projects.id, team, source), each escaped. The source is
+		// part of it: two sources are two edges (projectTeamRelationshipID).
+		projectTeamRef, _ := evidenceref.Mint(contractsv1.ContextFabricEvidenceEntityProjectTeamV2, provider, projectID, teamID, source)
 		relationship := contractsv1.ContextFabricRelationshipProjection{
 			RelationshipID: projectTeamRelationshipID(projectCanonicalID, teamID, source),
 			Type:           contractsv1.ContextFabricRelationshipOwnedByTeam,
@@ -1502,7 +1512,7 @@ func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQuery
 			Derivation:      contractsv1.ContextFabricDerivationRuleInferred,
 			EpistemicStatus: contractsv1.ContextFabricEpistemicSourceAsserted,
 			Authorization:   contractsv1.ContextFabricAuthorizationScope{ProjectIDs: []string{projectID}, TeamIDs: []string{teamID}},
-			EvidenceRefIDs:  []string{contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityProjectTeam, provider+":"+projectID+":"+teamID)},
+			EvidenceRefIDs:  []string{projectTeamRef},
 			ObservedAt:      observedAt,
 			SourceVersion:   TeamsProjectsSourceVersion,
 		}

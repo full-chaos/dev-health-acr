@@ -158,7 +158,12 @@ import (
 // ("query project theme mix failed") that answer reuse serves for Partial and
 // Degraded results too, and must not be reused. The rows the statements return
 // are unchanged (chaos7257_*_parity_integration_test.go).
-const QueryVersion = "devhealthfacts.clickhouse.v20"
+//
+// v20 -> v21 (CHAOS-7252): blockers and required_children facts cite the
+// ".v2" work-item-dependency ref (source, target and relation key, each
+// escaped). A candidate saved under v20 cites the retired bare-':' ref, which
+// names no source row, and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v21"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

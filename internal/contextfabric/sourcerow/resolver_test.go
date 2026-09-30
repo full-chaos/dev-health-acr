@@ -39,6 +39,7 @@ type world struct {
 	fail       map[string]error
 	calls      []string
 	gate       sourcerow.SubjectGate
+	reads      []contextpacket.SourceRowRead
 }
 
 func newWorld() *world {
@@ -78,6 +79,7 @@ func (w *world) ResolveOrganizationRow(_ context.Context, org string, read conte
 
 func (w *world) ResolveSourceRow(_ context.Context, org string, target contractsv1.ResolvedScope, read contextpacket.SourceRowRead) ([]contextpacket.EvidenceReference, error) {
 	w.calls = append(w.calls, fmt.Sprintf("row(%s,%s,%s,%s,%s)", org, target.RepoID, read.QueryID, read.Locator, read.TaskRef))
+	w.reads = append(w.reads, read)
 	if err := w.fail["row"]; err != nil {
 		return nil, err
 	}
@@ -180,7 +182,15 @@ func assertSourceRowExpansion(t *testing.T, expanded contractsv1.ExpandedEvidenc
 	if evidence.EvidenceRefID != ref || evidence.Source.System != contextfabric.SourceRowSystem || evidence.Provenance == contextfabric.ContextFabricEvidenceProvenance {
 		t.Fatalf("evidence = %+v", evidence)
 	}
-	for key, want := range map[string]any{"record": "source_row", "row_state": "current", "row_observed_at": "2026-09-01T12:00:00.000Z", "source_query": query, "source_query_version": contextpacket.SourceRowQueryVersionV1, "catalog_version": contextpacket.SourceQueryCatalogVersionV1} {
+	wantMetadata := map[string]any{"record": "source_row", "row_state": "current", "row_observed_at": "2026-09-01T12:00:00.000Z", "source_query": query, "source_query_version": contextpacket.SourceRowQueryVersion}
+	// The catalog version is named only for a row the packet catalog read
+	// (a ".v2" statement is source-row-only, CHAOS-7252).
+	if contextpacket.CatalogSourceQuery(query) {
+		wantMetadata["catalog_version"] = contextpacket.SourceQueryCatalogVersionV1
+	} else if _, named := evidence.Metadata["catalog_version"]; named {
+		t.Fatalf("a source-row-only statement names the catalog version: %v", evidence.Metadata)
+	}
+	for key, want := range wantMetadata {
 		if evidence.Metadata[key] != want {
 			t.Fatalf("metadata[%s] = %v, want %v", key, evidence.Metadata[key], want)
 		}

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/dependencyrelation"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/evidenceref"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -634,7 +636,14 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowK
 		}
 		sourceValidFrom, sourceValidTo := requiredTime(sourceCreatedAt), optionalTime(sourceHasEnded, sourceEndedAt)
 		sourceSubject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: sourceCanonicalID, Label: sourceID}
-		evidenceRefID := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItemDependency, repoID+":"+sourceID+":"+targetID+":"+relationshipType)
+		// CHAOS-7252 (and CHAOS-7238): the ref names the canonical RELATION
+		// (source, target, dependencyrelation.Key) with every component
+		// escaped, the same string the fact providers mint for it -- never
+		// the raw spelling joined with a bare ':'. A relation's spelling
+		// twins share it, as they share one fact (CHAOS-7177). A ref above
+		// the contract bound reaches the item validator and is quarantined
+		// there, never truncated.
+		evidenceRefID, _ := evidenceref.Mint(contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, sourceID, targetID, dependencyrelation.Key(relationshipType))
 
 		// The target join is LEFT: a target_work_item_id is not
 		// guaranteed to name a work item at all (see this function's doc
@@ -839,12 +848,15 @@ WHERE c.org_id = {org_id:String} AND c.parent_id != '' AND c.parent_id != c.work
 		// real work_item.v2 nodes here (no unresolved-ref stub case), so
 		// this needs only the id-scheme conversion, no tombstone healing.
 		relationshipID := identity.DeriveRelationship(identity.RelationshipFamilyWorkItemHierarchy, childCanonicalID, parentCanonicalID, string(contractsv1.ContextFabricRelationshipPartOf))
+		// CHAOS-7252: the child row's key (repo, work item) and the parent
+		// it names, each escaped.
+		hierarchyRef, _ := evidenceref.Mint(contractsv1.ContextFabricEvidenceEntityWorkItemHierarchyV2, repoID, childID, parentID)
 		relationship := contractsv1.ContextFabricRelationshipProjection{
 			RelationshipID: relationshipID, Type: contractsv1.ContextFabricRelationshipPartOf,
 			From:       contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: childCanonicalID, Label: childID},
 			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: parentCanonicalID, Label: parentID},
 			Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
-			Authorization: workItemAuthorization(repoID, repoSlug), EvidenceRefIDs: []string{contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItemHierarchy, repoID+":"+childID+":"+parentID)},
+			Authorization: workItemAuthorization(repoID, repoSlug), EvidenceRefIDs: []string{hierarchyRef},
 			ObservedAt: observedAt, ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
 		}
 		return []candidate{{observedAt: observedAt, sortKey: rowSortKey, relationship: &relationship}}, nil
@@ -883,19 +895,19 @@ WHERE c.org_id = {org_id:String} AND c.parent_id != '' AND c.parent_id != c.work
 func queryDeploymentIncidentEdges(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	statement := `SELECT e.edge_id, e.deployment_id, e.incident_id, r.repo, e.observed_at,
        ` + nullableTimestamp("coalesce(d.started_at, d.deployed_at)") + `, ` + nullableTimestamp("d.finished_at") + `,
-       ` + nullableTimestamp("i.started_at") + `, ` + nullableTimestamp("coalesce(i.resolved_at, i.deleted_at)") + `, toString(e.repo_id)
+       ` + nullableTimestamp("i.started_at") + `, ` + nullableTimestamp("coalesce(i.resolved_at, i.deleted_at)") + `, toString(e.repo_id), toString(e.source)
 FROM work_graph_deployment_incident_edges AS e FINAL
 INNER JOIN repos AS r FINAL ON r.id = e.repo_id AND r.org_id = toString(e.org_id)
 LEFT JOIN deployments AS d FINAL ON d.org_id = toString(e.org_id) AND d.deployment_id = e.deployment_id AND d.repo_id = e.repo_id
 LEFT JOIN operational_incidents AS i FINAL ON i.org_id = toString(e.org_id) AND i.id = e.incident_id
 WHERE toString(e.org_id) = {org_id:String} AND e.deployment_id != '' AND e.incident_id NOT IN ('', 'none')` + sincePredicate(cursor, "e.observed_at", "e.edge_id") + orderBy("e.observed_at", "e.edge_id")
 	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
-		var edgeID, deploymentID, incidentID, repoSlug, repoID string
+		var edgeID, deploymentID, incidentID, repoSlug, repoID, source string
 		var observedAt, deployStartedAt, deployFinishedAt, incidentStartedAt, incidentEndedAt time.Time
 		var hasDeployStart, hasDeployEnd, hasIncidentStart, hasIncidentEnd uint8
 		if err := r.Scan(&edgeID, &deploymentID, &incidentID, &repoSlug, &observedAt,
 			&hasDeployStart, &deployStartedAt, &hasDeployEnd, &deployFinishedAt,
-			&hasIncidentStart, &incidentStartedAt, &hasIncidentEnd, &incidentEndedAt, &repoID); err != nil {
+			&hasIncidentStart, &incidentStartedAt, &hasIncidentEnd, &incidentEndedAt, &repoID, &source); err != nil {
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
@@ -919,12 +931,17 @@ WHERE toString(e.org_id) = {org_id:String} AND e.deployment_id != '' AND e.incid
 		if omitted {
 			return []candidate{progressCandidate(observedAt, edgeID)}, nil
 		}
+		// CHAOS-7252: the ref carries the row's full key (deployment,
+		// incident, source) and the repository the row names. edge_id is
+		// not a key: it hashes (deployment, incident) without the repository
+		// or the source, so it can name two rows.
+		deploymentIncidentRef, _ := evidenceref.Mint(contractsv1.ContextFabricEvidenceEntityDeploymentIncidentV2, repoID, deploymentID, incidentID, source)
 		relationship := contractsv1.ContextFabricRelationshipProjection{
 			RelationshipID: relationshipID, Type: "CORRELATED_WITH_INCIDENT",
 			From:       contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectDeployment, CanonicalID: deploymentCanonicalID, Label: deploymentID},
 			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectIncident, CanonicalID: "incident:" + incidentID, Label: incidentID},
 			Derivation: contractsv1.ContextFabricDerivationRuleInferred, EpistemicStatus: contractsv1.ContextFabricEpistemicSourceAsserted,
-			Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityDeploymentIncident, edgeID)},
+			Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{deploymentIncidentRef},
 			ObservedAt: observedAt, ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
 		}
 		return []candidate{{observedAt: observedAt, sortKey: edgeID, relationship: &relationship}}, nil

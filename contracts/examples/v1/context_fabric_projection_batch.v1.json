@@ -270,7 +270,7 @@
       "derivation": "rule_inferred",
       "epistemic_status": "source_asserted",
       "evidence_ref_ids": [
-        "acr:v1:work-item-team:00000000-0000-0000-0000-000000000000:linear:CHAOS-3802:CHAOS"
+        "acr:v1:work-item-team.v2:00000000-0000-0000-0000-000000000000:linear%3ACHAOS-3802:CHAOS:native_team"
       ],
       "from": {
         "canonical_id": "work_item.v2:00000000-0000-0000-0000-000000000000:linear%3ACHAOS-3802",
@@ -287,7 +287,7 @@
         }
       },
       "relationship_id": "relationship.v2:work_item_team:8dce29ed83b79174cd7aaf8a149a035a",
-      "source_version": "devhealthsource.teams_projects.v16",
+      "source_version": "devhealthsource.teams_projects.v17",
       "to": {
         "canonical_id": "team:CHAOS",
         "kind": "team",
@@ -304,7 +304,7 @@
       "derivation": "rule_inferred",
       "epistemic_status": "inferred",
       "evidence_ref_ids": [
-        "acr:v1:work-item-team:cd620f84-2602-8dea-7809-8d1f11825cf4:gl:42:gl:full.chaos"
+        "acr:v1:work-item-team.v2:00000000-0000-0000-0000-000000000000:gl%3A42:gl%3Afull.chaos:project_ownership"
       ],
       "from": {
         "canonical_id": "work_item.v2:cd620f84-2602-8dea-7809-8d1f11825cf4:gl%3A42",
@@ -321,7 +321,7 @@
         }
       },
       "relationship_id": "relationship.v2:work_item_team:9f75989e94c47882f0eb87d473827a63",
-      "source_version": "devhealthsource.teams_projects.v16",
+      "source_version": "devhealthsource.teams_projects.v17",
       "to": {
         "canonical_id": "team:gl:full.chaos",
         "kind": "team",
@@ -341,7 +341,7 @@
       "derivation": "rule_inferred",
       "epistemic_status": "source_asserted",
       "evidence_ref_ids": [
-        "acr:v1:project-team:github:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891:gl:full.chaos"
+        "acr:v1:project-team.v2:github:70d529e0-3c06-4597-8480-794fd02328b6%3Agitlab%3A71133891:gl%3Afull.chaos:native"
       ],
       "from": {
         "canonical_id": "project.v2:github:70d529e0-3c06-4597-8480-794fd02328b6%3Agitlab%3A71133891",
@@ -355,7 +355,7 @@
         }
       },
       "relationship_id": "relationship.v2:project_team:02e9edd19d8a937a30f72b830f67b000",
-      "source_version": "devhealthsource.teams_projects.v16",
+      "source_version": "devhealthsource.teams_projects.v17",
       "to": {
         "canonical_id": "team:gl:full.chaos",
         "kind": "team",
@@ -403,7 +403,7 @@
         }
       },
       "relationship_id": "relationship.v2:repository_team:fe2a2afa8647c8e6b3442d3c6076d162",
-      "source_version": "devhealthsource.teams_projects.v16",
+      "source_version": "devhealthsource.teams_projects.v17",
       "to": {
         "canonical_id": "team:gl:full.chaos",
         "kind": "team",
@@ -430,7 +430,7 @@
       },
       "observed_at": "2026-08-13T19:00:02.504Z",
       "relationship_id": "relationship.v2:project_membership:d1cf18bc4600ab81d89b874fa370941f",
-      "source_version": "devhealthsource.teams_projects.v16",
+      "source_version": "devhealthsource.teams_projects.v17",
       "to": {
         "canonical_id": "project.v2:gitlab:70d529e0-3c06-4597-8480-794fd02328b6%3Agitlab%3A71133891",
         "kind": "project",
@@ -457,7 +457,7 @@
       },
       "observed_at": "2026-08-13T19:00:02.504Z",
       "relationship_id": "relationship.v2:project_membership:6ceb97ee1204d3ae29db9e8ae223ceb3",
-      "source_version": "devhealthsource.teams_projects.v16",
+      "source_version": "devhealthsource.teams_projects.v17",
       "to": {
         "canonical_id": "project.v2:linear:631fcb5f-c3e9-49ff-b17c-07877aaac9b7",
         "kind": "project",

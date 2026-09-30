@@ -364,7 +364,9 @@ func presenceRow(subjectKind, repoID, subjectID, repoSlug string, observedAt tim
 }
 
 func workItemTeamRow(workItemID, teamID, source, confidence, repoID, repoSlug string, computedAt time.Time) []any {
-	return []any{workItemID, teamID, source, confidence, repoID, repoSlug, computedAt}
+	// The attribution row's own repo_id (CHAOS-7252 ref key): the zero UUID,
+	// as for 5077 of 5089 live rows.
+	return []any{workItemID, teamID, source, confidence, repoID, repoSlug, computedAt, zeroRepositoryUUID}
 }
 
 // projectTeamRow mirrors queryProjectTeams' SELECT list exactly.
