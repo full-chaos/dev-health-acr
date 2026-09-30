@@ -606,8 +606,8 @@ func (x *gqlRun) execute(ctx context.Context, req GraphQLRequest) (GraphQLRespon
 	if reason := ReadBudgetOf(result.Body); reason != "" {
 		return x.readBudget(reason), nil
 	}
-	if class := listenerRefusalOf(result.Body); class != "" {
-		return x.listenerRefused(class, result.StatusCode), nil
+	if class, reason := listenerRefusalOf(result.Body); class != "" {
+		return x.listenerRefused(class, reason, result.StatusCode), nil
 	}
 	data, class9, ok := parseGraphQLAnswer(result.Body)
 	if !ok {
@@ -1332,14 +1332,19 @@ func (x *gqlRun) readBudget(reason ReadBudgetReason) GraphQLResponse {
 // listenerRefused maps a typed MCP listener refusal (any HTTP status). acr
 // refuses before the wire whatever the listener refuses, so it is a defect
 // or a drift: loud, never passed through.
-func (x *gqlRun) listenerRefused(refusal ListenerRefusalClass, status int) GraphQLResponse {
+func (x *gqlRun) listenerRefused(refusal ListenerRefusalClass, reason string, status int) GraphQLResponse {
 	class := UpstreamListenerRefused
 	if refusal == ListenerRefusalCarrier {
 		class = UpstreamCarrierRefused
 	}
+	// listener_reason is the closed listener vocabulary (or "unknown");
+	// acr_precheck_gap marks a reason acr validates itself before the
+	// wire: the listener refusing it means acr's own check failed.
 	x.r.logger.Error(GraphQLListenerRefusedLog,
 		"org_id", contextfabric.SanitizeLogAttr(x.principal.OrgID),
 		"error_class", contextfabric.SanitizeLogAttr(string(class)),
+		"listener_reason", contextfabric.SanitizeLogAttr(reason),
+		"acr_precheck_gap", ListenerRefusalIsPrecheckGap(reason),
 		"status", status,
 	)
 	return x.upstream(CallUpstreamError, class)
@@ -1351,7 +1356,7 @@ func (x *gqlRun) mapCallError(err error, maxBytes int) GraphQLResponse {
 		return x.readBudget(qe.ReadBudget)
 	}
 	if qe != nil && qe.ListenerRefusal != "" {
-		return x.listenerRefused(qe.ListenerRefusal, qe.StatusCode)
+		return x.listenerRefused(qe.ListenerRefusal, qe.ListenerReason, qe.StatusCode)
 	}
 	switch QueryErrorClassOf(err) {
 	case QueryErrorNotFound:

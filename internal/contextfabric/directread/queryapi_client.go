@@ -39,6 +39,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -115,6 +116,68 @@ type QueryError struct {
 	// (errors[].extensions.code MCP_REFUSED, ops PR #3425): the closed class
 	// of its reason (ListenerRefusalClassVocabulary), never upstream text.
 	ListenerRefusal ListenerRefusalClass
+	// ListenerReason is the listener's refusal reason when it is one of
+	// the closed MCPListenerRefusalReasons, else "unknown" (logging only).
+	ListenerReason string
+}
+
+// mcpListenerReasons is the MCP listener's closed refusal vocabulary (ops
+// PR #3425 at c33b9f280, extensions.reason under code MCP_REFUSED), each
+// with acr's class. carrier: the identity carrier or the org it names was
+// refused (the 401 set, elevated_claim, and the two org-argument reasons,
+// since acr sets every org value itself). precheck: acr validates exactly
+// this before the wire, so the listener refusing it means acr's own check
+// failed (logged as acr_precheck_gap). The rest are listener_refused.
+var mcpListenerReasons = map[string]struct {
+	class    ListenerRefusalClass
+	precheck bool
+}{
+	// 401
+	"authorization_header": {ListenerRefusalCarrier, false},
+	"no_carrier":           {ListenerRefusalCarrier, false},
+	"missing_header":       {ListenerRefusalCarrier, false},
+	"duplicate_header":     {ListenerRefusalCarrier, false},
+	"not_a_boolean":        {ListenerRefusalCarrier, false},
+	"invalid_org":          {ListenerRefusalCarrier, false},
+	// 403
+	"elevated_claim":         {ListenerRefusalCarrier, false},
+	"invalid_org_argument":   {ListenerRefusalCarrier, true},
+	"org_mismatch":           {ListenerRefusalCarrier, true},
+	"root_field_not_allowed": {ListenerRefusalQuery, true},
+	// 405, 413, 415
+	"method_not_allowed": {ListenerRefusalQuery, false},
+	"not_a_query":        {ListenerRefusalQuery, true},
+	"body_too_large":     {ListenerRefusalQuery, true},
+	"content_type":       {ListenerRefusalQuery, false},
+	// 400
+	"bad_body":                {ListenerRefusalQuery, false},
+	"unknown_body_field":      {ListenerRefusalQuery, false},
+	"invalid_document":        {ListenerRefusalQuery, true},
+	"operation_count":         {ListenerRefusalQuery, true},
+	"operation_name_mismatch": {ListenerRefusalQuery, false},
+	"introspection":           {ListenerRefusalQuery, true},
+	"depth_limit":             {ListenerRefusalQuery, true},
+	"alias_limit":             {ListenerRefusalQuery, true},
+	"invalid_variables":       {ListenerRefusalQuery, true},
+	"complexity_limit":        {ListenerRefusalQuery, true},
+}
+
+// MCPListenerRefusalReasons lists the listener's MCP_REFUSED reasons acr
+// knows (404 root_field_not_enabled and off_mcp_listener are read from the
+// status as operation_unavailable; the 422 ceilings are the read budget).
+func MCPListenerRefusalReasons() []string {
+	out := make([]string, 0, len(mcpListenerReasons))
+	for r := range mcpListenerReasons {
+		out = append(out, r)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ListenerRefusalIsPrecheckGap reports whether a known listener reason is
+// one acr checks itself before the wire.
+func ListenerRefusalIsPrecheckGap(reason string) bool {
+	return mcpListenerReasons[reason].precheck
 }
 
 // MCPRefusedCode is the extensions.code of every other MCP listener refusal.
@@ -140,10 +203,10 @@ func ListenerRefusalClassVocabulary() [2]ListenerRefusalClass {
 	return [2]ListenerRefusalClass{ListenerRefusalCarrier, ListenerRefusalQuery}
 }
 
-// listenerRefusalOf classifies an MCP_REFUSED answer by its reason. Only
-// the closed carrier reasons are named; any other reason is the query
-// class. A body without MCP_REFUSED yields "".
-func listenerRefusalOf(body []byte) ListenerRefusalClass {
+// listenerRefusalOf classifies an MCP_REFUSED answer by its reason with the
+// closed map; an unknown reason is the query class, reported as "unknown".
+// A body without MCP_REFUSED yields "", "".
+func listenerRefusalOf(body []byte) (ListenerRefusalClass, string) {
 	var answer struct {
 		Errors []struct {
 			Extensions struct {
@@ -153,20 +216,18 @@ func listenerRefusalOf(body []byte) ListenerRefusalClass {
 		} `json:"errors"`
 	}
 	if json.Unmarshal(body, &answer) != nil {
-		return ""
+		return "", ""
 	}
 	for _, e := range answer.Errors {
 		if e.Extensions.Code != MCPRefusedCode {
 			continue
 		}
-		switch e.Extensions.Reason {
-		case "invalid_org", "no_carrier", "authorization_header", "elevated_claim":
-			return ListenerRefusalCarrier
-		default:
-			return ListenerRefusalQuery
+		if known, ok := mcpListenerReasons[e.Extensions.Reason]; ok {
+			return known.class, e.Extensions.Reason
 		}
+		return ListenerRefusalQuery, "unknown"
 	}
-	return ""
+	return "", ""
 }
 
 // MCPReadBudgetExceededCode is the extensions.code GWC's MCP listener sets
@@ -429,7 +490,7 @@ func (c *HTTPQueryClient) Execute(ctx context.Context, call QueryCall) (QueryRes
 		if c.readsTypedRefusals {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 			qerr.ReadBudget = ReadBudgetOf(body)
-			qerr.ListenerRefusal = listenerRefusalOf(body)
+			qerr.ListenerRefusal, qerr.ListenerReason = listenerRefusalOf(body)
 		}
 		drain(resp.Body)
 		return QueryResult{}, qerr

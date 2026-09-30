@@ -134,12 +134,17 @@ func (l *fakeMCPListener) refuseStatus(w http.ResponseWriter, status int, reason
 
 func (l *fakeMCPListener) serve(w http.ResponseWriter, r *http.Request) {
 	raw, _ := io.ReadAll(r.Body)
-	if r.Method != http.MethodPost || r.URL.Path != directread.GraphQLListenerPath {
-		l.refuse(w, "route "+r.Method+" "+r.URL.Path)
+	// Statuses and reasons are the listener's own (ops PR #3425 c33b9f280).
+	if r.URL.Path != directread.GraphQLListenerPath {
+		l.refuseStatus(w, http.StatusNotFound, "off_mcp_listener")
+		return
+	}
+	if r.Method != http.MethodPost {
+		l.refuseStatus(w, http.StatusMethodNotAllowed, "method_not_allowed")
 		return
 	}
 	if r.Header.Get("Content-Type") != "application/json" {
-		l.refuse(w, "content type")
+		l.refuseStatus(w, http.StatusUnsupportedMediaType, "content_type")
 		return
 	}
 	if _, ok := r.Header["Authorization"]; ok {
@@ -147,8 +152,18 @@ func (l *fakeMCPListener) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, h := range []string{directread.HeaderInternalOrgID, directread.HeaderInternalRole, directread.HeaderInternalSuperuser, directread.HeaderInternalImpersonationActive} {
-		if len(r.Header.Values(h)) != 1 {
-			l.refuse(w, "header "+h+" not exactly once")
+		switch n := len(r.Header.Values(h)); {
+		case n == 0:
+			l.refuseStatus(w, http.StatusUnauthorized, "missing_header")
+			return
+		case n > 1:
+			l.refuseStatus(w, http.StatusUnauthorized, "duplicate_header")
+			return
+		}
+	}
+	for _, h := range []string{directread.HeaderInternalSuperuser, directread.HeaderInternalImpersonationActive} {
+		if v := r.Header.Get(h); v != "true" && v != "false" {
+			l.refuseStatus(w, http.StatusUnauthorized, "not_a_boolean")
 			return
 		}
 	}
@@ -156,7 +171,7 @@ func (l *fakeMCPListener) serve(w http.ResponseWriter, r *http.Request) {
 		l.refuseStatus(w, http.StatusUnauthorized, "invalid_org")
 		return
 	}
-	elevated := r.Header.Get(directread.HeaderInternalSuperuser) != "false" || r.Header.Get(directread.HeaderInternalImpersonationActive) != "false"
+	elevated := r.Header.Get(directread.HeaderInternalSuperuser) == "true" || r.Header.Get(directread.HeaderInternalImpersonationActive) == "true"
 	switch strings.ToLower(r.Header.Get(directread.HeaderInternalRole)) {
 	case "admin", "owner", "operator":
 		elevated = true
@@ -177,11 +192,15 @@ func (l *fakeMCPListener) serve(w http.ResponseWriter, r *http.Request) {
 	dec.UseNumber()
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&body); err != nil {
-		l.refuse(w, "body")
+		reason := "bad_body"
+		if strings.Contains(err.Error(), "unknown field") {
+			reason = "unknown_body_field"
+		}
+		l.refuseStatus(w, http.StatusBadRequest, reason)
 		return
 	}
 	if len(body.Extensions) > 0 {
-		l.refuse(w, "persisted query extensions")
+		l.refuseStatus(w, http.StatusBadRequest, "unknown_body_field")
 		return
 	}
 	l.mu.Lock()
@@ -189,21 +208,25 @@ func (l *fakeMCPListener) serve(w http.ResponseWriter, r *http.Request) {
 	l.mu.Unlock()
 	doc, errs := gqlparser.LoadQuery(l.schema, body.Query)
 	if len(errs) > 0 {
-		l.refuse(w, "query does not validate: "+errs.Error())
+		l.refuseStatus(w, http.StatusBadRequest, "invalid_document")
 		return
 	}
-	if len(doc.Operations) != 1 || doc.Operations[0].Operation != ast.Query {
-		l.refuse(w, "not exactly one query operation")
+	if len(doc.Operations) != 1 {
+		l.refuseStatus(w, http.StatusBadRequest, "operation_count")
+		return
+	}
+	if doc.Operations[0].Operation != ast.Query {
+		l.refuseStatus(w, http.StatusMethodNotAllowed, "not_a_query")
 		return
 	}
 	op := doc.Operations[0]
 	if _, err := validator.VariableValues(l.schema, op, body.Variables); err != nil {
-		l.refuse(w, "variables do not coerce: "+err.Error())
+		l.refuseStatus(w, http.StatusBadRequest, "invalid_variables")
 		return
 	}
 	org := r.Header.Get(directread.HeaderInternalOrgID)
 	if reason := orgArgumentsMismatch(op, body.Variables, org); reason != "" {
-		l.refuse(w, reason)
+		l.refuseStatus(w, http.StatusForbidden, "org_mismatch")
 		return
 	}
 	depth, aliases, complexity := 0, 0, 0
@@ -229,29 +252,33 @@ func (l *fakeMCPListener) serve(w http.ResponseWriter, r *http.Request) {
 		return ""
 	}
 	if reason := walk(op.SelectionSet, 1); reason != "" {
-		l.refuse(w, reason)
+		if reason == "introspection" {
+			l.refuseStatus(w, http.StatusBadRequest, "introspection")
+		} else {
+			l.refuseStatus(w, http.StatusBadRequest, "invalid_document")
+		}
 		return
 	}
 	for _, sel := range op.SelectionSet {
 		f := sel.(*ast.Field)
 		if !l.cfg.Roots[f.Name] {
-			l.refuse(w, "root field "+f.Name+" not on the listener allowlist")
+			l.refuseStatus(w, http.StatusForbidden, "root_field_not_allowed")
 			return
 		}
 	}
 	lim := l.cfg.Limits
 	switch {
 	case len(op.SelectionSet) > lim.MaxRootFields:
-		l.refuse(w, "root fields over the cap")
+		l.refuseStatus(w, http.StatusBadRequest, "complexity_limit")
 		return
 	case depth > lim.MaxDepth:
-		l.refuse(w, "depth over the cap")
+		l.refuseStatus(w, http.StatusBadRequest, "depth_limit")
 		return
 	case aliases > lim.MaxAliases:
-		l.refuse(w, "aliases over the cap")
+		l.refuseStatus(w, http.StatusBadRequest, "alias_limit")
 		return
 	case complexity > lim.MaxComplexity:
-		l.refuse(w, "complexity over the cap")
+		l.refuseStatus(w, http.StatusBadRequest, "complexity_limit")
 		return
 	}
 	if l.cfg.RefuseStatus != 0 {

@@ -852,7 +852,7 @@ func TestGraphQLListenerRefusalsMapToClosedClasses(t *testing.T) {
 		{403, "elevated_claim", directread.CallUpstreamError, directread.UpstreamCarrierRefused},
 		{400, "depth_limit", directread.CallUpstreamError, directread.UpstreamListenerRefused},
 		{403, "root_field_not_allowed", directread.CallUpstreamError, directread.UpstreamListenerRefused},
-		{403, "invalid_org_argument", directread.CallUpstreamError, directread.UpstreamListenerRefused},
+		{403, "invalid_org_argument", directread.CallUpstreamError, directread.UpstreamCarrierRefused},
 		{404, "root_field_not_enabled", directread.CallOperationUnavailable, directread.UpstreamNotFound},
 		// r2 P2: the same typed envelope on a 2xx answer.
 		{200, "elevated_claim", directread.CallUpstreamError, directread.UpstreamCarrierRefused},
@@ -1032,5 +1032,90 @@ func TestGraphQLRealOverlapClassRefusalIsTheStricterCandidates(t *testing.T) {
 		if want := op.Scope(directread.CallerRestricted).Refusal.Reason; resp.Refusal.Reason != want {
 			t.Fatalf("%s: refusal reason %q is not the stricter candidate's %q", tc.strict, resp.Refusal.Reason, want)
 		}
+	}
+}
+
+// The full MCP listener refusal contract (ops PR #3425 c33b9f280), one row
+// per reason with its HTTP status: every MCP_REFUSED reason maps to the
+// closed acr class (carrier_refused: the 401 set, elevated_claim and the two
+// org-argument reasons; listener_refused: the rest), is ERROR-logged with
+// the closed listener_reason and acr_precheck_gap exactly for the reasons acr
+// validates itself, and never passes through. The two 404 reasons are
+// operation_unavailable; the three 422 ceilings are read_budget_exceeded.
+func TestGraphQLEveryListenerRefusalReasonIsMapped(t *testing.T) {
+	type row struct {
+		status   int
+		reason   string
+		class    directread.UpstreamErrorClass // "" = see call
+		call     directread.CallStatus
+		precheck bool
+	}
+	carrier, query := directread.UpstreamCarrierRefused, directread.UpstreamListenerRefused
+	rows := []row{
+		{401, "authorization_header", carrier, directread.CallUpstreamError, false},
+		{401, "no_carrier", carrier, directread.CallUpstreamError, false},
+		{401, "missing_header", carrier, directread.CallUpstreamError, false},
+		{401, "duplicate_header", carrier, directread.CallUpstreamError, false},
+		{401, "not_a_boolean", carrier, directread.CallUpstreamError, false},
+		{401, "invalid_org", carrier, directread.CallUpstreamError, false},
+		{403, "elevated_claim", carrier, directread.CallUpstreamError, false},
+		{403, "invalid_org_argument", carrier, directread.CallUpstreamError, true},
+		{403, "org_mismatch", carrier, directread.CallUpstreamError, true},
+		{403, "root_field_not_allowed", query, directread.CallUpstreamError, true},
+		{405, "method_not_allowed", query, directread.CallUpstreamError, false},
+		{405, "not_a_query", query, directread.CallUpstreamError, true},
+		{413, "body_too_large", query, directread.CallUpstreamError, true},
+		{415, "content_type", query, directread.CallUpstreamError, false},
+		{400, "bad_body", query, directread.CallUpstreamError, false},
+		{400, "unknown_body_field", query, directread.CallUpstreamError, false},
+		{400, "invalid_document", query, directread.CallUpstreamError, true},
+		{400, "operation_count", query, directread.CallUpstreamError, true},
+		{400, "operation_name_mismatch", query, directread.CallUpstreamError, false},
+		{400, "introspection", query, directread.CallUpstreamError, true},
+		{400, "depth_limit", query, directread.CallUpstreamError, true},
+		{400, "alias_limit", query, directread.CallUpstreamError, true},
+		{400, "invalid_variables", query, directread.CallUpstreamError, true},
+		{400, "complexity_limit", query, directread.CallUpstreamError, true},
+		{400, "a_future_reason", query, directread.CallUpstreamError, false},
+		{404, "root_field_not_enabled", directread.UpstreamNotFound, directread.CallOperationUnavailable, false},
+		{404, "off_mcp_listener", directread.UpstreamNotFound, directread.CallOperationUnavailable, false},
+	}
+	known := map[string]bool{}
+	for _, r := range directread.MCPListenerRefusalReasons() {
+		known[r] = true
+	}
+	covered := 0
+	for _, tc := range rows {
+		t.Run(fmt.Sprintf("%d/%s", tc.status, tc.reason), func(t *testing.T) {
+			h := newGQLHarness(t, gqlHarnessOptions{fake: func(cfg *fakeMCPConfig) { cfg.RefuseStatus, cfg.RefuseReason = tc.status, tc.reason }})
+			resp := h.run(t, opUnrestricted(opOrgA), `{ catalog(dimension: TEAM) { values { value } } }`, nil)
+			if resp.Call != tc.call || len(resp.Errors) != 1 || resp.Errors[0].Class != tc.class || resp.Data != nil || resp.Refusal != nil {
+				t.Fatalf("want %s/%s, got %+v", tc.call, tc.class, resp)
+			}
+			if raw, _ := json.Marshal(resp); strings.Contains(string(raw), tc.reason) {
+				t.Fatalf("the listener reason passed through: %s", raw)
+			}
+			if tc.status == 404 {
+				return
+			}
+			line := opLineOf(t, h.logs.String(), directread.GraphQLListenerRefusedLog)
+			wantReason := tc.reason
+			if !known[tc.reason] {
+				wantReason = "unknown"
+			}
+			var fields map[string]any
+			if err := json.Unmarshal(line, &fields); err != nil {
+				t.Fatal(err)
+			}
+			if fields["level"] != "ERROR" || fields["listener_reason"] != wantReason || fields["acr_precheck_gap"] != tc.precheck || fields["error_class"] != string(tc.class) {
+				t.Fatalf("log line %s", line)
+			}
+			if known[tc.reason] {
+				covered++
+			}
+		})
+	}
+	if covered != len(known) {
+		t.Fatalf("the table covers %d of the %d known listener reasons", covered, len(known))
 	}
 }
