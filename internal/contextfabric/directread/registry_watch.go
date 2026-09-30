@@ -195,7 +195,7 @@ func (w *RegistryWatch) refresh() {
 	if class != "" {
 		w.logOnChange("failed:"+class, func() {
 			w.logger.Warn("context fabric registry check failed",
-				"class", class, "fallback", "pinned", "pinned_digest", w.cat.SchemaDigest())
+				"class", contextfabric.SanitizeLogAttr(class), "fallback", "pinned", "pinned_digest", contextfabric.SanitizeLogAttr(w.cat.SchemaDigest()))
 		})
 		return
 	}
@@ -297,18 +297,18 @@ func (w *RegistryWatch) compare(served registryServed) {
 	w.logOnChange(key, func() {
 		if digestMatch && len(drift) == 0 {
 			w.logger.Info("context fabric registry digest match",
-				"pinned_digest", pinnedDigest, "served_digest", served.SchemaDigest, "operations", len(pinned))
+				"pinned_digest", contextfabric.SanitizeLogAttr(pinnedDigest), "served_digest", contextfabric.SanitizeLogAttr(served.SchemaDigest), "operations", len(pinned))
 			return
 		}
 		if !digestMatch {
 			w.logger.Warn("context fabric registry digest drift",
-				"pinned_digest", pinnedDigest, "served_digest", served.SchemaDigest,
+				"pinned_digest", contextfabric.SanitizeLogAttr(pinnedDigest), "served_digest", contextfabric.SanitizeLogAttr(served.SchemaDigest),
 				"pinned_ops", len(pinned), "served_ops", len(servedOps), "drifted_ops", len(drift))
 		}
 		for _, d := range drift {
 			w.logger.Warn("context fabric registry operation drift",
-				"operation", contextfabric.SanitizeLogAttr(d.op), "pinned_document_digest", d.pinned,
-				"served_document_digest", d.served, "reason", d.reason)
+				"operation", contextfabric.SanitizeLogAttr(d.op), "pinned_document_digest", contextfabric.SanitizeLogAttr(d.pinned),
+				"served_document_digest", contextfabric.SanitizeLogAttr(d.served), "reason", contextfabric.SanitizeLogAttr(d.reason))
 		}
 	})
 }
