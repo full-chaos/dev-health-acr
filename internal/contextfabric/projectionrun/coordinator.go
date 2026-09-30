@@ -2447,18 +2447,13 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 		// list) are a failure of the checkpoint load, not of a source and
 		// not staleness: named "epoch_checkpoint_sources:checkpoint_load"
 		// on the line, in the pair-failed bucket a checkpoint-load failure
-		// inside a build pair already lands in.
+		// inside a build pair already lands in. It is a different read from
+		// any build pair's own checkpoint load, so it is counted on its own.
 		if errors.Is(guardErr, contextfabric.ErrEpochSourceVersionStale) {
 			signals.stale = true
 		}
 		for _, refusal := range refusals {
 			if refusal.Reason != contextfabric.EpochActivationRefusedCheckpointUnreadable && refusal.Reason != contextfabric.EpochActivationRefusedSourcesUnlistable {
-				continue
-			}
-			// A build pair that already broke this tick put the organization
-			// in this bucket for the same checkpoint store; do not count the
-			// outage twice.
-			if signals.pairBroke {
 				continue
 			}
 			signals.pairBroke = true

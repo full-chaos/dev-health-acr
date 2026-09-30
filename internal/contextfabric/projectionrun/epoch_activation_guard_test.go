@@ -395,24 +395,53 @@ func TestEpochActivationGuard_Clauses(t *testing.T) {
 	// A row is judged under the exact name it was stored with (codex #749
 	// r2): a padded name no configured source carries cannot be reloaded
 	// under a trimmed name and read as "never recorded".
-	t.Run("padded_source_name_row_is_refused", func(t *testing.T) {
-		r := rig(t, "org-guard-padded-name")
+	for i, tc := range []struct{ name, version string }{
+		{" retired_teams_projects ", epochGuardOldVersion},
+		// Trims to the configured name and carries the current version: only
+		// an exact-name lookup refuses it.
+		{" " + epochGuardSource + " ", epochGuardNewVersion},
+	} {
+		t.Run(fmt.Sprintf("padded_source_name_row_is_refused/%d", i), func(t *testing.T) {
+			r := rig(t, fmt.Sprintf("org-guard-padded-name-%d", i))
+			telemetry := &recordingActivationTelemetry{}
+			binary := r.coordinator(guardCoordinatorOptions{telemetry: telemetry}, projectionrun.SourcePair{Name: epochGuardSource, Source: versioned(epochGuardNewVersion, 1)})
+			require.NoError(t, binary.Rebuild(ctx, r.org))
+			tickUntilStatus(t, ctx, binary, lifecycle, r.org, contextfabric.LifecycleStatusGrace, 5)
+			require.NoError(t, checkpoints.CompareAndSwapProjectionCheckpoint(ctx,
+				contextfabric.ProjectionCheckpoint{OrgID: r.org, Source: tc.name},
+				contextfabric.ProjectionCheckpoint{OrgID: r.org, Source: tc.name, Cursor: "p", SourceVersion: tc.version, UpdatedAt: time.Now().UTC()}))
+
+			err := binary.Rollback(ctx, r.org)
+			require.ErrorIs(t, err, contextfabric.ErrEpochSourceVersionStale)
+			require.Equal(t, int64(1), r.row().ActiveEpoch)
+			require.Equal(t, []contextfabric.EpochActivationRefusal{{
+				OrgID: r.org, Transition: contextfabric.LifecycleTransitionRollback, ActiveEpoch: 1, CandidateEpoch: 0,
+				Source: tc.name, Reason: contextfabric.EpochActivationRefusedSourceNotConfigured, RecordedSourceVersion: tc.version,
+			}}, telemetry.snapshot())
+		})
+	}
+
+	// A row that claims no version (a reset checkpoint, or one written with
+	// no producer identity) recorded nothing, whether or not its source is
+	// configured: it never blocks an activation.
+	t.Run("rows_with_no_recorded_version_do_not_block", func(t *testing.T) {
+		r := rig(t, "org-guard-empty-rows")
 		telemetry := &recordingActivationTelemetry{}
 		binary := r.coordinator(guardCoordinatorOptions{telemetry: telemetry}, projectionrun.SourcePair{Name: epochGuardSource, Source: versioned(epochGuardNewVersion, 1)})
 		require.NoError(t, binary.Rebuild(ctx, r.org))
 		tickUntilStatus(t, ctx, binary, lifecycle, r.org, contextfabric.LifecycleStatusGrace, 5)
-		const padded = " retired_teams_projects "
-		require.NoError(t, checkpoints.CompareAndSwapProjectionCheckpoint(ctx,
-			contextfabric.ProjectionCheckpoint{OrgID: r.org, Source: padded},
-			contextfabric.ProjectionCheckpoint{OrgID: r.org, Source: padded, Cursor: "p", SourceVersion: epochGuardOldVersion, UpdatedAt: time.Now().UTC()}))
+		for _, source := range []string{epochGuardSource, "retired_teams_projects"} {
+			require.NoError(t, checkpoints.CompareAndSwapProjectionCheckpoint(ctx,
+				contextfabric.ProjectionCheckpoint{OrgID: r.org, Source: source},
+				contextfabric.ProjectionCheckpoint{OrgID: r.org, Source: source, Cursor: "reset-marker", UpdatedAt: time.Now().UTC()}))
+		}
+		rows, err := checkpoints.ListProjectionCheckpoints(ctx, r.org)
+		require.NoError(t, err)
+		require.Len(t, rows, 2, "precondition: epoch 0 holds two rows with no recorded version")
 
-		err := binary.Rollback(ctx, r.org)
-		require.ErrorIs(t, err, contextfabric.ErrEpochSourceVersionStale)
-		require.Equal(t, int64(1), r.row().ActiveEpoch)
-		require.Equal(t, []contextfabric.EpochActivationRefusal{{
-			OrgID: r.org, Transition: contextfabric.LifecycleTransitionRollback, ActiveEpoch: 1, CandidateEpoch: 0,
-			Source: padded, Reason: contextfabric.EpochActivationRefusedSourceNotConfigured, RecordedSourceVersion: epochGuardOldVersion,
-		}}, telemetry.snapshot())
+		require.NoError(t, binary.Rollback(ctx, r.org))
+		require.Equal(t, int64(0), r.row().ActiveEpoch)
+		require.Empty(t, telemetry.snapshot())
 	})
 
 	// Unlistable is a wiring defect, not a stale version: a rollback onto a
