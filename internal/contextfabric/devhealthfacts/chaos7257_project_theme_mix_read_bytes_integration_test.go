@@ -266,17 +266,36 @@ type chaos7257Statement struct {
 	Query     string
 }
 
+// queryLogSinceMark is the query_log window statementsSince applies: rows
+// logged strictly after the mark, a server-clock instant in whole
+// microseconds bound as fromUnixTimestamp64Micro(?).
+//
+// The mark MUST be bound at the column's own type and precision. The earlier
+// window bound a time.Time through clickhouse-go's positional `?`, which the
+// driver renders as toDateTime('YYYY-MM-DD HH:MM:SS') -- whole seconds.
+// system.query_log carries `INDEX event_time_microseconds_index
+// event_time_microseconds TYPE minmax GRANULARITY 1`, and ClickHouse's minmax
+// analysis of a DateTime64(6) column against a DateTime constant (an internal
+// TYPE_MISMATCH, "Expected: DateTime. Got: Decimal64") skips every granule
+// whose newest row falls in the constant's own second. Whenever the read and
+// the flush finished inside the mark's second, the one granule holding both
+// statements was skipped and the window came back empty ("measurement did not
+// happen"), although both statements were logged. A microsecond DateTime64
+// bound is analysed exactly; TestQueryLogWindowKeepsAStatementLoggedInTheMarksOwnSecondAgainstRealClickHouse
+// pins it on a table with query_log's index shape.
+const queryLogSinceMark = `event_time_microseconds > fromUnixTimestamp64Micro(?)`
+
 // statementsSince returns what query_log holds for SELECTs over
-// work_unit_investments logged after mark.
-func statementsSince(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, mark time.Time) []chaos7257Statement {
+// work_unit_investments logged after markMicros (serverNowMicros).
+func statementsSince(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, markMicros int64) []chaos7257Statement {
 	t.Helper()
 	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 		t.Fatalf("flush logs (query_log unavailable, measurement did not happen): %v", err)
 	}
 	rows, err := direct.Query(ctx, `SELECT type, exception_code, read_bytes, substring(query, 1, 4000) FROM system.query_log
-WHERE event_time_microseconds > ? AND type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Select'
+WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Select'
   AND has(tables, concat(currentDatabase(), '.work_unit_investments'))
-ORDER BY event_time_microseconds`, mark)
+ORDER BY event_time_microseconds`, markMicros)
 	if err != nil {
 		t.Fatalf("read query_log: %v", err)
 	}
@@ -289,67 +308,87 @@ ORDER BY event_time_microseconds`, mark)
 		}
 		out = append(out, s)
 	}
+	// A read that ends on a server exception returns no further rows; without
+	// this check it would read as "no statement logged" instead of failing.
 	if err := rows.Err(); err != nil {
 		t.Fatalf("read query_log rows (measurement did not happen): %v", err)
 	}
 	return out
 }
 
-// lane7257Diagnose is a TEMPORARY lane diagnostic: on a measurement miss it
-// dumps what the server holds, so a hosted failure names its own cause.
-func lane7257Diagnose(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, mark time.Time, facts int, reason string) {
+// serverNowMicros is the server's own clock in whole microseconds, so a
+// query_log window never depends on the test host's clock or timezone, and
+// never passes through a time.Time the driver would round to seconds.
+func serverNowMicros(t *testing.T, ctx context.Context, direct clickhousedriver.Conn) int64 {
 	t.Helper()
-	t.Logf("DIAG mark=%s loc=%q facts=%d reason=%q", mark.Format(time.RFC3339Nano), mark.Location().String(), facts, reason)
-	dump := func(label, statement string, args ...any) {
-		rows, err := direct.Query(ctx, statement, args...)
-		if err != nil {
-			t.Logf("DIAG %s: query error: %v", label, err)
-			return
-		}
-		defer rows.Close()
-		n := 0
-		for rows.Next() {
-			var a, b, c, d, e string
-			if err := rows.Scan(&a, &b, &c, &d, &e); err != nil {
-				t.Logf("DIAG %s: scan error: %v", label, err)
-				return
-			}
-			n++
-			t.Logf("DIAG %s[%d] %s | %s | %s | %s | %s", label, n, a, b, c, d, e)
-		}
-		if err := rows.Err(); err != nil {
-			t.Logf("DIAG %s: rows error: %v", label, err)
-		}
-		t.Logf("DIAG %s: %d rows", label, n)
-	}
-	dump("now", `SELECT toString(now64(6)), timezone(), currentDatabase(), version(), ''`)
-	dump("dblog", `SELECT toString(event_time_microseconds), toString(type), toString(query_kind), arrayStringConcat(tables, ','), substring(query, 1, 80) FROM system.query_log
-WHERE current_database = currentDatabase() AND query_kind = 'Select' ORDER BY event_time_microseconds DESC LIMIT 12`)
-	dump("anydb", `SELECT toString(event_time_microseconds), toString(type), current_database, arrayStringConcat(tables, ','), substring(query, 1, 80) FROM system.query_log
-WHERE event_time > now() - 120 AND query LIKE '%project_team%' ORDER BY event_time_microseconds DESC LIMIT 12`)
-	dump("errors", `SELECT name, toString(value), toString(last_error_time), toString(code), substring(last_error_message, 1, 400) FROM system.errors WHERE last_error_time > now() - 900 ORDER BY last_error_time DESC LIMIT 20`)
-	dump("logstate", `SELECT toString(count()), toString(max(event_time_microseconds)), toString(countIf(type = 'ExceptionBeforeStart' AND event_time > now() - 120)), toString(countIf(current_database = currentDatabase())), '' FROM system.query_log`)
-	dump("events", `SELECT event, toString(value), '', '', '' FROM system.events WHERE event ILIKE '%SystemLog%' OR event ILIKE '%Log%Flush%'`)
-	dump("textlog", `SELECT toString(event_time_microseconds), toString(level), logger_name, toString(thread_name), substring(message, 1, 400) FROM system.text_log
-WHERE event_time > now() - 900 AND level <= 'Warning' ORDER BY event_time_microseconds DESC LIMIT 40`)
-	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
-		t.Logf("DIAG reflush: %v", err)
-	}
-	t.Logf("DIAG after second flush: statementsSince=%d", len(statementsSince(t, ctx, direct, mark)))
-	for i, l := range sharedClickHouseDeathBuf.tail() {
-		t.Logf("DIAG container[%d] %s", i, l)
-	}
-}
-
-// serverNow is the server's own clock, so a query_log window never depends on
-// the test host's clock or timezone.
-func serverNow(t *testing.T, ctx context.Context, direct clickhousedriver.Conn) time.Time {
-	t.Helper()
-	var now time.Time
-	if err := direct.QueryRow(ctx, `SELECT now64(6)`).Scan(&now); err != nil {
+	var now int64
+	if err := direct.QueryRow(ctx, `SELECT toUnixTimestamp64Micro(now64(6))`).Scan(&now); err != nil {
 		t.Fatalf("read server clock: %v", err)
 	}
 	return now
+}
+
+// The query_log window must keep a statement logged in the mark's own second.
+// The table mirrors query_log's event_time_microseconds skip index (read from
+// the server, never assumed), holds one row half a second into a second, and
+// is asked for rows after a mark one microsecond before it: the row must come
+// back. The control proves the fixture reproduces the hazard: the old bind (a
+// time.Time through the driver's positional `?`) loses that row here.
+func TestQueryLogWindowKeepsAStatementLoggedInTheMarksOwnSecondAgainstRealClickHouse(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	_, direct := newScopedCHAOS7257Client(t, nil)
+
+	// A fresh server creates system.query_log at its first flush.
+	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
+		t.Fatalf("flush logs: %v", err)
+	}
+	var indexType string
+	var granularity uint64
+	if err := direct.QueryRow(ctx, `SELECT type, granularity FROM system.data_skipping_indices
+WHERE database = 'system' AND table = 'query_log' AND expr = 'event_time_microseconds'`).Scan(&indexType, &granularity); err != nil {
+		t.Fatalf("read query_log's event_time_microseconds skip index (the hazard's premise): %v", err)
+	}
+	if err := direct.Exec(ctx, fmt.Sprintf(`CREATE TABLE query_log_window (event_time DateTime, event_time_microseconds DateTime64(6),
+  INDEX event_time_microseconds_index event_time_microseconds TYPE %s GRANULARITY %d) ENGINE = MergeTree ORDER BY event_time`, indexType, granularity)); err != nil {
+		t.Fatalf("create query_log_window: %v", err)
+	}
+	logged := time.Date(2026, 9, 30, 19, 46, 5, 555189000, time.UTC)
+	batch, err := direct.PrepareBatch(ctx, `INSERT INTO query_log_window (event_time, event_time_microseconds)`)
+	if err != nil {
+		t.Fatalf("prepare query_log_window: %v", err)
+	}
+	if err := batch.Append(logged.Truncate(time.Second), logged); err != nil {
+		t.Fatalf("append query_log_window: %v", err)
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatalf("send query_log_window: %v", err)
+	}
+	count := func(predicate string, mark any) uint64 {
+		t.Helper()
+		var n uint64
+		if err := direct.QueryRow(ctx, `SELECT count() FROM query_log_window WHERE `+predicate, mark).Scan(&n); err != nil {
+			t.Fatalf("count query_log_window WHERE %s: %v", predicate, err)
+		}
+		return n
+	}
+	for _, c := range []struct {
+		name string
+		mark int64
+		want uint64
+	}{
+		{"mark 1us before the row, same second", logged.UnixMicro() - 1, 1},
+		{"mark at the row (strictly after)", logged.UnixMicro(), 0},
+		{"mark in the previous second", logged.Add(-time.Second).UnixMicro(), 1},
+		{"mark at the second's first microsecond", logged.Truncate(time.Second).UnixMicro(), 1},
+	} {
+		if got := count(queryLogSinceMark, c.mark); got != c.want {
+			t.Errorf("%s: %s kept %d rows, want %d", c.name, queryLogSinceMark, got, c.want)
+		}
+	}
+	if got := count(`event_time_microseconds > ?`, logged.Add(-time.Microsecond)); got != 0 {
+		t.Errorf("control: the old time.Time bind kept %d rows, want 0 -- the fixture no longer reproduces the skip-index hazard, so the window cases above prove nothing; re-derive it", got)
+	}
 }
 
 func TestProjectThemeMixFitsTheClickHouseByteBudgetAgainstRealClickHouse(t *testing.T) {
@@ -376,7 +415,7 @@ func TestProjectThemeMixFitsTheClickHouseByteBudgetAgainstRealClickHouse(t *test
 	for _, project := range shape.projects {
 		subjects = append(subjects, projectSubject("linear", project))
 	}
-	mark := serverNow(t, ctx, direct)
+	mark := serverNowMicros(t, ctx, direct)
 	result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactInvestment, Subjects: subjects,
 	})
@@ -388,7 +427,6 @@ func TestProjectThemeMixFitsTheClickHouseByteBudgetAgainstRealClickHouse(t *test
 		t.Fatalf("ReadFacts under max_bytes_to_read=%d failed: %v\nserver: %s", chaos7257ProdMaxBytesToRead, err, lastServerException(ctx, direct))
 	}
 	if len(statements) == 0 {
-		lane7257Diagnose(t, ctx, direct, mark, len(result.Facts), result.Reason) // LANE DIAGNOSTIC (temporary)
 		t.Fatal("measurement did not happen: query_log holds no statement over work_unit_investments")
 	}
 	// Every project is served complete: a mix source and the five shares.
