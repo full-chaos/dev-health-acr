@@ -378,6 +378,8 @@ func opMinimalVariables(t *testing.T, op *directread.OperationPolicy) map[string
 			var value any = "x"
 			if rule.Subject != nil && rule.Subject.Kind == directread.SubjectKindTeam {
 				value = opTeamT
+			} else if rule.Kind == "object" {
+				value = map[string]any{}
 			} else if len(rule.AllowedValues) > 0 {
 				value = rule.AllowedValues[0]
 			} else if rule.Min != nil {

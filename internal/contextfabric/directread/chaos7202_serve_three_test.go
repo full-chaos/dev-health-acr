@@ -69,6 +69,17 @@ func TestCHAOS7202RestrictedRefusedWithZeroUpstream(t *testing.T) {
 	}
 }
 
+// r1 P1: ops requires only the outer window; WindowInput defaults value=4 and
+// unit=WEEK, so window:{} is answerable and acr must not refuse it.
+func TestCHAOS7202RecommendationsServesTheSDLWindowDefaults(t *testing.T) {
+	h := newOpHarness(t, func(opRecorded) (int, string) { return 200, chaos7202Answers["recommendations"] }, opHarnessOptions{})
+	resp := h.run(t, opUnrestricted(opOrgA), "recommendations", map[string]any{"team": opTeamT, "window": map[string]any{}})
+	if resp.Call != directread.CallServed || len(h.upstream.requests()) != 1 {
+		raw, _ := json.Marshal(resp)
+		t.Fatalf("window:{} must be served (SDL defaults), got %s", raw)
+	}
+}
+
 func TestCHAOS7202PolicyMatrixRefusals(t *testing.T) {
 	cases := []struct {
 		name string
@@ -76,7 +87,7 @@ func TestCHAOS7202PolicyMatrixRefusals(t *testing.T) {
 		vars map[string]any
 		want directread.RefusalCode
 	}{
-		{"recommendations without team", "recommendations", map[string]any{"window": map[string]any{"value": 4, "unit": "WEEK"}}, directread.RefusalScopeRequired},
+		{"recommendations without team", "recommendations", map[string]any{"window": map[string]any{}}, directread.RefusalScopeRequired},
 		{"recommendations without window", "recommendations", map[string]any{"team": opTeamT}, directread.RefusalScopeRequired},
 		{"recommendations window over the clamp", "recommendations", map[string]any{"team": opTeamT, "window": map[string]any{"value": 27, "unit": "WEEK"}}, directread.RefusalVariableOutOfRange},
 		{"recommendations bad unit", "recommendations", map[string]any{"team": opTeamT, "window": map[string]any{"value": 4, "unit": "YEAR"}}, directread.RefusalVariableNotAllowed},
@@ -110,7 +121,7 @@ func TestCHAOS7202PolicyShape(t *testing.T) {
 		if _, refusal := cat.Lookup(name); refusal != nil {
 			t.Fatalf("%s not served: %+v", name, refusal)
 		}
-		if _, _, refusal := cat.LookupFor(name, directread.CallerRestricted); refusal == nil || refusal.Code != directread.RefusalOperationNotServedForCaller || !strings.Contains(refusal.Reason, "") {
+		if _, _, refusal := cat.LookupFor(name, directread.CallerRestricted); refusal == nil || refusal.Code != directread.RefusalOperationNotServedForCaller || refusal.Reason == "" {
 			t.Fatalf("%s restricted lookup: %+v", name, refusal)
 		}
 		for _, ns := range cat.NotServed() {

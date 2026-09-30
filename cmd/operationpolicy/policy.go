@@ -378,12 +378,11 @@ func declaredPolicy() policyDeclaration {
 				},
 				Constraints: []dr.Constraint{
 					{Kind: dr.ConstraintRequired, Path: "team", Code: dr.RefusalScopeRequired, Reason: "recommendations is served only with a team id ([ops] recommendations/recommendations.go:335-345; CHAOS-7202)"},
-					{Kind: dr.ConstraintRequired, Path: "window.value", Code: dr.RefusalScopeRequired, Reason: "a window is required ([ops] recommendations/recommendations.go:90-125; CHAOS-7202)"},
-					{Kind: dr.ConstraintRequired, Path: "window.unit", Code: dr.RefusalScopeRequired, Reason: "a window unit is required ([ops] recommendations/recommendations.go:90-125; CHAOS-7202)"},
+					{Kind: dr.ConstraintRequired, Path: "window", Code: dr.RefusalScopeRequired, Reason: "a window object is required (WindowInput! in the SDL); its value and unit default to 4 WEEK ([ops] recommendations/recommendations.go:90-125; CHAOS-7202)"},
 				},
 				Unrestricted: served("[ops] recommendations/recommendations.go:335-360 read the stored recommendation rows by team id and org (CHAOS-7202)"),
 				Restricted:   refusedFor("rows carry a team id and evidence rows, no repository id; team ids are not served to a repository-restricted caller ([ops] recommendations/recommendations.go:335-360; design D.3, K15; CHAOS-7202)"),
-				Notes:        []string{"window value is clamped to 1..26 (at most 26 cycles = 364 days); DAY/WEEK/CYCLE = 1/7/14 days (recommendations.go:96-112)", "an ops query failure answers an empty list, indistinguishable from no recommendations (recommendations.go:346-350)"},
+				Notes:        []string{"acr refuses window.value outside 1..26 (at most 26 cycles = 364 days); ops applies no upper limit; value and unit default to 4 WEEK as in the SDL; DAY/WEEK/CYCLE = 1/7/14 days (recommendations.go:96-112)", "an ops query failure answers an empty list, indistinguishable from no recommendations (recommendations.go:346-350)"},
 			},
 			"workItemTeamAttributions": {
 				DocumentName: "WorkItemTeamAttributions",
