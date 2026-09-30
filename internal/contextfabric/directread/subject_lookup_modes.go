@@ -113,6 +113,13 @@ func planHandle(plan findPlan, handle string) (findPlan, error) {
 		return plan, fmt.Errorf("%w: handle is too long", ErrFindInvalidRequest)
 	}
 	bound := graphrank.BindHandles(handle)
+	if len(bound) == 0 {
+		// CHAOS-7159: one whole-text key of any prefix; the org census
+		// decides existence (registry and free-text grammar unchanged).
+		if key, ok := graphrank.BindWorkItemKey(handle); ok {
+			bound = []graphrank.BoundHandle{key}
+		}
+	}
 	// Key SHAPE, any prefix (one grammar: graphrank). Find refuses a
 	// repository-restricted caller on it before any binding or upstream call.
 	plan.hasKeyToken = graphrank.HasWorkItemKeyToken(handle)

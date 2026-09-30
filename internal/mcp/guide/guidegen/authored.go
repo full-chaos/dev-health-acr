@@ -101,7 +101,7 @@ var grammarExamples = map[string]grammarExample{
 	"work_item_ticket_key": {
 		Question: "What is blocking CHAOS-123?",
 		Value:    "CHAOS-123",
-		Note:     "The registry knows only the `CHAOS-` key prefix today. An organization's own ticket-key prefix is org-specific data and does not bind through this pattern.",
+		Note:     "In free text (`investigate_question`) the registry knows only the `CHAOS-` key prefix; an organization's own ticket-key prefix does not bind through this pattern. `find_subjects` `handle` mode is wider: it takes one whole key of any prefix (a letter, then up to 31 letters or digits, `-`, digits) and the organization's own work items decide whether it exists.",
 	},
 	"ci_run_id": {
 		Question: "Why did run 18234567 fail?",

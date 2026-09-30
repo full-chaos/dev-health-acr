@@ -36,8 +36,10 @@ func (g upstreamCountingGraph) ListSubjectsByKind(ctx context.Context, p storage
 // caller must not tell a known prefix from an unknown one through ANY
 // observable: reason, telemetry kind, or upstream calls, for an exact key or
 // a key embedded in text alike. Org-wide and universal callers may see the
-// prefix set (invalid_find_request on an unknown prefix). A malformed shape
-// is invalid_find_request for everyone: shape is not existence.
+// prefix set: since CHAOS-7159 an exact key of any prefix is looked up by the
+// org census (an unknown one answers empty, not invalid_find_request), while
+// an unbindable text stays invalid_find_request. A malformed shape is
+// invalid_find_request for everyone: shape is not existence.
 func TestChaos7200_RestrictedHandleAnswerDoesNotRevealKeyPrefixSet(t *testing.T) {
 	inside := contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectRepository, CanonicalID: "repository:inside"}
 	authority := certifyGraph{nodes: map[string][]graphrank.CandidateNode{
@@ -69,8 +71,8 @@ func TestChaos7200_RestrictedHandleAnswerDoesNotRevealKeyPrefixSet(t *testing.T)
 	}{
 		{"exact known prefix, key present", "CHAOS-4322", scope, ok, ok},
 		{"exact known prefix, key missing", "CHAOS-999999", scope, ok, ok},
-		{"exact unknown prefix", "ZZZ-99999", scope, invalid, invalid},
-		{"exact unknown prefix, short", "ABC-123", scope, invalid, invalid},
+		{"exact unknown prefix", "ZZZ-99999", scope, ok, ok},
+		{"exact unknown prefix, short", "ABC-123", scope, ok, ok},
 		{"embedded known prefix", "please inspect CHAOS-4322", scope, ok, ok},
 		{"embedded unknown prefix", "please inspect ZZZ-4322", scope, invalid, invalid},
 		{"two known keys", "CHAOS-1 CHAOS-2", scope, invalid, invalid},
