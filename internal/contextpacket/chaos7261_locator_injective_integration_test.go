@@ -85,13 +85,15 @@ func TestEv2HandleNeverServesAnotherRowUnderCollidingLocators(t *testing.T) {
 		seedA, seedB  []string
 		deleteA       string
 		rowA, rowB    string
+		entityA       string
+		structuredKey string
 	}{
 		{
 			name: "deployment_incident_provenance same edge_id different source", queryID: "deployment_incident_provenance.v1",
 			seedA:   []string{fmt.Sprintf(`INSERT INTO work_graph_deployment_incident_edges (edge_id, org_id, deployment_id, incident_id, repo_id, confidence, source, evidence, observed_at, computed_at) VALUES ('edge-1', '%s', 'dep-1', 'inc-1', '%s', 1.0, 'native', 'ROW-A', %s, %s)`, injOrg, injRepoID, now, now)},
 			seedB:   []string{fmt.Sprintf(`INSERT INTO work_graph_deployment_incident_edges (edge_id, org_id, deployment_id, incident_id, repo_id, confidence, source, evidence, observed_at, computed_at) VALUES ('edge-1', '%s', 'dep-1', 'inc-1', '%s', 0.5, 'heuristic', 'ROW-B', %s, %s)`, injOrg, injRepoID, now, now)},
 			deleteA: fmt.Sprintf(`ALTER TABLE work_graph_deployment_incident_edges DELETE WHERE org_id = '%s' AND source = 'native' SETTINGS mutations_sync = 2`, injOrg),
-			rowA:    "ROW-A", rowB: "ROW-B",
+			rowA:    "ROW-A", rowB: "ROW-B", entityA: "edge-1", structuredKey: "edge_id",
 		},
 		{
 			name: "work_item_dependencies colon-shifted endpoints", queryID: "work_item_dependencies.v1",
@@ -104,7 +106,7 @@ func TestEv2HandleNeverServesAnotherRowUnderCollidingLocators(t *testing.T) {
 				fmt.Sprintf(`INSERT INTO work_item_dependencies (source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, org_id) VALUES ('a', 'b:c', 'blocks', 'ROW-B', %s, '%s')`, now, injOrg),
 			},
 			deleteA: fmt.Sprintf(`ALTER TABLE work_item_dependencies DELETE WHERE org_id = '%s' AND source_work_item_id = 'a:b' SETTINGS mutations_sync = 2`, injOrg),
-			rowA:    "ROW-A", rowB: "ROW-B",
+			rowA:    "ROW-A", rowB: "ROW-B", entityA: "a:b:c:blocks:fwd", structuredKey: "dependency_id",
 		},
 	}
 	for _, tc := range cases {
@@ -118,6 +120,15 @@ func TestEv2HandleNeverServesAnotherRowUnderCollidingLocators(t *testing.T) {
 			served, err := store.ResolveEvidence(ctx, principal, handle)
 			if err != nil || !strings.Contains(expandText(served), tc.rowA) {
 				t.Fatalf("handle minted for row A must serve row A while it is alone: err=%v text=%q", err, expandText(served))
+			}
+			// The locator grammar is not the entity identity: entity_id keeps
+			// its raw, human-readable form (the packet validator caps it at
+			// 1024 runes, which the escaped locator can exceed).
+			if got := served.Evidence.Source.EntityID; got != tc.entityA {
+				t.Errorf("EntityID = %q, want the raw %q", got, tc.entityA)
+			}
+			if got := served.Structured[tc.structuredKey]; got != tc.entityA {
+				t.Errorf("structured_fields[%s] = %v, want %q", tc.structuredKey, got, tc.entityA)
 			}
 			for _, s := range tc.seedB {
 				scopeExec(t, ctx, direct, s)
@@ -137,5 +148,25 @@ func TestEv2HandleNeverServesAnotherRowUnderCollidingLocators(t *testing.T) {
 				t.Fatalf("want ErrNotFound for the deleted row's handle, got %v", err)
 			}
 		})
+	}
+}
+
+// A dependency whose ids hold hundreds of ':' has a raw entity_id under the
+// 1024-rune bound but an escaped locator (':' -> "%3A") far over it. The
+// handle must still expand: only the locator is escaped, never the entity id.
+func TestEv2HandleExpandsADependencyWhoseEscapedFormExceedsTheEntityIDBound(t *testing.T) {
+	ctx := context.Background()
+	store, rows, direct, codec := injectiveStore(t, ctx)
+	now := "'2026-09-01 12:00:00.000'"
+	source := strings.Repeat("x:", 340) + "x"
+	scopeExec(t, ctx, direct, fmt.Sprintf(`INSERT INTO work_items (repo_id, work_item_id, title, status, created_at, updated_at, last_synced, org_id) VALUES ('%s', '%s', 't', 's', %s, %s, %s, '%s')`, injRepoID, source, now, now, now, injOrg))
+	scopeExec(t, ctx, direct, fmt.Sprintf(`INSERT INTO work_item_dependencies (source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, org_id) VALUES ('%s', 'c', 'blocks', 'LONG', %s, '%s')`, source, now, injOrg))
+	handle := mintFor(t, ctx, rows, codec, "work_item_dependencies.v1")
+	served, err := store.ResolveEvidence(ctx, storage.Principal{OrgID: injOrg, RepositoryScopes: []string{"*"}}, handle)
+	if err != nil {
+		t.Fatalf("a valid dependency with colon-heavy ids must expand: %v", err)
+	}
+	if want := source + ":c:blocks:fwd"; served.Evidence.Source.EntityID != want {
+		t.Errorf("EntityID = %d runes, want the raw %d-rune form", len(served.Evidence.Source.EntityID), len(want))
 	}
 }
