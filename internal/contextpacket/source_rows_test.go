@@ -177,32 +177,39 @@ func TestSourceRowLookupsBindNoGrant(t *testing.T) {
 	}
 }
 
-// sourceRowReadStatements is every statement a source-row expansion runs:
-// the lookups of source_rows.go and the catalog statement of every kind the
-// plans route (contextfabric cannot be imported here, so the list is
-// explicit; contextfabric's TestSourceRowPlansAreTotal pins the same set).
-func sourceRowReadStatements(t *testing.T) map[string]string {
+// organizationScopedStatements is every statement of the packet catalog
+// (context_for_task reads all of them; the source-row route reads nine) and
+// every statement of source_rows.go.
+func organizationScopedStatements(t *testing.T) map[string]string {
 	t.Helper()
 	statements := sourceRowStatements(t)
-	for _, id := range []string{"repository_freshness.v1", "work_items.v1", "work_item_dependencies.v1", "pull_requests.v1", "pull_request_reviews.v1", "ci_pipeline_runs.v1", "deployments.v1", "incidents.v1", "deployment_incident_provenance.v1"} {
-		statements[id] = catalogQuery(t, id).Statement
+	for _, query := range contextpacket.SourceQueryCatalogV1 {
+		statements[query.ID] = query.Statement
 	}
 	return statements
 }
 
 var (
-	tableAliasPattern = regexp.MustCompile(`(?:FROM|JOIN)\s+([a-z_]+)(?:\s+AS\s+([a-z]+))?\s+FINAL`)
+	tableAliasPattern = regexp.MustCompile(`(?:FROM|JOIN)\s+([a-z_]+)(?:\s+AS\s+([a-z]+))?`)
 	orgBindingPattern = regexp.MustCompile(`(?:toString\()?(?:([a-z]+)\.)?org_id\)?\s*=\s*\{org_id:String\}`)
 	orgJoinPattern    = regexp.MustCompile(`(?:toString\()?([a-z]+)\.org_id\)?\s*=\s*(?:toString\()?([a-z]+)\.org_id\)?`)
 )
 
-// CHAOS-7226 codex r1 P1: every table a source-row read touches is scoped to
-// the caller's organization, directly ({org_id} binding) or through an
-// org_id join to a table that is. A repository UUID is keyed (org_id, id), so
-// a join on repo_id alone admits another organization's rows. Tables the
-// declared schema gives no org_id are exempt (none today).
+// CHAOS-7226 codex r1 P1: every table of every catalog and source-row
+// statement is scoped to the caller's organization, directly ({org_id}
+// binding) or through an org_id join to a table that is. ops mints
+// repos.id deterministically from the repository name (providersync
+// repositoryIdentity), so two organizations syncing one repository share its
+// UUID, and a join on repo_id alone admits the other organization's rows. A
+// table devhealthschema does not declare is held to the rule too (the ops
+// schema gives every one of them org_id: git_commits and git_commit_stats
+// since ops migration 027); only a declared table without org_id is exempt.
 func TestSourceRowReadsScopeEveryTableToTheOrganization(t *testing.T) {
-	for name, statement := range sourceRowReadStatements(t) {
+	statements := organizationScopedStatements(t)
+	if len(statements) != len(contextpacket.SourceQueryCatalogV1)+len(sourceRowStatements(t)) {
+		t.Fatalf("statement ids collide: %d statements", len(statements))
+	}
+	for name, statement := range statements {
 		constrained := map[string]bool{}
 		unaliasedConstrained := false
 		for _, match := range orgBindingPattern.FindAllStringSubmatch(statement, -1) {
@@ -227,10 +234,7 @@ func TestSourceRowReadsScopeEveryTableToTheOrganization(t *testing.T) {
 		}
 		for _, table := range tables {
 			columns, declared := devhealthschema.ProductionColumns[table[1]]
-			if !declared {
-				t.Fatalf("%s reads %s, which devhealthschema does not declare", name, table[1])
-			}
-			hasOrg := false
+			hasOrg := !declared
 			for _, column := range columns {
 				hasOrg = hasOrg || column.Name == "org_id"
 			}

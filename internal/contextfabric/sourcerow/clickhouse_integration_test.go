@@ -117,6 +117,11 @@ func seedIntegration(t *testing.T, ctx context.Context, direct clickhousedriver.
 	for _, statement := range devhealthschema.DDL() {
 		exec(t, ctx, direct, statement)
 	}
+	// devhealthschema does not declare the commit tables; these are the ops
+	// definitions (migrations/clickhouse/000_raw_tables.sql) with the org_id
+	// column and sorting key of migration 027.
+	exec(t, ctx, direct, `CREATE TABLE git_commits (org_id String, repo_id UUID, hash String, message Nullable(String), author_name Nullable(String), author_email Nullable(String), author_when DateTime64(3, 'UTC'), committer_name Nullable(String), committer_email Nullable(String), committer_when DateTime64(3, 'UTC'), parents UInt32, last_synced DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, hash)`)
+	exec(t, ctx, direct, `CREATE TABLE git_commit_stats (org_id String, repo_id UUID, commit_hash String, file_path String, additions Int32, deletions Int32, old_file_mode String, new_file_mode String, last_synced DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, commit_hash, file_path)`)
 	now := "'2026-09-01 12:00:00.000'"
 	past := "'2026-01-01 00:00:00.000000'"
 	for _, statement := range []string{
@@ -154,6 +159,10 @@ func seedIntegration(t *testing.T, ctx context.Context, direct clickhousedriver.
 		fmt.Sprintf(`INSERT INTO git_pull_request_reviews (repo_id, number, review_id, state, submitted_at, last_synced, org_id) VALUES ('%s', 990, 'FOREIGN-REVIEW-990', 'APPROVED', %s, %s, '%s')`, grantedID, now, now, foreignOrg),
 		fmt.Sprintf(`INSERT INTO ci_pipeline_runs (repo_id, run_id, status, started_at, last_synced, org_id) VALUES ('%s', 'FOREIGN-CI-990', 'failed', %s, %s, '%s')`, grantedID, now, now, foreignOrg),
 		fmt.Sprintf(`INSERT INTO deployments (repo_id, deployment_id, status, environment, started_at, deployed_at, last_synced, org_id) VALUES ('%s', 'FOREIGN-DEP-990', 'success', 'private-env', %s, %s, %s, '%s')`, grantedID, now, now, now, foreignOrg),
+		// Commits: this organization's c0ffee, and the foreign organization's
+		// c0ffee (the same hash under the same repository UUID) and f0e1gn.
+		fmt.Sprintf(`INSERT INTO git_commits (org_id, repo_id, hash, message, author_when, committer_when, parents, last_synced) VALUES ('%[1]s', '%[3]s', 'c0ffee', 'own commit', %[4]s, %[4]s, 1, %[4]s), ('%[2]s', '%[3]s', 'c0ffee', 'FOREIGN commit', %[4]s, %[4]s, 1, %[4]s), ('%[2]s', '%[3]s', 'f0e1gn', 'FOREIGN only', %[4]s, %[4]s, 1, %[4]s)`, integrationOrg, foreignOrg, grantedID, now),
+		fmt.Sprintf(`INSERT INTO git_commit_stats (org_id, repo_id, commit_hash, file_path, additions, deletions, last_synced) VALUES ('%[1]s', '%[3]s', 'c0ffee', 'main.go', 1, 2, %[4]s), ('%[2]s', '%[3]s', 'c0ffee', 'main.go', 7, 8, %[4]s), ('%[2]s', '%[3]s', 'f0e1gn', 'secret.go', 9, 9, %[4]s)`, integrationOrg, foreignOrg, grantedID, now),
 		// INC-2's service maps to 65 repositories through mappings that
 		// expired, and to grantedID through a current one.
 		fmt.Sprintf(`INSERT INTO repos (id, repo, created_at, last_synced, org_id, provider) SELECT toUUID(concat('50000000-0000-4000-8000-', leftPad(toString(number), 12, '0'))), concat('acme/expired-', leftPad(toString(number), 3, '0')), %s, %s, '%s', 'github' FROM numbers(65)`, now, now, integrationOrg),
@@ -254,6 +263,33 @@ func TestSourceRowsAgainstClickHouse(t *testing.T) {
 	// the slug, and this organization still reads exactly its own (the
 	// served-kinds loop above asserts Rows == 1 and Repositories == 1 for
 	// every kind, with those colliding rows present).
+
+	// The commit statements are on no source-row plan (commit kinds stay on
+	// the record) but context_for_task reads them through the same catalog:
+	// each reads exactly this organization's row under the shared UUID.
+	catalog := contextpacket.NewCatalogClickHouseRows(query)
+	for _, read := range []struct {
+		query, locator string
+		want           int
+		citation       string
+	}{
+		{"git_commits.v1", "acr:v1:commit:c0ffee", 1, "own commit"},
+		{"git_commits.v1", "acr:v1:commit:f0e1gn", 0, ""},
+		{"git_commit_files.v1", "acr:v1:commit-file:c0ffee:main.go", 1, "1 additions, 2 deletions"},
+		{"git_commit_files.v1", "acr:v1:commit-file:f0e1gn:secret.go", 0, ""},
+	} {
+		references, err := catalog.ResolveSourceRow(ctx, integrationOrg, contractsv1.ResolvedScope{RepoID: grantedID, RepoSlug: grantedRep}, contextpacket.SourceRowRead{QueryID: read.query, Locator: read.locator})
+		if err != nil {
+			t.Fatalf("%s %s: %v", read.query, read.locator, err)
+		}
+		if len(references) != read.want || (read.want == 1 && references[0].Evidence.Citation != read.citation) {
+			t.Fatalf("%s %s: %d rows %+v, want %d (%q)", read.query, read.locator, len(references), references, read.want, read.citation)
+		}
+		foreign, err := catalog.ResolveSourceRow(ctx, foreignOrg, contractsv1.ResolvedScope{RepoID: grantedID, RepoSlug: grantedRep}, contextpacket.SourceRowRead{QueryID: read.query, Locator: read.locator})
+		if err != nil || len(foreign) != 1 {
+			t.Fatalf("%s %s: the foreign organization reads %d of its own rows (%v)", read.query, read.locator, len(foreign), err)
+		}
+	}
 
 	// Expired incident mappings (r1 P2) are not discovered: INC-2 has 65 of
 	// them and one current mapping, and only the current one is a candidate.
