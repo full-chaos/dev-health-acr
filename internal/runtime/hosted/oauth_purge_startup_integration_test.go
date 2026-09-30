@@ -29,8 +29,9 @@ import (
 // deletes the expired rows through that role, logs its heartbeat line, and the
 // runtime closes cleanly.
 // oauthPurgeStartupHarness is a fresh migrated Postgres plus a runtime role
-// (acr_purge_rt) holding everything except DELETE on the two OAuth tables: what
-// a deployment looks like before the DELETE grant has been applied.
+// (acr_purge_rt) holding everything except DELETE on the three tables the OAuth
+// purge deletes from: what a deployment looks like before the DELETE grants have
+// been applied.
 type oauthPurgeStartupHarness struct {
 	ctx        context.Context
 	owner      *sql.DB
@@ -58,7 +59,7 @@ func newOAuthPurgeStartupHarness(t *testing.T) oauthPurgeStartupHarness {
 		`CREATE ROLE acr_purge_rt LOGIN PASSWORD 'rt'`,
 		`GRANT USAGE ON SCHEMA acr TO acr_purge_rt`,
 		`GRANT ALL ON ALL TABLES IN SCHEMA acr TO acr_purge_rt`,
-		`REVOKE DELETE ON acr.oauth_clients, acr.oauth_authorization_requests FROM acr_purge_rt`,
+		`REVOKE DELETE ON acr.oauth_clients, acr.oauth_authorization_requests, acr.device_authorizations FROM acr_purge_rt`,
 	} {
 		_, err = owner.ExecContext(ctx, statement)
 		require.NoError(t, err, statement)
@@ -140,7 +141,7 @@ func TestOpenPostgres_oauthPurgeAtStartupThroughTheRealConstructor(t *testing.T)
 	require.Equal(t, 1, count("oauth_clients"))
 
 	// DELETE granted (what the runtime-acl step / Helm hook does): the initial purge runs through the real wiring.
-	_, err = owner.ExecContext(ctx, `GRANT DELETE ON acr.oauth_clients, acr.oauth_authorization_requests TO acr_purge_rt`)
+	_, err = owner.ExecContext(ctx, `GRANT DELETE ON acr.oauth_clients, acr.oauth_authorization_requests, acr.device_authorizations TO acr_purge_rt`)
 	require.NoError(t, err)
 	logger, logs = newLogger()
 	components, err = openPostgres(ctx, cfg, logger)
@@ -148,11 +149,46 @@ func TestOpenPostgres_oauthPurgeAtStartupThroughTheRealConstructor(t *testing.T)
 	require.NoError(t, components.close())
 	require.Equal(t, 0, count("oauth_authorization_requests"), "the startup purge must delete the expired request")
 	require.Equal(t, 0, count("oauth_clients"), "and, in the same call, the client whose last request just aged out")
+	require.Equal(t, 0, count("device_authorizations"), "and the expired device authorization behind the request")
 	require.Contains(t, logs.String(), `msg="oauth purge"`)
 	require.Contains(t, logs.String(), "requests=1")
 	require.Contains(t, logs.String(), "clients=1")
+	require.Contains(t, logs.String(), "device_authorizations=1")
 	require.Contains(t, logs.String(), "requests_remaining=0", "nothing eligible is left after the purge")
 	require.Contains(t, logs.String(), "clients_remaining=0")
+	require.Contains(t, logs.String(), "device_authorizations_remaining=0")
+}
+
+// The startup purge is the DELETE-privilege proof: a runtime role missing
+// DELETE on ANY table the purge deletes from must fail startup, on a database
+// that has no row to delete yet as well (the first tick that finds a candidate
+// is far too late to learn the grant is missing).
+func TestOpenPostgres_oauthPurgeStartupProvesDeleteOnEveryPurgedTable(t *testing.T) {
+	h := newOAuthPurgeStartupHarness(t)
+	ctx, owner := h.ctx, h.owner
+	cfg := h.config()
+	tables := []string{"acr.oauth_authorization_requests", "acr.oauth_clients", "acr.device_authorizations"}
+	for _, missing := range tables {
+		for _, table := range tables {
+			verb := "GRANT DELETE ON " + table + " TO"
+			if table == missing {
+				verb = "REVOKE DELETE ON " + table + " FROM"
+			}
+			_, err := owner.ExecContext(ctx, verb+" acr_purge_rt")
+			require.NoError(t, err)
+		}
+		logger, _ := newOAuthPurgeStartupLogger()
+		_, err := openPostgres(ctx, cfg, logger)
+		require.Errorf(t, err, "DELETE missing on %s: startup must fail even with nothing to delete", missing)
+		require.Contains(t, err.Error(), "purge expired oauth rows")
+	}
+
+	_, err := owner.ExecContext(ctx, `GRANT DELETE ON acr.oauth_authorization_requests, acr.oauth_clients, acr.device_authorizations TO acr_purge_rt`)
+	require.NoError(t, err)
+	logger, _ := newOAuthPurgeStartupLogger()
+	components, err := openPostgres(ctx, cfg, logger)
+	require.NoError(t, err, "with every DELETE granted an empty database starts")
+	require.NoError(t, components.close())
 }
 
 // CHAOS-7249: through the real constructor and a real database, a purge tick
@@ -163,7 +199,7 @@ func TestOpenPostgres_oauthPurgeAtStartupThroughTheRealConstructor(t *testing.T)
 func TestOpenPostgres_oauthPurgeTickLineSeparatesSkippedFromEmpty(t *testing.T) {
 	h := newOAuthPurgeStartupHarness(t)
 	ctx, owner := h.ctx, h.owner
-	_, err := owner.ExecContext(ctx, `GRANT DELETE ON acr.oauth_clients, acr.oauth_authorization_requests TO acr_purge_rt`)
+	_, err := owner.ExecContext(ctx, `GRANT DELETE ON acr.oauth_clients, acr.oauth_authorization_requests, acr.device_authorizations TO acr_purge_rt`)
 	require.NoError(t, err)
 	cfg := h.config()
 
@@ -172,10 +208,11 @@ func TestOpenPostgres_oauthPurgeTickLineSeparatesSkippedFromEmpty(t *testing.T) 
 	components, err := openPostgres(ctx, cfg, logger)
 	require.NoError(t, err)
 	require.NoError(t, components.close())
-	require.Contains(t, logs.String(), "requests=0 clients=0 requests_remaining=0 clients_remaining=0")
+	require.Contains(t, logs.String(), "requests=0 clients=0 device_authorizations=0 requests_remaining=0 clients_remaining=0 device_authorizations_remaining=0")
 
-	// One expired request (its client is young, so the client stays) and one idle client,
-	// both locked by another transaction for the whole startup purge.
+	// One expired request (its client is young, so the client stays) with its device
+	// authorization, and one idle client, all locked by another transaction for the
+	// whole startup purge.
 	t0 := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	audit, err := storagepostgres.NewAuditStore(owner)
 	require.NoError(t, err)
@@ -210,6 +247,8 @@ func TestOpenPostgres_oauthPurgeTickLineSeparatesSkippedFromEmpty(t *testing.T) 
 	defer func() { _ = tx.Rollback() }()
 	_, err = tx.ExecContext(ctx, `SELECT 1 FROM acr.oauth_authorization_requests FOR UPDATE`)
 	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `SELECT 1 FROM acr.device_authorizations FOR UPDATE`)
+	require.NoError(t, err)
 	_, err = tx.ExecContext(ctx, `SELECT 1 FROM acr.oauth_clients WHERE client_id = $1 FOR KEY SHARE`, idleClient)
 	require.NoError(t, err)
 
@@ -219,7 +258,7 @@ func TestOpenPostgres_oauthPurgeTickLineSeparatesSkippedFromEmpty(t *testing.T) 
 	require.NoError(t, components.close())
 	require.Equal(t, 1, h.count(t, "oauth_authorization_requests"))
 	require.Equal(t, 2, h.count(t, "oauth_clients"))
-	require.Contains(t, logs.String(), "requests=0 clients=0 requests_remaining=1 clients_remaining=1",
+	require.Contains(t, logs.String(), "requests=0 clients=0 device_authorizations=0 requests_remaining=1 clients_remaining=1 device_authorizations_remaining=1",
 		"skipped-everything must not read like the empty tick above")
 
 	// Released, the next purge takes them and the line says nothing is left.
@@ -229,6 +268,6 @@ func TestOpenPostgres_oauthPurgeTickLineSeparatesSkippedFromEmpty(t *testing.T) 
 	require.NoError(t, err)
 	require.NoError(t, components.close())
 	require.Equal(t, 0, h.count(t, "oauth_authorization_requests"))
-	require.Contains(t, logs.String(), "requests=1 clients=1 requests_remaining=0 clients_remaining=0")
+	require.Contains(t, logs.String(), "requests=1 clients=1 device_authorizations=1 requests_remaining=0 clients_remaining=0 device_authorizations_remaining=0")
 	require.Equal(t, 1, h.count(t, "oauth_clients"), "the young client stays")
 }

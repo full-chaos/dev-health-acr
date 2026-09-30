@@ -193,24 +193,30 @@ func TestOAuthStore_PurgeExpired_requests(t *testing.T) {
 	result := f.purge(purgeAt, 500)
 
 	// Then
-	require.Equal(t, OAuthPurgeResult{Requests: 4, Clients: 0}, result)
+	require.Equal(t, OAuthPurgeResult{Requests: 4, Clients: 0, DeviceAuthorizations: 4}, result, "the four purged requests' device authorizations follow in the same call")
 	for name, handle := range map[string]storage.OAuthSecretHash{"old": old, "revoked-credential": revoked, "expired-credential": expired, "referenced": referenced} {
 		require.Falsef(t, f.requestExists(handle), "%s: an expired request past the grace with no live credential must be purged", name)
 	}
 	for name, handle := range map[string]storage.OAuthSecretHash{"fresh": fresh, "inside-grace": justInsideGrace, "live-credential": live, "no-expiry-credential": noExpiry} {
 		require.Truef(t, f.requestExists(handle), "%s: must be kept", name)
 	}
-	require.Equal(t, 1, f.count("acr.oauth_device_grants"), "purging a request must not delete the device grant that shares its device authorization")
+	// The request delete itself is not blocked by the device grant that shares its
+	// device authorization (no foreign key points at a request); the grant goes
+	// with the device authorization (ON DELETE CASCADE, CHAOS-7229), which the
+	// same call then purges because it is past the grace.
+	require.Equal(t, 0, f.count("acr.oauth_device_grants"), "the grant is deleted with its expired device authorization")
+	require.Equal(t, 4, f.count("acr.device_authorizations"), "fresh, inside-grace, live-credential and no-expiry-credential device authorizations are kept")
 
 	// And: once the live credential itself has ended, its request goes too
 	// (with fresh and inside-grace, which are past the grace by then); a
 	// credential with no expiry is live forever, so its request never does,
 	// and while it stays the client is not idle.
 	afterCredential := credentialEnd.Add(oauthPurgeGrace)
-	require.Equal(t, OAuthPurgeResult{Requests: 3, Clients: 0}, f.purge(afterCredential, 500))
+	require.Equal(t, OAuthPurgeResult{Requests: 3, Clients: 0, DeviceAuthorizations: 3}, f.purge(afterCredential, 500))
 	require.False(t, f.requestExists(live))
 	require.True(t, f.requestExists(noExpiry))
 	require.True(t, f.clientExists(client))
+	require.Equal(t, 1, f.count("acr.device_authorizations"), "only the no-expiry credential's device authorization is left")
 }
 
 // The client statement deletes only a dynamic client registered before
@@ -254,7 +260,8 @@ func TestOAuthStore_PurgeExpired_clients(t *testing.T) {
 	result := f.purge(purgeAt, 500)
 
 	// Then
-	require.Equal(t, OAuthPurgeResult{Requests: 1, Clients: 3}, result)
+	require.Equal(t, OAuthPurgeResult{Requests: 1, Clients: 3, DeviceAuthorizations: 2}, result,
+		"device authorizations purged: the aged-out request's, and the revoked credential's (its grant is past the window); kept: recent request, recent grant, both live credentials")
 	for name, id := range map[string]string{"idle": idle, "revoked-credential-via-grant": deadThroughGrant, "last-request-just-aged-out": justAgedOut} {
 		require.Falsef(t, f.clientExists(id), "%s: an idle client must be purged", name)
 	}
@@ -276,7 +283,7 @@ func TestOAuthStore_PurgeExpired_clients(t *testing.T) {
 	// past the 30 day grace (requests first), and every remaining client's last
 	// activity is older than the 30 day idle window: all five are collected.
 	afterCredential := credentialEnd.Add(oauthPurgeGrace).Add(time.Hour)
-	require.Equal(t, OAuthPurgeResult{Requests: 2, Clients: 5}, f.purge(afterCredential, 500))
+	require.Equal(t, OAuthPurgeResult{Requests: 2, Clients: 5, DeviceAuthorizations: 4}, f.purge(afterCredential, 500))
 	for name, id := range map[string]string{
 		"recent-request": withRecentRequest, "live-via-request": liveThroughRequest, "live-via-grant": liveThroughGrant,
 		"young": young, "recent-grant": recentGrant,
@@ -284,10 +291,12 @@ func TestOAuthStore_PurgeExpired_clients(t *testing.T) {
 		require.Falsef(t, f.clientExists(id), "%s: purged once its credential ended and its activity aged out", name)
 	}
 	require.Equal(t, 0, f.count("acr.oauth_clients"))
+	require.Equal(t, 0, f.count("acr.device_authorizations"))
+	require.Equal(t, 0, f.count("acr.oauth_device_grants"))
 }
 
 func TestOAuthStore_PurgeExpired_batchIsBounded(t *testing.T) {
-	// Given: 5 purgeable requests and 5 idle clients
+	// Given: 5 purgeable requests (each on its own device authorization) and 5 idle clients
 	f := newOAuthPurgeFixture(t)
 	purgeAt := f.t0.Add(40 * 24 * time.Hour)
 	requestClient := f.client(0xc0, purgeAt.Add(-time.Hour))
@@ -298,12 +307,29 @@ func TestOAuthStore_PurgeExpired_batchIsBounded(t *testing.T) {
 		f.client(seed, f.t0)
 	}
 
-	// When / Then: two, two, one, none -- per statement
-	require.Equal(t, OAuthPurgeResult{Requests: 2, Clients: 2}, f.purge(purgeAt, 2))
-	require.Equal(t, OAuthPurgeResult{Requests: 2, Clients: 2}, f.purge(purgeAt, 2))
-	require.Equal(t, OAuthPurgeResult{Requests: 1, Clients: 1}, f.purge(purgeAt, 2))
-	require.Equal(t, OAuthPurgeResult{}, f.purge(purgeAt, 2))
+	// When / Then: the first call takes exactly a batch from each statement ...
+	require.Equal(t, OAuthPurgeResult{Requests: 2, Clients: 2, DeviceAuthorizations: 2}, f.purge(purgeAt, 2))
+
+	// ... and no call ever takes more than a batch from any statement (a deleted
+	// device authorization also takes its own request with it, so the request
+	// count of later calls is not fixed), until nothing is left.
+	total := OAuthPurgeResult{Requests: 2, Clients: 2, DeviceAuthorizations: 2}
+	for range 10 {
+		result := f.purge(purgeAt, 2)
+		require.LessOrEqual(t, result.Requests, 2)
+		require.LessOrEqual(t, result.Clients, 2)
+		require.LessOrEqual(t, result.DeviceAuthorizations, 2)
+		total.Clients += result.Clients
+		total.DeviceAuthorizations += result.DeviceAuthorizations
+		if result == (OAuthPurgeResult{}) {
+			break
+		}
+	}
+	require.Equal(t, 5, total.Clients)
+	require.Equal(t, 5, total.DeviceAuthorizations)
+	require.Equal(t, OAuthPurgeResult{}, f.purge(purgeAt, 2), "the purge reaches a fixed point")
 	require.Equal(t, 0, f.count("acr.oauth_authorization_requests"))
+	require.Equal(t, 0, f.count("acr.device_authorizations"))
 	require.Equal(t, 1, f.count("acr.oauth_clients"), "only the young client is left")
 }
 
@@ -367,7 +393,7 @@ func TestOAuthStore_PurgeExpired_defaultWindowsMeasureIdlenessExactly(t *testing
 	require.NoError(t, err)
 
 	// Then
-	require.Equal(t, OAuthPurgeResult{Requests: 1, Clients: 1}, result)
+	require.Equal(t, OAuthPurgeResult{Requests: 1, Clients: 1, DeviceAuthorizations: 1}, result)
 	require.True(t, f.clientExists(usedRecently), "a client with a request 2 days ago is not idle")
 	require.True(t, f.requestExists(recent))
 	require.True(t, f.clientExists(insideWindow), "a request 29 days ago is inside the 30 day window")

@@ -34,7 +34,8 @@ import (
 // The grant list here deliberately covers acr.oauth_device_grants -- the
 // one table CHAOS-6277 found missing its Kubernetes grant -- plus, since
 // CHAOS-6191, DELETE alone on acr.oauth_clients and
-// acr.oauth_authorization_requests for the bounded OAuth purge loop.
+// acr.oauth_authorization_requests for the bounded OAuth purge loop, plus, since
+// CHAOS-7229, DELETE alone on acr.device_authorizations for the same loop.
 // oauth_clients and oauth_authorization_requests (migration 0040) were both
 // independently confirmed already correctly granted SELECT, INSERT, UPDATE
 // on trial and prod when CHAOS-6277 was filed, so only the new privilege is
@@ -104,11 +105,25 @@ func grantRuntimeACL(ctx context.Context, db *sql.DB, runtimeDSN string, output 
 		)); err != nil {
 			return fmt.Errorf("grant DELETE on acr.oauth_clients and acr.oauth_authorization_requests to %s: %w", role, err)
 		}
+		// CHAOS-7229: DELETE on the device authorizations the same loop purges
+		// once they are expired. Its ON DELETE CASCADE into
+		// acr.oauth_authorization_requests and acr.oauth_device_grants runs as
+		// the referencing tables' owner, so no DELETE is granted on
+		// acr.oauth_device_grants.
+		if _, err := db.ExecContext(ctx, fmt.Sprintf(
+			`GRANT DELETE ON TABLE acr.device_authorizations TO %s`,
+			quotedRole,
+		)); err != nil {
+			return fmt.Errorf("grant DELETE on acr.device_authorizations to %s: %w", role, err)
+		}
 	}
 	role := strings.Join(roles, ", ")
 	if _, err = fmt.Fprintf(output, "granted SELECT, INSERT on acr.oauth_device_grants to %s\n", role); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(output, "granted DELETE on acr.oauth_clients, acr.oauth_authorization_requests to %s\n", role)
+	if _, err = fmt.Fprintf(output, "granted DELETE on acr.oauth_clients, acr.oauth_authorization_requests to %s\n", role); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(output, "granted DELETE on acr.device_authorizations to %s\n", role)
 	return err
 }

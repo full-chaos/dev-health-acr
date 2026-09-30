@@ -23,10 +23,14 @@ type OAuthStoreOptions struct {
 type OAuthStore struct {
 	DB  *sql.DB
 	now func() time.Time
-	// afterClientLock is a test seam, nil in production: purgeIdleOAuthClients
-	// calls it between locking its candidate clients and re-checking them, so a
-	// test can commit a request inside exactly that window.
-	afterClientLock func()
+	// afterClientLock and afterDeviceAuthorizationLock are test seams, nil in
+	// production: purgeLockedThenRechecked calls the one for the table it is
+	// purging between locking its candidate rows and re-checking them, so a test
+	// can commit a request inside exactly that window.
+	afterClientLock              func()
+	afterDeviceAuthorizationLock func()
+	// purgeLockTimeout overrides oauthPurgeLockTimeout when non-zero (tests).
+	purgeLockTimeout time.Duration
 }
 
 func NewOAuthStore(db *sql.DB) (*OAuthStore, error) {
