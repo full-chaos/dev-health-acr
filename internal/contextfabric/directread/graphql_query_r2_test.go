@@ -73,6 +73,11 @@ func TestGraphQLTwoOperationRootOverlapIsPinned(t *testing.T) {
 				t.Fatalf("%s is served to a restricted caller: the overlap now differs by caller class", op.Name)
 			}
 		}
+		// The root is charged the MAX cost weight of its candidates, whichever
+		// one maps the shape (lead ruling on overlaps).
+		if want := max(directread.GraphQLCostWeight(a.CostClass), directread.GraphQLCostWeight(b.CostClass)); directread.GraphQLCostWeight(root.CostClass()) != want {
+			t.Fatalf("%s charged weight %d, want the max %d", p.root, directread.GraphQLCostWeight(root.CostClass()), want)
+		}
 		if a.CostClass != b.CostClass || a.DeadlineSeconds != b.DeadlineSeconds || a.MaxInFlightPerOrg != b.MaxInFlightPerOrg {
 			t.Fatalf("%s: cost/deadline/concurrency differ between candidates", p.root)
 		}
@@ -346,4 +351,29 @@ func runSynthetic(t *testing.T, policy *directread.GraphQLPolicy, query string) 
 	}
 	_ = strings.TrimSpace
 	return resp
+}
+
+// A synthetic root whose candidates have different cost classes is charged
+// the heavier one even when the lighter candidate maps the shape.
+func TestGraphQLOverlapIsChargedTheMaxCandidateWeight(t *testing.T) {
+	cat := syntheticCatalogue(t, []synthSpec{
+		{from: "hotspots", name: "aHotspotsCheap", edit: func(op map[string]any) { op["cost_class"] = "catalog" }},
+		{from: "hotspots", name: "zHotspotsDear", edit: func(op map[string]any) { op["cost_class"] = "compute" }},
+	})
+	policy, err := directread.NewGraphQLPolicy(cat, directread.EmbeddedOpsSchema(), directread.DefaultGraphQLLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := policy.Roots()[0]
+	if root.Operations()[0] != "aHotspotsCheap" || root.CostClass() != directread.CostCompute {
+		t.Fatalf("order %v, charged %s; want the cheap op to map and compute to be charged", root.Operations(), root.CostClass())
+	}
+	resp := runSynthetic(t, policy, `{ hotspots(input: {sinceUtc: "2026-09-21T00:00:00Z", untilUtc: "2026-09-28T00:00:00Z"}) { rows { filePath } } }`)
+	if resp.Call != directread.CallServed || resp.RootFields[0].Operation != "aHotspotsCheap" {
+		t.Fatalf("mapped to %+v", resp.RootFields)
+	}
+	two := `{ a: hotspots(input: {sinceUtc: "2026-09-21T00:00:00Z", untilUtc: "2026-09-28T00:00:00Z"}) { rows { filePath } } b: hotspots(input: {sinceUtc: "2026-09-21T00:00:00Z", untilUtc: "2026-09-28T00:00:00Z"}) { rows { filePath } } }`
+	if resp := runSynthetic(t, policy, two); resp.Call != directread.CallRefused || resp.Refusal.Code != directread.RefusalQueryLimitExceeded {
+		t.Fatalf("two roots charged at the cheap weight: %+v", resp)
+	}
 }
