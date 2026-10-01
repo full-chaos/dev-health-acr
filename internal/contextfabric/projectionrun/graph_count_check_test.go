@@ -41,6 +41,13 @@ func (b *countingBackend) CountKind(_ context.Context, _ string, kind contextfab
 type belowObserver struct {
 	mu     sync.Mutex
 	events []projectionrun.GraphBelowSource
+	checks []projectionrun.GraphCountCheck
+}
+
+func (o *belowObserver) ObserveGraphCountCheck(c projectionrun.GraphCountCheck) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.checks = append(o.checks, c)
 }
 
 func (o *belowObserver) ObserveProjectionOutcome(projectionrun.Outcome)    {}

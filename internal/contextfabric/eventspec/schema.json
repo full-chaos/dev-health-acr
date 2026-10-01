@@ -8583,5 +8583,47 @@
         ]
       }
     ]
+  },
+  {
+    "id": "projectionrun.graph_count_check_completed",
+    "msg": "context_fabric: projection graph count check completed",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "org_id_hash"
+    ],
+    "bounded_aggregation": "at most one line per organization per check interval (default 10 minutes), only when the check actually ran; an organization not due, a negative interval or a backend without counts emits none.",
+    "fields": [
+      {
+        "key": "org_id_hash",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "sources_checked",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "kinds_compared",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "gap_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "error_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "duration_ms",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
   }
 ]

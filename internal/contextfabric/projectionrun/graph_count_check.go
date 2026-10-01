@@ -29,6 +29,22 @@ const (
 // reported as a counter event.
 type GraphCountObserver interface {
 	ObserveGraphBelowSource(GraphBelowSource)
+	ObserveGraphCountCheck(GraphCountCheck)
+}
+
+// GraphCountCheck is one completed count check of one organization: what it
+// compared and what it found. Reported once per check that actually ran, so
+// "the check ran and found nothing" is observable. Counts only; content-safe.
+type GraphCountCheck struct {
+	OrgID          string
+	SourcesChecked int
+	KindsCompared  int
+	// Gaps counts the confirmed graph_below_source gaps this check reported.
+	Gaps int
+	// Errors counts the source or graph count reads that failed this check.
+	Errors   int
+	Duration time.Duration
+	At       time.Time
 }
 
 // GraphBelowSource is one kind whose graph node count trails its source count
@@ -157,13 +173,23 @@ func (c *Coordinator) checkGraphCounts(ctx context.Context, orgID string) {
 	ctx, cancel := context.WithTimeout(ctx, graphCountCheckTimeout)
 	defer cancel()
 	hash := orgIDHash(orgID)
+	started := c.now()
+	result := GraphCountCheck{OrgID: orgID, At: started}
+	defer func() {
+		result.Duration = c.now().Sub(started)
+		if obs, ok := c.observer.(GraphCountObserver); ok {
+			obs.ObserveGraphCountCheck(result)
+		}
+	}()
 	for _, source := range c.sourceNames {
 		counter, ok := c.sources[source].(contextfabric.ProjectionSourceCounts)
 		if !ok {
 			continue
 		}
 		sourceCounts, err := counter.ProjectionSourceCounts(ctx, orgID)
+		result.SourcesChecked++
 		if err != nil {
+			result.Errors++
 			c.logger.WarnContext(ctx, "context_fabric: projection count check failed", "check", "graph_count", "stage", "source_count",
 				"source", contextfabric.SanitizeLogAttr(source), "org_id_hash", contextfabric.SanitizeLogAttr(hash), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
 			continue
@@ -177,11 +203,13 @@ func (c *Coordinator) checkGraphCounts(ctx context.Context, orgID string) {
 			sourceCount := sourceCounts[kind]
 			graphCount, err := graph.CountKind(ctx, orgID, kind)
 			if err != nil {
+				result.Errors++
 				c.logger.WarnContext(ctx, "context_fabric: projection count check failed", "check", "graph_count", "stage", "graph_count",
 					"source", contextfabric.SanitizeLogAttr(source), "kind", contextfabric.SanitizeLogAttr(string(kind)), "org_id_hash", contextfabric.SanitizeLogAttr(hash),
 					"failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
 				continue
 			}
+			result.KindsCompared++
 			tolerance := graphCountTolerance(sourceCount, graphCount)
 			gapKey := pairKey(orgID, source) + "\x00" + string(kind)
 			if sourceCount-graphCount <= tolerance {
@@ -194,6 +222,7 @@ func (c *Coordinator) checkGraphCounts(ctx context.Context, orgID string) {
 			c.logger.WarnContext(ctx, "context_fabric: graph_below_source", "check", "graph_below_source",
 				"source", contextfabric.SanitizeLogAttr(source), "kind", contextfabric.SanitizeLogAttr(string(kind)), "org_id_hash", contextfabric.SanitizeLogAttr(hash),
 				"source_count", sourceCount, "graph_count", graphCount, "tolerance", tolerance)
+			result.Gaps++
 			if obs, ok := c.observer.(GraphCountObserver); ok {
 				obs.ObserveGraphBelowSource(GraphBelowSource{OrgID: orgID, Source: source, Kind: kind, SourceCount: sourceCount, GraphCount: graphCount, Tolerance: tolerance, At: c.now()})
 			}

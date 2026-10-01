@@ -2902,6 +2902,7 @@ var All = []Event{
 	MCPHTTPReadiness,
 	OAuthStep,
 	OTelExport,
+	GraphCountCheckCompleted,
 }
 
 // CountPopulationScope (CHAOS-5775) is the Info line for whether a served
@@ -3199,5 +3200,27 @@ var MCPHostedContextScope = Event{
 		{Key: "has_branch", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "has_commit", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "file_count", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
+// GraphCountCheckCompleted is the Info line for one completed graph count
+// check of one organization: how many sources and kinds it compared, how many
+// confirmed graph_below_source gaps it found and how many count reads failed.
+// The Warn lines the check emits for a gap or a failed read stay as they are;
+// this line is what makes a check that ran and found nothing observable.
+var GraphCountCheckCompleted = Event{
+	ID:                 "projectionrun.graph_count_check_completed",
+	Msg:                "context_fabric: projection graph count check completed",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"org_id_hash"},
+	BoundedAggregation: "at most one line per organization per check interval (default 10 minutes), only when the check actually ran; an organization not due, a negative interval or a backend without counts emits none.",
+	Fields: []Field{
+		{Key: "org_id_hash", Type: FieldString, Presence: PresenceRequired},
+		{Key: "sources_checked", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "kinds_compared", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "gap_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "error_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "duration_ms", Type: FieldInt, Presence: PresenceRequired},
 	},
 }
