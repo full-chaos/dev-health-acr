@@ -34,7 +34,7 @@ printf 'ok  \texample/a\t1.0s\nFAIL\texample/hung\t420.012s\npanic: test timed o
 expect panic 1 'package example/hung printed FAIL' 420 "$tmp/panic"
 
 printf '?   \texample/c\t[no test files]\n' >"$tmp/nofiles"
-expect no-test-files 0 'top 5' 420 "$tmp/nofiles"
+expect no-test-files-only 1 'measurement did not happen' 420 "$tmp/nofiles"
 
 printf 'FAIL\texample/broken [build failed]\n' >"$tmp/build"
 expect build-failed 1 'package example/broken' 420 "$tmp/build"
@@ -45,6 +45,12 @@ expect empty-output 1 'measurement did not happen' 420 "$tmp/empty"
 printf 'ok  \texample/a\t1.0s\n' >"$tmp/one"
 for n in 1 2 3 4 5 6 7; do printf 'ok  \texample/p%s\t%s.0s\n' "$n" "$n" >>"$tmp/one"; done
 expect top5-truncated 0 'example/p7' 420 "$tmp/one"
+rows="$("$guard" 420 "$tmp/one" 2>&1 | grep -c 'example/p' || true)"
+if [ "$rows" -ne 5 ] || "$guard" 420 "$tmp/one" 2>&1 | grep -qE 'example/p[12]$'; then
+  echo "FAIL top5-limit: printed $rows rows"; fails=$((fails + 1))
+else
+  echo "ok   top5-limit"
+fi
 
 if command -v jq >/dev/null; then
   printf '%s\n' \

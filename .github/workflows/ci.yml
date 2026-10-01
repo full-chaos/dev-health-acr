@@ -415,7 +415,7 @@ jobs:
         if: always() && steps.go-tests.outputs.budget != ''
         run: scripts/ci/shard-budget-guard.sh --json '${{ steps.go-tests.outputs.budget }}' .tmp/coverage/go-test.json
       - name: Enforce Go tests (${{ steps.go-tests.outputs.failure }})
-        if: steps.go-tests.outputs.status != '0'
+        if: always() && steps.go-tests.outputs.status != '0'
         run: |
           jq -r '
             select(.Action == "output") |
@@ -611,7 +611,12 @@ jobs:
           budget="$(make -s print-gotest-timeout)"
           set +e
           make test-race GOTEST_PKGS="$packages" 2>&1 | tee "$out"
-          status=${PIPESTATUS[0]}
+          pipe=("${PIPESTATUS[@]}")
+          status=${pipe[0]}
+          if [ "$status" -eq 0 ] && [ "${pipe[1]}" -ne 0 ]; then
+            printf '::error::tee failed (exit %s); the captured go test output is incomplete\n' "${pipe[1]}"
+            status=1
+          fi
           set -e
           guard=0
           scripts/ci/shard-budget-guard.sh "${budget%s}" "$out" || guard=$?

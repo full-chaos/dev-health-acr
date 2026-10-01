@@ -59,6 +59,10 @@ awk -v budget="$budget" '
       printf "  %8.1fs  %5.1f%%  %s\n", t[best], t[best] * 100 / budget, name[best]
     }
     rc = 0
+    if (n == 0) {
+      print "::error::no ok/FAIL package timing rows were parsed; the measurement did not happen"
+      rc = 1
+    }
     for (i = 1; i <= n; i++) if (t[i] * 100 > budget * 85) {
       printf "::error::CHAOS-6342 class: %s at %ss is over 85%% of %ss\n", name[i], t[i], budget
       rc = 1
