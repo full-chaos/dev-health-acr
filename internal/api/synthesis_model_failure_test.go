@@ -54,7 +54,7 @@ func TestAModelCallThatFailsIsServedAsADegradedAnswer(t *testing.T) {
 			if !result.Coverage.Partial {
 				t.Fatal("coverage.partial = false, want true")
 			}
-			wantWarning := "answer text unavailable: the model call failed (class: " + testCase.wantClass + "); the facts below were read and are served without model prose"
+			wantWarning := "answer text unavailable: the model call failed (class: " + testCase.wantClass + "); the sources that were read are listed in coverage"
 			if len(result.Warnings) != 1 || result.Warnings[0] != wantWarning {
 				t.Fatalf("warnings = %q, want [%q]", result.Warnings, wantWarning)
 			}

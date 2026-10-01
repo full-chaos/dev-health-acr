@@ -33,7 +33,7 @@ const synthesisFailureCurrentState = "The model call that writes the answer fail
 // synthesisFailureWarning is the fixed, content-safe sentence a degraded
 // answer carries instead of model prose. It names the class only.
 func synthesisFailureWarning(class SynthesisFailureClass) string {
-	return "answer text unavailable: the model call failed (class: " + string(class) + "); the facts below were read and are served without model prose"
+	return "answer text unavailable: the model call failed (class: " + string(class) + "); the sources that were read are listed in coverage"
 }
 
 // synthesisFailureDegradeClass says whether a synthesis error is served as a
