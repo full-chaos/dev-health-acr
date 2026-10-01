@@ -468,6 +468,30 @@ func flowMeasureColumns() []columnDecl {
 	}
 }
 
+func flowTeamBreakdownColumns() []columnDecl {
+	cols := flowMeasureColumns()
+	out := make([]columnDecl, 0, len(cols))
+	for _, c := range cols {
+		if c.Name == "items_started" || c.Name == "items_completed" {
+			c.Name += "_latest_day"
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+func windowEchoFields() []fieldDecl {
+	return []fieldDecl{
+		fStr("window_mode"),
+		fStr("window_start"),
+		fStr("window_end"),
+		fInt("window_days", "days"),
+		fInt("window_days_with_data", "days"),
+		fInt("items_started_window", "count"),
+		fInt("items_completed_window", "count"),
+	}
+}
+
 func flowFields() []fieldDecl {
 	daily := fTable("daily_flow",
 		cStr("day"),
@@ -482,21 +506,22 @@ func flowFields() []fieldDecl {
 		cRef(declWorkScopeRef, cStr("work_scope_id")),
 		cStr("day"),
 	}, flowMeasureColumns()...)...)
-	teamBreakdown := fTable("team_breakdown", append([]columnDecl{cRef(declTeamRef, cStr("team_id"))}, flowMeasureColumns()...)...)
+	teamBreakdown := fTable("team_breakdown", append([]columnDecl{cRef(declTeamRef, cStr("team_id"))}, flowTeamBreakdownColumns()...)...)
 	return declJoin(
 		declOn(declTeamProject, daily, fInt("daily_flow_omitted_count", "count"), fStr("daily_flow_omitted_reason")),
+		declOn(declTeamProject, windowEchoFields()...),
 		declOn(declTeamOnly,
 			fInt("scope_count", "count"),
-			fInt("items_started", "count"),
-			fInt("items_completed", "count"),
+			fInt("items_started_latest_day", "count"),
+			fInt("items_completed_latest_day", "count"),
 			scopeBreakdown,
 			fInt("scope_breakdown_omitted_count", "count"),
 		),
 		declOn(declProjectOnly,
 			fStr("rollup_basis"),
 			declAggregate(fInt("team_count", "count")),
-			declAggregate(fInt("items_started", "count")),
-			declAggregate(fInt("items_completed", "count")),
+			declAggregate(fInt("items_started_latest_day", "count")),
+			declAggregate(fInt("items_completed_latest_day", "count")),
 			teamBreakdown,
 			fInt("team_breakdown_omitted_count", "count"),
 		),

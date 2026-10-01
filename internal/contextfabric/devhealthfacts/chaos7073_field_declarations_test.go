@@ -193,6 +193,19 @@ func t4Cases() []t4Case {
 		})},
 		{match: flowDailySeriesMatch, rows: [][]any{flowDailySeriesRow("linear:proj-1", "2026-02-21", 15, 9, 4)}},
 	}})
+	flowWindowStart := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	flowWindowEnd := time.Date(2026, 2, 28, 0, 0, 0, 0, time.UTC)
+	flowWindow := contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &flowWindowStart, End: &flowWindowEnd}
+	add(t4Case{name: "flow/team_window", kind: contextfabric.FactFlow, subjects: team, time: flowWindow, tables: []fakeTable{
+		{match: "-- window totals", rows: [][]any{{"CHAOS", int64(15), int64(9), int64(1)}}},
+		{match: "work_scope_id ORDER BY day DESC", rows: [][]any{workItemMetricsDailyRow("CHAOS", "scope-a", 10, 6, 4)}},
+		{match: flowDailySeriesMatch, rows: [][]any{flowDailySeriesRow("CHAOS", "2026-02-21", 15, 9, 4)}},
+	}})
+	add(t4Case{name: "flow/project_window", kind: contextfabric.FactFlow, subjects: proj, time: flowWindow, tables: []fakeTable{
+		{match: "-- window totals", rows: [][]any{{"linear:proj-1", int64(15), int64(9), int64(1)}}},
+		{match: "work_scope_id ORDER BY day DESC", rows: [][]any{projectWorkItemMetricsRow("linear", "proj-1", "team-1", "scope-a", 10, 6)}},
+		{match: flowDailySeriesMatch, rows: [][]any{flowDailySeriesRow("linear:proj-1", "2026-02-21", 15, 9, 4)}},
+	}})
 	add(t4Case{name: "flow/repository", kind: contextfabric.FactFlow, subjects: repo, tables: []fakeTable{
 		{match: "FROM repo_metrics_daily", rows: [][]any{repoMetricsFlowRow("repo-1", 8, 6)}},
 	}})

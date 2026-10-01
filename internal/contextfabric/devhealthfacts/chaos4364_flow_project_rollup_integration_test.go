@@ -91,10 +91,10 @@ func TestFlowProviderProjectRollupSumsAcrossTeamOwnScopesAndProviders(t *testing
 	// 10+4 and 6+3: BOTH provider rows counted. Pre-fix this would be
 	// EITHER (10,6) or (4,3) depending on the row_number() tiebreak hash --
 	// never the sum.
-	if got := rows[0].Fields["items_started"].Integer; got == nil || *got != 14 {
-		t.Fatalf("items_started = %#v, want 14 (summed across both providers' rows for the team)", rows[0].Fields["items_started"])
+	if got := rows[0].Fields["items_started_latest_day"].Integer; got == nil || *got != 14 {
+		t.Fatalf("items_started = %#v, want 14 (summed across both providers' rows for the team)", rows[0].Fields["items_started_latest_day"])
 	}
-	if got := rows[0].Fields["items_completed"].Integer; got == nil || *got != 9 {
-		t.Fatalf("items_completed = %#v, want 9 (summed across both providers' rows for the team)", rows[0].Fields["items_completed"])
+	if got := rows[0].Fields["items_completed_latest_day"].Integer; got == nil || *got != 9 {
+		t.Fatalf("items_completed = %#v, want 9 (summed across both providers' rows for the team)", rows[0].Fields["items_completed_latest_day"])
 	}
 }

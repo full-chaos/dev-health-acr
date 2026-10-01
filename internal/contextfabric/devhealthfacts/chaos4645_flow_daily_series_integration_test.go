@@ -93,7 +93,7 @@ func TestFlowProviderTeamDailySeriesAgainstRealClickHouse(t *testing.T) {
 	// Additive: the pre-existing scope_breakdown/items_started scalar (both
 	// of which reflect only the LATEST day's rows) must be untouched by the
 	// new daily_flow field's presence.
-	if got := fact.Fields["items_started"].Integer; got == nil {
+	if got := fact.Fields["items_started_latest_day"].Integer; got == nil {
 		t.Fatalf("pre-existing items_started scalar is missing -- daily_flow must be additive, not replace it")
 	}
 }

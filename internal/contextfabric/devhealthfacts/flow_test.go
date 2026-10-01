@@ -90,8 +90,8 @@ func TestFlowProviderTeamReadsScopeBreakdown(t *testing.T) {
 		t.Fatalf("facts = %#v, want 1", result.Facts)
 	}
 	fact := result.Facts[0]
-	if fact.Fields["items_started"].Integer == nil || *fact.Fields["items_started"].Integer != 10 {
-		t.Fatalf("items_started = %#v", fact.Fields["items_started"])
+	if fact.Fields["items_started_latest_day"].Integer == nil || *fact.Fields["items_started_latest_day"].Integer != 10 {
+		t.Fatalf("items_started = %#v", fact.Fields["items_started_latest_day"])
 	}
 	breakdown := fact.Fields["scope_breakdown"].Rows
 	if len(breakdown) != 1 || *breakdown[0].Fields["work_scope_id"].String != "scope-a" {
@@ -178,8 +178,8 @@ func TestFlowProviderTeamMultipleScopesNeverStitched(t *testing.T) {
 	if fact.Fields["scope_count"].Integer == nil || *fact.Fields["scope_count"].Integer != 2 {
 		t.Fatalf("scope_count = %#v", fact.Fields["scope_count"])
 	}
-	if fact.Fields["items_started"].Integer == nil || *fact.Fields["items_started"].Integer != 13 {
-		t.Fatalf("items_started (summed additive count) = %#v", fact.Fields["items_started"])
+	if fact.Fields["items_started_latest_day"].Integer == nil || *fact.Fields["items_started_latest_day"].Integer != 13 {
+		t.Fatalf("items_started (summed additive count) = %#v", fact.Fields["items_started_latest_day"])
 	}
 	if len(fact.Fields["scope_breakdown"].Rows) != 2 {
 		t.Fatalf("scope_breakdown rows = %d, want 2 (never merged)", len(fact.Fields["scope_breakdown"].Rows))
@@ -212,8 +212,8 @@ func TestFlowProviderProjectRollupSumsCountsDisclosesPerTeamBreakdown(t *testing
 	if fact.Fields["rollup_basis"].String == nil || *fact.Fields["rollup_basis"].String != "project_work_scope_sum" {
 		t.Fatalf("rollup_basis = %#v", fact.Fields["rollup_basis"])
 	}
-	if fact.Fields["items_started"].Integer == nil || *fact.Fields["items_started"].Integer != 15 {
-		t.Fatalf("items_started (summed) = %#v", fact.Fields["items_started"])
+	if fact.Fields["items_started_latest_day"].Integer == nil || *fact.Fields["items_started_latest_day"].Integer != 15 {
+		t.Fatalf("items_started (summed) = %#v", fact.Fields["items_started_latest_day"])
 	}
 	if fact.Fields["team_count"].Integer == nil || *fact.Fields["team_count"].Integer != 2 {
 		t.Fatalf("team_count = %#v", fact.Fields["team_count"])
@@ -350,8 +350,8 @@ func TestFlowProviderTeamReadsDailyFlowSeries(t *testing.T) {
 	}
 	fact := result.Facts[0]
 	// Additive: the pre-existing scalars/breakdown are untouched.
-	if fact.Fields["items_started"].Integer == nil || *fact.Fields["items_started"].Integer != 10 {
-		t.Fatalf("items_started = %#v, want unchanged at 10", fact.Fields["items_started"])
+	if fact.Fields["items_started_latest_day"].Integer == nil || *fact.Fields["items_started_latest_day"].Integer != 10 {
+		t.Fatalf("items_started = %#v, want unchanged at 10", fact.Fields["items_started_latest_day"])
 	}
 	if len(fact.Fields["scope_breakdown"].Rows) != 1 {
 		t.Fatalf("scope_breakdown = %#v, want unchanged at 1 row", fact.Fields["scope_breakdown"].Rows)
@@ -396,8 +396,8 @@ func TestFlowProviderProjectReadsDailyFlowSeries(t *testing.T) {
 		t.Fatalf("facts = %#v, want 1", result.Facts)
 	}
 	fact := result.Facts[0]
-	if fact.Fields["items_started"].Integer == nil || *fact.Fields["items_started"].Integer != 10 {
-		t.Fatalf("items_started = %#v, want unchanged at 10", fact.Fields["items_started"])
+	if fact.Fields["items_started_latest_day"].Integer == nil || *fact.Fields["items_started_latest_day"].Integer != 10 {
+		t.Fatalf("items_started = %#v, want unchanged at 10", fact.Fields["items_started_latest_day"])
 	}
 	table := fact.Fields["daily_flow"].Table
 	if table == nil {
