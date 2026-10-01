@@ -574,6 +574,40 @@ owned" arm (`valid_from <= now`) now applies to the edge too: future-dated
 assertions are no longer projected as edges. Already-projected team nodes keep
 the old raw list, and old future-dated edges remain, until a full rebuild.
 
+**Projection cursor space (CHAOS-7263).** The shared projection cursor
+(`devhealthsource`) is positioned on each row's INGEST time (the `last_synced`
+/ `computed_at` stamp ops writes when it normalizes the row), not on the row's
+provider-stamped `updated_at`, so a row that lands after the cursor passed but
+carries an old provider timestamp (a backfill, a newly connected project) is no
+longer skipped. The exposed `ObservedAt` on entities and edges stays the
+provider time. No operator action is required at deploy: a cursor saved before
+this change carries no position space and is read as a reset, i.e. ONE idempotent
+full re-read per organization and source (a one-time read/write spike), which
+also recovers rows the old cursor skipped. A trailing overlap window
+(`ACR_CONTEXT_FABRIC_PROJECTOR_OVERLAP`, default `15m`, must be `> 0`) is
+walked once the source is caught up, so a row whose ingest stamp landed just
+behind the cursor is still projected, without moving the cursor position. Such
+a window batch's next cursor keeps the position and carries an acknowledgment
+of the batch; its rows count as emitted only once the worker has persisted
+that cursor, i.e. after the graph applied the batch, so a failed apply
+re-emits the same batch on the retry. The walk runs
+in passes of ordinary 200-row pages (the ClickHouse client's `max_result_rows`
+is 1,000 and a larger read would fail the tick), at most 5 pages per call; a
+pass that does not reach the window's end stops at the last fully read row and
+resumes there on the next tick, logging `devhealthsource overlap window pass
+continues on the next tick`, so depth never drops a row, it only delays it.
+One tick walks one pass at most (plus a new pass when a pass resumed from an
+earlier tick completes); a page on which every table reports its end closes
+the pass, so an idle tick over a window smaller than one page costs one extra
+statement per table. After a full pass the window's lower edge moves to (pass start - 2 x overlap),
+so a row that lands more than about 2 x overlap after its own ingest stamp is
+not re-read (a rebuild recovers it), and a quiet organization's window closes
+by itself. After a projector restart the first caught-up ticks re-emit the
+window once (idempotent). Two tables still key on their old column until ops
+adds an ingest stamp: `team_project_ownership` and the
+`project_membership_presence` view (cursor-unsound for late-stamped rows, the
+same hazard as before).
+
 Crash-resumable: a durable marker (`acr.context_fabric_projection_rebuild_markers`)
 commits before the purge and clears only after every checkpoint is
 confirmed reset. If `acr-projector` crashes mid-rebuild, ordinary `serve`

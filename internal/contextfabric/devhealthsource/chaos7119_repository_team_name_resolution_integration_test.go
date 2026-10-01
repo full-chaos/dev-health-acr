@@ -64,7 +64,7 @@ func chaos7119Seed(t *testing.T, ctx context.Context, f *ownershipFixture, at ti
 
 func chaos7119Team(t *testing.T, ctx context.Context, f *ownershipFixture, id string, at time.Time) {
 	t.Helper()
-	mustExec(t, ctx, f.direct, `INSERT INTO teams VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	mustExec(t, ctx, f.direct, `INSERT INTO teams (id, name, description, updated_at, org_id, provider, native_team_key, project_keys, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, id+" name", "", at, f.orgID, "github", id, []string{}, uint8(1))
 }
 

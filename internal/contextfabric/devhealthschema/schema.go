@@ -400,6 +400,14 @@ var ProductionColumns = map[string][]Column{
 		// []string.
 		{Name: "project_keys", Type: "Array(String)"},
 		{Name: "is_active", Type: "UInt8"},
+		// CHAOS-7263: the INGEST stamp the projection cursor keys on
+		// (ops 011_ensure_teams.sql: DEFAULT now(), server insert time);
+		// updated_at can be provider-stamped (atlassianteams/write.go).
+		// This mirror is TEST DDL: it defaults last_synced to updated_at (not
+		// now()) so a fixture that only sets updated_at keeps its declared
+		// relative order across tables. Positional INSERT ... VALUES in
+		// fixtures must name their columns.
+		{Name: "last_synced", Type: "DateTime64(6) DEFAULT updated_at"},
 	},
 	// project_membership_transitions is ops migration 077 (CHAOS-4193/4194).
 	// The FULL declared column set, not a reader-scoped subset: acr's own
@@ -434,6 +442,10 @@ var ProductionColumns = map[string][]Column{
 		{Name: "state", Type: "LowCardinality(String)"},
 		{Name: "url", Type: "String"},
 		{Name: "updated_at", Type: "DateTime64(3, 'UTC')"},
+		// CHAOS-7263: ingest stamp (ops 051_team_attribution_dimensions.sql:13,
+		// DEFAULT now64(3) in production) the projection cursor keys on. TEST
+		// DDL: defaults to updated_at so fixtures keep their relative order.
+		{Name: "last_synced", Type: "DateTime64(3, 'UTC') DEFAULT updated_at"},
 	},
 	// work_unit_investments (CHAOS-4398) is the canonical WorkUnit
 	// theme/subcategory distribution source readTeamThemeMix reads --

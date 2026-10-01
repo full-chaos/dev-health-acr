@@ -317,6 +317,10 @@ type TeamsProjectsSource struct {
 	now     func() time.Time
 	logger  *slog.Logger
 
+	// overlap and window (CHAOS-7263): the trailing late-arrival re-read.
+	overlap time.Duration
+	window  *windowMemo
+
 	// omissionsMu guards omissions, which accumulates ambiguity telemetry
 	// per organization ACROSS the pages of a source run. The coordinator
 	// projects organizations concurrently, so this is genuinely shared state.
@@ -1088,8 +1092,24 @@ func NewTeamsProjectsSource(client contextpacket.ClickHouseQueryClient, enabled 
 	if client == nil {
 		return nil, fmt.Errorf("devhealthsource: clickhouse query client is required")
 	}
-	return &TeamsProjectsSource{client: client, enabled: enabled, now: time.Now, logger: slog.Default()}, nil
+	return &TeamsProjectsSource{client: client, enabled: enabled, now: time.Now, logger: slog.Default(), overlap: defaultReprojectOverlap, window: newWindowMemo()}, nil
 }
+
+// WithOverlap sets the trailing re-read window once caught up (CHAOS-7263;
+// see overlap.go). It must be > 0.
+func (s *TeamsProjectsSource) WithOverlap(d time.Duration) (*TeamsProjectsSource, error) {
+	if d <= 0 {
+		return nil, fmt.Errorf("devhealthsource: projection overlap must be > 0, got %s", d)
+	}
+	s.overlap = d
+	return s, nil
+}
+
+// Overlap is the trailing re-read window this source walks once caught up.
+func (s *TeamsProjectsSource) Overlap() time.Duration { return s.overlap }
+
+func (s *TeamsProjectsSource) overlapDuration() time.Duration { return s.overlap }
+func (s *TeamsProjectsSource) windowMemo() *windowMemo        { return s.window }
 
 // WithLogger overrides the default logger, mirroring
 // ClickHouseProjectionSource.WithLogger: only cmd/acr-projector wires a real
@@ -1187,8 +1207,11 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 		source:         TeamsProjectsSourceName,
 		version:        TeamsProjectsSourceVersion,
 		tables:         teamsProjectsTables(ledger, presence, teamAuth, repoOwnership),
+		windowTables:   teamsProjectsTables(&ambiguityLedger{}, &presenceTelemetryLedger{}, &teamAuthorizationLedger{}, &repositoryOwnershipLedger{}),
 		logger:         s.logger,
 		now:            s.now,
+		overlap:        s.overlapDuration(),
+		window:         s.windowMemo(),
 		recordConsumed: s.recordConsumed(checkpoint.Cursor),
 		dropConsumed:   s.forgetConsumed,
 		// Without this the shared engine's per-item quarantine drops items
@@ -1208,13 +1231,14 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 // (ReplacingMergeTree(updated_at) ORDER BY (org_id, id), so FINAL collapses
 // cleanly to one row per team).
 //
-// The cursor reads updated_at, not last_synced: it is the finer of the two
-// (DateTime64(6) against last_synced's whole seconds in live data) and it is
-// the actual change time. Note updated_at carries NO timezone qualifier --
-// live type is DateTime64(6), not DateTime64(6,'UTC') -- while
-// sincePredicate binds {since:DateTime64(6,'UTC')}. That is fine and already
-// precedented in this file's sibling producers: work_items.updated_at is
-// DateTime64(3) and queryWorkItems has always compared it the same way.
+// CHAOS-7263: the cursor position is the row's INGEST stamp
+// (queryTeamsIngestExpr: teams.last_synced, server insert time, or the
+// ownership/repos ingest watermark), NOT updated_at: a team's updated_at can be
+// provider-stamped (atlassianteams/write.go stamps the first team's provider
+// UpdatedAt), so keying on it skipped rows that landed after the cursor passed.
+// The exposed observedAt stays the effective updated_at. last_synced is
+// whole-second on live data; ties are broken by the row key, and the trailing
+// overlap re-read (overlap.go) covers a same-second late arrival.
 // DateTime64's timezone is display metadata; the comparison is on ticks.
 // ownedRepositoriesJoinSQL is queryTeams' LEFT JOIN fragment aggregating
 // each team's CURRENT repository ownership (team_repo_ownership, CHAOS-4321:
@@ -1337,6 +1361,12 @@ var ownedRepositoriesJoinSQL = `LEFT JOIN (
 // already applies at the edge level via its own `max(updated_at)`. The
 // `ifNull` fallback is a fixed epoch, never `tm.updated_at` again, so the
 // expression has no circular self-reference.
+// queryTeamsIngestExpr (CHAOS-7263) is the team row's position in the shared
+// cursor: the INGEST stamp (teams.last_synced, server insert time) or the
+// ownership/repos ingest watermark, whichever is later. The exposed
+// observedAt stays queryTeamsEffectiveUpdatedAtExpr.
+const queryTeamsIngestExpr = `greatest(tm.last_synced, ifNull(tro.latest_update, toDateTime64(0, 3, 'UTC')))`
+
 const queryTeamsEffectiveUpdatedAtExpr = `greatest(tm.updated_at, ifNull(tro.latest_update, toDateTime64(0, 3, 'UTC')))`
 
 // teamsQuery binds the run-scoped team-authorization telemetry ledger to
@@ -1350,11 +1380,11 @@ func teamsQuery(ledger *teamAuthorizationLedger) func(context.Context, contextpa
 
 func queryTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, teamAuth *teamAuthorizationLedger) ([]candidate, bool, error) {
 	const rowKey = "tm.id"
-	statement := `SELECT tm.id, tm.name, ifNull(tm.description, ''), tm.provider, ifNull(tm.native_team_key, ''), tm.is_active, ` + queryTeamsEffectiveUpdatedAtExpr + `, tm.project_keys, ifNull(tro.repos, [])
+	statement := `SELECT tm.id, tm.name, ifNull(tm.description, ''), tm.provider, ifNull(tm.native_team_key, ''), tm.is_active, ` + queryTeamsEffectiveUpdatedAtExpr + `, tm.project_keys, ifNull(tro.repos, []), ` + queryTeamsIngestExpr + `
 FROM teams AS tm FINAL
 ` + ownedRepositoriesJoinSQL + `
-WHERE tm.org_id = {org_id:String}` + sincePredicate(cursor, queryTeamsEffectiveUpdatedAtExpr, rowKey) + orderBy(queryTeamsEffectiveUpdatedAtExpr, rowKey)
-	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+WHERE tm.org_id = {org_id:String}` + sincePredicate(cursor, queryTeamsIngestExpr, rowKey) + orderBy(queryTeamsIngestExpr, rowKey)
+	return fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var id, name, description, provider, nativeKey string
 		var projectKeys, ownedRepos []string
 		var isActive uint8
@@ -1475,10 +1505,10 @@ func queryProjects(ctx context.Context, client contextpacket.ClickHouseQueryClie
 	// cannot tie at the SQL keyset-pagination tiebreaker the way D-6
 	// documents for the other four kinds.
 	const rowKey = "concat(provider, ':', id)"
-	statement := `SELECT id, name, ifNull(project_key, ''), provider, state, url, is_active, updated_at
+	statement := `SELECT id, name, ifNull(project_key, ''), provider, state, url, is_active, updated_at, last_synced
 FROM projects FINAL
-WHERE org_id = {org_id:String}` + sincePredicate(cursor, "updated_at", rowKey) + orderBy("updated_at", rowKey)
-	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+WHERE org_id = {org_id:String}` + sincePredicate(cursor, "last_synced", rowKey) + orderBy("last_synced", rowKey)
+	return fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var id, name, projectKey, provider, state, url string
 		var isActive uint8
 		var observedAt time.Time

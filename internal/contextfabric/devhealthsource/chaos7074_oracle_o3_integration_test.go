@@ -118,7 +118,7 @@ func o3Seed(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, org
 		}
 	}
 	for _, team := range []string{"T1", "T2"} {
-		exec("team "+team, `INSERT INTO teams VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, team, team+" name", "", now, orgID, "github", team, []string{}, uint8(1))
+		exec("team "+team, `INSERT INTO teams (id, name, description, updated_at, org_id, provider, native_team_key, project_keys, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, team, team+" name", "", now, orgID, "github", team, []string{}, uint8(1))
 	}
 	for i := 1; i <= 12; i++ {
 		if i == 9 {
@@ -216,6 +216,7 @@ WHERE first_from <= now64(3) AND (latest_to IS NULL OR latest_to > now64(3))`, o
 func o3Project(t *testing.T, ctx context.Context, source *devhealthsource.TeamsProjectsSource, adapter *falkorgraph.Adapter, orgID string) {
 	t.Helper()
 	cursor := ""
+	replays := map[string]bool{}
 	for page := 0; page < 50; page++ {
 		batch, available, err := source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{OrgID: orgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: cursor})
 		if err != nil {
@@ -227,9 +228,7 @@ func o3Project(t *testing.T, ctx context.Context, source *devhealthsource.TeamsP
 		if _, err := adapter.ApplyProjectionBatch(ctx, batch); err != nil {
 			t.Fatalf("apply producer page %d: %v", page, err)
 		}
-		if batch.NextCursor == cursor {
-			t.Fatalf("producer page %d did not advance", page)
-		}
+		requireCursorProgress(t, fmt.Sprintf("producer page %d", page), cursor, batch, replays)
 		cursor = batch.NextCursor
 	}
 	t.Fatal("producer did not drain in 50 pages")

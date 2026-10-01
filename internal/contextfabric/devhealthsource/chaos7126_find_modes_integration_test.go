@@ -28,6 +28,7 @@ func chaos7126Ctx(id string) context.Context {
 func drainSource(t *testing.T, ctx context.Context, source contextfabric.ProjectionSource, adapter *falkorgraph.Adapter, orgID, name string) {
 	t.Helper()
 	cursor := ""
+	replays := map[string]bool{}
 	for page := 0; page < 200; page++ {
 		batch, available, err := source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{OrgID: orgID, Source: name, Cursor: cursor})
 		if err != nil {
@@ -39,9 +40,7 @@ func drainSource(t *testing.T, ctx context.Context, source contextfabric.Project
 		if _, err := adapter.ApplyProjectionBatch(ctx, batch); err != nil {
 			t.Fatalf("apply %s page %d: %v", name, page, err)
 		}
-		if batch.NextCursor == cursor {
-			t.Fatalf("%s page %d did not advance", name, page)
-		}
+		requireCursorProgress(t, fmt.Sprintf("%s page %d", name, page), cursor, batch, replays)
 		cursor = batch.NextCursor
 	}
 	t.Fatalf("%s did not drain", name)

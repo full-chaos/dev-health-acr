@@ -25,7 +25,11 @@ const (
 	envContextFabricProjectorOrgs = "ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS"
 	envContextFabricOrgDiscovery  = "ACR_CONTEXT_FABRIC_PROJECTOR_ORG_DISCOVERY"
 	envContextFabricOrgActivity   = "ACR_CONTEXT_FABRIC_PROJECTOR_ORG_ACTIVITY_WINDOW"
-	envContextFabricOrgDenyIDs    = "ACR_CONTEXT_FABRIC_PROJECTOR_ORG_DISCOVERY_DENY_IDS"
+	envContextFabricOverlap       = "ACR_CONTEXT_FABRIC_PROJECTOR_OVERLAP"
+	// defaultProjectorOverlap mirrors devhealthsource's defaultReprojectOverlap
+	// (CHAOS-7263): the trailing window re-read once caught up.
+	defaultProjectorOverlap    = 15 * time.Minute
+	envContextFabricOrgDenyIDs = "ACR_CONTEXT_FABRIC_PROJECTOR_ORG_DISCOVERY_DENY_IDS"
 	// defaultProjectorOrgActivityWindow mirrors
 	// devhealthsource.DefaultOrgActivityWindow. It is restated rather than
 	// imported because internal/config must not depend on a Context Fabric
@@ -105,6 +109,11 @@ type ProjectorConfig struct {
 	// still applies); a negative value is refused. Ignored entirely when
 	// OrgDiscoveryEnabled is false, and it never affects OrgIDs.
 	OrgActivityWindow time.Duration
+	// Overlap (ACR_CONTEXT_FABRIC_PROJECTOR_OVERLAP, default 15m, must be > 0)
+	// is the trailing window the canonical sources re-read once caught up, so a
+	// row whose ingest stamp landed just behind the cursor is still projected
+	// (CHAOS-7263).
+	Overlap time.Duration
 	// OrgDiscoveryDenyIDs (ACR_CONTEXT_FABRIC_PROJECTOR_ORG_DISCOVERY_DENY_IDS)
 	// names organizations discovery must never admit. It filters the
 	// DISCOVERED set only: OrgIDs is an always-include allowlist, so an
@@ -242,6 +251,9 @@ func loadProjector(lookup lookupEnv, required requiredStores) (ProjectorConfig, 
 	if cfg.OrgDiscoveryEnabled, err = boolValue(lookup, envContextFabricOrgDiscovery, false); err != nil {
 		return ProjectorConfig{}, err
 	}
+	if cfg.Overlap, err = durationValue(lookup, envContextFabricOverlap, defaultProjectorOverlap); err != nil {
+		return ProjectorConfig{}, err
+	}
 	if cfg.OrgActivityWindow, err = durationValue(lookup, envContextFabricOrgActivity, defaultProjectorOrgActivityWindow); err != nil {
 		return ProjectorConfig{}, err
 	}
@@ -344,6 +356,9 @@ func (c ProjectorConfig) validate(required requiredStores) error {
 	// meaningful (the activity condition off), so it cannot double as the
 	// sentinel -- the same reasoning DrainBatchBudget's own doc comment
 	// gives for its sign convention.
+	if required.projection && c.Overlap <= 0 {
+		return fmt.Errorf("%s must be > 0 (the trailing re-read window that recovers late-landing rows)", envContextFabricOverlap)
+	}
 	if required.projection && c.OrgActivityWindow < 0 {
 		return fmt.Errorf("%s must not be negative (0 disables the activity condition)", envContextFabricOrgActivity)
 	}
@@ -361,7 +376,7 @@ func (c ProjectorConfig) SafeAttributes() []any {
 		"projection_enabled", c.ProjectionEnabled,
 		"organization_count", len(c.OrgIDs), "org_discovery_enabled", c.OrgDiscoveryEnabled,
 		"org_activity_window", c.OrgActivityWindow.String(), "org_discovery_deny_count", len(c.OrgDiscoveryDenyIDs),
-		"poll_interval", c.PollInterval.String(),
+		"poll_interval", c.PollInterval.String(), "overlap", c.Overlap.String(),
 		"concurrency", c.Concurrency, "drain_batch_budget", c.DrainBatchBudget, "teams_projects_enabled", c.TeamsProjectsEnabled, "episode_writeback_enabled", c.EpisodeWriteback,
 		"require_backing_stores", c.RequireBackingStores, "local_composition_ready", c.LocalCompositionReady,
 	}

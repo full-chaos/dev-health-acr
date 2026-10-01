@@ -113,9 +113,9 @@ func applyCursor(rows [][]any, cursorOf func(row []any) (time.Time, string), bin
 	var after string
 	for _, binding := range bindings {
 		switch binding.Name {
-		case "since":
-			if value, ok := binding.Value.(time.Time); ok {
-				since = value
+		case "since_us":
+			if value, ok := binding.Value.(int64); ok {
+				since = time.UnixMicro(value).UTC()
 			}
 		case "after":
 			if value, ok := binding.Value.(string); ok {
@@ -176,6 +176,17 @@ func (s *fakeScanner) Next() bool { return s.row < len(s.rows) }
 func (s *fakeScanner) Scan(dest ...any) error {
 	row := s.rows[s.row]
 	for index, target := range dest {
+		// CHAOS-7263: a producer's statement now ends with the row's INGEST
+		// timestamp (trailingCursorScanner). Fixtures that predate it carry no
+		// such column: read it as a zero time, which candidate.position()
+		// treats as "no separate cursor position" (falls back to observedAt).
+		// A fixture that supplies the column is scanned normally.
+		if index >= len(row) {
+			if value, ok := target.(*time.Time); ok {
+				*value = time.Time{}
+				continue
+			}
+		}
 		switch value := target.(type) {
 		case *string:
 			*value = row[index].(string)

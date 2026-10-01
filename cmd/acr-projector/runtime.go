@@ -18,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pglifecycle"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgprojection"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/projectionrun"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
 	storagepostgres "github.com/full-chaos/dev-health-acr/internal/storage/postgres"
 	migrations "github.com/full-chaos/dev-health-acr/migrations/postgres"
@@ -183,20 +184,14 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 		return nil, errors.Join(err, runtime.Close())
 	}
 
-	clickhouseSource, err := devhealthsource.NewClickHouseProjectionSource(clickhouseClient)
+	clickhouseSource, teamsProjectsSource, err := clickhouseBackedSources(clickhouseClient, cfg, logger)
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}
-	clickhouseSource.WithLogger(logger)
 	episodesSource, err := newEpisodesSource(episodeRows, cfg.EpisodeWriteback)
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}
-	teamsProjectsSource, err := devhealthsource.NewTeamsProjectsSource(clickhouseClient, cfg.TeamsProjectsEnabled)
-	if err != nil {
-		return nil, errors.Join(err, runtime.Close())
-	}
-	teamsProjectsSource.WithLogger(logger)
 
 	// CHAOS-6182: organization auto-discovery. Constructed ONLY when the
 	// operator opted in -- a nil projectionrun.Config.OrgSource leaves the
@@ -376,6 +371,30 @@ func newEpisodesSource(rows devhealthsource.EpisodeRows, writebackEnabled bool) 
 		return nil, err
 	}
 	return source.WithEnabled(writebackEnabled), nil
+}
+
+// clickhouseBackedSources builds the two projection sources that read Dev
+// Health's ClickHouse, each with the operator's overlap window
+// (ACR_CONTEXT_FABRIC_PROJECTOR_OVERLAP, CHAOS-7263). A separate function so
+// a test can pin that the setting reaches both.
+func clickhouseBackedSources(client contextpacket.ClickHouseQueryClient, cfg config.ProjectorConfig, logger *slog.Logger) (*devhealthsource.ClickHouseProjectionSource, *devhealthsource.TeamsProjectsSource, error) {
+	clickhouseSource, err := devhealthsource.NewClickHouseProjectionSource(client)
+	if err != nil {
+		return nil, nil, err
+	}
+	clickhouseSource.WithLogger(logger)
+	if _, err := clickhouseSource.WithOverlap(cfg.Overlap); err != nil {
+		return nil, nil, err
+	}
+	teamsProjectsSource, err := devhealthsource.NewTeamsProjectsSource(client, cfg.TeamsProjectsEnabled)
+	if err != nil {
+		return nil, nil, err
+	}
+	teamsProjectsSource.WithLogger(logger)
+	if _, err := teamsProjectsSource.WithOverlap(cfg.Overlap); err != nil {
+		return nil, nil, err
+	}
+	return clickhouseSource, teamsProjectsSource, nil
 }
 
 // projectionSources is the composition root's registered ProjectionSource
