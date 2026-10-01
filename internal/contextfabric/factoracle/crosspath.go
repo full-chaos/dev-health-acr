@@ -188,7 +188,9 @@ func leafStrings(leaves []Leaf) []string {
 // latest_day_vs_window: values of the latest day, or of all time, served
 // beside a window with no label. Each entry is a path or the prefix of a
 // block. This is read from the code of the resolvers; the oracle does not
-// reproduce it. The allowance holds while the paths are in the policy.
+// reproduce it. The allowance holds while the paths are in the policy. (The
+// acr half of the class is gone: the flow fact names its window and its
+// latest-day counts, and compareFlowWindow checks both.)
 var temporaryOpsPaths = map[string][]string{
 	"throughputForecast": {"throughputForecast.backlogSize", "throughputForecast.wipCongestion", "throughputForecast.staleWip", "throughputForecast.estimateCoverage"},
 	"capacityForecast":   {"capacityForecast.backlogSize"},

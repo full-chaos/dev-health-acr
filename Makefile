@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check test test-split test-race test-race-shared test-race-isolated test-race-split test-shuffle-random test-coverage coverage-cobertura isolated-timeout print-gotest-timeout crosscompile hosted-integration clients-real vet contract-write contract-test codegraph-contract shard-plan canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract o4-oracle-live o4-oracle-capture
+.PHONY: fmt fmt-check test test-split test-race test-race-shared test-race-isolated test-race-split test-shuffle-random test-coverage coverage-cobertura isolated-timeout print-gotest-timeout crosscompile hosted-integration clients-real vet contract-write contract-test codegraph-contract shard-plan canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract o4-oracle-live o4-oracle-capture o4-oracle-repin
 
 RELEASE_OUTPUT ?= .tmp/release
 RELEASE_VERSION ?=
@@ -277,6 +277,12 @@ o4-oracle-live:
 
 o4-oracle-capture:
 	go test -tags o4venue -count=1 -timeout 10m -run '^TestVenueCapture$$' -v ./internal/contextfabric/factoracle
+
+# Pins the outcome of the recorded mode again, with this build's fact
+# providers, after a change to them that is meant. Needs Docker, not a venue.
+# Review the diff of testdata/venue/manifest.json before the commit.
+o4-oracle-repin:
+	ACR_O4_REPIN=1 go test -count=1 -timeout 10m -run '^TestOracleOnTheSeededStore$$/^RecordedVenueRunReproducesTheVenue$$' -v ./internal/contextfabric/factoracle
 
 contract-write:
 	go run ./cmd/contractcheck -write

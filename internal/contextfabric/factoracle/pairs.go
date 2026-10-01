@@ -789,31 +789,48 @@ func compareReadiness(ctx context.Context, o *Oracle, rr *RootReport) error {
 	}
 	rr.differ(Difference{Pair: "readiness", Key: "all teams", Class: ClassForecastByDesign, Exact: true,
 		Detail: "the forecast percentiles are computed on demand and have no acr fact; only the estimate coverage block is compared"})
-	return compareFlowHeadline(ctx, o, rr)
+	return compareFlowWindow(ctx, o, rr)
 }
 
-// Outcomes of one flow fact's headline counts.
-const (
-	flowHeadlineIsWindow    = "window"
-	flowHeadlineIsLatestDay = "latest_day"
-	flowHeadlineUndecided   = "undecided"
-	flowHeadlineIsNeither   = "neither"
-)
+// flowCounts are the two counts of the flow fact the oracle checks.
+var flowCounts = []string{"items_started", "items_completed"}
 
-// classifyFlowHeadline says what a flow headline count is: the sum of the
-// daily series over the window, or the sum of each work scope's latest day.
-// When the two sums are equal the data cannot tell.
-func classifyFlowHeadline(headline, latestDaySum, windowSum int64) string {
-	switch {
-	case latestDaySum == windowSum && headline == windowSum:
-		return flowHeadlineUndecided
-	case headline == windowSum:
-		return flowHeadlineIsWindow
-	case headline == latestDaySum:
-		return flowHeadlineIsLatestDay
-	default:
-		return flowHeadlineIsNeither
+// flowWindowCheck holds one team's flow fact, read over the window, against
+// its own tables: the window-named count is the sum of the daily series, and
+// the latest-day count is the sum of each work scope's latest day. joined is
+// false for a fact with no window-named count: an acr build from before the
+// counts were named has nothing to check.
+func flowWindowCheck(fact ServedFact) (compared, matches int, findings []Finding, joined bool, err error) {
+	if _, has := fact.Fields[flowCounts[0]+"_window"]; !has {
+		return 0, 0, nil, false, nil
 	}
+	daily, dok := fact.Tables["daily_flow"]
+	scopes, sok := fact.Tables["scope_breakdown"]
+	if !dok || !sok {
+		return 0, 0, nil, false, fmt.Errorf("a flow fact with window counts has no daily series or no scope table")
+	}
+	for _, count := range flowCounts {
+		for _, part := range []struct {
+			field string
+			table ServedTable
+			what  string
+		}{{count + "_window", daily, "the sum of the daily series over the window"}, {count + "_latest_day", scopes, "the sum of each work scope's latest day"}} {
+			compared++
+			stated, serr := factInteger(fact.Fields[part.field])
+			sum, terr := tableSum(part.table, count)
+			switch {
+			case serr != nil || stated.T != LeafInt:
+				findings = append(findings, Finding{Pair: "flow_window", Key: "team", Path: part.field, Detail: "the flow fact states no integer " + part.field})
+			case terr != nil:
+				findings = append(findings, Finding{Pair: "flow_window", Key: "team", Path: part.field, Detail: "the table to sum is not whole: " + terr.Error()})
+			case stated.V != fmt.Sprint(sum):
+				findings = append(findings, Finding{Pair: "flow_window", Key: "team", Path: part.field, Detail: fmt.Sprintf("the fact states %s; %s is %d", stated.V, part.what, sum)})
+			default:
+				matches++
+			}
+		}
+	}
+	return compared, matches, findings, true, nil
 }
 
 func tableSum(table ServedTable, column string) (int64, error) {
@@ -836,14 +853,11 @@ func tableSum(table ServedTable, column string) (int64, error) {
 	return total, nil
 }
 
-// compareFlowHeadline is the acr side of the temporary class
-// latest_day_vs_window, and it is reproduced: the flow fact of a team, read
-// over the window, states items_started and items_completed, and they are
-// the sum of each work scope's latest day (the scope_breakdown table), not
-// the sum of the daily series over the window (the daily_flow table). The
-// class is reported while at least one team shows it; when no team does and
-// the data could tell, the allowance has expired.
-func compareFlowHeadline(ctx context.Context, o *Oracle, rr *RootReport) error {
+// compareFlowWindow checks the acr flow facts of the teams with work item
+// metrics in the window. It has no ops side: it is the acr half of the
+// latest-day-beside-a-window difference, which the flow fact now names in
+// its own fields.
+func compareFlowWindow(ctx context.Context, o *Oracle, rr *RootReport) error {
 	teams := map[string]bool{}
 	for _, row := range o.Store.extract.Tables["work_item_metrics_daily"] {
 		if team, ok := rowString(row, "team_id"); ok && team != "" {
@@ -859,73 +873,20 @@ func compareFlowHeadline(ctx context.Context, o *Oracle, rr *RootReport) error {
 	if err != nil {
 		return err
 	}
-	latestDay, window := 0, 0
 	for _, fact := range facts {
-		for _, field := range []string{"items_started", "items_completed"} {
-			headline, herr := factInteger(fact.Fields[field])
-			if herr != nil || headline.T != LeafInt {
-				// The fix renames the headline: a fact without it no longer
-				// shows the class.
-				window++
-				continue
-			}
-			daily, dok := fact.Tables["daily_flow"]
-			scopes, sok := fact.Tables["scope_breakdown"]
-			if !dok || !sok {
-				rr.NotJoined = append(rr.NotJoined, "flow: a team's fact has no daily series or no scope table")
-				continue
-			}
-			windowSum, werr := tableSum(daily, field)
-			latestSum, lerr := tableSum(scopes, field)
-			if werr != nil || lerr != nil {
-				rr.NotJoined = append(rr.NotJoined, "flow: a team's series is cut by the provider row cap")
-				continue
-			}
-			var value int64
-			_, _ = fmt.Sscan(headline.V, &value)
-			rr.Compared++
-			switch classifyFlowHeadline(value, latestSum, windowSum) {
-			case flowHeadlineIsLatestDay:
-				latestDay++
-			case flowHeadlineIsWindow:
-				window++
-				rr.Matches++
-			case flowHeadlineUndecided:
-				rr.Matches++
-			default:
-				rr.find(Finding{Pair: "flow_headline", Key: "team", Path: field, Detail: fmt.Sprintf("the headline is %d; the window sum is %d and the latest-day sum is %d", value, windowSum, latestSum)})
-			}
+		compared, matches, findings, joined, cerr := flowWindowCheck(fact)
+		if cerr != nil {
+			return cerr
+		}
+		if !joined {
+			rr.NotJoined = append(rr.NotJoined, "flow: a team's flow fact has no window-named counts (an acr build from before they were named)")
+			continue
+		}
+		rr.Compared += compared
+		rr.Matches += matches
+		for _, f := range findings {
+			rr.find(f)
 		}
 	}
-	switch flowAllowance(latestDay, window) {
-	case flowAllowanceAppears:
-		rr.differ(Difference{Pair: "flow_headline", Key: "items_started, items_completed", Class: ClassLatestDayVsWindow, Exact: true,
-			Values: map[string]float64{"headline_counts_that_are_latest_day_sums": float64(latestDay)},
-			Detail: "the acr flow fact, read over a window, states the sum of each work scope's latest day, not the sum over the window"})
-	case flowAllowanceExpired:
-		rr.Expired = append(rr.Expired, fmt.Sprintf("class %s: no acr flow headline count is a latest-day sum any more; remove the allowance", ClassLatestDayVsWindow))
-	}
 	return nil
-}
-
-// Outcomes of the flow headline allowance over all teams.
-const (
-	flowAllowanceAppears = "appears"
-	flowAllowanceExpired = "expired"
-	flowAllowanceUnknown = "unknown"
-)
-
-// flowAllowance decides the temporary class from the headline counts of all
-// teams: it appears while one count is a latest-day sum; it has expired when
-// none is and at least one count is shown to be the window sum (or the
-// headline is gone); with neither, the data cannot tell.
-func flowAllowance(latestDay, window int) string {
-	switch {
-	case latestDay > 0:
-		return flowAllowanceAppears
-	case window > 0:
-		return flowAllowanceExpired
-	default:
-		return flowAllowanceUnknown
-	}
 }

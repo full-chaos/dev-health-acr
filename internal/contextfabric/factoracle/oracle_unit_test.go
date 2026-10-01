@@ -771,30 +771,45 @@ func TestARunWithAnExpiredAllowanceIsAnError(t *testing.T) {
 	}
 }
 
-func TestFlowAllowanceAppearsExpiresOrCannotTell(t *testing.T) {
-	for _, c := range []struct {
-		latestDay, window int
-		want              string
-	}{{2, 0, flowAllowanceAppears}, {1, 9, flowAllowanceAppears}, {0, 3, flowAllowanceExpired}, {0, 0, flowAllowanceUnknown}} {
-		if got := flowAllowance(c.latestDay, c.window); got != c.want {
-			t.Errorf("%d latest-day and %d window counts: %s, want %s", c.latestDay, c.window, got, c.want)
+func TestFlowWindowCheck(t *testing.T) {
+	fact := func(startedWindow, startedLatest any) ServedFact {
+		fields := map[string]any{"items_completed_window": "5", "items_completed_latest_day": "2"}
+		if startedWindow != nil {
+			fields["items_started_window"] = startedWindow
 		}
+		if startedLatest != nil {
+			fields["items_started_latest_day"] = startedLatest
+		}
+		return ServedFact{Fields: fields, Tables: map[string]ServedTable{
+			"daily_flow":      {Columns: []string{"day", "items_started", "items_completed"}, Rows: [][]any{{"2026-09-02", "4", "3"}, {"2026-09-01", "6", "2"}}},
+			"scope_breakdown": {Columns: []string{"work_scope_id", "items_started", "items_completed"}, Rows: [][]any{{"a", "3", "2"}, {"b", "1", "0"}}},
+		}}
 	}
-}
-
-func TestClassifyFlowHeadline(t *testing.T) {
-	for _, c := range []struct {
-		headline, latest, window int64
-		want                     string
-	}{
-		{44, 44, 300, flowHeadlineIsLatestDay},
-		{300, 44, 300, flowHeadlineIsWindow},
-		{44, 44, 44, flowHeadlineUndecided},
-		{7, 44, 300, flowHeadlineIsNeither},
-		{7, 44, 44, flowHeadlineIsNeither},
-	} {
-		if got := classifyFlowHeadline(c.headline, c.latest, c.window); got != c.want {
-			t.Errorf("headline %d, latest-day sum %d, window sum %d: %s, want %s", c.headline, c.latest, c.window, got, c.want)
-		}
+	compared, matches, findings, joined, err := flowWindowCheck(fact("10", "4"))
+	if err != nil || !joined || compared != 4 || matches != 4 || len(findings) != 0 {
+		t.Fatalf("a consistent flow fact: %d of %d, findings %+v, joined %t, %v", matches, compared, findings, joined, err)
+	}
+	// The window count is the latest-day sum: the defect the fields were
+	// named for.
+	if _, matches, findings, _, _ := flowWindowCheck(fact("4", "4")); matches != 3 || len(findings) != 1 || findings[0].Path != "items_started_window" {
+		t.Fatalf("a window count that is the latest-day sum: %d matches, findings %+v", matches, findings)
+	}
+	if _, matches, findings, _, _ := flowWindowCheck(fact("10", "10")); matches != 3 || len(findings) != 1 || findings[0].Path != "items_started_latest_day" {
+		t.Fatalf("a latest-day count that is the window sum: %d matches, findings %+v", matches, findings)
+	}
+	if _, _, findings, _, _ := flowWindowCheck(fact("10", nil)); len(findings) != 1 {
+		t.Fatalf("a fact with no latest-day count: findings %+v", findings)
+	}
+	// A fact from before the counts were named is not joined, and is not a
+	// finding.
+	if _, _, findings, joined, err := flowWindowCheck(ServedFact{Fields: map[string]any{"items_started": "4"}}); joined || err != nil || len(findings) != 0 {
+		t.Fatalf("a fact with no window-named count: joined %t, findings %+v, %v", joined, findings, err)
+	}
+	cut := fact("10", "4")
+	table := cut.Tables["daily_flow"]
+	table.TruncatedBy = "provider_row_cap"
+	cut.Tables["daily_flow"] = table
+	if _, _, findings, _, _ := flowWindowCheck(cut); len(findings) != 2 {
+		t.Fatalf("a cut daily series must not be summed: findings %+v", findings)
 	}
 }

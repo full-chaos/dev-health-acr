@@ -4,20 +4,26 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"os"
 	"reflect"
 	"sort"
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 )
 
 const captureDir = "testdata/venue"
 
-// loadedCapture reads the capture once per test binary and proves it was
-// made against this build's SDL and fact queries. A capture of another
-// build is refused: it is replaced by a new capture, never trusted.
+// repinEnv makes the recorded-mode test write its outcome as the pinned one
+// (`make o4-oracle-repin`) instead of comparing with it.
+const repinEnv = "ACR_O4_REPIN"
+
+// loadedCapture reads the capture and proves it was made against the SDL
+// this build pins: the shapes and the recorded replies belong to it, and a
+// capture of another SDL is refused. The fact providers are not pinned by a
+// version: they run in every test, and what they give is held against the
+// pinned outcome.
 func loadedCapture(t *testing.T) (Manifest, Recording, *Extract) {
 	t.Helper()
 	manifest, recording, extract, err := LoadCapture(captureDir)
@@ -30,9 +36,6 @@ func loadedCapture(t *testing.T) (Manifest, Recording, *Extract) {
 	}
 	if got := policy.Catalogue().SchemaDigest(); got != manifest.SchemaDigest {
 		t.Fatalf("the capture was recorded against SDL %s and this build pins %s: run `make o4-oracle-capture` on the venue", manifest.SchemaDigest, got)
-	}
-	if manifest.FactQueryVersion != devhealthfacts.QueryVersion {
-		t.Fatalf("the capture was recorded against fact queries %s and this build is %s: run `make o4-oracle-capture` on the venue", manifest.FactQueryVersion, devhealthfacts.QueryVersion)
 	}
 	if manifest.FixtureOrg != FixtureOrgID || manifest.OpsBuild == "" {
 		t.Fatalf("the capture names no ops build or another fixture organization")
@@ -77,6 +80,13 @@ func recordedVenueRunReproducesTheVenue(t *testing.T) {
 	report := runOracle(t, oracle)
 	t.Logf("\n%s\n%s", report.Table(), report.Details())
 
+	if os.Getenv(repinEnv) != "" {
+		if err := Repin(captureDir, report, oracle.Residual); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("pinned outcome written to %s", captureDir)
+		return
+	}
 	if failures := planes.Listener.Failures(); len(failures) > 0 {
 		t.Fatalf("the replay listener was asked for something it has no record of: %v", failures)
 	}

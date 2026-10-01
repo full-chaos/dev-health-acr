@@ -60,6 +60,9 @@ type Oracle struct {
 	// ShapeCases, when set, replaces the cases the bindings generate from
 	// the store (the recorded mode replays the cases of the capture).
 	ShapeCases []ShapeCase
+	// FactVersions is, after Run, the fact query versions the acr plane
+	// answered with.
+	FactVersions map[string]bool
 	// OnlyRoots, when set, limits the run to these root fields (the
 	// acceptance gate runs one root).
 	OnlyRoots []string
@@ -163,6 +166,12 @@ func (o *Oracle) readFacts(ctx context.Context, kind, subjectKind string, ids []
 			if row.Outcome == directread.OutcomeUnavailable || row.Outcome == directread.OutcomeWithheldBudget || cut {
 				return nil, fmt.Errorf("read_facts %s: a subject was not measured whole (%s)", kind, row.Outcome)
 			}
+		}
+		for _, version := range answer.Versions.Kinds {
+			if o.FactVersions == nil {
+				o.FactVersions = map[string]bool{}
+			}
+			o.FactVersions[version] = true
 		}
 		if len(answer.Facts) >= factRowCap {
 			return nil, fmt.Errorf("read_facts %s: %d facts in one read, at the provider row cap", kind, len(answer.Facts))

@@ -1,5 +1,5 @@
 {
-  "captured_at": "2026-10-01T17:36:20Z",
+  "captured_at": "2026-10-01T18:06:45Z",
   "window": {
     "start": "2026-09-01T00:00:00Z",
     "end": "2026-10-02T00:00:00Z"
@@ -8,15 +8,18 @@
   "ops_build": "dev-health-ops 072c6768ba (bigboy MCP class proof 2026-10-01T15:09:03Z); query-api image ghcr.io/full-chaos/dev-health-go-dho@id:sha256:8591ac69d622a72af68b9b2df0e4bdfbf5030cfd154a5460fc050048b6623a3e",
   "acr_build": "dev-health-acr e3c1b332; acr-api image ghcr.io/full-chaos/dev-health-acr/acr-api@sha256:ea7d7f16178bedf70188df89599e5abd8967747f8e708ae89ed180e2382a8a4b",
   "schema_digest": "sha256:dd83956f18b52a3acf89e73e1f25b0dcf25df706d90eca49c5b66f8b8994f779",
-  "fact_query_version": "devhealthfacts.clickhouse.v21",
+  "venue_fact_query_versions": [
+    "devhealthfacts.clickhouse.v21"
+  ],
+  "fact_query_version": "devhealthfacts.clickhouse.v22",
   "rows": {
     "capacity_forecasts": 40,
     "compounding_risk_daily": 97,
-    "estimate_coverage_metrics_daily": 572,
+    "estimate_coverage_metrics_daily": 567,
     "repos": 11,
     "team_repo_ownership": 18,
     "teams": 17,
-    "work_item_metrics_daily": 480,
+    "work_item_metrics_daily": 477,
     "work_unit_investments": 2609,
     "work_unit_membership": 1351,
     "work_unit_membership_runs": 2,
@@ -461,7 +464,7 @@
         "input": {
           "historyDays": 90,
           "simulations": 1000,
-          "teamId": "team:team-6f3ff9f818d75492"
+          "teamId": "team:team-3aa00a20190feabf"
         }
       }
     },
@@ -612,7 +615,7 @@
       "variables": {
         "input": {
           "sinceDate": "2026-09-01",
-          "teamId": "team:team-6f3ff9f818d75492",
+          "teamId": "team:team-3aa00a20190feabf",
           "untilDate": "2026-10-01"
         }
       }
@@ -622,7 +625,7 @@
       "variables": {
         "input": {
           "sinceDate": "2026-09-01",
-          "teamId": "team:team-6f3ff9f818d75492",
+          "teamId": "team:team-3aa00a20190feabf",
           "untilDate": "2026-10-01"
         }
       }
@@ -632,7 +635,7 @@
       "variables": {
         "input": {
           "sinceDate": "2026-09-01",
-          "teamId": "team:team-6f3ff9f818d75492",
+          "teamId": "team:team-3aa00a20190feabf",
           "untilDate": "2026-10-01"
         }
       }
@@ -883,7 +886,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-6f3ff9f818d75492"
+            "team:team-3aa00a20190feabf"
           ]
         }
       }
@@ -894,7 +897,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-6f3ff9f818d75492"
+            "team:team-3aa00a20190feabf"
           ]
         }
       }
@@ -905,7 +908,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-6f3ff9f818d75492"
+            "team:team-3aa00a20190feabf"
           ]
         }
       }
@@ -916,7 +919,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-6f3ff9f818d75492"
+            "team:team-3aa00a20190feabf"
           ]
         }
       }
@@ -927,7 +930,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-6f3ff9f818d75492"
+            "team:team-3aa00a20190feabf"
           ]
         }
       }
@@ -938,7 +941,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-6f3ff9f818d75492"
+            "team:team-3aa00a20190feabf"
           ]
         }
       }
@@ -949,7 +952,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-6f3ff9f818d75492"
+            "team:team-3aa00a20190feabf"
           ]
         }
       }
@@ -960,7 +963,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-6f3ff9f818d75492"
+            "team:team-3aa00a20190feabf"
           ]
         }
       }
@@ -971,7 +974,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-6f3ff9f818d75492"
+            "team:team-3aa00a20190feabf"
           ]
         }
       }
@@ -1046,9 +1049,9 @@
     }
   ],
   "residual": {
-    "feature_delivery": 0.004845833173021674,
-    "maintenance": 0.0027481766301207244,
-    "operational": 0.00024466501781716943,
+    "feature_delivery": 0.004845833405852318,
+    "maintenance": 0.0027481766883283854,
+    "operational": 0.0002446650469209999,
     "quality": 0.002130022563505918,
     "risk": 0.00047797006845939904
   },
@@ -1215,11 +1218,11 @@
       "listener": "served",
       "shapes_run": 9,
       "leaves": 124,
-      "compared": 85,
-      "matches": 82,
+      "compared": 113,
+      "matches": 112,
       "by_class": {
         "forecast_by_design": 1,
-        "latest_day_vs_window": 2
+        "latest_day_vs_window": 1
       },
       "findings": [
         {

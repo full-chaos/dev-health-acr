@@ -215,10 +215,15 @@ type Manifest struct {
 	// OpsBuild is the ops build the recorded replies came from.
 	OpsBuild string `json:"ops_build"`
 	AcrBuild string `json:"acr_build"`
-	// SchemaDigest and FactQueryVersion are what the capture ran against. A
-	// build with another value must be captured again.
-	SchemaDigest     string `json:"schema_digest"`
-	FactQueryVersion string `json:"fact_query_version"`
+	// SchemaDigest is the SDL the shapes and the replies belong to. A build
+	// that pins another SDL must be captured again.
+	SchemaDigest string `json:"schema_digest"`
+	// VenueFactQueryVersions are the fact query versions the venue's acr
+	// answered with. FactQueryVersion is the version of the build whose
+	// providers gave Expect (see Repin); the providers run in every test, so
+	// a version that differs is information, not a failure.
+	VenueFactQueryVersions []string `json:"venue_fact_query_versions"`
+	FactQueryVersion       string   `json:"fact_query_version"`
 	// Rows counts the extract rows per table.
 	Rows map[string]int `json:"rows"`
 	// ShapeCases is the shape pass of the capture, variables scrubbed.
@@ -341,7 +346,8 @@ func Capture(ctx context.Context, cfg VenueConfig, dir string) (*LiveRun, error)
 		CapturedAt: time.Now().UTC().Format(time.RFC3339), Window: cfg.Window, FixtureOrg: FixtureOrgID,
 		OpsBuild: cfg.OpsBuild, AcrBuild: cfg.AcrBuild,
 		SchemaDigest: run.Oracle.Policy.Catalogue().SchemaDigest(), FactQueryVersion: devhealthfacts.QueryVersion,
-		Rows: map[string]int{}, Residual: run.Oracle.Residual, Expect: map[string]RootExpectation{},
+		VenueFactQueryVersions: sortedKeys(run.Oracle.FactVersions),
+		Rows:                   map[string]int{}, Residual: run.Oracle.Residual, Expect: map[string]RootExpectation{},
 	}
 	for _, c := range generated {
 		manifest.ShapeCases = append(manifest.ShapeCases, ShapeCase{ShapeID: c.ShapeID, Variables: scrubVariables(scrubber, c.Variables)})
@@ -378,6 +384,30 @@ func Capture(ctx context.Context, cfg VenueConfig, dir string) (*LiveRun, error)
 		return nil, err
 	}
 	return run, nil
+}
+
+// Repin replaces the pinned outcome of a capture with the outcome of a
+// recorded-mode run of this build: the recorded replies against this build's
+// fact providers on the extract. It is for a build whose fact providers are
+// newer than the venue's acr; the replies and the extract are not touched.
+func Repin(dir string, report *Report, residual map[string]float64) error {
+	raw, err := os.ReadFile(filepath.Join(dir, ManifestFile))
+	if err != nil {
+		return err
+	}
+	var manifest Manifest
+	if err := decodeNumbered(raw, &manifest); err != nil {
+		return err
+	}
+	manifest.FactQueryVersion, manifest.Residual, manifest.Expect = devhealthfacts.QueryVersion, residual, map[string]RootExpectation{}
+	for _, rr := range report.Roots {
+		manifest.Expect[rr.Root] = Expectation(rr)
+	}
+	encoded, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, ManifestFile), append(encoded, '\n'), 0o644)
 }
 
 // LoadCapture reads a capture directory.

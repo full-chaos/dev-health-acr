@@ -87,7 +87,6 @@ func TestOracleOnTheSeededStore(t *testing.T) {
 		{"EveryValuePairFindsAChangedValue", everyValuePairFindsAChangedValue},
 		{"EffortMovedBetweenRepositoriesIsAFinding", effortMovedBetweenRepositoriesIsAFinding},
 		{"AReplyThatIsNotOfTheStoreIsAFinding", aReplyThatIsNotOfTheStoreIsAFinding},
-		{"FlowHeadlineClassNeedsAStoreThatShowsIt", flowHeadlineClassNeedsAStoreThatShowsIt},
 	} {
 		if !t.Run(sub.name, sub.run) {
 			t.Logf("subtest %s failed", sub.name)

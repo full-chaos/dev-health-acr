@@ -32,10 +32,10 @@ const (
 
 // ClassLatestDayVsWindow is a TEMPORARY class: a value that is the latest
 // day (or all time) of a series, served beside a window with no label that
-// says so. It covers exactly the paths of temporaryOpsPaths and the acr flow
-// headline counts, and it is not one of the design's classes. The oracle
-// reports an expired allowance (Report.Expired) when it stops appearing, so
-// it cannot outlive the fixes it waits for.
+// says so. It covers exactly the ops output paths of temporaryOpsPaths, and
+// it is not one of the design's classes. The oracle reports an expired
+// allowance (Report.Expired) when those paths leave the policy, so it cannot
+// outlive the fix it waits for.
 const ClassLatestDayVsWindow Class = "latest_day_vs_window"
 
 // TemporaryClasses lists the classes that are allowed only until a fix lands.
