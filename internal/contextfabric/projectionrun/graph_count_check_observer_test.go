@@ -33,6 +33,9 @@ func TestGraphCountCheckReportsOneCompletedCheckWhenHealthy(t *testing.T) {
 		t.Fatalf("a check inside the interval must report nothing, got %d", len(h.observer.checks))
 	}
 	h.run(testStart.Add(time.Minute))
+	if len(h.observer.checks) == 2 && (h.observer.checks[0].Pass != 1 || h.observer.checks[1].Pass != 2) {
+		t.Fatalf("checks of one org are numbered 1, 2: %+v", h.observer.checks)
+	}
 	if len(h.observer.checks) != 2 {
 		t.Fatalf("each completed check reports once, got %d", len(h.observer.checks))
 	}
@@ -88,25 +91,30 @@ func TestGraphCountCheckDisabledReportsNothing(t *testing.T) {
 
 func TestSlogObserverGraphCountCheckInfoLineIsCertified(t *testing.T) {
 	t.Parallel()
-	var buffer bytes.Buffer
-	observer := projectionrun.SlogObserver{Logger: slog.New(slog.NewJSONHandler(&buffer, nil))}
-	observer.ObserveGraphCountCheck(projectionrun.GraphCountCheck{OrgID: "org-a", SourcesChecked: 2, KindsCompared: 7, Gaps: 1, Errors: 3, Outcome: projectionrun.GraphCountCheckFailed, Duration: 42 * time.Millisecond})
-	parsed, err := certify.Parse(buffer.Bytes())
-	if err != nil {
-		t.Fatalf("parse: %v", err)
+	first := projectionrun.GraphCountCheck{OrgID: "org-a", SourcesChecked: 2, KindsCompared: 7, Gaps: 1, Errors: 3, Outcome: projectionrun.GraphCountCheckFailed, Pass: 1, Duration: 42 * time.Millisecond}
+	second := projectionrun.GraphCountCheck{OrgID: "org-a", SourcesChecked: 2, KindsCompared: 7, Outcome: projectionrun.GraphCountCheckCompleted, Pass: 2, Duration: 5 * time.Millisecond}
+	certifyLog := func(t *testing.T, checks []projectionrun.GraphCountCheck, want map[string]any) {
+		t.Helper()
+		var buffer bytes.Buffer
+		observer := projectionrun.SlogObserver{Logger: slog.New(slog.NewJSONHandler(&buffer, nil))}
+		for _, check := range checks {
+			observer.ObserveGraphCountCheck(check)
+		}
+		parsed, err := certify.Parse(buffer.Bytes())
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if _, err := certify.Certify(parsed, certify.Assertion{Event: eventspec.GraphCountCheckFinished, Want: want}); err != nil {
+			t.Fatalf("certify: %v", err)
+		}
 	}
-	if _, err := certify.Certify(parsed, certify.Assertion{
-		Event: eventspec.GraphCountCheckFinished,
-		Want: map[string]any{
-			"org_id_hash":     "527a4c0a7e94",
-			"outcome":         "failed",
-			"sources_checked": 2,
-			"kinds_compared":  7,
-			"gap_count":       1,
-			"error_count":     3,
-			"duration_ms":     42,
-		},
-	}); err != nil {
-		t.Fatalf("certify: %v", err)
-	}
+	certifyLog(t, []projectionrun.GraphCountCheck{first}, map[string]any{
+		"org_id_hash": "527a4c0a7e94", "pass": 1, "outcome": "failed", "sources_checked": 2,
+		"kinds_compared": 7, "gap_count": 1, "error_count": 3, "duration_ms": 42,
+	})
+	// Two recurring checks of one organization are two passes, not a duplicate.
+	certifyLog(t, []projectionrun.GraphCountCheck{first, second}, map[string]any{
+		"org_id_hash": "527a4c0a7e94", "pass": 2, "outcome": "completed", "sources_checked": 2,
+		"kinds_compared": 7, "gap_count": 0, "error_count": 0, "duration_ms": 5,
+	})
 }

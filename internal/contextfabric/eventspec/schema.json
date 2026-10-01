@@ -8588,7 +8588,7 @@
     "id": "projectionrun.graph_count_check_finished",
     "msg": "context_fabric: projection graph count check finished",
     "level": "info",
-    "multiplicity": "zero_or_one_per_request",
+    "multiplicity": "zero_or_one_per_pass",
     "attribution": [
       "org_id_hash"
     ],
@@ -8597,6 +8597,11 @@
       {
         "key": "org_id_hash",
         "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "pass",
+        "type": "int",
         "presence": "required"
       },
       {

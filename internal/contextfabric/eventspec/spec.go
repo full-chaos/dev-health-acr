@@ -3212,11 +3212,15 @@ var GraphCountCheckFinished = Event{
 	ID:                 "projectionrun.graph_count_check_finished",
 	Msg:                "context_fabric: projection graph count check finished",
 	Level:              LevelInfo,
-	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Multiplicity:       MultiplicityZeroOrOnePerPass,
 	Attribution:        []string{"org_id_hash"},
 	BoundedAggregation: "at most one line per organization per check interval (default 10 minutes), only when the check actually ran; an organization not due, a negative interval or a backend without counts emits none.",
 	Fields: []Field{
 		{Key: "org_id_hash", Type: FieldString, Presence: PresenceRequired},
+		// pass is the organization's own 1-based check sequence in this process:
+		// each interval's check is a distinct pass, so recurring checks of one
+		// organization are told apart and a duplicate sequence is a defect.
+		{Key: "pass", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"completed", "cancelled", "failed"}},
 		{Key: "sources_checked", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "kinds_compared", Type: FieldInt, Presence: PresenceRequired},

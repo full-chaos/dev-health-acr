@@ -43,6 +43,8 @@ const (
 // "the check ran and found nothing" is observable. Counts only; content-safe.
 type GraphCountCheck struct {
 	OrgID string
+	// Pass is the organization's 1-based check sequence in this process.
+	Pass int
 	// Outcome is GraphCountCheckCompleted, GraphCountCheckCancelled (the check
 	// timeout or shutdown ended it) or GraphCountCheckFailed (a count read failed).
 	Outcome        string
@@ -92,6 +94,18 @@ type graphCountState struct {
 	// sees it again: rows landing in the source between a drain and the count
 	// read close on their own by the next tick, a skipped row does not.
 	suspects map[string]bool
+	passes   map[string]int
+}
+
+// nextPass numbers the organization's checks in this process, from 1.
+func (g *graphCountState) nextPass(orgID string) int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.passes == nil {
+		g.passes = map[string]int{}
+	}
+	g.passes[orgID]++
+	return g.passes[orgID]
 }
 
 func pairKey(orgID, source string) string { return orgID + "\x00" + source }
@@ -183,7 +197,7 @@ func (c *Coordinator) checkGraphCounts(ctx context.Context, orgID string) {
 	defer cancel()
 	hash := orgIDHash(orgID)
 	started := c.now()
-	result := GraphCountCheck{OrgID: orgID, At: started}
+	result := GraphCountCheck{OrgID: orgID, Pass: c.graphCounts.nextPass(orgID), At: started}
 	defer func() {
 		result.Duration = c.now().Sub(started)
 		switch {
