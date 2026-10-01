@@ -51,6 +51,9 @@ func TestMain(m *testing.M) {
 	if orgIsolationClickHouseTerminate != nil {
 		orgIsolationClickHouseTerminate()
 	}
+	if sharedDevHealthClickHouseTerminate != nil {
+		sharedDevHealthClickHouseTerminate()
+	}
 	os.Exit(code)
 }
 
