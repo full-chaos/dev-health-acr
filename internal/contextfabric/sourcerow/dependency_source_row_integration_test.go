@@ -77,14 +77,19 @@ func TestMintedDependencyRefsExpandToTheirSourceRow(t *testing.T) {
 	}
 	// A repository-restricted caller with no ownership path is refused.
 	restricted := storage.Principal{OrgID: org, RepositoryScopes: []string{grantedRep}}
+	refused := 0
 	for ref := range minted {
 		kind, id := splitRef(ref)
-		if kind != contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2 || !strings.Contains(id, "linear%3ACHAOS-1") {
+		if kind != contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2 || !strings.HasPrefix(id, "linear%3ACHAOS-1:") {
 			continue
 		}
-		if _, decision := resolve.ResolveSourceRow(ctx, restricted, string(kind), id); decision.Reason == contextfabric.SourceRowServed && !strings.Contains(id, "github%3Aacme") {
-			t.Errorf("restricted caller served a repo-less source row %q", id)
+		refused++
+		if _, decision := resolve.ResolveSourceRow(ctx, restricted, string(kind), id); decision.Reason != contextfabric.SourceRowNoRow {
+			t.Errorf("restricted caller, repo-less source %q: %+v, want no_row", id, decision)
 		}
+	}
+	if refused != 2 {
+		t.Errorf("checked %d repo-less-source dependency refs, want 2", refused)
 	}
 	var deps int
 	for ref := range minted {

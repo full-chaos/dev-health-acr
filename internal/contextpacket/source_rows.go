@@ -94,8 +94,9 @@ const (
 	// work_items row in (the key is (org_id, repo_id, work_item_id), so one
 	// id can live in several), with the slug "" for a repository id repos
 	// does not hold (the zero UUID of a Linear item). A slug-less repository
-	// is admitted only to a caller every repository is admitted to, and is
-	// never read in.
+	// holds repo-less work items: the resolver decides each one with the
+	// scope expander's repo-less rule (organization grant, or a project
+	// ownership or native pull-request link path to a granted repository).
 	SourceRowDiscoveryWorkItem SourceRowDiscovery = "work_item_repositories"
 )
 
