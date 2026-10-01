@@ -2533,6 +2533,11 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 		result.Limitations, displaced = appendBoundedLimitations(result.Limitations, []string{contractsv1.ContextFabricSynthesisInputBoundedLimitation})
 		result.LimitationsDisplaced += displaced
 		result.Coverage.Partial = true
+		// Only a complete status is lowered: the answer was written from part
+		// of the facts. A status already weaker than partial says more.
+		if result.Status == InvestigationComplete {
+			result.Status = InvestigationPartial
+		}
 	}
 	modelFacingCoverageDetailIDs := coverageDetailIDSet(result.Coverage.Details)
 	outcome, violation := classifyCoverageDisclosures(draft, &result, modelFacingCoverageDetailIDs)

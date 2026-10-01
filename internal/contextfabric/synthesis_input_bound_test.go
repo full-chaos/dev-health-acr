@@ -154,13 +154,65 @@ func TestSynthesizeBoundsTheFactsWhenTheModelInputDoesNotFit(t *testing.T) {
 	if !result.Coverage.Partial {
 		t.Fatal("coverage.partial = false, want true")
 	}
+	if result.Status != InvestigationPartial {
+		t.Fatalf("status = %q, want %q: the draft said complete", result.Status, InvestigationPartial)
+	}
 	if len(result.Limitations) != 1 || result.Limitations[0] != contractsv1.ContextFabricSynthesisInputBoundedLimitation {
 		t.Fatalf("limitations = %q, want the bounded-input disclosure", result.Limitations)
 	}
 	want := SynthesisInputBoundEvent{
 		Outcome: SynthesisInputBoundFitted, Passes: 1, InputBytes: 2000, MaxInputBytes: 1000,
-		FactsRead: 200, FactsGiven: 90, KindsRead: 2, KindsBounded: 1,
+		FactsRead: 200, FactsGiven: 90, KindsRead: 2, KindsGiven: 2, KindsBounded: 1,
 	}
+	if len(telemetry.synthesisInputBounds) != 1 || telemetry.synthesisInputBounds[0] != want {
+		t.Fatalf("bound events = %+v, want exactly %+v", telemetry.synthesisInputBounds, want)
+	}
+}
+
+// An answer written from part of the facts is not complete. A complete status
+// is lowered to partial; a status that already says more is kept.
+func TestSynthesizeLowersACompleteStatusWhenTheFactsWereBounded(t *testing.T) {
+	cases := []struct {
+		drafted InvestigationStatus
+		want    InvestigationStatus
+	}{
+		{drafted: InvestigationComplete, want: InvestigationPartial},
+		{drafted: InvestigationPartial, want: InvestigationPartial},
+		{drafted: InvestigationDegraded, want: InvestigationDegraded},
+	}
+	for _, testCase := range cases {
+		t.Run(string(testCase.drafted), func(t *testing.T) {
+			input := largeSynthesisInputFixture(199)
+			draft := validSynthesisDraftFixture(input)
+			draft.Status = testCase.drafted
+			var given []SynthesisInput
+			synthesizer := RuntimeAnswerSynthesizer{Runtime: sizedModelRuntime{bytesPerFact: 10, maxBytes: 1000, draft: draft, given: &given}}
+
+			result, err := synthesizer.Synthesize(context.Background(), storage.Principal{OrgID: "org_1"}, input)
+
+			if err != nil {
+				t.Fatalf("Synthesize() error = %v", err)
+			}
+			if len(given) != 2 {
+				t.Fatalf("the runtime was called %d times, want 2: the facts were bounded", len(given))
+			}
+			if result.Status != testCase.want {
+				t.Fatalf("status = %q, want %q", result.Status, testCase.want)
+			}
+		})
+	}
+}
+
+// The bound event counts the kinds the model was given apart from the kinds
+// read, so a kind that went missing from the model input would show.
+func TestTheBoundEventCountsTheKindsGivenApartFromTheKindsRead(t *testing.T) {
+	read := SynthesisInput{Facts: CanonicalFactBundle{Facts: append(boundFixtureFacts(FactWork, SubjectWorkItem, 4), boundFixtureFacts(FactPullRequests, SubjectPullRequest, 4)...)}}
+	given := SynthesisInput{Facts: CanonicalFactBundle{Facts: boundFixtureFacts(FactWork, SubjectWorkItem, 4)}}
+	telemetry := &recordingTelemetry{}
+
+	RuntimeAnswerSynthesizer{Telemetry: telemetry}.recordSynthesisInputBound(context.Background(), storage.Principal{OrgID: "org_1"}, SynthesisInputBoundEvent{Outcome: SynthesisInputBoundFitted, Passes: 1}, read, given)
+
+	want := SynthesisInputBoundEvent{Outcome: SynthesisInputBoundFitted, Passes: 1, FactsRead: 8, FactsGiven: 4, KindsRead: 2, KindsGiven: 1, KindsBounded: 1}
 	if len(telemetry.synthesisInputBounds) != 1 || telemetry.synthesisInputBounds[0] != want {
 		t.Fatalf("bound events = %+v, want exactly %+v", telemetry.synthesisInputBounds, want)
 	}
@@ -246,8 +298,8 @@ func TestSynthesizeLeavesAnInputThatFitsAlone(t *testing.T) {
 	if len(given) != 1 || len(given[0].Facts.Facts) != 10 {
 		t.Fatalf("the runtime was called %d times, want once with all 10 facts", len(given))
 	}
-	if result.Coverage.Partial || len(result.Limitations) != 0 {
-		t.Fatalf("coverage.partial = %v limitations = %q, want an answer that states no bound", result.Coverage.Partial, result.Limitations)
+	if result.Coverage.Partial || len(result.Limitations) != 0 || result.Status != InvestigationComplete {
+		t.Fatalf("status = %q coverage.partial = %v limitations = %q, want the complete answer with no bound stated", result.Status, result.Coverage.Partial, result.Limitations)
 	}
 	if len(telemetry.synthesisInputBounds) != 0 {
 		t.Fatalf("bound events = %+v, want none", telemetry.synthesisInputBounds)
@@ -277,7 +329,7 @@ func TestSynthesizeEndsWithTheOverflowWhenBoundingIsExhausted(t *testing.T) {
 		}
 		want := SynthesisInputBoundEvent{
 			Outcome: SynthesisInputBoundExhausted, Passes: 1, InputBytes: 200_000, MaxInputBytes: 1000,
-			FactsRead: 200, FactsGiven: 2, KindsRead: 2, KindsBounded: 1,
+			FactsRead: 200, FactsGiven: 2, KindsRead: 2, KindsGiven: 2, KindsBounded: 1,
 		}
 		if len(telemetry.synthesisInputBounds) != 1 || telemetry.synthesisInputBounds[0] != want {
 			t.Fatalf("bound events = %+v, want exactly %+v", telemetry.synthesisInputBounds, want)

@@ -34,6 +34,7 @@ type SynthesisInputBoundEvent struct {
 	FactsRead     int
 	FactsGiven    int
 	KindsRead     int
+	KindsGiven    int
 	KindsBounded  int
 }
 
@@ -132,7 +133,8 @@ func (r RuntimeAnswerSynthesizer) recordSynthesisInputBound(ctx context.Context,
 		return
 	}
 	readCounts, givenCounts := factCountsByKind(read.Facts.Facts), factCountsByKind(given.Facts.Facts)
-	event.FactsRead, event.FactsGiven, event.KindsRead = len(read.Facts.Facts), len(given.Facts.Facts), len(readCounts)
+	event.FactsRead, event.FactsGiven = len(read.Facts.Facts), len(given.Facts.Facts)
+	event.KindsRead, event.KindsGiven = len(readCounts), len(givenCounts)
 	for kind, count := range readCounts {
 		if givenCounts[kind] < count {
 			event.KindsBounded++

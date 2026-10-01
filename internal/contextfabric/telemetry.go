@@ -712,6 +712,7 @@ func (t SlogEngineTelemetry) RecordSynthesisInputBound(ctx context.Context, prin
 		"facts_read", event.FactsRead,
 		"facts_given", event.FactsGiven,
 		"kinds_read", event.KindsRead,
+		"kinds_given", event.KindsGiven,
 		"kinds_bounded", event.KindsBounded,
 	}, requestIDLogAttrs(ctx)...)
 	t.logger.Log(ctx, level, "context fabric synthesis input bounded", args...)

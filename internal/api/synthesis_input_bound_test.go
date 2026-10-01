@@ -387,6 +387,9 @@ func TestATeamQuestionLargerThanTheModelInputIsAnsweredWithBoundedFacts(t *testi
 	if bound["level"] != "WARN" || bound["outcome"] != "fitted" || bound["kinds_bounded"] != float64(len(expandedTeamKinds)) {
 		t.Fatalf("bound line = %v, want WARN outcome=fitted kinds_bounded=%d", bound, len(expandedTeamKinds))
 	}
+	if bound["kinds_given"] != float64(len(subjects)) || bound["kinds_given"] != bound["kinds_read"] {
+		t.Fatalf("bound line = %v, want kinds_given=%d (the kinds in the model request) and equal to kinds_read: no kind is removed", bound, len(subjects))
+	}
 	if bound["max_input_bytes"] != float64(genkitruntime.DefaultExchangeMaxInputBytes) || bound["input_bytes"].(float64) <= bound["max_input_bytes"].(float64) {
 		t.Fatalf("bound line = %v, want input_bytes above max_input_bytes=%d: the unbounded input did not fit", bound, genkitruntime.DefaultExchangeMaxInputBytes)
 	}
@@ -430,6 +433,14 @@ func TestTheModelInputBoundAloneMakesAFullyReadAnswerPartial(t *testing.T) {
 			}
 			if hasLimitation(result, contractsv1.ContextFabricSynthesisInputBoundedLimitation) != testCase.wantBounded {
 				t.Fatalf("limitations = %q, want the bounded-input disclosure present = %v", result.Limitations, testCase.wantBounded)
+			}
+			// The model answered "complete" in both cases.
+			wantStatus, wantReason := cf.InvestigationComplete, contractsv1.ContextFabricTerminalReason("")
+			if testCase.wantBounded {
+				wantStatus, wantReason = cf.InvestigationPartial, contractsv1.ContextFabricTerminalReasonLimitationDisclosed
+			}
+			if result.Status != wantStatus || result.Completeness.TerminalStatus != wantStatus || result.Completeness.TerminalReason != wantReason {
+				t.Fatalf("status = %q completeness = %q/%q, want %q with terminal reason %q", result.Status, result.Completeness.TerminalStatus, result.Completeness.TerminalReason, wantStatus, wantReason)
 			}
 			bounds := logLines(t, logs.String(), "context fabric synthesis input bounded")
 			if testCase.wantBounded && (len(bounds) != 1 || bounds[0]["outcome"] != "fitted") {
