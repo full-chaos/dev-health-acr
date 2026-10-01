@@ -3,7 +3,9 @@ package devhealthfacts
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -347,17 +349,21 @@ ORDER BY project_key`)
 // readProjectRollupMixRows runs the roll-up mix: phase 0, then the two arms. A
 // project is a row only when its repo arm counted a work unit (the old
 // statement's HAVING work_units > 0); the evidence arm only adds its count.
-func readProjectRollupMixRows(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound) ([]projectRollupMixRow, error) {
+func readProjectRollupMixRowsOnce(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound) ([]projectRollupMixRow, bool, error) {
 	scope, err := readProjectMixScope(ctx, client, orgID, ids, timeBound)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if len(scope.unitIDs) == 0 {
-		return nil, nil
+		return nil, false, nil
 	}
 	linkJSON, err := readProjectMixLinks(ctx, client, orgID, ids, timeBound)
 	if err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	before, err := readProjectMixInputs(ctx, client, orgID, ids, projectRollupInputsStatement(), 2)
+	if err != nil {
+		return nil, false, err
 	}
 	projectMixBetweenPhases(ctx)
 	extra := append(scope.bindings(), readers.Binding{Name: "link_json", Value: linkJSON})
@@ -370,7 +376,7 @@ func readProjectRollupMixRows(ctx context.Context, client contextpacket.ClickHou
 		rows = append(rows, r)
 		return nil
 	}, extra...); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	bugfix := map[string]float64{}
 	if err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectThemeMixBugfix", projectRollupRepoBugfixStatement(), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
@@ -382,7 +388,7 @@ func readProjectRollupMixRows(ctx context.Context, client contextpacket.ClickHou
 		bugfix[key] = weighted
 		return nil
 	}, extra...); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	excluded := map[string]uint64{}
 	if err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectThemeMixEvidenceArm", projectRollupEvidenceArmStatement(), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
@@ -394,13 +400,18 @@ func readProjectRollupMixRows(ctx context.Context, client contextpacket.ClickHou
 		excluded[key] = n
 		return nil
 	}, extra...); err != nil {
-		return nil, err
+		return nil, false, err
 	}
+	after, err := readProjectMixInputs(ctx, client, orgID, ids, projectRollupInputsStatement(), 2)
+	if err != nil {
+		return nil, false, err
+	}
+	changed := before != after
 	for i := range rows {
 		rows[i].ExcludedNoRepoLink = excluded[rows[i].ProjectKey]
 		rows[i].BugfixWeighted = bugfix[rows[i].ProjectKey]
 	}
-	return rows, nil
+	return rows, changed, nil
 }
 
 // projectNativePlacementStatement returns ONE row of parallel arrays, one
@@ -492,13 +503,17 @@ type projectNativeUnitValues struct {
 // unit values, then the per-project aggregation the single statement did in
 // SQL: a unit counts in full for every requested project it is placed in,
 // spanning when it is placed in more than one project (requested or not).
-func readProjectNativeMixRows(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound, rowLimit int) ([]readers.ProjectThemeMixRow, error) {
+func readProjectNativeMixRowsOnce(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound, rowLimit int) ([]readers.ProjectThemeMixRow, bool, error) {
 	scope, err := readProjectMixScope(ctx, client, orgID, ids, timeBound)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if len(scope.unitIDs) == 0 {
-		return nil, nil
+		return nil, false, nil
+	}
+	before, err := readProjectMixInputs(ctx, client, orgID, ids, projectNativeInputsStatement(), 3)
+	if err != nil {
+		return nil, false, err
 	}
 	projectMixBetweenPhases(ctx)
 	extra := scope.bindings()
@@ -508,10 +523,10 @@ func readProjectNativeMixRows(ctx context.Context, client contextpacket.ClickHou
 	if err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectThemeMixPlacement", projectNativePlacementStatement(), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		return row.Scan(&pUnit, &pProvider, &pProject, &pMulti)
 	}, extra...); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if len(pProvider) != len(pUnit) || len(pProject) != len(pUnit) || len(pMulti) != len(pUnit) {
-		return nil, fmt.Errorf("project native mix placement arrays disagree: %d/%d/%d/%d", len(pUnit), len(pProvider), len(pProject), len(pMulti))
+		return nil, false, fmt.Errorf("project native mix placement arrays disagree: %d/%d/%d/%d", len(pUnit), len(pProvider), len(pProject), len(pMulti))
 	}
 
 	var vUnit []string
@@ -519,14 +534,14 @@ func readProjectNativeMixRows(ctx context.Context, client contextpacket.ClickHou
 	if err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectThemeMixThemeValues", projectNativeThemeValuesStatement(), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		return row.Scan(&vUnit, &vEffort, &vFeature, &vOperational, &vMaintenance, &vQuality, &vRisk)
 	}, extra...); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	var bUnit []string
 	var bShare []float64
 	if err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectThemeMixBugfixValues", projectNativeBugfixValuesStatement(), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		return row.Scan(&bUnit, &bShare)
 	}, append(append([]readers.Binding{}, extra...), readers.Binding{Name: "bugfix_key", Value: readers.BugfixSubcategoryKey})...); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	bugfix := make(map[string]float64, len(bUnit))
 	for i, unit := range bUnit {
@@ -536,6 +551,12 @@ func readProjectNativeMixRows(ctx context.Context, client contextpacket.ClickHou
 	for i, unit := range vUnit {
 		values[unit] = projectNativeUnitValues{vEffort[i], vFeature[i], vOperational[i], vMaintenance[i], vQuality[i], vRisk[i], bugfix[unit]}
 	}
+
+	after, err := readProjectMixInputs(ctx, client, orgID, ids, projectNativeInputsStatement(), 3)
+	if err != nil {
+		return nil, false, err
+	}
+	changed := before != after
 
 	projectCount := make(map[string]int, len(pUnit))
 	for _, unit := range pUnit {
@@ -585,5 +606,72 @@ func readProjectNativeMixRows(ctx context.Context, client contextpacket.ClickHou
 	if rowLimit > 0 && len(rows) > rowLimit {
 		rows = rows[:rowLimit]
 	}
-	return rows, nil
+	return rows, changed, nil
+}
+
+// The roll-up and the native mix read tables beyond work_unit_investments that
+// change while a read is in flight (team attributions, repository names, work
+// items, project membership transitions, the project catalog). Pinning every
+// one of them to a version would mean forking ops' project_membership_presence
+// view and rewriting the attribution dedup, so these are VALIDATED instead: phase
+// 0 records each table's newest write mark for the organisation, the read runs,
+// the marks are read again, and if any moved the whole read starts over (the
+// unit versions and links are re-captured too). After projectMixMaxAttempts
+// attempts the read fails rather than serve an answer that mixes two states.
+
+const projectMixMaxAttempts = 3
+
+// projectMixInputMarks is the newest write mark (whole ms) of each table a mix
+// reads besides work_unit_investments; the unused slots stay zero.
+type projectMixInputMarks [3]int64
+
+func projectRollupInputsStatement() string {
+	return `SELECT
+    toUnixTimestamp64Milli((SELECT max(computed_at) FROM work_item_team_attributions WHERE org_id = {org_id:String})) AS attributions_mark,
+    toUnixTimestamp64Milli((SELECT max(last_synced) FROM repos WHERE org_id = {org_id:String})) AS repos_mark`
+}
+
+func projectNativeInputsStatement() string {
+	return `SELECT
+    toUnixTimestamp64Milli((SELECT max(last_synced) FROM work_items WHERE org_id = {org_id:String})) AS work_items_mark,
+    toUnixTimestamp64Milli((SELECT max(last_synced) FROM project_membership_transitions WHERE org_id = {org_id:String})) AS transitions_mark,
+    toUnixTimestamp64Milli((SELECT max(updated_at) FROM projects WHERE org_id = {org_id:String})) AS projects_mark`
+}
+
+func readProjectMixInputs(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, statement string, n int) (projectMixInputMarks, error) {
+	var marks projectMixInputMarks
+	err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectMixInputs", statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		dest := make([]any, n)
+		for i := range dest {
+			dest[i] = &marks[i]
+		}
+		return row.Scan(dest...)
+	})
+	return marks, err
+}
+
+// errProjectMixInputsChanged is the failure of a read whose inputs moved on every
+// attempt.
+var errProjectMixInputsChanged = errors.New("devhealthfacts: project mix inputs changed during every attempt")
+
+func readProjectRollupMixRows(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound) ([]projectRollupMixRow, error) {
+	for attempt := 1; attempt <= projectMixMaxAttempts; attempt++ {
+		rows, changed, err := readProjectRollupMixRowsOnce(ctx, client, orgID, ids, timeBound)
+		if err != nil || !changed {
+			return rows, err
+		}
+		slog.WarnContext(ctx, "devhealthfacts.project_mix_inputs_changed", "mix", "owning_team_rollup", "attempt", attempt, "max_attempts", projectMixMaxAttempts)
+	}
+	return nil, errProjectMixInputsChanged
+}
+
+func readProjectNativeMixRows(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound, rowLimit int) ([]readers.ProjectThemeMixRow, error) {
+	for attempt := 1; attempt <= projectMixMaxAttempts; attempt++ {
+		rows, changed, err := readProjectNativeMixRowsOnce(ctx, client, orgID, ids, timeBound, rowLimit)
+		if err != nil || !changed {
+			return rows, err
+		}
+		slog.WarnContext(ctx, "devhealthfacts.project_mix_inputs_changed", "mix", "project_native", "attempt", attempt, "max_attempts", projectMixMaxAttempts)
+	}
+	return nil, errProjectMixInputsChanged
 }

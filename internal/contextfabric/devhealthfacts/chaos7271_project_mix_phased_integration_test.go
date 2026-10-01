@@ -16,6 +16,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -314,5 +315,109 @@ func TestProjectNativePhasedReadHonoursTheRowLimitAgainstRealClickHouse(t *testi
 	}
 	if err := nativeRowsDiffer(oracle, got); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A write to an input the phases read besides the unit versions (team
+// attributions, work items) must never produce an answer that mixes the state
+// before it with the state after it. The write below moves a unit's values AND
+// the attribution (roll-up) / project placement (native) in one step: the phased
+// read must equal the single statement run before the write or the single
+// statement run after it. Never a blend. The control: the two single-statement
+// answers differ.
+func TestProjectMixPhasesNeverBlendTwoInputStatesAgainstRealClickHouse(t *testing.T) {
+	t.Parallel()
+	window := devhealthfacts.ProjectMixWindow{}
+	t.Run("roll-up", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		query, direct := newScopedCHAOS7257Client(t, nil)
+		createCHAOS7257Tables(t, ctx, direct)
+		const orgID = "org-7271-blend-rollup"
+		at := seedCHAOS7257Parity(t, ctx, direct, orgID)
+		insertVersionAtMilli(t, ctx, direct, orgID, "wu-pin", repoUUID("r1a"), `{"issues":[],"prs":[]}`, 7, at.Add(-time.Hour))
+		insertMembership(t, ctx, direct, orgID, "wu-pin", at)
+		ids := []string{"linear:proj-1", "linear:proj-2", "linear:proj-3"}
+		before := runRollupStatement(t, ctx, query, "SingleRollupBefore", devhealthfacts.ProjectRollupStatement(window), orgID, ids, window)
+		var once sync.Once
+		hooked, err := devhealthfacts.RunProjectRollupMix(devhealthfacts.WithProjectMixBetweenPhases(ctx, func() {
+			once.Do(func() {
+				insertVersionAtMilli(t, ctx, direct, orgID, "wu-pin", repoUUID("r1a"), `{"issues":[],"prs":[]}`, 1_000_000, at.Add(-30*time.Minute))
+				if err := direct.Exec(ctx, `INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, team_id, team_name, source, is_primary, confidence, computed_at)
+SELECT org_id, repo_id, work_item_id, 'team-2', 'team-2', source, is_primary, confidence, now64(3) FROM work_item_team_attributions WHERE org_id = ?`, orgID); err != nil {
+					t.Fatalf("move attributions: %v", err)
+				}
+			})
+		}), query, orgID, ids, window)
+		if err != nil {
+			t.Fatal(err)
+		}
+		after := runRollupStatement(t, ctx, query, "SingleRollupAfter", devhealthfacts.ProjectRollupStatement(window), orgID, ids, window)
+		if rollupRowsDiffer(before, after) == nil {
+			t.Fatal("control: the single statement answers before and after the write are equal, so the case proves nothing")
+		}
+		got := rollupRowsOf(hooked)
+		if rollupRowsDiffer(before, got) != nil && rollupRowsDiffer(after, got) != nil {
+			t.Fatalf("the phased answer is neither the state before the write nor the state after it:\nbefore %+v\nafter  %+v\ngot    %+v", before, after, got)
+		}
+	})
+	t.Run("native", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		query, direct := newScopedCHAOS7257Client(t, nil)
+		createCHAOS7257Tables(t, ctx, direct)
+		const orgID = "org-7271-blend-native"
+		at := seedCHAOS7257Native(t, ctx, direct, orgID)
+		insertVersionAtMilli(t, ctx, direct, orgID, "nu-pin", "", `{"issues":["linear:A-1"],"prs":[]}`, 7, at.Add(-time.Hour))
+		insertMembership(t, ctx, direct, orgID, "nu-pin", at)
+		ids := []string{"linear:n-p1", "linear:n-p2", "linear:n-p3"}
+		before := runNativeStatement(t, ctx, query, "SingleNativeBefore", devhealthfacts.ProjectNativeStatement(window, 201), orgID, ids, window)
+		var once sync.Once
+		hooked, err := devhealthfacts.RunProjectNativeMix(devhealthfacts.WithProjectMixBetweenPhases(ctx, func() {
+			once.Do(func() {
+				insertNativeVersion(t, ctx, direct, orgID, "nu-pin", at.Add(-30*time.Minute))
+				// linear:A-1 moves from n-p1 to n-p2 (a newer work_items version).
+				if err := direct.Exec(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, title, type, status, project_key, project_id, native_team_key, project_name, created_at, updated_at, completed_at, parent_id, url, last_synced, org_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+					"00000000-0000-0000-0000-000000000000", "linear:A-1", "linear", "title", "issue", "open", "", "n-p2", "", "", at, at, nil, "", "", at.Add(time.Hour), orgID); err != nil {
+					t.Fatalf("move work item: %v", err)
+				}
+			})
+		}), query, orgID, ids, window, 201)
+		if err != nil {
+			t.Fatal(err)
+		}
+		after := runNativeStatement(t, ctx, query, "SingleNativeAfter", devhealthfacts.ProjectNativeStatement(window, 201), orgID, ids, window)
+		if nativeRowsDiffer(before, after) == nil {
+			t.Fatal("control: the single statement answers before and after the write are equal, so the case proves nothing")
+		}
+		got := nativeRowsOf(hooked)
+		if nativeRowsDiffer(before, got) != nil && nativeRowsDiffer(after, got) != nil {
+			t.Fatalf("the phased answer is neither the state before the write nor the state after it:\nbefore %+v\nafter  %+v\ngot    %+v", before, after, got)
+		}
+	})
+}
+
+// A read whose inputs move on EVERY attempt fails; it never serves a blend. The
+// hook writes a newer work_items version each time the phases run.
+func TestProjectNativePhasedReadFailsWhenItsInputsMoveOnEveryAttemptAgainstRealClickHouse(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	query, direct := newScopedCHAOS7257Client(t, nil)
+	createCHAOS7257Tables(t, ctx, direct)
+	const orgID = "org-7271-exhaust"
+	at := seedCHAOS7257Native(t, ctx, direct, orgID)
+	attempts := 0
+	rows, err := devhealthfacts.RunProjectNativeMix(devhealthfacts.WithProjectMixBetweenPhases(ctx, func() {
+		attempts++
+		if err := direct.Exec(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, title, type, status, project_key, project_id, native_team_key, project_name, created_at, updated_at, completed_at, parent_id, url, last_synced, org_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			"00000000-0000-0000-0000-000000000000", "linear:A-1", "linear", "title", "issue", "open", "", "n-p1", "", "", at, at, nil, "", "", at.Add(time.Duration(attempts)*time.Hour), orgID); err != nil {
+			t.Fatalf("write work item: %v", err)
+		}
+	}), query, orgID, []string{"linear:n-p1"}, devhealthfacts.ProjectMixWindow{}, 201)
+	if err == nil {
+		t.Fatalf("read served %d rows although its inputs moved on every attempt", len(rows))
+	}
+	if attempts != 3 {
+		t.Fatalf("attempts = %d, want 3 (the bounded retry)", attempts)
 	}
 }
