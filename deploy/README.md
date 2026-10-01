@@ -10,7 +10,7 @@ script-driven overlay path.
 | `acr-migrate` | `templates/migration-job.yaml` (pre-install/upgrade hook) | `base/migration-job.yaml` |
 | `acr-db-init` (bootstrap roles) | **not covered -- documented gap** (see below) | not covered |
 | `acr-db-acl` (runtime ACL grants) | **not covered -- documented gap** (see below) | not covered |
-| `acr-projector` | `templates/projector-deployment.yaml` (values-gated; always `strategy: Recreate`, so two projector versions never run at once during a rollout) | **not covered -- documented gap** (see below) |
+| `acr-projector` | `templates/projector-deployment.yaml` (values-gated; always `strategy: Recreate`, so two projector versions never run at once during a rollout; a Deployment that predates `Recreate` needs a one-time `rollingUpdate` removal patch, see `docs/operations.md` "Upgrading an existing projector Deployment to `strategy: Recreate`") | **not covered -- documented gap** (see below) |
 | `falkordb` (profile-gated) | `templates/falkordb-statefulset.yaml` + service (values-gated, CHAOS-4055) | not covered (use helm) |
 | `acr-mcp` (hosted Streamable HTTP; **no compose service, Kubernetes only**) | `templates/acr-mcp-*.yaml` (`acrMcp.enabled`, off by default) | `components/acr-mcp` + `overlays/development-mcp` (opt-in Component) |
 | `postgres` / `clickhouse` (root compose) | external by contract (ADR-0004) | external by contract |

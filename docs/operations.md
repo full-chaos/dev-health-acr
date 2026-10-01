@@ -1385,6 +1385,33 @@ Promotion, publication, and release revocation are described in
 [release policy](release-policy.md). Test the promoted digest, preserve its
 provenance, and rehearse an application rollback before a production upgrade.
 
+### Upgrading an existing projector Deployment to `strategy: Recreate`
+
+The chart renders the projector with `strategy: {type: Recreate}`. A
+Deployment created before that change carries the API-defaulted
+`spec.strategy.rollingUpdate` block, and Helm 4 applies server-side. The
+upgrade then fails with:
+
+```text
+Deployment.apps "<release>-projector" is invalid: spec.strategy.rollingUpdate: Forbidden: may not be specified when strategy `type` is 'Recreate'
+```
+
+Server-side apply cannot clear a defaulted field: rendering
+`rollingUpdate: null` was tried on Kubernetes v1.36 with the `helm` field
+manager and is rejected the same way, and a server-side dry-run reports the
+same error, so it does not give early warning either. Remove the block once,
+before the first upgrade that carries `Recreate`:
+
+```sh
+kubectl -n <namespace> patch deployment <release>-projector --type json \
+  -p '[{"op":"remove","path":"/spec/strategy/rollingUpdate"}]'
+```
+
+The patch is a no-op on a fresh install and on a Deployment that is already
+`Recreate`. Check with
+`kubectl -n <namespace> get deployment <release>-projector -o jsonpath='{.spec.strategy}'`:
+the result must be `{"type":"Recreate"}`.
+
 ### Projector rebuild on Kubernetes: one-off Job (method of record)
 
 `kubectl exec deploy/dev-health-acr -- acr-projector rebuild` does NOT work
