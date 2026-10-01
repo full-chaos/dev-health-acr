@@ -207,6 +207,28 @@ func TestSynthesizeChecksClaimsAgainstTheFactsTheModelWasGiven(t *testing.T) {
 	}
 }
 
+// A model caveat the disclosure displaces from a full limitation list is
+// counted on the result.
+func TestSynthesizeCountsTheCaveatTheBoundedInputDisclosureDisplaces(t *testing.T) {
+	input := largeSynthesisInputFixture(199)
+	draft := validSynthesisDraftFixture(input)
+	for index := 0; index < contractsv1.ContextFabricLimitationsMaxCount; index++ {
+		draft.Limitations = append(draft.Limitations, fmt.Sprintf("Model caveat %d.", index))
+	}
+	var given []SynthesisInput
+	synthesizer := RuntimeAnswerSynthesizer{Runtime: sizedModelRuntime{bytesPerFact: 10, maxBytes: 1000, draft: draft, given: &given}}
+
+	result, err := synthesizer.Synthesize(context.Background(), storage.Principal{OrgID: "org_1"}, input)
+
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	last := result.Limitations[len(result.Limitations)-1]
+	if len(result.Limitations) != contractsv1.ContextFabricLimitationsMaxCount || last != contractsv1.ContextFabricSynthesisInputBoundedLimitation || result.LimitationsDisplaced != 1 {
+		t.Fatalf("limitations = %d ending %q, displaced = %d; want a full list ending with the disclosure and one caveat counted as displaced", len(result.Limitations), last, result.LimitationsDisplaced)
+	}
+}
+
 func TestSynthesizeLeavesAnInputThatFitsAlone(t *testing.T) {
 	input := largeSynthesisInputFixture(9)
 	var given []SynthesisInput
