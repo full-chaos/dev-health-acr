@@ -175,10 +175,12 @@ func declaredColumns(table string) ([]string, error) {
 	return out, nil
 }
 
-// checkSpecs proves every declared column has a rule and no rule names a
-// column that is not declared.
-func checkSpecs() error {
-	for _, spec := range extractTables {
+// checkSpecs proves every declared column of every extract table has a rule
+// and no rule names a column that is not declared.
+func checkSpecs() error { return checkSpecList(extractTables) }
+
+func checkSpecList(specs []tableSpec) error {
+	for _, spec := range specs {
 		columns, err := declaredColumns(spec.Table)
 		if err != nil {
 			return err

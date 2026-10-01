@@ -60,10 +60,6 @@ type Oracle struct {
 	// ShapeCases, when set, replaces the cases the bindings generate from
 	// the store (the recorded mode replays the cases of the capture).
 	ShapeCases []ShapeCase
-	// PinnedResidual is the investment residual per theme a capture
-	// measured. When set, the residual must equal it; when nil only the
-	// sign is checked.
-	PinnedResidual map[string]float64
 	// OnlyRoots, when set, limits the run to these root fields (the
 	// acceptance gate runs one root).
 	OnlyRoots []string

@@ -79,91 +79,68 @@ type investmentVerdict struct {
 // (ruling K16). They appear only when the acr reader loses the rule.
 var regressionClasses = []Class{ClassSupersession, ClassMembershipScope, ClassNullableArgmax}
 
-// classifyInvestment compares the ops organization value per theme with the
-// sum of the acr repository mixes.
+// classifyInvestment compares, per theme, the ops organization value, the
+// sum of the acr repository mixes and the sum the store rows give for those
+// mixes (expected).
 //
-// The accepted live difference is attribution_basis: ops minus acr is the
-// effort that reaches no repository, so it is never negative. With a pinned
-// residual the difference must equal the pin; an excess over it is named by
-// the one regression class whose witness explains it (equal to it, or, when
-// no witness is equal, the only one that bounds it). Everything else is a
-// finding.
-func classifyInvestment(ops, acr, pinned map[string]float64, witnesses Witnesses) investmentVerdict {
+// When acr equals expected, what is left between ops and acr is the effort
+// that reaches no repository: the accepted class attribution_basis. When acr
+// is off expected, the difference is named only if it EQUALS the witness of
+// exactly one regression class in every theme; a difference a witness merely
+// bounds is not named. Everything else is a finding.
+func classifyInvestment(ops, acr, expected map[string]float64, witnesses Witnesses) investmentVerdict {
 	verdict := investmentVerdict{Residual: map[string]float64{}}
-	themes := themeKeys(ops, acr, pinned)
+	themes := themeKeys(ops, acr, expected)
 	excess := map[string]float64{}
-	hasExcess := false
+	off := false
 	for _, theme := range themes {
-		residual := ops[theme] - acr[theme]
-		verdict.Residual[theme] = residual
-		tol := themeTolerance(ops[theme], acr[theme])
-		switch {
-		case pinned != nil:
-			if d := pinned[theme] - residual; math.Abs(d) > tol {
-				excess[theme], hasExcess = d, true
-			}
-		case residual < -tol:
-			excess[theme], hasExcess = -residual, true
+		verdict.Residual[theme] = ops[theme] - acr[theme]
+		d := acr[theme] - expected[theme]
+		excess[theme] = d
+		if math.Abs(d) > themeTolerance(acr[theme], expected[theme]) {
+			off = true
 		}
 	}
-	if !hasExcess {
+	if !off {
 		for _, theme := range themes {
-			if verdict.Residual[theme] > themeTolerance(ops[theme], acr[theme]) {
+			residual := verdict.Residual[theme]
+			tol := themeTolerance(ops[theme], acr[theme])
+			switch {
+			case residual > tol:
 				verdict.Differences = append(verdict.Differences, Difference{
-					Pair: "investment_org", Key: theme, Class: ClassAttributionBasis, Exact: pinned != nil,
+					Pair: "investment_org", Key: theme, Class: ClassAttributionBasis, Exact: true,
 					Detail: "ops organization value minus the sum of the acr repository mixes: effort that reaches no repository",
-					Values: map[string]float64{"residual": verdict.Residual[theme], "ops": ops[theme], "acr_repository_sum": acr[theme]},
+					Values: map[string]float64{"residual": residual, "ops": ops[theme], "acr_repository_sum": acr[theme]},
 				})
-			} else {
+			case residual < -tol:
+				verdict.Findings = append(verdict.Findings, fmt.Sprintf("theme %s: the acr repository sum is above the ops organization value by %s", theme, formatFloat(-residual)))
+			default:
 				verdict.Matches++
 			}
 		}
 		return verdict
 	}
-	var exact, bounded []Class
+	var named []Class
 	for _, class := range regressionClasses {
 		witness := witnesses[class]
-		isExact, isBound, any := true, true, false
+		equal := true
 		for _, theme := range themes {
-			tol := themeTolerance(ops[theme], acr[theme], witness[theme])
-			d := excess[theme]
-			if math.Abs(d-witness[theme]) > tol {
-				isExact = false
-			}
-			if d < -tol || d > witness[theme]+tol {
-				isBound = false
-			}
-			if witness[theme] > tol {
-				any = true
+			if math.Abs(excess[theme]-witness[theme]) > themeTolerance(acr[theme], expected[theme], witness[theme]) {
+				equal = false
 			}
 		}
-		if !any {
-			continue
-		}
-		if isExact {
-			exact = append(exact, class)
-		}
-		if isBound {
-			bounded = append(bounded, class)
+		if equal {
+			named = append(named, class)
 		}
 	}
-	var named Class
-	isExact := false
-	switch {
-	case len(exact) == 1:
-		named, isExact = exact[0], true
-	case len(exact) == 0 && len(bounded) == 1:
-		named = bounded[0]
-	}
-	if named == "" {
+	if len(named) != 1 {
 		verdict.Findings = append(verdict.Findings, fmt.Sprintf(
-			"the acr repository sum is above what the attribution basis allows by %s and no single class witness explains it (equal: %v, bounding: %v)",
-			formatThemes(excess), exact, bounded))
+			"the acr repository sum is off what the store rows give by %s and it equals the witness of %d classes %v", formatThemes(excess), len(named), named))
 		return verdict
 	}
 	verdict.Differences = append(verdict.Differences, Difference{
-		Pair: "investment_org", Key: "all themes", Class: named, Exact: isExact, Values: excess,
-		Detail: "the acr repository mixes hold effort the ops reading leaves out; the store witness of this class explains the excess",
+		Pair: "investment_org", Key: "all themes", Class: named[0], Exact: true, Values: excess,
+		Detail: "the acr repository mixes hold effort the ops reading leaves out; it equals the store witness of this class",
 	})
 	return verdict
 }
@@ -243,7 +220,14 @@ func compareInvestment(ctx context.Context, o *Oracle, rr *RootReport) error {
 		}
 	}
 	o.RepositoryEffort = byRepo
-	verdict := classifyInvestment(ops, acr, o.PinnedResidual, o.Store.Witnesses(o.Window))
+	expectedByRepo := o.Store.ExpectedRepositoryEffort(o.Window)
+	expected := map[string]float64{}
+	for _, effort := range expectedByRepo {
+		for theme, value := range effort {
+			expected[theme] += value
+		}
+	}
+	verdict := classifyInvestment(ops, acr, expected, o.Store.Witnesses(o.Window))
 	rr.Compared += len(themeKeys(ops, acr))
 	rr.Matches += verdict.Matches
 	for _, d := range verdict.Differences {
@@ -253,6 +237,24 @@ func compareInvestment(ctx context.Context, o *Oracle, rr *RootReport) error {
 		rr.find(Finding{Pair: "investment_org", Detail: detail})
 	}
 	o.Residual, rr.Residual = verdict.Residual, verdict.Residual
+	// Repository by repository, when the sums agree: effort that moved from
+	// one repository to another is not seen in a sum.
+	if len(verdict.Differences) == 0 || verdict.Differences[0].Class == ClassAttributionBasis {
+		moved := 0
+		for _, repo := range o.Store.RepositoryIDs() {
+			for _, theme := range themeKeys(byRepo[repo], expectedByRepo[repo]) {
+				rr.Compared++
+				if math.Abs(byRepo[repo][theme]-expectedByRepo[repo][theme]) <= themeTolerance(byRepo[repo][theme], expectedByRepo[repo][theme]) {
+					rr.Matches++
+				} else {
+					moved++
+				}
+			}
+		}
+		if moved > 0 {
+			rr.find(Finding{Pair: "investment_repository", Detail: fmt.Sprintf("%d repository and theme values of the acr mix are off what the store rows give", moved)})
+		}
+	}
 	return compareTeamRollup(ctx, o, rr, byRepo)
 }
 
@@ -299,7 +301,7 @@ func compareTeamRollup(ctx context.Context, o *Oracle, rr *RootReport, byRepo ma
 		want, nameOnly := sum(owned[team]), sum(byNameOnly[team])
 		themes := themeKeys(want, got[team])
 		deficit := map[string]float64{}
-		equal, explained, anyNameOnly := true, true, false
+		equal, explained := true, true
 		for _, theme := range themes {
 			tol := relSum * math.Max(1, math.Max(math.Abs(want[theme]), math.Abs(got[team][theme])))
 			d := want[theme] - got[team][theme]
@@ -310,15 +312,12 @@ func compareTeamRollup(ctx context.Context, o *Oracle, rr *RootReport, byRepo ma
 			if math.Abs(d-nameOnly[theme]) > tol {
 				explained = false
 			}
-			if nameOnly[theme] > tol {
-				anyNameOnly = true
-			}
 		}
 		rr.Compared += len(themes)
 		switch {
 		case equal:
 			rr.Matches += len(themes)
-		case explained && anyNameOnly:
+		case explained:
 			rr.differ(Difference{Pair: "investment_team_rollup", Key: "team", Class: ClassNullRepoID, Exact: true, Values: deficit,
 				Detail: "the team mix lacks exactly the mix of the repositories that only an ownership row with no repo_id names"})
 		default:

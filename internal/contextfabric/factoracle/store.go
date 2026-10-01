@@ -10,9 +10,12 @@ import (
 )
 
 // Store is the reference reading of the extract rows: what the two planes
-// read, reduced only as far as the witnesses of the named classes need. It
-// does not attribute effort to repositories; that is the acr producer's
-// work and it is never repeated here.
+// read. It restates, in Go and over the rows, the two readings the oracle
+// compares: the ops organization value (OrgThemeEffort) and the acr
+// repository mix (ExpectedRepositoryEffort, the pull request reference share
+// of devhealthfacts repoMixStatement). It is a test model, not a producer:
+// the live mode and the recorded mode both hold it against the real planes on
+// real rows, so a wrong model fails there before it can excuse a difference.
 type Store struct {
 	extract *Extract
 	units   map[string]*unitGenerations
@@ -23,6 +26,10 @@ type Store struct {
 	scopeRun string
 	// inRun is the work units of scopeRun.
 	inRun map[string]bool
+	// repoIDs is the organization's repository ids; reposByName maps
+	// provider + NUL + name to the ids that carry that name.
+	repoIDs     map[string]bool
+	reposByName map[string][]string
 }
 
 type unitGeneration struct {
@@ -33,6 +40,8 @@ type unitGeneration struct {
 	effort     float64
 	themes     map[string]float64
 	subcats    map[string]float64
+	prs        []string
+	issues     []string
 }
 
 type unitGenerations struct {
@@ -93,7 +102,8 @@ func rowMap(row Row, column string) (map[string]float64, error) {
 
 // NewStore reads the extract rows.
 func NewStore(extract *Extract) (*Store, error) {
-	s := &Store{extract: extract, units: map[string]*unitGenerations{}, superseded: map[string]bool{}, inRun: map[string]bool{}}
+	s := &Store{extract: extract, units: map[string]*unitGenerations{}, superseded: map[string]bool{}, inRun: map[string]bool{},
+		repoIDs: map[string]bool{}, reposByName: map[string][]string{}}
 	generations := map[string][]unitGeneration{}
 	for _, row := range extract.Tables["work_unit_investments"] {
 		id, ok := rowString(row, "work_unit_id")
@@ -123,6 +133,16 @@ func NewStore(extract *Extract) (*Store, error) {
 		if repo, ok := rowString(row, "repo_id"); ok {
 			gen.repoID = &repo
 		}
+		if evidence, ok := rowString(row, "structural_evidence_json"); ok {
+			var refs struct {
+				PRs    []string `json:"prs"`
+				Issues []string `json:"issues"`
+			}
+			// JSONExtract over text that is not JSON yields no reference.
+			if json.Unmarshal([]byte(evidence), &refs) == nil {
+				gen.prs, gen.issues = refs.PRs, refs.Issues
+			}
+		}
 		generations[id] = append(generations[id], gen)
 	}
 	for id, gens := range generations {
@@ -138,6 +158,7 @@ func NewStore(extract *Extract) (*Store, error) {
 		}
 		s.units[id] = unit
 	}
+	s.readRepositories()
 	for _, row := range extract.Tables["work_unit_supersessions"] {
 		if id, ok := rowString(row, "superseded_work_unit_id"); ok {
 			s.superseded[id] = true
@@ -207,12 +228,6 @@ func addSubcategoryEffort(out map[string]float64, gen unitGeneration) {
 	}
 }
 
-func addThemeEffort(out map[string]float64, gen unitGeneration) {
-	for theme, share := range gen.themes {
-		out[theme] += share * gen.effort
-	}
-}
-
 func (s *Store) unitIDs() []string {
 	ids := make([]string, 0, len(s.units))
 	for id := range s.units {
@@ -222,15 +237,145 @@ func (s *Store) unitIDs() []string {
 	return ids
 }
 
-// Witnesses are, per class, the theme effort the store holds that an acr
-// reader without that class's rule would add to a repository mix. It is an
-// upper bound per theme (a unit may reach no repository); it is exact for a
-// unit that names its repository itself.
+// readRepositories builds the name lookup of the repository mix: per
+// repository id the latest name, and its provider when the id has one
+// provider only (repoMixStatement's `rl` subquery).
+func (s *Store) readRepositories() {
+	type latest struct {
+		at        time.Time
+		name      string
+		provider  string
+		providers map[string]bool
+	}
+	byID := map[string]*latest{}
+	for _, row := range s.extract.Tables["repos"] {
+		id, ok := rowString(row, "id")
+		if !ok {
+			continue
+		}
+		id = strings.ToLower(id)
+		name, _ := rowString(row, "repo")
+		provider, _ := rowString(row, "provider")
+		at, _ := rowTime(row, "last_synced")
+		entry := byID[id]
+		if entry == nil {
+			entry = &latest{at: at, name: name, provider: provider, providers: map[string]bool{}}
+			byID[id] = entry
+		} else if at.After(entry.at) {
+			entry.at, entry.name, entry.provider = at, name, provider
+		}
+		entry.providers[provider] = true
+	}
+	for id, entry := range byID {
+		s.repoIDs[id] = true
+		provider := entry.provider
+		if len(entry.providers) != 1 {
+			provider = ""
+		}
+		key := provider + "\x00" + entry.name
+		s.reposByName[key] = append(s.reposByName[key], id)
+	}
+}
+
+// reach is the share of a work unit's effort each organization repository
+// gets: the unit's pull request references, each resolved to a repository,
+// counted distinct per repository, over the count of all its references. A
+// reference that resolves to no repository keeps its share and gives it to
+// nobody. A unit with no reference reaches its own repo_id.
+func (s *Store) reach(gen unitGeneration, repoID *string) map[string]float64 {
+	distinct := map[string]map[string]bool{}
+	add := func(repo, item string) {
+		if distinct[repo] == nil {
+			distinct[repo] = map[string]bool{}
+		}
+		distinct[repo][item] = true
+	}
+	refs := 0
+	for _, ref := range gen.prs {
+		if m := evidenceUUIDRef.FindStringSubmatch(ref); m != nil {
+			refs++
+			add(m[1], m[1]+"#"+m[2])
+		}
+	}
+	for _, ref := range gen.issues {
+		provider, m := "github", evidenceGithubRef.FindStringSubmatch(ref)
+		if m == nil {
+			provider, m = "gitlab", evidenceGitlabRef.FindStringSubmatch(ref)
+		}
+		if m == nil {
+			continue
+		}
+		refs++
+		matched := s.reposByName[provider+"\x00"+m[1]]
+		if len(matched) == 0 {
+			add("", ref)
+		}
+		for _, repo := range matched {
+			add(repo, repo+"#"+m[2])
+		}
+	}
+	if refs == 0 && repoID != nil {
+		add(strings.ToLower(*repoID), strings.ToLower(*repoID)+"#")
+	}
+	total := 0
+	for _, items := range distinct {
+		total += len(items)
+	}
+	out := map[string]float64{}
+	for repo, items := range distinct {
+		if repo != "" && s.repoIDs[repo] {
+			out[repo] = float64(len(items)) / float64(total)
+		}
+	}
+	return out
+}
+
+func reachTotal(reach map[string]float64) float64 {
+	total := 0.0
+	for _, share := range reach {
+		total += share
+	}
+	return total
+}
+
+// ExpectedRepositoryEffort is the acr repository mix the store rows give:
+// per repository and theme, effort_value x theme share x the repository's
+// share of the unit, over the latest generation of every work unit in scope
+// and in the window.
+func (s *Store) ExpectedRepositoryEffort(w Window) map[string]map[string]float64 {
+	out := map[string]map[string]float64{}
+	for _, id := range s.unitIDs() {
+		unit := s.units[id]
+		if !s.inScope(id) || !w.holds(unit.latest) {
+			continue
+		}
+		for repo, share := range s.reach(unit.latest, unit.latest.repoID) {
+			if out[repo] == nil {
+				out[repo] = map[string]float64{}
+			}
+			for theme, themeShare := range unit.latest.themes {
+				out[repo][theme] += unit.latest.effort * themeShare * share
+			}
+		}
+	}
+	return out
+}
+
+// Witnesses are, per regression class, the theme effort the repository mixes
+// gain when the reader loses that class's rule: the effort, as far as it
+// reaches a repository, of the superseded work units, of the work units
+// outside the membership run, and of the work units whose latest NULL
+// repo_id an older generation would replace.
 type Witnesses map[Class]map[string]float64
 
 // Witnesses computes the witness of every investment regression class.
 func (s *Store) Witnesses(w Window) Witnesses {
 	out := Witnesses{ClassSupersession: {}, ClassMembershipScope: {}, ClassNullableArgmax: {}}
+	add := func(class Class, gen unitGeneration, share float64) {
+		for theme, themeShare := range gen.themes {
+			out[class][theme] += gen.effort * themeShare * share
+		}
+	}
 	for _, id := range s.unitIDs() {
 		unit := s.units[id]
 		if !w.holds(unit.latest) {
@@ -238,26 +383,19 @@ func (s *Store) Witnesses(w Window) Witnesses {
 		}
 		switch {
 		case s.superseded[id]:
-			addThemeEffort(out[ClassSupersession], unit.latest)
+			add(ClassSupersession, unit.latest, reachTotal(s.reach(unit.latest, unit.latest.repoID)))
 		case s.scopeRun != "" && !s.inRun[id]:
-			addThemeEffort(out[ClassMembershipScope], unit.latest)
+			add(ClassMembershipScope, unit.latest, reachTotal(s.reach(unit.latest, unit.latest.repoID)))
 		case unit.revivedRepo != "":
-			addThemeEffort(out[ClassNullableArgmax], unit.latest)
+			revived := unit.revivedRepo
+			add(ClassNullableArgmax, unit.latest, reachTotal(s.reach(unit.latest, &revived))-reachTotal(s.reach(unit.latest, nil)))
 		}
 	}
 	return out
 }
 
 // RepositoryIDs lists the organization's repository ids, sorted.
-func (s *Store) RepositoryIDs() []string {
-	seen := map[string]bool{}
-	for _, row := range s.extract.Tables["repos"] {
-		if id, ok := rowString(row, "id"); ok {
-			seen[strings.ToLower(id)] = true
-		}
-	}
-	return sortedKeys(seen)
-}
+func (s *Store) RepositoryIDs() []string { return sortedKeys(s.repoIDs) }
 
 // TeamIDs lists the active teams, sorted.
 func (s *Store) TeamIDs() []string {

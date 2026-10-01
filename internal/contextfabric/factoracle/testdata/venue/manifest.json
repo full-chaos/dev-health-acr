@@ -1,5 +1,5 @@
 {
-  "captured_at": "2026-10-01T16:24:42Z",
+  "captured_at": "2026-10-01T16:37:25Z",
   "window": {
     "start": "2026-09-01T00:00:00Z",
     "end": "2026-10-02T00:00:00Z"
@@ -460,7 +460,7 @@
         "input": {
           "historyDays": 90,
           "simulations": 1000,
-          "teamId": "team:team-8fd96a4d73de37e3"
+          "teamId": "team:team-5a059b9d44e73476"
         }
       }
     },
@@ -611,7 +611,7 @@
       "variables": {
         "input": {
           "sinceDate": "2026-09-01",
-          "teamId": "team:team-8fd96a4d73de37e3",
+          "teamId": "team:team-5a059b9d44e73476",
           "untilDate": "2026-10-01"
         }
       }
@@ -621,7 +621,7 @@
       "variables": {
         "input": {
           "sinceDate": "2026-09-01",
-          "teamId": "team:team-8fd96a4d73de37e3",
+          "teamId": "team:team-5a059b9d44e73476",
           "untilDate": "2026-10-01"
         }
       }
@@ -631,7 +631,7 @@
       "variables": {
         "input": {
           "sinceDate": "2026-09-01",
-          "teamId": "team:team-8fd96a4d73de37e3",
+          "teamId": "team:team-5a059b9d44e73476",
           "untilDate": "2026-10-01"
         }
       }
@@ -882,7 +882,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-8fd96a4d73de37e3"
+            "team:team-5a059b9d44e73476"
           ]
         }
       }
@@ -893,7 +893,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-8fd96a4d73de37e3"
+            "team:team-5a059b9d44e73476"
           ]
         }
       }
@@ -904,7 +904,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-8fd96a4d73de37e3"
+            "team:team-5a059b9d44e73476"
           ]
         }
       }
@@ -915,7 +915,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-8fd96a4d73de37e3"
+            "team:team-5a059b9d44e73476"
           ]
         }
       }
@@ -926,7 +926,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-8fd96a4d73de37e3"
+            "team:team-5a059b9d44e73476"
           ]
         }
       }
@@ -937,7 +937,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-8fd96a4d73de37e3"
+            "team:team-5a059b9d44e73476"
           ]
         }
       }
@@ -948,7 +948,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-8fd96a4d73de37e3"
+            "team:team-5a059b9d44e73476"
           ]
         }
       }
@@ -959,7 +959,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-8fd96a4d73de37e3"
+            "team:team-5a059b9d44e73476"
           ]
         }
       }
@@ -970,7 +970,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-8fd96a4d73de37e3"
+            "team:team-5a059b9d44e73476"
           ]
         }
       }
@@ -1046,8 +1046,8 @@
   ],
   "residual": {
     "feature_delivery": 0.004845833173021674,
-    "maintenance": 0.0027481766301207244,
-    "operational": 0.0002446650469209999,
+    "maintenance": 0.0027481766883283854,
+    "operational": 0.00024466507602483034,
     "quality": 0.002130022563505918,
     "risk": 0.00047797006845939904
   },
@@ -1057,8 +1057,8 @@
       "listener": "served",
       "shapes_run": 24,
       "leaves": 384,
-      "compared": 20,
-      "matches": 20,
+      "compared": 40,
+      "matches": 40,
       "by_class": {},
       "findings": [],
       "not_joined": []
