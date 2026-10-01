@@ -38,7 +38,8 @@ type SynthesisInputBoundEvent struct {
 	KindsRead     int
 	KindsGiven    int
 	KindsBounded  int
-	// Selection is how the facts that stayed were chosen on the last pass.
+	// Selection is "relevance" when, on any pass, the ranking kept a fact a
+	// read-order cut would not have, and "position" otherwise.
 	Selection SynthesisInputSelection
 }
 
@@ -101,12 +102,21 @@ func boundSynthesisFacts(facts []CanonicalFact, ranking factRanking, overflow *M
 	for kind, indexes := range byKind {
 		ordered := append([]int(nil), indexes...)
 		sort.SliceStable(ordered, func(i, j int) bool { return scores[ordered[i]].before(scores[ordered[j]]) })
-		for rank, index := range ordered {
-			if index != indexes[rank] {
+		limit := quota[kind]
+		if limit > len(indexes) {
+			limit = len(indexes)
+		}
+		if limit < 0 {
+			limit = 0
+		}
+		positional := make(map[int]struct{}, limit)
+		for _, index := range indexes[:limit] {
+			positional[index] = struct{}{}
+		}
+		for _, index := range ordered[:limit] {
+			keep[index] = true
+			if _, ok := positional[index]; !ok {
 				selection = SynthesisInputSelectionRelevance
-			}
-			if rank < quota[kind] {
-				keep[index] = true
 			}
 		}
 	}
@@ -158,7 +168,7 @@ func newFactRanking(input SynthesisInput) factRanking {
 type factRelevance struct {
 	committed bool
 	required  bool
-	// overlap: 3 inside the window, 2 partly inside, 1 unknown, 0 outside.
+	// overlap: 3 inside the window, 2 partly inside or of unknown period, 0 outside.
 	overlap  int
 	observed time.Time
 }
@@ -179,7 +189,7 @@ func (a factRelevance) before(b factRelevance) bool {
 func (r factRanking) score(fact CanonicalFact) factRelevance {
 	var score factRelevance
 	for _, subject := range r.committed {
-		if subject.CanonicalID == fact.Subject.CanonicalID {
+		if sameSubject(subject, fact.Subject) {
 			score.committed = true
 			break
 		}
@@ -193,7 +203,7 @@ func (r factRanking) score(fact CanonicalFact) factRelevance {
 			break
 		}
 		for _, subject := range requirement.Subjects {
-			if subject.CanonicalID == fact.Subject.CanonicalID {
+			if sameSubject(subject, fact.Subject) {
 				score.required = true
 			}
 		}
@@ -213,7 +223,7 @@ func (r factRanking) overlap(fact CanonicalFact) int {
 	}
 	from, to, ok := factPeriod(fact)
 	if !ok {
-		return 1
+		return 2
 	}
 	switch {
 	case to.Before(*r.windowStart) || from.After(*r.windowEnd):
@@ -223,6 +233,10 @@ func (r factRanking) overlap(fact CanonicalFact) int {
 	default:
 		return 2
 	}
+}
+
+func sameSubject(a, b SubjectRef) bool {
+	return a.Kind == b.Kind && a.CanonicalID == b.CanonicalID
 }
 
 func factPeriod(fact CanonicalFact) (time.Time, time.Time, bool) {

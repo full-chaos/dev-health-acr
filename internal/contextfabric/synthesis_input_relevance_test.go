@@ -106,8 +106,8 @@ func TestBoundSynthesisFactsRanksAPeriodFullyInsideAbovePartlyInside(t *testing.
 	partly := ranking.score(period("partly", "2026-06-01", "2026-07-15"))
 	outside := ranking.score(period("outside", "2026-01-01", "2026-02-01"))
 	unknown := ranking.score(relevanceFact(FactMetrics, "unknown", *atDay(1), nil))
-	if !(inside.overlap > partly.overlap && partly.overlap > unknown.overlap && unknown.overlap > outside.overlap) {
-		t.Fatalf("overlap inside=%d partly=%d unknown=%d outside=%d, want inside > partly > unknown > outside", inside.overlap, partly.overlap, unknown.overlap, outside.overlap)
+	if !(inside.overlap > partly.overlap && partly.overlap == unknown.overlap && unknown.overlap > outside.overlap) {
+		t.Fatalf("overlap inside=%d partly=%d unknown=%d outside=%d, want inside > partly = unknown > outside", inside.overlap, partly.overlap, unknown.overlap, outside.overlap)
 	}
 }
 
@@ -130,5 +130,47 @@ func TestBoundSynthesisFactsLeavesAnInputThatNeedsNoCutAlone(t *testing.T) {
 	bounded, reduced, _ := boundSynthesisFacts(facts, ranking, &ModelInputOverflow{Bytes: 100, MaxBytes: 1000})
 	if reduced || !reflect.DeepEqual(bounded, facts) {
 		t.Fatalf("reduced = %v kept = %v, want every fact in read order", reduced, keptIDs(bounded))
+	}
+}
+
+func TestBoundSynthesisFactsKeepsTheSubjectOfTheNamedKindNotAnotherKindWithTheSameID(t *testing.T) {
+	team := relevanceFact(FactWork, "shared", *atDay(1), nil)
+	team.Subject.Kind = SubjectTeam
+	project := relevanceFact(FactWork, "shared", *atDay(1), nil)
+	project.Subject.Kind = SubjectProject
+	ranking := factRanking{requirements: []FactRequirement{{Kind: FactWork, Subjects: []SubjectRef{project.Subject}}}}
+
+	bounded, _, selection := boundSynthesisFacts([]CanonicalFact{team, project}, ranking, &ModelInputOverflow{Bytes: 200, MaxBytes: 100})
+
+	if len(bounded) != 1 || bounded[0].Subject.Kind != SubjectProject || selection != SynthesisInputSelectionRelevance {
+		t.Fatalf("kept = %+v selection = %q, want only the project fact", bounded, selection)
+	}
+}
+
+func TestBoundSynthesisFactsKeepsTheFactsInsideTheQuestionWindow(t *testing.T) {
+	outside := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	facts := boundFixtureFacts(FactPullRequests, SubjectPullRequest, 10)
+	for index := range facts {
+		facts[index].EventAt = &outside
+	}
+	facts[9].EventAt = atDay(5)
+
+	bounded, _, selection := boundSynthesisFacts(facts, relevanceRanking(), &ModelInputOverflow{Bytes: 200, MaxBytes: 100})
+
+	kept := keptIDs(bounded)
+	if selection != SynthesisInputSelectionRelevance || kept[len(kept)-1] != facts[9].Subject.CanonicalID {
+		t.Fatalf("kept = %v selection = %q, want the one fact inside the window kept", kept, selection)
+	}
+}
+
+func TestBoundSynthesisFactsReportsPositionWhenOnlyTheCutTailMoves(t *testing.T) {
+	facts := boundFixtureFacts(FactWork, SubjectWorkItem, 10)
+	ranking := factRanking{requirements: []FactRequirement{{Kind: FactWork, Subjects: []SubjectRef{facts[0].Subject, facts[1].Subject, facts[2].Subject, facts[3].Subject}}}}
+	ranking.requirements[0].Subjects = ranking.requirements[0].Subjects[:4]
+
+	_, _, selection := boundSynthesisFacts(facts, ranking, &ModelInputOverflow{Bytes: 200, MaxBytes: 100})
+
+	if selection != SynthesisInputSelectionPosition {
+		t.Fatalf("selection = %q, want position: the first four read are the named four", selection)
 	}
 }
