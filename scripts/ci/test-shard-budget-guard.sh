@@ -14,7 +14,7 @@ expect() { # name want_rc want_pattern budget file
   local name="$1" want="$2" pat="$3" budget="$4" f="$5" rc=0 out
   out="$("$guard" "$budget" "$f" 2>&1)" || rc=$?
   if [ "$rc" -ne "$want" ] || ! grep -q -- "$pat" <<<"$out"; then
-    echo "FAIL $name: rc=$rc want=$want pattern='$pat'"; echo "$out" | sed 's/^/    /'
+    echo "FAIL $name: rc=$rc want=$want pattern='$pat'"; printf '    %s\n' "${out//$'\n'/$'\n    '}"
     fails=$((fails + 1))
   else
     echo "ok   $name"
