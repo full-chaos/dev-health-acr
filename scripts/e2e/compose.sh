@@ -447,7 +447,7 @@ seed_go_api_routing() {
     sleep 4
   done
   printf '%s\n' "$output" | redact_log | tail -5 >&2
-  dho go-api routing status --json 2>/dev/null \
+  compose exec -T api dev-hops go-api routing status --json 2>/dev/null \
     | jq -e '[.. | objects | select(has("mode")) | .mode] | length > 0 and all(. == "primary")' >/dev/null \
     || die 'Go API routing rows are not all in primary mode after enablement'
 }
