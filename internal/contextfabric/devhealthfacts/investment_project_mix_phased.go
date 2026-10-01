@@ -637,29 +637,32 @@ func readProjectNativeMixRowsOnce(ctx context.Context, client contextpacket.Clic
 
 const projectMixMaxAttempts = 3
 
-// projectMixInputSource is one table a mix reads and the columns that identify
-// and version its rows.
-type projectMixInputSource struct{ table, columns string }
+// projectMixInputSource is one table a mix reads, as the FROM clause that reads it,
+// and the columns that identify and version its rows. The table is named inside
+// the clause (the way every other statement here names its tables), never as a
+// bare string literal: the schema closure guard treats a file that lists several
+// declared tables as literals as a second physical source.
+type projectMixInputSource struct{ from, columns string }
 
 var projectMixCommonInputSources = []projectMixInputSource{
-	{"projects", "provider, id, project_key, is_active, state, updated_at"},
-	{"work_unit_supersessions", "superseded_work_unit_id, superseded_at"},
-	{"work_unit_membership_runs", "run_id, completed_at"},
+	{"FROM projects", "provider, id, project_key, is_active, state, updated_at"},
+	{"FROM work_unit_supersessions", "superseded_work_unit_id, superseded_at"},
+	{"FROM work_unit_membership_runs", "run_id, completed_at"},
 }
 
 // projectRollupInputSources: everything the roll-up's link capture and arms read.
 var projectRollupInputSources = append(append([]projectMixInputSource{}, projectMixCommonInputSources...),
-	projectMixInputSource{"team_project_ownership", "provider, team_id, project_id, source, valid_from, valid_to, updated_at"},
-	projectMixInputSource{"team_repo_ownership", "provider, team_id, repo_id, match_type, source, is_primary, valid_from, valid_to, updated_at"},
-	projectMixInputSource{"teams", "id, provider, is_active, updated_at"},
-	projectMixInputSource{"repos", "id, repo, provider, last_synced"},
-	projectMixInputSource{"work_item_team_attributions", "repo_id, work_item_id, team_id, source, is_primary, computed_at"},
+	projectMixInputSource{"FROM team_project_ownership", "provider, team_id, project_id, source, valid_from, valid_to, updated_at"},
+	projectMixInputSource{"FROM team_repo_ownership", "provider, team_id, repo_id, match_type, source, is_primary, valid_from, valid_to, updated_at"},
+	projectMixInputSource{"FROM teams", "id, provider, is_active, updated_at"},
+	projectMixInputSource{"FROM repos", "id, repo, provider, last_synced"},
+	projectMixInputSource{"FROM work_item_team_attributions", "repo_id, work_item_id, team_id, source, is_primary, computed_at"},
 )
 
 // projectNativeInputSources: everything the native placement reads.
 var projectNativeInputSources = append(append([]projectMixInputSource{}, projectMixCommonInputSources...),
-	projectMixInputSource{"work_items", "repo_id, work_item_id, project_id, last_synced"},
-	projectMixInputSource{"project_membership_transitions", "repo_id, subject_kind, subject_id, from_project_id, to_project_id, occurred_at, event_id, last_synced"},
+	projectMixInputSource{"FROM work_items", "repo_id, work_item_id, project_id, last_synced"},
+	projectMixInputSource{"FROM project_membership_transitions", "repo_id, subject_kind, subject_id, from_project_id, to_project_id, occurred_at, event_id, last_synced"},
 )
 
 // projectMixInputsStatement returns ONE row: per source, (count, digest).
@@ -667,7 +670,7 @@ func projectMixInputsStatement(sources []projectMixInputSource) string {
 	withs := make([]string, 0, len(sources))
 	cols := make([]string, 0, 2*len(sources))
 	for i, src := range sources {
-		withs = append(withs, fmt.Sprintf("(SELECT (count(), sum(cityHash64(%s))) FROM %s WHERE org_id = {org_id:String}) AS d%d", src.columns, src.table, i))
+		withs = append(withs, fmt.Sprintf("(SELECT (count(), sum(cityHash64(%s))) %s WHERE org_id = {org_id:String}) AS d%d", src.columns, src.from, i))
 		cols = append(cols, fmt.Sprintf("d%d.1, d%d.2", i, i))
 	}
 	return "SELECT * FROM (WITH " + strings.Join(withs, ",\n") + "\nSELECT " + strings.Join(cols, ", ") + ")"
