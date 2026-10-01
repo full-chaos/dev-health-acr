@@ -113,20 +113,34 @@ func (o *Oracle) facts(ctx context.Context, kind, subjectKind string, ids []stri
 	return o.readFacts(ctx, kind, subjectKind, ids, true)
 }
 
-// currentFacts reads one fact kind with no window: the kind's current
-// answer. It is for the kinds whose ops counterpart takes no window.
+// currentFacts reads the scalar fields of one fact kind with no window: the
+// kind's current answer, tables omitted. It is for the kinds whose ops
+// counterpart takes no window. With no window a daily series runs over all
+// time and the provider's row cap cuts it, so the read is marked truncated;
+// the scalar facts are one per subject or work scope and are not cut by a
+// series. A read at the row cap itself is refused.
 func (o *Oracle) currentFacts(ctx context.Context, kind, subjectKind string, ids []string) ([]ServedFact, error) {
 	return o.readFacts(ctx, kind, subjectKind, ids, false)
 }
 
+// factRowCap is the fact providers' row cap per query.
+const factRowCap = 200
+
 func (o *Oracle) readFacts(ctx context.Context, kind, subjectKind string, ids []string, windowed bool) ([]ServedFact, error) {
 	var out []ServedFact
-	const chunk = 10
+	// A provider's row cap is shared by the subjects of one read: with many
+	// teams in one request the daily series of some are cut or absent. A
+	// team is read alone; a repository fact carries small tables only.
+	chunk := 10
+	if subjectKind == "team" {
+		chunk = 1
+	}
 	for start := 0; start < len(ids); start += chunk {
 		end := min(start+chunk, len(ids))
-		request := FactsRequest{Kinds: []string{kind}, MaxBytes: directread.MaxMaxBytes}
+		request := FactsRequest{Kinds: []string{kind}, MaxBytes: directread.MaxMaxBytes, Tables: directread.TablesOmit}
 		if windowed {
 			request.Window = &FactsWindow{Mode: directread.WindowRange, Start: o.Window.Start, End: o.Window.End}
+			request.Tables = directread.TablesInclude
 		}
 		for _, id := range ids[start:end] {
 			request.Subjects = append(request.Subjects, FactsSubject{Kind: subjectKind, CanonicalID: subjectKind + ":" + id})
@@ -139,16 +153,19 @@ func (o *Oracle) readFacts(ctx context.Context, kind, subjectKind string, ids []
 		if err := decodeNumbered(raw, &answer); err != nil {
 			return nil, fmt.Errorf("read_facts %s: answer is not JSON: %w", kind, err)
 		}
-		// A partial read is a read with a subject that has no fact, or a
-		// table cut by the provider row cap. Both are compared as they are;
-		// a read that could not measure is not.
+		// A partial read is a read with a subject that has no fact. A read
+		// that could not measure, or that was cut, is not compared.
 		if answer.Status != directread.StatusComplete && answer.Status != directread.StatusPartial {
 			return nil, fmt.Errorf("read_facts %s: status %s", kind, answer.Status)
 		}
 		for _, row := range answer.Coverage {
-			if row.Outcome == directread.OutcomeUnavailable || row.Outcome == directread.OutcomeWithheldBudget {
-				return nil, fmt.Errorf("read_facts %s: a subject was not measured (%s)", kind, row.Outcome)
+			cut := row.Outcome == directread.OutcomeTruncated && windowed
+			if row.Outcome == directread.OutcomeUnavailable || row.Outcome == directread.OutcomeWithheldBudget || cut {
+				return nil, fmt.Errorf("read_facts %s: a subject was not measured whole (%s)", kind, row.Outcome)
 			}
+		}
+		if len(answer.Facts) >= factRowCap {
+			return nil, fmt.Errorf("read_facts %s: %d facts in one read, at the provider row cap", kind, len(answer.Facts))
 		}
 		if answer.Truncation != nil {
 			return nil, fmt.Errorf("read_facts %s: truncated by %s", kind, answer.Truncation.TruncatedBy)

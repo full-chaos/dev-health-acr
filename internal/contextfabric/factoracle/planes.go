@@ -29,6 +29,7 @@ type FactsRequest struct {
 	Kinds    []string       `json:"kinds"`
 	Subjects []FactsSubject `json:"subjects"`
 	Window   *FactsWindow   `json:"window,omitempty"`
+	Tables   string         `json:"tables,omitempty"`
 	MaxBytes int            `json:"max_bytes,omitempty"`
 }
 
@@ -422,7 +423,7 @@ func (p *LocalPlanes) Operation(ctx context.Context, shape Shape, variables map[
 
 // Facts implements Planes.
 func (p *LocalPlanes) Facts(ctx context.Context, request FactsRequest) (json.RawMessage, error) {
-	read := directread.FactsRequest{Kinds: request.Kinds, MaxBytes: request.MaxBytes}
+	read := directread.FactsRequest{Kinds: request.Kinds, MaxBytes: request.MaxBytes, Tables: request.Tables}
 	for _, s := range request.Subjects {
 		read.Subjects = append(read.Subjects, directread.RequestSubject{Kind: s.Kind, CanonicalID: s.CanonicalID})
 	}
@@ -474,7 +475,18 @@ func (p *VenuePlanes) call(ctx context.Context, tool string, arguments any) (jso
 		if status != http.StatusOK {
 			return nil, fmt.Errorf("venue call %s: HTTP %d", tool, status)
 		}
-		return venueStructuredContent(tool, raw)
+		content, limited, err := venueStructuredContent(tool, raw)
+		if limited && attempt < venueRetries {
+			// The API behind the MCP server answered its own rate limit; the
+			// server hands that on as a tool error.
+			select {
+			case <-ctx.Done():
+				return nil, fmt.Errorf("venue call %s: rate limited and the run deadline passed", tool)
+			case <-time.After(5 * time.Second):
+			}
+			continue
+		}
+		return content, err
 	}
 }
 
@@ -513,7 +525,9 @@ func (p *VenuePlanes) post(ctx context.Context, tool string, arguments any) (raw
 	return raw, resp.StatusCode, resp.Header.Get("Retry-After"), nil
 }
 
-func venueStructuredContent(tool string, raw []byte) (json.RawMessage, error) {
+// venueStructuredContent reads the structured content of a tool answer.
+// limited is true for a tool error that is the rate limit of the API.
+func venueStructuredContent(tool string, raw []byte) (content json.RawMessage, limited bool, err error) {
 	payload := raw
 	for _, line := range strings.Split(string(raw), "\n") {
 		if rest, ok := strings.CutPrefix(line, "data: "); ok {
@@ -524,6 +538,9 @@ func venueStructuredContent(tool string, raw []byte) (json.RawMessage, error) {
 		Result struct {
 			StructuredContent json.RawMessage `json:"structuredContent"`
 			IsError           bool            `json:"isError"`
+			Content           []struct {
+				Text string `json:"text"`
+			} `json:"content"`
 		} `json:"result"`
 		Error *struct {
 			Code    int    `json:"code"`
@@ -531,15 +548,23 @@ func venueStructuredContent(tool string, raw []byte) (json.RawMessage, error) {
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(payload, &envelope); err != nil {
-		return nil, fmt.Errorf("venue call %s: answer is not JSON-RPC", tool)
+		return nil, false, fmt.Errorf("venue call %s: answer is not JSON-RPC", tool)
 	}
 	if envelope.Error != nil {
-		return nil, fmt.Errorf("venue call %s: JSON-RPC error %d", tool, envelope.Error.Code)
+		return nil, false, fmt.Errorf("venue call %s: JSON-RPC error %d", tool, envelope.Error.Code)
 	}
 	if len(envelope.Result.StructuredContent) == 0 {
-		return nil, fmt.Errorf("venue call %s: no structured content (tool error: %t)", tool, envelope.Result.IsError)
+		text := ""
+		if len(envelope.Result.Content) > 0 {
+			text = strings.ToLower(envelope.Result.Content[0].Text)
+		}
+		limited = envelope.Result.IsError && (strings.Contains(text, "rate") || strings.Contains(text, "429") || strings.Contains(text, "too many"))
+		if len(text) > 120 {
+			text = text[:120]
+		}
+		return nil, limited, fmt.Errorf("venue call %s: no structured content (tool error: %t): %s", tool, envelope.Result.IsError, text)
 	}
-	return envelope.Result.StructuredContent, nil
+	return envelope.Result.StructuredContent, false, nil
 }
 
 // GraphQL implements Planes.

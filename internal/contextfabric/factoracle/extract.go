@@ -79,7 +79,9 @@ type tableSpec struct {
 	Table string
 	// Where uses {start:String} and {end:String} (YYYY-MM-DD) and
 	// {org:String}.
-	Where   string
+	Where string
+	// OrderBy and LimitBy keep the first row of each LimitBy group.
+	OrderBy string
 	LimitBy string
 	Rules   map[string]columnRule
 }
@@ -119,11 +121,18 @@ var extractTables = []tableSpec{
 		"id": ruleTeam, "name": ruleHash, "description": ruleDrop, "updated_at": ruleKeep, "org_id": ruleOrg, "provider": ruleKeep,
 		"native_team_key": ruleDrop, "project_keys": ruleDropArray, "is_active": ruleKeep, "last_synced": ruleKeep,
 	}},
-	{Table: "team_repo_ownership", Where: "1", Rules: map[string]columnRule{
-		"org_id": ruleOrg, "provider": ruleKeep, "team_id": ruleTeam, "repo_id": ruleUUID, "repo_full_name": ruleSlug, "match_type": ruleKeep,
-		"source": ruleKeep, "is_primary": ruleKeep, "specificity": ruleKeep, "priority": ruleKeep, "valid_from": ruleKeep, "valid_to": ruleKeep,
-		"updated_at": ruleKeep,
-	}},
+	// Ownership rows that ended before the window can match no read of it.
+	// The source writes one more row, equal but for valid_from and
+	// updated_at, at every sync; of such rows the earliest is valid whenever
+	// a later one is, so it alone decides every read.
+	{Table: "team_repo_ownership", Where: "valid_to IS NULL OR valid_to >= toDateTime64({start:String}, 3, 'UTC')",
+		OrderBy: "valid_from ASC, updated_at ASC",
+		LimitBy: "provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_to",
+		Rules: map[string]columnRule{
+			"org_id": ruleOrg, "provider": ruleKeep, "team_id": ruleTeam, "repo_id": ruleUUID, "repo_full_name": ruleSlug, "match_type": ruleKeep,
+			"source": ruleKeep, "is_primary": ruleKeep, "specificity": ruleKeep, "priority": ruleKeep, "valid_from": ruleKeep, "valid_to": ruleKeep,
+			"updated_at": ruleKeep,
+		}},
 	{Table: "capacity_forecasts", Where: "toDate(computed_at) >= toDate({start:String}) AND toDate(computed_at) < toDate({end:String})", Rules: map[string]columnRule{
 		"forecast_id": ruleUUID, "computed_at": ruleKeep, "team_id": ruleTeam, "work_scope_id": ruleWorkScope, "backlog_size": ruleKeep,
 		"p50_days": ruleKeep, "throughput_mean": ruleKeep, "throughput_stddev": ruleKeep, "insufficient_history": ruleKeep,
@@ -222,6 +231,9 @@ func CaptureExtract(ctx context.Context, db RowQuerier, orgID string, window Win
 		columns, _ := declaredColumns(spec.Table)
 		statement := "SELECT formatRow('JSONEachRow', " + strings.Join(columns, ", ") + ") FROM " + spec.Table +
 			" WHERE org_id = {org:String} AND (" + spec.Where + ")"
+		if spec.OrderBy != "" {
+			statement += " ORDER BY " + spec.OrderBy
+		}
 		if spec.LimitBy != "" {
 			statement += " LIMIT 1 BY " + spec.LimitBy
 		}

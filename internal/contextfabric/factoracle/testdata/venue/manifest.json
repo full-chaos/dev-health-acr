@@ -1,5 +1,5 @@
 {
-  "captured_at": "2026-10-01T16:59:24Z",
+  "captured_at": "2026-10-01T17:36:20Z",
   "window": {
     "start": "2026-09-01T00:00:00Z",
     "end": "2026-10-02T00:00:00Z"
@@ -12,11 +12,11 @@
   "rows": {
     "capacity_forecasts": 40,
     "compounding_risk_daily": 97,
-    "estimate_coverage_metrics_daily": 566,
+    "estimate_coverage_metrics_daily": 572,
     "repos": 11,
-    "team_repo_ownership": 13093,
+    "team_repo_ownership": 18,
     "teams": 17,
-    "work_item_metrics_daily": 477,
+    "work_item_metrics_daily": 480,
     "work_unit_investments": 2609,
     "work_unit_membership": 1351,
     "work_unit_membership_runs": 2,
@@ -461,7 +461,7 @@
         "input": {
           "historyDays": 90,
           "simulations": 1000,
-          "teamId": "team:team-218b01bd40e618ae"
+          "teamId": "team:team-6f3ff9f818d75492"
         }
       }
     },
@@ -612,7 +612,7 @@
       "variables": {
         "input": {
           "sinceDate": "2026-09-01",
-          "teamId": "team:team-218b01bd40e618ae",
+          "teamId": "team:team-6f3ff9f818d75492",
           "untilDate": "2026-10-01"
         }
       }
@@ -622,7 +622,7 @@
       "variables": {
         "input": {
           "sinceDate": "2026-09-01",
-          "teamId": "team:team-218b01bd40e618ae",
+          "teamId": "team:team-6f3ff9f818d75492",
           "untilDate": "2026-10-01"
         }
       }
@@ -632,7 +632,7 @@
       "variables": {
         "input": {
           "sinceDate": "2026-09-01",
-          "teamId": "team:team-218b01bd40e618ae",
+          "teamId": "team:team-6f3ff9f818d75492",
           "untilDate": "2026-10-01"
         }
       }
@@ -883,7 +883,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-218b01bd40e618ae"
+            "team:team-6f3ff9f818d75492"
           ]
         }
       }
@@ -894,7 +894,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-218b01bd40e618ae"
+            "team:team-6f3ff9f818d75492"
           ]
         }
       }
@@ -905,7 +905,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-218b01bd40e618ae"
+            "team:team-6f3ff9f818d75492"
           ]
         }
       }
@@ -916,7 +916,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-218b01bd40e618ae"
+            "team:team-6f3ff9f818d75492"
           ]
         }
       }
@@ -927,7 +927,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-218b01bd40e618ae"
+            "team:team-6f3ff9f818d75492"
           ]
         }
       }
@@ -938,7 +938,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-218b01bd40e618ae"
+            "team:team-6f3ff9f818d75492"
           ]
         }
       }
@@ -949,7 +949,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-218b01bd40e618ae"
+            "team:team-6f3ff9f818d75492"
           ]
         }
       }
@@ -960,7 +960,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-218b01bd40e618ae"
+            "team:team-6f3ff9f818d75492"
           ]
         }
       }
@@ -971,7 +971,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-218b01bd40e618ae"
+            "team:team-6f3ff9f818d75492"
           ]
         }
       }
@@ -1046,9 +1046,9 @@
     }
   ],
   "residual": {
-    "feature_delivery": 0.0048458336386829615,
-    "maintenance": 0.0027481766883283854,
-    "operational": 0.0002446650469209999,
+    "feature_delivery": 0.004845833173021674,
+    "maintenance": 0.0027481766301207244,
+    "operational": 0.00024466501781716943,
     "quality": 0.002130022563505918,
     "risk": 0.00047797006845939904
   },
@@ -1215,8 +1215,8 @@
       "listener": "served",
       "shapes_run": 9,
       "leaves": 124,
-      "compared": 81,
-      "matches": 78,
+      "compared": 85,
+      "matches": 82,
       "by_class": {
         "forecast_by_design": 1,
         "latest_day_vs_window": 2

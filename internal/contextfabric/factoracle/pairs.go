@@ -863,12 +863,16 @@ func compareFlowHeadline(ctx context.Context, o *Oracle, rr *RootReport) error {
 	for _, fact := range facts {
 		for _, field := range []string{"items_started", "items_completed"} {
 			headline, herr := factInteger(fact.Fields[field])
-			daily, dok := fact.Tables["daily_flow"]
-			scopes, sok := fact.Tables["scope_breakdown"]
-			if herr != nil || headline.T != LeafInt || !dok || !sok {
+			if herr != nil || headline.T != LeafInt {
 				// The fix renames the headline: a fact without it no longer
 				// shows the class.
 				window++
+				continue
+			}
+			daily, dok := fact.Tables["daily_flow"]
+			scopes, sok := fact.Tables["scope_breakdown"]
+			if !dok || !sok {
+				rr.NotJoined = append(rr.NotJoined, "flow: a team's fact has no daily series or no scope table")
 				continue
 			}
 			windowSum, werr := tableSum(daily, field)
