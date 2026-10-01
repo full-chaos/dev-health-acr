@@ -368,6 +368,8 @@ func TestReplayMigrationsDir_ChmigrateLayoutReplaysBaselineThenDeltas(t *testing
 	}
 }
 
+// devhealthschema:not-a-production-replica this baseline is INPUT to the replay parser under test;
+// the test asserts a RENAME TABLE delta is reported rather than ignored.
 func TestReplayMigrationsDir_ChmigrateRenameIsReportedNotIgnored(t *testing.T) {
 	dir := t.TempDir()
 	for _, sub := range []string{"baseline", "sql"} {
