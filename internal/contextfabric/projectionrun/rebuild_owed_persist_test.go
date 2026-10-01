@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"log/slog"
 	"testing"
 	"time"
@@ -27,6 +28,11 @@ func restartedCoordinatorOn(t *testing.T, db *sql.DB, clock *fakeClock, backend 
 	t.Helper()
 	store, err := pgprojection.NewCheckpointStore(db)
 	require.NoError(t, err)
+	return coordinatorOverStore(t, store, clock, backend, sources...)
+}
+
+func coordinatorOverStore(t *testing.T, store contextfabric.ProjectionCheckpointStore, clock *fakeClock, backend *fakeBackend, sources ...*fakeSource) (*projectionrun.Coordinator, *bytes.Buffer) {
+	t.Helper()
 	var buffer bytes.Buffer
 	pairs := make([]projectionrun.SourcePair, 0, len(sources))
 	for _, source := range sources {
@@ -182,4 +188,49 @@ func TestRebuildOwedSurvivesAClaimWhoseApplyFails(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "test.v1", checkpoint.SourceVersion, "the claim ran")
 	require.True(t, checkpoint.RebuildOwed, "a claim applies nothing and must not resolve the owed rebuild")
+}
+
+// markFailingStore fails the first `failures` rebuild-owed writes, then
+// delegates, so a test can observe the retry.
+type markFailingStore struct {
+	*pgprojection.CheckpointStore
+	failures int
+}
+
+func (s *markFailingStore) MarkProjectionRebuildOwed(ctx context.Context, orgID, source string) error {
+	if s.failures > 0 {
+		s.failures--
+		return errors.New("injected persist failure")
+	}
+	return s.CheckpointStore.MarkProjectionRebuildOwed(ctx, orgID, source)
+}
+
+func TestRebuildOwedPersistFailureIsRetriedAndStaysOwedMeanwhile(t *testing.T) {
+	ctx := context.Background()
+	db := newProjectionRunTestDatabase(t, ctx)
+	clock := newFakeClock(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
+	seedMatchingCheckpoint(t, db, "src")
+	inner, err := pgprojection.NewCheckpointStore(db)
+	require.NoError(t, err)
+
+	source := versionRefusedSource("src")
+	coordinator, buffer := coordinatorOverStore(t, &markFailingStore{CheckpointStore: inner, failures: 1}, clock, newFakeBackend(), source)
+	requireBuckets(t, tickSummary(t, coordinator, buffer), 1, 0, 0, 1)
+	failed, err := inner.LoadProjectionCheckpoint(ctx, rebuildOwedOrg, "src")
+	require.NoError(t, err)
+	require.False(t, failed.RebuildOwed, "the write failed, so nothing is durable yet")
+
+	// The source stops refusing, so only the retry can make the flag durable,
+	// and the failed write must not let the (still false) durable value
+	// overwrite the in-process flag meanwhile.
+	source.err = nil
+	source.dormant = true
+	clock.Advance(time.Hour)
+	requireBuckets(t, tickSummary(t, coordinator, buffer), 1, 0, 0, 1)
+	retried, err := inner.LoadProjectionCheckpoint(ctx, rebuildOwedOrg, "src")
+	require.NoError(t, err)
+	require.True(t, retried.RebuildOwed, "the next attempt retried the write")
+
+	restarted, buffer := restartedCoordinator(t, db, clock, &fakeSource{name: "src", dormant: true})
+	requireBuckets(t, tickSummary(t, restarted, buffer), 1, 0, 0, 1)
 }
