@@ -399,6 +399,15 @@ type ProjectionCheckpointLister interface {
 	ListProjectionCheckpoints(ctx context.Context, orgID string) ([]ProjectionCheckpoint, error)
 }
 
+// ProjectionRebuildOwedMarker is an optional capability of a
+// ProjectionCheckpointStore: persist that a version refusal left a rebuild
+// owed on (orgID, source) in the store's own epoch. The checkpoint CAS clears
+// it, so there is no clear method. A store without it keeps the flag in the
+// process only.
+type ProjectionRebuildOwedMarker interface {
+	MarkProjectionRebuildOwed(ctx context.Context, orgID, source string) error
+}
+
 // EpochActivationRefusal is one cf_epoch_activation_refused signal: every
 // input the guard decided from, so a reader can rebuild the decision from
 // the signal alone. Content-safe: ids, epochs, enums and version strings.

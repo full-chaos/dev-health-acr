@@ -2201,6 +2201,10 @@ type ContextFabricProjectionCheckpoint struct {
 	// external wire contract" status as Epoch above -- the json tag exists
 	// only for parity with its sibling fields.
 	RowsApplied int64 `json:"rows_applied"`
+	// RebuildOwed is the durable form of "a version refusal was seen on this
+	// (org, epoch, source) and no batch has applied since". Written by
+	// SetProjectionRebuildOwed; cleared by the checkpoint CAS itself.
+	RebuildOwed bool `json:"rebuild_owed"`
 }
 
 type ContextFabricCapabilities struct {

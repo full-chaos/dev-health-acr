@@ -289,3 +289,46 @@ func TestCheckpointStore_listsTheRowsOfOneEpochOnlyExactlyAsStored(t *testing.T)
 		t.Fatalf("an epoch with no rows lists %v, %v; want nothing", none, err)
 	}
 }
+
+func TestCheckpointStore_rebuildOwedIsEpochScopedNeverCreatesARowAndIsClearedByTheCursorCAS(t *testing.T) {
+	ctx := context.Background()
+	store, err := pgprojection.NewCheckpointStore(newCheckpointTestDatabase(t, ctx))
+	require.NoError(t, err)
+	const org, source = "org-1", "dev_health_clickhouse"
+
+	require.NoError(t, store.MarkProjectionRebuildOwed(ctx, org, source))
+	absent, err := store.LoadProjectionCheckpoint(ctx, org, source)
+	require.NoError(t, err)
+	require.False(t, absent.RebuildOwed, "marking a source with no checkpoint row must not invent one")
+	require.Empty(t, absent.Cursor)
+
+	first := contextfabric.ProjectionCheckpoint{OrgID: org, Source: source, Cursor: "c1", SourceVersion: "v1", UpdatedAt: time.Now().UTC()}
+	require.NoError(t, store.CompareAndSwapProjectionCheckpoint(ctx, absent, first))
+	epochOne := store.ForEpoch(1)
+	require.NoError(t, epochOne.CompareAndSwapProjectionCheckpoint(ctx,
+		contextfabric.ProjectionCheckpoint{OrgID: org, Source: source},
+		contextfabric.ProjectionCheckpoint{OrgID: org, Source: source, Cursor: "e1", SourceVersion: "v1", UpdatedAt: time.Now().UTC()}))
+
+	require.NoError(t, epochOne.(contextfabric.ProjectionRebuildOwedMarker).MarkProjectionRebuildOwed(ctx, org, source))
+	legacy, err := store.LoadProjectionCheckpoint(ctx, org, source)
+	require.NoError(t, err)
+	require.False(t, legacy.RebuildOwed, "epoch 1's flag must not leak into epoch 0")
+	built, err := epochOne.LoadProjectionCheckpoint(ctx, org, source)
+	require.NoError(t, err)
+	require.True(t, built.RebuildOwed)
+	listed, err := epochOne.(contextfabric.ProjectionCheckpointLister).ListProjectionCheckpoints(ctx, org)
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	require.True(t, listed[0].RebuildOwed)
+
+	require.NoError(t, store.MarkProjectionRebuildOwed(ctx, org, source))
+	require.NoError(t, store.CompareAndSwapProjectionCheckpoint(ctx, first, contextfabric.ProjectionCheckpoint{OrgID: org, Source: source, Cursor: "c2", SourceVersion: "v1", UpdatedAt: time.Now().UTC()}))
+	cleared, err := store.LoadProjectionCheckpoint(ctx, org, source)
+	require.NoError(t, err)
+	require.False(t, cleared.RebuildOwed, "the cursor CAS clears the flag")
+
+	require.NoError(t, epochOne.CompareAndSwapProjectionCheckpoint(ctx, built, contextfabric.ProjectionCheckpoint{OrgID: org, Source: source, Cursor: "e2", SourceVersion: "v1", UpdatedAt: time.Now().UTC()}))
+	clearedEpoch, err := epochOne.LoadProjectionCheckpoint(ctx, org, source)
+	require.NoError(t, err)
+	require.False(t, clearedEpoch.RebuildOwed)
+}

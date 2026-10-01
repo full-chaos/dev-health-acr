@@ -486,6 +486,8 @@ type pairBackoff struct {
 	// batch since. Sticky across later failures of another class, because the
 	// version mismatch stays in the checkpoint while an outage comes and goes.
 	rebuildOwed bool
+	// hydrated: the durable flag was read into rebuildOwed once for this key.
+	hydrated bool
 }
 
 // orgs returns a SNAPSHOT of the effective organization set. Every
@@ -2612,6 +2614,7 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 		// failed on tick one simply vanished from the line on tick two: the
 		// CHAOS-4789 silence, reproduced inside the phase this disclosure had
 		// just claimed to cover.
+		c.hydrateRebuildOwed(ctx, key, orgID, source, checkpoints)
 		due, withheldByBackoff, withheldRebuild := c.dueState(key)
 		if !due {
 			if batches == 0 {
@@ -2633,6 +2636,7 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 		run, err := worker.RunOnce(ctx, orgID, source)
 		lastErr = err
 		c.recordBackoff(key, err)
+		c.persistRebuildOwed(ctx, orgID, source, checkpoints, err)
 		outcome := Outcome{OrgID: orgID, Source: source, Run: run, Err: err, Duration: c.now().Sub(attemptStarted), At: c.now()}
 		c.observer.ObserveProjectionOutcome(outcome)
 		if err != nil {
@@ -3041,6 +3045,7 @@ func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, che
 	// ONE clock read decides both "may it attempt" and "is it withheld by its
 	// own failure backoff" -- see dueState's own doc comment for the race two
 	// reads opened.
+	c.hydrateRebuildOwed(ctx, key, orgID, source, checkpoints)
 	due, withheld, withheldRebuild := c.dueState(key)
 	if !due {
 		return false, false, nil, withheldRebuild, withheld, false
@@ -3055,6 +3060,7 @@ func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, che
 	run, runErr := worker.RunOnce(ctx, orgID, source)
 	outcome := Outcome{OrgID: orgID, Source: source, Run: run, Err: runErr, Duration: c.now().Sub(started), At: c.now()}
 	c.recordBackoff(key, runErr)
+	c.persistRebuildOwed(ctx, orgID, source, checkpoints, runErr)
 	c.observer.ObserveProjectionOutcome(outcome)
 	if runErr != nil {
 		c.logger.WarnContext(ctx, "projection pair failed", "org_id", contextfabric.SanitizeLogAttr(orgID), "source", contextfabric.SanitizeLogAttr(source), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(runErr)), "duration_ms", outcome.Duration.Milliseconds())
@@ -3569,6 +3575,51 @@ func (c *Coordinator) rebuildOwed(key string) bool {
 	defer c.backoffMu.Unlock()
 	state, ok := c.backoff[key]
 	return ok && state.rebuildOwed
+}
+
+// hydrateRebuildOwed loads the durable flag into the in-process state once per
+// key, so the first tick after a restart reports a refused source without
+// waiting for another refusal. Only configured pairs reach it, so a source
+// removed from the configured set never keeps an organization stale. A failed
+// read is logged and retried next tick; it never fails the pair.
+func (c *Coordinator) hydrateRebuildOwed(ctx context.Context, key, orgID, source string, checkpoints contextfabric.ProjectionCheckpointStore) {
+	c.backoffMu.Lock()
+	state, ok := c.backoff[key]
+	if ok && state.hydrated {
+		c.backoffMu.Unlock()
+		return
+	}
+	c.backoffMu.Unlock()
+	checkpoint, err := checkpoints.LoadProjectionCheckpoint(ctx, orgID, source)
+	if err != nil {
+		c.logger.WarnContext(ctx, "rebuild-owed hydrate failed", "org_id", contextfabric.SanitizeLogAttr(orgID), "source", contextfabric.SanitizeLogAttr(source), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
+		return
+	}
+	c.backoffMu.Lock()
+	defer c.backoffMu.Unlock()
+	state, ok = c.backoff[key]
+	if !ok {
+		state = &pairBackoff{}
+		c.backoff[key] = state
+	}
+	state.hydrated = true
+	state.rebuildOwed = state.rebuildOwed || checkpoint.RebuildOwed
+}
+
+// persistRebuildOwed writes the flag through when err is a version refusal. A
+// store without the capability, or a failed write, leaves the flag in-process
+// only and is logged: a refusal must still back off and report.
+func (c *Coordinator) persistRebuildOwed(ctx context.Context, orgID, source string, checkpoints contextfabric.ProjectionCheckpointStore, err error) {
+	if !versionRefused(err) {
+		return
+	}
+	marker, ok := checkpoints.(contextfabric.ProjectionRebuildOwedMarker)
+	if !ok {
+		return
+	}
+	if merr := marker.MarkProjectionRebuildOwed(ctx, orgID, source); merr != nil {
+		c.logger.WarnContext(ctx, "rebuild-owed persist failed", "org_id", contextfabric.SanitizeLogAttr(orgID), "source", contextfabric.SanitizeLogAttr(source), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(merr)))
+	}
 }
 
 func (c *Coordinator) recordBackoff(key string, err error) {
