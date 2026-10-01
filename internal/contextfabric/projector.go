@@ -267,6 +267,8 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 			// literal that omitted this would silently reset an
 			// already-nonzero counter back to 0.
 			RowsApplied: checkpoint.RowsApplied,
+			// A claim applies nothing, so it resolves no owed rebuild.
+			RebuildOwed: checkpoint.RebuildOwed,
 		}
 		if err := w.checkpoints.CompareAndSwapProjectionCheckpoint(ctx, checkpoint, claim); err != nil {
 			if errors.Is(err, ErrProjectionConflict) {
