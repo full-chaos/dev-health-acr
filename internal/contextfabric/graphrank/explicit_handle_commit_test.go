@@ -90,7 +90,7 @@ func TestExplicitPullRequestHandleNotUniqueLeavesNoRepositoryAnswer(t *testing.T
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("Committed = %#v, want none: an answer about the repository is not an answer about the pull request", resolution.Committed)
 	}
-	if !strings.Contains(resolution.ClarificationPrompt, "pull request") || !strings.Contains(resolution.ClarificationPrompt, "full-chaos/dev-health-acr") {
+	if !strings.Contains(resolution.ClarificationPrompt, "pull request 747") || !strings.Contains(resolution.ClarificationPrompt, "full-chaos/dev-health-acr") {
 		t.Fatalf("ClarificationPrompt = %q", resolution.ClarificationPrompt)
 	}
 }
@@ -137,16 +137,17 @@ func TestExplicitPullRequestHandleReplacesACommittedPullRequestWithAnotherNumber
 	}
 }
 
-func TestSeveralExplicitHandlesLeaveTheResolutionAlone(t *testing.T) {
+func TestSeveralExplicitHandlesAskInsteadOfAnsweringAboutTheRepository(t *testing.T) {
 	t.Parallel()
 	var calls []explicitHandleCensusCall
 	deps, request := explicitHandleFixture(1, &calls)
 	request.SubjectHandles = append(request.SubjectHandles, contractsv1.ContextFabricRequestedHandle{Kind: contextfabric.SubjectPullRequest, PatternID: "pull_request_number", Value: "748"})
 	resolution := resolveExplicitHandleFixture(t, deps, request)
-	if hasCommittedKind(resolution.Committed, contextfabric.SubjectPullRequest) || len(resolution.Committed) != 1 {
-		t.Fatalf("Committed = %#v, want the repository untouched: several handles drive offers only", resolution.Committed)
+	if len(resolution.Committed) != 0 || !strings.Contains(resolution.ClarificationPrompt, "one handle") {
+		t.Fatalf("Committed = %#v prompt = %q, want a clarification asking for one handle", resolution.Committed, resolution.ClarificationPrompt)
 	}
 }
+
 func TestExplicitPullRequestHandleNeedsExactlyOneCommittedRepository(t *testing.T) {
 	t.Parallel()
 	var calls []explicitHandleCensusCall

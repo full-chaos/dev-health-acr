@@ -21,14 +21,24 @@ var errCensusPanicked = errors.New("census panicked")
 // one repository: it resolves only when exactly one repository is committed,
 // as a keyed census over (handle, that repository) that must return exactly
 // one satisfier, which is then re-read from the graph and re-authorized.
-// Exactly one handle is honored; several drive offers only.
+// Exactly one handle is honored; several are a clarification.
 //
 // A handle that cannot be resolved this way must not leave the repository
 // committed: an answer about the repository is not an answer about the
 // pull request the caller named. The repository then becomes a candidate and
 // the caller is asked, never guessed for.
 func commitExplicitHandleSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, resolution contextfabric.SubjectResolution, bases contextfabric.CommitBasisSet, digests contextfabric.CommitDecisionDigestSet) contextfabric.SubjectResolution {
-	if contextfabric.OffersOnlyResolution(ctx) || len(request.SubjectHandles) != 1 || deps.CensusFunc == nil || deps.HandleGrammarChecker == nil || deps.ExactHint == nil {
+	if contextfabric.OffersOnlyResolution(ctx) || len(request.SubjectHandles) == 0 || deps.CensusFunc == nil || deps.HandleGrammarChecker == nil || deps.ExactHint == nil {
+		return resolution
+	}
+	if len(request.SubjectHandles) > 1 {
+		// One subject per request: several handles cannot each be anchored
+		// on the one repository, so the caller is asked to send one.
+		for _, h := range request.SubjectHandles {
+			if _, ok := deps.HandleGrammarChecker(h.Kind, h.PatternID, h.Value); ok && KindHasAnchorFK(h.Kind, contextfabric.SubjectRepository) {
+				return demoteRepositoryAnchors(request, resolution, bases, digests, "Several subject handles were sent; send one handle at a time")
+			}
+		}
 		return resolution
 	}
 	handle := request.SubjectHandles[0]
@@ -51,7 +61,7 @@ func commitExplicitHandleSubjects(ctx context.Context, principal storage.Princip
 		return resolution
 	case 1:
 	default:
-		return demoteRepositoryAnchors(request, resolution, bases, digests, "Which repository holds the "+handleKindLabel(handle.Kind)+" you named")
+		return demoteRepositoryAnchors(request, resolution, bases, digests, "Which repository holds the "+handleKindLabel(handle.Kind)+" "+handle.Value)
 	}
 	satisfier, ok := explicitHandleSatisfier(ctx, principal, request, deps, handle.Kind, handle.Value, anchor)
 	var candidate contextfabric.SubjectCandidate
@@ -59,7 +69,7 @@ func commitExplicitHandleSubjects(ctx context.Context, principal storage.Princip
 		candidate, ok = explicitHandleCandidate(ctx, principal, request, deps, satisfier)
 	}
 	if !ok {
-		return demoteRepositoryAnchors(request, resolution, bases, digests, "The "+handleKindLabel(handle.Kind)+" you named could not be matched to exactly one record in the repository")
+		return demoteRepositoryAnchors(request, resolution, bases, digests, "The "+handleKindLabel(handle.Kind)+" "+handle.Value+" could not be matched to exactly one record in the repository")
 	}
 	kept := make([]contextfabric.SubjectRef, 0, len(resolution.Committed)+1)
 	for _, subject := range resolution.Committed {
