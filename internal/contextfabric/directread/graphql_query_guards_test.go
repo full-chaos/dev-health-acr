@@ -876,6 +876,33 @@ func TestGraphQLListenerRefusalsMapToClosedClasses(t *testing.T) {
 	}
 }
 
+// A listener 404 stays operation_unavailable/not_found (no contract change)
+// and logs one WARN naming the roots acr sent and the closed 404 reason;
+// the listener's own text never reaches the answer.
+func TestGraphQLListenerNotFoundLogsClosedReasonAndRoots(t *testing.T) {
+	for _, tc := range []struct{ reason, want string }{
+		{"root_field_not_enabled", "root_field_not_enabled"},
+		{"off_mcp_listener", "off_mcp_listener"},
+		{"something_new", "unknown"},
+	} {
+		t.Run(tc.reason, func(t *testing.T) {
+			h := newGQLHarness(t, gqlHarnessOptions{fake: func(cfg *fakeMCPConfig) { cfg.RefuseStatus, cfg.RefuseReason = 404, tc.reason }})
+			resp := h.run(t, opUnrestricted(opOrgA), `{ catalog(dimension: TEAM) { values { value } } }`, nil)
+			if resp.Call != directread.CallOperationUnavailable || len(resp.Errors) != 1 || resp.Errors[0].Class != directread.UpstreamNotFound {
+				t.Fatalf("got %+v", resp)
+			}
+			raw, _ := json.Marshal(resp)
+			if strings.Contains(string(raw), tc.reason) {
+				t.Fatalf("listener reason passed through: %s", raw)
+			}
+			line := string(opLineOf(t, h.logs.String(), directread.GraphQLRootNotEnabledLog))
+			if !strings.Contains(line, `"level":"WARN"`) || !strings.Contains(line, `"listener_reason":"`+tc.want+`"`) || !strings.Contains(line, `"root_fields":["catalog"]`) || !strings.Contains(line, `"retryable":false`) {
+				t.Fatalf("log line: %s", line)
+			}
+		})
+	}
+}
+
 // acr never sends an empty or padded org header (the listener's 401
 // invalid_org): such a principal is refused before any work, zero requests.
 func TestGraphQLNeverSendsAnEmptyOrPaddedOrg(t *testing.T) {
