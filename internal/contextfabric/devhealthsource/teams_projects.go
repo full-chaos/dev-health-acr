@@ -260,7 +260,13 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // with its source), each component escaped, instead of the retired bare-':'
 // joins. Already-projected edges carry the retired refs; the bump forces the
 // rebuild that re-mints them.
-const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v17"
+//
+// v17 -> v18: a duplicate project-membership ADD now retracts the interval it
+// would have opened (a late earlier ADD makes the later projected ADD a
+// duplicate). Builds before v18 left both intervals open, and the trailing
+// overlap that re-reads a row is finite, so only the rebuild clears an
+// already-projected superseded interval.
+const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v18"
 
 // teamsProjectsTables is this source's bounded coverage. Both tables were
 // already canonical Dev Health data; neither introduces a new ingest path.

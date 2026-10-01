@@ -24,7 +24,14 @@ func graphEdges(ds ...drained) map[string]contractsv1.ContextFabricRelationshipP
 				}
 			}
 			for _, tomb := range b.Tombstones {
-				delete(edges, tomb.CanonicalID)
+				// The adapter deletes a relationship tombstone only when the
+				// stored observed_at is at or before EffectiveAt.
+				if tomb.Kind != "relationship" || tomb.Reason != "superseded_by_earlier_add" {
+					panic("unexpected tombstone " + tomb.Kind + "/" + tomb.Reason)
+				}
+				if e, ok := edges[tomb.CanonicalID]; ok && !e.ObservedAt.After(tomb.EffectiveAt) {
+					delete(edges, tomb.CanonicalID)
+				}
 			}
 		}
 	}
