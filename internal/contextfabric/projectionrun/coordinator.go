@@ -2103,6 +2103,7 @@ func (c *Coordinator) runOrg(ctx context.Context, orgID string, stats *tickFresh
 		}
 	}()
 
+	c.graphCounts.resetOrg(orgID, c.sourceNames)
 	if c.lifecycle != nil {
 		c.runOrgLifecycle(scope, orgID)
 	} else {

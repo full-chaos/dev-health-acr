@@ -3,6 +3,7 @@ package projectionrun
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -54,9 +55,46 @@ type graphCountState struct {
 	mu        sync.Mutex
 	drained   map[string]bool
 	lastCheck map[string]time.Time
+	// suspects holds gaps seen once. A gap warns only when the next check
+	// sees it again: rows landing in the source between a drain and the count
+	// read close on their own by the next tick, a skipped row does not.
+	suspects map[string]bool
 }
 
 func pairKey(orgID, source string) string { return orgID + "\x00" + source }
+
+// resetOrg forgets every drain fact for the organization. runOrg calls it
+// before each tick body, so a check is authorized only by pairs that drained
+// in THIS tick: a recovery path that returns before any pair runs (a purge)
+// leaves nothing to authorize one.
+func (g *graphCountState) resetOrg(orgID string, sources []string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, source := range sources {
+		delete(g.drained, pairKey(orgID, source))
+	}
+}
+
+// confirmGap reports whether this gap was already seen at the previous check,
+// and records it as seen.
+func (g *graphCountState) confirmGap(key string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.suspects[key] {
+		return true
+	}
+	if g.suspects == nil {
+		g.suspects = map[string]bool{}
+	}
+	g.suspects[key] = true
+	return false
+}
+
+func (g *graphCountState) clearGap(key string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	delete(g.suspects, key)
+}
 
 func (g *graphCountState) markPair(orgID, source string, drained bool) {
 	g.mu.Lock()
@@ -75,6 +113,11 @@ func (g *graphCountState) due(orgID string, sources []string, now time.Time, int
 	defer g.mu.Unlock()
 	for _, source := range sources {
 		if !g.drained[pairKey(orgID, source)] {
+			for key := range g.suspects {
+				if strings.HasPrefix(key, orgID+"\x00") {
+					delete(g.suspects, key)
+				}
+			}
 			return false
 		}
 	}
@@ -130,7 +173,12 @@ func (c *Coordinator) checkGraphCounts(ctx context.Context, orgID string) {
 				continue
 			}
 			tolerance := graphCountTolerance(sourceCount)
+			gapKey := pairKey(orgID, source) + "\x00" + string(kind)
 			if sourceCount-graphCount <= tolerance {
+				c.graphCounts.clearGap(gapKey)
+				continue
+			}
+			if !c.graphCounts.confirmGap(gapKey) {
 				continue
 			}
 			c.logger.WarnContext(ctx, "context_fabric: graph_below_source", "check", "graph_below_source",

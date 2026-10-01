@@ -56,6 +56,7 @@ type countHarness struct {
 	source   *countingSource
 	observer *belowObserver
 	log      *bytes.Buffer
+	marker   *fakeRebuildMarker
 	run      func(now time.Time)
 }
 
@@ -70,6 +71,7 @@ func newCountHarness(t *testing.T, sourceCounts, graphCounts map[contextfabric.S
 	source := &countingSource{fakeSource: &fakeSource{name: "source-a", dormant: true, err: sourceFetchErr}, counts: sourceCounts, err: sourceErr}
 	backend := &countingBackend{fakeBackend: newFakeBackend(), graph: graphCounts, err: graphErr}
 	observer := &belowObserver{}
+	marker := newFakeRebuildMarker()
 	var clock atomic.Pointer[time.Time]
 	start := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	clock.Store(&start)
@@ -78,7 +80,7 @@ func newCountHarness(t *testing.T, sourceCounts, graphCounts map[contextfabric.S
 		Sources:                 []projectionrun.SourcePair{{Name: "source-a", Source: source}},
 		Backend:                 backend,
 		Checkpoints:             newFakeCheckpointStore(),
-		RebuildMarkers:          newFakeRebuildMarker(),
+		RebuildMarkers:          marker,
 		Observer:                observer,
 		Logger:                  logger,
 		GraphCountCheckInterval: interval,
@@ -87,7 +89,7 @@ func newCountHarness(t *testing.T, sourceCounts, graphCounts map[contextfabric.S
 	if err != nil {
 		t.Fatalf("new coordinator: %v", err)
 	}
-	return &countHarness{source: source, observer: observer, log: buffer, run: func(now time.Time) {
+	return &countHarness{source: source, observer: observer, log: buffer, marker: marker, run: func(now time.Time) {
 		clock.Store(&now)
 		coordinator.Tick(context.Background())
 	}}
@@ -102,6 +104,10 @@ func TestGraphBelowSourceWarnsWhenASourceRowWasSkipped(t *testing.T) {
 		map[contextfabric.SubjectKind]int64{contractsv1.ContextFabricSubjectPullRequest: 900},
 		nil, nil, time.Minute)
 	h.run(testStart)
+	if len(h.observer.events) != 0 {
+		t.Fatalf("a gap seen once may be rows in flight and must not warn yet")
+	}
+	h.run(testStart.Add(time.Minute))
 	logged := h.log.String()
 	for _, want := range []string{`"check":"graph_below_source"`, `"kind":"pull_request"`, `"source_count":1000`, `"graph_count":900`, `"tolerance":20`} {
 		if !strings.Contains(logged, want) {
@@ -136,6 +142,7 @@ func TestGraphBelowSourceToleratesRowsOmittedByDesign(t *testing.T) {
 		map[contextfabric.SubjectKind]int64{contractsv1.ContextFabricSubjectRepository: 7, contractsv1.ContextFabricSubjectPullRequest: 980, contractsv1.ContextFabricSubjectDeployment: 979},
 		nil, nil, time.Minute)
 	h.run(testStart)
+	h.run(testStart.Add(time.Minute))
 	if len(h.observer.events) != 1 || h.observer.events[0].Kind != contractsv1.ContextFabricSubjectDeployment {
 		t.Fatalf("only the kind beyond tolerance may warn, got %+v", h.observer.events)
 	}
@@ -211,5 +218,59 @@ func TestGraphCountCheckSkippedWhileASourceIsFailing(t *testing.T) {
 	h.run(testStart)
 	if h.source.callsFor.Load() != 0 || len(h.observer.events) != 0 {
 		t.Fatalf("a pair that did not end drained must not be compared (graph is catching up by design)")
+	}
+}
+
+func TestGraphBelowSourceTransientGapDoesNotWarn(t *testing.T) {
+	t.Parallel()
+	h := newCountHarness(t,
+		map[contextfabric.SubjectKind]int64{contractsv1.ContextFabricSubjectPullRequest: 1000},
+		map[contextfabric.SubjectKind]int64{contractsv1.ContextFabricSubjectPullRequest: 900},
+		nil, nil, time.Minute)
+	h.run(testStart)
+	h.source.counts = map[contextfabric.SubjectKind]int64{contractsv1.ContextFabricSubjectPullRequest: 900}
+	h.run(testStart.Add(time.Minute))
+	h.source.counts = map[contextfabric.SubjectKind]int64{contractsv1.ContextFabricSubjectPullRequest: 1000}
+	h.run(testStart.Add(2 * time.Minute))
+	if len(h.observer.events) != 0 || strings.Contains(h.log.String(), "graph_below_source") {
+		t.Fatalf("a gap that closed between checks must not warn, and its first sighting must not carry over:\n%s", h.log.String())
+	}
+}
+
+func TestGraphCountCheckNotAuthorizedByAPreviousTicksDrain(t *testing.T) {
+	t.Parallel()
+	h := newCountHarness(t,
+		map[contextfabric.SubjectKind]int64{contractsv1.ContextFabricSubjectPullRequest: 1000},
+		map[contextfabric.SubjectKind]int64{contractsv1.ContextFabricSubjectPullRequest: 0},
+		nil, nil, time.Minute)
+	h.run(testStart)
+	if h.source.callsFor.Load() != 1 {
+		t.Fatalf("first tick must check once, ran %d", h.source.callsFor.Load())
+	}
+	h.marker.mu.Lock()
+	h.marker.inProgress["org-a"] = true
+	h.marker.mu.Unlock()
+	h.run(testStart.Add(time.Minute))
+	if got := h.source.callsFor.Load(); got != 1 {
+		t.Fatalf("a tick that only resumed a rebuild drained nothing and must not check against the purged graph, checks=%d", got)
+	}
+}
+
+func TestGraphBelowSourceFirstSightingDoesNotSurviveAnUndrainedTick(t *testing.T) {
+	t.Parallel()
+	h := newCountHarness(t,
+		map[contextfabric.SubjectKind]int64{contractsv1.ContextFabricSubjectPullRequest: 1000},
+		map[contextfabric.SubjectKind]int64{contractsv1.ContextFabricSubjectPullRequest: 900},
+		nil, nil, time.Minute)
+	h.run(testStart)
+	h.source.fakeSource.err = errors.New("source down")
+	h.run(testStart.Add(time.Minute))
+	h.source.fakeSource.err = nil
+	h.run(testStart.Add(24 * time.Hour))
+	if len(h.observer.events) != 0 {
+		t.Fatalf("a sighting from before an undrained tick must not confirm a gap after it: %+v", h.observer.events)
+	}
+	if h.source.callsFor.Load() != 2 {
+		t.Fatalf("the post-recovery tick must have checked (calls=%d)", h.source.callsFor.Load())
 	}
 }
