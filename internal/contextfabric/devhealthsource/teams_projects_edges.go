@@ -294,10 +294,11 @@ func membershipIntervalsSubquery(ingest bool) string {
 }
 
 // membershipIntervalsSQL renders the interval source with ingestExpr (a
-// project_membership_transitions column) carried through as ingest_at: the
-// greatest ingest stamp among a touch and the touches adjacent to it, because
-// a late touch rewrites its neighbours' valid_to and duplicate/dangling flags
-// without touching their own rows.
+// project_membership_transitions column) carried through as ingest_at: a
+// touch's own stamp folded with the touch before it (a late earlier touch
+// changes this touch's duplicate/dangling classification) and, among the
+// non-duplicate touches, the one after it (a late later touch changes this
+// interval's valid_to).
 func membershipIntervalsSQL(ingestExpr string) string {
 	return `(
   WITH touches AS (
@@ -311,7 +312,7 @@ func membershipIntervalsSQL(ingestExpr string) string {
   ),
   classified AS (
     SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, occurred_at, event_id, is_add,
-      greatest(ingest_at, lagInFrame(ingest_at, 1, ingest_at) OVER w, leadInFrame(ingest_at, 1, ingest_at) OVER w) AS ingest_c,
+      greatest(ingest_at, lagInFrame(ingest_at, 1, ingest_at) OVER w) AS ingest_c,
       (is_add = 1 AND lagInFrame(is_add, 1, 2) OVER w = 1) AS dup_flag,
       (is_add = 0 AND lagInFrame(is_add, 1, 2) OVER w != 1) AS dangling_flag
     FROM touches

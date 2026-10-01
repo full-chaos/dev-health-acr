@@ -366,3 +366,26 @@ SELECT concat('WI-', toString(number)), ?, ?, 'issue', 'open', '', '', 'linear',
 		t.Fatalf("a caught-up drain after the re-read sent %d statements", counting.statements-quiet)
 	}
 }
+
+// A late EARLIER touch re-classifies the touch after it (here a first ADD
+// becomes a duplicate ADD): that touch is read again although its own row did
+// not change.
+func TestIngestColumnsLateEarlierTouchRereadsTheTouchAfterIt(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	f := newIngestColumnsFixture(t, "72670000-0000-4000-8000-00000000000b", nil, logger)
+	recent := f.now.Add(-10 * time.Minute)
+	f.project("P-late", "LATE", recent, recent)
+	f.team("T-anchor", recent, recent)
+	f.transition("WI-first", "P-late", "LATE", "evt-add-2", f.old.Add(time.Hour), recent)
+	first := f.h.drain("")
+	if n := relationshipsOfType(first, contractsv1.ContextFabricRelationshipBelongsToProject); n != 1 {
+		t.Fatalf("first drain: %d BELONGS_TO_PROJECT edges, want 1", n)
+	}
+	logs.Reset()
+	f.transition("WI-first", "P-late", "LATE", "evt-add-1", f.old, f.now)
+	f.h.drain(first.cursor)
+	if !strings.Contains(logs.String(), "collapsed a duplicate project membership ADD touch") {
+		t.Fatalf("the touch after a late earlier ADD was not re-read as a duplicate ADD: %q", logs.String())
+	}
+}
