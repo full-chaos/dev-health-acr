@@ -58,39 +58,50 @@ func drainMemberships(t *testing.T, f *ingestColumnsFixture, between func(page i
 // plantMembershipShape seeds the shape a migrated organization holds, with the
 // id formats the providers write (linear:<identifier> work items, UUID
 // projects): every legacy work item carries the ONE migration stamp, the legacy
-// transitions carry one stamp just before it, work items synced after the
+// transitions carry one stamp 26 ms before it, work items synced after the
 // migration carry their own stamps, and the attributions of the same work
 // items sit at an older position in the shared cursor, with a few recomputed
 // among the later stamps.
+//
+// Every ingest stamp is written through fromUnixTimestamp64Milli: a time bound
+// as a statement argument reaches ClickHouse at second precision, which would
+// put the two legacy stamps on whole seconds.
 func plantMembershipShape(f *ingestColumnsFixture, migration time.Time, legacy, live, secondBulk, transitions, attributions int) {
+	const stamp = "fromUnixTimestamp64Milli(toInt64(?), 'UTC')"
 	project := func(n int) string { return fmt.Sprintf("6241316a-7659-4000-8000-00000000000%d", n) }
 	f.team("T-drain", f.old, f.old)
 	for n := 1; n <= 4; n++ {
 		f.project(project(n), fmt.Sprintf("K%d", n), f.old, f.old)
 	}
 	workItems := `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at, last_synced, ingested_at)
-SELECT concat(?, toString(number)), ?, ?, 'issue', 'open', '', '', 'linear', ?, ?, ?, `
-	mustExec(f.t, f.ctx, f.h.direct, workItems+`? FROM numbers(?)`,
-		"linear:LEG-", zeroUUID, f.h.orgID, project(1), f.old, f.old, migration, uint64(legacy))
-	mustExec(f.t, f.ctx, f.h.direct, workItems+`? + toIntervalSecond(number + 1) FROM numbers(?)`,
-		"linear:LIVE-", zeroUUID, f.h.orgID, project(2), f.old, f.old, migration, uint64(live))
-	mustExec(f.t, f.ctx, f.h.direct, workItems+`? FROM numbers(?)`,
-		"linear:BULK-", zeroUUID, f.h.orgID, project(3), f.old, f.old, migration.Add(2*time.Hour), uint64(secondBulk))
+SELECT concat(?, toString(number)), ?, ?, 'issue', 'open', '', '', 'linear', ?, ?, ?, ` + stamp
+	mustExec(f.t, f.ctx, f.h.direct, workItems+` FROM numbers(?)`,
+		"linear:LEG-", zeroUUID, f.h.orgID, project(1), f.old, f.old, migration.UnixMilli(), uint64(legacy))
+	mustExec(f.t, f.ctx, f.h.direct, workItems+` + toIntervalSecond(number + 1) FROM numbers(?)`,
+		"linear:LIVE-", zeroUUID, f.h.orgID, project(2), f.old, f.old, migration.UnixMilli(), uint64(live))
+	mustExec(f.t, f.ctx, f.h.direct, workItems+` FROM numbers(?)`,
+		"linear:BULK-", zeroUUID, f.h.orgID, project(3), f.old, f.old, migration.Add(2*time.Hour).UnixMilli(), uint64(secondBulk))
 	// The subjects with history also hold a work_items row with a project; the
 	// view keeps them out of the column arm.
-	mustExec(f.t, f.ctx, f.h.direct, workItems+`? FROM numbers(?)`,
-		"linear:MOV-", zeroUUID, f.h.orgID, project(4), f.old, f.old, migration, uint64(transitions))
+	mustExec(f.t, f.ctx, f.h.direct, workItems+` FROM numbers(?)`,
+		"linear:MOV-", zeroUUID, f.h.orgID, project(4), f.old, f.old, migration.UnixMilli(), uint64(transitions))
 	mustExec(f.t, f.ctx, f.h.direct, `INSERT INTO project_membership_transitions (org_id, source_id, repo_id, subject_kind, subject_id, provider, from_project_id, to_project_id, from_project_key, to_project_key, actor, occurred_at, last_synced, event_id, ingested_at)
-SELECT ?, NULL, ?, 'work_item', concat('linear:MOV-', toString(number)), 'linear', '', ?, '', '', '', ?, ?, concat('linear:', toString(generateUUIDv4())), ? FROM numbers(?)`,
-		f.h.orgID, zeroUUID, project(4), f.old, f.old, migration.Add(-25*time.Millisecond), uint64(transitions))
+SELECT ?, NULL, ?, 'work_item', concat('linear:MOV-', toString(number)), 'linear', '', ?, '', '', '', ?, ?, concat('linear:', toString(generateUUIDv4())), `+stamp+` FROM numbers(?)`,
+		f.h.orgID, zeroUUID, project(4), f.old, f.old, migration.Add(-26*time.Millisecond).UnixMilli(), uint64(transitions))
 	attribution := `INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, team_id, source, is_primary, confidence, computed_at)
-SELECT ?, ?, concat(?, toString(number)), 'T-drain', 'native_team', 1, 'high', `
-	mustExec(f.t, f.ctx, f.h.direct, attribution+`? + toIntervalMillisecond(intDiv(number, 250)) FROM numbers(?)`,
-		f.h.orgID, zeroUUID, "linear:LEG-", migration.Add(-3*time.Hour), uint64(attributions))
+SELECT ?, ?, concat(?, toString(number)), 'T-drain', 'native_team', 1, 'high', ` + stamp
+	mustExec(f.t, f.ctx, f.h.direct, attribution+` + toIntervalMillisecond(intDiv(number, 250)) FROM numbers(?)`,
+		f.h.orgID, zeroUUID, "linear:LEG-", migration.Add(-3*time.Hour).UnixMilli(), uint64(attributions))
 	// Attributions recomputed after the migration interleave with the work
 	// items synced after it, so the page cut falls inside the later stamps.
-	mustExec(f.t, f.ctx, f.h.direct, attribution+`? + toIntervalMillisecond(500 + 1000 * number) FROM numbers(?)`,
-		f.h.orgID, zeroUUID, "linear:LIVE-", migration, uint64(live))
+	mustExec(f.t, f.ctx, f.h.direct, attribution+` + toIntervalMillisecond(500 + 1000 * number) FROM numbers(?)`,
+		f.h.orgID, zeroUUID, "linear:LIVE-", migration.UnixMilli(), uint64(live))
+}
+
+// migrationStamp is a legacy stamp with a millisecond fraction, as a mutation
+// writes it (04:37:41.423 in the incident), six hours back.
+func migrationStamp(f *ingestColumnsFixture) time.Time {
+	return f.now.Add(-6 * time.Hour).Add(423 * time.Millisecond)
 }
 
 // membershipLogLines are the JSON log records with msg.
@@ -119,7 +130,7 @@ func TestMembershipColumnArmDrainsEveryRowAtASharedIngestStamp(t *testing.T) {
 	const legacy, live, secondBulk, transitions, attributions = 1500, 300, 450, 450, 900
 	var logs bytes.Buffer
 	f := newIngestColumnsFixture(t, "76590000-0000-4000-8000-000000000001", nil, slog.New(slog.NewJSONHandler(&logs, nil)))
-	migration := f.now.Add(-6 * time.Hour).Truncate(time.Millisecond)
+	migration := migrationStamp(f)
 	plantMembershipShape(f, migration, legacy, live, secondBulk, transitions, attributions)
 	got := drainMemberships(t, f, nil)
 	column := legacy + live + secondBulk
@@ -151,16 +162,30 @@ func TestMembershipColumnArmDrainsEveryRowAtASharedIngestStamp(t *testing.T) {
 		}
 	}
 	consumed := map[string]int{}
+	legacyStamp := migration.UTC().Format(time.RFC3339Nano)
+	legacyPages := 0
 	for _, line := range membershipLogLines(t, &logs, "devhealthsource project membership page") {
 		arm, _ := line["arm"].(string)
 		rows, _ := line["consumed_rows"].(float64)
-		consumed[arm] += int(rows)
-		if line["last_key_digest"] == "" || line["last_stamp"] == "" {
-			t.Fatalf("a page line carries no last position: %v", line)
+		fresh, _ := line["consumed_new"].(float64)
+		if rows != fresh || line["replay"] != false || line["run"] != float64(1) {
+			t.Fatalf("arm %q page %v: a first read of each row logged consumed_rows=%v consumed_new=%v replay=%v run=%v", arm, line["page_n"], rows, fresh, line["replay"], line["run"])
+		}
+		consumed[arm] += int(fresh)
+		returned, _ := line["statement_rows"].(float64)
+		if (returned > 0 || rows > 0) && (line["last_key_digest"] == "" || line["last_stamp"] == "") {
+			t.Fatalf("a page line with rows carries no last position: %v", line)
 		}
 		if total, _ := line["consumed_total"].(float64); int(total) != consumed[arm] {
-			t.Fatalf("arm %q page %v: consumed_total = %v, running sum of consumed_rows = %d", arm, line["page_n"], line["consumed_total"], consumed[arm])
+			t.Fatalf("arm %q page %v: consumed_total = %v, running sum of consumed_new = %d", arm, line["page_n"], line["consumed_total"], consumed[arm])
 		}
+		if arm == "work_item_column" && rows > 0 && line["last_stamp"] == legacyStamp {
+			legacyPages++
+		}
+	}
+	// The 1500 legacy rows share the one stamp: at least seven pages end on it.
+	if legacyPages < legacy/200 {
+		t.Fatalf("%d work_item_column pages end on the legacy stamp %s, want at least %d", legacyPages, legacyStamp, legacy/200)
 	}
 	for arm, n := range want {
 		if consumed[arm] != n {
@@ -174,7 +199,7 @@ func TestMembershipColumnArmDrainsEveryRowAtASharedIngestStamp(t *testing.T) {
 func TestMembershipColumnArmDrainsEveryRowWhileASyncRewritesThem(t *testing.T) {
 	const legacy, live, secondBulk, transitions, attributions = 1500, 300, 450, 450, 900
 	f := newIngestColumnsFixture(t, "76590000-0000-4000-8000-000000000002", nil, nil)
-	migration := f.now.Add(-6 * time.Hour).Truncate(time.Millisecond)
+	migration := migrationStamp(f)
 	plantMembershipShape(f, migration, legacy, live, secondBulk, transitions, attributions)
 	const batch = 100
 	next := 0
@@ -184,8 +209,8 @@ func TestMembershipColumnArmDrainsEveryRowWhileASyncRewritesThem(t *testing.T) {
 		}
 		stamp := f.now.Add(time.Duration(page) * time.Millisecond)
 		mustExec(t, f.ctx, f.h.direct, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at, last_synced, ingested_at)
-SELECT concat('linear:LEG-', toString(number + ?)), ?, ?, 'issue', 'open', '', '', 'linear', '6241316a-7659-4000-8000-000000000001', ?, ?, ? FROM numbers(?)`,
-			uint64(next), zeroUUID, f.h.orgID, f.old, stamp, stamp, uint64(batch))
+SELECT concat('linear:LEG-', toString(number + ?)), ?, ?, 'issue', 'open', '', '', 'linear', '6241316a-7659-4000-8000-000000000001', ?, ?, fromUnixTimestamp64Milli(toInt64(?), 'UTC') FROM numbers(?)`,
+			uint64(next), zeroUUID, f.h.orgID, f.old, stamp, stamp.UnixMilli(), uint64(batch))
 		next += batch
 	})
 	if want := legacy + live + secondBulk; len(got.column) != want {

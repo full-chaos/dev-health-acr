@@ -1045,7 +1045,15 @@ func (s *TeamsProjectsSource) presenceLedgerFor(orgID string, fromScratch bool) 
 		s.presence = map[string]*presenceTelemetryLedger{}
 	}
 	if fromScratch || s.presence[orgID] == nil {
-		s.presence[orgID] = &presenceTelemetryLedger{}
+		// A new run record: its number tells a restarted read (a rebuild, or a
+		// first page asked again) from a continued one in the page log, and
+		// a run that starts from an empty cursor owes a summary even if it
+		// reads nothing.
+		run := 1
+		if previous := s.presence[orgID]; previous != nil {
+			run = previous.membership.run + 1
+		}
+		s.presence[orgID] = &presenceTelemetryLedger{membership: membershipReadLedger{run: run, summaryOwed: fromScratch}}
 	}
 	return s.presence[orgID]
 }

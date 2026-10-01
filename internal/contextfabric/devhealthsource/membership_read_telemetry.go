@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"hash/fnv"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -26,25 +28,40 @@ var membershipArms = []string{"transition", "work_item_column"}
 
 type membershipArmPage struct {
 	statementRows int
-	consumedRows  int
+	consumedRows  int // rows of this arm in the page the cursor moved past
+	consumedNew   int // of those, rows this run had not consumed before
 	lastStamp     time.Time
 	lastKey       string
 }
 
 type membershipPage struct {
-	n      int
-	more   bool
-	replay bool
-	arms   map[string]*membershipArmPage
+	n    int
+	more bool
+	arms map[string]*membershipArmPage
 }
 
-// membershipReadLedger is the page-level part of presenceTelemetryLedger.
+// replay reports a page that consumed membership rows and no new one: the
+// same page built again (a failed apply).
+func (p membershipPage) replay() bool {
+	consumed, fresh := 0, 0
+	for _, arm := range p.arms {
+		consumed, fresh = consumed+arm.consumedRows, fresh+arm.consumedNew
+	}
+	return consumed > 0 && fresh == 0
+}
+
+// membershipReadLedger is the page-level part of presenceTelemetryLedger. It
+// lives as long as the ledger: one run, from an empty cursor (or process
+// start) to the next empty cursor.
 type membershipReadLedger struct {
-	statements    int
-	pages         []membershipPage // not logged yet
-	consumedTotal map[string]int
+	run        int
+	statements int
+	pages      []membershipPage // not logged yet
+	// seen holds, per arm, a hash of every row the cursor moved past in this
+	// run, so a row counts once however many pages carry it: a page built
+	// again, or a retry that returns an overlapping or changed page.
+	seen          map[string]map[uint64]struct{}
 	consumedPages map[string]int
-	lastConsumed  string // fingerprint of the last consumed page, to spot a replay
 	summaryOwed   bool
 }
 
@@ -59,7 +76,8 @@ func (p *membershipPage) arm(name string) *membershipArmPage {
 }
 
 // recordStatement notes one membership statement: rows are the rows it
-// returned inside its limit, more is whether rows lay beyond the limit.
+// returned inside its limit, more is whether rows lay beyond the limit. Both
+// arms get a record, so an arm that returned nothing is stated, not absent.
 func (l *presenceTelemetryLedger) recordStatement(rows []candidate, more bool) {
 	if l == nil {
 		return
@@ -68,6 +86,9 @@ func (l *presenceTelemetryLedger) recordStatement(rows []candidate, more bool) {
 	defer l.mu.Unlock()
 	l.membership.statements++
 	page := membershipPage{n: l.membership.statements, more: more}
+	for _, name := range membershipArms {
+		page.arm(name)
+	}
 	for _, c := range rows {
 		if c.arm == "" {
 			continue
@@ -80,8 +101,7 @@ func (l *presenceTelemetryLedger) recordStatement(rows []candidate, more bool) {
 }
 
 // recordConsumed notes the page the shared cursor moves past: all is the
-// merged, sorted, cut page of every table. A page built again from the same
-// cursor (a failed apply) is marked a replay and not added to the totals.
+// merged, sorted, cut page of every table.
 func (l *presenceTelemetryLedger) recordConsumed(all []candidate) {
 	if l == nil {
 		return
@@ -93,38 +113,38 @@ func (l *presenceTelemetryLedger) recordConsumed(all []candidate) {
 		return
 	}
 	page := &m.pages[len(m.pages)-1]
-	consumed := map[string]int{}
-	first, last := "", ""
 	for _, c := range all {
 		if c.table != membershipTable || c.arm == "" {
 			continue
 		}
-		consumed[c.arm]++
 		arm := page.arm(c.arm)
+		arm.consumedRows++
 		arm.lastStamp, arm.lastKey = c.position(), c.sortKey
-		last = c.position().UTC().Format(time.RFC3339Nano) + "|" + c.sortKey
-		if first == "" {
-			first = last
+		if m.seen == nil {
+			m.seen, m.consumedPages = map[string]map[uint64]struct{}{}, map[string]int{}
 		}
-	}
-	if first == "" {
-		return
-	}
-	fingerprint := first + "\x00" + last
-	page.replay = fingerprint == m.lastConsumed
-	m.lastConsumed = fingerprint
-	for name, n := range consumed {
-		page.arm(name).consumedRows = n
-		if page.replay {
+		if m.seen[c.arm] == nil {
+			m.seen[c.arm] = map[uint64]struct{}{}
+		}
+		id := rowHash(c)
+		if _, ok := m.seen[c.arm][id]; ok {
 			continue
 		}
-		if m.consumedTotal == nil {
-			m.consumedTotal, m.consumedPages = map[string]int{}, map[string]int{}
+		m.seen[c.arm][id] = struct{}{}
+		if arm.consumedNew == 0 {
+			m.consumedPages[c.arm]++
 		}
-		m.consumedTotal[name] += n
-		m.consumedPages[name]++
+		arm.consumedNew++
 		m.summaryOwed = true
 	}
+}
+
+func rowHash(c candidate) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(strconv.FormatInt(c.position().UnixNano(), 10)))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(c.sortKey))
+	return h.Sum64()
 }
 
 // membershipConsumedTotal is the distinct rows of one arm the cursor moved
@@ -135,13 +155,16 @@ func (l *presenceTelemetryLedger) membershipConsumedTotal(arm string) int {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.membership.consumedTotal[arm]
+	return len(l.membership.seen[arm])
 }
 
-// logMembershipPages writes one line per statement and arm that returned or
-// consumed rows, and one summary line per arm when a statement finds the read
-// drained after rows were consumed. No line carries a row id: the last key is
-// logged as a digest.
+// logMembershipPages writes one line per arm for every statement that returned
+// or consumed a membership row, and one summary line per arm when a statement
+// finds the read drained: after rows were consumed, or at the first empty
+// statement of a run that started from an empty cursor. statement_more is a
+// fact about the whole statement: while it is true, an arm with no row may
+// still hold rows beyond the limit; when it is false, that arm has no row past
+// the cursor. No line carries a row id: the last key is logged as a digest.
 func logMembershipPages(ctx context.Context, logger *slog.Logger, orgID string, ledger *presenceTelemetryLedger) {
 	if logger == nil || ledger == nil {
 		return
@@ -150,18 +173,15 @@ func logMembershipPages(ctx context.Context, logger *slog.Logger, orgID string, 
 	m := &ledger.membership
 	pages := m.pages
 	m.pages = nil
-	statements := m.statements
-	// before is each arm's consumed total as it stood before these pages.
-	before := map[string]int{}
-	pagesWithRows := map[string]int{}
+	run, statements := m.run, m.statements
+	// total starts at each arm's distinct total as it stood before these pages.
+	total, pagesWithRows := map[string]int{}, map[string]int{}
 	for _, name := range membershipArms {
-		before[name], pagesWithRows[name] = m.consumedTotal[name], m.consumedPages[name]
+		total[name], pagesWithRows[name] = len(m.seen[name]), m.consumedPages[name]
 	}
 	for _, page := range pages {
 		for name, arm := range page.arms {
-			if !page.replay {
-				before[name] -= arm.consumedRows
-			}
+			total[name] -= arm.consumedNew
 		}
 	}
 	// Drained: the last statement returned no membership row at all.
@@ -178,21 +198,26 @@ func logMembershipPages(ctx context.Context, logger *slog.Logger, orgID string, 
 	}
 	ledger.mu.Unlock()
 
-	total := before
 	for _, page := range pages {
+		rows := 0
+		for _, arm := range page.arms {
+			rows += arm.statementRows + arm.consumedRows
+		}
+		if rows == 0 {
+			continue
+		}
 		for _, name := range membershipArms {
 			arm := page.arms[name]
-			if arm == nil || (arm.statementRows == 0 && arm.consumedRows == 0) {
-				continue
-			}
-			if !page.replay {
-				total[name] += arm.consumedRows
+			total[name] += arm.consumedNew
+			lastStamp := ""
+			if !arm.lastStamp.IsZero() {
+				lastStamp = arm.lastStamp.UTC().Format(time.RFC3339Nano)
 			}
 			logger.InfoContext(ctx, "devhealthsource project membership page",
-				"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName, "arm", contextfabric.SanitizeLogAttr(name), "page_n", page.n,
+				"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName, "arm", contextfabric.SanitizeLogAttr(name), "run", run, "page_n", page.n,
 				"statement_rows", arm.statementRows, "statement_more", page.more,
-				"consumed_rows", arm.consumedRows, "consumed_total", total[name], "replay", page.replay,
-				"last_stamp", contextfabric.SanitizeLogAttr(arm.lastStamp.UTC().Format(time.RFC3339Nano)), "last_key_digest", contextfabric.SanitizeLogAttr(keyDigest(arm.lastKey)))
+				"consumed_rows", arm.consumedRows, "consumed_new", arm.consumedNew, "consumed_total", total[name], "replay", page.replay(),
+				"last_stamp", contextfabric.SanitizeLogAttr(lastStamp), "last_key_digest", contextfabric.SanitizeLogAttr(keyDigest(arm.lastKey)))
 		}
 	}
 	if !drained {
@@ -200,13 +225,16 @@ func logMembershipPages(ctx context.Context, logger *slog.Logger, orgID string, 
 	}
 	for _, name := range membershipArms {
 		logger.InfoContext(ctx, "devhealthsource project membership read drained",
-			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName, "arm", contextfabric.SanitizeLogAttr(name),
+			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName, "arm", contextfabric.SanitizeLogAttr(name), "run", run,
 			"rows_total", total[name], "pages", pagesWithRows[name], "statements", statements,
 			"scanned_rows_total", ledger.presenceReadCount(name, "work_item")+ledger.presenceReadCount(name, "pull_request"))
 	}
 }
 
 func keyDigest(key string) string {
+	if key == "" {
+		return ""
+	}
 	sum := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(sum[:6])
 }
