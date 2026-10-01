@@ -420,19 +420,15 @@ WHERE 1 = 1` + sincePredicate(cursor, cursorColumn, rowKey) + orderBy(cursorColu
 		observedAt = observedAt.UTC()
 		rowSortKey := identity.JoinSegments(subjectKind, repoID, subjectID, provider, projectID, eventID)
 		telemetry.recordRead(source, subjectKind)
-		if isDuplicateAdd != 0 {
-			// See membershipIntervalsSubquery's own doc comment: an ADD
-			// immediately preceded by another ADD, no REMOVE between --
-			// #1896's discard-and-replay path and an ordinary re-sync both
-			// legitimately produce this for a subject that never left.
-			// Counted, but NOT treated as malformed and NOT dropped from
-			// attribution: the interval this touch belongs to is already
-			// emitted by the FIRST add in the run (this row's own
-			// occurred_at is strictly later than that interval's
-			// ValidFrom), so attribution continues unchanged -- this row
-			// itself just has no boundary of its own to contribute.
+		duplicateAdd := isDuplicateAdd != 0
+		if duplicateAdd {
+			// An ADD immediately preceded by another ADD, no REMOVE between
+			// (a discard-and-replay or an ordinary re-sync). Counted, not
+			// malformed. The interval it belongs to is opened by the FIRST
+			// ADD of the run. When this touch was projected earlier as its
+			// own open interval (a late earlier ADD has since displaced it
+			// as the run's first), that edge is retracted below.
 			telemetry.recordDuplicateAdd(provider, projectID)
-			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
 		}
 		if isMalformed != 0 {
 			// See membershipIntervalsSubquery's own doc comment: a REMOVE
@@ -580,6 +576,19 @@ WHERE 1 = 1` + sincePredicate(cursor, cursorColumn, rowKey) + orderBy(cursorColu
 			SourceVersion:   TeamsProjectsSourceVersion,
 			ValidFrom:       validFrom,
 			ValidTo:         validTo,
+		}
+		if duplicateAdd {
+			// Tombstone the interval this touch would have opened. A no-op
+			// for an edge never projected; for one projected before a late
+			// earlier ADD arrived it removes the superseded open interval.
+			tombstone := contractsv1.ContextFabricProjectionTombstone{
+				Kind:          "relationship",
+				CanonicalID:   relationship.RelationshipID,
+				Reason:        "superseded_by_earlier_add",
+				EffectiveAt:   observedAt,
+				SourceVersion: TeamsProjectsSourceVersion,
+			}
+			return []candidate{{observedAt: observedAt, sortKey: rowSortKey, tombstone: &tombstone}}, nil
 		}
 		return []candidate{{observedAt: observedAt, sortKey: rowSortKey, relationship: &relationship}}, nil
 	})

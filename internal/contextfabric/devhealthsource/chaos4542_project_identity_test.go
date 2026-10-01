@@ -200,7 +200,11 @@ func TestChaos4542_CheckpointMarkerMovedWithTheJoin(t *testing.T) {
 	// full key; the ownership group with its source). Already-projected
 	// edges carry the retired bare-':' refs, and their rows' own timestamps
 	// do not move, so only the rebuild re-mints them.
-	if want := "devhealthsource.teams_projects.v17"; TeamsProjectsSourceVersion != want {
+	//
+	// v17 -> v18: a duplicate membership ADD retracts the interval it would
+	// have opened; an already-projected superseded interval is cleared only
+	// by the rebuild.
+	if want := "devhealthsource.teams_projects.v18"; TeamsProjectsSourceVersion != want {
 		t.Fatalf("TeamsProjectsSourceVersion = %q, want %q -- changing this constant is a deliberate full-rebuild decision, so update this test with the reason in the constant's doc comment", TeamsProjectsSourceVersion, want)
 	}
 }
