@@ -618,9 +618,8 @@ main() {
   local pin_active=0 pin_shard=""
   if [ "$include_isolated" -eq 0 ] && [ "$total" -eq "$race_spread_total" ]; then
     pin_active=1
-    local pin_entry pin_pkg
+    local pin_entry
     for pin_entry in "${race_spread_pins[@]}"; do
-      pin_pkg="${pin_entry%=*}"
       pin_shard="${pin_entry##*=}"
       if ! [[ "$pin_shard" =~ ^[1-9][0-9]*$ ]] || [ "$pin_shard" -gt "$total" ]; then
         printf '%s: race_spread_pins entry has a shard outside 1..%s: %s\n' "${0##*/}" "$total" "$pin_entry" >&2
