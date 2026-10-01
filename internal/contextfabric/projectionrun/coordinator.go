@@ -230,7 +230,10 @@ const (
 	defaultPollInterval = 15 * time.Second
 	defaultConcurrency  = 4
 	defaultMaxBackoff   = 5 * time.Minute
-	baseBackoff         = 5 * time.Second
+	// defaultMaxRefusedBuilds bounds consecutive refused-then-aborted builds
+	// per organization before divergence recovery stops opening new ones.
+	defaultMaxRefusedBuilds = 3
+	baseBackoff             = 5 * time.Second
 	// defaultDrainBatchBudget (CHAOS-3826) is how many EXTRA batches (beyond
 	// the one every configured source always attempts each tick) EACH
 	// source of one organization's Tick may pull before yielding
@@ -359,6 +362,10 @@ type Config struct {
 	PollInterval time.Duration
 	Concurrency  int
 	MaxBackoff   time.Duration
+	// MaxRefusedBuilds caps consecutive builds the epoch activation guard
+	// refused and abortRefusedBuild gave up, per organization and source
+	// version set. 0 defaults to 3; negative disables the cap.
+	MaxRefusedBuilds int
 	// DrainBatchBudget (CHAOS-3826) bounds runPair/runBuildPair's in-tick
 	// drain -- see defaultDrainBatchBudget's doc comment. 0 (unset)
 	// defaults; a NEGATIVE value explicitly disables extra draining (every
@@ -464,6 +471,7 @@ type Coordinator struct {
 	poll               time.Duration
 	concurrency        int
 	maxBackoff         time.Duration
+	maxRefusedBuilds   int
 	drainBudget        int
 	graphCountInterval time.Duration
 	graphCounts        graphCountState
@@ -474,6 +482,11 @@ type Coordinator struct {
 
 	backoffMu sync.Mutex
 	backoff   map[string]*pairBackoff // "orgID\x00source" -> state
+
+	// refusedBuilds counts consecutive refused-then-aborted builds per org.
+	// In-process: a restart gives an organization a fresh budget.
+	refusedMu     sync.Mutex
+	refusedBuilds map[string]*refusedBuildState
 
 	// buildStarted (CHAOS-3826 telemetry) records when THIS process opened
 	// an org's currently-building epoch (beginLifecycleBuild's success
@@ -490,6 +503,57 @@ type Coordinator struct {
 // unset. 24h matches D11's own example range (24-72h) at its shorter,
 // more conservative end.
 const defaultGraceWindow = 24 * time.Hour
+
+// refusedBuildState is one organization's run of builds the activation guard
+// refused, keyed by the source versions this binary reported when it did.
+type refusedBuildState struct {
+	versions string
+	count    int
+}
+
+// sourceVersionsKey names the set of source versions this binary reports.
+func (c *Coordinator) sourceVersionsKey() string {
+	parts := make([]string, 0, len(c.sourceNames))
+	for _, name := range c.sourceNames {
+		parts = append(parts, name+"="+currentSourceVersion(c.sources[name]))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ";")
+}
+
+// noteRefusedBuild counts one more refused build and reports the count and
+// whether the cap is reached. A changed version set restarts the count.
+func (c *Coordinator) noteRefusedBuild(orgID string) (count int, capped bool) {
+	key := c.sourceVersionsKey()
+	c.refusedMu.Lock()
+	defer c.refusedMu.Unlock()
+	st := c.refusedBuilds[orgID]
+	if st == nil || st.versions != key {
+		st = &refusedBuildState{versions: key}
+		c.refusedBuilds[orgID] = st
+	}
+	st.count++
+	return st.count, c.maxRefusedBuilds > 0 && st.count >= c.maxRefusedBuilds
+}
+
+// refusedBuildsCapped reports whether recovery must not open another build:
+// the cap was reached under the version set this binary reports now.
+func (c *Coordinator) refusedBuildsCapped(orgID string) bool {
+	if c.maxRefusedBuilds <= 0 {
+		return false
+	}
+	key := c.sourceVersionsKey()
+	c.refusedMu.Lock()
+	defer c.refusedMu.Unlock()
+	st := c.refusedBuilds[orgID]
+	return st != nil && st.versions == key && st.count >= c.maxRefusedBuilds
+}
+
+func (c *Coordinator) clearRefusedBuilds(orgID string) {
+	c.refusedMu.Lock()
+	delete(c.refusedBuilds, orgID)
+	c.refusedMu.Unlock()
+}
 
 type pairBackoff struct {
 	consecutiveFailures int
@@ -825,6 +889,9 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 	if cfg.MaxBackoff <= 0 {
 		cfg.MaxBackoff = defaultMaxBackoff
 	}
+	if cfg.MaxRefusedBuilds == 0 {
+		cfg.MaxRefusedBuilds = defaultMaxRefusedBuilds
+	}
 	switch {
 	case cfg.DrainBatchBudget == 0:
 		cfg.DrainBatchBudget = defaultDrainBatchBudget
@@ -904,7 +971,7 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 		lifecycle: cfg.Lifecycle, epochCheckpoints: cfg.EpochCheckpoints, retireScheduler: cfg.RetireScheduler,
 		lifecycleTelem: cfg.LifecycleTelemetry, epochInvalidator: cfg.EpochResolverInvalidator, graceWindow: cfg.GraceWindow,
 		poll: cfg.PollInterval, concurrency: cfg.Concurrency,
-		maxBackoff: cfg.MaxBackoff, drainBudget: cfg.DrainBatchBudget, graphCountInterval: cfg.GraphCountCheckInterval, now: cfg.Now, logger: cfg.Logger, backoff: make(map[string]*pairBackoff),
+		maxBackoff: cfg.MaxBackoff, maxRefusedBuilds: cfg.MaxRefusedBuilds, refusedBuilds: make(map[string]*refusedBuildState), drainBudget: cfg.DrainBatchBudget, graphCountInterval: cfg.GraphCountCheckInterval, now: cfg.Now, logger: cfg.Logger, backoff: make(map[string]*pairBackoff),
 	}, nil
 }
 
@@ -1465,10 +1532,17 @@ type tickFreshnessStats struct {
 	// organization; a FACT about that organization is counted on its own.
 	// Same shape and same reason as orgsTruncated.
 	orgsStale int64
+	// orgsBuildRefusedCapped counts organizations whose divergence recovery
+	// was withheld this tick by the refused build cap. A fact beside the
+	// buckets, outside the bucket identity.
+	orgsBuildRefusedCapped int64
 }
 
 func (s *tickFreshnessStats) recordOK()              { atomic.AddInt64(&s.orgsOK, 1) }
 func (s *tickFreshnessStats) recordRebuildRequired() { atomic.AddInt64(&s.orgsRebuildRequired, 1) }
+func (s *tickFreshnessStats) recordBuildRefusedCapped() {
+	atomic.AddInt64(&s.orgsBuildRefusedCapped, 1)
+}
 func (s *tickFreshnessStats) recordBackoff()         { atomic.AddInt64(&s.orgsBackoff, 1) }
 func (s *tickFreshnessStats) recordSourceFailedOrg() { atomic.AddInt64(&s.orgsSourceFailed, 1) }
 func (s *tickFreshnessStats) recordPairFailedOrg()   { atomic.AddInt64(&s.orgsPairFailed, 1) }
@@ -1660,6 +1734,9 @@ type orgScope struct {
 	// observation, such as the deferred organization unlock.
 	signals   *orgSignals
 	truncated bool
+	// refusedCapped: the refused build cap withheld recovery this tick. A
+	// fact beside the bucket, committed by finish().
+	refusedCapped bool
 }
 
 // beginOrg opens one organization's scope. The caller MUST defer finish().
@@ -1749,6 +1826,9 @@ func (o *orgScope) recordPair(record func(truncated bool)) {
 // unevaluated rather than dropped -- that is a defect, and the bucket
 // identity on the line is what makes it visible instead of silent.
 func (o *orgScope) finish() {
+	if o.refusedCapped {
+		o.stats.recordBuildRefusedCapped()
+	}
 	// Completion is derived, never asserted: see run(). finish() does not
 	// read the context -- by the time it runs, a cancellation that
 	// interrupted the work and one that arrived after it finished look
@@ -2066,6 +2146,7 @@ func (c *Coordinator) Tick(ctx context.Context) {
 		// reading this off the bucket would tell an operator the rebuild
 		// queue had shrunk when a source outage started.
 		"orgs_stale", atomic.LoadInt64(&stats.orgsStale),
+		"orgs_build_refused_capped", atomic.LoadInt64(&stats.orgsBuildRefusedCapped),
 		"pending_rebuild_orgs_total", atomic.LoadInt64(&stats.orgsStale),
 		// CHAOS-3882: how many organizations this tick found in
 		// checkpoint-vs-store divergence and drove an automatic recovery
@@ -2522,6 +2603,7 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 	})
 	switch {
 	case err == nil:
+		c.clearRefusedBuilds(orgID)
 		attrs := []any{"org_id", contextfabric.SanitizeLogAttr(orgID), "from_epoch", row.ActiveEpoch, "to_epoch", flipped.ActiveEpoch}
 		// CHAOS-3826: report the build's wall-clock duration when this
 		// process is the one that opened it (buildStarted's doc comment).
@@ -2575,6 +2657,13 @@ func (c *Coordinator) abortRefusedBuild(scope *orgScope, orgID string, targetEpo
 			"source", contextfabric.SanitizeLogAttr(refusal.Source), "reason", contextfabric.SanitizeLogAttr(string(refusal.Reason)),
 			"recorded_source_version", contextfabric.SanitizeLogAttr(refusal.RecordedSourceVersion),
 			"current_source_version", contextfabric.SanitizeLogAttr(refusal.CurrentSourceVersion))
+	}
+	count, capped := c.noteRefusedBuild(orgID)
+	c.logger.WarnContext(scope.logCtx(), "context_fabric: refused build count for organization",
+		"org_id", contextfabric.SanitizeLogAttr(orgID), "refused_builds", count, "max_refused_builds", c.maxRefusedBuilds)
+	if capped {
+		c.logger.WarnContext(scope.logCtx(), "context_fabric: refused build cap reached; divergence recovery opens no more builds for this organization until a source version changes or the process restarts",
+			"org_id", contextfabric.SanitizeLogAttr(orgID), "refused_builds", count, "max_refused_builds", c.maxRefusedBuilds)
 	}
 	_ = scope.run(func(ctx context.Context) error {
 		c.invalidateEpochResolution(ctx, orgID, contextfabric.LifecycleTransitionAbortBuild)
@@ -2976,6 +3065,13 @@ func (c *Coordinator) recoverFromDivergenceLifecycle(scope *orgScope, orgID stri
 		return
 	}
 	hash := orgIDHash(orgID)
+	if c.refusedBuildsCapped(orgID) {
+		scope.refusedCapped = true
+		scope.record(scope.stats.recordDivergenceRecovered)
+		c.logger.WarnContext(scope.logCtx(), "context_fabric: automatic recovery withheld; the refused build cap is reached for this organization's source versions",
+			"org_id_hash", contextfabric.SanitizeLogAttr(hash), "max_refused_builds", c.maxRefusedBuilds)
+		return
+	}
 	c.logger.ErrorContext(scope.logCtx(), "context_fabric: projection checkpoint-store divergence detected (CHAOS-3882); the durable checkpoint outran the graph backend's own state -- triggering automatic build-aside recovery instead of serving resolution against a silently empty or stale graph",
 		"org_id_hash", contextfabric.SanitizeLogAttr(hash))
 	var opened bool
