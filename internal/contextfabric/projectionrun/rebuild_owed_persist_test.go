@@ -20,6 +20,11 @@ const rebuildOwedOrg = "org-a"
 // shape of a projector restart: no in-process backoff state survives.
 func restartedCoordinator(t *testing.T, db *sql.DB, clock *fakeClock, sources ...*fakeSource) (*projectionrun.Coordinator, *bytes.Buffer) {
 	t.Helper()
+	return restartedCoordinatorOn(t, db, clock, newFakeBackend(), sources...)
+}
+
+func restartedCoordinatorOn(t *testing.T, db *sql.DB, clock *fakeClock, backend *fakeBackend, sources ...*fakeSource) (*projectionrun.Coordinator, *bytes.Buffer) {
+	t.Helper()
 	store, err := pgprojection.NewCheckpointStore(db)
 	require.NoError(t, err)
 	var buffer bytes.Buffer
@@ -30,7 +35,7 @@ func restartedCoordinator(t *testing.T, db *sql.DB, clock *fakeClock, sources ..
 	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
 		OrgIDs:         []string{rebuildOwedOrg},
 		Sources:        pairs,
-		Backend:        newFakeBackend(),
+		Backend:        backend,
 		Checkpoints:    store,
 		RebuildMarkers: newFakeRebuildMarker(),
 		Logger:         slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo})),
@@ -104,4 +109,77 @@ func TestRebuildOwedOfARemovedSourceDoesNotKeepTheOrgStale(t *testing.T) {
 
 	restarted, buffer := restartedCoordinator(t, db, clock, &fakeSource{name: "kept", dormant: true})
 	requireBuckets(t, tickSummary(t, restarted, buffer), 0, 0, 0, 0)
+}
+
+func TestRebuildOwedSurvivesAResetUntilABatchApplies(t *testing.T) {
+	ctx := context.Background()
+	db := newProjectionRunTestDatabase(t, ctx)
+	clock := newFakeClock(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
+	seedMatchingCheckpoint(t, db, "src")
+
+	refused, buffer := restartedCoordinator(t, db, clock, versionRefusedSource("src"))
+	requireBuckets(t, tickSummary(t, refused, buffer), 1, 0, 0, 1)
+	require.NoError(t, refused.Rebuild(ctx, rebuildOwedOrg))
+
+	store, err := pgprojection.NewCheckpointStore(db)
+	require.NoError(t, err)
+	reset, err := store.LoadProjectionCheckpoint(ctx, rebuildOwedOrg, "src")
+	require.NoError(t, err)
+	require.Empty(t, reset.Cursor, "the rebuild reset the checkpoint")
+	require.True(t, reset.RebuildOwed, "a reset applies nothing and must not resolve the owed rebuild")
+
+	restarted, buffer := restartedCoordinator(t, db, clock, &fakeSource{name: "src", dormant: true})
+	requireBuckets(t, tickSummary(t, restarted, buffer), 1, 0, 0, 1)
+
+	applying, buffer := restartedCoordinator(t, db, clock, &fakeSource{name: "src", pages: 1})
+	requireBuckets(t, tickSummary(t, applying, buffer), 0, 0, 0, 0)
+}
+
+func TestRebuildOwedClearedByAnotherReplicaIsNotReportedForever(t *testing.T) {
+	ctx := context.Background()
+	db := newProjectionRunTestDatabase(t, ctx)
+	clock := newFakeClock(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
+	seedMatchingCheckpoint(t, db, "src")
+
+	// One graph backend for both replicas, as in production: separate fakes
+	// would read as the divergence the coordinator recovers from.
+	backend := newFakeBackend()
+	sourceA := versionRefusedSource("src")
+	replicaA, bufferA := restartedCoordinatorOn(t, db, clock, backend, sourceA)
+	requireBuckets(t, tickSummary(t, replicaA, bufferA), 1, 0, 0, 1)
+
+	replicaB, bufferB := restartedCoordinatorOn(t, db, clock, backend, &fakeSource{name: "src", pages: 1})
+	requireBuckets(t, tickSummary(t, replicaB, bufferB), 0, 0, 0, 0)
+
+	// A's source recovers but has nothing new: a no-op attempt clears nothing
+	// in A's own memory, so only the durable row can tell A it is settled.
+	sourceA.err = nil
+	sourceA.dormant = true
+	clock.Advance(time.Hour)
+	requireBuckets(t, tickSummary(t, replicaA, bufferA), 0, 0, 0, 0)
+}
+
+func TestRebuildOwedSurvivesAClaimWhoseApplyFails(t *testing.T) {
+	ctx := context.Background()
+	db := newProjectionRunTestDatabase(t, ctx)
+	clock := newFakeClock(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
+	seedMatchingCheckpoint(t, db, "src")
+
+	refused, buffer := restartedCoordinator(t, db, clock, versionRefusedSource("src"))
+	requireBuckets(t, tickSummary(t, refused, buffer), 1, 0, 0, 1)
+	require.NoError(t, refused.Rebuild(ctx, rebuildOwedOrg))
+
+	// The next attempt claims the new source version on the reset checkpoint,
+	// then its backend apply fails: nothing applied, so the rebuild is still owed.
+	backend := newFakeBackend()
+	backend.failOrgs[rebuildOwedOrg] = true
+	claiming, buffer := restartedCoordinatorOn(t, db, clock, backend, &fakeSource{name: "src", pages: 1})
+	tickSummary(t, claiming, buffer)
+
+	store, err := pgprojection.NewCheckpointStore(db)
+	require.NoError(t, err)
+	checkpoint, err := store.LoadProjectionCheckpoint(ctx, rebuildOwedOrg, "src")
+	require.NoError(t, err)
+	require.Equal(t, "test.v1", checkpoint.SourceVersion, "the claim ran")
+	require.True(t, checkpoint.RebuildOwed, "a claim applies nothing and must not resolve the owed rebuild")
 }

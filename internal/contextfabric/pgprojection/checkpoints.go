@@ -78,9 +78,9 @@ func (s *CheckpointStore) CompareAndSwapProjectionCheckpoint(ctx context.Context
 	}
 	updateResult, err := s.db.ExecContext(ctx, `
 UPDATE acr.context_fabric_projection_checkpoints
-SET cursor = $3, source_version = $4, backend_watermark = $5, updated_at = $6, rows_applied = $8, rebuild_owed = false
+SET cursor = $3, source_version = $4, backend_watermark = $5, updated_at = $6, rows_applied = $8, rebuild_owed = $9
 WHERE org_id = $1 AND source = $2 AND epoch = 0 AND cursor = $7`,
-		updated.OrgID, updated.Source, updated.Cursor, updated.SourceVersion, updated.BackendWatermark, updated.UpdatedAt, expected.Cursor, updated.RowsApplied)
+		updated.OrgID, updated.Source, updated.Cursor, updated.SourceVersion, updated.BackendWatermark, updated.UpdatedAt, expected.Cursor, updated.RowsApplied, updated.RebuildOwed)
 	if err != nil {
 		return fmt.Errorf("advance projection checkpoint: %w", sanitizeError(err))
 	}
@@ -96,10 +96,10 @@ WHERE org_id = $1 AND source = $2 AND epoch = 0 AND cursor = $7`,
 	// that turned out to already exist -- lose cleanly rather than corrupt
 	// the row.
 	insertResult, err := s.db.ExecContext(ctx, `
-INSERT INTO acr.context_fabric_projection_checkpoints (org_id, source, epoch, cursor, source_version, backend_watermark, updated_at, rows_applied)
-VALUES ($1, $2, 0, $3, $4, $5, $6, $7)
+INSERT INTO acr.context_fabric_projection_checkpoints (org_id, source, epoch, cursor, source_version, backend_watermark, updated_at, rows_applied, rebuild_owed)
+VALUES ($1, $2, 0, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (org_id, epoch, source) DO NOTHING`,
-		updated.OrgID, updated.Source, updated.Cursor, updated.SourceVersion, updated.BackendWatermark, updated.UpdatedAt, updated.RowsApplied)
+		updated.OrgID, updated.Source, updated.Cursor, updated.SourceVersion, updated.BackendWatermark, updated.UpdatedAt, updated.RowsApplied, updated.RebuildOwed)
 	if err != nil {
 		return fmt.Errorf("advance projection checkpoint: %w", sanitizeError(err))
 	}
@@ -176,9 +176,9 @@ func (s *CheckpointStore) CompareAndSwapProjectionCheckpointForEpoch(ctx context
 	}
 	updateResult, err := s.db.ExecContext(ctx, `
 UPDATE acr.context_fabric_projection_checkpoints
-SET cursor = $4, source_version = $5, backend_watermark = $6, updated_at = $7, rows_applied = $9, rebuild_owed = false
+SET cursor = $4, source_version = $5, backend_watermark = $6, updated_at = $7, rows_applied = $9, rebuild_owed = $10
 WHERE org_id = $1 AND source = $2 AND epoch = $3 AND cursor = $8`,
-		updated.OrgID, updated.Source, updated.Epoch, updated.Cursor, updated.SourceVersion, updated.BackendWatermark, updated.UpdatedAt, expected.Cursor, updated.RowsApplied)
+		updated.OrgID, updated.Source, updated.Epoch, updated.Cursor, updated.SourceVersion, updated.BackendWatermark, updated.UpdatedAt, expected.Cursor, updated.RowsApplied, updated.RebuildOwed)
 	if err != nil {
 		return fmt.Errorf("advance projection checkpoint for epoch: %w", sanitizeError(err))
 	}
@@ -188,10 +188,10 @@ WHERE org_id = $1 AND source = $2 AND epoch = $3 AND cursor = $8`,
 		return nil
 	}
 	insertResult, err := s.db.ExecContext(ctx, `
-INSERT INTO acr.context_fabric_projection_checkpoints (org_id, source, epoch, cursor, source_version, backend_watermark, updated_at, rows_applied)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO acr.context_fabric_projection_checkpoints (org_id, source, epoch, cursor, source_version, backend_watermark, updated_at, rows_applied, rebuild_owed)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (org_id, epoch, source) DO NOTHING`,
-		updated.OrgID, updated.Source, updated.Epoch, updated.Cursor, updated.SourceVersion, updated.BackendWatermark, updated.UpdatedAt, updated.RowsApplied)
+		updated.OrgID, updated.Source, updated.Epoch, updated.Cursor, updated.SourceVersion, updated.BackendWatermark, updated.UpdatedAt, updated.RowsApplied, updated.RebuildOwed)
 	if err != nil {
 		return fmt.Errorf("advance projection checkpoint for epoch: %w", sanitizeError(err))
 	}
@@ -209,7 +209,7 @@ ON CONFLICT (org_id, epoch, source) DO NOTHING`,
 // checkpoint row, that a version refusal left a rebuild owed. It never creates
 // a row: a refusal is only possible against an existing checkpoint, and an
 // invented row would carry an empty cursor that reads as "never projected".
-// The cursor CAS clears the flag, so there is deliberately no clear path here.
+// The checkpoint CAS writes the flag its caller carries: a batch advance carries false, a reset or claim carries the loaded value. There is deliberately no clear method.
 func (s *CheckpointStore) SetProjectionRebuildOwed(ctx context.Context, orgID string, epoch int64, source string) error {
 	if s == nil || s.db == nil {
 		return errors.New("pgprojection: checkpoint store is not configured")
