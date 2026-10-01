@@ -269,8 +269,8 @@ for candidate in \
   "$root/../../ops" \
   "$root/../../../ops"; do
   [[ -n "${candidate#/ops}" ]] || continue
-  if [[ -d "$candidate/src/dev_health_ops/migrations/clickhouse" ]]; then
-    migrations_dir="$candidate/src/dev_health_ops/migrations/clickhouse"
+  if [[ -f "$candidate/internal/chmigrate/baseline/head.json" ]]; then
+    migrations_dir="$candidate/internal/chmigrate"
     break
   fi
 done
