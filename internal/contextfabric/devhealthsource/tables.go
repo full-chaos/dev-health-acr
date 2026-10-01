@@ -124,7 +124,7 @@ func ProjectedSubjectKinds() []contractsv1.ContextFabricSubjectKind {
 // value is the normal case, so a page of rows sharing one millisecond
 // repeated forever. Executed: 1,000 teams sharing one microsecond-exact
 // stamp, and 1,000 differing only in microseconds, each stalled on page 2
-// with the truncated bound (chaos7263_ingest_cursor_integration_test.go).
+// with the truncated bound (ingest_cursor_integration_test.go).
 func sincePredicate(cursor cursorState, timestampExpr, rowKeyExpr string) string {
 	if cursor.Since.IsZero() && cursor.After == "" {
 		return ""

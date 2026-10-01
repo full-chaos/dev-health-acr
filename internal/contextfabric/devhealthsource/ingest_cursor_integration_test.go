@@ -24,7 +24,7 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
-func TestCHAOS7263IngestTimeCursor(t *testing.T) {
+func TestIngestTimeCursor(t *testing.T) {
 	ctx := context.Background()
 	// The package's shared org-scoped container (orgIsolationClickHouseFixture,
 	// productionSchemaDDL's tables): no container start of its own. Every

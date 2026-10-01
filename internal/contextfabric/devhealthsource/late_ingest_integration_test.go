@@ -175,7 +175,7 @@ func requireProviderTime(t *testing.T, what string, got, provider time.Time) {
 	}
 }
 
-func TestCHAOS7263LateIngestedRowsAreProjected(t *testing.T) {
+func TestLateIngestedRowsAreProjected(t *testing.T) {
 	ctx := context.Background()
 	// The package's shared org-scoped container (orgIsolationClickHouseFixture,
 	// productionSchemaDDL's tables): no container start of its own. Every
