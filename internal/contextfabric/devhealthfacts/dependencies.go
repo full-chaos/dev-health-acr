@@ -399,6 +399,7 @@ ORDER BY t.repo_id`, settings)
 		if table, omitted, ok := ownedRepositoriesFactValue(repos); ok {
 			fields["owned_repositories"] = table
 			if omitted > 0 {
+				outcome.truncated = true
 				fields["owned_repositories_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
 			}
 		}

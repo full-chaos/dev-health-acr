@@ -1,11 +1,14 @@
 package devhealthfacts_test
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // t4TeamRollupCases drive the team rollup of deployments, incidents, pull
@@ -95,6 +98,34 @@ func TestTeamRollupDeclarationMarks(t *testing.T) {
 			if counts && field.Name != "owned_repositories_omitted_count" && field.Name != "repository_breakdown_omitted_count" && !field.Aggregate && !field.CallerScoped {
 				t.Errorf("%s %s: a count over the owned set must be Aggregate or CallerScoped", kind, field.Name)
 			}
+		}
+	}
+}
+
+// A team that owns more repositories than the pointer table holds is served a
+// capped pointer; the result must say so (truncated) even when no repository
+// has a metric row, or the omitted repositories cannot be followed and the
+// read still claims to be complete.
+func TestTeamRollupCappedOwnedRepositoryPointerDegradesTheResult(t *testing.T) {
+	owned := make([][]any, 0, 70)
+	for i := 0; i < 70; i++ {
+		owned = append(owned, []any{"CHAOS", fmt.Sprintf("00000000-0000-4000-8000-%012d", i), fmt.Sprintf("acme/repo-%02d", i)})
+	}
+	for _, kind := range []contextfabric.FactKind{contextfabric.FactDeployments, contextfabric.FactPullRequests, contextfabric.FactIncidents, contextfabric.FactBlockers} {
+		client := &fakeClient{tables: []fakeTable{{match: "GROUP BY team_id, repo_key", rows: owned}}}
+		provider := findProvider(t, devhealthfacts.NewProviders(client), kind)
+		result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: kind, Subjects: []contextfabric.SubjectRef{teamSubject("CHAOS")},
+		})
+		if err != nil || len(result.Facts) != 1 {
+			t.Fatalf("%s: err=%v facts=%d, want one team fact", kind, err, len(result.Facts))
+		}
+		omitted := result.Facts[0].Fields["owned_repositories_omitted_count"]
+		if omitted.Integer == nil || *omitted.Integer != 6 {
+			t.Fatalf("%s: owned_repositories_omitted_count = %#v, want 6", kind, omitted)
+		}
+		if !result.Truncated {
+			t.Fatalf("%s: a capped owned_repositories pointer was served as untruncated (state=%s)", kind, result.State)
 		}
 	}
 }
