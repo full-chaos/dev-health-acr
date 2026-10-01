@@ -520,7 +520,7 @@ func TestOAuthLoginEndToEnd(t *testing.T) {
 		scopes, _ := json.Marshal(line["scopes"])
 		wantScopes := `[]`
 		if line["outcome"] == "ok" && (line["step"] == "authorize" || line["step"] == "token") {
-			wantScopes = `["context:read","evidence:read"]`
+			wantScopes = `["context:read","evidence:read","data:read"]`
 		}
 		if string(scopes) != wantScopes {
 			t.Fatalf("%s:%s scopes = %s, want %s", line["step"], line["outcome"], scopes, wantScopes)

@@ -107,7 +107,7 @@ func withNoStoreFor(resource string, h *HTTPHandler) http.Handler {
 	metadata := sdkauth.ProtectedResourceMetadataHandler(&oauthex.ProtectedResourceMetadata{
 		Resource:               resource,
 		AuthorizationServers:   []string{h.opts.AuthorizationServer},
-		ScopesSupported:        []string{auth.ScopeContextRead, auth.ScopeEvidenceRead, auth.ScopeDataRead},
+		ScopesSupported:        auth.AdvertisedScopes(),
 		BearerMethodsSupported: []string{"header"},
 		ResourceName:           "Dev Health agent context runtime",
 	})
@@ -146,7 +146,7 @@ func (h *HTTPHandler) challenge(base, path string) string {
 	if !h.oauthDiscoveryEnabled() {
 		return base
 	}
-	parameter := `resource_metadata="` + h.protectedResourceMetadataURL(path) + `", scope="` + auth.ScopeContextRead + " " + auth.ScopeEvidenceRead + `"`
+	parameter := `resource_metadata="` + h.protectedResourceMetadataURL(path) + `", scope="` + strings.Join(auth.AdvertisedScopes(), " ") + `"`
 	if rest, ok := strings.CutPrefix(base, "Bearer "); ok {
 		return "Bearer " + parameter + ", " + rest
 	}

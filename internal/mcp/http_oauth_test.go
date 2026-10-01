@@ -91,7 +91,7 @@ func TestProtectedResourceMetadataAndChallenge(t *testing.T) {
 		}
 		handler.ServeHTTP(recorder, request)
 		challenge := recorder.Header().Get("WWW-Authenticate")
-		if recorder.Code != http.StatusUnauthorized || !strings.HasPrefix(challenge, `Bearer resource_metadata="https://mcp.example.test/.well-known/oauth-protected-resource/mcp", scope="context:read evidence:read"`) {
+		if recorder.Code != http.StatusUnauthorized || !strings.HasPrefix(challenge, `Bearer resource_metadata="https://mcp.example.test/.well-known/oauth-protected-resource/mcp", scope="context:read evidence:read data:read"`) {
 			t.Fatalf("%s bearer: status %d challenge %q", name, recorder.Code, challenge)
 		}
 		if name == "malformed" && !strings.HasSuffix(challenge, `error="invalid_token"`) {
