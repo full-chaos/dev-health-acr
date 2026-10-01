@@ -145,7 +145,7 @@ func TestASuccessfulAttemptClearsTheRebuildOwed(t *testing.T) {
 	h.tick()
 	h.pastBackoff()
 	source.err = nil
-	source.pages = 1
+	source.pages = 5
 	summary := h.tick()
 	requireBuckets(t, summary, 0, 0, 0, 0)
 	if got := summaryNumber(t, summary, "orgs_ok"); got != 1 {
@@ -179,20 +179,47 @@ func TestABuildPhaseOutageAfterARefusalKeepsBothSignals(t *testing.T) {
 	requireBuckets(t, h.tick(), 0, 1, 1, 1)
 }
 
-func TestACancelledTickDoesNotClaimAVersionRefusalBucket(t *testing.T) {
+func TestANoOpAttemptDoesNotClearTheRebuildOwed(t *testing.T) {
 	t.Parallel()
-	source := versionRefusedSource("source-refused")
+	source := versionRefusedSource("source-s")
 	h := newRefusalHarness(t, false, source)
+	h.tick()
+	h.pastBackoff()
+	source.err = nil
+	source.dormant = true
+	summary := h.tick()
+	if got := source.calls.Load(); got != 2 {
+		t.Fatalf("source calls = %d, want 2 -- the no-op attempt must have run", got)
+	}
+	requireBuckets(t, summary, 1, 0, 0, 1)
+}
+
+func TestARefusalFollowedByACancellationKeepsTheFactAndDoesNotFinishTheTick(t *testing.T) {
+	t.Parallel()
+	refused := versionRefusedSource("source-a-refused")
+	slow := &fakeSource{name: "source-b-slow", delay: time.Hour}
+	h := newRefusalHarness(t, false, refused, slow)
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	go func() {
+		for slow.calls.Load() == 0 {
+			time.Sleep(time.Millisecond)
+		}
+		cancel()
+	}()
 	h.buffer.Reset()
 	h.coordinator.Tick(ctx)
-	for _, summary := range allFreshnessSummaries(t, &h.buffer) {
-		if got, _ := summary["tick_complete"].(bool); got {
-			t.Errorf("tick_complete = true on a cancelled tick; line: %v", summary)
-		}
-		if got := summaryNumber(t, summary, "orgs_source_failed"); got != 0 {
-			t.Errorf("orgs_source_failed = %v, want 0 -- a cancelled tick is not a source failure", got)
+	summary := freshnessSummary(t, &h.buffer)
+	if got, _ := summary["tick_complete"].(bool); got {
+		t.Errorf("tick_complete = true on a cancelled tick; line: %v", summary)
+	}
+	for key, want := range map[string]float64{
+		"orgs_source_failed": 0,
+		"sources_failed":     0,
+		"orgs_stale":         1,
+		"orgs_truncated":     1,
+	} {
+		if got := summaryNumber(t, summary, key); got != want {
+			t.Errorf("%s = %v, want %v; line: %v", key, got, want, summary)
 		}
 	}
 }

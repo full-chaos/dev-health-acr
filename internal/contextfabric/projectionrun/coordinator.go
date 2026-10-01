@@ -476,8 +476,8 @@ type pairBackoff struct {
 	// lastVersionRefused: the failure that set the CURRENT backoff was a
 	// source version refusal, which is a rebuild owed and not an outage.
 	lastVersionRefused bool
-	// rebuildOwed: a version refusal was seen and no attempt has succeeded
-	// since. Sticky across later failures of another class, because the
+	// rebuildOwed: a version refusal was seen and no attempt has applied a
+	// batch since. Sticky across later failures of another class, because the
 	// version mismatch stays in the checkpoint while an outage comes and goes.
 	rebuildOwed bool
 }
@@ -2605,6 +2605,7 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 		total = run.RowsApplied
 		if run.Applied {
 			applied++
+			c.clearRebuildOwed(key)
 		}
 		mode, terminal := classifyBuildCompletion(run)
 		if !terminal {
@@ -2682,7 +2683,7 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 	// failed is decided by the tick's context and not by the yield reason,
 	// for the reason lastErr exists above.
 	_, buildFailed, buildBroke, buildStage := pairOutcomeOf(ctx, lastErr)
-	if lastErr != nil && c.rebuildOwed(key) {
+	if c.rebuildOwed(key) {
 		rebuild = true
 	}
 	return batches > 0, buildFailed, withheld, rebuild, buildStage, buildBroke
@@ -3005,6 +3006,7 @@ func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, che
 		return true, false, runErr, c.rebuildOwed(key), false, false
 	}
 	if run.Applied {
+		c.clearRebuildOwed(key)
 		c.logger.InfoContext(ctx, "projection batch applied", "org_id", contextfabric.SanitizeLogAttr(orgID), "source", contextfabric.SanitizeLogAttr(source), "batch_id", contextfabric.SanitizeLogAttr(run.BatchID), "backend_watermark", contextfabric.SanitizeLogAttr(run.BackendWatermark), "duration_ms", outcome.Duration.Milliseconds())
 	}
 	// CHAOS-3887 (H1): computed and logged regardless of run.Applied/err --
@@ -3014,7 +3016,8 @@ func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, che
 	// rows, available=false, no error) got no freshness signal at all.
 	// complete: the applied batch itself claims the source has nothing more, so
 	// a drain that stops here has no backlog whatever its budget says.
-	return true, run.Applied, nil, c.emitProjectionFreshness(ctx, orgID, source), false, run.Applied && run.CompleteEnumeration
+	freshnessStale := c.emitProjectionFreshness(ctx, orgID, source)
+	return true, run.Applied, nil, freshnessStale || c.rebuildOwed(key), false, run.Applied && run.CompleteEnumeration
 }
 
 // runPair drains (org, source)'s pending batches within THIS tick
@@ -3492,6 +3495,17 @@ func (c *Coordinator) dueState(key string) (due, withheldByBackoff, withheldRebu
 	return false, withheld && !state.lastVersionRefused, withheld && state.rebuildOwed
 }
 
+// clearRebuildOwed records that an attempt APPLIED a batch under the current
+// source version. A no-op attempt resolves nothing: RunOnce returns nil
+// without a version check when no batch is available.
+func (c *Coordinator) clearRebuildOwed(key string) {
+	c.backoffMu.Lock()
+	defer c.backoffMu.Unlock()
+	if state, ok := c.backoff[key]; ok {
+		state.rebuildOwed = false
+	}
+}
+
 // rebuildOwed reports a version refusal on this pair not yet cleared by a
 // successful attempt.
 func (c *Coordinator) rebuildOwed(key string) bool {
@@ -3513,7 +3527,6 @@ func (c *Coordinator) recordBackoff(key string, err error) {
 		state.consecutiveFailures = 0
 		state.nextAttempt = time.Time{}
 		state.lastVersionRefused = false
-		state.rebuildOwed = false
 		return
 	}
 	state.lastVersionRefused = versionRefused(err)
