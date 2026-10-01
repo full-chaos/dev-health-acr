@@ -1644,6 +1644,16 @@ func (r *FactReadScopeResolver) Resolve(
 			// requirement the caller scoped -- mixed direct+derived roots
 			// for the SAME origin kind are stage 2's explicit case, gated
 			// on the same policy switch.
+			//
+			// The one carve-out is a team root of a kind in
+			// additiveTeamExpansionKinds: the team's direct rollup is the
+			// summary, and the per-item facts its enabled policy reaches
+			// stay served beside it.
+			additive := r.additiveTeamRoots(requirement.Kind, roots)
+			if len(additive) == 0 {
+				continue
+			}
+			r.resolveRequirement(ctx, principal, &scope, requirement.Kind, additive, input.TimeContext)
 			continue
 		}
 		// A root of a kind the capability answers directly must never
@@ -1665,12 +1675,40 @@ func (r *FactReadScopeResolver) Resolve(
 					unsupportedRoots = append(unsupportedRoots, root)
 				}
 			}
+			unsupportedRoots = append(unsupportedRoots, r.additiveTeamRoots(requirement.Kind, supported)...)
 			roots = unsupportedRoots
 		}
 		r.resolveRequirement(ctx, principal, &scope, requirement.Kind, roots, input.TimeContext)
 	}
 	sortFactScopeDerivations(scope.Derivations)
 	return scope
+}
+
+// additiveTeamExpansionKinds are the kinds whose provider answers a team root
+// directly with a rollup AND whose team-origin expansion rule reaches per-item
+// facts (pull requests; blockers via the team's work items). For these the
+// expansion stays on beside the direct answer: a team question keeps its
+// per-item facts, and the rollup is the summary over them.
+var additiveTeamExpansionKinds = map[FactKind]bool{FactPullRequests: true, FactBlockers: true}
+
+// additiveTeamRoots returns the team roots, among roots, that still owe an
+// expansion decision although their kind is directly readable. Only an enabled
+// rule qualifies: with none, the direct answer stands alone as before.
+func (r *FactReadScopeResolver) additiveTeamRoots(kind FactKind, roots []SubjectRef) []SubjectRef {
+	if !additiveTeamExpansionKinds[kind] {
+		return nil
+	}
+	rule, eligible := r.lookupFactScopePolicy(kind, SubjectTeam)
+	if !eligible || !rule.Enabled {
+		return nil
+	}
+	var out []SubjectRef
+	for _, root := range roots {
+		if root.Kind == SubjectTeam {
+			out = append(out, root)
+		}
+	}
+	return out
 }
 
 // resolveRequirement handles ONE requirement that no root can answer

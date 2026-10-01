@@ -375,6 +375,7 @@ func t4Cases() []t4Case {
 	add(t4Case{name: "incidents/incident", kind: contextfabric.FactIncidents, subjects: []contextfabric.SubjectRef{incidentSubject("incident-1")}, tables: []fakeTable{
 		{match: "FROM operational_incidents", rows: [][]any{{"incident-1", "open", "high"}, {"incident-1", "", ""}}},
 	}})
+	cases = append(cases, t4TeamRollupCases()...)
 	return cases
 }
 
@@ -675,6 +676,12 @@ func TestCHAOS7120SafetyMarksOnEntityDeclarations(t *testing.T) {
 	for _, kind := range entity {
 		capability := t4Capability(kind)
 		for _, field := range capability.Fields {
+			// Team rollup declarations (deployments, incidents, pull requests,
+			// blockers) are a team-subject shape, pinned by
+			// TestTeamRollupDeclarationMarks; this pin covers the entity roots.
+			if len(field.SubjectKinds) == 1 && field.SubjectKinds[0] == contextfabric.SubjectTeam {
+				continue
+			}
 			if field.Score || field.Aggregate {
 				t.Errorf("%s %s: Score=%v Aggregate=%v, want neither on an entity kind", kind, field.Name, field.Score, field.Aggregate)
 			}

@@ -28,14 +28,16 @@ import (
 //     in the same row and declares none.
 
 var (
-	declTeamOnly       = []contextfabric.SubjectKind{contextfabric.SubjectTeam}
-	declProjectOnly    = []contextfabric.SubjectKind{contextfabric.SubjectProject}
-	declRepositoryOnly = []contextfabric.SubjectKind{contextfabric.SubjectRepository}
-	declTeamProject    = []contextfabric.SubjectKind{contextfabric.SubjectTeam, contextfabric.SubjectProject}
-	declRepoTeam       = []contextfabric.SubjectKind{contextfabric.SubjectRepository, contextfabric.SubjectTeam}
-	declWorkItemOnly   = []contextfabric.SubjectKind{contextfabric.SubjectWorkItem}
-	declCIRunOnly      = []contextfabric.SubjectKind{contractsv1.ContextFabricSubjectCIRun}
-	declDeploymentOnly = []contextfabric.SubjectKind{contextfabric.SubjectDeployment}
+	declTeamOnly        = []contextfabric.SubjectKind{contextfabric.SubjectTeam}
+	declProjectOnly     = []contextfabric.SubjectKind{contextfabric.SubjectProject}
+	declRepositoryOnly  = []contextfabric.SubjectKind{contextfabric.SubjectRepository}
+	declTeamProject     = []contextfabric.SubjectKind{contextfabric.SubjectTeam, contextfabric.SubjectProject}
+	declRepoTeam        = []contextfabric.SubjectKind{contextfabric.SubjectRepository, contextfabric.SubjectTeam}
+	declWorkItemOnly    = []contextfabric.SubjectKind{contextfabric.SubjectWorkItem}
+	declCIRunOnly       = []contextfabric.SubjectKind{contractsv1.ContextFabricSubjectCIRun}
+	declDeploymentOnly  = []contextfabric.SubjectKind{contextfabric.SubjectDeployment}
+	declIncidentOnly    = []contextfabric.SubjectKind{contextfabric.SubjectIncident}
+	declPullRequestOnly = []contextfabric.SubjectKind{contextfabric.SubjectPullRequest}
 )
 
 type fieldDecl = contextfabric.FactFieldDeclaration
@@ -251,12 +253,52 @@ func actualCompletionFields() []fieldDecl {
 }
 
 func blockersFields() []fieldDecl {
-	return []fieldDecl{
-		declRef(declBareWorkItemRef, fStr("blocked_by_work_item_id")),
-		// Emitted only when the blocking item resolves to exactly one
-		// repository; gated like a work item root.
-		declRef(declWorkItemRef, fStr("blocked_by_work_item_ref")),
+	return declJoin(
+		declOn(declWorkItemOnly,
+			declRef(declBareWorkItemRef, fStr("blocked_by_work_item_id")),
+			// Emitted only when the blocking item resolves to exactly one
+			// repository; gated like a work item root.
+			declRef(declWorkItemRef, fStr("blocked_by_work_item_ref")),
+		),
+		teamRollupCommonFields(false),
+		// Current axis only: a dependency row carries no event time, so the
+		// counts name no window. Both ends pass the work-item authorization
+		// rule, so they are the caller's authorized population.
+		declOn(declTeamOnly,
+			declCallerScoped(fInt("blocked_work_items_current", "count")),
+			declCallerScoped(fInt("blocker_dependencies_current", "count")),
+			fTable("repository_breakdown",
+				cRef(declRepositoryRef, cStr("repository_id")),
+				cNullable(cStr("repository_name")),
+				cInt("blocked_work_items_current", "count"),
+				cInt("blocker_dependencies_current", "count"),
+			),
+		),
+	)
+}
+
+// teamRollupCommonFields are the fields every team rollup of deployments,
+// incidents, pull requests and blockers carries: the basis, the owned
+// repository pointer and counts, and (windowed kinds) the echoed window.
+func teamRollupCommonFields(windowed bool) []fieldDecl {
+	fields := []fieldDecl{
+		fStr("rollup_basis"),
+		declAggregate(fInt("owned_repository_count", "count")),
+		declAggregate(fInt("repositories_with_data_count", "count")),
+		declAggregate(fInt("repositories_without_data_count", "count")),
+		// The pointer: each row is a repository subject reference the gate
+		// checks, so a client can continue per repository.
+		fTable("owned_repositories",
+			cRef(declRepositoryRef, cStr("repository_id")),
+			cNullable(cStr("repository_name")),
+		),
+		fInt("owned_repositories_omitted_count", "count"),
+		fInt("repository_breakdown_omitted_count", "count"),
 	}
+	if windowed {
+		fields = append(fields, fStr("window_basis"), fStr("window_start"), fStr("window_end"))
+	}
+	return declOn(declTeamOnly, fields...)
 }
 
 func requiredChildrenFields() []fieldDecl {
@@ -269,7 +311,25 @@ func requiredChildrenFields() []fieldDecl {
 	}
 }
 
-func pullRequestFields() []fieldDecl { return []fieldDecl{declNullable(fStr("state"))} }
+func pullRequestFields() []fieldDecl {
+	return declJoin(
+		declOn(declPullRequestOnly, declNullable(fStr("state"))),
+		teamRollupCommonFields(true),
+		// Counted by each pull request's own event time inside the window.
+		declOn(declTeamOnly,
+			declAggregate(fInt("pull_requests_opened_window", "count")),
+			declAggregate(fInt("pull_requests_merged_window", "count")),
+			declAggregate(fInt("pull_requests_closed_unmerged_window", "count")),
+			fTable("repository_breakdown",
+				cRef(declRepositoryRef, cStr("repository_id")),
+				cNullable(cStr("repository_name")),
+				cInt("pull_requests_opened_window", "count"),
+				cInt("pull_requests_merged_window", "count"),
+				cInt("pull_requests_closed_unmerged_window", "count"),
+			),
+		),
+	)
+}
 
 func reviewFields() []fieldDecl { return []fieldDecl{declNullable(fStr("state"))} }
 
@@ -299,6 +359,24 @@ func deploymentFields() []fieldDecl {
 			fNum("deploy_time_p50_hours", "hours"),
 			fNum("lead_time_p50_hours", "hours"),
 		),
+		teamRollupCommonFields(true),
+		// Totals over the window's daily rows, summed across the owned
+		// repositories; percentiles are per repository at its latest day in
+		// the window and are never summed or averaged.
+		declOn(declTeamOnly,
+			declAggregate(fInt("deployments_count_window", "count")),
+			declAggregate(fInt("failed_deployments_count_window", "count")),
+			fTable("repository_breakdown",
+				cRef(declRepositoryRef, cStr("repository_id")),
+				cNullable(cStr("repository_name")),
+				cInt("deployments_count_window", "count"),
+				cInt("failed_deployments_count_window", "count"),
+				cInt("days_with_data_window", "count"),
+				cStr("latest_day"),
+				cNullable(cNum("deploy_time_p50_hours_latest_day", "hours")),
+				cNullable(cNum("lead_time_p50_hours_latest_day", "hours")),
+			),
+		),
 	)
 }
 
@@ -306,7 +384,26 @@ func incidentFields() []fieldDecl {
 	// severity is the source's own label, not a computed score (the same
 	// ruling as operational_deficiencies.severity); it is omitted on a
 	// historical read.
-	return []fieldDecl{declNullable(fStr("status")), fStr("severity")}
+	return declJoin(
+		declOn(declIncidentOnly, declNullable(fStr("status")), fStr("severity")),
+		teamRollupCommonFields(true),
+		// operational_incidents carries no repository: an incident reaches a
+		// repository only through a deployment-incident edge, so the team
+		// counts are deployment_linked and the unlinked remainder is an
+		// org-wide figure, never a team's.
+		declOn(declTeamOnly,
+			fStr("incident_attribution_basis"),
+			declAggregate(fInt("incidents_count_window", "count")),
+			declAggregate(fInt("resolved_incidents_count_window", "count")),
+			declAggregate(fInt("org_incidents_not_attributable_count_window", "count")),
+			fTable("repository_breakdown",
+				cRef(declRepositoryRef, cStr("repository_id")),
+				cNullable(cStr("repository_name")),
+				cInt("incidents_count_window", "count"),
+				cInt("resolved_incidents_count_window", "count"),
+			),
+		),
+	)
 }
 
 func sourceHealthFields() []fieldDecl {

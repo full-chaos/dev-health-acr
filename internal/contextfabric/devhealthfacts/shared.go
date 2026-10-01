@@ -169,7 +169,13 @@ import (
 // day; it is now items_*_latest_day, and a range request adds items_*_window
 // totals with the window echoed. A candidate saved under v21 carries the old
 // names and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v22"
+//
+// v22 -> v23: a team subject's deployments, incidents, pull_requests and
+// blockers facts are served as a rollup over the team's owned repositories
+// with an owned_repositories pointer; the window-bound counts are named
+// *_window and echo the window. A candidate saved under v22 holds no team
+// fact for these kinds and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v23"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

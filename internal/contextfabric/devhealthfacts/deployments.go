@@ -1,6 +1,8 @@
 package devhealthfacts
 
 import (
+	"time"
+
 	"context"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -35,9 +37,15 @@ func newDeploymentsProvider(client contextpacket.ClickHouseQueryClient) *Deploym
 }
 
 func (p *DeploymentsProvider) Capability() contextfabric.FactCapability {
-	return newCapability(contextfabric.FactDeployments, "devhealthfacts.deployments", []contextfabric.SubjectKind{
-		contextfabric.SubjectDeployment, contextfabric.SubjectRepository,
+	capability := newCapability(contextfabric.FactDeployments, "devhealthfacts.deployments", []contextfabric.SubjectKind{
+		contextfabric.SubjectDeployment, contextfabric.SubjectRepository, contextfabric.SubjectTeam,
 	})
+	// A team's rollup carries the owned-repository pointer and the
+	// per-repository breakdown, both breakdown tables.
+	capability.Tables = map[contextfabric.SubjectKind][]contextfabric.FactTableShape{
+		contextfabric.SubjectTeam: {contextfabric.FactTableBreakdown},
+	}
+	return capability
 }
 
 func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {
@@ -85,8 +93,23 @@ func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.P
 		}
 	}
 
+	teamsWithoutRepos := 0
+	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
+		outcome, scanErr := p.readTeamRollup(ctx, orgID, teamSubjects, &facts, timeBound, query.Time.EvidenceWindow)
+		if scanErr != nil {
+			return contextfabric.FactProviderResult{}, readFailure("query team deployments", scanErr)
+		}
+		truncated = truncated || outcome.truncated
+		rejectedCount += outcome.rejected
+		teamsWithoutRepos += outcome.teamsWithoutRepos
+		if outcome.contributed > 0 {
+			grain = grainDaily
+		}
+	}
+
 	state, retentionReason := timeBound.retentionState(len(facts))
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grain), Truncated: truncated}
+	applyNoOwnedRepositories(&result, teamsWithoutRepos)
 	return result, nil
 }
 
@@ -155,4 +178,138 @@ func (p *DeploymentsProvider) readRepositoryAggregate(ctx context.Context, orgID
 		})
 	}
 	return len(rows), rejected, nil
+}
+
+// deploymentRollupRepo is one owned repository's deploy_metrics_daily rows
+// inside the rollup window: totals over the window's days, plus the latest
+// day's own percentiles (never summed or averaged across days or repositories).
+type deploymentRollupRepo struct {
+	deployments, failed, days int64
+	latestDay                 string
+	hasDeployTime, hasLead    bool
+	deployTime, leadTime      float64
+}
+
+// readTeamRollup serves a team subject: deployment totals over the request
+// window, summed across the team's owned repositories, with the per-repository
+// breakdown and the owned_repositories pointer. A repository with no daily row
+// inside the window is counted as without data, never as zero.
+func (p *DeploymentsProvider) readTeamRollup(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, evidence *contractsv1.ContextFabricRequestedEvidenceWindow) (outcome teamRollupOutcome, err error) {
+	teamIDs, bySubject, rejected := subjectIndex(subjects, teamPrefix)
+	outcome.rejected = rejected
+	if len(teamIDs) == 0 {
+		return outcome, nil
+	}
+	owned, err := teamOwnedRepositories(ctx, p.facts.client, orgID, teamIDs, timeBound)
+	if err != nil {
+		return outcome, err
+	}
+	window := resolveRollupWindow(timeBound, evidence, time.Now())
+	byRepo := map[string]deploymentRollupRepo{}
+	if repoKeys := repoKeysOf(owned); len(repoKeys) > 0 {
+		statement := `SELECT toString(repo_id), toInt64(win_deployments), toInt64(win_failed), toInt64(win_days), toString(day), toUInt8(isNotNull(deploy_time)), toFloat64(ifNull(deploy_time, 0)), toUInt8(isNotNull(lead_time)), toFloat64(ifNull(lead_time, 0))
+FROM (
+	SELECT repo_id, day, deploy_time, lead_time,
+		sum(deployments_count) OVER (PARTITION BY repo_id) AS win_deployments,
+		sum(failed_deployments_count) OVER (PARTITION BY repo_id) AS win_failed,
+		count() OVER (PARTITION BY repo_id) AS win_days,
+		row_number() OVER (PARTITION BY repo_id ORDER BY day DESC) AS latest
+	FROM (
+		SELECT repo_id, day, deployments_count, failed_deployments_count, deploy_time_p50_hours AS deploy_time, lead_time_p50_hours AS lead_time,
+			row_number() OVER (PARTITION BY repo_id, day ORDER BY computed_at DESC, cityHash64(tuple(deployments_count, failed_deployments_count, ifNull(deploy_time_p50_hours, -1), ifNull(lead_time_p50_hours, -1))) DESC) AS rn
+		FROM deploy_metrics_daily
+		WHERE org_id = {org_id:String} AND toString(repo_id) IN {ids:Array(String)} AND ` + window.dayExpr("day") + `
+	)
+	WHERE rn = 1
+)
+WHERE latest = 1
+ORDER BY repo_id`
+		if scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamDeploymentRollup", statement, orgID, repoKeys, func(row contextpacket.ClickHouseRowScanner) error {
+			var repoID string
+			var r deploymentRollupRepo
+			var hasDeploy, hasLead uint8
+			if err := row.Scan(&repoID, &r.deployments, &r.failed, &r.days, &r.latestDay, &hasDeploy, &r.deployTime, &hasLead, &r.leadTime); err != nil {
+				return err
+			}
+			r.hasDeployTime, r.hasLead = hasDeploy != 0, hasLead != 0
+			byRepo[repoID] = r
+			return nil
+		}, window.bindings()...); scanErr != nil {
+			return outcome, scanErr
+		}
+	}
+	for _, teamID := range teamIDs {
+		subject := bySubject[teamID]
+		repos := owned[teamID]
+		if len(repos) == 0 {
+			outcome.teamsWithoutRepos++
+			continue
+		}
+		var total, failed, withData int64
+		breakdown := make([]contextfabric.FactValueRow, 0, len(repos))
+		for _, repo := range repos {
+			r, ok := byRepo[repo.key]
+			if !ok {
+				continue
+			}
+			outcome.contributed++
+			withData++
+			total += r.deployments
+			failed += r.failed
+			cells := map[string]contextfabric.FactValue{
+				"repository_id":                   contextfabric.StringFactValue(repo.key),
+				"deployments_count_window":        contextfabric.IntegerFactValue(r.deployments),
+				"failed_deployments_count_window": contextfabric.IntegerFactValue(r.failed),
+				"days_with_data_window":           contextfabric.IntegerFactValue(r.days),
+				"latest_day":                      contextfabric.StringFactValue(r.latestDay),
+			}
+			if repo.name != "" {
+				cells["repository_name"] = contextfabric.StringFactValue(repo.name)
+			}
+			if r.hasDeployTime {
+				cells["deploy_time_p50_hours_latest_day"] = contextfabric.NumberFactValue(r.deployTime)
+			}
+			if r.hasLead {
+				cells["lead_time_p50_hours_latest_day"] = contextfabric.NumberFactValue(r.leadTime)
+			}
+			breakdown = append(breakdown, contextfabric.FactValueRow{Fields: cells})
+		}
+		fields := map[string]contextfabric.FactValue{
+			"rollup_basis":                    contextfabric.StringFactValue(teamRollupBasis),
+			"window_basis":                    contextfabric.StringFactValue(window.basis),
+			"owned_repository_count":          contextfabric.IntegerFactValue(int64(len(repos))),
+			"repositories_with_data_count":    contextfabric.IntegerFactValue(withData),
+			"repositories_without_data_count": contextfabric.IntegerFactValue(int64(len(repos)) - withData),
+		}
+		if value, ok := window.startValue(); ok {
+			fields["window_start"] = value
+		}
+		if value, ok := window.endValue(); ok {
+			fields["window_end"] = value
+		}
+		if table, omitted, ok := ownedRepositoriesFactValue(repos); ok {
+			fields["owned_repositories"] = table
+			if omitted > 0 {
+				fields["owned_repositories_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
+			}
+		}
+		if withData > 0 {
+			fields["deployments_count_window"] = contextfabric.IntegerFactValue(total)
+			fields["failed_deployments_count_window"] = contextfabric.IntegerFactValue(failed)
+			if table, omitted, ok := repositoryBreakdownFactValue(breakdown, grainDaily,
+				[]string{"deployments_count_window", "failed_deployments_count_window", "days_with_data_window", "deploy_time_p50_hours_latest_day", "lead_time_p50_hours_latest_day"},
+				[]string{"repository_name", "latest_day"}); ok {
+				fields["repository_breakdown"] = table
+				if omitted > 0 {
+					outcome.truncated = true
+					fields["repository_breakdown_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
+				}
+			}
+		}
+		*facts = append(*facts, contextfabric.CanonicalFact{
+			Kind: contextfabric.FactDeployments, Subject: subject, Fields: fields,
+			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, teamID)},
+		})
+	}
+	return outcome, nil
 }
