@@ -136,7 +136,7 @@ services:
       dockerfile: docker/go-worker.Dockerfile
       target: dho
     restart: "no"
-    command: ["migrate", "upgrade"]
+    command: ["migrate", "upgrade", "--river"]
     environment:
       MIGRATION_DATABASE_URI: postgres://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@postgres:5432/${POSTGRES_DB:-devhealth}?sslmode=disable
       CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-default}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/${CLICKHOUSE_DB:-default}
