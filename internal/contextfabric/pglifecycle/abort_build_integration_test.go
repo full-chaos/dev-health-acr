@@ -236,6 +236,25 @@ func TestAbortBuild(t *testing.T) {
 		require.ErrorContains(t, err, "ck_acr_cf_graph_lifecycle_target_epoch")
 	})
 
+	// The reason vocabulary only widened: both earlier reasons are still
+	// admitted (a binary without this change keeps writing them), the new
+	// one is admitted, and anything else is still refused.
+	t.Run("retirement_reason_check_only_widened", func(t *testing.T) {
+		const org = "org-abort-reason-check"
+		insert := func(epoch int64, reason string) error {
+			_, err := db.ExecContext(ctx, `
+INSERT INTO acr.context_fabric_graph_epoch_retirements (org_id, epoch, reason, drain_start, state, created_at, updated_at)
+VALUES ($1, $2, $3, now(), 'draining', now(), now())`, org, epoch, reason)
+			return err
+		}
+		for epoch, reason := range []string{"grace_expired", "rollback_abandoned", "build_aborted"} {
+			require.NoError(t, insert(int64(epoch), reason), reason)
+		}
+		for epoch, reason := range []string{"", "BUILD_ABORTED", "build_aborted ", "aborted"} {
+			require.ErrorContains(t, insert(int64(10+epoch), reason), "context_fabric_graph_epoch_retirements_reason_check", reason)
+		}
+	})
+
 	t.Run("aborted_epoch_is_deleted_by_the_retire_executor_after_the_drain_bound", func(t *testing.T) {
 		store, _ := newStore(t)
 		const org = "org-abort-retire"

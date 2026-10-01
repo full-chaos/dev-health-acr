@@ -96,6 +96,7 @@ type abortCoordinatorOptions struct {
 	logger     *slog.Logger
 	lifecycle  contextfabric.GraphLifecycleStore
 	epochViews func(int64) contextfabric.ProjectionCheckpointStore
+	backend    *fakeBackend
 }
 
 func newAbortRig(t *testing.T, ctx context.Context, db *sql.DB, org string) *abortRig {
@@ -128,9 +129,13 @@ func (r *abortRig) coordinator(options abortCoordinatorOptions, sources ...proje
 	if options.epochViews != nil {
 		epochViews = options.epochViews
 	}
+	backend := options.backend
+	if backend == nil {
+		backend = newFakeBackend()
+	}
 	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
 		OrgIDs: []string{r.org}, Sources: sources,
-		Backend: newFakeBackend(), Checkpoints: r.checkpoints, RebuildMarkers: newFakeRebuildMarker(),
+		Backend: backend, Checkpoints: r.checkpoints, RebuildMarkers: newFakeRebuildMarker(),
 		Lifecycle: lifecycle, EpochCheckpoints: epochViews, LifecycleTelemetry: r.telemetry, EpochResolverInvalidator: r.resolver,
 		GraceWindow: time.Hour, MaxBackoff: time.Millisecond, DrainBatchBudget: options.budget, Logger: logger,
 	})
@@ -258,6 +263,7 @@ func TestGuardRefusedBuildIsAborted(t *testing.T) {
 		require.Equal(t, contextfabric.LifecycleStatusServing, row.Status)
 		require.Equal(t, int64(0), row.ActiveEpoch)
 		require.Nil(t, row.TargetEpoch)
+		require.Equal(t, int64(1), row.LastAllocatedEpoch, "the tick after the abort opens no build by itself")
 		require.Equal(t, epochGuardOldVersion, r.recordedVersion(1, epochGuardSource), "the aborted epoch is left as the build recorded it")
 		require.Equal(t, epochGuardNewVersion, r.recordedVersion(0, epochGuardSource), "the active epoch is projected again")
 
@@ -270,6 +276,57 @@ func TestGuardRefusedBuildIsAborted(t *testing.T) {
 		require.Len(t, refusals, 1)
 		require.Len(t, aborts, 1)
 		require.Len(t, r.retirements(), 1, "only the aborted epoch is queued while grace holds epoch 0")
+	})
+
+	// The one path that opens a build without an operator is divergence
+	// recovery. When the tick after the abort takes it, the build it opens is
+	// a NEW epoch under this binary, never the refused one, and it flips: the
+	// abort is not repeated.
+	t.Run("automatic_recovery_after_the_abort_opens_a_new_epoch_that_flips", func(t *testing.T) {
+		r := newAbortRig(t, ctx, db, "org-abort-then-recovery")
+		servedGraph := newFakeBackend()
+		old := r.coordinator(abortCoordinatorOptions{budget: -1, backend: servedGraph},
+			projectionrun.SourcePair{Name: epochGuardSource, Source: versioned(epochGuardOldVersion, 2)})
+		old.Tick(ctx)
+		served, err := r.checkpoints.LoadProjectionCheckpointForEpoch(ctx, r.org, 0, epochGuardSource)
+		require.NoError(t, err)
+		require.NotEmpty(t, served.BackendWatermark, "precondition: epoch 0 was durably projected")
+		require.NoError(t, old.Rebuild(ctx, r.org))
+		old.Tick(ctx)
+		require.Equal(t, contextfabric.LifecycleStatusBuilding, r.row().Status)
+		require.Equal(t, epochGuardOldVersion, r.recordedVersion(1, epochGuardSource))
+
+		var buffer bytes.Buffer
+		lostGraph := newFakeBackend()
+		next := r.coordinator(abortCoordinatorOptions{budget: -1, logger: jsonLogger(&buffer), backend: lostGraph},
+			projectionrun.SourcePair{Name: epochGuardSource, Source: versioned(epochGuardNewVersion, 1)})
+		next.Tick(ctx)
+		row := r.row()
+		require.Equal(t, contextfabric.LifecycleStatusServing, row.Status)
+		require.Equal(t, int64(1), row.LastAllocatedEpoch)
+		_, aborts, _ := r.telemetry.snapshot()
+		require.Equal(t, []buildAbort{{r.org, 0, 1}}, aborts)
+
+		next.Tick(ctx)
+		row = r.row()
+		require.Equal(t, contextfabric.LifecycleStatusBuilding, row.Status, "precondition: divergence recovery opened a build on the tick after the abort")
+		require.Equal(t, int64(2), *row.TargetEpoch, "the automatic build takes a new epoch, never the refused one")
+		require.Len(t, logRecords(t, &buffer, "context_fabric: projection checkpoint-store divergence detected"), 1)
+
+		flipped := tickUntilStatus(t, ctx, next, r.store, r.org, contextfabric.LifecycleStatusGrace, 5)
+		require.Equal(t, int64(2), flipped.ActiveEpoch)
+		require.Equal(t, epochGuardNewVersion, r.recordedVersion(2, epochGuardSource))
+		refusals, aborts, _ := r.telemetry.snapshot()
+		require.Len(t, refusals, 1, "only the OLD binary's epoch was ever refused")
+		require.Equal(t, []buildAbort{{r.org, 0, 1}}, aborts, "the abort is not repeated")
+		require.Len(t, logRecords(t, &buffer, abortedBuildWarn), 1)
+		var abortedEpochs []int64
+		for _, retirement := range r.retirements() {
+			if retirement.Reason == contextfabric.RetireReasonBuildAborted {
+				abortedEpochs = append(abortedEpochs, retirement.Epoch)
+			}
+		}
+		require.Equal(t, []int64{1}, abortedEpochs)
 	})
 
 	t.Run("each_refusing_source_is_named_and_the_build_is_aborted_once", func(t *testing.T) {
