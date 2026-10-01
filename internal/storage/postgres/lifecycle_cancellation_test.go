@@ -69,7 +69,7 @@ func waitForCredentialLock(t *testing.T, ctx context.Context, db *sql.DB) {
 		err := db.QueryRowContext(ctx, `
 SELECT EXISTS (
   SELECT 1 FROM pg_stat_activity
-  WHERE query LIKE '%FOR UPDATE%' AND wait_event_type = 'Lock'
+  WHERE datname = current_database() AND query LIKE '%FOR UPDATE%' AND wait_event_type = 'Lock'
 )`).Scan(&waiting)
 		require.NoError(t, err)
 		if waiting {
