@@ -34,7 +34,8 @@ const teamNoOwnedRepositoriesReason = "devhealthfacts: the team owns no reposito
 const teamOwnedRepositoriesOverflowReason = "query team owned repositories exceeded its bound"
 
 // maxTeamOwnedRepositoryRows bounds the ownership read across every requested
-// team.
+// team. The query reads one row past it so overflow is distinguishable from a
+// read of exactly this many rows.
 const maxTeamOwnedRepositoryRows = 2000
 
 const (
@@ -56,7 +57,7 @@ func teamOwnedRepositories(ctx context.Context, client contextpacket.ClickHouseQ
 		ownedRepositoriesSource(` AND team_id IN {ids:Array(String)}`+ownershipValidityPredicate(bound)) + `
 GROUP BY team_id, repo_key
 ORDER BY team_id, repo_key
-LIMIT ` + fmt.Sprint(maxTeamOwnedRepositoryRows)
+LIMIT ` + fmt.Sprint(maxTeamOwnedRepositoryRows+1)
 	extra := make([]readers.Binding, 0, 2)
 	for _, binding := range bound.bindings() {
 		extra = append(extra, readers.Binding{Name: binding.Name, Value: binding.Value})
@@ -75,7 +76,7 @@ LIMIT ` + fmt.Sprint(maxTeamOwnedRepositoryRows)
 	}, extra...); err != nil {
 		return nil, err
 	}
-	if rows >= maxTeamOwnedRepositoryRows {
+	if rows > maxTeamOwnedRepositoryRows {
 		return nil, fmt.Errorf("%s", teamOwnedRepositoriesOverflowReason)
 	}
 	return owned, nil
