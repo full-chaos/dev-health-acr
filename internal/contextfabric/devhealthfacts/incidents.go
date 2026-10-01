@@ -2,6 +2,7 @@ package devhealthfacts
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -60,7 +61,7 @@ func (p *IncidentsProvider) ReadFacts(ctx context.Context, principal storage.Pri
 	var teamOutcome teamRollupOutcome
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
 		var teamErr error
-		teamOutcome, teamErr = p.readTeamRollup(ctx, orgID, teamSubjects, &facts, timeBound, query.Time.EvidenceWindow)
+		teamOutcome, teamErr = p.readTeamRollup(ctx, orgID, orgWideFigureAllowed(principal, query.RequestedRepositoryScope), teamSubjects, &facts, timeBound, query.Time.EvidenceWindow)
 		if teamErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team incidents", teamErr)
 		}
@@ -125,7 +126,7 @@ type incidentRollupRepo struct{ incidents, resolved int64 }
 // deployment-incident edge that names one (work_graph_deployment_incident_
 // edges.repo_id): the rollup is deployment_linked, and incidents with no such
 // edge are reported as org-wide not attributable, never assigned to a team.
-func (p *IncidentsProvider) readTeamRollup(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, evidence *contractsv1.ContextFabricRequestedEvidenceWindow) (outcome teamRollupOutcome, err error) {
+func (p *IncidentsProvider) readTeamRollup(ctx context.Context, orgID string, orgWide bool, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, evidence *contractsv1.ContextFabricRequestedEvidenceWindow) (outcome teamRollupOutcome, err error) {
 	teamIDs, bySubject, rejected := subjectIndex(subjects, teamPrefix)
 	outcome.rejected = rejected
 	if len(teamIDs) == 0 {
@@ -166,10 +167,11 @@ ORDER BY e.repo_id`
 		}
 	}
 	// Org-wide, once: incidents in the window that no deployment-incident edge
-	// ties to any repository. It is not a team count and is declared
-	// aggregate so a repository-restricted caller never receives it.
+	// ties to any repository. It is not a team count, so it is read and served
+	// only to a caller whose repository scope is unrestricted; a restricted
+	// caller's fact omits the field (unknown to them, never a zero).
 	var notAttributable int64
-	if len(owned) > 0 {
+	if len(owned) > 0 && orgWide {
 		statement := `SELECT toInt64(count())
 FROM operational_incidents FINAL
 WHERE org_id = {org_id:String} AND is_deleted = 0 AND ` + window.timestampExpr("ifNull(started_at, observed_at)") + `
@@ -210,13 +212,15 @@ WHERE org_id = {org_id:String} AND is_deleted = 0 AND ` + window.timestampExpr("
 			breakdown = append(breakdown, contextfabric.FactValueRow{Fields: cells})
 		}
 		fields := map[string]contextfabric.FactValue{
-			"rollup_basis":                                contextfabric.StringFactValue(teamRollupBasis),
-			"incident_attribution_basis":                  contextfabric.StringFactValue("deployment_linked"),
-			"window_basis":                                contextfabric.StringFactValue(window.basis),
-			"owned_repository_count":                      contextfabric.IntegerFactValue(int64(len(repos))),
-			"repositories_with_data_count":                contextfabric.IntegerFactValue(withData),
-			"repositories_without_data_count":             contextfabric.IntegerFactValue(int64(len(repos)) - withData),
-			"org_incidents_not_attributable_count_window": contextfabric.IntegerFactValue(notAttributable),
+			"rollup_basis":                    contextfabric.StringFactValue(teamRollupBasis),
+			"incident_attribution_basis":      contextfabric.StringFactValue("deployment_linked"),
+			"window_basis":                    contextfabric.StringFactValue(window.basis),
+			"owned_repository_count":          contextfabric.IntegerFactValue(int64(len(repos))),
+			"repositories_with_data_count":    contextfabric.IntegerFactValue(withData),
+			"repositories_without_data_count": contextfabric.IntegerFactValue(int64(len(repos)) - withData),
+		}
+		if orgWide {
+			fields["org_incidents_not_attributable_count_window"] = contextfabric.IntegerFactValue(notAttributable)
 		}
 		if value, ok := window.startValue(); ok {
 			fields["window_start"] = value
@@ -277,4 +281,14 @@ WHERE ` + window.timestampExpr("ifNull(i.started_at, i.observed_at)")
 		return row.Scan(&distinct, &resolved)
 	}, window.bindings()...)
 	return distinct, resolved, err
+}
+
+// orgWideFigureAllowed reports whether the caller may see a figure that spans
+// the whole organization: no repository restriction on the principal ("*" or
+// none) and none requested for this read.
+func orgWideFigureAllowed(principal storage.Principal, requested []string) bool {
+	if len(requested) > 0 {
+		return false
+	}
+	return len(principal.RepositoryScopes) == 0 || slices.Contains(principal.RepositoryScopes, "*")
 }

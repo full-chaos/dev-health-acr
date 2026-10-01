@@ -137,8 +137,13 @@ func (f *teamRollupFixture) seed(ctx context.Context, direct clickhousedriver.Co
 
 func (f *teamRollupFixture) read(kind contextfabric.FactKind, timeContext contextfabric.TimeContext, subjects ...contextfabric.SubjectRef) contextfabric.FactProviderResult {
 	f.t.Helper()
+	return f.readAs(storage.Principal{OrgID: teamRollupOrg}, kind, timeContext, subjects...)
+}
+
+func (f *teamRollupFixture) readAs(principal storage.Principal, kind contextfabric.FactKind, timeContext contextfabric.TimeContext, subjects ...contextfabric.SubjectRef) contextfabric.FactProviderResult {
+	f.t.Helper()
 	provider := findProvider(f.t, f.providers, kind)
-	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: teamRollupOrg}, contextfabric.FactQuery{Time: timeContext, Kind: kind, Subjects: subjects})
+	result, err := provider.ReadFacts(context.Background(), principal, contextfabric.FactQuery{Time: timeContext, Kind: kind, Subjects: subjects})
 	if err != nil {
 		f.t.Fatalf("%s ReadFacts: %v", kind, err)
 	}
@@ -277,6 +282,17 @@ func TestTeamRollupsAgainstRealClickHouse(t *testing.T) {
 		if got := fields["incident_attribution_basis"].String; got == nil || *got != "deployment_linked" {
 			t.Fatalf("incident_attribution_basis = %#v", fields["incident_attribution_basis"])
 		}
+	})
+
+	t.Run("incident org-wide figure is withheld from a repository-restricted caller", func(t *testing.T) {
+		restricted := f.readAs(storage.Principal{OrgID: teamRollupOrg, RepositoryScopes: []string{"acme/repo-a"}}, contextfabric.FactIncidents, f.window, two)
+		fields := factFor(t, restricted, two).Fields
+		if _, leaked := fields["org_incidents_not_attributable_count_window"]; leaked {
+			t.Fatalf("an organization-wide count reached a repository-restricted caller: %#v", fields["org_incidents_not_attributable_count_window"])
+		}
+		wantInt(t, fields, "incidents_count_window", 2)
+		wildcard := f.readAs(storage.Principal{OrgID: teamRollupOrg, RepositoryScopes: []string{"*"}}, contextfabric.FactIncidents, f.window, two)
+		wantInt(t, factFor(t, wildcard, two).Fields, "org_incidents_not_attributable_count_window", 1)
 	})
 
 	t.Run("blockers", func(t *testing.T) {

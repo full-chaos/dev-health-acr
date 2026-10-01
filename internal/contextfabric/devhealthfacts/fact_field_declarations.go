@@ -395,6 +395,8 @@ func incidentFields() []fieldDecl {
 			fStr("incident_attribution_basis"),
 			declAggregate(fInt("incidents_count_window", "count")),
 			declAggregate(fInt("resolved_incidents_count_window", "count")),
+			// Organization-wide, served only to a caller with no repository
+			// restriction.
 			declAggregate(fInt("org_incidents_not_attributable_count_window", "count")),
 			fTable("repository_breakdown",
 				cRef(declRepositoryRef, cStr("repository_id")),
