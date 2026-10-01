@@ -20,6 +20,7 @@ const (
 	defaultProjectionPollInterval = 15 * time.Second
 	defaultProjectionConcurrency  = 4
 	defaultProjectionDrainBudget  = 500
+	defaultProjectionCountCheck   = 10 * time.Minute
 	defaultProjectorPingTimeout   = 5 * time.Second
 	envContextFabricProjection    = "ACR_CONTEXT_FABRIC_PROJECTION_ENABLED"
 	envContextFabricProjectorOrgs = "ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS"
@@ -39,6 +40,7 @@ const (
 	envContextFabricPollInterval      = "ACR_CONTEXT_FABRIC_PROJECTION_POLL_INTERVAL"
 	envContextFabricConcurrency       = "ACR_CONTEXT_FABRIC_PROJECTION_CONCURRENCY"
 	envContextFabricDrainBudget       = "ACR_CONTEXT_FABRIC_PROJECTION_DRAIN_BATCH_BUDGET"
+	envContextFabricCountCheck        = "ACR_CONTEXT_FABRIC_PROJECTION_COUNT_CHECK_INTERVAL"
 	envContextFabricTeamsProjects     = "ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED"
 	envEpisodeWriteback               = "ACR_ENABLE_EPISODE_WRITEBACK"
 	envContextFabricGraphReads        = "ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED"
@@ -126,7 +128,10 @@ type ProjectorConfig struct {
 	// organization may pull per Tick before yielding to the next poll
 	// (per source, not shared: an organization's tick is bounded by
 	// sources x budget) -- see projectionrun.Config.DrainBatchBudget's doc comment.
-	DrainBatchBudget     int
+	DrainBatchBudget int
+	// CountCheckInterval is the minimum gap between per-organization
+	// source-vs-graph count checks; negative disables them.
+	CountCheckInterval   time.Duration
 	TeamsProjectsEnabled bool
 	// EpisodeWriteback mirrors acr-api's flag of the same name. It gates the
 	// episodes projection source: with write-back off nothing writes
@@ -265,6 +270,9 @@ func loadProjector(lookup lookupEnv, required requiredStores) (ProjectorConfig, 
 		return ProjectorConfig{}, err
 	}
 	if cfg.DrainBatchBudget, err = intValue(lookup, envContextFabricDrainBudget, defaultProjectionDrainBudget); err != nil {
+		return ProjectorConfig{}, err
+	}
+	if cfg.CountCheckInterval, err = durationValue(lookup, envContextFabricCountCheck, defaultProjectionCountCheck); err != nil {
 		return ProjectorConfig{}, err
 	}
 	// Defaults to true as of CHAOS-3802 (was false). The old default existed
