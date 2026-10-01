@@ -63,8 +63,8 @@ func TestVenueLive(t *testing.T) {
 		t.Fatal(err)
 	}
 	logRun(t, run)
-	if expired := run.Report.Expired(); len(expired) > 0 {
-		t.Fatalf("a temporary allowance expired; remove the class: %v", expired)
+	if err := run.Report.Err(); err != nil {
+		t.Fatal(err)
 	}
 }
 

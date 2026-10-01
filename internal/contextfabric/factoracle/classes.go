@@ -1,5 +1,10 @@
 package factoracle
 
+import (
+	"fmt"
+	"strings"
+)
+
 // Class is a named difference between the two planes (design r5 J.4, O4).
 // A difference that is not one of these, or whose witness does not hold, is a
 // Finding.
@@ -136,6 +141,15 @@ func (r *Report) Expired() []string {
 		out = append(out, root.Expired...)
 	}
 	return out
+}
+
+// Err is the failure of a run that measured an expired allowance. Findings
+// are not an error: they are measured differences to report.
+func (r *Report) Err() error {
+	if expired := r.Expired(); len(expired) > 0 {
+		return fmt.Errorf("a temporary allowance expired; remove the class: %s", strings.Join(expired, "; "))
+	}
+	return nil
 }
 
 // Findings lists every finding of the run.

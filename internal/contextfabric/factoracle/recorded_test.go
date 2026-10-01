@@ -83,8 +83,8 @@ func recordedVenueRunReproducesTheVenue(t *testing.T) {
 	if unused := planes.Unused(); len(unused) > 0 {
 		t.Fatalf("%d recorded replies were never asked for (the run no longer makes the calls of the capture), first: %s", len(unused), unused[0])
 	}
-	if expired := report.Expired(); len(expired) > 0 {
-		t.Fatalf("a temporary allowance expired; remove the class: %v", expired)
+	if err := report.Err(); err != nil {
+		t.Fatal(err)
 	}
 	policy := oracle.Policy
 	if len(report.Roots) != len(policy.Roots()) || len(manifest.Expect) != len(policy.Roots()) {

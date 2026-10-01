@@ -760,6 +760,17 @@ func TestTemporaryAllowanceExpiresWithItsPaths(t *testing.T) {
 	}
 }
 
+func TestARunWithAnExpiredAllowanceIsAnError(t *testing.T) {
+	report := &Report{Roots: []*RootReport{{Root: "a", Findings: []Finding{{Detail: "a measured difference"}}}, {Root: "b"}}}
+	if err := report.Err(); err != nil {
+		t.Fatalf("a run with findings only is an error: %v", err)
+	}
+	report.Roots[1].Expired = []string{"class latest_day_vs_window: gone"}
+	if err := report.Err(); err == nil || !strings.Contains(err.Error(), "gone") {
+		t.Fatalf("a run with an expired allowance is not an error: %v", err)
+	}
+}
+
 func TestFlowAllowanceAppearsExpiresOrCannotTell(t *testing.T) {
 	for _, c := range []struct {
 		latestDay, window int
