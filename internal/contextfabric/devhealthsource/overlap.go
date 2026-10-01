@@ -65,6 +65,13 @@ const overlapWindowPagesPerCall = 5
 // recovers rows the old cursor space skipped.
 const cursorSpaceIngest = "ingest.v1"
 
+// cursorSpaceIngestColumns is the position space of a teams/projects source
+// whose team_project_ownership and project_membership_presence producers page
+// on their server-side ingest columns (ops migrations 099 and 100). A cursor
+// saved in cursorSpaceIngest (those two on provider/event time) is decoded as
+// a reset by sourcePlan.nextBatch, once, and so is the reverse.
+const cursorSpaceIngestColumns = "ingest.v2"
+
 // windowMemo remembers, per scope (organization and epoch, windowScopeFor),
 // the rows this process has emitted near the frontier -- so the overlap walk
 // only emits NEW rows -- and where the scope's current pass stands.
@@ -391,7 +398,7 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 		p.window.record(p.windowScope, all, p.overlap)
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
-	batch, err := buildBatch(orgID, p.source, p.version, cursor, all, items, false, false, p.clock())
+	batch, err := buildBatchIn(p.cursorSpace(), orgID, p.source, p.version, cursor, all, items, false, false, p.clock())
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, false, err
 	}
@@ -406,7 +413,7 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 	}
 	frontier := state
 	frontier.Ack = hex.EncodeToString(digest[:8])
-	next, err := encodeCursor(frontier)
+	next, err := encodeCursorIn(p.cursorSpace(), frontier)
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, false, err
 	}

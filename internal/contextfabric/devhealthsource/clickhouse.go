@@ -550,8 +550,13 @@ func truncateToCompleteRows(all []candidate, maxRows int) []candidate {
 // re-dropped on every later tick -- progress would stall exactly where the
 // bad data is, which is the failure this quarantine exists to end.
 func buildBatch(orgID, source, version, cursor string, cursorSource, items []candidate, fullSnapshot, completeEnumeration bool, generatedAt time.Time) (contextfabric.ProjectionBatch, error) {
+	return buildBatchIn(cursorSpaceIngest, orgID, source, version, cursor, cursorSource, items, fullSnapshot, completeEnumeration, generatedAt)
+}
+
+// buildBatchIn is buildBatch with the NextCursor encoded in space.
+func buildBatchIn(space, orgID, source, version, cursor string, cursorSource, items []candidate, fullSnapshot, completeEnumeration bool, generatedAt time.Time) (contextfabric.ProjectionBatch, error) {
 	last := cursorSource[len(cursorSource)-1]
-	nextCursor, err := encodeCursor(cursorState{Since: last.position(), After: last.sortKey})
+	nextCursor, err := encodeCursorIn(space, cursorState{Since: last.position(), After: last.sortKey})
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, err
 	}

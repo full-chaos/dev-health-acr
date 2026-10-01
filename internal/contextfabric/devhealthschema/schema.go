@@ -431,6 +431,10 @@ var ProductionColumns = map[string][]Column{
 		{Name: "occurred_at", Type: "DateTime64(3)"},
 		{Name: "last_synced", Type: "DateTime64(3)"},
 		{Name: "event_id", Type: "String"},
+		// Ops migration 100: server insert time (DEFAULT now64(3) in
+		// production). TEST DDL: defaults to occurred_at so fixtures keep
+		// their declared relative order unless they set it.
+		{Name: "ingested_at", Type: "DateTime64(3, 'UTC') DEFAULT occurred_at"},
 	},
 	"projects": {
 		{Name: "id", Type: "String"},
@@ -535,6 +539,9 @@ var ProductionColumns = map[string][]Column{
 		{Name: "valid_from", Type: "DateTime64(3, 'UTC')"},
 		{Name: "valid_to", Type: "Nullable(DateTime64(3, 'UTC'))"},
 		{Name: "updated_at", Type: "DateTime64(3, 'UTC')"},
+		// Ops migration 099: server insert time (DEFAULT now64(3) in
+		// production). TEST DDL: defaults to updated_at.
+		{Name: "last_synced", Type: "DateTime64(3, 'UTC') DEFAULT updated_at"},
 	},
 	// CHAOS-4363: read live off the kiac trial ClickHouse (system.columns,
 	// 2026-08-27) via `kubectl exec` into the trial-clickhouse pod (ns
@@ -620,6 +627,10 @@ var ProductionColumns = map[string][]Column{
 		{Name: "url", Type: "String"},
 		{Name: "last_synced", Type: "DateTime64(3)"},
 		{Name: "org_id", Type: "String"},
+		// Ops migration 100: server insert time the presence view's
+		// work_item_column arm exposes as last_synced. TEST DDL: defaults to
+		// updated_at.
+		{Name: "ingested_at", Type: "DateTime64(3, 'UTC') DEFAULT updated_at"},
 	},
 }
 
@@ -740,13 +751,14 @@ func withNullableKeySetting(engineFull string) string {
 }
 
 // ProjectMembershipPresenceViewDDL is the verbatim CREATE OR REPLACE VIEW
-// statement from ops migration 077
-// (dev-health-ops/src/dev_health_ops/migrations/clickhouse/077_project_membership_transitions.sql),
-// copied byte-for-byte (comments stripped; the executable SQL is
+// statement from ops migration 100
+// (internal/chmigrate/sql/100_project_membership_ingested_at.sql in ops, which
+// replaces migration 077's definition with the same view plus a last_synced
+// column), copied byte-for-byte (comments stripped; the executable SQL is
 // unchanged) rather than derived, because DDL() only ever renders a plain
 // CREATE TABLE from a column list and this object's CTEs/arrayJoin/UNION
 // ALL shape has no such mechanical rendering -- ops's own migration file
-// is the only source of truth for it. A future edit to 077's view body
+// is the only source of truth for it. A future edit to the view body
 // must update this constant too, or the view devhealthsource's
 // integration tests build against will silently disagree with what
 // production actually runs.
@@ -759,6 +771,7 @@ WITH touched AS (
         subject_id,
         provider,
         occurred_at,
+        ingested_at,
         event_id,
         to_project_id,
         arrayJoin(arrayFilter(
@@ -779,7 +792,8 @@ latest_membership AS (
         argMax(touch.2, (occurred_at, event_id)) AS project_key,
         argMax(provider, (occurred_at, event_id)) AS provider,
         argMax(to_project_id, (occurred_at, event_id)) AS latest_to_project_id,
-        max(occurred_at) AS observed_at
+        max(occurred_at) AS observed_at,
+        max(ingested_at) AS max_ingested_at
     FROM touched
     GROUP BY org_id, subject_kind, repo_id, subject_id, project_id
 ),
@@ -796,6 +810,7 @@ SELECT
     project_id,
     project_key,
     observed_at,
+    max_ingested_at AS last_synced,
     'transition' AS source
 FROM latest_membership
 WHERE latest_to_project_id = project_id
@@ -809,6 +824,7 @@ SELECT
     w.project_id AS project_id,
     w.project_key AS project_key,
     w.updated_at AS observed_at,
+    w.ingested_at AS last_synced,
     'work_item_column' AS source
 FROM work_items AS w FINAL
 WHERE w.project_id != ''
