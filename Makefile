@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check test test-split test-race test-race-shared test-race-isolated test-race-split test-shuffle-random test-coverage coverage-cobertura isolated-timeout print-gotest-timeout crosscompile hosted-integration clients-real vet contract-write contract-test codegraph-contract shard-plan canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract
+.PHONY: fmt fmt-check test test-split test-race test-race-shared test-race-isolated test-race-split test-shuffle-random test-coverage coverage-cobertura isolated-timeout print-gotest-timeout crosscompile hosted-integration clients-real vet contract-write contract-test codegraph-contract shard-plan canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract o4-oracle-live o4-oracle-capture
 
 RELEASE_OUTPUT ?= .tmp/release
 RELEASE_VERSION ?=
@@ -268,6 +268,15 @@ clients-real:
 
 vet:
 	go vet ./...
+	go vet -tags o4venue ./internal/contextfabric/factoracle
+
+# The O4 differential oracle on a live venue (never a pull request gate). The
+# venue is named by ACR_O4_* variables; see internal/contextfabric/factoracle.
+o4-oracle-live:
+	go test -tags o4venue -count=1 -timeout 10m -run '^TestVenueLive$$' -v ./internal/contextfabric/factoracle
+
+o4-oracle-capture:
+	go test -tags o4venue -count=1 -timeout 10m -run '^TestVenueCapture$$' -v ./internal/contextfabric/factoracle
 
 contract-write:
 	go run ./cmd/contractcheck -write
