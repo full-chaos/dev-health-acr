@@ -219,9 +219,8 @@ func TestFactCapabilityRegistryRequiresEvidenceForObservedCapability(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, canonicalFactRequest(project, FactReadiness)); err == nil || !strings.Contains(err.Error(), "requires evidence") {
-		t.Fatalf("ReadFacts() error = %v", err)
-	}
+	bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, canonicalFactRequest(project, FactReadiness))
+	requireRefusedFactResult(t, bundle, err, FactReadiness)
 }
 
 func TestFactCapabilityRegistryBoundsProviderDeadline(t *testing.T) {

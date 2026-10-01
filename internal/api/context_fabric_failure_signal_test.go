@@ -64,6 +64,16 @@ func TestContextFabricInvestigationFailuresCarryStageAndClassification(t *testin
 			wantStage: "fact_read", wantClassified: "no_investigation_subjects", wantLevel: "ERROR",
 		},
 		{
+			name: "a fact read that ends the investigation is named", wantStatus: http.StatusInternalServerError,
+			err:       staged(contextfabric.StageFactRead, fmt.Errorf("%w: read canonical facts: %w", contextfabric.ErrFactReadAborted, errors.New("fact capability pull_requests: fact query subjects must be unique"))),
+			wantStage: "fact_read", wantClassified: "fact_read_aborted", wantLevel: "ERROR",
+		},
+		{
+			name: "no investigation subjects inside an aborted fact read keeps its own class", wantStatus: http.StatusInternalServerError,
+			err:       staged(contextfabric.StageFactRead, fmt.Errorf("%w: read canonical facts: %w", contextfabric.ErrFactReadAborted, contextfabric.ErrNoInvestigationSubjects)),
+			wantStage: "fact_read", wantClassified: "no_investigation_subjects", wantLevel: "ERROR",
+		},
+		{
 			name: "invalid result at validation", wantStatus: http.StatusInternalServerError,
 			err:       staged(contextfabric.StageValidation, fmt.Errorf("%w: paths", contextfabric.ErrInvalidResult)),
 			wantStage: "validation", wantClassified: "invalid_result", wantLevel: "ERROR",

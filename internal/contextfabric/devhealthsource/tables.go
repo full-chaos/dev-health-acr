@@ -424,7 +424,7 @@ WHERE p.org_id = {org_id:String}` + sincePredicate(cursor, "p.last_synced", rowK
 		// queryWorkItems' note on why the trim does not happen here.
 		label := title
 		if strings.TrimSpace(label) == "" {
-			label = fmt.Sprintf("PR #%d", number)
+			label = identity.PullRequestLabel(number)
 		}
 		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequest, CanonicalID: canonicalID, Label: label}
 		properties := map[string]contractsv1.ContextFabricScalarValue{}
@@ -1046,7 +1046,7 @@ WHERE r.org_id = {org_id:String}` + sincePredicate(cursor, "r.last_synced", rowK
 		// submitted and is never retracted, so its window is open-ended
 		// from submitted_at. observedAt IS submitted_at for this query.
 		validFrom, validTo := requiredTime(observedAt), (*time.Time)(nil)
-		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequestReview, CanonicalID: canonicalID, Label: fmt.Sprintf("PR #%d review", number)}
+		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequestReview, CanonicalID: canonicalID, Label: identity.PullRequestReviewLabel(number)}
 		properties := map[string]contractsv1.ContextFabricScalarValue{}
 		if state != "" {
 			properties["state"] = stringScalar(state)

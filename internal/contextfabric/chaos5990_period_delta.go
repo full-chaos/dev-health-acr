@@ -470,9 +470,15 @@ func (e *Engine) applyPeriodDelta(ctx context.Context, principal storage.Princip
 			Subjects:     eligible,
 			Requirements: periodDeltaRequirements(touchedKinds),
 		})
-		if err != nil {
+		switch {
+		case err != nil:
 			failure = periodDeltaFailureReasonOf(err)
-		} else {
+		case priorBundle.Outcomes[FactHealth].Branch == string(factReadRejected):
+			// The read returned, and the registry refused the health
+			// result: nothing was learned about the prior point, which is
+			// prior_read_failed, never unknown_prior.
+			failure = PeriodDeltaFailureReadFailed
+		default:
 			priorIssued = true
 			for _, fact := range priorBundle.Facts {
 				if fact.Kind == FactHealth {

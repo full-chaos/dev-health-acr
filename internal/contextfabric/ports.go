@@ -15,6 +15,13 @@ var (
 	// ErrInvalidResult identifies an implementation result that violated the
 	// Context Fabric domain contract before it reached a consumer.
 	ErrInvalidResult = errors.New("context fabric result is invalid")
+	// ErrFactReadAborted identifies a canonical fact read that ended the
+	// investigation instead of degrading one fact kind. A provider's own
+	// error and a provider result the registry refuses both degrade, so what
+	// is left under this sentinel is a request the registry could not serve
+	// at all. Every error the engine's fact read returns carries it; a more
+	// specific sentinel in the same chain keeps its own classification.
+	ErrFactReadAborted = errors.New("context fabric canonical fact read aborted")
 	// ErrProjectionConflict identifies an out-of-order or incompatible
 	// projection batch. The worker must not advance its checkpoint.
 	ErrProjectionConflict = errors.New("context fabric projection conflict")

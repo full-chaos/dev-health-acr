@@ -184,19 +184,19 @@ func TestChaos4521_TheLedgerReportsMergeInducedTruncation(t *testing.T) {
 
 // Codex round-2 P2 (CHAOS-4521). recordFactRead's contract is one record
 // per PLANNED capability, whichever branch of the plan loop it took. Three
-// branches return early from ReadFacts and minted no record at all: an
-// unbuildable query, a cancelled context, and -- the one codex named -- a
-// provider result mergeFactProviderResult rejects.
+// branches minted no record at all: an unbuildable query, a cancelled
+// context, and -- the one codex named -- a provider result
+// mergeFactProviderResult rejects.
 //
-// That last is the failure an operator would most need attributed: it
-// aborts the whole investigation on an invalid provider result, and the
+// That last is the failure an operator would most need attributed: the
+// answer loses a whole fact kind to an invalid provider result, and the
 // artifacts named neither the capability nor why. An inaccurate coverage
 // claim is worse than an admitted gap, and the doc comment claimed this
 // path was covered.
 func TestChaos4521_TheLedgerRecordsARejectedProviderResult(t *testing.T) {
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	// A fact for a subject OUTSIDE the investigation set: merge rejects the
-	// whole result and ReadFacts returns an error.
+	// whole result and the kind is recorded as unavailable.
 	stranger := SubjectRef{Kind: SubjectProject, CanonicalID: "project_not_asked_for", Label: "Elsewhere"}
 	provider := &factProviderStub{
 		capability: FactCapability{Kind: FactStatus, Name: "ops-status", Version: "status-v2", SupportedSubjectKinds: []SubjectKind{SubjectProject}, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject}},
@@ -216,11 +216,10 @@ func TestChaos4521_TheLedgerRecordsARejectedProviderResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
 	}
-	if _, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, canonicalFactRequest(project, FactStatus)); err == nil {
-		t.Fatalf("precondition: expected the out-of-scope fact to be rejected")
-	}
+	bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, canonicalFactRequest(project, FactStatus))
+	requireRefusedFactResult(t, bundle, err, FactStatus)
 
-	var record map[string]any
+	var record, rejection map[string]any
 	for _, line := range strings.Split(strings.TrimSpace(sink.String()), "\n") {
 		var candidate map[string]any
 		if err := json.Unmarshal([]byte(line), &candidate); err != nil {
@@ -229,6 +228,9 @@ func TestChaos4521_TheLedgerRecordsARejectedProviderResult(t *testing.T) {
 		if candidate["msg"] == "context fabric fact read" {
 			record = candidate
 		}
+		if candidate["msg"] == "context fabric fact result rejected" {
+			rejection = candidate
+		}
 	}
 	if record == nil {
 		t.Fatalf("no fact-read record was emitted for a rejected provider result; the ledger claims one record per planned capability")
@@ -236,10 +238,11 @@ func TestChaos4521_TheLedgerRecordsARejectedProviderResult(t *testing.T) {
 	if record["kind"] != string(FactStatus) || record["outcome"] != "rejected" {
 		t.Errorf("record = %v, want kind=%q outcome=%q", record, FactStatus, "rejected")
 	}
-	// state is empty by design: the read aborted before any
-	// SourceObservation was minted, so there is no coverage state to name.
-	if record["state"] != "" {
-		t.Errorf("state = %v, want empty -- a rejected read mints no coverage observation", record["state"])
+	if record["state"] != string(SourceUnavailable) {
+		t.Errorf("state = %v, want %q -- a rejected result mints an unavailable observation", record["state"], SourceUnavailable)
+	}
+	if rejection == nil || rejection["rejection_cause"] != string(factResultRejectedFactSubjectOutsideSet) {
+		t.Errorf("rejection line = %v, want rejection_cause=%q", rejection, factResultRejectedFactSubjectOutsideSet)
 	}
 	// Still corpus-safe on the failure path, where a naive implementation
 	// would be tempted to log the offending subject.
@@ -285,13 +288,8 @@ func TestChaos4680_TheLedgerNamesANonNumericMeasureRejection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
 	}
-	_, readErr := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, canonicalFactRequest(project, FactHealth))
-	if readErr == nil {
-		t.Fatalf("precondition: expected the non-numeric measure to be rejected")
-	}
-	if !strings.Contains(readErr.Error(), "is not numeric") {
-		t.Fatalf("ReadFacts() error = %v, want it to name the numeric-measure invariant", readErr)
-	}
+	bundle, readErr := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, canonicalFactRequest(project, FactHealth))
+	requireRefusedFactResult(t, bundle, readErr, FactHealth)
 
 	var record map[string]any
 	for _, line := range strings.Split(strings.TrimSpace(sink.String()), "\n") {

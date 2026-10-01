@@ -380,7 +380,9 @@ func TestFactCapabilityRegistry_EvaluatedSubjectsAreValidatedAndStateGated(t *te
 	anchor := rankTestSubject("anchor")
 	stranger := rankTestSubject("stranger")
 	request := canonicalFactRequest(anchor, FactOperationalDeficiencies)
-	if _, err := deficienciesRegistry(t, stranger).ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, request); err == nil {
+	refused, err := deficienciesRegistry(t, stranger).ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+	requireRefusedFactResult(t, refused, err, FactOperationalDeficiencies)
+	if refused.EvaluatedSubjects.covers(FactOperationalDeficiencies, stranger) {
 		t.Fatal("ReadFacts() accepted evaluation evidence for a subject outside the investigation")
 	}
 	provider := &factProviderStub{
