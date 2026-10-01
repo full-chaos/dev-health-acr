@@ -1407,10 +1407,13 @@ kubectl -n <namespace> patch deployment <release>-projector --type json \
   -p '[{"op":"remove","path":"/spec/strategy/rollingUpdate"}]'
 ```
 
-The patch is a no-op on a fresh install and on a Deployment that is already
-`Recreate`. Check with
-`kubectl -n <namespace> get deployment <release>-projector -o jsonpath='{.spec.strategy}'`:
-the result must be `{"type":"Recreate"}`.
+Check first with
+`kubectl -n <namespace> get deployment <release>-projector -o jsonpath='{.spec.strategy}'`.
+Patch only when the result carries a `rollingUpdate` key. On a fresh install
+or a Deployment that is already `Recreate` the result is `{"type":"Recreate"}`
+and the patch fails with `remove operation does not apply: doc is missing
+path`; skip it there. After the patch the result must be
+`{"type":"Recreate"}`.
 
 ### Projector rebuild on Kubernetes: one-off Job (method of record)
 
