@@ -50,8 +50,8 @@ func (p echoFactProvider) ReadFacts(_ context.Context, _ storage.Principal, quer
 	return cf.FactProviderResult{State: cf.SourceAvailable, Facts: facts}, nil
 }
 
-// labelLessPullRequestExpander is the production expansion shape: pull
-// request targets with no label, one more candidate than was admitted.
+// labelLessPullRequestExpander mints pull request targets with no label, one
+// more candidate than was admitted: targets whose facts the registry refuses.
 type labelLessPullRequestExpander struct{}
 
 func (labelLessPullRequestExpander) ExpandFactScope(_ context.Context, request cf.FactScopeExpansionRequest) (cf.FactScopeExpansionResult, error) {
@@ -146,9 +146,8 @@ func postTeamQuestion(t *testing.T, app *App, token string) *httptest.ResponseRe
 	return recorder
 }
 
-// The production failure: a team question whose pull request fact read is
-// refused by the registry. The answer is served, partial, with the refused
-// kind named in coverage.
+// A team question whose pull request fact read is refused by the registry.
+// The answer is served, partial, with the refused kind named in coverage.
 func TestATeamQuestionWithARefusedFactReadAnswersPartial(t *testing.T) {
 	logs := &bytes.Buffer{}
 	// Every kind the engine plans for a team status question has a provider

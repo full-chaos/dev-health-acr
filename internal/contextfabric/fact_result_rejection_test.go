@@ -43,9 +43,9 @@ func registryLogLines(t *testing.T, logs *bytes.Buffer, message string) []map[st
 	return lines
 }
 
-// The production shape: a team question whose pull request subjects come from
-// a truncated scope expansion, and the expansion mints those subjects with no
-// label. Every fact the producer answers for them is refused by the merge.
+// A team question whose pull request subjects come from a truncated scope
+// expansion that mints them with no label, so every fact the producer answers
+// for them is refused by the merge. This is the shape that answered 500.
 func TestARefusedProviderResultCostsItsKindNotTheRead(t *testing.T) {
 	t.Parallel()
 	labelLess := []SubjectRef{

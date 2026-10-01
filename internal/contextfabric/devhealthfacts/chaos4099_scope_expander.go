@@ -1127,6 +1127,7 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 		target := contextfabric.SubjectRef{
 			Kind:        contractsv1.ContextFabricSubjectPullRequest,
 			CanonicalID: fmt.Sprintf("pull_request:%s:%d", repoID, number),
+			Label:       identity.PullRequestLabel(int64(number)),
 		}
 		targets = append(targets, target)
 		if repo, ok := byRepoID[repoID]; ok {
@@ -1236,7 +1237,7 @@ LIMIT ` + strconv.Itoa(limitPlusOne)
 			missingNextHop++
 			continue
 		}
-		target := contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequestReview, CanonicalID: canonicalID}
+		target := contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequestReview, CanonicalID: canonicalID, Label: identity.PullRequestReviewLabel(int64(number))}
 		targets = append(targets, target)
 		if repo, ok := byRepoID[repoID]; ok {
 			if repo.basis != "" {

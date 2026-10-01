@@ -3,7 +3,6 @@ package devhealthfacts_test
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"log/slog"
 	"strings"
 	"testing"
@@ -16,14 +15,12 @@ import (
 
 // The production chain end to end against a real ClickHouse: the real scope
 // expander reaches a team's pull requests and reviews, the real producers
-// answer a fact for each, and the real registry merges them.
+// answer a fact for each, and the real registry merges them. A team question
+// is served its pull request and review facts.
 //
-// The expander mints those targets with no label, so the registry refuses
-// every fact the producers return for them. That refusal must cost the two
-// kinds and nothing else: the read returns, and coverage names both. When the
-// expander mints a label these two kinds are served, and the expectations
-// below change with it.
-func TestTeamPullRequestFactsThroughTheRealProducersDegradeAndDoNotEndTheRead(t *testing.T) {
+// Every subject the expander mints must pass the registry's own subject
+// check, or the registry refuses every fact the producers return for it.
+func TestTeamPullRequestAndReviewFactsAreServedThroughTheRealProducers(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
 	seedChaos4101TeamFixture(t, ctx, direct, time.Now().UTC())
@@ -44,43 +41,63 @@ func TestTeamPullRequestFactsThroughTheRealProducersDegradeAndDoNotEndTheRead(t 
 	})
 
 	if err != nil {
-		t.Fatalf("ReadFacts error = %q, want nil: a team's pull request read must never end the investigation", err)
+		t.Fatalf("ReadFacts error = %q, want nil", err)
 	}
-	reached := map[contextfabric.SubjectKind]int{}
+	wantLabels := map[string]string{
+		"pull_request:" + chaos4101RepoAID + ":1":                      "PR #1",
+		"pull_request:" + chaos4101RepoAID + ":2":                      "PR #2",
+		"pull_request:" + chaos4101RepoBID + ":3":                      "PR #3",
+		"pull_request_review.v2:" + chaos4101RepoAID + ":1:review-a-1": "PR #1 review",
+	}
+	if len(bundle.Scope.Derivations) != len(wantLabels) {
+		t.Fatalf("derivations = %d, want %d: the fixture's 3 pull requests and 1 review", len(bundle.Scope.Derivations), len(wantLabels))
+	}
 	for _, derivation := range bundle.Scope.Derivations {
-		reached[derivation.Target.Kind]++
+		target := derivation.Target
+		if err := target.Validate(); err != nil {
+			t.Fatalf("expansion target %+v is not a valid subject: %v", target, err)
+		}
+		if want, ok := wantLabels[target.CanonicalID]; !ok || target.Label != want {
+			t.Fatalf("expansion target %+v, want label %q", target, want)
+		}
 	}
-	if reached[contextfabric.SubjectPullRequest] != 3 || reached[contextfabric.SubjectKind("pull_request_review")] != 1 {
-		t.Fatalf("expansion reached %v, want the fixture's 3 pull requests and 1 review: the producers were not exercised", reached)
+	wantStates := map[string]string{
+		"pull_request:" + chaos4101RepoAID + ":1":                      "open",
+		"pull_request:" + chaos4101RepoAID + ":2":                      "merged",
+		"pull_request:" + chaos4101RepoBID + ":3":                      "open",
+		"pull_request_review.v2:" + chaos4101RepoAID + ":1:review-a-1": "approved",
 	}
-	states := map[string]contextfabric.SourceObservation{}
+	served := map[string]string{}
+	for _, fact := range bundle.Facts {
+		state := fact.Fields["state"].String
+		if state == nil {
+			t.Fatalf("fact %+v carries no state", fact)
+		}
+		served[fact.Subject.CanonicalID] = *state
+		if fact.Subject.Label != wantLabels[fact.Subject.CanonicalID] {
+			t.Fatalf("served fact subject %+v, want label %q", fact.Subject, wantLabels[fact.Subject.CanonicalID])
+		}
+		if len(fact.EvidenceRefIDs) == 0 {
+			t.Fatalf("served fact for %s carries no evidence", fact.Subject.CanonicalID)
+		}
+	}
+	if len(served) != len(wantStates) {
+		t.Fatalf("served facts = %v, want %v", served, wantStates)
+	}
+	for id, want := range wantStates {
+		if served[id] != want {
+			t.Fatalf("served state for %s = %q, want %q (all served: %v)", id, served[id], want, served)
+		}
+	}
 	for _, source := range bundle.Coverage.Sources {
-		states[source.Source] = source
-	}
-	for _, kind := range []contextfabric.FactKind{contextfabric.FactPullRequests, contextfabric.FactReviews} {
-		source, ok := states["canonical_fact:"+string(kind)]
-		if !ok {
-			t.Fatalf("coverage has no %s source: %+v", kind, bundle.Coverage.Sources)
-		}
-		if source.State != contextfabric.SourceUnavailable || !strings.Contains(source.Reason, "canonical fact provider returned a result that was rejected") {
-			t.Fatalf("%s coverage = %+v, want unavailable with the rejection sentence", kind, source)
+		if source.State != contextfabric.SourceAvailable {
+			t.Fatalf("coverage %+v, want every kind available", source)
 		}
 	}
-	if len(bundle.Facts) != 0 {
-		t.Fatalf("bundle carries %d facts from refused results, want 0", len(bundle.Facts))
+	if len(bundle.Coverage.Sources) != 2 || bundle.Coverage.Partial {
+		t.Fatalf("coverage = %+v, want two available kinds and no partial flag", bundle.Coverage)
 	}
-	if err := bundle.Coverage.Validate(); err != nil {
-		t.Fatalf("the degraded coverage is not contract-valid: %v", err)
-	}
-	causes := map[string]string{}
-	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
-		entry := map[string]any{}
-		if json.Unmarshal([]byte(line), &entry) != nil || entry["msg"] != "context fabric fact result rejected" {
-			continue
-		}
-		causes[entry["kind"].(string)], _ = entry["rejection_cause"].(string)
-	}
-	if causes["pull_requests"] != "fact_subject_invalid" || causes["reviews"] != "fact_subject_invalid" {
-		t.Fatalf("rejection causes = %v, want fact_subject_invalid for pull_requests and reviews", causes)
+	if strings.Contains(logs.String(), "context fabric fact result rejected") {
+		t.Fatalf("a served read logged a rejected result:\n%s", logs.String())
 	}
 }
