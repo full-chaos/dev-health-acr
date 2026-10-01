@@ -20,7 +20,7 @@ import "slices"
 // FactKindOutcome is one planned kind's entry in the ledger.
 type FactKindOutcome struct {
 	// Branch is the plan-loop branch that decided the kind: unconfigured,
-	// scope_gap, pruned, failed or completed.
+	// scope_gap, pruned, failed, rejected or completed.
 	Branch string
 	// State and Reason are the coverage observation the branch minted.
 	State  SourceState

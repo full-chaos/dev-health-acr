@@ -878,7 +878,7 @@ func subjectOutcome(outcome contextfabric.FactKindOutcome, key string, served bo
 	switch outcome.Branch {
 	case "pruned":
 		return OutcomeNotApplicable
-	case "unconfigured", "scope_gap", "failed":
+	case "unconfigured", "scope_gap", "failed", "rejected":
 		return OutcomeUnavailable
 	}
 	queried := false

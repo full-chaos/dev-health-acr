@@ -3334,7 +3334,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// raised before resolution ran) simply emits nothing.
 		e.recordFactScopeExpansion(ctx, principal, facts.Scope)
 		if err != nil {
-			return InvestigationResult{}, stageError(StageFactRead, fmt.Errorf("read canonical facts: %w", err))
+			return InvestigationResult{}, stageError(StageFactRead, fmt.Errorf("%w: read canonical facts: %w", ErrFactReadAborted, err))
 		}
 
 	}

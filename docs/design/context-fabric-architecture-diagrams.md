@@ -101,12 +101,15 @@ flowchart TD
   ZERO -->|"rows > 0"| AVAIL["available<br/>(or truncated / stale)"]
   ZERO -->|"0 rows, current axis"| NODATA["<b>no_data</b> + emptyReadReason<br/>'reached and held no rows'<br/>-- NEVER available (check 12)"]
   ZERO -->|"0 rows, historical axis"| RETAIN["no_data + outOfRetentionReason<br/>'may predate the retained corpus'"]
+  AVAIL --> MERGE{"mergeFactProviderResult<br/>does the provider result pass every check?<br/>(state, version, subjects in the set and valid,<br/>per-fact state, evidence)"}
+  MERGE -->|"yes"| LEDGER
+  MERGE -->|"no -- commits NOTHING from the result"| REFUSED["<b>unavailable</b> + fixed reason, for THIS kind only<br/>the read continues with the next kind<br/>WARN 'context fabric fact result rejected'<br/>rejection_cause = closed vocabulary"]
+  REFUSED --> LEDGER
   PRUNE --> LEDGER
   UNEXP --> LEDGER
-  AVAIL --> LEDGER
   NODATA --> LEDGER
   RETAIN --> LEDGER
-  LEDGER["recordFactRead ledger (CHAOS-4521)<br/>ONE record per PLANNED capability:<br/>kind · outcome (unconfigured / scope_gap / pruned / failed / completed / rejected / cancelled)<br/>· state · subjects · subject_kinds · facts · truncated<br/>closed vocabulary + counts only, no labels/IDs"]
+  LEDGER["recordFactRead ledger (CHAOS-4521)<br/>ONE record per PLANNED capability:<br/>kind · outcome (unconfigured / scope_gap / pruned / failed / completed / rejected / cancelled)<br/>· state · subjects · subject_kinds · facts · truncated<br/>closed vocabulary + counts only, no labels/IDs<br/>a read that ENDS the investigation carries ErrFactReadAborted<br/>-> failure_classification=fact_read_aborted, never unclassified"]
   LEDGER --> BUNDLE["CanonicalFactBundle + Coverage"]
   BUNDLE --> STAGE2["<b>budget stage 2</b> (CHAOS-4636) -- bound what synthesis is GIVEN<br/>chaos4636_grouped_cohort.go<br/>GROUP (owning team read off each member's own fact rows)<br/>-> NARROW (member-first, D2) -> RANK<br/>facts for removed members dropped WITH them<br/>(an ungrounded claim would fail closure)"]
   STAGE2 --> SYN["Synthesize (model call)<br/>RuntimeAnswerSynthesizer.Synthesize<br/>model_runtime.go:596<br/><b>CHAOS-4355 follow-up:</b> modelFacingFacts<br/>(genkitruntime/runtime.go) drops every<br/>Rows-shaped field from canonical_facts<br/>BEFORE this prompt is sent"]

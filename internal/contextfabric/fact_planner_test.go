@@ -606,13 +606,11 @@ func TestReadFactsRejectsAProviderClaimingPrunedState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
 	}
-	_, err = registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
+	bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
 		Subjects:     []SubjectRef{subject(SubjectTeam, "team_platform")},
 		Requirements: []FactRequirement{{Kind: FactWorkload}},
 	})
-	if err == nil {
-		t.Fatal("ReadFacts() error = nil, want a provider-claimed pruned state rejected")
-	}
+	requireRefusedFactResult(t, bundle, err, FactWorkload)
 }
 
 // TestAppendFactCoverageClampsReasonToContractBound guards the one bound
@@ -716,13 +714,11 @@ func TestMergeRejectsImpossiblePerFactSourceState(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
 			}
-			_, err = registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
+			bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
 				Subjects:     []SubjectRef{repository},
 				Requirements: []FactRequirement{{Kind: FactMetrics}},
 			})
-			if err == nil {
-				t.Fatalf("ReadFacts() error = nil, want a fact carrying source state %q rejected", testCase.state)
-			}
+			requireRefusedFactResult(t, bundle, err, FactMetrics)
 		})
 	}
 }
@@ -792,7 +788,7 @@ func TestMergeRequiresEvidenceOnTruncatedFacts(t *testing.T) {
 		}
 	}
 
-	read := func(t *testing.T, fact CanonicalFact) error {
+	read := func(t *testing.T, fact CanonicalFact) (CanonicalFactBundle, error) {
 		t.Helper()
 		provider := &factProviderStub{
 			capability: evidenceRequiring,
@@ -802,18 +798,20 @@ func TestMergeRequiresEvidenceOnTruncatedFacts(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
 		}
-		_, err = registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
+		return registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, CanonicalFactRequest{
 			Subjects:     []SubjectRef{repository},
 			Requirements: []FactRequirement{{Kind: FactMetrics}},
 		})
-		return err
 	}
 
-	if err := read(t, factWith(nil)); err == nil {
-		t.Fatal("ReadFacts() error = nil, want an evidence-free truncated fact rejected when the capability requires evidence")
-	}
-	if err := read(t, factWith([]string{"evidence_metrics_0001"})); err != nil {
+	bundle, err := read(t, factWith(nil))
+	requireRefusedFactResult(t, bundle, err, FactMetrics)
+	bundle, err = read(t, factWith([]string{"evidence_metrics_0001"}))
+	if err != nil {
 		t.Fatalf("ReadFacts() error = %v, want a truncated fact WITH evidence still accepted", err)
+	}
+	if len(bundle.Facts) != 1 {
+		t.Fatalf("facts = %d, want the truncated fact WITH evidence admitted", len(bundle.Facts))
 	}
 }
 

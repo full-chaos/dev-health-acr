@@ -218,6 +218,7 @@ const (
 	contextFabricClassModelOutput       = "model_output_invalid"
 	contextFabricClassNoSubjects        = "no_investigation_subjects"
 	contextFabricClassInvalidResult     = "invalid_result"
+	contextFabricClassFactReadAborted   = "fact_read_aborted"
 	contextFabricClassPanic             = "panic"
 	// contextFabricClassBudgetRefusal (CHAOS-4636) is decision D5's PLANNED
 	// refusal: the engine measured its own assembled answer, re-synthesized
@@ -443,6 +444,14 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 	}
 	if errors.Is(err, contextfabric.ErrInvalidResult) {
 		a.writeContextFabricFailure(w, r, err, contextFabricClassInvalidResult, http.StatusInternalServerError, "internal_error", "Context Fabric investigation failed", false, nil)
+		return
+	}
+	// LAST of the named classes: every error the engine's fact read returns
+	// carries this sentinel, so a more specific one in the same chain (a
+	// deadline, an unavailable dependency, a rejected interpretation, no
+	// subjects) has already been matched above.
+	if errors.Is(err, contextfabric.ErrFactReadAborted) {
+		a.writeContextFabricFailure(w, r, err, contextFabricClassFactReadAborted, http.StatusInternalServerError, "internal_error", "Context Fabric investigation failed", false, nil)
 		return
 	}
 	a.writeContextFabricFailure(w, r, err, contextFabricClassUnclassified, http.StatusInternalServerError, "internal_error", "Context Fabric investigation failed", false, nil)

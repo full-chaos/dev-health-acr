@@ -1050,31 +1050,27 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		// afterwards would report the retained count as the returned count
 		// and hide exactly the truncation the same line reports.
 		factsReturned := len(result.Facts)
-		if err := mergeFactProviderResult(&bundle, registered.capability, query, result, allowedSubjects,
-			factDetailSpecForRead(planned, registered.capability, false, providerReason)); err != nil {
-			// Same reasoning as buildFactQuery's error above: the resolved
-			// scope rides out with the error so its telemetry is not lost.
+		if rejection := mergeFactProviderResult(&bundle, registered.capability, query, result, allowedSubjects,
+			factDetailSpecForRead(planned, registered.capability, false, providerReason)); rejection != nil {
+			// A result the merge refuses costs the answer this ONE kind, not
+			// the investigation: the kind is disclosed as unavailable, every
+			// other kind is still read, and the refused result contributes
+			// nothing (the merge commits no part of a result it refuses).
 			//
-			// Codex round-2 P2: and so does the ledger record. This path
-			// aborts the whole investigation on an invalid provider result,
-			// which is exactly the failure an operator would be reading the
-			// ledger to attribute -- leaving it out made the
-			// one-record-per-planned-capability claim false on the runs that
-			// need it most.
-			//
-			// CHAOS-4680 codex finding: the generic "rejected" outcome alone
-			// left an operator unable to tell a non-numeric-measure
-			// declaration apart from every other reason mergeFactProviderResult
-			// can refuse a provider's result. errors.Is against the domain
-			// sentinel narrows the outcome for that ONE cause, without
-			// logging Validate()'s free-text message (recordFactRead's own
-			// "no provider reason string" discipline).
+			// The outcome is narrowed for a non-numeric measure by errors.Is
+			// against the domain sentinel; the cause is the closed
+			// factResultRejectionCause. Neither is Validate()'s free text.
 			outcome := factReadRejected
-			if errors.Is(err, ErrFactTableMeasureNotNumeric) {
+			if errors.Is(rejection, ErrFactTableMeasureNotNumeric) {
 				outcome = factReadRejectedNonNumericMeasure
 			}
-			r.recordFactRead(ctx, principal, planned.Kind, outcome, "", query.Subjects, factsReturned, false)
-			return bundle, fmt.Errorf("fact capability %s: %w", planned.Kind, err)
+			state, reason := classifyFactReadError(rejection)
+			appendFactCoverage(&bundle, planned.Kind, state, nil, "", withNarrowingNote(planned, reason),
+				factDetailSpecForRead(planned, registered.capability, true, reason))
+			bundle.recordOutcome(planned.Kind, factReadRejected, planned.Subjects, query.Subjects, nil)
+			r.recordFactRead(ctx, principal, planned.Kind, outcome, state, query.Subjects, factsReturned, false)
+			r.recordFactResultRejection(ctx, principal, planned.Kind, rejection.cause, query.Subjects, factsReturned)
+			continue
 		}
 		// BOTH the state and the truncation flag are read back off the
 		// bundle's own coverage entry, never off result (codex round-1 P2).
@@ -1122,12 +1118,12 @@ const (
 	// factReadCompleted: the provider ran and returned a result. Whether
 	// that result carried any facts is the "facts" field, NOT this one.
 	factReadCompleted factReadOutcome = "completed"
-	// factReadRejected: the read never became an observation because the
-	// REQUEST or the RESULT was invalid -- an unbuildable query, or a
-	// provider result the merge refused (invalid state or version, a fact
-	// outside the investigation set, a fact whose own source state cannot
-	// carry facts). These paths abort the whole investigation, so no
-	// coverage entry is ever minted for them.
+	// factReadRejected: the REQUEST or the RESULT was invalid. An
+	// unbuildable query aborts the investigation and mints no coverage
+	// entry. A provider result the merge refused (invalid state or version,
+	// a fact outside the investigation set, a fact whose subject or source
+	// state is invalid) costs only its own kind: the kind is recorded as
+	// unavailable and the read continues.
 	factReadRejected factReadOutcome = "rejected"
 	// factReadRejectedNonNumericMeasure (CHAOS-4680) narrows factReadRejected
 	// for the ONE cause codex found undiagnosable without it: a provider
@@ -1163,11 +1159,11 @@ const (
 // org_id and request_id match SlogEngineTelemetry's existing convention so
 // this line joins the rest of an investigation's stream on the same keys.
 //
-// `state` is EMPTY on the rejected/cancelled outcomes, and that is the
-// honest value: those paths abort before any SourceObservation is minted,
-// so there is no coverage state to report and inventing one would be a
-// claim about an observation that does not exist. The outcome field
-// carries the information instead.
+// `state` is EMPTY on the cancelled outcome and on a rejected REQUEST (an
+// unbuildable query), and that is the honest value: those paths abort
+// before any SourceObservation is minted, so there is no coverage state to
+// report and inventing one would be a claim about an observation that does
+// not exist. A rejected RESULT does mint one, and reports its state.
 func (r *FactCapabilityRegistry) recordFactRead(ctx context.Context, principal storage.Principal, kind FactKind, outcome factReadOutcome, state SourceState, subjects []SubjectRef, facts int, truncated bool) {
 	if r == nil || r.logger == nil {
 		return
@@ -1379,18 +1375,82 @@ func copyRequestedRepositoryScope(values []string) []string {
 	return out
 }
 
-func mergeFactProviderResult(bundle *CanonicalFactBundle, capability FactCapability, query FactQuery, result FactProviderResult, allowed map[string]SubjectRef, detailSpec coverageDetailSpec) error {
+// factResultRejectionCause is the closed vocabulary of the merge checks that
+// can refuse a provider's result. It is what the rejection log line carries
+// in place of the check's own message, which can name a subject.
+type factResultRejectionCause string
+
+const (
+	factResultRejectedSourceState           factResultRejectionCause = "invalid_source_state"
+	factResultRejectedObservedAt            factResultRejectionCause = "invalid_observed_timestamp"
+	factResultRejectedVersion               factResultRejectionCause = "invalid_version"
+	factResultRejectedStateCarriesFacts     factResultRejectionCause = "state_cannot_carry_facts"
+	factResultRejectedEvaluatedSubject      factResultRejectionCause = "evaluated_subject_outside_set"
+	factResultRejectedFactKind              factResultRejectionCause = "fact_kind_mismatch"
+	factResultRejectedFactSubjectOutsideSet factResultRejectionCause = "fact_subject_outside_set"
+	factResultRejectedFactSubject           factResultRejectionCause = "fact_subject_invalid"
+	factResultRejectedFactSourceState       factResultRejectionCause = "fact_source_state_invalid"
+	factResultRejectedFactStateCarriesFacts factResultRejectionCause = "fact_source_state_cannot_carry_facts"
+	factResultRejectedFact                  factResultRejectionCause = "fact_invalid"
+)
+
+// factResultRejectedReason is the one sentence a refused result puts on the
+// answer's coverage. A fixed literal: the refusing check's own message can
+// carry a canonical id and never leaves the process.
+const factResultRejectedReason = "canonical fact provider returned a result that was rejected"
+
+// factResultRejection is a provider result mergeFactProviderResult refused.
+// It carries a FactReadFailure (errors.As finds one), so the read loop
+// classifies it exactly as it classifies a provider that returned an error
+// of its own.
+type factResultRejection struct {
+	cause   factResultRejectionCause
+	failure *FactReadFailure
+	err     error
+}
+
+func rejectFactResult(cause factResultRejectionCause, err error) *factResultRejection {
+	return &factResultRejection{
+		cause:   cause,
+		failure: &FactReadFailure{State: SourceUnavailable, Reason: factResultRejectedReason},
+		err:     err,
+	}
+}
+
+func (e *factResultRejection) Error() string   { return e.err.Error() }
+func (e *factResultRejection) Unwrap() []error { return []error{e.failure, e.err} }
+
+// recordFactResultRejection is the loud half of degrading a refused result:
+// the investigation no longer fails on it, so this WARN is the only place
+// the refusing check is named.
+func (r *FactCapabilityRegistry) recordFactResultRejection(ctx context.Context, principal storage.Principal, kind FactKind, cause factResultRejectionCause, subjects []SubjectRef, facts int) {
+	if r == nil || r.logger == nil {
+		return
+	}
+	attrs := []any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"kind", SanitizeLogAttr(string(kind)),
+		"rejection_cause", SanitizeLogAttr(string(cause)),
+		"subjects", len(subjects),
+		"subject_kinds", SanitizeLogAttr(strings.Join(distinctSubjectKinds(subjects), ",")),
+		"facts", facts,
+	}
+	attrs = append(attrs, requestIDLogAttrs(ctx)...)
+	r.logger.WarnContext(ctx, "context fabric fact result rejected", attrs...)
+}
+
+func mergeFactProviderResult(bundle *CanonicalFactBundle, capability FactCapability, query FactQuery, result FactProviderResult, allowed map[string]SubjectRef, detailSpec coverageDetailSpec) *factResultRejection {
 	if !validFactSourceState(result.State) {
-		return fmt.Errorf("provider returned invalid source state %q", result.State)
+		return rejectFactResult(factResultRejectedSourceState, fmt.Errorf("provider returned invalid source state %q", result.State))
 	}
 	if result.ObservedAt != nil && result.ObservedAt.IsZero() {
-		return errors.New("provider returned an invalid observed timestamp")
+		return rejectFactResult(factResultRejectedObservedAt, errors.New("provider returned an invalid observed timestamp"))
 	}
 	if strings.TrimSpace(result.Version) == "" {
 		result.Version = capability.Version
 	}
 	if strings.TrimSpace(result.Version) == "" || strings.TrimSpace(result.Version) != result.Version {
-		return errors.New("provider returned an invalid version")
+		return rejectFactResult(factResultRejectedVersion, errors.New("provider returned an invalid version"))
 	}
 	// Registry-level fanout cap (CHAOS-3755 adversarial review finding
 	// H7). Each provider bounds its OWN query, but nothing bounded the
@@ -1432,26 +1492,24 @@ func mergeFactProviderResult(bundle *CanonicalFactBundle, capability FactCapabil
 		}
 	}
 	if stateRejectsFacts(result.State) && len(result.Facts) > 0 {
-		return fmt.Errorf("source state %q cannot return facts", result.State)
+		return rejectFactResult(factResultRejectedStateCarriesFacts, fmt.Errorf("source state %q cannot return facts", result.State))
 	}
 	for _, subject := range result.EvaluatedSubjects {
 		if _, ok := allowed[canonicalFactSubjectKey(subject)]; !ok {
-			return fmt.Errorf("provider reported evaluation of subject %q outside the investigation set", subject.CanonicalID)
+			return rejectFactResult(factResultRejectedEvaluatedSubject, fmt.Errorf("provider reported evaluation of subject %q outside the investigation set", subject.CanonicalID))
 		}
 	}
-	if result.State == SourceAvailable {
-		if bundle.EvaluatedSubjects == nil {
-			bundle.EvaluatedSubjects = FactReadSubjects{}
-		}
-		bundle.EvaluatedSubjects.add(capability.Kind, result.EvaluatedSubjects)
-	}
+	accepted := make([]CanonicalFact, 0, len(result.Facts))
 	for index := range result.Facts {
 		fact := result.Facts[index]
 		if fact.Kind != capability.Kind || fact.Kind != query.Kind {
-			return fmt.Errorf("provider returned fact kind %q for capability %q", fact.Kind, capability.Kind)
+			return rejectFactResult(factResultRejectedFactKind, fmt.Errorf("provider returned fact kind %q for capability %q", fact.Kind, capability.Kind))
 		}
 		if _, ok := allowed[canonicalFactSubjectKey(fact.Subject)]; !ok {
-			return fmt.Errorf("provider returned subject %q outside the investigation set", fact.Subject.CanonicalID)
+			return rejectFactResult(factResultRejectedFactSubjectOutsideSet, fmt.Errorf("provider returned subject %q outside the investigation set", fact.Subject.CanonicalID))
+		}
+		if err := fact.Subject.Validate(); err != nil {
+			return rejectFactResult(factResultRejectedFactSubject, fmt.Errorf("provider fact subject: %w", err))
 		}
 		if fact.Source == "" {
 			fact.Source = capability.Name
@@ -1479,10 +1537,10 @@ func mergeFactProviderResult(bundle *CanonicalFactBundle, capability FactCapabil
 		// unauthorized, conflicted, and not_applicable all mean "there is no
 		// fact here", so a fact wearing one is self-contradicting.
 		if !validFactSourceState(fact.SourceState) {
-			return fmt.Errorf("provider returned fact with invalid source state %q", fact.SourceState)
+			return rejectFactResult(factResultRejectedFactSourceState, fmt.Errorf("provider returned fact with invalid source state %q", fact.SourceState))
 		}
 		if stateRejectsFacts(fact.SourceState) {
-			return fmt.Errorf("provider returned fact with source state %q, which cannot carry facts", fact.SourceState)
+			return rejectFactResult(factResultRejectedFactStateCarriesFacts, fmt.Errorf("provider returned fact with source state %q, which cannot carry facts", fact.SourceState))
 		}
 		// Codex round-2 R2-1: the evidence requirement is now keyed on the
 		// capability ALONE, not on the fact's state.
@@ -1500,9 +1558,18 @@ func mergeFactProviderResult(bundle *CanonicalFactBundle, capability FactCapabil
 		// fact-bearing. So the state test could only ever weaken the
 		// requirement, never strengthen it.
 		if err := fact.Validate(capability.RequiresEvidence); err != nil {
-			return fmt.Errorf("provider fact: %w", err)
+			return rejectFactResult(factResultRejectedFact, fmt.Errorf("provider fact: %w", err))
 		}
-		bundle.Facts = append(bundle.Facts, fact)
+		accepted = append(accepted, fact)
+	}
+	// Nothing above this line writes to the bundle: a refused result
+	// contributes no fact and no evaluation.
+	bundle.Facts = append(bundle.Facts, accepted...)
+	if result.State == SourceAvailable {
+		if bundle.EvaluatedSubjects == nil {
+			bundle.EvaluatedSubjects = FactReadSubjects{}
+		}
+		bundle.EvaluatedSubjects.add(capability.Kind, result.EvaluatedSubjects)
 	}
 	bundle.Versions[capability.Kind] = result.Version
 	if result.Watermark != "" {
