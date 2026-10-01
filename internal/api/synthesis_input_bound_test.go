@@ -365,9 +365,9 @@ func TestATeamQuestionLargerThanTheModelInputIsAnsweredWithBoundedFacts(t *testi
 }
 
 // A team whose expanded facts were all read, below the expansion cap, and are
-// still larger than the model input bound. The read itself is complete, so
-// the bound alone makes the answer partial.
-func TestABoundedSynthesisInputMakesAFullyReadAnswerPartial(t *testing.T) {
+// still larger than the model input bound. No fact read is degraded, and the
+// answer is bounded and says so.
+func TestAFullyReadFactSetLargerThanTheModelInputIsBounded(t *testing.T) {
 	logs := &bytes.Buffer{}
 	provider := newRecordedModelProvider(t)
 	app, token := teamSynthesisApp(t, productionModelRuntime(t, provider, logs), nil, teamExpander{targets: expansionCap - 1, complete: true}, logs)
@@ -378,8 +378,8 @@ func TestABoundedSynthesisInputMakesAFullyReadAnswerPartial(t *testing.T) {
 	if len(result.Coverage.DegradedReasons) != 0 {
 		t.Fatalf("degraded reasons = %q, want none: the fact read was complete", result.Coverage.DegradedReasons)
 	}
-	if !result.Coverage.Partial || !hasLimitation(result, contractsv1.ContextFabricSynthesisInputBoundedLimitation) {
-		t.Fatalf("coverage.partial = %v limitations = %q, want a partial answer that states the bound", result.Coverage.Partial, result.Limitations)
+	if !hasLimitation(result, contractsv1.ContextFabricSynthesisInputBoundedLimitation) {
+		t.Fatalf("limitations = %q, want the bounded-input disclosure", result.Limitations)
 	}
 	if bounds := logLines(t, logs.String(), "context fabric synthesis input bounded"); len(bounds) != 1 || bounds[0]["outcome"] != "fitted" {
 		t.Fatalf("bound lines = %v, want one with outcome=fitted", bounds)
