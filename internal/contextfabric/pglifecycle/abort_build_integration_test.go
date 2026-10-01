@@ -84,6 +84,11 @@ func TestAbortBuild(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, int64(2), *built.TargetEpoch)
 
+		building := lifecycleRow(t, ctx, store, org)
+		_, err = store.AbortBuild(ctx, org, building.ActiveEpoch, time.Now())
+		require.ErrorIs(t, err, contextfabric.ErrLifecycleConflict, "an abort that names the active epoch is not an abort of the open build")
+		require.Equal(t, building, lifecycleRow(t, ctx, store, org))
+
 		aborted, err := store.AbortBuild(ctx, org, 2, time.Now())
 		require.NoError(t, err)
 		require.Equal(t, contextfabric.LifecycleStatusServing, aborted.Status)
@@ -104,6 +109,29 @@ func TestAbortBuild(t *testing.T) {
 		telemetry.mu.Lock()
 		defer telemetry.mu.Unlock()
 		require.Equal(t, []buildAbortSignal{{org, 1, 2}}, telemetry.buildAborts)
+		require.Len(t, telemetry.casConflicts, 1)
+	})
+
+	t.Run("second_abort_of_the_same_epoch_conflicts_and_records_nothing_more", func(t *testing.T) {
+		store, telemetry := newStore(t)
+		const org = "org-abort-twice"
+		_, err := store.BeginBuild(ctx, org, []string{"a"}, time.Now())
+		require.NoError(t, err)
+		_, err = store.AbortBuild(ctx, org, 1, time.Now())
+		require.NoError(t, err)
+		serving := lifecycleRow(t, ctx, store, org)
+		retired := retirementsOf(t, ctx, store, org)
+
+		_, err = store.AbortBuild(ctx, org, 1, time.Now().Add(time.Hour))
+		require.ErrorIs(t, err, contextfabric.ErrLifecycleConflict)
+		require.Equal(t, serving, lifecycleRow(t, ctx, store, org))
+		require.Equal(t, retired, retirementsOf(t, ctx, store, org), "the drain clock of the aborted epoch does not restart")
+
+		telemetry.mu.Lock()
+		defer telemetry.mu.Unlock()
+		require.Equal(t, []buildAbortSignal{{org, 0, 1}}, telemetry.buildAborts)
+		require.Len(t, telemetry.casConflicts, 1)
+		require.Equal(t, contextfabric.LifecycleStatusServing, telemetry.casConflicts[0].observed)
 	})
 
 	t.Run("next_build_allocates_a_new_epoch_and_flips", func(t *testing.T) {
