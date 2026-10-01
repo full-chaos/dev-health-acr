@@ -302,3 +302,16 @@ func RunProjectNativeMix(ctx context.Context, client contextpacket.ClickHouseQue
 func WithProjectMixBetweenPhases(ctx context.Context, hook func()) context.Context {
 	return context.WithValue(ctx, projectMixBetweenPhasesKey{}, hook)
 }
+
+// WithProjectMixAfterBaseline returns a context whose hook runs right after a
+// project mix read took its baseline input digests and before it reads anything
+// else: the instant a write must be caught by the closing digests.
+func WithProjectMixAfterBaseline(ctx context.Context, hook func()) context.Context {
+	return context.WithValue(ctx, projectMixAfterBaselineKey{}, hook)
+}
+
+// WithProjectMixAfterScope returns a context whose hook runs right after a project
+// mix read's scope statement and before its next read (the roll-up's link capture).
+func WithProjectMixAfterScope(ctx context.Context, hook func()) context.Context {
+	return context.WithValue(ctx, projectMixAfterScopeKey{}, hook)
+}

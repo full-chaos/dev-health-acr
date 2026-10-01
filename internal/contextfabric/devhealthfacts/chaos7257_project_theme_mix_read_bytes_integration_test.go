@@ -44,6 +44,7 @@ import (
 const (
 	chaos7271RollupStatements  = 4
 	chaos7271PhasedStatements  = 8
+	chaos7271DigestStatements  = 4
 	chaos7271MainRollupBytes1x = 39384274
 	chaos7271MainNativeBytes1x = 39687121
 	// The phases re-read the narrow columns (work_unit_id, computed_at, repo_id)
@@ -508,6 +509,43 @@ func checkProjectThemeMixByteBudget(t *testing.T, units int, growth bool) {
 		}
 	}
 	t.Logf("per-mix totals: roll-up %d bytes, native %d bytes", rollupSum, nativeSum)
+
+	// The input-digest statements (two per mix: the baseline and the closing
+	// digests) read the input tables only, never work_unit_investments, and each
+	// stays under half of the cap as well.
+	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
+		t.Fatalf("flush logs (measurement did not happen): %v", err)
+	}
+	digestRows, err := direct.Query(ctx, `SELECT read_bytes, has(tables, concat(currentDatabase(), '.work_unit_investments')), substring(query, 1, 160) FROM system.query_log
+WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select' AND position(query, 'WITH (SELECT (count(), sum(cityHash64(') > 0
+  AND position(query, 'system.query_log') = 0 AND current_database = currentDatabase()`, mark)
+	if err != nil {
+		t.Fatalf("read input-digest statements from query_log: %v", err)
+	}
+	defer digestRows.Close()
+	digests := 0
+	for digestRows.Next() {
+		var readBytes uint64
+		var touchesInvestments bool
+		var head string
+		if err := digestRows.Scan(&readBytes, &touchesInvestments, &head); err != nil {
+			t.Fatalf("scan input-digest statement: %v", err)
+		}
+		digests++
+		if touchesInvestments {
+			t.Errorf("an input-digest statement read work_unit_investments")
+		}
+		if readBytes >= chaos7257ProdMaxBytesToRead/2 {
+			t.Errorf("an input-digest statement read %d bytes, at or over half of the %d-byte cap", readBytes, chaos7257ProdMaxBytesToRead)
+		}
+		t.Logf("input-digest statement: read_bytes=%d (%.2f MiB): %s", readBytes, float64(readBytes)/(1<<20), strings.ReplaceAll(head, "\n", " "))
+	}
+	if err := digestRows.Err(); err != nil {
+		t.Fatalf("read input-digest statements (measurement did not happen): %v", err)
+	}
+	if digests != chaos7271DigestStatements {
+		t.Fatalf("logged %d input-digest statements, want %d (baseline and closing, for each of the two mixes)", digests, chaos7271DigestStatements)
+	}
 
 	// The fixture must reproduce the incident, or the assertions above prove
 	// nothing: the two statements this change replaced (kept as the parity

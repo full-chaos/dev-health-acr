@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
+	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -349,18 +351,22 @@ ORDER BY project_key`)
 // project is a row only when its repo arm counted a work unit (the old
 // statement's HAVING work_units > 0); the evidence arm only adds its count.
 func readProjectRollupMixRowsOnce(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound) ([]projectRollupMixRow, bool, error) {
+	// Nothing is read before the baseline marks: every input below is read after
+	// them and checked against the marks read again at the end.
+	before, err := readProjectMixInputs(ctx, client, orgID, ids, projectRollupInputSources)
+	if err != nil {
+		return nil, false, err
+	}
+	projectMixAfterBaseline(ctx)
 	scope, err := readProjectMixScope(ctx, client, orgID, ids, timeBound)
 	if err != nil {
 		return nil, false, err
 	}
+	projectMixAfterScope(ctx)
 	if len(scope.unitIDs) == 0 {
 		return nil, false, nil
 	}
 	linkJSON, err := readProjectMixLinks(ctx, client, orgID, ids, timeBound)
-	if err != nil {
-		return nil, false, err
-	}
-	before, err := readProjectMixInputs(ctx, client, orgID, ids, projectRollupInputsStatement(), 2)
 	if err != nil {
 		return nil, false, err
 	}
@@ -401,11 +407,11 @@ func readProjectRollupMixRowsOnce(ctx context.Context, client contextpacket.Clic
 	}, extra...); err != nil {
 		return nil, false, err
 	}
-	after, err := readProjectMixInputs(ctx, client, orgID, ids, projectRollupInputsStatement(), 2)
+	after, err := readProjectMixInputs(ctx, client, orgID, ids, projectRollupInputSources)
 	if err != nil {
 		return nil, false, err
 	}
-	changed := before != after
+	changed := !slices.Equal(before, after)
 	for i := range rows {
 		rows[i].ExcludedNoRepoLink = excluded[rows[i].ProjectKey]
 		rows[i].BugfixWeighted = bugfix[rows[i].ProjectKey]
@@ -503,16 +509,19 @@ type projectNativeUnitValues struct {
 // SQL: a unit counts in full for every requested project it is placed in,
 // spanning when it is placed in more than one project (requested or not).
 func readProjectNativeMixRowsOnce(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound, rowLimit int) ([]readers.ProjectThemeMixRow, bool, error) {
+	// Nothing is read before the baseline marks (see the roll-up).
+	before, err := readProjectMixInputs(ctx, client, orgID, ids, projectNativeInputSources)
+	if err != nil {
+		return nil, false, err
+	}
+	projectMixAfterBaseline(ctx)
 	scope, err := readProjectMixScope(ctx, client, orgID, ids, timeBound)
 	if err != nil {
 		return nil, false, err
 	}
+	projectMixAfterScope(ctx)
 	if len(scope.unitIDs) == 0 {
 		return nil, false, nil
-	}
-	before, err := readProjectMixInputs(ctx, client, orgID, ids, projectNativeInputsStatement(), 3)
-	if err != nil {
-		return nil, false, err
 	}
 	projectMixBetweenPhases(ctx)
 	extra := scope.bindings()
@@ -551,11 +560,11 @@ func readProjectNativeMixRowsOnce(ctx context.Context, client contextpacket.Clic
 		values[unit] = projectNativeUnitValues{vEffort[i], vFeature[i], vOperational[i], vMaintenance[i], vQuality[i], vRisk[i], bugfix[unit]}
 	}
 
-	after, err := readProjectMixInputs(ctx, client, orgID, ids, projectNativeInputsStatement(), 3)
+	after, err := readProjectMixInputs(ctx, client, orgID, ids, projectNativeInputSources)
 	if err != nil {
 		return nil, false, err
 	}
-	changed := before != after
+	changed := !slices.Equal(before, after)
 
 	projectCount := make(map[string]int, len(pUnit))
 	for _, unit := range pUnit {
@@ -609,44 +618,91 @@ func readProjectNativeMixRowsOnce(ctx context.Context, client contextpacket.Clic
 }
 
 // The roll-up and the native mix read tables beyond work_unit_investments that
-// change while a read is in flight (team attributions, repository names, work
-// items, project membership transitions, the project catalog). Pinning every
-// one of them to a version would mean forking ops' project_membership_presence
-// view and rewriting the attribution dedup, so these are VALIDATED instead: phase
-// 0 records each table's newest write mark for the organisation, the read runs,
-// the marks are read again, and if any moved the whole read starts over (the
-// unit versions and links are re-captured too). After projectMixMaxAttempts
+// change while a read is in flight (team attributions, repository names, project
+// ownership, work items, project membership transitions, the project catalog,
+// supersessions, membership runs). Pinning every one of them to a version would
+// mean forking ops' project_membership_presence view and rewriting the
+// attribution dedup, so they are VALIDATED instead: the first thing a read does
+// is take a content digest of each of them for the organisation, every other
+// read (scope, links, phases) follows, and the digests are taken again at the
+// end; if any moved the whole read starts over. After projectMixMaxAttempts
 // attempts the read fails rather than serve an answer that mixes two states.
+//
+// A digest is count() and sum(cityHash64(<identity columns, version column>))
+// over the table's raw rows (no FINAL, no max): any insert, backdated or not,
+// changes both, where a max(timestamp) mark misses every write below the table's
+// current maximum. A background merge that collapses duplicate versions between
+// the two digests also moves the count; that is a retry, never a wrong answer.
+// The digest statements read the input tables only, never work_unit_investments.
 
 const projectMixMaxAttempts = 3
 
-// projectMixInputMarks is the newest write mark (whole ms) of each table a mix
-// reads besides work_unit_investments; the unused slots stay zero.
-type projectMixInputMarks [3]int64
+// projectMixInputSource is one table a mix reads and the columns that identify
+// and version its rows.
+type projectMixInputSource struct{ table, columns string }
 
-func projectRollupInputsStatement() string {
-	return `SELECT
-    toUnixTimestamp64Milli((SELECT max(computed_at) FROM work_item_team_attributions WHERE org_id = {org_id:String})) AS attributions_mark,
-    toUnixTimestamp64Milli((SELECT max(last_synced) FROM repos WHERE org_id = {org_id:String})) AS repos_mark`
+var projectMixCommonInputSources = []projectMixInputSource{
+	{"projects", "provider, id, project_key, is_active, state, updated_at"},
+	{"work_unit_supersessions", "superseded_work_unit_id, superseded_at"},
+	{"work_unit_membership_runs", "run_id, completed_at"},
 }
 
-func projectNativeInputsStatement() string {
-	return `SELECT
-    toUnixTimestamp64Milli((SELECT max(last_synced) FROM work_items WHERE org_id = {org_id:String})) AS work_items_mark,
-    toUnixTimestamp64Milli((SELECT max(last_synced) FROM project_membership_transitions WHERE org_id = {org_id:String})) AS transitions_mark,
-    toUnixTimestamp64Milli((SELECT max(updated_at) FROM projects WHERE org_id = {org_id:String})) AS projects_mark`
+// projectRollupInputSources: everything the roll-up's link capture and arms read.
+var projectRollupInputSources = append(append([]projectMixInputSource{}, projectMixCommonInputSources...),
+	projectMixInputSource{"team_project_ownership", "provider, team_id, project_id, source, valid_from, valid_to, updated_at"},
+	projectMixInputSource{"team_repo_ownership", "provider, team_id, repo_id, match_type, source, is_primary, valid_from, valid_to, updated_at"},
+	projectMixInputSource{"teams", "id, provider, is_active, updated_at"},
+	projectMixInputSource{"repos", "id, repo, provider, last_synced"},
+	projectMixInputSource{"work_item_team_attributions", "repo_id, work_item_id, team_id, source, is_primary, computed_at"},
+)
+
+// projectNativeInputSources: everything the native placement reads.
+var projectNativeInputSources = append(append([]projectMixInputSource{}, projectMixCommonInputSources...),
+	projectMixInputSource{"work_items", "repo_id, work_item_id, project_id, last_synced"},
+	projectMixInputSource{"project_membership_transitions", "repo_id, subject_kind, subject_id, from_project_id, to_project_id, occurred_at, event_id, last_synced"},
+)
+
+// projectMixInputsStatement returns ONE row: per source, (count, digest).
+func projectMixInputsStatement(sources []projectMixInputSource) string {
+	withs := make([]string, 0, len(sources))
+	cols := make([]string, 0, 2*len(sources))
+	for i, src := range sources {
+		withs = append(withs, fmt.Sprintf("(SELECT (count(), sum(cityHash64(%s))) FROM %s WHERE org_id = {org_id:String}) AS d%d", src.columns, src.table, i))
+		cols = append(cols, fmt.Sprintf("d%d.1, d%d.2", i, i))
+	}
+	return "SELECT * FROM (WITH " + strings.Join(withs, ",\n") + "\nSELECT " + strings.Join(cols, ", ") + ")"
 }
 
-func readProjectMixInputs(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, statement string, n int) (projectMixInputMarks, error) {
-	var marks projectMixInputMarks
-	err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectMixInputs", statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
-		dest := make([]any, n)
+func readProjectMixInputs(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, sources []projectMixInputSource) ([]uint64, error) {
+	digests := make([]uint64, 2*len(sources))
+	err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectMixInputs", projectMixInputsStatement(sources), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		dest := make([]any, len(digests))
 		for i := range dest {
-			dest[i] = &marks[i]
+			dest[i] = &digests[i]
 		}
 		return row.Scan(dest...)
 	})
-	return marks, err
+	return digests, err
+}
+
+// projectMixAfterBaselineKey carries a test hook run right after the baseline
+// digests and before the scope read (the gap a write must not hide in).
+type projectMixAfterBaselineKey struct{}
+
+// projectMixAfterScopeKey carries a test hook run right after the scope read (the
+// gap before the roll-up's link capture).
+type projectMixAfterScopeKey struct{}
+
+func projectMixAfterScope(ctx context.Context) {
+	if hook, ok := ctx.Value(projectMixAfterScopeKey{}).(func()); ok {
+		hook()
+	}
+}
+
+func projectMixAfterBaseline(ctx context.Context) {
+	if hook, ok := ctx.Value(projectMixAfterBaselineKey{}).(func()); ok {
+		hook()
+	}
 }
 
 // ProjectMixContendedError is the failure of a project mix read whose inputs moved
