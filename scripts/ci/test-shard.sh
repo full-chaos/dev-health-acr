@@ -193,6 +193,32 @@ heavy_exceptions=(
   "github.com/full-chaos/dev-health-acr/internal/storage/postgres"
 )
 
+# race_spread_pins pins named packages to a fixed -race shard so that several
+# packages of similar cost never queue behind each other in one shard. Format
+# "<package>=<shard>". Applies only to the plain race form (no --with-isolated)
+# and only when total equals race_spread_total; any other shape falls back to
+# the round-robin below, so the closure property (every package in exactly one
+# shard) holds either way. A pinned package is removed from the heavy/light
+# sets and emitted by its pinned shard only.
+race_spread_total=4
+race_spread_pins=(
+  "github.com/full-chaos/dev-health-acr/internal/contextfabric/falkorgraph=3"
+  "github.com/full-chaos/dev-health-acr/internal/contextfabric/projectionrun=2"
+  "github.com/full-chaos/dev-health-acr/internal/releasebuild=4"
+  "github.com/full-chaos/dev-health-acr/migrations/postgres=1"
+)
+
+pinned_shard_of() {
+  local pkg="$1" entry
+  for entry in "${race_spread_pins[@]}"; do
+    if [ "${entry%=*}" = "$pkg" ]; then
+      printf '%s' "${entry##*=}"
+      return 0
+    fi
+  done
+  return 1
+}
+
 usage() {
   printf 'usage: %s [--with-isolated] <index> <total>\n' "${0##*/}" >&2
   printf '  index  1-based shard number (1 <= index <= total)\n' >&2
@@ -575,6 +601,10 @@ main() {
   # separated from anything, with the guarantee this fix promises quietly
   # narrower than what its own comment claims.
   assert_hand_list_exists heavy_exceptions heavy_exceptions
+  local -a pin_names=()
+  local pin_e
+  for pin_e in "${race_spread_pins[@]}"; do pin_names+=("${pin_e%=*}"); done
+  assert_hand_list_exists pin_names race_spread_pins
 
   # CHAOS-5653: split into HEAVY (see is_heavy_package) and everything else,
   # then shard each set with its OWN round-robin counter. A heavy package
@@ -584,8 +614,27 @@ main() {
   # than shards, no two heavy packages can ever land in the same shard. The
   # light set fills in behind them with the round-robin this script always
   # used, so shard sizes stay balanced.
-  local -a heavy=() light=()
+  local -a heavy=() light=() pinned=()
+  local pin_active=0 pin_shard=""
+  if [ "$include_isolated" -eq 0 ] && [ "$total" -eq "$race_spread_total" ]; then
+    pin_active=1
+    local pin_entry pin_pkg
+    for pin_entry in "${race_spread_pins[@]}"; do
+      pin_pkg="${pin_entry%=*}"
+      pin_shard="${pin_entry##*=}"
+      if ! [[ "$pin_shard" =~ ^[1-9][0-9]*$ ]] || [ "$pin_shard" -gt "$total" ]; then
+        printf '%s: race_spread_pins entry has a shard outside 1..%s: %s\n' "${0##*/}" "$total" "$pin_entry" >&2
+        exit 1
+      fi
+    done
+  fi
   for pkg in "${all_packages[@]}"; do
+    if [ "$pin_active" -eq 1 ] && pin_shard="$(pinned_shard_of "$pkg")"; then
+      if ! is_isolated "$pkg"; then
+        [ "$pin_shard" -eq "$index" ] && pinned+=("$pkg")
+        continue
+      fi
+    fi
     if [ "$include_isolated" -eq 0 ] && is_isolated "$pkg"; then
       continue
     fi
@@ -614,7 +663,7 @@ main() {
     exit 1
   fi
 
-  local -a shard_packages=()
+  local -a shard_packages=("${pinned[@]}")
   local want=$((index - 1)) i
   for ((i = 0; i < ${#heavy[@]}; i++)); do
     if [ "$((i % total))" -eq "$want" ]; then
