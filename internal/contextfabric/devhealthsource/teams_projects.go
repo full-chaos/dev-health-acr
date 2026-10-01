@@ -876,6 +876,9 @@ type presenceTelemetryLedger struct {
 	// malformed touch) -- but still counted, never silently absorbed.
 	duplicateAdd     map[string]struct{} // distinct "provider\x00project_id" with a duplicate-ADD touch
 	duplicateAddRows int                 // total ROWS collapsed for a duplicate-ADD touch
+	// membership is the page-level record of the read
+	// (membership_read_telemetry.go).
+	membership membershipReadLedger
 }
 
 func (l *presenceTelemetryLedger) recordRead(source, subjectKind string) {
@@ -1042,7 +1045,15 @@ func (s *TeamsProjectsSource) presenceLedgerFor(orgID string, fromScratch bool) 
 		s.presence = map[string]*presenceTelemetryLedger{}
 	}
 	if fromScratch || s.presence[orgID] == nil {
-		s.presence[orgID] = &presenceTelemetryLedger{}
+		// A new run record: its number tells a restarted read (a rebuild, or a
+		// first page asked again) from a continued one in the page log, and
+		// a run that starts from an empty cursor owes a summary even if it
+		// reads nothing.
+		run := 1
+		if previous := s.presence[orgID]; previous != nil {
+			run = previous.membership.run + 1
+		}
+		s.presence[orgID] = &presenceTelemetryLedger{membership: membershipReadLedger{run: run, summaryOwed: fromScratch}}
 	}
 	return s.presence[orgID]
 }
@@ -1217,6 +1228,7 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 	}
 	presence := s.presenceLedgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
 	defer logPresenceTelemetry(ctx, s.logger, checkpoint.OrgID, presence)
+	defer logMembershipPages(ctx, s.logger, checkpoint.OrgID, presence)
 	teamAuth := s.teamAuthLedgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
 	defer logTeamAuthorizationTelemetry(ctx, s.logger, checkpoint.OrgID, teamAuth)
 	repoOwnership := s.repositoryOwnershipLedgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
@@ -1239,6 +1251,7 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 		window:         s.windowMemo(),
 		recordConsumed: s.recordConsumed(checkpoint.Cursor),
 		dropConsumed:   s.forgetConsumed,
+		observePage:    presence.recordConsumed,
 		// Without this the shared engine's per-item quarantine drops items
 		// on THIS source with no signal at all -- a silent loss, which the
 		// standing ruling forbids outright. The ClickHouse source got the

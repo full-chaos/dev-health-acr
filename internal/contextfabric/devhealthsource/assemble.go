@@ -58,6 +58,11 @@ type sourcePlan struct {
 	// called whenever a call publishes a batch. Optional.
 	dropConsumed func(orgID string)
 
+	// observePage is handed every page the cursor moves past: the merged,
+	// sorted candidates of all tables after the page cut, whether the page is
+	// published or skipped. Optional.
+	observePage func(all []candidate)
+
 	// logger receives the sanitized cause of a table read failure. Optional.
 	logger *slog.Logger
 
@@ -217,6 +222,7 @@ func (p sourcePlan) fullSnapshot(ctx context.Context, orgID string) (contextfabr
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
 	sortCandidates(all)
+	p.notePage(all)
 	// Normalize BEFORE quarantine: an item repaired to a contract bound is
 	// never offered to quarantine at all, which is what makes the quarantine
 	// counters for these bounds read zero instead of merely smaller.
@@ -285,6 +291,7 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 		if len(all) == 0 {
 			return contextfabric.ProjectionBatch{}, false, nil
 		}
+		p.notePage(all)
 		// Per-item quarantine BEFORE the payload check: an item the
 		// contract validator rejects must not reach buildBatch, and a page
 		// whose every item is quarantined is indistinguishable, from here
@@ -423,6 +430,12 @@ func (e *tableReadError) Unwrap() []error {
 		return []error{contextfabric.ErrQueryBudgetExceeded, e.cause}
 	}
 	return []error{contextfabric.ErrUnavailable, e.cause}
+}
+
+func (p sourcePlan) notePage(all []candidate) {
+	if p.observePage != nil {
+		p.observePage(all)
+	}
 }
 
 func (p sourcePlan) noteConsumed(orgID, cursor string) {
