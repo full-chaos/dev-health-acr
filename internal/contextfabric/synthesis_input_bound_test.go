@@ -37,7 +37,7 @@ func TestBoundSynthesisFactsKeepsTheSameShareOfEveryKindInReadOrder(t *testing.T
 	facts = append(facts, boundFixtureFacts(FactHealth, SubjectTeam, 1)...)
 
 	// The input is twice the bound, so 90% of the bound is a share of 45%.
-	bounded, reduced := boundSynthesisFacts(facts, nil, &ModelInputOverflow{Bytes: 200, MaxBytes: 100})
+	bounded, reduced, _ := boundSynthesisFacts(facts, factRanking{}, &ModelInputOverflow{Bytes: 200, MaxBytes: 100})
 
 	if !reduced {
 		t.Fatal("reduced = false, want true")
@@ -62,7 +62,7 @@ func TestBoundSynthesisFactsKeepsEveryFactOfACommittedSubject(t *testing.T) {
 
 	// A share of 45% of ten facts is four; the five committed subjects are
 	// last in read order and all stay.
-	bounded, reduced := boundSynthesisFacts(facts, committed, &ModelInputOverflow{Bytes: 200, MaxBytes: 100})
+	bounded, reduced, _ := boundSynthesisFacts(facts, factRanking{committed: committed}, &ModelInputOverflow{Bytes: 200, MaxBytes: 100})
 
 	if !reduced {
 		t.Fatal("reduced = false, want true")
@@ -90,7 +90,7 @@ func TestBoundSynthesisFactsReportsWhenNothingCanBeRemoved(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			bounded, reduced := boundSynthesisFacts(testCase.facts, nil, testCase.overflow)
+			bounded, reduced, _ := boundSynthesisFacts(testCase.facts, factRanking{}, testCase.overflow)
 			if reduced || len(bounded) != len(testCase.facts) {
 				t.Fatalf("reduced = %v with %d of %d facts, want nothing removed", reduced, len(bounded), len(testCase.facts))
 			}
@@ -162,7 +162,7 @@ func TestSynthesizeBoundsTheFactsWhenTheModelInputDoesNotFit(t *testing.T) {
 	}
 	want := SynthesisInputBoundEvent{
 		Outcome: SynthesisInputBoundFitted, Passes: 1, InputBytes: 2000, MaxInputBytes: 1000,
-		FactsRead: 200, FactsGiven: 90, KindsRead: 2, KindsGiven: 2, KindsBounded: 1,
+		FactsRead: 200, FactsGiven: 90, KindsRead: 2, KindsGiven: 2, KindsBounded: 1, Selection: SynthesisInputSelectionPosition,
 	}
 	if len(telemetry.synthesisInputBounds) != 1 || telemetry.synthesisInputBounds[0] != want {
 		t.Fatalf("bound events = %+v, want exactly %+v", telemetry.synthesisInputBounds, want)
@@ -329,7 +329,7 @@ func TestSynthesizeEndsWithTheOverflowWhenBoundingIsExhausted(t *testing.T) {
 		}
 		want := SynthesisInputBoundEvent{
 			Outcome: SynthesisInputBoundExhausted, Passes: 1, InputBytes: 200_000, MaxInputBytes: 1000,
-			FactsRead: 200, FactsGiven: 2, KindsRead: 2, KindsGiven: 2, KindsBounded: 1,
+			FactsRead: 200, FactsGiven: 2, KindsRead: 2, KindsGiven: 2, KindsBounded: 1, Selection: SynthesisInputSelectionPosition,
 		}
 		if len(telemetry.synthesisInputBounds) != 1 || telemetry.synthesisInputBounds[0] != want {
 			t.Fatalf("bound events = %+v, want exactly %+v", telemetry.synthesisInputBounds, want)

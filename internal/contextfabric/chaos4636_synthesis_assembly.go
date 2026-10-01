@@ -338,6 +338,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	synthesisInput, _ := canonicalizeSynthesisSubjectLabels(SynthesisInput{
 		Allocation: synthesisAllocation,
 		Request:    request, Interpretation: interpretation, Graph: graphContext, Facts: facts,
+		EvidenceWindow: effectiveWindow,
 	})
 	result, err := e.synthesizer.Synthesize(ctx, principal, synthesisInput)
 	if err != nil {
