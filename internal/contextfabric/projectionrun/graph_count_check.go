@@ -103,7 +103,7 @@ func (c *Coordinator) checkGraphCounts(ctx context.Context, orgID string) {
 	if !c.graphCounts.due(orgID, c.sourceNames, c.now(), c.graphCountInterval) {
 		return
 	}
-	hash := contextfabric.SanitizeLogAttr(orgIDHash(orgID))
+	hash := orgIDHash(orgID)
 	for _, source := range c.sourceNames {
 		counter, ok := c.sources[source].(contextfabric.ProjectionSourceCounts)
 		if !ok {
@@ -112,7 +112,7 @@ func (c *Coordinator) checkGraphCounts(ctx context.Context, orgID string) {
 		sourceCounts, err := counter.ProjectionSourceCounts(ctx, orgID)
 		if err != nil {
 			c.logger.WarnContext(ctx, "context_fabric: projection count check failed", "check", "graph_count", "stage", "source_count",
-				"source", contextfabric.SanitizeLogAttr(source), "org_id_hash", hash, "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
+				"source", contextfabric.SanitizeLogAttr(source), "org_id_hash", contextfabric.SanitizeLogAttr(hash), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
 			continue
 		}
 		kinds := make([]contextfabric.SubjectKind, 0, len(sourceCounts))
@@ -125,7 +125,7 @@ func (c *Coordinator) checkGraphCounts(ctx context.Context, orgID string) {
 			graphCount, err := graph.CountKind(ctx, orgID, kind)
 			if err != nil {
 				c.logger.WarnContext(ctx, "context_fabric: projection count check failed", "check", "graph_count", "stage", "graph_count",
-					"source", contextfabric.SanitizeLogAttr(source), "kind", contextfabric.SanitizeLogAttr(string(kind)), "org_id_hash", hash,
+					"source", contextfabric.SanitizeLogAttr(source), "kind", contextfabric.SanitizeLogAttr(string(kind)), "org_id_hash", contextfabric.SanitizeLogAttr(hash),
 					"failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
 				continue
 			}
@@ -134,7 +134,7 @@ func (c *Coordinator) checkGraphCounts(ctx context.Context, orgID string) {
 				continue
 			}
 			c.logger.WarnContext(ctx, "context_fabric: graph_below_source", "check", "graph_below_source",
-				"source", contextfabric.SanitizeLogAttr(source), "kind", contextfabric.SanitizeLogAttr(string(kind)), "org_id_hash", hash,
+				"source", contextfabric.SanitizeLogAttr(source), "kind", contextfabric.SanitizeLogAttr(string(kind)), "org_id_hash", contextfabric.SanitizeLogAttr(hash),
 				"source_count", sourceCount, "graph_count", graphCount, "tolerance", tolerance)
 			if obs, ok := c.observer.(GraphCountObserver); ok {
 				obs.ObserveGraphBelowSource(GraphBelowSource{OrgID: orgID, Source: source, Kind: kind, SourceCount: sourceCount, GraphCount: graphCount, Tolerance: tolerance, At: c.now()})
