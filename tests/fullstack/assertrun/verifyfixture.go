@@ -128,7 +128,7 @@ func runVerifyFixture(args []string) int {
 	out := fs.String("out", "", "path to write fixture-verification.json")
 	probeCommandRaw := fs.String("probe-command", "", "shell-quoted probe command prefix; the (substituted) SQL is appended as the final argument")
 	probeCommandFile := fs.String("probe-command-file", "", "file holding the NUL-separated probe argv; preferred, because the caller's compose wrapper is a shell function and cannot be expressed as a quoted string")
-	migrationsDir := fs.String("migrations-dir", "", "optional path to ops/src/dev_health_ops/migrations/clickhouse; when given, unattributable Python migration DDL is disclosed in fixture-verification.json rather than only in verify-seed-schema's own report")
+	migrationsDir := fs.String("migrations-dir", "", "optional path to ops/internal/chmigrate; when given, unattributable Python migration DDL is disclosed in fixture-verification.json rather than only in verify-seed-schema's own report")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}

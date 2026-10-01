@@ -12,7 +12,7 @@
 # never committed anywhere, may carry local-only config). It is authored
 # from scratch using only what dev-health-ops's own tracked compose.yml and
 # docker/Dockerfile publicly document: the "api" image target already bakes
-# the app in (no source bind mount needed), dev-hops is its entrypoint, and
+# the app in (no source bind mount needed), the migrate service runs the dho target, and
 # docker/init-extra-dbs.sh provisions the River roles from POSTGRES_USER/
 # POSTGRES_DB container env. render_override() in compose.sh (the shared
 # E2E driver) replaces postgres/clickhouse/valkey/pgbouncer/api images,

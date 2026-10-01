@@ -20,7 +20,7 @@ import (
 func runVerifySeedSchema(args []string) int {
 	fs := flag.NewFlagSet("verify-seed-schema", flag.ContinueOnError)
 	seedDir := fs.String("seed-dir", "", "path to testdata/fullstack/v1/seed/clickhouse")
-	migrationsDir := fs.String("migrations-dir", "", "path to ops/src/dev_health_ops/migrations/clickhouse")
+	migrationsDir := fs.String("migrations-dir", "", "path to ops/internal/chmigrate")
 	out := fs.String("out", "", "optional path to write a JSON report")
 	if err := fs.Parse(args); err != nil {
 		return 2

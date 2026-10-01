@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,7 +12,7 @@ import (
 
 // chSchema is the effective ClickHouse schema (table -> column set) produced by replaying a
 // migration directory's *.sql files in lexical filename order, which is the order
-// dev-hops's migrator applies them in. It intentionally understands only the small DDL
+// the ClickHouse migrator applies them in. It intentionally understands only the small DDL
 // subset the ops migrations actually use: CREATE TABLE (column list only; ENGINE/ORDER
 // BY/etc. are irrelevant here), ALTER TABLE ADD/DROP COLUMN, and DROP TABLE.
 type chSchema struct {
@@ -182,12 +183,15 @@ func (u unhandledDDL) String() string {
 }
 
 // replayMigrationsDir builds the effective schema from every *.sql/*.py file directly inside
-// dir, applied in lexical filename order (dev-hops's migrator's own ordering contract: e.g.
+// dir, applied in lexical filename order (the ClickHouse migrator's own ordering contract: e.g.
 // 027_*.py runs between 026_*.sql and 028_*.sql, and it adds columns later files and the seed
 // depend on). The second return value lists DDL applyMigrationPython could not fully
 // interpret -- callers must surface these rather than silently trusting a replay that may be
 // an incomplete picture of the schema (see pymigration.go).
 func replayMigrationsDir(dir string) (*chSchema, []unhandledDDL, error) {
+	if _, err := os.Stat(filepath.Join(dir, "baseline", "head.json")); err == nil {
+		return replayChmigrateDir(dir)
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, nil, fmt.Errorf("read migrations dir %s: %w", dir, err)
@@ -356,4 +360,53 @@ func splitValueTuples(s string) ([]string, error) {
 		return nil, fmt.Errorf("no value tuples found")
 	}
 	return tuples, nil
+}
+
+// replayChmigrateDir replays the Go ClickHouse migrator's layout (internal/chmigrate): the
+// head baseline's CREATE statements, then every sql/*.sql delta in file-name order. It is the
+// schema `dho migrate clickhouse upgrade` actually produces.
+func replayChmigrateDir(dir string) (*chSchema, []unhandledDDL, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "baseline", "head.json"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("read baseline: %w", err)
+	}
+	var baseline struct {
+		Objects []struct {
+			Name   string `json:"name"`
+			Create string `json:"create"`
+		} `json:"objects"`
+	}
+	if err := json.Unmarshal(data, &baseline); err != nil {
+		return nil, nil, fmt.Errorf("parse baseline: %w", err)
+	}
+	if len(baseline.Objects) == 0 {
+		return nil, nil, fmt.Errorf("baseline in %s lists no objects", dir)
+	}
+	schema := newCHSchema()
+	for _, object := range baseline.Objects {
+		if err := applyMigrationSQL(schema, object.Create); err != nil {
+			return nil, nil, fmt.Errorf("baseline object %s: %w", object.Name, err)
+		}
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, "sql"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("read deltas: %w", err)
+	}
+	var names []string
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".sql") {
+			names = append(names, entry.Name())
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		sql, err := os.ReadFile(filepath.Join(dir, "sql", name))
+		if err != nil {
+			return nil, nil, fmt.Errorf("read delta %s: %w", name, err)
+		}
+		if err := applyMigrationSQL(schema, string(sql)); err != nil {
+			return nil, nil, fmt.Errorf("delta %s: %w", name, err)
+		}
+	}
+	return schema, nil, nil
 }

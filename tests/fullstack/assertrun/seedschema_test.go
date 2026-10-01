@@ -329,3 +329,41 @@ INSERT INTO git_commits (repo_id, hash) VALUES ('r', 'h');
 		t.Fatal("expected verify-seed-schema to pass: the unhandled DDL names a table the seed never writes to")
 	}
 }
+
+// devhealthschema:not-a-production-replica this layout is INPUT to the baseline-replay parser
+// under test; the test asserts baseline objects and deltas are both replayed.
+func TestReplayMigrationsDir_ChmigrateLayoutReplaysBaselineThenDeltas(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "baseline"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "sql"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	baseline := `{"objects":[{"name":"widgets","create":"CREATE TABLE widgets (` + "`id`" + ` UUID, ` + "`org_id`" + ` String) ENGINE = MergeTree ORDER BY id"}]}`
+	if err := os.WriteFile(filepath.Join(dir, "baseline", "head.json"), []byte(baseline), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeMigration(t, filepath.Join(dir, "sql"), "100_add.sql", "ALTER TABLE widgets ADD COLUMN IF NOT EXISTS ordering_contract UInt8;")
+	schema, unhandled, err := replayMigrationsDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unhandled) != 0 {
+		t.Fatalf("unhandled DDL: %v", unhandled)
+	}
+	issues, err := verifySeedAgainstSchema(schema, "INSERT INTO widgets (id, org_id, ordering_contract) VALUES ('a', 'b', 2);", "s.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("baseline column or delta column missing: %v", issues)
+	}
+	issues, err = verifySeedAgainstSchema(schema, "INSERT INTO widgets (id, nope) VALUES ('a', 'b');", "s.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) == 0 {
+		t.Fatal("a column absent from baseline and deltas must be reported")
+	}
+}

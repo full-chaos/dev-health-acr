@@ -43,7 +43,7 @@
   "seed_files": [
     {
       "path": "testdata/fullstack/v1/seed/clickhouse/001_widget_service.sql",
-      "sha256": "a13ee11abe2720473f0437758c083fea93ce0f527b6d8d748e7a214f4e8611b1"
+      "sha256": "6232e89dde1cec5656f31b317fb5a8c86f12629fb5d80f448f6d9766fd41b256"
     }
   ],
   "org_id_substitution": {

@@ -412,8 +412,8 @@ find_ops_migrations_dir() {
     "$REPO_ROOT/../../ops" \
     "$REPO_ROOT/../../../ops"; do
     [[ -n "${candidate#/ops}" ]] || continue
-    if [[ -d "$candidate/src/dev_health_ops/migrations/clickhouse" ]]; then
-      printf '%s' "$candidate/src/dev_health_ops/migrations/clickhouse"
+    if [[ -f "$candidate/internal/chmigrate/baseline/head.json" ]]; then
+      printf '%s' "$candidate/internal/chmigrate"
       return 0
     fi
   done
