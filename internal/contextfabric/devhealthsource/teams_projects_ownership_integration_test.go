@@ -485,6 +485,16 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 		{"CHAOS-7130 randomized list/edge/oracle parity", "30000000-0000-4000-8000-000000000026", subCHAOS7130RandomizedListEdgeParity},
 		{"CHAOS-7139 a team at exactly the entity bound keeps every edge", "30000000-0000-4000-8000-000000000022", subCHAOS7139TeamAtEntityBoundKeepsEveryEdge},
 	}
+	// The subtests run in parallel on one shared schema; the organization id
+	// is the only thing keeping their rows apart, so two cases sharing one
+	// would silently read each other's data.
+	seenOrgs := make(map[string]string, len(cases))
+	for _, testCase := range cases {
+		if other, dup := seenOrgs[testCase.orgID]; dup {
+			t.Fatalf("cases %q and %q share organization id %s; parallel subtests on one schema need distinct ids", other, testCase.name, testCase.orgID)
+		}
+		seenOrgs[testCase.orgID] = testCase.name
+	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
