@@ -109,6 +109,8 @@ func TestRefusedBuildCap(t *testing.T) {
 
 		summary := rig.tick(ctx)
 		require.Equal(t, float64(1), summaryNumber(t, summary, "orgs_build_refused_capped"))
+		require.Equal(t, float64(1), summaryNumber(t, summary, "orgs_divergence_recovered"))
+		require.Equal(t, true, summary["tick_complete"], "the bucket identity balances on the capped path")
 		require.Len(t, logRecords(t, rig.buffer, recoveryHeldWarn), 1)
 		require.Equal(t, int64(3), rig.row().LastAllocatedEpoch)
 	})

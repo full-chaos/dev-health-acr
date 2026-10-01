@@ -515,7 +515,7 @@ type refusedBuildState struct {
 func (c *Coordinator) sourceVersionsKey() string {
 	parts := make([]string, 0, len(c.sourceNames))
 	for _, name := range c.sourceNames {
-		parts = append(parts, name+"="+currentSourceVersion(c.sources[name]))
+		parts = append(parts, fmt.Sprintf("%q:%q", name, currentSourceVersion(c.sources[name])))
 	}
 	sort.Strings(parts)
 	return strings.Join(parts, ";")
