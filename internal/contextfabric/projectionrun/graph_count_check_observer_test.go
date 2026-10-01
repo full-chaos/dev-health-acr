@@ -28,6 +28,9 @@ func TestGraphCountCheckReportsOneCompletedCheckWhenHealthy(t *testing.T) {
 	if got.Outcome != projectionrun.GraphCountCheckCompleted || got.OrgID != "org-a" || got.SourcesChecked != 1 || got.KindsCompared != 2 || got.Gaps != 0 || got.Errors != 0 {
 		t.Fatalf("unexpected check %+v", got)
 	}
+	if got.Instance == "" {
+		t.Fatalf("a check carries its projector instance: %+v", got)
+	}
 	h.run(testStart.Add(30 * time.Second))
 	if len(h.observer.checks) != 1 {
 		t.Fatalf("a check inside the interval must report nothing, got %d", len(h.observer.checks))
@@ -91,8 +94,8 @@ func TestGraphCountCheckDisabledReportsNothing(t *testing.T) {
 
 func TestSlogObserverGraphCountCheckInfoLineIsCertified(t *testing.T) {
 	t.Parallel()
-	first := projectionrun.GraphCountCheck{OrgID: "org-a", SourcesChecked: 2, KindsCompared: 7, Gaps: 1, Errors: 3, Outcome: projectionrun.GraphCountCheckFailed, Pass: 1, Duration: 42 * time.Millisecond}
-	second := projectionrun.GraphCountCheck{OrgID: "org-a", SourcesChecked: 2, KindsCompared: 7, Outcome: projectionrun.GraphCountCheckCompleted, Pass: 2, Duration: 5 * time.Millisecond}
+	first := projectionrun.GraphCountCheck{OrgID: "org-a", Instance: "inst-a", SourcesChecked: 2, KindsCompared: 7, Gaps: 1, Errors: 3, Outcome: projectionrun.GraphCountCheckFailed, Pass: 1, Duration: 42 * time.Millisecond}
+	second := projectionrun.GraphCountCheck{OrgID: "org-a", Instance: "inst-a", SourcesChecked: 2, KindsCompared: 7, Outcome: projectionrun.GraphCountCheckCompleted, Pass: 2, Duration: 5 * time.Millisecond}
 	certifyLog := func(t *testing.T, checks []projectionrun.GraphCountCheck, want map[string]any) {
 		t.Helper()
 		var buffer bytes.Buffer
@@ -109,12 +112,27 @@ func TestSlogObserverGraphCountCheckInfoLineIsCertified(t *testing.T) {
 		}
 	}
 	certifyLog(t, []projectionrun.GraphCountCheck{first}, map[string]any{
-		"org_id_hash": "527a4c0a7e94", "pass": 1, "outcome": "failed", "sources_checked": 2,
+		"org_id_hash": "527a4c0a7e94", "instance": "inst-a", "pass": 1, "outcome": "failed", "sources_checked": 2,
 		"kinds_compared": 7, "gap_count": 1, "error_count": 3, "duration_ms": 42,
 	})
 	// Two recurring checks of one organization are two passes, not a duplicate.
 	certifyLog(t, []projectionrun.GraphCountCheck{first, second}, map[string]any{
-		"org_id_hash": "527a4c0a7e94", "pass": 2, "outcome": "completed", "sources_checked": 2,
+		"org_id_hash": "527a4c0a7e94", "instance": "inst-a", "pass": 2, "outcome": "completed", "sources_checked": 2,
 		"kinds_compared": 7, "gap_count": 0, "error_count": 0, "duration_ms": 5,
 	})
+}
+
+func TestGraphCountCheckInstancesDifferAcrossProcesses(t *testing.T) {
+	t.Parallel()
+	counts := map[contextfabric.SubjectKind]int64{contractsv1.ContextFabricSubjectPullRequest: 5}
+	a := newCountHarness(t, counts, counts, nil, nil, time.Minute)
+	b := newCountHarness(t, counts, counts, nil, nil, time.Minute)
+	a.run(testStart)
+	b.run(testStart)
+	if len(a.observer.checks) != 1 || len(b.observer.checks) != 1 {
+		t.Fatalf("each replica reports its own check")
+	}
+	if a.observer.checks[0].Pass != 1 || b.observer.checks[0].Pass != 1 || a.observer.checks[0].Instance == b.observer.checks[0].Instance {
+		t.Fatalf("two replicas both number pass 1 and must be told apart by instance: %+v %+v", a.observer.checks[0], b.observer.checks[0])
+	}
 }

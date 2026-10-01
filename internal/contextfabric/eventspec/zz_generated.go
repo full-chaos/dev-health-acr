@@ -5750,6 +5750,7 @@ func (f OTelExportFields) SlogArgs() []any {
 // (CHAOS-5516): one Go field per Field GraphCountCheckFinished.Fields declares in spec.go.
 type GraphCountCheckFinishedFields struct {
 	OrgIDHash      string
+	Instance       string
 	Pass           int
 	Outcome        string
 	SourcesChecked int
@@ -5770,9 +5771,10 @@ type GraphCountCheckFinishedFields struct {
 
 // NewGraphCountCheckFinishedFields is the generated constructor for GraphCountCheckFinishedFields -- every
 // field GraphCountCheckFinished.Fields declares is a required parameter.
-func NewGraphCountCheckFinishedFields(orgIDHash string, pass int, outcome string, sourcesChecked int, kindsCompared int, gapCount int, errorCount int, durationMs int) GraphCountCheckFinishedFields {
+func NewGraphCountCheckFinishedFields(orgIDHash string, instance string, pass int, outcome string, sourcesChecked int, kindsCompared int, gapCount int, errorCount int, durationMs int) GraphCountCheckFinishedFields {
 	return GraphCountCheckFinishedFields{
 		OrgIDHash:      orgIDHash,
+		Instance:       instance,
 		Pass:           pass,
 		Outcome:        outcome,
 		SourcesChecked: sourcesChecked,
@@ -5798,6 +5800,7 @@ func (f GraphCountCheckFinishedFields) IsConstructed() bool { return f.construct
 func (f GraphCountCheckFinishedFields) SlogArgs() []any {
 	return []any{
 		"org_id_hash", contextfabric.SanitizeLogAttr(f.OrgIDHash),
+		"instance", contextfabric.SanitizeLogAttr(f.Instance),
 		"pass", f.Pass,
 		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
 		"sources_checked", f.SourcesChecked,

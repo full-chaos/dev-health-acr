@@ -8590,12 +8590,18 @@
     "level": "info",
     "multiplicity": "zero_or_one_per_pass",
     "attribution": [
-      "org_id_hash"
+      "org_id_hash",
+      "instance"
     ],
-    "bounded_aggregation": "at most one line per organization per check interval (default 10 minutes), only when the check actually ran; an organization not due, a negative interval or a backend without counts emits none.",
+    "bounded_aggregation": "at most one line per organization per projector instance per check interval (default 10 minutes), only when the check actually ran; an organization not due, a negative interval or a backend without counts emits none.",
     "fields": [
       {
         "key": "org_id_hash",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "instance",
         "type": "string",
         "presence": "required"
       },
