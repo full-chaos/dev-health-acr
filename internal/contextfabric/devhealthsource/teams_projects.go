@@ -292,18 +292,28 @@ const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v17"
 // ambiguous project keys and must say so) without a package-level global or
 // shared mutable state -- the coordinator projects organizations
 // concurrently, so a shared counter would be a race.
-func teamsProjectsTables(omissions *ambiguityLedger, presence *presenceTelemetryLedger, teamAuth *teamAuthorizationLedger, repoOwnership *repositoryOwnershipLedger) []entityTable {
+//
+// ingest pages team_project_ownership and project_membership_presence on
+// their ingest columns (ops migrations 099 and 100) instead of their
+// provider/event times.
+func teamsProjectsTablesFor(omissions *ambiguityLedger, presence *presenceTelemetryLedger, teamAuth *teamAuthorizationLedger, repoOwnership *repositoryOwnershipLedger, ingest bool) []entityTable {
 	return []entityTable{
 		{name: "teams", query: teamsQuery(teamAuth), subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectTeam}},
 		{name: "projects", query: queryProjects, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectProject}},
-		{name: "project_membership_presence", query: subjectProjectMembershipsQuery(presence)},
+		{name: "project_membership_presence", query: subjectProjectMembershipsQuery(presence, ingest)},
 		{name: "work_item_team_attributions", query: queryWorkItemTeams},
-		{name: "team_project_ownership", query: projectTeamsQuery(omissions)},
+		{name: "team_project_ownership", query: projectTeamsQuery(omissions, ingest)},
 		// CHAOS-6561: repository -> team OWNED_BY_TEAM, the ownership edge
 		// team_repo_ownership carries (queryTeams reads the same table only
 		// for a team's authorization scope).
 		{name: "team_repo_ownership", query: repositoryTeamsQuery(repoOwnership)},
 	}
+}
+
+// teamsProjectsTables is teamsProjectsTablesFor on the pre-migration cursor
+// columns.
+func teamsProjectsTables(omissions *ambiguityLedger, presence *presenceTelemetryLedger, teamAuth *teamAuthorizationLedger, repoOwnership *repositoryOwnershipLedger) []entityTable {
+	return teamsProjectsTablesFor(omissions, presence, teamAuth, repoOwnership, false)
 }
 
 // TeamsProjectsSource is the canonical Dev Health ProjectionSource for Team
@@ -320,6 +330,9 @@ type TeamsProjectsSource struct {
 	// overlap and window (CHAOS-7263): the trailing late-arrival re-read.
 	overlap time.Duration
 	window  *windowMemo
+
+	// ingest caches whether the ingest columns exist (ingest_probe.go).
+	ingest ingestProbe
 
 	// omissionsMu guards omissions, which accumulates ambiguity telemetry
 	// per organization ACROSS the pages of a source run. The coordinator
@@ -1202,12 +1215,18 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 	defer logTeamAuthorizationTelemetry(ctx, s.logger, checkpoint.OrgID, teamAuth)
 	repoOwnership := s.repositoryOwnershipLedgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
 	defer logRepositoryOwnershipTelemetry(ctx, s.logger, checkpoint.OrgID, repoOwnership)
+	ingest, _ := s.ingest.availableAt(ctx, s.client, s.logger, sourcePlan{now: s.now}.clock())
+	space := cursorSpaceIngest
+	if ingest {
+		space = cursorSpaceIngestColumns
+	}
 	return sourcePlan{
 		client:         s.client,
 		source:         TeamsProjectsSourceName,
 		version:        TeamsProjectsSourceVersion,
-		tables:         teamsProjectsTables(ledger, presence, teamAuth, repoOwnership),
-		windowTables:   teamsProjectsTables(&ambiguityLedger{}, &presenceTelemetryLedger{}, &teamAuthorizationLedger{}, &repositoryOwnershipLedger{}),
+		space:          space,
+		tables:         teamsProjectsTablesFor(ledger, presence, teamAuth, repoOwnership, ingest),
+		windowTables:   teamsProjectsTablesFor(&ambiguityLedger{}, &presenceTelemetryLedger{}, &teamAuthorizationLedger{}, &repositoryOwnershipLedger{}, ingest),
 		logger:         s.logger,
 		now:            s.now,
 		overlap:        s.overlapDuration(),

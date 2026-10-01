@@ -43,7 +43,13 @@ func decodeCursor(raw string) (cursorState, error) {
 }
 
 func encodeCursor(state cursorState) (string, error) {
-	state.Space = cursorSpaceIngest
+	return encodeCursorIn(cursorSpaceIngest, state)
+}
+
+// encodeCursorIn is encodeCursor for a source whose position space is not the
+// default (cursorSpaceIngestColumns).
+func encodeCursorIn(space string, state cursorState) (string, error) {
+	state.Space = space
 	encoded, err := json.Marshal(state)
 	if err != nil {
 		return "", fmt.Errorf("devhealthsource: encode cursor: %w", err)

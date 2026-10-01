@@ -83,6 +83,10 @@ type sourcePlan struct {
 	// (rows read, edges asserted) while nothing happened.
 	windowTables []entityTable
 
+	// space is the cursor position space this plan encodes and accepts; empty
+	// means cursorSpaceIngest.
+	space string
+
 	// observeNormalization is called once per token per item repaired by
 	// producer-side normalization (item_normalization.go), with a closed
 	// reason token from a vocabulary DISJOINT from observeQuarantine's.
@@ -139,7 +143,7 @@ func (p sourcePlan) nextBatch(ctx context.Context, checkpoint contextfabric.Proj
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, false, err
 	}
-	if state.Space != cursorSpaceIngest {
+	if state.Space != p.cursorSpace() {
 		// A cursor saved before the ingest-time position space (CHAOS-7263):
 		// its Since is provider/updated_at time and means nothing here. Re-read
 		// from the start under the ORIGINAL cursor string (the worker requires
@@ -235,7 +239,7 @@ func (p sourcePlan) fullSnapshot(ctx context.Context, orgID string) (contextfabr
 		noteConsumedFrom(p, orgID, all)
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
-	batch, err := buildBatch(orgID, p.source, p.version, "", all, items, true, true, p.clock())
+	batch, err := buildBatchIn(p.cursorSpace(), orgID, p.source, p.version, "", all, items, true, true, p.clock())
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, false, err
 	}
@@ -289,7 +293,7 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 		normalizeCandidates(all, p.observeNormalization)
 		items := partitionProjectableCandidates(all, p.observeQuarantine)
 		if carriesPayload(items) {
-			batch, err := buildBatch(orgID, p.source, p.version, cursor, all, items, false, false, p.clock())
+			batch, err := buildBatchIn(p.cursorSpace(), orgID, p.source, p.version, cursor, all, items, false, false, p.clock())
 			if err != nil {
 				return contextfabric.ProjectionBatch{}, false, err
 			}
@@ -328,7 +332,7 @@ func noteConsumedFrom(p sourcePlan, orgID string, consumed []candidate) {
 		return
 	}
 	last := consumed[len(consumed)-1]
-	if encoded, err := encodeCursor(cursorState{Since: last.position(), After: last.sortKey}); err == nil {
+	if encoded, err := encodeCursorIn(p.cursorSpace(), cursorState{Since: last.position(), After: last.sortKey}); err == nil {
 		p.noteConsumed(orgID, encoded)
 	}
 }
@@ -451,4 +455,12 @@ func (p sourcePlan) clock() time.Time {
 		return time.Now().UTC()
 	}
 	return p.now().UTC()
+}
+
+// cursorSpace is the position space this plan's cursors live in.
+func (p sourcePlan) cursorSpace() string {
+	if p.space == "" {
+		return cursorSpaceIngest
+	}
+	return p.space
 }

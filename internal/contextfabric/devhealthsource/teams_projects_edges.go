@@ -285,18 +285,34 @@ const resolvedProjectsSubquery = `(
 // silently skipped). event_id is this table's own tiebreaker for exactly
 // this case, so querySubjectProjectMemberships' own RelationshipID suffix
 // and rowSortKey both include it too, below.
-const membershipIntervalsSubquery = `(
+func membershipIntervalsSubquery(ingest bool) string {
+	touchIngest := "occurred_at"
+	if ingest {
+		touchIngest = "ingested_at"
+	}
+	return membershipIntervalsSQL(touchIngest)
+}
+
+// membershipIntervalsSQL renders the interval source with ingestExpr (a
+// project_membership_transitions column) carried through as ingest_at: a
+// touch's own stamp folded with the touch before it (a late earlier touch
+// changes this touch's duplicate/dangling classification) and, among the
+// non-duplicate touches, the one after it (a late later touch changes this
+// interval's valid_to).
+func membershipIntervalsSQL(ingestExpr string) string {
+	return `(
   WITH touches AS (
-    SELECT org_id, subject_kind, repo_id, subject_id, provider, to_project_id AS project_id, occurred_at, event_id, 1 AS is_add
+    SELECT org_id, subject_kind, repo_id, subject_id, provider, to_project_id AS project_id, occurred_at, event_id, ` + ingestExpr + ` AS ingest_at, 1 AS is_add
     FROM project_membership_transitions FINAL
     WHERE org_id = {org_id:String} AND to_project_id != '' AND to_project_id != from_project_id
     UNION ALL
-    SELECT org_id, subject_kind, repo_id, subject_id, provider, from_project_id AS project_id, occurred_at, event_id, 0 AS is_add
+    SELECT org_id, subject_kind, repo_id, subject_id, provider, from_project_id AS project_id, occurred_at, event_id, ` + ingestExpr + ` AS ingest_at, 0 AS is_add
     FROM project_membership_transitions FINAL
     WHERE org_id = {org_id:String} AND from_project_id != '' AND from_project_id != to_project_id
   ),
   classified AS (
     SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, occurred_at, event_id, is_add,
+      greatest(ingest_at, lagInFrame(ingest_at, 1, ingest_at) OVER w) AS ingest_c,
       (is_add = 1 AND lagInFrame(is_add, 1, 2) OVER w = 1) AS dup_flag,
       (is_add = 0 AND lagInFrame(is_add, 1, 2) OVER w != 1) AS dangling_flag
     FROM touches
@@ -312,6 +328,7 @@ const membershipIntervalsSubquery = `(
   ),
   closed AS (
     SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, occurred_at, event_id, is_add,
+      greatest(ingest_c, leadInFrame(ingest_c, 1, ingest_c) OVER w2) AS ingest_at,
       row_number() OVER w2 AS rn,
       count() OVER (PARTITION BY org_id, subject_kind, repo_id, subject_id, provider, project_id) AS touch_count,
       leadInFrame(occurred_at, 1, occurred_at) OVER w2 AS next_occurred_at,
@@ -320,35 +337,36 @@ const membershipIntervalsSubquery = `(
     WHERE NOT dup_flag
     WINDOW w2 AS (PARTITION BY org_id, subject_kind, repo_id, subject_id, provider, project_id ORDER BY occurred_at, event_id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
   )
-  SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, occurred_at AS observed_at, event_id,
+  SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, occurred_at AS observed_at, event_id, ingest_at,
     'transition' AS source,
     if(rn < touch_count AND next_is_add = 0, next_occurred_at, NULL) AS valid_to,
     0 AS is_malformed, 0 AS is_duplicate_add
   FROM closed
   WHERE is_add = 1
   UNION ALL
-  SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, occurred_at AS observed_at, event_id,
+  SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, occurred_at AS observed_at, event_id, ingest_c AS ingest_at,
     'transition' AS source,
     NULL AS valid_to,
     1 AS is_malformed, 0 AS is_duplicate_add
   FROM classified
   WHERE dangling_flag
   UNION ALL
-  SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, occurred_at AS observed_at, event_id,
+  SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, occurred_at AS observed_at, event_id, ingest_c AS ingest_at,
     'transition' AS source,
     NULL AS valid_to,
     0 AS is_malformed, 1 AS is_duplicate_add
   FROM classified
   WHERE dup_flag
 )`
+}
 
-func subjectProjectMembershipsQuery(telemetry *presenceTelemetryLedger) func(context.Context, contextpacket.ClickHouseQueryClient, string, cursorState, int) ([]candidate, bool, error) {
+func subjectProjectMembershipsQuery(telemetry *presenceTelemetryLedger, ingest bool) func(context.Context, contextpacket.ClickHouseQueryClient, string, cursorState, int) ([]candidate, bool, error) {
 	return func(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
-		return querySubjectProjectMemberships(ctx, client, orgID, cursor, limit, telemetry)
+		return querySubjectProjectMemberships(ctx, client, orgID, cursor, limit, telemetry, ingest)
 	}
 }
 
-func querySubjectProjectMemberships(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, telemetry *presenceTelemetryLedger) ([]candidate, bool, error) {
+func querySubjectProjectMemberships(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, telemetry *presenceTelemetryLedger, ingest bool) ([]candidate, bool, error) {
 	// event_id is part of the row key (codex xhigh review R1, HIGH,
 	// confirmed real -- see membershipIntervalsSubquery's own doc comment):
 	// two transition-arm intervals for the SAME (subject, project) pair CAN
@@ -361,25 +379,37 @@ func querySubjectProjectMemberships(ctx context.Context, client contextpacket.Cl
 	// transition arm's `valid_to` (membershipIntervalsSubquery) is derived
 	// from that column via leadInFrame, so the ifNull default must share its
 	// scale for the two UNION arms to agree on one column type.
-	statement := `SELECT subject_kind, repo_id_str, subject_id, repo_slug, observed_at, event_id, source, provider, project_id, resolved_project_id, key_resolution_count, valid_to_present, valid_to_value, is_malformed, is_duplicate_add
+	// ingest: the cursor pages on the ingest stamp (the transitions'
+	// ingested_at, folded with the adjacent touches, and the presence view's
+	// last_synced) selected as the LAST column; otherwise on observed_at.
+	cursorColumn, ingestSelect, transitionIngest, columnIngest := "observed_at", "", "", ""
+	if ingest {
+		cursorColumn, ingestSelect = "ingest_at", ", ingest_at"
+		transitionIngest, columnIngest = ", m.ingest_at AS ingest_at", ", m.last_synced AS ingest_at"
+	}
+	statement := `SELECT subject_kind, repo_id_str, subject_id, repo_slug, observed_at, event_id, source, provider, project_id, resolved_project_id, key_resolution_count, valid_to_present, valid_to_value, is_malformed, is_duplicate_add` + ingestSelect + `
 FROM (
   SELECT m.subject_kind AS subject_kind, toString(m.repo_id) AS repo_id_str, m.subject_id AS subject_id, ifNull(r.repo, '') AS repo_slug,
     m.observed_at AS observed_at, m.event_id AS event_id, m.source AS source, m.provider AS provider, m.project_id AS project_id, p.id AS resolved_project_id, p.key_resolution_count AS key_resolution_count,
-    isNotNull(m.valid_to) AS valid_to_present, ifNull(m.valid_to, toDateTime64(0, 3, 'UTC')) AS valid_to_value, m.is_malformed AS is_malformed, m.is_duplicate_add AS is_duplicate_add
-  FROM ` + membershipIntervalsSubquery + ` AS m
+    isNotNull(m.valid_to) AS valid_to_present, ifNull(m.valid_to, toDateTime64(0, 3, 'UTC')) AS valid_to_value, m.is_malformed AS is_malformed, m.is_duplicate_add AS is_duplicate_add` + transitionIngest + `
+  FROM ` + membershipIntervalsSubquery(ingest) + ` AS m
   LEFT JOIN ` + resolvedProjectsSubquery + ` AS p ON p.provider = m.provider AND p.join_key = m.project_id
   LEFT JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
   UNION ALL
   SELECT m.subject_kind AS subject_kind, toString(m.repo_id) AS repo_id_str, m.subject_id AS subject_id, ifNull(r.repo, '') AS repo_slug,
     m.observed_at AS observed_at, '' AS event_id, m.source AS source, m.provider AS provider, m.project_id AS project_id, p.id AS resolved_project_id, p.key_resolution_count AS key_resolution_count,
-    0 AS valid_to_present, toDateTime64(0, 3, 'UTC') AS valid_to_value, 0 AS is_malformed, 0 AS is_duplicate_add
+    0 AS valid_to_present, toDateTime64(0, 3, 'UTC') AS valid_to_value, 0 AS is_malformed, 0 AS is_duplicate_add` + columnIngest + `
   FROM project_membership_presence AS m
   LEFT JOIN ` + resolvedProjectsSubquery + ` AS p ON p.provider = m.provider AND p.join_key = m.project_id
   LEFT JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
   WHERE m.org_id = {org_id:String} AND m.source = 'work_item_column'
 )
-WHERE 1 = 1` + sincePredicate(cursor, "observed_at", rowKey) + orderBy("observed_at", rowKey)
-	return fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+WHERE 1 = 1` + sincePredicate(cursor, cursorColumn, rowKey) + orderBy(cursorColumn, rowKey)
+	fetchRows := fetch
+	if ingest {
+		fetchRows = fetchIngest
+	}
+	return fetchRows(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var subjectKind, repoID, subjectID, repoSlug, eventID, source, provider, projectID, resolvedProjectID string
 		var observedAt, validToValue time.Time
 		var keyResolutionCount uint64
@@ -736,9 +766,9 @@ WHERE a.org_id = {org_id:String} AND a.is_primary = 1 AND ifNull(a.team_id, '') 
 // producer. The producer records omissions; the SOURCE logs the run total
 // once per batch, so the number an operator sees is the run's distinct-key
 // count rather than one page's slice.
-func projectTeamsQuery(omissions *ambiguityLedger) func(context.Context, contextpacket.ClickHouseQueryClient, string, cursorState, int) ([]candidate, bool, error) {
+func projectTeamsQuery(omissions *ambiguityLedger, ingest bool) func(context.Context, contextpacket.ClickHouseQueryClient, string, cursorState, int) ([]candidate, bool, error) {
 	return func(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
-		return queryProjectTeams(ctx, client, orgID, cursor, limit, omissions)
+		return queryProjectTeams(ctx, client, orgID, cursor, limit, omissions, ingest)
 	}
 }
 
@@ -800,6 +830,11 @@ var projectTeamsRowKey = rowKeySQL("o.provider", "o.project_id", "o.team_id", "o
 // and a cursor covering only one of its inputs cannot see a change in the
 // other. See the RETRACTION ARM note in projectTeamsStatement.
 const projectTeamsWatermark = "max(o.row_watermark)"
+
+// projectTeamsIngestWatermark is projectTeamsWatermark on the ingest stamps
+// (ownership last_synced folded with its projects' last_synced): the cursor
+// position once the ingest columns exist. ObservedAt keeps projectTeamsWatermark.
+const projectTeamsIngestWatermark = "max(o.row_ingest)"
 
 // projectTeamRelationshipID is the ONE definition of an OWNED_BY_TEAM
 // project<->team edge's identity, used by the assertion and by the
@@ -953,9 +988,9 @@ func projectMembershipRelationshipID(subjectCanonicalID, projectCanonicalID, int
 // matches through. Every arm below reads this identical shape, so the two
 // columns cannot drift between what an arm matches on and what it reports as
 // ownership_ref/ownership_key.
-func projectTeamsOwnershipRowsSQL() string {
+func projectTeamsOwnershipRowsSQL(ingest bool) string {
 	return `(
-		SELECT provider, ` + readers.ProjectOwnershipJoinColumn + ` AS project_ref, ifNull(project_key, '') AS project_key, team_id, toString(source) AS source_name, valid_from, valid_to, updated_at
+		SELECT provider, ` + readers.ProjectOwnershipJoinColumn + ` AS project_ref, ifNull(project_key, '') AS project_key, team_id, toString(source) AS source_name, valid_from, valid_to, updated_at` + ingestStampSQL(ingest, "last_synced AS ingest_at") + `
 		FROM team_project_ownership FINAL
 		WHERE org_id = {org_id:String}
 	)`
@@ -984,23 +1019,23 @@ func projectTeamsOwnershipRowsSQL() string {
 // required_scope_kind gate. Neither branch ever names p.project_key, which
 // is what makes defect 6 structurally impossible here rather than merely
 // untested.
-func projectTeamsAssertingArm(resolved string) string {
+func projectTeamsAssertingArm(resolved string, ingest bool) string {
 	ownership := `(
-		SELECT provider, project_ref, project_key, team_id, source_name, valid_from, valid_to, updated_at,
+		SELECT provider, project_ref, project_key, team_id, source_name, valid_from, valid_to, updated_at` + ingestStampSQL(ingest, "ingest_at") + `,
 		       project_ref AS scope_value, '' AS required_scope_kind
-		FROM ` + projectTeamsOwnershipRowsSQL() + `
+		FROM ` + projectTeamsOwnershipRowsSQL(ingest) + `
 
 		UNION ALL
 
-		SELECT provider, project_ref, project_key, team_id, source_name, valid_from, valid_to, updated_at,
+		SELECT provider, project_ref, project_key, team_id, source_name, valid_from, valid_to, updated_at` + ingestStampSQL(ingest, "ingest_at") + `,
 		       project_key AS scope_value, 'key' AS required_scope_kind
-		FROM ` + projectTeamsOwnershipRowsSQL() + `
+		FROM ` + projectTeamsOwnershipRowsSQL(ingest) + `
 	) AS o`
 	return `
 		SELECT p.id AS project_id, p.provider AS provider,
 		       o.project_ref AS ownership_ref, o.project_key AS ownership_key,
-		       o.team_id AS team_id, o.source_name AS source_name, o.valid_from AS valid_from, o.valid_to AS valid_to, o.updated_at AS updated_at,
-		       p.project_updated_at AS project_updated_at, toUInt8(0) AS retraction_only
+		       o.team_id AS team_id, o.source_name AS source_name, o.valid_from AS valid_from, o.valid_to AS valid_to, o.updated_at AS updated_at` + ingestStampSQL(ingest, "o.ingest_at AS ingest_at") + `,
+		       p.project_updated_at AS project_updated_at` + ingestStampSQL(ingest, "p.project_ingest_at AS project_ingest_at") + `, toUInt8(0) AS retraction_only
 		FROM ` + resolved + `
 		INNER JOIN ` + ownership + ` ON o.provider = p.provider AND ` + readers.ProjectIdentityMatchSQL("o", "scope_value") + `
 		INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = o.team_id
@@ -1022,25 +1057,25 @@ func projectTeamsAssertingArm(resolved string) string {
 // "which arm a row reaches" to "which half of one union a row reaches". No
 // row gains or loses a match path, and neither branch can double-match a row
 // the other already covers.
-func projectTeamsRetractionArm(ambiguous string) string {
+func projectTeamsRetractionArm(ambiguous string, ingest bool) string {
 	ownership := `(
-		SELECT provider, project_ref, project_key, team_id, source_name, valid_from, valid_to, updated_at,
+		SELECT provider, project_ref, project_key, team_id, source_name, valid_from, valid_to, updated_at` + ingestStampSQL(ingest, "ingest_at") + `,
 		       project_key AS match_value
-		FROM ` + projectTeamsOwnershipRowsSQL() + `
+		FROM ` + projectTeamsOwnershipRowsSQL(ingest) + `
 		WHERE project_key != ''
 
 		UNION ALL
 
-		SELECT provider, project_ref, project_key, team_id, source_name, valid_from, valid_to, updated_at,
+		SELECT provider, project_ref, project_key, team_id, source_name, valid_from, valid_to, updated_at` + ingestStampSQL(ingest, "ingest_at") + `,
 		       project_ref AS match_value
-		FROM ` + projectTeamsOwnershipRowsSQL() + `
+		FROM ` + projectTeamsOwnershipRowsSQL(ingest) + `
 		WHERE project_key = ''
 	) AS o`
 	return `
 		SELECT p.id AS project_id, p.provider AS provider,
 		       o.project_ref AS ownership_ref, o.project_key AS ownership_key,
-		       o.team_id AS team_id, o.source_name AS source_name, o.valid_from AS valid_from, o.valid_to AS valid_to, o.updated_at AS updated_at,
-		       p.project_updated_at AS project_updated_at, toUInt8(1) AS retraction_only
+		       o.team_id AS team_id, o.source_name AS source_name, o.valid_from AS valid_from, o.valid_to AS valid_to, o.updated_at AS updated_at` + ingestStampSQL(ingest, "o.ingest_at AS ingest_at") + `,
+		       p.project_updated_at AS project_updated_at` + ingestStampSQL(ingest, "p.project_ingest_at AS project_ingest_at") + `, toUInt8(1) AS retraction_only
 		FROM ` + ambiguous + `
 		INNER JOIN ` + ownership + ` ON o.provider = p.provider AND o.match_value = p.project_key
 		INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = o.team_id
@@ -1059,13 +1094,31 @@ func projectTeamsRetractionArm(ambiguous string) string {
 // grouped into two arms that each embed their shared project source ONCE.
 // See projectTeamsAssertingArm and projectTeamsRetractionArm for what each
 // pair still means.
-func projectTeamsArms() []string {
-	resolved := projectIdentityWithWatermarkSQL()
-	ambiguous := ambiguousProjectIdentitySQL()
+func projectTeamsArms() []string { return projectTeamsArmsFor(false) }
+
+// projectTeamsArmsFor is projectTeamsArms with the ownership and project
+// stamps read from their ingest columns (ingest) or their provider times.
+func projectTeamsArmsFor(ingest bool) []string {
+	resolved := projectIdentityWithWatermarkSQL(ingest)
+	ambiguous := ambiguousProjectIdentitySQL(ingest)
 	return []string{
-		projectTeamsAssertingArm(resolved),
-		projectTeamsRetractionArm(ambiguous),
+		projectTeamsAssertingArm(resolved, ingest),
+		projectTeamsRetractionArm(ambiguous, ingest),
 	}
+}
+
+// ingestStampSQL is ", <column>" when the ingest columns are in use, else
+// nothing: one more selected column carrying a row's server insert time. A
+// column that already starts with ", " or ends with "," is not re-delimited.
+func ingestStampSQL(ingest bool, column string) string {
+	if !ingest {
+		return ""
+	}
+	column = strings.TrimSpace(column)
+	if strings.HasPrefix(column, ",") || strings.HasSuffix(column, ",") {
+		return " " + column
+	}
+	return ", " + column
 }
 
 // ambiguousProjectIdentitySQL is the retraction arm's project source: every
@@ -1102,21 +1155,21 @@ func projectTeamsArms() []string {
 // The WHERE is in the same SELECT as the window on purpose: ClickHouse
 // evaluates WHERE before window functions, so the count runs over the filtered
 // rows, which is what makes the de-duplication above hold.
-func ambiguousProjectIdentitySQL() string {
+func ambiguousProjectIdentitySQL(ingest bool) string {
 	return `(
-	SELECT pa.provider AS provider, pa.id AS id, pa.project_key AS project_key, pa.project_updated_at AS project_updated_at,
+	SELECT pa.provider AS provider, pa.id AS id, pa.project_key AS project_key, pa.project_updated_at AS project_updated_at,` + ingestStampSQL(ingest, " pa.project_ingest_at AS project_ingest_at,") + `
 	       count() OVER (PARTITION BY pa.provider, pa.project_key) AS key_project_count
-	FROM (SELECT * FROM ` + projectIdentityWithWatermarkSQL() + `) AS pa
+	FROM (SELECT * FROM ` + projectIdentityWithWatermarkSQL(ingest) + `) AS pa
 	WHERE pa.scope_kind = 'id' AND pa.project_key != ''
 ) AS p`
 }
 
-func projectIdentityWithWatermarkSQL() string {
+func projectIdentityWithWatermarkSQL(ingest bool) string {
 	return `(
-	SELECT pi.*, w.project_updated_at AS project_updated_at
+	SELECT pi.*, w.project_updated_at AS project_updated_at` + ingestStampSQL(ingest, ", w.project_ingest_at AS project_ingest_at") + `
 	FROM (SELECT * FROM ` + readers.ProjectIdentityCatalogSQL() + `) AS pi
 	INNER JOIN (
-		SELECT provider, id, updated_at AS project_updated_at
+		SELECT provider, id, updated_at AS project_updated_at` + ingestStampSQL(ingest, "last_synced AS project_ingest_at") + `
 		FROM projects FINAL
 		WHERE org_id = {org_id:String}
 	) AS w ON w.provider = pi.provider AND w.id = pi.id
@@ -1165,7 +1218,11 @@ func projectIdentityWithWatermarkSQL() string {
 // which a WHERE cannot reference, so the keyset condition is emitted as
 // HAVING through havingSincePredicate -- the same condition delegated,
 // not a second spelling of it.
-func projectTeamsStatement(cursor cursorState) string {
+func projectTeamsStatement(cursor cursorState) string { return projectTeamsStatementFor(cursor, false) }
+
+// projectTeamsStatementFor is projectTeamsStatement reading the ingest stamps
+// when ingest is set.
+func projectTeamsStatementFor(cursor cursorState, ingest bool) string {
 	// TWO arm BLOCKS (CHAOS-4750 respelling of what was four separately
 	// embedded arms), UNION ALL'd at ROW level, then aggregated on the
 	// RESOLVED projects.id. Each block itself unions two match variants at
@@ -1343,6 +1400,10 @@ func projectTeamsStatement(cursor cursorState) string {
 	// turning a retraction feature into an edge-deletion bug. Splitting the
 	// partition keeps the asserting block's conflict test byte-identical
 	// to what it was.
+	cursorWatermark := projectTeamsWatermark
+	if ingest {
+		cursorWatermark = projectTeamsIngestWatermark
+	}
 	const identityPartition = " OVER (PARTITION BY provider, ownership_ref, ownership_key, retraction_only)"
 	return `SELECT o.project_id, o.team_id, o.source_name,
        minIf(o.valid_from, o.unassertable = 0) AS first_valid_from,
@@ -1351,20 +1412,24 @@ func projectTeamsStatement(cursor cursorState) string {
        ` + projectTeamsWatermark + ` AS observed_at, o.provider,
        toUInt8(countIf(o.unassertable = 0) = 0) AS edge_suppressed,
        groupUniqArrayIf(concat(o.ownership_ref, '\0', o.ownership_key, '\0', o.team_id, '\0', o.source_name), o.unassertable = 1 AND o.retraction_only = 0) AS conflict_identities,
-       toUInt8(countIf(o.unassertable = 1 AND o.retraction_only = 0) > 0) AS conflicting_identity_present
+       toUInt8(countIf(o.unassertable = 1 AND o.retraction_only = 0) > 0) AS conflicting_identity_present` + ingestStampSQL(ingest, projectTeamsIngestWatermark+" AS ingest_at") + `
 FROM (
 	SELECT project_id, provider, ownership_ref, ownership_key, team_id, source_name, valid_from, valid_to, retraction_only,
-	       greatest(updated_at, max(project_updated_at)` + identityPartition + `) AS row_watermark,
+	       greatest(updated_at, max(project_updated_at)` + identityPartition + `) AS row_watermark,` + ingestStampSQL(ingest, " greatest(ingest_at, max(project_ingest_at)"+identityPartition+") AS row_ingest,") + `
 	       toUInt8(retraction_only = 1 OR min(project_id)` + identityPartition + ` != max(project_id)` + identityPartition + `) AS unassertable
-	FROM (` + strings.Join(projectTeamsArms(), "\n\n\t\tUNION ALL\n") + `
+	FROM (` + strings.Join(projectTeamsArmsFor(ingest), "\n\n\t\tUNION ALL\n") + `
 	)
 ) AS o
-GROUP BY o.project_id, o.provider, o.team_id, o.source_name` + havingSincePredicate(cursor, projectTeamsWatermark, projectTeamsRowKey) + orderBy(projectTeamsWatermark, projectTeamsRowKey)
+GROUP BY o.project_id, o.provider, o.team_id, o.source_name` + havingSincePredicate(cursor, cursorWatermark, projectTeamsRowKey) + orderBy(cursorWatermark, projectTeamsRowKey)
 }
 
-func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, omissions *ambiguityLedger) ([]candidate, bool, error) {
-	statement := projectTeamsStatement(cursor)
-	rows, truncated, err := fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, omissions *ambiguityLedger, ingest bool) ([]candidate, bool, error) {
+	statement := projectTeamsStatementFor(cursor, ingest)
+	fetchRows := fetch
+	if ingest {
+		fetchRows = fetchIngest
+	}
+	rows, truncated, err := fetchRows(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var projectID, teamID, source, provider string
 		var validFrom, latestValidTo, observedAt time.Time
 		var latestIsOpen, edgeSuppressed, conflictingIdentityPresent uint8

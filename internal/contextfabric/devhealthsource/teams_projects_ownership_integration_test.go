@@ -514,7 +514,7 @@ func newOwnershipFixture(t *testing.T, ctx context.Context, query contextpacket.
 			id, orgID, provider, key, id+" name", uint8(1), "started", "", at)
 	}
 	seedOwnership := func(provider, teamID, projectID, key string, validFrom time.Time, validTo any) {
-		mustSeed("team_project_ownership "+projectID, `INSERT INTO team_project_ownership VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		mustSeed("team_project_ownership "+projectID, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			orgID, provider, teamID, projectID, key, "native", validFrom, validTo, at)
 	}
 
@@ -622,7 +622,7 @@ func subAmbiguousProjectKeyResolvesAnIDAndOmitsAKey(t *testing.T, ctx context.Co
 	// KEY-shaped: project_id carries the ambiguous KEY, so the id arm matches
 	// nothing and the key arm excludes it. The baseline fixture already seeded
 	// PROJ-AMBIG-A and PROJ-AMBIG-B under (github, AMBIG-KEY).
-	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITLAB', 'AMBIG-KEY', 'AMBIG-KEY', 'native', ?, NULL, ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, 'github', 'TEAM-GITLAB', 'AMBIG-KEY', 'AMBIG-KEY', 'native', ?, NULL, ?)`,
 		fixture.orgID, ownershipFirstSeen, ownershipLaterAssertion)
 
 	batch := fixture.project(t, ctx)
@@ -733,7 +733,7 @@ FROM numbers(150)`, f.orgID, early)
 	mustExec(t, ctx, f.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at)
 SELECT concat('P-AMBIG-B-', repeat('x', 232), toString(number)), ?, 'github', concat('BULK-', toString(number)), 'bulk b', 1, 'started', '', ?
 FROM numbers(150)`, f.orgID, early)
-	mustExec(t, ctx, f.direct, `INSERT INTO team_project_ownership
+	mustExec(t, ctx, f.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at)
 SELECT ?, 'github', 'TEAM-GITHUB', concat('P-AMBIG-A-', repeat('x', 232), toString(number)), concat('BULK-', toString(number)), 'native', ?, NULL, ?
 FROM numbers(150)`, f.orgID, block, block)
 
@@ -741,7 +741,7 @@ FROM numbers(150)`, f.orgID, block, block)
 	// by this project's own entity candidate.
 	mustExec(t, ctx, f.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', 'BEYOND-KEY', 'beyond', 1, 'started', '', ?)`,
 		"PROJ-BEYOND", f.orgID, early)
-	mustExec(t, ctx, f.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, 'BEYOND-KEY', 'native', ?, NULL, ?)`,
+	mustExec(t, ctx, f.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, 'github', 'TEAM-GITHUB', ?, 'BEYOND-KEY', 'native', ?, NULL, ?)`,
 		f.orgID, "PROJ-BEYOND", beyond, beyond)
 }
 
@@ -778,9 +778,9 @@ func subTiedOwnershipAssertionsResolveDeterministically(t *testing.T, ctx contex
 	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', 'TIE-KEY', 'tie', 1, 'started', '', ?)`,
 		"PROJ-TIE", fixture.orgID, at)
 	// Same instant, same group after collapse; one closes, one leaves open.
-	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', 'ownership-row-closed', 'TIE-KEY', 'native', ?, ?, ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, 'github', 'TEAM-GITHUB', 'ownership-row-closed', 'TIE-KEY', 'native', ?, ?, ?)`,
 		fixture.orgID, ownershipFirstSeen, ownershipLatestClose, at)
-	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', 'ownership-row-open', 'TIE-KEY', 'native', ?, NULL, ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, 'github', 'TEAM-GITHUB', 'ownership-row-open', 'TIE-KEY', 'native', ?, NULL, ?)`,
 		fixture.orgID, ownershipFirstSeen, at)
 
 	tieEdge := devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-TIE", "TEAM-GITHUB", "native")
@@ -817,13 +817,13 @@ func subAmbiguityGuardIsScopedToOneOrganization(t *testing.T, ctx context.Contex
 		"PROJ-OTHER-ORG", otherOrg, at)
 	mustExec(t, ctx, fixture.direct, `INSERT INTO teams (id, name, description, updated_at, org_id, provider, native_team_key, project_keys, is_active) VALUES (?, ?, '', ?, ?, 'github', ?, ?, 1)`,
 		"TEAM-OTHER-ORG", "other org team", at, otherOrg, "TEAM-OTHER-ORG", []string{})
-	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-OTHER-ORG', ?, 'CROSS-ORG-KEY', 'native', ?, NULL, ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, 'github', 'TEAM-OTHER-ORG', ?, 'CROSS-ORG-KEY', 'native', ?, NULL, ?)`,
 		otherOrg, "PROJ-OTHER-ORG", ownershipFirstSeen, at)
 
 	// This organization's own project under the SAME (provider, project_key).
 	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', 'CROSS-ORG-KEY', 'this org project', 1, 'started', '', ?)`,
 		"PROJ-THIS-ORG", fixture.orgID, at)
-	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, 'CROSS-ORG-KEY', 'native', ?, NULL, ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, 'github', 'TEAM-GITHUB', ?, 'CROSS-ORG-KEY', 'native', ?, NULL, ?)`,
 		fixture.orgID, "PROJ-THIS-ORG", ownershipFirstSeen, at)
 
 	// CHAOS-4542: the row above is id-shaped, so it resolves without ever
@@ -833,7 +833,7 @@ func subAmbiguityGuardIsScopedToOneOrganization(t *testing.T, ctx context.Contex
 	// the window counted the other organization's project too, the count
 	// would be two, the key scope row would not be emitted at all, and this
 	// edge would vanish with no error anywhere.
-	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITLAB', 'CROSS-ORG-KEY', 'CROSS-ORG-KEY', 'native', ?, NULL, ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, 'github', 'TEAM-GITLAB', 'CROSS-ORG-KEY', 'CROSS-ORG-KEY', 'native', ?, NULL, ?)`,
 		fixture.orgID, ownershipFirstSeen, at)
 
 	batch := fixture.project(t, ctx)
@@ -1059,13 +1059,13 @@ func (f *ownershipFixture) seedOversizedAmbiguousBlock(t *testing.T, ctx context
 SELECT concat('P-BOUND-`+half+`-', repeat('x', 232), toString(number)), ?, 'github', concat('BOUND-', toString(number)), 'bulk', 1, 'started', '', ?
 FROM numbers(?)`, f.orgID, early, uint64(keys))
 	}
-	mustExec(t, ctx, f.direct, `INSERT INTO team_project_ownership
+	mustExec(t, ctx, f.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at)
 SELECT ?, 'github', 'TEAM-GITHUB', concat('P-BOUND-A-', repeat('x', 232), toString(number)), concat('BOUND-', toString(number)), 'native', ?, NULL, ?
 FROM numbers(?)`, f.orgID, block, block, uint64(keys))
 
 	mustExec(t, ctx, f.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', 'PAST-BOUND-KEY', 'past bound', 1, 'started', '', ?)`,
 		"PROJ-PAST-BOUND", f.orgID, early)
-	mustExec(t, ctx, f.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, 'PAST-BOUND-KEY', 'native', ?, NULL, ?)`,
+	mustExec(t, ctx, f.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, 'github', 'TEAM-GITHUB', ?, 'PAST-BOUND-KEY', 'native', ?, NULL, ?)`,
 		f.orgID, "PROJ-PAST-BOUND", beyond, beyond)
 }
 
@@ -1096,10 +1096,10 @@ func subTwoIDSpaceRowsYieldExactlyOneEdge(t *testing.T, ctx context.Context, fix
 	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', ?, ?, 1, 'started', '', ?)`,
 		projectID, fixture.orgID, projectKey, projectID+" name", ownershipLaterAssertion)
 	// Key-shaped: project_id holds the project KEY (the legacy/GitLab shape).
-	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
 		fixture.orgID, projectKey, projectKey, ownershipFirstSeen, ownershipLaterAssertion)
 	// UUID-shaped: project_id holds projects.id (what CHAOS-4530 writes).
-	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
 		fixture.orgID, projectID, projectKey, ownershipFirstSeen, ownershipLaterAssertion)
 
 	batch := fixture.project(t, ctx)
@@ -1159,7 +1159,7 @@ func subEmptyKeyProjectsEachKeepTheirOwnEdge(t *testing.T, ctx context.Context, 
 		// CHAOS-4530, not an empty string standing in for it.
 		mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'linear', NULL, ?, 1, 'started', '', ?)`,
 			projectID, fixture.orgID, projectID+" name", ownershipLaterAssertion)
-		mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'linear', ?, ?, NULL, 'native', ?, NULL, ?)`,
+		mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, 'linear', ?, ?, NULL, 'native', ?, NULL, ?)`,
 			fixture.orgID, teamID, projectID, ownershipFirstSeen, ownershipLaterAssertion)
 	}
 
@@ -1244,14 +1244,14 @@ func subRetractsAnEdgeWhoseKeyBecomesAmbiguous(t *testing.T, ctx context.Context
 	// names exactly one project both arms resolve it.
 	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', ?, 'retract me', 1, 'started', '', ?)`,
 		"PROJ-RETRACT-KEY", fixture.orgID, "RETRACT-KEY", at)
-	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
 		fixture.orgID, "RETRACT-KEY", "RETRACT-KEY", ownershipFirstSeen, at)
 	// The CONTROL rides the same ticks: an ordinary project whose ownership
 	// is untouched by any of this. Retracting everything is the cheapest way
 	// to pass the assertions below, and this is what refuses it.
 	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', ?, 'keep me', 1, 'started', '', ?)`,
 		"PROJ-KEEP", fixture.orgID, "KEEP-KEY", at)
-	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
 		fixture.orgID, "PROJ-KEEP", "KEEP-KEY", ownershipFirstSeen, at)
 
 	edge := devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-RETRACT-KEY", "TEAM-GITHUB", "native")
@@ -1318,14 +1318,14 @@ func subRetractsAnEdgeWhoseAmbiguousKeyArrivesViaProjectRef(t *testing.T, ctx co
 	// project_key NULL on purpose: the row's ONLY tie to the project is
 	// project_id, which carries the key-shaped value, exactly the GitLab
 	// shape readers.ProjectOwnershipJoinColumn's own doc comment describes.
-	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, NULL, 'native', ?, NULL, ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, 'github', 'TEAM-GITHUB', ?, NULL, 'native', ?, NULL, ?)`,
 		fixture.orgID, "RETRACT-REF-KEY", ownershipFirstSeen, at)
 	// The CONTROL rides the same ticks: an ordinary, unambiguous project_id
 	// match with the same NULL-project_key shape, so a false-positive fix
 	// that started matching every empty-project_key row shows up here.
 	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', ?, 'keep me too', 1, 'started', '', ?)`,
 		"PROJ-KEEP-REF", fixture.orgID, "KEEP-REF-KEY", at)
-	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, NULL, 'native', ?, NULL, ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, 'github', 'TEAM-GITHUB', ?, NULL, 'native', ?, NULL, ?)`,
 		fixture.orgID, "PROJ-KEEP-REF", ownershipFirstSeen, at)
 
 	edge := devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-RETRACT-REF", "TEAM-GITHUB", "native")
@@ -1383,7 +1383,7 @@ func subRetractsAnEdgeWhoseIdentityStartsConflicting(t *testing.T, ctx context.C
 		"PROJ-CONFLICT-A", fixture.orgID, at)
 	// project_key names nothing yet, so only the id arm resolves and the edge
 	// is clean.
-	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
 		fixture.orgID, "PROJ-CONFLICT-A", "CONFLICT-KEY", ownershipFirstSeen, at)
 
 	edge := devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-CONFLICT-A", "TEAM-GITHUB", "native")
@@ -1420,7 +1420,7 @@ func subRetractionIsIdempotentAcrossAReRun(t *testing.T, ctx context.Context, fi
 	// Already ambiguous when this row arrives: the NEVER-PROJECTED ordering.
 	// The retraction must still be emitted (the producer cannot know it is
 	// unnecessary) and must still be a no-op.
-	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
 		fixture.orgID, "IDEMPOTENT-KEY", "IDEMPOTENT-KEY", ownershipFirstSeen, at)
 
 	edge := devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-IDEMPOTENT-A", "TEAM-GITHUB", "native")
@@ -1501,7 +1501,7 @@ func subRetractionOnlyFollowsMaxRaisingProjectWrites(t *testing.T, ctx context.C
 	// through queryProjects, before this producer is even consulted.
 	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', ?, 'zzz', 1, 'started', '', ?)`,
 		"ZZZ-WATERMARK", fixture.orgID, "WM-KEY", future)
-	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
 		fixture.orgID, "WM-KEY", "WM-KEY", ownershipFirstSeen, at)
 
 	edge := devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "ZZZ-WATERMARK", "TEAM-GITHUB", "native")
@@ -1679,9 +1679,9 @@ func subTwoGroupsSharingAProjectIDGetDistinctCursorKeys(t *testing.T, ctx contex
 		"SHARED-ID", fixture.orgID, "GH-KEY", at)
 	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'gitlab', ?, 'gl', 1, 'started', '', ?)`,
 		"SHARED-ID", fixture.orgID, "GL-KEY", at)
-	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-SHARED', ?, ?, 'native', ?, NULL, ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, 'github', 'TEAM-SHARED', ?, ?, 'native', ?, NULL, ?)`,
 		fixture.orgID, "SHARED-ID", "GH-KEY", ownershipFirstSeen, at)
-	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'gitlab', 'TEAM-SHARED', ?, ?, 'native', ?, NULL, ?)`,
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, 'gitlab', 'TEAM-SHARED', ?, ?, 'native', ?, NULL, ?)`,
 		fixture.orgID, "SHARED-ID", "GL-KEY", ownershipFirstSeen, at)
 
 	// The keys must now differ. This is the property the fix delivers, and on

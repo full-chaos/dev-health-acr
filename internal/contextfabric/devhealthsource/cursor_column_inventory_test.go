@@ -39,11 +39,12 @@ var ingestCursorColumns = map[string]struct{ expr, writer string }{
 	"team_repo_ownership":                  {repositoryTeamsWatermark, "updated_at = write time on every writer (team_repo_ownership_derivation_clickhouse.go:89,692; github_team_catalog.go:269; linear_reference_catalog_route.go:487) folded with repos.last_synced"},
 }
 
-// cursorUnsoundTables are the tables with NO ingest column in ops yet. Their
-// cursor still reads a provider/event time, so a row stamped older than the
-// cursor that lands after it can be skipped until a rebuild (the pre-existing
-// hazard, unchanged). The value is the expression they page on today; the
-// test fails when either one changes, so the exemption cannot outlive the fix.
+// cursorUnsoundTables are the tables that page on a provider/event time while
+// the ingest columns (ops migrations 099 and 100) do not exist yet: a row
+// stamped older than the cursor that lands after it can be skipped until a
+// rebuild. The registry the source builds once the columns exist is checked in
+// TestIngestColumnsRegistryPagesOnTheIngestStamp. The value is the expression
+// they page on before the columns; the test fails when either one changes.
 var cursorUnsoundTables = map[string]string{
 	"team_project_ownership":      projectTeamsWatermark,
 	"project_membership_presence": "observed_at",
@@ -158,6 +159,47 @@ func TestWithOverlapRefusesANonPositiveWindow(t *testing.T) {
 		teams, err := (&TeamsProjectsSource{}).WithOverlap(d)
 		if err != nil || teams.overlap != d {
 			t.Errorf("TeamsProjectsSource.WithOverlap(%s) = %v, overlap %s", d, err, teams.overlap)
+		}
+	}
+}
+
+// With the ingest columns present the two producers page on the ingest stamp,
+// selected as the statement's trailing column, and never on the provider time.
+func TestIngestColumnsRegistryPagesOnTheIngestStamp(t *testing.T) {
+	want := map[string]string{
+		"team_project_ownership":      projectTeamsIngestWatermark,
+		"project_membership_presence": "ingest_at",
+	}
+	cursor := cursorState{Since: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC), After: "k", Space: cursorSpaceIngestColumns}
+	for _, ingest := range []bool{false, true} {
+		for _, table := range teamsProjectsTablesFor(&ambiguityLedger{}, &presenceTelemetryLedger{}, &teamAuthorizationLedger{}, &repositoryOwnershipLedger{}, ingest) {
+			expr, ok := want[table.name]
+			if !ok {
+				continue
+			}
+			rec := &statementRecorder{}
+			if _, _, err := table.query(context.Background(), rec, "org-1", cursor, 10); !errors.Is(err, errStatementRecorded) {
+				t.Fatalf("%s: producer did not reach its query (err=%v)", table.name, err)
+			}
+			statement := rec.statements[0]
+			got := cursorExpression(t, table.name, statement)
+			if ingest {
+				if got != expr {
+					t.Errorf("%s pages on %q with the ingest columns, want %q", table.name, got, expr)
+				}
+				if !strings.HasSuffix(strings.TrimSpace(strings.SplitN(statement, "\nFROM", 2)[0]), "ingest_at") {
+					t.Errorf("%s does not select the ingest stamp as its trailing column", table.name)
+				}
+				continue
+			}
+			if got != cursorUnsoundTables[table.name] {
+				t.Errorf("%s pages on %q before the ingest columns, want %q", table.name, got, cursorUnsoundTables[table.name])
+			}
+			for _, newColumn := range []string{"ingested_at", "project_ingest_at", "m.last_synced", "last_synced AS ingest_at"} {
+				if strings.Contains(statement, newColumn) {
+					t.Errorf("%s names %q before the ingest columns exist: the statement would fail on a pre-migration schema", table.name, newColumn)
+				}
+			}
 		}
 	}
 }
