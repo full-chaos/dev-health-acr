@@ -14,9 +14,9 @@ import (
 
 const (
 	refusedReleasedWarn = "context_fabric: refused build count released because the source version set changed"
-	refusedCountWarn = "context_fabric: refused build count for organization"
-	refusedCapWarn   = "context_fabric: refused build cap reached"
-	recoveryHeldWarn = "context_fabric: automatic recovery withheld"
+	refusedCountWarn    = "context_fabric: refused build count for organization"
+	refusedCapWarn      = "context_fabric: refused build cap reached"
+	recoveryHeldWarn    = "context_fabric: automatic recovery withheld"
 )
 
 // stampingSource stamps every batch with epochGuardNewVersion but reports its
