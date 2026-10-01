@@ -473,9 +473,13 @@ const defaultGraceWindow = 24 * time.Hour
 type pairBackoff struct {
 	consecutiveFailures int
 	nextAttempt         time.Time
-	// versionRefused: the failure that set this backoff was a source version
-	// refusal, which is a rebuild owed and not a source outage.
-	versionRefused bool
+	// lastVersionRefused: the failure that set the CURRENT backoff was a
+	// source version refusal, which is a rebuild owed and not an outage.
+	lastVersionRefused bool
+	// rebuildOwed: a version refusal was seen and no attempt has succeeded
+	// since. Sticky across later failures of another class, because the
+	// version mismatch stays in the checkpoint while an outage comes and goes.
+	rebuildOwed bool
 }
 
 // orgs returns a SNAPSHOT of the effective organization set. Every
@@ -2678,7 +2682,7 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 	// failed is decided by the tick's context and not by the yield reason,
 	// for the reason lastErr exists above.
 	_, buildFailed, buildBroke, buildStage := pairOutcomeOf(ctx, lastErr)
-	if versionRefused(lastErr) && !truncatedBy(ctx, lastErr) {
+	if lastErr != nil && c.rebuildOwed(key) {
 		rebuild = true
 	}
 	return batches > 0, buildFailed, withheld, rebuild, buildStage, buildBroke
@@ -2998,7 +3002,7 @@ func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, che
 	c.observer.ObserveProjectionOutcome(outcome)
 	if runErr != nil {
 		c.logger.WarnContext(ctx, "projection pair failed", "org_id", contextfabric.SanitizeLogAttr(orgID), "source", contextfabric.SanitizeLogAttr(source), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(runErr)), "duration_ms", outcome.Duration.Milliseconds())
-		return true, false, runErr, false, false, false
+		return true, false, runErr, c.rebuildOwed(key), false, false
 	}
 	if run.Applied {
 		c.logger.InfoContext(ctx, "projection batch applied", "org_id", contextfabric.SanitizeLogAttr(orgID), "source", contextfabric.SanitizeLogAttr(source), "batch_id", contextfabric.SanitizeLogAttr(run.BatchID), "backend_watermark", contextfabric.SanitizeLogAttr(run.BackendWatermark), "duration_ms", outcome.Duration.Milliseconds())
@@ -3077,7 +3081,7 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 		// silently clearing runOrg's per-tick freshness aggregate
 		// (tickFreshnessStats) to "OK" despite the tick having genuinely
 		// observed drift.
-		stale = stale || pairStale || (versionRefused(pairErr) && !truncatedBy(ctx, pairErr))
+		stale = stale || pairStale
 		lastErr = pairErr
 		batches++
 		if pairApplied {
@@ -3485,7 +3489,16 @@ func (c *Coordinator) dueState(key string) (due, withheldByBackoff, withheldRebu
 		return true, false, false
 	}
 	withheld := state.consecutiveFailures > 0
-	return false, withheld && !state.versionRefused, withheld && state.versionRefused
+	return false, withheld && !state.lastVersionRefused, withheld && state.rebuildOwed
+}
+
+// rebuildOwed reports a version refusal on this pair not yet cleared by a
+// successful attempt.
+func (c *Coordinator) rebuildOwed(key string) bool {
+	c.backoffMu.Lock()
+	defer c.backoffMu.Unlock()
+	state, ok := c.backoff[key]
+	return ok && state.rebuildOwed
 }
 
 func (c *Coordinator) recordBackoff(key string, err error) {
@@ -3499,10 +3512,12 @@ func (c *Coordinator) recordBackoff(key string, err error) {
 	if err == nil {
 		state.consecutiveFailures = 0
 		state.nextAttempt = time.Time{}
-		state.versionRefused = false
+		state.lastVersionRefused = false
+		state.rebuildOwed = false
 		return
 	}
-	state.versionRefused = errors.Is(err, contextfabric.ErrProjectionSourceVersionChanged)
+	state.lastVersionRefused = versionRefused(err)
+	state.rebuildOwed = state.rebuildOwed || state.lastVersionRefused
 	state.consecutiveFailures++
 	delay := baseBackoff * time.Duration(1<<min(state.consecutiveFailures-1, 10))
 	if delay > c.maxBackoff {
