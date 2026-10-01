@@ -551,6 +551,12 @@ const ContextFabricOrganizationScopeUnsupportedLimitation = "This question was r
 // log line through the one value all three share.
 const ContextFabricSubjectIdentityUnconfirmedLimitation = "This follow-up appears to be about a different subject than the earlier answer it continues, so the server did not guess which one was meant and no canonical facts were read. Name the subject directly, or answer the earlier offer naming it, to continue. The server refused this follow-up on the basis subject_identity_unconfirmed."
 
+// ContextFabricSynthesisInputBoundedLimitation is the sentence an answer
+// carries when the facts read for it did not fit the model input and only
+// part of them was given to answer synthesis. It states the consequence for
+// a reader and no number: the counts are on the telemetry line.
+const ContextFabricSynthesisInputBoundedLimitation = "Only part of the facts read for this question was given to answer synthesis, because the full set is larger than the model input limit. The answer may not reflect every fact that was read."
+
 // ContextFabricServiceAuthoredLimitations returns every disclosure this
 // service composes for itself, in no significant order.
 //
@@ -584,6 +590,7 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricDeclaredKindUnmatchedLimitation,
 		ContextFabricOrganizationScopeUnsupportedLimitation,
 		ContextFabricSubjectIdentityUnconfirmedLimitation,
+		ContextFabricSynthesisInputBoundedLimitation,
 	}
 }
 

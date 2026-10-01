@@ -1033,6 +1033,12 @@ type EngineTelemetry interface {
 	// Content-safe by construction: an org id and two counts, never a
 	// driver_id, a title, or any other model text.
 	RecordDriverIdentityCollisions(ctx context.Context, principal storage.Principal, collisions DriverIdentityCollisions)
+	// RecordSynthesisInputBound reports that the facts read for an answer did
+	// not fit the model input: how large the input was against the bound, how
+	// many facts and kinds were read and given, in how many passes, and
+	// whether the input fit in the end. Called only when the runtime refused
+	// an input for its size. Counts and a closed outcome only.
+	RecordSynthesisInputBound(ctx context.Context, principal storage.Principal, event SynthesisInputBoundEvent)
 	// RecordCohortRanked (CHAOS-4398) reports the outcome of ONE RankCohort
 	// pass: how many members were scored, the deterministic formula
 	// version (prompt-changes-are-behavior-changes discipline applied to

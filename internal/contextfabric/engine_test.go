@@ -393,8 +393,9 @@ type statedWindowAxisRecord struct {
 }
 
 type recordingTelemetry struct {
-	statedWindowAxes []statedWindowAxisRecord
-	ensembleEvents   []InterpretationEnsembleEvent
+	synthesisInputBounds []SynthesisInputBoundEvent
+	statedWindowAxes     []statedWindowAxisRecord
+	ensembleEvents       []InterpretationEnsembleEvent
 	// storedResultAuthorizations records every stored-result decision
 	// verbatim, in emission order.
 	storedResultAuthorizations []StoredResultAuthorization
@@ -1031,6 +1032,10 @@ func (r *recordingTelemetry) RecordModelRowsStripped(_ context.Context, _ storag
 
 func (r *recordingTelemetry) RecordDriverIdentityCollisions(_ context.Context, _ storage.Principal, collisions DriverIdentityCollisions) {
 	r.driverIdentityCollisions = append(r.driverIdentityCollisions, collisions)
+}
+
+func (r *recordingTelemetry) RecordSynthesisInputBound(_ context.Context, _ storage.Principal, event SynthesisInputBoundEvent) {
+	r.synthesisInputBounds = append(r.synthesisInputBounds, event)
 }
 
 func (r *recordingTelemetry) RecordRenderShapeSelection(_ context.Context, _ storage.Principal, event RenderShapeSelectionEvent) {

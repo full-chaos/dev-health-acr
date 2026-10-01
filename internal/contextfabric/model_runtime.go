@@ -57,7 +57,29 @@ var (
 	// synthesis draft, whether for a length/count bound or a claim-
 	// binding/grounding rule.
 	ErrSynthesisRejected = errors.New("context fabric synthesis rejected")
+	// ErrModelInputTooLarge identifies a model call that was not placed
+	// because its encoded input is larger than the runtime's input bound.
+	// It always arrives inside a *ModelInputOverflow, which carries the two
+	// byte counts.
+	ErrModelInputTooLarge = errors.New("context fabric model input exceeds the input bound")
+	// ErrModelReceiptUnrecorded identifies a model call whose execution
+	// receipt was refused by its own validation or by the receipt sink.
+	ErrModelReceiptUnrecorded = errors.New("context fabric model receipt not recorded")
 )
+
+// ModelInputOverflow is the error a model runtime returns in place of a call
+// whose encoded input exceeds its bound. Bytes is the encoded input size and
+// MaxBytes the bound; both are counts, never content.
+type ModelInputOverflow struct {
+	Bytes    int
+	MaxBytes int
+}
+
+func (o *ModelInputOverflow) Error() string {
+	return fmt.Sprintf("%s: %d bytes, bound %d bytes", ErrModelInputTooLarge.Error(), o.Bytes, o.MaxBytes)
+}
+
+func (o *ModelInputOverflow) Unwrap() error { return ErrModelInputTooLarge }
 
 // ModelBoundViolation carries the specific contracts/v1
 // ContextFabricModelFacingBounds entry a rejected interpretation or
@@ -2349,7 +2371,7 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 	if r.Runtime == nil {
 		return InvestigationResult{}, ErrModelUnavailable
 	}
-	draft, receipt, err := r.Runtime.SynthesizeAnswer(ctx, principal, input)
+	input, draft, receipt, inputBounded, err := r.synthesizeWithinInputBound(ctx, principal, input)
 	if err == nil {
 		// CHAOS-4355 follow-up (tolerance): a model that still authors
 		// ClaimedFact.Rows despite CHAOS-4364's model-facing facts no
@@ -2506,6 +2528,12 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 	// projection ships, this is the one line that changes: pass THAT
 	// projection's ids instead, and the guard starts catching a
 	// canonical-but-unshown detail_id it cannot distinguish today.
+	if inputBounded {
+		var displaced int
+		result.Limitations, displaced = appendBoundedLimitations(result.Limitations, []string{contractsv1.ContextFabricSynthesisInputBoundedLimitation})
+		result.LimitationsDisplaced += displaced
+		result.Coverage.Partial = true
+	}
 	modelFacingCoverageDetailIDs := coverageDetailIDSet(result.Coverage.Details)
 	outcome, violation := classifyCoverageDisclosures(draft, &result, modelFacingCoverageDetailIDs)
 	if violation != "" {
@@ -2994,7 +3022,7 @@ func recordModelReceipt(ctx context.Context, principal storage.Principal, sink M
 		return nil
 	}
 	if err := receipt.Validate(); err != nil {
-		return fmt.Errorf("model receipt: %w", err)
+		return fmt.Errorf("%w: model receipt: %w", ErrModelReceiptUnrecorded, err)
 	}
 	// Canonicalize the closed-vocabulary field at the SINK, not merely
 	// validate it. Validate() above proves membership; it cannot replace
@@ -3024,7 +3052,7 @@ func recordModelReceipt(ctx context.Context, principal storage.Principal, sink M
 		return nil
 	}
 	if err := sink.RecordModelExecution(ctx, principal, receipt); err != nil {
-		return fmt.Errorf("record model receipt: %w", err)
+		return fmt.Errorf("%w: record model receipt: %w", ErrModelReceiptUnrecorded, err)
 	}
 	return nil
 }

@@ -74,6 +74,41 @@ func TestContextFabricInvestigationFailuresCarryStageAndClassification(t *testin
 			wantStage: "fact_read", wantClassified: "no_investigation_subjects", wantLevel: "ERROR",
 		},
 		{
+			name: "a synthesis that ends the investigation is named", wantStatus: http.StatusInternalServerError,
+			err:       staged(contextfabric.StageSynthesis, fmt.Errorf("%w: synthesize investigation: %w", contextfabric.ErrSynthesisAborted, errors.New("generator closed"))),
+			wantStage: "synthesis", wantClassified: "synthesis_aborted", wantLevel: "ERROR",
+		},
+		{
+			name: "an invalid model output inside an aborted synthesis keeps its own class", wantStatus: http.StatusBadGateway,
+			err:       staged(contextfabric.StageSynthesis, fmt.Errorf("%w: synthesize investigation: %w", contextfabric.ErrSynthesisAborted, contextfabric.ErrModelOutput)),
+			wantStage: "synthesis", wantClassified: "model_output_invalid", wantLevel: "ERROR",
+		},
+		{
+			name: "a model input over the bound inside an aborted synthesis keeps its own class", wantStatus: http.StatusInternalServerError,
+			err:       staged(contextfabric.StageSynthesis, fmt.Errorf("%w: synthesize investigation: %w", contextfabric.ErrSynthesisAborted, &contextfabric.ModelInputOverflow{Bytes: 600_000, MaxBytes: 524_288})),
+			wantStage: "synthesis", wantClassified: "model_input_too_large", wantLevel: "ERROR",
+		},
+		{
+			name: "an unrecorded model receipt inside an aborted synthesis keeps its own class", wantStatus: http.StatusInternalServerError,
+			err:       staged(contextfabric.StageSynthesis, fmt.Errorf("%w: synthesize investigation: %w", contextfabric.ErrSynthesisAborted, fmt.Errorf("%w: record model receipt: %w", contextfabric.ErrModelReceiptUnrecorded, errors.New("connection reset")))),
+			wantStage: "synthesis", wantClassified: "model_receipt_unrecorded", wantLevel: "ERROR",
+		},
+		{
+			name: "an unavailable model whose receipt is also unrecorded keeps the model class", wantStatus: http.StatusServiceUnavailable,
+			err:       staged(contextfabric.StageSynthesis, errors.Join(contextfabric.ErrModelUnavailable, fmt.Errorf("%w: record model receipt: %w", contextfabric.ErrModelReceiptUnrecorded, errors.New("connection reset")))),
+			wantStage: "synthesis", wantClassified: "dependency_unavailable", wantLevel: "ERROR",
+		},
+		{
+			name: "a model input over the bound at interpretation is named", wantStatus: http.StatusInternalServerError,
+			err:       staged(contextfabric.StageInterpretation, fmt.Errorf("interpret question: %w", &contextfabric.ModelInputOverflow{Bytes: 600_000, MaxBytes: 524_288})),
+			wantStage: "interpretation", wantClassified: "model_input_too_large", wantLevel: "ERROR",
+		},
+		{
+			name: "an unrecorded model receipt at interpretation is named", wantStatus: http.StatusInternalServerError,
+			err:       staged(contextfabric.StageInterpretation, fmt.Errorf("%w: model receipt: %w", contextfabric.ErrModelReceiptUnrecorded, errors.New("provider is required"))),
+			wantStage: "interpretation", wantClassified: "model_receipt_unrecorded", wantLevel: "ERROR",
+		},
+		{
 			name: "invalid result at validation", wantStatus: http.StatusInternalServerError,
 			err:       staged(contextfabric.StageValidation, fmt.Errorf("%w: paths", contextfabric.ErrInvalidResult)),
 			wantStage: "validation", wantClassified: "invalid_result", wantLevel: "ERROR",
