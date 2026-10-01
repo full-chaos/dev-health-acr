@@ -486,6 +486,9 @@ const (
 	mixWriteBackdated     = "backdated"
 	mixWriteAfterBaseline = "after_baseline"
 	mixWriteAfterScope    = "after_scope"
+	// mixWriteInPlace is an ALTER TABLE ... UPDATE of one input row (the row
+	// count does not move); native only.
+	mixWriteInPlace = "in_place"
 )
 
 // rollupInputWrites lands what a concurrent writer does to the roll-up's inputs:
@@ -511,9 +514,19 @@ func rollupInputWrites(t *testing.T, ctx context.Context, direct clickhousedrive
 
 // nativeInputWrites: a newer version of nu-pin and a transition that moves
 // linear:A-1 to n-p2, dated (last_synced) BELOW the table's maximum.
-func nativeInputWrites(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID string, at time.Time) {
+func nativeInputWrites(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID string, at time.Time, kind string) {
 	t.Helper()
 	insertNativeVersion(t, ctx, direct, orgID, "nu-pin", at.Add(-30*time.Minute))
+	if kind == mixWriteInPlace {
+		// The same row, the same version stamp, a different project: no row is
+		// added, so a count cannot see it; the digest's sum over the row's columns
+		// does. project_id is not in work_items' sorting key, so the mutation is
+		// allowed.
+		if err := direct.Exec(ctx, `ALTER TABLE work_items UPDATE project_id = 'n-p2' WHERE org_id = ? AND work_item_id = 'linear:A-1' SETTINGS mutations_sync = 2`, orgID); err != nil {
+			t.Fatalf("update work item in place: %v", err)
+		}
+		return
+	}
 	if err := direct.Exec(ctx, `INSERT INTO project_membership_transitions (org_id, source_id, repo_id, subject_kind, subject_id, provider, from_project_id, to_project_id, from_project_key, to_project_key, actor, occurred_at, last_synced, event_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		orgID, nil, "00000000-0000-0000-0000-000000000000", "work_item", "linear:A-1", "linear", "n-p1", "n-p2", "", "", "", at.Add(time.Hour), at.Add(-2*time.Hour), "ev-backdated"); err != nil {
 		t.Fatalf("insert transition: %v", err)
@@ -534,39 +547,42 @@ func TestProjectMixInputWritesNeverBlendAgainstRealClickHouse(t *testing.T) {
 			return devhealthfacts.WithProjectMixBetweenPhases(ctx, hook)
 		}
 	}
-	for _, kind := range []string{mixWriteBackdated, mixWriteAfterBaseline, mixWriteAfterScope} {
-		t.Run(kind+"/roll-up", func(t *testing.T) {
-			t.Parallel()
-			ctx := context.Background()
-			query, direct := newScopedCHAOS7257Client(t, nil)
-			createCHAOS7257Tables(t, ctx, direct)
-			orgID := "org-mix-digest-rollup-" + strings.ReplaceAll(kind, "_", "-")
-			at := seedCHAOS7257Parity(t, ctx, direct, orgID)
-			insertVersionAtMilli(t, ctx, direct, orgID, "wu-pin", repoUUID("r1a"), `{"issues":[],"prs":[]}`, 7, at.Add(-time.Hour))
-			insertMembership(t, ctx, direct, orgID, "wu-pin", at)
-			// A unit without a repository whose only evidence is a pull request no
-			// attribution exists for: the attribution written below is the only
-			// thing that gives it a team.
-			insertVersionAtMilli(t, ctx, direct, orgID, "wu-bk", "", fmt.Sprintf(`{"issues":[],"prs":[%q]}`, repoUUID("r1a")+"#pr9999"), 3, at.Add(-time.Hour))
-			insertMembership(t, ctx, direct, orgID, "wu-bk", at)
-			ids := []string{"linear:proj-1", "linear:proj-2", "linear:proj-3"}
-			before := runRollupStatement(t, ctx, query, "SingleRollupBefore", devhealthfacts.ProjectRollupStatement(window), orgID, ids, window)
-			var once sync.Once
-			hooked, err := devhealthfacts.RunProjectRollupMix(install(kind)(ctx, func() {
-				once.Do(func() { rollupInputWrites(t, ctx, direct, orgID, at, kind) })
-			}), query, orgID, ids, window)
-			if err != nil {
-				t.Fatal(err)
-			}
-			after := runRollupStatement(t, ctx, query, "SingleRollupAfter", devhealthfacts.ProjectRollupStatement(window), orgID, ids, window)
-			if rollupRowsDiffer(before, after) == nil {
-				t.Fatal("control: the single statement answers before and after the writes are equal, so the case proves nothing")
-			}
-			got := rollupRowsOf(hooked)
-			if rollupRowsDiffer(before, got) != nil && rollupRowsDiffer(after, got) != nil {
-				t.Fatalf("the phased answer is neither the state before the writes nor the state after them:\nbefore %+v\nafter  %+v\ngot    %+v", before, after, got)
-			}
-		})
+	for _, kind := range []string{mixWriteBackdated, mixWriteAfterBaseline, mixWriteAfterScope, mixWriteInPlace} {
+		rollupApplies := kind != mixWriteInPlace
+		if rollupApplies {
+			t.Run(kind+"/roll-up", func(t *testing.T) {
+				t.Parallel()
+				ctx := context.Background()
+				query, direct := newScopedCHAOS7257Client(t, nil)
+				createCHAOS7257Tables(t, ctx, direct)
+				orgID := "org-mix-digest-rollup-" + strings.ReplaceAll(kind, "_", "-")
+				at := seedCHAOS7257Parity(t, ctx, direct, orgID)
+				insertVersionAtMilli(t, ctx, direct, orgID, "wu-pin", repoUUID("r1a"), `{"issues":[],"prs":[]}`, 7, at.Add(-time.Hour))
+				insertMembership(t, ctx, direct, orgID, "wu-pin", at)
+				// A unit without a repository whose only evidence is a pull request no
+				// attribution exists for: the attribution written below is the only
+				// thing that gives it a team.
+				insertVersionAtMilli(t, ctx, direct, orgID, "wu-bk", "", fmt.Sprintf(`{"issues":[],"prs":[%q]}`, repoUUID("r1a")+"#pr9999"), 3, at.Add(-time.Hour))
+				insertMembership(t, ctx, direct, orgID, "wu-bk", at)
+				ids := []string{"linear:proj-1", "linear:proj-2", "linear:proj-3"}
+				before := runRollupStatement(t, ctx, query, "SingleRollupBefore", devhealthfacts.ProjectRollupStatement(window), orgID, ids, window)
+				var once sync.Once
+				hooked, err := devhealthfacts.RunProjectRollupMix(install(kind)(ctx, func() {
+					once.Do(func() { rollupInputWrites(t, ctx, direct, orgID, at, kind) })
+				}), query, orgID, ids, window)
+				if err != nil {
+					t.Fatal(err)
+				}
+				after := runRollupStatement(t, ctx, query, "SingleRollupAfter", devhealthfacts.ProjectRollupStatement(window), orgID, ids, window)
+				if rollupRowsDiffer(before, after) == nil {
+					t.Fatal("control: the single statement answers before and after the writes are equal, so the case proves nothing")
+				}
+				got := rollupRowsOf(hooked)
+				if rollupRowsDiffer(before, got) != nil && rollupRowsDiffer(after, got) != nil {
+					t.Fatalf("the phased answer is neither the state before the writes nor the state after them:\nbefore %+v\nafter  %+v\ngot    %+v", before, after, got)
+				}
+			})
+		}
 		if kind == mixWriteAfterScope {
 			continue // an ownership change only concerns the roll-up's link capture
 		}
@@ -583,7 +599,7 @@ func TestProjectMixInputWritesNeverBlendAgainstRealClickHouse(t *testing.T) {
 			before := runNativeStatement(t, ctx, query, "SingleNativeBefore", devhealthfacts.ProjectNativeStatement(window, 201), orgID, ids, window)
 			var once sync.Once
 			hooked, err := devhealthfacts.RunProjectNativeMix(install(kind)(ctx, func() {
-				once.Do(func() { nativeInputWrites(t, ctx, direct, orgID, at) })
+				once.Do(func() { nativeInputWrites(t, ctx, direct, orgID, at, kind) })
 			}), query, orgID, ids, window, 201)
 			if err != nil {
 				t.Fatal(err)
