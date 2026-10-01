@@ -1376,6 +1376,23 @@ type ProjectionSource interface {
 	NextProjectionBatch(context.Context, ProjectionCheckpoint) (ProjectionBatch, bool, error)
 }
 
+// ProjectionSourceCounts is an OPTIONAL capability a ProjectionSource
+// implements to report, per subject kind, how many distinct entities the
+// source currently holds for an organization UNDER THE SAME ROW SHAPE its
+// producers project (joins and soft-delete filters included), so a count
+// comparison against the graph does not flag rows the projection omits by
+// design. Read-only; never advances a cursor or consumes progress.
+type ProjectionSourceCounts interface {
+	ProjectionSourceCounts(ctx context.Context, orgID string) (map[SubjectKind]int64, error)
+}
+
+// ProjectionGraphCounts is an OPTIONAL capability a ProjectionBackend
+// implements to count the subject nodes of one kind that organization holds in
+// its ACTIVE graph.
+type ProjectionGraphCounts interface {
+	CountKind(ctx context.Context, orgID string, kind SubjectKind) (int64, error)
+}
+
 // ProjectionPeeker is an OPTIONAL capability a ProjectionSource implements only
 // when it can answer "would NextProjectionBatch offer a batch at this
 // checkpoint?" with NO side effects: no consumed-progress memo, no ledger or

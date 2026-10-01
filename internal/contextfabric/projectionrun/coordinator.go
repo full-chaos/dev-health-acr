@@ -354,8 +354,12 @@ type Config struct {
 	// double as the sentinel the way Concurrency/PollInterval's zero value
 	// does.
 	DrainBatchBudget int
-	Now              func() time.Time
-	Logger           *slog.Logger
+	// GraphCountCheckInterval is the minimum gap between per-organization
+	// source-vs-graph count checks (graph_below_source). 0 defaults to 10m;
+	// negative disables the check.
+	GraphCountCheckInterval time.Duration
+	Now                     func() time.Time
+	Logger                  *slog.Logger
 }
 
 // RetireScheduler drives due per-epoch retirements to completion --
@@ -427,27 +431,29 @@ type Coordinator struct {
 	// log line (the first has no last-known set to keep).
 	orgDiscoveryStarted bool
 
-	sourceNames      []string
-	workers          map[string]*contextfabric.ProjectionWorker
-	sources          map[string]contextfabric.ProjectionSource // CHAOS-3887: needed for the freshness signal's current_source_version, which ProjectionWorker does not expose
-	backend          contextfabric.ProjectionBackend
-	checkpoints      contextfabric.ProjectionCheckpointStore
-	rebuildMarkers   RebuildMarker
-	locker           OrgLocker
-	observer         Observer
-	reuseInvalidator contextfabric.ReuseInvalidator
-	lifecycle        contextfabric.GraphLifecycleStore
-	epochCheckpoints func(int64) contextfabric.ProjectionCheckpointStore
-	retireScheduler  RetireScheduler
-	lifecycleTelem   contextfabric.GraphLifecycleTelemetry
-	epochInvalidator contextfabric.EpochResolverInvalidator
-	graceWindow      time.Duration
-	poll             time.Duration
-	concurrency      int
-	maxBackoff       time.Duration
-	drainBudget      int
-	now              func() time.Time
-	logger           *slog.Logger
+	sourceNames        []string
+	workers            map[string]*contextfabric.ProjectionWorker
+	sources            map[string]contextfabric.ProjectionSource // CHAOS-3887: needed for the freshness signal's current_source_version, which ProjectionWorker does not expose
+	backend            contextfabric.ProjectionBackend
+	checkpoints        contextfabric.ProjectionCheckpointStore
+	rebuildMarkers     RebuildMarker
+	locker             OrgLocker
+	observer           Observer
+	reuseInvalidator   contextfabric.ReuseInvalidator
+	lifecycle          contextfabric.GraphLifecycleStore
+	epochCheckpoints   func(int64) contextfabric.ProjectionCheckpointStore
+	retireScheduler    RetireScheduler
+	lifecycleTelem     contextfabric.GraphLifecycleTelemetry
+	epochInvalidator   contextfabric.EpochResolverInvalidator
+	graceWindow        time.Duration
+	poll               time.Duration
+	concurrency        int
+	maxBackoff         time.Duration
+	drainBudget        int
+	graphCountInterval time.Duration
+	graphCounts        graphCountState
+	now                func() time.Time
+	logger             *slog.Logger
 
 	orgMu sync.Map // orgID -> *sync.Mutex, in-process first line of defense
 
@@ -798,6 +804,12 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 	case cfg.DrainBatchBudget < 0:
 		cfg.DrainBatchBudget = 0
 	}
+	switch {
+	case cfg.GraphCountCheckInterval == 0:
+		cfg.GraphCountCheckInterval = defaultGraphCountCheckInterval
+	case cfg.GraphCountCheckInterval < 0:
+		cfg.GraphCountCheckInterval = 0
+	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
@@ -865,7 +877,7 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 		lifecycle: cfg.Lifecycle, epochCheckpoints: cfg.EpochCheckpoints, retireScheduler: cfg.RetireScheduler,
 		lifecycleTelem: cfg.LifecycleTelemetry, epochInvalidator: cfg.EpochResolverInvalidator, graceWindow: cfg.GraceWindow,
 		poll: cfg.PollInterval, concurrency: cfg.Concurrency,
-		maxBackoff: cfg.MaxBackoff, drainBudget: cfg.DrainBatchBudget, now: cfg.Now, logger: cfg.Logger, backoff: make(map[string]*pairBackoff),
+		maxBackoff: cfg.MaxBackoff, drainBudget: cfg.DrainBatchBudget, graphCountInterval: cfg.GraphCountCheckInterval, now: cfg.Now, logger: cfg.Logger, backoff: make(map[string]*pairBackoff),
 	}, nil
 }
 
@@ -2093,9 +2105,15 @@ func (c *Coordinator) runOrg(ctx context.Context, orgID string, stats *tickFresh
 
 	if c.lifecycle != nil {
 		c.runOrgLifecycle(scope, orgID)
-		return
+	} else {
+		c.runOrgLegacy(scope, orgID)
 	}
-	c.runOrgLegacy(scope, orgID)
+	if !scope.done() {
+		_ = scope.run(func(ctx context.Context) error {
+			c.checkGraphCounts(ctx, orgID)
+			return nil
+		})
+	}
 }
 
 // runOrgLegacy is the pre-CHAOS-3898 per-org tick body, unchanged: marker-based
@@ -2657,6 +2675,8 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 			c.logger.WarnContext(ctx, "record build source progress failed after retry; the cf_build_source_progress display row may stay stale until a future successful write (rows_projected accumulation itself is unaffected -- see runBuildPair's own doc comment)", "org_id", contextfabric.SanitizeLogAttr(orgID), "source", contextfabric.SanitizeLogAttr(source), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(rerr)))
 		}
 	}
+	// The graph is still being built aside from the active epoch: never a basis for a count comparison.
+	c.graphCounts.markPair(orgID, source, false)
 	if batches > 0 {
 		c.observer.ObserveProjectionDrain(DrainOutcome{
 			OrgID: orgID, Source: source, Batches: batches, Applied: applied, YieldReason: reason,
@@ -3107,6 +3127,7 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 		}
 		break
 	}
+	c.graphCounts.markPair(orgID, source, batches > 0 && lastErr == nil && reason == DrainYieldExhausted)
 	if batches > 0 {
 		c.observer.ObserveProjectionDrain(DrainOutcome{
 			OrgID: orgID, Source: source, Batches: batches, Applied: applied, YieldReason: reason,
