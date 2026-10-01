@@ -25,6 +25,11 @@ const (
 	SynthesisFailureReceiptUnrecorded SynthesisFailureClass = "model_receipt_unrecorded"
 )
 
+// synthesisFailureCurrentState replaces the "no canonical facts were observed"
+// sentence an empty claim list would give: facts were read, and the model call
+// that would have claimed them failed.
+const synthesisFailureCurrentState = "The model call that writes the answer failed, so no current state is written here; the sources that were read are listed in coverage."
+
 // synthesisFailureWarning is the fixed, content-safe sentence a degraded
 // answer carries instead of model prose. It names the class only.
 func synthesisFailureWarning(class SynthesisFailureClass) string {

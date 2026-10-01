@@ -64,6 +64,9 @@ func TestAModelCallThatFailsIsServedAsADegradedAnswer(t *testing.T) {
 			if strings.Contains(result.DeterministicAnswer, "Platform team has open work") {
 				t.Fatalf("deterministic_answer = %q, want server-composed text only", result.DeterministicAnswer)
 			}
+			if strings.Contains(result.CurrentState, "No canonical facts were observed") || result.CurrentState == "" {
+				t.Fatalf("current_state = %q, want a sentence that does not say no facts were observed", result.CurrentState)
+			}
 			available := 0
 			for _, source := range result.Coverage.Sources {
 				if source.State == cf.SourceAvailable {
