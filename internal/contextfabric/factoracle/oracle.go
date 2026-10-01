@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 )
 
@@ -72,6 +73,15 @@ type Oracle struct {
 	// Residual is, after Run, the investment residual per theme (ops
 	// organization value minus the sum of the acr repository mixes).
 	Residual map[string]float64
+	// ListenerDark and OperationDark name the root fields the venue is known
+	// not to serve through graphql_query and through run_operation. A root
+	// that is unavailable on a path and is not named for it, or that is named
+	// and served, makes the run invalid: a path that was not measured is
+	// never a silent pass.
+	ListenerDark  []string
+	OperationDark []string
+	// Allowances, when set, replaces temporaryAllowances (tests).
+	Allowances map[string]temporaryAllowance
 
 	shapes    []Shape
 	answers   map[string]json.RawMessage
@@ -111,25 +121,31 @@ func (o *Oracle) Answer(c ShapeCase) (json.RawMessage, bool) {
 	return raw, ok
 }
 
+// How a fact read treats its window and a cut source.
+const (
+	// readWindowed: over the oracle window, tables included. A source the
+	// provider marks truncated is refused.
+	readWindowed = iota
+	// readCurrent: no window, tables omitted. A truncated source is refused.
+	readCurrent
+	// readCurrentHeldToStore: no window, tables omitted, a truncated source
+	// accepted. With no window the provider's daily series runs over all
+	// time and its row cap marks the whole source truncated, although the
+	// scalar facts come from another query. The caller must hold every fact
+	// it compares against the store rows, so a scalar fact that was cut
+	// shows as a difference with the store.
+	readCurrentHeldToStore
+)
+
 // facts reads one fact kind over the oracle window.
 func (o *Oracle) facts(ctx context.Context, kind, subjectKind string, ids []string) ([]ServedFact, error) {
-	return o.readFacts(ctx, kind, subjectKind, ids, true)
-}
-
-// currentFacts reads the scalar fields of one fact kind with no window: the
-// kind's current answer, tables omitted. It is for the kinds whose ops
-// counterpart takes no window. With no window a daily series runs over all
-// time and the provider's row cap cuts it, so the read is marked truncated;
-// the scalar facts are one per subject or work scope and are not cut by a
-// series. A read at the row cap itself is refused.
-func (o *Oracle) currentFacts(ctx context.Context, kind, subjectKind string, ids []string) ([]ServedFact, error) {
-	return o.readFacts(ctx, kind, subjectKind, ids, false)
+	return o.readFacts(ctx, kind, subjectKind, ids, readWindowed)
 }
 
 // factRowCap is the fact providers' row cap per query.
 const factRowCap = 200
 
-func (o *Oracle) readFacts(ctx context.Context, kind, subjectKind string, ids []string, windowed bool) ([]ServedFact, error) {
+func (o *Oracle) readFacts(ctx context.Context, kind, subjectKind string, ids []string, mode int) ([]ServedFact, error) {
 	var out []ServedFact
 	// A provider's row cap is shared by the subjects of one read: with many
 	// teams in one request the daily series of some are cut or absent. A
@@ -141,7 +157,7 @@ func (o *Oracle) readFacts(ctx context.Context, kind, subjectKind string, ids []
 	for start := 0; start < len(ids); start += chunk {
 		end := min(start+chunk, len(ids))
 		request := FactsRequest{Kinds: []string{kind}, MaxBytes: directread.MaxMaxBytes, Tables: directread.TablesOmit}
-		if windowed {
+		if mode == readWindowed {
 			request.Window = &FactsWindow{Mode: directread.WindowRange, Start: o.Window.Start, End: o.Window.End}
 			request.Tables = directread.TablesInclude
 		}
@@ -162,7 +178,7 @@ func (o *Oracle) readFacts(ctx context.Context, kind, subjectKind string, ids []
 			return nil, fmt.Errorf("read_facts %s: status %s", kind, answer.Status)
 		}
 		for _, row := range answer.Coverage {
-			cut := row.Outcome == directread.OutcomeTruncated && windowed
+			cut := row.Outcome == directread.OutcomeTruncated && mode != readCurrentHeldToStore
 			if row.Outcome == directread.OutcomeUnavailable || row.Outcome == directread.OutcomeWithheldBudget || cut {
 				return nil, fmt.Errorf("read_facts %s: a subject was not measured whole (%s)", kind, row.Outcome)
 			}
@@ -182,6 +198,14 @@ func (o *Oracle) readFacts(ctx context.Context, kind, subjectKind string, ids []
 		if len(answer.Coverage) != end-start {
 			return nil, fmt.Errorf("read_facts %s: %d coverage rows for %d subjects", kind, len(answer.Coverage), end-start)
 		}
+		for _, fact := range answer.Facts {
+			if fact.Kind != kind {
+				return nil, fmt.Errorf("read_facts %s: the answer holds a %s fact", kind, fact.Kind)
+			}
+			if err := checkFactPlan(fact); err != nil {
+				return nil, err
+			}
+		}
 		out = append(out, answer.Facts...)
 	}
 	return out, nil
@@ -193,6 +217,14 @@ func (o *Oracle) Run(ctx context.Context) (*Report, error) {
 		return nil, fmt.Errorf("oracle needs a policy, planes and a store")
 	}
 	if err := o.Window.Validate(); err != nil {
+		return nil, err
+	}
+	if err := checkValuePaths(o.Policy); err != nil {
+		return nil, err
+	}
+	// The providers are built for their field declaration only; nothing is
+	// read through them here.
+	if err := checkFactPlanDeclared(devhealthfacts.NewProviders(nil)); err != nil {
 		return nil, err
 	}
 	shapes, err := Shapes(o.Policy)
@@ -256,15 +288,70 @@ func (o *Oracle) Run(ctx context.Context) (*Report, error) {
 				}
 			}
 		}
-		if pair.Mode == ModeValue && rr.Listener == "served" {
+		if pair.Mode == ModeValue && rr.listenerServed > 0 && rr.listenerDark == 0 {
+			rr.Excluded = excludedPaths(root.Field)
 			if err := pair.compare(ctx, o, rr); err != nil {
 				return nil, fmt.Errorf("root %s: %w", root.Field, err)
 			}
 		}
-		o.temporaryAllowance(rr, root)
+		if err := o.temporaryAllowance(ctx, rr, root, byShape); err != nil {
+			return nil, fmt.Errorf("root %s: %w", root.Field, err)
+		}
+		o.validate(rr, root, pair)
 		sort.Strings(rr.NotJoined)
 	}
 	return report, nil
+}
+
+func named(list []string, name string) bool {
+	for _, item := range list {
+		if item == name {
+			return true
+		}
+	}
+	return false
+}
+
+// validate decides whether the run of a root is a measurement. Every reason
+// it is not goes to RootReport.Invalid, and Report.Err fails on it: a path
+// that did not serve the root, an answer with no leaf, two served paths with
+// nothing compared between them, a value root that compared nothing.
+func (o *Oracle) validate(rr *RootReport, root *directread.GraphQLRootPolicy, pair rootPair) {
+	path := func(name string, served, dark int, declaredDark bool, leaves int) {
+		switch {
+		case served > 0 && dark > 0:
+			rr.invalid("%s served %d cases of the root and was unavailable for %d", name, served, dark)
+		case dark > 0 && !declaredDark:
+			rr.invalid("%s is unavailable for the root and the venue does not declare the root dark there: the path was not measured", name)
+		case served > 0 && declaredDark:
+			rr.invalid("the venue declares the root dark on %s and it is served: remove the declaration", name)
+		case served == 0 && dark == 0:
+			rr.invalid("%s served no case of the root", name)
+		case served > 0 && leaves == 0:
+			rr.invalid("%s served the root and gave no leaf: nothing was measured", name)
+		}
+	}
+	path("graphql_query", rr.listenerServed, rr.listenerDark, named(o.ListenerDark, rr.Root), rr.Leaves)
+	path("run_operation", rr.operationServed, rr.operationDark, named(o.OperationDark, rr.Root), rr.OperationLeaves)
+	if rr.listenerServed == 0 && rr.operationServed == 0 {
+		rr.invalid("no path served the root")
+	}
+	if _, volatile := volatileRoots[rr.Root]; !volatile && rr.listenerServed > 0 && rr.operationServed > 0 && rr.CrossPaths == 0 {
+		rr.invalid("both paths served the root and no leaf was compared between them")
+	}
+	if pair.Mode == ModeValue && rr.listenerServed > 0 && rr.listenerDark == 0 {
+		if rr.Compared == 0 {
+			rr.invalid("a value root compared nothing with the acr facts")
+		}
+		checkTouched(rr)
+	}
+	if rr.listenerServed > 0 || rr.operationServed > 0 {
+		for _, output := range rootOutputs(o.Policy, root) {
+			if !rr.measured[output] {
+				rr.Unmeasured = append(rr.Unmeasured, output)
+			}
+		}
+	}
 }
 
 // runShape runs one shape case and checks shape, echo and limits.
@@ -277,8 +364,10 @@ func (o *Oracle) runShape(ctx context.Context, rr *RootReport, shape Shape, c Sh
 	key := CaseKey(shape, c.Variables)
 	if answer.Call != string(directread.CallServed) {
 		if answer.Call == string(directread.CallOperationUnavailable) {
-			// The root is not enabled on the listener: stated, not compared.
+			// The root is not enabled on the listener: stated here; validate
+			// fails the run unless the venue declares the root dark there.
 			rr.Listener = answer.Call
+			rr.listenerDark++
 			return nil
 		}
 		detail := "call " + answer.Call
@@ -291,6 +380,7 @@ func (o *Oracle) runShape(ctx context.Context, rr *RootReport, shape Shape, c Sh
 		rr.find(Finding{Pair: "shape", Key: key, Detail: detail})
 		return nil
 	}
+	rr.listenerServed++
 	if len(answer.RootFields) != 1 || answer.RootFields[0].Field != shape.Root || answer.RootFields[0].Key != shape.Root || !candidates[answer.RootFields[0].Operation] {
 		rr.find(Finding{Pair: "shape", Key: key, Detail: fmt.Sprintf("echo: root_fields %+v is not one field %s of a candidate operation", answer.RootFields, shape.Root)})
 	}
@@ -306,9 +396,7 @@ func (o *Oracle) runShape(ctx context.Context, rr *RootReport, shape Shape, c Sh
 	for _, problem := range problems {
 		rr.find(Finding{Pair: "shape", Key: key, Detail: problem})
 	}
-	for _, values := range leaves {
-		rr.Leaves += len(values)
-	}
+	rr.Leaves += rr.measure(leaves)
 	return nil
 }
 
@@ -467,10 +555,12 @@ func items(value any) []map[string]any {
 	return out
 }
 
-// leafPair compares one ops leaf with one acr leaf. rel is the declared
+// leafPair compares one ops leaf with one acr leaf. path is the ops output
+// path, or "acr:..." for a check with no ops side. rel is the declared
 // relative tolerance of a float pair (0 = exact).
 func (rr *RootReport) leafPair(pair, key, path string, ops, acr Leaf, opsErr, acrErr error, rel float64) {
 	rr.Compared++
+	rr.touch(path)
 	switch {
 	case opsErr != nil:
 		rr.find(Finding{Pair: pair, Key: key, Path: path, Detail: "ops value: " + opsErr.Error()})

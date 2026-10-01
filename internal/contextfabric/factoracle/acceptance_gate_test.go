@@ -20,7 +20,10 @@ import (
 //   - control: the producer on the reference store. No difference of the
 //     class and no finding: with the input present the fix holds.
 //   - planted: the producer on the planted store. The oracle must report
-//     exactly the one class, and no finding.
+//     exactly the one class, with the values the case expects, and no
+//     finding. The expected values are not read from the oracle's own
+//     witness: they are the effort of the planted work unit, or what the
+//     real producer answers on the two stores.
 //   - in the planted run the shape pass (the wire-shape check that existed
 //     before this oracle) still reports nothing: it cannot see the defect.
 //
@@ -75,20 +78,68 @@ func wantClean(t *testing.T, rr *RootReport, allowed ...Class) {
 	}
 }
 
+// sameThemes reports whether two theme maps hold the same values; a theme
+// that one map lacks is zero there.
+func sameThemes(got, want map[string]float64) bool {
+	for _, theme := range themeKeys(got, want) {
+		if math.Abs(got[theme]-want[theme]) > sumTolerance(got[theme], want[theme]) {
+			return false
+		}
+	}
+	return true
+}
+
+// repositorySum is the acr repository mix of a run, summed per theme.
+func repositorySum(o *Oracle) map[string]float64 {
+	out := map[string]float64{}
+	for _, effort := range o.RepositoryEffort {
+		for theme, value := range effort {
+			out[theme] += value
+		}
+	}
+	return out
+}
+
+func minus(a, b map[string]float64) map[string]float64 {
+	out := map[string]float64{}
+	for _, theme := range themeKeys(a, b) {
+		out[theme] = a[theme] - b[theme]
+	}
+	return out
+}
+
 // wantPlanted requires the planted run to name exactly one class in pair,
-// by a witness that equals the difference, and to have no finding at all:
-// in particular the shape pass, the wire-shape check that existed before the
-// oracle, ran and saw nothing.
-func wantPlanted(t *testing.T, rr *RootReport, pair string, want Class) {
+// once, by a witness that equals the difference, with the values the case
+// expects, and to have no finding at all: in particular the shape pass, the
+// wire-shape check that existed before the oracle, ran and saw nothing.
+func wantPlanted(t *testing.T, rr *RootReport, pair string, want Class, values map[string]float64) {
 	t.Helper()
 	got := classesOf(rr, pair)
 	if len(got) != 1 || got[0] != want {
 		t.Fatalf("planted run names %v in pair %s, want exactly [%s]; findings: %+v", got, pair, want, rr.Findings)
 	}
+	nonZero := 0.0
+	for _, v := range values {
+		nonZero += math.Abs(v)
+	}
+	if nonZero == 0 {
+		t.Fatalf("the case expects a difference of zero: it would pin nothing")
+	}
+	named := 0
 	for _, d := range rr.Differences {
-		if d.Pair == pair && d.Class == want && !d.Exact {
+		if d.Pair != pair || d.Class != want {
+			continue
+		}
+		named++
+		if !d.Exact {
 			t.Errorf("class %s is named by a witness that does not equal the difference", want)
 		}
+		if !sameThemes(d.Values, values) {
+			t.Errorf("class %s is named with values %s, the case expects %s", want, formatThemes(d.Values), formatThemes(values))
+		}
+	}
+	if named != 1 {
+		t.Errorf("class %s is named %d times in pair %s, want once", want, named, pair)
 	}
 	if len(rr.Findings) > 0 {
 		t.Errorf("planted run has findings beside the named class: %+v", rr.Findings)
@@ -192,16 +243,17 @@ func acceptanceGateMembershipScope(t *testing.T) {
 	if store.scopeRun == "" || outside <= 0 {
 		t.Fatal("the extract has no complete membership run with work units outside it: the gate case cannot be built")
 	}
-	_, control := gateRun(t, manifest, recording, extract, extract)
+	controlOracle, control := gateRun(t, manifest, recording, extract, extract)
 	wantClean(t, control, ClassAttributionBasis)
 
 	// Plant: the membership run markers are gone, so the scope filter of the
 	// current reader keeps every work unit, as the reader did before it had
-	// the filter.
+	// the filter. The expected values are what the real producer gains from
+	// the control store to the planted one.
 	planted := extract.Clone()
 	planted.Tables[tableWorkUnitMembershipRuns] = nil
-	_, rr := gateRun(t, manifest, recording, extract, planted)
-	wantPlanted(t, rr, "investment_org", ClassMembershipScope)
+	plantedOracle, rr := gateRun(t, manifest, recording, extract, planted)
+	wantPlanted(t, rr, "investment_org", ClassMembershipScope, minus(repositorySum(plantedOracle), repositorySum(controlOracle)))
 }
 
 func acceptanceGateSupersession(t *testing.T) {
@@ -236,7 +288,9 @@ func acceptanceGateSupersession(t *testing.T) {
 	planted := reference.Clone()
 	planted.Tables[tableWorkUnitSupersessions] = nil
 	_, rr := gateRun(t, manifest, recording, reference, planted)
-	wantPlanted(t, rr, "investment_org", ClassSupersession)
+	// The superseded unit is a copy of a unit whose whole effort reaches
+	// organization repositories: read as live, it adds exactly its effort.
+	wantPlanted(t, rr, "investment_org", ClassSupersession, unitThemeEffort(t, source))
 }
 
 func acceptanceGateNullableArgmax(t *testing.T) {
@@ -251,7 +305,12 @@ func acceptanceGateNullableArgmax(t *testing.T) {
 	// Reference: the unit gets a newer generation with no pull request
 	// reference and a NULL repo_id. The ops organization value reads neither,
 	// so the recorded reply stands; the current reader keeps the NULL and the
-	// unit reaches no repository.
+	// unit reaches no repository. This control run is the one that puts the
+	// NULL in front of the reader's own SQL (argMax over a tuple): the seeded
+	// store holds both generations of the unit (Seed keeps every row), so a
+	// reader whose argMax skips the NULL revives the older repository here,
+	// and the control then names the class and fails. The hand-run kill proof
+	// of that SQL clause is in the pull request's test evidence.
 	reference := extract.Clone()
 	newer := cloneRow(source)
 	newer["computed_at"], newer["repo_id"], newer["structural_evidence_json"] = later, nil, `{"issues":[],"prs":[]}`
@@ -268,12 +327,15 @@ func acceptanceGateNullableArgmax(t *testing.T) {
 	}
 
 	// Plant: the newest generation names the repository of the older one,
-	// which is what an argMax that skips NULL hands the reader.
+	// which is what an argMax that skips NULL hands the reader. The data
+	// layer cannot make the current SQL skip a NULL, so this run shows that
+	// the comparator names the class for that answer, and with which values;
+	// the SQL itself is exercised by the control run above.
 	planted := reference.Clone()
 	rows := planted.Tables[tableWorkUnitInvestments]
 	rows[len(rows)-1]["repo_id"] = source["repo_id"]
 	_, rr := gateRun(t, manifest, recording, reference, planted)
-	wantPlanted(t, rr, "investment_org", ClassNullableArgmax)
+	wantPlanted(t, rr, "investment_org", ClassNullableArgmax, unitThemeEffort(t, source))
 }
 
 func acceptanceGateNullRepoID(t *testing.T) {
@@ -352,7 +414,9 @@ func acceptanceGateNullRepoID(t *testing.T) {
 		planted.Tables[tableTeamRepoOwnership][i]["repo_full_name"] = name + "-moved"
 	}
 	_, rr := gateRun(t, manifest, recording, reference, planted)
-	wantPlanted(t, rr, "investment_team_rollup", ClassNullRepoID)
+	// The team loses exactly the mix of the repository, as the real producer
+	// gave it on the clean store.
+	wantPlanted(t, rr, "investment_team_rollup", ClassNullRepoID, cleanOracle.RepositoryEffort[repo])
 	if got := classesOf(rr, "investment_org"); len(got) != 0 && !(len(got) == 1 && got[0] == ClassAttributionBasis) {
 		t.Errorf("the organization pair must not change when only ownership changes, got %v", got)
 	}

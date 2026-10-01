@@ -442,6 +442,12 @@ type SeedTarget struct {
 }
 
 func (t SeedTarget) exec(ctx context.Context, database, statement string, body io.Reader) error {
+	_, err := t.query(ctx, database, statement, body)
+	return err
+}
+
+// query runs one statement and returns the text of the answer.
+func (t SeedTarget) query(ctx context.Context, database, statement string, body io.Reader) (string, error) {
 	query := url.Values{}
 	query.Set("query", statement)
 	if database != "" {
@@ -452,7 +458,7 @@ func (t SeedTarget) exec(ctx context.Context, database, statement string, body i
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(t.BaseURL, "/")+"/?"+query.Encode(), body)
 	if err != nil {
-		return err
+		return "", err
 	}
 	req.SetBasicAuth(t.User, t.Password)
 	client := t.Client
@@ -461,20 +467,27 @@ func (t SeedTarget) exec(ctx context.Context, database, statement string, body i
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	text, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 	if resp.StatusCode != http.StatusOK {
-		text, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return fmt.Errorf("clickhouse answered %d: %s", resp.StatusCode, strings.TrimSpace(string(text)))
+		return "", fmt.Errorf("clickhouse answered %d: %s", resp.StatusCode, strings.TrimSpace(string(text)))
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
-	return nil
+	return strings.TrimSpace(string(text)), nil
 }
 
 // Seed creates the database and the extract tables, with the declared
 // production types and engines, and loads the rows. ClickHouse parses its own
 // JSONEachRow, so no value passes through a Go type on the way in.
+//
+// The seeded table must hold every row of the extract, as the venue's parts
+// held them when they were read. A ReplacingMergeTree collapses the rows of
+// one sorting key inside an inserted block (optimize_on_insert), which would
+// drop every older generation of a work unit before a reader sees it: the
+// insert turns that off, and the row count is read back. A table with one
+// part is not merged afterwards.
 func (e *Extract) Seed(ctx context.Context, target SeedTarget) error {
 	if err := target.exec(ctx, "", "CREATE DATABASE "+target.Database, nil); err != nil {
 		return err
@@ -499,8 +512,15 @@ func (e *Extract) Seed(ctx context.Context, target SeedTarget) error {
 			body.Write(encoded)
 			body.WriteByte('\n')
 		}
-		if err := target.exec(ctx, target.Database, "INSERT INTO "+table+" FORMAT JSONEachRow", &body); err != nil {
+		if err := target.exec(ctx, target.Database, "INSERT INTO "+table+" SETTINGS optimize_on_insert = 0 FORMAT JSONEachRow", &body); err != nil {
 			return fmt.Errorf("table %s: %w", table, err)
+		}
+		count, err := target.query(ctx, target.Database, "SELECT count() FROM "+table, nil)
+		if err != nil {
+			return fmt.Errorf("table %s: %w", table, err)
+		}
+		if count != fmt.Sprint(len(rows)) {
+			return fmt.Errorf("table %s holds %s rows after the load, the extract has %d: the seeded store is not the extract", table, count, len(rows))
 		}
 	}
 	return nil

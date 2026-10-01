@@ -1,11 +1,11 @@
 {
-  "captured_at": "2026-10-01T18:06:45Z",
+  "captured_at": "2026-10-01T20:40:52Z",
   "window": {
     "start": "2026-09-01T00:00:00Z",
     "end": "2026-10-02T00:00:00Z"
   },
   "fixture_org": "0f0f0f0f-0000-4000-8000-00000000f4c7",
-  "ops_build": "dev-health-ops 072c6768ba (bigboy MCP class proof 2026-10-01T15:09:03Z); query-api image ghcr.io/full-chaos/dev-health-go-dho@id:sha256:8591ac69d622a72af68b9b2df0e4bdfbf5030cfd154a5460fc050048b6623a3e",
+  "ops_build": "dev-health-ops 31a54720edbe (bigboy cut 2, 2026-10-01T18:13Z); query-api image dev-health-go-dho digest f296d57da9a8 (arm64 child 15fbf5182399)",
   "acr_build": "dev-health-acr e3c1b332; acr-api image ghcr.io/full-chaos/dev-health-acr/acr-api@sha256:ea7d7f16178bedf70188df89599e5abd8967747f8e708ae89ed180e2382a8a4b",
   "schema_digest": "sha256:dd83956f18b52a3acf89e73e1f25b0dcf25df706d90eca49c5b66f8b8994f779",
   "venue_fact_query_versions": [
@@ -15,11 +15,11 @@
   "rows": {
     "capacity_forecasts": 40,
     "compounding_risk_daily": 97,
-    "estimate_coverage_metrics_daily": 567,
+    "estimate_coverage_metrics_daily": 635,
     "repos": 11,
     "team_repo_ownership": 18,
     "teams": 17,
-    "work_item_metrics_daily": 477,
+    "work_item_metrics_daily": 510,
     "work_unit_investments": 2609,
     "work_unit_membership": 1351,
     "work_unit_membership_runs": 2,
@@ -464,7 +464,7 @@
         "input": {
           "historyDays": 90,
           "simulations": 1000,
-          "teamId": "team:team-3aa00a20190feabf"
+          "teamId": "team:team-e62ea33c034087cd"
         }
       }
     },
@@ -615,7 +615,7 @@
       "variables": {
         "input": {
           "sinceDate": "2026-09-01",
-          "teamId": "team:team-3aa00a20190feabf",
+          "teamId": "team:team-e62ea33c034087cd",
           "untilDate": "2026-10-01"
         }
       }
@@ -625,7 +625,7 @@
       "variables": {
         "input": {
           "sinceDate": "2026-09-01",
-          "teamId": "team:team-3aa00a20190feabf",
+          "teamId": "team:team-e62ea33c034087cd",
           "untilDate": "2026-10-01"
         }
       }
@@ -635,7 +635,7 @@
       "variables": {
         "input": {
           "sinceDate": "2026-09-01",
-          "teamId": "team:team-3aa00a20190feabf",
+          "teamId": "team:team-e62ea33c034087cd",
           "untilDate": "2026-10-01"
         }
       }
@@ -886,7 +886,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-3aa00a20190feabf"
+            "team:team-e62ea33c034087cd"
           ]
         }
       }
@@ -897,7 +897,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-3aa00a20190feabf"
+            "team:team-e62ea33c034087cd"
           ]
         }
       }
@@ -908,7 +908,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-3aa00a20190feabf"
+            "team:team-e62ea33c034087cd"
           ]
         }
       }
@@ -919,7 +919,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-3aa00a20190feabf"
+            "team:team-e62ea33c034087cd"
           ]
         }
       }
@@ -930,7 +930,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-3aa00a20190feabf"
+            "team:team-e62ea33c034087cd"
           ]
         }
       }
@@ -941,7 +941,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-3aa00a20190feabf"
+            "team:team-e62ea33c034087cd"
           ]
         }
       }
@@ -952,7 +952,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-3aa00a20190feabf"
+            "team:team-e62ea33c034087cd"
           ]
         }
       }
@@ -963,7 +963,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-3aa00a20190feabf"
+            "team:team-e62ea33c034087cd"
           ]
         }
       }
@@ -974,7 +974,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-3aa00a20190feabf"
+            "team:team-e62ea33c034087cd"
           ]
         }
       }
@@ -1051,8 +1051,8 @@
   "residual": {
     "feature_delivery": 0.004845833405852318,
     "maintenance": 0.0027481766883283854,
-    "operational": 0.0002446650469209999,
-    "quality": 0.002130022563505918,
+    "operational": 0.00024466507602483034,
+    "quality": 0.002130022505298257,
     "risk": 0.00047797006845939904
   },
   "expect": {
@@ -1068,8 +1068,28 @@
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 6,
+      "operation_leaves": 192,
       "cross_paths": 192,
-      "cross_matches": 192
+      "cross_matches": 192,
+      "differences": [],
+      "unmeasured": [
+        "analytics.sankey.__typename",
+        "analytics.sankey.coverage.__typename",
+        "analytics.sankey.coverage.repoCoverage",
+        "analytics.sankey.coverage.teamCoverage",
+        "analytics.sankey.edges[*].__typename",
+        "analytics.sankey.edges[*].source",
+        "analytics.sankey.edges[*].target",
+        "analytics.sankey.edges[*].value",
+        "analytics.sankey.nodes[*].__typename",
+        "analytics.sankey.nodes[*].dimension",
+        "analytics.sankey.nodes[*].id",
+        "analytics.sankey.nodes[*].label",
+        "analytics.sankey.nodes[*].value",
+        "analytics.sankey.unit"
+      ],
+      "code_read": [],
+      "invalid": []
     },
     "capacityForecast": {
       "mode": "shape",
@@ -1085,8 +1105,20 @@
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 1,
+      "operation_leaves": 22,
       "cross_paths": 0,
-      "cross_matches": 0
+      "cross_matches": 0,
+      "differences": [
+        {
+          "pair": "window_probe",
+          "key": "capacityForecast.backlogSize",
+          "class": "latest_day_vs_window",
+          "exact": true
+        }
+      ],
+      "unmeasured": [],
+      "code_read": [],
+      "invalid": []
     },
     "capacityForecasts": {
       "mode": "value",
@@ -1100,8 +1132,13 @@
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 1,
+      "operation_leaves": 967,
       "cross_paths": 967,
-      "cross_matches": 967
+      "cross_matches": 967,
+      "differences": [],
+      "unmeasured": [],
+      "code_read": [],
+      "invalid": []
     },
     "catalog": {
       "mode": "value",
@@ -1115,8 +1152,13 @@
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 6,
+      "operation_leaves": 201,
       "cross_paths": 201,
-      "cross_matches": 201
+      "cross_matches": 201,
+      "differences": [],
+      "unmeasured": [],
+      "code_read": [],
+      "invalid": []
     },
     "cognitiveLoad": {
       "mode": "shape",
@@ -1130,8 +1172,21 @@
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 1,
+      "operation_leaves": 4,
       "cross_paths": 4,
-      "cross_matches": 4
+      "cross_matches": 4,
+      "differences": [],
+      "unmeasured": [
+        "cognitiveLoad.signals[*].__typename",
+        "cognitiveLoad.signals[*].afterHoursCommitRatio",
+        "cognitiveLoad.signals[*].contextSpreadCount",
+        "cognitiveLoad.signals[*].day",
+        "cognitiveLoad.signals[*].prInterruptionLoad",
+        "cognitiveLoad.signals[*].reviewRequestLoad",
+        "cognitiveLoad.signals[*].weekendCommitRatio"
+      ],
+      "code_read": [],
+      "invalid": []
     },
     "complexityTimeseries": {
       "mode": "shape",
@@ -1145,8 +1200,13 @@
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 1,
+      "operation_leaves": 902,
       "cross_paths": 902,
-      "cross_matches": 902
+      "cross_matches": 902,
+      "differences": [],
+      "unmeasured": [],
+      "code_read": [],
+      "invalid": []
     },
     "compoundingRisk": {
       "mode": "value",
@@ -1158,15 +1218,20 @@
       "by_class": {},
       "findings": [],
       "not_joined": [
-        "repository: a health fact states no severity_as_of day",
-        "repository: a health fact states no severity_as_of day",
-        "repository: a health fact states no severity_as_of day",
-        "team: a health fact states no severity_as_of day"
+        "repository: a health fact states no severity_as_of day (no_known_severity_breakdown_rows)",
+        "repository: a health fact states no severity_as_of day (no_known_severity_breakdown_rows)",
+        "repository: a health fact states no severity_as_of day (no_known_severity_breakdown_rows)",
+        "team: a health fact states no severity_as_of day (known_severity_stale_beyond_freshness_window)"
       ],
       "run_operation": "served",
       "operations_run": 2,
+      "operation_leaves": 352,
       "cross_paths": 350,
-      "cross_matches": 350
+      "cross_matches": 350,
+      "differences": [],
+      "unmeasured": [],
+      "code_read": [],
+      "invalid": []
     },
     "hotspots": {
       "mode": "shape",
@@ -1180,8 +1245,13 @@
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 1,
+      "operation_leaves": 551,
       "cross_paths": 551,
-      "cross_matches": 551
+      "cross_matches": 551,
+      "differences": [],
+      "unmeasured": [],
+      "code_read": [],
+      "invalid": []
     },
     "securityAlerts": {
       "mode": "shape",
@@ -1195,8 +1265,13 @@
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 1,
+      "operation_leaves": 97,
       "cross_paths": 0,
-      "cross_matches": 0
+      "cross_matches": 0,
+      "differences": [],
+      "unmeasured": [],
+      "code_read": [],
+      "invalid": []
     },
     "securityOverview": {
       "mode": "shape",
@@ -1210,19 +1285,24 @@
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 1,
+      "operation_leaves": 129,
       "cross_paths": 129,
-      "cross_matches": 129
+      "cross_matches": 129,
+      "differences": [],
+      "unmeasured": [],
+      "code_read": [],
+      "invalid": []
     },
     "throughputForecast": {
       "mode": "value",
       "listener": "served",
       "shapes_run": 9,
       "leaves": 124,
-      "compared": 113,
-      "matches": 112,
+      "compared": 188,
+      "matches": 187,
       "by_class": {
         "forecast_by_design": 1,
-        "latest_day_vs_window": 1
+        "latest_day_vs_window": 4
       },
       "findings": [
         {
@@ -1235,8 +1315,44 @@
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 1,
+      "operation_leaves": 62,
       "cross_paths": 60,
-      "cross_matches": 60
+      "cross_matches": 60,
+      "differences": [
+        {
+          "pair": "readiness",
+          "key": "all teams",
+          "class": "forecast_by_design",
+          "exact": true
+        },
+        {
+          "pair": "window_probe",
+          "key": "throughputForecast.backlogSize",
+          "class": "latest_day_vs_window",
+          "exact": true
+        },
+        {
+          "pair": "window_probe",
+          "key": "throughputForecast.estimateCoverage",
+          "class": "latest_day_vs_window",
+          "exact": true
+        },
+        {
+          "pair": "window_probe",
+          "key": "throughputForecast.staleWip",
+          "class": "latest_day_vs_window",
+          "exact": true
+        },
+        {
+          "pair": "window_probe",
+          "key": "throughputForecast.wipCongestion",
+          "class": "latest_day_vs_window",
+          "exact": true
+        }
+      ],
+      "unmeasured": [],
+      "code_read": [],
+      "invalid": []
     },
     "workGraphArtifacts": {
       "mode": "shape",
@@ -1250,8 +1366,13 @@
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 1,
+      "operation_leaves": 252,
       "cross_paths": 252,
-      "cross_matches": 252
+      "cross_matches": 252,
+      "differences": [],
+      "unmeasured": [],
+      "code_read": [],
+      "invalid": []
     },
     "workGraphEdges": {
       "mode": "shape",
@@ -1265,8 +1386,13 @@
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 1,
+      "operation_leaves": 758,
       "cross_paths": 758,
-      "cross_matches": 758
+      "cross_matches": 758,
+      "differences": [],
+      "unmeasured": [],
+      "code_read": [],
+      "invalid": []
     },
     "workGraphFlow": {
       "mode": "shape",
@@ -1275,15 +1401,25 @@
       "leaves": 68,
       "compared": 0,
       "matches": 0,
-      "by_class": {
-        "latest_day_vs_window": 1
-      },
+      "by_class": {},
       "findings": [],
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 1,
+      "operation_leaves": 34,
       "cross_paths": 34,
-      "cross_matches": 34
+      "cross_matches": 34,
+      "differences": [],
+      "unmeasured": [],
+      "code_read": [
+        "class latest_day_vs_window, workGraphFlow.rows[*].inflow, workGraphFlow.rows[*].outflow: read from the resolver code, not measured by this run (the operation takes no window argument)"
+      ],
+      "invalid": []
     }
-  }
+  },
+  "listener_dark": [
+    "securityAlerts",
+    "capacityForecast"
+  ],
+  "operation_dark": []
 }

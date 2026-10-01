@@ -36,6 +36,10 @@ type VenueConfig struct {
 	OpsBuild string
 	// AcrBuild names the acr build the venue runs.
 	AcrBuild string
+	// ListenerDark and OperationDark name the root fields the venue does not
+	// serve through graphql_query and through run_operation (Oracle).
+	ListenerDark  []string
+	OperationDark []string
 }
 
 type clickHouseQuerier struct{ conn clickhouse.Conn }
@@ -109,7 +113,9 @@ type LiveRun struct {
 // RunLive runs the oracle on the venue: both planes through the hosted MCP
 // server, the reference store read with SELECT statements from the venue
 // ClickHouse. The store must not change while the run reads it: the extract
-// is read before and after, and a run over a store that moved is refused.
+// is read before and after, and a run over a store that moved is refused
+// (the error names the tables). Rows a job writes and rows a background merge
+// removes both read as a store that moved.
 func RunLive(ctx context.Context, cfg VenueConfig) (*LiveRun, error) {
 	if cfg.MCPURL == "" || cfg.TokenFile == "" || cfg.ClickHouseDSNFile == "" || cfg.OrgID == "" {
 		return nil, fmt.Errorf("venue configuration is incomplete")
@@ -124,7 +130,8 @@ func RunLive(ctx context.Context, cfg VenueConfig) (*LiveRun, error) {
 	}
 	defer func() { _ = conn.Close() }()
 	db := clickHouseQuerier{conn: conn}
-	const attempts = 3
+	const attempts = 2
+	var moved []string
 	for attempt := 1; attempt <= attempts; attempt++ {
 		before, err := CaptureExtract(ctx, db, cfg.OrgID, cfg.Window)
 		if err != nil {
@@ -134,7 +141,8 @@ func RunLive(ctx context.Context, cfg VenueConfig) (*LiveRun, error) {
 		if err != nil {
 			return nil, err
 		}
-		oracle := &Oracle{Policy: policy, Planes: &VenuePlanes{URL: cfg.MCPURL, TokenFile: cfg.TokenFile}, Store: store, Window: cfg.Window}
+		oracle := &Oracle{Policy: policy, Planes: &VenuePlanes{URL: cfg.MCPURL, TokenFile: cfg.TokenFile}, Store: store, Window: cfg.Window,
+			ListenerDark: cfg.ListenerDark, OperationDark: cfg.OperationDark}
 		report, err := oracle.Run(ctx)
 		if err != nil {
 			return nil, err
@@ -143,11 +151,40 @@ func RunLive(ctx context.Context, cfg VenueConfig) (*LiveRun, error) {
 		if err != nil {
 			return nil, err
 		}
-		if extractDigest(before) == extractDigest(after) {
+		if moved = movedTables(before, after); len(moved) == 0 {
 			return &LiveRun{Report: report, Oracle: oracle, Extract: before}, nil
 		}
 	}
-	return nil, fmt.Errorf("the venue store changed during each of %d runs; no run is reported", attempts)
+	return nil, fmt.Errorf("the venue store changed during each of %d runs (last: %s); no run is reported: run again when no job writes these tables", attempts, strings.Join(moved, ", "))
+}
+
+// movedTables names the extract tables whose rows are not the same in the
+// two extracts.
+func movedTables(before, after *Extract) []string {
+	tables := map[string]bool{}
+	for table := range before.Tables {
+		tables[table] = true
+	}
+	for table := range after.Tables {
+		tables[table] = true
+	}
+	var moved []string
+	for _, table := range sortedKeys(tables) {
+		if tableDigest(before.Tables[table]) != tableDigest(after.Tables[table]) {
+			moved = append(moved, table)
+		}
+	}
+	return moved
+}
+
+func tableDigest(rows []Row) string {
+	lines := make([]string, 0, len(rows))
+	for _, row := range rows {
+		encoded, _ := json.Marshal(row)
+		lines = append(lines, string(encoded))
+	}
+	sort.Strings(lines)
+	return strings.Join(lines, "\n")
 }
 
 func extractDigest(e *Extract) string {
@@ -158,13 +195,7 @@ func extractDigest(e *Extract) string {
 	sort.Strings(tables)
 	var all []string
 	for _, table := range tables {
-		lines := make([]string, 0, len(e.Tables[table]))
-		for _, row := range e.Tables[table] {
-			encoded, _ := json.Marshal(row)
-			lines = append(lines, string(encoded))
-		}
-		sort.Strings(lines)
-		all = append(all, table+"\n"+strings.Join(lines, "\n"))
+		all = append(all, table+"\n"+tableDigest(e.Tables[table]))
 	}
 	return strings.Join(all, "\n\n")
 }
@@ -180,22 +211,57 @@ type RootExpectation struct {
 	ByClass   map[Class]int `json:"by_class"`
 	Findings  []Finding     `json:"findings"`
 	NotJoined []string      `json:"not_joined"`
-	// RunOperation, OperationsRun, CrossPaths and CrossMatches are the
-	// run_operation pass and its compare with graphql_query.
-	RunOperation  string `json:"run_operation"`
-	OperationsRun int    `json:"operations_run"`
-	CrossPaths    int    `json:"cross_paths"`
-	CrossMatches  int    `json:"cross_matches"`
+	// RunOperation, OperationsRun, OperationLeaves, CrossPaths and
+	// CrossMatches are the run_operation pass and its compare with
+	// graphql_query.
+	RunOperation    string `json:"run_operation"`
+	OperationsRun   int    `json:"operations_run"`
+	OperationLeaves int    `json:"operation_leaves"`
+	CrossPaths      int    `json:"cross_paths"`
+	CrossMatches    int    `json:"cross_matches"`
+	// Differences pins every named difference with its key and its values,
+	// so a class that is named with other values is not the pinned outcome.
+	Differences []PinnedDifference `json:"differences"`
+	// Unmeasured, CodeRead and Invalid are the root's lists of the same name.
+	Unmeasured []string `json:"unmeasured"`
+	CodeRead   []string `json:"code_read"`
+	Invalid    []string `json:"invalid"`
+}
+
+// PinnedDifference is the pinned form of a Difference.
+type PinnedDifference struct {
+	Pair   string             `json:"pair"`
+	Key    string             `json:"key"`
+	Class  Class              `json:"class"`
+	Exact  bool               `json:"exact"`
+	Values map[string]float64 `json:"values,omitempty"`
 }
 
 // Expectation summarizes a root report for pinning.
 func Expectation(rr *RootReport) RootExpectation {
 	out := RootExpectation{Mode: rr.Mode, Listener: rr.Listener, ShapesRun: rr.ShapesRun, Leaves: rr.Leaves, Compared: rr.Compared,
 		Matches: rr.Matches, ByClass: map[Class]int{}, Findings: []Finding{}, NotJoined: []string{},
-		RunOperation: rr.RunOperation, OperationsRun: rr.OperationsRun, CrossPaths: rr.CrossPaths, CrossMatches: rr.CrossMatches}
+		RunOperation: rr.RunOperation, OperationsRun: rr.OperationsRun, OperationLeaves: rr.OperationLeaves, CrossPaths: rr.CrossPaths, CrossMatches: rr.CrossMatches,
+		Differences: []PinnedDifference{}, Unmeasured: []string{}, CodeRead: []string{}, Invalid: []string{}}
 	for class, n := range rr.ByClass {
 		out.ByClass[class] = n
 	}
+	for _, d := range rr.Differences {
+		out.Differences = append(out.Differences, PinnedDifference{Pair: d.Pair, Key: d.Key, Class: d.Class, Exact: d.Exact, Values: d.Values})
+	}
+	sort.SliceStable(out.Differences, func(i, j int) bool {
+		a, b := out.Differences[i], out.Differences[j]
+		if a.Pair != b.Pair {
+			return a.Pair < b.Pair
+		}
+		if a.Class != b.Class {
+			return a.Class < b.Class
+		}
+		return a.Key < b.Key
+	})
+	out.Unmeasured = append(out.Unmeasured, rr.Unmeasured...)
+	out.CodeRead = append(out.CodeRead, rr.CodeRead...)
+	out.Invalid = append(out.Invalid, rr.Invalid...)
 	for _, f := range rr.Findings {
 		// The key of an ops call holds a digest of the venue variables.
 		if strings.Contains(f.Key, "#") {
@@ -232,6 +298,11 @@ type Manifest struct {
 	Residual map[string]float64 `json:"residual"`
 	// Expect is the venue outcome per root.
 	Expect map[string]RootExpectation `json:"expect"`
+	// ListenerDark and OperationDark are the root fields the venue did not
+	// serve through graphql_query and through run_operation, as the capture
+	// was told (VenueConfig).
+	ListenerDark  []string `json:"listener_dark"`
+	OperationDark []string `json:"operation_dark"`
 }
 
 // Capture file names under the capture directory.
@@ -250,6 +321,10 @@ func Capture(ctx context.Context, cfg VenueConfig, dir string) (*LiveRun, error)
 	run, err := RunLive(ctx, cfg)
 	if err != nil {
 		return nil, err
+	}
+	// A run that is not a measurement is not recorded.
+	if invalid := run.Report.Invalid(); len(invalid) > 0 {
+		return run, fmt.Errorf("the venue run is not a measurement; nothing was written: %s", strings.Join(invalid, "; "))
 	}
 	scrubber, err := NewScrubber(cfg.OrgID)
 	if err != nil {
@@ -348,6 +423,7 @@ func Capture(ctx context.Context, cfg VenueConfig, dir string) (*LiveRun, error)
 		SchemaDigest: run.Oracle.Policy.Catalogue().SchemaDigest(), FactQueryVersion: devhealthfacts.QueryVersion,
 		VenueFactQueryVersions: sortedKeys(run.Oracle.FactVersions),
 		Rows:                   map[string]int{}, Residual: run.Oracle.Residual, Expect: map[string]RootExpectation{},
+		ListenerDark: append([]string{}, cfg.ListenerDark...), OperationDark: append([]string{}, cfg.OperationDark...),
 	}
 	for _, c := range generated {
 		manifest.ShapeCases = append(manifest.ShapeCases, ShapeCase{ShapeID: c.ShapeID, Variables: scrubVariables(scrubber, c.Variables)})

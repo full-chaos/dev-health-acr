@@ -6,9 +6,21 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
+
+// rootList reads a comma-separated list of root fields.
+func rootList(name string) []string {
+	var out []string
+	for _, item := range strings.Split(os.Getenv(name), ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
+}
 
 // venueConfig reads the venue from the environment. A missing value fails
 // the run: a live run that did not happen is never a pass.
@@ -35,6 +47,9 @@ func venueConfig(t *testing.T) VenueConfig {
 		OrgID:    need("ACR_O4_ORG_ID"),
 		Window:   Window{Start: end.Add(-MaxWindowDays * 24 * time.Hour), End: end},
 		OpsBuild: os.Getenv("ACR_O4_OPS_BUILD"), AcrBuild: os.Getenv("ACR_O4_ACR_BUILD"),
+		// The roots the venue is known not to serve on a path. A root that is
+		// unavailable and not named here fails the run.
+		ListenerDark: rootList("ACR_O4_LISTENER_DARK"), OperationDark: rootList("ACR_O4_OPERATION_DARK"),
 	}
 }
 
@@ -54,7 +69,9 @@ func logRun(t *testing.T, run *LiveRun) {
 
 // TestVenueLive is the live mode: both planes on the venue. Findings are
 // reported, not failed: they are differences to file, and the run measured
-// them. An expired temporary allowance fails the run.
+// them. The run fails when it is not a measurement (Report.Invalid: a path
+// that did not serve a root and is not declared dark, an answer with no leaf,
+// a value root that compared nothing) and when a temporary allowance expired.
 func TestVenueLive(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 9*time.Minute)
 	defer cancel()
@@ -73,8 +90,13 @@ func TestVenueCapture(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 9*time.Minute)
 	defer cancel()
 	run, err := Capture(ctx, venueConfig(t), "testdata/venue")
+	if run != nil {
+		logRun(t, run)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	logRun(t, run)
+	if err := run.Report.Err(); err != nil {
+		t.Fatal(err)
+	}
 }

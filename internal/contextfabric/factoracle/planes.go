@@ -232,7 +232,9 @@ type Recording struct {
 // run_operation calls (both are POST /query with the internal headers). It
 // answers one armed case at a time with the reply the real listener gave; a
 // request with no armed case, or for another root field, is a failure and is
-// answered with 500.
+// answered with 500. It keeps the root field arguments (variables resolved)
+// and the selection of the last request, so the caller can hold the request
+// the runner sent against the case the reply was recorded for (boundRequest).
 type ReplayListener struct {
 	mu       sync.Mutex
 	armed    *RecordedReply
@@ -240,6 +242,210 @@ type ReplayListener struct {
 	orgID    string
 	requests int
 	failures []string
+
+	lastArguments map[string]any
+	lastSelection []string
+}
+
+// last returns the root field arguments and the selected leaf paths of the
+// last request.
+func (l *ReplayListener) last() (arguments map[string]any, selection []string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.lastArguments, append([]string(nil), l.lastSelection...)
+}
+
+// selectionPaths lists the leaf fields of a selection as dotted paths.
+func selectionPaths(prefix string, set ast.SelectionSet) []string {
+	var out []string
+	for _, selection := range set {
+		field, ok := selection.(*ast.Field)
+		if !ok {
+			out = append(out, prefix+".(fragment)")
+			continue
+		}
+		path := prefix + "." + field.Name
+		if prefix == "" {
+			path = field.Name
+		}
+		if len(field.SelectionSet) == 0 {
+			out = append(out, path)
+			continue
+		}
+		out = append(out, selectionPaths(path, field.SelectionSet)...)
+	}
+	return out
+}
+
+// flattenVariables lists the leaves of a variable value by path. A list of
+// objects is walked item by item ("[*]" in the path, the item number in the
+// key); any other list is one leaf.
+func flattenVariables(prefix, key string, value any, out map[string]variableLeaf) {
+	switch v := value.(type) {
+	case map[string]any:
+		for name, item := range v {
+			path, itemKey := name, name
+			if prefix != "" {
+				path, itemKey = prefix+"."+name, key+"."+name
+			}
+			flattenVariables(path, itemKey, item, out)
+		}
+	case []any:
+		objects := len(v) > 0
+		for _, item := range v {
+			if _, isObject := item.(map[string]any); !isObject {
+				objects = false
+			}
+		}
+		if !objects {
+			out[key] = variableLeaf{Path: prefix, Value: value}
+			return
+		}
+		for i, item := range v {
+			flattenVariables(prefix+"[*]", fmt.Sprintf("%s[%d]", key, i), item, out)
+		}
+	default:
+		out[key] = variableLeaf{Path: prefix, Value: value}
+	}
+}
+
+type variableLeaf struct {
+	// Path is the policy path of the leaf ("[*]" for a list item).
+	Path  string
+	Value any
+}
+
+// opsForm gives a client value the form acr sends to ops: a subject id loses
+// its acr prefix where the policy says so.
+func opsForm(rule directread.VariableRule, value any) any {
+	if rule.Subject == nil || rule.Subject.AcrPrefix == "" {
+		return value
+	}
+	switch v := value.(type) {
+	case string:
+		return strings.TrimPrefix(v, rule.Subject.AcrPrefix)
+	case []any:
+		out := make([]any, len(v))
+		for i, item := range v {
+			out[i] = opsForm(rule, item)
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+// boundRequest holds the request a runner sent to the listener against the
+// case it was sent for: it selects exactly the leaves of the shape, every
+// variable the client set arrives with the client's value, and a variable the
+// client did not set is one acr itself sets (the caller's organization, or a
+// forced value). A runner that drops, adds or changes a variable or a field
+// would else be answered with the recorded reply of the case it was meant to
+// send. arguments are the arguments of the root field the listener received,
+// variables resolved: graphql_query rebuilds the query (it renames variables
+// and may write a value into the query text), run_operation sends the
+// registered document, and both must give the root field the same arguments.
+//
+// registered is true for run_operation: its request must select what the
+// registered document selects (the document can select an output acr
+// withholds from the answer; a client query cannot). For graphql_query the
+// request must select the leaves of the shape, no more and no less.
+func boundRequest(shape Shape, registered bool, client map[string]any, orgID string, arguments map[string]any, selection []string) []string {
+	var problems []string
+	// The arguments, renamed to the variables of the registered document: the
+	// policy's variable rules and the client's variables use those names.
+	upstream := map[string]any{}
+	doc, err := parser.ParseQuery(&ast.Source{Input: shape.op.DocumentText})
+	if err != nil || len(doc.Operations) != 1 || len(doc.Operations[0].SelectionSet) != 1 {
+		return []string{"the registered document is not one root field"}
+	}
+	root, _ := doc.Operations[0].SelectionSet[0].(*ast.Field)
+	if root == nil {
+		return []string{"the registered document is not one root field"}
+	}
+	declared := map[string]bool{}
+	for _, argument := range root.Arguments {
+		declared[argument.Name] = true
+		value, sent := arguments[argument.Name]
+		if argument.Value.Kind == ast.Variable {
+			if sent {
+				upstream[argument.Value.Raw] = value
+			}
+			continue
+		}
+		// A value the registered document writes itself.
+		literal, lerr := argument.Value.Value(nil)
+		if lerr != nil || !sent || canonicalJSON(literal) != canonicalJSON(value) {
+			problems = append(problems, "the argument "+argument.Name+" is not the value the registered document writes")
+		}
+	}
+	for name := range arguments {
+		if !declared[name] {
+			problems = append(problems, "the request has the argument "+name+", which the registered document does not have")
+		}
+	}
+	want := map[string]bool{}
+	if registered {
+		for _, path := range selectionPaths("", doc.Operations[0].SelectionSet) {
+			want[path] = true
+		}
+	} else {
+		for _, path := range shape.Paths {
+			want[strings.ReplaceAll(path, "[*]", "")] = true
+		}
+	}
+	got := map[string]bool{}
+	for _, path := range selection {
+		got[path] = true
+	}
+	for path := range want {
+		if !got[path] {
+			problems = append(problems, "the request does not select "+path)
+		}
+	}
+	for path := range got {
+		if !want[path] {
+			problems = append(problems, "the request selects "+path+", which is not in the selection of the case")
+		}
+	}
+	generic, err := decodeJSON([]byte(canonicalJSON(client)))
+	if err != nil {
+		return append(problems, "the client variables are not JSON")
+	}
+	sent, received := map[string]variableLeaf{}, map[string]variableLeaf{}
+	flattenVariables("", "", generic, sent)
+	flattenVariables("", "", upstream, received)
+	for key, leaf := range sent {
+		rule, ok := shape.op.Variable(leaf.Path)
+		if !ok {
+			problems = append(problems, "the client variable "+leaf.Path+" has no rule in the policy")
+			continue
+		}
+		arrived, ok := received[key]
+		if !ok {
+			problems = append(problems, "the client variable "+key+" did not reach the listener")
+			continue
+		}
+		if canonicalJSON(opsForm(rule, leaf.Value)) != canonicalJSON(arrived.Value) {
+			problems = append(problems, "the client variable "+key+" reached the listener with another value")
+		}
+	}
+	for key, leaf := range received {
+		if _, set := sent[key]; set {
+			continue
+		}
+		rule, ok := shape.op.Variable(leaf.Path)
+		switch {
+		case !ok:
+			problems = append(problems, "the listener received the variable "+key+", which has no rule in the policy")
+		case rule.Source == directread.SourceClient:
+			problems = append(problems, "the listener received the client variable "+key+", which the client did not set")
+		case rule.Source == directread.SourcePrincipalOrg && canonicalJSON(leaf.Value) != canonicalJSON(orgID):
+			problems = append(problems, "the organization variable "+key+" is not the caller's organization")
+		}
+	}
+	sort.Strings(problems)
+	return problems
 }
 
 // NewReplayListener makes a listener that accepts requests for orgID only.
@@ -294,12 +500,24 @@ func (l *ReplayListener) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Query string `json:"query"`
+		Query     string          `json:"query"`
+		Variables json.RawMessage `json:"variables"`
 	}
 	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil || json.Unmarshal(raw, &body) != nil {
 		l.fail(w, "request body is not a GraphQL request")
 		return
+	}
+	l.lastArguments, l.lastSelection = nil, nil
+	variables := map[string]any{}
+	if len(body.Variables) > 0 && string(body.Variables) != "null" {
+		decoded, verr := decodeJSON(body.Variables)
+		object, isObject := decoded.(map[string]any)
+		if verr != nil || !isObject {
+			l.fail(w, "request variables are not a JSON object")
+			return
+		}
+		variables = object
 	}
 	doc, perr := parser.ParseQuery(&ast.Source{Input: body.Query})
 	if perr != nil || len(doc.Operations) != 1 || len(doc.Operations[0].SelectionSet) != 1 {
@@ -315,6 +533,17 @@ func (l *ReplayListener) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		l.fail(w, "no reply is armed for root %s", field.Name)
 		return
 	}
+	arguments := map[string]any{}
+	for _, argument := range field.Arguments {
+		value, aerr := argument.Value.Value(variables)
+		if aerr != nil {
+			l.fail(w, "argument %s of root %s has no value", argument.Name, field.Name)
+			return
+		}
+		arguments[argument.Name] = value
+	}
+	l.lastArguments = arguments
+	l.lastSelection = selectionPaths("", doc.Operations[0].SelectionSet)
 	w.Header().Set("Content-Type", "application/json")
 	if l.armed.Status == http.StatusNotFound {
 		w.WriteHeader(http.StatusNotFound)
@@ -390,6 +619,10 @@ func (p *LocalPlanes) GraphQL(ctx context.Context, shape Shape, variables map[st
 	if got := p.Listener.Requests() - before; got != 1 {
 		return nil, fmt.Errorf("case %s: the runner sent %d listener requests, want 1 (call %s)", key, got, response.Call)
 	}
+	upstream, selection := p.Listener.last()
+	if problems := boundRequest(shape, false, variables, p.Principal.OrgID, upstream, selection); len(problems) > 0 {
+		return nil, fmt.Errorf("case %s: the request graphql_query sent is not the request of the case: %s", key, strings.Join(problems, "; "))
+	}
 	return json.Marshal(response)
 }
 
@@ -417,6 +650,10 @@ func (p *LocalPlanes) Operation(ctx context.Context, shape Shape, variables map[
 	}
 	if got := p.Listener.Requests() - before; got != 1 {
 		return nil, fmt.Errorf("case %s: the runner sent %d upstream requests, want 1 (call %s)", key, got, response.Call)
+	}
+	upstream, selection := p.Listener.last()
+	if problems := boundRequest(shape, true, variables, p.Principal.OrgID, upstream, selection); len(problems) > 0 {
+		return nil, fmt.Errorf("case %s: the request run_operation sent is not the request of the case: %s", key, strings.Join(problems, "; "))
 	}
 	return json.Marshal(response)
 }
@@ -559,10 +796,9 @@ func venueStructuredContent(tool string, raw []byte) (content json.RawMessage, l
 			text = strings.ToLower(envelope.Result.Content[0].Text)
 		}
 		limited = envelope.Result.IsError && (strings.Contains(text, "rate") || strings.Contains(text, "429") || strings.Contains(text, "too many"))
-		if len(text) > 120 {
-			text = text[:120]
-		}
-		return nil, limited, fmt.Errorf("venue call %s: no structured content (tool error: %t): %s", tool, envelope.Result.IsError, text)
+		// The text of a tool error can quote a name, an address or a
+		// credential of the venue: only its length is reported.
+		return nil, limited, fmt.Errorf("venue call %s: no structured content (tool error: %t, rate limit: %t, %d characters of text withheld)", tool, envelope.Result.IsError, limited, len(text))
 	}
 	return envelope.Result.StructuredContent, false, nil
 }

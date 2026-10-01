@@ -3,16 +3,19 @@ package factoracle
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/vektah/gqlparser/v2"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 )
 
@@ -166,6 +169,7 @@ func TestABindingCannotSetAPathThePolicyRefuses(t *testing.T) {
 type fakePlanes struct {
 	graphQL   func(shape Shape, variables map[string]any) (json.RawMessage, error)
 	operation func(shape Shape, variables map[string]any) (json.RawMessage, error)
+	facts     func(request FactsRequest) (json.RawMessage, error)
 }
 
 func (f fakePlanes) GraphQL(_ context.Context, shape Shape, variables map[string]any) (json.RawMessage, error) {
@@ -179,8 +183,46 @@ func (f fakePlanes) Operation(_ context.Context, shape Shape, variables map[stri
 	return f.operation(shape, variables)
 }
 
-func (fakePlanes) Facts(context.Context, FactsRequest) (json.RawMessage, error) {
-	return nil, context.Canceled
+func (f fakePlanes) Facts(_ context.Context, request FactsRequest) (json.RawMessage, error) {
+	if f.facts == nil {
+		return nil, context.Canceled
+	}
+	return f.facts(request)
+}
+
+// noFacts is a read_facts answer in which no subject has a fact.
+func noFacts(request FactsRequest) (json.RawMessage, error) {
+	coverage := []any{}
+	for _, s := range request.Subjects {
+		coverage = append(coverage, map[string]any{"kind": request.Kinds[0], "subject": s, "outcome": "read_no_fact"})
+	}
+	return json.Marshal(map[string]any{"status": "partial", "facts": []any{}, "coverage": coverage, "versions": map[string]any{"kinds": map[string]any{}}})
+}
+
+func unavailable(Shape, map[string]any) (json.RawMessage, error) {
+	return json.RawMessage(`{"call":"operation_unavailable"}`), nil
+}
+
+// fakeRun runs one root of the oracle on the cases of the capture.
+func fakeRun(t *testing.T, root string, planes Planes, configure func(*Oracle)) *Report {
+	t.Helper()
+	manifest, _, extract, err := LoadCapture(captureDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(extract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases, OnlyRoots: []string{root}, Planes: planes}
+	if configure != nil {
+		configure(oracle)
+	}
+	report, err := oracle.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return report
 }
 
 // A generated shape that is not run is not a pass: the run stops.
@@ -286,6 +328,14 @@ func TestClassifyInvestment(t *testing.T) {
 	ambiguous := classifyInvestment(ops, themes(950, 520, 200), themes(900, 500, 200), twins)
 	if len(ambiguous.Findings) != 1 || len(ambiguous.Differences) != 0 {
 		t.Fatalf("a difference two witnesses equal was named: %+v", ambiguous)
+	}
+
+	// acr against the store rows is held to the sum tolerance (1e-9), not to
+	// the Float32 tolerance of the ops side: a drift of 1e-7 of the value is a
+	// finding.
+	drift := classifyInvestment(ops, themes(1000.0001, 500, 200), themes(1000, 500, 200), witnesses)
+	if len(drift.Findings) != 1 || len(drift.Differences) != 0 {
+		t.Fatalf("acr off the store rows by 1e-7 relative was accepted: %+v", drift)
 	}
 
 	// acr lost effort: no class explains a loss, and a zero witness explains
@@ -576,8 +626,11 @@ func TestShapePassFindsTypeEchoAndLimitProblems(t *testing.T) {
 		t.Helper()
 		oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases, OnlyRoots: []string{"workGraphFlow"},
 			Planes: fakePlanes{graphQL: func(shape Shape, _ map[string]any) (json.RawMessage, error) {
-				if shape.Name != "all" {
-					return servedAnswer(t, "workGraphFlow", "workGraphFlow", `{"workGraphFlow":{}}`, 20, 32768), nil
+				switch shape.Name {
+				case "branch:(root)":
+					return servedAnswer(t, "workGraphFlow", "workGraphFlow", `{"workGraphFlow":{"__typename":"WorkGraphFlowResult","degradedReason":null}}`, 20, 32768), nil
+				case "branch:rows":
+					return servedAnswer(t, "workGraphFlow", "workGraphFlow", `{"workGraphFlow":{"rows":[{"__typename":"WorkGraphFlowRow","nodeType":"ISSUE","inflow":3,"outflow":4}]}}`, 20, 32768), nil
 				}
 				return answer, nil
 			}}}
@@ -587,26 +640,31 @@ func TestShapePassFindsTypeEchoAndLimitProblems(t *testing.T) {
 		}
 		return report.Root("workGraphFlow")
 	}
-	if rr := run(servedAnswer(t, "workGraphFlow", "workGraphFlow", good, len(good), 32768)); len(rr.Findings) != 0 || rr.Leaves != 6 {
+	if rr := run(servedAnswer(t, "workGraphFlow", "workGraphFlow", good, len(good), 32768)); len(rr.Findings) != 0 || rr.Leaves != 12 {
 		t.Fatalf("a well-formed answer: %d leaves, findings %+v", rr.Leaves, rr.Findings)
 	}
 	for name, answer := range map[string]json.RawMessage{
-		"an integer served as a string": servedAnswer(t, "workGraphFlow", "workGraphFlow", strings.Replace(good, `"inflow":3`, `"inflow":"3"`, 1), 100, 32768),
-		"a float where an integer is":   servedAnswer(t, "workGraphFlow", "workGraphFlow", strings.Replace(good, `"inflow":3`, `"inflow":3.5`, 1), 100, 32768),
-		"a path that was not selected":  servedAnswer(t, "workGraphFlow", "workGraphFlow", strings.Replace(good, `"inflow":3`, `"inflow":3,"evidence":"text"`, 1), 100, 32768),
-		"a null in a non-null field":    servedAnswer(t, "workGraphFlow", "workGraphFlow", strings.Replace(good, `"inflow":3`, `"inflow":null`, 1), 100, 32768),
-		"another operation in the echo": servedAnswer(t, "workGraphFlow", "hotspots", good, 100, 32768),
-		"another root in the echo":      servedAnswer(t, "hotspots", "workGraphFlow", good, 100, 32768),
-		"more bytes than the limit":     servedAnswer(t, "workGraphFlow", "workGraphFlow", good, 40000, 32768),
-		"no byte count":                 servedAnswer(t, "workGraphFlow", "workGraphFlow", good, 0, 32768),
-		"a refusal":                     json.RawMessage(`{"call":"refused","refusal":{"code":"response_budget"}}`),
-		"an upstream error":             json.RawMessage(`{"call":"upstream_error","errors":[{"class":"server_error"}]}`),
+		"an integer served as a string":   servedAnswer(t, "workGraphFlow", "workGraphFlow", strings.Replace(good, `"inflow":3`, `"inflow":"3"`, 1), 100, 32768),
+		"a float where an integer is":     servedAnswer(t, "workGraphFlow", "workGraphFlow", strings.Replace(good, `"inflow":3`, `"inflow":3.5`, 1), 100, 32768),
+		"a path that was not selected":    servedAnswer(t, "workGraphFlow", "workGraphFlow", strings.Replace(good, `"inflow":3`, `"inflow":3,"evidence":"text"`, 1), 100, 32768),
+		"a null in a non-null field":      servedAnswer(t, "workGraphFlow", "workGraphFlow", strings.Replace(good, `"inflow":3`, `"inflow":null`, 1), 100, 32768),
+		"a selected field that is absent": servedAnswer(t, "workGraphFlow", "workGraphFlow", strings.Replace(good, `"inflow":3,`, ``, 1), 100, 32768),
+		"a selected block that is absent": servedAnswer(t, "workGraphFlow", "workGraphFlow", `{"workGraphFlow":{"__typename":"WorkGraphFlowResult","degradedReason":null}}`, 100, 32768),
+		"no root field":                   servedAnswer(t, "workGraphFlow", "workGraphFlow", `{}`, 100, 32768),
+		"another operation in the echo":   servedAnswer(t, "workGraphFlow", "hotspots", good, 100, 32768),
+		"another root in the echo":        servedAnswer(t, "hotspots", "workGraphFlow", good, 100, 32768),
+		"more bytes than the limit":       servedAnswer(t, "workGraphFlow", "workGraphFlow", good, 40000, 32768),
+		"no byte count":                   servedAnswer(t, "workGraphFlow", "workGraphFlow", good, 0, 32768),
+		"a refusal":                       json.RawMessage(`{"call":"refused","refusal":{"code":"response_budget"}}`),
+		"an upstream error":               json.RawMessage(`{"call":"upstream_error","errors":[{"class":"server_error"}]}`),
 	} {
 		if rr := run(answer); len(rr.Findings) == 0 {
 			t.Errorf("%s: the shape pass found nothing", name)
 		}
 	}
-	// A root that is not enabled on the listener is stated, not found.
+	// A root that is not enabled on the listener is stated, not found. That
+	// such a run is not a measurement unless the venue declares the root dark
+	// is TestARootMustBeMeasuredOnEveryPathTheVenueServes.
 	if rr := run(json.RawMessage(`{"call":"operation_unavailable","errors":[{"class":"not_found"}]}`)); len(rr.Findings) != 0 || rr.Listener != "operation_unavailable" {
 		t.Fatalf("a root that is not enabled: listener %s, findings %+v", rr.Listener, rr.Findings)
 	}
@@ -722,31 +780,41 @@ func TestTheTwoPathsMustAnswerTheSame(t *testing.T) {
 
 func TestTemporaryAllowanceExpiresWithItsPaths(t *testing.T) {
 	policy := mustPolicy(t)
-	for root, spec := range temporaryOpsPaths {
+	for root, spec := range temporaryAllowances {
 		rootPolicy, ok := policy.Root(root)
 		if !ok {
 			t.Fatalf("temporary paths for %s, which is not an allowed root", root)
 		}
-		var outputs []string
-		for _, name := range rootPolicy.Operations() {
-			op, _ := policy.Catalogue().Lookup(name)
-			for _, out := range op.Outputs {
-				outputs = append(outputs, out.Path)
-			}
-		}
-		if missing := temporaryPathsMissing(spec, outputs); len(missing) != 0 {
+		outputs := rootOutputs(policy, rootPolicy)
+		if missing := temporaryPathsMissing(spec.Paths, outputs); len(missing) != 0 {
 			t.Fatalf("root %s: temporary paths %v are not in the policy", root, missing)
 		}
 		// Each path or block, taken out of the policy, expires the allowance.
-		for _, gone := range spec {
+		for _, gone := range spec.Paths {
 			var rest []string
 			for _, path := range outputs {
 				if path != gone && !strings.HasPrefix(path, gone+".") {
 					rest = append(rest, path)
 				}
 			}
-			if missing := temporaryPathsMissing(spec, rest); len(missing) != 1 || missing[0] != gone {
+			if missing := temporaryPathsMissing(spec.Paths, rest); len(missing) != 1 || missing[0] != gone {
 				t.Errorf("root %s: without %s the missing list is %v", root, gone, missing)
+			}
+		}
+		// The allowance is read against the contract this build pins.
+		op, refusal := policy.Catalogue().Lookup(spec.Operation)
+		if refusal != nil {
+			t.Fatalf("root %s: operation %s is not served", root, spec.Operation)
+		}
+		if got := contractDigest(op); got != spec.Contract {
+			t.Errorf("root %s: the contract of %s is %s, the allowance pins %s: read the resolver again, then renew the digest or remove the allowance", root, spec.Operation, got, spec.Contract)
+		}
+		if spec.Window != "" {
+			if rule, ok := op.Variable(spec.Window); !ok || !rule.Allowed || rule.Source != directread.SourceClient {
+				t.Errorf("root %s: the window variable %s is not a client variable of %s", root, spec.Window, spec.Operation)
+			}
+			if !op.OutputAllowed(spec.Echo) {
+				t.Errorf("root %s: the echo path %s is not an output of %s", root, spec.Echo, spec.Operation)
 			}
 		}
 	}
@@ -768,6 +836,11 @@ func TestARunWithAnExpiredAllowanceIsAnError(t *testing.T) {
 	report.Roots[1].Expired = []string{"class latest_day_vs_window: gone"}
 	if err := report.Err(); err == nil || !strings.Contains(err.Error(), "gone") {
 		t.Fatalf("a run with an expired allowance is not an error: %v", err)
+	}
+	report.Roots[1].Expired = nil
+	report.Roots[0].Invalid = []string{"no path served the root"}
+	if err := report.Err(); err == nil || !strings.Contains(err.Error(), "a: no path served the root") {
+		t.Fatalf("a run that is not a measurement is not an error: %v", err)
 	}
 }
 
@@ -791,10 +864,10 @@ func TestFlowWindowCheck(t *testing.T) {
 	}
 	// The window count is the latest-day sum: the defect the fields were
 	// named for.
-	if _, matches, findings, _, _ := flowWindowCheck(fact("4", "4")); matches != 3 || len(findings) != 1 || findings[0].Path != "items_started_window" {
+	if _, matches, findings, _, _ := flowWindowCheck(fact("4", "4")); matches != 3 || len(findings) != 1 || findings[0].Path != "acr:flow.items_started_window" {
 		t.Fatalf("a window count that is the latest-day sum: %d matches, findings %+v", matches, findings)
 	}
-	if _, matches, findings, _, _ := flowWindowCheck(fact("10", "10")); matches != 3 || len(findings) != 1 || findings[0].Path != "items_started_latest_day" {
+	if _, matches, findings, _, _ := flowWindowCheck(fact("10", "10")); matches != 3 || len(findings) != 1 || findings[0].Path != "acr:flow.items_started_latest_day" {
 		t.Fatalf("a latest-day count that is the window sum: %d matches, findings %+v", matches, findings)
 	}
 	if _, _, findings, _, _ := flowWindowCheck(fact("10", nil)); len(findings) != 1 {
@@ -811,5 +884,739 @@ func TestFlowWindowCheck(t *testing.T) {
 	cut.Tables["daily_flow"] = table
 	if _, _, findings, _, _ := flowWindowCheck(cut); len(findings) != 2 {
 		t.Fatalf("a cut daily series must not be summed: findings %+v", findings)
+	}
+}
+
+const flowAnswer = `{"workGraphFlow":{"__typename":"WorkGraphFlowResult","degradedReason":null,"rows":[{"__typename":"WorkGraphFlowRow","nodeType":"ISSUE","inflow":3,"outflow":4}]}}`
+
+// flowPlanes answers every shape of workGraphFlow with the fields it selects.
+func flowPlanes(t *testing.T) fakePlanes {
+	t.Helper()
+	answer := func(shape Shape) string {
+		switch shape.Name {
+		case "branch:(root)":
+			return `{"workGraphFlow":{"__typename":"WorkGraphFlowResult","degradedReason":null}}`
+		case "branch:rows":
+			return `{"workGraphFlow":{"rows":[{"__typename":"WorkGraphFlowRow","nodeType":"ISSUE","inflow":3,"outflow":4}]}}`
+		}
+		return flowAnswer
+	}
+	return fakePlanes{
+		graphQL: func(shape Shape, _ map[string]any) (json.RawMessage, error) {
+			data := answer(shape)
+			return servedAnswer(t, shape.Root, shape.Operation, data, len(data), 32768), nil
+		},
+		operation: func(shape Shape, _ map[string]any) (json.RawMessage, error) {
+			return operationAnswer(t, shape.Operation, answer(shape)), nil
+		},
+	}
+}
+
+// An answer that holds none of the selected fields, with a valid echo and
+// valid limits, on both paths: every absent field is a finding, and the run
+// is not a measurement.
+func TestAnAnswerWithNoSelectedFieldIsNotAPass(t *testing.T) {
+	report := fakeRun(t, "workGraphFlow", fakePlanes{
+		graphQL: func(shape Shape, _ map[string]any) (json.RawMessage, error) {
+			return servedAnswer(t, shape.Root, shape.Operation, `{}`, 2, 32768), nil
+		},
+		operation: func(shape Shape, _ map[string]any) (json.RawMessage, error) {
+			return operationAnswer(t, shape.Operation, `{}`), nil
+		},
+	}, nil)
+	rr := report.Root("workGraphFlow")
+	if len(rr.Findings) == 0 {
+		t.Fatalf("an answer with no root field is not a finding")
+	}
+	err := report.Err()
+	if err == nil || !strings.Contains(err.Error(), "gave no leaf") {
+		t.Fatalf("a run that measured no leaf is not an error: %v", err)
+	}
+	// An object that lost one selected field is a finding of its own.
+	lost := fakeRun(t, "workGraphFlow", fakePlanes{
+		graphQL: func(shape Shape, _ map[string]any) (json.RawMessage, error) {
+			data := `{"workGraphFlow":{"__typename":"WorkGraphFlowResult","degradedReason":null,"rows":[{"__typename":"WorkGraphFlowRow","nodeType":"ISSUE","outflow":4}]}}`
+			return servedAnswer(t, shape.Root, shape.Operation, data, len(data), 32768), nil
+		},
+		operation: unavailable,
+	}, nil).Root("workGraphFlow")
+	found := false
+	for _, f := range lost.Findings {
+		if strings.Contains(f.Detail, "workGraphFlow.rows[*].inflow is absent") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("a row with no inflow field is not a finding: %+v", lost.Findings)
+	}
+	// A selected path under a null parent or an empty list is stated.
+	empty := fakeRun(t, "workGraphFlow", fakePlanes{
+		graphQL: func(shape Shape, _ map[string]any) (json.RawMessage, error) {
+			data := `{"workGraphFlow":{"__typename":"WorkGraphFlowResult","degradedReason":null,"rows":[]}}`
+			return servedAnswer(t, shape.Root, shape.Operation, data, len(data), 32768), nil
+		},
+		operation: unavailable,
+	}, nil).Root("workGraphFlow")
+	if strings.Join(empty.Unmeasured, " ") != "workGraphFlow.rows[*].__typename workGraphFlow.rows[*].inflow workGraphFlow.rows[*].nodeType workGraphFlow.rows[*].outflow" {
+		t.Fatalf("the paths under an empty list are not stated as paths with no value: %v", empty.Unmeasured)
+	}
+}
+
+// A root is measured on a path, or the venue declares it dark there.
+func TestARootMustBeMeasuredOnEveryPathTheVenueServes(t *testing.T) {
+	served := flowPlanes(t)
+	invalid := func(planes fakePlanes, listenerDark, operationDark []string) string {
+		t.Helper()
+		report := fakeRun(t, "workGraphFlow", planes, func(o *Oracle) {
+			o.ListenerDark, o.OperationDark = listenerDark, operationDark
+		})
+		if err := report.Err(); err != nil {
+			return err.Error()
+		}
+		return ""
+	}
+	root := []string{"workGraphFlow"}
+	if got := invalid(served, nil, nil); got != "" {
+		t.Fatalf("a root served on both paths is not a measurement: %s", got)
+	}
+	if got := invalid(fakePlanes{graphQL: unavailable, operation: unavailable}, nil, nil); !strings.Contains(got, "no path served the root") {
+		t.Fatalf("a root no path serves: %q", got)
+	}
+	if got := invalid(fakePlanes{graphQL: unavailable, operation: unavailable}, root, root); !strings.Contains(got, "no path served the root") {
+		t.Fatalf("a root declared dark on both paths is still not measured: %q", got)
+	}
+	if got := invalid(fakePlanes{graphQL: unavailable, operation: served.operation}, nil, nil); !strings.Contains(got, "graphql_query is unavailable for the root and the venue does not declare the root dark") {
+		t.Fatalf("a root that is dark on the listener and not declared: %q", got)
+	}
+	if got := invalid(fakePlanes{graphQL: unavailable, operation: served.operation}, root, nil); got != "" {
+		t.Fatalf("a root declared dark on the listener and served through run_operation is refused: %s", got)
+	}
+	if got := invalid(fakePlanes{graphQL: served.graphQL, operation: unavailable}, nil, nil); !strings.Contains(got, "run_operation is unavailable for the root and the venue does not declare the root dark") {
+		t.Fatalf("a root that run_operation does not serve and that is not declared: %q", got)
+	}
+	if got := invalid(served, root, nil); !strings.Contains(got, "declares the root dark on graphql_query and it is served") {
+		t.Fatalf("a root declared dark and served: %q", got)
+	}
+	partly := fakePlanes{operation: served.operation, graphQL: func(shape Shape, variables map[string]any) (json.RawMessage, error) {
+		if shape.Name == "branch:rows" {
+			return unavailable(shape, variables)
+		}
+		return served.graphQL(shape, variables)
+	}}
+	if got := invalid(partly, nil, nil); !strings.Contains(got, "graphql_query served 2 cases of the root and was unavailable for 1") {
+		t.Fatalf("a root served for some cases only: %q", got)
+	}
+	refused := fakePlanes{operation: served.operation, graphQL: func(Shape, map[string]any) (json.RawMessage, error) {
+		return json.RawMessage(`{"call":"refused","refusal":{"code":"response_budget"}}`), nil
+	}}
+	if got := invalid(refused, nil, nil); !strings.Contains(got, "graphql_query served no case of the root") {
+		t.Fatalf("a root every case of which is refused: %q", got)
+	}
+	// Two served paths that give no leaf to compare.
+	null := `{"workGraphFlow":null}`
+	nulls := fakePlanes{
+		graphQL: func(shape Shape, _ map[string]any) (json.RawMessage, error) {
+			return servedAnswer(t, shape.Root, shape.Operation, null, len(null), 32768), nil
+		},
+		operation: func(shape Shape, _ map[string]any) (json.RawMessage, error) {
+			return operationAnswer(t, shape.Operation, null), nil
+		},
+	}
+	if got := invalid(nulls, nil, nil); !strings.Contains(got, "gave no leaf") || !strings.Contains(got, "no leaf was compared between them") {
+		t.Fatalf("two served paths with a null root: %q", got)
+	}
+}
+
+func historyOf(variables map[string]any, name string) int {
+	input, _ := variables["input"].(map[string]any)
+	switch v := input[name].(type) {
+	case int:
+		return v
+	case float64:
+		return int(v)
+	case json.Number:
+		n, _ := v.Int64()
+		return int(n)
+	}
+	return -1
+}
+
+// recordedThroughput answers throughputForecast from the recorded reply of
+// the capture, changed by mutate, cut to the fields each shape selects.
+func recordedThroughput(t *testing.T, mutate func(variables map[string]any, forecast map[string]any)) fakePlanes {
+	t.Helper()
+	_, recording, _, err := LoadCapture(captureDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var template map[string]any
+	keys := make([]string, 0, len(recording.Replies))
+	for key := range recording.Replies {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		reply := recording.Replies[key]
+		if !strings.HasPrefix(key, "throughputForecast/throughputForecast/all#") || reply.Status != 200 {
+			continue
+		}
+		var candidate map[string]any
+		if err := json.Unmarshal(reply.Data, &candidate); err != nil {
+			t.Fatal(err)
+		}
+		if forecast, _ := candidate["throughputForecast"].(map[string]any); forecast != nil && forecast["estimateCoverage"] != nil {
+			template = candidate
+			break
+		}
+	}
+	if template == nil {
+		t.Fatal("the capture has no served throughputForecast reply with an estimate coverage")
+	}
+	answer := func(shape Shape, variables map[string]any) string {
+		var data map[string]any
+		encoded, _ := json.Marshal(template)
+		_ = json.Unmarshal(encoded, &data)
+		forecast := data["throughputForecast"].(map[string]any)
+		mutate(variables, forecast)
+		selected := map[string]bool{}
+		for _, path := range shape.Paths {
+			selected[strings.Split(strings.ReplaceAll(path, "[*]", ""), ".")[1]] = true
+		}
+		for field := range forecast {
+			if !selected[field] {
+				delete(forecast, field)
+			}
+		}
+		out, _ := json.Marshal(data)
+		return string(out)
+	}
+	return fakePlanes{
+		facts: noFacts,
+		graphQL: func(shape Shape, variables map[string]any) (json.RawMessage, error) {
+			data := answer(shape, variables)
+			return servedAnswer(t, shape.Root, shape.Operation, data, len(data), 32768), nil
+		},
+		operation: func(shape Shape, variables map[string]any) (json.RawMessage, error) {
+			return operationAnswer(t, shape.Operation, answer(shape, variables)), nil
+		},
+	}
+}
+
+// The temporary class is counted only where the run measured it, and the
+// allowance expires when the measured value starts to follow the window.
+func TestTemporaryAllowanceIsMeasuredNotAssumed(t *testing.T) {
+	echo := func(variables map[string]any, forecast map[string]any) {
+		forecast["historyWeeks"] = historyOf(variables, "historyWeeks")
+	}
+	count := func(rr *RootReport) int { return rr.ByClass[ClassLatestDayVsWindow] }
+
+	// The covered values are the same for both histories: four counted
+	// differences, one per covered path, nothing expired.
+	same := fakeRun(t, "throughputForecast", recordedThroughput(t, echo), nil)
+	rr := same.Root("throughputForecast")
+	if count(rr) != 4 || len(same.Expired()) != 0 || len(rr.CodeRead) != 0 {
+		t.Fatalf("a latest-day value under two histories: %d differences, expired %v, code read %v", count(rr), same.Expired(), rr.CodeRead)
+	}
+	for _, d := range rr.Differences {
+		if d.Class == ClassLatestDayVsWindow && (d.Pair != "window_probe" || !d.Exact) {
+			t.Fatalf("a measured difference of the class is not marked as measured: %+v", d)
+		}
+	}
+
+	// The backlog now follows the requested history: that path expires, the
+	// other three are still measured.
+	follows := fakeRun(t, "throughputForecast", recordedThroughput(t, func(variables map[string]any, forecast map[string]any) {
+		echo(variables, forecast)
+		forecast["backlogSize"] = 100 + historyOf(variables, "historyWeeks")
+	}), nil)
+	expired := follows.Expired()
+	if len(expired) != 1 || !strings.Contains(expired[0], "throughputForecast.backlogSize is another value") || count(follows.Root("throughputForecast")) != 3 {
+		t.Fatalf("a backlog that follows the history: expired %v, %d differences", expired, count(follows.Root("throughputForecast")))
+	}
+	if follows.Err() == nil {
+		t.Fatal("a run with an allowance that expired by measurement is not an error")
+	}
+
+	// A value inside a covered block that follows the history expires the block.
+	block := fakeRun(t, "throughputForecast", recordedThroughput(t, func(variables map[string]any, forecast map[string]any) {
+		echo(variables, forecast)
+		forecast["staleWip"] = map[string]any{"__typename": "StaleWipSignal", "p50AgeHours": float64(historyOf(variables, "historyWeeks")), "p90AgeHours": 9.5}
+	}), nil)
+	if expired := block.Expired(); len(expired) != 1 || !strings.Contains(expired[0], "throughputForecast.staleWip is another value") {
+		t.Fatalf("a block that follows the history: expired %v", expired)
+	}
+
+	// The answer states the same history for both requests: the probe did
+	// not change what the resolver read, so nothing is measured or counted.
+	blind := fakeRun(t, "throughputForecast", recordedThroughput(t, func(_ map[string]any, forecast map[string]any) {
+		forecast["historyWeeks"] = 12
+	}), nil)
+	rr = blind.Root("throughputForecast")
+	if count(rr) != 0 || len(blind.Expired()) != 0 || len(rr.CodeRead) != 1 || !strings.Contains(rr.CodeRead[0], "states the same history") {
+		t.Fatalf("a probe that changed nothing: %d differences, expired %v, code read %v", count(rr), blind.Expired(), rr.CodeRead)
+	}
+
+	// The answer for the second history states no history: not measured.
+	silent := fakeRun(t, "throughputForecast", recordedThroughput(t, func(variables map[string]any, forecast map[string]any) {
+		echo(variables, forecast)
+		if historyOf(variables, "historyWeeks") != 12 {
+			forecast["historyWeeks"] = nil
+		}
+	}), nil)
+	rr = silent.Root("throughputForecast")
+	if count(rr) != 0 || len(silent.Expired()) != 0 || len(rr.CodeRead) != 1 {
+		t.Fatalf("a second answer that states no history: %d differences, expired %v, code read %v", count(rr), silent.Expired(), rr.CodeRead)
+	}
+
+	// A covered block with no value is not counted.
+	null := fakeRun(t, "throughputForecast", recordedThroughput(t, func(variables map[string]any, forecast map[string]any) {
+		echo(variables, forecast)
+		forecast["estimateCoverage"] = nil
+	}), nil)
+	rr = null.Root("throughputForecast")
+	if count(rr) != 3 || len(rr.CodeRead) != 1 || !strings.Contains(rr.CodeRead[0], "throughputForecast.estimateCoverage") {
+		t.Fatalf("a covered block that is null: %d differences, code read %v", count(rr), rr.CodeRead)
+	}
+
+	// The contract of the operation is not the one the allowance was read
+	// against: the allowance expires before anything is measured.
+	renewed := fakeRun(t, "throughputForecast", recordedThroughput(t, echo), func(o *Oracle) {
+		spec := temporaryAllowances["throughputForecast"]
+		spec.Contract = "sha256:another"
+		o.Allowances = map[string]temporaryAllowance{"throughputForecast": spec}
+	})
+	if expired := renewed.Expired(); len(expired) != 1 || !strings.Contains(expired[0], "the contract of operation throughputForecast") || count(renewed.Root("throughputForecast")) != 0 {
+		t.Fatalf("an allowance read against another contract: expired %v", expired)
+	}
+
+	// A root with no window argument is stated as read from code.
+	flow := fakeRun(t, "workGraphFlow", flowPlanes(t), nil).Root("workGraphFlow")
+	if count(flow) != 0 || len(flow.CodeRead) != 1 || !strings.Contains(flow.CodeRead[0], "takes no window argument") || len(flow.Expired) != 0 {
+		t.Fatalf("a root with no window argument: %d differences, code read %v, expired %v", count(flow), flow.CodeRead, flow.Expired)
+	}
+}
+
+// A subject with rows in the store and no answer is a finding on every value
+// pair: it is never skipped and never counted as a match.
+func TestASubjectOfTheStoreWithNoAnswerIsAFinding(t *testing.T) {
+	findings := func(rr *RootReport, pair, detail string) int {
+		n := 0
+		for _, f := range rr.Findings {
+			if f.Pair == pair && strings.Contains(f.Detail, detail) {
+				n++
+			}
+		}
+		return n
+	}
+	_, _, extract, err := LoadCapture(captureDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(extract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coverage, err := store.LatestEstimateCoverage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	flowTeams := map[string]bool{}
+	for _, row := range extract.Tables[tableWorkItemMetricsDaily] {
+		if team, ok := rowString(row, "team_id"); ok && team != "" {
+			flowTeams[team] = true
+		}
+	}
+	if len(coverage) == 0 || len(flowTeams) == 0 {
+		t.Fatal("the extract has no team with estimate coverage or work item metrics rows")
+	}
+
+	// Readiness: no coverage in the ops answer and no acr fact.
+	rr := fakeRun(t, "throughputForecast", recordedThroughput(t, func(_ map[string]any, forecast map[string]any) {
+		forecast["estimateCoverage"] = nil
+	}), nil).Root("throughputForecast")
+	if got := findings(rr, "readiness", "on neither side"); got != len(coverage) {
+		t.Fatalf("%d teams have no estimate coverage on either side, %d findings; %d compared, %d matches", len(coverage), got, rr.Compared, rr.Matches)
+	}
+	if rr.Matches != 0 {
+		t.Fatalf("%d matches were counted with no answer on either side", rr.Matches)
+	}
+	if got := findings(rr, "readiness_store", "no acr readiness fact"); got != len(coverage) {
+		t.Fatalf("%d teams have store rows and no acr readiness fact, %d findings", len(coverage), got)
+	}
+	// Flow: a team with work item metrics rows and no flow fact.
+	if got := findings(rr, "flow_window", "no acr flow fact"); got != len(flowTeams) {
+		t.Fatalf("%d teams have work item metrics rows and no flow fact, %d findings", len(flowTeams), got)
+	}
+
+	// Health: a subject with compounding risk rows and no health fact.
+	risk := `{"compoundingRisk":{"__typename":"CompoundingRiskResult","orgId":"` + FixtureOrgID + `","breakout":"REPO","generatedAt":"2026-10-01T16:00:00Z","rows":[],"trend":[]}}`
+	health := fakeRun(t, "compoundingRisk", fakePlanes{
+		facts: noFacts,
+		graphQL: func(shape Shape, _ map[string]any) (json.RawMessage, error) {
+			return servedAnswer(t, shape.Root, shape.Operation, risk, len(risk), 32768), nil
+		},
+		operation: unavailable,
+	}, nil).Root("compoundingRisk")
+	want := 0
+	for _, scope := range []struct {
+		name string
+		ids  []string
+	}{{"repo", store.RepositoryIDs()}, {"team", store.TeamIDs()}} {
+		subjects := store.RiskSubjects(scope.name)
+		for _, id := range scope.ids {
+			if subjects[strings.ToLower(id)] {
+				want++
+			}
+		}
+	}
+	if got := findings(health, "health_rows", "has no acr health fact"); want == 0 || got != want {
+		t.Fatalf("%d subjects have compounding risk rows and no health fact, %d findings", want, got)
+	}
+
+	// Health: a fact that states a day for a subject the store has no row of.
+	stranger := ""
+	for _, id := range store.RepositoryIDs() {
+		if !store.RiskSubjects("repo")[id] {
+			stranger = id
+			break
+		}
+	}
+	if stranger == "" {
+		t.Fatal("every repository of the extract has a compounding risk row")
+	}
+	invented := fakeRun(t, "compoundingRisk", fakePlanes{
+		facts: func(request FactsRequest) (json.RawMessage, error) {
+			coverage, facts := []any{}, []any{}
+			for _, s := range request.Subjects {
+				coverage = append(coverage, map[string]any{"kind": "health", "subject": s, "outcome": "read_no_fact"})
+				if s.CanonicalID == "repository:"+stranger {
+					facts = append(facts, map[string]any{"kind": "health", "subject": s, "fields": map[string]any{"severity_as_of": "2026-09-18", "severity": "elevated"}})
+				}
+			}
+			return json.Marshal(map[string]any{"status": "partial", "facts": facts, "coverage": coverage, "versions": map[string]any{"kinds": map[string]any{}}})
+		},
+		graphQL: func(shape Shape, _ map[string]any) (json.RawMessage, error) {
+			return servedAnswer(t, shape.Root, shape.Operation, risk, len(risk), 32768), nil
+		},
+		operation: unavailable,
+	}, nil).Root("compoundingRisk")
+	if got := findings(invented, "health_rows", "no compounding risk row in the store"); got != 1 {
+		t.Fatalf("a health fact with a day for a subject with no store row: %d findings", got)
+	}
+
+	// Workload: a team with forecast rows, an empty ops list and no fact.
+	forecastTeams := map[string]bool{}
+	for _, row := range extract.Tables[tableCapacityForecasts] {
+		if team, ok := rowString(row, "team_id"); ok && team != "" {
+			forecastTeams[team] = true
+		}
+	}
+	list := `{"capacityForecasts":{"__typename":"CapacityForecastConnection","edges":[],"pageInfo":{"__typename":"PageInfo","hasNextPage":false,"hasPreviousPage":false,"startCursor":null,"endCursor":null},"totalCount":0}}`
+	workload := fakeRun(t, "capacityForecasts", fakePlanes{
+		facts: noFacts,
+		graphQL: func(shape Shape, _ map[string]any) (json.RawMessage, error) {
+			return servedAnswer(t, shape.Root, shape.Operation, list, len(list), 32768), nil
+		},
+		operation: unavailable,
+	}, nil).Root("capacityForecasts")
+	if got := findings(workload, "workload", "no row and no acr workload fact"); len(forecastTeams) == 0 || got != len(forecastTeams) {
+		t.Fatalf("%d teams have forecast rows and no answer on either side, %d findings", len(forecastTeams), got)
+	}
+	if workload.Matches != 0 {
+		t.Fatalf("%d matches were counted with no answer on either side", workload.Matches)
+	}
+}
+
+// A readiness fact the current read lost shows against the store rows, even
+// when the two planes agree with each other.
+func TestAReadinessFactTheReadLostShowsAgainstTheStore(t *testing.T) {
+	_, _, extract, err := LoadCapture(captureDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(extract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coverage, err := store.LatestEstimateCoverage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each team answers one fact on its latest day, with one item less than
+	// the store rows hold. lose is what the read lost.
+	run := func(lose int64) *RootReport {
+		t.Helper()
+		planes := recordedThroughput(t, func(variables map[string]any, forecast map[string]any) {
+			input, _ := variables["input"].(map[string]any)
+			teams, _ := input["teamIds"].([]any)
+			team, _ := teams[0].(string)
+			stored, ok := coverage[strings.TrimPrefix(team, "team:")]
+			if !ok {
+				return
+			}
+			estimated, backlog := stored.Counts["estimated_count"]-lose, stored.Counts["backlog_size"]
+			block := map[string]any{"__typename": "EstimateCoverageSignal", "estimatedCount": estimated, "unestimatedCount": stored.Counts["unestimated_count"], "backlogSize": backlog, "ratio": nil}
+			if backlog != 0 {
+				block["ratio"] = float64(estimated) / float64(backlog)
+			}
+			forecast["estimateCoverage"] = block
+		})
+		planes.facts = func(request FactsRequest) (json.RawMessage, error) {
+			if request.Kinds[0] != "readiness" {
+				return noFacts(request)
+			}
+			subject := request.Subjects[0]
+			stored := coverage[strings.TrimPrefix(subject.CanonicalID, "team:")]
+			fact := map[string]any{"kind": "readiness", "subject": subject, "fields": map[string]any{
+				"day": stored.Day, "estimated_count": fmt.Sprint(stored.Counts["estimated_count"] - lose),
+				"unestimated_count": fmt.Sprint(stored.Counts["unestimated_count"]), "backlog_size": fmt.Sprint(stored.Counts["backlog_size"])}}
+			return json.Marshal(map[string]any{"status": "partial", "versions": map[string]any{"kinds": map[string]any{}}, "facts": []any{fact},
+				"coverage": []any{map[string]any{"kind": "readiness", "subject": subject, "outcome": "truncated"}}})
+		}
+		return fakeRun(t, "throughputForecast", planes, nil).Root("throughputForecast")
+	}
+	count := func(rr *RootReport, pair, path string) int {
+		n := 0
+		for _, f := range rr.Findings {
+			if f.Pair == pair && (path == "" || f.Path == path) {
+				n++
+			}
+		}
+		return n
+	}
+	whole := run(0)
+	if got := count(whole, "readiness_store", "acr:readiness.estimated_count") + count(whole, "readiness_store", "acr:readiness.day"); got != 0 {
+		t.Fatalf("facts that hold what the store holds: %d findings against the store", got)
+	}
+	cut := run(1)
+	if got := count(cut, "readiness", ""); got != 0 {
+		t.Fatalf("the two planes agree and the ops pair has %d findings: %+v", got, cut.Findings)
+	}
+	if got := count(cut, "readiness_store", "acr:readiness.estimated_count"); got != len(coverage) {
+		t.Fatalf("%d teams lost an estimated item in the read, %d findings against the store", len(coverage), got)
+	}
+	// One fact for a team whose store rows are more than one work scope.
+	several := 0
+	for _, stored := range coverage {
+		if stored.Scopes != 1 {
+			several++
+		}
+	}
+	if got := count(whole, "readiness_store", "acr:readiness.scopes"); several == 0 || got != several {
+		t.Fatalf("%d teams have more than one work scope in the store, %d scope findings", several, got)
+	}
+}
+
+// Every output path of a value root is compared or excluded with a reason,
+// and the plan is held against the production policy.
+func TestTheValuePathPlanCoversThePolicy(t *testing.T) {
+	policy := mustPolicy(t)
+	if err := checkValuePaths(policy); err != nil {
+		t.Fatal(err)
+	}
+	valueRoots := 0
+	for root, pair := range rootPairs {
+		if pair.Mode == ModeValue {
+			valueRoots++
+			compared := 0
+			for _, rule := range valuePaths[root] {
+				if rule.Reason == "" {
+					compared++
+				}
+			}
+			if compared == 0 {
+				t.Errorf("value root %s compares no output path", root)
+			}
+		}
+	}
+	if valueRoots != 5 || len(valuePaths) != 5 {
+		t.Fatalf("%d value roots, %d plans, want 5 and 5", valueRoots, len(valuePaths))
+	}
+	saved := valuePaths["catalog"]
+	defer func() { valuePaths["catalog"] = saved }()
+	// An output path the plan does not name stops the run.
+	valuePaths["catalog"] = saved[:1]
+	if err := checkValuePaths(policy); err == nil || !strings.Contains(err.Error(), "catalog.values[*].count") {
+		t.Fatalf("an output path with no rule passed: %v", err)
+	}
+	// A rule for a path the policy does not serve stops the run.
+	valuePaths["catalog"] = append(append([]pathRule{}, saved...), pathRule{Path: "catalog.values[*].share"})
+	if err := checkValuePaths(policy); err == nil || !strings.Contains(err.Error(), "covers no output path") {
+		t.Fatalf("a rule for a path that is not served passed: %v", err)
+	}
+	// Two rules for one path stop the run.
+	valuePaths["catalog"] = append(append([]pathRule{}, saved...), pathRule{Path: "catalog.values", Reason: "all of it"})
+	if err := checkValuePaths(policy); err == nil || !strings.Contains(err.Error(), "has 2 rules") {
+		t.Fatalf("an output path with two rules passed: %v", err)
+	}
+	valuePaths["catalog"] = saved
+
+	// A planned path the run compared nothing on, and a compared path that
+	// is not planned, both make the root invalid.
+	rr := &RootReport{Root: "catalog"}
+	checkTouched(rr)
+	if len(rr.Invalid) != 1 || !strings.Contains(rr.Invalid[0], "catalog.values[*].value is planned as compared") {
+		t.Fatalf("a planned path with no compare: %v", rr.Invalid)
+	}
+	rr = &RootReport{Root: "catalog"}
+	rr.touch("catalog.values[*].value", "catalog.values[*].count", "acr:identity.name")
+	checkTouched(rr)
+	if len(rr.Invalid) != 1 || !strings.Contains(rr.Invalid[0], "catalog.values[*].count, which is not a compared path") {
+		t.Fatalf("a compared path outside the plan: %v", rr.Invalid)
+	}
+}
+
+// The fact plan is held against the providers' own field declaration: a field
+// a provider declares and the plan does not name stops the run, and so does a
+// plan entry no provider declares.
+func TestTheFactPlanCoversTheProvidersDeclaration(t *testing.T) {
+	providers := devhealthfacts.NewProviders(nil)
+	if err := checkFactPlanDeclared(providers); err != nil {
+		t.Fatal(err)
+	}
+	declared := declaredFactFields(providers)
+	if len(declared) != len(factReads) || len(factReads) != 6 {
+		t.Fatalf("%d declared kinds, %d read kinds, want 6 and 6", len(declared), len(factReads))
+	}
+	compared := 0
+	for kind, plan := range factPlan {
+		for name, reason := range plan {
+			if reason == "" {
+				compared++
+				if !declared[kind][name] {
+					t.Errorf("the plan compares %s.%s, which the provider does not declare", kind, name)
+				}
+			}
+		}
+	}
+	if compared == 0 {
+		t.Fatal("the plan compares no fact field")
+	}
+	saved := factPlan["readiness"]
+	defer func() { factPlan["readiness"] = saved }()
+	without := map[string]string{}
+	for name, reason := range saved {
+		if name != "daily_readiness_omitted_count" {
+			without[name] = reason
+		}
+	}
+	factPlan["readiness"] = without
+	if err := checkFactPlanDeclared(providers); err == nil || !strings.Contains(err.Error(), "daily_readiness_omitted_count") {
+		t.Fatalf("a declared field with no plan entry passed: %v", err)
+	}
+	extra := map[string]string{"confidence": "not declared"}
+	for name, reason := range saved {
+		extra[name] = reason
+	}
+	factPlan["readiness"] = extra
+	if err := checkFactPlanDeclared(providers); err == nil || !strings.Contains(err.Error(), "confidence") {
+		t.Fatalf("a plan entry no provider declares passed: %v", err)
+	}
+}
+
+// A fact field or a table column the plan does not name stops the read.
+func TestAFactFieldOutsideThePlanStopsTheRead(t *testing.T) {
+	fact := ServedFact{Kind: "readiness", Fields: map[string]any{"day": "2026-09-30", "estimated_count": "3"}}
+	if err := checkFactPlan(fact); err != nil {
+		t.Fatalf("a planned fact is refused: %v", err)
+	}
+	fact.Fields["confidence"] = "high"
+	if err := checkFactPlan(fact); err == nil || !strings.Contains(err.Error(), "confidence") {
+		t.Fatalf("a field outside the plan passed: %v", err)
+	}
+	table := ServedFact{Kind: "flow", Tables: map[string]ServedTable{"daily_flow": {Columns: []string{"day", "items_started", "items_reopened"}}}}
+	if err := checkFactPlan(table); err == nil || !strings.Contains(err.Error(), "daily_flow.items_reopened") {
+		t.Fatalf("a table column outside the plan passed: %v", err)
+	}
+	if err := checkFactPlan(ServedFact{Kind: "delivery"}); err == nil {
+		t.Fatal("a fact kind with no plan passed")
+	}
+	// A read that returns such a fact stops the run.
+	oracle := &Oracle{Planes: fakePlanes{facts: func(request FactsRequest) (json.RawMessage, error) {
+		return json.Marshal(map[string]any{"status": "complete", "versions": map[string]any{"kinds": map[string]any{}},
+			"coverage": []any{map[string]any{"kind": "identity", "subject": request.Subjects[0], "outcome": "fact_served"}},
+			"facts":    []any{map[string]any{"kind": "identity", "subject": request.Subjects[0], "fields": map[string]any{"name": "a/b", "visibility": "private"}}}})
+	}}}
+	if _, err := oracle.readFacts(context.Background(), "identity", "repository", []string{"r1"}, readCurrent); err == nil || !strings.Contains(err.Error(), "visibility") {
+		t.Fatalf("a read with a field outside the plan passed: %v", err)
+	}
+}
+
+// A current read the provider marks truncated is refused, unless the pair
+// holds every compared fact against the store.
+func TestATruncatedReadIsRefused(t *testing.T) {
+	truncated := func(request FactsRequest) (json.RawMessage, error) {
+		return json.Marshal(map[string]any{"status": "partial", "versions": map[string]any{"kinds": map[string]any{}},
+			"coverage": []any{map[string]any{"kind": request.Kinds[0], "subject": request.Subjects[0], "outcome": "truncated"}}, "facts": []any{}})
+	}
+	oracle := &Oracle{Planes: fakePlanes{facts: truncated}, Window: Window{Start: mustDay(t, "2026-09-01"), End: mustDay(t, "2026-10-01")}}
+	for name, mode := range map[string]int{"windowed": readWindowed, "current": readCurrent} {
+		if _, err := oracle.readFacts(context.Background(), "identity", "repository", []string{"r1"}, mode); err == nil || !strings.Contains(err.Error(), "not measured whole") {
+			t.Errorf("a truncated %s read passed: %v", name, err)
+		}
+	}
+	if _, err := oracle.readFacts(context.Background(), "readiness", "team", []string{"t1"}, readCurrentHeldToStore); err != nil {
+		t.Fatalf("a truncated read that the pair holds to the store is refused: %v", err)
+	}
+}
+
+// The request a runner sends must be the request of the case.
+func TestTheReplayedRequestIsBoundToItsCase(t *testing.T) {
+	shape, ok := ShapeByID(mustShapes(t), "throughputForecast/throughputForecast/branch:staleWip")
+	if !ok {
+		t.Fatal("shape is not generated")
+	}
+	client := map[string]any{"input": map[string]any{"teamIds": []any{"team:t1"}, "historyWeeks": 12}}
+	selection := []string{"throughputForecast.staleWip.p50AgeHours", "throughputForecast.staleWip.p90AgeHours", "throughputForecast.staleWip.__typename"}
+	upstream := func(raw string) map[string]any {
+		t.Helper()
+		value, err := decodeJSON([]byte(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value.(map[string]any)
+	}
+	good := `{"orgId":"` + FixtureOrgID + `","input":{"teamIds":["t1"],"historyWeeks":12}}`
+	if problems := boundRequest(shape, false, client, FixtureOrgID, upstream(good), selection); len(problems) != 0 {
+		t.Fatalf("the request of the case is refused: %v", problems)
+	}
+	for name, c := range map[string]struct {
+		variables string
+		selection []string
+		want      string
+	}{
+		"a dropped variable":                     {`{"orgId":"` + FixtureOrgID + `","input":{"teamIds":["t1"]}}`, selection, "input.historyWeeks did not reach the listener"},
+		"a changed variable":                     {`{"orgId":"` + FixtureOrgID + `","input":{"teamIds":["t1"],"historyWeeks":4}}`, selection, "input.historyWeeks reached the listener with another value"},
+		"another subject":                        {`{"orgId":"` + FixtureOrgID + `","input":{"teamIds":["t2"],"historyWeeks":12}}`, selection, "input.teamIds reached the listener with another value"},
+		"a subject id not converted":             {`{"orgId":"` + FixtureOrgID + `","input":{"teamIds":["team:t1"],"historyWeeks":12}}`, selection, "input.teamIds reached the listener with another value"},
+		"a variable the client did not set":      {`{"orgId":"` + FixtureOrgID + `","input":{"teamIds":["t1"],"historyWeeks":12,"backlogSize":5}}`, selection, "input.backlogSize, which the client did not set"},
+		"another organization":                   {`{"orgId":"another","input":{"teamIds":["t1"],"historyWeeks":12}}`, selection, "orgId is not the caller's organization"},
+		"an argument the document does not have": {`{"orgId":"` + FixtureOrgID + `","input":{"teamIds":["t1"],"historyWeeks":12},"debug":true}`, selection, "the argument debug, which the registered document does not have"},
+		"a variable with no rule":                {`{"orgId":"` + FixtureOrgID + `","input":{"teamIds":["t1"],"historyWeeks":12,"debug":true}}`, selection, "input.debug, which has no rule"},
+		"a field that is not selected":           {good, selection[:2], "does not select throughputForecast.staleWip.__typename"},
+		"a field outside the shape":              {good, append(append([]string{}, selection...), "throughputForecast.backlogSize"), "selects throughputForecast.backlogSize, which is not in the selection of the case"},
+	} {
+		problems := boundRequest(shape, false, client, FixtureOrgID, upstream(c.variables), c.selection)
+		if len(problems) != 1 || !strings.Contains(problems[0], c.want) {
+			t.Errorf("%s: problems %v, want one with %q", name, problems, c.want)
+		}
+	}
+	// run_operation must select what the registered document selects: the
+	// selection of one branch is not the request of that tool.
+	if problems := boundRequest(shape, true, client, FixtureOrgID, upstream(good), selection); len(problems) == 0 {
+		t.Fatal("a run_operation request that selects one branch of the registered document passed")
+	}
+	// A value the registered document writes itself (the REPO dimension of
+	// the repository scope list) must arrive as that value.
+	scopes, ok := ShapeByID(mustShapes(t), "catalog/acrRepositoryScopes/all")
+	if !ok {
+		t.Fatal("shape is not generated")
+	}
+	all := []string{"catalog.values.value", "catalog.values.count", "catalog.values.__typename", "catalog.__typename"}
+	if problems := boundRequest(scopes, false, map[string]any{}, FixtureOrgID, upstream(`{"orgId":"`+FixtureOrgID+`","dimension":"REPO"}`), all); len(problems) != 0 {
+		t.Fatalf("the request of the repository scope list is refused: %v", problems)
+	}
+	if problems := boundRequest(scopes, false, map[string]any{}, FixtureOrgID, upstream(`{"orgId":"`+FixtureOrgID+`","dimension":"TEAM"}`), all); len(problems) != 1 || !strings.Contains(problems[0], "dimension is not the value the registered document writes") {
+		t.Fatalf("another dimension than the document's: %v", problems)
 	}
 }

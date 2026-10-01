@@ -394,6 +394,91 @@ func (s *Store) Witnesses(w Window) Witnesses {
 	return out
 }
 
+// RiskSubjects is the subjects of one scope ("repo", "team") with a
+// compounding risk row in the extract, by lower-cased id.
+func (s *Store) RiskSubjects(scope string) map[string]bool {
+	out := map[string]bool{}
+	for _, row := range s.extract.Tables[tableCompoundingRiskDaily] {
+		rowScope, _ := rowString(row, "scope")
+		id, ok := rowString(row, "scope_id")
+		if ok && id != "" && strings.EqualFold(rowScope, scope) {
+			out[strings.ToLower(id)] = true
+		}
+	}
+	return out
+}
+
+// EstimateCoverage is the store reading of one team's estimate coverage on
+// its latest day.
+type EstimateCoverage struct {
+	Day string
+	// Scopes counts the (provider, work scope) rows of that day.
+	Scopes int
+	// Counts sums estimated_count, unestimated_count and backlog_size over
+	// those rows.
+	Counts map[string]int64
+}
+
+// LatestEstimateCoverage reads, per team, the estimate coverage rows of the
+// team's latest day in the extract: one row per provider and work scope (the
+// latest by computed_at), summed. It is what both planes state for the team:
+// ops as the coverage block of the forecast, acr as the readiness facts of
+// that day.
+func (s *Store) LatestEstimateCoverage() (map[string]EstimateCoverage, error) {
+	type scopeRow struct {
+		at     time.Time
+		counts map[string]int64
+	}
+	latestDay := map[string]string{}
+	rows := map[string]map[string]scopeRow{}
+	for _, row := range s.extract.Tables[tableEstimateCoverageMetricsDaily] {
+		team, ok := rowString(row, "team_id")
+		if !ok || team == "" {
+			continue
+		}
+		day, ok := rowString(row, "day")
+		if !ok {
+			return nil, fmt.Errorf("estimate_coverage_metrics_daily: a row has no day")
+		}
+		if day < latestDay[team] {
+			continue
+		}
+		if day > latestDay[team] {
+			latestDay[team], rows[team] = day, map[string]scopeRow{}
+		}
+		at, err := rowTime(row, "computed_at")
+		if err != nil {
+			return nil, err
+		}
+		provider, _ := rowString(row, "provider")
+		scope, _ := rowString(row, "work_scope_id")
+		key := provider + "\x00" + scope
+		if prior, seen := rows[team][key]; seen && !at.After(prior.at) {
+			continue
+		}
+		counts := map[string]int64{}
+		for _, column := range []string{"estimated_count", "unestimated_count", "backlog_size"} {
+			value, err := rowFloat(row, column)
+			if err != nil {
+				return nil, fmt.Errorf("estimate_coverage_metrics_daily: %w", err)
+			}
+			counts[column] = int64(value)
+		}
+		rows[team][key] = scopeRow{at: at, counts: counts}
+	}
+	out := map[string]EstimateCoverage{}
+	for team, day := range latestDay {
+		coverage := EstimateCoverage{Day: day, Scopes: len(rows[team]), Counts: map[string]int64{}}
+		for _, row := range rows[team] {
+			for column, value := range row.counts {
+				coverage.Counts[column] += value
+			}
+		}
+		out[team] = coverage
+	}
+	return out, nil
+}
+
 // RepositoryIDs lists the organization's repository ids, sorted.
 func (s *Store) RepositoryIDs() []string { return sortedKeys(s.repoIDs) }
 

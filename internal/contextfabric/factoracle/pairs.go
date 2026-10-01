@@ -18,13 +18,23 @@ const (
 	relOpsFloat32 = 1e-6
 )
 
-func themeTolerance(values ...float64) float64 {
+func scaled(rel float64, values ...float64) float64 {
 	scale := 1.0
 	for _, v := range values {
 		scale = math.Max(scale, math.Abs(v))
 	}
-	return relOpsFloat32 * scale
+	return rel * scale
 }
+
+// themeTolerance is the tolerance of a compare with an ops theme value on
+// one side: ops makes it from Float32 shares.
+func themeTolerance(values ...float64) float64 { return scaled(relOpsFloat32, values...) }
+
+// sumTolerance is the tolerance of a compare between the acr repository mix
+// and what the store rows give for it. Both are Float64 sums of the same
+// products, added in another order; the Float32 rule of ops has no part in
+// either.
+func sumTolerance(values ...float64) float64 { return scaled(relSum, values...) }
 
 // themeEffort reads theme -> weighted_effort from an investment fact's
 // theme_breakdown table.
@@ -97,7 +107,7 @@ func classifyInvestment(ops, acr, expected map[string]float64, witnesses Witness
 		verdict.Residual[theme] = ops[theme] - acr[theme]
 		d := acr[theme] - expected[theme]
 		excess[theme] = d
-		if math.Abs(d) > themeTolerance(acr[theme], expected[theme]) {
+		if math.Abs(d) > sumTolerance(acr[theme], expected[theme]) {
 			off = true
 		}
 	}
@@ -125,7 +135,7 @@ func classifyInvestment(ops, acr, expected map[string]float64, witnesses Witness
 		witness := witnesses[class]
 		equal := true
 		for _, theme := range themes {
-			if math.Abs(excess[theme]-witness[theme]) > themeTolerance(acr[theme], expected[theme], witness[theme]) {
+			if math.Abs(excess[theme]-witness[theme]) > sumTolerance(acr[theme], expected[theme], witness[theme]) {
 				equal = false
 			}
 		}
@@ -164,13 +174,6 @@ const investmentShape = "analytics/investmentBreakdown/all"
 // theme under CHURN_LOC against the acr repository investment facts, and the
 // acr team mix against the repositories the team owns.
 func compareInvestment(ctx context.Context, o *Oracle, rr *RootReport) error {
-	rr.Excluded = map[string]string{
-		"analytics.breakdowns[*] (dimension SUBCATEGORY, WORK_TYPE)": "acr investment facts carry the theme mix only: shape only",
-		"analytics.evidenceQualityDistribution":                      "no acr fact field: shape only",
-		"analytics.evidenceQualityStats":                             "no acr fact field: shape only",
-		"analytics.sankey":                                           "refused shape (design K14-A): sankey is null",
-		"breakdown dimension TEAM, REPO":                             "refused by acr (design K14-A, basis_dependent_shape): not reachable through graphql_query",
-	}
 	root, ok, err := o.served(ctx, rr, "investment_org", investmentShape, investmentVariables(o.Window, "THEME"))
 	if err != nil || !ok {
 		return err
@@ -181,8 +184,10 @@ func compareInvestment(ctx context.Context, o *Oracle, rr *RootReport) error {
 		rr.find(Finding{Pair: "investment_org", Detail: "echo: the answer is not one THEME breakdown under CHURN_LOC"})
 		return nil
 	}
+	rr.touch("analytics.breakdowns[*].dimension", "analytics.breakdowns[*].measure")
 	for _, item := range items(breakdowns[0]["items"]) {
 		key, _ := item["key"].(string)
+		rr.touch("analytics.breakdowns[*].items[*].key", "analytics.breakdowns[*].items[*].value")
 		leaf, lerr := typedLeaf(LeafFloat, item["value"])
 		if lerr != nil || leaf.T == LeafNull {
 			rr.find(Finding{Pair: "investment_org", Key: key, Detail: "ops item value is not a number"})
@@ -244,7 +249,7 @@ func compareInvestment(ctx context.Context, o *Oracle, rr *RootReport) error {
 		for _, repo := range o.Store.RepositoryIDs() {
 			for _, theme := range themeKeys(byRepo[repo], expectedByRepo[repo]) {
 				rr.Compared++
-				if math.Abs(byRepo[repo][theme]-expectedByRepo[repo][theme]) <= themeTolerance(byRepo[repo][theme], expectedByRepo[repo][theme]) {
+				if math.Abs(byRepo[repo][theme]-expectedByRepo[repo][theme]) <= sumTolerance(byRepo[repo][theme], expectedByRepo[repo][theme]) {
 					rr.Matches++
 				} else {
 					moved++
@@ -330,11 +335,6 @@ func compareTeamRollup(ctx context.Context, o *Oracle, rr *RootReport, byRepo ma
 // compareCatalog is root catalog, dimension REPO: the ops repository slug
 // list against the acr repository identity facts, as sets.
 func compareCatalog(ctx context.Context, o *Oracle, rr *RootReport) error {
-	rr.Excluded = map[string]string{
-		"catalog.values[*].count":           "no acr fact field: shape only",
-		"catalog (dimension TEAM)":          "no acr fact kind has a team identity (team is a graph subject): shape only",
-		"catalog (THEME, SUBCATEGORY, ...)": "value sets of the investment source with org-wide counts; no acr organization fact: shape only",
-	}
 	root, ok, err := o.served(ctx, rr, "catalog_repositories", "catalog/acrRepositoryScopes/all", map[string]any{})
 	if err != nil || !ok {
 		return err
@@ -345,7 +345,8 @@ func compareCatalog(ctx context.Context, o *Oracle, rr *RootReport) error {
 			ops[value] = true
 		}
 	}
-	facts, err := o.currentFacts(ctx, "identity", "repository", o.Store.RepositoryIDs())
+	// The ops catalogue takes no window, so the acr side is the current read.
+	facts, err := o.readFacts(ctx, "identity", "repository", o.Store.RepositoryIDs(), readCurrent)
 	if err != nil {
 		return err
 	}
@@ -364,6 +365,7 @@ func compareCatalog(ctx context.Context, o *Oracle, rr *RootReport) error {
 	}
 	for range sortedKeys(all) {
 		rr.Compared++
+		rr.touch("catalog.values[*].value")
 	}
 	missingInAcr, missingInOps := 0, 0
 	for name := range all {
@@ -387,19 +389,8 @@ var healthSignals = []string{"churn", "complexity", "ownership", "review"}
 // compareHealth is root compoundingRisk: the ops row of a scope on the day
 // the acr health fact states (severity_as_of) against that fact.
 func compareHealth(ctx context.Context, o *Oracle, rr *RootReport) error {
-	rr.Excluded = map[string]string{
-		"compoundingRisk.rows[*].scopeLabel":                   "a name; the acr fact carries the subject id",
-		"compoundingRisk.rows[*].components.reworkChurn":       "raw component; no acr fact field",
-		"compoundingRisk.rows[*].components.complexityDelta":   "raw component; no acr fact field",
-		"compoundingRisk.rows[*].components.ownershipGini":     "raw component; no acr fact field",
-		"compoundingRisk.rows[*].components.singleOwnerRatio":  "raw component; no acr fact field",
-		"compoundingRisk.rows[*].components.reviewLatencyP90h": "raw component; no acr fact field",
-		"compoundingRisk.rows[*].thresholds":                   "no acr fact field",
-		"compoundingRisk.trend":                                "an organization average per day; no acr fact",
-		"compoundingRisk.generatedAt, orgId, breakout":         "request echo",
-	}
-	type scope struct{ kind, breakout, idsVariable string }
-	for _, sc := range []scope{{"repository", "REPO", "repoIds"}, {"team", "TEAM", "teamIds"}} {
+	type scope struct{ kind, breakout, idsVariable, storeScope string }
+	for _, sc := range []scope{{"repository", "REPO", "repoIds", "repo"}, {"team", "TEAM", "teamIds", "team"}} {
 		ids := o.Store.RepositoryIDs()
 		if sc.kind == "team" {
 			ids = o.Store.TeamIDs()
@@ -411,14 +402,40 @@ func compareHealth(ctx context.Context, o *Oracle, rr *RootReport) error {
 		if err != nil {
 			return err
 		}
+		// Every subject with a risk row in the store must have a fact, and a
+		// fact that states a day must have a row in the store: a subject that
+		// is absent on one side is a finding, never skipped.
+		inStore := o.Store.RiskSubjects(sc.storeScope)
+		requested := map[string]bool{}
+		for _, id := range ids {
+			requested[strings.ToLower(id)] = true
+		}
+		hasFact := map[string]bool{}
 		byDay := map[string][]ServedFact{}
 		for _, fact := range facts {
+			id := strings.ToLower(bareID(fact.Subject.CanonicalID))
+			hasFact[id] = true
 			day, ok := fact.Fields["severity_as_of"].(string)
 			if !ok {
-				rr.NotJoined = append(rr.NotJoined, sc.kind+": a health fact states no severity_as_of day")
+				reason, _ := fact.Fields["severity_unavailable_reason"].(string)
+				rr.NotJoined = append(rr.NotJoined, sc.kind+": a health fact states no severity_as_of day ("+reason+")")
+				continue
+			}
+			if !inStore[id] {
+				rr.Compared++
+				rr.find(Finding{Pair: "health_rows", Key: sc.kind, Detail: "an acr health fact states a day for a subject with no compounding risk row in the store"})
 				continue
 			}
 			byDay[day] = append(byDay[day], fact)
+		}
+		for _, id := range sortedKeys(inStore) {
+			switch {
+			case !requested[id]:
+				rr.NotJoined = append(rr.NotJoined, sc.kind+": a subject with compounding risk rows in the store is not a "+sc.kind+" of the organization tables")
+			case !hasFact[id]:
+				rr.Compared++
+				rr.find(Finding{Pair: "health_rows", Key: sc.kind, Detail: "a subject with compounding risk rows in the store has no acr health fact"})
+			}
 		}
 		days := make([]string, 0, len(byDay))
 		for day := range byDay {
@@ -442,6 +459,7 @@ func compareHealth(ctx context.Context, o *Oracle, rr *RootReport) error {
 			for _, row := range items(root["rows"]) {
 				if id, isString := row["scopeId"].(string); isString {
 					rows[strings.ToLower(id)] = row
+					rr.touch("compoundingRisk.rows[*].scopeId")
 				}
 			}
 			for _, fact := range byDay[day] {
@@ -466,7 +484,8 @@ func compareHealthRow(rr *RootReport, key string, row map[string]any, fact Serve
 		acr, acrErr := typedLeaf(acrKind, acrValue)
 		rr.leafPair(pair, key, path, ops, acr, opsErr, acrErr, 0)
 	}
-	both("score", LeafFloat, row["score"], LeafFloat, fact.Fields["compounding_risk"])
+	const rows = "compoundingRisk.rows[*]."
+	both(rows+"score", LeafFloat, row["score"], LeafFloat, fact.Fields["compounding_risk"])
 	// ops prints the severity as its GraphQL enum name (upper case); the acr
 	// fact carries the stored value (lower case). The enum name is lowered:
 	// the two are one vocabulary in two spellings.
@@ -474,9 +493,9 @@ func compareHealthRow(rr *RootReport, key string, row map[string]any, fact Serve
 	if name, ok := opsSeverity.(string); ok {
 		opsSeverity = strings.ToLower(name)
 	}
-	both("severity", LeafString, opsSeverity, LeafString, fact.Fields["severity"])
-	both("day", LeafDate, row["day"], LeafDate, fact.Fields["severity_as_of"])
-	both("computedAt", LeafTime, row["computedAt"], LeafTime, fact.Fields["computed_at"])
+	both(rows+"severity", LeafString, opsSeverity, LeafString, fact.Fields["severity"])
+	both(rows+"day", LeafDate, row["day"], LeafDate, fact.Fields["severity_as_of"])
+	both(rows+"computedAt", LeafTime, row["computedAt"], LeafTime, fact.Fields["computed_at"])
 	rules := fact.Tables["risk_rules"]
 	signal, weight, norm := tableColumn(rules, "signal"), tableColumn(rules, "weight"), tableColumn(rules, "norm_value")
 	components, _ := row["components"].(map[string]any)
@@ -493,13 +512,15 @@ func compareHealthRow(rr *RootReport, key string, row map[string]any, fact Serve
 		}
 		if !found {
 			rr.Compared++
-			rr.find(Finding{Pair: pair, Key: key, Path: "risk_rules." + name, Detail: "the acr fact has no risk_rules row for the signal"})
+			rr.find(Finding{Pair: pair, Key: key, Path: "acr:health.risk_rules." + name, Detail: "the acr fact has no risk_rules row for the signal"})
 			continue
 		}
-		both("components."+name+"Norm", LeafFloat, components[name+"Norm"], LeafFloat, acrNorm)
-		both("weights."+name, LeafFloat, weights[name], LeafFloat, acrWeight)
+		both(rows+"components."+name+"Norm", LeafFloat, components[name+"Norm"], LeafFloat, acrNorm)
+		both(rows+"weights."+name, LeafFloat, weights[name], LeafFloat, acrWeight)
 	}
 }
+
+const nodePath = "capacityForecasts.edges[*].node."
 
 type forecastNode struct {
 	scope, id string
@@ -513,10 +534,6 @@ type forecastNode struct {
 // day: the latest by computed_at, then forecast id; design A1.1), against
 // the acr workload facts.
 func compareWorkload(ctx context.Context, o *Oracle, rr *RootReport) error {
-	rr.Excluded = map[string]string{
-		"capacityForecasts.edges[*].node.{targetItems,targetDate,p50Date,p85Date,p95Date,p85Days,p95Days,p50Items,p85Items,p95Items,historyDays}": "forecast_by_design: the acr workload fact carries the p50 day count only",
-		"capacityForecasts.{pageInfo,totalCount}, edges[*].cursor":                                                                                "list paging; the acr fact is not a list",
-	}
 	teams := map[string]bool{}
 	for _, row := range o.Store.extract.Tables[tableCapacityForecasts] {
 		if team, ok := rowString(row, "team_id"); ok && team != "" {
@@ -549,6 +566,12 @@ func compareWorkload(ctx context.Context, o *Oracle, rr *RootReport) error {
 			continue
 		}
 		edges := items(root["edges"])
+		if len(edges) == 0 && len(byTeam[team]) == 0 {
+			// The store has forecast rows of the team in the window.
+			rr.Compared++
+			rr.find(Finding{Pair: "workload", Key: "team", Detail: "a team with forecast rows in the store has an ops list with no row and no acr workload fact"})
+			continue
+		}
 		if len(edges) >= limit {
 			rr.find(Finding{Pair: "workload", Key: "team", Detail: "the ops list is at its limit; the compare would be over a cut list"})
 			continue
@@ -563,6 +586,7 @@ func compareWorkload(ctx context.Context, o *Oracle, rr *RootReport) error {
 				continue
 			}
 			scopeID, _ := node["workScopeId"].(string)
+			rr.touch(nodePath+"forecastId", nodePath+"workScopeId")
 			n := forecastNode{scope: scopeID, id: id, computed: computed, day: computed.V[:10], row: node}
 			key := n.scope + "\x00" + n.day
 			if prior, seen := latest[key]; !seen || n.computed.V > prior.computed.V || (n.computed.V == prior.computed.V && n.id > prior.id) {
@@ -651,11 +675,11 @@ func compareWorkloadTeam(rr *RootReport, latest map[string]forecastNode, facts [
 			continue
 		}
 		backlog, backlogErr := factInteger(cell(*daily, row, "backlog_size"))
-		rr.leafPair(pair, key, "daily.backlog_size", Leaf{T: LeafInt, V: fmt.Sprint(total.backlog)}, backlog, nil, backlogErr, 0)
+		rr.leafPair(pair, key, nodePath+"backlogSize", Leaf{T: LeafInt, V: fmt.Sprint(total.backlog)}, backlog, nil, backlogErr, 0)
 		mean, meanErr := typedLeaf(LeafFloat, cell(*daily, row, "throughput_mean"))
-		rr.leafPair(pair, key, "daily.throughput_mean", Leaf{T: LeafFloat, V: formatFloat(total.mean)}, mean, nil, meanErr, relSum)
+		rr.leafPair(pair, key, nodePath+"throughputMean", Leaf{T: LeafFloat, V: formatFloat(total.mean)}, mean, nil, meanErr, relSum)
 		stddev, stddevErr := typedLeaf(LeafFloat, cell(*daily, row, "throughput_stddev"))
-		rr.leafPair(pair, key, "daily.throughput_stddev", Leaf{T: LeafFloat, V: formatFloat(math.Sqrt(total.sq))}, stddev, nil, stddevErr, relSum)
+		rr.leafPair(pair, key, nodePath+"throughputStddev", Leaf{T: LeafFloat, V: formatFloat(math.Sqrt(total.sq))}, stddev, nil, stddevErr, relSum)
 	}
 	if truncated {
 		rr.NotJoined = append(rr.NotJoined, "workload: a daily_workload table is cut by the provider row cap; only its days were compared")
@@ -683,7 +707,7 @@ func compareWorkloadTeam(rr *RootReport, latest map[string]forecastNode, facts [
 			} else {
 				acr, acrErr = typedLeaf(kind, acrValue)
 			}
-			rr.leafPair(pair, key, path, ops, acr, opsErr, acrErr, 0)
+			rr.leafPair(pair, key, nodePath+path, ops, acr, opsErr, acrErr, 0)
 		}
 		both("backlogSize", LeafInt, n.row["backlogSize"], fact.Fields["backlog_size"])
 		both("throughputMean", LeafFloat, n.row["throughputMean"], fact.Fields["throughput_mean"])
@@ -701,19 +725,21 @@ func compareWorkloadTeam(rr *RootReport, latest map[string]forecastNode, facts [
 	}
 }
 
+const coveragePath = "throughputForecast.estimateCoverage."
+
 // compareReadiness is root throughputForecast: the estimate coverage block
 // of the forecast against the acr readiness facts of the team, on the
-// latest day.
+// latest day. The store rows of that day are the third reading: the acr
+// facts are held against them first, so a current read the provider marks
+// truncated is compared only when its facts are whole.
 func compareReadiness(ctx context.Context, o *Oracle, rr *RootReport) error {
-	rr.Excluded = map[string]string{
-		"throughputForecast.{p50Weeks,p75Weeks,p90Weeks,rollingWindows,forecastId,computedAt,backlogSize,historyWeeks,insufficientHistory}": "forecast_by_design: computed on demand; acr has no on-demand forecast",
-		"throughputForecast.{primaryRisk,wipCongestion,staleWip,reviewBottleneck,incidentLoad}":                                             "derived risk signals; no acr fact",
+	coverageRows, err := o.Store.LatestEstimateCoverage()
+	if err != nil {
+		return err
 	}
 	teams := map[string]bool{}
-	for _, row := range o.Store.extract.Tables[tableEstimateCoverageMetricsDaily] {
-		if team, ok := rowString(row, "team_id"); ok && team != "" {
-			teams[team] = true
-		}
+	for team := range coverageRows {
+		teams[team] = true
 	}
 	ids := sortedKeys(teams)
 	if len(ids) == 0 {
@@ -722,7 +748,7 @@ func compareReadiness(ctx context.Context, o *Oracle, rr *RootReport) error {
 	}
 	// ops reads the team's latest day with no window, so the acr side is the
 	// current read: one fact per work scope, each with its own latest day.
-	facts, err := o.currentFacts(ctx, "readiness", "team", ids)
+	facts, err := o.readFacts(ctx, "readiness", "team", ids, readCurrentHeldToStore)
 	if err != nil {
 		return err
 	}
@@ -731,6 +757,7 @@ func compareReadiness(ctx context.Context, o *Oracle, rr *RootReport) error {
 		team := bareID(fact.Subject.CanonicalID)
 		byTeam[team] = append(byTeam[team], fact)
 	}
+	counts := []struct{ ops, acr string }{{"estimatedCount", "estimated_count"}, {"unestimatedCount", "unestimated_count"}, {"backlogSize", "backlog_size"}}
 	for _, team := range ids {
 		variables := map[string]any{"input": map[string]any{"teamIds": []any{"team:" + team}, "historyWeeks": 12}}
 		root, ok, serr := o.served(ctx, rr, "readiness", "throughputForecast/throughputForecast/all", variables)
@@ -749,34 +776,50 @@ func compareReadiness(ctx context.Context, o *Oracle, rr *RootReport) error {
 			}
 		}
 		sums := map[string]int64{}
+		scopes := 0
 		for _, fact := range byTeam[team] {
 			if day, _ := fact.Fields["day"].(string); day != latestDay {
 				continue
 			}
-			for _, name := range []string{"estimated_count", "unestimated_count", "backlog_size"} {
-				leaf, lerr := factInteger(fact.Fields[name])
+			scopes++
+			for _, f := range counts {
+				leaf, lerr := factInteger(fact.Fields[f.acr])
 				if lerr != nil || leaf.T != LeafInt {
 					rr.Compared++
-					rr.find(Finding{Pair: "readiness", Key: "team", Path: name, Detail: "an acr readiness fact has no integer " + name})
+					rr.find(Finding{Pair: "readiness", Key: "team", Path: "acr:readiness." + f.acr, Detail: "an acr readiness fact has no integer " + f.acr})
 					continue
 				}
 				var v int64
 				_, _ = fmt.Sscan(leaf.V, &v)
-				sums[name] += v
+				sums[f.acr] += v
 			}
 		}
 		key := "team"
+		// The acr facts against the store rows of the team's latest day.
+		stored := coverageRows[team]
+		if latestDay == "" {
+			rr.Compared++
+			rr.find(Finding{Pair: "readiness_store", Key: key, Detail: "a team with estimate coverage rows in the store has no acr readiness fact with a day"})
+		} else {
+			rr.leafPair("readiness_store", key, "acr:readiness.day", Leaf{T: LeafDate, V: stored.Day}, Leaf{T: LeafDate, V: latestDay}, nil, nil, 0)
+			rr.leafPair("readiness_store", key, "acr:readiness.scopes", Leaf{T: LeafInt, V: fmt.Sprint(stored.Scopes)}, Leaf{T: LeafInt, V: fmt.Sprint(scopes)}, nil, nil, 0)
+			for _, f := range counts {
+				rr.leafPair("readiness_store", key, "acr:readiness."+f.acr, Leaf{T: LeafInt, V: fmt.Sprint(stored.Counts[f.acr])}, Leaf{T: LeafInt, V: fmt.Sprint(sums[f.acr])}, nil, nil, 0)
+			}
+		}
 		switch {
 		case !hasOps && latestDay == "":
+			// The store has rows for the team and neither plane answers: a
+			// measurement that did not happen, not an agreement.
 			rr.Compared++
-			rr.Matches++
+			rr.find(Finding{Pair: "readiness", Key: key, Detail: "a team with estimate coverage rows in the store has an estimate coverage on neither side"})
 		case !hasOps || latestDay == "":
 			rr.Compared++
 			rr.find(Finding{Pair: "readiness", Key: key, Detail: fmt.Sprintf("estimate coverage present in ops %t, in acr %t", hasOps, latestDay != "")})
 		default:
-			for _, f := range []struct{ ops, acr string }{{"estimatedCount", "estimated_count"}, {"unestimatedCount", "unestimated_count"}, {"backlogSize", "backlog_size"}} {
+			for _, f := range counts {
 				opsLeaf, opsErr := typedLeaf(LeafInt, coverage[f.ops])
-				rr.leafPair("readiness", key, "estimateCoverage."+f.ops, opsLeaf, Leaf{T: LeafInt, V: fmt.Sprint(sums[f.acr])}, opsErr, nil, 0)
+				rr.leafPair("readiness", key, coveragePath+f.ops, opsLeaf, Leaf{T: LeafInt, V: fmt.Sprint(sums[f.acr])}, opsErr, nil, 0)
 			}
 			// ops: ratio = estimated / backlog, null when the backlog is 0.
 			opsRatio, opsErr := typedLeaf(LeafFloat, coverage["ratio"])
@@ -784,7 +827,7 @@ func compareReadiness(ctx context.Context, o *Oracle, rr *RootReport) error {
 			if sums["backlog_size"] != 0 {
 				acrRatio = Leaf{T: LeafFloat, V: formatFloat(float64(sums["estimated_count"]) / float64(sums["backlog_size"]))}
 			}
-			rr.leafPair("readiness", key, "estimateCoverage.ratio", opsRatio, acrRatio, opsErr, nil, relSum)
+			rr.leafPair("readiness", key, coveragePath+"ratio", opsRatio, acrRatio, opsErr, nil, relSum)
 		}
 	}
 	rr.differ(Difference{Pair: "readiness", Key: "all teams", Class: ClassForecastByDesign, Exact: true,
@@ -820,11 +863,11 @@ func flowWindowCheck(fact ServedFact) (compared, matches int, findings []Finding
 			sum, terr := tableSum(part.table, count)
 			switch {
 			case serr != nil || stated.T != LeafInt:
-				findings = append(findings, Finding{Pair: "flow_window", Key: "team", Path: part.field, Detail: "the flow fact states no integer " + part.field})
+				findings = append(findings, Finding{Pair: "flow_window", Key: "team", Path: "acr:flow." + part.field, Detail: "the flow fact states no integer " + part.field})
 			case terr != nil:
-				findings = append(findings, Finding{Pair: "flow_window", Key: "team", Path: part.field, Detail: "the table to sum is not whole: " + terr.Error()})
+				findings = append(findings, Finding{Pair: "flow_window", Key: "team", Path: "acr:flow." + part.field, Detail: "the table to sum is not whole: " + terr.Error()})
 			case stated.V != fmt.Sprint(sum):
-				findings = append(findings, Finding{Pair: "flow_window", Key: "team", Path: part.field, Detail: fmt.Sprintf("the fact states %s; %s is %d", stated.V, part.what, sum)})
+				findings = append(findings, Finding{Pair: "flow_window", Key: "team", Path: "acr:flow." + part.field, Detail: fmt.Sprintf("the fact states %s; %s is %d", stated.V, part.what, sum)})
 			default:
 				matches++
 			}
@@ -872,6 +915,16 @@ func compareFlowWindow(ctx context.Context, o *Oracle, rr *RootReport) error {
 	facts, err := o.facts(ctx, "flow", "team", ids)
 	if err != nil {
 		return err
+	}
+	hasFact := map[string]bool{}
+	for _, fact := range facts {
+		hasFact[bareID(fact.Subject.CanonicalID)] = true
+	}
+	for _, team := range ids {
+		if !hasFact[team] {
+			rr.Compared++
+			rr.find(Finding{Pair: "flow_window", Key: "team", Detail: "a team with work item metrics rows in the store has no acr flow fact"})
+		}
 	}
 	for _, fact := range facts {
 		compared, matches, findings, joined, cerr := flowWindowCheck(fact)

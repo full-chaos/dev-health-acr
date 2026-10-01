@@ -272,6 +272,9 @@ vet:
 
 # The O4 differential oracle on a live venue (never a pull request gate). The
 # venue is named by ACR_O4_* variables; see internal/contextfabric/factoracle.
+# ACR_O4_LISTENER_DARK and ACR_O4_OPERATION_DARK name the roots the venue does
+# not serve on a path; a root that is unavailable and not named fails the run.
+# These two verbs start no container: they call the venue.
 o4-oracle-live:
 	go test -tags o4venue -count=1 -timeout 10m -run '^TestVenueLive$$' -v ./internal/contextfabric/factoracle
 
@@ -282,7 +285,7 @@ o4-oracle-capture:
 # providers, after a change to them that is meant. Needs Docker, not a venue.
 # Review the diff of testdata/venue/manifest.json before the commit.
 o4-oracle-repin:
-	ACR_O4_REPIN=1 go test -count=1 -timeout 10m -run '^TestOracleOnTheSeededStore$$/^RecordedVenueRunReproducesTheVenue$$' -v ./internal/contextfabric/factoracle
+	ACR_O4_REPIN=1 go test $(GOTEST_EXEC) -count=1 -timeout 10m -run '^TestOracleOnTheSeededStore$$/^RecordedVenueRunReproducesTheVenue$$' -v ./internal/contextfabric/factoracle
 
 contract-write:
 	go run ./cmd/contractcheck -write

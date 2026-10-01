@@ -200,14 +200,38 @@ func selectionText(root string, paths []string) (string, error) {
 // LeafJSON is the type of a custom scalar that holds an object.
 const LeafJSON = "json"
 
+// selectedChildren maps a selection prefix (a generalized path, a list marked
+// [*]) to the field names the shape selects under it.
+func (s Shape) selectedChildren() map[string][]string {
+	out := map[string][]string{}
+	seen := map[string]bool{}
+	for _, p := range s.Paths {
+		segs := strings.Split(p, ".")
+		prefix := segs[0]
+		for _, seg := range segs[1:] {
+			name := strings.TrimSuffix(seg, "[*]")
+			if key := prefix + "\x00" + name; !seen[key] {
+				seen[key] = true
+				out[prefix] = append(out[prefix], name)
+			}
+			prefix += "." + seg
+		}
+	}
+	return out
+}
+
 // shapeLeaves types every leaf of an answer by the SDL type of its output
-// path. A value on a path the shape did not select, or of the wrong JSON
-// type, is returned as a problem.
+// path. Three things are returned as problems: a value on a path the shape
+// did not select, a value of the wrong JSON type, and a selected field that
+// is absent from an object of the answer. A GraphQL answer holds a key for
+// every selected field (null for a nullable one), so an absent key is an
+// answer that was cut, never an empty one.
 func (s Shape) shapeLeaves(data any) (map[string][]Leaf, []string) {
 	selected := map[string]bool{}
 	for _, p := range s.Paths {
 		selected[p] = true
 	}
+	children := s.selectedChildren()
 	out := map[string][]Leaf{}
 	var problems []string
 	var walk func(path string, v any)
@@ -219,6 +243,11 @@ func (s Shape) shapeLeaves(data any) (map[string][]Leaf, []string) {
 			if isLeaf {
 				out[path] = append(out[path], Leaf{T: LeafJSON, V: canonicalJSON(t)})
 				return
+			}
+			for _, name := range children[path] {
+				if _, present := t[name]; !present {
+					problems = append(problems, fmt.Sprintf("%s: the selected field %s.%s is absent from the answer", s.ID(), path, name))
+				}
 			}
 			keys := make([]string, 0, len(t))
 			for k := range t {
@@ -259,8 +288,16 @@ func (s Shape) shapeLeaves(data any) (map[string][]Leaf, []string) {
 	if !ok {
 		return out, []string{s.ID() + ": data is not an object"}
 	}
-	for k, v := range root {
-		walk(k, v)
+	if _, present := root[s.Root]; !present {
+		problems = append(problems, fmt.Sprintf("%s: the answer has no %s field", s.ID(), s.Root))
+	}
+	keys := make([]string, 0, len(root))
+	for k := range root {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		walk(k, root[k])
 	}
 	return out, problems
 }

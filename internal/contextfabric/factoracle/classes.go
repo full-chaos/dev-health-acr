@@ -32,10 +32,12 @@ const (
 
 // ClassLatestDayVsWindow is a TEMPORARY class: a value that is the latest
 // day (or all time) of a series, served beside a window with no label that
-// says so. It covers exactly the ops output paths of temporaryOpsPaths, and
-// it is not one of the design's classes. The oracle reports an expired
-// allowance (Report.Expired) when those paths leave the policy, so it cannot
-// outlive the fix it waits for.
+// says so. It covers exactly the ops output paths of temporaryAllowances, and
+// it is not one of the design's classes. A run counts the class only where it
+// measured it (temporaryAllowance), and reports an expired allowance
+// (Report.Expired) when a covered path leaves the policy, when the contract of
+// its operation changes, or when the value starts to follow the requested
+// window, so the allowance cannot outlive the fix it waits for.
 const ClassLatestDayVsWindow Class = "latest_day_vs_window"
 
 // TemporaryClasses lists the classes that are allowed only until a fix lands.
@@ -96,12 +98,62 @@ type RootReport struct {
 	OperationsRun int `json:"operations_run"`
 	CrossPaths    int `json:"cross_paths"`
 	CrossMatches  int `json:"cross_matches"`
+	// OperationLeaves counts the typed leaves of the served run_operation
+	// answers.
+	OperationLeaves int `json:"operation_leaves"`
+	// Unmeasured lists the selected output paths for which no served answer
+	// of the root gave a value: every answer had a null parent or an empty
+	// list above them.
+	Unmeasured []string `json:"unmeasured,omitempty"`
 	// Expired lists temporary allowances that no longer appear.
 	Expired []string `json:"expired,omitempty"`
+	// Invalid lists the reasons the run of this root is not a measurement: a
+	// path that was not served and is not declared dark, a served answer
+	// with no leaf, a value root that compared nothing. A run with one fails.
+	Invalid []string `json:"invalid,omitempty"`
+	// CodeRead lists statements about the root that are read from the code
+	// of a resolver and that this run did not measure. They are not counted
+	// as differences.
+	CodeRead []string `json:"code_read,omitempty"`
 	// Residual is, for root analytics, the ops organization value minus the
 	// sum of the acr repository mixes, per theme.
 	Residual map[string]float64 `json:"residual,omitempty"`
 	Excluded map[string]string  `json:"excluded,omitempty"`
+
+	// The cases of each path by outcome, the output paths a served answer
+	// gave a value for, and the ops output paths the value pairs compared.
+	listenerServed, listenerDark   int
+	operationServed, operationDark int
+	measured                       map[string]bool
+	touched                        map[string]int
+}
+
+func (r *RootReport) invalid(format string, args ...any) {
+	r.Invalid = append(r.Invalid, fmt.Sprintf(format, args...))
+}
+
+// touch records that a value pair compared the ops output path.
+func (r *RootReport) touch(paths ...string) {
+	if r.touched == nil {
+		r.touched = map[string]int{}
+	}
+	for _, path := range paths {
+		r.touched[path]++
+	}
+}
+
+func (r *RootReport) measure(leaves map[string][]Leaf) int {
+	if r.measured == nil {
+		r.measured = map[string]bool{}
+	}
+	n := 0
+	for path, values := range leaves {
+		if len(values) > 0 {
+			r.measured[path] = true
+		}
+		n += len(values)
+	}
+	return n
 }
 
 func (r *RootReport) differ(d Difference) {
@@ -143,9 +195,24 @@ func (r *Report) Expired() []string {
 	return out
 }
 
-// Err is the failure of a run that measured an expired allowance. Findings
-// are not an error: they are measured differences to report.
+// Invalid lists, per root, every reason the run is not a measurement.
+func (r *Report) Invalid() []string {
+	var out []string
+	for _, root := range r.Roots {
+		for _, reason := range root.Invalid {
+			out = append(out, root.Root+": "+reason)
+		}
+	}
+	return out
+}
+
+// Err is the failure of a run that did not measure what it reports, or that
+// measured an expired allowance. Findings are not an error: they are measured
+// differences to report.
 func (r *Report) Err() error {
+	if invalid := r.Invalid(); len(invalid) > 0 {
+		return fmt.Errorf("the run is not a measurement: %s", strings.Join(invalid, "; "))
+	}
 	if expired := r.Expired(); len(expired) > 0 {
 		return fmt.Errorf("a temporary allowance expired; remove the class: %s", strings.Join(expired, "; "))
 	}

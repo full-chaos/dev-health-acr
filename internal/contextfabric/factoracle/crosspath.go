@@ -76,7 +76,10 @@ func (o *Oracle) runOperation(ctx context.Context, rr *RootReport, shape Shape, 
 	}
 	if answer.Call != string(directread.CallServed) {
 		if answer.Call == string(directread.CallOperationUnavailable) {
+			// Not served through run_operation: stated here; validate fails
+			// the run unless the venue declares the root dark on this path.
 			rr.RunOperation = answer.Call
+			rr.operationDark++
 			return nil
 		}
 		detail := "call " + answer.Call
@@ -89,6 +92,7 @@ func (o *Oracle) runOperation(ctx context.Context, rr *RootReport, shape Shape, 
 		rr.find(Finding{Pair: "run_operation", Key: key, Detail: detail})
 		return nil
 	}
+	rr.operationServed++
 	if answer.Operation != shape.Operation {
 		rr.find(Finding{Pair: "run_operation", Key: key, Detail: "echo: the answer names operation " + answer.Operation})
 	}
@@ -104,8 +108,10 @@ func (o *Oracle) runOperation(ctx context.Context, rr *RootReport, shape Shape, 
 	for _, problem := range problems {
 		rr.find(Finding{Pair: "run_operation", Key: key, Detail: problem})
 	}
+	rr.OperationLeaves += rr.measure(leaves)
 
-	// The other path, when it served the same case.
+	// The other path, when it served the same case. Its own shape problems
+	// were reported by the shape pass, which ran this same answer.
 	raw, seen := o.answers[CaseKey(shape, c.Variables)]
 	if !seen {
 		return nil
@@ -184,59 +190,193 @@ func leafStrings(leaves []Leaf) []string {
 	return out
 }
 
-// temporaryOpsPaths are the ops output paths of the temporary class
-// latest_day_vs_window: values of the latest day, or of all time, served
-// beside a window with no label. Each entry is a path or the prefix of a
-// block. This is read from the code of the resolvers; the oracle does not
-// reproduce it. The allowance holds while the paths are in the policy. (The
-// acr half of the class is gone: the flow fact names its window and its
-// latest-day counts, and compareFlowWindow checks both.)
-var temporaryOpsPaths = map[string][]string{
-	"throughputForecast": {"throughputForecast.backlogSize", "throughputForecast.wipCongestion", "throughputForecast.staleWip", "throughputForecast.estimateCoverage"},
-	"capacityForecast":   {"capacityForecast.backlogSize"},
-	"workGraphFlow":      {"workGraphFlow.rows[*].inflow", "workGraphFlow.rows[*].outflow"},
-}
-
-// temporaryPathsMissing lists the paths of spec that outputs no longer hold.
-func temporaryPathsMissing(spec []string, outputs []string) []string {
-	var missing []string
-	for _, want := range spec {
-		found := false
-		for _, path := range outputs {
-			if path == want || strings.HasPrefix(path, want+".") {
-				found = true
-			}
-		}
-		if !found {
-			missing = append(missing, want)
-		}
+// setVariable returns a deep copy of variables with the value at a dotted
+// path replaced, and the value that was there.
+func setVariable(variables map[string]any, path string, value any) (map[string]any, any, bool) {
+	generic, err := decodeJSON([]byte(canonicalJSON(variables)))
+	if err != nil {
+		return nil, nil, false
 	}
-	return missing
-}
-
-// temporaryAllowance reports the temporary class for a root that still
-// serves the paths it covers, and an expired allowance when the policy no
-// longer holds them.
-func (o *Oracle) temporaryAllowance(rr *RootReport, root *directread.GraphQLRootPolicy) {
-	spec, ok := temporaryOpsPaths[root.Field]
+	out, ok := generic.(map[string]any)
 	if !ok {
-		return
+		return nil, nil, false
 	}
-	var outputs []string
-	for _, name := range root.Operations() {
-		if op, refusal := o.Policy.Catalogue().Lookup(name); refusal == nil && op != nil {
-			for _, out := range op.Outputs {
-				outputs = append(outputs, out.Path)
-			}
+	segs := strings.Split(path, ".")
+	cur := out
+	for _, seg := range segs[:len(segs)-1] {
+		next, isObject := cur[seg].(map[string]any)
+		if !isObject {
+			return nil, nil, false
+		}
+		cur = next
+	}
+	last := segs[len(segs)-1]
+	prior, had := cur[last]
+	if !had {
+		return nil, nil, false
+	}
+	cur[last] = value
+	return out, prior, true
+}
+
+// probeLeaves runs one case of the window probe on the path that serves the
+// root and returns its typed leaves. served is false, with the reason, when
+// the case gave nothing to read.
+func (o *Oracle) probeLeaves(ctx context.Context, rr *RootReport, shape Shape, variables map[string]any) (leaves map[string][]Leaf, reason string, err error) {
+	var data []byte
+	switch {
+	case rr.listenerServed > 0:
+		answer, gerr := o.graphQL(ctx, shape, variables)
+		if gerr != nil {
+			return nil, "", gerr
+		}
+		if answer.Call != string(directread.CallServed) {
+			return nil, "graphql_query answered " + answer.Call, nil
+		}
+		data = answer.Data
+	case rr.operationServed > 0:
+		answer, oerr := o.operation(ctx, shape, variables)
+		if oerr != nil {
+			return nil, "", oerr
+		}
+		if answer.Call != string(directread.CallServed) {
+			return nil, "run_operation answered " + answer.Call, nil
+		}
+		data = answer.Data
+	default:
+		return nil, "no path served the root", nil
+	}
+	decoded, derr := decodeJSON(data)
+	if derr != nil {
+		return nil, "the answer is not JSON", nil
+	}
+	object, _ := decoded.(map[string]any)
+	if object == nil || object[shape.Root] == nil {
+		return nil, "the answer is null", nil
+	}
+	leaves, _ = shape.shapeLeaves(decoded)
+	return leaves, "", nil
+}
+
+// leavesUnder returns the leaves of a path or of the block under it, as
+// sorted strings per path, type names left out. measured is false when no
+// leaf holds a value.
+func leavesUnder(leaves map[string][]Leaf, prefix string) (out string, measured bool) {
+	var paths []string
+	for path := range leaves {
+		if strings.HasSuffix(path, ".__typename") {
+			continue
+		}
+		if path == prefix || strings.HasPrefix(path, prefix+".") || strings.HasPrefix(path, prefix+"[*]") {
+			paths = append(paths, path)
 		}
 	}
-	if missing := temporaryPathsMissing(spec, outputs); len(missing) > 0 {
+	sort.Strings(paths)
+	var b strings.Builder
+	for _, path := range paths {
+		for _, leaf := range leaves[path] {
+			if leaf.T != LeafNull {
+				measured = true
+			}
+		}
+		b.WriteString(path + "=" + strings.Join(leafStrings(leaves[path]), ",") + ";")
+	}
+	return b.String(), measured
+}
+
+// temporaryAllowance measures the temporary class for a root. The allowance
+// expires when a covered path leaves the policy, when the contract of its
+// operation is not the one it was read against, or when a covered value is
+// another value for another history: it then follows the requested window,
+// which is the fix the allowance waits for. A covered value that is the same
+// for both histories, while the answer states both histories, is one counted
+// difference of the class. What the run could not measure is stated in
+// CodeRead and is not counted.
+func (o *Oracle) temporaryAllowance(ctx context.Context, rr *RootReport, root *directread.GraphQLRootPolicy, cases map[string][]ShapeCase) error {
+	spec, ok := o.allowances()[root.Field]
+	if !ok {
+		return nil
+	}
+	if missing := temporaryPathsMissing(spec.Paths, rootOutputs(o.Policy, root)); len(missing) > 0 {
 		rr.Expired = append(rr.Expired, fmt.Sprintf("class %s: %s is no longer an output path of the policy; remove the allowance", ClassLatestDayVsWindow, strings.Join(missing, ", ")))
-		return
+		return nil
 	}
-	if rr.Listener != string(directread.CallServed) && rr.RunOperation != string(directread.CallServed) {
-		return
+	op, refusal := o.Policy.Catalogue().Lookup(spec.Operation)
+	if refusal != nil || op == nil {
+		rr.Expired = append(rr.Expired, fmt.Sprintf("class %s: operation %s is no longer served; remove the allowance", ClassLatestDayVsWindow, spec.Operation))
+		return nil
 	}
-	rr.differ(Difference{Pair: "unlabelled_latest_value", Key: strings.Join(spec, ", "), Class: ClassLatestDayVsWindow, Exact: false,
-		Detail: "read from the resolver code, not reproduced by this oracle: a latest-day or all-time value served beside a window with no label"})
+	if got := contractDigest(op); got != spec.Contract {
+		rr.Expired = append(rr.Expired, fmt.Sprintf("class %s: the contract of operation %s is %s, not the one the allowance was read against; read the resolver again, then renew the digest or remove the allowance", ClassLatestDayVsWindow, spec.Operation, got))
+		return nil
+	}
+	covered := strings.Join(spec.Paths, ", ")
+	unmeasured := func(reason string) {
+		rr.CodeRead = append(rr.CodeRead, fmt.Sprintf("class %s, %s: read from the resolver code, not measured by this run (%s)", ClassLatestDayVsWindow, covered, reason))
+	}
+	if spec.Window == "" {
+		unmeasured("the operation takes no window argument")
+		return nil
+	}
+	shape, err := o.shape(root.Field + "/" + spec.Operation + "/all")
+	if err != nil {
+		return err
+	}
+	if len(cases[shape.ID()]) == 0 {
+		return fmt.Errorf("shape %s has no case for the window probe", shape.ID())
+	}
+	wide := cases[shape.ID()][0].Variables
+	narrow, prior, ok := setVariable(wide, spec.Window, spec.Narrow)
+	if !ok {
+		return fmt.Errorf("the case of shape %s does not set %s: the window probe has no history to change", shape.ID(), spec.Window)
+	}
+	if fmt.Sprint(prior) == fmt.Sprint(spec.Narrow) {
+		return fmt.Errorf("the case of shape %s already asks for a history of %d: the window probe needs two histories", shape.ID(), spec.Narrow)
+	}
+	if err := checkVariablePaths(shape, "", narrow); err != nil {
+		return err
+	}
+	wideLeaves, reason, err := o.probeLeaves(ctx, rr, shape, wide)
+	if err != nil {
+		return err
+	}
+	if reason != "" {
+		unmeasured(reason)
+		return nil
+	}
+	narrowLeaves, reason, err := o.probeLeaves(ctx, rr, shape, narrow)
+	if err != nil {
+		return err
+	}
+	if reason != "" {
+		unmeasured("for the second history " + reason)
+		return nil
+	}
+	wideEcho, _ := leavesUnder(wideLeaves, spec.Echo)
+	narrowEcho, echoMeasured := leavesUnder(narrowLeaves, spec.Echo)
+	if !echoMeasured || wideEcho == narrowEcho {
+		unmeasured(fmt.Sprintf("the answer states the same history at %s for both requests", spec.Echo))
+		return nil
+	}
+	for _, path := range spec.Paths {
+		a, measured := leavesUnder(wideLeaves, path)
+		b, _ := leavesUnder(narrowLeaves, path)
+		switch {
+		case a != b:
+			rr.Expired = append(rr.Expired, fmt.Sprintf("class %s: %s is another value for a history of %v and of %d: it now follows the requested window; remove it from the allowance", ClassLatestDayVsWindow, path, prior, spec.Narrow))
+		case !measured:
+			rr.CodeRead = append(rr.CodeRead, fmt.Sprintf("class %s, %s: read from the resolver code, not measured by this run (the answer holds no value there)", ClassLatestDayVsWindow, path))
+		default:
+			rr.differ(Difference{Pair: "window_probe", Key: path, Class: ClassLatestDayVsWindow, Exact: true,
+				Detail: fmt.Sprintf("the value is the same for a history of %v and of %d, and the answer states both histories: it does not follow the requested window", prior, spec.Narrow)})
+		}
+	}
+	return nil
+}
+
+func (o *Oracle) allowances() map[string]temporaryAllowance {
+	if o.Allowances != nil {
+		return o.Allowances
+	}
+	return temporaryAllowances
 }

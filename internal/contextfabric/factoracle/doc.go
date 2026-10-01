@@ -31,7 +31,25 @@
 // Roots with no acr fact are checked for shape, echo and limits only; the
 // reason is recorded per root in rootPairs.
 //
+// What is compared is held against the production declarations, not against
+// a list in this package alone: every output path of a value root is compared
+// or excluded with a reason (valuePaths, checked against the root policy), and
+// every field and table column a fact provider declares for a kind the oracle
+// reads is compared or excluded with a reason (factPlan, checked against
+// FactCapability.Fields and against every fact a run reads).
+//
+// A run is a measurement or it fails (Report.Err): a path that does not serve
+// a root must be declared dark by the venue (Oracle.ListenerDark,
+// Oracle.OperationDark), a served answer must hold every selected field and
+// at least one leaf, two served paths must have leaves to compare, and a
+// value root must compare something on every path its plan says it compares.
+// A subject with rows in the store and no answer is a finding, never a match
+// and never skipped.
+//
 // The design's six classes are permanent. ClassLatestDayVsWindow is a
-// temporary allowance: a run reports it as expired when it stops appearing,
-// and both run modes fail on an expired allowance.
+// temporary allowance. It is counted only where a run measured it (the same
+// value for two different histories; temporaryAllowance), and it expires when
+// a covered path leaves the policy, when the contract of its operation
+// changes, or when a covered value starts to follow the requested window.
+// Both run modes fail on an expired allowance.
 package factoracle

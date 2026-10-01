@@ -3,6 +3,7 @@ package factoracle
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"os"
 	"reflect"
@@ -53,7 +54,8 @@ func oracleFor(t *testing.T, manifest Manifest, planes Planes, reference *Extrac
 	if err != nil {
 		t.Fatalf("reference store: %v", err)
 	}
-	return &Oracle{Policy: policy, Planes: planes, Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases}
+	return &Oracle{Policy: policy, Planes: planes, Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases,
+		ListenerDark: manifest.ListenerDark, OperationDark: manifest.OperationDark}
 }
 
 func runOracle(t *testing.T, o *Oracle) *Report {
@@ -112,6 +114,13 @@ func recordedVenueRunReproducesTheVenue(t *testing.T) {
 		sortFindings(want.Findings)
 		sort.Strings(got.NotJoined)
 		sort.Strings(want.NotJoined)
+		// The values of a named difference are float sums: they are held to
+		// the pinned ones within the tolerance of a reordered sum, everything
+		// else exactly.
+		if problem := differencesDiffer(got.Differences, want.Differences); problem != "" {
+			t.Errorf("root %s: the named differences are not the pinned ones: %s", rr.Root, problem)
+		}
+		got.Differences, want.Differences = nil, nil
 		if !reflect.DeepEqual(got, want) {
 			g, _ := json.Marshal(got)
 			w, _ := json.Marshal(want)
@@ -135,6 +144,27 @@ func recordedVenueRunReproducesTheVenue(t *testing.T) {
 			t.Errorf("investment residual of %s is %v, the venue gave %v", theme, got, want)
 		}
 	}
+}
+
+// differencesDiffer says how two pinned difference lists differ, "" when
+// they are the same classes, keys and values.
+func differencesDiffer(got, want []PinnedDifference) string {
+	if len(got) != len(want) {
+		return fmt.Sprintf("%d differences, the pinned outcome has %d", len(got), len(want))
+	}
+	for i := range got {
+		g, w := got[i], want[i]
+		if g.Pair != w.Pair || g.Key != w.Key || g.Class != w.Class || g.Exact != w.Exact || len(g.Values) != len(w.Values) {
+			return fmt.Sprintf("difference %d is %s/%s/%s, the pinned one %s/%s/%s", i, g.Pair, g.Class, g.Key, w.Pair, w.Class, w.Key)
+		}
+		for name, value := range g.Values {
+			pinned, ok := w.Values[name]
+			if !ok || math.Abs(value-pinned) > sumTolerance(value, pinned) {
+				return fmt.Sprintf("difference %s/%s/%s: value %s is %v, the pinned one %v", g.Pair, g.Class, g.Key, name, value, pinned)
+			}
+		}
+	}
+	return ""
 }
 
 func sortFindings(findings []Finding) {
