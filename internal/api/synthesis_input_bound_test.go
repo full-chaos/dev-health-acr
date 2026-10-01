@@ -29,9 +29,12 @@ const expansionCap = 200
 
 // teamExpander admits a fixed number of targets for every kind a team
 // question expands: out of a larger candidate set, or as the whole set.
+// workItemsOnly reads the team through its work items alone, the kinds whose
+// expansion is by ownership and carries no association disclosure.
 type teamExpander struct {
-	targets  int
-	complete bool
+	targets       int
+	complete      bool
+	workItemsOnly bool
 }
 
 func (e teamExpander) ExpandFactScope(_ context.Context, request cf.FactScopeExpansionRequest) (cf.FactScopeExpansionResult, error) {
@@ -94,6 +97,7 @@ type recordedModelProvider struct {
 	mu       sync.Mutex
 	requests [][]byte
 	baseURL  string
+	draft    string
 }
 
 const teamSynthesisJSON = `{
@@ -107,9 +111,24 @@ const teamSynthesisJSON = `{
 	"warnings": []
 }`
 
+// teamClaimSynthesisJSON is a complete answer that claims the team's own
+// health fact, so the engine keeps the team as the committed subject.
+const teamClaimSynthesisJSON = `{
+	"status": "complete",
+	"direct_judgment": "The Platform team has open work.",
+	"current_state": "Open work.",
+	"strongest_pressures": [], "drivers": [],
+	"remaining_work": [], "readiness_gaps": [], "conflicts": [], "limitations": [],
+	"evidence_ref_ids": [],
+	"claimed_facts": [{"claim_id": "claim_team_health", "kind": "health", "field": "state", "value": {"string": "open"},
+		"subject": {"kind": "team", "canonical_id": "team:PLATFORM", "label": "Platform"}}],
+	"deterministic_answer": "The Platform team has open work.",
+	"warnings": []
+}`
+
 func newRecordedModelProvider(t *testing.T) *recordedModelProvider {
 	t.Helper()
-	provider := &recordedModelProvider{}
+	provider := &recordedModelProvider{draft: teamSynthesisJSON}
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		body, err := io.ReadAll(request.Body)
 		if err != nil {
@@ -117,11 +136,12 @@ func newRecordedModelProvider(t *testing.T) *recordedModelProvider {
 		}
 		provider.mu.Lock()
 		provider.requests = append(provider.requests, body)
+		draft := provider.draft
 		provider.mu.Unlock()
 		writer.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(writer, `{"id":"chatcmpl-test","object":"chat.completion","created":1760000000,"model":"gpt-5-nano",
 			"choices":[{"index":0,"message":{"role":"assistant","content":%q},"finish_reason":"stop"}],
-			"usage":{"prompt_tokens":41,"completion_tokens":17,"total_tokens":58}}`, teamSynthesisJSON)
+			"usage":{"prompt_tokens":41,"completion_tokens":17,"total_tokens":58}}`, draft)
 	}))
 	t.Cleanup(server.Close)
 	provider.baseURL = server.URL + "/v1/"
@@ -144,6 +164,17 @@ var expandedTeamKinds = []struct {
 	{cf.FactBlockers, cf.SubjectWorkItem}, {cf.FactPullRequests, cf.SubjectPullRequest}, {cf.FactReviews, contractsv1.ContextFabricSubjectPullRequestReview},
 }
 
+// workItemTeamKinds are the kinds a team question reaches through its work
+// items.
+var workItemTeamKinds = []struct {
+	kind    cf.FactKind
+	subject cf.SubjectKind
+}{
+	{cf.FactIdentity, cf.SubjectWorkItem}, {cf.FactActualCompletion, cf.SubjectWorkItem}, {cf.FactWork, cf.SubjectWorkItem},
+	{cf.FactBlockers, cf.SubjectWorkItem}, {cf.FactStatus, cf.SubjectWorkItem}, {cf.FactRequiredChildren, cf.SubjectWorkItem},
+	{cf.FactMembership, cf.SubjectWorkItem},
+}
+
 // teamSynthesisApp serves a team question through the real engine, the real
 // fact registry and the real answer synthesizer over the given model runtime.
 // Each expanded kind is read over the expander's targets.
@@ -152,7 +183,11 @@ func teamSynthesisApp(t *testing.T, runtime cf.ModelRuntime, sink cf.ModelReceip
 	logger := slog.New(slog.NewJSONHandler(logs, nil))
 	requirements := []cf.FactRequirement{{Kind: cf.FactHealth}}
 	providers := []cf.FactProvider{}
-	for _, expanded := range expandedTeamKinds {
+	kinds := expandedTeamKinds
+	if expander.workItemsOnly {
+		kinds = workItemTeamKinds
+	}
+	for _, expanded := range kinds {
 		requirements = append(requirements, cf.FactRequirement{Kind: expanded.kind})
 		providers = append(providers, producerShapedFactProvider{capability: teamFactCapability(expanded.kind, string(expanded.kind), expanded.subject)})
 	}
@@ -364,25 +399,46 @@ func TestATeamQuestionLargerThanTheModelInputIsAnsweredWithBoundedFacts(t *testi
 	}
 }
 
-// A team whose expanded facts were all read, below the expansion cap, and are
-// still larger than the model input bound. No fact read is degraded, and the
-// answer is bounded and says so.
-func TestAFullyReadFactSetLargerThanTheModelInputIsBounded(t *testing.T) {
-	logs := &bytes.Buffer{}
-	provider := newRecordedModelProvider(t)
-	app, token := teamSynthesisApp(t, productionModelRuntime(t, provider, logs), nil, teamExpander{targets: expansionCap - 1, complete: true}, logs)
-
-	response := postTeamQuestion(t, app, token)
-
-	result := decodeTeamAnswer(t, response, logs)
-	if len(result.Coverage.DegradedReasons) != 0 {
-		t.Fatalf("degraded reasons = %q, want none: the fact read was complete", result.Coverage.DegradedReasons)
+// A team whose work item facts were all read, by ownership, with an answer
+// that keeps the team as its subject: nothing but the model input bound can
+// make the answer partial. Below the bound the answer is not partial; above
+// it the answer is partial and says why.
+func TestTheModelInputBoundAloneMakesAFullyReadAnswerPartial(t *testing.T) {
+	cases := []struct {
+		name        string
+		targets     int
+		wantBounded bool
+	}{
+		{name: "facts that fit", targets: 3},
+		{name: "facts larger than the model input", targets: expansionCap - 1, wantBounded: true},
 	}
-	if !hasLimitation(result, contractsv1.ContextFabricSynthesisInputBoundedLimitation) {
-		t.Fatalf("limitations = %q, want the bounded-input disclosure", result.Limitations)
-	}
-	if bounds := logLines(t, logs.String(), "context fabric synthesis input bounded"); len(bounds) != 1 || bounds[0]["outcome"] != "fitted" {
-		t.Fatalf("bound lines = %v, want one with outcome=fitted", bounds)
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			logs := &bytes.Buffer{}
+			provider := newRecordedModelProvider(t)
+			provider.draft = teamClaimSynthesisJSON
+			app, token := teamSynthesisApp(t, productionModelRuntime(t, provider, logs), nil, teamExpander{targets: testCase.targets, complete: true, workItemsOnly: true}, logs)
+
+			response := postTeamQuestion(t, app, token)
+
+			result := decodeTeamAnswer(t, response, logs)
+			if len(result.Coverage.DegradedReasons) != 0 {
+				t.Fatalf("degraded reasons = %q, want none: every fact read was complete", result.Coverage.DegradedReasons)
+			}
+			if result.Coverage.Partial != testCase.wantBounded {
+				t.Fatalf("coverage.partial = %v, want %v. limitations = %q", result.Coverage.Partial, testCase.wantBounded, result.Limitations)
+			}
+			if hasLimitation(result, contractsv1.ContextFabricSynthesisInputBoundedLimitation) != testCase.wantBounded {
+				t.Fatalf("limitations = %q, want the bounded-input disclosure present = %v", result.Limitations, testCase.wantBounded)
+			}
+			bounds := logLines(t, logs.String(), "context fabric synthesis input bounded")
+			if testCase.wantBounded && (len(bounds) != 1 || bounds[0]["outcome"] != "fitted") {
+				t.Fatalf("bound lines = %v, want one with outcome=fitted", bounds)
+			}
+			if !testCase.wantBounded && len(bounds) != 0 {
+				t.Fatalf("bound lines = %v, want none", bounds)
+			}
+		})
 	}
 }
 
