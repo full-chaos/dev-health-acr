@@ -862,7 +862,9 @@ type ContextFabricInvestigationRequest struct {
 	// inferred_default/explicit_unattributed (drives census-narrowing and
 	// offer-shaping only; a decisive outcome still requires the matching
 	// kindr_/handr_ receipt, or -- for kind -- the §2.0 kind-insensitivity
-	// proof); on every other surface (panel/web_assertion) an explicit
+	// proof) EXCEPT that a single subject_handle whose kind is anchored on a
+	// repository is also resolved against the one repository the request
+	// committed, through the keyed census; on every other surface (panel/web_assertion) an explicit
 	// value keeps 3900 v5.2's ordinary question_stated rule. (EvidenceWindow
 	// no longer splits by surface: a supplied window is committed on every
 	// surface, CHAOS-6557.) See canonicalizeStructure (structure.go) for the

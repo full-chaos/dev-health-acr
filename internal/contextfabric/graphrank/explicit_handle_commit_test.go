@@ -82,19 +82,71 @@ func TestExplicitPullRequestHandleResolvesInsideCommittedRepository(t *testing.T
 	}
 }
 
-func TestExplicitPullRequestHandleStaysUnresolvedWhenNotUnique(t *testing.T) {
+func TestExplicitPullRequestHandleNotUniqueLeavesNoRepositoryAnswer(t *testing.T) {
 	t.Parallel()
 	var calls []explicitHandleCensusCall
 	deps, request := explicitHandleFixture(2, &calls)
-	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("dev-health-acr"), deps, nil, nil, nil, "")
-	if err != nil {
-		t.Fatal(err)
+	resolution := resolveExplicitHandleFixture(t, deps, request)
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("Committed = %#v, want none: an answer about the repository is not an answer about the pull request", resolution.Committed)
 	}
-	if len(resolution.Committed) != 1 || resolution.Committed[0].Kind != contextfabric.SubjectRepository {
-		t.Fatalf("Committed = %#v, want the repository only", resolution.Committed)
+	if !strings.Contains(resolution.ClarificationPrompt, "pull request") || !strings.Contains(resolution.ClarificationPrompt, "full-chaos/dev-health-acr") {
+		t.Fatalf("ClarificationPrompt = %q", resolution.ClarificationPrompt)
 	}
 }
 
+func TestExplicitPullRequestHandleCensusPanicFailsClosed(t *testing.T) {
+	t.Parallel()
+	var calls []explicitHandleCensusCall
+	deps, request := explicitHandleFixture(1, &calls)
+	census := deps.CensusFunc
+	deps.CensusFunc = func(ctx context.Context, org string, kind CensusKind, value string, handleBound bool, anchorKind contextfabric.SubjectKind, anchorID string, anchorBound bool) (CensusOutcome, error) {
+		if anchorBound {
+			panic("census exploded")
+		}
+		return census(ctx, org, kind, value, handleBound, anchorKind, anchorID, anchorBound)
+	}
+	resolution := resolveExplicitHandleFixture(t, deps, request)
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("Committed = %#v, want none", resolution.Committed)
+	}
+}
+
+func TestExplicitPullRequestHandleReplacesACommittedPullRequestWithAnotherNumber(t *testing.T) {
+	t.Parallel()
+	var calls []explicitHandleCensusCall
+	deps, request := explicitHandleFixture(1, &calls)
+	other := "pull_request:7b9583ee-4d24-2be7-4d09-34f815bebdd7:748"
+	exact := deps.ExactHint
+	deps.ExactHint = func(ctx context.Context, s contextfabric.SubjectRef) (CandidateNode, bool, error) {
+		if s.CanonicalID == other {
+			return candidateNode(s.Kind, other, "PR #748", 0.1, "*"), true, nil
+		}
+		return exact(ctx, s)
+	}
+	request.RequestedScope.SubjectHints = append(request.RequestedScope.SubjectHints, contextfabric.SubjectHint{Kind: contextfabric.SubjectPullRequest, ID: other, Label: "PR #748", Source: "caller"})
+	resolution := resolveExplicitHandleFixture(t, deps, request)
+	var prs []string
+	for _, s := range resolution.Committed {
+		if s.Kind == contextfabric.SubjectPullRequest {
+			prs = append(prs, s.CanonicalID)
+		}
+	}
+	if len(prs) != 1 || prs[0] != explicitHandlePRID {
+		t.Fatalf("pull requests committed = %v, want only %s", prs, explicitHandlePRID)
+	}
+}
+
+func TestSeveralExplicitHandlesLeaveTheResolutionAlone(t *testing.T) {
+	t.Parallel()
+	var calls []explicitHandleCensusCall
+	deps, request := explicitHandleFixture(1, &calls)
+	request.SubjectHandles = append(request.SubjectHandles, contractsv1.ContextFabricRequestedHandle{Kind: contextfabric.SubjectPullRequest, PatternID: "pull_request_number", Value: "748"})
+	resolution := resolveExplicitHandleFixture(t, deps, request)
+	if hasCommittedKind(resolution.Committed, contextfabric.SubjectPullRequest) || len(resolution.Committed) != 1 {
+		t.Fatalf("Committed = %#v, want the repository untouched: several handles drive offers only", resolution.Committed)
+	}
+}
 func TestExplicitPullRequestHandleNeedsExactlyOneCommittedRepository(t *testing.T) {
 	t.Parallel()
 	var calls []explicitHandleCensusCall
@@ -188,8 +240,8 @@ func TestExplicitPullRequestHandleRefusesAnUnsafeCensusOutcome(t *testing.T) {
 			deps.CensusFunc = func(context.Context, string, CensusKind, string, bool, contextfabric.SubjectKind, string, bool) (CensusOutcome, error) {
 				return outcome, nil
 			}
-			if resolution := resolveExplicitHandleFixture(t, deps, request); committedHasKind(resolution.Committed, contextfabric.SubjectPullRequest) {
-				t.Fatalf("Committed = %#v, want no pull request", resolution.Committed)
+			if resolution := resolveExplicitHandleFixture(t, deps, request); len(resolution.Committed) != 0 {
+				t.Fatalf("Committed = %#v, want none: neither the pull request nor the repository", resolution.Committed)
 			}
 		})
 	}
@@ -225,9 +277,37 @@ func TestExplicitPullRequestHandleIsInertWithoutItsInputs(t *testing.T) {
 				return candidateNode(s.Kind, s.CanonicalID, "full-chaos/dev-health-acr", 0.9, "*"), true, nil
 			}
 			fn(&deps, &request)
-			if resolution := resolveExplicitHandleFixture(t, deps, request); committedHasKind(resolution.Committed, contextfabric.SubjectPullRequest) || len(resolution.Committed) > 1 {
+			if resolution := resolveExplicitHandleFixture(t, deps, request); hasCommittedKind(resolution.Committed, contextfabric.SubjectPullRequest) || len(resolution.Committed) > 1 {
 				t.Fatalf("Committed = %#v, want at most the hinted subject", resolution.Committed)
 			}
 		})
+	}
+}
+
+func hasCommittedKind(committed []contextfabric.SubjectRef, kind contextfabric.SubjectKind) bool {
+	for _, subject := range committed {
+		if subject.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func TestExplicitPullRequestHandleDigestCarriesTheResolutionWideFlags(t *testing.T) {
+	t.Parallel()
+	var calls []explicitHandleCensusCall
+	deps, request := explicitHandleFixture(1, &calls)
+	repo := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: explicitHandleRepoID, Label: "full-chaos/dev-health-acr"}
+	bases := contextfabric.CommitBasisSet{}
+	digests := contextfabric.CommitDecisionDigestSet{}
+	digests.Record(repo, contextfabric.CommitDecisionDigest{CommitGate: "lone_floor", SearchTruncated: true, AliasLookupComplete: true})
+	resolution := commitExplicitHandleSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, deps, contextfabric.SubjectResolution{Committed: []contextfabric.SubjectRef{repo}}, bases, digests)
+	pr := contextfabric.SubjectRef{Kind: contextfabric.SubjectPullRequest, CanonicalID: explicitHandlePRID}
+	if len(resolution.Committed) != 2 {
+		t.Fatalf("Committed = %#v", resolution.Committed)
+	}
+	got := digests.For(pr)
+	if got.CommitGate != commitGateExplicitHandleCensus || !got.SearchTruncated || !got.AliasLookupComplete {
+		t.Fatalf("digest = %#v, want the evidence_census gate carrying the resolution-wide flags", got)
 	}
 }
