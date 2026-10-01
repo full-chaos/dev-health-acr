@@ -97,6 +97,7 @@ type abortCoordinatorOptions struct {
 	lifecycle  contextfabric.GraphLifecycleStore
 	epochViews func(int64) contextfabric.ProjectionCheckpointStore
 	backend    *fakeBackend
+	now        func() time.Time
 }
 
 func newAbortRig(t *testing.T, ctx context.Context, db *sql.DB, org string) *abortRig {
@@ -116,6 +117,11 @@ func newAbortRig(t *testing.T, ctx context.Context, db *sql.DB, org string) *abo
 }
 
 func (r *abortRig) coordinator(options abortCoordinatorOptions, sources ...projectionrun.SourcePair) *projectionrun.Coordinator {
+	r.t.Helper()
+	return r.coordinatorWithCap(options, 0, sources...)
+}
+
+func (r *abortRig) coordinatorWithCap(options abortCoordinatorOptions, maxRefusedBuilds int, sources ...projectionrun.SourcePair) *projectionrun.Coordinator {
 	r.t.Helper()
 	logger := options.logger
 	if logger == nil {
@@ -137,7 +143,7 @@ func (r *abortRig) coordinator(options abortCoordinatorOptions, sources ...proje
 		OrgIDs: []string{r.org}, Sources: sources,
 		Backend: backend, Checkpoints: r.checkpoints, RebuildMarkers: newFakeRebuildMarker(),
 		Lifecycle: lifecycle, EpochCheckpoints: epochViews, LifecycleTelemetry: r.telemetry, EpochResolverInvalidator: r.resolver,
-		GraceWindow: time.Hour, MaxBackoff: time.Millisecond, DrainBatchBudget: options.budget, Logger: logger,
+		GraceWindow: time.Hour, MaxBackoff: time.Millisecond, DrainBatchBudget: options.budget, Logger: logger, MaxRefusedBuilds: maxRefusedBuilds, Now: options.now,
 	})
 	require.NoError(r.t, err)
 	return coordinator
