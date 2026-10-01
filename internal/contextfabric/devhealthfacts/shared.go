@@ -280,6 +280,20 @@ func (f clickhouseFacts) query(ctx context.Context, statement, orgID string, ids
 // this package has no server-side logging seam to hand it to (inventing one
 // here is out of scope for this fix), so err is accepted for call sites'
 // context but intentionally never reaches the returned error at all.
+// mixReadFailure is readFailure for the project mix reads: a read that stayed
+// contended through every attempt (ProjectMixContendedError) is a retryable
+// unavailable source with a "contended" reason, not a generic failure.
+func mixReadFailure(action string, err error) error {
+	var contended *ProjectMixContendedError
+	if errors.As(err, &contended) {
+		return &contextfabric.FactReadFailure{
+			State:  contextfabric.SourceUnavailable,
+			Reason: "devhealthfacts: " + action + " contended: its inputs changed during every read attempt; retry",
+		}
+	}
+	return readFailure(action, err)
+}
+
 func readFailure(action string, err error) error {
 	return &contextfabric.FactReadFailure{
 		State:  contextfabric.SourceUnavailable,

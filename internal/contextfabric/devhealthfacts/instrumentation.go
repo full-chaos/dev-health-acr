@@ -32,6 +32,7 @@ func (p instrumentedProvider) Capability() contextfabric.FactCapability {
 }
 
 func (p instrumentedProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+	ctx = context.WithValue(ctx, projectMixInstrumentationKey{}, p.instr)
 	return p.inner.ReadFacts(readers.ContextWithInstrumentation(ctx, p.instr), principal, query)
 }
 

@@ -16,13 +16,17 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/full-chaos/dev-health-go/readers"
 )
@@ -397,9 +401,12 @@ SELECT org_id, repo_id, work_item_id, 'team-2', 'team-2', source, is_primary, co
 	})
 }
 
-// A read whose inputs move on EVERY attempt fails; it never serves a blend. The
-// hook writes a newer work_items version each time the phases run.
-func TestProjectNativePhasedReadFailsWhenItsInputsMoveOnEveryAttemptAgainstRealClickHouse(t *testing.T) {
+// A read whose inputs move on EVERY attempt fails with the typed retryable
+// class, which the provider answers as an unavailable source with a "contended"
+// reason (never a blend, never a generic failure), and which reports through the
+// instrumentation hook: one event per retry, one error event for the terminal
+// failure.
+func TestProjectNativePhasedReadFailsContendedWhenItsInputsMoveOnEveryAttemptAgainstRealClickHouse(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	query, direct := newScopedCHAOS7257Client(t, nil)
@@ -407,17 +414,89 @@ func TestProjectNativePhasedReadFailsWhenItsInputsMoveOnEveryAttemptAgainstRealC
 	const orgID = "org-7271-exhaust"
 	at := seedCHAOS7257Native(t, ctx, direct, orgID)
 	attempts := 0
-	rows, err := devhealthfacts.RunProjectNativeMix(devhealthfacts.WithProjectMixBetweenPhases(ctx, func() {
+	hook := func() {
 		attempts++
 		if err := direct.Exec(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, title, type, status, project_key, project_id, native_team_key, project_name, created_at, updated_at, completed_at, parent_id, url, last_synced, org_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			"00000000-0000-0000-0000-000000000000", "linear:A-1", "linear", "title", "issue", "open", "", "n-p1", "", "", at, at, nil, "", "", at.Add(time.Duration(attempts)*time.Hour), orgID); err != nil {
 			t.Fatalf("write work item: %v", err)
 		}
-	}), query, orgID, []string{"linear:n-p1"}, devhealthfacts.ProjectMixWindow{}, 201)
-	if err == nil {
-		t.Fatalf("read served %d rows although its inputs moved on every attempt", len(rows))
+	}
+
+	// The typed class, straight from the read.
+	_, err := devhealthfacts.RunProjectNativeMix(devhealthfacts.WithProjectMixBetweenPhases(ctx, hook), query, orgID, []string{"linear:n-p1"}, devhealthfacts.ProjectMixWindow{}, 201)
+	var contended *devhealthfacts.ProjectMixContendedError
+	if !errors.As(err, &contended) || !contended.Retryable() || contended.Attempts != 3 {
+		t.Fatalf("err = %v, want a retryable *ProjectMixContendedError after 3 attempts", err)
 	}
 	if attempts != 3 {
 		t.Fatalf("attempts = %d, want 3 (the bounded retry)", attempts)
 	}
+
+	// Through the provider: an unavailable source with a contended reason, and
+	// the retry path visible in the instrumentation.
+	// (attempts keeps counting: each write must be newer than the last one.)
+	rec := &mixEventRecorder{}
+	provider := findProvider(t, devhealthfacts.NewInstrumentedProviders(query, rec), contextfabric.FactInvestment)
+	_, err = provider.ReadFacts(devhealthfacts.WithProjectMixBetweenPhases(ctx, hook), storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactInvestment,
+		Subjects: []contextfabric.SubjectRef{projectSubject("linear", "n-p1")},
+	})
+	var failure *contextfabric.FactReadFailure
+	if !errors.As(err, &failure) || failure.State != contextfabric.SourceUnavailable || !strings.Contains(failure.Reason, "contended") {
+		t.Fatalf("ReadFacts err = %#v, want a FactReadFailure with State unavailable and a contended reason", err)
+	}
+	if got := rec.count("ProjectMixInputsRetry"); got != 2 {
+		t.Errorf("retry events = %d, want 2 (attempts 1 and 2 retry; attempt 3 is terminal)", got)
+	}
+	if got := rec.errCount("ProjectMixContended"); got != 1 {
+		t.Errorf("terminal contended error events = %d, want 1", got)
+	}
+}
+
+// mixEventRecorder is a readers.Instrumentation that keeps every event.
+type mixEventRecorder struct {
+	mu     sync.Mutex
+	events []mixEvent
+}
+
+type mixEvent struct {
+	reader string
+	err    error
+}
+
+func (r *mixEventRecorder) StartQuery(ctx context.Context, reader string, _ bool) (context.Context, func(error)) {
+	idx := -1
+	r.mu.Lock()
+	r.events = append(r.events, mixEvent{reader: reader})
+	idx = len(r.events) - 1
+	r.mu.Unlock()
+	return ctx, func(err error) {
+		r.mu.Lock()
+		r.events[idx].err = err
+		r.mu.Unlock()
+	}
+}
+
+func (r *mixEventRecorder) count(reader string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, e := range r.events {
+		if e.reader == reader {
+			n++
+		}
+	}
+	return n
+}
+
+func (r *mixEventRecorder) errCount(reader string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, e := range r.events {
+		if e.reader == reader && e.err != nil {
+			n++
+		}
+	}
+	return n
 }

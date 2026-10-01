@@ -142,7 +142,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		unusableRollup := map[string]int64{}
 		themeRowCount, themeScanErr := p.readProjectThemeMix(ctx, orgID, projectSubjects, &facts, timeBound, unusableRollup)
 		if themeScanErr != nil {
-			return contextfabric.FactProviderResult{}, readFailure("query project theme mix", themeScanErr)
+			return contextfabric.FactProviderResult{}, mixReadFailure("query project theme mix", themeScanErr)
 		}
 		truncated = truncated || themeRowCount > maxFactRowsPerQuery
 		// The project's OWN attribution replaces the roll-up's shares for a
@@ -151,7 +151,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		// fact and move the roll-up's population beside it.
 		nativeRowCount, nativeScanErr := p.readProjectNativeThemeMix(ctx, orgID, projectSubjects, &facts, timeBound, unusableRollup)
 		if nativeScanErr != nil {
-			return contextfabric.FactProviderResult{}, readFailure("query project native theme mix", nativeScanErr)
+			return contextfabric.FactProviderResult{}, mixReadFailure("query project native theme mix", nativeScanErr)
 		}
 		truncated = truncated || nativeRowCount > maxFactRowsPerQuery
 	}

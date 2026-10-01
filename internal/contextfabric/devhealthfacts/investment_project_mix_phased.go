@@ -3,7 +3,6 @@ package devhealthfacts
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -650,9 +649,46 @@ func readProjectMixInputs(ctx context.Context, client contextpacket.ClickHouseQu
 	return marks, err
 }
 
-// errProjectMixInputsChanged is the failure of a read whose inputs moved on every
-// attempt.
-var errProjectMixInputsChanged = errors.New("devhealthfacts: project mix inputs changed during every attempt")
+// ProjectMixContendedError is the failure of a project mix read whose inputs moved
+// on every attempt (projectMixMaxAttempts). It is retryable: the same read, a
+// moment later, is expected to succeed. The investment provider maps it to a
+// contextfabric.FactReadFailure with State SourceUnavailable and a "contended"
+// reason (mixReadFailure), so the answer degrades as a retryable unavailable
+// source and not as a generic read failure.
+type ProjectMixContendedError struct {
+	Mix      string
+	Attempts int
+}
+
+func (e *ProjectMixContendedError) Error() string {
+	return fmt.Sprintf("devhealthfacts: project %s mix inputs changed during every one of %d attempts", e.Mix, e.Attempts)
+}
+
+// Retryable marks the class: the caller may repeat the read.
+func (e *ProjectMixContendedError) Retryable() bool { return true }
+
+// The reader names under which the retry path reports through the same
+// readers.Instrumentation hook every other read here uses (its counter and span
+// carry the reader name and the error class): a retry is a success event of
+// ProjectMixInputsRetry, the terminal failure an error event of
+// ProjectMixContended. A noisy-ingest deployment shows up as a rate of either.
+const (
+	projectMixRetryReader     = "ProjectMixInputsRetry"
+	projectMixContendedReader = "ProjectMixContended"
+)
+
+type projectMixInstrumentationKey struct{}
+
+// projectMixEvent reports one event through the instrumentation the provider
+// wrapper put on the context (none: nothing to report to).
+func projectMixEvent(ctx context.Context, reader string, err error) {
+	instr, ok := ctx.Value(projectMixInstrumentationKey{}).(readers.Instrumentation)
+	if !ok || instr == nil {
+		return
+	}
+	_, finish := instr.StartQuery(ctx, reader, true)
+	finish(err)
+}
 
 func readProjectRollupMixRows(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound) ([]projectRollupMixRow, error) {
 	for attempt := 1; attempt <= projectMixMaxAttempts; attempt++ {
@@ -661,8 +697,14 @@ func readProjectRollupMixRows(ctx context.Context, client contextpacket.ClickHou
 			return rows, err
 		}
 		slog.WarnContext(ctx, "devhealthfacts.project_mix_inputs_changed", "mix", "owning_team_rollup", "attempt", attempt, "max_attempts", projectMixMaxAttempts)
+		if attempt < projectMixMaxAttempts {
+			projectMixEvent(ctx, projectMixRetryReader, nil)
+		}
 	}
-	return nil, errProjectMixInputsChanged
+	contended := &ProjectMixContendedError{Mix: "owning_team_rollup", Attempts: projectMixMaxAttempts}
+	slog.WarnContext(ctx, "devhealthfacts.project_mix_contended", "mix", contextfabric.SanitizeLogAttr(contended.Mix), "attempts", contended.Attempts)
+	projectMixEvent(ctx, projectMixContendedReader, contended)
+	return nil, contended
 }
 
 func readProjectNativeMixRows(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound, rowLimit int) ([]readers.ProjectThemeMixRow, error) {
@@ -672,6 +714,12 @@ func readProjectNativeMixRows(ctx context.Context, client contextpacket.ClickHou
 			return rows, err
 		}
 		slog.WarnContext(ctx, "devhealthfacts.project_mix_inputs_changed", "mix", "project_native", "attempt", attempt, "max_attempts", projectMixMaxAttempts)
+		if attempt < projectMixMaxAttempts {
+			projectMixEvent(ctx, projectMixRetryReader, nil)
+		}
 	}
-	return nil, errProjectMixInputsChanged
+	contended := &ProjectMixContendedError{Mix: "project_native", Attempts: projectMixMaxAttempts}
+	slog.WarnContext(ctx, "devhealthfacts.project_mix_contended", "mix", contextfabric.SanitizeLogAttr(contended.Mix), "attempts", contended.Attempts)
+	projectMixEvent(ctx, projectMixContendedReader, contended)
+	return nil, contended
 }
