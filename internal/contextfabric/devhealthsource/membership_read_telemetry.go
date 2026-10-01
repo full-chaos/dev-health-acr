@@ -178,7 +178,6 @@ func logMembershipPages(ctx context.Context, logger *slog.Logger, orgID string, 
 	}
 	ledger.mu.Unlock()
 
-	org := contextfabric.SanitizeLogAttr(redactOrg(orgID))
 	total := before
 	for _, page := range pages {
 		for _, name := range membershipArms {
@@ -190,10 +189,10 @@ func logMembershipPages(ctx context.Context, logger *slog.Logger, orgID string, 
 				total[name] += arm.consumedRows
 			}
 			logger.InfoContext(ctx, "devhealthsource project membership page",
-				"org_id", org, "source", TeamsProjectsSourceName, "arm", name, "page_n", page.n,
+				"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName, "arm", contextfabric.SanitizeLogAttr(name), "page_n", page.n,
 				"statement_rows", arm.statementRows, "statement_more", page.more,
 				"consumed_rows", arm.consumedRows, "consumed_total", total[name], "replay", page.replay,
-				"last_stamp", contextfabric.SanitizeLogAttr(arm.lastStamp.UTC().Format(time.RFC3339Nano)), "last_key_digest", keyDigest(arm.lastKey))
+				"last_stamp", contextfabric.SanitizeLogAttr(arm.lastStamp.UTC().Format(time.RFC3339Nano)), "last_key_digest", contextfabric.SanitizeLogAttr(keyDigest(arm.lastKey)))
 		}
 	}
 	if !drained {
@@ -201,7 +200,7 @@ func logMembershipPages(ctx context.Context, logger *slog.Logger, orgID string, 
 	}
 	for _, name := range membershipArms {
 		logger.InfoContext(ctx, "devhealthsource project membership read drained",
-			"org_id", org, "source", TeamsProjectsSourceName, "arm", name,
+			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName, "arm", contextfabric.SanitizeLogAttr(name),
 			"rows_total", total[name], "pages", pagesWithRows[name], "statements", statements,
 			"scanned_rows_total", ledger.presenceReadCount(name, "work_item")+ledger.presenceReadCount(name, "pull_request"))
 	}
