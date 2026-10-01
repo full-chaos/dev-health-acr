@@ -6,7 +6,7 @@
 // CAS discipline, matching pgprojection.CheckpointStore's own convention
 // (see that package's CompareAndSwapProjectionCheckpoint doc comment): every
 // mutating query is a single UPDATE (or, for the two-table transitions --
-// Rollback and BeginRetire -- a single transaction) whose WHERE clause
+// Rollback, AbortBuild and BeginRetire -- a single transaction) whose WHERE clause
 // names the caller's expected pre-transition state, RETURNING the new row.
 // Zero rows returned means the row no longer matched -- exactly one
 // concurrent transition ever wins a race (design brief §3.5); the loser
@@ -338,6 +338,54 @@ ON CONFLICT (org_id, epoch) DO NOTHING`, orgID, expectedActiveEpoch, now); err !
 		graceRemaining = current.GraceDeadline.Sub(now)
 	}
 	s.telemetry().RecordEpochRollback(ctx, orgID, expectedActiveEpoch, result.ActiveEpoch, graceRemaining)
+	return result, nil
+}
+
+// AbortBuild is the building -> serving CAS transition for a build whose
+// target epoch can never be activated. One transaction: the CAS, then the
+// RetireReasonBuildAborted EpochRetirement for expectedTargetEpoch with
+// DrainStart = now.
+func (s *Store) AbortBuild(ctx context.Context, orgID string, expectedTargetEpoch int64, now time.Time) (contextfabric.OrgGraphLifecycle, error) {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" || expectedTargetEpoch <= 0 {
+		return contextfabric.OrgGraphLifecycle{}, errors.New("pglifecycle: organization and a positive target epoch are required")
+	}
+	now = now.UTC()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return contextfabric.OrgGraphLifecycle{}, fmt.Errorf("pglifecycle: begin abort build transaction: %w", sanitize(err))
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	row := tx.QueryRowContext(ctx, `
+UPDATE acr.context_fabric_graph_lifecycle
+SET status = 'serving',
+    target_epoch = NULL,
+    required_sources = NULL,
+    updated_at = $3
+WHERE org_id = $1 AND status = 'building' AND target_epoch = $2
+RETURNING active_epoch, last_allocated_epoch, status, target_epoch, grace_epoch, COALESCE(required_sources, '[]'::jsonb), grace_deadline, updated_at`,
+		orgID, expectedTargetEpoch, now)
+	result, err := scanLifecycle(row, orgID)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		observedRow, observedFound, _ := s.Get(ctx, orgID)
+		s.telemetry().RecordLifecycleCASConflict(ctx, orgID, contextfabric.LifecycleTransitionAbortBuild, observedStatusOrServing(observedRow, observedFound))
+		return contextfabric.OrgGraphLifecycle{}, fmt.Errorf("%w: abort_build: no open build at epoch %d for this organization", contextfabric.ErrLifecycleConflict, expectedTargetEpoch)
+	}
+	if err != nil {
+		return contextfabric.OrgGraphLifecycle{}, fmt.Errorf("pglifecycle: abort build: %w", sanitize(err))
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO acr.context_fabric_graph_epoch_retirements (org_id, epoch, reason, drain_start, state, created_at, updated_at)
+VALUES ($1, $2, 'build_aborted', $3, 'draining', $3, $3)
+ON CONFLICT (org_id, epoch) DO NOTHING`, orgID, expectedTargetEpoch, now); err != nil {
+		return contextfabric.OrgGraphLifecycle{}, fmt.Errorf("pglifecycle: abort build: record aborted epoch retirement: %w", sanitize(err))
+	}
+	if err := tx.Commit(); err != nil {
+		return contextfabric.OrgGraphLifecycle{}, fmt.Errorf("pglifecycle: abort build: commit: %w", sanitize(err))
+	}
+	s.telemetry().RecordEpochBuildAborted(ctx, orgID, result.ActiveEpoch, expectedTargetEpoch)
 	return result, nil
 }
 

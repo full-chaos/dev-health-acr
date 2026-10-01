@@ -69,6 +69,8 @@ func (f *fakeLifecycleTelemetry) RecordEpochResolverInvalidation(context.Context
 func (f *fakeLifecycleTelemetry) RecordEpochActivationRefused(context.Context, contextfabric.EpochActivationRefusal) {
 }
 
+func (f *fakeLifecycleTelemetry) RecordEpochBuildAborted(context.Context, string, int64, int64) {}
+
 func (f *fakeLifecycleTelemetry) RecordBuildSourceProgress(context.Context, string, int64, string, contextfabric.BuildCompletionMode, int64) {
 }
 
