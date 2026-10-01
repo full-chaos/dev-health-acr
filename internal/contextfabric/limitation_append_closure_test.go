@@ -56,10 +56,14 @@ var auditedLimitationWrites = map[string]limitationAudit{
 		sameShapedTotal: 1,
 		reason:          "the SEED, not an addition: a one-element list holding the single fixed terminal disclosure resolveTerminalStatus chose. Every list has to start somewhere, and everything added after it goes through the bounded appender, which also normalizes an already-over-cap input -- so the seed cannot be the write that overflows the contract",
 	},
-	"Synthesize#cloneSlice#0": {
+	"composeSynthesisResult#cloneSlice#0": {
 		sameShapedTotal: 1,
 		reason:          "an INTERMEDIATE, not a list that reaches a consumer: this is the model's own draft list entering the synthesized result, and Investigate then passes result.Limitations through appendTemporalLimitations UNCONDITIONALLY -- it is called on every axis, current included, and appendBoundedLimitations normalizes an already-over-cap input -- before Validate runs",
+	}, "degradedSynthesisDraft#make#0": {
+		sameShapedTotal: 1,
+		reason:          "an EMPTY seed, not an addition: the draft a failed model call is served with carries no limitation of its own, and it enters composeSynthesisResult like every other draft, so Investigate's bounded appenders add every disclosure after it",
 	},
+
 	"windowVetoResult#composite literal []string{limitation}#0": {
 		sameShapedTotal: 1,
 		reason:          "the SEED, not an addition: a one-element list holding the single fixed window-veto disclosure windowVetoLimitation chose (CHAOS-3900 W1) -- identical shape and reasoning to terminalResult's own seed write above. Nothing is ever appended to this list afterward: a window-veto result is composed once and saved, never passed through a further limitation appender",

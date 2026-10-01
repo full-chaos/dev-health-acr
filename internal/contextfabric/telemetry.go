@@ -718,6 +718,19 @@ func (t SlogEngineTelemetry) RecordSynthesisInputBound(ctx context.Context, prin
 	t.logger.Log(ctx, level, "context fabric synthesis input bounded", args...)
 }
 
+// RecordSynthesisModelFailure implements EngineTelemetry. The answer is
+// served, so the line logs at Warn. A closed class and counts only, never the
+// cause's own text.
+func (t SlogEngineTelemetry) RecordSynthesisModelFailure(ctx context.Context, principal storage.Principal, event SynthesisModelFailureEvent) {
+	args := append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"class", string(event.Class),
+		"attempts", event.Attempts,
+		"elapsed_ms", event.ElapsedMS,
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.Log(ctx, slog.LevelWarn, synthesisModelFailureMessage, args...)
+}
+
 // RecordFactScopeExpansion implements EngineTelemetry (CHAOS-4099) -- the
 // ONE operator-visible record of whether a fact family could be reached from
 // the subjects an investigation resolved.

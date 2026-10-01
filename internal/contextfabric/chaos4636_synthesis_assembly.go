@@ -340,6 +340,12 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		Request:    request, Interpretation: interpretation, Graph: graphContext, Facts: facts,
 	})
 	result, err := e.synthesizer.Synthesize(ctx, principal, synthesisInput)
+	var modelFailure *SynthesisFailure
+	if errors.As(err, &modelFailure) {
+		if degraded, ok := e.synthesizer.(DegradedSynthesizer); ok {
+			result, err = degraded.ComposeDegraded(ctx, principal, synthesisInput, modelFailure)
+		}
+	}
 	if err != nil {
 		return InvestigationResult{}, synthesisAllocation, assemblyTelemetry{}, MembershipCardinality{}, stageError(StageSynthesis, fmt.Errorf("%w: synthesize investigation: %w", ErrSynthesisAborted, err))
 	}
