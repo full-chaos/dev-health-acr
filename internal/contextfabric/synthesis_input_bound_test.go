@@ -403,3 +403,36 @@ func TestTheBoundedInputDisclosureIsServiceAuthored(t *testing.T) {
 		t.Fatal("the bounded-input disclosure is not in the service-authored list: a later disclosure could displace it")
 	}
 }
+
+// A call that failed after the facts were bounded still says the facts were
+// bounded: the degraded answer carries the bounded-input disclosure.
+func TestAModelFailureAfterBoundingStillDisclosesTheBound(t *testing.T) {
+	input := largeSynthesisInputFixture(199)
+	draft := validSynthesisDraftFixture(input)
+	title := "work_150"
+	workItem := SubjectRef{Kind: SubjectWorkItem, CanonicalID: "work_150", Label: "work_150"}
+	draft.Drivers[0].AffectedSubjects = append(draft.Drivers[0].AffectedSubjects, workItem)
+	draft.Drivers[0].ClaimedFactIDs = []string{"claim_work_1"}
+	draft.ClaimedFacts = []ClaimedFact{{ClaimID: "claim_work_1", Kind: FactWork, Field: "title", Value: ScalarValue{String: &title}, Subject: workItem}}
+	var given []SynthesisInput
+	synthesizer := RuntimeAnswerSynthesizer{Runtime: sizedModelRuntime{bytesPerFact: 10, maxBytes: 1000, draft: draft, given: &given}}
+	principal := storage.Principal{OrgID: "org_1"}
+
+	_, err := synthesizer.Synthesize(context.Background(), principal, input)
+
+	var failure *SynthesisFailure
+	if !errors.As(err, &failure) || !failure.InputBounded {
+		t.Fatalf("Synthesize() error = %v, want a SynthesisFailure from a bounded input", err)
+	}
+	result, err := synthesizer.ComposeDegraded(context.Background(), principal, input, failure)
+	if err != nil {
+		t.Fatalf("ComposeDegraded() error = %v", err)
+	}
+	found := false
+	for _, limitation := range result.Limitations {
+		found = found || limitation == contractsv1.ContextFabricSynthesisInputBoundedLimitation
+	}
+	if !found {
+		t.Fatalf("limitations = %q, want the bounded-input disclosure", result.Limitations)
+	}
+}

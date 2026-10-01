@@ -1039,6 +1039,10 @@ type EngineTelemetry interface {
 	// whether the input fit in the end. Called only when the runtime refused
 	// an input for its size. Counts and a closed outcome only.
 	RecordSynthesisInputBound(ctx context.Context, principal storage.Principal, event SynthesisInputBoundEvent)
+	// RecordSynthesisModelFailure reports that the model call for an answer
+	// failed and the answer was served without model prose: the closed class,
+	// the attempts the runtime made and the time the call took.
+	RecordSynthesisModelFailure(ctx context.Context, principal storage.Principal, event SynthesisModelFailureEvent)
 	// RecordCohortRanked (CHAOS-4398) reports the outcome of ONE RankCohort
 	// pass: how many members were scored, the deterministic formula
 	// version (prompt-changes-are-behavior-changes discipline applied to

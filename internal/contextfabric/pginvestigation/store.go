@@ -662,6 +662,9 @@ func (s *Store) reuseColumnsFor(result contextfabric.InvestigationResult, reuseS
 	// ticket's own exposure of it -- strictly more conservative than
 	// today's behavior, so it can only remove reuse hits that were never
 	// supposed to happen, never break a legitimate one.
+	if contextfabric.IsSynthesisModelFailureAnswer(result) {
+		return sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, nil, sql.NullInt64{}
+	}
 	if result.StructureNeeds != nil || len(result.ConfirmedStructure) > 0 {
 		return sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, nil, sql.NullInt64{}
 	}

@@ -2371,6 +2371,7 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 	if r.Runtime == nil {
 		return InvestigationResult{}, ErrModelUnavailable
 	}
+	started := time.Now()
 	input, draft, receipt, inputBounded, err := r.synthesizeWithinInputBound(ctx, principal, input)
 	if err == nil {
 		// CHAOS-4355 follow-up (tolerance): a model that still authors
@@ -2427,18 +2428,30 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 			receipt.Outcome = "success"
 		}
 	}
-	if sinkErr := recordModelReceipt(ctx, principal, r.Sink, receipt); sinkErr != nil {
+	callErr := err
+	sinkErr := recordModelReceipt(ctx, principal, r.Sink, receipt)
+	if sinkErr != nil {
 		// See the matching comment in RuntimeQuestionInterpreter.Interpret:
 		// a sink failure is never silently dropped, even when a domain
 		// validation error already occurred.
 		if err == nil {
-			return InvestigationResult{}, sinkErr
+			err = sinkErr
+		} else {
+			err = errors.Join(err, sinkErr)
 		}
-		err = errors.Join(err, sinkErr)
 	}
 	if err != nil {
+		if class, degrade := synthesisFailureDegradeClass(ctx, callErr, sinkErr); degrade {
+			return InvestigationResult{}, &SynthesisFailure{Class: class, Attempts: receipt.Attempts, Elapsed: time.Since(started), Receipt: receipt, InputBounded: inputBounded, cause: err}
+		}
 		return InvestigationResult{}, err
 	}
+	return r.composeSynthesisResult(ctx, principal, input, draft, receipt, inputBounded, false)
+}
+
+// composeSynthesisResult composes the served result from a validated draft,
+// or, with modelFailed, from the draft a failed call is served with.
+func (r RuntimeAnswerSynthesizer) composeSynthesisResult(ctx context.Context, principal storage.Principal, input SynthesisInput, draft SynthesisDraft, receipt ModelExecutionReceipt, inputBounded, modelFailed bool) (InvestigationResult, error) {
 	// CHAOS-4355: attachCanonicalRows is the ONLY place a ClaimedFact.Rows
 	// is ever set. ValidateAgainst has just rejected any draft claim that
 	// carried a non-empty Rows of its own, so every claim reaching this
@@ -2500,8 +2513,8 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 			BackendVersion:          strings.TrimSpace(r.Options.BackendVersion),
 			ProjectionVersion:       nonEmptyVersion(r.Options.ProjectionVersion, "unwired"),
 			QueryVersion:            nonEmptyVersion(r.Options.QueryVersion, "unwired"),
-			InterpretationVersion:   receipt.SchemaVersion,
-			SynthesisVersion:        receipt.PromptVersion + "+" + receipt.ModelVersion,
+			InterpretationVersion:   nonEmptyVersion(receipt.SchemaVersion, "unwired"),
+			SynthesisVersion:        synthesisVersionOf(receipt),
 			CanonicalServiceVersion: nonEmptyVersion(r.Options.CanonicalServiceVersion, input.Facts.Version),
 			// ModelIdentity (CHAOS-3782) names the provider and model that
 			// produced THIS synthesis -- receipt.Provider/receipt.Model,
@@ -2538,6 +2551,10 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 		if result.Status == InvestigationComplete {
 			result.Status = InvestigationPartial
 		}
+	}
+	if modelFailed {
+		result.Coverage.Partial = true
+		result.CurrentState = synthesisFailureCurrentState
 	}
 	modelFacingCoverageDetailIDs := coverageDetailIDSet(result.Coverage.Details)
 	outcome, violation := classifyCoverageDisclosures(draft, &result, modelFacingCoverageDetailIDs)
