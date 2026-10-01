@@ -87,10 +87,17 @@ func (s *epochGuardTeamSource) NextProjectionBatch(_ context.Context, checkpoint
 // the capability every production source implements.
 func (s *epochGuardTeamSource) CurrentProjectionSourceVersion() string { return s.version }
 
-// disabledEpochGuardSource is the same source with the teams toggle off.
+// disabledEpochGuardSource is the same source with the teams toggle off: as
+// the production sources do, it reports itself disabled and yields no batch
+// when read.
 type disabledEpochGuardSource struct{ *epochGuardTeamSource }
 
 func (disabledEpochGuardSource) Enabled() bool { return false }
+
+func (d disabledEpochGuardSource) NextProjectionBatch(context.Context, contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
+	d.calls.Add(1)
+	return contextfabric.ProjectionBatch{}, false, nil
+}
 
 func oldTeamSource(pages int) *epochGuardTeamSource {
 	return &epochGuardTeamSource{version: epochGuardOldVersion, scope: []string{epochGuardRepo}, pages: pages}
@@ -144,6 +151,12 @@ func (h *epochGuardHarness) coordinator(budget int, sources ...projectionrun.Sou
 // commits nothing.
 func (h *epochGuardHarness) committed() int {
 	h.t.Helper()
+	return h.committedFor(epochGuardRepo)
+}
+
+// committedFor is the same count for a principal scoped to repository.
+func (h *epochGuardHarness) committedFor(repository string) int {
+	h.t.Helper()
 	interpreted := contextfabric.InterpretedQuestion{
 		Shape: contextfabric.ShapeSingleSubject, RequestedJudgment: "status", SubjectTerms: []string{epochGuardTeam.Label},
 		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
@@ -158,7 +171,7 @@ func (h *epochGuardHarness) committed() int {
 		Consumer: contextfabric.ConsumerInfo{Name: "test", Version: "v1", Surface: "test"},
 	}
 	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: epochGuardTeam.Kind, ID: epochGuardTeam.CanonicalID, Label: epochGuardTeam.Label, Source: "live-test"}}
-	principal := storage.Principal{OrgID: h.org, RepositoryScopes: []string{epochGuardRepo}}
+	principal := storage.Principal{OrgID: h.org, RepositoryScopes: []string{repository}}
 	resolution, _, _, _, err := h.adapter.ResolveSubjects(h.ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, nil, "")
 	if errors.Is(err, contextfabric.ErrGraphNotProjected) {
 		return 0
@@ -331,6 +344,40 @@ func TestEpochActivationGuard_LivePathsNeverActivateAnOlderSourceVersion(t *test
 		assertBuildNotActivated(t, h, "after NEW binary resumed the build")
 	})
 
+	// After the abort the organization is an ordinary serving one again: the
+	// NEW binary's ticks write the active epoch's graph (not the aborted
+	// epoch's), and a rebuild under the NEW binary flips.
+	t.Run("aborted_build_then_rebuild_flips_under_the_new_version", func(t *testing.T) {
+		h := harness(t, "org-7283-abort-rebuild")
+		old := h.coordinator(-1, projectionrun.SourcePair{Name: epochGuardSource, Source: oldTeamSource(2)})
+		require.NoError(t, old.Rebuild(ctx, h.org))
+		old.Tick(ctx)
+		row, _ := h.state()
+		require.Equal(t, contextfabric.LifecycleStatusBuilding, row.Status, "precondition: page 2 is still pending")
+
+		next := h.coordinator(-1, projectionrun.SourcePair{Name: epochGuardSource, Source: newTeamSource(1)})
+		next.Tick(ctx)
+		row, _ = h.state()
+		require.Equal(t, contextfabric.LifecycleStatusServing, row.Status, "the refused build is aborted")
+		require.Equal(t, 0, h.committedFor("acme/other"), "precondition: nothing is projected into the active epoch yet")
+
+		next.Tick(ctx)
+		row, recorded, committed := h.observe("NEW binary ticked the active epoch after the abort")
+		require.Equal(t, contextfabric.LifecycleStatusServing, row.Status)
+		require.Equal(t, int64(0), row.ActiveEpoch)
+		require.Equal(t, epochGuardNewVersion, recorded)
+		require.Equal(t, 0, committed)
+		require.Equal(t, 1, h.committedFor("acme/other"), "the NEW binary's batch landed in the active epoch's graph")
+
+		require.NoError(t, next.Rebuild(ctx, h.org))
+		tickUntilStatus(t, ctx, next, lifecycle, h.org, contextfabric.LifecycleStatusGrace, 5)
+		row, recorded, committed = h.observe("NEW binary rebuilt and flipped")
+		require.Equal(t, int64(2), row.ActiveEpoch)
+		require.Equal(t, epochGuardNewVersion, recorded)
+		require.Equal(t, 0, committed)
+		require.Equal(t, 1, h.committedFor("acme/other"))
+	})
+
 	// Dormant: the OLD binary projected page 1 of a build and stopped (no
 	// in-tick drain). The NEW binary finds no rows past that cursor, so the
 	// source is cursor_exhausted without a batch ever reaching RunOnce's
@@ -363,18 +410,19 @@ func TestEpochActivationGuard_LivePathsNeverActivateAnOlderSourceVersion(t *test
 
 		disabled := disabledEpochGuardSource{newTeamSource(1)}
 		next := h.coordinator(-1, projectionrun.SourcePair{Name: epochGuardSource, Source: disabled})
-		for i := 0; i < 3; i++ {
+		next.Tick(ctx)
+		require.Zero(t, disabled.calls.Load(), "a build tick never reads a disabled source")
+		for i := 0; i < 2; i++ {
 			next.Tick(ctx)
 		}
 		assertBuildNotActivated(t, h, "after NEW binary resumed with the source disabled")
-		require.Zero(t, disabled.calls.Load(), "a disabled source is never read")
 	})
 }
 
 // assertBuildNotActivated is the resume paths' shared verdict: the build
-// that holds OLD-version data in epoch 1 must still be building, epoch 0
-// (never projected for this organization) must still be the active one,
-// and the restricted principal must resolve nothing.
+// that holds OLD-version data in epoch 1 was aborted, never flipped. Epoch 0
+// is still the active one, the organization serves it again, nothing the OLD
+// binary recorded is in it, and the restricted principal resolves nothing.
 func assertBuildNotActivated(t *testing.T, h *epochGuardHarness, label string) {
 	t.Helper()
 	row, recorded, committed := h.observe(label)
@@ -382,8 +430,18 @@ func assertBuildNotActivated(t *testing.T, h *epochGuardHarness, label string) {
 	require.NoError(t, err)
 	t.Logf("%s: epoch 1 %s source_version=%q", label, epochGuardSource, target.SourceVersion)
 	require.Equal(t, epochGuardOldVersion, target.SourceVersion, "precondition: epoch 1 holds data recorded under the OLD version")
-	require.Equal(t, contextfabric.LifecycleStatusBuilding, row.Status, "a build holding older-version data must not flip")
+	require.Equal(t, contextfabric.LifecycleStatusServing, row.Status, "a build holding older-version data is aborted, not left building")
 	require.Equal(t, int64(0), row.ActiveEpoch)
-	require.Empty(t, recorded)
+	require.Nil(t, row.TargetEpoch)
+	require.NotEqual(t, epochGuardOldVersion, recorded, "the active epoch holds nothing the OLD binary recorded")
 	require.Equal(t, 0, committed, "the restricted principal must not be admitted by the older epoch")
+	retirements, err := h.lifecycle.DrainingRetirements(h.ctx, time.Now().Add(24*time.Hour))
+	require.NoError(t, err)
+	var aborted []int64
+	for _, retirement := range retirements {
+		if retirement.OrgID == h.org && retirement.Reason == contextfabric.RetireReasonBuildAborted {
+			aborted = append(aborted, retirement.Epoch)
+		}
+	}
+	require.Equal(t, []int64{1}, aborted, "the refused epoch is queued for retirement")
 }

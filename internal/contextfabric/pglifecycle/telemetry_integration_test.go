@@ -39,6 +39,12 @@ type fakeLifecycleTelemetry struct {
 		source string
 		mode   contextfabric.BuildCompletionMode
 	}
+	buildAborts []buildAbortSignal
+}
+
+type buildAbortSignal struct {
+	orgID                     string
+	activeEpoch, abortedEpoch int64
 }
 
 func (f *fakeLifecycleTelemetry) RecordResolvedGraphKey(context.Context, string, int64, contextfabric.GraphKeyRole, string) {
@@ -88,6 +94,12 @@ func (f *fakeLifecycleTelemetry) RecordEpochResolverInvalidation(context.Context
 }
 
 func (f *fakeLifecycleTelemetry) RecordEpochActivationRefused(context.Context, contextfabric.EpochActivationRefusal) {
+}
+
+func (f *fakeLifecycleTelemetry) RecordEpochBuildAborted(_ context.Context, orgID string, activeEpoch, abortedEpoch int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.buildAborts = append(f.buildAborts, buildAbortSignal{orgID, activeEpoch, abortedEpoch})
 }
 
 func (f *fakeLifecycleTelemetry) RecordBuildSourceProgress(_ context.Context, orgID string, epoch int64, source string, mode contextfabric.BuildCompletionMode, _ int64) {

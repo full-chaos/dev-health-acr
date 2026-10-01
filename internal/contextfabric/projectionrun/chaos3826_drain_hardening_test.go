@@ -103,6 +103,10 @@ func (f *fakeFaultyLifecycleStore) Rollback(context.Context, string, int64, time
 	return contextfabric.OrgGraphLifecycle{}, errors.New("fakeFaultyLifecycleStore: not implemented")
 }
 
+func (f *fakeFaultyLifecycleStore) AbortBuild(context.Context, string, int64, time.Time) (contextfabric.OrgGraphLifecycle, error) {
+	return contextfabric.OrgGraphLifecycle{}, errors.New("fakeFaultyLifecycleStore: not implemented")
+}
+
 func (f *fakeFaultyLifecycleStore) BeginRetire(context.Context, string, int64, time.Time, bool) (contextfabric.OrgGraphLifecycle, contextfabric.EpochRetirement, error) {
 	return contextfabric.OrgGraphLifecycle{}, contextfabric.EpochRetirement{}, errors.New("fakeFaultyLifecycleStore: not implemented")
 }

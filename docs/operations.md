@@ -380,6 +380,22 @@ acr-projector rollback --org <organization-id>    # restore the PREVIOUS epoch d
 been retired, or none is open) — it is not a general-purpose "undo",
 only the specific insurance window a flip opens.
 
+**A build this binary can never activate is aborted.** A build-aside epoch
+that holds data recorded under a source version other than the running
+binary's (a deploy that bumps a source version while a build is open, or a
+source the binary no longer configures) is refused at the flip. The projector
+then aborts that build on the same tick: the organization goes back to
+`serving` its unchanged active epoch, ordinary ticks resume there, and the
+refused epoch is queued for retirement (reason `build_aborted`; its graph key
+and checkpoint set are deleted after the same drain bound as any retired
+epoch). Look for the Warn `context_fabric: build aborted because the epoch
+activation guard refused its epoch` (organization, refused epoch, source,
+recorded and current source version) and the `context_fabric: graph epoch
+build aborted` signal. Nothing rebuilds on its own: run
+`acr-projector rebuild --org <organization-id>` to build again under the
+running binary. A guard that could not read the epoch's checkpoint rows does
+not abort; that build stays open and is retried on the next tick.
+
 **A rebuild is REQUIRED after deploying CHAOS-3781** (`devhealthsource`
 `ClickHouseSourceVersion` v3 → v4). Every producer now emits a valid-time
 window (`valid_from` / `valid_to`) derived from its source row's own

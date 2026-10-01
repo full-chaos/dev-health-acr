@@ -93,8 +93,8 @@ import (
 // acr.oauth_authorization_requests tables (internal/storage/oauth.go's
 // package doc comment has the full flow). 0042 (CHAOS-6233) is the RFC 8628
 // device-code grant's client/resource/scope binding table,
-// acr.oauth_device_grants, FK'd to acr.device_authorizations. 0043 (CHAOS-6231) binds an OAuth authorization request to the first signed-in web user who opens it (bound_org_id, bound_subject). 0045 (CHAOS-7249) indexes acr.oauth_clients.created_at for the OAuth purge's idle-client predicate. 0046 (CHAOS-7229) indexes acr.device_authorizations.expires_at for every state, for the OAuth purge's device authorization predicate.
-var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46}
+// acr.oauth_device_grants, FK'd to acr.device_authorizations. 0043 (CHAOS-6231) binds an OAuth authorization request to the first signed-in web user who opens it (bound_org_id, bound_subject). 0045 (CHAOS-7249) indexes acr.oauth_clients.created_at for the OAuth purge's idle-client predicate. 0046 (CHAOS-7229) indexes acr.device_authorizations.expires_at for every state, for the OAuth purge's device authorization predicate. 0047 widens acr.context_fabric_graph_epoch_retirements.reason with 'build_aborted', the retirement an aborted build's target epoch gets.
+var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47}
 
 func TestEmbeddedRunner_appliesMigrationsInOrder_whenDatabaseIsFresh(t *testing.T) {
 	// Given

@@ -113,6 +113,11 @@ const (
 	// allocator is what guarantees the epoch NUMBER is never reused
 	// either).
 	RetireReasonRollbackAbandoned RetireReason = "rollback_abandoned"
+	// RetireReasonBuildAborted: abort_build created this record for the
+	// target epoch of a build that can never flip. The epoch never served a
+	// read; its graph key and checkpoint set are deleted through the same
+	// drain as any other retired epoch.
+	RetireReasonBuildAborted RetireReason = "build_aborted"
 )
 
 // RetireRecordState is one EpochRetirement's own small state machine,
@@ -230,6 +235,16 @@ type GraphLifecycleStore interface {
 	// at the original flip).
 	Rollback(ctx context.Context, orgID string, expectedActiveEpoch int64, now time.Time) (OrgGraphLifecycle, error)
 
+	// AbortBuild is the building -> serving CAS transition that gives up an
+	// open build whose target epoch can never be activated. ActiveEpoch does
+	// not move: the organization returns to the state BeginBuild left, with
+	// TargetEpoch and RequiredSources cleared and LastAllocatedEpoch kept, so
+	// the aborted epoch number is never reused. In the SAME durable write it
+	// creates a RetireReasonBuildAborted EpochRetirement for
+	// expectedTargetEpoch with DrainStart = now. Fails with
+	// ErrLifecycleConflict unless a build is open at expectedTargetEpoch.
+	AbortBuild(ctx context.Context, orgID string, expectedTargetEpoch int64, now time.Time) (OrgGraphLifecycle, error)
+
 	// BeginRetire is the grace -> serving CAS transition that forecloses
 	// rollback (design brief §3.1 step 5, §3.5): the point of no return.
 	// Legal ONLY while Status == LifecycleStatusGrace AND
@@ -338,6 +353,7 @@ const (
 	LifecycleTransitionBeginBuild  LifecycleTransition = "begin_build"
 	LifecycleTransitionFlip        LifecycleTransition = "flip"
 	LifecycleTransitionRollback    LifecycleTransition = "rollback"
+	LifecycleTransitionAbortBuild  LifecycleTransition = "abort_build"
 	LifecycleTransitionBeginRetire LifecycleTransition = "begin_retire"
 	LifecycleTransitionRetireDone  LifecycleTransition = "retire_done"
 )
@@ -467,6 +483,11 @@ type GraphLifecycleTelemetry interface {
 	// flip or a rollback from activating an epoch whose recorded source
 	// version is not the running binary's (see EpochActivationRefusal).
 	RecordEpochActivationRefused(ctx context.Context, refusal EpochActivationRefusal)
+	// RecordEpochBuildAborted is cf_epoch_build_aborted: fired once every
+	// time abort_build commits. activeEpoch is the epoch that keeps serving;
+	// abortedEpoch is the build target that was given up and queued for
+	// retirement.
+	RecordEpochBuildAborted(ctx context.Context, orgID string, activeEpoch, abortedEpoch int64)
 }
 
 // EpochGraphDeleter is the retire executor's graph-deletion port (design
@@ -520,6 +541,7 @@ func (NoopGraphLifecycleTelemetry) RecordEpochResolverInvalidation(context.Conte
 }
 func (NoopGraphLifecycleTelemetry) RecordEpochActivationRefused(context.Context, EpochActivationRefusal) {
 }
+func (NoopGraphLifecycleTelemetry) RecordEpochBuildAborted(context.Context, string, int64, int64) {}
 
 var _ GraphLifecycleTelemetry = NoopGraphLifecycleTelemetry{}
 
@@ -638,6 +660,14 @@ func (t SlogGraphLifecycleTelemetry) RecordEpochActivationRefused(_ context.Cont
 		"active_epoch", refusal.ActiveEpoch, "candidate_epoch", refusal.CandidateEpoch,
 		"source", SanitizeLogAttr(refusal.Source), "reason", SanitizeLogAttr(string(refusal.Reason)),
 		"recorded_source_version", SanitizeLogAttr(refusal.RecordedSourceVersion), "current_source_version", SanitizeLogAttr(refusal.CurrentSourceVersion))
+}
+
+// RecordEpochBuildAborted logs at Warn: a build was given up, so the
+// organization still serves the epoch the build was meant to replace.
+// Bounded: at most once per build.
+func (t SlogGraphLifecycleTelemetry) RecordEpochBuildAborted(_ context.Context, orgID string, activeEpoch, abortedEpoch int64) {
+	t.logger().Warn("context_fabric: graph epoch build aborted",
+		"org_id", SanitizeLogAttr(orgID), "active_epoch", activeEpoch, "aborted_epoch", abortedEpoch)
 }
 
 var _ GraphLifecycleTelemetry = SlogGraphLifecycleTelemetry{}

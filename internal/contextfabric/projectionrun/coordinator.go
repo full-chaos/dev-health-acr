@@ -2443,7 +2443,8 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 	if guardErr != nil {
 		// Nothing flips, and the tick summary says why. A stale epoch is a
 		// rebuild-required organization, exactly like a steady-state
-		// producer drift. Checkpoint rows the guard could not read (or
+		// producer drift, and its build is aborted: it can never flip.
+		// Checkpoint rows the guard could not read (or
 		// list) are a failure of the checkpoint load, not of a source and
 		// not staleness: named "epoch_checkpoint_sources:checkpoint_load"
 		// on the line, in the pair-failed bucket a checkpoint-load failure
@@ -2451,6 +2452,7 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 		// any build pair's own checkpoint load, so it is counted on its own.
 		if errors.Is(guardErr, contextfabric.ErrEpochSourceVersionStale) {
 			signals.stale = true
+			c.abortRefusedBuild(scope, orgID, targetEpoch, refusals)
 		}
 		for _, refusal := range refusals {
 			if refusal.Reason != contextfabric.EpochActivationRefusedCheckpointUnreadable && refusal.Reason != contextfabric.EpochActivationRefusedSourcesUnlistable {
@@ -2497,6 +2499,38 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 	default:
 		c.logger.WarnContext(scope.logCtx(), "flip attempt failed", "org_id", contextfabric.SanitizeLogAttr(orgID), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
 	}
+}
+
+// abortRefusedBuild gives up a build whose target epoch the activation guard
+// refused for a source version: that epoch holds data this binary can never
+// activate, and no later tick can change what it recorded. The organization
+// returns to serving its unchanged active epoch, where ordinary ticks and a
+// new rebuild are legal again, and the refused epoch is queued for retirement.
+// Refusals the guard could not decide (unreadable or unlistable checkpoint
+// rows) never reach here: the build stays open and the next tick re-reads.
+func (c *Coordinator) abortRefusedBuild(scope *orgScope, orgID string, targetEpoch int64, refusals []contextfabric.EpochActivationRefusal) {
+	var aborted contextfabric.OrgGraphLifecycle
+	err := scope.run(func(ctx context.Context) error {
+		var e error
+		aborted, e = c.lifecycle.AbortBuild(ctx, orgID, targetEpoch, c.now())
+		return e
+	})
+	if err != nil {
+		c.logger.WarnContext(scope.logCtx(), "context_fabric: abort of a build the epoch activation guard refused failed; the organization stays building and the next tick tries again",
+			"org_id", contextfabric.SanitizeLogAttr(orgID), "refused_epoch", targetEpoch, "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
+		return
+	}
+	for _, refusal := range refusals {
+		c.logger.WarnContext(scope.logCtx(), "context_fabric: build aborted because the epoch activation guard refused its epoch, which is queued for retirement -- the organization serves its active epoch again and needs a rebuild under this binary",
+			"org_id", contextfabric.SanitizeLogAttr(orgID), "active_epoch", aborted.ActiveEpoch, "refused_epoch", targetEpoch,
+			"source", contextfabric.SanitizeLogAttr(refusal.Source), "reason", contextfabric.SanitizeLogAttr(string(refusal.Reason)),
+			"recorded_source_version", contextfabric.SanitizeLogAttr(refusal.RecordedSourceVersion),
+			"current_source_version", contextfabric.SanitizeLogAttr(refusal.CurrentSourceVersion))
+	}
+	_ = scope.run(func(ctx context.Context) error {
+		c.invalidateEpochResolution(ctx, orgID, contextfabric.LifecycleTransitionAbortBuild)
+		return nil
+	})
 }
 
 // runBuildPair drains ONE source's build-epoch batches within THIS tick

@@ -197,9 +197,10 @@ func TestEpochActivationGuard_Clauses(t *testing.T) {
 		return &guardRig{t: t, ctx: ctx, lifecycle: lifecycle, checkpoints: checkpoints, org: org}
 	}
 
-	// A refused flip is loud on every attempt: a Warn naming every input,
-	// one cf_epoch_activation_refused per refusing source, and the
-	// organization counted rebuild_required on the tick summary.
+	// A refused flip is loud: a Warn naming every input, one
+	// cf_epoch_activation_refused per refusing source, and the organization
+	// counted rebuild_required on the tick summary. The refused build is
+	// aborted, so the same epoch is never a flip candidate again.
 	t.Run("flip_refusal_is_loud_and_recorded", func(t *testing.T) {
 		r := rig(t, "org-guard-flip-loud")
 		old := r.coordinator(guardCoordinatorOptions{budget: -1}, projectionrun.SourcePair{Name: epochGuardSource, Source: versioned(epochGuardOldVersion, 2)})
@@ -232,10 +233,11 @@ func TestEpochActivationGuard_Clauses(t *testing.T) {
 		require.Equal(t, epochGuardNewVersion, warns[0]["current_source_version"])
 		summary := freshnessSummary(t, &buffer)
 		require.Equal(t, float64(1), summaryNumber(t, summary, "orgs_rebuild_required"))
-		require.Equal(t, contextfabric.LifecycleStatusBuilding, r.row().Status)
+		require.Equal(t, contextfabric.LifecycleStatusServing, r.row().Status)
+		require.Equal(t, int64(0), r.row().ActiveEpoch)
 
 		next.Tick(ctx)
-		require.Len(t, telemetry.snapshot(), 2, "every flip attempt is refused again, and says so again")
+		require.Len(t, telemetry.snapshot(), 1, "the aborted build is not refused a second time")
 	})
 
 	// A refused rollback returns the refusal to the operator, leaves the
@@ -320,7 +322,8 @@ func TestEpochActivationGuard_Clauses(t *testing.T) {
 			projectionrun.SourcePair{Name: "sibling", Source: versioned("sibling.v1", 0)},
 		)
 		next.Tick(ctx)
-		require.Equal(t, contextfabric.LifecycleStatusBuilding, r.row().Status)
+		require.Equal(t, contextfabric.LifecycleStatusServing, r.row().Status, "the refused build is aborted")
+		require.Equal(t, int64(0), r.row().ActiveEpoch)
 		require.Equal(t, []contextfabric.EpochActivationRefusal{{
 			OrgID: r.org, Transition: contextfabric.LifecycleTransitionFlip, ActiveEpoch: 0, CandidateEpoch: 1,
 			Source: "dropped", Reason: contextfabric.EpochActivationRefusedSourceNotConfigured, RecordedSourceVersion: "dropped.v1",
@@ -342,7 +345,8 @@ func TestEpochActivationGuard_Clauses(t *testing.T) {
 		require.Equal(t, "unversioned", startup[0]["source"])
 		require.NoError(t, binary.Rebuild(ctx, r.org))
 		binary.Tick(ctx)
-		require.Equal(t, contextfabric.LifecycleStatusBuilding, r.row().Status)
+		require.Equal(t, contextfabric.LifecycleStatusServing, r.row().Status, "the refused build is aborted")
+		require.Equal(t, int64(0), r.row().ActiveEpoch)
 		require.Equal(t, []contextfabric.EpochActivationRefusal{{
 			OrgID: r.org, Transition: contextfabric.LifecycleTransitionFlip, ActiveEpoch: 0, CandidateEpoch: 1,
 			Source: "unversioned", Reason: contextfabric.EpochActivationRefusedSourceVersionUnknown, RecordedSourceVersion: "test.v1",
@@ -359,7 +363,8 @@ func TestEpochActivationGuard_Clauses(t *testing.T) {
 		telemetry := &recordingActivationTelemetry{}
 		blank := r.coordinator(guardCoordinatorOptions{budget: -1, telemetry: telemetry}, projectionrun.SourcePair{Name: epochGuardSource, Source: versioned(" \t", 1)})
 		blank.Tick(ctx)
-		require.Equal(t, contextfabric.LifecycleStatusBuilding, r.row().Status)
+		require.Equal(t, contextfabric.LifecycleStatusServing, r.row().Status, "the refused build is aborted")
+		require.Equal(t, int64(0), r.row().ActiveEpoch)
 		refusals := telemetry.snapshot()
 		require.Len(t, refusals, 1)
 		require.Equal(t, contextfabric.EpochActivationRefusedSourceVersionUnknown, refusals[0].Reason)
