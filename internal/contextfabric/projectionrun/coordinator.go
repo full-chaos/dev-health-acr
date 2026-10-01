@@ -473,6 +473,13 @@ const defaultGraceWindow = 24 * time.Hour
 type pairBackoff struct {
 	consecutiveFailures int
 	nextAttempt         time.Time
+	// lastVersionRefused: the failure that set the CURRENT backoff was a
+	// source version refusal, which is a rebuild owed and not an outage.
+	lastVersionRefused bool
+	// rebuildOwed: a version refusal was seen and no attempt has applied a
+	// batch since. Sticky across later failures of another class, because the
+	// version mismatch stays in the checkpoint while an outage comes and goes.
+	rebuildOwed bool
 }
 
 // orgs returns a SNAPSHOT of the effective organization set. Every
@@ -2167,7 +2174,7 @@ func (c *Coordinator) runOrgLegacy(scope *orgScope, orgID string) {
 			pairEvaluated, pairStale, pairFailed, pairWithheld, pairStage, pairBroke, err = c.runPair(ctx, orgID, source, c.checkpoints, &budget)
 			return err
 		})
-		evaluated = evaluated || pairEvaluated
+		evaluated = evaluated || pairEvaluated || pairStale
 		stale = stale || pairStale
 		pairBrokeAny = pairBrokeAny || pairBroke
 		// A pair withheld by its own failure backoff counts as a failing
@@ -2265,7 +2272,7 @@ func (c *Coordinator) runOrgLifecycle(scope *orgScope, orgID string) {
 			pairEvaluated, pairStale, pairFailed, pairWithheld, pairStage, pairBroke, err = c.runPair(ctx, orgID, source, checkpoints, &budget)
 			return err
 		})
-		evaluated = evaluated || pairEvaluated
+		evaluated = evaluated || pairEvaluated || pairStale
 		stale = stale || pairStale
 		pairBrokeAny = pairBrokeAny || pairBroke
 		// A pair withheld by its own failure backoff counts as a failing
@@ -2391,10 +2398,10 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 			continue
 		}
 		budget := c.drainBudget // CHAOS-7171: per-source, see runOrgLegacy
-		var buildEvaluated, buildFailed, buildWithheld, buildBroke bool
+		var buildEvaluated, buildFailed, buildWithheld, buildRebuild, buildBroke bool
 		var buildStage contextfabric.PairStage
 		_ = scope.run(func(ctx context.Context) error {
-			buildEvaluated, buildFailed, buildWithheld, buildStage, buildBroke = c.runBuildPair(ctx, orgID, source, targetEpoch, checkpoints, &budget)
+			buildEvaluated, buildFailed, buildWithheld, buildRebuild, buildStage, buildBroke = c.runBuildPair(ctx, orgID, source, targetEpoch, checkpoints, &budget)
 			return nil
 		})
 		// Folded into signals AS OBSERVED, never into locals copied out
@@ -2409,6 +2416,7 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 		// that fired only while the source was RUNNING went quiet after
 		// tick one with the source still broken.
 		signals.pairBroke = signals.pairBroke || buildBroke
+		signals.stale = signals.stale || buildRebuild
 		signals.sourceFailed = signals.sourceFailed || buildFailed || buildWithheld
 		scope.recordPair(func(truncated bool) {
 			scope.stats.recordBuildPairOutcome(source, buildEvaluated, buildFailed, buildWithheld, truncated)
@@ -2526,7 +2534,7 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 // cf_build_source_progress's own last-successful (now stale) value, with
 // no way to recover the lost batches' rows once the checkpoint had already
 // advanced past them.
-func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, epoch int64, checkpoints contextfabric.ProjectionCheckpointStore, budget *int) (evaluated, failed, withheld bool, pairStage contextfabric.PairStage, pairBroke bool) {
+func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, epoch int64, checkpoints contextfabric.ProjectionCheckpointStore, budget *int) (evaluated, failed, withheld, rebuild bool, pairStage contextfabric.PairStage, pairBroke bool) {
 	key := orgID + "\x00build\x00" + source
 	started := c.now()
 	var total int64
@@ -2551,10 +2559,11 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 		// failed on tick one simply vanished from the line on tick two: the
 		// CHAOS-4789 silence, reproduced inside the phase this disclosure had
 		// just claimed to cover.
-		due, withheldByBackoff := c.dueState(key)
+		due, withheldByBackoff, withheldRebuild := c.dueState(key)
 		if !due {
 			if batches == 0 {
 				withheld = withheldByBackoff
+				rebuild = withheldRebuild
 			}
 			break
 		}
@@ -2596,6 +2605,7 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 		total = run.RowsApplied
 		if run.Applied {
 			applied++
+			c.clearRebuildOwed(key)
 		}
 		mode, terminal := classifyBuildCompletion(run)
 		if !terminal {
@@ -2673,7 +2683,10 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 	// failed is decided by the tick's context and not by the yield reason,
 	// for the reason lastErr exists above.
 	_, buildFailed, buildBroke, buildStage := pairOutcomeOf(ctx, lastErr)
-	return batches > 0, buildFailed, withheld, buildStage, buildBroke
+	if c.rebuildOwed(key) {
+		rebuild = true
+	}
+	return batches > 0, buildFailed, withheld, rebuild, buildStage, buildBroke
 }
 
 // classifyBuildCompletion maps one build tick's ProjectionRun onto design
@@ -2973,9 +2986,9 @@ func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, che
 	// ONE clock read decides both "may it attempt" and "is it withheld by its
 	// own failure backoff" -- see dueState's own doc comment for the race two
 	// reads opened.
-	due, withheld := c.dueState(key)
+	due, withheld, withheldRebuild := c.dueState(key)
 	if !due {
-		return false, false, nil, false, withheld, false
+		return false, false, nil, withheldRebuild, withheld, false
 	}
 	started := c.now()
 	worker, werr := c.workerFor(source, checkpoints)
@@ -2990,9 +3003,10 @@ func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, che
 	c.observer.ObserveProjectionOutcome(outcome)
 	if runErr != nil {
 		c.logger.WarnContext(ctx, "projection pair failed", "org_id", contextfabric.SanitizeLogAttr(orgID), "source", contextfabric.SanitizeLogAttr(source), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(runErr)), "duration_ms", outcome.Duration.Milliseconds())
-		return true, false, runErr, false, false, false
+		return true, false, runErr, c.rebuildOwed(key), false, false
 	}
 	if run.Applied {
+		c.clearRebuildOwed(key)
 		c.logger.InfoContext(ctx, "projection batch applied", "org_id", contextfabric.SanitizeLogAttr(orgID), "source", contextfabric.SanitizeLogAttr(source), "batch_id", contextfabric.SanitizeLogAttr(run.BatchID), "backend_watermark", contextfabric.SanitizeLogAttr(run.BackendWatermark), "duration_ms", outcome.Duration.Milliseconds())
 	}
 	// CHAOS-3887 (H1): computed and logged regardless of run.Applied/err --
@@ -3002,7 +3016,8 @@ func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, che
 	// rows, available=false, no error) got no freshness signal at all.
 	// complete: the applied batch itself claims the source has nothing more, so
 	// a drain that stops here has no backlog whatever its budget says.
-	return true, run.Applied, nil, c.emitProjectionFreshness(ctx, orgID, source), false, run.Applied && run.CompleteEnumeration
+	freshnessStale := c.emitProjectionFreshness(ctx, orgID, source)
+	return true, run.Applied, nil, freshnessStale || c.rebuildOwed(key), false, run.Applied && run.CompleteEnumeration
 }
 
 // runPair drains (org, source)'s pending batches within THIS tick
@@ -3038,7 +3053,7 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 				// keep saying so on every tick. The withheld fact comes
 				// from the SAME clock read that refused the attempt, so
 				// the two can no longer disagree.
-				return false, false, false, pairWithheld, "", false, nil
+				return false, pairStale, false, pairWithheld, "", false, nil
 			}
 			break
 		}
@@ -3384,7 +3399,7 @@ func orgIDHash(orgID string) string {
 }
 
 func (c *Coordinator) due(key string) bool {
-	due, _ := c.dueState(key)
+	due, _, _ := c.dueState(key)
 	return due
 }
 
@@ -3439,10 +3454,20 @@ func pairOutcomeOf(ctx context.Context, err error) (truncated, sourceFailed, pai
 	if ctx.Err() != nil && pairErr.PropagatedCancellation {
 		return true, false, false, pairErr.Stage
 	}
+	if versionRefused(err) {
+		return false, false, false, pairErr.Stage
+	}
 	if pairErr.FromSourceRead() {
 		return false, true, false, pairErr.Stage
 	}
 	return false, false, true, pairErr.Stage
+}
+
+// versionRefused reports a source refused for a version mismatch. It is a
+// rebuild owed, never a source outage: pairOutcomeOf keeps it out of
+// sourceFailed and the pair loops report it as stale instead.
+func versionRefused(err error) bool {
+	return errors.Is(err, contextfabric.ErrProjectionSourceVersionChanged)
 }
 
 // truncatedBy is pairOutcomeOf's truncation answer, kept as a helper because
@@ -3455,18 +3480,39 @@ func truncatedBy(ctx context.Context, err error) bool {
 	return truncated
 }
 
-func (c *Coordinator) dueState(key string) (due, withheldByBackoff bool) {
+func (c *Coordinator) dueState(key string) (due, withheldByBackoff, withheldRebuild bool) {
 	c.backoffMu.Lock()
 	defer c.backoffMu.Unlock()
 	state, ok := c.backoff[key]
 	if !ok {
-		return true, false
+		return true, false, false
 	}
 	now := c.now()
 	if !now.Before(state.nextAttempt) {
-		return true, false
+		return true, false, false
 	}
-	return false, state.consecutiveFailures > 0
+	withheld := state.consecutiveFailures > 0
+	return false, withheld && !state.lastVersionRefused, withheld && state.rebuildOwed
+}
+
+// clearRebuildOwed records that an attempt APPLIED a batch under the current
+// source version. A no-op attempt resolves nothing: RunOnce returns nil
+// without a version check when no batch is available.
+func (c *Coordinator) clearRebuildOwed(key string) {
+	c.backoffMu.Lock()
+	defer c.backoffMu.Unlock()
+	if state, ok := c.backoff[key]; ok {
+		state.rebuildOwed = false
+	}
+}
+
+// rebuildOwed reports a version refusal on this pair not yet cleared by a
+// successful attempt.
+func (c *Coordinator) rebuildOwed(key string) bool {
+	c.backoffMu.Lock()
+	defer c.backoffMu.Unlock()
+	state, ok := c.backoff[key]
+	return ok && state.rebuildOwed
 }
 
 func (c *Coordinator) recordBackoff(key string, err error) {
@@ -3480,8 +3526,11 @@ func (c *Coordinator) recordBackoff(key string, err error) {
 	if err == nil {
 		state.consecutiveFailures = 0
 		state.nextAttempt = time.Time{}
+		state.lastVersionRefused = false
 		return
 	}
+	state.lastVersionRefused = versionRefused(err)
+	state.rebuildOwed = state.rebuildOwed || state.lastVersionRefused
 	state.consecutiveFailures++
 	delay := baseBackoff * time.Duration(1<<min(state.consecutiveFailures-1, 10))
 	if delay > c.maxBackoff {
