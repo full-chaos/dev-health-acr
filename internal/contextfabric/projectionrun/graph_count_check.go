@@ -19,6 +19,9 @@ const (
 	// items, in-batch duplicates) and rows landing between the two reads.
 	graphCountToleranceFloor   = 3
 	graphCountToleranceDivisor = 50
+	// graphCountCheckTimeout bounds the whole check for one organization. It runs
+	// under the org lock, so a slow count read must not hold the tick longer.
+	graphCountCheckTimeout = 30 * time.Second
 )
 
 // GraphCountObserver is an OPTIONAL Observer extension: when the configured
@@ -41,7 +44,12 @@ type GraphBelowSource struct {
 }
 
 // graphCountTolerance is the number of nodes the graph may trail sourceCount.
-func graphCountTolerance(sourceCount int64) int64 {
+func graphCountTolerance(sourceCount, graphCount int64) int64 {
+	// A kind the source holds and the graph holds none of is a gap whatever its
+	// size: the absolute floor exists for stragglers, not for an empty kind.
+	if graphCount == 0 && sourceCount > 0 {
+		return 0
+	}
 	if t := sourceCount / graphCountToleranceDivisor; t > graphCountToleranceFloor {
 		return t
 	}
@@ -146,6 +154,8 @@ func (c *Coordinator) checkGraphCounts(ctx context.Context, orgID string) {
 	if !c.graphCounts.due(orgID, c.sourceNames, c.now(), c.graphCountInterval) {
 		return
 	}
+	ctx, cancel := context.WithTimeout(ctx, graphCountCheckTimeout)
+	defer cancel()
 	hash := orgIDHash(orgID)
 	for _, source := range c.sourceNames {
 		counter, ok := c.sources[source].(contextfabric.ProjectionSourceCounts)
@@ -172,7 +182,7 @@ func (c *Coordinator) checkGraphCounts(ctx context.Context, orgID string) {
 					"failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
 				continue
 			}
-			tolerance := graphCountTolerance(sourceCount)
+			tolerance := graphCountTolerance(sourceCount, graphCount)
 			gapKey := pairKey(orgID, source) + "\x00" + string(kind)
 			if sourceCount-graphCount <= tolerance {
 				c.graphCounts.clearGap(gapKey)

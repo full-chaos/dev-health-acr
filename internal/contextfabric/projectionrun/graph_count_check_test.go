@@ -274,3 +274,16 @@ func TestGraphBelowSourceFirstSightingDoesNotSurviveAnUndrainedTick(t *testing.T
 		t.Fatalf("the post-recovery tick must have checked (calls=%d)", h.source.callsFor.Load())
 	}
 }
+
+func TestGraphBelowSourceWarnsWhenASmallKindIsWhollyMissing(t *testing.T) {
+	t.Parallel()
+	h := newCountHarness(t,
+		map[contextfabric.SubjectKind]int64{contractsv1.ContextFabricSubjectTeam: 1},
+		map[contextfabric.SubjectKind]int64{contractsv1.ContextFabricSubjectTeam: 0},
+		nil, nil, time.Minute)
+	h.run(testStart)
+	h.run(testStart.Add(time.Minute))
+	if len(h.observer.events) != 1 || h.observer.events[0].Tolerance != 0 {
+		t.Fatalf("one source team with none in the graph is a gap, got %+v", h.observer.events)
+	}
+}
