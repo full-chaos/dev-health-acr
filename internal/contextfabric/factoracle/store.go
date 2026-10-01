@@ -105,7 +105,7 @@ func NewStore(extract *Extract) (*Store, error) {
 	s := &Store{extract: extract, units: map[string]*unitGenerations{}, superseded: map[string]bool{}, inRun: map[string]bool{},
 		repoIDs: map[string]bool{}, reposByName: map[string][]string{}}
 	generations := map[string][]unitGeneration{}
-	for _, row := range extract.Tables["work_unit_investments"] {
+	for _, row := range extract.Tables[tableWorkUnitInvestments] {
 		id, ok := rowString(row, "work_unit_id")
 		if !ok {
 			return nil, fmt.Errorf("work_unit_investments: a row has no work_unit_id")
@@ -159,13 +159,13 @@ func NewStore(extract *Extract) (*Store, error) {
 		s.units[id] = unit
 	}
 	s.readRepositories()
-	for _, row := range extract.Tables["work_unit_supersessions"] {
+	for _, row := range extract.Tables[tableWorkUnitSupersessions] {
 		if id, ok := rowString(row, "superseded_work_unit_id"); ok {
 			s.superseded[id] = true
 		}
 	}
 	var latestMarker time.Time
-	for _, row := range extract.Tables["work_unit_membership_runs"] {
+	for _, row := range extract.Tables[tableWorkUnitMembershipRuns] {
 		at, err := rowTime(row, "completed_at")
 		if err != nil {
 			return nil, err
@@ -178,7 +178,7 @@ func NewStore(extract *Extract) (*Store, error) {
 	if s.scopeRun == legacyRunID {
 		return nil, fmt.Errorf("the latest membership marker is the legacy one; the reference reading does not cover that branch")
 	}
-	for _, row := range extract.Tables["work_unit_membership"] {
+	for _, row := range extract.Tables[tableWorkUnitMembership] {
 		run, _ := rowString(row, "run_id")
 		id, _ := rowString(row, "work_unit_id")
 		if run == s.scopeRun && s.scopeRun != "" {
@@ -248,7 +248,7 @@ func (s *Store) readRepositories() {
 		providers map[string]bool
 	}
 	byID := map[string]*latest{}
-	for _, row := range s.extract.Tables["repos"] {
+	for _, row := range s.extract.Tables[tableRepos] {
 		id, ok := rowString(row, "id")
 		if !ok {
 			continue
@@ -400,7 +400,7 @@ func (s *Store) RepositoryIDs() []string { return sortedKeys(s.repoIDs) }
 // TeamIDs lists the active teams, sorted.
 func (s *Store) TeamIDs() []string {
 	seen := map[string]bool{}
-	for _, row := range s.extract.Tables["teams"] {
+	for _, row := range s.extract.Tables[tableTeams] {
 		id, ok := rowString(row, "id")
 		if !ok || id == "" {
 			continue
@@ -427,7 +427,7 @@ func (s *Store) ownedRepositories(at time.Time) (owned map[string]map[string]boo
 	type repoKey struct{ provider, name string }
 	byName := map[repoKey]string{}
 	known := map[string]bool{}
-	for _, row := range s.extract.Tables["repos"] {
+	for _, row := range s.extract.Tables[tableRepos] {
 		id, _ := rowString(row, "id")
 		provider, _ := rowString(row, "provider")
 		name, _ := rowString(row, "repo")
@@ -436,7 +436,7 @@ func (s *Store) ownedRepositories(at time.Time) (owned map[string]map[string]boo
 	}
 	owned, byNameOnly = map[string]map[string]bool{}, map[string]map[string]bool{}
 	byID := map[string]map[string]bool{}
-	for _, row := range s.extract.Tables["team_repo_ownership"] {
+	for _, row := range s.extract.Tables[tableTeamRepoOwnership] {
 		from, ferr := rowTime(row, "valid_from")
 		if ferr != nil {
 			return nil, nil, ferr

@@ -115,7 +115,7 @@ func directUnit(t *testing.T, extract *Extract, window Window) (id string, row R
 		repos[repo] = true
 	}
 	best := -1.0
-	for _, candidate := range extract.Tables["work_unit_investments"] {
+	for _, candidate := range extract.Tables[tableWorkUnitInvestments] {
 		unitID, _ := rowString(candidate, "work_unit_id")
 		unit := store.units[unitID]
 		repo, hasRepo := rowString(candidate, "repo_id")
@@ -199,7 +199,7 @@ func acceptanceGateMembershipScope(t *testing.T) {
 	// current reader keeps every work unit, as the reader did before it had
 	// the filter.
 	planted := extract.Clone()
-	planted.Tables["work_unit_membership_runs"] = nil
+	planted.Tables[tableWorkUnitMembershipRuns] = nil
 	_, rr := gateRun(t, manifest, recording, extract, planted)
 	wantPlanted(t, rr, "investment_org", ClassMembershipScope)
 }
@@ -219,13 +219,13 @@ func acceptanceGateSupersession(t *testing.T) {
 	reference := extract.Clone()
 	unit := cloneRow(source)
 	unit["work_unit_id"] = cloneID
-	reference.Tables["work_unit_investments"] = append(reference.Tables["work_unit_investments"], unit)
+	reference.Tables[tableWorkUnitInvestments] = append(reference.Tables[tableWorkUnitInvestments], unit)
 	computedAt, _ := rowString(source, "computed_at")
-	reference.Tables["work_unit_membership"] = append(reference.Tables["work_unit_membership"], Row{
+	reference.Tables[tableWorkUnitMembership] = append(reference.Tables[tableWorkUnitMembership], Row{
 		"org_id": FixtureOrgID, "node_type": "issue", "node_id": "node-gate-superseded", "work_unit_id": cloneID,
 		"category_kind": "theme", "category": "gate", "computed_at": computedAt, "run_id": store.scopeRun,
 	})
-	reference.Tables["work_unit_supersessions"] = append(reference.Tables["work_unit_supersessions"], Row{
+	reference.Tables[tableWorkUnitSupersessions] = append(reference.Tables[tableWorkUnitSupersessions], Row{
 		"org_id": FixtureOrgID, "superseded_work_unit_id": cloneID, "superseded_at": "2026-09-21 00:00:00.000000000",
 	})
 	_, control := gateRun(t, manifest, recording, reference, reference)
@@ -234,7 +234,7 @@ func acceptanceGateSupersession(t *testing.T) {
 	// Plant: the supersession row is gone, so the current reader reads the
 	// superseded unit as live.
 	planted := reference.Clone()
-	planted.Tables["work_unit_supersessions"] = nil
+	planted.Tables[tableWorkUnitSupersessions] = nil
 	_, rr := gateRun(t, manifest, recording, reference, planted)
 	wantPlanted(t, rr, "investment_org", ClassSupersession)
 }
@@ -255,7 +255,7 @@ func acceptanceGateNullableArgmax(t *testing.T) {
 	reference := extract.Clone()
 	newer := cloneRow(source)
 	newer["computed_at"], newer["repo_id"], newer["structural_evidence_json"] = later, nil, `{"issues":[],"prs":[]}`
-	reference.Tables["work_unit_investments"] = append(reference.Tables["work_unit_investments"], newer)
+	reference.Tables[tableWorkUnitInvestments] = append(reference.Tables[tableWorkUnitInvestments], newer)
 	controlOracle, control := gateRun(t, manifest, recording, reference, reference)
 	wantClean(t, control, ClassAttributionBasis)
 	// The control is not vacuous: the unit left the repository mix, so the
@@ -270,7 +270,7 @@ func acceptanceGateNullableArgmax(t *testing.T) {
 	// Plant: the newest generation names the repository of the older one,
 	// which is what an argMax that skips NULL hands the reader.
 	planted := reference.Clone()
-	rows := planted.Tables["work_unit_investments"]
+	rows := planted.Tables[tableWorkUnitInvestments]
 	rows[len(rows)-1]["repo_id"] = source["repo_id"]
 	_, rr := gateRun(t, manifest, recording, reference, planted)
 	wantPlanted(t, rr, "investment_org", ClassNullableArgmax)
@@ -331,7 +331,7 @@ func acceptanceGateNullRepoID(t *testing.T) {
 	}
 	reference := extract.Clone()
 	var changed []int
-	for i, row := range reference.Tables["team_repo_ownership"] {
+	for i, row := range reference.Tables[tableTeamRepoOwnership] {
 		if valid(row) {
 			row["repo_id"] = nil
 			changed = append(changed, i)
@@ -348,8 +348,8 @@ func acceptanceGateNullRepoID(t *testing.T) {
 	// no repo_id was dropped.
 	planted := reference.Clone()
 	for _, i := range changed {
-		name, _ := rowString(planted.Tables["team_repo_ownership"][i], "repo_full_name")
-		planted.Tables["team_repo_ownership"][i]["repo_full_name"] = name + "-moved"
+		name, _ := rowString(planted.Tables[tableTeamRepoOwnership][i], "repo_full_name")
+		planted.Tables[tableTeamRepoOwnership][i]["repo_full_name"] = name + "-moved"
 	}
 	_, rr := gateRun(t, manifest, recording, reference, planted)
 	wantPlanted(t, rr, "investment_team_rollup", ClassNullRepoID)
@@ -389,7 +389,7 @@ func teamRollupLossWithNoNullRowIsAFinding(t *testing.T) {
 	}
 	planted := extract.Clone()
 	var kept []Row
-	for _, row := range planted.Tables["team_repo_ownership"] {
+	for _, row := range planted.Tables[tableTeamRepoOwnership] {
 		rowTeam, _ := rowString(row, "team_id")
 		rowRepo, _ := rowString(row, "repo_id")
 		if rowTeam == team && strings.ToLower(rowRepo) == repo {
@@ -397,7 +397,7 @@ func teamRollupLossWithNoNullRowIsAFinding(t *testing.T) {
 		}
 		kept = append(kept, row)
 	}
-	planted.Tables["team_repo_ownership"] = kept
+	planted.Tables[tableTeamRepoOwnership] = kept
 	_, rr := gateRun(t, manifest, recording, extract, planted)
 	if got := classesOf(rr, "investment_team_rollup"); len(got) != 0 {
 		t.Fatalf("a loss with no null row was named %v", got)
@@ -427,22 +427,22 @@ func everyValuePairFindsAChangedValue(t *testing.T) {
 		row[column] = json.Number(formatFloat(value + by))
 	}
 	planted := extract.Clone()
-	for _, row := range planted.Tables["compounding_risk_daily"] {
+	for _, row := range planted.Tables[tableCompoundingRiskDaily] {
 		if row["compounding_risk"] != nil {
 			bump(row, "compounding_risk", 0.125)
 		}
 	}
-	for _, row := range planted.Tables["capacity_forecasts"] {
+	for _, row := range planted.Tables[tableCapacityForecasts] {
 		bump(row, "backlog_size", 1)
 	}
-	for _, row := range planted.Tables["estimate_coverage_metrics_daily"] {
+	for _, row := range planted.Tables[tableEstimateCoverageMetricsDaily] {
 		bump(row, "unestimated_count", 1)
 	}
-	for _, row := range planted.Tables["work_unit_investments"] {
+	for _, row := range planted.Tables[tableWorkUnitInvestments] {
 		bump(row, "effort_value", 1)
 	}
-	name, _ := rowString(planted.Tables["repos"][0], "repo")
-	planted.Tables["repos"][0]["repo"] = name + "x"
+	name, _ := rowString(planted.Tables[tableRepos][0], "repo")
+	planted.Tables[tableRepos][0]["repo"] = name + "x"
 
 	planes := localPlanes(t, seedStore(t, planted), &recording)
 	oracle := oracleFor(t, manifest, planes, extract)
@@ -483,7 +483,7 @@ func effortMovedBetweenRepositoriesIsAFinding(t *testing.T) {
 		t.Fatal("the extract has one repository only")
 	}
 	planted := extract.Clone()
-	for _, row := range planted.Tables["work_unit_investments"] {
+	for _, row := range planted.Tables[tableWorkUnitInvestments] {
 		if unit, _ := rowString(row, "work_unit_id"); unit == id {
 			evidence, _ := rowString(row, "structural_evidence_json")
 			row["structural_evidence_json"] = strings.ReplaceAll(evidence, from, to)
@@ -510,7 +510,7 @@ func effortMovedBetweenRepositoriesIsAFinding(t *testing.T) {
 func aReplyThatIsNotOfTheStoreIsAFinding(t *testing.T) {
 	manifest, recording, extract := loadedCapture(t)
 	other := extract.Clone()
-	for _, row := range other.Tables["work_unit_investments"] {
+	for _, row := range other.Tables[tableWorkUnitInvestments] {
 		value, err := rowFloat(row, "effort_value")
 		if err != nil {
 			t.Fatal(err)

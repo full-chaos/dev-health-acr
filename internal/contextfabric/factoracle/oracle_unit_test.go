@@ -355,19 +355,19 @@ func TestEveryDeclaredColumnOfTheExtractHasAScrubRule(t *testing.T) {
 		t.Fatalf("%d extract tables, want 11", len(extractTables))
 	}
 	// A declared column with no rule stops the capture.
-	missing := tableSpec{Table: "repos", Rules: map[string]columnRule{}}
+	missing := tableSpec{Table: tableRepos, Rules: map[string]columnRule{}}
 	for column, rule := range extractTables[4].Rules {
 		if column != "tags" {
 			missing.Rules[column] = rule
 		}
 	}
-	if extractTables[4].Table != "repos" {
+	if extractTables[4].Table != tableRepos {
 		t.Fatal("extract table order changed; fix this test")
 	}
 	if err := checkSpecList([]tableSpec{missing}); err == nil || !strings.Contains(err.Error(), "tags") {
 		t.Fatalf("a declared column with no rule passed: %v", err)
 	}
-	extra := tableSpec{Table: "repos", Rules: map[string]columnRule{"not_a_column": ruleKeep}}
+	extra := tableSpec{Table: tableRepos, Rules: map[string]columnRule{"not_a_column": ruleKeep}}
 	for column, rule := range extractTables[4].Rules {
 		extra.Rules[column] = rule
 	}
@@ -487,11 +487,11 @@ func TestLoadCaptureRefusesAnExtractThatDoesNotMatchItsManifest(t *testing.T) {
 		t.Fatal("a capture with no extract was loaded")
 	}
 	short := extract.Clone()
-	short.Tables["repos"] = short.Tables["repos"][1:]
+	short.Tables[tableRepos] = short.Tables[tableRepos][1:]
 	if err := short.Write(filepath.Join(dir, ExtractDir)); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := LoadCapture(dir); err == nil || !strings.Contains(err.Error(), "repos") {
+	if _, _, _, err := LoadCapture(dir); err == nil || !strings.Contains(err.Error(), tableRepos) {
 		t.Fatalf("an extract with a missing row was loaded: %v", err)
 	}
 }
@@ -512,16 +512,16 @@ func TestStoreReadsScopeSupersessionAndTheNullGeneration(t *testing.T) {
 			"subcategory_distribution_json": map[string]any{"quality.bugfix": json.Number("1")}}
 	}
 	extract := &Extract{Tables: map[string][]Row{
-		"work_unit_investments": {
+		tableWorkUnitInvestments: {
 			unit("live", "2026-09-12 00:00:00.000", "r1"),
 			unit("superseded", "2026-09-12 00:00:00.000", "r1"),
 			unit("outside", "2026-09-12 00:00:00.000", "r1"),
 			unit("nulled", "2026-09-13 00:00:00.000", nil), unit("nulled", "2026-09-12 00:00:00.000", "r1"),
 		},
-		"repos":                     {{"id": "r1", "repo": "o/r1", "provider": "github", "last_synced": "2026-09-01 00:00:00.000"}},
-		"work_unit_supersessions":   {{"superseded_work_unit_id": "superseded"}},
-		"work_unit_membership_runs": {{"run_id": "old", "completed_at": "2026-09-01 00:00:00.000"}, {"run_id": "run", "completed_at": "2026-09-20 00:00:00.000"}},
-		"work_unit_membership": {{"run_id": "run", "work_unit_id": "live"}, {"run_id": "run", "work_unit_id": "superseded"},
+		tableRepos:                  {{"id": "r1", "repo": "o/r1", "provider": "github", "last_synced": "2026-09-01 00:00:00.000"}},
+		tableWorkUnitSupersessions:  {{"superseded_work_unit_id": "superseded"}},
+		tableWorkUnitMembershipRuns: {{"run_id": "old", "completed_at": "2026-09-01 00:00:00.000"}, {"run_id": "run", "completed_at": "2026-09-20 00:00:00.000"}},
+		tableWorkUnitMembership: {{"run_id": "run", "work_unit_id": "live"}, {"run_id": "run", "work_unit_id": "superseded"},
 			{"run_id": "run", "work_unit_id": "nulled"}, {"run_id": "old", "work_unit_id": "outside"}},
 	}}
 	store, err := NewStore(extract)

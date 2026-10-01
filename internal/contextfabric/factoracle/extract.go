@@ -94,30 +94,30 @@ const unitsInWindow = `work_unit_id IN (
 
 // extractTables are the tables the value-compared pairs read.
 var extractTables = []tableSpec{
-	{Table: "work_unit_investments", Where: unitsInWindow, Rules: map[string]columnRule{
+	{Table: tableWorkUnitInvestments, Where: unitsInWindow, Rules: map[string]columnRule{
 		"work_unit_id": ruleWorkUnit, "from_ts": ruleKeep, "to_ts": ruleKeep, "repo_id": ruleUUID, "effort_value": ruleKeep,
 		"theme_distribution_json": ruleKeep, "subcategory_distribution_json": ruleKeep, "structural_evidence_json": ruleEvidence,
 		"computed_at": ruleKeep, "org_id": ruleOrg,
 	}},
-	{Table: "work_unit_supersessions", Where: strings.Replace(unitsInWindow, "work_unit_id IN", "superseded_work_unit_id IN", 1), Rules: map[string]columnRule{
+	{Table: tableWorkUnitSupersessions, Where: strings.Replace(unitsInWindow, "work_unit_id IN", "superseded_work_unit_id IN", 1), Rules: map[string]columnRule{
 		"org_id": ruleOrg, "superseded_work_unit_id": ruleWorkUnit, "superseded_at": ruleKeep,
 	}},
-	{Table: "work_unit_membership_runs", Where: "1", Rules: map[string]columnRule{
+	{Table: tableWorkUnitMembershipRuns, Where: "1", Rules: map[string]columnRule{
 		"org_id": ruleOrg, "run_id": ruleRun, "completed_at": ruleKeep,
 	}},
 	// One membership row per work unit of the latest complete run is enough
 	// for the scope filter, which reads DISTINCT work_unit_id of that run.
-	{Table: "work_unit_membership", LimitBy: "work_unit_id",
+	{Table: tableWorkUnitMembership, LimitBy: "work_unit_id",
 		Where: unitsInWindow + ` AND run_id = (SELECT argMax(run_id, completed_at) FROM work_unit_membership_runs WHERE org_id = {org:String})`,
 		Rules: map[string]columnRule{
 			"org_id": ruleOrg, "node_type": ruleKeep, "node_id": ruleNode, "work_unit_id": ruleWorkUnit, "category_kind": ruleKeep,
 			"category": ruleHash, "computed_at": ruleKeep, "run_id": ruleRun,
 		}},
-	{Table: "repos", Where: "1", Rules: map[string]columnRule{
+	{Table: tableRepos, Where: "1", Rules: map[string]columnRule{
 		"id": ruleUUID, "repo": ruleSlug, "ref": ruleDrop, "created_at": ruleKeep, "tags": ruleDrop, "last_synced": ruleKeep,
 		"org_id": ruleOrg, "provider": ruleKeep,
 	}},
-	{Table: "teams", Where: "1", Rules: map[string]columnRule{
+	{Table: tableTeams, Where: "1", Rules: map[string]columnRule{
 		"id": ruleTeam, "name": ruleHash, "description": ruleDrop, "updated_at": ruleKeep, "org_id": ruleOrg, "provider": ruleKeep,
 		"native_team_key": ruleDrop, "project_keys": ruleDropArray, "is_active": ruleKeep, "last_synced": ruleKeep,
 	}},
@@ -125,7 +125,7 @@ var extractTables = []tableSpec{
 	// The source writes one more row, equal but for valid_from and
 	// updated_at, at every sync; of such rows the earliest is valid whenever
 	// a later one is, so it alone decides every read.
-	{Table: "team_repo_ownership", Where: "valid_to IS NULL OR valid_to >= toDateTime64({start:String}, 3, 'UTC')",
+	{Table: tableTeamRepoOwnership, Where: "valid_to IS NULL OR valid_to >= toDateTime64({start:String}, 3, 'UTC')",
 		OrderBy: "valid_from ASC, updated_at ASC",
 		LimitBy: "provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_to",
 		Rules: map[string]columnRule{
@@ -133,23 +133,23 @@ var extractTables = []tableSpec{
 			"source": ruleKeep, "is_primary": ruleKeep, "specificity": ruleKeep, "priority": ruleKeep, "valid_from": ruleKeep, "valid_to": ruleKeep,
 			"updated_at": ruleKeep,
 		}},
-	{Table: "capacity_forecasts", Where: "toDate(computed_at) >= toDate({start:String}) AND toDate(computed_at) < toDate({end:String})", Rules: map[string]columnRule{
+	{Table: tableCapacityForecasts, Where: "toDate(computed_at) >= toDate({start:String}) AND toDate(computed_at) < toDate({end:String})", Rules: map[string]columnRule{
 		"forecast_id": ruleUUID, "computed_at": ruleKeep, "team_id": ruleTeam, "work_scope_id": ruleWorkScope, "backlog_size": ruleKeep,
 		"p50_days": ruleKeep, "throughput_mean": ruleKeep, "throughput_stddev": ruleKeep, "insufficient_history": ruleKeep,
 		"high_variance": ruleKeep, "org_id": ruleOrg,
 	}},
-	{Table: "compounding_risk_daily", Where: "day >= toDate({start:String}) AND day < toDate({end:String})", Rules: map[string]columnRule{
+	{Table: tableCompoundingRiskDaily, Where: "day >= toDate({start:String}) AND day < toDate({end:String})", Rules: map[string]columnRule{
 		"org_id": ruleOrg, "day": ruleKeep, "scope": ruleKeep, "scope_id": ruleScopeID, "compounding_risk": ruleKeep, "severity": ruleKeep,
 		"churn_norm": ruleKeep, "complexity_norm": ruleKeep, "ownership_norm": ruleKeep, "review_norm": ruleKeep, "w_churn": ruleKeep,
 		"w_complexity": ruleKeep, "w_ownership": ruleKeep, "w_review": ruleKeep, "computed_at": ruleKeep,
 	}},
-	{Table: "work_item_metrics_daily", Where: "day >= toDate({start:String}) AND day < toDate({end:String})", Rules: map[string]columnRule{
+	{Table: tableWorkItemMetricsDaily, Where: "day >= toDate({start:String}) AND day < toDate({end:String})", Rules: map[string]columnRule{
 		"day": ruleKeep, "provider": ruleKeep, "work_scope_id": ruleWorkScope, "team_id": ruleTeam, "items_started": ruleKeep,
 		"items_completed": ruleKeep, "wip_count_end_of_day": ruleKeep, "cycle_time_p50_hours": ruleKeep, "cycle_time_p90_hours": ruleKeep,
 		"lead_time_p50_hours": ruleKeep, "lead_time_p90_hours": ruleKeep, "wip_age_p50_hours": ruleKeep, "wip_age_p90_hours": ruleKeep,
 		"bug_completed_ratio": ruleKeep, "story_points_completed": ruleKeep, "computed_at": ruleKeep, "org_id": ruleOrg,
 	}},
-	{Table: "estimate_coverage_metrics_daily", Where: "day >= toDate({start:String}) AND day < toDate({end:String})", Rules: map[string]columnRule{
+	{Table: tableEstimateCoverageMetricsDaily, Where: "day >= toDate({start:String}) AND day < toDate({end:String})", Rules: map[string]columnRule{
 		"day": ruleKeep, "provider": ruleKeep, "work_scope_id": ruleWorkScope, "team_id": ruleTeam, "estimated_count": ruleKeep,
 		"unestimated_count": ruleKeep, "backlog_size": ruleKeep, "ratio": ruleKeep, "computed_at": ruleKeep, "org_id": ruleOrg,
 	}},

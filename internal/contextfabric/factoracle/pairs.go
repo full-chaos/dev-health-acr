@@ -518,7 +518,7 @@ func compareWorkload(ctx context.Context, o *Oracle, rr *RootReport) error {
 		"capacityForecasts.{pageInfo,totalCount}, edges[*].cursor":                                                                                "list paging; the acr fact is not a list",
 	}
 	teams := map[string]bool{}
-	for _, row := range o.Store.extract.Tables["capacity_forecasts"] {
+	for _, row := range o.Store.extract.Tables[tableCapacityForecasts] {
 		if team, ok := rowString(row, "team_id"); ok && team != "" {
 			teams[team] = true
 		}
@@ -710,7 +710,7 @@ func compareReadiness(ctx context.Context, o *Oracle, rr *RootReport) error {
 		"throughputForecast.{primaryRisk,wipCongestion,staleWip,reviewBottleneck,incidentLoad}":                                             "derived risk signals; no acr fact",
 	}
 	teams := map[string]bool{}
-	for _, row := range o.Store.extract.Tables["estimate_coverage_metrics_daily"] {
+	for _, row := range o.Store.extract.Tables[tableEstimateCoverageMetricsDaily] {
 		if team, ok := rowString(row, "team_id"); ok && team != "" {
 			teams[team] = true
 		}
@@ -859,7 +859,7 @@ func tableSum(table ServedTable, column string) (int64, error) {
 // its own fields.
 func compareFlowWindow(ctx context.Context, o *Oracle, rr *RootReport) error {
 	teams := map[string]bool{}
-	for _, row := range o.Store.extract.Tables["work_item_metrics_daily"] {
+	for _, row := range o.Store.extract.Tables[tableWorkItemMetricsDaily] {
 		if team, ok := rowString(row, "team_id"); ok && team != "" {
 			teams[team] = true
 		}
