@@ -46,7 +46,7 @@ import (
 //
 // The single statements these replace stay (projectRollupMixStatement,
 // projectNativeMixStatement) as the parity oracle of
-// chaos7271_project_mix_phased_integration_test.go.
+// project_mix_phased_integration_test.go.
 
 // projectMixPinnedFilter restricts a phase to EXACTLY the (work unit, version)
 // pairs phase 0 selected: the unit's computed_at, in whole milliseconds (the
