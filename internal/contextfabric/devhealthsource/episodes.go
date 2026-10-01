@@ -69,6 +69,22 @@ func (s *EpisodesProjectionSource) Enabled() bool {
 	return s != nil && s.enabled
 }
 
+// CurrentProjectionSourceVersion implements contextfabric.ProjectionSourceVersion
+// (CHAOS-7283): the epoch activation guard compares every epoch's recorded
+// episodes version against this before the epoch may become active, and a
+// source without the capability is one the guard cannot verify.
+func (s *EpisodesProjectionSource) CurrentProjectionSourceVersion() string {
+	return EpisodesSourceVersion
+}
+
+// Every production projection source reports its current version, so the
+// epoch activation guard (projectionrun.Coordinator) can verify each of them.
+var (
+	_ contextfabric.ProjectionSourceVersion = (*ClickHouseProjectionSource)(nil)
+	_ contextfabric.ProjectionSourceVersion = (*EpisodesProjectionSource)(nil)
+	_ contextfabric.ProjectionSourceVersion = (*TeamsProjectsSource)(nil)
+)
+
 func (s *EpisodesProjectionSource) NextProjectionBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
 	if s == nil || s.rows == nil {
 		return contextfabric.ProjectionBatch{}, false, fmt.Errorf("devhealthsource: episode source is not configured")

@@ -44,6 +44,13 @@ var (
 	// conflict means "retry against fresh state might succeed"; a refusal
 	// means "this call can never succeed as shaped".
 	ErrLifecycleTransitionRefused = errors.New("context fabric graph lifecycle transition refused")
+	// ErrEpochSourceVersionStale identifies an activation (flip or
+	// rollback) refused because the candidate epoch holds data recorded
+	// under a source version that is not the running binary's own. Always
+	// returned together with ErrLifecycleTransitionRefused: retrying the
+	// same activation can never succeed until the epoch is rebuilt, or the
+	// binary that recorded it is running again.
+	ErrEpochSourceVersionStale = errors.New("context fabric graph epoch holds a source version other than the running binary's")
 )
 
 // LifecycleStatus is the org lifecycle row's own state (design brief §3.5).
@@ -335,6 +342,63 @@ const (
 	LifecycleTransitionRetireDone  LifecycleTransition = "retire_done"
 )
 
+// EpochActivationRefusalReason is cf_epoch_activation_refused's closed
+// reason vocabulary: why the activation guard would not let one source of a
+// candidate epoch become active.
+type EpochActivationRefusalReason string
+
+const (
+	// EpochActivationRefusedSourceVersion: the candidate epoch's checkpoint
+	// for the source records a version, and it is not the version the
+	// running binary's source reports.
+	EpochActivationRefusedSourceVersion EpochActivationRefusalReason = "source_version_mismatch"
+	// EpochActivationRefusedSourceNotConfigured: the candidate epoch holds
+	// data from a source the running binary does not configure at all, so
+	// no current version exists to compare against.
+	EpochActivationRefusedSourceNotConfigured EpochActivationRefusalReason = "source_not_configured"
+	// EpochActivationRefusedSourceVersionUnknown: the candidate epoch
+	// records a version for the source, but the running binary's source
+	// reports no current version (blank, or no ProjectionSourceVersion
+	// capability) -- nothing can vouch for the recorded data.
+	EpochActivationRefusedSourceVersionUnknown EpochActivationRefusalReason = "source_version_unknown"
+	// EpochActivationRefusedCheckpointUnreadable: the candidate epoch's
+	// checkpoint rows could not be read, so the guard cannot prove the epoch
+	// is current. Fail closed; the next attempt re-reads.
+	EpochActivationRefusedCheckpointUnreadable EpochActivationRefusalReason = "checkpoint_unreadable"
+	// EpochActivationRefusedSourcesUnlistable: the candidate epoch's
+	// checkpoint view cannot list its checkpoint rows (it does not
+	// implement ProjectionCheckpointLister), so nothing the epoch recorded
+	// can be checked. Fail closed.
+	EpochActivationRefusedSourcesUnlistable EpochActivationRefusalReason = "checkpoint_sources_unlistable"
+)
+
+// ProjectionCheckpointLister is the capability the epoch activation guard
+// needs from an epoch's checkpoint view: every checkpoint row the view's
+// epoch holds for orgID, each exactly as stored (source name and source
+// version untouched), so the guard judges the epoch's own record of who
+// wrote into it -- including sources the running binary no longer
+// configures. pgprojection.CheckpointStore (epoch 0) and its ForEpoch views
+// implement it.
+type ProjectionCheckpointLister interface {
+	ListProjectionCheckpoints(ctx context.Context, orgID string) ([]ProjectionCheckpoint, error)
+}
+
+// EpochActivationRefusal is one cf_epoch_activation_refused signal: every
+// input the guard decided from, so a reader can rebuild the decision from
+// the signal alone. Content-safe: ids, epochs, enums and version strings.
+type EpochActivationRefusal struct {
+	OrgID      string
+	Transition LifecycleTransition
+	// ActiveEpoch is the epoch that stays active because of the refusal.
+	ActiveEpoch int64
+	// CandidateEpoch is the epoch the transition would have activated.
+	CandidateEpoch        int64
+	Source                string
+	Reason                EpochActivationRefusalReason
+	RecordedSourceVersion string
+	CurrentSourceVersion  string
+}
+
 // CheckpointEpochState is cf_checkpoint_epoch_state's per-(org, epoch)
 // enum (design brief §3.4/§5b).
 type CheckpointEpochState string
@@ -398,6 +462,11 @@ type GraphLifecycleTelemetry interface {
 	// which commit triggered it (LifecycleTransitionBeginBuild or
 	// LifecycleTransitionFlip today).
 	RecordEpochResolverInvalidation(ctx context.Context, orgID string, transition LifecycleTransition)
+	// RecordEpochActivationRefused is cf_epoch_activation_refused: fired
+	// once per refusing source every time the activation guard keeps a
+	// flip or a rollback from activating an epoch whose recorded source
+	// version is not the running binary's (see EpochActivationRefusal).
+	RecordEpochActivationRefused(ctx context.Context, refusal EpochActivationRefusal)
 }
 
 // EpochGraphDeleter is the retire executor's graph-deletion port (design
@@ -448,6 +517,8 @@ func (NoopGraphLifecycleTelemetry) RecordCheckpointEpochState(context.Context, s
 func (NoopGraphLifecycleTelemetry) RecordBuildSourceProgress(context.Context, string, int64, string, BuildCompletionMode, int64) {
 }
 func (NoopGraphLifecycleTelemetry) RecordEpochResolverInvalidation(context.Context, string, LifecycleTransition) {
+}
+func (NoopGraphLifecycleTelemetry) RecordEpochActivationRefused(context.Context, EpochActivationRefusal) {
 }
 
 var _ GraphLifecycleTelemetry = NoopGraphLifecycleTelemetry{}
@@ -554,6 +625,19 @@ func (t SlogGraphLifecycleTelemetry) RecordBuildSourceProgress(_ context.Context
 
 func (t SlogGraphLifecycleTelemetry) RecordEpochResolverInvalidation(_ context.Context, orgID string, transition LifecycleTransition) {
 	t.logger().Info("context_fabric: epoch resolver cache invalidated", "org_id", SanitizeLogAttr(orgID), "transition", SanitizeLogAttr(string(transition)))
+}
+
+// RecordEpochActivationRefused logs at Warn: a refusal means an epoch built
+// under another producer version was about to be served, which an operator
+// must see. Bounded: at most once per refusing source per activation
+// attempt, and activation attempts happen only while a build is open or on
+// an explicit rollback.
+func (t SlogGraphLifecycleTelemetry) RecordEpochActivationRefused(_ context.Context, refusal EpochActivationRefusal) {
+	t.logger().Warn("context_fabric: graph epoch activation refused",
+		"org_id", SanitizeLogAttr(refusal.OrgID), "transition", SanitizeLogAttr(string(refusal.Transition)),
+		"active_epoch", refusal.ActiveEpoch, "candidate_epoch", refusal.CandidateEpoch,
+		"source", SanitizeLogAttr(refusal.Source), "reason", SanitizeLogAttr(string(refusal.Reason)),
+		"recorded_source_version", SanitizeLogAttr(refusal.RecordedSourceVersion), "current_source_version", SanitizeLogAttr(refusal.CurrentSourceVersion))
 }
 
 var _ GraphLifecycleTelemetry = SlogGraphLifecycleTelemetry{}

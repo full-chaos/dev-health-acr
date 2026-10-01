@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -236,4 +238,54 @@ func TestCheckpointStore_isolatesCheckpointsPerOrganizationAndSource(t *testing.
 	require.Equal(t, "cursor-org-1-dev_health_clickhouse", orgOneClickHouse.Cursor)
 	require.Equal(t, "cursor-org-1-dev_health_episodes", orgOneEpisodes.Cursor)
 	require.Equal(t, "cursor-org-2-dev_health_clickhouse", orgTwoClickHouse.Cursor)
+}
+
+// TestCheckpointStore_listsTheRowsOfOneEpochOnlyExactlyAsStored pins the
+// capability the epoch activation guard reads: every checkpoint row of one
+// (organization, epoch), sorted by source, nothing from another epoch or
+// org, and each source name and version exactly as stored -- a padded name
+// or version must reach the guard untouched.
+func TestCheckpointStore_listsTheRowsOfOneEpochOnlyExactlyAsStored(t *testing.T) {
+	ctx := context.Background()
+	store, err := pgprojection.NewCheckpointStore(newCheckpointTestDatabase(t, ctx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := func(view contextfabric.ProjectionCheckpointStore, org, source, version string) {
+		t.Helper()
+		if err := view.CompareAndSwapProjectionCheckpoint(ctx, contextfabric.ProjectionCheckpoint{OrgID: org, Source: source},
+			contextfabric.ProjectionCheckpoint{OrgID: org, Source: source, Cursor: "c1", SourceVersion: version}); err != nil {
+			t.Fatalf("write %s/%q: %v", org, source, err)
+		}
+	}
+	write(store, "org-1", "zeta", "v1")
+	write(store, "org-1", " alpha ", "v2 ")
+	write(store.ForEpoch(2), "org-1", "beta", "v3")
+	write(store, "org-2", "gamma", "v4")
+
+	describe := func(rows []contextfabric.ProjectionCheckpoint) string {
+		parts := make([]string, 0, len(rows))
+		for _, row := range rows {
+			parts = append(parts, fmt.Sprintf("%q=%q", row.Source, row.SourceVersion))
+		}
+		return strings.Join(parts, ",")
+	}
+	epoch0, err := store.ListProjectionCheckpoints(ctx, "org-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := describe(epoch0), `" alpha "="v2 ","zeta"="v1"`; got != want {
+		t.Fatalf("epoch 0 rows = %s, want %s", got, want)
+	}
+	epoch2, err := store.ForEpoch(2).(contextfabric.ProjectionCheckpointLister).ListProjectionCheckpoints(ctx, "org-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := describe(epoch2), `"beta"="v3"`; got != want {
+		t.Fatalf("epoch 2 rows = %s, want %s", got, want)
+	}
+	none, err := store.ForEpoch(3).(contextfabric.ProjectionCheckpointLister).ListProjectionCheckpoints(ctx, "org-1")
+	if err != nil || len(none) != 0 {
+		t.Fatalf("an epoch with no rows lists %v, %v; want nothing", none, err)
+	}
 }

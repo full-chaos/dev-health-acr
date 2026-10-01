@@ -66,6 +66,9 @@ func (f *fakeLifecycleTelemetry) RecordCheckpointEpochState(context.Context, str
 func (f *fakeLifecycleTelemetry) RecordEpochResolverInvalidation(context.Context, string, contextfabric.LifecycleTransition) {
 }
 
+func (f *fakeLifecycleTelemetry) RecordEpochActivationRefused(context.Context, contextfabric.EpochActivationRefusal) {
+}
+
 func (f *fakeLifecycleTelemetry) RecordBuildSourceProgress(context.Context, string, int64, string, contextfabric.BuildCompletionMode, int64) {
 }
 

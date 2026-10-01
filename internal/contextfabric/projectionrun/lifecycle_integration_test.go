@@ -77,6 +77,11 @@ func (f *lifecycleFakeSource) NextProjectionBatch(_ context.Context, checkpoint 
 	return batch, true, nil
 }
 
+// CurrentProjectionSourceVersion reports the version validBatch stamps, as
+// every production source reports the version its batches record -- the
+// epoch activation guard refuses a source that reports none.
+func (f *lifecycleFakeSource) CurrentProjectionSourceVersion() string { return "test.v1" }
+
 func (f *lifecycleFakeSource) callCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
