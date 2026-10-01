@@ -2,6 +2,7 @@ package devhealthfacts
 
 import (
 	"context"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
@@ -367,6 +368,10 @@ func (p *FlowProvider) readTeamFlow(ctx context.Context, orgID string, subjects 
 	if dailySeriesRowCount > rowCount {
 		rowCount = dailySeriesRowCount
 	}
+	windowByTeam, windowErr := p.queryTeamFlowWindowTotals(ctx, orgID, ids, timeBound)
+	if windowErr != nil {
+		return rowCount, 0, rejected, windowErr
+	}
 	totalOmitted := 0
 	for _, teamID := range teamOrder {
 		subject, ok := bySubject[teamID]
@@ -384,9 +389,9 @@ func (p *FlowProvider) readTeamFlow(ctx context.Context, orgID string, subjects 
 		valueRows, omitted := capFactValueRows(valueRows)
 		totalOmitted += omitted
 		fields := map[string]contextfabric.FactValue{
-			"scope_count":     contextfabric.IntegerFactValue(int64(len(rows))),
-			"items_started":   contextfabric.IntegerFactValue(totalStarted),
-			"items_completed": contextfabric.IntegerFactValue(totalCompleted),
+			"scope_count":                contextfabric.IntegerFactValue(int64(len(rows))),
+			"items_started_latest_day":   contextfabric.IntegerFactValue(totalStarted),
+			"items_completed_latest_day": contextfabric.IntegerFactValue(totalCompleted),
 			// CHAOS-4633 P1: Key = [provider, work_scope_id] -- NEVER
 			// team_id. The design's own canonical citation: two different
 			// providers can legitimately share one work_scope_id string
@@ -411,6 +416,7 @@ func (p *FlowProvider) readTeamFlow(ctx context.Context, orgID string, subjects 
 				Rows:         valueRows,
 			}),
 		}
+		addFlowWindowFields(fields, timeBound, windowByTeam[teamID])
 		if omitted > 0 {
 			fields["scope_breakdown_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
 		}
@@ -493,11 +499,11 @@ type teamFlowAggregateRow struct {
 
 func (r teamFlowAggregateRow) toFactValueRow() contextfabric.FactValueRow {
 	fields := map[string]contextfabric.FactValue{
-		"items_started":          contextfabric.IntegerFactValue(r.itemsStarted),
-		"items_completed":        contextfabric.IntegerFactValue(r.itemsCompleted),
-		"wip_count_end_of_day":   contextfabric.IntegerFactValue(r.wipCountEndOfDay),
-		"bug_completed_ratio":    contextfabric.NumberFactValue(r.bugCompletedRatio),
-		"story_points_completed": contextfabric.NumberFactValue(r.storyPointsCompleted),
+		"items_started_latest_day":   contextfabric.IntegerFactValue(r.itemsStarted),
+		"items_completed_latest_day": contextfabric.IntegerFactValue(r.itemsCompleted),
+		"wip_count_end_of_day":       contextfabric.IntegerFactValue(r.wipCountEndOfDay),
+		"bug_completed_ratio":        contextfabric.NumberFactValue(r.bugCompletedRatio),
+		"story_points_completed":     contextfabric.NumberFactValue(r.storyPointsCompleted),
 	}
 	if r.hasWipAgeP50 {
 		fields["wip_age_p50_hours"] = contextfabric.NumberFactValue(r.wipAgeP50Hours)
@@ -618,6 +624,10 @@ ORDER BY p.id, wm.team_id`)
 	if dailySeriesRowCount > rowCount {
 		rowCount = dailySeriesRowCount
 	}
+	windowByProject, windowErr := p.queryProjectFlowWindowTotals(ctx, orgID, ids, timeBound)
+	if windowErr != nil {
+		return rowCount, 0, rejected, windowErr
+	}
 	totalOmitted := 0
 	for _, projectKey := range projectOrder {
 		rows := byProject[projectKey]
@@ -652,9 +662,9 @@ ORDER BY p.id, wm.team_id`)
 			// happens -- provenance describing a chain the read did not
 			// traverse. This path groups the project's OWN work-scope
 			// rows; no ownership edge is consulted.
-			"team_count":      contextfabric.IntegerFactValue(int64(len(seenTeams))),
-			"items_started":   contextfabric.IntegerFactValue(totalStarted),
-			"items_completed": contextfabric.IntegerFactValue(totalCompleted),
+			"team_count":                 contextfabric.IntegerFactValue(int64(len(seenTeams))),
+			"items_started_latest_day":   contextfabric.IntegerFactValue(totalStarted),
+			"items_completed_latest_day": contextfabric.IntegerFactValue(totalCompleted),
 			// CHAOS-4633 P1: Key = [team_id] -- one row per team
 			// (seenTeams dedupe above), each already SUMMED/AVERAGED
 			// across that team's own scopes (teamFlowAggregateRow's own
@@ -663,7 +673,7 @@ ORDER BY p.id, wm.team_id`)
 				Shape: contextfabric.FactTableBreakdown,
 				Key:   []string{"team_id"},
 				Measures: []string{
-					"items_started", "items_completed", "wip_count_end_of_day",
+					"items_started_latest_day", "items_completed_latest_day", "wip_count_end_of_day",
 					"bug_completed_ratio", "story_points_completed",
 					"wip_age_p50_hours", "wip_age_p90_hours",
 					"cycle_time_p50_hours", "cycle_time_p90_hours",
@@ -673,6 +683,7 @@ ORDER BY p.id, wm.team_id`)
 				Rows:  teamRows,
 			}),
 		}
+		addFlowWindowFields(fields, timeBound, windowByProject[projectKey])
 		if omitted > 0 {
 			fields["team_breakdown_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
 		}
@@ -791,4 +802,94 @@ WHERE rn = 1`)
 		return nil
 	}, timeBound.bindings()...)
 	return rowCount, rejected, scanErr
+}
+
+// flowWindowTotals is one subject's request-window sum of work_item_metrics_daily
+// (deduped per team/provider/scope/day), read by its own un-capped aggregate so
+// it can never be a partial sum of a row-capped daily_flow series.
+type flowWindowTotals struct {
+	itemsStarted, itemsCompleted, daysWithData int64
+	present                                    bool
+}
+
+const flowWindowTotalsDedupe = `SELECT team_id, provider, work_scope_id, day, items_started, items_completed,
+		row_number() OVER (PARTITION BY team_id, provider, work_scope_id, day ORDER BY computed_at DESC, cityHash64(tuple(items_started, items_completed, wip_count_end_of_day, bug_completed_ratio, story_points_completed)) DESC) AS rn`
+
+// addFlowWindowFields names the window every headline value covers. A range
+// request gets window totals; a point-in-time or current request has no window,
+// so only the latest-day values exist and no total is fabricated.
+func addFlowWindowFields(fields map[string]contextfabric.FactValue, b factTimeBound, w flowWindowTotals) {
+	switch {
+	case b.active && b.hasStart:
+		fields["window_mode"] = contextfabric.StringFactValue("range")
+		fields["window_start"] = contextfabric.StringFactValue(b.start.UTC().Format(time.DateOnly))
+		fields["window_end"] = contextfabric.StringFactValue(b.end.UTC().Format(time.DateOnly))
+		startDay := b.start.UTC().Truncate(24 * time.Hour)
+		endDay := b.end.UTC().Truncate(24 * time.Hour)
+		fields["window_days"] = contextfabric.IntegerFactValue(int64(endDay.Sub(startDay)/(24*time.Hour)) + 1)
+		if w.present {
+			fields["items_started_window"] = contextfabric.IntegerFactValue(w.itemsStarted)
+			fields["items_completed_window"] = contextfabric.IntegerFactValue(w.itemsCompleted)
+			fields["window_days_with_data"] = contextfabric.IntegerFactValue(w.daysWithData)
+		}
+	case b.active:
+		fields["window_mode"] = contextfabric.StringFactValue("as_of")
+		fields["window_end"] = contextfabric.StringFactValue(b.end.UTC().Format(time.DateOnly))
+	default:
+		fields["window_mode"] = contextfabric.StringFactValue("current")
+	}
+}
+
+func (p *FlowProvider) queryTeamFlowWindowTotals(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (map[string]flowWindowTotals, error) {
+	out := make(map[string]flowWindowTotals)
+	if !timeBound.active || !timeBound.hasStart {
+		return out, nil
+	}
+	statement := withRowLimit(`SELECT toString(team_id), toInt64(sum(items_started)), toInt64(sum(items_completed)), toInt64(uniqExact(day))
+FROM (
+	` + flowWindowTotalsDedupe + `
+	FROM work_item_metrics_daily
+	WHERE org_id = {org_id:String} AND toString(team_id) IN {ids:Array(String)}` + timeBound.dayPredicate("day") + `
+)
+WHERE rn = 1
+GROUP BY team_id
+ORDER BY team_id -- window totals`)
+	err := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		var key string
+		var w flowWindowTotals
+		if err := row.Scan(&key, &w.itemsStarted, &w.itemsCompleted, &w.daysWithData); err != nil {
+			return err
+		}
+		w.present = true
+		out[key] = w
+		return nil
+	}, timeBound.bindings()...)
+	return out, err
+}
+
+func (p *FlowProvider) queryProjectFlowWindowTotals(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (map[string]flowWindowTotals, error) {
+	out := make(map[string]flowWindowTotals)
+	if !timeBound.active || !timeBound.hasStart {
+		return out, nil
+	}
+	statement := withRowLimit(`SELECT concat(p.provider, ':', p.id), toInt64(sum(wm.items_started)), toInt64(sum(wm.items_completed)), toInt64(uniqExact(wm.day))
+FROM ` + projectIdentityJoinSQL() + `
+INNER JOIN (
+	` + flowWindowTotalsDedupe + `
+	FROM work_item_metrics_daily
+	WHERE org_id = {org_id:String}` + timeBound.dayPredicate("day") + `
+) AS wm ON ` + projectIdentityMatchSQL("wm", "work_scope_id") + ` AND wm.rn = 1
+GROUP BY p.provider, p.id
+ORDER BY p.id -- window totals`)
+	err := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		var key string
+		var w flowWindowTotals
+		if err := row.Scan(&key, &w.itemsStarted, &w.itemsCompleted, &w.daysWithData); err != nil {
+			return err
+		}
+		w.present = true
+		out[key] = w
+		return nil
+	}, timeBound.bindings()...)
+	return out, err
 }

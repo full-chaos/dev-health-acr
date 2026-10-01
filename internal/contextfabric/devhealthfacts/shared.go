@@ -163,7 +163,13 @@ import (
 // ".v2" work-item-dependency ref (source, target and relation key, each
 // escaped). A candidate saved under v20 cites the retired bare-':' ref, which
 // names no source row, and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v21"
+//
+// v21 -> v22: flow headline values name the window they cover. The old
+// items_started / items_completed headline summed each scope's latest observed
+// day; it is now items_*_latest_day, and a range request adds items_*_window
+// totals with the window echoed. A candidate saved under v21 carries the old
+// names and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v22"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

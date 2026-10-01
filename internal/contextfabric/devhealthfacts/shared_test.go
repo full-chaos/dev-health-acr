@@ -415,3 +415,11 @@ func TestQueryVersionMovedPastTheLegacyTeamInvestmentShape(t *testing.T) {
 		t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer stored under that version holds the legacy team day rows and would be reused", devhealthfacts.QueryVersion, versionBeforeTheTeamMixShape)
 	}
 }
+
+func TestQueryVersionMovedPastTheUnnamedFlowHeadlineWindow(t *testing.T) {
+	t.Parallel()
+	const versionBeforeFlowHeadlinesNamedTheirWindow = "devhealthfacts.clickhouse.v21"
+	if devhealthfacts.QueryVersion == versionBeforeFlowHeadlinesNamedTheirWindow {
+		t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer stored under that version carries the flow headline items_started/items_completed whose window is unnamed and would be reused", devhealthfacts.QueryVersion, versionBeforeFlowHeadlinesNamedTheirWindow)
+	}
+}
