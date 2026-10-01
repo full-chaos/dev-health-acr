@@ -2,6 +2,7 @@ package graphrank
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -54,6 +55,8 @@ func TestExplicitPullRequestHandleResolvesInsideCommittedRepository(t *testing.T
 	t.Parallel()
 	var calls []explicitHandleCensusCall
 	deps, request := explicitHandleFixture(1, &calls)
+	tracer := &captureResolutionTracer{}
+	deps.ResolutionTracer = tracer
 	resolution, _, bases, digests, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("dev-health-acr"), deps, nil, nil, nil, "")
 	if err != nil {
 		t.Fatal(err)
@@ -69,6 +72,10 @@ func TestExplicitPullRequestHandleResolvesInsideCommittedRepository(t *testing.T
 	}
 	if len(anchored) != 1 || anchored[0].value != "747" || !anchored[0].handleBound || anchored[0].anchorID != explicitHandleRepoID || anchored[0].anchorKind != contextfabric.SubjectRepository {
 		t.Fatalf("census calls = %#v, want one handle=747 call anchored on the committed repository", calls)
+	}
+	events := tracer.eventsForStage("evidence_census_commit")
+	if len(events) != 1 || events[0].Outcome != "merged" || !events[0].CensusCommitHandleExplicit || events[0].Subject.CanonicalID != explicitHandlePRID {
+		t.Fatalf("evidence_census_commit events = %#v, want one merged handle-explicit event for the pull request", events)
 	}
 	if bases.For(resolution.Committed[1]) != contextfabric.CommitBasisStatistical || digests.For(resolution.Committed[1]).CommitGate != commitGateExplicitHandleCensus {
 		t.Fatalf("basis/digest not recorded for the handle-resolved subject: %v %v", bases, digests)
@@ -114,12 +121,23 @@ func TestExplicitPullRequestHandleSkipsWhenTwoRepositoriesAreCommitted(t *testin
 	}}
 	deps.ExactHint = backend.deps().ExactHint
 	request.RequestedScope.SubjectHints = append(request.RequestedScope.SubjectHints, contextfabric.SubjectHint{Kind: contextfabric.SubjectRepository, ID: other, Label: "full-chaos/other", Source: "caller"})
-	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("x"), deps, nil, nil, nil, "")
+	resolution, _, bases, digests, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("x"), deps, nil, nil, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if committedHasKind(resolution.Committed, contextfabric.SubjectPullRequest) {
-		t.Fatalf("Committed = %#v, want no pull request: the repository is ambiguous", resolution.Committed)
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("Committed = %#v, want none: two repositories can anchor the handle", resolution.Committed)
+	}
+	if !strings.Contains(resolution.ClarificationPrompt, "full-chaos/dev-health-acr") || !strings.Contains(resolution.ClarificationPrompt, "full-chaos/other") {
+		t.Fatalf("ClarificationPrompt = %q, want both candidate repositories named", resolution.ClarificationPrompt)
+	}
+	for _, candidate := range resolution.Candidates {
+		if candidate.State == contextfabric.ResolutionCommitted {
+			t.Fatalf("candidate %#v still committed", candidate)
+		}
+	}
+	if len(bases) != 0 || len(digests) != 0 {
+		t.Fatalf("bases=%v digests=%v, want none for demoted repositories", bases, digests)
 	}
 }
 

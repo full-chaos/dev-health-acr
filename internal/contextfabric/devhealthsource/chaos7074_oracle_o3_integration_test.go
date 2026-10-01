@@ -56,6 +56,11 @@ const chaos7074FalkorImage = "falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7
 
 func chaos7074FalkorAdapter(t *testing.T, ctx context.Context) *falkorgraph.Adapter {
 	t.Helper()
+	return chaos7074FalkorAdapterWith(t, ctx, nil)
+}
+
+func chaos7074FalkorAdapterWith(t *testing.T, ctx context.Context, configure func(*falkorgraph.Config)) *falkorgraph.Adapter {
+	t.Helper()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: chaos7074FalkorImage, ExposedPorts: []string{"6379/tcp"},
@@ -75,10 +80,14 @@ func chaos7074FalkorAdapter(t *testing.T, ctx context.Context) *falkorgraph.Adap
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter, err := falkorgraph.New(falkorgraph.Config{
+	config := falkorgraph.Config{
 		Addr: host + ":" + port.Port(), GraphPrefix: "acr-cf-o3", RequestTimeout: 15 * time.Second,
 		MaxAttempts: 1, MaxResults: 25, PoolSize: 10, AllowInsecure: true, TLS: false,
-	})
+	}
+	if configure != nil {
+		configure(&config)
+	}
+	adapter, err := falkorgraph.New(config)
 	if err != nil {
 		t.Fatalf("falkorgraph.New: %v", err)
 	}

@@ -814,7 +814,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"subject_kind", contextfabric.SanitizeLogAttr(string(event.Subject.Kind)), "subject_canonical_id", contextfabric.SanitizeLogAttr(event.Subject.CanonicalID),
 			"outcome", contextfabric.SanitizeLogAttr(event.Outcome), "graph_existence_ok", event.GraphExistenceOK,
-			"census_commit_reason", contextfabric.SanitizeLogAttr(event.CensusCommitReason))
+			"census_commit_reason", contextfabric.SanitizeLogAttr(event.CensusCommitReason), "census_commit_handle_explicit", event.CensusCommitHandleExplicit)
 	case "evidence_source_native":
 		// CHAOS-3918 (chris-ratified pre-registered shadow measurement,
 		// 2026-08-19; codex xhigh review finding, confirmed and fixed:
