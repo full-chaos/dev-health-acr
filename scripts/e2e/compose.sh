@@ -172,6 +172,9 @@ prepare_state() {
   cp "$COMPOSE_FILE" "$STATE/stage/compose.yml"
   ln -s "$(cd "$(dirname "$COMPOSE_FILE")" && pwd)/ops" "$STATE/stage/ops"
   ln -s "$(cd "$(dirname "$COMPOSE_FILE")" && pwd)/web" "$STATE/stage/web"
+  export OPS_COMMIT
+  OPS_COMMIT="$(git -C "$STATE/stage/ops" rev-parse HEAD 2>/dev/null || true)"
+  [[ "$OPS_COMMIT" =~ ^[0-9a-f]{40}$ ]] || die 'the ops checkout has no commit: the prover and query-api must be built from one identified commit'
   ln -s "$REPO_ROOT/deploy" "$STATE/stage/deploy"
   "$REPO_ROOT/scripts/deploy/local-pki.sh" --out "$STATE/pki" --dns 'localhost,acr-api,acr-tls-proxy,127.0.0.1'
   PORT="$(free_port)"
@@ -257,8 +260,26 @@ services:
   # query-api authenticates the Go-served REST routes with the user's edge access token, the HS256
   # JWT the Python api mints with JWT_SECRET_KEY (cmd/query-api edge_verifier_config.go). It needs
   # the same per-run secret as api, or every routed call answers 401 (CHAOS-6326).
+  # DEV_HEALTH_ENV and GO_API_PROOF_ROUTE_ENABLED mount the measurement route the prover needs
+  # for a shadow row; query-api and the tools image are built at ONE commit (OPS_COMMIT) because
+  # the prover refuses a build that differs from the running one.
   query-api:
-    environment: { GO_API_EDGE_JWT_SECRET: "${jwt}" }
+    build: { args: { COMMIT: "${OPS_COMMIT}" } }
+    environment: { GO_API_EDGE_JWT_SECRET: "${jwt}", DEV_HEALTH_ENV: ci, GO_API_PROOF_ROUTE_ENABLED: "true" }
+  # One-shot tools shell (dho goapi routing/prove, mint), run by enable_go_api_routing.
+  go-api-tools:
+    build: { context: ./ops, dockerfile: docker/go-api-tools.Dockerfile, args: { COMMIT: "${OPS_COMMIT}" } }
+    restart: "no"
+    profiles: ["tools"]
+    environment:
+      JWT_SECRET_KEY: "${jwt}"
+      POSTGRES_URI: "postgresql://devhealth:${pg}@postgres:5432/devhealth"
+      GO_API_QUERY_API_URL: http://query-api:8090
+      GO_API_ENVELOPE_PRIVATE_KEY: "\${GO_API_ENVELOPE_PRIVATE_KEY:-}"
+      GO_API_ENVELOPE_ISSUER: dev-health-ops-edge
+      GO_API_ENVELOPE_AUDIENCE: query-api
+      GO_API_ENVELOPE_KEY_ID: "\${GO_API_ENVELOPE_KEY_ID:-go-api-envelope-2026-08}"
+    networks: [dev-health]
   traefik: { ports: [] }
   acr-api:
     image: "${IMAGE}"
@@ -389,67 +410,64 @@ ops_clickhouse_database() { printf 'acr_%s_e2e' "${PROJECT//-/}"; }
 
 clickhouse_query() { compose exec -T clickhouse clickhouse-client --user default --password ch --query "$1"; }
 
-# seed_go_api_routing writes the go_api_routing_state rows that make the Go-owned GraphQL
-# operations reachable, through ops' own committed row writer (enable_operation in
-# dev_health_ops.api.graphql.go_api_routing_admin), never hand-written SQL. Without them the ops
-# `api` answers a Go-owned operation (catalog, which the web Repository select needs) with
-# GoServedOperationUnavailableError.
-#
-# It does NOT call `dev-hops go-api routing enable`. Since ops CHAOS-6154 (ops PR #2806) that verb
-# admits an operation only from a recorded deployed_executed proof run for the build or a written
-# ledger limit, with no flag that can add one, and a fresh per-run stack has neither. Ops CI meets
-# the same situation in ci/lib/go_api_prove_e2e.sh (GO_API_PROVE_E2E_ROUTING_PROGRAM) and writes
-# the fixture row directly; this follows that precedent, in primary mode. The program keeps the
-# preflights that still matter here: the running query-api's /registry must answer (this loop is
-# also the query-api readiness wait), and its schema digest must equal this checkout's, because
-# rows are keyed by it and a mismatch makes them unreachable. Digests come from /registry.
-SEED_GO_API_ROUTING_PROGRAM='import asyncio, json, os, sys, urllib.request
-from dev_health_ops.api.graphql.go_api_routing_admin import enable_operation
-from dev_health_ops.api.graphql.go_api_schema_digest import current_schema_digest
-from dev_health_ops.db import get_postgres_session
+# ACR_E2E_ROUTING_OPERATIONS names the Go-owned GraphQL operations this suite's flows call
+# through the ops `api`. Each one must hold a primary routing row backed by a receipt the
+# prover recorded for THIS build; an operation without one stays dark and its cells fail.
+ACR_E2E_ROUTING_OPERATIONS="${ACR_E2E_ROUTING_OPERATIONS:-acrRepositoryScopes}"
+# The proof service principal the prover mints its read-level edge token for (migrated by
+# `dho migrate`, no membership until granted here).
+GO_API_PROOF_PRINCIPAL_ID='00000000-0000-4000-8000-00000000e0e1'
 
-build = sys.argv[1]
-with urllib.request.urlopen(os.environ["GO_API_QUERY_API_URL"].rstrip("/") + "/registry", timeout=10) as resp:
-    registry = json.loads(resp.read().decode("utf-8"))
-local = current_schema_digest()
-if registry["schema_digest"] != local:
-    sys.exit("schema digest mismatch: python edge %s, query-api %s" % (local, registry["schema_digest"]))
-operations = {e["operation"]: e["document_digest"] for e in registry["operations"]}
-if not operations:
-    sys.exit("query-api registers no operations")
+# go_api_tools runs one bash script in the go-api-tools image: the SAME build (OPS_COMMIT) as
+# query-api, with the migrated Postgres, the per-run envelope key and the edge JWT secret in its
+# environment. Secrets reach dho through the environment, never argv.
+go_api_tools() { local script="$1"; shift; compose run --rm --no-deps -T "$@" go-api-tools bash -ec "$script"; }
 
-async def main():
-    async with get_postgres_session() as session:
-        for operation, document_digest in sorted(operations.items()):
-            await enable_operation(
-                session, schema_digest=local, document_digest=document_digest,
-                selected_operation=operation, candidate_build=build, mode="primary",
-                rollout_percentage=100,
-                review_evidence="isolated compose E2E fixture row: per-run stack, no deployed proof run",
-                recorded_by="acr-compose-e2e",
-            )
-        await session.commit()
-    print("seeded %d go_api_routing_state rows in primary mode at schema_digest=%s" % (len(operations), local))
-
-asyncio.run(main())
-'
-seed_go_api_routing() {
-  local build attempts=0 output
-  build="$(git -C "$STATE/stage/ops" rev-parse HEAD 2>/dev/null || true)"
-  [[ -n "$build" ]] || build='acr-e2e-local'
-  until output="$(compose exec -T api python -c "$SEED_GO_API_ROUTING_PROGRAM" "$build" 2>&1)"; do
-    attempts=$((attempts + 1))
-    if [[ "$attempts" -ge 30 ]]; then
-      printf '%s\n' "$output" | redact_log >&2
-      compose logs --no-color query-api 2>&1 | redact_log | tail -40 >&2 || true
-      die 'Go API routing enablement failed'
-    fi
-    sleep 4
-  done
-  printf '%s\n' "$output" | redact_log | tail -5 >&2
-  compose exec -T api dev-hops go-api routing status --json 2>/dev/null \
-    | jq -e '[.. | objects | select(has("mode")) | .mode] | length > 0 and all(. == "primary")' >/dev/null \
-    || die 'Go API routing rows are not all in primary mode after enablement'
+# enable_go_api_routing takes each operation in ACR_E2E_ROUTING_OPERATIONS through the real
+# path: seed (shadow), prove through query-api's own /graphql in Go-edge mode, enable primary.
+# `enable` admits an operation only from a recorded proof run for the running build, so a
+# prove that did not happen or did not match leaves the operation dark and this function dies.
+# It must run after the org exists and the fixtures are loaded: prove measures against data.
+enable_go_api_routing() {
+  local org_id operations status output
+  org_id="$(<"$STATE/org-id")"
+  operations="$ACR_E2E_ROUTING_OPERATIONS"
+  compose exec -T postgres psql -U "$POSTGRES_USER" -d "${POSTGRES_DB:-devhealth}" -v ON_ERROR_STOP=1 -qc \
+    "INSERT INTO memberships (id, user_id, org_id, role, created_at, updated_at) VALUES (gen_random_uuid(), '${GO_API_PROOF_PRINCIPAL_ID}', '${org_id}', 'viewer', now(), now()) ON CONFLICT DO NOTHING" >/dev/null \
+    || die 'could not grant the proof principal a membership'
+  if ! output="$(go_api_tools '
+    u="-registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo"
+    who=acr-compose-e2e
+    GO_API_ROUTING_BEARER="$(dho mint envelope -org "$ORG_ID")"; export GO_API_ROUTING_BEARER
+    dho goapi routing seed $u -operations "$OPERATIONS" -recorded-by "$who" -review-evidence "isolated compose E2E: first row, shadow"
+    dho goapi routing proof-org add -org "$ORG_ID" -recorded-by "$who" -review-evidence "isolated compose E2E proof org"
+    prove() {
+      local log=/tmp/prove.out
+      dho goapi prove $u -go-edge -proof-url http://query-api:8090/query/proof -edge-url http://query-api:8090/graphql \
+        -documents /app/go-api/documents.json -org "$ORG_ID" -artifact-dir /tmp/proof -key-id "$GO_API_ENVELOPE_KEY_ID" \
+        -recorded-by "$who" -review-evidence "$2" > "$log" 2>&1 \
+        || echo "go-api-tools: prove exited $?"
+      cat "$log"
+      for op in $(printf "%s" "$OPERATIONS" | tr "," " "); do
+        grep -Eq "go-api-prove: +$op +mode=$3 +route=$4 +PROVEN_GO_ONLY" "$log" \
+          || { echo "go-api-tools: $op was not proven in mode=$3 through route=$4" >&2; exit 1; }
+      done
+    }
+    prove x "isolated compose E2E: go-edge proof through the proof route (shadow)" shadow proof
+    dho goapi routing enable $u -operations "$OPERATIONS" -mode canary -recorded-by "$who" -review-evidence "isolated compose E2E: shadow receipt of this run"
+    prove x "isolated compose E2E: go-edge proof through /graphql (canary)" canary edge
+    dho goapi routing enable $u -operations "$OPERATIONS" -mode primary -recorded-by "$who" -review-evidence "isolated compose E2E: edge receipt of this run"
+  ' -e "ORG_ID=$org_id" -e "OPERATIONS=$operations" 2>&1)"; then
+    printf '%s\n' "$output" | redact_log | tail -60 >&2
+    die "Go API routing enablement failed for: ${operations}"
+  fi
+  printf '%s\n' "$output" | grep -F 'go-api-routing: enabled' | tail -1 | grep -Fq "go-api-routing: enabled total=$(printf '%s' "$operations" | awk -F, '{print NF}') proven=$(printf '%s' "$operations" | awk -F, '{print NF}') named_limit=0" \
+    || { printf '%s\n' "$output" | redact_log | tail -40 >&2; die "Go API primary admission did not come from an edge-route receipt for: ${operations}"; }
+  printf '%s\n' "$output" | redact_log | grep -E "go-api-prove: (edge_mode|prover_build|attempted|exit_cause)|edge access token mints|envelope mints|go-api-prove: +($(printf '%s' "$operations" | tr ',' '|')) |go-api-routing: enabled|go_api_routing.enabled|prove exited" | cut -c1-260 >&2 || true
+  status="$(compose run --rm --no-deps -T -e "ORG_ID=$org_id" go-api-tools bash -ec 'GO_API_ROUTING_BEARER="$(dho mint envelope -org "$ORG_ID")"; export GO_API_ROUTING_BEARER; dho goapi routing status -json -registry-url http://query-api:8090/registry' 2>/dev/null)" \
+    || die 'Go API routing status could not be read'
+  printf '%s' "$status" | jq -e --arg ops "$operations" '[.operations[] | select(.operation as $o | ($ops | split(",") | index($o)))] as $rows | ($rows | length) == ($ops | split(",") | length) and all($rows[]; .mode == "primary" and .reachable == true)' >/dev/null \
+    || die "Go API operations are not all primary and reachable after enablement: ${operations}"
 }
 
 provision_ops_control_plane() {
@@ -461,7 +479,6 @@ provision_ops_control_plane() {
   compose up -d --wait clickhouse >/dev/null
   clickhouse_query "CREATE DATABASE IF NOT EXISTS $(ops_clickhouse_database)" >/dev/null
   compose up -d postgres valkey pgbouncer mailpit migrate api query-api >/dev/null
-  seed_go_api_routing
   if ! output="$(dho admin orgs create --name "${PROJECT} E2E" --slug "$PROJECT" --description 'isolated compose E2E' --tier community)"; then
     printf '%s\n' "$output" >&2
     die 'Ops organization provisioning failed'
@@ -536,6 +553,7 @@ bootstrap_ops() {
   provision_ops_control_plane
   provision_evidence_database
   "$ACR_E2E_SEED_HOOK"
+  enable_go_api_routing
   grant_clickhouse_reader
 }
 
