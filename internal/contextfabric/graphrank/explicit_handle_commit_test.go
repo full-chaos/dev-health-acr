@@ -312,3 +312,41 @@ func TestExplicitPullRequestHandleDigestCarriesTheResolutionWideFlags(t *testing
 		t.Fatalf("digest = %#v, want the evidence_census gate carrying the resolution-wide flags", got)
 	}
 }
+
+func explicitHandleWithCommittedPullRequest(t *testing.T, committedID string, censusCount int) contextfabric.SubjectResolution {
+	t.Helper()
+	var calls []explicitHandleCensusCall
+	deps, request := explicitHandleFixture(censusCount, &calls)
+	exact := deps.ExactHint
+	deps.ExactHint = func(ctx context.Context, s contextfabric.SubjectRef) (CandidateNode, bool, error) {
+		if s.CanonicalID == committedID {
+			return candidateNode(s.Kind, committedID, "PR", 0.1, "*"), true, nil
+		}
+		return exact(ctx, s)
+	}
+	request.RequestedScope.SubjectHints = append(request.RequestedScope.SubjectHints, contextfabric.SubjectHint{Kind: contextfabric.SubjectPullRequest, ID: committedID, Label: "PR", Source: "caller"})
+	return resolveExplicitHandleFixture(t, deps, request)
+}
+
+func TestExplicitPullRequestHandleIgnoresTheSameNumberInAnotherRepository(t *testing.T) {
+	t.Parallel()
+	otherRepoPR := "pull_request:00000000-0000-0000-0000-000000000002:747"
+	resolution := explicitHandleWithCommittedPullRequest(t, otherRepoPR, 1)
+	var prs []string
+	for _, s := range resolution.Committed {
+		if s.Kind == contextfabric.SubjectPullRequest {
+			prs = append(prs, s.CanonicalID)
+		}
+	}
+	if len(prs) != 1 || prs[0] != explicitHandlePRID {
+		t.Fatalf("pull requests committed = %v, want only %s: the same number in another repository is another subject", prs, explicitHandlePRID)
+	}
+}
+
+func TestExplicitPullRequestHandleFailureDropsAnotherCommittedPullRequest(t *testing.T) {
+	t.Parallel()
+	resolution := explicitHandleWithCommittedPullRequest(t, "pull_request:7b9583ee-4d24-2be7-4d09-34f815bebdd7:748", 0)
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("Committed = %#v, want none: PR 748 does not answer a question about 747", resolution.Committed)
+	}
+}

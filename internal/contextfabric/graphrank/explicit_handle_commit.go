@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -36,16 +37,13 @@ func commitExplicitHandleSubjects(ctx context.Context, principal storage.Princip
 		// on the one repository, so the caller is asked to send one.
 		for _, h := range request.SubjectHandles {
 			if _, ok := deps.HandleGrammarChecker(h.Kind, h.PatternID, h.Value); ok && KindHasAnchorFK(h.Kind, contextfabric.SubjectRepository) {
-				return demoteRepositoryAnchors(request, resolution, bases, digests, "Several subject handles were sent; send one handle at a time")
+				return demoteRepositoryAnchors(request, resolution, bases, digests, h.Kind, "Several subject handles were sent; send one handle at a time")
 			}
 		}
 		return resolution
 	}
 	handle := request.SubjectHandles[0]
 	if _, ok := deps.HandleGrammarChecker(handle.Kind, handle.PatternID, handle.Value); !ok || !KindHasAnchorFK(handle.Kind, contextfabric.SubjectRepository) {
-		return resolution
-	}
-	if committedMatchesHandle(resolution.Committed, handle.Kind, handle.Value) {
 		return resolution
 	}
 	var anchor contextfabric.SubjectRef
@@ -60,8 +58,11 @@ func commitExplicitHandleSubjects(ctx context.Context, principal storage.Princip
 	case 0:
 		return resolution
 	case 1:
+		if committedMatchesHandle(resolution.Committed, handle.Kind, handle.Value, anchor) {
+			return resolution
+		}
 	default:
-		return demoteRepositoryAnchors(request, resolution, bases, digests, "Which repository holds the "+handleKindLabel(handle.Kind)+" "+handle.Value)
+		return demoteRepositoryAnchors(request, resolution, bases, digests, handle.Kind, "Which repository holds the "+handleKindLabel(handle.Kind)+" "+handle.Value)
 	}
 	satisfier, ok := explicitHandleSatisfier(ctx, principal, request, deps, handle.Kind, handle.Value, anchor)
 	var candidate contextfabric.SubjectCandidate
@@ -69,7 +70,7 @@ func commitExplicitHandleSubjects(ctx context.Context, principal storage.Princip
 		candidate, ok = explicitHandleCandidate(ctx, principal, request, deps, satisfier)
 	}
 	if !ok {
-		return demoteRepositoryAnchors(request, resolution, bases, digests, "The "+handleKindLabel(handle.Kind)+" "+handle.Value+" could not be matched to exactly one record in the repository")
+		return demoteRepositoryAnchors(request, resolution, bases, digests, handle.Kind, "The "+handleKindLabel(handle.Kind)+" "+handle.Value+" could not be matched to exactly one record in the repository")
 	}
 	kept := make([]contextfabric.SubjectRef, 0, len(resolution.Committed)+1)
 	for _, subject := range resolution.Committed {
@@ -96,24 +97,44 @@ func commitExplicitHandleSubjects(ctx context.Context, principal storage.Princip
 	return resolution
 }
 
-// committedMatchesHandle reports whether a committed subject of kind already
-// carries the handle's value, read from its canonical id by the same
-// extractor the handle offers use. A committed subject of that kind with a
-// different value does not satisfy the handle.
-func committedMatchesHandle(committed []contextfabric.SubjectRef, kind contextfabric.SubjectKind, value string) bool {
+// committedMatchesHandle reports whether a committed subject of kind carries
+// the handle's value AND lives in the anchor repository. Both are read from
+// its canonical id; the same number in another repository is another subject.
+func committedMatchesHandle(committed []contextfabric.SubjectRef, kind contextfabric.SubjectKind, value string, anchor contextfabric.SubjectRef) bool {
 	extractor, ok := handleGraphExtractors[kind]
 	if !ok {
 		return false
 	}
+	anchorRepo := strings.TrimPrefix(anchor.CanonicalID, "repository:")
 	for _, subject := range committed {
 		if subject.Kind != kind {
 			continue
 		}
-		if got, ok := extractor.extract(subject.CanonicalID); ok && got == value {
+		got, ok := extractor.extract(subject.CanonicalID)
+		repo, repoOK := committedSubjectRepository(kind, subject.CanonicalID)
+		if ok && got == value && repoOK && repo == anchorRepo {
 			return true
 		}
 	}
 	return false
+}
+
+func committedSubjectRepository(kind contextfabric.SubjectKind, canonicalID string) (string, bool) {
+	switch kind {
+	case contextfabric.SubjectPullRequest:
+		parts := strings.Split(canonicalID, ":")
+		if len(parts) != 3 || parts[1] == "" {
+			return "", false
+		}
+		return parts[1], true
+	case contractsv1.ContextFabricSubjectCIRun:
+		segments, ok := identity.Segments(identity.KindCIPipelineRun, canonicalID)
+		if !ok || len(segments) != 2 || segments[0] == "" {
+			return "", false
+		}
+		return segments[0], true
+	}
+	return "", false
 }
 
 func handleKindLabel(kind contextfabric.SubjectKind) string {
@@ -181,20 +202,25 @@ func explicitHandleCandidate(ctx context.Context, principal storage.Principal, r
 	return candidate, true
 }
 
-// demoteRepositoryAnchors moves every committed repository out of Committed:
-// they stay in Candidates as ambiguous and the prompt names them.
-func demoteRepositoryAnchors(request contextfabric.InvestigationRequest, resolution contextfabric.SubjectResolution, bases contextfabric.CommitBasisSet, digests contextfabric.CommitDecisionDigestSet, question string) contextfabric.SubjectResolution {
+// demoteRepositoryAnchors moves every committed repository, and every
+// committed subject of the handle's kind (an answer about another such
+// subject is not an answer about the one named), out of Committed: they stay
+// in Candidates as ambiguous and the prompt names the repositories.
+func demoteRepositoryAnchors(request contextfabric.InvestigationRequest, resolution contextfabric.SubjectResolution, bases contextfabric.CommitBasisSet, digests contextfabric.CommitDecisionDigestSet, handleKind contextfabric.SubjectKind, question string) contextfabric.SubjectResolution {
 	kept := make([]contextfabric.SubjectRef, 0, len(resolution.Committed))
 	labels := make([]string, 0, len(resolution.Committed))
 	demoted := map[string]bool{}
 	for _, subject := range resolution.Committed {
-		if subject.Kind != contextfabric.SubjectRepository {
+		if subject.Kind != contextfabric.SubjectRepository && subject.Kind != handleKind {
 			kept = append(kept, subject)
 			continue
 		}
 		demoted[SubjectKey(subject)] = true
 		delete(bases, contextfabric.SubjectMapKey(subject))
 		delete(digests, contextfabric.SubjectMapKey(subject))
+		if subject.Kind != contextfabric.SubjectRepository {
+			continue
+		}
 		label := subject.Label
 		if label == "" {
 			label = subject.CanonicalID
