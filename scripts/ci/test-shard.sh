@@ -173,15 +173,16 @@ unit_dedicated_packages=(
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 )
 
-# heavy_exceptions names a package HEAVY (see is_heavy_package below) despite
-# not carrying the package-scoped-shared-container pattern that function
-# looks for. internal/storage/postgres starts a FRESH testcontainer per test
-# (t.Cleanup, not a package-wide sync.Once + TestMain) rather than one
-# shared container -- so is_heavy_package alone does not see it -- but it is
-# still a real Postgres server under -race, measured at ~250s wall, and it
-# was the OTHER package sharing race shard 1 with devhealthfacts in both
-# incidents this fix is for. Listing it explicitly (rather than widening
-# is_heavy_package's own signal to catch it) keeps that signal narrow and
+# heavy_exceptions names a package HEAVY (see is_heavy_package below) by hand,
+# whatever is_heavy_pattern says about it. internal/storage/postgres was
+# listed when it started a FRESH testcontainer per test (t.Cleanup, not a
+# package-wide sync.Once + TestMain), a shape is_heavy_pattern does not see;
+# it was the OTHER package sharing race shard 1 with devhealthfacts in both
+# incidents this fix is for. It now keeps ONE Postgres container alive for
+# its whole run (shared_database_test.go), so is_heavy_pattern detects it as
+# well; the entry stays so the package keeps a shard of its own if that file
+# ever stops matching the pattern. Listing it explicitly (rather than
+# widening is_heavy_pattern's own signal) keeps that signal narrow and
 # code-derived for the pattern it actually detects, while still making the
 # separation this fix promises literal for the pair actually observed
 # colliding, not just a side effect of how the light packages happen to
@@ -392,12 +393,12 @@ is_heavy_pattern() {
 # The full HEAVY set: is_heavy_pattern's code-derived signal, UNION
 # heavy_exceptions above. The pattern alone misses a package that is
 # genuinely expensive under -race but does not share ONE container across
-# its run (internal/storage/postgres: a fresh testcontainer per test,
-# ~250s wall) -- widening the pattern itself to catch that shape would also
-# catch several of the 18 merely-imports-testcontainers-go packages it is
-# deliberately narrow to exclude, so that one package is named explicitly
-# instead (see heavy_exceptions' own comment for why, and for the existence
-# check that keeps it from silently naming nothing after a rename).
+# its run (a fresh testcontainer per test) -- widening the pattern itself to
+# catch that shape would also catch several of the 18
+# merely-imports-testcontainers-go packages it is deliberately narrow to
+# exclude, so such a package is named explicitly instead (see
+# heavy_exceptions' own comment for why, and for the existence check that
+# keeps it from silently naming nothing after a rename).
 is_heavy_package() {
   local pkg="$1"
   is_heavy_pattern "$pkg" || is_heavy_exception "$pkg"
