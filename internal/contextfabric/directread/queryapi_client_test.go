@@ -203,3 +203,30 @@ func TestQueryClientResponseBoundAndConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Only the listener (graphql) client reads a 404 body: the run_operation
+// client never does, so its 404 carries no listener reason.
+func TestQueryClientNotFoundBodyIsReadOnlyByTheListenerClient(t *testing.T) {
+	const refused = `{"errors":[{"message":"m","extensions":{"code":"MCP_REFUSED","reason":"root_field_not_enabled"}}]}`
+	u := newOpUpstream(t, func(opRecorded) (int, string) { return 404, refused })
+	call := directread.QueryCall{OrgID: opOrgA, Document: "query X { x }"}
+
+	op, err := directread.NewHTTPQueryClient(u.server.URL, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = op.Execute(context.Background(), call)
+	var qe *directread.QueryError
+	if !errors.As(err, &qe) || qe.Class != directread.QueryErrorNotFound || qe.ListenerReason != "" {
+		t.Fatalf("run_operation client 404: %+v", err)
+	}
+
+	gq, err := directread.NewHTTPGraphQLClient(u.server.URL, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = gq.Execute(context.Background(), call)
+	if !errors.As(err, &qe) || qe.Class != directread.QueryErrorNotFound || qe.ListenerReason != directread.ListenerNotFoundRootNotEnabled {
+		t.Fatalf("graphql client 404: %+v", err)
+	}
+}

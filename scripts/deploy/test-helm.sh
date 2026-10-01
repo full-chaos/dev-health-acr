@@ -755,6 +755,13 @@ grep -q 'ACR_DATA_GRAPHQL_URL' <<<"$(render --set config.dataGraphqlUrl=http://m
 if grep -q 'ACR_DATA_GRAPHQL_URL' "$rendered"; then
   fail_gate "query-mcp-egress: the default render must not set ACR_DATA_GRAPHQL_URL"
 fi
+qm_sel="$(render --set networkPolicy.egress.queryMcpPort=8092 --set-string networkPolicy.egress.queryMcpPodSelector.app\\.kubernetes\\.io/name=ops-query)"
+qm_sel_api="$(extract_doc NetworkPolicy 'component: api' 'component: falkordb' <<<"$qm_sel")"
+grep -Pzq 'to:\n\s+- podSelector:\n\s+matchLabels:\n\s+app.kubernetes.io/name: ops-query\n\s+ports:\n\s+- protocol: TCP\n\s+port: 8092\n' <<<"$qm_sel_api" \
+  || fail_gate "query-mcp-egress: queryMcpPodSelector must narrow the 8092 rule to those pods"
+if grep -Pzq 'port: 8092\n\s+to:' <<<"$qm_on_api"; then
+  fail_gate "query-mcp-egress: empty queryMcpPodSelector must stay port-only"
+fi
 pass "query-mcp-egress: API egress rule and URL are gated on queryMcpPort / dataGraphqlUrl"
 
 # Operator podLabels must never detach the pod from the selectors: the last

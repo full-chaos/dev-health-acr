@@ -230,6 +230,41 @@ func listenerRefusalOf(body []byte) (ListenerRefusalClass, string) {
 	return "", ""
 }
 
+// Closed reasons of a listener 404 (ops mcp_route.go): a root the routing
+// rows do not enable, a path other than POST /query, or anything else.
+const (
+	ListenerNotFoundRootNotEnabled = "root_field_not_enabled"
+	ListenerNotFoundOffListener    = "off_mcp_listener"
+	ListenerNotFoundUnknown        = "unknown"
+)
+
+// listenerNotFoundReasonOf reads a 404 body for the listener's MCP_REFUSED
+// reason and keeps it only when it is one of the two known values; any other
+// body is "unknown". Nothing else of the body is kept.
+func listenerNotFoundReasonOf(body []byte) string {
+	var answer struct {
+		Errors []struct {
+			Extensions struct {
+				Code   string `json:"code"`
+				Reason string `json:"reason"`
+			} `json:"extensions"`
+		} `json:"errors"`
+	}
+	if json.Unmarshal(body, &answer) != nil {
+		return ListenerNotFoundUnknown
+	}
+	for _, e := range answer.Errors {
+		if e.Extensions.Code != MCPRefusedCode {
+			continue
+		}
+		switch e.Extensions.Reason {
+		case ListenerNotFoundRootNotEnabled, ListenerNotFoundOffListener:
+			return e.Extensions.Reason
+		}
+	}
+	return ListenerNotFoundUnknown
+}
+
 // MCPReadBudgetExceededCode is the extensions.code GWC's MCP listener sets
 // when a query breaches its ClickHouse bytes-read or time ceiling.
 const MCPReadBudgetExceededCode = "MCP_READ_BUDGET_EXCEEDED"
@@ -483,8 +518,13 @@ func (c *HTTPQueryClient) Execute(ctx context.Context, call QueryCall) (QueryRes
 	defer resp.Body.Close()
 	switch {
 	case resp.StatusCode == http.StatusNotFound:
+		qerr := &QueryError{Class: QueryErrorNotFound, StatusCode: resp.StatusCode}
+		if c.readsTypedRefusals {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+			qerr.ListenerReason = listenerNotFoundReasonOf(body)
+		}
 		drain(resp.Body)
-		return QueryResult{}, &QueryError{Class: QueryErrorNotFound, StatusCode: resp.StatusCode}
+		return QueryResult{}, qerr
 	case resp.StatusCode < 200 || resp.StatusCode > 299:
 		qerr := &QueryError{Class: QueryErrorHTTPStatus, StatusCode: resp.StatusCode}
 		if c.readsTypedRefusals {

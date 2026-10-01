@@ -1363,6 +1363,25 @@ func (x *gqlRun) listenerRefused(refusal ListenerRefusalClass, reason string, st
 	return x.upstream(CallUpstreamError, class)
 }
 
+// GraphQLRootNotEnabledLog is the line for a listener 404: the roots acr sent
+// and the listener's closed reason (root_field_not_enabled = the routing rows
+// do not enable the root yet; retrying does not help until they do).
+const GraphQLRootNotEnabledLog = "context fabric graphql query root is not enabled on the MCP listener"
+
+func (x *gqlRun) logNotFound(qe *QueryError) {
+	reason := ListenerNotFoundUnknown
+	if qe != nil && qe.ListenerReason != "" {
+		reason = qe.ListenerReason
+	}
+	roots := append([]string{}, x.read.RootFields...)
+	x.r.logger.Warn(GraphQLRootNotEnabledLog,
+		"org_id", contextfabric.SanitizeLogAttr(x.principal.OrgID),
+		"listener_reason", contextfabric.SanitizeLogAttr(reason),
+		"root_fields", contextfabric.SanitizeLogStrings(roots),
+		"retryable", false,
+	)
+}
+
 func (x *gqlRun) mapCallError(err error, maxBytes int) GraphQLResponse {
 	var qe *QueryError
 	if errors.As(err, &qe) && qe.ReadBudget != "" {
@@ -1373,6 +1392,7 @@ func (x *gqlRun) mapCallError(err error, maxBytes int) GraphQLResponse {
 	}
 	switch QueryErrorClassOf(err) {
 	case QueryErrorNotFound:
+		x.logNotFound(qe)
 		return x.upstream(CallOperationUnavailable, UpstreamNotFound)
 	case QueryErrorTimeout:
 		// acr's own deadline cut the call before the listener answered

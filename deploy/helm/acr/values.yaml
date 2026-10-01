@@ -607,6 +607,9 @@ networkPolicy:
     # GWC's MCP listener (graphql_query, CHAOS-7085; acr-api egress only).
     # 0 renders no rule; the values roll sets 8092 with dataGraphqlUrl.
     queryMcpPort: 0
+    # Optional pod labels of the ops query-api pods (same namespace) that
+    # narrow the 8092 rule to those pods. Empty = port-only, like the rules above.
+    queryMcpPodSelector: {}
     # FalkorDB graph backend port. Rendered into the API egress only when
     # contextFabric.falkor.addr is set (acr-api's optional Investigator and
     # acr-projector share the same endpoint contract); an unconfigured
