@@ -70,10 +70,13 @@ type Oracle struct {
 	// organization value minus the sum of the acr repository mixes).
 	Residual map[string]float64
 
-	shapes  []Shape
-	answers map[string]json.RawMessage
-	// Calls lists every ops call of the run, in order.
-	Calls []ShapeCase
+	shapes    []Shape
+	answers   map[string]json.RawMessage
+	opAnswers map[string]json.RawMessage
+	// Calls lists every graphql_query call of the run, in order;
+	// OperationCalls every run_operation call.
+	Calls          []ShapeCase
+	OperationCalls []ShapeCase
 }
 
 func (o *Oracle) graphQL(ctx context.Context, shape Shape, variables map[string]any) (GraphQLAnswer, error) {
@@ -170,7 +173,7 @@ func (o *Oracle) Run(ctx context.Context) (*Report, error) {
 	if err != nil {
 		return nil, err
 	}
-	o.shapes, o.answers, o.Calls = shapes, map[string]json.RawMessage{}, nil
+	o.shapes, o.answers, o.opAnswers, o.Calls, o.OperationCalls = shapes, map[string]json.RawMessage{}, map[string]json.RawMessage{}, nil, nil
 	cases := o.ShapeCases
 	if cases == nil {
 		if cases, err = o.generatedCases(); err != nil {
@@ -216,11 +219,23 @@ func (o *Oracle) Run(ctx context.Context) (*Report, error) {
 				}
 			}
 		}
+		// run_operation, for the full selection of every operation.
+		for _, shape := range shapes {
+			if shape.Root != root.Field || shape.Name != "all" {
+				continue
+			}
+			for _, c := range byShape[shape.ID()] {
+				if err := o.runOperation(ctx, rr, shape, c); err != nil {
+					return nil, err
+				}
+			}
+		}
 		if pair.Mode == ModeValue && rr.Listener == "served" {
 			if err := pair.compare(ctx, o, rr); err != nil {
 				return nil, fmt.Errorf("root %s: %w", root.Field, err)
 			}
 		}
+		o.temporaryAllowance(rr, root)
 		sort.Strings(rr.NotJoined)
 	}
 	return report, nil
@@ -308,7 +323,7 @@ func (o *Oracle) generatedCases() ([]ShapeCase, error) {
 		case "hotspots":
 			sets = append(sets, map[string]any{"input": map[string]any{"sinceUtc": dateTime(start), "untilUtc": dateTime(last), "limit": 50}})
 		case "securityAlerts":
-			sets = append(sets, map[string]any{"filters": map[string]any{"since": start, "until": last}, "pagination": map[string]any{"first": 25}})
+			sets = append(sets, map[string]any{"filters": map[string]any{"since": start, "until": last}, "pagination": map[string]any{"first": 5}})
 		case "securityOverview":
 			sets = append(sets, map[string]any{"filters": map[string]any{"since": start, "until": last}})
 		case "throughputForecast":

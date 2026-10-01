@@ -25,7 +25,18 @@ const (
 	ClassForecastByDesign Class = "forecast_by_design"
 )
 
-// Classes lists the named classes.
+// ClassLatestDayVsWindow is a TEMPORARY class: a value that is the latest
+// day (or all time) of a series, served beside a window with no label that
+// says so. It covers exactly the paths of temporaryOpsPaths and the acr flow
+// headline counts, and it is not one of the design's classes. The oracle
+// reports an expired allowance (Report.Expired) when it stops appearing, so
+// it cannot outlive the fixes it waits for.
+const ClassLatestDayVsWindow Class = "latest_day_vs_window"
+
+// TemporaryClasses lists the classes that are allowed only until a fix lands.
+func TemporaryClasses() []Class { return []Class{ClassLatestDayVsWindow} }
+
+// Classes lists the named classes of the design. They are permanent.
 func Classes() []Class {
 	return []Class{ClassAttributionBasis, ClassNullRepoID, ClassSupersession, ClassMembershipScope, ClassNullableArgmax, ClassForecastByDesign}
 }
@@ -71,6 +82,17 @@ type RootReport struct {
 	Findings    []Finding     `json:"findings"`
 	ByClass     map[Class]int `json:"by_class"`
 	NotJoined   []string      `json:"not_joined,omitempty"`
+	// RunOperation is "served", or the call status run_operation gave for
+	// the root's operations; empty when no operation was run.
+	RunOperation string `json:"run_operation,omitempty"`
+	// OperationsRun counts run_operation calls; CrossPaths and CrossMatches
+	// count the leaves compared between run_operation and graphql_query for
+	// the same variables, and the equal ones.
+	OperationsRun int `json:"operations_run"`
+	CrossPaths    int `json:"cross_paths"`
+	CrossMatches  int `json:"cross_matches"`
+	// Expired lists temporary allowances that no longer appear.
+	Expired []string `json:"expired,omitempty"`
 	// Residual is, for root analytics, the ops organization value minus the
 	// sum of the acr repository mixes, per theme.
 	Residual map[string]float64 `json:"residual,omitempty"`
@@ -104,6 +126,16 @@ func (r *Report) Root(name string) *RootReport {
 		}
 	}
 	return nil
+}
+
+// Expired lists every temporary allowance that stopped appearing. A run
+// with one must fail: the class is to be removed.
+func (r *Report) Expired() []string {
+	var out []string
+	for _, root := range r.Roots {
+		out = append(out, root.Expired...)
+	}
+	return out
 }
 
 // Findings lists every finding of the run.

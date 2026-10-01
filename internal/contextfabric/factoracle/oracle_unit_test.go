@@ -164,11 +164,19 @@ func TestABindingCannotSetAPathThePolicyRefuses(t *testing.T) {
 }
 
 type fakePlanes struct {
-	graphQL func(shape Shape, variables map[string]any) (json.RawMessage, error)
+	graphQL   func(shape Shape, variables map[string]any) (json.RawMessage, error)
+	operation func(shape Shape, variables map[string]any) (json.RawMessage, error)
 }
 
 func (f fakePlanes) GraphQL(_ context.Context, shape Shape, variables map[string]any) (json.RawMessage, error) {
 	return f.graphQL(shape, variables)
+}
+
+func (f fakePlanes) Operation(_ context.Context, shape Shape, variables map[string]any) (json.RawMessage, error) {
+	if f.operation == nil {
+		return json.RawMessage(`{"call":"operation_unavailable"}`), nil
+	}
+	return f.operation(shape, variables)
 }
 
 func (fakePlanes) Facts(context.Context, FactsRequest) (json.RawMessage, error) {
@@ -310,11 +318,18 @@ func TestScrubberKeepsJoinsAndDropsText(t *testing.T) {
 		t.Fatalf("subject id pseudonym %q", mapped)
 	}
 	evidence := s.Evidence(`{"prs":["` + id + `#pr12","not a ref"],"issues":["ghpr:Full-Chaos/ops#7","gitlab:grp/sub/proj!3","jira:SEC-1"],"title":"a person wrote this","authors":["someone@example.com"]}`)
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(evidence), &keys); err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 2 || keys["prs"] == nil || keys["issues"] == nil {
+		t.Fatalf("evidence rewrite kept a key beside prs and issues: %s", evidence)
+	}
 	var out map[string][]string
 	if err := json.Unmarshal([]byte(evidence), &out); err != nil {
 		t.Fatal(err)
 	}
-	if len(out) != 2 || len(out["prs"]) != 1 || len(out["issues"]) != 2 || out["prs"][0] != s.UUID(id)+"#pr12" ||
+	if len(out["prs"]) != 1 || len(out["issues"]) != 2 || out["prs"][0] != s.UUID(id)+"#pr12" ||
 		out["issues"][0] != "ghpr:"+s.Slug("Full-Chaos/ops")+"#7" || out["issues"][1] != "gitlab:"+s.Slug("grp/sub/proj")+"!3" {
 		t.Fatalf("evidence rewrite kept or lost the wrong parts: %s", evidence)
 	}
@@ -336,8 +351,8 @@ func TestEveryDeclaredColumnOfTheExtractHasAScrubRule(t *testing.T) {
 	if err := checkSpecs(); err != nil {
 		t.Fatal(err)
 	}
-	if len(extractTables) != 10 {
-		t.Fatalf("%d extract tables, want 10", len(extractTables))
+	if len(extractTables) != 11 {
+		t.Fatalf("%d extract tables, want 11", len(extractTables))
 	}
 	// A declared column with no rule stops the capture.
 	missing := tableSpec{Table: "repos", Rules: map[string]columnRule{}}
@@ -594,5 +609,181 @@ func TestShapePassFindsTypeEchoAndLimitProblems(t *testing.T) {
 	// A root that is not enabled on the listener is stated, not found.
 	if rr := run(json.RawMessage(`{"call":"operation_unavailable","errors":[{"class":"not_found"}]}`)); len(rr.Findings) != 0 || rr.Listener != "operation_unavailable" {
 		t.Fatalf("a root that is not enabled: listener %s, findings %+v", rr.Listener, rr.Findings)
+	}
+}
+
+func operationAnswer(t *testing.T, operation, data string) json.RawMessage {
+	t.Helper()
+	encoded, err := json.Marshal(map[string]any{
+		"call": "served", "result": "data", "operation": operation, "data": json.RawMessage(data),
+		"page": map[string]any{"returned_bytes": len(data), "max_bytes": 32768},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}
+
+// run_operation and graphql_query must give the same leaves for the same
+// variables; a value made for each request is the only thing left out.
+func TestTheTwoPathsMustAnswerTheSame(t *testing.T) {
+	manifest, _, extract, err := LoadCapture(captureDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(extract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flow := `{"workGraphFlow":{"__typename":"WorkGraphFlowResult","degradedReason":null,"rows":[{"__typename":"WorkGraphFlowRow","nodeType":"ISSUE","inflow":3,"outflow":4},{"__typename":"WorkGraphFlowRow","nodeType":"PR","inflow":1,"outflow":2}]}}`
+	run := func(root, graphQL, operation string) *RootReport {
+		t.Helper()
+		oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases, OnlyRoots: []string{root},
+			Planes: fakePlanes{
+				graphQL: func(shape Shape, _ map[string]any) (json.RawMessage, error) {
+					if shape.Name != "all" {
+						return json.RawMessage(`{"call":"operation_unavailable"}`), nil
+					}
+					return servedAnswer(t, root, shape.Operation, graphQL, len(graphQL), 32768), nil
+				},
+				operation: func(shape Shape, _ map[string]any) (json.RawMessage, error) {
+					return operationAnswer(t, shape.Operation, operation), nil
+				},
+			}}
+		report, rerr := oracle.Run(context.Background())
+		if rerr != nil {
+			t.Fatal(rerr)
+		}
+		return report.Root(root)
+	}
+	crossFindings := func(rr *RootReport) int {
+		n := 0
+		for _, f := range rr.Findings {
+			if f.Pair == "cross_path" {
+				n++
+			}
+		}
+		return n
+	}
+	same := run("workGraphFlow", flow, flow)
+	if crossFindings(same) != 0 || same.CrossPaths != 10 || same.CrossMatches != 10 || same.RunOperation != "served" || same.OperationsRun != 1 {
+		t.Fatalf("equal answers: %d of %d leaves equal, findings %+v", same.CrossMatches, same.CrossPaths, same.Findings)
+	}
+	// The order of a list is not a difference.
+	reordered := strings.Replace(strings.Replace(flow, `"nodeType":"ISSUE","inflow":3,"outflow":4`, `"nodeType":"X"`, 1), `"nodeType":"PR","inflow":1,"outflow":2`, `"nodeType":"ISSUE","inflow":3,"outflow":4`, 1)
+	reordered = strings.Replace(reordered, `"nodeType":"X"`, `"nodeType":"PR","inflow":1,"outflow":2`, 1)
+	if rr := run("workGraphFlow", flow, reordered); crossFindings(rr) != 0 {
+		t.Fatalf("a reordered list is a finding: %+v", rr.Findings)
+	}
+	if rr := run("workGraphFlow", flow, strings.Replace(flow, `"inflow":3`, `"inflow":5`, 1)); crossFindings(rr) != 1 {
+		t.Fatalf("another value on the other path: %d cross-path findings, want 1: %+v", crossFindings(rr), rr.Findings)
+	}
+	if rr := run("workGraphFlow", flow, strings.Replace(flow, `,{"__typename":"WorkGraphFlowRow","nodeType":"PR","inflow":1,"outflow":2}`, ``, 1)); crossFindings(rr) == 0 {
+		t.Fatalf("a row missing on the other path is not a finding")
+	}
+	// run_operation must name the operation that was asked.
+	echo := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases, OnlyRoots: []string{"workGraphFlow"},
+		Planes: fakePlanes{
+			graphQL: func(Shape, map[string]any) (json.RawMessage, error) {
+				return json.RawMessage(`{"call":"operation_unavailable"}`), nil
+			},
+			operation: func(Shape, map[string]any) (json.RawMessage, error) { return operationAnswer(t, "hotspots", flow), nil },
+		}}
+	echoReport, err := echo.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rr := echoReport.Root("workGraphFlow"); len(rr.Findings) == 0 || rr.Findings[0].Pair != "run_operation" {
+		t.Fatalf("a run_operation answer that names another operation is not a finding: %+v", rr.Findings)
+	}
+
+	// A float aggregate may differ in its last digits, and in nothing more.
+	stats := func(stddev string) string {
+		return `{"analytics":{"__typename":"AnalyticsResult","breakdowns":[],"evidenceQualityDistribution":{"low":1},"evidenceQualityStats":{"__typename":"EvidenceQualityStats","mean":0.4,"stddev":` + stddev + `,"total":10,"bandCounts":{"low":1}}}}`
+	}
+	if rr := run("analytics", stats("0.21024065010042445"), stats("0.21024065010042448")); crossFindings(rr) != 0 {
+		t.Fatalf("a last-digit difference of a float aggregate is a finding: %+v", rr.Findings)
+	}
+	if rr := run("analytics", stats("0.21024065010042445"), stats("0.2103")); crossFindings(rr) == 0 {
+		t.Fatal("another standard deviation on the other path is not a finding")
+	}
+
+	// A value made for each request is not compared.
+	risk := func(at string) string {
+		return `{"compoundingRisk":{"__typename":"CompoundingRiskResult","orgId":"o","breakout":"REPO","generatedAt":"` + at + `","rows":[],"trend":[]}}`
+	}
+	if rr := run("compoundingRisk", risk("2026-10-01T16:00:00Z"), risk("2026-10-01T16:00:05Z")); crossFindings(rr) != 0 {
+		t.Fatalf("the request time is compared across the two paths: %+v", rr.Findings)
+	}
+	if rr := run("compoundingRisk", risk("2026-10-01T16:00:00Z"), strings.Replace(risk("2026-10-01T16:00:00Z"), `"REPO"`, `"TEAM"`, 1)); crossFindings(rr) == 0 {
+		t.Fatalf("another breakout on the other path is not a finding")
+	}
+}
+
+func TestTemporaryAllowanceExpiresWithItsPaths(t *testing.T) {
+	policy := mustPolicy(t)
+	for root, spec := range temporaryOpsPaths {
+		rootPolicy, ok := policy.Root(root)
+		if !ok {
+			t.Fatalf("temporary paths for %s, which is not an allowed root", root)
+		}
+		var outputs []string
+		for _, name := range rootPolicy.Operations() {
+			op, _ := policy.Catalogue().Lookup(name)
+			for _, out := range op.Outputs {
+				outputs = append(outputs, out.Path)
+			}
+		}
+		if missing := temporaryPathsMissing(spec, outputs); len(missing) != 0 {
+			t.Fatalf("root %s: temporary paths %v are not in the policy", root, missing)
+		}
+		// Each path or block, taken out of the policy, expires the allowance.
+		for _, gone := range spec {
+			var rest []string
+			for _, path := range outputs {
+				if path != gone && !strings.HasPrefix(path, gone+".") {
+					rest = append(rest, path)
+				}
+			}
+			if missing := temporaryPathsMissing(spec, rest); len(missing) != 1 || missing[0] != gone {
+				t.Errorf("root %s: without %s the missing list is %v", root, gone, missing)
+			}
+		}
+	}
+	if len(TemporaryClasses()) != 1 || len(Classes()) != 6 {
+		t.Fatalf("%d temporary and %d design classes, want 1 and 6", len(TemporaryClasses()), len(Classes()))
+	}
+	for _, class := range Classes() {
+		if class == ClassLatestDayVsWindow {
+			t.Fatal("the temporary class is listed as a design class")
+		}
+	}
+}
+
+func TestFlowAllowanceAppearsExpiresOrCannotTell(t *testing.T) {
+	for _, c := range []struct {
+		latestDay, window int
+		want              string
+	}{{2, 0, flowAllowanceAppears}, {1, 9, flowAllowanceAppears}, {0, 3, flowAllowanceExpired}, {0, 0, flowAllowanceUnknown}} {
+		if got := flowAllowance(c.latestDay, c.window); got != c.want {
+			t.Errorf("%d latest-day and %d window counts: %s, want %s", c.latestDay, c.window, got, c.want)
+		}
+	}
+}
+
+func TestClassifyFlowHeadline(t *testing.T) {
+	for _, c := range []struct {
+		headline, latest, window int64
+		want                     string
+	}{
+		{44, 44, 300, flowHeadlineIsLatestDay},
+		{300, 44, 300, flowHeadlineIsWindow},
+		{44, 44, 44, flowHeadlineUndecided},
+		{7, 44, 300, flowHeadlineIsNeither},
+		{7, 44, 44, flowHeadlineIsNeither},
+	} {
+		if got := classifyFlowHeadline(c.headline, c.latest, c.window); got != c.want {
+			t.Errorf("headline %d, latest-day sum %d, window sum %d: %s, want %s", c.headline, c.latest, c.window, got, c.want)
+		}
 	}
 }

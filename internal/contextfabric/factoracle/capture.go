@@ -180,12 +180,19 @@ type RootExpectation struct {
 	ByClass   map[Class]int `json:"by_class"`
 	Findings  []Finding     `json:"findings"`
 	NotJoined []string      `json:"not_joined"`
+	// RunOperation, OperationsRun, CrossPaths and CrossMatches are the
+	// run_operation pass and its compare with graphql_query.
+	RunOperation  string `json:"run_operation"`
+	OperationsRun int    `json:"operations_run"`
+	CrossPaths    int    `json:"cross_paths"`
+	CrossMatches  int    `json:"cross_matches"`
 }
 
 // Expectation summarizes a root report for pinning.
 func Expectation(rr *RootReport) RootExpectation {
 	out := RootExpectation{Mode: rr.Mode, Listener: rr.Listener, ShapesRun: rr.ShapesRun, Leaves: rr.Leaves, Compared: rr.Compared,
-		Matches: rr.Matches, ByClass: map[Class]int{}, Findings: []Finding{}, NotJoined: []string{}}
+		Matches: rr.Matches, ByClass: map[Class]int{}, Findings: []Finding{}, NotJoined: []string{},
+		RunOperation: rr.RunOperation, OperationsRun: rr.OperationsRun, CrossPaths: rr.CrossPaths, CrossMatches: rr.CrossMatches}
 	for class, n := range rr.ByClass {
 		out.ByClass[class] = n
 	}
@@ -289,6 +296,42 @@ func Capture(ctx context.Context, cfg VenueConfig, dir string) (*LiveRun, error)
 			continue
 		}
 		recording.Replies[CaseKey(shape, variables)] = reply
+	}
+	for _, call := range run.Oracle.OperationCalls {
+		shape, err := run.Oracle.shape(call.ShapeID)
+		if err != nil {
+			return nil, err
+		}
+		raw, ok := run.Oracle.OperationAnswer(call)
+		if !ok {
+			return nil, fmt.Errorf("run_operation call %s has no answer", call.ShapeID)
+		}
+		var answer OperationAnswer
+		if err := decodeNumbered(raw, &answer); err != nil {
+			return nil, err
+		}
+		reply := RecordedReply{Call: answer.Call, Result: answer.Result, Operation: answer.Operation}
+		switch answer.Call {
+		case string(directread.CallServed):
+			data, derr := decodeJSON(answer.Data)
+			if derr != nil {
+				return nil, fmt.Errorf("run_operation %s: data is not JSON", shape.Operation)
+			}
+			clean, serr := scrubReply(scrubber, schema, shape, call.Variables, data)
+			if serr != nil {
+				return nil, serr
+			}
+			encoded, merr := json.Marshal(clean)
+			if merr != nil {
+				return nil, merr
+			}
+			reply.Status, reply.Data = 200, encoded
+		case string(directread.CallOperationUnavailable):
+			reply.Status, reply.Reason = 404, "not_registered_or_routing_off"
+		default:
+			continue
+		}
+		recording.Replies[OperationKey(shape, scrubVariables(scrubber, call.Variables))] = reply
 	}
 	generated, err := run.Oracle.generatedCases()
 	if err != nil {

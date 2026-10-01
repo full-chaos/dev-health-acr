@@ -4,14 +4,11 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"log/slog"
 	"net"
 	"net/http/httptest"
-	"os"
 	"regexp"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -26,29 +23,19 @@ import (
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
-// One ClickHouse server for the package: every test that needs a store seeds
-// its own database on it.
-var (
-	sharedServerOnce sync.Once
-	sharedServer     *clickHouseServer
-	sharedServerErr  error
-)
+// seededServer is the ClickHouse server of the running
+// TestOracleOnTheSeededStore; its subtests seed one database each on it.
+var seededServer *clickHouseServer
 
 type clickHouseServer struct {
 	nativeAddr string
 	httpURL    string
-	terminate  func()
 }
 
-func TestMain(m *testing.M) {
-	code := m.Run()
-	if sharedServer != nil {
-		sharedServer.terminate()
-	}
-	os.Exit(code)
-}
-
-func startClickHouseServer() (*clickHouseServer, error) {
+// startClickHouseServer starts one server for the calling test and stops it
+// when that test ends.
+func startClickHouseServer(t *testing.T) *clickHouseServer {
+	t.Helper()
 	ctx := context.Background()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
@@ -59,42 +46,53 @@ func startClickHouseServer() (*clickHouseServer, error) {
 		Started: true,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("start ClickHouse container: %w", err)
+		t.Fatalf("start ClickHouse container: %v", err)
 	}
-	terminate := func() {
+	t.Cleanup(func() {
 		if err := container.Terminate(context.Background()); err != nil {
-			log.Printf("factoracle: terminate ClickHouse container: %v", err)
+			t.Errorf("terminate ClickHouse container: %v", err)
 		}
-	}
+	})
 	host, err := container.Host(ctx)
 	if err != nil {
-		terminate()
-		return nil, err
+		t.Fatal(err)
 	}
 	native, err := container.MappedPort(ctx, "9000/tcp")
 	if err != nil {
-		terminate()
-		return nil, err
+		t.Fatal(err)
 	}
 	web, err := container.MappedPort(ctx, "8123/tcp")
 	if err != nil {
-		terminate()
-		return nil, err
+		t.Fatal(err)
 	}
-	return &clickHouseServer{
-		nativeAddr: net.JoinHostPort(host, native.Port()),
-		httpURL:    "http://" + net.JoinHostPort(host, web.Port()),
-		terminate:  terminate,
-	}, nil
+	return &clickHouseServer{nativeAddr: net.JoinHostPort(host, native.Port()), httpURL: "http://" + net.JoinHostPort(host, web.Port())}
 }
 
-func clickHouse(t *testing.T) *clickHouseServer {
-	t.Helper()
-	sharedServerOnce.Do(func() { sharedServer, sharedServerErr = startClickHouseServer() })
-	if sharedServerErr != nil {
-		t.Fatalf("ClickHouse fixture: %v", sharedServerErr)
+// TestOracleOnTheSeededStore runs every test that needs the real fact
+// providers on a real ClickHouse: the recorded mode, the acceptance gate and
+// the negative controls. One server lives for this test only.
+func TestOracleOnTheSeededStore(t *testing.T) {
+	seededServer = startClickHouseServer(t)
+	t.Cleanup(func() { seededServer = nil })
+	for _, sub := range []struct {
+		name string
+		run  func(*testing.T)
+	}{
+		{"RecordedVenueRunReproducesTheVenue", recordedVenueRunReproducesTheVenue},
+		{"AcceptanceGate/MembershipScope", acceptanceGateMembershipScope},
+		{"AcceptanceGate/Supersession", acceptanceGateSupersession},
+		{"AcceptanceGate/NullableArgmax", acceptanceGateNullableArgmax},
+		{"AcceptanceGate/NullRepoID", acceptanceGateNullRepoID},
+		{"TeamRollupLossWithNoNullRowIsAFinding", teamRollupLossWithNoNullRowIsAFinding},
+		{"EveryValuePairFindsAChangedValue", everyValuePairFindsAChangedValue},
+		{"EffortMovedBetweenRepositoriesIsAFinding", effortMovedBetweenRepositoriesIsAFinding},
+		{"AReplyThatIsNotOfTheStoreIsAFinding", aReplyThatIsNotOfTheStoreIsAFinding},
+		{"FlowHeadlineClassNeedsAStoreThatShowsIt", flowHeadlineClassNeedsAStoreThatShowsIt},
+	} {
+		if !t.Run(sub.name, sub.run) {
+			t.Logf("subtest %s failed", sub.name)
+		}
 	}
-	return sharedServer
 }
 
 var databaseNameUnsafe = regexp.MustCompile(`[^a-z0-9_]`)
@@ -103,7 +101,10 @@ var databaseNameUnsafe = regexp.MustCompile(`[^a-z0-9_]`)
 // production query client over it.
 func seedStore(t *testing.T, extract *Extract) *runtimeclickhouse.Client {
 	t.Helper()
-	server := clickHouse(t)
+	server := seededServer
+	if server == nil {
+		t.Fatal("this test needs the ClickHouse server of TestOracleOnTheSeededStore; run it as a subtest of that test")
+	}
 	database := "o4_" + databaseNameUnsafe.ReplaceAllString(strings.ToLower(t.Name()), "_") + fmt.Sprintf("_%d", time.Now().UnixNano()%1_000_000)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -165,6 +166,10 @@ func localPlanes(t *testing.T, store *runtimeclickhouse.Client, recording *Recor
 	if err != nil {
 		t.Fatalf("listener client: %v", err)
 	}
+	queryClient, err := directread.NewHTTPQueryClient(server.URL, 30*time.Second)
+	if err != nil {
+		t.Fatalf("query client: %v", err)
+	}
 	policy, err := directread.DefaultGraphQLPolicy()
 	if err != nil {
 		t.Fatalf("root policy: %v", err)
@@ -173,5 +178,9 @@ func localPlanes(t *testing.T, store *runtimeclickhouse.Client, recording *Recor
 	if err != nil {
 		t.Fatalf("graphql runner: %v", err)
 	}
-	return &LocalPlanes{Runner: runner, Facts_: facts, Principal: fixturePrincipal(), Listener: listener, Recording: recording}
+	operations, err := directread.NewOperationRunner(directread.OperationRunnerConfig{Catalogue: policy.Catalogue(), Gate: gate, Client: queryClient, Logger: quiet})
+	if err != nil {
+		t.Fatalf("operation runner: %v", err)
+	}
+	return &LocalPlanes{Runner: runner, Operations: operations, Facts_: facts, Principal: fixturePrincipal(), Listener: listener, Recording: recording}
 }

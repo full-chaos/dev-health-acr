@@ -2,11 +2,14 @@
 // (r5, section J.4): the ops GraphQL answer for a root field against the acr
 // fact for the same subject and window.
 //
-// Two planes, one comparator:
+// Three tools, one comparator:
 //
-//   - ops plane: a selection shape generated from the production root policy
-//     (directread.GraphQLPolicy), run through graphql_query;
-//   - acr plane: read_facts, served by the real fact providers.
+//   - graphql_query: a selection shape generated from the production root
+//     policy (directread.GraphQLPolicy);
+//   - run_operation: the registered document of the same operation, for the
+//     same variables; every leaf must equal graphql_query's;
+//   - read_facts: the acr fact for the same subject and window, served by
+//     the real fact providers.
 //
 // Every compared leaf is typed ({"t","v"}): the ops type comes from the SDL
 // type of the output path in the policy, the acr type from the pair's field
@@ -27,4 +30,8 @@
 //
 // Roots with no acr fact are checked for shape, echo and limits only; the
 // reason is recorded per root in rootPairs.
+//
+// The design's six classes are permanent. ClassLatestDayVsWindow is a
+// temporary allowance: a run reports it as expired when it stops appearing,
+// and both run modes fail on an expired allowance.
 package factoracle

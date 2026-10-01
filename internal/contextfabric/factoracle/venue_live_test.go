@@ -54,20 +54,23 @@ func logRun(t *testing.T, run *LiveRun) {
 
 // TestVenueLive is the live mode: both planes on the venue. Findings are
 // reported, not failed: they are differences to file, and the run measured
-// them.
+// them. An expired temporary allowance fails the run.
 func TestVenueLive(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 9*time.Minute)
 	defer cancel()
 	run, err := RunLive(ctx, venueConfig(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	logRun(t, run)
+	if expired := run.Report.Expired(); len(expired) > 0 {
+		t.Fatalf("a temporary allowance expired; remove the class: %v", expired)
+	}
 }
 
 // TestVenueCapture records the extract and the replies into testdata/venue.
 func TestVenueCapture(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 9*time.Minute)
 	defer cancel()
 	run, err := Capture(ctx, venueConfig(t), "testdata/venue")
 	if err != nil {

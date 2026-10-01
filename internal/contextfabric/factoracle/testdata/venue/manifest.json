@@ -1,5 +1,5 @@
 {
-  "captured_at": "2026-10-01T16:37:25Z",
+  "captured_at": "2026-10-01T16:59:24Z",
   "window": {
     "start": "2026-09-01T00:00:00Z",
     "end": "2026-10-02T00:00:00Z"
@@ -16,6 +16,7 @@
     "repos": 11,
     "team_repo_ownership": 13093,
     "teams": 17,
+    "work_item_metrics_daily": 477,
     "work_unit_investments": 2609,
     "work_unit_membership": 1351,
     "work_unit_membership_runs": 2,
@@ -460,7 +461,7 @@
         "input": {
           "historyDays": 90,
           "simulations": 1000,
-          "teamId": "team:team-5a059b9d44e73476"
+          "teamId": "team:team-218b01bd40e618ae"
         }
       }
     },
@@ -611,7 +612,7 @@
       "variables": {
         "input": {
           "sinceDate": "2026-09-01",
-          "teamId": "team:team-5a059b9d44e73476",
+          "teamId": "team:team-218b01bd40e618ae",
           "untilDate": "2026-10-01"
         }
       }
@@ -621,7 +622,7 @@
       "variables": {
         "input": {
           "sinceDate": "2026-09-01",
-          "teamId": "team:team-5a059b9d44e73476",
+          "teamId": "team:team-218b01bd40e618ae",
           "untilDate": "2026-10-01"
         }
       }
@@ -631,7 +632,7 @@
       "variables": {
         "input": {
           "sinceDate": "2026-09-01",
-          "teamId": "team:team-5a059b9d44e73476",
+          "teamId": "team:team-218b01bd40e618ae",
           "untilDate": "2026-10-01"
         }
       }
@@ -782,7 +783,7 @@
           "until": "2026-10-01"
         },
         "pagination": {
-          "first": 25
+          "first": 5
         }
       }
     },
@@ -794,7 +795,7 @@
           "until": "2026-10-01"
         },
         "pagination": {
-          "first": 25
+          "first": 5
         }
       }
     },
@@ -806,7 +807,7 @@
           "until": "2026-10-01"
         },
         "pagination": {
-          "first": 25
+          "first": 5
         }
       }
     },
@@ -818,7 +819,7 @@
           "until": "2026-10-01"
         },
         "pagination": {
-          "first": 25
+          "first": 5
         }
       }
     },
@@ -882,7 +883,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-5a059b9d44e73476"
+            "team:team-218b01bd40e618ae"
           ]
         }
       }
@@ -893,7 +894,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-5a059b9d44e73476"
+            "team:team-218b01bd40e618ae"
           ]
         }
       }
@@ -904,7 +905,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-5a059b9d44e73476"
+            "team:team-218b01bd40e618ae"
           ]
         }
       }
@@ -915,7 +916,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-5a059b9d44e73476"
+            "team:team-218b01bd40e618ae"
           ]
         }
       }
@@ -926,7 +927,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-5a059b9d44e73476"
+            "team:team-218b01bd40e618ae"
           ]
         }
       }
@@ -937,7 +938,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-5a059b9d44e73476"
+            "team:team-218b01bd40e618ae"
           ]
         }
       }
@@ -948,7 +949,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-5a059b9d44e73476"
+            "team:team-218b01bd40e618ae"
           ]
         }
       }
@@ -959,7 +960,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-5a059b9d44e73476"
+            "team:team-218b01bd40e618ae"
           ]
         }
       }
@@ -970,7 +971,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-5a059b9d44e73476"
+            "team:team-218b01bd40e618ae"
           ]
         }
       }
@@ -1045,9 +1046,9 @@
     }
   ],
   "residual": {
-    "feature_delivery": 0.004845833173021674,
+    "feature_delivery": 0.0048458336386829615,
     "maintenance": 0.0027481766883283854,
-    "operational": 0.00024466507602483034,
+    "operational": 0.0002446650469209999,
     "quality": 0.002130022563505918,
     "risk": 0.00047797006845939904
   },
@@ -1061,7 +1062,11 @@
       "matches": 40,
       "by_class": {},
       "findings": [],
-      "not_joined": []
+      "not_joined": [],
+      "run_operation": "served",
+      "operations_run": 6,
+      "cross_paths": 192,
+      "cross_matches": 192
     },
     "capacityForecast": {
       "mode": "shape",
@@ -1070,9 +1075,15 @@
       "leaves": 0,
       "compared": 0,
       "matches": 0,
-      "by_class": {},
+      "by_class": {
+        "latest_day_vs_window": 1
+      },
       "findings": [],
-      "not_joined": []
+      "not_joined": [],
+      "run_operation": "served",
+      "operations_run": 1,
+      "cross_paths": 0,
+      "cross_matches": 0
     },
     "capacityForecasts": {
       "mode": "value",
@@ -1083,7 +1094,11 @@
       "matches": 224,
       "by_class": {},
       "findings": [],
-      "not_joined": []
+      "not_joined": [],
+      "run_operation": "served",
+      "operations_run": 1,
+      "cross_paths": 967,
+      "cross_matches": 967
     },
     "catalog": {
       "mode": "value",
@@ -1094,7 +1109,11 @@
       "matches": 11,
       "by_class": {},
       "findings": [],
-      "not_joined": []
+      "not_joined": [],
+      "run_operation": "served",
+      "operations_run": 6,
+      "cross_paths": 201,
+      "cross_matches": 201
     },
     "cognitiveLoad": {
       "mode": "shape",
@@ -1105,7 +1124,11 @@
       "matches": 0,
       "by_class": {},
       "findings": [],
-      "not_joined": []
+      "not_joined": [],
+      "run_operation": "served",
+      "operations_run": 1,
+      "cross_paths": 4,
+      "cross_matches": 4
     },
     "complexityTimeseries": {
       "mode": "shape",
@@ -1116,7 +1139,11 @@
       "matches": 0,
       "by_class": {},
       "findings": [],
-      "not_joined": []
+      "not_joined": [],
+      "run_operation": "served",
+      "operations_run": 1,
+      "cross_paths": 902,
+      "cross_matches": 902
     },
     "compoundingRisk": {
       "mode": "value",
@@ -1132,7 +1159,11 @@
         "repository: a health fact states no severity_as_of day",
         "repository: a health fact states no severity_as_of day",
         "team: a health fact states no severity_as_of day"
-      ]
+      ],
+      "run_operation": "served",
+      "operations_run": 2,
+      "cross_paths": 350,
+      "cross_matches": 350
     },
     "hotspots": {
       "mode": "shape",
@@ -1143,7 +1174,11 @@
       "matches": 0,
       "by_class": {},
       "findings": [],
-      "not_joined": []
+      "not_joined": [],
+      "run_operation": "served",
+      "operations_run": 1,
+      "cross_paths": 551,
+      "cross_matches": 551
     },
     "securityAlerts": {
       "mode": "shape",
@@ -1154,7 +1189,11 @@
       "matches": 0,
       "by_class": {},
       "findings": [],
-      "not_joined": []
+      "not_joined": [],
+      "run_operation": "served",
+      "operations_run": 1,
+      "cross_paths": 0,
+      "cross_matches": 0
     },
     "securityOverview": {
       "mode": "shape",
@@ -1165,17 +1204,22 @@
       "matches": 0,
       "by_class": {},
       "findings": [],
-      "not_joined": []
+      "not_joined": [],
+      "run_operation": "served",
+      "operations_run": 1,
+      "cross_paths": 129,
+      "cross_matches": 129
     },
     "throughputForecast": {
       "mode": "value",
       "listener": "served",
       "shapes_run": 9,
       "leaves": 124,
-      "compared": 57,
-      "matches": 56,
+      "compared": 81,
+      "matches": 78,
       "by_class": {
-        "forecast_by_design": 1
+        "forecast_by_design": 1,
+        "latest_day_vs_window": 2
       },
       "findings": [
         {
@@ -1185,7 +1229,11 @@
           "detail": "estimate coverage present in ops false, in acr true"
         }
       ],
-      "not_joined": []
+      "not_joined": [],
+      "run_operation": "served",
+      "operations_run": 1,
+      "cross_paths": 60,
+      "cross_matches": 60
     },
     "workGraphArtifacts": {
       "mode": "shape",
@@ -1196,7 +1244,11 @@
       "matches": 0,
       "by_class": {},
       "findings": [],
-      "not_joined": []
+      "not_joined": [],
+      "run_operation": "served",
+      "operations_run": 1,
+      "cross_paths": 252,
+      "cross_matches": 252
     },
     "workGraphEdges": {
       "mode": "shape",
@@ -1207,7 +1259,11 @@
       "matches": 0,
       "by_class": {},
       "findings": [],
-      "not_joined": []
+      "not_joined": [],
+      "run_operation": "served",
+      "operations_run": 1,
+      "cross_paths": 758,
+      "cross_matches": 758
     },
     "workGraphFlow": {
       "mode": "shape",
@@ -1216,9 +1272,15 @@
       "leaves": 68,
       "compared": 0,
       "matches": 0,
-      "by_class": {},
+      "by_class": {
+        "latest_day_vs_window": 1
+      },
       "findings": [],
-      "not_joined": []
+      "not_joined": [],
+      "run_operation": "served",
+      "operations_run": 1,
+      "cross_paths": 34,
+      "cross_matches": 34
     }
   }
 }

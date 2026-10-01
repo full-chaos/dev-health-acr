@@ -49,7 +49,34 @@ type FactsWindow struct {
 // answer, so the live and the recorded mode are read by the same code.
 type Planes interface {
 	GraphQL(ctx context.Context, shape Shape, variables map[string]any) (json.RawMessage, error)
+	// Operation runs run_operation for the operation of shape, which is the
+	// operation's full selection.
+	Operation(ctx context.Context, shape Shape, variables map[string]any) (json.RawMessage, error)
 	Facts(ctx context.Context, request FactsRequest) (json.RawMessage, error)
+}
+
+// OperationAnswer is the part of the run_operation answer the oracle reads.
+type OperationAnswer struct {
+	Call      string `json:"call"`
+	Result    string `json:"result"`
+	Operation string `json:"operation"`
+	Refusal   *struct {
+		Code string `json:"code"`
+	} `json:"refusal"`
+	Errors []struct {
+		Class string `json:"class"`
+	} `json:"errors"`
+	Data json.RawMessage `json:"data"`
+	Page struct {
+		ReturnedBytes int `json:"returned_bytes"`
+		MaxBytes      int `json:"max_bytes"`
+	} `json:"page"`
+}
+
+// OperationKey names one run_operation call.
+func OperationKey(shape Shape, variables map[string]any) string {
+	sum := sha256.Sum256([]byte(canonicalJSON(variables)))
+	return "run_operation/" + shape.Operation + "#" + hex.EncodeToString(sum[:8])
 }
 
 // GraphQLAnswer is the part of the graphql_query answer the oracle reads.
@@ -199,7 +226,9 @@ type Recording struct {
 	Replies map[string]RecordedReply `json:"replies"`
 }
 
-// ReplayListener stands in for the ops MCP listener in the recorded mode. It
+// ReplayListener stands in for the ops query service in the recorded mode:
+// the MCP listener graphql_query calls and the registered-document route
+// run_operation calls (both are POST /query with the internal headers). It
 // answers one armed case at a time with the reply the real listener gave; a
 // request with no armed case, or for another root field, is a failure and is
 // answered with 500.
@@ -304,13 +333,14 @@ func (l *ReplayListener) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // LocalPlanes runs both tools in process: the real graphql_query runner over
 // the replay listener and the real read_facts reader over a seeded store.
 type LocalPlanes struct {
-	Runner    *directread.GraphQLRunner
-	Facts_    *directread.FactsReader
-	Principal storage.Principal
-	Listener  *ReplayListener
-	Recording *Recording
-	seq       int
-	used      map[string]bool
+	Runner     *directread.GraphQLRunner
+	Operations *directread.OperationRunner
+	Facts_     *directread.FactsReader
+	Principal  storage.Principal
+	Listener   *ReplayListener
+	Recording  *Recording
+	seq        int
+	used       map[string]bool
 }
 
 // Unused lists the recorded replies no call of the run asked for.
@@ -358,6 +388,34 @@ func (p *LocalPlanes) GraphQL(ctx context.Context, shape Shape, variables map[st
 	}
 	if got := p.Listener.Requests() - before; got != 1 {
 		return nil, fmt.Errorf("case %s: the runner sent %d listener requests, want 1 (call %s)", key, got, response.Call)
+	}
+	return json.Marshal(response)
+}
+
+// Operation implements Planes.
+func (p *LocalPlanes) Operation(ctx context.Context, shape Shape, variables map[string]any) (json.RawMessage, error) {
+	key := OperationKey(shape, variables)
+	reply, ok := p.Recording.Replies[key]
+	if !ok {
+		return nil, fmt.Errorf("no recorded reply for case %s", key)
+	}
+	if p.used == nil {
+		p.used = map[string]bool{}
+	}
+	p.used[key] = true
+	encodedVars, err := json.Marshal(variables)
+	if err != nil {
+		return nil, err
+	}
+	p.Listener.arm(shape.Root, reply)
+	defer p.Listener.disarm()
+	before := p.Listener.Requests()
+	response, err := p.Operations.Run(p.requestContext(ctx), p.Principal, directread.OperationRequest{Operation: shape.Operation, Variables: encodedVars})
+	if err != nil {
+		return nil, err
+	}
+	if got := p.Listener.Requests() - before; got != 1 {
+		return nil, fmt.Errorf("case %s: the runner sent %d upstream requests, want 1 (call %s)", key, got, response.Call)
 	}
 	return json.Marshal(response)
 }
@@ -495,6 +553,15 @@ func (p *VenuePlanes) GraphQL(ctx context.Context, shape Shape, variables map[st
 		arguments["variables"] = sent
 	}
 	return p.call(ctx, "graphql_query", arguments)
+}
+
+// Operation implements Planes.
+func (p *VenuePlanes) Operation(ctx context.Context, shape Shape, variables map[string]any) (json.RawMessage, error) {
+	arguments := map[string]any{"operation": shape.Operation}
+	if len(variables) > 0 {
+		arguments["variables"] = variables
+	}
+	return p.call(ctx, "run_operation", arguments)
 }
 
 // Facts implements Planes.

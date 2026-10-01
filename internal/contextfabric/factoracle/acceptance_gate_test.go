@@ -179,7 +179,7 @@ func unitThemeEffort(t *testing.T, row Row) map[string]float64 {
 	return out
 }
 
-func TestAcceptanceGateMembershipScope(t *testing.T) {
+func acceptanceGateMembershipScope(t *testing.T) {
 	manifest, recording, extract := loadedCapture(t)
 	store, err := NewStore(extract)
 	if err != nil {
@@ -204,7 +204,7 @@ func TestAcceptanceGateMembershipScope(t *testing.T) {
 	wantPlanted(t, rr, "investment_org", ClassMembershipScope)
 }
 
-func TestAcceptanceGateSupersession(t *testing.T) {
+func acceptanceGateSupersession(t *testing.T) {
 	manifest, recording, extract := loadedCapture(t)
 	_, source := directUnit(t, extract, manifest.Window)
 	store, err := NewStore(extract)
@@ -239,7 +239,7 @@ func TestAcceptanceGateSupersession(t *testing.T) {
 	wantPlanted(t, rr, "investment_org", ClassSupersession)
 }
 
-func TestAcceptanceGateNullableArgmax(t *testing.T) {
+func acceptanceGateNullableArgmax(t *testing.T) {
 	manifest, recording, extract := loadedCapture(t)
 	id, source := directUnit(t, extract, manifest.Window)
 	at, err := rowTime(source, "computed_at")
@@ -276,7 +276,7 @@ func TestAcceptanceGateNullableArgmax(t *testing.T) {
 	wantPlanted(t, rr, "investment_org", ClassNullableArgmax)
 }
 
-func TestAcceptanceGateNullRepoID(t *testing.T) {
+func acceptanceGateNullRepoID(t *testing.T) {
 	manifest, recording, extract := loadedCapture(t)
 	cleanOracle, clean := gateRun(t, manifest, recording, extract, extract)
 	wantClean(t, clean, ClassAttributionBasis)
@@ -361,7 +361,7 @@ func TestAcceptanceGateNullRepoID(t *testing.T) {
 // A team that loses a repository it owns by id is not a null_repo_id
 // difference: the class is named only when the loss is exactly the
 // repositories a row with no repo_id names.
-func TestTeamRollupLossWithNoNullRowIsAFinding(t *testing.T) {
+func teamRollupLossWithNoNullRowIsAFinding(t *testing.T) {
 	manifest, recording, extract := loadedCapture(t)
 	cleanOracle, _ := gateRun(t, manifest, recording, extract, extract)
 	store, err := NewStore(extract)
@@ -416,7 +416,7 @@ func TestTeamRollupLossWithNoNullRowIsAFinding(t *testing.T) {
 // Every value pair sees a store that moved: one changed value per pair on
 // the acr side, against the recorded ops replies of the unchanged store, is
 // a finding on that root.
-func TestEveryValuePairFindsAChangedValue(t *testing.T) {
+func everyValuePairFindsAChangedValue(t *testing.T) {
 	manifest, recording, extract := loadedCapture(t)
 	bump := func(row Row, column string, by float64) {
 		t.Helper()
@@ -464,7 +464,7 @@ func TestEveryValuePairFindsAChangedValue(t *testing.T) {
 
 // Effort that moves from one repository to another leaves every sum as it
 // was. The repository-by-repository compare sees it.
-func TestEffortMovedBetweenRepositoriesIsAFinding(t *testing.T) {
+func effortMovedBetweenRepositoriesIsAFinding(t *testing.T) {
 	manifest, recording, extract := loadedCapture(t)
 	id, source := directUnit(t, extract, manifest.Window)
 	from, _ := rowString(source, "repo_id")
@@ -507,7 +507,7 @@ func TestEffortMovedBetweenRepositoriesIsAFinding(t *testing.T) {
 
 // A recorded reply that is not the reply of the reference store is a
 // finding before anything is said about acr.
-func TestAReplyThatIsNotOfTheStoreIsAFinding(t *testing.T) {
+func aReplyThatIsNotOfTheStoreIsAFinding(t *testing.T) {
 	manifest, recording, extract := loadedCapture(t)
 	other := extract.Clone()
 	for _, row := range other.Tables["work_unit_investments"] {
@@ -526,5 +526,53 @@ func TestAReplyThatIsNotOfTheStoreIsAFinding(t *testing.T) {
 	}
 	if found == 0 {
 		t.Fatalf("a reply of another store is not a finding: %+v", rr.Findings)
+	}
+}
+
+// The flow headline class is reported from what the store shows, not from a
+// list: on the venue store it appears (with the ops paths: twice on this
+// root); on a store that keeps one day for each team, where the window sum
+// and the latest-day sum are one number, it is not reported and it does not
+// expire either.
+func flowHeadlineClassNeedsAStoreThatShowsIt(t *testing.T) {
+	manifest, recording, extract := loadedCapture(t)
+	planes := localPlanes(t, seedStore(t, extract), &recording)
+	oracle := oracleFor(t, manifest, planes, extract)
+	oracle.OnlyRoots = []string{"throughputForecast"}
+	report := runOracle(t, oracle)
+	rr := report.Root("throughputForecast")
+	if rr.ByClass[ClassLatestDayVsWindow] != 2 || len(rr.Expired) != 0 {
+		t.Fatalf("on the venue store the class must appear twice (ops paths, acr flow headline) and not expire: %+v, expired %v", rr.ByClass, rr.Expired)
+	}
+
+	// Plant: only the latest day of each team stays, so the sum over the
+	// window is the latest-day sum and no headline can show the class.
+	latest := map[string]string{}
+	for _, row := range extract.Tables["work_item_metrics_daily"] {
+		team, _ := rowString(row, "team_id")
+		if day, _ := rowString(row, "day"); day > latest[team] {
+			latest[team] = day
+		}
+	}
+	planted := extract.Clone()
+	var kept []Row
+	for _, row := range planted.Tables["work_item_metrics_daily"] {
+		team, _ := rowString(row, "team_id")
+		if day, _ := rowString(row, "day"); day == latest[team] {
+			kept = append(kept, row)
+		}
+	}
+	planted.Tables["work_item_metrics_daily"] = kept
+	plantedPlanes := localPlanes(t, seedStore(t, planted), &recording)
+	plantedOracle := oracleFor(t, manifest, plantedPlanes, planted)
+	plantedOracle.OnlyRoots = []string{"throughputForecast"}
+	plantedRR := runOracle(t, plantedOracle).Root("throughputForecast")
+	for _, d := range plantedRR.Differences {
+		if d.Pair == "flow_headline" {
+			t.Fatalf("the class is reported for a store that cannot show it: %+v", d)
+		}
+	}
+	if len(plantedRR.Expired) != 0 {
+		t.Fatalf("the allowance expired on a store that cannot tell: %v", plantedRR.Expired)
 	}
 }

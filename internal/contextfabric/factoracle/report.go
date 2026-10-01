@@ -9,8 +9,8 @@ import (
 // Table renders the per-root outcome of a run as a Markdown table.
 func (r *Report) Table() string {
 	var b strings.Builder
-	b.WriteString("| root | mode | listener | shapes run | leaves | compared | matches | differences by class | findings |\n")
-	b.WriteString("|---|---|---|---|---|---|---|---|---|\n")
+	b.WriteString("| root | mode | graphql_query | run_operation | shapes run | leaves | two paths equal | fact leaves compared | matches | differences by class | findings |\n")
+	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|\n")
 	for _, rr := range r.Roots {
 		classes := make([]string, 0, len(rr.ByClass))
 		for class, n := range rr.ByClass {
@@ -21,8 +21,12 @@ func (r *Report) Table() string {
 		if byClass == "" {
 			byClass = "none"
 		}
-		fmt.Fprintf(&b, "| %s | %s | %s | %d | %d | %d | %d | %s | %d |\n",
-			rr.Root, rr.Mode, rr.Listener, rr.ShapesRun, rr.Leaves, rr.Compared, rr.Matches, byClass, len(rr.Findings))
+		operation := rr.RunOperation
+		if operation == "" {
+			operation = "not run"
+		}
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %d | %d | %d of %d | %d | %d | %s | %d |\n",
+			rr.Root, rr.Mode, rr.Listener, operation, rr.ShapesRun, rr.Leaves, rr.CrossMatches, rr.CrossPaths, rr.Compared, rr.Matches, byClass, len(rr.Findings))
 	}
 	return b.String()
 }
@@ -47,6 +51,9 @@ func (r *Report) Details() string {
 		}
 		for _, f := range rr.Findings {
 			fmt.Fprintf(&b, "FINDING %s %s [%s] %s: %s\n", rr.Root, f.Pair, f.Key, f.Path, f.Detail)
+		}
+		for _, e := range rr.Expired {
+			fmt.Fprintf(&b, "EXPIRED %s: %s\n", rr.Root, e)
 		}
 		for _, n := range rr.NotJoined {
 			fmt.Fprintf(&b, "NOT-JOINED %s: %s\n", rr.Root, n)

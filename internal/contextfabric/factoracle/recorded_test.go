@@ -64,13 +64,13 @@ func runOracle(t *testing.T, o *Oracle) *Report {
 	return report
 }
 
-// TestRecordedVenueRunReproducesTheVenue is the recorded mode: the replies
+// recordedVenueRunReproducesTheVenue is the recorded mode: the replies
 // of the real ops listener, replayed through the real graphql_query runner,
 // against the real fact providers on the seeded extract of the same store.
 // Its outcome must be the venue's outcome, root by root: the same shapes
 // run, the same leaves, the same matches, the same named differences and the
 // same findings.
-func TestRecordedVenueRunReproducesTheVenue(t *testing.T) {
+func recordedVenueRunReproducesTheVenue(t *testing.T) {
 	manifest, recording, extract := loadedCapture(t)
 	planes := localPlanes(t, seedStore(t, extract), &recording)
 	oracle := oracleFor(t, manifest, planes, extract)
@@ -82,6 +82,9 @@ func TestRecordedVenueRunReproducesTheVenue(t *testing.T) {
 	}
 	if unused := planes.Unused(); len(unused) > 0 {
 		t.Fatalf("%d recorded replies were never asked for (the run no longer makes the calls of the capture), first: %s", len(unused), unused[0])
+	}
+	if expired := report.Expired(); len(expired) > 0 {
+		t.Fatalf("a temporary allowance expired; remove the class: %v", expired)
 	}
 	policy := oracle.Policy
 	if len(report.Roots) != len(policy.Roots()) || len(manifest.Expect) != len(policy.Roots()) {
