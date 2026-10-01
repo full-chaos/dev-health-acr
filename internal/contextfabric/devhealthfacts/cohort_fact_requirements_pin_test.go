@@ -80,7 +80,7 @@ func TestCohortFactRequirementsOmitNothingAProviderServes(t *testing.T) {
 			asked[factKind] = true
 		}
 		for _, factKind := range graphrank.CohortDerivedFactKinds() {
-			if capabilityDeclares(factKind, subjectKind) && !asked[factKind] {
+			if capabilityDeclares(factKind, subjectKind) && !asked[factKind] && !cohortOmissionIsDeliberate(factKind, subjectKind) {
 				t.Errorf("a provider declares %q for %q, but a %q cohort does not ask for it -- the answer silently loses facts it could have had", factKind, subjectKind, subjectKind)
 			}
 		}
@@ -174,4 +174,14 @@ func TestCohortDerivedFactKindsIsExactlyTheTablesUnion(t *testing.T) {
 			t.Errorf("CohortDerivedFactKinds() reports %q, which no row of the table declares -- the accessor claims a cohort can ask for a fact nothing asks for", factKind)
 		}
 	}
+}
+
+// cohortOmissionIsDeliberate lists the (fact kind, cohort kind) pairs a
+// provider serves but a cohort deliberately does not ask for. The team rollups
+// of incidents and pull requests are served for a team subject a question
+// names, beside the expanded per-item facts; no answer obligation requires
+// them for a discovered team cohort, and asking would add reads the planner
+// does not use (planning_authority_parity.txt shows the loss column).
+func cohortOmissionIsDeliberate(factKind contextfabric.FactKind, subjectKind contextfabric.SubjectKind) bool {
+	return subjectKind == contextfabric.SubjectTeam && (factKind == contextfabric.FactIncidents || factKind == contextfabric.FactPullRequests)
 }
