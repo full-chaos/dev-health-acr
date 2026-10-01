@@ -372,6 +372,19 @@ wait_https_ready() {
 # scripts/e2e/fullstack-opencode.sh substitutes a versioned deterministic projection.
 ACR_E2E_SEED_HOOK="${ACR_E2E_SEED_HOOK:-seed_synthetic_evidence}"
 
+# dho runs the Go operator CLI one-shot in the query-api service image (entrypoint dho) on the
+# stack network, so no Python ops image is needed. Postgres is reached directly (not through
+# pgbouncer) for the elevated admin/migration verbs; ClickHouse over the native port.
+dho() {
+  local pg
+  pg="$(<"$STATE/secrets/postgres-password")"
+  compose run --rm --no-deps -T \
+    -e "MIGRATION_DATABASE_URI=postgres://devhealth:${pg}@postgres:5432/devhealth?sslmode=disable" \
+    -e "POSTGRES_URI=postgres://devhealth:${pg}@postgres:5432/devhealth?sslmode=disable" \
+    -e "CLICKHOUSE_URI=${DHO_CLICKHOUSE_URI:-clickhouse://default:ch@clickhouse:9000/${CLICKHOUSE_DB:-default}}" \
+    query-api "$@"
+}
+
 ops_clickhouse_database() { printf 'acr_%s_e2e' "${PROJECT//-/}"; }
 
 clickhouse_query() { compose exec -T clickhouse clickhouse-client --user default --password ch --query "$1"; }
@@ -434,7 +447,7 @@ seed_go_api_routing() {
     sleep 4
   done
   printf '%s\n' "$output" | redact_log | tail -5 >&2
-  compose exec -T api dev-hops go-api routing status --json 2>/dev/null \
+  dho go-api routing status --json 2>/dev/null \
     | jq -e '[.. | objects | select(has("mode")) | .mode] | length > 0 and all(. == "primary")' >/dev/null \
     || die 'Go API routing rows are not all in primary mode after enablement'
 }
@@ -449,14 +462,14 @@ provision_ops_control_plane() {
   clickhouse_query "CREATE DATABASE IF NOT EXISTS $(ops_clickhouse_database)" >/dev/null
   compose up -d postgres valkey pgbouncer mailpit migrate api query-api >/dev/null
   seed_go_api_routing
-  if ! output="$(compose exec -T api dev-hops admin orgs create --name "${PROJECT} E2E" --slug "$PROJECT" --description 'isolated compose E2E' --tier community)"; then
+  if ! output="$(dho admin orgs create --name "${PROJECT} E2E" --slug "$PROJECT" --description 'isolated compose E2E' --tier community)"; then
     printf '%s\n' "$output" >&2
     die 'Ops organization provisioning failed'
   fi
   org_id="$(printf '%s\n' "$output" | sed -nE 's/.*id:[[:space:]]*([0-9a-fA-F-]{36}).*/\1/p')"
   [[ "$org_id" =~ ^[0-9a-fA-F-]{36}$ ]] || die 'Ops org provisioning did not return an ID'
-  compose exec -T api dev-hops admin bundles assign-org --org-id "$org_id" --feature-key agent_context_runtime --reason 'isolated compose E2E' --expires-days 1 >/dev/null
-  token="$(compose exec -T api dev-hops service-credentials create --service acr --scope entitlements:read)"
+  dho admin bundles assign-org --org-id "$org_id" --feature-key agent_context_runtime --reason 'isolated compose E2E' --expires-days 1 >/dev/null
+  token="$(dho service-credentials create --service acr --scope entitlements:read)"
   [[ "$token" == svc_acr_* ]] || die 'Ops credential provisioning returned an invalid token shape'
   write_secret "$STATE/secrets/ops-token" "$token"
   # This is the one secret file the entitlement client reads through readRestrictedFile /
@@ -481,7 +494,7 @@ provision_evidence_database() {
   local db
   db="$(ops_clickhouse_database)"
   clickhouse_query "CREATE DATABASE IF NOT EXISTS ${db}" >/dev/null
-  compose exec -T api sh -ec "CLICKHOUSE_URI=clickhouse://default:ch@clickhouse:8123/${db} dev-hops migrate clickhouse" >/dev/null
+  DHO_CLICKHOUSE_URI="clickhouse://default:ch@clickhouse:9000/${db}" dho migrate clickhouse upgrade >/dev/null
 }
 
 # assert_scoped_repository fails closed when a suite's evidence does not resolve to exactly
@@ -502,7 +515,7 @@ seed_synthetic_evidence() {
   local db org_id
   db="$(ops_clickhouse_database)"
   org_id="$(<"$STATE/org-id")"
-  compose exec -T api sh -ec "CLICKHOUSE_URI=clickhouse://default:ch@clickhouse:8123/${db} dev-hops fixtures generate --sink \"\$CLICKHOUSE_URI\" --db-type clickhouse --repo-name acme/live-e2e --provider synthetic --days 14 --commits-per-day 6 --pr-count 24 --seed 20260219 --with-metrics --with-work-graph" >/dev/null
+  DHO_CLICKHOUSE_URI="clickhouse://default:ch@clickhouse:9000/${db}" dho fixtures generate --sink "clickhouse://default:ch@clickhouse:9000/${db}" --db-type clickhouse --repo-name acme/live-e2e --provider synthetic --days 14 --commits-per-day 6 --pr-count 24 --seed 20260219 --with-metrics --with-work-graph >/dev/null
   clickhouse_query "INSERT INTO ${db}.repos (id, repo, ref, created_at, settings, tags, last_synced, org_id, provider) SELECT generateUUIDv4(), 'acme/live-e2e', 'main', now64(3), NULL, NULL, now64(3), '${org_id}', 'synthetic'" >/dev/null
   assert_scoped_repository 'acme/live-e2e'
 }

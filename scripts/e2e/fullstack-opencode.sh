@@ -1457,12 +1457,12 @@ record_web_browser_failure() {
 bootstrap_web_user() {
   local create_output create_status
   set +e
-  create_output="$(compose exec -T api dev-hops admin users create --email "$WEB_EMAIL" --password "$WEB_PASSWORD" --full-name 'ACR Full-stack Account' 2>&1)"
+  create_output="$(dho admin users create --email "$WEB_EMAIL" --password "$WEB_PASSWORD" --full-name 'ACR Full-stack Account' 2>&1)"
   create_status=$?
   set -e
   if [[ "$create_status" -ne 0 ]] && ! grep -Fq "User with email ${WEB_EMAIL} already exists" <<<"$create_output"; then
     printf '%s\n' "$create_output" | redact_log >&2
-    fs_die "could not create the isolated web user (dev-hops exited ${create_status})"
+    fs_die "could not create the isolated web user (dho exited ${create_status})"
   fi
   # --superuser: dev-health-web's /agent-context/context-packet is now a compatibility alias
   # for pre-move bookmarks (see its own comment) -- Context Fabric validation moved to its
@@ -1472,7 +1472,7 @@ bootstrap_web_user() {
   # instead, and run_web_agreement_check's wait for the "Context Fabric" heading times out
   # 30s later with no signal of why. This isolated harness user is torn down with the rest of
   # the project at the end of the run, so platform-superuser scope here is not a standing grant.
-  compose exec -T api dev-hops admin users update --email "$WEB_EMAIL" --verified --superuser --org "$(<"$STATE/org-id")" --role owner >/dev/null
+  dho admin users update --email "$WEB_EMAIL" --verified --superuser --org "$(<"$STATE/org-id")" --role owner >/dev/null
   assert_acr_entitlement
 }
 

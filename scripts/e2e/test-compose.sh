@@ -56,7 +56,7 @@ grep -Fq 'clickhouse-client --user default --password ch' "$script"
 db_variable=db
 expected_clickhouse_database="CREATE DATABASE IF NOT EXISTS \${${db_variable}}"
 grep -Fq "$expected_clickhouse_database" "$script"
-expected_clickhouse_migration="CLICKHOUSE_URI=clickhouse://default:ch@clickhouse:8123/\${${db_variable}} dev-hops migrate clickhouse"
+expected_clickhouse_migration="DHO_CLICKHOUSE_URI=\"clickhouse://default:ch@clickhouse:9000/\${${db_variable}}\" dho migrate clickhouse upgrade"
 grep -Fq "$expected_clickhouse_migration" "$script"
 grep -Fq "INSERT INTO \${${db_variable}}.repos (id, repo, ref, created_at, settings, tags, last_synced, org_id, provider)" "$script"
 grep -Fq 'project-scoped repository evidence provisioning failed' "$script"

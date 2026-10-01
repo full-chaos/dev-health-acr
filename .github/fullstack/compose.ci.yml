@@ -133,19 +133,13 @@ services:
   migrate:
     build:
       context: ./ops
-      dockerfile: ./docker/Dockerfile
-      target: api
-      args:
-        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+      dockerfile: docker/go-worker.Dockerfile
+      target: dho
     restart: "no"
-    entrypoint: ["sh", "-ec", "dev-hops migrate postgres && dev-hops migrate clickhouse"]
+    command: ["migrate", "upgrade"]
     environment:
-      POSTGRES_URI: postgresql+asyncpg://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@postgres:5432/${POSTGRES_DB:-devhealth}
-      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
-      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
-      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
-      CLICKHOUSE_URI: clickhouse://default:ch@clickhouse:8123/${CLICKHOUSE_DB:-default}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      MIGRATION_DATABASE_URI: postgres://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@postgres:5432/${POSTGRES_DB:-devhealth}?sslmode=disable
+      CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-default}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/${CLICKHOUSE_DB:-default}
     depends_on:
       postgres:
         condition: service_healthy

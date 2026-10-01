@@ -114,7 +114,7 @@ EOF
   if [[ "$SCENARIO" != 'happy' ]]; then
     cat >> "$STATE/svs.override.yml" <<'EOF'
   migrate:
-    entrypoint: ["sh", "-c", "python -m dev_health_ops.cli migrate postgres"]
+    command: ["migrate", "postgres", "upgrade"]
 EOF
   fi
 }
@@ -163,8 +163,8 @@ wait_web_ready() {
 }
 
 bootstrap_web_user() {
-  compose exec -T api dev-hops admin users create --email "$WEB_EMAIL" --password "$WEB_PASSWORD" --full-name 'ACR SVS Canonical Account' >/dev/null
-  compose exec -T api dev-hops admin users update --email "$WEB_EMAIL" --verified --org "$(<"$STATE/org-id")" --role owner >/dev/null
+  dho admin users create --email "$WEB_EMAIL" --password "$WEB_PASSWORD" --full-name 'ACR SVS Canonical Account' >/dev/null
+  dho admin users update --email "$WEB_EMAIL" --verified --org "$(<"$STATE/org-id")" --role owner >/dev/null
 }
 
 assert_canonical_account_login() {
@@ -330,20 +330,20 @@ remove_runtime_entitlement() {
 bootstrap_failure_ops() {
   local output org_id token db
   compose up -d postgres clickhouse valkey pgbouncer mailpit migrate api >/dev/null
-  if ! output="$(compose exec -T api dev-hops admin orgs create --name "${PROJECT} SVS" --slug "$PROJECT" --description 'isolated SVS control plane' --tier community)"; then
+  if ! output="$(dho admin orgs create --name "${PROJECT} SVS" --slug "$PROJECT" --description 'isolated SVS control plane' --tier community)"; then
     printf '%s\n' "$output" >&2
     svs_die 'Ops organization provisioning failed'
   fi
   org_id="$(printf '%s\n' "$output" | sed -nE 's/.*id:[[:space:]]*([0-9a-fA-F-]{36}).*/\1/p')"
   [[ "$org_id" =~ ^[0-9a-fA-F-]{36}$ ]] || svs_die 'Ops organization provisioning did not return an ID'
-  compose exec -T api dev-hops admin bundles assign-org --org-id "$org_id" --feature-key agent_context_runtime --reason 'isolated SVS control plane' --expires-days 1 >/dev/null
-  token="$(compose exec -T api dev-hops service-credentials create --service acr --scope entitlements:read)"
+  dho admin bundles assign-org --org-id "$org_id" --feature-key agent_context_runtime --reason 'isolated SVS control plane' --expires-days 1 >/dev/null
+  token="$(dho service-credentials create --service acr --scope entitlements:read)"
   [[ "$token" == svc_acr_* ]] || svs_die 'Ops credential provisioning returned an invalid token shape'
   write_secret "$STATE/secrets/ops-token" "$token"
   printf '%s' "$org_id" > "$STATE/org-id"
   db="acr_${PROJECT//-/}_e2e"
   compose exec -T clickhouse clickhouse-client --user default --password ch --query "CREATE DATABASE IF NOT EXISTS ${db}" >/dev/null
-  compose exec -T api sh -ec "CLICKHOUSE_URI=clickhouse://default:ch@clickhouse:8123/${db} dev-hops migrate clickhouse" >/dev/null
+  DHO_CLICKHOUSE_URI="clickhouse://default:ch@clickhouse:9000/${db}" dho migrate clickhouse upgrade >/dev/null
   compose exec -T clickhouse clickhouse-client --user default --password ch --multiquery <<EOF >/dev/null
 CREATE USER IF NOT EXISTS acr_reader IDENTIFIED BY '$(<"$STATE/secrets/clickhouse-password")';
 ALTER USER acr_reader SETTINGS readonly = 2;
