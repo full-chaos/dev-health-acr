@@ -196,6 +196,8 @@ jobs:
       # packages would still report success.
       - name: Verify the race shards cover every package
         run: scripts/ci/test-shard-closure.sh
+      - name: Test the shard budget guard
+        run: scripts/ci/test-shard-budget-guard.sh
       - name: Check known Go vulnerabilities
         run: scripts/ci/retry.sh go run golang.org/x/vuln/cmd/govulncheck@v1.5.0 ./...
 
@@ -407,9 +409,13 @@ jobs:
           ' .tmp/coverage/go-test.json | head -n 1)"
           test -n "$failure" || failure=unknown
           failure="$(printf '%s' "$failure" | tr '\r\n' '  ' | cut -c1-180)"
-          printf 'status=%s\nfailure=%s\n' "$status" "$failure" >>"$GITHUB_OUTPUT"
+          budget="${isolated_timeout:-600s}"
+          printf 'status=%s\nfailure=%s\nbudget=%s\n' "$status" "$failure" "${budget%s}" >>"$GITHUB_OUTPUT"
+      - name: Guard unit shard package budget
+        if: always() && steps.go-tests.outputs.budget != ''
+        run: scripts/ci/shard-budget-guard.sh --json '${{ steps.go-tests.outputs.budget }}' .tmp/coverage/go-test.json
       - name: Enforce Go tests (${{ steps.go-tests.outputs.failure }})
-        if: steps.go-tests.outputs.status != '0'
+        if: always() && steps.go-tests.outputs.status != '0'
         run: |
           jq -r '
             select(.Action == "output") |
@@ -601,7 +607,21 @@ jobs:
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh ${{ matrix.shard }} 4)"
           printf 'shard %s/4 packages:\n%s\n' '${{ matrix.shard }}' "$packages"
-          make test-race GOTEST_PKGS="$packages"
+          out="$(mktemp)"
+          budget="$(make -s print-gotest-timeout)"
+          set +e
+          make test-race GOTEST_PKGS="$packages" 2>&1 | tee "$out"
+          pipe=("${PIPESTATUS[@]}")
+          status=${pipe[0]}
+          if [ "$status" -eq 0 ] && [ "${pipe[1]}" -ne 0 ]; then
+            printf '::error::tee failed (exit %s); the captured go test output is incomplete\n' "${pipe[1]}"
+            status=1
+          fi
+          set -e
+          guard=0
+          scripts/ci/shard-budget-guard.sh "${budget%s}" "$out" || guard=$?
+          if [ "$status" -ne 0 ]; then exit "$status"; fi
+          exit "$guard"
 
   # CHAOS-3974: internal/contextfabric/devhealthschema's full-repo
   # declaration-closure tests walk every file in the module, so their cost

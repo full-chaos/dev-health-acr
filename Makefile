@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check test test-split test-race test-race-shared test-race-isolated test-race-split test-shuffle-random test-coverage coverage-cobertura isolated-timeout crosscompile hosted-integration clients-real vet contract-write contract-test codegraph-contract shard-plan canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract
+.PHONY: fmt fmt-check test test-split test-race test-race-shared test-race-isolated test-race-split test-shuffle-random test-coverage coverage-cobertura isolated-timeout print-gotest-timeout crosscompile hosted-integration clients-real vet contract-write contract-test codegraph-contract shard-plan canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract
 
 RELEASE_OUTPUT ?= .tmp/release
 RELEASE_VERSION ?=
@@ -247,6 +247,9 @@ isolated-timeout:
 		*/internal/contextfabric/devhealthfacts) echo "$(GOTEST_DEVHEALTHFACTS_TIMEOUT)" ;; \
 		*) echo "$(GOTEST_ISOLATED_TIMEOUT)" ;; \
 	esac
+
+print-gotest-timeout:
+	@echo $(GOTEST_TIMEOUT)
 
 crosscompile:
 	GOOS=windows GOARCH=amd64 go build ./...
