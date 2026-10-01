@@ -22,6 +22,8 @@ metadata:
 spec:
   replicas: {{ $projector.replicaCount }}
   revisionHistoryLimit: {{ $projector.revisionHistoryLimit }}
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "acr.projectorSelectorLabels" . | nindent 6 }}
