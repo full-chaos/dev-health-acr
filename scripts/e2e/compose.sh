@@ -442,14 +442,20 @@ enable_go_api_routing() {
     dho goapi routing seed $u -operations "$OPERATIONS" -recorded-by "$who" -review-evidence "isolated compose E2E: first row, shadow"
     dho goapi routing proof-org add -org "$ORG_ID" -recorded-by "$who" -review-evidence "isolated compose E2E proof org"
     prove() {
+      local log=/tmp/prove.out
       dho goapi prove $u -go-edge -proof-url http://query-api:8090/query/proof -edge-url http://query-api:8090/graphql \
         -documents /app/go-api/documents.json -org "$ORG_ID" -artifact-dir /tmp/proof -key-id "$GO_API_ENVELOPE_KEY_ID" \
-        -recorded-by "$who" -review-evidence "$1" \
-        || echo "go-api-tools: prove exited $? (enable below refuses any operation without a matching receipt)"
+        -recorded-by "$who" -review-evidence "$2" > "$log" 2>&1 \
+        || echo "go-api-tools: prove exited $?"
+      cat "$log"
+      for op in $(printf "%s" "$OPERATIONS" | tr "," " "); do
+        grep -Eq "go-api-prove: +$op +mode=$3 +route=$4 +PROVEN_GO_ONLY" "$log" \
+          || { echo "go-api-tools: $op was not proven in mode=$3 through route=$4" >&2; exit 1; }
+      done
     }
-    prove "isolated compose E2E: go-edge proof through the proof route (shadow)"
+    prove x "isolated compose E2E: go-edge proof through the proof route (shadow)" shadow proof
     dho goapi routing enable $u -operations "$OPERATIONS" -mode canary -recorded-by "$who" -review-evidence "isolated compose E2E: shadow receipt of this run"
-    prove "isolated compose E2E: go-edge proof through /graphql (canary)"
+    prove x "isolated compose E2E: go-edge proof through /graphql (canary)" canary edge
     dho goapi routing enable $u -operations "$OPERATIONS" -mode primary -recorded-by "$who" -review-evidence "isolated compose E2E: edge receipt of this run"
   ' -e "ORG_ID=$org_id" -e "OPERATIONS=$operations" 2>&1)"; then
     printf '%s\n' "$output" | redact_log | tail -60 >&2
