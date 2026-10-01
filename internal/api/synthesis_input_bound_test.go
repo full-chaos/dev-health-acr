@@ -28,8 +28,11 @@ import (
 const expansionCap = 200
 
 // teamExpander admits a fixed number of targets for every kind a team
-// question expands, out of a larger candidate set.
-type teamExpander struct{ targets int }
+// question expands: out of a larger candidate set, or as the whole set.
+type teamExpander struct {
+	targets  int
+	complete bool
+}
 
 func (e teamExpander) ExpandFactScope(_ context.Context, request cf.FactScopeExpansionRequest) (cf.FactScopeExpansionResult, error) {
 	targets := make([]cf.SubjectRef, 0, e.targets)
@@ -45,6 +48,9 @@ func (e teamExpander) ExpandFactScope(_ context.Context, request cf.FactScopeExp
 		default:
 			return cf.FactScopeExpansionResult{}, nil
 		}
+	}
+	if e.complete {
+		return cf.FactScopeExpansionResult{Targets: targets, Counts: cf.FactScopeExpansionCounts{CandidateCount: e.targets}}, nil
 	}
 	return cf.FactScopeExpansionResult{Targets: targets, Counts: cf.FactScopeExpansionCounts{CandidateCount: 10287, Truncated: true}}, nil
 }
@@ -140,8 +146,8 @@ var expandedTeamKinds = []struct {
 
 // teamSynthesisApp serves a team question through the real engine, the real
 // fact registry and the real answer synthesizer over the given model runtime.
-// Each expanded kind is read over targets subjects.
-func teamSynthesisApp(t *testing.T, runtime cf.ModelRuntime, sink cf.ModelReceiptSink, targets int, logs *bytes.Buffer) (*App, string) {
+// Each expanded kind is read over the expander's targets.
+func teamSynthesisApp(t *testing.T, runtime cf.ModelRuntime, sink cf.ModelReceiptSink, expander teamExpander, logs *bytes.Buffer) (*App, string) {
 	t.Helper()
 	logger := slog.New(slog.NewJSONHandler(logs, nil))
 	requirements := []cf.FactRequirement{{Kind: cf.FactHealth}}
@@ -153,7 +159,7 @@ func teamSynthesisApp(t *testing.T, runtime cf.ModelRuntime, sink cf.ModelReceip
 	for _, kind := range []cf.FactKind{cf.FactHealth, cf.FactWorkload, cf.FactFlow, cf.FactInvestment, cf.FactLandscape, cf.FactReadiness} {
 		providers = append(providers, echoFactProvider{capability: teamFactCapability(kind, string(kind), cf.SubjectTeam)})
 	}
-	registry, err := cf.NewFactCapabilityRegistry(providers, cf.FactRegistryOptions{ScopeExpander: teamExpander{targets: targets}, Logger: logger})
+	registry, err := cf.NewFactCapabilityRegistry(providers, cf.FactRegistryOptions{ScopeExpander: expander, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +300,7 @@ func hasLimitation(result cf.InvestigationResult, limitation string) bool {
 func TestATeamQuestionLargerThanTheModelInputIsAnsweredWithBoundedFacts(t *testing.T) {
 	logs := &bytes.Buffer{}
 	provider := newRecordedModelProvider(t)
-	app, token := teamSynthesisApp(t, productionModelRuntime(t, provider, logs), nil, expansionCap, logs)
+	app, token := teamSynthesisApp(t, productionModelRuntime(t, provider, logs), nil, teamExpander{targets: expansionCap}, logs)
 
 	response := postTeamQuestion(t, app, token)
 
@@ -358,13 +364,34 @@ func TestATeamQuestionLargerThanTheModelInputIsAnsweredWithBoundedFacts(t *testi
 	}
 }
 
+// A team whose expanded facts were all read, below the expansion cap, and are
+// still larger than the model input bound. The read itself is complete, so
+// the bound alone makes the answer partial.
+func TestABoundedSynthesisInputMakesAFullyReadAnswerPartial(t *testing.T) {
+	logs := &bytes.Buffer{}
+	provider := newRecordedModelProvider(t)
+	app, token := teamSynthesisApp(t, productionModelRuntime(t, provider, logs), nil, teamExpander{targets: expansionCap - 1, complete: true}, logs)
+
+	response := postTeamQuestion(t, app, token)
+
+	result := decodeTeamAnswer(t, response, logs)
+	if len(result.Coverage.DegradedReasons) != 0 {
+		t.Fatalf("degraded reasons = %q, want none: the fact read was complete", result.Coverage.DegradedReasons)
+	}
+	if !result.Coverage.Partial || !hasLimitation(result, contractsv1.ContextFabricSynthesisInputBoundedLimitation) {
+		t.Fatalf("coverage.partial = %v limitations = %q, want a partial answer that states the bound", result.Coverage.Partial, result.Limitations)
+	}
+	if bounds := logLines(t, logs.String(), "context fabric synthesis input bounded"); len(bounds) != 1 || bounds[0]["outcome"] != "fitted" {
+		t.Fatalf("bound lines = %v, want one with outcome=fitted", bounds)
+	}
+}
+
 // A team whose facts fit the model input. Nothing is bounded and nothing says
 // it was.
 func TestATeamQuestionThatFitsTheModelInputIsGivenEveryFact(t *testing.T) {
-	const targets = 3
 	logs := &bytes.Buffer{}
 	provider := newRecordedModelProvider(t)
-	app, token := teamSynthesisApp(t, productionModelRuntime(t, provider, logs), nil, targets, logs)
+	app, token := teamSynthesisApp(t, productionModelRuntime(t, provider, logs), nil, teamExpander{targets: 3}, logs)
 
 	response := postTeamQuestion(t, app, token)
 
@@ -452,7 +479,7 @@ func TestASynthesisThatEndsTheInvestigationIsNamed(t *testing.T) {
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			logs := &bytes.Buffer{}
-			app, token := teamSynthesisApp(t, testCase.model, testCase.sink, 3, logs)
+			app, token := teamSynthesisApp(t, testCase.model, testCase.sink, teamExpander{targets: 3}, logs)
 
 			response := postTeamQuestion(t, app, token)
 
@@ -492,7 +519,7 @@ func TestASynthesisThatEndsTheInvestigationIsNamed(t *testing.T) {
 // reported as exhausted.
 func TestAModelInputThatNoBoundingFitsReportsItsSize(t *testing.T) {
 	logs := &bytes.Buffer{}
-	app, token := teamSynthesisApp(t, scriptedSynthesisModel{err: &cf.ModelInputOverflow{Bytes: 900_000, MaxBytes: 524_288}}, nil, 3, logs)
+	app, token := teamSynthesisApp(t, scriptedSynthesisModel{err: &cf.ModelInputOverflow{Bytes: 900_000, MaxBytes: 524_288}}, nil, teamExpander{targets: 3}, logs)
 
 	response := postTeamQuestion(t, app, token)
 
