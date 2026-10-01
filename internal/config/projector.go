@@ -376,7 +376,7 @@ func (c ProjectorConfig) SafeAttributes() []any {
 		"projection_enabled", c.ProjectionEnabled,
 		"organization_count", len(c.OrgIDs), "org_discovery_enabled", c.OrgDiscoveryEnabled,
 		"org_activity_window", c.OrgActivityWindow.String(), "org_discovery_deny_count", len(c.OrgDiscoveryDenyIDs),
-		"poll_interval", c.PollInterval.String(),
+		"poll_interval", c.PollInterval.String(), "overlap", c.Overlap.String(),
 		"concurrency", c.Concurrency, "drain_batch_budget", c.DrainBatchBudget, "teams_projects_enabled", c.TeamsProjectsEnabled, "episode_writeback_enabled", c.EpisodeWriteback,
 		"require_backing_stores", c.RequireBackingStores, "local_composition_ready", c.LocalCompositionReady,
 	}
