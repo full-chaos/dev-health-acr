@@ -59,7 +59,7 @@ func commitExplicitHandleSubjects(ctx context.Context, principal storage.Princip
 		return resolution
 	case 1:
 		if committedMatchesHandle(resolution.Committed, handle.Kind, handle.Value, anchor) {
-			return resolution
+			return dropOtherSubjectsOfKind(resolution, bases, digests, handle.Kind, handle.Value, anchor)
 		}
 	default:
 		return demoteRepositoryAnchors(request, resolution, bases, digests, handle.Kind, "Which repository holds the "+handleKindLabel(handle.Kind)+" "+handle.Value)
@@ -236,5 +236,28 @@ func demoteRepositoryAnchors(request contextfabric.InvestigationRequest, resolut
 	if request.Options.AllowClarification {
 		resolution.ClarificationPrompt = question + " (" + strings.Join(labels, ", ") + ")?"
 	}
+	return resolution
+}
+
+// dropOtherSubjectsOfKind keeps only the committed subject that is the handle's
+// own and moves every other committed subject of that kind to ambiguous
+// candidates: evidence about another such subject must not enter an answer
+// about the one the caller named.
+func dropOtherSubjectsOfKind(resolution contextfabric.SubjectResolution, bases contextfabric.CommitBasisSet, digests contextfabric.CommitDecisionDigestSet, kind contextfabric.SubjectKind, value string, anchor contextfabric.SubjectRef) contextfabric.SubjectResolution {
+	kept := make([]contextfabric.SubjectRef, 0, len(resolution.Committed))
+	for _, subject := range resolution.Committed {
+		if subject.Kind != kind || committedMatchesHandle([]contextfabric.SubjectRef{subject}, kind, value, anchor) {
+			kept = append(kept, subject)
+			continue
+		}
+		delete(bases, contextfabric.SubjectMapKey(subject))
+		delete(digests, contextfabric.SubjectMapKey(subject))
+		for i := range resolution.Candidates {
+			if resolution.Candidates[i].Subject == subject {
+				resolution.Candidates[i].State = contextfabric.ResolutionAmbiguous
+			}
+		}
+	}
+	resolution.Committed = kept
 	return resolution
 }

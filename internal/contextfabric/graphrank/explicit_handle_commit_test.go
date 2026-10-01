@@ -350,3 +350,30 @@ func TestExplicitPullRequestHandleFailureDropsAnotherCommittedPullRequest(t *tes
 		t.Fatalf("Committed = %#v, want none: PR 748 does not answer a question about 747", resolution.Committed)
 	}
 }
+
+func TestExplicitPullRequestHandleDropsOtherCommittedPullRequestsWhenOneMatches(t *testing.T) {
+	t.Parallel()
+	var calls []explicitHandleCensusCall
+	deps, request := explicitHandleFixture(1, &calls)
+	other := "pull_request:7b9583ee-4d24-2be7-4d09-34f815bebdd7:748"
+	exact := deps.ExactHint
+	deps.ExactHint = func(ctx context.Context, s contextfabric.SubjectRef) (CandidateNode, bool, error) {
+		if s.CanonicalID == other {
+			return candidateNode(s.Kind, other, "PR 748", 0.1, "*"), true, nil
+		}
+		return exact(ctx, s)
+	}
+	request.RequestedScope.SubjectHints = append(request.RequestedScope.SubjectHints,
+		contextfabric.SubjectHint{Kind: contextfabric.SubjectPullRequest, ID: explicitHandlePRID, Label: "PR 747", Source: "caller"},
+		contextfabric.SubjectHint{Kind: contextfabric.SubjectPullRequest, ID: other, Label: "PR 748", Source: "caller"})
+	r := resolveExplicitHandleFixture(t, deps, request)
+	n := 0
+	for _, s := range r.Committed {
+		if s.Kind == contextfabric.SubjectPullRequest {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("PRs committed = %d (%#v), want only 747", n, r.Committed)
+	}
+}
