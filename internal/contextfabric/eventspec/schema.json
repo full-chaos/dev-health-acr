@@ -6821,6 +6821,11 @@
           "graph_missing_satisfier",
           "census_commit_error"
         ]
+      },
+      {
+        "key": "census_commit_handle_explicit",
+        "type": "bool",
+        "presence": "required"
       }
     ]
   },

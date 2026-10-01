@@ -357,6 +357,11 @@ const (
 	// Such a turn is always freshly windowed; the count measures what that
 	// costs.
 	AnswerReuseBypassStatedPeriod AnswerReuseBypassReason = "stated_period"
+	// AnswerReuseBypassExplicitHandle: this turn carried an explicit
+	// subject_handle. The handle decides which subject is resolved, and the
+	// reuse key does not include it, so a stored answer for the same question
+	// without the handle (or with another) must never be served.
+	AnswerReuseBypassExplicitHandle AnswerReuseBypassReason = "explicit_handle"
 )
 
 // reuseBypassReason decides whether this request may consult the reuse
@@ -404,6 +409,9 @@ func reuseBypassReason(request InvestigationRequest, structureCanon requestStruc
 	}
 	if len(carryReferencedResultIDs(request, nil)) > 0 || carryParentSeed(request) != "" {
 		return AnswerReuseBypassPriorResultReference
+	}
+	if len(request.SubjectHandles) > 0 {
+		return AnswerReuseBypassExplicitHandle
 	}
 	return ""
 }

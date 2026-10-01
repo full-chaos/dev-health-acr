@@ -1728,6 +1728,10 @@ type ResolutionTraceEvent struct {
 	// -- this event only ever describes the graph read half.
 	GraphExistenceOK   bool
 	CensusCommitReason string
+	// CensusCommitHandleExplicit is true when the evidence_census_commit
+	// event came from a caller-explicit subject_handle rather than the
+	// shadow round's attested satisfier.
+	CensusCommitHandleExplicit bool
 	// ShadowSourceNativeMatchCount/ShadowSourceNativeAnyResolved
 	// (evidence_source_native stage ONLY, CHAOS-3899 WIDENING measurement --
 	// chris-ratified pre-registered shadow measurement, 2026-08-19): the
@@ -2239,6 +2243,7 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 		// caller ever receives. Return empty sets rather than that debris.
 		return resolution, offerMaterial, make(contextfabric.CommitBasisSet), make(contextfabric.CommitDecisionDigestSet), err
 	}
+	resolution = commitExplicitHandleSubjects(ctx, principal, request, deps, resolution, bases, digests)
 	return resolution, offerMaterial, bases, digests, nil
 }
 
@@ -4275,14 +4280,14 @@ const censusCommitErrorReason = "census_commit_error"
 // count from four to one does not change that -- mergeCensusAttestedSatisfier
 // still has exactly one, unlooped call site (resolveSubjects), so at most
 // one of these four outcomes can still fire per request.
-func emitEvidenceCensusCommit(tracer ResolutionTracer, requestID string, subject contextfabric.SubjectRef, outcome string, graphExistenceOK bool, reason string) {
+func emitEvidenceCensusCommit(tracer ResolutionTracer, requestID string, subject contextfabric.SubjectRef, outcome string, graphExistenceOK bool, reason string, handleExplicit bool) {
 	if tracer == nil {
 		return
 	}
 	tracer.Trace(ResolutionTraceEvent{
 		RequestID: requestID, Stage: "evidence_census_commit",
 		Subject: subject, Outcome: outcome, GraphExistenceOK: graphExistenceOK,
-		CensusCommitReason: reason,
+		CensusCommitReason: reason, CensusCommitHandleExplicit: handleExplicit,
 	})
 }
 
@@ -4326,7 +4331,7 @@ func mergeCensusAttestedSatisfier(ctx context.Context, principal storage.Princip
 		if err != nil {
 			reason = censusCommitErrorReason
 		}
-		emitEvidenceCensusCommit(deps.ResolutionTracer, request.RequestID, subject, "refused", false, reason)
+		emitEvidenceCensusCommit(deps.ResolutionTracer, request.RequestID, subject, "refused", false, reason, false)
 		return "", false
 	}
 	// accepted (codex xhigh review finding, confirmed): mirrors
@@ -4351,7 +4356,7 @@ func mergeCensusAttestedSatisfier(ctx context.Context, principal storage.Princip
 		}
 	}
 	if !accepted {
-		emitEvidenceCensusCommit(deps.ResolutionTracer, request.RequestID, subject, "refused", true, "")
+		emitEvidenceCensusCommit(deps.ResolutionTracer, request.RequestID, subject, "refused", true, "", false)
 		return "", false
 	}
 	// censusProvenanceMarker: a synthetic, non-caller-typed provenance
@@ -4384,10 +4389,10 @@ func mergeCensusAttestedSatisfier(ctx context.Context, principal storage.Princip
 	// the refusal rather than a merge that did not happen. Without this the
 	// caller is handed a key naming a subject the pool does not contain.
 	if admission.refused(subject) {
-		emitEvidenceCensusCommit(deps.ResolutionTracer, request.RequestID, subject, contestSetDisposition, true, "")
+		emitEvidenceCensusCommit(deps.ResolutionTracer, request.RequestID, subject, contestSetDisposition, true, "", false)
 		return "", false
 	}
-	emitEvidenceCensusCommit(deps.ResolutionTracer, request.RequestID, subject, "merged", true, "")
+	emitEvidenceCensusCommit(deps.ResolutionTracer, request.RequestID, subject, "merged", true, "", false)
 	return key, true
 }
 

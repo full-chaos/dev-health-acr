@@ -3988,12 +3988,13 @@ func (f DecisionSummaryFields) SlogArgs() []any {
 // EvidenceCensusCommitFields is graphrank.evidence_census_commit's generated typed construction interface
 // (CHAOS-5516): one Go field per Field EvidenceCensusCommit.Fields declares in spec.go.
 type EvidenceCensusCommitFields struct {
-	RequestID          string
-	SubjectKind        string
-	SubjectCanonicalID string
-	Outcome            string
-	GraphExistenceOk   bool
-	CensusCommitReason string
+	RequestID                  string
+	SubjectKind                string
+	SubjectCanonicalID         string
+	Outcome                    string
+	GraphExistenceOk           bool
+	CensusCommitReason         string
+	CensusCommitHandleExplicit bool
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every EvidenceCensusCommitFields uniformly, set ONLY by NewEvidenceCensusCommitFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -4007,15 +4008,16 @@ type EvidenceCensusCommitFields struct {
 
 // NewEvidenceCensusCommitFields is the generated constructor for EvidenceCensusCommitFields -- every
 // field EvidenceCensusCommit.Fields declares is a required parameter.
-func NewEvidenceCensusCommitFields(requestID string, subjectKind string, subjectCanonicalID string, outcome string, graphExistenceOk bool, censusCommitReason string) EvidenceCensusCommitFields {
+func NewEvidenceCensusCommitFields(requestID string, subjectKind string, subjectCanonicalID string, outcome string, graphExistenceOk bool, censusCommitReason string, censusCommitHandleExplicit bool) EvidenceCensusCommitFields {
 	return EvidenceCensusCommitFields{
-		RequestID:          requestID,
-		SubjectKind:        subjectKind,
-		SubjectCanonicalID: subjectCanonicalID,
-		Outcome:            outcome,
-		GraphExistenceOk:   graphExistenceOk,
-		CensusCommitReason: censusCommitReason,
-		constructed:        true,
+		RequestID:                  requestID,
+		SubjectKind:                subjectKind,
+		SubjectCanonicalID:         subjectCanonicalID,
+		Outcome:                    outcome,
+		GraphExistenceOk:           graphExistenceOk,
+		CensusCommitReason:         censusCommitReason,
+		CensusCommitHandleExplicit: censusCommitHandleExplicit,
+		constructed:                true,
 	}
 }
 
@@ -4039,6 +4041,7 @@ func (f EvidenceCensusCommitFields) SlogArgs() []any {
 		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
 		"graph_existence_ok", f.GraphExistenceOk,
 		"census_commit_reason", contextfabric.SanitizeLogAttr(f.CensusCommitReason),
+		"census_commit_handle_explicit", f.CensusCommitHandleExplicit,
 	}
 }
 

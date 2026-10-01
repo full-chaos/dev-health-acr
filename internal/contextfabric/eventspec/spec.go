@@ -1593,6 +1593,7 @@ var EvidenceCensusCommit = Event{
 		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: evidenceCensusCommitOutcome},
 		{Key: "graph_existence_ok", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "census_commit_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: evidenceCensusCommitReason},
+		{Key: "census_commit_handle_explicit", Type: FieldBool, Presence: PresenceRequired},
 	},
 }
 
