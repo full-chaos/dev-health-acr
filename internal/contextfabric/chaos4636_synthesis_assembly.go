@@ -341,7 +341,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	})
 	result, err := e.synthesizer.Synthesize(ctx, principal, synthesisInput)
 	if err != nil {
-		return InvestigationResult{}, synthesisAllocation, assemblyTelemetry{}, MembershipCardinality{}, stageError(StageSynthesis, fmt.Errorf("synthesize investigation: %w", err))
+		return InvestigationResult{}, synthesisAllocation, assemblyTelemetry{}, MembershipCardinality{}, stageError(StageSynthesis, fmt.Errorf("%w: synthesize investigation: %w", ErrSynthesisAborted, err))
 	}
 	result.SchemaVersion = InvestigationResultSchemaV1
 	result.ResultID = e.newResultID()

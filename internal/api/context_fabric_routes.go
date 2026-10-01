@@ -219,6 +219,9 @@ const (
 	contextFabricClassNoSubjects        = "no_investigation_subjects"
 	contextFabricClassInvalidResult     = "invalid_result"
 	contextFabricClassFactReadAborted   = "fact_read_aborted"
+	contextFabricClassModelInputSize    = "model_input_too_large"
+	contextFabricClassModelReceipt      = "model_receipt_unrecorded"
+	contextFabricClassSynthesisAborted  = "synthesis_aborted"
 	contextFabricClassPanic             = "panic"
 	// contextFabricClassBudgetRefusal (CHAOS-4636) is decision D5's PLANNED
 	// refusal: the engine measured its own assembled answer, re-synthesized
@@ -454,6 +457,26 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 		a.writeContextFabricFailure(w, r, err, contextFabricClassFactReadAborted, http.StatusInternalServerError, "internal_error", "Context Fabric investigation failed", false, nil)
 		return
 	}
+	// A model call that was not placed because its input is larger than the
+	// runtime's bound. For answer synthesis this is what is left after the
+	// facts were bounded and the input still did not fit. Not retryable: the
+	// same question assembles the same input.
+	if errors.Is(err, contextfabric.ErrModelInputTooLarge) {
+		a.writeContextFabricFailure(w, r, err, contextFabricClassModelInputSize, http.StatusInternalServerError, "internal_error", "Context Fabric investigation failed", false, nil)
+		return
+	}
+	// A model call whose receipt was not recorded. Below every model class:
+	// when the call itself also failed, that failure names the request.
+	if errors.Is(err, contextfabric.ErrModelReceiptUnrecorded) {
+		a.writeContextFabricFailure(w, r, err, contextFabricClassModelReceipt, http.StatusInternalServerError, "internal_error", "Context Fabric investigation failed", false, nil)
+		return
+	}
+	// Every error the engine's synthesis call returns carries this sentinel,
+	// so it is checked after every class a synthesis failure can also carry.
+	if errors.Is(err, contextfabric.ErrSynthesisAborted) {
+		a.writeContextFabricFailure(w, r, err, contextFabricClassSynthesisAborted, http.StatusInternalServerError, "internal_error", "Context Fabric investigation failed", false, nil)
+		return
+	}
 	a.writeContextFabricFailure(w, r, err, contextFabricClassUnclassified, http.StatusInternalServerError, "internal_error", "Context Fabric investigation failed", false, nil)
 }
 
@@ -613,6 +636,10 @@ func (a *App) logContextFabricFailure(r *http.Request, err error, classification
 	// (contextFabricValidationRule).
 	if errors.Is(err, contextfabric.ErrInvalidResult) {
 		fields = append(fields, "validation_rule", contextFabricValidationRule(err))
+	}
+	var overflow *contextfabric.ModelInputOverflow
+	if errors.As(err, &overflow) {
+		fields = append(fields, "input_bytes", overflow.Bytes, "max_input_bytes", overflow.MaxBytes)
 	}
 	if snapshot, ok := contextfabric.SynthesisNarrowingSnapshotOf(err); ok {
 		fields = append(fields,

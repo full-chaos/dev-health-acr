@@ -3085,7 +3085,7 @@ func boundedJSON(value any, maximum int) ([]byte, error) {
 		return nil, fmt.Errorf("encode bounded model input: %w", err)
 	}
 	if len(encoded) > maximum {
-		return nil, fmt.Errorf("model input exceeds %d bytes", maximum)
+		return nil, &contextfabric.ModelInputOverflow{Bytes: len(encoded), MaxBytes: maximum}
 	}
 	return encoded, nil
 }

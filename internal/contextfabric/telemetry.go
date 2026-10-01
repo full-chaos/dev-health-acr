@@ -695,6 +695,29 @@ func (t SlogEngineTelemetry) RecordDriverIdentityCollisions(ctx context.Context,
 	t.logger.InfoContext(ctx, "context fabric driver identity collisions resolved before validation", args...)
 }
 
+// RecordSynthesisInputBound implements EngineTelemetry. A fitted input is a
+// served, bounded answer and logs at Warn; an exhausted one ends the
+// investigation and logs at Error.
+func (t SlogEngineTelemetry) RecordSynthesisInputBound(ctx context.Context, principal storage.Principal, event SynthesisInputBoundEvent) {
+	level := slog.LevelWarn
+	if event.Outcome != SynthesisInputBoundFitted {
+		level = slog.LevelError
+	}
+	args := append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"outcome", string(event.Outcome),
+		"passes", event.Passes,
+		"input_bytes", event.InputBytes,
+		"max_input_bytes", event.MaxInputBytes,
+		"facts_read", event.FactsRead,
+		"facts_given", event.FactsGiven,
+		"kinds_read", event.KindsRead,
+		"kinds_given", event.KindsGiven,
+		"kinds_bounded", event.KindsBounded,
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.Log(ctx, level, "context fabric synthesis input bounded", args...)
+}
+
 // RecordFactScopeExpansion implements EngineTelemetry (CHAOS-4099) -- the
 // ONE operator-visible record of whether a fact family could be reached from
 // the subjects an investigation resolved.

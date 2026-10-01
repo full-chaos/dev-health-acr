@@ -22,6 +22,11 @@ var (
 	// at all. Every error the engine's fact read returns carries it; a more
 	// specific sentinel in the same chain keeps its own classification.
 	ErrFactReadAborted = errors.New("context fabric canonical fact read aborted")
+	// ErrSynthesisAborted identifies an answer synthesis that ended the
+	// investigation. Every error the engine's synthesis call returns carries
+	// it; a more specific sentinel in the same chain keeps its own
+	// classification.
+	ErrSynthesisAborted = errors.New("context fabric answer synthesis aborted")
 	// ErrProjectionConflict identifies an out-of-order or incompatible
 	// projection batch. The worker must not advance its checkpoint.
 	ErrProjectionConflict = errors.New("context fabric projection conflict")
