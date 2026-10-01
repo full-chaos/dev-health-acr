@@ -3,6 +3,7 @@ package devhealthfacts
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -90,5 +91,15 @@ func TestRepoLessWorkItemSourceRowsFollowTheScopeExpander(t *testing.T) {
 	}
 	if !sawAdmit["organization grant"] || !sawAdmit["restricted, granted repo owned by project's team"] || !sawDeny["restricted, granted repo owned by project's team"] || !sawDeny["restricted, denied"] {
 		t.Errorf("the fixture must exercise all three bases: admitted %v denied %v", sawAdmit, sawDeny)
+	}
+
+	// Equal refusal: for a caller denied the repo-less row, an existing row
+	// and an id that names no row end in the same decision and body.
+	denied := authzPathsPrincipal("nobody/else")
+	kind := string(contractsv1.ContextFabricEvidenceEntityWorkItem)
+	existing, existingDecision := resolver.ResolveSourceRow(ctx, denied, kind, zeroRepositoryID+":linear:q-none")
+	absent, absentDecision := resolver.ResolveSourceRow(ctx, denied, kind, zeroRepositoryID+":linear:no-such-item")
+	if existingDecision != absentDecision || existingDecision.Reason != contextfabric.SourceRowNoRow || !reflect.DeepEqual(existing, absent) {
+		t.Errorf("denied repo-less row differs from an absent one: %+v vs %+v", existingDecision, absentDecision)
 	}
 }

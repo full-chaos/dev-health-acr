@@ -95,6 +95,10 @@ func (r *Resolver) WithRepoLessAdmitter(admitter RepoLessAdmitter) *Resolver {
 	return r
 }
 
+// HasRepoLessAdmitter reports whether the repo-less work item decision is
+// composed; the production wiring must have it.
+func (r *Resolver) HasRepoLessAdmitter() bool { return r.repoLess != nil }
+
 // zeroRepositoryID is the repository id of a work item the provider keeps in
 // no repository.
 const zeroRepositoryID = "00000000-0000-0000-0000-000000000000"
