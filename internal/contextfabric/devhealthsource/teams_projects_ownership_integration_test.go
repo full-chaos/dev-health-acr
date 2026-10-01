@@ -487,6 +487,7 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
 			testCase.run(t, ctx, newOwnershipFixture(t, ctx, query, direct, testCase.orgID))
 		})
 	}

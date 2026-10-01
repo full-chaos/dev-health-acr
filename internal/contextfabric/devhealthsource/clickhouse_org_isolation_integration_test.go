@@ -2,8 +2,11 @@ package devhealthsource_test
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -36,34 +39,19 @@ const collidingRepoID = "11111111-1111-1111-1111-111111111111"
 // ClickHouse server.
 func newDevHealthClickHouseIntegrationClient(t *testing.T, ctx context.Context) (query *runtimeclickhouse.Client, direct clickhousedriver.Conn) {
 	t.Helper()
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: testcontainers.ContainerRequest{
-			Image: chfixture.Image, ExposedPorts: []string{"9000/tcp"},
-			Env:        map[string]string{"CLICKHOUSE_USER": "acr", "CLICKHOUSE_PASSWORD": "acr", "CLICKHOUSE_DB": "default"},
-			WaitingFor: wait.ForListeningPort("9000/tcp").WithStartupTimeout(2 * time.Minute),
-		},
-		Started: true,
-	})
-	if err != nil {
-		t.Fatalf("start ClickHouse container: %v", err)
+	addr, admin := sharedDevHealthClickHouse(t)
+	database := fmt.Sprintf("t%d", perTestDatabaseSeq.Add(1))
+	if err := admin.Exec(ctx, "CREATE DATABASE "+database); err != nil {
+		t.Fatalf("create per-test database %s: %v", database, err)
 	}
 	t.Cleanup(func() {
-		if err := container.Terminate(context.Background()); err != nil {
-			t.Errorf("terminate ClickHouse container: %v", err)
+		if err := admin.Exec(context.Background(), "DROP DATABASE IF EXISTS "+database+" SYNC"); err != nil {
+			t.Errorf("drop per-test database %s: %v", database, err)
 		}
 	})
-	host, err := container.Host(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	port, err := container.MappedPort(ctx, "9000/tcp")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := net.JoinHostPort(host, port.Port())
 
-	direct, err = clickhousedriver.Open(&clickhousedriver.Options{
-		Addr: []string{addr}, Auth: clickhousedriver.Auth{Database: "default", Username: "acr", Password: "acr"}, DialTimeout: 10 * time.Second,
+	direct, err := clickhousedriver.Open(&clickhousedriver.Options{
+		Addr: []string{addr}, Auth: clickhousedriver.Auth{Database: database, Username: "acr", Password: "acr"}, DialTimeout: 10 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("open native ClickHouse connection: %v", err)
@@ -73,18 +61,8 @@ func newDevHealthClickHouseIntegrationClient(t *testing.T, ctx context.Context) 
 			t.Errorf("close native ClickHouse connection: %v", err)
 		}
 	})
-	pingDeadline := time.Now().Add(30 * time.Second)
-	for {
-		if pingErr := direct.Ping(ctx); pingErr == nil {
-			break
-		} else if time.Now().After(pingDeadline) {
-			t.Fatalf("clickhouse not ready for connections: %v", pingErr)
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-
 	query, err = runtimeclickhouse.NewClickHouseQueryClientWithOptions(runtimeclickhouse.Options{
-		DSN: "clickhouse://acr:acr@" + addr + "/default", DialTimeout: 10 * time.Second,
+		DSN: "clickhouse://acr:acr@" + addr + "/" + database, DialTimeout: 10 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("open production ClickHouse query client: %v", err)
@@ -95,6 +73,84 @@ func newDevHealthClickHouseIntegrationClient(t *testing.T, ctx context.Context) 
 		}
 	})
 	return query, direct
+}
+
+var (
+	perTestDatabaseSeq atomic.Int64
+
+	sharedDevHealthClickHouseOnce      sync.Once
+	sharedDevHealthClickHouseAddr      string
+	sharedDevHealthClickHouseAdmin     clickhousedriver.Conn
+	sharedDevHealthClickHouseErr       error
+	sharedDevHealthClickHouseTerminate func()
+)
+
+// sharedDevHealthClickHouse starts the one ClickHouse container every
+// newDevHealthClickHouseIntegrationClient caller shares. Each caller gets its
+// own database on it, so tables, rows and views never cross tests; TestMain
+// terminates the container after the last test.
+func sharedDevHealthClickHouse(t *testing.T) (string, clickhousedriver.Conn) {
+	t.Helper()
+	sharedDevHealthClickHouseOnce.Do(func() {
+		ctx := context.Background()
+		container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+			ContainerRequest: testcontainers.ContainerRequest{
+				Image: chfixture.Image, ExposedPorts: []string{"9000/tcp"},
+				Env:        map[string]string{"CLICKHOUSE_USER": "acr", "CLICKHOUSE_PASSWORD": "acr", "CLICKHOUSE_DB": "default"},
+				WaitingFor: wait.ForListeningPort("9000/tcp").WithStartupTimeout(2 * time.Minute),
+			},
+			Started: true,
+		})
+		if err != nil {
+			sharedDevHealthClickHouseErr = fmt.Errorf("start ClickHouse container: %w", err)
+			return
+		}
+		terminate := func() { logCleanupErr("terminate shared container", container.Terminate(context.Background())) }
+		host, err := container.Host(ctx)
+		if err != nil {
+			terminate()
+			sharedDevHealthClickHouseErr = err
+			return
+		}
+		port, err := container.MappedPort(ctx, "9000/tcp")
+		if err != nil {
+			terminate()
+			sharedDevHealthClickHouseErr = err
+			return
+		}
+		addr := net.JoinHostPort(host, port.Port())
+		admin, err := clickhousedriver.Open(&clickhousedriver.Options{
+			Addr: []string{addr}, Auth: clickhousedriver.Auth{Database: "default", Username: "acr", Password: "acr"}, DialTimeout: 10 * time.Second,
+		})
+		if err != nil {
+			terminate()
+			sharedDevHealthClickHouseErr = fmt.Errorf("open native ClickHouse connection: %w", err)
+			return
+		}
+		pingDeadline := time.Now().Add(30 * time.Second)
+		for {
+			pingErr := admin.Ping(ctx)
+			if pingErr == nil {
+				break
+			}
+			if time.Now().After(pingDeadline) {
+				logCleanupErr("close admin connection", admin.Close())
+				terminate()
+				sharedDevHealthClickHouseErr = fmt.Errorf("clickhouse not ready for connections: %w", pingErr)
+				return
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+		sharedDevHealthClickHouseAddr, sharedDevHealthClickHouseAdmin = addr, admin
+		sharedDevHealthClickHouseTerminate = func() {
+			logCleanupErr("close admin connection", admin.Close())
+			terminate()
+		}
+	})
+	if sharedDevHealthClickHouseErr != nil {
+		t.Fatalf("shared ClickHouse container: %v", sharedDevHealthClickHouseErr)
+	}
+	return sharedDevHealthClickHouseAddr, sharedDevHealthClickHouseAdmin
 }
 
 // seedTwoTenantRepoIDCollision inserts one colliding repos row per
