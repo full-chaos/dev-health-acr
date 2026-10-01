@@ -280,13 +280,18 @@ func t4Cases() []t4Case {
 			investmentProjectRollupRow("linear", "proj-1", "team-1", "Team One", "product", "growth", 30, 12, 4, 850, 18.5),
 			nullStream,
 		}},
-		{match: "project_link AS", rows: [][]any{
-			{"linear:proj-1", 60.0, 20.0, 10.0, 6.0, 4.0, 1.0, uint64(9), uint64(2), uint64(2), uint64(3)},
+		// The phased roll-up (CHAOS-7271): scope, repo themes, repo bugfix, evidence arm.
+		{match: "AS unit_ids", rows: [][]any{{[]string{"unit-1"}, []int64{1}}}},
+		{match: "groupArray(link_kind)", rows: [][]any{{[]string{"linear"}, []string{"proj-1"}, []string{"repo"}, []string{"r:repo-1"}, [][]string{{"team-1"}}}}},
+		{match: "uniqExactIf(u.repo_id", rows: [][]any{
+			{"linear:proj-1", 60.0, 20.0, 10.0, 6.0, 4.0, uint64(9), uint64(2), uint64(2)},
 		}},
+		{match: "sumIf(u.bugfix_share", rows: [][]any{{"linear:proj-1", 1.0}}},
+		{match: "excluded_no_repo_link", rows: [][]any{{"linear:proj-1", uint64(3)}}},
 	}
 	add(t4Case{name: "investment/project_rollup", kind: contextfabric.FactInvestment, subjects: proj, tables: projectAB})
 	add(t4Case{name: "investment/project_native_over_rollup", kind: contextfabric.FactInvestment, subjects: proj, tables: append(append([]fakeTable{}, projectAB...),
-		fakeTable{match: "AS project_count", rows: [][]any{nativeMixRow("proj-1", 7)}})})
+		nativePhasedTables(nativeMixUnits("proj-1", 7))...)})
 
 	// ---- entity kinds (CHAOS-7120)
 	work := []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")}

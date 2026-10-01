@@ -12,8 +12,67 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-func nativeMixRow(project string, effortUnits uint64) []any {
-	return []any{"linear:" + project, 6.0, 4.0, 0.0, 0.0, 0.0, 1.0, uint64(9), effortUnits, uint64(2), uint64(3)}
+// nativePhasedUnit is one work unit of the phased native read (CHAOS-7271): its
+// placement in a project, optionally also in an unrequested one (spanning), its
+// multi-placed flag and its values.
+type nativePhasedUnit struct {
+	id, project        string
+	other              bool
+	multi              uint8
+	effort, fd, op, bg float64
+}
+
+// nativeMixUnitsFor builds the units of one project whose phased read
+// aggregates to: work units, effort units (effort 1 each; the theme totals fd and
+// op and the bugfix share sit on the first), spanning units and multi-placed units.
+func nativeMixUnitsFor(project string, work, effortN, spanning, multi int, fd, op, bugfix float64) []nativePhasedUnit {
+	units := make([]nativePhasedUnit, 0, work)
+	for i := 0; i < work; i++ {
+		u := nativePhasedUnit{id: fmt.Sprintf("%s-u%d", project, i), project: project}
+		if i < effortN {
+			u.effort = 1
+		}
+		if i == 0 && effortN > 0 {
+			u.fd, u.op, u.bg = fd, op, bugfix
+		}
+		u.other = i < spanning
+		if i < multi {
+			u.multi = 1
+		}
+		units = append(units, u)
+	}
+	return units
+}
+
+// nativeMixUnits is the default project: 9 work units, effortUnits of them with
+// effort, feature_delivery 6, operational 4, bugfix 1, 2 spanning, 3 multi-placed.
+func nativeMixUnits(project string, effortUnits int) []nativePhasedUnit {
+	return nativeMixUnitsFor(project, 9, effortUnits, 2, 3, 6, 4, 1)
+}
+
+// nativePhasedTables answers the four statements of the phased native read.
+func nativePhasedTables(groups ...[]nativePhasedUnit) []fakeTable {
+	var ids, pUnit, pProvider, pProject []string
+	var pMulti []uint8
+	var effort, fd, op, zero, bugfix []float64
+	var versions []int64
+	for _, units := range groups {
+		for _, u := range units {
+			ids = append(ids, u.id)
+			versions = append(versions, 1)
+			effort, fd, op, zero, bugfix = append(effort, u.effort), append(fd, u.fd), append(op, u.op), append(zero, 0.0), append(bugfix, u.bg)
+			pUnit, pProvider, pProject, pMulti = append(pUnit, u.id), append(pProvider, "linear"), append(pProject, u.project), append(pMulti, u.multi)
+			if u.other {
+				pUnit, pProvider, pProject, pMulti = append(pUnit, u.id), append(pProvider, "linear"), append(pProject, "zz-unrequested"), append(pMulti, 0)
+			}
+		}
+	}
+	return []fakeTable{
+		{match: "AS unit_ids", rows: [][]any{{ids, versions}}},
+		{match: "groupArray(multi_placed)", rows: [][]any{{pUnit, pProvider, pProject, pMulti}}},
+		{match: "groupArray(theme_feature_delivery)", rows: [][]any{{ids, effort, fd, op, zero, zero, zero}}},
+		{match: "groupArray(bugfix_share)", rows: [][]any{{ids, bugfix}}},
+	}
 }
 
 func readNativeMix(t *testing.T, client *fakeClient, projects ...string) (contextfabric.FactProviderResult, error) {
@@ -30,7 +89,7 @@ func readNativeMix(t *testing.T, client *fakeClient, projects ...string) (contex
 
 func TestProjectNativeThemeMixFromScannedRow(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "AS project_count", rows: [][]any{nativeMixRow("a", 7)}}}}
+	client := &fakeClient{tables: nativePhasedTables(nativeMixUnits("a", 7))}
 	result, err := readNativeMix(t, client, "a")
 	if err != nil {
 		t.Fatalf("ReadFacts: %v", err)
@@ -58,9 +117,9 @@ func TestProjectNativeThemeMixFromScannedRow(t *testing.T) {
 
 func TestProjectNativeThemeMixIgnoresARowWithNoEffortOrNoWeight(t *testing.T) {
 	t.Parallel()
-	noEffort := []any{"linear:a", 6.0, 4.0, 0.0, 0.0, 0.0, 1.0, uint64(9), uint64(0), uint64(2), uint64(0)}
-	noWeight := []any{"linear:b", 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, uint64(3), uint64(3), uint64(0), uint64(0)}
-	client := &fakeClient{tables: []fakeTable{{match: "AS project_count", rows: [][]any{noEffort, noWeight}}}}
+	noEffort := nativeMixUnitsFor("a", 9, 0, 2, 0, 6, 4, 1)
+	noWeight := nativeMixUnitsFor("b", 3, 3, 0, 0, 0, 0, 0)
+	client := &fakeClient{tables: nativePhasedTables(noEffort, noWeight)}
 	result, err := readNativeMix(t, client, "a", "b")
 	if err != nil {
 		t.Fatalf("ReadFacts: %v", err)
@@ -72,13 +131,15 @@ func TestProjectNativeThemeMixIgnoresARowWithNoEffortOrNoWeight(t *testing.T) {
 
 func TestProjectNativeThemeMixIsBoundToTheOrganizationAndRequestedProjects(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "AS project_count", rows: nil}}}
+	client := &fakeClient{tables: nativePhasedTables(nativeMixUnits("a", 1))}
 	if _, err := readNativeMix(t, client, "a", "b"); err != nil {
 		t.Fatalf("ReadFacts: %v", err)
 	}
+	// Every phase of the native read carries the organisation and the requested
+	// projects; the placement is the statement that selects them.
 	var native *capturedQuery
 	for i := range client.queries {
-		if strings.Contains(client.queries[i].statement, "AS project_count") {
+		if strings.Contains(client.queries[i].statement, "groupArray(project_provider)") {
 			native = &client.queries[i]
 		}
 	}
@@ -103,14 +164,14 @@ func TestProjectNativeThemeMixIsBoundToTheOrganizationAndRequestedProjects(t *te
 func TestProjectNativeThemeMixProbeRowIsEvidenceOfTruncationNeverServed(t *testing.T) {
 	t.Parallel()
 	const limit = 200
-	rows := make([][]any, 0, limit+1)
+	var groups [][]nativePhasedUnit
 	projects := make([]string, 0, limit+1)
 	for i := 0; i <= limit; i++ {
 		project := fmt.Sprintf("p%03d", i)
 		projects = append(projects, project)
-		rows = append(rows, nativeMixRow(project, 1))
+		groups = append(groups, nativeMixUnits(project, 1))
 	}
-	client := &fakeClient{tables: []fakeTable{{match: "AS project_count", rows: rows}}}
+	client := &fakeClient{tables: nativePhasedTables(groups...)}
 	result, err := readNativeMix(t, client, projects...)
 	if err != nil {
 		t.Fatalf("ReadFacts: %v", err)
@@ -125,7 +186,9 @@ func TestProjectNativeThemeMixProbeRowIsEvidenceOfTruncationNeverServed(t *testi
 
 func TestProjectNativeThemeMixReadFailureIsReported(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "AS project_count", err: errors.New("boom")}}}
+	tables := nativePhasedTables(nativeMixUnits("a", 1))
+	tables[1] = fakeTable{match: "groupArray(multi_placed)", err: errors.New("boom")} // the placement phase fails
+	client := &fakeClient{tables: tables}
 	if _, err := readNativeMix(t, client, "a"); err == nil || !strings.Contains(err.Error(), "query project native theme mix") {
 		t.Fatalf("err = %v, want the native read named", err)
 	}
@@ -135,8 +198,7 @@ func TestProjectNativeThemeMixReadFailureIsReported(t *testing.T) {
 // carrying only the multi-placed count; one with neither serves nothing.
 func TestProjectNativeThemeMixDisclosesMultiPlacedUnitsWithoutAMix(t *testing.T) {
 	t.Parallel()
-	onlyMultiPlaced := []any{"linear:a", 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, uint64(3), uint64(0), uint64(0), uint64(2)}
-	client := &fakeClient{tables: []fakeTable{{match: "AS project_count", rows: [][]any{onlyMultiPlaced}}}}
+	client := &fakeClient{tables: nativePhasedTables(nativeMixUnitsFor("a", 3, 0, 0, 2, 0, 0, 0))}
 	result, err := readNativeMix(t, client, "a")
 	if err != nil {
 		t.Fatalf("ReadFacts: %v", err)

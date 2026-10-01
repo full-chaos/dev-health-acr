@@ -68,3 +68,48 @@ func TestProjectMixStatementsReadWorkUnitInvestmentsOnce(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-7271: each phased project-mix statement names work_unit_investments
+// once and reads ONE wide column group: structural_evidence_json, the theme map
+// or the subcategory map, never two of them. A phase that reads two brings back
+// the whole-table statement this change split (the byte guard is
+// chaos7257_project_theme_mix_read_bytes_integration_test.go).
+func TestPhasedProjectMixStatementsReadOneWideColumnGroupEach(t *testing.T) {
+	t.Parallel()
+	start := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	wide := []string{"structural_evidence_json", "theme_distribution_json", "subcategory_distribution_json"}
+	for boundName, bound := range map[string]factTimeBound{
+		"current axis": {},
+		"range":        {active: true, hasStart: true, start: start, end: end},
+	} {
+		for name, c := range map[string]struct {
+			statement string
+			wide      string // the one wide column the phase reads; "" = none
+		}{
+			"scope":            {projectMixScopeStatement(bound), ""},
+			"roll-up themes":   {projectRollupRepoThemesStatement(), "theme_distribution_json"},
+			"roll-up bugfix":   {projectRollupRepoBugfixStatement(), "subcategory_distribution_json"},
+			"roll-up evidence": {projectRollupEvidenceArmStatement(), "structural_evidence_json"},
+			"native placement": {projectNativePlacementStatement(), "structural_evidence_json"},
+			"native themes":    {projectNativeThemeValuesStatement(), "theme_distribution_json"},
+			"native bugfix":    {projectNativeBugfixValuesStatement(), "subcategory_distribution_json"},
+		} {
+			if got := strings.Count(c.statement, "FROM work_unit_investments"); got != 1 {
+				t.Errorf("%s / %s: reads work_unit_investments %d times, want 1", name, boundName, got)
+			}
+			for _, column := range wide {
+				named := strings.Contains(c.statement, "argMax("+column) || strings.Contains(c.statement, "("+column+",")
+				if named != (column == c.wide) {
+					t.Errorf("%s / %s: reads %s = %v, want %v (one wide column group per phase)", name, boundName, column, named, column == c.wide)
+				}
+			}
+			if name != "scope" && !strings.Contains(c.statement, "(work_unit_id, toUnixTimestamp64Milli(computed_at)) IN (") {
+				t.Errorf("%s / %s: phase is not pinned to the exact (unit, version) pairs of the scope", name, boundName)
+			}
+			if strings.HasPrefix(name, "roll-up") && (strings.Contains(c.statement, "team_project_ownership") || !strings.Contains(c.statement, "{link_json:String}")) {
+				t.Errorf("%s / %s: phase re-derives ownership instead of reading the link table the scope captured", name, boundName)
+			}
+		}
+	}
+}

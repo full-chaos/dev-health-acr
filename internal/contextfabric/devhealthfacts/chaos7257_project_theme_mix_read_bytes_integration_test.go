@@ -38,6 +38,22 @@ import (
 	"github.com/full-chaos/dev-health-go/readers"
 )
 
+// CHAOS-7271: phased project mix reads. chaos7271RollupStatements is the roll-up
+// mix's statement count (scope, repo themes, repo bugfix, evidence arm); the native mix adds
+// scope, placement and unit values.
+const (
+	chaos7271RollupStatements  = 4
+	chaos7271PhasedStatements  = 8
+	chaos7271DigestStatements  = 4
+	chaos7271MainRollupBytes1x = 39384274
+	chaos7271MainNativeBytes1x = 39687121
+	// The phases re-read the narrow columns (work_unit_id, computed_at, repo_id)
+	// once each, so a mix reads about a tenth more than the one statement did at
+	// 1x (measured: +11.9% roll-up, +9.7% native); the byte cost of not reading
+	// every wide column in one statement.
+	chaos7271MaxMixGrowth = 1.15
+)
+
 // chaos7257ProdMaxBytesToRead is ACR_CLICKHOUSE_MAX_BYTES_TO_READ on prod (the
 // acr-api startup log field clickhouse_max_bytes_to_read = 67108864). It is
 // the budget the production statement must fit in; the fix never raises it.
@@ -46,7 +62,8 @@ const chaos7257ProdMaxBytesToRead uint64 = 67108864
 // Shape of the prod table the fixture mimics (rows, not bytes: bytes come out
 // of the row widths below and are measured, not asserted).
 const (
-	chaos7257Units       = 20000 // prod: 20,780 work_unit_investments rows
+	chaos7257Units       = 20000              // prod: 20,780 work_unit_investments rows
+	chaos7271GrowthUnits = 2 * chaos7257Units // CHAOS-7271: the table at twice the prod row count
 	chaos7257Repos       = 20
 	chaos7257Projects    = 5 // the five prod project subjects that failed 5 of 5
 	chaos7257NullRepoMod = 7 // every 7th unit has no repo_id: reached only by the evidence vote
@@ -81,7 +98,7 @@ func chaos7257Subcategories(i int) map[string]float64 {
 
 // seedCHAOS7257ProdShape seeds ownership, work items, membership and a
 // prod-shaped work_unit_investments table for one org.
-func seedCHAOS7257ProdShape(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID string) chaos7257Shape {
+func seedCHAOS7257ProdShape(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID string, units int) chaos7257Shape {
 	t.Helper()
 	shape := chaos7257Shape{orgID: orgID, at: ts(2026, 9, 20, 0, 0, 0)}
 	at := shape.at
@@ -133,7 +150,7 @@ func seedCHAOS7257ProdShape(t *testing.T, ctx context.Context, direct clickhouse
 		t.Fatalf("prepare work_unit_membership: %v", err)
 	}
 	themeNames := []string{"feature_delivery", "operational", "maintenance", "quality", "risk"}
-	for i := 0; i < chaos7257Units; i++ {
+	for i := 0; i < units; i++ {
 		unit := repoUUID(fmt.Sprintf("wu-%d", i))
 		var repoID any
 		nullRepo := i%chaos7257NullRepoMod == 3
@@ -393,6 +410,19 @@ WHERE database = 'system' AND table = 'query_log' AND expr = 'event_time_microse
 
 func TestProjectThemeMixFitsTheClickHouseByteBudgetAgainstRealClickHouse(t *testing.T) {
 	t.Parallel()
+	checkProjectThemeMixByteBudget(t, chaos7257Units, false)
+}
+
+// CHAOS-7271: the same read on a table of twice the prod row count. Every
+// statement of the read must stay under half of max_bytes_to_read: the cap is
+// where a read fails, and prod's table is growing towards it.
+func TestProjectThemeMixStaysUnderHalfTheByteBudgetAtTwiceTheTableAgainstRealClickHouse(t *testing.T) {
+	t.Parallel()
+	checkProjectThemeMixByteBudget(t, chaos7271GrowthUnits, true)
+}
+
+func checkProjectThemeMixByteBudget(t *testing.T, units int, growth bool) {
+	t.Helper()
 	ctx := context.Background()
 	query, direct := newScopedCHAOS7257Client(t, func(o *runtimeclickhouse.Options) {
 		cap := chaos7257ProdMaxBytesToRead
@@ -402,7 +432,7 @@ func TestProjectThemeMixFitsTheClickHouseByteBudgetAgainstRealClickHouse(t *test
 	})
 	createCHAOS7257Tables(t, ctx, direct)
 	const orgID = "org-7257-bytes"
-	shape := seedCHAOS7257ProdShape(t, ctx, direct, orgID)
+	shape := seedCHAOS7257ProdShape(t, ctx, direct, orgID, units)
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
 
 	var table uint64
@@ -446,28 +476,75 @@ func TestProjectThemeMixFitsTheClickHouseByteBudgetAgainstRealClickHouse(t *test
 			t.Fatalf("project %s: theme_feature_delivery = %#v, want a number", project, value)
 		}
 	}
-	// One pass reads the table once plus the membership scope tables: this
-	// fixture measures 1.29x the table. Any second read of a wide column pushes
-	// it past 1.5x (structural_evidence_json is 46% of the table, subcategory
-	// 27%), and the old statements read the table three times. Passing under the
-	// cap alone would not do: the cap is where a read FAILS, not the target, and
-	// prod's table is growing towards it.
-	const maxFactor = 1.5
+	// CHAOS-7271: the read is phased (investment_project_mix_phased.go): per mix
+	// a scope statement, then one statement per column group. No statement
+	// reads every wide column, and the phases of one mix read at most
+	// chaos7271MaxMixGrowth times what the one statement of that mix read on main.
+	if len(statements) != chaos7271PhasedStatements {
+		t.Fatalf("project investment read logged %d statements over work_unit_investments, want %d (roll-up: scope, repo arm, evidence arm; native: scope, placement, theme values, bugfix values)",
+			len(statements), chaos7271PhasedStatements)
+	}
+	var rollupSum, nativeSum uint64
 	for i, s := range statements {
 		if s.Type != "QueryFinish" {
 			t.Fatalf("statement %d ended %s code %d, want QueryFinish", i, s.Type, s.Code)
 		}
-		if float64(s.ReadBytes) > maxFactor*float64(table) {
-			t.Errorf("statement %d read %d bytes = %.2fx the %d-byte table, want <= %.2fx (the latest-row selection must be one pass)",
-				i, s.ReadBytes, float64(s.ReadBytes)/float64(table), table, maxFactor)
+		if s.ReadBytes >= chaos7257ProdMaxBytesToRead/2 {
+			t.Errorf("statement %d read %d bytes = %.1f%% of the %d-byte cap, want under 50%%", i, s.ReadBytes, 100*float64(s.ReadBytes)/float64(chaos7257ProdMaxBytesToRead), chaos7257ProdMaxBytesToRead)
 		}
-		if s.ReadBytes >= chaos7257ProdMaxBytesToRead {
-			t.Errorf("statement %d read %d bytes, at or over the %d-byte cap", i, s.ReadBytes, chaos7257ProdMaxBytesToRead)
+		if i < chaos7271RollupStatements {
+			rollupSum += s.ReadBytes
+		} else {
+			nativeSum += s.ReadBytes
 		}
 	}
-	// The project read runs the roll-up and the native mix: two statements.
-	if len(statements) != 2 {
-		t.Errorf("project investment read logged %d statements over work_unit_investments, want 2 (roll-up, native mix)", len(statements))
+	if !growth {
+		// main 3307db10 read 39,384,274 and 39,687,121 bytes for the one
+		// statement of each mix on this fixture (measured).
+		if float64(rollupSum) > chaos7271MaxMixGrowth*chaos7271MainRollupBytes1x {
+			t.Errorf("roll-up phases read %d bytes in total, more than %.2fx the %d the single statement read on main", rollupSum, chaos7271MaxMixGrowth, chaos7271MainRollupBytes1x)
+		}
+		if float64(nativeSum) > chaos7271MaxMixGrowth*chaos7271MainNativeBytes1x {
+			t.Errorf("native phases read %d bytes in total, more than %.2fx the %d the single statement read on main", nativeSum, chaos7271MaxMixGrowth, chaos7271MainNativeBytes1x)
+		}
+	}
+	t.Logf("per-mix totals: roll-up %d bytes, native %d bytes", rollupSum, nativeSum)
+
+	// The input-digest statements (two per mix: the baseline and the closing
+	// digests) read the input tables only, never work_unit_investments, and each
+	// stays under half of the cap as well.
+	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
+		t.Fatalf("flush logs (measurement did not happen): %v", err)
+	}
+	digestRows, err := direct.Query(ctx, `SELECT read_bytes, has(tables, concat(currentDatabase(), '.work_unit_investments')), substring(query, 1, 160) FROM system.query_log
+WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select' AND position(query, 'WITH (SELECT (count(), sum(cityHash64(') > 0
+  AND position(query, 'system.query_log') = 0 AND current_database = currentDatabase()`, mark)
+	if err != nil {
+		t.Fatalf("read input-digest statements from query_log: %v", err)
+	}
+	defer digestRows.Close()
+	digests := 0
+	for digestRows.Next() {
+		var readBytes uint64
+		var touchesInvestments bool
+		var head string
+		if err := digestRows.Scan(&readBytes, &touchesInvestments, &head); err != nil {
+			t.Fatalf("scan input-digest statement: %v", err)
+		}
+		digests++
+		if touchesInvestments {
+			t.Errorf("an input-digest statement read work_unit_investments")
+		}
+		if readBytes >= chaos7257ProdMaxBytesToRead/2 {
+			t.Errorf("an input-digest statement read %d bytes, at or over half of the %d-byte cap", readBytes, chaos7257ProdMaxBytesToRead)
+		}
+		t.Logf("input-digest statement: read_bytes=%d (%.2f MiB): %s", readBytes, float64(readBytes)/(1<<20), strings.ReplaceAll(head, "\n", " "))
+	}
+	if err := digestRows.Err(); err != nil {
+		t.Fatalf("read input-digest statements (measurement did not happen): %v", err)
+	}
+	if digests != chaos7271DigestStatements {
+		t.Fatalf("logged %d input-digest statements, want %d (baseline and closing, for each of the two mixes)", digests, chaos7271DigestStatements)
 	}
 
 	// The fixture must reproduce the incident, or the assertions above prove

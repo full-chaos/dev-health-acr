@@ -73,13 +73,28 @@ func runRollupStatement(t *testing.T, ctx context.Context, query *runtimeclickho
 }
 
 // rollupRowsDiffer reports the first difference between two row sets (nil when
-// identical). Counts compare exactly; floats compare to a relative 1e-9, since a
+// identical). Counts compare exactly; floats compare to a relative 1e-12, since a
 // sum over the same units in a different order is not bit-identical.
+// runRollupPhased is the roll-up read production runs (CHAOS-7271: phased).
+func runRollupPhased(t *testing.T, ctx context.Context, query *runtimeclickhouse.Client, orgID string, ids []string, w devhealthfacts.ProjectMixWindow) []rollupRow {
+	t.Helper()
+	rows, err := devhealthfacts.RunProjectRollupMix(ctx, query, orgID, ids, w)
+	if err != nil {
+		t.Fatalf("phased roll-up: %v", err)
+	}
+	var out []rollupRow
+	for _, r := range rows {
+		out = append(out, rollupRow{Key: r.ProjectKey, Themes: [5]float64{r.FeatureDelivery, r.Operational, r.Maintenance, r.Quality, r.Risk},
+			Bugfix: r.BugfixWeighted, WorkUnits: r.WorkUnits, Repos: r.Repos, Teams: r.Teams, Excluded: r.ExcludedNoRepoLink})
+	}
+	return out
+}
+
 func rollupRowsDiffer(want, got []rollupRow) error {
 	if len(want) != len(got) {
 		return fmt.Errorf("row count: oracle %d, new %d\noracle %+v\nnew    %+v", len(want), len(got), want, got)
 	}
-	near := func(a, b float64) bool { return math.Abs(a-b) <= 1e-9*math.Max(1, math.Max(math.Abs(a), math.Abs(b))) }
+	near := func(a, b float64) bool { return math.Abs(a-b) <= 1e-12*math.Max(1, math.Max(math.Abs(a), math.Abs(b))) }
 	for i := range want {
 		w, g := want[i], got[i]
 		if w.Key != g.Key || w.WorkUnits != g.WorkUnits || w.Repos != g.Repos || w.Teams != g.Teams || w.Excluded != g.Excluded || !near(w.Bugfix, g.Bugfix) {
@@ -353,7 +368,7 @@ func TestProjectRollupSinglePassMatchesTheMultiReferenceOracleAgainstRealClickHo
 	for _, tc := range windows {
 		t.Run(tc.name, func(t *testing.T) {
 			oracle := runRollupStatement(t, ctx, query, "OracleProjectRollup", devhealthfacts.OracleProjectRollupStatement(tc.window), orgID, ids, tc.window)
-			got := runRollupStatement(t, ctx, query, "ProjectRollup", devhealthfacts.ProjectRollupStatement(tc.window), orgID, ids, tc.window)
+			got := runRollupPhased(t, ctx, query, orgID, ids, tc.window)
 			keys := make([]string, 0, len(oracle))
 			for _, r := range oracle {
 				keys = append(keys, r.Key)
