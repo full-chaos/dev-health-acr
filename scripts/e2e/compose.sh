@@ -450,7 +450,7 @@ enable_go_api_routing() {
     printf '%s\n' "$output" | redact_log | tail -60 >&2
     die "Go API routing enablement failed for: ${operations}"
   fi
-  printf '%s\n' "$output" | redact_log | grep -E 'go-api-prove:|enabled|seeded|prove exited' | tail -20 >&2 || true
+  printf '%s\n' "$output" | redact_log | grep -E "go-api-prove: (edge_mode|prover_build|attempted|exit_cause)|edge access token mints|envelope mints|go-api-prove: +($(printf '%s' "$operations" | tr ',' '|')) |go-api-routing: enabled|go_api_routing.enabled|prove exited" | cut -c1-260 >&2 || true
   status="$(compose run --rm --no-deps -T -e "ORG_ID=$org_id" go-api-tools bash -ec 'GO_API_ROUTING_BEARER="$(dho mint envelope -org "$ORG_ID")"; export GO_API_ROUTING_BEARER; dho goapi routing status -json -registry-url http://query-api:8090/registry' 2>/dev/null)" \
     || die 'Go API routing status could not be read'
   printf '%s' "$status" | jq -e --arg ops "$operations" '[.operations[] | select(.operation as $o | ($ops | split(",") | index($o)))] as $rows | ($rows | length) == ($ops | split(",") | length) and all($rows[]; .mode == "primary" and .reachable == true)' >/dev/null \
