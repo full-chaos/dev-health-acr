@@ -523,30 +523,41 @@ func (c *Coordinator) sourceVersionsKey() string {
 
 // noteRefusedBuild counts one more refused build and reports the count and
 // whether the cap is reached. A changed version set restarts the count.
-func (c *Coordinator) noteRefusedBuild(orgID string) (count int, capped bool) {
+func (c *Coordinator) noteRefusedBuild(orgID string) (count int, capped, versionsChanged bool) {
 	key := c.sourceVersionsKey()
 	c.refusedMu.Lock()
 	defer c.refusedMu.Unlock()
 	st := c.refusedBuilds[orgID]
 	if st == nil || st.versions != key {
+		versionsChanged = st != nil
 		st = &refusedBuildState{versions: key}
 		c.refusedBuilds[orgID] = st
 	}
 	st.count++
-	return st.count, c.maxRefusedBuilds > 0 && st.count >= c.maxRefusedBuilds
+	return st.count, c.maxRefusedBuilds > 0 && st.count >= c.maxRefusedBuilds, versionsChanged
 }
 
 // refusedBuildsCapped reports whether recovery must not open another build:
-// the cap was reached under the version set this binary reports now.
-func (c *Coordinator) refusedBuildsCapped(orgID string) bool {
+// the cap was reached under the version set this binary reports now. When the
+// stored state belongs to a different version set it is dropped here, at the
+// observation, so a later return to the old set starts from zero; released
+// reports that drop so the caller can say why recovery proceeds.
+func (c *Coordinator) refusedBuildsCapped(orgID string) (capped, released bool) {
 	if c.maxRefusedBuilds <= 0 {
-		return false
+		return false, false
 	}
 	key := c.sourceVersionsKey()
 	c.refusedMu.Lock()
 	defer c.refusedMu.Unlock()
 	st := c.refusedBuilds[orgID]
-	return st != nil && st.versions == key && st.count >= c.maxRefusedBuilds
+	if st == nil {
+		return false, false
+	}
+	if st.versions != key {
+		delete(c.refusedBuilds, orgID)
+		return false, true
+	}
+	return st.count >= c.maxRefusedBuilds, false
 }
 
 func (c *Coordinator) clearRefusedBuilds(orgID string) {
@@ -2658,7 +2669,11 @@ func (c *Coordinator) abortRefusedBuild(scope *orgScope, orgID string, targetEpo
 			"recorded_source_version", contextfabric.SanitizeLogAttr(refusal.RecordedSourceVersion),
 			"current_source_version", contextfabric.SanitizeLogAttr(refusal.CurrentSourceVersion))
 	}
-	count, capped := c.noteRefusedBuild(orgID)
+	count, capped, versionsChanged := c.noteRefusedBuild(orgID)
+	if versionsChanged {
+		c.logger.WarnContext(scope.logCtx(), "context_fabric: refused build count restarted because the source version set changed",
+			"org_id", contextfabric.SanitizeLogAttr(orgID))
+	}
 	c.logger.WarnContext(scope.logCtx(), "context_fabric: refused build count for organization",
 		"org_id", contextfabric.SanitizeLogAttr(orgID), "refused_builds", count, "max_refused_builds", c.maxRefusedBuilds)
 	if capped {
@@ -3065,7 +3080,12 @@ func (c *Coordinator) recoverFromDivergenceLifecycle(scope *orgScope, orgID stri
 		return
 	}
 	hash := orgIDHash(orgID)
-	if c.refusedBuildsCapped(orgID) {
+	capped, released := c.refusedBuildsCapped(orgID)
+	if released {
+		c.logger.WarnContext(scope.logCtx(), "context_fabric: refused build count released because the source version set changed; automatic recovery proceeds",
+			"org_id_hash", contextfabric.SanitizeLogAttr(hash))
+	}
+	if capped {
 		scope.refusedCapped = true
 		scope.record(scope.stats.recordDivergenceRecovered)
 		c.logger.WarnContext(scope.logCtx(), "context_fabric: automatic recovery withheld; the refused build cap is reached for this organization's source versions",

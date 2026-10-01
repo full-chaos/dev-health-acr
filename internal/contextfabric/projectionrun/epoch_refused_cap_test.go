@@ -13,6 +13,7 @@ import (
 )
 
 const (
+	refusedReleasedWarn = "context_fabric: refused build count released because the source version set changed"
 	refusedCountWarn = "context_fabric: refused build count for organization"
 	refusedCapWarn   = "context_fabric: refused build cap reached"
 	recoveryHeldWarn = "context_fabric: automatic recovery withheld"
@@ -155,5 +156,23 @@ func TestRefusedBuildCap(t *testing.T) {
 		rig.ticks(ctx, 30)
 		_, aborts, _ = rig.telemetry.snapshot()
 		require.Len(t, aborts, 5, "two refusals under the first version set, then a full cap under the second")
+	})
+
+	t.Run("a_version_change_observed_by_recovery_drops_the_cap_for_good", func(t *testing.T) {
+		rig := newCappedRig(t, ctx, newAbortRig(t, ctx, db, "org-cap-observed"), 2)
+		rig.ticks(ctx, 20)
+		require.Equal(t, int64(2), rig.row().LastAllocatedEpoch, "precondition: capped under the first version set")
+
+		other := "devhealth.other.v99"
+		rig.source.other.Store(&other)
+		rig.buffer.Reset()
+		rig.next.Tick(ctx)
+		require.Len(t, logRecords(t, rig.buffer, refusedReleasedWarn), 1, "the release names its reason")
+		require.Equal(t, contextfabric.LifecycleStatusBuilding, rig.row().Status, "recovery opened a build under the changed set")
+
+		rig.source.other.Store(nil)
+		rig.ticks(ctx, 1)
+		summary := rig.tick(ctx)
+		require.Equal(t, float64(0), summaryNumber(t, summary, "orgs_build_refused_capped"), "returning to the old set before any refusal does not revive the old cap")
 	})
 }
