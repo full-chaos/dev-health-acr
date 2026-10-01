@@ -2903,6 +2903,7 @@ var All = []Event{
 	MCPHTTPReadiness,
 	OAuthStep,
 	OTelExport,
+	GraphCountCheckFinished,
 }
 
 // CountPopulationScope (CHAOS-5775) is the Info line for whether a served
@@ -3200,5 +3201,35 @@ var MCPHostedContextScope = Event{
 		{Key: "has_branch", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "has_commit", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "file_count", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
+// GraphCountCheckFinished is the Info line for one finished graph count
+// check of one organization: its outcome (completed, cancelled by the check timeout or shutdown, or failed with at least one count read error), how many sources and kinds it compared, how many
+// confirmed graph_below_source gaps it found and how many count reads failed.
+// The Warn lines the check emits for a gap or a failed read stay as they are;
+// this line is what makes a check that ran and found nothing observable.
+var GraphCountCheckFinished = Event{
+	ID:                 "projectionrun.graph_count_check_finished",
+	Msg:                "context_fabric: projection graph count check finished",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerPass,
+	Attribution:        []string{"org_id_hash", "instance"},
+	BoundedAggregation: "at most one line per organization per projector instance per check interval (default 10 minutes), only when the check actually ran; an organization not due, a negative interval or a backend without counts emits none.",
+	Fields: []Field{
+		{Key: "org_id_hash", Type: FieldString, Presence: PresenceRequired},
+		// instance is a random identifier of the projector process: replicas
+		// each count their own passes, so a pass is unique per (org, instance).
+		{Key: "instance", Type: FieldString, Presence: PresenceRequired},
+		// pass is the organization's own 1-based check sequence in this process:
+		// each interval's check is a distinct pass, so recurring checks of one
+		// organization are told apart and a duplicate sequence is a defect.
+		{Key: "pass", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"completed", "cancelled", "failed"}},
+		{Key: "sources_checked", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "kinds_compared", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "gap_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "error_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "duration_ms", Type: FieldInt, Presence: PresenceRequired},
 	},
 }

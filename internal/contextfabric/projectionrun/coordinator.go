@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 )
 
 // SourcePair binds a configured ProjectionSource to the Source name it
@@ -151,6 +152,20 @@ func (o SlogObserver) ObserveProjectionOutcome(outcome Outcome) {
 	}
 	logger.Debug("context_fabric: projection tick completed", attrs...)
 }
+
+// ObserveGraphCountCheck logs the Info line of one completed graph count check.
+// The below-source and failed-read Warn lines stay with the check itself.
+func (o SlogObserver) ObserveGraphCountCheck(check GraphCountCheck) {
+	logger := o.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	fields := eventspec.NewGraphCountCheckFinishedFields(orgIDHash(check.OrgID), check.Instance, check.Pass, check.Outcome, check.SourcesChecked, check.KindsCompared, check.Gaps, check.Errors, int(check.Duration.Milliseconds()))
+	logger.Info(eventspec.GraphCountCheckFinished.Msg, fields.SlogArgs()...)
+}
+
+// ObserveGraphBelowSource is a no-op: the check logs the gap itself.
+func (o SlogObserver) ObserveGraphBelowSource(GraphBelowSource) {}
 
 // ObserveProjectionDrain logs CHAOS-3826's per-pair drain summary. Routine
 // pairs (the overwhelming common case: nothing new, or exactly one new
