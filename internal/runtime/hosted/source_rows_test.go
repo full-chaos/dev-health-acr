@@ -89,3 +89,13 @@ func TestBuildSourceRowsThreadsTheSubjectGate(t *testing.T) {
 		t.Fatalf("without a gate: %+v", decision)
 	}
 }
+
+// The production composition always carries the repo-less work item decision:
+// without it a Linear work item (zero repository UUID) is decided by its empty
+// slug and never served.
+func TestBuildSourceRowsComposesTheRepoLessAdmitter(t *testing.T) {
+	resolver, ok := buildSourceRows(noQueryClient{}, nil, nil, nil, nil).(*sourcerow.Resolver)
+	if !ok || !resolver.HasRepoLessAdmitter() {
+		t.Fatalf("buildSourceRows composed %T without the repo-less admitter", resolver)
+	}
+}

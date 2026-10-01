@@ -1975,16 +1975,7 @@ func authorizeWorkItems(principal storage.Principal, candidates []workItemCandid
 	counts := contextfabric.FactScopeExpansionCounts{}
 
 	for _, candidate := range candidates {
-		admitted := authorizedForRepository(principal, candidate.authorizationSlug)
-		derived := false
-		if !admitted && candidate.repoLess && workItemDerivedPath(candidate.authorizationPaths) {
-			for _, repository := range candidate.authorizationRepositories {
-				if authorizedForRepository(principal, repository) {
-					admitted, derived = true, true
-					break
-				}
-			}
-		}
+		admitted, derived := admitsWorkItem(principal, candidate.authorizationSlug, candidate.repoLess, candidate.authorizationPaths, candidate.authorizationRepositories)
 		if !admitted {
 			// The mask should already have caught this. Reaching here means
 			// the two gates DISAGREE, which is a defect in the statement --
@@ -2160,4 +2151,23 @@ INNER JOIN (
 -- provider is half of that name.
 WHERE w.org_id = {org_id:String} AND p.key_resolution_count = 1 AND concat(p.provider, '`+projectOriginKeySeparator+`', p.id) IN {project_ids:Array(String)}
 GROUP BY toString(w.repo_id), w.work_item_id, ifNull(r.repo, '')`, limit)
+}
+
+// admitsWorkItem is the ONE Go-side admission rule for a work item, shared by
+// the scope expander and the source-row resolver: the row's own
+// authorization slug (the resolved repository slug, or the no-repository /
+// orphaned sentinel) first, then, for a repo-less item only, the granted
+// repositories its project-ownership or pull-request-link path returned.
+func admitsWorkItem(principal storage.Principal, authorizationSlug string, repoLess bool, paths, repositories []string) (admitted, derived bool) {
+	if authorizedForRepository(principal, authorizationSlug) {
+		return true, false
+	}
+	if repoLess && workItemDerivedPath(paths) {
+		for _, repository := range repositories {
+			if authorizedForRepository(principal, repository) {
+				return true, true
+			}
+		}
+	}
+	return false, false
 }

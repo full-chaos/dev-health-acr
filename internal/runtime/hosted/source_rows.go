@@ -4,6 +4,7 @@ import (
 	"log/slog"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/sourcerow"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -37,5 +38,5 @@ func buildSourceRows(client contextpacket.ClickHouseQueryClient, assembly contex
 		}
 		return nil
 	}
-	return resolver
+	return resolver.WithRepoLessAdmitter(devhealthfacts.NewRepoLessWorkItemAdmitter(client))
 }

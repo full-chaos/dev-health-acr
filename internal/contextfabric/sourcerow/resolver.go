@@ -70,11 +70,66 @@ type Expander interface {
 	Expand(ctx context.Context, input contextpacket.EvidenceExpansionInput) (contractsv1.ExpandedEvidence, error)
 }
 
+// RepoLessAdmitter decides whether a caller may read a work item that carries
+// no repository (the zero repository UUID), by the same rule the scope
+// expander applies: *devhealthfacts.RepoLessWorkItemAdmitter.
+type RepoLessAdmitter interface {
+	AdmitsRepoLessWorkItem(ctx context.Context, principal storage.Principal, workItemID string) (bool, error)
+}
+
 // Resolver implements contextfabric.SourceRowResolver.
 type Resolver struct {
 	rows     Rows
 	expander Expander
 	gate     SubjectGate
+	repoLess RepoLessAdmitter
+}
+
+// WithRepoLessAdmitter sets the decision for a work item with no repository.
+// Without it such a scope is decided by its (empty) repository slug, as any
+// other scope is.
+func (r *Resolver) WithRepoLessAdmitter(admitter RepoLessAdmitter) *Resolver {
+	if !storage.IsNil(admitter) {
+		r.repoLess = admitter
+	}
+	return r
+}
+
+// HasRepoLessAdmitter reports whether the repo-less work item decision is
+// composed; the production wiring must have it.
+func (r *Resolver) HasRepoLessAdmitter() bool { return r.repoLess != nil }
+
+// zeroRepositoryID is the repository id of a work item the provider keeps in
+// no repository.
+const zeroRepositoryID = "00000000-0000-0000-0000-000000000000"
+
+// admitScopes keeps the scopes principal may read. A scope of the zero
+// repository holds repo-less work items: it has no repository slug, so the
+// work item (workItemID) is decided by the repo-less admitter. Every other
+// scope is decided by its slug.
+func (r *Resolver) admitScopes(ctx context.Context, principal storage.Principal, scopes []contractsv1.ResolvedScope, workItemID string, decision *contextfabric.SourceRowDecision) ([]contractsv1.ResolvedScope, error) {
+	decision.Repositories += len(scopes)
+	kept := make([]contractsv1.ResolvedScope, 0, len(scopes))
+	for _, scope := range scopes {
+		if strings.TrimSpace(scope.RepoID) == "" {
+			continue
+		}
+		if scope.RepoID == zeroRepositoryID && r.repoLess != nil {
+			ok, err := r.repoLess.AdmitsRepoLessWorkItem(ctx, principal, workItemID)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				kept = append(kept, scope)
+			}
+			continue
+		}
+		if admits(principal, scope.RepoSlug) {
+			kept = append(kept, scope)
+		}
+	}
+	decision.Admitted += len(kept)
+	return kept, nil
 }
 
 // New returns a resolver. rows and expander are required. gate may be nil
@@ -133,7 +188,11 @@ func (r *Resolver) ResolveSourceRow(ctx context.Context, principal storage.Princ
 		if entityType == string(contractsv1.ContextFabricEvidenceEntityWorkItem) {
 			read.TaskRef = rest
 		}
-		targets, err = r.repositoryTargets(ctx, principal, repoID, read, &decision)
+		workItemID := ""
+		if entityType == string(contractsv1.ContextFabricEvidenceEntityWorkItem) {
+			workItemID = rest
+		}
+		targets, err = r.repositoryTargets(ctx, principal, repoID, workItemID, read, &decision)
 	case contextfabric.SourceRowRouteRowRepository:
 		decision.Grammar = contextfabric.SourceRowGrammarRowAnchored
 		discovery, ok := rowDiscoveries[contractsv1.ContextFabricEvidenceEntityType(entityType)]
@@ -248,10 +307,22 @@ func admitted(principal storage.Principal, scopes []contractsv1.ResolvedScope, d
 // repositoryTargets looks the id's repository up and keeps it when the caller
 // may read it. Two repositories under one id cannot be told apart and are
 // refused.
-func (r *Resolver) repositoryTargets(ctx context.Context, principal storage.Principal, repoID string, read contextpacket.SourceRowRead, decision *contextfabric.SourceRowDecision) ([]target, error) {
+func (r *Resolver) repositoryTargets(ctx context.Context, principal storage.Principal, repoID, workItemID string, read contextpacket.SourceRowRead, decision *contextfabric.SourceRowDecision) ([]target, error) {
 	scopes, err := r.rows.RepositoryByID(ctx, principal.OrgID, repoID)
 	if err != nil {
 		return nil, err
+	}
+	if repoID == zeroRepositoryID && len(scopes) == 0 && workItemID != "" {
+		scopes = []contractsv1.ResolvedScope{{RepoID: zeroRepositoryID, Resolution: contractsv1.ScopeRepoFallback, FallbackReasons: []string{}}}
+		kept, err := r.admitScopes(ctx, principal, scopes, workItemID, decision)
+		if err != nil {
+			return nil, err
+		}
+		var targets []target
+		for _, scope := range kept {
+			targets = append(targets, target{scope: scope, read: read, grammar: decision.Grammar})
+		}
+		return targets, nil
 	}
 	if len(scopes) > 1 {
 		decision.Repositories += len(scopes)
@@ -380,7 +451,7 @@ func (r *Resolver) expand(ctx context.Context, entityType, entityID string, row 
 		structured[key] = value
 	}
 	structured["entity_type"] = entityType
-	if row.target.scope.RepoID != "" {
+	if row.target.scope.RepoID != "" && row.target.scope.RepoID != zeroRepositoryID {
 		structured["repository_id"] = row.target.scope.RepoID
 		structured["repository"] = row.target.scope.RepoSlug
 	}
@@ -671,15 +742,30 @@ func (r *Resolver) encodedTargets(ctx context.Context, principal storage.Princip
 			return nil, err
 		}
 	}
+	anchorWorkItem := ""
+	if !spec.anchorByID {
+		anchorWorkItem = values[spec.anchorSegment]
+	}
+	admittedAnchors, err := r.admitScopes(ctx, principal, anchors, anchorWorkItem, decision)
+	if err != nil {
+		return nil, err
+	}
 	readable := make([]contractsv1.ResolvedScope, 0, len(anchors))
-	for _, scope := range admitted(principal, anchors, decision) {
-		if strings.TrimSpace(scope.RepoSlug) != "" {
+	for _, scope := range admittedAnchors {
+		if strings.TrimSpace(scope.RepoSlug) != "" || (scope.RepoID == zeroRepositoryID && r.repoLess != nil) {
 			readable = append(readable, scope)
 		}
 	}
 	allowed := len(readable) > 0
 	for index, end := range spec.endpoints {
-		admittedEnds := admitted(principal, found[index], decision)
+		endWorkItem := ""
+		if end.discovery == contextpacket.SourceRowDiscoveryWorkItem {
+			endWorkItem = values[end.segment]
+		}
+		admittedEnds, err := r.admitScopes(ctx, principal, found[index], endWorkItem, decision)
+		if err != nil {
+			return nil, err
+		}
 		if len(found[index]) == 0 {
 			allowed = allowed && end.optional
 			continue
