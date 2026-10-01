@@ -175,3 +175,70 @@ func TestARefusedPriorHealthResultIsAFailedPriorReadNotAnUnknownPrior(t *testing
 		t.Fatalf("event = %+v, want PriorReadIssued=false, reason read_failed, one prior_read_failed", event)
 	}
 }
+
+// groupReadRefusingReader answers the group-rooted read through a real
+// registry, so a result that registry refuses reaches the engine exactly as
+// production hands it over.
+type groupReadRefusingReader struct {
+	inner    *groupReadRecorder
+	registry *FactCapabilityRegistry
+}
+
+func (r *groupReadRefusingReader) ReadFacts(ctx context.Context, principal storage.Principal, request CanonicalFactRequest) (CanonicalFactBundle, error) {
+	for _, subject := range request.Subjects {
+		if subject.Kind == SubjectTeam {
+			r.inner.requests = append(r.inner.requests, request)
+			return r.registry.ReadFacts(ctx, principal, request)
+		}
+	}
+	return r.inner.ReadFacts(ctx, principal, request)
+}
+
+// The group read is a second fact read over the groups. A kind whose result
+// the registry refuses there degrades that kind on the served document; the
+// group read itself is issued, is not refused, and the turn is answered.
+func TestARefusedKindInTheGroupReadDegradesThatKindNotTheGroupRead(t *testing.T) {
+	health := planCapability(FactHealth, "health", SubjectTeam)
+	health.RequiresEvidence = true
+	registry, err := NewFactCapabilityRegistry([]FactProvider{
+		subjectEchoProvider{capability: health},
+		subjectEchoProvider{capability: planCapability(FactWorkload, "workload", SubjectTeam)},
+	}, FactRegistryOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := groupReadServing()
+	logs := captureEngineLogger(t)
+	members := []CohortMember{
+		{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_a", Label: "project_a"}, Rank: 1, InclusionReasons: []string{"matched"}},
+		{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_b", Label: "project_b"}, Rank: 2, InclusionReasons: []string{"matched"}},
+	}
+	engine, request := groupReadEngineFixtureFull(t, logs.telemetry, &groupReadRefusingReader{inner: recorder, registry: registry}, members, nil, SubjectProject, nil, nil)
+
+	result, err := engine.Investigate(canonicalRequestContext(), storage.Principal{OrgID: "org_1"}, request)
+
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if sent := len(recorder.groupRootedRequests(SubjectTeam)); sent != 1 {
+		t.Fatalf("group-rooted requests = %d, want 1: the fixture did not reach the group read", sent)
+	}
+	line := cohortGroupReadLine(t, logs)
+	if line["group_read_issued"] != true || line["group_read_refused"] != false || line["group_read_refusal"] != string(GroupReadRefusalNone) {
+		t.Fatalf("group read line issued=%v refused=%v refusal=%v, want an issued read that was not refused", line["group_read_issued"], line["group_read_refused"], line["group_read_refusal"])
+	}
+	states := map[string]SourceObservation{}
+	for _, source := range result.Coverage.Sources {
+		states[source.Source] = source
+	}
+	refused := states["canonical_fact:health"]
+	if refused.State != SourceUnavailable || !strings.Contains(refused.Reason, "canonical fact provider returned a result that was rejected") {
+		t.Fatalf("served health coverage = %+v, want unavailable with the rejection sentence", refused)
+	}
+	if !result.Coverage.Partial {
+		t.Fatal("served coverage.partial = false, want true")
+	}
+	if states["canonical_fact:workload"].State != SourceAvailable || line["group_facts_merged"] != float64(2) {
+		t.Fatalf("workload coverage = %+v, group_facts_merged = %v, want the group's other kind read and its 2 facts composed", states["canonical_fact:workload"], line["group_facts_merged"])
+	}
+}

@@ -1,10 +1,13 @@
 package contextfabric
 
 import (
+	"context"
 	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
+	"log/slog"
 	"strconv"
 	"strings"
 	"testing"
@@ -240,4 +243,28 @@ func TestAnAcceptedResultStillCommitsFactsAndEvaluations(t *testing.T) {
 	if bundle.Versions[FactMetrics] != "v1" || bundle.Watermarks[FactMetrics] != "wm" || len(bundle.Coverage.Sources) != 1 {
 		t.Fatalf("versions = %v, watermarks = %v, coverage = %+v", bundle.Versions, bundle.Watermarks, bundle.Coverage.Sources)
 	}
+}
+
+// The repository-restricted caller's fact gate sits between the engine and
+// the registry. A kind the registry refused reaches the engine through it as
+// coverage, with no error and no fact.
+func TestTheRestrictedCallerFactGateCarriesARefusedKindAsCoverage(t *testing.T) {
+	t.Parallel()
+	health := planCapability(FactHealth, "health", SubjectProject)
+	health.RequiresEvidence = true
+	registry, err := NewFactCapabilityRegistry([]FactProvider{subjectEchoProvider{capability: health}}, FactRegistryOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	telemetry := NewSlogEngineTelemetry(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	reader := newGatedFactReader(registry, NewStoredResultGate(chaos7127Graph(nil)), telemetry)
+	if classifyStoredResultPrincipalScope(chaos7127Restricted) != StoredResultScopeRestricted {
+		t.Fatal("the fixture principal is not repository-restricted: the gate would not run")
+	}
+
+	bundle, err := reader.ReadFacts(context.Background(), chaos7127Restricted, CanonicalFactRequest{
+		Subjects: []SubjectRef{chaos7127Project()}, Requirements: []FactRequirement{{Kind: FactHealth}},
+	})
+
+	requireRefusedFactResult(t, bundle, err, FactHealth)
 }
