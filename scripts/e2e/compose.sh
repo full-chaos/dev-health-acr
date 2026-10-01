@@ -441,15 +441,22 @@ enable_go_api_routing() {
     GO_API_ROUTING_BEARER="$(dho mint envelope -org "$ORG_ID")"; export GO_API_ROUTING_BEARER
     dho goapi routing seed $u -operations "$OPERATIONS" -recorded-by "$who" -review-evidence "isolated compose E2E: first row, shadow"
     dho goapi routing proof-org add -org "$ORG_ID" -recorded-by "$who" -review-evidence "isolated compose E2E proof org"
-    dho goapi prove $u -go-edge -proof-url http://query-api:8090/query/proof -edge-url http://query-api:8090/graphql \
-      -documents /app/go-api/documents.json -org "$ORG_ID" -artifact-dir /tmp/proof -key-id "$GO_API_ENVELOPE_KEY_ID" \
-      -recorded-by "$who" -review-evidence "isolated compose E2E: go-edge proof of the build under test" \
-      || echo "go-api-tools: prove exited $? (enable below refuses any operation without a matching receipt)"
-    dho goapi routing enable $u -operations "$OPERATIONS" -mode primary -recorded-by "$who" -review-evidence "isolated compose E2E: proven by the receipt of this run"
+    prove() {
+      dho goapi prove $u -go-edge -proof-url http://query-api:8090/query/proof -edge-url http://query-api:8090/graphql \
+        -documents /app/go-api/documents.json -org "$ORG_ID" -artifact-dir /tmp/proof -key-id "$GO_API_ENVELOPE_KEY_ID" \
+        -recorded-by "$who" -review-evidence "$1" \
+        || echo "go-api-tools: prove exited $? (enable below refuses any operation without a matching receipt)"
+    }
+    prove "isolated compose E2E: go-edge proof through the proof route (shadow)"
+    dho goapi routing enable $u -operations "$OPERATIONS" -mode canary -recorded-by "$who" -review-evidence "isolated compose E2E: shadow receipt of this run"
+    prove "isolated compose E2E: go-edge proof through /graphql (canary)"
+    dho goapi routing enable $u -operations "$OPERATIONS" -mode primary -recorded-by "$who" -review-evidence "isolated compose E2E: edge receipt of this run"
   ' -e "ORG_ID=$org_id" -e "OPERATIONS=$operations" 2>&1)"; then
     printf '%s\n' "$output" | redact_log | tail -60 >&2
     die "Go API routing enablement failed for: ${operations}"
   fi
+  printf '%s\n' "$output" | grep -F 'go-api-routing: enabled' | tail -1 | grep -Fq "go-api-routing: enabled total=$(printf '%s' "$operations" | awk -F, '{print NF}') proven=$(printf '%s' "$operations" | awk -F, '{print NF}') named_limit=0" \
+    || { printf '%s\n' "$output" | redact_log | tail -40 >&2; die "Go API primary admission did not come from an edge-route receipt for: ${operations}"; }
   printf '%s\n' "$output" | redact_log | grep -E "go-api-prove: (edge_mode|prover_build|attempted|exit_cause)|edge access token mints|envelope mints|go-api-prove: +($(printf '%s' "$operations" | tr ',' '|')) |go-api-routing: enabled|go_api_routing.enabled|prove exited" | cut -c1-260 >&2 || true
   status="$(compose run --rm --no-deps -T -e "ORG_ID=$org_id" go-api-tools bash -ec 'GO_API_ROUTING_BEARER="$(dho mint envelope -org "$ORG_ID")"; export GO_API_ROUTING_BEARER; dho goapi routing status -json -registry-url http://query-api:8090/registry' 2>/dev/null)" \
     || die 'Go API routing status could not be read'
