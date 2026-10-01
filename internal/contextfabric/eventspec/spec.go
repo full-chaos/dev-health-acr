@@ -2902,7 +2902,7 @@ var All = []Event{
 	MCPHTTPReadiness,
 	OAuthStep,
 	OTelExport,
-	GraphCountCheckCompleted,
+	GraphCountCheckFinished,
 }
 
 // CountPopulationScope (CHAOS-5775) is the Info line for whether a served
@@ -3203,20 +3203,21 @@ var MCPHostedContextScope = Event{
 	},
 }
 
-// GraphCountCheckCompleted is the Info line for one completed graph count
-// check of one organization: how many sources and kinds it compared, how many
+// GraphCountCheckFinished is the Info line for one finished graph count
+// check of one organization: its outcome (completed, cancelled by the check timeout or shutdown, or failed with at least one count read error), how many sources and kinds it compared, how many
 // confirmed graph_below_source gaps it found and how many count reads failed.
 // The Warn lines the check emits for a gap or a failed read stay as they are;
 // this line is what makes a check that ran and found nothing observable.
-var GraphCountCheckCompleted = Event{
-	ID:                 "projectionrun.graph_count_check_completed",
-	Msg:                "context_fabric: projection graph count check completed",
+var GraphCountCheckFinished = Event{
+	ID:                 "projectionrun.graph_count_check_finished",
+	Msg:                "context_fabric: projection graph count check finished",
 	Level:              LevelInfo,
 	Multiplicity:       MultiplicityZeroOrOnePerRequest,
 	Attribution:        []string{"org_id_hash"},
 	BoundedAggregation: "at most one line per organization per check interval (default 10 minutes), only when the check actually ran; an organization not due, a negative interval or a backend without counts emits none.",
 	Fields: []Field{
 		{Key: "org_id_hash", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"completed", "cancelled", "failed"}},
 		{Key: "sources_checked", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "kinds_compared", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "gap_count", Type: FieldInt, Presence: PresenceRequired},

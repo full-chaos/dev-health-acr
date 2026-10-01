@@ -21,10 +21,14 @@ type countingSource struct {
 	counts   map[contextfabric.SubjectKind]int64
 	err      error
 	callsFor atomic.Int64
+	onCount  func()
 }
 
 func (s *countingSource) ProjectionSourceCounts(context.Context, string) (map[contextfabric.SubjectKind]int64, error) {
 	s.callsFor.Add(1)
+	if s.onCount != nil {
+		s.onCount()
+	}
 	return s.counts, s.err
 }
 
@@ -65,6 +69,7 @@ type countHarness struct {
 	log      *bytes.Buffer
 	marker   *fakeRebuildMarker
 	run      func(now time.Time)
+	cancel   context.CancelFunc
 }
 
 func newCountHarness(t *testing.T, sourceCounts, graphCounts map[contextfabric.SubjectKind]int64, sourceErr, graphErr error, interval time.Duration, fetchErr ...error) *countHarness {
@@ -96,9 +101,11 @@ func newCountHarness(t *testing.T, sourceCounts, graphCounts map[contextfabric.S
 	if err != nil {
 		t.Fatalf("new coordinator: %v", err)
 	}
-	return &countHarness{source: source, observer: observer, log: buffer, marker: marker, run: func(now time.Time) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	return &countHarness{source: source, observer: observer, log: buffer, marker: marker, cancel: cancel, run: func(now time.Time) {
 		clock.Store(&now)
-		coordinator.Tick(context.Background())
+		coordinator.Tick(ctx)
 	}}
 }
 

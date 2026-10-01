@@ -8585,8 +8585,8 @@
     ]
   },
   {
-    "id": "projectionrun.graph_count_check_completed",
-    "msg": "context_fabric: projection graph count check completed",
+    "id": "projectionrun.graph_count_check_finished",
+    "msg": "context_fabric: projection graph count check finished",
     "level": "info",
     "multiplicity": "zero_or_one_per_request",
     "attribution": [
@@ -8598,6 +8598,16 @@
         "key": "org_id_hash",
         "type": "string",
         "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "completed",
+          "cancelled",
+          "failed"
+        ]
       },
       {
         "key": "sources_checked",

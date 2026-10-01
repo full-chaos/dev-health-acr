@@ -160,8 +160,8 @@ func (o SlogObserver) ObserveGraphCountCheck(check GraphCountCheck) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	fields := eventspec.NewGraphCountCheckCompletedFields(orgIDHash(check.OrgID), check.SourcesChecked, check.KindsCompared, check.Gaps, check.Errors, int(check.Duration.Milliseconds()))
-	logger.Info(eventspec.GraphCountCheckCompleted.Msg, fields.SlogArgs()...)
+	fields := eventspec.NewGraphCountCheckFinishedFields(orgIDHash(check.OrgID), check.Outcome, check.SourcesChecked, check.KindsCompared, check.Gaps, check.Errors, int(check.Duration.Milliseconds()))
+	logger.Info(eventspec.GraphCountCheckFinished.Msg, fields.SlogArgs()...)
 }
 
 // ObserveGraphBelowSource is a no-op: the check logs the gap itself.

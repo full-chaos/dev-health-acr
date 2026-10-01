@@ -220,8 +220,8 @@ func goVarName(e Event) string {
 		return "OAuthStep"
 	case OTelExport.ID:
 		return "OTelExport"
-	case GraphCountCheckCompleted.ID:
-		return "GraphCountCheckCompleted"
+	case GraphCountCheckFinished.ID:
+		return "GraphCountCheckFinished"
 	default:
 		panic("eventspec: goVarName has no mapping for " + e.ID + " -- add one before regenerating")
 	}

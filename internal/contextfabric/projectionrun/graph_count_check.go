@@ -32,11 +32,20 @@ type GraphCountObserver interface {
 	ObserveGraphCountCheck(GraphCountCheck)
 }
 
+const (
+	GraphCountCheckCompleted = "completed"
+	GraphCountCheckCancelled = "cancelled"
+	GraphCountCheckFailed    = "failed"
+)
+
 // GraphCountCheck is one completed count check of one organization: what it
 // compared and what it found. Reported once per check that actually ran, so
 // "the check ran and found nothing" is observable. Counts only; content-safe.
 type GraphCountCheck struct {
-	OrgID          string
+	OrgID string
+	// Outcome is GraphCountCheckCompleted, GraphCountCheckCancelled (the check
+	// timeout or shutdown ended it) or GraphCountCheckFailed (a count read failed).
+	Outcome        string
 	SourcesChecked int
 	KindsCompared  int
 	// Gaps counts the confirmed graph_below_source gaps this check reported.
@@ -177,6 +186,14 @@ func (c *Coordinator) checkGraphCounts(ctx context.Context, orgID string) {
 	result := GraphCountCheck{OrgID: orgID, At: started}
 	defer func() {
 		result.Duration = c.now().Sub(started)
+		switch {
+		case ctx.Err() != nil:
+			result.Outcome = GraphCountCheckCancelled
+		case result.Errors > 0:
+			result.Outcome = GraphCountCheckFailed
+		default:
+			result.Outcome = GraphCountCheckCompleted
+		}
 		if obs, ok := c.observer.(GraphCountObserver); ok {
 			obs.ObserveGraphCountCheck(result)
 		}

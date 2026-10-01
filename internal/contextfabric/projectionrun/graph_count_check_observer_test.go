@@ -25,7 +25,7 @@ func TestGraphCountCheckReportsOneCompletedCheckWhenHealthy(t *testing.T) {
 		t.Fatalf("one completed check expected, got %+v", h.observer.checks)
 	}
 	got := h.observer.checks[0]
-	if got.OrgID != "org-a" || got.SourcesChecked != 1 || got.KindsCompared != 2 || got.Gaps != 0 || got.Errors != 0 {
+	if got.Outcome != projectionrun.GraphCountCheckCompleted || got.OrgID != "org-a" || got.SourcesChecked != 1 || got.KindsCompared != 2 || got.Gaps != 0 || got.Errors != 0 {
 		t.Fatalf("unexpected check %+v", got)
 	}
 	h.run(testStart.Add(30 * time.Second))
@@ -46,7 +46,7 @@ func TestGraphCountCheckReportCountsGapsAndErrors(t *testing.T) {
 		nil, nil, time.Minute)
 	gap.run(testStart)
 	gap.run(testStart.Add(time.Minute))
-	if len(gap.observer.checks) != 2 || gap.observer.checks[0].Gaps != 0 || gap.observer.checks[1].Gaps != 1 {
+	if len(gap.observer.checks) != 2 || gap.observer.checks[0].Gaps != 0 || gap.observer.checks[1].Gaps != 1 || gap.observer.checks[1].Outcome != projectionrun.GraphCountCheckCompleted {
 		t.Fatalf("only the confirmed gap counts: %+v", gap.observer.checks)
 	}
 	for name, errs := range map[string][2]error{"source": {errors.New("down"), nil}, "graph": {nil, errors.New("down")}} {
@@ -55,9 +55,22 @@ func TestGraphCountCheckReportCountsGapsAndErrors(t *testing.T) {
 			map[contextfabric.SubjectKind]int64{contractsv1.ContextFabricSubjectPullRequest: 0},
 			errs[0], errs[1], time.Minute)
 		h.run(testStart)
-		if len(h.observer.checks) != 1 || h.observer.checks[0].Errors != 1 || h.observer.checks[0].Gaps != 0 {
+		if len(h.observer.checks) != 1 || h.observer.checks[0].Errors != 1 || h.observer.checks[0].Outcome != projectionrun.GraphCountCheckFailed || h.observer.checks[0].Gaps != 0 {
 			t.Fatalf("%s: a failed read counts as an error, never a gap: %+v", name, h.observer.checks)
 		}
+	}
+}
+
+func TestGraphCountCheckCancelledMidCheckIsNotCompleted(t *testing.T) {
+	t.Parallel()
+	h := newCountHarness(t,
+		map[contextfabric.SubjectKind]int64{contractsv1.ContextFabricSubjectPullRequest: 1000},
+		map[contextfabric.SubjectKind]int64{contractsv1.ContextFabricSubjectPullRequest: 1000},
+		nil, nil, time.Minute)
+	h.source.onCount = h.cancel
+	h.run(testStart)
+	if len(h.observer.checks) != 1 || h.observer.checks[0].Outcome != projectionrun.GraphCountCheckCancelled {
+		t.Fatalf("a cancelled check must report outcome cancelled: %+v", h.observer.checks)
 	}
 }
 
@@ -77,15 +90,16 @@ func TestSlogObserverGraphCountCheckInfoLineIsCertified(t *testing.T) {
 	t.Parallel()
 	var buffer bytes.Buffer
 	observer := projectionrun.SlogObserver{Logger: slog.New(slog.NewJSONHandler(&buffer, nil))}
-	observer.ObserveGraphCountCheck(projectionrun.GraphCountCheck{OrgID: "org-a", SourcesChecked: 2, KindsCompared: 7, Gaps: 1, Errors: 3, Duration: 42 * time.Millisecond})
+	observer.ObserveGraphCountCheck(projectionrun.GraphCountCheck{OrgID: "org-a", SourcesChecked: 2, KindsCompared: 7, Gaps: 1, Errors: 3, Outcome: projectionrun.GraphCountCheckFailed, Duration: 42 * time.Millisecond})
 	parsed, err := certify.Parse(buffer.Bytes())
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	if _, err := certify.Certify(parsed, certify.Assertion{
-		Event: eventspec.GraphCountCheckCompleted,
+		Event: eventspec.GraphCountCheckFinished,
 		Want: map[string]any{
 			"org_id_hash":     "527a4c0a7e94",
+			"outcome":         "failed",
 			"sources_checked": 2,
 			"kinds_compared":  7,
 			"gap_count":       1,
