@@ -1009,4 +1009,19 @@ otel_endpoint_must_fail "enabled with a schemeless endpoint" "/otel/endpoint" --
 otel_endpoint_must_fail "enabled with a hostless endpoint" "/otel/endpoint" --set-string otel.endpoint=http://:4317
 otel_endpoint_must_fail "enabled with a blank service name" "otel.serviceNames" --set-string otel.endpoint=http://collector:4317 --set-string 'otel.serviceNames.api= '
 
+# Gate: the projector Deployment renders strategy type Recreate with no
+# rollingUpdate key (Recreate forbids one; server-side apply cannot clear a
+# defaulted block, so the chart must never render it), and acr-api / acr-mcp
+# keep their own strategy.
+strategy_render="$(render "${otel_base[@]}")"
+projector_dep="$(extract_doc Deployment '  name: [^\n]*-projector\n' <<<"$strategy_render")"
+[[ -n "$projector_dep" ]] || fail_gate "projector-strategy: projector Deployment missing from the render"
+grep -Pzq '  strategy:\n    type: Recreate\n  selector:' <<<"$projector_dep" \
+  || fail_gate "projector-strategy: projector Deployment must render strategy type Recreate with no rollingUpdate key"
+pass "projector-strategy: projector renders Recreate with no rollingUpdate key"
+other_deps="$(awk 'BEGIN{RS="\n---\n"} /\nkind: Deployment\n/ && !/\n  name: [^\n]*-projector\n/ {print}' <<<"$strategy_render")"
+[[ -n "$other_deps" ]] || fail_gate "projector-strategy: no non-projector Deployment in the render (the untouched check would be vacuous)"
+if grep -q 'type: Recreate' <<<"$other_deps"; then fail_gate "projector-strategy: acr-api/acr-mcp Deployments must not render Recreate"; fi
+pass "projector-strategy: acr-api and acr-mcp strategies are untouched"
+
 printf 'RESULT: happy path passed all gates\n'
