@@ -11,6 +11,7 @@ import (
 
 	cf "github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 const modelFailureWarn = "context fabric synthesis model call failed, degraded answer served"
@@ -29,6 +30,7 @@ func TestAModelCallThatFailsIsServedAsADegradedAnswer(t *testing.T) {
 		{name: "an invalid model output with a receipt that is also refused", model: scriptedSynthesisModel{err: fmt.Errorf("%w: provider status", cf.ErrModelOutput), receipt: true}, sink: failingReceiptSink{}, wantClass: "model_output_invalid"},
 		{name: "a draft that fails the bounds after the draw budget", model: scriptedSynthesisModel{err: fmt.Errorf("%w: %w: claim is not grounded", cf.ErrSynthesisRejected, cf.ErrModelOutput), receipt: true}, wantClass: "synthesis_rejected"},
 		{name: "a receipt the sink refuses after a valid draft", model: scriptedSynthesisModel{}, sink: failingReceiptSink{}, wantClass: "model_receipt_unrecorded"},
+		{name: "a receipt store that is unavailable after a valid draft", model: scriptedSynthesisModel{}, sink: unavailableReceiptSink{}, wantClass: "model_receipt_unrecorded"},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -145,4 +147,12 @@ func TestAModelCallThatFailsTransientlyKeepsItsErrorStatus(t *testing.T) {
 			}
 		})
 	}
+}
+
+// unavailableReceiptSink fails the way the production receipt store does when
+// its database is down: with the dependency-unavailable sentinel.
+type unavailableReceiptSink struct{}
+
+func (unavailableReceiptSink) RecordModelExecution(context.Context, storage.Principal, cf.ModelExecutionReceipt) error {
+	return fmt.Errorf("%w: insert model receipt", cf.ErrUnavailable)
 }

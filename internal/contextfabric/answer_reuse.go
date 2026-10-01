@@ -676,6 +676,10 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 	// (answer-bearing) statuses; ClarificationRequired/NoMatch are not,
 	// and a non-decisive candidate could never have been influenced by an
 	// unconfirmed window's own fact-retrieval bound in the first place.
+	if IsSynthesisModelFailureAnswer(candidate) {
+		e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
+		return InvestigationResult{}, false, false, storedCountReading{}, nil
+	}
 	if candidate.EffectiveEvidenceWindow != nil && candidate.EffectiveEvidenceWindow.Provenance == WindowInferredDefault {
 		switch candidate.Status {
 		case InvestigationComplete, InvestigationPartial, InvestigationDegraded:

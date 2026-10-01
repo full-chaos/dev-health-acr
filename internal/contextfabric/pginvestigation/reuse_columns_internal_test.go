@@ -247,3 +247,31 @@ func TestReuseColumnsFor_PriorSubjectReceiptDispositionsBearingResultNeverPopula
 			questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks, invalidationEpoch)
 	}
 }
+
+// The degraded answer served for a failed model call is never a reuse source:
+// a model that recovers must be asked again. The control, an ordinary
+// degraded answer, still populates the columns.
+func TestReuseColumnsFor_AModelFailureAnswerNeverPopulatesReuseColumns(t *testing.T) {
+	t.Parallel()
+	store := newNoDialStore(t, WithAnswerReuse(time.Hour))
+	snapshot := contextfabric.SourceWatermarkSnapshot{"source-a": "watermark-1"}
+	epoch := int64(3)
+	build := func(warning string) contextfabric.InvestigationResult {
+		return contextfabric.InvestigationResult{
+			Question: "How is the Platform team doing?",
+			Status:   contextfabric.InvestigationDegraded,
+			Warnings: []string{warning},
+			Versions: contextfabric.VersionSet{ContractVersion: "contract-v1", ProjectionVersion: "projection-v1", ModelIdentity: "test/model-v1"},
+		}
+	}
+	failed := build("answer text unavailable: the model call failed (class: model_output_invalid); the sources that were read are listed in coverage")
+	hash, _, _, _, watermarks, invalidationEpoch := store.reuseColumnsFor(failed, snapshot, &epoch)
+	if hash.Valid || watermarks != nil || invalidationEpoch.Valid {
+		t.Fatalf("reuseColumnsFor(model failure answer) = (%+v, %v, %+v), want all-NULL/nil", hash, watermarks, invalidationEpoch)
+	}
+	ordinary := build("a coverage warning")
+	hash, _, _, _, watermarks, invalidationEpoch = store.reuseColumnsFor(ordinary, snapshot, &epoch)
+	if !hash.Valid || watermarks == nil || !invalidationEpoch.Valid {
+		t.Fatalf("reuseColumnsFor(ordinary degraded answer) = (%+v, %v, %+v), want populated", hash, watermarks, invalidationEpoch)
+	}
+}

@@ -2428,7 +2428,9 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 			receipt.Outcome = "success"
 		}
 	}
-	if sinkErr := recordModelReceipt(ctx, principal, r.Sink, receipt); sinkErr != nil {
+	callErr := err
+	sinkErr := recordModelReceipt(ctx, principal, r.Sink, receipt)
+	if sinkErr != nil {
 		// See the matching comment in RuntimeQuestionInterpreter.Interpret:
 		// a sink failure is never silently dropped, even when a domain
 		// validation error already occurred.
@@ -2439,8 +2441,8 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 		}
 	}
 	if err != nil {
-		if class, degrade := synthesisFailureDegradeClass(ctx, err); degrade {
-			return InvestigationResult{}, &SynthesisFailure{Class: class, Attempts: receipt.Attempts, Elapsed: time.Since(started), Receipt: receipt, cause: err}
+		if class, degrade := synthesisFailureDegradeClass(ctx, callErr, sinkErr); degrade {
+			return InvestigationResult{}, &SynthesisFailure{Class: class, Attempts: receipt.Attempts, Elapsed: time.Since(started), Receipt: receipt, InputBounded: inputBounded, cause: err}
 		}
 		return InvestigationResult{}, err
 	}

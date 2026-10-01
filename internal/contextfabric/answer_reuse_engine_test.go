@@ -1876,3 +1876,43 @@ func TestCHAOS3478_PriorSubjectReceiptsBypassReuse(t *testing.T) {
 		t.Errorf("result.ResultID = %q, want the fresh result %q", result.ResultID, freshTestResultID)
 	}
 }
+
+// A stored degraded answer for a failed model call is not served from reuse:
+// the question is investigated again, so a model that recovered is asked.
+func TestAStoredModelFailureAnswerIsNotServedFromReuse(t *testing.T) {
+	t.Parallel()
+	project, candidate := reusableCandidate()
+	candidate.Status = InvestigationDegraded
+	candidate.Warnings = []string{synthesisFailureWarning(SynthesisFailureModelOutputInvalid)}
+	telemetry := &recordingTelemetry{}
+	synthesized := 0
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			synthesized++
+			return validInvestigationResult(), nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Results:   &resultStoreStub{},
+		Telemetry: telemetry,
+		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+			return candidate, true, nil
+		}),
+	})
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Reused || synthesized != 1 {
+		t.Fatalf("reused = %v synthesized = %d, want a fresh investigation", result.Reused, synthesized)
+	}
+	if got, want := telemetry.answerReuseOutcomes, []AnswerReuseOutcome{AnswerReuseMissNoCandidate}; !reuseOutcomeSlicesEqual(got, want) {
+		t.Fatalf("answerReuseOutcomes = %v, want %v", got, want)
+	}
+}
