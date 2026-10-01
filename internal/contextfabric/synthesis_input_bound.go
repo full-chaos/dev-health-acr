@@ -3,6 +3,8 @@ package contextfabric
 import (
 	"context"
 	"errors"
+	"sort"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -36,6 +38,9 @@ type SynthesisInputBoundEvent struct {
 	KindsRead     int
 	KindsGiven    int
 	KindsBounded  int
+	// Selection is "relevance" when, on any pass, the ranking kept a fact a
+	// read-order cut would not have, and "position" otherwise.
+	Selection SynthesisInputSelection
 }
 
 const (
@@ -51,16 +56,19 @@ const (
 //
 // Every kind keeps the same share of its facts, the share the overflow calls
 // for, and at least one: no kind is removed. Within a kind the facts that
-// stay are the first in read order, so kinds read over the same subjects keep
-// the same subjects. A fact about a committed subject always stays.
+// stay are the most relevant to the question (see factRelevance); facts the
+// ranking cannot tell apart keep their read order, so an input with nothing
+// to rank on is bounded exactly as it was by position. A fact about a
+// committed subject always stays.
 //
-// The second result is false when nothing could be removed.
-func boundSynthesisFacts(facts []CanonicalFact, committed []SubjectRef, overflow *ModelInputOverflow) ([]CanonicalFact, bool) {
+// The second result is false when nothing could be removed. The third names
+// how the facts that stayed were chosen.
+func boundSynthesisFacts(facts []CanonicalFact, ranking factRanking, overflow *ModelInputOverflow) ([]CanonicalFact, bool, SynthesisInputSelection) {
 	if overflow == nil || overflow.Bytes <= 0 || overflow.MaxBytes <= 0 {
-		return facts, false
+		return facts, false, SynthesisInputSelectionPosition
 	}
-	protected := make(map[string]struct{}, len(committed))
-	for _, subject := range committed {
+	protected := make(map[string]struct{}, len(ranking.committed))
+	for _, subject := range ranking.committed {
 		protected[subject.CanonicalID] = struct{}{}
 	}
 	quota := factCountsByKind(facts)
@@ -76,18 +84,183 @@ func boundSynthesisFacts(facts []CanonicalFact, committed []SubjectRef, overflow
 			quota[fact.Kind]--
 		}
 	}
-	bounded := make([]CanonicalFact, 0, len(facts))
-	for _, fact := range facts {
-		if _, ok := protected[fact.Subject.CanonicalID]; ok {
-			bounded = append(bounded, fact)
-			continue
+	scores := make([]factRelevance, len(facts))
+	byKind := make(map[FactKind][]int)
+	for index, fact := range facts {
+		scores[index] = ranking.score(fact)
+		if _, ok := protected[fact.Subject.CanonicalID]; !ok {
+			byKind[fact.Kind] = append(byKind[fact.Kind], index)
 		}
-		if quota[fact.Kind] > 0 {
-			quota[fact.Kind]--
+	}
+	selection := SynthesisInputSelectionPosition
+	keep := make([]bool, len(facts))
+	for index, fact := range facts {
+		if _, ok := protected[fact.Subject.CanonicalID]; ok {
+			keep[index] = true
+		}
+	}
+	for kind, indexes := range byKind {
+		ordered := append([]int(nil), indexes...)
+		sort.SliceStable(ordered, func(i, j int) bool { return scores[ordered[i]].before(scores[ordered[j]]) })
+		limit := quota[kind]
+		if limit > len(indexes) {
+			limit = len(indexes)
+		}
+		if limit < 0 {
+			limit = 0
+		}
+		positional := make(map[int]struct{}, limit)
+		for _, index := range indexes[:limit] {
+			positional[index] = struct{}{}
+		}
+		for _, index := range ordered[:limit] {
+			keep[index] = true
+			if _, ok := positional[index]; !ok {
+				selection = SynthesisInputSelectionRelevance
+			}
+		}
+	}
+	bounded := make([]CanonicalFact, 0, len(facts))
+	for index, fact := range facts {
+		if keep[index] {
 			bounded = append(bounded, fact)
 		}
 	}
-	return bounded, len(bounded) < len(facts)
+	return bounded, len(bounded) < len(facts), selection
+}
+
+// SynthesisInputSelection names how the facts that stayed in a bounded input
+// were chosen.
+type SynthesisInputSelection string
+
+const (
+	// SynthesisInputSelectionRelevance: the ranking changed the order inside
+	// at least one kind, so the cut kept facts a read-order cut would not have.
+	SynthesisInputSelectionRelevance SynthesisInputSelection = "relevance"
+	// SynthesisInputSelectionPosition: the ranking left every kind in read
+	// order, so the cut kept the first facts read.
+	SynthesisInputSelectionPosition SynthesisInputSelection = "position"
+)
+
+// factRanking carries what the question says about which facts matter.
+type factRanking struct {
+	committed    []SubjectRef
+	requirements []FactRequirement
+	// windowStart and windowEnd bound the question window; both nil means the
+	// question has no window to rank against.
+	windowStart, windowEnd *time.Time
+}
+
+func newFactRanking(input SynthesisInput) factRanking {
+	ranking := factRanking{committed: input.Graph.Resolution.Committed, requirements: input.Interpretation.FactRequirements}
+	start, end := input.Interpretation.TimeContext.Start, input.Interpretation.TimeContext.End
+	if window := input.EvidenceWindow; window != nil && window.Start != nil && window.End != nil {
+		start, end = window.Start, window.End
+	}
+	if start != nil && end != nil && !end.Before(*start) {
+		ranking.windowStart, ranking.windowEnd = start, end
+	}
+	return ranking
+}
+
+// factRelevance is a fact's rank, compared field by field in the order the
+// fields are declared.
+type factRelevance struct {
+	committed bool
+	required  bool
+	// overlap: 3 inside the window, 2 partly inside or of unknown period, 0 outside.
+	overlap  int
+	observed time.Time
+}
+
+func (a factRelevance) before(b factRelevance) bool {
+	if a.committed != b.committed {
+		return a.committed
+	}
+	if a.required != b.required {
+		return a.required
+	}
+	if a.overlap != b.overlap {
+		return a.overlap > b.overlap
+	}
+	return a.observed.After(b.observed)
+}
+
+func (r factRanking) score(fact CanonicalFact) factRelevance {
+	var score factRelevance
+	for _, subject := range r.committed {
+		if sameSubject(subject, fact.Subject) {
+			score.committed = true
+			break
+		}
+	}
+	for _, requirement := range r.requirements {
+		if requirement.Kind != fact.Kind {
+			continue
+		}
+		if len(requirement.Subjects) == 0 {
+			score.required = true
+			break
+		}
+		for _, subject := range requirement.Subjects {
+			if sameSubject(subject, fact.Subject) {
+				score.required = true
+			}
+		}
+	}
+	score.overlap = r.overlap(fact)
+	if fact.ObservedAt != nil {
+		score.observed = *fact.ObservedAt
+	}
+	return score
+}
+
+// overlap places the fact's own period, or its event time when it has no
+// period, against the question window.
+func (r factRanking) overlap(fact CanonicalFact) int {
+	if r.windowStart == nil {
+		return 0
+	}
+	from, to, ok := factPeriod(fact)
+	if !ok {
+		return 2
+	}
+	switch {
+	case to.Before(*r.windowStart) || from.After(*r.windowEnd):
+		return 0
+	case !from.Before(*r.windowStart) && !to.After(*r.windowEnd):
+		return 3
+	default:
+		return 2
+	}
+}
+
+func sameSubject(a, b SubjectRef) bool {
+	return a.Kind == b.Kind && a.CanonicalID == b.CanonicalID
+}
+
+func factPeriod(fact CanonicalFact) (time.Time, time.Time, bool) {
+	start, end := factTimeField(fact, "window_start"), factTimeField(fact, "window_end")
+	if start != nil && end != nil {
+		return *start, *end, true
+	}
+	if fact.EventAt != nil {
+		return *fact.EventAt, *fact.EventAt, true
+	}
+	return time.Time{}, time.Time{}, false
+}
+
+func factTimeField(fact CanonicalFact, name string) *time.Time {
+	value, ok := fact.Fields[name]
+	if !ok || value.String == nil {
+		return nil
+	}
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02"} {
+		if parsed, err := time.Parse(layout, *value.String); err == nil {
+			return &parsed
+		}
+	}
+	return nil
 }
 
 func factCountsByKind(facts []CanonicalFact) map[FactKind]int {
@@ -104,6 +277,7 @@ func factCountsByKind(facts []CanonicalFact) map[FactKind]int {
 func (r RuntimeAnswerSynthesizer) synthesizeWithinInputBound(ctx context.Context, principal storage.Principal, input SynthesisInput) (SynthesisInput, SynthesisDraft, ModelExecutionReceipt, bool, error) {
 	given := input
 	var event SynthesisInputBoundEvent
+	ranking := newFactRanking(input)
 	for {
 		draft, receipt, err := r.Runtime.SynthesizeAnswer(ctx, principal, given)
 		var overflow *ModelInputOverflow
@@ -117,7 +291,10 @@ func (r RuntimeAnswerSynthesizer) synthesizeWithinInputBound(ctx context.Context
 		if event.Passes == 0 {
 			event.InputBytes, event.MaxInputBytes = overflow.Bytes, overflow.MaxBytes
 		}
-		bounded, reduced := boundSynthesisFacts(given.Facts.Facts, given.Graph.Resolution.Committed, overflow)
+		bounded, reduced, selection := boundSynthesisFacts(given.Facts.Facts, ranking, overflow)
+		if selection == SynthesisInputSelectionRelevance || event.Selection == "" {
+			event.Selection = selection
+		}
 		if !reduced || event.Passes == maxSynthesisInputBoundPasses {
 			event.Outcome = SynthesisInputBoundExhausted
 			r.recordSynthesisInputBound(ctx, principal, event, input, given)

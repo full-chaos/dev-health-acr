@@ -254,3 +254,118 @@ func TestATeamAtTheExpansionCapIsSynthesizedWithinTheModelInputBound(t *testing.
 		t.Fatalf("bound line = %v, want outcome=fitted input_bytes=%d facts_read=%d facts_given=%d kinds_given=%d kinds_bounded=%d", bound, len(unbounded), len(bundle.Facts), len(given.Facts), len(kinds), len(kinds))
 	}
 }
+
+// The same bounded team input twice, once with nothing to rank on and once
+// with the late-read facts named by the question's requirements. Counts kept
+// per kind are the same; the named facts are kept only by relevance.
+func TestABoundedTeamInputKeepsTheFactsTheQuestionNamesNotTheFirstRead(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
+	at := time.Now().UTC()
+	seedChaos4101TeamFixture(t, ctx, direct, at)
+	seedTeamAtTheExpansionCap(t, ctx, direct, at)
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(query), contextfabric.FactRegistryOptions{
+		ScopeExpander: devhealthfacts.NewScopeExpander(query), Logger: logger,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal := storage.Principal{OrgID: chaos4099OrgID, RepositoryScopes: []string{"*"}}
+	kinds := []contextfabric.FactKind{
+		contextfabric.FactIdentity, contextfabric.FactActualCompletion, contextfabric.FactWork,
+		contextfabric.FactBlockers, contextfabric.FactPullRequests, contextfabric.FactReviews,
+	}
+	requirements := make([]contextfabric.FactRequirement, 0, len(kinds))
+	for _, kind := range kinds {
+		requirements = append(requirements, contextfabric.FactRequirement{Kind: kind})
+	}
+	bundle, err := registry.ReadFacts(ctx, principal, contextfabric.CanonicalFactRequest{
+		Question:     contextfabric.InterpretedQuestion{TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}},
+		Subjects:     []contextfabric.SubjectRef{chaos4101TeamSubject()},
+		Requirements: requirements,
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts error = %v", err)
+	}
+	const namedPerKind = 5
+	named := map[contextfabric.FactKind][]contextfabric.SubjectRef{}
+	for _, fact := range bundle.Facts {
+		named[fact.Kind] = append(named[fact.Kind], fact.Subject)
+	}
+	var namedRequirements []contextfabric.FactRequirement
+	namedIDs := map[string]struct{}{}
+	namedFacts := 0
+	for _, kind := range kinds {
+		late := named[kind][len(named[kind])-namedPerKind:]
+		namedRequirements = append(namedRequirements, contextfabric.FactRequirement{Kind: kind, Subjects: late})
+		for _, subject := range late {
+			namedIDs[string(kind)+"/"+subject.CanonicalID] = struct{}{}
+			namedFacts++
+		}
+	}
+
+	run := func(interpretation contextfabric.InterpretedQuestion) (map[contextfabric.FactKind]int, int) {
+		input := contextfabric.SynthesisInput{
+			Request:        contextfabric.InvestigationRequest{RequestID: "request_team_cap_0002", Question: "How is the Platform team doing?"},
+			Interpretation: interpretation,
+			Graph: contextfabric.GraphContext{Resolution: contextfabric.SubjectResolution{
+				Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{chaos4101TeamSubject()},
+			}},
+			Facts: bundle,
+		}
+		model := newRecordedSynthesisModel(t)
+		runtime, err := modelprovider.New(ctx, modelprovider.Config{
+			Provider: modelprovider.DefaultProvider, BaseURL: model.url, Model: modelprovider.DefaultModel,
+			APIKey: "sk-configured", Timeout: 10 * time.Second, MaxAttempts: 1, MaxTransportRetries: 0, AllowInsecureBaseURL: true,
+			Logger: logger,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := (contextfabric.RuntimeAnswerSynthesizer{Runtime: runtime}).Synthesize(ctx, principal, input); err != nil {
+			t.Fatalf("Synthesize error = %q", err)
+		}
+		inputs := model.given()
+		if len(inputs) == 0 {
+			t.Fatal("the model was not called")
+		}
+		var given struct {
+			Facts []struct {
+				Kind    contextfabric.FactKind `json:"kind"`
+				Subject struct {
+					CanonicalID string `json:"canonical_id"`
+				} `json:"subject"`
+			} `json:"canonical_facts"`
+		}
+		if err := json.Unmarshal([]byte(inputs[0]), &given); err != nil {
+			t.Fatalf("the model input is not the synthesis input: %v", err)
+		}
+		perKind, namedKept := map[contextfabric.FactKind]int{}, 0
+		for _, fact := range given.Facts {
+			perKind[fact.Kind]++
+			if _, ok := namedIDs[string(fact.Kind)+"/"+fact.Subject.CanonicalID]; ok {
+				namedKept++
+			}
+		}
+		return perKind, namedKept
+	}
+
+	positionKinds, positionNamed := run(contextfabric.InterpretedQuestion{TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}})
+	relevanceKinds, relevanceNamed := run(contextfabric.InterpretedQuestion{
+		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: namedRequirements,
+	})
+	t.Logf("kept per kind by position: %v; by relevance: %v", positionKinds, relevanceKinds)
+	t.Logf("named facts kept (of %d): position %d, relevance %d", namedFacts, positionNamed, relevanceNamed)
+	for _, kind := range kinds {
+		if delta := positionKinds[kind] - relevanceKinds[kind]; delta < -2 || delta > 2 {
+			t.Fatalf("kept per kind position = %v relevance = %v, want the same share of every kind (the requirements add bytes to the input, so +-2)", positionKinds, relevanceKinds)
+		}
+	}
+	if relevanceNamed != namedFacts {
+		t.Fatalf("named facts kept by relevance = %d, want all %d", relevanceNamed, namedFacts)
+	}
+	if positionNamed >= relevanceNamed {
+		t.Fatalf("named facts kept by position = %d, want fewer than by relevance (%d): the late facts were cut", positionNamed, relevanceNamed)
+	}
+}

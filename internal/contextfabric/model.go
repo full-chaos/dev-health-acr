@@ -1014,4 +1014,7 @@ type SynthesisInput struct {
 	// engine bookkeeping for the synthesis_input trace line and never reaches
 	// the model.
 	LabelCanonicalization SubjectLabelCanonicalization `json:"-"`
+	// EvidenceWindow is the window the answer speaks for. Engine bookkeeping
+	// for ranking facts when the input is bounded; it never reaches the model.
+	EvidenceWindow *contractsv1.ContextFabricEffectiveEvidenceWindow `json:"-"`
 }
