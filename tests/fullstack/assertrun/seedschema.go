@@ -399,6 +399,7 @@ func replayChmigrateDir(dir string) (*chSchema, []unhandledDDL, error) {
 		}
 	}
 	sort.Strings(names)
+	var unhandled []unhandledDDL
 	for _, name := range names {
 		sql, err := os.ReadFile(filepath.Join(dir, "sql", name))
 		if err != nil {
@@ -407,6 +408,13 @@ func replayChmigrateDir(dir string) (*chSchema, []unhandledDDL, error) {
 		if err := applyMigrationSQL(schema, string(sql)); err != nil {
 			return nil, nil, fmt.Errorf("delta %s: %w", name, err)
 		}
+		for _, raw := range splitSQLStatements(stripSQLLineComments(string(sql))) {
+			if shapeChangingRE.MatchString(strings.TrimSpace(raw)) {
+				unhandled = append(unhandled, unhandledDDL{File: name, Message: "statement changes table shape in a way the replay does not model"})
+			}
+		}
 	}
-	return schema, nil, nil
+	return schema, unhandled, nil
 }
+
+var shapeChangingRE = regexp.MustCompile(`(?is)^\s*(RENAME\s+TABLE|EXCHANGE\s+TABLES)\b`)

@@ -367,3 +367,24 @@ func TestReplayMigrationsDir_ChmigrateLayoutReplaysBaselineThenDeltas(t *testing
 		t.Fatal("a column absent from baseline and deltas must be reported")
 	}
 }
+
+func TestReplayMigrationsDir_ChmigrateRenameIsReportedNotIgnored(t *testing.T) {
+	dir := t.TempDir()
+	for _, sub := range []string{"baseline", "sql"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	baseline := `{"objects":[{"name":"widgets","create":"CREATE TABLE widgets (` + "`id`" + ` UUID) ENGINE = MergeTree ORDER BY id"}]}`
+	if err := os.WriteFile(filepath.Join(dir, "baseline", "head.json"), []byte(baseline), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeMigration(t, filepath.Join(dir, "sql"), "100_rename.sql", "RENAME TABLE widgets TO widgets_v2;")
+	_, unhandled, err := replayMigrationsDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unhandled) != 1 {
+		t.Fatalf("a RENAME TABLE delta must be reported as unhandled, got %v", unhandled)
+	}
+}
