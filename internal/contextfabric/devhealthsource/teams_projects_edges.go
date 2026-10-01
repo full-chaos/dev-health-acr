@@ -409,7 +409,10 @@ WHERE 1 = 1` + sincePredicate(cursor, cursorColumn, rowKey) + orderBy(cursorColu
 	if ingest {
 		fetchRows = fetchIngest
 	}
-	return fetchRows(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+	// rowArm is the arm of the row scanRow read last; every candidate of that
+	// row is labelled with it for the page telemetry.
+	var rowArm string
+	scanRow := func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var subjectKind, repoID, subjectID, repoSlug, eventID, source, provider, projectID, resolvedProjectID string
 		var observedAt, validToValue time.Time
 		var keyResolutionCount uint64
@@ -417,6 +420,7 @@ WHERE 1 = 1` + sincePredicate(cursor, cursorColumn, rowKey) + orderBy(cursorColu
 		if err := r.Scan(&subjectKind, &repoID, &subjectID, &repoSlug, &observedAt, &eventID, &source, &provider, &projectID, &resolvedProjectID, &keyResolutionCount, &validToPresent, &validToValue, &isMalformed, &isDuplicateAdd); err != nil {
 			return nil, err
 		}
+		rowArm = source
 		observedAt = observedAt.UTC()
 		rowSortKey := identity.JoinSegments(subjectKind, repoID, subjectID, provider, projectID, eventID)
 		telemetry.recordRead(source, subjectKind)
@@ -591,7 +595,18 @@ WHERE 1 = 1` + sincePredicate(cursor, cursorColumn, rowKey) + orderBy(cursorColu
 			return []candidate{{observedAt: observedAt, sortKey: rowSortKey, tombstone: &tombstone}}, nil
 		}
 		return []candidate{{observedAt: observedAt, sortKey: rowSortKey, relationship: &relationship}}, nil
+	}
+	rows, more, err := fetchRows(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+		items, err := scanRow(r)
+		for i := range items {
+			items[i].arm = rowArm
+		}
+		return items, err
 	})
+	if err == nil {
+		telemetry.recordStatement(rows, more)
+	}
+	return rows, more, err
 }
 
 // queryWorkItemTeams projects work_item -> team (OWNED_BY_TEAM) from

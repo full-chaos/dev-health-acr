@@ -290,7 +290,10 @@ type candidate struct {
 	// orders rows of all tables by (position, sortKey), and two tables can
 	// hold rows with the same pair, so a row's identity in the overlap
 	// memo is (table, position, sortKey). Empty for synthesized candidates.
-	table        string
+	table string
+	// arm is the statement arm a project_membership_presence row came from
+	// (membership_read_telemetry.go); empty for every other table.
+	arm          string
 	entity       *contractsv1.ContextFabricEntityProjection
 	relationship *contractsv1.ContextFabricRelationshipProjection
 	episode      *contractsv1.ContextFabricEpisodeProjection
