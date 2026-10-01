@@ -433,6 +433,24 @@ SELECT ?, ?, concat('dep-', leftPad(toString(number), 3, '0')), 'success', 'prod
 		}
 	})
 
+	// A row the paged read emitted is in the memo under the same identity
+	// the walk looks it up by: the caught-up tick that follows must not emit
+	// it again.
+	t.Run("a row the paged read emitted is not re-emitted by the walk", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t, "72630000-0000-4000-8000-000000000026", "72630000-0000-4000-8000-0000000000bd", 15*time.Minute, nil)
+		h.workItem("WI-frontier", now.Add(-time.Hour), now.Add(-10*time.Minute))
+		first := h.drain("")
+		h.workItem("WI-new", now.Add(-time.Minute), now.Add(-time.Minute))
+		second := h.drain(first.cursor)
+		if _, ok := second.items[title("WI-new")]; !ok {
+			t.Fatalf("precondition: the new row beyond the frontier was not projected")
+		}
+		if len(second.batches) != 1 {
+			t.Fatalf("the drain emitted %d batches, want 1 (the paged batch): the walk re-emitted a row the paged read had already emitted", len(second.batches))
+		}
+	})
+
 	// The memo is per process. A projector that restarts with a saved cursor
 	// starts its first pass at (frontier - 2*overlap), so a row that landed
 	// behind the frontier while no process was walking is still found.
