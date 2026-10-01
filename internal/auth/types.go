@@ -12,6 +12,13 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
+// AdvertisedScopes is the one list of scopes the protected resource and the
+// authorization server tell clients they can request; the bearer challenge
+// hint is built from it too.
+func AdvertisedScopes() []string {
+	return []string{ScopeContextRead, ScopeEvidenceRead, ScopeDataRead}
+}
+
 const (
 	TokenPrefix = "fcacr_"
 
