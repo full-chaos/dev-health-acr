@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -35,6 +34,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-acr/internal/storage/memory"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
 // CHAOS-7072 (S1a) end to end, model-free (design T8, A1.7): the three data
@@ -190,11 +190,7 @@ func newDTStack(t *testing.T) *dtStack {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve test file")
-	}
-	corpus, err := evalfixture.VerifyCorpus(filepath.Join(filepath.Dir(thisFile), "..", "..", "testdata", "evaluation", "v1"))
+	corpus, err := evalfixture.VerifyCorpus(repopath.Path(t, "testdata", "evaluation", "v1"))
 	if err != nil {
 		t.Fatalf("verify corpus: %v", err)
 	}

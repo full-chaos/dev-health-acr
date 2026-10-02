@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
-	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -13,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
 // CHAOS-7075 (S1b): the graphql_query route, its capability, and the
@@ -308,8 +307,7 @@ func TestChaos7075RealGraphQLAnswersValidateAgainstThePublishedSchemas(t *testin
 func TestChaos7075OpenAPIGraphQLResponseIsAsClosedAsTheSchema(t *testing.T) {
 	read := func(parts ...string) map[string]any {
 		t.Helper()
-		_, thisFile, _, _ := runtime.Caller(0)
-		raw, err := os.ReadFile(filepath.Join(append([]string{filepath.Dir(thisFile), "..", ".."}, parts...)...))
+		raw, err := os.ReadFile(repopath.Path(t, parts...))
 		if err != nil {
 			t.Fatal(err)
 		}

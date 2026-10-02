@@ -17,7 +17,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,6 +33,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-acr/internal/storage/memory"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/modelcontextprotocol/go-sdk/oauthex"
@@ -140,8 +140,7 @@ func newOAuthStack(t *testing.T, extraResources ...string) *oauthStack {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, thisFile, _, _ := runtime.Caller(0)
-	corpus, err := evalfixture.VerifyCorpus(filepath.Join(filepath.Dir(thisFile), "..", "..", "testdata", "evaluation", "v1"))
+	corpus, err := evalfixture.VerifyCorpus(repopath.Path(t, "testdata", "evaluation", "v1"))
 	if err != nil {
 		t.Fatal(err)
 	}

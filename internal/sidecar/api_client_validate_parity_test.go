@@ -4,13 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contractcheck"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
 // These tests prove parity between validateCapabilities/
@@ -31,11 +30,7 @@ import (
 // contracts/examples/v1.
 func contractFixturePath(t *testing.T, name string) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot resolve caller path")
-	}
-	return filepath.Join(filepath.Dir(file), "..", "..", "contracts", "examples", "v1", name)
+	return repopath.Path(t, "contracts", "examples", "v1", name)
 }
 
 func loadContractFixture[T any](t *testing.T, name string) T {

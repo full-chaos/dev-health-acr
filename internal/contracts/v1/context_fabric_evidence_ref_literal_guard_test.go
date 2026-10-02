@@ -9,12 +9,13 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 
 	"golang.org/x/tools/go/packages"
+
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
 // evidenceRefLiteralAllowlist is the SHORT, closed list of files allowed to
@@ -794,19 +795,5 @@ func flattenAdd(expr ast.Expr) []ast.Expr {
 // test binary's working directory) until go.mod is found.
 func moduleRootFromThisFile(t *testing.T) string {
 	t.Helper()
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("evidence-ref literal guard: could not resolve this test file's own path")
-	}
-	dir := filepath.Dir(thisFile)
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatalf("evidence-ref literal guard: no go.mod found walking up from %s", thisFile)
-		}
-		dir = parent
-	}
+	return repopath.Root(t)
 }
