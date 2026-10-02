@@ -1727,6 +1727,14 @@ func TestAFactAnswerMustNameTheSubjectsAsked(t *testing.T) {
 	if err := read(fakePlanes{facts: kindless}); err == nil || !strings.Contains(err.Error(), "subject kind") {
 		t.Fatalf("a coverage row of another subject kind was read: %v", err)
 	}
+	otherKind := func(request FactsRequest) (json.RawMessage, error) {
+		return json.Marshal(map[string]any{"status": "complete", "versions": map[string]any{"kinds": map[string]any{}},
+			"coverage": []any{map[string]any{"kind": "readiness", "subject": map[string]any{"kind": "repository", "canonical_id": "repository:r1"}, "outcome": "available"}},
+			"facts":    []any{}})
+	}
+	if err := read(fakePlanes{facts: otherKind}); err == nil || !strings.Contains(err.Error(), "is of kind readiness") {
+		t.Fatalf("a coverage row of another fact kind was read: %v", err)
+	}
 	factKind := func(request FactsRequest) (json.RawMessage, error) {
 		kind := request.Kinds[0]
 		return json.Marshal(map[string]any{"status": "complete", "versions": map[string]any{"kinds": map[string]any{}},
