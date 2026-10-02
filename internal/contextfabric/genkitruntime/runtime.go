@@ -218,7 +218,12 @@ const (
 	// words name"; evidence is never listed and the burden composite is the
 	// one fixed exception. A change to what the model is told, so the
 	// version bumps (same standing rule stated at v9 above).
-	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v16"
+	// v16 -> v17: interpretationSystemPrompt drops "infer ... time context"
+	// for the time rules: time_context copies the request's axis and bounds,
+	// a trailing window keeps axis current, and change and movement questions
+	// take period_comparison and time_series. A change to what the model is
+	// told, so the version bumps (same standing rule stated at v9 above).
+	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v17"
 	// DefaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
 	// review round: v2 added claimed_facts for value-level closure; v3
 	// closes the driver category vocabulary (a fixed 16-value set, no

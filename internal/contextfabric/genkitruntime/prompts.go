@@ -80,7 +80,7 @@ import (
 //     non-empty vocabulary.
 var interpretationSystemPrompt = fmt.Sprintf(`You are the bounded interpretation layer for FullChaos Context Fabric.
 Interpret any authorized natural-language engineering question. Questions are open-ended and are not matched to a finite allowlist.
-Return only the requested structured output. Infer the investigation shape, requested judgment, subject terms, comparison terms, time context, and canonical fact families that the question's words name.
+Return only the requested structured output. Infer the investigation shape, requested judgment, subject terms, comparison terms, and canonical fact families that the question's words name. Copy time_context from the request; never infer it (see the time rules below).
 Each fact_requirements[].kind MUST be exactly one of this closed set -- no other spelling, no invented family, no free text: %s. Choose only the families the question's words name (see the fact_requirements rules below), and never emit the same kind twice. If a named family is not in this set, omit it rather than inventing a name for it.
 %s
 %s
@@ -103,6 +103,7 @@ question_frame.goals: what the user is asking the system to ESTABLISH, as a LIST
 question_frame.subject_expression describes WHAT the question is about, structurally. Its kind MUST be exactly one of this closed set: %s. Pick by the question's own shape: named_subject when it names one or more subjects directly ("how is Dev Health Ops doing"); explicit_set when it compares named things side by side; discovered_kind when it asks the service to FIND the members of a kind ("which teams are struggling"); children_of_scope when it asks for the members OF a named parent of a different kind ("the fullchaos team's projects"); grouped_members when it asks for results partitioned into groups ("project statuses for each team"); organization_scope when the organization itself is the subject ("how are we doing").
 Fill only the fields that kind uses, and fill them ALL: named_subject uses terms; explicit_set uses operands (each operand is itself a named_subject with terms, or a children_of_scope with anchor_terms and member_kind and optional member_qualifier); discovered_kind uses member_kind; children_of_scope uses anchor_terms and member_kind and optional member_qualifier; grouped_members uses group_kind AND member_kind, set to EXACTLY the kinds the question names. member_qualifier is optional and MUST be exactly one of "status" or "assignee" when the question explicitly qualifies the members; omit it for unqualified membership. A question about EACH member of one kind ("how is each repository doing", "each project's delivery pace") is discovered_kind over that kind, not a grouping. When the question explicitly asks to partition members BY a kind ("repository health grouped by team", "group the projects by project"), express that partition exactly as asked, even when it groups a kind by that same kind (then group_kind and member_kind are both that kind). Never re-express an explicit grouping as discovered_kind or any other variant, and never drop or change group_kind or member_kind to make it look acceptable: whether a grouping is legal is decided by the server after you answer, never by you; organization_scope uses member_kind only when the question is a count ("how many repositories are in the organization"). terms and anchor_terms follow the same VERBATIM rule as subject_terms. member_kind and group_kind come from the same closed subject-kind set as group_kind above.
 question_frame.temporal: exactly one of %s. Use current unless the question asks about a span (bounded_window), a comparison between two periods (period_comparison), or movement over time (time_series). A question asking how something CHANGED is never current.
+%s
 question_frame.emphasis is OPTIONAL, a list from this closed set: %s. Emit it only when the question explicitly asks about the ends of a ranking ("who is doing best and who is struggling"); it says which ends the answer must speak to and never adds new evidence.
 question_frame.dimensions is OPTIONAL, a list from this closed set: %s. Emit a dimension only when the question is explicitly ABOUT it ("how is delivery flow for team X"). Naming a dimension only ever ADDS to what the answer covers; it never narrows it, so do not emit one to focus the answer.`,
 	contextFabricFactKindList,
@@ -123,6 +124,7 @@ question_frame.dimensions is OPTIONAL, a list from this closed set: %s. Emit a d
 	contextFabricInvestigationGoalList,
 	contextFabricSubjectExpressionKindList,
 	contextFabricTemporalIntentList,
+	interpretationTemporalRules,
 	contextFabricAnswerEmphasisList,
 	contextFabricHealthDimensionList,
 )

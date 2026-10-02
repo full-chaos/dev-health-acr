@@ -106,3 +106,25 @@ func TestInterpretationPromptTeamServingMatchesCapabilities(t *testing.T) {
 		}
 	}
 }
+
+func TestInterpretationPromptTimeRulesStatedOnce(t *testing.T) {
+	t.Parallel()
+	for _, rule := range []string{
+		"time_context copies only the axis and the bounds (as_of, start, end) of the request's time_context, and no other field of it. Never output a date or time that the request does not carry. Where two rules below fit one question, the rule listed first wins.",
+		`A trailing window stated in the question ("the last month", "the past week", "since last month") keeps the request's axis (current when the request carries no other axis) and takes a non-current temporal; it never adds an as_of or bounds that the request does not carry.`,
+		`A calendar period ("this quarter") gets start and end only when the request carries that range.`,
+		"A past as-of instant: temporal is current, and time_context keeps the request's as-of axis and as_of value.",
+		"A follow-up that states no period carries the window that the prior turn's text states.",
+		`A change question with no "why"`,
+		"The movement of one named measure over a window",
+	} {
+		if got := strings.Count(interpretationSystemPrompt, rule); got != 1 {
+			t.Errorf("time rule %q appears %d times, want exactly 1", rule, got)
+		}
+	}
+	for _, gone := range []string{"Infer the investigation shape, requested judgment, subject terms, comparison terms, time context", "time context, and canonical"} {
+		if strings.Contains(interpretationSystemPrompt, gone) {
+			t.Errorf("prompt still tells the model to infer the time context: %q", gone)
+		}
+	}
+}

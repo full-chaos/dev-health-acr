@@ -79,7 +79,8 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// DefaultInterpretationPromptVersion's own doc comment.
 			// v15 -> v16: the fact-kind glossary and the word-to-kind
 			// fact_requirements rules. See the constant's own doc comment.
-			digest: "a189f5be82bdffef703063edf984f3872a96a2a00e84a2267ec21680cdac4520",
+			// v16 -> v17: the time rules; time_context is copied, not inferred.
+			digest: "b22892610297f49cb96715b11c55593ca85f21bdfad5c6a71b02ea723b4c272c",
 		},
 		{
 			name:    "synthesis system prompt",
