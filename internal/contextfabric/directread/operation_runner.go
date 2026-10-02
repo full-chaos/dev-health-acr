@@ -806,9 +806,29 @@ func convertSubjectValues(op *OperationPolicy, tree map[string]any) error {
 }
 
 // mapCallError is the D.7 mapping of an internal-call failure.
+// OperationNotFoundLog is the line for an upstream 404 on run_operation: the
+// operation and the upstream's closed reason (root_field_not_enabled = the
+// routing rows do not enable the root yet; unknown = no typed reason).
+const OperationNotFoundLog = "context fabric run_operation upstream answered not found"
+
+func (x *run) logNotFound(err error) {
+	reason := ListenerNotFoundUnknown
+	var qe *QueryError
+	if errors.As(err, &qe) && qe.ListenerReason != "" {
+		reason = qe.ListenerReason
+	}
+	x.r.logger.Warn(OperationNotFoundLog,
+		"org_id", contextfabric.SanitizeLogAttr(x.principal.OrgID),
+		"operation", contextfabric.SanitizeLogAttr(x.read.Operation),
+		"listener_reason", contextfabric.SanitizeLogAttr(reason),
+		"retryable", false,
+	)
+}
+
 func (x *run) mapCallError(err error, maxBytes int) OperationResponse {
 	switch QueryErrorClassOf(err) {
 	case QueryErrorNotFound:
+		x.logNotFound(err)
 		return x.upstream(CallOperationUnavailable, UpstreamNotFound)
 	case QueryErrorTimeout:
 		return x.upstream(CallUpstreamTimeout, UpstreamTimeout)

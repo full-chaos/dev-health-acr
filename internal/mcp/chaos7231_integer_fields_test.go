@@ -472,11 +472,33 @@ func TestIntegerMiddlewareLogsEachDecisionAtDebugWithoutTheLiteral(t *testing.T)
 			t.Errorf("no Debug record %q in %v", want, got)
 		}
 	}
+	scanned := logWithoutTimestamps(log.String())
 	for _, literal := range []string{"4097.0", "1e999999999", "1.5"} {
-		if strings.Contains(log.String(), literal) {
+		if strings.Contains(scanned, literal) {
 			t.Errorf("the log carries the literal %q", literal)
 		}
 	}
+}
+
+// logWithoutTimestamps keeps each record's message and attributes and drops
+// its "time", whose digits can spell a literal such as 1.5 by chance.
+func logWithoutTimestamps(raw string) string {
+	var kept []string
+	for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(line), &fields); err != nil {
+			kept = append(kept, line)
+			continue
+		}
+		delete(fields, "time")
+		body, err := json.Marshal(fields)
+		if err != nil {
+			kept = append(kept, line)
+			continue
+		}
+		kept = append(kept, string(body))
+	}
+	return strings.Join(kept, "\n")
 }
 
 // A field whose published schema says 0 means the default is left out of the

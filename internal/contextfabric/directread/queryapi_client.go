@@ -26,7 +26,8 @@ package directread
 //   - The request body is refused before sending when it exceeds 16 KiB,
 //     the ops body limit (ops server/query_route.go:3110).
 //   - 404 is CallOperationUnavailable (not registered OR routing row off;
-//     acr cannot tell which) and is never retried on another path.
+//     the typed reason is logged, the caller cannot tell which) and is never
+//     retried on another path.
 //   - An error never carries upstream body text, the URL or a transport
 //     message: QueryError holds a closed class only.
 
@@ -350,7 +351,8 @@ type HTTPQueryClient struct {
 	endpoint  string
 	userAgent string
 	// readsTypedRefusals: the MCP listener client reads a bounded error
-	// body to recognise the read-budget refusal.
+	// body to recognise the read-budget refusal. Every client reads a
+	// bounded 404 body for the listener's not-found reason.
 	readsTypedRefusals bool
 	timeout            time.Duration
 	client             *http.Client
@@ -519,10 +521,8 @@ func (c *HTTPQueryClient) Execute(ctx context.Context, call QueryCall) (QueryRes
 	switch {
 	case resp.StatusCode == http.StatusNotFound:
 		qerr := &QueryError{Class: QueryErrorNotFound, StatusCode: resp.StatusCode}
-		if c.readsTypedRefusals {
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-			qerr.ListenerReason = listenerNotFoundReasonOf(body)
-		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		qerr.ListenerReason = listenerNotFoundReasonOf(body)
 		drain(resp.Body)
 		return QueryResult{}, qerr
 	case resp.StatusCode < 200 || resp.StatusCode > 299:

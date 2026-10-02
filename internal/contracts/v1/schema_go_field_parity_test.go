@@ -7,12 +7,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
 
 	"golang.org/x/tools/go/packages"
+
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
 // This file anchors the hand-maintained JSON Schemas to the Go wire structs.
@@ -532,21 +533,7 @@ func propertyKeys(node map[string]any) map[string]map[string]any {
 
 func moduleRootForParity(t *testing.T) string {
 	t.Helper()
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("schema/Go field parity: could not resolve this test file's own path")
-	}
-	dir := filepath.Dir(thisFile)
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatalf("schema/Go field parity: no go.mod found walking up from %s", thisFile)
-		}
-		dir = parent
-	}
+	return repopath.Root(t)
 }
 
 func loadContractsPackage(t *testing.T, root string) *packages.Package {

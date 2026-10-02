@@ -47,6 +47,10 @@ var cohortFactRequirements = map[contextfabric.SubjectKind][]contextfabric.FactK
 	// remove.
 	contextfabric.SubjectIncident:    {contextfabric.FactIncidents},
 	contextfabric.SubjectPullRequest: {contextfabric.FactPullRequests},
+	// DeploymentsProvider declares FactDeployments for the deployment kind
+	// (per-deployment status and environment) and for no cohort-derived
+	// health or workload fact.
+	contextfabric.SubjectDeployment: {contextfabric.FactDeployments},
 }
 
 // CohortFactRequirements returns the fact kinds a cohort of this kind asks

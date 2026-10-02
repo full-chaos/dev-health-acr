@@ -2,11 +2,11 @@ package falkorgraph
 
 import (
 	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
 // TestNewSDKAPIIsPinnedAndConstructible is the falkorgraph twin of zepgraph's
@@ -41,13 +41,9 @@ func TestNewSDKAPIIsPinnedAndConstructible(t *testing.T) {
 // cooperation from the toolchain.
 func TestSDKModuleAndVersionMatchThePinnedGoModDependency(t *testing.T) {
 	t.Parallel()
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller(0) failed to report this test file's path")
-	}
 	// This file lives at internal/contextfabric/falkorgraph/sdk_test.go;
 	// go.mod is three directories up, at the repository root.
-	goModPath := filepath.Join(filepath.Dir(thisFile), "..", "..", "..", "go.mod")
+	goModPath := repopath.Path(t, "go.mod")
 	contents, err := os.ReadFile(goModPath)
 	if err != nil {
 		t.Fatalf("read %s: %v", goModPath, err)

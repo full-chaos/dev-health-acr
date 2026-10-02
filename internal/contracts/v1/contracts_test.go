@@ -3,18 +3,14 @@ package v1
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
-	"runtime"
 	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
 func fixturePath(t *testing.T, name string) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot resolve caller path")
-	}
-	return filepath.Join(filepath.Dir(file), "..", "..", "..", "contracts", "examples", "v1", name)
+	return repopath.Path(t, "contracts", "examples", "v1", name)
 }
 
 func loadFixture[T any](t *testing.T, name string) T {

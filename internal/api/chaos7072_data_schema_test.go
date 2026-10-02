@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
-	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/google/jsonschema-go/jsonschema"
+
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
 // CHAOS-7072 (S1a): the published response schemas of the three MCP data
@@ -22,11 +22,7 @@ import (
 
 func dataSchemaFor(t *testing.T, name string) *jsonschema.Resolved {
 	t.Helper()
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve test file")
-	}
-	data, err := os.ReadFile(filepath.Join(filepath.Dir(thisFile), "..", "..", "contracts", "jsonschema", "v1", name))
+	data, err := os.ReadFile(repopath.Path(t, "contracts", "jsonschema", "v1", name))
 	if err != nil {
 		t.Fatal(err)
 	}

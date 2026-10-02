@@ -5,13 +5,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 	"github.com/stretchr/testify/require"
 )
 
@@ -198,9 +198,7 @@ func TestCodeGraphProvider_ContextForTask_preservesCandidateTimeout(t *testing.T
 
 func readCodeGraphFixture(t *testing.T, name string) string {
 	t.Helper()
-	_, sourceFile, _, found := runtime.Caller(0)
-	require.True(t, found)
-	contents, err := os.ReadFile(filepath.Join(filepath.Dir(sourceFile), "..", "..", "testdata", "codegraph", "v1.2.0", name+".json"))
+	contents, err := os.ReadFile(repopath.Path(t, "testdata", "codegraph", "v1.2.0", name+".json"))
 	require.NoError(t, err)
 	return string(contents)
 }

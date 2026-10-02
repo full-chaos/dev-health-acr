@@ -5,8 +5,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 
@@ -18,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-acr/internal/storage/memory"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
 func TestSeededProtectedFlowCorrelatesRealPacketPipeline(t *testing.T) {
@@ -119,11 +118,7 @@ func TestSeededProtectedFlowCorrelatesRealPacketPipeline(t *testing.T) {
 
 func seededEvaluationStore(t *testing.T, orgID string, observer contextpacket.EvidenceExpansionObserver) storage.EvidenceStore {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve test file")
-	}
-	corpus, err := evalfixture.VerifyCorpus(filepath.Join(filepath.Dir(file), "..", "..", "testdata", "evaluation", "v1"))
+	corpus, err := evalfixture.VerifyCorpus(repopath.Path(t, "testdata", "evaluation", "v1"))
 	if err != nil {
 		t.Fatal(err)
 	}

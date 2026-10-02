@@ -177,6 +177,12 @@ func cardinalityAnswerSentence(cardinality MembershipCardinality) string {
 	if cardinality.Kind == SubjectWorkItem && cardinality.PopulationIncomplete {
 		return fmt.Sprintf("Counted at least %d %s.", cardinality.Served, noun)
 	}
+	if cardinality.Kind == SubjectDeployment && cardinality.PopulationIncomplete {
+		if cardinality.Declared > cardinality.Served {
+			return fmt.Sprintf("Counted %d %s of at least %d found.", cardinality.Served, noun, cardinality.Declared)
+		}
+		return fmt.Sprintf("Counted at least %d %s.", cardinality.Served, noun)
+	}
 	if cardinality.Declared > cardinality.Served {
 		return fmt.Sprintf("Counted %d %s of %d found.", cardinality.Served, noun, cardinality.Declared)
 	}
