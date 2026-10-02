@@ -80,7 +80,7 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// v15 -> v16: the fact-kind glossary and the word-to-kind
 			// fact_requirements rules. See the constant's own doc comment.
 			// v16 -> v17: the time rules; time_context is copied, not inferred.
-			digest: "ca3f8d9287c74ba1d0a81c51294dc605f0565a16a199a593d0f901e51a88c686",
+			digest: "b22892610297f49cb96715b11c55593ca85f21bdfad5c6a71b02ea723b4c272c",
 		},
 		{
 			name:    "synthesis system prompt",
