@@ -1341,7 +1341,7 @@ func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Princip
 		// composeTemporalLabel already returns nil on the current axis, so
 		// this is a no-op for the ordinary current-axis veto case.
 		Temporal:            composeTemporalLabel(resolvedInterpretation, emptyCoverage, ""),
-		Versions:            e.terminalVersions(),
+		Versions:            e.terminalVersions(ctx),
 		DeterministicAnswer: limitation,
 		Warnings:            []string{},
 	}
@@ -1665,7 +1665,7 @@ func (e *Engine) windowConfirmationRequiredResult(
 		ConfirmedStructure:      confirmedStructureEcho,
 		StructureOfferSnapshot:  offerSnapshot,
 		StructureNeeds:          structureNeeds,
-		Versions:                e.terminalVersions(),
+		Versions:                e.terminalVersions(ctx),
 		DeterministicAnswer:     limitation,
 		Warnings:                []string{},
 	}

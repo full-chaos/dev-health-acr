@@ -2092,6 +2092,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		captureSkipReasonForTelemetry = CaptureSkipReasonInterpretationFailed
 		return InvestigationResult{}, stageError(StageInterpretation, fmt.Errorf("interpret question: %w", err))
 	}
+	ctx = withInterpretationStamp(ctx, familyOutcome.Interpretation)
 	// Bound the INTERPRETED question too, not just the wire request
 	// (CHAOS-3755 codex delta review, P2).
 	//
