@@ -211,8 +211,10 @@ func (o *Oracle) readFacts(ctx context.Context, kind, subjectKind string, ids []
 			}
 			asked[id]++
 		}
+		// As many rows as subjects, each row a subject asked: a subject with
+		// no row means another one has two.
 		for id, n := range asked {
-			if n != 1 {
+			if n > 1 {
 				return nil, fmt.Errorf("read_facts %s: subject %s has %d coverage rows, want 1", kind, id, n)
 			}
 		}
@@ -484,6 +486,25 @@ func (o *Oracle) generatedCases() ([]ShapeCase, error) {
 	return out, nil
 }
 
+// sendableValues are the values of an enum variable a client may send: the
+// allowed values, or the enum without the refused ones.
+func sendableValues(v directread.VariableRule) []string {
+	if len(v.AllowedValues) > 0 {
+		return v.AllowedValues
+	}
+	refused := map[string]bool{}
+	for _, r := range v.RefusedValues {
+		refused[r.Value] = true
+	}
+	var values []string
+	for _, e := range v.Enum {
+		if !refused[e] {
+			values = append(values, e)
+		}
+	}
+	return values
+}
+
 // variableValues are the values a client may send for an enum variable of an
 // operation, read from the policy: the allowed values, or the enum without
 // the refused ones. A dimension the policy gains is run without an edit here.
@@ -496,18 +517,7 @@ func (o *Oracle) variableValues(operation, path string) ([]string, error) {
 		if v.Path != path || !v.Allowed {
 			continue
 		}
-		values := v.AllowedValues
-		if len(values) == 0 {
-			refused := map[string]bool{}
-			for _, r := range v.RefusedValues {
-				refused[r.Value] = true
-			}
-			for _, e := range v.Enum {
-				if !refused[e] {
-					values = append(values, e)
-				}
-			}
-		}
+		values := sendableValues(v)
 		if len(values) == 0 {
 			return nil, fmt.Errorf("operation %s: variable %s has no value a client may send", operation, path)
 		}

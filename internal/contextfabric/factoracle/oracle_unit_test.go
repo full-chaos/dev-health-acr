@@ -436,6 +436,37 @@ func TestEveryDeclaredColumnOfTheExtractHasAScrubRule(t *testing.T) {
 	}
 }
 
+// What a client may send for an enum variable comes from the policy.
+func TestTheValuesOfAnEnumVariableComeFromThePolicy(t *testing.T) {
+	rule := directread.VariableRule{Enum: []string{"A", "B", "C"}, RefusedValues: []directread.ValueRefusal{{Value: "B"}}}
+	if got := sendableValues(rule); strings.Join(got, ",") != "A,C" {
+		t.Fatalf("enum values without the refused ones: %v", got)
+	}
+	rule.AllowedValues = []string{"C"}
+	if got := sendableValues(rule); strings.Join(got, ",") != "C" {
+		t.Fatalf("allowed values: %v", got)
+	}
+	o := &Oracle{Policy: mustPolicy(t)}
+	got, err := o.variableValues("catalogValues", "dimension")
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, _ := o.Policy.Catalogue().Lookup("catalogValues")
+	for _, v := range op.Variables {
+		if v.Path == "dimension" && strings.Join(got, ",") != strings.Join(sendableValues(v), ",") {
+			t.Fatalf("catalog dimensions %v, the policy sends %v", got, sendableValues(v))
+		}
+	}
+	for _, dimension := range got {
+		if dimension == "AUTHOR" {
+			t.Fatalf("a refused dimension is run: %v", got)
+		}
+	}
+	if len(got) < 5 {
+		t.Fatalf("catalog dimensions: %v", got)
+	}
+}
+
 // A taxonomy term that is not shaped like one is text, and is replaced.
 func TestATaxonomyTermOfAnotherShapeIsReplaced(t *testing.T) {
 	s, err := NewScrubber("11111111-2222-4333-8444-555555555555")
@@ -446,6 +477,10 @@ func TestATaxonomyTermOfAnotherShapeIsReplaced(t *testing.T) {
 		if got := taxonomyTerm(s, kept); got != kept {
 			t.Errorf("term %q was replaced by %q", kept, got)
 		}
+	}
+	long := strings.Repeat("a", 65)
+	if got := taxonomyTerm(s, long); got == long {
+		t.Errorf("a term of 65 characters was kept")
 	}
 	for _, text := range []string{"Jane Doe", "https://example.org/x", "jane@example.org", "Feature Delivery", "9lives"} {
 		if got := taxonomyTerm(s, text); got == text || strings.Contains(got, "example") {

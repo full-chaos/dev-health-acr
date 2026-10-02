@@ -154,8 +154,8 @@ func (o *Oracle) runOperation(ctx context.Context, rr *RootReport, shape Shape, 
 
 // rowSignatures lists, for each list of objects in an answer, one signature
 // per row: the scalar fields the row holds, as typed leaves, and the
-// signatures of the lists below it. Volatile paths and float aggregates are
-// left out (they are compared on their own rules). The signatures keep what
+// signatures of the lists below it. (No volatile path and no float aggregate
+// lies in a list row: the plan below holds them as scalars of the root.) The signatures keep what
 // the per-path compare loses: which values belong to the same row.
 func (s Shape) rowSignatures(data any) map[string][]string {
 	selected := map[string]bool{}
@@ -208,13 +208,6 @@ func (s Shape) rowSignature(path string, row map[string]any) string {
 	sort.Strings(keys)
 	var b strings.Builder
 	for _, k := range keys {
-		child := path + "." + k
-		if _, volatile := volatilePaths[child]; volatile {
-			continue
-		}
-		if _, aggregate := aggregateFloatPaths[child]; aggregate {
-			continue
-		}
 		switch row[k].(type) {
 		case map[string]any, []any:
 			continue
