@@ -308,7 +308,7 @@ Tests use a loopback `httptest` server, fixture seals, sessions and profiles, an
 | T11 | crash injection after `pair_reserved`, after send, after the temp write, after `link`, before `pair_terminal`; resume completes a verified pair, marks others uncertain, never resends; a new `run_id` refused; `recover` writes a separate artifact and charges the budget | resend on resume; a new run id recapturing |
 | T12 | modes on every file; pre-existing paths, symlinks, `..`; `link` refuses to replace; derived files regenerate atomically | a `rename` overwrite of a canonical file |
 | T13 | build manifest: a binary hash mismatch; a modified production path at the same revision; an allowed experiment file | a revision-only check |
-| T14 | the `interpreq` request and input shas equal `bin/interp-helper render` on fixture requests | a divergent decode |
+| T14 | the `interpreq` request and input shas equal the helper's `render` on fixture requests (the tests build the helper from `gohelper` in `TestMain`) | a divergent decode |
 | T15 | descriptor: a missing, wrong or >2^53 seed; each golden top key changed, removed or added; `temperature`; an extra message member; a parts-versus-string change; a third message; a swapped order | a subset key check |
 | T16 | the golden file regenerated from the production runtime over loopback equals the checked-in file | a stale golden |
 | T17 | a write failure stops calls; 2 consecutive `model_unavailable` stop; `--min-interval` measured at the server; a concurrent runner refused by the lock; a changed run config on resume refused; the exposure line durable before the first request; `descriptor_vectors.json` regenerates identically | each guard removed |
@@ -424,7 +424,7 @@ So the model, the user message, the seed, the response format, the decoding, the
 **Approval.** Its own record: `variant_approval {…, variant, appendix_sha256, variant_mode:"replace", …}`, written by chris with `gocapture approve-variant … --prompt-variant <name> --system-message-file <path> …`. One name, one mode, one file: a name approved as an appendix does not approve a replacement, the same file approved in one mode does not approve the other, and a changed file needs a new name. The calls spend from the same approval and cap.
 
 **Ledger and files.**
-- `variant_mode: "replace"` is on `variant_approval` and `run_started` only. The append mode writes no `variant_mode` member, so its ledger lines, `run.json` and artifacts are byte for byte as in R7 (`TestAppendModeRecordsHaveNoModeMember`). In a replace record, `appendix_sha256` and `appendix_bytes` describe the system message file.
+- `variant_mode: "replace"` is on `variant_approval` and `run_started` only; the ledger refuses the member on any other record. The append mode writes no `variant_mode` member, so its ledger lines, `run.json` and artifacts are byte for byte as in R7 (`TestAppendModeRecordsHaveNoModeMember`). In a replace record, `appendix_sha256` and `appendix_bytes` describe the system message file.
 - The `variant` block of `run.json`, of artifacts and of response rows has `mode: "replace"` and no `separator_sha256`.
 - `system-message.md`: the file, published write-once in the run directory before `run_started`; a resume checks it. A replace run directory has no `system-append.md`.
 - Binaries built before this revision refuse a ledger that holds a `variant_mode` member (unknown member).

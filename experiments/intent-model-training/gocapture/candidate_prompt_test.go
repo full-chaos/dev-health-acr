@@ -1,3 +1,5 @@
+//go:build unix
+
 package main
 
 import (
@@ -638,6 +640,12 @@ func TestCandidateLedgerRules(t *testing.T) {
 	refuse("a mode on an incumbent run", ledgerRecord{Kind: "run_started", RunID: "run1", SealDigest: "s", RunConfigSHA256: "c", RunCapHTTPAttempts: &n, VariantMode: variantModeReplace})
 	accept("replace run", ledgerRecord{Kind: "run_started", RunID: "cand1", SealDigest: "s", RunConfigSHA256: "c", RunCapHTTPAttempts: &n, Variant: "cand-v1", AppendixSHA256: sha, VariantMode: variantModeReplace})
 	accept("append run", ledgerRecord{Kind: "run_started", RunID: "var1", SealDigest: "s", RunConfigSHA256: "c", RunCapHTTPAttempts: &n, Variant: "rules-v1", AppendixSHA256: sha})
+	// The mode belongs on the approval and on run_started only.
+	zero := 0
+	refuse("a mode on a pair record", ledgerRecord{Kind: "pair_reserved", RunID: "cand1", SealDigest: "s", RowID: "r", Replicate: &zero, Variant: "cand-v1", VariantMode: variantModeReplace})
+	refuse("a mode on a stop record", ledgerRecord{Kind: "run_stopped", RunID: "cand1", Reason: "x", Variant: "cand-v1", VariantMode: variantModeReplace})
+	refuse("a mode on the plain approval", ledgerRecord{Kind: "approval", CapHTTPAttempts: &n, ApprovedBy: "human:chris", Source: "s", VariantMode: variantModeReplace})
+	accept("pair of the replace run", ledgerRecord{Kind: "pair_reserved", RunID: "cand1", SealDigest: "s", RowID: "r", Replicate: &zero, Variant: "cand-v1"})
 	// The whole ledger replays to the same state.
 	l.close()
 	replayed, err := f.tryLedger()

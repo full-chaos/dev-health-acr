@@ -227,6 +227,9 @@ func (l *approvalLedger) apply(rec ledgerRecord) error {
 	if rec.ApprovalID != l.approvalID {
 		return nil
 	}
+	if rec.VariantMode != "" && rec.Kind != "variant_approval" && rec.Kind != "run_started" {
+		return errors.New("a variant mode belongs on variant_approval and run_started records only")
+	}
 	switch rec.Kind {
 	case "approval":
 		if rec.CapHTTPAttempts == nil || *rec.CapHTTPAttempts < 1 || rec.ApprovedBy != "human:chris" {
