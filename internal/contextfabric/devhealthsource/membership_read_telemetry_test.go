@@ -1,8 +1,10 @@
 package devhealthsource
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"strings"
 	"testing"
@@ -104,5 +106,59 @@ func TestMembershipReadLedgerSummarisesAnEmptyFromScratchRead(t *testing.T) {
 	out := logs.String()
 	if !strings.Contains(out, "arm=work_item_column run=2 rows_total=0 pages=0 statements=1") || !strings.Contains(out, "arm=transition run=2 rows_total=0") {
 		t.Fatalf("an empty from-scratch read wrote no summary with run 2:\n%s", out)
+	}
+}
+
+// A first read moves the cursor past each row once. A page that is not a
+// replay and still consumes rows that are not new says so at error level: two
+// rows on one cursor position, or a page that changed between two attempts.
+func TestMembershipPageLogsAnErrorWhenAFirstReadConsumesRowsThatAreNotNew(t *testing.T) {
+	at := time.Date(2026, 10, 1, 4, 37, 41, 397_000_000, time.UTC)
+	tr := func(key string) candidate { return membershipRow("transition", key, at) }
+	col := func(key string) candidate { return membershipRow("work_item_column", key, at) }
+	ledger := &presenceTelemetryLedger{}
+	consumePage(ledger, true, tr("a"), tr("b"), col("x"))          // every row new
+	consumePage(ledger, true, tr("c"), tr("d"), tr("d"), col("y")) // two transition rows on one position
+	consumePage(ledger, true, tr("c"), tr("d"), tr("d"), col("y")) // the same page built again
+	consumePage(ledger, false, tr("d"), tr("e"))                   // a retry that overlaps the page before it
+
+	var logs bytes.Buffer
+	logMembershipPages(context.Background(), slog.New(slog.NewJSONHandler(&logs, nil)), "org", ledger)
+	type errorLine struct {
+		Level  string `json:"level"`
+		Msg    string `json:"msg"`
+		Arm    string `json:"arm"`
+		Source string `json:"source"`
+		Page   int    `json:"page_n"`
+		Rows   int    `json:"consumed_rows"`
+		New    int    `json:"consumed_new"`
+		Shared int    `json:"shared_position_rows"`
+		Stamp  string `json:"last_stamp"`
+		Digest string `json:"last_key_digest"`
+	}
+	var got []errorLine
+	scanner := bufio.NewScanner(&logs)
+	for scanner.Scan() {
+		var line errorLine
+		if err := json.Unmarshal(scanner.Bytes(), &line); err != nil {
+			t.Fatalf("log line is not JSON: %q", scanner.Text())
+		}
+		if line.Level == "ERROR" {
+			got = append(got, line)
+		}
+	}
+	const msg = "devhealthsource project membership page consumed rows that are not new and is not a replay"
+	stamp := "2026-10-01T04:37:41.397Z"
+	want := []errorLine{
+		{Level: "ERROR", Msg: msg, Arm: "transition", Source: TeamsProjectsSourceName, Page: 2, Rows: 3, New: 2, Shared: 1, Stamp: stamp, Digest: keyDigest("d")},
+		{Level: "ERROR", Msg: msg, Arm: "transition", Source: TeamsProjectsSourceName, Page: 4, Rows: 2, New: 1, Shared: 0, Stamp: stamp, Digest: keyDigest("e")},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("%d error lines, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("error line %d = %+v, want %+v", i, got[i], want[i])
+		}
 	}
 }

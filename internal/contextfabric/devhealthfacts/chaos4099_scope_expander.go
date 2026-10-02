@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"sort"
 	"strconv"
 	"strings"
@@ -580,11 +581,11 @@ func asOfWindow(timeContext contextfabric.TimeContext) (start, end time.Time, er
 const membershipTouchesAsOfSQL = `(
   WITH touches AS (
     SELECT repo_id, subject_id, provider, to_project_id AS project_id, occurred_at, event_id, 1 AS is_add
-    FROM project_membership_transitions FINAL
+    FROM ` + devhealthschema.DedupedMembershipTransitionsLastSynced + `
     WHERE org_id = {org_id:String} AND subject_kind = 'work_item' AND to_project_id != '' AND to_project_id != from_project_id
     UNION ALL
     SELECT repo_id, subject_id, provider, from_project_id AS project_id, occurred_at, event_id, 0 AS is_add
-    FROM project_membership_transitions FINAL
+    FROM ` + devhealthschema.DedupedMembershipTransitionsLastSynced + `
     WHERE org_id = {org_id:String} AND subject_kind = 'work_item' AND from_project_id != '' AND from_project_id != to_project_id
   ),
   classified AS (

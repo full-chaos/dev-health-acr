@@ -269,8 +269,12 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 	// real content, and deterministicBatchID stays stable for replay.
 	for skips := 0; ; skips++ {
 		var all []candidate
+		var bound pageBound
 		for _, table := range p.tables {
-			rows, _, err := readTable(ctx, table, p.client, orgID, state, incrementalBatchCap)
+			rows, truncated, err := readTable(ctx, table, p.client, orgID, state, incrementalBatchCap)
+			if err == nil {
+				err = p.boundRead(ctx, orgID, table.name, state, &bound, rows, truncated)
+			}
 			if err != nil {
 				logTableReadFailure(ctx, p.logger, p.source, orgID, table.name, err)
 				return contextfabric.ProjectionBatch{}, false, &tableReadError{table: table.name, cause: err}
@@ -287,9 +291,12 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 			return p.overlapBatch(ctx, orgID, cursor, state)
 		}
 		sortCandidates(all)
-		all = truncateToCompleteRows(all, incrementalBatchCap)
+		all, bounded := truncateToCompleteRows(all, incrementalBatchCap, bound)
 		if len(all) == 0 {
 			return contextfabric.ProjectionBatch{}, false, nil
+		}
+		if bounded {
+			p.logBoundedPage(ctx, orgID, bound)
 		}
 		p.notePage(all)
 		// Per-item quarantine BEFORE the payload check: an item the
@@ -430,6 +437,37 @@ func (e *tableReadError) Unwrap() []error {
 		return []error{contextfabric.ErrQueryBudgetExceeded, e.cause}
 	}
 	return []error{contextfabric.ErrUnavailable, e.cause}
+}
+
+// boundRead takes one table's read into the page bound. A read the bound
+// rejects holds more rows on one cursor position than one page, directly after
+// the cursor the read started from. The cursor stays, so every retry reads the
+// same rows and writes this line again, until the rows change.
+func (p sourcePlan) boundRead(ctx context.Context, orgID, table string, from cursorState, bound *pageBound, rows []candidate, truncated bool) error {
+	err := bound.note(table, rows, truncated)
+	if err != nil && p.logger != nil {
+		after := ""
+		if !from.Since.IsZero() {
+			after = from.Since.UTC().Format(time.RFC3339Nano)
+		}
+		p.logger.ErrorContext(ctx, "devhealthsource read stopped: more rows of one table share one cursor position than one page holds",
+			"source", contextfabric.SanitizeLogAttr(p.source), "org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "table", contextfabric.SanitizeLogAttr(table),
+			"page_rows", incrementalBatchCap, "rows_on_position_min", incrementalBatchCap+1,
+			"after_stamp", contextfabric.SanitizeLogAttr(after), "after_key_digest", contextfabric.SanitizeLogAttr(keyDigest(from.After)))
+	}
+	return err
+}
+
+// logBoundedPage reports a page that ended at a truncated table's last row
+// before it was full: rows of that table share one cursor position. The page
+// lost nothing; the line names the table that holds such rows.
+func (p sourcePlan) logBoundedPage(ctx context.Context, orgID string, bound pageBound) {
+	if p.logger == nil {
+		return
+	}
+	p.logger.WarnContext(ctx, "devhealthsource page ended at the last row a truncated table returned; rows of that table share one cursor position",
+		"source", contextfabric.SanitizeLogAttr(p.source), "org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "table", contextfabric.SanitizeLogAttr(bound.table),
+		"last_stamp", contextfabric.SanitizeLogAttr(bound.at.UTC().Format(time.RFC3339Nano)), "last_key_digest", contextfabric.SanitizeLogAttr(keyDigest(bound.key)))
 }
 
 func (p sourcePlan) notePage(all []candidate) {
