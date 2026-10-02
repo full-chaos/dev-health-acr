@@ -52,6 +52,9 @@ func declaresModule(goMod string) bool {
 		return false
 	}
 	for _, line := range strings.Split(string(data), "\n") {
+		if i := strings.Index(line, "//"); i >= 0 {
+			line = line[:i]
+		}
 		fields := strings.Fields(line)
 		if len(fields) == 2 && fields[0] == "module" {
 			return fields[1] == modulePath

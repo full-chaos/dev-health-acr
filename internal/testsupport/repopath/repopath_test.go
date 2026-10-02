@@ -37,6 +37,16 @@ func TestFindRootRejectsForeignModule(t *testing.T) {
 	}
 }
 
+func TestFindRootAcceptsModuleLineWithComment(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module "+modulePath+" // project module\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if root, ok := findRoot(dir); !ok || root != dir {
+		t.Fatalf("findRoot = %q,%v want %q,true", root, ok, dir)
+	}
+}
+
 func TestFindRootAcceptsAcrModule(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module "+modulePath+"\n\ngo 1.27.0\n"), 0o600); err != nil {
