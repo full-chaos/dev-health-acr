@@ -26,7 +26,8 @@ package directread
 //   - The request body is refused before sending when it exceeds 16 KiB,
 //     the ops body limit (ops server/query_route.go:3110).
 //   - 404 is CallOperationUnavailable (not registered OR routing row off;
-//     acr cannot tell which) and is never retried on another path.
+//     the typed reason is logged, the caller cannot tell which) and is never
+//     retried on another path.
 //   - An error never carries upstream body text, the URL or a transport
 //     message: QueryError holds a closed class only.
 
