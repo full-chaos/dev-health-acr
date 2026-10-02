@@ -1,3 +1,5 @@
+//go:build unix
+
 package main
 
 import (
@@ -28,7 +30,7 @@ var systemText string
 func helperSystemText(t *testing.T) string {
 	t.Helper()
 	systemTextOnce.Do(func() {
-		out, err := exec.Command(filepath.Join(experimentDir(), "bin", "interp-helper"), "system-message").Output()
+		out, err := exec.Command(builtHelper, "system-message").Output()
 		if err != nil {
 			return
 		}
@@ -40,7 +42,7 @@ func helperSystemText(t *testing.T) string {
 		}
 	})
 	if systemText == "" {
-		t.Fatal("bin/interp-helper system-message unavailable: a missing measurement fails, it never skips")
+		t.Fatal("the helper built for this test run gave no system-message: a missing measurement fails, it never skips")
 	}
 	if sha256Hex([]byte(systemText)) != helperSystemSHA(t) {
 		t.Fatal("helper system message text and sha disagree")

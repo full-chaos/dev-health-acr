@@ -1,3 +1,5 @@
+//go:build unix
+
 // Command gocapture captures the incumbent interpreter (gpt-5.6-luna behind
 // the production genkit runtime) on a sealed held-out set, with a wire proof
 // for every request. SPEC-incumbent-capture.md is the contract.

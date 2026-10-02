@@ -1,4 +1,4 @@
-//go:build gocapture_loopback
+//go:build unix && gocapture_loopback
 
 package main
 

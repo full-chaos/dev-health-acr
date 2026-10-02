@@ -1,3 +1,5 @@
+//go:build unix
+
 package main
 
 import (
@@ -139,7 +141,7 @@ var systemSHA string
 func helperSystemSHA(t *testing.T) string {
 	t.Helper()
 	systemSHAOnce.Do(func() {
-		out, err := exec.Command(filepath.Join(experimentDir(), "bin", "interp-helper"), "system-message").Output()
+		out, err := exec.Command(builtHelper, "system-message").Output()
 		if err != nil {
 			return
 		}
@@ -151,7 +153,7 @@ func helperSystemSHA(t *testing.T) string {
 		}
 	})
 	if systemSHA == "" {
-		t.Fatal("bin/interp-helper system-message unavailable: a missing measurement fails, it never skips")
+		t.Fatal("the helper built for this test run gave no system-message: a missing measurement fails, it never skips")
 	}
 	return systemSHA
 }
