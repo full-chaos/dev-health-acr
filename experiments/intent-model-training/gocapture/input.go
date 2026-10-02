@@ -118,6 +118,8 @@ func phaseFor(set string) (string, error) {
 		return "H3-round3", nil
 	case "H4":
 		return "H4-cov2", nil
+	case "H5":
+		return "H5-cov3", nil
 	}
 	return "", fmt.Errorf("unknown held-out set %q", set)
 }
