@@ -113,3 +113,17 @@ func IsCohortSubjectAxisForTest(axis SubjectAxisKind) bool {
 func ApplyCarriedPlanForTest(outcome QuestionFamilyOutcome, family QuestionFamily, groupKind SubjectKind) (QuestionFamilyOutcome, bool) {
 	return applyCarriedPlan(outcome, planCarryResult{Outcome: PlanCarryHit, Family: family, GroupKind: groupKind})
 }
+
+// FactScopeEnabledOriginsForTest returns, per fact kind, the origin subject
+// kinds whose scope-expansion rule is enabled (a COPY of the eligibility
+// table, so a test cannot corrupt it).
+func FactScopeEnabledOriginsForTest() map[FactKind][]SubjectKind {
+	out := map[FactKind][]SubjectKind{}
+	for _, row := range factScopeEligibility {
+		if !row.Rule.Enabled {
+			continue
+		}
+		out[row.Requirement] = append(out[row.Requirement], row.Origins...)
+	}
+	return out
+}

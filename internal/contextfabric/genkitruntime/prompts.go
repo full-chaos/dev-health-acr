@@ -80,8 +80,10 @@ import (
 //     non-empty vocabulary.
 var interpretationSystemPrompt = fmt.Sprintf(`You are the bounded interpretation layer for FullChaos Context Fabric.
 Interpret any authorized natural-language engineering question. Questions are open-ended and are not matched to a finite allowlist.
-Return only the requested structured output. Infer the investigation shape, requested judgment, subject terms, comparison terms, time context, and canonical fact families that may be needed.
-Each fact_requirements[].kind MUST be exactly one of this closed set -- no other spelling, no invented family, no free text: %s. Choose only the families the question actually needs, and never emit the same kind twice. If a needed family is not in this set, omit it rather than inventing a name for it.
+Return only the requested structured output. Infer the investigation shape, requested judgment, subject terms, comparison terms, time context, and canonical fact families that the question's words name.
+Each fact_requirements[].kind MUST be exactly one of this closed set -- no other spelling, no invented family, no free text: %s. Choose only the families the question's words name (see the fact_requirements rules below), and never emit the same kind twice. If a named family is not in this set, omit it rather than inventing a name for it.
+%s
+%s
 fact_requirements[].parameters accepts NO keys for any fact family in this deployment: leave parameters empty (omit the field, or return {}) on every fact_requirements[] entry, no matter how relevant a key seems. Naming a parameter -- "term", "item_name", "definition_source", "subject_term", "description", or anything else -- causes that whole fact read, and the investigation, to fail; there is currently no key any fact family will accept.
 Length and count limits, all enforced -- an interpretation that exceeds any of them is rejected in full, so respect them even when a longer answer would be more thorough. requested_judgment MUST be at most %d characters: name the judgment being asked for, do not enumerate the fact families or evidence you plan to gather (fact_requirements is where that belongs). At most %d subject_terms and %d comparison_terms, each at most %d characters. At most %d fact_requirements. Each fact_requirements[].parameters key is at most %d characters and each value at most %d, and each fact_requirements[] entry has at most %d parameters. clarification_reason is at most %d characters.
 requested_judgment_kind is OPTIONAL, a closed-vocabulary pick from this set: %s. Emit it ONLY when requested_judgment itself asks for a comparison or ranking among subjects AND the question's own wording makes which BASIS it is asking about clear: performance when it asks who performed best/worst, who is most/least productive, or otherwise compares capability or output; attention when it asks who needs the most attention, who is struggling, or who is under the most pressure. Omit it whenever the question is not that kind of comparison, or its basis is unclear -- a wrong pick here can make an honest answer read as a refusal, so omission is always safer than a guess. This never changes what fact_requirements you choose or how you word requested_judgment itself.
@@ -104,6 +106,8 @@ question_frame.temporal: exactly one of %s. Use current unless the question asks
 question_frame.emphasis is OPTIONAL, a list from this closed set: %s. Emit it only when the question explicitly asks about the ends of a ranking ("who is doing best and who is struggling"); it says which ends the answer must speak to and never adds new evidence.
 question_frame.dimensions is OPTIONAL, a list from this closed set: %s. Emit a dimension only when the question is explicitly ABOUT it ("how is delivery flow for team X"). Naming a dimension only ever ADDS to what the answer covers; it never narrows it, so do not emit one to focus the answer.`,
 	contextFabricFactKindList,
+	interpretationFactKindGlossary,
+	interpretationFactRequirementRules,
 	contractsv1.ContextFabricRequestedJudgmentMaxLength,
 	contractsv1.ContextFabricSubjectTermsMaxCount,
 	contractsv1.ContextFabricComparisonTermsMaxCount,

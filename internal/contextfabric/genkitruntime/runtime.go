@@ -211,7 +211,14 @@ const (
 	// a row interpreted before the model was ever told this field exists
 	// must not satisfy a reuse lookup as though it were interpreted under
 	// the new prompt (same standing rule stated at v9 above).
-	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v15"
+	// v15 -> v16: interpretationSystemPrompt gains the 22-kind fact-kind
+	// glossary and the word-to-kind fact_requirements rules, and drops
+	// "infer ... fact families that may be needed" and "choose only the
+	// families the question actually needs" for "the families the question's
+	// words name"; evidence is never listed and the burden composite is the
+	// one fixed exception. A change to what the model is told, so the
+	// version bumps (same standing rule stated at v9 above).
+	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v16"
 	// DefaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
 	// review round: v2 added claimed_facts for value-level closure; v3
 	// closes the driver category vocabulary (a fixed 16-value set, no
