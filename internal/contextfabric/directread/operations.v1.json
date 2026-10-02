@@ -827,7 +827,10 @@
         }
       ],
       "withheld_outputs": [],
-      "disclosure": []
+      "disclosure": [],
+      "notes": [
+        "input.teamId is required: without it the call is refused with scope_required"
+      ]
     },
     {
       "name": "complexityTimeseries",

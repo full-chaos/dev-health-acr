@@ -332,6 +332,7 @@ func declaredPolicy() policyDeclaration {
 					"input.untilDate": client,
 					"input.teamId":    teamID,
 				},
+				Notes: []string{"input.teamId is required: without it the call is refused with scope_required"},
 				RefusedPaths: map[string]dr.Refusal{
 					"input.repoId": refuse(dr.RefusalVariableNotAllowed, "a repository-only read returns org-wide team ratios ([ops] cognitiveload/cognitiveload.go:178-195,343-356; RM §7, design D.3)"),
 				},

@@ -65,3 +65,17 @@ func TestCognitiveLoadWithoutTeamIDNamesInputTeamID(t *testing.T) {
 		t.Fatalf("want scope_required naming input.teamId, got %+v", resp.Refusal)
 	}
 }
+
+func TestCognitiveLoadCatalogueNoteNamesInputTeamID(t *testing.T) {
+	cat, _ := directread.DefaultCatalogue()
+	op, refusal := cat.Lookup("cognitiveLoad")
+	if refusal != nil {
+		t.Fatalf("lookup: %v", refusal)
+	}
+	for _, n := range op.Notes {
+		if strings.Contains(n, "`input.teamId`") || strings.Contains(n, "input.teamId is required") {
+			return
+		}
+	}
+	t.Fatalf("no note names input.teamId: %v", op.Notes)
+}
