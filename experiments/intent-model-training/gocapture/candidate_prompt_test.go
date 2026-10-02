@@ -215,6 +215,7 @@ func TestCandidateFlagsAndFile(t *testing.T) {
 		"control character": {"cand-v1", "", write("nul.md", []byte("a\x00b"), 0o600), "control character"},
 		"too large":         {"cand-v1", "", write("big.md", bytes.Repeat([]byte("a"), maxAppendixBytes+1), 0o600), "larger than"},
 		"holds the key":     {"cand-v1", "", write("key.md", []byte("rule "+testKey+"\n"), 0o600), "credential"},
+		"helper envelope":   {"cand-v1", "", write("envelope.md", []byte(`{"text":"You interpret one question.","sha256":"`+strings.Repeat("a", 64)+`","bytes":27}`+"\n"), 0o600), "helper's JSON output"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -563,6 +564,62 @@ func TestCandidateRefusesAnyOtherDifference(t *testing.T) {
 	mustEqual(t, "server requests", tf.fx.server.count(), 0)
 }
 
+// Retries and redraws in the replace mode: every attempt carries the
+// candidate as the whole system message, with its own base proof, and the
+// redraw is still authorized only by production's rejection event.
+func TestCandidateRetriesAndRedraws(t *testing.T) {
+	f := newFixture(t)
+	f.profileMap["model_max_transport_retries"] = 1
+	f.writeProfile()
+	path := f.writeCandidate(testCandidate)
+	f.approveCandidate("cand-v1", path)
+	// row-a#0: 429 then a rejected draw, then the redraw succeeds.
+	f.server.push(scripted{status: 429, body: `{"error":{"message":"slow down"}}`, headers: retryFast},
+		scripted{status: 200, body: completion(rejectedAnswer)})
+	if _, err := f.run(f.candidateConfig("cand1", "cand-v1", path)); err != nil {
+		t.Fatal(err)
+	}
+	mustEqual(t, "server requests", f.server.count(), 8)
+	for i, body := range f.server.bodies {
+		if systemContent(t, body) != testCandidate {
+			t.Fatalf("request %d does not carry the candidate as the whole system message", i)
+		}
+	}
+	var first artifact
+	for _, a := range f.artifacts("cand1") {
+		if a.RowID == "row-a" && a.Replicate == 0 {
+			first = a
+		}
+	}
+	if len(first.Attempts) != 3 || first.Attempts[0].Status != 429 || first.Attempts[2].Draw != 1 || first.Outcome != "ok" ||
+		len(first.DrawAuthorizations) != 1 {
+		t.Fatalf("attempts %+v outcome %s", first.Attempts, first.Outcome)
+	}
+	candidateSHA := sha256Hex([]byte(testCandidate))
+	for i, at := range first.Attempts {
+		// Each attempt: its own base proof and its own proof of the sent request.
+		if !at.Sent || at.BaseExpectedDescriptorSHA256 == "" || at.BaseExpectedDescriptorSHA256 != at.BaseObservedDescriptorSHA256 ||
+			at.ExpectedDescriptorSHA256 != at.ObservedDescriptorSHA256 || at.BaseExpectedDescriptorSHA256 == at.ExpectedDescriptorSHA256 {
+			t.Fatalf("attempt %d proofs %+v", i, at)
+		}
+		var d descriptor
+		if err := json.Unmarshal(at.ObservedDescriptor, &d); err != nil || d.Messages[0].ContentSHA256 != candidateSHA {
+			t.Fatalf("attempt %d: the sent system message is not the candidate: %v", i, err)
+		}
+	}
+	// The redraw has another seed than the first draw; the two attempts of draw 0 share one.
+	seed0, _ := seedOf(first.Attempts[0].ObservedDescriptor)
+	seed1, _ := seedOf(first.Attempts[1].ObservedDescriptor)
+	seed2, _ := seedOf(first.Attempts[2].ObservedDescriptor)
+	var q struct {
+		Question string `json:"question"`
+	}
+	_ = json.Unmarshal([]byte(fixtureRequests["row-a"]), &q)
+	mustEqual(t, "retry keeps the seed", seed1, seed0)
+	mustEqual(t, "redraw seed", seed2, strconv.FormatInt(interpretSeed(q.Question, 1), 10))
+	mustEqual(t, "server = reservations", f.server.count(), f.ledger().spent)
+}
+
 func TestCandidateCrashResume(t *testing.T) {
 	f := newFixture(t)
 	path := f.writeCandidate(testCandidate)
@@ -652,6 +709,25 @@ func TestCandidateLedgerRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() {
+		// An explicitly empty mode member is not the absent member of the
+		// append mode: a ledger line that holds one is refused at load.
+		file, err := os.OpenFile(f.paths.Ledger, os.O_APPEND|os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		line := `{"kind":"pair_reserved","approval_id":"appr-test","run_id":"cand1","seal_digest":"s","row_id":"r2","replicate":0,"variant":"cand-v1","variant_mode":"","at":"2026-10-02T00:00:00Z"}` + "\n"
+		if _, err := file.WriteString(line); err != nil {
+			t.Fatal(err)
+		}
+		_ = file.Close()
+		if reopened, err := f.tryLedger(); err == nil || !strings.Contains(err.Error(), "empty variant_mode member") {
+			if reopened != nil {
+				reopened.close()
+			}
+			t.Fatalf("a ledger line with an empty variant_mode member: %v", err)
+		}
+	}()
 	defer replayed.close()
 	if replayed.variants["cand-v1"] != sha || replayed.variantModes["cand-v1"] != variantModeReplace || replayed.variantModes["rules-v1"] != variantModeAppend {
 		t.Fatalf("the replayed ledger differs: %+v", replayed.variantModes)

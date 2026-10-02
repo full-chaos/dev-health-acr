@@ -77,7 +77,7 @@ func cmdRun(args []string, recovery bool) error {
 	by := fs.String("authorized-by", "", "recover only: human:chris")
 	reason := fs.String("reason", "", "recover only: why")
 	recoverIndex := fs.Int("recovery-index", 0, "recover only: the next recovery index chris authorizes (1, 2, ...)")
-	promptVariant := fs.String("prompt-variant", "", "prompt-variant name: capture the labelled control incumbent-variant[<name>], NOT the incumbent (needs --system-append-file and chris's approve-variant record)")
+	promptVariant := fs.String("prompt-variant", "", "prompt-variant name: capture the labelled control incumbent-variant[<name>], NOT the incumbent (needs --system-append-file or --system-message-file, and chris's approve-variant record for that name, mode and file)")
 	appendFile := fs.String("system-append-file", "", "prompt variant only: the appendix added after the production system message (0600 file)")
 	messageFile := fs.String("system-message-file", "", "prompt variant only, replace mode: the whole candidate system message, sent in place of the production system message (0600 file; not with --system-append-file)")
 	if err := fs.Parse(args); err != nil {

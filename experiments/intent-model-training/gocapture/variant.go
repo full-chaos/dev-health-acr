@@ -188,7 +188,23 @@ func loadVariant(name, appendPath, messagePath string) (*promptVariant, error) {
 			return nil, errors.New(label + " holds a control character (only newline and tab are allowed)")
 		}
 	}
+	if mode == variantModeReplace && isHelperEnvelope(data) {
+		return nil, errors.New(label + " is the helper's JSON output, not a system message: write the value of its text member to the file")
+	}
 	return &promptVariant{Name: name, Appendix: data, AppendixSHA256: sha256Hex(data), Mode: mode}, nil
+}
+
+// isHelperEnvelope reports whether data is the JSON object that
+// `interp-helper system-message` prints (it has a text and a sha256 member).
+// Sent as it is, that object would be the prompt.
+func isHelperEnvelope(data []byte) bool {
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(data, &envelope) != nil {
+		return false
+	}
+	_, hasText := envelope["text"]
+	_, hasSHA := envelope["sha256"]
+	return hasText && hasSHA
 }
 
 // systemContentSpan finds the string content of the FIRST message, which

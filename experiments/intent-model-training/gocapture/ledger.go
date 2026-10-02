@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -175,11 +176,27 @@ func (l *approvalLedger) load() error {
 		if err := strictUnmarshal(scanner.Bytes(), &rec); err != nil {
 			return fmt.Errorf("approval ledger line %d: %w", line, err)
 		}
+		// The runner never writes an empty variant_mode member (the append
+		// mode writes none). A decoded record cannot show an empty member, so
+		// the line itself is checked.
+		if rec.ApprovalID == l.approvalID && rec.VariantMode == "" && hasMember(scanner.Bytes(), "variant_mode") {
+			return fmt.Errorf("approval ledger line %d: an empty variant_mode member", line)
+		}
 		if err := l.apply(rec); err != nil {
 			return fmt.Errorf("approval ledger line %d: %w", line, err)
 		}
 	}
 	return scanner.Err()
+}
+
+// hasMember reports whether the JSON object in line has the member name.
+func hasMember(line []byte, name string) bool {
+	var members map[string]json.RawMessage
+	if json.Unmarshal(line, &members) != nil {
+		return false
+	}
+	_, ok := members[name]
+	return ok
 }
 
 // pairsOf is the pair map of one series: the incumbent's ("") or one
