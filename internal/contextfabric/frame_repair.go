@@ -443,7 +443,7 @@ func repairCountKindCollapse(receipt ModelExecutionReceipt, proposed QuestionFra
 		Kind:   SubjectExpressionChildrenOfScope,
 		Scoped: &ScopedSetExpression{AnchorTerms: proposed.SubjectExpression.SubjectTerms(), MemberKind: hint},
 	}
-	if _, _, reason := CohortMemberKindFor(repaired.SubjectExpression); reason != CohortDiscoverable {
+	if _, _, reason := CohortMemberKindFor(repaired.SubjectExpression); reason != CohortDiscoverable || scopedOnlyCohortKinds[hint] {
 		return declined(FrameRepairDeclinedHintUnservable)
 	}
 	considered.Attempts++
