@@ -66,16 +66,26 @@ func TestCognitiveLoadWithoutTeamIDNamesInputTeamID(t *testing.T) {
 	}
 }
 
-func TestCognitiveLoadCatalogueNoteNamesInputTeamID(t *testing.T) {
+func TestCognitiveLoadCatalogueResponseNamesInputTeamID(t *testing.T) {
 	cat, _ := directread.DefaultCatalogue()
-	op, refusal := cat.Lookup("cognitiveLoad")
-	if refusal != nil {
-		t.Fatalf("lookup: %v", refusal)
+	sections, err := directread.ParseCatalogSections(directread.CatalogSectionOperations)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, n := range op.Notes {
-		if strings.Contains(n, "`input.teamId`") || strings.Contains(n, "input.teamId is required") {
-			return
+	built := directread.BuildDataCatalog(cat, directread.CatalogCaller{PrincipalClass: directread.ClassUnrestricted, Scopes: []string{"context:read", "data:read"}, DataRead: true, OperationsServable: true, GateComposed: true}, sections)
+	if built.Operations == nil {
+		t.Fatal("no operations section")
+	}
+	for _, op := range built.Operations.Operations {
+		if op.Name != "cognitiveLoad" {
+			continue
 		}
+		for _, n := range op.Notes {
+			if strings.Contains(n, "input.teamId is required") {
+				return
+			}
+		}
+		t.Fatalf("no note in the data_catalog response names input.teamId: %v", op.Notes)
 	}
-	t.Fatalf("no note names input.teamId: %v", op.Notes)
+	t.Fatal("cognitiveLoad missing from the data_catalog response")
 }
