@@ -81,3 +81,27 @@ func TestInterpretationPromptDropsTheInferMayBeNeededContradiction(t *testing.T)
 		t.Error("rendered prompt lacks the words-name-the-kinds instruction")
 	}
 }
+
+func TestInterpretationPromptTeamServingMatchesCapabilities(t *testing.T) {
+	t.Parallel()
+	for _, line := range []string{
+		"(work_item, team)",
+		"(pull_request, team)",
+		"(deployment, repository, team)",
+		"(incident, team)",
+		"A team also has its own rollups of blockers, pull_requests, incidents and deployments.",
+	} {
+		if !strings.Contains(interpretationSystemPrompt, line) {
+			t.Errorf("rendered prompt lacks the team-serving statement %q", line)
+		}
+	}
+	for _, stale := range []string{
+		"and not a repository or team fact",
+		"Not an incident count for a team",
+		"incidents, deployments, continuous_integration and source_health are not reached from a team",
+	} {
+		if strings.Contains(interpretationSystemPrompt, stale) {
+			t.Errorf("rendered prompt still carries the stale team-serving statement %q", stale)
+		}
+	}
+}
