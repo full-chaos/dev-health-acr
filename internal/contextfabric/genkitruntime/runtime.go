@@ -223,7 +223,15 @@ const (
 	// a trailing window keeps axis current, and change and movement questions
 	// take period_comparison and time_series. A change to what the model is
 	// told, so the version bumps (same standing rule stated at v9 above).
-	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v17"
+	// v17 -> v18: interpretationSystemPrompt gains the goal cues, the
+	// emphasis ends and the closed dimension word lists, the judgment-kind cue
+	// table, the bare "why?" clarification rule and the follow-up carry
+	// rules, and drops "only when the question explicitly asks about the ends
+	// of a ranking", "only when the question is explicitly ABOUT it", "Emit
+	// EVERY goal" and the unqualified clarification sentence they contradict.
+	// A change to what the model is told, so the version bumps (same
+	// standing rule stated at v9 above).
+	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v18"
 	// DefaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
 	// review round: v2 added claimed_facts for value-level closure; v3
 	// closes the driver category vocabulary (a fixed 16-value set, no
