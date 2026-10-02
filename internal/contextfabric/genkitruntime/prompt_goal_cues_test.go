@@ -115,3 +115,51 @@ func TestInterpretationEmphasisWordListsCoverTheVocabulary(t *testing.T) {
 		}
 	}
 }
+
+const (
+	judgmentKindUnsetRule = `- A cue word alone never emits it. A question that does not rank, survey or compare subjects leaves it unset, also when it names a cue word: a question that asks only for a state, a driver (a "why"), a trend, a count or the state of each member.`
+	judgmentKindCarryRule = `A follow-up emits it only when its own words rank, survey or compare subjects by a cue; it never keeps the kind of an earlier turn.`
+)
+
+// The leave-unset rule sits right after the cue word lists, so the model reads
+// it before any other omission rule and never takes a cue word as a trigger.
+func TestInterpretationPromptJudgmentKindLeavesUnsetWithoutARanking(t *testing.T) {
+	t.Parallel()
+	p := interpretationSystemPrompt
+	for _, rule := range []string{judgmentKindUnsetRule, judgmentKindCarryRule} {
+		if got := strings.Count(p, rule); got != 1 {
+			t.Errorf("rule %q appears %d times, want exactly 1", rule, got)
+		}
+	}
+	at := -1
+	for _, anchor := range []string{
+		"requested_judgment_kind is OPTIONAL",
+		"requested_judgment_kind cues.",
+		"- performance: performed or performing best or worst",
+		judgmentKindUnsetRule,
+		judgmentKindCarryRule,
+		"- Omit it for every other basis:",
+		"For subject_terms and comparison_terms",
+	} {
+		i := strings.Index(p, anchor)
+		if i <= at {
+			t.Fatalf("%q is missing or out of order (index %d, previous anchor at %d)", anchor, i, at)
+		}
+		at = i
+	}
+}
+
+// No sentence outside the judgment-kind section names the field, so no worked
+// example elsewhere can show it set for a question the section leaves unset.
+func TestInterpretationPromptNamesJudgmentKindOnlyInItsSection(t *testing.T) {
+	t.Parallel()
+	p := interpretationSystemPrompt
+	start := strings.Index(p, "requested_judgment_kind is OPTIONAL")
+	end := strings.Index(p, "For subject_terms and comparison_terms")
+	if start < 0 || end <= start {
+		t.Fatalf("judgment-kind section anchors not found in order (start %d, end %d)", start, end)
+	}
+	if n := strings.Count(p[:start], "requested_judgment_kind") + strings.Count(p[end:], "requested_judgment_kind"); n != 0 {
+		t.Errorf("requested_judgment_kind is named %d times outside its section", n)
+	}
+}
