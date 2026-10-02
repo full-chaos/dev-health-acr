@@ -351,9 +351,14 @@ func repairCells() []repairCell {
 			wantKind: SubjectExpressionChildrenOfScope, wantAnchors: []string{"owner", repairAnchorTerm}, wantLine: appliedLine(),
 		},
 		{
-			cell: "hint a vocabulary kind no discovery arm serves", receipt: func(r *ModelExecutionReceipt) { r.RequestedSubjectKind = contractsv1.ContextFabricSubjectDeployment },
+			cell: "hint a vocabulary kind no discovery arm serves", receipt: func(r *ModelExecutionReceipt) { r.RequestedSubjectKind = contractsv1.ContextFabricSubjectMetric },
 			frame: countOverNamedSubject, wantOutcome: FrameValidationOutcomeRefusedInvalid,
 			wantLine: refusedI9Terms("declined_hint_unservable", "match"),
+		},
+		{
+			cell: "hint deployment, served only as the members of a named anchor", receipt: func(r *ModelExecutionReceipt) { r.RequestedSubjectKind = contractsv1.ContextFabricSubjectDeployment },
+			frame: countOverNamedSubject, wantOutcome: FrameValidationOutcomeRepaired, wantKind: SubjectExpressionChildrenOfScope,
+			wantAnchors: []string{repairAnchorTerm}, wantLine: func() map[string]any { line := appliedLine(); line["repair_member_kind"] = "deployment"; return line }(),
 		},
 		{
 			cell: "hint organization", receipt: func(r *ModelExecutionReceipt) { r.RequestedSubjectKind = SubjectOrganization },
