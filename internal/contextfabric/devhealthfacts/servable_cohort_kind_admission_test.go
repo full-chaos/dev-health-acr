@@ -69,6 +69,9 @@ func TestEveryProjectedKindWithACohortFactProducerIsServable(t *testing.T) {
 	for _, kind := range contextfabric.ServableCohortKindsForAudit() {
 		servable[kind] = true
 	}
+	for _, kind := range contextfabric.ScopedOnlyCohortKindsForAudit() {
+		servable[kind] = true
+	}
 	projected := devhealthsource.ProjectedSubjectKinds()
 	if len(projected) == 0 {
 		t.Fatal("devhealthsource.ProjectedSubjectKinds() is empty, so this guard quantifies over nothing -- the producer registries declare no subject kinds at all")
@@ -104,7 +107,7 @@ func TestEveryServableKindIsProjected(t *testing.T) {
 	for _, kind := range devhealthsource.ProjectedSubjectKinds() {
 		projected[kind] = true
 	}
-	admitted := contextfabric.ServableCohortKindsForAudit()
+	admitted := append(contextfabric.ServableCohortKindsForAudit(), contextfabric.ScopedOnlyCohortKindsForAudit()...)
 	if len(admitted) == 0 {
 		t.Fatal("the seam allow-list is empty, so this guard quantifies over nothing")
 	}

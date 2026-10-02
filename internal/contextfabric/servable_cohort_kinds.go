@@ -100,6 +100,20 @@ var scopedOnlyCohortKinds = map[SubjectKind]bool{
 	SubjectDeployment: true,
 }
 
+// ScopedOnlyCohortKindsForAudit returns, sorted, the kinds served only as the
+// members of a named anchor, for the audits that quantify over "every kind an
+// arm exists for". No decision calls it.
+func ScopedOnlyCohortKindsForAudit() []SubjectKind {
+	kinds := make([]SubjectKind, 0, len(scopedOnlyCohortKinds))
+	for kind, admitted := range scopedOnlyCohortKinds {
+		if admitted {
+			kinds = append(kinds, kind)
+		}
+	}
+	sort.Slice(kinds, func(i, j int) bool { return kinds[i] < kinds[j] })
+	return kinds
+}
+
 // DeploymentCohortAnchorServable reports whether a committed scope anchor of
 // this kind can anchor a deployment cohort. Only a repository is proven.
 func DeploymentCohortAnchorServable(anchor SubjectKind) bool {

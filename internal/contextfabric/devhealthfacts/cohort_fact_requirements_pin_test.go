@@ -182,6 +182,36 @@ func TestCohortDerivedFactKindsIsExactlyTheTablesUnion(t *testing.T) {
 // names, beside the expanded per-item facts; no answer obligation requires
 // them for a discovered team cohort, and asking would add reads the planner
 // does not use (planning_authority_parity.txt shows the loss column).
+//
+// The deployment rollups (repository aggregate, team rollup) are served for a
+// repository or team subject a question names. The deployment cohort asks for
+// the per-deployment facts only; adding the rollups to a repository or team
+// cohort would widen what those existing cohorts read, a change this arm does
+// not make.
 func cohortOmissionIsDeliberate(factKind contextfabric.FactKind, subjectKind contextfabric.SubjectKind) bool {
+	if factKind == contextfabric.FactDeployments {
+		return subjectKind == contextfabric.SubjectRepository || subjectKind == contextfabric.SubjectTeam
+	}
 	return subjectKind == contextfabric.SubjectTeam && (factKind == contextfabric.FactIncidents || factKind == contextfabric.FactPullRequests)
+}
+
+// TestEveryScopedOnlyCohortKindHasARequirementRow is the scoped-only twin of
+// TestEveryServableCohortKindHasARequirementRow.
+func TestEveryScopedOnlyCohortKindHasARequirementRow(t *testing.T) {
+	t.Parallel()
+	table := graphrank.CohortFactRequirementKinds()
+	kinds := contextfabric.ScopedOnlyCohortKindsForAudit()
+	if len(kinds) == 0 {
+		t.Fatal("no scoped-only kind, so this guard asserts nothing")
+	}
+	for _, subjectKind := range kinds {
+		if len(table[subjectKind]) == 0 {
+			t.Errorf("%q is servable as the members of a named anchor but has no cohort fact-requirement row", subjectKind)
+		}
+		for _, factKind := range table[subjectKind] {
+			if !capabilityDeclares(factKind, subjectKind) {
+				t.Errorf("the %q cohort asks for %q, which no registered provider declares for it", subjectKind, factKind)
+			}
+		}
+	}
 }
