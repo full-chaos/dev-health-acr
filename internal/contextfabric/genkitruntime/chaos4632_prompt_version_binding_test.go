@@ -82,7 +82,8 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// v16 -> v17: the time rules; time_context is copied, not inferred.
 			// v17 -> v18: goal cues, emphasis ends, dimension word lists, judgment-kind cues, clarification and follow-up rules.
 			// v18 -> v19: the shape mapping, the flat-field restatement, the proper-name first term, the subject expression rules and the kind-word rule for requested_subject_kind.
-			digest: "310262220891efd4b5a89605fde1bdaeb16b972b69698ae67acd8d0f78069edd",
+			// v19 -> v20: rule precedence with the count rule before the share rule, the member-kind, event-member and assignee rules, more state conditions, and worked examples for the members of a named parent.
+			digest: "78ba0ee6231d556b2350ea6411f721ba9702f8077a17f75354dae5519d430601",
 		},
 		{
 			name:    "synthesis system prompt",

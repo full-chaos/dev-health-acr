@@ -240,7 +240,14 @@ const (
 	// named_subject, children_of_scope and non-verbatim-term sentences they
 	// contradict. A change to what the model is told, so the version bumps
 	// (same standing rule stated at v9 above).
-	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v19"
+	// v19 -> v20: the subject expression rules gain a precedence sentence
+	// (the rule listed first wins) with the count rule listed before the
+	// share rule, the member-kind rule, the event-member rule, the review
+	// states and "behind" as state conditions and the assignee rule, and
+	// the prompt gains worked examples for the members of a named parent.
+	// A change to what the model is told, so the version bumps (same
+	// standing rule stated at v9 above).
+	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v20"
 	// DefaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
 	// review round: v2 added claimed_facts for value-level closure; v3
 	// closes the driver category vocabulary (a fixed 16-value set, no
