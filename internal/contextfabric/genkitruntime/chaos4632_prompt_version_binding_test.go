@@ -81,7 +81,7 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// fact_requirements rules. See the constant's own doc comment.
 			// v16 -> v17: the time rules; time_context is copied, not inferred.
 			// v17 -> v18: goal cues, emphasis ends, dimension word lists, judgment-kind cues, clarification and follow-up rules.
-			digest: "7b069fa0d39e76dd4b583f06b8fc10f3ddfb63ce62887cfd904a6622b86a9765",
+			digest: "d0f194cfb99b790eecb71933a5f7103bd242522aec951bffec1fe3eb43caaf48",
 		},
 		{
 			name:    "synthesis system prompt",
