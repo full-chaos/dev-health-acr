@@ -137,19 +137,24 @@ func drainPages(t *testing.T, tables ...entityTable) (pages [][]string, bounded 
 	if available {
 		t.Fatal("rows that carry no payload built a batch")
 	}
+	return pages, boundedPageLines(t, &logs), err
+}
+
+func boundedPageLines(t *testing.T, logs *bytes.Buffer) (bounded []map[string]any) {
+	t.Helper()
 	for _, line := range bytes.Split(bytes.TrimSpace(logs.Bytes()), []byte("\n")) {
 		if len(line) == 0 {
 			continue
 		}
 		var record map[string]any
-		if jsonErr := json.Unmarshal(line, &record); jsonErr != nil {
+		if err := json.Unmarshal(line, &record); err != nil {
 			t.Fatalf("log line is not JSON: %q", line)
 		}
 		if msg, _ := record["msg"].(string); strings.HasPrefix(msg, "devhealthsource page ended at the last row a truncated table returned") {
 			bounded = append(bounded, record)
 		}
 	}
-	return pages, bounded, err
+	return bounded
 }
 
 func requirePages(t *testing.T, got [][]string, want ...[]string) {
@@ -415,7 +420,15 @@ func TestOverlapWalkNeverStepsPastTheLastRowATruncatedTableReturned(t *testing.T
 	if missing != 0 || len(walked) != len(want) {
 		t.Fatalf("the walk reached %d of %d rows; %d rows were never read", len(walked), len(want), missing)
 	}
-	if !strings.Contains(logs.String(), `"msg":"devhealthsource page ended at the last row a truncated table returned`) || !strings.Contains(logs.String(), `"table":"full"`) {
-		t.Fatalf("the walk page that the bound ended wrote no bounded-page line:\n%s", logs.String())
+	// Only the first page of a pass is ended by the bound, at a198. Each pass
+	// that walks it says so; the pages the cap ended and the last page do not.
+	bounded := boundedPageLines(t, &logs)
+	if len(bounded) == 0 {
+		t.Fatal("the walk page that the bound ended wrote no bounded-page line")
+	}
+	for _, line := range bounded {
+		if line["table"] != "full" || line["last_key_digest"] != keyDigest("a198") {
+			t.Fatalf("bounded-page line = %v, want only the page that ends at the last row of table full", line)
+		}
 	}
 }
