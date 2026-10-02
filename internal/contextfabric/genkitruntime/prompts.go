@@ -106,6 +106,7 @@ question_frame.subject_expression describes WHAT the question is about, structur
 Fill only the fields that kind uses, and fill them ALL: named_subject uses terms; explicit_set uses operands (each operand is itself a named_subject with terms, or a children_of_scope with anchor_terms and member_kind and optional member_qualifier); discovered_kind uses member_kind; children_of_scope uses anchor_terms and member_kind and optional member_qualifier; grouped_members uses group_kind AND member_kind, set to EXACTLY the kinds the question names. member_qualifier is optional and MUST be exactly one of "status" or "assignee" when the question explicitly qualifies the members; omit it for unqualified membership. A question about EACH member of one kind ("how is each repository doing", "each project's delivery pace") is discovered_kind over that kind, not a grouping. When the question explicitly asks to partition members BY a kind ("repository health grouped by team", "group the projects by project"), express that partition exactly as asked, even when it groups a kind by that same kind (then group_kind and member_kind are both that kind). Never re-express an explicit grouping as discovered_kind or any other variant, and never drop or change group_kind or member_kind to make it look acceptable: whether a grouping is legal is decided by the server after you answer, never by you; organization_scope uses member_kind only when the question is a count ("how many repositories are in the organization"). terms and anchor_terms follow the same VERBATIM rule as subject_terms. member_kind and group_kind come from the same closed subject-kind set as group_kind above.
 %s
 %s
+%s
 question_frame.temporal: exactly one of %s. Use current unless the question asks about a span (bounded_window), a comparison between two periods (period_comparison), or movement over time (time_series). A question asking how something CHANGED is never current.
 %s
 %s
@@ -133,6 +134,7 @@ question_frame.temporal: exactly one of %s. Use current unless the question asks
 	interpretationGoalCueRules,
 	contextFabricSubjectExpressionKindList,
 	interpretationSubjectExpressionRules,
+	interpretationScopedMemberExampleLines,
 	interpretationShapeRules,
 	contextFabricTemporalIntentList,
 	interpretationTemporalRules,

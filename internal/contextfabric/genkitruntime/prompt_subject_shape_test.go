@@ -21,7 +21,7 @@ func TestInterpretationPromptSubjectRulesStatedOnce(t *testing.T) {
 		`is organization_scope with member_kind set to the counted kind; the organization is the scope bound, not the counted subject.`,
 		`A count with no organization wording and no named parent is discovered_kind.`,
 		`is named_subject with the goal assess_state. Never make it children_of_scope, and never a count over the members of the named subject.`,
-		`A count of the members of a named parent is children_of_scope too.`,
+		`A count of the members of a named parent ("how many pull requests did the X team merge") is children_of_scope.`,
 		`"who owns repository X" is children_of_scope, not named_subject: the repository is the anchor and member_kind is team.`,
 		`A state verb with a window on the members of a named parent ("merged", "closed", "stay unresolved" over a stated window) is a state condition too.`,
 		`Emit it only when a kind word is said in the question`,
