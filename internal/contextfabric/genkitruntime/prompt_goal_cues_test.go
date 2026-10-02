@@ -10,7 +10,7 @@ import (
 func TestInterpretationPromptGoalCuesStatedOnce(t *testing.T) {
 	t.Parallel()
 	for _, rule := range []string{
-		`What changed, how X is different and whether X improved, asked with no "why", are assess_state.`,
+		`naming no measure to follow over a span, is assess_state. When the question names one measure and a span, the movement cue below wins.`,
 		`explain_change needs an explicit "why" about a movement`,
 		`How one named measure (a duration, a rate or a count) moved over a stated span or over time is describe_trend.`,
 		`A "why" about a present condition (stuck, blocked, behind, slow, struggling) is explain_drivers.`,

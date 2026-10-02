@@ -83,7 +83,7 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// v17 -> v18: goal cues, emphasis ends, dimension word lists, judgment-kind cues, clarification and follow-up rules.
 			// v18 -> v19: the shape mapping, the flat-field restatement, the proper-name first term, the subject expression rules and the kind-word rule for requested_subject_kind.
 			// v19 -> v20: rule precedence with the count rule before the share rule, the member-kind, event-member and assignee rules, more state conditions, and worked examples for the members of a named parent.
-			digest: "a01c51075a8a96cc35aac2aa0642f47c8d11adc01e2efd35f555b0d30ddb5d63",
+			digest: "9eb2b867f4a958080ab90f32401b80dcf826e94bdd5be16edfe46a0b01670187",
 		},
 		{
 			name:    "synthesis system prompt",
