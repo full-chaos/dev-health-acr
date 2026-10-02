@@ -3096,6 +3096,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		}
 		e.workItemTupleNarrowing(ctx, principal, &plan, request.Options.MaxCohortMembers, tupleCensus)
 	} else {
+		if declared, scoped := deploymentCohortFrameMember(familyOutcome.Frame); scoped && !deploymentCohortAnchorsServable(resolution.Committed, familyOutcome.WinningSample.ScopeAnchorKind) {
+			if len(resolution.Committed) > 0 {
+				familyOutcome.Gate = FrameGate{Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable, DeclaredMemberKind: declared}
+				resolution = SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}
+			}
+			return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, substitutionForTelemetry.Outcome, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntriesForServed, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, postVetoLedgerBase).withAnchorShadow(anchorShadow))
+		}
 		graphContext, err = e.graph.DiscoverContext(ctx, principal, GraphDiscoveryRequest{
 			Request: graphRequest, Interpretation: interpretation, Resolution: resolution, Binding: binding,
 			ScopeAnchorResolved: scopeAnchorResolved(familyOutcome),
