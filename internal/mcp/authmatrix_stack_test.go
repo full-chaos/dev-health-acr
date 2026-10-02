@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -28,6 +27,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-acr/internal/storage/memory"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
 // The isolation matrix runs against a REAL acr-api composition: api.NewApp
@@ -299,11 +299,7 @@ func newMatrixStackWith(t *testing.T, investigator func(*memoryinvestigation.Sto
 		t.Fatal(err)
 	}
 
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve test file")
-	}
-	corpus, err := evalfixture.VerifyCorpus(filepath.Join(filepath.Dir(thisFile), "..", "..", "testdata", "evaluation", "v1"))
+	corpus, err := evalfixture.VerifyCorpus(repopath.Path(t, "testdata", "evaluation", "v1"))
 	if err != nil {
 		t.Fatalf("verify corpus: %v", err)
 	}

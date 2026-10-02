@@ -332,11 +332,12 @@ func declaredPolicy() policyDeclaration {
 					"input.untilDate": client,
 					"input.teamId":    teamID,
 				},
+				Notes: []string{"input.teamId is required: without it the call is refused with scope_required"},
 				RefusedPaths: map[string]dr.Refusal{
 					"input.repoId": refuse(dr.RefusalVariableNotAllowed, "a repository-only read returns org-wide team ratios ([ops] cognitiveload/cognitiveload.go:178-195,343-356; RM §7, design D.3)"),
 				},
 				Constraints: []dr.Constraint{
-					{Kind: dr.ConstraintRequired, Path: "input.teamId", Code: dr.RefusalScopeRequired, Reason: "cognitiveLoad is served only with a team id ([ops] cognitiveload/cognitiveload.go:119-141; design D.3)"},
+					{Kind: dr.ConstraintRequired, Path: "input.teamId", Code: dr.RefusalScopeRequired, Reason: "cognitiveLoad is served only with a team id: send `input.teamId` ([ops] cognitiveload/cognitiveload.go:119-141; design D.3)"},
 					window("input.sinceDate", "input.untilDate", windowDays, false),
 				},
 				Unrestricted: served("[ops] cognitiveload/cognitiveload.go:119-141,468-473 read team_cognitive_load_daily by team id (RM §7, V)"),
@@ -377,7 +378,7 @@ func declaredPolicy() policyDeclaration {
 					"window.unit":  enum("DAY", "WEEK", "CYCLE"),
 				},
 				Constraints: []dr.Constraint{
-					{Kind: dr.ConstraintRequired, Path: "team", Code: dr.RefusalScopeRequired, Reason: "recommendations is served only with a team id ([ops] recommendations/recommendations.go:335-345; CHAOS-7202)"},
+					{Kind: dr.ConstraintRequired, Path: "team", Code: dr.RefusalScopeRequired, Reason: "recommendations is served only with a team id: send `team` ([ops] recommendations/recommendations.go:335-345; CHAOS-7202)"},
 					{Kind: dr.ConstraintRequired, Path: "window", Code: dr.RefusalScopeRequired, Reason: "a window object is required (WindowInput! in the SDL); its value and unit default to 4 WEEK ([ops] recommendations/recommendations.go:90-125; CHAOS-7202)"},
 				},
 				Unrestricted: served("[ops] recommendations/recommendations.go:335-360 read the stored recommendation rows by team id and org (CHAOS-7202)"),

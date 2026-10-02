@@ -86,6 +86,40 @@ var servableCohortKinds = map[SubjectKind]bool{
 	SubjectPullRequest: true,
 }
 
+// scopedOnlyCohortKinds are kinds an arm serves ONLY as the members of a
+// named anchor (children_of_scope). They are kept out of servableCohortKinds
+// because that map also admits discovered_kind, grouped_members and a counted
+// organization_scope, none of which has a proven arm for these kinds.
+//
+// deployment: the projection emits deployment nodes beside a
+// BELONGS_TO_REPOSITORY edge and DeploymentsProvider declares the kind, so the
+// members of a named repository are discoverable. The anchor kind is not on
+// the frame; the engine refuses a deployment cohort whose committed anchor is
+// not a repository (see deploymentCohortAnchorServable).
+var scopedOnlyCohortKinds = map[SubjectKind]bool{
+	SubjectDeployment: true,
+}
+
+// ScopedOnlyCohortKindsForAudit returns, sorted, the kinds served only as the
+// members of a named anchor, for the audits that quantify over "every kind an
+// arm exists for". No decision calls it.
+func ScopedOnlyCohortKindsForAudit() []SubjectKind {
+	kinds := make([]SubjectKind, 0, len(scopedOnlyCohortKinds))
+	for kind, admitted := range scopedOnlyCohortKinds {
+		if admitted {
+			kinds = append(kinds, kind)
+		}
+	}
+	sort.Slice(kinds, func(i, j int) bool { return kinds[i] < kinds[j] })
+	return kinds
+}
+
+// DeploymentCohortAnchorServable reports whether a committed scope anchor of
+// this kind can anchor a deployment cohort. Only a repository is proven.
+func DeploymentCohortAnchorServable(anchor SubjectKind) bool {
+	return anchor == SubjectRepository
+}
+
 // CohortDiscoverability names WHY a subject expression can or cannot produce a
 // discovered cohort. Closed, and exhaustive over the expression union.
 //
@@ -204,7 +238,7 @@ func CohortMemberKindFor(expression SubjectExpression) (servable SubjectKind, de
 	if !ok {
 		return "", "", CohortNoMemberKind
 	}
-	if !servableCohortKinds[kind] {
+	if !servableCohortKinds[kind] && !(scopedOnlyCohortKinds[kind] && expression.Kind == SubjectExpressionChildrenOfScope) {
 		return "", kind, CohortMemberKindUnservable
 	}
 	return kind, kind, CohortDiscoverable

@@ -3,17 +3,13 @@ package api
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
-	"runtime"
 	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
 func TestHostedReadRoutesMatchOpenAPI(t *testing.T) {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve test path")
-	}
-	encoded, err := os.ReadFile(filepath.Join(filepath.Dir(file), "..", "..", "contracts", "openapi", "acr-v1.json"))
+	encoded, err := os.ReadFile(repopath.Path(t, "contracts", "openapi", "acr-v1.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

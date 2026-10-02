@@ -4,20 +4,18 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
-	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
 func chaos7126RepoFile(t *testing.T, parts ...string) []byte {
 	t.Helper()
-	_, thisFile, _, _ := runtime.Caller(0)
-	data, err := os.ReadFile(filepath.Join(append([]string{filepath.Dir(thisFile), "..", ".."}, parts...)...))
+	data, err := os.ReadFile(repopath.Path(t, parts...))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,13 +7,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contractcheck"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
 func TestContextFabricGoldenContractsDecodeAndValidate(t *testing.T) {
@@ -416,11 +416,7 @@ func TestContextFabricProjectionBatchRejectsDuplicateRelationshipID(t *testing.T
 
 func contextFabricGolden(t *testing.T, name string) []byte {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve test path")
-	}
-	encoded, err := os.ReadFile(filepath.Join(filepath.Dir(file), "..", "..", "..", "contracts", "examples", "v1", name))
+	encoded, err := os.ReadFile(repopath.Path(t, "contracts", "examples", "v1", name))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,8 +3,6 @@ package contextpacket_test
 import (
 	"context"
 	"errors"
-	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 
@@ -12,6 +10,7 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/evalfixture"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
 func TestEvaluationStore_ResolveEvidence_returns_generic_not_found_when_reference_is_not_authorized(t *testing.T) {
@@ -150,11 +149,7 @@ func (o *evidenceObserver) ObserveEvidenceExpansion(_ context.Context, observati
 
 func evidenceFixtureStore(t *testing.T) *contextpacket.EvaluationStore {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve test file")
-	}
-	corpus, err := evalfixture.VerifyCorpus(filepath.Join(filepath.Dir(file), "..", "..", "testdata", "evaluation", "v1"))
+	corpus, err := evalfixture.VerifyCorpus(repopath.Path(t, "testdata", "evaluation", "v1"))
 	if err != nil {
 		t.Fatalf("verify corpus: %v", err)
 	}

@@ -447,7 +447,11 @@ func parseEdgeTime(value any) (time.Time, bool) {
 }
 
 func constraintRefusal(con Constraint) *Refusal {
-	return &Refusal{Code: con.Code, Reason: con.Reason}
+	reason := con.Reason
+	if con.Kind == ConstraintRequired && !strings.Contains(reason, "`"+con.Path+"`") {
+		reason += "; missing required argument `" + con.Path + "`"
+	}
+	return &Refusal{Code: con.Code, Reason: reason}
 }
 
 // checkConstraints applies cross-path constraints to the allowlisted client

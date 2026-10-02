@@ -742,7 +742,7 @@
           "kind": "required",
           "path": "input.teamId",
           "code": "scope_required",
-          "reason": "cognitiveLoad is served only with a team id ([ops] cognitiveload/cognitiveload.go:119-141; design D.3)"
+          "reason": "cognitiveLoad is served only with a team id: send `input.teamId` ([ops] cognitiveload/cognitiveload.go:119-141; design D.3)"
         },
         {
           "kind": "window_max_days",
@@ -827,7 +827,10 @@
         }
       ],
       "withheld_outputs": [],
-      "disclosure": []
+      "disclosure": [],
+      "notes": [
+        "input.teamId is required: without it the call is refused with scope_required"
+      ]
     },
     {
       "name": "complexityTimeseries",
@@ -4159,7 +4162,7 @@
           "kind": "required",
           "path": "team",
           "code": "scope_required",
-          "reason": "recommendations is served only with a team id ([ops] recommendations/recommendations.go:335-345; CHAOS-7202)"
+          "reason": "recommendations is served only with a team id: send `team` ([ops] recommendations/recommendations.go:335-345; CHAOS-7202)"
         },
         {
           "kind": "required",
