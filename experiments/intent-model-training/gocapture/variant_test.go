@@ -99,13 +99,13 @@ func jsonKeys(t *testing.T, data []byte) []string {
 // ------------------------------------------------------------------ H3 phase
 
 func TestPhaseForTable(t *testing.T) {
-	for set, want := range map[string]string{"H1": "H1-decision", "H2": "H2-final", "H3": "H3-round3"} {
+	for set, want := range map[string]string{"H1": "H1-decision", "H2": "H2-final", "H3": "H3-round3", "H4": "H4-cov2"} {
 		got, err := phaseFor(set)
 		if err != nil || got != want {
 			t.Fatalf("phaseFor(%s) = %q, %v; want %q", set, got, err, want)
 		}
 	}
-	for _, set := range []string{"H4", "h3", "", "H3 "} {
+	for _, set := range []string{"H5", "h4", "", "H4 "} {
 		if _, err := phaseFor(set); err == nil {
 			t.Fatalf("phaseFor(%q) accepted", set)
 		}

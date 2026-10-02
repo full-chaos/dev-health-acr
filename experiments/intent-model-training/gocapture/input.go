@@ -116,6 +116,8 @@ func phaseFor(set string) (string, error) {
 	case "H3":
 		// The Python side holds the same table (heldout.PHASES).
 		return "H3-round3", nil
+	case "H4":
+		return "H4-cov2", nil
 	}
 	return "", fmt.Errorf("unknown held-out set %q", set)
 }
