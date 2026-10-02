@@ -526,20 +526,70 @@ func sortCandidates(all []candidate) {
 // already seen). Capping by whole rows instead means a row that doesn't
 // fully fit is deferred, unsplit, to the next page: the cursor only ever
 // advances past a row once every one of its candidates has been emitted.
-func truncateToCompleteRows(all []candidate, maxRows int) []candidate {
+//
+// The cap counts distinct (position, sortKey) pairs, so two rows of one table
+// that share a pair take one slot, and a table that filled its statement limit
+// does not fill the page. The rows that then complete the page come from other
+// tables and can sort after rows the first table has not returned yet. bound
+// stops the page there: it never ends past the last row a truncated table
+// returned. bounded reports that the bound, not the cap, ended the page.
+func truncateToCompleteRows(all []candidate, maxRows int, bound pageBound) (kept []candidate, bounded bool) {
 	if maxRows <= 0 {
-		return nil
+		return nil, false
 	}
 	rows := 0
 	for i, c := range all {
 		if i == 0 || !c.position().Equal(all[i-1].position()) || c.sortKey != all[i-1].sortKey {
-			rows++
-			if rows > maxRows {
-				return all[:i]
+			if rows == maxRows {
+				return all[:i], false
 			}
+			if bound.passedBy(c) {
+				return all[:i], true
+			}
+			rows++
 		}
 	}
-	return all
+	return all, false
+}
+
+// pageBound is the furthest place one merged page may end: the last row of
+// the truncated table that ends first. Each truncated table holds rows past
+// its last returned row that no statement of this page read, and a cursor that
+// moves beyond that row never reads them.
+type pageBound struct {
+	set   bool
+	at    time.Time
+	key   string
+	table string
+}
+
+// note takes one table's read into the bound. A truncated read that kept no
+// row holds more rows on one cursor position than a page: the keyset cannot
+// step through them, so the read fails instead of moving past them.
+func (b *pageBound) note(table string, rows []candidate, truncated bool) error {
+	if !truncated {
+		return nil
+	}
+	if len(rows) == 0 {
+		return &ProducerRejection{Reason: "more rows share one cursor position than one page holds"}
+	}
+	last := rows[len(rows)-1]
+	if !b.set || sortsAfter(b.at, b.key, last.position(), last.sortKey) {
+		*b = pageBound{set: true, at: last.position(), key: last.sortKey, table: table}
+	}
+	return nil
+}
+
+func (b pageBound) passedBy(c candidate) bool {
+	return b.set && sortsAfter(c.position(), c.sortKey, b.at, b.key)
+}
+
+// sortsAfter is sortCandidates' order on two (position, row key) pairs.
+func sortsAfter(at time.Time, key string, otherAt time.Time, otherKey string) bool {
+	if !at.Equal(otherAt) {
+		return at.After(otherAt)
+	}
+	return key > otherKey
 }
 
 // buildBatch assembles one batch.

@@ -353,8 +353,12 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 		// happened, this page reached the window's end and no further
 		// (empty) read is needed to learn that.
 		more := false
+		var bound pageBound
 		for _, table := range tables {
 			rows, truncated, err := readTable(ctx, table, p.client, orgID, pass.walk, incrementalBatchCap)
+			if err == nil {
+				err = p.boundRead(ctx, orgID, table.name, pass.walk, &bound, rows, truncated)
+			}
 			if err != nil {
 				logTableReadFailure(ctx, p.logger, p.source, orgID, table.name, err)
 				return contextfabric.ProjectionBatch{}, false, &tableReadError{table: table.name, cause: err}
@@ -364,7 +368,10 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 		}
 		if len(pageRows) > 0 {
 			sortCandidates(pageRows)
-			complete := truncateToCompleteRows(pageRows, incrementalBatchCap)
+			complete, bounded := truncateToCompleteRows(pageRows, incrementalBatchCap, bound)
+			if bounded {
+				p.logBoundedPage(ctx, orgID, bound)
+			}
 			more = more || len(complete) < len(pageRows)
 			pageRows = complete
 			last := pageRows[len(pageRows)-1]
