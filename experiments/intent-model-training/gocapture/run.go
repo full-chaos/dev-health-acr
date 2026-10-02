@@ -112,22 +112,29 @@ func (c *runConfig) defaults() {
 }
 
 // sameProfileAsOtherRuns refuses when another started run of the seal, of
-// any series, recorded another deployment-profile digest in its run.json.
+// any series and under any approval id of the shared ledger, recorded
+// another deployment-profile digest in its run.json.
 func sameProfileAsOtherRuns(ledger *approvalLedger, heldout *cdir, set, sealDigest, runID, profileSHA string) error {
-	ids := make([]string, 0, len(ledger.runs))
-	for id, other := range ledger.runs {
-		if id != runID && other.SealDigest == sealDigest {
-			ids = append(ids, id)
+	others := map[string]ledgerRecord{}
+	for _, other := range ledger.startedRuns {
+		if other.SealDigest != sealDigest || (other.ApprovalID == ledger.approvalID && other.RunID == runID) {
+			continue
 		}
+		others[other.ApprovalID+"\x00"+other.RunID] = other
 	}
-	sort.Strings(ids)
-	for _, id := range ids {
-		recorded, err := recordedProfileSHA(heldout, set, id, ledger.runs[id].RunConfigSHA256)
+	keys := make([]string, 0, len(others))
+	for key := range others {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		other := others[key]
+		recorded, err := recordedProfileSHA(heldout, set, other.RunID, other.RunConfigSHA256)
 		if err != nil {
-			return fmt.Errorf("run %q of this seal: %w", id, err)
+			return fmt.Errorf("run %q (approval id %q) of this seal: %w", other.RunID, other.ApprovalID, err)
 		}
 		if recorded != profileSHA {
-			return fmt.Errorf("run %q of this seal was made under another deployment profile (sha256 %s, this run %s): one seal is captured under one profile, because deadlines and retries come from it", id, recorded, profileSHA)
+			return fmt.Errorf("run %q (approval id %q) of this seal was made under another deployment profile (sha256 %s, this run %s): one seal is captured under one profile, because deadlines and retries come from it", other.RunID, other.ApprovalID, recorded, profileSHA)
 		}
 	}
 	return nil

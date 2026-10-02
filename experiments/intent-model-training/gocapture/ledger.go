@@ -107,7 +107,11 @@ type approvalLedger struct {
 	variantPairs map[string]map[pairKey]*pairState
 	variants     map[string]string
 	// variantModes holds each approved variant's mode ("" is append).
-	variantModes   map[string]string
+	variantModes map[string]string
+	// startedRuns holds the run_started records of EVERY approval id in
+	// the file, in file order: the one-profile rule of a seal does not stop
+	// at an approval id.
+	startedRuns    []ledgerRecord
 	terminalOrder  []ledgerRecord
 	lastReservedAt time.Time
 	nextSeq        int
@@ -255,6 +259,9 @@ func keyOf(rec ledgerRecord) (pairKey, error) {
 }
 
 func (l *approvalLedger) apply(rec ledgerRecord) error {
+	if rec.Kind == "run_started" {
+		l.startedRuns = append(l.startedRuns, rec)
+	}
 	if rec.ApprovalID != l.approvalID {
 		return nil
 	}

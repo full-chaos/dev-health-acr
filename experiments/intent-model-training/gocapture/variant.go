@@ -195,19 +195,28 @@ func loadVariant(name, appendPath, messagePath string) (*promptVariant, error) {
 }
 
 // isHelperEnvelope reports whether data is the JSON object that
-// `interp-helper system-message` prints: an object whose sha256 member is
-// the sha256 of its text member. Sent as it is, that object would be the
-// prompt. A JSON prompt that only has members of those names is not one.
-// A UTF-8 byte-order mark before the object does not hide it.
+// `interp-helper system-message` prints. Sent as it is, that object would
+// be the prompt. It is recognized by the helper's own shape: only members
+// the helper writes, a sha256 member that is the sha256 of the text member,
+// and a bytes member that is its length. A JSON prompt with another member,
+// another digest or another count is a prompt. A UTF-8 byte-order mark
+// before the object does not hide it.
 func isHelperEnvelope(data []byte) bool {
 	var envelope struct {
-		Text   *string `json:"text"`
-		SHA256 *string `json:"sha256"`
+		Text              *string          `json:"text"`
+		SHA256            *string          `json:"sha256"`
+		Bytes             *int             `json:"bytes"`
+		Parts             *json.RawMessage `json:"parts"`
+		PromptSHA256      *json.RawMessage `json:"prompt_sha256"`
+		InstructionSHA256 *json.RawMessage `json:"instruction_sha256"`
+		InstructionBytes  *json.RawMessage `json:"instruction_bytes"`
 	}
-	if json.Unmarshal(bytes.TrimPrefix(data, []byte("\xef\xbb\xbf")), &envelope) != nil || envelope.Text == nil || envelope.SHA256 == nil {
+	dec := json.NewDecoder(bytes.NewReader(bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))))
+	dec.DisallowUnknownFields()
+	if dec.Decode(&envelope) != nil || envelope.Text == nil || envelope.SHA256 == nil || envelope.Bytes == nil {
 		return false
 	}
-	return sha256Hex([]byte(*envelope.Text)) == *envelope.SHA256
+	return sha256Hex([]byte(*envelope.Text)) == *envelope.SHA256 && *envelope.Bytes == len(*envelope.Text)
 }
 
 // systemContentSpan finds the string content of the FIRST message, which

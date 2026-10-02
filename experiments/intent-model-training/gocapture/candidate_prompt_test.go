@@ -206,6 +206,10 @@ func TestCandidateFileThatLooksLikeTheHelperOutput(t *testing.T) {
 		"not an object":   `["text","sha256"]`,
 		"plain text":      "text and sha256 are words of this prompt.\n",
 		"text not string": `{"text":7,"sha256":"` + strings.Repeat("a", 64) + `"}`,
+		// A matching digest with a member the helper never writes: a prompt, not the helper's output.
+		"extra member":     `{"text":"` + helperEnvelopeText + `","sha256":"` + sha256Hex([]byte(helperEnvelopeText)) + `","purpose":"candidate prompt"}`,
+		"wrong byte count": `{"text":"` + helperEnvelopeText + `","sha256":"` + sha256Hex([]byte(helperEnvelopeText)) + `","bytes":3}`,
+		"extra member beside a consistent text, sha256 and bytes": `{"text":"` + helperEnvelopeText + `","sha256":"` + sha256Hex([]byte(helperEnvelopeText)) + `","bytes":27,"purpose":"candidate prompt"}`,
 	} {
 		if isHelperEnvelope([]byte(text)) {
 			t.Fatalf("%s: a legitimate candidate is refused as the helper's output", name)
@@ -724,6 +728,45 @@ func TestOneSealOneDeploymentProfileIncumbentLater(t *testing.T) {
 		t.Fatalf("an incumbent run under another profile than the seal's first run: %v", err)
 	}
 	mustEqual(t, "requests", f.server.count(), 6)
+}
+
+// The rule holds across approval ids: the ledger is one file, and a run of
+// the seal under another approval id and another profile would spend that
+// approval's cap on a capture nobody can compare.
+func TestOneSealOneDeploymentProfileAcrossApprovalIDs(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.run(f.config("run1")); err != nil {
+		t.Fatal(err)
+	}
+	path := f.writeCandidate(testCandidate)
+	if err := approve(f.paths.Root, "appr-b", 720, "a second approval", "human:chris", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := approveVariantFile(f.paths.Root, "appr-b", "cand-v1", "", path, "a second approval, candidate", "human:chris"); err != nil {
+		t.Fatal(err)
+	}
+	ledgerBefore, _ := os.ReadFile(f.paths.Ledger)
+	f.profileMap["model_max_attempts"] = 2
+	f.writeProfile()
+	cfg := f.candidateConfig("cand1", "cand-v1", path)
+	cfg.ApprovalID = "appr-b"
+	if _, err := f.run(cfg); err == nil || !strings.Contains(err.Error(), "another deployment profile") {
+		t.Fatalf("a run under another approval id and another profile than the seal's first run: %v", err)
+	}
+	mustEqual(t, "requests", f.server.count(), 6)
+	ledgerAfter, _ := os.ReadFile(f.paths.Ledger)
+	if !bytes.Equal(ledgerBefore, ledgerAfter) {
+		t.Fatal("the refused run wrote to the ledger")
+	}
+	// Under the seal's profile the second approval id is used as chris approved it, from its own cap.
+	f.profileMap["model_max_attempts"] = 1
+	f.writeProfile()
+	cfg = f.candidateConfig("cand1", "cand-v1", path)
+	cfg.ApprovalID = "appr-b"
+	if _, err := f.run(cfg); err != nil {
+		t.Fatal(err)
+	}
+	mustEqual(t, "requests", f.server.count(), 12)
 }
 
 // The profile of an earlier run of the seal is read from the run.json its
