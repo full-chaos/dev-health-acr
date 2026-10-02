@@ -195,16 +195,19 @@ func loadVariant(name, appendPath, messagePath string) (*promptVariant, error) {
 }
 
 // isHelperEnvelope reports whether data is the JSON object that
-// `interp-helper system-message` prints (it has a text and a sha256 member).
-// Sent as it is, that object would be the prompt.
+// `interp-helper system-message` prints: an object whose sha256 member is
+// the sha256 of its text member. Sent as it is, that object would be the
+// prompt. A JSON prompt that only has members of those names is not one.
+// A UTF-8 byte-order mark before the object does not hide it.
 func isHelperEnvelope(data []byte) bool {
-	var envelope map[string]json.RawMessage
-	if json.Unmarshal(data, &envelope) != nil {
+	var envelope struct {
+		Text   *string `json:"text"`
+		SHA256 *string `json:"sha256"`
+	}
+	if json.Unmarshal(bytes.TrimPrefix(data, []byte("\xef\xbb\xbf")), &envelope) != nil || envelope.Text == nil || envelope.SHA256 == nil {
 		return false
 	}
-	_, hasText := envelope["text"]
-	_, hasSHA := envelope["sha256"]
-	return hasText && hasSHA
+	return sha256Hex([]byte(*envelope.Text)) == *envelope.SHA256
 }
 
 // systemContentSpan finds the string content of the FIRST message, which

@@ -179,14 +179,28 @@ func (l *approvalLedger) load() error {
 		// The runner never writes an empty variant_mode member (the append
 		// mode writes none). A decoded record cannot show an empty member, so
 		// the line itself is checked.
-		if rec.ApprovalID == l.approvalID && rec.VariantMode == "" && hasMember(scanner.Bytes(), "variant_mode") {
+		// Both mode rules hold for every line of the file, also for a record
+		// of another approval id that apply does not act on.
+		if rec.VariantMode == "" && hasMember(scanner.Bytes(), "variant_mode") {
 			return fmt.Errorf("approval ledger line %d: an empty variant_mode member", line)
+		}
+		if err := variantModeOwner(rec); err != nil {
+			return fmt.Errorf("approval ledger line %d: %w", line, err)
 		}
 		if err := l.apply(rec); err != nil {
 			return fmt.Errorf("approval ledger line %d: %w", line, err)
 		}
 	}
 	return scanner.Err()
+}
+
+// variantModeOwner: only the approval of a variant and the start of its run
+// carry the mode.
+func variantModeOwner(rec ledgerRecord) error {
+	if rec.VariantMode != "" && rec.Kind != "variant_approval" && rec.Kind != "run_started" {
+		return errors.New("a variant mode belongs on variant_approval and run_started records only")
+	}
+	return nil
 }
 
 // hasMember reports whether the JSON object in line has the member name.
@@ -244,8 +258,8 @@ func (l *approvalLedger) apply(rec ledgerRecord) error {
 	if rec.ApprovalID != l.approvalID {
 		return nil
 	}
-	if rec.VariantMode != "" && rec.Kind != "variant_approval" && rec.Kind != "run_started" {
-		return errors.New("a variant mode belongs on variant_approval and run_started records only")
+	if err := variantModeOwner(rec); err != nil {
+		return err
 	}
 	switch rec.Kind {
 	case "approval":

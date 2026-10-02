@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -108,6 +109,49 @@ func (c *runConfig) defaults() {
 	if c.stderr == nil {
 		c.stderr = os.Stderr
 	}
+}
+
+// sameProfileAsOtherRuns refuses when another started run of the seal, of
+// any series, recorded another deployment-profile digest in its run.json.
+func sameProfileAsOtherRuns(ledger *approvalLedger, heldout *cdir, set, sealDigest, runID, profileSHA string) error {
+	ids := make([]string, 0, len(ledger.runs))
+	for id, other := range ledger.runs {
+		if id != runID && other.SealDigest == sealDigest {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		recorded, err := recordedProfileSHA(heldout, set, id, ledger.runs[id].RunConfigSHA256)
+		if err != nil {
+			return fmt.Errorf("run %q of this seal: %w", id, err)
+		}
+		if recorded != profileSHA {
+			return fmt.Errorf("run %q of this seal was made under another deployment profile (sha256 %s, this run %s): one seal is captured under one profile, because deadlines and retries come from it", id, recorded, profileSHA)
+		}
+	}
+	return nil
+}
+
+// recordedProfileSHA reads the profile digest another run of the seal
+// recorded. The run.json must be the one its run_started record binds.
+func recordedProfileSHA(heldout *cdir, set, runID, configSHA string) (string, error) {
+	dir, err := heldout.walk(false, set, "captures", runID)
+	if err != nil {
+		return "", fmt.Errorf("its run directory: %w", err)
+	}
+	defer dir.close()
+	data, err := dir.readFile("run.json")
+	if err != nil || sha256Hex(data) != configSHA {
+		return "", errors.New("its run.json is missing or differs from the ledger, so its deployment profile cannot be compared")
+	}
+	var recorded struct {
+		ProfileSHA256 string `json:"profile_sha256"`
+	}
+	if json.Unmarshal(data, &recorded) != nil || !isSHA256Hex(recorded.ProfileSHA256) {
+		return "", errors.New("its run.json names no deployment profile")
+	}
+	return recorded.ProfileSHA256, nil
 }
 
 func prefixed(fault func(string) error, prefix string) func(string) error {
@@ -252,6 +296,13 @@ func capture(ctx context.Context, cfg runConfig) (runResult, error) {
 		} else if approved != variant.AppendixSHA256 {
 			return runResult{}, fmt.Errorf("prompt variant %q is approved for another %s (sha256 %s): the file changed, so it needs a new variant name and approval", variant.Name, variant.fileLabel(), approved)
 		}
+	}
+	// One seal, one deployment profile. Deadlines and retries come from the
+	// profile, not from the request the wire proof covers, so a run of this
+	// seal under another profile is not comparable with the runs already
+	// made. It is refused here, before any write, reservation or call.
+	if err := sameProfileAsOtherRuns(ledger, heldout, set, input.Seal.SealDigest, cfg.RunID, record.ProfileSHA256); err != nil {
+		return runResult{}, err
 	}
 	prior, started := ledger.runs[cfg.RunID]
 	if cfg.Resume != started {

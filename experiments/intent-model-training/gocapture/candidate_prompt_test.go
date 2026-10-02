@@ -187,6 +187,44 @@ func TestReplaceSystemMessage(t *testing.T) {
 	}
 }
 
+// The JSON object `interp-helper system-message` prints: its sha256 member is
+// the sha256 of its text member.
+const helperEnvelopeText = "You interpret one question."
+
+var helperEnvelope = `{"text":"` + helperEnvelopeText + `","sha256":"` + sha256Hex([]byte(helperEnvelopeText)) + `","bytes":27,"parts":1}`
+
+// A prompt that is itself a JSON object with members named text and sha256
+// is a legitimate candidate: only the helper's own output (the sha256 member
+// is the digest of the text member) is refused.
+func TestCandidateFileThatLooksLikeTheHelperOutput(t *testing.T) {
+	if !isHelperEnvelope([]byte(helperEnvelope)) || !isHelperEnvelope([]byte("\xef\xbb\xbf"+helperEnvelope+"\n")) {
+		t.Fatal("the helper's output is not recognized")
+	}
+	for name, text := range map[string]string{
+		"another digest":  `{"text":"Answer with a JSON object.","sha256":"` + strings.Repeat("a", 64) + `"}`,
+		"no sha member":   `{"text":"Answer with a JSON object."}`,
+		"not an object":   `["text","sha256"]`,
+		"plain text":      "text and sha256 are words of this prompt.\n",
+		"text not string": `{"text":7,"sha256":"` + strings.Repeat("a", 64) + `"}`,
+	} {
+		if isHelperEnvelope([]byte(text)) {
+			t.Fatalf("%s: a legitimate candidate is refused as the helper's output", name)
+		}
+	}
+	// End to end: a JSON prompt with those member names is approved and sent.
+	f := newFixture(t)
+	prompt := `{"text":"Answer with a JSON object.","sha256":"` + strings.Repeat("a", 64) + `"}` + "\n"
+	path := f.writeCandidate(prompt)
+	f.approveCandidate("json-v1", path)
+	if _, err := f.run(f.candidateConfig("cand1", "json-v1", path)); err != nil {
+		t.Fatal(err)
+	}
+	mustEqual(t, "server requests", f.server.count(), 6)
+	if systemContent(t, f.server.bodies[0]) != prompt {
+		t.Fatal("the JSON prompt was not sent as it is")
+	}
+}
+
 func TestCandidateFlagsAndFile(t *testing.T) {
 	f := newFixture(t)
 	good := f.writeCandidate(testCandidate)
@@ -215,7 +253,9 @@ func TestCandidateFlagsAndFile(t *testing.T) {
 		"control character": {"cand-v1", "", write("nul.md", []byte("a\x00b"), 0o600), "control character"},
 		"too large":         {"cand-v1", "", write("big.md", bytes.Repeat([]byte("a"), maxAppendixBytes+1), 0o600), "larger than"},
 		"holds the key":     {"cand-v1", "", write("key.md", []byte("rule "+testKey+"\n"), 0o600), "credential"},
-		"helper envelope":   {"cand-v1", "", write("envelope.md", []byte(`{"text":"You interpret one question.","sha256":"`+strings.Repeat("a", 64)+`","bytes":27}`+"\n"), 0o600), "helper's JSON output"},
+		"helper envelope":   {"cand-v1", "", write("envelope.md", []byte(helperEnvelope+"\n"), 0o600), "helper's JSON output"},
+		"envelope with BOM": {"cand-v1", "", write("envelope-bom.md", []byte("\xef\xbb\xbf"+helperEnvelope+"\n"), 0o600), "helper's JSON output"},
+		"pretty envelope":   {"cand-v1", "", write("envelope-pretty.md", []byte("{\n  \"bytes\": 27,\n  \"sha256\": \""+sha256Hex([]byte(helperEnvelopeText))+"\",\n  \"text\": \""+helperEnvelopeText+"\"\n}\n"), 0o600), "helper's JSON output"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -620,6 +660,128 @@ func TestCandidateRetriesAndRedraws(t *testing.T) {
 	mustEqual(t, "server = reservations", f.server.count(), f.ledger().spent)
 }
 
+// One seal is captured under one deployment profile. Deadlines and retries
+// come from the profile, not from the request, so a run of the seal under
+// another profile is refused before any write, reservation or call: the
+// evaluator would refuse to score it later, after the calls were spent.
+func TestOneSealOneDeploymentProfile(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.run(f.config("run1")); err != nil {
+		t.Fatal(err)
+	}
+	mustEqual(t, "incumbent requests", f.server.count(), 6)
+	path := f.writeCandidate(testCandidate)
+	f.approveCandidate("cand-v1", path)
+	appendix := f.writeAppendix(testAppendix)
+	f.approveVariant("rules-v1", appendix)
+	ledgerBefore, _ := os.ReadFile(f.paths.Ledger)
+
+	// Another retry policy: a different profile file, a different digest.
+	f.profileMap["model_max_attempts"] = 2
+	f.writeProfile()
+	for name, cfg := range map[string]runConfig{
+		"replace": f.candidateConfig("cand1", "cand-v1", path),
+		"append":  f.variantConfig("var1", "rules-v1", appendix),
+	} {
+		_, err := f.run(cfg)
+		if err == nil || !strings.Contains(err.Error(), "another deployment profile") {
+			t.Fatalf("%s run under another profile than the incumbent run of the seal: %v", name, err)
+		}
+		if _, statErr := os.Stat(f.runDir(cfg.RunID)); statErr == nil {
+			t.Fatalf("the refused %s run wrote a run directory", name)
+		}
+	}
+	mustEqual(t, "requests after the refusals", f.server.count(), 6)
+	ledgerAfter, _ := os.ReadFile(f.paths.Ledger)
+	if !bytes.Equal(ledgerBefore, ledgerAfter) {
+		t.Fatal("a refused run wrote to the ledger")
+	}
+
+	// Under the incumbent's profile both runs go ahead.
+	f.profileMap["model_max_attempts"] = 1
+	f.writeProfile()
+	if _, err := f.run(f.candidateConfig("cand1", "cand-v1", path)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.run(f.variantConfig("var1", "rules-v1", appendix)); err != nil {
+		t.Fatal(err)
+	}
+	mustEqual(t, "requests", f.server.count(), 18)
+}
+
+// The same rule in the other order: the first run of a seal fixes the
+// profile, also when it is a variant run and the incumbent comes later.
+func TestOneSealOneDeploymentProfileIncumbentLater(t *testing.T) {
+	f := newFixture(t)
+	path := f.writeCandidate(testCandidate)
+	f.approveCandidate("cand-v1", path)
+	if _, err := f.run(f.candidateConfig("cand1", "cand-v1", path)); err != nil {
+		t.Fatal(err)
+	}
+	f.profileMap["model_max_attempts"] = 2
+	f.writeProfile()
+	if _, err := f.run(f.config("run1")); err == nil || !strings.Contains(err.Error(), "another deployment profile") {
+		t.Fatalf("an incumbent run under another profile than the seal's first run: %v", err)
+	}
+	mustEqual(t, "requests", f.server.count(), 6)
+}
+
+// The profile of an earlier run of the seal is read from the run.json its
+// run_started record binds. A run.json that was changed to name the new
+// profile does not make the two runs comparable.
+func TestOneSealOneDeploymentProfileReadsTheBoundRunJSON(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.run(f.config("run1")); err != nil {
+		t.Fatal(err)
+	}
+	path := f.writeCandidate(testCandidate)
+	f.approveCandidate("cand-v1", path)
+	f.profileMap["model_max_attempts"] = 2
+	f.writeProfile()
+	cfg := f.candidateConfig("cand1", "cand-v1", path)
+	newProfile, err := os.ReadFile(cfg.ProfilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runJSON := filepath.Join(f.runDir("run1"), "run.json")
+	original, _ := os.ReadFile(runJSON)
+	var recorded map[string]json.RawMessage
+	if err := json.Unmarshal(original, &recorded); err != nil {
+		t.Fatal(err)
+	}
+	recorded["profile_sha256"], _ = json.Marshal(sha256Hex(newProfile))
+	tampered, _ := json.Marshal(recorded)
+	if err := os.WriteFile(runJSON, tampered, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.run(cfg); err == nil || !strings.Contains(err.Error(), "differs from the ledger") {
+		t.Fatalf("a changed run.json of the earlier run: %v", err)
+	}
+	if err := os.Remove(runJSON); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.run(cfg); err == nil || !strings.Contains(err.Error(), "missing or differs from the ledger") {
+		t.Fatalf("a missing run.json of the earlier run: %v", err)
+	}
+	mustEqual(t, "requests", f.server.count(), 6)
+}
+
+// The rule is per seal: a started run of another seal is not compared and
+// does not need a run directory here.
+func TestOneSealOneDeploymentProfileIgnoresOtherSeals(t *testing.T) {
+	f := newFixture(t)
+	l := f.ledger()
+	n := 10
+	if err := l.append(ledgerRecord{Kind: "run_started", RunID: "elsewhere", SealDigest: "another-seal", RunConfigSHA256: "c", RunCapHTTPAttempts: &n}); err != nil {
+		t.Fatal(err)
+	}
+	l.close()
+	if _, err := f.run(f.config("run1")); err != nil {
+		t.Fatalf("a run of another seal blocked this seal: %v", err)
+	}
+	mustEqual(t, "requests", f.server.count(), 6)
+}
+
 func TestCandidateCrashResume(t *testing.T) {
 	f := newFixture(t)
 	path := f.writeCandidate(testCandidate)
@@ -716,16 +878,24 @@ func TestCandidateLedgerRules(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		line := `{"kind":"pair_reserved","approval_id":"appr-test","run_id":"cand1","seal_digest":"s","row_id":"r2","replicate":0,"variant":"cand-v1","variant_mode":"","at":"2026-10-02T00:00:00Z"}` + "\n"
-		if _, err := file.WriteString(line); err != nil {
-			t.Fatal(err)
-		}
 		_ = file.Close()
-		if reopened, err := f.tryLedger(); err == nil || !strings.Contains(err.Error(), "empty variant_mode member") {
-			if reopened != nil {
-				reopened.close()
+		base, _ := os.ReadFile(f.paths.Ledger)
+		// The rules hold for every line of the file: also for a record of
+		// another approval id, which this approval's state ignores.
+		for name, c := range map[string][2]string{
+			"empty member":                       {`{"kind":"pair_reserved","approval_id":"appr-test","run_id":"cand1","seal_digest":"s","row_id":"r2","replicate":0,"variant":"cand-v1","variant_mode":"","at":"2026-10-02T00:00:00Z"}`, "empty variant_mode member"},
+			"empty member, another approval":     {`{"kind":"pair_reserved","approval_id":"appr-other","run_id":"x1","seal_digest":"s","row_id":"r2","replicate":0,"variant_mode":"","at":"2026-10-02T00:00:00Z"}`, "empty variant_mode member"},
+			"misplaced member, another approval": {`{"kind":"pair_reserved","approval_id":"appr-other","run_id":"x1","seal_digest":"s","row_id":"r2","replicate":0,"variant_mode":"replace","at":"2026-10-02T00:00:00Z"}`, "belongs on variant_approval and run_started"},
+		} {
+			if err := os.WriteFile(f.paths.Ledger, append(append([]byte{}, base...), c[0]+"\n"...), 0o600); err != nil {
+				t.Fatal(err)
 			}
-			t.Fatalf("a ledger line with an empty variant_mode member: %v", err)
+			if reopened, err := f.tryLedger(); err == nil || !strings.Contains(err.Error(), c[1]) {
+				if reopened != nil {
+					reopened.close()
+				}
+				t.Fatalf("%s: want a refusal containing %q, got %v", name, c[1], err)
+			}
 		}
 	}()
 	defer replayed.close()
