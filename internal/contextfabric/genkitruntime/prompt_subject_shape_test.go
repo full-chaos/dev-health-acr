@@ -29,6 +29,7 @@ func TestInterpretationPromptSubjectRulesStatedOnce(t *testing.T) {
 		`take the kind word from the conversation turn that names that subject.`,
 		`In a count, the counted kind word decides it, also when organization wording is present: "how many repositories are in the organization" says repository. Never organization there, and never omit it there.`,
 		`Omit it for an explicit_set whose operands state different kinds: the field holds one kind.`,
+		`Prefer the shape (single subject, explicit cohort, discovered cohort, or open) implied by the resolved reference`,
 	} {
 		if got := strings.Count(interpretationSystemPrompt, rule); got != 1 {
 			t.Errorf("rule %q appears %d times, want exactly 1", rule, got)
@@ -47,6 +48,7 @@ func TestInterpretationPromptDropsContradictedSubjectSentences(t *testing.T) {
 		`organization_scope when the organization itself is the subject ("how are we doing").`,
 		"Only when the question describes a subject with no literal substring you could copy",
 		"may that subject's first term be your own best non-verbatim term instead.\n",
+		"(single subject, explicit cohort, or open)",
 	} {
 		if strings.Contains(interpretationSystemPrompt, gone) {
 			t.Errorf("prompt still carries the contradicted sentence %q", gone)
