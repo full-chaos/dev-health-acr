@@ -256,7 +256,9 @@ type Config struct {
 	// dataQueryURL / dataQueryTimeout: internal ops query service call
 	// (ACR_DATA_QUERY_URL, ACR_DATA_QUERY_TIMEOUT); read via the
 	// DataQueryURL / DataQueryTimeout methods. See data_query.go.
-	dataQueryURL     string
+	dataQueryURL string
+	// dataQueryPath is the run_operation path under dataQueryURL (ACR_DATA_QUERY_PATH); "" = the default "/query".
+	dataQueryPath    string
 	dataQueryTimeout time.Duration
 	// dataGraphQLURL: GWC's MCP listener for graphql_query
 	// (ACR_DATA_GRAPHQL_URL, CHAOS-7075); read via DataGraphQLURL.
@@ -402,6 +404,9 @@ func load(lookup lookupEnv) (Config, error) {
 	}
 	cfg.DevHealthEntitlementMaxResponseBytes = int64(devHealthEntitlementMaxResponseBytes)
 	if cfg.dataQueryURL, err = dataQueryURLValue(lookup); err != nil {
+		return Config{}, err
+	}
+	if cfg.dataQueryPath, err = dataQueryPathValue(lookup); err != nil {
 		return Config{}, err
 	}
 	if cfg.dataQueryTimeout, err = dataQueryTimeoutValue(lookup); err != nil {

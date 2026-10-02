@@ -105,3 +105,50 @@ func TestDataGraphQLURL(t *testing.T) {
 		}
 	}
 }
+
+// ACR_DATA_QUERY_PATH: unset = "/query" (today's behaviour); a valid value is kept; a value that is SET but empty, whitespace or malformed is refused at
+// startup, never silently defaulted, and the refusal does not echo the value.
+func TestDataQueryPathDefaultsAndAcceptsAValidValue(t *testing.T) {
+	cfg, err := load(dataQueryEnv(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DataQueryPath() != "/query" {
+		t.Fatalf("DataQueryPath = %q, want the default /query", cfg.DataQueryPath())
+	}
+	cfg, err = load(dataQueryEnv(map[string]string{"ACR_DATA_QUERY_PATH": "/query/run-operation"}))
+	if err != nil || cfg.DataQueryPath() != "/query/run-operation" {
+		t.Fatalf("valid path: %v, %q", err, cfg.DataQueryPath())
+	}
+	cfg, err = load(dataQueryEnv(map[string]string{"ACR_DATA_QUERY_PATH": "  /query/run-operation  "}))
+	if err != nil || cfg.DataQueryPath() != "/query/run-operation" {
+		t.Fatalf("padded path is trimmed: %v, %q", err, cfg.DataQueryPath())
+	}
+}
+
+func TestDataQueryPathRefusesASetButBadValueWithoutEchoingIt(t *testing.T) {
+	const secret = "s3cr3t-token"
+	for name, raw := range map[string]string{
+		"empty":        "",
+		"whitespace":   "   ",
+		"relative":     "query/" + secret,
+		"query string": "/query?k=" + secret,
+		"fragment":     "/query#" + secret,
+		"dot segment":  "/../" + secret,
+		"empty seg":    "//" + secret,
+		"trailing /":   "/query/" + secret + "/",
+		"space":        "/query " + secret,
+		"absolute url": "http://h/" + secret,
+		"non-ascii":    "/qüry" + secret,
+		"too long":     "/" + strings.Repeat("a", 201) + secret,
+	} {
+		_, err := load(dataQueryEnv(map[string]string{"ACR_DATA_QUERY_PATH": raw}))
+		if err == nil {
+			t.Errorf("%s: ACR_DATA_QUERY_PATH=%q was accepted", name, raw)
+			continue
+		}
+		if !strings.Contains(err.Error(), "ACR_DATA_QUERY_PATH") || strings.Contains(err.Error(), secret) {
+			t.Errorf("%s: error = %q, want it to name the variable and not echo the value", name, err)
+		}
+	}
+}

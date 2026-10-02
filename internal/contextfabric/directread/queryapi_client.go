@@ -368,6 +368,38 @@ func NewHTTPQueryClient(baseURL string, timeout time.Duration) (*HTTPQueryClient
 	return newHTTPQueryClient(baseURL, timeout, queryEndpointPath, queryClientUserAgent)
 }
 
+// NewHTTPQueryClientWithPath is NewHTTPQueryClient posting to path (config.DataQueryPath) instead of the default "/query". An empty path is the default;
+// a path that is not an absolute plain path (plainQueryPath) is refused with ErrQueryClientConfig. Nothing else about the client changes.
+func NewHTTPQueryClientWithPath(baseURL string, timeout time.Duration, path string) (*HTTPQueryClient, error) {
+	if path == "" {
+		path = queryEndpointPath
+	}
+	if !plainQueryPath(path) {
+		return nil, ErrQueryClientConfig
+	}
+	return newHTTPQueryClient(baseURL, timeout, path, queryClientUserAgent)
+}
+
+// plainQueryPath is the rule of config.ValidateDataQueryPath (ACR_DATA_QUERY_PATH), repeated here so this package does not import config: an absolute
+// path of plain segments (letters, digits, . _ ~ -), none empty, "." or "..", at most 200 characters. internal/runtime/hosted pins that the two agree.
+func plainQueryPath(path string) bool {
+	if len(path) > 200 || path == "" || path[0] != '/' {
+		return false
+	}
+	for _, segment := range strings.Split(path[1:], "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return false
+		}
+		for i := 0; i < len(segment); i++ {
+			c := segment[i]
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == '~' || c == '-') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // Endpoint paths of the two internal listeners.
 const (
 	// queryEndpointPath is the registered-document route (run_operation).

@@ -17,6 +17,9 @@ data:
   {{- with .Values.config.dataQueryUrl }}
   ACR_DATA_QUERY_URL: {{ . | quote }}
   {{- end }}
+  {{- with .Values.config.dataQueryPath }}
+  ACR_DATA_QUERY_PATH: {{ . | quote }}
+  {{- end }}
   {{- with .Values.config.dataQueryTimeout }}
   ACR_DATA_QUERY_TIMEOUT: {{ . | quote }}
   {{- end }}

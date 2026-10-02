@@ -23,6 +23,7 @@ The default listen address is `127.0.0.1:8080` (dictation 811: loopback-only, so
 | `ACR_ADDR` | `127.0.0.1:8080` | HTTP listen address (loopback-only by default -- dictation 811) |
 | `ACR_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
 | `ACR_REQUEST_TIMEOUT` | `15s` | Per-request context deadline |
+| `ACR_DATA_QUERY_PATH` | unset (`/query`) | Path `run_operation` posts to under `ACR_DATA_QUERY_URL`; an absolute path of plain segments (letters, digits, `. _ ~ -`), no query or fragment; a set-but-empty or malformed value fails startup. `GET <url>/registry` and the `graphql_query` listener are not affected |
 | `ACR_DATA_QUERY_URL` | empty (off) | Internal ops query service base URL (`POST <url>/query`); absolute http(s), no userinfo/query/fragment |
 | `ACR_DATA_QUERY_TIMEOUT` | `30s` | Per-call deadline to the query service; rejected at load outside 1s..55s |
 | `ACR_DATA_GRAPHQL_URL` | empty (off) | GWC's MCP listener base URL for `graphql_query` (`POST <url>/query`, CHAOS-7085); same URL rules as `ACR_DATA_QUERY_URL`; shares `ACR_DATA_QUERY_TIMEOUT` |

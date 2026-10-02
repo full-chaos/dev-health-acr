@@ -192,6 +192,7 @@
         "logLevel": { "type": "string", "enum": ["debug", "info", "warn", "error"] },
         "requestTimeout": { "type": "string" },
         "dataQueryUrl": { "type": "string" },
+        "dataQueryPath": { "type": "string" },
         "dataQueryTimeout": { "type": "string" },
         "dataGraphqlUrl": { "type": "string" },
         "readHeaderTimeout": { "type": "string" },
