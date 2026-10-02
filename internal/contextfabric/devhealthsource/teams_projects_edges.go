@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -290,7 +291,7 @@ func membershipIntervalsSubquery(ingest bool) string {
 	if ingest {
 		touchIngest = "ingested_at"
 	}
-	return membershipIntervalsSQL(touchIngest)
+	return membershipIntervalsSQL(touchIngest, ingest)
 }
 
 // membershipIntervalsSQL renders the interval source with ingestExpr (a
@@ -299,15 +300,18 @@ func membershipIntervalsSubquery(ingest bool) string {
 // changes this touch's duplicate/dangling classification) and, among the
 // non-duplicate touches, the one after it (a late later touch changes this
 // interval's valid_to).
-func membershipIntervalsSQL(ingestExpr string) string {
+// ingested says whether the transitions table has ingested_at (the dedupe
+// tie-break; see devhealthschema.DedupedMembershipTransitions).
+func membershipIntervalsSQL(ingestExpr string, ingested bool) string {
+	deduped := devhealthschema.DedupedMembershipTransitions(ingested)
 	return `(
   WITH touches AS (
     SELECT org_id, subject_kind, repo_id, subject_id, provider, to_project_id AS project_id, occurred_at, event_id, ` + ingestExpr + ` AS ingest_at, 1 AS is_add
-    FROM project_membership_transitions FINAL
+    FROM ` + deduped + `
     WHERE org_id = {org_id:String} AND to_project_id != '' AND to_project_id != from_project_id
     UNION ALL
     SELECT org_id, subject_kind, repo_id, subject_id, provider, from_project_id AS project_id, occurred_at, event_id, ` + ingestExpr + ` AS ingest_at, 0 AS is_add
-    FROM project_membership_transitions FINAL
+    FROM ` + deduped + `
     WHERE org_id = {org_id:String} AND from_project_id != '' AND from_project_id != to_project_id
   ),
   classified AS (
