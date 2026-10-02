@@ -117,8 +117,9 @@ func TestInterpretationEmphasisWordListsCoverTheVocabulary(t *testing.T) {
 }
 
 const (
-	judgmentKindUnsetRule = `- A cue word alone never emits it. A question that does not rank, survey or compare subjects leaves it unset, also when it names a cue word: a question that asks only for a state, a driver (a "why"), a trend, a count or the state of each member.`
-	judgmentKindCarryRule = `A follow-up emits it only when its own words rank, survey or compare subjects by a cue; it never keeps the kind of an earlier turn.`
+	judgmentKindUnsetRule = `- A cue word alone never emits it. A question that does not rank or compare subjects leaves it unset, also when it names a cue word: a question that asks only for a state, a driver (a "why"), a trend, a count or the state of each member.`
+	judgmentKindPickRule  = `A question that picks subjects by a cue condition ("which teams are struggling") counts as a ranking by that condition.`
+	judgmentKindCarryRule = `A follow-up emits it only when its own words rank or compare subjects by a cue; it never keeps the kind of an earlier turn.`
 )
 
 // The leave-unset rule sits right after the cue word lists, so the model reads
@@ -126,7 +127,7 @@ const (
 func TestInterpretationPromptJudgmentKindLeavesUnsetWithoutARanking(t *testing.T) {
 	t.Parallel()
 	p := interpretationSystemPrompt
-	for _, rule := range []string{judgmentKindUnsetRule, judgmentKindCarryRule} {
+	for _, rule := range []string{judgmentKindUnsetRule, judgmentKindPickRule, judgmentKindCarryRule} {
 		if got := strings.Count(p, rule); got != 1 {
 			t.Errorf("rule %q appears %d times, want exactly 1", rule, got)
 		}
@@ -137,6 +138,7 @@ func TestInterpretationPromptJudgmentKindLeavesUnsetWithoutARanking(t *testing.T
 		"requested_judgment_kind cues.",
 		"- performance: performed or performing best or worst",
 		judgmentKindUnsetRule,
+		judgmentKindPickRule,
 		judgmentKindCarryRule,
 		"- Omit it for every other basis:",
 		"For subject_terms and comparison_terms",
@@ -146,6 +148,10 @@ func TestInterpretationPromptJudgmentKindLeavesUnsetWithoutARanking(t *testing.T
 			t.Fatalf("%q is missing or out of order (index %d, previous anchor at %d)", anchor, i, at)
 		}
 		at = i
+	}
+	section := p[strings.Index(p, "requested_judgment_kind cues."):strings.Index(p, "For subject_terms and comparison_terms")]
+	if strings.Contains(section, "survey") {
+		t.Errorf("the judgment-kind section names a gate wider than the appendix's \"ranks or compares\": %q", section)
 	}
 }
 
