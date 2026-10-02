@@ -44,6 +44,13 @@ func gateRun(t *testing.T, manifest Manifest, recording Recording, reference, ac
 	if rr == nil || rr.ShapesRun == 0 || rr.Compared == 0 {
 		t.Fatalf("root analytics was not run: %+v", rr)
 	}
+	// A run that is not a valid measurement proves nothing about the class.
+	if len(rr.Invalid) > 0 {
+		t.Fatalf("root analytics is not a valid measurement: %v", rr.Invalid)
+	}
+	if err := report.Err(); err != nil {
+		t.Fatalf("the gate run is an error: %v", err)
+	}
 	return oracle, rr
 }
 
@@ -124,6 +131,14 @@ func wantPlanted(t *testing.T, rr *RootReport, pair string, want Class, values m
 	}
 	if nonZero == 0 {
 		t.Fatalf("the case expects a difference of zero: it would pin nothing")
+	}
+	// Only that class: any other accepted difference in the whole run (the
+	// residual of attribution_basis is by design and always present) is a
+	// second defect the plant did not make.
+	for _, d := range rr.Differences {
+		if d.Class != want && d.Class != ClassAttributionBasis {
+			t.Errorf("planted run carries class %s in pair %s beside %s: %s", d.Class, d.Pair, want, d.Detail)
+		}
 	}
 	named := 0
 	for _, d := range rr.Differences {

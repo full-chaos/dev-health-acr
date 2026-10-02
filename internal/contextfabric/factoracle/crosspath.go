@@ -135,6 +135,7 @@ func (o *Oracle) runOperation(ctx context.Context, rr *RootReport, shape Shape, 
 	for path := range otherLeaves {
 		paths[path] = true
 	}
+	differing := []string{}
 	for _, path := range sortedKeys(paths) {
 		if _, volatile := volatilePaths[path]; volatile {
 			continue
@@ -145,7 +146,105 @@ func (o *Oracle) runOperation(ctx context.Context, rr *RootReport, shape Shape, 
 			rr.CrossMatches += len(a)
 			continue
 		}
+		differing = append(differing, path)
 		rr.find(Finding{Pair: "cross_path", Key: key, Path: path, Detail: fmt.Sprintf("run_operation and graphql_query answer differently: %d and %d leaves, not the same values", len(a), len(b))})
+	}
+	return o.compareRows(rr, shape, key, data, otherData, differing)
+}
+
+// rowSignatures lists, for each list of objects in an answer, one signature
+// per row: the scalar fields the row holds, as typed leaves, and the
+// signatures of the lists below it. Volatile paths and float aggregates are
+// left out (they are compared on their own rules). The signatures keep what
+// the per-path compare loses: which values belong to the same row.
+func (s Shape) rowSignatures(data any) map[string][]string {
+	selected := map[string]bool{}
+	for _, p := range s.Paths {
+		selected[p] = true
+	}
+	out := map[string][]string{}
+	var walk func(path string, v any)
+	walk = func(path string, v any) {
+		if _, leaf := s.OutputType(path); leaf && selected[path] {
+			return
+		}
+		switch t := v.(type) {
+		case map[string]any:
+			keys := make([]string, 0, len(t))
+			for k := range t {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				walk(path+"."+k, t[k])
+			}
+		case []any:
+			for _, item := range t {
+				row, isObject := item.(map[string]any)
+				if isObject {
+					out[path+"[*]"] = append(out[path+"[*]"], s.rowSignature(path+"[*]", row))
+				}
+				walk(path+"[*]", item)
+			}
+		}
+	}
+	if root, ok := data.(map[string]any); ok {
+		for k, v := range root {
+			walk(k, v)
+		}
+	}
+	for path := range out {
+		sort.Strings(out[path])
+	}
+	return out
+}
+
+// rowSignature is the canonical form of the scalar fields of one row.
+func (s Shape) rowSignature(path string, row map[string]any) string {
+	keys := make([]string, 0, len(row))
+	for k := range row {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for _, k := range keys {
+		child := path + "." + k
+		if _, volatile := volatilePaths[child]; volatile {
+			continue
+		}
+		if _, aggregate := aggregateFloatPaths[child]; aggregate {
+			continue
+		}
+		switch row[k].(type) {
+		case map[string]any, []any:
+			continue
+		}
+		b.WriteString(k + "=" + canonicalJSON(row[k]) + ";")
+	}
+	return b.String()
+}
+
+// compareRows holds the rows of the two answers to each other as rows: the
+// per-path compare is blind to two rows that swap values between them.
+func (o *Oracle) compareRows(rr *RootReport, shape Shape, key string, data, otherData any, differing []string) error {
+	mine, theirs := shape.rowSignatures(data), shape.rowSignatures(otherData)
+	paths := map[string]bool{}
+	for p := range mine {
+		paths[p] = true
+	}
+	for p := range theirs {
+		paths[p] = true
+	}
+	for _, path := range sortedKeys(paths) {
+		explained := false
+		for _, d := range differing {
+			if strings.HasPrefix(d, path+".") || strings.HasPrefix(d, path+"[*]") {
+				explained = true
+			}
+		}
+		if !explained && strings.Join(mine[path], "\x00") != strings.Join(theirs[path], "\x00") {
+			rr.find(Finding{Pair: "cross_path", Key: key, Path: path, Detail: fmt.Sprintf("run_operation and graphql_query answer the same fields with other rows: %d and %d rows, the values are not in the same rows", len(mine[path]), len(theirs[path]))})
+		}
 	}
 	return nil
 }
@@ -258,6 +357,15 @@ func (o *Oracle) probeLeaves(ctx context.Context, rr *RootReport, shape Shape, v
 	return leaves, "", nil
 }
 
+// echoValue is the one value the answer states at an echo path ("" when it
+// states none, or more than one).
+func echoValue(leaves map[string][]Leaf, path string) string {
+	if len(leaves[path]) != 1 || leaves[path][0].T == LeafNull {
+		return ""
+	}
+	return leaves[path][0].V
+}
+
 // leavesUnder returns the leaves of a path or of the block under it, as
 // sorted strings per path, type names left out. measured is false when no
 // leaf holds a value.
@@ -352,10 +460,20 @@ func (o *Oracle) temporaryAllowance(ctx context.Context, rr *RootReport, root *d
 		unmeasured("for the second history " + reason)
 		return nil
 	}
-	wideEcho, _ := leavesUnder(wideLeaves, spec.Echo)
-	narrowEcho, echoMeasured := leavesUnder(narrowLeaves, spec.Echo)
-	if !echoMeasured || wideEcho == narrowEcho {
-		unmeasured(fmt.Sprintf("the answer states the same history at %s for both requests", spec.Echo))
+	wantWide := fmt.Sprint(prior)
+	if spec.WideStated != 0 {
+		wantWide = fmt.Sprint(spec.WideStated)
+	}
+	if got := echoValue(wideLeaves, spec.Echo); got != wantWide {
+		unmeasured(fmt.Sprintf("the answer states a history of %q at %s for the request of %s, not %s", got, spec.Echo, fmt.Sprint(prior), wantWide))
+		return nil
+	}
+	wantNarrow := fmt.Sprint(spec.Narrow)
+	if spec.NarrowStated != 0 {
+		wantNarrow = fmt.Sprint(spec.NarrowStated)
+	}
+	if got := echoValue(narrowLeaves, spec.Echo); got != wantNarrow {
+		unmeasured(fmt.Sprintf("the answer states a history of %q at %s for the request of %d, not %s", got, spec.Echo, spec.Narrow, wantNarrow))
 		return nil
 	}
 	for _, path := range spec.Paths {

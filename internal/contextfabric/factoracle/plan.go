@@ -493,6 +493,11 @@ type temporaryAllowance struct {
 	Window string
 	Narrow int
 	Echo   string
+	// WideStated is the history the answer states for the request of the
+	// case when the resolver rounds or clamps it (0: the answer states what was asked).
+	// NarrowStated is the same for the second request.
+	WideStated   int
+	NarrowStated int
 	// Contract is the digest of the operation's contract the allowance was
 	// read against (contractDigest). A contract that changed is read again
 	// before the allowance is renewed.
@@ -515,7 +520,7 @@ var temporaryAllowances = map[string]temporaryAllowance{
 		Contract: "sha256:ad5d774fa899197d84842001d2f9fcee48155c5356a27238e1d726e1aff4db51",
 	},
 	"capacityForecast": {
-		Operation: "capacityForecast", Window: "input.historyDays", Narrow: 30, Echo: "capacityForecast.historyDays",
+		Operation: "capacityForecast", Window: "input.historyDays", Narrow: 30, Echo: "capacityForecast.historyDays", WideStated: 60, NarrowStated: 28,
 		Paths:    []string{"capacityForecast.backlogSize"},
 		Contract: "sha256:89ba9c9930575ff03676ed2696400b9bd6ea5ac84ed87534e7840a7d5fd8345a",
 	},

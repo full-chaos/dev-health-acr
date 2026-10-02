@@ -557,12 +557,16 @@ const (
 	replyWorkScope
 	replyScopeID
 	replyCatalogValue
+	// replyTaxonomy is a term of the fixed investment taxonomy (theme,
+	// subcategory, work type): kept when it has the shape of a taxonomy
+	// identifier, replaced by a token when it has any other shape.
+	replyTaxonomy
 )
 
 var replyRules = map[string]int{
 	"analytics.breakdowns[*].dimension":              replyKeep,
 	"analytics.breakdowns[*].measure":                replyKeep,
-	"analytics.breakdowns[*].items[*].key":           replyKeep,
+	"analytics.breakdowns[*].items[*].key":           replyTaxonomy,
 	"analytics.sankey.unit":                          replyKeep,
 	"capacityForecast.forecastId":                    replyUUID,
 	"capacityForecast.teamId":                        replyTeam,
@@ -650,6 +654,8 @@ func scrubReply(s *Scrubber, schema *ast.Schema, shape Shape, variables map[stri
 			switch replyRules[path] {
 			case replyKeep:
 				return t, nil
+			case replyTaxonomy:
+				return taxonomyTerm(s, t), nil
 			case replyOrg:
 				return s.Org(t)
 			case replyUUID:
@@ -670,7 +676,7 @@ func scrubReply(s *Scrubber, schema *ast.Schema, shape Shape, variables map[stri
 				case "TEAM":
 					return s.Token("team", t), nil
 				case "THEME", "SUBCATEGORY", "WORK_TYPE":
-					return t, nil
+					return taxonomyTerm(s, t), nil
 				default:
 					return s.Token("h", t), nil
 				}
@@ -700,6 +706,19 @@ func scrubReply(s *Scrubber, schema *ast.Schema, shape Shape, variables map[stri
 		out[k] = cleaned
 	}
 	return out, nil
+}
+
+// taxonomyShape is the shape of a term of the investment taxonomy: lower
+// snake case words, optionally a theme and a subcategory joined by a dot.
+// A value of another shape (spaces, capitals, digits first, a URL, an address)
+// is not a term of the taxonomy and is replaced.
+var taxonomyShape = regexp.MustCompile(`^[a-z][a-z0-9]*(_[a-z0-9]+)*(\.[a-z][a-z0-9]*(_[a-z0-9]+)*)?$`)
+
+func taxonomyTerm(s *Scrubber, t string) string {
+	if len(t) <= 64 && taxonomyShape.MatchString(t) {
+		return t
+	}
+	return s.Token("h", t)
 }
 
 func scrubJSONScalar(s *Scrubber, value map[string]any) map[string]any {

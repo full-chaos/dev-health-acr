@@ -198,7 +198,28 @@ func (o *Oracle) readFacts(ctx context.Context, kind, subjectKind string, ids []
 		if len(answer.Coverage) != end-start {
 			return nil, fmt.Errorf("read_facts %s: %d coverage rows for %d subjects", kind, len(answer.Coverage), end-start)
 		}
+		// The answer is about the subjects that were asked: each is covered
+		// once, and no fact or coverage row names another subject.
+		asked := map[string]int{}
+		for _, subject := range request.Subjects {
+			asked[strings.ToLower(subject.CanonicalID)] = 0
+		}
+		for _, row := range answer.Coverage {
+			id := strings.ToLower(row.Subject.CanonicalID)
+			if _, ok := asked[id]; !ok {
+				return nil, fmt.Errorf("read_facts %s: a coverage row names %s, which was not asked", kind, row.Subject.CanonicalID)
+			}
+			asked[id]++
+		}
+		for id, n := range asked {
+			if n != 1 {
+				return nil, fmt.Errorf("read_facts %s: subject %s has %d coverage rows, want 1", kind, id, n)
+			}
+		}
 		for _, fact := range answer.Facts {
+			if _, ok := asked[strings.ToLower(fact.Subject.CanonicalID)]; !ok {
+				return nil, fmt.Errorf("read_facts %s: a fact names %s, which was not asked", kind, fact.Subject.CanonicalID)
+			}
 			if fact.Kind != kind {
 				return nil, fmt.Errorf("read_facts %s: the answer holds a %s fact", kind, fact.Kind)
 			}
@@ -425,7 +446,11 @@ func (o *Oracle) generatedCases() ([]ShapeCase, error) {
 		case "acrRepositoryScopes":
 			sets = append(sets, map[string]any{})
 		case "catalogValues":
-			for _, dimension := range []string{"TEAM", "REPO", "THEME", "SUBCATEGORY", "WORK_TYPE"} {
+			dimensions, derr := o.variableValues(shape.Operation, "dimension")
+			if derr != nil {
+				return nil, derr
+			}
+			for _, dimension := range dimensions {
 				sets = append(sets, map[string]any{"dimension": dimension})
 			}
 		case "cognitiveLoad":
@@ -457,6 +482,38 @@ func (o *Oracle) generatedCases() ([]ShapeCase, error) {
 		}
 	}
 	return out, nil
+}
+
+// variableValues are the values a client may send for an enum variable of an
+// operation, read from the policy: the allowed values, or the enum without
+// the refused ones. A dimension the policy gains is run without an edit here.
+func (o *Oracle) variableValues(operation, path string) ([]string, error) {
+	op, refusal := o.Policy.Catalogue().Lookup(operation)
+	if refusal != nil || op == nil {
+		return nil, fmt.Errorf("operation %s is not served", operation)
+	}
+	for _, v := range op.Variables {
+		if v.Path != path || !v.Allowed {
+			continue
+		}
+		values := v.AllowedValues
+		if len(values) == 0 {
+			refused := map[string]bool{}
+			for _, r := range v.RefusedValues {
+				refused[r.Value] = true
+			}
+			for _, e := range v.Enum {
+				if !refused[e] {
+					values = append(values, e)
+				}
+			}
+		}
+		if len(values) == 0 {
+			return nil, fmt.Errorf("operation %s: variable %s has no value a client may send", operation, path)
+		}
+		return values, nil
+	}
+	return nil, fmt.Errorf("operation %s has no allowed variable %s", operation, path)
 }
 
 func investmentVariables(w Window, dimension string) map[string]any {

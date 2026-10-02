@@ -436,6 +436,24 @@ func TestEveryDeclaredColumnOfTheExtractHasAScrubRule(t *testing.T) {
 	}
 }
 
+// A taxonomy term that is not shaped like one is text, and is replaced.
+func TestATaxonomyTermOfAnotherShapeIsReplaced(t *testing.T) {
+	s, err := NewScrubber("11111111-2222-4333-8444-555555555555")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kept := range []string{"feature_delivery", "feature_delivery.new_capability", "maintenance"} {
+		if got := taxonomyTerm(s, kept); got != kept {
+			t.Errorf("term %q was replaced by %q", kept, got)
+		}
+	}
+	for _, text := range []string{"Jane Doe", "https://example.org/x", "jane@example.org", "Feature Delivery", "9lives"} {
+		if got := taxonomyTerm(s, text); got == text || strings.Contains(got, "example") {
+			t.Errorf("text %q was kept as %q", text, got)
+		}
+	}
+}
+
 func TestScrubReplyKeepsTypesAndReplacesText(t *testing.T) {
 	s, err := NewScrubber("11111111-2222-4333-8444-555555555555")
 	if err != nil {
@@ -732,6 +750,12 @@ func TestTheTwoPathsMustAnswerTheSame(t *testing.T) {
 	reordered = strings.Replace(reordered, `"nodeType":"X"`, `"nodeType":"PR","inflow":1,"outflow":2`, 1)
 	if rr := run("workGraphFlow", flow, reordered); crossFindings(rr) != 0 {
 		t.Fatalf("a reordered list is a finding: %+v", rr.Findings)
+	}
+	// Two rows that swap their values: every field has the same values, the
+	// rows are not the same rows.
+	swapped := `{"workGraphFlow":{"__typename":"WorkGraphFlowResult","degradedReason":null,"rows":[{"__typename":"WorkGraphFlowRow","nodeType":"ISSUE","inflow":1,"outflow":2},{"__typename":"WorkGraphFlowRow","nodeType":"PR","inflow":3,"outflow":4}]}}`
+	if rr := run("workGraphFlow", flow, swapped); crossFindings(rr) == 0 {
+		t.Fatalf("rows that swapped their values between them are not a finding: %+v", rr.Findings)
 	}
 	if rr := run("workGraphFlow", flow, strings.Replace(flow, `"inflow":3`, `"inflow":5`, 1)); crossFindings(rr) != 1 {
 		t.Fatalf("another value on the other path: %d cross-path findings, want 1: %+v", crossFindings(rr), rr.Findings)
@@ -1152,8 +1176,24 @@ func TestTemporaryAllowanceIsMeasuredNotAssumed(t *testing.T) {
 		forecast["historyWeeks"] = 12
 	}), nil)
 	rr = blind.Root("throughputForecast")
-	if count(rr) != 0 || len(blind.Expired()) != 0 || len(rr.CodeRead) != 1 || !strings.Contains(rr.CodeRead[0], "states the same history") {
+	if count(rr) != 0 || len(blind.Expired()) != 0 || len(rr.CodeRead) != 1 || !strings.Contains(rr.CodeRead[0], "the answer states a history") {
 		t.Fatalf("a probe that changed nothing: %d differences, expired %v, code read %v", count(rr), blind.Expired(), rr.CodeRead)
+	}
+
+	// The answer states a history other than the one asked for: 8 weeks for a
+	// request of 12, and 4 for the probe. The two echoes differ and the covered
+	// values are equal, but the answer does not say that the probe changed what
+	// was read: nothing is counted.
+	wrongEcho := fakeRun(t, "throughputForecast", recordedThroughput(t, func(variables map[string]any, forecast map[string]any) {
+		if historyOf(variables, "historyWeeks") == 12 {
+			forecast["historyWeeks"] = 8
+		} else {
+			forecast["historyWeeks"] = historyOf(variables, "historyWeeks")
+		}
+	}), nil)
+	rr = wrongEcho.Root("throughputForecast")
+	if count(rr) != 0 || len(wrongEcho.Expired()) != 0 || len(rr.CodeRead) != 1 || !strings.Contains(rr.CodeRead[0], `states a history of "8"`) {
+		t.Fatalf("an echo that is not the history asked for: %d differences, expired %v, code read %v", count(rr), wrongEcho.Expired(), rr.CodeRead)
 	}
 
 	// The answer for the second history states no history: not measured.
@@ -1557,6 +1597,39 @@ func TestATruncatedReadIsRefused(t *testing.T) {
 	}
 	if _, err := oracle.readFacts(context.Background(), "readiness", "team", []string{"t1"}, readCurrentHeldToStore); err != nil {
 		t.Fatalf("a truncated read that the pair holds to the store is refused: %v", err)
+	}
+}
+
+// A read_facts answer is about the subjects that were asked.
+func TestAFactAnswerMustNameTheSubjectsAsked(t *testing.T) {
+	answerFor := func(coverage, fact string) func(FactsRequest) (json.RawMessage, error) {
+		return func(request FactsRequest) (json.RawMessage, error) {
+			kind := request.Kinds[0]
+			return json.Marshal(map[string]any{"status": "complete", "versions": map[string]any{"kinds": map[string]any{}},
+				"coverage": []any{map[string]any{"kind": kind, "subject": map[string]any{"kind": "repository", "canonical_id": coverage}, "outcome": "available"}},
+				"facts":    []any{map[string]any{"kind": kind, "subject": map[string]any{"kind": "repository", "canonical_id": fact}, "fields": map[string]any{}}}})
+		}
+	}
+	read := func(planes fakePlanes) error {
+		oracle := &Oracle{Planes: planes, Window: Window{Start: mustDay(t, "2026-09-01"), End: mustDay(t, "2026-10-01")}}
+		_, err := oracle.readFacts(context.Background(), "identity", "repository", []string{"r1"}, readCurrent)
+		return err
+	}
+	if err := read(fakePlanes{facts: answerFor("repository:r2", "repository:r2")}); err == nil || !strings.Contains(err.Error(), "which was not asked") {
+		t.Fatalf("an answer about another subject was read: %v", err)
+	}
+	// Two subjects asked, one covered twice and one not at all.
+	twice := func(request FactsRequest) (json.RawMessage, error) {
+		kind := request.Kinds[0]
+		row := map[string]any{"kind": kind, "subject": map[string]any{"kind": "repository", "canonical_id": "repository:r1"}, "outcome": "available"}
+		return json.Marshal(map[string]any{"status": "complete", "versions": map[string]any{"kinds": map[string]any{}}, "coverage": []any{row, row}, "facts": []any{}})
+	}
+	oracle := &Oracle{Planes: fakePlanes{facts: twice}, Window: Window{Start: mustDay(t, "2026-09-01"), End: mustDay(t, "2026-10-01")}}
+	if _, err := oracle.readFacts(context.Background(), "identity", "repository", []string{"r1", "r2"}, readCurrent); err == nil || !strings.Contains(err.Error(), "coverage rows, want 1") {
+		t.Fatalf("a subject with no coverage row was read: %v", err)
+	}
+	if err := read(fakePlanes{facts: answerFor("repository:r1", "repository:r2")}); err == nil || !strings.Contains(err.Error(), "a fact names") {
+		t.Fatalf("a fact of another subject was read: %v", err)
 	}
 }
 
