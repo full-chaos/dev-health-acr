@@ -231,7 +231,16 @@ const (
 	// EVERY goal" and the unqualified clarification sentence they contradict.
 	// A change to what the model is told, so the version bumps (same
 	// standing rule stated at v9 above).
-	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v18"
+	// v18 -> v19: interpretationSystemPrompt gains the shape mapping from
+	// question_frame.subject_expression, the flat-field restatement rules,
+	// the proper-name first term, the count, share and ownership rules for
+	// the subject expression and the kind-word rule for
+	// requested_subject_kind, and drops "infer the investigation shape",
+	// "emit it whenever the question makes it clear" and the unqualified
+	// named_subject, children_of_scope and non-verbatim-term sentences they
+	// contradict. A change to what the model is told, so the version bumps
+	// (same standing rule stated at v9 above).
+	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v19"
 	// DefaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
 	// review round: v2 added claimed_facts for value-level closure; v3
 	// closes the driver category vocabulary (a fixed 16-value set, no
