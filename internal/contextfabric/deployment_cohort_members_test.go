@@ -47,7 +47,16 @@ func TestDeploymentCohortAnchorServableIsRepositoryOnly(t *testing.T) {
 	if !DeploymentCohortAnchorServable(SubjectRepository) {
 		t.Error("a repository anchors a deployment cohort")
 	}
-	if deploymentCohortAnchorsServable(nil) || deploymentCohortAnchorsServable([]SubjectRef{{Kind: SubjectRepository, CanonicalID: "a"}, {Kind: SubjectRepository, CanonicalID: "b"}}) {
+	repo := []SubjectRef{{Kind: SubjectRepository, CanonicalID: "a"}}
+	if !deploymentCohortAnchorsServable(repo, "") || !deploymentCohortAnchorsServable(repo, SubjectRepository) {
+		t.Error("a committed repository with no declared anchor kind, or a declared repository, serves")
+	}
+	for _, declared := range []SubjectKind{SubjectTeam, SubjectProject} {
+		if deploymentCohortAnchorsServable(repo, declared) {
+			t.Errorf("a committed repository under a declared %q anchor must not serve (a hint committed it, the question did not name it)", declared)
+		}
+	}
+	if deploymentCohortAnchorsServable(nil, "") || deploymentCohortAnchorsServable([]SubjectRef{{Kind: SubjectRepository, CanonicalID: "a"}, {Kind: SubjectRepository, CanonicalID: "b"}}, "") {
 		t.Error("zero or several committed anchors must not serve")
 	}
 }
@@ -61,14 +70,19 @@ func TestDeploymentCohortEngineDiscoversOnlyUnderARepositoryAnchor(t *testing.T)
 		{"repository anchor discovers", SubjectRepository, 1},
 		{"project anchor refused before discovery", SubjectProject, 0},
 		{"team anchor refused before discovery", SubjectTeam, 0},
+		{"repository committed under a declared team anchor refused", SubjectRepository, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			declaredKind := tc.anchorKind
+			if tc.name == "repository committed under a declared team anchor refused" {
+				declaredKind = SubjectTeam
+			}
 			frame := deploymentScopedFrame(GoalAssessState)
 			gate := DecideFrameGate(ValidateFrame(frame, nil, ""), true)
 			if gate.Refuses() {
 				t.Fatalf("fixture gate refuses: %+v", gate)
 			}
-			outcome := QuestionFamilyOutcome{Family: QuestionFamilyScopedCohortStatus, Source: QuestionFamilySourceModel, Frame: &frame, FrameObligations: frame.Obligations, Gate: gate, WinningSample: FamilySample{ScopeAnchorKind: tc.anchorKind, ScopeAnchorTerm: "Anchor"}}
+			outcome := QuestionFamilyOutcome{Family: QuestionFamilyScopedCohortStatus, Source: QuestionFamilySourceModel, Frame: &frame, FrameObligations: frame.Obligations, Gate: gate, WinningSample: FamilySample{ScopeAnchorKind: declaredKind, ScopeAnchorTerm: "Anchor"}}
 			payload := workItemTuplePayloadFixture(t)
 			resolution := payload.SubjectResolution
 			resolution.Committed = []SubjectRef{{Kind: tc.anchorKind, CanonicalID: "anchor-1", Label: "Anchor"}}
@@ -95,9 +109,27 @@ func TestDeploymentCohortEngineDiscoversOnlyUnderARepositoryAnchor(t *testing.T)
 			if graph.discoverCalls != tc.wantDiscover {
 				t.Fatalf("discover calls = %d, want %d", graph.discoverCalls, tc.wantDiscover)
 			}
-			if tc.wantDiscover == 0 && len(result.SubjectResolution.Committed) != 0 {
-				t.Fatalf("a refused anchor must not stay committed: %+v", result.SubjectResolution.Committed)
+			if tc.wantDiscover == 0 && (len(result.SubjectResolution.Committed) != 0 || len(result.SubjectResolution.Candidates) != 0) {
+				t.Fatalf("a refused anchor must not stay committed or listed as a candidate: %+v", result.SubjectResolution)
 			}
 		})
+	}
+}
+
+func TestDeploymentCountSentenceNeverReadsExactWhenThePopulationIsIncomplete(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		in   MembershipCardinality
+		want string
+	}{
+		{"complete exact", MembershipCardinality{Resolved: true, Kind: SubjectDeployment, Served: 3, Declared: 3}, "Counted 3 deployments."},
+		{"capped", MembershipCardinality{Resolved: true, Kind: SubjectDeployment, Served: 3, Declared: 7, PopulationIncomplete: true}, "Counted 3 deployments of at least 7 found."},
+		{"truncated pool", MembershipCardinality{Resolved: true, Kind: SubjectDeployment, Served: 2, Declared: 2, PopulationIncomplete: true}, "Counted at least 2 deployments."},
+		{"other kinds unchanged", MembershipCardinality{Resolved: true, Kind: SubjectIncident, Served: 3, Declared: 7, PopulationIncomplete: true}, "Counted 3 incidents of 7 found."},
+	} {
+		if got := cardinalityAnswerSentence(tc.in); got != tc.want {
+			t.Errorf("%s: sentence = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }

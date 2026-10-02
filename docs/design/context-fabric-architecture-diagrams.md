@@ -2369,6 +2369,15 @@ disagreed for TWELVE: a ranking row named `rank_cohort` as its server while the
 seam refused to build the cohort, so nothing computed the ordering the answer
 claimed.
 
+A kind may also be servable ONLY as the members of a named anchor
+(`scopedOnlyCohortKinds`, today `deployment`): `CohortMemberKindFor` admits it
+for `children_of_scope` and refuses it for `discovered_kind`, `grouped_members`
+and a counted `organization_scope`. After anchor resolution the engine refuses
+a deployment cohort unless exactly one repository is committed and the
+interpretation declared no other anchor kind; the cohort then asks for the
+per-deployment facts (`cohortFactRequirements`), never the repository or team
+rollups.
+
 The FOURTH reason is a runtime fact nobody can decide at derivation time: a
 perfectly servable kind whose search retains no members. `DiscoveredCohort`
 returns a nil cohort in that case, so the correction belongs on the served
