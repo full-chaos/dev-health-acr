@@ -3,8 +3,6 @@ package contextpacket_test
 import (
 	"context"
 	"errors"
-	"path/filepath"
-	"runtime"
 	"slices"
 	"testing"
 	"time"
@@ -13,6 +11,7 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/evalfixture"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
 func TestAssembler_uses_fixed_corpus_for_exact_commit_scope(t *testing.T) {
@@ -105,11 +104,7 @@ func TestAssembler_marks_partial_and_timeout_retrieval(t *testing.T) {
 
 func fixtureAssembler(t *testing.T) *contextpacket.Assembler {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve test file")
-	}
-	corpus, err := evalfixture.VerifyCorpus(filepath.Join(filepath.Dir(file), "..", "..", "testdata", "evaluation", "v1"))
+	corpus, err := evalfixture.VerifyCorpus(repopath.Path(t, "testdata", "evaluation", "v1"))
 	if err != nil {
 		t.Fatalf("verify corpus: %v", err)
 	}

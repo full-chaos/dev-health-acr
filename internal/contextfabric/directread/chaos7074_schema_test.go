@@ -2,9 +2,7 @@ package directread
 
 import (
 	"encoding/json"
-	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -12,6 +10,7 @@ import (
 	"github.com/xeipuuv/gojsonschema"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread/gatevocab"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
 // CHAOS-7074: the published MCP schemas for read_relationships must accept
@@ -20,15 +19,14 @@ import (
 // is a published property (and the reverse), so a field added to a struct
 // without a schema property fails here rather than at a consumer.
 
-func relationshipsSchemaPath(name string) string {
-	_, file, _, _ := runtime.Caller(0)
-	return filepath.Join(filepath.Dir(file), "..", "..", "..", "contracts", "jsonschema", "v1", name)
+func relationshipsSchemaPath(t *testing.T, name string) string {
+	return repopath.Path(t, "contracts", "jsonschema", "v1", name)
 }
 
 func relationshipsValidate(t *testing.T, schemaName string, document []byte) {
 	t.Helper()
 	result, err := gojsonschema.Validate(
-		gojsonschema.NewReferenceLoader("file://"+relationshipsSchemaPath(schemaName)),
+		gojsonschema.NewReferenceLoader("file://"+relationshipsSchemaPath(t, schemaName)),
 		gojsonschema.NewBytesLoader(document))
 	if err != nil {
 		t.Fatalf("validate %s: %v", schemaName, err)
@@ -67,7 +65,7 @@ func relationshipsSchemaKeys(node map[string]any) []string {
 func relationshipsLoadSchema(t *testing.T, name string) map[string]any {
 	t.Helper()
 	result := map[string]any{}
-	loader := gojsonschema.NewReferenceLoader("file://" + relationshipsSchemaPath(name))
+	loader := gojsonschema.NewReferenceLoader("file://" + relationshipsSchemaPath(t, name))
 	doc, err := loader.LoadJSON()
 	if err != nil {
 		t.Fatal(err)

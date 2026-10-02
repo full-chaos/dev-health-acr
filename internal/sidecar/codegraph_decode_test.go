@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
 func TestDecodeCodeGraphJSON_preservesOutputLimitError_whenLimitReadAlsoHasBytes(t *testing.T) {
@@ -275,9 +275,7 @@ func appendStatusField(t *testing.T, object map[string]json.RawMessage, field st
 
 func readCodeGraphFixtureAt(t *testing.T, directory, name string) string {
 	t.Helper()
-	_, sourceFile, _, found := runtime.Caller(0)
-	require.True(t, found)
-	contents, err := os.ReadFile(filepath.Join(filepath.Dir(sourceFile), "..", "..", "testdata", "codegraph", "v1.2.0", directory, name+".json"))
+	contents, err := os.ReadFile(repopath.Path(t, "testdata", "codegraph", "v1.2.0", directory, name+".json"))
 	require.NoError(t, err)
 	return string(contents)
 }

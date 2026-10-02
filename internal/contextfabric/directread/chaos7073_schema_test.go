@@ -3,9 +3,7 @@ package directread
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -14,6 +12,7 @@ import (
 	"github.com/xeipuuv/gojsonschema"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
 // CHAOS-7073: the published MCP schemas for read_facts must accept exactly
@@ -24,8 +23,7 @@ import (
 
 func readFactsSchemaPath(t *testing.T, name string) string {
 	t.Helper()
-	_, file, _, _ := runtime.Caller(0)
-	return filepath.Join(filepath.Dir(file), "..", "..", "..", "contracts", "jsonschema", "v1", name)
+	return repopath.Path(t, "contracts", "jsonschema", "v1", name)
 }
 
 func loadSchema(t *testing.T, name string) map[string]any {

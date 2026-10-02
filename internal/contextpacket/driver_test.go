@@ -4,20 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/evalfixture"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
 func TestFixtureDriver_assembles_every_fixed_corpus_task(t *testing.T) {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve test file")
-	}
-	corpus, err := evalfixture.VerifyCorpus(filepath.Join(filepath.Dir(file), "..", "..", "testdata", "evaluation", "v1"))
+	corpus, err := evalfixture.VerifyCorpus(repopath.Path(t, "testdata", "evaluation", "v1"))
 	if err != nil {
 		t.Fatalf("verify corpus: %v", err)
 	}

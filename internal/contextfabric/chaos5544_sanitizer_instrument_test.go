@@ -58,11 +58,12 @@ import (
 	"go/types"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"testing"
 
 	"golang.org/x/tools/go/packages"
+
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
 // chaos5544LoggerMethods maps a slog logger method name to the index of
@@ -958,21 +959,7 @@ func chaos5544ScanForUnsanitizedLogAttrs(t *testing.T, dir, pattern string) []st
 // the working directory `go test` is invoked from.
 func chaos5544RepoRoot(t *testing.T) string {
 	t.Helper()
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	dir := filepath.Dir(thisFile)
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatal("could not find module root (go.mod) walking up from " + thisFile)
-		}
-		dir = parent
-	}
+	return repopath.Root(t)
 }
 
 // TestNoUnsanitizedLogAttributeInContextFabric is THE GATE: zero tolerance,
