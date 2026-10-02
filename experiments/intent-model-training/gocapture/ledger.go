@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -53,7 +54,10 @@ type ledgerRecord struct {
 	// incumbent record, so incumbent ledger lines are unchanged.
 	Variant        string `json:"variant,omitempty"`
 	AppendixSHA256 string `json:"appendix_sha256,omitempty"`
-	At             string `json:"at"`
+	// Replace-mode variants only: "replace" on variant_approval and
+	// run_started. Absent for the append mode, so its lines are unchanged.
+	VariantMode string `json:"variant_mode,omitempty"`
+	At          string `json:"at"`
 }
 
 type pairKey struct {
@@ -100,8 +104,14 @@ type approvalLedger struct {
 	// Prompt-variant series (variant.go): the pairs of each approved
 	// variant, kept apart from the incumbent's pairs, and each approved
 	// variant's appendix sha256. All spend from the same approval cap.
-	variantPairs   map[string]map[pairKey]*pairState
-	variants       map[string]string
+	variantPairs map[string]map[pairKey]*pairState
+	variants     map[string]string
+	// variantModes holds each approved variant's mode ("" is append).
+	variantModes map[string]string
+	// startedRuns holds the run_started records of EVERY approval id in
+	// the file, in file order: the one-profile rule of a seal does not stop
+	// at an approval id.
+	startedRuns    []ledgerRecord
 	terminalOrder  []ledgerRecord
 	lastReservedAt time.Time
 	nextSeq        int
@@ -127,7 +137,7 @@ func openLedger(dir *cdir, approvalID string, create bool) (*approvalLedger, err
 	}
 	l := &approvalLedger{file: file, approvalID: approvalID, runSpent: map[string]int{}, runs: map[string]ledgerRecord{},
 		stopped: map[string]string{}, pairs: map[pairKey]*pairState{}, nextSeq: 1, now: time.Now,
-		variantPairs: map[string]map[pairKey]*pairState{}, variants: map[string]string{}}
+		variantPairs: map[string]map[pairKey]*pairState{}, variants: map[string]string{}, variantModes: map[string]string{}}
 	if err := l.load(); err != nil {
 		_ = file.Close()
 		return nil, err
@@ -170,11 +180,41 @@ func (l *approvalLedger) load() error {
 		if err := strictUnmarshal(scanner.Bytes(), &rec); err != nil {
 			return fmt.Errorf("approval ledger line %d: %w", line, err)
 		}
+		// The runner never writes an empty variant_mode member (the append
+		// mode writes none). A decoded record cannot show an empty member, so
+		// the line itself is checked.
+		// Both mode rules hold for every line of the file, also for a record
+		// of another approval id that apply does not act on.
+		if rec.VariantMode == "" && hasMember(scanner.Bytes(), "variant_mode") {
+			return fmt.Errorf("approval ledger line %d: an empty variant_mode member", line)
+		}
+		if err := variantModeOwner(rec); err != nil {
+			return fmt.Errorf("approval ledger line %d: %w", line, err)
+		}
 		if err := l.apply(rec); err != nil {
 			return fmt.Errorf("approval ledger line %d: %w", line, err)
 		}
 	}
 	return scanner.Err()
+}
+
+// variantModeOwner: only the approval of a variant and the start of its run
+// carry the mode.
+func variantModeOwner(rec ledgerRecord) error {
+	if rec.VariantMode != "" && rec.Kind != "variant_approval" && rec.Kind != "run_started" {
+		return errors.New("a variant mode belongs on variant_approval and run_started records only")
+	}
+	return nil
+}
+
+// hasMember reports whether the JSON object in line has the member name.
+func hasMember(line []byte, name string) bool {
+	var members map[string]json.RawMessage
+	if json.Unmarshal(line, &members) != nil {
+		return false
+	}
+	_, ok := members[name]
+	return ok
 }
 
 // pairsOf is the pair map of one series: the incumbent's ("") or one
@@ -219,8 +259,14 @@ func keyOf(rec ledgerRecord) (pairKey, error) {
 }
 
 func (l *approvalLedger) apply(rec ledgerRecord) error {
+	if rec.Kind == "run_started" {
+		l.startedRuns = append(l.startedRuns, rec)
+	}
 	if rec.ApprovalID != l.approvalID {
 		return nil
+	}
+	if err := variantModeOwner(rec); err != nil {
+		return err
 	}
 	switch rec.Kind {
 	case "approval":
@@ -233,7 +279,7 @@ func (l *approvalLedger) apply(rec ledgerRecord) error {
 	case "variant_approval":
 		// chris's approval of one named prompt variant with one appendix
 		// (gocapture approve-variant). Its calls spend from this approval.
-		if rec.ApprovedBy != "human:chris" || validVariantName(rec.Variant) != nil || !isSHA256Hex(rec.AppendixSHA256) || rec.Source == "" {
+		if rec.ApprovedBy != "human:chris" || validVariantName(rec.Variant) != nil || !isSHA256Hex(rec.AppendixSHA256) || rec.Source == "" || !validVariantMode(rec.VariantMode) {
 			return errors.New("malformed variant_approval record")
 		}
 		if !l.approved {
@@ -242,7 +288,10 @@ func (l *approvalLedger) apply(rec ledgerRecord) error {
 		if prior, ok := l.variants[rec.Variant]; ok && prior != rec.AppendixSHA256 {
 			return errors.New("this variant name is approved for another appendix: a changed appendix needs a new variant name")
 		}
-		l.variants[rec.Variant] = rec.AppendixSHA256
+		if prior, ok := l.variantModes[rec.Variant]; ok && prior != rec.VariantMode {
+			return errors.New("this variant name is approved in the other mode (append or replace): another mode needs a new variant name")
+		}
+		l.variants[rec.Variant], l.variantModes[rec.Variant] = rec.AppendixSHA256, rec.VariantMode
 		return nil
 	case "run_started":
 		if rec.RunID == "" || rec.RunCapHTTPAttempts == nil || rec.RunConfigSHA256 == "" {
@@ -251,8 +300,8 @@ func (l *approvalLedger) apply(rec ledgerRecord) error {
 		if prior, ok := l.runs[rec.RunID]; ok && prior.RunConfigSHA256 != rec.RunConfigSHA256 {
 			return errors.New("run_started repeated with a different config")
 		}
-		if rec.Variant != "" || rec.AppendixSHA256 != "" {
-			if approved, ok := l.variants[rec.Variant]; !ok || approved != rec.AppendixSHA256 {
+		if rec.Variant != "" || rec.AppendixSHA256 != "" || rec.VariantMode != "" {
+			if approved, ok := l.variants[rec.Variant]; !ok || approved != rec.AppendixSHA256 || l.variantModes[rec.Variant] != rec.VariantMode {
 				return errors.New("prompt-variant run without chris's variant_approval for this variant and appendix")
 			}
 		}
@@ -396,7 +445,10 @@ func (l *approvalLedger) append(rec ledgerRecord) error {
 func (l *approvalLedger) dryApply(rec ledgerRecord) error {
 	shadow := &approvalLedger{approvalID: l.approvalID, cap: l.cap, approved: l.approved, spent: l.spent, nextSeq: l.nextSeq,
 		runSpent: map[string]int{}, runs: map[string]ledgerRecord{}, stopped: map[string]string{}, pairs: map[pairKey]*pairState{},
-		variantPairs: map[string]map[pairKey]*pairState{}, variants: map[string]string{}}
+		variantPairs: map[string]map[pairKey]*pairState{}, variants: map[string]string{}, variantModes: map[string]string{}}
+	for k, v := range l.variantModes {
+		shadow.variantModes[k] = v
+	}
 	for k, v := range l.runs {
 		shadow.runs[k] = v
 	}
@@ -519,13 +571,20 @@ func approve(dataRoot, approvalID string, cap int, source, approvedBy, raiseReas
 // its appendix (by sha256) under an existing approval. A variant run is
 // refused without it, and its HTTP attempts spend from that approval's cap.
 func approveVariant(dataRoot, approvalID, name, appendixPath, source, approvedBy string) error {
+	return approveVariantFile(dataRoot, approvalID, name, appendixPath, "", source, approvedBy)
+}
+
+// approveVariantFile is approveVariant for either mode: appendixPath for
+// the append mode, messagePath for the replace mode (a candidate system
+// message). The record binds the name, the mode and the file's sha256.
+func approveVariantFile(dataRoot, approvalID, name, appendixPath, messagePath, source, approvedBy string) error {
 	if approvedBy != "human:chris" {
 		return errors.New("a variant approval is written by human:chris only")
 	}
 	if source == "" {
 		return errors.New("--source (the approval citation) is required")
 	}
-	variant, err := loadVariant(name, appendixPath)
+	variant, err := loadVariant(name, appendixPath, messagePath)
 	if err != nil {
 		return err
 	}
@@ -547,8 +606,8 @@ func approveVariant(dataRoot, approvalID, name, appendixPath, source, approvedBy
 	if !l.approved {
 		return errors.New("no approval record for this approval id: a variant is approved under an existing approval")
 	}
-	if approved, ok := l.variants[variant.Name]; ok && approved == variant.AppendixSHA256 {
-		return nil // already approved with this appendix
+	if approved, ok := l.variants[variant.Name]; ok && approved == variant.AppendixSHA256 && l.variantModes[variant.Name] == variant.Mode {
+		return nil // already approved with this file in this mode
 	}
-	return l.append(ledgerRecord{Kind: "variant_approval", Variant: variant.Name, AppendixSHA256: variant.AppendixSHA256, ApprovedBy: approvedBy, Source: source})
+	return l.append(ledgerRecord{Kind: "variant_approval", Variant: variant.Name, AppendixSHA256: variant.AppendixSHA256, VariantMode: variant.Mode, ApprovedBy: approvedBy, Source: source})
 }

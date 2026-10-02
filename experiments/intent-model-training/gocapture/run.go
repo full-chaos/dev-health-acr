@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -41,6 +42,9 @@ type runConfig struct {
 	// Prompt variant (variant.go): both empty for the incumbent capture.
 	PromptVariant    string
 	SystemAppendFile string
+	// Replace mode: the whole candidate system message, in place of
+	// production's. Exclusive with SystemAppendFile.
+	SystemMessageFile string
 
 	// Unexported seams for tests only; main never sets them.
 	allow      *allowlist
@@ -107,6 +111,56 @@ func (c *runConfig) defaults() {
 	}
 }
 
+// sameProfileAsOtherRuns refuses when another started run of the seal, of
+// any series and under any approval id of the shared ledger, recorded
+// another deployment-profile digest in its run.json.
+func sameProfileAsOtherRuns(ledger *approvalLedger, heldout *cdir, set, sealDigest, runID, profileSHA string) error {
+	others := map[string]ledgerRecord{}
+	for _, other := range ledger.startedRuns {
+		if other.SealDigest != sealDigest || (other.ApprovalID == ledger.approvalID && other.RunID == runID) {
+			continue
+		}
+		others[other.ApprovalID+"\x00"+other.RunID] = other
+	}
+	keys := make([]string, 0, len(others))
+	for key := range others {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		other := others[key]
+		recorded, err := recordedProfileSHA(heldout, set, other.RunID, other.RunConfigSHA256)
+		if err != nil {
+			return fmt.Errorf("run %q (approval id %q) of this seal: %w", other.RunID, other.ApprovalID, err)
+		}
+		if recorded != profileSHA {
+			return fmt.Errorf("run %q (approval id %q) of this seal was made under another deployment profile (sha256 %s, this run %s): one seal is captured under one profile, because deadlines and retries come from it", other.RunID, other.ApprovalID, recorded, profileSHA)
+		}
+	}
+	return nil
+}
+
+// recordedProfileSHA reads the profile digest another run of the seal
+// recorded. The run.json must be the one its run_started record binds.
+func recordedProfileSHA(heldout *cdir, set, runID, configSHA string) (string, error) {
+	dir, err := heldout.walk(false, set, "captures", runID)
+	if err != nil {
+		return "", fmt.Errorf("its run directory: %w", err)
+	}
+	defer dir.close()
+	data, err := dir.readFile("run.json")
+	if err != nil || sha256Hex(data) != configSHA {
+		return "", errors.New("its run.json is missing or differs from the ledger, so its deployment profile cannot be compared")
+	}
+	var recorded struct {
+		ProfileSHA256 string `json:"profile_sha256"`
+	}
+	if json.Unmarshal(data, &recorded) != nil || !isSHA256Hex(recorded.ProfileSHA256) {
+		return "", errors.New("its run.json names no deployment profile")
+	}
+	return recorded.ProfileSHA256, nil
+}
+
 func prefixed(fault func(string) error, prefix string) func(string) error {
 	return func(p string) error { return fault(prefix + p) }
 }
@@ -128,7 +182,7 @@ func capture(ctx context.Context, cfg runConfig) (runResult, error) {
 	if err := validName(cfg.RunID); err != nil {
 		return runResult{}, fmt.Errorf("--run-id: %w", err)
 	}
-	variant, err := loadVariant(cfg.PromptVariant, cfg.SystemAppendFile)
+	variant, err := loadVariant(cfg.PromptVariant, cfg.SystemAppendFile, cfg.SystemMessageFile)
 	if err != nil {
 		return runResult{}, err
 	}
@@ -180,7 +234,7 @@ func capture(ctx context.Context, cfg runConfig) (runResult, error) {
 			return runResult{}, errors.New("a prompt variant needs a system message with string content first in the envelope golden")
 		}
 		if transport.scanner.scan(variant.Appendix) {
-			return runResult{}, errors.New("the system append file holds the configured credential")
+			return runResult{}, errors.New("the " + variant.fileLabel() + " file holds the configured credential")
 		}
 	}
 	modelConfig.Logger = slog.New(&drawObserver{transport: transport})
@@ -197,6 +251,9 @@ func capture(ctx context.Context, cfg runConfig) (runResult, error) {
 	input, err := verifyInput(root, cfg.SessionID)
 	if err != nil {
 		return runResult{}, err
+	}
+	if variant.replaces() && variant.AppendixSHA256 == input.Seal.ExpectedSystemMessageSHA256 {
+		return runResult{}, errVariantIsIncumbent
 	}
 	set := input.Seal.Set
 	record := runConfigRecord{
@@ -241,9 +298,18 @@ func capture(ctx context.Context, cfg runConfig) (runResult, error) {
 		// chris's own record that names this variant and this appendix.
 		if approved, ok := ledger.variants[variant.Name]; !ok {
 			return runResult{}, fmt.Errorf("no variant_approval record names prompt variant %q under this approval id (gocapture approve-variant, by chris)", variant.Name)
+		} else if ledger.variantModes[variant.Name] != variant.Mode {
+			return runResult{}, fmt.Errorf("prompt variant %q is approved in the other mode (append or replace): this run needs its own variant name and approval", variant.Name)
 		} else if approved != variant.AppendixSHA256 {
-			return runResult{}, fmt.Errorf("prompt variant %q is approved for another appendix (sha256 %s): the file changed, so it needs a new variant name and approval", variant.Name, approved)
+			return runResult{}, fmt.Errorf("prompt variant %q is approved for another %s (sha256 %s): the file changed, so it needs a new variant name and approval", variant.Name, variant.fileLabel(), approved)
 		}
+	}
+	// One seal, one deployment profile. Deadlines and retries come from the
+	// profile, not from the request the wire proof covers, so a run of this
+	// seal under another profile is not comparable with the runs already
+	// made. It is refused here, before any write, reservation or call.
+	if err := sameProfileAsOtherRuns(ledger, heldout, set, input.Seal.SealDigest, cfg.RunID, record.ProfileSHA256); err != nil {
+		return runResult{}, err
 	}
 	prior, started := ledger.runs[cfg.RunID]
 	if cfg.Resume != started {
@@ -297,10 +363,10 @@ func capture(ctx context.Context, cfg runConfig) (runResult, error) {
 			return runResult{}, err
 		}
 		if variant != nil {
-			// The appendix the evaluator rebuilds the system message from.
-			kept, err := runDir.readFile(systemAppendName)
+			// The file the evaluator rebuilds the system message from.
+			kept, err := runDir.readFile(variant.keptName())
 			if err != nil || sha256Hex(kept) != variant.AppendixSHA256 {
-				return runResult{}, errors.New(systemAppendName + " is missing from the run directory or differs from the appendix")
+				return runResult{}, errors.New(variant.keptName() + " is missing from the run directory or differs from the " + variant.fileLabel())
 			}
 		}
 	} else {
@@ -309,10 +375,10 @@ func capture(ctx context.Context, cfg runConfig) (runResult, error) {
 		}
 		started := ledgerRecord{Kind: "run_started", RunID: cfg.RunID, Set: set, SealDigest: input.Seal.SealDigest, RunConfigSHA256: configSHA}
 		if variant != nil {
-			if err := runDir.publishWriteOnce(systemAppendName, variant.Appendix, prefixed(cfg.fault, "append_")); err != nil {
-				return runResult{}, fmt.Errorf("publish %s: %w", systemAppendName, err)
+			if err := runDir.publishWriteOnce(variant.keptName(), variant.Appendix, prefixed(cfg.fault, "append_")); err != nil {
+				return runResult{}, fmt.Errorf("publish %s: %w", variant.keptName(), err)
 			}
-			started.Variant, started.AppendixSHA256 = variant.Name, variant.AppendixSHA256
+			started.Variant, started.AppendixSHA256, started.VariantMode = variant.Name, variant.AppendixSHA256, variant.Mode
 		}
 		n := cfg.RunCap
 		started.RunCapHTTPAttempts = &n

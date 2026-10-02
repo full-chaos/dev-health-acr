@@ -697,6 +697,10 @@ func TestVariantAndIncumbentNeverMix(t *testing.T) {
 // The variant's calls spend from the same approval cap as the incumbent's.
 func TestVariantSpendsFromTheSameApproval(t *testing.T) {
 	f := newFixture(t)
+	// One profile for both runs of the seal (a seal is captured under one
+	// deployment profile): the retry policy the storm below needs.
+	f.profileMap["model_max_transport_retries"] = 2
+	f.writeProfile()
 	path := f.writeAppendix(testAppendix)
 	f.approveVariant("rules-v1", path)
 	if _, err := f.run(f.config("run1")); err != nil {
@@ -714,12 +718,10 @@ func TestVariantSpendsFromTheSameApproval(t *testing.T) {
 	if err := approve(f.paths.Root, "appr-test", 14, "raise", "human:chris", ""); err != nil {
 		t.Fatal(err)
 	}
-	f.profileMap["model_max_transport_retries"] = 2
-	f.writeProfile()
 	for i := 0; i < 8; i++ {
 		f.server.push(scripted{status: 429, body: `{}`, headers: retryFast})
 	}
-	// The profile changed, so the incumbent run could not resume; the variant run is new.
+	// The variant run is new: its first start was refused before any write.
 	res, err := f.run(f.variantConfig("var1", "rules-v1", path))
 	if err != nil {
 		t.Fatal(err)

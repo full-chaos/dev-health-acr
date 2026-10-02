@@ -30,6 +30,17 @@ import (
 // message sha included), then changes ONE thing: the system message content
 // gains the separator and the appendix. The changed request is proven again
 // against the same expected descriptor with the variant's system message sha.
+//
+// Two modes change that one thing in two ways:
+//   - append (the default, R7): the production system message, the
+//     separator and an appendix file;
+//   - replace (a candidate prompt): the file is the WHOLE system message
+//     and takes the place of production's. The base proof is the same, so
+//     the model, the user message, the seed, the response format and the
+//     decoding stay production's by proof.
+//
+// A name is approved for one mode and one file. Append-mode records are
+// written exactly as before the replace mode existed.
 
 // variantSeparator sits between the production system message and the
 // appendix. It is fixed; its sha256 is recorded in run.json and artifacts.
@@ -41,6 +52,21 @@ const variantArtifactSchema = "gocapture.variant-artifact.v1"
 const maxAppendixBytes = 64 << 10
 
 const systemAppendName = "system-append.md"
+
+// systemMessageName is the kept file of a replace-mode run: the whole
+// system message that was sent.
+const systemMessageName = "system-message.md"
+
+// Variant modes. The append mode is the empty string, so no append-mode
+// record gains a member.
+const (
+	variantModeAppend  = ""
+	variantModeReplace = "replace"
+)
+
+func validVariantMode(mode string) bool {
+	return mode == variantModeAppend || mode == variantModeReplace
+}
 
 var variantNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,63}$`)
 
@@ -59,21 +85,28 @@ func validVariantName(name string) error {
 // variant run. It can never equal "incumbent".
 func variantCandidate(name string) string { return "incumbent-variant[" + name + "]" }
 
+// In replace mode Appendix is the whole candidate system message and
+// AppendixSHA256 its sha256: one file per variant, whatever the mode.
 type promptVariant struct {
 	Name           string
 	Appendix       []byte
 	AppendixSHA256 string
+	Mode           string
 }
 
 // variantRecord is the variant block of run.json and of every artifact.
 // SystemMessageSHA256 is set in artifacts only: the sha256 of the system
-// message actually sent (production message + separator + appendix).
+// message actually sent (production message + separator + appendix, or the
+// file alone in replace mode). Mode is absent for append; in replace mode
+// the appendix members describe the system message file and there is no
+// separator.
 type variantRecord struct {
 	Name                    string `json:"name"`
 	Candidate               string `json:"candidate"`
 	AppendixSHA256          string `json:"appendix_sha256"`
 	AppendixBytes           int    `json:"appendix_bytes"`
-	SeparatorSHA256         string `json:"separator_sha256"`
+	SeparatorSHA256         string `json:"separator_sha256,omitempty"`
+	Mode                    string `json:"mode,omitempty"`
 	BaseSystemMessageSHA256 string `json:"base_system_message_sha256"`
 	SystemMessageSHA256     string `json:"system_message_sha256,omitempty"`
 }
@@ -89,44 +122,188 @@ func (v *promptVariant) record(baseSystemSHA, systemSHA string) *variantRecord {
 	if v == nil {
 		return nil
 	}
-	return &variantRecord{Name: v.Name, Candidate: variantCandidate(v.Name), AppendixSHA256: v.AppendixSHA256, AppendixBytes: len(v.Appendix),
+	rec := &variantRecord{Name: v.Name, Candidate: variantCandidate(v.Name), AppendixSHA256: v.AppendixSHA256, AppendixBytes: len(v.Appendix),
 		SeparatorSHA256: sha256Hex([]byte(variantSeparator)), BaseSystemMessageSHA256: baseSystemSHA, SystemMessageSHA256: systemSHA}
+	if v.replaces() {
+		rec.SeparatorSHA256, rec.Mode = "", variantModeReplace
+	}
+	return rec
+}
+
+func (v *promptVariant) replaces() bool { return v != nil && v.Mode == variantModeReplace }
+
+// keptName is the file of the run directory that keeps the variant's file.
+func (v *promptVariant) keptName() string {
+	if v.replaces() {
+		return systemMessageName
+	}
+	return systemAppendName
+}
+
+// fileLabel names the variant's file in messages.
+func (v *promptVariant) fileLabel() string {
+	if v.replaces() {
+		return "system message"
+	}
+	return "appendix"
 }
 
 // suffix is what the system message gains.
 func (v *promptVariant) suffix() string { return variantSeparator + string(v.Appendix) }
 
-// loadVariant reads the two variant flags. Both or neither: a name without
-// a file, or a file without a name, is refused.
-func loadVariant(name, path string) (*promptVariant, error) {
-	if name == "" && path == "" {
+// loadVariant reads the variant flags: a name and exactly one file, or
+// nothing. appendPath selects the append mode, messagePath the replace mode.
+func loadVariant(name, appendPath, messagePath string) (*promptVariant, error) {
+	if name == "" && appendPath == "" && messagePath == "" {
 		return nil, nil
 	}
+	if appendPath != "" && messagePath != "" {
+		return nil, errors.New("give --system-append-file (the production prompt plus an appendix) or --system-message-file (a candidate prompt in its place), not both")
+	}
+	path, mode, label := appendPath, variantModeAppend, "system append file"
+	if messagePath != "" {
+		path, mode, label = messagePath, variantModeReplace, "system message file"
+	}
 	if name == "" || path == "" {
-		return nil, errors.New("--prompt-variant and --system-append-file go together: give both, or neither for the incumbent")
+		return nil, errors.New("--prompt-variant and one of --system-append-file or --system-message-file go together: give a name and one file, or neither for the incumbent")
 	}
 	if err := validVariantName(name); err != nil {
 		return nil, err
 	}
 	data, err := readPrivateFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("system append file: %w", err)
+		return nil, fmt.Errorf("%s: %w", label, err)
 	}
 	if len(data) > maxAppendixBytes {
-		return nil, fmt.Errorf("system append file is larger than %d bytes", maxAppendixBytes)
+		return nil, fmt.Errorf("%s is larger than %d bytes", label, maxAppendixBytes)
 	}
 	if !utf8.Valid(data) {
-		return nil, errors.New("system append file is not valid UTF-8")
+		return nil, errors.New(label + " is not valid UTF-8")
 	}
 	if strings.TrimSpace(string(data)) == "" {
-		return nil, errors.New("system append file is empty: an empty appendix is the incumbent, not a variant")
+		return nil, errors.New(label + " is empty: an empty appendix is the incumbent, and an empty system message is no prompt")
 	}
 	for _, c := range data {
 		if c < 0x20 && c != '\n' && c != '\t' {
-			return nil, errors.New("system append file holds a control character (only newline and tab are allowed)")
+			return nil, errors.New(label + " holds a control character (only newline and tab are allowed)")
 		}
 	}
-	return &promptVariant{Name: name, Appendix: data, AppendixSHA256: sha256Hex(data)}, nil
+	if mode == variantModeReplace && isHelperEnvelope(data) {
+		return nil, errors.New(label + " is the helper's JSON output, not a system message: write the value of its text member to the file")
+	}
+	return &promptVariant{Name: name, Appendix: data, AppendixSHA256: sha256Hex(data), Mode: mode}, nil
+}
+
+// isHelperEnvelope reports whether data is the JSON object that
+// `interp-helper system-message` prints. Sent as it is, that object would
+// be the prompt. It is recognized by the helper's own shape: only members
+// the helper writes, a sha256 member that is the sha256 of the text member,
+// and a bytes member that is its length. A JSON prompt with another member,
+// another digest or another count is a prompt. A UTF-8 byte-order mark
+// before the object does not hide it.
+func isHelperEnvelope(data []byte) bool {
+	var envelope struct {
+		Text              *string          `json:"text"`
+		SHA256            *string          `json:"sha256"`
+		Bytes             *int             `json:"bytes"`
+		Parts             *json.RawMessage `json:"parts"`
+		PromptSHA256      *json.RawMessage `json:"prompt_sha256"`
+		InstructionSHA256 *json.RawMessage `json:"instruction_sha256"`
+		InstructionBytes  *json.RawMessage `json:"instruction_bytes"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))))
+	dec.DisallowUnknownFields()
+	if dec.Decode(&envelope) != nil || envelope.Text == nil || envelope.SHA256 == nil || envelope.Bytes == nil {
+		return false
+	}
+	return sha256Hex([]byte(*envelope.Text)) == *envelope.SHA256 && *envelope.Bytes == len(*envelope.Text)
+}
+
+// systemContentSpan finds the string content of the FIRST message, which
+// must have role "system": body[start:end] is that one JSON string, quotes
+// included, and base is its decoded text.
+func systemContentSpan(body []byte) (start, end int64, base string, err error) {
+	fail := func(e error) (int64, int64, string, error) { return 0, 0, "", e }
+	dec := json.NewDecoder(bytes.NewReader(body))
+	if err := expectDelim(dec, '{'); err != nil {
+		return fail(fmt.Errorf("request body: %w", err))
+	}
+	for dec.More() {
+		key, err := stringToken(dec)
+		if err != nil {
+			return fail(fmt.Errorf("request body: %w", err))
+		}
+		if key != "messages" {
+			var skip json.RawMessage
+			if err := dec.Decode(&skip); err != nil {
+				return fail(fmt.Errorf("request body: %w", err))
+			}
+			continue
+		}
+		if err := expectDelim(dec, '['); err != nil {
+			return fail(fmt.Errorf("messages: %w", err))
+		}
+		if !dec.More() {
+			return fail(errors.New("messages is empty"))
+		}
+		if err := expectDelim(dec, '{'); err != nil {
+			return fail(fmt.Errorf("first message: %w", err))
+		}
+		role := ""
+		start, end = -1, -1
+		var content json.RawMessage
+		for dec.More() {
+			member, err := stringToken(dec)
+			if err != nil {
+				return fail(fmt.Errorf("first message: %w", err))
+			}
+			var value json.RawMessage
+			if err := dec.Decode(&value); err != nil {
+				return fail(fmt.Errorf("first message: %w", err))
+			}
+			switch member {
+			case "role":
+				if json.Unmarshal(value, &role) != nil {
+					return fail(errors.New("first message role is not a string"))
+				}
+			case "content":
+				if start >= 0 {
+					return fail(errors.New("first message has two content members"))
+				}
+				end = dec.InputOffset()
+				start = end - int64(len(value))
+				content = value
+			}
+		}
+		if role != "system" {
+			return fail(errors.New("the first message is not the system message"))
+		}
+		if start < 0 || len(content) < 2 || content[0] != '"' || content[len(content)-1] != '"' {
+			return fail(errors.New("the system message content is not one JSON string"))
+		}
+		if !bytes.Equal(body[start:end], content) {
+			return fail(errors.New("could not locate the system message content in the request body"))
+		}
+		if err := json.Unmarshal(content, &base); err != nil {
+			return fail(errors.New("the system message content does not decode"))
+		}
+		return start, end, base, nil
+	}
+	return fail(errors.New("request body has no messages"))
+}
+
+// readSystemContent decodes the first message's string content.
+func readSystemContent(body []byte) (string, bool) {
+	var check struct {
+		Messages []struct {
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	var got string
+	if err := json.Unmarshal(body, &check); err != nil || len(check.Messages) == 0 || json.Unmarshal(check.Messages[0].Content, &got) != nil {
+		return "", false
+	}
+	return got, true
 }
 
 // spliceSystemMessage returns body with suffix added to the END of the
@@ -135,90 +312,47 @@ func loadVariant(name, path string) (*promptVariant, error) {
 // is unchanged; inside it, the original bytes are kept and the suffix is
 // added before the closing quote.
 func spliceSystemMessage(body []byte, suffix string) ([]byte, string, error) {
-	dec := json.NewDecoder(bytes.NewReader(body))
-	if err := expectDelim(dec, '{'); err != nil {
-		return nil, "", fmt.Errorf("request body: %w", err)
+	_, end, base, err := systemContentSpan(body)
+	if err != nil {
+		return nil, "", err
 	}
-	for dec.More() {
-		key, err := stringToken(dec)
-		if err != nil {
-			return nil, "", fmt.Errorf("request body: %w", err)
-		}
-		if key != "messages" {
-			var skip json.RawMessage
-			if err := dec.Decode(&skip); err != nil {
-				return nil, "", fmt.Errorf("request body: %w", err)
-			}
-			continue
-		}
-		if err := expectDelim(dec, '['); err != nil {
-			return nil, "", fmt.Errorf("messages: %w", err)
-		}
-		if !dec.More() {
-			return nil, "", errors.New("messages is empty")
-		}
-		if err := expectDelim(dec, '{'); err != nil {
-			return nil, "", fmt.Errorf("first message: %w", err)
-		}
-		role, start, end := "", int64(-1), int64(-1)
-		var content json.RawMessage
-		for dec.More() {
-			member, err := stringToken(dec)
-			if err != nil {
-				return nil, "", fmt.Errorf("first message: %w", err)
-			}
-			var value json.RawMessage
-			if err := dec.Decode(&value); err != nil {
-				return nil, "", fmt.Errorf("first message: %w", err)
-			}
-			switch member {
-			case "role":
-				if json.Unmarshal(value, &role) != nil {
-					return nil, "", errors.New("first message role is not a string")
-				}
-			case "content":
-				if start >= 0 {
-					return nil, "", errors.New("first message has two content members")
-				}
-				end = dec.InputOffset()
-				start = end - int64(len(value))
-				content = value
-			}
-		}
-		if role != "system" {
-			return nil, "", errors.New("the first message is not the system message")
-		}
-		if start < 0 || len(content) < 2 || content[0] != '"' || content[len(content)-1] != '"' {
-			return nil, "", errors.New("the system message content is not one JSON string")
-		}
-		if !bytes.Equal(body[start:end], content) {
-			return nil, "", errors.New("could not locate the system message content in the request body")
-		}
-		var base string
-		if err := json.Unmarshal(content, &base); err != nil {
-			return nil, "", errors.New("the system message content does not decode")
-		}
-		encoded, err := json.Marshal(suffix)
-		if err != nil {
-			return nil, "", err
-		}
-		out := make([]byte, 0, len(body)+len(encoded))
-		out = append(out, body[:end-1]...)              // everything up to the closing quote
-		out = append(out, encoded[1:len(encoded)-1]...) // the suffix, JSON-escaped, without its quotes
-		out = append(out, body[end-1:]...)              // the closing quote and the rest
-		// Read the result back: the content is exactly base + suffix.
-		var check struct {
-			Messages []struct {
-				Content json.RawMessage `json:"content"`
-			} `json:"messages"`
-		}
-		var got string
-		if err := json.Unmarshal(out, &check); err != nil || len(check.Messages) == 0 || json.Unmarshal(check.Messages[0].Content, &got) != nil || got != base+suffix {
-			return nil, "", errors.New("the changed request does not read back as the production system message plus the appendix")
-		}
-		return out, base, nil
+	encoded, err := json.Marshal(suffix)
+	if err != nil {
+		return nil, "", err
 	}
-	return nil, "", errors.New("request body has no messages")
+	out := make([]byte, 0, len(body)+len(encoded))
+	out = append(out, body[:end-1]...)              // everything up to the closing quote
+	out = append(out, encoded[1:len(encoded)-1]...) // the suffix, JSON-escaped, without its quotes
+	out = append(out, body[end-1:]...)              // the closing quote and the rest
+	// Read the result back: the content is exactly base + suffix.
+	if got, ok := readSystemContent(out); !ok || got != base+suffix {
+		return nil, "", errors.New("the changed request does not read back as the production system message plus the appendix")
+	}
+	return out, base, nil
+}
+
+// replaceSystemMessage returns body with the string content of the FIRST
+// message, which must have role "system", replaced by content, and that
+// message's original content. Every byte outside that one JSON string is
+// unchanged.
+func replaceSystemMessage(body []byte, content string) ([]byte, string, error) {
+	start, end, base, err := systemContentSpan(body)
+	if err != nil {
+		return nil, "", err
+	}
+	encoded, err := json.Marshal(content)
+	if err != nil {
+		return nil, "", err
+	}
+	out := make([]byte, 0, len(body)+len(encoded))
+	out = append(out, body[:start]...) // everything before the content string
+	out = append(out, encoded...)      // the candidate, as one JSON string
+	out = append(out, body[end:]...)   // everything after it
+	// Read the result back: the content is exactly the candidate.
+	if got, ok := readSystemContent(out); !ok || got != content {
+		return nil, "", errors.New("the changed request does not read back as the candidate system message")
+	}
+	return out, base, nil
 }
 
 func expectDelim(dec *json.Decoder, want json.Delim) error {
@@ -246,6 +380,8 @@ func stringToken(dec *json.Decoder) (string, error) {
 
 var errVariantBase = errors.New("gocapture: the production request differs from the expected incumbent request; the variant is refused unsent")
 
+var errVariantIsIncumbent = errors.New("gocapture: the candidate system message equals the production system message: that is the incumbent, not a candidate; refused unsent")
+
 // rewrite proves the production request is the incumbent's, then returns
 // the request the variant sends. It records the base proof on the attempt.
 func (v *promptVariant) rewrite(t *captureTransport, inv *invocation, body []byte, record *attemptRecord) ([]byte, error) {
@@ -270,14 +406,25 @@ func (v *promptVariant) rewrite(t *captureTransport, inv *invocation, body []byt
 	if record.BaseObservedDescriptorSHA256 != record.BaseExpectedDescriptorSHA256 {
 		return nil, errVariantBase
 	}
-	out, base, err := spliceSystemMessage(body, v.suffix())
+	var out []byte
+	var base, sent string
+	if v.replaces() {
+		sent = string(v.Appendix)
+		out, base, err = replaceSystemMessage(body, sent)
+	} else {
+		out, base, err = spliceSystemMessage(body, v.suffix())
+		sent = base + v.suffix()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("gocapture: %w; the variant is refused unsent", err)
 	}
 	if sha256Hex([]byte(base)) != inv.systemSHA {
 		return nil, errVariantBase
 	}
-	systemSHA := sha256Hex([]byte(base + v.suffix()))
+	if sent == base {
+		return nil, errVariantIsIncumbent
+	}
+	systemSHA := sha256Hex([]byte(sent))
 	if inv.variantSystemSHA != "" && inv.variantSystemSHA != systemSHA {
 		return nil, errors.New("gocapture: the variant system message changed inside one invocation; refused unsent")
 	}
