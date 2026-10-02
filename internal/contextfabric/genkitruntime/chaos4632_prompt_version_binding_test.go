@@ -77,7 +77,9 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// express a grouping as asked and leaves I6 to the server.
 			// v14 -> v15: the requested_judgment_kind paragraph. See
 			// DefaultInterpretationPromptVersion's own doc comment.
-			digest: "d742ed893c24398cd98fdd2475984d85d2df16a9bf06a1d6aad2f97d8b687778",
+			// v15 -> v16: the fact-kind glossary and the word-to-kind
+			// fact_requirements rules. See the constant's own doc comment.
+			digest: "3b0f149d1bb9e0072d90750e8fa626e8667b697339c6da9588cbf8dd1b032534",
 		},
 		{
 			name:    "synthesis system prompt",
