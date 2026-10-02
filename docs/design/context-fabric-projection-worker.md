@@ -475,8 +475,11 @@ overlap walk:
   next keyset predicate, which is strict, pass the row past the limit.
 
 More rows on one position than one page holds cannot be paged without a
-loss: the read fails with a producer rejection and the cursor stays. A
-page that the bound ended writes a WARN line with the table; the project
+loss: the read fails with a producer rejection and the cursor stays. Each
+retry writes an ERROR line with the table, the page size, the least
+number of rows on the position and the cursor they lie after. The read of
+that source stays stopped for that organization until the rows change or
+their row key becomes unique. A page that the bound ended writes a WARN line with the table; the project
 membership read writes an ERROR line when a page that is not a replay
 consumes rows that are not new (`shared_position_rows` counts the rows on
 a shared position). Proven by `page_cut_test.go` and, on a real

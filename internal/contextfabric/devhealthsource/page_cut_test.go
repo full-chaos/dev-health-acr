@@ -123,8 +123,11 @@ func keysetKeys(table string, rows keysetRows) []string {
 	return keys
 }
 
+const readStoppedMessage = "devhealthsource read stopped: more rows of one table share one cursor position than one page holds"
+
 // drainPages runs the paged read from an empty cursor until it is caught up
-// and returns every page the cursor moved past, and the bounded-page lines.
+// and returns every page the cursor moved past, and the bounded-page lines. A
+// read that did not fail wrote no read-stopped line.
 func drainPages(t *testing.T, tables ...entityTable) (pages [][]string, bounded []map[string]any, err error) {
 	t.Helper()
 	var logs bytes.Buffer
@@ -137,10 +140,19 @@ func drainPages(t *testing.T, tables ...entityTable) (pages [][]string, bounded 
 	if available {
 		t.Fatal("rows that carry no payload built a batch")
 	}
+	if stopped := logLines(t, &logs, readStoppedMessage); err == nil && len(stopped) != 0 {
+		t.Fatalf("a read that did not fail wrote %d read-stopped lines: %v", len(stopped), stopped)
+	}
 	return pages, boundedPageLines(t, &logs), err
 }
 
-func boundedPageLines(t *testing.T, logs *bytes.Buffer) (bounded []map[string]any) {
+func boundedPageLines(t *testing.T, logs *bytes.Buffer) []map[string]any {
+	t.Helper()
+	return logLines(t, logs, "devhealthsource page ended at the last row a truncated table returned")
+}
+
+// logLines are the JSON log records whose message starts with prefix.
+func logLines(t *testing.T, logs *bytes.Buffer, prefix string) (out []map[string]any) {
 	t.Helper()
 	for _, line := range bytes.Split(bytes.TrimSpace(logs.Bytes()), []byte("\n")) {
 		if len(line) == 0 {
@@ -150,11 +162,11 @@ func boundedPageLines(t *testing.T, logs *bytes.Buffer) (bounded []map[string]an
 		if err := json.Unmarshal(line, &record); err != nil {
 			t.Fatalf("log line is not JSON: %q", line)
 		}
-		if msg, _ := record["msg"].(string); strings.HasPrefix(msg, "devhealthsource page ended at the last row a truncated table returned") {
-			bounded = append(bounded, record)
+		if msg, _ := record["msg"].(string); strings.HasPrefix(msg, prefix) {
+			out = append(out, record)
 		}
 	}
-	return bounded
+	return out
 }
 
 func requirePages(t *testing.T, got [][]string, want ...[]string) {
@@ -335,6 +347,39 @@ func TestMoreRowsOnOnePositionThanAPageHoldsFailTheRead(t *testing.T) {
 	}
 	if len(pages) != 0 {
 		t.Fatalf("the failed read moved the cursor past %d pages", len(pages))
+	}
+
+	// The cursor stays, so every retry fails the same way and says so again:
+	// the table, the page size, the least number of rows on the position, and
+	// the cursor the rows lie directly after.
+	var logs bytes.Buffer
+	stuck := keysetTable("stuck", rows)
+	plan := sourcePlan{client: keysetRows{}, source: "page_cut_test", version: "v1", tables: []entityTable{keysetTable("before", numbered(pageCutStamp.Add(-time.Hour), "b", 0, 3)), stuck}}
+	from := cursorState{Since: pageCutStamp.Add(-time.Minute), After: "b002"}
+	for retry, from := range []cursorState{from, from, {}} {
+		retry++
+		wantStamp := ""
+		if !from.Since.IsZero() {
+			wantStamp = from.Since.Format(time.RFC3339Nano)
+		}
+		// A plan without a logger fails the same way and writes nothing.
+		if _, _, err := plan.pagedBatch(context.Background(), "org", "", from, false); !errors.As(err, &rejection) {
+			t.Fatalf("retry %d without a logger: err = %v", retry, err)
+		}
+		logged := plan
+		logged.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+		if _, _, err := logged.pagedBatch(context.Background(), "org", "", from, false); !errors.As(err, &rejection) {
+			t.Fatalf("retry %d: err = %v", retry, err)
+		}
+		stopped := logLines(t, &logs, readStoppedMessage)
+		if len(stopped) != retry {
+			t.Fatalf("retry %d: %d read-stopped lines, want one for each failed read: %v", retry, len(stopped), stopped)
+		}
+		line := stopped[retry-1]
+		if line["level"] != "ERROR" || line["table"] != "stuck" || line["page_rows"] != float64(incrementalBatchCap) || line["rows_on_position_min"] != float64(incrementalBatchCap+1) ||
+			line["after_stamp"] != wantStamp || line["after_key_digest"] != keyDigest(from.After) {
+			t.Fatalf("read-stopped line = %v, want table stuck, %d page rows, at least %d rows on the position, after the cursor of the read", line, incrementalBatchCap, incrementalBatchCap+1)
+		}
 	}
 }
 

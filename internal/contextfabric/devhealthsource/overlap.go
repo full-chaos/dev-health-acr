@@ -357,7 +357,7 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 		for _, table := range tables {
 			rows, truncated, err := readTable(ctx, table, p.client, orgID, pass.walk, incrementalBatchCap)
 			if err == nil {
-				err = bound.note(table.name, rows, truncated)
+				err = p.boundRead(ctx, orgID, table.name, pass.walk, &bound, rows, truncated)
 			}
 			if err != nil {
 				logTableReadFailure(ctx, p.logger, p.source, orgID, table.name, err)
