@@ -74,7 +74,11 @@ func newBlockersProvider(client contextpacket.ClickHouseQueryClient) *BlockersPr
 }
 
 func (p *BlockersProvider) Capability() contextfabric.FactCapability {
-	return newCapability(contextfabric.FactBlockers, "devhealthfacts.blockers", []contextfabric.SubjectKind{contextfabric.SubjectWorkItem})
+	capability := newCapability(contextfabric.FactBlockers, "devhealthfacts.blockers", []contextfabric.SubjectKind{contextfabric.SubjectWorkItem, contextfabric.SubjectTeam})
+	capability.Tables = map[contextfabric.SubjectKind][]contextfabric.FactTableShape{
+		contextfabric.SubjectTeam: {contextfabric.FactTableBreakdown},
+	}
+	return capability
 }
 
 func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {
@@ -85,7 +89,7 @@ func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
-	ids, bySubject, rejected := v2Index(query.Subjects, identity.KindWorkItem)
+	ids, bySubject, rejected := v2Index(subjectsOfKind(query.Subjects, contextfabric.SubjectWorkItem), identity.KindWorkItem)
 	// CHAOS-5026: deferred so every return path passes through the
 	// disclosure -- see ci.go's identical note.
 	defer func() {
@@ -94,6 +98,22 @@ func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Prin
 		}
 	}()
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
+	var teamOutcome teamRollupOutcome
+	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
+		var teamErr error
+		teamOutcome, teamErr = p.readTeamRollup(ctx, principal, orgID, query.RequestedRepositoryScope, teamSubjects, &facts)
+		if teamErr != nil {
+			return contextfabric.FactProviderResult{}, readFailure("query team blockers", teamErr)
+		}
+		rejected += teamOutcome.rejected
+	}
+	teamFactCount := len(facts)
+	if len(ids) == 0 {
+		state, emptyReason := currentAxisReadState(teamFactCount)
+		result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: teamOutcome.truncated}
+		applyNoOwnedRepositories(&result, teamOutcome.teamsWithoutRepos)
+		return result, nil
+	}
 	// CHAOS-5438: ONE owner -- see factBudget, and WorkProvider's identical
 	// note on why a single-branch provider uses it too.
 	budget := newFactBudget()
@@ -170,7 +190,8 @@ LIMIT 1 BY toString(t.repo_id), d.target_work_item_id, d.source_work_item_id`), 
 	}
 	budget.observe(rowCount)
 	state, emptyReason := currentAxisReadState(len(facts))
-	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: budget.truncated()}
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: budget.truncated() || teamOutcome.truncated}
+	applyNoOwnedRepositories(&result, teamOutcome.teamsWithoutRepos)
 	return result, nil
 }
 
@@ -293,4 +314,111 @@ LIMIT 1 BY toString(s.repo_id), d.source_work_item_id, d.target_work_item_id, `+
 func dependencyEvidenceRefID(sourceID, targetID, relationKey string) string {
 	ref, _ := evidenceref.Mint(contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, sourceID, targetID, relationKey)
 	return ref
+}
+
+// blockerRollupRepo is one owned repository's recorded blocker edges whose
+// target work item lives in it.
+type blockerRollupRepo struct{ blockedItems, blockerEdges int64 }
+
+// readTeamRollup serves a team subject on the current axis only:
+// work_item_dependencies carries no event time, so no window is claimed and
+// the counts are *_current. Every recorded blocker edge counts, as in the
+// per-item read; no status filter is applied. Both ends pass the shared
+// work-item authorization rule, so the counts cover the caller's authorized
+// items and are declared caller-scoped.
+func (p *BlockersProvider) readTeamRollup(ctx context.Context, principal storage.Principal, orgID string, requestedScope []string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact) (outcome teamRollupOutcome, err error) {
+	teamIDs, bySubject, rejected := subjectIndex(subjects, teamPrefix)
+	outcome.rejected = rejected
+	if len(teamIDs) == 0 {
+		return outcome, nil
+	}
+	owned, err := teamOwnedRepositories(ctx, p.facts.client, orgID, teamIDs, factTimeBound{})
+	if err != nil {
+		return outcome, err
+	}
+	byRepo := map[string]blockerRollupRepo{}
+	if repoKeys := repoKeysOf(owned); len(repoKeys) > 0 {
+		authorized, authorizationBindings := workItemAuthorizedIDsSQL(workItemRepositoryAuthorization(principal, requestedScope))
+		settings, settingsErr := workItemReaderSettings(ctx)
+		if settingsErr != nil {
+			return outcome, settingsErr
+		}
+		statement := readers.WithSettings(`SELECT toString(t.repo_id), toInt64(uniqExact(d.target_work_item_id)), toInt64(uniqExact(d.target_work_item_id, d.source_work_item_id))
+FROM work_item_dependencies AS d FINAL
+INNER JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
+WHERE d.org_id = {org_id:String} AND toString(t.repo_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) = '`+blockerRelationshipType+`'
+  AND d.target_work_item_id IN `+authorized+` AND d.source_work_item_id IN `+authorized+`
+GROUP BY t.repo_id
+ORDER BY t.repo_id`, settings)
+		if scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamBlockerRollup", statement, orgID, repoKeys, func(row readers.RowScanner) error {
+			var repoID string
+			var r blockerRollupRepo
+			if err := row.Scan(&repoID, &r.blockedItems, &r.blockerEdges); err != nil {
+				return err
+			}
+			byRepo[repoID] = r
+			return nil
+		}, authorizationBindings...); scanErr != nil {
+			return outcome, scanErr
+		}
+	}
+	for _, teamID := range teamIDs {
+		subject := bySubject[teamID]
+		repos := owned[teamID]
+		if len(repos) == 0 {
+			outcome.teamsWithoutRepos++
+			continue
+		}
+		var blockedItems, blockerEdges, withData int64
+		breakdown := make([]contextfabric.FactValueRow, 0, len(repos))
+		for _, repo := range repos {
+			r, ok := byRepo[repo.key]
+			if !ok {
+				continue
+			}
+			outcome.contributed++
+			withData++
+			blockedItems += r.blockedItems
+			blockerEdges += r.blockerEdges
+			cells := map[string]contextfabric.FactValue{
+				"repository_id":                contextfabric.StringFactValue(repo.key),
+				"blocked_work_items_current":   contextfabric.IntegerFactValue(r.blockedItems),
+				"blocker_dependencies_current": contextfabric.IntegerFactValue(r.blockerEdges),
+			}
+			if repo.name != "" {
+				cells["repository_name"] = contextfabric.StringFactValue(repo.name)
+			}
+			breakdown = append(breakdown, contextfabric.FactValueRow{Fields: cells})
+		}
+		fields := map[string]contextfabric.FactValue{
+			"rollup_basis":                    contextfabric.StringFactValue(teamRollupBasis),
+			"owned_repository_count":          contextfabric.IntegerFactValue(int64(len(repos))),
+			"repositories_with_data_count":    contextfabric.IntegerFactValue(withData),
+			"repositories_without_data_count": contextfabric.IntegerFactValue(int64(len(repos)) - withData),
+		}
+		if table, omitted, ok := ownedRepositoriesFactValue(repos); ok {
+			fields["owned_repositories"] = table
+			if omitted > 0 {
+				outcome.truncated = true
+				fields["owned_repositories_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
+			}
+		}
+		if withData > 0 {
+			fields["blocked_work_items_current"] = contextfabric.IntegerFactValue(blockedItems)
+			fields["blocker_dependencies_current"] = contextfabric.IntegerFactValue(blockerEdges)
+			if table, omitted, ok := repositoryBreakdownFactValue(breakdown, "",
+				[]string{"blocked_work_items_current", "blocker_dependencies_current"}, []string{"repository_name"}); ok {
+				fields["repository_breakdown"] = table
+				if omitted > 0 {
+					outcome.truncated = true
+					fields["repository_breakdown_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
+				}
+			}
+		}
+		*facts = append(*facts, contextfabric.CanonicalFact{
+			Kind: contextfabric.FactBlockers, Subject: subject, Fields: fields,
+			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, teamID)},
+		})
+	}
+	return outcome, nil
 }

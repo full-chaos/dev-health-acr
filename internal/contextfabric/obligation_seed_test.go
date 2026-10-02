@@ -288,9 +288,21 @@ func TestCapabilitiesDoesNotShareItsDeclarationMapsWithTheRegistry(t *testing.T)
 	// Find a capability that actually declares both map fields, so the
 	// mutation has something to corrupt. Picking blindly could land on a
 	// provider with neither and pass vacuously.
+	// The sentinel appended below must be absent from the declaration to start
+	// with; a kind that already declares it would read as a leak it is not.
+	declaresSentinel := func(capability contextfabric.FactCapability) bool {
+		for _, declared := range capability.Obligations {
+			for _, obligation := range declared {
+				if obligation == contextfabric.ObligationRemainingWork {
+					return true
+				}
+			}
+		}
+		return false
+	}
 	var target contextfabric.FactKind
 	for _, capability := range before {
-		if len(capability.Tables) > 0 && len(capability.Obligations) > 0 {
+		if len(capability.Tables) > 0 && len(capability.Obligations) > 0 && !declaresSentinel(capability) {
 			target = capability.Kind
 			break
 		}

@@ -187,6 +187,7 @@ func producerGrammars() []producerGrammar {
 		// the subject gate (CHAOS-7227).
 		{kind: contractsv1.ContextFabricEvidenceEntityTeam, shape: "concat/1", rowQuery: "teams.v1", keyColumns: []string{"id"}, sites: sites(
 			"internal/contextfabric/chaos5990_period_delta.go|periodDeltaSubjectEvidenceRef", facts+"deficiencies.go|ReadFacts",
+			facts+"dependencies.go|readTeamRollup", facts+"deployments.go|readTeamRollup", facts+"incidents.go|readTeamRollup", facts+"pullrequests.go|readTeamRollup",
 			facts+"flow.go|readProjectFlow", facts+"flow.go|readTeamFlow", facts+"health.go|ReadFacts", facts+"health.go|readProjectHealth*2",
 			facts+"investment.go|readProjectInvestment", facts+"investment.go|readTeamThemeMix", facts+"landscape.go|readProjectLandscape",
 			facts+"landscape.go|readTeamLandscape", facts+"metrics.go|readProjectMetrics", facts+"metrics.go|readTeamMetrics",

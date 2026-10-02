@@ -37,8 +37,11 @@ import (
 // widening is a REAL table join instead (team_metrics_daily directly for
 // team; team_project_ownership -> team_metrics_daily, summed and disclosed
 // via rollup_basis/team_breakdown, for project) -- see metrics.go's package
-// doc comment. FactPullRequests and FactReviews have no such source and
-// stay exactly as CHAOS-4099 left them, so this test keeps pinning them.
+// doc comment. FactPullRequests likewise gains SubjectTeam for a rollup over the
+// team's owned repositories (team_repo_ownership, a real table read with
+// the owned_repositories pointer, not a proxy join); the per-pull-request
+// expansion stays on beside it. FactReviews has no such source and stays
+// exactly as CHAOS-4099 left it, so this test keeps pinning it.
 func TestChaos4099_RealProviderSubjectKindsStayUnwidened(t *testing.T) {
 	t.Parallel()
 
@@ -48,7 +51,7 @@ func TestChaos4099_RealProviderSubjectKindsStayUnwidened(t *testing.T) {
 	// own doc comment above.
 	want := map[contextfabric.FactKind][]contextfabric.SubjectKind{
 		contextfabric.FactMetrics:      {contextfabric.SubjectRepository, contextfabric.SubjectTeam, contextfabric.SubjectProject},
-		contextfabric.FactPullRequests: {contextfabric.SubjectPullRequest},
+		contextfabric.FactPullRequests: {contextfabric.SubjectPullRequest, contextfabric.SubjectTeam},
 		contextfabric.FactReviews:      {contractsv1.ContextFabricSubjectPullRequestReview},
 	}
 	got := map[contextfabric.FactKind][]contextfabric.SubjectKind{
