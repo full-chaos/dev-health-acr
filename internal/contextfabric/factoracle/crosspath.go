@@ -412,11 +412,15 @@ func (o *Oracle) temporaryAllowance(ctx context.Context, rr *RootReport, root *d
 		return nil
 	}
 	covered := strings.Join(spec.Paths, ", ")
+	// A root with no window argument cannot be probed: its allowance is read
+	// from the resolver code, stated, never counted. A root with a window
+	// argument is measured or the run is not a measurement (invalid): a probe
+	// that could not read is a failure of the run, not a pass.
 	unmeasured := func(reason string) {
-		rr.CodeRead = append(rr.CodeRead, fmt.Sprintf("class %s, %s: read from the resolver code, not measured by this run (%s)", ClassLatestDayVsWindow, covered, reason))
+		rr.invalid("class %s, %s: the window probe could not measure it (%s)", ClassLatestDayVsWindow, covered, reason)
 	}
 	if spec.Window == "" {
-		unmeasured("the operation takes no window argument")
+		rr.CodeRead = append(rr.CodeRead, fmt.Sprintf("class %s, %s: read from the resolver code, not measured by this run (the operation takes no window argument)", ClassLatestDayVsWindow, covered))
 		return nil
 	}
 	shape, err := o.shape(root.Field + "/" + spec.Operation + "/all")
@@ -476,7 +480,7 @@ func (o *Oracle) temporaryAllowance(ctx context.Context, rr *RootReport, root *d
 		case a != b:
 			rr.Expired = append(rr.Expired, fmt.Sprintf("class %s: %s is another value for a history of %v and of %d: it now follows the requested window; remove it from the allowance", ClassLatestDayVsWindow, path, prior, spec.Narrow))
 		case !measured:
-			rr.CodeRead = append(rr.CodeRead, fmt.Sprintf("class %s, %s: read from the resolver code, not measured by this run (the answer holds no value there)", ClassLatestDayVsWindow, path))
+			rr.invalid("class %s, %s: the window probe could not measure it (the answer holds no value there)", ClassLatestDayVsWindow, path)
 		default:
 			rr.differ(Difference{Pair: "window_probe", Key: path, Class: ClassLatestDayVsWindow, Exact: true,
 				Detail: fmt.Sprintf("the value is the same for a history of %v and of %d, and the answer states both histories: it does not follow the requested window", prior, spec.Narrow)})

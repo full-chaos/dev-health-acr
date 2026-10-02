@@ -209,6 +209,9 @@ func (o *Oracle) readFacts(ctx context.Context, kind, subjectKind string, ids []
 			if _, ok := asked[id]; !ok {
 				return nil, fmt.Errorf("read_facts %s: a coverage row names %s, which was not asked", kind, row.Subject.CanonicalID)
 			}
+			if row.Kind != kind || row.Subject.Kind != subjectKind {
+				return nil, fmt.Errorf("read_facts %s: the coverage row of %s is of kind %s, subject kind %s, want %s and %s", kind, row.Subject.CanonicalID, row.Kind, row.Subject.Kind, kind, subjectKind)
+			}
 			asked[id]++
 		}
 		// As many rows as subjects, each row a subject asked: a subject with
@@ -221,6 +224,9 @@ func (o *Oracle) readFacts(ctx context.Context, kind, subjectKind string, ids []
 		for _, fact := range answer.Facts {
 			if _, ok := asked[strings.ToLower(fact.Subject.CanonicalID)]; !ok {
 				return nil, fmt.Errorf("read_facts %s: a fact names %s, which was not asked", kind, fact.Subject.CanonicalID)
+			}
+			if fact.Subject.Kind != subjectKind {
+				return nil, fmt.Errorf("read_facts %s: a fact of %s has subject kind %s, want %s", kind, fact.Subject.CanonicalID, fact.Subject.Kind, subjectKind)
 			}
 			if fact.Kind != kind {
 				return nil, fmt.Errorf("read_facts %s: the answer holds a %s fact", kind, fact.Kind)

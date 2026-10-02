@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -68,6 +69,9 @@ const (
 	ruleDropArray
 	ruleEvidence
 	ruleScopeID
+	// ruleTaxonomyMap: a map keyed by terms of the investment taxonomy. A key
+	// of another shape than a taxonomy identifier is replaced by a token.
+	ruleTaxonomyMap
 )
 
 // tableSpec is one extracted table: its row predicate (the org predicate is
@@ -96,7 +100,7 @@ const unitsInWindow = `work_unit_id IN (
 var extractTables = []tableSpec{
 	{Table: tableWorkUnitInvestments, Where: unitsInWindow, Rules: map[string]columnRule{
 		"work_unit_id": ruleWorkUnit, "from_ts": ruleKeep, "to_ts": ruleKeep, "repo_id": ruleUUID, "effort_value": ruleKeep,
-		"theme_distribution_json": ruleKeep, "subcategory_distribution_json": ruleKeep, "structural_evidence_json": ruleEvidence,
+		"theme_distribution_json": ruleTaxonomyMap, "subcategory_distribution_json": ruleTaxonomyMap, "structural_evidence_json": ruleEvidence,
 		"computed_at": ruleKeep, "org_id": ruleOrg,
 	}},
 	{Table: tableWorkUnitSupersessions, Where: strings.Replace(unitsInWindow, "work_unit_id IN", "superseded_work_unit_id IN", 1), Rules: map[string]columnRule{
@@ -292,6 +296,17 @@ func scrubValue(s *Scrubber, rule columnRule, value any, row Row) (any, error) {
 	}
 	if rule == ruleDropArray {
 		return []any{}, nil
+	}
+	if rule == ruleTaxonomyMap && value != nil {
+		rv := reflect.ValueOf(value)
+		if rv.Kind() != reflect.Map || rv.Type().Key().Kind() != reflect.String {
+			return nil, fmt.Errorf("want a map keyed by strings, got %T", value)
+		}
+		out := make(map[string]any, rv.Len())
+		for _, key := range rv.MapKeys() {
+			out[taxonomyTerm(s, key.String())] = rv.MapIndex(key).Interface()
+		}
+		return out, nil
 	}
 	if value == nil {
 		return nil, nil

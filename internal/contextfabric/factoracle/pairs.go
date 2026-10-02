@@ -11,6 +11,10 @@ import (
 // Float tolerances. Each one is a declared rule of a pair, with its reason;
 // a float pair with no rule here is compared exactly.
 const (
+	// absNoise: the least tolerance of any compare, the float noise of a
+	// difference of two large sums. It is absolute and tiny on purpose: a value
+	// of 5e-7 that is 0 on the other side is a difference, not a rounding.
+	absNoise = 1e-9
 	// relSum: a sum the two planes add in a different order.
 	relSum = 1e-9
 	// relOpsFloat32: ops casts the subcategory share to Float32 before it
@@ -19,11 +23,11 @@ const (
 )
 
 func scaled(rel float64, values ...float64) float64 {
-	scale := 1.0
+	scale := 0.0
 	for _, v := range values {
 		scale = math.Max(scale, math.Abs(v))
 	}
-	return rel * scale
+	return math.Max(rel*scale, absNoise)
 }
 
 // themeTolerance is the tolerance of a compare with an ops theme value on
@@ -308,7 +312,7 @@ func compareTeamRollup(ctx context.Context, o *Oracle, rr *RootReport, byRepo ma
 		deficit := map[string]float64{}
 		equal, explained := true, true
 		for _, theme := range themes {
-			tol := relSum * math.Max(1, math.Max(math.Abs(want[theme]), math.Abs(got[team][theme])))
+			tol := scaled(relSum, want[theme], got[team][theme])
 			d := want[theme] - got[team][theme]
 			if math.Abs(d) > tol {
 				equal = false

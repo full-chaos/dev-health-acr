@@ -330,6 +330,14 @@ func TestClassifyInvestment(t *testing.T) {
 		t.Fatalf("a difference two witnesses equal was named: %+v", ambiguous)
 	}
 
+	// A tiny effort is not rounded to nothing: 5e-7 on the acr side and in the
+	// store rows, 0 on the ops side, is a difference (the compare was once
+	// held to an absolute 1e-6).
+	tiny := classifyInvestment(themes(1000, 500, 0), themes(1000, 500, 5e-7), themes(1000, 500, 5e-7), witnesses)
+	if len(tiny.Findings) != 1 || len(tiny.Differences) != 0 || tiny.Matches != 2 {
+		t.Fatalf("a tiny effort that ops does not hold was a match: %+v", tiny)
+	}
+
 	// acr against the store rows is held to the sum tolerance (1e-9), not to
 	// the Float32 tolerance of the ops side: a drift of 1e-7 of the value is a
 	// finding.
@@ -464,6 +472,51 @@ func TestTheValuesOfAnEnumVariableComeFromThePolicy(t *testing.T) {
 	}
 	if len(got) < 5 {
 		t.Fatalf("catalog dimensions: %v", got)
+	}
+}
+
+// The theme and subcategory maps of the extract are keyed by taxonomy terms
+// only: a key of another shape is replaced at capture, and the committed
+// extract holds none.
+func TestTheExtractHoldsTaxonomyKeysOnly(t *testing.T) {
+	s, err := NewScrubber("11111111-2222-4333-8444-555555555555")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := scrubValue(s, ruleTaxonomyMap, map[string]float64{"jane_doe_x": 1, "Jane Doe": 2, "feature_delivery.roadmap": 3}, Row{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := got.(map[string]any)
+	if _, kept := keys["feature_delivery.roadmap"]; !kept || len(keys) != 3 {
+		t.Fatalf("taxonomy keys: %v", keys)
+	}
+	if _, kept := keys["Jane Doe"]; kept {
+		t.Fatalf("a key of another shape was kept: %v", keys)
+	}
+	_, _, extract, err := LoadCapture(captureDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked := 0
+	defer func() {
+		if checked == 0 {
+			t.Error("the audit of the committed extract read no key")
+		}
+	}()
+	for _, row := range extract.Tables[tableWorkUnitInvestments] {
+		for _, column := range []string{"theme_distribution_json", "subcategory_distribution_json"} {
+			m, _ := row[column].(map[string]any)
+			if m == nil && row[column] != nil {
+				t.Fatalf("%s holds a %T, not a map", column, row[column])
+			}
+			checked += len(m)
+			for key := range m {
+				if !taxonomyShape.MatchString(key) || len(key) > 64 {
+					t.Fatalf("the committed extract holds the key %q in %s", key, column)
+				}
+			}
+		}
 	}
 }
 
@@ -1163,6 +1216,17 @@ func recordedThroughput(t *testing.T, mutate func(variables map[string]any, fore
 
 // The temporary class is counted only where the run measured it, and the
 // allowance expires when the measured value starts to follow the window.
+// probeInvalid lists the reasons a window probe could not measure.
+func probeInvalid(rr *RootReport) []string {
+	var out []string
+	for _, reason := range rr.Invalid {
+		if strings.Contains(reason, "the window probe could not measure it") {
+			out = append(out, reason)
+		}
+	}
+	return out
+}
+
 func TestTemporaryAllowanceIsMeasuredNotAssumed(t *testing.T) {
 	echo := func(variables map[string]any, forecast map[string]any) {
 		forecast["historyWeeks"] = historyOf(variables, "historyWeeks")
@@ -1211,8 +1275,8 @@ func TestTemporaryAllowanceIsMeasuredNotAssumed(t *testing.T) {
 		forecast["historyWeeks"] = 12
 	}), nil)
 	rr = blind.Root("throughputForecast")
-	if count(rr) != 0 || len(blind.Expired()) != 0 || len(rr.CodeRead) != 1 || !strings.Contains(rr.CodeRead[0], "the answer states a history") {
-		t.Fatalf("a probe that changed nothing: %d differences, expired %v, code read %v", count(rr), blind.Expired(), rr.CodeRead)
+	if count(rr) != 0 || len(blind.Expired()) != 0 || len(rr.CodeRead) != 0 || len(probeInvalid(rr)) != 1 || !strings.Contains(probeInvalid(rr)[0], "the answer states a history") || blind.Err() == nil {
+		t.Fatalf("a probe that changed nothing: %d differences, expired %v, code read %v, invalid %v", count(rr), blind.Expired(), rr.CodeRead, rr.Invalid)
 	}
 
 	// The answer states a history other than the one asked for: 8 weeks for a
@@ -1227,8 +1291,8 @@ func TestTemporaryAllowanceIsMeasuredNotAssumed(t *testing.T) {
 		}
 	}), nil)
 	rr = wrongEcho.Root("throughputForecast")
-	if count(rr) != 0 || len(wrongEcho.Expired()) != 0 || len(rr.CodeRead) != 1 || !strings.Contains(rr.CodeRead[0], `states a history of "8"`) {
-		t.Fatalf("an echo that is not the history asked for: %d differences, expired %v, code read %v", count(rr), wrongEcho.Expired(), rr.CodeRead)
+	if count(rr) != 0 || len(wrongEcho.Expired()) != 0 || len(rr.CodeRead) != 0 || len(probeInvalid(rr)) != 1 || !strings.Contains(probeInvalid(rr)[0], `states a history of "8"`) || wrongEcho.Err() == nil {
+		t.Fatalf("an echo that is not the history asked for: %d differences, expired %v, code read %v, invalid %v", count(rr), wrongEcho.Expired(), rr.CodeRead, rr.Invalid)
 	}
 
 	// The answer for the second history states no history: not measured.
@@ -1239,8 +1303,8 @@ func TestTemporaryAllowanceIsMeasuredNotAssumed(t *testing.T) {
 		}
 	}), nil)
 	rr = silent.Root("throughputForecast")
-	if count(rr) != 0 || len(silent.Expired()) != 0 || len(rr.CodeRead) != 1 {
-		t.Fatalf("a second answer that states no history: %d differences, expired %v, code read %v", count(rr), silent.Expired(), rr.CodeRead)
+	if count(rr) != 0 || len(silent.Expired()) != 0 || len(rr.CodeRead) != 0 || len(probeInvalid(rr)) != 1 || silent.Err() == nil {
+		t.Fatalf("a second answer that states no history: %d differences, expired %v, code read %v, invalid %v", count(rr), silent.Expired(), rr.CodeRead, rr.Invalid)
 	}
 
 	// A covered block with no value is not counted.
@@ -1249,8 +1313,8 @@ func TestTemporaryAllowanceIsMeasuredNotAssumed(t *testing.T) {
 		forecast["estimateCoverage"] = nil
 	}), nil)
 	rr = null.Root("throughputForecast")
-	if count(rr) != 3 || len(rr.CodeRead) != 1 || !strings.Contains(rr.CodeRead[0], "throughputForecast.estimateCoverage") {
-		t.Fatalf("a covered block that is null: %d differences, code read %v", count(rr), rr.CodeRead)
+	if count(rr) != 3 || len(rr.CodeRead) != 0 || len(probeInvalid(rr)) != 1 || !strings.Contains(probeInvalid(rr)[0], "throughputForecast.estimateCoverage") || null.Err() == nil {
+		t.Fatalf("a covered block that is null: %d differences, code read %v, invalid %v", count(rr), rr.CodeRead, rr.Invalid)
 	}
 
 	// The contract of the operation is not the one the allowance was read
@@ -1652,6 +1716,25 @@ func TestAFactAnswerMustNameTheSubjectsAsked(t *testing.T) {
 	}
 	if err := read(fakePlanes{facts: answerFor("repository:r2", "repository:r2")}); err == nil || !strings.Contains(err.Error(), "which was not asked") {
 		t.Fatalf("an answer about another subject was read: %v", err)
+	}
+	// The same canonical id under another subject kind is another subject.
+	kindless := func(request FactsRequest) (json.RawMessage, error) {
+		kind := request.Kinds[0]
+		return json.Marshal(map[string]any{"status": "complete", "versions": map[string]any{"kinds": map[string]any{}},
+			"coverage": []any{map[string]any{"kind": "identity", "subject": map[string]any{"kind": "team", "canonical_id": "repository:r1"}, "outcome": "available"}},
+			"facts":    []any{map[string]any{"kind": kind, "subject": map[string]any{"kind": "repository", "canonical_id": "repository:r1"}, "fields": map[string]any{}}}})
+	}
+	if err := read(fakePlanes{facts: kindless}); err == nil || !strings.Contains(err.Error(), "subject kind") {
+		t.Fatalf("a coverage row of another subject kind was read: %v", err)
+	}
+	factKind := func(request FactsRequest) (json.RawMessage, error) {
+		kind := request.Kinds[0]
+		return json.Marshal(map[string]any{"status": "complete", "versions": map[string]any{"kinds": map[string]any{}},
+			"coverage": []any{map[string]any{"kind": kind, "subject": map[string]any{"kind": "repository", "canonical_id": "repository:r1"}, "outcome": "available"}},
+			"facts":    []any{map[string]any{"kind": kind, "subject": map[string]any{"kind": "team", "canonical_id": "repository:r1"}, "fields": map[string]any{}}}})
+	}
+	if err := read(fakePlanes{facts: factKind}); err == nil || !strings.Contains(err.Error(), "a fact of") {
+		t.Fatalf("a fact of another subject kind was read: %v", err)
 	}
 	// Two subjects asked, one covered twice and one not at all.
 	twice := func(request FactsRequest) (json.RawMessage, error) {
