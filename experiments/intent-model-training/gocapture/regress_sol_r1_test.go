@@ -352,15 +352,22 @@ func TestSolR1MalformedRangeRefusedBeforeWrites(t *testing.T) {
 }
 
 // M9: the profile's attempt limit reaches production (real runtime retries).
+//
+// The timeouts set the interference threshold (the smaller timeout / 20).
+// With a 1s model timeout it was 50 ms, and the harness time of the three
+// attempts of one invocation measured 34 to 55 ms under the race detector
+// (median 40, 35 invocations), so the pair turned runner-owned on a slow
+// run. A 5s model timeout puts the threshold at 250 ms. The mechanism is
+// unchanged: every attempt still ends on the model timeout.
 func TestSolR1RuntimeRetriesOnModelTimeout(t *testing.T) {
 	f := newFixture(t)
-	f.profileMap["acr_request_timeout"] = "5s"
-	f.profileMap["model_timeout"] = "1s"
+	f.profileMap["acr_request_timeout"] = "20s"
+	f.profileMap["model_timeout"] = "5s"
 	f.profileMap["model_max_attempts"] = 3
 	f.profileMap["model_max_transport_retries"] = 0
 	f.profileMap["synthesis_max_resynthesis_attempts"] = 1
 	f.writeProfile()
-	f.server.fallback = scripted{status: 200, body: completion(okAnswer), delay: 1100 * time.Millisecond}
+	f.server.fallback = scripted{status: 200, body: completion(okAnswer), delay: 5500 * time.Millisecond}
 	cfg := f.config("run1")
 	if _, err := f.run(cfg); err != nil {
 		t.Fatal(err)
@@ -370,7 +377,7 @@ func TestSolR1RuntimeRetriesOnModelTimeout(t *testing.T) {
 		mustEqual(t, "HTTP attempts per invocation", len(a.Attempts), 3)
 		mustEqual(t, "runtime receipt attempts", a.Receipt.Attempts, 3)
 		if a.ProductionReturned || a.RawText != nil || a.RunnerOwned {
-			t.Fatal("a timeout was promoted or treated as runner-owned")
+			t.Fatalf("a timeout was promoted or treated as runner-owned: outcome %s, harness overhead %d ms, interference threshold 250 ms", a.Outcome, a.HarnessOverheadMS)
 		}
 	}
 }
@@ -426,16 +433,23 @@ func TestSolR1ReservationWriteFailureLatches(t *testing.T) {
 
 // M9: a deadline outcome with a genuine provider delay is a scored-zero
 // model failure, not runner-owned (the harness overhead is small).
+//
+// With a 300ms request timeout the interference threshold was 15 ms, and
+// the harness time of one invocation measured 10 to 16 ms under the race
+// detector (median 12, 31 invocations). A 2s request timeout puts the
+// threshold at 100 ms. The provider delay still exceeds the deadline.
 func TestSolR1DeadlineTerminalProof(t *testing.T) {
 	f := newFixture(t)
-	f.profileMap["acr_request_timeout"] = "300ms"
+	f.profileMap["acr_request_timeout"] = "2s"
 	f.writeProfile()
-	f.server.fallback = scripted{status: 200, body: completion(okAnswer), delay: 600 * time.Millisecond}
+	f.server.fallback = scripted{status: 200, body: completion(okAnswer), delay: 2600 * time.Millisecond}
 	if _, err := f.run(f.config("run1")); err != nil {
 		t.Fatal(err)
 	}
 	for _, a := range f.artifacts("run1") {
-		mustEqual(t, "outcome", a.Outcome, "deadline")
+		if a.Outcome != "deadline" {
+			t.Fatalf("outcome = %s, want deadline (harness overhead %d ms, interference threshold 100 ms)", a.Outcome, a.HarnessOverheadMS)
+		}
 		if a.ProductionReturned || a.RawText != nil || a.RunnerOwned {
 			t.Fatal("deadline promoted or treated as runner-owned")
 		}
