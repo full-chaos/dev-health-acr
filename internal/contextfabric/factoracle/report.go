@@ -1,0 +1,74 @@
+package factoracle
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
+
+// Table renders the per-root outcome of a run as a Markdown table.
+func (r *Report) Table() string {
+	var b strings.Builder
+	b.WriteString("| root | mode | graphql_query | run_operation | shapes run | leaves | run_operation leaves | two paths equal | fact leaves compared | matches | differences by class | findings | paths with no value | invalid |\n")
+	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+	for _, rr := range r.Roots {
+		classes := make([]string, 0, len(rr.ByClass))
+		for class, n := range rr.ByClass {
+			classes = append(classes, fmt.Sprintf("%s=%d", class, n))
+		}
+		sort.Strings(classes)
+		byClass := strings.Join(classes, " ")
+		if byClass == "" {
+			byClass = "none"
+		}
+		operation := rr.RunOperation
+		if operation == "" {
+			operation = "not run"
+		}
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %d | %d | %d | %d of %d | %d | %d | %s | %d | %d | %d |\n",
+			rr.Root, rr.Mode, rr.Listener, operation, rr.ShapesRun, rr.Leaves, rr.OperationLeaves, rr.CrossMatches, rr.CrossPaths, rr.Compared, rr.Matches, byClass, len(rr.Findings), len(rr.Unmeasured), len(rr.Invalid))
+	}
+	return b.String()
+}
+
+// Details lists the differences, the findings, the reasons a root is not a
+// measurement, the statements read from code, the selected paths no answer
+// gave a value for, and the unjoined subjects.
+func (r *Report) Details() string {
+	var b strings.Builder
+	for _, rr := range r.Roots {
+		if len(rr.Residual) > 0 {
+			fmt.Fprintf(&b, "RESIDUAL %s (ops organization value minus the acr repository sum): %s\n", rr.Root, formatThemes(rr.Residual))
+		}
+		for _, d := range rr.Differences {
+			exact := "bounded"
+			if d.Exact {
+				exact = "exact"
+			}
+			fmt.Fprintf(&b, "DIFFERENCE %s %s [%s] class=%s (%s): %s", rr.Root, d.Pair, d.Key, d.Class, exact, d.Detail)
+			if len(d.Values) > 0 {
+				fmt.Fprintf(&b, " {%s}", formatThemes(d.Values))
+			}
+			b.WriteString("\n")
+		}
+		for _, f := range rr.Findings {
+			fmt.Fprintf(&b, "FINDING %s %s [%s] %s: %s\n", rr.Root, f.Pair, f.Key, f.Path, f.Detail)
+		}
+		for _, reason := range rr.Invalid {
+			fmt.Fprintf(&b, "INVALID %s: %s\n", rr.Root, reason)
+		}
+		for _, e := range rr.Expired {
+			fmt.Fprintf(&b, "EXPIRED %s: %s\n", rr.Root, e)
+		}
+		for _, statement := range rr.CodeRead {
+			fmt.Fprintf(&b, "CODE-READ %s: %s\n", rr.Root, statement)
+		}
+		if len(rr.Unmeasured) > 0 {
+			fmt.Fprintf(&b, "NO-VALUE %s: %s\n", rr.Root, strings.Join(rr.Unmeasured, ", "))
+		}
+		for _, n := range rr.NotJoined {
+			fmt.Fprintf(&b, "NOT-JOINED %s: %s\n", rr.Root, n)
+		}
+	}
+	return b.String()
+}
