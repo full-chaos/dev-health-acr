@@ -353,6 +353,7 @@ func TestFetchKeepsWholePositionsInsideTheLimit(t *testing.T) {
 		{name: "one row key at two stamps across the limit", rows: keysetRows{row("a"), row("b"), row("c"), {at: at.Add(time.Millisecond), key: "c"}}, limit: 3, want: []string{"a", "b", "c"}, truncated: true},
 		{name: "the row past the limit yields no candidate", rows: keysetRows{row("a"), row("b"), row("c"), row(voidKey)}, limit: 3, want: []string{"a", "b", "c"}, truncated: true},
 		{name: "the last row inside the limit yields no candidate", rows: keysetRows{row("a"), row("b"), row(voidKey), row(voidKey + "2")}, limit: 3, want: []string{"a", "b"}, truncated: true},
+		{name: "the last row inside the limit yields no candidate and the row past it does", rows: keysetRows{row("a"), row("b"), row(voidKey), row("w")}, limit: 3, want: []string{"a", "b"}, truncated: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, truncated, err := fetch(context.Background(), tc.rows, "", rowLimitBindings("org", cursorState{}, tc.limit), tc.limit, scanKeysetRow)
