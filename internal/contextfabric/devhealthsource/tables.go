@@ -201,13 +201,27 @@ func fetch(ctx context.Context, client contextpacket.ClickHouseQueryClient, stat
 	}
 	truncated := len(rowGroups) > limit
 	if truncated {
+		beyond := rowGroups[limit]
 		rowGroups = rowGroups[:limit]
+		// The first row past the limit shares its cursor position with the
+		// last rows kept. A page that ends on that position makes the next
+		// keyset predicate (strictly after it) pass the row past the limit, so
+		// every row on the position is left for the next page.
+		for len(rowGroups) > 0 && sharesPosition(rowGroups[len(rowGroups)-1], beyond) {
+			rowGroups = rowGroups[:len(rowGroups)-1]
+		}
 	}
 	result := make([]candidate, 0, len(rowGroups))
 	for _, group := range rowGroups {
 		result = append(result, group...)
 	}
 	return result, truncated, nil
+}
+
+// sharesPosition reports whether two scanned rows hold one place in the keyset
+// order: the same position and the same row key.
+func sharesPosition(row, other []candidate) bool {
+	return len(row) > 0 && len(other) > 0 && row[0].position().Equal(other[0].position()) && row[0].sortKey == other[0].sortKey
 }
 
 // trailingCursorScanner appends the row's INGEST timestamp (the statement's

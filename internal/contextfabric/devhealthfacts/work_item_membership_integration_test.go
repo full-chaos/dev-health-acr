@@ -305,6 +305,45 @@ func TestWorkItemMembershipS1AgainstActualDDL(t *testing.T) {
 	t.Logf("live duplicate transition fixture: state=%s authorized=%d future=%d assertions=%d members=%d", duplicateResult.Census.State, duplicateResult.Census.AuthorizedPopulation, duplicateResult.Census.FutureBoundaryCount, duplicateResult.Census.TransitionAssertionCount, len(duplicateResult.Members))
 	duplicateLease.Release()
 
+	// One provider-native event id stored at two occurred_at values (the later
+	// copy from a later sync). The presence view and the transition metadata
+	// both read the raw rows, so the metadata join on observed_at keeps
+	// matching the view row: the census must be the same as for the two
+	// distinct-event ADDs above (one member, one assertion), and must not lose
+	// the row to a join miss. A dedupe applied to the metadata side alone would
+	// break this when the winner is not the max-occurred_at copy.
+	const (
+		nativeOrgID     = "chaos-native-event-join"
+		nativeProjectID = "P-native"
+		nativeRepoID    = "20000000-0000-4000-8000-000000000007"
+		nativeRepoSlug  = "acme/native"
+		nativeWorkID    = "native-event"
+	)
+	seed(`INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
+		nativeRepoID, nativeOrgID, nativeRepoSlug, "linear", at)
+	seed(`INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		nativeProjectID, nativeOrgID, "linear", nativeProjectID, "Native event", uint8(1), "active", "", at)
+	seed(`INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id, provider, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		nativeWorkID, nativeRepoID, nativeOrgID, nativeWorkID, "open", "", at, "", "linear", "")
+	seed(`INSERT INTO project_membership_transitions (org_id, repo_id, subject_kind, subject_id, provider, from_project_id, to_project_id, from_project_key, to_project_key, actor, occurred_at, last_synced, event_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		nativeOrgID, nativeRepoID, "work_item", nativeWorkID, "linear", "", nativeProjectID, "", nativeProjectID, "fixture", at.Add(time.Hour), at, "linear:native-moved",
+		nativeOrgID, nativeRepoID, "work_item", nativeWorkID, "linear", "", nativeProjectID, "", nativeProjectID, "fixture", at.Add(2*time.Hour), at.Add(time.Minute), "linear:native-moved")
+	nativeCtx, cancelNative := context.WithTimeout(ctx, 30*time.Second)
+	nativeLease, nativeResult, err := reader.BeginWorkItemMembership(nativeCtx, storage.Principal{OrgID: nativeOrgID}, contextfabric.WorkItemMembershipRequest{
+		Anchor:                   workItemMembershipTestAnchor(t, "linear", nativeProjectID),
+		RequestedRepositoryScope: []string{nativeRepoSlug},
+		S1Instant:                at.Add(30 * time.Minute),
+	})
+	cancelNative()
+	if err != nil || nativeLease == nil {
+		t.Fatalf("native event BeginWorkItemMembership lease=%v err=%v", nativeLease, err)
+	}
+	if nativeResult.Census.State != contextfabric.WorkItemMembershipCensusExact || nativeResult.Census.AuthorizedPopulation != 1 || nativeResult.Census.TransitionAssertionCount != 1 || nativeResult.Census.FutureBoundaryCount != 0 || len(nativeResult.Members) != 1 {
+		nativeLease.Release()
+		t.Fatalf("native event census = %+v members=%#v, want one member, one assertion and zero future boundaries (the view and the metadata both read the raw copies)", nativeResult.Census, nativeResult.Members)
+	}
+	nativeLease.Release()
+
 	// Provider is part of the membership identity. A transition from another
 	// provider must not authorize a work-item row that happens to reuse the
 	// same repository and subject identifiers.

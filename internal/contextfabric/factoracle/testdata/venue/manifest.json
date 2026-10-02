@@ -1,0 +1,1425 @@
+{
+  "captured_at": "2026-10-01T20:40:52Z",
+  "window": {
+    "start": "2026-09-01T00:00:00Z",
+    "end": "2026-10-02T00:00:00Z"
+  },
+  "fixture_org": "0f0f0f0f-0000-4000-8000-00000000f4c7",
+  "ops_build": "dev-health-ops 31a54720edbe (bigboy cut 2, 2026-10-01T18:13Z); query-api image dev-health-go-dho digest f296d57da9a8 (arm64 child 15fbf5182399)",
+  "acr_build": "dev-health-acr e3c1b332; acr-api image ghcr.io/full-chaos/dev-health-acr/acr-api@sha256:ea7d7f16178bedf70188df89599e5abd8967747f8e708ae89ed180e2382a8a4b",
+  "schema_digest": "sha256:dd83956f18b52a3acf89e73e1f25b0dcf25df706d90eca49c5b66f8b8994f779",
+  "venue_fact_query_versions": [
+    "devhealthfacts.clickhouse.v21"
+  ],
+  "fact_query_version": "devhealthfacts.clickhouse.v22",
+  "rows": {
+    "capacity_forecasts": 40,
+    "compounding_risk_daily": 97,
+    "estimate_coverage_metrics_daily": 635,
+    "repos": 11,
+    "team_repo_ownership": 18,
+    "teams": 17,
+    "work_item_metrics_daily": 510,
+    "work_unit_investments": 2609,
+    "work_unit_membership": 1351,
+    "work_unit_membership_runs": 2,
+    "work_unit_supersessions": 0
+  },
+  "shape_cases": [
+    {
+      "shape": "analytics/investmentBreakdown/all",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-10-02",
+                "startDate": "2026-09-01"
+              },
+              "dimension": "THEME",
+              "measure": "CHURN_LOC",
+              "topN": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdown/all",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-10-02",
+                "startDate": "2026-09-01"
+              },
+              "dimension": "SUBCATEGORY",
+              "measure": "CHURN_LOC",
+              "topN": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdown/all",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-10-02",
+                "startDate": "2026-09-01"
+              },
+              "dimension": "WORK_TYPE",
+              "measure": "CHURN_LOC",
+              "topN": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdown/branch:breakdowns",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-10-02",
+                "startDate": "2026-09-01"
+              },
+              "dimension": "THEME",
+              "measure": "CHURN_LOC",
+              "topN": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdown/branch:breakdowns",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-10-02",
+                "startDate": "2026-09-01"
+              },
+              "dimension": "SUBCATEGORY",
+              "measure": "CHURN_LOC",
+              "topN": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdown/branch:breakdowns",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-10-02",
+                "startDate": "2026-09-01"
+              },
+              "dimension": "WORK_TYPE",
+              "measure": "CHURN_LOC",
+              "topN": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdown/branch:(root)",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-10-02",
+                "startDate": "2026-09-01"
+              },
+              "dimension": "THEME",
+              "measure": "CHURN_LOC",
+              "topN": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdown/branch:(root)",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-10-02",
+                "startDate": "2026-09-01"
+              },
+              "dimension": "SUBCATEGORY",
+              "measure": "CHURN_LOC",
+              "topN": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdown/branch:(root)",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-10-02",
+                "startDate": "2026-09-01"
+              },
+              "dimension": "WORK_TYPE",
+              "measure": "CHURN_LOC",
+              "topN": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdown/branch:evidenceQualityStats",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-10-02",
+                "startDate": "2026-09-01"
+              },
+              "dimension": "THEME",
+              "measure": "CHURN_LOC",
+              "topN": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdown/branch:evidenceQualityStats",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-10-02",
+                "startDate": "2026-09-01"
+              },
+              "dimension": "SUBCATEGORY",
+              "measure": "CHURN_LOC",
+              "topN": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdown/branch:evidenceQualityStats",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-10-02",
+                "startDate": "2026-09-01"
+              },
+              "dimension": "WORK_TYPE",
+              "measure": "CHURN_LOC",
+              "topN": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentFull/all",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-10-02",
+                "startDate": "2026-09-01"
+              },
+              "dimension": "THEME",
+              "measure": "CHURN_LOC",
+              "topN": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentFull/all",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-10-02",
+                "startDate": "2026-09-01"
+              },
+              "dimension": "SUBCATEGORY",
+              "measure": "CHURN_LOC",
+              "topN": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentFull/all",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-10-02",
+                "startDate": "2026-09-01"
+              },
+              "dimension": "WORK_TYPE",
+              "measure": "CHURN_LOC",
+              "topN": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentFull/branch:breakdowns",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-10-02",
+                "startDate": "2026-09-01"
+              },
+              "dimension": "THEME",
+              "measure": "CHURN_LOC",
+              "topN": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentFull/branch:breakdowns",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-10-02",
+                "startDate": "2026-09-01"
+              },
+              "dimension": "SUBCATEGORY",
+              "measure": "CHURN_LOC",
+              "topN": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentFull/branch:breakdowns",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-10-02",
+                "startDate": "2026-09-01"
+              },
+              "dimension": "WORK_TYPE",
+              "measure": "CHURN_LOC",
+              "topN": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentFull/branch:sankey",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-10-02",
+                "startDate": "2026-09-01"
+              },
+              "dimension": "THEME",
+              "measure": "CHURN_LOC",
+              "topN": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentFull/branch:sankey",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-10-02",
+                "startDate": "2026-09-01"
+              },
+              "dimension": "SUBCATEGORY",
+              "measure": "CHURN_LOC",
+              "topN": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentFull/branch:sankey",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-10-02",
+                "startDate": "2026-09-01"
+              },
+              "dimension": "WORK_TYPE",
+              "measure": "CHURN_LOC",
+              "topN": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentFull/branch:(root)",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-10-02",
+                "startDate": "2026-09-01"
+              },
+              "dimension": "THEME",
+              "measure": "CHURN_LOC",
+              "topN": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentFull/branch:(root)",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-10-02",
+                "startDate": "2026-09-01"
+              },
+              "dimension": "SUBCATEGORY",
+              "measure": "CHURN_LOC",
+              "topN": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentFull/branch:(root)",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-10-02",
+                "startDate": "2026-09-01"
+              },
+              "dimension": "WORK_TYPE",
+              "measure": "CHURN_LOC",
+              "topN": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "shape": "capacityForecast/capacityForecast/all",
+      "variables": {
+        "input": {
+          "historyDays": 90,
+          "simulations": 1000,
+          "teamId": "team:team-e62ea33c034087cd"
+        }
+      }
+    },
+    {
+      "shape": "capacityForecasts/capacityForecasts/all",
+      "variables": {
+        "filters": {
+          "fromDate": "2026-09-01",
+          "limit": 50,
+          "toDate": "2026-10-01"
+        }
+      }
+    },
+    {
+      "shape": "capacityForecasts/capacityForecasts/branch:edges",
+      "variables": {
+        "filters": {
+          "fromDate": "2026-09-01",
+          "limit": 50,
+          "toDate": "2026-10-01"
+        }
+      }
+    },
+    {
+      "shape": "capacityForecasts/capacityForecasts/branch:pageInfo",
+      "variables": {
+        "filters": {
+          "fromDate": "2026-09-01",
+          "limit": 50,
+          "toDate": "2026-10-01"
+        }
+      }
+    },
+    {
+      "shape": "capacityForecasts/capacityForecasts/branch:(root)",
+      "variables": {
+        "filters": {
+          "fromDate": "2026-09-01",
+          "limit": 50,
+          "toDate": "2026-10-01"
+        }
+      }
+    },
+    {
+      "shape": "catalog/acrRepositoryScopes/all",
+      "variables": {}
+    },
+    {
+      "shape": "catalog/acrRepositoryScopes/branch:values",
+      "variables": {}
+    },
+    {
+      "shape": "catalog/acrRepositoryScopes/branch:(root)",
+      "variables": {}
+    },
+    {
+      "shape": "catalog/catalogValues/all",
+      "variables": {
+        "dimension": "TEAM"
+      }
+    },
+    {
+      "shape": "catalog/catalogValues/all",
+      "variables": {
+        "dimension": "REPO"
+      }
+    },
+    {
+      "shape": "catalog/catalogValues/all",
+      "variables": {
+        "dimension": "THEME"
+      }
+    },
+    {
+      "shape": "catalog/catalogValues/all",
+      "variables": {
+        "dimension": "SUBCATEGORY"
+      }
+    },
+    {
+      "shape": "catalog/catalogValues/all",
+      "variables": {
+        "dimension": "WORK_TYPE"
+      }
+    },
+    {
+      "shape": "catalog/catalogValues/branch:values",
+      "variables": {
+        "dimension": "TEAM"
+      }
+    },
+    {
+      "shape": "catalog/catalogValues/branch:values",
+      "variables": {
+        "dimension": "REPO"
+      }
+    },
+    {
+      "shape": "catalog/catalogValues/branch:values",
+      "variables": {
+        "dimension": "THEME"
+      }
+    },
+    {
+      "shape": "catalog/catalogValues/branch:values",
+      "variables": {
+        "dimension": "SUBCATEGORY"
+      }
+    },
+    {
+      "shape": "catalog/catalogValues/branch:values",
+      "variables": {
+        "dimension": "WORK_TYPE"
+      }
+    },
+    {
+      "shape": "catalog/catalogValues/branch:(root)",
+      "variables": {
+        "dimension": "TEAM"
+      }
+    },
+    {
+      "shape": "catalog/catalogValues/branch:(root)",
+      "variables": {
+        "dimension": "REPO"
+      }
+    },
+    {
+      "shape": "catalog/catalogValues/branch:(root)",
+      "variables": {
+        "dimension": "THEME"
+      }
+    },
+    {
+      "shape": "catalog/catalogValues/branch:(root)",
+      "variables": {
+        "dimension": "SUBCATEGORY"
+      }
+    },
+    {
+      "shape": "catalog/catalogValues/branch:(root)",
+      "variables": {
+        "dimension": "WORK_TYPE"
+      }
+    },
+    {
+      "shape": "cognitiveLoad/cognitiveLoad/all",
+      "variables": {
+        "input": {
+          "sinceDate": "2026-09-01",
+          "teamId": "team:team-e62ea33c034087cd",
+          "untilDate": "2026-10-01"
+        }
+      }
+    },
+    {
+      "shape": "cognitiveLoad/cognitiveLoad/branch:(root)",
+      "variables": {
+        "input": {
+          "sinceDate": "2026-09-01",
+          "teamId": "team:team-e62ea33c034087cd",
+          "untilDate": "2026-10-01"
+        }
+      }
+    },
+    {
+      "shape": "cognitiveLoad/cognitiveLoad/branch:signals",
+      "variables": {
+        "input": {
+          "sinceDate": "2026-09-01",
+          "teamId": "team:team-e62ea33c034087cd",
+          "untilDate": "2026-10-01"
+        }
+      }
+    },
+    {
+      "shape": "complexityTimeseries/complexityTimeseries/all",
+      "variables": {
+        "input": {
+          "granularity": "DAY",
+          "limit": 5,
+          "scope": "REPO",
+          "sinceUtc": "2026-09-01T00:00:00Z",
+          "untilUtc": "2026-10-01T00:00:00Z"
+        }
+      }
+    },
+    {
+      "shape": "complexityTimeseries/complexityTimeseries/branch:points",
+      "variables": {
+        "input": {
+          "granularity": "DAY",
+          "limit": 5,
+          "scope": "REPO",
+          "sinceUtc": "2026-09-01T00:00:00Z",
+          "untilUtc": "2026-10-01T00:00:00Z"
+        }
+      }
+    },
+    {
+      "shape": "complexityTimeseries/complexityTimeseries/branch:(root)",
+      "variables": {
+        "input": {
+          "granularity": "DAY",
+          "limit": 5,
+          "scope": "REPO",
+          "sinceUtc": "2026-09-01T00:00:00Z",
+          "untilUtc": "2026-10-01T00:00:00Z"
+        }
+      }
+    },
+    {
+      "shape": "compoundingRisk/compoundingRisk/all",
+      "variables": {
+        "filter": {
+          "breakout": "REPO",
+          "trendDays": 30
+        }
+      }
+    },
+    {
+      "shape": "compoundingRisk/compoundingRisk/all",
+      "variables": {
+        "filter": {
+          "breakout": "TEAM",
+          "trendDays": 30
+        }
+      }
+    },
+    {
+      "shape": "compoundingRisk/compoundingRisk/branch:(root)",
+      "variables": {
+        "filter": {
+          "breakout": "REPO",
+          "trendDays": 30
+        }
+      }
+    },
+    {
+      "shape": "compoundingRisk/compoundingRisk/branch:(root)",
+      "variables": {
+        "filter": {
+          "breakout": "TEAM",
+          "trendDays": 30
+        }
+      }
+    },
+    {
+      "shape": "compoundingRisk/compoundingRisk/branch:rows",
+      "variables": {
+        "filter": {
+          "breakout": "REPO",
+          "trendDays": 30
+        }
+      }
+    },
+    {
+      "shape": "compoundingRisk/compoundingRisk/branch:rows",
+      "variables": {
+        "filter": {
+          "breakout": "TEAM",
+          "trendDays": 30
+        }
+      }
+    },
+    {
+      "shape": "compoundingRisk/compoundingRisk/branch:trend",
+      "variables": {
+        "filter": {
+          "breakout": "REPO",
+          "trendDays": 30
+        }
+      }
+    },
+    {
+      "shape": "compoundingRisk/compoundingRisk/branch:trend",
+      "variables": {
+        "filter": {
+          "breakout": "TEAM",
+          "trendDays": 30
+        }
+      }
+    },
+    {
+      "shape": "hotspots/hotspots/all",
+      "variables": {
+        "input": {
+          "limit": 50,
+          "sinceUtc": "2026-09-01T00:00:00Z",
+          "untilUtc": "2026-10-01T00:00:00Z"
+        }
+      }
+    },
+    {
+      "shape": "hotspots/hotspots/branch:rows",
+      "variables": {
+        "input": {
+          "limit": 50,
+          "sinceUtc": "2026-09-01T00:00:00Z",
+          "untilUtc": "2026-10-01T00:00:00Z"
+        }
+      }
+    },
+    {
+      "shape": "hotspots/hotspots/branch:(root)",
+      "variables": {
+        "input": {
+          "limit": 50,
+          "sinceUtc": "2026-09-01T00:00:00Z",
+          "untilUtc": "2026-10-01T00:00:00Z"
+        }
+      }
+    },
+    {
+      "shape": "securityAlerts/securityAlerts/all",
+      "variables": {
+        "filters": {
+          "since": "2026-09-01",
+          "until": "2026-10-01"
+        },
+        "pagination": {
+          "first": 5
+        }
+      }
+    },
+    {
+      "shape": "securityAlerts/securityAlerts/branch:edges",
+      "variables": {
+        "filters": {
+          "since": "2026-09-01",
+          "until": "2026-10-01"
+        },
+        "pagination": {
+          "first": 5
+        }
+      }
+    },
+    {
+      "shape": "securityAlerts/securityAlerts/branch:(root)",
+      "variables": {
+        "filters": {
+          "since": "2026-09-01",
+          "until": "2026-10-01"
+        },
+        "pagination": {
+          "first": 5
+        }
+      }
+    },
+    {
+      "shape": "securityAlerts/securityAlerts/branch:pageInfo",
+      "variables": {
+        "filters": {
+          "since": "2026-09-01",
+          "until": "2026-10-01"
+        },
+        "pagination": {
+          "first": 5
+        }
+      }
+    },
+    {
+      "shape": "securityOverview/securityOverview/all",
+      "variables": {
+        "filters": {
+          "since": "2026-09-01",
+          "until": "2026-10-01"
+        }
+      }
+    },
+    {
+      "shape": "securityOverview/securityOverview/branch:kpis",
+      "variables": {
+        "filters": {
+          "since": "2026-09-01",
+          "until": "2026-10-01"
+        }
+      }
+    },
+    {
+      "shape": "securityOverview/securityOverview/branch:severityBreakdown",
+      "variables": {
+        "filters": {
+          "since": "2026-09-01",
+          "until": "2026-10-01"
+        }
+      }
+    },
+    {
+      "shape": "securityOverview/securityOverview/branch:topRepos",
+      "variables": {
+        "filters": {
+          "since": "2026-09-01",
+          "until": "2026-10-01"
+        }
+      }
+    },
+    {
+      "shape": "securityOverview/securityOverview/branch:trend",
+      "variables": {
+        "filters": {
+          "since": "2026-09-01",
+          "until": "2026-10-01"
+        }
+      }
+    },
+    {
+      "shape": "securityOverview/securityOverview/branch:(root)",
+      "variables": {
+        "filters": {
+          "since": "2026-09-01",
+          "until": "2026-10-01"
+        }
+      }
+    },
+    {
+      "shape": "throughputForecast/throughputForecast/all",
+      "variables": {
+        "input": {
+          "historyWeeks": 12,
+          "teamIds": [
+            "team:team-e62ea33c034087cd"
+          ]
+        }
+      }
+    },
+    {
+      "shape": "throughputForecast/throughputForecast/branch:(root)",
+      "variables": {
+        "input": {
+          "historyWeeks": 12,
+          "teamIds": [
+            "team:team-e62ea33c034087cd"
+          ]
+        }
+      }
+    },
+    {
+      "shape": "throughputForecast/throughputForecast/branch:rollingWindows",
+      "variables": {
+        "input": {
+          "historyWeeks": 12,
+          "teamIds": [
+            "team:team-e62ea33c034087cd"
+          ]
+        }
+      }
+    },
+    {
+      "shape": "throughputForecast/throughputForecast/branch:primaryRisk",
+      "variables": {
+        "input": {
+          "historyWeeks": 12,
+          "teamIds": [
+            "team:team-e62ea33c034087cd"
+          ]
+        }
+      }
+    },
+    {
+      "shape": "throughputForecast/throughputForecast/branch:wipCongestion",
+      "variables": {
+        "input": {
+          "historyWeeks": 12,
+          "teamIds": [
+            "team:team-e62ea33c034087cd"
+          ]
+        }
+      }
+    },
+    {
+      "shape": "throughputForecast/throughputForecast/branch:staleWip",
+      "variables": {
+        "input": {
+          "historyWeeks": 12,
+          "teamIds": [
+            "team:team-e62ea33c034087cd"
+          ]
+        }
+      }
+    },
+    {
+      "shape": "throughputForecast/throughputForecast/branch:estimateCoverage",
+      "variables": {
+        "input": {
+          "historyWeeks": 12,
+          "teamIds": [
+            "team:team-e62ea33c034087cd"
+          ]
+        }
+      }
+    },
+    {
+      "shape": "throughputForecast/throughputForecast/branch:reviewBottleneck",
+      "variables": {
+        "input": {
+          "historyWeeks": 12,
+          "teamIds": [
+            "team:team-e62ea33c034087cd"
+          ]
+        }
+      }
+    },
+    {
+      "shape": "throughputForecast/throughputForecast/branch:incidentLoad",
+      "variables": {
+        "input": {
+          "historyWeeks": 12,
+          "teamIds": [
+            "team:team-e62ea33c034087cd"
+          ]
+        }
+      }
+    },
+    {
+      "shape": "workGraphArtifacts/workGraphArtifacts/all",
+      "variables": {
+        "filters": {
+          "limit": 50
+        }
+      }
+    },
+    {
+      "shape": "workGraphArtifacts/workGraphArtifacts/branch:rows",
+      "variables": {
+        "filters": {
+          "limit": 50
+        }
+      }
+    },
+    {
+      "shape": "workGraphArtifacts/workGraphArtifacts/branch:(root)",
+      "variables": {
+        "filters": {
+          "limit": 50
+        }
+      }
+    },
+    {
+      "shape": "workGraphEdges/workGraphEdges/all",
+      "variables": {
+        "filters": {
+          "limit": 50
+        }
+      }
+    },
+    {
+      "shape": "workGraphEdges/workGraphEdges/branch:edges",
+      "variables": {
+        "filters": {
+          "limit": 50
+        }
+      }
+    },
+    {
+      "shape": "workGraphEdges/workGraphEdges/branch:(root)",
+      "variables": {
+        "filters": {
+          "limit": 50
+        }
+      }
+    },
+    {
+      "shape": "workGraphEdges/workGraphEdges/branch:pageInfo",
+      "variables": {
+        "filters": {
+          "limit": 50
+        }
+      }
+    },
+    {
+      "shape": "workGraphFlow/workGraphFlow/all",
+      "variables": {}
+    },
+    {
+      "shape": "workGraphFlow/workGraphFlow/branch:rows",
+      "variables": {}
+    },
+    {
+      "shape": "workGraphFlow/workGraphFlow/branch:(root)",
+      "variables": {}
+    }
+  ],
+  "residual": {
+    "feature_delivery": 0.004845833405852318,
+    "maintenance": 0.0027481766883283854,
+    "operational": 0.00024466507602483034,
+    "quality": 0.002130022505298257,
+    "risk": 0.00047797006845939904
+  },
+  "expect": {
+    "analytics": {
+      "mode": "value",
+      "listener": "served",
+      "shapes_run": 24,
+      "leaves": 384,
+      "compared": 40,
+      "matches": 40,
+      "by_class": {},
+      "findings": [],
+      "not_joined": [],
+      "run_operation": "served",
+      "operations_run": 6,
+      "operation_leaves": 192,
+      "cross_paths": 192,
+      "cross_matches": 192,
+      "differences": [],
+      "unmeasured": [
+        "analytics.sankey.__typename",
+        "analytics.sankey.coverage.__typename",
+        "analytics.sankey.coverage.repoCoverage",
+        "analytics.sankey.coverage.teamCoverage",
+        "analytics.sankey.edges[*].__typename",
+        "analytics.sankey.edges[*].source",
+        "analytics.sankey.edges[*].target",
+        "analytics.sankey.edges[*].value",
+        "analytics.sankey.nodes[*].__typename",
+        "analytics.sankey.nodes[*].dimension",
+        "analytics.sankey.nodes[*].id",
+        "analytics.sankey.nodes[*].label",
+        "analytics.sankey.nodes[*].value",
+        "analytics.sankey.unit"
+      ],
+      "code_read": [],
+      "invalid": []
+    },
+    "capacityForecast": {
+      "mode": "shape",
+      "listener": "operation_unavailable",
+      "shapes_run": 1,
+      "leaves": 0,
+      "compared": 0,
+      "matches": 0,
+      "by_class": {
+        "latest_day_vs_window": 1
+      },
+      "findings": [],
+      "not_joined": [],
+      "run_operation": "served",
+      "operations_run": 1,
+      "operation_leaves": 22,
+      "cross_paths": 0,
+      "cross_matches": 0,
+      "differences": [
+        {
+          "pair": "window_probe",
+          "key": "capacityForecast.backlogSize",
+          "class": "latest_day_vs_window",
+          "exact": true
+        }
+      ],
+      "unmeasured": [],
+      "code_read": [],
+      "invalid": []
+    },
+    "capacityForecasts": {
+      "mode": "value",
+      "listener": "served",
+      "shapes_run": 4,
+      "leaves": 1934,
+      "compared": 224,
+      "matches": 224,
+      "by_class": {},
+      "findings": [],
+      "not_joined": [],
+      "run_operation": "served",
+      "operations_run": 1,
+      "operation_leaves": 967,
+      "cross_paths": 967,
+      "cross_matches": 967,
+      "differences": [],
+      "unmeasured": [],
+      "code_read": [],
+      "invalid": []
+    },
+    "catalog": {
+      "mode": "value",
+      "listener": "served",
+      "shapes_run": 18,
+      "leaves": 402,
+      "compared": 11,
+      "matches": 11,
+      "by_class": {},
+      "findings": [],
+      "not_joined": [],
+      "run_operation": "served",
+      "operations_run": 6,
+      "operation_leaves": 201,
+      "cross_paths": 201,
+      "cross_matches": 201,
+      "differences": [],
+      "unmeasured": [],
+      "code_read": [],
+      "invalid": []
+    },
+    "cognitiveLoad": {
+      "mode": "shape",
+      "listener": "served",
+      "shapes_run": 3,
+      "leaves": 8,
+      "compared": 0,
+      "matches": 0,
+      "by_class": {},
+      "findings": [],
+      "not_joined": [],
+      "run_operation": "served",
+      "operations_run": 1,
+      "operation_leaves": 4,
+      "cross_paths": 4,
+      "cross_matches": 4,
+      "differences": [],
+      "unmeasured": [
+        "cognitiveLoad.signals[*].__typename",
+        "cognitiveLoad.signals[*].afterHoursCommitRatio",
+        "cognitiveLoad.signals[*].contextSpreadCount",
+        "cognitiveLoad.signals[*].day",
+        "cognitiveLoad.signals[*].prInterruptionLoad",
+        "cognitiveLoad.signals[*].reviewRequestLoad",
+        "cognitiveLoad.signals[*].weekendCommitRatio"
+      ],
+      "code_read": [],
+      "invalid": []
+    },
+    "complexityTimeseries": {
+      "mode": "shape",
+      "listener": "served",
+      "shapes_run": 3,
+      "leaves": 1804,
+      "compared": 0,
+      "matches": 0,
+      "by_class": {},
+      "findings": [],
+      "not_joined": [],
+      "run_operation": "served",
+      "operations_run": 1,
+      "operation_leaves": 902,
+      "cross_paths": 902,
+      "cross_matches": 902,
+      "differences": [],
+      "unmeasured": [],
+      "code_read": [],
+      "invalid": []
+    },
+    "compoundingRisk": {
+      "mode": "value",
+      "listener": "served",
+      "shapes_run": 8,
+      "leaves": 704,
+      "compared": 36,
+      "matches": 36,
+      "by_class": {},
+      "findings": [],
+      "not_joined": [
+        "repository: a health fact states no severity_as_of day (no_known_severity_breakdown_rows)",
+        "repository: a health fact states no severity_as_of day (no_known_severity_breakdown_rows)",
+        "repository: a health fact states no severity_as_of day (no_known_severity_breakdown_rows)",
+        "team: a health fact states no severity_as_of day (known_severity_stale_beyond_freshness_window)"
+      ],
+      "run_operation": "served",
+      "operations_run": 2,
+      "operation_leaves": 352,
+      "cross_paths": 350,
+      "cross_matches": 350,
+      "differences": [],
+      "unmeasured": [],
+      "code_read": [],
+      "invalid": []
+    },
+    "hotspots": {
+      "mode": "shape",
+      "listener": "served",
+      "shapes_run": 3,
+      "leaves": 1102,
+      "compared": 0,
+      "matches": 0,
+      "by_class": {},
+      "findings": [],
+      "not_joined": [],
+      "run_operation": "served",
+      "operations_run": 1,
+      "operation_leaves": 551,
+      "cross_paths": 551,
+      "cross_matches": 551,
+      "differences": [],
+      "unmeasured": [],
+      "code_read": [],
+      "invalid": []
+    },
+    "securityAlerts": {
+      "mode": "shape",
+      "listener": "operation_unavailable",
+      "shapes_run": 4,
+      "leaves": 0,
+      "compared": 0,
+      "matches": 0,
+      "by_class": {},
+      "findings": [],
+      "not_joined": [],
+      "run_operation": "served",
+      "operations_run": 1,
+      "operation_leaves": 97,
+      "cross_paths": 0,
+      "cross_matches": 0,
+      "differences": [],
+      "unmeasured": [],
+      "code_read": [],
+      "invalid": []
+    },
+    "securityOverview": {
+      "mode": "shape",
+      "listener": "served",
+      "shapes_run": 6,
+      "leaves": 258,
+      "compared": 0,
+      "matches": 0,
+      "by_class": {},
+      "findings": [],
+      "not_joined": [],
+      "run_operation": "served",
+      "operations_run": 1,
+      "operation_leaves": 129,
+      "cross_paths": 129,
+      "cross_matches": 129,
+      "differences": [],
+      "unmeasured": [],
+      "code_read": [],
+      "invalid": []
+    },
+    "throughputForecast": {
+      "mode": "value",
+      "listener": "served",
+      "shapes_run": 9,
+      "leaves": 124,
+      "compared": 188,
+      "matches": 187,
+      "by_class": {
+        "forecast_by_design": 1,
+        "latest_day_vs_window": 4
+      },
+      "findings": [
+        {
+          "root": "throughputForecast",
+          "pair": "readiness",
+          "key": "team",
+          "detail": "estimate coverage present in ops false, in acr true"
+        }
+      ],
+      "not_joined": [],
+      "run_operation": "served",
+      "operations_run": 1,
+      "operation_leaves": 62,
+      "cross_paths": 60,
+      "cross_matches": 60,
+      "differences": [
+        {
+          "pair": "readiness",
+          "key": "all teams",
+          "class": "forecast_by_design",
+          "exact": true
+        },
+        {
+          "pair": "window_probe",
+          "key": "throughputForecast.backlogSize",
+          "class": "latest_day_vs_window",
+          "exact": true
+        },
+        {
+          "pair": "window_probe",
+          "key": "throughputForecast.estimateCoverage",
+          "class": "latest_day_vs_window",
+          "exact": true
+        },
+        {
+          "pair": "window_probe",
+          "key": "throughputForecast.staleWip",
+          "class": "latest_day_vs_window",
+          "exact": true
+        },
+        {
+          "pair": "window_probe",
+          "key": "throughputForecast.wipCongestion",
+          "class": "latest_day_vs_window",
+          "exact": true
+        }
+      ],
+      "unmeasured": [],
+      "code_read": [],
+      "invalid": []
+    },
+    "workGraphArtifacts": {
+      "mode": "shape",
+      "listener": "served",
+      "shapes_run": 3,
+      "leaves": 504,
+      "compared": 0,
+      "matches": 0,
+      "by_class": {},
+      "findings": [],
+      "not_joined": [],
+      "run_operation": "served",
+      "operations_run": 1,
+      "operation_leaves": 252,
+      "cross_paths": 252,
+      "cross_matches": 252,
+      "differences": [],
+      "unmeasured": [],
+      "code_read": [],
+      "invalid": []
+    },
+    "workGraphEdges": {
+      "mode": "shape",
+      "listener": "served",
+      "shapes_run": 4,
+      "leaves": 1516,
+      "compared": 0,
+      "matches": 0,
+      "by_class": {},
+      "findings": [],
+      "not_joined": [],
+      "run_operation": "served",
+      "operations_run": 1,
+      "operation_leaves": 758,
+      "cross_paths": 758,
+      "cross_matches": 758,
+      "differences": [],
+      "unmeasured": [],
+      "code_read": [],
+      "invalid": []
+    },
+    "workGraphFlow": {
+      "mode": "shape",
+      "listener": "served",
+      "shapes_run": 3,
+      "leaves": 68,
+      "compared": 0,
+      "matches": 0,
+      "by_class": {},
+      "findings": [],
+      "not_joined": [],
+      "run_operation": "served",
+      "operations_run": 1,
+      "operation_leaves": 34,
+      "cross_paths": 34,
+      "cross_matches": 34,
+      "differences": [],
+      "unmeasured": [],
+      "code_read": [
+        "class latest_day_vs_window, workGraphFlow.rows[*].inflow, workGraphFlow.rows[*].outflow: read from the resolver code, not measured by this run (the operation takes no window argument)"
+      ],
+      "invalid": []
+    }
+  },
+  "listener_dark": [
+    "securityAlerts",
+    "capacityForecast"
+  ],
+  "operation_dark": []
+}
