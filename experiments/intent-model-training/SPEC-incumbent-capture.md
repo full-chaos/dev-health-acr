@@ -407,3 +407,31 @@ Retries and redraws pass through the same steps, so every attempt carries the ap
 - A variant capture given as `--incumbent-capture` is refused, and an incumbent capture given as `--variant-capture` is refused. Each proof also refuses the other kind of artifact, row and ledger record.
 - The variant is scored like any candidate, as the series `incumbent-variant[<name>]#<draw>`. `paired_with_incumbent` pairs on the real incumbent only.
 - `report --heldout` shows each variant under its own label with two paired differences per stratum: tuned minus variant, and variant minus incumbent, and the share of the tuned-minus-incumbent gap that the variant closes.
+
+## R8. Candidate-prompt mode: a system message in place of production's (2026-10-02)
+
+**What it is.** A second mode of the prompt variant (R7). The file is the WHOLE candidate system message and is sent in place of the production system message. It measures a change of the prompt text itself, where R7 measures text added after the prompt. It is still a labelled control: `incumbent-variant[<name>]`, never the incumbent.
+
+**Command.** `gocapture run ... --prompt-variant <name> --system-message-file <path>`. A name goes with exactly one of `--system-append-file` (R7, append mode) and `--system-message-file` (replace mode); both files together are refused. The file rules are R7's. The file is the complete system message as the helper prints it (`interp-helper system-message`) from a build at the candidate commit: the prompt and the output instruction.
+
+**How the request is made.** The steps are R7's, with one difference in step 2 and step 3:
+1. **Base proof.** Unchanged: the request production built is the incumbent's, by the complete expected descriptor.
+2. **One change.** The content string of the system message is replaced by the file, JSON-encoded as one string. Every byte outside that one JSON string is unchanged (`replaceSystemMessage`).
+3. **Variant proof.** The changed request is checked against the same expected descriptor with one value replaced: the system `content_sha256` is `sha256(file)`.
+
+So the model, the user message, the seed, the response format, the decoding, the deadlines and the retries are production's by proof. A file that equals the production system message is the incumbent and is refused: before any write when its sha256 is the sealed `expected_system_message_sha256`, and again in the transport.
+
+**Approval.** Its own record: `variant_approval {…, variant, appendix_sha256, variant_mode:"replace", …}`, written by chris with `gocapture approve-variant … --prompt-variant <name> --system-message-file <path> …`. One name, one mode, one file: a name approved as an appendix does not approve a replacement, the same file approved in one mode does not approve the other, and a changed file needs a new name. The calls spend from the same approval and cap.
+
+**Ledger and files.**
+- `variant_mode: "replace"` is on `variant_approval` and `run_started` only. The append mode writes no `variant_mode` member, so its ledger lines, `run.json` and artifacts are byte for byte as in R7 (`TestAppendModeRecordsHaveNoModeMember`). In a replace record, `appendix_sha256` and `appendix_bytes` describe the system message file.
+- The `variant` block of `run.json`, of artifacts and of response rows has `mode: "replace"` and no `separator_sha256`.
+- `system-message.md`: the file, published write-once in the run directory before `run_started`; a resume checks it. A replace run directory has no `system-append.md`.
+- Binaries built before this revision refuse a ledger that holds a `variant_mode` member (unknown member).
+
+**Wire proof (test).** `TestCandidateWireDiffIsTheSystemMessageOnly`: for every request of a replace run, the set of JSON paths that differ from the incumbent's request for the same user message is exactly `messages[0].content`, and the bytes outside that string are equal. `TestJSONDiffPathsSeesEveryChange` shows that the comparison reports a second change.
+
+**Limits.**
+- Only the system message moves. A candidate that also changes the output schema or a validator is not measured by this mode.
+- The read-back of the changed request (`replaceSystemMessage`, last check) has no test that makes it fail: a correct construction cannot produce the case. The same holds for the append mode's read-back.
+- **Evaluator (Python).** `capturecontract.verify_variant_capture` in the intent-training repository reads `mode` from `run.json`. For a replace run it rebuilds the system message from `system-message.md` alone and requires `variant_mode: "replace"` on chris's `variant_approval` and on `run_started`; it refuses a run directory that holds both kept files, a separator on a replace block, an unknown mode, and the production system message under a variant label. A verifier from before that change refuses a replace capture ("the variant run used another separator than this evaluator knows") and scores nothing: executed 2026-10-02 against a loopback capture.

@@ -77,12 +77,13 @@ func cmdRun(args []string, recovery bool) error {
 	recoverIndex := fs.Int("recovery-index", 0, "recover only: the next recovery index chris authorizes (1, 2, ...)")
 	promptVariant := fs.String("prompt-variant", "", "prompt-variant name: capture the labelled control incumbent-variant[<name>], NOT the incumbent (needs --system-append-file and chris's approve-variant record)")
 	appendFile := fs.String("system-append-file", "", "prompt variant only: the appendix added after the production system message (0600 file)")
+	messageFile := fs.String("system-message-file", "", "prompt variant only, replace mode: the whole candidate system message, sent in place of the production system message (0600 file; not with --system-append-file)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	cfg := runConfig{DataRoot: *dataRoot, SessionID: *session, ApprovalID: *approval, RunID: *runID, Resume: *resume,
 		RunCap: *runCap, SourcePin: *pin, ProfilePath: *profile, GoldenPath: *golden, MinInterval: *interval,
-		PromptVariant: *promptVariant, SystemAppendFile: *appendFile}
+		PromptVariant: *promptVariant, SystemAppendFile: *appendFile, SystemMessageFile: *messageFile}
 	if recovery {
 		idx := strings.LastIndexByte(*pair, ':')
 		if idx < 1 {
@@ -120,15 +121,16 @@ func cmdApproveVariant(args []string) error {
 	approval := fs.String("approval-id", "", "the existing approval id the variant's calls spend from")
 	variant := fs.String("prompt-variant", "", "prompt-variant name")
 	appendFile := fs.String("system-append-file", "", "the appendix file chris approves (bound by sha256)")
+	messageFile := fs.String("system-message-file", "", "replace mode: the candidate system message file chris approves (bound by sha256; not with --system-append-file)")
 	source := fs.String("source", "", "approval citation (ASCII)")
 	by := fs.String("approved-by", "", "must be human:chris")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *dataRoot == "" || *variant == "" || *appendFile == "" {
-		return errors.New("--data-root, --prompt-variant and --system-append-file are required")
+	if *dataRoot == "" || *variant == "" || (*appendFile == "") == (*messageFile == "") {
+		return errors.New("--data-root, --prompt-variant and exactly one of --system-append-file or --system-message-file are required")
 	}
-	return approveVariant(*dataRoot, *approval, *variant, *appendFile, *source, *by)
+	return approveVariantFile(*dataRoot, *approval, *variant, *appendFile, *messageFile, *source, *by)
 }
 
 func cmdApprove(args []string) error {
