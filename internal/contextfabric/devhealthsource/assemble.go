@@ -269,8 +269,12 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 	// real content, and deterministicBatchID stays stable for replay.
 	for skips := 0; ; skips++ {
 		var all []candidate
+		var bound pageBound
 		for _, table := range p.tables {
-			rows, _, err := readTable(ctx, table, p.client, orgID, state, incrementalBatchCap)
+			rows, truncated, err := readTable(ctx, table, p.client, orgID, state, incrementalBatchCap)
+			if err == nil {
+				err = bound.note(table.name, rows, truncated)
+			}
 			if err != nil {
 				logTableReadFailure(ctx, p.logger, p.source, orgID, table.name, err)
 				return contextfabric.ProjectionBatch{}, false, &tableReadError{table: table.name, cause: err}
@@ -287,9 +291,12 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 			return p.overlapBatch(ctx, orgID, cursor, state)
 		}
 		sortCandidates(all)
-		all = truncateToCompleteRows(all, incrementalBatchCap)
+		all, bounded := truncateToCompleteRows(all, incrementalBatchCap, bound)
 		if len(all) == 0 {
 			return contextfabric.ProjectionBatch{}, false, nil
+		}
+		if bounded {
+			p.logBoundedPage(ctx, orgID, bound)
 		}
 		p.notePage(all)
 		// Per-item quarantine BEFORE the payload check: an item the
@@ -430,6 +437,18 @@ func (e *tableReadError) Unwrap() []error {
 		return []error{contextfabric.ErrQueryBudgetExceeded, e.cause}
 	}
 	return []error{contextfabric.ErrUnavailable, e.cause}
+}
+
+// logBoundedPage reports a page that ended at a truncated table's last row
+// before it was full: rows of that table share one cursor position. The page
+// lost nothing; the line names the table that holds such rows.
+func (p sourcePlan) logBoundedPage(ctx context.Context, orgID string, bound pageBound) {
+	if p.logger == nil {
+		return
+	}
+	p.logger.WarnContext(ctx, "devhealthsource page ended at the last row a truncated table returned; rows of that table share one cursor position",
+		"source", contextfabric.SanitizeLogAttr(p.source), "org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "table", contextfabric.SanitizeLogAttr(bound.table),
+		"last_stamp", contextfabric.SanitizeLogAttr(bound.at.UTC().Format(time.RFC3339Nano)), "last_key_digest", contextfabric.SanitizeLogAttr(keyDigest(bound.key)))
 }
 
 func (p sourcePlan) notePage(all []candidate) {

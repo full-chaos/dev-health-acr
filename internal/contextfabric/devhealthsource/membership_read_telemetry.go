@@ -30,6 +30,7 @@ type membershipArmPage struct {
 	statementRows int
 	consumedRows  int // rows of this arm in the page the cursor moved past
 	consumedNew   int // of those, rows this run had not consumed before
+	sharedRows    int // of consumedRows, rows on a cursor position an earlier row of this page holds
 	lastStamp     time.Time
 	lastKey       string
 }
@@ -113,6 +114,7 @@ func (l *presenceTelemetryLedger) recordConsumed(all []candidate) {
 		return
 	}
 	page := &m.pages[len(m.pages)-1]
+	inPage := map[string]map[uint64]struct{}{}
 	for _, c := range all {
 		if c.table != membershipTable || c.arm == "" {
 			continue
@@ -120,6 +122,13 @@ func (l *presenceTelemetryLedger) recordConsumed(all []candidate) {
 		arm := page.arm(c.arm)
 		arm.consumedRows++
 		arm.lastStamp, arm.lastKey = c.position(), c.sortKey
+		if inPage[c.arm] == nil {
+			inPage[c.arm] = map[uint64]struct{}{}
+		}
+		if _, ok := inPage[c.arm][rowHash(c)]; ok {
+			arm.sharedRows++
+		}
+		inPage[c.arm][rowHash(c)] = struct{}{}
 		if m.seen == nil {
 			m.seen, m.consumedPages = map[string]map[uint64]struct{}{}, map[string]int{}
 		}
@@ -218,6 +227,15 @@ func logMembershipPages(ctx context.Context, logger *slog.Logger, orgID string, 
 				"statement_rows", arm.statementRows, "statement_more", page.more,
 				"consumed_rows", arm.consumedRows, "consumed_new", arm.consumedNew, "consumed_total", total[name], "replay", page.replay(),
 				"last_stamp", contextfabric.SanitizeLogAttr(lastStamp), "last_key_digest", contextfabric.SanitizeLogAttr(keyDigest(arm.lastKey)))
+			// A first read moves the cursor past each row once. Rows that are
+			// not new on a page that is not a replay share one cursor position
+			// (shared_position_rows), or the page changed between two attempts.
+			if arm.consumedRows != arm.consumedNew && !page.replay() {
+				logger.ErrorContext(ctx, "devhealthsource project membership page consumed rows that are not new and is not a replay",
+					"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", contextfabric.SanitizeLogAttr(TeamsProjectsSourceName), "arm", contextfabric.SanitizeLogAttr(name), "run", run, "page_n", page.n,
+					"consumed_rows", arm.consumedRows, "consumed_new", arm.consumedNew, "shared_position_rows", arm.sharedRows,
+					"last_stamp", contextfabric.SanitizeLogAttr(lastStamp), "last_key_digest", contextfabric.SanitizeLogAttr(keyDigest(arm.lastKey)))
+			}
 		}
 	}
 	if !drained {

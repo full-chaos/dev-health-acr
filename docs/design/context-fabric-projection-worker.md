@@ -457,6 +457,31 @@ existing stable sort) instead of slicing at a raw index -- a row that
 doesn't fully fit is deferred, unsplit, to the next page. Proven by
 `TestClickHouseProjectionSourcePagedBatchNeverSplitsARowsCandidatesAcrossAPageBoundary`.
 
+**A page never ends past the last row a truncated table returned.** The
+cap counts distinct `(position, sortKey)` pairs. Two rows of one table
+that share a pair take one slot, so a table that filled its statement
+limit does not fill the page, and the rows that complete it come from
+other tables and can sort after rows the first table has not returned
+yet. A cursor on such a row passes those rows for good. Two rules close
+this for every table of a `sourcePlan`, in the paged read and in the
+overlap walk:
+
+- `pagedBatch` and `overlapBatch` keep each table's `truncated` flag and
+  the last row it returned (`pageBound`). `truncateToCompleteRows` ends
+  the page at the earliest of those rows.
+- `fetch` leaves a position whole for the next page when its rows lie
+  across the statement limit (the last rows inside the limit and the
+  first row past it). A page that ended on that position would make the
+  next keyset predicate, which is strict, pass the row past the limit.
+
+More rows on one position than one page holds cannot be paged without a
+loss: the read fails with a producer rejection and the cursor stays. A
+page that the bound ended writes a WARN line with the table; the project
+membership read writes an ERROR line when a page that is not a replay
+consumes rows that are not new (`shared_position_rows` counts the rows on
+a shared position). Proven by `page_cut_test.go` and, on a real
+ClickHouse, `TestPageCutKeepsEveryRowWhenTwoStatementRowsShareStampAndKey`.
+
 **K3 -- the episode source must page too, not just ClickHouse.**
 `EpisodesProjectionSource.NextProjectionBatch` still hard-errored when a
 from-scratch (`cursor == ""`) read exceeded `episodesSnapshotCap` (500)
