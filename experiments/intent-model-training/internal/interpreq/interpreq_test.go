@@ -3,10 +3,10 @@ package interpreq
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"testing"
 )
 
@@ -18,15 +18,39 @@ var fixtureRequests = []string{
 	`{"question":"Which repositories need attention <now> & why?","time_context":{"axis":"current"}}`,
 }
 
+// builtHelper is the interpretation helper the tests run. TestMain builds it
+// from ../../gohelper for every test run: a helper that does not build fails
+// the run, and no test depends on a binary that someone built earlier.
+var builtHelper string
+
+func TestMain(m *testing.M) {
+	os.Exit(runWithHelper(m))
+}
+
+func runWithHelper(m *testing.M) int {
+	dir, err := os.MkdirTemp("", "interp-helper-")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "interpreq tests: temp dir for the helper: %v\n", err)
+		return 1
+	}
+	defer os.RemoveAll(dir)
+	bin := filepath.Join(dir, "interp-helper")
+	build := exec.Command("go", "build", "-o", bin, "../../gohelper")
+	if out, err := build.CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "interpreq tests: the interpretation helper does not build: %v\n%s", err, out)
+		return 1
+	}
+	builtHelper = bin
+	return m.Run()
+}
+
 func helperBinary(t *testing.T) string {
 	t.Helper()
-	_, file, _, _ := runtime.Caller(0)
-	bin := filepath.Join(filepath.Dir(file), "..", "..", "bin", "interp-helper")
-	if _, err := os.Stat(bin); err != nil {
+	if builtHelper == "" {
 		// A missing helper is a failed measurement, never a skip.
-		t.Fatalf("helper binary missing at %s: build it with the INTERFACES §6 command", bin)
+		t.Fatal("the helper was not built for this test run")
 	}
-	return bin
+	return builtHelper
 }
 
 // T14: interpreq's request_sha256 and input_sha256 equal the helper's render.
