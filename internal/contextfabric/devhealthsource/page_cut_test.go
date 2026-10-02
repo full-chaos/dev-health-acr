@@ -477,3 +477,63 @@ func TestOverlapWalkNeverStepsPastTheLastRowATruncatedTableReturned(t *testing.T
 		}
 	}
 }
+
+// scanMembershipArmRow is scanKeysetRow for the membership table: its rows
+// belong to the transition arm, so the membership read ledger counts them.
+func scanMembershipArmRow(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+	rows, err := scanKeysetRow(r)
+	for i := range rows {
+		rows[i].arm = "transition"
+	}
+	return rows, err
+}
+
+// Two statement rows of the membership table on one stamp and one row key,
+// read through the real fetch and pagedBatch with the ledger the production
+// source hooks into observePage. The page consumes every row (6 rows, 5
+// positions) and the ledger says so at error level: 6 rows consumed, 5 new, 1
+// on a shared position. This is the assertion the integration test
+// TestPageCutKeepsEveryRowWhenTwoStatementRowsShareStampAndKey held before the
+// reader stopped producing such a pair from stored data.
+func TestPageThatConsumesTwoRowsOnOneStampAndKeyIsReportedByTheLedger(t *testing.T) {
+	rows := numbered(pageCutStamp, "a", 0, 3)
+	rows = append(rows, keysetRow{at: pageCutStamp, key: "a003"}, keysetRow{at: pageCutStamp, key: "a003"}, keysetRow{at: pageCutStamp, key: "a004"})
+	table := entityTable{name: membershipTable, query: func(ctx context.Context, _ contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
+		return fetch(ctx, keysetRows(rows), "", rowLimitBindings(orgID, cursor, limit), limit, scanMembershipArmRow)
+	}}
+	ledger := &presenceTelemetryLedger{}
+	var pages [][]string
+	var logs bytes.Buffer
+	plan := sourcePlan{
+		client: keysetRows{}, source: "page_cut_test", version: "v1", tables: []entityTable{table},
+		logger: slog.New(slog.NewJSONHandler(&logs, nil)),
+		observePage: func(all []candidate) {
+			pages = append(pages, keysOf(all))
+			ledger.recordStatement(all, false)
+			ledger.recordConsumed(all)
+		},
+	}
+	if _, available, err := plan.pagedBatch(context.Background(), "org", "", cursorState{}, false); err != nil || available {
+		t.Fatalf("pagedBatch available=%v err=%v", available, err)
+	}
+	// Every statement row is consumed, the pair included.
+	requirePages(t, pages, join(keysetKeys(membershipTable, rows)))
+	if got := ledger.membershipConsumedTotal("transition"); got != 5 {
+		t.Fatalf("distinct rows consumed = %d, want 5 (the pair takes one slot)", got)
+	}
+
+	var report bytes.Buffer
+	logMembershipPages(context.Background(), slog.New(slog.NewJSONHandler(&report, nil)), "org", ledger)
+	var errors []map[string]any
+	for _, line := range logLines(t, &report, "devhealthsource project membership page consumed rows that are not new") {
+		if line["level"] == "ERROR" {
+			errors = append(errors, line)
+		}
+	}
+	if len(errors) != 1 {
+		t.Fatalf("%d not-new-rows error lines, want 1: %v", len(errors), errors)
+	}
+	if e := errors[0]; e["arm"] != "transition" || e["page_n"] != float64(1) || e["consumed_rows"] != float64(6) || e["consumed_new"] != float64(5) || e["shared_position_rows"] != float64(1) {
+		t.Fatalf("not-new-rows line = %v, want transition page 1 with 6 rows, 5 new, 1 on a shared position", e)
+	}
+}
