@@ -1,0 +1,10 @@
+# Private: training data, weights, checkpoints, raw responses, local tools.
+/data/
+/artifacts/
+/runs/
+/models/
+/private/
+/bin/
+/.venv/
+__pycache__/
+.pytest_cache/

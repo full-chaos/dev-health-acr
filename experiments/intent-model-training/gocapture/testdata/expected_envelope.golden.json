@@ -1,0 +1,36 @@
+{
+ "schema": "gocapture.envelope-golden.v1",
+ "top": {
+  "response_format": {
+   "type": "json_object"
+  }
+ },
+ "messages": [
+  {
+   "content_kind": "string",
+   "keys": [
+    "content",
+    "role"
+   ],
+   "parts": null,
+   "role": "system"
+  },
+  {
+   "content_kind": "parts",
+   "keys": [
+    "content",
+    "role"
+   ],
+   "parts": [
+    {
+     "keys": [
+      "text",
+      "type"
+     ],
+     "type": "text"
+    }
+   ],
+   "role": "user"
+  }
+ ]
+}
