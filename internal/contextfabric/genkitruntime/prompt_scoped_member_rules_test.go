@@ -11,6 +11,7 @@ func TestInterpretationPromptScopedMemberRulesStatedOnce(t *testing.T) {
 	t.Parallel()
 	for _, rule := range []string{
 		`Subject expression rules. Where two rules below fit one question, the rule listed first wins:`,
+		`A count with organization wording ("in the organization", "organization-wide", "our organization") and no named parent is organization_scope`,
 		`A count of the members of a named parent ("how many pull requests did the X team merge") is children_of_scope.`,
 		`A trend of a measure over the members of a named parent, where the question names the member noun, is children_of_scope too.`,
 		`Incidents, pull requests, deployments and work items of a named team, project or repository are its members when the question lists, counts, trends or filters them.`,
@@ -51,6 +52,7 @@ func TestInterpretationPromptDropsTheUnorderedCountSentence(t *testing.T) {
 	t.Parallel()
 	for _, gone := range []string{
 		"Subject expression rules:\n",
+		`"our organization") is organization_scope`,
 		"A count of the members of a named parent is children_of_scope too.",
 	} {
 		if strings.Contains(interpretationSystemPrompt, gone) {

@@ -13,7 +13,7 @@ import (
 // interpretationSubjectExpressionRules decides the cases where two
 // subject_expression kinds seem to fit one question.
 const interpretationSubjectExpressionRules = `Subject expression rules. Where two rules below fit one question, the rule listed first wins:
-- A count with organization wording ("in the organization", "organization-wide", "our organization") is organization_scope with member_kind set to the counted kind; the organization is the scope bound, not the counted subject. A count with no organization wording and no named parent is discovered_kind. Do not swap one for the other.
+- A count with organization wording ("in the organization", "organization-wide", "our organization") and no named parent is organization_scope with member_kind set to the counted kind; the organization is the scope bound, not the counted subject. A count with no organization wording and no named parent is discovered_kind. Do not swap one for the other.
 - A count of the members of a named parent ("how many pull requests did the X team merge") is children_of_scope. A trend of a measure over the members of a named parent, where the question names the member noun, is children_of_scope too.
 - A share or amount of one named subject's members (what fraction of a named project's work items are completed) is named_subject with the goal assess_state. Never make it children_of_scope, and never a count over the members of the named subject.
 - "who owns repository X" is children_of_scope, not named_subject: the repository is the anchor and member_kind is team.

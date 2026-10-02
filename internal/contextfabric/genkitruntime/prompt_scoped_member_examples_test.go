@@ -30,8 +30,9 @@ var scopedMemberExampleFrames = map[string]struct {
 	"Which of the Vesper team's projects are open?":                                           {`["rank_or_survey"]`, "current"},
 }
 
-// The frame gate refuses these two examples today: a work-item member with
-// a qualifier has no serving arm. Every other example passes the gate.
+// DecideFrameGate refuses these two examples and passes every other one.
+// It is the gate before the work-item arm that the engine applies after it;
+// that arm admits no work-item frame with a qualifier, so both stay refused.
 var scopedMemberExamplesRefusedByTheGate = map[string]bool{
 	"List the work items assigned to the Vesper team.":           true,
 	"Which Brackwater project work items are still in progress?": true,
