@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -105,7 +106,15 @@ func TestDeploymentCohortEngineDiscoversOnlyUnderARepositoryAnchor(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
-			result, _ := engine.Investigate(context.Background(), storage.Principal{OrgID: "org-1"}, validInvestigationRequestWithConfirmedWindow())
+			result, investigateErr := engine.Investigate(context.Background(), storage.Principal{OrgID: "org-1"}, validInvestigationRequestWithConfirmedWindow())
+			if tc.wantDiscover == 0 {
+				if investigateErr != nil {
+					t.Fatalf("a refused anchor must end on a clean terminal refusal, got error %v", investigateErr)
+				}
+				if result.RefusalBasis != contractsv1.ContextFabricRefusalBasisMemberKindUnservable {
+					t.Fatalf("refusal basis = %q, want member_kind_unservable", result.RefusalBasis)
+				}
+			}
 			if graph.discoverCalls != tc.wantDiscover {
 				t.Fatalf("discover calls = %d, want %d", graph.discoverCalls, tc.wantDiscover)
 			}

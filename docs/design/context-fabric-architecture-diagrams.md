@@ -2375,8 +2375,12 @@ for `children_of_scope` and refuses it for `discovered_kind`, `grouped_members`
 and a counted `organization_scope`. After anchor resolution the engine refuses
 a deployment cohort unless exactly one repository is committed and the
 interpretation declared no other anchor kind; the cohort then asks for the
-per-deployment facts (`cohortFactRequirements`), never the repository or team
-rollups.
+per-deployment facts (`cohortFactRequirements`). The deployments requirement
+applies to every investigation subject, so the committed anchor repository's
+own deployments rollup is read beside them; a deployment and its repository
+carry the same repository grant (`repoAuthorization`), so the rollup reveals
+nothing the cohort list does not. The repository and team cohorts do not ask
+for the rollups.
 
 The FOURTH reason is a runtime fact nobody can decide at derivation time: a
 perfectly servable kind whose search retains no members. `DiscoveredCohort`
