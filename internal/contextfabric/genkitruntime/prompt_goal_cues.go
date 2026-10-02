@@ -12,7 +12,7 @@ import (
 // interpretationGoalCueRules states which goals a question's wording takes.
 // The temporal consequences of these goals live in interpretationTemporalRules.
 const interpretationGoalCueRules = `Goal cues:
-- What changed, how X is different and whether X improved, asked with no "why", are assess_state.
+- An open "what changed", "how is X different" or "has X improved", asked with no "why" and naming no measure to follow over a span, is assess_state. When the question names one measure and a span, the movement cue below wins.
 - explain_change needs an explicit "why" about a movement that the question, or the turn it refers to, states (slowed, slower than last month, rose, fell, gone up, dropped).
 - A "why" about a present condition (stuck, blocked, behind, slow, struggling) is explain_drivers. When a ranking and a "why" share one condition (a ranking by "furthest behind" that also asks why), the ranked condition is a state: rank_or_survey and explain_drivers.
 - A ranking by how much something improved or dropped compared with before, with no "why": rank_or_survey.
