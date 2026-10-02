@@ -79,7 +79,7 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// DefaultInterpretationPromptVersion's own doc comment.
 			// v15 -> v16: the fact-kind glossary and the word-to-kind
 			// fact_requirements rules. See the constant's own doc comment.
-			digest: "cf98876d2819a29a79a4c7e71ecb070fb986bf5c397ddb5a8336df49cf7fc091",
+			digest: "a189f5be82bdffef703063edf984f3872a96a2a00e84a2267ec21680cdac4520",
 		},
 		{
 			name:    "synthesis system prompt",

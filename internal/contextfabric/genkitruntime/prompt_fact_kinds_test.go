@@ -59,6 +59,7 @@ func TestInterpretationPromptWordToKindRules(t *testing.T) {
 		`A counted noun that is itself a kind`,
 		`An output measure with no kind word`,
 		"Never list evidence.",
+		`A repository "failure rate": continuous_integration, except "change failure rate", which is metrics and takes precedence over the failure-rate rule.`,
 	} {
 		if !strings.Contains(interpretationSystemPrompt, rule) {
 			t.Errorf("rendered prompt lacks the word-to-kind rule %q", rule)

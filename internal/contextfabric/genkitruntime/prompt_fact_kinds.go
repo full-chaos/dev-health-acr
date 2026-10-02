@@ -47,7 +47,7 @@ const interpretationFactRequirementRules = `fact_requirements rules: list the ki
 - A closing verb on work items within a window ("closed last week"): actual_completion.
 - "on track", "on schedule", "behind", "delayed", "miss targets": actual_completion, status.
 - "on-call load", "operational load": incidents. The word "load" never names workload.
-- "code ownership risk" named: metrics. "maintenance attention": investment. "security risk": health. "build health": continuous_integration. "release reliability": deployments, incidents. A repository "failure rate": continuous_integration.
+- "code ownership risk" named: metrics. "maintenance attention": investment. "security risk": health. "build health": continuous_integration. "release reliability": deployments, incidents. A repository "failure rate": continuous_integration, except "change failure rate", which is metrics and takes precedence over the failure-rate rule.
 - An output measure with no kind word ("most productive", "performed best on delivery"): flow.
 - A share of a named subject's members: actual_completion for completion, readiness for estimate coverage.
 - A "why?" follow-up takes the fact kinds of the topic that its referent turn names.`
