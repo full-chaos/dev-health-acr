@@ -25,8 +25,13 @@ var globalInstalls = map[string]map[string]bool{
 }
 
 // allowedGlobalInstalls are the only production call sites permitted: the
-// Genkit suppression itself, which installs exporter-less providers.
+// Genkit suppression itself, which installs exporter-less providers, and the
+// same exporter-less suppression in the offline interpretation helper of the
+// intent-model-training experiment (it calls genkit.Init itself and is not a
+// served binary).
 var allowedGlobalInstalls = []string{
+	"experiments/intent-model-training/gohelper/genkitharness.go: go.opentelemetry.io/otel.SetMeterProvider",
+	"experiments/intent-model-training/gohelper/genkitharness.go: go.opentelemetry.io/otel.SetTracerProvider",
 	"internal/contextfabric/modelprovider/provider.go: go.opentelemetry.io/otel.SetMeterProvider",
 	"internal/contextfabric/modelprovider/provider.go: go.opentelemetry.io/otel.SetTracerProvider",
 }

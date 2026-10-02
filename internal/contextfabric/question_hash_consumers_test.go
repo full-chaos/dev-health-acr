@@ -75,6 +75,8 @@ func TestQuestionHashConsumers_EveryCallSiteHasADeclaredDisposition(t *testing.T
 		// --- NOT A LIVE SERVING PATH ---
 		"Run": {"not-serving",
 			"panel-harness manifest field, written for offline replay provenance; nothing is retrieved or inherited by it (internal/panelharness)"},
+		"interpretSeed": {"not-serving",
+			"offline capture harness: it reproduces the decoding seed production derives for a draw, to prove a recorded wire request; nothing is retrieved or inherited by it (experiments/intent-model-training/gocapture)"},
 	}
 
 	calls := questionHashCallSites(t, moduleRoot(t))
