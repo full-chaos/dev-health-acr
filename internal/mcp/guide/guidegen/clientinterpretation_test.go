@@ -72,8 +72,8 @@ func clientFlowVocabulary(t *testing.T, c ClientFlowInputs) []string {
 		CodeContractRefused, CodeInterpretationRejected, DetailsViolatedBound, "details."+c.ContractDetailsKey, "details."+DetailsViolatedBound,
 		c.ModelOutputVersion, c.PromptVersion, c.SystemSHA256,
 		c.ClientProvider+"/<your model>", c.ClientProvider+"/"+c.ClientUndeclared, c.SourceClient, c.SourceServer,
-		c.SourceField, c.IdentityField, c.ModelIdentityField, c.StatusField, c.WindowReceipts, c.ParentField,
-		"versions", "data_catalog", "find_subjects", "run_operation")
+		c.SourceField, c.IdentityField, c.ModelIdentityField, c.StatusField, c.WindowReceipts,
+		"versions", "requested_scope", "data_catalog", "find_subjects", "run_operation")
 	vocab = append(vocab, c.PromptMetaKeys...)
 	vocab = append(vocab, c.ContractFields...)
 	vocab = append(vocab, guideURIs(c)...)

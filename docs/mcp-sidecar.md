@@ -572,7 +572,7 @@ Defined in the MCP tool contract (`contracts/mcp/tools.v1.json`) as `disabled_by
 
 ## Guide resources
 
-The server also lists three read-only MCP resources. They are static, identical for every caller, and need no credential data:
+The server also lists read-only MCP resources. They are static, identical for every caller, and need no credential data:
 
 - `acr://guide/questions`: question families ACR answers, one example each, and which tool to call. Families that are declared but not reachable are marked not answerable.
 - `acr://guide/vocabulary`: subject kinds (and which can be discovered as a cohort), handle grammar with examples, evidence windows, result statuses, render kinds.

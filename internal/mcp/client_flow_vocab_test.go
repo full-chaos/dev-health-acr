@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"slices"
+	"sort"
 	"testing"
 )
 
@@ -49,5 +50,25 @@ func TestInterpretPromptResultHasTwoUserMessages(t *testing.T) {
 		if message.Role != "user" {
 			t.Errorf("message %d role = %q, want user: the guide says both messages carry the role user", i+1, message.Role)
 		}
+	}
+}
+
+func TestInterpretPromptUserPayloadHoldsOnlyTheDocumentedKeys(t *testing.T) {
+	result, err := interpretPromptResult("Is pull request 532 ready to merge?", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := messageText(t, result.Messages[1])
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(text), &payload); err != nil {
+		t.Fatal(err)
+	}
+	var keys []string
+	for key := range payload {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	if !slices.Equal(keys, []string{"question", "requested_scope", "time_context"}) || string(payload["requested_scope"]) != "{}" {
+		t.Fatalf("payload %s: the guide says question, time context and an empty requested_scope", text)
 	}
 }
