@@ -188,11 +188,8 @@ services:
   # its grants cannot cover the api login; without this step the api answers
   # "permission denied for table feature_flags".
   go-api-grants:
-    build:
-      context: ./ops
-      dockerfile: docker/go-worker.Dockerfile
-      target: operator
     image: ${DEV_HEALTH_GO_OPERATOR_IMAGE:-ghcr.io/full-chaos/dev-health-go-operator:local}
+    pull_policy: never
     restart: "no"
     command: ["migrate", "river", "--apply-and-check"]
     environment:
@@ -217,11 +214,8 @@ services:
   # scripts/e2e/compose.sh wait_go_api probes the internal listener from the
   # network instead.
   go-api:
-    build:
-      context: ./ops
-      dockerfile: docker/go-worker.Dockerfile
-      target: operator
     image: ${DEV_HEALTH_GO_OPERATOR_IMAGE:-ghcr.io/full-chaos/dev-health-go-operator:local}
+    pull_policy: never
     restart: unless-stopped
     command:
       - api

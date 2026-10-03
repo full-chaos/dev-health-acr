@@ -448,7 +448,7 @@ verify_fixture() {
 # ---------------------------------------------------------------------------
 
 record_service_readiness() {
-  local services=(postgres clickhouse valkey api acr-api acr-tls-proxy)
+  local services=(postgres clickhouse valkey go-api acr-api acr-tls-proxy)
   local service state health
   : > "$ARTIFACTS/.readiness.jsonl"
   for service in "${services[@]}"; do
