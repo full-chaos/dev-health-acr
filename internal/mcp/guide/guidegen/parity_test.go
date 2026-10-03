@@ -2,6 +2,8 @@ package guidegen
 
 import (
 	"encoding/json"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -100,9 +102,13 @@ func TestCohortServableRowsMatchRegistry(t *testing.T) {
 	if len(servable) == 0 {
 		t.Fatal("no servable cohort kinds")
 	}
+	scoped := map[string]bool{}
+	for _, kind := range contextfabric.ScopedOnlyCohortKindsForAudit() {
+		scoped[string(kind)] = true
+	}
 	vocabulary := embeddedFiles(t)[FileVocabulary]
 	rows := 0
-	for _, line := range strings.Split(vocabulary, "\n") {
+	for _, line := range strings.Split(kindTable(vocabulary), "\n") {
 		cells := strings.Split(line, "|")
 		if len(cells) < 4 || !strings.HasPrefix(strings.TrimSpace(cells[1]), "`") {
 			continue
@@ -112,7 +118,11 @@ func TestCohortServableRowsMatchRegistry(t *testing.T) {
 			continue
 		}
 		rows++
-		if got, want := strings.TrimSpace(cells[2]), yesNo(servable[kind]); got != want {
+		want := yesNo(servable[kind])
+		if scoped[kind] {
+			want = "scoped"
+		}
+		if got := strings.TrimSpace(cells[2]); got != want {
 			t.Errorf("kind %s: guide says %q, registry says %q", kind, got, want)
 		}
 	}
@@ -360,6 +370,7 @@ func TestParityDetectsRemovedRegistryEntries(t *testing.T) {
 			c.Families = slices.Clone(in.Families)
 			c.SubjectKinds = slices.Clone(in.SubjectKinds)
 			c.ServableCohortKinds = slices.Clone(in.ServableCohortKinds)
+			c.ScopedCohortKinds = slices.Clone(in.ScopedCohortKinds)
 			c.Grammars = slices.Clone(in.Grammars)
 			c.Windows = slices.Clone(in.Windows)
 			c.Statuses = slices.Clone(in.Statuses)
@@ -376,6 +387,9 @@ func TestParityDetectsRemovedRegistryEntries(t *testing.T) {
 		c = clone()
 		c.ServableCohortKinds = c.ServableCohortKinds[1:]
 		cases["cohort kind"] = c
+		c = clone()
+		c.ScopedCohortKinds = nil
+		cases["scoped cohort kind"] = c
 		c = clone()
 		c.Grammars = c.Grammars[1:]
 		cases["grammar"] = c
@@ -413,4 +427,81 @@ func TestConversationGuideTeachesBareReceiptForm(t *testing.T) {
 			t.Errorf("conversation guide lacks %q", want)
 		}
 	}
+}
+
+func TestGuideAdvertisesEveryServedCohortKind(t *testing.T) {
+	vocabulary := embeddedFiles(t)[FileVocabulary]
+	advertised := map[string]string{}
+	for _, line := range strings.Split(kindTable(vocabulary), "\n") {
+		cells := strings.Split(line, "|")
+		if len(cells) < 4 {
+			continue
+		}
+		kind := strings.Trim(strings.TrimSpace(cells[1]), "`")
+		if _, isKind := subjectKindTexts[kind]; isKind {
+			advertised[kind] = strings.TrimSpace(cells[2])
+		}
+	}
+	engine := map[string]string{}
+	for _, kind := range contextfabric.ServableCohortKindsForAudit() {
+		engine[string(kind)] = "yes"
+	}
+	scopedKinds := contextfabric.ScopedOnlyCohortKindsForAudit()
+	if len(scopedKinds) == 0 {
+		t.Fatal("no scoped-only cohort kinds; the comparison below would be vacuous")
+	}
+	for _, kind := range scopedKinds {
+		engine[string(kind)] = "scoped"
+		anchors := contextfabric.ScopedOnlyCohortAnchorKindsForAudit(kind)
+		if len(anchors) == 0 {
+			t.Fatalf("scoped-only kind %s has no anchor kind", kind)
+		}
+		for _, anchor := range anchors {
+			if !strings.Contains(vocabulary, "| `"+string(kind)+"` | ") || !strings.Contains(vocabulary, "`"+string(anchor)+"`") {
+				t.Errorf("guide does not state that %s is served under a named %s", kind, anchor)
+			}
+		}
+		if !strings.Contains(vocabulary, "member_kind_unservable") {
+			t.Errorf("guide does not state the refusal for an unservable anchor of %s", kind)
+		}
+	}
+	for _, line := range strings.Split(vocabulary, "\n") {
+		cells := strings.Split(line, "|")
+		if len(cells) < 5 || strings.TrimSpace(cells[3]) == "" || !strings.HasPrefix(strings.TrimSpace(cells[3]), "any other anchor kind") {
+			continue
+		}
+		for _, kind := range scopedKinds {
+			served := map[string]bool{}
+			for _, anchor := range contextfabric.ScopedOnlyCohortAnchorKindsForAudit(kind) {
+				served[string(anchor)] = true
+			}
+			for _, subject := range contractsv1.ContextFabricSubjectKindVocabulary() {
+				if strings.Contains(cells[3], "`"+string(subject)+"`") == served[string(subject)] {
+					t.Errorf("refused-under cell for %s: kind %s listed=%v but served=%v", kind, subject, !served[string(subject)], served[string(subject)])
+				}
+			}
+		}
+	}
+	for kind, cell := range advertised {
+		if cell == "no" {
+			delete(advertised, kind)
+		}
+	}
+	if !maps.Equal(advertised, engine) {
+		t.Fatalf("guide advertises %v, engine serves %v", advertised, engine)
+	}
+}
+
+func kindTable(vocabulary string) string {
+	start := strings.Index(vocabulary, "## Subject kinds")
+	end := strings.Index(vocabulary, "\n## ")
+	if start < 0 {
+		return ""
+	}
+	if rest := strings.Index(vocabulary[start+3:], "\n## "); rest >= 0 {
+		end = start + 3 + rest
+	} else {
+		end = len(vocabulary)
+	}
+	return vocabulary[start:end]
 }

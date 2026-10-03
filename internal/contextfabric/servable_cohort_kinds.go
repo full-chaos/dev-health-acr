@@ -121,7 +121,27 @@ func ScopedOnlyCohortKindsForAudit() []SubjectKind {
 // the discovery walk's two hops. A project has no repository edge: its nearest
 // path to a deployment is three hops, so it stays refused.
 func DeploymentCohortAnchorServable(anchor SubjectKind) bool {
-	return anchor == SubjectRepository || anchor == SubjectTeam
+	return scopedOnlyCohortAnchors[SubjectDeployment][anchor]
+}
+
+// scopedOnlyCohortAnchors names, per scoped-only kind, the committed anchor
+// kinds its members are served under. Any other anchor is refused as
+// member_kind_unservable.
+var scopedOnlyCohortAnchors = map[SubjectKind]map[SubjectKind]bool{
+	SubjectDeployment: {SubjectRepository: true, SubjectTeam: true},
+}
+
+// ScopedOnlyCohortAnchorKindsForAudit returns, sorted, the anchor kinds a
+// scoped-only kind is served under, for the guide and the audits.
+func ScopedOnlyCohortAnchorKindsForAudit(kind SubjectKind) []SubjectKind {
+	anchors := make([]SubjectKind, 0, len(scopedOnlyCohortAnchors[kind]))
+	for anchor, admitted := range scopedOnlyCohortAnchors[kind] {
+		if admitted {
+			anchors = append(anchors, anchor)
+		}
+	}
+	sort.Slice(anchors, func(i, j int) bool { return anchors[i] < anchors[j] })
+	return anchors
 }
 
 // CohortDiscoverability names WHY a subject expression can or cannot produce a
