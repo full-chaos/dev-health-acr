@@ -83,4 +83,4 @@ const interpretationFollowUpRules = `Follow-ups in a conversation:
 - A follow-up that refers back to a subject restates that subject as the first term, copied from the text of the turn that names it. Use nothing that the request does not carry.
 - A dimension that only an earlier turn names is not emitted, with one exception: a follow-up that keeps the prior turn's goal and facts and changes only the subject, adds a comparison subject, or changes only the window keeps the prior turn's dimensions. A window-only follow-up also keeps the prior turn's emphasis. A follow-up that changes the goal does not carry the dimension.
 - A "why?" follow-up takes the fact kinds of the topic that its referent turn names.
-- A follow-up about the same set as the prior turn restates that set by its definition: the same anchor_terms, member_kind and member_qualifier.`
+- A follow-up about the same set as the prior turn restates that set by its definition: the same anchor_terms, member_kind, member_qualifier and member_qualifier_value.`

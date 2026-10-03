@@ -247,7 +247,12 @@ const (
 	// the prompt gains worked examples for the members of a named parent.
 	// A change to what the model is told, so the version bumps (same
 	// standing rule stated at v9 above).
-	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v20"
+	// v20 -> v21: the prompt gains member_qualifier_value, the state or
+	// assignee the question names, with the closed work_item status set and
+	// the words that map onto it, and the worked examples carry the value.
+	// A change to what the model is told, so the version bumps (same
+	// standing rule stated at v9 above).
+	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v21"
 	// DefaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
 	// review round: v2 added claimed_facts for value-level closure; v3
 	// closes the driver category vocabulary (a fixed 16-value set, no
@@ -498,7 +503,11 @@ const (
 	// vocabulary (a NARROWING of the decoded output space: a v6-era model
 	// could emit a kind the validator then rejected, a v7 model cannot), so
 	// a stored result must say which contract it was produced under.
-	DefaultSchemaVersion    = "context-fabric-model-output.v7"
+	// v8: the scoped member and scoped operand outputs gained one optional
+	// string field, member_qualifier_value (widening, same reasoning as v3/v4
+	// above -- a v7-era model was never offered this field and could not have
+	// emitted it).
+	DefaultSchemaVersion    = "context-fabric-model-output.v8"
 	defaultEvaluatorVersion = "context-fabric-grounding.v1"
 	// DefaultPhrasingPromptVersion is v1 (CHAOS-4171 PR2): the SECOND
 	// bounded model call's own prompt, versioned independently of
@@ -1437,11 +1446,12 @@ type interpretationFamilyCapture struct {
 // new way to fail a real investigation. The vocabularies are stated in the
 // prompt and enforced by the sanitizer.
 type subjectOperandOutput struct {
-	Kind            string   `json:"kind,omitempty"`
-	Terms           []string `json:"terms,omitempty"`
-	AnchorTerms     []string `json:"anchor_terms,omitempty"`
-	MemberKind      string   `json:"member_kind,omitempty"`
-	MemberQualifier string   `json:"member_qualifier,omitempty"`
+	Kind                 string   `json:"kind,omitempty"`
+	Terms                []string `json:"terms,omitempty"`
+	AnchorTerms          []string `json:"anchor_terms,omitempty"`
+	MemberKind           string   `json:"member_kind,omitempty"`
+	MemberQualifier      string   `json:"member_qualifier,omitempty"`
+	MemberQualifierValue string   `json:"member_qualifier_value,omitempty"`
 }
 
 func (o *subjectOperandOutput) UnmarshalJSON(data []byte) error {
@@ -1458,13 +1468,14 @@ func (o *subjectOperandOutput) UnmarshalJSON(data []byte) error {
 }
 
 type subjectExpressionOutput struct {
-	Kind            string                 `json:"kind,omitempty"`
-	Terms           []string               `json:"terms,omitempty"`
-	AnchorTerms     []string               `json:"anchor_terms,omitempty"`
-	MemberKind      string                 `json:"member_kind,omitempty"`
-	MemberQualifier string                 `json:"member_qualifier,omitempty"`
-	GroupKind       string                 `json:"group_kind,omitempty"`
-	Operands        []subjectOperandOutput `json:"operands,omitempty"`
+	Kind                 string                 `json:"kind,omitempty"`
+	Terms                []string               `json:"terms,omitempty"`
+	AnchorTerms          []string               `json:"anchor_terms,omitempty"`
+	MemberKind           string                 `json:"member_kind,omitempty"`
+	MemberQualifier      string                 `json:"member_qualifier,omitempty"`
+	MemberQualifierValue string                 `json:"member_qualifier_value,omitempty"`
+	GroupKind            string                 `json:"group_kind,omitempty"`
+	Operands             []subjectOperandOutput `json:"operands,omitempty"`
 }
 
 func (o *subjectExpressionOutput) UnmarshalJSON(data []byte) error {
@@ -1503,8 +1514,8 @@ func rejectExplicitNullMemberQualifier(data []byte) error {
 		if err := decoder.Decode(&value); err != nil {
 			return err
 		}
-		if strings.EqualFold(key, "member_qualifier") && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
-			return errors.New("member_qualifier must be a string when present")
+		if (strings.EqualFold(key, "member_qualifier") || strings.EqualFold(key, "member_qualifier_value")) && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return errors.New("member_qualifier and member_qualifier_value must be strings when present")
 		}
 	}
 	if _, err := decoder.Token(); err != nil {
@@ -1601,6 +1612,10 @@ func sanitizeFrameOutput(output interpretationOutput) interpretationFrameCapture
 	if memberQualifierUnrecognized {
 		capture.MemberQualifierUnrecognized = true
 	}
+	memberQualifierValue, memberQualifierValueUnrecognized := contextfabric.SanitizeMemberQualifierValue(expression.MemberQualifierValue)
+	if memberQualifierValueUnrecognized {
+		capture.MemberQualifierUnrecognized = true
+	}
 	groupKind, groupKindUnrecognized := contextfabric.SanitizeSubjectKind(expression.GroupKind)
 	if groupKindUnrecognized {
 		capture.GroupKindUnrecognized = true
@@ -1617,7 +1632,7 @@ func sanitizeFrameOutput(output interpretationOutput) interpretationFrameCapture
 	case contextfabric.SubjectExpressionDiscoveredKind:
 		capture.Frame.SubjectExpression.Discovered = &contextfabric.DiscoveredSetExpression{MemberKind: memberKind}
 	case contextfabric.SubjectExpressionChildrenOfScope:
-		capture.Frame.SubjectExpression.Scoped = &contextfabric.ScopedSetExpression{AnchorTerms: anchors, MemberKind: memberKind, MemberQualifier: memberQualifier}
+		capture.Frame.SubjectExpression.Scoped = &contextfabric.ScopedSetExpression{AnchorTerms: anchors, MemberKind: memberKind, MemberQualifier: memberQualifier, MemberQualifierValue: memberQualifierValue}
 	case contextfabric.SubjectExpressionGroupedMembers:
 		capture.Frame.SubjectExpression.Grouped = &contextfabric.GroupedSetExpression{GroupKind: groupKind, MemberKind: memberKind}
 	case contextfabric.SubjectExpressionOrganizationScope:
@@ -1667,11 +1682,13 @@ func sanitizeOperandOutput(raw subjectOperandOutput) (contextfabric.SubjectOpera
 	anchors, anchorTruncated := contextfabric.SanitizeSubjectTerms(raw.AnchorTerms)
 	memberKind, memberKindUnrecognized := contextfabric.SanitizeSubjectKind(raw.MemberKind)
 	memberQualifier, memberQualifierUnrecognized := contextfabric.SanitizeMemberQualifier(raw.MemberQualifier)
+	memberQualifierValue, memberQualifierValueUnrecognized := contextfabric.SanitizeMemberQualifierValue(raw.MemberQualifierValue)
+	memberQualifierUnrecognized = memberQualifierUnrecognized || memberQualifierValueUnrecognized
 	switch operand.Kind {
 	case contextfabric.SubjectOperandNamed:
 		operand.Named = &contextfabric.NamedSubjectExpression{Terms: terms}
 	case contextfabric.SubjectOperandScoped:
-		operand.Scoped = &contextfabric.ScopedSetExpression{AnchorTerms: anchors, MemberKind: memberKind, MemberQualifier: memberQualifier}
+		operand.Scoped = &contextfabric.ScopedSetExpression{AnchorTerms: anchors, MemberKind: memberKind, MemberQualifier: memberQualifier, MemberQualifierValue: memberQualifierValue}
 	}
 	return operand, truncated + anchorTruncated, memberKindUnrecognized, memberQualifierUnrecognized
 }

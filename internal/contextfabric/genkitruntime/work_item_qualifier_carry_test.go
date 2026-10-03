@@ -258,3 +258,95 @@ func rawInterpretationOutputWithMemberQualifier(t *testing.T, qualifier string) 
 	}
 	return rawOutput
 }
+
+func TestParseInterpretationOutputSignalsCarriesMemberQualifierValue(t *testing.T) {
+	for _, c := range []struct {
+		name         string
+		raw          string
+		want         string
+		unrecognized bool
+	}{
+		{"closed value", "in_progress", "in_progress", false},
+		{"padded value is trimmed", "  blocked ", "blocked", false},
+		{"blank value is flagged, not dropped silently", "   ", "", true},
+		{"overlong value is flagged, not truncated", strings.Repeat("x", contextfabric.MemberQualifierValueMaxRunes+1), "", true},
+	} {
+		output := validInterpretationOutput()
+		output.QuestionFrame = &questionFrameOutput{
+			Goals: []string{"assess_state"},
+			SubjectExpression: &subjectExpressionOutput{
+				Kind: "children_of_scope", AnchorTerms: []string{"Project Alpha"}, MemberKind: "work_item",
+				MemberQualifier: "status", MemberQualifierValue: c.raw,
+			},
+			Temporal: "current",
+		}
+		rawOutput, err := json.Marshal(output)
+		if err != nil {
+			t.Fatalf("%s: marshal: %v", c.name, err)
+		}
+		_, capture, err := ParseInterpretationOutputSignals(rawOutput, contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent})
+		if err != nil {
+			t.Fatalf("%s: ParseInterpretationOutputSignals: %v", c.name, err)
+		}
+		scoped := capture.Frame.Frame.SubjectExpression.Scoped
+		if scoped == nil || scoped.MemberQualifierValue != c.want || scoped.MemberQualifier != contextfabric.MemberQualifierStatus {
+			t.Fatalf("%s: scoped = %+v, want qualifier status and value %q", c.name, scoped, c.want)
+		}
+		if capture.Frame.MemberQualifierUnrecognized != c.unrecognized {
+			t.Fatalf("%s: MemberQualifierUnrecognized = %v, want %v", c.name, capture.Frame.MemberQualifierUnrecognized, c.unrecognized)
+		}
+	}
+}
+
+func TestParseInterpretationOutputSignalsCarriesScopedOperandQualifierValue(t *testing.T) {
+	output := validInterpretationOutput()
+	output.QuestionFrame = &questionFrameOutput{
+		Goals: []string{"compare"},
+		SubjectExpression: &subjectExpressionOutput{
+			Kind: "explicit_set",
+			Operands: []subjectOperandOutput{{
+				Kind: "children_of_scope", AnchorTerms: []string{"Project Alpha"}, MemberKind: "project",
+				MemberQualifier: "status", MemberQualifierValue: "open",
+			}},
+		},
+		Temporal: "current",
+	}
+	rawOutput, err := json.Marshal(output)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	_, capture, err := ParseInterpretationOutputSignals(rawOutput, contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent})
+	if err != nil {
+		t.Fatalf("ParseInterpretationOutputSignals: %v", err)
+	}
+	operand := capture.Frame.Frame.SubjectExpression.Explicit.Operands[0]
+	if operand.Scoped == nil || operand.Scoped.MemberQualifierValue != "open" {
+		t.Fatalf("operand = %+v, want value open", operand.Scoped)
+	}
+}
+
+func TestParseInterpretationOutputRejectsExplicitNullMemberQualifierValue(t *testing.T) {
+	output := validInterpretationOutput()
+	output.QuestionFrame = &questionFrameOutput{
+		Goals: []string{"assess_state"},
+		SubjectExpression: &subjectExpressionOutput{
+			Kind: "children_of_scope", AnchorTerms: []string{"Project Alpha"}, MemberKind: "work_item",
+			MemberQualifier: "status", MemberQualifierValue: "done",
+		},
+		Temporal: "current",
+	}
+	valid, err := json.Marshal(output)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if _, _, err := ParseInterpretationOutputSignals(valid, contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}); err != nil {
+		t.Fatalf("control (a string value) was refused: %v", err)
+	}
+	withNull := strings.Replace(string(valid), `"member_qualifier_value":"done"`, `"member_qualifier_value":null`, 1)
+	if withNull == string(valid) {
+		t.Fatalf("fixture carries no member_qualifier_value: %s", valid)
+	}
+	if _, _, err := ParseInterpretationOutputSignals([]byte(withNull), contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}); err == nil {
+		t.Fatal("an explicit null member_qualifier_value was accepted")
+	}
+}

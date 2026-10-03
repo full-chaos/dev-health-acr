@@ -3,6 +3,8 @@ package contextfabric
 import (
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -1068,6 +1070,91 @@ func SanitizeMemberQualifier(raw string) (qualifier MemberQualifier, unrecognize
 		}
 	}
 	return MemberQualifierUnrecognized, true
+}
+
+// MemberQualifierValueMaxRunes bounds a qualifier value. A longer value is
+// refused, never truncated: a truncated state word or name is a different
+// value.
+const MemberQualifierValueMaxRunes = 64
+
+func memberQualifierValueText(value string) bool {
+	if value == "" || strings.TrimSpace(value) != value || utf8.RuneCountInString(value) > MemberQualifierValueMaxRunes || !utf8.ValidString(value) {
+		return false
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// MemberStatusWordMaxRunes bounds a state word for a member kind that has no
+// closed status set.
+const MemberStatusWordMaxRunes = 32
+
+// memberStatusWordText reports whether value is a state word as the prompt
+// asks for it: lowercase letters, digits, underscore or hyphen, one or two
+// words, so a sentence or a name is not accepted as a state.
+func memberStatusWordText(value string) bool {
+	if utf8.RuneCountInString(value) > MemberStatusWordMaxRunes {
+		return false
+	}
+	words := strings.Split(value, " ")
+	if len(words) > 2 {
+		return false
+	}
+	for _, word := range words {
+		if word == "" {
+			return false
+		}
+		for _, r := range word {
+			if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_' || r == '-') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// ValidMemberQualifierValue reports whether value is valid beside qualifier
+// on a scoped set of memberKind. Empty is the valid absence. A value needs a
+// recognized qualifier. For work_item members with a status qualifier the
+// value is one of WorkItemStatusVocabulary, the closed set Dev Health writes
+// into work_items.status; acr holds no synonyms, so the interpretation
+// prompt maps the question's word onto the set.
+func ValidMemberQualifierValue(memberKind SubjectKind, qualifier MemberQualifier, value string) bool {
+	if value == "" {
+		return true
+	}
+	if qualifier != MemberQualifierStatus && qualifier != MemberQualifierAssignee {
+		return false
+	}
+	if !memberQualifierValueText(value) {
+		return false
+	}
+	if memberKind == SubjectWorkItem && qualifier == MemberQualifierStatus {
+		return InWorkItemStatusVocabulary(value)
+	}
+	if qualifier == MemberQualifierStatus {
+		return memberStatusWordText(value)
+	}
+	return true
+}
+
+// SanitizeMemberQualifierValue closes a raw qualifier value. A value that is
+// not empty but is not a usable value (blank, overlong, control characters)
+// is reported as unrecognized and returned empty; the qualifier stays
+// present, so a later gate never reads it as an unqualified request.
+func SanitizeMemberQualifierValue(raw string) (value string, unrecognized bool) {
+	if raw == "" {
+		return "", false
+	}
+	trimmed := strings.TrimSpace(raw)
+	if !memberQualifierValueText(trimmed) {
+		return "", true
+	}
+	return trimmed, false
 }
 
 // sortedObligations returns a copy in vocabulary order. Obligation sets

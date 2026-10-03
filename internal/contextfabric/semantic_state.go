@@ -1008,6 +1008,9 @@ func validateSemanticFrameBounds(frame QuestionFrame) error {
 		if !ValidMemberQualifier(expression.Scoped.MemberQualifier) {
 			return fmt.Errorf("scoped member_qualifier %q is not a vocabulary member", expression.Scoped.MemberQualifier)
 		}
+		if !ValidMemberQualifierValue(expression.Scoped.MemberKind, expression.Scoped.MemberQualifier, expression.Scoped.MemberQualifierValue) {
+			return fmt.Errorf("scoped member_qualifier_value is not valid beside its qualifier and member kind")
+		}
 	}
 	if expression.Explicit != nil {
 		if len(expression.Explicit.Operands) > SemanticStateMaxOperands {
@@ -1025,6 +1028,9 @@ func validateSemanticFrameBounds(frame QuestionFrame) error {
 				}
 				if !ValidMemberQualifier(operand.Scoped.MemberQualifier) {
 					return fmt.Errorf("operand scoped member_qualifier %q is not a vocabulary member", operand.Scoped.MemberQualifier)
+				}
+				if !ValidMemberQualifierValue(operand.Scoped.MemberKind, operand.Scoped.MemberQualifier, operand.Scoped.MemberQualifierValue) {
+					return fmt.Errorf("operand scoped member_qualifier_value is not valid beside its qualifier and member kind")
 				}
 			}
 		}
