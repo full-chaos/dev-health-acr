@@ -2,6 +2,7 @@ package guidegen
 
 import (
 	"encoding/json"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"maps"
 	"os"
 	"path/filepath"
@@ -462,6 +463,23 @@ func TestGuideAdvertisesEveryServedCohortKind(t *testing.T) {
 		}
 		if !strings.Contains(vocabulary, "member_kind_unservable") {
 			t.Errorf("guide does not state the refusal for an unservable anchor of %s", kind)
+		}
+	}
+	for _, line := range strings.Split(vocabulary, "\n") {
+		cells := strings.Split(line, "|")
+		if len(cells) < 5 || strings.TrimSpace(cells[3]) == "" || !strings.HasPrefix(strings.TrimSpace(cells[3]), "any other anchor kind") {
+			continue
+		}
+		for _, kind := range scopedKinds {
+			served := map[string]bool{}
+			for _, anchor := range contextfabric.ScopedOnlyCohortAnchorKindsForAudit(kind) {
+				served[string(anchor)] = true
+			}
+			for _, subject := range contractsv1.ContextFabricSubjectKindVocabulary() {
+				if strings.Contains(cells[3], "`"+string(subject)+"`") == served[string(subject)] {
+					t.Errorf("refused-under cell for %s: kind %s listed=%v but served=%v", kind, subject, !served[string(subject)], served[string(subject)])
+				}
+			}
 		}
 	}
 	for kind, cell := range advertised {

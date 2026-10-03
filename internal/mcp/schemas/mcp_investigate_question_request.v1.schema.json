@@ -197,7 +197,7 @@
     },
     "expected_kinds": {
       "type": "array",
-      "description": "Optional hint about what kinds of subject the question is about, for example [\"team\"] or [\"pull_request\"]. Use it when the question is ambiguous about kind. It states your intent, not a fact about any subject. Every value in the SubjectKind list is accepted, but only team, project, repository, incident and pull_request can be discovered as a cohort (a \"which ...\" question over many); other kinds are answered when you name the specific subject.",
+      "description": "Optional hint about what kinds of subject the question is about, for example [\"team\"] or [\"pull_request\"]. Use it when the question is ambiguous about kind. It states your intent, not a fact about any subject. Every value in the SubjectKind list is accepted, but only team, project, repository, incident and pull_request can be discovered as a cohort (a \"which ...\" question over many), and deployment only as the members of a named repository or team; other kinds are answered when you name the specific subject.",
       "items": {
         "$ref": "#/$defs/SubjectKind"
       },
@@ -502,7 +502,7 @@
       ]
     },
     "SubjectKind": {
-      "description": "The kinds of subject the service knows: organization, team, project, repository, work_item (a ticket or issue), pull_request, deployment, incident, document, decision, episode (a recorded agent run), metric, pull_request_review, ci_pipeline_run and work_item_ref (a work item known only by a reference). All are accepted on the wire; only team, project, repository, incident and pull_request can be discovered as a cohort. work_item_ref is never answered on its own.",
+      "description": "The kinds of subject the service knows: organization, team, project, repository, work_item (a ticket or issue), pull_request, deployment, incident, document, decision, episode (a recorded agent run), metric, pull_request_review, ci_pipeline_run and work_item_ref (a work item known only by a reference). All are accepted on the wire; only team, project, repository, incident and pull_request can be discovered as a cohort, and deployment only as the members of a named repository or team. work_item_ref is never answered on its own.",
       "type": "string",
       "enum": [
         "organization",

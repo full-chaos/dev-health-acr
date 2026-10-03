@@ -197,7 +197,7 @@ func buildVocabulary(in Inputs) (string, error) {
 			}
 			var refused []string
 			for _, kind := range in.SubjectKinds {
-				if !served[kind] && kind != row.Kind {
+				if !served[kind] {
 					refused = append(refused, kind)
 				}
 			}
