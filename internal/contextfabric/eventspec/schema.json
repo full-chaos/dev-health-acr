@@ -2295,6 +2295,7 @@
           "member_kind_unset",
           "member_kind_invalid",
           "member_qualifier_invalid",
+          "member_qualifier_value_invalid",
           "group_kind_unset",
           "group_kind_invalid",
           "group_kind_equals_member_kind",
@@ -2316,7 +2317,8 @@
           "operand_no_terms",
           "operand_no_anchor_terms",
           "operand_member_kind_invalid",
-          "operand_member_qualifier_invalid"
+          "operand_member_qualifier_invalid",
+          "operand_member_qualifier_value_invalid"
         ]
       },
       {

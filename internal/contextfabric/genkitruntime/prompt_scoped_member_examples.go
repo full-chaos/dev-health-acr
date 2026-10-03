@@ -35,7 +35,7 @@ var interpretationScopedMemberExamples = []scopedMemberExample{
 	},
 	{
 		Question:   "What explains the many open pull requests of the Marram team?",
-		Expression: `{"kind":"children_of_scope","anchor_terms":["Marram"],"member_kind":"pull_request","member_qualifier":"status"}`,
+		Expression: `{"kind":"children_of_scope","anchor_terms":["Marram"],"member_kind":"pull_request","member_qualifier":"status","member_qualifier_value":"open"}`,
 		AnchorKind: "team",
 		Note:       "the members are filtered by a state",
 	},
@@ -46,7 +46,7 @@ var interpretationScopedMemberExamples = []scopedMemberExample{
 	},
 	{
 		Question:   "Show the Marram team's projects that are blocked.",
-		Expression: `{"kind":"children_of_scope","anchor_terms":["Marram"],"member_kind":"project","member_qualifier":"status"}`,
+		Expression: `{"kind":"children_of_scope","anchor_terms":["Marram"],"member_kind":"project","member_qualifier":"status","member_qualifier_value":"blocked"}`,
 		AnchorKind: "team",
 		Note:       "blocked is a state",
 	},
@@ -64,28 +64,28 @@ var interpretationScopedMemberExamples = []scopedMemberExample{
 	},
 	{
 		Question:   "In the past month, how many pull requests has the Vesper team merged?",
-		Expression: `{"kind":"children_of_scope","anchor_terms":["Vesper"],"member_kind":"pull_request","member_qualifier":"status"}`,
+		Expression: `{"kind":"children_of_scope","anchor_terms":["Vesper"],"member_kind":"pull_request","member_qualifier":"status","member_qualifier_value":"merged"}`,
 		AnchorKind: "team",
 		Note:       "pull requests are counted; merged over a window is a state",
 	},
 	{
 		Question:   "List the work items assigned to the Vesper team.",
-		Expression: `{"kind":"children_of_scope","anchor_terms":["Vesper"],"member_kind":"work_item","member_qualifier":"assignee"}`,
+		Expression: `{"kind":"children_of_scope","anchor_terms":["Vesper"],"member_kind":"work_item","member_qualifier":"assignee","member_qualifier_value":"Vesper"}`,
 		AnchorKind: "team",
 	},
 	{
 		Question:   "Which Brackwater project work items are still in progress?",
-		Expression: `{"kind":"children_of_scope","anchor_terms":["Brackwater"],"member_kind":"work_item","member_qualifier":"status"}`,
+		Expression: `{"kind":"children_of_scope","anchor_terms":["Brackwater"],"member_kind":"work_item","member_qualifier":"status","member_qualifier_value":"in_progress"}`,
 		AnchorKind: "project",
 	},
 	{
 		Question:   "Compare the open projects of the Marram team with the open projects of the Vesper team.",
-		Expression: `{"kind":"explicit_set","operands":[{"kind":"children_of_scope","anchor_terms":["Marram"],"member_kind":"project","member_qualifier":"status"},{"kind":"children_of_scope","anchor_terms":["Vesper"],"member_kind":"project","member_qualifier":"status"}]}`,
+		Expression: `{"kind":"explicit_set","operands":[{"kind":"children_of_scope","anchor_terms":["Marram"],"member_kind":"project","member_qualifier":"status","member_qualifier_value":"open"},{"kind":"children_of_scope","anchor_terms":["Vesper"],"member_kind":"project","member_qualifier":"status","member_qualifier_value":"open"}]}`,
 		Note:       "one operand for each parent, never one children_of_scope with two anchor terms; no scope anchor",
 	},
 	{
 		Question:   "Which of the Vesper team's projects are open?",
-		Expression: `{"kind":"children_of_scope","anchor_terms":["Vesper"],"member_kind":"project","member_qualifier":"status"}`,
+		Expression: `{"kind":"children_of_scope","anchor_terms":["Vesper"],"member_kind":"project","member_qualifier":"status","member_qualifier_value":"open"}`,
 		AnchorKind: "team",
 	},
 }

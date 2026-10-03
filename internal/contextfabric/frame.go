@@ -330,6 +330,11 @@ type ScopedSetExpression struct {
 	// membership; the unrecognized marker is preserved as present so a later
 	// admission gate cannot treat an unknown model value as unqualified.
 	MemberQualifier MemberQualifier `json:"member_qualifier,omitempty"`
+	// MemberQualifierValue is the state word or the assignee the question
+	// names, typed and validated by invariant I5. Empty means the question
+	// did not state one. It is a value, unlike AnchorTerms: for a work_item
+	// member with a status qualifier it is one of WorkItemStatusVocabulary.
+	MemberQualifierValue string `json:"member_qualifier_value,omitempty"`
 }
 
 // GroupedSetExpression asks for members of one kind grouped by another.

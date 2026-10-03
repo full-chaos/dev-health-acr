@@ -355,33 +355,38 @@ const (
 	FrameFailureMemberKindUnset        FrameFailureDetail = "member_kind_unset"
 	FrameFailureMemberKindInvalid      FrameFailureDetail = "member_kind_invalid"
 	FrameFailureMemberQualifierInvalid FrameFailureDetail = "member_qualifier_invalid"
-	FrameFailureGroupKindUnset         FrameFailureDetail = "group_kind_unset"
-	FrameFailureGroupKindInvalid       FrameFailureDetail = "group_kind_invalid"
-	FrameFailureGroupEqualsMember      FrameFailureDetail = "group_kind_equals_member_kind"
+	// FrameFailureMemberQualifierValueInvalid: a qualifier value without a
+	// recognized qualifier, an unusable value, or (work_item status) a value
+	// outside WorkItemStatusVocabulary.
+	FrameFailureMemberQualifierValueInvalid FrameFailureDetail = "member_qualifier_value_invalid"
+	FrameFailureGroupKindUnset              FrameFailureDetail = "group_kind_unset"
+	FrameFailureGroupKindInvalid            FrameFailureDetail = "group_kind_invalid"
+	FrameFailureGroupEqualsMember           FrameFailureDetail = "group_kind_equals_member_kind"
 	// FrameFailureGroupAxisNotExpressed: the interpretation's own group hint
 	// asked for a grouping and the frame it proposed expresses no group
 	// axis. Decided in resolveFrame, which holds both halves of the same
 	// model call; ValidateFrame sees only the frame. See
 	// requestedGroupAxisDropped.
-	FrameFailureGroupAxisNotExpressed  FrameFailureDetail = "requested_group_axis_not_expressed"
-	FrameFailureCompareNeedsSet        FrameFailureDetail = "compare_requires_explicit_set"
-	FrameFailureTrendNeedsTemporal     FrameFailureDetail = "trend_requires_non_current_temporal"
-	FrameFailureCountNeedsSetKind      FrameFailureDetail = "count_requires_set_valued_kind"
-	FrameFailureOrgCountNeedsMember    FrameFailureDetail = "org_count_requires_member_kind"
-	FrameFailureNoGoals                FrameFailureDetail = "goal_set_empty"
-	FrameFailureGoalOutsideVocabulary  FrameFailureDetail = "goal_outside_vocabulary"
-	FrameFailureNoObligations          FrameFailureDetail = "obligation_set_empty"
-	FrameFailureObligationInvalid      FrameFailureDetail = "obligation_outside_vocabulary"
-	FrameFailureEmphasisNeedsRanking   FrameFailureDetail = "emphasis_requires_ranking_obligation"
-	FrameFailureAxisUndischarged       FrameFailureDetail = "axis_undischarged"
-	FrameFailureOperandKindUnset       FrameFailureDetail = "operand_kind_unset"
-	FrameFailureOperandNoVariant       FrameFailureDetail = "operand_no_variant_set"
-	FrameFailureOperandMultiVariant    FrameFailureDetail = "operand_multiple_variants_set"
-	FrameFailureOperandKindMismatch    FrameFailureDetail = "operand_disagrees_with_kind"
-	FrameFailureOperandNoTerms         FrameFailureDetail = "operand_no_terms"
-	FrameFailureOperandNoAnchor        FrameFailureDetail = "operand_no_anchor_terms"
-	FrameFailureOperandMemberKind      FrameFailureDetail = "operand_member_kind_invalid"
-	FrameFailureOperandMemberQualifier FrameFailureDetail = "operand_member_qualifier_invalid"
+	FrameFailureGroupAxisNotExpressed       FrameFailureDetail = "requested_group_axis_not_expressed"
+	FrameFailureCompareNeedsSet             FrameFailureDetail = "compare_requires_explicit_set"
+	FrameFailureTrendNeedsTemporal          FrameFailureDetail = "trend_requires_non_current_temporal"
+	FrameFailureCountNeedsSetKind           FrameFailureDetail = "count_requires_set_valued_kind"
+	FrameFailureOrgCountNeedsMember         FrameFailureDetail = "org_count_requires_member_kind"
+	FrameFailureNoGoals                     FrameFailureDetail = "goal_set_empty"
+	FrameFailureGoalOutsideVocabulary       FrameFailureDetail = "goal_outside_vocabulary"
+	FrameFailureNoObligations               FrameFailureDetail = "obligation_set_empty"
+	FrameFailureObligationInvalid           FrameFailureDetail = "obligation_outside_vocabulary"
+	FrameFailureEmphasisNeedsRanking        FrameFailureDetail = "emphasis_requires_ranking_obligation"
+	FrameFailureAxisUndischarged            FrameFailureDetail = "axis_undischarged"
+	FrameFailureOperandKindUnset            FrameFailureDetail = "operand_kind_unset"
+	FrameFailureOperandNoVariant            FrameFailureDetail = "operand_no_variant_set"
+	FrameFailureOperandMultiVariant         FrameFailureDetail = "operand_multiple_variants_set"
+	FrameFailureOperandKindMismatch         FrameFailureDetail = "operand_disagrees_with_kind"
+	FrameFailureOperandNoTerms              FrameFailureDetail = "operand_no_terms"
+	FrameFailureOperandNoAnchor             FrameFailureDetail = "operand_no_anchor_terms"
+	FrameFailureOperandMemberKind           FrameFailureDetail = "operand_member_kind_invalid"
+	FrameFailureOperandMemberQualifier      FrameFailureDetail = "operand_member_qualifier_invalid"
+	FrameFailureOperandMemberQualifierValue FrameFailureDetail = "operand_member_qualifier_value_invalid"
 )
 
 // frameFailureDetails is the closed vocabulary, in declared order.
@@ -389,14 +394,14 @@ var frameFailureDetails = [...]FrameFailureDetail{
 	FrameFailureNoVariant, FrameFailureMultipleVariants, FrameFailureVariantKindMismatch,
 	FrameFailureKindUnset, FrameFailureTooFewOperands, FrameFailureNoTerms, FrameFailureBlankTerm,
 	FrameFailureNoAnchorTerms, FrameFailureMemberKindUnset, FrameFailureMemberKindInvalid,
-	FrameFailureMemberQualifierInvalid, FrameFailureGroupKindUnset, FrameFailureGroupKindInvalid,
+	FrameFailureMemberQualifierInvalid, FrameFailureMemberQualifierValueInvalid, FrameFailureGroupKindUnset, FrameFailureGroupKindInvalid,
 	FrameFailureGroupEqualsMember, FrameFailureGroupAxisNotExpressed, FrameFailureCompareNeedsSet,
 	FrameFailureTrendNeedsTemporal, FrameFailureCountNeedsSetKind, FrameFailureOrgCountNeedsMember,
 	FrameFailureNoGoals, FrameFailureGoalOutsideVocabulary, FrameFailureNoObligations,
 	FrameFailureObligationInvalid, FrameFailureEmphasisNeedsRanking, FrameFailureAxisUndischarged,
 	FrameFailureOperandKindUnset, FrameFailureOperandNoVariant, FrameFailureOperandMultiVariant,
 	FrameFailureOperandKindMismatch, FrameFailureOperandNoTerms, FrameFailureOperandNoAnchor,
-	FrameFailureOperandMemberKind, FrameFailureOperandMemberQualifier,
+	FrameFailureOperandMemberKind, FrameFailureOperandMemberQualifier, FrameFailureOperandMemberQualifierValue,
 }
 
 // FrameFailureDetailCount is the closed vocabulary's size.
@@ -705,6 +710,9 @@ func checkI19(expression SubjectExpression) (FrameValidationFailure, bool) {
 			if !ValidMemberQualifier(operand.Scoped.MemberQualifier) {
 				return fail(FrameFailureOperandMemberQualifier)
 			}
+			if !ValidMemberQualifierValue(operand.Scoped.MemberKind, operand.Scoped.MemberQualifier, operand.Scoped.MemberQualifierValue) {
+				return fail(FrameFailureOperandMemberQualifierValue)
+			}
 		}
 	}
 	return FrameValidationFailure{}, false
@@ -746,6 +754,9 @@ func checkI5(expression SubjectExpression) (FrameValidationFailure, bool) {
 	}
 	if !ValidMemberQualifier(expression.Scoped.MemberQualifier) {
 		return fail(FrameFailureMemberQualifierInvalid)
+	}
+	if !ValidMemberQualifierValue(expression.Scoped.MemberKind, expression.Scoped.MemberQualifier, expression.Scoped.MemberQualifierValue) {
+		return fail(FrameFailureMemberQualifierValueInvalid)
 	}
 	return FrameValidationFailure{}, false
 }
@@ -917,6 +928,9 @@ func subjectOperandWellFormed(operand SubjectOperand) bool {
 			return false
 		}
 		if !ValidMemberQualifier(operand.Scoped.MemberQualifier) {
+			return false
+		}
+		if !ValidMemberQualifierValue(operand.Scoped.MemberKind, operand.Scoped.MemberQualifier, operand.Scoped.MemberQualifierValue) {
 			return false
 		}
 	}
