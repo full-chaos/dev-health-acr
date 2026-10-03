@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
 	"regexp"
 	"strings"
 	"testing"
@@ -14,9 +15,20 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/mcp/guide"
 )
 
+func investigateFixture(t *testing.T) *fixtureServer {
+	t.Helper()
+	fx := newFixtureServer(t)
+	fx.CapabilitiesHandler = func(w http.ResponseWriter, r *http.Request) {
+		caps := validCapabilitiesFixture()
+		caps.EnabledTools = append(caps.EnabledTools, toolInvestigateQuestion, toolInvestigationResult)
+		writeJSONFixture(t, w, http.StatusOK, caps)
+	}
+	return fx
+}
+
 func investigateBootstrap(t *testing.T) *Bootstrap {
 	t.Helper()
-	boot := newFixtureBootstrap(t, newFixtureServer(t))
+	boot := newFixtureBootstrap(t, investigateFixture(t))
 	boot.Capabilities.EnabledTools = append(boot.Capabilities.EnabledTools, toolInvestigateQuestion, toolInvestigationResult)
 	return boot
 }

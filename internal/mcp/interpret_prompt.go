@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -52,7 +54,10 @@ func registerInterpretPrompt(server *mcpsdk.Server, caller *CallerContext, servi
 			Description: "The engineering question to interpret, in plain words.",
 		}},
 		Meta: meta,
-	}, func(_ context.Context, req *mcpsdk.GetPromptRequest) (*mcpsdk.GetPromptResult, error) {
+	}, func(ctx context.Context, req *mcpsdk.GetPromptRequest) (*mcpsdk.GetPromptResult, error) {
+		if !liveToolEnabled(ctx, caller, toolInvestigateQuestion) {
+			return nil, &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: "unknown prompt"}
+		}
 		var question string
 		if req != nil && req.Params != nil {
 			question = req.Params.Arguments[interpretQuestionArg]
@@ -69,6 +74,9 @@ func metaString(m mcpsdk.Meta, key string) string {
 func interpretPromptResult(question, serviceVersion string) (*mcpsdk.GetPromptResult, error) {
 	if strings.TrimSpace(question) == "" {
 		return nil, &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: "question is required"}
+	}
+	if utf8.RuneCountInString(question) > contractsv1.MCPInvestigationQuestionMaxLength {
+		return nil, &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: "question is too long"}
 	}
 	userJSON, err := interpretprompt.UserPayload(contextfabric.InvestigationRequest{
 		Question:    question,
@@ -87,4 +95,19 @@ func interpretPromptResult(question, serviceVersion string) (*mcpsdk.GetPromptRe
 			{Role: "user", Content: &mcpsdk.TextContent{Text: user}},
 		},
 	}, nil
+}
+
+// liveToolEnabled re-reads the caller's capabilities from the hosted API, so a
+// revocation after the server was built (a long-lived STDIO session) takes
+// effect on the next read. It fails closed.
+func liveToolEnabled(ctx context.Context, caller *CallerContext, tool string) bool {
+	client := caller.Client()
+	if client == nil {
+		return false
+	}
+	caps, err := client.Capabilities(ctx)
+	if err != nil {
+		return false
+	}
+	return slices.Contains(caps.EnabledTools, tool)
 }

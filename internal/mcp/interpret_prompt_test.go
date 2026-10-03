@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -117,5 +118,35 @@ func TestInterpretPromptRequiresQuestion(t *testing.T) {
 	defer closeFn()
 	if _, err := getInterpretPrompt(t, client, "  "); err == nil {
 		t.Fatal("blank question accepted")
+	}
+}
+
+func TestInterpretPromptIsRefusedAfterTheToolIsRevoked(t *testing.T) {
+	fx := investigateFixture(t)
+	boot := newFixtureBootstrap(t, fx)
+	boot.Capabilities.EnabledTools = append(boot.Capabilities.EnabledTools, toolInvestigateQuestion)
+	client, closeFn := connectedClient(t, boot)
+	defer closeFn()
+	if _, err := getInterpretPrompt(t, client, "q"); err != nil {
+		t.Fatalf("get before revocation: %v", err)
+	}
+	fx.CapabilitiesHandler = func(w http.ResponseWriter, r *http.Request) {
+		caps := validCapabilitiesFixture()
+		caps.EnabledTools = slices.DeleteFunc(slices.Clone(caps.EnabledTools), func(n string) bool { return n == toolInvestigateQuestion })
+		writeJSONFixture(t, w, http.StatusOK, caps)
+	}
+	if _, err := getInterpretPrompt(t, client, "q"); err == nil {
+		t.Fatal("interpret_question served after the hosted API revoked investigate_question")
+	}
+}
+
+func TestInterpretPromptEnforcesTheQuestionLimit(t *testing.T) {
+	client, closeFn := connectedClient(t, investigateBootstrap(t))
+	defer closeFn()
+	if _, err := getInterpretPrompt(t, client, strings.Repeat("a", contractsv1.MCPInvestigationQuestionMaxLength)); err != nil {
+		t.Fatalf("question at the limit: %v", err)
+	}
+	if _, err := getInterpretPrompt(t, client, strings.Repeat("a", contractsv1.MCPInvestigationQuestionMaxLength+1)); err == nil {
+		t.Fatal("question over the limit accepted")
 	}
 }
