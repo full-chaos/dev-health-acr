@@ -224,7 +224,7 @@
     "contract": {
       "type": "object",
       "additionalProperties": false,
-      "description": "The contract you ran the interpretation under: the _meta values of the interpret_question prompt you fetched.",
+      "description": "The contract you ran the interpretation under: the _meta values of the interpret_question prompt you fetched. All three values are required.",
       "properties": {
         "model_output_version": {
           "type": "string",
@@ -241,12 +241,13 @@
         "system_sha256": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$",
-          "description": "The system_sha256 value of the prompt _meta block, unchanged. Optional, but send it when the prompt gave it."
+          "description": "The system_sha256 value of the prompt _meta block, unchanged."
         }
       },
       "required": [
         "model_output_version",
-        "prompt_version"
+        "prompt_version",
+        "system_sha256"
       ]
     },
     "client_model": {

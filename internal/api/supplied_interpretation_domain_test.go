@@ -4,30 +4,42 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/genkitruntime"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // TestSuppliedInterpretationRequestDomainAtTheRoute sends the request field
 // through the real route decode and validation, one cell per field and input
-// shape. want is the HTTP status; reached says what the investigator saw:
-// "supplied" (the field arrived), "plain" (the request arrived with no
-// supplied interpretation) or "" (the route refused before the investigator).
+// shape, into an investigator that runs the production contract gate and
+// nothing else of the interpretation step. want is the HTTP status; reached
+// says what the investigator saw: "supplied" (the field arrived), "plain"
+// (the request arrived with no supplied interpretation) or "" (the route
+// refused before the investigator). A 409 is the gate's refusal of a contract
+// value that is absent or is not the service's own.
 func TestSuppliedInterpretationRequestDomainAtTheRoute(t *testing.T) {
-	const (
-		version = `"context-fabric-model-output.v8"`
-		prompt  = `"context-fabric-interpretation.v21"`
-		object  = `{"shape":"open"}`
-	)
-	sha := strings.Repeat("a", 64)
-	field := func(output, modelOutputVersion, promptVersion, extra string) string {
+	gate, err := genkitruntime.NewSuppliedInterpreter(genkitruntime.SuppliedInterpreterConfig{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract := gate.Contract()
+	quoted := func(text string) string { encoded, _ := json.Marshal(text); return string(encoded) }
+	const object = `{"shape":"open"}`
+	version, prompt, sha := quoted(contract.ModelOutputVersion), quoted(contract.PromptVersion), quoted(contract.SystemSHA256)
+	otherSHA := strings.Repeat("a", 64)
+	// field writes one supplied_interpretation object; an empty argument
+	// leaves that key out.
+	field := func(output, modelOutputVersion, promptVersion, systemSHA256, extra string) string {
 		parts := []string{}
 		if output != "" {
 			parts = append(parts, `"output":`+output)
@@ -38,13 +50,15 @@ func TestSuppliedInterpretationRequestDomainAtTheRoute(t *testing.T) {
 		if promptVersion != "" {
 			parts = append(parts, `"prompt_version":`+promptVersion)
 		}
+		if systemSHA256 != "" {
+			parts = append(parts, `"system_sha256":`+systemSHA256)
+		}
 		if extra != "" {
 			parts = append(parts, extra)
 		}
 		return "{" + strings.Join(parts, ",") + "}"
 	}
-	valid := func(extra string) string { return field(object, version, prompt, extra) }
-	quoted := func(text string) string { encoded, _ := json.Marshal(text); return string(encoded) }
+	valid := func(extra string) string { return field(object, version, prompt, sha, extra) }
 	atBound := `{"k":"` + strings.Repeat("a", contractsv1.ContextFabricSuppliedInterpretationMaxBytes-8) + `"}`
 
 	type cell struct {
@@ -65,30 +79,34 @@ func TestSuppliedInterpretationRequestDomainAtTheRoute(t *testing.T) {
 		{"field unknown key", valid(`"service_version":"x"`), 400, ""},
 		{"field duplicate key, last wins and is valid", valid(`"prompt_version":` + prompt), 200, "supplied"},
 
-		{"output absent", field("", version, prompt, ""), 400, ""},
-		{"output null", field(`null`, version, prompt, ""), 400, ""},
-		{"output empty object", field(`{}`, version, prompt, ""), 200, "supplied"},
-		{"output zero", field(`0`, version, prompt, ""), 400, ""},
-		{"output fractional", field(`1.5`, version, prompt, ""), 400, ""},
-		{"output true", field(`true`, version, prompt, ""), 400, ""},
-		{"output empty string", field(`""`, version, prompt, ""), 400, ""},
-		{"output string", field(`"open"`, version, prompt, ""), 400, ""},
-		{"output empty array", field(`[]`, version, prompt, ""), 400, ""},
-		{"output array of object", field(`[{}]`, version, prompt, ""), 400, ""},
-		{"output at the byte bound", field(atBound, version, prompt, ""), 200, "supplied"},
-		{"output one byte over the bound", field(strings.Replace(atBound, `"k"`, `"kk"`, 1), version, prompt, ""), 400, ""},
+		{"output absent", field("", version, prompt, sha, ""), 400, ""},
+		{"output null", field(`null`, version, prompt, sha, ""), 400, ""},
+		{"output empty object", field(`{}`, version, prompt, sha, ""), 200, "supplied"},
+		{"output zero", field(`0`, version, prompt, sha, ""), 400, ""},
+		{"output fractional", field(`1.5`, version, prompt, sha, ""), 400, ""},
+		{"output true", field(`true`, version, prompt, sha, ""), 400, ""},
+		{"output empty string", field(`""`, version, prompt, sha, ""), 400, ""},
+		{"output string", field(`"open"`, version, prompt, sha, ""), 400, ""},
+		{"output empty array", field(`[]`, version, prompt, sha, ""), 400, ""},
+		{"output array of object", field(`[{}]`, version, prompt, sha, ""), 400, ""},
+		{"output at the byte bound", field(atBound, version, prompt, sha, ""), 200, "supplied"},
+		{"output one byte over the bound", field(strings.Replace(atBound, `"k"`, `"kk"`, 1), version, prompt, sha, ""), 400, ""},
 	}
 	for _, name := range []string{"model_output_version", "prompt_version"} {
 		with := func(value string) string {
 			if name == "model_output_version" {
-				return field(object, value, prompt, "")
+				return field(object, value, prompt, sha, "")
 			}
-			return field(object, version, value, "")
+			return field(object, version, value, sha, "")
+		}
+		current := version
+		if name == "prompt_version" {
+			current = prompt
 		}
 		cells = append(cells,
-			cell{name + " absent", with(""), 400, ""},
-			cell{name + " null", with(`null`), 400, ""},
-			cell{name + " empty string", with(`""`), 400, ""},
+			cell{name + " absent", with(""), 409, "supplied"},
+			cell{name + " null", with(`null`), 409, "supplied"},
+			cell{name + " empty string", with(`""`), 409, "supplied"},
 			cell{name + " blank string", with(`"  "`), 400, ""},
 			cell{name + " padded", with(`" v8"`), 400, ""},
 			cell{name + " zero", with(`0`), 400, ""},
@@ -96,26 +114,29 @@ func TestSuppliedInterpretationRequestDomainAtTheRoute(t *testing.T) {
 			cell{name + " true", with(`true`), 400, ""},
 			cell{name + " array", with(`["v8"]`), 400, ""},
 			cell{name + " object", with(`{}`), 400, ""},
-			cell{name + " out of vocabulary", with(`"not-a-version"`), 200, "supplied"},
-			cell{name + " 256 characters", with(quoted(strings.Repeat("v", 256))), 200, "supplied"},
+			cell{name + " the service's own", with(current), 200, "supplied"},
+			cell{name + " out of vocabulary", with(`"not-a-version"`), 409, "supplied"},
+			cell{name + " 256 characters", with(quoted(strings.Repeat("v", 256))), 409, "supplied"},
 			cell{name + " 257 characters", with(quoted(strings.Repeat("v", 257))), 400, ""},
 		)
 	}
+	digest := func(value string) string { return field(object, version, prompt, value, "") }
 	optional := func(name string, value string) string { return valid(`"` + name + `":` + value) }
 	cells = append(cells,
-		cell{"system_sha256 absent", valid(""), 200, "supplied"},
-		cell{"system_sha256 null", optional("system_sha256", `null`), 200, "supplied"},
-		cell{"system_sha256 empty string", optional("system_sha256", `""`), 200, "supplied"},
-		cell{"system_sha256 blank string", optional("system_sha256", `"  "`), 400, ""},
-		cell{"system_sha256 zero", optional("system_sha256", `0`), 400, ""},
-		cell{"system_sha256 true", optional("system_sha256", `true`), 400, ""},
-		cell{"system_sha256 array", optional("system_sha256", `[]`), 400, ""},
-		cell{"system_sha256 object", optional("system_sha256", `{}`), 400, ""},
-		cell{"system_sha256 63 hex", optional("system_sha256", quoted(sha[:63])), 400, ""},
-		cell{"system_sha256 64 lowercase hex", optional("system_sha256", quoted(sha)), 200, "supplied"},
-		cell{"system_sha256 64 uppercase hex", optional("system_sha256", quoted(strings.ToUpper(sha))), 400, ""},
-		cell{"system_sha256 64 non-hex", optional("system_sha256", quoted(strings.Repeat("g", 64))), 400, ""},
-		cell{"system_sha256 65 hex", optional("system_sha256", quoted(sha+"a")), 400, ""},
+		cell{"system_sha256 absent", digest(""), 409, "supplied"},
+		cell{"system_sha256 null", digest(`null`), 409, "supplied"},
+		cell{"system_sha256 empty string", digest(`""`), 409, "supplied"},
+		cell{"system_sha256 blank string", digest(`"  "`), 400, ""},
+		cell{"system_sha256 zero", digest(`0`), 400, ""},
+		cell{"system_sha256 true", digest(`true`), 400, ""},
+		cell{"system_sha256 array", digest(`[]`), 400, ""},
+		cell{"system_sha256 object", digest(`{}`), 400, ""},
+		cell{"system_sha256 63 hex", digest(quoted(otherSHA[:63])), 400, ""},
+		cell{"system_sha256 the service's own", digest(sha), 200, "supplied"},
+		cell{"system_sha256 64 lowercase hex of another prompt", digest(quoted(otherSHA)), 409, "supplied"},
+		cell{"system_sha256 64 uppercase hex", digest(quoted(strings.ToUpper(contract.SystemSHA256))), 400, ""},
+		cell{"system_sha256 64 non-hex", digest(quoted(strings.Repeat("g", 64))), 400, ""},
+		cell{"system_sha256 65 hex", digest(quoted(otherSHA + "a")), 400, ""},
 
 		cell{"client_model absent", valid(""), 200, "supplied"},
 		cell{"client_model null", optional("client_model", `null`), 200, "supplied"},
@@ -149,10 +170,14 @@ func TestSuppliedInterpretationRequestDomainAtTheRoute(t *testing.T) {
 			body = strings.TrimSuffix(body, "}") + `,"supplied_interpretation":` + c.raw + "}"
 		}
 		reached := ""
-		app, token := newContextFabricTestApp(t, investigatorFunc(func(_ context.Context, _ storage.Principal, request contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
+		app, token := newContextFabricTestApp(t, investigatorFunc(func(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
 			reached = "plain"
 			if request.SuppliedInterpretation != nil {
 				reached = "supplied"
+				var mismatch *contextfabric.SuppliedInterpretationContractMismatch
+				if _, _, err := gate.InterpretSuppliedQuestion(ctx, principal, request); errors.As(err, &mismatch) {
+					return contextfabric.InvestigationResult{}, err
+				}
 			}
 			return validContextFabricInvestigationResult(), nil
 		}))
@@ -168,9 +193,9 @@ func TestSuppliedInterpretationRequestDomainAtTheRoute(t *testing.T) {
 		}
 		tally[fmt.Sprintf("%d %s", response.Code, reached)]++
 	}
-	t.Logf("cells = %d: served with the supplied field = %d, served as a plain request = %d, refused 400 = %d",
-		len(cells), tally["200 supplied"], tally["200 plain"], tally["400 "])
-	if len(cells) < 70 || tally["200 supplied"] == 0 || tally["200 plain"] != 2 || tally["400 "] == 0 {
+	t.Logf("cells = %d: served with the supplied field = %d, served as a plain request = %d, refused 400 before the investigator = %d, refused 409 by the contract gate = %d",
+		len(cells), tally["200 supplied"], tally["200 plain"], tally["400 "], tally["409 supplied"])
+	if len(cells) < 70 || tally["200 supplied"] == 0 || tally["200 plain"] != 2 || tally["400 "] == 0 || tally["409 supplied"] != 14 || len(tally) != 4 {
 		t.Fatalf("cells = %d tally = %v: the table did not exercise every class", len(cells), tally)
 	}
 }

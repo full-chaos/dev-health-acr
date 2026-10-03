@@ -106,7 +106,7 @@
     "supplied_interpretation": {
       "type": "object",
       "additionalProperties": false,
-      "description": "An interpretation the caller ran on its own model. When present the service runs no interpretation call: output is validated exactly as a model output is, and resolution, authorization, retrieval and answer assembly run unchanged. Each declared version must equal the service's own, or the request is refused with the current values.",
+      "description": "An interpretation the caller ran on its own model. When present the service runs no interpretation call: output is validated exactly as a model output is, and resolution, authorization, retrieval and answer assembly run unchanged. model_output_version, prompt_version and system_sha256 name the contract the caller ran. All three are required: a value that is absent or does not equal the service's own is refused with status 409 and the current values.",
       "properties": {
         "output": {
           "type": "object",
@@ -134,7 +134,8 @@
       "required": [
         "output",
         "model_output_version",
-        "prompt_version"
+        "prompt_version",
+        "system_sha256"
       ]
     },
     "requested_scope": {

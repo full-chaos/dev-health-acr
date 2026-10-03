@@ -173,6 +173,9 @@ func (s *SuppliedInterpreter) reject(receipt *contextfabric.ModelExecutionReceip
 	return contextfabric.InterpretedQuestion{}, *receipt, rejection
 }
 
+// contractMismatch names each contract field whose declared value is not the
+// service's own. The service's own values are never empty, so an absent
+// declared value is a mismatch.
 func (s *SuppliedInterpreter) contractMismatch(supplied contextfabric.SuppliedInterpretation) []string {
 	var mismatch []string
 	if supplied.ModelOutputVersion != s.contract.ModelOutputVersion {
@@ -181,7 +184,7 @@ func (s *SuppliedInterpreter) contractMismatch(supplied contextfabric.SuppliedIn
 	if supplied.PromptVersion != s.contract.PromptVersion {
 		mismatch = append(mismatch, contractsv1.ContextFabricInterpretationContractFieldPromptVersion)
 	}
-	if supplied.SystemSHA256 != "" && supplied.SystemSHA256 != s.contract.SystemSHA256 {
+	if supplied.SystemSHA256 != s.contract.SystemSHA256 {
 		mismatch = append(mismatch, contractsv1.ContextFabricInterpretationContractFieldSystemSHA256)
 	}
 	return mismatch

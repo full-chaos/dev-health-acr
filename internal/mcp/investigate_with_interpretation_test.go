@@ -82,19 +82,16 @@ func TestInvestigateWithInterpretationForwardsTheSuppliedInterpretation(t *testi
 	}
 }
 
-func TestInvestigateWithInterpretationOmitsOptionalContractFields(t *testing.T) {
+func TestInvestigateWithInterpretationOmitsTheOptionalClientModel(t *testing.T) {
 	var seen contractsv1.ContextFabricInvestigationRequest
 	boot := withInterpretationTool(answerFixtureBootstrap(t, parityResult(), &seen))
-	args := interpretationArgs(t, func(m map[string]any) {
-		m["contract"] = map[string]any{"model_output_version": "out-v1", "prompt_version": "prompt-v1"}
-		delete(m, "client_model")
-	})
+	args := interpretationArgs(t, func(m map[string]any) { delete(m, "client_model") })
 	result, err := invokeInvestigateWithInterpretation(boot, args)
 	if err != nil || result.IsError {
 		t.Fatalf("err %v result %s", err, toolResultText(result))
 	}
-	if seen.SuppliedInterpretation == nil || seen.SuppliedInterpretation.SystemSHA256 != "" || seen.SuppliedInterpretation.ClientModel != "" {
-		t.Fatalf("supplied interpretation = %#v, want no sha and no client model", seen.SuppliedInterpretation)
+	if seen.SuppliedInterpretation == nil || seen.SuppliedInterpretation.SystemSHA256 != interpretationSHA || seen.SuppliedInterpretation.ClientModel != "" {
+		t.Fatalf("supplied interpretation = %#v, want the whole contract and no client model", seen.SuppliedInterpretation)
 	}
 }
 
@@ -147,7 +144,7 @@ func TestInvestigateWithInterpretationForwardsEveryOtherFieldLikeInvestigateQues
 		t.Fatal(err)
 	}
 	wire["interpretation"] = json.RawMessage(`{"shape":"one_subject"}`)
-	wire["contract"] = map[string]any{"model_output_version": "out-v1", "prompt_version": "prompt-v1"}
+	wire["contract"] = map[string]any{"model_output_version": "out-v1", "prompt_version": "prompt-v1", "system_sha256": interpretationSHA}
 	interpretationArgs, err := json.Marshal(wire)
 	if err != nil {
 		t.Fatal(err)
@@ -195,10 +192,25 @@ func TestInvestigateWithInterpretationRefusesBadArgumentsBeforeTheHostedCall(t *
 		},
 		"bad client model": func(m map[string]any) { m["client_model"] = "has space" },
 		"empty version": func(m map[string]any) {
-			m["contract"] = map[string]any{"model_output_version": "", "prompt_version": "p"}
+			m["contract"] = map[string]any{"model_output_version": "", "prompt_version": "p", "system_sha256": interpretationSHA}
+		},
+		"missing model output version": func(m map[string]any) {
+			m["contract"] = map[string]any{"prompt_version": "p", "system_sha256": interpretationSHA}
+		},
+		"missing prompt version": func(m map[string]any) {
+			m["contract"] = map[string]any{"model_output_version": "v", "system_sha256": interpretationSHA}
+		},
+		"missing sha": func(m map[string]any) {
+			m["contract"] = map[string]any{"model_output_version": "v", "prompt_version": "p"}
+		},
+		"null sha": func(m map[string]any) {
+			m["contract"] = map[string]any{"model_output_version": "v", "prompt_version": "p", "system_sha256": nil}
+		},
+		"empty sha": func(m map[string]any) {
+			m["contract"] = map[string]any{"model_output_version": "v", "prompt_version": "p", "system_sha256": ""}
 		},
 		"unknown contract key": func(m map[string]any) {
-			m["contract"] = map[string]any{"model_output_version": "v", "prompt_version": "p", "extra": 1}
+			m["contract"] = map[string]any{"model_output_version": "v", "prompt_version": "p", "system_sha256": interpretationSHA, "extra": 1}
 		},
 	}
 	for name, mutate := range cases {

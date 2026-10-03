@@ -168,6 +168,12 @@ func TestSuppliedInterpretationContractMismatchIsRefusedWithTheCurrentContract(t
 		{"all three", func(s *contextfabric.SuppliedInterpretation) {
 			s.ModelOutputVersion, s.PromptVersion, s.SystemSHA256 = "schema-v0", "interpret-v0", otherSHA
 		}, []string{"model_output_version", "prompt_version", "system_sha256"}},
+		{"model output version absent", func(s *contextfabric.SuppliedInterpretation) { s.ModelOutputVersion = "" }, []string{"model_output_version"}},
+		{"prompt version absent", func(s *contextfabric.SuppliedInterpretation) { s.PromptVersion = "" }, []string{"prompt_version"}},
+		{"system sha256 absent", func(s *contextfabric.SuppliedInterpretation) { s.SystemSHA256 = "" }, []string{"system_sha256"}},
+		{"all three absent", func(s *contextfabric.SuppliedInterpretation) {
+			s.ModelOutputVersion, s.PromptVersion, s.SystemSHA256 = "", "", ""
+		}, []string{"model_output_version", "prompt_version", "system_sha256"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -205,16 +211,6 @@ func TestSuppliedInterpretationContractMismatchIsRefusedWithTheCurrentContract(t
 				t.Fatalf("decision contract_mismatch = %#v, want %v", attrs["contract_mismatch"], tc.want)
 			}
 		})
-	}
-}
-
-func TestSuppliedInterpretationWithoutASystemSHAIsServed(t *testing.T) {
-	t.Parallel()
-	supplied := mustSuppliedInterpreter(t, nil)
-	request := suppliedRequestFor(supplied, mustMarshalOutput(t, validInterpretationOutput()))
-	request.SuppliedInterpretation.SystemSHA256 = ""
-	if _, _, err := supplied.InterpretSuppliedQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
-		t.Fatalf("InterpretSuppliedQuestion() error = %v, want an omitted system_sha256 to be accepted", err)
 	}
 }
 
@@ -358,6 +354,15 @@ func TestSuppliedInterpreterDefaultsToTheContractTheRuntimeRuns(t *testing.T) {
 	}
 	if supplied.Contract() != want {
 		t.Fatalf("Contract() = %#v, want %#v", supplied.Contract(), want)
+	}
+	// The gate reads an absent declared value as a mismatch because no value
+	// of the service's own contract is empty, whatever the configuration.
+	blank, err := NewSuppliedInterpreter(SuppliedInterpreterConfig{InterpretationPromptVersion: "  ", SchemaVersion: "\t"})
+	if err != nil {
+		t.Fatalf("NewSuppliedInterpreter() error = %v", err)
+	}
+	if blank.Contract() != want || len(blank.Contract().Missing()) != 0 {
+		t.Fatalf("Contract() from blank configured versions = %#v, want the defaults %#v with no empty value", blank.Contract(), want)
 	}
 }
 

@@ -29,7 +29,8 @@ func TestSuppliedInterpretationValidate(t *testing.T) {
 		valid  bool
 	}{
 		{"complete", func(*ContextFabricSuppliedInterpretation) {}, true},
-		{"no system sha256 and no client model", func(s *ContextFabricSuppliedInterpretation) { s.SystemSHA256, s.ClientModel = "", "" }, true},
+		{"no client model", func(s *ContextFabricSuppliedInterpretation) { s.ClientModel = "" }, true},
+		{"system sha256 absent: left to the interpretation step", func(s *ContextFabricSuppliedInterpretation) { s.SystemSHA256 = "" }, true},
 		{"output at the byte bound", func(s *ContextFabricSuppliedInterpretation) { s.Output = atBound }, true},
 		{"output one byte over the bound", func(s *ContextFabricSuppliedInterpretation) { s.Output = append(json.RawMessage(" "), atBound...) }, false},
 		{"output absent", func(s *ContextFabricSuppliedInterpretation) { s.Output = nil }, false},
@@ -37,8 +38,9 @@ func TestSuppliedInterpretationValidate(t *testing.T) {
 		{"output is a string", func(s *ContextFabricSuppliedInterpretation) { s.Output = json.RawMessage(`"open"`) }, false},
 		{"output is two documents", func(s *ContextFabricSuppliedInterpretation) { s.Output = json.RawMessage(`{}{}`) }, false},
 		{"output is not JSON", func(s *ContextFabricSuppliedInterpretation) { s.Output = json.RawMessage(`{"shape":`) }, false},
-		{"model output version absent", func(s *ContextFabricSuppliedInterpretation) { s.ModelOutputVersion = "" }, false},
-		{"prompt version absent", func(s *ContextFabricSuppliedInterpretation) { s.PromptVersion = "" }, false},
+		{"model output version absent: left to the interpretation step", func(s *ContextFabricSuppliedInterpretation) { s.ModelOutputVersion = "" }, true},
+		{"prompt version absent: left to the interpretation step", func(s *ContextFabricSuppliedInterpretation) { s.PromptVersion = "" }, true},
+		{"model output version blank", func(s *ContextFabricSuppliedInterpretation) { s.ModelOutputVersion = "  " }, false},
 		{"prompt version padded", func(s *ContextFabricSuppliedInterpretation) { s.PromptVersion = " v21" }, false},
 		{"prompt version over 256", func(s *ContextFabricSuppliedInterpretation) { s.PromptVersion = strings.Repeat("v", 257) }, false},
 		{"system sha256 uppercase", func(s *ContextFabricSuppliedInterpretation) { s.SystemSHA256 = strings.Repeat("A", 64) }, false},
@@ -57,6 +59,43 @@ func TestSuppliedInterpretationValidate(t *testing.T) {
 				t.Fatalf("Validate() error = %v, want valid = %t", err, tc.valid)
 			}
 		})
+	}
+}
+
+// TestInvestigateWithInterpretationRequestRequiresTheWholeContract pins the
+// tool request against its input schema's required list: a contract with a
+// missing value is refused, and the complete one is accepted.
+func TestInvestigateWithInterpretationRequestRequiresTheWholeContract(t *testing.T) {
+	t.Parallel()
+	complete := func() MCPInvestigateWithInterpretationRequest {
+		supplied := validSuppliedInterpretationFixture()
+		return MCPInvestigateWithInterpretationRequest{
+			MCPInvestigateQuestionRequest: MCPInvestigateQuestionRequest{Question: "Which teams need attention?"},
+			Interpretation:                supplied.Output,
+			Contract: ContextFabricInterpretationContract{
+				ModelOutputVersion: supplied.ModelOutputVersion, PromptVersion: supplied.PromptVersion, SystemSHA256: supplied.SystemSHA256,
+			},
+		}
+	}
+	if err := complete().Validate(); err != nil {
+		t.Fatalf("complete contract: Validate() error = %v, want none", err)
+	}
+	for name, clear := range map[string]func(*ContextFabricInterpretationContract){
+		"model_output_version": func(c *ContextFabricInterpretationContract) { c.ModelOutputVersion = "" },
+		"prompt_version":       func(c *ContextFabricInterpretationContract) { c.PromptVersion = "" },
+		"system_sha256":        func(c *ContextFabricInterpretationContract) { c.SystemSHA256 = "" },
+	} {
+		request := complete()
+		clear(&request.Contract)
+		if missing := request.Contract.Missing(); len(missing) != 1 || missing[0] != name {
+			t.Fatalf("%s cleared: Missing() = %v, want only that field", name, missing)
+		}
+		if err := request.Validate(); err == nil || !strings.Contains(err.Error(), name) {
+			t.Fatalf("%s cleared: Validate() error = %v, want a refusal that names the field", name, err)
+		}
+	}
+	if missing := (ContextFabricInterpretationContract{}).Missing(); len(missing) != 3 {
+		t.Fatalf("empty contract: Missing() = %v, want all three fields", missing)
 	}
 }
 
@@ -152,7 +191,7 @@ func TestInvestigateWithInterpretationRequestDecodesFlatAndStrict(t *testing.T) 
 		err := decoder.Decode(&request)
 		return request, err
 	}
-	const arguments = `{"question":"What is the status of Ask Dev?","parent_result_id":"result_12345678","interpretation":{"shape":"open"},"contract":{"model_output_version":"context-fabric-model-output.v8","prompt_version":"context-fabric-interpretation.v21"},"client_model":"claude-test"}`
+	const arguments = `{"question":"What is the status of Ask Dev?","parent_result_id":"result_12345678","interpretation":{"shape":"open"},"contract":{"model_output_version":"context-fabric-model-output.v8","prompt_version":"context-fabric-interpretation.v21","system_sha256":"0000000000000000000000000000000000000000000000000000000000000000"},"client_model":"claude-test"}`
 	request, err := decode(arguments)
 	if err != nil {
 		t.Fatalf("decode error = %v", err)

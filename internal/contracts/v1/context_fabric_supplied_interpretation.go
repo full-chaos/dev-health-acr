@@ -39,16 +39,21 @@ func ValidContextFabricInterpretationSource(source ContextFabricInterpretationSo
 // ContextFabricSuppliedInterpretation is an interpretation the caller ran on
 // its own model. Output is the model output object, in the shape and version
 // the service's own interpretation call returns; it is untrusted and is
-// validated exactly as a model output is. The three version fields name the
-// contract the caller ran: each one present must equal the service's own.
+// validated exactly as a model output is. ModelOutputVersion, PromptVersion
+// and SystemSHA256 name the contract the caller ran. All three are required:
+// the interpretation step refuses a value that is absent or is not the
+// service's own, and names the contract the service runs.
 type ContextFabricSuppliedInterpretation struct {
 	Output             json.RawMessage `json:"output"`
 	ModelOutputVersion string          `json:"model_output_version"`
 	PromptVersion      string          `json:"prompt_version"`
-	SystemSHA256       string          `json:"system_sha256,omitempty"`
+	SystemSHA256       string          `json:"system_sha256"`
 	ClientModel        string          `json:"client_model,omitempty"`
 }
 
+// Validate checks the shape of each value that is present. It accepts an
+// absent contract value: only the interpretation step holds the contract the
+// service runs, so that step refuses it, with the current values.
 func (s ContextFabricSuppliedInterpretation) Validate() error {
 	output := bytes.TrimSpace(s.Output)
 	if len(s.Output) > ContextFabricSuppliedInterpretationMaxBytes {
@@ -57,7 +62,7 @@ func (s ContextFabricSuppliedInterpretation) Validate() error {
 	if len(output) == 0 || output[0] != '{' || !json.Valid(output) {
 		return fmt.Errorf("supplied_interpretation output must be a JSON object")
 	}
-	if !validVersion(s.ModelOutputVersion) || !validVersion(s.PromptVersion) {
+	if (s.ModelOutputVersion != "" && !validVersion(s.ModelOutputVersion)) || (s.PromptVersion != "" && !validVersion(s.PromptVersion)) {
 		return fmt.Errorf("supplied_interpretation versions violate v1 bounds")
 	}
 	if s.SystemSHA256 != "" && !validLowerHexSHA256(s.SystemSHA256) {
@@ -149,7 +154,23 @@ func validateInterpretationProvenance(source ContextFabricInterpretationSource, 
 type ContextFabricInterpretationContract struct {
 	ModelOutputVersion string `json:"model_output_version"`
 	PromptVersion      string `json:"prompt_version"`
-	SystemSHA256       string `json:"system_sha256,omitempty"`
+	SystemSHA256       string `json:"system_sha256"`
+}
+
+// Missing lists the contract fields that carry no value, in the order a
+// refusal names them.
+func (c ContextFabricInterpretationContract) Missing() []string {
+	var missing []string
+	if c.ModelOutputVersion == "" {
+		missing = append(missing, ContextFabricInterpretationContractFieldModelOutputVersion)
+	}
+	if c.PromptVersion == "" {
+		missing = append(missing, ContextFabricInterpretationContractFieldPromptVersion)
+	}
+	if c.SystemSHA256 == "" {
+		missing = append(missing, ContextFabricInterpretationContractFieldSystemSHA256)
+	}
+	return missing
 }
 
 // The fields of a supplied interpretation's contract that can mismatch.
@@ -165,8 +186,9 @@ const ContextFabricInterpretationContractDetailsKey = "interpretation_contract"
 
 // ContextFabricInterpretationContractRefusal is the body of the refusal of a
 // supplied interpretation whose declared contract is not the service's own.
-// Mismatch names each declared field that differs; Current is the contract
-// the service runs, which the caller reads to fetch the prompt again.
+// Mismatch names each contract field that is absent or differs; Current is
+// the contract the service runs, which the caller reads to fetch the prompt
+// again.
 type ContextFabricInterpretationContractRefusal struct {
 	Mismatch []string                            `json:"mismatch"`
 	Current  ContextFabricInterpretationContract `json:"current"`
@@ -218,9 +240,15 @@ func (r MCPInvestigateWithInterpretationRequest) Supplied() ContextFabricSupplie
 	}
 }
 
+// Validate refuses a contract with a missing value, as the tool's input
+// schema does: the tool sends the hosted request only for arguments its
+// schema accepts.
 func (r MCPInvestigateWithInterpretationRequest) Validate() error {
 	if err := r.MCPInvestigateQuestionRequest.Validate(); err != nil {
 		return err
+	}
+	if missing := r.Contract.Missing(); len(missing) > 0 {
+		return fmt.Errorf("contract requires %s", strings.Join(missing, ", "))
 	}
 	return r.Supplied().Validate()
 }

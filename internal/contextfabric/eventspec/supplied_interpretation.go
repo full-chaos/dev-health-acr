@@ -47,7 +47,7 @@ var SuppliedInterpretationDecision = Event{
 		{Key: "client_model", Type: FieldString, Presence: PresenceRequired, Applicability: "the declared model name, or undeclared when the caller sent none; empty when outcome=request_invalid"},
 		{Key: "prompt_version", Type: FieldString, Presence: PresenceRequired, Applicability: "the service's own interpretation prompt version"},
 		{Key: "model_output_version", Type: FieldString, Presence: PresenceRequired, Applicability: "the service's own model output version"},
-		{Key: "contract_mismatch", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: SuppliedInterpretationContractFieldVocabulary(), Applicability: "the declared contract fields that differ from the service's own when outcome=contract_mismatch; empty on every other line"},
+		{Key: "contract_mismatch", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: SuppliedInterpretationContractFieldVocabulary(), Applicability: "the contract fields whose declared value is absent or differs from the service's own when outcome=contract_mismatch; empty on every other line"},
 		{Key: "schema_error_type", Type: FieldString, Presence: PresenceRequired, Applicability: "the schema validator's name for the first failed rule when the output failed the model output schema or the strict decode; empty on every other line"},
 		{Key: "rejection_reason", Type: FieldString, Presence: PresenceRequired, Applicability: "the interpretation rejection reason when outcome=invalid_output; empty on every other line"},
 	},

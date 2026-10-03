@@ -116,8 +116,8 @@ func TestSuppliedInterpretationOutsideItsBoundsIsRefusedBeforeTheInvestigator(t 
 	}{
 		{"output over the byte bound", func(s *contractsv1.ContextFabricSuppliedInterpretation) { s.Output = oversize }},
 		{"output is not an object", func(s *contractsv1.ContextFabricSuppliedInterpretation) { s.Output = json.RawMessage(`["open"]`) }},
-		{"missing model output version", func(s *contractsv1.ContextFabricSuppliedInterpretation) { s.ModelOutputVersion = "" }},
-		{"missing prompt version", func(s *contractsv1.ContextFabricSuppliedInterpretation) { s.PromptVersion = "" }},
+		{"model output version is blank", func(s *contractsv1.ContextFabricSuppliedInterpretation) { s.ModelOutputVersion = "  " }},
+		{"prompt version is over its length bound", func(s *contractsv1.ContextFabricSuppliedInterpretation) { s.PromptVersion = strings.Repeat("v", 257) }},
 		{"system sha256 is not 64 hex", func(s *contractsv1.ContextFabricSuppliedInterpretation) { s.SystemSHA256 = "ABC" }},
 		{"client model outside its character class", func(s *contractsv1.ContextFabricSuppliedInterpretation) { s.ClientModel = "model name\nwith a line" }},
 	}

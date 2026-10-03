@@ -4404,7 +4404,7 @@
           "prompt_version",
           "system_sha256"
         ],
-        "applicability": "the declared contract fields that differ from the service's own when outcome=contract_mismatch; empty on every other line"
+        "applicability": "the contract fields whose declared value is absent or differs from the service's own when outcome=contract_mismatch; empty on every other line"
       },
       {
         "key": "schema_error_type",
