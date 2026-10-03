@@ -107,6 +107,7 @@ var schemaRootTypes = map[string]string{
 	"capabilities.v1.schema.json":                                  "Capabilities",
 	"context_fabric_answer_projection.v1.schema.json":              "ContextFabricAnswerProjection",
 	"context_fabric_investigation_request.v1.schema.json":          "ContextFabricInvestigationRequest",
+	"context_fabric_investigation_response.v1.schema.json":         "ContextFabricInvestigationResponse",
 	"context_fabric_investigation_result.v1.schema.json":           "ContextFabricInvestigationResult",
 	"context_fabric_org_model_config.v1.schema.json":               "ContextFabricOrgModelConfig",
 	"context_fabric_org_model_config_write_request.v1.schema.json": "ContextFabricOrgModelConfigWriteRequest",
@@ -155,6 +156,9 @@ var schemaRootTypes = map[string]string{
 	// a field and v2 is not updated alongside it, this catches the divergence
 	// at the point it is introduced.
 	"context_fabric_investigation_result.v2.schema.json": "ContextFabricInvestigationResult",
+	// The create-investigation response: the result plus the optional
+	// synthesis_input sibling, served from the envelope type.
+	"context_fabric_investigation_response.v2.schema.json": "ContextFabricInvestigationResponse",
 }
 
 // schemaRootExemptions names documents with no Go root type, each with the

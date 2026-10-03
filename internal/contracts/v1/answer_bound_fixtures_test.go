@@ -475,7 +475,10 @@ const irreducibleAnswerBytes = 1023
 //
 // 521159035 -> 521162181 (+3146): the version set carries the interpretation
 // source and the interpretation model identity at its 513-rune bound.
-const maximalAnswerBytes = 521162181
+//
+// 521162181 -> 521162209 (+28): the version set carries the synthesis
+// source.
+const maximalAnswerBytes = 521162209
 
 func TestIrreducibleAndMaximalFixturesAreValid(t *testing.T) {
 	for _, tc := range []struct {

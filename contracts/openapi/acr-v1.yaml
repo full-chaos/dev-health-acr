@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 319c9b847da4a662606cc8d40059c468710301b0de090de3752f75ceabdd3593
+# canonical-content-sha256: bcd0cb37903a4160ea97cf377310445aa3e91579e75f7ef607bfcb69af478bdc
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -592,10 +592,10 @@ paths:
               schema:
                 oneOf:
                   -
-                    "$ref": "../jsonschema/v1/context_fabric_investigation_result.v1.schema.json"
+                    "$ref": "../jsonschema/v1/context_fabric_investigation_response.v1.schema.json"
                   -
-                    "$ref": "../jsonschema/v1/context_fabric_investigation_result.v2.schema.json"
-          description: "Investigation result; status may be complete, partial, degraded, clarification_required, or no_match. schema_version is context_fabric_investigation_result.v1, or .v2 when the result minted an anchor membership-verify offer (CHAOS-4042)."
+                    "$ref": "../jsonschema/v1/context_fabric_investigation_response.v2.schema.json"
+          description: "Investigation result; status may be complete, partial, degraded, clarification_required, or no_match. schema_version is context_fabric_investigation_result.v1, or .v2 when the result minted an anchor membership-verify offer (CHAOS-4042). The body is the result plus, when the request asked synthesis_mode client and the turn reached synthesis, synthesis_input: the input for the caller's model to write the answer from. The result read by id never carries it."
         "400":
           "$ref": "#/components/responses/Error"
         "401":
