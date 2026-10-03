@@ -185,7 +185,13 @@ import (
 // anchor guard admits a team beside a repository). A candidate saved under v24
 // for such a question may hold the member_kind_unservable refusal and must not
 // be reused. Not pinned by a test.
-const QueryVersion = "devhealthfacts.clickhouse.v26"
+//
+// v26 -> v27: a pull-request number named in the question is attested by the
+// source census even when a scope-anchor repository committed first, so the
+// pull request is committed and its facts are served. A candidate saved under
+// v26 for such a question holds the repository alone with the pull-request
+// facts pruned, and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v27"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

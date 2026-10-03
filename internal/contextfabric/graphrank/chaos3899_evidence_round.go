@@ -178,6 +178,11 @@ type Attestation struct {
 	// this round's outcome -- "the proof cannot speak for kinds it did not
 	// enumerate."
 	NonCensusedSurvivor bool
+	// SurvivorExcludedReason is non-empty when a would_commit stood only
+	// because a pooled non-censused candidate was excluded from the survivor
+	// set: "scope_anchor" means that candidate is the bound scope anchor the
+	// handle's own census already ran under, so it is scope, not a rival.
+	SurvivorExcludedReason string
 	// UnscopedVisibility gates census EXECUTION itself (brief §1.3(5)): a
 	// scoped caller gets Outcome=would_clarify, Reason=scoped_visibility,
 	// with NO source reads at all -- Kinds is always empty in that case.
@@ -304,6 +309,12 @@ type ShadowEvidenceRoundInput struct {
 	// (NonCensusedSurvivor) without stopping the round from evaluating
 	// would_commit/would_clarify for the kinds it DOES cover.
 	PooledKinds []CensusKind
+	// PooledSubjects are the resolution's candidate subjects behind
+	// PooledKinds; used only to recognise the bound scope anchor among them.
+	PooledSubjects []contextfabric.SubjectRef
+	// Trigger names why the round ran ("stalled", "committed_scope_anchor");
+	// a pure trace tag.
+	Trigger string
 	// CurrentAxis is true only for contextfabric.TemporalCurrent -- brief
 	// D7: historical axis is skipped loudly in Slice 1.
 	CurrentAxis bool
@@ -481,6 +492,8 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 				ShadowPreconditionUnproven:       a.PreconditionUnproven,
 				ShadowUnscopedVisibility:         a.UnscopedVisibility,
 				ShadowNonCensusedSurvivor:        a.NonCensusedSurvivor,
+				ShadowSurvivorExcludedReason:     a.SurvivorExcludedReason,
+				ShadowTrigger:                    input.Trigger,
 				ShadowHandleGrammarBound:         a.HandleGrammarBound,
 				ShadowAnchorUniqueClaimant:       a.AnchorUniqueClaimant,
 				ShadowAnchorReceiptConfirmed:     a.AnchorReceiptConfirmed,
@@ -629,6 +642,7 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 	base.DIdentity = d.Identity()
 
 	var kindAttestations []KindAttestation
+	loopSurvivor := false
 	complete := true
 	satisfierKinds := 0
 	multiSatisfierKinds := 0
@@ -642,6 +656,7 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 			// gap a non-censused-registry kind leaves (brief §3(2)'s own
 			// rationale, applied one level down).
 			base.NonCensusedSurvivor = true
+			loopSurvivor = true
 			continue
 		}
 		outcome, err := input.CensusFunc(ctx, input.OrgID, kind,
@@ -704,6 +719,13 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 	case satisfierKinds == 1 && multiSatisfierKinds == 0 && !base.NonCensusedSurvivor:
 		base.Outcome = ShadowWouldCommit
 		base.PreconditionUnproven = true
+	case satisfierKinds == 1 && multiSatisfierKinds == 0 && nonCensusedSurvivor && !loopSurvivor &&
+		handleSatisfied(handle, kindAttestations) && pooledSurvivorsAreScopeAnchor(input.PooledSubjects, anchor, anchorOK, handle):
+		// The only non-censused hypothesis is the bound scope anchor the
+		// handle's census ran under: scope, not a rival subject.
+		base.Outcome = ShadowWouldCommit
+		base.PreconditionUnproven = true
+		base.SurvivorExcludedReason = "scope_anchor"
 	case satisfierKinds == 0 && multiSatisfierKinds == 0 && !base.NonCensusedSurvivor:
 		base.Outcome = ShadowWouldNoMatch
 	default:
@@ -1031,6 +1053,38 @@ func KindHasAnchorFK(kind CensusKind, anchorKind contextfabric.SubjectKind) bool
 	default:
 		return anchorKind == contextfabric.SubjectRepository
 	}
+}
+
+func handleSatisfied(handle *BoundHandle, kinds []KindAttestation) bool {
+	if handle == nil {
+		return false
+	}
+	for _, ka := range kinds {
+		if ka.Kind == handle.Kind && ka.HandleApplied && ka.Complete && !ka.ClosureMismatch && ka.Count == 1 {
+			return true
+		}
+	}
+	return false
+}
+
+// pooledSurvivorsAreScopeAnchor reports whether every pooled subject outside
+// the census registry is the bound anchor itself, and the anchor is one the
+// handle's kind is keyed under.
+func pooledSurvivorsAreScopeAnchor(pooled []contextfabric.SubjectRef, anchor AnchorBinding, anchorOK bool, handle *BoundHandle) bool {
+	if !anchorOK || handle == nil || !KindHasAnchorFK(handle.Kind, anchor.Kind) {
+		return false
+	}
+	seen := false
+	for _, subject := range pooled {
+		if IsCensusKindRegistered(subject.Kind) {
+			continue
+		}
+		if subject.Kind != anchor.Kind || subject.CanonicalID != anchor.CanonicalID {
+			return false
+		}
+		seen = true
+	}
+	return seen
 }
 
 func valueOr(applies bool, handle *BoundHandle) string {
