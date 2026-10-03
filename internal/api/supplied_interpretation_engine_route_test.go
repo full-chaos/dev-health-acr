@@ -685,3 +685,110 @@ func TestSuppliedInterpretationFollowUpTurnIsServedLikeTheModelPath(t *testing.T
 		})
 	}
 }
+
+// TestSuppliedInterpretationContractIsRefusedOnATurnThatEndsBeforeInterpretation
+// posts a supplied interpretation on requests the engine ends before its
+// interpret step: one names a prior window receipt of a result that does not
+// exist, one a prior kind receipt of such a result. With a stale or missing
+// contract value each is refused 409 with the current contract. With the
+// service's own contract the same requests are served the engine's own
+// refusal of the receipt, so the 409 is the contract's and not the receipt's.
+func TestSuppliedInterpretationContractIsRefusedOnATurnThatEndsBeforeInterpretation(t *testing.T) {
+	supplied, err := genkitruntime.NewSuppliedInterpreter(genkitruntime.SuppliedInterpreterConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract := supplied.Contract()
+	interprets := 0
+	var synthesized []contextfabric.InterpretedQuestion
+	app, token := newSuppliedRouteApp(t, contextfabric.RuntimeQuestionInterpreter{Runtime: interpretCountingRuntime{interprets: &interprets}, Supplied: supplied}, contextfabric.StoredSubjectAdmitted, &synthesized)
+
+	exits := map[string]func(*contractsv1.ContextFabricInvestigationRequest){
+		"unresolved window receipt": func(r *contractsv1.ContextFabricInvestigationRequest) {
+			r.PriorWindowReceipts = []contractsv1.ContextFabricBoundSubjectReceipt{{ResultID: "result_does_not_exist_01", ReceiptID: "winr_confirm0001"}}
+		},
+		"unresolved kind receipt": func(r *contractsv1.ContextFabricInvestigationRequest) {
+			r.PriorKindReceipts = []contractsv1.ContextFabricBoundSubjectReceipt{{ResultID: "result_does_not_exist_01", ReceiptID: "kindr_confirm0001"}}
+		},
+	}
+	contracts := map[string]func(*contractsv1.ContextFabricSuppliedInterpretation) string{
+		"stale prompt version": func(s *contractsv1.ContextFabricSuppliedInterpretation) string {
+			s.PromptVersion = "context-fabric-interpretation.v1"
+			return "prompt_version"
+		},
+		"stale model output version": func(s *contractsv1.ContextFabricSuppliedInterpretation) string {
+			s.ModelOutputVersion = "context-fabric-model-output.v1"
+			return "model_output_version"
+		},
+		"digest of another prompt": func(s *contractsv1.ContextFabricSuppliedInterpretation) string {
+			s.SystemSHA256 = strings.Repeat("a", 64)
+			return "system_sha256"
+		},
+		"digest absent": func(s *contractsv1.ContextFabricSuppliedInterpretation) string {
+			s.SystemSHA256 = ""
+			return "system_sha256"
+		},
+	}
+	post := func(t *testing.T, exit func(*contractsv1.ContextFabricInvestigationRequest), field contractsv1.ContextFabricSuppliedInterpretation) *httptest.ResponseRecorder {
+		t.Helper()
+		body := investigationRequestBody()
+		body.SuppliedInterpretation = &field
+		exit(&body)
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := httptest.NewRequest(http.MethodPost, ContextFabricInvestigationsPath, bytes.NewReader(encoded))
+		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set("X-ACR-Client-Version", "1.0.0")
+		request.Header.Set("Content-Type", "application/json")
+		recorder := httptest.NewRecorder()
+		app.Handler().ServeHTTP(recorder, request)
+		return recorder
+	}
+	current := func() contractsv1.ContextFabricSuppliedInterpretation {
+		return contractsv1.ContextFabricSuppliedInterpretation{
+			Output:             json.RawMessage(suppliedRouteOutput),
+			ModelOutputVersion: contract.ModelOutputVersion, PromptVersion: contract.PromptVersion, SystemSHA256: contract.SystemSHA256,
+		}
+	}
+
+	for exitName, exit := range exits {
+		control := post(t, exit, current())
+		var served contractsv1.ContextFabricInvestigationResult
+		if err := json.Unmarshal(control.Body.Bytes(), &served); err != nil {
+			t.Fatalf("%s, the service's own contract: status = %d body=%s: %v", exitName, control.Code, control.Body.String(), err)
+		}
+		if control.Code != http.StatusOK || served.Status != contractsv1.ContextFabricInvestigationNoMatch || served.Versions.InterpretationSource != "" {
+			t.Fatalf("%s, the service's own contract: status = %d result status = %q interpretation_source = %q, want the engine's own refusal of the receipt with no interpretation",
+				exitName, control.Code, served.Status, served.Versions.InterpretationSource)
+		}
+		for contractName, mutate := range contracts {
+			t.Run(exitName+", "+contractName, func(t *testing.T) {
+				field := current()
+				wantField := mutate(&field)
+				refused := post(t, exit, field)
+				var envelope struct {
+					Error struct {
+						Code    string `json:"code"`
+						Details struct {
+							Contract contractsv1.ContextFabricInterpretationContractRefusal `json:"interpretation_contract"`
+						} `json:"details"`
+					} `json:"error"`
+				}
+				if err := json.Unmarshal(refused.Body.Bytes(), &envelope); err != nil {
+					t.Fatalf("status = %d body=%s: %v", refused.Code, refused.Body.String(), err)
+				}
+				if refused.Code != http.StatusConflict || envelope.Error.Code != "invalid_request" {
+					t.Fatalf("status = %d code = %q body=%s, want a 409 invalid_request", refused.Code, envelope.Error.Code, refused.Body.String())
+				}
+				if !reflect.DeepEqual(envelope.Error.Details.Contract.Mismatch, []string{wantField}) || envelope.Error.Details.Contract.Current != contract {
+					t.Fatalf("refusal = %#v, want %s named and the service's own contract %#v", envelope.Error.Details.Contract, wantField, contract)
+				}
+			})
+		}
+	}
+	if interprets != 0 || len(synthesized) != 0 {
+		t.Fatalf("interpret calls = %d syntheses = %d, want 0 and 0: every one of these turns ends before interpretation", interprets, len(synthesized))
+	}
+}

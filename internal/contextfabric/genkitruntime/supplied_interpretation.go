@@ -97,6 +97,36 @@ func InterpretationSystemPromptSHA256() string {
 // have been made under.
 func (s *SuppliedInterpreter) Contract() contextfabric.InterpretationContract { return s.contract }
 
+// CheckSuppliedContract refuses a supplied interpretation whose declared
+// contract is not the one this service runs, and writes the decision line of
+// that refusal. A contract that matches writes nothing: the interpret step
+// writes the line of a turn that reaches it.
+func (s *SuppliedInterpreter) CheckSuppliedContract(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest) error {
+	supplied := request.SuppliedInterpretation
+	if supplied == nil {
+		return errors.New("request carries no supplied interpretation")
+	}
+	mismatch := s.contractMismatch(*supplied)
+	if len(mismatch) == 0 {
+		return nil
+	}
+	s.logDecision(ctx, principal.OrgID, request.RequestID, suppliedDecision{
+		outcome:          eventspec.SuppliedInterpretationOutcomeContractMismatch,
+		clientModel:      declaredClientModel(*supplied),
+		contractMismatch: mismatch,
+	})
+	return &contextfabric.SuppliedInterpretationContractMismatch{
+		Refusal: contextfabric.InterpretationContractRefusal{Mismatch: mismatch, Current: s.contract},
+	}
+}
+
+func declaredClientModel(supplied contextfabric.SuppliedInterpretation) string {
+	if supplied.ClientModel == "" {
+		return contractsv1.ContextFabricClientModelUndeclared
+	}
+	return supplied.ClientModel
+}
+
 func (s *SuppliedInterpreter) InterpretSuppliedQuestion(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
 	// Every return before the output is evaluated is a refused request; the
 	// two later outcomes are read off the receipt.
@@ -119,10 +149,7 @@ func (s *SuppliedInterpreter) InterpretSuppliedQuestion(ctx context.Context, pri
 	if supplied == nil {
 		return contextfabric.InterpretedQuestion{}, contextfabric.ModelExecutionReceipt{}, errors.New("request carries no supplied interpretation")
 	}
-	model := supplied.ClientModel
-	if model == "" {
-		model = contractsv1.ContextFabricClientModelUndeclared
-	}
+	model := declaredClientModel(*supplied)
 	decision.clientModel = model
 	if mismatch := s.contractMismatch(*supplied); len(mismatch) > 0 {
 		decision.outcome = eventspec.SuppliedInterpretationOutcomeContractMismatch

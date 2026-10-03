@@ -27,12 +27,20 @@ func (m modelFreeRuntime) SynthesizeAnswer(context.Context, storage.Principal, S
 }
 
 // scriptedSuppliedRuntime is a SuppliedInterpretationRuntime that returns a
-// fixed answer and records each request it was given.
+// fixed answer and records each request it was given. contractErr is what
+// its contract check returns; checks counts those checks.
 type scriptedSuppliedRuntime struct {
 	interpreted InterpretedQuestion
 	receipt     ModelExecutionReceipt
 	err         error
 	requests    []InvestigationRequest
+	contractErr error
+	checks      int
+}
+
+func (s *scriptedSuppliedRuntime) CheckSuppliedContract(context.Context, storage.Principal, InvestigationRequest) error {
+	s.checks++
+	return s.contractErr
 }
 
 func (s *scriptedSuppliedRuntime) InterpretSuppliedQuestion(_ context.Context, _ storage.Principal, request InvestigationRequest) (InterpretedQuestion, ModelExecutionReceipt, error) {
@@ -370,5 +378,91 @@ func TestContractMismatchOfASuppliedInterpretationReachesTheCallerTyped(t *testi
 	}
 	if len(rig.sink.recorded) != 0 || len(rig.interpreted) != 0 || rig.store.saved.ResultID != "" {
 		t.Fatalf("receipts = %d resolutions = %d saved = %q, want nothing recorded, resolved or saved", len(rig.sink.recorded), len(rig.interpreted), rig.store.saved.ResultID)
+	}
+}
+
+// TestSuppliedInterpretationContractIsCheckedAboveEveryExitOfTheTurn runs
+// supplied interpretations on turns the engine ends before its interpret
+// step: a prior window receipt and a prior kind receipt of a result that does
+// not exist. A contract the runtime refuses ends the turn with that refusal
+// and nothing saved. A contract it accepts lets the turn reach the engine's
+// own refusal of the receipt, with one check and no interpretation.
+func TestSuppliedInterpretationContractIsCheckedAboveEveryExitOfTheTurn(t *testing.T) {
+	t.Parallel()
+	refusal := InterpretationContractRefusal{
+		Mismatch: []string{contractsv1.ContextFabricInterpretationContractFieldSystemSHA256},
+		Current: InterpretationContract{
+			ModelOutputVersion: "schema-v1", PromptVersion: "prompt-v2",
+			SystemSHA256: "0000000000000000000000000000000000000000000000000000000000000000",
+		},
+	}
+	exits := map[string]func(*InvestigationRequest){
+		"unresolved window receipt": func(r *InvestigationRequest) {
+			r.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: "result_does_not_exist_01", ReceiptID: "winr_confirm0001"}}
+		},
+		"unresolved kind receipt": func(r *InvestigationRequest) {
+			r.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: "result_does_not_exist_01", ReceiptID: "kindr_confirm0001"}}
+		},
+	}
+	for name, exit := range exits {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			request := suppliedInvestigationRequest(validInvestigationRequest())
+			exit(&request)
+
+			accepted := &scriptedSuppliedRuntime{interpreted: suppliedInterpretation(), receipt: clientInterpretReceipt()}
+			control := newSuppliedEngineRig(t, RuntimeQuestionInterpreter{Runtime: modelFreeRuntime{t: t}, Supplied: accepted})
+			served, err := control.engine.Investigate(context.Background(), reusePrincipal(), request)
+			if err != nil {
+				t.Fatalf("accepted contract: Investigate() error = %v, want the engine's own refusal of the receipt", err)
+			}
+			if served.Status != InvestigationNoMatch || accepted.checks != 1 || len(accepted.requests) != 0 || len(control.interpreted) != 0 {
+				t.Fatalf("accepted contract: Status = %q contract checks = %d interpretations = %d resolutions = %d, want a no_match turn that checked the contract once and interpreted nothing",
+					served.Status, accepted.checks, len(accepted.requests), len(control.interpreted))
+			}
+
+			refused := &scriptedSuppliedRuntime{contractErr: &SuppliedInterpretationContractMismatch{Refusal: refusal}}
+			rig := newSuppliedEngineRig(t, RuntimeQuestionInterpreter{Runtime: modelFreeRuntime{t: t}, Supplied: refused})
+			_, err = rig.engine.Investigate(context.Background(), reusePrincipal(), request)
+			var mismatch *SuppliedInterpretationContractMismatch
+			if !errors.As(err, &mismatch) || !reflect.DeepEqual(mismatch.Refusal, refusal) {
+				t.Fatalf("refused contract: error = %v, want the contract mismatch with its refusal intact", err)
+			}
+			if stage, ok := FailureStage(err); !ok || stage != StageInterpretation {
+				t.Fatalf("refused contract: failure stage = %q, want %q", stage, StageInterpretation)
+			}
+			if refused.checks != 1 || len(refused.requests) != 0 || rig.store.saved.ResultID != "" || rig.lookups != 0 || len(rig.sink.recorded) != 0 {
+				t.Fatalf("refused contract: checks = %d interpretations = %d saved = %q lookups = %d receipts = %d, want one check and nothing interpreted, saved, looked up or recorded",
+					refused.checks, len(refused.requests), rig.store.saved.ResultID, rig.lookups, len(rig.sink.recorded))
+			}
+		})
+	}
+}
+
+// TestSuppliedInterpretationIsRefusedAtTheStartOfTheTurnWhenNothingCanCheckIt
+// covers the two interpreters that cannot check a supplied interpretation:
+// the production interpreter with no supplied runtime, and an interpreter
+// that is not a SuppliedInterpretationGate. Each turn ends before any exit
+// that serves a result, here the refusal of an unresolved window receipt.
+func TestSuppliedInterpretationIsRefusedAtTheStartOfTheTurnWhenNothingCanCheckIt(t *testing.T) {
+	t.Parallel()
+	request := suppliedInvestigationRequest(validInvestigationRequest())
+	request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: "result_does_not_exist_01", ReceiptID: "winr_confirm0001"}}
+	noRuntime := newSuppliedEngineRig(t, RuntimeQuestionInterpreter{Runtime: modelFreeRuntime{t: t}})
+	if _, err := noRuntime.engine.Investigate(context.Background(), reusePrincipal(), request); !errors.Is(err, ErrSuppliedInterpretationUnsupported) || noRuntime.store.saved.ResultID != "" {
+		t.Fatalf("no supplied runtime: error = %v saved = %q, want ErrSuppliedInterpretationUnsupported and nothing saved", err, noRuntime.store.saved.ResultID)
+	}
+
+	store := &resultStoreStub{}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph:   graphReaderStub{},
+		Results: store,
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			t.Fatal("an interpreter that cannot check a supplied interpretation was asked to interpret one")
+			return InterpretedQuestion{}, nil
+		}),
+	})
+	if _, err := engine.Investigate(context.Background(), reusePrincipal(), request); !errors.Is(err, ErrSuppliedInterpretationUnsupported) || store.saved.ResultID != "" {
+		t.Fatalf("interpreter with no gate: error = %v saved = %q, want ErrSuppliedInterpretationUnsupported and nothing saved", err, store.saved.ResultID)
 	}
 }

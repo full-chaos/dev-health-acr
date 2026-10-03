@@ -27,9 +27,11 @@ func SuppliedInterpretationContractFieldVocabulary() []string {
 }
 
 // SuppliedInterpretationDecision is the one line a request that carries its
-// own interpretation produces at the interpret step, on every path: accepted,
-// refused for its contract, refused for its content, or refused before
-// either. It carries no question text and no part of the supplied output.
+// own interpretation produces: when its contract is refused at the start of
+// the turn, or at the interpret step on every path (accepted, refused for
+// its contract, refused for its content, or refused before either). A turn
+// whose contract matches and that ends before the interpret step produces
+// none. It carries no question text and no part of the supplied output.
 // client_model is the caller's declared model name, bounded to a fixed
 // character class by the request contract.
 var SuppliedInterpretationDecision = Event{
@@ -38,7 +40,7 @@ var SuppliedInterpretationDecision = Event{
 	Level:              LevelInfo,
 	Multiplicity:       MultiplicityZeroOrOnePerRequest,
 	Attribution:        []string{"request_id"},
-	BoundedAggregation: "exactly one line per investigation that carries a supplied interpretation, written when the interpret step accepts or refuses it; a request with no supplied interpretation emits none",
+	BoundedAggregation: "at most one line per investigation that carries a supplied interpretation, written when the turn refuses its contract or when the interpret step accepts or refuses it; a turn that ends before the interpret step with a matching contract emits none, and a request with no supplied interpretation emits none",
 	Fields: []Field{
 		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "org_id_hash", Type: FieldString, Presence: PresenceRequired},

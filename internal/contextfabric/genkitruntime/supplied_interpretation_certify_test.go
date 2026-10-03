@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"reflect"
 	"sort"
@@ -121,6 +122,61 @@ func TestEverySuppliedInterpretationOutcomeCertifiesAgainstTheDeclaration(t *tes
 	sort.Strings(declared)
 	if !reflect.DeepEqual(distinct, declared) {
 		t.Fatalf("outcomes driven = %v, declared vocabulary = %v: every declared outcome needs a real producer run, and no run may emit an undeclared one", distinct, declared)
+	}
+}
+
+// TestTheStartOfTurnContractCheckWritesTheDecisionLineOnlyWhenItRefuses runs
+// the contract check the engine calls at the start of a turn. A refused
+// contract returns the refusal with the service's contract and writes one
+// line that certifies against the declared event. A contract that matches
+// writes none, and the interpret step then writes the turn's one line, so a
+// served turn never has two.
+func TestTheStartOfTurnContractCheckWritesTheDecisionLineOnlyWhenItRefuses(t *testing.T) {
+	t.Parallel()
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	supplied := mustSuppliedInterpreter(t, logger)
+	principal := storage.Principal{OrgID: "org_1"}
+
+	refused := suppliedRequestFor(supplied, mustMarshalOutput(t, validInterpretationOutput()))
+	refused.SuppliedInterpretation.SystemSHA256 = ""
+	refused.SuppliedInterpretation.ClientModel = "claude-test"
+	err := supplied.CheckSuppliedContract(context.Background(), principal, refused)
+	var mismatch *contextfabric.SuppliedInterpretationContractMismatch
+	if !errors.As(err, &mismatch) || !reflect.DeepEqual(mismatch.Refusal.Mismatch, []string{"system_sha256"}) || mismatch.Refusal.Current != supplied.Contract() {
+		t.Fatalf("CheckSuppliedContract() error = %v, want the system_sha256 mismatch with the service's contract", err)
+	}
+	log, err := certify.Parse(buffer.Bytes())
+	if err != nil {
+		t.Fatalf("certify.Parse() on the emitted log: %v", err)
+	}
+	result, err := certify.Certify(log, certify.Assertion{Event: eventspec.SuppliedInterpretationDecision, Want: map[string]any{
+		"request_id": refused.RequestID, "interpretation_source": "client", "outcome": "contract_mismatch", "client_model": "claude-test",
+		"prompt_version": "interpret-v1", "model_output_version": "schema-v1", "schema_error_type": "", "rejection_reason": "",
+	}})
+	if err != nil {
+		t.Fatalf("the refusal line failed certification: %v\n%s", err, buffer.String())
+	}
+	if got, _ := result.Line["contract_mismatch"].([]any); !reflect.DeepEqual(got, []any{"system_sha256"}) {
+		t.Fatalf("contract_mismatch = %#v, want system_sha256", result.Line["contract_mismatch"])
+	}
+	if lines := bytes.Count(buffer.Bytes(), []byte(eventspec.SuppliedInterpretationDecisionLogMessage)); lines != 1 {
+		t.Fatalf("decision lines for one refused contract = %d, want 1", lines)
+	}
+
+	buffer.Reset()
+	served := suppliedRequestFor(supplied, mustMarshalOutput(t, validInterpretationOutput()))
+	if err := supplied.CheckSuppliedContract(context.Background(), principal, served); err != nil {
+		t.Fatalf("CheckSuppliedContract() error = %v for the service's own contract, want none", err)
+	}
+	if buffer.Len() != 0 {
+		t.Fatalf("a contract that matches wrote a line at the start of the turn: %s", buffer.String())
+	}
+	if _, _, err := supplied.InterpretSuppliedQuestion(context.Background(), principal, served); err != nil {
+		t.Fatalf("InterpretSuppliedQuestion() error = %v", err)
+	}
+	if lines := bytes.Count(buffer.Bytes(), []byte(eventspec.SuppliedInterpretationDecisionLogMessage)); lines != 1 {
+		t.Fatalf("decision lines for one served turn = %d, want 1", lines)
 	}
 }
 

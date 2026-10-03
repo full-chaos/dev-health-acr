@@ -26,7 +26,20 @@ const (
 // call. The supplied output is untrusted: an implementation validates it as
 // it validates a model output.
 type SuppliedInterpretationRuntime interface {
+	// CheckSuppliedContract refuses, with a
+	// *SuppliedInterpretationContractMismatch, a supplied interpretation
+	// whose declared contract is not the service's own. It evaluates nothing
+	// else of the request.
+	CheckSuppliedContract(context.Context, storage.Principal, InvestigationRequest) error
 	InterpretSuppliedQuestion(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, ModelExecutionReceipt, error)
+}
+
+// SuppliedInterpretationGate is implemented by a QuestionInterpreter that
+// takes supplied interpretations. The engine calls it at the start of every
+// turn that carries one, before any exit that could serve a result, so a
+// turn that ends before the interpret step is refused like any other.
+type SuppliedInterpretationGate interface {
+	CheckSuppliedInterpretation(context.Context, storage.Principal, InvestigationRequest) error
 }
 
 // ErrSuppliedInterpretationUnsupported is returned when a request carries a
@@ -42,6 +55,27 @@ type SuppliedInterpretationContractMismatch struct {
 
 func (e *SuppliedInterpretationContractMismatch) Error() string {
 	return "supplied interpretation contract mismatch: " + strings.Join(e.Refusal.Mismatch, ",")
+}
+
+// CheckSuppliedInterpretation refuses a supplied interpretation this
+// interpreter would refuse for its contract, and every supplied
+// interpretation when no supplied runtime is wired.
+func (r RuntimeQuestionInterpreter) CheckSuppliedInterpretation(ctx context.Context, principal storage.Principal, request InvestigationRequest) error {
+	if r.Supplied == nil {
+		return ErrSuppliedInterpretationUnsupported
+	}
+	return r.Supplied.CheckSuppliedContract(ctx, principal, request)
+}
+
+// checkSuppliedInterpretation is the engine's entry gate for a request that
+// carries a supplied interpretation. An interpreter that cannot check one
+// cannot take one.
+func (e *Engine) checkSuppliedInterpretation(ctx context.Context, principal storage.Principal, request InvestigationRequest) error {
+	gate, ok := e.interpreter.(SuppliedInterpretationGate)
+	if !ok {
+		return ErrSuppliedInterpretationUnsupported
+	}
+	return gate.CheckSuppliedInterpretation(ctx, principal, request)
 }
 
 // interpretSupplied is Interpret for a request that carries its own

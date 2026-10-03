@@ -3,6 +3,7 @@ package hosted
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -35,6 +36,22 @@ func TestTheCompositionConstructorServesASuppliedInterpretationWithNoModel(t *te
 			PromptVersion:      genkitruntime.DefaultInterpretationPromptVersion,
 			SystemSHA256:       genkitruntime.InterpretationSystemPromptSHA256(),
 		},
+	}
+
+	// The engine checks the contract through this interface at the start of
+	// every turn that carries a supplied interpretation; an interpreter that
+	// is not one refuses them all.
+	var gate contextfabric.SuppliedInterpretationGate = interpreter
+	if err := gate.CheckSuppliedInterpretation(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
+		t.Fatalf("CheckSuppliedInterpretation() error = %v for the contract this binary runs, want none", err)
+	}
+	stale := request
+	staleField := *request.SuppliedInterpretation
+	staleField.SystemSHA256 = ""
+	stale.SuppliedInterpretation = &staleField
+	var mismatch *contextfabric.SuppliedInterpretationContractMismatch
+	if err := gate.CheckSuppliedInterpretation(context.Background(), storage.Principal{OrgID: "org_1"}, stale); !errors.As(err, &mismatch) {
+		t.Fatalf("CheckSuppliedInterpretation() error = %v for a contract with no digest, want the contract mismatch", err)
 	}
 
 	question, outcome, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, request)

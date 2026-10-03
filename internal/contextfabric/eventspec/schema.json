@@ -4346,7 +4346,7 @@
     "attribution": [
       "request_id"
     ],
-    "bounded_aggregation": "exactly one line per investigation that carries a supplied interpretation, written when the interpret step accepts or refuses it; a request with no supplied interpretation emits none",
+    "bounded_aggregation": "at most one line per investigation that carries a supplied interpretation, written when the turn refuses its contract or when the interpret step accepts or refuses it; a turn that ends before the interpret step with a matching contract emits none, and a request with no supplied interpretation emits none",
     "fields": [
       {
         "key": "request_id",

@@ -1507,6 +1507,16 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		continuation = continuation.withReason(ContinuationReasonPrincipalUnauthenticated)
 		return InvestigationResult{}, errors.New("authenticated organization is required")
 	}
+	// A supplied interpretation made under a contract this service does not
+	// run is refused here, above every exit that serves a result. Several of
+	// those exits end the turn before the interpret step, which checks the
+	// contract again for a turn that reaches it.
+	if request.SuppliedInterpretation != nil {
+		if err := e.checkSuppliedInterpretation(ctx, principal, request); err != nil {
+			continuation = continuation.withReason(ContinuationReasonRequestInvalid)
+			return InvestigationResult{}, stageError(StageInterpretation, err)
+		}
+	}
 	// CHAOS-3781: historical questions are ANSWERED now, not refused --
 	// the graph admits by validity window and the fact providers bound
 	// themselves or decline honestly, so the layers this engine used to
