@@ -50,7 +50,7 @@ func generateCandidates(rng *rand.Rand) generatedCase {
 		contractsv1.ContextFabricRelationshipBlocks,
 		contractsv1.ContextFabricRelationshipRelatesTo,
 		contractsv1.ContextFabricRelationshipDuplicates,
-		"EXTERNAL_ISSUE_KEY", // outside the vocabulary
+		"UNMAPPED_TEST_TYPE", // outside the vocabulary
 		"NOT_A_REAL_TYPE",    // outside the vocabulary
 	}
 

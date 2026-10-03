@@ -313,6 +313,11 @@ type candidate struct {
 	// fired or which producer emitted the pair, only that one item was the
 	// reason for another.
 	supports string
+
+	// ignoredType, when set, marks a progress-only candidate for a source row
+	// whose relationship type is deliberately not projected (see
+	// ignoredDependencyTypes). It carries no item; partition counts it.
+	ignoredType string
 }
 
 func (s *ClickHouseProjectionSource) NextProjectionBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {

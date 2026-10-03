@@ -4,6 +4,7 @@ import (
 	"errors"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -66,6 +67,9 @@ type quarantineObservation struct {
 	// Kind names which item shape was dropped: entity, relationship,
 	// episode or tombstone.
 	Kind string
+	// IgnoredCount is non-zero only for an ignore observation: Detail then
+	// names the ignored relationship type and Reason is empty.
+	IgnoredCount int
 }
 
 // validateCandidateItem runs the contract's OWN validator over whichever
@@ -225,7 +229,13 @@ func partitionProjectableCandidates(all []candidate, observe func(quarantineObse
 	kept := make([]candidate, 0, len(all))
 	quarantinedRelationships := make(map[string]struct{})
 	quarantinedEntities := make(map[string]struct{})
+	ignored := make(map[string]int)
 	for _, c := range all {
+		if c.ignoredType != "" {
+			ignored[c.ignoredType]++
+			kept = append(kept, c)
+			continue
+		}
 		kind, err := validateCandidateItem(c)
 		if err == nil {
 			kept = append(kept, c)
@@ -243,6 +253,16 @@ func partitionProjectableCandidates(all []candidate, observe func(quarantineObse
 				Detail: quarantineDetail(c),
 				Kind:   kind,
 			})
+		}
+	}
+	if observe != nil {
+		types := make([]string, 0, len(ignored))
+		for t := range ignored {
+			types = append(types, t)
+		}
+		sort.Strings(types)
+		for _, t := range types {
+			observe(quarantineObservation{Kind: "relationship", Detail: t, IgnoredCount: ignored[t]})
 		}
 	}
 	// An endpoint whose AUTHORITATIVE entity was quarantined must not be left
@@ -490,6 +510,14 @@ func quarantineLogger(logger *slog.Logger, sourceName string) func(quarantineObs
 		return nil
 	}
 	return func(observation quarantineObservation) {
+		if observation.IgnoredCount > 0 {
+			logger.Info("context_fabric: projection rows ignored by documented relationship type; nothing is projected for them",
+				"source", contextfabric.SanitizeLogAttr(sourceName),
+				"ignored_relationship_type", contextfabric.SanitizeLogAttr(observation.Detail),
+				"ignored_count", observation.IgnoredCount,
+			)
+			return
+		}
 		attrs := []any{
 			"source", contextfabric.SanitizeLogAttr(sourceName),
 			"quarantine_reason", contextfabric.SanitizeLogAttr(observation.Reason),

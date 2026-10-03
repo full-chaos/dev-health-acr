@@ -671,7 +671,7 @@ func TestProdShapedPageStillReportsZeroForTheNormalizedBounds(t *testing.T) {
 	const illegal, legal = 105, 96
 	rows := make([][]any, 0, illegal+legal)
 	for i := 0; i < illegal; i++ {
-		rows = append(rows, unresolvedDependencyRow(fmt.Sprintf("WI-X%03d", i), fmt.Sprintf("EXT-%03d", i), "EXTERNAL_ISSUE_KEY", at.Add(time.Duration(i)*time.Second), created))
+		rows = append(rows, unresolvedDependencyRow(fmt.Sprintf("WI-X%03d", i), fmt.Sprintf("EXT-%03d", i), "UNMAPPED_TEST_TYPE", at.Add(time.Duration(i)*time.Second), created))
 	}
 	for i := 0; i < legal; i++ {
 		rows = append(rows, dependencyRow(fmt.Sprintf("WI-G%03d", i), fmt.Sprintf("WI-H%03d", i), "RELATES_TO", at.Add(time.Duration(illegal+i)*time.Second), created))
