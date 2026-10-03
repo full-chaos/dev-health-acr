@@ -183,6 +183,13 @@ type Attestation struct {
 	// set: "scope_anchor" means that candidate is the bound scope anchor the
 	// handle's own census already ran under, so it is scope, not a rival.
 	SurvivorExcludedReason string
+	// CallerNarrowing is non-empty when the census count exceeded one and the
+	// caller's repository narrowing was applied to the satisfier set:
+	// narrowed_to_one is the only value that changes the outcome.
+	// NarrowedFrom/NarrowedTo are the satisfier counts before and after.
+	CallerNarrowing string
+	NarrowedFrom    int
+	NarrowedTo      int
 	// UnscopedVisibility gates census EXECUTION itself (brief §1.3(5)): a
 	// scoped caller gets Outcome=would_clarify, Reason=scoped_visibility,
 	// with NO source reads at all -- Kinds is always empty in that case.
@@ -312,6 +319,9 @@ type ShadowEvidenceRoundInput struct {
 	// PooledSubjects are the resolution's candidate subjects behind
 	// PooledKinds; used only to recognise the bound scope anchor among them.
 	PooledSubjects []contextfabric.SubjectRef
+	// NarrowSatisfiers, when set, restricts a multi-satisfier census to the
+	// caller's own repository narrowing (an unrestricted principal's filter).
+	NarrowSatisfiers SatisfierNarrower
 	// Trigger names why the round ran ("stalled", "committed_scope_anchor");
 	// a pure trace tag.
 	Trigger string
@@ -494,6 +504,9 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 				ShadowNonCensusedSurvivor:        a.NonCensusedSurvivor,
 				ShadowSurvivorExcludedReason:     a.SurvivorExcludedReason,
 				ShadowTrigger:                    input.Trigger,
+				ShadowCallerNarrowing:            a.CallerNarrowing,
+				ShadowNarrowedFrom:               a.NarrowedFrom,
+				ShadowNarrowedTo:                 a.NarrowedTo,
 				ShadowHandleGrammarBound:         a.HandleGrammarBound,
 				ShadowAnchorUniqueClaimant:       a.AnchorUniqueClaimant,
 				ShadowAnchorReceiptConfirmed:     a.AnchorReceiptConfirmed,
@@ -681,6 +694,18 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 			ka.SatisfierCanonicalID = outcome.SatisfierCanonicalID
 			ka.SatisfierCanonicalIDs = outcome.SatisfierCanonicalIDs
 			ka.SatisfierSetClosureMismatch = outcome.SatisfierSetClosureMismatch
+			if input.NarrowSatisfiers != nil && !outcome.ClosureMismatch && outcome.Count > 1 {
+				narrowed := narrowCensusSatisfiers(ctx, input.NarrowSatisfiers, kind, outcome)
+				base.CallerNarrowing, base.NarrowedFrom, base.NarrowedTo = narrowed.outcome, outcome.Count, len(narrowed.kept)
+				if narrowed.outcome == narrowedToOne {
+					outcome.Count = 1
+					outcome.SatisfierCanonicalID = narrowed.kept[0]
+					outcome.SatisfierCanonicalIDs = nil
+					ka.Count = 1
+					ka.SatisfierCanonicalID = outcome.SatisfierCanonicalID
+					ka.SatisfierCanonicalIDs = nil
+				}
+			}
 			if outcome.ClosureMismatch {
 				mismatch = true
 			} else if outcome.Count == 1 {
@@ -1092,4 +1117,45 @@ func valueOr(applies bool, handle *BoundHandle) string {
 		return handle.Value
 	}
 	return ""
+}
+
+const (
+	narrowedToOne    = "narrowed_to_one"
+	narrowedToNone   = "narrowed_to_none"
+	narrowedToMany   = "narrowed_to_many"
+	narrowTruncated  = "census_truncated"
+	narrowReadFailed = "satisfier_read_failed"
+)
+
+// censusNarrowingMaxSatisfiers bounds the keyed graph reads one narrowing makes.
+const censusNarrowingMaxSatisfiers = 25
+
+// SatisfierNarrower keeps the satisfier ids the caller's repository narrowing
+// admits; ok is false when it could not decide.
+type SatisfierNarrower func(ctx context.Context, kind CensusKind, canonicalIDs []string) (kept []string, ok bool)
+
+type censusNarrowing struct {
+	outcome string
+	kept    []string
+}
+
+func narrowCensusSatisfiers(ctx context.Context, narrow SatisfierNarrower, kind CensusKind, outcome CensusOutcome) censusNarrowing {
+	ids := outcome.SatisfierCanonicalIDs
+	switch {
+	case outcome.SatisfierSetClosureMismatch || len(ids) != outcome.Count:
+		return censusNarrowing{outcome: narrowTruncated}
+	case len(ids) > censusNarrowingMaxSatisfiers:
+		return censusNarrowing{outcome: narrowTruncated}
+	}
+	kept, ok := narrow(ctx, kind, ids)
+	switch {
+	case !ok:
+		return censusNarrowing{outcome: narrowReadFailed}
+	case len(kept) == 1:
+		return censusNarrowing{outcome: narrowedToOne, kept: kept}
+	case len(kept) == 0:
+		return censusNarrowing{outcome: narrowedToNone}
+	default:
+		return censusNarrowing{outcome: narrowedToMany, kept: kept}
+	}
 }
