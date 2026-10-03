@@ -106,3 +106,31 @@ func TestInterpretationStampOfAnEarlierTurnIsClearedByAZeroStamp(t *testing.T) {
 		t.Fatalf("Versions = %#v, want unwired: a turn with no interpret call must not read an earlier turn's stamp", versions)
 	}
 }
+
+type zeroStampInterpreter struct{ inner QuestionInterpreter }
+
+func (i zeroStampInterpreter) Interpret(ctx context.Context, principal storage.Principal, request InvestigationRequest) (InterpretedQuestion, QuestionFamilyOutcome, error) {
+	interpreted, outcome, err := i.inner.Interpret(ctx, principal, request)
+	outcome.Interpretation = InterpretationStamp{}
+	return interpreted, outcome, err
+}
+
+func TestEngineInvestigateClearsAStaleInterpretationStampWhenNoInterpretCallRan(t *testing.T) {
+	t.Parallel()
+	runtime := fakeModelRuntime{interpreted: bootstrapInterpretation(), receipt: acceptanceReceipt()}
+	graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext()}
+	engine := buildWindowGateEngine(t, zeroStampInterpreter{inner: RuntimeQuestionInterpreter{Runtime: runtime}}, graph, newMapResultStore())
+	stale := withInterpretationStamp(context.Background(), interpretedStamp().Interpretation)
+
+	result, err := engine.Investigate(stale, acceptancePrincipal(), validInvestigationRequestWithConfirmedWindow())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Status != InvestigationNoMatch {
+		t.Fatalf("Status = %q, want no_match", result.Status)
+	}
+	got := result.Versions
+	if got.InterpretationSource != "" || got.InterpretationModelIdentity != "" || got.InterpretationVersion != "unwired" || got.ModelIdentity != "unwired" || got.SynthesisVersion != "unwired" {
+		t.Fatalf("Versions = %#v, want no interpretation provenance and unwired versions: a turn with no interpret call must not read the stamp its context carried in", got)
+	}
+}
