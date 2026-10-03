@@ -522,7 +522,7 @@ func runHostedE2E(t *testing.T, cfg *hostedE2EConfig) {
 		for _, p := range prompts.Prompts {
 			promptNames = append(promptNames, p.Name)
 		}
-		for _, want := range []string{"investigate", "continue_investigation", "expand_evidence"} {
+		for _, want := range []string{"investigate", "continue_investigation", "expand_evidence", "interpret_question"} {
 			if !slices.Contains(promptNames, want) {
 				t.Errorf("prompts/list lacks %q: %v", want, promptNames)
 			}
