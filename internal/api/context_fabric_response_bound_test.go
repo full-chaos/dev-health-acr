@@ -374,7 +374,7 @@ func TestContextFabricInvestigationRouteRowsBearingResultFitsProductionResponseB
 // ContextFabricInvestigationResultPath and the matching test above for
 // why the org usage window must still grow.
 func TestContextFabricInvestigationResultRouteRowsBearingResultFitsProductionResponseBudget(t *testing.T) {
-	result := threeRollupProjectStatusResult("result_4355_get")
+	result := storedNamingItsInterpreter(threeRollupProjectStatusResult("result_4355_get"))
 	measuredBytes := marshaledSize(t, result)
 	estimatedTokens := (measuredBytes + 3) / 4
 	store := memoryinvestigation.NewStore()
@@ -417,6 +417,15 @@ func TestContextFabricInvestigationResultRouteRowsBearingResultFitsProductionRes
 // takes an already-built result rather than the shared
 // validContextFabricInvestigationResult() fixture, so this file's
 // Rows-bearing fixtures can be stored directly.
+// storedNamingItsInterpreter is result as the service stores an answer it
+// interpreted. The read by id serves such a row with its versions unchanged,
+// so the served document has the size of the stored one.
+func storedNamingItsInterpreter(result contractsv1.ContextFabricInvestigationResult) contractsv1.ContextFabricInvestigationResult {
+	result.Versions.InterpretationSource = contractsv1.ContextFabricInterpretationSourceServer
+	result.Versions.InterpretationModelIdentity = "test-provider/interpret-model"
+	return result
+}
+
 func seedResult3355(t *testing.T, store *memoryinvestigation.Store, orgID string, result contractsv1.ContextFabricInvestigationResult) contractsv1.ContextFabricInvestigationResult {
 	t.Helper()
 	if err := store.Save(context.Background(), seedPrincipal(orgID), result, contextfabric.SourceWatermarkSnapshot{}, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation)); err != nil {

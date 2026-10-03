@@ -59,7 +59,9 @@
     "interpretation_version": "schema-v1",
     "synthesis_version": "prompt-v1+model-v1",
     "canonical_service_version": "unwired",
-    "model_identity": "test-provider/test-model"
+    "model_identity": "test-provider/test-model",
+    "interpretation_source": "server",
+    "interpretation_model_identity": "test-provider/test-model"
   },
   "projection_budget": {
     "truncated": false,

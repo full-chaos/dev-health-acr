@@ -1,0 +1,717 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/acr/v1/mcp_investigate_with_interpretation_request.v1.schema.json",
+  "title": "ACR MCP investigate_with_interpretation Request v1",
+  "description": "Input for the investigate_with_interpretation tool: every investigate_question argument, plus the interpretation you ran on your own model. Fetch the prompt interpret_question with prompts/get, run it on your own model, send the reply object as interpretation and the prompt's _meta values (prompt_version, model_output_version, system_sha256) as contract. The question and the other arguments mean what they mean for investigate_question. A contract that is not the service's own is refused with the current values: fetch the prompt again. The answer comes back in the same form as investigate_question.",
+  "examples": [
+    {
+      "question": "Is pull request 532 ready to merge?",
+      "expected_kinds": [
+        "pull_request"
+      ],
+      "interpretation": {},
+      "contract": {
+        "model_output_version": "interpretation_output.v1",
+        "prompt_version": "interpret_question.v1",
+        "system_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "client_model": "example-model"
+    }
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "question",
+    "interpretation",
+    "contract"
+  ],
+  "if": {
+    "properties": {
+      "prior_subject_receipts": {
+        "items": {
+          "type": "object"
+        }
+      },
+      "prior_kind_receipts": {
+        "items": {
+          "type": "object"
+        }
+      },
+      "prior_anchor_receipts": {
+        "items": {
+          "type": "object"
+        }
+      },
+      "prior_handle_receipts": {
+        "items": {
+          "type": "object"
+        }
+      },
+      "prior_window_receipts": {
+        "items": {
+          "type": "object"
+        }
+      },
+      "prior_candidate_receipts": {
+        "items": {
+          "type": "object"
+        }
+      }
+    }
+  },
+  "else": {
+    "required": [
+      "parent_result_id"
+    ]
+  },
+  "properties": {
+    "question": {
+      "type": "string",
+      "description": "The question in natural language, for example \"which teams need attention?\" or \"what is blocking the payments project?\". Name the subject and, if it matters, the period. Required. Write it as a person would ask it; do not pass code or instructions to the service.",
+      "minLength": 1,
+      "maxLength": 8000
+    },
+    "conversation": {
+      "type": "array",
+      "description": "Optional previous turns of this conversation (oldest first, up to 50), so a short follow-up such as \"and last quarter?\" can be understood. Include user and assistant turns as they were said. Confirmed subjects travel through the receipts and parent_result_id, not through this list.",
+      "items": {
+        "$ref": "#/$defs/ConversationTurn"
+      },
+      "maxItems": 50
+    },
+    "prior_subject_receipts": {
+      "type": "array",
+      "description": "Confirms subjects a previous answer committed to, so this turn keeps investigating the same subjects. Take entries from that answer's subject_receipts. Receipts returned by the previous answer. Copy each entry unchanged from that answer, with the result_id it came from. Each entry may also be the bare receipt_id string; then parent_result_id is required and is used as that receipt's result_id.",
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/BoundSubjectReceipt"
+          },
+          {
+            "$ref": "#/$defs/BareBoundSubjectReceiptID"
+          }
+        ]
+      },
+      "maxItems": 20
+    },
+    "prior_kind_receipts": {
+      "type": "array",
+      "description": "Answers a clarification about what kind of thing you meant. Take the receipt_id (starts with kindr_) of the kind option you choose from structure_needs.kind_options. Receipts returned by the previous answer. Copy each entry unchanged from that answer, with the result_id it came from. Each entry may also be the bare receipt_id string; then parent_result_id is required and is used as that receipt's result_id.",
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/KindBoundReceipt"
+          },
+          {
+            "$ref": "#/$defs/BareKindReceiptID"
+          }
+        ]
+      },
+      "maxItems": 20
+    },
+    "prior_anchor_receipts": {
+      "type": "array",
+      "description": "Answers a clarification about which named subject you meant. Take the receipt_id (starts with ancr_) of the option you choose from structure_needs.anchor_options. Receipts returned by the previous answer. Copy each entry unchanged from that answer, with the result_id it came from. Each entry may also be the bare receipt_id string; then parent_result_id is required and is used as that receipt's result_id.",
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/AnchorBoundReceipt"
+          },
+          {
+            "$ref": "#/$defs/BareAnchorReceiptID"
+          }
+        ]
+      },
+      "maxItems": 20
+    },
+    "prior_handle_receipts": {
+      "type": "array",
+      "description": "Confirms an identifier the service offered, such as a pull request number. Take the receipt_id (starts with handr_) of the option you choose from structure_needs.handle_options. Receipts returned by the previous answer. Copy each entry unchanged from that answer, with the result_id it came from. Each entry may also be the bare receipt_id string; then parent_result_id is required and is used as that receipt's result_id.",
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/HandleBoundReceipt"
+          },
+          {
+            "$ref": "#/$defs/BareHandleReceiptID"
+          }
+        ]
+      },
+      "maxItems": 20
+    },
+    "prior_window_receipts": {
+      "type": "array",
+      "description": "Confirms a time window the service offered. Take the receipt_id (starts with winr_) of the option you choose from structure_needs.window_options. Receipts returned by the previous answer. Copy each entry unchanged from that answer, with the result_id it came from. Each entry may also be the bare receipt_id string; then parent_result_id is required and is used as that receipt's result_id.",
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/WindowBoundReceipt"
+          },
+          {
+            "$ref": "#/$defs/BareWindowReceiptID"
+          }
+        ]
+      },
+      "maxItems": 20
+    },
+    "prior_candidate_receipts": {
+      "type": "array",
+      "description": "Chooses among candidate subjects the service offered when several matched. Take the receipt_id (starts with candr_) of the option you choose from structure_needs.candidate_options. Receipts returned by the previous answer. Copy each entry unchanged from that answer, with the result_id it came from. Each entry may also be the bare receipt_id string; then parent_result_id is required and is used as that receipt's result_id.",
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/CandidateBoundReceipt"
+          },
+          {
+            "$ref": "#/$defs/BareCandidateReceiptID"
+          }
+        ]
+      },
+      "maxItems": 20
+    },
+    "parent_result_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 256,
+      "description": "The result_id of the answer this turn follows. Optional. It links the turns of one conversation; it does not by itself bind that answer's subjects into this turn, use the prior_*_receipts for that."
+    },
+    "expected_kinds": {
+      "type": "array",
+      "description": "Optional hint about what kinds of subject the question is about, for example [\"team\"] or [\"pull_request\"]. Use it when the question is ambiguous about kind. It states your intent, not a fact about any subject. Every value in the SubjectKind list is accepted, but only team, project, repository, incident and pull_request can be discovered as a cohort (a \"which ...\" question over many), and deployment only as the members of a named repository or team; other kinds are answered when you name the specific subject.",
+      "items": {
+        "$ref": "#/$defs/SubjectKind"
+      },
+      "maxItems": 15,
+      "uniqueItems": true
+    },
+    "subject_handles": {
+      "type": "array",
+      "description": "Optional exact identifiers you already know, each as a kind, a pattern_id and a value (up to 20). Example: {\"kind\":\"pull_request\",\"pattern_id\":\"pull_request_number\",\"value\":\"532\"}. Usually unnecessary: the service also recognizes identifiers written in the question text, and it offers matches back in structure_needs.handle_options.",
+      "items": {
+        "$ref": "#/$defs/RequestedHandle"
+      },
+      "maxItems": 20,
+      "uniqueItems": true
+    },
+    "evidence_window": {
+      "$ref": "#/$defs/RequestedEvidenceWindow",
+      "description": "Optional period the answer should cover. Give either relative_id (trailing_30d, trailing_90d, trailing_365d or all_time) or both start and end. This is your stated intent and is used as given; the service reports the window it used (see effective_evidence_window)."
+    },
+    "window_confirmation_mode": {
+      "$ref": "#/$defs/WindowConfirmationMode",
+      "description": "Optional. How an inferred, unconfirmed window is reported: headless (the default when empty or omitted) reports it in the structured result; nudge also adds a sentence in the warnings asking you to confirm it. Does not change which window is used."
+    },
+    "scope": {
+      "$ref": "#/$defs/InvestigationScope",
+      "description": "Optional. Restricts the search to exact identifiers you already hold. It does not say what any subject is. Omit it when you only know names; there is no tool that lists valid ids, so put names in the question and let the service resolve them."
+    },
+    "budget": {
+      "$ref": "#/$defs/InvestigationBudget",
+      "description": "Optional limits on the size of the answer. Omitted fields use defaults suited to agents. Every value is clamped to what the service grants your credential, so you can only ask for less than the maximum."
+    },
+    "allow_clarification": {
+      "type": "boolean",
+      "description": "Optional. When true or omitted, the service may return status clarification_required with structure_needs that list the choices it needs from you. Set false to get the best available answer instead of a question back."
+    },
+    "include_full_result": {
+      "type": "boolean",
+      "description": "Optional, default false. When true, also return the full canonical result next to the bounded answer, if it fits the byte budget. Otherwise leave it out and call investigation_result (if this server offers it) with the result_id only when you need more detail."
+    },
+    "interpretation": {
+      "type": "object",
+      "description": "The interpretation object, in the model output shape the interpret_question prompt asks for. It is the reply of your own model, sent unchanged. The service validates it exactly as it validates its own model output; at most 32768 bytes serialized."
+    },
+    "contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The contract you ran the interpretation under: the _meta values of the interpret_question prompt you fetched. All three values are required.",
+      "properties": {
+        "model_output_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "The model_output_version value of the prompt _meta block, unchanged."
+        },
+        "prompt_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "The prompt_version value of the prompt _meta block, unchanged."
+        },
+        "system_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "The system_sha256 value of the prompt _meta block, unchanged."
+        }
+      },
+      "required": [
+        "model_output_version",
+        "prompt_version",
+        "system_sha256"
+      ]
+    },
+    "client_model": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._:/-]{1,128}$",
+      "description": "Optional name of the model you ran, recorded as provenance only."
+    }
+  },
+  "$defs": {
+    "ConversationTurn": {
+      "type": "object",
+      "description": "One previous turn of the conversation.",
+      "additionalProperties": false,
+      "required": [
+        "turn_id",
+        "role",
+        "content",
+        "created_at"
+      ],
+      "properties": {
+        "turn_id": {
+          "type": "string",
+          "description": "Your own identifier for this turn. Unique within the conversation.",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "role": {
+          "type": "string",
+          "description": "Who said it: user or assistant.",
+          "enum": [
+            "user",
+            "assistant"
+          ]
+        },
+        "content": {
+          "type": "string",
+          "description": "The text of the turn.",
+          "minLength": 1,
+          "maxLength": 12000
+        },
+        "created_at": {
+          "type": "string",
+          "description": "When the turn happened, as an RFC 3339 date-time.",
+          "format": "date-time"
+        }
+      }
+    },
+    "BoundSubjectReceipt": {
+      "type": "object",
+      "description": "A receipt confirming a subject a previous answer committed to.",
+      "additionalProperties": false,
+      "required": [
+        "result_id",
+        "receipt_id"
+      ],
+      "properties": {
+        "result_id": {
+          "type": "string",
+          "description": "The result_id of the answer the receipt came from, exactly as returned.",
+          "minLength": 8,
+          "maxLength": 256
+        },
+        "receipt_id": {
+          "type": "string",
+          "description": "The receipt_id from that answer's subject_receipts, unchanged.",
+          "minLength": 8,
+          "maxLength": 256
+        }
+      }
+    },
+    "InvestigationScope": {
+      "description": "Restricts the search to exact identifiers. It narrows what may be considered without saying what any subject is. Every list is optional and holds up to 200 unique values.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository_slugs": {
+          "type": "array",
+          "description": "Repository slugs in owner/name form, for example acme/billing.",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^[^|]*$"
+          },
+          "maxItems": 200,
+          "uniqueItems": true
+        },
+        "project_ids": {
+          "type": "array",
+          "description": "Project identifiers as the service uses them. Omit unless you obtained them from a previous answer.",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[^|]*$"
+          },
+          "maxItems": 200,
+          "uniqueItems": true
+        },
+        "team_ids": {
+          "type": "array",
+          "description": "Team identifiers as the service uses them. Omit unless you obtained them from a previous answer.",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[^|]*$"
+          },
+          "maxItems": 200,
+          "uniqueItems": true
+        }
+      }
+    },
+    "InvestigationBudget": {
+      "description": "Optional limits on the size of the answer. Omitted fields take an agent-appropriate default, and every field is clamped to what the service grants your credential.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_drivers": {
+          "type": "integer",
+          "description": "Maximum number of principal drivers to return, 1 to 50. 0 means not set (the default applies).",
+          "minimum": 0,
+          "maximum": 50
+        },
+        "max_cohort_members": {
+          "type": "integer",
+          "description": "Maximum number of members to list when the answer is about a cohort, 1 to 250. 0 means not set (the default applies).",
+          "minimum": 0,
+          "maximum": 250
+        },
+        "max_evidence_refs": {
+          "type": "integer",
+          "description": "Maximum number of evidence references to return, 1 to 500. 0 means not set (the default applies).",
+          "minimum": 0,
+          "maximum": 500
+        },
+        "max_serialized_bytes": {
+          "type": "integer",
+          "description": "Byte ceiling for the whole serialized response, 8192 to 1048576. Content that does not fit is dropped, never truncated into invalid JSON. 0 means not set (the default applies).",
+          "anyOf": [
+            {
+              "const": 0
+            },
+            {
+              "minimum": 8192
+            }
+          ],
+          "maximum": 1048576
+        }
+      }
+    },
+    "KindBoundReceipt": {
+      "description": "A receipt selecting a kind option the previous answer offered. The receipt_id must start with kindr_; a receipt with another prefix is rejected.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "result_id": {
+          "type": "string",
+          "description": "The result_id of the answer the receipt came from, exactly as returned.",
+          "minLength": 8,
+          "maxLength": 256
+        },
+        "receipt_id": {
+          "type": "string",
+          "description": "The receipt_id of the chosen option, unchanged; it starts with kindr_.",
+          "minLength": 8,
+          "maxLength": 256,
+          "pattern": "^kindr_"
+        }
+      },
+      "required": [
+        "result_id",
+        "receipt_id"
+      ]
+    },
+    "AnchorBoundReceipt": {
+      "description": "A receipt selecting an anchor option the previous answer offered. The receipt_id must start with ancr_; a receipt with another prefix is rejected.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "result_id": {
+          "type": "string",
+          "description": "The result_id of the answer the receipt came from, exactly as returned.",
+          "minLength": 8,
+          "maxLength": 256
+        },
+        "receipt_id": {
+          "type": "string",
+          "description": "The receipt_id of the chosen option, unchanged; it starts with ancr_.",
+          "minLength": 8,
+          "maxLength": 256,
+          "pattern": "^ancr_"
+        }
+      },
+      "required": [
+        "result_id",
+        "receipt_id"
+      ]
+    },
+    "HandleBoundReceipt": {
+      "description": "A receipt selecting a handle option the previous answer offered. The receipt_id must start with handr_; a receipt with another prefix is rejected.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "result_id": {
+          "type": "string",
+          "description": "The result_id of the answer the receipt came from, exactly as returned.",
+          "minLength": 8,
+          "maxLength": 256
+        },
+        "receipt_id": {
+          "type": "string",
+          "description": "The receipt_id of the chosen option, unchanged; it starts with handr_.",
+          "minLength": 8,
+          "maxLength": 256,
+          "pattern": "^handr_"
+        }
+      },
+      "required": [
+        "result_id",
+        "receipt_id"
+      ]
+    },
+    "CandidateBoundReceipt": {
+      "description": "A receipt selecting a candidate option the previous answer offered. The receipt_id must start with candr_; a receipt with another prefix is rejected.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "result_id": {
+          "type": "string",
+          "description": "The result_id of the answer the receipt came from, exactly as returned.",
+          "minLength": 8,
+          "maxLength": 256
+        },
+        "receipt_id": {
+          "type": "string",
+          "description": "The receipt_id of the chosen option, unchanged; it starts with candr_.",
+          "minLength": 8,
+          "maxLength": 256,
+          "pattern": "^candr_"
+        }
+      },
+      "required": [
+        "result_id",
+        "receipt_id"
+      ]
+    },
+    "WindowBoundReceipt": {
+      "description": "A receipt selecting a window option the previous answer offered. The receipt_id must start with winr_; a receipt with another prefix is rejected.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "result_id": {
+          "type": "string",
+          "description": "The result_id of the answer the receipt came from, exactly as returned.",
+          "minLength": 8,
+          "maxLength": 256
+        },
+        "receipt_id": {
+          "type": "string",
+          "description": "The receipt_id of the chosen option, unchanged; it starts with winr_.",
+          "minLength": 8,
+          "maxLength": 256,
+          "pattern": "^winr_"
+        }
+      },
+      "required": [
+        "result_id",
+        "receipt_id"
+      ]
+    },
+    "SubjectKind": {
+      "description": "The kinds of subject the service knows: organization, team, project, repository, work_item (a ticket or issue), pull_request, deployment, incident, document, decision, episode (a recorded agent run), metric, pull_request_review, ci_pipeline_run and work_item_ref (a work item known only by a reference). All are accepted on the wire; only team, project, repository, incident and pull_request can be discovered as a cohort, and deployment only as the members of a named repository or team. work_item_ref is never answered on its own.",
+      "type": "string",
+      "enum": [
+        "organization",
+        "team",
+        "project",
+        "repository",
+        "work_item",
+        "pull_request",
+        "deployment",
+        "incident",
+        "document",
+        "decision",
+        "episode",
+        "metric",
+        "pull_request_review",
+        "ci_pipeline_run",
+        "work_item_ref"
+      ]
+    },
+    "RequestedHandle": {
+      "description": "One exact identifier you already know: a kind, a pattern_id naming how the value is written, and the value. The service checks the value against that pattern before using it. Known pattern_ids include pull_request_number (kind pull_request, value such as 532), work_item_ticket_key (kind work_item, the full ticket key as written) and ci_run_id (kind ci_pipeline_run, the run number). The list can grow, so pattern_id is free text and not an enum.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/SubjectKind",
+          "description": "The kind of subject the identifier names."
+        },
+        "pattern_id": {
+          "type": "string",
+          "description": "How the value is written. Examples: pull_request_number, work_item_ticket_key, ci_run_id. Not a closed list; an unknown pattern is refused or ignored.",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "value": {
+          "type": "string",
+          "description": "The identifier itself in the form the pattern expects: digits for pull_request_number and ci_run_id (for example 532), the whole key for work_item_ticket_key.",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "kind",
+        "pattern_id",
+        "value"
+      ]
+    },
+    "RequestedEvidenceWindow": {
+      "description": "The period you want covered. Give relative_id alone (trailing_30d, trailing_90d, trailing_365d, all_time) or both start and end. all_time takes no start or end; any other shape needs both start and end, never only one. The service decides how the window is labelled and how confident it is; you cannot set that.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "type": "string",
+          "description": "Start of the period, RFC 3339 date-time. Give it together with end.",
+          "format": "date-time"
+        },
+        "end": {
+          "type": "string",
+          "description": "End of the period, RFC 3339 date-time, after start. Give it together with start.",
+          "format": "date-time"
+        },
+        "relative_id": {
+          "$ref": "#/$defs/RelativeWindowID",
+          "description": "A named period ending at the time of the call. Use this instead of start and end."
+        }
+      },
+      "if": {
+        "properties": {
+          "relative_id": {
+            "const": "all_time"
+          }
+        },
+        "required": [
+          "relative_id"
+        ]
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "start"
+              ]
+            },
+            {
+              "required": [
+                "end"
+              ]
+            }
+          ]
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "relative_id"
+          ]
+        },
+        {
+          "required": [
+            "start",
+            "end"
+          ]
+        }
+      ],
+      "not": {
+        "description": "A start without an end, or an end without a start, is not accepted.",
+        "anyOf": [
+          {
+            "required": [
+              "start"
+            ],
+            "not": {
+              "required": [
+                "end"
+              ]
+            }
+          },
+          {
+            "required": [
+              "end"
+            ],
+            "not": {
+              "required": [
+                "start"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "RelativeWindowID": {
+      "description": "Named period ending at the time of the call: trailing_30d, trailing_90d, trailing_365d (the last 30, 90 or 365 days) or all_time (everything available).",
+      "type": "string",
+      "enum": [
+        "trailing_30d",
+        "trailing_90d",
+        "trailing_365d",
+        "all_time"
+      ]
+    },
+    "WindowConfirmationMode": {
+      "description": "How to report a window the service inferred rather than received from you: headless (empty string means the same) reports it in the structured result only; nudge also adds a warning sentence asking you to confirm it.",
+      "type": "string",
+      "enum": [
+        "",
+        "headless",
+        "nudge"
+      ]
+    },
+    "BareBoundSubjectReceiptID": {
+      "description": "A bare receipt_id string. It is accepted only when parent_result_id is set in the same call; the receipt then carries parent_result_id as its result_id. It is the receipt_id from the previous answer, unchanged.",
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 256
+    },
+    "BareKindReceiptID": {
+      "description": "A bare receipt_id string. It is accepted only when parent_result_id is set in the same call; the receipt then carries parent_result_id as its result_id. It must start with kindr_.",
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 256,
+      "pattern": "^kindr_"
+    },
+    "BareAnchorReceiptID": {
+      "description": "A bare receipt_id string. It is accepted only when parent_result_id is set in the same call; the receipt then carries parent_result_id as its result_id. It must start with ancr_.",
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 256,
+      "pattern": "^ancr_"
+    },
+    "BareHandleReceiptID": {
+      "description": "A bare receipt_id string. It is accepted only when parent_result_id is set in the same call; the receipt then carries parent_result_id as its result_id. It must start with handr_.",
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 256,
+      "pattern": "^handr_"
+    },
+    "BareWindowReceiptID": {
+      "description": "A bare receipt_id string. It is accepted only when parent_result_id is set in the same call; the receipt then carries parent_result_id as its result_id. It must start with winr_.",
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 256,
+      "pattern": "^winr_"
+    },
+    "BareCandidateReceiptID": {
+      "description": "A bare receipt_id string. It is accepted only when parent_result_id is set in the same call; the receipt then carries parent_result_id as its result_id. It must start with candr_.",
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 256,
+      "pattern": "^candr_"
+    }
+  }
+}

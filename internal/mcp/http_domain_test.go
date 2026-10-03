@@ -209,13 +209,13 @@ func TestHostedFollowsTheTransportOnly(t *testing.T) {
 // Every tool the server can register is a member of the request line's tool
 // vocabulary, so no registered tool is logged as "other".
 func TestEveryRegisteredToolIsInTheRequestLineVocabulary(t *testing.T) {
-	registered := []string{toolContextForTask, toolSourceEvidence, toolInvestigateQuestion, toolInvestigationResult, toolRecordEpisode}
+	registered := []string{toolContextForTask, toolSourceEvidence, toolInvestigateQuestion, toolInvestigateWithInterpretation, toolInvestigationResult, toolRecordEpisode}
 	for _, name := range registered {
 		if bucket(name, HTTPToolVocabulary()) != name {
 			t.Errorf("tool %q is not in the request line vocabulary", name)
 		}
 	}
-	if len(registered) != 5 {
-		t.Fatalf("%d tools, want 5", len(registered))
+	if len(registered) != 6 {
+		t.Fatalf("%d tools, want 6", len(registered))
 	}
 }

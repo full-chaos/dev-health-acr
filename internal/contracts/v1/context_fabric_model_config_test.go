@@ -86,3 +86,18 @@ func TestMaskContextFabricOrgModelCredential_isAFixedMaskPlusAtMostFourTrailingC
 		t.Fatalf("mask suffix = %q, want the last 4 characters of the credential", suffix)
 	}
 }
+
+func TestContextFabricOrgModelConfigWriteRequest_Validate_rejectsTheReservedProviderName(t *testing.T) {
+	for _, provider := range []string{"client-supplied", "Client-Supplied", "CLIENT-SUPPLIED"} {
+		request := validOrgModelConfigWriteRequest()
+		request.Provider = provider
+		if err := request.Validate(); err == nil {
+			t.Fatalf("provider %q validated, want it refused: a server model must never read as client-supplied", provider)
+		}
+	}
+	request := validOrgModelConfigWriteRequest()
+	request.Provider = "client-supplied-gateway"
+	if err := request.Validate(); err != nil {
+		t.Fatalf("provider %q refused (%v), want only the exact reserved name refused", request.Provider, err)
+	}
+}

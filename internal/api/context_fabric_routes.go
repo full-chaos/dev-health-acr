@@ -230,9 +230,14 @@ const (
 	// carries a diagnosis -- the plan says which ceiling was exceeded and
 	// what narrower question would fit -- and because the fix for it is a
 	// planner change, not an operator one.
-	contextFabricClassBudgetRefusal       = "budget_refusal"
-	contextFabricClassUnclassified        = "unclassified"
-	contextFabricInvestigationFailureName = "context_fabric_investigation"
+	contextFabricClassBudgetRefusal = "budget_refusal"
+	// contextFabricClassInterpretationContract is the refusal of a supplied
+	// interpretation that was made under a contract this service does not
+	// run. The caller is told the current contract and fetches the prompt
+	// again.
+	contextFabricClassInterpretationContract = "interpretation_contract_mismatch"
+	contextFabricClassUnclassified           = "unclassified"
+	contextFabricInvestigationFailureName    = "context_fabric_investigation"
 )
 
 func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, err error) {
@@ -407,6 +412,12 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 	// value or any other model-generated text. A business-rule rejection
 	// (an invalid enum, a claim-binding/grounding failure) has no single
 	// bound to name, so details is omitted for those.
+	var contractMismatch *contextfabric.SuppliedInterpretationContractMismatch
+	if errors.As(err, &contractMismatch) {
+		details := map[string]any{contractsv1.ContextFabricInterpretationContractDetailsKey: contractMismatch.Refusal}
+		a.writeContextFabricFailure(w, r, err, contextFabricClassInterpretationContract, http.StatusConflict, "invalid_request", "The supplied interpretation was made under an interpretation contract this service does not run", false, details)
+		return
+	}
 	if errors.Is(err, contextfabric.ErrInterpretationRejected) {
 		a.writeContextFabricRejectionError(w, r, err, contextFabricClassInterpretRejected, "interpretation_rejected", "Context Fabric's interpretation of the question violated a v1 bound")
 		return

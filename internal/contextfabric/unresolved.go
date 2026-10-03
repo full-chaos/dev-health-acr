@@ -1054,5 +1054,6 @@ func (e *Engine) terminalVersions(ctx context.Context) VersionSet {
 		synthesisFallback = SynthesisVersionNotSynthesized
 	}
 	versions.SynthesisVersion = nonEmptyVersion(versions.SynthesisVersion, synthesisFallback)
+	stampInterpretationProvenance(ctx, &versions)
 	return versions
 }

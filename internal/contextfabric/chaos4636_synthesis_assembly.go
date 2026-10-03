@@ -409,6 +409,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	if strings.TrimSpace(result.Versions.ModelIdentity) == "" {
 		result.Versions.ModelIdentity = "unwired"
 	}
+	stampInterpretationProvenance(ctx, &result.Versions)
 	// CHAOS-3781 AC-3781-2: a historical answer states the time it speaks
 	// for in a structured field. Composed HERE, from the interpretation
 	// and the coverage the sources actually returned, rather than inside

@@ -1,0 +1,23 @@
+{
+  "schema_version": "error.v1",
+  "request_id": "req_01J0ACR005",
+  "error": {
+    "code": "invalid_request",
+    "message": "The supplied interpretation was made under an interpretation contract this service does not run",
+    "http_status": 409,
+    "retryable": false,
+    "details": {
+      "interpretation_contract": {
+        "mismatch": [
+          "prompt_version",
+          "system_sha256"
+        ],
+        "current": {
+          "model_output_version": "context-fabric-model-output.v8",
+          "prompt_version": "context-fabric-interpretation.v21",
+          "system_sha256": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+        }
+      }
+    }
+  }
+}

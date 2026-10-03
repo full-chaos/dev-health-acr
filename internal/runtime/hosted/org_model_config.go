@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/genkitruntime"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelconfigcrypto"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelprovider"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelruntimeresolver"
@@ -294,14 +295,22 @@ func newContextFabricQuestionInterpreter(
 	engineTelemetry contextfabric.EngineTelemetry,
 	factRegistry contextfabric.RequirementDeriver,
 	configuredEnsembleSize int,
-) contextfabric.RuntimeQuestionInterpreter {
+	logger *slog.Logger,
+) (contextfabric.RuntimeQuestionInterpreter, error) {
+	// Built here, not passed in, so no composition can leave it out: the
+	// supplied-interpretation path needs no model and is always served.
+	supplied, err := genkitruntime.NewSuppliedInterpreter(genkitruntime.SuppliedInterpreterConfig{Logger: logger})
+	if err != nil {
+		return contextfabric.RuntimeQuestionInterpreter{}, err
+	}
 	return contextfabric.RuntimeQuestionInterpreter{
 		Runtime:         modelRuntime,
+		Supplied:        supplied,
 		SampledRuntime:  sampledModelRuntime(modelRuntime),
 		EnsembleSize:    interpretationEnsembleSize(configuredEnsembleSize),
 		Sink:            receiptSink,
 		FamilyTelemetry: engineTelemetry,
 		FrameTelemetry:  engineTelemetry,
 		Requirements:    factRegistry,
-	}
+	}, nil
 }

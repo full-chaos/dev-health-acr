@@ -112,6 +112,11 @@ func (r ContextFabricInvestigationRequest) Validate() error {
 		}
 		seenHandles[handle] = struct{}{}
 	}
+	if r.SuppliedInterpretation != nil {
+		if err := r.SuppliedInterpretation.Validate(); err != nil {
+			return err
+		}
+	}
 	if err := r.RequestedScope.Validate(); err != nil {
 		return fmt.Errorf("requested_scope: %w", err)
 	}

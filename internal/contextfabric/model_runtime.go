@@ -1579,6 +1579,10 @@ type ModelRuntime interface {
 type RuntimeQuestionInterpreter struct {
 	Runtime ModelRuntime
 	Sink    ModelReceiptSink
+	// Supplied serves a request that carries its own interpretation. An
+	// explicit, wired field for the reason FamilyTelemetry below is one;
+	// left nil, such a request is refused.
+	Supplied SuppliedInterpretationRuntime
 	// SampledRuntime and EnsembleSize (CHAOS-5638) turn the family
 	// resolution from one sample into a consensus over N. Both are
 	// required together: EnsembleSize > 1 with no SampledRuntime is a
@@ -2025,6 +2029,11 @@ func backfillNamedSubjectExpectedKind(frame QuestionFrame, receipt *ModelExecuti
 // an absence. Add it when a corpus shows N=1 failing.
 
 func (r RuntimeQuestionInterpreter) Interpret(ctx context.Context, principal storage.Principal, request InvestigationRequest) (InterpretedQuestion, QuestionFamilyOutcome, error) {
+	if request.SuppliedInterpretation != nil {
+		// Checked before the ensemble and before Runtime: a supplied
+		// interpretation draws no sample and needs no model.
+		return r.interpretSupplied(ctx, principal, request)
+	}
 	if r.ensembleEnabled() {
 		// CHAOS-5638. Checked BEFORE r.Runtime, because an ensemble draws
 		// every sample from SampledRuntime and never touches Runtime --
@@ -3537,6 +3546,10 @@ func subjectKeyForModel(subject SubjectRef) string {
 	return string(subject.Kind) + "\x00" + subject.CanonicalID
 }
 
+// unwiredVersion is the placeholder of a version nothing on the turn
+// supplied.
+const unwiredVersion = "unwired"
+
 func nonEmptyVersion(primary, fallback string) string {
 	if value := strings.TrimSpace(primary); value != "" {
 		return value
@@ -3544,7 +3557,7 @@ func nonEmptyVersion(primary, fallback string) string {
 	if value := strings.TrimSpace(fallback); value != "" {
 		return value
 	}
-	return "unwired"
+	return unwiredVersion
 }
 
 // modelIdentity combines a receipt's provider and model into the single

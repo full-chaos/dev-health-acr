@@ -333,6 +333,10 @@ func maximalVersions() ContextFabricVersionSet {
 	// ModelIdentity has its OWN bound, wider than the version bound the
 	// other fields share.
 	v.ModelIdentity = escaped(ContextFabricModelIdentityMaxLength)
+	// The interpretation identity shares that bound. A server source keeps
+	// the whole width free: a client identity spends part of it on its prefix.
+	v.InterpretationSource = ContextFabricInterpretationSourceServer
+	v.InterpretationModelIdentity = escaped(ContextFabricModelIdentityMaxLength)
 	return v
 }
 

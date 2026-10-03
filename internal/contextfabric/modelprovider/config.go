@@ -33,6 +33,7 @@ import (
 
 	acrconfig "github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 // Default provider selection. These encode the CHAOS-3855 decision (the
@@ -211,6 +212,9 @@ func (c Config) validate() error {
 	// resolve a different model than the one configured.
 	if strings.ContainsRune(c.Provider, '/') {
 		return fmt.Errorf("%s must not contain a path separator", EnvProvider)
+	}
+	if contractsv1.ContextFabricReservedModelProvider(c.Provider) {
+		return fmt.Errorf("%s names a reserved provider", EnvProvider)
 	}
 	if err := validateModelID(EnvModel, c.Model); err != nil {
 		return err

@@ -482,6 +482,9 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
           "413": {
             "$ref": "#/components/responses/Error"
           },

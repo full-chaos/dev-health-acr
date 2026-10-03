@@ -13,10 +13,13 @@ const SynthesisVersionNotSynthesized = "not_synthesized"
 // InterpretationStamp is the version-shaped part of one interpret call's
 // receipt. Ran is true when an interpret call produced the outcome, even if
 // its receipt named no version or model; the zero value means none ran.
+// Source names who interpreted: the service's own model unless the
+// interpreter marks the interpretation as supplied by the caller.
 type InterpretationStamp struct {
 	Ran                   bool
 	InterpretationVersion string
 	ModelIdentity         string
+	Source                InterpretationSource
 }
 
 func interpretationStampOf(receipt ModelExecutionReceipt) InterpretationStamp {
@@ -24,7 +27,37 @@ func interpretationStampOf(receipt ModelExecutionReceipt) InterpretationStamp {
 		Ran:                   true,
 		InterpretationVersion: strings.TrimSpace(receipt.SchemaVersion),
 		ModelIdentity:         modelIdentity(receipt.Provider, receipt.Model),
+		Source:                InterpretationSourceServer,
 	}
+}
+
+// stampInterpretationProvenance records on a fresh result's versions who
+// interpreted its question. A turn with no interpret call leaves both fields
+// absent.
+func stampInterpretationProvenance(ctx context.Context, versions *VersionSet) {
+	stamp, interpreted := interpretationStampFrom(ctx)
+	if !interpreted {
+		return
+	}
+	versions.InterpretationSource = stamp.Source
+	versions.InterpretationModelIdentity = stamp.ModelIdentity
+}
+
+// BackfillStoredInterpretationProvenance names the interpreter of a result
+// served from a stored row: the reuse return and the read by id use this one
+// rule. A row that names no source and records an interpretation version was
+// stored before the field existed, and the service's own model interpreted
+// it: a caller's interpretation is always stored with its source. A row
+// whose interpretation version is the unwired placeholder ended before the
+// interpretation step and stays without a source. The model identity stays
+// as stored: such a row does not record which model interpreted. It reports
+// whether it named a source.
+func BackfillStoredInterpretationProvenance(versions *VersionSet) bool {
+	if versions.InterpretationSource != "" || versions.InterpretationVersion == unwiredVersion {
+		return false
+	}
+	versions.InterpretationSource = InterpretationSourceServer
+	return true
 }
 
 type interpretationStampKey struct{}

@@ -95,7 +95,10 @@ func TestATypedNilRuntimeIsNeverOfferedAsSampled(t *testing.T) {
 // the interpreter it returns carries both halves of the ensemble wiring.
 func TestTheCompositionConstructorWiresBothHalvesOfTheEnsemble(t *testing.T) {
 	t.Parallel()
-	interpreter := newContextFabricQuestionInterpreter(canSampleRuntime{}, nil, nil, nil, 3)
+	interpreter, err := newContextFabricQuestionInterpreter(canSampleRuntime{}, nil, nil, nil, 3, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if interpreter.SampledRuntime == nil {
 		t.Fatal("SampledRuntime is nil: an enabled ensemble would fail every turn with ErrEnsembleRuntimeMissing")
 	}
@@ -108,14 +111,20 @@ func TestTheCompositionConstructorWiresBothHalvesOfTheEnsemble(t *testing.T) {
 
 	// The default composition, which is every deployment today: one sample,
 	// and a sampled runtime offered but never read.
-	unconfigured := newContextFabricQuestionInterpreter(canSampleRuntime{}, nil, nil, nil, 0)
+	unconfigured, err := newContextFabricQuestionInterpreter(canSampleRuntime{}, nil, nil, nil, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if unconfigured.EnsembleSize != 1 {
 		t.Fatalf("EnsembleSize = %d for an unset option, want 1", unconfigured.EnsembleSize)
 	}
 
 	// And a runtime that cannot sample yields nil rather than something that
 	// panics on first use.
-	notSampled := newContextFabricQuestionInterpreter(notSampledRuntime{}, nil, nil, nil, 3)
+	notSampled, err := newContextFabricQuestionInterpreter(notSampledRuntime{}, nil, nil, nil, 3, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if notSampled.SampledRuntime != nil {
 		t.Fatalf("SampledRuntime = %T for a runtime with no per-sample method", notSampled.SampledRuntime)
 	}
