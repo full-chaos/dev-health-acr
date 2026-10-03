@@ -598,6 +598,81 @@
     ]
   },
   {
+    "id": "contextfabric.client_synthesis_decision",
+    "msg": "context fabric client synthesis decision",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation that asked for client synthesis, written when the turn is refused at its start, when the input cannot be bounded, or when the input is served; a turn that ends before the synthesis step emits none, and a request that did not ask for client synthesis emits none",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "served",
+          "unavailable",
+          "input_too_large"
+        ]
+      },
+      {
+        "key": "status",
+        "type": "string",
+        "presence": "required",
+        "applicability": "the served result status when outcome=served; empty on every other line"
+      },
+      {
+        "key": "bundle_bytes",
+        "type": "int",
+        "presence": "required",
+        "applicability": "the size of the served synthesis input; 0 unless outcome=served"
+      },
+      {
+        "key": "max_bytes",
+        "type": "int",
+        "presence": "required",
+        "applicability": "the bound the input was fitted to; 0 when outcome=unavailable"
+      },
+      {
+        "key": "bounded",
+        "type": "bool",
+        "presence": "required",
+        "applicability": "whether the facts were reduced to fit the bound"
+      },
+      {
+        "key": "facts_read",
+        "type": "int",
+        "presence": "required",
+        "applicability": "0 when outcome=unavailable"
+      },
+      {
+        "key": "facts_given",
+        "type": "int",
+        "presence": "required",
+        "applicability": "0 when outcome=unavailable"
+      },
+      {
+        "key": "commits_retracted",
+        "type": "int",
+        "presence": "required",
+        "applicability": "the commits the commit gate retracted from the served result; 0 unless outcome=served"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.cohort_kind_fulltext",
     "msg": "context_fabric: cohort kind fulltext",
     "level": "info",

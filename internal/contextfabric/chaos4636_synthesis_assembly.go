@@ -340,11 +340,17 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		Request:    request, Interpretation: interpretation, Graph: graphContext, Facts: facts,
 		EvidenceWindow: effectiveWindow,
 	})
-	result, err := e.synthesizer.Synthesize(ctx, principal, synthesisInput)
-	var modelFailure *SynthesisFailure
-	if errors.As(err, &modelFailure) && ctx.Err() == nil {
-		if degraded, ok := e.synthesizer.(DegradedSynthesizer); ok {
-			result, err = degraded.ComposeDegraded(ctx, principal, synthesisInput, modelFailure)
+	var result InvestigationResult
+	var err error
+	if clientSynthesisRequested(request) {
+		result, pending.ClientSynthesisInput, pending.ClientSynthesisMeasure, err = e.runClientSynthesis(ctx, principal, synthesisInput)
+	} else {
+		result, err = e.synthesizer.Synthesize(ctx, principal, synthesisInput)
+		var modelFailure *SynthesisFailure
+		if errors.As(err, &modelFailure) && ctx.Err() == nil {
+			if degraded, ok := e.synthesizer.(DegradedSynthesizer); ok {
+				result, err = degraded.ComposeDegraded(ctx, principal, synthesisInput, modelFailure)
+			}
 		}
 	}
 	if err != nil {
@@ -599,7 +605,9 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		// composition alone, same as before this ticket. A non-cohort
 		// (single-subject) investigation never enters this block at all, so
 		// its answer composition is unaffected.
-		if len(narrated) > 0 {
+		// A turn that asks to write its own answer keeps its fixed answer
+		// text: the status sentence would say coverage was unavailable.
+		if len(narrated) > 0 && !clientSynthesisRequested(request) {
 			result.DirectJudgment, result.DeterministicAnswer = recomposeCohortAnswerNarrative(result.Status, result.SubjectResolution)
 			narrationEvent.AnswerNarrativeRecomposed = true
 		}
@@ -660,6 +668,12 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		Facts:      facts,
 	}); len(outcomes) > 0 {
 		pending.CommitAffirmations = outcomes
+		if clientSynthesisRequested(request) {
+			composed, displaced := appendBoundedLimitations(result.Limitations, []string{contractsv1.ContextFabricClientSynthesisCommitNotAffirmedLimitation})
+			result.Limitations = composed
+			result.LimitationsDisplaced += displaced
+			pending.ClientCommitsRetracted = len(outcomes)
+		}
 	}
 	// CHAOS-4087: stamped AFTER applyCommitAffirmation, not before -- that
 	// gate can RETRACT a subject from result.SubjectResolution.Committed
@@ -774,6 +788,12 @@ type assemblyTelemetry struct {
 	// REPLACED per finalize, like CohortRanked, because it describes the
 	// served member set; nil when the cohort was not narrowed.
 	CohortNarrowingDisclosure *CohortNarrowingDisclosureEvent
+	// ClientSynthesisInput is the synthesis input this pass built for a turn
+	// that asked to write its own answer. It never rides on the result; the
+	// engine delivers the one of the served pass after the result is saved.
+	ClientSynthesisInput   *contractsv1.ContextFabricSynthesisInput
+	ClientSynthesisMeasure clientSynthesisMeasure
+	ClientCommitsRetracted int
 }
 
 // emit publishes the held events. The engine calls it EXACTLY ONCE, for the

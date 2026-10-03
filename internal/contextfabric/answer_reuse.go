@@ -373,6 +373,10 @@ const (
 	// stored answer would be served in place of the one the caller's
 	// interpretation leads to.
 	AnswerReuseBypassSuppliedInterpretation AnswerReuseBypassReason = "supplied_interpretation"
+	// AnswerReuseBypassClientSynthesis: this turn asked to write its own
+	// answer. A stored answer was written by the service's model, and a row
+	// saved by this turn carries no answer text a later turn could use.
+	AnswerReuseBypassClientSynthesis AnswerReuseBypassReason = "client_synthesis"
 )
 
 // reuseBypassReason decides whether this request may consult the reuse
@@ -414,6 +418,9 @@ const (
 func reuseBypassReason(request InvestigationRequest, structureCanon requestStructureCanonicalization) AnswerReuseBypassReason {
 	if request.SuppliedInterpretation != nil {
 		return AnswerReuseBypassSuppliedInterpretation
+	}
+	if clientSynthesisRequested(request) {
+		return AnswerReuseBypassClientSynthesis
 	}
 	if len(structureCanon.Confirmed) > 0 {
 		return AnswerReuseBypassConfirmedStructure

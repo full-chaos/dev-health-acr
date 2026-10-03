@@ -121,6 +121,11 @@ func (e *Engine) saveResult(
 	if result.Versions.InterpretationSource == InterpretationSourceClient {
 		watermark, epoch = nil, nil
 	}
+	// A result whose answer the caller writes is never stored as reusable
+	// either: a later turn that asks the service to write would be served it.
+	if result.Versions.SynthesisSource == SynthesisSourceClient {
+		watermark, epoch = nil, nil
+	}
 	capture, carried := capture.withTurnParentFrom(ctx).attachCarriedParent(result)
 	capture, anchorEvent := capture.attachAnchorBinding(site, result)
 	if anchorEvent == nil && !e.anchorBindingShadowDisabled {

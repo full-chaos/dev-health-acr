@@ -2356,6 +2356,9 @@ type RuntimeAnswerSynthesizer struct {
 	// builds a synthesizer by hand) behaves exactly as before this field
 	// existed.
 	Telemetry EngineTelemetry
+	// ClientSynthesis lets a turn that asks to write its own answer be served.
+	// Nil refuses such a turn with ErrClientSynthesisUnavailable.
+	ClientSynthesis *ClientSynthesisAssembly
 }
 
 // StaticResultVersions implements ResultVersionProvider (CHAOS-3810), so a
@@ -2525,6 +2528,7 @@ func (r RuntimeAnswerSynthesizer) composeSynthesisResult(ctx context.Context, pr
 			QueryVersion:            nonEmptyVersion(r.Options.QueryVersion, "unwired"),
 			InterpretationVersion:   nonEmptyVersion(receipt.SchemaVersion, "unwired"),
 			SynthesisVersion:        synthesisVersionOf(receipt),
+			SynthesisSource:         SynthesisSourceServer,
 			CanonicalServiceVersion: nonEmptyVersion(r.Options.CanonicalServiceVersion, input.Facts.Version),
 			// ModelIdentity (CHAOS-3782) names the provider and model that
 			// produced THIS synthesis -- receipt.Provider/receipt.Model,

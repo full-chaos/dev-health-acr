@@ -2913,6 +2913,7 @@ var All = []Event{
 	OTelExport,
 	GraphCountCheckFinished,
 	SuppliedInterpretationDecision,
+	ClientSynthesisDecision,
 }
 
 // CountPopulationScope (CHAOS-5775) is the Info line for whether a served
