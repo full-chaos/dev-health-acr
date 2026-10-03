@@ -1679,31 +1679,34 @@ func (f FrameValidationFields) SlogArgs() []any {
 // GraphQLQueryFields is contextfabric.graphql_query's generated typed construction interface
 // (CHAOS-5516): one Go field per Field GraphQLQuery.Fields declares in spec.go.
 type GraphQLQueryFields struct {
-	OrgID         string
-	CallerClass   string
-	ScopeClass    string
-	Decision      string
-	RootFields    []string
-	Operations    []string
-	RootCount     int
-	AliasCount    int
-	Depth         int
-	FieldCount    int
-	Complexity    int
-	ForcedByGrant bool
-	RowsChecked   int
-	RowsForeign   int
-	PathsRemoved  int
-	Completeness  string
-	Bytes         int
-	LatencyMs     int
-	SchemaDigest  string
-	QueryDigest   string
-	Result        string
-	RefusalCode   string
-	ErrorClass    string
-	ReadBudget    string
-	RequestID     string
+	OrgID          string
+	CallerClass    string
+	ScopeClass     string
+	Decision       string
+	RootFields     []string
+	Operations     []string
+	RootCount      int
+	AliasCount     int
+	Depth          int
+	FieldCount     int
+	Complexity     int
+	ForcedByGrant  bool
+	RowsChecked    int
+	RowsForeign    int
+	PathsRemoved   int
+	Completeness   string
+	Bytes          int
+	LatencyMs      int
+	SchemaDigest   string
+	QueryDigest    string
+	Result         string
+	RefusalCode    string
+	ErrorClass     string
+	UpstreamStatus int
+	GraphqlCode    string
+	Variable       string
+	ReadBudget     string
+	RequestID      string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every GraphQLQueryFields uniformly, set ONLY by NewGraphQLQueryFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -1717,7 +1720,7 @@ type GraphQLQueryFields struct {
 
 // NewGraphQLQueryFields is the generated constructor for GraphQLQueryFields -- every
 // field GraphQLQuery.Fields declares is a required parameter.
-func NewGraphQLQueryFields(orgID string, callerClass string, scopeClass string, decision string, rootFields []string, operations []string, rootCount int, aliasCount int, depth int, fieldCount int, complexity int, forcedByGrant bool, rowsChecked int, rowsForeign int, pathsRemoved int, completeness string, bytes int, latencyMs int, schemaDigest string, queryDigest string, result string, refusalCode string, errorClass string, readBudget string, requestID string) GraphQLQueryFields {
+func NewGraphQLQueryFields(orgID string, callerClass string, scopeClass string, decision string, rootFields []string, operations []string, rootCount int, aliasCount int, depth int, fieldCount int, complexity int, forcedByGrant bool, rowsChecked int, rowsForeign int, pathsRemoved int, completeness string, bytes int, latencyMs int, schemaDigest string, queryDigest string, result string, refusalCode string, errorClass string, upstreamStatus int, graphqlCode string, variable string, readBudget string, requestID string) GraphQLQueryFields {
 	valid := true
 	if rootFields == nil {
 		valid = false
@@ -1726,32 +1729,35 @@ func NewGraphQLQueryFields(orgID string, callerClass string, scopeClass string, 
 		valid = false
 	}
 	return GraphQLQueryFields{
-		OrgID:         orgID,
-		CallerClass:   callerClass,
-		ScopeClass:    scopeClass,
-		Decision:      decision,
-		RootFields:    rootFields,
-		Operations:    operations,
-		RootCount:     rootCount,
-		AliasCount:    aliasCount,
-		Depth:         depth,
-		FieldCount:    fieldCount,
-		Complexity:    complexity,
-		ForcedByGrant: forcedByGrant,
-		RowsChecked:   rowsChecked,
-		RowsForeign:   rowsForeign,
-		PathsRemoved:  pathsRemoved,
-		Completeness:  completeness,
-		Bytes:         bytes,
-		LatencyMs:     latencyMs,
-		SchemaDigest:  schemaDigest,
-		QueryDigest:   queryDigest,
-		Result:        result,
-		RefusalCode:   refusalCode,
-		ErrorClass:    errorClass,
-		ReadBudget:    readBudget,
-		RequestID:     requestID,
-		constructed:   valid,
+		OrgID:          orgID,
+		CallerClass:    callerClass,
+		ScopeClass:     scopeClass,
+		Decision:       decision,
+		RootFields:     rootFields,
+		Operations:     operations,
+		RootCount:      rootCount,
+		AliasCount:     aliasCount,
+		Depth:          depth,
+		FieldCount:     fieldCount,
+		Complexity:     complexity,
+		ForcedByGrant:  forcedByGrant,
+		RowsChecked:    rowsChecked,
+		RowsForeign:    rowsForeign,
+		PathsRemoved:   pathsRemoved,
+		Completeness:   completeness,
+		Bytes:          bytes,
+		LatencyMs:      latencyMs,
+		SchemaDigest:   schemaDigest,
+		QueryDigest:    queryDigest,
+		Result:         result,
+		RefusalCode:    refusalCode,
+		ErrorClass:     errorClass,
+		UpstreamStatus: upstreamStatus,
+		GraphqlCode:    graphqlCode,
+		Variable:       variable,
+		ReadBudget:     readBudget,
+		RequestID:      requestID,
+		constructed:    valid,
 	}
 }
 
@@ -1791,6 +1797,9 @@ func (f GraphQLQueryFields) SlogArgs() []any {
 		"result", contextfabric.SanitizeLogAttr(f.Result),
 		"refusal_code", contextfabric.SanitizeLogAttr(f.RefusalCode),
 		"error_class", contextfabric.SanitizeLogAttr(f.ErrorClass),
+		"upstream_status", f.UpstreamStatus,
+		"graphql_code", contextfabric.SanitizeLogAttr(f.GraphqlCode),
+		"variable", contextfabric.SanitizeLogAttr(f.Variable),
 		"read_budget", contextfabric.SanitizeLogAttr(f.ReadBudget),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}

@@ -867,16 +867,12 @@ const RefusalReasonUpstreamRejectedRequest = "the query service rejected the req
 // code into errors[] and the read log. A GraphQL validation or parse
 // rejection is the caller's request: it is a refusal, not an upstream error.
 func (x *run) httpStatusError(err error) OperationResponse {
-	var qe *QueryError
-	if !errors.As(err, &qe) {
+	entry, callerFault, ok := upstreamHTTPEntry(err)
+	if !ok {
 		return x.upstream(CallUpstreamError, UpstreamHTTPStatus)
 	}
-	entry := OperationError{Class: UpstreamHTTPStatus, GraphQLCode: qe.GraphQLCode, Variable: qe.Variable}
-	if qe.StatusCode >= 100 && qe.StatusCode <= 599 {
-		entry.Status = qe.StatusCode
-	}
 	x.read.UpstreamStatus, x.read.GraphQLCode, x.read.Variable = entry.Status, entry.GraphQLCode, entry.Variable
-	if qe.GraphQLCode.callerFault() && entry.Status == http.StatusUnprocessableEntity {
+	if callerFault {
 		x.refuse(RefusalInvalidRequest, RefusalReasonUpstreamRejectedRequest, "")
 		x.resp.Errors = []OperationError{entry}
 		x.read.ErrorClass = UpstreamHTTPStatus
@@ -888,6 +884,21 @@ func (x *run) httpStatusError(err error) OperationResponse {
 	x.read.Decision = string(CallUpstreamError)
 	x.read.ErrorClass = UpstreamHTTPStatus
 	return x.resp
+}
+
+// upstreamHTTPEntry builds the errors[] entry of an upstream non-2xx answer
+// and says whether it is a GraphQL validation or parse rejection (HTTP 422)
+// of the caller's own request.
+func upstreamHTTPEntry(err error) (entry OperationError, callerFault, ok bool) {
+	var qe *QueryError
+	if !errors.As(err, &qe) {
+		return OperationError{}, false, false
+	}
+	entry = OperationError{Class: UpstreamHTTPStatus, GraphQLCode: qe.GraphQLCode, Variable: qe.Variable}
+	if qe.StatusCode >= 100 && qe.StatusCode <= 599 {
+		entry.Status = qe.StatusCode
+	}
+	return entry, qe.GraphQLCode.callerFault() && entry.Status == http.StatusUnprocessableEntity, true
 }
 
 // parseGraphQLAnswer reads {"data": ..., "errors": [...]}. Any GraphQL error

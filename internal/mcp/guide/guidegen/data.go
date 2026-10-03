@@ -83,6 +83,7 @@ var GraphQLRules = []string{
 	"For a credential restricted to some repositories, acr limits each root to your grant and adds the row id field when you select a row list without it; `root_fields[].added_paths` names it.",
 	"acr rebuilds the query text it sends from your validated query; your text is never forwarded. `source.query_digest` names what was sent.",
 	"`read_budget_exceeded` means the data service stopped the query at its bytes or time ceiling (`refusal.read_budget`): select fewer fields or narrow the window, scope or limit.",
+	"A refusal `invalid_request` with an `errors` entry carrying `graphql_code` `graphql_validation_failed` or `graphql_parse_failed` means the data service rejected your variables or document: `errors[0].variable` names the variable, for example one that is required and was not sent. An `upstream_error` `errors` entry with class `http_status` carries the data service's HTTP `status` and, when it gave one, a closed `graphql_code`; it never carries the service's message text.",
 }
 
 // DataRules are the rules for a client that plans the reads itself (design

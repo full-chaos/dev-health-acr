@@ -2286,7 +2286,7 @@ var (
 var GraphQLQuery = Event{
 	ID: "contextfabric.graphql_query", Msg: "context fabric graphql query", Level: LevelInfo,
 	Multiplicity: MultiplicityZeroOrOnePerRequest, Attribution: []string{"org_id"},
-	BoundedAggregation: "one line per graphql_query request; closed vocabularies, SDL field names, counts and digests only",
+	BoundedAggregation: "one line per graphql_query request; closed vocabularies, SDL field names, counts, digests, the upstream HTTP status and, on an upstream rejection, one GraphQL variable name (a GraphQL name of at most 64 characters, from the request document)",
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "caller_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: operationReadCallerClasses},
@@ -2310,7 +2310,10 @@ var GraphQLQuery = Event{
 		{Key: "query_digest", Type: FieldString, Presence: PresenceConditional, Applicability: "written when acr rebuilt a query (every root passed the policy)"},
 		{Key: "result", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call is served", ClosedVocabulary: operationReadResults},
 		{Key: "refusal_code", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call is refused", ClosedVocabulary: graphqlQueryRefusalCodes},
-		{Key: "error_class", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call ends upstream_error, upstream_timeout or operation_unavailable; acr_deadline = acr's own deadline cut the call before the listener answered", ClosedVocabulary: graphqlQueryErrorClasses},
+		{Key: "error_class", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call ends upstream_error, upstream_timeout or operation_unavailable, or is refused invalid_request because the listener rejected the variables or document (error_class http_status); acr_deadline = acr's own deadline cut the call before the listener answered", ClosedVocabulary: graphqlQueryErrorClasses},
+		{Key: "upstream_status", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when error_class is http_status: the upstream HTTP status, 100 to 599"},
+		{Key: "graphql_code", Type: FieldString, Presence: PresenceConditional, Applicability: "written when error_class is http_status and the upstream body is a GraphQL error envelope with a code; the code is a closed token, never upstream message text", ClosedVocabulary: operationReadGraphQLCodes},
+		{Key: "variable", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the upstream rejected a named GraphQL variable (errors[0].path variable, a GraphQL name of at most 64 characters)"},
 		{Key: "read_budget", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the listener refused the query on its read budget (refusal_code read_budget_exceeded)", ClosedVocabulary: graphqlQueryReadBudgets},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
