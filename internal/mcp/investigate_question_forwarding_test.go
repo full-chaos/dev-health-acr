@@ -160,6 +160,7 @@ func TestInvestigateQuestion_EveryRequestFieldIsForwarded(t *testing.T) {
 		"EvidenceWindow":         "TimeContext",
 		"AllowClarification":     "Options",
 		"WindowConfirmationMode": "Options",
+		"Synthesis":              "SynthesisMode",
 	}
 
 	deliberatelyNotForwarded := map[string]string{

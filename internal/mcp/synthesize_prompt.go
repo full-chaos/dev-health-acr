@@ -38,7 +38,7 @@ func registerSynthesizePrompt(server *mcpsdk.Server, cfg *ProcessConfig, caller 
 		Name:  promptSynthesizeAnswer,
 		Title: "Synthesize an answer",
 		Description: "The synthesis system message acr runs on the facts read for a question, byte for byte. " +
-			"It asks for a structured answer object; the schema of that object is the resource " + uriSynthesisOutput + ". Versions: prompt " +
+			"Run it as the system message with the synthesis_input.input of an investigation that asked synthesis client as the user message. It asks for a structured answer object; the schema of that object is the resource " + uriSynthesisOutput + ". Versions: prompt " +
 			metaString(meta, "prompt_version") + ", model output " + metaString(meta, "model_output_version") +
 			", system sha256 " + metaString(meta, "system_sha256") + ", service " + serviceVersion + ".",
 		Meta: meta,

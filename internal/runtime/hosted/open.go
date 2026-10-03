@@ -3,7 +3,6 @@ package hosted
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"errors"
@@ -919,7 +918,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		ObservationKeys: factRegistry,
 		Graph:           graphReader,
 		Facts:           factRegistry,
-		Synthesizer:     contextfabric.RuntimeAnswerSynthesizer{Runtime: modelRuntime, Sink: receiptSink, Options: contextFabricSynthesizerOptions(request.options.ServiceVersion), Telemetry: engineTelemetry, ClientSynthesis: contextFabricClientSynthesisAssembly()},
+		Synthesizer:     contextfabric.RuntimeAnswerSynthesizer{Runtime: modelRuntime, Sink: receiptSink, Options: contextFabricSynthesizerOptions(request.options.ServiceVersion), Telemetry: engineTelemetry, ClientSynthesis: synthesisprompt.ClientAssembly()},
 		Results:         investigationStore,
 		ReuseGate:       investigationStore,
 		// CHAOS-3782 Codex round-1 F1: same *pginvestigation.Store also
@@ -1377,19 +1376,4 @@ func buildDirectRelationships(investigator contextfabric.Investigator, gate *dir
 		return nil
 	}
 	return reader
-}
-
-// contextFabricClientSynthesisAssembly is what lets a turn that asks to write
-// its own answer be served: the synthesis contract this binary runs, the
-// writing rules and the encoder that builds the exact model input.
-func contextFabricClientSynthesisAssembly() *contextfabric.ClientSynthesisAssembly {
-	system := sha256.Sum256([]byte(synthesisprompt.System()))
-	return &contextfabric.ClientSynthesisAssembly{
-		PromptVersion:      synthesisprompt.PromptVersion,
-		ModelOutputVersion: synthesisprompt.OutputVersion,
-		SystemSHA256:       hex.EncodeToString(system[:]),
-		Rules:              synthesisprompt.ClientRules(),
-		MaxBytes:           contractsv1.ContextFabricSynthesisInputDefaultMaxBytes,
-		Encode:             synthesisprompt.UserPayload,
-	}
 }

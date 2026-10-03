@@ -17,7 +17,7 @@ import (
 // binary runs. A synthesizer built without it refuses every client turn.
 func TestTheClientSynthesisAssemblyCarriesTheContractThisBinaryRuns(t *testing.T) {
 	t.Parallel()
-	assembly := contextFabricClientSynthesisAssembly()
+	assembly := synthesisprompt.ClientAssembly()
 	sum := sha256.Sum256([]byte(synthesisprompt.System()))
 	if assembly.PromptVersion != synthesisprompt.PromptVersion || assembly.ModelOutputVersion != synthesisprompt.OutputVersion || assembly.SystemSHA256 != hex.EncodeToString(sum[:]) {
 		t.Fatalf("assembly contract = %q %q %q, want the synthesis prompt package's own", assembly.PromptVersion, assembly.ModelOutputVersion, assembly.SystemSHA256)
@@ -40,7 +40,7 @@ func TestTheProductionSynthesizerIsWiredWithTheClientSynthesisAssembly(t *testin
 	if err != nil {
 		t.Fatalf("read open.go: %v", err)
 	}
-	if !strings.Contains(string(source), "contextfabric.RuntimeAnswerSynthesizer{Runtime: modelRuntime, Sink: receiptSink, Options: contextFabricSynthesizerOptions(request.options.ServiceVersion), Telemetry: engineTelemetry, ClientSynthesis: contextFabricClientSynthesisAssembly()}") {
-		t.Fatal("open.go builds the production synthesizer without ClientSynthesis: contextFabricClientSynthesisAssembly()")
+	if !strings.Contains(string(source), "contextfabric.RuntimeAnswerSynthesizer{Runtime: modelRuntime, Sink: receiptSink, Options: contextFabricSynthesizerOptions(request.options.ServiceVersion), Telemetry: engineTelemetry, ClientSynthesis: synthesisprompt.ClientAssembly()}") {
+		t.Fatal("open.go builds the production synthesizer without ClientSynthesis: synthesisprompt.ClientAssembly()")
 	}
 }

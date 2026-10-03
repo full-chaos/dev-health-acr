@@ -822,3 +822,30 @@ func TestClientSynthesisInputThatFailsItsContractIsNeverServed(t *testing.T) {
 		t.Fatal("a result without a valid synthesis input was saved")
 	}
 }
+
+// An input that every pass reduces and that never fits stops at the pass
+// limit, as the model path does.
+func TestClientSynthesisInputBoundStopsAtThePassLimit(t *testing.T) {
+	t.Parallel()
+	input := validSynthesisInputFixture()
+	input.Facts.Facts = clientManyFacts(SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}, 2000)
+	calls := 0
+	telemetry := &recordingTelemetry{}
+	synthesizer := RuntimeAnswerSynthesizer{Telemetry: telemetry, ClientSynthesis: &ClientSynthesisAssembly{
+		PromptVersion: "p", ModelOutputVersion: "o", SystemSHA256: hex.EncodeToString(sha256Sum("system")), Rules: []string{"rule"}, MaxBytes: 1000,
+		Encode: func(string, SynthesisInput, int) ([]byte, error) {
+			calls++
+			return nil, &ModelInputOverflow{Bytes: 1001, MaxBytes: 1000}
+		},
+	}}
+	_, bundle, err := synthesizer.ComposeForClientSynthesis(context.Background(), reusePrincipal(), input)
+	if !errors.Is(err, ErrModelInputTooLarge) || bundle != nil {
+		t.Fatalf("ComposeForClientSynthesis() error = %v bundle nil = %v, want ErrModelInputTooLarge and no bundle", err, bundle == nil)
+	}
+	if calls != maxSynthesisInputBoundPasses+1 {
+		t.Fatalf("encode calls = %d, want %d: one first try and one per pass", calls, maxSynthesisInputBoundPasses+1)
+	}
+	if len(telemetry.synthesisInputBounds) != 1 || telemetry.synthesisInputBounds[0].Outcome != SynthesisInputBoundExhausted || telemetry.synthesisInputBounds[0].Passes != maxSynthesisInputBoundPasses {
+		t.Fatalf("input bound events = %+v, want one exhausted at the pass limit", telemetry.synthesisInputBounds)
+	}
+}

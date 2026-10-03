@@ -377,6 +377,16 @@ var enumNarrowings = map[string]enumNarrowing{
 const cardinalityIsClaimableNotRequestable = "cardinality is a CLAIM kind, not a requestable one: it names a server-computed value with no producer, so a fact requirement carrying it could only ever be unserved -- and the requestable vocabulary is rendered into the interpretation prompt's closed set, so admitting it there would offer the model a kind nothing can answer. Rejected by validFactKind; admitted on the claim side by validClaimedFactKind."
 
 func init() {
+	const serverIsTheDefault = "server is the default and is not spelled: the MCP request accepts an empty value or client, so the published enum offers client only. Rejected by MCPInvestigateQuestionRequest.Validate."
+	for _, document := range []string{"mcp_investigate_question_request.v1.schema.json", "mcp_investigate_with_interpretation_request.v1.schema.json"} {
+		enumNarrowings[document+"#(root).synthesis"] = enumNarrowing{
+			excluded: []string{string(ContextFabricSynthesisModeServer)},
+			why:      serverIsTheDefault,
+			accepts: func(value string) bool {
+				return MCPInvestigateQuestionRequest{Question: "q", Synthesis: ContextFabricSynthesisMode(value)}.Validate() == nil
+			},
+		}
+	}
 	requirementSideFactKindFields := []string{
 		"context_fabric_common.v1.schema.json#FactRequirement.kind",
 		"context_fabric_common.v1.schema.json#AnswerPlan.fact_kinds",
