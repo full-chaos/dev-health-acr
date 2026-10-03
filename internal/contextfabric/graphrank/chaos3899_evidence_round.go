@@ -726,7 +726,7 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 				if outcome.RepositoryFilterApplied {
 					if refusal := crossCheckFilteredCensus(ctx, input.NarrowSatisfiers, kind, &outcome); refusal != "" {
 						slog.ErrorContext(ctx, "context fabric census: filtered census refused by the caller repository narrowing cross-check",
-							"request_id", contextfabric.SanitizeLogAttr(input.RequestID), "kind", contextfabric.SanitizeLogAttr(string(kind)), "refusal", refusal)
+							"request_id", contextfabric.SanitizeLogAttr(input.RequestID), "kind", contextfabric.SanitizeLogAttr(string(kind)), "refusal", contextfabric.SanitizeLogAttr(refusal))
 						outcome.ClosureMismatch = true
 						ka.ClosureMismatch = true
 					} else if outcome.Count == 0 {
