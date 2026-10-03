@@ -341,7 +341,7 @@ func TestWorkItemAuthorizationPathsThroughEverySQLReader(t *testing.T) {
 		s1, s1Bindings := workItemMembershipS1Statement(scope, 200)
 		s1Bindings = append(s1Bindings,
 			readers.Binding{Name: "anchor_provider", Value: "linear"}, readers.Binding{Name: "anchor_project_id", Value: authzPathsProjectP},
-			readers.Binding{Name: "s1_instant", Value: fixture.at}, readers.Binding{Name: "serve_limit", Value: uint32(200)})
+			readers.Binding{Name: "status_filter", Value: ""}, readers.Binding{Name: "s1_instant", Value: fixture.at}, readers.Binding{Name: "serve_limit", Value: uint32(200)})
 		rollup, rollupBindings := workItemProjectCompletionStatement(scope)
 		rollupBindings = append(rollupBindings, readers.Binding{Name: "ids", Value: []string{"linear:" + authzPathsProjectP}})
 		for _, tc := range []struct {
