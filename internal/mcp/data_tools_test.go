@@ -38,6 +38,7 @@ type dtHosted struct {
 	operate func(w http.ResponseWriter, r *http.Request)
 	graphql func(w http.ResponseWriter, r *http.Request)
 	calls   atomic.Int64
+	tools   []string
 	last    struct {
 		path, auth, query string
 		body              []byte
@@ -67,6 +68,10 @@ func newDTHosted(t *testing.T) *dtHosted {
 			h.last.body = buf.Bytes()
 		}
 		switch r.URL.Path {
+		case "/api/v1/agent-context/capabilities":
+			caps := validCapabilitiesFixture()
+			caps.EnabledTools = append(caps.EnabledTools, h.tools...)
+			dtRaw(w, http.StatusOK, mustJSON(t, caps))
 		case "/api/v1/context-fabric/data/catalog":
 			h.catalog(w, r)
 		case "/api/v1/context-fabric/data/subjects":
@@ -90,6 +95,7 @@ func (h *dtHosted) boot(t *testing.T, tools ...string) *Bootstrap {
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.tools = tools
 	caps := validCapabilitiesFixture()
 	caps.EnabledTools = append(caps.EnabledTools, tools...)
 	return &Bootstrap{Config: cfg, Client: client, Capabilities: caps}
@@ -660,4 +666,13 @@ func TestDataToolContractsMatchTheDirectreadVocabularies(t *testing.T) {
 			t.Errorf("the request schema refuses the served operation name %q: %v", op.Name, err)
 		}
 	}
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }
