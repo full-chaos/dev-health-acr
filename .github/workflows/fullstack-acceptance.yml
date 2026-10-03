@@ -42,6 +42,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  GOFLAGS: -trimpath
   OPENCODE_PINNED_VERSION: 1.18.4
   # The acceptance client loads this provider package at runtime. It is
   # pre-warmed into the npm cache so the graded run itself never depends on a
