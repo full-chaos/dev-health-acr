@@ -696,7 +696,9 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 			ka.SatisfierSetClosureMismatch = outcome.SatisfierSetClosureMismatch
 			if input.NarrowSatisfiers != nil && !outcome.ClosureMismatch && outcome.Count > 1 {
 				narrowed := narrowCensusSatisfiers(ctx, input.NarrowSatisfiers, kind, outcome)
-				base.CallerNarrowing, base.NarrowedFrom, base.NarrowedTo = narrowed.outcome, outcome.Count, len(narrowed.kept)
+				if base.CallerNarrowing == "" || base.CallerNarrowing == narrowedToOne {
+					base.CallerNarrowing, base.NarrowedFrom, base.NarrowedTo = narrowed.outcome, outcome.Count, len(narrowed.kept)
+				}
 				if narrowed.outcome == narrowedToOne {
 					outcome.Count = 1
 					outcome.SatisfierCanonicalID = narrowed.kept[0]

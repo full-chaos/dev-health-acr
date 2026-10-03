@@ -5130,7 +5130,10 @@ func callerNarrowingSatisfierFilter(principal storage.Principal, request context
 			if err != nil {
 				return nil, false
 			}
-			if exists && AuthorizedAttributes(principal, request.RequestedScope, node.Attributes) {
+			if !exists {
+				return nil, false
+			}
+			if AuthorizedAttributes(principal, request.RequestedScope, node.Attributes) {
 				kept = append(kept, id)
 			}
 		}

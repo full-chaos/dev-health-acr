@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -300,5 +301,41 @@ func TestResolveSubjects_StalledHandleCensusCommitsAnInsideSingleSatisfierWithou
 	}
 	if rounds := narrowingEvents(tracer); len(rounds) != 1 || rounds[0].ShadowCallerNarrowing != "" {
 		t.Fatalf("evidence_round = %#v, want no narrowing recorded for a census of one", rounds)
+	}
+}
+
+func TestResolveSubjects_StalledHandleCensusNeverTreatsAMissingGraphRowAsOutsideTheNarrowing(t *testing.T) {
+	t.Parallel()
+	backend := narrowingBackend()
+	delete(backend.exactHints, SubjectKey(contextfabric.SubjectRef{Kind: contextfabric.SubjectPullRequest, CanonicalID: narrowingPRID(0)}))
+	resolution, tracer, _ := resolveNarrowed(t, backend, storage.Principal{OrgID: "org_1"}, []string{narrowingRepos[1]}, narrowingQuestion, allNarrowingIDs())
+	if got := scopeAnchorCommittedIDs(resolution); len(got) != 0 {
+		t.Fatalf("committed = %v, want none: a census match with no graph row may lie inside the narrowing", got)
+	}
+	if rounds := narrowingEvents(tracer); len(rounds) != 1 || rounds[0].ShadowCallerNarrowing != "satisfier_read_failed" {
+		t.Fatalf("evidence_round = %#v, want satisfier_read_failed", rounds)
+	}
+}
+
+func TestRunShadowEvidenceRound_AFailedKindIsNotHiddenByALaterKindsNarrowing(t *testing.T) {
+	t.Parallel()
+	ciRun := contractsv1.ContextFabricSubjectCIRun
+	census := func(_ context.Context, _ string, kind CensusKind, _ string, _ bool, _ contextfabric.SubjectKind, _ string, _ bool) (CensusOutcome, error) {
+		return CensusOutcome{Count: 2, CensusReadAt: time.Now().UTC(), SatisfierCanonicalIDs: []string{string(kind) + ":a", string(kind) + ":b"}}, nil
+	}
+	input := baseInput()
+	input.Question = "pull request 747"
+	input.PooledKinds = []CensusKind{contextfabric.SubjectPullRequest, ciRun}
+	input.CensusFunc = census
+	input.ConfirmedAnchor = &AnchorBinding{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:r-1"}
+	input.NarrowSatisfiers = func(_ context.Context, kind CensusKind, ids []string) ([]string, bool) {
+		if kind == contextfabric.SubjectPullRequest {
+			return nil, false
+		}
+		return ids[:1], true
+	}
+	attestation := RunShadowEvidenceRound(context.Background(), input, nil)
+	if attestation.CallerNarrowing != "satisfier_read_failed" {
+		t.Fatalf("CallerNarrowing = %q, want the earlier kind's satisfier_read_failed to stay visible", attestation.CallerNarrowing)
 	}
 }
