@@ -57,6 +57,8 @@ type Inputs struct {
 	// GraphQLRoots are the graphql_query root fields (CHAOS-7075).
 	GraphQLRoots  []DataGraphQLRootRow
 	DataNotServed []DataNotServedRow
+	// ClientFlow is the vocabulary of the client-side interpretation flow.
+	ClientFlow ClientFlowInputs
 }
 
 // FromRegistries reads the live registries.
@@ -111,5 +113,6 @@ func FromRegistries() Inputs {
 	}
 	in.DataOperations, in.DataNotServed = dataRegistryRows()
 	in.GraphQLRoots = dataGraphQLRoots()
+	in.ClientFlow = clientFlowInputs()
 	return in
 }
