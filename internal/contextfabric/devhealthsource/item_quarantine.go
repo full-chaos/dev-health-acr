@@ -570,7 +570,7 @@ func (l *ignoredLedger) flush(ctx context.Context, logger *slog.Logger, sourceNa
 			"source", contextfabric.SanitizeLogAttr(sourceName),
 			"ignored_relationship_type", contextfabric.SanitizeLogAttr(t),
 			"ignored_count", totals[t],
-			"pass_outcome", passOutcome,
+			"pass_outcome", contextfabric.SanitizeLogAttr(passOutcome),
 		)
 	}
 }
