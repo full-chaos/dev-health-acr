@@ -3546,6 +3546,10 @@ func subjectKeyForModel(subject SubjectRef) string {
 	return string(subject.Kind) + "\x00" + subject.CanonicalID
 }
 
+// unwiredVersion is the placeholder of a version nothing on the turn
+// supplied.
+const unwiredVersion = "unwired"
+
 func nonEmptyVersion(primary, fallback string) string {
 	if value := strings.TrimSpace(primary); value != "" {
 		return value
@@ -3553,7 +3557,7 @@ func nonEmptyVersion(primary, fallback string) string {
 	if value := strings.TrimSpace(fallback); value != "" {
 		return value
 	}
-	return "unwired"
+	return unwiredVersion
 }
 
 // modelIdentity combines a receipt's provider and model into the single

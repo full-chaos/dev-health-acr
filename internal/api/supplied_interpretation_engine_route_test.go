@@ -115,6 +115,13 @@ func newSuppliedRouteApp(t *testing.T, interpreter contextfabric.RuntimeQuestion
 // store.
 func newSuppliedRouteAppWithStore(t *testing.T, interpreter contextfabric.RuntimeQuestionInterpreter, outcome contextfabric.StoredSubjectOutcome, synthesized *[]contextfabric.InterpretedQuestion, store contextfabric.InvestigationResultStore) (*App, string) {
 	t.Helper()
+	return newLiveContextFabricTestApp(t, newSuppliedRouteEngine(t, interpreter, outcome, synthesized, store))
+}
+
+// newSuppliedRouteEngine is the real engine newSuppliedRouteAppWithStore puts
+// behind the route.
+func newSuppliedRouteEngine(t *testing.T, interpreter contextfabric.RuntimeQuestionInterpreter, outcome contextfabric.StoredSubjectOutcome, synthesized *[]contextfabric.InterpretedQuestion, store contextfabric.InvestigationResultStore) *contextfabric.Engine {
+	t.Helper()
 	project := suppliedRouteProject()
 	results := 0
 	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
@@ -134,7 +141,7 @@ func newSuppliedRouteAppWithStore(t *testing.T, interpreter contextfabric.Runtim
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newLiveContextFabricTestApp(t, engine)
+	return engine
 }
 
 func windowedInvestigationHTTPRequest(t *testing.T, token string, supplied *contractsv1.ContextFabricSuppliedInterpretation) *http.Request {

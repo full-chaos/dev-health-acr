@@ -163,7 +163,7 @@ func TestContextFabricInvestigationRouteExceededPathStillLogsTheExceedLine(t *te
 // re-reading a stored, passing result via GET never logged its own
 // measurement either.
 func TestContextFabricInvestigationResultRoutePassingAnswerLogsBudgetMeasurement(t *testing.T) {
-	result := threeRollupProjectStatusResult("result_4540_get_pass")
+	result := storedNamingItsInterpreter(threeRollupProjectStatusResult("result_4540_get_pass"))
 	measuredBytes := marshaledSize(t, result)
 	estimatedTokens := (measuredBytes + 3) / 4
 	wantItems := contextFabricResultItemCounts(result).Total()

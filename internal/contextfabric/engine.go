@@ -1924,7 +1924,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				}
 			}
 			reused.Completeness = ComputeAnswerCompleteness(reused)
-			stampReusedInterpretationProvenance(&reused.Versions)
+			BackfillStoredInterpretationProvenance(&reused.Versions)
 			// The count reaches the OPERATOR on this path too.
 			//
 			// The backfill above states a cardinality on a served answer, and

@@ -11,7 +11,9 @@ import (
 // Investigate's reuse return. A row stored before the provenance fields
 // existed names the service as its interpreter and keeps its model identity
 // absent, because the row does not record which model interpreted. A row that
-// carries both fields is served with them unchanged.
+// carries both fields is served with them unchanged. A row whose
+// interpretation version is the unwired placeholder records no interpretation
+// and is served without a source.
 func TestReusedResultNamesItsInterpreter(t *testing.T) {
 	t.Parallel()
 
@@ -23,6 +25,7 @@ func TestReusedResultNamesItsInterpreter(t *testing.T) {
 		wantIdentity string
 	}{
 		{name: "row stored before the provenance fields existed", wantSource: InterpretationSourceServer},
+		{name: "row that records no interpretation", stored: VersionSet{InterpretationVersion: unwiredVersion}},
 		{
 			name:       "row stored with its provenance",
 			stored:     VersionSet{InterpretationSource: InterpretationSourceServer, InterpretationModelIdentity: storedIdentity},
@@ -34,6 +37,9 @@ func TestReusedResultNamesItsInterpreter(t *testing.T) {
 			project, candidate := reusableCandidate()
 			candidate.Versions.InterpretationSource = tc.stored.InterpretationSource
 			candidate.Versions.InterpretationModelIdentity = tc.stored.InterpretationModelIdentity
+			if tc.stored.InterpretationVersion != "" {
+				candidate.Versions.InterpretationVersion = tc.stored.InterpretationVersion
+			}
 			if err := candidate.Validate(); err != nil {
 				t.Fatalf("stored fixture is not a valid result: %v", err)
 			}

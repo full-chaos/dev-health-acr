@@ -43,16 +43,21 @@ func stampInterpretationProvenance(ctx context.Context, versions *VersionSet) {
 	versions.InterpretationModelIdentity = stamp.ModelIdentity
 }
 
-// stampReusedInterpretationProvenance names the interpreter of a result
-// served from answer reuse. saveResult stores a row as reusable only when the
-// service's own model interpreted it, so a reused row that names no source
-// was stored before the field existed and its interpreter was the service.
-// The model identity stays as stored: such a row does not record which model
-// interpreted.
-func stampReusedInterpretationProvenance(versions *VersionSet) {
-	if versions.InterpretationSource == "" {
-		versions.InterpretationSource = InterpretationSourceServer
+// BackfillStoredInterpretationProvenance names the interpreter of a result
+// served from a stored row: the reuse return and the read by id use this one
+// rule. A row that names no source and records an interpretation version was
+// stored before the field existed, and the service's own model interpreted
+// it: a caller's interpretation is always stored with its source. A row
+// whose interpretation version is the unwired placeholder ended before the
+// interpretation step and stays without a source. The model identity stays
+// as stored: such a row does not record which model interpreted. It reports
+// whether it named a source.
+func BackfillStoredInterpretationProvenance(versions *VersionSet) bool {
+	if versions.InterpretationSource != "" || versions.InterpretationVersion == unwiredVersion {
+		return false
 	}
+	versions.InterpretationSource = InterpretationSourceServer
+	return true
 }
 
 type interpretationStampKey struct{}
