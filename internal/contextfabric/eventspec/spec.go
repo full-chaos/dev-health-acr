@@ -2246,7 +2246,7 @@ var OperationRead = Event{
 		{Key: "document_digest", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the operation is a served catalogue operation"},
 		{Key: "result", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call is served", ClosedVocabulary: operationReadResults},
 		{Key: "refusal_code", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call is refused", ClosedVocabulary: operationReadRefusalCodes},
-		{Key: "error_class", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call ends upstream_error, upstream_timeout or operation_unavailable", ClosedVocabulary: operationReadErrorClasses},
+		{Key: "error_class", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call ends upstream_error, upstream_timeout or operation_unavailable, or is refused invalid_request because the query service rejected the variables or document (error_class http_status)", ClosedVocabulary: operationReadErrorClasses},
 		{Key: "upstream_status", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when error_class is http_status: the upstream HTTP status, 100 to 599"},
 		{Key: "graphql_code", Type: FieldString, Presence: PresenceConditional, Applicability: "written when error_class is http_status and the upstream body is a GraphQL error envelope with a code; the code is a closed token, never upstream message text", ClosedVocabulary: operationReadGraphQLCodes},
 		{Key: "variable", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the upstream rejected a named GraphQL variable (errors[0].path variable, a GraphQL name of at most 64 characters)"},
