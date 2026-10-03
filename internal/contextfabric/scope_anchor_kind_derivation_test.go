@@ -21,9 +21,10 @@ func runDeploymentCohortWithAnchor(t *testing.T, declared SubjectKind, committed
 	gate := DecideFrameGate(ValidateFrame(frame, nil, ""), true)
 	outcome := QuestionFamilyOutcome{Family: QuestionFamilyScopedCohortStatus, Source: QuestionFamilySourceModel, Frame: &frame, FrameObligations: frame.Obligations, Gate: gate, WinningSample: FamilySample{ScopeAnchorKind: declared, ScopeAnchorTerm: "Anchor"}}
 	resolution := workItemTuplePayloadFixture(t).SubjectResolution
-	resolution.Committed = committed
+	resolution.Committed = append([]SubjectRef{}, committed...)
 	template := resolution.Candidates[0]
-	resolution.Candidates = nil
+	resolution.CommitDecisionDigests = identityProvenDigests(committed...)
+	resolution.Candidates = []SubjectCandidate{}
 	for _, subject := range committed {
 		candidate := template
 		candidate.Subject = subject
@@ -123,5 +124,51 @@ func TestSemanticStateRejectsAnUnknownScopeAnchorKindSource(t *testing.T) {
 	state.ScopeAnchor.KindSource = ScopeAnchorKindCommittedHint
 	if _, err := EncodeSemanticState(state); err != nil {
 		t.Fatalf("committed_hint must encode: %v", err)
+	}
+}
+
+func TestContinuationCarriesTheDerivedAnchorKindSource(t *testing.T) {
+	state := semanticFixture(t)
+	state.ScopeAnchor = SemanticScopeAnchor{Kind: SubjectRepository, Term: "Anchor", KindSource: ScopeAnchorKindCommittedHint}
+	decision := windowContinuationDecision{Observed: true, WindowOnlyShape: true, Disposition: ContinuationApplied,
+		Accepted: &continuationCarriedContext{Family: state.Family, GroupKind: state.GroupKind, State: state}}
+	before := QuestionFamilyOutcome{Family: QuestionFamilyDiscoveredCohortRanking, Source: QuestionFamilySourceModel, WinningSample: FamilySample{ScopeAnchorKind: SubjectTeam, ScopeAnchorKindSource: "other"}}
+	after, applied := applyWindowContinuation(before, decision, composeAcceptedContext(compositionInput{Carried: state}))
+	if !applied || after.WinningSample.ScopeAnchorKind != SubjectRepository || after.WinningSample.ScopeAnchorKindSource != ScopeAnchorKindCommittedHint {
+		t.Fatalf("applied=%v sample anchor kind=%q source=%q, want repository/committed_hint", applied, after.WinningSample.ScopeAnchorKind, after.WinningSample.ScopeAnchorKindSource)
+	}
+	state.ScopeAnchor = SemanticScopeAnchor{Kind: SubjectRepository, Term: "Anchor"}
+	after, _ = applyWindowContinuation(before, decision, composeAcceptedContext(compositionInput{Carried: state}))
+	if after.WinningSample.ScopeAnchorKindSource != "" {
+		t.Fatalf("a declared carried kind must not gain a source, got %q", after.WinningSample.ScopeAnchorKindSource)
+	}
+}
+
+func TestScopeAnchorComparisonIgnoresTheKindSourceAndMatchesADerivedKind(t *testing.T) {
+	derived := SemanticScopeAnchor{Kind: SubjectRepository, Term: "Anchor", KindSource: ScopeAnchorKindCommittedHint}
+	for _, tc := range []struct {
+		name         string
+		carried, now SemanticScopeAnchor
+		same         bool
+	}{
+		{"same declared kind, source differs", derived, SemanticScopeAnchor{Kind: SubjectRepository, Term: "Anchor"}, true},
+		{"derived carried kind vs fresh proposal with none", derived, SemanticScopeAnchor{Term: "Anchor"}, true},
+		{"declared carried kind vs fresh proposal with none", SemanticScopeAnchor{Kind: SubjectRepository, Term: "Anchor"}, SemanticScopeAnchor{Term: "Anchor"}, false},
+		{"derived carried kind vs a different fresh kind", derived, SemanticScopeAnchor{Kind: SubjectTeam, Term: "Anchor"}, false},
+		{"term differs", derived, SemanticScopeAnchor{Kind: SubjectRepository, Term: "Other"}, false},
+	} {
+		if got := sameScopeAnchor(tc.carried, tc.now); got != tc.same {
+			t.Errorf("%s: same = %v, want %v", tc.name, got, tc.same)
+		}
+	}
+}
+
+func TestEmptyDeclaredAnchorKindWithNoCommittedSubjectIsNotServed(t *testing.T) {
+	run := runDeploymentCohortWithAnchor(t, "")
+	if run.discoverCalls != 0 {
+		t.Fatalf("discover calls = %d, want 0", run.discoverCalls)
+	}
+	if run.saved != nil && run.saved.ScopeAnchor.KindSource != "" {
+		t.Fatalf("no committed subject must derive nothing: %+v", run.saved.ScopeAnchor)
 	}
 }
