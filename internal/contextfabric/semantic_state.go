@@ -232,6 +232,9 @@ type ConfirmedNeedEntry struct {
 type SemanticScopeAnchor struct {
 	Kind SubjectKind `json:"kind"`
 	Term string      `json:"term"`
+	// KindSource is "committed_hint" when Kind was derived from the one
+	// committed subject rather than declared by the interpretation.
+	KindSource ScopeAnchorKindSource `json:"kind_source,omitempty"`
 	// MemberSource is TOLERATED ON READ ONLY: DecodeSemanticState's
 	// DisallowUnknownFields decoder rejects any JSON key this struct has no
 	// matching field for, so a row a prior binary wrote with this key
@@ -760,6 +763,9 @@ func validateSemanticState(s PersistedSemanticState) error {
 	if s.ScopeAnchor.Kind != "" && !contractsv1.ValidContextFabricSubjectKind(s.ScopeAnchor.Kind) {
 		return reject("scope_anchor.kind %q is not a vocabulary member", s.ScopeAnchor.Kind)
 	}
+	if s.ScopeAnchor.KindSource != "" && s.ScopeAnchor.KindSource != ScopeAnchorKindCommittedHint {
+		return reject("scope_anchor.kind_source %q is not a vocabulary member", s.ScopeAnchor.KindSource)
+	}
 	if len(s.ScopeAnchor.Term) > SemanticStateMaxTermBytes {
 		return oversized(SemanticStateBoundTermBytes, "scope_anchor.term is %d bytes, exceeds %d", len(s.ScopeAnchor.Term), SemanticStateMaxTermBytes)
 	}
@@ -1216,7 +1222,7 @@ func BuildSemanticState(in SemanticStateInput) *PersistedSemanticState {
 		FamilyTableVersion:           in.FamilyVersion,
 		GroupKind:                    in.GroupKind,
 		NarrowingBasis:               in.NarrowingBasis,
-		ScopeAnchor:                  SemanticScopeAnchor{Kind: in.Outcome.WinningSample.ScopeAnchorKind, Term: in.Outcome.WinningSample.ScopeAnchorTerm},
+		ScopeAnchor:                  SemanticScopeAnchor{Kind: in.Outcome.WinningSample.ScopeAnchorKind, Term: in.Outcome.WinningSample.ScopeAnchorTerm, KindSource: in.Outcome.WinningSample.ScopeAnchorKindSource},
 		FrameVersion:                 QuestionFrameVersion,
 		Roles:                        []SemanticRoleSlot{},
 		Requirements:                 []SemanticRequirement{},

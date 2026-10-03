@@ -224,6 +224,7 @@ var semanticStateGroupFields = []Field{
 	{Key: "group_kind", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true"},
 	{Key: "narrowing_basis", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true"},
 	{Key: "scope_anchor_kind", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true"},
+	{Key: "scope_anchor_kind_source", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true; none unless the kind was derived from the one committed subject"},
 	{Key: "scope_anchor_term_present", Type: FieldBool, Presence: PresenceConditional, Applicability: "written when present=true; the term itself is corpus text and is never published"},
 	{Key: "frame_present", Type: FieldBool, Presence: PresenceConditional, Applicability: "written when present=true"},
 	{Key: "frame_version", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true"},

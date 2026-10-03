@@ -3968,6 +3968,12 @@
             "applicability": "written when present=true"
           },
           {
+            "key": "scope_anchor_kind_source",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true; none unless the kind was derived from the one committed subject"
+          },
+          {
             "key": "scope_anchor_term_present",
             "type": "bool",
             "presence": "conditional",
@@ -5017,6 +5023,12 @@
             "applicability": "written when present=true"
           },
           {
+            "key": "scope_anchor_kind_source",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true; none unless the kind was derived from the one committed subject"
+          },
+          {
             "key": "scope_anchor_term_present",
             "type": "bool",
             "presence": "conditional",
@@ -5225,6 +5237,12 @@
             "type": "string",
             "presence": "conditional",
             "applicability": "written when present=true"
+          },
+          {
+            "key": "scope_anchor_kind_source",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true; none unless the kind was derived from the one committed subject"
           },
           {
             "key": "scope_anchor_term_present",
