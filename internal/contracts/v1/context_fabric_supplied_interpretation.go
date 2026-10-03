@@ -69,6 +69,13 @@ func (s ContextFabricSuppliedInterpretation) Validate() error {
 	return nil
 }
 
+// ContextFabricReservedModelProvider reports whether provider is a name no
+// server-side model configuration may use: a result's interpretation model
+// identity that starts with it means the caller interpreted.
+func ContextFabricReservedModelProvider(provider string) bool {
+	return strings.EqualFold(strings.TrimSpace(provider), ContextFabricClientSuppliedProvider)
+}
+
 // ValidContextFabricClientModel reports whether a client-declared model name
 // is safe to store: 1..128 characters of [A-Za-z0-9._:/-].
 func ValidContextFabricClientModel(model string) bool {

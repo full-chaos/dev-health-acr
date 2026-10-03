@@ -73,6 +73,9 @@ func (r ContextFabricOrgModelConfigWriteRequest) Validate() error {
 	if strings.ContainsRune(r.Provider, '/') {
 		return errors.New("context fabric org model config: provider must not contain a path separator")
 	}
+	if ContextFabricReservedModelProvider(r.Provider) {
+		return errors.New("context fabric org model config: provider name is reserved")
+	}
 	if err := validateContextFabricModelID("model", r.Model); err != nil {
 		return err
 	}
