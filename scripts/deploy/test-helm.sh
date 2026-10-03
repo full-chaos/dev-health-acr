@@ -329,7 +329,7 @@ pass "local-entitlement: development render omits remote URL/token/CA/network in
 
 distinct_token_render="$workdir/distinct-token.yaml"
 render \
-  --set-string 'config.entitlement.url=http://ops.dev-health.internal:8000' \
+  --set-string 'config.entitlement.url=http://ops.dev-health.internal:8091' \
   --set-string 'credentials.entitlementToken.existingSecret=acr-entitlement-token' \
   --set-string 'config.entitlementCaBundle.existingSecret=acr-entitlement-ca' \
   --set-string 'credentials.entitlementToken.key=source-token' \
@@ -389,9 +389,9 @@ if 'port: 9440' in api or 'port: 8123' in api: fail('API egress contains an unex
 if 'protocol: TCP' not in api: fail('API egress must explicitly use TCP')
 if 'port: 8080' not in api or 'namespaceSelector:' not in api: fail('API ingress must be constrained to the configured Gateway namespace selector')
 if 'port: 5432' not in migrate or 'protocol: TCP' not in migrate: fail('migration policy must allow TCP PostgreSQL only')
-for port in ('port: 9000', 'port: 8000', 'port: 8080'):
+for port in ('port: 9000', 'port: 8091', 'port: 8080'):
     if port in migrate: fail('migration policy must not allow non-PostgreSQL dependency '+port)
-if 'port: 8000' in api: fail('local API egress must not retain the remote entitlement port')
+if 'port: 8091' in api: fail('local API egress must not retain the remote entitlement port')
 print('  ok   network-policy: local API permits TCP Postgres/ClickHouse ports and Gateway ingress; migration permits only DNS + TCP Postgres')
 PY
 
@@ -533,7 +533,7 @@ pass "device-verification-url: hosted runtime approval URL is rendered ($device_
 
 # Gate 14: remote mode remains explicit and accepts an ordinary HTTP service origin.
 ent_url="$(grep 'ACR_DEV_HEALTH_ENTITLEMENT_URL' "$distinct_token_render" | head -1 | grep -oE 'https?://[^"]+')"
-[[ "$ent_url" == "http://ops.dev-health.internal:8000" ]] \
+[[ "$ent_url" == "http://ops.dev-health.internal:8091" ]] \
   || fail_gate "entitlement-origin: explicit remote render did not retain the HTTP origin"
 pass "entitlement-origin: explicit remote render retains HTTP origin and token projection"
 

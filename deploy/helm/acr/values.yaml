@@ -602,7 +602,7 @@ networkPolicy:
     # entitlement origin select different ports, including TLS-native ports.
     postgresPort: 5432
     clickhousePort: 9000
-    entitlementPort: 8000
+    entitlementPort: 8091
     # Ops query service internal listener (acr-api egress only). The port is
     # reserved as DHO_QUERY_INTERNAL_PORT: 8095 in GWC's draft, NOT final
     # until their merge (design r5 text says 8091). Set 0 to render no rule.

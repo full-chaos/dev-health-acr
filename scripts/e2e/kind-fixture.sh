@@ -1000,7 +1000,7 @@ metadata:
 data:
   default.conf: |
     server {
-      listen 8000;
+      listen 8091;
       listen 8443 ssl;
       ssl_certificate     /tls/tls.crt;
       ssl_certificate_key /tls/tls.key;
@@ -1037,7 +1037,7 @@ spec:
       containers:
         - name: nginx
           image: ${ACR_E2E_IMG_OPS_ENTITLEMENT}
-          ports: [{ containerPort: 8000 }, { containerPort: 8443 }]
+          ports: [{ containerPort: 8091 }, { containerPort: 8443 }]
           volumeMounts:
             - { name: conf, mountPath: /etc/nginx/conf.d/default.conf, subPath: default.conf }
             - { name: tls, mountPath: /tls }
@@ -1057,7 +1057,7 @@ metadata:
   labels: { app: ops-entitlement }
 spec:
   selector: { app: ops-entitlement }
-  ports: [{ name: http, port: 8000, targetPort: 8000 }, { name: https, port: 8443, targetPort: 8443 }]
+  ports: [{ name: http, port: 8091, targetPort: 8091 }, { name: https, port: 8443, targetPort: 8443 }]
 EOF
 }
 

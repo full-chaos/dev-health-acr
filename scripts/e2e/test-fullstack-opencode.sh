@@ -26,8 +26,9 @@ grep -Fq 'ACR_E2E_SEED_HOOK' "$driver" || fail 'compose.sh lost the evidence see
 grep -Fq 'ACR_E2E_REPOSITORY_SCOPE' "$driver" || fail 'compose.sh lost the repository scope override'
 grep -Fq 'prepare_stack()' "$driver" || fail 'compose.sh lost the prepared-stack boundary'
 grep -Fq 'assert_scoped_repository' "$driver" || fail 'compose.sh lost the single-repository assertion'
-grep -Fq 'SETUPTOOLS_SCM_PRETEND_VERSION: "0.0.0"' "$driver" \
-  || fail 'the staged Ops API must receive a deterministic setuptools-scm version'
+grep -Fq 'ACR_DEV_HEALTH_ENTITLEMENT_URL: http://go-api:8091' "$driver" \
+  || fail 'acr-api must call the Go ops api internal listener for entitlement'
+if grep -Fq 'SETUPTOOLS_SCM_PRETEND_VERSION' "$driver"; then fail 'the harness must not build the Python Ops API'; fi
 grep -Fq 'jwt="$(random_secret)"' "$driver" \
   || fail 'the isolated Ops API must generate a per-run JWT secret'
 grep -Fq 'JWT_SECRET_KEY: "${jwt}"' "$driver" \
@@ -309,7 +310,7 @@ grep -Fq 'the ops api service reads ClickHouse database' "$script" \
 
 grep -Fq 'ACR_DEVICE_VERIFICATION_URL' "$driver" \
   || fail 'the isolated ACR runtime must receive the concrete web device verification URL'
-grep -Fq 'compose logs --no-color clickhouse migrate api acr-migrate acr-api acr-tls-proxy' "$driver" \
+grep -Fq 'compose logs --no-color clickhouse migrate go-api-roles go-api acr-migrate acr-api acr-tls-proxy' "$driver" \
   || fail 'failed isolated runs must retain the TLS proxy diagnostics for device-login transport failures'
 grep -Fq 'run_device_login_lifecycle' "$script" \
   || fail 'the live gate must exercise CLI login through web approval and lifecycle commands'

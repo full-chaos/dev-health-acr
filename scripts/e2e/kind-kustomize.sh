@@ -103,7 +103,7 @@ imagePullSecrets:
 config:
   environment: development
   entitlement:
-    url: http://${KUSTOMIZE_E2E_OPS_HOST}:8000
+    url: http://${KUSTOMIZE_E2E_OPS_HOST}:8091
 credentials:
   runtime:
     existingSecret: acr-runtime-credentials
@@ -122,7 +122,7 @@ gateway:
 networkPolicy:
   egress:
     clickhousePort: 9000
-    entitlementPort: 8000
+    entitlementPort: 8091
   ingressNamespaceSelectors:
     - matchLabels:
         kubernetes.io/metadata.name: envoy-gateway-system
@@ -135,7 +135,7 @@ EOF
   done
   verify_semantic_port_parity 'PostgreSQL' 5432 acr-api "${KUSTOMIZE_E2E_WORK}/rendered.yaml" acr "$helm_network_policy"
   verify_semantic_port_parity 'ClickHouse native plaintext' 9000 acr-api "${KUSTOMIZE_E2E_WORK}/rendered.yaml" acr "$helm_network_policy"
-  verify_semantic_port_parity 'entitlement HTTP' 8000 acr-api "${KUSTOMIZE_E2E_WORK}/rendered.yaml" acr "$helm_network_policy"
+  verify_semantic_port_parity 'entitlement HTTP' 8091 acr-api "${KUSTOMIZE_E2E_WORK}/rendered.yaml" acr "$helm_network_policy"
   if grep -Eq '/var/run/acr/(postgres|clickhouse|entitlement)-ca|acr-(postgres|clickhouse|entitlement)-ca' "${KUSTOMIZE_E2E_WORK}/rendered.yaml" "$helm_render"; then
     e2e_die 'parity: ordinary internal transport must not require CA projections'
   fi
@@ -170,7 +170,7 @@ verify_network_and_gateway() {
   api_policy_ports="$(network_policy_tcp_ports "${KUSTOMIZE_E2E_WORK}/rendered.yaml" acr-api)"
   grep -Fqx -- 5432 <<<"${api_policy_ports}" || e2e_die 'API NetworkPolicy lacks PostgreSQL egress'
   grep -Fqx -- 9000 <<<"${api_policy_ports}" || e2e_die 'API NetworkPolicy lacks ClickHouse native egress'
-  grep -Fqx -- 8000 <<<"${api_policy_ports}" || e2e_die 'API NetworkPolicy lacks entitlement HTTP egress'
+  grep -Fqx -- 8091 <<<"${api_policy_ports}" || e2e_die 'API NetworkPolicy lacks entitlement HTTP egress'
 }
 
 verify_no_mcp() {

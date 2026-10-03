@@ -105,7 +105,7 @@ cleanup() {
   fi
   note "cleanup receipt before: $(owned_receipt)"
   if [[ "$status" -ne 0 ]]; then
-    compose logs --no-color clickhouse migrate api acr-migrate acr-api acr-tls-proxy 2>&1 | redact_log || true
+    compose logs --no-color clickhouse migrate go-api-roles go-api acr-migrate acr-api acr-tls-proxy 2>&1 | redact_log || true
     for service in clickhouse api; do
       health_container="$(compose ps -q "$service" 2>/dev/null || true)"
       if [[ -n "$health_container" ]]; then
@@ -254,11 +254,10 @@ services:
     image: "${VALKEY_IMAGE}"
     ports: !override []
   mailpit: { image: "${MAILPIT_IMAGE}" }
-  api:
-    environment: { SETUPTOOLS_SCM_PRETEND_VERSION: "0.0.0", JWT_SECRET_KEY: "${jwt}" }
-    healthcheck: { test: ["CMD", "wget", "--spider", "http://localhost:8000/ready"], interval: 5s, timeout: 5s, retries: 36, start_period: 120s }
+  go-api:
+    environment: { JWT_SECRET_KEY: "${jwt}" }
   # query-api authenticates the Go-served REST routes with the user's edge access token, the HS256
-  # JWT the Python api mints with JWT_SECRET_KEY (cmd/query-api edge_verifier_config.go). It needs
+  # JWT the Go api mints with JWT_SECRET_KEY (cmd/query-api edge_verifier_config.go). It needs
   # the same per-run secret as api, or every routed call answers 401 (CHAOS-6326).
   # DEV_HEALTH_ENV and GO_API_PROOF_ROUTE_ENABLED mount the measurement route the prover needs
   # for a shadow row; query-api and the tools image are built at ONE commit (OPS_COMMIT) because
@@ -294,7 +293,9 @@ services:
       ACR_REQUIRE_BACKING_STORES: "true"
       ACR_POSTGRES_DSN_FILE: /run/secrets/acr_runtime_dsn
       ACR_CLICKHOUSE_DSN_FILE: /run/secrets/acr_clickhouse_dsn
-      ACR_DEV_HEALTH_ENTITLEMENT_URL: http://api:8000
+      ACR_DEV_HEALTH_ENTITLEMENT_URL: http://go-api:8091
+      ACR_DATA_QUERY_URL: http://query-api:8091
+      ACR_DATA_QUERY_PATH: /query/run-operation
       ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE: /run/secrets/acr_ops_token
       ACR_DEVICE_VERIFICATION_URL: "${ACR_E2E_DEVICE_VERIFICATION_URL:-https://device.invalid/acr/device}"
       ACR_EVIDENCE_ID_ACTIVE_KID_FILE: /run/secrets/acr_evidence_active_kid
@@ -308,7 +309,7 @@ services:
     depends_on: !override
       postgres: { condition: service_healthy }
       clickhouse: { condition: service_healthy }
-      api: { condition: service_healthy }
+      go-api: { condition: service_started }
       acr-db-acl: { condition: service_completed_successfully }
   acr-credentials:
     image: "${IMAGE}"
@@ -353,7 +354,7 @@ assert_safe_render() {
   if ! grep -q 'host_ip: 127.0.0.1' "$STATE/rendered.yml" || ! grep -q 'target: 8443' "$STATE/rendered.yml" || ! grep -q "published: \"${PORT}\"" "$STATE/rendered.yml"; then
     die 'direct localhost TLS endpoint missing'
   fi
-  jq -e '.services["acr-api"].depends_on | keys == ["acr-db-acl","api","clickhouse","postgres"]' "$STATE/rendered.json" >/dev/null \
+  jq -e '.services["acr-api"].depends_on | keys == ["acr-db-acl","clickhouse","go-api","postgres"]' "$STATE/rendered.json" >/dev/null \
     || die 'ACR API inherited an unexpected local-dev dependency'
   jq -e '(.services["acr-api"].volumes // []) | all(.[]; ((.source // "") | contains("/.acr-dev/") | not))' "$STATE/rendered.json" >/dev/null \
     || die 'ACR API inherited a local-dev bind mount'
@@ -366,7 +367,7 @@ assert_safe_render() {
   fi
   jq -e '.services["acr-migrate"].environment | keys == ["ACR_ENVIRONMENT","ACR_POSTGRES_CONNECTION_KIND","ACR_POSTGRES_MIGRATION_DSN_FILE"]' "$STATE/rendered.json" >/dev/null \
     || die 'ACR migration environment inherited local-dev configuration'
-  jq -e '(.services.api.environment.JWT_SECRET_KEY // "") | length >= 32' "$STATE/rendered.json" >/dev/null \
+  jq -e '(.services["go-api"].environment.JWT_SECRET_KEY // "") | length >= 32' "$STATE/rendered.json" >/dev/null \
     || die 'Ops API is missing its per-run JWT secret'
   jq -e '.services["acr-api"].environment as $environment | ($environment | has("ACR_POSTGRES_DSN") | not) and ($environment | has("ACR_CLICKHOUSE_DSN") | not) and ($environment | has("ACR_ALLOW_INSECURE_POSTGRES") | not)' "$STATE/rendered.json" >/dev/null \
     || die 'ACR API environment inherited direct or insecure configuration'
@@ -404,6 +405,19 @@ dho() {
     -e "POSTGRES_URI=postgres://devhealth:${pg}@postgres:5432/devhealth?sslmode=disable" \
     -e "CLICKHOUSE_URI=${DHO_CLICKHOUSE_URI:-clickhouse://default:ch@clickhouse:9000/${CLICKHOUSE_DB:-default}}" \
     query-api "$@"
+}
+
+# wait_go_api polls the Go api internal listener from the compose network. The go-api image is
+# distroless (no shell, no wget), so the probe runs in the nginx image already pinned here.
+wait_go_api() {
+  local i
+  for i in $(seq 1 90); do
+    if compose run --rm --no-deps -T --entrypoint wget acr-tls-proxy -q -O /dev/null http://go-api:8091/api/v1/internal/acr/health >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  die 'Go ops api internal listener did not become ready'
 }
 
 ops_clickhouse_database() { printf 'acr_%s_e2e' "${PROJECT//-/}"; }
@@ -478,7 +492,8 @@ provision_ops_control_plane() {
   # than a later one.
   compose up -d --wait clickhouse >/dev/null
   clickhouse_query "CREATE DATABASE IF NOT EXISTS $(ops_clickhouse_database)" >/dev/null
-  compose up -d postgres valkey pgbouncer mailpit migrate api query-api >/dev/null
+  compose up -d postgres valkey pgbouncer mailpit migrate go-api-roles go-api query-api >/dev/null
+  wait_go_api
   if ! output="$(dho admin orgs create --name "${PROJECT} E2E" --slug "$PROJECT" --description 'isolated compose E2E' --tier community)"; then
     printf '%s\n' "$output" >&2
     die 'Ops organization provisioning failed'
@@ -762,7 +777,7 @@ main() {
     start_happy
     inject_existing_volume_drift
     compose down --remove-orphans >/dev/null
-    compose up -d postgres clickhouse valkey pgbouncer mailpit migrate api acr-db-init acr-migrate acr-api acr-tls-proxy >/dev/null
+    compose up -d postgres clickhouse valkey pgbouncer mailpit migrate go-api-roles go-api acr-db-init acr-migrate acr-api acr-tls-proxy >/dev/null
     wait_https_ready
     record_acl_probe
     run_mcp "$(<"$STATE/secrets/acr-rotated-token")"

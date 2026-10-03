@@ -426,7 +426,7 @@ verify_fixture() {
   org_id="$(<"$STATE/org-id")"
   # compose is a shell function, so the verifier cannot exec it; hand it the resolved argv.
   { compose_argv; printf '%s\0' exec -T clickhouse clickhouse-client --user default --password ch --database "$db" --query; } > "$STATE/probe-argv"
-  # Best-effort only: disclose unattributable Python migration DDL in fixture-verification.json
+  # Best-effort only: disclose unattributable migration DDL in fixture-verification.json
   # too when a sibling ops checkout happens to be available; never required for the live run.
   if migrations_dir="$(find_ops_migrations_dir)"; then
     migrations_dir_args=(--migrations-dir "$migrations_dir")
@@ -448,7 +448,7 @@ verify_fixture() {
 # ---------------------------------------------------------------------------
 
 record_service_readiness() {
-  local services=(postgres clickhouse valkey api acr-api acr-tls-proxy)
+  local services=(postgres clickhouse valkey go-api acr-api acr-tls-proxy)
   local service state health
   : > "$ARTIFACTS/.readiness.jsonl"
   for service in "${services[@]}"; do
@@ -1103,10 +1103,10 @@ write_web_assertion_material() {
 }
 
 # write_query_api_router_conf renders the nginx config for api-router: prod's ingress
-# splits REST paths between the Python `api` and the Go query-api
+# splits REST paths between the Go `go-api` and the Go query-api
 # (full-chaos/dev-health-deploy chart/templates/query-api-ingress.yaml, paths from
 # chart/values.prod.yaml ingress.queryApiPaths), but this fixture's `web-fullstack`
-# previously called BACKEND_URL=http://api:8000 directly, with no such split -- so once
+# previously called the ops api public listener directly, with no such split -- so once
 # ops #2821 (CHAOS-6241) reduced the Go-served REST route bodies in Python to a loud 500
 # sentinel, every one of those 32 routes 500'd here even though query-api (already built
 # from the same ./ops checkout, see compose.ci.yml's query-api service comment) serves
@@ -1118,7 +1118,7 @@ write_web_assertion_material() {
 # Go-served REST route is added here in the same change that lists it in the chart).
 # Exact entries become nginx `location =`; the chart's ImplementationSpecific
 # (person/work-unit-scoped) entries become nginx regex locations. Everything else falls
-# through to the Python api, mirroring the ingress's catch-all.
+# through to the Go api, mirroring the ingress's catch-all.
 write_query_api_router_conf() {
   mkdir -p "$STATE/web"
   cat > "$STATE/web/query-api-router.conf" <<'EOF'
@@ -1153,7 +1153,9 @@ http {
     location ~ ^/api/v1/people/[^/]+/drilldown/prs$ { proxy_pass http://query-api:8090; }
     location ~ ^/api/v1/work-units/[^/]+/explain$ { proxy_pass http://query-api:8090; }
 
-    location / { proxy_pass http://api:8000; }
+    location = /graphql { proxy_pass http://query-api:8090; }
+
+    location / { proxy_pass http://go-api:8000; }
   }
 }
 EOF
@@ -1181,7 +1183,7 @@ services:
     container_name: ${PROJECT}-bugsink
     ports: []
     restart: "no"
-  # api-router splits REST traffic between the Python api and the Go query-api the same
+  # api-router splits REST traffic between the Go api and the Go query-api the same
   # way prod's ingress does (see write_query_api_router_conf above). web-fullstack talks
   # to this instead of api directly so the fixture proves the same routing prod relies on.
   api-router:
@@ -1189,7 +1191,7 @@ services:
     volumes:
       - ${STATE}/web/query-api-router.conf:/etc/nginx/nginx.conf:ro
     depends_on:
-      api: { condition: service_healthy }
+      go-api: { condition: service_started }
       query-api: { condition: service_started }
     networks: [dev-health]
   web-fullstack:
@@ -1212,7 +1214,7 @@ services:
     volumes:
       - ${STATE}/web/web-assertion.key:/run/acr-e2e/web-assertion.key:ro
     depends_on:
-      api: { condition: service_healthy }
+      go-api: { condition: service_started }
       api-router: { condition: service_started }
       bugsink: { condition: service_started }
       valkey: { condition: service_healthy }
@@ -1540,7 +1542,7 @@ assert_repository_catalog_visible() {
   # ops `api` service resolves its own CLICKHOUSE_URI at container start, and when that named a
   # different database it served a clean, empty, entirely valid catalog while this probe passed.
   # A probe that reads past the component under test cannot speak for it.
-  api_db="$(compose exec -T api sh -c 'printf %s "${CLICKHOUSE_URI:-}"' 2>/dev/null | sed -nE 's#.*/([^/?]+)(\?.*)?$#\1#p')"
+  api_db="$(compose config --format json 2>/dev/null | jq -r '.services["go-api"].environment.DEV_HEALTH_CH_DB // empty')"
   [[ "$api_db" == "$db" ]] \
     || fs_die "the ops api service reads ClickHouse database '${api_db:-<unset>}' but this suite seeds '${db}'; the repository catalog would answer 200 with an empty list"
   visible="$(clickhouse_query "SELECT count() FROM (SELECT lowerUTF8(trimBoth(repo)) AS canonical_repo FROM ${db}.repos FINAL WHERE org_id = '${org_id}') WHERE canonical_repo = '${FULLSTACK_REPO_SLUG}'")"

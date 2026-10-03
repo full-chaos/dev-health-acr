@@ -11,8 +11,8 @@
 # This is NOT a copy of chris's local dev-health/compose.yml (untracked,
 # never committed anywhere, may carry local-only config). It is authored
 # from scratch using only what dev-health-ops's own tracked compose.yml and
-# docker/Dockerfile publicly document: the "api" image target already bakes
-# the app in (no source bind mount needed), the migrate service runs the dho target, and
+# docker/Dockerfile publicly document: the Go operator image target bakes
+# the api in (no source bind mount needed), the migrate service runs the dho target, and
 # docker/init-extra-dbs.sh provisions the River roles from POSTGRES_USER/
 # POSTGRES_DB container env. render_override() in compose.sh (the shared
 # E2E driver) replaces postgres/clickhouse/valkey/pgbouncer/api images,
@@ -151,35 +151,108 @@ services:
         condition: service_healthy
     networks: [dev-health]
 
-  api:
+  # One-shot: creates the unprivileged Postgres logins (`dho migrate roles`),
+  # including the api's own, after the canonical migrate service has created every
+  # semantic table the grants cover. Operator image, built from ./ops.
+  go-api-roles:
     build:
       context: ./ops
-      dockerfile: ./docker/Dockerfile
-      target: api
-      args:
-        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+      dockerfile: docker/go-worker.Dockerfile
+      target: operator
+    image: ${DEV_HEALTH_GO_OPERATOR_IMAGE:-ghcr.io/full-chaos/dev-health-go-operator:local}
+    restart: "no"
+    command: ["migrate", "roles"]
     environment:
-      SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DEV_HEALTH_OPS: "0.0.0"
-      PYTHONPATH: /app/src
-      GRAPHQL_QUERY_TIMEOUT: "30"
-      DATABASE_URI: postgresql+asyncpg://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
-      PGBOUNCER_TRANSACTION_MODE: "true"
-      CLICKHOUSE_URI: clickhouse://default:ch@clickhouse:8123/${CLICKHOUSE_DB:-default}
-      REDIS_URL: redis://valkey:6379/1
+      DEV_HEALTH_MIGRATION_PG_HOST: postgres
+      DEV_HEALTH_MIGRATION_PG_USER: ${POSTGRES_USER:-devhealth}
+      DEV_HEALTH_MIGRATION_PG_PASSWORD: ${POSTGRES_PASSWORD:-devhealth}
+      DEV_HEALTH_MIGRATION_PG_DB: ${POSTGRES_DB:-devhealth}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      RIVER_DOMAIN_DATABASE_PASSWORD: ${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_PASSWORD: ${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}
+      RIVER_COORDINATOR_DATABASE_PASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}
+      API_DATABASE_ROLE: ${API_DATABASE_ROLE:-devhealth_api}
+      API_DATABASE_PASSWORD: ${API_DATABASE_PASSWORD:-devhealth_api}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks: [dev-health]
+
+  # One-shot: applies the privilege policy for the roles above, including the api
+  # role's grants on the semantic tables (`dho migrate river --apply-and-check` reads
+  # API_DATABASE_ROLE). The canonical migrate service runs before the roles exist, so
+  # its grants cannot cover the api login; without this step the api answers
+  # "permission denied for table feature_flags".
+  go-api-grants:
+    image: ${DEV_HEALTH_GO_OPERATOR_IMAGE:-ghcr.io/full-chaos/dev-health-go-operator:local}
+    pull_policy: never
+    restart: "no"
+    command: ["migrate", "river", "--apply-and-check"]
+    environment:
+      DEV_HEALTH_MIGRATION_PG_HOST: postgres
+      DEV_HEALTH_MIGRATION_PG_USER: ${POSTGRES_USER:-devhealth}
+      DEV_HEALTH_MIGRATION_PG_PASSWORD: ${POSTGRES_PASSWORD:-devhealth}
+      DEV_HEALTH_MIGRATION_PG_DB: ${POSTGRES_DB:-devhealth}
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      RIVER_COORDINATOR_DATABASE_PASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}
+      API_DATABASE_ROLE: ${API_DATABASE_ROLE:-devhealth_api}
+    depends_on:
+      go-api-roles:
+        condition: service_completed_successfully
+    networks: [dev-health]
+
+  # The Go ops api (`dho api`): public listener :8000 (login, session routes),
+  # internal listener :8091 (the acr entitlement route), billing edge :8010.
+  # Distroless runtime: no shell or wget, so no container healthcheck;
+  # scripts/e2e/compose.sh wait_go_api probes the internal listener from the
+  # network instead.
+  go-api:
+    image: ${DEV_HEALTH_GO_OPERATOR_IMAGE:-ghcr.io/full-chaos/dev-health-go-operator:local}
+    pull_policy: never
+    restart: unless-stopped
+    command:
+      - api
+      - --api-addr=:8000
+      - --api-billing-edge-addr=:8010
+      - --api-internal-addr=:8091
+      - --http-addr=:8080
+      - --river-schema=${RIVER_DATABASE_SCHEMA:-river}
+      - --domain-database-role=${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      - --queue-database-role=${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      - --domain-transaction-pooler=true
+    environment:
+      DEV_HEALTH_PG_API_HOST: postgres
+      DEV_HEALTH_PG_API_PORT: "5432"
+      DEV_HEALTH_PG_API_USER: ${API_DATABASE_ROLE:-devhealth_api}
+      DEV_HEALTH_PG_API_PASSWORD: ${API_DATABASE_PASSWORD:-devhealth_api}
+      DEV_HEALTH_PG_DB: ${POSTGRES_DB:-devhealth}
+      API_DATABASE_ROLE: ${API_DATABASE_ROLE:-devhealth_api}
+      DEV_HEALTH_PG_DOMAIN_HOST: pgbouncer
+      DEV_HEALTH_PG_DOMAIN_PORT: "6432"
+      DEV_HEALTH_PG_DOMAIN_USER: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      DEV_HEALTH_PG_DOMAIN_PASSWORD: ${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}
+      DEV_HEALTH_PG_QUEUE_HOST: postgres
+      DEV_HEALTH_PG_QUEUE_PORT: "5432"
+      DEV_HEALTH_PG_QUEUE_USER: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      DEV_HEALTH_PG_QUEUE_PASSWORD: ${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}
+      DEV_HEALTH_CH_HOST: clickhouse
+      DEV_HEALTH_CH_PORT: "9000"
+      DEV_HEALTH_CH_USER: ${CLICKHOUSE_USER:-default}
+      DEV_HEALTH_CH_PASSWORD: ${CLICKHOUSE_PASSWORD:-ch}
+      DEV_HEALTH_CH_DB: ${CLICKHOUSE_DB:-default}
+      VALKEY_URI: redis://valkey:6379/1
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-ci-fixture-jwt-secret-key-0123456789abcdef}
       SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:-}
-      # Go API edge half (go_api_dispatcher): GO_API_QUERY_API_URL is its master
-      # switch. Key, issuer, audience and key id must agree with query-api below.
-      GO_API_QUERY_API_URL: http://query-api:8090
-      GO_API_ENVELOPE_PRIVATE_KEY: ${GO_API_ENVELOPE_PRIVATE_KEY:-}
-      GO_API_ENVELOPE_ISSUER: ${GO_API_ENVELOPE_ISSUER:-dev-health-ops-edge}
-      GO_API_ENVELOPE_AUDIENCE: ${GO_API_ENVELOPE_AUDIENCE:-query-api}
-      GO_API_ENVELOPE_KEY_ID: ${GO_API_ENVELOPE_KEY_ID:-go-api-envelope-2026-08}
-      GO_API_PLANE_HEADER_ENABLED: "true"
-      AUTO_RUN_MIGRATIONS: "false"
-      EMAIL_PROVIDER: console
-      EMAIL_FROM_ADDRESS: noreply@example.com
-      OTEL_ENABLED: "false"
-      SENTRY_DSN: ""
+      STRIPE_SECRET_KEY: ""
+      STRIPE_WEBHOOK_SECRET: ""
+      LICENSE_PRIVATE_KEY: ""
     depends_on:
       postgres:
         condition: service_healthy
@@ -187,16 +260,10 @@ services:
         condition: service_healthy
       valkey:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
       pgbouncer:
-        condition: service_started
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8000/ready"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
+        condition: service_healthy
+      go-api-grants:
+        condition: service_completed_successfully
     networks: [dev-health]
 
   # Go query-api: serves the Go-owned GraphQL operations the ops `api` dispatches
@@ -216,9 +283,11 @@ services:
     restart: unless-stopped
     environment:
       QUERY_API_ADDR: ":8090"
+      QUERY_API_INTERNAL_ADDR: ":8091"
       # Native ClickHouse port (9000), not the HTTP 8123 the Python services use.
       CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-default}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/${CLICKHOUSE_DB:-default}
       GO_API_REGISTRY_POSTGRES_URI: postgresql://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+      GO_API_EDGE_JWT_SECRET: ${JWT_SECRET_KEY:-ci-fixture-jwt-secret-key-0123456789abcdef}
       GO_API_ENVELOPE_JWKS_PATH: /secrets/envelope-jwks.json
       GO_API_ENVELOPE_ISSUER: ${GO_API_ENVELOPE_ISSUER:-dev-health-ops-edge}
       GO_API_ENVELOPE_AUDIENCE: ${GO_API_ENVELOPE_AUDIENCE:-query-api}
