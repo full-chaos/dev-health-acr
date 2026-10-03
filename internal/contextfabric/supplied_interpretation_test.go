@@ -113,6 +113,7 @@ type suppliedEngineRig struct {
 	lookups     int
 	syntheses   int
 	snapshot    SourceWatermarkSnapshot
+	synthesized func() InvestigationResult
 }
 
 // newSuppliedEngineRig builds an engine whose fresh path commits one project
@@ -147,6 +148,9 @@ func newSuppliedEngineRig(t *testing.T, interpreter RuntimeQuestionInterpreter) 
 		}),
 		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
 			rig.syntheses++
+			if rig.synthesized != nil {
+				return rig.synthesized(), nil
+			}
 			return decisiveSynthesis(), nil
 		}),
 		Interpreter: interpreter,
@@ -464,5 +468,25 @@ func TestSuppliedInterpretationIsRefusedAtTheStartOfTheTurnWhenNothingCanCheckIt
 	})
 	if _, err := engine.Investigate(context.Background(), reusePrincipal(), request); !errors.Is(err, ErrSuppliedInterpretationUnsupported) || store.saved.ResultID != "" {
 		t.Fatalf("interpreter with no gate: error = %v saved = %q, want ErrSuppliedInterpretationUnsupported and nothing saved", err, store.saved.ResultID)
+	}
+}
+
+func TestDecisiveResultOfANonModelSynthesizerStillNamesTheInterpretingModel(t *testing.T) {
+	t.Parallel()
+	server := newSuppliedEngineRig(t, RuntimeQuestionInterpreter{Runtime: fakeModelRuntime{interpreted: suppliedInterpretation(), receipt: validModelReceiptFixture(ModelOperationInterpret)}})
+	server.synthesized = func() InvestigationResult {
+		result := decisiveSynthesis()
+		result.Versions.ModelIdentity = ""
+		return result
+	}
+	result, err := server.engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if server.syntheses != 1 || result.Status != InvestigationComplete {
+		t.Fatalf("syntheses = %d Status = %q, want the decisive path", server.syntheses, result.Status)
+	}
+	if got := result.Versions; got.InterpretationSource != InterpretationSourceServer || got.InterpretationModelIdentity != "test-provider/test-model" || got.ModelIdentity != "unwired" {
+		t.Fatalf("Versions = %#v, want interpretation_source=server, interpretation_model_identity=test-provider/test-model, model_identity=unwired (no synthesis model ran)", got)
 	}
 }
