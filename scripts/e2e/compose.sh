@@ -294,6 +294,8 @@ services:
       ACR_POSTGRES_DSN_FILE: /run/secrets/acr_runtime_dsn
       ACR_CLICKHOUSE_DSN_FILE: /run/secrets/acr_clickhouse_dsn
       ACR_DEV_HEALTH_ENTITLEMENT_URL: http://go-api:8091
+      ACR_DATA_QUERY_URL: http://query-api:8091
+      ACR_DATA_QUERY_PATH: /query/run-operation
       ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE: /run/secrets/acr_ops_token
       ACR_DEVICE_VERIFICATION_URL: "${ACR_E2E_DEVICE_VERIFICATION_URL:-https://device.invalid/acr/device}"
       ACR_EVIDENCE_ID_ACTIVE_KID_FILE: /run/secrets/acr_evidence_active_kid

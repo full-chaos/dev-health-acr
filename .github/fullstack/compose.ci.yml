@@ -260,6 +260,7 @@ services:
     restart: unless-stopped
     environment:
       QUERY_API_ADDR: ":8090"
+      QUERY_API_INTERNAL_ADDR: ":8091"
       # Native ClickHouse port (9000), not the HTTP 8123 the Python services use.
       CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-default}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/${CLICKHOUSE_DB:-default}
       GO_API_REGISTRY_POSTGRES_URI: postgresql://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
