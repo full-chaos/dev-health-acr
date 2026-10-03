@@ -3816,7 +3816,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// -- the brief's own cost note ("per stalled resolution... committed
 	// resolutions pay nothing").
 	stalledForCensus := len(resolution.Committed) == 0 && searchTruncated
-	if !offersOnly && deps.CensusFunc != nil && (stalledForCensus || committedScopeAnchorShadowsHandle(request.Question, resolution.Committed)) {
+	if !offersOnly && deps.CensusFunc != nil && (stalledForCensus || committedScopeAnchorShadowsHandle(request.Question, resolution.Committed, frame)) {
 		// CHAOS-4300: false -- this is the pre-existing stalled-resolution
 		// call site, not the caller-hint short circuit's own new call above.
 		attestation := runShadowEvidenceRoundForResolution(ctx, principal, request, interpreted, resolution, aliasClaimantsByTerm, aliasIdentityComplete, unscopedVisibility, deps, confirmedKind, confirmedAnchor, false)
@@ -3850,7 +3850,21 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				// evidence-census re-decision actually fires (independent of
 				// whether the scoped re-decision above did).
 				if !stalledForCensus {
-					appendCensusAttestedCommit(&resolution, candidatesBySubject[attestedKey], commitBases, commitDigests, searchTruncated, aliasIdentityComplete)
+					pass++
+					if appendCensusAttestedCommit(&resolution, candidatesBySubject[attestedKey], request.Options.MaxSubjectCandidates, commitBases, commitDigests, searchTruncated, aliasIdentityComplete) && deps.ResolutionTracer != nil {
+						appended := candidatesBySubject[attestedKey]
+						winningMechanism := ""
+						if len(appended.MatchMechanisms) > 0 {
+							winningMechanism = string(appended.MatchMechanisms[0])
+						}
+						deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+							RequestID: request.RequestID, Stage: "decision", Subject: appended.Subject,
+							Outcome: "committed", WinningMechanism: winningMechanism, CommitGate: "evidence_census",
+							CommitBasis: string(commitBases.For(appended.Subject)), SearchTruncated: searchTruncated,
+							SearchCandidateLimit: effectiveSearchLimit, PopulationBasis: "none",
+							Pass: pass, Index: 1, Total: 1,
+						})
+					}
 				} else {
 					pass++
 					resolution, censusBases, censusDigests = resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, attestedKey, false, false, nil, anchorReservedSlot{}, kindRescue, pass)
@@ -4228,8 +4242,15 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 // committed subject is a scope anchor that handle's kind is keyed under while
 // none is of the handle's own kind. A committed scope anchor must not shadow
 // a handle the question names: the census runs for that handle regardless.
-func committedScopeAnchorShadowsHandle(question string, committed []contextfabric.SubjectRef) bool {
+//
+// Only a named-subject (or absent) frame qualifies: in a cohort, grouped or
+// count question a handle is an example or an operand, and committing it would
+// change the population the answer walks from.
+func committedScopeAnchorShadowsHandle(question string, committed []contextfabric.SubjectRef, frame *contextfabric.QuestionFrame) bool {
 	if len(committed) == 0 {
+		return false
+	}
+	if frame != nil && frame.SubjectExpression.Kind != contextfabric.SubjectExpressionNamed {
 		return false
 	}
 	bound := BindHandles(question)
@@ -5001,13 +5022,13 @@ func evidenceRoundTrigger(resolution contextfabric.SubjectResolution, callerHint
 // already-committed scope anchor. The basis is statistical, exactly like the
 // stalled evidence_census path, so the commit-affirmation gate still has to
 // see the answer stand on that subject.
-func appendCensusAttestedCommit(resolution *contextfabric.SubjectResolution, candidate contextfabric.SubjectCandidate, bases contextfabric.CommitBasisSet, digests contextfabric.CommitDecisionDigestSet, searchTruncated, aliasComplete bool) {
+func appendCensusAttestedCommit(resolution *contextfabric.SubjectResolution, candidate contextfabric.SubjectCandidate, maxCandidates int, bases contextfabric.CommitBasisSet, digests contextfabric.CommitDecisionDigestSet, searchTruncated, aliasComplete bool) bool {
 	if candidate.Subject.CanonicalID == "" {
-		return
+		return false
 	}
 	for _, committed := range resolution.Committed {
 		if committed == candidate.Subject {
-			return
+			return false
 		}
 	}
 	candidate.State = contextfabric.ResolutionCommitted
@@ -5019,6 +5040,19 @@ func appendCensusAttestedCommit(resolution *contextfabric.SubjectResolution, can
 		}
 	}
 	if !found {
+		if maxCandidates > 0 && len(resolution.Candidates) >= maxCandidates {
+			drop := -1
+			for i := len(resolution.Candidates) - 1; i >= 0; i-- {
+				if resolution.Candidates[i].State != contextfabric.ResolutionCommitted {
+					drop = i
+					break
+				}
+			}
+			if drop < 0 {
+				return false
+			}
+			resolution.Candidates = append(resolution.Candidates[:drop:drop], resolution.Candidates[drop+1:]...)
+		}
 		resolution.Candidates = append(resolution.Candidates, candidate)
 	}
 	resolution.Committed = append(resolution.Committed, candidate.Subject)
@@ -5027,4 +5061,5 @@ func appendCensusAttestedCommit(resolution *contextfabric.SubjectResolution, can
 		CommitGate: "evidence_census", IdentityProven: contextfabric.CommitBasisStatistical.IdentityProven(),
 		SearchTruncated: searchTruncated, AliasLookupComplete: aliasComplete,
 	})
+	return true
 }

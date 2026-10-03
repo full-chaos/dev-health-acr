@@ -31,9 +31,9 @@ func scopeAnchorBackend(searchTruncated bool, repoRelevance float64) *fakeGraphB
 }
 
 func scopeAnchorCensus(calls *int) CensusFunc {
-	return func(_ context.Context, _ string, kind CensusKind, _ string, _ bool, _ contextfabric.SubjectKind, _ string, _ bool) (CensusOutcome, error) {
+	return func(_ context.Context, _ string, kind CensusKind, handleValue string, handleBound bool, anchorKind contextfabric.SubjectKind, anchorID string, anchorBound bool) (CensusOutcome, error) {
 		*calls++
-		if kind == contextfabric.SubjectPullRequest {
+		if kind == contextfabric.SubjectPullRequest && handleBound && handleValue == "747" && anchorBound && anchorKind == contextfabric.SubjectRepository && anchorID == scopeAnchorRepoID {
 			return CensusOutcome{Count: 1, CensusReadAt: time.Now().UTC(), SatisfierCanonicalID: scopeAnchorPRID}, nil
 		}
 		return CensusOutcome{}, nil
@@ -74,6 +74,15 @@ func TestResolveSubjects_CommittedScopeAnchorDoesNotShadowTheNamedHandle(t *test
 		t.Fatalf("committed = %v, want the scope anchor then the census-attested pull request", ids)
 	}
 	rounds := tracer.eventsForStage("evidence_round")
+	var decisionCommits int
+	for _, e := range tracer.eventsForStage("decision") {
+		if e.Outcome == "committed" && e.Subject.CanonicalID == scopeAnchorPRID && e.CommitGate == "evidence_census" && e.CommitBasis == string(contextfabric.CommitBasisStatistical) {
+			decisionCommits++
+		}
+	}
+	if decisionCommits != 1 {
+		t.Fatalf("decision events for the pull request = %d, want exactly 1 evidence_census statistical commit", decisionCommits)
+	}
 	if len(rounds) != 1 || rounds[0].ShadowTrigger != "committed_scope_anchor" || rounds[0].ShadowSurvivorExcludedReason != "scope_anchor" || rounds[0].ShadowOutcome != string(ShadowWouldCommit) {
 		t.Fatalf("evidence_round events = %#v, want one committed_scope_anchor would_commit with survivor_excluded_reason=scope_anchor", rounds)
 	}
@@ -120,11 +129,63 @@ func TestRunShadowEvidenceRound_RealRivalNonCensusedCandidateStillClarifies(t *t
 	var calls int
 	input.CensusFunc = scopeAnchorCensus(&calls)
 	att := RunShadowEvidenceRound(context.Background(), input, nil)
-	if att.Outcome == ShadowWouldCommit || att.SurvivorExcludedReason != "" {
+	if att.Outcome != ShadowWouldClarify || att.SurvivorExcludedReason != "" {
 		t.Fatalf("attestation = %#v, want would_clarify: a repository that is not the bound anchor is a real rival", att)
 	}
 	input.PooledSubjects = append(input.PooledSubjects, contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: scopeAnchorRepoID})
-	if att := RunShadowEvidenceRound(context.Background(), input, nil); att.Outcome == ShadowWouldCommit {
+	if att := RunShadowEvidenceRound(context.Background(), input, nil); att.Outcome != ShadowWouldClarify {
 		t.Fatalf("attestation = %#v, want would_clarify while any other non-censused candidate is pooled", att)
+	}
+}
+
+func TestResolveSubjects_CohortFrameBindingAHandleKeepsTheScopeAnchorAlone(t *testing.T) {
+	t.Parallel()
+	backend := scopeAnchorBackend(true, -1)
+	deps := backend.deps()
+	var calls int
+	deps.CensusFunc = scopeAnchorCensus(&calls)
+	request := testRequest()
+	request.Question = "How many pull requests does full-chaos/dev-health-acr have, for example pull request 747?"
+	frame := &contextfabric.QuestionFrame{
+		Goals:             []contextfabric.InvestigationGoal{contextfabric.GoalCountOrAggregate},
+		SubjectExpression: contextfabric.SubjectExpression{Kind: contextfabric.SubjectExpressionOrganizationScope},
+	}
+	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(scopeAnchorRepo), deps, nil, nil, frame, "")
+	if err != nil {
+		t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+	}
+	for _, id := range scopeAnchorCommittedIDs(resolution) {
+		if id == scopeAnchorPRID {
+			t.Fatalf("committed = %v, want the pull request left out: in a cohort question the handle is an example, not the subject", scopeAnchorCommittedIDs(resolution))
+		}
+	}
+}
+
+func TestAppendCensusAttestedCommitHonoursTheCandidateCap(t *testing.T) {
+	t.Parallel()
+	repo := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: scopeAnchorRepoID}
+	other := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:r-2"}
+	pr := contextfabric.SubjectRef{Kind: contextfabric.SubjectPullRequest, CanonicalID: scopeAnchorPRID}
+	resolution := contextfabric.SubjectResolution{
+		Candidates: []contextfabric.SubjectCandidate{
+			{Subject: repo, State: contextfabric.ResolutionCommitted},
+			{Subject: other, State: contextfabric.ResolutionProposed},
+		},
+		Committed: []contextfabric.SubjectRef{repo},
+	}
+	bases := contextfabric.CommitBasisSet{}
+	digests := contextfabric.CommitDecisionDigestSet{}
+	if !appendCensusAttestedCommit(&resolution, contextfabric.SubjectCandidate{Subject: pr}, 2, bases, digests, true, true) {
+		t.Fatal("append = false, want the pull request committed by displacing the uncommitted candidate")
+	}
+	if len(resolution.Candidates) != 2 || len(resolution.Committed) != 2 {
+		t.Fatalf("candidates = %d, committed = %d, want 2 and 2 under a cap of 2", len(resolution.Candidates), len(resolution.Committed))
+	}
+	full := contextfabric.SubjectResolution{
+		Candidates: []contextfabric.SubjectCandidate{{Subject: repo, State: contextfabric.ResolutionCommitted}},
+		Committed:  []contextfabric.SubjectRef{repo},
+	}
+	if appendCensusAttestedCommit(&full, contextfabric.SubjectCandidate{Subject: pr}, 1, bases, digests, true, true) || len(full.Candidates) != 1 {
+		t.Fatalf("append over a cap of committed-only candidates must refuse, got %#v", full)
 	}
 }
