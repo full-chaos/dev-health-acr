@@ -252,5 +252,8 @@ func seededWalkStep(byKey map[string]seededNode, edges []seededEdge, cypher stri
 			})
 		}
 	}
+	if limit, ok := params["limit"].(int); ok && len(rows) > limit {
+		rows = rows[:limit]
+	}
 	return rows
 }

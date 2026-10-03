@@ -53,7 +53,7 @@ type walkHit struct {
 
 // walkStepHits reads the neighbours of ids along one relationship, in a
 // deterministic order, with the window applied to the edge and the neighbour.
-func (a *Adapter) walkStepHits(ctx context.Context, key, orgID string, ids []string, step walkStep, temporal temporalFilter) ([]walkHit, error) {
+func (a *Adapter) walkStepHits(ctx context.Context, key, orgID string, ids []string, step walkStep, temporal temporalFilter, budget int) ([]walkHit, bool, error) {
 	b := fmt.Sprintf("(b:%s {%s:$org, %s:$toKind})", labelSubject, propOrgID, propKind)
 	var pattern string
 	switch step.direction {
@@ -71,11 +71,17 @@ func (a *Adapter) walkStepHits(ctx context.Context, key, orgID string, ids []str
 	case len(step.notToTypes) > 0:
 		typeClause = fmt.Sprintf(" AND (b.%s IS NULL OR NOT b.%s IN $btypes)", propWorkItemType, propWorkItemType)
 	}
-	cypher := fmt.Sprintf("UNWIND $ids AS id MATCH (a:%s {%s:$org, %s:$fromKind, %s:id})"+pattern+" WHERE r.%s = $rel%s%s%s RETURN id, b, r ORDER BY id, b.%s, r.%s",
+	cypher := fmt.Sprintf("UNWIND $ids AS id MATCH (a:%s {%s:$org, %s:$fromKind, %s:id})"+pattern+" WHERE r.%s = $rel%s%s%s RETURN id, b, r ORDER BY id, b.%s, r.%s LIMIT $limit",
 		labelSubject, propOrgID, propKind, propCanonicalID, labelRelation,
 		propRelationType, typeClause, temporal.predicate("r"), temporal.predicate("b"), propCanonicalID, propRelationshipID)
 	var hits []walkHit
+	cut := false
 	for start := 0; start < len(ids); start += storedSubjectBatch {
+		remaining := budget - len(hits)
+		if budget > 0 && remaining <= 0 {
+			cut = true
+			break
+		}
 		end := min(start+storedSubjectBatch, len(ids))
 		batch := make([]interface{}, 0, end-start)
 		for _, id := range ids[start:end] {
@@ -83,7 +89,11 @@ func (a *Adapter) walkStepHits(ctx context.Context, key, orgID string, ids []str
 		}
 		params := temporal.bind(map[string]interface{}{
 			"org": orgID, "ids": batch, "fromKind": string(step.fromKind), "toKind": string(step.toKind), "rel": string(step.relation),
+			"limit": 1 << 30,
 		})
+		if budget > 0 {
+			params["limit"] = remaining + 1
+		}
 		if len(step.toTypes) > 0 {
 			params["btypes"] = step.toTypes
 		} else if len(step.notToTypes) > 0 {
@@ -91,7 +101,11 @@ func (a *Adapter) walkStepHits(ctx context.Context, key, orgID string, ids []str
 		}
 		rows, err := a.api.query(ctx, key, cypher, params, true)
 		if err != nil {
-			return nil, safeDependencyError("walk project deployments", err)
+			return nil, false, safeDependencyError("walk project deployments", err)
+		}
+		if budget > 0 && len(rows) > remaining {
+			rows = rows[:remaining]
+			cut = true
 		}
 		for _, r := range rows {
 			id, _ := r["id"].(string)
@@ -103,7 +117,7 @@ func (a *Adapter) walkStepHits(ctx context.Context, key, orgID string, ids []str
 			hits = append(hits, walkHit{from: id, to: n, rel: e})
 		}
 	}
-	return hits, nil
+	return hits, cut, nil
 }
 
 // projectDeploymentWalk is the result of the project -> deployments read.
@@ -170,11 +184,12 @@ func (a *Adapter) projectDeploymentMembers(ctx context.Context, key, orgID strin
 		out.denied++
 	}
 
-	issueHits, err := a.walkStepHits(ctx, key, orgID, []string{project.CanonicalID},
-		walkStep{fromKind: contractsv1.ContextFabricSubjectProject, toKind: contractsv1.ContextFabricSubjectWorkItem, relation: contractsv1.ContextFabricRelationshipBelongsToProject, direction: walkIn, notToTypes: pullRequestWorkItemTypes}, temporal)
+	issueHits, issuesCut, err := a.walkStepHits(ctx, key, orgID, []string{project.CanonicalID},
+		walkStep{fromKind: contractsv1.ContextFabricSubjectProject, toKind: contractsv1.ContextFabricSubjectWorkItem, relation: contractsv1.ContextFabricRelationshipBelongsToProject, direction: walkIn, notToTypes: pullRequestWorkItemTypes}, temporal, collectLimit)
 	if err != nil {
 		return out, err
 	}
+	out.truncated = out.truncated || issuesCut
 	issues := cut(unique(issueHits, toID))
 	out.issues = len(issues)
 	issueNodes := map[string]*node{}
@@ -184,11 +199,12 @@ func (a *Adapter) projectDeploymentMembers(ctx context.Context, key, orgID strin
 
 	var pullRequests []string
 	if len(issues) > 0 {
-		linkHits, err := a.walkStepHits(ctx, key, orgID, issues,
-			walkStep{fromKind: contractsv1.ContextFabricSubjectWorkItem, toKind: contractsv1.ContextFabricSubjectWorkItem, relation: contractsv1.ContextFabricRelationshipRelatesTo, direction: walkEither, toTypes: pullRequestWorkItemTypes}, temporal)
+		linkHits, linksCut, err := a.walkStepHits(ctx, key, orgID, issues,
+			walkStep{fromKind: contractsv1.ContextFabricSubjectWorkItem, toKind: contractsv1.ContextFabricSubjectWorkItem, relation: contractsv1.ContextFabricRelationshipRelatesTo, direction: walkEither, toTypes: pullRequestWorkItemTypes}, temporal, collectLimit)
 		if err != nil {
 			return out, err
 		}
+		out.truncated = out.truncated || linksCut
 		pullRequests = unique(linkHits, toID)
 		out.linkedPullRequests = len(pullRequests)
 		authorizedPRs := map[string]bool{}
@@ -213,11 +229,12 @@ func (a *Adapter) projectDeploymentMembers(ctx context.Context, key, orgID strin
 		return out, nil
 	}
 
-	repoHits, err := a.walkStepHits(ctx, key, orgID, pullRequests,
-		walkStep{fromKind: contractsv1.ContextFabricSubjectWorkItem, toKind: contractsv1.ContextFabricSubjectRepository, relation: contractsv1.ContextFabricRelationshipBelongsToRepository, direction: walkOut}, temporal)
+	repoHits, reposCut, err := a.walkStepHits(ctx, key, orgID, pullRequests,
+		walkStep{fromKind: contractsv1.ContextFabricSubjectWorkItem, toKind: contractsv1.ContextFabricSubjectRepository, relation: contractsv1.ContextFabricRelationshipBelongsToRepository, direction: walkOut}, temporal, collectLimit)
 	if err != nil {
 		return out, err
 	}
+	out.truncated = out.truncated || reposCut
 	repositories := map[string]*node{}
 	for _, h := range repoHits {
 		if !authorized(h.to) {
@@ -235,11 +252,12 @@ func (a *Adapter) projectDeploymentMembers(ctx context.Context, key, orgID strin
 		return out, nil
 	}
 
-	deploymentHits, err := a.walkStepHits(ctx, key, orgID, repositoryIDs,
-		walkStep{fromKind: contractsv1.ContextFabricSubjectRepository, toKind: contractsv1.ContextFabricSubjectDeployment, relation: contractsv1.ContextFabricRelationshipBelongsToRepository, direction: walkIn}, temporal)
+	deploymentHits, deploymentsCut, err := a.walkStepHits(ctx, key, orgID, repositoryIDs,
+		walkStep{fromKind: contractsv1.ContextFabricSubjectRepository, toKind: contractsv1.ContextFabricSubjectDeployment, relation: contractsv1.ContextFabricRelationshipBelongsToRepository, direction: walkIn}, temporal, collectLimit)
 	if err != nil {
 		return out, err
 	}
+	out.truncated = out.truncated || deploymentsCut
 	seen := map[string]bool{}
 	for _, h := range deploymentHits {
 		if !authorized(h.to) {

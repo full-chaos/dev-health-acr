@@ -682,11 +682,13 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			var walk projectDeploymentWalk
 			walk, err = a.projectDeploymentMembers(ctx, key, principal.OrgID, principal, scope, subject, collectLimit, temporal)
 			nodes, edges, filters, walkTruncated = walk.nodes, walk.edges, walk.filters, walk.truncated
-			if err == nil && walk.linkedPullRequests == 0 {
-				projectDeploymentsUnlinked = walk.issues
-			}
-			if err == nil && walk.linkedPullRequests > 0 && len(walk.nodes) == 0 && walk.denied > 0 {
-				projectDeploymentsDenied = walk.denied
+			if err == nil && len(walk.nodes) == 0 {
+				switch {
+				case needsProjectReach(principal):
+					projectDeploymentsDenied = 0
+				case walk.linkedPullRequests == 0 && !walk.truncated:
+					projectDeploymentsUnlinked = walk.issues
+				}
 			}
 		} else {
 			nodes, edges, failed, filters, walkTruncated, err = a.hopWalk(ctx, key, principal.OrgID, principal, scope, subject, 2, collectLimit, temporal)
@@ -857,6 +859,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		}
 		for _, ce := range textEdges {
 			if seenEdge[ce.UUID] {
+				continue
+			}
+			if projectDeploymentAnchor != nil && touchesDeployment(ce) {
 				continue
 			}
 			seenEdge[ce.UUID] = true
@@ -1594,4 +1599,13 @@ func isReservedIdentityProjectID(row graphrank.IdentityRow) bool {
 		return false
 	}
 	return contractsv1.ContextFabricIsReservedOrganizationScopeID(strings.TrimPrefix(row.CanonicalID, "project:"))
+}
+
+func touchesDeployment(ce graphrank.CandidateEdge) bool {
+	for _, uuid := range []string{ce.SourceNodeUUID, ce.TargetNodeUUID} {
+		if kind, _ := splitSubjectUUID(uuid); kind == string(contextfabric.SubjectDeployment) {
+			return true
+		}
+	}
+	return false
 }

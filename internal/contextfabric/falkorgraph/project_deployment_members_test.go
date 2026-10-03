@@ -271,7 +271,7 @@ func TestLinkedPullRequestsDeniedByAuthorizationAreNotTheUnlinkedLimitation(t *t
 	if unlinkedDetail(result) != nil {
 		t.Fatal("pull requests that exist but are not visible to the caller must not read as 'no issue links a pull request'")
 	}
-	if detail := deniedDetail(result); detail == nil || detail.Count == nil || *detail.Count == 0 || !result.Coverage.Partial {
+	if detail := deniedDetail(result); detail == nil || detail.Count == nil || *detail.Count != 0 || !result.Coverage.Partial {
 		t.Fatalf("details = %+v partial=%v, want the restricted-visibility limitation (denied by authorization) and partial coverage", result.Coverage.Details, result.Coverage.Partial)
 	}
 }
@@ -285,17 +285,19 @@ func deniedDetail(result contextfabric.GraphContext) *contextfabric.CoverageDeta
 	return nil
 }
 
-func TestUnrestrictedCallerWithNoLinkedPullRequestIsStillUnlinkedNotDenied(t *testing.T) {
+func TestNoLinkedPullRequestIsUnlinkedOnlyForAnUnrestrictedCaller(t *testing.T) {
 	s := projectSeed{served: map[string]string{}}
 	s.nodes = append(s.nodes,
 		seededNode{kind: "project", id: projectAnchorID, label: "payments"},
 		seededNode{kind: "work_item", id: "work_item:gh:1", label: "issue", repos: []string{"acme/x"}, workItemType: "issue"})
 	s.edges = append(s.edges, seededEdge{"BELONGS_TO_PROJECT", "work_item", "work_item:gh:1", "project", projectAnchorID})
-	for _, principal := range []storage.Principal{{OrgID: "org-1"}, {OrgID: "org-1", RepositoryScopes: []string{"acme/granted"}}} {
-		_, result := discoverProjectDeployments(t, s, principal, nil)
-		if unlinkedDetail(result) == nil || deniedDetail(result) != nil {
-			t.Fatalf("principal %v: details = %+v, want only the unlinked limitation (no link exists for anyone)", principal.RepositoryScopes, result.Coverage.Details)
-		}
+	_, open := discoverProjectDeployments(t, s, storage.Principal{OrgID: "org-1"}, nil)
+	if detail := unlinkedDetail(open); detail == nil || detail.Count == nil || *detail.Count != 1 || deniedDetail(open) != nil {
+		t.Fatalf("unrestricted: details = %+v, want only the unlinked limitation with 1 issue examined", open.Coverage.Details)
+	}
+	_, restricted := discoverProjectDeployments(t, s, storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"acme/granted"}}, nil)
+	if detail := deniedDetail(restricted); detail == nil || detail.Count == nil || *detail.Count != 0 || unlinkedDetail(restricted) != nil {
+		t.Fatalf("restricted: details = %+v, want only the neutral denied code (no link existence, no issue count)", restricted.Coverage.Details)
 	}
 }
 
@@ -411,6 +413,101 @@ func TestProjectDeploymentWalkAuthorizesEachDisclosedHop(t *testing.T) {
 		walk := walkProject(t, build(c.pr, c.repository, c.deployment), granted, 50)
 		if len(walk.nodes) != c.want {
 			t.Errorf("%s: walk served %d deployments, want %d", c.name, len(walk.nodes), c.want)
+		}
+	}
+}
+
+func linklessThenLinked(linkless int) projectSeed {
+	s := projectSeed{served: map[string]string{}}
+	s.nodes = append(s.nodes, seededNode{kind: "project", id: projectAnchorID, label: "payments"})
+	repoID := s.repository("acme/one", 1)
+	for i := 0; i < linkless; i++ {
+		issue := fmt.Sprintf("work_item:gh:%02d", i)
+		s.nodes = append(s.nodes, seededNode{kind: "work_item", id: issue, label: issue, repos: []string{noRepositoryScope}, workItemType: "issue"})
+		s.edges = append(s.edges, seededEdge{"BELONGS_TO_PROJECT", "work_item", issue, "project", projectAnchorID})
+	}
+	s.link("late", "work_item:gh:zz", nil, "work_item:ghpr:late", "pr", repoID, "acme/one", false)
+	return s
+}
+
+func TestACutIssueFrontierIsNeverTheUnlinkedLimitation(t *testing.T) {
+	s := linklessThenLinked(6)
+	adapter := newFakeAdapter(t, seededGraphConn(s.nodes, s.edges))
+	adapter.config.MaxResults = 3
+	result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, projectDeploymentsRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unlinkedDetail(result) != nil {
+		t.Fatalf("the first 3 of 7 issues have no link but a later one does: details = %+v, 'unlinked' is false", result.Coverage.Details)
+	}
+	if result.Cohort != nil && result.Cohort.Complete {
+		t.Fatalf("a cut issue frontier must not claim a complete cohort: %+v", result.Cohort)
+	}
+}
+
+func TestProjectDeploymentStepQueriesAreBounded(t *testing.T) {
+	s := manyIssuesOneRepository(40)
+	conn := seededGraphConn(s.nodes, s.edges)
+	adapter := newFakeAdapter(t, conn)
+	var limits []int
+	inner := conn.queryFunc
+	conn.queryFunc = func(ctx context.Context, key, cypher string, params map[string]interface{}, ro bool) ([]row, error) {
+		if strings.Contains(cypher, "UNWIND $ids") {
+			if !strings.Contains(cypher, "LIMIT $limit") {
+				t.Errorf("step query has no LIMIT: %s", cypher)
+			}
+			if limit, ok := params["limit"].(int); ok {
+				limits = append(limits, limit)
+			}
+		}
+		return inner(ctx, key, cypher, params, ro)
+	}
+	walk, err := adapter.projectDeploymentMembers(context.Background(), "key", "org-1", storage.Principal{OrgID: "org-1"}, contextfabric.RequestedScope{},
+		contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: projectAnchorID}, 5, newTemporalFilter(contextfabric.TimeContext{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !walk.truncated {
+		t.Fatal("40 issues under a budget of 5 must report truncation")
+	}
+	if len(limits) == 0 {
+		t.Fatal("no step query observed")
+	}
+	for _, l := range limits {
+		if l > 6 {
+			t.Errorf("step read limit %d exceeds budget+1", l)
+		}
+	}
+}
+
+func TestALexicallyMatchedRepositoryAddsNoDeploymentToThePaths(t *testing.T) {
+	s := seedProject()
+	s.nodes = append(s.nodes,
+		seededNode{kind: "repository", id: "repository:payments", label: "payments", repos: []string{"acme/payments"}},
+		seededNode{kind: "deployment", id: "deployment:payments:0", label: "payments deploy", repos: []string{"acme/payments"}})
+	s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "deployment", "deployment:payments:0", "repository", "repository:payments"})
+	got, result := discoverProjectDeployments(t, s, storage.Principal{OrgID: "org-1"}, func(c *fakeConn) {
+		inner := c.queryFunc
+		c.queryFunc = func(ctx context.Context, key, cypher string, params map[string]interface{}, ro bool) ([]row, error) {
+			if strings.Contains(cypher, "fulltext") {
+				n := fakeSubjectNodeRow("repository", "repository:payments", "payments")["n"].(*node)
+				n.Properties[propAuthzRepos] = []string{"acme/payments"}
+				return []row{{"node": n, "score": 1.0}}, nil
+			}
+			return inner(ctx, key, cypher, params, ro)
+		}
+	})
+	for _, id := range got {
+		if id == "deployment:payments:0" {
+			t.Fatalf("cohort carries the lexically matched repository's deployment")
+		}
+	}
+	for _, p := range result.Paths {
+		for _, ref := range p.Nodes {
+			if ref.CanonicalID == "deployment:payments:0" {
+				t.Fatalf("paths carry the lexically matched repository's deployment: %+v", p)
+			}
 		}
 	}
 }
