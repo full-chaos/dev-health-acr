@@ -144,7 +144,47 @@
         "server",
         "client"
       ],
-      "description": "Who writes the answer. Absent or server: the service's own model writes it. client: the service runs everything but its synthesis call and returns, beside the stored result, the synthesis input for the caller's model to write the answer from. Nothing the caller writes is sent back or stored."
+      "description": "Who writes the answer. Absent or server: the service's own model writes it. client: the service runs everything but its synthesis call and returns, beside the stored result, the synthesis input for the caller's model to write the answer from. Without supplied_synthesis nothing the caller writes is sent back or stored."
+    },
+    "supplied_synthesis": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The answer draft the caller wrote on its own model from the synthesis input of an earlier answer to the same question. Requires synthesis_mode client and a supplied_interpretation. The service runs the turn again, checks that the rebuilt synthesis input is the one the draft was written from, validates the draft exactly as it validates its own model's draft, and makes no model call. An input that changed is refused with the new synthesis input.",
+      "properties": {
+        "output": {
+          "type": "object",
+          "description": "The model output object of the synthesize_answer prompt, at most 262144 bytes serialized."
+        },
+        "model_output_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "prompt_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "system_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "input_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "client_model": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._:/-]{1,128}$"
+        }
+      },
+      "required": [
+        "output",
+        "model_output_version",
+        "prompt_version",
+        "system_sha256",
+        "input_sha256"
+      ]
     },
     "requested_scope": {
       "$ref": "context_fabric_common.v1.schema.json#/$defs/RequestedScope"

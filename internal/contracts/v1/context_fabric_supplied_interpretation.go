@@ -226,6 +226,11 @@ type MCPInvestigateWithInterpretationRequest struct {
 	Interpretation json.RawMessage                     `json:"interpretation"`
 	Contract       ContextFabricInterpretationContract `json:"contract"`
 	ClientModel    string                              `json:"client_model,omitempty"`
+	// SynthesisOutput and SynthesisContract carry the answer draft the
+	// client wrote on its own model; they are sent together and only with
+	// synthesis "client".
+	SynthesisOutput   json.RawMessage       `json:"synthesis_output,omitempty"`
+	SynthesisContract *MCPSynthesisContract `json:"synthesis_contract,omitempty"`
 }
 
 // Supplied maps the tool's interpretation arguments onto the hosted request
@@ -250,5 +255,8 @@ func (r MCPInvestigateWithInterpretationRequest) Validate() error {
 	if missing := r.Contract.Missing(); len(missing) > 0 {
 		return fmt.Errorf("contract requires %s", strings.Join(missing, ", "))
 	}
-	return r.Supplied().Validate()
+	if err := r.Supplied().Validate(); err != nil {
+		return err
+	}
+	return r.validateSynthesisWriteBack()
 }

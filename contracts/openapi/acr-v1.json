@@ -474,7 +474,7 @@
             }
           },
           "400": {
-            "$ref": "#/components/responses/Error"
+            "$ref": "#/components/responses/ContextFabricInvestigationBadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Error"
@@ -483,13 +483,13 @@
             "$ref": "#/components/responses/Error"
           },
           "409": {
-            "$ref": "#/components/responses/Error"
+            "$ref": "#/components/responses/ContextFabricInvestigationConflict"
           },
           "413": {
             "$ref": "#/components/responses/Error"
           },
           "422": {
-            "$ref": "#/components/responses/Error"
+            "$ref": "#/components/responses/ContextFabricInvestigationUnprocessable"
           },
           "426": {
             "$ref": "#/components/responses/Error"
@@ -2912,6 +2912,157 @@
           "application/json": {
             "schema": {
               "$ref": "../jsonschema/v1/error.v1.schema.json"
+            }
+          }
+        }
+      },
+      "ContextFabricInvestigationBadRequest": {
+        "description": "Structured safe error. When the request carries supplied_synthesis without a supplied_interpretation, code is invalid_request and details.reason is supplied_interpretation_required.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "../jsonschema/v1/error.v1.schema.json"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "details": {
+                          "type": "object",
+                          "properties": {
+                            "reason": {
+                              "enum": [
+                                "input_changed",
+                                "supplied_interpretation_required"
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "ContextFabricInvestigationConflict": {
+        "description": "Structured safe error. A supplied interpretation or supplied synthesis that was made under a contract this service does not run carries details.interpretation_contract or details.synthesis_contract. A supplied synthesis written from an input that is no longer the turn's input carries details.reason input_changed and details.synthesis_input, the new synthesis input.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "../jsonschema/v1/error.v1.schema.json"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "details": {
+                          "type": "object",
+                          "properties": {
+                            "synthesis_contract": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "mismatch",
+                                "current"
+                              ],
+                              "description": "The synthesis contract refusal: each contract field that is absent or differs, and the contract the service runs.",
+                              "properties": {
+                                "mismatch": {
+                                  "type": "array",
+                                  "minItems": 1,
+                                  "maxItems": 4,
+                                  "uniqueItems": true,
+                                  "items": {
+                                    "enum": [
+                                      "model_output_version",
+                                      "prompt_version",
+                                      "system_sha256",
+                                      "input_sha256"
+                                    ]
+                                  }
+                                },
+                                "current": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "model_output_version",
+                                    "prompt_version",
+                                    "system_sha256"
+                                  ],
+                                  "properties": {
+                                    "model_output_version": {
+                                      "type": "string"
+                                    },
+                                    "prompt_version": {
+                                      "type": "string"
+                                    },
+                                    "system_sha256": {
+                                      "type": "string",
+                                      "pattern": "^[0-9a-f]{64}$"
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "reason": {
+                              "enum": [
+                                "input_changed",
+                                "supplied_interpretation_required"
+                              ]
+                            },
+                            "synthesis_input": {
+                              "$ref": "../jsonschema/v1/context_fabric_investigation_response.v1.schema.json#/properties/synthesis_input"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "ContextFabricInvestigationUnprocessable": {
+        "description": "Structured safe error. A supplied synthesis the service rejected carries code synthesis_rejected and details.rejection_reason, a closed token.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "../jsonschema/v1/error.v1.schema.json"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "details": {
+                          "type": "object",
+                          "properties": {
+                            "rejection_reason": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
             }
           }
         }
