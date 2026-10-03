@@ -39,9 +39,9 @@ func TestDeploymentMembersAreServableOnlyAsTheMembersOfANamedAnchor(t *testing.T
 	}
 }
 
-func TestDeploymentCohortAnchorServableIsRepositoryAndTeamOnly(t *testing.T) {
+func TestDeploymentCohortAnchorServableIsRepositoryTeamAndProject(t *testing.T) {
 	t.Parallel()
-	for _, kind := range []SubjectKind{SubjectProject, SubjectOrganization, SubjectDeployment, SubjectPullRequest, SubjectWorkItem, SubjectIncident} {
+	for _, kind := range []SubjectKind{SubjectOrganization, SubjectDeployment, SubjectPullRequest, SubjectWorkItem, SubjectIncident} {
 		if DeploymentCohortAnchorServable(kind) {
 			t.Errorf("anchor %q must not anchor a deployment cohort", kind)
 		}
@@ -51,6 +51,16 @@ func TestDeploymentCohortAnchorServableIsRepositoryAndTeamOnly(t *testing.T) {
 	}
 	if !DeploymentCohortAnchorServable(SubjectTeam) {
 		t.Error("a team anchors a deployment cohort")
+	}
+	if !DeploymentCohortAnchorServable(SubjectProject) {
+		t.Error("a project anchors a deployment cohort")
+	}
+	project := []SubjectRef{{Kind: SubjectProject, CanonicalID: "p"}}
+	if !deploymentCohortAnchorsServable(project, "") || !deploymentCohortAnchorsServable(project, SubjectProject) {
+		t.Error("a committed project with no declared anchor kind, or a declared project, serves")
+	}
+	if deploymentCohortAnchorsServable(project, SubjectTeam) || deploymentCohortAnchorsServable(project, SubjectRepository) {
+		t.Error("a committed project under a declared team or repository anchor must not serve")
 	}
 	team := []SubjectRef{{Kind: SubjectTeam, CanonicalID: "t"}}
 	if !deploymentCohortAnchorsServable(team, "") || !deploymentCohortAnchorsServable(team, SubjectTeam) {
@@ -81,14 +91,15 @@ func TestDeploymentCohortAnchorServableIsRepositoryAndTeamOnly(t *testing.T) {
 	}
 }
 
-func TestDeploymentCohortEngineDiscoversOnlyUnderARepositoryOrTeamAnchor(t *testing.T) {
+func TestDeploymentCohortEngineDiscoversOnlyUnderARepositoryTeamOrProjectAnchor(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		anchorKind   SubjectKind
 		wantDiscover int
 	}{
 		{"repository anchor discovers", SubjectRepository, 1},
-		{"project anchor refused before discovery", SubjectProject, 0},
+		{"project anchor discovers", SubjectProject, 1},
+		{"organization anchor refused before discovery", SubjectOrganization, 0},
 		{"team anchor discovers", SubjectTeam, 1},
 		{"repository committed under a declared project anchor refused", SubjectRepository, 0},
 		{"team committed under a declared project anchor refused", SubjectTeam, 0},
