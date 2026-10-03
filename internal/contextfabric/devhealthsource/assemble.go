@@ -136,8 +136,10 @@ func logTableReadFailure(ctx context.Context, logger *slog.Logger, source, orgID
 
 func (p sourcePlan) nextBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
 	batch, available, err := p.nextBatchPage(ctx, checkpoint)
-	if err == nil && !available {
-		p.ignored.flush(ctx, p.logger, p.source, strings.TrimSpace(checkpoint.OrgID))
+	if err != nil {
+		p.ignored.flush(ctx, p.logger, p.source, strings.TrimSpace(checkpoint.OrgID), "error")
+	} else if !available {
+		p.ignored.flush(ctx, p.logger, p.source, strings.TrimSpace(checkpoint.OrgID), "caught_up_or_yielded")
 	}
 	return batch, available, err
 }

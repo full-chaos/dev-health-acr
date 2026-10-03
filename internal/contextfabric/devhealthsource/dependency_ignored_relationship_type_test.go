@@ -73,6 +73,12 @@ func TestExternalIssueKeyRelationshipsAreIgnoredWithoutQuarantine(t *testing.T) 
 				t.Fatalf("ignored type = %v", entry["ignored_relationship_type"])
 			}
 			ignoredLines++
+			if entry["level"] != "INFO" {
+				t.Fatalf("ignored line level = %v, want INFO", entry["level"])
+			}
+			if entry["pass_outcome"] == nil || entry["pass_outcome"] == "" {
+				t.Fatalf("ignored line carries no pass_outcome: %v", entry)
+			}
 			ignored += int(entry["ignored_count"].(float64))
 		}
 	}

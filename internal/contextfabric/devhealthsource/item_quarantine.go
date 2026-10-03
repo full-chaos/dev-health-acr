@@ -543,9 +543,10 @@ func (l *ignoredLedger) add(orgID, relationshipType string, n int) {
 	l.counts[orgID+"\x00"+relationshipType] += n
 }
 
-// flush logs and clears the org's totals. Called when the source reports
-// caught up, which ends a pass.
-func (l *ignoredLedger) flush(ctx context.Context, logger *slog.Logger, sourceName, orgID string) {
+// flush logs and clears the org's totals when a call ends without publishing
+// a batch (caught up, a skip-page yield, or an error). A count can repeat across
+// an errored pass and its retry: it is rows read, not unique rows.
+func (l *ignoredLedger) flush(ctx context.Context, logger *slog.Logger, sourceName, orgID, passOutcome string) {
 	if l == nil || logger == nil {
 		return
 	}
@@ -569,6 +570,7 @@ func (l *ignoredLedger) flush(ctx context.Context, logger *slog.Logger, sourceNa
 			"source", contextfabric.SanitizeLogAttr(sourceName),
 			"ignored_relationship_type", contextfabric.SanitizeLogAttr(t),
 			"ignored_count", totals[t],
+			"pass_outcome", passOutcome,
 		)
 	}
 }
