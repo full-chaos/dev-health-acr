@@ -64,7 +64,7 @@ func TestStatusFactDisclosesNormalizedBasisAndLabelDerivedProviders(t *testing.T
 		if note == nil {
 			t.Fatalf("status %q: no status_provenance", status)
 		}
-		for _, must := range []string{"normalized vocabulary", "varies by provider", "jira from", "github and gitlab from issue labels", "not a provider fact", "linear from", "provider of this item is not carried"} {
+		for _, must := range []string{"normalized vocabulary", "missing status is null", "served as read", "status_in_vocabulary says which", "varies by provider", "jira from", "github and gitlab from issue labels", "not a provider fact", "linear from", "provider of this item is not carried"} {
 			if !strings.Contains(*note, must) {
 				t.Fatalf("status_provenance lacks %q: %s", must, *note)
 			}
@@ -112,10 +112,21 @@ func TestStatusProvenanceNamesNoSingleProviderAsThisItemsSource(t *testing.T) {
 	if !strings.Contains(lower, "provider of this item is not carried") {
 		t.Fatalf("status_provenance does not say the item's provider is not carried: %s", note)
 	}
-	basis := lower[strings.Index(lower, "varies by provider"):]
+	cut := strings.Index(lower, "varies by provider")
+	before, basis := lower[:cut], lower[cut:]
 	for _, provider := range []string{"jira", "github", "gitlab", "linear"} {
+		if strings.Contains(before, provider) {
+			t.Fatalf("%s is named outside the per-provider basis: %s", provider, note)
+		}
 		if !strings.Contains(basis, provider) {
 			t.Fatalf("the per-provider basis omits %s: %s", provider, note)
+		}
+	}
+	// Every provider name sits inside the enumeration, and a phrasing that
+	// attributes this item to one is refused wherever it appears.
+	for _, attribution := range []string{" comes from a ", " came from a ", " is a github", " is a gitlab", " is a jira", " is a linear", "this fact comes", "this item comes"} {
+		if strings.Contains(lower, attribution) {
+			t.Fatalf("status_provenance attributes the item with %q: %s", attribution, note)
 		}
 	}
 }

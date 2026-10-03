@@ -24,7 +24,7 @@ const (
 	// statusProvenanceNote is the vocabulary disclosure. It is a statement
 	// about the vocabulary, true for every item: it never says which provider
 	// this item came from, because the read does not carry the provider.
-	statusProvenanceNote = "Status is the sync's normalized vocabulary of eight values (backlog, todo, in_progress, in_review, blocked, done, canceled, unknown), not the provider's own status string. " +
+	statusProvenanceNote = "Status is expected to be one of the sync's normalized vocabulary of eight values (backlog, todo, in_progress, in_review, blocked, done, canceled, unknown), not the provider's own status string; a missing status is null and a value outside the set is served as read, and status_in_vocabulary says which. " +
 		"Its basis varies by provider: jira from a status-mapping configuration, github and gitlab from issue labels and open or closed state (a mapping, not a provider fact), linear from the workflow state type. " +
 		"The provider of this item is not carried by this read."
 )
