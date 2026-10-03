@@ -92,6 +92,7 @@ concurrency:
 
 env:
   GO_VERSION: '1.27.0'
+  GOFLAGS: -trimpath
 
 jobs:
   # Resolve, in ONE place, the parameters both events supply differently. The

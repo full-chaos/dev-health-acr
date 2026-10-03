@@ -1393,9 +1393,11 @@ func applyWindowContinuation(outcome QuestionFamilyOutcome, decision windowConti
 	// under this turn's sampled anchor is a reading neither turn proposed.
 	outcome.WinningSample.ScopeAnchorKind = ""
 	outcome.WinningSample.ScopeAnchorTerm = ""
+	outcome.WinningSample.ScopeAnchorKindSource = ""
 	if carried.State != nil {
 		outcome.WinningSample.ScopeAnchorKind = carried.State.ScopeAnchor.Kind
 		outcome.WinningSample.ScopeAnchorTerm = carried.State.ScopeAnchor.Term
+		outcome.WinningSample.ScopeAnchorKindSource = carried.State.ScopeAnchor.KindSource
 	}
 	// THE WHOLE CARRIED READING, INCLUDING ITS ABSENCE OF A FRAME. A
 	// frameless carrier is continued frameless: installing the fresh frame
