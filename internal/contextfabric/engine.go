@@ -3085,7 +3085,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			authorized, _ = e.candidateVerifier(ctx, principal, request.RequestedScope, binding, SubjectProject, resolution.Committed[0].CanonicalID)
 		}
 		if !authorized || ctx.Err() != nil {
-			resolution = SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}
+			resolution = withoutSubjects(resolution)
 			return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, substitutionForTelemetry.Outcome, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntriesForServed, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, postVetoLedgerBase).withAnchorShadow(anchorShadow))
 		}
 		resolution = restrictWorkItemTupleCandidate(resolution)
