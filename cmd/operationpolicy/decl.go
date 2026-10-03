@@ -30,6 +30,7 @@ type operationDecl struct {
 	Constraints       []directread.Constraint
 	Unrestricted      directread.CallerScope
 	Restricted        directread.CallerScope
+	AdditionalOutputs []string
 	OutputExceptions  map[string]string
 	WithheldOutputs   map[string]string
 	Disclosure        []directread.DisclosureField

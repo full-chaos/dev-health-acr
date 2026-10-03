@@ -475,9 +475,10 @@ func declaredPolicy() policyDeclaration {
 				RefusedPaths: map[string]dr.Refusal{
 					"filters.workScopeId": refuse(dr.RefusalVariableNotAllowed, "work scope id form between acr and ops is UNCONFIRMED (POLICY-ARTIFACT-v0)"),
 				},
-				Constraints:  []dr.Constraint{window("filters.fromDate", "filters.toDate", windowDays, false)},
-				Unrestricted: served("[ops] capacityforecast.go:398-421 apply teamId and the dates; limit has no ops clamp (:423-454; A1.1) (RM §15)"),
-				Restricted:   refusedFor("no repository scope; team aggregates ([ops] capacityforecast.go:398-421; RM §15); REFUSED until the K2 team path is read"),
+				Constraints:       []dr.Constraint{window("filters.fromDate", "filters.toDate", windowDays, false)},
+				AdditionalOutputs: []string{"capacityForecasts.edges[*].node.completionDistribution.days[*].value", "capacityForecasts.edges[*].node.completionDistribution.days[*].count", "capacityForecasts.edges[*].node.completionDistribution.items[*].value", "capacityForecasts.edges[*].node.completionDistribution.items[*].count"},
+				Unrestricted:      served("[ops] capacityforecast.go:398-421 apply teamId and the dates; limit has no ops clamp (:423-454; A1.1) (RM §15)"),
+				Restricted:        refusedFor("no repository scope; team aggregates ([ops] capacityforecast.go:398-421; RM §15); REFUSED until the K2 team path is read"),
 			},
 			"capacityForecast": {
 				DocumentName:      "CapacityForecast",
@@ -497,9 +498,10 @@ func declaredPolicy() policyDeclaration {
 				Constraints: []dr.Constraint{
 					{Kind: dr.ConstraintMaxDaysAhead, Path: "input.targetDate", MaxDays: 365, Code: dr.RefusalVariableOutOfRange, Reason: "targetDate at most 365 days ahead (design D.6)"},
 				},
-				Unrestricted: served("[ops] capacityforecast/clickhouse.go:47-61 apply teamId (RM §16)"),
-				Restricted:   refusedFor("no repository scope; team aggregate with compute cost ([ops] capacityforecast/clickhouse.go:47-61; capacityforecast.go:130; RM §16); REFUSED until the K2 team path is read"),
-				Notes:        []string{"non-deterministic: a random seed per call, no seed argument (capacityforecast.go:139-148; A1.1)", "null result = no history or no target, indistinguishable (capacityforecast.go:229-260)"},
+				AdditionalOutputs: []string{"capacityForecast.completionDistribution.days[*].value", "capacityForecast.completionDistribution.days[*].count", "capacityForecast.completionDistribution.items[*].value", "capacityForecast.completionDistribution.items[*].count"},
+				Unrestricted:      served("[ops] capacityforecast/clickhouse.go:47-61 apply teamId (RM §16)"),
+				Restricted:        refusedFor("no repository scope; team aggregate with compute cost ([ops] capacityforecast/clickhouse.go:47-61; capacityforecast.go:130; RM §16); REFUSED until the K2 team path is read"),
+				Notes:             []string{"non-deterministic: a random seed per call, no seed argument (capacityforecast.go:139-148; A1.1)", "null result = no history or no target, indistinguishable (capacityforecast.go:229-260)"},
 			},
 		},
 		NotServed: notServed(),

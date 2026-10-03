@@ -308,6 +308,26 @@
           "path": "capacityForecast.__typename",
           "type": "String",
           "leaf": "typename"
+        },
+        {
+          "path": "capacityForecast.completionDistribution.days[*].value",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.completionDistribution.days[*].count",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.completionDistribution.items[*].value",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.completionDistribution.items[*].count",
+          "type": "Int!",
+          "leaf": "scalar"
         }
       ],
       "withheld_outputs": [],
@@ -574,6 +594,26 @@
           "path": "capacityForecasts.__typename",
           "type": "String",
           "leaf": "typename"
+        },
+        {
+          "path": "capacityForecasts.edges[*].node.completionDistribution.days[*].value",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.edges[*].node.completionDistribution.days[*].count",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.edges[*].node.completionDistribution.items[*].value",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.edges[*].node.completionDistribution.items[*].count",
+          "type": "Int!",
+          "leaf": "scalar"
         }
       ],
       "withheld_outputs": [],

@@ -523,3 +523,23 @@ func TestGenerationIsDeterministic(t *testing.T) {
 		t.Fatal("generation is not deterministic")
 	}
 }
+
+func TestAdditionalOutputsAreCheckedAgainstTheSDL(t *testing.T) {
+	for name, path := range map[string]string{
+		"unknown field":     "capacityForecast.noSuchField.value",
+		"wrong root":        "capacityForecasts.completionDistribution.days[*].value",
+		"object not a leaf": "capacityForecast.completionDistribution.days[*]",
+		"missing list mark": "capacityForecast.completionDistribution.days.value",
+		"already selected":  "capacityForecast.forecastId",
+	} {
+		t.Run(name, func(t *testing.T) {
+			in := cloneInputs(vendoredInputs(t))
+			decl := in.Policy.Served["capacityForecast"]
+			decl.AdditionalOutputs = []string{path}
+			in.Policy.Served["capacityForecast"] = decl
+			if _, err := generate(in); err == nil || !strings.Contains(err.Error(), "additional output") {
+				t.Fatalf("additional output %q: %v, want an additional output refusal", path, err)
+			}
+		})
+	}
+}
