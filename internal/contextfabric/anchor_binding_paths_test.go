@@ -195,8 +195,8 @@ func (g storedReuseGate) FindReusable(context.Context, storage.Principal, ReuseK
 
 // TestAReuseServeDecidesFromThisRequestAndTheReplayedProof: a reuse serve is
 // decided like a resolved turn over the replayed row's resolution, with this
-// request's own hints; a hint the replayed row never committed contests the
-// anchor instead of being ignored, and the line shows the hints.
+// request's own hints, and the line shows the hints. A hint the replayed row
+// never committed is a reuse miss instead (TestAnUncoveredHintMissesReuse).
 func TestAReuseServeDecidesFromThisRequestAndTheReplayedProof(t *testing.T) {
 	project, candidate := reusableCandidate()
 	candidate.SubjectResolution.Candidates = []SubjectCandidate{{
@@ -204,15 +204,9 @@ func TestAReuseServeDecidesFromThisRequestAndTheReplayedProof(t *testing.T) {
 		MatchedTerms: []string{"a"}, MatchReasons: []string{"matched"}, Confidence: 1, EvidenceRefIDs: []string{},
 	}}
 	held := anchorRef{Kind: project.Kind, ID: project.CanonicalID}
-	other := SubjectHint{Kind: project.Kind, ID: "project_other", Label: "Other", Source: "ask-dev"}
 	framed := BuildSemanticState(SemanticStateInput{
 		Outcome:         QuestionFamilyOutcome{Family: QuestionFamilyScopedCohortStatus, Source: QuestionFamilySourceModel, Frame: countingFrame(SubjectTeam), Gate: FrameGate{Outcome: FrameGatePassed}},
 		EmittedShape:    ShapeOpen,
-		FamilyVersion:   QuestionFamilyTableVersion,
-		RequestIdentity: SemanticRequestIdentityOf(validInvestigationRequest(), ""),
-	})
-	unframed := BuildSemanticState(SemanticStateInput{
-		Outcome:         QuestionFamilyOutcome{Family: QuestionFamilyUnclassified, Source: QuestionFamilySourceNone},
 		FamilyVersion:   QuestionFamilyTableVersion,
 		RequestIdentity: SemanticRequestIdentityOf(validInvestigationRequest(), ""),
 	})
@@ -222,8 +216,6 @@ func TestAReuseServeDecidesFromThisRequestAndTheReplayedProof(t *testing.T) {
 	proven := func(proof AnchorBindingProof, reason AnchorBindingReason) AnchorBinding {
 		return AnchorBinding{State: AnchorBindingBound, Kind: held.Kind, CanonicalID: held.ID, Proof: proof, Reason: reason, OriginResultID: candidate.ResultID}
 	}
-	contested := proven(AnchorBindingProofIdentityProven, AnchorBindingReasonAmbiguousProof)
-	contested.State, contested.ContenderKind, contested.ContenderID = AnchorBindingContested, other.Kind, other.ID
 	for _, tc := range []struct {
 		name       string
 		row        *PersistedSemanticState
@@ -233,9 +225,6 @@ func TestAReuseServeDecidesFromThisRequestAndTheReplayedProof(t *testing.T) {
 	}{
 		{"replayed proof, no hints", framed, nil, proven(AnchorBindingProofIdentityProven, AnchorBindingReasonIdentityProven), []string{"project:project_ask_dev"}},
 		{"a hint naming the replayed anchor", framed, []SubjectHint{{Kind: held.Kind, ID: held.ID, Label: "Ask Dev", Source: "ask-dev"}}, proven(AnchorBindingProofCallerHint, AnchorBindingReasonCallerHint), []string{"project:project_ask_dev"}},
-		{"a hint naming another identity of the anchor kind", framed, []SubjectHint{other}, contested, []string{"project:project_ask_dev"}},
-		{"a hint of another kind", framed, []SubjectHint{{Kind: SubjectTeam, ID: "team_x", Label: "Team X", Source: "ask-dev"}}, proven(AnchorBindingProofIdentityProven, AnchorBindingReasonIdentityProven), []string{"project:project_ask_dev"}},
-		{"a row with no counting frame proves nothing", unframed, []SubjectHint{other}, AnchorBinding{State: AnchorBindingUnbound, Proof: AnchorBindingProofNone, Reason: AnchorBindingReasonNoProof}, []string{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			telemetry := &recordingTelemetry{}

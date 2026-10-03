@@ -317,6 +317,11 @@ const (
 	// decision over its own persisted reading and resolution withholds. Never
 	// rewritten; the request takes the fresh path.
 	AnswerReuseMissCountScope AnswerReuseOutcome = "miss_count_scope"
+	// AnswerReuseMissHintNotCommitted: the request carries a subject hint the
+	// stored row did not commit. The reuse key holds no hint, so serving the
+	// row would skip the post-interpretation commit guards a fresh turn applies
+	// to that hint; the request takes the fresh path.
+	AnswerReuseMissHintNotCommitted AnswerReuseOutcome = "miss_hint_not_committed"
 )
 
 // AnswerReuseBypassReason is the closed vocabulary naming WHY a request
@@ -621,6 +626,10 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 		return InvestigationResult{}, false, false, storedCountReading{}, nil
 	} else if e.telemetry != nil {
 		e.telemetry.RecordStoredResultAuthorization(ctx, principal, decision)
+	}
+	if !requestHintsCommittedBy(request.RequestedScope.SubjectHints, candidate.SubjectResolution.Committed) {
+		e.recordReuseOutcome(ctx, principal, AnswerReuseMissHintNotCommitted)
+		return InvestigationResult{}, false, false, storedCountReading{}, nil
 	}
 	// CHAOS-3900 W1 (codex review, rounds 2-5, consolidated round 5): a
 	// window-keyed lookup (windowKey != "") must never serve a candidate
@@ -1068,4 +1077,22 @@ func reuseSubjectsToRecheck(candidate InvestigationResult) []SubjectRef {
 // that class of divergence unrepresentable rather than merely fixed.
 func reuseEvidenceRefsToRecheck(candidate InvestigationResult) []string {
 	return collectEvidenceRefs(resultEvidenceSurface(candidate))
+}
+
+// requestHintsCommittedBy reports whether every hint names a subject the
+// stored row committed. No hint is trivially covered.
+func requestHintsCommittedBy(hints []SubjectHint, committed []SubjectRef) bool {
+	for _, hint := range hints {
+		covered := false
+		for _, subject := range committed {
+			if subject.Kind == hint.Kind && subject.CanonicalID == hint.ID {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			return false
+		}
+	}
+	return true
 }

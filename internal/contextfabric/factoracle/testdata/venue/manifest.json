@@ -7,7 +7,7 @@
   "fixture_org": "0f0f0f0f-0000-4000-8000-00000000f4c7",
   "ops_build": "dev-health-ops 31a54720edbe (bigboy cut 2, 2026-10-01T18:13Z); query-api image dev-health-go-dho digest f296d57da9a8 (arm64 child 15fbf5182399)",
   "acr_build": "dev-health-acr e3c1b332; acr-api image ghcr.io/full-chaos/dev-health-acr/acr-api@sha256:ea7d7f16178bedf70188df89599e5abd8967747f8e708ae89ed180e2382a8a4b",
-  "schema_digest": "sha256:dd83956f18b52a3acf89e73e1f25b0dcf25df706d90eca49c5b66f8b8994f779",
+  "schema_digest": "sha256:330d0ebf0ea59fce8d0b1bb14887cad8e5b3f6971ad02618afa9844b6fac7a50",
   "venue_fact_query_versions": [
     "devhealthfacts.clickhouse.v21"
   ],

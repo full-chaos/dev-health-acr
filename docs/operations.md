@@ -749,7 +749,7 @@ The outcome is one of three, and they are distinguishable in telemetry:
   `miss_evidence_containment` now means specifically that one of the
   answer's own CITATIONS is no longer visible;
   `miss_recheck_unavailable` means the fresh discovery failed, so nothing
-  was proved either way; `miss_degrade_invalid` means a narrowing was
+  was proved either way; `miss_hint_not_committed` means the request carried a subject hint the stored answer did not commit; `miss_degrade_invalid` means a narrowing was
   possible in principle but the stripped payload would not have satisfied
   the result contract, so it was refused rather than served malformed.
 
