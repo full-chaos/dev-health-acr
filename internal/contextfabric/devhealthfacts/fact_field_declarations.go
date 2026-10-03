@@ -223,7 +223,14 @@ func membershipFields() []fieldDecl {
 	)
 }
 
-func statusFields() []fieldDecl { return []fieldDecl{declNullable(fStr("status"))} }
+func statusFields() []fieldDecl {
+	return []fieldDecl{
+		declNullable(fStr("status")),
+		fStr("status_basis"),
+		declNullable(fBool("status_in_vocabulary")),
+		fStr("status_provenance"),
+	}
+}
 
 func workFields() []fieldDecl { return []fieldDecl{declNullable(fStr("title"))} }
 

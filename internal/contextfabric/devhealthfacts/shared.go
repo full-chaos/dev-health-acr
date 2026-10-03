@@ -175,7 +175,12 @@ import (
 // with an owned_repositories pointer; the window-bound counts are named
 // *_window and echo the window. A candidate saved under v22 holds no team
 // fact for these kinds and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v23"
+//
+// v23 -> v24: a work item's status fact adds status_basis,
+// status_in_vocabulary and status_provenance beside status. A candidate saved
+// under v23 holds a status fact without the vocabulary disclosure and must
+// not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v24"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

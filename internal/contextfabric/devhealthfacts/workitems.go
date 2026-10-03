@@ -71,7 +71,12 @@ func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Princi
 		}
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactStatus, Subject: subject,
-			Fields:         map[string]contextfabric.FactValue{"status": stringOrNull(row.Status)},
+			Fields: map[string]contextfabric.FactValue{
+				"status":               stringOrNull(row.Status),
+				"status_basis":         contextfabric.StringFactValue(statusBasisNormalized),
+				"status_in_vocabulary": statusInVocabularyValue(row.Status),
+				"status_provenance":    contextfabric.StringFactValue(statusProvenanceNote),
+			},
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, row.RepoID+":"+row.ID)},
 		})
 	}
