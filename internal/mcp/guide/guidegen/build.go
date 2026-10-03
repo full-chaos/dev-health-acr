@@ -154,6 +154,24 @@ func buildVocabulary(in Inputs) (string, error) {
 			return "", fmt.Errorf("guidegen: cohort-servable kind %q is not a subject kind", kind)
 		}
 	}
+	scoped := map[string]ScopedCohortRow{}
+	for _, row := range in.ScopedCohortKinds {
+		if !known[row.Kind] {
+			return "", fmt.Errorf("guidegen: scoped cohort kind %q is not a subject kind", row.Kind)
+		}
+		if servable[row.Kind] {
+			return "", fmt.Errorf("guidegen: kind %q is both cohort-servable and scoped-only", row.Kind)
+		}
+		if len(row.Anchors) == 0 {
+			return "", fmt.Errorf("guidegen: scoped cohort kind %q names no anchor kind", row.Kind)
+		}
+		for _, anchor := range row.Anchors {
+			if !known[anchor] {
+				return "", fmt.Errorf("guidegen: scoped cohort kind %q names anchor %q, which is not a subject kind", row.Kind, anchor)
+			}
+		}
+		scoped[row.Kind] = row
+	}
 	var b strings.Builder
 	b.WriteString(generatedNote)
 	b.WriteString("# ACR vocabulary\n\n")
@@ -162,10 +180,29 @@ func buildVocabulary(in Inputs) (string, error) {
 	b.WriteString("## Subject kinds\n\n")
 	b.WriteString("`expected_kinds` and `subject_handles[].kind` accept every kind below. ")
 	b.WriteString("Accepted on the wire is not the same as answerable. ")
-	b.WriteString("Only the kinds marked yes can be discovered as a cohort (\"which teams ...\", \"which pull requests ...\").\n\n")
+	b.WriteString("Only the kinds marked yes can be discovered as a cohort (\"which teams ...\", \"which pull requests ...\"). Kinds marked scoped can be discovered only as the members of one named anchor (see Scoped cohort kinds).\n\n")
 	b.WriteString("| Kind | Cohort can be discovered | Meaning |\n|---|---|---|\n")
 	for _, kind := range in.SubjectKinds {
-		fmt.Fprintf(&b, "| `%s` | %s | %s |\n", kind, yesNo(servable[kind]), subjectKindTexts[kind])
+		fmt.Fprintf(&b, "| `%s` | %s | %s |\n", kind, cohortCell(kind, servable, scoped), subjectKindTexts[kind])
+	}
+
+	if len(in.ScopedCohortKinds) > 0 {
+		b.WriteString("\n## Scoped cohort kinds\n\n")
+		b.WriteString("These kinds are discovered only as the members of a named anchor, never across the organization or grouped. Name the anchor in the question (\"which deployments does the payments repository have?\"). An anchor of any other kind is refused with `member_kind_unservable`.\n\n")
+		b.WriteString("| Kind | Served under a named | Refused under |\n|---|---|---|\n")
+		for _, row := range in.ScopedCohortKinds {
+			served := map[string]bool{}
+			for _, anchor := range row.Anchors {
+				served[anchor] = true
+			}
+			var refused []string
+			for _, kind := range in.SubjectKinds {
+				if !served[kind] && kind != row.Kind {
+					refused = append(refused, kind)
+				}
+			}
+			fmt.Fprintf(&b, "| `%s` | %s | any other anchor kind (%s) |\n", row.Kind, strings.Join(quoteAll(row.Anchors), ", "), strings.Join(quoteAll(refused), ", "))
+		}
 	}
 
 	b.WriteString("\n## Handle grammar\n\n")
@@ -247,6 +284,13 @@ func splitRenderKinds(kinds, unproduced []string) (produced, declared []string) 
 		}
 	}
 	return produced, declared
+}
+
+func cohortCell(kind string, servable map[string]bool, scoped map[string]ScopedCohortRow) string {
+	if _, ok := scoped[kind]; ok {
+		return "scoped"
+	}
+	return yesNo(servable[kind])
 }
 
 func yesNo(v bool) string {

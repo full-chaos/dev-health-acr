@@ -21,6 +21,13 @@ type FamilyRow struct {
 	Unreachable    bool
 }
 
+// ScopedCohortRow is one scoped-only cohort kind and the anchor kinds it is
+// served under.
+type ScopedCohortRow struct {
+	Kind    string
+	Anchors []string
+}
+
 // GrammarRow is one handle-grammar registry entry.
 type GrammarRow struct {
 	PatternID string
@@ -33,9 +40,12 @@ type Inputs struct {
 	Families            []FamilyRow
 	SubjectKinds        []string
 	ServableCohortKinds []string
-	Grammars            []GrammarRow
-	Windows             []string
-	Statuses            []string
+	// ScopedCohortKinds are kinds served only as the members of a named
+	// anchor, with the anchor kinds that serve them.
+	ScopedCohortKinds []ScopedCohortRow
+	Grammars          []GrammarRow
+	Windows           []string
+	Statuses          []string
 	// UnproducedRenderKinds are render kinds a family may name that no
 	// producer builds today.
 	UnproducedRenderKinds []string
@@ -75,6 +85,13 @@ func FromRegistries() Inputs {
 	}
 	for _, kind := range contextfabric.ServableCohortKindsForAudit() {
 		in.ServableCohortKinds = append(in.ServableCohortKinds, string(kind))
+	}
+	for _, kind := range contextfabric.ScopedOnlyCohortKindsForAudit() {
+		row := ScopedCohortRow{Kind: string(kind)}
+		for _, anchor := range contextfabric.ScopedOnlyCohortAnchorKindsForAudit(kind) {
+			row.Anchors = append(row.Anchors, string(anchor))
+		}
+		in.ScopedCohortKinds = append(in.ScopedCohortKinds, row)
 	}
 	for _, pattern := range graphrank.HandleGrammarPatterns() {
 		in.Grammars = append(in.Grammars, GrammarRow{PatternID: pattern.ID, Kind: string(pattern.Kind)})
