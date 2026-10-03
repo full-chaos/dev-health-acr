@@ -9,6 +9,10 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// missingContractValueMessage is the fixed refusal of a contract with a
+// missing value. It says where the three values come from.
+const missingContractValueMessage = "investigate_with_interpretation needs all three contract values: model_output_version, prompt_version and system_sha256; fetch the prompt interpret_question with prompts/get and send the values of those three _meta keys, unchanged, as contract"
+
 // handleInvestigateWithInterpretation implements the
 // investigate_with_interpretation tool: investigate_question with an
 // interpretation the client ran on its own model. The arguments are decoded
@@ -30,6 +34,9 @@ func handleInvestigateWithInterpretation(ctx context.Context, cfg *ProcessConfig
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&input); err != nil {
 		return toolErrorResult(&classifiedError{category: "validation", message: "investigate_with_interpretation arguments are not valid JSON for the declared schema"}), nil
+	}
+	if len(input.Contract.Missing()) > 0 {
+		return toolErrorResult(&classifiedError{category: "validation", message: missingContractValueMessage}), nil
 	}
 	if err := input.Validate(); err != nil {
 		return toolErrorResult(&classifiedError{category: "validation", message: "investigate_with_interpretation arguments failed schema validation"}), nil

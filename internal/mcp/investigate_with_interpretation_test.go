@@ -183,7 +183,6 @@ func TestInvestigateWithInterpretationRefusesBadArgumentsBeforeTheHostedCall(t *
 		"string interpretation":    func(m map[string]any) { m["interpretation"] = "text" },
 		"null interpretation":      func(m map[string]any) { m["interpretation"] = nil },
 		"missing interpretation":   func(m map[string]any) { delete(m, "interpretation") },
-		"missing contract":         func(m map[string]any) { delete(m, "contract") },
 		"uppercase sha": func(m map[string]any) {
 			m["contract"] = map[string]any{"model_output_version": "v", "prompt_version": "p", "system_sha256": strings.ToUpper(interpretationSHA)}
 		},
@@ -191,24 +190,6 @@ func TestInvestigateWithInterpretationRefusesBadArgumentsBeforeTheHostedCall(t *
 			m["contract"] = map[string]any{"model_output_version": "v", "prompt_version": "p", "system_sha256": "abc"}
 		},
 		"bad client model": func(m map[string]any) { m["client_model"] = "has space" },
-		"empty version": func(m map[string]any) {
-			m["contract"] = map[string]any{"model_output_version": "", "prompt_version": "p", "system_sha256": interpretationSHA}
-		},
-		"missing model output version": func(m map[string]any) {
-			m["contract"] = map[string]any{"prompt_version": "p", "system_sha256": interpretationSHA}
-		},
-		"missing prompt version": func(m map[string]any) {
-			m["contract"] = map[string]any{"model_output_version": "v", "system_sha256": interpretationSHA}
-		},
-		"missing sha": func(m map[string]any) {
-			m["contract"] = map[string]any{"model_output_version": "v", "prompt_version": "p"}
-		},
-		"null sha": func(m map[string]any) {
-			m["contract"] = map[string]any{"model_output_version": "v", "prompt_version": "p", "system_sha256": nil}
-		},
-		"empty sha": func(m map[string]any) {
-			m["contract"] = map[string]any{"model_output_version": "v", "prompt_version": "p", "system_sha256": ""}
-		},
 		"unknown contract key": func(m map[string]any) {
 			m["contract"] = map[string]any{"model_output_version": "v", "prompt_version": "p", "system_sha256": interpretationSHA, "extra": 1}
 		},
@@ -231,6 +212,61 @@ func TestInvestigateWithInterpretationRefusesBadArgumentsBeforeTheHostedCall(t *
 				t.Error("the hosted API was called for a request the tool must refuse")
 			}
 		})
+	}
+}
+
+// TestInvestigateWithInterpretationSaysWhereAMissingContractValueComesFrom
+// sends a contract with one value absent, null or empty, and no contract at
+// all. Each is refused before the hosted call with one fixed text that names
+// the three values and where to fetch them. A contract value that is present
+// but malformed keeps the generic schema refusal.
+func TestInvestigateWithInterpretationSaysWhereAMissingContractValueComesFrom(t *testing.T) {
+	const want = "validation: investigate_with_interpretation needs all three contract values: model_output_version, prompt_version and system_sha256; fetch the prompt interpret_question with prompts/get and send the values of those three _meta keys, unchanged, as contract"
+	complete := func() map[string]any {
+		return map[string]any{"model_output_version": "v", "prompt_version": "p", "system_sha256": interpretationSHA}
+	}
+	cases := map[string]func(map[string]any){
+		"no contract": func(m map[string]any) { delete(m, "contract") },
+	}
+	for _, field := range []string{"model_output_version", "prompt_version", "system_sha256"} {
+		cases[field+" absent"] = func(m map[string]any) { contract := complete(); delete(contract, field); m["contract"] = contract }
+		cases[field+" null"] = func(m map[string]any) { contract := complete(); contract[field] = nil; m["contract"] = contract }
+		cases[field+" empty"] = func(m map[string]any) { contract := complete(); contract[field] = ""; m["contract"] = contract }
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			var seen contractsv1.ContextFabricInvestigationRequest
+			boot := withInterpretationTool(answerFixtureBootstrap(t, parityResult(), &seen))
+			result, err := invokeInvestigateWithInterpretation(boot, interpretationArgs(t, mutate))
+			if err != nil {
+				t.Fatalf("protocol error: %v", err)
+			}
+			if !result.IsError || toolResultText(result) != want {
+				t.Fatalf("IsError = %v text = %q, want the refusal %q", result.IsError, toolResultText(result), want)
+			}
+			if seen.Question != "" {
+				t.Error("the hosted API was called for a request the tool must refuse")
+			}
+		})
+	}
+
+	var seen contractsv1.ContextFabricInvestigationRequest
+	boot := withInterpretationTool(answerFixtureBootstrap(t, parityResult(), &seen))
+	malformed := interpretationArgs(t, func(m map[string]any) {
+		contract := complete()
+		contract["system_sha256"] = "abc"
+		m["contract"] = contract
+	})
+	result, err := invokeInvestigateWithInterpretation(boot, malformed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := toolResultText(result); !result.IsError || text == want || !strings.HasPrefix(text, "validation:") {
+		t.Fatalf("malformed digest: IsError = %v text = %q, want the generic validation refusal", result.IsError, text)
+	}
+	complete2 := interpretationArgs(t, func(m map[string]any) { m["contract"] = complete() })
+	if served, err := invokeInvestigateWithInterpretation(boot, complete2); err != nil || served.IsError {
+		t.Fatalf("complete contract: err %v result %s, want it forwarded", err, toolResultText(served))
 	}
 }
 
