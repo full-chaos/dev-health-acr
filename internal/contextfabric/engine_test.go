@@ -395,8 +395,10 @@ type statedWindowAxisRecord struct {
 type recordingTelemetry struct {
 	synthesisModelFailures []SynthesisModelFailureEvent
 	synthesisInputBounds   []SynthesisInputBoundEvent
-	statedWindowAxes       []statedWindowAxisRecord
-	ensembleEvents         []InterpretationEnsembleEvent
+	// clientSynthesisDecisions records every client synthesis decision line.
+	clientSynthesisDecisions []ClientSynthesisDecisionEvent
+	statedWindowAxes         []statedWindowAxisRecord
+	ensembleEvents           []InterpretationEnsembleEvent
 	// storedResultAuthorizations records every stored-result decision
 	// verbatim, in emission order.
 	storedResultAuthorizations []StoredResultAuthorization
@@ -1037,6 +1039,10 @@ func (r *recordingTelemetry) RecordDriverIdentityCollisions(_ context.Context, _
 
 func (r *recordingTelemetry) RecordSynthesisInputBound(_ context.Context, _ storage.Principal, event SynthesisInputBoundEvent) {
 	r.synthesisInputBounds = append(r.synthesisInputBounds, event)
+}
+
+func (r *recordingTelemetry) RecordClientSynthesisDecision(_ context.Context, _ storage.Principal, event ClientSynthesisDecisionEvent) {
+	r.clientSynthesisDecisions = append(r.clientSynthesisDecisions, event)
 }
 
 func (r *recordingTelemetry) RecordSynthesisModelFailure(_ context.Context, _ storage.Principal, event SynthesisModelFailureEvent) {

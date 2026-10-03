@@ -104,6 +104,7 @@ var versionSetAuthorities = map[string]versionAuthority{
 	// That was already so before the field existed (the interpret identity
 	// was not on the result at all); the field makes it visible and does not
 	// change it.
+	"SynthesisSource":             {reason: "who wrote the answer (server or client), not a version identity: a client-written result is saved with no reuse inputs (pinned by TestClientSynthesisTurnNeverReadsOrWritesAnswerReuse), so every reusable row reads server and the reuse key's synthesis identity already fences the server writer"},
 	"InterpretationSource":        {reason: "who interpreted (server or client), not a version identity: every reusable row reads server, because saveResult stores a client-interpreted result with no reuse inputs (pinned by TestSuppliedInterpretationNeverReadsOrWritesAnswerReuse)"},
 	"InterpretationModelIdentity": {reason: "the interpret call's provider/model, recorded for provenance. Reuse binds on the synthesis identity (ModelIdentities), exactly as before this field existed; a server row interpreted by a fallback model the chain later drops stays reusable, which is a known, unfenced property this field makes visible rather than introduces. A client-supplied identity never reaches a reusable row (see InterpretationSource)"},
 }

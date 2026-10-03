@@ -32,6 +32,10 @@ const ContextFabricInvestigationResultPath = "/api/v1/context-fabric/investigati
 // read by id that named the interpreter of a row stored without one.
 const storedInterpretationProvenanceBackfilledLogMessage = "context fabric legacy interpretation provenance backfilled"
 
+// storedSynthesisSourceBackfilledLogMessage is the Info line of a stored
+// result served with a synthesis source it did not record.
+const storedSynthesisSourceBackfilledLogMessage = "context fabric legacy synthesis source backfilled"
+
 // investigationResults returns the configured result store, or nil when the
 // hosted runtime (or the store within it) is not configured. Handler()
 // calls this at mux-construction time, when a.runtime may itself be nil --
@@ -233,6 +237,11 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 			a.logger.InfoContext(r.Context(), storedInterpretationProvenanceBackfilledLogMessage,
 				"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
 				"interpretation_source", string(result.Versions.InterpretationSource))
+		}
+		if contextfabric.BackfillStoredSynthesisSource(&result.Versions) {
+			a.logger.InfoContext(r.Context(), storedSynthesisSourceBackfilledLogMessage,
+				"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
+				"synthesis_source", string(result.Versions.SynthesisSource))
 		}
 		// The outcome-derivation completeness authority, re-evaluated HERE
 		// against the row's OWN outcome rows -- a stored row never reaches

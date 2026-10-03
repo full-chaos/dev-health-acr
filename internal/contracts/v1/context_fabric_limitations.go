@@ -110,6 +110,15 @@ const ContextFabricObservedTimeLimitation = "Observed-time questions cannot be a
 // behind it.
 const ContextFabricCommitRetractionLimitation = "A candidate subject was identified but not committed: the evidence assembled for it does not support naming it as the answer to this question."
 
+// ContextFabricClientSynthesisAnswer is the answer sentence of a turn on
+// which the caller asked to write the answer: the service wrote none.
+const ContextFabricClientSynthesisAnswer = "The facts and evidence for this question were read. The service wrote no answer on this turn: the caller asked to write it from the synthesis input."
+
+// ContextFabricClientSynthesisCommitNotAffirmedLimitation discloses that the
+// commit gate retracted a candidate subject because no service answer
+// affirmed it on a client synthesis turn.
+const ContextFabricClientSynthesisCommitNotAffirmedLimitation = "Client synthesis: commit not affirmed. A candidate subject was identified but not committed, because the service wrote no answer on this turn and so nothing affirmed the subject. Confirm the candidate with its receipt on the next turn."
+
 // ContextFabricSynthesisClarificationUnavailableLimitation is CHAOS-4098's
 // disclosure that the synthesis step declined to conclude on a path with no
 // clarification to offer.
@@ -581,6 +590,7 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricTemporalProjectionLimitation,
 		ContextFabricObservedTimeLimitation,
 		ContextFabricCommitRetractionLimitation,
+		ContextFabricClientSynthesisCommitNotAffirmedLimitation,
 		ContextFabricSynthesisClarificationUnavailableLimitation,
 		ContextFabricFactScopeUnexpandedLimitation,
 		ContextFabricFactScopeActivityProxyLimitation,

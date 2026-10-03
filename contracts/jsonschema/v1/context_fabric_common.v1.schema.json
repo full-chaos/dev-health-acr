@@ -3408,6 +3408,14 @@
           "minLength": 1,
           "maxLength": 513,
           "description": "The model that interpreted the question of this result: <provider>/<model> for the service's own model, client-supplied/<declared model or undeclared> for the caller's. A client interpretation_source requires the client-supplied prefix and no other source may carry it. Optional: a stored result written before the field existed is served with a server interpretation_source and without this field."
+        },
+        "synthesis_source": {
+          "type": "string",
+          "enum": [
+            "server",
+            "client"
+          ],
+          "description": "Who wrote the answer of this result: the service's own model (server) or the caller's (client). Optional: absent when no synthesis step ran on the turn. A client result carries no model-written drivers or claims; the caller wrote the answer from the synthesis input of its turn. The status of a client result is partial, or degraded when the service finds a required source unavailable, or no_match; never complete."
         }
       },
       "required": [

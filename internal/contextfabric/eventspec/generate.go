@@ -222,6 +222,8 @@ func goVarName(e Event) string {
 		return "OTelExport"
 	case SuppliedInterpretationDecision.ID:
 		return "SuppliedInterpretationDecision"
+	case ClientSynthesisDecision.ID:
+		return "ClientSynthesisDecision"
 	case GraphCountCheckFinished.ID:
 		return "GraphCountCheckFinished"
 	default:

@@ -403,7 +403,7 @@ var contractRootExemplars = []any{
 	DeviceTokenRequest{}, DeviceTokenResponse{},
 	ErrorEnvelope{}, EvidenceRef{}, ExpandedEvidence{},
 	MCPContextForTaskRequest{}, MCPContextForTaskResponse{},
-	MCPInvestigateQuestionRequest{}, MCPInvestigateQuestionResponse{}, MCPInvestigateWithInterpretationRequest{},
+	MCPInvestigateQuestionRequest{}, MCPInvestigateQuestionResponse{}, MCPInvestigateWithInterpretationRequest{}, ContextFabricInvestigationResponse{},
 	MCPInvestigationResultRequest{}, MCPInvestigationResultResponse{},
 	MCPDataCatalogRequest{}, MCPFindSubjectsRequest{}, MCPRunOperationRequest{}, MCPGraphQLQueryRequest{},
 	MCPRecordEpisodeRequest{}, MCPRecordEpisodeResponse{},

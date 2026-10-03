@@ -236,6 +236,13 @@
     "include_full_result": {
       "type": "boolean",
       "description": "Optional, default false. When true, also return the full canonical result next to the bounded answer, if it fits the byte budget. Otherwise leave it out and call investigation_result (if this server offers it) with the result_id only when you need more detail."
+    },
+    "synthesis": {
+      "type": "string",
+      "enum": [
+        "client"
+      ],
+      "description": "Optional. Send client to have the service skip its own answer writing and return synthesis_input: the model input for your own model, bounded in size (byte for byte the service's own input when its bounded flag is false), to be run with the prompt synthesize_answer (the input is the user message). The stored result then carries facts and evidence only, with no model-written text. Leave it out for the service-written answer."
     }
   },
   "$defs": {

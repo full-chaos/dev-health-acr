@@ -457,16 +457,16 @@
         },
         "responses": {
           "200": {
-            "description": "Investigation result; status may be complete, partial, degraded, clarification_required, or no_match. schema_version is context_fabric_investigation_result.v1, or .v2 when the result minted an anchor membership-verify offer (CHAOS-4042).",
+            "description": "Investigation result; status may be complete, partial, degraded, clarification_required, or no_match. schema_version is context_fabric_investigation_result.v1, or .v2 when the result minted an anchor membership-verify offer (CHAOS-4042). The body is the result plus, when the request asked synthesis_mode client and the turn reached synthesis, synthesis_input: the input for the caller's model to write the answer from. The result read by id never carries it.",
             "content": {
               "application/json": {
                 "schema": {
                   "oneOf": [
                     {
-                      "$ref": "../jsonschema/v1/context_fabric_investigation_result.v1.schema.json"
+                      "$ref": "../jsonschema/v1/context_fabric_investigation_response.v1.schema.json"
                     },
                     {
-                      "$ref": "../jsonschema/v1/context_fabric_investigation_result.v2.schema.json"
+                      "$ref": "../jsonschema/v1/context_fabric_investigation_response.v2.schema.json"
                     }
                   ]
                 }

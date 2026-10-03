@@ -94,6 +94,11 @@ func normalizedInvestigationArgs(ctx context.Context, cfg *ProcessConfig, req *m
 	return args, nil
 }
 
+// clientSynthesisFlowLine is the fixed line a client synthesis answer adds to
+// the rendered markdown. No value from the synthesis input is put in it.
+const clientSynthesisFlowLine = "\n\nThe service wrote no answer text on this turn. Fetch the prompt " + promptSynthesizeAnswer +
+	" (its schema is the resource " + uriSynthesisOutput + "), run it as the system message on your own model, and send synthesis_input.input as the user message.\n"
+
 // investigateAndRender maps a validated request onto the hosted contract,
 // calls the hosted investigation and renders the shared bounded projection.
 // A non-nil supplied interpretation is the only difference between the tools
@@ -103,10 +108,11 @@ func investigateAndRender(ctx context.Context, cfg *ProcessConfig, caller *Calle
 	hosted := hostedInvestigationRequest(input, budget)
 	hosted.SuppliedInterpretation = supplied
 
-	result, currentRequestID, err := caller.client.InvestigateWithRequestID(ctx, hosted)
+	hostedResponse, currentRequestID, err := caller.client.InvestigateWithSynthesisInput(ctx, hosted)
 	if err != nil {
 		return toolErrorResult(err), nil
 	}
+	result := hostedResponse.ContextFabricInvestigationResult
 
 	projection := answerprojection.Project(result, answerprojection.Budget{
 		MaxDrivers:       budget.MaxDrivers,
@@ -130,7 +136,15 @@ func investigateAndRender(ctx context.Context, cfg *ProcessConfig, caller *Calle
 		attachFullResult(&response, result, budget.MaxSerializedBytes)
 	}
 
-	rendered, truncated := sidecar.RenderAnswerProjectionMarkdown(response.Structured, investigationRenderedMarkdownMax)
+	response.SynthesisInput = hostedResponse.SynthesisInput
+	markdownMax := investigationRenderedMarkdownMax
+	if response.SynthesisInput != nil {
+		markdownMax -= len(clientSynthesisFlowLine)
+	}
+	rendered, truncated := sidecar.RenderAnswerProjectionMarkdown(response.Structured, markdownMax)
+	if response.SynthesisInput != nil {
+		rendered += clientSynthesisFlowLine
+	}
 	response.RenderedMarkdown = contractsv1.MCPRenderedMarkdown{
 		Markdown:  rendered,
 		Untrusted: true,
@@ -206,6 +220,8 @@ func hostedInvestigationRequest(input contractsv1.MCPInvestigateQuestionRequest,
 		// possible from this mapping.
 		TimeContext: contractsv1.ContextFabricTimeContext{Axis: contractsv1.ContextFabricTemporalCurrent, EvidenceWindow: input.EvidenceWindow},
 		Options:     hostedOptions(budget, input.AllowClarification, input.WindowConfirmationMode),
+		// Synthesis "client" is the hosted synthesis_mode of the same name.
+		SynthesisMode: input.Synthesis,
 	}
 	if input.Scope != nil {
 		hosted.RequestedScope = contractsv1.ContextFabricRequestedScope{

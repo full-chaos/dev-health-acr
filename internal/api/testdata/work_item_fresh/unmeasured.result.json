@@ -159,7 +159,8 @@
     "canonical_service_version": "unwired",
     "model_identity": "test-provider/test-model",
     "interpretation_source": "server",
-    "interpretation_model_identity": "test-provider/test-model"
+    "interpretation_model_identity": "test-provider/test-model",
+    "synthesis_source": "server"
   },
   "deterministic_answer": "This investigation is complete.",
   "warnings": [],

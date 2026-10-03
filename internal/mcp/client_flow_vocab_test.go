@@ -72,3 +72,13 @@ func TestInterpretPromptUserPayloadHoldsOnlyTheDocumentedKeys(t *testing.T) {
 		t.Fatalf("payload %s: the guide says question, time context and an empty requested_scope", text)
 	}
 }
+
+func TestClientFlowVocabularyTiesTheSynthesisSurfaces(t *testing.T) {
+	vocab := ClientFlow()
+	if vocab.SynthesisPrompt != promptSynthesizeAnswer || vocab.SynthesisPrompt == "" {
+		t.Errorf("synthesis prompt = %q", vocab.SynthesisPrompt)
+	}
+	if vocab.SynthesisOutputURI != uriSynthesisOutput || vocab.SynthesisOutputURI == "" {
+		t.Errorf("synthesis output URI = %q", vocab.SynthesisOutputURI)
+	}
+}
