@@ -1,4 +1,4 @@
-package genkitruntime
+package interpretprompt
 
 // The fact-kind sections of interpretationSystemPrompt. Each section is its
 // own constant so a later rule family adds a section beside these instead of

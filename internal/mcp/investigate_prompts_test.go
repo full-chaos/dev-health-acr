@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
 	"regexp"
 	"strings"
 	"testing"
@@ -14,9 +15,20 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/mcp/guide"
 )
 
+func investigateFixture(t *testing.T) *fixtureServer {
+	t.Helper()
+	fx := newFixtureServer(t)
+	fx.CapabilitiesHandler = func(w http.ResponseWriter, r *http.Request) {
+		caps := validCapabilitiesFixture()
+		caps.EnabledTools = append(caps.EnabledTools, toolInvestigateQuestion, toolInvestigationResult)
+		writeJSONFixture(t, w, http.StatusOK, caps)
+	}
+	return fx
+}
+
 func investigateBootstrap(t *testing.T) *Bootstrap {
 	t.Helper()
-	boot := newFixtureBootstrap(t, newFixtureServer(t))
+	boot := newFixtureBootstrap(t, investigateFixture(t))
 	boot.Capabilities.EnabledTools = append(boot.Capabilities.EnabledTools, toolInvestigateQuestion, toolInvestigationResult)
 	return boot
 }
@@ -46,12 +58,14 @@ func TestServerListsInvestigatePromptsWithVocabularyArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := guide.PromptDefs(vocab)
-	if len(want) != 3 || len(listed.Prompts) != len(want) {
-		t.Fatalf("listed %d prompts, defined %d", len(listed.Prompts), len(want))
-	}
 	got := map[string]*mcpsdk.Prompt{}
 	for _, p := range listed.Prompts {
-		got[p.Name] = p
+		if p.Name != promptInterpretQuestion {
+			got[p.Name] = p
+		}
+	}
+	if len(want) != 3 || len(got) != len(want) || len(listed.Prompts) != len(want)+1 {
+		t.Fatalf("listed %d prompts, defined %d plus %s", len(listed.Prompts), len(want), promptInterpretQuestion)
 	}
 	for _, def := range want {
 		p := got[def.Name]
@@ -95,8 +109,8 @@ func TestInvestigatePromptsFollowToolAvailability(t *testing.T) {
 	}
 	full, closeFull := connectedClient(t, investigateBootstrap(t))
 	defer closeFull()
-	if names := promptNames(t, full); len(names) != 3 {
-		t.Fatalf("with investigate_question expected 3 prompts, got %v", names)
+	if names := promptNames(t, full); len(names) != 4 {
+		t.Fatalf("with investigate_question expected 4 prompts, got %v", names)
 	}
 	if _, err := plain.GetPrompt(context.Background(), &mcpsdk.GetPromptParams{
 		Name: guide.PromptInvestigate, Arguments: map[string]string{"question": "q"},
@@ -297,7 +311,7 @@ func TestPromptCatalogueFollowsTheCallersOwnCapabilities(t *testing.T) {
 	namesA := promptNames(t, sessionA)
 	namesB := promptNames(t, sessionB)
 
-	if len(namesA) != 3 || len(namesB) != 1 || namesB[0] != guide.PromptExpand {
+	if len(namesA) != 4 || len(namesB) != 1 || namesB[0] != guide.PromptExpand {
 		t.Fatalf("caller A prompts %v, caller B prompts %v", namesA, namesB)
 	}
 	args := map[string]string{"evidence_ref_id": "e1"}

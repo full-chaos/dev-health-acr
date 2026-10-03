@@ -1,4 +1,4 @@
-package genkitruntime
+package interpretprompt
 
 import (
 	"fmt"

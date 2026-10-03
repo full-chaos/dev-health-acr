@@ -21,6 +21,7 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/interpretprompt"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/invopop/jsonschema"
@@ -252,7 +253,7 @@ const (
 	// the words that map onto it, and the worked examples carry the value.
 	// A change to what the model is told, so the version bumps (same
 	// standing rule stated at v9 above).
-	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v21"
+	DefaultInterpretationPromptVersion = interpretprompt.PromptVersion
 	// DefaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
 	// review round: v2 added claimed_facts for value-level closure; v3
 	// closes the driver category vocabulary (a fixed 16-value set, no
@@ -507,7 +508,7 @@ const (
 	// string field, member_qualifier_value (widening, same reasoning as v3/v4
 	// above -- a v7-era model was never offered this field and could not have
 	// emitted it).
-	DefaultSchemaVersion    = "context-fabric-model-output.v8"
+	DefaultSchemaVersion    = interpretprompt.OutputVersion
 	defaultEvaluatorVersion = "context-fabric-grounding.v1"
 	// DefaultPhrasingPromptVersion is v1 (CHAOS-4171 PR2): the SECOND
 	// bounded model call's own prompt, versioned independently of
@@ -1091,15 +1092,7 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 	if strings.TrimSpace(principal.OrgID) == "" {
 		return contextfabric.InterpretedQuestion{}, contextfabric.ModelExecutionReceipt{}, errors.New("authenticated organization is required")
 	}
-	payload := interpretationInput{
-		Question:             request.Question,
-		Conversation:         request.Conversation,
-		SubjectHints:         request.RequestedScope.SubjectHints,
-		RequestedScope:       request.RequestedScope,
-		TimeContext:          request.TimeContext,
-		PriorSubjectReceipts: request.PriorSubjectReceipts,
-	}
-	encoded, err := boundedJSON(payload, r.config.MaxInputBytes)
+	encoded, err := interpretprompt.UserPayload(request, r.config.MaxInputBytes)
 	if err != nil {
 		return contextfabric.InterpretedQuestion{}, contextfabric.ModelExecutionReceipt{}, err
 	}
@@ -1132,7 +1125,7 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 		drawOutcomes, generationErr = r.withRetry(ctx, func(callCtx context.Context) error {
 			var err error
 			output, usage, err = r.generator.Interpret(callCtx, generationRequest{
-				Model: r.config.ModelRef, System: interpretationSystemPrompt, Prompt: string(encoded),
+				Model: r.config.ModelRef, System: interpretprompt.System(), Prompt: string(encoded),
 				Config: chaos4631InterpretDecodingConfig(decodingSeed),
 			})
 			return err
@@ -3386,15 +3379,6 @@ func describeReportedLeg(primary, fallback contextfabric.ModelExecutionReceipt) 
 	primary.ModelVersion = fallback.ModelVersion
 	primary.OutputDigest = fallback.OutputDigest
 	return primary
-}
-
-type interpretationInput struct {
-	Question             string                              `json:"question"`
-	Conversation         []contextfabric.ConversationTurn    `json:"conversation,omitempty"`
-	SubjectHints         []contextfabric.SubjectHint         `json:"subject_hints,omitempty"`
-	RequestedScope       contextfabric.RequestedScope        `json:"requested_scope,omitempty"`
-	TimeContext          contextfabric.TimeContext           `json:"time_context"`
-	PriorSubjectReceipts []contextfabric.BoundSubjectReceipt `json:"prior_subject_receipts,omitempty"`
 }
 
 type interpretationOutput struct {

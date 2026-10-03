@@ -88,7 +88,7 @@ The evidence store and the stored-result store are the in-memory production twin
 | Step | What it asserts |
 | --- | --- |
 | `01_discover_2026_07_28` | the client's first request is `server/discover`, it negotiates 2026-07-28, and it never falls back to `initialize` |
-| `02_catalogue_per_credential` | each caller's `tools/list` equals its expected catalogue; `resources/list` carries `acr://guide/*`; `prompts/list` carries `investigate`, `continue_investigation`, `expand_evidence` |
+| `02_catalogue_per_credential` | each caller's `tools/list` equals its expected catalogue; `resources/list` carries `acr://guide/*`; `prompts/list` carries `investigate`, `continue_investigation`, `expand_evidence`, `interpret_question` |
 | `03_context_for_task` | an explicit repository returns a packet with evidence references; no repository returns the typed refusal naming `repository.slug` |
 | `04_investigate_question` | a real question, with every clarification answered from the latest answer's first option, ends in an answer carrying the completeness, coverage and budget contract fields |
 | `05_investigation_result_by_id` | `include_full_result` under a byte budget declares `full_result_omitted` instead of attaching an oversized result; `investigation_result` returns every result id read back |
