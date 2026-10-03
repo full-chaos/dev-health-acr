@@ -187,7 +187,7 @@ func buildData(in Inputs) (string, error) {
 
 	b.WriteString("## Which way\n\n")
 	b.WriteString("- If you are a model, plan the reads yourself with `data_catalog`, `find_subjects` and `run_operation`. You choose the reads and you do the comparison, ranking, charting and explanation. These tools call no model on our side.\n")
-	b.WriteString("- `investigate_question` is for our own engine's narrative answers (Ask Dev, and callers with no model of their own). It runs a model on our side. Use it only when you want the engine's answer.\n")
+	b.WriteString("- `investigate_question` is for our own engine's narrative answers (Ask Dev, and callers with no model of their own). It runs a model on our side. Use it only when you want the engine's answer. With `synthesis` set to `client` it makes no synthesis call: see `acr://guide/client-interpretation`.\n")
 	b.WriteString("- `investigate_with_interpretation` is the same engine, with the interpretation step run on your own model: fetch the prompt `interpret_question`, run it, and send the reply as `interpretation` with the prompt's `_meta` values as `contract`. The steps and the replies are in `acr://guide/client-interpretation`.\n")
 	b.WriteString("- A tool appears in `tools/list` only when the hosted API enables it for your credential. `run_operation` and `graphql_query` need the `data:read` scope. More data tools are planned; none is named here until it ships.\n\n")
 
