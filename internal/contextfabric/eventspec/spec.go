@@ -2556,6 +2556,7 @@ var WorkItemTupleAdmission = Event{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "admitted", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "stripped_obligations", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: contextfabric.WorkItemTupleAdmissionStrippedObligationsVocabulary()},
+		{Key: "member_filter", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.WorkItemMemberFilterVocabulary()},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }

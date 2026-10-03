@@ -17,6 +17,7 @@ import (
 var workItemTupleAdmissionEventLogKeys = map[string]string{
 	"Admitted":            "admitted",
 	"StrippedObligations": "stripped_obligations",
+	"MemberFilter":        "member_filter",
 }
 
 // TestEveryWorkItemTupleAdmissionEventFieldReachesTheLogLine is the

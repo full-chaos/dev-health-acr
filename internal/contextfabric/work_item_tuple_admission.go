@@ -35,7 +35,7 @@ func prospectiveWorkItemTupleAdmission(frame *QuestionFrame, familyAllowsWorkIte
 	if frame == nil || frame.SubjectExpression.Kind != SubjectExpressionChildrenOfScope || frame.SubjectExpression.Scoped == nil || frame.SubjectExpression.Scoped.MemberKind != SubjectWorkItem {
 		return workItemTupleNotApplicable
 	}
-	if !familyAllowsWorkItemTuple || len(frame.Goals) == 0 || frame.Temporal != TemporalIntentCurrent || timeContext.Axis != TemporalCurrent || MemberQualifierPresent(frame.SubjectExpression.Scoped.MemberQualifier) {
+	if !familyAllowsWorkItemTuple || len(frame.Goals) == 0 || frame.Temporal != TemporalIntentCurrent || timeContext.Axis != TemporalCurrent || !workItemTupleQualifierServable(frame.SubjectExpression.Scoped) {
 		return workItemTupleRefused
 	}
 	orderingRequested := workItemTupleOrderingRequested(frame)
@@ -53,6 +53,69 @@ func prospectiveWorkItemTupleAdmission(frame *QuestionFrame, familyAllowsWorkIte
 		}
 	}
 	return workItemTupleProspective
+}
+
+// Member-filter basis tokens: the closed vocabulary of the settled
+// admission line's member_filter field. Only "status" with a closed-set
+// value is served; every other qualifier shape stays refused.
+const (
+	WorkItemMemberFilterNone               = "none"
+	WorkItemMemberFilterStatus             = "status"
+	WorkItemMemberFilterStatusWithoutValue = "status_without_value"
+	WorkItemMemberFilterAssignee           = "assignee"
+	WorkItemMemberFilterUnrecognized       = "unrecognized"
+)
+
+// WorkItemMemberFilterVocabulary is the closed member_filter vocabulary.
+func WorkItemMemberFilterVocabulary() []string {
+	return []string{WorkItemMemberFilterNone, WorkItemMemberFilterStatus, WorkItemMemberFilterStatusWithoutValue, WorkItemMemberFilterAssignee, WorkItemMemberFilterUnrecognized}
+}
+
+// workItemTupleMemberFilterBasis names which qualifier shape decided the
+// member filter, for the admission telemetry line.
+func workItemTupleMemberFilterBasis(frame *QuestionFrame) string {
+	if !workItemTupleInScope(frame) {
+		return WorkItemMemberFilterNone
+	}
+	scoped := frame.SubjectExpression.Scoped
+	switch scoped.MemberQualifier {
+	case "":
+		return WorkItemMemberFilterNone
+	case MemberQualifierStatus:
+		if scoped.MemberQualifierValue == "" {
+			return WorkItemMemberFilterStatusWithoutValue
+		}
+		return WorkItemMemberFilterStatus
+	case MemberQualifierAssignee:
+		return WorkItemMemberFilterAssignee
+	default:
+		return WorkItemMemberFilterUnrecognized
+	}
+}
+
+// workItemTupleQualifierServable reports whether the member qualifier is
+// absent or a status qualifier carrying a value of the closed status set.
+// A status qualifier without a value cannot be applied in the read, and an
+// assignee or unrecognized qualifier has no source, so those stay refused
+// rather than answered as unqualified membership.
+func workItemTupleQualifierServable(scoped *ScopedSetExpression) bool {
+	if scoped == nil {
+		return false
+	}
+	if !MemberQualifierPresent(scoped.MemberQualifier) {
+		return true
+	}
+	return scoped.MemberQualifier == MemberQualifierStatus && InWorkItemStatusVocabulary(scoped.MemberQualifierValue)
+}
+
+// workItemTupleStatusFilter is the status the member read must apply, or
+// empty for unqualified membership. It is non-empty only where admission
+// admitted the frame.
+func workItemTupleStatusFilter(frame *QuestionFrame) string {
+	if !workItemTupleInScope(frame) || frame.SubjectExpression.Scoped.MemberQualifier != MemberQualifierStatus || !workItemTupleQualifierServable(frame.SubjectExpression.Scoped) {
+		return ""
+	}
+	return frame.SubjectExpression.Scoped.MemberQualifierValue
 }
 
 // workItemTupleOrderingRequested reports whether the frame asks for an
@@ -299,4 +362,19 @@ func WorkItemTupleAdmissionStrippedObligationsVocabulary() []string {
 type WorkItemTupleAdmissionEvent struct {
 	Admitted            bool
 	StrippedObligations []AnswerObligation
+	MemberFilter        string
+}
+
+// workItemMemberFilterLogValue maps the unset basis to "none" and refuses
+// any token outside the closed vocabulary rather than logging it.
+func workItemMemberFilterLogValue(basis string) string {
+	if basis == "" {
+		return WorkItemMemberFilterNone
+	}
+	for _, token := range WorkItemMemberFilterVocabulary() {
+		if basis == token {
+			return token
+		}
+	}
+	return WorkItemMemberFilterNone
 }

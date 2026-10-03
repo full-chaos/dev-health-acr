@@ -2429,7 +2429,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			stripped = workItemTupleObligationsToStrip(familyOutcome.Frame)
 		}
 		if e.telemetry != nil {
-			e.telemetry.RecordWorkItemTupleAdmission(ctx, principal, WorkItemTupleAdmissionEvent{Admitted: workItemTuple, StrippedObligations: stripped})
+			e.telemetry.RecordWorkItemTupleAdmission(ctx, principal, WorkItemTupleAdmissionEvent{Admitted: workItemTuple, StrippedObligations: stripped, MemberFilter: workItemTupleMemberFilterBasis(familyOutcome.Frame)})
 		}
 	}
 	// requirementFrame is the ONE frame every requirement-coordinate reader
@@ -3102,7 +3102,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		resolution = restrictWorkItemTupleCandidate(resolution)
 		plan.MemberKind = SubjectWorkItem
 		plan.FactKinds = []FactKind{FactStatus, FactWork}
-		graphContext, tupleCensus, err = e.discoverWorkItemTuple(ctx, principal, request, resolution, &plan)
+		graphContext, tupleCensus, err = e.discoverWorkItemTuple(ctx, principal, request, resolution, &plan, workItemTupleStatusFilter(familyOutcome.Frame))
 		if err != nil {
 			return InvestigationResult{}, stageError(StageGraph, err)
 		}
@@ -3823,6 +3823,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// served on the second pass.
 	if tupleCensus != nil {
 		result = ServeWorkItemTupleCensus(result, tupleCensus)
+		result = withWorkItemStatusFilterLimitations(result, workItemTupleStatusFilter(familyOutcome.Frame), tupleCensus)
 		e.recordWorkItemAuthorizationGap(ctx, principal, tupleCensus, result)
 		// Measure the same display labels the final response will carry.
 		applyCoverageDisplayLabels(&result)

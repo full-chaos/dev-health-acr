@@ -74,7 +74,7 @@ func workItemTupleSemanticState(state *PersistedSemanticState) bool {
 	if expression.Named != nil || expression.Explicit != nil || expression.Discovered != nil || expression.Grouped != nil || expression.Org != nil {
 		return false
 	}
-	return expression.Scoped.MemberKind == SubjectWorkItem && expression.Scoped.MemberQualifier == ""
+	return expression.Scoped.MemberKind == SubjectWorkItem && workItemTupleQualifierServable(expression.Scoped)
 }
 
 // workItemTuplePayloadMarker is the fail-closed fallback for a stored row

@@ -37,6 +37,10 @@ func (e *Engine) tryReuseWorkItemTuple(ctx context.Context, principal storage.Pr
 	if classification.Disposition != WorkItemTupleEligible {
 		return InvestigationResult{}, false, nil
 	}
+	if workItemTupleStatusFilter(stored.SemanticState.Frame) != "" {
+		event.Decision = "member_filter_not_reusable"
+		return InvestigationResult{}, false, nil
+	}
 	candidate := stored.Result
 	event.Decision = "payload_rejected"
 	if ValidateWorkItemTuplePayload(candidate, principal) != nil {
@@ -133,7 +137,7 @@ func (e *Engine) tryReuseWorkItemTuple(ctx context.Context, principal storage.Pr
 		stripped = workItemTupleObligationsToStrip(state.Frame)
 	}
 	if e.telemetry != nil {
-		e.telemetry.RecordWorkItemTupleAdmission(ctx, principal, WorkItemTupleAdmissionEvent{Admitted: true, StrippedObligations: stripped})
+		e.telemetry.RecordWorkItemTupleAdmission(ctx, principal, WorkItemTupleAdmissionEvent{Admitted: true, StrippedObligations: stripped, MemberFilter: workItemTupleMemberFilterBasis(stored.SemanticState.Frame)})
 	}
 	return candidate, true, nil
 }

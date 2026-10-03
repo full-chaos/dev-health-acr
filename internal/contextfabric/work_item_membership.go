@@ -90,6 +90,12 @@ type WorkItemMembershipRequest struct {
 	PlanMaxMembers    int
 	RequestMaxMembers int
 
+	// Status, when non-empty, restricts members to work items whose current
+	// work_items.status equals it (a value of the closed status set). The
+	// predicate runs in the read, so the census and the cap are over the
+	// filtered population. Empty reads every member.
+	Status string
+
 	// S1Instant is the census instant used for the future-boundary counter.
 	// A zero value is filled by the adapter's clock before the statement runs.
 	S1Instant time.Time
