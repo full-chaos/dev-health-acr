@@ -25,6 +25,15 @@ const (
 	continuationOlderID   = "result_5465_turn_zero_001"
 )
 
+// contractAcceptingInterpreter is an interpreter that accepts the contract of
+// every supplied interpretation, as the production interpreter does for the
+// contract the service runs.
+type contractAcceptingInterpreter struct{ QuestionInterpreter }
+
+func (contractAcceptingInterpreter) CheckSuppliedInterpretation(context.Context, storage.Principal, InvestigationRequest) error {
+	return nil
+}
+
 // forcedFamilyInterpreter proposes a stated family with a stated group kind.
 //
 // It exists because interpreterFunc's adapter always reports
