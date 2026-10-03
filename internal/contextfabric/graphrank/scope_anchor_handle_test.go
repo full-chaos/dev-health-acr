@@ -42,6 +42,21 @@ func scopeAnchorCensus(calls *int) CensusFunc {
 
 func resolveScopeAnchorQuestion(t *testing.T, backend *fakeGraphBackend, question string) (contextfabric.SubjectResolution, *captureResolutionTracer, int) {
 	t.Helper()
+	return resolveScopeAnchorQuestionWith(t, backend, question, namedScopeAnchorFrame(nil), 0)
+}
+
+func namedScopeAnchorFrame(expected *contextfabric.SubjectKind) *contextfabric.QuestionFrame {
+	return &contextfabric.QuestionFrame{
+		Goals: []contextfabric.InvestigationGoal{contextfabric.GoalAssessState},
+		SubjectExpression: contextfabric.SubjectExpression{
+			Kind:  contextfabric.SubjectExpressionNamed,
+			Named: &contextfabric.NamedSubjectExpression{Terms: []string{"pull request 747"}, ExpectedKind: expected},
+		},
+	}
+}
+
+func resolveScopeAnchorQuestionWith(t *testing.T, backend *fakeGraphBackend, question string, frame *contextfabric.QuestionFrame, maxCandidates int) (contextfabric.SubjectResolution, *captureResolutionTracer, int) {
+	t.Helper()
 	deps := backend.deps()
 	tracer := &captureResolutionTracer{}
 	deps.ResolutionTracer = tracer
@@ -49,7 +64,10 @@ func resolveScopeAnchorQuestion(t *testing.T, backend *fakeGraphBackend, questio
 	deps.CensusFunc = scopeAnchorCensus(&calls)
 	request := testRequest()
 	request.Question = question
-	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(scopeAnchorRepo, "pull request 747"), deps, nil, nil)
+	if maxCandidates > 0 {
+		request.Options.MaxSubjectCandidates = maxCandidates
+	}
+	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(scopeAnchorRepo, "pull request 747"), deps, nil, nil, frame, "")
 	if err != nil {
 		t.Fatalf("ResolveSubjects() error = %v", err)
 	}
@@ -76,7 +94,7 @@ func TestResolveSubjects_CommittedScopeAnchorDoesNotShadowTheNamedHandle(t *test
 	rounds := tracer.eventsForStage("evidence_round")
 	var decisionCommits int
 	for _, e := range tracer.eventsForStage("decision") {
-		if e.Outcome == "committed" && e.Subject.CanonicalID == scopeAnchorPRID && e.CommitGate == "evidence_census" && e.CommitBasis == string(contextfabric.CommitBasisStatistical) {
+		if e.Outcome == "committed" && e.Subject.CanonicalID == scopeAnchorPRID && e.CommitGate == "evidence_census" && e.CommitBasis == string(contextfabric.CommitBasisStatistical) && e.Index == 1 && e.Total == 1 && e.Pass >= 2 {
 			decisionCommits++
 		}
 	}
@@ -181,11 +199,43 @@ func TestAppendCensusAttestedCommitHonoursTheCandidateCap(t *testing.T) {
 	if len(resolution.Candidates) != 2 || len(resolution.Committed) != 2 {
 		t.Fatalf("candidates = %d, committed = %d, want 2 and 2 under a cap of 2", len(resolution.Candidates), len(resolution.Committed))
 	}
+	if resolution.Candidates[0].Subject != repo || resolution.Candidates[1].Subject != pr || resolution.Candidates[1].State != contextfabric.ResolutionCommitted {
+		t.Fatalf("candidates = %#v, want the committed repository kept and the pull request in place of the uncommitted candidate", resolution.Candidates)
+	}
 	full := contextfabric.SubjectResolution{
 		Candidates: []contextfabric.SubjectCandidate{{Subject: repo, State: contextfabric.ResolutionCommitted}},
 		Committed:  []contextfabric.SubjectRef{repo},
 	}
 	if appendCensusAttestedCommit(&full, contextfabric.SubjectCandidate{Subject: pr}, 1, bases, digests, true, true) || len(full.Candidates) != 1 {
 		t.Fatalf("append over a cap of committed-only candidates must refuse, got %#v", full)
+	}
+}
+
+func TestResolveSubjects_NamedRepositoryFrameKeepsTheScopeAnchorAlone(t *testing.T) {
+	t.Parallel()
+	repository := contextfabric.SubjectRepository
+	resolution, _, _ := resolveScopeAnchorQuestionWith(t, scopeAnchorBackend(true, -1),
+		"How is full-chaos/dev-health-acr doing over the last 30 days? Use pull request 747 as an example.", namedScopeAnchorFrame(&repository), 0)
+	ids := scopeAnchorCommittedIDs(resolution)
+	if len(ids) != 1 || ids[0] != scopeAnchorRepoID {
+		t.Fatalf("committed = %v, want only the repository: the frame says the repository is the subject", ids)
+	}
+}
+
+func TestResolveSubjects_CandidateCapRefusalIsRecordedAsADecision(t *testing.T) {
+	t.Parallel()
+	resolution, tracer, _ := resolveScopeAnchorQuestionWith(t, scopeAnchorBackend(true, -1), scopeAnchorQuestion, namedScopeAnchorFrame(nil), 1)
+	ids := scopeAnchorCommittedIDs(resolution)
+	if len(ids) != 1 || ids[0] != scopeAnchorRepoID {
+		t.Fatalf("committed = %v, want the repository alone under a cap of one", ids)
+	}
+	var refused int
+	for _, e := range tracer.eventsForStage("decision") {
+		if e.Outcome == "no_commit" && e.CommitGate == "evidence_census" && e.Subject.CanonicalID == scopeAnchorPRID {
+			refused++
+		}
+	}
+	if refused != 1 {
+		t.Fatalf("no_commit evidence_census decision events for the pull request = %d, want 1", refused)
 	}
 }

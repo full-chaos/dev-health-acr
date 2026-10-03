@@ -3851,7 +3851,16 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				// whether the scoped re-decision above did).
 				if !stalledForCensus {
 					pass++
-					if appendCensusAttestedCommit(&resolution, candidatesBySubject[attestedKey], request.Options.MaxSubjectCandidates, commitBases, commitDigests, searchTruncated, aliasIdentityComplete) && deps.ResolutionTracer != nil {
+					appendedCommit := appendCensusAttestedCommit(&resolution, candidatesBySubject[attestedKey], request.Options.MaxSubjectCandidates, commitBases, commitDigests, searchTruncated, aliasIdentityComplete)
+					if !appendedCommit && deps.ResolutionTracer != nil {
+						deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+							RequestID: request.RequestID, Stage: "decision", Subject: candidatesBySubject[attestedKey].Subject,
+							Outcome: "no_commit", CommitGate: "evidence_census", SearchTruncated: searchTruncated,
+							SearchCandidateLimit: effectiveSearchLimit, PopulationBasis: "none",
+							Pass: pass, Index: 1, Total: 1,
+						})
+					}
+					if appendedCommit && deps.ResolutionTracer != nil {
 						appended := candidatesBySubject[attestedKey]
 						winningMechanism := ""
 						if len(appended.MatchMechanisms) > 0 {
@@ -4243,19 +4252,25 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 // none is of the handle's own kind. A committed scope anchor must not shadow
 // a handle the question names: the census runs for that handle regardless.
 //
-// Only a named-subject (or absent) frame qualifies: in a cohort, grouped or
-// count question a handle is an example or an operand, and committing it would
-// change the population the answer walks from.
+// Only a named-subject (or absent) frame qualifies, and one that states an
+// expected kind must state the handle's kind: in a cohort, grouped or count
+// question, or one about the repository itself, a handle is an example or an
+// operand, and committing it would change what the answer is about.
 func committedScopeAnchorShadowsHandle(question string, committed []contextfabric.SubjectRef, frame *contextfabric.QuestionFrame) bool {
 	if len(committed) == 0 {
-		return false
-	}
-	if frame != nil && frame.SubjectExpression.Kind != contextfabric.SubjectExpressionNamed {
 		return false
 	}
 	bound := BindHandles(question)
 	if len(bound) != 1 || !IsCensusKindRegistered(bound[0].Kind) {
 		return false
+	}
+	if frame != nil {
+		if frame.SubjectExpression.Kind != contextfabric.SubjectExpressionNamed {
+			return false
+		}
+		if named := frame.SubjectExpression.Named; named != nil && named.ExpectedKind != nil && *named.ExpectedKind != bound[0].Kind {
+			return false
+		}
 	}
 	for _, subject := range committed {
 		if subject.Kind == bound[0].Kind || !KindHasAnchorFK(bound[0].Kind, subject.Kind) {
