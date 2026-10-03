@@ -354,3 +354,98 @@ func TestSuppliedInterpretationRootTheCallerCannotReadIsRefusedLikeTheModelPath(
 		t.Fatalf("interpret calls on the supplied path = %d, want 0", interprets)
 	}
 }
+
+// TestSuppliedInterpretationFollowUpTurnIsDecidedLikeTheModelPath runs two
+// turns through the real route on both paths: the first asks, the second
+// sends the offered window receipt back. Each turn is decided the same on
+// both paths, and the supplied path makes no interpret call on either turn.
+func TestSuppliedInterpretationFollowUpTurnIsDecidedLikeTheModelPath(t *testing.T) {
+	supplied, err := genkitruntime.NewSuppliedInterpreter(genkitruntime.SuppliedInterpreterConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract := supplied.Contract()
+	interpreted, err := genkitruntime.ParseInterpretationOutput([]byte(suppliedRouteOutput), contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	modelReceipt := contextfabric.ModelExecutionReceipt{
+		Operation: contextfabric.ModelOperationInterpret, Provider: "test-provider", Model: "test-model", ModelVersion: "model-v1",
+		PromptVersion: contract.PromptVersion, SchemaVersion: contract.ModelOutputVersion, EvaluatorVersion: "eval-v1",
+		StartedAt: at, CompletedAt: at, Attempts: 1, InputDigest: strings.Repeat("a", 64), Outcome: "success",
+	}
+	suppliedField := &contractsv1.ContextFabricSuppliedInterpretation{
+		Output: json.RawMessage(suppliedRouteOutput), ModelOutputVersion: contract.ModelOutputVersion, PromptVersion: contract.PromptVersion,
+	}
+
+	type turn struct {
+		code     int
+		status   contractsv1.ContextFabricInvestigationStatus
+		refusal  contractsv1.ContextFabricRefusalBasis
+		windowed bool
+		offers   int
+		limits   []string
+		source   contractsv1.ContextFabricInterpretationSource
+	}
+	twoTurns := func(t *testing.T, interpreter contextfabric.RuntimeQuestionInterpreter, field *contractsv1.ContextFabricSuppliedInterpretation) [2]turn {
+		t.Helper()
+		var synthesized []contextfabric.InterpretedQuestion
+		app, token := newSuppliedRouteApp(t, interpreter, contextfabric.StoredSubjectAdmitted, &synthesized)
+		send := func(body contractsv1.ContextFabricInvestigationRequest) (turn, contractsv1.ContextFabricInvestigationResult) {
+			encoded, err := json.Marshal(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodPost, ContextFabricInvestigationsPath, bytes.NewReader(encoded))
+			request.Header.Set("Authorization", "Bearer "+token)
+			request.Header.Set("X-ACR-Client-Version", "1.0.0")
+			request.Header.Set("Content-Type", "application/json")
+			recorder := httptest.NewRecorder()
+			app.Handler().ServeHTTP(recorder, request)
+			var result contractsv1.ContextFabricInvestigationResult
+			if err := json.Unmarshal(recorder.Body.Bytes(), &result); err != nil {
+				t.Fatalf("status = %d body=%s: %v", recorder.Code, recorder.Body.String(), err)
+			}
+			offers := 0
+			if result.WindowClarification != nil {
+				offers = len(result.WindowClarification.Options)
+			}
+			return turn{
+				code: recorder.Code, status: result.Status, refusal: result.RefusalBasis, windowed: result.EffectiveEvidenceWindow != nil,
+				offers: offers, limits: result.Limitations, source: result.Versions.InterpretationSource,
+			}, result
+		}
+		first := investigationRequestBody()
+		first.SuppliedInterpretation = field
+		firstTurn, asked := send(first)
+		if firstTurn.code != http.StatusOK || firstTurn.offers == 0 {
+			t.Fatalf("first turn = %#v, want a window clarification with an option to confirm", firstTurn)
+		}
+		second := investigationRequestBody()
+		second.SuppliedInterpretation = field
+		second.PriorWindowReceipts = []contractsv1.ContextFabricBoundSubjectReceipt{{ResultID: asked.ResultID, ReceiptID: asked.WindowClarification.Options[0].ReceiptID}}
+		secondTurn, _ := send(second)
+		return [2]turn{firstTurn, secondTurn}
+	}
+
+	interprets := 0
+	suppliedTurns := twoTurns(t, contextfabric.RuntimeQuestionInterpreter{Runtime: interpretCountingRuntime{interprets: &interprets}, Supplied: supplied}, suppliedField)
+	modelTurns := twoTurns(t, contextfabric.RuntimeQuestionInterpreter{Runtime: scriptedInterpretRuntime{interpreted: interpreted, receipt: modelReceipt}}, nil)
+	if interprets != 0 {
+		t.Fatalf("interpret calls on the supplied path = %d over two turns, want 0", interprets)
+	}
+	for index := range suppliedTurns {
+		got, want := suppliedTurns[index], modelTurns[index]
+		if got.source != contractsv1.ContextFabricInterpretationSourceClient || want.source != contractsv1.ContextFabricInterpretationSourceServer {
+			t.Fatalf("turn %d: interpretation_source = %q (supplied) and %q (model), want client and server", index+1, got.source, want.source)
+		}
+		got.source, want.source = "", ""
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("turn %d is decided differently on the two paths\nsupplied: %#v\nmodel:    %#v", index+1, got, want)
+		}
+	}
+	if suppliedTurns[0].status == suppliedTurns[1].status && suppliedTurns[0].refusal == suppliedTurns[1].refusal {
+		t.Fatalf("both turns read %q/%q: the follow-up turn did not take the receipt path", suppliedTurns[1].status, suppliedTurns[1].refusal)
+	}
+}
