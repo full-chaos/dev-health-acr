@@ -422,7 +422,7 @@ type freshLiveQuery struct {
 
 func (c *freshLiveQuery) Query(ctx context.Context, sql string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
 	phase := "s1"
-	if strings.Contains(sql, "w.status") {
+	if strings.Contains(sql, "w.status") && !strings.Contains(sql, "project_membership_presence") {
 		phase = "status"
 	}
 	if strings.Contains(sql, "w.title") {

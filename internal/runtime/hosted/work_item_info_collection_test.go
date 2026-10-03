@@ -385,7 +385,7 @@ type infoTupleQuery struct {
 func (c *infoTupleQueryClient) Query(_ context.Context, sql string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
 	phase := "s1"
 	rows := [][]any{{c.memberID, "repo-1", "work-1", infoRepository, uint8(1), uint64(1), uint64(1), uint64(0), uint64(0), uint64(0)}}
-	if strings.Contains(sql, "w.status") {
+	if strings.Contains(sql, "w.status") && !strings.Contains(sql, "project_membership_presence") {
 		phase = "status"
 		rows = [][]any{{"work-1", "open", "repo-1"}}
 	}
