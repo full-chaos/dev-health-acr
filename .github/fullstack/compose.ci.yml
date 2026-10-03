@@ -182,6 +182,35 @@ services:
         condition: service_completed_successfully
     networks: [dev-health]
 
+  # One-shot: applies the privilege policy for the roles above, including the api
+  # role's grants on the semantic tables (`dho migrate river --apply-and-check` reads
+  # API_DATABASE_ROLE). The canonical migrate service runs before the roles exist, so
+  # its grants cannot cover the api login; without this step the api answers
+  # "permission denied for table feature_flags".
+  go-api-grants:
+    build:
+      context: ./ops
+      dockerfile: docker/go-worker.Dockerfile
+      target: operator
+    image: ${DEV_HEALTH_GO_OPERATOR_IMAGE:-ghcr.io/full-chaos/dev-health-go-operator:local}
+    restart: "no"
+    command: ["migrate", "river", "--apply-and-check"]
+    environment:
+      DEV_HEALTH_MIGRATION_PG_HOST: postgres
+      DEV_HEALTH_MIGRATION_PG_USER: ${POSTGRES_USER:-devhealth}
+      DEV_HEALTH_MIGRATION_PG_PASSWORD: ${POSTGRES_PASSWORD:-devhealth}
+      DEV_HEALTH_MIGRATION_PG_DB: ${POSTGRES_DB:-devhealth}
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      RIVER_COORDINATOR_DATABASE_PASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}
+      API_DATABASE_ROLE: ${API_DATABASE_ROLE:-devhealth_api}
+    depends_on:
+      go-api-roles:
+        condition: service_completed_successfully
+    networks: [dev-health]
+
   # The Go ops api (`dho api`): public listener :8000 (login, session routes),
   # internal listener :8091 (the acr entitlement route), billing edge :8010.
   # Distroless runtime: no shell or wget, so no container healthcheck;
@@ -239,7 +268,7 @@ services:
         condition: service_healthy
       pgbouncer:
         condition: service_healthy
-      go-api-roles:
+      go-api-grants:
         condition: service_completed_successfully
     networks: [dev-health]
 
