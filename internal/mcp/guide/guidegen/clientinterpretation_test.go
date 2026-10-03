@@ -18,7 +18,7 @@ import (
 var backtickToken = regexp.MustCompile("`([^`]+)`")
 
 // plainWords are English or protocol words the guide quotes that no registry owns.
-var plainWords = []string{"user", "validation", "mismatch", "current", "prompts/get", "role"}
+var plainWords = []string{"user", "validation", "prompts/get", "role"}
 
 func jsonNames(typ reflect.Type) []string {
 	var names []string
@@ -159,6 +159,14 @@ func TestClientInterpretationErrorsMatchThePublishedExamples(t *testing.T) {
 		}
 		if _, ok := doc.Error.Details[row.details]; !ok {
 			t.Errorf("%s: details lack %q", row.file, row.details)
+		}
+		if row.code == CodeContractRefused {
+			nested, _ := doc.Error.Details[row.details].(map[string]any)
+			for _, key := range jsonNames(reflect.TypeOf(contractsv1.ContextFabricInterpretationContractRefusal{})) {
+				if _, ok := nested[key]; !ok {
+					t.Errorf("%s: details.%s lacks %q", row.file, row.details, key)
+				}
+			}
 		}
 		if row.code == CodeInterpretationRejected && !doc.Error.Retryable {
 			t.Errorf("%s: retryable = false; the guide says the response marks it retryable", row.file)
