@@ -2286,7 +2286,7 @@ var (
 var GraphQLQuery = Event{
 	ID: "contextfabric.graphql_query", Msg: "context fabric graphql query", Level: LevelInfo,
 	Multiplicity: MultiplicityZeroOrOnePerRequest, Attribution: []string{"org_id"},
-	BoundedAggregation: "one line per graphql_query request; closed vocabularies, SDL field names, counts and digests only",
+	BoundedAggregation: "one line per graphql_query request; closed vocabularies, SDL field names, counts, digests, the upstream HTTP status and, on an upstream rejection, one GraphQL variable name (a GraphQL name of at most 64 characters, from the request document)",
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "caller_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: operationReadCallerClasses},

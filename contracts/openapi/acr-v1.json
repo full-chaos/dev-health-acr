@@ -2739,7 +2739,7 @@
                 },
                 "graphql_code": {
                   "type": "string",
-                  "description": "The GraphQL error code the data service returned, as a closed token; other for any code not listed.",
+                  "description": "The GraphQL error code the data service returned, as a closed token; other for any code not listed. graphql_validation_failed and graphql_parse_failed with HTTP 422 mean the request variables or document were rejected (call refused, code invalid_request).",
                   "enum": [
                     "graphql_validation_failed",
                     "graphql_parse_failed",

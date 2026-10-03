@@ -3120,7 +3120,7 @@
     "attribution": [
       "org_id"
     ],
-    "bounded_aggregation": "one line per graphql_query request; closed vocabularies, SDL field names, counts and digests only",
+    "bounded_aggregation": "one line per graphql_query request; closed vocabularies, SDL field names, counts, digests, the upstream HTTP status and, on an upstream rejection, one GraphQL variable name (a GraphQL name of at most 64 characters, from the request document)",
     "fields": [
       {
         "key": "org_id",
