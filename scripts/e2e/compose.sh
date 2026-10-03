@@ -367,7 +367,7 @@ assert_safe_render() {
   fi
   jq -e '.services["acr-migrate"].environment | keys == ["ACR_ENVIRONMENT","ACR_POSTGRES_CONNECTION_KIND","ACR_POSTGRES_MIGRATION_DSN_FILE"]' "$STATE/rendered.json" >/dev/null \
     || die 'ACR migration environment inherited local-dev configuration'
-  jq -e '(.services.api.environment.JWT_SECRET_KEY // "") | length >= 32' "$STATE/rendered.json" >/dev/null \
+  jq -e '(.services["go-api"].environment.JWT_SECRET_KEY // "") | length >= 32' "$STATE/rendered.json" >/dev/null \
     || die 'Ops API is missing its per-run JWT secret'
   jq -e '.services["acr-api"].environment as $environment | ($environment | has("ACR_POSTGRES_DSN") | not) and ($environment | has("ACR_CLICKHOUSE_DSN") | not) and ($environment | has("ACR_ALLOW_INSECURE_POSTGRES") | not)' "$STATE/rendered.json" >/dev/null \
     || die 'ACR API environment inherited direct or insecure configuration'
