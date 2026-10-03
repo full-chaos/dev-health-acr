@@ -125,7 +125,8 @@ func MCPHTTPMethodVocabulary() []string {
 func MCPHTTPToolVocabulary() []string {
 	return []string{
 		MCPHTTPValueNone, "context_for_task", "source_evidence", "investigate_question",
-		"investigation_result", "read_facts", "read_relationships", "record_episode", MCPHTTPValueOther,
+		"investigate_with_interpretation", "investigation_result", "read_facts", "read_relationships",
+		"record_episode", MCPHTTPValueOther,
 	}
 }
 

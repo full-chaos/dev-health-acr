@@ -8424,6 +8424,7 @@
           "context_for_task",
           "source_evidence",
           "investigate_question",
+          "investigate_with_interpretation",
           "investigation_result",
           "read_facts",
           "read_relationships",
