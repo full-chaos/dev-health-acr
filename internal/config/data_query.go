@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -12,11 +13,17 @@ import (
 const (
 	envDataQueryURL     = "ACR_DATA_QUERY_URL"
 	envDataQueryTimeout = "ACR_DATA_QUERY_TIMEOUT"
+	// envDataQueryPath is the PATH run_operation posts to under ACR_DATA_QUERY_URL. Unset = "/query" (the route every deployment used until the
+	// class-gated route existed); a deployment switches by value (ops' dedicated internal route "/query/run-operation"), and rolls back by value.
+	envDataQueryPath = "ACR_DATA_QUERY_PATH"
 	// envDataGraphQLURL is GWC's MCP listener base URL for graphql_query
 	// (CHAOS-7085: its own port, POST <url>/query; prod Service
 	// http://dev-health-ops-query-api-mcp.dev-health.svc:8092). Empty =
 	// graphql_query off. The per-call deadline is ACR_DATA_QUERY_TIMEOUT.
 	envDataGraphQLURL = "ACR_DATA_GRAPHQL_URL"
+
+	// DefaultDataQueryPath is the run_operation path when ACR_DATA_QUERY_PATH is unset.
+	DefaultDataQueryPath = "/query"
 
 	defaultDataQueryTimeout = 30 * time.Second
 	minDataQueryTimeout     = time.Second
@@ -26,6 +33,15 @@ const (
 // DataQueryURL returns the internal ops query service base URL
 // (ACR_DATA_QUERY_URL). Empty means the feature is off.
 func (c Config) DataQueryURL() string { return c.dataQueryURL }
+
+// DataQueryPath returns the path run_operation posts to under DataQueryURL (ACR_DATA_QUERY_PATH, default "/query"). It never carries a query or a
+// fragment; load validated it.
+func (c Config) DataQueryPath() string {
+	if c.dataQueryPath == "" {
+		return DefaultDataQueryPath
+	}
+	return c.dataQueryPath
+}
 
 // DataQueryTimeout returns the per-call deadline (ACR_DATA_QUERY_TIMEOUT,
 // default 30s, validated within [1s, 55s] at load).
@@ -64,6 +80,42 @@ func dataQueryURLValue(lookup lookupEnv) (string, error) {
 		return "", fmt.Errorf("%s: %w", envDataQueryURL, err)
 	}
 	return raw, nil
+}
+
+// dataQueryPathValue reads ACR_DATA_QUERY_PATH: unset is the default; a value that is SET must be an absolute path made of plain segments (letters,
+// digits, . _ ~ -), with no empty, "." or ".." segment, no query, no fragment and no host. An empty, whitespace-only or malformed value is refused at
+// startup (it never silently falls back to the default). The value is not echoed.
+func dataQueryPathValue(lookup lookupEnv) (string, error) {
+	if _, set := lookup(envDataQueryPath); !set {
+		return "", nil
+	}
+	raw := stringValue(lookup, envDataQueryPath, "")
+	if err := ValidateDataQueryPath(raw); err != nil {
+		return "", fmt.Errorf("%s: %w", envDataQueryPath, err)
+	}
+	return raw, nil
+}
+
+// ValidateDataQueryPath is the rule of ACR_DATA_QUERY_PATH, shared with the client builder.
+func ValidateDataQueryPath(raw string) error {
+	if raw == "" {
+		return errors.New("must not be empty (leave it unset for the default)")
+	}
+	if len(raw) > 200 || raw[0] != '/' {
+		return errors.New("must be an absolute path starting with / (at most 200 characters)")
+	}
+	for _, segment := range strings.Split(raw[1:], "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return errors.New("must not contain an empty, . or .. segment")
+		}
+		for i := 0; i < len(segment); i++ {
+			c := segment[i]
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == '~' || c == '-') {
+				return errors.New("must contain only letters, digits and . _ ~ - in its segments")
+			}
+		}
+	}
+	return nil
 }
 
 func validateDataQueryURL(raw string) error {

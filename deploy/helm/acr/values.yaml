@@ -44,6 +44,9 @@ config:
   # Internal ops query service base URL (ACR_DATA_QUERY_URL); empty = feature
   # off. Per-call deadline (ACR_DATA_QUERY_TIMEOUT) must be within 1s..55s.
   dataQueryUrl: ""
+  # Path run_operation posts to under dataQueryUrl (ACR_DATA_QUERY_PATH); empty = unset = "/query". Ops' dedicated, class-gated internal route is
+  # "/query/run-operation": switch by this value, roll back by emptying it. (Order: the ops route is deployed first, then this value changes.)
+  dataQueryPath: ""
   dataQueryTimeout: ""
   # GWC's MCP listener base URL for graphql_query (ACR_DATA_GRAPHQL_URL,
   # CHAOS-7075/7085: its own port, POST <url>/query; prod Service

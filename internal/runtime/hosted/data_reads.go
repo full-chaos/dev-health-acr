@@ -54,7 +54,7 @@ var dataReadsCatalogue = directread.DefaultCatalogue
 // the query timeout and, when composed, the grant listing.
 var dataReadsGraphQLPolicy = directread.DefaultGraphQLPolicy
 
-func buildDataReads(queryURL, graphqlURL string, queryTimeout time.Duration, investigator contextfabric.Investigator, gate *directread.SubjectGate, logger *slog.Logger) (dataReads, error) {
+func buildDataReads(queryURL, queryPath, graphqlURL string, queryTimeout time.Duration, investigator contextfabric.Investigator, gate *directread.SubjectGate, logger *slog.Logger) (dataReads, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -96,7 +96,7 @@ func buildDataReads(queryURL, graphqlURL string, queryTimeout time.Duration, inv
 		logger.Info("context fabric direct data composition", "decision", "operations_off", "reason", "data_query_not_configured")
 		return out, nil
 	}
-	client, err := directread.NewHTTPQueryClient(queryURL, queryTimeout)
+	client, err := directread.NewHTTPQueryClientWithPath(queryURL, queryTimeout, queryPath)
 	if err != nil {
 		return dataReads{}, fmt.Errorf("initialize data query client: %w", err)
 	}
