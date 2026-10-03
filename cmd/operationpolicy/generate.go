@@ -455,6 +455,7 @@ type outputNode struct {
 	Type     string
 	Leaf     directread.OutputLeaf
 	Segments []string
+	Beyond   bool
 }
 
 // walkOutputs lists every response leaf path of a validated document, from
@@ -586,7 +587,7 @@ func additionalOutputNodes(schema *ast.Schema, opDef *ast.OperationDefinition, p
 		if def.Type.Name() == "JSON" {
 			leaf = directread.LeafJSON
 		}
-		out = append(out, outputNode{Path: path, Type: def.Type.String(), Leaf: leaf, Segments: segs})
+		out = append(out, outputNode{Path: path, Type: def.Type.String(), Leaf: leaf, Segments: segs, Beyond: true})
 	}
 	return out, nil
 }
@@ -632,7 +633,7 @@ func buildOutputs(schema *ast.Schema, opDef *ast.OperationDefinition, decl opera
 			failing = append(failing, n.Path)
 			continue
 		}
-		outputs = append(outputs, directread.OutputPath{Path: n.Path, Type: n.Type, Leaf: n.Leaf, Exception: exception})
+		outputs = append(outputs, directread.OutputPath{Path: n.Path, Type: n.Type, Leaf: n.Leaf, Exception: exception, BeyondDocument: n.Beyond})
 	}
 	if len(failing) > 0 {
 		return nil, nil, fmt.Errorf("%w: %s", errPersonOutput, strings.Join(failing, ", "))

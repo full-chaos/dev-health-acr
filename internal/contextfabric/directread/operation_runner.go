@@ -532,7 +532,7 @@ func (x *run) execute(ctx context.Context, class CallerClass, req OperationReque
 	}
 
 	// 9b: the output allowlist.
-	filtered, err := FilterResponse(op, data)
+	filtered, err := FilterResponse(op.documentOutputsOnly(), data)
 	if err != nil {
 		return x.upstream(CallUpstreamError, UpstreamDecode), nil
 	}

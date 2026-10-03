@@ -1,6 +1,8 @@
 package directread_test
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
@@ -67,4 +69,22 @@ func containsText(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+func TestRunOperationDoesNotPassAnUnrequestedCompletionDistribution(t *testing.T) {
+	answer := `{"data":{"capacityForecast":{"forecastId":"f1","teamId":"team:t1","completionDistribution":{"days":[{"value":3,"count":2}],"items":null},"__typename":"CapacityForecast"}}}`
+	h := newOpHarness(t, func(opRecorded) (int, string) { return 200, answer }, opHarnessOptions{})
+	cat, err := directread.DefaultCatalogue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, _ := cat.Lookup("capacityForecast")
+	resp := h.run(t, opUnrestricted(opOrgA), "capacityForecast", opMinimalVariables(t, op))
+	raw, _ := json.Marshal(resp)
+	if resp.Call != directread.CallServed {
+		t.Fatalf("want served, got %s", raw)
+	}
+	if strings.Contains(string(raw), "completionDistribution") {
+		t.Fatalf("run_operation passed a field its registered document does not select: %s", raw)
+	}
 }
