@@ -59,7 +59,7 @@ func TestExternalIssueKeyRelationshipsAreIgnoredWithoutQuarantine(t *testing.T) 
 			}
 		}
 	}
-	ignored := 0
+	ignored, ignoredLines := 0, 0
 	for _, entry := range lines {
 		msg, _ := entry["msg"].(string)
 		if strings.Contains(msg, quarantineLine) {
@@ -72,8 +72,12 @@ func TestExternalIssueKeyRelationshipsAreIgnoredWithoutQuarantine(t *testing.T) 
 			if entry["ignored_relationship_type"] != "external_issue_key" {
 				t.Fatalf("ignored type = %v", entry["ignored_relationship_type"])
 			}
+			ignoredLines++
 			ignored += int(entry["ignored_count"].(float64))
 		}
+	}
+	if ignoredLines != 1 {
+		t.Fatalf("ignored lines = %d, want one per run", ignoredLines)
 	}
 	if ignored != len(rows) {
 		t.Fatalf("ignored count = %d, want %d", ignored, len(rows))

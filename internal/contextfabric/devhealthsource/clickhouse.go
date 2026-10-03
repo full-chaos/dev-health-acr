@@ -150,6 +150,8 @@ type ClickHouseProjectionSource struct {
 	client contextpacket.ClickHouseQueryClient
 	now    func() time.Time
 	logger *slog.Logger
+	// ignored counts rows skipped by a documented ignore across a pass.
+	ignored ignoredLedger
 
 	// overlap and window (CHAOS-7263): the trailing late-arrival re-read.
 	// windowPages is the pages-per-call bound of the window walk; zero means
@@ -350,6 +352,7 @@ func (s *ClickHouseProjectionSource) PeekProjectionBatch(ctx context.Context, ch
 	plan.logger = nil
 	plan.observe = nil
 	plan.observeQuarantine = nil
+	plan.ignored = nil
 	plan.observeNormalization = nil
 	plan.recordConsumed = nil
 	plan.dropConsumed = nil
@@ -394,6 +397,7 @@ func (s *ClickHouseProjectionSource) plan(fromCursor string) sourcePlan {
 		windowPagesPerCall:   s.windowPages,
 		observe:              s.logOrphanedWorkItems,
 		observeQuarantine:    quarantineLogger(s.logger, SourceName),
+		ignored:              &s.ignored,
 		observeNormalization: normalizationLogger(s.logger, SourceName),
 		recordConsumed:       s.recordConsumed(fromCursor),
 		dropConsumed:         s.forgetConsumed,

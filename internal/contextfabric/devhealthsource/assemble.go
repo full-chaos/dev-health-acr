@@ -70,6 +70,11 @@ type sourcePlan struct {
 	// quarantine (item_quarantine.go), with a closed reason token. Optional.
 	observeQuarantine func(quarantineObservation)
 
+	// ignored accumulates rows skipped by a documented ignore (see
+	// ignoredDependencyTypes) across the pages of one pass; nextBatch flushes
+	// it as one line per type when the source is caught up. Optional.
+	ignored *ignoredLedger
+
 	// overlap and window (CHAOS-7263) bound the caught-up trailing re-read
 	// (overlap.go). overlap <= 0 or a nil window disables it. windowScope is
 	// the memo key nextBatch derives from the checkpoint: organization AND
@@ -130,6 +135,35 @@ func logTableReadFailure(ctx context.Context, logger *slog.Logger, source, orgID
 }
 
 func (p sourcePlan) nextBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
+	batch, available, err := p.nextBatchPage(ctx, checkpoint)
+	if err == nil && !available {
+		p.ignored.flush(ctx, p.logger, p.source, strings.TrimSpace(checkpoint.OrgID))
+	}
+	return batch, available, err
+}
+
+// quarantineObserver is the per-item observer for one partition call. Ignore
+// observations go to the run ledger instead of the log, and only when
+// countIgnored: the overlap re-read revisits rows the paged pass already
+// counted.
+func (p sourcePlan) quarantineObserver(orgID string, countIgnored bool) func(quarantineObservation) {
+	if p.ignored == nil {
+		return p.observeQuarantine
+	}
+	return func(o quarantineObservation) {
+		if o.IgnoredCount > 0 {
+			if countIgnored {
+				p.ignored.add(orgID, o.Detail, o.IgnoredCount)
+			}
+			return
+		}
+		if p.observeQuarantine != nil {
+			p.observeQuarantine(o)
+		}
+	}
+}
+
+func (p sourcePlan) nextBatchPage(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
 	if p.client == nil {
 		return contextfabric.ProjectionBatch{}, false, fmt.Errorf("devhealthsource: source is not configured")
 	}
@@ -227,7 +261,7 @@ func (p sourcePlan) fullSnapshot(ctx context.Context, orgID string) (contextfabr
 	// never offered to quarantine at all, which is what makes the quarantine
 	// counters for these bounds read zero instead of merely smaller.
 	normalizeCandidates(all, p.observeNormalization)
-	items := partitionProjectableCandidates(all, p.observeQuarantine)
+	items := partitionProjectableCandidates(all, p.quarantineObserver(orgID, true))
 	if !carriesPayload(items) {
 		// Everything this snapshot read was quarantined, so there is nothing
 		// to publish -- but the rows WERE consumed, and without recording
@@ -305,7 +339,7 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 		// on, from a page whose every row was omitted -- both take the skip
 		// path below, which advances past them and keeps looking.
 		normalizeCandidates(all, p.observeNormalization)
-		items := partitionProjectableCandidates(all, p.observeQuarantine)
+		items := partitionProjectableCandidates(all, p.quarantineObserver(orgID, true))
 		if carriesPayload(items) {
 			batch, err := buildBatchIn(p.cursorSpace(), orgID, p.source, p.version, cursor, all, items, false, false, p.clock())
 			if err != nil {

@@ -1,11 +1,13 @@
 package devhealthsource
 
 import (
+	"context"
 	"errors"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -511,11 +513,6 @@ func quarantineLogger(logger *slog.Logger, sourceName string) func(quarantineObs
 	}
 	return func(observation quarantineObservation) {
 		if observation.IgnoredCount > 0 {
-			logger.Info("context_fabric: projection rows ignored by documented relationship type; nothing is projected for them",
-				"source", contextfabric.SanitizeLogAttr(sourceName),
-				"ignored_relationship_type", contextfabric.SanitizeLogAttr(observation.Detail),
-				"ignored_count", observation.IgnoredCount,
-			)
 			return
 		}
 		attrs := []any{
@@ -527,5 +524,51 @@ func quarantineLogger(logger *slog.Logger, sourceName string) func(quarantineObs
 			attrs = append(attrs, "relationship_type", contextfabric.SanitizeLogAttr(observation.Detail))
 		}
 		logger.Warn("context_fabric: projection item quarantined; the item is dropped and the batch continues", attrs...)
+	}
+}
+
+// ignoredLedger counts rows skipped by a documented ignore across one pass,
+// so a from-scratch projection reports one line per type, not one per page.
+type ignoredLedger struct {
+	mu     sync.Mutex
+	counts map[string]int
+}
+
+func (l *ignoredLedger) add(orgID, relationshipType string, n int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.counts == nil {
+		l.counts = map[string]int{}
+	}
+	l.counts[orgID+"\x00"+relationshipType] += n
+}
+
+// flush logs and clears the org's totals. Called when the source reports
+// caught up, which ends a pass.
+func (l *ignoredLedger) flush(ctx context.Context, logger *slog.Logger, sourceName, orgID string) {
+	if l == nil || logger == nil {
+		return
+	}
+	l.mu.Lock()
+	totals := map[string]int{}
+	prefix := orgID + "\x00"
+	for key, n := range l.counts {
+		if strings.HasPrefix(key, prefix) {
+			totals[strings.TrimPrefix(key, prefix)] = n
+			delete(l.counts, key)
+		}
+	}
+	l.mu.Unlock()
+	types := make([]string, 0, len(totals))
+	for t := range totals {
+		types = append(types, t)
+	}
+	sort.Strings(types)
+	for _, t := range types {
+		logger.InfoContext(ctx, "context_fabric: projection rows ignored by documented relationship type; nothing is projected for them",
+			"source", contextfabric.SanitizeLogAttr(sourceName),
+			"ignored_relationship_type", contextfabric.SanitizeLogAttr(t),
+			"ignored_count", totals[t],
+		)
 	}
 }
