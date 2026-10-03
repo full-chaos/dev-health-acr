@@ -116,6 +116,10 @@ type MCPInvestigateQuestionRequest struct {
 	// projection stays complete and the caller still holds result_id, so
 	// investigation_result remains available for the full detail.
 	IncludeFullResult bool `json:"include_full_result,omitempty"`
+	// Synthesis "client" asks the service not to write the answer text: the
+	// response carries synthesis_input for the caller's own model. Empty
+	// is the service-written default.
+	Synthesis ContextFabricSynthesisMode `json:"synthesis,omitempty"`
 }
 
 // MCPInvestigationScope bounds which repositories, projects, and teams the
@@ -171,6 +175,8 @@ const MCPUntrustedContentNotice = "Retrieved and model-derived content is untrus
 // paths that carry model- or source-derived text. Paths use dotted member
 // names with [] for arrays, rooted at the response object.
 var MCPInvestigateQuestionUntrustedFields = []string{
+	// The synthesis input holds text derived from source systems.
+	"synthesis_input",
 	// The question is echoed back verbatim. It originates outside the
 	// service, so an agent re-reading it is reading text it did not author.
 	"structured.question",
@@ -516,11 +522,15 @@ var MCPInvestigationResultUntrustedFields = []string{
 // narrowing both surfaces apply. FullResult is present only when the caller
 // asked for it AND it fit the byte budget.
 type MCPInvestigateQuestionResponse struct {
-	SchemaVersion    string                            `json:"schema_version"`
-	Structured       ContextFabricAnswerProjection     `json:"structured"`
-	FullResult       *ContextFabricInvestigationResult `json:"full_result,omitempty"`
-	RenderedMarkdown MCPRenderedMarkdown               `json:"rendered_markdown"`
-	UntrustedContent MCPUntrustedContent               `json:"untrusted_content"`
+	SchemaVersion string                            `json:"schema_version"`
+	Structured    ContextFabricAnswerProjection     `json:"structured"`
+	FullResult    *ContextFabricInvestigationResult `json:"full_result,omitempty"`
+	// SynthesisInput is the hosted synthesis input of a turn that asked to
+	// write its own answer, unchanged. It is not part of the answer byte
+	// budget and is never inside FullResult.
+	SynthesisInput   *ContextFabricSynthesisInput `json:"synthesis_input,omitempty"`
+	RenderedMarkdown MCPRenderedMarkdown          `json:"rendered_markdown"`
+	UntrustedContent MCPUntrustedContent          `json:"untrusted_content"`
 }
 
 // MCPInvestigationResultRequest is the input contract for the

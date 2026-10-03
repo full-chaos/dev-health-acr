@@ -60,6 +60,24 @@ func BackfillStoredInterpretationProvenance(versions *VersionSet) bool {
 	return true
 }
 
+// BackfillStoredSynthesisSource names the writer of the answer of a stored
+// result: the reuse return and the read by id use this one rule. A row that
+// names no source and records a real synthesis version was stored before the
+// field existed, and the service's own model wrote it. A row whose synthesis
+// version is empty, the unwired placeholder or not_synthesized had no model
+// answer and stays without a source. It reports whether it named a source.
+func BackfillStoredSynthesisSource(versions *VersionSet) bool {
+	switch versions.SynthesisVersion {
+	case "", unwiredVersion, SynthesisVersionNotSynthesized:
+		return false
+	}
+	if versions.SynthesisSource != "" {
+		return false
+	}
+	versions.SynthesisSource = SynthesisSourceServer
+	return true
+}
+
 type interpretationStampKey struct{}
 
 // withInterpretationStamp always writes, so a zero stamp clears one a reused

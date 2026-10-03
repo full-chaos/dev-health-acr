@@ -59,6 +59,9 @@ var auditedLimitationWrites = map[string]limitationAudit{
 	"composeSynthesisResult#cloneSlice#0": {
 		sameShapedTotal: 1,
 		reason:          "an INTERMEDIATE, not a list that reaches a consumer: this is the model's own draft list entering the synthesized result, and Investigate then passes result.Limitations through appendTemporalLimitations UNCONDITIONALLY -- it is called on every axis, current included, and appendBoundedLimitations normalizes an already-over-cap input -- before Validate runs",
+	}, "clientSynthesisDraft#make#0": {
+		sameShapedTotal: 1,
+		reason:          "an EMPTY seed, not an addition: the draft of a turn the caller writes carries no limitation of its own, and it enters composeSynthesisResult like every other draft, so Investigate's bounded appenders add every disclosure after it",
 	}, "degradedSynthesisDraft#make#0": {
 		sameShapedTotal: 1,
 		reason:          "an EMPTY seed, not an addition: the draft a failed model call is served with carries no limitation of its own, and it enters composeSynthesisResult like every other draft, so Investigate's bounded appenders add every disclosure after it",

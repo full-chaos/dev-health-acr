@@ -39,10 +39,10 @@ func staticResourceMeta(text, promptVersion, serviceVersion string) mcpsdk.Meta 
 // own credential.
 func registerInterpretResources(server *mcpsdk.Server, cfg *ProcessConfig, caller *CallerContext, serviceVersion string) {
 	if hostedToolEnabled(caller, toolInvestigateQuestion) {
-		addStaticResource(server, cfg, caller, toolInvestigateQuestion, uriInterpretationOutput, "interpretation-output", "Interpretation output schema",
+		addStaticResource(server, cfg, caller, []string{toolInvestigateQuestion}, uriInterpretationOutput, "interpretation-output", "Interpretation output schema",
 			"JSON schema of the object the interpretation prompt returns. Validate your own interpretation against it. Version "+interpretprompt.OutputVersion+".",
 			"application/schema+json", interpretprompt.OutputSchema(), interpretprompt.PromptVersion, serviceVersion)
-		addStaticResource(server, cfg, caller, toolInvestigateQuestion, uriFactKinds, "guide-fact-kinds", "Fact-kind glossary",
+		addStaticResource(server, cfg, caller, []string{toolInvestigateQuestion}, uriFactKinds, "guide-fact-kinds", "Fact-kind glossary",
 			"What each fact kind holds, which subject kinds it serves, and what it is not; the same text the interpretation prompt states.",
 			guideMIME, interpretprompt.FactKindsGuide(), interpretprompt.PromptVersion, serviceVersion)
 	}
@@ -81,14 +81,14 @@ func registerInterpretResources(server *mcpsdk.Server, cfg *ProcessConfig, calle
 
 const guideMIME = "text/markdown"
 
-func addStaticResource(server *mcpsdk.Server, cfg *ProcessConfig, caller *CallerContext, tool, uri, name, title, description, mime, text, promptVersion, serviceVersion string) {
+func addStaticResource(server *mcpsdk.Server, cfg *ProcessConfig, caller *CallerContext, tools []string, uri, name, title, description, mime, text, promptVersion, serviceVersion string) {
 	meta := staticResourceMeta(text, promptVersion, serviceVersion)
 	server.AddResource(&mcpsdk.Resource{
 		URI: uri, Name: name, Title: title, Description: description, MIMEType: mime,
 		Annotations: &mcpsdk.Annotations{Audience: []mcpsdk.Role{"assistant"}},
 		Meta:        meta,
 	}, func(ctx context.Context, _ *mcpsdk.ReadResourceRequest) (*mcpsdk.ReadResourceResult, error) {
-		if ok, reason := liveToolEnabled(ctx, caller, tool); !ok {
+		if ok, reason := liveToolEnabled(ctx, caller, tools...); !ok {
 			logSurfaceRefusal(ctx, cfg, "resource", uri, reason)
 			return nil, mcpsdk.ResourceNotFoundError(uri)
 		}

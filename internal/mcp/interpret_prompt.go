@@ -102,8 +102,9 @@ func interpretPromptResult(question, serviceVersion string) (*mcpsdk.GetPromptRe
 // revocation after the server was built (a long-lived STDIO session) takes
 // effect on the next read. It fails closed. The returned reason is a closed
 // vocabulary ("ok", "no_client", "capability_check_failed", "tool_revoked")
-// so an operator can tell an outage from a revocation.
-func liveToolEnabled(ctx context.Context, caller *CallerContext, tool string) (bool, string) {
+// so an operator can tell an outage from a revocation. With several tools it
+// passes when any one is enabled, from one capabilities read.
+func liveToolEnabled(ctx context.Context, caller *CallerContext, tools ...string) (bool, string) {
 	client := caller.Client()
 	if client == nil {
 		return false, "no_client"
@@ -112,10 +113,12 @@ func liveToolEnabled(ctx context.Context, caller *CallerContext, tool string) (b
 	if err != nil {
 		return false, "capability_check_failed"
 	}
-	if !slices.Contains(caps.EnabledTools, tool) {
-		return false, "tool_revoked"
+	for _, tool := range tools {
+		if slices.Contains(caps.EnabledTools, tool) {
+			return true, "ok"
+		}
 	}
-	return true, "ok"
+	return false, "tool_revoked"
 }
 
 func logSurfaceRefusal(ctx context.Context, cfg *ProcessConfig, surface, name, reason string) {

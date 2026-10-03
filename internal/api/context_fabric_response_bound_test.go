@@ -418,11 +418,12 @@ func TestContextFabricInvestigationResultRouteRowsBearingResultFitsProductionRes
 // validContextFabricInvestigationResult() fixture, so this file's
 // Rows-bearing fixtures can be stored directly.
 // storedNamingItsInterpreter is result as the service stores an answer it
-// interpreted. The read by id serves such a row with its versions unchanged,
-// so the served document has the size of the stored one.
+// interpreted and wrote. The read by id serves such a row with its versions
+// unchanged, so the served document has the size of the stored one.
 func storedNamingItsInterpreter(result contractsv1.ContextFabricInvestigationResult) contractsv1.ContextFabricInvestigationResult {
 	result.Versions.InterpretationSource = contractsv1.ContextFabricInterpretationSourceServer
 	result.Versions.InterpretationModelIdentity = "test-provider/interpret-model"
+	result.Versions.SynthesisSource = contractsv1.ContextFabricSynthesisSourceServer
 	return result
 }
 

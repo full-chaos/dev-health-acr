@@ -58,6 +58,9 @@ func TestForwardedClientIsSentOnEveryClientCall(t *testing.T) {
 		"InvestigateWithRequestID": func() {
 			_, _, _ = client.InvestigateWithRequestID(ctx, investigationRequest)
 		},
+		"InvestigateWithSynthesisInput": func() {
+			_, _, _ = client.InvestigateWithSynthesisInput(ctx, investigationRequest)
+		},
 		"InvestigationResult":     func() { _, _ = client.InvestigationResult(ctx, "res_00001") },
 		"ReadDirectFacts":         func() { _, _ = client.ReadDirectFacts(ctx, raw) },
 		"ReadDirectRelationships": func() { _, _ = client.ReadDirectRelationships(ctx, raw) },

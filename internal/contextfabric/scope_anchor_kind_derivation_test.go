@@ -61,7 +61,7 @@ func runDeploymentCohortWithAnchor(t *testing.T, declared SubjectKind, committed
 }
 
 func TestEmptyDeclaredAnchorKindIsDerivedFromTheOneCommittedSubject(t *testing.T) {
-	for _, kind := range []SubjectKind{SubjectRepository, SubjectTeam} {
+	for _, kind := range []SubjectKind{SubjectRepository, SubjectTeam, SubjectProject} {
 		run := runDeploymentCohortWithAnchor(t, "", SubjectRef{Kind: kind, CanonicalID: "anchor-1", Label: "Anchor"})
 		if run.discoverCalls != 1 {
 			t.Fatalf("%s: discover calls = %d, want 1", kind, run.discoverCalls)
@@ -88,7 +88,7 @@ func TestEmptyDeclaredAnchorKindWithSeveralCommittedSubjectsIsRefused(t *testing
 }
 
 func TestEmptyDeclaredAnchorKindWithAnUnservableCommittedKindIsRefused(t *testing.T) {
-	run := runDeploymentCohortWithAnchor(t, "", SubjectRef{Kind: SubjectProject, CanonicalID: "anchor-1", Label: "A"})
+	run := runDeploymentCohortWithAnchor(t, "", SubjectRef{Kind: SubjectIncident, CanonicalID: "anchor-1", Label: "A"})
 	if run.discoverCalls != 0 || run.refusalBasis != contractsv1.ContextFabricRefusalBasisMemberKindUnservable {
 		t.Fatalf("discover=%d refusal=%q, want 0 and member_kind_unservable", run.discoverCalls, run.refusalBasis)
 	}

@@ -882,10 +882,14 @@ type ContextFabricInvestigationRequest struct {
 	// supplied output is validated as a model output is, and resolution,
 	// authorization, retrieval and answer assembly run unchanged.
 	SuppliedInterpretation *ContextFabricSuppliedInterpretation `json:"supplied_interpretation,omitempty"`
-	RequestedScope         ContextFabricRequestedScope          `json:"requested_scope,omitempty"`
-	TimeContext            ContextFabricTimeContext             `json:"time_context"`
-	Options                ContextFabricInvestigationOptions    `json:"options"`
-	Consumer               ContextFabricConsumerInfo            `json:"consumer"`
+	// SynthesisMode "client" asks the service to skip its own synthesis call
+	// and return the synthesis input for the caller's model to write the
+	// answer. Absent or "server" is the service's own synthesis.
+	SynthesisMode  ContextFabricSynthesisMode        `json:"synthesis_mode,omitempty"`
+	RequestedScope ContextFabricRequestedScope       `json:"requested_scope,omitempty"`
+	TimeContext    ContextFabricTimeContext          `json:"time_context"`
+	Options        ContextFabricInvestigationOptions `json:"options"`
+	Consumer       ContextFabricConsumerInfo         `json:"consumer"`
 }
 
 // ContextFabricExpectedKindsMaxCount bounds ExpectedKinds -- the closed
@@ -1776,6 +1780,10 @@ type ContextFabricVersionSet struct {
 	// "unwired" placeholder of a turn that ended before interpretation.
 	InterpretationSource        ContextFabricInterpretationSource `json:"interpretation_source,omitempty"`
 	InterpretationModelIdentity string                            `json:"interpretation_model_identity,omitempty"`
+	// SynthesisSource names who wrote the answer of this result: the
+	// service's own model ("server") or the caller's ("client"). Absent when
+	// no synthesis step ran on the turn.
+	SynthesisSource ContextFabricSynthesisSource `json:"synthesis_source,omitempty"`
 }
 
 type ContextFabricInterpretedQuestion struct {

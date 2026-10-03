@@ -2373,8 +2373,16 @@ A kind may also be servable ONLY as the members of a named anchor
 (`scopedOnlyCohortKinds`, today `deployment`): `CohortMemberKindFor` admits it
 for `children_of_scope` and refuses it for `discovered_kind`, `grouped_members`
 and a counted `organization_scope`. After anchor resolution the engine refuses
-a deployment cohort unless exactly one repository is committed and the
-interpretation declared no other anchor kind; the cohort then asks for the
+a deployment cohort unless exactly one repository, team or project is committed
+and the interpretation declared no other anchor kind. A repository reaches its
+deployments in one hop and a team in two (through the repository's
+`OWNED_BY_TEAM` edge); a project has no repository edge, so the adapter runs a
+dedicated bounded read instead of a wider pool radius: project
+`<-BELONGS_TO_PROJECT-` issue `-RELATES_TO-` pull-request work item
+(`pr`/`merge_request`) `-BELONGS_TO_REPOSITORY->` repository
+`<-BELONGS_TO_REPOSITORY-` deployment (`falkorgraph/project_deployment_walk.go`).
+A project none of whose issues links a pull request is the named
+`graph_project_deployments_unlinked` limitation, never an empty cohort. The cohort then asks for the
 per-deployment facts (`cohortFactRequirements`). The deployments requirement
 applies to every investigation subject, so the committed anchor repository's
 own deployments rollup is read beside them; a deployment and its repository

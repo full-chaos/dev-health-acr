@@ -138,6 +138,14 @@
         "system_sha256"
       ]
     },
+    "synthesis_mode": {
+      "type": "string",
+      "enum": [
+        "server",
+        "client"
+      ],
+      "description": "Who writes the answer. Absent or server: the service's own model writes it. client: the service runs everything but its synthesis call and returns, beside the stored result, the synthesis input for the caller's model to write the answer from. Nothing the caller writes is sent back or stored."
+    },
     "requested_scope": {
       "$ref": "context_fabric_common.v1.schema.json#/$defs/RequestedScope"
     },

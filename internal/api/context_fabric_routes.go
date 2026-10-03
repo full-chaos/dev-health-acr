@@ -76,7 +76,8 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
 			return
 		}
-		result, err := investigateRecovered(r.Context(), investigator, principal, request)
+		investigateCtx, collectedSynthesisInput := contextfabric.WithSynthesisInputCollector(r.Context())
+		result, err := investigateRecovered(investigateCtx, investigator, principal, request)
 		if err != nil {
 			a.writeContextFabricError(w, r, err)
 			return
@@ -158,7 +159,26 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			})
 			return
 		}
-		a.logContextFabricResponseBudgetMeasured(r, measuredBytes, maximumBytes, estimatedTokens, itemCounts)
+		synthesisInputBytes := 0
+		if bundle := collectedSynthesisInput(); bundle != nil {
+			// The synthesis input has its own bound, so it is not part of the
+			// measure above.
+			var envelopeBytes int64
+			encoded, envelopeBytes, sizeErr = marshalContextFabricResponse(contractsv1.ContextFabricInvestigationResponse{ContextFabricInvestigationResult: result, SynthesisInput: bundle})
+			if sizeErr != nil {
+				writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation response could not be serialized", false, nil)
+				return
+			}
+			if envelopeBytes > int64(a.config.MaxSerializedBytes) {
+				a.logContextFabricResponseBudgetExceeded(r, "synthesis_input_bytes", envelopeBytes, int64(a.config.MaxSerializedBytes), estimatedTokens, itemCounts)
+				writeError(w, r, http.StatusRequestEntityTooLarge, "invalid_request", "Context Fabric investigation response exceeded service limits", false, map[string]any{
+					"measured_bytes": envelopeBytes, "max_serialized_bytes": int64(a.config.MaxSerializedBytes),
+				})
+				return
+			}
+			synthesisInputBytes = int(envelopeBytes - measuredBytes)
+		}
+		a.logContextFabricResponseBudgetMeasured(r, measuredBytes, maximumBytes, estimatedTokens, itemCounts, "synthesis_input_bytes", synthesisInputBytes)
 		a.recordReadAudit(r.Context(), principal, "context_fabric_investigation_completed", "context_fabric_investigation", result.ResultID, "success", map[string]any{"investigation_status": result.Status})
 		writeEncodedJSON(w, http.StatusOK, encoded)
 	})
@@ -236,6 +256,7 @@ const (
 	// run. The caller is told the current contract and fetches the prompt
 	// again.
 	contextFabricClassInterpretationContract = "interpretation_contract_mismatch"
+	contextFabricClassClientSynthesis        = "client_synthesis_unavailable"
 	contextFabricClassUnclassified           = "unclassified"
 	contextFabricInvestigationFailureName    = "context_fabric_investigation"
 )
@@ -412,6 +433,10 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 	// value or any other model-generated text. A business-rule rejection
 	// (an invalid enum, a claim-binding/grounding failure) has no single
 	// bound to name, so details is omitted for those.
+	if errors.Is(err, contextfabric.ErrClientSynthesisUnavailable) {
+		a.writeContextFabricFailure(w, r, err, contextFabricClassClientSynthesis, http.StatusBadRequest, "invalid_request", "This deployment cannot return a synthesis input for client synthesis", false, nil)
+		return
+	}
 	var contractMismatch *contextfabric.SuppliedInterpretationContractMismatch
 	if errors.As(err, &contractMismatch) {
 		details := map[string]any{contractsv1.ContextFabricInterpretationContractDetailsKey: contractMismatch.Refusal}
@@ -930,8 +955,9 @@ func (a *App) logContextFabricResponseBudgetExceeded(r *http.Request, reason str
 // regression from 40-42 down to under 30 had nowhere to be read off from a
 // successful run. The exceed-path WARN above is unchanged in name, level and
 // field set, so existing consumers of it are unaffected.
-func (a *App) logContextFabricResponseBudgetMeasured(r *http.Request, measuredBytes, maximumBytes, estimatedTokens int64, counts contextFabricItemCounts) {
+func (a *App) logContextFabricResponseBudgetMeasured(r *http.Request, measuredBytes, maximumBytes, estimatedTokens int64, counts contextFabricItemCounts, extra ...any) {
 	fields := append([]any{"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context()))},
 		contextFabricResponseBudgetFields(a.config.MaxItems, measuredBytes, maximumBytes, estimatedTokens, counts)...)
+	fields = append(fields, extra...)
 	a.logger.InfoContext(r.Context(), "context fabric response measured", fields...)
 }

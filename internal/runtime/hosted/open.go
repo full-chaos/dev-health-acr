@@ -31,6 +31,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgmodelconfig"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgstructurepriors"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgstructureselection"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/synthesisprompt"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
@@ -917,7 +918,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		ObservationKeys: factRegistry,
 		Graph:           graphReader,
 		Facts:           factRegistry,
-		Synthesizer:     contextfabric.RuntimeAnswerSynthesizer{Runtime: modelRuntime, Sink: receiptSink, Options: contextFabricSynthesizerOptions(request.options.ServiceVersion), Telemetry: engineTelemetry},
+		Synthesizer:     contextfabric.RuntimeAnswerSynthesizer{Runtime: modelRuntime, Sink: receiptSink, Options: contextFabricSynthesizerOptions(request.options.ServiceVersion), Telemetry: engineTelemetry, ClientSynthesis: synthesisprompt.ClientAssembly()},
 		Results:         investigationStore,
 		ReuseGate:       investigationStore,
 		// CHAOS-3782 Codex round-1 F1: same *pginvestigation.Store also

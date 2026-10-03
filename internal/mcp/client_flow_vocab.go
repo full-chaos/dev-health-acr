@@ -20,6 +20,9 @@ type ClientFlowVocabulary struct {
 	CatalogURI      string
 	ResultTool      string
 	SystemSHA256    string
+
+	SynthesisPrompt    string
+	SynthesisOutputURI string
 }
 
 // ClientFlow returns the vocabulary of the client-side interpretation flow.
@@ -40,5 +43,8 @@ func ClientFlow() ClientFlowVocabulary {
 		CatalogURI:      uriDataCatalog,
 		ResultTool:      toolInvestigationResult,
 		SystemSHA256:    sha256Hex(interpretprompt.System()),
+
+		SynthesisPrompt:    promptSynthesizeAnswer,
+		SynthesisOutputURI: uriSynthesisOutput,
 	}
 }
