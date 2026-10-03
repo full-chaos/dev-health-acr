@@ -7,6 +7,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/interpretprompt"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/synthesisprompt"
 )
 
 // DefaultExchangeMaxInputBytes mirrors Config's own MaxInputBytes default
@@ -32,7 +33,7 @@ func InterpretationSystemPrompt() string { return interpretprompt.System() }
 
 // SynthesisSystemPrompt returns the exact system prompt SynthesizeAnswer
 // sends.
-func SynthesisSystemPrompt() string { return synthesisSystemPrompt }
+func SynthesisSystemPrompt() string { return synthesisprompt.System() }
 
 // BuildInterpretationPrompt renders the exact bounded-JSON user payload
 // InterpretQuestion would send for this request, without performing a
@@ -113,8 +114,7 @@ func InterpretationOutputSchema() ([]byte, error) {
 // contextfabric.MergeCoverage) carries an empty org id here -- merge
 // semantics are otherwise byte-identical to SynthesizeAnswer's own call.
 func BuildSynthesisPrompt(input contextfabric.SynthesisInput, maxBytes int) (string, error) {
-	payload := synthesisInputFromDomain("", input)
-	encoded, err := boundedJSON(payload, maxBytes)
+	encoded, err := synthesisprompt.UserPayload("", input, maxBytes)
 	if err != nil {
 		return "", err
 	}

@@ -60,12 +60,12 @@ func TestServerListsInvestigatePromptsWithVocabularyArguments(t *testing.T) {
 	want := guide.PromptDefs(vocab)
 	got := map[string]*mcpsdk.Prompt{}
 	for _, p := range listed.Prompts {
-		if p.Name != promptInterpretQuestion {
+		if p.Name != promptInterpretQuestion && p.Name != promptSynthesizeAnswer {
 			got[p.Name] = p
 		}
 	}
-	if len(want) != 3 || len(got) != len(want) || len(listed.Prompts) != len(want)+1 {
-		t.Fatalf("listed %d prompts, defined %d plus %s", len(listed.Prompts), len(want), promptInterpretQuestion)
+	if len(want) != 3 || len(got) != len(want) || len(listed.Prompts) != len(want)+2 {
+		t.Fatalf("listed %d prompts, defined %d plus %s and %s", len(listed.Prompts), len(want), promptInterpretQuestion, promptSynthesizeAnswer)
 	}
 	for _, def := range want {
 		p := got[def.Name]
@@ -109,8 +109,8 @@ func TestInvestigatePromptsFollowToolAvailability(t *testing.T) {
 	}
 	full, closeFull := connectedClient(t, investigateBootstrap(t))
 	defer closeFull()
-	if names := promptNames(t, full); len(names) != 4 {
-		t.Fatalf("with investigate_question expected 4 prompts, got %v", names)
+	if names := promptNames(t, full); len(names) != 5 {
+		t.Fatalf("with investigate_question expected 5 prompts, got %v", names)
 	}
 	if _, err := plain.GetPrompt(context.Background(), &mcpsdk.GetPromptParams{
 		Name: guide.PromptInvestigate, Arguments: map[string]string{"question": "q"},
@@ -311,7 +311,7 @@ func TestPromptCatalogueFollowsTheCallersOwnCapabilities(t *testing.T) {
 	namesA := promptNames(t, sessionA)
 	namesB := promptNames(t, sessionB)
 
-	if len(namesA) != 4 || len(namesB) != 1 || namesB[0] != guide.PromptExpand {
+	if len(namesA) != 5 || len(namesB) != 1 || namesB[0] != guide.PromptExpand {
 		t.Fatalf("caller A prompts %v, caller B prompts %v", namesA, namesB)
 	}
 	args := map[string]string{"evidence_ref_id": "e1"}

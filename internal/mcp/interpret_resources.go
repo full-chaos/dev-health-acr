@@ -23,10 +23,10 @@ func sha256Hex(text string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func staticResourceMeta(text, serviceVersion string) mcpsdk.Meta {
+func staticResourceMeta(text, promptVersion, serviceVersion string) mcpsdk.Meta {
 	return mcpsdk.Meta{
 		"model_output_version": interpretprompt.OutputVersion,
-		"prompt_version":       interpretprompt.PromptVersion,
+		"prompt_version":       promptVersion,
 		"sha256":               sha256Hex(text),
 		"service_version":      serviceVersion,
 	}
@@ -41,10 +41,10 @@ func registerInterpretResources(server *mcpsdk.Server, cfg *ProcessConfig, calle
 	if hostedToolEnabled(caller, toolInvestigateQuestion) {
 		addStaticResource(server, cfg, caller, toolInvestigateQuestion, uriInterpretationOutput, "interpretation-output", "Interpretation output schema",
 			"JSON schema of the object the interpretation prompt returns. Validate your own interpretation against it. Version "+interpretprompt.OutputVersion+".",
-			"application/schema+json", interpretprompt.OutputSchema(), serviceVersion)
+			"application/schema+json", interpretprompt.OutputSchema(), interpretprompt.PromptVersion, serviceVersion)
 		addStaticResource(server, cfg, caller, toolInvestigateQuestion, uriFactKinds, "guide-fact-kinds", "Fact-kind glossary",
 			"What each fact kind holds, which subject kinds it serves, and what it is not; the same text the interpretation prompt states.",
-			guideMIME, interpretprompt.FactKindsGuide(), serviceVersion)
+			guideMIME, interpretprompt.FactKindsGuide(), interpretprompt.PromptVersion, serviceVersion)
 	}
 	if hostedToolEnabled(caller, toolDataCatalog) {
 		server.AddResource(&mcpsdk.Resource{
@@ -81,8 +81,8 @@ func registerInterpretResources(server *mcpsdk.Server, cfg *ProcessConfig, calle
 
 const guideMIME = "text/markdown"
 
-func addStaticResource(server *mcpsdk.Server, cfg *ProcessConfig, caller *CallerContext, tool, uri, name, title, description, mime, text, serviceVersion string) {
-	meta := staticResourceMeta(text, serviceVersion)
+func addStaticResource(server *mcpsdk.Server, cfg *ProcessConfig, caller *CallerContext, tool, uri, name, title, description, mime, text, promptVersion, serviceVersion string) {
+	meta := staticResourceMeta(text, promptVersion, serviceVersion)
 	server.AddResource(&mcpsdk.Resource{
 		URI: uri, Name: name, Title: title, Description: description, MIMEType: mime,
 		Annotations: &mcpsdk.Annotations{Audience: []mcpsdk.Role{"assistant"}},
