@@ -199,6 +199,7 @@ func newServer(cfg *ProcessConfig, caller *CallerContext, serverVersion string, 
 	registerGuideResources(server)
 	registerInvestigatePrompts(server, caller)
 	registerInterpretPrompt(server, caller, serverVersion)
+	registerInterpretResources(server, caller, serverVersion)
 	if recordEpisodeEnabled(cfg, caller) {
 		server.AddTool(
 			buildWritebackTool(toolRecordEpisode, "Record episode", recordEpisodeRequestSchemaFile, recordEpisodeResponseSchemaFile),
