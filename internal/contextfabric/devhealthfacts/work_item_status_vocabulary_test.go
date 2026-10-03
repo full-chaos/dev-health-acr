@@ -64,7 +64,7 @@ func TestStatusFactDisclosesNormalizedBasisAndLabelDerivedProviders(t *testing.T
 		if note == nil {
 			t.Fatalf("status %q: no status_provenance", status)
 		}
-		for _, must := range []string{"github and gitlab", "labels", "not a provider fact", "jira", "linear"} {
+		for _, must := range []string{"normalized vocabulary", "varies by provider", "jira from", "github and gitlab from issue labels", "not a provider fact", "linear from", "provider of this item is not carried"} {
 			if !strings.Contains(*note, must) {
 				t.Fatalf("status_provenance lacks %q: %s", must, *note)
 			}
@@ -88,5 +88,34 @@ func TestStatusFactMissingStatusIsNullNotInVocabularyFalse(t *testing.T) {
 	fact := readStatusFacts(t, "")[0]
 	if !fact.Fields["status"].Null || !fact.Fields["status_in_vocabulary"].Null {
 		t.Fatalf("fields = %+v, want status and status_in_vocabulary null", fact.Fields)
+	}
+}
+
+// The sentence is a statement about the vocabulary. It must not claim a
+// provider as THIS item's source: every provider name appears only inside the
+// "varies by provider" enumeration, never as "this item is ..." or "this
+// <provider> item".
+func TestStatusProvenanceNamesNoSingleProviderAsThisItemsSource(t *testing.T) {
+	t.Parallel()
+	note := *readStatusFacts(t, "done")[0].Fields["status_provenance"].String
+	lower := strings.ToLower(note)
+	for _, provider := range []string{"jira", "github", "gitlab", "linear"} {
+		for _, claim := range []string{"this " + provider, "this item is " + provider, "this item came from " + provider, provider + " item"} {
+			if strings.Contains(lower, claim) {
+				t.Fatalf("status_provenance claims %q as this item's source: %s", claim, note)
+			}
+		}
+	}
+	if strings.Contains(lower, "label-derived") || strings.Contains(lower, "derived from") {
+		t.Fatalf("status_provenance uses an unconditional derivation claim: %s", note)
+	}
+	if !strings.Contains(lower, "provider of this item is not carried") {
+		t.Fatalf("status_provenance does not say the item's provider is not carried: %s", note)
+	}
+	basis := lower[strings.Index(lower, "varies by provider"):]
+	for _, provider := range []string{"jira", "github", "gitlab", "linear"} {
+		if !strings.Contains(basis, provider) {
+			t.Fatalf("the per-provider basis omits %s: %s", provider, note)
+		}
 	}
 }

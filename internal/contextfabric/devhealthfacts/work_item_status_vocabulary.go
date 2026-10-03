@@ -21,12 +21,12 @@ func WorkItemStatusVocabulary() []string {
 const (
 	statusBasisNormalized = "dev_health_normalized"
 
-	// statusProvenanceNote is the vocabulary disclosure. The value is a
-	// mapping Dev Health applied, not the provider's own status string, and
-	// for two providers it is derived from labels.
-	statusProvenanceNote = "Dev Health normalizes status into backlog, todo, in_progress, in_review, blocked, done, canceled or unknown. " +
-		"github and gitlab values are derived from issue labels and state, so they are a mapping and not a provider fact. " +
-		"jira values follow the organization's status mapping. linear values follow the workflow state type."
+	// statusProvenanceNote is the vocabulary disclosure. It is a statement
+	// about the vocabulary, true for every item: it never says which provider
+	// this item came from, because the read does not carry the provider.
+	statusProvenanceNote = "Status is the sync's normalized vocabulary of eight values (backlog, todo, in_progress, in_review, blocked, done, canceled, unknown), not the provider's own status string. " +
+		"Its basis varies by provider: jira from a status-mapping configuration, github and gitlab from issue labels and open or closed state (a mapping, not a provider fact), linear from the workflow state type. " +
+		"The provider of this item is not carried by this read."
 )
 
 func inWorkItemStatusVocabulary(value string) bool {
