@@ -12,23 +12,24 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 workflows="${1:-$repo_root/.github/workflows}"
 dockerfile="${2:-$repo_root/Dockerfile}"
 
+trim_token='(^|[[:space:]=:"'\''])-trimpath([[:space:]"'\'']|$)'
 go_cmd='(^|[^[:alnum:]_.-])go (build|test|run|vet|install)([[:space:]]|$)|setup-go@'
 
 check_workflow() {
   local file=$1 code
-  code="$(grep -vE '^[[:space:]]*#' "$file")"
+  code="$(grep -vE '^[[:space:]]*#' "$file" | sed -E 's/[[:space:]]+#.*$//')"
   grep -qE "$go_cmd" <<<"$code" || return 0
   awk '
     /^env:/ { in_env=1; next }
     in_env && /^[^[:space:]]/ { in_env=0 }
-    in_env && /^  GOFLAGS:.*-trimpath/ { found=1 }
-    END { exit found ? 0 : 1 }
-  ' <<<"$code" || { printf '%s: no workflow-level GOFLAGS with -trimpath\n' "$file" >&2; return 1; }
-  if grep -E '^[[:space:]]+GOFLAGS:' <<<"$code" | grep -vq -- '-trimpath'; then
+    in_env && /^  GOFLAGS:/ { print }
+  ' <<<"$code" | grep -qE "$trim_token" \
+    || { printf '%s: no workflow-level GOFLAGS with -trimpath\n' "$file" >&2; return 1; }
+  if grep -E '^[[:space:]]+GOFLAGS:' <<<"$code" | grep -vqE "$trim_token"; then
     printf '%s: nested GOFLAGS override without -trimpath\n' "$file" >&2
     return 1
   fi
-  if grep -E 'GOFLAGS=' <<<"$code" | grep -vq -- '-trimpath'; then
+  if grep -E 'GOFLAGS=' <<<"$code" | grep -vqE "$trim_token"; then
     printf '%s: inline GOFLAGS= without -trimpath\n' "$file" >&2
     return 1
   fi
@@ -73,6 +74,12 @@ for f in "$workflows"/*.yml; do
   reset
   sed -i -E 's/^(  GOFLAGS:).*/\1 -mod=readonly/' "$tmp/wf/$(basename "$f")"
   expect_fail "workflow GOFLAGS lacks -trimpath: $(basename "$f")"
+  reset
+  sed -i -E 's/^(  GOFLAGS:).*/\1 -mod=readonly # -trimpath/' "$tmp/wf/$(basename "$f")"
+  expect_fail "workflow GOFLAGS has -trimpath only in a trailing comment: $(basename "$f")"
+  reset
+  sed -i -E 's/^(  GOFLAGS:).*/\1 -notrimpath/' "$tmp/wf/$(basename "$f")"
+  expect_fail "workflow GOFLAGS has a lookalike token: $(basename "$f")"
 done
 
 reset
@@ -83,5 +90,9 @@ reset
 f="$(grep -lE '^  GOFLAGS:.*-trimpath' "$workflows"/*.yml | head -1)"
 printf '\n      - run: GOFLAGS=-mod=readonly go test ./...\n' >>"$tmp/wf/$(basename "$f")"
 expect_fail "inline GOFLAGS override"
+
+reset
+printf '\n      - run: GOFLAGS=-mod=readonly go test ./... # -trimpath\n' >>"$tmp/wf/$(basename "$f")"
+expect_fail "inline GOFLAGS override with -trimpath only in a comment"
 
 printf 'trimpath guard ok\n'
