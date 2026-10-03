@@ -1,7 +1,7 @@
 {
   "source": {
     "repository": "full-chaos/dev-health-ops",
-    "commit": "cb758a29d89178bd83ca8aaefe95e38bb08cc7fb",
+    "commit": "0ec8b693bedeff6cfaf678ad9a5dbd0b06114651",
     "tool": "go run ./cmd/registrydump -file internal/queryapi/server/query_route.go",
     "schema_path": "contracts/graphql/v1/schema.graphql"
   },

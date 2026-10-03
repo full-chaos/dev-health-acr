@@ -286,7 +286,7 @@ func TestRegistryWatch_invalid_base_url(t *testing.T) {
 // 2026-09-30 00:21Z at ops cb758a29 (HTTP 200, 6916 bytes). The real served
 // format must decode and match the re-pinned catalogue with zero drift.
 func TestRegistryWatch_live_prod_registry_golden_matches_pin(t *testing.T) {
-	golden, err := os.ReadFile("testdata/query_registry_cb758a29.json")
+	golden, err := os.ReadFile("testdata/query_registry_16dc07c9.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +295,7 @@ func TestRegistryWatch_live_prod_registry_golden_matches_pin(t *testing.T) {
 	w, cat, buf := newWatch(t, f, nil)
 	w.Start()
 	w.Wait()
-	const want = "sha256:dd83956f18b52a3acf89e73e1f25b0dcf25df706d90eca49c5b66f8b8994f779"
+	const want = "sha256:330d0ebf0ea59fce8d0b1bb14887cad8e5b3f6971ad02618afa9844b6fac7a50"
 	if got := cat.StampedSchemaDigest(); got != want || cat.SchemaDigest() != want {
 		t.Fatalf("stamp %s pinned %s, want %s", got, cat.SchemaDigest(), want)
 	}

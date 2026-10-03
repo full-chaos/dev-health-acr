@@ -3,10 +3,10 @@
   "generator": "cmd/operationpolicy",
   "source": {
     "repository": "full-chaos/dev-health-ops",
-    "commit": "cb758a29d89178bd83ca8aaefe95e38bb08cc7fb",
+    "commit": "0ec8b693bedeff6cfaf678ad9a5dbd0b06114651",
     "tool": "go run ./cmd/registrydump -file internal/queryapi/server/query_route.go",
-    "schema_digest": "sha256:dd83956f18b52a3acf89e73e1f25b0dcf25df706d90eca49c5b66f8b8994f779",
-    "registry_sha256": "25786efd92fb390eb9188f547b71dc0b5a0d012bdba94d372fd20483d5738439",
+    "schema_digest": "sha256:330d0ebf0ea59fce8d0b1bb14887cad8e5b3f6971ad02618afa9844b6fac7a50",
+    "registry_sha256": "1cda55c485ab0f115bf4af0198362c8b198194bf63c918b342257e7f9d2ccd23",
     "registry_rows": 58
   },
   "person_name_tokens": [
