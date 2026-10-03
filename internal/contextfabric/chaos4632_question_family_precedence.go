@@ -142,6 +142,10 @@ type FamilySample struct {
 	// the asymmetry cannot be established and row 2 does not fire, which
 	// is the refuse-to-guess side of the rule.
 	ScopeAnchorKind SubjectKind
+	// ScopeAnchorKindSource is ScopeAnchorKindCommittedHint when the engine
+	// derived ScopeAnchorKind from the one committed subject, empty when the
+	// model declared it or none exists.
+	ScopeAnchorKindSource ScopeAnchorKindSource
 	// RequestedKind is the kind the question asks ABOUT, when one is
 	// determinable. Row 2's other half.
 	RequestedKind SubjectKind

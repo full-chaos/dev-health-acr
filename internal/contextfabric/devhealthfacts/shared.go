@@ -185,7 +185,7 @@ import (
 // anchor guard admits a team beside a repository). A candidate saved under v24
 // for such a question may hold the member_kind_unservable refusal and must not
 // be reused. Not pinned by a test.
-const QueryVersion = "devhealthfacts.clickhouse.v25"
+const QueryVersion = "devhealthfacts.clickhouse.v26"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

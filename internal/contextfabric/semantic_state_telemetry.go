@@ -99,6 +99,7 @@ func semanticStateLogGroup(key string, state *PersistedSemanticState) slog.Attr 
 		// The anchor's KIND is a closed value; its term is corpus text, so
 		// only its presence is published.
 		slog.String("scope_anchor_kind", SanitizeLogAttr(string(state.ScopeAnchor.Kind))),
+		slog.String("scope_anchor_kind_source", SanitizeLogAttr(noneWhenEmpty(string(state.ScopeAnchor.KindSource)))),
 		slog.Bool("scope_anchor_term_present", state.ScopeAnchor.Term != ""),
 		slog.Bool("frame_present", state.FramePresent),
 		slog.String("frame_version", SanitizeLogAttr(state.FrameVersion)),

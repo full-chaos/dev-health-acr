@@ -3097,6 +3097,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		}
 		e.workItemTupleNarrowing(ctx, principal, &plan, request.Options.MaxCohortMembers, tupleCensus)
 	} else {
+		if _, scoped := deploymentCohortFrameMember(familyOutcome.Frame); scoped {
+			familyOutcome.WinningSample = withDerivedScopeAnchorKind(familyOutcome.WinningSample, resolution.Committed)
+		}
 		if declared, scoped := deploymentCohortFrameMember(familyOutcome.Frame); scoped && !deploymentCohortAnchorsServable(resolution.Committed, familyOutcome.WinningSample.ScopeAnchorKind) {
 			if len(resolution.Committed) > 0 {
 				familyOutcome.Gate = FrameGate{Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable, DeclaredMemberKind: declared}
