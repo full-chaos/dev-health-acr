@@ -493,7 +493,9 @@ func TestALexicallyMatchedRepositoryAddsNoDeploymentToThePaths(t *testing.T) {
 			if strings.Contains(cypher, "fulltext") {
 				n := fakeSubjectNodeRow("repository", "repository:payments", "payments")["n"].(*node)
 				n.Properties[propAuthzRepos] = []string{"acme/payments"}
-				return []row{{"node": n, "score": 1.0}}, nil
+				d := fakeSubjectNodeRow("deployment", "deployment:payments:0", "payments deploy")["n"].(*node)
+				d.Properties[propAuthzRepos] = []string{"acme/payments"}
+				return []row{{"node": n, "score": 1.0}, {"node": d, "score": 0.9}}, nil
 			}
 			return inner(ctx, key, cypher, params, ro)
 		}
@@ -509,5 +511,52 @@ func TestALexicallyMatchedRepositoryAddsNoDeploymentToThePaths(t *testing.T) {
 				t.Fatalf("paths carry the lexically matched repository's deployment: %+v", p)
 			}
 		}
+	}
+}
+
+func TestADeploymentReachedFromAStrayCommittedSubjectIsNotAProjectMember(t *testing.T) {
+	s := projectSeed{served: map[string]string{}}
+	s.nodes = append(s.nodes, seededNode{kind: "project", id: projectAnchorID, label: "payments"})
+	s.repository("acme/stray", 1)
+	conn := seededGraphConn(s.nodes, s.edges)
+	adapter := newFakeAdapter(t, conn)
+	request := projectDeploymentsRequest()
+	request.Resolution.Committed = append(request.Resolution.Committed,
+		contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:github:acme/stray", Label: "acme/stray"})
+	result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Cohort != nil && len(result.Cohort.Members) != 0 {
+		t.Fatalf("a deployment of a stray committed repository became a member: %+v", result.Cohort.Members)
+	}
+	for _, p := range result.Paths {
+		for _, ref := range p.Nodes {
+			if ref.Kind == contextfabric.SubjectDeployment {
+				t.Fatalf("paths carry a deployment reached from a stray committed subject: %+v", p)
+			}
+		}
+	}
+}
+
+func TestACutFrontierWithNoMemberIsPartialAndNamesTheTruncation(t *testing.T) {
+	s := linklessThenLinked(6)
+	adapter := newFakeAdapter(t, seededGraphConn(s.nodes, s.edges))
+	adapter.config.MaxResults = 3
+	result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, projectDeploymentsRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Coverage.Partial {
+		t.Fatalf("a cut frontier with no member must be partial coverage: %+v", result.Coverage)
+	}
+	var cut *contextfabric.CoverageDetail
+	for i := range result.Coverage.Details {
+		if result.Coverage.Details[i].Code == contractsv1.ContextFabricCoverageDetailKindCensusTruncated {
+			cut = &result.Coverage.Details[i]
+		}
+	}
+	if cut == nil || cut.Kind != contextfabric.SubjectDeployment || unlinkedDetail(result) != nil {
+		t.Fatalf("details = %+v, want the deployment truncation disclosure and no unlinked", result.Coverage.Details)
 	}
 }
