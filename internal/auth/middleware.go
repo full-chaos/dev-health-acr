@@ -141,7 +141,12 @@ func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler
 				a.writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
 				return
 			}
-			a.logger.ErrorContext(r.Context(), "credential lookup failed", "request_id", logsanitize.SanitizeLogAttr(requestID(r)), "failure_class", "credential_store")
+			cause := credentialLookupCause(err)
+			if cause == credentialLookupCauseCanceled {
+				a.logger.InfoContext(r.Context(), "credential lookup canceled", "request_id", logsanitize.SanitizeLogAttr(requestID(r)), "failure_class", "caller_canceled", "cause", cause)
+			} else {
+				a.logger.ErrorContext(r.Context(), "credential lookup failed", "request_id", logsanitize.SanitizeLogAttr(requestID(r)), "failure_class", "credential_store", "cause", cause)
+			}
 			a.writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Credential service is temporarily unavailable", true, nil)
 			return
 		}
@@ -351,4 +356,27 @@ func SameResource(a, b string) bool {
 	}
 	aliasPath := func(p string) bool { return p == "" || p == "/" || p == "/mcp" }
 	return aliasPath(ua.Path) && aliasPath(ub.Path)
+}
+
+const (
+	credentialLookupCauseCanceled = "context_canceled"
+	credentialLookupCauseDeadline = "deadline_exceeded"
+	credentialLookupCauseConn     = "conn_reset"
+	credentialLookupCauseOther    = "other"
+)
+
+// credentialLookupCause maps a store error to a closed token; the error text
+// never reaches the log.
+func credentialLookupCause(err error) string {
+	var class *storage.DependencyErrorClass
+	switch {
+	case errors.Is(err, context.Canceled):
+		return credentialLookupCauseCanceled
+	case errors.Is(err, context.DeadlineExceeded):
+		return credentialLookupCauseDeadline
+	case errors.As(err, &class) && class.Class == "connection_failure":
+		return credentialLookupCauseConn
+	default:
+		return credentialLookupCauseOther
+	}
 }
