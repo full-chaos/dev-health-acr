@@ -196,7 +196,12 @@ import (
 // source census inside a caller's repository narrowing, so the one pull
 // request in the narrowed repositories commits. A candidate saved under v27
 // for such a question is a clarification and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v28"
+//
+// v28 -> v29: the handle census applies the caller's repository narrowing
+// inside its query, so a number held in more repositories than the census cap
+// commits the one pull request in the narrowed repositories. A candidate saved
+// under v28 for such a question is a clarification and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v29"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

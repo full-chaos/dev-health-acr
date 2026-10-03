@@ -2948,7 +2948,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// can never drift from what authorization actually enforces.
 		if !offersOnly && deps.CensusFunc != nil {
 			runShadowEvidenceRoundForResolution(ctx, principal, request, interpreted, exactResolution, nil, false,
-				unscopedVisibilityFor(principal, request), deps, confirmedKind, confirmedAnchor, true)
+				unscopedVisibilityFor(principal, request) || repositoryNarrowedByUnrestrictedPrincipal(principal, request), deps, confirmedKind, confirmedAnchor, true)
 		}
 		return exactResolution, contextfabric.StructureOfferMaterial{}, nil
 	}
@@ -4623,6 +4623,7 @@ func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.
 		UnscopedVisibility: unscopedVisibility, AliasClaimants: claimantsFromCandidateNodes(aliasClaimantsByTerm),
 		AliasLookupComplete: aliasIdentityComplete, CensusFunc: deps.CensusFunc,
 		NarrowSatisfiers:          callerNarrowingSatisfierFilter(principal, request, deps),
+		CensusRepositories:        callerCensusRepositories(principal, request, deps),
 		PreNarrowingExplicitKinds: preNarrowingExplicitKinds,
 		ConfirmedAnchor:           confirmedAnchorInput,
 		ConfirmedHandle:           confirmedHandleInput,
@@ -5115,12 +5116,29 @@ func repositoryNarrowedByUnrestrictedPrincipal(principal storage.Principal, requ
 		len(request.RequestedScope.TeamIDs) == 0
 }
 
+// callerNarrowingApplies is the one predicate for "narrowed, unrestricted
+// principal": the satisfier narrowing and the in-query census filter both use it.
+func callerNarrowingApplies(principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps) bool {
+	return repositoryNarrowedByUnrestrictedPrincipal(principal, request) && deps.ExactHint != nil
+}
+
+// callerCensusRepositories is the caller's own requested repository slugs when
+// callerNarrowingApplies, nil otherwise. A restricted principal never gets a
+// filter (it gets no census at all), so the filter can only be what the caller
+// asked for within an unrestricted principal's visibility.
+func callerCensusRepositories(principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps) []string {
+	if !callerNarrowingApplies(principal, request, deps) {
+		return nil
+	}
+	return append([]string(nil), request.RequestedScope.RepositorySlugs...)
+}
+
 // callerNarrowingSatisfierFilter returns the satisfier narrowing for a call
 // whose only visibility limit is the caller's own repository narrowing of an
 // unrestricted principal, and nil otherwise. A restricted principal never gets
 // one: its round does not run a census at all.
 func callerNarrowingSatisfierFilter(principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps) SatisfierNarrower {
-	if !repositoryNarrowedByUnrestrictedPrincipal(principal, request) || deps.ExactHint == nil {
+	if !callerNarrowingApplies(principal, request, deps) {
 		return nil
 	}
 	return func(ctx context.Context, kind CensusKind, canonicalIDs []string) ([]string, bool) {
