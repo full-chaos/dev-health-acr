@@ -405,13 +405,13 @@
             "server",
             "client"
           ],
-          "description": "Who interpreted the question of this result: the service's own model (server) or the caller's (client). Optional: absent when no interpretation ran on the turn and on results written before the field existed."
+          "description": "Who interpreted the question of this result: the service's own model (server) or the caller's (client). Optional: absent when no interpretation ran on the turn and on a stored result written before the field existed. A result served from answer reuse always carries it."
         },
         "interpretation_model_identity": {
           "type": "string",
           "minLength": 1,
           "maxLength": 513,
-          "description": "The model that interpreted the question of this result: <provider>/<model> for the service's own model, client-supplied/<declared model or undeclared> for the caller's. A client interpretation_source requires the client-supplied prefix and no other source may carry it. Optional."
+          "description": "The model that interpreted the question of this result: <provider>/<model> for the service's own model, client-supplied/<declared model or undeclared> for the caller's. A client interpretation_source requires the client-supplied prefix and no other source may carry it. Optional: a result served from answer reuse carries a server interpretation_source without it when the stored row was written before the field existed."
         }
       },
       "required": [

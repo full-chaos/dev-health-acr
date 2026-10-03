@@ -1769,8 +1769,10 @@ type ContextFabricVersionSet struct {
 	// interpreted the question of this result: the service's own model
 	// ("server", "<provider>/<model>") or the caller's ("client",
 	// "client-supplied/<declared model or undeclared>"). Both are absent
-	// when no interpretation ran on the turn, and on a result written before
-	// the fields existed.
+	// when no interpretation ran on the turn, and on a stored result written
+	// before the fields existed. A result served from answer reuse always
+	// names its source; its model identity is absent when the stored row
+	// was written before the fields existed.
 	InterpretationSource        ContextFabricInterpretationSource `json:"interpretation_source,omitempty"`
 	InterpretationModelIdentity string                            `json:"interpretation_model_identity,omitempty"`
 }

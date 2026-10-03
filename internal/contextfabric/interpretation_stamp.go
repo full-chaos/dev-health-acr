@@ -43,6 +43,18 @@ func stampInterpretationProvenance(ctx context.Context, versions *VersionSet) {
 	versions.InterpretationModelIdentity = stamp.ModelIdentity
 }
 
+// stampReusedInterpretationProvenance names the interpreter of a result
+// served from answer reuse. saveResult stores a row as reusable only when the
+// service's own model interpreted it, so a reused row that names no source
+// was stored before the field existed and its interpreter was the service.
+// The model identity stays as stored: such a row does not record which model
+// interpreted.
+func stampReusedInterpretationProvenance(versions *VersionSet) {
+	if versions.InterpretationSource == "" {
+		versions.InterpretationSource = InterpretationSourceServer
+	}
+}
+
 type interpretationStampKey struct{}
 
 // withInterpretationStamp always writes, so a zero stamp clears one a reused
