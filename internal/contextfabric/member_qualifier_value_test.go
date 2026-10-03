@@ -56,12 +56,17 @@ func TestValidMemberQualifierValueMatrix(t *testing.T) {
 		{"work item status wrong case", SubjectWorkItem, MemberQualifierStatus, "Done", false},
 		{"pull request status verbatim word", SubjectPullRequest, MemberQualifierStatus, "merged", true},
 		{"project status verbatim word", SubjectProject, MemberQualifierStatus, "open", true},
+		{"status word of two words", SubjectProject, MemberQualifierStatus, "on hold", true},
+		{"status sentence", SubjectProject, MemberQualifierStatus, "please show only those still open", false},
+		{"status word with capital", SubjectProject, MemberQualifierStatus, "Open", false},
+		{"status word with punctuation", SubjectProject, MemberQualifierStatus, "open!", false},
+		{"status word over its bound", SubjectProject, MemberQualifierStatus, strings.Repeat("a", MemberStatusWordMaxRunes+1), false},
 		{"assignee name", SubjectWorkItem, MemberQualifierAssignee, "Vesper", true},
 		{"assignee name is not checked against the status set", SubjectWorkItem, MemberQualifierAssignee, "stuck", true},
-		{"padded value", SubjectProject, MemberQualifierStatus, " open", false},
-		{"control character", SubjectProject, MemberQualifierStatus, "op\nen", false},
-		{"at the length bound", SubjectProject, MemberQualifierStatus, strings.Repeat("a", MemberQualifierValueMaxRunes), true},
-		{"over the length bound", SubjectProject, MemberQualifierStatus, strings.Repeat("a", MemberQualifierValueMaxRunes+1), false},
+		{"padded value", SubjectProject, MemberQualifierAssignee, " Alice", false},
+		{"control character", SubjectProject, MemberQualifierAssignee, "Al\nice", false},
+		{"at the length bound", SubjectProject, MemberQualifierAssignee, strings.Repeat("a", MemberQualifierValueMaxRunes), true},
+		{"over the length bound", SubjectProject, MemberQualifierAssignee, strings.Repeat("a", MemberQualifierValueMaxRunes+1), false},
 	} {
 		if got := ValidMemberQualifierValue(c.kind, c.qualifier, c.value); got != c.want {
 			t.Errorf("%s: ValidMemberQualifierValue(%q,%q,%q) = %v, want %v", c.name, c.kind, c.qualifier, c.value, got, c.want)

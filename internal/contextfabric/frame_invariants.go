@@ -192,8 +192,11 @@ const (
 	FrameFieldOperands        FrameField = "operands"
 	FrameFieldMemberKind      FrameField = "member_kind"
 	FrameFieldMemberQualifier FrameField = "member_qualifier"
-	FrameFieldGroupKind       FrameField = "group_kind"
-	FrameFieldExpectedKind    FrameField = "expected_kind"
+	// FrameFieldMemberQualifierValue is the state word or assignee a scoped
+	// set's qualifier names.
+	FrameFieldMemberQualifierValue FrameField = "member_qualifier_value"
+	FrameFieldGroupKind            FrameField = "group_kind"
+	FrameFieldExpectedKind         FrameField = "expected_kind"
 
 	// -- DERIVED values. Reading one of these makes an invariant A2 or
 	// later, by law L4.
@@ -262,7 +265,7 @@ var frameInvariantSpecs = []FrameInvariantSpec{
 	{ID: FrameInvariantI4, Phase: FrameValidationPhaseA1,
 		Reads: []FrameField{FrameFieldMemberKind}},
 	{ID: FrameInvariantI5, Phase: FrameValidationPhaseA1,
-		Reads: []FrameField{FrameFieldAnchorTerms, FrameFieldMemberKind, FrameFieldMemberQualifier}},
+		Reads: []FrameField{FrameFieldAnchorTerms, FrameFieldMemberKind, FrameFieldMemberQualifier, FrameFieldMemberQualifierValue}},
 	{ID: FrameInvariantI6, Phase: FrameValidationPhaseA1,
 		Reads: []FrameField{FrameFieldGroupKind, FrameFieldMemberKind}},
 	{ID: FrameInvariantI7, Phase: FrameValidationPhaseA1,

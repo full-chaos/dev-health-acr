@@ -51,10 +51,16 @@ func TestMemberQualifierIsDeclaredAsAnOuterScopeInvariantInput(t *testing.T) {
 		if spec.ID != FrameInvariantI5 {
 			continue
 		}
+		var qualifier, value bool
 		for _, field := range spec.Reads {
-			if field == FrameFieldMemberQualifier {
-				return
-			}
+			qualifier = qualifier || field == FrameFieldMemberQualifier
+			value = value || field == FrameFieldMemberQualifierValue
+		}
+		if qualifier && value {
+			return
+		}
+		if qualifier {
+			t.Fatal("I5 validates member_qualifier_value but does not declare it among its inputs")
 		}
 		t.Fatal("I5 does not declare member_qualifier among its model-emitted inputs")
 	}

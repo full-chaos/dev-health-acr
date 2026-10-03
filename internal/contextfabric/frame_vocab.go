@@ -1089,6 +1089,34 @@ func memberQualifierValueText(value string) bool {
 	return true
 }
 
+// MemberStatusWordMaxRunes bounds a state word for a member kind that has no
+// closed status set.
+const MemberStatusWordMaxRunes = 32
+
+// memberStatusWordText reports whether value is a state word as the prompt
+// asks for it: lowercase letters, digits, underscore or hyphen, one or two
+// words, so a sentence or a name is not accepted as a state.
+func memberStatusWordText(value string) bool {
+	if utf8.RuneCountInString(value) > MemberStatusWordMaxRunes {
+		return false
+	}
+	words := strings.Split(value, " ")
+	if len(words) > 2 {
+		return false
+	}
+	for _, word := range words {
+		if word == "" {
+			return false
+		}
+		for _, r := range word {
+			if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_' || r == '-') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // ValidMemberQualifierValue reports whether value is valid beside qualifier
 // on a scoped set of memberKind. Empty is the valid absence. A value needs a
 // recognized qualifier. For work_item members with a status qualifier the
@@ -1107,6 +1135,9 @@ func ValidMemberQualifierValue(memberKind SubjectKind, qualifier MemberQualifier
 	}
 	if memberKind == SubjectWorkItem && qualifier == MemberQualifierStatus {
 		return InWorkItemStatusVocabulary(value)
+	}
+	if qualifier == MemberQualifierStatus {
+		return memberStatusWordText(value)
 	}
 	return true
 }
