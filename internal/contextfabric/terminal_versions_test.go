@@ -83,3 +83,26 @@ func TestInterpretedTimeBoundRefusalStampsVersionsFromTheInterpretationReceipt(t
 	}
 	assertInterpretedTerminalVersions(t, "time bound refusal", result.Versions)
 }
+
+func TestInterpretationWithoutAReceiptStillReadsNotSynthesized(t *testing.T) {
+	t.Parallel()
+	engine := buildTerminalEngine(t, &acceptanceGraphReader{resolution: ambiguousResolution("Which one?"), context: emptyGraphContext()}, nil)
+	ran := engine.terminalVersions(withInterpretationStamp(context.Background(), interpretationStampOf(ModelExecutionReceipt{})))
+	if ran.SynthesisVersion != SynthesisVersionNotSynthesized {
+		t.Fatalf("synthesis_version = %q, want %q: an interpret call ran even though its receipt named nothing", ran.SynthesisVersion, SynthesisVersionNotSynthesized)
+	}
+	if ran.InterpretationVersion != "unwired" || ran.ModelIdentity != "unwired" {
+		t.Fatalf("Versions = %#v, want unwired for the fields the empty receipt could not supply", ran)
+	}
+}
+
+func TestInterpretationStampOfAnEarlierTurnIsClearedByAZeroStamp(t *testing.T) {
+	t.Parallel()
+	engine := buildTerminalEngine(t, &acceptanceGraphReader{resolution: ambiguousResolution("Which one?"), context: emptyGraphContext()}, nil)
+	reused := withInterpretationStamp(context.Background(), interpretedStamp().Interpretation)
+	reused = withInterpretationStamp(reused, InterpretationStamp{})
+	versions := engine.terminalVersions(reused)
+	if versions.InterpretationVersion != "unwired" || versions.SynthesisVersion != "unwired" || versions.ModelIdentity != "unwired" {
+		t.Fatalf("Versions = %#v, want unwired: a turn with no interpret call must not read an earlier turn's stamp", versions)
+	}
+}
