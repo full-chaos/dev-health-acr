@@ -10,36 +10,36 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/genkitruntime"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/interpretprompt"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 const (
 	promptInterpretQuestion = "interpret_question"
 	interpretQuestionArg    = "question"
-	interpretPromptMaxBytes = genkitruntime.DefaultExchangeMaxInputBytes
+	interpretPromptMaxBytes = 512 << 10
 )
 
 // interpretPromptMeta is the _meta block of an interpret_question result.
 func interpretPromptMeta(system, serviceVersion string) mcpsdk.Meta {
 	sum := sha256.Sum256([]byte(system))
 	return mcpsdk.Meta{
-		"prompt_version":       genkitruntime.DefaultInterpretationPromptVersion,
-		"model_output_version": genkitruntime.DefaultSchemaVersion,
+		"prompt_version":       interpretprompt.PromptVersion,
+		"model_output_version": interpretprompt.OutputVersion,
 		"system_sha256":        hex.EncodeToString(sum[:]),
 		"service_version":      serviceVersion,
 	}
 }
 
 // registerInterpretPrompt serves the interpretation system message the server
-// itself sends, taken from the one assembly in genkitruntime. It registers
+// itself sends, taken from interpretprompt, the one assembly the runtime also sends. It registers
 // only with investigate_question, so a credential that cannot investigate
 // cannot read the prompt.
 func registerInterpretPrompt(server *mcpsdk.Server, caller *CallerContext, serviceVersion string) {
 	if !hostedToolEnabled(caller, toolInvestigateQuestion) {
 		return
 	}
-	meta := interpretPromptMeta(genkitruntime.InterpretationSystemPrompt(), serviceVersion)
+	meta := interpretPromptMeta(interpretprompt.System(), serviceVersion)
 	server.AddPrompt(&mcpsdk.Prompt{
 		Name:  promptInterpretQuestion,
 		Title: "Interpret a question",
@@ -70,16 +70,17 @@ func interpretPromptResult(question, serviceVersion string) (*mcpsdk.GetPromptRe
 	if strings.TrimSpace(question) == "" {
 		return nil, &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: "question is required"}
 	}
-	user, err := genkitruntime.BuildInterpretationPrompt(contextfabric.InvestigationRequest{
+	userJSON, err := interpretprompt.UserPayload(contextfabric.InvestigationRequest{
 		Question:    question,
 		TimeContext: contextfabric.TimeContext{Axis: contractsv1.ContextFabricTemporalCurrent},
 	}, interpretPromptMaxBytes)
 	if err != nil {
 		return nil, &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: "question is too large"}
 	}
-	system := genkitruntime.InterpretationSystemPrompt()
+	user := string(userJSON)
+	system := interpretprompt.System()
 	return &mcpsdk.GetPromptResult{
-		Description: "Interpretation prompt " + genkitruntime.DefaultInterpretationPromptVersion,
+		Description: "Interpretation prompt " + interpretprompt.PromptVersion,
 		Meta:        interpretPromptMeta(system, serviceVersion),
 		Messages: []*mcpsdk.PromptMessage{
 			{Role: "user", Content: &mcpsdk.TextContent{Text: system}},

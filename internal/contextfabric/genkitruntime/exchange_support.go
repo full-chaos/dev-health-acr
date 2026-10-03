@@ -6,6 +6,7 @@ import (
 	"github.com/firebase/genkit/go/core"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/interpretprompt"
 )
 
 // DefaultExchangeMaxInputBytes mirrors Config's own MaxInputBytes default
@@ -27,7 +28,7 @@ const DefaultExchangeMaxInputBytes = 512 << 10
 
 // InterpretationSystemPrompt returns the exact system prompt
 // InterpretQuestion sends.
-func InterpretationSystemPrompt() string { return interpretationSystemPrompt }
+func InterpretationSystemPrompt() string { return interpretprompt.System() }
 
 // SynthesisSystemPrompt returns the exact system prompt SynthesizeAnswer
 // sends.
@@ -37,15 +38,7 @@ func SynthesisSystemPrompt() string { return synthesisSystemPrompt }
 // InterpretQuestion would send for this request, without performing a
 // network call.
 func BuildInterpretationPrompt(request contextfabric.InvestigationRequest, maxBytes int) (string, error) {
-	payload := interpretationInput{
-		Question:             request.Question,
-		Conversation:         request.Conversation,
-		SubjectHints:         request.RequestedScope.SubjectHints,
-		RequestedScope:       request.RequestedScope,
-		TimeContext:          request.TimeContext,
-		PriorSubjectReceipts: request.PriorSubjectReceipts,
-	}
-	encoded, err := boundedJSON(payload, maxBytes)
+	encoded, err := interpretprompt.UserPayload(request, maxBytes)
 	if err != nil {
 		return "", err
 	}

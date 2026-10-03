@@ -1,4 +1,4 @@
-package genkitruntime
+package interpretprompt
 
 // The temporal section of interpretationSystemPrompt. Its own constant so a
 // later rule family adds a section beside it; prompts.go splices it in with %s.
