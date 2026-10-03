@@ -666,6 +666,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		}
 	}
 	projectDeploymentsUnlinked := -1
+	projectDeploymentsDenied := -1
 
 	for _, subject := range request.Resolution.Committed {
 		if ownershipRoutedRepoSlug != "" && subject.Kind == contextfabric.SubjectRepository && subject.Label == ownershipRoutedRepoSlug {
@@ -683,6 +684,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			nodes, edges, filters, walkTruncated = walk.nodes, walk.edges, walk.filters, walk.truncated
 			if err == nil && walk.linkedPullRequests == 0 {
 				projectDeploymentsUnlinked = walk.issues
+			}
+			if err == nil && walk.linkedPullRequests > 0 && len(walk.nodes) == 0 && walk.denied > 0 {
+				projectDeploymentsDenied = walk.denied
 			}
 		} else {
 			nodes, edges, failed, filters, walkTruncated, err = a.hopWalk(ctx, key, principal.OrgID, principal, scope, subject, 2, collectLimit, temporal)
@@ -1376,7 +1380,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		unbounded = countUnboundedValidity(cohortNodes, orderedResolved)
 	}
 
-	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0 || exactNameTruncated || cohortWhollyDeniedByAuthz || kindCensusTruncated || projectDeploymentsUnlinked >= 0
+	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0 || exactNameTruncated || cohortWhollyDeniedByAuthz || kindCensusTruncated || projectDeploymentsUnlinked >= 0 || projectDeploymentsDenied >= 0
 	var degradedReasons []string
 	var coverageDetails []contextfabric.CoverageDetail
 	// CHAOS-4690: every degraded reason this reader composes gets a paired
@@ -1457,6 +1461,12 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		degradedReasons = append(degradedReasons, cohortDeniedReason)
 		deniedCount := cohortKindScopedAuthzDropped
 		appendGraphDetail(contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization, true, &deniedCount, cohortDeniedReason, "context-fabric:graph")
+	}
+	if projectDeploymentsDenied >= 0 {
+		deniedReason := fmt.Sprintf("cohort_denied_by_authorization:%d", projectDeploymentsDenied)
+		degradedReasons = append(degradedReasons, deniedReason)
+		deniedHops := projectDeploymentsDenied
+		appendGraphDetail(contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization, true, &deniedHops, deniedReason, "context-fabric:graph")
 	}
 	if projectDeploymentsUnlinked >= 0 {
 		// The project's deployments are UNKNOWN, not none: no issue links a

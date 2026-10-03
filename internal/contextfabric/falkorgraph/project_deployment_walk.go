@@ -116,15 +116,29 @@ type projectDeploymentWalk struct {
 	// linkedPullRequests how many pull-request work items they link, before
 	// authorization. Zero linked pull requests is the unlinked terminal.
 	issues, linkedPullRequests int
+	// denied counts the links, repositories and deployments the caller's
+	// authorization hid. Members unseen for that reason are not an unlinked
+	// project.
+	denied int
+}
+
+// noRepositoryScope is the authorization scope a work item with no repository
+// carries.
+const noRepositoryScope = "acr-context-fabric:no-repository"
+
+func repositoryLess(n *node) bool {
+	repositories, _ := n.Properties[propAuthzRepos].([]string)
+	return len(repositories) == 1 && repositories[0] == noRepositoryScope
 }
 
 func canonicalIDOf(n *node) string { return propStringValue(n.Properties[propCanonicalID]) }
 
 // projectDeploymentMembers returns the deployments of the repositories the
 // project's issues' linked pull requests belong to. Only the pull request,
-// the repository and the deployment must pass the caller's authorization; an
-// issue is a waypoint and is never disclosed (a repository-less issue carries
-// the "*" scope, which a repository-restricted caller is admitted to nowhere).
+// the repository and the deployment must pass the caller's authorization, and
+// so must the issue under the work-item rule: an issue with a repository of its
+// own is decided by that repository; a repository-less issue (Linear, Jira) is
+// admitted by its native link to a pull request the caller is granted.
 func (a *Adapter) projectDeploymentMembers(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, project contextfabric.SubjectRef, collectLimit int, temporal temporalFilter) (projectDeploymentWalk, error) {
 	var out projectDeploymentWalk
 	authorized := func(n *node) bool {
@@ -151,6 +165,10 @@ func (a *Adapter) projectDeploymentMembers(ctx context.Context, key, orgID strin
 		return ids
 	}
 	toID := func(h walkHit) string { return canonicalIDOf(h.to) }
+	deny := func() {
+		out.filters.add(edgeFiltered, edgeFilterReasonAuthz)
+		out.denied++
+	}
 
 	issueHits, err := a.walkStepHits(ctx, key, orgID, []string{project.CanonicalID},
 		walkStep{fromKind: contractsv1.ContextFabricSubjectProject, toKind: contractsv1.ContextFabricSubjectWorkItem, relation: contractsv1.ContextFabricRelationshipBelongsToProject, direction: walkIn, notToTypes: pullRequestWorkItemTypes}, temporal)
@@ -159,6 +177,10 @@ func (a *Adapter) projectDeploymentMembers(ctx context.Context, key, orgID strin
 	}
 	issues := cut(unique(issueHits, toID))
 	out.issues = len(issues)
+	issueNodes := map[string]*node{}
+	for _, h := range issueHits {
+		issueNodes[canonicalIDOf(h.to)] = h.to
+	}
 
 	var pullRequests []string
 	if len(issues) > 0 {
@@ -171,10 +193,14 @@ func (a *Adapter) projectDeploymentMembers(ctx context.Context, key, orgID strin
 		out.linkedPullRequests = len(pullRequests)
 		authorizedPRs := map[string]bool{}
 		for _, h := range linkHits {
-			if authorized(h.to) {
+			issue := issueNodes[h.from]
+			switch {
+			case issue == nil || !(authorized(issue) || repositoryLess(issue)):
+				deny()
+			case !authorized(h.to):
+				deny()
+			default:
 				authorizedPRs[canonicalIDOf(h.to)] = true
-			} else {
-				out.filters.add(edgeFiltered, edgeFilterReasonAuthz)
 			}
 		}
 		pullRequests = pullRequests[:0]
@@ -195,7 +221,7 @@ func (a *Adapter) projectDeploymentMembers(ctx context.Context, key, orgID strin
 	repositories := map[string]*node{}
 	for _, h := range repoHits {
 		if !authorized(h.to) {
-			out.filters.add(edgeFiltered, edgeFilterReasonAuthz)
+			deny()
 			continue
 		}
 		repositories[canonicalIDOf(h.to)] = h.to
@@ -217,7 +243,7 @@ func (a *Adapter) projectDeploymentMembers(ctx context.Context, key, orgID strin
 	seen := map[string]bool{}
 	for _, h := range deploymentHits {
 		if !authorized(h.to) {
-			out.filters.add(edgeFiltered, edgeFilterReasonAuthz)
+			deny()
 			continue
 		}
 		id := canonicalIDOf(h.to)

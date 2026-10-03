@@ -36,6 +36,9 @@ func (s *projectSeed) repository(slug string, deployments int) string {
 // pull-request work item relates to the issue (pull request is the edge
 // source) and belongs to its own repository.
 func (s *projectSeed) link(row, issueID string, issueRepos []string, prID, prType, repoID, slug string, issueIsSource bool) {
+	if issueRepos == nil {
+		issueRepos = []string{noRepositoryScope}
+	}
 	s.nodes = append(s.nodes,
 		seededNode{kind: "work_item", id: issueID, label: issueID, repos: issueRepos, workItemType: "issue"},
 		seededNode{kind: "work_item", id: prID, label: prID, repos: []string{slug}, workItemType: prType})
@@ -268,6 +271,60 @@ func TestLinkedPullRequestsDeniedByAuthorizationAreNotTheUnlinkedLimitation(t *t
 	if unlinkedDetail(result) != nil {
 		t.Fatal("pull requests that exist but are not visible to the caller must not read as 'no issue links a pull request'")
 	}
+	if detail := deniedDetail(result); detail == nil || detail.Count == nil || *detail.Count == 0 || !result.Coverage.Partial {
+		t.Fatalf("details = %+v partial=%v, want the restricted-visibility limitation (denied by authorization) and partial coverage", result.Coverage.Details, result.Coverage.Partial)
+	}
+}
+
+func deniedDetail(result contextfabric.GraphContext) *contextfabric.CoverageDetail {
+	for i := range result.Coverage.Details {
+		if result.Coverage.Details[i].Code == contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization {
+			return &result.Coverage.Details[i]
+		}
+	}
+	return nil
+}
+
+func TestUnrestrictedCallerWithNoLinkedPullRequestIsStillUnlinkedNotDenied(t *testing.T) {
+	s := projectSeed{served: map[string]string{}}
+	s.nodes = append(s.nodes,
+		seededNode{kind: "project", id: projectAnchorID, label: "payments"},
+		seededNode{kind: "work_item", id: "work_item:gh:1", label: "issue", repos: []string{"acme/x"}, workItemType: "issue"})
+	s.edges = append(s.edges, seededEdge{"BELONGS_TO_PROJECT", "work_item", "work_item:gh:1", "project", projectAnchorID})
+	for _, principal := range []storage.Principal{{OrgID: "org-1"}, {OrgID: "org-1", RepositoryScopes: []string{"acme/granted"}}} {
+		_, result := discoverProjectDeployments(t, s, principal, nil)
+		if unlinkedDetail(result) == nil || deniedDetail(result) != nil {
+			t.Fatalf("principal %v: details = %+v, want only the unlinked limitation (no link exists for anyone)", principal.RepositoryScopes, result.Coverage.Details)
+		}
+	}
+}
+
+func TestProjectDeploymentWalkAdmitsAnIssueByTheWorkItemRule(t *testing.T) {
+	build := func(issueRepos []string) projectSeed {
+		s := projectSeed{served: map[string]string{}}
+		s.nodes = append(s.nodes, seededNode{kind: "project", id: projectAnchorID, label: "payments"})
+		repo := s.repository("acme/granted", 1)
+		s.link("row", "work_item:issue:1", issueRepos, "work_item:ghpr:1", "pr", repo, "acme/granted", false)
+		return s
+	}
+	granted := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"acme/granted"}}
+	for _, c := range []struct {
+		name       string
+		issueRepos []string
+		want       int
+	}{
+		{"repository-less issue linked to a granted pull request", nil, 1},
+		{"issue in the granted repository", []string{"acme/granted"}, 1},
+		{"issue in a repository the caller cannot see", []string{"acme/hidden"}, 0},
+	} {
+		walk := walkProject(t, build(c.issueRepos), granted, 50)
+		if len(walk.nodes) != c.want {
+			t.Errorf("%s: served %d deployments, want %d", c.name, len(walk.nodes), c.want)
+		}
+		if c.want == 0 && (walk.denied == 0 || walk.linkedPullRequests == 0) {
+			t.Errorf("%s: denied=%d linked=%d, want the unseen link counted as denied, not as unlinked", c.name, walk.denied, walk.linkedPullRequests)
+		}
+	}
 }
 
 func walkProject(t *testing.T, s projectSeed, principal storage.Principal, limit int) projectDeploymentWalk {
@@ -292,7 +349,7 @@ func manyIssuesOneRepository(issues int) projectSeed {
 	s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "work_item", "work_item:ghpr:one", "repository", repoID})
 	for i := 0; i < issues; i++ {
 		issue := fmt.Sprintf("work_item:gh:%02d", i)
-		s.nodes = append(s.nodes, seededNode{kind: "work_item", id: issue, label: issue, workItemType: "issue"})
+		s.nodes = append(s.nodes, seededNode{kind: "work_item", id: issue, label: issue, repos: []string{noRepositoryScope}, workItemType: "issue"})
 		s.edges = append(s.edges,
 			seededEdge{"BELONGS_TO_PROJECT", "work_item", issue, "project", projectAnchorID},
 			seededEdge{"RELATES_TO", "work_item", "work_item:ghpr:one", "work_item", issue})
@@ -328,7 +385,7 @@ func TestProjectDeploymentWalkAuthorizesEachDisclosedHop(t *testing.T) {
 		s := projectSeed{served: map[string]string{}}
 		s.nodes = append(s.nodes,
 			seededNode{kind: "project", id: projectAnchorID, label: "payments"},
-			seededNode{kind: "work_item", id: "work_item:gh:1", label: "issue", workItemType: "issue"},
+			seededNode{kind: "work_item", id: "work_item:gh:1", label: "issue", repos: []string{noRepositoryScope}, workItemType: "issue"},
 			seededNode{kind: "work_item", id: "work_item:ghpr:1", label: "pr", repos: prRepos, workItemType: "pr"},
 			seededNode{kind: "repository", id: "repository:r", label: "r", repos: repoRepos},
 			seededNode{kind: "deployment", id: "deployment:d", label: "d", repos: deploymentRepos})
