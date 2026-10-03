@@ -3819,7 +3819,11 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if !offersOnly && deps.CensusFunc != nil && (stalledForCensus || committedScopeAnchorShadowsHandle(request.Question, resolution.Committed, frame)) {
 		// CHAOS-4300: false -- this is the pre-existing stalled-resolution
 		// call site, not the caller-hint short circuit's own new call above.
-		attestation := runShadowEvidenceRoundForResolution(ctx, principal, request, interpreted, resolution, aliasClaimantsByTerm, aliasIdentityComplete, unscopedVisibility, deps, confirmedKind, confirmedAnchor, false)
+		censusVisibility := unscopedVisibility
+		if !stalledForCensus {
+			censusVisibility = unscopedVisibility || repositoryNarrowedByUnrestrictedPrincipal(principal, request)
+		}
+		attestation := runShadowEvidenceRoundForResolution(ctx, principal, request, interpreted, resolution, aliasClaimantsByTerm, aliasIdentityComplete, censusVisibility, deps, confirmedKind, confirmedAnchor, false)
 		// CHAOS-3896 Slice C (design brief v6 §1.4): the round's Attestation
 		// is now CONSUMED in the commit decision, not merely traced. When it
 		// named exactly one satisfier (attestedSatisfier), prove that
@@ -5077,4 +5081,17 @@ func appendCensusAttestedCommit(resolution *contextfabric.SubjectResolution, can
 		SearchTruncated: searchTruncated, AliasLookupComplete: aliasComplete,
 	})
 	return true
+}
+
+// repositoryNarrowedByUnrestrictedPrincipal is true when the only thing
+// restricting visibility is the caller's own repository narrowing of an
+// otherwise unrestricted principal. Such a narrowing cannot hide anything the
+// principal could not already see, so it does not make the census an
+// existence oracle; the attested satisfier is still authorized against the
+// requested scope when it is merged.
+func repositoryNarrowedByUnrestrictedPrincipal(principal storage.Principal, request contextfabric.InvestigationRequest) bool {
+	return scopesUnrestricted(principal.RepositoryScopes) &&
+		len(request.RequestedScope.RepositorySlugs) > 0 &&
+		len(request.RequestedScope.ProjectIDs) == 0 &&
+		len(request.RequestedScope.TeamIDs) == 0
 }

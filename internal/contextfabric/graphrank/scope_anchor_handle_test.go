@@ -16,8 +16,13 @@ const (
 )
 
 func scopeAnchorBackend(searchTruncated bool, repoRelevance float64) *fakeGraphBackend {
+	return scopeAnchorBackendFor(searchTruncated, repoRelevance, "*")
+}
+
+func scopeAnchorBackendFor(searchTruncated bool, repoRelevance float64, authorization interface{}) *fakeGraphBackend {
 	repoNode := aliasCandidateNode(contextfabric.SubjectRepository, scopeAnchorRepoID, scopeAnchorRepo, repoRelevance, []string{scopeAnchorRepo}, nil, true)
-	prNode := candidateNode(contextfabric.SubjectPullRequest, scopeAnchorPRID, "PR #747", 0.5, "*")
+	repoNode.Attributes["authorization_repositories"] = authorization
+	prNode := candidateNode(contextfabric.SubjectPullRequest, scopeAnchorPRID, "PR #747", 0.5, authorization)
 	return &fakeGraphBackend{
 		enableAliasLookup:    true,
 		aliasLookupClaimants: map[string][]CandidateNode{scopeAnchorRepo: {repoNode}},
@@ -237,5 +242,52 @@ func TestResolveSubjects_CandidateCapRefusalIsRecordedAsADecision(t *testing.T) 
 	}
 	if refused != 1 {
 		t.Fatalf("no_commit evidence_census decision events for the pull request = %d, want 1", refused)
+	}
+}
+
+func TestResolveSubjects_RepositoryNarrowedRequestStillAttestsTheNamedHandle(t *testing.T) {
+	t.Parallel()
+	backend := scopeAnchorBackend(true, -1)
+	deps := backend.deps()
+	var calls int
+	deps.CensusFunc = scopeAnchorCensus(&calls)
+	request := testRequest()
+	request.Question = scopeAnchorQuestion
+	request.RequestedScope.RepositorySlugs = []string{scopeAnchorRepo}
+	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"*"}}
+	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), principal, request, testInterpreted(scopeAnchorRepo, "pull request 747"), deps, nil, nil, namedScopeAnchorFrame(nil), "")
+	if err != nil {
+		t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+	}
+	ids := scopeAnchorCommittedIDs(resolution)
+	if len(ids) != 2 || ids[1] != scopeAnchorPRID {
+		t.Fatalf("committed = %v, want the repository then the pull request: a caller's repository narrowing of an unrestricted principal hides nothing", ids)
+	}
+}
+
+func TestResolveSubjects_RestrictedPrincipalNeverRunsTheHandleCensus(t *testing.T) {
+	t.Parallel()
+	backend := scopeAnchorBackendFor(true, -1, []string{scopeAnchorRepo})
+	deps := backend.deps()
+	var calls int
+	deps.CensusFunc = scopeAnchorCensus(&calls)
+	request := testRequest()
+	request.Question = scopeAnchorQuestion
+	request.RequestedScope.RepositorySlugs = []string{scopeAnchorRepo}
+	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{scopeAnchorRepo}}
+	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), principal, request, testInterpreted(scopeAnchorRepo, "pull request 747"), deps, nil, nil, namedScopeAnchorFrame(nil), "")
+	if err != nil {
+		t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+	}
+	if ids := scopeAnchorCommittedIDs(resolution); len(ids) != 1 || ids[0] != scopeAnchorRepoID {
+		t.Fatalf("committed = %v, want the repository committed so the trigger is reachable", ids)
+	}
+	if calls != 0 {
+		t.Fatalf("census calls = %d, want 0 for a repository-restricted principal", calls)
+	}
+	for _, id := range scopeAnchorCommittedIDs(resolution) {
+		if id == scopeAnchorPRID {
+			t.Fatalf("committed = %v, want the pull request left out", scopeAnchorCommittedIDs(resolution))
+		}
 	}
 }
