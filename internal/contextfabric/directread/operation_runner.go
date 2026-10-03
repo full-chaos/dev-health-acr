@@ -37,6 +37,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/http"
 	"sort"
 	"strings"
 	"sync"
@@ -152,6 +153,12 @@ type OperationRefusal struct {
 // OperationError is one safe upstream error entry.
 type OperationError struct {
 	Class UpstreamErrorClass `json:"class"`
+	// Status is the upstream HTTP status, set with class http_status.
+	Status int `json:"status,omitempty"`
+	// GraphQLCode is the closed token of the upstream GraphQL error code.
+	GraphQLCode UpstreamGraphQLCode `json:"graphql_code,omitempty"`
+	// Variable is the GraphQL variable name the upstream rejected.
+	Variable string `json:"variable,omitempty"`
 }
 
 // OperationSource names where the data came from.
@@ -227,6 +234,9 @@ type OperationRead struct {
 	Decision          string
 	RefusalCode       RefusalCode
 	ErrorClass        UpstreamErrorClass
+	UpstreamStatus    int
+	GraphQLCode       UpstreamGraphQLCode
+	Variable          string
 	ForcedByGrant     bool
 	VariablesRejected int
 	RowsChecked       int
@@ -843,10 +853,41 @@ func (x *run) mapCallError(err error, maxBytes int) OperationResponse {
 		x.resp = resp
 		return resp
 	case QueryErrorHTTPStatus:
-		return x.upstream(CallUpstreamError, UpstreamHTTPStatus)
+		return x.httpStatusError(err)
 	default:
 		return x.upstream(CallUpstreamError, UpstreamTransport)
 	}
+}
+
+// RefusalReasonUpstreamRejectedRequest is the fixed reason of a refusal
+// that the upstream's GraphQL validation or parse step caused.
+const RefusalReasonUpstreamRejectedRequest = "the query service rejected the request variables or document; see errors for the variable"
+
+// httpStatusError carries the upstream HTTP status and the closed GraphQL
+// code into errors[] and the read log. A GraphQL validation or parse
+// rejection is the caller's request: it is a refusal, not an upstream error.
+func (x *run) httpStatusError(err error) OperationResponse {
+	var qe *QueryError
+	if !errors.As(err, &qe) {
+		return x.upstream(CallUpstreamError, UpstreamHTTPStatus)
+	}
+	entry := OperationError{Class: UpstreamHTTPStatus, GraphQLCode: qe.GraphQLCode, Variable: qe.Variable}
+	if qe.StatusCode >= 100 && qe.StatusCode <= 599 {
+		entry.Status = qe.StatusCode
+	}
+	x.read.UpstreamStatus, x.read.GraphQLCode, x.read.Variable = entry.Status, entry.GraphQLCode, entry.Variable
+	if qe.GraphQLCode.callerFault() && entry.Status == http.StatusUnprocessableEntity {
+		x.refuse(RefusalInvalidRequest, RefusalReasonUpstreamRejectedRequest, "")
+		x.resp.Errors = []OperationError{entry}
+		x.read.ErrorClass = UpstreamHTTPStatus
+		return x.resp
+	}
+	x.resp.Call = CallUpstreamError
+	x.resp.Errors = []OperationError{entry}
+	x.resp.Data = nil
+	x.read.Decision = string(CallUpstreamError)
+	x.read.ErrorClass = UpstreamHTTPStatus
+	return x.resp
 }
 
 // parseGraphQLAnswer reads {"data": ..., "errors": [...]}. Any GraphQL error
@@ -925,6 +966,15 @@ func OperationReadLogArgs(principal storage.Principal, read OperationRead) []any
 	}
 	if read.ErrorClass != "" {
 		args = append(args, "error_class", contextfabric.SanitizeLogAttr(string(read.ErrorClass)))
+	}
+	if read.UpstreamStatus != 0 {
+		args = append(args, "upstream_status", read.UpstreamStatus)
+	}
+	if read.GraphQLCode != "" {
+		args = append(args, "graphql_code", contextfabric.SanitizeLogAttr(string(read.GraphQLCode)))
+	}
+	if read.Variable != "" {
+		args = append(args, "variable", contextfabric.SanitizeLogAttr(read.Variable))
 	}
 	return args
 }

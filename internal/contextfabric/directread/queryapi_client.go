@@ -120,6 +120,11 @@ type QueryError struct {
 	// ListenerReason is the listener's refusal reason when it is one of
 	// the closed MCPListenerRefusalReasons, else "unknown" (logging only).
 	ListenerReason string
+	// GraphQLCode and Variable are set for QueryErrorHTTPStatus when the
+	// non-2xx body is a GraphQL error envelope: the closed code token and
+	// the variable name from errors[0].path. Never upstream message text.
+	GraphQLCode UpstreamGraphQLCode
+	Variable    string
 }
 
 // mcpListenerReasons is the MCP listener's closed refusal vocabulary (ops
@@ -559,8 +564,9 @@ func (c *HTTPQueryClient) Execute(ctx context.Context, call QueryCall) (QueryRes
 		return QueryResult{}, qerr
 	case resp.StatusCode < 200 || resp.StatusCode > 299:
 		qerr := &QueryError{Class: QueryErrorHTTPStatus, StatusCode: resp.StatusCode}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		qerr.GraphQLCode, qerr.Variable = parseUpstreamGraphQLError(body)
 		if c.readsTypedRefusals {
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 			qerr.ReadBudget = ReadBudgetOf(body)
 			qerr.ListenerRefusal, qerr.ListenerReason = listenerRefusalOf(body)
 		}

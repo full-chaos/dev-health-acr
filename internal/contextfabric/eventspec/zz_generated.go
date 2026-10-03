@@ -1816,6 +1816,9 @@ type OperationReadFields struct {
 	Result            string
 	RefusalCode       string
 	ErrorClass        string
+	UpstreamStatus    int
+	GraphqlCode       string
+	Variable          string
 	RequestID         string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every OperationReadFields uniformly, set ONLY by NewOperationReadFields below. A caller
@@ -1830,7 +1833,7 @@ type OperationReadFields struct {
 
 // NewOperationReadFields is the generated constructor for OperationReadFields -- every
 // field OperationRead.Fields declares is a required parameter.
-func NewOperationReadFields(orgID string, operation string, callerClass string, scopeClass string, decision string, forcedByGrant bool, variablesRejected int, rowsChecked int, rowsForeign int, pathsRemoved int, completeness string, bytes int, latencyMs int, schemaDigest string, documentDigest string, result string, refusalCode string, errorClass string, requestID string) OperationReadFields {
+func NewOperationReadFields(orgID string, operation string, callerClass string, scopeClass string, decision string, forcedByGrant bool, variablesRejected int, rowsChecked int, rowsForeign int, pathsRemoved int, completeness string, bytes int, latencyMs int, schemaDigest string, documentDigest string, result string, refusalCode string, errorClass string, upstreamStatus int, graphqlCode string, variable string, requestID string) OperationReadFields {
 	return OperationReadFields{
 		OrgID:             orgID,
 		Operation:         operation,
@@ -1850,6 +1853,9 @@ func NewOperationReadFields(orgID string, operation string, callerClass string, 
 		Result:            result,
 		RefusalCode:       refusalCode,
 		ErrorClass:        errorClass,
+		UpstreamStatus:    upstreamStatus,
+		GraphqlCode:       graphqlCode,
+		Variable:          variable,
 		RequestID:         requestID,
 		constructed:       true,
 	}
@@ -1886,6 +1892,9 @@ func (f OperationReadFields) SlogArgs() []any {
 		"result", contextfabric.SanitizeLogAttr(f.Result),
 		"refusal_code", contextfabric.SanitizeLogAttr(f.RefusalCode),
 		"error_class", contextfabric.SanitizeLogAttr(f.ErrorClass),
+		"upstream_status", f.UpstreamStatus,
+		"graphql_code", contextfabric.SanitizeLogAttr(f.GraphqlCode),
+		"variable", contextfabric.SanitizeLogAttr(f.Variable),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }

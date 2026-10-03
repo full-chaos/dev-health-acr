@@ -2216,6 +2216,7 @@ var (
 		"invalid_request", "scope_required", "row_outside_grant", "policy_stale", "denied_or_not_found",
 	}
 	operationReadErrorClasses = []string{"graphql_errors", "decode", "http_status", "transport", "canceled", "timeout", "not_found", "concurrency_wait"}
+	operationReadGraphQLCodes = []string{"graphql_validation_failed", "graphql_parse_failed", "mcp_refused", "mcp_read_budget_exceeded", "other"}
 )
 
 // OperationRead records one run_operation call (CHAOS-7036 design J.3): the
@@ -2246,6 +2247,9 @@ var OperationRead = Event{
 		{Key: "result", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call is served", ClosedVocabulary: operationReadResults},
 		{Key: "refusal_code", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call is refused", ClosedVocabulary: operationReadRefusalCodes},
 		{Key: "error_class", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call ends upstream_error, upstream_timeout or operation_unavailable", ClosedVocabulary: operationReadErrorClasses},
+		{Key: "upstream_status", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when error_class is http_status: the upstream HTTP status, 100 to 599"},
+		{Key: "graphql_code", Type: FieldString, Presence: PresenceConditional, Applicability: "written when error_class is http_status and the upstream body is a GraphQL error envelope with a code; the code is a closed token, never upstream message text", ClosedVocabulary: operationReadGraphQLCodes},
+		{Key: "variable", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the upstream rejected a named GraphQL variable (errors[0].path variable, a GraphQL name of at most 64 characters)"},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }

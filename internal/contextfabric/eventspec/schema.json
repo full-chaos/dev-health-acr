@@ -3498,6 +3498,31 @@
         "applicability": "written when the call ends upstream_error, upstream_timeout or operation_unavailable"
       },
       {
+        "key": "upstream_status",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when error_class is http_status: the upstream HTTP status, 100 to 599"
+      },
+      {
+        "key": "graphql_code",
+        "type": "string",
+        "presence": "conditional",
+        "closed_vocabulary": [
+          "graphql_validation_failed",
+          "graphql_parse_failed",
+          "mcp_refused",
+          "mcp_read_budget_exceeded",
+          "other"
+        ],
+        "applicability": "written when error_class is http_status and the upstream body is a GraphQL error envelope with a code; the code is a closed token, never upstream message text"
+      },
+      {
+        "key": "variable",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the upstream rejected a named GraphQL variable (errors[0].path variable, a GraphQL name of at most 64 characters)"
+      },
+      {
         "key": "request_id",
         "type": "string",
         "presence": "conditional",
