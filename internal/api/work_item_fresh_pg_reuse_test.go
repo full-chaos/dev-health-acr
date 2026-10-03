@@ -94,6 +94,25 @@ func TestWorkItemFreshEnginePostgresReuseAcrossInstances(t *testing.T) {
 				t.Fatalf("native PG census=%+v", native.WorkItemCensus)
 			}
 
+			if scenario == "same_request_hit" {
+				// The row as a build without the interpretation provenance
+				// fields wrote it: the stored document names no interpreter.
+				stripped, err := db.ExecContext(ctx, `UPDATE acr.context_fabric_investigation_results SET payload = payload #- '{versions,interpretation_source}' #- '{versions,interpretation_model_identity}' WHERE org_id=$1 AND result_id=$2`, principal.OrgID, initial.ResultID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if rows, err := stripped.RowsAffected(); err != nil || rows != 1 {
+					t.Fatalf("stripped rows = %d err = %v, want the one stored row", rows, err)
+				}
+				var namesInterpreter bool
+				if err := db.QueryRowContext(ctx, `SELECT jsonb_exists(payload->'versions', 'interpretation_source') OR jsonb_exists(payload->'versions', 'interpretation_model_identity') FROM acr.context_fabric_investigation_results WHERE org_id=$1 AND result_id=$2`, principal.OrgID, initial.ResultID).Scan(&namesInterpreter); err != nil {
+					t.Fatal(err)
+				}
+				if namesInterpreter {
+					t.Fatal("the stored row still names its interpreter")
+				}
+			}
+
 			// New Engine, model adapter, graph fixture, PG Store and membership reader.
 			// Only the durable database and process gate survive construction.
 			second := newFreshPGReuseEngine(t, db, principal, gate, "result_fresh_pg_"+scenario+"_second")
@@ -148,6 +167,9 @@ func TestWorkItemFreshEnginePostgresReuseAcrossInstances(t *testing.T) {
 			if scenario == "same_request_hit" {
 				if !served.Reused || served.ResultID != initial.ResultID || !reflect.DeepEqual(served.ClaimedFacts, initial.ClaimedFacts) || !reflect.DeepEqual(served.Cohort.Members, initial.Cohort.Members) {
 					t.Fatalf("PG reuse lost fresh result identity/content: %+v", served)
+				}
+				if got := served.Versions; got.InterpretationSource != contextfabric.InterpretationSourceServer || got.InterpretationModelIdentity != "" {
+					t.Fatalf("reused row with no stored interpreter: interpretation_source = %q interpretation_model_identity = %q, want server and no identity", got.InterpretationSource, got.InterpretationModelIdentity)
 				}
 				if second.anchorCalls != 1 || len(second.membership.measured) != 1 {
 					t.Fatalf("reuse anchor=%d S1=%d", second.anchorCalls, len(second.membership.measured))

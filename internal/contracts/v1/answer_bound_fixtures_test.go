@@ -472,7 +472,10 @@ const irreducibleAnswerBytes = 1023
 // number went DOWN because the maximum was overstated, not because a bound
 // shrank: ContextFabricFactScopeCensusTokenMaxLength is unchanged and still
 // breachable on length. Deliberate, in the same commit as the validator.
-const maximalAnswerBytes = 521159035
+//
+// 521159035 -> 521162181 (+3146): the version set carries the interpretation
+// source and the interpretation model identity at its 513-rune bound.
+const maximalAnswerBytes = 521162181
 
 func TestIrreducibleAndMaximalFixturesAreValid(t *testing.T) {
 	for _, tc := range []struct {

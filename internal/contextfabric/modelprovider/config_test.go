@@ -292,6 +292,14 @@ func TestConfigFromEnv_rejectsInvalidConfigurations(t *testing.T) {
 			values: map[string]string{EnvAPIKey: "sk-test", EnvProvider: "acme/gateway"},
 			want:   "path separator",
 		},
+		"provider with the reserved client-supplied name": {
+			values: map[string]string{EnvAPIKey: "sk-test", EnvProvider: "client-supplied"},
+			want:   "reserved provider",
+		},
+		"provider with the reserved name in another case": {
+			values: map[string]string{EnvAPIKey: "sk-test", EnvProvider: "Client-Supplied"},
+			want:   "reserved provider",
+		},
 		"model with an empty path segment": {
 			values: map[string]string{EnvAPIKey: "sk-test", EnvModel: "/gpt-5-nano"},
 			want:   "empty path segment",

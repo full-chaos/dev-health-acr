@@ -28,6 +28,10 @@ import (
 // The path parameter is a frozen, opaque handle. Nothing parses it.
 const ContextFabricInvestigationResultPath = "/api/v1/context-fabric/investigations/{result_id}"
 
+// storedInterpretationProvenanceBackfilledLogMessage is the Info line of a
+// read by id that named the interpreter of a row stored without one.
+const storedInterpretationProvenanceBackfilledLogMessage = "context fabric legacy interpretation provenance backfilled"
+
 // investigationResults returns the configured result store, or nil when the
 // hosted runtime (or the store within it) is not configured. Handler()
 // calls this at mux-construction time, when a.runtime may itself be nil --
@@ -221,6 +225,15 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 			a.logger.InfoContext(r.Context(), contextfabric.RetainedRankingAccountingLogMessage, args...)
 		}
 		result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
+		// A row stored before the interpretation provenance fields existed
+		// names its interpreter here by the rule the reuse return uses. The
+		// projection view below copies these versions. Logged when a source
+		// was named, so the count of such rows still read is a measurement.
+		if contextfabric.BackfillStoredInterpretationProvenance(&result.Versions) {
+			a.logger.InfoContext(r.Context(), storedInterpretationProvenanceBackfilledLogMessage,
+				"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
+				"interpretation_source", string(result.Versions.InterpretationSource))
+		}
 		// The outcome-derivation completeness authority, re-evaluated HERE
 		// against the row's OWN outcome rows -- a stored row never reaches
 		// finalizeServed (this route reads storage directly, the same

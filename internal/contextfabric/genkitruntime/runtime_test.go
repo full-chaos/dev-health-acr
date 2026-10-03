@@ -1489,7 +1489,9 @@ func TestDecisionEventNeverCarriesCorpusText(t *testing.T) {
 	}
 
 	interpretFields := map[string]bool{
-		"request_id": true, "org_id_hash": true, "operation": true, "outcome": true,
+		// A closed value, server or client: who interpreted.
+		"interpretation_source": true,
+		"request_id":            true, "org_id_hash": true, "operation": true, "outcome": true,
 		"attempts": true, "fallback_used": true, "primary_failure_classification": true,
 		"axis_source": true,
 		// CHAOS-4631: the applied INTERPRET decoding config (a derived seed,

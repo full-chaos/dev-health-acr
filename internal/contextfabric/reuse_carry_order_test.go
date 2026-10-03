@@ -314,6 +314,7 @@ func TestReuseBypass_TheSlogSinkEmitsEachArm(t *testing.T) {
 		AnswerReuseBypassConfirmedStructure,
 		AnswerReuseBypassPriorSubjectReceipts,
 		AnswerReuseBypassPriorResultReference,
+		AnswerReuseBypassSuppliedInterpretation,
 	} {
 		t.Run(string(reason), func(t *testing.T) {
 			t.Parallel()

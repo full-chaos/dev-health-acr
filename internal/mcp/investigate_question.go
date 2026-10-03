@@ -59,20 +59,9 @@ func handleInvestigateQuestion(ctx context.Context, cfg *ProcessConfig, req *mcp
 		return refuseWithoutCaller(ctx, cfg, toolInvestigateQuestion), nil
 	}
 
-	args, receiptForm, normalizeErr := expandBareReceiptIDs(rawArgs(req))
-	if normalizeErr != nil {
-		// Decision basis for the refusal: the field is one of the six fixed
-		// names, never caller text, and no receipt id is logged.
-		if cfg.diagnostics != nil {
-			cfg.diagnostics.WarnContext(ctx, "investigate_question bare receipt refused", "reason", "parent_result_id_missing", "field", receiptForm.RefusedField, "surface", "investigate_question")
-		}
-		return toolErrorResult(&classifiedError{category: "validation", message: normalizeErr.Error()}), nil
-	}
-	if receiptForm.Bare > 0 && cfg.diagnostics != nil {
-		// Decision basis for the normalization: how many receipts arrived bare
-		// and were bound to parent_result_id versus already carried their own
-		// result_id. Counts and a closed field list only; never ids.
-		cfg.diagnostics.InfoContext(ctx, "investigate_question bare receipts expanded", "bare_receipts", receiptForm.Bare, "object_receipts", receiptForm.Object, "receipt_fields", receiptForm.Fields, "parent_bound", true, "surface", "investigate_question")
+	args, refused := normalizedInvestigationArgs(ctx, cfg, req, toolInvestigateQuestion)
+	if refused != nil {
+		return refused, nil
 	}
 	var input contractsv1.MCPInvestigateQuestionRequest
 	if err := json.Unmarshal(args, &input); err != nil {
@@ -81,8 +70,86 @@ func handleInvestigateQuestion(ctx context.Context, cfg *ProcessConfig, req *mcp
 	if err := input.Validate(); err != nil {
 		return toolErrorResult(&classifiedError{category: "validation", message: "investigate_question arguments failed schema validation"}), nil
 	}
+	return investigateAndRender(ctx, cfg, caller, toolInvestigateQuestion, input, nil)
+}
 
+// normalizedInvestigationArgs expands bare receipt ids in the raw arguments
+// of an investigation tool. A refusal comes back as a ready tool result.
+func normalizedInvestigationArgs(ctx context.Context, cfg *ProcessConfig, req *mcpsdk.CallToolRequest, surface string) ([]byte, *mcpsdk.CallToolResult) {
+	args, receiptForm, normalizeErr := expandBareReceiptIDs(rawArgs(req), surface)
+	if normalizeErr != nil {
+		// Decision basis for the refusal: the field is one of the six fixed
+		// names, never caller text, and no receipt id is logged.
+		if cfg.diagnostics != nil {
+			cfg.diagnostics.WarnContext(ctx, surface+" bare receipt refused", "reason", "parent_result_id_missing", "field", receiptForm.RefusedField, "surface", surface)
+		}
+		return nil, toolErrorResult(&classifiedError{category: "validation", message: normalizeErr.Error()})
+	}
+	if receiptForm.Bare > 0 && cfg.diagnostics != nil {
+		// Decision basis for the normalization: how many receipts arrived bare
+		// and were bound to parent_result_id versus already carried their own
+		// result_id. Counts and a closed field list only; never ids.
+		cfg.diagnostics.InfoContext(ctx, surface+" bare receipts expanded", "bare_receipts", receiptForm.Bare, "object_receipts", receiptForm.Object, "receipt_fields", receiptForm.Fields, "parent_bound", true, "surface", surface)
+	}
+	return args, nil
+}
+
+// investigateAndRender maps a validated request onto the hosted contract,
+// calls the hosted investigation and renders the shared bounded projection.
+// A non-nil supplied interpretation is the only difference between the tools
+// that call it.
+func investigateAndRender(ctx context.Context, cfg *ProcessConfig, caller *CallerContext, surface string, input contractsv1.MCPInvestigateQuestionRequest, supplied *contractsv1.ContextFabricSuppliedInterpretation) (*mcpsdk.CallToolResult, error) {
 	budget := answerBudget(input.Budget, caller.Capabilities().Limits)
+	hosted := hostedInvestigationRequest(input, budget)
+	hosted.SuppliedInterpretation = supplied
+
+	result, currentRequestID, err := caller.client.InvestigateWithRequestID(ctx, hosted)
+	if err != nil {
+		return toolErrorResult(err), nil
+	}
+
+	projection := answerprojection.Project(result, answerprojection.Budget{
+		MaxDrivers:       budget.MaxDrivers,
+		MaxCohortMembers: budget.MaxCohortMembers,
+		MaxEvidenceRefs:  budget.MaxEvidenceRefs,
+	})
+	response := contractsv1.MCPInvestigateQuestionResponse{
+		SchemaVersion: contractsv1.MCPInvestigateQuestionResponseSchema,
+		Structured:    projection,
+		// The structured payload carries the same untrusted signal the
+		// markdown rendering does, machine-readably. A consumer reading
+		// Structured must not have to infer safety from the absence of a
+		// warning it only ever saw in prose.
+		UntrustedContent: contractsv1.MCPUntrustedContent{
+			Untrusted: true,
+			Notice:    contractsv1.MCPUntrustedContentNotice,
+			Fields:    contractsv1.MCPInvestigateQuestionUntrustedFields,
+		},
+	}
+	if input.IncludeFullResult {
+		attachFullResult(&response, result, budget.MaxSerializedBytes)
+	}
+
+	rendered, truncated := sidecar.RenderAnswerProjectionMarkdown(response.Structured, investigationRenderedMarkdownMax)
+	response.RenderedMarkdown = contractsv1.MCPRenderedMarkdown{
+		Markdown:  rendered,
+		Untrusted: true,
+		Truncated: truncated,
+	}
+	if err := response.Validate(); err != nil {
+		return toolErrorResult(&classifiedError{category: "internal", message: "the assembled response failed contract validation"}), nil
+	}
+	if cfg.diagnostics != nil {
+		args := answerprojection.DisplayLogArgs(result, response.Structured, answerprojection.Budget{MaxDrivers: budget.MaxDrivers, MaxCohortMembers: budget.MaxCohortMembers, MaxEvidenceRefs: budget.MaxEvidenceRefs}, true, truncated)
+		args = append(args, "request_id", currentRequestID, "surface", surface)
+		cfg.diagnostics.InfoContext(ctx, "context fabric answer display", args...)
+	}
+	return buildToolResult(response, response.RenderedMarkdown.Markdown)
+}
+
+// hostedInvestigationRequest maps the MCP investigation arguments onto the
+// hosted investigation contract.
+func hostedInvestigationRequest(input contractsv1.MCPInvestigateQuestionRequest, budget contractsv1.MCPInvestigationBudget) contractsv1.ContextFabricInvestigationRequest {
 	hosted := contractsv1.ContextFabricInvestigationRequest{
 		Question:             input.Question,
 		Conversation:         input.Conversation,
@@ -147,49 +214,7 @@ func handleInvestigateQuestion(ctx context.Context, cfg *ProcessConfig, req *mcp
 			TeamIDs:         input.Scope.TeamIDs,
 		}
 	}
-
-	result, currentRequestID, err := caller.client.InvestigateWithRequestID(ctx, hosted)
-	if err != nil {
-		return toolErrorResult(err), nil
-	}
-
-	projection := answerprojection.Project(result, answerprojection.Budget{
-		MaxDrivers:       budget.MaxDrivers,
-		MaxCohortMembers: budget.MaxCohortMembers,
-		MaxEvidenceRefs:  budget.MaxEvidenceRefs,
-	})
-	response := contractsv1.MCPInvestigateQuestionResponse{
-		SchemaVersion: contractsv1.MCPInvestigateQuestionResponseSchema,
-		Structured:    projection,
-		// The structured payload carries the same untrusted signal the
-		// markdown rendering does, machine-readably. A consumer reading
-		// Structured must not have to infer safety from the absence of a
-		// warning it only ever saw in prose.
-		UntrustedContent: contractsv1.MCPUntrustedContent{
-			Untrusted: true,
-			Notice:    contractsv1.MCPUntrustedContentNotice,
-			Fields:    contractsv1.MCPInvestigateQuestionUntrustedFields,
-		},
-	}
-	if input.IncludeFullResult {
-		attachFullResult(&response, result, budget.MaxSerializedBytes)
-	}
-
-	rendered, truncated := sidecar.RenderAnswerProjectionMarkdown(response.Structured, investigationRenderedMarkdownMax)
-	response.RenderedMarkdown = contractsv1.MCPRenderedMarkdown{
-		Markdown:  rendered,
-		Untrusted: true,
-		Truncated: truncated,
-	}
-	if err := response.Validate(); err != nil {
-		return toolErrorResult(&classifiedError{category: "internal", message: "the assembled response failed contract validation"}), nil
-	}
-	if cfg.diagnostics != nil {
-		args := answerprojection.DisplayLogArgs(result, response.Structured, answerprojection.Budget{MaxDrivers: budget.MaxDrivers, MaxCohortMembers: budget.MaxCohortMembers, MaxEvidenceRefs: budget.MaxEvidenceRefs}, true, truncated)
-		args = append(args, "request_id", currentRequestID, "surface", "investigate_question")
-		cfg.diagnostics.InfoContext(ctx, "context fabric answer display", args...)
-	}
-	return buildToolResult(response, response.RenderedMarkdown.Markdown)
+	return hosted
 }
 
 // attachFullResult honors include_full_result within the byte budget.
@@ -286,7 +311,7 @@ var priorReceiptFields = []string{
 // the field, because there is no result_id to give it. Everything else
 // (bad JSON, wrong types, wrong prefixes) is left for the normal decode and
 // Validate path, so this function widens the input and refuses nothing else.
-func expandBareReceiptIDs(raw []byte) ([]byte, receiptFormSummary, error) {
+func expandBareReceiptIDs(raw []byte, surface string) ([]byte, receiptFormSummary, error) {
 	var summary receiptFormSummary
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &top); err != nil {
@@ -315,7 +340,7 @@ func expandBareReceiptIDs(raw []byte) ([]byte, receiptFormSummary, error) {
 			}
 			if parent == "" {
 				summary.RefusedField = field
-				return nil, summary, fmt.Errorf("investigate_question: %s has a bare receipt_id string, which needs parent_result_id (the result_id of the answer the receipt came from); pass parent_result_id, or pass {\"result_id\", \"receipt_id\"} objects", field)
+				return nil, summary, fmt.Errorf("%s: %s has a bare receipt_id string, which needs parent_result_id (the result_id of the answer the receipt came from); pass parent_result_id, or pass {\"result_id\", \"receipt_id\"} objects", surface, field)
 			}
 			object, err := json.Marshal(map[string]string{"result_id": parent, "receipt_id": bare})
 			if err != nil {

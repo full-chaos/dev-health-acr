@@ -876,11 +876,16 @@ type ContextFabricInvestigationRequest struct {
 	// PatternID must name one of the closed handle-grammar registry
 	// entries this deployment discloses via StructureNeeds.AcceptedGrammars
 	// -- never free text or a caller-supplied regex.
-	SubjectHandles []ContextFabricRequestedHandle    `json:"subject_handles,omitempty"`
-	RequestedScope ContextFabricRequestedScope       `json:"requested_scope,omitempty"`
-	TimeContext    ContextFabricTimeContext          `json:"time_context"`
-	Options        ContextFabricInvestigationOptions `json:"options"`
-	Consumer       ContextFabricConsumerInfo         `json:"consumer"`
+	SubjectHandles []ContextFabricRequestedHandle `json:"subject_handles,omitempty"`
+	// SuppliedInterpretation is an interpretation the caller ran on its own
+	// model. When present the service runs no interpretation call: the
+	// supplied output is validated as a model output is, and resolution,
+	// authorization, retrieval and answer assembly run unchanged.
+	SuppliedInterpretation *ContextFabricSuppliedInterpretation `json:"supplied_interpretation,omitempty"`
+	RequestedScope         ContextFabricRequestedScope          `json:"requested_scope,omitempty"`
+	TimeContext            ContextFabricTimeContext             `json:"time_context"`
+	Options                ContextFabricInvestigationOptions    `json:"options"`
+	Consumer               ContextFabricConsumerInfo            `json:"consumer"`
 }
 
 // ContextFabricExpectedKindsMaxCount bounds ExpectedKinds -- the closed
@@ -1760,6 +1765,17 @@ type ContextFabricVersionSet struct {
 	// round trip) would fail schema validation purely from this
 	// asymmetry.
 	ModelIdentity string `json:"model_identity,omitempty"`
+	// InterpretationSource and InterpretationModelIdentity name who
+	// interpreted the question of this result: the service's own model
+	// ("server", "<provider>/<model>") or the caller's ("client",
+	// "client-supplied/<declared model or undeclared>"). Both are absent
+	// when no interpretation ran on the turn. A stored result written before
+	// the fields existed is served, from answer reuse and by id, with the
+	// source "server" and no model identity when its InterpretationVersion
+	// names a version, and with neither field when that version is the
+	// "unwired" placeholder of a turn that ended before interpretation.
+	InterpretationSource        ContextFabricInterpretationSource `json:"interpretation_source,omitempty"`
+	InterpretationModelIdentity string                            `json:"interpretation_model_identity,omitempty"`
 }
 
 type ContextFabricInterpretedQuestion struct {

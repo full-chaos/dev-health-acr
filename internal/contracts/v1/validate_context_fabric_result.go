@@ -1318,6 +1318,9 @@ func (v ContextFabricVersionSet) Validate() error {
 	if !stringLengthBetween(v.BackendVersion, 0, 256) || strings.TrimSpace(v.BackendVersion) != v.BackendVersion {
 		return fmt.Errorf("backend_version violates v1 bounds")
 	}
+	if err := validateInterpretationProvenance(v.InterpretationSource, v.InterpretationModelIdentity); err != nil {
+		return err
+	}
 	return nil
 }
 

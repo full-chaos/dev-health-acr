@@ -367,6 +367,12 @@ const (
 	// reuse key does not include it, so a stored answer for the same question
 	// without the handle (or with another) must never be served.
 	AnswerReuseBypassExplicitHandle AnswerReuseBypassReason = "explicit_handle"
+	// AnswerReuseBypassSuppliedInterpretation: this turn carried an
+	// interpretation the caller ran itself. The lookup runs before
+	// interpretation and its key does not include the interpretation, so a
+	// stored answer would be served in place of the one the caller's
+	// interpretation leads to.
+	AnswerReuseBypassSuppliedInterpretation AnswerReuseBypassReason = "supplied_interpretation"
 )
 
 // reuseBypassReason decides whether this request may consult the reuse
@@ -406,6 +412,9 @@ const (
 // precisely what made the same-question containment a per-path property, and
 // this bypass is not worth reintroducing that.
 func reuseBypassReason(request InvestigationRequest, structureCanon requestStructureCanonicalization) AnswerReuseBypassReason {
+	if request.SuppliedInterpretation != nil {
+		return AnswerReuseBypassSuppliedInterpretation
+	}
 	if len(structureCanon.Confirmed) > 0 {
 		return AnswerReuseBypassConfirmedStructure
 	}

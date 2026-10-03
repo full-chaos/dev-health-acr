@@ -20,74 +20,75 @@ func FieldKeys(e Event) []string {
 // rather than hand-maintained so it can never drift from All.
 var ByID = map[string]Event{
 	"api.oauth_step": OAuthStep,
-	"contextfabric.anchor_binding_transition":      AnchorBindingTransition,
-	"contextfabric.answer_display":                 AnswerDisplay,
-	"contextfabric.cohort_kind_fulltext":           CohortKindFulltext,
-	"contextfabric.completeness_authority":         CompletenessAuthority,
-	"contextfabric.confirmed_need_ledger":          ConfirmedNeedLedger,
-	"contextfabric.count_population_scope":         CountPopulationScope,
-	"contextfabric.direct_read":                    DirectRead,
-	"contextfabric.direct_read_authorization":      DirectReadAuthorization,
-	"contextfabric.direct_relationships_read":      DirectRelationshipsRead,
-	"contextfabric.evidence_expansion":             EvidenceExpansion,
-	"contextfabric.frame_validation":               FrameValidation,
-	"contextfabric.graphql_query":                  GraphQLQuery,
-	"contextfabric.operation_read":                 OperationRead,
-	"contextfabric.remembered_window_axis":         RememberedWindowAxis,
-	"contextfabric.requirement_outcome_transition": RequirementOutcomeTransition,
-	"contextfabric.retained_ranking_accounting":    RetainedRankingAccounting,
-	"contextfabric.semantic_state_persistence":     SemanticStatePersistence,
-	"contextfabric.stored_result_authorization":    StoredResultAuthorization,
-	"contextfabric.synthesis_input":                SynthesisInput,
-	"contextfabric.synthesis_retry_selection":      SynthesisRetrySelection,
-	"contextfabric.window_continuation_decision":   WindowContinuationDecision,
-	"contextfabric.work_item_authorization_gap":    WorkItemAuthorizationGap,
-	"contextfabric.work_item_membership_gate":      WorkItemMembershipGate,
-	"contextfabric.work_item_membership_s1":        WorkItemMembershipS1,
-	"contextfabric.work_item_reuse":                WorkItemReuse,
-	"contextfabric.work_item_stored_serving":       WorkItemStoredServing,
-	"contextfabric.work_item_tuple_admission":      WorkItemTupleAdmission,
-	"graphrank.alias_lookup":                       AliasLookup,
-	"graphrank.anchor_kind_withheld":               AnchorKindWithheld,
-	"graphrank.anchor_kind_withheld_summary":       AnchorKindWithheldSummary,
-	"graphrank.anchor_offer":                       AnchorOffer,
-	"graphrank.anchor_pool":                        AnchorPool,
-	"graphrank.anchor_slot_displaced":              AnchorSlotDisplaced,
-	"graphrank.confirmed_kind_rescue":              ConfirmedKindRescue,
-	"graphrank.confirmed_kind_scope":               ConfirmedKindScope,
-	"graphrank.corroboration":                      Corroboration,
-	"graphrank.corroboration_summary":              CorroborationSummary,
-	"graphrank.decision":                           Decision,
-	"graphrank.decision_summary":                   DecisionSummary,
-	"graphrank.evidence_census_commit":             EvidenceCensusCommit,
-	"graphrank.evidence_probe":                     EvidenceProbe,
-	"graphrank.evidence_round":                     EvidenceRound,
-	"graphrank.evidence_source_native":             EvidenceSourceNative,
-	"graphrank.evidence_source_native_probe":       EvidenceSourceNativeProbe,
-	"graphrank.exact_name_search":                  ExactNameSearch,
-	"graphrank.identity_gate":                      IdentityGate,
-	"graphrank.identity_gate_summary":              IdentityGateSummary,
-	"graphrank.identity_universe":                  IdentityUniverse,
-	"graphrank.kind_coverage_floor":                KindCoverageFloor,
-	"graphrank.kind_hint_search":                   KindHintSearch,
-	"graphrank.kind_offer":                         KindOffer,
-	"graphrank.kind_offer_withheld":                KindOfferWithheld,
-	"graphrank.low_population_kind_scope":          LowPopulationKindScope,
-	"graphrank.low_population_kind_scope_summary":  LowPopulationKindScopeSummary,
-	"graphrank.offer_pool":                         OfferPool,
-	"graphrank.offer_pool_summary":                 OfferPoolSummary,
-	"graphrank.ranked_cut_summary":                 RankedCutSummary,
-	"graphrank.reserved_kind_admitted":             ReservedKindAdmitted,
-	"graphrank.search":                             Search,
-	"graphrank.search_question":                    SearchQuestion,
-	"graphrank.slice_b_survivor_verdict":           SliceBSurvivorVerdict,
-	"graphrank.slice_b_survivor_verdict_summary":   SliceBSurvivorVerdictSummary,
-	"mcp.hosted_context_scope":                     MCPHostedContextScope,
-	"mcp.http_readiness":                           MCPHTTPReadiness,
-	"mcp.http_request":                             MCPHTTPRequest,
-	"mcp.http_serving":                             MCPHTTPServing,
-	"process.otel_export":                          OTelExport,
-	"projectionrun.graph_count_check_finished":     GraphCountCheckFinished,
+	"contextfabric.anchor_binding_transition":        AnchorBindingTransition,
+	"contextfabric.answer_display":                   AnswerDisplay,
+	"contextfabric.cohort_kind_fulltext":             CohortKindFulltext,
+	"contextfabric.completeness_authority":           CompletenessAuthority,
+	"contextfabric.confirmed_need_ledger":            ConfirmedNeedLedger,
+	"contextfabric.count_population_scope":           CountPopulationScope,
+	"contextfabric.direct_read":                      DirectRead,
+	"contextfabric.direct_read_authorization":        DirectReadAuthorization,
+	"contextfabric.direct_relationships_read":        DirectRelationshipsRead,
+	"contextfabric.evidence_expansion":               EvidenceExpansion,
+	"contextfabric.frame_validation":                 FrameValidation,
+	"contextfabric.graphql_query":                    GraphQLQuery,
+	"contextfabric.operation_read":                   OperationRead,
+	"contextfabric.remembered_window_axis":           RememberedWindowAxis,
+	"contextfabric.requirement_outcome_transition":   RequirementOutcomeTransition,
+	"contextfabric.retained_ranking_accounting":      RetainedRankingAccounting,
+	"contextfabric.semantic_state_persistence":       SemanticStatePersistence,
+	"contextfabric.stored_result_authorization":      StoredResultAuthorization,
+	"contextfabric.supplied_interpretation_decision": SuppliedInterpretationDecision,
+	"contextfabric.synthesis_input":                  SynthesisInput,
+	"contextfabric.synthesis_retry_selection":        SynthesisRetrySelection,
+	"contextfabric.window_continuation_decision":     WindowContinuationDecision,
+	"contextfabric.work_item_authorization_gap":      WorkItemAuthorizationGap,
+	"contextfabric.work_item_membership_gate":        WorkItemMembershipGate,
+	"contextfabric.work_item_membership_s1":          WorkItemMembershipS1,
+	"contextfabric.work_item_reuse":                  WorkItemReuse,
+	"contextfabric.work_item_stored_serving":         WorkItemStoredServing,
+	"contextfabric.work_item_tuple_admission":        WorkItemTupleAdmission,
+	"graphrank.alias_lookup":                         AliasLookup,
+	"graphrank.anchor_kind_withheld":                 AnchorKindWithheld,
+	"graphrank.anchor_kind_withheld_summary":         AnchorKindWithheldSummary,
+	"graphrank.anchor_offer":                         AnchorOffer,
+	"graphrank.anchor_pool":                          AnchorPool,
+	"graphrank.anchor_slot_displaced":                AnchorSlotDisplaced,
+	"graphrank.confirmed_kind_rescue":                ConfirmedKindRescue,
+	"graphrank.confirmed_kind_scope":                 ConfirmedKindScope,
+	"graphrank.corroboration":                        Corroboration,
+	"graphrank.corroboration_summary":                CorroborationSummary,
+	"graphrank.decision":                             Decision,
+	"graphrank.decision_summary":                     DecisionSummary,
+	"graphrank.evidence_census_commit":               EvidenceCensusCommit,
+	"graphrank.evidence_probe":                       EvidenceProbe,
+	"graphrank.evidence_round":                       EvidenceRound,
+	"graphrank.evidence_source_native":               EvidenceSourceNative,
+	"graphrank.evidence_source_native_probe":         EvidenceSourceNativeProbe,
+	"graphrank.exact_name_search":                    ExactNameSearch,
+	"graphrank.identity_gate":                        IdentityGate,
+	"graphrank.identity_gate_summary":                IdentityGateSummary,
+	"graphrank.identity_universe":                    IdentityUniverse,
+	"graphrank.kind_coverage_floor":                  KindCoverageFloor,
+	"graphrank.kind_hint_search":                     KindHintSearch,
+	"graphrank.kind_offer":                           KindOffer,
+	"graphrank.kind_offer_withheld":                  KindOfferWithheld,
+	"graphrank.low_population_kind_scope":            LowPopulationKindScope,
+	"graphrank.low_population_kind_scope_summary":    LowPopulationKindScopeSummary,
+	"graphrank.offer_pool":                           OfferPool,
+	"graphrank.offer_pool_summary":                   OfferPoolSummary,
+	"graphrank.ranked_cut_summary":                   RankedCutSummary,
+	"graphrank.reserved_kind_admitted":               ReservedKindAdmitted,
+	"graphrank.search":                               Search,
+	"graphrank.search_question":                      SearchQuestion,
+	"graphrank.slice_b_survivor_verdict":             SliceBSurvivorVerdict,
+	"graphrank.slice_b_survivor_verdict_summary":     SliceBSurvivorVerdictSummary,
+	"mcp.hosted_context_scope":                       MCPHostedContextScope,
+	"mcp.http_readiness":                             MCPHTTPReadiness,
+	"mcp.http_request":                               MCPHTTPRequest,
+	"mcp.http_serving":                               MCPHTTPServing,
+	"process.otel_export":                            OTelExport,
+	"projectionrun.graph_count_check_finished":       GraphCountCheckFinished,
 }
 
 // OAuthStepFields is api.oauth_step's generated typed construction interface
@@ -2321,6 +2322,78 @@ func (f StoredResultAuthorizationFields) SlogArgs() []any {
 		"refused_kinds", contextfabric.SanitizeLogStrings(f.RefusedKinds),
 		"error_class", contextfabric.SanitizeLogAttr(f.ErrorClass),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// SuppliedInterpretationDecisionFields is contextfabric.supplied_interpretation_decision's generated typed construction interface
+// (CHAOS-5516): one Go field per Field SuppliedInterpretationDecision.Fields declares in spec.go.
+type SuppliedInterpretationDecisionFields struct {
+	RequestID            string
+	OrgIDHash            string
+	InterpretationSource string
+	Outcome              string
+	ClientModel          string
+	PromptVersion        string
+	ModelOutputVersion   string
+	ContractMismatch     []string
+	SchemaErrorType      string
+	RejectionReason      string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every SuppliedInterpretationDecisionFields uniformly, set ONLY by NewSuppliedInterpretationDecisionFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewSuppliedInterpretationDecisionFields is the generated constructor for SuppliedInterpretationDecisionFields -- every
+// field SuppliedInterpretationDecision.Fields declares is a required parameter.
+func NewSuppliedInterpretationDecisionFields(requestID string, orgIDHash string, interpretationSource string, outcome string, clientModel string, promptVersion string, modelOutputVersion string, contractMismatch []string, schemaErrorType string, rejectionReason string) SuppliedInterpretationDecisionFields {
+	valid := true
+	if contractMismatch == nil {
+		valid = false
+	}
+	return SuppliedInterpretationDecisionFields{
+		RequestID:            requestID,
+		OrgIDHash:            orgIDHash,
+		InterpretationSource: interpretationSource,
+		Outcome:              outcome,
+		ClientModel:          clientModel,
+		PromptVersion:        promptVersion,
+		ModelOutputVersion:   modelOutputVersion,
+		ContractMismatch:     contractMismatch,
+		SchemaErrorType:      schemaErrorType,
+		RejectionReason:      rejectionReason,
+		constructed:          valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewSuppliedInterpretationDecisionFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f SuppliedInterpretationDecisionFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns SuppliedInterpretationDecision's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f SuppliedInterpretationDecisionFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"org_id_hash", contextfabric.SanitizeLogAttr(f.OrgIDHash),
+		"interpretation_source", contextfabric.SanitizeLogAttr(f.InterpretationSource),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"client_model", contextfabric.SanitizeLogAttr(f.ClientModel),
+		"prompt_version", contextfabric.SanitizeLogAttr(f.PromptVersion),
+		"model_output_version", contextfabric.SanitizeLogAttr(f.ModelOutputVersion),
+		"contract_mismatch", contextfabric.SanitizeLogStrings(f.ContractMismatch),
+		"schema_error_type", contextfabric.SanitizeLogAttr(f.SchemaErrorType),
+		"rejection_reason", contextfabric.SanitizeLogAttr(f.RejectionReason),
 	}
 }
 

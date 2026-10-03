@@ -191,7 +191,12 @@ import (
 // pull request is committed and its facts are served. A candidate saved under
 // v26 for such a question holds the repository alone with the pull-request
 // facts pruned, and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v27"
+//
+// v27 -> v28: a pull-request number named in the question is attested by the
+// source census inside a caller's repository narrowing, so the one pull
+// request in the narrowed repositories commits. A candidate saved under v27
+// for such a question is a clarification and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v28"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

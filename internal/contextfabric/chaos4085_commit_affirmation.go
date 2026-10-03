@@ -97,7 +97,7 @@ import (
 // "cg_v2", not v1: v1 names the pre-CHAOS-4085 behavior, which no row
 // records, so starting at v2 keeps the vocabulary honest about the fact
 // that a first generation existed and is exactly what is being fenced off.
-const CommitGateVersion = "cg_v3"
+const CommitGateVersion = "cg_v4"
 
 // commitRetractionLimitation is the answer-facing disclosure appended when
 // this gate retracts a commit.

@@ -103,6 +103,41 @@
       "maxItems": 20,
       "uniqueItems": true
     },
+    "supplied_interpretation": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "An interpretation the caller ran on its own model. When present the service runs no interpretation call: output is validated exactly as a model output is, and resolution, authorization, retrieval and answer assembly run unchanged. model_output_version, prompt_version and system_sha256 name the contract the caller ran. All three are required: a value that is absent or does not equal the service's own is refused with status 409 and the current values.",
+      "properties": {
+        "output": {
+          "type": "object",
+          "description": "The model output object, at most 32768 bytes serialized."
+        },
+        "model_output_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "prompt_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "system_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "client_model": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._:/-]{1,128}$"
+        }
+      },
+      "required": [
+        "output",
+        "model_output_version",
+        "prompt_version",
+        "system_sha256"
+      ]
+    },
     "requested_scope": {
       "$ref": "context_fabric_common.v1.schema.json#/$defs/RequestedScope"
     },

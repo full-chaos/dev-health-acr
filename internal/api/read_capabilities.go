@@ -47,7 +47,7 @@ func (a *App) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	// per-call error instead of an honest capability answer -- the same
 	// reason record_episode below is gated on a.runtime.Episodes.
 	if entitled && capabilities.Permissions.ContextRead && a.investigator() != nil {
-		capabilities.EnabledTools = append(capabilities.EnabledTools, "investigate_question")
+		capabilities.EnabledTools = append(capabilities.EnabledTools, "investigate_question", "investigate_with_interpretation")
 	}
 	if entitled && capabilities.Permissions.ContextRead && a.investigationResults() != nil {
 		capabilities.EnabledTools = append(capabilities.EnabledTools, "investigation_result")

@@ -2477,7 +2477,7 @@ var AnswerDisplay = Event{
 	BoundedAggregation: "one line after bounded projection validation succeeds and before response delivery; canonical-only retrieval and requests rejected before a validated projection emit none; markdown_rendered distinguishes API projection from MCP rendering",
 	Fields: []Field{
 		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
-		{Key: "surface", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"result_by_id", "investigate_question"}},
+		{Key: "surface", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"result_by_id", "investigate_question", "investigate_with_interpretation"}},
 		{Key: "canonical_members", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "projected_members", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "canonical_eligible_facts", Type: FieldInt, Presence: PresenceRequired},
@@ -2909,6 +2909,7 @@ var All = []Event{
 	OAuthStep,
 	OTelExport,
 	GraphCountCheckFinished,
+	SuppliedInterpretationDecision,
 }
 
 // CountPopulationScope (CHAOS-5775) is the Info line for whether a served

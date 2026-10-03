@@ -417,6 +417,9 @@ func parityInvestigationResult() contractsv1.ContextFabricInvestigationResult {
 			ServiceVersion: "acr-v1", ContractVersion: contractsv1.ContextFabricInvestigationResultSchema, Backend: "graph",
 			ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1",
 			SynthesisVersion: "synthesis-v1", CanonicalServiceVersion: "ops-v1",
+			// The engine names the interpreter of every result it interprets,
+			// so the stored row and the fresh result carry the same versions.
+			InterpretationSource: contractsv1.ContextFabricInterpretationSourceServer, InterpretationModelIdentity: "test-provider/interpret-model",
 		},
 		DeterministicAnswer: "Two teams need attention because blockers and stalled reviews concentrate there.",
 		Warnings:            []string{},

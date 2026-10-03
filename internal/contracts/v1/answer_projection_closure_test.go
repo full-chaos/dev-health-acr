@@ -345,7 +345,7 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// judgment_mismatch is a bool and is not walked here.
 		// Trusted-because-closed: a fixed, server-minted enum, never model
 		// prose.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 239},
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 241},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -413,7 +413,7 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// 351 -> 352 -- InterpretedQuestion's new requested_judgment_kind
 		// string leaf. answer_projection is unaffected: the projection
 		// carries no Interpretation at all.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 352},
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 354},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -716,7 +716,11 @@ func trustedBecauseClosed(path string) bool {
 		"service_version", "contract_version", "backend", "backend_version",
 		"projection_version", "query_version", "interpretation_version",
 		"synthesis_version", "canonical_service_version", "source_version",
-		"model_identity":
+		"model_identity",
+		// interpretation_source is a closed two-value vocabulary, and
+		// interpretation_model_identity is service-built from the provider
+		// and model names or a client model name held to [A-Za-z0-9._:/-].
+		"interpretation_source", "interpretation_model_identity":
 		return true
 	// Timestamps.
 	case "generated_at", "observed_at", "created_at", "as_of", "start", "end",

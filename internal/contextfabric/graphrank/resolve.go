@@ -703,6 +703,12 @@ type ResolutionTraceEvent struct {
 	// proves it found a match (C2).
 	AliasLookupComplete         bool
 	AliasLookupMatchedClaimants int
+	// AliasLookupTermCount/AliasLookupMatchedKinds: how many terms the lookup
+	// was asked about and the distinct subject kinds of its claimants -- counts
+	// and closed kinds only, never the terms themselves (they come from the
+	// question text).
+	AliasLookupTermCount    int
+	AliasLookupMatchedKinds []string
 	// Subject (corroboration/decision stages): kind+canonical_id, the
 	// graph's own stable identifier -- never a label or matched term.
 	Subject contextfabric.SubjectRef
@@ -1597,6 +1603,9 @@ type ResolutionTraceEvent struct {
 	// Attestation.SurvivorExcludedReason and ShadowEvidenceRoundInput.Trigger.
 	ShadowSurvivorExcludedReason string
 	ShadowTrigger                string
+	ShadowCallerNarrowing        string
+	ShadowNarrowedFrom           int
+	ShadowNarrowedTo             int
 	ShadowHandleGrammarBound     bool
 	ShadowAnchorUniqueClaimant   bool
 	// ShadowAnchorReceiptConfirmed (CHAOS-4042, sol-max ruling) mirrors
@@ -3147,7 +3156,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		}
 		aliasIdentityComplete = complete
 		aliasClaimantsByTerm = claimantsByTerm
-		traceAliasLookup(deps, request.RequestID, complete, claimantsByTerm)
+		traceAliasLookup(deps, request.RequestID, complete, len(terms), claimantsByTerm)
 		for term, nodes := range claimantsByTerm {
 			// allowExactMatch=true: these are the SAME genuine
 			// caller-derived terms the per-term Search loop above already
@@ -3819,10 +3828,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if !offersOnly && deps.CensusFunc != nil && (stalledForCensus || committedScopeAnchorShadowsHandle(request.Question, resolution.Committed, frame)) {
 		// CHAOS-4300: false -- this is the pre-existing stalled-resolution
 		// call site, not the caller-hint short circuit's own new call above.
-		censusVisibility := unscopedVisibility
-		if !stalledForCensus {
-			censusVisibility = unscopedVisibility || repositoryNarrowedByUnrestrictedPrincipal(principal, request)
-		}
+		censusVisibility := unscopedVisibility || repositoryNarrowedByUnrestrictedPrincipal(principal, request)
 		attestation := runShadowEvidenceRoundForResolution(ctx, principal, request, interpreted, resolution, aliasClaimantsByTerm, aliasIdentityComplete, censusVisibility, deps, confirmedKind, confirmedAnchor, false)
 		// CHAOS-3896 Slice C (design brief v6 §1.4): the round's Attestation
 		// is now CONSUMED in the commit decision, not merely traced. When it
@@ -4616,6 +4622,7 @@ func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.
 		PooledKinds: censusKinds, PooledSubjects: pooledSubjects, Trigger: evidenceRoundTrigger(resolution, callerHintShortCircuit), CurrentAxis: interpreted.TimeContext.Axis == contextfabric.TemporalCurrent,
 		UnscopedVisibility: unscopedVisibility, AliasClaimants: claimantsFromCandidateNodes(aliasClaimantsByTerm),
 		AliasLookupComplete: aliasIdentityComplete, CensusFunc: deps.CensusFunc,
+		NarrowSatisfiers:          callerNarrowingSatisfierFilter(principal, request, deps),
 		PreNarrowingExplicitKinds: preNarrowingExplicitKinds,
 		ConfirmedAnchor:           confirmedAnchorInput,
 		ConfirmedHandle:           confirmedHandleInput,
@@ -5012,17 +5019,29 @@ func retrieveCandidatesForTerms(
 // traceAliasLookup emits the alias_lookup stage for one keyed identity read.
 // The event firing at all shows the read was invoked; a positive
 // matched-claimant count shows it found a match.
-func traceAliasLookup(deps ResolveDeps, requestID string, complete bool, claimantsByTerm map[string][]CandidateNode) {
+func traceAliasLookup(deps ResolveDeps, requestID string, complete bool, termCount int, claimantsByTerm map[string][]CandidateNode) {
 	if deps.ResolutionTracer == nil {
 		return
 	}
 	matched := 0
+	kindSet := map[string]struct{}{}
 	for _, nodes := range claimantsByTerm {
 		matched += len(nodes)
+		for _, node := range nodes {
+			if subject, ok := NodeSubject(node); ok {
+				kindSet[string(subject.Kind)] = struct{}{}
+			}
+		}
 	}
+	kinds := make([]string, 0, len(kindSet))
+	for kind := range kindSet {
+		kinds = append(kinds, kind)
+	}
+	slices.Sort(kinds)
 	deps.ResolutionTracer.Trace(ResolutionTraceEvent{
 		RequestID: requestID, Stage: "alias_lookup",
 		AliasLookupComplete: complete, AliasLookupMatchedClaimants: matched,
+		AliasLookupTermCount: termCount, AliasLookupMatchedKinds: kinds,
 	})
 }
 
@@ -5094,4 +5113,30 @@ func repositoryNarrowedByUnrestrictedPrincipal(principal storage.Principal, requ
 		len(request.RequestedScope.RepositorySlugs) > 0 &&
 		len(request.RequestedScope.ProjectIDs) == 0 &&
 		len(request.RequestedScope.TeamIDs) == 0
+}
+
+// callerNarrowingSatisfierFilter returns the satisfier narrowing for a call
+// whose only visibility limit is the caller's own repository narrowing of an
+// unrestricted principal, and nil otherwise. A restricted principal never gets
+// one: its round does not run a census at all.
+func callerNarrowingSatisfierFilter(principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps) SatisfierNarrower {
+	if !repositoryNarrowedByUnrestrictedPrincipal(principal, request) || deps.ExactHint == nil {
+		return nil
+	}
+	return func(ctx context.Context, kind CensusKind, canonicalIDs []string) ([]string, bool) {
+		kept := make([]string, 0, len(canonicalIDs))
+		for _, id := range canonicalIDs {
+			node, exists, err := deps.ExactHint(ctx, contextfabric.SubjectRef{Kind: kind, CanonicalID: id})
+			if err != nil {
+				return nil, false
+			}
+			if !exists {
+				return nil, false
+			}
+			if AuthorizedAttributes(principal, request.RequestedScope, node.Attributes) {
+				kept = append(kept, id)
+			}
+		}
+		return kept, true
+	}
 }

@@ -239,7 +239,7 @@ func (h *hostedAPI) capabilities(w http.ResponseWriter, r *http.Request) {
 		GeneratedAt: time.Now().UTC(),
 	}
 	if slices.Contains(principal.RepositoryScopes, repoAnswers) {
-		caps.EnabledTools = append(caps.EnabledTools, acrmcp.ToolInvestigateQuestionForTest, acrmcp.ToolInvestigationResultForTest)
+		caps.EnabledTools = append(caps.EnabledTools, acrmcp.ToolInvestigateQuestionForTest, acrmcp.ToolInvestigateWithInterpretationForTest, acrmcp.ToolInvestigationResultForTest)
 	}
 	if slices.Contains(principal.RepositoryScopes, repoIncompatible) {
 		caps.MinimumSidecarVersion = "99.0.0"

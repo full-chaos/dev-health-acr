@@ -3,7 +3,10 @@ package mcp
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -112,6 +115,9 @@ func classifyAPIError(err error, apiErr *sidecar.APIError) *classifiedError {
 		category = "no_data"
 	case errors.Is(err, sidecar.ErrInvalidRequest):
 		category = "validation"
+		if apiErr.InterpretationContract != nil {
+			message = interpretationContractMessage(*apiErr.InterpretationContract)
+		}
 	// ErrInterpretationRejected/ErrSynthesisRejected are the Context Fabric
 	// investigations endpoint's 422 codes (CHAOS-3784): the request was
 	// well-formed, but ACR's own contracts/v1 bound (or a claim-binding/
@@ -196,4 +202,13 @@ func toolErrorResult(err error) *mcpsdk.CallToolResult {
 	result := &mcpsdk.CallToolResult{}
 	result.SetError(ce)
 	return result
+}
+
+// interpretationContractMessage renders a refused supplied-interpretation
+// contract: the mismatched field names, the current contract values and a
+// fixed instruction. The values are quoted, so no control character in a
+// hosted value can shape the message.
+func interpretationContractMessage(refusal contractsv1.ContextFabricInterpretationContractRefusal) string {
+	return fmt.Sprintf("the interpretation contract is not the current one (mismatch: %s); current model_output_version=%q prompt_version=%q system_sha256=%q; fetch the prompt interpret_question again with prompts/get, run it on your own model and retry with the new _meta values as contract",
+		strings.Join(refusal.Mismatch, ", "), refusal.Current.ModelOutputVersion, refusal.Current.PromptVersion, refusal.Current.SystemSHA256)
 }

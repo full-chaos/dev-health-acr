@@ -101,9 +101,9 @@ type matrixRow struct {
 }
 
 var (
-	toolsAnswerSet = []string{"context_for_task", "investigate_question", "investigation_result", "source_evidence"}
-	toolsWriteSet  = []string{"context_for_task", "investigate_question", "investigation_result", "record_episode", "source_evidence"}
-	allTools       = []string{"context_for_task", "source_evidence", "investigate_question", "investigation_result", "record_episode"}
+	toolsAnswerSet = []string{"context_for_task", "investigate_question", "investigate_with_interpretation", "investigation_result", "source_evidence"}
+	toolsWriteSet  = []string{"context_for_task", "investigate_question", "investigate_with_interpretation", "investigation_result", "record_episode", "source_evidence"}
+	allTools       = []string{"context_for_task", "source_evidence", "investigate_question", "investigate_with_interpretation", "investigation_result", "record_episode"}
 )
 
 // matrixFixture is what a target must know to build its rows.
@@ -231,7 +231,7 @@ func evidenceArgs(id string) map[string]any { return map[string]any{"evidence_re
 // expectedMatrixRows is the size of the table. The runner fails when the
 // table drifts from it, so a row cannot be dropped without the drop being a
 // visible edit.
-const expectedMatrixRows = 27 + 4*6
+const expectedMatrixRows = 27 + 4*7
 
 // matrixTarget is one endpoint under test.
 type matrixTarget struct {
