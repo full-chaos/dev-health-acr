@@ -2,12 +2,15 @@ package hintsource_test
 
 import (
 	"go/ast"
+	"go/build"
 	"go/importer"
 	"go/parser"
 	"go/token"
 	"go/types"
+	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/hintsource"
@@ -199,6 +202,7 @@ func TestTheDuplicateDetectorFindsADuplicate(t *testing.T) {
 // against the types as they are now rather than against an installed copy.
 func typeCheckAgainstHintsource(t *testing.T, statement string) error {
 	t.Helper()
+	ensureBuildContextGOROOT(t)
 	source := `package probe
 
 import "github.com/full-chaos/dev-health-acr/internal/contextfabric/hintsource"
@@ -217,6 +221,25 @@ func probe() {
 	config := types.Config{Importer: importer.ForCompiler(fset, "source", nil)}
 	_, checkErr := config.Check("probe", fset, []*ast.File{file}, nil)
 	return checkErr
+}
+
+var goRootOnce sync.Once
+
+// ensureBuildContextGOROOT restores GOROOT for the source importer: a binary
+// built with -trimpath reports an empty runtime GOROOT, and go/build then
+// cannot find the go tool and falls back to GOPATH lookups.
+func ensureBuildContextGOROOT(t *testing.T) {
+	t.Helper()
+	goRootOnce.Do(func() {
+		if build.Default.GOROOT != "" {
+			return
+		}
+		out, err := exec.Command("go", "env", "GOROOT").Output()
+		if err != nil {
+			t.Fatalf("go env GOROOT: %v", err)
+		}
+		build.Default.GOROOT = strings.TrimSpace(string(out))
+	})
 }
 
 // AND THE CONTROL: the accessors must actually report the stored values, or
