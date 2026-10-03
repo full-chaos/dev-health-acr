@@ -220,6 +220,8 @@ func goVarName(e Event) string {
 		return "OAuthStep"
 	case OTelExport.ID:
 		return "OTelExport"
+	case SuppliedInterpretationDecision.ID:
+		return "SuppliedInterpretationDecision"
 	case GraphCountCheckFinished.ID:
 		return "GraphCountCheckFinished"
 	default:

@@ -82,6 +82,13 @@ func (p *populator) populate(v reflect.Value, path string, depth int, seen map[r
 		return
 	}
 
+	if t == reflect.TypeOf(json.RawMessage(nil)) {
+		if v.CanSet() {
+			v.Set(reflect.ValueOf(json.RawMessage(`{}`)))
+		}
+		return
+	}
+
 	switch t.Kind() {
 	case reflect.Pointer:
 		if v.IsNil() {
@@ -396,7 +403,7 @@ var contractRootExemplars = []any{
 	DeviceTokenRequest{}, DeviceTokenResponse{},
 	ErrorEnvelope{}, EvidenceRef{}, ExpandedEvidence{},
 	MCPContextForTaskRequest{}, MCPContextForTaskResponse{},
-	MCPInvestigateQuestionRequest{}, MCPInvestigateQuestionResponse{},
+	MCPInvestigateQuestionRequest{}, MCPInvestigateQuestionResponse{}, MCPInvestigateWithInterpretationRequest{},
 	MCPInvestigationResultRequest{}, MCPInvestigationResultResponse{},
 	MCPDataCatalogRequest{}, MCPFindSubjectsRequest{}, MCPRunOperationRequest{}, MCPGraphQLQueryRequest{},
 	MCPRecordEpisodeRequest{}, MCPRecordEpisodeResponse{},

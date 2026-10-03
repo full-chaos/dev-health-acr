@@ -868,6 +868,10 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		}
 		workItemMembership = reader
 	}
+	questionInterpreter, err := newContextFabricQuestionInterpreter(modelRuntime, receiptSink, engineTelemetry, factRegistry, request.options.InterpretationEnsembleSize, request.options.Logger)
+	if err != nil {
+		return nil, nil, nil, nil, nil, nil, err
+	}
 	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
 		WorkItemMembership: workItemMembership,
 		// FrameTelemetry is wired here and NOT discovered by a type
@@ -892,7 +896,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// would have. sampledModelRuntime returns nil unless that runtime
 		// really implements the port, and EnsembleSize defaults to 1, so
 		// the pair is inert until a composition asks for N>1.
-		Interpreter: newContextFabricQuestionInterpreter(modelRuntime, receiptSink, engineTelemetry, factRegistry, request.options.InterpretationEnsembleSize),
+		Interpreter: questionInterpreter,
 		// The SAME factRegistry again, for the engine's own derivation of
 		// this turn's requirement rows at assembly. It is wired rather
 		// than discovered for the reason stated above, and it is wired at

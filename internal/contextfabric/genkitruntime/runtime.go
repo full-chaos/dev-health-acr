@@ -1376,16 +1376,24 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 	// alternate transport's receipt carries an IDENTICAL classification,
 	// never a transport-specific reimplementation that could silently
 	// drift.
-	receipt.WindowClass, receipt.WindowConfidence, receipt.WindowClassUnrecognized = sanitizeWindowOutput(output)
 	// CHAOS-4632 (SHADOW ONLY): the same sanitize-after-validate step for
 	// the family signals. Captured on the receipt only, never on
 	// `interpreted`; nothing downstream of this call reads them to decide
 	// anything, so these lines change no serving-path behavior. Shared
 	// with ParseInterpretationOutputFamily (exchange_support.go) so an
 	// alternate transport's receipt carries an IDENTICAL capture.
-	applyFamilyCapture(&receipt, sanitizeFamilyOutput(output))
-	applyFrameCapture(&receipt, sanitizeFrameOutput(output))
+	applyInterpretationCaptures(&receipt, output)
 	return interpreted, receipt, nil
+}
+
+// applyInterpretationCaptures runs the three sanitizers over one validated
+// output and stamps their captures on the receipt. The model path and the
+// supplied-interpretation path both call it, so the two capture the same
+// values from the same output.
+func applyInterpretationCaptures(receipt *contextfabric.ModelExecutionReceipt, output interpretationOutput) {
+	receipt.WindowClass, receipt.WindowConfidence, receipt.WindowClassUnrecognized = sanitizeWindowOutput(output)
+	applyFamilyCapture(receipt, sanitizeFamilyOutput(output))
+	applyFrameCapture(receipt, sanitizeFrameOutput(output))
 }
 
 // interpretationFamilyCapture is the sanitized CHAOS-4632 capture from one
@@ -2931,6 +2939,7 @@ func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID str
 		"model_id", contextfabric.SanitizeLogAttr(receipt.Model),
 		"model_version", contextfabric.SanitizeLogAttr(receipt.ModelVersion),
 		"prompt_version", contextfabric.SanitizeLogAttr(receipt.PromptVersion),
+		"interpretation_source", string(contextfabric.InterpretationSourceServer),
 	}
 	// CHAOS-5380: the attempt sequence, appended by the ONE renderer all three
 	// decision emitters share -- written as a literal in each of them the three

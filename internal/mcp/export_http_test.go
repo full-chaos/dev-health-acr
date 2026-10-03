@@ -18,10 +18,11 @@ var OurSchemaVersionsForTest = ourSchemaVersions
 
 // Tool names, for fixtures that build a hosted capability answer.
 const (
-	ToolContextForTaskForTest      = toolContextForTask
-	ToolSourceEvidenceForTest      = toolSourceEvidence
-	ToolInvestigateQuestionForTest = toolInvestigateQuestion
-	ToolInvestigationResultForTest = toolInvestigationResult
+	ToolContextForTaskForTest                = toolContextForTask
+	ToolSourceEvidenceForTest                = toolSourceEvidence
+	ToolInvestigateQuestionForTest           = toolInvestigateQuestion
+	ToolInvestigationResultForTest           = toolInvestigationResult
+	ToolInvestigateWithInterpretationForTest = toolInvestigateWithInterpretation
 )
 
 // HostedRepositoryRequiredMessageForTest is the refusal a hosted

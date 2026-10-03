@@ -114,6 +114,13 @@ func (e *Engine) saveResult(
 	// (reuse_grant_scope.go); this is the engine's only Save, so every saved
 	// row of a restricted caller carries it.
 	timeAxisKey = GrantScopedTimeAxisKey(principal, timeAxisKey)
+	// A result built from a caller-supplied interpretation is never stored
+	// as reusable: the reuse key does not include the interpretation, so the
+	// row would answer a later server-interpreted question. Nil snapshots
+	// are the store's own "never reusable" input.
+	if result.Versions.InterpretationSource == InterpretationSourceClient {
+		watermark, epoch = nil, nil
+	}
 	capture, carried := capture.withTurnParentFrom(ctx).attachCarriedParent(result)
 	capture, anchorEvent := capture.attachAnchorBinding(site, result)
 	if anchorEvent == nil && !e.anchorBindingShadowDisabled {

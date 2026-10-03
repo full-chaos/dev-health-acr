@@ -60,7 +60,7 @@ func TestHostedEndToEndLive(t *testing.T) {
 	runHostedE2E(t, cfg)
 }
 
-var hostedAnswerTools = []string{"context_for_task", "investigate_question", "investigation_result", "source_evidence"}
+var hostedAnswerTools = []string{"context_for_task", "investigate_question", "investigate_with_interpretation", "investigation_result", "source_evidence"}
 
 type hostedE2EConfig struct {
 	url             string

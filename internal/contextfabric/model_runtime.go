@@ -1579,6 +1579,10 @@ type ModelRuntime interface {
 type RuntimeQuestionInterpreter struct {
 	Runtime ModelRuntime
 	Sink    ModelReceiptSink
+	// Supplied serves a request that carries its own interpretation. An
+	// explicit, wired field for the reason FamilyTelemetry below is one;
+	// left nil, such a request is refused.
+	Supplied SuppliedInterpretationRuntime
 	// SampledRuntime and EnsembleSize (CHAOS-5638) turn the family
 	// resolution from one sample into a consensus over N. Both are
 	// required together: EnsembleSize > 1 with no SampledRuntime is a
@@ -2025,6 +2029,11 @@ func backfillNamedSubjectExpectedKind(frame QuestionFrame, receipt *ModelExecuti
 // an absence. Add it when a corpus shows N=1 failing.
 
 func (r RuntimeQuestionInterpreter) Interpret(ctx context.Context, principal storage.Principal, request InvestigationRequest) (InterpretedQuestion, QuestionFamilyOutcome, error) {
+	if request.SuppliedInterpretation != nil {
+		// Checked before the ensemble and before Runtime: a supplied
+		// interpretation draws no sample and needs no model.
+		return r.interpretSupplied(ctx, principal, request)
+	}
 	if r.ensembleEnabled() {
 		// CHAOS-5638. Checked BEFORE r.Runtime, because an ensemble draws
 		// every sample from SampledRuntime and never touches Runtime --

@@ -31,17 +31,18 @@ func (c *repositoryCheck) validateMCP() error {
 	// investigate_question and investigation_result are the CHAOS-3746
 	// answer surface.
 	expected := map[string]bool{
-		"context_for_task":     false,
-		"source_evidence":      false,
-		"investigate_question": false,
-		"investigation_result": false,
-		"read_facts":           false,
-		"data_catalog":         false,
-		"find_subjects":        false,
-		"run_operation":        false,
-		"graphql_query":        false,
-		"read_relationships":   false,
-		"record_episode":       false,
+		"context_for_task":                false,
+		"source_evidence":                 false,
+		"investigate_question":            false,
+		"investigate_with_interpretation": false,
+		"investigation_result":            false,
+		"read_facts":                      false,
+		"data_catalog":                    false,
+		"find_subjects":                   false,
+		"run_operation":                   false,
+		"graphql_query":                   false,
+		"read_relationships":              false,
+		"record_episode":                  false,
 	}
 	for index, raw := range tools {
 		tool, ok := raw.(map[string]any)

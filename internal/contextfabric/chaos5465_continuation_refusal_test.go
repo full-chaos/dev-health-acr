@@ -1011,6 +1011,9 @@ func TestWindowContinuation_EveryRequestFieldIsDecidedByName(t *testing.T) {
 		"subject_handles": {"disqualifier", "a stated handle", func(r *InvestigationRequest) {
 			r.SubjectHandles = []contractsv1.ContextFabricRequestedHandle{{Kind: SubjectPullRequest, PatternID: "pull_request_number", Value: "532"}}
 		}},
+		"supplied_interpretation": {"exempt", "who interpreted this turn, not what is asked: a supplied interpretation enters where the model's own does, and the continuation decision reads neither", func(r *InvestigationRequest) {
+			r.SuppliedInterpretation = &SuppliedInterpretation{Output: json.RawMessage(`{}`), ModelOutputVersion: "schema-v1", PromptVersion: "prompt-v1"}
+		}},
 		"requested_scope.repository_slugs": {"disqualifier", "a stated repository scope", func(r *InvestigationRequest) { r.RequestedScope.RepositorySlugs = []string{"widget-service"} }},
 		"requested_scope.project_ids":      {"disqualifier", "a stated project scope", func(r *InvestigationRequest) { r.RequestedScope.ProjectIDs = []string{"project_ask_dev"} }},
 		"requested_scope.team_ids":         {"disqualifier", "a stated team scope", func(r *InvestigationRequest) { r.RequestedScope.TeamIDs = []string{"team_platform"} }},

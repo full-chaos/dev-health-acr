@@ -1,0 +1,14 @@
+{
+ "question": "Is pull request 532 ready to merge?",
+ "expected_kinds": [
+  "pull_request"
+ ],
+ "interpretation": {},
+ "contract": {
+  "model_output_version": "interpretation_output.v1",
+  "prompt_version": "interpret_question.v1",
+  "system_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+ },
+ "client_model": "example-model",
+ "allow_clarification": true
+}

@@ -505,7 +505,8 @@
         "presence": "required",
         "closed_vocabulary": [
           "result_by_id",
-          "investigate_question"
+          "investigate_question",
+          "investigate_with_interpretation"
         ]
       },
       {
@@ -4334,6 +4335,88 @@
         "type": "string",
         "presence": "conditional",
         "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.supplied_interpretation_decision",
+    "msg": "context fabric supplied interpretation decision",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "exactly one line per investigation that carries a supplied interpretation, written when the interpret step accepts or refuses it; a request with no supplied interpretation emits none",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "org_id_hash",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "interpretation_source",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "client"
+        ]
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "success",
+          "invalid_output",
+          "contract_mismatch",
+          "request_invalid"
+        ]
+      },
+      {
+        "key": "client_model",
+        "type": "string",
+        "presence": "required",
+        "applicability": "the declared model name, or undeclared when the caller sent none; empty when outcome=request_invalid"
+      },
+      {
+        "key": "prompt_version",
+        "type": "string",
+        "presence": "required",
+        "applicability": "the service's own interpretation prompt version"
+      },
+      {
+        "key": "model_output_version",
+        "type": "string",
+        "presence": "required",
+        "applicability": "the service's own model output version"
+      },
+      {
+        "key": "contract_mismatch",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "model_output_version",
+          "prompt_version",
+          "system_sha256"
+        ],
+        "applicability": "the declared contract fields that differ from the service's own when outcome=contract_mismatch; empty on every other line"
+      },
+      {
+        "key": "schema_error_type",
+        "type": "string",
+        "presence": "required",
+        "applicability": "the schema validator's name for the first failed rule when the output failed the model output schema or the strict decode; empty on every other line"
+      },
+      {
+        "key": "rejection_reason",
+        "type": "string",
+        "presence": "required",
+        "applicability": "the interpretation rejection reason when outcome=invalid_output; empty on every other line"
       }
     ]
   },

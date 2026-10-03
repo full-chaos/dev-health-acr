@@ -11,13 +11,14 @@ import (
 )
 
 const (
-	toolContextForTask      = "context_for_task"
-	toolSourceEvidence      = "source_evidence"
-	toolInvestigateQuestion = "investigate_question"
-	toolInvestigationResult = "investigation_result"
-	toolReadFacts           = "read_facts"
-	toolReadRelationships   = "read_relationships"
-	toolRecordEpisode       = "record_episode"
+	toolContextForTask                = "context_for_task"
+	toolSourceEvidence                = "source_evidence"
+	toolInvestigateQuestion           = "investigate_question"
+	toolInvestigateWithInterpretation = "investigate_with_interpretation"
+	toolInvestigationResult           = "investigation_result"
+	toolReadFacts                     = "read_facts"
+	toolReadRelationships             = "read_relationships"
+	toolRecordEpisode                 = "record_episode"
 )
 
 // boolPtr is a small helper for the optional *bool annotation fields.
@@ -169,6 +170,14 @@ func newServer(cfg *ProcessConfig, caller *CallerContext, serverVersion string, 
 			},
 		)
 	}
+	if hostedToolEnabled(caller, toolInvestigateWithInterpretation) {
+		server.AddTool(
+			buildTool(toolInvestigateWithInterpretation, "Investigate with interpretation", investigateWithInterpretationRequestSchemaFile, investigateQuestionResponseSchemaFile),
+			func(ctx context.Context, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+				return handleInvestigateWithInterpretation(ctx, cfg, req)
+			},
+		)
+	}
 	if hostedToolEnabled(caller, toolInvestigationResult) {
 		server.AddTool(
 			buildTool(toolInvestigationResult, "Investigation result", investigationResultRequestSchemaFile, investigationResultResponseSchemaFile),
@@ -247,6 +256,9 @@ func serverInstructions(cfg *ProcessConfig, caller *CallerContext) string {
 	b.WriteString("- context_for_task: you are about to work on a task in one repository. Pass a goal; get a ranked context packet.\n")
 	if investigate {
 		b.WriteString("- investigate_question: you have a question about teams, projects, repositories, pull requests, incidents or delivery health, for one subject or for many. Pass the question in plain words.\n")
+	}
+	if hostedToolEnabled(caller, toolInvestigateWithInterpretation) {
+		b.WriteString("- investigate_with_interpretation: the same question as investigate_question, when you ran the interpretation on your own model. Fetch the prompt interpret_question with prompts/get, run it, and pass the reply as interpretation and the prompt's _meta values as contract.\n")
 	}
 	if hostedToolEnabled(caller, toolInvestigationResult) {
 		b.WriteString("- investigation_result: you need the full result behind a previous answer. Pass its result_id.\n")

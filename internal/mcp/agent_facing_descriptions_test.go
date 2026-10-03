@@ -19,6 +19,7 @@ var requestSchemaFiles = []string{
 	contextForTaskRequestSchemaFile,
 	sourceEvidenceRequestSchemaFile,
 	investigateQuestionRequestSchemaFile,
+	investigateWithInterpretationRequestSchemaFile,
 	investigationResultRequestSchemaFile,
 	dataCatalogRequestSchemaFile,
 	findSubjectsRequestSchemaFile,
@@ -247,10 +248,11 @@ func TestToolDescriptionsPointToFollowUpTools(t *testing.T) {
 		byName[tool.Name] = tool.Description
 	}
 	links := map[string][]string{
-		"context_for_task":     {"source_evidence", "investigate_question"},
-		"investigate_question": {"investigation_result", "source_evidence", "context_for_task", "prior_", "result_id"},
-		"investigation_result": {"investigate_question"},
-		"source_evidence":      {"context_for_task", "investigate_question"},
+		"context_for_task":                {"source_evidence", "investigate_question"},
+		"investigate_question":            {"investigation_result", "source_evidence", "context_for_task", "prior_", "result_id"},
+		"investigate_with_interpretation": {"investigate_question", "interpret_question", "prompts/get", "interpretation", "contract", "_meta"},
+		"investigation_result":            {"investigate_question"},
+		"source_evidence":                 {"context_for_task", "investigate_question"},
 	}
 	for tool, wants := range links {
 		description, ok := byName[tool]
@@ -317,7 +319,7 @@ func TestServerInstructionsNameOnlyRegisteredTools(t *testing.T) {
 	}
 }
 
-var everyToolName = []string{toolContextForTask, toolSourceEvidence, toolInvestigateQuestion, toolInvestigationResult, toolRecordEpisode, toolDataCatalog, toolFindSubjects, toolRunOperation}
+var everyToolName = []string{toolContextForTask, toolSourceEvidence, toolInvestigateQuestion, toolInvestigateWithInterpretation, toolInvestigationResult, toolRecordEpisode, toolDataCatalog, toolFindSubjects, toolRunOperation}
 
 // TestWireMetadataNamesOnlyRegisteredTools drives the real MCP handshake for a
 // reduced and a full capability set and holds what an agent actually reads
@@ -331,7 +333,7 @@ func TestWireMetadataNamesOnlyRegisteredTools(t *testing.T) {
 		"reduced": func() *Bootstrap { return newFixtureBootstrap(t, fx) },
 		"full": func() *Bootstrap {
 			boot := newFixtureBootstrap(t, fx)
-			boot.Capabilities.EnabledTools = append(boot.Capabilities.EnabledTools, toolInvestigateQuestion, toolInvestigationResult)
+			boot.Capabilities.EnabledTools = append(boot.Capabilities.EnabledTools, toolInvestigateQuestion, toolInvestigateWithInterpretation, toolInvestigationResult)
 			return boot
 		},
 	}

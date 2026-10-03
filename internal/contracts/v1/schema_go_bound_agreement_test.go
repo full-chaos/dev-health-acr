@@ -62,6 +62,10 @@ var asymmetricBounds = map[string]goBound{
 	// value to the empty string, which it cannot distinguish from the
 	// absent field that empty string actually becomes. The two sides
 	// agree; the instrument cannot express the difference.
+	"common#$defs.VersionSet.properties.interpretation_model_identity.minLength": {
+		value: 1,
+		why:   "optional field: an empty Go string is an omitted JSON property, which the schema allows, and minLength binds only a present one",
+	},
 	"common#$defs.VersionSet.properties.model_identity.minLength": {
 		value: 1,
 		why:   "optional field: an empty Go string is an omitted JSON property, which the schema allows, and minLength binds only a present one",

@@ -5306,6 +5306,20 @@
               "minLength": 1,
               "type": "string"
             },
+            "interpretation_source": {
+              "type": "string",
+              "enum": [
+                "server",
+                "client"
+              ],
+              "description": "Who interpreted the question of this result: the service's own model (server) or the caller's (client). Optional: absent when no interpretation ran on the turn and on results written before the field existed."
+            },
+            "interpretation_model_identity": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 513,
+              "description": "The model that interpreted the question of this result: <provider>/<model> for the service's own model, client-supplied/<declared model or undeclared> for the caller's. A client interpretation_source requires the client-supplied prefix and no other source may carry it. Optional."
+            },
             "projection_version": {
               "maxLength": 256,
               "minLength": 1,

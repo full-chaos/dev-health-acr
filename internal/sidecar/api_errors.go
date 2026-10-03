@@ -1,6 +1,8 @@
 package sidecar
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -158,6 +160,10 @@ type APIError struct {
 	// It is never hosted free text: a value outside it is dropped, so no count, subject, id or
 	// name can ride through it.
 	Reason string
+	// InterpretationContract is set only for a 409 invalid_request whose
+	// details carry a supplied-interpretation contract refusal that passes
+	// its own Validate: closed field names and the current contract values.
+	InterpretationContract *contractsv1.ContextFabricInterpretationContractRefusal
 
 	sentinel error
 }
@@ -220,6 +226,10 @@ func BudgetContinuationAxes() []string {
 	return axes
 }
 
+// interpretationContractSafeMessage replaces the invalid_request message for
+// a refused supplied-interpretation contract.
+const interpretationContractSafeMessage = "the supplied interpretation contract is not the current one"
+
 // budgetRefusalSafeMessage replaces the invalid_request message for a
 // budget refusal: the request was valid, the answer was too large.
 const budgetRefusalSafeMessage = "the answer did not fit the response budget"
@@ -234,6 +244,9 @@ func (e *APIError) Error() string {
 	}
 	if e.Reason != "" {
 		base += " reason=" + e.Reason
+	}
+	if c := e.InterpretationContract; c != nil {
+		base += " interpretation_contract_mismatch=" + strings.Join(c.Mismatch, ",")
 	}
 	if b := e.Budget; b != nil {
 		if b.Overrun != "" {
@@ -305,6 +318,12 @@ func newAPIError(status int, detail contractsv1.ErrorDetail, requestID, retryAft
 			apiErr.Message = budgetRefusalSafeMessage
 		}
 	}
+	if detail.Code == "invalid_request" && status == 409 {
+		if refusal, ok := interpretationContractRefusal(detail.Details); ok {
+			apiErr.InterpretationContract = &refusal
+			apiErr.Message = interpretationContractSafeMessage
+		}
+	}
 	if detail.Code == "invalid_request" {
 		apiErr.Reason = safeReasonToken(detail.Details)
 	}
@@ -342,6 +361,30 @@ func budgetRefusal(details map[string]any) (BudgetRefusal, bool) {
 		}
 	}
 	return b, found
+}
+
+// interpretationContractRefusal decodes the interpretation contract refusal
+// from a 409's details. ok is false unless the value decodes without unknown
+// fields and passes its own Validate.
+func interpretationContractRefusal(details map[string]any) (contractsv1.ContextFabricInterpretationContractRefusal, bool) {
+	var refusal contractsv1.ContextFabricInterpretationContractRefusal
+	raw, present := details[contractsv1.ContextFabricInterpretationContractDetailsKey]
+	if !present {
+		return refusal, false
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return refusal, false
+	}
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&refusal); err != nil {
+		return contractsv1.ContextFabricInterpretationContractRefusal{}, false
+	}
+	if err := refusal.Validate(); err != nil {
+		return contractsv1.ContextFabricInterpretationContractRefusal{}, false
+	}
+	return refusal, true
 }
 
 // nonNegativeInteger accepts a JSON number (float64 after decode, or int

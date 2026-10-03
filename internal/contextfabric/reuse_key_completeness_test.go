@@ -93,6 +93,19 @@ var versionSetAuthorities = map[string]versionAuthority{
 	// why it is not a 1:1 "reuseKeyField" name match here but is still a
 	// full member of the key.
 	"ModelIdentity": {reuseKeyField: "ModelIdentities"},
+	// InterpretationSource and InterpretationModelIdentity name who
+	// interpreted the question. Neither is a reuse dimension, for two
+	// different reasons that are both stated because only one is a
+	// guarantee. A client row is never reusable: saveResult stores it with
+	// no reuse inputs, and TestSuppliedInterpretationNeverReadsOrWritesAnswerReuse
+	// pins that. Among server rows the interpret identity is NOT fenced: a
+	// row interpreted by a fallback the organization's chain no longer names
+	// stays reusable while its synthesis identity is still in the chain.
+	// That was already so before the field existed (the interpret identity
+	// was not on the result at all); the field makes it visible and does not
+	// change it.
+	"InterpretationSource":        {reason: "who interpreted (server or client), not a version identity: every reusable row reads server, because saveResult stores a client-interpreted result with no reuse inputs (pinned by TestSuppliedInterpretationNeverReadsOrWritesAnswerReuse)"},
+	"InterpretationModelIdentity": {reason: "the interpret call's provider/model, recorded for provenance. Reuse binds on the synthesis identity (ModelIdentities), exactly as before this field existed; a server row interpreted by a fallback model the chain later drops stays reusable, which is a known, unfenced property this field makes visible rather than introduces. A client-supplied identity never reaches a reusable row (see InterpretationSource)"},
 }
 
 // modelExecutionReceiptAuthorities classifies every ModelExecutionReceipt

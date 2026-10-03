@@ -125,7 +125,7 @@ func TestHTTPToolsListFollowsEachCredential(t *testing.T) {
 	if len(answerTools) == 0 || len(plainTools) == 0 {
 		t.Fatalf("empty catalogue: %v / %v", answerTools, plainTools)
 	}
-	if want := []string{"context_for_task", "investigate_question", "investigation_result", "source_evidence"}; !slices.Equal(answerTools, want) {
+	if want := []string{"context_for_task", "investigate_question", "investigate_with_interpretation", "investigation_result", "source_evidence"}; !slices.Equal(answerTools, want) {
 		t.Fatalf("answers credential tools %v, want %v", answerTools, want)
 	}
 	if want := []string{"context_for_task", "source_evidence"}; !slices.Equal(plainTools, want) {
