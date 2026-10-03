@@ -83,6 +83,10 @@ make hosted-integration
 go build ./cmd/acr-api ./cmd/acr-mcp ./cmd/contractcheck
 ```
 
+CI and image builds use `-trimpath`. For local builds that share a Go build cache across
+checkouts, set it once per machine (a user setting, not done by any script here):
+`go env -w GOFLAGS=-trimpath`.
+
 ## Releases
 
 Every successful push to `main` runs the complete release matrix. The workflow

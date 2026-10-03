@@ -81,6 +81,9 @@ concurrency:
   group: release-${{ inputs.dry_run && format('dryrun-{0}', github.run_id) || github.event.inputs.tag || github.sha }}
   cancel-in-progress: false
 
+env:
+  GOFLAGS: -trimpath
+
 jobs:
   preflight:
     # A dry run must not trigger the real pipeline: every other job reaches the

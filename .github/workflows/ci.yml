@@ -41,6 +41,9 @@ concurrency:
   group: ci-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
+env:
+  GOFLAGS: -trimpath
+
 jobs:
   # CHAOS-4855 R2: ci.yml and mirror-images.yml are independent workflows
   # triggered by the SAME push, with no cross-workflow `needs` (GitHub
@@ -140,6 +143,8 @@ jobs:
             --fixtures testdata/release-approvals
       - name: Verify CI workflow contract
         run: scripts/ci/test-workflow-contract.sh
+      - name: Verify Go builds use -trimpath
+        run: scripts/ci/test-trimpath-guard.sh
       # CHAOS-4855 R3: mirror-preflight and resolve-mirrored-images.sh only
       # verify the images this list's author already knew to add -- neither
       # notices a NEW or reintroduced bare-tag testcontainers image

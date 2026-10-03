@@ -361,11 +361,11 @@ fullstack-opencode-e2e:
 		--web "$(E2E_WEB)"
 
 build:
-	go build -ldflags "$(LOCAL_BUILD_LDFLAGS)" -o .tmp/acr-api ./cmd/acr-api
-	go build -ldflags "$(LOCAL_BUILD_LDFLAGS)" -o .tmp/acr-mcp ./cmd/acr-mcp
-	go build -o .tmp/contractcheck ./cmd/contractcheck
-	go build -o .tmp/acr-migrate ./cmd/acr-migrate
-	go build -ldflags "$(LOCAL_BUILD_LDFLAGS)" -o .tmp/acr-projector ./cmd/acr-projector
+	go build -trimpath -ldflags "$(LOCAL_BUILD_LDFLAGS)" -o .tmp/acr-api ./cmd/acr-api
+	go build -trimpath -ldflags "$(LOCAL_BUILD_LDFLAGS)" -o .tmp/acr-mcp ./cmd/acr-mcp
+	go build -trimpath -o .tmp/contractcheck ./cmd/contractcheck
+	go build -trimpath -o .tmp/acr-migrate ./cmd/acr-migrate
+	go build -trimpath -ldflags "$(LOCAL_BUILD_LDFLAGS)" -o .tmp/acr-projector ./cmd/acr-projector
 
 verify: fmt-check vet test-split test-race-split crosscompile contract-test codegraph-contract shard-plan canonical-receipts fullstack-contract build
 
