@@ -118,8 +118,10 @@ func ScopedOnlyCohortKindsForAudit() []SubjectKind {
 // this kind can anchor a deployment cohort. A repository reaches its
 // deployments by one BELONGS_TO_REPOSITORY edge and a team by two (through the
 // repository's OWNED_BY_TEAM edge, which is ownership-derived), both inside
-// the discovery walk's two hops. A project has no repository edge: its nearest
-// path to a deployment is three hops, so it stays refused.
+// the discovery walk's two hops. A project has no repository edge: it reaches
+// its deployments through its issues' linked pull requests, a dedicated
+// bounded read (falkorgraph's project deployment walk) rather than a wider
+// pool radius.
 func DeploymentCohortAnchorServable(anchor SubjectKind) bool {
 	return scopedOnlyCohortAnchors[SubjectDeployment][anchor]
 }
@@ -128,7 +130,7 @@ func DeploymentCohortAnchorServable(anchor SubjectKind) bool {
 // kinds its members are served under. Any other anchor is refused as
 // member_kind_unservable.
 var scopedOnlyCohortAnchors = map[SubjectKind]map[SubjectKind]bool{
-	SubjectDeployment: {SubjectRepository: true, SubjectTeam: true},
+	SubjectDeployment: {SubjectRepository: true, SubjectTeam: true, SubjectProject: true},
 }
 
 // ScopedOnlyCohortAnchorKindsForAudit returns, sorted, the anchor kinds a

@@ -14,6 +14,8 @@ import (
 type seededNode struct {
 	kind, id, label string
 	repos           []string
+	// workItemType is the stored work item `type` property, empty elsewhere.
+	workItemType string
 }
 
 type seededEdge struct {
@@ -33,6 +35,8 @@ func seededGraphConn(nodes []seededNode, edges []seededEdge) *fakeConn {
 		kind, _ := params["kind"].(string)
 		id, _ := params["id"].(string)
 		switch {
+		case params["fromKind"] != nil:
+			return seededWalkStep(byKey, edges, cypher, params), nil
 		case strings.Contains(cypher, "fulltext"), strings.Contains(cypher, "$kinds"):
 			return nil, nil
 		case strings.Contains(cypher, "UNION"):
@@ -80,10 +84,8 @@ type parentSeed struct {
 
 // seedParentDeployments builds, for each repository host, two owned
 // repositories with two deployments each and one repository the parent does
-// not own. The owned repositories are linked to the parent only by the edge
-// kinds the projection emits: repository -OWNED_BY_TEAM-> team for a team
-// parent, and work_item -BELONGS_TO_PROJECT-> project plus work_item
-// -BELONGS_TO_REPOSITORY-> repository for a project parent.
+// not own. The owned repositories are linked to the team only by the edge the
+// projection emits: repository -OWNED_BY_TEAM-> team.
 func seedParentDeployments(parentKind string) parentSeed {
 	var s parentSeed
 	parentID := parentKind + ":payments"
@@ -97,12 +99,6 @@ func seedParentDeployments(parentKind string) parentSeed {
 			case "team":
 				s.nodes[0].repos = append(s.nodes[0].repos, slug)
 				s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", repoID, "team", parentID})
-			case "project":
-				wiID := fmt.Sprintf("work_item:%s:%d", host, r)
-				s.nodes = append(s.nodes, seededNode{kind: "work_item", id: wiID, label: wiID, repos: []string{slug}})
-				s.edges = append(s.edges,
-					seededEdge{"BELONGS_TO_PROJECT", "work_item", wiID, "project", parentID},
-					seededEdge{"BELONGS_TO_REPOSITORY", "work_item", wiID, "repository", repoID})
 			}
 			for d := 0; d < 2; d++ {
 				depID := fmt.Sprintf("deployment:%s:%d:%d", host, r, d)
@@ -195,9 +191,66 @@ func TestTeamDeploymentMembersFollowTheCallersRepositoryGrant(t *testing.T) {
 	}
 }
 
-func TestProjectDeploymentMembersAreNotReachedWithinTwoHops(t *testing.T) {
-	got, _ := reachedDeployments(t, "project", storage.Principal{OrgID: "org-1"})
-	if len(got) != 0 {
-		t.Fatalf("project reached %v: the project-to-deployment path is three hops, if this reaches the walk radius or edges changed and the project anchor can be reconsidered", got)
+// seededWalkStep answers one project-walk step from the seeded topology: the
+// neighbours of the batched ids along one relationship type, in the direction
+// the query pattern names, with the optional work item type filter applied.
+func seededWalkStep(byKey map[string]seededNode, edges []seededEdge, cypher string, params map[string]interface{}) []row {
+	fromKind, _ := params["fromKind"].(string)
+	toKind, _ := params["toKind"].(string)
+	relation, _ := params["rel"].(string)
+	ids, _ := params["ids"].([]interface{})
+	include := strings.Contains(cypher, "b."+propWorkItemType+" IN $btypes") && !strings.Contains(cypher, "NOT b."+propWorkItemType)
+	exclude := strings.Contains(cypher, "NOT b."+propWorkItemType)
+	types := map[string]bool{}
+	if list, ok := params["btypes"].([]interface{}); ok {
+		for _, v := range list {
+			types[v.(string)] = true
+		}
 	}
+	incoming := strings.Contains(cypher, "<-[r")
+	outgoing := !incoming && strings.Contains(cypher, "]->")
+	var rows []row
+	for _, rawID := range ids {
+		id := rawID.(string)
+		for i, e := range edges {
+			if e.typ != relation {
+				continue
+			}
+			var otherKind, otherID string
+			switch {
+			case outgoing && e.srcKind == fromKind && e.srcID == id:
+				otherKind, otherID = e.dstKind, e.dstID
+			case incoming && e.dstKind == fromKind && e.dstID == id:
+				otherKind, otherID = e.srcKind, e.srcID
+			case !incoming && !outgoing && e.srcKind == fromKind && e.srcID == id:
+				otherKind, otherID = e.dstKind, e.dstID
+			case !incoming && !outgoing && e.dstKind == fromKind && e.dstID == id:
+				otherKind, otherID = e.srcKind, e.srcID
+			default:
+				continue
+			}
+			other, ok := byKey[otherKind+"|"+otherID]
+			if !ok || otherKind != toKind {
+				continue
+			}
+			if include && !types[other.workItemType] {
+				continue
+			}
+			if exclude && types[other.workItemType] {
+				continue
+			}
+			n := fakeSubjectNodeRow(other.kind, other.id, other.label)["n"].(*node)
+			if len(other.repos) > 0 {
+				n.Properties[propAuthzRepos] = other.repos
+			}
+			if other.workItemType != "" {
+				n.Properties[propWorkItemType] = other.workItemType
+			}
+			rows = append(rows, row{
+				"id": id, "b": n,
+				"r": &edge{Properties: map[string]interface{}{propRelationType: e.typ, propRelationshipID: fmt.Sprintf("rel_%03d", i), propEvidenceRefs: []string{fmt.Sprintf("evidence_%03d", i)}}},
+			})
+		}
+	}
+	return rows
 }

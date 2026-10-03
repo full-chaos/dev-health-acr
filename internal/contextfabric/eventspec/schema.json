@@ -840,7 +840,8 @@
           "read_population_unverified",
           "requirement_read_not_planned",
           "fact_read_origin_state",
-          "kind_census_truncated"
+          "kind_census_truncated",
+          "graph_project_deployments_unlinked"
         ]
       },
       {

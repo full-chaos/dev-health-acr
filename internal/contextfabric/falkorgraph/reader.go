@@ -653,11 +653,40 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		}
 	}
 
+	// projectDeploymentAnchor is set when the frame asks for the deployment
+	// members of a named project: a project has no repository edge, so its
+	// members come from projectDeploymentMembers, not from the two-hop walk.
+	var projectDeploymentAnchor *contextfabric.SubjectRef
+	if declaredCohortKindForRouting == contextfabric.SubjectDeployment {
+		for i, subject := range request.Resolution.Committed {
+			if subject.Kind == contextfabric.SubjectProject && frameAnchorBound(request.Frame, subject, request.Resolution, request.Bases) {
+				projectDeploymentAnchor = &request.Resolution.Committed[i]
+				break
+			}
+		}
+	}
+	projectDeploymentsUnlinked := -1
+
 	for _, subject := range request.Resolution.Committed {
 		if ownershipRoutedRepoSlug != "" && subject.Kind == contextfabric.SubjectRepository && subject.Label == ownershipRoutedRepoSlug {
 			continue
 		}
-		nodes, edges, failed, filters, walkTruncated, err := a.hopWalk(ctx, key, principal.OrgID, principal, scope, subject, 2, collectLimit, temporal)
+		var nodes []graphrank.CandidateNode
+		var edges []graphrank.ResolvedEdge
+		var failed int
+		var filters edgeFilterCounts
+		var walkTruncated bool
+		var err error
+		if projectDeploymentAnchor != nil && subject == *projectDeploymentAnchor {
+			var walk projectDeploymentWalk
+			walk, err = a.projectDeploymentMembers(ctx, key, principal.OrgID, principal, scope, subject, collectLimit, temporal)
+			nodes, edges, filters, walkTruncated = walk.nodes, walk.edges, walk.filters, walk.truncated
+			if err == nil && walk.linkedPullRequests == 0 {
+				projectDeploymentsUnlinked = walk.issues
+			}
+		} else {
+			nodes, edges, failed, filters, walkTruncated, err = a.hopWalk(ctx, key, principal.OrgID, principal, scope, subject, 2, collectLimit, temporal)
+		}
 		if err != nil {
 			// CHAOS-4077: see graphNotProjectedError's own doc comment --
 			// this is one of the two DiscoverContext sites that would
@@ -802,6 +831,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	for _, n := range textNodes {
 		subject, ok := graphrank.NodeSubject(n)
 		if !ok {
+			continue
+		}
+		if projectDeploymentAnchor != nil && subject.Kind == contextfabric.SubjectDeployment {
 			continue
 		}
 		nk := graphrank.SubjectKey(subject)
@@ -962,6 +994,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			for _, n := range kindTextNodes {
 				subject, ok := graphrank.NodeSubject(n)
 				if !ok {
+					continue
+				}
+				if projectDeploymentAnchor != nil && subject.Kind == contextfabric.SubjectDeployment {
 					continue
 				}
 				nk := graphrank.SubjectKey(subject)
@@ -1341,7 +1376,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		unbounded = countUnboundedValidity(cohortNodes, orderedResolved)
 	}
 
-	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0 || exactNameTruncated || cohortWhollyDeniedByAuthz || kindCensusTruncated
+	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0 || exactNameTruncated || cohortWhollyDeniedByAuthz || kindCensusTruncated || projectDeploymentsUnlinked >= 0
 	var degradedReasons []string
 	var coverageDetails []contextfabric.CoverageDetail
 	// CHAOS-4690: every degraded reason this reader composes gets a paired
@@ -1422,6 +1457,14 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		degradedReasons = append(degradedReasons, cohortDeniedReason)
 		deniedCount := cohortKindScopedAuthzDropped
 		appendGraphDetail(contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization, true, &deniedCount, cohortDeniedReason, "context-fabric:graph")
+	}
+	if projectDeploymentsUnlinked >= 0 {
+		// The project's deployments are UNKNOWN, not none: no issue links a
+		// pull request, so no repository is reachable. Never an empty cohort.
+		unlinkedReason := fmt.Sprintf("project_deployments_unlinked:%d", projectDeploymentsUnlinked)
+		degradedReasons = append(degradedReasons, unlinkedReason)
+		issuesChecked := projectDeploymentsUnlinked
+		appendGraphDetail(contractsv1.ContextFabricCoverageDetailGraphProjectDeploymentsUnlinked, true, &issuesChecked, unlinkedReason, "context-fabric:graph")
 	}
 	if admission.DroppedUnknownRelationshipTypeCount > 0 {
 		unknownTypeReason := fmt.Sprintf("unknown_relationship_type:%d", admission.DroppedUnknownRelationshipTypeCount)

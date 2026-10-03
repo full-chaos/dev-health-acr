@@ -41,6 +41,7 @@ func validDetailForCode(code ContextFabricCoverageDetailCode) ContextFabricCover
 		d.Narrowed, d.SkippedKinds, d.Count = true, []ContextFabricSubjectKind{ContextFabricSubjectTeam}, intPtr(2)
 	case ContextFabricCoverageDetailGraphEndpointLookupFailed,
 		ContextFabricCoverageDetailGraphCohortDeniedByAuthorization,
+		ContextFabricCoverageDetailGraphProjectDeploymentsUnlinked,
 		ContextFabricCoverageDetailGraphUnknownRelationshipType:
 		d.Source, d.Count = "context-fabric:graph", intPtr(3)
 	case ContextFabricCoverageDetailGraphExactNameCandidatesTruncated:
