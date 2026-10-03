@@ -89,7 +89,7 @@ func TestInterpretResourcesBytesEqualTheirSources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if read.Contents[0].Text != dtCatalogBody || read.Contents[0].Meta["sha256"] != sha256Hex(dtCatalogBody) {
+	if read.Contents[0].Text != dtCatalogBody || read.Contents[0].Meta["sha256"] != sha256Hex(dtCatalogBody) || read.Contents[0].Meta["contract_version"] != "acr-data.v1" {
 		t.Error("catalogue resource bytes differ from the hosted data_catalog answer")
 	}
 }
@@ -165,5 +165,21 @@ func TestInterpretResourcesAreRefusedAfterTheToolIsRevoked(t *testing.T) {
 		if _, err := readResource(t, client, u); err == nil {
 			t.Errorf("%s served after the hosted API revoked investigate_question", u)
 		}
+	}
+}
+
+func TestLiveToolEnabledReportsAClosedReason(t *testing.T) {
+	fx := investigateFixture(t)
+	boot := newFixtureBootstrap(t, fx)
+	caller := newCallerContext(nil, boot.Client, boot.Capabilities)
+	if ok, reason := liveToolEnabled(context.Background(), caller, toolInvestigateQuestion); !ok || reason != "ok" {
+		t.Fatalf("enabled = %v %q", ok, reason)
+	}
+	if ok, reason := liveToolEnabled(context.Background(), caller, "nope"); ok || reason != "tool_revoked" {
+		t.Fatalf("revoked = %v %q", ok, reason)
+	}
+	fx.CapabilitiesHandler = func(w http.ResponseWriter, r *http.Request) { http.Error(w, "x", http.StatusInternalServerError) }
+	if ok, reason := liveToolEnabled(context.Background(), caller, toolInvestigateQuestion); ok || reason != "capability_check_failed" {
+		t.Fatalf("outage = %v %q", ok, reason)
 	}
 }

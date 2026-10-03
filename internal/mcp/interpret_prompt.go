@@ -37,7 +37,7 @@ func interpretPromptMeta(system, serviceVersion string) mcpsdk.Meta {
 // itself sends, taken from interpretprompt, the one assembly the runtime also sends. It registers
 // only with investigate_question, so a credential that cannot investigate
 // cannot read the prompt.
-func registerInterpretPrompt(server *mcpsdk.Server, caller *CallerContext, serviceVersion string) {
+func registerInterpretPrompt(server *mcpsdk.Server, cfg *ProcessConfig, caller *CallerContext, serviceVersion string) {
 	if !hostedToolEnabled(caller, toolInvestigateQuestion) {
 		return
 	}
@@ -55,7 +55,8 @@ func registerInterpretPrompt(server *mcpsdk.Server, caller *CallerContext, servi
 		}},
 		Meta: meta,
 	}, func(ctx context.Context, req *mcpsdk.GetPromptRequest) (*mcpsdk.GetPromptResult, error) {
-		if !liveToolEnabled(ctx, caller, toolInvestigateQuestion) {
+		if ok, reason := liveToolEnabled(ctx, caller, toolInvestigateQuestion); !ok {
+			logSurfaceRefusal(ctx, cfg, "prompt", promptInterpretQuestion, reason)
 			return nil, &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: "unknown prompt"}
 		}
 		var question string
@@ -99,15 +100,27 @@ func interpretPromptResult(question, serviceVersion string) (*mcpsdk.GetPromptRe
 
 // liveToolEnabled re-reads the caller's capabilities from the hosted API, so a
 // revocation after the server was built (a long-lived STDIO session) takes
-// effect on the next read. It fails closed.
-func liveToolEnabled(ctx context.Context, caller *CallerContext, tool string) bool {
+// effect on the next read. It fails closed. The returned reason is a closed
+// vocabulary ("ok", "no_client", "capability_check_failed", "tool_revoked")
+// so an operator can tell an outage from a revocation.
+func liveToolEnabled(ctx context.Context, caller *CallerContext, tool string) (bool, string) {
 	client := caller.Client()
 	if client == nil {
-		return false
+		return false, "no_client"
 	}
 	caps, err := client.Capabilities(ctx)
 	if err != nil {
-		return false
+		return false, "capability_check_failed"
 	}
-	return slices.Contains(caps.EnabledTools, tool)
+	if !slices.Contains(caps.EnabledTools, tool) {
+		return false, "tool_revoked"
+	}
+	return true, "ok"
+}
+
+func logSurfaceRefusal(ctx context.Context, cfg *ProcessConfig, surface, name, reason string) {
+	if cfg == nil || cfg.diagnostics == nil {
+		return
+	}
+	cfg.diagnostics.WarnContext(ctx, "mcp read refused", "surface", surface, "name", name, "reason", reason)
 }

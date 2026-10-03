@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -36,12 +37,12 @@ func staticResourceMeta(text, serviceVersion string) mcpsdk.Meta {
 // investigate_question (same gate as the interpret_question prompt); the
 // catalogue registers only with data_catalog and is read live for the caller's
 // own credential.
-func registerInterpretResources(server *mcpsdk.Server, caller *CallerContext, serviceVersion string) {
+func registerInterpretResources(server *mcpsdk.Server, cfg *ProcessConfig, caller *CallerContext, serviceVersion string) {
 	if hostedToolEnabled(caller, toolInvestigateQuestion) {
-		addStaticResource(server, caller, toolInvestigateQuestion, uriInterpretationOutput, "interpretation-output", "Interpretation output schema",
+		addStaticResource(server, cfg, caller, toolInvestigateQuestion, uriInterpretationOutput, "interpretation-output", "Interpretation output schema",
 			"JSON schema of the object the interpretation prompt returns. Validate your own interpretation against it. Version "+interpretprompt.OutputVersion+".",
 			"application/schema+json", interpretprompt.OutputSchema(), serviceVersion)
-		addStaticResource(server, caller, toolInvestigateQuestion, uriFactKinds, "guide-fact-kinds", "Fact-kind glossary",
+		addStaticResource(server, cfg, caller, toolInvestigateQuestion, uriFactKinds, "guide-fact-kinds", "Fact-kind glossary",
 			"What each fact kind holds, which subject kinds it serves, and what it is not; the same text the interpretation prompt states.",
 			guideMIME, interpretprompt.FactKindsGuide(), serviceVersion)
 	}
@@ -53,15 +54,24 @@ func registerInterpretResources(server *mcpsdk.Server, caller *CallerContext, se
 			Annotations: &mcpsdk.Annotations{Audience: []mcpsdk.Role{"assistant"}},
 		}, func(ctx context.Context, _ *mcpsdk.ReadResourceRequest) (*mcpsdk.ReadResourceResult, error) {
 			callerCtx, err := CallerFromContext(ctx)
-			if err != nil || !liveToolEnabled(ctx, callerCtx, toolDataCatalog) {
+			if err != nil {
+				logSurfaceRefusal(ctx, cfg, "resource", uriDataCatalog, "caller_absent")
 				return nil, &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: "this request carries no authenticated caller identity"}
+			}
+			if ok, reason := liveToolEnabled(ctx, callerCtx, toolDataCatalog); !ok {
+				logSurfaceRefusal(ctx, cfg, "resource", uriDataCatalog, reason)
+				return nil, mcpsdk.ResourceNotFoundError(uriDataCatalog)
 			}
 			raw, err := callerCtx.client.DataCatalog(ctx, nil)
 			if err != nil {
 				return nil, &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: "the data catalogue is unavailable"}
 			}
 			text := string(raw)
-			meta := mcpsdk.Meta{"sha256": sha256Hex(text), "service_version": serviceVersion}
+			var head struct {
+				ContractVersion string `json:"contract_version"`
+			}
+			_ = json.Unmarshal(raw, &head)
+			meta := mcpsdk.Meta{"sha256": sha256Hex(text), "service_version": serviceVersion, "contract_version": head.ContractVersion}
 			return &mcpsdk.ReadResourceResult{Meta: meta, Contents: []*mcpsdk.ResourceContents{{
 				URI: uriDataCatalog, MIMEType: "application/json", Text: text, Meta: meta,
 			}}}, nil
@@ -71,14 +81,15 @@ func registerInterpretResources(server *mcpsdk.Server, caller *CallerContext, se
 
 const guideMIME = "text/markdown"
 
-func addStaticResource(server *mcpsdk.Server, caller *CallerContext, tool, uri, name, title, description, mime, text, serviceVersion string) {
+func addStaticResource(server *mcpsdk.Server, cfg *ProcessConfig, caller *CallerContext, tool, uri, name, title, description, mime, text, serviceVersion string) {
 	meta := staticResourceMeta(text, serviceVersion)
 	server.AddResource(&mcpsdk.Resource{
 		URI: uri, Name: name, Title: title, Description: description, MIMEType: mime,
 		Annotations: &mcpsdk.Annotations{Audience: []mcpsdk.Role{"assistant"}},
 		Meta:        meta,
 	}, func(ctx context.Context, _ *mcpsdk.ReadResourceRequest) (*mcpsdk.ReadResourceResult, error) {
-		if !liveToolEnabled(ctx, caller, tool) {
+		if ok, reason := liveToolEnabled(ctx, caller, tool); !ok {
+			logSurfaceRefusal(ctx, cfg, "resource", uri, reason)
 			return nil, mcpsdk.ResourceNotFoundError(uri)
 		}
 		return &mcpsdk.ReadResourceResult{Meta: meta, Contents: []*mcpsdk.ResourceContents{{
