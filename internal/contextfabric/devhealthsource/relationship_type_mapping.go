@@ -1,6 +1,8 @@
 package devhealthsource
 
 import (
+	"strings"
+
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/dependencyrelation"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -35,4 +37,20 @@ func orientDependencyEndpoints(from, to contractsv1.ContextFabricSubjectRef, swa
 		return to, from
 	}
 	return from, to
+}
+
+// Relationship types of work_item_dependencies by disposition:
+//   - mapped: translated to a contract type by dependencyrelation.
+//   - ignored: ignoredDependencyTypes; the row advances the cursor, projects
+//     nothing and is counted under its type at Info, never quarantined.
+//   - quarantined: any other value outside the vocabulary (WARN per item).
+//
+// external_issue_key is ignored because its target is an unresolved external
+// key, not a work item, and a key prefix alone is not linked-issue inheritance.
+var ignoredDependencyTypes = map[string]struct{}{"external_issue_key": {}}
+
+func ignoredDependencyType(raw string) (string, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(raw))
+	_, ok := ignoredDependencyTypes[normalized]
+	return normalized, ok
 }

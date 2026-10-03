@@ -161,7 +161,7 @@ func TestOneUnknownRelationshipTypeQuarantinesTheItemNotTheBatch(t *testing.T) {
 	for i := 0; i < legal; i++ {
 		rows = append(rows, dependencyRow(fmt.Sprintf("WI-%03d", i), fmt.Sprintf("WI-T%03d", i), "RELATES_TO", at.Add(time.Duration(i)*time.Second), created))
 	}
-	rows = append(rows, dependencyRow("WI-BAD", "EXT-123", "EXTERNAL_ISSUE_KEY", at.Add(legal*time.Second), created))
+	rows = append(rows, dependencyRow("WI-BAD", "EXT-123", "UNMAPPED_TEST_TYPE", at.Add(legal*time.Second), created))
 
 	batch, available, err, observations := projectWithQuarantineLog(t, dependencyTablesOnly(t, at, rows), testCursor(t, at.Add(-time.Hour), ""))
 	if err != nil {
@@ -176,7 +176,7 @@ func TestOneUnknownRelationshipTypeQuarantinesTheItemNotTheBatch(t *testing.T) {
 		switch r.Type {
 		case contractsv1.ContextFabricRelationshipRelatesTo:
 			relates++
-		case "EXTERNAL_ISSUE_KEY":
+		case "UNMAPPED_TEST_TYPE":
 			external++
 		}
 	}
@@ -192,8 +192,8 @@ func TestOneUnknownRelationshipTypeQuarantinesTheItemNotTheBatch(t *testing.T) {
 	if got := observations[0]["quarantine_reason"]; got != "unknown_relationship_type" {
 		t.Fatalf("quarantine_reason = %v, want %q", got, "unknown_relationship_type")
 	}
-	if got := observations[0]["relationship_type"]; got != "EXTERNAL_ISSUE_KEY" {
-		t.Fatalf("relationship_type detail = %v, want %q -- an operator must be able to tell one unmapped value from many distinct problems", got, "EXTERNAL_ISSUE_KEY")
+	if got := observations[0]["relationship_type"]; got != "UNMAPPED_TEST_TYPE" {
+		t.Fatalf("relationship_type detail = %v, want %q -- an operator must be able to tell one unmapped value from many distinct problems", got, "UNMAPPED_TEST_TYPE")
 	}
 }
 
@@ -215,7 +215,7 @@ func TestProdShapedPageProjectsTheLegalRowsAndCountsTheRest(t *testing.T) {
 		// rows take the ref-form branch and emit a stub entity alongside the
 		// edge -- the shape that produced the orphan-node defect, so the
 		// entity assertion below is load-bearing, not vacuously zero.
-		rows = append(rows, unresolvedDependencyRow(fmt.Sprintf("WI-X%03d", i), fmt.Sprintf("EXT-%03d", i), "EXTERNAL_ISSUE_KEY", at.Add(time.Duration(i)*time.Second), created))
+		rows = append(rows, unresolvedDependencyRow(fmt.Sprintf("WI-X%03d", i), fmt.Sprintf("EXT-%03d", i), "UNMAPPED_TEST_TYPE", at.Add(time.Duration(i)*time.Second), created))
 	}
 	for i := 0; i < legal; i++ {
 		rows = append(rows, dependencyRow(fmt.Sprintf("WI-G%03d", i), fmt.Sprintf("WI-H%03d", i), "RELATES_TO", at.Add(time.Duration(illegal+i)*time.Second), created))
@@ -512,7 +512,7 @@ func TestQuarantiningAnEdgeAlsoDropsTheStubThatOnlyExistedToBeItsEndpoint(t *tes
 	}
 
 	t.Run("unknown type drops the edge AND its stub", func(t *testing.T) {
-		rows := [][]any{unresolved("WI-1", "EXT-ABC-123", "EXTERNAL_ISSUE_KEY", at)}
+		rows := [][]any{unresolved("WI-1", "EXT-ABC-123", "UNMAPPED_TEST_TYPE", at)}
 		batch, available, err, observations := projectWithQuarantineLog(t, dependencyTablesOnly(t, at, rows), testCursor(t, at.Add(-time.Hour), ""))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -578,8 +578,8 @@ func TestAllQuarantinedTailAdvancesTheDurableCursorExactlyOnce(t *testing.T) {
 
 	// The whole tail is unprojectable: nothing publishable after it.
 	rows := [][]any{
-		unresolvedDependencyRow("WI-1", "EXT-1", "EXTERNAL_ISSUE_KEY", at, created),
-		unresolvedDependencyRow("WI-2", "EXT-2", "EXTERNAL_ISSUE_KEY", at.Add(time.Second), created),
+		unresolvedDependencyRow("WI-1", "EXT-1", "UNMAPPED_TEST_TYPE", at, created),
+		unresolvedDependencyRow("WI-2", "EXT-2", "UNMAPPED_TEST_TYPE", at.Add(time.Second), created),
 	}
 	tables := dependencyTablesOnly(t, at, rows)
 	start := testCursor(t, at.Add(-time.Hour), "")
@@ -638,7 +638,7 @@ func TestStaleConsumedMemoIsRefusedAndLeavesTheCursorWhereItWas(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 6, 30, 10, 47, 54, 0, time.UTC)
 	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	rows := [][]any{unresolvedDependencyRow("WI-1", "EXT-1", "EXTERNAL_ISSUE_KEY", at, created)}
+	rows := [][]any{unresolvedDependencyRow("WI-1", "EXT-1", "UNMAPPED_TEST_TYPE", at, created)}
 	tables := dependencyTablesOnly(t, at, rows)
 
 	source, err := devhealthsource.NewClickHouseProjectionSource(&fakeClient{tables: tables})
@@ -897,7 +897,7 @@ func TestValidRowKeepsItsStubWhenAQuarantinedRowSharesTheTarget(t *testing.T) {
 
 	// The quarantined row sorts FIRST, so it is the one dedup would keep.
 	rows := [][]any{
-		unresolvedDependencyRow("WI-1", "EXT-1", "EXTERNAL_ISSUE_KEY", at, created),
+		unresolvedDependencyRow("WI-1", "EXT-1", "UNMAPPED_TEST_TYPE", at, created),
 		unresolvedDependencyRow("WI-2", "EXT-1", "RELATES_TO", at.Add(time.Second), created),
 	}
 	batch, available, err, observations := projectWithQuarantineLog(t, dependencyTablesOnly(t, at, rows), testCursor(t, at.Add(-time.Hour), ""))
@@ -1088,8 +1088,8 @@ func TestPeekOverAllQuarantinedTailHasNoSideEffects(t *testing.T) {
 	at := time.Date(2026, 6, 30, 10, 47, 54, 0, time.UTC)
 	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	rows := [][]any{
-		unresolvedDependencyRow("WI-1", "EXT-1", "EXTERNAL_ISSUE_KEY", at, created),
-		unresolvedDependencyRow("WI-2", "EXT-2", "EXTERNAL_ISSUE_KEY", at.Add(time.Second), created),
+		unresolvedDependencyRow("WI-1", "EXT-1", "UNMAPPED_TEST_TYPE", at, created),
+		unresolvedDependencyRow("WI-2", "EXT-2", "UNMAPPED_TEST_TYPE", at.Add(time.Second), created),
 	}
 	source, err := devhealthsource.NewClickHouseProjectionSource(&fakeClient{tables: dependencyTablesOnly(t, at, rows)})
 	if err != nil {

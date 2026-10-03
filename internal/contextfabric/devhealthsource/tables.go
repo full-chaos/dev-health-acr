@@ -688,6 +688,9 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowK
 		}
 		observedAt = observedAt.UTC()
 		rowSortKey := repoID + ":" + sourceID + ":" + targetID + ":" + relationshipType
+		if ignored, ok := ignoredDependencyType(relationshipType); ok {
+			return []candidate{{observedAt: observedAt, sortKey: rowSortKey, ignoredType: ignored}}, nil
+		}
 		sourceCanonicalID, sourceOmitted, err := identity.Derive(identity.KindWorkItem, []string{repoID, sourceID}, nil)
 		if err != nil {
 			return nil, err

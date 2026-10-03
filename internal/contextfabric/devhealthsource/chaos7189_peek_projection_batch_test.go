@@ -84,7 +84,7 @@ func TestClickHouseProjectionSourcePeekFromBlankCursorIsNonConsuming(t *testing.
 	t.Parallel()
 	at := time.Date(2026, 6, 30, 10, 47, 54, 0, time.UTC)
 	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	rows := [][]any{unresolvedDependencyRow("WI-1", "EXT-1", "EXTERNAL_ISSUE_KEY", at, created)}
+	rows := [][]any{unresolvedDependencyRow("WI-1", "EXT-1", "UNMAPPED_TEST_TYPE", at, created)}
 	newSource := func(t *testing.T, buf *bytes.Buffer) *devhealthsource.ClickHouseProjectionSource {
 		source, err := devhealthsource.NewClickHouseProjectionSource(&fakeClient{tables: dependencyTablesOnly(t, at, rows)})
 		if err != nil {

@@ -1,10 +1,13 @@
 package devhealthsource
 
 import (
+	"context"
 	"errors"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"log/slog"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -66,6 +69,9 @@ type quarantineObservation struct {
 	// Kind names which item shape was dropped: entity, relationship,
 	// episode or tombstone.
 	Kind string
+	// IgnoredCount is non-zero only for an ignore observation: Detail then
+	// names the ignored relationship type and Reason is empty.
+	IgnoredCount int
 }
 
 // validateCandidateItem runs the contract's OWN validator over whichever
@@ -225,7 +231,13 @@ func partitionProjectableCandidates(all []candidate, observe func(quarantineObse
 	kept := make([]candidate, 0, len(all))
 	quarantinedRelationships := make(map[string]struct{})
 	quarantinedEntities := make(map[string]struct{})
+	ignored := make(map[string]int)
 	for _, c := range all {
+		if c.ignoredType != "" {
+			ignored[c.ignoredType]++
+			kept = append(kept, c)
+			continue
+		}
 		kind, err := validateCandidateItem(c)
 		if err == nil {
 			kept = append(kept, c)
@@ -243,6 +255,16 @@ func partitionProjectableCandidates(all []candidate, observe func(quarantineObse
 				Detail: quarantineDetail(c),
 				Kind:   kind,
 			})
+		}
+	}
+	if observe != nil {
+		types := make([]string, 0, len(ignored))
+		for t := range ignored {
+			types = append(types, t)
+		}
+		sort.Strings(types)
+		for _, t := range types {
+			observe(quarantineObservation{Kind: "relationship", Detail: t, IgnoredCount: ignored[t]})
 		}
 	}
 	// An endpoint whose AUTHORITATIVE entity was quarantined must not be left
@@ -490,6 +512,9 @@ func quarantineLogger(logger *slog.Logger, sourceName string) func(quarantineObs
 		return nil
 	}
 	return func(observation quarantineObservation) {
+		if observation.IgnoredCount > 0 {
+			return
+		}
 		attrs := []any{
 			"source", contextfabric.SanitizeLogAttr(sourceName),
 			"quarantine_reason", contextfabric.SanitizeLogAttr(observation.Reason),
@@ -499,5 +524,53 @@ func quarantineLogger(logger *slog.Logger, sourceName string) func(quarantineObs
 			attrs = append(attrs, "relationship_type", contextfabric.SanitizeLogAttr(observation.Detail))
 		}
 		logger.Warn("context_fabric: projection item quarantined; the item is dropped and the batch continues", attrs...)
+	}
+}
+
+// ignoredLedger counts rows skipped by a documented ignore across one pass,
+// so a from-scratch projection reports one line per type, not one per page.
+type ignoredLedger struct {
+	mu     sync.Mutex
+	counts map[string]int
+}
+
+func (l *ignoredLedger) add(orgID, relationshipType string, n int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.counts == nil {
+		l.counts = map[string]int{}
+	}
+	l.counts[orgID+"\x00"+relationshipType] += n
+}
+
+// flush logs and clears the org's totals when a call ends without publishing
+// a batch (caught up, a skip-page yield, or an error). A count can repeat across
+// an errored pass and its retry: it is rows read, not unique rows.
+func (l *ignoredLedger) flush(ctx context.Context, logger *slog.Logger, sourceName, orgID, passOutcome string) {
+	if l == nil || logger == nil {
+		return
+	}
+	l.mu.Lock()
+	totals := map[string]int{}
+	prefix := orgID + "\x00"
+	for key, n := range l.counts {
+		if strings.HasPrefix(key, prefix) {
+			totals[strings.TrimPrefix(key, prefix)] = n
+			delete(l.counts, key)
+		}
+	}
+	l.mu.Unlock()
+	types := make([]string, 0, len(totals))
+	for t := range totals {
+		types = append(types, t)
+	}
+	sort.Strings(types)
+	for _, t := range types {
+		logger.InfoContext(ctx, "context_fabric: projection rows ignored by documented relationship type; nothing is projected for them",
+			"source", contextfabric.SanitizeLogAttr(sourceName),
+			"ignored_relationship_type", contextfabric.SanitizeLogAttr(t),
+			"ignored_count", totals[t],
+			"pass_outcome", contextfabric.SanitizeLogAttr(passOutcome),
+		)
 	}
 }
