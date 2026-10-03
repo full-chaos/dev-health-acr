@@ -157,6 +157,8 @@ func TestSynthesisOutputResourceEqualsTheRuntimeSchema(t *testing.T) {
 	}
 	delete(gotMap, "$id")
 	delete(gotMap, "title")
+	delete(wantMap, "$id")
+	delete(wantMap, "title")
 	a, _ := json.Marshal(gotMap)
 	b, _ := json.Marshal(wantMap)
 	if string(a) != string(b) {
