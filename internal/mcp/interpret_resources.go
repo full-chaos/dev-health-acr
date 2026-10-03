@@ -38,10 +38,10 @@ func staticResourceMeta(text, serviceVersion string) mcpsdk.Meta {
 // own credential.
 func registerInterpretResources(server *mcpsdk.Server, caller *CallerContext, serviceVersion string) {
 	if hostedToolEnabled(caller, toolInvestigateQuestion) {
-		addStaticResource(server, uriInterpretationOutput, "interpretation-output", "Interpretation output schema",
+		addStaticResource(server, caller, toolInvestigateQuestion, uriInterpretationOutput, "interpretation-output", "Interpretation output schema",
 			"JSON schema of the object the interpretation prompt returns. Validate your own interpretation against it. Version "+interpretprompt.OutputVersion+".",
 			"application/schema+json", interpretprompt.OutputSchema(), serviceVersion)
-		addStaticResource(server, uriFactKinds, "guide-fact-kinds", "Fact-kind glossary",
+		addStaticResource(server, caller, toolInvestigateQuestion, uriFactKinds, "guide-fact-kinds", "Fact-kind glossary",
 			"What each fact kind holds, which subject kinds it serves, and what it is not; the same text the interpretation prompt states.",
 			guideMIME, interpretprompt.FactKindsGuide(), serviceVersion)
 	}
@@ -53,7 +53,7 @@ func registerInterpretResources(server *mcpsdk.Server, caller *CallerContext, se
 			Annotations: &mcpsdk.Annotations{Audience: []mcpsdk.Role{"assistant"}},
 		}, func(ctx context.Context, _ *mcpsdk.ReadResourceRequest) (*mcpsdk.ReadResourceResult, error) {
 			callerCtx, err := CallerFromContext(ctx)
-			if err != nil {
+			if err != nil || !liveToolEnabled(ctx, callerCtx, toolDataCatalog) {
 				return nil, &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: "this request carries no authenticated caller identity"}
 			}
 			raw, err := callerCtx.client.DataCatalog(ctx, nil)
@@ -71,13 +71,16 @@ func registerInterpretResources(server *mcpsdk.Server, caller *CallerContext, se
 
 const guideMIME = "text/markdown"
 
-func addStaticResource(server *mcpsdk.Server, uri, name, title, description, mime, text, serviceVersion string) {
+func addStaticResource(server *mcpsdk.Server, caller *CallerContext, tool, uri, name, title, description, mime, text, serviceVersion string) {
 	meta := staticResourceMeta(text, serviceVersion)
 	server.AddResource(&mcpsdk.Resource{
 		URI: uri, Name: name, Title: title, Description: description, MIMEType: mime,
 		Annotations: &mcpsdk.Annotations{Audience: []mcpsdk.Role{"assistant"}},
 		Meta:        meta,
-	}, func(_ context.Context, _ *mcpsdk.ReadResourceRequest) (*mcpsdk.ReadResourceResult, error) {
+	}, func(ctx context.Context, _ *mcpsdk.ReadResourceRequest) (*mcpsdk.ReadResourceResult, error) {
+		if !liveToolEnabled(ctx, caller, tool) {
+			return nil, mcpsdk.ResourceNotFoundError(uri)
+		}
 		return &mcpsdk.ReadResourceResult{Meta: meta, Contents: []*mcpsdk.ResourceContents{{
 			URI: uri, MIMEType: mime, Text: text, Meta: meta,
 		}}}, nil

@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -145,5 +146,24 @@ func TestInterpretResourcesFollowTheCallersTools(t *testing.T) {
 	uris = resourceURIs(t, catalogOnly)
 	if !slices.Contains(uris, uriDataCatalog) || slices.Contains(uris, uriInterpretationOutput) || slices.Contains(uris, uriFactKinds) {
 		t.Errorf("catalog-only caller sees %v", uris)
+	}
+}
+
+func TestInterpretResourcesAreRefusedAfterTheToolIsRevoked(t *testing.T) {
+	fx := investigateFixture(t)
+	boot := newFixtureBootstrap(t, fx)
+	boot.Capabilities.EnabledTools = append(boot.Capabilities.EnabledTools, toolInvestigateQuestion)
+	client, closeFn := connectedClient(t, boot)
+	defer closeFn()
+	if _, err := readResource(t, client, uriFactKinds); err != nil {
+		t.Fatalf("read before revocation: %v", err)
+	}
+	fx.CapabilitiesHandler = func(w http.ResponseWriter, r *http.Request) {
+		writeJSONFixture(t, w, http.StatusOK, validCapabilitiesFixture())
+	}
+	for _, u := range []string{uriInterpretationOutput, uriFactKinds} {
+		if _, err := readResource(t, client, u); err == nil {
+			t.Errorf("%s served after the hosted API revoked investigate_question", u)
+		}
 	}
 }
