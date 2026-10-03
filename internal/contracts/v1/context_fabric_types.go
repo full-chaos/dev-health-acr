@@ -1738,8 +1738,10 @@ type ContextFabricVersionSet struct {
 	InterpretationVersion   string `json:"interpretation_version"`
 	SynthesisVersion        string `json:"synthesis_version"`
 	CanonicalServiceVersion string `json:"canonical_service_version"`
-	// ModelIdentity names the provider and model that produced this
-	// result's synthesis (e.g. "openai-compatible/gpt-5-nano"), never a
+	// ModelIdentity names the provider and model of the call that produced
+	// this result: its synthesis, or the interpretation call when the result
+	// ended without a synthesis (SynthesisVersion then reads not_synthesized)
+	// (e.g. "openai-compatible/gpt-5-nano"), never a
 	// bare vendor name on its own -- the same provider-shaped rule
 	// §19.3.6 applies to configuration applies here. It is one of the
 	// dimensions CHAOS-3782 answer reuse binds to (TRD §19.7.2, AC-3782-7):

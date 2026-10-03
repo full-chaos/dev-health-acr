@@ -140,7 +140,7 @@ func (e *Engine) continuationRefusalResult(
 		ClaimedFacts:       []ClaimedFact{},
 		Coverage:           emptyCoverage,
 		Temporal:           composeTemporalLabel(refusedInterpretation, emptyCoverage, ""),
-		Versions:           e.terminalVersions(),
+		Versions:           e.terminalVersions(ctx),
 		// The deterministic answer IS the limitation, as on the other refusing
 		// terminal: there is no judgment to state, and the one sentence that
 		// is true of the turn is the refusal.

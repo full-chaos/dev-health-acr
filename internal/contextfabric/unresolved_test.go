@@ -274,9 +274,10 @@ func TestTerminalResultCarriesTheSynthesizersStaticVersions(t *testing.T) {
 		versions.ProjectionVersion != "projection-v9" || versions.QueryVersion != "query-v9" || versions.CanonicalServiceVersion != "ops-v9" {
 		t.Fatalf("Versions = %#v, want the synthesizer's static versions verbatim", versions)
 	}
-	// Receipt-derived only: no model ran, so these are honestly unwired.
-	if versions.InterpretationVersion != "unwired" || versions.SynthesisVersion != "unwired" || versions.ModelIdentity != "unwired" {
-		t.Fatalf("Versions = %#v, want the receipt-derived fields to read \"unwired\"", versions)
+	// The interpret call ran on this turn, so its receipt stamps the
+	// interpretation fields; no synthesis ran, and that is not "unwired".
+	if versions.InterpretationVersion != "schema-v1" || versions.ModelIdentity != "test-provider/test-model" || versions.SynthesisVersion != SynthesisVersionNotSynthesized {
+		t.Fatalf("Versions = %#v, want the interpretation receipt's stamps and the not-synthesized marker", versions)
 	}
 }
 

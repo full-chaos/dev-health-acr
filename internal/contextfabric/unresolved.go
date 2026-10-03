@@ -566,7 +566,7 @@ func (e *Engine) terminalResult(
 		// (chaos4171_offer_phrasing.go) for why this is the shared hook
 		// with window.go's own composeGatedStructureNeeds call site.
 		StructureNeeds:      e.applyOfferPhrasing(ctx, principal, request.RequestID, composeStructureNeeds(structureMaterial, resultID)),
-		Versions:            e.terminalVersions(),
+		Versions:            e.terminalVersions(ctx),
 		DeterministicAnswer: answer,
 		Warnings:            terminalWarnings,
 	}
@@ -1031,8 +1031,11 @@ func refusalLimitation(gate FrameGate, basis contractsv1.ContextFabricRefusalBas
 // terminalVersions builds the version set for a model-free terminal result:
 // the synthesizer's static versions when it can report them (see
 // ResultVersionProvider), Engine's own service/contract versions, and the
-// "unwired" placeholder for everything only a model receipt could supply.
-func (e *Engine) terminalVersions() VersionSet {
+// interpretation receipt of this turn when the interpret call ran (see
+// withInterpretationStamp), and the "unwired" placeholder only for what no
+// model call on this turn could supply. A terminal result has no synthesis,
+// so once a model ran its synthesis version reads SynthesisVersionNotSynthesized.
+func (e *Engine) terminalVersions(ctx context.Context) VersionSet {
 	var versions VersionSet
 	if provider, ok := e.synthesizer.(ResultVersionProvider); ok {
 		versions = provider.StaticResultVersions()
@@ -1043,8 +1046,13 @@ func (e *Engine) terminalVersions() VersionSet {
 	versions.ProjectionVersion = nonEmptyVersion(versions.ProjectionVersion, "")
 	versions.QueryVersion = nonEmptyVersion(versions.QueryVersion, "")
 	versions.CanonicalServiceVersion = nonEmptyVersion(versions.CanonicalServiceVersion, "")
-	versions.InterpretationVersion = nonEmptyVersion(versions.InterpretationVersion, "")
-	versions.SynthesisVersion = nonEmptyVersion(versions.SynthesisVersion, "")
-	versions.ModelIdentity = nonEmptyVersion(versions.ModelIdentity, "")
+	stamp, interpreted := interpretationStampFrom(ctx)
+	versions.InterpretationVersion = nonEmptyVersion(versions.InterpretationVersion, stamp.InterpretationVersion)
+	versions.ModelIdentity = nonEmptyVersion(versions.ModelIdentity, stamp.ModelIdentity)
+	synthesisFallback := ""
+	if interpreted {
+		synthesisFallback = SynthesisVersionNotSynthesized
+	}
+	versions.SynthesisVersion = nonEmptyVersion(versions.SynthesisVersion, synthesisFallback)
 	return versions
 }

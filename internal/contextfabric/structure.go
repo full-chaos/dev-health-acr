@@ -1409,7 +1409,7 @@ func (e *Engine) structureVetoResult(ctx context.Context, principal storage.Prin
 		ClaimedFacts:        []ClaimedFact{},
 		Coverage:            emptyCoverage,
 		Temporal:            composeTemporalLabel(resolvedInterpretation, emptyCoverage, ""),
-		Versions:            e.terminalVersions(),
+		Versions:            e.terminalVersions(ctx),
 		DeterministicAnswer: limitation,
 		Warnings:            []string{},
 	}

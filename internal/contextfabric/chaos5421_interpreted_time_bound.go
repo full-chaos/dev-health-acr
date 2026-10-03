@@ -394,7 +394,7 @@ func (e *Engine) interpretedTimeBoundResult(
 		// non-current axis. Composed rather than hardcoded so the rule
 		// stays in one place.
 		Temporal:            composeTemporalLabel(resolvedInterpretation, emptyCoverage, ""),
-		Versions:            e.terminalVersions(),
+		Versions:            e.terminalVersions(ctx),
 		DeterministicAnswer: limitation,
 		Warnings:            []string{},
 	}

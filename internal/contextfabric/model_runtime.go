@@ -2219,6 +2219,7 @@ func (r RuntimeQuestionInterpreter) finishFamilyResolution(
 	// for a frame that refused and for a frame that was never proposed;
 	// carrying the verdict separately is what lets the engine tell those
 	// two apart, which is the whole of this seam.
+	outcome.Interpretation = interpretationStampOf(receipt)
 	outcome.Gate = FrameGate{
 		Outcome:            receipt.FrameGateOutcome,
 		RefuseBasis:        receipt.FrameGateRefuseBasis,

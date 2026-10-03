@@ -63,6 +63,10 @@ const (
 
 // QuestionFamilyOutcome is the resolver's whole verdict.
 type QuestionFamilyOutcome struct {
+	// Interpretation names the interpret call this outcome was resolved
+	// from. Zero when no call produced it. Engine reads it only to stamp the
+	// version set of a terminal result that has no synthesis of its own.
+	Interpretation InterpretationStamp
 	// Frame is the VALIDATED QuestionFrame this interpretation produced,
 	// nil when no frame reached validation.
 	//
