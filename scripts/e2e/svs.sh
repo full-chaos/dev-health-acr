@@ -96,7 +96,7 @@ services:
     environment:
       AUTH_SECRET: ${WEB_AUTH_SECRET}
       AUTH_URL: http://127.0.0.1:${WEB_PORT}
-      BACKEND_URL: http://api:8000
+      BACKEND_URL: http://go-api:8000
       ACR_API_ORIGIN: http://acr-tls-proxy:8080
       ACR_WEB_ASSERTION_AUDIENCE: dev-health-acr
       ACR_WEB_ASSERTION_ISSUER: dev-health-web
@@ -106,7 +106,7 @@ services:
     volumes:
       - ${STATE}/web/web-assertion.key:/run/acr-e2e/web-assertion.key:ro
     depends_on:
-      api: { condition: service_healthy }
+      go-api: { condition: service_started }
       bugsink: { condition: service_started }
       valkey: { condition: service_healthy }
     networks: [dev-health]
@@ -172,7 +172,7 @@ assert_canonical_account_login() {
 const email = process.env.SVS_WEB_EMAIL;
 const password = process.env.SVS_WEB_PASSWORD;
 void (async () => {
-  const response = await fetch("http://api:8000/api/v1/auth/login", {
+  const response = await fetch("http://go-api:8000/api/v1/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
@@ -329,7 +329,8 @@ remove_runtime_entitlement() {
 
 bootstrap_failure_ops() {
   local output org_id token db
-  compose up -d postgres clickhouse valkey pgbouncer mailpit migrate api >/dev/null
+  compose up -d postgres clickhouse valkey pgbouncer mailpit migrate go-api-roles go-api >/dev/null
+  wait_go_api
   if ! output="$(dho admin orgs create --name "${PROJECT} SVS" --slug "$PROJECT" --description 'isolated SVS control plane' --tier community)"; then
     printf '%s\n' "$output" >&2
     svs_die 'Ops organization provisioning failed'

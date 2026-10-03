@@ -170,7 +170,7 @@ fi
 require_literal "image: $image" "immutable-image: requested image was not rendered"
 pass "immutable-image: API and migration images use the requested digest"
 
-for token in 'secretKeyRef:' 'name: acr-runtime-credentials' 'name: acr-migration-credentials' 'ACR_POSTGRES_DSN' 'ACR_POSTGRES_MIGRATION_DSN' 'imagePullSecrets:' 'ACR_DEV_HEALTH_ENTITLEMENT_URL: http://ops.dev-health.internal:8000'; do
+for token in 'secretKeyRef:' 'name: acr-runtime-credentials' 'name: acr-migration-credentials' 'ACR_POSTGRES_DSN' 'ACR_POSTGRES_MIGRATION_DSN' 'imagePullSecrets:' 'ACR_DEV_HEALTH_ENTITLEMENT_URL: http://ops.dev-health.internal:8091'; do
   require_literal "$token" "secret-ref: missing $token"
 done
 if grep -qE 'name: acr-runtime-credentials.*ACR_POSTGRES_MIGRATION_DSN|name: acr-migration-credentials.*ACR_POSTGRES_DSN' "$work/rendered.yaml"; then

@@ -305,7 +305,7 @@ func TestProductionAcceptsPlainHTTPDevHealthEntitlementURL(t *testing.T) {
 		"ACR_ENVIRONMENT": "production", "ACR_REQUIRE_BACKING_STORES": "false",
 		"ACR_CLICKHOUSE_DSN": "clickhouse://redacted", "ACR_POSTGRES_DSN": "postgres://redacted?sslmode=verify-full",
 		"ACR_EVIDENCE_ID_ACTIVE_KID": "current", "ACR_EVIDENCE_ID_KEYS": "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
-		"ACR_DEV_HEALTH_ENTITLEMENT_URL":        "http://ops.internal:8000",
+		"ACR_DEV_HEALTH_ENTITLEMENT_URL":        "http://ops.internal:8091",
 		"ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE": "/run/secrets/ops-token",
 		"ACR_DEVICE_VERIFICATION_URL":           "https://verify.example.test/device",
 		"ACR_POSTGRES_CONNECTION_KIND":          "direct",
@@ -318,7 +318,7 @@ func TestProductionAcceptsPlainHTTPDevHealthEntitlementURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.DevHealthEntitlementURL != "http://ops.internal:8000" {
+	if cfg.DevHealthEntitlementURL != "http://ops.internal:8091" {
 		t.Fatalf("entitlement URL = %q, want plain internal origin", cfg.DevHealthEntitlementURL)
 	}
 }

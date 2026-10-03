@@ -267,29 +267,26 @@ VALUES ('00000000-0000-0000-0000-000000000001', 'deadbeef', '2026-01-01 00:00:00
 	}
 }
 
-// TestRunVerifySeedSchema_FailsClosedWhenUnhandledDDLTouchesSeededTable is Codex finding 12's
-// core ask: unattributed DDL on a table the seed actually inserts into must fail the run, not
-// just print a warning -- this replay's picture of that table's columns may be wrong, which
-// is exactly the condition that let a seed pass here and fail against the real schema.
-// devhealthschema:not-a-production-replica this DDL is INPUT to the migration parser under test,
+// TestRunVerifySeedSchema_FailsClosedWhenUnhandledDDLTouchesSeededTable: DDL the replay cannot
+// attribute to a table (a RENAME TABLE delta) must fail the run, not print a warning -- the
+// replay's picture of the seeded table's columns may be wrong, which is exactly the condition
+// that let a seed pass here and fail against the real schema.
+// devhealthschema:not-a-production-replica this layout is INPUT to the migration parser under test,
 // never a fixture any Context Fabric reader queries. The
 // table names are incidental; the test asserts how statements are replayed.
 func TestRunVerifySeedSchema_FailsClosedWhenUnhandledDDLTouchesSeededTable(t *testing.T) {
 	migrations := t.TempDir()
-	writeMigration(t, migrations, "000_create.sql", `
-CREATE TABLE IF NOT EXISTS git_commits (
-    repo_id UUID,
-    hash String
-) ENGINE = ReplacingMergeTree ORDER BY (repo_id, hash);
-`)
-	// A templated ALTER this file cannot attribute to any table list at all -- Table=="",
-	// which must always fail closed regardless of what the seed touches.
-	writeMigration(t, migrations, "001_mystery.py", `
-def upgrade(client):
-    client.command(
-        f"ALTER TABLE `+"`{table}`"+` ADD COLUMN IF NOT EXISTS mystery_column String"
-    )
-`)
+	if err := os.MkdirAll(filepath.Join(migrations, "baseline"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(migrations, "sql"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	baseline := `{"objects":[{"name":"git_commits","create":"CREATE TABLE git_commits (` + "`repo_id`" + ` UUID, ` + "`hash`" + ` String) ENGINE = ReplacingMergeTree ORDER BY (repo_id, hash)"}]}`
+	if err := os.WriteFile(filepath.Join(migrations, "baseline", "head.json"), []byte(baseline), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeMigration(t, filepath.Join(migrations, "sql"), "100_mystery.sql", "RENAME TABLE git_commits TO git_commits_old;")
 	seedDir := t.TempDir()
 	writeFile(t, filepath.Join(seedDir, "001_seed.sql"), `
 INSERT INTO git_commits (repo_id, hash) VALUES ('r', 'h');
@@ -298,35 +295,6 @@ INSERT INTO git_commits (repo_id, hash) VALUES ('r', 'h');
 	code := runVerifySeedSchema([]string{"--seed-dir", seedDir, "--migrations-dir", migrations})
 	if code == 0 {
 		t.Fatal("expected verify-seed-schema to fail closed: the unattributed DDL's affected table is unknown")
-	}
-}
-
-// TestRunVerifySeedSchema_WarnsButPassesWhenUnhandledDDLTouchesUnrelatedTable is the other
-// half: a note about a table the seed genuinely never inserts into cannot affect this run's
-// verdict, so it must stay a warning, not a failure (avoiding an unrelated-migration-shaped
-// denial of service on every seed change).
-// devhealthschema:not-a-production-replica this DDL is INPUT to the migration parser under test,
-// never a fixture any Context Fabric reader queries. The
-// table names are incidental; the test asserts how statements are replayed.
-func TestRunVerifySeedSchema_WarnsButPassesWhenUnhandledDDLTouchesUnrelatedTable(t *testing.T) {
-	migrations := t.TempDir()
-	writeMigration(t, migrations, "000_create.sql", `
-CREATE TABLE IF NOT EXISTS git_commits (
-    repo_id UUID,
-    hash String
-) ENGINE = ReplacingMergeTree ORDER BY (repo_id, hash);
-`)
-	writeMigration(t, migrations, "001_unrelated.py", `
-def upgrade(client):
-    client.command("""CREATE TABLE totally_unrelated_table (id UUID) ENGINE = MergeTree ORDER BY id""")
-`)
-	seedDir := t.TempDir()
-	writeFile(t, filepath.Join(seedDir, "001_seed.sql"), `
-INSERT INTO git_commits (repo_id, hash) VALUES ('r', 'h');
-`)
-
-	if code := runVerifySeedSchema([]string{"--seed-dir", seedDir, "--migrations-dir", migrations}); code != 0 {
-		t.Fatal("expected verify-seed-schema to pass: the unhandled DDL names a table the seed never writes to")
 	}
 }
 

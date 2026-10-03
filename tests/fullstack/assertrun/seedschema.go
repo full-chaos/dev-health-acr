@@ -182,12 +182,10 @@ func (u unhandledDDL) String() string {
 	return fmt.Sprintf("%s: %s (table: unknown -- cannot rule out any table)", u.File, u.Message)
 }
 
-// replayMigrationsDir builds the effective schema from every *.sql/*.py file directly inside
-// dir, applied in lexical filename order (the ClickHouse migrator's own ordering contract: e.g.
-// 027_*.py runs between 026_*.sql and 028_*.sql, and it adds columns later files and the seed
-// depend on). The second return value lists DDL applyMigrationPython could not fully
-// interpret -- callers must surface these rather than silently trusting a replay that may be
-// an incomplete picture of the schema (see pymigration.go).
+// replayMigrationsDir builds the effective schema from every *.sql file directly inside dir,
+// applied in lexical filename order. The second return value lists DDL the replay could not
+// fully interpret -- callers must surface these rather than silently trusting a replay that
+// may be an incomplete picture of the schema.
 func replayMigrationsDir(dir string) (*chSchema, []unhandledDDL, error) {
 	if _, err := os.Stat(filepath.Join(dir, "baseline", "head.json")); err == nil {
 		return replayChmigrateDir(dir)
@@ -198,10 +196,10 @@ func replayMigrationsDir(dir string) (*chSchema, []unhandledDDL, error) {
 	}
 	var names []string
 	for _, e := range entries {
-		if e.IsDir() || e.Name() == "__init__.py" {
+		if e.IsDir() {
 			continue
 		}
-		if strings.HasSuffix(e.Name(), ".sql") || strings.HasSuffix(e.Name(), ".py") {
+		if strings.HasSuffix(e.Name(), ".sql") {
 			names = append(names, e.Name())
 		}
 	}
@@ -210,21 +208,16 @@ func replayMigrationsDir(dir string) (*chSchema, []unhandledDDL, error) {
 		return nil, nil, fmt.Errorf("no migration files found in %s", dir)
 	}
 	schema := newCHSchema()
-	var unhandled []unhandledDDL
 	for _, name := range names {
 		data, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
 			return nil, nil, fmt.Errorf("read migration %s: %w", name, err)
 		}
-		if strings.HasSuffix(name, ".py") {
-			unhandled = append(unhandled, applyMigrationPython(schema, string(data), name)...)
-			continue
-		}
 		if err := applyMigrationSQL(schema, string(data)); err != nil {
 			return nil, nil, fmt.Errorf("migration %s: %w", name, err)
 		}
 	}
-	return schema, unhandled, nil
+	return schema, nil, nil
 }
 
 // --- seed INSERT verification ---

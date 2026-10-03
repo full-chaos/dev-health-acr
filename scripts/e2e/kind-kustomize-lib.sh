@@ -153,7 +153,7 @@ patches:
     patch: |-
       - op: replace
         path: /data/ACR_DEV_HEALTH_ENTITLEMENT_URL
-        value: http://${KUSTOMIZE_E2E_OPS_HOST}:8000
+        value: http://${KUSTOMIZE_E2E_OPS_HOST}:8091
   - target:
       group: networking.k8s.io
       version: v1

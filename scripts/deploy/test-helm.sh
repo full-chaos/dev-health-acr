@@ -329,7 +329,7 @@ pass "local-entitlement: development render omits remote URL/token/CA/network in
 
 distinct_token_render="$workdir/distinct-token.yaml"
 render \
-  --set-string 'config.entitlement.url=http://ops.dev-health.internal:8000' \
+  --set-string 'config.entitlement.url=http://ops.dev-health.internal:8091' \
   --set-string 'credentials.entitlementToken.existingSecret=acr-entitlement-token' \
   --set-string 'config.entitlementCaBundle.existingSecret=acr-entitlement-ca' \
   --set-string 'credentials.entitlementToken.key=source-token' \
@@ -533,7 +533,7 @@ pass "device-verification-url: hosted runtime approval URL is rendered ($device_
 
 # Gate 14: remote mode remains explicit and accepts an ordinary HTTP service origin.
 ent_url="$(grep 'ACR_DEV_HEALTH_ENTITLEMENT_URL' "$distinct_token_render" | head -1 | grep -oE 'https?://[^"]+')"
-[[ "$ent_url" == "http://ops.dev-health.internal:8000" ]] \
+[[ "$ent_url" == "http://ops.dev-health.internal:8091" ]] \
   || fail_gate "entitlement-origin: explicit remote render did not retain the HTTP origin"
 pass "entitlement-origin: explicit remote render retains HTTP origin and token projection"
 

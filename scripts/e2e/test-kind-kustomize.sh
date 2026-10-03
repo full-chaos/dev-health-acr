@@ -61,9 +61,9 @@ test_parity_keeps_dependency_port_meanings_separate() {
   grep -Fq "verify_semantic_port_parity 'entitlement HTTP' 8000 acr-api" "${HARNESS}" || fail 'parity does not require entitlement HTTP port 8000'
   grep -Fq 'network_policy_tcp_ports' "${HARNESS}" || fail 'parity does not scope dependency ports to NetworkPolicy documents'
   grep -Fq "KUSTOMIZE_E2E_OPS_PORT=\"${literal_dollar}(e2e_fixture_value \"${literal_dollar}file\" ACR_E2E_OPS_ENTITLEMENT_PORT)\"" "${LIBRARY}" || fail 'Kustomize does not load the entitlement port from the fixture export'
-  grep -Fq "http://${literal_dollar}{KUSTOMIZE_E2E_OPS_HOST}:8000" "${LIBRARY}" || fail 'Kustomize entitlement URL does not use the internal HTTP service port'
+  grep -Fq "http://${literal_dollar}{KUSTOMIZE_E2E_OPS_HOST}:8091" "${LIBRARY}" || fail 'Kustomize entitlement URL does not use the internal HTTP service port'
   grep -Fq 'port: 8000' "${api_policy}" || fail 'API policy does not allow the base entitlement HTTP port'
-  helm_policy_port='entitlementPort: 8000'
+  helm_policy_port='entitlementPort: 8091'
   grep -Fq "${helm_policy_port}" "${HARNESS}" || fail 'Helm values do not use the entitlement HTTP port'
 }
 
@@ -79,7 +79,7 @@ test_base_and_fixture_entitlement_ports_render() {
   fi
   base_url="$(yq -r 'select(.kind == "ConfigMap" and .metadata.name == "acr-config") | .data.ACR_DEV_HEALTH_ENTITLEMENT_URL' "${base_render}")"
   base_ports="$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "acr-api") | .spec.egress[]?.ports[]? | select(.protocol == "TCP") | .port' "${base_render}")"
-  [[ "${base_url}" == 'http://ops.dev-health.internal:8000' ]] || fail "base entitlement URL = ${base_url}"
+  [[ "${base_url}" == 'http://ops.dev-health.internal:8091' ]] || fail "base entitlement URL = ${base_url}"
   require_output "${base_ports}" 8000
   require_output "${base_ports}" 9000
   if grep -Fqx 8443 <<<"${base_ports}"; then rm -rf "${state_root}"; fail 'base policy retains fixture entitlement port'; fi
@@ -97,7 +97,7 @@ test_base_and_fixture_entitlement_ports_render() {
   cp "${KUSTOMIZE_E2E_WORK}/rendered.yaml" "${fixture_render}"
   fixture_url="$(yq -r 'select(.kind == "ConfigMap" and .metadata.name == "acr-config") | .data.ACR_DEV_HEALTH_ENTITLEMENT_URL' "${fixture_render}")"
   fixture_ports="$(yq -r 'select(.kind == "NetworkPolicy" and .metadata.name == "acr-api") | .spec.egress[]?.ports[]? | select(.protocol == "TCP") | .port' "${fixture_render}")"
-  [[ "${fixture_url}" == 'http://ops.example.test:8000' ]] || fail "fixture entitlement URL = ${fixture_url}"
+  [[ "${fixture_url}" == 'http://ops.example.test:8091' ]] || fail "fixture entitlement URL = ${fixture_url}"
   require_output "${fixture_ports}" 8000
   require_output "${fixture_ports}" 9000
   rm -rf "${state_root}"

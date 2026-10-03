@@ -103,7 +103,7 @@ imagePullSecrets:
 config:
   environment: development
   entitlement:
-    url: http://${KUSTOMIZE_E2E_OPS_HOST}:8000
+    url: http://${KUSTOMIZE_E2E_OPS_HOST}:8091
 credentials:
   runtime:
     existingSecret: acr-runtime-credentials
@@ -122,7 +122,7 @@ gateway:
 networkPolicy:
   egress:
     clickhousePort: 9000
-    entitlementPort: 8000
+    entitlementPort: 8091
   ingressNamespaceSelectors:
     - matchLabels:
         kubernetes.io/metadata.name: envoy-gateway-system
