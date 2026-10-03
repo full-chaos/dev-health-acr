@@ -1086,7 +1086,7 @@ func lookupComparisonAliasClaimants(ctx context.Context, principal storage.Princ
 	if err != nil {
 		return comparisonAliasClaimants{}, err
 	}
-	traceAliasLookup(deps, request.RequestID, complete, claimantsByTerm)
+	traceAliasLookup(deps, request.RequestID, complete, len(terms), claimantsByTerm)
 	return comparisonAliasClaimants{claimantsByTerm: claimantsByTerm, complete: complete}, nil
 }
 

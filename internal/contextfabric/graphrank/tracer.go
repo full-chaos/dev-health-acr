@@ -86,7 +86,8 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// to Info.
 		t.logger.InfoContext(ctx, "context fabric resolution trace: alias lookup",
 			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
-			"complete", event.AliasLookupComplete, "matched_claimants", event.AliasLookupMatchedClaimants)
+			"complete", event.AliasLookupComplete, "matched_claimants", event.AliasLookupMatchedClaimants,
+			"term_count", event.AliasLookupTermCount, "matched_kinds", contextfabric.SanitizeLogStrings(event.AliasLookupMatchedKinds))
 	case "kind_hint_search":
 		// CHAOS-4348: traceKindHintSearch's own event (chaos4348_reachability.go)
 		// -- one per matched node, before this case existed this stage fell
@@ -751,6 +752,8 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"shadow_non_censused_survivor", event.ShadowNonCensusedSurvivor,
 			"shadow_survivor_excluded_reason", contextfabric.SanitizeLogAttr(event.ShadowSurvivorExcludedReason),
 			"shadow_trigger", contextfabric.SanitizeLogAttr(event.ShadowTrigger),
+			"shadow_caller_narrowing", contextfabric.SanitizeLogAttr(event.ShadowCallerNarrowing),
+			"shadow_narrowed_from", event.ShadowNarrowedFrom, "shadow_narrowed_to", event.ShadowNarrowedTo,
 			"shadow_handle_grammar_bound", event.ShadowHandleGrammarBound,
 			"shadow_anchor_unique_claimant", event.ShadowAnchorUniqueClaimant,
 			"shadow_anchor_receipt_confirmed", event.ShadowAnchorReceiptConfirmed,
