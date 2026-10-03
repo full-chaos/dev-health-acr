@@ -98,14 +98,14 @@ type fixtureVerification struct {
 	CorpusHashes   []corpusHashCheck `json:"corpus_hashes"`
 	SeedHashes     []seedHashCheck   `json:"seed_hashes"`
 	Probes         []probeCheck      `json:"probes"`
-	// UnhandledPythonMigrationNotes is populated only when --migrations-dir is given: DDL in
-	// a Python ops migration this tool's replay could not attribute to a table (see
-	// pymigration.go). It never fails the run by itself -- see verify-seed-schema, the
+	// UnhandledMigrationNotes is populated only when --migrations-dir is given: DDL in
+	// an ops ClickHouse migration this tool's replay could not attribute to a table.
+	// It never fails the run by itself -- see verify-seed-schema, the
 	// dedicated static check, for why -- it is here so a live run's own
 	// fixture-verification.json also discloses the gap rather than only a separate offline
 	// report nobody may be looking at.
-	UnhandledPythonMigrationNotes []string `json:"unhandled_python_migration_notes,omitempty"`
-	OK                            bool     `json:"ok"`
+	UnhandledMigrationNotes []string `json:"unhandled_migration_notes,omitempty"`
+	OK                      bool     `json:"ok"`
 }
 
 func unhandledDDLStrings(notes []unhandledDDL) []string {
@@ -128,7 +128,7 @@ func runVerifyFixture(args []string) int {
 	out := fs.String("out", "", "path to write fixture-verification.json")
 	probeCommandRaw := fs.String("probe-command", "", "shell-quoted probe command prefix; the (substituted) SQL is appended as the final argument")
 	probeCommandFile := fs.String("probe-command-file", "", "file holding the NUL-separated probe argv; preferred, because the caller's compose wrapper is a shell function and cannot be expressed as a quoted string")
-	migrationsDir := fs.String("migrations-dir", "", "optional path to ops/internal/chmigrate; when given, unattributable Python migration DDL is disclosed in fixture-verification.json rather than only in verify-seed-schema's own report")
+	migrationsDir := fs.String("migrations-dir", "", "optional path to ops/internal/chmigrate; when given, unattributable migration DDL is disclosed in fixture-verification.json rather than only in verify-seed-schema's own report")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -183,7 +183,7 @@ func runVerifyFixture(args []string) int {
 		if _, unhandled, err := replayMigrationsDir(*migrationsDir); err != nil {
 			fmt.Fprintf(os.Stderr, "[assertrun] WARN fixture migrations-dir: %s\n", redact(err.Error()))
 		} else {
-			report.UnhandledPythonMigrationNotes = unhandledDDLStrings(unhandled)
+			report.UnhandledMigrationNotes = unhandledDDLStrings(unhandled)
 			for _, note := range unhandled {
 				fmt.Fprintf(os.Stderr, "[assertrun] WARN fixture: %s\n", redact(note.String()))
 			}

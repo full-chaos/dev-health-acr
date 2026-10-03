@@ -245,7 +245,7 @@ e2e_set_ops_entitlement_token() {
   local token="$1" config
   config="$(cat <<EOF
 server {
-  listen 8000;
+  listen 8091;
   listen 8443 ssl;
   ssl_certificate /tls/tls.crt;
   ssl_certificate_key /tls/tls.key;

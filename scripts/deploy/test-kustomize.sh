@@ -178,7 +178,7 @@ if grep -qE 'name: acr-runtime-credentials.*ACR_POSTGRES_MIGRATION_DSN|name: acr
 fi
 pass "secret-ref: distinct existing runtime and migration credential references"
 
-for token in 'runAsNonRoot: true' 'readOnlyRootFilesystem: true' 'allowPrivilegeEscalation: false' 'type: RuntimeDefault' 'automountServiceAccountToken: false' 'port: 5432' 'port: 9000' 'port: 8000' 'name: prepare-entitlement-token' 'name: entitlement-token-source'; do
+for token in 'runAsNonRoot: true' 'readOnlyRootFilesystem: true' 'allowPrivilegeEscalation: false' 'type: RuntimeDefault' 'automountServiceAccountToken: false' 'port: 5432' 'port: 9000' 'port: 8091' 'name: prepare-entitlement-token' 'name: entitlement-token-source'; do
   require_literal "$token" "pod-security: missing $token"
 done
 if grep -Eq 'ACR_(POSTGRES|CLICKHOUSE|DEV_HEALTH_ENTITLEMENT)_CA_BUNDLE|secretName: acr-(postgres|clickhouse|entitlement)-ca' "$work/rendered.yaml"; then

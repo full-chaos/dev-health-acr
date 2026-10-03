@@ -426,7 +426,7 @@ verify_fixture() {
   org_id="$(<"$STATE/org-id")"
   # compose is a shell function, so the verifier cannot exec it; hand it the resolved argv.
   { compose_argv; printf '%s\0' exec -T clickhouse clickhouse-client --user default --password ch --database "$db" --query; } > "$STATE/probe-argv"
-  # Best-effort only: disclose unattributable Python migration DDL in fixture-verification.json
+  # Best-effort only: disclose unattributable migration DDL in fixture-verification.json
   # too when a sibling ops checkout happens to be available; never required for the live run.
   if migrations_dir="$(find_ops_migrations_dir)"; then
     migrations_dir_args=(--migrations-dir "$migrations_dir")

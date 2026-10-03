@@ -389,9 +389,9 @@ if 'port: 9440' in api or 'port: 8123' in api: fail('API egress contains an unex
 if 'protocol: TCP' not in api: fail('API egress must explicitly use TCP')
 if 'port: 8080' not in api or 'namespaceSelector:' not in api: fail('API ingress must be constrained to the configured Gateway namespace selector')
 if 'port: 5432' not in migrate or 'protocol: TCP' not in migrate: fail('migration policy must allow TCP PostgreSQL only')
-for port in ('port: 9000', 'port: 8000', 'port: 8080'):
+for port in ('port: 9000', 'port: 8091', 'port: 8080'):
     if port in migrate: fail('migration policy must not allow non-PostgreSQL dependency '+port)
-if 'port: 8000' in api: fail('local API egress must not retain the remote entitlement port')
+if 'port: 8091' in api: fail('local API egress must not retain the remote entitlement port')
 print('  ok   network-policy: local API permits TCP Postgres/ClickHouse ports and Gateway ingress; migration permits only DNS + TCP Postgres')
 PY
 
