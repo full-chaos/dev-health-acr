@@ -95,7 +95,7 @@ var servableCohortKinds = map[SubjectKind]bool{
 // BELONGS_TO_REPOSITORY edge and DeploymentsProvider declares the kind, so the
 // members of a named repository are discoverable. The anchor kind is not on
 // the frame; the engine refuses a deployment cohort whose committed anchor is
-// not a repository (see deploymentCohortAnchorServable).
+// not a repository or a team (see DeploymentCohortAnchorServable).
 var scopedOnlyCohortKinds = map[SubjectKind]bool{
 	SubjectDeployment: true,
 }
@@ -115,9 +115,13 @@ func ScopedOnlyCohortKindsForAudit() []SubjectKind {
 }
 
 // DeploymentCohortAnchorServable reports whether a committed scope anchor of
-// this kind can anchor a deployment cohort. Only a repository is proven.
+// this kind can anchor a deployment cohort. A repository reaches its
+// deployments by one BELONGS_TO_REPOSITORY edge and a team by two (through the
+// repository's OWNED_BY_TEAM edge, which is ownership-derived), both inside
+// the discovery walk's two hops. A project has no repository edge: its nearest
+// path to a deployment is three hops, so it stays refused.
 func DeploymentCohortAnchorServable(anchor SubjectKind) bool {
-	return anchor == SubjectRepository
+	return anchor == SubjectRepository || anchor == SubjectTeam
 }
 
 // CohortDiscoverability names WHY a subject expression can or cannot produce a

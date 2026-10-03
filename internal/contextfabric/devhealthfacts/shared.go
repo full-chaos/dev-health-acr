@@ -180,7 +180,12 @@ import (
 // status_in_vocabulary and status_provenance beside status. A candidate saved
 // under v23 holds a status fact without the vocabulary disclosure and must
 // not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v24"
+//
+// v24 -> v25: the deployment members of a named team are served (the cohort
+// anchor guard admits a team beside a repository). A candidate saved under v24
+// for such a question may hold the member_kind_unservable refusal and must not
+// be reused. Not pinned by a test.
+const QueryVersion = "devhealthfacts.clickhouse.v25"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
