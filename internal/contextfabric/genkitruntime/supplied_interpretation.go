@@ -17,6 +17,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/interpretprompt"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -88,7 +89,7 @@ func NewSuppliedInterpreter(config SuppliedInterpreterConfig) (*SuppliedInterpre
 // InterpretationSystemPromptSHA256 is the lowercase hex sha256 of the system
 // message InterpretQuestion sends.
 func InterpretationSystemPromptSHA256() string {
-	sum := sha256.Sum256([]byte(interpretationSystemPrompt))
+	sum := sha256.Sum256([]byte(interpretprompt.System()))
 	return hex.EncodeToString(sum[:])
 }
 
