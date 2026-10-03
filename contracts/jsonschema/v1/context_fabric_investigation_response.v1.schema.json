@@ -253,7 +253,7 @@
     "synthesis_input": {
       "type": "object",
       "additionalProperties": false,
-      "description": "The exact input the service would have sent its own synthesis model, served only in the turn that built it and never stored. Present only when the request asked synthesis_mode client and the turn reached synthesis. input_sha256 is the sha256 of the input bytes. bounded is true when facts were reduced to fit the input size bound.",
+      "description": "The model input the service would have sent its own synthesis model, served only in the turn that built it and never stored. Present only when the request asked synthesis_mode client and the turn reached synthesis. input_sha256 is the sha256 of the input bytes. bounded is true when facts were reduced to fit the input size bound; the input is then not byte for byte what the service's own model is given.",
       "properties": {
         "contract": {
           "type": "object",

@@ -575,3 +575,44 @@ func TestClientSynthesisInputSizeAcrossThreeTurns(t *testing.T) {
 		})
 	}
 }
+
+// The service ceiling bounds the whole body: a result that fits it alone is
+// refused when the synthesis input would push the response past it.
+func TestClientSynthesisResponseOverTheServiceCeilingIsRefused(t *testing.T) {
+	fixture := manyFactsFixture(40, 600)
+	ceiling := contractsv1.ContextFabricSerializedBytesMin
+	withLimit := func(r *contractsv1.ContextFabricInvestigationRequest) { r.Options.MaxSerializedBytes = ceiling }
+
+	probe := newClientRouteRig(t, fixture)
+	whole := probe.post(t, contractsv1.ContextFabricSynthesisModeClient, withLimit).Body.Len()
+	if whole <= ceiling {
+		t.Fatalf("whole body = %d bytes, want more than the %d byte ceiling", whole, ceiling)
+	}
+
+	rig := newClientRouteRig(t, fixture)
+	rig.app.config.MaxSerializedBytes = ceiling
+	recorder := rig.post(t, contractsv1.ContextFabricSynthesisModeClient, withLimit)
+	if recorder.Code != http.StatusRequestEntityTooLarge || !containsJSONCode(recorder.Body.Bytes(), "invalid_request") {
+		t.Fatalf("status = %d body=%s, want 413 invalid_request", recorder.Code, recorder.Body.String())
+	}
+	if _, present := topLevelKeys(t, recorder.Body.Bytes())["synthesis_input"]; present || bytes.Contains(recorder.Body.Bytes(), []byte("synthesis_input")) {
+		t.Error("the refusal carries a synthesis_input")
+	}
+	var refusal struct {
+		Error struct {
+			Details map[string]any `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &refusal); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := refusal.Error.Details["measured_bytes"].(float64); !ok || int(got) != whole {
+		t.Errorf("measured_bytes = %v, want the whole body %d", refusal.Error.Details["measured_bytes"], whole)
+	}
+	if got, ok := refusal.Error.Details["max_serialized_bytes"].(float64); !ok || int(got) != ceiling {
+		t.Errorf("max_serialized_bytes = %v, want the service ceiling %d", refusal.Error.Details["max_serialized_bytes"], ceiling)
+	}
+	if !strings.Contains(rig.logs.String(), "synthesis_input_bytes") {
+		t.Error("the refusal logged no synthesis_input_bytes reason")
+	}
+}

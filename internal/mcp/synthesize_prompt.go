@@ -27,10 +27,10 @@ func synthesizePromptMeta(system, serviceVersion string) mcpsdk.Meta {
 // registerSynthesizePrompt serves the synthesis system message the server
 // itself sends and the schema of the object that message asks for, both taken
 // from synthesisprompt, the one assembly the runtime also sends. Both
-// register only with investigate_question, so a credential that cannot
-// investigate cannot read them.
+// register only with investigate_question or investigate_with_interpretation,
+// so a credential that can run neither cannot read them.
 func registerSynthesizePrompt(server *mcpsdk.Server, cfg *ProcessConfig, caller *CallerContext, serviceVersion string) {
-	if !hostedToolEnabled(caller, toolInvestigateQuestion) {
+	if !hostedToolEnabled(caller, toolInvestigateQuestion) && !hostedToolEnabled(caller, toolInvestigateWithInterpretation) {
 		return
 	}
 	meta := synthesizePromptMeta(synthesisprompt.System(), serviceVersion)
@@ -43,7 +43,7 @@ func registerSynthesizePrompt(server *mcpsdk.Server, cfg *ProcessConfig, caller 
 			", system sha256 " + metaString(meta, "system_sha256") + ", service " + serviceVersion + ".",
 		Meta: meta,
 	}, func(ctx context.Context, _ *mcpsdk.GetPromptRequest) (*mcpsdk.GetPromptResult, error) {
-		if ok, reason := liveToolEnabled(ctx, caller, toolInvestigateQuestion); !ok {
+		if ok, reason := liveToolEnabled(ctx, caller, toolInvestigateQuestion, toolInvestigateWithInterpretation); !ok {
 			logSurfaceRefusal(ctx, cfg, "prompt", promptSynthesizeAnswer, reason)
 			return nil, &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: "unknown prompt"}
 		}
@@ -54,7 +54,7 @@ func registerSynthesizePrompt(server *mcpsdk.Server, cfg *ProcessConfig, caller 
 			Messages:    []*mcpsdk.PromptMessage{{Role: "user", Content: &mcpsdk.TextContent{Text: system}}},
 		}, nil
 	})
-	addStaticResource(server, cfg, caller, toolInvestigateQuestion, uriSynthesisOutput, "synthesis-output", "Synthesis output schema",
+	addStaticResource(server, cfg, caller, []string{toolInvestigateQuestion, toolInvestigateWithInterpretation}, uriSynthesisOutput, "synthesis-output", "Synthesis output schema",
 		"JSON schema of the object the synthesis prompt returns. Version "+synthesisprompt.OutputVersion+".",
 		"application/schema+json", synthesisprompt.OutputSchema(), synthesisprompt.PromptVersion, serviceVersion)
 }

@@ -419,7 +419,7 @@
             "server",
             "client"
           ],
-          "description": "Who wrote the answer of this result: the service's own model (server) or the caller's (client). Optional: absent when no synthesis step ran on the turn. A client result carries no model-written drivers or claims; the caller wrote the answer from the synthesis input of its turn."
+          "description": "Who wrote the answer of this result: the service's own model (server) or the caller's (client). Optional: absent when no synthesis step ran on the turn. A client result carries no model-written drivers or claims; the caller wrote the answer from the synthesis input of its turn. The status of a client result is partial, or degraded when the service finds a required source unavailable, or no_match; never complete."
         }
       },
       "required": [

@@ -169,6 +169,13 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 				writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation response could not be serialized", false, nil)
 				return
 			}
+			if envelopeBytes > int64(a.config.MaxSerializedBytes) {
+				a.logContextFabricResponseBudgetExceeded(r, "synthesis_input_bytes", envelopeBytes, int64(a.config.MaxSerializedBytes), estimatedTokens, itemCounts)
+				writeError(w, r, http.StatusRequestEntityTooLarge, "invalid_request", "Context Fabric investigation response exceeded service limits", false, map[string]any{
+					"measured_bytes": envelopeBytes, "max_serialized_bytes": int64(a.config.MaxSerializedBytes),
+				})
+				return
+			}
 			synthesisInputBytes = int(envelopeBytes - measuredBytes)
 		}
 		a.logContextFabricResponseBudgetMeasured(r, measuredBytes, maximumBytes, estimatedTokens, itemCounts, "synthesis_input_bytes", synthesisInputBytes)

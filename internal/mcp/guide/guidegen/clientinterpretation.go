@@ -62,6 +62,8 @@ type ClientFlowInputs struct {
 	SynthesisNotSynthesized string
 	StatusComplete          string
 	StatusPartial           string
+	StatusDegraded          string
+	TextFields              []string
 	StatusNoMatch           string
 	SynthesisMaxBytes       int
 	CommitNotAffirmed       string
@@ -132,6 +134,8 @@ func clientFlowInputs() ClientFlowInputs {
 		SynthesisNotSynthesized: contextfabric.SynthesisVersionNotSynthesized,
 		StatusComplete:          string(contractsv1.ContextFabricInvestigationComplete),
 		StatusPartial:           string(contractsv1.ContextFabricInvestigationPartial),
+		StatusDegraded:          string(contractsv1.ContextFabricInvestigationDegraded),
+		TextFields:              []string{jsonName(result, "DirectJudgment"), jsonName(result, "CurrentState"), jsonName(result, "DeterministicAnswer")},
 		StatusNoMatch:           string(contractsv1.ContextFabricInvestigationNoMatch),
 		SynthesisMaxBytes:       contractsv1.ContextFabricSynthesisInputDefaultMaxBytes,
 		CommitNotAffirmed:       commit,
@@ -148,7 +152,7 @@ func buildClientInterpretation(c ClientFlowInputs) (string, error) {
 		"synthesis input field": c.SynthesisInputField, "synthesis source field": c.SynthesisSourceField,
 		"synthesis version field": c.SynthesisVersionField, "synthesis source client": c.SynthesisSourceClient,
 		"synthesis source server": c.SynthesisSourceServer, "not synthesized value": c.SynthesisNotSynthesized,
-		"status complete": c.StatusComplete, "status partial": c.StatusPartial, "status no match": c.StatusNoMatch,
+		"status complete": c.StatusComplete, "status partial": c.StatusPartial, "status degraded": c.StatusDegraded, "status no match": c.StatusNoMatch,
 		"commit not affirmed prefix": c.CommitNotAffirmed,
 	} {
 		if value == "" {
@@ -165,6 +169,9 @@ func buildClientInterpretation(c ClientFlowInputs) (string, error) {
 		if field == "" {
 			return "", fmt.Errorf("guidegen: client interpretation synthesis field %d is empty", i)
 		}
+	}
+	if len(c.TextFields) != 3 || slices.Contains(c.TextFields, "") {
+		return "", fmt.Errorf("guidegen: client interpretation text fields are missing")
 	}
 	meta := map[string]bool{}
 	for _, key := range c.PromptMetaKeys {
@@ -224,12 +231,14 @@ func buildClientInterpretation(c ClientFlowInputs) (string, error) {
 	b.WriteString("\n## Write the answer on your own model\n\n")
 	fmt.Fprintf(&b, "- To write the answer yourself, send %s %s on %s or on %s. The service then makes no synthesis model call.\n",
 		q(c.ArgSynthesis), q(c.SynthesisModeClient), q(c.ServerSideTool), q(c.InterpretTool))
-	fmt.Fprintf(&b, "- The answer then carries %s with five fields: %s. The field %s holds %s, the same values as the `_meta` of the synthesis prompt. The field %s is the exact JSON the service would have sent its own synthesis model.\n",
-		q(c.SynthesisInputField), strings.Join(quoteAll(c.SynthesisInputFields), ", "), q(c.SynthesisInputFields[0]), strings.Join(quoteAll(c.SynthesisContractFields), ", "), q(c.SynthesisInputFields[1]))
-	fmt.Fprintf(&b, "- Call `prompts/get` for the prompt %s, with no arguments. Its one message is the system message. Run it on your model with %s as the user message. The reply follows the schema resource %s. Follow the writing %s.\n",
-		q(c.SynthesisPrompt), q(c.SynthesisInputFields[1]), q(c.SynthesisOutputURI), q(c.SynthesisInputFields[4]))
-	fmt.Fprintf(&b, "- The stored result of that turn holds facts and evidence only, with no drivers or claims written by a model. Its %s is %s, or %s when nothing was read, and never %s. Its %s is %s (%s on an answer we wrote) and its %s is %s.\n",
-		q(c.StatusField), q(c.StatusPartial), q(c.StatusNoMatch), q(c.StatusComplete), q(c.SynthesisSourceField), q(c.SynthesisSourceClient), q(c.SynthesisSourceServer), q(c.SynthesisVersionField), q(c.SynthesisNotSynthesized))
+	fmt.Fprintf(&b, "- The answer then carries %s with five fields: %s. The field %s holds %s, the same values as the `_meta` of the synthesis prompt. The field %s is the model input, bounded to the default byte bound. When %s is false it is byte for byte what the service would have sent its own synthesis model. When %s is true, facts were cut to fit the bound, and the service's own model can be given more.\n",
+		q(c.SynthesisInputField), strings.Join(quoteAll(c.SynthesisInputFields), ", "), q(c.SynthesisInputFields[0]), strings.Join(quoteAll(c.SynthesisContractFields), ", "), q(c.SynthesisInputFields[1]), q(c.SynthesisInputFields[3]), q(c.SynthesisInputFields[3]))
+	fmt.Fprintf(&b, "- Call `prompts/get` for the prompt %s, with no arguments. Its one message is the system message. Run it on your model with %s as the user message. The reply follows the schema resource %s. Follow the writing %s. The prompt and the schema are served to a caller with either %s or %s.\n",
+		q(c.SynthesisPrompt), q(c.SynthesisInputFields[1]), q(c.SynthesisOutputURI), q(c.SynthesisInputFields[4]), q(c.ServerSideTool), q(c.InterpretTool))
+	fmt.Fprintf(&b, "- The stored result of that turn holds facts and evidence only, with no drivers or claims written by a model. Its %s is %s, or %s when the service finds a required source unavailable, or %s when nothing was read; never %s. Its %s is %s (%s on an answer we wrote) and its %s is %s.\n",
+		q(c.StatusField), q(c.StatusPartial), q(c.StatusDegraded), q(c.StatusNoMatch), q(c.StatusComplete), q(c.SynthesisSourceField), q(c.SynthesisSourceClient), q(c.SynthesisSourceServer), q(c.SynthesisVersionField), q(c.SynthesisNotSynthesized))
+	fmt.Fprintf(&b, "- On a %s or %s result the three text fields (%s) carry one fixed sentence. A %s result keeps the no-match sentence of the service.\n",
+		q(c.StatusPartial), q(c.StatusDegraded), strings.Join(quoteAll(c.TextFields), ", "), q(c.StatusNoMatch))
 	fmt.Fprintf(&b, "- The input is served in that one answer. The tool %s never returns it, and nothing is sent back to us.\n", q(c.ResultTool))
 	fmt.Fprintf(&b, "- When we matched a subject but could not prove it by identity, we do not commit it, because no answer affirms it. The answer then has a limitation that starts with \"%s\". Confirm the candidate with its receipt on the next turn.\n", c.CommitNotAffirmed)
 	fmt.Fprintf(&b, "- The input is bounded to %d bytes by default. When facts were cut to fit, %s is true and a limitation says so. The input is not part of the answer byte budget.\n",

@@ -77,7 +77,8 @@ func clientFlowVocabulary(t *testing.T, c ClientFlowInputs) []string {
 		"versions", "requested_scope",
 		c.SynthesisPrompt, c.SynthesisOutputURI, c.ArgSynthesis, c.SynthesisModeClient, c.SynthesisInputField,
 		c.SynthesisSourceField, c.SynthesisVersionField, c.SynthesisSourceClient, c.SynthesisSourceServer, c.SynthesisNotSynthesized,
-		c.StatusComplete, c.StatusPartial, c.StatusNoMatch)
+		c.StatusComplete, c.StatusPartial, c.StatusDegraded, c.StatusNoMatch)
+	vocab = append(vocab, c.TextFields...)
 	vocab = append(vocab, c.SynthesisInputFields...)
 	vocab = append(vocab, c.SynthesisContractFields...)
 	vocab = append(vocab, c.PromptMetaKeys...)
@@ -204,10 +205,12 @@ func TestClientInterpretationGuideHasTheSynthesisSection(t *testing.T) {
 		t.Fatal("guide lacks the section Write the answer on your own model")
 	}
 	want := []string{c.ArgSynthesis, c.SynthesisModeClient, c.SynthesisInputField, c.SynthesisPrompt, c.SynthesisOutputURI,
-		c.StatusPartial, c.StatusNoMatch, c.StatusComplete, c.SynthesisSourceField, c.SynthesisSourceClient, c.SynthesisSourceServer,
+		c.StatusPartial, c.StatusDegraded, c.StatusNoMatch, c.StatusComplete, c.SynthesisSourceField, c.SynthesisSourceClient, c.SynthesisSourceServer,
 		c.SynthesisVersionField, c.SynthesisNotSynthesized, c.ResultTool, c.CommitNotAffirmed, strconv.Itoa(c.SynthesisMaxBytes)}
 	want = append(want, c.SynthesisInputFields...)
 	want = append(want, c.SynthesisContractFields...)
+	want = append(want, c.TextFields...)
+	want = append(want, "never `"+c.StatusComplete+"`", "either `"+c.ServerSideTool+"` or `"+c.InterpretTool+"`", "byte for byte")
 	for _, value := range want {
 		if value == "" || !strings.Contains(section, value) {
 			t.Errorf("synthesis section lacks %q", value)
@@ -235,7 +238,9 @@ func TestClientInterpretationRefusesAnEmptySynthesisInput(t *testing.T) {
 		"not synthesized":      func(c *ClientFlowInputs) { c.SynthesisNotSynthesized = "" },
 		"status complete":      func(c *ClientFlowInputs) { c.StatusComplete = "" },
 		"status partial":       func(c *ClientFlowInputs) { c.StatusPartial = "" },
+		"status degraded":      func(c *ClientFlowInputs) { c.StatusDegraded = "" },
 		"status no match":      func(c *ClientFlowInputs) { c.StatusNoMatch = "" },
+		"text fields":          func(c *ClientFlowInputs) { c.TextFields = nil },
 		"commit prefix":        func(c *ClientFlowInputs) { c.CommitNotAffirmed = "" },
 		"input fields":         func(c *ClientFlowInputs) { c.SynthesisInputFields = c.SynthesisInputFields[:4] },
 		"one input field": func(c *ClientFlowInputs) {

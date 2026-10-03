@@ -630,7 +630,8 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// Same precondition as the claim above, and appended through the bound-
 	// aware helper: the composer has already truncated to the contract length,
 	// so a blind append turns a valid answer into an invalid one.
-	if cardinalityOwedByFrame(params.Frame, e.requirements, cardinality) {
+	// A client synthesis result keeps its fixed text; the count stays in the claim.
+	if !clientSynthesisRequested(request) && cardinalityOwedByFrame(params.Frame, e.requirements, cardinality) {
 		result.DeterministicAnswer = appendCardinalitySentence(result.DeterministicAnswer, cardinalityAnswerSentence(cardinality))
 	}
 	// CHAOS-4085: the post-synthesis commit-affirmation gate. Placed HERE
