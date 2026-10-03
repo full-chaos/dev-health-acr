@@ -34,6 +34,14 @@ func TestCensusRepositoryFilterAgainstRealClickHouse(t *testing.T) {
 	if err := direct.Exec(ctx, `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced) VALUES (?, ?, ?, ?, ?, ?)`, lookalike, orgA, uint32(747), "PR 747", "open", now); err != nil {
 		t.Fatalf("seed lookalike pull request: %v", err)
 	}
+	// A repository stored with padding around its name still matches its clean slug.
+	padded := o3UUID(orgA + "-padded")
+	if err := direct.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, padded, orgA, " Padded/Repo ", "github", now); err != nil {
+		t.Fatalf("seed padded repo: %v", err)
+	}
+	if err := direct.Exec(ctx, `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced) VALUES (?, ?, ?, ?, ?, ?)`, padded, orgA, uint32(747), "PR 747", "open", now); err != nil {
+		t.Fatalf("seed padded pull request: %v", err)
+	}
 	// Another organization owns a repository with the same slug and the same number.
 	otherRepo := o3UUID(orgB + "-repo")
 	if err := direct.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, otherRepo, orgB, "acme/repo-25", "github", now); err != nil {
@@ -59,13 +67,14 @@ func TestCensusRepositoryFilterAgainstRealClickHouse(t *testing.T) {
 		count   int
 		applied bool
 	}{
-		{"no filter", nil, repos + 1, false},
+		{"no filter", nil, repos + 2, false},
 		{"one repository, case-folded", []string{"ACME/Repo-25"}, 1, true},
 		{"two repositories", []string{"acme/repo-00", "acme/repo-01"}, 2, true},
 		{"owner wildcard", []string{"acme/*"}, repos, true},
+		{"padded stored name", []string{"padded/repo"}, 1, true},
 		{"unknown repository", []string{"acme/elsewhere"}, 0, true},
 		{"other owner wildcard", []string{"nobody/*"}, 0, true},
-		{"star falls back to unfiltered", []string{"*"}, repos + 1, false},
+		{"star falls back to unfiltered", []string{"*"}, repos + 2, false},
 	}
 	for _, tc := range cases {
 		outcome := run(tc.slugs)

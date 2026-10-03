@@ -43,7 +43,7 @@ func TestCensusRepositoryFilterIsAppliedInEveryStatement(t *testing.T) {
 		t.Fatalf("statements = %d, want aggregate and satisfier set", len(client.calls))
 	}
 	for i, statement := range client.calls {
-		if !strings.Contains(statement, "toString(p.repo_id) IN (SELECT toString(id) FROM repos FINAL WHERE org_id = {census_org_id:String}") || !strings.Contains(statement, "lower(repo) = {census_repo_0:String}") {
+		if !strings.Contains(statement, "toString(p.repo_id) IN (SELECT toString(id) FROM repos FINAL WHERE org_id = {census_org_id:String}") || !strings.Contains(statement, "lower(trimBoth(repo)) = {census_repo_0:String}") {
 			t.Fatalf("statement %d = %q, want the repository filter inside it", i, statement)
 		}
 		values := map[string]any{}
@@ -59,7 +59,7 @@ func TestCensusRepositoryFilterIsAppliedInEveryStatement(t *testing.T) {
 func TestCensusRepositoryFilterOwnerWildcard(t *testing.T) {
 	t.Parallel()
 	client, outcome := runFilteredCensus(t, contextfabric.SubjectPullRequest, "747", []string{"ACME/*"})
-	if !outcome.RepositoryFilterApplied || !strings.Contains(client.calls[0], "startsWith(lower(repo), {census_repo_0:String})") {
+	if !outcome.RepositoryFilterApplied || !strings.Contains(client.calls[0], "startsWith(lower(trimBoth(repo)), {census_repo_0:String})") {
 		t.Fatalf("applied = %v statement = %q, want an owner prefix clause", outcome.RepositoryFilterApplied, client.calls[0])
 	}
 	for _, b := range client.bindings[0] {
@@ -71,9 +71,17 @@ func TestCensusRepositoryFilterOwnerWildcard(t *testing.T) {
 
 func TestCensusRepositoryFilterFallsBackToUnfilteredWhenItCannotBeExact(t *testing.T) {
 	t.Parallel()
-	tooMany := make([]string, 51)
+	tooMany := make([]string, 201)
 	for i := range tooMany {
 		tooMany[i] = "acme/repo"
+	}
+	atCap := make([]string, 200)
+	for i := range atCap {
+		atCap[i] = "acme/repo"
+	}
+	_, capOutcome := runFilteredCensus(t, contextfabric.SubjectPullRequest, "747", atCap)
+	if !capOutcome.RepositoryFilterApplied {
+		t.Fatalf("200 slugs (the request maximum) must still be filtered in the query")
 	}
 	cases := map[string]struct {
 		kind  graphrank.CensusKind

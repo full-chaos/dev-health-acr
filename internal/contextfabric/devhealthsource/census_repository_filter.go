@@ -11,11 +11,11 @@ import (
 )
 
 // maxCensusRepositoryFilter bounds the bindings one filtered census carries.
-const maxCensusRepositoryFilter = 50
+const maxCensusRepositoryFilter = 200
 
 // withRepositoryFilter ANDs a repository restriction onto predicate so the
 // census count and satisfier set are computed inside the caller's narrowing.
-// Repositories are keyed by repos.repo (the owner/name the graph's
+// Repositories are keyed by repos.repo, trimmed and lower-cased like the graph-side comparison (the owner/name the graph's
 // authorization_repositories also carries) and joined to the base table's
 // repo_id. It returns the predicate unchanged and false when the filter cannot
 // be applied exactly -- a kind with no repository column, a wildcard, a slug
@@ -41,7 +41,7 @@ func withRepositoryFilter(kind graphrank.CensusKind, predicate CensusPredicate, 
 				return predicate, false
 			}
 			owner, _, _ = strings.Cut(normalized, "/")
-			clauses = append(clauses, fmt.Sprintf("startsWith(lower(repo), {%s:String})", name))
+			clauses = append(clauses, fmt.Sprintf("startsWith(lower(trimBoth(repo)), {%s:String})", name))
 			bindings = append(bindings, contextpacket.ClickHouseBinding{Name: name, Value: owner + "/"})
 			continue
 		}
@@ -49,7 +49,7 @@ func withRepositoryFilter(kind graphrank.CensusKind, predicate CensusPredicate, 
 		if err != nil {
 			return predicate, false
 		}
-		clauses = append(clauses, fmt.Sprintf("lower(repo) = {%s:String}", name))
+		clauses = append(clauses, fmt.Sprintf("lower(trimBoth(repo)) = {%s:String}", name))
 		bindings = append(bindings, contextpacket.ClickHouseBinding{Name: name, Value: normalized})
 	}
 	predicate.SQL = fmt.Sprintf("(%s) AND toString(%s) IN (SELECT toString(id) FROM repos FINAL WHERE org_id = {census_org_id:String} AND (%s))",

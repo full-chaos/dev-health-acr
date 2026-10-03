@@ -724,9 +724,9 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 			ka.SatisfierSetClosureMismatch = outcome.SatisfierSetClosureMismatch
 			if input.NarrowSatisfiers != nil && !outcome.ClosureMismatch {
 				if outcome.RepositoryFilterApplied {
-					if !crossCheckFilteredCensus(ctx, input.NarrowSatisfiers, kind, &outcome) {
-						slog.ErrorContext(ctx, "context fabric census: filtered census returned a satisfier outside the caller repository narrowing",
-							"request_id", contextfabric.SanitizeLogAttr(input.RequestID), "kind", contextfabric.SanitizeLogAttr(string(kind)))
+					if refusal := crossCheckFilteredCensus(ctx, input.NarrowSatisfiers, kind, &outcome); refusal != "" {
+						slog.ErrorContext(ctx, "context fabric census: filtered census refused by the caller repository narrowing cross-check",
+							"request_id", contextfabric.SanitizeLogAttr(input.RequestID), "kind", contextfabric.SanitizeLogAttr(string(kind)), "refusal", refusal)
 						outcome.ClosureMismatch = true
 						ka.ClosureMismatch = true
 					} else if outcome.Count == 0 {
@@ -1223,25 +1223,31 @@ func narrowingRank(outcome string) int {
 }
 
 // crossCheckFilteredCensus re-checks, against the caller's narrowing, the
-// satisfier ids a repository-filtered census returned. It is false when a
-// returned row is outside the narrowing or cannot be checked: the filter is an
+// satisfier ids a repository-filtered census returned. It returns "" when every
+// row is inside the narrowing, else why the result is refused: the filter is an
 // optimisation inside the query, never the only authorization.
-func crossCheckFilteredCensus(ctx context.Context, narrow SatisfierNarrower, kind CensusKind, outcome *CensusOutcome) bool {
+func crossCheckFilteredCensus(ctx context.Context, narrow SatisfierNarrower, kind CensusKind, outcome *CensusOutcome) string {
 	var ids []string
 	switch {
 	case outcome.Count == 0:
-		return true
+		return ""
 	case outcome.Count == 1:
 		if outcome.SatisfierCanonicalID == "" {
-			return false
+			return "no_identity"
 		}
 		ids = []string{outcome.SatisfierCanonicalID}
 	default:
 		if outcome.SatisfierSetClosureMismatch || len(outcome.SatisfierCanonicalIDs) != outcome.Count || len(outcome.SatisfierCanonicalIDs) > censusNarrowingMaxSatisfiers {
-			return true
+			return ""
 		}
 		ids = outcome.SatisfierCanonicalIDs
 	}
 	kept, ok := narrow(ctx, kind, ids)
-	return ok && len(kept) == len(ids)
+	switch {
+	case !ok:
+		return "keyed_read_failed"
+	case len(kept) != len(ids):
+		return "outside_narrowing"
+	}
+	return ""
 }
