@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -38,9 +39,9 @@ func TestDeploymentMembersAreServableOnlyAsTheMembersOfANamedAnchor(t *testing.T
 	}
 }
 
-func TestDeploymentCohortAnchorServableIsRepositoryOnly(t *testing.T) {
+func TestDeploymentCohortAnchorServableIsRepositoryAndTeamOnly(t *testing.T) {
 	t.Parallel()
-	for _, kind := range []SubjectKind{SubjectProject, SubjectTeam, SubjectOrganization, SubjectDeployment, SubjectPullRequest, SubjectWorkItem, SubjectIncident} {
+	for _, kind := range []SubjectKind{SubjectProject, SubjectOrganization, SubjectDeployment, SubjectPullRequest, SubjectWorkItem, SubjectIncident} {
 		if DeploymentCohortAnchorServable(kind) {
 			t.Errorf("anchor %q must not anchor a deployment cohort", kind)
 		}
@@ -48,11 +49,21 @@ func TestDeploymentCohortAnchorServableIsRepositoryOnly(t *testing.T) {
 	if !DeploymentCohortAnchorServable(SubjectRepository) {
 		t.Error("a repository anchors a deployment cohort")
 	}
+	if !DeploymentCohortAnchorServable(SubjectTeam) {
+		t.Error("a team anchors a deployment cohort")
+	}
+	team := []SubjectRef{{Kind: SubjectTeam, CanonicalID: "t"}}
+	if !deploymentCohortAnchorsServable(team, "") || !deploymentCohortAnchorsServable(team, SubjectTeam) {
+		t.Error("a committed team with no declared anchor kind, or a declared team, serves")
+	}
+	if deploymentCohortAnchorsServable(team, SubjectProject) {
+		t.Error("a committed team under a declared project anchor must not serve")
+	}
 	repo := []SubjectRef{{Kind: SubjectRepository, CanonicalID: "a"}}
 	if !deploymentCohortAnchorsServable(repo, "") || !deploymentCohortAnchorsServable(repo, SubjectRepository) {
 		t.Error("a committed repository with no declared anchor kind, or a declared repository, serves")
 	}
-	for _, declared := range []SubjectKind{SubjectTeam, SubjectProject} {
+	for _, declared := range []SubjectKind{SubjectProject, SubjectOrganization} {
 		if deploymentCohortAnchorsServable(repo, declared) {
 			t.Errorf("a committed repository under a declared %q anchor must not serve (a hint committed it, the question did not name it)", declared)
 		}
@@ -62,7 +73,7 @@ func TestDeploymentCohortAnchorServableIsRepositoryOnly(t *testing.T) {
 	}
 }
 
-func TestDeploymentCohortEngineDiscoversOnlyUnderARepositoryAnchor(t *testing.T) {
+func TestDeploymentCohortEngineDiscoversOnlyUnderARepositoryOrTeamAnchor(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		anchorKind   SubjectKind
@@ -70,13 +81,14 @@ func TestDeploymentCohortEngineDiscoversOnlyUnderARepositoryAnchor(t *testing.T)
 	}{
 		{"repository anchor discovers", SubjectRepository, 1},
 		{"project anchor refused before discovery", SubjectProject, 0},
-		{"team anchor refused before discovery", SubjectTeam, 0},
-		{"repository committed under a declared team anchor refused", SubjectRepository, 0},
+		{"team anchor discovers", SubjectTeam, 1},
+		{"repository committed under a declared project anchor refused", SubjectRepository, 0},
+		{"team committed under a declared project anchor refused", SubjectTeam, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			declaredKind := tc.anchorKind
-			if tc.name == "repository committed under a declared team anchor refused" {
-				declaredKind = SubjectTeam
+			if strings.Contains(tc.name, "declared project anchor") {
+				declaredKind = SubjectProject
 			}
 			frame := deploymentScopedFrame(GoalAssessState)
 			gate := DecideFrameGate(ValidateFrame(frame, nil, ""), true)
