@@ -21,10 +21,11 @@ type Resource struct {
 
 // URIs of the guide resources.
 const (
-	URIQuestions    = "acr://guide/questions"
-	URIVocabulary   = "acr://guide/vocabulary"
-	URIConversation = "acr://guide/conversation"
-	URIData         = "acr://guide/data"
+	URIQuestions            = "acr://guide/questions"
+	URIVocabulary           = "acr://guide/vocabulary"
+	URIConversation         = "acr://guide/conversation"
+	URIData                 = "acr://guide/data"
+	URIClientInterpretation = "acr://guide/client-interpretation"
 )
 
 var resources = []Resource{
@@ -43,6 +44,10 @@ var resources = []Resource{
 	{
 		URI: URIData, File: "data.md", Name: "guide-data", Title: "Plan the reads yourself: the data tools",
 		Description: "How to use data_catalog, find_subjects, run_operation and graphql_query: the rules, the operation and root field lists for each caller class and worked examples. Read before you plan a data investigation.",
+	},
+	{
+		URI: URIClientInterpretation, File: "client-interpretation.md", Name: "guide-client-interpretation", Title: "Interpret on your own model",
+		Description: "The client-side interpretation flow: fetch the interpretation prompt, run it on your own model, send the result with the contract values, and read the replies, the refusals and the limits.",
 	},
 }
 
