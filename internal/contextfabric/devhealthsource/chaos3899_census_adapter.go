@@ -30,12 +30,17 @@ func NewCensusFunc(client contextpacket.ClickHouseQueryClient) graphrank.CensusF
 		if err != nil {
 			return graphrank.CensusOutcome{}, err
 		}
+		filtered := false
+		if slugs := graphrank.CensusRepositoryFilterFrom(ctx); len(slugs) > 0 {
+			predicate, filtered = withRepositoryFilter(kind, predicate, slugs)
+		}
 		result, err := RunCensus(ctx, client, orgID, kind, predicate)
 		if err != nil {
 			return graphrank.CensusOutcome{}, err
 		}
 		outcome := graphrank.CensusOutcome{
-			Count: result.Count, CensusReadAt: result.CensusReadAt, SatisfierNaturalKey: result.SatisfierNaturalKey,
+			RepositoryFilterApplied: filtered,
+			Count:                   result.Count, CensusReadAt: result.CensusReadAt, SatisfierNaturalKey: result.SatisfierNaturalKey,
 			ClosureMismatch: result.ClosureMismatch, StatementCount: result.StatementCount, RowsRead: result.RowsRead,
 			SatisfierSetClosureMismatch: result.SatisfierSetClosureMismatch,
 		}
