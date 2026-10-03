@@ -25,6 +25,7 @@ func TestWorkItemTupleRefusalLeavesNoStaleResolutionState(t *testing.T) {
 				resolution.Committed = append(resolution.Committed, anchor)
 			}
 			resolution.CommitDecisionDigests = identityProvenDigests(resolution.Committed...)
+			resolution.RetrievalDegraded = true
 			graph := &dispatchGraphProbe{graphReaderStub: graphReaderStub{resolution: resolution, bases: provenCommitBases(resolution.Committed...)}}
 			engine := mustReuseTestEngine(t, EngineDependencies{Interpreter: familyInterpreter{interpreted: question, outcome: outcome}, Graph: graph,
 				CandidateVerifier: func(context.Context, storage.Principal, RequestedScope, ResolvedGraphBinding, SubjectKind, string) (bool, CandidateVerificationReason) {
@@ -37,6 +38,9 @@ func TestWorkItemTupleRefusalLeavesNoStaleResolutionState(t *testing.T) {
 			result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequestWithConfirmedWindow())
 			if err != nil {
 				t.Fatalf("a refused tuple anchor must end on a valid terminal result, got %v", err)
+			}
+			if !result.SubjectResolution.RetrievalDegraded {
+				t.Fatalf("a refusal must keep the resolution's retrieval-degraded marker: %+v", result.SubjectResolution)
 			}
 			if len(result.SubjectResolution.Committed) != 0 || len(result.SubjectResolution.Candidates) != 0 || len(result.SubjectResolution.CommitDecisionDigests) != 0 {
 				t.Fatalf("a refused tuple anchor must leave no committed subject, candidate or digest: %+v", result.SubjectResolution)
