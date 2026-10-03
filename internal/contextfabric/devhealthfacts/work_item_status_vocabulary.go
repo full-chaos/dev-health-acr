@@ -38,18 +38,12 @@ func inWorkItemStatusVocabulary(value string) bool {
 	return false
 }
 
-// workItemStatusFields is the fact's field map for one row: the normalized
-// value plus the disclosure of what that value is. A value outside the
-// closed set is served as read and flagged, never mapped.
-func workItemStatusFields(status string) map[string]contextfabric.FactValue {
-	inVocabulary := contextfabric.NullFactValue()
-	if status != "" {
-		inVocabulary = contextfabric.BooleanFactValue(inWorkItemStatusVocabulary(status))
+// statusInVocabularyValue reports whether a served status is a member of the
+// closed set: null when the status is missing, false when it is outside the
+// set (served as read, never mapped).
+func statusInVocabularyValue(status string) contextfabric.FactValue {
+	if status == "" {
+		return contextfabric.NullFactValue()
 	}
-	return map[string]contextfabric.FactValue{
-		"status":               stringOrNull(status),
-		"status_basis":         contextfabric.StringFactValue(statusBasisNormalized),
-		"status_in_vocabulary": inVocabulary,
-		"status_provenance":    contextfabric.StringFactValue(statusProvenanceNote),
-	}
+	return contextfabric.BooleanFactValue(inWorkItemStatusVocabulary(status))
 }
