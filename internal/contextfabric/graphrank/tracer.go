@@ -749,6 +749,8 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"shadow_precondition_unproven", event.ShadowPreconditionUnproven,
 			"shadow_unscoped_visibility", event.ShadowUnscopedVisibility,
 			"shadow_non_censused_survivor", event.ShadowNonCensusedSurvivor,
+			"shadow_survivor_excluded_reason", contextfabric.SanitizeLogAttr(event.ShadowSurvivorExcludedReason),
+			"shadow_trigger", contextfabric.SanitizeLogAttr(event.ShadowTrigger),
 			"shadow_handle_grammar_bound", event.ShadowHandleGrammarBound,
 			"shadow_anchor_unique_claimant", event.ShadowAnchorUniqueClaimant,
 			"shadow_anchor_receipt_confirmed", event.ShadowAnchorReceiptConfirmed,
