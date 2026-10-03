@@ -3112,7 +3112,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			familyOutcome.WinningSample = withDerivedScopeAnchorKind(familyOutcome.WinningSample, resolution.Committed)
 		}
 		if declared, scoped := deploymentCohortFrameMember(familyOutcome.Frame); scoped && !deploymentCohortAnchorsServable(resolution.Committed, familyOutcome.WinningSample.ScopeAnchorKind) {
-			if len(resolution.Committed) > 0 {
+			if len(resolution.Committed) > 0 || zeroCommitAnchorKindUnservable(resolution.Committed, resolution.Candidates, familyOutcome.WinningSample.ScopeAnchorKind) {
 				familyOutcome.Gate = FrameGate{Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable, DeclaredMemberKind: declared}
 				resolution = withoutSubjects(resolution)
 			}

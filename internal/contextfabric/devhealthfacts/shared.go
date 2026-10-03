@@ -201,7 +201,13 @@ import (
 // inside its query, so a number held in more repositories than the census cap
 // commits the one pull request in the narrowed repositories. A candidate saved
 // under v28 for such a question is a clarification and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v29"
+//
+// v29 -> v30: a scoped deployment question with no committed subject ends
+// member_kind_unservable when the anchor kind is known (declared, else every
+// offered candidate) and none can serve deployment members. A candidate saved
+// under v29 for such a question holds a clarification or no_match and must not
+// be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v30"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
