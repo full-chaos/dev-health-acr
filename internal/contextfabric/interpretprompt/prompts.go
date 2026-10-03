@@ -1,0 +1,260 @@
+package interpretprompt
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+)
+
+// interpretationSystemPrompt interpolates every bound and the closed
+// fact-kind vocabulary from contracts/v1, exactly as synthesisSystemPrompt
+// already did (codex round-9 F6).
+//
+// While these were literals the prompt could state a number the validator
+// did not enforce and nothing would notice until a live acceptance run
+// failed -- which is how it came to advertise "at most 64 fact_requirements"
+// against a schema that said 50 and a vocabulary that permits 20.
+// Interpolation makes the statement and the enforcement the same fact.
+//
+// Two more measured defects, both fixed here (CHAOS-3742 five-arm
+// generative trial, chris-ratified 2026-08-16 roadmap):
+//
+//   - CHAOS-3856: the trial's dominant failure (~85-90% of the corpus) was a
+//     clarification wall -- this prompt told the model subject_terms "may be
+//     exact names, aliases, acronyms, previous names, or provider
+//     identifiers" with no ordering preference, and a real model reliably
+//     read that as license to paraphrase (the trial's own arm-4 responder
+//     self-assessed that it "deliberately kept aliases to close
+//     paraphrases", the natural reading of that sentence). A paraphrased
+//     term has no exact substring in the source text for the lexical
+//     retrieval arm to anchor on, so commit gates that require vector+
+//     LEXICAL corroboration never fire and the investigation asks for
+//     clarification instead. The benchmark run using author-supplied,
+//     lexically-anchored terms committed ~4/30; models emitting paraphrases
+//     committed 0-4/30. The fix demands a VERBATIM substring first for
+//     every subject_terms/comparison_terms entry, with paraphrase/alias
+//     terms allowed only as an explicitly secondary addition. The copied
+//     span excludes surrounding quotes/brackets and trailing grammatical
+//     attachments (a possessive 's, sentence punctuation) -- sol review F1:
+//     exact-label promotion (graphrank/candidate.go) compares the raw term
+//     against the canonical label, so a wrapped or possessive copy loses
+//     MatchExact even though lexical retrieval (which tokenizes and strips
+//     that punctuation, falkorgraph/queries.go) still finds the node; only
+//     the confidence-1 exact-match commit was at risk, not retrieval
+//     itself.
+//   - Note (sol review F3, doc-only, no behavior change): this verbatim
+//     rule's retrieval payoff currently applies only to subject_terms --
+//     graphrank.SubjectTerms (candidate.go) builds its search terms from
+//     interpreted.SubjectTerms and RequestedScope.SubjectHints alone,
+//     never from ComparisonTerms, so a verbatim comparison_terms entry is
+//     not yet consumed by resolution the same way. The prompt still asks
+//     for verbatim comparison_terms (for schema/receipt consistency and
+//     because a future retrieval consumer may read them), but do not read
+//     this as claiming comparison_terms already anchors a commit the way
+//     subject_terms does.
+//   - CHAOS-3854 (prompt-side half): the trial also measured every arm
+//     (nano, luna, nano+luna, claude-fable-5) independently hitting fact
+//     capability parameter rejections -- InterpretedQuestion.Validate()
+//     passes a fact_requirements[].parameters key of any spelling (it only
+//     bounds length and count), but internal/contextfabric/fact_registry.go
+//     rejects any key not on that capability's FactCapability.
+//     AllowedParameters allowlist, and -- measured directly against this
+//     package's newCapability wiring in internal/contextfabric/
+//     devhealthfacts -- every one of the 19 production fact capabilities
+//     declares an EMPTY AllowedParameters list, so any key the model
+//     invents ("term", "item_name", "definition_source", "subject_term",
+//     "description" were the ones the trial actually observed) always
+//     fails the fact read. CHAOS-3854's provider half
+//     (internal/contextfabric/fact_registry.go) now classifies that
+//     rejection as ErrInterpretationRejected -- 422 interpretation_rejected,
+//     retryable -- instead of the opaque, unclassified fact_read 500 the
+//     trial originally measured, but a classified rejection still fails
+//     the read: this prompt sentence's job is unchanged by that fix, which
+//     is why both halves of CHAOS-3854 ship together. The complete,
+//     current "allowed parameter vocabulary per capability" the ticket
+//     asks this prompt to state is therefore the empty set for every
+//     capability; the correct prompt-side fix is to say exactly that, so
+//     the model stops inventing keys instead of being handed a fabricated
+//     non-empty vocabulary.
+var interpretationSystemPrompt = fmt.Sprintf(`You are the bounded interpretation layer for FullChaos Context Fabric.
+Interpret any authorized natural-language engineering question. Questions are open-ended and are not matched to a finite allowlist.
+Return only the requested structured output. Infer the requested judgment, the subject terms and the canonical fact families that the question's words name; shape and the other flat fields restate question_frame.subject_expression (see the shape rules below). Copy time_context from the request; never infer it (see the time rules below).
+Each fact_requirements[].kind MUST be exactly one of this closed set -- no other spelling, no invented family, no free text: %s. Choose only the families the question's words name (see the fact_requirements rules below), and never emit the same kind twice. If a named family is not in this set, omit it rather than inventing a name for it.
+%s
+%s
+fact_requirements[].parameters accepts NO keys for any fact family in this deployment: leave parameters empty (omit the field, or return {}) on every fact_requirements[] entry, no matter how relevant a key seems. Naming a parameter -- "term", "item_name", "definition_source", "subject_term", "description", or anything else -- causes that whole fact read, and the investigation, to fail; there is currently no key any fact family will accept.
+Length and count limits, all enforced -- an interpretation that exceeds any of them is rejected in full, so respect them even when a longer answer would be more thorough. requested_judgment MUST be at most %d characters: name the judgment being asked for, do not enumerate the fact families or evidence you plan to gather (fact_requirements is where that belongs). At most %d subject_terms and %d comparison_terms, each at most %d characters. At most %d fact_requirements. Each fact_requirements[].parameters key is at most %d characters and each value at most %d, and each fact_requirements[] entry has at most %d parameters. clarification_reason is at most %d characters.
+requested_judgment_kind is OPTIONAL, a closed-vocabulary pick from this set: %s.
+%s
+For subject_terms and comparison_terms, the term you list FIRST for each subject MUST be copied VERBATIM from the question text -- the exact substring as the user wrote it, same spelling and casing, never corrected, translated, or normalized to a canonical or official name. Copy the entity itself: drop surrounding quotation marks or brackets the question wrapped the name in, and drop a trailing grammatical attachment that is not part of the name (a possessive 's, a trailing comma, sentence-final punctuation); punctuation that is actually part of the name (a hyphen, an ampersand, an apostrophe inside the name itself) stays verbatim. Copy the proper name as written, without the kind word: for "the X team" or "team X" the first term is "X"; the kind word still sets the kind fields (requested_subject_kind, scope_anchor_kind). The same holds for terms, anchor_terms, operand terms and scope_anchor_term. Only after that verbatim term may you add a paraphrase, synonym, alias, acronym, expansion, or previous name as a further, clearly SECONDARY term for the same subject; a secondary term must never replace or precede the verbatim one, and never offer a paraphrase alone. Extract the verbatim term even when you also know a fuller or more correct name for the subject -- the literal text the user wrote is what retrieval matches against. Only when the question describes one particular subject with no literal substring you could copy (a purely indirect description of that one subject, naming no name) may that subject's first term be your own best non-verbatim term instead. A question that names no subject and asks for a kind, a grouping or the organization (discovered_kind, grouped_members, organization_scope) has no subject_terms at all: never write a term for it.
+When conversation turns or prior subject receipts are supplied, resolve conversational references ("it", "that team", "the other one", "what about now") against whichever subject those turns and receipts actually indicate for that specific reference -- a reference like "it" or "what about now" usually points to the most recently discussed subject, but a contrastive reference like "the other one" or "the previous one" points away from it, to a different subject those turns also established. Prefer the shape (single subject, explicit cohort, discovered cohort, or open) implied by the resolved reference over guessing a new one.
+When the question names no specific subject but describes a team- or project-level condition shared across the organization ("which teams are under the most pressure", "what projects are behind"), interpret it as a discovered cohort within the caller's authorized scope rather than asking which single subject was meant.
+Do not invent canonical entity IDs, measurements, relationships, evidence, staffing, status, health, or authorization.
+Do not produce SQL, GraphQL, Cypher, graph IDs, credentials, or tool calls.
+%s
+window_class is OPTIONAL and, if present, MUST be exactly one of this closed set -- no other spelling, no invented value: %s. Pick the class that best matches what kind of evidence-window judgment the question is asking for; omit it entirely if none fits. Never emit a timestamp, date, or duration for this -- only the class name. window_confidence is OPTIONAL and, if present, MUST be exactly "high" or "low": use "low" whenever the question could plausibly fit more than one window_class, or you are otherwise unsure of the pick.
+group_kind and scope_anchor_term are BOTH OPTIONAL, and the correct answer for most questions is to OMIT BOTH. Emit them ONLY when the question itself makes them unambiguous; a guess here is worse than an omission, because an omitted field costs nothing and a wrong one sends the question to the wrong kind of answer.
+group_kind: emit ONLY when the question asks for results PARTITIONED INTO GROUPS -- phrasing like "for each X", "per X", "broken down by X", "grouped by X". Its value is the kind of thing the groups ARE, and MUST be exactly one of this closed set -- no other spelling, no invented value: %s. Example: "what are the project statuses for each team" groups projects by TEAM, so group_kind is "team". A question about one subject, or about a flat list with no grouping, has NO group_kind -- omit it. Do NOT emit group_kind merely because the question mentions teams or projects.
+scope_anchor_term: emit ONLY when the question asks about the MEMBERS OF a named parent, where the parent is a DIFFERENT kind of thing than the members -- phrasing like "the X team's projects", "repositories in Y". Its value is the parent's name, copied VERBATIM from the question text under the same verbatim rule that governs subject_terms. Example: in "what are the statuses of the fullchaos team's projects", the answer is about PROJECTS and the anchor is the team, so scope_anchor_term is "fullchaos" and scope_anchor_kind is "team". When you emit scope_anchor_term you SHOULD also emit scope_anchor_kind (the parent's kind, from the same closed set as group_kind). A question whose named subject IS the thing being asked about has NO scope anchor -- omit it.
+%s
+question_frame describes the question COMPOSITIONALLY, and unlike the three hints above it is worth emitting on EVERY question -- it is how the service knows what the answer has to establish. Emit it as an object with these fields.
+question_frame.goals: what the user is asking the system to ESTABLISH, as a LIST, because real questions ask for more than one thing at once. Every entry MUST be exactly one of this closed set -- no other spelling, no invented value: %s. Emit every goal the question asks for, not just the first: "what teams are struggling and what are the driving factors" asks for BOTH rank_or_survey AND explain_drivers, and emitting only one of them silently drops half the question. Never emit a goal the question did not ask for. The goal cues below say where a wording takes one goal alone.
+%s
+question_frame.subject_expression describes WHAT the question is about, structurally. Its kind MUST be exactly one of this closed set: %s. Pick by the question's own shape: named_subject when it names one or more subjects and asks about those subjects themselves ("how is Dev Health Ops doing"); explicit_set when it compares named things side by side; discovered_kind when it asks the service to FIND the members of a kind ("which teams are struggling"); children_of_scope when it asks for the members OF a named parent of a different kind ("the fullchaos team's projects"), or for the teams that own a named subject ("who owns repository X"); grouped_members when it asks for results partitioned into groups ("project statuses for each team"); organization_scope when the organization itself is the subject ("how are we doing") or bounds a count ("how many repositories are in the organization"). The subject expression rules below decide the cases where two kinds seem to fit.
+Fill only the fields that kind uses, and fill them ALL: named_subject uses terms; explicit_set uses operands (each operand is itself a named_subject with terms, or a children_of_scope with anchor_terms and member_kind and optional member_qualifier and member_qualifier_value); discovered_kind uses member_kind; children_of_scope uses anchor_terms and member_kind and optional member_qualifier and member_qualifier_value; grouped_members uses group_kind AND member_kind, set to EXACTLY the kinds the question names. member_qualifier is optional and MUST be exactly one of "status" or "assignee" when the question explicitly qualifies the members; omit it for unqualified membership. member_qualifier_value is the state or the assignee the question names; fill it whenever member_qualifier is set and the question states one, and omit it otherwise. A question about EACH member of one kind ("how is each repository doing", "each project's delivery pace") is discovered_kind over that kind, not a grouping. When the question explicitly asks to partition members BY a kind ("repository health grouped by team", "group the projects by project"), express that partition exactly as asked, even when it groups a kind by that same kind (then group_kind and member_kind are both that kind). Never re-express an explicit grouping as discovered_kind or any other variant, and never drop or change group_kind or member_kind to make it look acceptable: whether a grouping is legal is decided by the server after you answer, never by you; organization_scope uses member_kind only when the question is a count ("how many repositories are in the organization"). terms and anchor_terms follow the same VERBATIM rule as subject_terms. member_kind and group_kind come from the same closed subject-kind set as group_kind above.
+%s
+%s
+%s
+question_frame.temporal: exactly one of %s. Use current unless the question asks about a span (bounded_window), a comparison between two periods (period_comparison), or movement over time (time_series). A question asking how something CHANGED is never current.
+%s
+%s
+%s
+%s`,
+	contextFabricFactKindList,
+	interpretationFactKindGlossary,
+	interpretationFactRequirementRules,
+	contractsv1.ContextFabricRequestedJudgmentMaxLength,
+	contractsv1.ContextFabricSubjectTermsMaxCount,
+	contractsv1.ContextFabricComparisonTermsMaxCount,
+	contractsv1.ContextFabricSubjectOrComparisonTermMaxLength,
+	contractsv1.ContextFabricFactRequirementsMaxCount,
+	contractsv1.ContextFabricFactRequirementParameterKeyMaxLength,
+	contractsv1.ContextFabricFactRequirementParameterValueMaxLength,
+	contractsv1.ContextFabricFactRequirementParametersMaxCount,
+	contractsv1.ContextFabricClarificationReasonMaxLength,
+	contextFabricRequestedJudgmentKindList,
+	interpretationJudgmentKindCues,
+	interpretationClarificationRule,
+	contextFabricWindowClassList,
+	contextFabricSubjectKindList,
+	interpretationRequestedSubjectKindRule,
+	contextFabricInvestigationGoalList,
+	interpretationGoalCueRules,
+	contextFabricSubjectExpressionKindList,
+	interpretationSubjectExpressionRules,
+	interpretationScopedMemberExampleLines,
+	interpretationShapeRules,
+	contextFabricTemporalIntentList,
+	interpretationTemporalRules,
+	fmt.Sprintf(interpretationEmphasisRules, contextFabricAnswerEmphasisList),
+	fmt.Sprintf(interpretationDimensionRules, contextFabricHealthDimensionList),
+	interpretationFollowUpRules,
+)
+
+// contextFabricSubjectKindList renders its closed vocabulary in published
+// order, for the same reason contextFabricFactKindList does: the prompt's
+// closed set is the SAME declaration the sanitizer accepts, so a member
+// added or pruned cannot leave a stale list in the prompt.
+var contextFabricSubjectKindList = func() string {
+	vocabulary := contractsv1.ContextFabricSubjectKindVocabulary()
+	kinds := make([]string, 0, len(vocabulary))
+	for _, kind := range vocabulary {
+		kinds = append(kinds, string(kind))
+	}
+	return strings.Join(kinds, ", ")
+}()
+
+// THE QUESTION-FAMILY LIST IS GONE (CHAOS-4736, seam 7), and its absence is
+// the point. The model is no longer shown the family vocabulary and no
+// longer asked to pick from it, because the family is now DERIVED from the
+// frame the model does emit. Asking for both invited the model to assert a
+// classification the service would then have to agree or disagree with,
+// when the structural description it gives in question_frame already
+// determines the answer.
+//
+// The CHAOS-4452 stage-2 frame vocabularies, rendered for the prompt on
+// the same rule as every list above: the prompt's closed set IS the
+// declaration the sanitizer accepts, so a member added or pruned cannot
+// leave a stale list in the prompt.
+//
+// NO jsonschema enum tag backs any of these on the output struct, and that
+// is deliberate rather than an omission -- it is the rule the subject-kind
+// fields already follow (runtime.go's own comment): a schema enum makes
+// the PROVIDER reject the whole response for an out-of-set value, which
+// converts a shadow capture into a way to fail a real investigation.
+// Sanitization handles the out-of-set case instead, and the prompt is
+// where the vocabulary is stated.
+var contextFabricInvestigationGoalList = func() string {
+	vocabulary := contextfabric.InvestigationGoalVocabulary()
+	goals := make([]string, 0, len(vocabulary))
+	for _, goal := range vocabulary {
+		goals = append(goals, string(goal))
+	}
+	return strings.Join(goals, ", ")
+}()
+
+var contextFabricSubjectExpressionKindList = func() string {
+	vocabulary := contextfabric.SubjectExpressionKindVocabulary()
+	kinds := make([]string, 0, len(vocabulary))
+	for _, kind := range vocabulary {
+		kinds = append(kinds, string(kind))
+	}
+	return strings.Join(kinds, ", ")
+}()
+
+var contextFabricTemporalIntentList = func() string {
+	vocabulary := contextfabric.TemporalIntentVocabulary()
+	temporals := make([]string, 0, len(vocabulary))
+	for _, temporal := range vocabulary {
+		temporals = append(temporals, string(temporal))
+	}
+	return strings.Join(temporals, ", ")
+}()
+
+var contextFabricRequestedJudgmentKindList = func() string {
+	vocabulary := contextfabric.RequestedJudgmentKindVocabulary()
+	kinds := make([]string, 0, len(vocabulary))
+	for _, kind := range vocabulary {
+		kinds = append(kinds, string(kind))
+	}
+	return strings.Join(kinds, ", ")
+}()
+
+var contextFabricAnswerEmphasisList = func() string {
+	vocabulary := contextfabric.AnswerEmphasisVocabulary()
+	emphases := make([]string, 0, len(vocabulary))
+	for _, emphasis := range vocabulary {
+		emphases = append(emphases, string(emphasis))
+	}
+	return strings.Join(emphases, ", ")
+}()
+
+var contextFabricHealthDimensionList = func() string {
+	vocabulary := contextfabric.HealthDimensionVocabulary()
+	dimensions := make([]string, 0, len(vocabulary))
+	for _, dimension := range vocabulary {
+		dimensions = append(dimensions, string(dimension))
+	}
+	return strings.Join(dimensions, ", ")
+}()
+
+// contextFabricFactKindList renders the closed fact-kind vocabulary in
+// published order. The prompt's closed set is therefore the SAME
+// declaration the validator accepts and the schema publishes -- a kind
+// added or pruned in contracts/v1 cannot leave a stale list in the prompt
+// telling the model to avoid a family the service now accepts.
+var contextFabricFactKindList = func() string {
+	vocabulary := contractsv1.ContextFabricFactKindVocabulary()
+	kinds := make([]string, 0, len(vocabulary))
+	for _, kind := range vocabulary {
+		kinds = append(kinds, string(kind))
+	}
+	return strings.Join(kinds, ", ")
+}()
+
+// contextFabricWindowClassList renders the closed window-class vocabulary
+// (CHAOS-3900 W0, SHADOW ONLY) in published order, from the SAME
+// declaration ValidWindowClass/SanitizeWindowClass consult -- the fact-kind
+// list's own interpolation discipline, applied to a second closed
+// vocabulary that lives in package contextfabric rather than contracts/v1
+// (see chaos3900_window_vocab.go's doc comment for why).
+var contextFabricWindowClassList = func() string {
+	vocabulary := contextfabric.WindowClassVocabulary()
+	classes := make([]string, 0, len(vocabulary))
+	for _, class := range vocabulary {
+		classes = append(classes, string(class))
+	}
+	return strings.Join(classes, ", ")
+}()
