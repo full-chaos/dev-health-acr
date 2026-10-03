@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 03aa953ab907bf65100e6a01517c16cc31b2d53325c615868a84f027367c218d
+# canonical-content-sha256: df4413041abd5559a46b7a5f13741971ab674a7aedfe30d6849404ceaafa475c
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -1410,6 +1410,25 @@ components:
                   - "listener_refused"
                   - "not_found"
                   - "concurrency_wait"
+              graphql_code:
+                description: "The GraphQL error code the data service returned, as a closed token; other for any code not listed."
+                enum:
+                  - "graphql_validation_failed"
+                  - "graphql_parse_failed"
+                  - "mcp_refused"
+                  - "mcp_read_budget_exceeded"
+                  - "other"
+                type: "string"
+              status:
+                description: "The data service's HTTP status. Present with class http_status."
+                maximum: 599
+                minimum: 100
+                type: "integer"
+              variable:
+                description: "The GraphQL variable the data service named in its rejection."
+                maxLength: 64
+                pattern: "^[_A-Za-z][_0-9A-Za-z]*$"
+                type: "string"
             required:
               - "class"
             type: "object"

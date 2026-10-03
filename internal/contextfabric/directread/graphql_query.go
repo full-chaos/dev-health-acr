@@ -214,6 +214,11 @@ type GraphQLQueryRead struct {
 	SchemaDigest  string
 	QueryDigest   string
 	ReadBudget    ReadBudgetReason
+	// UpstreamStatus, GraphQLCode and Variable carry an upstream non-2xx
+	// answer as run_operation does: the HTTP status and closed tokens only.
+	UpstreamStatus int
+	GraphQLCode    UpstreamGraphQLCode
+	Variable       string
 }
 
 // GraphQLRunnerConfig wires the runner.
@@ -1410,10 +1415,30 @@ func (x *gqlRun) mapCallError(err error, maxBytes int) GraphQLResponse {
 		x.resp = resp
 		return resp
 	case QueryErrorHTTPStatus:
-		return x.upstream(CallUpstreamError, UpstreamHTTPStatus)
+		return x.httpStatusError(err)
 	default:
 		return x.upstream(CallUpstreamError, UpstreamTransport)
 	}
+}
+
+// httpStatusError carries the upstream HTTP status and the closed GraphQL
+// code into errors[] and the log line. A GraphQL validation or parse
+// rejection is the caller's request: a refusal, not an upstream error.
+func (x *gqlRun) httpStatusError(err error) GraphQLResponse {
+	entry, callerFault, ok := upstreamHTTPEntry(err)
+	if !ok {
+		return x.upstream(CallUpstreamError, UpstreamHTTPStatus)
+	}
+	x.read.UpstreamStatus, x.read.GraphQLCode, x.read.Variable = entry.Status, entry.GraphQLCode, entry.Variable
+	if callerFault {
+		x.refuse(RefusalInvalidRequest, RefusalReasonUpstreamRejectedRequest, "")
+		x.resp.Errors = []OperationError{entry}
+		x.read.ErrorClass = UpstreamHTTPStatus
+		return x.resp
+	}
+	x.upstream(CallUpstreamError, UpstreamHTTPStatus)
+	x.resp.Errors = []OperationError{entry}
+	return x.resp
 }
 
 // ---------------------------------------------------------------- telemetry
@@ -1465,6 +1490,15 @@ func GraphQLQueryLogArgs(principal storage.Principal, read GraphQLQueryRead) []a
 	}
 	if read.ReadBudget != "" {
 		args = append(args, "read_budget", contextfabric.SanitizeLogAttr(string(read.ReadBudget)))
+	}
+	if read.UpstreamStatus != 0 {
+		args = append(args, "upstream_status", read.UpstreamStatus)
+	}
+	if read.GraphQLCode != "" {
+		args = append(args, "graphql_code", contextfabric.SanitizeLogAttr(string(read.GraphQLCode)))
+	}
+	if read.Variable != "" {
+		args = append(args, "variable", contextfabric.SanitizeLogAttr(read.Variable))
 	}
 	return args
 }

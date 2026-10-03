@@ -2730,6 +2730,29 @@
                     "not_found",
                     "concurrency_wait"
                   ]
+                },
+                "status": {
+                  "type": "integer",
+                  "minimum": 100,
+                  "maximum": 599,
+                  "description": "The data service's HTTP status. Present with class http_status."
+                },
+                "graphql_code": {
+                  "type": "string",
+                  "description": "The GraphQL error code the data service returned, as a closed token; other for any code not listed.",
+                  "enum": [
+                    "graphql_validation_failed",
+                    "graphql_parse_failed",
+                    "mcp_refused",
+                    "mcp_read_budget_exceeded",
+                    "other"
+                  ]
+                },
+                "variable": {
+                  "type": "string",
+                  "description": "The GraphQL variable the data service named in its rejection.",
+                  "pattern": "^[_A-Za-z][_0-9A-Za-z]*$",
+                  "maxLength": 64
                 }
               },
               "additionalProperties": false

@@ -218,7 +218,7 @@
     },
     "errors": {
       "type": "array",
-      "description": "Upstream errors, as safe classes only.",
+      "description": "Upstream errors, as safe classes and closed tokens only; never upstream message text.",
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -241,6 +241,29 @@
               "not_found",
               "concurrency_wait"
             ]
+          },
+          "status": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 599,
+            "description": "The data service's HTTP status. Present with class http_status."
+          },
+          "graphql_code": {
+            "type": "string",
+            "description": "The GraphQL error code the data service returned, as a closed token; other for any code not listed. graphql_validation_failed and graphql_parse_failed mean the request variables or document were rejected (call refused, code invalid_request). Present with class http_status when the body is a GraphQL error envelope.",
+            "enum": [
+              "graphql_validation_failed",
+              "graphql_parse_failed",
+              "mcp_refused",
+              "mcp_read_budget_exceeded",
+              "other"
+            ]
+          },
+          "variable": {
+            "type": "string",
+            "description": "The GraphQL variable the data service named in its rejection, for example a required variable that was not sent.",
+            "pattern": "^[_A-Za-z][_0-9A-Za-z]*$",
+            "maxLength": 64
           }
         }
       }
