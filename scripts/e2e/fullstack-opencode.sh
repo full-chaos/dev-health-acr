@@ -1153,6 +1153,8 @@ http {
     location ~ ^/api/v1/people/[^/]+/drilldown/prs$ { proxy_pass http://query-api:8090; }
     location ~ ^/api/v1/work-units/[^/]+/explain$ { proxy_pass http://query-api:8090; }
 
+    location = /graphql { proxy_pass http://query-api:8090; }
+
     location / { proxy_pass http://go-api:8000; }
   }
 }

@@ -287,6 +287,7 @@ services:
       # Native ClickHouse port (9000), not the HTTP 8123 the Python services use.
       CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-default}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/${CLICKHOUSE_DB:-default}
       GO_API_REGISTRY_POSTGRES_URI: postgresql://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@pgbouncer:6432/${POSTGRES_DB:-devhealth}
+      GO_API_EDGE_JWT_SECRET: ${JWT_SECRET_KEY:-ci-fixture-jwt-secret-key-0123456789abcdef}
       GO_API_ENVELOPE_JWKS_PATH: /secrets/envelope-jwks.json
       GO_API_ENVELOPE_ISSUER: ${GO_API_ENVELOPE_ISSUER:-dev-health-ops-edge}
       GO_API_ENVELOPE_AUDIENCE: ${GO_API_ENVELOPE_AUDIENCE:-query-api}
