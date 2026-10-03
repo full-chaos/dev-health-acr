@@ -14,8 +14,8 @@ func deploymentCohortFrameMember(frame *QuestionFrame) (SubjectKind, bool) {
 // different anchor kind than the committed one (a caller-supplied hint can
 // commit a repository the question never named as its anchor).
 func deploymentCohortAnchorsServable(committed []SubjectRef, declaredAnchorKind SubjectKind) bool {
-	if declaredAnchorKind != "" && !DeploymentCohortAnchorServable(declaredAnchorKind) {
+	if len(committed) != 1 || !DeploymentCohortAnchorServable(committed[0].Kind) {
 		return false
 	}
-	return len(committed) == 1 && DeploymentCohortAnchorServable(committed[0].Kind)
+	return declaredAnchorKind == "" || declaredAnchorKind == committed[0].Kind
 }

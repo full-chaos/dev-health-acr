@@ -56,6 +56,14 @@ func TestDeploymentCohortAnchorServableIsRepositoryAndTeamOnly(t *testing.T) {
 	if !deploymentCohortAnchorsServable(team, "") || !deploymentCohortAnchorsServable(team, SubjectTeam) {
 		t.Error("a committed team with no declared anchor kind, or a declared team, serves")
 	}
+	for _, c := range []struct {
+		committed []SubjectRef
+		declared  SubjectKind
+	}{{team, SubjectRepository}, {[]SubjectRef{{Kind: SubjectRepository, CanonicalID: "a"}}, SubjectTeam}} {
+		if deploymentCohortAnchorsServable(c.committed, c.declared) {
+			t.Errorf("committed %q under a declared %q anchor must not serve: both kinds are servable but the question named the other one", c.committed[0].Kind, c.declared)
+		}
+	}
 	if deploymentCohortAnchorsServable(team, SubjectProject) {
 		t.Error("a committed team under a declared project anchor must not serve")
 	}
@@ -84,11 +92,18 @@ func TestDeploymentCohortEngineDiscoversOnlyUnderARepositoryOrTeamAnchor(t *test
 		{"team anchor discovers", SubjectTeam, 1},
 		{"repository committed under a declared project anchor refused", SubjectRepository, 0},
 		{"team committed under a declared project anchor refused", SubjectTeam, 0},
+		{"repository committed under a declared team anchor refused", SubjectRepository, 0},
+		{"team committed under a declared repository anchor refused", SubjectTeam, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			declaredKind := tc.anchorKind
-			if strings.Contains(tc.name, "declared project anchor") {
+			switch {
+			case strings.Contains(tc.name, "declared project anchor"):
 				declaredKind = SubjectProject
+			case strings.Contains(tc.name, "declared team anchor"):
+				declaredKind = SubjectTeam
+			case strings.Contains(tc.name, "declared repository anchor"):
+				declaredKind = SubjectRepository
 			}
 			frame := deploymentScopedFrame(GoalAssessState)
 			gate := DecideFrameGate(ValidateFrame(frame, nil, ""), true)
