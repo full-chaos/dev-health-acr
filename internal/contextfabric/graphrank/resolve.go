@@ -1593,8 +1593,12 @@ type ResolutionTraceEvent struct {
 	ShadowPreconditionUnproven bool
 	ShadowUnscopedVisibility   bool
 	ShadowNonCensusedSurvivor  bool
-	ShadowHandleGrammarBound   bool
-	ShadowAnchorUniqueClaimant bool
+	// ShadowSurvivorExcludedReason/ShadowTrigger: see
+	// Attestation.SurvivorExcludedReason and ShadowEvidenceRoundInput.Trigger.
+	ShadowSurvivorExcludedReason string
+	ShadowTrigger                string
+	ShadowHandleGrammarBound     bool
+	ShadowAnchorUniqueClaimant   bool
 	// ShadowAnchorReceiptConfirmed (CHAOS-4042, sol-max ruling) mirrors
 	// Attestation.AnchorReceiptConfirmed -- see that field's own doc
 	// comment for why it is traced separately from
@@ -3811,7 +3815,8 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// "stalled" (§0's own definition: nothing committed and searchTruncated)
 	// -- the brief's own cost note ("per stalled resolution... committed
 	// resolutions pay nothing").
-	if !offersOnly && deps.CensusFunc != nil && len(resolution.Committed) == 0 && searchTruncated {
+	stalledForCensus := len(resolution.Committed) == 0 && searchTruncated
+	if !offersOnly && deps.CensusFunc != nil && (stalledForCensus || committedScopeAnchorShadowsHandle(request.Question, resolution.Committed)) {
 		// CHAOS-4300: false -- this is the pre-existing stalled-resolution
 		// call site, not the caller-hint short circuit's own new call above.
 		attestation := runShadowEvidenceRoundForResolution(ctx, principal, request, interpreted, resolution, aliasClaimantsByTerm, aliasIdentityComplete, unscopedVisibility, deps, confirmedKind, confirmedAnchor, false)
@@ -3844,11 +3849,15 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				// resolution's next finalization, reached only when the
 				// evidence-census re-decision actually fires (independent of
 				// whether the scoped re-decision above did).
-				pass++
-				resolution, censusBases, censusDigests = resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, attestedKey, false, false, nil, anchorReservedSlot{}, kindRescue, pass)
-				commitBases.ResetTo(censusBases)
-				commitDigests.ResetTo(censusDigests)
-				resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded
+				if !stalledForCensus {
+					appendCensusAttestedCommit(&resolution, candidatesBySubject[attestedKey], commitBases, commitDigests, searchTruncated, aliasIdentityComplete)
+				} else {
+					pass++
+					resolution, censusBases, censusDigests = resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, attestedKey, false, false, nil, anchorReservedSlot{}, kindRescue, pass)
+					commitBases.ResetTo(censusBases)
+					commitDigests.ResetTo(censusDigests)
+					resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded
+				}
 			}
 		}
 		// CHAOS-3896 Slice B: presentation only -- SurvivorsFirstOrder's own
@@ -3862,7 +3871,9 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// resolution.Committed/Status (its own doc comment), so reordering
 		// the candidate list around an already-committed subject is
 		// harmless and keeps this call site's shape unconditional.
-		resolution.Candidates = SurvivorsFirstOrder(resolution.Candidates, attestation, deps.ResolutionTracer, request.RequestID)
+		if stalledForCensus {
+			resolution.Candidates = SurvivorsFirstOrder(resolution.Candidates, attestation, deps.ResolutionTracer, request.RequestID)
+		}
 		// len>0 guard: the emptied-by-exclusion prompt travels on a
 		// resolution with ZERO candidates, and rebuilding from an empty
 		// list would destroy the one signal that separates a withheld pool
@@ -4212,6 +4223,27 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	return resolution, offerMaterial, nil
 }
 
+// committedScopeAnchorShadowsHandle is true when the question binds exactly
+// one handle of a census-registered kind, something is committed, and every
+// committed subject is a scope anchor that handle's kind is keyed under while
+// none is of the handle's own kind. A committed scope anchor must not shadow
+// a handle the question names: the census runs for that handle regardless.
+func committedScopeAnchorShadowsHandle(question string, committed []contextfabric.SubjectRef) bool {
+	if len(committed) == 0 {
+		return false
+	}
+	bound := BindHandles(question)
+	if len(bound) != 1 || !IsCensusKindRegistered(bound[0].Kind) {
+		return false
+	}
+	for _, subject := range committed {
+		if subject.Kind == bound[0].Kind || !KindHasAnchorFK(bound[0].Kind, subject.Kind) {
+			return false
+		}
+	}
+	return true
+}
+
 // mergeCensusAttestedSatisfier implements design brief v6 §1.4's commit
 // precondition: "censusComplete && |satisfiers| == 1 names one source row
 // S. Committing requires S as a GRAPH node (payload, authorization)." ok is
@@ -4473,8 +4505,10 @@ func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.
 	roundCtx, cancel := context.WithTimeout(ctx, evidenceRoundDeadline)
 	defer cancel()
 	pooledKinds := make([]CensusKind, 0, len(resolution.Candidates))
+	pooledSubjects := make([]contextfabric.SubjectRef, 0, len(resolution.Candidates))
 	for _, candidate := range resolution.Candidates {
 		pooledKinds = append(pooledKinds, candidate.Subject.Kind)
+		pooledSubjects = append(pooledSubjects, candidate.Subject)
 	}
 	// CHAOS-3972 P3 (design brief §2.0/§2.3, the P1.D hard precondition):
 	// an EXPLICIT (non-receipt) request.ExpectedKinds narrows the census's
@@ -4539,7 +4573,7 @@ func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.
 	}
 	attestation = RunShadowEvidenceRound(roundCtx, ShadowEvidenceRoundInput{
 		RequestID: request.RequestID, Question: request.Question, OrgID: principal.OrgID,
-		PooledKinds: censusKinds, CurrentAxis: interpreted.TimeContext.Axis == contextfabric.TemporalCurrent,
+		PooledKinds: censusKinds, PooledSubjects: pooledSubjects, Trigger: evidenceRoundTrigger(resolution, callerHintShortCircuit), CurrentAxis: interpreted.TimeContext.Axis == contextfabric.TemporalCurrent,
 		UnscopedVisibility: unscopedVisibility, AliasClaimants: claimantsFromCandidateNodes(aliasClaimantsByTerm),
 		AliasLookupComplete: aliasIdentityComplete, CensusFunc: deps.CensusFunc,
 		PreNarrowingExplicitKinds: preNarrowingExplicitKinds,
@@ -4949,5 +4983,48 @@ func traceAliasLookup(deps ResolveDeps, requestID string, complete bool, claiman
 	deps.ResolutionTracer.Trace(ResolutionTraceEvent{
 		RequestID: requestID, Stage: "alias_lookup",
 		AliasLookupComplete: complete, AliasLookupMatchedClaimants: matched,
+	})
+}
+
+func evidenceRoundTrigger(resolution contextfabric.SubjectResolution, callerHint bool) string {
+	switch {
+	case callerHint:
+		return "caller_hint"
+	case len(resolution.Committed) > 0:
+		return "committed_scope_anchor"
+	default:
+		return "stalled"
+	}
+}
+
+// appendCensusAttestedCommit commits the census-attested satisfier beside the
+// already-committed scope anchor. The basis is statistical, exactly like the
+// stalled evidence_census path, so the commit-affirmation gate still has to
+// see the answer stand on that subject.
+func appendCensusAttestedCommit(resolution *contextfabric.SubjectResolution, candidate contextfabric.SubjectCandidate, bases contextfabric.CommitBasisSet, digests contextfabric.CommitDecisionDigestSet, searchTruncated, aliasComplete bool) {
+	if candidate.Subject.CanonicalID == "" {
+		return
+	}
+	for _, committed := range resolution.Committed {
+		if committed == candidate.Subject {
+			return
+		}
+	}
+	candidate.State = contextfabric.ResolutionCommitted
+	found := false
+	for i := range resolution.Candidates {
+		if resolution.Candidates[i].Subject == candidate.Subject {
+			resolution.Candidates[i].State = contextfabric.ResolutionCommitted
+			found = true
+		}
+	}
+	if !found {
+		resolution.Candidates = append(resolution.Candidates, candidate)
+	}
+	resolution.Committed = append(resolution.Committed, candidate.Subject)
+	bases.Record(candidate.Subject, contextfabric.CommitBasisStatistical)
+	digests.Record(candidate.Subject, contextfabric.CommitDecisionDigest{
+		CommitGate: "evidence_census", IdentityProven: contextfabric.CommitBasisStatistical.IdentityProven(),
+		SearchTruncated: searchTruncated, AliasLookupComplete: aliasComplete,
 	})
 }
