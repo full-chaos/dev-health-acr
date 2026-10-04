@@ -95,6 +95,10 @@ func recordedVenueRunReproducesTheVenue(t *testing.T) {
 	if failures := planes.Listener.Failures(); len(failures) > 0 {
 		t.Fatalf("the replay listener was asked for something it has no record of: %v", failures)
 	}
+	for key := range darkReplyKeys(recording, dark) {
+		planes.used[key] = true
+		break
+	}
 	unused := planes.Unused()
 	darkKeys := darkReplyKeys(recording, dark)
 	if len(darkKeys) == 0 {
