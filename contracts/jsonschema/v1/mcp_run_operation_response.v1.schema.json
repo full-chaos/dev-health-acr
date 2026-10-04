@@ -217,6 +217,18 @@
         "max_bytes": {
           "type": "integer",
           "description": "The bound that applied."
+        },
+        "rows_returned": {
+          "type": "integer",
+          "description": "Rows in data when the answer was cut to fit max_bytes; absent when not cut."
+        },
+        "rows_read": {
+          "type": "integer",
+          "description": "Rows the query service returned before the cut; absent when not cut."
+        },
+        "cut": {
+          "type": "string",
+          "description": "Plain statement of the cut: how many rows were returned of how many read, and how to see more; absent when not cut."
         }
       }
     },
