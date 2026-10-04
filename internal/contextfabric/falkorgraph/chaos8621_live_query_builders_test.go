@@ -111,88 +111,96 @@ func TestLiveSubjectReadBuildersReturnTheSeededRows(t *testing.T) {
 		t.Fatalf("ResolveInvestigationBinding() error = %v", err)
 	}
 
-	// ListSubjectsByKind: a keyset page in canonical-id order, then the rest.
-	page, err := adapter.ListSubjectsByKind(ctx, principal, binding, "project", "", 2)
-	if err != nil {
-		t.Fatalf("ListSubjectsByKind(first page) error = %v", err)
-	}
-	requireIDs(t, "first page", ids(page.Nodes), "project:a", "project:b")
-	if !page.More {
-		t.Fatal("first page More = false, want true: a third project follows")
-	}
-	if page.Nodes[0].Label != "Authentication Service" || page.Nodes[0].Kind != "project" {
-		t.Fatalf("first node = %+v, want the stored label and kind", page.Nodes[0])
-	}
-	page, err = adapter.ListSubjectsByKind(ctx, principal, binding, "project", "project:b", 2)
-	if err != nil {
-		t.Fatalf("ListSubjectsByKind(after cursor) error = %v", err)
-	}
-	requireIDs(t, "second page", ids(page.Nodes), "project:c")
-	if page.More {
-		t.Fatal("second page More = true, want false")
-	}
-	page, err = adapter.ListSubjectsByKind(ctx, principal, binding, "team", "", 5)
-	if err != nil {
-		t.Fatalf("ListSubjectsByKind(team) error = %v", err)
-	}
-	requireIDs(t, "team page", ids(page.Nodes), "team:a")
-
-	// FindSubjectsByExactName: label equality and alias equality, in the
-	// requested kinds only.
-	found, err := adapter.FindSubjectsByExactName(ctx, principal, binding, "auth gateway", []string{"project"})
-	if err != nil {
-		t.Fatalf("FindSubjectsByExactName(label) error = %v", err)
-	}
-	requireIDs(t, "label match", ids(found.Nodes), "project:b")
-	if found.Truncated || found.Nodes[0].Match != "exact" {
-		t.Fatalf("label match = %+v, want exact and not truncated", found)
-	}
-	found, err = adapter.FindSubjectsByExactName(ctx, principal, binding, "login-service", []string{"project"})
-	if err != nil {
-		t.Fatalf("FindSubjectsByExactName(alias) error = %v", err)
-	}
-	requireIDs(t, "alias match", ids(found.Nodes), "project:a")
-	if found.Nodes[0].Match != "alias" {
-		t.Fatalf("alias match class = %q, want alias", found.Nodes[0].Match)
-	}
-	found, err = adapter.FindSubjectsByExactName(ctx, principal, binding, "Auth Team", []string{"project"})
-	if err != nil || len(found.Nodes) != 0 {
-		t.Fatalf("a team name searched in the project kind = %+v, %v; want no node", found, err)
-	}
-	found, err = adapter.FindSubjectsByExactName(ctx, principal, binding, "Auth Team", nil)
-	if err != nil {
-		t.Fatalf("FindSubjectsByExactName(default kinds) error = %v", err)
-	}
-	requireIDs(t, "default kinds match", ids(found.Nodes), "team:a")
-
-	// ReadSubjectNodes: present subjects come back, a missing one is absent.
-	nodes, err := adapter.ReadSubjectNodes(ctx, principal, binding, []contextfabric.SubjectRef{
-		{Kind: contextfabric.SubjectProject, CanonicalID: "project:c"},
-		{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:a"},
-		{Kind: contextfabric.SubjectProject, CanonicalID: "project:missing"},
-		{Kind: contextfabric.SubjectTeam, CanonicalID: "project:a"}, // right id, wrong kind
+	t.Run("ListSubjectsByKind", func(t *testing.T) {
+		// ListSubjectsByKind: a keyset page in canonical-id order, then the rest.
+		page, err := adapter.ListSubjectsByKind(ctx, principal, binding, "project", "", 2)
+		if err != nil {
+			t.Fatalf("ListSubjectsByKind(first page) error = %v", err)
+		}
+		requireIDs(t, "first page", ids(page.Nodes), "project:a", "project:b")
+		if !page.More {
+			t.Fatal("first page More = false, want true: a third project follows")
+		}
+		if page.Nodes[0].Label != "Authentication Service" || page.Nodes[0].Kind != "project" {
+			t.Fatalf("first node = %+v, want the stored label and kind", page.Nodes[0])
+		}
+		page, err = adapter.ListSubjectsByKind(ctx, principal, binding, "project", "project:b", 2)
+		if err != nil {
+			t.Fatalf("ListSubjectsByKind(after cursor) error = %v", err)
+		}
+		requireIDs(t, "second page", ids(page.Nodes), "project:c")
+		if page.More {
+			t.Fatal("second page More = true, want false")
+		}
+		page, err = adapter.ListSubjectsByKind(ctx, principal, binding, "team", "", 5)
+		if err != nil {
+			t.Fatalf("ListSubjectsByKind(team) error = %v", err)
+		}
+		requireIDs(t, "team page", ids(page.Nodes), "team:a")
 	})
-	if err != nil {
-		t.Fatalf("ReadSubjectNodes() error = %v", err)
-	}
-	got := ids(nodes)
-	sort.Strings(got)
-	requireIDs(t, "read nodes", got, "project:c", "repository:a")
-	for _, n := range nodes {
-		if n.CanonicalID == "project:c" && (n.Label != "Billing Ledger" || n.Kind != "project") {
-			t.Fatalf("read node = %+v, want the stored label and kind", n)
-		}
-	}
 
-	// CountKind: an aggregate per kind; an absent kind counts zero.
-	for kind, want := range map[contextfabric.SubjectKind]int64{
-		contextfabric.SubjectProject: 3, contextfabric.SubjectTeam: 1, contextfabric.SubjectRepository: 1, contextfabric.SubjectIncident: 0,
-	} {
-		count, err := adapter.CountKind(ctx, orgID, kind)
-		if err != nil || count != want {
-			t.Fatalf("CountKind(%s) = %d, %v; want %d", kind, count, err, want)
+	t.Run("FindSubjectsByExactName", func(t *testing.T) {
+		// FindSubjectsByExactName: label equality and alias equality, in the
+		// requested kinds only.
+		found, err := adapter.FindSubjectsByExactName(ctx, principal, binding, "auth gateway", []string{"project"})
+		if err != nil {
+			t.Fatalf("FindSubjectsByExactName(label) error = %v", err)
 		}
-	}
+		requireIDs(t, "label match", ids(found.Nodes), "project:b")
+		if found.Truncated || found.Nodes[0].Match != "exact" {
+			t.Fatalf("label match = %+v, want exact and not truncated", found)
+		}
+		found, err = adapter.FindSubjectsByExactName(ctx, principal, binding, "login-service", []string{"project"})
+		if err != nil {
+			t.Fatalf("FindSubjectsByExactName(alias) error = %v", err)
+		}
+		requireIDs(t, "alias match", ids(found.Nodes), "project:a")
+		if found.Nodes[0].Match != "alias" {
+			t.Fatalf("alias match class = %q, want alias", found.Nodes[0].Match)
+		}
+		found, err = adapter.FindSubjectsByExactName(ctx, principal, binding, "Auth Team", []string{"project"})
+		if err != nil || len(found.Nodes) != 0 {
+			t.Fatalf("a team name searched in the project kind = %+v, %v; want no node", found, err)
+		}
+		found, err = adapter.FindSubjectsByExactName(ctx, principal, binding, "Auth Team", nil)
+		if err != nil {
+			t.Fatalf("FindSubjectsByExactName(default kinds) error = %v", err)
+		}
+		requireIDs(t, "default kinds match", ids(found.Nodes), "team:a")
+	})
+
+	t.Run("ReadSubjectNodes", func(t *testing.T) {
+		// ReadSubjectNodes: present subjects come back, a missing one is absent.
+		nodes, err := adapter.ReadSubjectNodes(ctx, principal, binding, []contextfabric.SubjectRef{
+			{Kind: contextfabric.SubjectProject, CanonicalID: "project:c"},
+			{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:a"},
+			{Kind: contextfabric.SubjectProject, CanonicalID: "project:missing"},
+			{Kind: contextfabric.SubjectTeam, CanonicalID: "project:a"}, // right id, wrong kind
+		})
+		if err != nil {
+			t.Fatalf("ReadSubjectNodes() error = %v", err)
+		}
+		got := ids(nodes)
+		sort.Strings(got)
+		requireIDs(t, "read nodes", got, "project:c", "repository:a")
+		for _, n := range nodes {
+			if n.CanonicalID == "project:c" && (n.Label != "Billing Ledger" || n.Kind != "project") {
+				t.Fatalf("read node = %+v, want the stored label and kind", n)
+			}
+		}
+	})
+
+	t.Run("CountKind", func(t *testing.T) {
+		// CountKind: an aggregate per kind; an absent kind counts zero.
+		for kind, want := range map[contextfabric.SubjectKind]int64{
+			contextfabric.SubjectProject: 3, contextfabric.SubjectTeam: 1, contextfabric.SubjectRepository: 1, contextfabric.SubjectIncident: 0,
+		} {
+			count, err := adapter.CountKind(ctx, orgID, kind)
+			if err != nil || count != want {
+				t.Fatalf("CountKind(%s) = %d, %v; want %d", kind, count, err, want)
+			}
+		}
+	})
 }
 
 // TestLiveConfirmedKindVectorCensusReadsTheSeededVectors runs the census's
@@ -211,36 +219,43 @@ func TestLiveConfirmedKindVectorCensusReadsTheSeededVectors(t *testing.T) {
 	key := graphKey(adapter.config.GraphPrefix, orgID)
 	identity := adapter.stampedEmbedderIdentity(keywordEmbedder{}.Identity())
 
-	count, err := adapter.countKindEmbedderFenceCorpus(ctx, key, orgID, "project", identity)
-	if err != nil || count != 3 {
-		t.Fatalf("countKindEmbedderFenceCorpus(project) = %d, %v; want 3 (the team's vector is another kind)", count, err)
-	}
-	if count, err = adapter.countKindEmbedderFenceCorpus(ctx, key, orgID, "project", "other/identity"); err != nil || count != 0 {
-		t.Fatalf("countKindEmbedderFenceCorpus(other identity) = %d, %v; want 0", count, err)
-	}
-	corpus, enumerated, malformed, err := adapter.fetchKindEmbedderFenceCorpus(ctx, key, orgID, "project", identity)
-	if err != nil || enumerated != 3 || malformed != 0 || len(corpus) != 3 {
-		t.Fatalf("fetchKindEmbedderFenceCorpus(project) = %d rows, enumerated %d, malformed %d, %v; want 3, 3, 0", len(corpus), enumerated, malformed, err)
-	}
-	var corpusIDs []string
-	for _, v := range corpus {
-		if len(v.Vector) != 4 || v.Kind != "project" {
-			t.Fatalf("decoded row = %+v, want a 4-wide project vector", v)
+	t.Run("count", func(t *testing.T) {
+		count, err := adapter.countKindEmbedderFenceCorpus(ctx, key, orgID, "project", identity)
+		if err != nil || count != 3 {
+			t.Fatalf("countKindEmbedderFenceCorpus(project) = %d, %v; want 3 (the team's vector is another kind)", count, err)
 		}
-		corpusIDs = append(corpusIDs, v.CanonicalID)
-	}
-	requireIDs(t, "fetched ids", corpusIDs, "project:a", "project:b", "project:c")
+		if count, err = adapter.countKindEmbedderFenceCorpus(ctx, key, orgID, "project", "other/identity"); err != nil || count != 0 {
+			t.Fatalf("countKindEmbedderFenceCorpus(other identity) = %d, %v; want 0", count, err)
+		}
+	})
 
-	outcome := adapter.confirmedKindVectorCensus(ctx, key, orgID, contextfabric.SubjectProject, []string{"auth"})
-	if outcome.State != graphrank.ConfirmedKindVectorScopeComplete || outcome.PopulationCount != 3 || outcome.EnumeratedCount != 3 ||
-		outcome.QueriesScored != 1 || outcome.RivalCountAboveTau != 2 || !outcome.SnapshotStable {
-		t.Fatalf("census = %+v, want complete over 3 projects, 1 query scored, 2 rivals above the floor", outcome)
-	}
-	adapter.config.ConfirmedKindVectorCensusMaxComparisons = 2
-	outcome = adapter.confirmedKindVectorCensus(ctx, key, orgID, contextfabric.SubjectProject, []string{"auth"})
-	if outcome.State != graphrank.ConfirmedKindVectorScopeOverBudget || outcome.PopulationCount != 3 || outcome.ComparisonCount != 3 {
-		t.Fatalf("census over budget = %+v, want over_budget with population 3, comparisons 3", outcome)
-	}
+	t.Run("fetch", func(t *testing.T) {
+		corpus, enumerated, malformed, err := adapter.fetchKindEmbedderFenceCorpus(ctx, key, orgID, "project", identity)
+		if err != nil || enumerated != 3 || malformed != 0 || len(corpus) != 3 {
+			t.Fatalf("fetchKindEmbedderFenceCorpus(project) = %d rows, enumerated %d, malformed %d, %v; want 3, 3, 0", len(corpus), enumerated, malformed, err)
+		}
+		var corpusIDs []string
+		for _, v := range corpus {
+			if len(v.Vector) != 4 || v.Kind != "project" {
+				t.Fatalf("decoded row = %+v, want a 4-wide project vector", v)
+			}
+			corpusIDs = append(corpusIDs, v.CanonicalID)
+		}
+		requireIDs(t, "fetched ids", corpusIDs, "project:a", "project:b", "project:c")
+	})
+
+	t.Run("census", func(t *testing.T) {
+		outcome := adapter.confirmedKindVectorCensus(ctx, key, orgID, contextfabric.SubjectProject, []string{"auth"})
+		if outcome.State != graphrank.ConfirmedKindVectorScopeComplete || outcome.PopulationCount != 3 || outcome.EnumeratedCount != 3 ||
+			outcome.QueriesScored != 1 || outcome.RivalCountAboveTau != 2 || !outcome.SnapshotStable {
+			t.Fatalf("census = %+v, want complete over 3 projects, 1 query scored, 2 rivals above the floor", outcome)
+		}
+		adapter.config.ConfirmedKindVectorCensusMaxComparisons = 2
+		outcome = adapter.confirmedKindVectorCensus(ctx, key, orgID, contextfabric.SubjectProject, []string{"auth"})
+		if outcome.State != graphrank.ConfirmedKindVectorScopeOverBudget || outcome.PopulationCount != 3 || outcome.ComparisonCount != 3 {
+			t.Fatalf("census over budget = %+v, want over_budget with population 3, comparisons 3", outcome)
+		}
+	})
 }
 
 // cypherShape is a coarse grammar check for the read the builder sent: the
