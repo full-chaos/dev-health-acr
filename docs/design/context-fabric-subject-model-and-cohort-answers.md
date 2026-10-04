@@ -26,20 +26,25 @@ answers:
 |---|---|---|---|
 | `team` | `teams` table; graph node via `queryTeams` (`devhealthsource/teams_projects.go`) | **Ownership only** — a team owns a subject iff `team_repo_ownership`/`team_project_ownership` says so. Never person→membership (CHAOS-4321 hard rule) | first-class, cohort-capable |
 | `project` | `projects` table; graph node via `teams_projects.go` | `team_project_ownership` (project→team) | first-class, cohort-capable — `interpretedCohortKind` already selects `SubjectProject` for project-shaped questions and `DiscoveredCohort` admits project nodes the same way it admits team nodes. The real limitation is narrower: `interpretedCohortKind` picks exactly **one** kind per question (a substring heuristic, `graphrank/discover.go:296`), so a mixed team+project cohort in one question is not supported — that is a distinct, pre-existing gap, not "project is single-subject only" |
-| `repository` | `repositories`/`tables.go` | N/A (leaf; owned by team indirectly via ownership tables, never a direct graph edge — see diagram 3 caveat below) | first-class |
+| `repository` | `repositories`/`tables.go` | `team_repo_ownership` (repository→team `OWNED_BY_TEAM` edge since CHAOS-6561) | first-class |
 | `metric` | `ContextFabricSubjectMetric` constant declared (`model.go:92`) | — | **declared, not wired** — no query producer reads it yet |
 | person | — | — | **not a subject kind in acr.** No `SubjectPerson` exists. This is by design, not an oversight: the dev-health **platform** root `AGENTS.md` (`../../AGENTS.md` from this repo — distinct from this repo's own `AGENTS.md`) bars person-to-person rankings under "Visualization Guardrails," and the Context Fabric project's own Linear description states the finer "no person-level productivity, health, workload, or staffing ranking" as a non-negotiable boundary; a `person` subject able to carry a ranking would need a governance decision first, not a silent addition. |
 
-**No direct repository↔project or repository↔team graph edge exists, by
-design** — `project` here is a work-tracking project (Linear-shaped), not a
-repository group. The only path from a project/team to a repository-scoped
-activity kind (PR, review, CI run, deployment) is through `work_item`:
-`project <-BELONGS_TO_PROJECT- work_item -BELONGS_TO_REPOSITORY-> repository`,
-an **activity proxy**, never an ownership claim
-(`docs/design/context-fabric-architecture-diagrams.md` §3,
-`docs/design/context-fabric-fact-scope.md` §1). ClickHouse-side ownership
-joins (`team_repo_ownership`, used by `HealthProvider`'s project rollup) are a
-fact-producer join, not a graph edge, and do not appear in the graph diagram.
+**No direct repository↔project graph edge exists, by design** — `project`
+here is a work-tracking project, not a repository group. A project and a
+repository meet through the entity tree, **Repository <> Pull request <> Issue
+<> Project** (`docs/design/context-fabric-architecture-diagrams.md` §3):
+`project <-BELONGS_TO_PROJECT- issue -RELATES_TO- pull request
+-BELONGS_TO_REPOSITORY-> repository`, where the issue↔pull request hop is an
+actual `work_item_dependencies` link row and the repository is the pull
+request's own. An issue's own repository column is not that path. A team
+reaches repositories and projects through ownership only
+(`team_repo_ownership`, `team_project_ownership`). Some reads still use a
+work item's own repository as an activity proxy (the CHAOS-4099 fact-scope
+chains, `docs/design/context-fabric-fact-scope.md` §1); they are listed in
+diagram 3 under "Code that does not yet follow the tree". ClickHouse-side
+ownership joins (`team_repo_ownership`, used by `HealthProvider`'s project
+rollup) are a fact-producer join, not a graph edge.
 
 ## 2. Corrections (2026-08-28 gate re-open)
 
