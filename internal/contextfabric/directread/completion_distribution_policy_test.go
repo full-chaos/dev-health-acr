@@ -95,14 +95,14 @@ func containsText(s, sub string) bool {
 }
 
 func TestRunOperationPassesOnlyWhatTheRegisteredDocumentSelects(t *testing.T) {
-	answer := `{"data":{"capacityForecast":{"forecastId":"f1","teamId":"team:t1","completionDistribution":{"days":[{"value":3,"count":2}],"items":null},"__typename":"CapacityForecast"}}}`
+	answer := `{"data":{"capacityForecast":{"forecastId":"f1","teamId":"team:t1","completionDistribution":{"runs":500,"unfinishedRuns":7,"horizonDays":365,"days":[{"value":3,"count":2,"cumulativeShare":0.4}],"items":[{"value":9,"count":1,"cumulativeShare":1}]},"__typename":"CapacityForecast"}}}`
 	cat, err := directread.DefaultCatalogue()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for operation, wantFields := range map[string]struct{ present, absent []string }{
 		"capacityCompletionDistribution": {present: []string{"completionDistribution"}, absent: []string{"forecastId", "teamId"}},
-		"capacityForecast":               {present: []string{"completionDistribution", "forecastId"}},
+		"capacityForecast":               {present: []string{"completionDistribution", "forecastId", `"runs":500`, `"unfinishedRuns":7`, `"horizonDays":365`, `"cumulativeShare":0.4`, `"cumulativeShare":1`}},
 	} {
 		t.Run(operation, func(t *testing.T) {
 			h := newOpHarness(t, func(opRecorded) (int, string) { return 200, answer }, opHarnessOptions{})
