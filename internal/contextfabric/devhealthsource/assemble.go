@@ -75,6 +75,12 @@ type sourcePlan struct {
 	// it as one line per type when the source is caught up. Optional.
 	ignored *ignoredLedger
 
+	// yielded, when set by nextBatch, is raised by a call that ends without
+	// publishing because it hit its per-tick bound (the skip-page limit)
+	// rather than because the source is caught up. The pass is not over
+	// then, so the ignored line is not flushed (CHAOS-8290).
+	yielded *bool
+
 	// overlap and window (CHAOS-7263) bound the caught-up trailing re-read
 	// (overlap.go). overlap <= 0 or a nil window disables it. windowScope is
 	// the memo key nextBatch derives from the checkpoint: organization AND
@@ -135,11 +141,15 @@ func logTableReadFailure(ctx context.Context, logger *slog.Logger, source, orgID
 }
 
 func (p sourcePlan) nextBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
+	yielded := false
+	p.yielded = &yielded
 	batch, available, err := p.nextBatchPage(ctx, checkpoint)
+	// One line per type per pass: flushed when the pass ends (caught up) or
+	// fails, never at a mid-pass yield or a published batch.
 	if err != nil {
 		p.ignored.flush(ctx, p.logger, p.source, strings.TrimSpace(checkpoint.OrgID), "error")
-	} else if !available {
-		p.ignored.flush(ctx, p.logger, p.source, strings.TrimSpace(checkpoint.OrgID), "caught_up_or_yielded")
+	} else if !available && !yielded {
+		p.ignored.flush(ctx, p.logger, p.source, strings.TrimSpace(checkpoint.OrgID), "caught_up")
 	}
 	return batch, available, err
 }
@@ -329,6 +339,7 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 		sortCandidates(all)
 		all, bounded := truncateToCompleteRows(all, incrementalBatchCap, bound)
 		if len(all) == 0 {
+			p.noteYield()
 			return contextfabric.ProjectionBatch{}, false, nil
 		}
 		if bounded {
@@ -368,6 +379,7 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 		p.window.record(p.windowScope, all, p.overlap)
 		noteConsumedFrom(p, orgID, all)
 		if skips >= maxOmittedPageSkips {
+			p.noteYield()
 			return contextfabric.ProjectionBatch{}, false, nil
 		}
 	}
@@ -509,6 +521,12 @@ func (p sourcePlan) logBoundedPage(ctx context.Context, orgID string, bound page
 func (p sourcePlan) notePage(all []candidate) {
 	if p.observePage != nil {
 		p.observePage(all)
+	}
+}
+
+func (p sourcePlan) noteYield() {
+	if p.yielded != nil {
+		*p.yielded = true
 	}
 }
 
