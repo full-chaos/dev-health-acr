@@ -16,7 +16,9 @@ func System() string { return synthesisSystemPrompt }
 
 const (
 	// PromptVersion names the synthesis prompt text and the shape of the
-	// model input; bump it on every change to what the model is told.
+	// input the service's own model is given (UserPayload); bump it on every
+	// change to what that model is told. The client input (ClientPayload) is a
+	// documented projection of that input, pinned by its own input_sha256.
 	PromptVersion = "context-fabric-synthesis.v17"
 	// OutputVersion names the model-output contract the prompt asks for.
 	OutputVersion = interpretprompt.OutputVersion

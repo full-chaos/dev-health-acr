@@ -419,7 +419,7 @@ func TestEveryTimeValueTheClockWroteIsLeftOutAndEveryFactStays(t *testing.T) {
 	at := time.Date(2031, 2, 3, 4, 5, 6, 789000000, time.UTC)
 	var payload Input
 	populateTimes(reflect.ValueOf(&payload).Elem(), at, map[reflect.Type]int{})
-	client, err := json.Marshal(canonicalClientInput(payload, nil, contextfabric.ReadTimeClamp{At: at, AsOf: true, Start: true, End: true}))
+	client, err := json.Marshal(canonicalClientInput(payload, clientWindow{}, contextfabric.ReadTimeClamp{At: at, AsOf: true, Start: true, End: true}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -485,23 +485,26 @@ func TestTheClientInputNamesTheWindowTheFactsWereReadOver(t *testing.T) {
 	at := *instant("2026-08-12T12:00:00.5Z")
 	start, end := instant("2026-07-13T12:00:00.5Z"), &at
 	stated := &contextfabric.EffectiveEvidenceWindow{Start: instant("2026-08-01T00:00:00Z"), End: instant("2026-08-10T00:00:00Z"), WindowClass: "recent_activity_lookup"}
+	relative := &contextfabric.EffectiveEvidenceWindow{Start: start, End: end, RelativeID: "trailing_30d", WindowClass: "recent_activity_lookup"}
 	cases := map[string]struct {
-		window *contextfabric.EffectiveEvidenceWindow
-		clamp  contextfabric.ReadTimeClamp
-		want   string
+		window    *contextfabric.EffectiveEvidenceWindow
+		fromClock bool
+		clamp     contextfabric.ReadTimeClamp
+		want      string
 	}{
-		"no window":         {nil, contextfabric.ReadTimeClamp{}, ""},
-		"a relative window": {&contextfabric.EffectiveEvidenceWindow{Start: start, End: end, RelativeID: "trailing_30d", WindowClass: "recent_activity_lookup"}, contextfabric.ReadTimeClamp{}, `{"relative_id":"trailing_30d","window_class":"recent_activity_lookup"}`},
-		"all time":          {&contextfabric.EffectiveEvidenceWindow{RelativeID: "all_time", WindowClass: "historical_analysis"}, contextfabric.ReadTimeClamp{}, `{"relative_id":"all_time","window_class":"historical_analysis"}`},
-		"a stated window":   {stated, contextfabric.ReadTimeClamp{At: at, End: true}, `{"window_class":"recent_activity_lookup","start":"2026-08-01T00:00:00Z","end":"2026-08-10T00:00:00Z"}`},
-		"a stated window whose end the clock wrote": {&contextfabric.EffectiveEvidenceWindow{Start: instant("2026-08-01T00:00:00Z"), End: &at, WindowClass: "recent_activity_lookup"}, contextfabric.ReadTimeClamp{At: at, WindowEnd: true},
+		"no window": {nil, false, contextfabric.ReadTimeClamp{}, ""},
+		"a relative window resolved from the clock": {relative, true, contextfabric.ReadTimeClamp{}, `{"relative_id":"trailing_30d","window_class":"recent_activity_lookup"}`},
+		"a frozen relative window":                  {relative, false, contextfabric.ReadTimeClamp{}, `{"relative_id":"trailing_30d","window_class":"recent_activity_lookup","start":"2026-07-13T12:00:00.5Z","end":"2026-08-12T12:00:00.5Z"}`},
+		"all time":                                  {&contextfabric.EffectiveEvidenceWindow{RelativeID: "all_time", WindowClass: "historical_analysis"}, false, contextfabric.ReadTimeClamp{}, `{"relative_id":"all_time","window_class":"historical_analysis"}`},
+		"a stated window":                           {stated, false, contextfabric.ReadTimeClamp{At: at, End: true}, `{"window_class":"recent_activity_lookup","start":"2026-08-01T00:00:00Z","end":"2026-08-10T00:00:00Z"}`},
+		"a stated window whose end the clock wrote": {&contextfabric.EffectiveEvidenceWindow{Start: instant("2026-08-01T00:00:00Z"), End: &at, WindowClass: "recent_activity_lookup"}, false, contextfabric.ReadTimeClamp{At: at, WindowEnd: true},
 			`{"window_class":"recent_activity_lookup","start":"2026-08-01T00:00:00Z"}`},
-		"a stated start equal to the instant the clock wrote into the end": {&contextfabric.EffectiveEvidenceWindow{Start: &at, End: &at}, contextfabric.ReadTimeClamp{At: at, WindowEnd: true}, `{"start":"2026-08-12T12:00:00.5Z"}`},
+		"a stated start equal to the instant the clock wrote into the end": {&contextfabric.EffectiveEvidenceWindow{Start: &at, End: &at}, false, contextfabric.ReadTimeClamp{At: at, WindowEnd: true}, `{"start":"2026-08-12T12:00:00.5Z"}`},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			input := populatedInput(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, tc.clamp)
-			input.EvidenceWindow = tc.window
+			input.EvidenceWindow, input.EvidenceWindowFromClock = tc.window, tc.fromClock
 			client, err := ClientPayload("org-quartz", input, 1<<20)
 			if err != nil {
 				t.Fatal(err)
@@ -552,21 +555,23 @@ func TestTheClientInputLeavesOutOnlyTheWindowEchoesTheClockWrote(t *testing.T) {
 	cases := map[string]struct {
 		fact      contextfabric.CanonicalFact
 		window    *contextfabric.EffectiveEvidenceWindow
+		fromClock bool
 		clamp     contextfabric.ReadTimeClamp
 		wantStart bool
 		wantEnd   bool
 	}{
-		"the provider's own default window":      {windowedFact("default_trailing", "2026-05-14T12:00:00Z", "2026-08-12T12:00:00Z"), nil, contextfabric.ReadTimeClamp{}, false, false},
-		"the bounds of a relative window":        {windowedFact("evidence_window", "2026-07-13T12:00:00Z", "2026-08-12T12:00:00Z"), relative, contextfabric.ReadTimeClamp{}, false, false},
-		"the bounds of a stated window":          {windowedFact("evidence_window", "2026-08-01T00:00:00Z", "2026-08-10T00:00:00Z"), stated, contextfabric.ReadTimeClamp{}, true, true},
-		"an end the clamp wrote":                 {windowedFact("range", "2026-08-01T00:00:00Z", "2026-08-12T12:00:00Z"), nil, contextfabric.ReadTimeClamp{At: at, End: true}, true, false},
-		"stored window fields with no basis":     {windowedFact("", "2026-08-12", "2026-08-12"), relative, contextfabric.ReadTimeClamp{}, true, true},
-		"a stated bound under a relative window": {windowedFact("evidence_window", "2026-08-01T00:00:00Z", "2026-08-10T00:00:00Z"), relative, contextfabric.ReadTimeClamp{}, true, true},
+		"the provider's own default window":              {windowedFact("default_trailing", "2026-05-14T12:00:00Z", "2026-08-12T12:00:00Z"), nil, false, contextfabric.ReadTimeClamp{}, false, false},
+		"the bounds of a relative window from the clock": {windowedFact("evidence_window", "2026-07-13T12:00:00Z", "2026-08-12T12:00:00Z"), relative, true, contextfabric.ReadTimeClamp{}, false, false},
+		"the bounds of a frozen relative window":         {windowedFact("evidence_window", "2026-07-13T12:00:00Z", "2026-08-12T12:00:00Z"), relative, false, contextfabric.ReadTimeClamp{}, true, true},
+		"the bounds of a stated window":                  {windowedFact("evidence_window", "2026-08-01T00:00:00Z", "2026-08-10T00:00:00Z"), stated, false, contextfabric.ReadTimeClamp{}, true, true},
+		"an end the clamp wrote":                         {windowedFact("range", "2026-08-01T00:00:00Z", "2026-08-12T12:00:00Z"), nil, false, contextfabric.ReadTimeClamp{At: at, End: true}, true, false},
+		"stored window fields with no basis":             {windowedFact("", "2026-08-12", "2026-08-12"), relative, true, contextfabric.ReadTimeClamp{}, true, true},
+		"a stated bound under a relative window":         {windowedFact("evidence_window", "2026-08-01T00:00:00Z", "2026-08-10T00:00:00Z"), relative, true, contextfabric.ReadTimeClamp{}, true, true},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			input := populatedInput(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, tc.clamp)
-			input.EvidenceWindow = tc.window
+			input.EvidenceWindow, input.EvidenceWindowFromClock = tc.window, tc.fromClock
 			input.Facts.Facts = []contextfabric.CanonicalFact{tc.fact}
 			client := ClientInputFromDomain("org-quartz", input)
 			fields := client.Facts[0].Fields

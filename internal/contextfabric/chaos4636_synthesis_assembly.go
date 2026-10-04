@@ -341,6 +341,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		Allocation: synthesisAllocation,
 		Request:    request, Interpretation: interpretation, Graph: graphContext, Facts: facts,
 		EvidenceWindow: effectiveWindow, ReadTimeClamp: params.ReadTimeClamp,
+		EvidenceWindowFromClock: windowBoundsFromClock(effectiveWindow, params.WindowCanon.KeyEncoding, params.WindowCarried),
 	})
 	var result InvestigationResult
 	var err error

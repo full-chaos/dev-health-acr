@@ -17,14 +17,15 @@ import (
 //     watermark, which stays.
 //   - interpretation.time_context.{as_of,start,end} and
 //     evidence_window.{start,end} are left out only when the turn's clock
-//     wrote them: a future instant pulled back to the time of the read
+//     wrote them (a re-derivable relative window carries no bounds at all): a future instant pulled back to the time of the read
 //     (SynthesisInput.ReadTimeClamp). The span then runs to the read. An
 //     instant the caller or a stored window stated stays.
 //   - canonical_facts[].fields.{window_start,window_end} are left out when
 //     the fact's window_basis says the provider chose the window from its own
 //     clock, or when the value is a bound this turn resolved from its clock:
-//     a bound of a relative evidence window or an instant a clamp wrote. A
-//     stated bound stays.
+//     a bound of a re-derivable relative evidence window
+//     (SynthesisInput.EvidenceWindowFromClock) or an instant a clamp wrote. A
+//     stated or frozen bound stays.
 var clientInputObservationPaths = [...]string{
 	"coverage.sources[].observed_at",
 	"interpretation.time_context.as_of",
@@ -51,8 +52,9 @@ type ClientInput struct {
 }
 
 // ClientEvidenceWindow names the evidence window of the turn. A relative
-// window is named by its id alone, because its bounds move with the clock; a
-// stated window carries its bounds.
+// window whose bounds the turn resolved from its clock is named by its id
+// alone, because those bounds move with the clock; a stated or frozen window
+// carries its bounds.
 type ClientEvidenceWindow struct {
 	RelativeID  contractsv1.ContextFabricRelativeWindowID `json:"relative_id,omitempty"`
 	WindowClass contractsv1.ContextFabricWindowClass      `json:"window_class,omitempty"`
@@ -62,13 +64,13 @@ type ClientEvidenceWindow struct {
 
 // ClientInputFromDomain builds the ClientInput of input.
 func ClientInputFromDomain(orgID string, input contextfabric.SynthesisInput) ClientInput {
-	return canonicalClientInput(InputFromDomain(orgID, input), input.EvidenceWindow, input.ReadTimeClamp)
+	return canonicalClientInput(InputFromDomain(orgID, input), clientWindow{Window: input.EvidenceWindow, FromClock: input.EvidenceWindowFromClock}, input.ReadTimeClamp)
 }
 
 // canonicalClientInput leaves out of payload the values the turn's clock
 // wrote and adds the window. It never changes the slices, maps or pointers
 // payload shares with the domain input.
-func canonicalClientInput(payload Input, window *contractsv1.ContextFabricEffectiveEvidenceWindow, clamp contextfabric.ReadTimeClamp) ClientInput {
+func canonicalClientInput(payload Input, window clientWindow, clamp contextfabric.ReadTimeClamp) ClientInput {
 	sources := make([]contextfabric.SourceObservation, len(payload.Coverage.Sources))
 	for i, source := range payload.Coverage.Sources {
 		source.ObservedAt = nil
@@ -84,24 +86,31 @@ func canonicalClientInput(payload Input, window *contractsv1.ContextFabricEffect
 	return ClientInput{Input: payload, EvidenceWindow: clientEvidenceWindow(window, clamp)}
 }
 
-func clientEvidenceWindow(window *contractsv1.ContextFabricEffectiveEvidenceWindow, clamp contextfabric.ReadTimeClamp) *ClientEvidenceWindow {
-	if window == nil {
+// clientWindow is the turn's evidence window and whether the turn resolved its
+// bounds from its clock.
+type clientWindow struct {
+	Window    *contractsv1.ContextFabricEffectiveEvidenceWindow
+	FromClock bool
+}
+
+func clientEvidenceWindow(window clientWindow, clamp contextfabric.ReadTimeClamp) *ClientEvidenceWindow {
+	if window.Window == nil {
 		return nil
 	}
-	descriptor := &ClientEvidenceWindow{RelativeID: window.RelativeID, WindowClass: window.WindowClass}
-	if window.RelativeID == "" {
-		descriptor.Start = unlessClockWrote(window.Start, clamp.WindowStart, clamp.At)
-		descriptor.End = unlessClockWrote(window.End, clamp.WindowEnd, clamp.At)
+	descriptor := &ClientEvidenceWindow{RelativeID: window.Window.RelativeID, WindowClass: window.Window.WindowClass}
+	if !window.FromClock {
+		descriptor.Start = unlessClockWrote(window.Window.Start, clamp.WindowStart, clamp.At)
+		descriptor.End = unlessClockWrote(window.Window.End, clamp.WindowEnd, clamp.At)
 	}
 	return descriptor
 }
 
 // clockResolvedBounds returns, in the form a fact echoes a window bound, the
 // bounds this turn resolved from its clock.
-func clockResolvedBounds(window *contractsv1.ContextFabricEffectiveEvidenceWindow, clamp contextfabric.ReadTimeClamp) map[string]bool {
+func clockResolvedBounds(window clientWindow, clamp contextfabric.ReadTimeClamp) map[string]bool {
 	bounds := map[string]bool{}
-	if window != nil && window.RelativeID != "" {
-		for _, bound := range []*time.Time{window.Start, window.End} {
+	if window.Window != nil && window.FromClock {
+		for _, bound := range []*time.Time{window.Window.Start, window.Window.End} {
 			if bound != nil {
 				bounds[bound.UTC().Format(time.RFC3339)] = true
 			}

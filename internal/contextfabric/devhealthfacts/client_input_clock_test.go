@@ -76,6 +76,9 @@ func (s *universalScanner) Scan(dest ...any) error {
 		fillDeterministic(value.Elem(), func() string {
 			defer func() { position++ }()
 			if position < len(s.values) {
+				if s.values[position] == "$id" {
+					return s.client.subjectID
+				}
 				return s.values[position]
 			}
 			return s.client.subjectID
@@ -180,6 +183,16 @@ func clockTestSubjectID(kind contextfabric.SubjectKind) (canonicalID, rowID stri
 func clockTestRules() []stringRule {
 	const day = "2026-09-10"
 	return []stringRule{
+		{match: "SELECT w.work_item_id, toString(w.repo_id), ifNull(r.repo", values: []string{"item1", "r1", "repo-one"}},
+		{match: "SELECT toString(repo_id), toString(day), toInt64(commits_count)", values: []string{"r1", day}},
+		{match: "SELECT scope_id, toString(day), toString(severity)", values: []string{"$id", day, "low"}},
+		{match: "SELECT scope_id, toString(severity)", values: []string{"$id", "low", day + " 08:30:00", day}},
+		{match: "SELECT project_key, scope, scope_id, scope_name, severity", values: []string{"linear:P1", "team", "t1", "Team One", "low", day + " 08:30:00", day}},
+		{match: "SELECT project_key, toString(day), toUInt8(isNotNull(max(risk)))", values: []string{"linear:P1", day, "low"}},
+		{match: "SELECT concat(p.provider, ':', p.id), ec.has_team", values: []string{"linear:P1", "T1", "Team One", "scope1", "github", day}},
+		{match: "SELECT concat(p.provider, ':', p.id), toString(ec.day)", values: []string{"linear:P1", day}},
+		{match: "SELECT concat(p.provider, ':', p.id), wm.team_id", values: []string{"linear:P1", "t1"}},
+		{match: "SELECT concat(p.provider, ':', p.id), toString(wm.day)", values: []string{"linear:P1", day}},
 		{"SELECT w.work_item_id, ifNull(w.status", []string{"item1", "open", "r1"}, nil},
 		{"SELECT w.work_item_id, isNotNull(w.completed_at", []string{"item1", "r1"}, nil},
 		{"SELECT w.work_item_id, ifNull(w.title", []string{"item1", "a title", "r1"}, nil},
@@ -281,10 +294,11 @@ func clockTestPayload(t *testing.T, provider contextfabric.FactProvider, subject
 		return nil, 0, fmt.Errorf("ReadFacts: %w", err)
 	}
 	input := contextfabric.SynthesisInput{
-		Request:        contextfabric.InvestigationRequest{Question: "clock stability"},
-		Interpretation: interpretation,
-		Facts:          bundle,
-		EvidenceWindow: tc.effective(now),
+		Request:                 contextfabric.InvestigationRequest{Question: "clock stability"},
+		Interpretation:          interpretation,
+		Facts:                   bundle,
+		EvidenceWindow:          tc.effective(now),
+		EvidenceWindowFromClock: tc.name == "relative_window",
 	}
 	payload, err := synthesisprompt.ClientPayload("org-x", input, 1<<20)
 	if err != nil {
@@ -353,8 +367,8 @@ func TestClientInputIsClockIndependentForEveryFactKind(t *testing.T) {
 	clocks := []time.Time{t0, t0.Add(3 * time.Second), t0.Add(7 * time.Minute)}
 	providers := devhealthfacts.NewProviders(&universalClient{})
 	produced := map[string]bool{}
-	notRun := map[string][]string{}
-	var kinds []string
+	refusals := map[string][]string{}
+	var kinds, labels []string
 
 	for _, base := range providers {
 		capability := base.Capability()
@@ -366,19 +380,19 @@ func TestClientInputIsClockIndependentForEveryFactKind(t *testing.T) {
 			provider := findProvider(t, devhealthfacts.NewProviders(&universalClient{subjectID: rowID, rows: 1, rules: clockTestRules()}), kind)
 			for _, tc := range clockTestCases() {
 				label := fmt.Sprintf("%s/%s/%s", kind, subjectKind, tc.name)
-				covered := string(kind) + "/" + tc.name
+				labels = append(labels, label)
 				var first []byte
 				for index, now := range clocks {
 					payload, facts, err := clockTestPayload(t, provider, subject, kind, tc, now)
 					if err != nil && !strings.HasPrefix(err.Error(), "no facts") {
-						notRun[covered] = append(notRun[covered], label+": "+err.Error())
+						refusals[label] = append(refusals[label], err.Error())
 						break
 					}
 					if err != nil && index == 0 {
-						notRun[covered] = append(notRun[covered], label+": "+err.Error())
+						refusals[label] = append(refusals[label], err.Error())
 					}
 					if facts > 0 {
-						produced[covered] = true
+						produced[label] = true
 					}
 					if index == 0 {
 						first = payload
@@ -403,12 +417,9 @@ func TestClientInputIsClockIndependentForEveryFactKind(t *testing.T) {
 	}
 
 	t.Logf("kinds enumerated: %s", strings.Join(kinds, ", "))
-	for _, kind := range kinds {
-		for _, tc := range clockTestCases() {
-			covered := kind + "/" + tc.name
-			if !produced[covered] {
-				t.Errorf("%s produced no fact for any subject kind, so the clock is not tested there; refusals: %s", covered, strings.Join(notRun[covered], " | "))
-			}
+	for _, label := range labels {
+		if !produced[label] {
+			t.Errorf("%s produced no fact, so the clock is not tested there; refusals: %s", label, strings.Join(refusals[label], " | "))
 		}
 	}
 }

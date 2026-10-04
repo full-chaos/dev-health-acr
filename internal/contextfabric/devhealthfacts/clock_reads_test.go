@@ -37,13 +37,30 @@ func TestProducersReadTheWallClockOnlyThroughTheirClock(t *testing.T) {
 			t.Fatal(err)
 		}
 		parsed++
+		timeNames := map[string]bool{}
+		for _, spec := range file.Imports {
+			if spec.Path.Value != `"time"` {
+				continue
+			}
+			local := "time"
+			if spec.Name != nil {
+				local = spec.Name.Name
+			}
+			if local == "." {
+				t.Errorf("%s: imports time with a dot; the wall-clock guard cannot see its reads", name)
+			}
+			timeNames[local] = true
+		}
+		if len(timeNames) == 0 {
+			continue
+		}
 		ast.Inspect(file, func(node ast.Node) bool {
 			selector, ok := node.(*ast.SelectorExpr)
 			if !ok {
 				return true
 			}
 			pkg, ok := selector.X.(*ast.Ident)
-			if !ok || pkg.Name != "time" {
+			if !ok || !timeNames[pkg.Name] {
 				return true
 			}
 			switch selector.Sel.Name {
