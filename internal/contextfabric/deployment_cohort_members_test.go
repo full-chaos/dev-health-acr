@@ -91,6 +91,30 @@ func TestDeploymentCohortAnchorServableIsRepositoryTeamAndProject(t *testing.T) 
 	}
 }
 
+func TestDeploymentCohortAnchorIsTheOneCommittedServableSubject(t *testing.T) {
+	t.Parallel()
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "p", Label: "P"}
+	if anchor, ok := DeploymentCohortAnchor([]SubjectRef{project}); !ok || anchor != project {
+		t.Errorf("one committed project: anchor = %+v ok = %v, want the project", anchor, ok)
+	}
+	for name, committed := range map[string][]SubjectRef{
+		"none":       nil,
+		"several":    {project, {Kind: SubjectRepository, CanonicalID: "r"}},
+		"unservable": {{Kind: SubjectIncident, CanonicalID: "i"}},
+	} {
+		if anchor, ok := DeploymentCohortAnchor(committed); ok || anchor != (SubjectRef{}) {
+			t.Errorf("%s: anchor = %+v ok = %v, want no anchor", name, anchor, ok)
+		}
+	}
+	for _, kind := range ScopedOnlyCohortAnchorKindsForAudit(SubjectDeployment) {
+		committed := []SubjectRef{{Kind: kind, CanonicalID: "a"}}
+		_, ok := DeploymentCohortAnchor(committed)
+		if !ok || !deploymentCohortAnchorsServable(committed, "") {
+			t.Errorf("kind %q: the anchor rule and the engine gate disagree (anchor %v)", kind, ok)
+		}
+	}
+}
+
 func TestDeploymentCohortEngineDiscoversOnlyUnderARepositoryTeamOrProjectAnchor(t *testing.T) {
 	for _, tc := range []struct {
 		name         string

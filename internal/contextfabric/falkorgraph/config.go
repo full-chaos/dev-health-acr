@@ -574,6 +574,13 @@ type GraphTelemetry interface {
 	// does -- a call this arm exists to rescue must never end up worse off
 	// than the code it replaces.
 	RecordCohortKindFulltext(ctx context.Context, orgID string, decision CohortKindFulltextDecision, memberKind contextfabric.SubjectKind, members int, truncated bool, addedByKindArm, duplicatesWithGeneral int, readErr error)
+	// RecordProjectDeploymentWalk (eventspec.ProjectDeploymentWalk) reports
+	// ONE DiscoverContext call that asks for the deployment members of a named
+	// anchor: whether the project walk ran and what it found. A call whose
+	// anchor is not a project reports ProjectDeploymentWalkNotRouted with the
+	// anchor's kind, so "the walk was not reached" is a line and not an
+	// absence. Counts and closed values only.
+	RecordProjectDeploymentWalk(ctx context.Context, orgID string, decision ProjectDeploymentWalkDecision)
 	// RecordNeighborLookupFailed reports ONE neighbour the hop walk reached
 	// through an admitted edge and then could not read back.
 	//
@@ -658,6 +665,8 @@ func (NoopTelemetry) RecordCohortKindBasis(context.Context, string, contextfabri
 func (NoopTelemetry) RecordCohortKindCensus(context.Context, string, CohortKindCensusDecision, contextfabric.SubjectKind, []string, int, int, bool, error) {
 }
 func (NoopTelemetry) RecordCohortKindFulltext(context.Context, string, CohortKindFulltextDecision, contextfabric.SubjectKind, int, bool, int, int, error) {
+}
+func (NoopTelemetry) RecordProjectDeploymentWalk(context.Context, string, ProjectDeploymentWalkDecision) {
 }
 
 func (NoopTelemetry) RecordNeighborLookupFailed(context.Context, string, string, string, NeighborLookupFailureSite, error) {
@@ -975,6 +984,37 @@ func (t SlogTelemetry) RecordCohortKindFulltext(ctx context.Context, orgID strin
 		}
 	}
 	t.logger().Info(eventspec.CohortKindFulltext.Msg, append(args, graphRequestIDLogAttrs(ctx)...)...)
+}
+
+// RecordProjectDeploymentWalk logs at Info. The walk counts ride only on an
+// outcome that ran the walk, and error only on a failed read, so a
+// not-routed line never carries a measured zero. Built as a hand literal for
+// the reason RecordCohortKindFulltext above states: request_id is omitted,
+// never written empty, when the context carries none.
+func (t SlogTelemetry) RecordProjectDeploymentWalk(ctx context.Context, orgID string, decision ProjectDeploymentWalkDecision) {
+	anchorKind := string(decision.AnchorKind)
+	if anchorKind == "" {
+		anchorKind = "none"
+	}
+	args := []any{
+		"org_id", contextfabric.SanitizeLogAttr(orgID),
+		"outcome", contextfabric.SanitizeLogAttr(string(decision.Outcome)),
+		"anchor_kind", contextfabric.SanitizeLogAttr(anchorKind),
+		"anchor_basis", contextfabric.SanitizeLogAttr(string(decision.AnchorBasis)),
+		"committed", decision.Committed,
+	}
+	if decision.Outcome != ProjectDeploymentWalkNotRouted {
+		args = append(args,
+			"issues", decision.Issues,
+			"linked_pull_requests", decision.LinkedPullRequests,
+			"members", decision.Members,
+			"denied", decision.Denied,
+			"truncated", decision.Truncated)
+	}
+	if decision.Err != nil {
+		args = append(args, "error", contextfabric.SanitizeLogAttr(decision.Err.Error()))
+	}
+	t.logger().Info(eventspec.ProjectDeploymentWalk.Msg, append(args, graphRequestIDLogAttrs(ctx)...)...)
 }
 
 // RecordNeighborLookupFailed logs at Warn: unlike the cohort-kind basis, this

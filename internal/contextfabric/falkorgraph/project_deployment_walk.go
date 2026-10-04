@@ -51,18 +51,38 @@ type walkHit struct {
 	rel  *edge
 }
 
-// walkStepHits reads the neighbours of ids along one relationship, in a
+// The four steps of the project deployment walk, in order.
+var (
+	projectIssuesStep = walkStep{
+		fromKind: contractsv1.ContextFabricSubjectProject, toKind: contractsv1.ContextFabricSubjectWorkItem,
+		relation: contractsv1.ContextFabricRelationshipBelongsToProject, direction: walkIn, notToTypes: pullRequestWorkItemTypes,
+	}
+	issuePullRequestsStep = walkStep{
+		fromKind: contractsv1.ContextFabricSubjectWorkItem, toKind: contractsv1.ContextFabricSubjectWorkItem,
+		relation: contractsv1.ContextFabricRelationshipRelatesTo, direction: walkEither, toTypes: pullRequestWorkItemTypes,
+	}
+	pullRequestRepositoriesStep = walkStep{
+		fromKind: contractsv1.ContextFabricSubjectWorkItem, toKind: contractsv1.ContextFabricSubjectRepository,
+		relation: contractsv1.ContextFabricRelationshipBelongsToRepository, direction: walkOut,
+	}
+	repositoryDeploymentsStep = walkStep{
+		fromKind: contractsv1.ContextFabricSubjectRepository, toKind: contractsv1.ContextFabricSubjectDeployment,
+		relation: contractsv1.ContextFabricRelationshipBelongsToRepository, direction: walkIn,
+	}
+)
+
+// walkStepCypher is the read of one step: the neighbours of the batched ids
+// along one relationship, as ONE path pattern from the origin node, in a
 // deterministic order, with the window applied to the edge and the neighbour.
-func (a *Adapter) walkStepHits(ctx context.Context, key, orgID string, ids []string, step walkStep, temporal temporalFilter, budget int) ([]walkHit, bool, error) {
-	b := fmt.Sprintf("(b:%s {%s:$org, %s:$toKind})", labelSubject, propOrgID, propKind)
-	var pattern string
+func walkStepCypher(step walkStep, temporal temporalFilter) string {
+	var arrow string
 	switch step.direction {
 	case walkOut:
-		pattern = "(a)-[r:%s]->" + b
+		arrow = "-[r:%s]->"
 	case walkIn:
-		pattern = "(a)<-[r:%s]-" + b
+		arrow = "<-[r:%s]-"
 	default:
-		pattern = "(a)-[r:%s]-" + b
+		arrow = "-[r:%s]-"
 	}
 	typeClause := ""
 	switch {
@@ -71,9 +91,29 @@ func (a *Adapter) walkStepHits(ctx context.Context, key, orgID string, ids []str
 	case len(step.notToTypes) > 0:
 		typeClause = fmt.Sprintf(" AND (b.%s IS NULL OR NOT b.%s IN $btypes)", propWorkItemType, propWorkItemType)
 	}
-	cypher := fmt.Sprintf("UNWIND $ids AS id MATCH (a:%s {%s:$org, %s:$fromKind, %s:id})"+pattern+" WHERE r.%s = $rel%s%s%s RETURN id, b, r ORDER BY id, b.%s, r.%s LIMIT $limit",
-		labelSubject, propOrgID, propKind, propCanonicalID, labelRelation,
+	return fmt.Sprintf("UNWIND $ids AS id MATCH (a:%s {%s:$org, %s:$fromKind, %s:id})"+arrow+"(b:%s {%s:$org, %s:$toKind}) WHERE r.%s = $rel%s%s%s RETURN id, b, r ORDER BY id, b.%s, r.%s LIMIT $limit",
+		labelSubject, propOrgID, propKind, propCanonicalID, labelRelation, labelSubject, propOrgID, propKind,
 		propRelationType, typeClause, temporal.predicate("r"), temporal.predicate("b"), propCanonicalID, propRelationshipID)
+}
+
+// walkStepParams binds one batch of a step read.
+func walkStepParams(orgID string, ids []interface{}, step walkStep, limit int, temporal temporalFilter) map[string]interface{} {
+	params := temporal.bind(map[string]interface{}{
+		"org": orgID, "ids": ids, "fromKind": string(step.fromKind), "toKind": string(step.toKind), "rel": string(step.relation),
+		"limit": limit,
+	})
+	if len(step.toTypes) > 0 {
+		params["btypes"] = step.toTypes
+	} else if len(step.notToTypes) > 0 {
+		params["btypes"] = step.notToTypes
+	}
+	return params
+}
+
+// walkStepHits reads the neighbours of ids along one relationship, in a
+// deterministic order, with the window applied to the edge and the neighbour.
+func (a *Adapter) walkStepHits(ctx context.Context, key, orgID string, ids []string, step walkStep, temporal temporalFilter, budget int) ([]walkHit, bool, error) {
+	cypher := walkStepCypher(step, temporal)
 	var hits []walkHit
 	cut := false
 	for start := 0; start < len(ids); start += storedSubjectBatch {
@@ -87,19 +127,11 @@ func (a *Adapter) walkStepHits(ctx context.Context, key, orgID string, ids []str
 		for _, id := range ids[start:end] {
 			batch = append(batch, id)
 		}
-		params := temporal.bind(map[string]interface{}{
-			"org": orgID, "ids": batch, "fromKind": string(step.fromKind), "toKind": string(step.toKind), "rel": string(step.relation),
-			"limit": 1 << 30,
-		})
+		limit := 1 << 30
 		if budget > 0 {
-			params["limit"] = remaining + 1
+			limit = remaining + 1
 		}
-		if len(step.toTypes) > 0 {
-			params["btypes"] = step.toTypes
-		} else if len(step.notToTypes) > 0 {
-			params["btypes"] = step.notToTypes
-		}
-		rows, err := a.api.query(ctx, key, cypher, params, true)
+		rows, err := a.api.query(ctx, key, cypher, walkStepParams(orgID, batch, step, limit, temporal), true)
 		if err != nil {
 			return nil, false, safeDependencyError("walk project deployments", err)
 		}
@@ -184,8 +216,7 @@ func (a *Adapter) projectDeploymentMembers(ctx context.Context, key, orgID strin
 		out.denied++
 	}
 
-	issueHits, issuesCut, err := a.walkStepHits(ctx, key, orgID, []string{project.CanonicalID},
-		walkStep{fromKind: contractsv1.ContextFabricSubjectProject, toKind: contractsv1.ContextFabricSubjectWorkItem, relation: contractsv1.ContextFabricRelationshipBelongsToProject, direction: walkIn, notToTypes: pullRequestWorkItemTypes}, temporal, collectLimit)
+	issueHits, issuesCut, err := a.walkStepHits(ctx, key, orgID, []string{project.CanonicalID}, projectIssuesStep, temporal, collectLimit)
 	if err != nil {
 		return out, err
 	}
@@ -199,8 +230,7 @@ func (a *Adapter) projectDeploymentMembers(ctx context.Context, key, orgID strin
 
 	var pullRequests []string
 	if len(issues) > 0 {
-		linkHits, linksCut, err := a.walkStepHits(ctx, key, orgID, issues,
-			walkStep{fromKind: contractsv1.ContextFabricSubjectWorkItem, toKind: contractsv1.ContextFabricSubjectWorkItem, relation: contractsv1.ContextFabricRelationshipRelatesTo, direction: walkEither, toTypes: pullRequestWorkItemTypes}, temporal, collectLimit)
+		linkHits, linksCut, err := a.walkStepHits(ctx, key, orgID, issues, issuePullRequestsStep, temporal, collectLimit)
 		if err != nil {
 			return out, err
 		}
@@ -229,8 +259,7 @@ func (a *Adapter) projectDeploymentMembers(ctx context.Context, key, orgID strin
 		return out, nil
 	}
 
-	repoHits, reposCut, err := a.walkStepHits(ctx, key, orgID, pullRequests,
-		walkStep{fromKind: contractsv1.ContextFabricSubjectWorkItem, toKind: contractsv1.ContextFabricSubjectRepository, relation: contractsv1.ContextFabricRelationshipBelongsToRepository, direction: walkOut}, temporal, collectLimit)
+	repoHits, reposCut, err := a.walkStepHits(ctx, key, orgID, pullRequests, pullRequestRepositoriesStep, temporal, collectLimit)
 	if err != nil {
 		return out, err
 	}
@@ -252,8 +281,7 @@ func (a *Adapter) projectDeploymentMembers(ctx context.Context, key, orgID strin
 		return out, nil
 	}
 
-	deploymentHits, deploymentsCut, err := a.walkStepHits(ctx, key, orgID, repositoryIDs,
-		walkStep{fromKind: contractsv1.ContextFabricSubjectRepository, toKind: contractsv1.ContextFabricSubjectDeployment, relation: contractsv1.ContextFabricRelationshipBelongsToRepository, direction: walkIn}, temporal, collectLimit)
+	deploymentHits, deploymentsCut, err := a.walkStepHits(ctx, key, orgID, repositoryIDs, repositoryDeploymentsStep, temporal, collectLimit)
 	if err != nil {
 		return out, err
 	}
@@ -288,4 +316,80 @@ func (a *Adapter) projectDeploymentMembers(ctx context.Context, key, orgID strin
 	}
 	sortCandidateNodesBySubjectKey(out.nodes)
 	return out, nil
+}
+
+// ProjectDeploymentWalkOutcome is the closed outcome of one deployment-members
+// discovery with respect to the project walk.
+type ProjectDeploymentWalkOutcome string
+
+const (
+	// ProjectDeploymentWalkNotRouted: the frame asks for deployment members
+	// and the walk did not run, because no committed project is the anchor.
+	ProjectDeploymentWalkNotRouted ProjectDeploymentWalkOutcome = "not_routed"
+	// ProjectDeploymentWalkMembers: the walk reached at least one deployment.
+	ProjectDeploymentWalkMembers ProjectDeploymentWalkOutcome = "members"
+	// ProjectDeploymentWalkUnlinked: no member, and no issue of the project
+	// links a pull request (unrestricted caller, uncut frontier).
+	ProjectDeploymentWalkUnlinked ProjectDeploymentWalkOutcome = "unlinked"
+	// ProjectDeploymentWalkDenied: no member for a repository-restricted
+	// caller. The served reason is neutral; the counts stay on this line.
+	ProjectDeploymentWalkDenied ProjectDeploymentWalkOutcome = "denied"
+	// ProjectDeploymentWalkTruncated: no member, and a frontier was cut.
+	ProjectDeploymentWalkTruncated ProjectDeploymentWalkOutcome = "truncated"
+	// ProjectDeploymentWalkNoDeployments: no member, links exist, nothing was
+	// cut: the reached repositories hold no deployment in the window.
+	ProjectDeploymentWalkNoDeployments ProjectDeploymentWalkOutcome = "no_deployments"
+	// ProjectDeploymentWalkReadFailed: a step read failed and the call ends.
+	ProjectDeploymentWalkReadFailed ProjectDeploymentWalkOutcome = "read_failed"
+)
+
+// ProjectDeploymentWalkOutcomeVocabulary returns every declared outcome, in
+// declaration order.
+func ProjectDeploymentWalkOutcomeVocabulary() []ProjectDeploymentWalkOutcome {
+	return []ProjectDeploymentWalkOutcome{
+		ProjectDeploymentWalkNotRouted, ProjectDeploymentWalkMembers, ProjectDeploymentWalkUnlinked, ProjectDeploymentWalkDenied,
+		ProjectDeploymentWalkTruncated, ProjectDeploymentWalkNoDeployments, ProjectDeploymentWalkReadFailed,
+	}
+}
+
+// DeploymentAnchorBasisVocabulary returns every declared anchor basis, in
+// declaration order.
+func DeploymentAnchorBasisVocabulary() []DeploymentAnchorBasis {
+	return []DeploymentAnchorBasis{DeploymentAnchorNone, DeploymentAnchorBound, DeploymentAnchorSoleCommit}
+}
+
+// ProjectDeploymentWalkDecision is one decision line of the walk: counts and
+// closed values only, never a name or an id.
+type ProjectDeploymentWalkDecision struct {
+	Outcome     ProjectDeploymentWalkOutcome
+	AnchorKind  contextfabric.SubjectKind
+	AnchorBasis DeploymentAnchorBasis
+	// Committed is how many subjects the resolution committed.
+	Committed int
+	// Issues, LinkedPullRequests, Members, Denied and Truncated describe a
+	// walk that ran.
+	Issues, LinkedPullRequests, Members, Denied int
+	Truncated                                   bool
+	// Err is the failed read of a walk that did not finish.
+	Err error
+}
+
+// projectDeploymentWalkOutcome classifies a finished walk. A restricted caller
+// with no member is denied whether links are hidden or absent; a cut frontier
+// is never reported as unlinked.
+func projectDeploymentWalkOutcome(walk projectDeploymentWalk, restricted bool, err error) ProjectDeploymentWalkOutcome {
+	switch {
+	case err != nil:
+		return ProjectDeploymentWalkReadFailed
+	case len(walk.nodes) > 0:
+		return ProjectDeploymentWalkMembers
+	case restricted:
+		return ProjectDeploymentWalkDenied
+	case walk.truncated:
+		return ProjectDeploymentWalkTruncated
+	case walk.linkedPullRequests == 0:
+		return ProjectDeploymentWalkUnlinked
+	default:
+		return ProjectDeploymentWalkNoDeployments
+	}
 }
