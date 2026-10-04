@@ -344,6 +344,7 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 					"window_low", contextfabric.SanitizeLogAttr(pass.low.UTC().Format(time.RFC3339Nano)), "resume_after", contextfabric.SanitizeLogAttr(pass.walk.Since.UTC().Format(time.RFC3339Nano)),
 					"frontier", contextfabric.SanitizeLogAttr(state.Since.UTC().Format(time.RFC3339Nano)), "pass_age_seconds", int64(now.Sub(pass.passStart).Seconds()))
 			}
+			p.noteYield()
 			return contextfabric.ProjectionBatch{}, false, nil
 		}
 		var pageRows []candidate
@@ -403,6 +404,9 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 		// Nothing to apply: rows that are only quarantined count as seen
 		// now, so they are not re-judged every tick.
 		p.window.record(p.windowScope, all, p.overlap)
+		// The walk read a page and stopped; it is unfinished until a call
+		// reaches the window's end, so the pass is not over.
+		p.noteYield()
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
 	batch, err := buildBatchIn(p.cursorSpace(), orgID, p.source, p.version, cursor, all, items, false, false, p.clock())
