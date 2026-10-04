@@ -145,18 +145,18 @@ func (p sourcePlan) nextBatch(ctx context.Context, checkpoint contextfabric.Proj
 }
 
 // quarantineObserver is the per-item observer for one partition call. Ignore
-// observations go to the run ledger instead of the log, and only when
-// countIgnored: the overlap re-read revisits rows the paged pass already
-// counted.
-func (p sourcePlan) quarantineObserver(orgID string, countIgnored bool) func(quarantineObservation) {
+// observations go to the run ledger instead of the log. The overlap re-read
+// counts them too (CHAOS-8287): it only judges rows the window memo has not
+// seen, so a row that landed behind the frontier is counted exactly when it is
+// first judged. After a restart the memo is empty and the window re-judges its
+// rows once, so ignored_count is rows read, not unique rows.
+func (p sourcePlan) quarantineObserver(orgID string) func(quarantineObservation) {
 	if p.ignored == nil {
 		return p.observeQuarantine
 	}
 	return func(o quarantineObservation) {
 		if o.IgnoredCount > 0 {
-			if countIgnored {
-				p.ignored.add(orgID, o.Detail, o.IgnoredCount)
-			}
+			p.ignored.add(orgID, o.Detail, o.IgnoredCount)
 			return
 		}
 		if p.observeQuarantine != nil {
@@ -263,7 +263,7 @@ func (p sourcePlan) fullSnapshot(ctx context.Context, orgID string) (contextfabr
 	// never offered to quarantine at all, which is what makes the quarantine
 	// counters for these bounds read zero instead of merely smaller.
 	normalizeCandidates(all, p.observeNormalization)
-	items := partitionProjectableCandidates(all, p.quarantineObserver(orgID, true))
+	items := partitionProjectableCandidates(all, p.quarantineObserver(orgID))
 	if !carriesPayload(items) {
 		// Everything this snapshot read was quarantined, so there is nothing
 		// to publish -- but the rows WERE consumed, and without recording
@@ -341,7 +341,7 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 		// on, from a page whose every row was omitted -- both take the skip
 		// path below, which advances past them and keeps looking.
 		normalizeCandidates(all, p.observeNormalization)
-		items := partitionProjectableCandidates(all, p.quarantineObserver(orgID, true))
+		items := partitionProjectableCandidates(all, p.quarantineObserver(orgID))
 		if carriesPayload(items) {
 			batch, err := buildBatchIn(p.cursorSpace(), orgID, p.source, p.version, cursor, all, items, false, false, p.clock())
 			if err != nil {
