@@ -987,8 +987,8 @@ func (t SlogTelemetry) RecordCohortKindFulltext(ctx context.Context, orgID strin
 }
 
 // RecordProjectDeploymentWalk logs at Info. The walk counts ride only on an
-// outcome that ran the walk, and error only on a failed read, so a
-// not-routed line never carries a measured zero. Built as a hand literal for
+// outcome whose walk finished, and error only on a failed read, so neither a
+// not-routed line nor a failed read carries a zero nobody measured. Built as a hand literal for
 // the reason RecordCohortKindFulltext above states: request_id is omitted,
 // never written empty, when the context carries none.
 func (t SlogTelemetry) RecordProjectDeploymentWalk(ctx context.Context, orgID string, decision ProjectDeploymentWalkDecision) {
@@ -1003,7 +1003,7 @@ func (t SlogTelemetry) RecordProjectDeploymentWalk(ctx context.Context, orgID st
 		"anchor_basis", contextfabric.SanitizeLogAttr(string(decision.AnchorBasis)),
 		"committed", decision.Committed,
 	}
-	if decision.Outcome != ProjectDeploymentWalkNotRouted {
+	if decision.Outcome != ProjectDeploymentWalkNotRouted && decision.Outcome != ProjectDeploymentWalkReadFailed {
 		args = append(args,
 			"issues", decision.Issues,
 			"linked_pull_requests", decision.LinkedPullRequests,

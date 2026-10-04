@@ -2885,7 +2885,8 @@ var projectDeploymentWalkAnchorBasis = []string{"none", "bound", "sole_commit"}
 //
 // outcome=not_routed is a call whose anchor is not a committed project
 // (anchor_kind says which kind, or "none"); the walk did not run and no walk
-// count is written. Every other outcome ran the walk and carries its counts:
+// count is written. outcome=read_failed carries the error and no count: the
+// walk did not finish. Every other outcome carries the walk's counts:
 // issues examined, pull requests they link, deployments reached, hops the
 // caller's authorization hid, and whether a frontier was cut. anchor_basis
 // says how the anchor was chosen from the committed subjects: bound (the
@@ -2907,11 +2908,11 @@ var ProjectDeploymentWalk = Event{
 		{Key: "anchor_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"none"}, contextFabricSubjectKindTokens...)},
 		{Key: "anchor_basis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: projectDeploymentWalkAnchorBasis},
 		{Key: "committed", Type: FieldInt, Presence: PresenceRequired},
-		{Key: "issues", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the walk ran (every outcome but not_routed)"},
-		{Key: "linked_pull_requests", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the walk ran (every outcome but not_routed)"},
-		{Key: "members", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the walk ran (every outcome but not_routed)"},
-		{Key: "denied", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the walk ran (every outcome but not_routed)"},
-		{Key: "truncated", Type: FieldBool, Presence: PresenceConditional, Applicability: "written when the walk ran (every outcome but not_routed)"},
+		{Key: "issues", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the walk finished (every outcome but not_routed and read_failed)"},
+		{Key: "linked_pull_requests", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the walk finished (every outcome but not_routed and read_failed)"},
+		{Key: "members", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the walk finished (every outcome but not_routed and read_failed)"},
+		{Key: "denied", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the walk finished (every outcome but not_routed and read_failed)"},
+		{Key: "truncated", Type: FieldBool, Presence: PresenceConditional, Applicability: "written when the walk finished (every outcome but not_routed and read_failed)"},
 		{Key: "error", Type: FieldString, Presence: PresenceConditional, Applicability: "written when outcome=read_failed"},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},

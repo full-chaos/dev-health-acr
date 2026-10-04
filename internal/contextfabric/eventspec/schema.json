@@ -3709,31 +3709,31 @@
         "key": "issues",
         "type": "int",
         "presence": "conditional",
-        "applicability": "written when the walk ran (every outcome but not_routed)"
+        "applicability": "written when the walk finished (every outcome but not_routed and read_failed)"
       },
       {
         "key": "linked_pull_requests",
         "type": "int",
         "presence": "conditional",
-        "applicability": "written when the walk ran (every outcome but not_routed)"
+        "applicability": "written when the walk finished (every outcome but not_routed and read_failed)"
       },
       {
         "key": "members",
         "type": "int",
         "presence": "conditional",
-        "applicability": "written when the walk ran (every outcome but not_routed)"
+        "applicability": "written when the walk finished (every outcome but not_routed and read_failed)"
       },
       {
         "key": "denied",
         "type": "int",
         "presence": "conditional",
-        "applicability": "written when the walk ran (every outcome but not_routed)"
+        "applicability": "written when the walk finished (every outcome but not_routed and read_failed)"
       },
       {
         "key": "truncated",
         "type": "bool",
         "presence": "conditional",
-        "applicability": "written when the walk ran (every outcome but not_routed)"
+        "applicability": "written when the walk finished (every outcome but not_routed and read_failed)"
       },
       {
         "key": "error",

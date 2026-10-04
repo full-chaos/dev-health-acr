@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"reflect"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec/certify"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -290,8 +292,9 @@ func TestEveryProjectDeploymentWalkOutcomeIsEmittedByTheRealProducer(t *testing.
 				t.Fatalf("%d lines, want one", len(lines))
 			}
 			for _, key := range []string{"issues", "linked_pull_requests", "members", "denied", "truncated"} {
-				if _, present := lines[0][key]; present != (outcome != ProjectDeploymentWalkNotRouted) {
-					t.Errorf("line %v: %s present = %v; a walk count rides only on a walk that ran", lines[0], key, present)
+				measured := outcome != ProjectDeploymentWalkNotRouted && outcome != ProjectDeploymentWalkReadFailed
+				if _, present := lines[0][key]; present != measured {
+					t.Errorf("line %v: %s present = %v; a walk count rides only on a walk that finished", lines[0], key, present)
 				}
 			}
 			if _, present := lines[0]["error"]; present != (outcome == ProjectDeploymentWalkReadFailed) {
@@ -425,8 +428,52 @@ func TestARestrictedCallerWithACutFrontierStillGetsTheNeutralReason(t *testing.T
 	if len(telemetry.projectDeploymentWalks) != 1 || telemetry.projectDeploymentWalks[0].Outcome != ProjectDeploymentWalkDenied || !telemetry.projectDeploymentWalks[0].Truncated {
 		t.Fatalf("walk decisions = %+v, want one denied decision that records the cut", telemetry.projectDeploymentWalks)
 	}
-	if deniedDetail(result) == nil || unlinkedDetail(result) != nil {
-		t.Fatalf("details = %+v, want the neutral denied reason and no unlinked one", result.Coverage.Details)
+	if deniedDetail(result) == nil || unlinkedDetail(result) != nil || cutDetail(result) != nil || len(result.Coverage.Details) != 1 {
+		t.Fatalf("details = %+v, want only the neutral denied reason: a truncation detail tells a restricted caller the hidden frontier was larger than the read", result.Coverage.Details)
+	}
+}
+
+func cutDetail(result contextfabric.GraphContext) *contextfabric.CoverageDetail {
+	for i := range result.Coverage.Details {
+		if result.Coverage.Details[i].Code == contractsv1.ContextFabricCoverageDetailKindCensusTruncated {
+			return &result.Coverage.Details[i]
+		}
+	}
+	return nil
+}
+
+// TestAnAnchorWhoseCutReadReachedNoDeploymentIsPartial: a repository or team
+// anchor whose two-hop read was cut before it reached a deployment serves no
+// cohort, and the answer must say the read was cut.
+func TestAnAnchorWhoseCutReadReachedNoDeploymentIsPartial(t *testing.T) {
+	for _, kind := range []string{"repository", "team"} {
+		t.Run(kind, func(t *testing.T) {
+			s := projectSeed{served: map[string]string{}}
+			anchorID := kind + ":anchor"
+			s.nodes = append(s.nodes, seededNode{kind: kind, id: anchorID, label: "payments", repos: []string{"acme/anchor"}})
+			// More issues of the anchor than the read budget, each ranked
+			// ahead of the one deployment the anchor reaches.
+			for i := 0; i < 6; i++ {
+				id := fmt.Sprintf("work_item:gh:%d", i)
+				s.nodes = append(s.nodes, seededNode{kind: "work_item", id: id, label: id, repos: []string{"acme/anchor"}, workItemType: "issue"})
+				s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "work_item", id, kind, anchorID})
+			}
+			s.nodes = append(s.nodes, seededNode{kind: "deployment", id: "deployment:anchor:0", label: "deployment", repos: []string{"acme/anchor"}})
+			s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "deployment", "deployment:anchor:0", kind, anchorID})
+			adapter := newFakeAdapter(t, seededGraphConn(s.nodes, s.edges))
+			adapter.config.MaxResults = 3
+			anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectKind(kind), CanonicalID: anchorID, Label: "payments"}
+			result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, soleCommitRequest(anchor, contextfabric.CommitBasisStatistical))
+			if err != nil {
+				t.Fatalf("DiscoverContext() error = %v", err)
+			}
+			if result.Cohort != nil {
+				t.Fatalf("cohort = %+v, want none: the fixture must cut the read before the deployment", result.Cohort)
+			}
+			if !result.Coverage.Partial || cutDetail(result) == nil {
+				t.Fatalf("partial = %v, details = %+v, want partial coverage and the truncation detail", result.Coverage.Partial, result.Coverage.Details)
+			}
+		})
 	}
 }
 
@@ -446,5 +493,68 @@ func TestARestrictedCallerWithVisibleMembersIsAMembersOutcome(t *testing.T) {
 	got := telemetry.projectDeploymentWalks[0]
 	if got.Outcome != ProjectDeploymentWalkMembers || got.Members != 4 || got.Denied == 0 {
 		t.Fatalf("walk decision = %+v, want outcome members with the 4 granted deployments and the hidden hops counted", got)
+	}
+}
+
+// anchorWithIssues seeds an anchor of kind with issues issues of its own,
+// each ranked ahead of its deployments, and deployments deployments.
+func anchorWithIssues(s *projectSeed, kind, anchorID, slug string, issues, deployments int) {
+	s.nodes = append(s.nodes, seededNode{kind: kind, id: anchorID, label: anchorID, repos: []string{slug}})
+	for i := 0; i < issues; i++ {
+		id := fmt.Sprintf("work_item:%s:%d", anchorID, i)
+		s.nodes = append(s.nodes, seededNode{kind: "work_item", id: id, label: id, repos: []string{slug}, workItemType: "issue"})
+		s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "work_item", id, kind, anchorID})
+	}
+	for d := 0; d < deployments; d++ {
+		id := fmt.Sprintf("deployment:%s:%d", anchorID, d)
+		s.nodes = append(s.nodes, seededNode{kind: "deployment", id: id, label: id, repos: []string{slug}})
+		s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "deployment", id, kind, anchorID})
+	}
+}
+
+// TestACutAnchorReadWithMembersCarriesTheCutOnTheCohortOnly: when the cut
+// read still reached members, the cohort says it is truncated and no empty
+// truncation detail contradicts the members it carries.
+func TestACutAnchorReadWithMembersCarriesTheCutOnTheCohortOnly(t *testing.T) {
+	s := projectSeed{served: map[string]string{}}
+	anchorWithIssues(&s, "repository", "repository:anchor", "acme/anchor", 0, 6)
+	adapter := newFakeAdapter(t, seededGraphConn(s.nodes, s.edges))
+	adapter.config.MaxResults = 3
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:anchor", Label: "payments"}
+	result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, soleCommitRequest(anchor, contextfabric.CommitBasisStatistical))
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.Cohort == nil || len(result.Cohort.Members) == 0 || !result.Cohort.Truncated {
+		t.Fatalf("cohort = %+v, want members from the cut read and a truncated cohort", result.Cohort)
+	}
+	if cutDetail(result) != nil {
+		t.Fatalf("details = %+v, want no empty truncation detail beside a cohort that has members", result.Coverage.Details)
+	}
+}
+
+// TestAStrayCommitsCutReadIsNotTheAnchorsCut: the cut that makes an empty
+// anchored cohort partial is the anchor's own, never another committed
+// subject's.
+func TestAStrayCommitsCutReadIsNotTheAnchorsCut(t *testing.T) {
+	s := projectSeed{served: map[string]string{}}
+	anchorWithIssues(&s, "repository", "repository:anchor", "acme/anchor", 0, 0)
+	anchorWithIssues(&s, "repository", "repository:stray", "acme/stray", 6, 0)
+	adapter := newFakeAdapter(t, seededGraphConn(s.nodes, s.edges))
+	adapter.config.MaxResults = 3
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:anchor", Label: "payments"}
+	request := ownershipRoutingRequest(deploymentMembersFrame(), anchor)
+	request.Request.Options.MaxCohortMembers = 50
+	request.Resolution.Committed = append(request.Resolution.Committed,
+		contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:stray", Label: "acme/stray"})
+	result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.Cohort != nil {
+		t.Fatalf("cohort = %+v, want none: the bound anchor reaches no deployment", result.Cohort)
+	}
+	if cutDetail(result) != nil {
+		t.Fatalf("details = %+v, want no truncation detail: the anchor's own read was not cut", result.Coverage.Details)
 	}
 }

@@ -677,7 +677,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	}
 	projectDeploymentsUnlinked := -1
 	projectDeploymentsDenied := -1
-	projectDeploymentsCutEmpty := false
+	// deploymentAnchorReadCut: the read of the deployment anchor's own reach
+	// (the project walk, or the two-hop walk of a repository or team) was cut.
+	deploymentAnchorReadCut := false
 
 	for _, subject := range request.Resolution.Committed {
 		if ownershipRoutedRepoSlug != "" && subject.Kind == contextfabric.SubjectRepository && subject.Label == ownershipRoutedRepoSlug {
@@ -695,7 +697,6 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			nodes, edges, filters, walkTruncated = walk.nodes, walk.edges, walk.filters, walk.truncated
 			outcome := projectDeploymentWalkOutcome(walk, needsProjectReach(principal), err)
 			if err == nil && len(walk.nodes) == 0 {
-				projectDeploymentsCutEmpty = walk.truncated
 				switch outcome {
 				case ProjectDeploymentWalkDenied:
 					projectDeploymentsDenied = 0
@@ -730,6 +731,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		// resolvedNodes that becomes cohortNodes, so this is an OR across
 		// subjects, never the last one's value.
 		hopWalkTruncated = hopWalkTruncated || walkTruncated
+		if deploymentAnchor != nil && subject == *deploymentAnchor {
+			deploymentAnchorReadCut = walkTruncated
+		}
 		edgeFilters.Authz += filters.Authz
 		edgeFilters.TemporalWindow += filters.TemporalWindow
 		for _, n := range nodes {
@@ -1424,7 +1428,12 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		unbounded = countUnboundedValidity(cohortNodes, orderedResolved)
 	}
 
-	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0 || exactNameTruncated || cohortWhollyDeniedByAuthz || kindCensusTruncated || projectDeploymentsUnlinked >= 0 || projectDeploymentsDenied >= 0 || projectDeploymentsCutEmpty
+	// anchoredCutEmpty: the anchor's read was cut and reached no member, so
+	// members may exist past the cut. A restricted caller served the neutral
+	// denied reason is told nothing more: the project walk counts its cut
+	// before authorization.
+	anchoredCutEmpty := cohort == nil && deploymentAnchorReadCut && projectDeploymentsDenied < 0
+	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0 || exactNameTruncated || cohortWhollyDeniedByAuthz || kindCensusTruncated || projectDeploymentsUnlinked >= 0 || projectDeploymentsDenied >= 0 || anchoredCutEmpty
 	var degradedReasons []string
 	var coverageDetails []contextfabric.CoverageDetail
 	// CHAOS-4690: every degraded reason this reader composes gets a paired
@@ -1506,7 +1515,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		deniedCount := cohortKindScopedAuthzDropped
 		appendGraphDetail(contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization, true, &deniedCount, cohortDeniedReason, "context-fabric:graph")
 	}
-	if projectDeploymentsCutEmpty {
+	if anchoredCutEmpty {
 		cutReason := fmt.Sprintf("kind_census_truncated:%s:%d:%d", contextfabric.SubjectDeployment, 0, 0)
 		degradedReasons = append(degradedReasons, cutReason)
 		cutDeclared, cutServed := 0, 0
