@@ -26,7 +26,7 @@ func workItemMemberSection(in Inputs) (string, error) {
 	}
 	b.WriteString("- A period with no such verb is not guessed: the answer lists no members and offers the readings " + strings.Join(quoteAll(roleNames(in)), ", ") + ". Ask again with one verb.\n")
 	b.WriteString("- Two different roles in one clause get the same answer as no verb. A past period over a status (\"were in progress last March\") is refused, because status history is not stored.\n")
-	b.WriteString("- A period sent with the request, with no verb in the question, gives the current members and this limitation: \"" + contractsv1.ContextFabricWorkItemWindowNotAppliedLimitation + "\"\n")
+	b.WriteString("- A period sent with the request, with no verb and no status in the question, gives the current members and this limitation: \"" + contractsv1.ContextFabricWorkItemWindowNotAppliedLimitation + "\" With a status in the question, the members are filtered by that status as of now, and the status limitation says it is read over no period.\n")
 	b.WriteString("- A period filters the members by that one time field. Their status and every other fact stay as of now, not as of the period.\n")
 	b.WriteString("- Each work-item `status` fact carries `status_basis`, `status_in_vocabulary` (null when the status is missing, false when it is outside the set) and `status_provenance`. Read `status_provenance` before you quote a status.\n\n")
 	return b.String(), nil
