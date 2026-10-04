@@ -43,6 +43,7 @@ type Level string
 
 const (
 	LevelInfo  Level = "info"
+	LevelError Level = "error"
 	LevelDebug Level = "debug"
 )
 
@@ -2108,6 +2109,24 @@ var WorkItemMembershipGate = Event{
 	},
 }
 
+// TerminalSaveSkipped records a terminal answer served without a stored copy
+// because the strict work-item tuple validator refused its reading.
+var TerminalSaveSkipped = Event{
+	ID:                 "contextfabric.terminal_save_skipped",
+	Msg:                "context fabric terminal save skipped",
+	Level:              LevelError,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"org_id"},
+	BoundedAggregation: "at most one line per terminal exit, from the engine's terminal save helper; closed tokens and the result id only",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "result_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "site", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.TerminalSaveSiteVocabulary()},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.TerminalSaveOutcomeVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
 // WorkItemReuse is the one tuple decision after stored clarification handling.
 var WorkItemReuse = Event{
 	ID:                 "contextfabric.work_item_reuse",
@@ -2951,6 +2970,7 @@ var All = []Event{
 	WorkItemMembershipS1,
 	WorkItemMembershipGate,
 	WorkItemReuse,
+	TerminalSaveSkipped,
 	WorkItemStoredServing,
 	StoredResultAuthorization,
 	DirectReadAuthorization,

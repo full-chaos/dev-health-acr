@@ -5093,6 +5093,55 @@
     ]
   },
   {
+    "id": "contextfabric.terminal_save_skipped",
+    "msg": "context fabric terminal save skipped",
+    "level": "error",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "at most one line per terminal exit, from the engine's terminal save helper; closed tokens and the result id only",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "result_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "site",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "subjectless_terminal",
+          "window_veto",
+          "window_confirmation_required",
+          "structure_veto",
+          "unrecognised"
+        ]
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "skipped_payload_rejected",
+          "unrecognised"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.window_continuation_decision",
     "msg": "context fabric window continuation decision",
     "level": "info",
