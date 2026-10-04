@@ -529,6 +529,21 @@ func quarantineLogger(logger *slog.Logger, sourceName string) func(quarantineObs
 
 // ignoredLedger counts rows skipped by a documented ignore across one pass,
 // so a from-scratch projection reports one line per type, not one per page.
+//
+// LOSS WINDOW (CHAOS-8288): the ledger is in memory and log-only. A call that
+// publishes a batch does not flush it, so the count for rows on published
+// pages stays pending after the worker commits the cursor past them, until a
+// later call ends without publishing: caught up, a skip-page or overlap-walk
+// yield, or an error (a call that does not publish always flushes today). A
+// process restart in that window loses the pending count: the summed
+// ignored_count then reads low, while the rows themselves stay correctly
+// ignored (nothing is projected for them and the cursor is already past
+// them). A NextProjectionBatch call cancelled while reading ends as an error
+// and flushes. A peek call runs with the ledger cleared, so it neither flushes
+// nor counts, cancelled or not. A stop between calls and a hard kill lose the
+// pending count. Persisting the count would need new stored state, which this
+// log-only counter does not carry. TestPendingIgnoredCountFlushPoints pins the
+// flush points.
 type ignoredLedger struct {
 	mu     sync.Mutex
 	counts map[string]int
