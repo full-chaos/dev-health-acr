@@ -55,6 +55,34 @@ func RecordSubjectCandidatesAuthzDropped(ctx context.Context, count int) {
 	}
 }
 
+type workItemCensusRepositoryScopeKey struct{}
+
+// WithWorkItemCensusRepositoryScopeRecorder attaches a fresh cell to ctx that
+// RecordWorkItemCensusRepositoryScope sets. Investigate attaches it before any
+// resolution runs; finalizeServed reads it, so every serving path states the
+// scope exclusion beside the answer it composed.
+func WithWorkItemCensusRepositoryScopeRecorder(ctx context.Context) context.Context {
+	if _, ok := ctx.Value(workItemCensusRepositoryScopeKey{}).(*bool); ok {
+		return ctx
+	}
+	return context.WithValue(ctx, workItemCensusRepositoryScopeKey{}, new(bool))
+}
+
+// RecordWorkItemCensusRepositoryScope reports that the work item census ran
+// inside the caller's repository scope. A no-op when ctx carries no recorder.
+func RecordWorkItemCensusRepositoryScope(ctx context.Context) {
+	if cell, ok := ctx.Value(workItemCensusRepositoryScopeKey{}).(*bool); ok {
+		*cell = true
+	}
+}
+
+// WorkItemCensusRepositoryScopeRecorded reports whether the census ran inside
+// the caller's repository scope on this call.
+func WorkItemCensusRepositoryScopeRecorded(ctx context.Context) bool {
+	cell, ok := ctx.Value(workItemCensusRepositoryScopeKey{}).(*bool)
+	return ok && *cell
+}
+
 // ErrNoInvestigationSubjects (CHAOS-3810/CHAOS-3811) classifies the one
 // failure this ticket exists to make impossible: a canonical fact read
 // attempted with neither a discovered subject nor a cohort.

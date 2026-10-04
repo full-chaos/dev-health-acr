@@ -1390,6 +1390,7 @@ func (e *Engine) captureAcceptedReading(
 }
 
 func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, request InvestigationRequest) (served InvestigationResult, servedErr error) {
+	ctx = WithWorkItemCensusRepositoryScopeRecorder(ctx)
 	// Only the creator completes the response owner. Hosted requests borrow
 	// the transport's larger lifetime; direct calls end at this return.
 	if _, ok := WorkItemResponseOwnerFromContext(ctx); !ok {

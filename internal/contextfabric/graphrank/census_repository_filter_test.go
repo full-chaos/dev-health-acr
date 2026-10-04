@@ -273,3 +273,33 @@ func TestResolveSubjects_CensusProbeTraceNamesWhetherTheRepositoryFilterWasAppli
 		})
 	}
 }
+
+func TestRunShadowEvidenceRound_RecordsTheWorkItemCensusRepositoryScopeOnlyWhenItWasApplied(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		question string
+		applied  bool
+		want     bool
+	}{
+		{"work item, filter applied", "What is the state of CHAOS-77?", true, true},
+		{"work item, filter ignored", "What is the state of CHAOS-77?", false, false},
+		{"pull request, filter applied", "What is the state of pull request 747?", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			input := baseInput()
+			input.Question = tc.question
+			input.CensusRepositories = []string{filterRepo(1)}
+			input.NarrowSatisfiers = func(_ context.Context, _ CensusKind, ids []string) ([]string, bool) { return ids, true }
+			input.CensusFunc = func(_ context.Context, _ string, _ CensusKind, _ string, _ bool, _ contextfabric.SubjectKind, _ string, _ bool) (CensusOutcome, error) {
+				return CensusOutcome{Count: 0, CensusReadAt: time.Now().UTC(), RepositoryFilterApplied: tc.applied}, nil
+			}
+			ctx := contextfabric.WithWorkItemCensusRepositoryScopeRecorder(context.Background())
+			RunShadowEvidenceRound(ctx, input, nil)
+			if got := contextfabric.WorkItemCensusRepositoryScopeRecorded(ctx); got != tc.want {
+				t.Fatalf("recorded = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

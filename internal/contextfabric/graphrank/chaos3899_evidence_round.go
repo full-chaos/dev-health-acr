@@ -714,6 +714,9 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 			ka.CensusReadAt = outcome.CensusReadAt
 			ka.ClosureMismatch = outcome.ClosureMismatch
 			ka.RepositoryFilterApplied = outcome.RepositoryFilterApplied
+			if outcome.RepositoryFilterApplied && kind == contextfabric.SubjectWorkItem {
+				contextfabric.RecordWorkItemCensusRepositoryScope(ctx)
+			}
 			ka.StatementCount = outcome.StatementCount
 			ka.RowsRead = outcome.RowsRead
 			// CHAOS-3896 Slice B: carried through for the presentation-only
