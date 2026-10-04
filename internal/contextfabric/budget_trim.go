@@ -57,7 +57,7 @@ func budgetTrimCut(result InvestigationResult, step budgetTrimStep) (Investigati
 	if step == budgetTrimCited {
 		result = budgetTrimStripCitations(result, dropped)
 	}
-	return result, len(kept), depth.declared, true
+	return result, depth.declared - len(dropped), depth.declared, true
 }
 
 // budgetTrimCitationAnchors is the first claim each driver, finding and member

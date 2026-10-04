@@ -234,6 +234,11 @@ func TestBudgetTrimCutsCitedClaimsWhenTheUncitedOnesAreNotEnough(t *testing.T) {
 	if len(result.ClaimedFacts) != 2 {
 		t.Fatalf("claims=%d want the one anchor claim the driver keeps plus the census count", len(result.ClaimedFacts))
 	}
+	for _, row := range result.Completeness.Outcomes {
+		if row.Impact == contractsv1.ContextFabricAnswerImpactDepth && row.CauseOverrun == contractsv1.ContextFabricBudgetOverrunItems && (row.Served != 1 || row.Declared != 28) {
+			t.Fatalf("outcome row counts member claims %d of %d, want 1 of 28 (the census count is not a member claim)", row.Served, row.Declared)
+		}
+	}
 	ids := map[string]bool{}
 	for _, claim := range result.ClaimedFacts {
 		ids[claim.ClaimID] = true
@@ -296,7 +301,7 @@ func TestBudgetTrimDisclosesTheCutAsANarrowedDepthOutcome(t *testing.T) {
 	result, _ := budgetTrimServed(t, budgetTrimProdShape)
 	found := false
 	for _, row := range result.Completeness.Outcomes {
-		if row.Outcome == contractsv1.ContextFabricRequirementNarrowed && row.Impact == contractsv1.ContextFabricAnswerImpactDepth && row.CauseOverrun == contractsv1.ContextFabricBudgetOverrunItems && row.Served == 1 && row.Declared == 28 {
+		if row.Outcome == contractsv1.ContextFabricRequirementNarrowed && row.Impact == contractsv1.ContextFabricAnswerImpactDepth && row.CauseOverrun == contractsv1.ContextFabricBudgetOverrunItems && row.Served == 0 && row.Declared == 28 {
 			found = true
 		}
 	}
