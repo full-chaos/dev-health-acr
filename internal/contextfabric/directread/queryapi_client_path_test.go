@@ -1,11 +1,15 @@
 package directread_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -98,5 +102,56 @@ func TestQueryClientRefusesAMalformedPath(t *testing.T) {
 		if _, err := directread.NewHTTPQueryClientWithPath("http://h", time.Second, bad); !errors.Is(err, directread.ErrQueryClientConfig) {
 			t.Errorf("NewHTTPQueryClientWithPath(%q) = %v, want ErrQueryClientConfig", bad, err)
 		}
+	}
+}
+
+// The "context fabric operation read" Info record names the configured ops query path (path only, never the URL), so a wrong route that still answers success is visible.
+func TestOperationReadInfoRecordCarriesTheConfiguredQueryPath(t *testing.T) {
+	for _, test := range []struct{ name, path, want string }{
+		{"dedicated route", "/query/run-operation", "/query/run-operation"},
+		{"default", "", "/query"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			upstream := newPathRecorder(t)
+			client, err := directread.NewHTTPQueryClientWithPath(upstream.serve.URL+"/base", 5*time.Second, test.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var logs bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&logs, nil))
+			cat, _ := directread.DefaultCatalogue()
+			runner, err := directread.NewOperationRunner(directread.OperationRunnerConfig{
+				Catalogue: cat,
+				Gate:      directread.NewSubjectGate(newOpGraph(), nil),
+				Client:    client,
+				Logger:    logger,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := runner.Run(context.Background(), opUnrestricted(opOrgA), directread.OperationRequest{Operation: "securityAlerts"}); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			var found bool
+			for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+				var rec map[string]any
+				if err := json.Unmarshal([]byte(line), &rec); err != nil || rec["msg"] != directread.OperationReadLogMessage {
+					continue
+				}
+				found = true
+				if rec["level"] != "INFO" {
+					t.Errorf("level = %v, want INFO", rec["level"])
+				}
+				if rec["query_path"] != test.want {
+					t.Errorf("query_path = %v, want %q (record: %s)", rec["query_path"], test.want, line)
+				}
+				if strings.Contains(line, upstream.serve.URL) || strings.Contains(line, "127.0.0.1") {
+					t.Errorf("record carries the URL: %s", line)
+				}
+			}
+			if !found {
+				t.Fatalf("no operation read record in %q", logs.String())
+			}
+		})
 	}
 }
