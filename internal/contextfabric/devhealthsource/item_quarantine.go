@@ -533,8 +533,9 @@ func quarantineLogger(logger *slog.Logger, sourceName string) func(quarantineObs
 // LOSS WINDOW (CHAOS-8288): the ledger is in memory and log-only. A call that
 // publishes a batch does not flush it, so the count for rows on published
 // pages stays pending after the worker commits the cursor past them, until a
-// later call ends without publishing: caught up, a skip-page or overlap-walk
-// yield, or an error (a call that does not publish always flushes today). A
+// later call ends without publishing because the pass is over (caught up) or
+// failed (an error). A skip-page or overlap-walk yield holds the count, and a
+// from-scratch call flushes it as "abandoned" first. A
 // process restart in that window loses the pending count: the summed
 // ignored_count then reads low, while the rows themselves stay correctly
 // ignored (nothing is projected for them and the cursor is already past
@@ -559,7 +560,11 @@ func (l *ignoredLedger) add(orgID, relationshipType string, n int) {
 }
 
 // flush logs and clears the org's totals when a call ends without publishing
-// a batch (caught up, a skip-page yield, or an error). A count can repeat across
+// a batch because the pass is over (caught up) or failed (an error). A
+// skip-page yield or an unfinished overlap walk does not flush: the pass
+// continues on the next tick. A from-scratch or position-space-reset call
+// flushes the pending count as "abandoned" before it re-reads, so a rebuild's
+// pass never inherits it and it is never silently dropped. A count can repeat across
 // an errored pass and its retry: it is rows read, not unique rows.
 func (l *ignoredLedger) flush(ctx context.Context, logger *slog.Logger, sourceName, orgID, passOutcome string) {
 	if l == nil || logger == nil {
