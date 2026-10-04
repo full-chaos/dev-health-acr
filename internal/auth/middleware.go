@@ -398,7 +398,7 @@ func credentialLookupCause(err error) string {
 		return credentialLookupCauseDeadline
 	case errors.As(err, &class) && (class.Class == "connection_failure" || connectionFailureSQLState(class.SQLState)):
 		return credentialLookupCauseConn
-	case errors.As(err, &class) && strings.HasPrefix(class.SQLState, "53"):
+	case strings.HasPrefix(credentialLookupSQLState(err), "53"):
 		return credentialLookupCauseResource
 	case errors.As(err, &class) && serverUnavailableSQLStates[class.SQLState]:
 		return credentialLookupCauseServer
