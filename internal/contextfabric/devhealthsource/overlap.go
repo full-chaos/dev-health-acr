@@ -398,7 +398,7 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 	}
 	p.window.setPass(p.windowScope, pass)
 	normalizeCandidates(all, p.observeNormalization)
-	items := partitionProjectableCandidates(all, p.quarantineObserver(orgID, false))
+	items := partitionProjectableCandidates(all, p.quarantineObserver(orgID))
 	if !carriesPayload(items) {
 		// Nothing to apply: rows that are only quarantined count as seen
 		// now, so they are not re-judged every tick.

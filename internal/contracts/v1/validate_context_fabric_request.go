@@ -120,6 +120,14 @@ func (r ContextFabricInvestigationRequest) Validate() error {
 	if r.SynthesisMode != "" && !ValidContextFabricSynthesisMode(r.SynthesisMode) {
 		return fmt.Errorf("synthesis_mode is invalid")
 	}
+	if r.SuppliedSynthesis != nil {
+		if r.SynthesisMode != ContextFabricSynthesisModeClient {
+			return fmt.Errorf("supplied_synthesis requires synthesis_mode %q", ContextFabricSynthesisModeClient)
+		}
+		if err := r.SuppliedSynthesis.Validate(); err != nil {
+			return err
+		}
+	}
 	if err := r.RequestedScope.Validate(); err != nil {
 		return fmt.Errorf("requested_scope: %w", err)
 	}

@@ -39,6 +39,10 @@ const (
 	RejectionReasonDirectJudgmentMissing      SynthesisRejectionReason = "direct_judgment_missing"
 	RejectionReasonDeterministicAnswerMissing SynthesisRejectionReason = "deterministic_answer_missing"
 	RejectionReasonEvidenceUnknown            SynthesisRejectionReason = "evidence_unknown"
+	// RejectionReasonOutputSchemaMismatch: a draft a caller wrote is not the
+	// declared synthesis output schema (a wrong type, a missing required
+	// field, an unknown field, or not one JSON object).
+	RejectionReasonOutputSchemaMismatch SynthesisRejectionReason = "output_schema_mismatch"
 
 	// Claimed facts.
 	RejectionReasonClaimInvalid           SynthesisRejectionReason = "claim_invalid"
@@ -122,6 +126,7 @@ var canonicalSynthesisRejectionReasons = map[SynthesisRejectionReason]SynthesisR
 	RejectionReasonDirectJudgmentMissing:            RejectionReasonDirectJudgmentMissing,
 	RejectionReasonDeterministicAnswerMissing:       RejectionReasonDeterministicAnswerMissing,
 	RejectionReasonEvidenceUnknown:                  RejectionReasonEvidenceUnknown,
+	RejectionReasonOutputSchemaMismatch:             RejectionReasonOutputSchemaMismatch,
 	RejectionReasonClaimInvalid:                     RejectionReasonClaimInvalid,
 	RejectionReasonClaimRowsModelAuthored:           RejectionReasonClaimRowsModelAuthored,
 	RejectionReasonClaimTimeSeriesRowsModelAuthored: RejectionReasonClaimTimeSeriesRowsModelAuthored,

@@ -255,6 +255,45 @@
       "pattern": "^[A-Za-z0-9._:/-]{1,128}$",
       "description": "Optional name of the model you ran, recorded as provenance only."
     },
+    "synthesis_output": {
+      "type": "object",
+      "description": "Optional, with synthesis client and synthesis_contract. The answer draft your own model wrote from the synthesis_input of the first answer to the same question, sent unchanged: one object of the schema acr://contract/synthesis-output. The service validates it exactly as it validates its own model output and makes no model call; at most 262144 bytes serialized."
+    },
+    "synthesis_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Required with synthesis_output. The contract and input_sha256 of the synthesis_input the draft was written from. All four values are required.",
+      "properties": {
+        "model_output_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "synthesis_input.contract.model_output_version, unchanged."
+        },
+        "prompt_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "synthesis_input.contract.prompt_version, unchanged."
+        },
+        "system_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "synthesis_input.contract.system_sha256, unchanged."
+        },
+        "input_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "synthesis_input.input_sha256, unchanged."
+        }
+      },
+      "required": [
+        "model_output_version",
+        "prompt_version",
+        "system_sha256",
+        "input_sha256"
+      ]
+    },
     "synthesis": {
       "type": "string",
       "enum": [
@@ -263,6 +302,40 @@
       "description": "Optional. Send client to have the service skip its own answer writing and return synthesis_input: the model input for your own model, bounded in size (byte for byte the service's own input when its bounded flag is false), to be run with the prompt synthesize_answer (the input is the user message). The stored result then carries facts and evidence only, with no model-written text. Leave it out for the service-written answer."
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "required": ["synthesis_output"]
+      },
+      "then": {
+        "required": ["synthesis_contract"]
+      }
+    },
+    {
+      "if": {
+        "required": ["synthesis_contract"]
+      },
+      "then": {
+        "required": ["synthesis_output"]
+      }
+    },
+    {
+      "if": {
+        "anyOf": [
+          {"required": ["synthesis_output"]},
+          {"required": ["synthesis_contract"]}
+        ]
+      },
+      "then": {
+        "required": ["synthesis"],
+        "properties": {
+          "synthesis": {
+            "const": "client"
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "ConversationTurn": {
       "type": "object",

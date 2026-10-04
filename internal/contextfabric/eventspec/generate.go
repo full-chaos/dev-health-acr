@@ -226,6 +226,8 @@ func goVarName(e Event) string {
 		return "SuppliedInterpretationDecision"
 	case ClientSynthesisDecision.ID:
 		return "ClientSynthesisDecision"
+	case SuppliedSynthesisDecision.ID:
+		return "SuppliedSynthesisDecision"
 	case GraphCountCheckFinished.ID:
 		return "GraphCountCheckFinished"
 	default:

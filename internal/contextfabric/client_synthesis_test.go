@@ -78,10 +78,16 @@ type clientRig struct {
 	// synthesizer replaces the production synthesizer when set.
 	synthesizer AnswerSynthesizer
 	reuse       *InvestigationResult
-	encoded     [][]byte
-	factReads   int
-	lookups     int
-	engine      *Engine
+	// supplied, sink and engineTelemetry stand in for the supplied
+	// interpretation runtime, the receipt sink and the engine's telemetry
+	// when a test sets them.
+	supplied        SuppliedInterpretationRuntime
+	sink            ModelReceiptSink
+	engineTelemetry EngineTelemetry
+	encoded         [][]byte
+	factReads       int
+	lookups         int
+	engine          *Engine
 }
 
 func newClientRig(t *testing.T, mutate func(*clientRig)) *clientRig {
@@ -112,16 +118,19 @@ func newClientRig(t *testing.T, mutate func(*clientRig)) *clientRig {
 	if mutate != nil {
 		mutate(rig)
 	}
+	if rig.engineTelemetry == nil {
+		rig.engineTelemetry = rig.telemetry
+	}
 	var synthesizer AnswerSynthesizer = RuntimeAnswerSynthesizer{
-		Runtime: rig.runtime, Options: RuntimeAnswerSynthesizerOptions{ServiceVersion: "acr-test", Backend: "graph"},
-		Telemetry: rig.telemetry, ClientSynthesis: rig.assembly,
+		Runtime: rig.runtime, Sink: rig.sink, Options: RuntimeAnswerSynthesizerOptions{ServiceVersion: "acr-test", Backend: "graph"},
+		Telemetry: rig.engineTelemetry, ClientSynthesis: rig.assembly,
 	}
 	if rig.synthesizer != nil {
 		synthesizer = rig.synthesizer
 	}
 	events := []string{}
 	deps := EngineDependencies{
-		Interpreter: RuntimeQuestionInterpreter{Runtime: rig.runtime},
+		Interpreter: RuntimeQuestionInterpreter{Runtime: rig.runtime, Supplied: rig.supplied},
 		Graph:       rig.graph,
 		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
 			rig.factReads++
@@ -131,7 +140,7 @@ func newClientRig(t *testing.T, mutate func(*clientRig)) *clientRig {
 		}),
 		Synthesizer: synthesizer,
 		Results:     rig.store,
-		Telemetry:   rig.telemetry,
+		Telemetry:   rig.engineTelemetry,
 		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
 			rig.lookups++
 			if rig.reuse != nil {
