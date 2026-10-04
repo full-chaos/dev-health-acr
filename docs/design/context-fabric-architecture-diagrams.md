@@ -1,8 +1,8 @@
 # Context Fabric architecture diagrams (CHAOS-4133)
 
 Mermaid diagrams covering the question-answering pipeline, the
-candidate-pool mechanism that hid CHAOS-4348, the live subject/graph data
-model, the fact data model, the two-turn trial harness's measurement
+candidate-pool mechanism that hid CHAOS-4348, the subject/graph entity
+tree (§3), the fact data model, the two-turn trial harness's measurement
 fields, and the N-turn confirmation-carry class (CHAOS-4360). Built
 against live code (`codegraph_explore`, file:line cited
 throughout) and the live kiac trial graph (`kubectl exec ... redis-cli
@@ -400,70 +400,79 @@ same PR that merges that fix, per the update rule above.
 
 ---
 
-## 3 — Subject hierarchy and graph data model
+## 3 — Subject hierarchy and graph data model: the entity tree
 
-Node/edge shape verified live against the kiac trial graph (org
-`70d529e0-3c06-4597-8480-794fd02328b6`, `GRAPH.QUERY acr-cf-fa7030e2106de7411bfbf8ebce74c620-e2`,
-2026-08-26). All nodes carry label `Subject` with a `subject_kind` property;
-all edges carry relationship type `Relates` with a `relation_type` property
-(never a distinct Cypher relationship type per edge kind).
+Every node carries label `Subject` with a `subject_kind` property; every edge
+carries relationship type `Relates` with a `relation_type` property (never a
+distinct Cypher relationship type per edge kind). The edge names below are
+`relation_type` values.
+
+The tree (ruled, every integration): **Repository <> Pull request <> Issue <>
+Project**. A pull request or merge request is itself a `work_item` (type `pr`
+or `merge_request`); an issue is a `work_item` of any other type.
 
 ```mermaid
-flowchart TD
-  ORG["organization<br/>(1 node, live)<br/>ZERO edges to/from it in the live graph"]
-  TEAM["team<br/>(3 nodes)"]
-  PROJ["project<br/>(20 nodes, canonical_id project.v2:...)"]
-  REPO["repository<br/>(11 nodes)"]
-  WI["work_item<br/>(3327 nodes)"]
-  PR["pull_request<br/>(2926 nodes)"]
-  PRR["pull_request_review<br/>(1121 nodes)"]
-  CI["ci_pipeline_run<br/>(27902 nodes)"]
-  DEP["deployment<br/>(676 nodes)"]
-  INC["incident<br/>(SupportedSubjectKind exists in code;<br/>0 nodes in this org's live graph)"]
+flowchart TB
+  REPO["Repository<br/>repos"]
+  PR["Pull request / merge request<br/>work_item, type pr or merge_request"]
+  ISSUE["Issue<br/>work_item, any other type"]
+  PROJ["Project<br/>projects"]
+  TEAM["Team<br/>teams"]
+  DEP["Deployment<br/>deployments"]
+  PRN["pull_request node<br/>git_pull_requests<br/>(no edge to the PR work item)"]
 
-  WI -->|"OWNED_BY_TEAM (3327)<br/>work_item_team_attributions,<br/>is_primary=1"| TEAM
-  WI -->|"BELONGS_TO_PROJECT (3098)<br/>project_membership_presence view<br/>teams_projects_edges.go"| PROJ
-  PROJ -->|"OWNED_BY_TEAM (3)<br/>team_project_ownership, collapsed<br/>teams_projects.go Trap C"| TEAM
-  REPO -->|"OWNED_BY_TEAM (CHAOS-6561, new)<br/>team_repo_ownership, collapsed<br/>queryRepositoryTeams"| TEAM
-  WI -->|"BELONGS_TO_REPOSITORY (6, rare)"| REPO
-  PR -->|"BELONGS_TO_REPOSITORY (2926)"| REPO
-  CI -->|"BELONGS_TO_REPOSITORY (27902)"| REPO
-  DEP -->|"BELONGS_TO_REPOSITORY (676)"| REPO
-  PRR -->|"BELONGS_TO_PULL_REQUEST (1121)"| PR
-  WI -->|"PART_OF (2106) / RELATES_TO (657) /<br/>BLOCKS (505) / DUPLICATES (11)"| WI
+  PR ==>|"BELONGS_TO_REPOSITORY<br/>the PR row's work_items.repo_id<br/>queryWorkItems"| REPO
+  PR ==>|"RELATES_TO<br/>work_item_dependencies link row (PR = source)<br/>queryWorkItemDependencies"| ISSUE
+  ISSUE ==>|"BELONGS_TO_PROJECT<br/>project_membership_presence<br/>querySubjectProjectMemberships"| PROJ
+  REPO -.->|"OWNED_BY_TEAM<br/>team_repo_ownership<br/>queryRepositoryTeams"| TEAM
+  PROJ -.->|"OWNED_BY_TEAM<br/>team_project_ownership<br/>queryProjectTeams"| TEAM
+  DEP -.->|"BELONGS_TO_REPOSITORY<br/>deployments.repo_id<br/>queryDeployments"| REPO
+  REPO x-.-|"NOT tree: BELONGS_TO_REPOSITORY<br/>of the issue's own repo_id"| ISSUE
+  ISSUE -.-x|"NOT ownership: OWNED_BY_TEAM<br/>work_item_team_attributions (attribution)"| TEAM
+  PRN -.->|"BELONGS_TO_REPOSITORY"| REPO
+  PRN ~~~ PR
 
-  REPO -.->|"NO edge exists, either direction<br/>(0 live, by design -- 'project' here is<br/>work-tracking, not a repo group)"| PROJ
-  ORG -.->|"NO edge exists at all (0 live)"| TEAM
-
-  classDef gap fill:#78350f,stroke:#f59e0b,color:#ffffff
-  classDef fixed fill:#14532d,stroke:#22c55e,color:#ffffff
-  class REPO,PROJ,TEAM,ORG gap
+  classDef tree fill:#14532d,stroke:#22c55e,color:#ffffff
+  classDef leaf fill:#1e3a5f,stroke:#60a5fa,color:#ffffff
+  classDef aside fill:#3f3f46,stroke:#a1a1aa,color:#ffffff
+  class REPO,PR,ISSUE,PROJ tree
+  class TEAM,DEP leaf
+  class PRN aside
 ```
 
-**Caption.** The hierarchy is **not** organization → team → project →
-repository → activity. Live data shows organization has zero edges to
-anything, and there is **no direct repository↔project edge at all, by
-design** (repository→team ownership became an edge in CHAOS-6561 -- see the
-update below; before it there was none)
-(`docs/design/context-fabric-team-project-subjects.md` §9: "No new fact
-providers... project gets zero fact-provider entries... `project` here is a
-work-tracking project, Linear-shaped, not a repository group. There is no
-direct project↔repository edge"). The only path from a project or team to
-a repository-scoped activity kind (PR, review, CI run, deployment) is
-**through `work_item`** — `project <-BELONGS_TO_PROJECT- work_item
--BELONGS_TO_REPOSITORY-> repository -BELONGS_TO_REPOSITORY<-
-{pull_request, ci_pipeline_run, deployment}`
-(`docs/design/context-fabric-fact-scope.md` §1) — and that chain is
-explicitly an **activity proxy**, never an ownership claim: "repositories
-with at least one project-linked work item," disclosed as such via
-`FactScopeBasisActivityProxy`. Producers: work_item edges from
-`internal/contextfabric/devhealthsource/teams_projects_edges.go`
-(`querySubjectProjectMemberships`, `queryWorkItemTeams`); repository/PR/CI/
-deployment/review edges from `devhealthsource/tables.go`; project→team from
-`teams_projects.go`; repository→team from `teams_projects_edges.go`
-(`queryRepositoryTeams`, CHAOS-6561 -- see the update below). `incident` is a `SubjectKind` the code supports
-end-to-end but this org's live graph currently has zero incident nodes —
-absence of evidence, not absence of a code path.
+**Legend.** Every integration (each issue tracker, each code host) writes these
+same rows; no edge is provider-specific. Producers are in
+`internal/contextfabric/devhealthsource` (`tables.go`, `teams_projects_edges.go`).
+
+- Thick edges, green nodes: the ruled tree. Repository <- pull request (the
+  pull-request work item's own repository), pull request - issue (the link
+  row), issue -> project. Tree membership is found only by walking these edges.
+- Dotted edges: hang off the tree. A team owns a repository or a project; a
+  deployment belongs to a repository.
+- Crossed edges: exist in the graph but are never tree membership. An issue's
+  own `repo_id` is not its link to a repository, and a work item's team
+  attribution is not ownership.
+- The grey `pull_request` node is a second node for the same pull request,
+  projected from `git_pull_requests` (reviews and CI hang off it). No edge
+  joins it to the pull-request work item, so the tree does not pass through it.
+
+**The two rules.**
+
+1. A link is an actual linked row: a `work_item_dependencies` row whose two
+   ends are real work items. Never an issue-key prefix, never an `extkey:`
+   stub, never an issue's own repository column.
+2. Team = ownership only (`team_repo_ownership`, `team_project_ownership`).
+   Never person membership, never a computed attribution.
+
+**Code that does not yet follow the tree.** Some reads still reach a
+repository through a work item's own `repo_id`, as an activity proxy
+(`FactScopeBasisActivityProxy`), not as tree membership: the CHAOS-4099
+fact-scope expander (`devhealthfacts/chaos4099_scope_expander.go`,
+`projectRepositories`, `projectRepositoriesAsOf`, `teamRepositories`; chains
+declared in `fact_scope.go`) and the team blocker rollup
+(`devhealthfacts/dependencies.go`). Until they move to the tree, their answers
+carry the activity-proxy disclosure. `incident` is a supported `SubjectKind`
+with its own producer; it is not part of the tree.
 
 **Wildcard authorization closed (2026-09-28, CHAOS-7080):** the shared
 predicate `graphrank.AuthorizedAttributes` no longer admits a node or edge
@@ -500,17 +509,14 @@ merged. Full corrected mechanism, the pipeline this feeds into
 (ranking/drivers/Rows), and the score formula:
 [context-fabric-subject-model-and-cohort-answers.md](context-fabric-subject-model-and-cohort-answers.md).
 
-**Clarification (CHAOS-4363):** the "NO edge exists" markers above describe
-the **graph** projection only. `HealthProvider`'s new project-subject rollup
+**Clarification (CHAOS-4363):** the absence of a direct repository↔project
+edge describes the **graph** projection only. `HealthProvider`'s new project-subject rollup
 (diagram 4) reads `team_repo_ownership` directly off **ClickHouse** -- a
 real per-team repository-ownership table this package had not read before
 -- to chain `project -> team_project_ownership -> team_repo_ownership ->
 repository` for the `compounding_risk_daily` repo layer. That is a
 ClickHouse fact-producer join, not a graph edge: it does not add a
-`REPO -> TEAM`/`REPO -> PROJ` edge to this diagram, and the live trial data
-plane currently holds zero `team_repo_ownership` rows for the org above (an
-upstream ingestion gap, not a producer defect -- see this ticket's CH
-readback evidence).
+`REPO -> PROJ` edge to this diagram.
 
 **Update (2026-08-30, CHAOS-4577):** that zero-row gap also starves
 `queryTeams`' authorization join above -- with no CURRENT `team_repo_ownership`
@@ -576,11 +582,9 @@ assertions are ignored by both.
 `internal/contextfabric/devhealthsource/teams_projects.go:54` and
 `internal/contextfabric/devhealthsource/clickhouse.go:29` both assert,
 in a CHAOS-3898-era comment, "live-verified zero project.v2:-shaped nodes
-exist anywhere in that org's graph today." The live kiac graph now holds 20
-project nodes, every one with a `project.v2:<provider>:<id>` canonical id
-(e.g. `project.v2:linear:2fb2c2b3-c52a-441a-b5f6-0453ce894e32`) — a rebuild
-has happened since that comment was written (the graph is on lifecycle
-epoch 2). The comment is a historical decision record (why the version was
+exist anywhere in that org's graph today." Project nodes are now projected with a
+`project.v2:<provider>:<id>` canonical id; a rebuild has happened since that
+comment was written. The comment is a historical decision record (why the version was
 bumped) and is not wrong about *why*, but its present-tense "today" claim is
 stale and could mislead a reader checking current graph state.
 
