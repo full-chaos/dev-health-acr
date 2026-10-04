@@ -72,8 +72,8 @@ func mutationRows(t *testing.T, in inputs) []registryRow {
 // acr's recomputation, and every row's kind equals acr's parse.
 func TestVendoredDigestsRecompute(t *testing.T) {
 	in := vendoredInputs(t)
-	if len(in.Registry.Rows) != 58 {
-		t.Fatalf("vendored registry has %d rows, the dump at ops cb758a29 has 58", len(in.Registry.Rows))
+	if len(in.Registry.Rows) != 68 {
+		t.Fatalf("vendored registry has %d rows, the dump at ops a42ff657 has 68", len(in.Registry.Rows))
 	}
 	for _, row := range in.Registry.Rows {
 		if got := directread.DocumentDigest(row.Document); got != row.Digest {
@@ -165,7 +165,7 @@ func TestServedCounts(t *testing.T) {
 		}
 		return n
 	}
-	wantUnrestricted := []string{"acrRepositoryScopes", "capacityForecast", "capacityForecasts", "catalogValues", "cognitiveLoad", "complexityTimeseries", "compoundingRisk", "home", "hotspots", "investmentBreakdown", "investmentFull", "recommendations", "securityOverview", "throughputForecast", "workGraphArtifacts", "workGraphEdges", "workGraphFlow", "workItemTeamAttributions"}
+	wantUnrestricted := []string{"acrRepositoryScopes", "capacityCompletionDistribution", "capacityForecast", "capacityForecasts", "catalogValues", "cognitiveLoad", "complexityTimeseries", "compoundingRisk", "home", "hotspots", "investmentBreakdown", "investmentFull", "recommendations", "securityOverview", "throughputForecast", "workGraphArtifacts", "workGraphEdges", "workGraphFlow", "workItemTeamAttributions"}
 	if got := names(cat.Operations(directread.CallerUnrestricted)); !slices.Equal(got, wantUnrestricted) {
 		t.Fatalf("unrestricted = %v (%d), want the 16 of design D.3 plus home, recommendations and workItemTeamAttributions, minus the dark securityAlerts", got, len(got))
 	}

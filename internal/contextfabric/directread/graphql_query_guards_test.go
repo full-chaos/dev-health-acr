@@ -493,7 +493,7 @@ func TestT18GraphQLEveryRootRefusesEveryGeneratedAttack(t *testing.T) {
 		if !strings.Contains(leaf, ".") {
 			t.Fatalf("%s: first output %q is not below the root", field, leaf)
 		}
-		if unlisted := unlistedFieldUnder(t, h.policy, field, op); unlisted != "" {
+		if unlisted := unlistedFieldUnder(t, h.policy, field, ops); unlisted != "" {
 			q := gqlQueryFor(t, op, vars, append(outputPaths(op), unlisted), "")
 			attacks = append(attacks, struct {
 				name  string
@@ -669,7 +669,7 @@ func outputPaths(op *directread.OperationPolicy) []string {
 
 // unlistedFieldUnder finds, from the SDL, a leaf field below the root that
 // takes no argument and is not on the operation's output allowlist.
-func unlistedFieldUnder(t *testing.T, policy *directread.GraphQLPolicy, field string, op *directread.OperationPolicy) string {
+func unlistedFieldUnder(t *testing.T, policy *directread.GraphQLPolicy, field string, ops []*directread.OperationPolicy) string {
 	t.Helper()
 	schema := policy.Schema()
 	def := schema.Query.Fields.ForName(field)
@@ -696,7 +696,7 @@ func unlistedFieldUnder(t *testing.T, policy *directread.GraphQLPolicy, field st
 				walk(f.Type.Name(), child, depth+1)
 				continue
 			}
-			if !op.OutputAllowed(child) {
+			if !slices.ContainsFunc(ops, func(op *directread.OperationPolicy) bool { return op.OutputAllowed(child) }) {
 				found = child
 			}
 		}

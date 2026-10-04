@@ -515,6 +515,7 @@ func (e *Engine) terminalResult(
 	// without a fact read.
 	temporallyLimited, temporalDisplaced := appendTemporalLimitations(limitations, interpretation)
 	limitations = temporallyLimited
+	limitations, conflictDisplaced := appendBoundedLimitations(limitations, statedRangeConflictLimitations(windowCanon))
 	answer := statusSentence(status, resolution)
 	if status == InvestigationClarificationRequired && resolution.ClarificationPrompt != "" {
 		answer += " " + resolution.ClarificationPrompt
@@ -565,7 +566,7 @@ func (e *Engine) terminalResult(
 		Paths:                   []RelationshipPath{},
 		Conflicts:               []Finding{},
 		Limitations:             limitations,
-		LimitationsDisplaced:    degradedDisplaced + temporalDisplaced,
+		LimitationsDisplaced:    degradedDisplaced + temporalDisplaced + conflictDisplaced,
 		RefusalBasis:            refusalBasis,
 		EvidenceRefIDs:          []string{},
 		ClaimedFacts:            []ClaimedFact{},

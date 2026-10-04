@@ -3,11 +3,11 @@
   "generator": "cmd/operationpolicy",
   "source": {
     "repository": "full-chaos/dev-health-ops",
-    "commit": "0ec8b693bedeff6cfaf678ad9a5dbd0b06114651",
+    "commit": "a42ff6572434e7a0398a8700555279b9a74adb45",
     "tool": "go run ./cmd/registrydump -file internal/queryapi/server/query_route.go",
-    "schema_digest": "sha256:330d0ebf0ea59fce8d0b1bb14887cad8e5b3f6971ad02618afa9844b6fac7a50",
-    "registry_sha256": "1cda55c485ab0f115bf4af0198362c8b198194bf63c918b342257e7f9d2ccd23",
-    "registry_rows": 58
+    "schema_digest": "sha256:fdff794c3fa3de956e07061645b7494cca33ed760f9405d405c912ae01d3e34b",
+    "registry_sha256": "b53f5e5e5e94fcf7032659d6b724bafda43a327f3257212c51c21bdcb6160ae1",
+    "registry_rows": 59
   },
   "person_name_tokens": [
     "actor",
@@ -85,11 +85,11 @@
       "disclosure": []
     },
     {
-      "name": "capacityForecast",
-      "document_operation_name": "CapacityForecast",
+      "name": "capacityCompletionDistribution",
+      "document_operation_name": "CapacityCompletionDistribution",
       "kind": "query",
-      "digest": "b4fb8f075aba9954714f10f7f4451242d969548d6392d778dae1177759f80780",
-      "document_text": "query CapacityForecast($orgId: String!, $input: CapacityForecastInput) {\n  capacityForecast(orgId: $orgId, input: $input) {\n    forecastId\n    computedAt\n    teamId\n    workScopeId\n    backlogSize\n    targetItems\n    targetDate\n    p50Date\n    p85Date\n    p95Date\n    p50Days\n    p85Days\n    p95Days\n    p50Items\n    p85Items\n    p95Items\n    throughputMean\n    throughputStddev\n    historyDays\n    insufficientHistory\n    highVariance\n    __typename\n  }\n}",
+      "digest": "52cfd38c3f8346aec89fe807abda5a72fa24596a0fad9f302ca6121510b302e9",
+      "document_text": "query CapacityCompletionDistribution($orgId: String!, $input: CapacityForecastInput) {\n  capacityForecast(orgId: $orgId, input: $input) {\n    completionDistribution {\n      days {\n        value\n        count\n        __typename\n      }\n      items {\n        value\n        count\n        __typename\n      }\n      __typename\n    }\n    __typename\n  }\n}",
       "cost_class": "compute",
       "deadline_seconds": 30,
       "max_in_flight_per_org": 1,
@@ -119,6 +119,193 @@
             "kind": "team",
             "acr_prefix": "team:",
             "ops_form": "bare_id"
+          }
+        },
+        {
+          "path": "input.teamIds",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "not on the variable allowlist of CapacityCompletionDistribution"
+          }
+        },
+        {
+          "path": "input.workScopeId",
+          "type": "String",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "work scope id form between acr and ops is UNCONFIRMED (POLICY-ARTIFACT-v0)"
+          }
+        },
+        {
+          "path": "input.targetItems",
+          "type": "Int",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "min": 1,
+          "max": 100000
+        },
+        {
+          "path": "input.targetDate",
+          "type": "Date",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "input.historyDays",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "90",
+          "allowed": true,
+          "source": "client",
+          "min": 1,
+          "max": 180
+        },
+        {
+          "path": "input.simulations",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "10000",
+          "allowed": true,
+          "source": "client",
+          "min": 1,
+          "max": 10000
+        }
+      ],
+      "person_variables": [],
+      "constraints": [
+        {
+          "kind": "max_days_ahead",
+          "path": "input.targetDate",
+          "max_days": 365,
+          "code": "variable_out_of_range",
+          "reason": "targetDate at most 365 days ahead (design D.6)"
+        }
+      ],
+      "scopes": [
+        {
+          "caller": "unrestricted",
+          "served": true,
+          "basis": "[ops] capacityforecast/clickhouse.go:47-61 apply teamId (RM §16)"
+        },
+        {
+          "caller": "restricted",
+          "served": false,
+          "refusal": {
+            "code": "operation_not_served_for_caller",
+            "reason": "no repository scope; team aggregate with compute cost ([ops] capacityforecast/clickhouse.go:47-61; capacityforecast.go:130; RM §16); REFUSED until the K2 team path is read"
+          },
+          "basis": "no repository scope; team aggregate with compute cost ([ops] capacityforecast/clickhouse.go:47-61; capacityforecast.go:130; RM §16); REFUSED until the K2 team path is read"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "capacityForecast.completionDistribution.days[*].value",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.completionDistribution.days[*].count",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.completionDistribution.days[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "capacityForecast.completionDistribution.items[*].value",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.completionDistribution.items[*].count",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.completionDistribution.items[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "capacityForecast.completionDistribution.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "capacityForecast.__typename",
+          "type": "String",
+          "leaf": "typename"
+        }
+      ],
+      "withheld_outputs": [],
+      "disclosure": [],
+      "notes": [
+        "non-deterministic: a random seed per call, no seed argument (capacityforecast.go:139-148; A1.1)",
+        "null result = no history, indistinguishable from no target (capacityforecast.go:229-260)"
+      ]
+    },
+    {
+      "name": "capacityForecast",
+      "document_operation_name": "CapacityForecast",
+      "kind": "query",
+      "digest": "d95197012e32056fcece1f8975d953e7465bb112354cf4201e87b39375f933ef",
+      "document_text": "query CapacityForecast($orgId: String!, $input: CapacityForecastInput) {\n  capacityForecast(orgId: $orgId, input: $input) {\n    forecastId\n    computedAt\n    teamId\n    workScopeId\n    backlogSize\n    targetItems\n    targetDate\n    p50Date\n    p85Date\n    p95Date\n    p50Days\n    p85Days\n    p95Days\n    p50Items\n    p85Items\n    p95Items\n    throughputMean\n    throughputStddev\n    historyDays\n    insufficientHistory\n    highVariance\n    completionDistribution {\n      runs\n      unfinishedRuns\n      horizonDays\n      days {\n        value\n        count\n        cumulativeShare\n        __typename\n      }\n      items {\n        value\n        count\n        cumulativeShare\n        __typename\n      }\n      __typename\n    }\n    __typename\n  }\n}",
+      "cost_class": "compute",
+      "deadline_seconds": 30,
+      "max_in_flight_per_org": 1,
+      "variables": [
+        {
+          "path": "orgId",
+          "type": "String!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "acr_principal_org"
+        },
+        {
+          "path": "input",
+          "type": "CapacityForecastInput",
+          "kind": "object",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "input.teamId",
+          "type": "String",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "subject": {
+            "kind": "team",
+            "acr_prefix": "team:",
+            "ops_form": "bare_id"
+          }
+        },
+        {
+          "path": "input.teamIds",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "not on the variable allowlist of CapacityForecast"
           }
         },
         {
@@ -305,33 +492,69 @@
           "leaf": "scalar"
         },
         {
-          "path": "capacityForecast.__typename",
-          "type": "String",
-          "leaf": "typename"
+          "path": "capacityForecast.completionDistribution.runs",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.completionDistribution.unfinishedRuns",
+          "type": "Int",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.completionDistribution.horizonDays",
+          "type": "Int!",
+          "leaf": "scalar"
         },
         {
           "path": "capacityForecast.completionDistribution.days[*].value",
           "type": "Int!",
-          "leaf": "scalar",
-          "beyond_document": true
+          "leaf": "scalar"
         },
         {
           "path": "capacityForecast.completionDistribution.days[*].count",
           "type": "Int!",
-          "leaf": "scalar",
-          "beyond_document": true
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.completionDistribution.days[*].cumulativeShare",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.completionDistribution.days[*].__typename",
+          "type": "String",
+          "leaf": "typename"
         },
         {
           "path": "capacityForecast.completionDistribution.items[*].value",
           "type": "Int!",
-          "leaf": "scalar",
-          "beyond_document": true
+          "leaf": "scalar"
         },
         {
           "path": "capacityForecast.completionDistribution.items[*].count",
           "type": "Int!",
-          "leaf": "scalar",
-          "beyond_document": true
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.completionDistribution.items[*].cumulativeShare",
+          "type": "Float!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.completionDistribution.items[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "capacityForecast.completionDistribution.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "capacityForecast.__typename",
+          "type": "String",
+          "leaf": "typename"
         }
       ],
       "withheld_outputs": [],
@@ -6050,7 +6273,7 @@
     {
       "name": "aiAttributedPrs",
       "kind": "query",
-      "digest": "6ed54ebe5a535e28c16c1e903f64eda9fbbc32577465ccebe7fa30e2075f2f3e",
+      "digest": "186aa8ced0a7ab707911c61c829f561157913dc9c5176d665705394cc84f6bba",
       "code": "unknown_operation",
       "reason": "reviewer and author data (design D.3)"
     },
@@ -6078,14 +6301,14 @@
     {
       "name": "aiImpactSummary",
       "kind": "query",
-      "digest": "7e84d73b35104dd2ec3ece19c163cd8247c4637aa93df3b5f1449394c4539328",
+      "digest": "7dfe2a4ab59046a24963210cb68b8157e505dfd78ee2c7fe81382d772ae1d6d0",
       "code": "unknown_operation",
       "reason": "AI analytics: later slice (design D.3)"
     },
     {
       "name": "aiOpportunities",
       "kind": "query",
-      "digest": "fad9b02c4e8a4a7023bf9a7ba988a04346473cdd9d840ec76d611f92e1b5af2e",
+      "digest": "7cd9dfba84aa25a1c3b931819f29729e60f6fa395a1c1f2389ddabd329d3d6e0",
       "code": "unknown_operation",
       "reason": "AI analytics: later slice (design D.3)"
     },
@@ -6106,7 +6329,7 @@
     {
       "name": "aiWorkflowDrilldown",
       "kind": "query",
-      "digest": "42bfc78e3f533b51578eb3575c027a61f9c81bfc9a7bf843c4c2f9979972fea4",
+      "digest": "5f489ef8f1ba43d3fa2c84ec607d46882fcace1ff8a9913ece369b85e1e60afa",
       "code": "unknown_operation",
       "reason": "AI analytics: later slice (design D.3)"
     },
@@ -6190,7 +6413,7 @@
     {
       "name": "improveOpportunities",
       "kind": "query",
-      "digest": "8890d7aeddfebaa9683d6c8834c82b059e345af1dbf42db14eebba840fcd87d2",
+      "digest": "645f285412fb2c9517238aabca7e1204f530b66748893b748c0e5160cccf35c4",
       "code": "unknown_operation",
       "reason": "not in slice 1: no resolver path read in step 0 (default REFUSED, design D.4)"
     },
@@ -6211,7 +6434,7 @@
     {
       "name": "operatingReview",
       "kind": "query",
-      "digest": "c376a5dc191fd8d8759578ccd9dffaffadcd621bdc0625fe62c4c08619f3363e",
+      "digest": "d26e965931987ac4bdf607f43f542e2bd3f49f91561400287014a161371726e9",
       "code": "unknown_operation",
       "reason": "its investment part reads investment_metrics_daily, neither the acr basis nor the canonical mix ([ops] operatingreview/operatingreview.go:840; K14 ruling, table K14-A)"
     },
@@ -6253,7 +6476,7 @@
     {
       "name": "reviewEdges",
       "kind": "query",
-      "digest": "4a759f9e3d3e903b03a3aae8039b3bdca2ed69b3af25a0b20f01c1da55d97123",
+      "digest": "6b45584e433c1f7d281f29fd17044858457f5334aa282531463060d676a07bc9",
       "code": "unknown_operation",
       "reason": "reviewer and author data (design D.3)"
     },

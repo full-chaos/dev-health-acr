@@ -35,7 +35,7 @@ func seededGraphConn(nodes []seededNode, edges []seededEdge) *fakeConn {
 		kind, _ := params["kind"].(string)
 		id, _ := params["id"].(string)
 		switch {
-		case params["relates"] != nil:
+		case params["linkRel"] != nil:
 			return seededProjectLinks(byKey, edges, cypher, params), nil
 		case params["fromKind"] != nil:
 			return seededWalkStep(byKey, edges, cypher, params), nil
@@ -193,55 +193,82 @@ func TestTeamDeploymentMembersFollowTheCallersRepositoryGrant(t *testing.T) {
 	}
 }
 
-// seededProjectLinks answers the project walk's link read and issue count from
-// the seeded topology: the project's issues (work items that are not pull
-// requests, joined by BELONGS_TO_PROJECT) and, for the link read, one row per
-// RELATES_TO link from such an issue to a pull-request work item, in the
-// read's order, paged by skip and limit.
+// seededProjectLinks answers the walk's link read and source count from the
+// seeded topology: the anchor's near-side nodes (joined by the feeding
+// relation in the read's direction, filtered by their stored type) and, for
+// the link read, one row per link relation from such a node to a far-side node
+// of the far side's type, in the read's order, paged by skip and limit.
 func seededProjectLinks(byKey map[string]seededNode, edges []seededEdge, cypher string, params map[string]interface{}) []row {
-	project, _ := params["project"].(string)
-	pullRequestTypes := map[string]bool{}
-	if list, ok := params["prtypes"].([]interface{}); ok {
-		for _, v := range list {
-			pullRequestTypes[v.(string)] = true
+	anchor, _ := params["anchor"].(string)
+	anchorKind, _ := params["anchorKind"].(string)
+	midKind, _ := params["midKind"].(string)
+	endKind, _ := params["endKind"].(string)
+	feedRel, _ := params["feedRel"].(string)
+	linkRel, _ := params["linkRel"].(string)
+	typeSet := func(param string) map[string]bool {
+		out := map[string]bool{}
+		if list, ok := params[param].([]interface{}); ok {
+			for _, v := range list {
+				out[v.(string)] = true
+			}
 		}
+		return out
 	}
-	isPullRequest := func(n seededNode) bool { return pullRequestTypes[n.workItemType] }
-	issues := map[string]seededNode{}
+	midTypes, endTypes := typeSet("mtypes"), typeSet("btypes")
+	typed := func(variable string, set map[string]bool, n seededNode) bool {
+		switch {
+		case strings.Contains(cypher, "NOT "+variable+"."+propWorkItemType+" IN"):
+			return !set[n.workItemType]
+		case strings.Contains(cypher, variable+"."+propWorkItemType+" IN"):
+			return set[n.workItemType]
+		}
+		return true
+	}
+	feedIn := strings.Contains(cypher, ")<-[ra:")
+	near := map[string]seededNode{}
 	for _, e := range edges {
-		if e.typ != "BELONGS_TO_PROJECT" || e.dstKind != "project" || e.dstID != project || e.srcKind != "work_item" {
+		if e.typ != feedRel {
 			continue
 		}
-		if n, ok := byKey["work_item|"+e.srcID]; ok && !isPullRequest(n) {
-			issues[n.id] = n
+		var otherKind, otherID string
+		switch {
+		case feedIn && e.dstKind == anchorKind && e.dstID == anchor:
+			otherKind, otherID = e.srcKind, e.srcID
+		case !feedIn && e.srcKind == anchorKind && e.srcID == anchor:
+			otherKind, otherID = e.dstKind, e.dstID
+		default:
+			continue
+		}
+		if n, ok := byKey[otherKind+"|"+otherID]; ok && otherKind == midKind && typed("m", midTypes, n) {
+			near[n.id] = n
 		}
 	}
-	if strings.Contains(cypher, "count(DISTINCT i)") {
-		return []row{{"issues": int64(len(issues))}}
+	if strings.Contains(cypher, "count(DISTINCT m)") {
+		return []row{{"sources": int64(len(near))}}
 	}
 	type link struct {
-		issue, pullRequest seededNode
-		rel                string
+		near, far seededNode
+		rel       string
 	}
 	var links []link
 	for i, e := range edges {
-		if e.typ != "RELATES_TO" || e.srcKind != "work_item" || e.dstKind != "work_item" {
+		if e.typ != linkRel || e.srcKind == "" {
 			continue
 		}
-		for _, pair := range [][2]string{{e.srcID, e.dstID}, {e.dstID, e.srcID}} {
-			issue, isIssue := issues[pair[0]]
-			pullRequest, ok := byKey["work_item|"+pair[1]]
-			if isIssue && ok && isPullRequest(pullRequest) && seededGrantsAdmit(params, issue, pullRequest) {
-				links = append(links, link{issue, pullRequest, fmt.Sprintf("rel_%03d", i)})
+		for _, pair := range [][2][2]string{{{e.srcKind, e.srcID}, {e.dstKind, e.dstID}}, {{e.dstKind, e.dstID}, {e.srcKind, e.srcID}}} {
+			n, isNear := near[pair[0][1]]
+			far, ok := byKey[pair[1][0]+"|"+pair[1][1]]
+			if isNear && pair[0][0] == midKind && ok && pair[1][0] == endKind && typed("b", endTypes, far) && seededLinkGrantsAdmit(params, n, far) {
+				links = append(links, link{n, far, fmt.Sprintf("rel_%03d", i)})
 			}
 		}
 	}
 	sort.Slice(links, func(a, b int) bool {
-		if links[a].issue.id != links[b].issue.id {
-			return links[a].issue.id < links[b].issue.id
+		if links[a].near.id != links[b].near.id {
+			return links[a].near.id < links[b].near.id
 		}
-		if links[a].pullRequest.id != links[b].pullRequest.id {
-			return links[a].pullRequest.id < links[b].pullRequest.id
+		if links[a].far.id != links[b].far.id {
+			return links[a].far.id < links[b].far.id
 		}
 		return links[a].rel < links[b].rel
 	})
@@ -267,8 +294,8 @@ func seededProjectLinks(byKey map[string]seededNode, edges []seededEdge, cypher 
 	rows := make([]row, 0, len(links))
 	for _, l := range links {
 		rows = append(rows, row{
-			"i": asNode(l.issue), "pr": asNode(l.pullRequest),
-			"rl": &edge{Properties: map[string]interface{}{propRelationType: "RELATES_TO", propRelationshipID: l.rel}},
+			"m": asNode(l.near), "b": asNode(l.far),
+			"rl": &edge{Properties: map[string]interface{}{propRelationType: linkRel, propRelationshipID: l.rel}},
 		})
 	}
 	return rows
@@ -344,6 +371,15 @@ func seededWalkStep(byKey map[string]seededNode, edges []seededEdge, cypher stri
 // seededGrantsAdmit applies the link read's grant clause when the read carries
 // one: the pull request's repositories meet the grants, and the issue's do or
 // the issue has no repository.
+// seededLinkGrantsAdmit applies the restricted link read's grant clause to
+// one link, whichever end is the pull request.
+func seededLinkGrantsAdmit(params map[string]interface{}, near, far seededNode) bool {
+	if near.workItemType == "pr" || near.workItemType == "merge_request" {
+		return seededGrantsAdmit(params, far, near)
+	}
+	return seededGrantsAdmit(params, near, far)
+}
+
 func seededGrantsAdmit(params map[string]interface{}, issue, pullRequest seededNode) bool {
 	grants, restricted := params["grants"].([]interface{})
 	if !restricted {

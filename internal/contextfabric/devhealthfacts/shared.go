@@ -315,9 +315,17 @@ import (
 // saved under v53 for such a question holds a refusal or an unfiltered read and
 // must not be reused.
 //
-// v54 -> v56: a run_operation list answer over the response budget is served
+// v54 -> v55: on MCP, a question that states a trailing period ("in the last
+// 30 days") runs on the current axis with that question_stated window whatever
+// window class or range axis the interpretation carried, as the effective
+// window already committed it. A candidate saved under v54 for a supplied
+// range interpretation ran on the range axis with no window and must not be
+// reused.
+//
+// v55 -> v56: a run_operation list answer over the response budget is served
 // as the largest whole-row page that fits, with the cut stated, where it was
-// refused with response_budget. v55 is held by the supplied-range change.
+// refused with response_budget. A candidate
+// saved under v55 for such a question holds a refusal and must not be reused.
 const QueryVersion = "devhealthfacts.clickhouse.v56"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for

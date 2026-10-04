@@ -141,7 +141,7 @@ func TestRegistryWatch_digest_drift_stamps_served_and_warns_once(t *testing.T) {
 	ws := warns(buf.String())
 	if len(ws) != 1 || !strings.Contains(ws[0], "registry digest drift") ||
 		!strings.Contains(ws[0], cat.SchemaDigest()) || !strings.Contains(ws[0], servedDrift) ||
-		!strings.Contains(ws[0], "pinned_ops=58") || !strings.Contains(ws[0], "served_ops=58") {
+		!strings.Contains(ws[0], "pinned_ops=59") || !strings.Contains(ws[0], "served_ops=59") {
 		t.Fatalf("warns = %q", ws)
 	}
 	// Same state again: no repeat line.
@@ -283,26 +283,60 @@ func TestRegistryWatch_invalid_base_url(t *testing.T) {
 }
 
 // Golden fixture: the live prod query-api GET /registry document captured
-// 2026-09-30 00:21Z at ops cb758a29 (HTTP 200, 6916 bytes). The real served
-// format must decode and match the re-pinned catalogue with zero drift.
-func TestRegistryWatch_live_prod_registry_golden_matches_pin(t *testing.T) {
+// 2026-09-30 00:21Z at ops cb758a29 (HTTP 200, 6916 bytes). Against the
+// catalogue pinned at ops a42ff657 it must decode and show exactly the drift a
+// re-vendor clears: the schema digest, the document digests that changed, and
+// the operation the old build did not serve.
+func TestRegistryWatch_older_prod_registry_golden_drifts_from_the_new_pin(t *testing.T) {
 	golden, err := os.ReadFile("testdata/query_registry_16dc07c9.json")
 	if err != nil {
 		t.Fatal(err)
 	}
 	f := newRegistryFixture(t)
 	f.set(200, golden)
+	w, _, buf := newWatch(t, f, nil)
+	w.Start()
+	w.Wait()
+	out := buf.String()
+	if !strings.Contains(out, "registry digest drift") {
+		t.Fatalf("no schema digest drift line: %s", out)
+	}
+	changed := []string{"aiAttributedPrs", "aiImpactSummary", "aiOpportunities", "aiWorkflowDrilldown", "capacityForecast", "improveOpportunities", "operatingReview", "reviewEdges"}
+	for _, op := range changed {
+		if !strings.Contains(out, "operation="+op+" ") || !strings.Contains(out, "reason=changed") {
+			t.Errorf("no changed drift line for %s: %s", op, out)
+		}
+	}
+	if !strings.Contains(out, "operation=capacityCompletionDistribution ") || !strings.Contains(out, "reason=missing_in_served") {
+		t.Errorf("no missing_in_served line for the new operation: %s", out)
+	}
+	if got := strings.Count(out, "registry operation drift"); got != len(changed)+1 {
+		t.Errorf("%d operation drift lines, want %d: %s", got, len(changed)+1, out)
+	}
+}
+
+// Fixture: the GET /registry body of ops a42ff657, written from the output of
+// ops go run ./cmd/registrydump (the current text of every operation, the
+// legacy texts left out, as the route serves them), not captured from a host.
+// The catalogue pinned from that commit must match it with zero drift.
+func TestRegistryWatch_registry_of_the_vendored_commit_matches_pin(t *testing.T) {
+	body, err := os.ReadFile("testdata/query_registry_a42ff657.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newRegistryFixture(t)
+	f.set(200, body)
 	w, cat, buf := newWatch(t, f, nil)
 	w.Start()
 	w.Wait()
-	const want = "sha256:330d0ebf0ea59fce8d0b1bb14887cad8e5b3f6971ad02618afa9844b6fac7a50"
+	const want = "sha256:fdff794c3fa3de956e07061645b7494cca33ed760f9405d405c912ae01d3e34b"
 	if got := cat.StampedSchemaDigest(); got != want || cat.SchemaDigest() != want {
 		t.Fatalf("stamp %s pinned %s, want %s", got, cat.SchemaDigest(), want)
 	}
 	if ws := warns(buf.String()); len(ws) != 0 {
-		t.Fatalf("drift against the live document: %q", ws)
+		t.Fatalf("drift against the vendored commit's registry: %q", ws)
 	}
-	if !strings.Contains(buf.String(), "registry digest match") || !strings.Contains(buf.String(), "operations=58") {
-		t.Fatalf("no match line with 58 ops: %s", buf)
+	if !strings.Contains(buf.String(), "registry digest match") || !strings.Contains(buf.String(), "operations=59") {
+		t.Fatalf("no match line with 59 ops: %s", buf)
 	}
 }

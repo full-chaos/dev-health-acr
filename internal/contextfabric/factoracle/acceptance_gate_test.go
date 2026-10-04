@@ -523,8 +523,10 @@ func everyValuePairFindsAChangedValue(t *testing.T) {
 	name, _ := rowString(planted.Tables[tableRepos][0], "repo")
 	planted.Tables[tableRepos][0]["repo"] = name + "x"
 
+	manifest, skipped := withoutNotRecordedRoots(t, manifest)
 	planes := localPlanes(t, seedStore(t, planted), &recording)
 	oracle := oracleFor(t, manifest, planes, extract)
+	oracle.OnlyRoots = rootsExcept(t, skipped)
 	report := runOracle(t, oracle)
 	for _, root := range []string{"analytics", "capacityForecasts", "catalog", "compoundingRisk", "throughputForecast"} {
 		rr := report.Root(root)

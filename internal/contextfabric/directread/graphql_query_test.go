@@ -170,7 +170,7 @@ func TestGraphQLEveryAllowedRootFieldRoundTrips(t *testing.T) {
 			cases++
 		}
 	}
-	if cases != 15 {
-		t.Fatalf("ran %d root/operation cases, want 15 (one per served operation)", cases)
+	if cases != 16 {
+		t.Fatalf("ran %d root/operation cases, want 16 (one per served operation)", cases)
 	}
 }

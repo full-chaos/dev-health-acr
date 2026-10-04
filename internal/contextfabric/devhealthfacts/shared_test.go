@@ -526,3 +526,12 @@ func TestQueryVersionMovedPastTheCopulaStatusMemberTimeRole(t *testing.T) {
 		}
 	}
 }
+
+func TestQueryVersionMovedPastTheSuppliedRangeOnAStatedPeriod(t *testing.T) {
+	t.Parallel()
+	for _, versionBeforeTheStatedPeriodAxis := range []string{"devhealthfacts.clickhouse.v50", "devhealthfacts.clickhouse.v51", "devhealthfacts.clickhouse.v52", "devhealthfacts.clickhouse.v53", "devhealthfacts.clickhouse.v54"} {
+		if devhealthfacts.QueryVersion == versionBeforeTheStatedPeriodAxis {
+			t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved when a supplied range kept a stated trailing period off the current axis ran with no window and must not be reused", devhealthfacts.QueryVersion, versionBeforeTheStatedPeriodAxis)
+		}
+	}
+}

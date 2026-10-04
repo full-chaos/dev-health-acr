@@ -1,7 +1,7 @@
 {
   "source": {
     "repository": "full-chaos/dev-health-ops",
-    "commit": "0ec8b693bedeff6cfaf678ad9a5dbd0b06114651",
+    "commit": "a42ff6572434e7a0398a8700555279b9a74adb45",
     "tool": "go run ./cmd/registrydump -file internal/queryapi/server/query_route.go",
     "schema_path": "contracts/graphql/v1/schema.graphql"
   },
@@ -15,10 +15,18 @@
     },
     {
       "operation": "aiAttributedPrs",
-      "document": "query AIAttributedPrs($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput, $limit: Int! = 50, $offset: Int! = 0) {\n  aiAttributedPrs(\n    orgId: $orgId\n    dateRange: $dateRange\n    scope: $scope\n    limit: $limit\n    offset: $offset\n  ) {\n    orgId\n    startDate\n    endDate\n    total\n    hasMore\n    dataAvailable\n    rows {\n      repoId\n      number\n      title\n      kind\n      workType\n      teamId\n      mergedAt\n      __typename\n    }\n    __typename\n  }\n}",
+      "document": "query AIAttributedPrs($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput, $limit: Int! = 50, $offset: Int! = 0) {\n  aiAttributedPrs(\n    orgId: $orgId\n    dateRange: $dateRange\n    scope: $scope\n    limit: $limit\n    offset: $offset\n  ) {\n    orgId\n    startDate\n    endDate\n    total\n    hasMore\n    dataAvailable\n    rows {\n      repoId\n      repoName\n      number\n      title\n      kind\n      workType\n      teamId\n      mergedAt\n      __typename\n    }\n    __typename\n  }\n}",
       "const_name": "registeredAiAttributedPrsDocument",
-      "digest": "6ed54ebe5a535e28c16c1e903f64eda9fbbc32577465ccebe7fa30e2075f2f3e",
+      "digest": "186aa8ced0a7ab707911c61c829f561157913dc9c5176d665705394cc84f6bba",
       "kind": "query"
+    },
+    {
+      "operation": "aiAttributedPrs",
+      "document": "query AIAttributedPrs($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput, $limit: Int! = 50, $offset: Int! = 0) {\n  aiAttributedPrs(\n    orgId: $orgId\n    dateRange: $dateRange\n    scope: $scope\n    limit: $limit\n    offset: $offset\n  ) {\n    orgId\n    startDate\n    endDate\n    total\n    hasMore\n    dataAvailable\n    rows {\n      repoId\n      number\n      title\n      kind\n      workType\n      teamId\n      mergedAt\n      __typename\n    }\n    __typename\n  }\n}",
+      "const_name": "registeredAiAttributedPrsV1Document",
+      "digest": "6ed54ebe5a535e28c16c1e903f64eda9fbbc32577465ccebe7fa30e2075f2f3e",
+      "kind": "query",
+      "legacy": true
     },
     {
       "operation": "aiAttributionOverview",
@@ -43,17 +51,33 @@
     },
     {
       "operation": "aiImpactSummary",
-      "document": "query AIImpactSummary($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput) {\n  aiImpactSummary(orgId: $orgId, dateRange: $dateRange, scope: $scope) {\n    orgId\n    startDate\n    endDate\n    totalPrs\n    aiAssistedPrs\n    agentCreatedPrs\n    humanPrs\n    unknownPrs\n    aiAssistedPrRatio\n    dataAvailable\n    computedAt\n    byBucket {\n      bucket\n      prsTotal\n      prsMerged\n      aiAssistedPrRatio\n      agentCreatedPrCount\n      cycleTimeAvgHours\n      aiCycleTimeDeltaHours\n      aiReviewAmplification\n      reworkDragRate\n      revertRate\n      incidentDragRate\n      testGapRate\n      leverage {\n        prsComponent\n        cycleTimeComponent\n        reviewComponent\n        reworkComponent\n        testComponent\n        incidentComponent\n        __typename\n      }\n      __typename\n    }\n    daily {\n      bucket\n      prsTotal\n      prsMerged\n      cycleTimeAvgHours\n      reviewsPerPr\n      changesRequestedPerPr\n      reworkPrs\n      reworkRate\n      revertPrs\n      revertRate\n      incidentsCount\n      incidentRate\n      testGapPrs\n      testGapRate\n      __typename\n    }\n    repoBreakdown {\n      scopeId\n      scopeLabel\n      aiPrsTotal\n      aiAssistedPrRatio\n      reworkRateDelta\n      __typename\n    }\n    teamBreakdown {\n      scopeId\n      scopeLabel\n      aiPrsTotal\n      aiAssistedPrRatio\n      reworkRateDelta\n      __typename\n    }\n    __typename\n  }\n}",
+      "document": "query AIImpactSummary($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput) {\n  aiImpactSummary(orgId: $orgId, dateRange: $dateRange, scope: $scope) {\n    orgId\n    startDate\n    endDate\n    totalPrs\n    aiAssistedPrs\n    agentCreatedPrs\n    humanPrs\n    unknownPrs\n    aiAssistedPrRatio\n    dataAvailable\n    computedAt\n    byBucket {\n      bucket\n      prsTotal\n      prsMerged\n      aiAssistedPrRatio\n      agentCreatedPrCount\n      cycleTimeAvgHours\n      aiCycleTimeDeltaHours\n      aiReviewAmplification\n      reworkDragRate\n      revertRate\n      incidentDragRate\n      testGapRate\n      leverage {\n        prsComponent\n        cycleTimeComponent\n        reviewComponent\n        reworkComponent\n        testComponent\n        incidentComponent\n        __typename\n      }\n      __typename\n    }\n    daily {\n      bucket\n      prsTotal\n      prsMerged\n      cycleTimeAvgHours\n      reviewsPerPr\n      changesRequestedPerPr\n      reworkPrs\n      reworkRate\n      revertPrs\n      revertRate\n      incidentsCount\n      incidentRate\n      testGapPrs\n      testGapRate\n      day\n      __typename\n    }\n    repoBreakdown {\n      scopeId\n      scopeLabel\n      aiPrsTotal\n      aiAssistedPrRatio\n      reworkRateDelta\n      __typename\n    }\n    teamBreakdown {\n      scopeId\n      scopeLabel\n      aiPrsTotal\n      aiAssistedPrRatio\n      reworkRateDelta\n      __typename\n    }\n    __typename\n  }\n}",
       "const_name": "registeredAiImpactSummaryDocument",
+      "digest": "7dfe2a4ab59046a24963210cb68b8157e505dfd78ee2c7fe81382d772ae1d6d0",
+      "kind": "query"
+    },
+    {
+      "operation": "aiImpactSummary",
+      "document": "query AIImpactSummary($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput) {\n  aiImpactSummary(orgId: $orgId, dateRange: $dateRange, scope: $scope) {\n    orgId\n    startDate\n    endDate\n    totalPrs\n    aiAssistedPrs\n    agentCreatedPrs\n    humanPrs\n    unknownPrs\n    aiAssistedPrRatio\n    dataAvailable\n    computedAt\n    byBucket {\n      bucket\n      prsTotal\n      prsMerged\n      aiAssistedPrRatio\n      agentCreatedPrCount\n      cycleTimeAvgHours\n      aiCycleTimeDeltaHours\n      aiReviewAmplification\n      reworkDragRate\n      revertRate\n      incidentDragRate\n      testGapRate\n      leverage {\n        prsComponent\n        cycleTimeComponent\n        reviewComponent\n        reworkComponent\n        testComponent\n        incidentComponent\n        __typename\n      }\n      __typename\n    }\n    daily {\n      bucket\n      prsTotal\n      prsMerged\n      cycleTimeAvgHours\n      reviewsPerPr\n      changesRequestedPerPr\n      reworkPrs\n      reworkRate\n      revertPrs\n      revertRate\n      incidentsCount\n      incidentRate\n      testGapPrs\n      testGapRate\n      __typename\n    }\n    repoBreakdown {\n      scopeId\n      scopeLabel\n      aiPrsTotal\n      aiAssistedPrRatio\n      reworkRateDelta\n      __typename\n    }\n    teamBreakdown {\n      scopeId\n      scopeLabel\n      aiPrsTotal\n      aiAssistedPrRatio\n      reworkRateDelta\n      __typename\n    }\n    __typename\n  }\n}",
+      "const_name": "registeredAiImpactSummaryV1Document",
       "digest": "7e84d73b35104dd2ec3ece19c163cd8247c4637aa93df3b5f1449394c4539328",
+      "kind": "query",
+      "legacy": true
+    },
+    {
+      "operation": "aiOpportunities",
+      "document": "query AIOpportunities($orgId: String!, $scope: AIScopeInput, $limit: Int! = 5) {\n  aiOpportunities(orgId: $orgId, scope: $scope, limit: $limit) {\n    orgId\n    detectorReady\n    recommendations {\n      opportunityId\n      kind\n      repoId\n      repoName\n      teamId\n      teamName\n      title\n      rationale\n      score\n      evidenceRefs\n      workGraphDrilldowns {\n        rootType\n        rootId\n        label\n        __typename\n      }\n      __typename\n    }\n    __typename\n  }\n}",
+      "const_name": "registeredAiOpportunitiesDocument",
+      "digest": "7cd9dfba84aa25a1c3b931819f29729e60f6fa395a1c1f2389ddabd329d3d6e0",
       "kind": "query"
     },
     {
       "operation": "aiOpportunities",
       "document": "query AIOpportunities($orgId: String!, $scope: AIScopeInput, $limit: Int! = 5) {\n  aiOpportunities(orgId: $orgId, scope: $scope, limit: $limit) {\n    orgId\n    detectorReady\n    recommendations {\n      opportunityId\n      kind\n      repoId\n      teamId\n      title\n      rationale\n      score\n      evidenceRefs\n      workGraphDrilldowns {\n        rootType\n        rootId\n        label\n        __typename\n      }\n      __typename\n    }\n    __typename\n  }\n}",
-      "const_name": "registeredAiOpportunitiesDocument",
+      "const_name": "registeredAiOpportunitiesV1Document",
       "digest": "fad9b02c4e8a4a7023bf9a7ba988a04346473cdd9d840ec76d611f92e1b5af2e",
-      "kind": "query"
+      "kind": "query",
+      "legacy": true
     },
     {
       "operation": "aiReviewLoad",
@@ -71,10 +95,18 @@
     },
     {
       "operation": "aiWorkflowDrilldown",
-      "document": "query AIWorkflowDrilldown($orgId: String!, $rootType: AIWorkflowRootTypeInput!, $rootId: String!, $depth: Int! = 3, $limit: Int! = 100) {\n  aiWorkflowDrilldown(\n    orgId: $orgId\n    rootType: $rootType\n    rootId: $rootId\n    depth: $depth\n    limit: $limit\n  ) {\n    orgId\n    rootType\n    rootId\n    partial\n    dataAvailable\n    nodes {\n      nodeType\n      nodeId\n      __typename\n    }\n    edges {\n      edgeId\n      sourceType\n      sourceId\n      targetType\n      targetId\n      edgeType\n      confidence\n      source\n      evidence\n      provider\n      repoId\n      __typename\n    }\n    __typename\n  }\n}",
+      "document": "query AIWorkflowDrilldown($orgId: String!, $rootType: AIWorkflowRootTypeInput!, $rootId: String!, $depth: Int! = 3, $limit: Int! = 100) {\n  aiWorkflowDrilldown(\n    orgId: $orgId\n    rootType: $rootType\n    rootId: $rootId\n    depth: $depth\n    limit: $limit\n  ) {\n    orgId\n    rootType\n    rootId\n    partial\n    dataAvailable\n    nodes {\n      nodeType\n      nodeId\n      displayName\n      nameExpected\n      __typename\n    }\n    edges {\n      edgeId\n      sourceType\n      sourceId\n      targetType\n      targetId\n      edgeType\n      confidence\n      source\n      evidence\n      provider\n      repoId\n      __typename\n    }\n    __typename\n  }\n}",
       "const_name": "registeredAiWorkflowDrilldownDocument",
-      "digest": "42bfc78e3f533b51578eb3575c027a61f9c81bfc9a7bf843c4c2f9979972fea4",
+      "digest": "5f489ef8f1ba43d3fa2c84ec607d46882fcace1ff8a9913ece369b85e1e60afa",
       "kind": "query"
+    },
+    {
+      "operation": "aiWorkflowDrilldown",
+      "document": "query AIWorkflowDrilldown($orgId: String!, $rootType: AIWorkflowRootTypeInput!, $rootId: String!, $depth: Int! = 3, $limit: Int! = 100) {\n  aiWorkflowDrilldown(\n    orgId: $orgId\n    rootType: $rootType\n    rootId: $rootId\n    depth: $depth\n    limit: $limit\n  ) {\n    orgId\n    rootType\n    rootId\n    partial\n    dataAvailable\n    nodes {\n      nodeType\n      nodeId\n      __typename\n    }\n    edges {\n      edgeId\n      sourceType\n      sourceId\n      targetType\n      targetId\n      edgeType\n      confidence\n      source\n      evidence\n      provider\n      repoId\n      __typename\n    }\n    __typename\n  }\n}",
+      "const_name": "registeredAiWorkflowDrilldownV1Document",
+      "digest": "42bfc78e3f533b51578eb3575c027a61f9c81bfc9a7bf843c4c2f9979972fea4",
+      "kind": "query",
+      "legacy": true
     },
     {
       "operation": "busFactor",
@@ -84,11 +116,34 @@
       "kind": "query"
     },
     {
+      "operation": "capacityCompletionDistribution",
+      "document": "query CapacityCompletionDistribution($orgId: String!, $input: CapacityForecastInput) {\n  capacityForecast(orgId: $orgId, input: $input) {\n    completionDistribution {\n      days {\n        value\n        count\n        __typename\n      }\n      items {\n        value\n        count\n        __typename\n      }\n      __typename\n    }\n    __typename\n  }\n}",
+      "const_name": "registeredCapacityCompletionDistributionDocument",
+      "digest": "52cfd38c3f8346aec89fe807abda5a72fa24596a0fad9f302ca6121510b302e9",
+      "kind": "query"
+    },
+    {
+      "operation": "capacityForecast",
+      "document": "query CapacityForecast($orgId: String!, $input: CapacityForecastInput) {\n  capacityForecast(orgId: $orgId, input: $input) {\n    forecastId\n    computedAt\n    teamId\n    workScopeId\n    backlogSize\n    targetItems\n    targetDate\n    p50Date\n    p85Date\n    p95Date\n    p50Days\n    p85Days\n    p95Days\n    p50Items\n    p85Items\n    p95Items\n    throughputMean\n    throughputStddev\n    historyDays\n    insufficientHistory\n    highVariance\n    completionDistribution {\n      runs\n      unfinishedRuns\n      horizonDays\n      days {\n        value\n        count\n        cumulativeShare\n        __typename\n      }\n      items {\n        value\n        count\n        cumulativeShare\n        __typename\n      }\n      __typename\n    }\n    __typename\n  }\n}",
+      "const_name": "registeredCapacityForecastDocument",
+      "digest": "d95197012e32056fcece1f8975d953e7465bb112354cf4201e87b39375f933ef",
+      "kind": "query"
+    },
+    {
       "operation": "capacityForecast",
       "document": "query CapacityForecast($orgId: String!, $input: CapacityForecastInput) {\n  capacityForecast(orgId: $orgId, input: $input) {\n    forecastId\n    computedAt\n    teamId\n    workScopeId\n    backlogSize\n    targetItems\n    targetDate\n    p50Date\n    p85Date\n    p95Date\n    p50Days\n    p85Days\n    p95Days\n    p50Items\n    p85Items\n    p95Items\n    throughputMean\n    throughputStddev\n    historyDays\n    insufficientHistory\n    highVariance\n    __typename\n  }\n}",
-      "const_name": "registeredCapacityForecastDocument",
+      "const_name": "registeredCapacityForecastV1Document",
       "digest": "b4fb8f075aba9954714f10f7f4451242d969548d6392d778dae1177759f80780",
-      "kind": "query"
+      "kind": "query",
+      "legacy": true
+    },
+    {
+      "operation": "capacityForecast",
+      "document": "query CapacityForecast($orgId: String!, $input: CapacityForecastInput) {\n  capacityForecast(orgId: $orgId, input: $input) {\n    forecastId\n    computedAt\n    teamId\n    workScopeId\n    backlogSize\n    targetItems\n    targetDate\n    p50Date\n    p85Date\n    p95Date\n    p50Days\n    p85Days\n    p95Days\n    p50Items\n    p85Items\n    p95Items\n    throughputMean\n    throughputStddev\n    historyDays\n    insufficientHistory\n    highVariance\n    completionDistribution {\n      days {\n        value\n        count\n        __typename\n      }\n      items {\n        value\n        count\n        __typename\n      }\n      __typename\n    }\n    __typename\n  }\n}",
+      "const_name": "registeredCapacityForecastV2Document",
+      "digest": "7ec8e919d784ed0dea1b87e85d64ffe18d05557379a397d07da0ab958694ffd1",
+      "kind": "query",
+      "legacy": true
     },
     {
       "operation": "capacityForecasts",
@@ -211,10 +266,18 @@
     },
     {
       "operation": "improveOpportunities",
-      "document": "query ImproveOpportunities($scope: AIScopeInput, $limit: Int! = 10, $windowDays: Int! = 30) {\n  improveOpportunities(scope: $scope, limit: $limit, windowDays: $windowDays) {\n    orgId\n    detectorReady\n    totalCount\n    opportunities {\n      opportunityId\n      kind\n      entityType\n      entityId\n      title\n      rationale\n      score\n      severity\n      evidenceRefs\n      recommendedAction\n      __typename\n    }\n    __typename\n  }\n}",
+      "document": "query ImproveOpportunities($scope: AIScopeInput, $limit: Int! = 10, $windowDays: Int! = 30) {\n  improveOpportunities(scope: $scope, limit: $limit, windowDays: $windowDays) {\n    orgId\n    detectorReady\n    totalCount\n    opportunities {\n      opportunityId\n      kind\n      entityType\n      entityId\n      title\n      rationale\n      score\n      severity\n      evidenceRefs\n      recommendedAction\n      value\n      threshold\n      unit\n      thresholdDirection\n      __typename\n    }\n    __typename\n  }\n}",
       "const_name": "registeredImproveOpportunitiesDocument",
-      "digest": "8890d7aeddfebaa9683d6c8834c82b059e345af1dbf42db14eebba840fcd87d2",
+      "digest": "645f285412fb2c9517238aabca7e1204f530b66748893b748c0e5160cccf35c4",
       "kind": "query"
+    },
+    {
+      "operation": "improveOpportunities",
+      "document": "query ImproveOpportunities($scope: AIScopeInput, $limit: Int! = 10, $windowDays: Int! = 30) {\n  improveOpportunities(scope: $scope, limit: $limit, windowDays: $windowDays) {\n    orgId\n    detectorReady\n    totalCount\n    opportunities {\n      opportunityId\n      kind\n      entityType\n      entityId\n      title\n      rationale\n      score\n      severity\n      evidenceRefs\n      recommendedAction\n      __typename\n    }\n    __typename\n  }\n}",
+      "const_name": "registeredImproveOpportunitiesV1Document",
+      "digest": "8890d7aeddfebaa9683d6c8834c82b059e345af1dbf42db14eebba840fcd87d2",
+      "kind": "query",
+      "legacy": true
     },
     {
       "operation": "investmentBreakdown",
@@ -246,10 +309,18 @@
     },
     {
       "operation": "operatingReview",
-      "document": "query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {\n  operatingReview(orgId: $orgId, input: $input) {\n    orgId\n    teamId\n    weekStart\n    priorWeekStart\n    sections {\n      key\n      title\n      changed\n      improved\n      worsened\n      metrics {\n        key\n        label\n        value\n        unit\n        delta {\n          value\n          priorValue\n          absolute\n          percent\n          status\n          __typename\n        }\n        __typename\n      }\n      __typename\n    }\n    recommendations\n    recommendationsEmptyState\n    __typename\n  }\n}",
+      "document": "query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {\n  operatingReview(orgId: $orgId, input: $input) {\n    orgId\n    teamId\n    weekStart\n    priorWeekStart\n    sections {\n      key\n      title\n      changed\n      improved\n      worsened\n      metrics {\n        key\n        label\n        value\n        unit\n        hasData\n        delta {\n          value\n          priorValue\n          absolute\n          percent\n          status\n          hasPriorData\n          __typename\n        }\n        __typename\n      }\n      __typename\n    }\n    recommendations\n    recommendationsEmptyState\n    __typename\n  }\n}",
       "const_name": "registeredOperatingReviewDocument",
-      "digest": "c376a5dc191fd8d8759578ccd9dffaffadcd621bdc0625fe62c4c08619f3363e",
+      "digest": "d26e965931987ac4bdf607f43f542e2bd3f49f91561400287014a161371726e9",
       "kind": "query"
+    },
+    {
+      "operation": "operatingReview",
+      "document": "query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {\n  operatingReview(orgId: $orgId, input: $input) {\n    orgId\n    teamId\n    weekStart\n    priorWeekStart\n    sections {\n      key\n      title\n      changed\n      improved\n      worsened\n      metrics {\n        key\n        label\n        value\n        unit\n        delta {\n          value\n          priorValue\n          absolute\n          percent\n          status\n          __typename\n        }\n        __typename\n      }\n      __typename\n    }\n    recommendations\n    recommendationsEmptyState\n    __typename\n  }\n}",
+      "const_name": "registeredOperatingReviewV1Document",
+      "digest": "c376a5dc191fd8d8759578ccd9dffaffadcd621bdc0625fe62c4c08619f3363e",
+      "kind": "query",
+      "legacy": true
     },
     {
       "operation": "pr",
@@ -295,10 +366,18 @@
     },
     {
       "operation": "reviewEdges",
-      "document": "query ReviewEdges($input: ReviewEdgesInput!) {\n  reviewEdges(input: $input) {\n    edges {\n      reviewer\n      author\n      reviewsCount\n      day\n      repoId\n      __typename\n    }\n    totalCount\n    __typename\n  }\n}",
+      "document": "query ReviewEdges($input: ReviewEdgesInput!) {\n  reviewEdges(input: $input) {\n    edges {\n      reviewerKey\n      authorKey\n      reviewerName\n      authorName\n      reviewsCount\n      day\n      repoId\n      __typename\n    }\n    totalCount\n    __typename\n  }\n}",
       "const_name": "registeredReviewEdgesDocument",
-      "digest": "4a759f9e3d3e903b03a3aae8039b3bdca2ed69b3af25a0b20f01c1da55d97123",
+      "digest": "6b45584e433c1f7d281f29fd17044858457f5334aa282531463060d676a07bc9",
       "kind": "query"
+    },
+    {
+      "operation": "reviewEdges",
+      "document": "query ReviewEdges($input: ReviewEdgesInput!) {\n  reviewEdges(input: $input) {\n    edges {\n      reviewer\n      author\n      reviewsCount\n      day\n      repoId\n      __typename\n    }\n    totalCount\n    __typename\n  }\n}",
+      "const_name": "registeredReviewEdgesV1Document",
+      "digest": "4a759f9e3d3e903b03a3aae8039b3bdca2ed69b3af25a0b20f01c1da55d97123",
+      "kind": "query",
+      "legacy": true
     },
     {
       "operation": "savedReport",

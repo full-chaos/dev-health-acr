@@ -2296,7 +2296,7 @@ var (
 	graphqlQueryErrorClasses = []string{"graphql_errors", "decode", "http_status", "transport", "canceled", "acr_deadline", "carrier_refused", "listener_refused", "not_found", "concurrency_wait"}
 	graphqlQueryReadBudgets  = []string{"bytes_ceiling", "rows_ceiling", "time_ceiling", "unknown"}
 	graphqlQueryOperations   = []string{
-		"acrRepositoryScopes", "capacityForecast", "capacityForecasts", "catalogValues", "cognitiveLoad",
+		"acrRepositoryScopes", "capacityCompletionDistribution", "capacityForecast", "capacityForecasts", "catalogValues", "cognitiveLoad",
 		"complexityTimeseries", "compoundingRisk", "hotspots", "investmentBreakdown", "investmentFull",
 		"securityOverview", "throughputForecast", "workGraphArtifacts", "workGraphEdges",
 		"workGraphFlow",
