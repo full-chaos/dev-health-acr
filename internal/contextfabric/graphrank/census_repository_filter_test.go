@@ -255,3 +255,21 @@ func TestResolveSubjects_CallerHintRoundUsesTheCallerNarrowingVisibility(t *test
 		t.Fatalf("evidence_round = %+v, want the round past the scoped-visibility gate for a narrowed unrestricted principal", events)
 	}
 }
+
+func TestResolveSubjects_CensusProbeTraceNamesWhetherTheRepositoryFilterWasApplied(t *testing.T) {
+	t.Parallel()
+	for name, honour := range map[string]bool{"applied": true, "ignored": false} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			probe := &filterCensusProbe{}
+			_, tracer := resolveFiltered(t, storage.Principal{OrgID: "org_1"}, []string{filterRepo(filterRepoCount - 1)}, probe.store(honour, nil))
+			probes := tracer.eventsForStage("evidence_probe")
+			if len(probes) != 1 {
+				t.Fatalf("evidence_probe events = %d, want 1", len(probes))
+			}
+			if probes[0].CensusRepositoryFilterApplied != honour {
+				t.Fatalf("CensusRepositoryFilterApplied = %v, want %v", probes[0].CensusRepositoryFilterApplied, honour)
+			}
+		})
+	}
+}

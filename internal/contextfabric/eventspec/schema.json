@@ -7567,6 +7567,11 @@
         "presence": "required"
       },
       {
+        "key": "census_repository_filter_applied",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
         "key": "shadow_caller_hint_short_circuit",
         "type": "bool",
         "presence": "required"

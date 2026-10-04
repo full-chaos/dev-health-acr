@@ -156,6 +156,8 @@ type KindAttestation struct {
 	RowsRead        int
 	HandleApplied   bool
 	AnchorApplied   bool
+	// RepositoryFilterApplied mirrors CensusOutcome.RepositoryFilterApplied.
+	RepositoryFilterApplied bool
 	// SatisfierCanonicalID/SatisfierCanonicalIDs/SatisfierSetClosureMismatch
 	// (CHAOS-3896 Slice B) mirror CensusOutcome's own fields of the same
 	// name -- see that type's doc comment. In-process only, deliberately
@@ -565,7 +567,7 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 					CensusKind: k.Kind, CensusComplete: k.Complete, CensusCount: k.Count,
 					CensusReadAtUnix: readAtUnix, CensusProtocol: k.Protocol,
 					CensusClosureMismatch: k.ClosureMismatch, CensusStatementCount: k.StatementCount,
-					CensusRowsRead: k.RowsRead, CensusHandleApplied: k.HandleApplied, CensusAnchorApplied: k.AnchorApplied,
+					CensusRowsRead: k.RowsRead, CensusHandleApplied: k.HandleApplied, CensusAnchorApplied: k.AnchorApplied, CensusRepositoryFilterApplied: k.RepositoryFilterApplied,
 					// Index/Total (CHAOS-5636): self-carried bound over this
 					// SAME a.Kinds slice ShadowKindsCensused already counts
 					// above -- known before this loop starts.
@@ -711,6 +713,7 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 			ka.Count = outcome.Count
 			ka.CensusReadAt = outcome.CensusReadAt
 			ka.ClosureMismatch = outcome.ClosureMismatch
+			ka.RepositoryFilterApplied = outcome.RepositoryFilterApplied
 			ka.StatementCount = outcome.StatementCount
 			ka.RowsRead = outcome.RowsRead
 			// CHAOS-3896 Slice B: carried through for the presentation-only

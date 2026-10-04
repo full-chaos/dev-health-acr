@@ -795,6 +795,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"census_protocol", contextfabric.SanitizeLogAttr(event.CensusProtocol), "census_closure_mismatch", event.CensusClosureMismatch,
 			"census_statement_count", event.CensusStatementCount, "census_rows_read", event.CensusRowsRead,
 			"census_handle_applied", event.CensusHandleApplied, "census_anchor_applied", event.CensusAnchorApplied,
+			"census_repository_filter_applied", event.CensusRepositoryFilterApplied,
 			// CHAOS-4300: same tag as the sibling evidence_round event.
 			"shadow_caller_hint_short_circuit", event.ShadowCallerHintShortCircuit,
 			// index/total (CHAOS-5636): this event's self-carried
