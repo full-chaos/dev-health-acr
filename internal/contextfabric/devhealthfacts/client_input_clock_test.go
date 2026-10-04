@@ -32,11 +32,18 @@ type universalClient struct {
 	rows      int
 	rules     []stringRule
 	spy       func(statement string, dest []any)
+	// order serves row i as the rows[order[i]] of the static set, and a non-nil
+	// order also makes the rows differ from each other (their numbers carry the
+	// static index), so a changed order is a changed provider answer for the
+	// same rows. noise scales every float by (1+noise): the last-digit
+	// difference two ClickHouse aggregations of the same rows can carry.
+	order []int
+	noise float64
 }
 
 func (c *universalClient) Query(_ context.Context, statement string, _ []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
 	collapsed := strings.Join(strings.Fields(statement), " ")
-	scanner := &universalScanner{client: c, statement: collapsed, remaining: c.rows}
+	scanner := &universalScanner{client: c, statement: collapsed, remaining: c.rows, total: c.rows}
 	for _, rule := range c.rules {
 		if strings.Contains(collapsed, rule.match) {
 			scanner.values = rule.values
@@ -53,6 +60,9 @@ type universalScanner struct {
 	values    []string
 	numbers   []float64
 	remaining int
+	total     int
+	served    int
+	current   int
 }
 
 func (s *universalScanner) Next() bool {
@@ -60,6 +70,11 @@ func (s *universalScanner) Next() bool {
 		return false
 	}
 	s.remaining--
+	s.current = s.served
+	if s.client.order != nil && s.served < len(s.client.order) {
+		s.current = s.client.order[s.served]
+	}
+	s.served++
 	return true
 }
 
@@ -73,7 +88,7 @@ func (s *universalScanner) Scan(dest ...any) error {
 		if value.Kind() != reflect.Pointer || value.IsNil() {
 			return fmt.Errorf("universal scanner: destination %T is not a pointer", target)
 		}
-		fillDeterministic(value.Elem(), func() string {
+		fillDeterministic(value.Elem(), s.rowOffset(), s.client.noise, func() string {
 			defer func() { position++ }()
 			if position < len(s.values) {
 				if s.values[position] == "$id" {
@@ -93,11 +108,20 @@ func (s *universalScanner) Scan(dest ...any) error {
 	return nil
 }
 
+// rowOffset is the per-row number offset of an ordered client: 0 for the
+// plain one-row client, the static row index otherwise.
+func (s *universalScanner) rowOffset() int {
+	if s.client.order == nil {
+		return 0
+	}
+	return s.current
+}
+
 func (s *universalScanner) Err() error { return nil }
 
 func (s *universalScanner) Close() error { return nil }
 
-func fillDeterministic(value reflect.Value, nextString func() string, nextNumber func() (float64, bool)) {
+func fillDeterministic(value reflect.Value, offset int, noise float64, nextString func() string, nextNumber func() (float64, bool)) {
 	switch value.Kind() {
 	case reflect.String:
 		value.SetString(nextString())
@@ -106,7 +130,7 @@ func fillDeterministic(value reflect.Value, nextString func() string, nextNumber
 			value.SetInt(int64(number))
 			return
 		}
-		value.SetInt(7)
+		value.SetInt(int64(7 + offset))
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		if number, ok := nextNumber(); ok {
 			value.SetUint(uint64(number))
@@ -116,21 +140,21 @@ func fillDeterministic(value reflect.Value, nextString func() string, nextNumber
 			value.SetUint(1)
 			return
 		}
-		value.SetUint(7)
+		value.SetUint(uint64(7 + offset))
 	case reflect.Float32, reflect.Float64:
 		if number, ok := nextNumber(); ok {
-			value.SetFloat(number)
+			value.SetFloat(number * (1 + noise))
 			return
 		}
-		value.SetFloat(0.75)
+		value.SetFloat((0.75 + 0.125*float64(offset)) * (1 + noise))
 	case reflect.Bool:
 		value.SetBool(true)
 	case reflect.Pointer:
 		value.Set(reflect.New(value.Type().Elem()))
-		fillDeterministic(value.Elem(), nextString, nextNumber)
+		fillDeterministic(value.Elem(), offset, noise, nextString, nextNumber)
 	case reflect.Slice:
 		slice := reflect.MakeSlice(value.Type(), 1, 1)
-		fillDeterministic(slice.Index(0), nextString, nextNumber)
+		fillDeterministic(slice.Index(0), offset, noise, nextString, nextNumber)
 		value.Set(slice)
 	case reflect.Map:
 		entry := reflect.MakeMap(value.Type())
@@ -138,10 +162,10 @@ func fillDeterministic(value reflect.Value, nextString func() string, nextNumber
 		if key.Kind() == reflect.String {
 			key.SetString("feature_delivery")
 		} else {
-			fillDeterministic(key, nextString, nextNumber)
+			fillDeterministic(key, offset, noise, nextString, nextNumber)
 		}
 		elem := reflect.New(value.Type().Elem()).Elem()
-		fillDeterministic(elem, nextString, nextNumber)
+		fillDeterministic(elem, offset, noise, nextString, nextNumber)
 		entry.SetMapIndex(key, elem)
 		value.Set(entry)
 	case reflect.Struct:
@@ -151,7 +175,7 @@ func fillDeterministic(value reflect.Value, nextString func() string, nextNumber
 		}
 		for index := 0; index < value.NumField(); index++ {
 			if value.Field(index).CanSet() {
-				fillDeterministic(value.Field(index), nextString, nextNumber)
+				fillDeterministic(value.Field(index), offset, noise, nextString, nextNumber)
 			}
 		}
 	}

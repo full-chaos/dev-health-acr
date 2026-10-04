@@ -762,7 +762,8 @@ FROM (
 	FROM repo_metrics_daily
 	WHERE org_id = {org_id:String} AND toString(repo_id) IN {ids:Array(String)}` + timeBound.dayPredicate("day") + `
 )
-WHERE rn = 1`)
+WHERE rn = 1
+ORDER BY repo_id`)
 	rowCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++

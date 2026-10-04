@@ -277,6 +277,14 @@ import (
 // under v46 for such a question holds a refusal or another role and must not
 // be reused.
 //
+// v47 -> v48: canonical fact rows are served in one total order (a tie on
+// kind, subject and source is broken by the facts' own content, not by the
+// provider's row order), the readers' rows are sorted before facts are minted,
+// and the scalar shares of a theme mix are rounded to eleven significant digits.
+// A candidate saved under v47 carries facts in provider order and share values
+// with last-digit noise; its stored input no longer equals the input a fresh
+// read produces, so it must not be reused.
+//
 // v49 -> v50: every LIMIT read of the fact store orders its rows by a total
 // order (newest first on the time column, then the natural key) before the
 // row limit cuts, so a question with more matching rows than the limit is
