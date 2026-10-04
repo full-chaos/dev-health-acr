@@ -40,6 +40,18 @@ func TestRowLimitReadServesTheSameRowsForAnyStoreOrder(t *testing.T) {
 	baseOrg := sharedTestOrgID(t)
 	query, direct := sharedClickHouseFixture(t)
 
+	// Merges off for the duration: a background merge would collapse the three
+	// parts into one naturally ordered part and a read without the outer
+	// ORDER BY would then serve the same valid cut for both orgs.
+	if err := direct.Exec(ctx, `SYSTEM STOP MERGES work_items`); err != nil {
+		t.Fatalf("stop merges: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := direct.Exec(context.Background(), `SYSTEM START MERGES work_items`); err != nil {
+			t.Errorf("start merges: %v", err)
+		}
+	})
+
 	seed := func(org string, spans [][3]int) {
 		t.Helper()
 		for _, span := range spans {
@@ -59,6 +71,16 @@ ORDER BY number %s`, rowLimitOrderRepos, org, span[0], span[1], direction)
 	orgAscending, orgDescending := baseOrg+"-asc", baseOrg+"-desc"
 	seed(orgAscending, [][3]int{{0, 100, 0}, {100, 100, 0}, {200, 60, 0}})
 	seed(orgDescending, [][3]int{{200, 60, 1}, {0, 100, 1}, {100, 100, 1}})
+
+	for _, org := range []string{orgAscending, orgDescending} {
+		var parts uint64
+		if err := direct.QueryRow(ctx, `SELECT uniqExact(_part) FROM work_items WHERE org_id = ?`, org).Scan(&parts); err != nil {
+			t.Fatalf("count parts for %s: %v", org, err)
+		}
+		if parts < 3 {
+			t.Fatalf("%s holds %d part(s), want at least 3: the seeded layout is not the one the test measures", org, parts)
+		}
+	}
 
 	subjects := make([]contextfabric.SubjectRef, 0, rowLimitOrderItems)
 	keys := make([]string, 0, rowLimitOrderItems)
