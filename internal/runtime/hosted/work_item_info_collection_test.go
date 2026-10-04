@@ -313,7 +313,7 @@ func runWorkItemInfoChild(t *testing.T, scenario string) {
 			workID := fmt.Sprintf("work-%03d", i)
 			id, _, _ := identity.Derive(identity.KindWorkItem, []string{"repo-1", workID}, nil)
 			client.rowsByPhase["s1"] = append(client.rowsByPhase["s1"], []any{id, "repo-1", workID, infoRepository, uint8(1), uint64(2001), uint64(2001), uint64(0), uint64(0), uint64(0)})
-			client.rowsByPhase["status"] = append(client.rowsByPhase["status"], []any{workID, "open", "repo-1"})
+			client.rowsByPhase["status"] = append(client.rowsByPhase["status"], []any{workID, "open", "repo-1", ""})
 			client.rowsByPhase["work"] = append(client.rowsByPhase["work"], []any{workID, "Title " + workID, "repo-1"})
 		}
 	}
@@ -387,7 +387,7 @@ func (c *infoTupleQueryClient) Query(_ context.Context, sql string, bindings []c
 	rows := [][]any{{c.memberID, "repo-1", "work-1", infoRepository, uint8(1), uint64(1), uint64(1), uint64(0), uint64(0), uint64(0)}}
 	if strings.Contains(sql, "w.status") && !strings.Contains(sql, "project_membership_presence") {
 		phase = "status"
-		rows = [][]any{{"work-1", "open", "repo-1"}}
+		rows = [][]any{{"work-1", "open", "repo-1", ""}}
 	}
 	if strings.Contains(sql, "w.title") {
 		phase = "work"

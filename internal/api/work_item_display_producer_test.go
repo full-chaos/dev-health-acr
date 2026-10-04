@@ -81,7 +81,7 @@ func TestWorkItemDisplayProducerStatuses(t *testing.T) {
 		if i == 9 {
 			status = "waiting"
 		}
-		f.client.rowsByPhase["status"] = append(f.client.rowsByPhase["status"], []any{workID, status, "repo-1"})
+		f.client.rowsByPhase["status"] = append(f.client.rowsByPhase["status"], []any{workID, status, "repo-1", ""})
 		f.client.rowsByPhase["work"] = append(f.client.rowsByPhase["work"], []any{workID, strings.Repeat("Long descriptive title ", 21) + workID, "repo-1"})
 	}
 	body := investigationRequestBody()
@@ -345,7 +345,7 @@ func TestWorkItemDisplayProducerControls(t *testing.T) {
 			}
 			f := newFreshTupleProducerFixture(t, failure)
 			if mode == "unknown" {
-				f.client.rowsByPhase = map[string][][]any{"status": {{"work-1", "unknown", "repo-1"}}}
+				f.client.rowsByPhase = map[string][][]any{"status": {{"work-1", "unknown", "repo-1", ""}}}
 			}
 			body := investigationRequestBody()
 			body.Question = "What is the state and count of Project Alpha work items?"

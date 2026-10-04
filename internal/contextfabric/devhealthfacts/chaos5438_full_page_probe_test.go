@@ -99,7 +99,7 @@ func probeArms() []probeArm {
 			name: "status", kind: contextfabric.FactStatus, match: "FROM work_items",
 			subjectsFor: workItemSubjects,
 			rowsFor: perSubject(func(i int) []any {
-				return []any{"WIDGET-" + strconv.Itoa(i), "open", "repo-1"}
+				return []any{"WIDGET-" + strconv.Itoa(i), "open", "repo-1", ""}
 			}),
 		},
 		{

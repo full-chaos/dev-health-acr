@@ -125,7 +125,7 @@ func TestWorkItemFreshEnginePostgresReuseAcrossInstances(t *testing.T) {
 				}
 				second.fixture.client.rowsByPhase = map[string][][]any{
 					"s1":     {{changedID, "repo-1", "work-2", hostedTestRepository, uint8(1), uint64(1), uint64(1), uint64(0), uint64(0), uint64(0)}},
-					"status": {{"work-2", "open", "repo-1"}}, "work": {{"work-2", "A changed member", "repo-1"}},
+					"status": {{"work-2", "open", "repo-1", ""}}, "work": {{"work-2", "A changed member", "repo-1"}},
 				}
 			}
 			if scenario == "requested_scope_changed" {

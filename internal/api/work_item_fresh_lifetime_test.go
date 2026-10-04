@@ -176,7 +176,7 @@ func TestWorkItemFreshRetryKeepsAuthorizedAnchor(t *testing.T) {
 					t.Fatal(err)
 				}
 				f.client.rowsByPhase["s1"] = append(f.client.rowsByPhase["s1"], []any{id, "repo-1", workID, hostedTestRepository, uint8(1), uint64(tc.members), uint64(tc.members), uint64(0), uint64(0), uint64(0)})
-				f.client.rowsByPhase["status"] = append(f.client.rowsByPhase["status"], []any{workID, "open", "repo-1"})
+				f.client.rowsByPhase["status"] = append(f.client.rowsByPhase["status"], []any{workID, "open", "repo-1", ""})
 				f.client.rowsByPhase["work"] = append(f.client.rowsByPhase["work"], []any{workID, "Title " + workID, "repo-1"})
 			}
 			sizes := []int{}

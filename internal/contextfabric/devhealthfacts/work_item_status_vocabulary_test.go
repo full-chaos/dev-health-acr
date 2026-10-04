@@ -17,7 +17,7 @@ func readStatusFacts(t *testing.T, statuses ...string) []contextfabric.Canonical
 	var subjects []contextfabric.SubjectRef
 	for i, status := range statuses {
 		id := "ITEM-" + string(rune('A'+i))
-		rows = append(rows, []any{id, status, "repo-1"})
+		rows = append(rows, []any{id, status, "repo-1", ""})
 		subjects = append(subjects, workItemSubject("repo-1", id))
 	}
 	client := &fakeClient{tables: []fakeTable{{match: "FROM work_items", rows: rows}}}
