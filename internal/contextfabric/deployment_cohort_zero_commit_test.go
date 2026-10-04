@@ -13,6 +13,7 @@ type zeroCommitRun struct {
 	status        contractsv1.ContextFabricInvestigationStatus
 	basis         contractsv1.ContextFabricRefusalBasis
 	candidates    int
+	prompt        string
 }
 
 func runDeploymentCohortWithNoCommit(t *testing.T, declared SubjectKind, candidateKinds ...SubjectKind) zeroCommitRun {
@@ -25,6 +26,9 @@ func runDeploymentCohortWithNoCommit(t *testing.T, declared SubjectKind, candida
 	resolution.Committed = []SubjectRef{}
 	resolution.CommitDecisionDigests = nil
 	resolution.Candidates = []SubjectCandidate{}
+	if len(candidateKinds) > 0 {
+		resolution.ClarificationPrompt = "Which anchor did you mean?"
+	}
 	for i, kind := range candidateKinds {
 		candidate := template
 		candidate.ReceiptID = template.ReceiptID + "_" + string(rune('a'+i))
@@ -50,7 +54,7 @@ func runDeploymentCohortWithNoCommit(t *testing.T, declared SubjectKind, candida
 	if runErr != nil {
 		t.Fatalf("investigate: %v", runErr)
 	}
-	return zeroCommitRun{discoverCalls: graph.discoverCalls, status: result.Status, basis: result.RefusalBasis, candidates: len(result.SubjectResolution.Candidates)}
+	return zeroCommitRun{discoverCalls: graph.discoverCalls, status: result.Status, basis: result.RefusalBasis, candidates: len(result.SubjectResolution.Candidates), prompt: result.SubjectResolution.ClarificationPrompt}
 }
 
 func TestZeroCommitDeploymentFrameWithOnlyUnservableAnchorKindsIsRefused(t *testing.T) {
@@ -69,6 +73,9 @@ func TestZeroCommitDeploymentFrameWithOnlyUnservableAnchorKindsIsRefused(t *test
 			run := runDeploymentCohortWithNoCommit(t, tc.declared, tc.candidates...)
 			if run.basis != contractsv1.ContextFabricRefusalBasisMemberKindUnservable {
 				t.Fatalf("refusal basis = %q (status %q), want member_kind_unservable", run.basis, run.status)
+			}
+			if run.status == InvestigationClarificationRequired || run.prompt != "" {
+				t.Fatalf("a refusal must not ask the caller to choose among candidates it dropped: status %q, basis %q, prompt %q", run.status, run.basis, run.prompt)
 			}
 			if run.discoverCalls != 0 || run.candidates != 0 {
 				t.Fatalf("discover calls = %d, candidates kept = %d, want 0 and 0", run.discoverCalls, run.candidates)
