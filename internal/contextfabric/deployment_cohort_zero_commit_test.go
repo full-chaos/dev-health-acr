@@ -63,11 +63,11 @@ func TestZeroCommitDeploymentFrameWithOnlyUnservableAnchorKindsIsRefused(t *test
 		declared   SubjectKind
 		candidates []SubjectKind
 	}{
-		{"declared project, no candidate", SubjectProject, nil},
-		{"declared project, one repository candidate", SubjectProject, []SubjectKind{SubjectRepository}},
-		{"declared project, one project candidate", SubjectProject, []SubjectKind{SubjectProject}},
-		{"no declared kind, one project candidate", "", []SubjectKind{SubjectProject}},
-		{"no declared kind, only unservable candidates", "", []SubjectKind{SubjectProject, SubjectProject}},
+		{"declared incident, no candidate", SubjectIncident, nil},
+		{"declared incident, one repository candidate", SubjectIncident, []SubjectKind{SubjectRepository}},
+		{"declared incident, one incident candidate", SubjectIncident, []SubjectKind{SubjectIncident}},
+		{"no declared kind, one incident candidate", "", []SubjectKind{SubjectIncident}},
+		{"no declared kind, only unservable candidates", "", []SubjectKind{SubjectIncident, SubjectIncident}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			run := runDeploymentCohortWithNoCommit(t, tc.declared, tc.candidates...)
@@ -94,11 +94,13 @@ func TestZeroCommitDeploymentFrameKeepsItsTerminalWhenAServableKindCouldStillHel
 		kept       int
 	}{
 		{"no declared kind, one repository candidate keeps the offer", "", []SubjectKind{SubjectRepository}, "clarification_required", "", 1},
-		{"no declared kind, mixed candidates keep the offer", "", []SubjectKind{SubjectProject, SubjectTeam}, "clarification_required", "", 2},
+		{"no declared kind, mixed candidates keep the offer", "", []SubjectKind{SubjectIncident, SubjectTeam}, "clarification_required", "", 2},
 		{"no declared kind, nothing found", "", nil, "no_match", "", 0},
 		{"declared repository, one repository candidate", SubjectRepository, []SubjectKind{SubjectRepository}, "clarification_required", "", 1},
-		{"declared repository, one project candidate", SubjectRepository, []SubjectKind{SubjectProject}, "no_match", "declared_kind_unmatched", 1},
+		{"declared repository, one incident candidate", SubjectRepository, []SubjectKind{SubjectIncident}, "no_match", "declared_kind_unmatched", 1},
 		{"declared repository, nothing found", SubjectRepository, nil, "no_match", "", 0},
+		{"declared project, nothing found", SubjectProject, nil, "no_match", "", 0},
+		{"no declared kind, one project candidate keeps the offer", "", []SubjectKind{SubjectProject}, "clarification_required", "", 1},
 		{"declared team, nothing found", SubjectTeam, nil, "no_match", "", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

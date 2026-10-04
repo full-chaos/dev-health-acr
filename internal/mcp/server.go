@@ -258,10 +258,10 @@ func serverInstructions(cfg *ProcessConfig, caller *CallerContext) string {
 	b.WriteString("\nChoosing a tool:\n")
 	b.WriteString("- context_for_task: you are about to work on a task in one repository. Pass a goal; get a ranked context packet.\n")
 	if investigate {
-		b.WriteString("- investigate_question: you have a question about teams, projects, repositories, pull requests, incidents or delivery health, for one subject or for many. Pass the question in plain words.\n")
+		b.WriteString("- investigate_question: you have a question about teams, projects, repositories, pull requests, incidents or delivery health, for one subject or for many. Pass the question in plain words. To write the answer on your own model, pass synthesis \"client\": the service skips its own answer writing and returns synthesis_input; fetch the prompt synthesize_answer with prompts/get and run it with synthesis_input.input as the user message. The stored result then carries facts and evidence only.\n")
 	}
 	if hostedToolEnabled(caller, toolInvestigateWithInterpretation) {
-		b.WriteString("- investigate_with_interpretation: the same question as investigate_question, when you ran the interpretation on your own model. Fetch the prompt interpret_question with prompts/get, run it, and pass the reply as interpretation and the prompt's _meta values as contract.\n")
+		b.WriteString("- investigate_with_interpretation: the same question as investigate_question, when you ran the interpretation on your own model. Fetch the prompt interpret_question with prompts/get, run it, and pass the reply as interpretation and the prompt's _meta values as contract. It takes synthesis \"client\" as well.\n")
 	}
 	if hostedToolEnabled(caller, toolInvestigationResult) {
 		b.WriteString("- investigation_result: you need the full result behind a previous answer. Pass its result_id.\n")

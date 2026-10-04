@@ -95,8 +95,12 @@ func TestShapesAreGeneratedFromThePolicyForEveryRoot(t *testing.T) {
 			t.Fatalf("%s: operation is not served", shape.ID())
 		}
 		allowed := map[string]bool{}
+		inDocument := 0
 		for _, o := range op.Outputs {
 			allowed[o.Path] = true
+			if !o.BeyondDocument {
+				inDocument++
+			}
 		}
 		if len(shape.Paths) == 0 {
 			t.Errorf("%s selects nothing", shape.ID())
@@ -106,8 +110,8 @@ func TestShapesAreGeneratedFromThePolicyForEveryRoot(t *testing.T) {
 				t.Errorf("%s selects %s, which the policy does not allow", shape.ID(), path)
 			}
 		}
-		if shape.Name == "all" && len(shape.Paths) != len(op.Outputs) {
-			t.Errorf("%s selects %d of %d allowed paths", shape.ID(), len(shape.Paths), len(op.Outputs))
+		if shape.Name == "all" && len(shape.Paths) != inDocument {
+			t.Errorf("%s selects %d of %d allowed paths the registered document selects", shape.ID(), len(shape.Paths), inDocument)
 		}
 		query, _, err := shape.Query(nil)
 		if err != nil {

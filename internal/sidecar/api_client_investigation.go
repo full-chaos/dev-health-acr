@@ -48,9 +48,17 @@ func (c *Client) Investigate(ctx context.Context, request contractsv1.ContextFab
 // A reused result can retain a historical ID; caller diagnostics must use
 // the outgoing request's identity without modifying that stored result.
 func (c *Client) InvestigateWithRequestID(ctx context.Context, request contractsv1.ContextFabricInvestigationRequest) (contractsv1.ContextFabricInvestigationResult, string, error) {
+	response, requestID, err := c.InvestigateWithSynthesisInput(ctx, request)
+	return response.ContextFabricInvestigationResult, requestID, err
+}
+
+// InvestigateWithSynthesisInput is InvestigateWithRequestID that also hands
+// back the synthesis input a client synthesis turn returns. The input is
+// checked here and is nil for every turn that did not ask for it.
+func (c *Client) InvestigateWithSynthesisInput(ctx context.Context, request contractsv1.ContextFabricInvestigationRequest) (contractsv1.ContextFabricInvestigationResponse, string, error) {
 	requestID, err := newClientRequestID()
 	if err != nil {
-		return contractsv1.ContextFabricInvestigationResult{}, requestID, err
+		return contractsv1.ContextFabricInvestigationResponse{}, requestID, err
 	}
 	request.SchemaVersion = contractsv1.ContextFabricInvestigationRequestSchema
 	request.RequestID = requestID
@@ -60,27 +68,32 @@ func (c *Client) InvestigateWithRequestID(ctx context.Context, request contracts
 		Surface: contextFabricMCPSurface,
 	}
 	if err := request.Validate(); err != nil {
-		return contractsv1.ContextFabricInvestigationResult{}, requestID, fmt.Errorf("invalid investigation request: %w", err)
+		return contractsv1.ContextFabricInvestigationResponse{}, requestID, fmt.Errorf("invalid investigation request: %w", err)
 	}
 	encoded, err := json.Marshal(request)
 	if err != nil {
-		return contractsv1.ContextFabricInvestigationResult{}, requestID, fmt.Errorf("encode investigation request: %w", err)
+		return contractsv1.ContextFabricInvestigationResponse{}, requestID, fmt.Errorf("encode investigation request: %w", err)
 	}
 
-	var result contractsv1.ContextFabricInvestigationResult
+	var response contractsv1.ContextFabricInvestigationResponse
 	// Use the same transport-owned ID in the existing correlation header;
 	// the hosted route replaces body IDs with its request-context ID.
-	if _, err := c.callWithHeaders(ctx, http.MethodPost, investigationsPath, encoded, &result, http.Header{"X-Request-ID": []string{requestID}}); err != nil {
-		return contractsv1.ContextFabricInvestigationResult{}, requestID, err
+	if _, err := c.callWithHeaders(ctx, http.MethodPost, investigationsPath, encoded, &response, http.Header{"X-Request-ID": []string{requestID}}); err != nil {
+		return contractsv1.ContextFabricInvestigationResponse{}, requestID, err
 	}
 	// Lenient, even though this is the "fresh answer" call: with CHAOS-3782
 	// answer reuse the server may legitimately serve a STORED row here, so
 	// a strict client gate would reject an answer the hosted side was right
 	// to return (codex round-5 R5-1).
-	if err := validateStoredInvestigationResult(result); err != nil {
-		return contractsv1.ContextFabricInvestigationResult{}, requestID, err
+	if err := validateStoredInvestigationResult(response.ContextFabricInvestigationResult); err != nil {
+		return contractsv1.ContextFabricInvestigationResponse{}, requestID, err
 	}
-	return result, requestID, nil
+	if response.SynthesisInput != nil {
+		if err := response.SynthesisInput.Validate(); err != nil {
+			return contractsv1.ContextFabricInvestigationResponse{}, requestID, fmt.Errorf("invalid synthesis input from the hosted service: %w", err)
+		}
+	}
+	return response, requestID, nil
 }
 
 // InvestigationResult re-reads one persisted investigation result by its

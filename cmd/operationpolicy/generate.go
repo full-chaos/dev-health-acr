@@ -204,7 +204,7 @@ func buildOperation(schema *ast.Schema, row registryRow, decl operationDecl) (di
 	if err != nil {
 		return directread.OperationPolicy{}, err
 	}
-	outputs, withheld, err := buildOutputs(opDef, decl)
+	outputs, withheld, err := buildOutputs(schema, opDef, decl)
 	if err != nil {
 		return directread.OperationPolicy{}, err
 	}
@@ -455,6 +455,7 @@ type outputNode struct {
 	Type     string
 	Leaf     directread.OutputLeaf
 	Segments []string
+	Beyond   bool
 }
 
 // walkOutputs lists every response leaf path of a validated document, from
@@ -523,14 +524,87 @@ func walkOutputs(opDef *ast.OperationDefinition) ([]outputNode, error) {
 	return out, nil
 }
 
+// additionalOutputNodes resolves the declared output paths the registered
+// document does not select against the SDL. graphql_query rebuilds the
+// client's selection, so an SDL leaf listed here is servable there while the
+// registered document, and its pinned digest, stay as ops registered them.
+func additionalOutputNodes(schema *ast.Schema, opDef *ast.OperationDefinition, paths []string, have []outputNode) ([]outputNode, error) {
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	if len(opDef.SelectionSet) != 1 {
+		return nil, fmt.Errorf("additional outputs need a single root field, document has %d", len(opDef.SelectionSet))
+	}
+	rootSel, ok := opDef.SelectionSet[0].(*ast.Field)
+	if !ok || rootSel.Definition == nil {
+		return nil, errors.New("additional outputs: root selection is not a resolved field")
+	}
+	seen := map[string]bool{}
+	for _, n := range have {
+		seen[n.Path] = true
+	}
+	var out []outputNode
+	for _, path := range paths {
+		if seen[path] {
+			return nil, fmt.Errorf("additional output %q is already selected by the document", path)
+		}
+		seen[path] = true
+		parts := strings.Split(path, ".")
+		if parts[0] != rootSel.Alias && parts[0] != rootSel.Name {
+			return nil, fmt.Errorf("additional output %q does not start at root field %q", path, rootSel.Name)
+		}
+		def := rootSel.Definition
+		segs := []string{parts[0], rootSel.Name}
+		want := parts[0]
+		for t := def.Type; t.Elem != nil; t = t.Elem {
+			want += "[*]"
+		}
+		for _, raw := range parts[1:] {
+			typeDef := schema.Types[def.Type.Name()]
+			if typeDef == nil || typeDef.Kind != ast.Object {
+				return nil, fmt.Errorf("additional output %q: %q is not an object type", path, def.Type.Name())
+			}
+			name := strings.TrimSuffix(raw, "[*]")
+			next := typeDef.Fields.ForName(name)
+			if next == nil {
+				return nil, fmt.Errorf("additional output %q: %s has no field %q", path, typeDef.Name, name)
+			}
+			def = next
+			segs = append(segs, name, name)
+			want += "." + name
+			for t := def.Type; t.Elem != nil; t = t.Elem {
+				want += "[*]"
+			}
+		}
+		if want != path {
+			return nil, fmt.Errorf("additional output %q is not the SDL path %q", path, want)
+		}
+		leafDef := schema.Types[def.Type.Name()]
+		if leafDef == nil || (leafDef.Kind != ast.Scalar && leafDef.Kind != ast.Enum) {
+			return nil, fmt.Errorf("additional output %q is not a leaf", path)
+		}
+		leaf := directread.LeafScalar
+		if def.Type.Name() == "JSON" {
+			leaf = directread.LeafJSON
+		}
+		out = append(out, outputNode{Path: path, Type: def.Type.String(), Leaf: leaf, Segments: segs, Beyond: true})
+	}
+	return out, nil
+}
+
 // errPersonOutput marks the output-path rule failure (T17).
 var errPersonOutput = errors.New("person-named or free JSON output path without a written exception")
 
-func buildOutputs(opDef *ast.OperationDefinition, decl operationDecl) ([]directread.OutputPath, []directread.WithheldOutput, error) {
+func buildOutputs(schema *ast.Schema, opDef *ast.OperationDefinition, decl operationDecl) ([]directread.OutputPath, []directread.WithheldOutput, error) {
 	nodes, err := walkOutputs(opDef)
 	if err != nil {
 		return nil, nil, err
 	}
+	extra, err := additionalOutputNodes(schema, opDef, decl.AdditionalOutputs, nodes)
+	if err != nil {
+		return nil, nil, err
+	}
+	nodes = append(nodes, extra...)
 	known := map[string]bool{}
 	for _, n := range nodes {
 		known[n.Path] = true
@@ -559,7 +633,7 @@ func buildOutputs(opDef *ast.OperationDefinition, decl operationDecl) ([]directr
 			failing = append(failing, n.Path)
 			continue
 		}
-		outputs = append(outputs, directread.OutputPath{Path: n.Path, Type: n.Type, Leaf: n.Leaf, Exception: exception})
+		outputs = append(outputs, directread.OutputPath{Path: n.Path, Type: n.Type, Leaf: n.Leaf, Exception: exception, BeyondDocument: n.Beyond})
 	}
 	if len(failing) > 0 {
 		return nil, nil, fmt.Errorf("%w: %s", errPersonOutput, strings.Join(failing, ", "))

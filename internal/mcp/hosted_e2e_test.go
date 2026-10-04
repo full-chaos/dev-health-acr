@@ -510,6 +510,11 @@ func runHostedE2E(t *testing.T, cfg *hostedE2EConfig) {
 		if guides == 0 {
 			t.Errorf("resources/list carries no acr://guide/* resource: %v", uris)
 		}
+		for _, want := range []string{"acr://contract/interpretation-output", "acr://contract/synthesis-output", "acr://guide/fact-kinds"} {
+			if !slices.Contains(uris, want) {
+				t.Errorf("resources/list lacks %q: %v", want, uris)
+			}
+		}
 		var prompts *mcpsdk.ListPromptsResult
 		err = retryTooMany(t, "prompts/list", func() (err error) {
 			prompts, err = a.session.ListPrompts(ctx, nil)

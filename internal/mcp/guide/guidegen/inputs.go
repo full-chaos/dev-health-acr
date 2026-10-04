@@ -7,6 +7,7 @@ package guidegen
 import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/interpretprompt"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -57,6 +58,12 @@ type Inputs struct {
 	// GraphQLRoots are the graphql_query root fields (CHAOS-7075).
 	GraphQLRoots  []DataGraphQLRootRow
 	DataNotServed []DataNotServedRow
+	// FactKinds is the closed set of fact kinds and FactKindsGuide the
+	// glossary text the interpretation prompt states for them.
+	FactKinds      []string
+	FactKindsGuide string
+	// ClientFlow is the vocabulary of the client-side interpretation flow.
+	ClientFlow ClientFlowInputs
 }
 
 // FromRegistries reads the live registries.
@@ -111,5 +118,10 @@ func FromRegistries() Inputs {
 	}
 	in.DataOperations, in.DataNotServed = dataRegistryRows()
 	in.GraphQLRoots = dataGraphQLRoots()
+	for _, kind := range contractsv1.ContextFabricFactKindVocabulary() {
+		in.FactKinds = append(in.FactKinds, string(kind))
+	}
+	in.FactKindsGuide = interpretprompt.FactKindsGuide()
+	in.ClientFlow = clientFlowInputs()
 	return in
 }

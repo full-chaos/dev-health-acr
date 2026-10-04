@@ -337,6 +337,7 @@ func maximalVersions() ContextFabricVersionSet {
 	// the whole width free: a client identity spends part of it on its prefix.
 	v.InterpretationSource = ContextFabricInterpretationSourceServer
 	v.InterpretationModelIdentity = escaped(ContextFabricModelIdentityMaxLength)
+	v.SynthesisSource = ContextFabricSynthesisSourceServer
 	return v
 }
 

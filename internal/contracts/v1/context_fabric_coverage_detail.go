@@ -255,6 +255,22 @@ const (
 	// it), so gating the disclosure on a served Cohort would drop it on
 	// exactly the turns a caller most needs to see the floor.
 	ContextFabricCoverageDetailKindCensusTruncated ContextFabricCoverageDetailCode = "kind_census_truncated"
+
+	// ContextFabricCoverageDetailGraphProjectDeploymentsUnlinked: a question
+	// asked for the deployments of a named PROJECT and none of the project's
+	// issues links a pull request in the graph, so no repository -- and no
+	// deployment -- is reachable from it. Count is the number of the
+	// project's issues the read examined (zero when the project has none).
+	//
+	// It names a gap in the LINK, not an empty result: the project's
+	// deployments are unknown, which is not the same as none. The graph
+	// cannot say WHY the link is absent -- the project may simply have no
+	// linked pull request, or its provider may write no native link from a
+	// pull request or merge request to an issue (a GitLab merge request
+	// today) -- so the code carries no cause qualifier it could only guess.
+	// `graph_cohort_denied_by_authorization` is the nearest neighbour and
+	// would be a lie here: nothing was denied, nothing was found.
+	ContextFabricCoverageDetailGraphProjectDeploymentsUnlinked ContextFabricCoverageDetailCode = "graph_project_deployments_unlinked"
 )
 
 // contextFabricCoverageDetailCodes is the closed vocabulary in published
@@ -280,6 +296,7 @@ var contextFabricCoverageDetailCodes = [...]ContextFabricCoverageDetailCode{
 	ContextFabricCoverageDetailRequirementReadNotPlanned,
 	ContextFabricCoverageDetailFactReadOriginState,
 	ContextFabricCoverageDetailKindCensusTruncated,
+	ContextFabricCoverageDetailGraphProjectDeploymentsUnlinked,
 }
 
 // ContextFabricCoverageDetailCodeCount is the vocabulary size as a
@@ -541,6 +558,7 @@ var coverageDetailFieldRules = map[ContextFabricCoverageDetailCode]coverageDetai
 	ContextFabricCoverageDetailAnswerTerminatedBeforeAttempt:    {},
 	ContextFabricCoverageDetailGraphCohortDeniedByAuthorization: {requireCount: true, allowCount: true},
 	ContextFabricCoverageDetailGraphUnknownRelationshipType:     {requireCount: true, allowCount: true},
+	ContextFabricCoverageDetailGraphProjectDeploymentsUnlinked:  {requireCount: true, allowCount: true},
 	ContextFabricCoverageDetailGraphValidityUnbounded:           {requireCount: true, allowCount: true},
 	ContextFabricCoverageDetailReuseAuxiliaryRefsStripped:       {requireCount: true, allowCount: true},
 	// No fact kind and NO COUNT. The count is the tempting one and it is

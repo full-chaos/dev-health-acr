@@ -261,7 +261,8 @@
     "canonical_service_version": "context-fabric-facts.v2",
     "model_identity": "test-provider/test-model",
     "interpretation_source": "server",
-    "interpretation_model_identity": "test-provider/test-model"
+    "interpretation_model_identity": "test-provider/test-model",
+    "synthesis_source": "server"
   },
   "deterministic_answer": "This investigation is complete. Counted at least 2000 work items.",
   "warnings": [],

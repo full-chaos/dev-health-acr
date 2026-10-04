@@ -11,14 +11,14 @@ import (
 
 // reuseAnchorGuardEngine builds an engine whose stored row committed repo-1
 // (a servable deployment cohort anchor) and whose fresh interpretation
-// commits the request's project hint under a project anchor, which the
+// commits the request's incident hint under an incident anchor, which the
 // deployment cohort anchor guard refuses.
 func reuseAnchorGuardEngine(t *testing.T, withStoredRow bool, telemetry *recordingTelemetry) *Engine {
 	t.Helper()
 	frame := deploymentScopedFrame(GoalAssessState)
 	gate := DecideFrameGate(ValidateFrame(frame, nil, ""), true)
-	outcome := QuestionFamilyOutcome{Family: QuestionFamilyScopedCohortStatus, Source: QuestionFamilySourceModel, Frame: &frame, FrameObligations: frame.Obligations, Gate: gate, WinningSample: FamilySample{ScopeAnchorKind: SubjectProject, ScopeAnchorTerm: "Anchor"}}
-	hinted := SubjectRef{Kind: SubjectProject, CanonicalID: "project-2", Label: "Project"}
+	outcome := QuestionFamilyOutcome{Family: QuestionFamilyScopedCohortStatus, Source: QuestionFamilySourceModel, Frame: &frame, FrameObligations: frame.Obligations, Gate: gate, WinningSample: FamilySample{ScopeAnchorKind: SubjectIncident, ScopeAnchorTerm: "Anchor"}}
+	hinted := SubjectRef{Kind: SubjectIncident, CanonicalID: "incident-2", Label: "Incident"}
 	payload := workItemTuplePayloadFixture(t)
 	resolution := payload.SubjectResolution
 	resolution.Committed = []SubjectRef{hinted}
@@ -55,7 +55,7 @@ func reuseAnchorGuardEngine(t *testing.T, withStoredRow bool, telemetry *recordi
 
 func reuseAnchorGuardRequest() InvestigationRequest {
 	request := validInvestigationRequestWithConfirmedWindow()
-	request.RequestedScope.SubjectHints = []SubjectHint{{Kind: SubjectProject, ID: "project-2", Label: "Project", Source: "caller"}}
+	request.RequestedScope.SubjectHints = []SubjectHint{{Kind: SubjectIncident, ID: "incident-2", Label: "Incident", Source: "caller"}}
 	return request
 }
 

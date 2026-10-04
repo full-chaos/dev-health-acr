@@ -37,7 +37,8 @@ func TestEveryDeclaredUntrustedStringIsMarkedInTheRendering(t *testing.T) {
 	// claimed_facts.field ship unmarked, so anything not planted must be
 	// named here with a reason.
 	carveOuts := map[string]string{
-		"full_result": "the whole canonical document, rendered by the investigation_result tool rather than this view",
+		"full_result":     "the whole canonical document, rendered by the investigation_result tool rather than this view",
+		"synthesis_input": "the synthesis input of a client synthesis turn, carried beside the projection and never rendered into it",
 	}
 	// One sentinel PER FIELD, derived from its path (codex round-7 F6). A
 	// single shared sentinel only proved that SOME planted field survived

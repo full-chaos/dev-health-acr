@@ -24,6 +24,9 @@ const (
 // hosted API grants -- the sidecar clamps to the advertised capability
 // limits after this runs.
 func (r MCPInvestigateQuestionRequest) Validate() error {
+	if r.Synthesis != "" && r.Synthesis != ContextFabricSynthesisModeClient {
+		return fmt.Errorf("investigate_question synthesis must be empty or %q", ContextFabricSynthesisModeClient)
+	}
 	if !rawBoundedText(r.Question, 1, MCPInvestigationQuestionMaxLength) {
 		return fmt.Errorf("investigate_question requires a question within v1 bounds")
 	}
@@ -194,6 +197,11 @@ func (r MCPInvestigateQuestionResponse) Validate() error {
 		// the flag would fetch a result it already holds.
 		if r.Structured.ProjectionBudget.FullResultOmitted {
 			return fmt.Errorf("investigate_question full_result is present but declared omitted")
+		}
+	}
+	if r.SynthesisInput != nil {
+		if err := r.SynthesisInput.Validate(); err != nil {
+			return fmt.Errorf("synthesis_input: %w", err)
 		}
 	}
 	if err := validateUntrustedContent(r.UntrustedContent, MCPInvestigateQuestionUntrustedFields); err != nil {

@@ -1043,6 +1043,10 @@ type EngineTelemetry interface {
 	// failed and the answer was served without model prose: the closed class,
 	// the attempts the runtime made and the time the call took.
 	RecordSynthesisModelFailure(ctx context.Context, principal storage.Principal, event SynthesisModelFailureEvent)
+	// RecordClientSynthesisDecision reports what became of a turn that asked
+	// to write its own answer: refused, input too large, or served. Counts
+	// and a closed outcome only.
+	RecordClientSynthesisDecision(ctx context.Context, principal storage.Principal, event ClientSynthesisDecisionEvent)
 	// RecordCohortRanked (CHAOS-4398) reports the outcome of ONE RankCohort
 	// pass: how many members were scored, the deterministic formula
 	// version (prompt-changes-are-behavior-changes discipline applied to
@@ -1517,6 +1521,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			return InvestigationResult{}, stageError(StageInterpretation, err)
 		}
 	}
+	if clientSynthesisRequested(request) {
+		if err := e.checkClientSynthesis(ctx); err != nil {
+			continuation = continuation.withReason(ContinuationReasonRequestInvalid)
+			e.recordClientSynthesisDecision(ctx, principal, ClientSynthesisDecisionEvent{Outcome: ClientSynthesisUnavailable})
+			return InvestigationResult{}, stageError(StageSynthesis, err)
+		}
+	}
 	// CHAOS-3781: historical questions are ANSWERED now, not refused --
 	// the graph admits by validity window and the fact providers bound
 	// themselves or decline honestly, so the layers this engine used to
@@ -1925,6 +1936,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			}
 			reused.Completeness = ComputeAnswerCompleteness(reused)
 			BackfillStoredInterpretationProvenance(&reused.Versions)
+			BackfillStoredSynthesisSource(&reused.Versions)
 			// The count reaches the OPERATOR on this path too.
 			//
 			// The backfill above states a cardinality on a served answer, and
@@ -4056,6 +4068,15 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// call is shared with terminalResult's own Save call site, not
 		// hand-copied.
 		e.recordStructureConfirmationOutcome(ctx, principal, request, structureCanon)
+	}
+	if pendingTelemetry.ClientSynthesisInput != nil {
+		deliverSynthesisInput(ctx, pendingTelemetry.ClientSynthesisInput)
+		measure := pendingTelemetry.ClientSynthesisMeasure
+		e.recordClientSynthesisDecision(ctx, principal, ClientSynthesisDecisionEvent{
+			Outcome: ClientSynthesisServed, Status: result.Status,
+			BundleBytes: len(pendingTelemetry.ClientSynthesisInput.Input), MaxBytes: measure.MaxBytes, Bounded: pendingTelemetry.ClientSynthesisInput.Bounded,
+			FactsRead: measure.FactsRead, FactsGiven: measure.FactsGiven, CommitsRetracted: pendingTelemetry.ClientCommitsRetracted,
+		})
 	}
 	cover.answered = true
 	return result, nil

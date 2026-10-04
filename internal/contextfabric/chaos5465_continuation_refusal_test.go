@@ -1014,6 +1014,7 @@ func TestWindowContinuation_EveryRequestFieldIsDecidedByName(t *testing.T) {
 		"supplied_interpretation": {"exempt", "who interpreted this turn, not what is asked: its contract is checked at the start of the turn, and once the interpreter accepts that contract a supplied interpretation enters where the model's own does and the continuation decision reads neither", func(r *InvestigationRequest) {
 			r.SuppliedInterpretation = &SuppliedInterpretation{Output: json.RawMessage(`{}`), ModelOutputVersion: "schema-v1", PromptVersion: "prompt-v1"}
 		}},
+		"synthesis_mode":                   {"exempt", "who writes the answer, not what is asked: the continuation decision is made before synthesis and reads neither", func(r *InvestigationRequest) { r.SynthesisMode = SynthesisModeClient }},
 		"requested_scope.repository_slugs": {"disqualifier", "a stated repository scope", func(r *InvestigationRequest) { r.RequestedScope.RepositorySlugs = []string{"widget-service"} }},
 		"requested_scope.project_ids":      {"disqualifier", "a stated project scope", func(r *InvestigationRequest) { r.RequestedScope.ProjectIDs = []string{"project_ask_dev"} }},
 		"requested_scope.team_ids":         {"disqualifier", "a stated team scope", func(r *InvestigationRequest) { r.RequestedScope.TeamIDs = []string{"team_platform"} }},
@@ -1083,7 +1084,12 @@ func TestWindowContinuation_EveryRequestFieldIsDecidedByName(t *testing.T) {
 			store := newRefusalStore(&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior, older.ResultID: older}})
 			telemetry := &recordingTelemetry{}
 			engine, _ := newRefusalEngine(t, store, contractAcceptingInterpreter{forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam}}, telemetry)
-			result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+			ctx := context.Background()
+			if request.SynthesisMode == SynthesisModeClient {
+				engine.synthesizer = clientComposingSynthesizer{AnswerSynthesizer: engine.synthesizer}
+				ctx, _ = WithSynthesisInputCollector(ctx)
+			}
+			result, err := engine.Investigate(ctx, acceptancePrincipal(), request)
 			disposition, reason := ContinuationDisposition("<no decision>"), ContinuationDecisionReason("")
 			if len(telemetry.windowContinuationDecisions) == 1 {
 				disposition, reason = telemetry.windowContinuationDecisions[0].Disposition, telemetry.windowContinuationDecisions[0].Reason

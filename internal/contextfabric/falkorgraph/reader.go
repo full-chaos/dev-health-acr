@@ -653,11 +653,48 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		}
 	}
 
+	// projectDeploymentAnchor is set when the frame asks for the deployment
+	// members of a named project: a project has no repository edge, so its
+	// members come from projectDeploymentMembers, not from the two-hop walk.
+	var projectDeploymentAnchor *contextfabric.SubjectRef
+	if declaredCohortKindForRouting == contextfabric.SubjectDeployment {
+		for i, subject := range request.Resolution.Committed {
+			if subject.Kind == contextfabric.SubjectProject && frameAnchorBound(request.Frame, subject, request.Resolution, request.Bases) {
+				projectDeploymentAnchor = &request.Resolution.Committed[i]
+				break
+			}
+		}
+	}
+	projectDeploymentsUnlinked := -1
+	projectDeploymentsDenied := -1
+	projectDeploymentsCutEmpty := false
+
 	for _, subject := range request.Resolution.Committed {
 		if ownershipRoutedRepoSlug != "" && subject.Kind == contextfabric.SubjectRepository && subject.Label == ownershipRoutedRepoSlug {
 			continue
 		}
-		nodes, edges, failed, filters, walkTruncated, err := a.hopWalk(ctx, key, principal.OrgID, principal, scope, subject, 2, collectLimit, temporal)
+		var nodes []graphrank.CandidateNode
+		var edges []graphrank.ResolvedEdge
+		var failed int
+		var filters edgeFilterCounts
+		var walkTruncated bool
+		var err error
+		if projectDeploymentAnchor != nil && subject == *projectDeploymentAnchor {
+			var walk projectDeploymentWalk
+			walk, err = a.projectDeploymentMembers(ctx, key, principal.OrgID, principal, scope, subject, collectLimit, temporal)
+			nodes, edges, filters, walkTruncated = walk.nodes, walk.edges, walk.filters, walk.truncated
+			if err == nil && len(walk.nodes) == 0 {
+				projectDeploymentsCutEmpty = walk.truncated
+				switch {
+				case needsProjectReach(principal):
+					projectDeploymentsDenied = 0
+				case walk.linkedPullRequests == 0 && !walk.truncated:
+					projectDeploymentsUnlinked = walk.issues
+				}
+			}
+		} else {
+			nodes, edges, failed, filters, walkTruncated, err = a.hopWalk(ctx, key, principal.OrgID, principal, scope, subject, 2, collectLimit, temporal)
+		}
 		if err != nil {
 			// CHAOS-4077: see graphNotProjectedError's own doc comment --
 			// this is one of the two DiscoverContext sites that would
@@ -690,6 +727,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			if ownershipRoutedRepoSlug != "" && mustSubject(n).Kind == declaredCohortKindForRouting {
 				continue
 			}
+			if projectDeploymentAnchor != nil && subject != *projectDeploymentAnchor && mustSubject(n).Kind == contextfabric.SubjectDeployment {
+				continue
+			}
 			nk := graphrank.SubjectKey(mustSubject(n))
 			if !seenNode[nk] {
 				seenNode[nk] = true
@@ -697,6 +737,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			}
 		}
 		for _, e := range edges {
+			if projectDeploymentAnchor != nil && subject != *projectDeploymentAnchor && (e.From.Kind == contextfabric.SubjectDeployment || e.To.Kind == contextfabric.SubjectDeployment) {
+				continue
+			}
 			if !seenEdge[e.UUID] {
 				seenEdge[e.UUID] = true
 				resolvedEdges = append(resolvedEdges, e)
@@ -804,6 +847,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		if !ok {
 			continue
 		}
+		if projectDeploymentAnchor != nil && subject.Kind == contextfabric.SubjectDeployment {
+			continue
+		}
 		nk := graphrank.SubjectKey(subject)
 		if !seenNode[nk] {
 			seenNode[nk] = true
@@ -821,6 +867,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		}
 		for _, ce := range textEdges {
 			if seenEdge[ce.UUID] {
+				continue
+			}
+			if projectDeploymentAnchor != nil && touchesDeployment(ce) {
 				continue
 			}
 			seenEdge[ce.UUID] = true
@@ -962,6 +1011,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			for _, n := range kindTextNodes {
 				subject, ok := graphrank.NodeSubject(n)
 				if !ok {
+					continue
+				}
+				if projectDeploymentAnchor != nil && subject.Kind == contextfabric.SubjectDeployment {
 					continue
 				}
 				nk := graphrank.SubjectKey(subject)
@@ -1341,7 +1393,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		unbounded = countUnboundedValidity(cohortNodes, orderedResolved)
 	}
 
-	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0 || exactNameTruncated || cohortWhollyDeniedByAuthz || kindCensusTruncated
+	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0 || exactNameTruncated || cohortWhollyDeniedByAuthz || kindCensusTruncated || projectDeploymentsUnlinked >= 0 || projectDeploymentsDenied >= 0 || projectDeploymentsCutEmpty
 	var degradedReasons []string
 	var coverageDetails []contextfabric.CoverageDetail
 	// CHAOS-4690: every degraded reason this reader composes gets a paired
@@ -1422,6 +1474,32 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		degradedReasons = append(degradedReasons, cohortDeniedReason)
 		deniedCount := cohortKindScopedAuthzDropped
 		appendGraphDetail(contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization, true, &deniedCount, cohortDeniedReason, "context-fabric:graph")
+	}
+	if projectDeploymentsCutEmpty {
+		cutReason := fmt.Sprintf("kind_census_truncated:%s:%d:%d", contextfabric.SubjectDeployment, 0, 0)
+		degradedReasons = append(degradedReasons, cutReason)
+		cutDeclared, cutServed := 0, 0
+		cutDetail := contextfabric.CoverageDetail{
+			DetailID: fmt.Sprintf("cov-graph-%02d", len(coverageDetails)+1), Source: "context-fabric:graph",
+			Code: contractsv1.ContextFabricCoverageDetailKindCensusTruncated, Degrading: true,
+			Kind: contextfabric.SubjectDeployment, Declared: &cutDeclared, Served: &cutServed, Raw: cutReason,
+		}
+		cutDetail.Label = contractsv1.ComposeCoverageDetailLabel(cutDetail)
+		coverageDetails = append(coverageDetails, cutDetail)
+	}
+	if projectDeploymentsDenied >= 0 {
+		deniedReason := fmt.Sprintf("cohort_denied_by_authorization:%d", projectDeploymentsDenied)
+		degradedReasons = append(degradedReasons, deniedReason)
+		deniedHops := projectDeploymentsDenied
+		appendGraphDetail(contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization, true, &deniedHops, deniedReason, "context-fabric:graph")
+	}
+	if projectDeploymentsUnlinked >= 0 {
+		// The project's deployments are UNKNOWN, not none: no issue links a
+		// pull request, so no repository is reachable. Never an empty cohort.
+		unlinkedReason := fmt.Sprintf("project_deployments_unlinked:%d", projectDeploymentsUnlinked)
+		degradedReasons = append(degradedReasons, unlinkedReason)
+		issuesChecked := projectDeploymentsUnlinked
+		appendGraphDetail(contractsv1.ContextFabricCoverageDetailGraphProjectDeploymentsUnlinked, true, &issuesChecked, unlinkedReason, "context-fabric:graph")
 	}
 	if admission.DroppedUnknownRelationshipTypeCount > 0 {
 		unknownTypeReason := fmt.Sprintf("unknown_relationship_type:%d", admission.DroppedUnknownRelationshipTypeCount)
@@ -1541,4 +1619,13 @@ func isReservedIdentityProjectID(row graphrank.IdentityRow) bool {
 		return false
 	}
 	return contractsv1.ContextFabricIsReservedOrganizationScopeID(strings.TrimPrefix(row.CanonicalID, "project:"))
+}
+
+func touchesDeployment(ce graphrank.CandidateEdge) bool {
+	for _, uuid := range []string{ce.SourceNodeUUID, ce.TargetNodeUUID} {
+		if kind, _ := splitSubjectUUID(uuid); kind == string(contextfabric.SubjectDeployment) {
+			return true
+		}
+	}
+	return false
 }

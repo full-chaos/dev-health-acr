@@ -1321,6 +1321,9 @@ func (v ContextFabricVersionSet) Validate() error {
 	if err := validateInterpretationProvenance(v.InterpretationSource, v.InterpretationModelIdentity); err != nil {
 		return err
 	}
+	if v.SynthesisSource != "" && !ValidContextFabricSynthesisSource(v.SynthesisSource) {
+		return fmt.Errorf("synthesis_source is invalid")
+	}
 	return nil
 }
 

@@ -420,6 +420,7 @@ func parityInvestigationResult() contractsv1.ContextFabricInvestigationResult {
 			// The engine names the interpreter of every result it interprets,
 			// so the stored row and the fresh result carry the same versions.
 			InterpretationSource: contractsv1.ContextFabricInterpretationSourceServer, InterpretationModelIdentity: "test-provider/interpret-model",
+			SynthesisSource: contractsv1.ContextFabricSynthesisSourceServer,
 		},
 		DeterministicAnswer: "Two teams need attention because blockers and stalled reviews concentrate there.",
 		Warnings:            []string{},
