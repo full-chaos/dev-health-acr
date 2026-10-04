@@ -84,5 +84,36 @@ func (s *SuppliedSynthesizer) decode(raw []byte) (synthesisOutput, error) {
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
 		return synthesisOutput{}, errSuppliedSynthesisSchema
 	}
+	if !strictCoverageDisclosures(output.CoverageDisclosures) {
+		return synthesisOutput{}, errSuppliedSynthesisSchema
+	}
 	return output, nil
+}
+
+// strictCoverageDisclosures holds a caller's draft to the closed shape the
+// model path decodes leniently: absent or null, or an array of exactly
+// {detail_id, text} string objects.
+func strictCoverageDisclosures(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return true
+	}
+	var entries []json.RawMessage
+	if err := json.Unmarshal(trimmed, &entries); err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		var members map[string]json.RawMessage
+		if err := json.Unmarshal(entry, &members); err != nil || members == nil || len(members) != 2 {
+			return false
+		}
+		for _, key := range []string{"detail_id", "text"} {
+			value, ok := members[key]
+			var text string
+			if !ok || json.Unmarshal(value, &text) != nil || string(bytes.TrimSpace(value)) == "null" {
+				return false
+			}
+		}
+	}
+	return true
 }

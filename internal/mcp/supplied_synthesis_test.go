@@ -327,3 +327,40 @@ func TestWriteBackTextsAreFixedAndNameTheContract(t *testing.T) {
 		}
 	}
 }
+
+// Through a real session the fixed refusal texts reach the caller: the SDK's
+// check of the input schema does not replace them.
+func TestWriteBackRefusalTextsReachTheCallerThroughTheSDK(t *testing.T) {
+	cases := map[string]struct {
+		mutate func(map[string]any)
+		want   string
+	}{
+		"a lone synthesis_output":           {func(m map[string]any) { delete(m, "synthesis_contract") }, writeBackPairMessage},
+		"a lone synthesis_contract":         {func(m map[string]any) { delete(m, "synthesis_output") }, writeBackPairMessage},
+		"the pair without synthesis client": {func(m map[string]any) { delete(m, "synthesis") }, writeBackNeedsClientMessage},
+		"a missing contract value": {func(m map[string]any) {
+			delete(m["synthesis_contract"].(map[string]any), "input_sha256")
+		}, missingSynthesisContractMessage},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			fx := newWriteBackFixture(t, http.StatusOK, envelopeBody(nil))
+			client, closeFn := connectedClient(t, fx.boot)
+			defer closeFn()
+			var arguments map[string]any
+			if err := json.Unmarshal(writeBackArgs(t, tc.mutate), &arguments); err != nil {
+				t.Fatal(err)
+			}
+			result, err := client.CallTool(context.Background(), &mcpsdk.CallToolParams{Name: toolInvestigateWithInterpretation, Arguments: arguments})
+			if err != nil || !result.IsError {
+				t.Fatalf("err = %v result = %+v, want the handler's tool error", err, result)
+			}
+			if got := toolResultText(result); got != "validation: "+tc.want {
+				t.Fatalf("text = %q, want the fixed text %q", got, tc.want)
+			}
+			if fx.hits != 0 {
+				t.Fatalf("hosted calls = %d, want 0", fx.hits)
+			}
+		})
+	}
+}

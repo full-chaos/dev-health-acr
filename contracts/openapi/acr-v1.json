@@ -2936,7 +2936,6 @@
                           "properties": {
                             "reason": {
                               "enum": [
-                                "input_changed",
                                 "supplied_interpretation_required"
                               ]
                             }
@@ -3017,8 +3016,7 @@
                             },
                             "reason": {
                               "enum": [
-                                "input_changed",
-                                "supplied_interpretation_required"
+                                "input_changed"
                               ]
                             },
                             "synthesis_input": {

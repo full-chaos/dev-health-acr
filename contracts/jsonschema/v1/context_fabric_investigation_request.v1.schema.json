@@ -206,5 +206,20 @@
     "time_context",
     "options",
     "consumer"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "required": ["supplied_synthesis"]
+      },
+      "then": {
+        "required": ["synthesis_mode", "supplied_interpretation"],
+        "properties": {
+          "synthesis_mode": {
+            "const": "client"
+          }
+        }
+      }
+    }
   ]
 }

@@ -721,3 +721,25 @@ func TestInputChangedWithoutAnInputIsNotAnsweredAsInputChanged(t *testing.T) {
 		t.Fatalf("status = %d body=%s, want no input-changed refusal", recorder.Code, recorder.Body.String())
 	}
 }
+
+func TestWriteBackWithAnUnknownMemberInACoverageDisclosureIsRejected(t *testing.T) {
+	rig := newWriteBackRouteRig(t)
+	first := rig.firstCall(t)
+	savedBefore := rig.store.count()
+	var document map[string]any
+	if err := json.Unmarshal(writeBackOutputJSON(t, writeBackDraft(writeBackProject(), writeBackMarker)), &document); err != nil {
+		t.Fatal(err)
+	}
+	document["coverage_disclosures"] = []any{map[string]any{"detail_id": "cov-01", "text": "x", "extra": "y"}}
+	raw, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := decodeRefusal(t, rig.writeBack(t, first.SynthesisInput, raw, nil), http.StatusUnprocessableEntity, "synthesis_rejected")
+	if got := detailString(t, body, "rejection_reason"); got != string(contextfabric.RejectionReasonOutputSchemaMismatch) {
+		t.Fatalf("rejection_reason = %q, want %q", got, contextfabric.RejectionReasonOutputSchemaMismatch)
+	}
+	if rig.store.count() != savedBefore {
+		t.Fatal("a rejected draft was saved")
+	}
+}

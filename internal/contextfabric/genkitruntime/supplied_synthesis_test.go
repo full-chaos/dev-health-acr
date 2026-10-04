@@ -155,19 +155,85 @@ func TestSuppliedSynthesizerRefusesAnOversizeOutput(t *testing.T) {
 	}
 }
 
-func TestSuppliedSynthesizerKeepsCoverageDisclosuresLenient(t *testing.T) {
+func TestSuppliedSynthesizerRefusesAMalformedCoverageDisclosures(t *testing.T) {
 	t.Parallel()
 	synthesizer := newTestSuppliedSynthesizer(t, SuppliedSynthesizerConfig{})
-	document := suppliedSynthesisFixture(t)
-	document["coverage_disclosures"] = []any{map[string]any{"detail_id": "d1", "text": 17}}
-	raw := marshalFixture(t, document)
-	got, err := synthesizer.Parse(raw)
-	if err != nil {
-		t.Fatalf("Parse() error = %v, want a malformed disclosure to stay lenient", err)
+	valid := map[string]any{"detail_id": "cov-01", "text": "x"}
+	cases := map[string]any{
+		"an unknown member":          []any{map[string]any{"detail_id": "cov-01", "text": "x", "extra": "y"}},
+		"a missing detail_id":        []any{map[string]any{"text": "x"}},
+		"a missing text":             []any{map[string]any{"detail_id": "cov-01"}},
+		"a non-string text":          []any{map[string]any{"detail_id": "cov-01", "text": 17}},
+		"a non-string detail_id":     []any{map[string]any{"detail_id": 17, "text": "x"}},
+		"a null text":                []any{map[string]any{"detail_id": "cov-01", "text": nil}},
+		"a wrongly cased member":     []any{map[string]any{"Detail_ID": "cov-01", "text": "x"}},
+		"a non-array":                map[string]any{"detail_id": "cov-01", "text": "x"},
+		"a string":                   "cov-01",
+		"a non-object element":       []any{"cov-01"},
+		"a null element":             []any{nil},
+		"a bad element after a good": []any{valid, map[string]any{"detail_id": "cov-02"}},
 	}
-	want, err := ParseSynthesisOutput(raw)
-	if err != nil || !reflect.DeepEqual(got, want) || !got.CoverageDisclosuresUndecodable {
-		t.Fatalf("draft = %+v (model path %+v, error %v), want the same lenient decode with undecodable set", got, want, err)
+	for name, value := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			document := suppliedSynthesisFixture(t)
+			document["coverage_disclosures"] = value
+			_, err := synthesizer.Parse(marshalFixture(t, document))
+			if reason := requireClosedRejection(t, name, err); reason != contextfabric.RejectionReasonOutputSchemaMismatch {
+				t.Fatalf("reason = %q, want output_schema_mismatch", reason)
+			}
+			if !errors.Is(err, errSuppliedSynthesisSchema) {
+				t.Fatalf("error = %v, want the fixed schema error", err)
+			}
+		})
+	}
+}
+
+func TestSuppliedSynthesizerAcceptsWellFormedCoverageDisclosures(t *testing.T) {
+	t.Parallel()
+	synthesizer := newTestSuppliedSynthesizer(t, SuppliedSynthesizerConfig{})
+	cases := map[string]struct {
+		set  bool
+		the  any
+		want int
+	}{
+		"absent":      {},
+		"null":        {set: true, the: nil},
+		"empty array": {set: true, the: []any{}},
+		"one entry":   {set: true, the: []any{map[string]any{"detail_id": "cov-01", "text": "x"}}, want: 1},
+	}
+	for name, c := range cases {
+		document := suppliedSynthesisFixture(t)
+		delete(document, "coverage_disclosures")
+		if c.set {
+			document["coverage_disclosures"] = c.the
+		}
+		draft, err := synthesizer.Parse(marshalFixture(t, document))
+		if err != nil {
+			t.Fatalf("%s: Parse() error = %v", name, err)
+		}
+		if len(draft.CoverageDisclosures) != c.want || draft.CoverageDisclosuresUndecodable {
+			t.Fatalf("%s: disclosures = %+v undecodable = %v, want %d entries, decodable", name, draft.CoverageDisclosures, draft.CoverageDisclosuresUndecodable, c.want)
+		}
+	}
+}
+
+func TestParseSynthesisOutputStaysLenientWhereTheSuppliedParserRefuses(t *testing.T) {
+	t.Parallel()
+	for name, value := range map[string]any{
+		"an unknown member": []any{map[string]any{"detail_id": "cov-01", "text": "x", "extra": "y"}},
+		"a non-string text": []any{map[string]any{"detail_id": "cov-01", "text": 17}},
+		"a non-array":       "cov-01",
+	} {
+		document := suppliedSynthesisFixture(t)
+		document["coverage_disclosures"] = value
+		raw := marshalFixture(t, document)
+		if _, err := newTestSuppliedSynthesizer(t, SuppliedSynthesizerConfig{}).Parse(raw); err == nil {
+			t.Fatalf("%s: the supplied parser accepted it", name)
+		}
+		if _, err := ParseSynthesisOutput(raw); err != nil {
+			t.Fatalf("%s: ParseSynthesisOutput() error = %v, want the model path to stay lenient", name, err)
+		}
 	}
 }
 
