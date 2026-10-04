@@ -522,10 +522,10 @@ func workItemRoleClarificationReason(gate FrameGate, frame *QuestionFrame, famil
 
 // promoteCurrentWorkItemFrameToPeriod returns a copy of a current work-item
 // tuple frame as a bounded-window frame when the request committed a window
-// (supplied or stated; a remembered window never commits) and the question
-// binds exactly one time field. Any other frame is not promoted.
-func promoteCurrentWorkItemFrameToPeriod(frame *QuestionFrame, basis workItemTupleWindowBasis) (*QuestionFrame, bool) {
-	if !workItemTupleInScope(frame) || frame.Temporal != TemporalIntentCurrent || !basis.Committed || basis.Role == "" {
+// (supplied or stated; a remembered window never commits), the interpreted
+// axis is current and the question binds exactly one time field. Any other frame is not promoted.
+func promoteCurrentWorkItemFrameToPeriod(frame *QuestionFrame, timeContext TimeContext, basis workItemTupleWindowBasis) (*QuestionFrame, bool) {
+	if timeContext.Axis != TemporalCurrent || !workItemTupleInScope(frame) || frame.Temporal != TemporalIntentCurrent || !basis.Committed || basis.Role == "" {
 		return frame, false
 	}
 	promoted := cloneFrame(*frame)

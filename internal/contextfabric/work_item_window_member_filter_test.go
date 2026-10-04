@@ -645,19 +645,19 @@ func TestWorkItemRememberedWindowNeverPromotesACurrentFrame(t *testing.T) {
 	frame := currentWorkItemFrame()
 	explicit := requestWindowCanonicalization{Effective: validEffectiveWindowForTest(t)}
 	basis := deriveWorkItemTupleWindowBasis("Which items were closed?", explicit, true)
-	if _, promoted := promoteCurrentWorkItemFrameToPeriod(&frame, basis); promoted {
+	if _, promoted := promoteCurrentWorkItemFrameToPeriod(&frame, TimeContext{Axis: TemporalCurrent}, basis); promoted {
 		t.Fatalf("a remembered window promoted the frame: %+v", basis)
 	}
 	if workItemCurrentFrameCarriesUnappliedWindow(&frame, basis) {
 		t.Fatal("a remembered window was reported as an unapplied committed window")
 	}
 	committed := deriveWorkItemTupleWindowBasis("Which items were closed?", explicit, false)
-	if got, promoted := promoteCurrentWorkItemFrameToPeriod(&frame, committed); !promoted || got.Temporal != TemporalIntentBoundedWindow || frame.Temporal != TemporalIntentCurrent {
+	if got, promoted := promoteCurrentWorkItemFrameToPeriod(&frame, TimeContext{Axis: TemporalCurrent}, committed); !promoted || got.Temporal != TemporalIntentBoundedWindow || frame.Temporal != TemporalIntentCurrent {
 		t.Fatalf("committed window did not promote a copy: promoted=%v", promoted)
 	}
 	nonWorkItem := currentWorkItemFrame()
 	nonWorkItem.SubjectExpression.Scoped.MemberKind = SubjectRepository
-	if _, promoted := promoteCurrentWorkItemFrameToPeriod(&nonWorkItem, committed); promoted {
+	if _, promoted := promoteCurrentWorkItemFrameToPeriod(&nonWorkItem, TimeContext{Axis: TemporalCurrent}, committed); promoted {
 		t.Fatal("a non-work-item frame was promoted")
 	}
 }
@@ -702,12 +702,35 @@ func TestWorkItemPromotionAndUnappliedNoticeIgnoreEveryNonCurrentIntent(t *testi
 	for _, intent := range []TemporalIntent{TemporalIntentBoundedWindow, TemporalIntentPeriodComparison, TemporalIntentTimeSeries} {
 		frame := currentWorkItemFrame()
 		frame.Temporal = intent
-		got, promoted := promoteCurrentWorkItemFrameToPeriod(&frame, committed)
+		got, promoted := promoteCurrentWorkItemFrameToPeriod(&frame, TimeContext{Axis: TemporalCurrent}, committed)
 		if promoted || got.Temporal != intent {
 			t.Errorf("%s frame was promoted to %s", intent, got.Temporal)
 		}
 		if workItemCurrentFrameCarriesUnappliedWindow(&frame, noRole) {
 			t.Errorf("%s frame was reported as carrying an unapplied window", intent)
 		}
+	}
+}
+
+func TestWorkItemHistoricalAxisNeverPromotesACurrentFrame(t *testing.T) {
+	committed := workItemTupleWindowBasis{Committed: true, Role: MemberTimeRoleCompleted, RoleReason: MemberTimeRoleBound}
+	frame := currentWorkItemFrame()
+	for _, axis := range []TemporalAxis{TemporalValidTime, TemporalObservedTime} {
+		if got, promoted := promoteCurrentWorkItemFrameToPeriod(&frame, TimeContext{Axis: axis}, committed); promoted || got.Temporal != TemporalIntentCurrent {
+			t.Errorf("axis %s promoted the frame", axis)
+		}
+	}
+}
+
+func TestWorkItemAllTimeCallerWindowIsNoPeriodAndAddsNoNotice(t *testing.T) {
+	defer reportWorkItemMutationPanic(t)
+	request := statedPeriodRequest("Which work items in Project Alpha are there?")
+	request.TimeContext.EvidenceWindow = &RequestedEvidenceWindow{RelativeID: RelativeWindowAllTime}
+	run := runTupleFilterCase(t, currentWorkItemFrame(), WorkItemMembershipCensus{State: WorkItemMembershipCensusExact, PopulationMeasured: true, AuthorizedPopulation: 1}, request)
+	if run.invokedErr != nil {
+		t.Fatal(run.invokedErr)
+	}
+	if run.request.TimeColumn != "" || limitationsContain(run.result.Limitations, contractsv1.ContextFabricWorkItemWindowNotAppliedLimitation) {
+		t.Fatalf("an all-time window is no period: request=%+v limitations=%v", run.request, run.result.Limitations)
 	}
 }

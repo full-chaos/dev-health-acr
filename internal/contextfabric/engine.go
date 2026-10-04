@@ -2441,7 +2441,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	var workItemTuple bool
 	// A current frame whose request committed a window and whose question binds
 	// one time field is a period question: the window must reach the membership.
-	if promoted, ok := promoteCurrentWorkItemFrameToPeriod(familyOutcome.Frame, windowBasis); ok {
+	if promoted, ok := promoteCurrentWorkItemFrameToPeriod(familyOutcome.Frame, interpretation.TimeContext, windowBasis); ok {
 		familyOutcome.Frame = promoted
 	}
 	if workItemTupleIsPeriodFrame(familyOutcome.Frame) {
