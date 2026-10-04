@@ -289,3 +289,79 @@ func (a *Adapter) projectDeploymentMembers(ctx context.Context, key, orgID strin
 	sortCandidateNodesBySubjectKey(out.nodes)
 	return out, nil
 }
+
+// ProjectDeploymentWalkOutcome is the closed outcome of one deployment-members
+// discovery with respect to the project walk.
+type ProjectDeploymentWalkOutcome string
+
+const (
+	// ProjectDeploymentWalkNotRouted: the frame asks for deployment members
+	// and the walk did not run, because no committed project is the anchor.
+	ProjectDeploymentWalkNotRouted ProjectDeploymentWalkOutcome = "not_routed"
+	// ProjectDeploymentWalkMembers: the walk reached at least one deployment.
+	ProjectDeploymentWalkMembers ProjectDeploymentWalkOutcome = "members"
+	// ProjectDeploymentWalkUnlinked: no member, and no issue of the project
+	// links a pull request (unrestricted caller, uncut frontier).
+	ProjectDeploymentWalkUnlinked ProjectDeploymentWalkOutcome = "unlinked"
+	// ProjectDeploymentWalkDenied: no member for a repository-restricted
+	// caller. The served reason is neutral; the counts stay on this line.
+	ProjectDeploymentWalkDenied ProjectDeploymentWalkOutcome = "denied"
+	// ProjectDeploymentWalkTruncated: no member, and a frontier was cut.
+	ProjectDeploymentWalkTruncated ProjectDeploymentWalkOutcome = "truncated"
+	// ProjectDeploymentWalkNoDeployments: no member, links exist, nothing was
+	// cut: the reached repositories hold no deployment in the window.
+	ProjectDeploymentWalkNoDeployments ProjectDeploymentWalkOutcome = "no_deployments"
+	// ProjectDeploymentWalkReadFailed: a step read failed and the call ends.
+	ProjectDeploymentWalkReadFailed ProjectDeploymentWalkOutcome = "read_failed"
+)
+
+// ProjectDeploymentWalkOutcomeVocabulary returns every declared outcome, in
+// declaration order.
+func ProjectDeploymentWalkOutcomeVocabulary() []ProjectDeploymentWalkOutcome {
+	return []ProjectDeploymentWalkOutcome{
+		ProjectDeploymentWalkNotRouted, ProjectDeploymentWalkMembers, ProjectDeploymentWalkUnlinked, ProjectDeploymentWalkDenied,
+		ProjectDeploymentWalkTruncated, ProjectDeploymentWalkNoDeployments, ProjectDeploymentWalkReadFailed,
+	}
+}
+
+// DeploymentAnchorBasisVocabulary returns every declared anchor basis, in
+// declaration order.
+func DeploymentAnchorBasisVocabulary() []DeploymentAnchorBasis {
+	return []DeploymentAnchorBasis{DeploymentAnchorNone, DeploymentAnchorBound, DeploymentAnchorSoleCommit}
+}
+
+// ProjectDeploymentWalkDecision is one decision line of the walk: counts and
+// closed values only, never a name or an id.
+type ProjectDeploymentWalkDecision struct {
+	Outcome     ProjectDeploymentWalkOutcome
+	AnchorKind  contextfabric.SubjectKind
+	AnchorBasis DeploymentAnchorBasis
+	// Committed is how many subjects the resolution committed.
+	Committed int
+	// Issues, LinkedPullRequests, Members, Denied and Truncated describe a
+	// walk that ran.
+	Issues, LinkedPullRequests, Members, Denied int
+	Truncated                                   bool
+	// Err is the failed read of a walk that did not finish.
+	Err error
+}
+
+// projectDeploymentWalkOutcome classifies a finished walk. A restricted caller
+// with no member is denied whether links are hidden or absent; a cut frontier
+// is never reported as unlinked.
+func projectDeploymentWalkOutcome(walk projectDeploymentWalk, restricted bool, err error) ProjectDeploymentWalkOutcome {
+	switch {
+	case err != nil:
+		return ProjectDeploymentWalkReadFailed
+	case len(walk.nodes) > 0:
+		return ProjectDeploymentWalkMembers
+	case restricted:
+		return ProjectDeploymentWalkDenied
+	case walk.truncated:
+		return ProjectDeploymentWalkTruncated
+	case walk.linkedPullRequests == 0:
+		return ProjectDeploymentWalkUnlinked
+	default:
+		return ProjectDeploymentWalkNoDeployments
+	}
+}
