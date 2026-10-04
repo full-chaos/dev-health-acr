@@ -5,7 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -238,5 +241,108 @@ func TestTeamMixPriorWindowSharesAreStableOverRowOrderAndNoise(t *testing.T) {
 				t.Fatalf("order %v noise %g: scalar fields differ:\n%s\n%s", order, noise, first, encoded)
 			}
 		}
+	}
+}
+
+func payloadInvestmentNumbers(t *testing.T, payload []byte) (map[string]float64, string) {
+	t.Helper()
+	var decoded struct {
+		Facts []struct {
+			Kind   string `json:"kind"`
+			Fields map[string]struct {
+				Number *float64 `json:"number"`
+			} `json:"fields"`
+		} `json:"canonical_facts"`
+	}
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]float64{}
+	for _, fact := range decoded.Facts {
+		if fact.Kind != string(contextfabric.FactInvestment) {
+			continue
+		}
+		for name, value := range fact.Fields {
+			if value.Number != nil {
+				out[name] = *value.Number
+			}
+		}
+	}
+	return out, string(payload)
+}
+
+// TestInvestmentClientInputCarriesOnlyRoundedSharesAndNoTables pins what the
+// rounding relies on: the theme_breakdown table (weighted_effort, exact) is
+// not in the client input, and every float the input does carry for an
+// investment fact is already at the declared precision. A float field added
+// to the client input later without the rounding fails here.
+func TestInvestmentClientInputCarriesOnlyRoundedSharesAndNoTables(t *testing.T) {
+	now := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	tc := clockTestCases()[1]
+	canonicalID, rowID := clockTestSubjectID(contextfabric.SubjectRepository)
+	repository := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: canonicalID, Label: "r1"}
+	subjects := map[string]struct {
+		subject contextfabric.SubjectRef
+		client  *fakeClient
+	}{
+		"repository": {repository, &fakeClient{tables: []fakeTable{{match: "FROM work_unit_investments", rows: [][]any{{uint8(0), rowID, map[string]float64{
+			"feature_delivery": 0.48898883728007437, "operational": 0.047865254810142, "maintenance": 0.2304889002988043, "quality": 0.1388265562681117, "risk": 0.0936,
+		}, 0.0864588925764, uint64(3)}}}}}},
+		"team": {teamSubject("CHAOS"), teamMixClient([]int{0, 1, 2, 3, 4, 5}, 0, 1)},
+	}
+	for name, c := range subjects {
+		provider := findProvider(t, devhealthfacts.NewProviders(c.client), contextfabric.FactInvestment)
+		payload, facts, err := clockTestPayload(t, provider, c.subject, contextfabric.FactInvestment, tc, now)
+		if err != nil || facts == 0 {
+			t.Fatalf("%s: facts=%d err=%v", name, facts, err)
+		}
+		numbers, raw := payloadInvestmentNumbers(t, payload)
+		if strings.Contains(raw, "theme_breakdown") || strings.Contains(raw, "weighted_effort") {
+			t.Fatalf("%s: the client input carries the theme breakdown table", name)
+		}
+		if len(numbers) == 0 {
+			t.Fatalf("%s: the client input carries no investment number", name)
+		}
+		for field, value := range numbers {
+			rounded, perr := strconv.ParseFloat(strconv.FormatFloat(value, 'g', 11, 64), 64)
+			if perr != nil || rounded != value {
+				t.Errorf("%s: %s = %v is not at the declared precision of 11 significant digits", name, field, value)
+			}
+		}
+	}
+}
+
+// TestAShareAtARoundingEdgeCanStillFlipTheDigest names the residual: a
+// repository value that sits exactly at a rounding edge changes its served
+// digits when the aggregate noise crosses the edge, so two calls then carry
+// two inputs (the write-back answers 409 input_changed once, and the client
+// repeats call 1). The value served stays within 5e-11 relative of the exact.
+func TestAShareAtARoundingEdgeCanStillFlipTheDigest(t *testing.T) {
+	now := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	tc := clockTestCases()[1]
+	canonicalID, rowID := clockTestSubjectID(contextfabric.SubjectRepository)
+	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: canonicalID, Label: "r1"}
+	// feature_delivery share = 0.5 + 5e-11 * 0.5 exactly at the eleventh digit
+	// edge when the total is 1: efforts 0.50000000000500 versus the same plus
+	// one part in 1e15.
+	read := func(edge float64) []byte {
+		client := &fakeClient{tables: []fakeTable{{match: "FROM work_unit_investments", rows: [][]any{{uint8(0), rowID, map[string]float64{
+			"feature_delivery": edge, "operational": 1 - edge, "maintenance": 0, "quality": 0, "risk": 0,
+		}, 0.0, uint64(3)}}}}}
+		provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
+		payload, _, err := clockTestPayload(t, provider, subject, contextfabric.FactInvestment, tc, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return payload
+	}
+	below, above := 0.500000000005-1e-15, 0.500000000005+1e-15
+	if bytes.Equal(read(below), read(above)) {
+		t.Fatal("a value on either side of a rounding edge gave one digest: the residual the change names is not reachable")
+	}
+	numbersBelow, _ := payloadInvestmentNumbers(t, read(below))
+	exact := numbersBelow["theme_feature_delivery"]
+	if math.Abs(exact-below)/below > 5.0001e-11 {
+		t.Fatalf("served share %v is not within 5e-11 relative of %v", exact, below)
 	}
 }

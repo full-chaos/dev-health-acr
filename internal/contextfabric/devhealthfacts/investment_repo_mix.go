@@ -255,7 +255,7 @@ type repoThemeTotals struct {
 // different inputs. The effort sums themselves (the theme_breakdown table,
 // which the client input does not carry) stay unrounded: the differential
 // oracle pins them to full precision. Eleven significant digits keeps a share
-// within 5e-12 relative of its exact value and far above the last-digit noise
+// within 5e-11 relative of its exact value and far above the last-digit noise
 // (about 1e-16 relative): a rounding edge is crossed by noise with
 // probability near 1e-5 per value, never by a real change of the data.
 const mixEffortSignificantDigits = 11
@@ -265,7 +265,7 @@ func roundMixEffort(v float64) float64 {
 	if v == 0 || math.IsNaN(v) || math.IsInf(v, 0) {
 		return v
 	}
-	rounded, err := strconv.ParseFloat(strconv.FormatFloat(v, 'g', mixEffortSignificantDigits-1, 64), 64)
+	rounded, err := strconv.ParseFloat(strconv.FormatFloat(v, 'g', mixEffortSignificantDigits, 64), 64)
 	if err != nil {
 		return v
 	}
