@@ -484,7 +484,7 @@ func TestChaos7072CatalogPerCallerClass(t *testing.T) {
 		token string
 		want  int
 		class string
-	}{{restricted, 2, "restricted"}, {unrestricted, 18, "unrestricted"}} {
+	}{{restricted, 2, "restricted"}, {unrestricted, 19, "unrestricted"}} {
 		response := h.get(ContextFabricDataCatalogPath, tc.token)
 		body := decodeC7072(t, response)
 		operations := body["operations"].(map[string]any)

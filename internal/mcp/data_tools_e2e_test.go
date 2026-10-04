@@ -341,8 +341,8 @@ func TestDataToolsEndToEndAreModelFreeAndScopedToTheCredential(t *testing.T) {
 		t.Fatalf("hotspots: %v %q", hot, text)
 	}
 	catalog, _ := dtCallTool(t, cs, "data_catalog", map[string]any{"sections": []string{"operations"}})
-	if got := len(catalog["operations"].(map[string]any)["operations"].([]any)); got != 18 {
-		t.Fatalf("an unrestricted credential sees %d operations, want 18", got)
+	if got := len(catalog["operations"].(map[string]any)["operations"].([]any)); got != 19 {
+		t.Fatalf("an unrestricted credential sees %d operations, want 19", got)
 	}
 	// A foreign id is a typed refusal, never data.
 	foreign, _ := dtCallTool(t, cs, "run_operation", map[string]any{"operation": "hotspots", "variables": map[string]any{"input": map[string]any{"repoIds": []string{"repository:cccccccc-cccc-4ccc-8ccc-cccccccccccc"}, "sinceUtc": "2026-08-29T00:00:00Z", "untilUtc": "2026-09-28T00:00:00Z"}}})

@@ -1,7 +1,7 @@
 {
   "contract": "acr.mcp.graphql_roots.v1",
   "generator": "cmd/operationpolicy",
-  "schema_digest": "sha256:330d0ebf0ea59fce8d0b1bb14887cad8e5b3f6971ad02618afa9844b6fac7a50",
+  "schema_digest": "sha256:fdff794c3fa3de956e07061645b7494cca33ed760f9405d405c912ae01d3e34b",
   "operations_source": "contracts/mcp/operations.v1.json",
   "limits": {
     "max_query_bytes": 8192,
@@ -40,6 +40,7 @@
     {
       "field": "capacityForecast",
       "operations": [
+        "capacityCompletionDistribution",
         "capacityForecast"
       ],
       "cost_class": "compute",

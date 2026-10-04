@@ -48,6 +48,11 @@ type registryRow struct {
 	ConstName string `json:"const_name"`
 	Digest    string `json:"digest"`
 	Kind      string `json:"kind"`
+	// Legacy marks an older text of an operation that ops still accepts from
+	// a client built before the change. The registry endpoint serves only the
+	// current text, so a legacy row is verified and then left out of the
+	// served and not-served classification.
+	Legacy bool `json:"legacy,omitempty"`
 }
 
 // inputs is everything generation reads. Tests build one from the vendored
@@ -90,9 +95,12 @@ func encode(file directread.CatalogueFile) ([]byte, error) {
 
 func build(in inputs) (directread.CatalogueFile, error) {
 	rows := map[string]registryRow{}
+	var legacy []registryRow
 	for _, row := range in.Registry.Rows {
-		if _, dup := rows[row.Operation]; dup {
-			return directread.CatalogueFile{}, fmt.Errorf("registry lists %q twice", row.Operation)
+		if !row.Legacy {
+			if _, dup := rows[row.Operation]; dup {
+				return directread.CatalogueFile{}, fmt.Errorf("registry lists %q twice", row.Operation)
+			}
 		}
 		if got := directread.DocumentDigest(row.Document); got != row.Digest {
 			return directread.CatalogueFile{}, fmt.Errorf("registry %q: digest %s, recomputed %s", row.Operation, row.Digest, got)
@@ -104,7 +112,20 @@ func build(in inputs) (directread.CatalogueFile, error) {
 		if parsed.Kind != row.Kind {
 			return directread.CatalogueFile{}, fmt.Errorf("registry %q: declared kind %q, document parses as %q", row.Operation, row.Kind, parsed.Kind)
 		}
+		if row.Legacy {
+			legacy = append(legacy, row)
+			continue
+		}
 		rows[row.Operation] = row
+	}
+	for _, row := range legacy {
+		current, ok := rows[row.Operation]
+		if !ok {
+			return directread.CatalogueFile{}, fmt.Errorf("registry legacy text of %q has no current row", row.Operation)
+		}
+		if row.Digest == current.Digest {
+			return directread.CatalogueFile{}, fmt.Errorf("registry legacy text of %q has the digest of its current text", row.Operation)
+		}
 	}
 
 	schema, err := gqlparser.LoadSchema(&ast.Source{Name: schemaPath, Input: string(in.SDL)})

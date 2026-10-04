@@ -2,6 +2,7 @@ package directread_test
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -41,23 +42,45 @@ func TestGraphQLCompletionDistributionOutputPathsAreExactlyTheDistributionLeaves
 		t.Fatal(err)
 	}
 	ops := gqlRootOps(t, policy)
-	for root, prefix := range map[string]string{"capacityForecast": "capacityForecast", "capacityForecasts": "capacityForecasts.edges[*].node"} {
-		want := []string{
+	distributionPaths := func(op *directread.OperationPolicy, prefix string) []string {
+		var got []string
+		for _, p := range outputPaths(op) {
+			if strings.HasPrefix(p, prefix) && containsText(p, ".completionDistribution") && !strings.HasSuffix(p, "__typename") {
+				got = append(got, p)
+			}
+		}
+		return sortedStrings(got)
+	}
+	leaves := func(prefix string) []string {
+		return sortedStrings([]string{
 			prefix + ".completionDistribution.days[*].count",
 			prefix + ".completionDistribution.days[*].value",
 			prefix + ".completionDistribution.items[*].count",
 			prefix + ".completionDistribution.items[*].value",
+		})
+	}
+	for _, op := range ops["capacityForecast"] {
+		got := distributionPaths(op, "capacityForecast")
+		want := leaves("capacityForecast")
+		if op.Name == "capacityForecast" {
+			want = sortedStrings(append(want,
+				"capacityForecast.completionDistribution.days[*].cumulativeShare",
+				"capacityForecast.completionDistribution.horizonDays",
+				"capacityForecast.completionDistribution.items[*].cumulativeShare",
+				"capacityForecast.completionDistribution.runs",
+				"capacityForecast.completionDistribution.unfinishedRuns"))
 		}
-		var got []string
-		for _, op := range ops[root] {
-			for _, p := range outputPaths(op) {
-				if len(p) > len(prefix) && p[:len(prefix)] == prefix && containsText(p, ".completionDistribution") {
-					got = append(got, p)
-				}
-			}
+		if !slices.Equal(got, want) {
+			t.Fatalf("%s distribution output paths = %v, want %v", op.Name, got, want)
 		}
-		if g, w := sortedStrings(got), sortedStrings(want); len(g) != len(w) || g[0] != w[0] || g[1] != w[1] || g[2] != w[2] || g[3] != w[3] {
-			t.Fatalf("%s distribution output paths = %v, want %v", root, g, w)
+	}
+	if len(ops["capacityForecast"]) != 2 {
+		t.Fatalf("root capacityForecast has %d operations, want capacityCompletionDistribution and capacityForecast", len(ops["capacityForecast"]))
+	}
+	for _, op := range ops["capacityForecasts"] {
+		prefix := "capacityForecasts.edges[*].node"
+		if got, want := distributionPaths(op, prefix), leaves(prefix); !slices.Equal(got, want) {
+			t.Fatalf("%s distribution output paths = %v, want %v", op.Name, got, want)
 		}
 	}
 }
@@ -71,20 +94,34 @@ func containsText(s, sub string) bool {
 	return false
 }
 
-func TestRunOperationDoesNotPassAnUnrequestedCompletionDistribution(t *testing.T) {
+func TestRunOperationPassesOnlyWhatTheRegisteredDocumentSelects(t *testing.T) {
 	answer := `{"data":{"capacityForecast":{"forecastId":"f1","teamId":"team:t1","completionDistribution":{"days":[{"value":3,"count":2}],"items":null},"__typename":"CapacityForecast"}}}`
-	h := newOpHarness(t, func(opRecorded) (int, string) { return 200, answer }, opHarnessOptions{})
 	cat, err := directread.DefaultCatalogue()
 	if err != nil {
 		t.Fatal(err)
 	}
-	op, _ := cat.Lookup("capacityForecast")
-	resp := h.run(t, opUnrestricted(opOrgA), "capacityForecast", opMinimalVariables(t, op))
-	raw, _ := json.Marshal(resp)
-	if resp.Call != directread.CallServed {
-		t.Fatalf("want served, got %s", raw)
-	}
-	if strings.Contains(string(raw), "completionDistribution") {
-		t.Fatalf("run_operation passed a field its registered document does not select: %s", raw)
+	for operation, wantFields := range map[string]struct{ present, absent []string }{
+		"capacityCompletionDistribution": {present: []string{"completionDistribution"}, absent: []string{"forecastId", "teamId"}},
+		"capacityForecast":               {present: []string{"completionDistribution", "forecastId"}},
+	} {
+		t.Run(operation, func(t *testing.T) {
+			h := newOpHarness(t, func(opRecorded) (int, string) { return 200, answer }, opHarnessOptions{})
+			op, _ := cat.Lookup(operation)
+			resp := h.run(t, opUnrestricted(opOrgA), operation, opMinimalVariables(t, op))
+			raw, _ := json.Marshal(resp)
+			if resp.Call != directread.CallServed {
+				t.Fatalf("want served, got %s", raw)
+			}
+			for _, f := range wantFields.present {
+				if !strings.Contains(string(raw), f) {
+					t.Fatalf("answer lacks %s: %s", f, raw)
+				}
+			}
+			for _, f := range wantFields.absent {
+				if strings.Contains(string(raw), f) {
+					t.Fatalf("run_operation passed %s, which its registered document does not select: %s", f, raw)
+				}
+			}
+		})
 	}
 }

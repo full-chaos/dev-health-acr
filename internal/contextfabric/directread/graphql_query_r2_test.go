@@ -42,6 +42,7 @@ func TestGraphQLTwoOperationRootOverlapIsPinned(t *testing.T) {
 		strictOnlyVars, otherOnly []string // variable paths only one candidate has
 	}
 	pairs := []pair{
+		{root: "capacityForecast", strict: "capacityCompletionDistribution", other: "capacityForecast", onlyOther: []string{"capacityForecast.backlogSize", "capacityForecast.completionDistribution.days[*].cumulativeShare", "capacityForecast.completionDistribution.horizonDays", "capacityForecast.completionDistribution.items[*].cumulativeShare", "capacityForecast.completionDistribution.runs", "capacityForecast.completionDistribution.unfinishedRuns", "capacityForecast.computedAt", "capacityForecast.forecastId", "capacityForecast.highVariance", "capacityForecast.historyDays", "capacityForecast.insufficientHistory", "capacityForecast.p50Date", "capacityForecast.p50Days", "capacityForecast.p50Items", "capacityForecast.p85Date", "capacityForecast.p85Days", "capacityForecast.p85Items", "capacityForecast.p95Date", "capacityForecast.p95Days", "capacityForecast.p95Items", "capacityForecast.targetDate", "capacityForecast.targetItems", "capacityForecast.teamId", "capacityForecast.throughputMean", "capacityForecast.throughputStddev", "capacityForecast.workScopeId"}},
 		{root: "catalog", strict: "acrRepositoryScopes", other: "catalogValues", otherOnly: []string{"dimension"}},
 		{
 			root: "analytics", strict: "investmentBreakdown", other: "investmentFull",
