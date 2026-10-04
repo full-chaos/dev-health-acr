@@ -78,6 +78,12 @@ func clientFlowVocabulary(t *testing.T, c ClientFlowInputs) []string {
 		c.SynthesisPrompt, c.SynthesisOutputURI, c.ArgSynthesis, c.SynthesisModeClient, c.SynthesisInputField,
 		c.SynthesisSourceField, c.SynthesisVersionField, c.SynthesisSourceClient, c.SynthesisSourceServer, c.SynthesisNotSynthesized,
 		c.StatusComplete, c.StatusPartial, c.StatusDegraded, c.StatusNoMatch)
+	vocab = append(vocab, c.ArgSynthesisOutput, c.ArgSynthesisContract, c.ArgClientModel, c.BudgetArg, CodeSynthesisRejected,
+		"details."+c.SynthesisContractDetailsKey, "details."+c.ReasonKey, "details."+c.InputChangedDetailsKey, "details."+c.RejectionReasonKey,
+		c.ReasonInputChanged, c.ReasonInterpretationRequired,
+		c.SynthesisInputField+"."+c.SynthesisInputFields[0], c.SynthesisInputField+"."+c.SynthesisInputFields[2],
+		"mismatch", "current")
+	vocab = append(vocab, c.WriteBackContractFields...)
 	vocab = append(vocab, c.TextFields...)
 	vocab = append(vocab, c.SynthesisInputFields...)
 	vocab = append(vocab, c.SynthesisContractFields...)
@@ -224,6 +230,65 @@ func TestClientInterpretationGuideHasTheSynthesisSection(t *testing.T) {
 	}
 }
 
+func TestClientInterpretationGuideHasTheWriteBack(t *testing.T) {
+	c := clientFlowInputs()
+	text, err := buildClientInterpretation(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, section, ok := strings.Cut(text, "\n### Send the answer back\n")
+	if !ok {
+		t.Fatal("guide lacks the write-back subsection")
+	}
+	want := []string{c.ArgSynthesisOutput, c.ArgSynthesisContract, c.ArgClientModel, c.InterpretTool, c.ServerSideTool, c.ArgInterpretation, c.ArgContract,
+		c.ArgSynthesis, c.SynthesisModeClient, strconv.Itoa(c.SynthesisOutputMaxBytes),
+		c.SynthesisInputField + "." + c.SynthesisInputFields[0], c.SynthesisInputField + "." + c.SynthesisInputFields[2],
+		c.SynthesisSourceField, c.SynthesisSourceClient, c.ModelIdentityField, c.ClientProvider + "/<your model>", c.ClientProvider + "/" + c.ClientUndeclared,
+		c.SynthesisVersionField, c.StatusField, c.StatusComplete,
+		"details." + c.SynthesisContractDetailsKey, "details." + c.ReasonKey, c.ReasonInputChanged, "details." + c.InputChangedDetailsKey,
+		"details." + c.RejectionReasonKey, CodeSynthesisRejected, c.ReasonInterpretationRequired, c.BudgetArg, c.SynthesisPrompt,
+		strconv.Itoa(StatusContractRefused), strconv.Itoa(StatusDraftRejected), strconv.Itoa(StatusAnswerTooLarge),
+		"We never call a model", "no suffix", "stays committed"}
+	want = append(want, c.WriteBackContractFields...)
+	want = append(want, c.TextFields...)
+	for _, value := range want {
+		if value == "" || !strings.Contains(section, value) {
+			t.Errorf("write-back subsection lacks %q", value)
+		}
+	}
+}
+
+func TestClientInterpretationWriteBackNamesMatchTheCode(t *testing.T) {
+	c := clientFlowInputs()
+	if c.ReasonInputChanged != "input_changed" || c.ReasonInterpretationRequired != "supplied_interpretation_required" || c.SynthesisContractDetailsKey != "synthesis_contract" ||
+		c.InputChangedDetailsKey != "synthesis_input" || c.RejectionReasonKey != "rejection_reason" || c.ReasonKey != "reason" {
+		t.Errorf("write-back detail names changed: %+v", c)
+	}
+	if !slices.Equal(c.WriteBackContractFields, []string{"model_output_version", "prompt_version", "system_sha256", "input_sha256"}) {
+		t.Errorf("write-back contract fields = %v", c.WriteBackContractFields)
+	}
+	if c.ArgSynthesisOutput != "synthesis_output" || c.ArgSynthesisContract != "synthesis_contract" || c.SynthesisOutputMaxBytes != contractsv1.ContextFabricSuppliedSynthesisMaxBytes {
+		t.Errorf("write-back arguments = %q %q %d", c.ArgSynthesisOutput, c.ArgSynthesisContract, c.SynthesisOutputMaxBytes)
+	}
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "contracts", "examples", "v1", "error_context_fabric_synthesis_contract.v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Error struct {
+			Code       string                    `json:"code"`
+			HTTPStatus float64                   `json:"http_status"`
+			Details    map[string]map[string]any `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Error.Code != CodeContractRefused || doc.Error.HTTPStatus != StatusContractRefused || doc.Error.Details[c.SynthesisContractDetailsKey]["mismatch"] == nil {
+		t.Errorf("published synthesis contract example does not match the guide: %+v", doc.Error)
+	}
+}
+
 func TestClientInterpretationRefusesAnEmptySynthesisInput(t *testing.T) {
 	for name, mutate := range map[string]func(*ClientFlowInputs){
 		"synthesis prompt":     func(c *ClientFlowInputs) { c.SynthesisPrompt = "" },
@@ -247,8 +312,24 @@ func TestClientInterpretationRefusesAnEmptySynthesisInput(t *testing.T) {
 			c.SynthesisInputFields = slices.Clone(c.SynthesisInputFields)
 			c.SynthesisInputFields[2] = ""
 		},
-		"contract fields": func(c *ClientFlowInputs) { c.SynthesisContractFields = nil },
-		"size bound":      func(c *ClientFlowInputs) { c.SynthesisMaxBytes = 0 },
+		"contract fields":                func(c *ClientFlowInputs) { c.SynthesisContractFields = nil },
+		"synthesis output argument":      func(c *ClientFlowInputs) { c.ArgSynthesisOutput = "" },
+		"synthesis contract argument":    func(c *ClientFlowInputs) { c.ArgSynthesisContract = "" },
+		"synthesis contract details key": func(c *ClientFlowInputs) { c.SynthesisContractDetailsKey = "" },
+		"reason key":                     func(c *ClientFlowInputs) { c.ReasonKey = "" },
+		"input changed reason":           func(c *ClientFlowInputs) { c.ReasonInputChanged = "" },
+		"interpretation required reason": func(c *ClientFlowInputs) { c.ReasonInterpretationRequired = "" },
+		"rejection reason key":           func(c *ClientFlowInputs) { c.RejectionReasonKey = "" },
+		"input changed details key":      func(c *ClientFlowInputs) { c.InputChangedDetailsKey = "" },
+		"budget argument":                func(c *ClientFlowInputs) { c.BudgetArg = "" },
+		"client model argument":          func(c *ClientFlowInputs) { c.ArgClientModel = "" },
+		"write-back contract fields":     func(c *ClientFlowInputs) { c.WriteBackContractFields = c.WriteBackContractFields[:3] },
+		"one write-back contract field": func(c *ClientFlowInputs) {
+			c.WriteBackContractFields = slices.Clone(c.WriteBackContractFields)
+			c.WriteBackContractFields[3] = ""
+		},
+		"write-back size bound": func(c *ClientFlowInputs) { c.SynthesisOutputMaxBytes = 0 },
+		"size bound":            func(c *ClientFlowInputs) { c.SynthesisMaxBytes = 0 },
 	} {
 		c := clientFlowInputs()
 		mutate(&c)

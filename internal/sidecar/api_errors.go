@@ -164,6 +164,16 @@ type APIError struct {
 	// details carry a supplied-interpretation contract refusal that passes
 	// its own Validate: closed field names and the current contract values.
 	InterpretationContract *contractsv1.ContextFabricInterpretationContractRefusal
+	// SynthesisContract is set only for a 409 invalid_request whose details
+	// carry a supplied-synthesis contract refusal that passes its own Validate.
+	SynthesisContract *contractsv1.ContextFabricSynthesisContractRefusal
+	// SynthesisInput is set only for a 409 invalid_request with reason
+	// input_changed whose details carry a synthesis input that passes its own
+	// Validate: the input the caller writes its next draft from.
+	SynthesisInput *contractsv1.ContextFabricSynthesisInput
+	// SynthesisRejectionReason is set only for a 422 synthesis_rejected whose
+	// details carry a rejection reason of the closed token shape.
+	SynthesisRejectionReason string
 
 	sentinel error
 }
@@ -230,6 +240,14 @@ func BudgetContinuationAxes() []string {
 // a refused supplied-interpretation contract.
 const interpretationContractSafeMessage = "the supplied interpretation contract is not the current one"
 
+// synthesisContractSafeMessage and synthesisInputChangedSafeMessage replace the
+// invalid_request message for the two refusals of a supplied synthesis that
+// carry their own details.
+const (
+	synthesisContractSafeMessage     = "the supplied synthesis contract is not the current one"
+	synthesisInputChangedSafeMessage = "the supplied synthesis was written from an input that has changed"
+)
+
 // budgetRefusalSafeMessage replaces the invalid_request message for a
 // budget refusal: the request was valid, the answer was too large.
 const budgetRefusalSafeMessage = "the answer did not fit the response budget"
@@ -247,6 +265,12 @@ func (e *APIError) Error() string {
 	}
 	if c := e.InterpretationContract; c != nil {
 		base += " interpretation_contract_mismatch=" + strings.Join(c.Mismatch, ",")
+	}
+	if c := e.SynthesisContract; c != nil {
+		base += " synthesis_contract_mismatch=" + strings.Join(c.Mismatch, ",")
+	}
+	if e.SynthesisRejectionReason != "" {
+		base += " rejection_reason=" + e.SynthesisRejectionReason
 	}
 	if b := e.Budget; b != nil {
 		if b.Overrun != "" {
@@ -324,8 +348,17 @@ func newAPIError(status int, detail contractsv1.ErrorDetail, requestID, retryAft
 			apiErr.Message = interpretationContractSafeMessage
 		}
 	}
+	if detail.Code == "invalid_request" && status == 409 {
+		if refusal, ok := synthesisContractRefusal(detail.Details); ok {
+			apiErr.SynthesisContract = &refusal
+			apiErr.Message = synthesisContractSafeMessage
+		}
+	}
 	if detail.Code == "invalid_request" {
 		apiErr.Reason = safeReasonToken(detail.Details)
+	}
+	if detail.Code == "synthesis_rejected" && status == 422 {
+		apiErr.SynthesisRejectionReason = rejectionReasonToken(detail.Details)
 	}
 	if seconds, ok := parseRetryAfterSeconds(retryAfterHeader); ok {
 		apiErr.RetryAfter = time.Duration(seconds) * time.Second
@@ -385,6 +418,75 @@ func interpretationContractRefusal(details map[string]any) (contractsv1.ContextF
 		return contractsv1.ContextFabricInterpretationContractRefusal{}, false
 	}
 	return refusal, true
+}
+
+// synthesisContractRefusal decodes the supplied-synthesis contract refusal
+// from a 409's details under the same rules as the interpretation one.
+func synthesisContractRefusal(details map[string]any) (contractsv1.ContextFabricSynthesisContractRefusal, bool) {
+	var refusal contractsv1.ContextFabricSynthesisContractRefusal
+	raw, present := details[contractsv1.ContextFabricSynthesisContractDetailsKey]
+	if !present {
+		return refusal, false
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return refusal, false
+	}
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&refusal); err != nil {
+		return contractsv1.ContextFabricSynthesisContractRefusal{}, false
+	}
+	if err := refusal.Validate(); err != nil {
+		return contractsv1.ContextFabricSynthesisContractRefusal{}, false
+	}
+	return refusal, true
+}
+
+// synthesisInputFromBody decodes the new synthesis input of an input_changed
+// refusal from the raw error body, so the bytes of input are the ones the
+// service hashed. ok is false unless it decodes without unknown fields and
+// passes its own Validate.
+func synthesisInputFromBody(body []byte) (*contractsv1.ContextFabricSynthesisInput, bool) {
+	var envelope struct {
+		Error struct {
+			Details map[string]json.RawMessage `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil, false
+	}
+	raw, present := envelope.Error.Details[contractsv1.ContextFabricSynthesisInputDetailsKey]
+	if !present {
+		return nil, false
+	}
+	var input contractsv1.ContextFabricSynthesisInput
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		return nil, false
+	}
+	if err := input.Validate(); err != nil {
+		return nil, false
+	}
+	return &input, true
+}
+
+// rejectionReasonToken returns details.rejection_reason when it has the shape
+// of a closed token: lowercase letters, digits and underscores, at most 64.
+// The vocabulary itself belongs to the engine; a value of another shape is
+// dropped, so hosted text cannot ride through it.
+func rejectionReasonToken(details map[string]any) string {
+	reason, ok := details[contractsv1.ContextFabricSynthesisRejectionReasonKey].(string)
+	if !ok || reason == "" || len(reason) > 64 {
+		return ""
+	}
+	for _, r := range reason {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' {
+			return ""
+		}
+	}
+	return reason
 }
 
 // nonNegativeInteger accepts a JSON number (float64 after decode, or int

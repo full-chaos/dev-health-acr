@@ -279,6 +279,10 @@ const (
 	// and could not shrink the rows that overran. Refused without a second
 	// synthesis.
 	RetryDeclinedCannotReduceAxis RetryDeclinedReason = "cannot_reduce_axis"
+	// RetryDeclinedSuppliedSynthesis: the turn carries a synthesis the caller
+	// wrote. A retry would build another input, which that draft was not
+	// written from, so the turn is never re-synthesized.
+	RetryDeclinedSuppliedSynthesis RetryDeclinedReason = "supplied_synthesis"
 )
 
 // PlanNarrowingEventFrom builds the event.

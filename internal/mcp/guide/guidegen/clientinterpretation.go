@@ -24,6 +24,10 @@ const (
 	CodeContractRefused        = "invalid_request"
 	CodeInterpretationRejected = "interpretation_rejected"
 	DetailsViolatedBound       = "violated_bound"
+	CodeSynthesisRejected      = "synthesis_rejected"
+	StatusInputChanged         = 409
+	StatusDraftRejected        = 422
+	StatusAnswerTooLarge       = 413
 )
 
 // ClientFlowInputs is every value the client-interpretation guide quotes.
@@ -67,6 +71,18 @@ type ClientFlowInputs struct {
 	StatusNoMatch           string
 	SynthesisMaxBytes       int
 	CommitNotAffirmed       string
+
+	ArgSynthesisOutput           string
+	ArgSynthesisContract         string
+	SynthesisOutputMaxBytes      int
+	SynthesisContractDetailsKey  string
+	ReasonKey                    string
+	ReasonInputChanged           string
+	ReasonInterpretationRequired string
+	RejectionReasonKey           string
+	InputChangedDetailsKey       string
+	WriteBackContractFields      []string
+	BudgetArg                    string
 }
 
 func jsonName(typ reflect.Type, field string) string {
@@ -89,6 +105,7 @@ func clientFlowInputs() ClientFlowInputs {
 	synthesisInput := reflect.TypeOf(contractsv1.ContextFabricSynthesisInput{})
 	synthesisContract := reflect.TypeOf(contractsv1.ContextFabricSynthesisContract{})
 	response := reflect.TypeOf(contractsv1.MCPInvestigateQuestionResponse{})
+	writeBack := reflect.TypeOf(contractsv1.MCPSynthesisContract{})
 	commit, _, _ := strings.Cut(contractsv1.ContextFabricClientSynthesisCommitNotAffirmedLimitation, ".")
 	return ClientFlowInputs{
 		ClientFlowVocabulary: mcp.ClientFlow(),
@@ -139,6 +156,21 @@ func clientFlowInputs() ClientFlowInputs {
 		StatusNoMatch:           string(contractsv1.ContextFabricInvestigationNoMatch),
 		SynthesisMaxBytes:       contractsv1.ContextFabricSynthesisInputDefaultMaxBytes,
 		CommitNotAffirmed:       commit,
+
+		ArgSynthesisOutput:           jsonName(request, "SynthesisOutput"),
+		ArgSynthesisContract:         jsonName(request, "SynthesisContract"),
+		SynthesisOutputMaxBytes:      contractsv1.ContextFabricSuppliedSynthesisMaxBytes,
+		SynthesisContractDetailsKey:  contractsv1.ContextFabricSynthesisContractDetailsKey,
+		ReasonKey:                    contractsv1.ContextFabricSuppliedSynthesisReasonKey,
+		ReasonInputChanged:           contractsv1.ContextFabricSuppliedSynthesisReasonInputChanged,
+		ReasonInterpretationRequired: contractsv1.ContextFabricSuppliedSynthesisReasonInterpretationRequired,
+		RejectionReasonKey:           contractsv1.ContextFabricSynthesisRejectionReasonKey,
+		InputChangedDetailsKey:       contractsv1.ContextFabricSynthesisInputDetailsKey,
+		WriteBackContractFields: []string{
+			jsonName(writeBack, "ModelOutputVersion"), jsonName(writeBack, "PromptVersion"),
+			jsonName(writeBack, "SystemSHA256"), jsonName(writeBack, "InputSHA256"),
+		},
+		BudgetArg: jsonName(base, "Budget"),
 	}
 }
 
@@ -154,6 +186,11 @@ func buildClientInterpretation(c ClientFlowInputs) (string, error) {
 		"synthesis source server": c.SynthesisSourceServer, "not synthesized value": c.SynthesisNotSynthesized,
 		"status complete": c.StatusComplete, "status partial": c.StatusPartial, "status degraded": c.StatusDegraded, "status no match": c.StatusNoMatch,
 		"commit not affirmed prefix": c.CommitNotAffirmed,
+		"synthesis output argument":  c.ArgSynthesisOutput, "synthesis contract argument": c.ArgSynthesisContract,
+		"synthesis contract details key": c.SynthesisContractDetailsKey, "reason key": c.ReasonKey,
+		"input changed reason": c.ReasonInputChanged, "interpretation required reason": c.ReasonInterpretationRequired,
+		"rejection reason key": c.RejectionReasonKey, "input changed details key": c.InputChangedDetailsKey,
+		"budget argument": c.BudgetArg, "client model argument": c.ArgClientModel,
 	} {
 		if value == "" {
 			return "", fmt.Errorf("guidegen: client interpretation input %s is empty", name)
@@ -169,6 +206,9 @@ func buildClientInterpretation(c ClientFlowInputs) (string, error) {
 		if field == "" {
 			return "", fmt.Errorf("guidegen: client interpretation synthesis field %d is empty", i)
 		}
+	}
+	if len(c.WriteBackContractFields) != 4 || slices.Contains(c.WriteBackContractFields, "") || c.SynthesisOutputMaxBytes <= 0 {
+		return "", fmt.Errorf("guidegen: client interpretation write-back contract fields or size bound are missing")
 	}
 	if len(c.TextFields) != 3 || slices.Contains(c.TextFields, "") {
 		return "", fmt.Errorf("guidegen: client interpretation text fields are missing")
@@ -243,6 +283,30 @@ func buildClientInterpretation(c ClientFlowInputs) (string, error) {
 	fmt.Fprintf(&b, "- When we matched a subject but could not prove it by identity, we do not commit it, because no answer affirms it. The answer then has a limitation that starts with \"%s\". Confirm the candidate with its receipt on the next turn.\n", c.CommitNotAffirmed)
 	fmt.Fprintf(&b, "- The input is bounded to %d bytes by default. When facts were cut to fit, %s is true and a limitation says so. The input is not part of the answer byte budget.\n",
 		c.SynthesisMaxBytes, q(c.SynthesisInputFields[3]))
-	b.WriteString("- We do not check the text your model writes.\n")
+	b.WriteString("- On a turn without a draft we do not check the text your model writes: it never reaches us. To have us check and serve it, send it back as below.\n")
+
+	b.WriteString("\n### Send the answer back\n\n")
+	fmt.Fprintf(&b, "- Write-back works only on %s. The tool %s refuses %s and %s before any hosted call, with a text that names %s.\n",
+		q(c.InterpretTool), q(c.ServerSideTool), q(c.ArgSynthesisOutput), q(c.ArgSynthesisContract), q(c.InterpretTool))
+	fmt.Fprintf(&b, "- Send the same call again: the same question, the same %s, the same %s, and %s %s. Add %s (the reply object of your model, at most %d bytes) and %s. Add %s to name your model.\n",
+		q(c.ArgInterpretation), q(c.ArgContract), q(c.ArgSynthesis), q(c.SynthesisModeClient), q(c.ArgSynthesisOutput), c.SynthesisOutputMaxBytes, q(c.ArgSynthesisContract), q(c.ArgClientModel))
+	fmt.Fprintf(&b, "- %s has four required fields: %s. Copy the first three from %s of the first answer, and %s from %s of the first answer, unchanged. The tool refuses a missing value before any hosted call, with a text that says where the values come from.\n",
+		q(c.ArgSynthesisContract), strings.Join(quoteAll(c.WriteBackContractFields), ", "),
+		q(c.SynthesisInputField+"."+c.SynthesisInputFields[0]), q(c.WriteBackContractFields[3]), q(c.SynthesisInputField+"."+c.SynthesisInputFields[2]))
+	b.WriteString("- We run the turn again, with live authorization and live reads, and we build the model input again. If it is not the input your draft was written from, we refuse. If it is, we check your draft against the facts with the checks we use on the draft of our own model. We never call a model on this turn.\n")
+	fmt.Fprintf(&b, "- A served write-back reads like this. %s is %s. %s is %s (%s when you declared no model). %s is the prompt version of the synthesis prompt, with no suffix. %s comes from your draft, and %s is possible. The three text fields (%s) are composed from your draft, not the fixed sentence. The answer has no %s. A subject we matched but could not prove by identity stays committed when your draft supports it.\n",
+		q(c.SynthesisSourceField), q(c.SynthesisSourceClient), q(c.ModelIdentityField), q(c.ClientProvider+"/<your model>"), q(c.ClientProvider+"/"+c.ClientUndeclared),
+		q(c.SynthesisVersionField), q(c.StatusField), q(c.StatusComplete), strings.Join(quoteAll(c.TextFields), ", "), q(c.SynthesisInputField))
+	fmt.Fprintf(&b, "- **The contract is not the current one.** Status %d, code %s, with %s: `mismatch` lists the fields that are absent or differ, and `current` holds the three current values. Send the first call again to get a new %s, and fetch the prompt %s again.\n",
+		StatusContractRefused, q(CodeContractRefused), q("details."+c.SynthesisContractDetailsKey), q(c.SynthesisInputField), q(c.SynthesisPrompt))
+	fmt.Fprintf(&b, "- **The input changed.** Status %d, code %s, with %s %s and %s: the new input. The facts or the question changed between your two calls. Run your model again on the new input, then send the write-back again. The tool result is an error that names the reason. It carries the new %s as JSON in a second content block.\n",
+		StatusInputChanged, q(CodeContractRefused), q("details."+c.ReasonKey), q(c.ReasonInputChanged), q("details."+c.InputChangedDetailsKey), q(c.SynthesisInputField))
+	fmt.Fprintf(&b, "- **The draft is rejected.** Status %d, code %s, with %s: one closed word that names the check that failed, for example a claim that does not match a fact, or a subject that is not in the input. We store nothing, we do not retry, and we do not use our own model. Correct the draft against the facts and send it again. The tool reports it with the category `validation`.\n",
+		StatusDraftRejected, q(CodeSynthesisRejected), q("details."+c.RejectionReasonKey))
+	fmt.Fprintf(&b, "- **No interpretation.** A hosted request with a draft and no interpretation is refused with status 400, code %s, and %s %s. The tool always sends your interpretation.\n",
+		q(CodeContractRefused), q("details."+c.ReasonKey), q(c.ReasonInterpretationRequired))
+	fmt.Fprintf(&b, "- **The answer does not fit the byte budget.** Status %d, as for any answer that is too large. We do not narrow the input and write a new one, because your draft was written for this input. Raise the byte limit of %s, or write fewer items in your draft.\n",
+		StatusAnswerTooLarge, q(c.BudgetArg))
+	b.WriteString("- We check the claims, the subjects, and the evidence of your draft against the facts we read. We make no model call, and nothing is stored when a check fails.\n")
 	return b.String(), nil
 }

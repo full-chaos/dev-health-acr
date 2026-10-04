@@ -1,11 +1,15 @@
 package graphrank
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec/certify"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -201,8 +205,12 @@ func TestAppendCensusAttestedCommitHonoursTheCandidateCap(t *testing.T) {
 	}
 	bases := contextfabric.CommitBasisSet{}
 	digests := contextfabric.CommitDecisionDigestSet{}
-	if !appendCensusAttestedCommit(&resolution, contextfabric.SubjectCandidate{Subject: pr}, 2, bases, digests, true, true) {
+	ok, displaced := appendCensusAttestedCommit(&resolution, contextfabric.SubjectCandidate{Subject: pr}, 2, bases, digests, true, true)
+	if !ok {
 		t.Fatal("append = false, want the pull request committed by displacing the uncommitted candidate")
+	}
+	if displaced != other {
+		t.Fatalf("displaced = %v, want %v", displaced, other)
 	}
 	if len(resolution.Candidates) != 2 || len(resolution.Committed) != 2 {
 		t.Fatalf("candidates = %d, committed = %d, want 2 and 2 under a cap of 2", len(resolution.Candidates), len(resolution.Committed))
@@ -214,7 +222,7 @@ func TestAppendCensusAttestedCommitHonoursTheCandidateCap(t *testing.T) {
 		Candidates: []contextfabric.SubjectCandidate{{Subject: repo, State: contextfabric.ResolutionCommitted}},
 		Committed:  []contextfabric.SubjectRef{repo},
 	}
-	if appendCensusAttestedCommit(&full, contextfabric.SubjectCandidate{Subject: pr}, 1, bases, digests, true, true) || len(full.Candidates) != 1 {
+	if okFull, gone := appendCensusAttestedCommit(&full, contextfabric.SubjectCandidate{Subject: pr}, 1, bases, digests, true, true); okFull || gone.CanonicalID != "" || len(full.Candidates) != 1 {
 		t.Fatalf("append over a cap of committed-only candidates must refuse, got %#v", full)
 	}
 }
@@ -295,5 +303,89 @@ func TestResolveSubjects_RestrictedPrincipalNeverRunsTheHandleCensus(t *testing.
 		if id == scopeAnchorPRID {
 			t.Fatalf("committed = %v, want the pull request left out", scopeAnchorCommittedIDs(resolution))
 		}
+	}
+}
+
+func TestResolveSubjects_CandidateDisplacedAtTheCapByTheAttestedCommitIsTraced(t *testing.T) {
+	t.Parallel()
+	backend := scopeAnchorBackend(true, -1)
+	rival := candidateNode(contextfabric.SubjectPullRequest, "pull_request:r-1:12", "PR #12", 0.9, "*")
+	backend.searchResults[scopeAnchorRepo] = append(backend.searchResults[scopeAnchorRepo], rival)
+	resolution, tracer, _ := resolveScopeAnchorQuestionWith(t, backend, scopeAnchorQuestion, namedScopeAnchorFrame(nil), 2)
+	ids := scopeAnchorCommittedIDs(resolution)
+	if len(ids) != 2 || ids[1] != scopeAnchorPRID {
+		t.Fatalf("committed = %v, want the scope anchor then the pull request", ids)
+	}
+	var displaced int
+	for _, e := range tracer.eventsForStage("decision") {
+		if e.Outcome == "displaced" && e.CommitGate == "evidence_census" && e.Subject.CanonicalID == "pull_request:r-1:12" && e.Index == 1 && e.Total == 2 {
+			displaced++
+		}
+	}
+	if displaced != 1 {
+		t.Fatalf("displaced evidence_census decision events for the pushed-out candidate = %d, want 1 (candidates = %#v)", displaced, resolution.Candidates)
+	}
+}
+
+func TestResolveSubjects_DisplacedCandidateTraceKeepsTheDecisionBoundsAndSummary(t *testing.T) {
+	t.Parallel()
+	backend := scopeAnchorBackend(true, -1)
+	rival := candidateNode(contextfabric.SubjectPullRequest, "pull_request:r-1:12", "PR #12", 0.9, "*")
+	backend.searchResults[scopeAnchorRepo] = append(backend.searchResults[scopeAnchorRepo], rival)
+	var buf bytes.Buffer
+	deps := backend.deps()
+	deps.ResolutionTracer = NewSlogResolutionTracer(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	calls := 0
+	deps.CensusFunc = scopeAnchorCensus(&calls)
+	request := testRequest()
+	request.Question = scopeAnchorQuestion
+	request.Options.MaxSubjectCandidates = 2
+	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(scopeAnchorRepo, "pull request 747"), deps, nil, nil, namedScopeAnchorFrame(nil), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := scopeAnchorCommittedIDs(resolution); len(ids) != 2 {
+		t.Fatalf("committed = %v, want the displacement fixture to commit the pull request", ids)
+	}
+	log, err := certify.Parse(buf.Bytes())
+	if err != nil {
+		t.Fatalf("certify.Parse() error = %v", err)
+	}
+	for _, pass := range []int{1, 2} {
+		if _, err := certify.CertifyBoundedManyCount(log, eventspec.Decision, map[string]any{"request_id": request.RequestID, "pass": pass}); err != nil {
+			t.Fatalf("CertifyBoundedManyCount(decision, pass %d) error = %v", pass, err)
+		}
+	}
+	summaries := decisionSummaryLines(t, &buf)
+	if len(summaries) != 1 {
+		t.Fatalf("decision summaries = %d, want 1", len(summaries))
+	}
+	requireSummaryShape(t, summaries[0])
+}
+
+func TestResolveSubjects_ScopeAnchorRoundPanicRecoveryTagsTheTrigger(t *testing.T) {
+	t.Parallel()
+	backend := scopeAnchorBackend(true, -1)
+	deps := backend.deps()
+	tracer := &captureResolutionTracer{}
+	deps.ResolutionTracer = tracer
+	deps.CensusFunc = func(context.Context, string, CensusKind, string, bool, contextfabric.SubjectKind, string, bool) (CensusOutcome, error) {
+		panic("simulated CensusFunc panic on the scope-anchor round")
+	}
+	request := testRequest()
+	request.Question = scopeAnchorQuestion
+	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(scopeAnchorRepo, "pull request 747"), deps, nil, nil, namedScopeAnchorFrame(nil), "")
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v, want the panic isolated", err)
+	}
+	if ids := scopeAnchorCommittedIDs(resolution); len(ids) != 1 || ids[0] != scopeAnchorRepoID {
+		t.Fatalf("committed = %v, want the scope anchor alone after a recovered panic", ids)
+	}
+	events := tracer.eventsForStage("evidence_round")
+	if len(events) != 1 || events[0].ShadowReason != string(ReasonProbeError) {
+		t.Fatalf("evidence_round events = %#v, want exactly 1 recovered probe_error event", events)
+	}
+	if events[0].ShadowTrigger != "committed_scope_anchor" {
+		t.Fatalf("recovered event ShadowTrigger = %q, want %q", events[0].ShadowTrigger, "committed_scope_anchor")
 	}
 }

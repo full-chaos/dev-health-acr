@@ -825,7 +825,11 @@ var AnchorKindWithheldSummary = Event{
 // NEVER zero: every pass reaches exactly one of three mutually exclusive
 // branches (resolution.go's own switch), each unconditional -- "committed"
 // (one line per committed subject, Total=len(resolution.Committed)) or
-// "ambiguous"/"no_commit" (exactly one line, Total=1). DecisionSummary is
+// "ambiguous"/"no_commit" (exactly one line, Total=1). When the
+// census-attested commit pushes a candidate out at the candidate cap
+// (CHAOS-8408) that pass carries one extra "displaced" line, so the pass is
+// index 1/2 "displaced" then index 2/2 "committed"; DecisionSummary does not
+// count the displaced line. DecisionSummary is
 // the folded per-REQUEST Info line an operator actually reads; this is its
 // own per-pass, per-outcome detail.
 var Decision = Event{
@@ -834,7 +838,7 @@ var Decision = Event{
 	Level:              LevelDebug,
 	Multiplicity:       MultiplicityBoundedManyPerPass,
 	Attribution:        []string{"request_id"},
-	BoundedAggregation: "bounded by the pass's own outcome: one line per committed subject for a \"committed\" pass (self-carried index/total), otherwise exactly one line (index=1/total=1) -- never zero.",
+	BoundedAggregation: "bounded by the pass's own outcome: one line per committed subject for a \"committed\" pass (self-carried index/total), otherwise exactly one line (index=1/total=1) -- never zero. A \"displaced\" line (CHAOS-8408) names the candidate the census-attested commit pushed out at the candidate cap: that pass is then index 1/total 2 \"displaced\" followed by index 2/total 2 \"committed\".",
 	Fields: []Field{
 		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "pass", Type: FieldInt, Presence: PresenceRequired},
@@ -843,7 +847,7 @@ var Decision = Event{
 		{Key: "total", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired},
 		{Key: "subject_canonical_id", Type: FieldString, Presence: PresenceRequired},
-		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"committed", "ambiguous", "no_commit"}},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"committed", "ambiguous", "no_commit", "displaced"}},
 		{
 			Key: "winning_mechanism", Type: FieldString, Presence: PresenceRequired,
 			// Open vocabulary: a contextfabric.MatchMechanism token, or "".
@@ -2916,6 +2920,7 @@ var All = []Event{
 	GraphCountCheckFinished,
 	SuppliedInterpretationDecision,
 	ClientSynthesisDecision,
+	SuppliedSynthesisDecision,
 }
 
 // CountPopulationScope (CHAOS-5775) is the Info line for whether a served

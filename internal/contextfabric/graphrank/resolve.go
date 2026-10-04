@@ -744,7 +744,9 @@ type ResolutionTraceEvent struct {
 	CorroborationMinConfidence  float64
 	CorroborationMaxConfidence  float64
 	// Outcome/WinningMechanism (decision stage): "committed" / "ambiguous"
-	// / "no_commit". WinningMechanism is the strongest mechanism on the
+	// / "no_commit", or "displaced" (CHAOS-8408: a candidate pushed out at
+	// the cap by the census-attested commit; not counted in the summary).
+	// WinningMechanism is the strongest mechanism on the
 	// committed/considered candidate (empty for a no-candidate outcome).
 	Outcome          string
 	WinningMechanism string
@@ -2497,6 +2499,12 @@ func (b *decisionSummaryBuffer) Trace(event ResolutionTraceEvent) {
 	if event.Stage != "decision" {
 		return
 	}
+	// CHAOS-8408: a displaced line names a candidate that LEFT the pool; it is
+	// not a decision about a subject, so it stays out of the outcome counts and
+	// the total, which must remain the sum of its parts.
+	if event.Outcome == "displaced" {
+		return
+	}
 	b.eventCount++
 	// OR across the call: see DecisionOfferedUnderWindowGate's own doc
 	// comment for why "at least one" is the claim rather than a whole-call
@@ -2954,7 +2962,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			// its anchor have not run here), and the attestation is
 			// consumed exactly as the ordinary path consumes it: same
 			// predicate, same census, same commit.
-			shadowsHandle := committedScopeAnchorShadowsHandle(request.Question, exactResolution.Committed, frame)
+			shadowsHandle := len(request.SubjectHandles) == 0 && committedScopeAnchorShadowsHandle(request.Question, exactResolution.Committed, frame)
 			roundAnchor := confirmedAnchor
 			if shadowsHandle && roundAnchor == nil && len(exactResolution.Committed) == 1 {
 				roundAnchor = &contextfabric.ConfirmedAnchorSelection{Kind: exactResolution.Committed[0].Kind, CanonicalID: exactResolution.Committed[0].CanonicalID}
@@ -4539,6 +4547,8 @@ func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.
 					// for a panic on the caller-hint short circuit's own
 					// call.
 					ShadowCallerHintShortCircuit: callerHintShortCircuit,
+					// CHAOS-8409: same trigger tag a normal-path event carries.
+					ShadowTrigger: evidenceRoundTrigger(resolution, callerHintShortCircuit),
 				})
 			}
 			// attestation stays its zero value -- see this function's own
@@ -5061,7 +5071,7 @@ func evidenceRoundTrigger(resolution contextfabric.SubjectResolution, callerHint
 // outcome as a decision event: "committed" when appended, "no_commit" when the
 // candidate cap or a duplicate refuses it.
 func commitCensusAttestedBesideScopeAnchor(resolution *contextfabric.SubjectResolution, candidate contextfabric.SubjectCandidate, request contextfabric.InvestigationRequest, deps ResolveDeps, bases contextfabric.CommitBasisSet, digests contextfabric.CommitDecisionDigestSet, searchTruncated, aliasComplete bool, searchCandidateLimit, pass int) bool {
-	appended := appendCensusAttestedCommit(resolution, candidate, request.Options.MaxSubjectCandidates, bases, digests, searchTruncated, aliasComplete)
+	appended, displaced := appendCensusAttestedCommit(resolution, candidate, request.Options.MaxSubjectCandidates, bases, digests, searchTruncated, aliasComplete)
 	if deps.ResolutionTracer == nil {
 		return appended
 	}
@@ -5074,6 +5084,19 @@ func commitCensusAttestedBesideScopeAnchor(resolution *contextfabric.SubjectReso
 		})
 		return false
 	}
+	// CHAOS-8408: the appended subject took the last uncommitted slot at the
+	// candidate cap; record who left. A displaced line shares the pass, so the
+	// pair is index 1/2 "displaced" then 2/2 "committed".
+	committedIndex, committedTotal := 1, 1
+	if displaced.CanonicalID != "" {
+		committedIndex, committedTotal = 2, 2
+		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+			RequestID: request.RequestID, Stage: "decision", Subject: displaced,
+			Outcome: "displaced", CommitGate: "evidence_census", SearchTruncated: searchTruncated,
+			SearchCandidateLimit: searchCandidateLimit, PopulationBasis: "none",
+			Pass: pass, Index: 1, Total: 2,
+		})
+	}
 	winningMechanism := ""
 	if len(candidate.MatchMechanisms) > 0 {
 		winningMechanism = string(candidate.MatchMechanisms[0])
@@ -5083,7 +5106,7 @@ func commitCensusAttestedBesideScopeAnchor(resolution *contextfabric.SubjectReso
 		Outcome: "committed", WinningMechanism: winningMechanism, CommitGate: "evidence_census",
 		CommitBasis: string(bases.For(candidate.Subject)), SearchTruncated: searchTruncated,
 		SearchCandidateLimit: searchCandidateLimit, PopulationBasis: "none",
-		Pass: pass, Index: 1, Total: 1,
+		Pass: pass, Index: committedIndex, Total: committedTotal,
 	})
 	return true
 }
@@ -5092,13 +5115,13 @@ func commitCensusAttestedBesideScopeAnchor(resolution *contextfabric.SubjectReso
 // already-committed scope anchor. The basis is statistical, exactly like the
 // stalled evidence_census path, so the commit-affirmation gate still has to
 // see the answer stand on that subject.
-func appendCensusAttestedCommit(resolution *contextfabric.SubjectResolution, candidate contextfabric.SubjectCandidate, maxCandidates int, bases contextfabric.CommitBasisSet, digests contextfabric.CommitDecisionDigestSet, searchTruncated, aliasComplete bool) bool {
+func appendCensusAttestedCommit(resolution *contextfabric.SubjectResolution, candidate contextfabric.SubjectCandidate, maxCandidates int, bases contextfabric.CommitBasisSet, digests contextfabric.CommitDecisionDigestSet, searchTruncated, aliasComplete bool) (appended bool, displaced contextfabric.SubjectRef) {
 	if candidate.Subject.CanonicalID == "" {
-		return false
+		return false, contextfabric.SubjectRef{}
 	}
 	for _, committed := range resolution.Committed {
 		if committed == candidate.Subject {
-			return false
+			return false, contextfabric.SubjectRef{}
 		}
 	}
 	candidate.State = contextfabric.ResolutionCommitted
@@ -5119,8 +5142,9 @@ func appendCensusAttestedCommit(resolution *contextfabric.SubjectResolution, can
 				}
 			}
 			if drop < 0 {
-				return false
+				return false, contextfabric.SubjectRef{}
 			}
+			displaced = resolution.Candidates[drop].Subject
 			resolution.Candidates = append(resolution.Candidates[:drop:drop], resolution.Candidates[drop+1:]...)
 		}
 		resolution.Candidates = append(resolution.Candidates, candidate)
@@ -5131,7 +5155,7 @@ func appendCensusAttestedCommit(resolution *contextfabric.SubjectResolution, can
 		CommitGate: "evidence_census", IdentityProven: contextfabric.CommitBasisStatistical.IdentityProven(),
 		SearchTruncated: searchTruncated, AliasLookupComplete: aliasComplete,
 	})
-	return true
+	return true, displaced
 }
 
 // repositoryNarrowedByUnrestrictedPrincipal is true when the only thing

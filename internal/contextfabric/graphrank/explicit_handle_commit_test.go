@@ -251,7 +251,6 @@ func TestExplicitPullRequestHandleRefusesAnUnsafeCensusOutcome(t *testing.T) {
 func TestExplicitPullRequestHandleIsInertWithoutItsInputs(t *testing.T) {
 	t.Parallel()
 	mutate := map[string]func(*ResolveDeps, *contextfabric.InvestigationRequest){
-		"no handles":    func(_ *ResolveDeps, r *contextfabric.InvestigationRequest) { r.SubjectHandles = nil },
 		"no census":     func(d *ResolveDeps, _ *contextfabric.InvestigationRequest) { d.CensusFunc = nil },
 		"no grammar":    func(d *ResolveDeps, _ *contextfabric.InvestigationRequest) { d.HandleGrammarChecker = nil },
 		"invalid value": func(_ *ResolveDeps, r *contextfabric.InvestigationRequest) { r.SubjectHandles[0].Value = "7x" },
@@ -282,6 +281,20 @@ func TestExplicitPullRequestHandleIsInertWithoutItsInputs(t *testing.T) {
 				t.Fatalf("Committed = %#v, want at most the hinted subject", resolution.Committed)
 			}
 		})
+	}
+}
+
+// Without an explicit handle the explicit path does nothing; the pull request
+// the question names is then attested by the text-derived census instead
+// (CHAOS-8407), so the repository hint no longer shadows it.
+func TestExplicitPullRequestHandleAbsentLeavesTheTextDerivedAttestation(t *testing.T) {
+	t.Parallel()
+	var calls []explicitHandleCensusCall
+	deps, request := explicitHandleFixture(1, &calls)
+	request.SubjectHandles = nil
+	resolution := resolveExplicitHandleFixture(t, deps, request)
+	if len(resolution.Committed) != 2 || resolution.Committed[1].CanonicalID != explicitHandlePRID {
+		t.Fatalf("Committed = %#v, want the hinted repository then the text-attested pull request", resolution.Committed)
 	}
 }
 

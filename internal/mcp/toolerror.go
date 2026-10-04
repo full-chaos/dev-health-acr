@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -115,8 +116,15 @@ func classifyAPIError(err error, apiErr *sidecar.APIError) *classifiedError {
 		category = "no_data"
 	case errors.Is(err, sidecar.ErrInvalidRequest):
 		category = "validation"
-		if apiErr.InterpretationContract != nil {
+		switch {
+		case apiErr.InterpretationContract != nil:
 			message = interpretationContractMessage(*apiErr.InterpretationContract)
+		case apiErr.SynthesisContract != nil:
+			message = synthesisContractMessage(*apiErr.SynthesisContract)
+		case apiErr.SynthesisInput != nil:
+			message = synthesisInputChangedMessage
+		case apiErr.Reason == contractsv1.ContextFabricSuppliedSynthesisReasonInterpretationRequired:
+			message = synthesisInterpretationRequiredMessage
 		}
 	// ErrInterpretationRejected/ErrSynthesisRejected are the Context Fabric
 	// investigations endpoint's 422 codes (CHAOS-3784): the request was
@@ -129,6 +137,9 @@ func classifyAPIError(err error, apiErr *sidecar.APIError) *classifiedError {
 	// CHAOS-3784 exists to create for an MCP consumer (round-2 R2-1).
 	case errors.Is(err, sidecar.ErrInterpretationRejected), errors.Is(err, sidecar.ErrSynthesisRejected):
 		category = "validation"
+		if apiErr.SynthesisRejectionReason != "" {
+			message = synthesisRejectedMessage(apiErr.SynthesisRejectionReason)
+		}
 	// ErrUpstreamInvalidOutput is the pre-existing upstream_invalid_output
 	// code (a provider/schema-level failure, not a bound violation): it
 	// already fell into the default "unavailable" bucket before this case
@@ -211,4 +222,45 @@ func toolErrorResult(err error) *mcpsdk.CallToolResult {
 func interpretationContractMessage(refusal contractsv1.ContextFabricInterpretationContractRefusal) string {
 	return fmt.Sprintf("the interpretation contract is not the current one (mismatch: %s); current model_output_version=%q prompt_version=%q system_sha256=%q; fetch the prompt interpret_question again with prompts/get, run it on your own model and retry with the new _meta values as contract",
 		strings.Join(refusal.Mismatch, ", "), refusal.Current.ModelOutputVersion, refusal.Current.PromptVersion, refusal.Current.SystemSHA256)
+}
+
+const (
+	synthesisInputChangedMessage           = "reason=" + contractsv1.ContextFabricSuppliedSynthesisReasonInputChanged + ": the draft was written from an input that is no longer the current one, so it was not applied and nothing was stored; the new synthesis_input follows in the next content block as JSON; run the prompt synthesize_answer on its input on your own model, then send the same call again with the new synthesis_output and a synthesis_contract made of the new synthesis_input.contract and synthesis_input.input_sha256"
+	synthesisInterpretationRequiredMessage = "reason=" + contractsv1.ContextFabricSuppliedSynthesisReasonInterpretationRequired + ": synthesis_output is accepted only together with your interpretation; send it with investigate_with_interpretation"
+)
+
+// synthesisContractMessage renders a refused supplied-synthesis contract: the
+// mismatched field names, the current contract values and a fixed instruction.
+// The values are quoted, so no control character in a hosted value can shape
+// the message.
+func synthesisContractMessage(refusal contractsv1.ContextFabricSynthesisContractRefusal) string {
+	return fmt.Sprintf("the synthesis contract is not the current one (mismatch: %s); current model_output_version=%q prompt_version=%q system_sha256=%q; send the question again with synthesis \"client\" and no synthesis_output, fetch the prompt synthesize_answer again with prompts/get, run it on your own model on the new synthesis_input, and retry with its contract and input_sha256 as synthesis_contract",
+		strings.Join(refusal.Mismatch, ", "), refusal.Current.ModelOutputVersion, refusal.Current.PromptVersion, refusal.Current.SystemSHA256)
+}
+
+// synthesisRejectedMessage names the closed reason the service rejected a
+// supplied draft for. The reason is a token of the service's own vocabulary.
+func synthesisRejectedMessage(reason string) string {
+	return fmt.Sprintf("the synthesis draft was rejected (reason: %s); nothing was stored and the service does not retry; correct the draft against the synthesis_input facts and send the same call again", reason)
+}
+
+// writeBackAwareErrorResult is toolErrorResult for the investigation tools. A
+// refusal that carries a new synthesis input also returns it, as one JSON text
+// block after the error text: structured content on an error result would be
+// held to the success output schema by a strict client, a text block cannot.
+func writeBackAwareErrorResult(err error) *mcpsdk.CallToolResult {
+	result := toolErrorResult(err)
+	var apiErr *sidecar.APIError
+	if !errors.As(err, &apiErr) || apiErr.SynthesisInput == nil {
+		return result
+	}
+	encoded, marshalErr := json.Marshal(struct {
+		Reason         string                                   `json:"reason"`
+		SynthesisInput *contractsv1.ContextFabricSynthesisInput `json:"synthesis_input"`
+	}{Reason: contractsv1.ContextFabricSuppliedSynthesisReasonInputChanged, SynthesisInput: apiErr.SynthesisInput})
+	if marshalErr != nil {
+		return result
+	}
+	result.Content = append(result.Content, &mcpsdk.TextContent{Text: string(encoded)})
+	return result
 }
