@@ -174,12 +174,15 @@ func TestNothingIsPersistedWithoutBeingFinalized(t *testing.T) {
 				if sel.Sel.Name == "Save" {
 					if inner, ok := sel.X.(*ast.SelectorExpr); ok && inner.Sel.Name == "results" {
 						rawSinkCallers[fn.Name.Name]++
-						if fn.Name.Name != "saveResult" && (!save.IsValid() || call.Pos() < save) {
+						if fn.Name.Name != "saveResult" && fn.Name.Name != "saveTerminalResult" && (!save.IsValid() || call.Pos() < save) {
 							save = call.Pos()
 						}
 					}
 				}
-				if sel.Sel.Name == "saveResult" {
+				// saveTerminalResult wraps saveResult for the four terminal exits;
+				// each of those callers is a persisting function quantified here, and
+				// must finalize before it calls the wrapper.
+				if (sel.Sel.Name == "saveResult" || sel.Sel.Name == "saveTerminalResult") && fn.Name.Name != "saveTerminalResult" {
 					if !save.IsValid() || call.Pos() < save {
 						save = call.Pos()
 					}

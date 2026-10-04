@@ -2,8 +2,11 @@ package contextfabric
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -122,5 +125,51 @@ func TestTerminalSaveKeepsOtherPersistenceErrors(t *testing.T) {
 	err := engine.saveResult(context.Background(), storage.Principal{OrgID: "org-1"}, BudgetAssertDecisive, rejected, nil, nil, "", 0, "", semanticStateCapture{Write: SemanticStateOf(workItemTupleSemanticStateFixture())})
 	if !errors.Is(err, errWorkItemTuplePayloadRejected) {
 		t.Errorf("decisive tuple with members must stay rejected, got %v", err)
+	}
+}
+
+func tupleRejectedTerminalForTest(t *testing.T) (*Engine, *recordingTelemetry) {
+	t.Helper()
+	telemetry := &recordingTelemetry{}
+	engine := mustReuseTestEngine(t, EngineDependencies{Results: &resultStoreStub{}, Telemetry: telemetry})
+	return engine, telemetry
+}
+
+// A terminal whose disclosure no longer fits the budget refuses with its
+// budget stage, not the persistence stage, and records no skipped-copy claim
+// as served.
+func TestTerminalSaveRemeasureOverrunKeepsItsStage(t *testing.T) {
+	engine, _ := tupleRejectedTerminalForTest(t)
+	state := workItemTupleSemanticStateFixture()
+	result := InvestigationResult{ResultID: "result_overrun", Status: InvestigationNoMatch, Limitations: []string{}}
+	result.EvidenceRefIDs = []string{"foreign"} // pre-membership exemption does not apply
+	err := engine.saveTerminalResult(context.Background(), storage.Principal{OrgID: "org-1"}, BudgetAssertSubjectlessTerminal, &result, nil, ResponseBudget{MaxSerializedBytes: 1}, nil, nil, "", 0, "", semanticStateCapture{Write: SemanticStateOf(state)})
+	if err == nil {
+		t.Fatal("an over-budget disclosure must refuse")
+	}
+	wrapped := persistenceStageError(err)
+	if stage, _ := FailureStage(wrapped); stage == StagePersistence {
+		t.Errorf("budget refusal re-tagged as persistence: %v", wrapped)
+	}
+	if !strings.Contains(wrapped.Error(), "response budget") {
+		t.Errorf("not the budget refusal: %v", wrapped)
+	}
+}
+
+func TestTerminalSaveSkippedLineIsErrorWithClosedTokens(t *testing.T) {
+	var buf strings.Builder
+	sink := SlogEngineTelemetry{logger: slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))}
+	sink.RecordTerminalSaveSkipped(context.Background(), storage.Principal{OrgID: "org-1"}, TerminalSaveSkippedEvent{ResultID: "r1", Site: BudgetAssertReuse, Outcome: TerminalSaveSkippedPayloadRejected})
+	sink.RecordTerminalSaveSkipped(context.Background(), storage.Principal{OrgID: "org-1"}, TerminalSaveSkippedEvent{ResultID: "r1", Site: BudgetAssertWindowVeto, Outcome: TerminalSaveSkippedPayloadRejected})
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	var first, second map[string]any
+	if json.Unmarshal([]byte(lines[0]), &first) != nil || json.Unmarshal([]byte(lines[1]), &second) != nil {
+		t.Fatal("decode")
+	}
+	if first["level"] != "ERROR" || first["site"] != continuationTelemetryUnrecognised {
+		t.Errorf("a site this event cannot emit must read unrecognised: %v", first)
+	}
+	if second["site"] != string(BudgetAssertWindowVeto) || second["outcome"] != string(TerminalSaveSkippedPayloadRejected) {
+		t.Errorf("line = %v", second)
 	}
 }

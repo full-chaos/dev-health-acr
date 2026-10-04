@@ -648,7 +648,7 @@ func (e *Engine) terminalResult(
 				// silently drop them.
 				return e.structureSupersessionVetoResult(ctx, principal, request, mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions, carriedStructureEntries, plan, ancestryParent, semantic)
 			}
-			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
+			return InvestigationResult{}, persistenceStageError(err)
 		}
 		e.emitBindingEpochDelta(ctx, principal, epochDeltaSample)
 		// CHAOS-3927 P4 (codex round-2 adversarial review fix): same

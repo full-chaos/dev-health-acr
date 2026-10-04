@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 
@@ -218,6 +219,33 @@ type TerminalSaveOutcome string
 // refused the terminal's reading, so the answer is served and not stored.
 const TerminalSaveSkippedPayloadRejected TerminalSaveOutcome = "skipped_payload_rejected"
 
+// TerminalSaveSiteVocabulary is the four exits that save through saveTerminalResult.
+func TerminalSaveSiteVocabulary() []string {
+	return []string{string(BudgetAssertSubjectlessTerminal), string(BudgetAssertWindowVeto), string(BudgetAssertWindowConfirmationRequired), string(BudgetAssertStructureVeto), continuationTelemetryUnrecognised}
+}
+
+func validTerminalSaveSite(site BudgetAssertStage) bool {
+	return slices.Contains(TerminalSaveSiteVocabulary(), string(site)) && string(site) != continuationTelemetryUnrecognised
+}
+
+// terminalRemeasureError carries a failure raised while re-measuring a degraded
+// terminal (the budget refusal, a validation failure) so the caller returns it
+// exactly as finalizeServed would have: not re-tagged as a persistence failure.
+type terminalRemeasureError struct{ Err error }
+
+func (e *terminalRemeasureError) Error() string { return e.Err.Error() }
+func (e *terminalRemeasureError) Unwrap() error { return e.Err }
+
+// persistenceStageError tags a save failure with the persistence stage unless
+// it came from re-measuring a degraded terminal.
+func persistenceStageError(err error) error {
+	var remeasured *terminalRemeasureError
+	if errors.As(err, &remeasured) {
+		return remeasured.Err
+	}
+	return stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
+}
+
 // TerminalSaveOutcomeVocabulary is the closed outcome list the event spec reads.
 func TerminalSaveOutcomeVocabulary() []string {
 	return []string{string(TerminalSaveSkippedPayloadRejected), continuationTelemetryUnrecognised}
@@ -244,17 +272,24 @@ func (e *Engine) saveTerminalResult(
 	capture semanticStateCapture,
 ) error {
 	// The not-saved disclosure is bytes in the served document, so the served
-	// form is measured again after it is added (finalizeServed is the one
-	// measurement point). Declared before the save so the budget quantifier
-	// sees the measurement is not skipped on this path.
+	// form is measured again after it is added. The callers already ran
+	// finalizeServed (completeness, authority, plan and the budget line) and the
+	// disclosure changes none of that, so only the budget is re-checked: silently
+	// when the document still fits, through assertFitsBudget (which records the
+	// overrun and returns the refusal) when it does not.
 	remeasure := func() error {
 		composed, displaced := appendBoundedLimitations(result.Limitations, []string{contractsv1.ContextFabricTerminalNotSavedLimitation})
 		degraded := *result
 		degraded.Limitations = composed
 		degraded.LimitationsDisplaced += displaced
-		degraded, err := e.finalizeServed(ctx, principal, site, degraded, plan, budget)
-		if err != nil {
-			return err
+		if budget.MaxItems > 0 || budget.MaxSerializedBytes > 0 {
+			measurement, err := contractsv1.MeasureContextFabricResponse(degraded)
+			if err != nil {
+				return stageError(StageValidation, err)
+			}
+			if measurement.Overrun(budget) != contractsv1.ContextFabricBudgetFits {
+				return e.assertFitsBudget(ctx, principal, site, degraded, budget)
+			}
 		}
 		if err := ValidateResult(degraded); err != nil {
 			return stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
@@ -269,5 +304,8 @@ func (e *Engine) saveTerminalResult(
 	if e.telemetry != nil {
 		e.telemetry.RecordTerminalSaveSkipped(ctx, principal, TerminalSaveSkippedEvent{ResultID: result.ResultID, Site: site, Outcome: TerminalSaveSkippedPayloadRejected})
 	}
-	return remeasure()
+	if err := remeasure(); err != nil {
+		return &terminalRemeasureError{Err: err}
+	}
+	return nil
 }

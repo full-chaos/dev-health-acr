@@ -2121,7 +2121,7 @@ var TerminalSaveSkipped = Event{
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "result_id", Type: FieldString, Presence: PresenceRequired},
-		{Key: "site", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.SemanticStatePersistenceLineVocabulary("site")},
+		{Key: "site", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.TerminalSaveSiteVocabulary()},
 		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.TerminalSaveOutcomeVocabulary()},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},

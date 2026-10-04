@@ -1443,7 +1443,7 @@ func (e *Engine) structureVetoResult(ctx context.Context, principal storage.Prin
 	}
 	if e.results != nil {
 		if err := e.saveTerminalResult(ctx, principal, BudgetAssertStructureVeto, &result, plan, e.effectiveResponseBudget(request), nil, nil, TimeAxisKeyFor(request.TimeContext), binding.Epoch, ancestryParent, semantic); err != nil {
-			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
+			return InvestigationResult{}, persistenceStageError(err)
 		}
 	}
 	return result, nil

@@ -242,7 +242,7 @@ func (t SlogEngineTelemetry) RecordTerminalSaveSkipped(ctx context.Context, prin
 		outcome = continuationTelemetryUnrecognised
 	}
 	site := string(event.Site)
-	if !ValidBudgetAssertStage(event.Site) {
+	if !validTerminalSaveSite(event.Site) {
 		site = continuationTelemetryUnrecognised
 	}
 	args := []any{

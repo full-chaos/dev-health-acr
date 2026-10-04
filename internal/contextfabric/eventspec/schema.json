@@ -5006,14 +5006,10 @@
         "type": "string",
         "presence": "required",
         "closed_vocabulary": [
-          "decisive",
           "subjectless_terminal",
           "window_veto",
           "window_confirmation_required",
           "structure_veto",
-          "reuse",
-          "interpreted_time_bound",
-          "continuation_refusal",
           "unrecognised"
         ]
       },

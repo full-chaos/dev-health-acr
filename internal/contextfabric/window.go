@@ -1401,7 +1401,7 @@ func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Princip
 		// never on a window key component: a window veto is never itself
 		// a reusable answer (its own status is a refusal, not a judgment).
 		if err := e.saveTerminalResult(ctx, principal, BudgetAssertWindowVeto, &result, plan, e.effectiveResponseBudget(request), nil, nil, TimeAxisKeyFor(timeAxisKeySource), binding.Epoch, ancestryParent, semantic); err != nil {
-			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
+			return InvestigationResult{}, persistenceStageError(err)
 		}
 	}
 	return result, nil
@@ -1761,7 +1761,7 @@ func (e *Engine) windowConfirmationRequiredResult(
 					return e.structureSupersessionVetoResult(ctx, principal, request, structureCanon.Confirmed, superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions, carriedStructureEntries, plan, ancestryParent, semantic)
 				}
 			}
-			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
+			return InvestigationResult{}, persistenceStageError(err)
 		}
 		if structureCanon != nil {
 			// Mirrors terminalResult's own deferred-until-durable success
