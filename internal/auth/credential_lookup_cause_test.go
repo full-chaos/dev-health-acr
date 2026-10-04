@@ -3,13 +3,19 @@ package auth
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"database/sql"
+	"database/sql/driver"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -38,10 +44,13 @@ func TestCredentialLookupFailureNamesCauseAndFailsClosed(t *testing.T) {
 		{"transaction resolution unknown", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "08007", Class: "unclassified"}), "ERROR", "connection_failure", "credential_store", "connection_exception"},
 		{"protocol violation", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "08P01", Class: "unclassified"}), "ERROR", "other", "credential_store", "connection_exception"},
 		{"non connection class", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "42501", Class: "insufficient_privilege"}), "ERROR", "other", "credential_store", "access_rule_violation"},
-		{"resource exhausted", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "53300", Class: "unclassified"}), "ERROR", "other", "credential_store", "insufficient_resources"},
-		{"operator shutdown", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "57P01", Class: "unclassified"}), "ERROR", "other", "credential_store", "operator_intervention"},
+		{"resource exhausted", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "53300", Class: "unclassified"}), "ERROR", "resource_exhausted", "credential_store", "insufficient_resources"},
+		{"operator shutdown", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "57P01", Class: "unclassified"}), "ERROR", "server_unavailable", "credential_store", "operator_intervention"},
 		{"unmapped class", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "ZZ999", Class: "unclassified"}), "ERROR", "other", "credential_store", "other"},
 		{"class without sqlstate", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "5", Class: "unclassified"}), "ERROR", "other", "credential_store", "none"},
+		{"crash shutdown", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "57P02", Class: "unclassified"}), "ERROR", "server_unavailable", "credential_store", "operator_intervention"},
+		{"cannot connect now", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "57P03", Class: "unclassified"}), "ERROR", "server_unavailable", "credential_store", "operator_intervention"},
+		{"statement timeout stays other", fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: "57014", Class: "query_canceled"}), "ERROR", "other", "credential_store", "operator_intervention"},
 		{"unavailable without class", fmt.Errorf("find credential: %w", storage.ErrUnavailable), "ERROR", "other", "credential_store", "none"},
 		{"other", errors.New("postgres://operator:secret@example"), "ERROR", "other", "credential_store", "none"},
 	}
@@ -92,8 +101,56 @@ func TestCredentialLookupFailureNamesCauseAndFailsClosed(t *testing.T) {
 			if tc.wantLevel == "INFO" && strings.Contains(line, `"level":"ERROR"`) {
 				t.Fatalf("a caller cancel wrote an ERROR record: %s", line)
 			}
+			if m := regexp.MustCompile(`"error_kind":"([a-z_]+)"`).FindStringSubmatch(line); m == nil {
+				t.Fatalf("log line has no error_kind: %s", line)
+			}
+			if want := credentialLookupSQLState(tc.err); want != "" && !strings.Contains(line, `"sqlstate":"`+want+`"`) {
+				t.Fatalf("log line missing sqlstate %s: %s", want, line)
+			} else if want == "" && strings.Contains(line, `"sqlstate":`) {
+				t.Fatalf("log line carries a sqlstate for an error without one: %s", line)
+			}
 			if strings.Contains(line, "secret") {
 				t.Fatalf("raw error text leaked: %s", line)
+			}
+		})
+	}
+}
+
+func TestCredentialLookupErrorKindAndSQLStateAreClosedTokens(t *testing.T) {
+	withClass := func(state string) error {
+		return fmt.Errorf("find credential: %w: %w", storage.ErrUnavailable, &storage.DependencyErrorClass{SQLState: state, Class: "unclassified"})
+	}
+	cases := []struct {
+		name      string
+		err       error
+		wantKind  string
+		wantState string
+	}{
+		{"canceled", fmt.Errorf("x: %w", context.Canceled), "context_canceled", ""},
+		{"deadline", fmt.Errorf("x: %w", context.DeadlineExceeded), "deadline_exceeded", ""},
+		{"sqlstate", withClass("53300"), "sqlstate", "53300"},
+		{"sqlstate with letters", withClass("57P01"), "sqlstate", "57P01"},
+		{"sqlstate too short", withClass("5"), "sqlstate", ""},
+		{"sqlstate four characters", withClass("57P0"), "sqlstate", ""},
+		{"sqlstate six characters", withClass("57P011"), "sqlstate", ""},
+		{"sqlstate lower case", withClass("57p01"), "sqlstate", ""},
+		{"sqlstate with free text", withClass("57P01 secret"), "sqlstate", ""},
+		{"network", fmt.Errorf("x: %w: %w", storage.ErrUnavailable, &net.OpError{Op: "read", Err: errors.New("reset")}), "network", ""},
+		{"plain eof", fmt.Errorf("x: %w: %w", storage.ErrUnavailable, io.EOF), "eof", ""},
+		{"eof", fmt.Errorf("x: %w: %w", storage.ErrUnavailable, io.ErrUnexpectedEOF), "eof", ""},
+		{"tls", fmt.Errorf("x: %w: %w", storage.ErrUnavailable, tls.RecordHeaderError{Msg: "bad"}), "tls", ""},
+		{"bad conn", fmt.Errorf("x: %w", driver.ErrBadConn), "bad_conn", ""},
+		{"conn done", fmt.Errorf("x: %w", sql.ErrConnDone), "conn_done", ""},
+		{"unavailable without detail", fmt.Errorf("x: %w", storage.ErrUnavailable), "unavailable", ""},
+		{"unknown", errors.New("postgres://operator:secret@example"), "unknown", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := credentialLookupErrorKind(tc.err); got != tc.wantKind || got == "" {
+				t.Fatalf("error kind = %q, want %q", got, tc.wantKind)
+			}
+			if got := credentialLookupSQLState(tc.err); got != tc.wantState {
+				t.Fatalf("sqlstate = %q, want %q", got, tc.wantState)
 			}
 		})
 	}

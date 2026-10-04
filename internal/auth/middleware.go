@@ -2,11 +2,17 @@ package auth
 
 import (
 	"context"
+	"crypto/tls"
+	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -143,9 +149,9 @@ func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler
 			}
 			cause := credentialLookupCause(err)
 			if cause == credentialLookupCauseCanceled {
-				a.logger.InfoContext(r.Context(), "credential lookup canceled", "request_id", logsanitize.SanitizeLogAttr(requestID(r)), "failure_class", "caller_canceled", "cause", cause, "db_class", credentialLookupDBClass(err))
+				a.logger.InfoContext(r.Context(), "credential lookup canceled", "request_id", logsanitize.SanitizeLogAttr(requestID(r)), "failure_class", "caller_canceled", "cause", cause, "db_class", credentialLookupDBClass(err), "error_kind", credentialLookupErrorKind(err), credentialLookupSQLStateAttr(err))
 			} else {
-				a.logger.ErrorContext(r.Context(), "credential lookup failed", "request_id", logsanitize.SanitizeLogAttr(requestID(r)), "failure_class", "credential_store", "cause", cause, "db_class", credentialLookupDBClass(err))
+				a.logger.ErrorContext(r.Context(), "credential lookup failed", "request_id", logsanitize.SanitizeLogAttr(requestID(r)), "failure_class", "credential_store", "cause", cause, "db_class", credentialLookupDBClass(err), "error_kind", credentialLookupErrorKind(err), credentialLookupSQLStateAttr(err))
 			}
 			a.writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Credential service is temporarily unavailable", true, nil)
 			return
@@ -365,12 +371,19 @@ const (
 	credentialLookupCauseCanceled = "context_canceled"
 	credentialLookupCauseDeadline = "deadline_exceeded"
 	credentialLookupCauseConn     = "connection_failure"
+	credentialLookupCauseResource = "resource_exhausted"
+	credentialLookupCauseServer   = "server_unavailable"
 	credentialLookupCauseOther    = "other"
 )
 
 // connectionFailureSQLStates are the class 08 SQLSTATEs that mean the
 // connection failed. 08P01 (protocol_violation) is not one of them.
 var connectionFailureSQLStates = map[string]bool{"08000": true, "08001": true, "08003": true, "08004": true, "08006": true, "08007": true}
+
+// serverUnavailableSQLStates are the class 57 SQLSTATEs of a server that is
+// shutting down or not yet accepting connections. 57014 (query_canceled) is not
+// one of them.
+var serverUnavailableSQLStates = map[string]bool{"57P01": true, "57P02": true, "57P03": true}
 
 func connectionFailureSQLState(state string) bool { return connectionFailureSQLStates[state] }
 
@@ -385,6 +398,10 @@ func credentialLookupCause(err error) string {
 		return credentialLookupCauseDeadline
 	case errors.As(err, &class) && (class.Class == "connection_failure" || connectionFailureSQLState(class.SQLState)):
 		return credentialLookupCauseConn
+	case errors.As(err, &class) && strings.HasPrefix(class.SQLState, "53"):
+		return credentialLookupCauseResource
+	case errors.As(err, &class) && serverUnavailableSQLStates[class.SQLState]:
+		return credentialLookupCauseServer
 	default:
 		return credentialLookupCauseOther
 	}
@@ -420,4 +437,55 @@ func credentialLookupDBClass(err error) string {
 		return name
 	}
 	return "other"
+}
+
+var sqlStatePattern = regexp.MustCompile(`^[0-9A-Z]{5}$`)
+
+// credentialLookupSQLState returns the store error's SQLSTATE when it is a
+// well-formed five-character code, and "" otherwise.
+func credentialLookupSQLState(err error) string {
+	var class *storage.DependencyErrorClass
+	if errors.As(err, &class) && sqlStatePattern.MatchString(class.SQLState) {
+		return class.SQLState
+	}
+	return ""
+}
+
+// credentialLookupSQLStateAttr is the sqlstate log attribute, absent when there
+// is no well-formed code.
+func credentialLookupSQLStateAttr(err error) slog.Attr {
+	if state := credentialLookupSQLState(err); state != "" {
+		return slog.String("sqlstate", state)
+	}
+	return slog.Attr{}
+}
+
+// credentialLookupErrorKind names the shape of a store error as a closed,
+// never-empty token, so a failure with no SQLSTATE still says what it was.
+func credentialLookupErrorKind(err error) string {
+	var class *storage.DependencyErrorClass
+	var recordHeader tls.RecordHeaderError
+	var network net.Error
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "context_canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline_exceeded"
+	case errors.As(err, &class):
+		return "sqlstate"
+	case errors.As(err, &recordHeader):
+		return "tls"
+	case errors.As(err, &network):
+		return "network"
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		return "eof"
+	case errors.Is(err, driver.ErrBadConn):
+		return "bad_conn"
+	case errors.Is(err, sql.ErrConnDone):
+		return "conn_done"
+	case errors.Is(err, storage.ErrUnavailable):
+		return "unavailable"
+	default:
+		return "unknown"
+	}
 }
