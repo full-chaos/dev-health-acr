@@ -206,10 +206,16 @@ import (
 // through the project's issues' linked pull requests. A candidate saved under
 // v29 for such a question is the member-kind refusal and must not be reused.
 //
-// v30 -> v31: the work-item member read takes a status filter, so a project's
-// members of one status are served. A candidate saved under v30 for such a
+// v30 -> v31: a scoped deployment question with no committed subject ends
+// member_kind_unservable when the anchor kind is known (declared, else every
+// offered candidate) and none can serve deployment members. A candidate saved
+// under v30 for such a question holds a clarification or no_match and must not
+// be reused.
+//
+// v31 -> v32: the work-item member read takes a status filter, so a project's
+// members of one status are served. A candidate saved under v31 for such a
 // question is the member-kind refusal and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v31"
+const QueryVersion = "devhealthfacts.clickhouse.v32"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

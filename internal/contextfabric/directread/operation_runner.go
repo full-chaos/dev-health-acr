@@ -248,6 +248,15 @@ type OperationRead struct {
 	Latency           time.Duration
 	SchemaDigest      string
 	DocumentDigest    string
+	// QueryPath is the configured ops query path the client posts to (path
+	// only, never the URL); empty when the client does not report one.
+	QueryPath string
+}
+
+// QueryPathReporter is implemented by a QueryClient that can name the ops
+// query path it posts to.
+type QueryPathReporter interface {
+	QueryPath() string
 }
 
 // OperationRunnerConfig wires the runner.
@@ -386,6 +395,9 @@ func (r *OperationRunner) Run(ctx context.Context, principal storage.Principal, 
 		ScopeClass:   ScopeNotReached,
 		Completeness: CompletenessUnknown,
 		SchemaDigest: stampedDigest,
+	}
+	if reporter, ok := r.client.(QueryPathReporter); ok {
+		x.read.QueryPath = reporter.QueryPath()
 	}
 	x.resp = OperationResponse{
 		Completeness:     CompletenessUnknown,
@@ -968,6 +980,9 @@ func OperationReadLogArgs(principal storage.Principal, read OperationRead) []any
 	}
 	if read.DocumentDigest != "" {
 		args = append(args, "document_digest", contextfabric.SanitizeLogAttr(read.DocumentDigest))
+	}
+	if read.QueryPath != "" {
+		args = append(args, "query_path", contextfabric.SanitizeLogAttr(read.QueryPath))
 	}
 	if read.Result != "" {
 		args = append(args, "result", contextfabric.SanitizeLogAttr(string(read.Result)))

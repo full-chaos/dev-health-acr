@@ -3552,6 +3552,12 @@
         "applicability": "written when the operation is a served catalogue operation"
       },
       {
+        "key": "query_path",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the query client reports its configured ops query path (ACR_DATA_QUERY_PATH): the path only, never the URL"
+      },
+      {
         "key": "result",
         "type": "string",
         "presence": "conditional",

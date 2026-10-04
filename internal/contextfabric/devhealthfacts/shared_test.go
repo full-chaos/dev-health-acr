@@ -426,7 +426,7 @@ func TestQueryVersionMovedPastTheUnnamedFlowHeadlineWindow(t *testing.T) {
 
 func TestQueryVersionMovedPastTheUnfilteredWorkItemMembershipRead(t *testing.T) {
 	t.Parallel()
-	const versionBeforeMembersCouldBeFilteredByStatus = "devhealthfacts.clickhouse.v30"
+	const versionBeforeMembersCouldBeFilteredByStatus = "devhealthfacts.clickhouse.v31"
 	if devhealthfacts.QueryVersion == versionBeforeMembersCouldBeFilteredByStatus {
 		t.Fatalf("QueryVersion = %q, want it moved past %q -- a stored work-item member answer saved before the member read took a status filter must not be served as one", devhealthfacts.QueryVersion, versionBeforeMembersCouldBeFilteredByStatus)
 	}
