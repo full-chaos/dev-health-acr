@@ -358,10 +358,13 @@ func SameResource(a, b string) bool {
 	return aliasPath(ua.Path) && aliasPath(ub.Path)
 }
 
+// The cause tokens are a closed set. credentialLookupCauseConn is the store's
+// "connection_failure" class (connection-class SQLSTATE, dial failure, broken
+// pipe, driver.ErrBadConn), named for the class and not for one of its members.
 const (
 	credentialLookupCauseCanceled = "context_canceled"
 	credentialLookupCauseDeadline = "deadline_exceeded"
-	credentialLookupCauseConn     = "conn_reset"
+	credentialLookupCauseConn     = "connection_failure"
 	credentialLookupCauseOther    = "other"
 )
 
