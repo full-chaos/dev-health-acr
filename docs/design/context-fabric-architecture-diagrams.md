@@ -464,6 +464,18 @@ same rows; no edge is provider-specific. Producers are in
 2. Team = ownership only (`team_repo_ownership`, `team_project_ownership`).
    Never person membership, never a computed attribution.
 
+**Walks are derived from the tree (CHAOS-8673).** The edges above are one
+table, `entityTree` in `internal/contextfabric/falkorgraph/tree_walk.go`. A
+named anchor's members are read along `treePath(anchor position, member
+position)`, the shortest path of that table; team and deployment are leaves,
+so a path never passes through them, and a pair with no path or two shortest
+paths is refused. The hop from the anchor that only feeds the issue <> pull
+request link is read fused with the link, paged and link-first, so issues or
+pull requests with no link do not spend the budget. Every disclosed node
+passes the caller's authorization; a repository-less issue is admitted by its
+link to a granted pull request. The project, team and repository deployment
+walks are instances of this one executor.
+
 **Code that does not yet follow the tree.** Some reads still reach a
 repository through a work item's own `repo_id`, as an activity proxy
 (`FactScopeBasisActivityProxy`), not as tree membership: the CHAOS-4099
