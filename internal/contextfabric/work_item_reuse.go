@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"errors"
 	"slices"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -15,10 +16,13 @@ type WorkItemReuseEvent struct {
 	SemanticRead     SemanticStateReadStatus
 	CensusRead       WorkItemTupleCensusReadStatus
 	RequestedTeamIDs []string
+	// RejectReason is the closed token of the validator rule that refused the
+	// candidate payload, "none" for every other decision.
+	RejectReason string
 }
 
 func (e *Engine) tryReuseWorkItemTuple(ctx context.Context, principal storage.Principal, request InvestigationRequest, binding ResolvedGraphBinding, stored StoredInvestigationResult, classification WorkItemTupleClassification) (result InvestigationResult, hit bool, servingErr error) {
-	event := WorkItemReuseEvent{Decision: "reading_unavailable", SemanticRead: stored.SemanticStateRead, CensusRead: "not_checked", RequestedTeamIDs: append([]string(nil), request.RequestedScope.TeamIDs...)}
+	event := WorkItemReuseEvent{Decision: "reading_unavailable", SemanticRead: stored.SemanticStateRead, CensusRead: "not_checked", RejectReason: WorkItemTupleRuleNone, RequestedTeamIDs: append([]string(nil), request.RequestedScope.TeamIDs...)}
 	defer func() {
 		if e.telemetry != nil {
 			e.telemetry.RecordWorkItemReuse(ctx, principal, event)
@@ -43,7 +47,8 @@ func (e *Engine) tryReuseWorkItemTuple(ctx context.Context, principal storage.Pr
 	}
 	candidate := stored.Result
 	event.Decision = "payload_rejected"
-	if ValidateWorkItemTuplePayload(candidate, principal) != nil {
+	if err := ValidateWorkItemTuplePayload(candidate, principal); err != nil {
+		event.RejectReason = workItemTupleRuleOf(errors.Join(errWorkItemTuplePayloadRejected, err))
 		return InvestigationResult{}, false, nil
 	}
 	census := stored.SemanticState.WorkItemCensus

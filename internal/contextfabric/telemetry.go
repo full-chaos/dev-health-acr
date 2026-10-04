@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -2769,10 +2770,23 @@ func requestDerivedLogInt(value int) int {
 	return parsed
 }
 
+// workItemReuseRejectReason keeps the record's reject_reason inside its closed
+// vocabulary.
+func workItemReuseRejectReason(reason string) string {
+	if reason == "" {
+		return WorkItemTupleRuleNone
+	}
+	if slices.Contains(WorkItemTupleRejectReasonVocabulary(), reason) {
+		return reason
+	}
+	return continuationTelemetryUnrecognised
+}
+
 func (t SlogEngineTelemetry) RecordWorkItemReuse(ctx context.Context, principal storage.Principal, event WorkItemReuseEvent) {
 	args := []any{
 		"org_id", SanitizeLogAttr(principal.OrgID),
 		"decision", SanitizeLogAttr(event.Decision),
+		"reject_reason", SanitizeLogAttr(workItemReuseRejectReason(event.RejectReason)),
 		"semantic_read", string(event.SemanticRead),
 		"census_read", string(event.CensusRead),
 		"requested_team_ids", SanitizeLogStrings(event.RequestedTeamIDs),

@@ -2138,7 +2138,8 @@ var WorkItemReuse = Event{
 	BoundedAggregation: "at most one tuple candidate per request; one decision records the first declined guard or the hit, and the current requested team scope",
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
-		{Key: "decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"reading_unavailable", "payload_rejected", "census_unavailable", "digest_changed", "anchor_unavailable", "membership_unavailable", "membership_changed", "coverage_invalid", "hit"}},
+		{Key: "decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"reading_unavailable", "member_filter_not_reusable", "payload_rejected", "census_unavailable", "digest_changed", "anchor_unavailable", "membership_unavailable", "membership_changed", "coverage_invalid", "hit"}},
+		{Key: "reject_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.SemanticStatePersistenceLineVocabulary("reject_reason")},
 		{Key: "semantic_read", Type: FieldString, Presence: PresenceRequired},
 		{Key: "census_read", Type: FieldString, Presence: PresenceRequired},
 		{Key: "requested_team_ids", Type: FieldStringSlice, Presence: PresenceRequired},
