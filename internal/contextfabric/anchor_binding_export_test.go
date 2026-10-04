@@ -117,6 +117,8 @@ func anchorVocabularyScenarios() []anchorSiteScenario {
 		{name: "replaced by caller", run: anchorProbeScenario(first, anchorProbeStep{request: followUp("request_vocab_replace", "", betaHint), response: needTurnResponse{
 			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{probeBeta}}, bases: provenCommitBases(probeBeta)}})},
 		{name: "ambiguous proof", run: anchorProbeScenario(anchorProbeStep{request: firstTurnRequest("request_vocab_ambiguous", true), response: identityProvenResponse(probeAlpha, probeBeta)})},
+		{name: "single subject count", run: anchorProbeScenario(anchorProbeStep{request: firstTurnRequest("request_vocab_single_subject", true), response: needTurnResponse{
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{scopeAnchorMatch(probeTeam)}, Committed: []SubjectRef{probeTeam}}, bases: provenCommitBases(probeTeam)}})},
 		{name: "carried not evaluated", run: anchorProbeScenario(first, anchorProbeStep{request: followUp("request_vocab_refused", "", nil), gate: &refused, response: emptyProbeResponse()})},
 		{name: "window confirmed", run: anchorProbeScenario(
 			anchorProbeStep{request: firstTurnRequest("request_vocab_gate_one", false), windowed: true, response: identityProvenResponse(probeAlpha)},
