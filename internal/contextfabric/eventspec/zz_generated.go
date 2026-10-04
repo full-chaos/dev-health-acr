@@ -2380,6 +2380,7 @@ type SemanticStatePersistenceFields struct {
 	Decision              string
 	Absence               string
 	OversizedBound        string
+	RejectReason          string
 	EncodedBytes          int
 	EncodedCap            int
 	State                 map[string]any
@@ -2401,7 +2402,7 @@ type SemanticStatePersistenceFields struct {
 
 // NewSemanticStatePersistenceFields is the generated constructor for SemanticStatePersistenceFields -- every
 // field SemanticStatePersistence.Fields declares is a required parameter.
-func NewSemanticStatePersistenceFields(orgID string, resultID string, parentResultID string, site string, decision string, absence string, oversizedBound string, encodedBytes int, encodedCap int, state map[string]any, carriedParent string, carriedParentState string, carriedParentResultID string, carriedParentDepth int, requestID string) SemanticStatePersistenceFields {
+func NewSemanticStatePersistenceFields(orgID string, resultID string, parentResultID string, site string, decision string, absence string, oversizedBound string, rejectReason string, encodedBytes int, encodedCap int, state map[string]any, carriedParent string, carriedParentState string, carriedParentResultID string, carriedParentDepth int, requestID string) SemanticStatePersistenceFields {
 	return SemanticStatePersistenceFields{
 		OrgID:                 orgID,
 		ResultID:              resultID,
@@ -2410,6 +2411,7 @@ func NewSemanticStatePersistenceFields(orgID string, resultID string, parentResu
 		Decision:              decision,
 		Absence:               absence,
 		OversizedBound:        oversizedBound,
+		RejectReason:          rejectReason,
 		EncodedBytes:          encodedBytes,
 		EncodedCap:            encodedCap,
 		State:                 state,
@@ -2442,6 +2444,7 @@ func (f SemanticStatePersistenceFields) SlogArgs() []any {
 		"decision", contextfabric.SanitizeLogAttr(f.Decision),
 		"absence", contextfabric.SanitizeLogAttr(f.Absence),
 		"oversized_bound", contextfabric.SanitizeLogAttr(f.OversizedBound),
+		"reject_reason", contextfabric.SanitizeLogAttr(f.RejectReason),
 		"encoded_bytes", f.EncodedBytes,
 		"encoded_cap", f.EncodedCap,
 		"state", f.State,
