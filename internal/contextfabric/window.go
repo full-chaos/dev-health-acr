@@ -795,18 +795,13 @@ func composeEffectiveWindow(interpretation InterpretedQuestion, requestWindow *c
 
 // questionStatesWindow reports whether the question itself states the
 // evidence window (CHAOS-6557): the binder bound exactly one role-checked
-// span and the interpreted class carries a window at all (the same
-// "refuse to guess" rule composeEffectiveWindow applies). It is the one
-// predicate both the axis decision in Investigate and composeEffectiveWindow's
-// stated-provenance branch read, so the turn that executes on the current
-// axis is exactly the turn that reports a question_stated window.
-func questionStatesWindow(interpretation InterpretedQuestion, binderProposal WindowBindOutcome) bool {
-	if binderProposal.Reason != WindowBindRoutedInferred || !binderProposal.Trailing {
-		return false
-	}
-	outcome := ClassifyWindow(interpretation, interpretation.WindowClass, interpretation.WindowConfidence)
-	_, ok := DefaultRelativeID(outcome, windowDefaultPolicy)
-	return ok
+// trailing span. Whatever window class the interpreter picked, exactly as
+// composeEffectiveWindow's stated-provenance branch commits it, so the turn
+// that executes on the current axis is exactly the turn that reports a
+// question_stated window: a range the interpreter read from the same phrase
+// does not keep the turn on a historical axis.
+func questionStatesWindow(binderProposal WindowBindOutcome) bool {
+	return binderProposal.Reason == WindowBindRoutedInferred && binderProposal.Trailing
 }
 
 // StatedWindowOrigin values (CHAOS-6557) name where a caller-supplied
@@ -856,7 +851,7 @@ const mcpSurface = "mcp"
 // a stated window with no receipt follows the fresh interpretation. A phrase
 // only counts on a current-axis request: a caller who asked for a historical
 // axis keeps it.
-func statedWindowOrigin(canon requestWindowCanonicalization, interpretation InterpretedQuestion, requestAxis TemporalAxis, surface string) string {
+func statedWindowOrigin(canon requestWindowCanonicalization, requestAxis TemporalAxis, surface string) string {
 	if strings.TrimSpace(surface) != mcpSurface {
 		return ""
 	}
@@ -866,7 +861,7 @@ func statedWindowOrigin(canon requestWindowCanonicalization, interpretation Inte
 		}
 		return ""
 	}
-	if canon.Veto == windowVetoNone && requestAxis == TemporalCurrent && questionStatesWindow(interpretation, canon.BinderProposal) {
+	if canon.Veto == windowVetoNone && requestAxis == TemporalCurrent && questionStatesWindow(canon.BinderProposal) {
 		return StatedWindowOriginQuestionPhrase
 	}
 	return ""

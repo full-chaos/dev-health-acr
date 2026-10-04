@@ -314,7 +314,14 @@ import (
 // period is told so, on a current frame as on a period frame. A candidate
 // saved under v53 for such a question holds a refusal or an unfiltered read and
 // must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v54"
+//
+// v54 -> v55: on MCP, a question that states a trailing period ("in the last
+// 30 days") runs on the current axis with that question_stated window whatever
+// window class or range axis the interpretation carried, as the effective
+// window already committed it. A candidate saved under v54 for a supplied
+// range interpretation ran on the range axis with no window and must not be
+// reused.
+const QueryVersion = "devhealthfacts.clickhouse.v55"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

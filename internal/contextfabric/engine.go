@@ -2209,7 +2209,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		if remembered.Outcome == ContinuationAxisOverriddenByReceipt {
 			interpretedTimeBound = resolveInterpretedTimeContext(executedTime, e.now())
 		}
-	} else if statedOrigin := statedWindowOrigin(windowCanon, interpretation, clampedRequestTime.Axis, request.Consumer.Surface); statedOrigin != "" {
+	} else if statedOrigin := statedWindowOrigin(windowCanon, clampedRequestTime.Axis, request.Consumer.Surface); statedOrigin != "" {
 		// CHAOS-6557: on the MCP surface a window the CALLER supplied (the
 		// evidence_window field, or a period stated in the question) is the
 		// caller's time, exactly as a window they confirmed by receipt is. The
