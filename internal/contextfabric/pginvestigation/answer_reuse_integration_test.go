@@ -1411,7 +1411,7 @@ func TestFindReusable_OwnershipRoutingVersionIsConjunctive(t *testing.T) {
 	// own field doc comment names). The stored row -- computed under the
 	// OLD rules -- must miss.
 	bumped := reuseKeyFor(result)
-	bumped.OwnershipRoutingVersion = "ownership-routing.v2"
+	bumped.OwnershipRoutingVersion = reuseKeyFor(result).OwnershipRoutingVersion + ".next"
 	_, ok, _, err := store.FindReusable(ctx, principal, bumped)
 	require.NoError(t, err)
 	require.False(t, ok, "expected a stale count computed under an old ownership-routing version to miss after the routing version changed, not be silently reused under the new rules' semantics")

@@ -1149,6 +1149,8 @@ type recordingTelemetry struct {
 
 	// projectDeploymentWalks records every RecordProjectDeploymentWalk call.
 	projectDeploymentWalks []ProjectDeploymentWalkDecision
+	// ownershipRoutings records every RecordOwnershipRouting call.
+	ownershipRoutings []OwnershipRoutingDecision
 
 	// cohortKindBases records every RecordCohortKindBasis call verbatim.
 	cohortKindBases []cohortKindBasisRecord
@@ -1356,6 +1358,10 @@ func (r *recordingTelemetry) RecordCohortKindFulltext(_ context.Context, orgID s
 
 func (r *recordingTelemetry) RecordProjectDeploymentWalk(_ context.Context, _ string, decision ProjectDeploymentWalkDecision) {
 	r.projectDeploymentWalks = append(r.projectDeploymentWalks, decision)
+}
+
+func (r *recordingTelemetry) RecordOwnershipRouting(_ context.Context, _ string, decision OwnershipRoutingDecision) {
+	r.ownershipRoutings = append(r.ownershipRoutings, decision)
 }
 
 func (r *recordingTelemetry) RecordNeighborLookupFailed(_ context.Context, orgID, originCanonicalID, neighborUUID string, site NeighborLookupFailureSite, err error) {

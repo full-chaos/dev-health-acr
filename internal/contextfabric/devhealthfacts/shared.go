@@ -254,10 +254,15 @@ import (
 // such a question holds members the period never filtered and must not be
 // reused.
 //
-// v41 -> v43 (v42 is held by a change in review): a synthesis no_match over a
+// v41 -> v42: the teams of a repository named by its label are read from its
+// ownership records, and a team the question text matched is not one of
+// them. A candidate saved under v41 for such a question can hold teams that
+// do not own the repository and must not be reused.
+//
+// v42 -> v43: a synthesis no_match over a
 // committed subject with a served cohort outcome or a read fact row is served
 // as the status the service established, with the narrative withheld. A
-// candidate saved under v41 for such a question can hold a no_match and must
+// candidate saved under v42 for such a question can hold a no_match and must
 // not be reused.
 const QueryVersion = "devhealthfacts.clickhouse.v43"
 

@@ -126,6 +126,8 @@ func (f *fakeIdentityTelemetry) RecordCohortKindFulltext(context.Context, string
 }
 func (f *fakeIdentityTelemetry) RecordProjectDeploymentWalk(context.Context, string, falkorgraph.ProjectDeploymentWalkDecision) {
 }
+func (f *fakeIdentityTelemetry) RecordOwnershipRouting(context.Context, string, falkorgraph.OwnershipRoutingDecision) {
+}
 
 func (f *fakeIdentityTelemetry) RecordNeighborLookupFailed(context.Context, string, string, string, falkorgraph.NeighborLookupFailureSite, error) {
 }

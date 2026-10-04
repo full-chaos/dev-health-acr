@@ -422,6 +422,13 @@ type GraphDiscoveryRequest struct {
 	// DiscoverContext's own exact-name census gate for the one place this
 	// is read.
 	ScopeAnchorResolved bool `json:"-"`
+	// ScopeAnchorKind is the anchor kind the reading states for a
+	// children_of_scope frame (ScopeAnchorRetrievalKind), the same value
+	// ResolveSubjects was given; empty when the reading states none. A graph
+	// reader that picks the anchor from the committed subjects reads it so a
+	// subject of another kind, committed by a hint or a carry, is not taken
+	// for the anchor the question names.
+	ScopeAnchorKind SubjectKind `json:"-"`
 	// Frame is the VALIDATED QuestionFrame for this turn, carried from
 	// interpretation, nil when no frame validated.
 	//

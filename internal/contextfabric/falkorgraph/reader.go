@@ -631,26 +631,30 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	shapeAnchorEligible, censusBasis := cohortExactNameCensusEligibility(request.Frame, request.ScopeAnchorResolved)
 	censusAdmitted := shapeAnchorEligible && len(request.Resolution.Committed) == 0
 	var ownershipRoutedRepoSlug string
-	if declaredCohortKindForRouting == contextfabric.SubjectTeam {
-		for _, subject := range request.Resolution.Committed {
-			// Label is stamped verbatim as the repository's own slug at
-			// projection time (devhealthsource/tables.go's queryRepositories)
-			// and never rewritten by resolution, so it is the same string
-			// authorization_repositories carries for a team that owns it.
-			//
-			// GATED ON THE SUBJECT BEING THE FRAME'S OWN BOUND ANCHOR, not on
-			// "any committed repository": a committed subject set can carry
-			// more than one identity for reasons unrelated to this question's
-			// anchor (an explicit comparison operand, a carried-over hint), and
-			// a repository committed for one of those reasons is not what "how
-			// many teams own repository R" is asking about: a project-anchored,
-			// team-member frame with an unrelated committed repository must
-			// never route through ownership on that repository's account.
-			if subject.Kind == contextfabric.SubjectRepository && subject.Label != "" && frameAnchorBound(request.Frame, subject, request.Resolution, request.Bases) {
-				ownershipRoutedRepoSlug = subject.Label
-				break
-			}
+	var ownershipRoutedRepoID string
+	ownershipAnchorBasis := AnchorBasisNone
+	// ONE decision for every way a repository reaches the committed set
+	// (contextfabric.OwnershipAnchor holds the rule and its truth table). The
+	// repository's label is stamped verbatim as its slug at projection time
+	// and never rewritten by resolution, so it is the string a team's
+	// repository list carries.
+	if anchor, basis := contextfabric.OwnershipAnchor(request.Frame, request.ScopeAnchorKind, request.Resolution, request.Bases); basis != contextfabric.OwnershipAnchorNone {
+		ownershipRoutedRepoSlug = anchor.Label
+		ownershipRoutedRepoID = anchor.CanonicalID
+		ownershipAnchorBasis = AnchorBasisSoleCommit
+		if basis == contextfabric.OwnershipAnchorBound {
+			ownershipAnchorBasis = AnchorBasisBound
 		}
+	}
+	// teamMembersOfScope: the frame asks for the team members of a named
+	// anchor, the one frame ownership routing can serve.
+	teamMembersOfScope := declaredCohortKindForRouting == contextfabric.SubjectTeam && request.Frame != nil &&
+		request.Frame.SubjectExpression.Kind == contextfabric.SubjectExpressionChildrenOfScope
+	if teamMembersOfScope && ownershipRoutedRepoSlug == "" && a.config.Telemetry != nil {
+		a.config.Telemetry.RecordOwnershipRouting(ctx, principal.OrgID, OwnershipRoutingDecision{
+			Outcome: OwnershipRoutingNotRouted, AnchorKind: soleCommittedKind(request.Resolution.Committed), AnchorBasis: ownershipAnchorBasis,
+			Committed: len(request.Resolution.Committed),
+		})
 	}
 
 	// deploymentAnchor is set when the frame asks for the deployment members
@@ -658,7 +662,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// deployment another committed subject or a lexical arm returned is not a
 	// member, whatever basis the anchor was committed on.
 	var deploymentAnchor *contextfabric.SubjectRef
-	deploymentAnchorBasis := DeploymentAnchorNone
+	deploymentAnchorBasis := AnchorBasisNone
 	if declaredCohortKindForRouting == contextfabric.SubjectDeployment {
 		deploymentAnchor, deploymentAnchorBasis = deploymentCohortAnchor(request)
 	}
@@ -778,6 +782,41 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	if ownershipRoutedRepoSlug != "" {
 		cohortMemberSource = contextfabric.CohortMemberSourceOwnership
 		ownershipNodes, truncated, ownershipErr := a.cohortKindCensusCandidates(ctx, key, principal.OrgID, []string{string(contextfabric.SubjectTeam)}, temporal)
+		// A team's repository list is bounded: a team that owns more
+		// repositories than the bound carries a sentinel in place of the
+		// list. The repository's own ownership edges name every owner, so a
+		// team either source names owns the repository.
+		//
+		// The list says who owns the repository now. Ownership edges carry
+		// the period each held: for a question about now they are read at the
+		// adapter clock, so an ended edge does not admit a former owner; under
+		// a stated window only the edges of that window decide, since the
+		// present-tense list cannot speak for the past.
+		var edgeOwners map[string]bool
+		if ownershipErr == nil {
+			var edgesCut bool
+			edgeOwners, edgesCut, ownershipErr = a.repositoryOwningTeams(ctx, key, principal.OrgID, ownershipRoutedRepoID, currentOwnership(temporal, a.now()))
+			truncated = truncated || edgesCut
+		}
+		ownsAnchor := func(n graphrank.CandidateNode) bool {
+			if !temporal.active && graphrank.OwnsRepository(n.Attributes, ownershipRoutedRepoSlug) {
+				return true
+			}
+			subject, ok := graphrank.NodeSubject(n)
+			return ok && edgeOwners[subject.CanonicalID]
+		}
+		owners := 0
+		for _, n := range ownershipNodes {
+			if ownsAnchor(n) {
+				owners++
+			}
+		}
+		if a.config.Telemetry != nil {
+			a.config.Telemetry.RecordOwnershipRouting(ctx, principal.OrgID, OwnershipRoutingDecision{
+				Outcome: ownershipRoutingOutcome(owners, ownershipErr), AnchorKind: contextfabric.SubjectRepository, AnchorBasis: ownershipAnchorBasis,
+				Committed: len(request.Resolution.Committed), Census: len(ownershipNodes), Owners: owners, Truncated: truncated, Err: ownershipErr,
+			})
+		}
 		if ownershipErr != nil {
 			return contextfabric.GraphContext{}, graphNotProjectedError(ownershipErr)
 		}
@@ -801,7 +840,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			// POOL-MEMBERSHIP question, answered once here from the node's
 			// own declared signal, independently of whatever the caller may
 			// additionally be authorized to see.
-			if !graphrank.OwnsRepository(n.Attributes, ownershipRoutedRepoSlug) {
+			if !ownsAnchor(n) {
 				continue
 			}
 			nk := graphrank.SubjectKey(subject)
@@ -867,6 +906,12 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			continue
 		}
 		if deploymentAnchor != nil && subject.Kind == contextfabric.SubjectDeployment {
+			continue
+		}
+		// The owners of the routed repository are the whole team pool: a team
+		// the question text matched is not an owner. An owner the text also
+		// matched is already in the pool from the ownership read.
+		if ownershipRoutedRepoSlug != "" && subject.Kind == contextfabric.SubjectTeam && !seenNode[graphrank.SubjectKey(subject)] {
 			continue
 		}
 		nk := graphrank.SubjectKey(subject)
@@ -963,13 +1008,13 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// question-text match the plain arm already runs, merely not forced to
 	// share its budget with kinds this cohort never asked about.
 	cohortFulltextTruncated := fulltextTruncated
-	if deploymentAnchor != nil {
-		// No lexical arm can add a member to an anchored deployment cohort, so
-		// a cut lexical arm is not a loss from it and the kind-scoped arm has
-		// nothing to fetch.
+	if deploymentAnchor != nil || ownershipRoutedRepoSlug != "" {
+		// No lexical arm can add a member to an anchored deployment cohort or
+		// to an ownership-routed one, so a cut lexical arm is not a loss from
+		// it and the kind-scoped arm has nothing to fetch.
 		cohortFulltextTruncated = false
 	}
-	if declaredCohortKindForRouting != "" && !censusAdmitted && deploymentAnchor == nil {
+	if declaredCohortKindForRouting != "" && !censusAdmitted && deploymentAnchor == nil && ownershipRoutedRepoSlug == "" {
 		kindTextNodes, kindTruncated, kindErr := a.fulltextSearchNodesForKind(ctx, key, principal.OrgID, request.Request.Question, collectLimit, temporal, declaredCohortKindForRouting)
 		if kindErr != nil && (errors.Is(kindErr, context.Canceled) || errors.Is(kindErr, context.DeadlineExceeded)) {
 			// THE CALLER GIVING UP IS NOT A DEPENDENCY FAILURE THIS ARM CAN
@@ -1288,6 +1333,12 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			cohort.Members[i].InclusionReasons = []string{reason}
 		}
 		cohort.Rationale = anchoredDeploymentCohortRationale
+	}
+	if cohort != nil && ownershipRoutedRepoSlug != "" {
+		for i := range cohort.Members {
+			cohort.Members[i].InclusionReasons = []string{ownershipInclusionReason}
+		}
+		cohort.Rationale = ownershipCohortRationale
 	}
 	// SEAM 7 (CHAOS-4736): what decided the cohort kind, or what prevented
 	// a cohort. This is the I/O boundary, so the telemetry call lives here
@@ -1616,19 +1667,21 @@ func frameAnchorBound(frame *contextfabric.QuestionFrame, subject contextfabric.
 	return contextfabric.AnchorBound(frame, "", subject, resolution, bases)
 }
 
-// DeploymentAnchorBasis names how the anchor of a deployment-members frame was
+// AnchorBasis names how the anchor of a scoped member read (the deployment
+// members of a named anchor, the owning teams of a named repository) was
 // chosen from the committed subjects.
-type DeploymentAnchorBasis string
+type AnchorBasis string
 
 const (
-	// DeploymentAnchorNone: no committed subject is the anchor.
-	DeploymentAnchorNone DeploymentAnchorBasis = "none"
-	// DeploymentAnchorBound: the committed subject is the frame's bound anchor
+	// AnchorBasisNone: no committed subject is the anchor.
+	AnchorBasisNone AnchorBasis = "none"
+	// AnchorBasisBound: the committed subject is the frame's bound anchor
 	// (contextfabric.AnchorBound).
-	DeploymentAnchorBound DeploymentAnchorBasis = "bound"
-	// DeploymentAnchorSoleCommit: the one committed subject, the rule the
-	// engine admits the frame on (contextfabric.DeploymentCohortAnchor).
-	DeploymentAnchorSoleCommit DeploymentAnchorBasis = "sole_commit"
+	AnchorBasisBound AnchorBasis = "bound"
+	// AnchorBasisSoleCommit: the one committed subject, under the rule of
+	// its member kind (contextfabric.DeploymentCohortAnchor,
+	// contextfabric.OwnershipAnchor).
+	AnchorBasisSoleCommit AnchorBasis = "sole_commit"
 )
 
 // deploymentCohortAnchor picks the committed subject a deployment-members
@@ -1637,17 +1690,17 @@ const (
 // one committed subject of a kind that can anchor a deployment cohort: the
 // engine admits the frame on that rule whatever the commit basis, and a
 // subject named by its label is committed on a basis that never binds.
-func deploymentCohortAnchor(request contextfabric.GraphDiscoveryRequest) (*contextfabric.SubjectRef, DeploymentAnchorBasis) {
+func deploymentCohortAnchor(request contextfabric.GraphDiscoveryRequest) (*contextfabric.SubjectRef, AnchorBasis) {
 	committed := request.Resolution.Committed
 	for i, subject := range committed {
 		if contextfabric.DeploymentCohortAnchorServable(subject.Kind) && frameAnchorBound(request.Frame, subject, request.Resolution, request.Bases) {
-			return &committed[i], DeploymentAnchorBound
+			return &committed[i], AnchorBasisBound
 		}
 	}
 	if _, ok := contextfabric.DeploymentCohortAnchor(committed); ok {
-		return &committed[0], DeploymentAnchorSoleCommit
+		return &committed[0], AnchorBasisSoleCommit
 	}
-	return nil, DeploymentAnchorNone
+	return nil, AnchorBasisNone
 }
 
 func deploymentAnchorKind(anchor *contextfabric.SubjectRef) contextfabric.SubjectKind {
@@ -1656,6 +1709,22 @@ func deploymentAnchorKind(anchor *contextfabric.SubjectRef) contextfabric.Subjec
 	}
 	return anchor.Kind
 }
+
+// soleCommittedKind is the kind of the one committed subject, empty when the
+// resolution committed none or several.
+func soleCommittedKind(committed []contextfabric.SubjectRef) contextfabric.SubjectKind {
+	if len(committed) != 1 {
+		return ""
+	}
+	return committed[0].Kind
+}
+
+// ownershipInclusionReason is the inclusion reason of a team the ownership
+// read admitted.
+const ownershipInclusionReason = "Team that owns the repository the question names."
+
+// ownershipCohortRationale is the rationale of an ownership-routed cohort.
+const ownershipCohortRationale = "Teams were read from the ownership records of the repository the question names in the authorized Context Fabric graph."
 
 // projectDeploymentInclusionReason is the inclusion reason of a deployment
 // the project walk reached.

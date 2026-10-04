@@ -16,4 +16,10 @@ package contextfabric
 // which pairings route through ownership, which committed subject's
 // contribution the routed pool admits or excludes, or how a bound anchor
 // is recognized.
-const OwnershipRoutingVersion = "ownership-routing.v1"
+//
+// v1 -> v2: a repository named by its label (an exact-label commit, which is
+// not an identity proof) routes through ownership when it is the one committed
+// subject and the reading points at it, and a team the question text matched
+// is no longer a member of an ownership-routed cohort. A stored answer saved
+// under v1 for such a question holds teams that do not own the repository.
+const OwnershipRoutingVersion = "ownership-routing.v2"
