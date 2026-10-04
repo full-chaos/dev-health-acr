@@ -744,7 +744,9 @@ type ResolutionTraceEvent struct {
 	CorroborationMinConfidence  float64
 	CorroborationMaxConfidence  float64
 	// Outcome/WinningMechanism (decision stage): "committed" / "ambiguous"
-	// / "no_commit". WinningMechanism is the strongest mechanism on the
+	// / "no_commit", or "displaced" (CHAOS-8408: a candidate pushed out at
+	// the cap by the census-attested commit; not counted in the summary).
+	// WinningMechanism is the strongest mechanism on the
 	// committed/considered candidate (empty for a no-candidate outcome).
 	Outcome          string
 	WinningMechanism string
@@ -2497,6 +2499,12 @@ func (b *decisionSummaryBuffer) Trace(event ResolutionTraceEvent) {
 	if event.Stage != "decision" {
 		return
 	}
+	// CHAOS-8408: a displaced line names a candidate that LEFT the pool; it is
+	// not a decision about a subject, so it stays out of the outcome counts and
+	// the total, which must remain the sum of its parts.
+	if event.Outcome == "displaced" {
+		return
+	}
 	b.eventCount++
 	// OR across the call: see DecisionOfferedUnderWindowGate's own doc
 	// comment for why "at least one" is the claim rather than a whole-call
@@ -3877,11 +3885,16 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 							RequestID: request.RequestID, Stage: "decision", Subject: displacedCandidate,
 							Outcome: "displaced", CommitGate: "evidence_census", SearchTruncated: searchTruncated,
 							SearchCandidateLimit: effectiveSearchLimit, PopulationBasis: "none",
-							Pass: pass, Index: 1, Total: 1,
+							Pass: pass, Index: 1, Total: 2,
 						})
 					}
 					if appendedCommit && deps.ResolutionTracer != nil {
 						appended := candidatesBySubject[attestedKey]
+						// A displaced line shares this pass: the pair is index 1/2 and 2/2.
+						committedIndex, committedTotal := 1, 1
+						if displacedCandidate.CanonicalID != "" {
+							committedIndex, committedTotal = 2, 2
+						}
 						winningMechanism := ""
 						if len(appended.MatchMechanisms) > 0 {
 							winningMechanism = string(appended.MatchMechanisms[0])
@@ -3891,7 +3904,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 							Outcome: "committed", WinningMechanism: winningMechanism, CommitGate: "evidence_census",
 							CommitBasis: string(commitBases.For(appended.Subject)), SearchTruncated: searchTruncated,
 							SearchCandidateLimit: effectiveSearchLimit, PopulationBasis: "none",
-							Pass: pass, Index: 1, Total: 1,
+							Pass: pass, Index: committedIndex, Total: committedTotal,
 						})
 					}
 				} else {

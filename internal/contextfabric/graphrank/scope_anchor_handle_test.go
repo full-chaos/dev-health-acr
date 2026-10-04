@@ -1,11 +1,15 @@
 package graphrank
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec/certify"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -314,11 +318,47 @@ func TestResolveSubjects_CandidateDisplacedAtTheCapByTheAttestedCommitIsTraced(t
 	}
 	var displaced int
 	for _, e := range tracer.eventsForStage("decision") {
-		if e.Outcome == "displaced" && e.CommitGate == "evidence_census" && e.Subject.CanonicalID == "pull_request:r-1:12" && e.Index == 1 && e.Total == 1 {
+		if e.Outcome == "displaced" && e.CommitGate == "evidence_census" && e.Subject.CanonicalID == "pull_request:r-1:12" && e.Index == 1 && e.Total == 2 {
 			displaced++
 		}
 	}
 	if displaced != 1 {
 		t.Fatalf("displaced evidence_census decision events for the pushed-out candidate = %d, want 1 (candidates = %#v)", displaced, resolution.Candidates)
 	}
+}
+
+func TestResolveSubjects_DisplacedCandidateTraceKeepsTheDecisionBoundsAndSummary(t *testing.T) {
+	t.Parallel()
+	backend := scopeAnchorBackend(true, -1)
+	rival := candidateNode(contextfabric.SubjectPullRequest, "pull_request:r-1:12", "PR #12", 0.9, "*")
+	backend.searchResults[scopeAnchorRepo] = append(backend.searchResults[scopeAnchorRepo], rival)
+	var buf bytes.Buffer
+	deps := backend.deps()
+	deps.ResolutionTracer = NewSlogResolutionTracer(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	calls := 0
+	deps.CensusFunc = scopeAnchorCensus(&calls)
+	request := testRequest()
+	request.Question = scopeAnchorQuestion
+	request.Options.MaxSubjectCandidates = 2
+	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(scopeAnchorRepo, "pull request 747"), deps, nil, nil, namedScopeAnchorFrame(nil), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := scopeAnchorCommittedIDs(resolution); len(ids) != 2 {
+		t.Fatalf("committed = %v, want the displacement fixture to commit the pull request", ids)
+	}
+	log, err := certify.Parse(buf.Bytes())
+	if err != nil {
+		t.Fatalf("certify.Parse() error = %v", err)
+	}
+	for _, pass := range []int{1, 2} {
+		if _, err := certify.CertifyBoundedManyCount(log, eventspec.Decision, map[string]any{"request_id": request.RequestID, "pass": pass}); err != nil {
+			t.Fatalf("CertifyBoundedManyCount(decision, pass %d) error = %v", pass, err)
+		}
+	}
+	summaries := decisionSummaryLines(t, &buf)
+	if len(summaries) != 1 {
+		t.Fatalf("decision summaries = %d, want 1", len(summaries))
+	}
+	requireSummaryShape(t, summaries[0])
 }
