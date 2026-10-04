@@ -106,7 +106,7 @@ cleanup() {
   note "cleanup receipt before: $(owned_receipt)"
   if [[ "$status" -ne 0 ]]; then
     compose logs --no-color clickhouse migrate go-api-roles go-api acr-migrate acr-api acr-tls-proxy 2>&1 | redact_log || true
-    for service in clickhouse api; do
+    for service in postgres pgbouncer clickhouse valkey; do
       health_container="$(compose ps -q "$service" 2>/dev/null || true)"
       if [[ -n "$health_container" ]]; then
         docker inspect --format '{{range .State.Health.Log}}{{.Output}}{{end}}' "$health_container" 2>&1 | redact_log || true
