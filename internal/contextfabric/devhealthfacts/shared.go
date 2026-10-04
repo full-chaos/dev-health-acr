@@ -328,11 +328,16 @@ import (
 // stated reason and no member count, where it ended as an unresolved anchor.
 // A candidate saved under v55 for such a question must not be reused.
 //
-// v59 -> v60: a run_operation answer of an operation with one list of rows,
+// v59 -> v60: the first sentence of an answer states the status the answer is
+// served with, not the status the model draft carried. A candidate saved under
+// v59 can open with a stronger status than its own served status and must not
+// be reused.
+//
+// v60 -> v61: a run_operation answer of an operation with one list of rows,
 // over the response budget, is served as the largest whole-row page that fits,
 // with the cut stated, where it was refused with response_budget. A candidate
-// saved under v59 for such a question holds a refusal and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v60"
+// saved under v60 for such a question holds a refusal and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v61"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
