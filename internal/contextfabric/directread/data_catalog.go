@@ -9,8 +9,8 @@ package directread
 //   - Operations come from the loaded policy artifact only (the same
 //     *Catalogue the runner refuses with), so the catalogue can never list an
 //     operation the runner would refuse as unknown, nor hide one it serves.
-//   - The operation list is the one for the caller's class: 19 operations for
-//     an unrestricted caller, 3 for a repository-restricted one. Every other
+//   - The operation list is the one for the caller's class: 18 operations for
+//     an unrestricted caller, 2 for a repository-restricted one. Every other
 //     registered document is listed under not_served with its code and
 //     reason, and every refused variable value (the K14-A
 //     basis_dependent_shape and the person-scoped values) under
