@@ -252,12 +252,12 @@ type repoThemeTotals struct {
 // the prior-window shares). ClickHouse sums Float64 in a thread-dependent
 // order, so the last digits of one persisted aggregate differ between two
 // reads of the same rows; served as-is they make the same question carry two
-// different inputs. Nine significant digits is far below what the effort
-// carries (the persisted distributions are model estimates with two or three
-// meaningful digits) and far above the last-digit noise (about 1e-16
-// relative), so a rounding edge is crossed with probability near 1e-7 per
-// value, never by a real change of the data.
-const mixEffortSignificantDigits = 9
+// different inputs. Eleven significant digits keeps the value within 5e-12
+// relative of the stored sum (the differential oracle holds a sum to 1e-9),
+// far above the last-digit noise (about 1e-16 relative): a rounding edge is
+// crossed by noise with probability near 1e-5 per value, never by a real
+// change of the data.
+const mixEffortSignificantDigits = 11
 
 // roundMixEffort rounds v to mixEffortSignificantDigits significant digits.
 func roundMixEffort(v float64) float64 {
