@@ -213,3 +213,42 @@ func TestADeploymentOfTwoReachedRepositoriesIsOneMember(t *testing.T) {
 		t.Fatalf("members %v, want each owned deployment once: %v", got, s.ownedDeployments)
 	}
 }
+
+// TestALinkWhoseFarEndIsTheMemberAdmitsOnlyFarEndsTheCallerMaySee: when the
+// link ends the path (a repository's issues), the far end of each link row is
+// the member, and the walk's own check of that end is the only thing keeping
+// an unseen issue out. The caller holds grants for both repositories, so the
+// link read's grant clause keeps every row; the request is narrowed to the
+// anchor's repository, which only the walk's check of each row applies. An
+// issue whose own repository is outside the request is not a member; a
+// repository-less issue is admitted by its link to the granted pull request.
+func TestALinkWhoseFarEndIsTheMemberAdmitsOnlyFarEndsTheCallerMaySee(t *testing.T) {
+	repo := "repository:github:acme/svc"
+	nodes := []seededNode{{kind: "repository", id: repo, label: "acme/svc", repos: []string{"acme/svc"}}}
+	var edges []seededEdge
+	for i, issue := range []seededNode{
+		{kind: "work_item", id: "work_item:gh:visible", label: "gh:visible", repos: []string{"acme/svc"}, workItemType: "issue"},
+		{kind: "work_item", id: "work_item:gh:secret", label: "gh:secret", repos: []string{"acme/secret"}, workItemType: "issue"},
+		{kind: "work_item", id: "work_item:linear:ENG-1", label: "linear:ENG-1", repos: []string{noRepositoryScope}, workItemType: "issue"},
+	} {
+		pr := seededNode{kind: "work_item", id: fmt.Sprintf("work_item:ghpr:%d", i), label: fmt.Sprintf("ghpr:%d", i), repos: []string{"acme/svc"}, workItemType: "pr"}
+		nodes = append(nodes, issue, pr)
+		edges = append(edges,
+			seededEdge{"BELONGS_TO_REPOSITORY", "work_item", pr.id, "repository", repo},
+			seededEdge{"RELATES_TO", "work_item", pr.id, "work_item", issue.id})
+	}
+	adapter := newFakeAdapter(t, seededGraphConn(nodes, edges))
+	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"acme/svc", "acme/secret"}}
+	scope := contextfabric.RequestedScope{RepositorySlugs: []string{"acme/svc"}}
+	walk, err := adapter.treeMembers(context.Background(), "key", "org-1", principal, scope,
+		contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: repo, Label: "acme/svc"}, treeIssue, 25, newTemporalFilter(contextfabric.TimeContext{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(walkMemberIDs(walk), ","); got != "work_item:gh:visible,work_item:linear:ENG-1" {
+		t.Fatalf("members %s, want the issue in the requested repository and the repository-less issue, never the issue of acme/secret", got)
+	}
+	if walk.denied != 1 || walk.linkTargets != 3 || walk.linkSources != 3 {
+		t.Fatalf("denied %d, link targets %d, link sources %d; want 1 denied of 3 linked issues from 3 pull requests", walk.denied, walk.linkTargets, walk.linkSources)
+	}
+}

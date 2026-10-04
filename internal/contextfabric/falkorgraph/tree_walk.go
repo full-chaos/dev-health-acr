@@ -252,11 +252,16 @@ func (a *Adapter) treeMembers(ctx context.Context, key, orgID string, principal 
 			// The anchor's hop only feeds the link: read fused with it, so
 			// nodes with no link do not spend the budget.
 			out.hasLink = true
-			ends, err := a.linkSegment(ctx, key, orgID, state, anchor, hop, path[1], temporal)
+			ends, far, err := a.linkSegment(ctx, key, orgID, state, anchor, hop, path[1], temporal)
 			if err != nil {
 				return out, err
 			}
 			k++
+			if k == len(path)-1 {
+				// The link ends the path: its far side is the member set.
+				state.linkMembers(ends, far)
+				return out, nil
+			}
 			frontier, subjects = state.cut(ends), map[string]contextfabric.SubjectRef{}
 			if len(frontier) == 0 {
 				return out, nil
@@ -342,6 +347,16 @@ func (s treeWalkState) members(hop treeHop, hits []walkHit, parents map[string]c
 		if subject, ok := graphrank.NodeSubject(candidate); ok {
 			s.disclose(hop, h, subject, parents)
 		}
+	}
+	sortCandidateNodesBySubjectKey(s.out.nodes)
+}
+
+// linkMembers makes the far-side nodes of the authorized links the members,
+// bounded by the budget. The link edges are not disclosed: the near side of a
+// link is not a member.
+func (s treeWalkState) linkMembers(ends []string, far map[string]*node) {
+	for _, id := range s.cut(ends) {
+		s.out.nodes = append(s.out.nodes, toCandidateNode(far[id]))
 	}
 	sortCandidateNodesBySubjectKey(s.out.nodes)
 }
@@ -499,12 +514,12 @@ func (a *Adapter) linkSources(ctx context.Context, key, orgID string, anchor con
 // linkSegment reads the anchor's hop and the link fused, paged, each row
 // authorized before it counts against the budget, so links the caller cannot
 // see do not crowd out links it can. It returns the far-side nodes of the
-// authorized links.
-func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state treeWalkState, anchor contextfabric.SubjectRef, feed, link treeHop, temporal temporalFilter) ([]string, error) {
+// authorized links, by canonical id.
+func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state treeWalkState, anchor contextfabric.SubjectRef, feed, link treeHop, temporal temporalFilter) ([]string, map[string]*node, error) {
 	out := state.out
 	sources, err := a.linkSources(ctx, key, orgID, anchor, feed, link, temporal)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	out.linkSources = sources
 
@@ -515,7 +530,7 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 	restricted := needsProjectReach(state.principal)
 	cypher := linkSegmentCypher(feed, link, temporal, restricted)
 	seen := map[string]bool{}
-	admitted := map[string]bool{}
+	admitted := map[string]*node{}
 	for page := 0; ; page++ {
 		if page >= linkSegmentPageCap {
 			out.truncated = true
@@ -527,7 +542,7 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 		}
 		rows, err := a.api.query(ctx, key, cypher, params, true)
 		if err != nil {
-			return nil, safeDependencyError("walk the entity tree", err)
+			return nil, nil, safeDependencyError("walk the entity tree", err)
 		}
 		for _, r := range rows {
 			near, _ := r["m"].(*node)
@@ -546,7 +561,7 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 			case !state.admitted(link.to, far):
 				state.deny()
 			default:
-				admitted[id] = true
+				admitted[id] = far
 			}
 		}
 		if len(rows) < pageSize || (state.collectLimit > 0 && len(admitted) > state.collectLimit) {
@@ -557,7 +572,7 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 	for id := range admitted {
 		ends = append(ends, id)
 	}
-	return ends, nil
+	return ends, admitted, nil
 }
 
 // anchorDeploymentMembers returns the deployments a named anchor reaches on
