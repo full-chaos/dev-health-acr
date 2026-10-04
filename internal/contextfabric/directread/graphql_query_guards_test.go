@@ -252,8 +252,8 @@ func TestT12GraphQLForcedScopeRestrictedCallerNeverReceivesAForeignRow(t *testin
 			}
 		}
 	}
-	if restrictedRoots != 3 {
-		t.Fatalf("%d roots served to a restricted caller, want 3 (compoundingRisk, hotspots, securityAlerts)", restrictedRoots)
+	if restrictedRoots != 2 {
+		t.Fatalf("%d roots served to a restricted caller, want 2 (compoundingRisk, hotspots)", restrictedRoots)
 	}
 }
 
@@ -512,11 +512,11 @@ func TestT18GraphQLEveryRootRefusesEveryGeneratedAttack(t *testing.T) {
 			})
 		}
 	}
-	if want := 8*14 + withUnlisted; executed != want {
+	if want := 8*13 + withUnlisted; executed != want {
 		t.Fatalf("executed %d T18 cases, want %d (8 per allowed root + %d unlisted-field cases)", executed, want, withUnlisted)
 	}
 	if withUnlisted < 6 {
-		t.Fatalf("only %d of 14 roots have an unlisted SDL field to plant", withUnlisted)
+		t.Fatalf("only %d of 13 roots have an unlisted SDL field to plant", withUnlisted)
 	}
 }
 
@@ -942,10 +942,10 @@ func TestGraphQLRepeatedSelectionsAreMerged(t *testing.T) {
 	}
 	// Two levels deep.
 	h.listener.reset()
-	deep := `{ securityAlerts { edges { node { alertId } } edges { node { repoId } cursor } } }`
+	deep := `{ securityOverview { topRepos { repoId } topRepos { repoName count } } }`
 	resp = h.run(t, opUnrestricted(opOrgA), deep, nil)
 	h.wantServed(t, resp)
-	if sent := h.listener.requests()[0].Query; !strings.Contains(sent, "alertId") || !strings.Contains(sent, "repoId") || !strings.Contains(sent, "cursor") {
+	if sent := h.listener.requests()[0].Query; !strings.Contains(sent, "repoId") || !strings.Contains(sent, "repoName") || !strings.Contains(sent, "count") {
 		t.Fatalf("a nested repeated selection was dropped:\n%s", sent)
 	}
 }
@@ -977,8 +977,8 @@ func TestGraphQLLiteralKindsMustMatchTheirPosition(t *testing.T) {
 		"enum as string":         `{ catalog(dimension: "TEAM") { values { value } } }`,
 		"string as enum":         `{ hotspots(input: {sinceUtc: TODAY, untilUtc: "2026-09-28T00:00:00Z"}) { rows { filePath } } }`,
 		"int as string":          `{ hotspots(input: {` + window + `, limit: "5"}) { rows { filePath } } }`,
-		"enum in list as string": `{ securityAlerts(filters: {severities: ["HIGH"]}) { edges { node { alertId } } } }`,
-		"bool as string":         `{ securityAlerts(filters: {openOnly: "true"}) { edges { node { alertId } } } }`,
+		"enum in list as string": `{ securityOverview(filters: {severities: ["HIGH"]}) { kpis { openTotal } } }`,
+		"bool as string":         `{ securityOverview(filters: {openOnly: "true"}) { kpis { openTotal } } }`,
 		"default enum as string": `query($d: DimensionInput = "TEAM") { catalog(dimension: $d) { values { value } } }`,
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -987,7 +987,7 @@ func TestGraphQLLiteralKindsMustMatchTheirPosition(t *testing.T) {
 		})
 	}
 	h.listener.reset()
-	h.wantServed(t, h.run(t, opUnrestricted(opOrgA), `{ securityAlerts(filters: {severities: HIGH, openOnly: true}) { edges { node { alertId } } } }`, nil))
+	h.wantServed(t, h.run(t, opUnrestricted(opOrgA), `{ securityOverview(filters: {severities: HIGH, openOnly: true}) { kpis { openTotal } } }`, nil))
 }
 
 // r2 P2: a stricter candidate that admits the shape but refuses the caller

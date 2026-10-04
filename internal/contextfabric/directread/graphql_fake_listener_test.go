@@ -45,9 +45,9 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 )
 
-// gwcMCPRoots is GWC's listener root allowlist (CHAOS-7085, 14 roots).
+// gwcMCPRoots is the listener root allowlist acr derives its roots against (13 roots; securityAlerts is dark on purpose and is not in it).
 var gwcMCPRoots = []string{
-	"compoundingRisk", "hotspots", "securityAlerts", "catalog", "complexityTimeseries", "cognitiveLoad",
+	"compoundingRisk", "hotspots", "catalog", "complexityTimeseries", "cognitiveLoad",
 	"analytics", "securityOverview", "workGraphEdges", "workGraphFlow", "workGraphArtifacts",
 	"throughputForecast", "capacityForecasts", "capacityForecast",
 }

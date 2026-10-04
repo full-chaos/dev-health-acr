@@ -129,7 +129,7 @@ func TestOperationReadInfoRecordCarriesTheConfiguredQueryPath(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := runner.Run(context.Background(), opUnrestricted(opOrgA), directread.OperationRequest{Operation: "securityAlerts"}); err != nil {
+			if _, err := runner.Run(context.Background(), opUnrestricted(opOrgA), directread.OperationRequest{Operation: "securityOverview"}); err != nil {
 				t.Fatalf("Run: %v", err)
 			}
 			var found bool

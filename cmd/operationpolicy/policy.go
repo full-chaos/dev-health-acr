@@ -268,24 +268,6 @@ func declaredPolicy() policyDeclaration {
 					Basis:              "forced input.repoIds + row check on rows[*].repoId = toString(repo_id) ([ops] hotspots/hotspots.go:228,375). Empty or null repoIds means ALL repositories (:245), so an empty grant intersection must end before dispatch with no_granted_scope (RM §2)",
 				},
 			},
-			"securityAlerts": {
-				DocumentName: "SecurityAlerts",
-				Cost:         dr.CostList,
-				Variables: withVariables(securityFilterVariables, map[string]variableDecl{
-					"pagination.first": between(1, pageSize),
-					"pagination.after": text(64),
-				}),
-				Constraints:  []dr.Constraint{window("filters.since", "filters.until", windowDays, true)},
-				Unrestricted: served("[ops] security/filter.go:61-64 apply repoIds (uuid only); alerts.go:99-113 page (RM §3, V)"),
-				Restricted: dr.CallerScope{
-					Served:             true,
-					ForcedVariablePath: "filters.repoIds",
-					SubjectKind:        dr.SubjectKindRepository,
-					RowIDPaths:         []string{"securityAlerts.edges[*].node.repoId"},
-					Basis:              "forced filters.repoIds (uuid only, [ops] security/filter.go:62) + row check on edges[*].node.repoId = toString(sa.repo_id) (alerts.go:116,156). null or [] = all repositories, so an empty intersection ends before dispatch (RM §3)",
-				},
-				Notes: []string{"filters.since is optional (allow_open_start): an alert list is state, and pagination.first <= 200 bounds the cost; ops has no max on first (alerts.go:99-103)"},
-			},
 			"acrRepositoryScopes": {
 				DocumentName: "ACRRepositoryScopes",
 				Cost:         dr.CostCatalog,
@@ -517,6 +499,7 @@ func notServed() map[string]notServedDecl {
 		userOwned  = "user-owned product object (design D.3)"
 		noScope    = "no scope rule or no honest status yet (design D.3)"
 		personData = "reviewer and author data (design D.3)"
+		rootDark   = "root field is not enabled on the ops query service run-operation path (root_field_not_enabled): dark on purpose"
 	)
 	return map[string]notServedDecl{
 		"cloneSavedReport":                  {mutation},
@@ -554,6 +537,7 @@ func notServed() map[string]notServedDecl {
 		"testOpsPipeline":                   {noScope},
 		"testOpsTest":                       {noScope},
 		"testopsRisk":                       {noScope},
+		"securityAlerts":                    {rootDark},
 		"reportRuns":                        {userOwned},
 		"savedReport":                       {userOwned},
 		"savedReports":                      {userOwned},

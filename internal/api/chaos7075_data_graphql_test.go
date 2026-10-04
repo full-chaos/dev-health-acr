@@ -197,7 +197,7 @@ func TestChaos7075CatalogSchemaSectionPerCallerClass(t *testing.T) {
 		t.Fatal("the schema view names a refused root or a person field")
 	}
 	r := section(restricted, h)
-	if got := roots(r); !slices.Equal(got, []string{"compoundingRisk", "hotspots", "securityAlerts"}) {
+	if got := roots(r); !slices.Equal(got, []string{"compoundingRisk", "hotspots"}) {
 		t.Fatalf("restricted roots %v", got)
 	}
 	for _, root := range r["roots"].([]any) {

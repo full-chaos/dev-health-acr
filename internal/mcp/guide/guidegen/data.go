@@ -147,7 +147,7 @@ var DataExamples = []DataExample{
 		Note:  "Find the repository by its exact name, then read the alerts. Page with `pagination.after` when the answer says there is more.",
 		Calls: []DataExampleCall{
 			{Tool: "find_subjects", Args: `{"query":"acme/payments","kinds":["repository"]}`, Comment: "name to id; `status` `ambiguous` means more than one match"},
-			{Tool: "run_operation", Args: `{"operation":"securityAlerts","variables":{"filters":{"repoIds":["` + sampleRepoID + `"],"openOnly":true},"pagination":{"first":50}}}`, Comment: "open alerts with severity, state and repository"},
+			{Tool: "run_operation", Args: `{"operation":"securityOverview","variables":{"filters":{"repoIds":["` + sampleRepoID + `"]}}}`, Comment: "open alert counts by severity and the trend"},
 		},
 	},
 	{

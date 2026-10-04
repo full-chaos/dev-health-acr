@@ -127,20 +127,6 @@
       "restricted_served": true
     },
     {
-      "field": "securityAlerts",
-      "operations": [
-        "securityAlerts"
-      ],
-      "cost_class": "list",
-      "arguments": [
-        "filters",
-        "orgId",
-        "pagination"
-      ],
-      "fixed_arguments": [],
-      "restricted_served": true
-    },
-    {
       "field": "securityOverview",
       "operations": [
         "securityOverview"
@@ -232,6 +218,7 @@
     "reviewEdges",
     "savedReport",
     "savedReports",
+    "securityAlerts",
     "testopsRisk",
     "workItemTeamAttributions",
     "workUnitTeamAttributions"

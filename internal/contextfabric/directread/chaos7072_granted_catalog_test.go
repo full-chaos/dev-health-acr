@@ -124,10 +124,10 @@ func TestDataCatalogOperationsPerCallerClass(t *testing.T) {
 	restricted := catalogFor(t, ClassRestricted, true, true)
 	unrestricted := catalogFor(t, ClassUnrestricted, true, true)
 	universal := catalogFor(t, ClassUniversal, true, true)
-	if got := len(restricted.Operations.Operations); got != 3 {
+	if got := len(restricted.Operations.Operations); got != 2 {
 		t.Fatalf("restricted: %d operations", got)
 	}
-	if got := len(unrestricted.Operations.Operations); got != 19 || len(universal.Operations.Operations) != 19 {
+	if got := len(unrestricted.Operations.Operations); got != 18 || len(universal.Operations.Operations) != 18 {
 		t.Fatalf("unrestricted: %d, universal %d", got, len(universal.Operations.Operations))
 	}
 	for _, op := range restricted.Operations.Operations {

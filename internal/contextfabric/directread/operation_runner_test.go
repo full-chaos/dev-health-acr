@@ -293,8 +293,8 @@ func TestT13EveryPersonVariableRefusedAtTheEdge(t *testing.T) {
 func TestT2OrgIsolationEveryOperation(t *testing.T) {
 	cat, _ := directread.DefaultCatalogue()
 	ops := cat.Operations(directread.CallerUnrestricted)
-	if len(ops) != 19 {
-		t.Fatalf("unrestricted catalogue has %d operations, want 19", len(ops))
+	if len(ops) != 18 {
+		t.Fatalf("unrestricted catalogue has %d operations, want 18", len(ops))
 	}
 	for _, op := range ops {
 		var orgPaths []string
@@ -494,13 +494,11 @@ func TestClampsConstraintsAndAcrSetValues(t *testing.T) {
 		vars map[string]any
 		want directread.RefusalCode
 	}{
-		{"securityAlerts", map[string]any{"pagination": map[string]any{"first": 201}}, directread.RefusalVariableOutOfRange},
-		{"securityAlerts", map[string]any{"pagination": map[string]any{"first": 1.5}}, directread.RefusalInvalidRequest},
-		{"securityAlerts", map[string]any{"filters": map[string]any{"severities": []any{"HIGH", "NOPE"}}}, directread.RefusalVariableNotAllowed},
-		{"securityAlerts", map[string]any{"filters": map[string]any{"search": strings.Repeat("x", 201)}}, directread.RefusalVariableOutOfRange},
-		{"securityAlerts", map[string]any{"filters": map[string]any{"since": "2026-01-01"}}, directread.RefusalVariableOutOfRange},
-		{"securityAlerts", map[string]any{"filters": map[string]any{"since": "2026-09-01", "until": "2026-08-01"}}, directread.RefusalVariableOutOfRange},
-		{"securityAlerts", map[string]any{"filters": map[string]any{"since": "yesterday"}}, directread.RefusalInvalidRequest},
+		{"securityOverview", map[string]any{"filters": map[string]any{"severities": []any{"HIGH", "NOPE"}}}, directread.RefusalVariableNotAllowed},
+		{"securityOverview", map[string]any{"filters": map[string]any{"search": strings.Repeat("x", 201)}}, directread.RefusalVariableOutOfRange},
+		{"securityOverview", map[string]any{"filters": map[string]any{"since": "2026-01-01"}}, directread.RefusalVariableOutOfRange},
+		{"securityOverview", map[string]any{"filters": map[string]any{"since": "2026-09-01", "until": "2026-08-01"}}, directread.RefusalVariableOutOfRange},
+		{"securityOverview", map[string]any{"filters": map[string]any{"since": "yesterday"}}, directread.RefusalInvalidRequest},
 		{"hotspots", map[string]any{}, directread.RefusalVariableOutOfRange},
 		{"hotspots", map[string]any{"input": map[string]any{"teamIds": []any{opTeamT}}}, directread.RefusalVariableNotAllowed},
 		{"cognitiveLoad", map[string]any{"input": map[string]any{"sinceDate": "2026-09-20", "untilDate": "2026-09-27"}}, directread.RefusalScopeRequired},
