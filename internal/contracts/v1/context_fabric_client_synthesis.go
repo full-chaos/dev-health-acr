@@ -59,8 +59,10 @@ type ContextFabricSynthesisContract struct {
 // the answer writes it from: the input the service would have sent its own
 // synthesis model (cut to the size bound when Bounded is set) without the
 // times at which the turn looked and with the evidence window named, so
-// InputSHA256, the sha256 of Input, names the facts and the window and not
-// the moment of the read. It is served only in the turn
+// InputSHA256, the sha256 of Input, covers the facts, the coverage and the
+// identity of the evidence window. A relative window, a clamped span and a
+// provider's own default window are each one standing commitment: their
+// moving bounds are not part of the digest. It is served only in the turn
 // that built it and is never stored.
 type ContextFabricSynthesisInput struct {
 	Contract    ContextFabricSynthesisContract `json:"contract"`

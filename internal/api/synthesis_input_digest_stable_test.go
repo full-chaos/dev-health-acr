@@ -210,7 +210,14 @@ func TestASpanThatEndsInTheFutureGivesOneInputDigest(t *testing.T) {
 	}
 }
 
-func TestWriteBackOfASpanThatEndsInTheFutureIsServedAfterTheClockMoved(t *testing.T) {
+// TestAClampedSpanIsOneStandingCommitmentByDesign pins today's rule: a span
+// whose end is pulled back to the time of the read is one standing
+// commitment. Its moving end is not part of the digest, so a draft written at
+// call 1 is served at call 2 while the facts are equal, although call 2 read
+// through a later end. Pinning one clock per write-back (call 2 re-runs on
+// call 1's instant) would put the end back in the digest; when that lands,
+// this test changes to expect the end in the input.
+func TestAClampedSpanIsOneStandingCommitmentByDesign(t *testing.T) {
 	rig := newWriteBackRouteRig(t)
 	first := decodeEnvelope(t, rig.post(t, spanInterpretation(futureEndingRange)))
 	if first.SynthesisInput == nil {

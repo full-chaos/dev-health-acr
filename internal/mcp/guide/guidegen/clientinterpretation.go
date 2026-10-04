@@ -302,7 +302,7 @@ func buildClientInterpretation(c ClientFlowInputs) (string, error) {
 		q(c.FactWindowStart), q(c.FactWindowEnd), q(c.FactWindowBasis), q(c.FactWindowDefaultTrailing))
 	fmt.Fprintf(&b, "- Apart from those times and the window, when %s is false %s is byte for byte what the service would have sent its own synthesis model. When %s is true, facts were cut to fit the bound, and the service's own model can be given more.\n",
 		q(c.SynthesisInputFields[3]), q(c.SynthesisInputFields[1]), q(c.SynthesisInputFields[3]))
-	fmt.Fprintf(&b, "- %s is the sha256 of %s. Two calls over the same facts and the same window give the same %s and the same %s. A change in a fact, a source state, a watermark, the window, the question or the interpretation changes it.\n",
+	fmt.Fprintf(&b, "- %s is the sha256 of %s. It covers the facts, the coverage and the identity of the evidence window. A relative window, a span whose end we pulled back to the time of our read, and a provider's own default window are each one standing commitment: their moving bounds are not part of the digest, so two calls over the same facts give the same %s and the same %s, and a draft is accepted while the facts are unchanged. A change in a fact, a source state, a watermark, the window's identity, the question or the interpretation changes it.\n",
 		q(c.SynthesisInputFields[2]), q(c.SynthesisInputFields[1]), q(c.SynthesisInputFields[1]), q(c.SynthesisInputFields[2]))
 	fmt.Fprintf(&b, "- Call `prompts/get` for the prompt %s, with no arguments. Its one message is the system message. Run it on your model with %s as the user message. The reply follows the schema resource %s. Follow the writing %s. The prompt and the schema are served to a caller with either %s or %s.\n",
 		q(c.SynthesisPrompt), q(c.SynthesisInputFields[1]), q(c.SynthesisOutputURI), q(c.SynthesisInputFields[4]), q(c.ServerSideTool), q(c.InterpretTool))
@@ -339,5 +339,6 @@ func buildClientInterpretation(c ClientFlowInputs) (string, error) {
 	fmt.Fprintf(&b, "- **The answer does not fit the byte budget.** Status %d, as for any answer that is too large. We do not narrow the input and write a new one, because your draft was written for this input. Raise the byte limit of %s, or write fewer items in your draft.\n",
 		StatusAnswerTooLarge, q(c.BudgetArg))
 	b.WriteString("- We check the claims, the subjects, and the evidence of your draft against the facts we read. We make no model call, and nothing is stored when a check fails.\n")
+	b.WriteString("- We do not check the free text of a draft against the input, as for the text of our own model. Do not state absolute window bounds that the input does not hold.\n")
 	return b.String(), nil
 }

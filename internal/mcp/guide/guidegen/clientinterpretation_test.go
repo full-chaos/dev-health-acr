@@ -223,7 +223,7 @@ func TestClientInterpretationGuideHasTheSynthesisSection(t *testing.T) {
 	for _, path := range synthesisprompt.ClientInputObservationPaths() {
 		want = append(want, "`"+path+"`")
 	}
-	want = append(want, "`input_sha256` is the sha256 of `input`", "the same `input` and the same `input_sha256`", "`"+c.ClientWindowField+"`", "`"+c.FactWindowDefaultTrailing+"`")
+	want = append(want, "`input_sha256` is the sha256 of `input`", "the same `input` and the same `input_sha256`", "one standing commitment", "a draft is accepted while the facts are unchanged", "Do not state absolute window bounds that the input does not hold.", "`"+c.ClientWindowField+"`", "`"+c.FactWindowDefaultTrailing+"`")
 	for _, value := range want {
 		if value == "" || !strings.Contains(section, value) {
 			t.Errorf("synthesis section lacks %q", value)
