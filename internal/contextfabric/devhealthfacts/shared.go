@@ -337,7 +337,12 @@ import (
 // over the response budget, is served as the largest whole-row page that fits,
 // with the cut stated, where it was refused with response_budget. A candidate
 // saved under v60 for such a question holds a refusal and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v61"
+//
+// v61 -> v65: a series or period-comparison question that states its period
+// reads that period on the range axis, and a comparison names the period it is
+// compared with as not read, where both ran as one current-state window. A
+// candidate saved under v61 for such a question must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v65"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

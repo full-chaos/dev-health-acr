@@ -663,7 +663,8 @@ func IsContextFabricServiceAuthoredLimitation(limitation string) bool {
 		IsContextFabricPathDropLimitation(limitation) ||
 		IsContextFabricWorkItemMemberFilterLimitation(limitation) ||
 		IsContextFabricWorkItemCensusRepositoryScopeLimitation(limitation) ||
-		IsContextFabricStatedRangeConflictLimitation(limitation)
+		IsContextFabricStatedRangeConflictLimitation(limitation) ||
+		IsContextFabricComparisonPeriodUnreadLimitation(limitation)
 }
 
 // ContextFabricStatedRangeConflictLimitation is served when a turn ran on the
@@ -679,6 +680,25 @@ var statedRangeConflictLimitationPattern = regexp.MustCompile(`^The interpretati
 // is that disclosure; it matches the whole sentence.
 func IsContextFabricStatedRangeConflictLimitation(limitation string) bool {
 	return statedRangeConflictLimitationPattern.MatchString(limitation)
+}
+
+// ContextFabricComparisonPeriodUnreadLimitation is served when a question
+// compares two periods and the turn read only the period it states. Bounds are
+// RFC 3339 in UTC, as an evidence window states them, so a client can send the
+// comparison period back as the evidence_window of a second call.
+func ContextFabricComparisonPeriodUnreadLimitation(statedStart, statedEnd, comparisonStart, comparisonEnd string) string {
+	return "This question compares two periods; this answer read only the stated period, " + statedStart + " to " + statedEnd + ". The period it is compared with, " + comparisonStart + " to " + comparisonEnd + ", was not read; a second call with evidence_window start " + comparisonStart + " and end " + comparisonEnd + " reads it."
+}
+
+const comparisonPeriodInstant = `\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z`
+
+var comparisonPeriodUnreadLimitationPattern = regexp.MustCompile(`^This question compares two periods; this answer read only the stated period, ` + comparisonPeriodInstant + ` to ` + comparisonPeriodInstant + `\. The period it is compared with, (` + comparisonPeriodInstant + `) to (` + comparisonPeriodInstant + `), was not read; a second call with evidence_window start (` + comparisonPeriodInstant + `) and end (` + comparisonPeriodInstant + `) reads it\.$`)
+
+// IsContextFabricComparisonPeriodUnreadLimitation reports whether one
+// limitation is that disclosure; it matches the whole sentence.
+func IsContextFabricComparisonPeriodUnreadLimitation(limitation string) bool {
+	match := comparisonPeriodUnreadLimitationPattern.FindStringSubmatch(limitation)
+	return match != nil && match[1] == match[3] && match[2] == match[4]
 }
 
 // ContextFabricWorkItemCensusRepositoryScopeLimitation is served, in the same

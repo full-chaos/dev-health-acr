@@ -2209,6 +2209,17 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		if remembered.Outcome == ContinuationAxisOverriddenByReceipt {
 			interpretedTimeBound = resolveInterpretedTimeContext(executedTime, e.now())
 		}
+	} else if period := statedPeriodRead(windowCanon, interpretation, familyOutcome.Frame, clampedRequestTime.Axis, interpretedTimeBound.Bound, interpretedTimeBound.Answerable(), request.Consumer.Surface, e.now()); period != nil {
+		// The frame asks for a series or a comparison: the turn reads the
+		// period the question states on the range axis, whatever window class
+		// came with it, and never collapses it into one current-state window.
+		executedTime := TimeContext{Axis: TemporalRange, Start: &period.Start, End: &period.End}
+		if e.telemetry != nil {
+			e.telemetry.RecordStatedWindowAxis(ctx, principal, request.Consumer.Surface, period.Origin, interpretedTimeBound.Bound.Axis, executedTime.Axis, StatedWindowAxisStatedRange)
+		}
+		windowCanon.StatedRangeConflict = period.Conflict
+		windowCanon.UnreadComparisonPeriod = period.Unread
+		interpretedTimeBound = resolveInterpretedTimeContext(executedTime, e.now())
 	} else if statedOrigin := statedWindowOrigin(windowCanon, interpretation, familyOutcome.Frame, clampedRequestTime.Axis, request.Consumer.Surface); statedOrigin != "" {
 		// CHAOS-6557: on the MCP surface a window the CALLER supplied (the
 		// evidence_window field, or a period stated in the question) is the
@@ -2230,7 +2241,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			}
 			interpretedTimeBound = resolveInterpretedTimeContext(executedTime, e.now())
 		}
-	} else if period := interpreterPeriodWindow(windowCanon, clampedRequestTime.Axis, interpretedTimeBound.Bound, interpretedTimeBound.Answerable(), request.Consumer.Surface); period != nil {
+	} else if period := interpreterPeriodWindow(windowCanon, familyOutcome.Frame, clampedRequestTime.Axis, interpretedTimeBound.Bound, interpretedTimeBound.Answerable(), request.Consumer.Surface); period != nil {
 		// CHAOS-6557, the published MCP tool contract: a period the
 		// interpreter read as a calendar range is an evidence window over
 		// current state. The window becomes the turn's committed window (frozen

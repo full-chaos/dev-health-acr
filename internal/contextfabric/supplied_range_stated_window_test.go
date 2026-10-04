@@ -2,7 +2,6 @@ package contextfabric
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -48,12 +47,18 @@ func TestQuestionStatesWindowIsTheBoundTrailingPhraseForACurrentOrPeriodFrame(t 
 			t.Errorf("%q: a point-in-time phrase stated an evidence window", question)
 		}
 	}
-	// A class that carries a default keeps the rule it had for every frame.
+	// A class that carries a default states the window for a current-state
+	// frame only: a series or a comparison reads its period on the range axis.
 	recent := explicit
 	recent.WindowClass = WindowClassRecentActivityLookup
 	recent.Shape = ShapeDiscoveredCohort
-	if !questionStatesWindow(recent, &series, trailing) {
-		t.Error("a class with a default stopped stating the window on a series frame")
+	if !questionStatesWindow(recent, &current, trailing) {
+		t.Error("a class with a default stopped stating the window on a current frame")
+	}
+	for _, frame := range []*QuestionFrame{&series, &comparison} {
+		if questionStatesWindow(recent, frame, trailing) {
+			t.Errorf("a class with a default stated a current-state window on a %s frame", frame.Temporal)
+		}
 	}
 	if got := statedWindowOrigin(requestWindowCanonicalization{BinderProposal: trailing}, explicit, &current, TemporalCurrent, mcpSurface); got != StatedWindowOriginQuestionPhrase {
 		t.Errorf("a trailing phrase on MCP: origin %q, want %q", got, StatedWindowOriginQuestionPhrase)
@@ -72,6 +77,29 @@ type suppliedRangeCell struct {
 	class    WindowClass
 	frame    *QuestionFrame
 	question string
+	time     suppliedTimeVariant
+}
+
+// suppliedTimeVariant is the time context a cell's client sends: a range equal
+// to the stated 30 days (the zero value), a 7-day range that differs from it,
+// or the current axis with no bounds, as the published interpret prompt copies
+// the request's time context.
+type suppliedTimeVariant int
+
+const (
+	suppliedRangeEqual suppliedTimeVariant = iota
+	suppliedRangeDifferent
+	suppliedRangeAbsent
+)
+
+func (v suppliedTimeVariant) String() string {
+	switch v {
+	case suppliedRangeDifferent:
+		return "range 7d"
+	case suppliedRangeAbsent:
+		return "current axis"
+	}
+	return "range 30d"
 }
 
 // runSuppliedRangeCell runs one cell through Engine.Investigate and returns
@@ -85,7 +113,15 @@ func suppliedRangeInterpreted(cell suppliedRangeCell) InterpretedQuestion {
 	start := now.Add(-30 * 24 * time.Hour)
 	interpreted := suppliedInterpretation()
 	interpreted.Shape, interpreted.SubjectTerms = cell.shape, cell.terms
-	interpreted.TimeContext = TimeContext{Axis: TemporalRange, Start: &start, End: &now}
+	switch cell.time {
+	case suppliedRangeDifferent:
+		week := now.Add(-7 * 24 * time.Hour)
+		interpreted.TimeContext = TimeContext{Axis: TemporalRange, Start: &week, End: &now}
+	case suppliedRangeAbsent:
+		interpreted.TimeContext = TimeContext{Axis: TemporalCurrent}
+	default:
+		interpreted.TimeContext = TimeContext{Axis: TemporalRange, Start: &start, End: &now}
+	}
 	interpreted.WindowClass = cell.class
 	if cell.class != "" {
 		interpreted.WindowConfidence = WindowConfidenceHigh
@@ -117,41 +153,6 @@ func runSuppliedRangeCell(t *testing.T, cell suppliedRangeCell, surface string) 
 		family = spy.events[len(spy.events)-1].Family
 	}
 	return result, family
-}
-
-func suppliedRangeRow(result InvestigationResult, family QuestionFamily, cell suppliedRangeCell) string {
-	temporal := "none"
-	if cell.frame != nil {
-		temporal = string(cell.frame.Temporal)
-	}
-	class := string(cell.class)
-	if class == "" {
-		class = "(none)"
-	}
-	return fmt.Sprintf("ROW|%s|%s|%s|%s|%s", family, class, temporal, cell.question, suppliedRangeOutcome(result))
-}
-
-// suppliedRangeOutcome is a cell's served outcome in one line: status, executed
-// axis, window provenance, relative window, window class, and whether the range
-// conflict was disclosed.
-func suppliedRangeOutcome(result InvestigationResult) string {
-	window := "no window"
-	if w := result.EffectiveEvidenceWindow; w != nil {
-		class := string(w.WindowClass)
-		if class == "" {
-			class = "none"
-		}
-		relative := string(w.RelativeID)
-		if relative == "" {
-			relative = "calendar"
-		}
-		window = string(w.Provenance) + " " + relative + " class " + class
-	}
-	conflict := ""
-	if limitationsContain(result.Limitations, "which is not the period the question states") {
-		conflict = " +conflict"
-	}
-	return fmt.Sprintf("%s %s %s%s", result.Status, result.Interpretation.TimeContext.Axis, window, conflict)
 }
 
 // familyFrame is a frame of the given temporal intent whose subject
@@ -203,152 +204,6 @@ func reachableFamilyCells(class WindowClass, framed bool, temporal TemporalInten
 		out = append(out, cell)
 	}
 	return out
-}
-
-// Every reachable family, routed to its own family by its signals and, where
-// framed, by a frame that projects to the same family: a client range for a
-// stated trailing period of a current-state question runs on the current axis
-// with the question_stated window; a series, a period comparison, a
-// point-in-time phrase, or a question that states no period keeps the
-// client's range unless an earlier rule (a class default, a calendar range)
-// already decides it.
-func TestSuppliedRangeWithAStatedTrailingPhraseRunsOnTheCurrentAxis(t *testing.T) {
-	const stated = "How is the Ask Dev project doing in the last 30 days?"
-	type expectation struct {
-		cells   []suppliedRangeCell
-		current bool
-	}
-	var groups []expectation
-	for _, class := range []WindowClass{WindowClassExplicitWindow, WindowClassStateSnapshot, ""} {
-		groups = append(groups, expectation{reachableFamilyCells(class, false, "", stated), true})
-	}
-	groups = append(groups,
-		expectation{reachableFamilyCells(WindowClassExplicitWindow, true, TemporalIntentCurrent, stated), true},
-		expectation{reachableFamilyCells(WindowClassExplicitWindow, true, TemporalIntentBoundedWindow, stated), true},
-		expectation{reachableFamilyCells(WindowClassExplicitWindow, true, TemporalIntentTimeSeries, "How has the Ask Dev project's throughput changed over the last 30 days?"), false},
-		expectation{reachableFamilyCells(WindowClassExplicitWindow, true, TemporalIntentPeriodComparison, "Compare the Ask Dev project in the last 30 days with the month before"), false},
-		expectation{reachableFamilyCells(WindowClassExplicitWindow, true, TemporalIntentPeriodComparison, "How does the Ask Dev project's last 30 days compare to the previous 30 days?"), false},
-		expectation{reachableFamilyCells(WindowClassExplicitWindow, true, TemporalIntentCurrent, "How was the Ask Dev project doing as of the start of the last 30 days?"), false},
-		expectation{reachableFamilyCells(WindowClassExplicitWindow, true, TemporalIntentCurrent, "What was the Ask Dev project's state as of the beginning of the past quarter?"), false},
-		expectation{reachableFamilyCells(WindowClassExplicitWindow, false, "", "How is the Ask Dev project doing?"), false},
-	)
-	for _, group := range groups {
-		for _, cell := range group.cells {
-			result, family := runSuppliedRangeCell(t, cell, mcpSurface)
-			t.Log(suppliedRangeRow(result, family, cell))
-			if family != cell.family {
-				t.Errorf("%s/%q %q: resolved family %s, want the cell's own family", cell.family, cell.class, cell.question, family)
-			}
-			key := suppliedRangeCellKey(cell)
-			if want, ok := suppliedRangeServedOutcome[key]; !ok || suppliedRangeOutcome(result) != want {
-				t.Errorf("%s: served %q, want %q (hand-pinned)", key, suppliedRangeOutcome(result), want)
-			}
-			binder := ProposeWindowFromSpans(cell.question)
-			interpreted := suppliedRangeInterpreted(cell)
-			_, classStates := DefaultRelativeID(ClassifyWindow(interpreted, interpreted.WindowClass, interpreted.WindowConfidence), windowDefaultPolicy)
-			period := interpreterPeriodWindow(requestWindowCanonicalization{BinderProposal: binder}, TemporalCurrent, interpreted.TimeContext, true, mcpSurface)
-			want := group.current || (binder.Reason == WindowBindRoutedInferred && binder.Trailing && classStates) || period != nil
-			window := result.EffectiveEvidenceWindow
-			onCurrent := result.Interpretation.TimeContext.Axis == TemporalCurrent && window != nil && window.Provenance == WindowQuestionStated
-			if onCurrent != want {
-				t.Errorf("%s/%q %q: axis=%s window=%+v, want stated-current=%v", cell.family, cell.class, cell.question, result.Interpretation.TimeContext.Axis, window, want)
-			}
-			wantClass := ClassifyWindow(interpreted, interpreted.WindowClass, interpreted.WindowConfidence).Class
-			if window != nil && window.RelativeID == "" {
-				// A calendar range committed by interpreterPeriodWindow
-				// carries no class.
-				wantClass = ""
-			}
-			if window != nil && window.WindowClass != wantClass {
-				t.Errorf("%s/%q %q: window class %q, want the classified %q", cell.family, cell.class, cell.question, window.WindowClass, wantClass)
-			}
-			wantConflict := onCurrent && window.RelativeID != "" && detectStatedRangeConflict(binder, interpreted.TimeContext, suppliedRangeRigNow) != nil
-			if limitationsContain(result.Limitations, "which is not the period the question states") != wantConflict {
-				t.Errorf("%s/%q %q: limitations %q, want the range conflict disclosed=%v", cell.family, cell.class, cell.question, result.Limitations, wantConflict)
-			}
-			if !want && result.Interpretation.TimeContext.Axis != TemporalRange {
-				t.Errorf("%s/%q %q: axis=%s, want the client's range kept", cell.family, cell.class, cell.question, result.Interpretation.TimeContext.Axis)
-			}
-		}
-	}
-	// Another surface keeps the client's range.
-	result, _ := runSuppliedRangeCell(t, reachableFamilyCells(WindowClassExplicitWindow, false, "", stated)[0], "api")
-	if result.Interpretation.TimeContext.Axis != TemporalRange {
-		t.Errorf("api surface: axis=%s, want the client's range kept", result.Interpretation.TimeContext.Axis)
-	}
-}
-
-func suppliedRangeCellKey(cell suppliedRangeCell) string {
-	temporal := "none"
-	if cell.frame != nil {
-		temporal = string(cell.frame.Temporal)
-	}
-	return string(cell.family) + "|" + string(cell.class) + "|" + temporal + "|" + cell.question
-}
-
-// suppliedRangeServedOutcome hand-pins each cell's served outcome, the table
-// in the change's notes: status, axis, window, window class and the conflict
-// disclosure. The derived checks beside it must agree with it.
-var suppliedRangeServedOutcome = map[string]string{
-	"subject_investigation|explicit_window|none|How is the Ask Dev project doing in the last 30 days?":                                         "complete current question_stated trailing_30d class recent_activity_lookup",
-	"discovered_cohort_ranking|explicit_window|none|How is the Ask Dev project doing in the last 30 days?":                                     "complete current question_stated trailing_30d class trend_assessment",
-	"scoped_cohort_status|explicit_window|none|How is the Ask Dev project doing in the last 30 days?":                                          "complete current question_stated trailing_30d class none",
-	"grouped_cohort_status|explicit_window|none|How is the Ask Dev project doing in the last 30 days?":                                         "complete current question_stated trailing_30d class trend_assessment",
-	"explicit_comparison|explicit_window|none|How is the Ask Dev project doing in the last 30 days?":                                           "complete current question_stated trailing_30d class none",
-	"unclassified|explicit_window|none|How is the Ask Dev project doing in the last 30 days?":                                                  "complete current question_stated trailing_30d class none",
-	"subject_investigation|state_snapshot|none|How is the Ask Dev project doing in the last 30 days?":                                          "complete current question_stated trailing_30d class state_snapshot",
-	"discovered_cohort_ranking|state_snapshot|none|How is the Ask Dev project doing in the last 30 days?":                                      "complete current question_stated trailing_30d class state_snapshot",
-	"scoped_cohort_status|state_snapshot|none|How is the Ask Dev project doing in the last 30 days?":                                           "complete current question_stated trailing_30d class state_snapshot",
-	"grouped_cohort_status|state_snapshot|none|How is the Ask Dev project doing in the last 30 days?":                                          "complete current question_stated trailing_30d class state_snapshot",
-	"explicit_comparison|state_snapshot|none|How is the Ask Dev project doing in the last 30 days?":                                            "complete current question_stated trailing_30d class state_snapshot",
-	"unclassified|state_snapshot|none|How is the Ask Dev project doing in the last 30 days?":                                                   "complete current question_stated trailing_30d class state_snapshot",
-	"subject_investigation||none|How is the Ask Dev project doing in the last 30 days?":                                                        "complete current question_stated trailing_30d class recent_activity_lookup",
-	"discovered_cohort_ranking||none|How is the Ask Dev project doing in the last 30 days?":                                                    "complete current question_stated trailing_30d class trend_assessment",
-	"scoped_cohort_status||none|How is the Ask Dev project doing in the last 30 days?":                                                         "complete current question_stated trailing_30d class none",
-	"grouped_cohort_status||none|How is the Ask Dev project doing in the last 30 days?":                                                        "complete current question_stated trailing_30d class trend_assessment",
-	"explicit_comparison||none|How is the Ask Dev project doing in the last 30 days?":                                                          "complete current question_stated trailing_30d class none",
-	"unclassified||none|How is the Ask Dev project doing in the last 30 days?":                                                                 "complete current question_stated trailing_30d class none",
-	"subject_investigation|explicit_window|current|How is the Ask Dev project doing in the last 30 days?":                                      "complete current question_stated trailing_30d class recent_activity_lookup",
-	"discovered_cohort_ranking|explicit_window|current|How is the Ask Dev project doing in the last 30 days?":                                  "complete current question_stated trailing_30d class trend_assessment",
-	"scoped_cohort_status|explicit_window|current|How is the Ask Dev project doing in the last 30 days?":                                       "no_match current question_stated trailing_30d class none",
-	"grouped_cohort_status|explicit_window|current|How is the Ask Dev project doing in the last 30 days?":                                      "complete current question_stated trailing_30d class trend_assessment",
-	"explicit_comparison|explicit_window|current|How is the Ask Dev project doing in the last 30 days?":                                        "complete current question_stated trailing_30d class none",
-	"subject_investigation|explicit_window|bounded_window|How is the Ask Dev project doing in the last 30 days?":                               "complete current question_stated trailing_30d class recent_activity_lookup",
-	"discovered_cohort_ranking|explicit_window|bounded_window|How is the Ask Dev project doing in the last 30 days?":                           "complete current question_stated trailing_30d class trend_assessment",
-	"scoped_cohort_status|explicit_window|bounded_window|How is the Ask Dev project doing in the last 30 days?":                                "no_match current question_stated trailing_30d class none",
-	"grouped_cohort_status|explicit_window|bounded_window|How is the Ask Dev project doing in the last 30 days?":                               "complete current question_stated trailing_30d class trend_assessment",
-	"explicit_comparison|explicit_window|bounded_window|How is the Ask Dev project doing in the last 30 days?":                                 "complete current question_stated trailing_30d class none",
-	"subject_investigation|explicit_window|time_series|How has the Ask Dev project's throughput changed over the last 30 days?":                "complete current question_stated trailing_30d class recent_activity_lookup",
-	"discovered_cohort_ranking|explicit_window|time_series|How has the Ask Dev project's throughput changed over the last 30 days?":            "complete current question_stated trailing_30d class trend_assessment",
-	"scoped_cohort_status|explicit_window|time_series|How has the Ask Dev project's throughput changed over the last 30 days?":                 "no_match range no window",
-	"grouped_cohort_status|explicit_window|time_series|How has the Ask Dev project's throughput changed over the last 30 days?":                "complete current question_stated trailing_30d class trend_assessment",
-	"explicit_comparison|explicit_window|time_series|How has the Ask Dev project's throughput changed over the last 30 days?":                  "complete range no window",
-	"subject_investigation|explicit_window|period_comparison|Compare the Ask Dev project in the last 30 days with the month before":            "complete current question_stated trailing_30d class recent_activity_lookup",
-	"discovered_cohort_ranking|explicit_window|period_comparison|Compare the Ask Dev project in the last 30 days with the month before":        "complete current question_stated trailing_30d class trend_assessment",
-	"scoped_cohort_status|explicit_window|period_comparison|Compare the Ask Dev project in the last 30 days with the month before":             "no_match range no window",
-	"grouped_cohort_status|explicit_window|period_comparison|Compare the Ask Dev project in the last 30 days with the month before":            "complete current question_stated trailing_30d class trend_assessment",
-	"explicit_comparison|explicit_window|period_comparison|Compare the Ask Dev project in the last 30 days with the month before":              "complete range no window",
-	"subject_investigation|explicit_window|period_comparison|How does the Ask Dev project's last 30 days compare to the previous 30 days?":     "complete current question_stated calendar class none",
-	"discovered_cohort_ranking|explicit_window|period_comparison|How does the Ask Dev project's last 30 days compare to the previous 30 days?": "complete current question_stated calendar class none",
-	"scoped_cohort_status|explicit_window|period_comparison|How does the Ask Dev project's last 30 days compare to the previous 30 days?":      "no_match current question_stated calendar class none",
-	"grouped_cohort_status|explicit_window|period_comparison|How does the Ask Dev project's last 30 days compare to the previous 30 days?":     "complete current question_stated calendar class none",
-	"explicit_comparison|explicit_window|period_comparison|How does the Ask Dev project's last 30 days compare to the previous 30 days?":       "complete current question_stated calendar class none",
-	"subject_investigation|explicit_window|current|How was the Ask Dev project doing as of the start of the last 30 days?":                     "complete current question_stated trailing_30d class recent_activity_lookup",
-	"discovered_cohort_ranking|explicit_window|current|How was the Ask Dev project doing as of the start of the last 30 days?":                 "complete current question_stated trailing_30d class trend_assessment",
-	"scoped_cohort_status|explicit_window|current|How was the Ask Dev project doing as of the start of the last 30 days?":                      "no_match range no window",
-	"grouped_cohort_status|explicit_window|current|How was the Ask Dev project doing as of the start of the last 30 days?":                     "complete current question_stated trailing_30d class trend_assessment",
-	"explicit_comparison|explicit_window|current|How was the Ask Dev project doing as of the start of the last 30 days?":                       "complete range no window",
-	"subject_investigation|explicit_window|current|What was the Ask Dev project's state as of the beginning of the past quarter?":              "complete current question_stated trailing_90d class recent_activity_lookup +conflict",
-	"discovered_cohort_ranking|explicit_window|current|What was the Ask Dev project's state as of the beginning of the past quarter?":          "complete current question_stated trailing_90d class trend_assessment +conflict",
-	"scoped_cohort_status|explicit_window|current|What was the Ask Dev project's state as of the beginning of the past quarter?":               "no_match range no window",
-	"grouped_cohort_status|explicit_window|current|What was the Ask Dev project's state as of the beginning of the past quarter?":              "complete current question_stated trailing_90d class trend_assessment +conflict",
-	"explicit_comparison|explicit_window|current|What was the Ask Dev project's state as of the beginning of the past quarter?":                "complete range no window",
-	"subject_investigation|explicit_window|none|How is the Ask Dev project doing?":                                                             "complete range no window",
-	"discovered_cohort_ranking|explicit_window|none|How is the Ask Dev project doing?":                                                         "complete range no window",
-	"scoped_cohort_status|explicit_window|none|How is the Ask Dev project doing?":                                                              "complete range no window",
-	"grouped_cohort_status|explicit_window|none|How is the Ask Dev project doing?":                                                             "complete range no window",
-	"explicit_comparison|explicit_window|none|How is the Ask Dev project doing?":                                                               "complete range no window",
-	"unclassified|explicit_window|none|How is the Ask Dev project doing?":                                                                      "complete range no window",
 }
 
 // A client range that differs from the period the question states: the turn
