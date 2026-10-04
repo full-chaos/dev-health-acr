@@ -600,17 +600,17 @@ func applyAcrValues(op *OperationPolicy, tree map[string]any, orgID string) erro
 // 200). The parent object is created when absent.
 func applyCostClamps(op *OperationPolicy, tree map[string]any) error {
 	for _, rule := range op.Variables {
-		if !rule.Allowed || rule.Source != SourceClient || rule.Max == nil || strings.Contains(rule.Path, "[*]") || baseTypeName(rule.Type) != "Int" {
+		if !rule.Allowed || rule.Source != SourceClient || strings.Contains(rule.Path, "[*]") || baseTypeName(rule.Type) != "Int" {
 			continue
 		}
-		var def int64
-		if _, err := fmt.Sscan(rule.Default, &def); err != nil || def <= *rule.Max {
+		effective := rule.EffectiveDefault()
+		if effective == rule.Default {
 			continue
 		}
 		if f := lookupOne(tree, rule.Path); !isNullish(f) {
 			continue
 		}
-		if err := setPath(tree, rule.Path, json.Number(fmt.Sprint(*rule.Max))); err != nil {
+		if err := setPath(tree, rule.Path, json.Number(effective)); err != nil {
 			return err
 		}
 	}

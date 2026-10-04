@@ -439,6 +439,27 @@ type NotServedOperation struct {
 	Reason string      `json:"reason"`
 }
 
+// EffectiveDefault is the default a client can rely on when it omits the
+// variable: the generated SDL default, moved into [Min, Max] for an integer.
+// data_catalog, the schema view and the cost clamp all read it, so the
+// advertised value and the applied value cannot differ.
+func (r VariableRule) EffectiveDefault() string {
+	if baseTypeName(r.Type) != "Int" {
+		return r.Default
+	}
+	var v int64
+	if _, err := fmt.Sscan(r.Default, &v); err != nil || fmt.Sprint(v) != r.Default {
+		return r.Default
+	}
+	if r.Max != nil && v > *r.Max {
+		v = *r.Max
+	}
+	if r.Min != nil && v < *r.Min {
+		v = *r.Min
+	}
+	return fmt.Sprint(v)
+}
+
 // Catalogue is a loaded, validated artifact.
 type Catalogue struct {
 	file      CatalogueFile

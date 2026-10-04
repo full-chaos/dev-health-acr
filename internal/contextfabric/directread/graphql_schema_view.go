@@ -139,7 +139,7 @@ func BuildCatalogSchema(policy *GraphQLPolicy, class CallerClass, servable, gate
 						continue
 					}
 					seen[path] = true
-					v := CatalogVariable{Path: path, Type: rule.Type, Default: rule.Default, Min: rule.Min, Max: rule.Max, MaxItems: rule.MaxItems, MaxLength: rule.MaxLength}
+					v := CatalogVariable{Path: path, Type: rule.Type, Default: rule.EffectiveDefault(), Min: rule.Min, Max: rule.Max, MaxItems: rule.MaxItems, MaxLength: rule.MaxLength}
 					if rule.Kind == VariableKindEnum {
 						v.EnumValues = append([]string{}, rule.AllowedValues...)
 					}
