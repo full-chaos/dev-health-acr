@@ -3,7 +3,6 @@ package devhealthfacts
 import (
 	"context"
 	"slices"
-	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -136,7 +135,7 @@ func (p *IncidentsProvider) readTeamRollup(ctx context.Context, orgID string, or
 	if err != nil {
 		return outcome, err
 	}
-	window := resolveRollupWindow(timeBound, evidence, time.Now())
+	window := resolveRollupWindow(timeBound, evidence, clock())
 	byRepo := map[string]incidentRollupRepo{}
 	incidentTime := "ifNull(i.started_at, i.observed_at)"
 	if repoKeys := repoKeysOf(owned); len(repoKeys) > 0 {

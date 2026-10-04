@@ -1017,8 +1017,8 @@ type SynthesisInput struct {
 	// EvidenceWindow is the window the answer speaks for. Engine bookkeeping
 	// for ranking facts when the input is bounded; it never reaches the model.
 	EvidenceWindow *contractsv1.ContextFabricEffectiveEvidenceWindow `json:"-"`
-	// ReadTimeClamps are the instants this turn's clock wrote into a time
-	// context when it pulled a future instant back to the time of its read.
-	// Engine bookkeeping; the client input leaves out an instant equal to one.
-	ReadTimeClamps []time.Time `json:"-"`
+	// ReadTimeClamp is what this turn's clock wrote into the time context
+	// when it pulled a future instant back to the time of its read. Engine
+	// bookkeeping; the client input leaves those instants out.
+	ReadTimeClamp ReadTimeClamp `json:"-"`
 }

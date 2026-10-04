@@ -1,8 +1,6 @@
 package devhealthfacts
 
 import (
-	"time"
-
 	"context"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -204,7 +202,7 @@ func (p *DeploymentsProvider) readTeamRollup(ctx context.Context, orgID string, 
 	if err != nil {
 		return outcome, err
 	}
-	window := resolveRollupWindow(timeBound, evidence, time.Now())
+	window := resolveRollupWindow(timeBound, evidence, clock())
 	byRepo := map[string]deploymentRollupRepo{}
 	if repoKeys := repoKeysOf(owned); len(repoKeys) > 0 {
 		statement := `SELECT toString(repo_id), toInt64(win_deployments), toInt64(win_failed), toInt64(win_days), toString(day), toUInt8(isNotNull(deploy_time)), toFloat64(ifNull(deploy_time, 0)), toUInt8(isNotNull(lead_time)), toFloat64(ifNull(lead_time, 0))

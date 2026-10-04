@@ -63,6 +63,12 @@ type ClientFlowInputs struct {
 	// out when they hold the time a turn looked (synthesisprompt).
 	SynthesisObservationPaths []string
 	SourceWatermarkField      string
+	ClientWindowField         string
+	ClientWindowRelativeID    string
+	FactWindowStart           string
+	FactWindowEnd             string
+	FactWindowBasis           string
+	FactWindowDefaultTrailing string
 	SynthesisContractFields   []string
 	SynthesisSourceField      string
 	SynthesisVersionField     string
@@ -149,6 +155,12 @@ func clientFlowInputs() ClientFlowInputs {
 		},
 		SynthesisObservationPaths: synthesisprompt.ClientInputObservationPaths(),
 		SourceWatermarkField:      jsonName(sourceObservation, "Watermark"),
+		ClientWindowField:         jsonName(reflect.TypeOf(synthesisprompt.ClientInput{}), "EvidenceWindow"),
+		ClientWindowRelativeID:    jsonName(reflect.TypeOf(synthesisprompt.ClientEvidenceWindow{}), "RelativeID"),
+		FactWindowStart:           contextfabric.FactFieldWindowStart,
+		FactWindowEnd:             contextfabric.FactFieldWindowEnd,
+		FactWindowBasis:           contextfabric.FactFieldWindowBasis,
+		FactWindowDefaultTrailing: contextfabric.FactWindowBasisDefaultTrailing,
 		SynthesisContractFields: []string{
 			jsonName(synthesisContract, "PromptVersion"), jsonName(synthesisContract, "ModelOutputVersion"), jsonName(synthesisContract, "SystemSHA256"),
 		},
@@ -208,7 +220,8 @@ func buildClientInterpretation(c ClientFlowInputs) (string, error) {
 		return "", fmt.Errorf("guidegen: client interpretation contract fields or prompt meta keys are missing")
 	}
 	if len(c.SynthesisInputFields) != 5 || len(c.SynthesisContractFields) != 3 || c.SynthesisMaxBytes <= 0 ||
-		len(c.SynthesisObservationPaths) == 0 || slices.Contains(c.SynthesisObservationPaths, "") || c.SourceWatermarkField == "" {
+		len(c.SynthesisObservationPaths) == 0 || slices.Contains(c.SynthesisObservationPaths, "") || c.SourceWatermarkField == "" ||
+		c.ClientWindowField == "" || c.ClientWindowRelativeID == "" || c.FactWindowStart == "" || c.FactWindowEnd == "" || c.FactWindowBasis == "" || c.FactWindowDefaultTrailing == "" {
 		return "", fmt.Errorf("guidegen: client interpretation synthesis input fields or size bound are missing")
 	}
 	for i, field := range append(slices.Clone(c.SynthesisInputFields), c.SynthesisContractFields...) {
@@ -280,9 +293,16 @@ func buildClientInterpretation(c ClientFlowInputs) (string, error) {
 	b.WriteString("\n## Write the answer on your own model\n\n")
 	fmt.Fprintf(&b, "- To write the answer yourself, send %s %s on %s or on %s. The service then makes no synthesis model call.\n",
 		q(c.ArgSynthesis), q(c.SynthesisModeClient), q(c.ServerSideTool), q(c.InterpretTool))
-	fmt.Fprintf(&b, "- The answer then carries %s with five fields: %s. The field %s holds %s, the same values as the `_meta` of the synthesis prompt. The field %s is the model input, bounded to the default byte bound. It holds no time at which the turn looked: of the paths %s, the first is always left out (the time we read the source; its freshness is the %s, which stays), and a time context instant is left out only when we pulled a future instant back to the time of our read (the span then runs to the read). Apart from those times, when %s is false it is byte for byte what the service would have sent its own synthesis model. When %s is true, facts were cut to fit the bound, and the service's own model can be given more.\n",
-		q(c.SynthesisInputField), strings.Join(quoteAll(c.SynthesisInputFields), ", "), q(c.SynthesisInputFields[0]), strings.Join(quoteAll(c.SynthesisContractFields), ", "), q(c.SynthesisInputFields[1]), strings.Join(quoteAll(c.SynthesisObservationPaths), ", "), q(c.SourceWatermarkField), q(c.SynthesisInputFields[3]), q(c.SynthesisInputFields[3]))
-	fmt.Fprintf(&b, "- %s is the sha256 of %s. Two calls over the same facts give the same %s and the same %s. A change in a fact, a source state, a watermark, the question or the interpretation changes it.\n",
+	fmt.Fprintf(&b, "- The answer then carries %s with five fields: %s. The field %s holds %s, the same values as the `_meta` of the synthesis prompt. The field %s is the model input, bounded to the default byte bound.\n",
+		q(c.SynthesisInputField), strings.Join(quoteAll(c.SynthesisInputFields), ", "), q(c.SynthesisInputFields[0]), strings.Join(quoteAll(c.SynthesisContractFields), ", "), q(c.SynthesisInputFields[1]))
+	fmt.Fprintf(&b, "- %s names the window the facts were read over in %s: a relative window by its %s and class only, because its bounds move with the clock; a stated window with its bounds.\n",
+		q(c.SynthesisInputFields[1]), q(c.ClientWindowField), q(c.ClientWindowRelativeID))
+	fmt.Fprintf(&b, "- %s holds no time at which the turn looked. Of the paths %s: %s is always left out (the time we read the source; its freshness is the %s, which stays); an instant of the time context or of %s is left out only when we pulled a future instant back to the time of our read (the span then runs to the read); a fact's %s and %s are left out when its %s is %s or the value is a bound we resolved from our clock. A stated value always stays.\n",
+		q(c.SynthesisInputFields[1]), strings.Join(quoteAll(c.SynthesisObservationPaths), ", "), q(c.SynthesisObservationPaths[0]), q(c.SourceWatermarkField), q(c.ClientWindowField),
+		q(c.FactWindowStart), q(c.FactWindowEnd), q(c.FactWindowBasis), q(c.FactWindowDefaultTrailing))
+	fmt.Fprintf(&b, "- Apart from those times and the window, when %s is false %s is byte for byte what the service would have sent its own synthesis model. When %s is true, facts were cut to fit the bound, and the service's own model can be given more.\n",
+		q(c.SynthesisInputFields[3]), q(c.SynthesisInputFields[1]), q(c.SynthesisInputFields[3]))
+	fmt.Fprintf(&b, "- %s is the sha256 of %s. Two calls over the same facts and the same window give the same %s and the same %s. A change in a fact, a source state, a watermark, the window, the question or the interpretation changes it.\n",
 		q(c.SynthesisInputFields[2]), q(c.SynthesisInputFields[1]), q(c.SynthesisInputFields[1]), q(c.SynthesisInputFields[2]))
 	fmt.Fprintf(&b, "- Call `prompts/get` for the prompt %s, with no arguments. Its one message is the system message. Run it on your model with %s as the user message. The reply follows the schema resource %s. Follow the writing %s. The prompt and the schema are served to a caller with either %s or %s.\n",
 		q(c.SynthesisPrompt), q(c.SynthesisInputFields[1]), q(c.SynthesisOutputURI), q(c.SynthesisInputFields[4]), q(c.ServerSideTool), q(c.InterpretTool))
@@ -310,7 +330,7 @@ func buildClientInterpretation(c ClientFlowInputs) (string, error) {
 		q(c.SynthesisVersionField), q(c.StatusField), q(c.StatusComplete), strings.Join(quoteAll(c.TextFields), ", "), q(c.SynthesisInputField))
 	fmt.Fprintf(&b, "- **The contract is not the current one.** Status %d, code %s, with %s: `mismatch` lists the fields that are absent or differ, and `current` holds the three current values. Send the first call again to get a new %s, and fetch the prompt %s again.\n",
 		StatusContractRefused, q(CodeContractRefused), q("details."+c.SynthesisContractDetailsKey), q(c.SynthesisInputField), q(c.SynthesisPrompt))
-	fmt.Fprintf(&b, "- **The input changed.** Status %d, code %s, with %s %s and %s: the new input. The facts or the question changed between your two calls. Run your model again on the new input, then send the write-back again. The tool result is an error that names the reason. It carries the new %s as JSON in a second content block.\n",
+	fmt.Fprintf(&b, "- **The input changed.** Status %d, code %s, with %s %s and %s: the new input. The facts, the window or the question changed between your two calls. Run your model again on the new input, then send the write-back again. The tool result is an error that names the reason. It carries the new %s as JSON in a second content block.\n",
 		StatusInputChanged, q(CodeContractRefused), q("details."+c.ReasonKey), q(c.ReasonInputChanged), q("details."+c.InputChangedDetailsKey), q(c.SynthesisInputField))
 	fmt.Fprintf(&b, "- **The draft is rejected.** Status %d, code %s, with %s: one closed word that names the check that failed, for example a claim that does not match a fact, or a subject that is not in the input. We store nothing, we do not retry, and we do not use our own model. Correct the draft against the facts and send it again. The tool reports it with the category `validation`.\n",
 		StatusDraftRejected, q(CodeSynthesisRejected), q("details."+c.RejectionReasonKey))

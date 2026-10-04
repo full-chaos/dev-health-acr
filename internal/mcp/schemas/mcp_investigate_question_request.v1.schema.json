@@ -242,7 +242,7 @@
       "enum": [
         "client"
       ],
-      "description": "Optional. Send client to have the service skip its own answer writing and return synthesis_input: the model input for your own model, bounded in size (byte for byte the service's own input when its bounded flag is false), to be run with the prompt synthesize_answer (the input is the user message). The stored result then carries facts and evidence only, with no model-written text. Leave it out for the service-written answer."
+      "description": "Optional. Send client to have the service skip its own answer writing and return synthesis_input: the model input for your own model, bounded in size (the service's own input without the times at which the turn looked and with the evidence window named, when its bounded flag is false), to be run with the prompt synthesize_answer (the input is the user message). The stored result then carries facts and evidence only, with no model-written text. Leave it out for the service-written answer."
     }
   },
   "$defs": {

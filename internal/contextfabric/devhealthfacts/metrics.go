@@ -308,7 +308,7 @@ func (p *MetricsProvider) readRepositoryMetrics(ctx context.Context, orgID strin
 		// metricsSeriesDefaultWindow's own doc comment explains why this
 		// matches the platform's own default evidence-window policy
 		// width, rather than a devhealthfacts-invented number.
-		now := time.Now().UTC()
+		now := clock().UTC()
 		dayPredicate = " AND day >= toDate({series_window_start:DateTime64(6,'UTC')}) AND day <= toDate({series_window_end:DateTime64(6,'UTC')})"
 		extra = []readers.Binding{
 			{Name: "series_window_start", Value: now.Add(-metricsSeriesDefaultWindow)},

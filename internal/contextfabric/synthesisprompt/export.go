@@ -28,7 +28,7 @@ func UserPayload(orgID string, input contextfabric.SynthesisInput, maxBytes int)
 	return encodeBounded(InputFromDomain(orgID, input), maxBytes)
 }
 
-func encodeBounded(payload Input, maxBytes int) ([]byte, error) {
+func encodeBounded(payload any, maxBytes int) ([]byte, error) {
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("encode bounded model input: %w", err)

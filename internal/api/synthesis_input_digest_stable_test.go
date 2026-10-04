@@ -268,31 +268,121 @@ func TestWriteBackAfterAStatedSpanChangedIsRefused(t *testing.T) {
 	}
 }
 
-// TestWriteBackAfterOnlyTheWindowChangedIsServed records a known gap: the
-// effective evidence window is not part of the synthesis input, so a call 2
-// that names another window over the same facts gives the same digest and
-// the draft is served under the other window. When the window is bound into
-// the digest, this test must change to expect 409 input_changed.
-func TestWriteBackAfterOnlyTheWindowChangedIsServed(t *testing.T) {
-	rig := newWriteBackRouteRig(t)
-	first := rig.firstCall(t)
-	if first.EffectiveEvidenceWindow == nil || first.EffectiveEvidenceWindow.RelativeID != contextfabric.RelativeWindowTrailing90D {
-		t.Fatalf("call 1 window = %+v, want trailing_90d", first.EffectiveEvidenceWindow)
-	}
-	rig.advance(4 * time.Minute)
-	recorder := rig.post(t, func(body *contractsv1.ContextFabricInvestigationRequest) {
-		body.TimeContext.EvidenceWindow = &contractsv1.ContextFabricRequestedEvidenceWindow{RelativeID: contextfabric.RelativeWindowTrailing30D}
-		body.SuppliedSynthesis = &contractsv1.ContextFabricSuppliedSynthesis{
-			Output: writeBackOutputJSON(t, writeBackDraft(rig.project, writeBackMarker)), ModelOutputVersion: first.SynthesisInput.Contract.ModelOutputVersion,
-			PromptVersion: first.SynthesisInput.Contract.PromptVersion, SystemSHA256: first.SynthesisInput.Contract.SystemSHA256,
-			InputSHA256: first.SynthesisInput.InputSHA256, ClientModel: "writer-model-1",
+func TestWriteBackAfterOnlyTheWindowChangedIsRefused(t *testing.T) {
+	stated := func(start, end string) *contractsv1.ContextFabricRequestedEvidenceWindow {
+		from, err := time.Parse(time.RFC3339, start)
+		if err != nil {
+			t.Fatal(err)
 		}
-	})
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d body=%s: the gap this test records is closed; expect 409 input_changed here now", recorder.Code, recorder.Body.String())
+		to, err := time.Parse(time.RFC3339, end)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &contractsv1.ContextFabricRequestedEvidenceWindow{Start: &from, End: &to}
 	}
-	served := decodeEnvelope(t, recorder)
-	if served.EffectiveEvidenceWindow == nil || served.EffectiveEvidenceWindow.RelativeID != contextfabric.RelativeWindowTrailing30D {
-		t.Fatalf("served window = %+v, want trailing_30d", served.EffectiveEvidenceWindow)
+	cases := map[string]struct {
+		first, second *contractsv1.ContextFabricRequestedEvidenceWindow
+	}{
+		"trailing 90 days to trailing 30 days": {
+			&contractsv1.ContextFabricRequestedEvidenceWindow{RelativeID: contextfabric.RelativeWindowTrailing90D},
+			&contractsv1.ContextFabricRequestedEvidenceWindow{RelativeID: contextfabric.RelativeWindowTrailing30D},
+		},
+		"a relative window to a stated one": {
+			&contractsv1.ContextFabricRequestedEvidenceWindow{RelativeID: contextfabric.RelativeWindowTrailing30D},
+			stated("2026-07-13T12:00:00Z", "2026-08-12T12:00:00Z"),
+		},
+		"a stated window that moved": {
+			stated("2026-07-01T00:00:00Z", "2026-08-01T00:00:00Z"),
+			stated("2026-07-02T00:00:00Z", "2026-08-01T00:00:00Z"),
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			rig := newWriteBackRouteRig(t)
+			first := decodeEnvelope(t, rig.post(t, func(body *contractsv1.ContextFabricInvestigationRequest) {
+				body.TimeContext.EvidenceWindow = tc.first
+			}))
+			if first.SynthesisInput == nil {
+				t.Fatal("call 1 returned no synthesis input")
+			}
+			rig.advance(4 * time.Minute)
+			savedBefore := rig.store.count()
+			recorder := rig.post(t, func(body *contractsv1.ContextFabricInvestigationRequest) {
+				body.TimeContext.EvidenceWindow = tc.second
+				body.SuppliedSynthesis = &contractsv1.ContextFabricSuppliedSynthesis{
+					Output: writeBackOutputJSON(t, writeBackDraft(rig.project, writeBackMarker)), ModelOutputVersion: first.SynthesisInput.Contract.ModelOutputVersion,
+					PromptVersion: first.SynthesisInput.Contract.PromptVersion, SystemSHA256: first.SynthesisInput.Contract.SystemSHA256,
+					InputSHA256: first.SynthesisInput.InputSHA256, ClientModel: "writer-model-1",
+				}
+			})
+			body := decodeRefusal(t, recorder, http.StatusConflict, "invalid_request")
+			if got := detailString(t, body, "reason"); got != contractsv1.ContextFabricSuppliedSynthesisReasonInputChanged {
+				t.Fatalf("reason = %q, want input_changed", got)
+			}
+			if rig.store.count() != savedBefore {
+				t.Fatal("a refused write-back saved a result")
+			}
+		})
+	}
+}
+
+func TestTheSameWindowGivesOneInputDigestAcrossAMovingClock(t *testing.T) {
+	from, to := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	for name, window := range map[string]*contractsv1.ContextFabricRequestedEvidenceWindow{
+		"relative": {RelativeID: contextfabric.RelativeWindowTrailing30D},
+		"stated":   {Start: &from, End: &to},
+		"all time": {RelativeID: contractsv1.ContextFabricRelativeWindowAllTime},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rig := newWriteBackRouteRig(t)
+			edit := func(body *contractsv1.ContextFabricInvestigationRequest) { body.TimeContext.EvidenceWindow = window }
+			first := decodeEnvelope(t, rig.post(t, edit))
+			rig.advance(6 * time.Minute)
+			second := decodeEnvelope(t, rig.post(t, edit))
+			if first.SynthesisInput == nil || second.SynthesisInput == nil {
+				t.Fatal("a first call returned no synthesis input")
+			}
+			if first.SynthesisInput.InputSHA256 != second.SynthesisInput.InputSHA256 {
+				t.Fatalf("input_sha256 differs:\n%s\n%s", first.SynthesisInput.Input, second.SynthesisInput.Input)
+			}
+			var decoded map[string]json.RawMessage
+			if err := json.Unmarshal(first.SynthesisInput.Input, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if _, present := decoded["evidence_window"]; !present {
+				t.Fatalf("the input does not name its window: %s", first.SynthesisInput.Input)
+			}
+		})
+	}
+}
+
+func TestAPeriodTheQuestionNamesGivesOneInputDigestAcrossAMovingClock(t *testing.T) {
+	rig := newWriteBackRouteRig(t)
+	edit := func(body *contractsv1.ContextFabricInvestigationRequest) {
+		spanInterpretation(futureEndingRange)(body)
+		body.Question = "Why was the payments ledger service not ready to ship last month?"
+		body.Consumer.Surface = "mcp"
+	}
+	first := decodeEnvelope(t, rig.post(t, edit))
+	rig.advance(8 * time.Minute)
+	second := decodeEnvelope(t, rig.post(t, edit))
+	if first.SynthesisInput == nil || second.SynthesisInput == nil {
+		t.Fatal("a first call returned no synthesis input")
+	}
+	window := first.EffectiveEvidenceWindow
+	if window == nil || window.RelativeID != "" || window.Start == nil || !window.Start.Equal(time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)) || window.End == nil || !window.End.Before(time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("effective window = %+v: the turn did not take the period from the interpretation", window)
+	}
+	if first.SynthesisInput.InputSHA256 != second.SynthesisInput.InputSHA256 {
+		t.Fatalf("input_sha256 differs:\n%s\n%s", first.SynthesisInput.Input, second.SynthesisInput.Input)
+	}
+	var decoded struct {
+		EvidenceWindow map[string]any `json:"evidence_window"`
+	}
+	if err := json.Unmarshal(first.SynthesisInput.Input, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.EvidenceWindow["start"] != "2026-08-01T00:00:00Z" || decoded.EvidenceWindow["end"] != nil {
+		t.Fatalf("evidence_window = %v, want the stated start and no end", decoded.EvidenceWindow)
 	}
 }

@@ -236,7 +236,7 @@ func systemSHA(t *testing.T) string {
 // A client turn through the real route: no synthesize call, a partial result
 // with no model-written content, and a synthesis input that is, byte for byte,
 // what the same question sent to the service's own model in server mode.
-func TestClientSynthesisTurnReturnsTheExactInputTheServerModelIsGiven(t *testing.T) {
+func TestClientSynthesisTurnReturnsTheClientFormOfTheServerModelInput(t *testing.T) {
 	client := newClientRouteRig(t, singleSubjectFixture())
 	envelope := decodeEnvelope(t, client.post(t, contractsv1.ContextFabricSynthesisModeClient, nil))
 	if _, synthesizes := client.model.counts(); synthesizes != 0 {
@@ -266,16 +266,35 @@ func TestClientSynthesisTurnReturnsTheExactInputTheServerModelIsGiven(t *testing
 		t.Fatalf("server synthesize calls = %d, want 1", synthesizes)
 	}
 	given := server.model.synthesized[0]
-	want, err := synthesisprompt.UserPayload(callerOrgID, given, contractsv1.ContextFabricSynthesisInputDefaultMaxBytes)
+	want, err := synthesisprompt.ClientPayload(callerOrgID, given, contractsv1.ContextFabricSynthesisInputDefaultMaxBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(bundle.Input) != string(want) {
-		t.Fatalf("client input differs from the server model input\nclient: %s\nserver: %s", bundle.Input, want)
+		t.Fatalf("client input is not the client form of the server model input\nclient: %s\nwant:   %s", bundle.Input, want)
 	}
 	sum := sha256.Sum256(want)
 	if bundle.InputSHA256 != hex.EncodeToString(sum[:]) {
-		t.Fatalf("input_sha256 = %s, want the sha256 of the server model input", bundle.InputSHA256)
+		t.Fatalf("input_sha256 = %s, want the sha256 of the client input", bundle.InputSHA256)
+	}
+	serverInput, err := synthesisprompt.UserPayload(callerOrgID, given, contractsv1.ContextFabricSynthesisInputDefaultMaxBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var clientKeys, serverKeys map[string]json.RawMessage
+	if err := json.Unmarshal(bundle.Input, &clientKeys); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(serverInput, &serverKeys); err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range serverKeys {
+		if key == "coverage" || key == "canonical_facts" || key == "interpretation" {
+			continue
+		}
+		if string(clientKeys[key]) != string(value) {
+			t.Fatalf("client input %s = %s, want the server model's %s", key, clientKeys[key], value)
+		}
 	}
 	if serverEnvelope.Versions.SynthesisSource != contractsv1.ContextFabricSynthesisSourceServer {
 		t.Fatalf("server turn synthesis_source = %q, want server", serverEnvelope.Versions.SynthesisSource)
