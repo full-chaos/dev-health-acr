@@ -3180,6 +3180,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		graphContext, err = e.graph.DiscoverContext(ctx, principal, GraphDiscoveryRequest{
 			Request: graphRequest, Interpretation: interpretation, Resolution: resolution, Binding: binding,
 			ScopeAnchorResolved: scopeAnchorResolved(familyOutcome),
+			ScopeAnchorKind:     ScopeAnchorRetrievalKind(familyOutcome.Frame, familyOutcome.WinningSample.ScopeAnchorKind),
 			// CARRIED, NOT RE-DERIVED (CHAOS-4736 bar 5): the frame comes off
 			// the family outcome this turn's interpretation already produced.
 			// Nothing here reconstructs a frame from the family, from Shape or

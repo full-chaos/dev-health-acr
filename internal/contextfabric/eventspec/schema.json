@@ -3639,6 +3639,102 @@
     ]
   },
   {
+    "id": "contextfabric.ownership_routing",
+    "msg": "context_fabric: ownership routing",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "at most one line per DiscoverContext call, emitted only when the frame asks for the team members of a named anchor",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_routed",
+          "owners",
+          "no_owner",
+          "read_failed"
+        ]
+      },
+      {
+        "key": "anchor_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "anchor_basis",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "bound",
+          "sole_commit"
+        ]
+      },
+      {
+        "key": "committed",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "census",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the ownership read finished (every outcome but not_routed and read_failed)"
+      },
+      {
+        "key": "owners",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the ownership read finished (every outcome but not_routed and read_failed)"
+      },
+      {
+        "key": "truncated",
+        "type": "bool",
+        "presence": "conditional",
+        "applicability": "written when the ownership read finished (every outcome but not_routed and read_failed)"
+      },
+      {
+        "key": "error",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when outcome=read_failed"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.project_deployment_walk",
     "msg": "context_fabric: project deployment walk",
     "level": "info",

@@ -253,7 +253,12 @@ import (
 // the period was not applied when it does not. A candidate saved under v40 for
 // such a question holds members the period never filtered and must not be
 // reused.
-const QueryVersion = "devhealthfacts.clickhouse.v41"
+//
+// v41 -> v42: the teams of a repository named by its label are read from its
+// ownership records, and a team the question text matched is not one of
+// them. A candidate saved under v41 for such a question can hold teams that
+// do not own the repository and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v42"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

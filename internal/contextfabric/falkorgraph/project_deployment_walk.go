@@ -533,10 +533,10 @@ func ProjectDeploymentWalkOutcomeVocabulary() []ProjectDeploymentWalkOutcome {
 	}
 }
 
-// DeploymentAnchorBasisVocabulary returns every declared anchor basis, in
+// AnchorBasisVocabulary returns every declared anchor basis, in
 // declaration order.
-func DeploymentAnchorBasisVocabulary() []DeploymentAnchorBasis {
-	return []DeploymentAnchorBasis{DeploymentAnchorNone, DeploymentAnchorBound, DeploymentAnchorSoleCommit}
+func AnchorBasisVocabulary() []AnchorBasis {
+	return []AnchorBasis{AnchorBasisNone, AnchorBasisBound, AnchorBasisSoleCommit}
 }
 
 // ProjectDeploymentWalkDecision is one decision line of the walk: counts and
@@ -544,7 +544,7 @@ func DeploymentAnchorBasisVocabulary() []DeploymentAnchorBasis {
 type ProjectDeploymentWalkDecision struct {
 	Outcome     ProjectDeploymentWalkOutcome
 	AnchorKind  contextfabric.SubjectKind
-	AnchorBasis DeploymentAnchorBasis
+	AnchorBasis AnchorBasis
 	// Committed is how many subjects the resolution committed.
 	Committed int
 	// Issues, LinkedPullRequests, Members, Denied and Truncated describe a

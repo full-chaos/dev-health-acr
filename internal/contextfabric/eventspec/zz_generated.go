@@ -34,6 +34,7 @@ var ByID = map[string]Event{
 	"contextfabric.frame_validation":                 FrameValidation,
 	"contextfabric.graphql_query":                    GraphQLQuery,
 	"contextfabric.operation_read":                   OperationRead,
+	"contextfabric.ownership_routing":                OwnershipRouting,
 	"contextfabric.project_deployment_walk":          ProjectDeploymentWalk,
 	"contextfabric.remembered_window_axis":           RememberedWindowAxis,
 	"contextfabric.requirement_outcome_transition":   RequirementOutcomeTransition,
@@ -1980,6 +1981,74 @@ func (f OperationReadFields) SlogArgs() []any {
 		"upstream_status", f.UpstreamStatus,
 		"graphql_code", contextfabric.SanitizeLogAttr(f.GraphqlCode),
 		"variable", contextfabric.SanitizeLogAttr(f.Variable),
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// OwnershipRoutingFields is contextfabric.ownership_routing's generated typed construction interface
+// (CHAOS-5516): one Go field per Field OwnershipRouting.Fields declares in spec.go.
+type OwnershipRoutingFields struct {
+	OrgID       string
+	Outcome     string
+	AnchorKind  string
+	AnchorBasis string
+	Committed   int
+	Census      int
+	Owners      int
+	Truncated   bool
+	Error       string
+	RequestID   string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every OwnershipRoutingFields uniformly, set ONLY by NewOwnershipRoutingFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewOwnershipRoutingFields is the generated constructor for OwnershipRoutingFields -- every
+// field OwnershipRouting.Fields declares is a required parameter.
+func NewOwnershipRoutingFields(orgID string, outcome string, anchorKind string, anchorBasis string, committed int, census int, owners int, truncated bool, error string, requestID string) OwnershipRoutingFields {
+	return OwnershipRoutingFields{
+		OrgID:       orgID,
+		Outcome:     outcome,
+		AnchorKind:  anchorKind,
+		AnchorBasis: anchorBasis,
+		Committed:   committed,
+		Census:      census,
+		Owners:      owners,
+		Truncated:   truncated,
+		Error:       error,
+		RequestID:   requestID,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewOwnershipRoutingFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f OwnershipRoutingFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns OwnershipRouting's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f OwnershipRoutingFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"anchor_kind", contextfabric.SanitizeLogAttr(f.AnchorKind),
+		"anchor_basis", contextfabric.SanitizeLogAttr(f.AnchorBasis),
+		"committed", f.Committed,
+		"census", f.Census,
+		"owners", f.Owners,
+		"truncated", f.Truncated,
+		"error", contextfabric.SanitizeLogAttr(f.Error),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }
