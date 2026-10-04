@@ -2139,6 +2139,7 @@ var WorkItemReuse = Event{
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"reading_unavailable", "payload_rejected", "census_unavailable", "digest_changed", "anchor_unavailable", "membership_unavailable", "membership_changed", "coverage_invalid", "hit"}},
+		{Key: "reject_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.SemanticStatePersistenceLineVocabulary("reject_reason")},
 		{Key: "semantic_read", Type: FieldString, Presence: PresenceRequired},
 		{Key: "census_read", Type: FieldString, Presence: PresenceRequired},
 		{Key: "requested_team_ids", Type: FieldStringSlice, Presence: PresenceRequired},

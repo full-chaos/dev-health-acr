@@ -3417,6 +3417,7 @@ func (f WorkItemMembershipS1Fields) SlogArgs() []any {
 type WorkItemReuseFields struct {
 	OrgID            string
 	Decision         string
+	RejectReason     string
 	SemanticRead     string
 	CensusRead       string
 	RequestedTeamIDs []string
@@ -3434,7 +3435,7 @@ type WorkItemReuseFields struct {
 
 // NewWorkItemReuseFields is the generated constructor for WorkItemReuseFields -- every
 // field WorkItemReuse.Fields declares is a required parameter.
-func NewWorkItemReuseFields(orgID string, decision string, semanticRead string, censusRead string, requestedTeamIDs []string, requestID string) WorkItemReuseFields {
+func NewWorkItemReuseFields(orgID string, decision string, rejectReason string, semanticRead string, censusRead string, requestedTeamIDs []string, requestID string) WorkItemReuseFields {
 	valid := true
 	if requestedTeamIDs == nil {
 		valid = false
@@ -3442,6 +3443,7 @@ func NewWorkItemReuseFields(orgID string, decision string, semanticRead string, 
 	return WorkItemReuseFields{
 		OrgID:            orgID,
 		Decision:         decision,
+		RejectReason:     rejectReason,
 		SemanticRead:     semanticRead,
 		CensusRead:       censusRead,
 		RequestedTeamIDs: requestedTeamIDs,
@@ -3465,6 +3467,7 @@ func (f WorkItemReuseFields) SlogArgs() []any {
 	return []any{
 		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
 		"decision", contextfabric.SanitizeLogAttr(f.Decision),
+		"reject_reason", contextfabric.SanitizeLogAttr(f.RejectReason),
 		"semantic_read", contextfabric.SanitizeLogAttr(f.SemanticRead),
 		"census_read", contextfabric.SanitizeLogAttr(f.CensusRead),
 		"requested_team_ids", contextfabric.SanitizeLogStrings(f.RequestedTeamIDs),
