@@ -327,7 +327,12 @@ import (
 // the label matched, is answered as a question about that subject with a
 // stated reason and no member count, where it ended as an unresolved anchor.
 // A candidate saved under v55 for such a question must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v59"
+//
+// v59 -> v60: the first sentence of an answer states the status the answer is
+// served with, not the status the model draft carried. A candidate saved under
+// v59 can open with a stronger status than its own served status and must not
+// be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v60"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

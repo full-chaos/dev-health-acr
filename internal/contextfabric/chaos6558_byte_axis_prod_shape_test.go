@@ -88,6 +88,9 @@ type chaos6558Shape struct {
 	// on non-member repositories, so halving the cohort DROPS the removed
 	// team's facts -- the case where a retry can reduce the rows.
 	factsOnMembers bool
+	// composedHead makes the synthesis carry the server-composed head for its
+	// own draft status, as the production synthesizer does.
+	composedHead bool
 	// table selects the claims' row-table declaration: "" is the prod
 	// per-day series, "undated" declares a series keyed on a column that is
 	// not an instant (the rows cannot be dated, so the cut falls back to the
@@ -173,13 +176,19 @@ func chaos6558Engine(t *testing.T, calls *int, telemetry *recordingTelemetry, sh
 					Table: chaos6558SeriesTableFor(shape),
 				})
 			}
+			draftHead := "Two teams lean toward needing attention."
+			draftAnswer := "Two teams appear to need attention, based on available context."
+			if shape.composedHead {
+				draftHead = composeDirectJudgmentFrom(InvestigationComplete, nil, SubjectResolution{})
+				draftAnswer = composeDeterministicAnswerFrom(InvestigationComplete, nil, nil, SubjectResolution{})
+			}
 			return InvestigationResult{
-				Status: InvestigationComplete, DirectJudgment: "Two teams lean toward needing attention.", CurrentState: "Review queues appear to be growing.",
+				Status: InvestigationComplete, DirectJudgment: draftHead, CurrentState: "Review queues appear to be growing.",
 				StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{},
 				ReadinessGaps: []Finding{}, Paths: []RelationshipPath{}, Conflicts: []Finding{},
 				Limitations: []string{}, EvidenceRefIDs: []string{}, ClaimedFacts: claims,
 				Coverage:            Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
-				DeterministicAnswer: "Two teams appear to need attention, based on available context.", Warnings: []string{},
+				DeterministicAnswer: draftAnswer, Warnings: []string{},
 				Versions: VersionSet{
 					Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1",
 					InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1",
