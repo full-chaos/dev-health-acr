@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
@@ -626,5 +627,42 @@ func TestAFailedTeamReadIsAReadFailure(t *testing.T) {
 	}
 	if len(telemetry.projectDeploymentWalks) != 1 || telemetry.projectDeploymentWalks[0].Outcome != ProjectDeploymentWalkReadFailed || telemetry.projectDeploymentWalks[0].AnchorKind != contextfabric.SubjectTeam {
 		t.Fatalf("walk decisions = %+v, want one read_failed decision for the team anchor", telemetry.projectDeploymentWalks)
+	}
+}
+
+// TestATeamsOwnershipIsReadAsOfNowForAQuestionAboutNow: an ownership edge that
+// ended is history; for a question about now the owned-repository read is
+// bound to the adapter clock, and a question's own window is kept.
+func TestATeamsOwnershipIsReadAsOfNowForAQuestionAboutNow(t *testing.T) {
+	s := seedParentDeployments("team")
+	conn := seededGraphConn(s.nodes, s.edges)
+	inner := conn.queryFunc
+	var bound []map[string]interface{}
+	conn.queryFunc = func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if params["fromKind"] == string(contextfabric.SubjectTeam) {
+			bound = append(bound, params)
+		}
+		return inner(ctx, key, cypher, params, readOnly)
+	}
+	adapter := newFakeAdapter(t, conn)
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	adapter.now = func() time.Time { return now }
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:payments", Label: "payments"}
+	if _, err := adapter.anchorDeploymentMembers(context.Background(), "key", "org-1", storage.Principal{OrgID: "org-1"}, contextfabric.RequestedScope{}, anchor, 50, newTemporalFilter(contextfabric.TimeContext{})); err != nil {
+		t.Fatalf("anchorDeploymentMembers() error = %v", err)
+	}
+	start, end := now.Add(-48*time.Hour), now.Add(-24*time.Hour)
+	if _, err := adapter.anchorDeploymentMembers(context.Background(), "key", "org-1", storage.Principal{OrgID: "org-1"}, contextfabric.RequestedScope{}, anchor, 50,
+		newTemporalFilter(contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end})); err != nil {
+		t.Fatalf("anchorDeploymentMembers() error = %v", err)
+	}
+	if len(bound) != 2 {
+		t.Fatalf("%d owned-repository reads, want 2", len(bound))
+	}
+	if bound[0][temporalParamStart] != nsTimestamp(now) || bound[0][temporalParamEnd] != nsTimestamp(now) {
+		t.Errorf("a question about now read ownership under %v..%v, want the adapter clock", bound[0][temporalParamStart], bound[0][temporalParamEnd])
+	}
+	if bound[1][temporalParamStart] != nsTimestamp(start) || bound[1][temporalParamEnd] != nsTimestamp(end) {
+		t.Errorf("a question with a window read ownership under %v..%v, want its own window", bound[1][temporalParamStart], bound[1][temporalParamEnd])
 	}
 }

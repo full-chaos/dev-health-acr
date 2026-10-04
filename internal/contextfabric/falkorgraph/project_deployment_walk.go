@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
@@ -332,6 +333,17 @@ func (a *Adapter) projectDeploymentMembers(ctx context.Context, key, orgID strin
 	return out, err
 }
 
+// currentOwnership is the window ownership edges are read under: the
+// question's window, or the adapter clock for a question about now. An
+// ownership edge carries the period it held; an ended one is history, and a
+// team that owned a repository once does not own it now.
+func currentOwnership(temporal temporalFilter, now time.Time) temporalFilter {
+	if temporal.active {
+		return temporal
+	}
+	return newTemporalFilter(contextfabric.TimeContext{Axis: contextfabric.TemporalValidTime, AsOf: &now})
+}
+
 // teamRepositoriesStep reads the repositories a team owns: the repository's
 // OWNED_BY_TEAM edge points at the team.
 var teamRepositoriesStep = walkStep{
@@ -369,7 +381,7 @@ func (a *Adapter) anchorDeploymentMembers(ctx context.Context, key, orgID string
 	case contextfabric.SubjectRepository:
 		repositories[anchor.CanonicalID] = anchor
 	case contextfabric.SubjectTeam:
-		hits, hitsCut, err := a.walkStepHits(ctx, key, orgID, []string{anchor.CanonicalID}, teamRepositoriesStep, temporal, collectLimit)
+		hits, hitsCut, err := a.walkStepHits(ctx, key, orgID, []string{anchor.CanonicalID}, teamRepositoriesStep, currentOwnership(temporal, a.now()), collectLimit)
 		if err != nil {
 			return out, err
 		}

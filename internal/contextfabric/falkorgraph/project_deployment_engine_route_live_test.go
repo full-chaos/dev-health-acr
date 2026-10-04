@@ -260,6 +260,20 @@ func TestLiveTheLinkReadFindsLinksPastTheBudgetAndCountsAnUnlinkedProject(t *tes
 	team := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:kilo", Label: "kilo"}
 	entity(team, repository, "")
 	relate("ledger_owned_by_kilo", contractsv1.ContextFabricRelationshipOwnedByTeam, repo, team, repository)
+	// A repository the team owned once: its ownership edge ended, and its
+	// deployments are not the team's now.
+	archiveScope := contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/archive"}}
+	archive := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:github:acme/archive", Label: "acme/archive"}
+	entity(archive, archiveScope, "")
+	for d := 0; d < 2; d++ {
+		deployment := contextfabric.SubjectRef{Kind: contextfabric.SubjectDeployment, CanonicalID: fmt.Sprintf("deployment:archive:%d", d), Label: "deployment"}
+		entity(deployment, archiveScope, "")
+		relate(fmt.Sprintf("archive_deployment_%d", d), contractsv1.ContextFabricRelationshipBelongsToRepository, deployment, archive, archiveScope)
+	}
+	relate("archive_owned_by_kilo", contractsv1.ContextFabricRelationshipOwnedByTeam, archive, team, archiveScope)
+	ownedFrom, ownedTo := observed.Add(-72*time.Hour), observed.Add(-36*time.Hour)
+	relationships.Relationships[len(relationships.Relationships)-1].ValidFrom = &ownedFrom
+	relationships.Relationships[len(relationships.Relationships)-1].ValidTo = &ownedTo
 	projects := map[string]contextfabric.SubjectRef{}
 	for _, name := range []string{"gamma", "delta"} {
 		project := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project.v2:linear:" + name, Label: name}
