@@ -404,6 +404,11 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		result.LimitationsDisplaced += displaced
 		result.Coverage.Partial = true
 	}
+	if cardinality.Scope.Decision == CountPopulationScopeSingleSubject {
+		composed, displaced := appendBoundedLimitations(result.Limitations, []string{contractsv1.ContextFabricSingleSubjectCountLimitation})
+		result.Limitations = composed
+		result.LimitationsDisplaced += displaced
+	}
 	if result.Cohort == nil || params.WorkItemCensus != nil {
 		result.Cohort = graphContext.Cohort
 	}

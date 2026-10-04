@@ -484,3 +484,41 @@ func TestAForeignRowBeyondTheReturnedPrefixStillRefusesTheWholeAnswer(t *testing
 		t.Fatalf("%.400s", out)
 	}
 }
+
+func TestACutKeepsTheLargestPrefixWhenCursorsNeedEscapes(t *testing.T) {
+	cat, _ := directread.DefaultCatalogue()
+	op, refusal := cat.Lookup("capacityForecasts")
+	if refusal != nil {
+		t.Fatal(refusal)
+	}
+	// Every cursor has the same raw length; those at index 149 and 150 differ
+	// in escapes (a control character expands to six bytes), so the first probe of a
+	// search (150 rows, end cursor of row 149) is long and 151 rows are short.
+	edges := make([]map[string]any, 300)
+	for i := range edges {
+		cursor := strings.Repeat("a", 300)
+		if i == 149 {
+			cursor = strings.Repeat("\x01", 300)
+		}
+		edges[i] = map[string]any{"node": map[string]any{"forecastId": fmt.Sprintf("f%d", i), "teamId": "t"}, "cursor": cursor}
+	}
+	page := func(n int) []byte {
+		info := map[string]any{"hasNextPage": true, "hasPreviousPage": false, "startCursor": "c", "endCursor": edges[n-1]["cursor"]}
+		out, _ := json.Marshal(map[string]any{"capacityForecasts": map[string]any{"edges": edges[:n], "totalCount": 300, "pageInfo": info}})
+		return out
+	}
+	maxBytes := len(page(151))
+	if len(page(150)) <= maxBytes {
+		t.Fatal("the planted case does not make 150 rows too big")
+	}
+	raw, _ := json.Marshal(map[string]any{"data": map[string]any{"capacityForecasts": map[string]any{
+		"edges": edges, "totalCount": 300,
+		"pageInfo": map[string]any{"hasNextPage": false, "hasPreviousPage": false, "startCursor": "c", "endCursor": "x"},
+	}}})
+	h := newOpHarness(t, func(opRecorded) (int, string) { return 200, string(raw) }, opHarnessOptions{})
+	vars, _ := json.Marshal(opMinimalVariables(t, op))
+	resp, err := h.runner.Run(context.Background(), opUnrestricted(opOrgA), directread.OperationRequest{Operation: "capacityForecasts", Variables: vars, MaxBytes: maxBytes})
+	if err != nil || resp.Call != directread.CallServed || resp.Page.RowsReturned != 151 {
+		t.Fatalf("want 151 rows, got %+v err %v", resp.Page, err)
+	}
+}

@@ -322,11 +322,17 @@ import (
 // range interpretation ran on the range axis with no window and must not be
 // reused.
 //
-// v55 -> v56: a run_operation list answer over the response budget is served
-// as the largest whole-row page that fits, with the cut stated, where it was
-// refused with response_budget. A candidate
-// saved under v55 for such a question holds a refusal and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v56"
+// v55 -> v59: a count whose frame reads the members of a kind under an anchor,
+// when the one committed subject is itself of that kind and the only subject
+// the label matched, is answered as a question about that subject with a
+// stated reason and no member count, where it ended as an unresolved anchor.
+// A candidate saved under v55 for such a question must not be reused.
+//
+// v59 -> v60: a run_operation answer of an operation with one list of rows,
+// over the response budget, is served as the largest whole-row page that fits,
+// with the cut stated, where it was refused with response_budget. A candidate
+// saved under v59 for such a question holds a refusal and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v60"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

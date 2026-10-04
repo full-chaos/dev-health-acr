@@ -136,8 +136,8 @@ func fitListPage(data json.RawMessage, listPath string, maxBytes int) (pageCut, 
 	return cut, true
 }
 
-// cursorSpread is the largest difference in length between the cursors of
-// the rows of one list.
+// cursorSpread is the largest difference in serialized length (as the size
+// check measures it, with escapes) between the cursors of the rows of one list.
 func cursorSpread(rows []any) int {
 	lo, hi := -1, -1
 	for _, row := range rows {
@@ -149,11 +149,15 @@ func cursorSpread(rows []any) int {
 		if !ok {
 			continue
 		}
-		if lo < 0 || len(c) < lo {
-			lo = len(c)
+		enc, err := json.Marshal(c)
+		if err != nil {
+			continue
 		}
-		if len(c) > hi {
-			hi = len(c)
+		if lo < 0 || len(enc) < lo {
+			lo = len(enc)
+		}
+		if len(enc) > hi {
+			hi = len(enc)
 		}
 	}
 	if lo < 0 {
