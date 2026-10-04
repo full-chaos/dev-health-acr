@@ -455,3 +455,11 @@ func TestQueryVersionMovedPastTheLexicalDeploymentCohort(t *testing.T) {
 		t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved before a named anchor's deployment cohort was held to the anchor's reach holds deployments the question text matched across the organization and must not be reused", devhealthfacts.QueryVersion, versionBeforeAnchoredDeploymentCohortsHeldToTheirReach)
 	}
 }
+
+func TestQueryVersionMovedPastTheProximityOwnershipTeams(t *testing.T) {
+	t.Parallel()
+	const versionBeforeALabelNamedRepositoryRoutedOwnership = "devhealthfacts.clickhouse.v36"
+	if devhealthfacts.QueryVersion == versionBeforeALabelNamedRepositoryRoutedOwnership {
+		t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved when the teams of a label-named repository came from graph proximity and the question text holds teams that do not own it and must not be reused", devhealthfacts.QueryVersion, versionBeforeALabelNamedRepositoryRoutedOwnership)
+	}
+}

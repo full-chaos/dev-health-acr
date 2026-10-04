@@ -235,7 +235,13 @@ import (
 // v35 -> v36: a terminal answer whose stored reading the strict work-item
 // validator refuses is now served (with a not-saved disclosure) instead of
 // failing the turn.
-const QueryVersion = "devhealthfacts.clickhouse.v36"
+//
+// v36 -> v38 (v37 is held by a change in review): the teams of a repository
+// named by its label are read from its ownership records, and a team the
+// question text matched is not one of them. A candidate saved under v36 for
+// such a question can hold teams that do not own the repository and must not
+// be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v38"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

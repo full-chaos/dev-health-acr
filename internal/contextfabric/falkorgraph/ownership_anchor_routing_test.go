@@ -84,7 +84,7 @@ func TestASoleCommittedRepositoryNamedByItsLabelRoutesThroughOwnership(t *testin
 	telemetry := &recordingTelemetry{}
 	reads := 0
 	adapter := newFakeAdapterWithTelemetry(t, ownershipConn(twoOwnersCensus(), nil, &reads), telemetry)
-	result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, namedByLabelRequest(contextfabric.SubjectRepository, false))
+	result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, namedByLabelRequest(contextfabric.SubjectRepository, true))
 	if err != nil {
 		t.Fatalf("DiscoverContext() error = %v", err)
 	}
@@ -195,7 +195,7 @@ func TestAQuestionTextMatchDoesNotAddANonOwnerToAnOwnershipRoutedCohort(t *testi
 	text := []row{textTeamRow("team:text-only", 2, "full-chaos/other"), textTeamRow("team:one", 1, ownedSlug)}
 	census := []row{teamRow("team:one", ownedSlug)}
 	adapter := newFakeAdapter(t, ownershipConn(census, text, &reads))
-	result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, namedByLabelRequest(contextfabric.SubjectRepository, false))
+	result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, namedByLabelRequest(contextfabric.SubjectRepository, true))
 	if err != nil {
 		t.Fatalf("DiscoverContext() error = %v", err)
 	}
@@ -213,7 +213,7 @@ func TestACutQuestionTextArmDoesNotTruncateAnOwnershipCohort(t *testing.T) {
 	}
 	census := []row{teamRow("team:one", ownedSlug)}
 	adapter := newFakeAdapter(t, ownershipConn(census, text, &reads))
-	result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, namedByLabelRequest(contextfabric.SubjectRepository, false))
+	result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, namedByLabelRequest(contextfabric.SubjectRepository, true))
 	if err != nil {
 		t.Fatalf("DiscoverContext() error = %v", err)
 	}
@@ -222,6 +222,29 @@ func TestACutQuestionTextArmDoesNotTruncateAnOwnershipCohort(t *testing.T) {
 	}
 	if !result.Cohort.Complete || result.Cohort.Truncated {
 		t.Fatalf("cohort complete = %v truncated = %v, want complete and not truncated", result.Cohort.Complete, result.Cohort.Truncated)
+	}
+}
+
+// TestACutQuestionTextArmIsNoLossWhenNoTeamOwnsTheRepository: with no owner in
+// the ownership read, nothing covers the cut question-text arm, and the arm
+// still cannot add a member, so the pool is not reported as cut.
+func TestACutQuestionTextArmIsNoLossWhenNoTeamOwnsTheRepository(t *testing.T) {
+	reads := 0
+	var text []row
+	for i := 0; i < 30; i++ {
+		text = append(text, textTeamRow(fmt.Sprintf("team:noise-%02d", i), 1, "full-chaos/other"))
+	}
+	telemetry := &recordingTelemetry{}
+	adapter := newFakeAdapterWithTelemetry(t, ownershipConn(nil, text, &reads), telemetry)
+	result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, namedByLabelRequest(contextfabric.SubjectRepository, true))
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if reads != 1 || result.Cohort != nil {
+		t.Fatalf("census reads = %d, cohort = %+v, want one ownership read and no cohort", reads, result.Cohort)
+	}
+	if len(telemetry.cohortKindBases) != 1 || telemetry.cohortKindBases[0].poolTruncation == CohortPoolTruncationTruncated {
+		t.Fatalf("cohort kind basis = %+v, want one line whose pool is not cut: no team the question text matched can join the cohort", telemetry.cohortKindBases)
 	}
 }
 
@@ -234,7 +257,7 @@ type ownershipOutcomeFixture struct {
 
 func ownershipOutcomeFixtures() map[OwnershipRoutingOutcome]ownershipOutcomeFixture {
 	owned := func() contextfabric.GraphDiscoveryRequest {
-		return namedByLabelRequest(contextfabric.SubjectRepository, false)
+		return namedByLabelRequest(contextfabric.SubjectRepository, true)
 	}
 	return map[OwnershipRoutingOutcome]ownershipOutcomeFixture{
 		OwnershipRoutingNotRouted: {
@@ -458,8 +481,13 @@ func TestAnOwnershipRoutedDiscoveryStillWalksTheEdgesOfWhatTheQuestionTextMatche
 	s.nodes = append(s.nodes, seededNode{kind: "repository", id: "repository:github:acme/gamma", label: "acme/gamma", repos: []string{"acme/gamma"}})
 	s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", "repository:github:acme/gamma", "team", "team:owner"})
 	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: routeOwnedRepository, Label: routeOwnedSlug}
-	request := namedByLabelRequest(contextfabric.SubjectRepository, false)
+	request := namedByLabelRequest(contextfabric.SubjectRepository, true)
 	request.Resolution.Committed = []contextfabric.SubjectRef{anchor}
+	request.Resolution.Candidates = []contextfabric.SubjectCandidate{{
+		ReceiptID: "receipt_anchor", Subject: anchor, State: contextfabric.ResolutionCommitted,
+		MatchedTerms: request.Frame.SubjectExpression.Scoped.AnchorTerms, MatchReasons: []string{"matched"},
+		Confidence: 1, EvidenceRefIDs: []string{},
+	}}
 	request.Bases = contextfabric.CommitBasisSet{}
 	request.Bases.Record(anchor, contextfabric.CommitBasisStatistical)
 	request.Request.Question = "which teams own repository " + routeOwnedSlug

@@ -24,7 +24,9 @@ func TestOwnershipCohortAnchor(t *testing.T) {
 		declared   SubjectKind
 		accepted   bool
 	}{
-		{"declared repository, one labelled repository", teamFrame(), committed(repo), SubjectRepository, true},
+		{"declared repository, anchor term matched", teamFrame(), matched(repo, "acme/api"), SubjectRepository, true},
+		{"declared repository, no term matched", teamFrame(), matched(repo, "other"), SubjectRepository, false},
+		{"declared repository, no candidate", teamFrame(), committed(repo), SubjectRepository, false},
 		{"declared none, anchor term matched", teamFrame(), matched(repo, "acme/api"), "", true},
 		{"nil frame", nil, committed(repo), SubjectRepository, false},
 		{"not children of scope", frameWithPointer(nil, discoveredExpression(SubjectTeam)), committed(repo), SubjectRepository, false},
