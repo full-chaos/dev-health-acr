@@ -144,6 +144,9 @@ type InterpretedTimeBoundDecision struct {
 	// is always written, true or false, so a missing clamp and a clamp of
 	// zero instants are never the same reading.
 	ClampApplied bool
+	// Clamp names the instant a clamp wrote and the fields it wrote it into.
+	// It is the zero value exactly when ClampApplied is false.
+	Clamp ReadTimeClamp
 	// RangeDays is the width, in whole days, of the FINAL bound on the
 	// range axis, and an explicit 0 on every other axis. Explicit rather
 	// than omitted for the same reason: a reader must never have to guess
@@ -154,6 +157,19 @@ type InterpretedTimeBoundDecision struct {
 	// interpreter's own unusable value, carried for no purpose but the
 	// decision's own completeness.
 	Bound TimeContext
+}
+
+// ReadTimeClamp names the instants a turn's clock wrote when it pulled a
+// future instant back to the time of its read: the instant, which of the time
+// context's as_of, start and end it wrote, and which bounds of the evidence
+// window it wrote. The zero value wrote none.
+type ReadTimeClamp struct {
+	At          time.Time
+	AsOf        bool
+	Start       bool
+	End         bool
+	WindowStart bool
+	WindowEnd   bool
 }
 
 // Answerable reports whether the turn proceeds. Exactly two members are
@@ -249,7 +265,7 @@ func resolveInterpretedTimeContext(timeContext TimeContext, now time.Time) Inter
 		at := now
 		clamped.AsOf = &at
 		return InterpretedTimeBoundDecision{
-			Axis: timeContext.Axis, Outcome: InterpretedTimeBoundFutureEnd, ClampApplied: true, Bound: clamped,
+			Axis: timeContext.Axis, Outcome: InterpretedTimeBoundFutureEnd, ClampApplied: true, Clamp: ReadTimeClamp{At: now, AsOf: true}, Bound: clamped,
 		}
 	case TemporalRange:
 		if timeContext.Start == nil || timeContext.End == nil {
@@ -264,22 +280,26 @@ func resolveInterpretedTimeContext(timeContext TimeContext, now time.Time) Inter
 		// Step 4 for a range.
 		bound := timeContext
 		clampApplied := false
+		var clamp ReadTimeClamp
 		if timeContext.End.After(now) {
 			end := now
 			bound.End = &end
 			clampApplied = true
+			clamp.At, clamp.End = now, true
 			// A window whose whole span sits in the future would otherwise
 			// invert once the end is pulled back -- the same guard
 			// resolveTimeContext carries for its tolerance window.
 			if timeContext.Start.After(now) {
 				start := now
 				bound.Start = &start
+				clamp.Start = true
 			}
 		}
 		// Step 5, on the clamped bound.
 		rangeDays := int(bound.End.Sub(*bound.Start) / (24 * time.Hour))
 		if bound.End.Sub(*bound.Start) > maxHistoricalRangeDays*24*time.Hour {
 			decision := refuse(InterpretedTimeBoundRangeTooWide, clampApplied)
+			decision.Clamp = clamp
 			decision.RangeDays = rangeDays
 			decision.Bound = bound
 			return decision
@@ -289,7 +309,7 @@ func resolveInterpretedTimeContext(timeContext TimeContext, now time.Time) Inter
 			outcome = InterpretedTimeBoundFutureEnd
 		}
 		return InterpretedTimeBoundDecision{
-			Axis: timeContext.Axis, Outcome: outcome, ClampApplied: clampApplied, RangeDays: rangeDays, Bound: bound,
+			Axis: timeContext.Axis, Outcome: outcome, ClampApplied: clampApplied, Clamp: clamp, RangeDays: rangeDays, Bound: bound,
 		}
 	default:
 		return refuse(InterpretedTimeBoundUnknownAxis, false)

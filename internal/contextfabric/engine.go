@@ -2187,6 +2187,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// Admission reads the carrier and decides nothing about the frame; the
 	// composition that does stays below, after the verdict, where it was.
 	// The fresh line above still reports what the interpreter proposed.
+	var periodClamp ReadTimeClamp
 	windowCommitted := windowCanon.Effective != nil
 	if continuation.Observed {
 		continuation = e.admitWindowContinuation(
@@ -2234,6 +2235,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		windowCanon.Effective = period
 		windowCanon.KeyComponent = windowKeyComponent(*period, windowKeyFrozen)
 		windowCanon.KeyEncoding = windowKeyFrozen
+		periodClamp = interpretedTimeBound.Clamp
 		executedTime := TimeContext{Axis: clampedRequestTime.Axis, AsOf: clampedRequestTime.AsOf}
 		if e.telemetry != nil {
 			e.telemetry.RecordStatedWindowAxis(ctx, principal, request.Consumer.Surface, StatedWindowOriginInterpreterRange, interpretedTimeBound.Bound.Axis, executedTime.Axis, StatedWindowAxisOverridden)
@@ -2278,6 +2280,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	}
 	clampedInterpretedTime := interpretedTimeBound.Bound
 	interpretation.TimeContext = clampedInterpretedTime
+	readTimeClamp := interpretedTimeBound.Clamp
+	if !periodClamp.At.IsZero() {
+		readTimeClamp = ReadTimeClamp{At: periodClamp.At, WindowStart: periodClamp.Start, WindowEnd: periodClamp.End}
+	}
 	// CHAOS-5465: ONE admission function, after every disqualifier and before
 	// every consumer; then ONE composition boundary that validates the frame
 	// consumers receive and decides its gate on that composition.
@@ -3835,6 +3841,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		Graph: graphContext, Facts: facts,
 		Resolution: resolution, CohortSignalCitations: cohortSignalCitations,
 		EffectiveWindow: effectiveWindow, WindowCanon: windowCanon, WindowCarried: windowCarried,
+		ReadTimeClamp:  readTimeClamp,
 		StructureCanon: structureCanon, CarriedStructureEntries: carriedStructureEntriesForServed,
 		CommitBases: commitBases, CommitDigests: commitDigests,
 		GroupedNarrowingBasis: stage2GroupedBasis,

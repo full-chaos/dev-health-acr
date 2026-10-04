@@ -107,11 +107,12 @@ func (g writeBackGraph) AuthorizeStoredSubjects(ctx context.Context, principal s
 
 func (g writeBackGraph) DiscoverContext(context.Context, storage.Principal, contextfabric.GraphDiscoveryRequest) (contextfabric.GraphContext, error) {
 	project := g.rig.project
+	observedAt := g.rig.now().UTC()
 	return contextfabric.GraphContext{
 		Resolution: contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{project}},
 		Paths:      []contextfabric.RelationshipPath{}, DriverCandidates: []contextfabric.DriverJudgment{},
 		FactRequirements: []contextfabric.FactRequirement{}, EvidenceRefIDs: []string{},
-		Coverage: contextfabric.Coverage{Sources: []contextfabric.SourceObservation{}, DegradedReasons: []string{}},
+		Coverage: contextfabric.Coverage{Sources: []contextfabric.SourceObservation{{Source: "context-fabric:graph", State: contextfabric.SourceAvailable, ObservedAt: &observedAt}}, DegradedReasons: []string{}},
 	}, nil
 }
 
@@ -124,10 +125,36 @@ type writeBackRouteRig struct {
 	project contextfabric.SubjectRef
 	nextID  int
 
+	clockMu  sync.Mutex
+	clock    time.Time
+	requests int
+
 	mu        sync.Mutex
 	facts     contextfabric.CanonicalFactBundle
 	outcome   contextfabric.StoredSubjectOutcome
 	factReads int
+}
+
+// now is the clock of the engine and of the graph's source observation. It
+// moves on every read, as a production clock does between two calls.
+func (r *writeBackRouteRig) now() time.Time {
+	r.clockMu.Lock()
+	defer r.clockMu.Unlock()
+	r.clock = r.clock.Add(1500 * time.Millisecond)
+	return r.clock
+}
+
+func (r *writeBackRouteRig) advance(d time.Duration) {
+	r.clockMu.Lock()
+	defer r.clockMu.Unlock()
+	r.clock = r.clock.Add(d)
+}
+
+func (r *writeBackRouteRig) nextRequest() int {
+	r.clockMu.Lock()
+	defer r.clockMu.Unlock()
+	r.requests++
+	return r.requests
 }
 
 func (r *writeBackRouteRig) currentOutcome() contextfabric.StoredSubjectOutcome {
@@ -175,6 +202,7 @@ func newWriteBackRouteRig(t *testing.T) *writeBackRouteRig {
 	rig := &writeBackRouteRig{
 		model: model, store: store, logs: logs, project: project,
 		facts: liveCanonicalFacts(project), outcome: contextfabric.StoredSubjectAdmitted,
+		clock: time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC),
 	}
 	suppliedInterpreter, err := genkitruntime.NewSuppliedInterpreter(genkitruntime.SuppliedInterpreterConfig{Logger: logger})
 	if err != nil {
@@ -198,7 +226,7 @@ func newWriteBackRouteRig(t *testing.T) *writeBackRouteRig {
 		Results: store, Telemetry: telemetry,
 	}, contextfabric.EngineOptions{
 		ServiceVersion: "write-back-route",
-		Now:            func() time.Time { return time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC) },
+		Now:            rig.now,
 		NewResultID: func() string {
 			rig.nextID++
 			return fmt.Sprintf("result_write_back%02d", rig.nextID)
@@ -226,7 +254,9 @@ func writeBackInterpretation(t *testing.T) *contractsv1.ContextFabricSuppliedInt
 
 func (r *writeBackRouteRig) post(t *testing.T, edit func(*contractsv1.ContextFabricInvestigationRequest)) *httptest.ResponseRecorder {
 	t.Helper()
+	call := r.nextRequest()
 	body := investigationRequestBody()
+	body.RequestID = fmt.Sprintf("request_write_back_%04d", call)
 	body.Question = writeBackQuestion
 	body.SynthesisMode = contractsv1.ContextFabricSynthesisModeClient
 	body.SuppliedInterpretation = writeBackInterpretation(t)
@@ -242,6 +272,8 @@ func (r *writeBackRouteRig) post(t *testing.T, edit func(*contractsv1.ContextFab
 	request.Header.Set("Authorization", "Bearer "+r.token)
 	request.Header.Set("X-ACR-Client-Version", "1.0.0")
 	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Request-ID", fmt.Sprintf("req-write-back-%04d", call))
+	request.Header.Set("Traceparent", fmt.Sprintf("00-%032x-%016x-01", call, call))
 	recorder := httptest.NewRecorder()
 	r.app.Handler().ServeHTTP(recorder, request)
 	return recorder

@@ -1017,4 +1017,13 @@ type SynthesisInput struct {
 	// EvidenceWindow is the window the answer speaks for. Engine bookkeeping
 	// for ranking facts when the input is bounded; it never reaches the model.
 	EvidenceWindow *contractsv1.ContextFabricEffectiveEvidenceWindow `json:"-"`
+	// ReadTimeClamp is what this turn's clock wrote into the time context
+	// when it pulled a future instant back to the time of its read. Engine
+	// bookkeeping; the client input leaves those instants out.
+	ReadTimeClamp ReadTimeClamp `json:"-"`
+	// EvidenceWindowFromClock says this turn resolved EvidenceWindow's bounds
+	// from its clock: a re-derivable relative window. A frozen window (a
+	// confirmed receipt, a remembered or carried window, a period) and a
+	// stated one are false, so their bounds stay facts.
+	EvidenceWindowFromClock bool `json:"-"`
 }

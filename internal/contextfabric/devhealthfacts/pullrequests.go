@@ -3,7 +3,6 @@ package devhealthfacts
 import (
 	"context"
 	"strconv"
-	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
@@ -180,7 +179,7 @@ func (p *PullRequestsProvider) readTeamRollup(ctx context.Context, orgID string,
 	if err != nil {
 		return outcome, err
 	}
-	window := resolveRollupWindow(timeBound, evidence, time.Now())
+	window := resolveRollupWindow(timeBound, evidence, clock())
 	byRepo := map[string]pullRequestRollupRepo{}
 	if repoKeys := repoKeysOf(owned); len(repoKeys) > 0 {
 		statement := `SELECT toString(repo_id),

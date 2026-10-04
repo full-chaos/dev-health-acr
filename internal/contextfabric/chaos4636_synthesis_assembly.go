@@ -84,7 +84,9 @@ type synthesisAssemblyParams struct {
 	Resolution            SubjectResolution
 	CohortSignalCitations cohortMemberSignalCitations
 	EffectiveWindow       *contractsv1.ContextFabricEffectiveEvidenceWindow
-	WindowCanon           requestWindowCanonicalization
+	// ReadTimeClamp is SynthesisInput.ReadTimeClamp, carried to every pass.
+	ReadTimeClamp ReadTimeClamp
+	WindowCanon   requestWindowCanonicalization
 	// WindowCarried is true when this turn's effective window was carried --
 	// by the same-conversation window carry or by the confirmed-need
 	// ledger's window consumer -- rather than confirmed, stated or inferred
@@ -338,7 +340,8 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	synthesisInput, _ := canonicalizeSynthesisSubjectLabels(SynthesisInput{
 		Allocation: synthesisAllocation,
 		Request:    request, Interpretation: interpretation, Graph: graphContext, Facts: facts,
-		EvidenceWindow: effectiveWindow,
+		EvidenceWindow: effectiveWindow, ReadTimeClamp: params.ReadTimeClamp,
+		EvidenceWindowFromClock: windowBoundsFromClock(effectiveWindow, params.WindowCanon.KeyEncoding, params.WindowCarried),
 	})
 	var result InvestigationResult
 	var err error

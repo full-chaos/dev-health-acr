@@ -74,7 +74,7 @@ func NewWorkItemMembershipReader(client contextpacket.ClickHouseQueryClient, opt
 	}
 	now := options.Now
 	if now == nil {
-		now = time.Now
+		now = func() time.Time { return clock() }
 	}
 	return &WorkItemMembershipReader{
 		client:    client,
