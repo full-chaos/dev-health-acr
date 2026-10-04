@@ -166,7 +166,7 @@ func recordedVenueRunReproducesTheVenue(t *testing.T) {
 	var live []string
 	for _, key := range unused {
 		unusedSet[key] = true
-		if !darkKeys[key] && !isNotRecordedKey(key, skipped) {
+		if !darkKeys[key] && !isNotRecordedKey(t, key, skipped) {
 			live = append(live, key)
 		}
 	}
@@ -424,9 +424,23 @@ func rootsExcept(t *testing.T, skipped []string) []string {
 	return only
 }
 
-func isNotRecordedKey(key string, skipped []string) bool {
-	root := strings.SplitN(key, "/", 2)[0]
-	return slices.Contains(skipped, root)
+// isNotRecordedKey says whether a recorded reply belongs to a not recorded
+// root: a graphql_query key starts with the root, a run_operation key with
+// run_operation and the operation, which is matched against the operations
+// of the skipped roots.
+func isNotRecordedKey(t *testing.T, key string, skipped []string) bool {
+	t.Helper()
+	parts := strings.Split(strings.SplitN(key, "#", 2)[0], "/")
+	if parts[0] != "run_operation" {
+		return slices.Contains(skipped, parts[0])
+	}
+	policy := mustPolicy(t)
+	for _, root := range skipped {
+		if r, ok := policy.Root(root); ok && len(parts) > 1 && slices.Contains(r.Operations(), parts[1]) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRecordedRunNamesTheRootsItDoesNotMeasure(t *testing.T) {
@@ -440,7 +454,7 @@ func TestRecordedRunNamesTheRootsItDoesNotMeasure(t *testing.T) {
 	}
 	n := 0
 	for key := range recording.Replies {
-		if isNotRecordedKey(key, skipped) {
+		if isNotRecordedKey(t, key, skipped) {
 			n++
 		}
 	}
