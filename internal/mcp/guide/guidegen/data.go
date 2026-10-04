@@ -215,6 +215,12 @@ func buildData(in Inputs) (string, error) {
 		b.WriteString("- " + rule + "\n")
 	}
 
+	section, err := factKindsSection(in)
+	if err != nil {
+		return "", err
+	}
+	b.WriteString(section)
+
 	b.WriteString("\n## Worked examples\n\n")
 	b.WriteString("The ids and dates below are samples. Use the ids `find_subjects` returns and dates you compute from today.\n")
 	for i, example := range DataExamples {
@@ -228,5 +234,27 @@ func buildData(in Inputs) (string, error) {
 			fmt.Fprintf(&b, "%d. `%s` %s\n   - %s\n", j+1, call.Tool, "`"+string(encoded)+"`", call.Comment)
 		}
 	}
+	return b.String(), nil
+}
+
+const factKindsGuideHeading = "# Fact kinds\n\n"
+
+// factKindsSection renders the fact-kind glossary and the word-to-kind rules
+// from the text the interpretation prompt states, so the two cannot differ.
+// It fails when a kind in the closed set has no glossary line.
+func factKindsSection(in Inputs) (string, error) {
+	if len(in.FactKinds) == 0 || !strings.HasPrefix(in.FactKindsGuide, factKindsGuideHeading) {
+		return "", fmt.Errorf("guidegen: the fact-kind glossary input is empty")
+	}
+	body := strings.TrimPrefix(in.FactKindsGuide, factKindsGuideHeading)
+	for _, kind := range in.FactKinds {
+		if strings.Count(body, "\n- "+kind+": ") != 1 {
+			return "", fmt.Errorf("guidegen: fact kind %q has no single glossary line", kind)
+		}
+	}
+	var b strings.Builder
+	b.WriteString("\n## Fact kinds\n\n")
+	b.WriteString("`data_catalog` section `facts` lists the fact kinds and fields served to your credential. The text below says what each kind means and which words name it. It is the text the interpretation prompt states (also `acr://guide/fact-kinds` with `investigate_question`). Read \"list the kinds\" as \"choose the kinds to read\". A kind the catalog does not list is not served to you.\n\n")
+	b.WriteString(body)
 	return b.String(), nil
 }

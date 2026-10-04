@@ -535,6 +535,19 @@ func (op *OperationPolicy) narrowedTo(paths []string) *OperationPolicy {
 	return out
 }
 
+// documentOutputsOnly returns the filter-only copy of op whose allowlist is the
+// paths its registered document selects: run_operation executes that document
+// verbatim, so a path only graphql_query serves must not pass its filter.
+func (op *OperationPolicy) documentOutputsOnly() *OperationPolicy {
+	paths := make([]string, 0, len(op.Outputs))
+	for _, out := range op.Outputs {
+		if !out.BeyondDocument {
+			paths = append(paths, out.Path)
+		}
+	}
+	return op.narrowedTo(paths)
+}
+
 // graphqlRootsFile is the wire shape of graphql_roots.v1.json.
 type graphqlRootsFile struct {
 	Contract          string              `json:"contract"`
