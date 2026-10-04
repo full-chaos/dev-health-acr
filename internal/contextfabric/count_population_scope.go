@@ -165,6 +165,11 @@ type CountPopulationScope struct {
 	// member kind, and of the reading's anchor kind when one is stated. Only
 	// these make an unbound anchor ambiguous.
 	AnchorCandidates int
+	// AnchorTermMatches is how many candidates, committed or not and of any
+	// kind, matched a term the frame states as an anchor term. It is the
+	// measure behind the single_subject decision's "no other candidate matched
+	// the label" clause, so the trace can rebuild that clause.
+	AnchorTermMatches int
 	// MemberSource is which graph discovery arm served the resolved member
 	// set this decision rides on -- carried from GraphContext.CohortMemberSource
 	// (empty/not_applicable on reuse, which ran no live discovery).
@@ -217,6 +222,9 @@ func DecideCountPopulationScopeWithDigests(frame *QuestionFrame, sampleAnchorKin
 	scope.MemberKind, _ = frame.SubjectExpression.MemberKind()
 	scope.AnchorKind = ScopeAnchorRetrievalKind(frame, sampleAnchorKind)
 	for _, candidate := range resolution.Candidates {
+		if anchorTermMatched(frame, candidate.Subject, resolution) {
+			scope.AnchorTermMatches++
+		}
 		if candidate.Subject.Kind == scope.MemberKind {
 			continue
 		}
@@ -568,6 +576,7 @@ func CountPopulationScopeLogArgs(event CountPopulationScopeEvent, orgID string) 
 		"anchor_id", SanitizeLogAttr(event.Scope.AnchorID),
 		"candidates", SanitizeLogInt(int64(event.Scope.Candidates)),
 		"anchor_candidates", SanitizeLogInt(int64(event.Scope.AnchorCandidates)),
+		"anchor_term_matches", SanitizeLogInt(int64(event.Scope.AnchorTermMatches)),
 		"member_source", SanitizeLogAttr(string(event.Scope.MemberSource)),
 		"member_set_resolved", event.MemberSetResolved,
 		"members", SanitizeLogInt(int64(event.Members)),

@@ -32,35 +32,36 @@ func TestAMetricCountOverOneNamedSubjectIsNotAMemberCount(t *testing.T) {
 		resolution func(SubjectRef) SubjectResolution
 		want       CountPopulationScopeDecision
 		cohortSize int
+		matches    int
 	}{
 		{"repository", SubjectRepository, func(s SubjectRef) SubjectResolution {
 			return SubjectResolution{Committed: []SubjectRef{s}, Candidates: []SubjectCandidate{namedMatch(s)}}
-		}, single, 11},
+		}, single, 11, 1},
 		{"project", SubjectProject, func(s SubjectRef) SubjectResolution {
 			return SubjectResolution{Committed: []SubjectRef{s}, Candidates: []SubjectCandidate{namedMatch(s)}}
-		}, single, 4},
+		}, single, 4, 1},
 		{"team", SubjectTeam, func(s SubjectRef) SubjectResolution {
 			return SubjectResolution{Committed: []SubjectRef{s}, Candidates: []SubjectCandidate{namedMatch(s)}}
-		}, single, 3},
+		}, single, 3, 1},
 		{"prod shape: other repositories offered, none matched the label", SubjectRepository, func(s SubjectRef) SubjectResolution {
 			other := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:OTHER", Label: "other"}
 			return SubjectResolution{Committed: []SubjectRef{s}, Candidates: []SubjectCandidate{namedMatch(s), scopeCandidate(other, "receipt_other")}}
-		}, single, 6},
+		}, single, 6, 1},
 		{"ambiguous label: a project carries it too", SubjectRepository, func(s SubjectRef) SubjectResolution {
 			project := SubjectRef{Kind: SubjectProject, CanonicalID: "project:NAMED_ONE", Label: "named one"}
 			return SubjectResolution{Committed: []SubjectRef{s}, Candidates: []SubjectCandidate{namedMatch(s), namedMatch(project)}}
-		}, CountPopulationScopeAnchorUnresolved, 11},
+		}, CountPopulationScopeAnchorUnresolved, 11, 2},
 		{"ambiguous label: a second repository carries it", SubjectRepository, func(s SubjectRef) SubjectResolution {
 			twin := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:TWIN", Label: "named one"}
 			return SubjectResolution{Committed: []SubjectRef{s}, Candidates: []SubjectCandidate{namedMatch(s), namedMatch(twin)}}
-		}, CountPopulationScopeAnchorUnresolved, 11},
+		}, CountPopulationScopeAnchorUnresolved, 11, 2},
 		{"two committed subjects of the member kind", SubjectRepository, func(s SubjectRef) SubjectResolution {
 			second := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:SECOND", Label: "second"}
 			return SubjectResolution{Committed: []SubjectRef{s, second}, Candidates: []SubjectCandidate{namedMatch(s), namedMatch(second)}}
-		}, CountPopulationScopeAnchorUnresolved, 11},
+		}, CountPopulationScopeAnchorUnresolved, 11, 2},
 		{"the committed subject did not match the anchor term", SubjectRepository, func(s SubjectRef) SubjectResolution {
 			return SubjectResolution{Committed: []SubjectRef{s}, Candidates: []SubjectCandidate{namedMatch(s, "b")}}
-		}, CountPopulationScopeAnchorUnresolved, 11},
+		}, CountPopulationScopeAnchorUnresolved, 11, 0},
 	}
 	for _, row := range rows {
 		row := row
@@ -80,6 +81,9 @@ func TestAMetricCountOverOneNamedSubjectIsNotAMemberCount(t *testing.T) {
 			event := telemetry.countPopulationScopes[0]
 			if event.Scope.Decision != row.want {
 				t.Fatalf("decision = %q, want %q (%+v)", event.Scope.Decision, row.want, event.Scope)
+			}
+			if event.Scope.AnchorTermMatches != row.matches {
+				t.Errorf("anchor_term_matches = %d, want %d", event.Scope.AnchorTermMatches, row.matches)
 			}
 			if claim := cardinalityClaimOf(result); claim != nil {
 				t.Errorf("a member count claim was served: %+v", *claim)

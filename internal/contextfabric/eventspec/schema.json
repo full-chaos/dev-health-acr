@@ -1535,6 +1535,11 @@
         "presence": "required"
       },
       {
+        "key": "anchor_term_matches",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "member_source",
         "type": "string",
         "presence": "required",

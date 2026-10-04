@@ -913,6 +913,7 @@ type CountPopulationScopeFields struct {
 	AnchorID          string
 	Candidates        int
 	AnchorCandidates  int
+	AnchorTermMatches int
 	MemberSource      string
 	MemberSetResolved bool
 	Members           int
@@ -937,7 +938,7 @@ type CountPopulationScopeFields struct {
 
 // NewCountPopulationScopeFields is the generated constructor for CountPopulationScopeFields -- every
 // field CountPopulationScope.Fields declares is a required parameter.
-func NewCountPopulationScopeFields(orgID string, expressionKind string, memberKind string, requirement string, committed int, committedAnchors int, committedUnbound int, anchorKind string, anchorID string, candidates int, anchorCandidates int, memberSource string, memberSetResolved bool, members int, decision string, assembledOutcome string, counted bool, served int, reused bool, subjectKind string, subjectID string, requestID string) CountPopulationScopeFields {
+func NewCountPopulationScopeFields(orgID string, expressionKind string, memberKind string, requirement string, committed int, committedAnchors int, committedUnbound int, anchorKind string, anchorID string, candidates int, anchorCandidates int, anchorTermMatches int, memberSource string, memberSetResolved bool, members int, decision string, assembledOutcome string, counted bool, served int, reused bool, subjectKind string, subjectID string, requestID string) CountPopulationScopeFields {
 	return CountPopulationScopeFields{
 		OrgID:             orgID,
 		ExpressionKind:    expressionKind,
@@ -950,6 +951,7 @@ func NewCountPopulationScopeFields(orgID string, expressionKind string, memberKi
 		AnchorID:          anchorID,
 		Candidates:        candidates,
 		AnchorCandidates:  anchorCandidates,
+		AnchorTermMatches: anchorTermMatches,
 		MemberSource:      memberSource,
 		MemberSetResolved: memberSetResolved,
 		Members:           members,
@@ -989,6 +991,7 @@ func (f CountPopulationScopeFields) SlogArgs() []any {
 		"anchor_id", contextfabric.SanitizeLogAttr(f.AnchorID),
 		"candidates", f.Candidates,
 		"anchor_candidates", f.AnchorCandidates,
+		"anchor_term_matches", f.AnchorTermMatches,
 		"member_source", contextfabric.SanitizeLogAttr(f.MemberSource),
 		"member_set_resolved", f.MemberSetResolved,
 		"members", f.Members,
