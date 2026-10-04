@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
@@ -564,5 +565,60 @@ func TestAFailedOwnershipEdgeReadFailsTheCall(t *testing.T) {
 	}
 	if len(telemetry.ownershipRoutings) != 1 || telemetry.ownershipRoutings[0].Outcome != OwnershipRoutingReadFailed {
 		t.Fatalf("decisions = %+v, want one read_failed decision", telemetry.ownershipRoutings)
+	}
+}
+
+// ownershipTimeConn answers the ownership census with census, records the
+// edge read's parameters, and returns no edge.
+func ownershipTimeConn(census []row, bound *[]map[string]interface{}) *fakeConn {
+	return &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "$kinds"):
+			return census, nil
+		case isOwnershipEdgeRead(params):
+			*bound = append(*bound, params)
+		}
+		return nil, nil
+	}}
+}
+
+// TestOwnershipEdgesAreReadAtTheClockForAQuestionAboutNow: an ended ownership
+// edge is history, so for a question about now the edge read is bound to the
+// adapter clock.
+func TestOwnershipEdgesAreReadAtTheClockForAQuestionAboutNow(t *testing.T) {
+	var bound []map[string]interface{}
+	adapter := newFakeAdapter(t, ownershipTimeConn([]row{teamRow("team:one", ownedSlug)}, &bound))
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	adapter.now = func() time.Time { return now }
+	result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, namedByLabelRequest(contextfabric.SubjectRepository, true))
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if len(bound) != 1 || bound[0][temporalParamStart] != nsTimestamp(now) || bound[0][temporalParamEnd] != nsTimestamp(now) {
+		t.Fatalf("edge reads = %v, want one read bound to the adapter clock", bound)
+	}
+	if got := ownedMemberIDs(result); !reflect.DeepEqual(got, []string{"team:one"}) {
+		t.Fatalf("members = %v, want the team whose list names the repository now", got)
+	}
+}
+
+// TestAStatedWindowDecidesOwnershipByItsEdgesOnly: the repository list says
+// who owns the repository now; under a stated window a team the list names
+// but no ownership edge of that window names is not an owner.
+func TestAStatedWindowDecidesOwnershipByItsEdgesOnly(t *testing.T) {
+	var bound []map[string]interface{}
+	adapter := newFakeAdapter(t, ownershipTimeConn([]row{teamRow("team:one", ownedSlug)}, &bound))
+	start, end := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	request := namedByLabelRequest(contextfabric.SubjectRepository, true)
+	request.Interpretation.TimeContext = contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end}
+	result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if len(bound) != 1 || bound[0][temporalParamStart] != nsTimestamp(start) || bound[0][temporalParamEnd] != nsTimestamp(end) {
+		t.Fatalf("edge reads = %v, want one read bound to the stated window", bound)
+	}
+	if got := ownedMemberIDs(result); len(got) != 0 {
+		t.Fatalf("members = %v, want none: no ownership edge of the window names a team", got)
 	}
 }

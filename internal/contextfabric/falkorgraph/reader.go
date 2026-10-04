@@ -648,7 +648,11 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			// many teams own repository R" is asking about: a project-anchored,
 			// team-member frame with an unrelated committed repository must
 			// never route through ownership on that repository's account.
-			if subject.Kind == contextfabric.SubjectRepository && subject.Label != "" && frameAnchorBound(request.Frame, subject, request.Resolution, request.Bases) {
+			//
+			// The declared anchor kind binds too: a repository committed on the
+			// caller's id binds without a term match, and under a reading that
+			// names a project it is not the anchor.
+			if subject.Kind == contextfabric.SubjectRepository && subject.Label != "" && contextfabric.AnchorBound(request.Frame, request.ScopeAnchorKind, subject, request.Resolution, request.Bases) {
 				ownershipRoutedRepoSlug = subject.Label
 				ownershipRoutedRepoID = subject.CanonicalID
 				ownershipAnchorBasis = AnchorBasisBound
@@ -810,14 +814,20 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		// repositories than the bound carries a sentinel in place of the
 		// list. The repository's own ownership edges name every owner, so a
 		// team either source names owns the repository.
+		//
+		// The list says who owns the repository now. Ownership edges carry
+		// the period each held: for a question about now they are read at the
+		// adapter clock, so an ended edge does not admit a former owner; under
+		// a stated window only the edges of that window decide, since the
+		// present-tense list cannot speak for the past.
 		var edgeOwners map[string]bool
 		if ownershipErr == nil {
 			var edgesCut bool
-			edgeOwners, edgesCut, ownershipErr = a.repositoryOwningTeams(ctx, key, principal.OrgID, ownershipRoutedRepoID, temporal)
+			edgeOwners, edgesCut, ownershipErr = a.repositoryOwningTeams(ctx, key, principal.OrgID, ownershipRoutedRepoID, currentOwnership(temporal, a.now()))
 			truncated = truncated || edgesCut
 		}
 		ownsAnchor := func(n graphrank.CandidateNode) bool {
-			if graphrank.OwnsRepository(n.Attributes, ownershipRoutedRepoSlug) {
+			if !temporal.active && graphrank.OwnsRepository(n.Attributes, ownershipRoutedRepoSlug) {
 				return true
 			}
 			subject, ok := graphrank.NodeSubject(n)
