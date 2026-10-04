@@ -456,9 +456,17 @@ func TestQueryVersionMovedPastTheLexicalDeploymentCohort(t *testing.T) {
 	}
 }
 
+func TestQueryVersionMovedPastTheIssueFirstProjectWalk(t *testing.T) {
+	t.Parallel()
+	const versionBeforeTheProjectWalkReadLinksFirst = "devhealthfacts.clickhouse.v36"
+	if devhealthfacts.QueryVersion == versionBeforeTheProjectWalkReadLinksFirst {
+		t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved when the project walk read issues before links holds a cut or empty answer for a project whose links sort past the budget and must not be reused", devhealthfacts.QueryVersion, versionBeforeTheProjectWalkReadLinksFirst)
+	}
+}
+
 func TestQueryVersionMovedPastUnwindowedCurrentWorkItemMembers(t *testing.T) {
 	t.Parallel()
-	const versionBeforeCallerWindowReachedMembers = "devhealthfacts.clickhouse.v36"
+	const versionBeforeCallerWindowReachedMembers = "devhealthfacts.clickhouse.v39"
 	if devhealthfacts.QueryVersion == versionBeforeCallerWindowReachedMembers {
 		t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved before a committed window reached the work-item members holds members the period never filtered and must not be reused", devhealthfacts.QueryVersion, versionBeforeCallerWindowReachedMembers)
 	}

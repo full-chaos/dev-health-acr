@@ -1226,7 +1226,7 @@ snapshot, or a present snapshot against an absent one, is refused
 (`ErrSemanticStateReplayConflict`) by both adapters and on both PostgreSQL save
 paths. Every Save emits `context fabric semantic state persistence` at Info
 with the site, the decision, the absence reason or the snapshot's closed values,
-and the encoded size against the cap; the decision line carries
+the encoded size against the cap, and `reject_reason` (the closed token of the work-item payload rule that refused the save, `none` otherwise); the decision line carries
 `carried_state_read` and both readings (`carried_state`, `fresh_state`). Neither
 line carries a retrieval term.
 

@@ -1746,6 +1746,7 @@ var SemanticStatePersistence = Event{
 		{Key: "decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.SemanticStatePersistenceLineVocabulary("decision")},
 		{Key: "absence", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.SemanticStatePersistenceLineVocabulary("absence")},
 		{Key: "oversized_bound", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.SemanticStatePersistenceLineVocabulary("oversized_bound")},
+		{Key: "reject_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.SemanticStatePersistenceLineVocabulary("reject_reason")},
 		{Key: "encoded_bytes", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "encoded_cap", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "state", Type: FieldObject, Presence: PresenceRequired, Fields: semanticStateGroupFields},
@@ -2909,9 +2910,11 @@ var projectDeploymentWalkAnchorBasis = []string{"none", "bound", "sole_commit"}
 // outcome=not_routed is a call whose anchor is not a committed project
 // (anchor_kind says which kind, or "none"); the walk did not run and no walk
 // count is written. outcome=read_failed carries the error and no count: the
-// walk did not finish. Every other outcome carries the walk's counts:
-// issues examined, pull requests they link, deployments reached, hops the
-// caller's authorization hid, and whether a frontier was cut. anchor_basis
+// walk did not finish. Every other outcome carries the walk's counts: the
+// project's issues, the distinct pull requests its issues link (both before
+// authorization), deployments reached, hops the caller's authorization hid,
+// and whether the read was cut (more linked pull requests, repositories or
+// deployments than the budget). anchor_basis
 // says how the anchor was chosen from the committed subjects: bound (the
 // frame's proven anchor) or sole_commit (the one committed subject).
 //

@@ -236,12 +236,18 @@ import (
 // validator refuses is now served (with a not-saved disclosure) instead of
 // failing the turn.
 //
-// v36 -> v37: a work-item members question whose request committed a window is
+// v36 -> v39 (v37 and v38 are held by changes in review): the project walk
+// reads its issues' links first, so a project whose linked issues sort past
+// the read budget is served, and a project with no link is unlinked with its
+// exact issue count instead of cut. A candidate saved under v36 for such a
+// question holds a cut or empty answer and must not be reused.
+//
+// v39 -> v40: a work-item members question whose request committed a window is
 // served by that window when the question binds one time field, and states that
-// the period was not applied when it does not. A candidate saved under v36 for
+// the period was not applied when it does not. A candidate saved under v39 for
 // such a question holds members the period never filtered and must not be
 // reused.
-const QueryVersion = "devhealthfacts.clickhouse.v37"
+const QueryVersion = "devhealthfacts.clickhouse.v40"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
