@@ -77,23 +77,30 @@ func (g *lookupFakeGraph) ListSubjectsByKind(_ context.Context, principal storag
 	return page, nil
 }
 
-func (g *lookupFakeGraph) FindSubjectsByExactName(_ context.Context, principal storage.Principal, _ contextfabric.ResolvedGraphBinding, query string, kinds []string) (LookupPage, error) {
+func (g *lookupFakeGraph) FindSubjectsByExactName(_ context.Context, principal storage.Principal, _ contextfabric.ResolvedGraphBinding, query, kind, after string, pageSize int) (LookupPage, error) {
 	g.nameCalls++
 	if g.nameErr != nil {
 		return LookupPage{}, g.nameErr
 	}
-	var page LookupPage
-	page.Truncated = g.truncateName
+	var all []LookupNode
 	for _, node := range append(slices.Clone(g.org(principal.OrgID).nodes), g.leakPhantoms...) {
-		if !slices.Contains(kinds, node.Kind) || !strings.EqualFold(node.Label, query) {
+		if node.Kind != kind || !strings.EqualFold(node.Label, query) || node.CanonicalID <= after {
 			continue
 		}
 		if node.Match == "" {
 			node.Match = MatchExact
 		}
-		page.Nodes = append(page.Nodes, node)
+		all = append(all, node)
 	}
-	sort.Slice(page.Nodes, func(i, j int) bool { return page.Nodes[i].CanonicalID < page.Nodes[j].CanonicalID })
+	sort.Slice(all, func(i, j int) bool { return all[i].CanonicalID < all[j].CanonicalID })
+	page := LookupPage{More: len(all) > pageSize, Truncated: g.truncateName}
+	if page.More {
+		all = all[:pageSize]
+	}
+	page.Nodes = all
+	if len(all) > 0 {
+		page.After = all[len(all)-1].CanonicalID
+	}
 	return page, nil
 }
 
@@ -550,5 +557,53 @@ func TestFindTelemetryClosedVocabularyOnly(t *testing.T) {
 		if strings.Contains(line, leak) {
 			t.Errorf("line leaks %q:\n%s", leak, line)
 		}
+	}
+}
+
+// Name mode pages the matches and gates each page: a visible match behind more
+// hidden matches than the old single read held is still found, and a name with
+// more matches than the examination bound reports the cut instead of an empty
+// answer.
+func TestFindNameScanPagesMatchesAndGatesEachPage(t *testing.T) {
+	build := func(hidden int) *lookupFakeGraph {
+		graph := &lookupFakeGraph{orgs: map[string]*lookupOrgGraph{orgA: {}}}
+		for index := 0; index < hidden; index++ {
+			graph.orgs[orgA].nodes = append(graph.orgs[orgA].nodes, repoNode(fmt.Sprintf("repository:h%06d", index), "Shared", "acme/hidden"))
+		}
+		graph.orgs[orgA].nodes = append(graph.orgs[orgA].nodes, repoNode("repository:zz-visible", "shared", "acme/mine"))
+		return graph
+	}
+	principal := lookupPrincipal(orgA, "acme/mine")
+
+	graph := build(MaxFindScanNodes + 500)
+	got, err := newLookup(graph, nil).Find(context.Background(), principal, FindRequest{Query: "shared", Kinds: []string{"repository"}})
+	if err != nil || !slices.Equal(ids(got.Subjects), []string{"repository:zz-visible"}) || got.Population.Truncated || got.Status != FindComplete {
+		t.Fatalf("visible match behind %d hidden: %+v %s, %v", MaxFindScanNodes+500, got, got.Status, err)
+	}
+	if graph.nameCalls < (MaxFindScanNodes+500)/MaxLookupPageSize {
+		t.Fatalf("name calls = %d: the matches were not paged", graph.nameCalls)
+	}
+
+	cut, err := newLookup(build(MaxFindNameScanMatches+MaxLookupPageSize), nil).Find(context.Background(), principal, FindRequest{Query: "shared", Kinds: []string{"repository"}})
+	if err != nil || len(cut.Subjects) != 0 || !cut.Population.Truncated || cut.Status != FindPartial {
+		t.Fatalf("matches past the examination bound: %+v %s, %v", cut.Population, cut.Status, err)
+	}
+
+	absent, err := newLookup(build(10), nil).Find(context.Background(), principal, FindRequest{Query: "nothing", Kinds: []string{"repository"}})
+	if err != nil || absent.Status != FindEmpty || absent.Population.Truncated || !absent.Page.Complete {
+		t.Fatalf("absent name: %+v %s, %v", absent.Population, absent.Status, err)
+	}
+}
+
+// More admitted matches than MaxFindScanNodes: the read stops at the bound and
+// says so.
+func TestFindNameScanAdmittedBoundDisclosesTruncation(t *testing.T) {
+	graph := &lookupFakeGraph{orgs: map[string]*lookupOrgGraph{orgA: {}}}
+	for index := 0; index < MaxFindScanNodes+MaxLookupPageSize; index++ {
+		graph.orgs[orgA].nodes = append(graph.orgs[orgA].nodes, repoNode(fmt.Sprintf("repository:m%06d", index), "Shared", "acme/mine"))
+	}
+	got, err := newLookup(graph, nil).Find(context.Background(), lookupPrincipal(orgA), FindRequest{Query: "shared", Kinds: []string{"repository"}, Limit: 10})
+	if err != nil || !got.Population.Truncated || got.Population.TotalKnown > MaxFindScanNodes+MaxLookupPageSize-1 || len(got.Subjects) != 10 {
+		t.Fatalf("admitted bound: %+v, %v", got.Population, err)
 	}
 }

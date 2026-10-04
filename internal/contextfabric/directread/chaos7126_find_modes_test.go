@@ -47,7 +47,7 @@ func (g *modesGraph) ListSubjectsByKind(_ context.Context, principal storage.Pri
 	}
 	return page, nil
 }
-func (g *modesGraph) FindSubjectsByExactName(context.Context, storage.Principal, contextfabric.ResolvedGraphBinding, string, []string) (LookupPage, error) {
+func (g *modesGraph) FindSubjectsByExactName(context.Context, storage.Principal, contextfabric.ResolvedGraphBinding, string, string, string, int) (LookupPage, error) {
 	return LookupPage{}, nil
 }
 func (g *modesGraph) ReadSubjectNodes(_ context.Context, principal storage.Principal, _ contextfabric.ResolvedGraphBinding, subjects []contextfabric.SubjectRef) ([]LookupNode, error) {

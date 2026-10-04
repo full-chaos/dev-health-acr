@@ -27,9 +27,12 @@ type LookupPage struct {
 	// More: a list read stopped at its page size and the kind holds nodes
 	// after the last one returned.
 	More bool
-	// Truncated: a name read hit its per-kind pool bound, so a match past the
-	// bound is unreachable in this read.
+	// Truncated: the read itself was cut, so a match past the cut is
+	// unreachable in this read.
 	Truncated bool
+	// After is the last canonical id the store returned for this page, the
+	// keyset position for the next name page (empty when the page was empty).
+	After string
 }
 
 // SubjectGraph is the graph side of find_subjects. falkorgraph.Adapter
@@ -41,9 +44,12 @@ type SubjectGraph interface {
 	// canonical id, whose canonical id sorts after afterCanonicalID ("" for
 	// the first page). pageSize is at most MaxLookupPageSize.
 	ListSubjectsByKind(ctx context.Context, principal storage.Principal, binding contextfabric.ResolvedGraphBinding, kind, afterCanonicalID string, pageSize int) (LookupPage, error)
-	// FindSubjectsByExactName returns the nodes of the given kinds whose
-	// label, alias or provider key equals query exactly (case-insensitive).
-	FindSubjectsByExactName(ctx context.Context, principal storage.Principal, binding contextfabric.ResolvedGraphBinding, query string, kinds []string) (LookupPage, error)
+	// FindSubjectsByExactName returns one keyset page (at most pageSize,
+	// ordered by canonical id, after afterCanonicalID) of the nodes of the
+	// given kind whose label, alias or provider key equals query exactly
+	// (case-insensitive). The equality is evaluated by the store over every
+	// node of the kind; More says matches follow the page.
+	FindSubjectsByExactName(ctx context.Context, principal storage.Principal, binding contextfabric.ResolvedGraphBinding, query, kind, afterCanonicalID string, pageSize int) (LookupPage, error)
 }
 
 // MaxLookupPageSize bounds one graph page and one find_subjects page.

@@ -38,7 +38,7 @@ func (g chaos7126Graph) ListSubjectsByKind(_ context.Context, _ storage.Principa
 	}
 	return page, nil
 }
-func (chaos7126Graph) FindSubjectsByExactName(context.Context, storage.Principal, contextfabric.ResolvedGraphBinding, string, []string) (directread.LookupPage, error) {
+func (chaos7126Graph) FindSubjectsByExactName(context.Context, storage.Principal, contextfabric.ResolvedGraphBinding, string, string, string, int) (directread.LookupPage, error) {
 	return directread.LookupPage{}, nil
 }
 func (chaos7126Graph) ReadSubjectNodes(_ context.Context, _ storage.Principal, _ contextfabric.ResolvedGraphBinding, subjects []contextfabric.SubjectRef) ([]directread.LookupNode, error) {

@@ -27,7 +27,7 @@ func (workItemGraph) ListSubjectsByKind(_ context.Context, _ storage.Principal, 
 	return directread.LookupPage{Nodes: []directread.LookupNode{{Kind: "repository", CanonicalID: "repository:inside", Label: "acme/inside-repo",
 		Attributes: map[string]interface{}{"authorization_repositories": []string{"acme/inside-repo"}}}}}, nil
 }
-func (workItemGraph) FindSubjectsByExactName(context.Context, storage.Principal, contextfabric.ResolvedGraphBinding, string, []string) (directread.LookupPage, error) {
+func (workItemGraph) FindSubjectsByExactName(context.Context, storage.Principal, contextfabric.ResolvedGraphBinding, string, string, string, int) (directread.LookupPage, error) {
 	return directread.LookupPage{}, nil
 }
 func (workItemGraph) ReadSubjectNodes(context.Context, storage.Principal, contextfabric.ResolvedGraphBinding, []contextfabric.SubjectRef) ([]directread.LookupNode, error) {

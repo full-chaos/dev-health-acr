@@ -142,7 +142,7 @@ func TestLiveSubjectReadBuildersReturnTheSeededRows(t *testing.T) {
 	t.Run("FindSubjectsByExactName", func(t *testing.T) {
 		// FindSubjectsByExactName: label equality and alias equality, in the
 		// requested kinds only.
-		found, err := adapter.FindSubjectsByExactName(ctx, principal, binding, "auth gateway", []string{"project"})
+		found, err := adapter.FindSubjectsByExactName(ctx, principal, binding, "auth gateway", "project", "", directread.MaxLookupPageSize)
 		if err != nil {
 			t.Fatalf("FindSubjectsByExactName(label) error = %v", err)
 		}
@@ -150,7 +150,7 @@ func TestLiveSubjectReadBuildersReturnTheSeededRows(t *testing.T) {
 		if found.Truncated || found.Nodes[0].Match != "exact" {
 			t.Fatalf("label match = %+v, want exact and not truncated", found)
 		}
-		found, err = adapter.FindSubjectsByExactName(ctx, principal, binding, "login-service", []string{"project"})
+		found, err = adapter.FindSubjectsByExactName(ctx, principal, binding, "login-service", "project", "", directread.MaxLookupPageSize)
 		if err != nil {
 			t.Fatalf("FindSubjectsByExactName(alias) error = %v", err)
 		}
@@ -158,11 +158,11 @@ func TestLiveSubjectReadBuildersReturnTheSeededRows(t *testing.T) {
 		if found.Nodes[0].Match != "alias" {
 			t.Fatalf("alias match class = %q, want alias", found.Nodes[0].Match)
 		}
-		found, err = adapter.FindSubjectsByExactName(ctx, principal, binding, "Auth Team", []string{"project"})
+		found, err = adapter.FindSubjectsByExactName(ctx, principal, binding, "Auth Team", "project", "", directread.MaxLookupPageSize)
 		if err != nil || len(found.Nodes) != 0 {
 			t.Fatalf("a team name searched in the project kind = %+v, %v; want no node", found, err)
 		}
-		found, err = adapter.FindSubjectsByExactName(ctx, principal, binding, "Auth Team", nil)
+		found, err = adapter.FindSubjectsByExactName(ctx, principal, binding, "Auth Team", "team", "", directread.MaxLookupPageSize)
 		if err != nil {
 			t.Fatalf("FindSubjectsByExactName(default kinds) error = %v", err)
 		}
@@ -293,7 +293,7 @@ func TestSubjectReadBuildersSendOnePathMatch(t *testing.T) {
 	if _, err := adapter.ListSubjectsByKind(ctx, principal, lookupBinding, "project", "project:a", 2); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := adapter.FindSubjectsByExactName(ctx, principal, lookupBinding, "x", []string{"project"}); err != nil {
+	if _, err := adapter.FindSubjectsByExactName(ctx, principal, lookupBinding, "x", "project", "", directread.MaxLookupPageSize); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := adapter.CountKind(ctx, "org-1", contextfabric.SubjectProject); err != nil {

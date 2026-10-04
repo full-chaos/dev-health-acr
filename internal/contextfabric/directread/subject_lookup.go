@@ -56,7 +56,10 @@ const (
 	// partial and population.truncated is true, and total_known is the
 	// admitted count of the nodes examined (a lower bound).
 	MaxFindScanNodes = 2000
-	maxCursorBytes   = 512
+	// MaxFindNameScanMatches bounds how many name matches one kind's name
+	// lookup examines (gating each page) before it reports the cut.
+	MaxFindNameScanMatches = 10000
+	maxCursorBytes         = 512
 
 	// FindSubjectsTool is the tool name the telemetry line carries.
 	FindSubjectsTool = "find_subjects"
@@ -459,16 +462,43 @@ func (l *SubjectLookup) scanList(ctx context.Context, principal storage.Principa
 	}
 }
 
+// scanName reads the matches of each requested kind page by page, in
+// canonical-id order, and gates each page. The store evaluates the name
+// equality over every node of the kind (falkorgraph FindSubjectsByExactName),
+// so a match is found wherever it sorts. The bounds are on matches: at most
+// MaxFindNameScanMatches matches examined per kind and MaxFindScanNodes
+// admitted subjects per call; a cut at either bound with matches left is
+// reported as truncated, never as a complete answer.
 func (l *SubjectLookup) scanName(ctx context.Context, principal storage.Principal, binding contextfabric.ResolvedGraphBinding, plan findPlan) ([]FoundSubject, bool, error) {
-	page, err := l.graph.FindSubjectsByExactName(ctx, principal, binding, plan.query, plan.kinds)
-	if err != nil {
-		return nil, false, err
+	var admitted []FoundSubject
+	truncated := false
+	for _, kind := range plan.kinds {
+		after, examined := "", 0
+		for {
+			page, err := l.graph.FindSubjectsByExactName(ctx, principal, binding, plan.query, kind, after, MaxLookupPageSize)
+			if err != nil {
+				return nil, false, err
+			}
+			batch, err := l.gateNodes(ctx, principal, page.Nodes)
+			if err != nil {
+				return nil, false, err
+			}
+			admitted = append(admitted, batch...)
+			examined += len(page.Nodes)
+			truncated = truncated || page.Truncated
+			if !page.More {
+				break
+			}
+			// A page that cannot advance, or a bound, ends the read loudly
+			// as truncated: never a silent claim of a complete answer.
+			if page.After == "" || page.After <= after || examined >= MaxFindNameScanMatches || len(admitted) >= MaxFindScanNodes {
+				truncated = true
+				break
+			}
+			after = page.After
+		}
 	}
-	admitted, err := l.gateNodes(ctx, principal, page.Nodes)
-	if err != nil {
-		return nil, false, err
-	}
-	return admitted, page.Truncated, nil
+	return admitted, truncated, nil
 }
 
 // gateNodes runs candidates through the S0 subject gate and keeps only the

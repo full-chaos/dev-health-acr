@@ -105,10 +105,10 @@ func (dtGraph) ListSubjectsByKind(_ context.Context, _ storage.Principal, _ cont
 	return page, nil
 }
 
-func (dtGraph) FindSubjectsByExactName(_ context.Context, _ storage.Principal, _ contextfabric.ResolvedGraphBinding, query string, kinds []string) (directread.LookupPage, error) {
+func (dtGraph) FindSubjectsByExactName(_ context.Context, _ storage.Principal, _ contextfabric.ResolvedGraphBinding, query string, kind string, _ string, _ int) (directread.LookupPage, error) {
 	var out []directread.LookupNode
 	for _, node := range dtNodes() {
-		for _, kind := range kinds {
+		{
 			if node.Kind == kind && strings.EqualFold(node.Label, query) {
 				n := node
 				n.Match = "exact"
