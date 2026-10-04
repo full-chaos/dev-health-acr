@@ -366,7 +366,7 @@ var censusKindRegistryEntries = map[graphrank.CensusKind]censusKindRegistryEntry
 		anchorColumns: map[contextfabric.SubjectKind]string{
 			contextfabric.SubjectProject: "w.project_id",
 		},
-		repositoryColumn:  "w.repo_id",
+		repositoryColumn:  "",
 		bridgeCanonicalID: bridgeWorkItemSatisfier,
 	},
 	contractsv1.ContextFabricSubjectCIRun: {
