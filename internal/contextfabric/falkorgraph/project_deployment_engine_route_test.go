@@ -26,8 +26,11 @@ const (
 	routeProjectBravo = "project:bravo"
 	// routeWalkMessage is the decision line of the project deployment walk.
 	routeWalkMessage = "context_fabric: project deployment walk"
-	// routeReachReason is the inclusion reason of a member the two-hop walk
-	// reached from a named repository or team.
+	// routeTeamReason is the inclusion reason of a deployment of a repository
+	// the named team owns.
+	routeTeamReason = "Deployment of a repository the named team owns."
+	// routeReachReason is the inclusion reason of a deployment of a named
+	// repository.
 	routeReachReason = "Graph retrieval reached this deployment from the anchor the question names."
 	// routeOwnershipMessage is the decision line of ownership routing.
 	routeOwnershipMessage = "context_fabric: ownership routing"
@@ -448,8 +451,8 @@ func TestNamedTeamServesOnlyTheDeploymentsItReachesThroughTheEngine(t *testing.T
 		t.Fatalf("team served %v, want only the deployments it reaches %v: a deployment the question text matched is not a member", got, want)
 	}
 	for _, member := range answer.result.Cohort.Members {
-		if len(member.InclusionReasons) != 1 || member.InclusionReasons[0] != routeReachReason {
-			t.Errorf("member %s inclusion reasons = %q, want the anchor reach reason", member.Subject.CanonicalID, member.InclusionReasons)
+		if len(member.InclusionReasons) != 1 || member.InclusionReasons[0] != routeTeamReason {
+			t.Errorf("member %s inclusion reasons = %q, want the team reason", member.Subject.CanonicalID, member.InclusionReasons)
 		}
 	}
 	reached := map[string]bool{}
@@ -474,11 +477,13 @@ func TestNamedTeamServesOnlyTheDeploymentsItReachesThroughTheEngine(t *testing.T
 		t.Fatalf("%d walk decision lines, want exactly one", len(answer.walkLines))
 	}
 	line := answer.walkLines[0]
-	if line["outcome"] != "not_routed" || line["anchor_kind"] != "team" || line["anchor_basis"] != "sole_commit" {
-		t.Errorf("walk line = %v, want outcome=not_routed anchor_kind=team anchor_basis=sole_commit", line)
+	if line["outcome"] != "members" || line["anchor_kind"] != "team" || line["anchor_basis"] != "sole_commit" || line["members"] != float64(len(want)) {
+		t.Errorf("walk line = %v, want outcome=members anchor_kind=team anchor_basis=sole_commit members=%d", line, len(want))
 	}
-	if _, measured := line["members"]; measured {
-		t.Errorf("walk line %v carries a member count for a walk that did not run", line)
+	for _, key := range []string{"issues", "linked_pull_requests"} {
+		if _, measured := line[key]; measured {
+			t.Errorf("walk line %v carries %s for a team anchor, which reads no issue", line, key)
+		}
 	}
 }
 

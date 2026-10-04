@@ -242,11 +242,16 @@ import (
 // exact issue count instead of cut. A candidate saved under v36 for such a
 // question holds a cut or empty answer and must not be reused.
 //
-// v39 -> v41 (v37 and v40 are held by changes in review): the teams of a
-// repository named by its label are read from its ownership records, and a
-// team the question text matched is not one of them. A candidate saved under
-// v39 for such a question can hold teams that do not own the repository and
+// v39 -> v40: the deployments of a named team are read from the repositories
+// it owns and those of a named repository directly, not from the generic
+// two-hop walk whose budget the anchor's work items could spend first. A
+// candidate saved under v39 for such a question can hold an empty cohort and
 // must not be reused.
+//
+// v40 -> v41: the teams of a repository named by its label are read from its
+// ownership records, and a team the question text matched is not one of
+// them. A candidate saved under v40 for such a question can hold teams that
+// do not own the repository and must not be reused.
 const QueryVersion = "devhealthfacts.clickhouse.v41"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for

@@ -666,14 +666,10 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	if declaredCohortKindForRouting == contextfabric.SubjectDeployment {
 		deploymentAnchor, deploymentAnchorBasis = deploymentCohortAnchor(request)
 	}
-	// projectDeploymentAnchor is that anchor when it is a project: a project
-	// has no repository edge, so its members come from
-	// projectDeploymentMembers, not from the two-hop walk.
-	var projectDeploymentAnchor *contextfabric.SubjectRef
-	if deploymentAnchor != nil && deploymentAnchor.Kind == contextfabric.SubjectProject {
-		projectDeploymentAnchor = deploymentAnchor
-	}
-	if declaredCohortKindForRouting == contextfabric.SubjectDeployment && projectDeploymentAnchor == nil && a.config.Telemetry != nil {
+	// The anchor's members come from a read directed at deployments
+	// (anchorDeploymentMembers), never from the generic two-hop walk, whose
+	// budget the anchor's other neighbours can spend first.
+	if declaredCohortKindForRouting == contextfabric.SubjectDeployment && deploymentAnchor == nil && a.config.Telemetry != nil {
 		a.config.Telemetry.RecordProjectDeploymentWalk(ctx, principal.OrgID, ProjectDeploymentWalkDecision{
 			Outcome: ProjectDeploymentWalkNotRouted, AnchorKind: deploymentAnchorKind(deploymentAnchor), AnchorBasis: deploymentAnchorBasis,
 			Committed: len(request.Resolution.Committed),
@@ -682,7 +678,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	projectDeploymentsUnlinked := -1
 	projectDeploymentsDenied := -1
 	// deploymentAnchorReadCut: the read of the deployment anchor's own reach
-	// (the project walk, or the two-hop walk of a repository or team) was cut.
+	// was cut.
 	deploymentAnchorReadCut := false
 
 	for _, subject := range request.Resolution.Committed {
@@ -695,9 +691,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		var filters edgeFilterCounts
 		var walkTruncated bool
 		var err error
-		if projectDeploymentAnchor != nil && subject == *projectDeploymentAnchor {
+		if deploymentAnchor != nil && subject == *deploymentAnchor {
 			var walk projectDeploymentWalk
-			walk, err = a.projectDeploymentMembers(ctx, key, principal.OrgID, principal, scope, subject, collectLimit, temporal)
+			walk, err = a.anchorDeploymentMembers(ctx, key, principal.OrgID, principal, scope, subject, collectLimit, temporal)
 			nodes, edges, filters, walkTruncated = walk.nodes, walk.edges, walk.filters, walk.truncated
 			outcome := projectDeploymentWalkOutcome(walk, needsProjectReach(principal), err)
 			if err == nil && len(walk.nodes) == 0 {
@@ -710,7 +706,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			}
 			if a.config.Telemetry != nil {
 				a.config.Telemetry.RecordProjectDeploymentWalk(ctx, principal.OrgID, ProjectDeploymentWalkDecision{
-					Outcome: outcome, AnchorKind: contextfabric.SubjectProject, AnchorBasis: deploymentAnchorBasis,
+					Outcome: outcome, AnchorKind: subject.Kind, AnchorBasis: deploymentAnchorBasis,
 					Committed: len(request.Resolution.Committed),
 					Issues:    walk.issues, LinkedPullRequests: walk.linkedPullRequests, Members: len(walk.nodes), Denied: walk.denied,
 					Truncated: walk.truncated, Err: err,
@@ -1734,8 +1730,12 @@ const ownershipCohortRationale = "Teams were read from the ownership records of 
 // the project walk reached.
 const projectDeploymentInclusionReason = "Deployment of a repository that a pull request linked to an issue of the named project belongs to."
 
-// anchorReachInclusionReason is the inclusion reason of a deployment the
-// two-hop walk reached from a named repository or team.
+// teamDeploymentInclusionReason is the inclusion reason of a deployment of a
+// repository the named team owns.
+const teamDeploymentInclusionReason = "Deployment of a repository the named team owns."
+
+// anchorReachInclusionReason is the inclusion reason of a deployment of the
+// named repository.
 const anchorReachInclusionReason = "Graph retrieval reached this deployment from the anchor the question names."
 
 // anchoredDeploymentCohortRationale is the rationale of a deployment cohort
@@ -1743,10 +1743,14 @@ const anchorReachInclusionReason = "Graph retrieval reached this deployment from
 const anchoredDeploymentCohortRationale = "Deployments were reached from the anchor the question names in the authorized Context Fabric graph."
 
 func anchoredDeploymentInclusionReason(anchor contextfabric.SubjectKind) string {
-	if anchor == contextfabric.SubjectProject {
+	switch anchor {
+	case contextfabric.SubjectProject:
 		return projectDeploymentInclusionReason
+	case contextfabric.SubjectTeam:
+		return teamDeploymentInclusionReason
+	default:
+		return anchorReachInclusionReason
 	}
-	return anchorReachInclusionReason
 }
 
 // sortCandidateNodesBySubjectKey sorts nodes in place by graphrank.SubjectKey

@@ -2,7 +2,6 @@ package falkorgraph
 
 import (
 	"context"
-	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -80,15 +79,4 @@ func (a *Adapter) repositoryOwningTeams(ctx context.Context, key, orgID, reposit
 		owners[canonicalIDOf(h.to)] = true
 	}
 	return owners, cut, nil
-}
-
-// currentOwnership is the window ownership edges are read under: the
-// question's window, or the adapter clock for a question about now. An
-// ownership edge carries the period it held; an ended one is history, and a
-// team that owned a repository once does not own it now.
-func currentOwnership(temporal temporalFilter, now time.Time) temporalFilter {
-	if temporal.active {
-		return temporal
-	}
-	return newTemporalFilter(contextfabric.TimeContext{Axis: contextfabric.TemporalValidTime, AsOf: &now})
 }
