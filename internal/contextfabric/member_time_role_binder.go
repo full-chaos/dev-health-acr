@@ -126,6 +126,7 @@ func BindMemberTimeRole(question string, window BoundWindowSpan) MemberTimeRoleO
 	clause := question[start:end]
 	var bound []BoundMemberTimeRole
 	seen := map[MemberTimeRole]bool{}
+	predicate := map[MemberTimeRole]bool{}
 	for _, entry := range memberTimeRoleRegistry {
 		for _, loc := range entry.pattern.FindAllStringIndex(clause, -1) {
 			if hyphenJoined(clause, loc[0], loc[1]) || wordRuneAdjacent(clause, loc[0], loc[1]) {
@@ -133,7 +134,20 @@ func BindMemberTimeRole(question string, window BoundWindowSpan) MemberTimeRoleO
 			}
 			bound = append(bound, BoundMemberTimeRole{Role: entry.role, Grammar: entry.grammar, SpanStart: start + loc[0], SpanEnd: start + loc[1]})
 			seen[entry.role] = true
+			if !nounPhraseModifier(clause[loc[1]:]) {
+				predicate[entry.role] = true
+			}
 		}
+	}
+	if len(predicate) > 0 {
+		seen = predicate
+		kept := bound[:0]
+		for _, form := range bound {
+			if predicate[form.Role] {
+				kept = append(kept, form)
+			}
+		}
+		bound = kept
 	}
 	switch len(seen) {
 	case 0:
@@ -142,6 +156,27 @@ func BindMemberTimeRole(question string, window BoundWindowSpan) MemberTimeRoleO
 		return MemberTimeRoleOutcome{Reason: MemberTimeRoleBound, Role: bound[0].Role, Bound: bound}
 	}
 	return MemberTimeRoleOutcome{Reason: MemberTimeRoleAmbiguous, Bound: bound}
+}
+
+// workItemNounPhrase matches the head noun that directly follows a form which
+// then modifies it ("closed issues", "new work items"): the closed noun list.
+// Another form may sit between them ("new closed issues"), so a run of forms
+// before the noun is one noun phrase.
+var workItemNounPhrase = func() *regexp.Regexp {
+	var forms []string
+	for _, entry := range memberTimeRoleRegistry {
+		forms = append(forms, entry.forms...)
+	}
+	return regexp.MustCompile(`(?i)^(?:\s+(?:` + strings.Join(forms, "|") + `))*\s+(?:work\s+)?(?:items?|issues?|tickets?|tasks?|bugs?|stor(?:y|ies)|epics?)\b`)
+}()
+
+// nounPhraseModifier reports a form that sits in the noun phrase as its
+// pre-nominal modifier: it describes the items, it does not say when the
+// period applies. A modifier binds the role only when no predicate form in the
+// clause does, so "closed issues created in the last 30 days" binds created,
+// while a lone "closed issues in the last 30 days" still binds completed.
+func nounPhraseModifier(rest string) bool {
+	return workItemNounPhrase.MatchString(rest)
 }
 
 func clauseBounds(question string, window BoundWindowSpan) (int, int) {

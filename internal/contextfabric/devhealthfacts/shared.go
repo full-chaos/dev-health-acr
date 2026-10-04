@@ -270,7 +270,13 @@ import (
 // workflow_state_type, or dev_health_normalized when the provider is not
 // known), and its provenance note names that provider. A candidate saved under
 // v43 carries one basis for every item and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v44"
+//
+// v46 -> v47: the time role of a work-item members period is bound from the
+// predicate verb of the clause; a form that modifies the item noun ("closed
+// issues created last month") no longer competes with it. A candidate saved
+// under v46 for such a question holds a refusal or another role and must not
+// be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v47"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
