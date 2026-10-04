@@ -882,6 +882,9 @@ type ContextFabricInvestigationRequest struct {
 	// supplied output is validated as a model output is, and resolution,
 	// authorization, retrieval and answer assembly run unchanged.
 	SuppliedInterpretation *ContextFabricSuppliedInterpretation `json:"supplied_interpretation,omitempty"`
+	// SuppliedSynthesis is the answer draft the caller wrote on its own
+	// model from a synthesis input. It requires synthesis_mode client.
+	SuppliedSynthesis *ContextFabricSuppliedSynthesis `json:"supplied_synthesis,omitempty"`
 	// SynthesisMode "client" asks the service to skip its own synthesis call
 	// and return the synthesis input for the caller's model to write the
 	// answer. Absent or "server" is the service's own synthesis.

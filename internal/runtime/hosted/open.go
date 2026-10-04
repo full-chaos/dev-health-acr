@@ -873,6 +873,12 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, err
 	}
+	suppliedSynthesizer, err := genkitruntime.NewSuppliedSynthesizer(genkitruntime.SuppliedSynthesizerConfig{})
+	if err != nil {
+		return nil, nil, nil, nil, nil, nil, err
+	}
+	clientSynthesis := synthesisprompt.ClientAssembly()
+	clientSynthesis.ParseDraft = suppliedSynthesizer.Parse
 	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
 		WorkItemMembership: workItemMembership,
 		// FrameTelemetry is wired here and NOT discovered by a type
@@ -918,7 +924,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		ObservationKeys: factRegistry,
 		Graph:           graphReader,
 		Facts:           factRegistry,
-		Synthesizer:     contextfabric.RuntimeAnswerSynthesizer{Runtime: modelRuntime, Sink: receiptSink, Options: contextFabricSynthesizerOptions(request.options.ServiceVersion), Telemetry: engineTelemetry, ClientSynthesis: synthesisprompt.ClientAssembly()},
+		Synthesizer:     contextfabric.RuntimeAnswerSynthesizer{Runtime: modelRuntime, Sink: receiptSink, Options: contextFabricSynthesizerOptions(request.options.ServiceVersion), Telemetry: engineTelemetry, ClientSynthesis: clientSynthesis},
 		Results:         investigationStore,
 		ReuseGate:       investigationStore,
 		// CHAOS-3782 Codex round-1 F1: same *pginvestigation.Store also

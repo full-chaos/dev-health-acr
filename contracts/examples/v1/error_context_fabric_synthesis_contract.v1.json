@@ -1,0 +1,23 @@
+{
+  "schema_version": "error.v1",
+  "request_id": "req_01J0ACR006",
+  "error": {
+    "code": "invalid_request",
+    "message": "The supplied synthesis was written under a synthesis contract this service does not run",
+    "http_status": 409,
+    "retryable": false,
+    "details": {
+      "synthesis_contract": {
+        "mismatch": [
+          "prompt_version",
+          "input_sha256"
+        ],
+        "current": {
+          "model_output_version": "context-fabric-synthesis-output.v3",
+          "prompt_version": "context-fabric-synthesis.v17",
+          "system_sha256": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+        }
+      }
+    }
+  }
+}

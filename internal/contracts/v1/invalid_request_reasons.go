@@ -15,6 +15,9 @@ var invalidRequestReasons = map[string]struct{}{
 	"invalid_cursor":       {}, // read_relationships cursor
 	"expired_cursor":       {}, // read_relationships cursor
 	"denied_or_not_found":  {}, // read_facts / read_relationships subject
+
+	ContextFabricSuppliedSynthesisReasonInputChanged:           {}, // supplied synthesis written from another input
+	ContextFabricSuppliedSynthesisReasonInterpretationRequired: {}, // supplied synthesis without a supplied interpretation
 }
 
 // IsInvalidRequestReason reports whether reason is a member of the closed
