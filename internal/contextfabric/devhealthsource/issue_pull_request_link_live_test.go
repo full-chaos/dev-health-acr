@@ -186,16 +186,20 @@ func TestIssuePullRequestLinkEdgesOnRealStores(t *testing.T) {
 	}
 }
 
-// TestIssuePullRequestLinkResolvesOneWorkItemRowPerLink seeds one issue id
-// stored under two repositories (work_items is keyed (repo_id, work_item_id))
-// and two link rows naming it, and asserts that each link row projects exactly
-// one edge: from the row in the pull request's own repository when there is
-// one, else from the most recently synced row. Before the fix the join matched
-// both rows, so each link row projected one edge per row.
+// TestIssuePullRequestLinkProjectsOneEdgePerWorkItemNodeOfTheLinkedIssue pins
+// the lead ruling on an issue with rows in several repositories. The
+// work-item node identity of main is (repo_id, work_item_id): an issue with
+// rows in several repositories has several nodes (queryWorkItems), so a link
+// row, which names its issue by work_item_id alone, projects one edge per
+// node; the older edge producers (dependencies, parent/child) behave the
+// same, and the node identity is a separate ticket. Asserted: exactly one
+// edge per (link row x work-item node of its issue), each carrying its link
+// row's tier, and both ends of every edge resolve to a stored node (no
+// dangling end). Distinct issues in an answer are the walks' job (#896/#899).
 //
 // Needs Docker (ClickHouse and FalkorDB containers). Written to be run by CI
 // or by the lane owner; not run in the authoring sandbox.
-func TestIssuePullRequestLinkResolvesOneWorkItemRowPerLink(t *testing.T) {
+func TestIssuePullRequestLinkProjectsOneEdgePerWorkItemNodeOfTheLinkedIssue(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
 	for _, statement := range productionSchemaDDL() {
@@ -220,23 +224,23 @@ func TestIssuePullRequestLinkResolvesOneWorkItemRowPerLink(t *testing.T) {
 	}
 	exec("repo a", `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, repoA, orgID, "acme/alpha", "github", now)
 	exec("repo b", `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, repoB, orgID, "group/beta", "gitlab", now)
-	// The same issue id under two repositories: the repository-less row is the
-	// most recently synced; the row in repository A is older.
-	for _, row := range []struct {
-		repo   string
-		synced time.Time
-	}{{zeroRepo, now}, {repoA, now.Add(-time.Hour)}} {
-		exec("work item under "+row.repo, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, type, status, provider, created_at, updated_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			issueID, row.repo, orgID, issueID, "story", "open", "jira", created, row.synced, row.synced)
+	// One issue id with rows under two repositories: two work-item nodes.
+	issueRepos := []string{zeroRepo, repoA}
+	for _, repo := range issueRepos {
+		exec("work item under "+repo, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, type, status, provider, created_at, updated_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			issueID, repo, orgID, issueID, "story", "open", "jira", created, now, now)
 	}
-	for _, p := range []struct {
+	type pull struct {
 		repo   string
 		number uint32
-	}{{repoA, 1}, {repoB, 2}} {
+		tier   string
+	}
+	pulls := []pull{{repoA, 1, "native"}, {repoB, 2, "heuristic"}}
+	for _, p := range pulls {
 		exec(fmt.Sprintf("pull request %s#%d", p.repo, p.number), `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, created_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 			p.repo, orgID, p.number, fmt.Sprintf("PR %d", p.number), "open", created, now)
 		exec(fmt.Sprintf("link to %s#%d", p.repo, p.number), `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			p.repo, issueID, p.number, float32(0.9), "native", "", now, orgID)
+			p.repo, issueID, p.number, float32(0.9), p.tier, "", now, orgID)
 	}
 
 	source, err := devhealthsource.NewClickHouseProjectionSource(query)
@@ -250,10 +254,21 @@ func TestIssuePullRequestLinkResolvesOneWorkItemRowPerLink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve graph binding: %v", err)
 	}
-	pullA, pullB := fmt.Sprintf("pull_request:%s:1", repoA), fmt.Sprintf("pull_request:%s:2", repoB)
+	var origins []contextfabric.SubjectRef
+	want := map[string]string{}
+	for _, p := range pulls {
+		pullID := fmt.Sprintf("pull_request:%s:%d", p.repo, p.number)
+		origins = append(origins, contextfabric.SubjectRef{Kind: contextfabric.SubjectPullRequest, CanonicalID: pullID})
+		for _, repo := range issueRepos {
+			node, _, err := identity.Derive(identity.KindWorkItem, []string{repo, issueID}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want[node+" -> "+pullID] = p.tier
+		}
+	}
 	page, err := adapter.DirectEdgePage(ctx, principal, binding, directread.EdgePageQuery{
-		Origins: []contextfabric.SubjectRef{{Kind: contextfabric.SubjectPullRequest, CanonicalID: pullA}, {Kind: contextfabric.SubjectPullRequest, CanonicalID: pullB}},
-		Types:   []string{"LINKS_PULL_REQUEST"}, Direction: directread.EdgeDirectionIn, Limit: 100, ValidAt: now.Add(time.Minute),
+		Origins: origins, Types: []string{"LINKS_PULL_REQUEST"}, Direction: directread.EdgeDirectionIn, Limit: 100, ValidAt: now.Add(time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("direct edge page: %v", err)
@@ -261,34 +276,46 @@ func TestIssuePullRequestLinkResolvesOneWorkItemRowPerLink(t *testing.T) {
 	if page.More {
 		t.Fatal("more edges than the page held")
 	}
-	issueInA, _, err := identity.Derive(identity.KindWorkItem, []string{repoA, issueID}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	issueInZero, _, err := identity.Derive(identity.KindWorkItem, []string{zeroRepo, issueID}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := map[string]bool{
-		issueInA + " -> " + pullA:    true, // the row in the pull request's repository, though older
-		issueInZero + " -> " + pullB: true, // no row in repository B: the most recently synced row
-	}
-	got := map[string]bool{}
+	got := map[string]string{}
+	var ends []contextfabric.SubjectRef
 	for _, edge := range page.Edges {
-		got[edge.From.Subject.CanonicalID+" -> "+edge.To.Subject.CanonicalID] = true
+		key := edge.From.Subject.CanonicalID + " -> " + edge.To.Subject.CanonicalID
+		if _, dup := got[key]; dup {
+			t.Fatalf("edge %s projected twice", key)
+		}
+		got[key] = fmt.Sprint(edge.Attributes["property_link_provenance"])
+		ends = append(ends, edge.From.Subject, edge.To.Subject)
 	}
-	if len(page.Edges) != len(want) {
-		t.Errorf("LINKS_PULL_REQUEST edges = %d, want %d (one per link row): %v", len(page.Edges), len(want), got)
+	if len(got) != len(want) {
+		t.Errorf("LINKS_PULL_REQUEST edges = %d, want %d (one per link row x work-item node)\n got  %v\n want %v", len(got), len(want), sortedPairs(got), sortedPairs(want))
 	}
-	for key := range want {
-		if !got[key] {
-			t.Errorf("missing edge %s; got %v", key, got)
+	for key, tier := range want {
+		if got[key] != tier {
+			t.Errorf("edge %s: tier = %q, want %q (the link row's tier on every node's edge)", key, got[key], tier)
 		}
 	}
 	for key := range got {
-		if !want[key] {
-			t.Errorf("unexpected edge %s (one link row fanned out to another work item row)", key)
+		if _, ok := want[key]; !ok {
+			t.Errorf("unexpected edge %s", key)
 		}
+	}
+	// No dangling end: every end of every edge is a node the node producers
+	// made from the same store.
+	nodes, err := adapter.ReadSubjectNodes(ctx, principal, binding, ends)
+	if err != nil {
+		t.Fatalf("read subject nodes: %v", err)
+	}
+	stored := map[string]bool{}
+	for _, n := range nodes {
+		stored[n.Kind+"|"+n.CanonicalID] = true
+	}
+	for _, end := range ends {
+		if !stored[string(end.Kind)+"|"+end.CanonicalID] {
+			t.Errorf("edge end %s %s has no stored node", end.Kind, end.CanonicalID)
+		}
+	}
+	if len(ends) == 0 {
+		t.Fatal("no edge ends to resolve: the dangling-end check measured nothing")
 	}
 }
 

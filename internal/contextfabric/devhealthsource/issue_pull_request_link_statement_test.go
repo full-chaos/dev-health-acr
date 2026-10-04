@@ -28,7 +28,6 @@ func TestIssuePullRequestLinkStatementShape(t *testing.T) {
 		"LEFT JOIN repos AS r FINAL ON r.id = l.repo_id AND r.org_id = l.org_id",
 		"toString(w.repo_id)",
 		"WHERE l.org_id = {org_id:String}",
-		"toUInt8(w.repo_id = l.repo_id) DESC, w.last_synced DESC, toString(w.repo_id) ASC\nLIMIT 1 BY concat(toString(l.repo_id), ':', l.work_item_id, ':', toString(l.pr_number)) LIMIT {row_limit:UInt32}",
 	} {
 		if !strings.Contains(statement, fragment) {
 			t.Errorf("statement lacks %q:\n%s", fragment, statement)
