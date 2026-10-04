@@ -6309,7 +6309,10 @@
           "status",
           "status_without_value",
           "assignee",
-          "unrecognized"
+          "unrecognized",
+          "window",
+          "window_role_unresolved",
+          "window_not_served"
         ]
       },
       {

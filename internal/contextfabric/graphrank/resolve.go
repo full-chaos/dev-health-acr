@@ -2955,8 +2955,37 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// SAME unscopedVisibilityFor the main resolution below uses, so it
 		// can never drift from what authorization actually enforces.
 		if !offersOnly && deps.CensusFunc != nil {
-			runShadowEvidenceRoundForResolution(ctx, principal, request, interpreted, exactResolution, nil, false,
+			// CHAOS-8407: an exact hint for a scope anchor (a repository)
+			// beside a handle the question names must not shadow that
+			// handle either. The hint IS the anchor, so it is handed to the
+			// round as one (the alias claimants that give the ordinary path
+			// its anchor have not run here), and the attestation is
+			// consumed exactly as the ordinary path consumes it: same
+			// predicate, same census, same commit.
+			shadowsHandle := len(request.SubjectHandles) == 0 && committedScopeAnchorShadowsHandle(request.Question, exactResolution.Committed, frame)
+			// The hinted anchor reaches the round as the sole claimant of its
+			// own label, the same shape the alias lookup gives the ordinary
+			// path, so the trace reports a unique claimant and never a
+			// redeemed receipt. A real receipt still takes priority.
+			var hintClaimants map[string][]CandidateNode
+			if shadowsHandle && confirmedAnchor == nil && len(exactResolution.Committed) == 1 {
+				anchorSubject := exactResolution.Committed[0]
+				hintClaimants = map[string][]CandidateNode{anchorSubject.Label: {{
+					Name:       anchorSubject.Label,
+					Attributes: map[string]interface{}{"subject_kind": string(anchorSubject.Kind), "canonical_id": anchorSubject.CanonicalID, "label": anchorSubject.Label},
+				}}}
+			}
+			attestation := runShadowEvidenceRoundForResolution(ctx, principal, request, interpreted, exactResolution, hintClaimants, hintClaimants != nil,
 				unscopedVisibilityFor(principal, request) || repositoryNarrowedByUnrestrictedPrincipal(principal, request), deps, confirmedKind, confirmedAnchor, true)
+			hintGate := deps.CommitGatePolicy
+			if hintGate == (CommitGatePolicy{}) {
+				hintGate = DefaultCommitGatePolicy()
+			}
+			if shadowsHandle && hintGate.Validate() == nil {
+				if attestedKey, merged := mergeCensusAttestedSatisfier(ctx, principal, request, deps, attestation, candidatesBySubject, make(map[string]string), make(map[string]bool), identityClaimants{}, identityMatchTerms{}, admission); merged {
+					commitCensusAttestedBesideScopeAnchor(&exactResolution, candidatesBySubject[attestedKey], request, deps, commitBases, commitDigests, false, false, request.Options.MaxSubjectCandidates, 2)
+				}
+			}
 		}
 		return exactResolution, contextfabric.StructureOfferMaterial{}, nil
 	}
@@ -3869,44 +3898,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				// whether the scoped re-decision above did).
 				if !stalledForCensus {
 					pass++
-					appendedCommit, displacedCandidate := appendCensusAttestedCommit(&resolution, candidatesBySubject[attestedKey], request.Options.MaxSubjectCandidates, commitBases, commitDigests, searchTruncated, aliasIdentityComplete)
-					if !appendedCommit && deps.ResolutionTracer != nil {
-						deps.ResolutionTracer.Trace(ResolutionTraceEvent{
-							RequestID: request.RequestID, Stage: "decision", Subject: candidatesBySubject[attestedKey].Subject,
-							Outcome: "no_commit", CommitGate: "evidence_census", SearchTruncated: searchTruncated,
-							SearchCandidateLimit: effectiveSearchLimit, PopulationBasis: "none",
-							Pass: pass, Index: 1, Total: 1,
-						})
-					}
-					// CHAOS-8408: the appended pull request took the last
-					// uncommitted slot at the candidate cap; record who left.
-					if appendedCommit && displacedCandidate.CanonicalID != "" && deps.ResolutionTracer != nil {
-						deps.ResolutionTracer.Trace(ResolutionTraceEvent{
-							RequestID: request.RequestID, Stage: "decision", Subject: displacedCandidate,
-							Outcome: "displaced", CommitGate: "evidence_census", SearchTruncated: searchTruncated,
-							SearchCandidateLimit: effectiveSearchLimit, PopulationBasis: "none",
-							Pass: pass, Index: 1, Total: 2,
-						})
-					}
-					if appendedCommit && deps.ResolutionTracer != nil {
-						appended := candidatesBySubject[attestedKey]
-						// A displaced line shares this pass: the pair is index 1/2 and 2/2.
-						committedIndex, committedTotal := 1, 1
-						if displacedCandidate.CanonicalID != "" {
-							committedIndex, committedTotal = 2, 2
-						}
-						winningMechanism := ""
-						if len(appended.MatchMechanisms) > 0 {
-							winningMechanism = string(appended.MatchMechanisms[0])
-						}
-						deps.ResolutionTracer.Trace(ResolutionTraceEvent{
-							RequestID: request.RequestID, Stage: "decision", Subject: appended.Subject,
-							Outcome: "committed", WinningMechanism: winningMechanism, CommitGate: "evidence_census",
-							CommitBasis: string(commitBases.For(appended.Subject)), SearchTruncated: searchTruncated,
-							SearchCandidateLimit: effectiveSearchLimit, PopulationBasis: "none",
-							Pass: pass, Index: committedIndex, Total: committedTotal,
-						})
-					}
+					commitCensusAttestedBesideScopeAnchor(&resolution, candidatesBySubject[attestedKey], request, deps, commitBases, commitDigests, searchTruncated, aliasIdentityComplete, effectiveSearchLimit, pass)
 				} else {
 					pass++
 					resolution, censusBases, censusDigests = resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, attestedKey, false, false, nil, anchorReservedSlot{}, kindRescue, pass)
@@ -5080,6 +5072,51 @@ func evidenceRoundTrigger(resolution contextfabric.SubjectResolution, callerHint
 	default:
 		return "stalled"
 	}
+}
+
+// commitCensusAttestedBesideScopeAnchor appends the census-attested satisfier
+// to a resolution that already committed only scope anchors, and records the
+// outcome as a decision event: "committed" when appended, "no_commit" when the
+// candidate cap or a duplicate refuses it.
+func commitCensusAttestedBesideScopeAnchor(resolution *contextfabric.SubjectResolution, candidate contextfabric.SubjectCandidate, request contextfabric.InvestigationRequest, deps ResolveDeps, bases contextfabric.CommitBasisSet, digests contextfabric.CommitDecisionDigestSet, searchTruncated, aliasComplete bool, searchCandidateLimit, pass int) bool {
+	appended, displaced := appendCensusAttestedCommit(resolution, candidate, request.Options.MaxSubjectCandidates, bases, digests, searchTruncated, aliasComplete)
+	if deps.ResolutionTracer == nil {
+		return appended
+	}
+	if !appended {
+		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+			RequestID: request.RequestID, Stage: "decision", Subject: candidate.Subject,
+			Outcome: "no_commit", CommitGate: "evidence_census", SearchTruncated: searchTruncated,
+			SearchCandidateLimit: searchCandidateLimit, PopulationBasis: "none",
+			Pass: pass, Index: 1, Total: 1,
+		})
+		return false
+	}
+	// CHAOS-8408: the appended subject took the last uncommitted slot at the
+	// candidate cap; record who left. A displaced line shares the pass, so the
+	// pair is index 1/2 "displaced" then 2/2 "committed".
+	committedIndex, committedTotal := 1, 1
+	if displaced.CanonicalID != "" {
+		committedIndex, committedTotal = 2, 2
+		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+			RequestID: request.RequestID, Stage: "decision", Subject: displaced,
+			Outcome: "displaced", CommitGate: "evidence_census", SearchTruncated: searchTruncated,
+			SearchCandidateLimit: searchCandidateLimit, PopulationBasis: "none",
+			Pass: pass, Index: 1, Total: 2,
+		})
+	}
+	winningMechanism := ""
+	if len(candidate.MatchMechanisms) > 0 {
+		winningMechanism = string(candidate.MatchMechanisms[0])
+	}
+	deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+		RequestID: request.RequestID, Stage: "decision", Subject: candidate.Subject,
+		Outcome: "committed", WinningMechanism: winningMechanism, CommitGate: "evidence_census",
+		CommitBasis: string(bases.For(candidate.Subject)), SearchTruncated: searchTruncated,
+		SearchCandidateLimit: searchCandidateLimit, PopulationBasis: "none",
+		Pass: pass, Index: committedIndex, Total: committedTotal,
+	})
+	return true
 }
 
 // appendCensusAttestedCommit commits the census-attested satisfier beside the

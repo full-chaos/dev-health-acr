@@ -121,6 +121,11 @@ func runStatusFilterTuple(t *testing.T, frame QuestionFrame, population int) sta
 
 func runStatusFilterTupleCensus(t *testing.T, frame QuestionFrame, census WorkItemMembershipCensus) statusFilterRun {
 	t.Helper()
+	return runTupleFilterCase(t, frame, census, validInvestigationRequestWithConfirmedWindow())
+}
+
+func runTupleFilterCase(t *testing.T, frame QuestionFrame, census WorkItemMembershipCensus, investigation InvestigationRequest) statusFilterRun {
+	t.Helper()
 	population := census.AuthorizedPopulation
 	var run statusFilterRun
 	frame = ValidateFrame(frame, nil, "").Frame
@@ -157,7 +162,7 @@ func runStatusFilterTupleCensus(t *testing.T, frame QuestionFrame, census WorkIt
 	if err != nil {
 		t.Fatal(err)
 	}
-	run.result, run.invokedErr = engine.Investigate(context.Background(), storage.Principal{OrgID: "org-1"}, validInvestigationRequestWithConfirmedWindow())
+	run.result, run.invokedErr = engine.Investigate(context.Background(), storage.Principal{OrgID: "org-1"}, investigation)
 	run.admissions = telemetry.workItemTupleAdmissions
 	if store.savedSemantic != nil && store.savedSemantic.State != nil {
 		run.savedCensus = store.savedSemantic.State.WorkItemCensus
@@ -259,7 +264,7 @@ func TestWorkItemNoMatchDisclosureNeedsAnExactZeroCensus(t *testing.T) {
 		{"exact zero with a denied partition", &WorkItemTupleCensus{State: WorkItemMembershipCensusExact, Value: 0, gap: &workItemAuthorizationGap{}}, false},
 		{"no census", nil, false},
 	} {
-		got := withWorkItemStatusFilterLimitations(InvestigationResult{}, "blocked", tc.census)
+		got := withWorkItemMemberFilterLimitations(InvestigationResult{}, workItemMemberFilter{Status: "blocked"}, tc.census)
 		if has := limitationsContain(got.Limitations, workItemStatusNoMatchDisclosure("blocked")); has != tc.want {
 			t.Errorf("%s: no-match disclosure present=%v, want %v", tc.name, has, tc.want)
 		}

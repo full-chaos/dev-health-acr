@@ -216,10 +216,21 @@ import (
 // members of one status are served. A candidate saved under v31 for such a
 // question is the member-kind refusal and must not be reused.
 //
-// v32 -> v33: a terminal answer whose stored reading the strict work-item
+// v32 -> v33: an exact repository hint beside a pull request handle in the
+// question commits the census-attested pull request too, where it used to
+// commit the repository alone. A candidate saved under v32 for such a question
+// answers about the repository and must not be reused.
+//
+// v33 -> v34: the work-item member read takes a window on one bound time
+// field (created, completed or updated), so a project's members of a period
+// are served. A candidate saved under v33 for such a question is the
+// member-kind refusal and must not be reused.
+//
+// v34 -> v35: a terminal answer whose stored reading the strict work-item
 // validator refuses is now served (with a not-saved disclosure) instead of
 // failing the turn.
-const QueryVersion = "devhealthfacts.clickhouse.v33"
+const QueryVersion = "devhealthfacts.clickhouse.v35"
+
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
