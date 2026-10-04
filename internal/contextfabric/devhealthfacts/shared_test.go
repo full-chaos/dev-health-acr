@@ -545,6 +545,15 @@ func TestQueryVersionMovedPastTheDraftStatusAnswerHead(t *testing.T) {
 	}
 }
 
+func TestQueryVersionMovedPastTheRelatesToDeploymentWalk(t *testing.T) {
+	t.Parallel()
+	for _, versionBeforeTheWalkReadTheLinkOfRecord := range []string{"devhealthfacts.clickhouse.v54", "devhealthfacts.clickhouse.v55", "devhealthfacts.clickhouse.v56", "devhealthfacts.clickhouse.v57", "devhealthfacts.clickhouse.v58", "devhealthfacts.clickhouse.v59", "devhealthfacts.clickhouse.v60", "devhealthfacts.clickhouse.v61", "devhealthfacts.clickhouse.v62", "devhealthfacts.clickhouse.v63", "devhealthfacts.clickhouse.v64", "devhealthfacts.clickhouse.v65", "devhealthfacts.clickhouse.v66"} {
+		if devhealthfacts.QueryVersion == versionBeforeTheWalkReadTheLinkOfRecord {
+			t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved when the deployment walk read RELATES_TO between work items holds the deployments of that topology and must not be reused", devhealthfacts.QueryVersion, versionBeforeTheWalkReadTheLinkOfRecord)
+		}
+	}
+}
+
 func TestQueryVersionMovedPastTheOneWindowSeriesAndComparison(t *testing.T) {
 	t.Parallel()
 	for _, versionBeforeThePeriodShape := range []string{"devhealthfacts.clickhouse.v55", "devhealthfacts.clickhouse.v56", "devhealthfacts.clickhouse.v57", "devhealthfacts.clickhouse.v58", "devhealthfacts.clickhouse.v59", "devhealthfacts.clickhouse.v60", "devhealthfacts.clickhouse.v61", "devhealthfacts.clickhouse.v62", "devhealthfacts.clickhouse.v63"} {

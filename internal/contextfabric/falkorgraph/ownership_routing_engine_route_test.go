@@ -90,7 +90,7 @@ func TestACrowdOfTeamsTheQuestionTextMatchesDoesNotCrowdOutTheOwner(t *testing.T
 func TestAnOwnerOverTheRepositoryListBoundIsServedThroughTheEngine(t *testing.T) {
 	s := seedOwnedRepository()
 	s.nodes = append(s.nodes, seededNode{kind: "team", id: "team:large", label: "large", repos: []string{"acr-context-fabric:team-repository-ownership-over-bound"}})
-	s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", routeOwnedRepository, "team", "team:large"})
+	s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", routeOwnedRepository, "team", "team:large", ""})
 	answer := askOwningTeams(t, s, storage.Principal{OrgID: "org-1"})
 	if got := answer.members(); strings.Join(got, ",") != "team:large,team:owner" {
 		t.Fatalf("served %v, want both owners: the over-bound owner through the repository's ownership edge, the other through its list", got)

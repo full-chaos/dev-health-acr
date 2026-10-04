@@ -598,8 +598,9 @@ ops link table of record `work_graph_issue_pr` as `LINKS_PULL_REQUEST`
 every projected organization, so incremental catch-up never reads them. Every
 projected organization needs one `acr-projector rebuild --org <id>`; until it
 runs, `ErrProjectionSourceVersionChanged` refuses the incremental tick. The
-tree walk still reads `RELATES_TO`; it switches to the new edge in a later
-change.
+tree walk reads this edge (and no longer `RELATES_TO`), so a project,
+repository or team walk over an organization that has not been rebuilt finds
+no link.
 
 **Projection cursor space (CHAOS-7263).** The shared projection cursor
 (`devhealthsource`) is positioned on each row's INGEST time (the `last_synced`

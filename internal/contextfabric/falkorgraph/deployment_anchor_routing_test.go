@@ -144,10 +144,10 @@ func projectWithOneIssue(link bool, deployments int) ([]seededNode, []seededEdge
 	s.nodes = append(s.nodes, seededNode{kind: "project", id: projectAnchorID, label: "payments"})
 	repoID := s.repository("acme/linked", deployments)
 	if link {
-		s.link("github", "work_item:gh:1", []string{"acme/linked"}, "work_item:ghpr:1", "pr", repoID, "acme/linked", false)
+		s.link("github", "work_item:gh:1", []string{"acme/linked"}, "pull_request:ghpr:1", "native", repoID, "acme/linked")
 	} else {
 		s.nodes = append(s.nodes, seededNode{kind: "work_item", id: "work_item:gh:1", label: "issue", repos: []string{"acme/linked"}, workItemType: "issue"})
-		s.edges = append(s.edges, seededEdge{"BELONGS_TO_PROJECT", "work_item", "work_item:gh:1", "project", projectAnchorID})
+		s.edges = append(s.edges, seededEdge{"BELONGS_TO_PROJECT", "work_item", "work_item:gh:1", "project", projectAnchorID, ""})
 	}
 	return s.nodes, s.edges
 }
@@ -430,10 +430,8 @@ func TestARestrictedCallerWithACutFrontierStillGetsTheNeutralReason(t *testing.T
 	s := linkedIssues(40, 1)
 	for i := range s.nodes {
 		switch s.nodes[i].kind {
-		case "work_item":
-			if s.nodes[i].workItemType == "pr" {
-				s.nodes[i].repos = []string{"acme/somewhere-else"}
-			}
+		case "pull_request":
+			s.nodes[i].repos = []string{"acme/somewhere-else"}
 		case "repository":
 			s.nodes[i].repos = []string{"acme/hidden"}
 		}
@@ -472,7 +470,7 @@ func TestAnAnchorWhoseCutReadReachedNoDeploymentIsPartial(t *testing.T) {
 	// More owned repositories than the read budget, none with a deployment.
 	for i := 0; i < 6; i++ {
 		repoID := s.repository(fmt.Sprintf("acme/owned-%02d", i), 0)
-		s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", repoID, "team", "team:anchor"})
+		s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", repoID, "team", "team:anchor", ""})
 	}
 	adapter := newFakeAdapter(t, seededGraphConn(s.nodes, s.edges))
 	adapter.config.MaxResults = 3
@@ -515,12 +513,12 @@ func anchorWithIssues(s *projectSeed, kind, anchorID, slug string, issues, deplo
 	for i := 0; i < issues; i++ {
 		id := fmt.Sprintf("work_item:%s:%d", anchorID, i)
 		s.nodes = append(s.nodes, seededNode{kind: "work_item", id: id, label: id, repos: []string{slug}, workItemType: "issue"})
-		s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "work_item", id, kind, anchorID})
+		s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "work_item", id, kind, anchorID, ""})
 	}
 	for d := 0; d < deployments; d++ {
 		id := fmt.Sprintf("deployment:%s:%d", anchorID, d)
 		s.nodes = append(s.nodes, seededNode{kind: "deployment", id: id, label: id, repos: []string{slug}})
-		s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "deployment", id, kind, anchorID})
+		s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "deployment", id, kind, anchorID, ""})
 	}
 }
 
@@ -606,8 +604,8 @@ func TestATeamsReachAuthorizesTheOwnedRepositoryOnItsOwn(t *testing.T) {
 		seededNode{kind: "repository", id: "repository:r", label: "r", repos: []string{"acme/hidden"}},
 		seededNode{kind: "deployment", id: "deployment:d", label: "d", repos: []string{"acme/granted"}})
 	s.edges = append(s.edges,
-		seededEdge{"OWNED_BY_TEAM", "repository", "repository:r", "team", "team:anchor"},
-		seededEdge{"BELONGS_TO_REPOSITORY", "deployment", "deployment:d", "repository", "repository:r"})
+		seededEdge{"OWNED_BY_TEAM", "repository", "repository:r", "team", "team:anchor", ""},
+		seededEdge{"BELONGS_TO_REPOSITORY", "deployment", "deployment:d", "repository", "repository:r", ""})
 	adapter := newFakeAdapter(t, seededGraphConn(s.nodes, s.edges))
 	reach, err := adapter.anchorDeploymentMembers(context.Background(), "key", "org-1", storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"acme/granted"}}, contextfabric.RequestedScope{},
 		contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:anchor", Label: "payments"}, 50, newTemporalFilter(contextfabric.TimeContext{}))
@@ -689,7 +687,7 @@ func TestATeamsRepositoriesWithSeveralOwnershipEdgesSpendTheBudgetOnce(t *testin
 	for i := 0; i < 10; i++ {
 		repoID := s.repository(fmt.Sprintf("acme/owned-%02d", i), 1)
 		for a := 0; a < 3; a++ {
-			s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", repoID, "team", "team:anchor"})
+			s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", repoID, "team", "team:anchor", ""})
 		}
 	}
 	adapter := newFakeAdapter(t, seededGraphConn(s.nodes, s.edges))
@@ -711,10 +709,10 @@ func TestATeamsOwnershipEdgesPastTheReadBoundAreACut(t *testing.T) {
 	s.nodes = append(s.nodes, seededNode{kind: "team", id: "team:anchor", label: "payments"})
 	first := s.repository("acme/a-first", 1)
 	for a := 0; a < exactNameCandidateQueryLimit; a++ {
-		s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", first, "team", "team:anchor"})
+		s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", first, "team", "team:anchor", ""})
 	}
 	last := s.repository("acme/z-last", 1)
-	s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", last, "team", "team:anchor"})
+	s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", last, "team", "team:anchor", ""})
 	adapter := newFakeAdapter(t, seededGraphConn(s.nodes, s.edges))
 	reach, err := adapter.anchorDeploymentMembers(context.Background(), "key", "org-1", storage.Principal{OrgID: "org-1"}, contextfabric.RequestedScope{},
 		contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:anchor", Label: "payments"}, 25, newTemporalFilter(contextfabric.TimeContext{}))
@@ -733,7 +731,7 @@ func TestATeamsReachKeepsOwnershipEdgesOnlyForTheRepositoriesItReads(t *testing.
 	s.nodes = append(s.nodes, seededNode{kind: "team", id: "team:anchor", label: "payments"})
 	for i := 0; i < 6; i++ {
 		repoID := s.repository(fmt.Sprintf("acme/owned-%02d", i), 0)
-		s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", repoID, "team", "team:anchor"})
+		s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", repoID, "team", "team:anchor", ""})
 	}
 	adapter := newFakeAdapter(t, seededGraphConn(s.nodes, s.edges))
 	reach, err := adapter.anchorDeploymentMembers(context.Background(), "key", "org-1", storage.Principal{OrgID: "org-1"}, contextfabric.RequestedScope{},

@@ -34,10 +34,10 @@ answers:
 here is a work-tracking project, not a repository group. A project and a
 repository meet through the entity tree, **Repository <> Pull request <> Issue
 <> Project** (`docs/design/context-fabric-architecture-diagrams.md` §3):
-`project <-BELONGS_TO_PROJECT- issue -RELATES_TO- pull request
--BELONGS_TO_REPOSITORY-> repository`, where the issue↔pull request hop is an
-actual `work_item_dependencies` link row and the repository is the pull
-request's own. An issue's own repository column is not that path. A team
+`project <-BELONGS_TO_PROJECT- issue -LINKS_PULL_REQUEST-> pull request
+-BELONGS_TO_REPOSITORY-> repository`, where the issue→pull request hop is an
+actual `work_graph_issue_pr` link row (the link of record, with its provenance
+tier) and the repository is the pull request's own. An issue's own repository column is not that path. A team
 reaches repositories and projects through ownership only
 (`team_repo_ownership`, `team_project_ownership`). Some reads still use a
 work item's own repository as an activity proxy (the CHAOS-4099 fact-scope

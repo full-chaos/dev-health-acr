@@ -11,12 +11,14 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-// TestLiveAPullRequestWithoutATypeIsNotALinkOnTheProjectWalk runs the real link
-// read against a real graph store. A pull-request work item whose projected
-// row carries no `type` property is not recognised as a pull request: a project
-// whose only link goes to one reads as unlinked, and a project with a typed
-// link reads only that link.
-func TestLiveAPullRequestWithoutATypeIsNotALinkOnTheProjectWalk(t *testing.T) {
+// TestLiveAPullRequestsTypeDecidesNothingOnTheProjectWalk runs the real link
+// read against a real graph store. The pull-request position is the
+// pull_request node, which carries no work-item `type`, so the link of an
+// issue reaches it whether the issue's own type is "issue" or absent. The type
+// of a WORK ITEM still decides who is an issue: a work item typed as a pull
+// request that belongs to the project is no issue, and the link it holds is
+// not followed (a project whose only such link it is reads as unlinked).
+func TestLiveAPullRequestsTypeDecidesNothingOnTheProjectWalk(t *testing.T) {
 	ctx := context.Background()
 	adapter, _ := newLiveFalkorAdapter(t, ctx)
 	orgID := "live-typeless-pr-" + time.Now().UTC().Format("20060102T150405.000000000")
@@ -44,6 +46,7 @@ func TestLiveAPullRequestWithoutATypeIsNotALinkOnTheProjectWalk(t *testing.T) {
 	relate := func(id string, relation contractsv1.ContextFabricRelationshipType, from, to contextfabric.SubjectRef, authorization contextfabric.AuthorizationScope) {
 		relationships.Relationships = append(relationships.Relationships, contextfabric.RelationshipProjection{
 			RelationshipID: "relationship_typeless_pr_" + id, Type: relation, From: from, To: to,
+			Properties: liveLinkProperties(relation, "native"),
 			Derivation: contextfabric.DerivationCanonicalStructured, EpistemicStatus: contextfabric.EpistemicObserved,
 			Authorization: authorization, EvidenceRefIDs: []string{"evidence_typeless_pr_" + id}, ObservedAt: observed.Add(time.Minute), SourceVersion: "v1",
 		})
@@ -59,17 +62,17 @@ func TestLiveAPullRequestWithoutATypeIsNotALinkOnTheProjectWalk(t *testing.T) {
 	for _, c := range []struct {
 		name  string
 		types []string
-	}{{"typed", []string{"pr", ""}}, {"typeless", []string{""}}} {
+	}{{"plain", []string{"issue"}}, {"typeless", []string{""}}, {"typedpr", []string{"pr"}}} {
 		project := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project.v2:linear:" + c.name, Label: c.name}
 		projects[c.name] = project
 		entity(project, contextfabric.AuthorizationScope{ProjectIDs: []string{"project-" + c.name}}, "")
 		for i, kind := range c.types {
 			issue := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_item:linear:" + c.name + "-" + string(rune('a'+i)), Label: "issue"}
-			entity(issue, noRepository, "issue")
+			entity(issue, noRepository, kind)
 			relate(c.name+"_"+string(rune('a'+i))+"_project", contractsv1.ContextFabricRelationshipBelongsToProject, issue, project, noRepository)
-			pullRequest := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_item:ghpr:" + c.name + "-" + string(rune('a'+i)), Label: "pull request"}
-			entity(pullRequest, repository, kind)
-			relate(c.name+"_"+string(rune('a'+i))+"_link", contractsv1.ContextFabricRelationshipRelatesTo, pullRequest, issue, repository)
+			pullRequest := contextfabric.SubjectRef{Kind: contextfabric.SubjectPullRequest, CanonicalID: "pull_request:ghpr:" + c.name + "-" + string(rune('a'+i)), Label: "pull request"}
+			entity(pullRequest, repository, "")
+			relate(c.name+"_"+string(rune('a'+i))+"_link", contractsv1.ContextFabricRelationshipLinksPullRequest, issue, pullRequest, repository)
 			relate(c.name+"_"+string(rune('a'+i))+"_repository", contractsv1.ContextFabricRelationshipBelongsToRepository, pullRequest, repo, repository)
 		}
 	}
@@ -91,16 +94,18 @@ func TestLiveAPullRequestWithoutATypeIsNotALinkOnTheProjectWalk(t *testing.T) {
 		t.Fatalf("effectiveKey() error = %v", err)
 	}
 	for windowName, temporal := range walkWindows(time.Now().UTC()) {
-		typed, err := adapter.anchorDeploymentMembers(ctx, key, orgID, principal, contextfabric.RequestedScope{}, projects["typed"], 25, temporal)
-		if err != nil || len(typed.nodes) != 1 || typed.linkTargets != 1 || typed.truncated {
-			t.Fatalf("%s, typed: walk = %d members, %d links, truncated %v, error %v; want 1 member, only the typed link, uncut", windowName, len(typed.nodes), typed.linkTargets, typed.truncated, err)
+		for _, name := range []string{"plain", "typeless"} {
+			walk, err := adapter.anchorDeploymentMembers(ctx, key, orgID, principal, contextfabric.RequestedScope{}, projects[name], 25, temporal)
+			if err != nil || len(walk.nodes) != 1 || walk.linkTargets != 1 || walk.truncated {
+				t.Fatalf("%s, %s: walk = %d members, %d links, truncated %v, error %v; want 1 member through its link, uncut", windowName, name, len(walk.nodes), walk.linkTargets, walk.truncated, err)
+			}
 		}
-		typeless, err := adapter.anchorDeploymentMembers(ctx, key, orgID, principal, contextfabric.RequestedScope{}, projects["typeless"], 25, temporal)
-		if err != nil || len(typeless.nodes) != 0 || typeless.linkTargets != 0 || typeless.truncated {
-			t.Fatalf("%s, typeless: walk = %d members, %d links, truncated %v, error %v; want no member, no link, uncut", windowName, len(typeless.nodes), typeless.linkTargets, typeless.truncated, err)
+		typedPR, err := adapter.anchorDeploymentMembers(ctx, key, orgID, principal, contextfabric.RequestedScope{}, projects["typedpr"], 25, temporal)
+		if err != nil || len(typedPR.nodes) != 0 || typedPR.linkTargets != 0 || typedPR.truncated {
+			t.Fatalf("%s, typed pull-request work item: walk = %d members, %d links, truncated %v, error %v; want no member, no link, uncut", windowName, len(typedPR.nodes), typedPR.linkTargets, typedPR.truncated, err)
 		}
-		if outcome := projectDeploymentWalkOutcome(typeless, false, nil); outcome != ProjectDeploymentWalkUnlinked {
-			t.Fatalf("%s, typeless: outcome = %q, want unlinked", windowName, outcome)
+		if outcome := projectDeploymentWalkOutcome(typedPR, false, nil); outcome != ProjectDeploymentWalkUnlinked {
+			t.Fatalf("%s, typed pull-request work item: outcome = %q, want unlinked", windowName, outcome)
 		}
 	}
 }

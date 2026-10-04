@@ -14,9 +14,9 @@ import (
 )
 
 // liveRouteFixture is two projects in the shape the projection writes: each
-// project has one repository-less issue, a pull-request work item that relates
-// to it and belongs to the project's own repository, and two deployments of
-// that repository. No name shares a word with another subject's, so a term
+// project has one repository-less issue, a pull request the issue links by a
+// native LINKS_PULL_REQUEST edge (the pull request belongs to the project's own
+// repository), and two deployments of that repository. No name shares a word with another subject's, so a term
 // retrieves one subject only.
 type liveRouteFixture struct {
 	entities, relationships contextfabric.ProjectionBatch
@@ -25,6 +25,20 @@ type liveRouteFixture struct {
 }
 
 func liveRouteString(value string) *string { return &value }
+
+// liveLinkProperties are the properties the projection writes on a
+// LINKS_PULL_REQUEST edge: the provenance tier and its rank. Other
+// relationships carry none.
+func liveLinkProperties(relation contractsv1.ContextFabricRelationshipType, tier string) map[string]contextfabric.ScalarValue {
+	if relation != contractsv1.ContextFabricRelationshipLinksPullRequest {
+		return nil
+	}
+	rank := map[string]int64{"native": 3, "explicit_text": 2, "heuristic": 1}[tier]
+	return map[string]contextfabric.ScalarValue{
+		linkTierProperty: {String: liveRouteString(tier)},
+		linkRankProperty: {Integer: &rank},
+	}
+}
 
 func newLiveRouteFixture(orgID string, observed time.Time) liveRouteFixture {
 	fixture := liveRouteFixture{deployments: map[string][]string{}}
@@ -47,6 +61,7 @@ func newLiveRouteFixture(orgID string, observed time.Time) liveRouteFixture {
 	relate := func(id string, relation contractsv1.ContextFabricRelationshipType, from, to contextfabric.SubjectRef, authorization contextfabric.AuthorizationScope) {
 		fixture.relationships.Relationships = append(fixture.relationships.Relationships, contextfabric.RelationshipProjection{
 			RelationshipID: "relationship_route_" + id, Type: relation, From: from, To: to,
+			Properties: liveLinkProperties(relation, "native"),
 			Derivation: contextfabric.DerivationCanonicalStructured, EpistemicStatus: contextfabric.EpistemicObserved,
 			Authorization: authorization, EvidenceRefIDs: []string{"evidence_route_edge_" + id},
 			ObservedAt: observed.Add(time.Minute), SourceVersion: "v1",
@@ -60,15 +75,14 @@ func newLiveRouteFixture(orgID string, observed time.Time) liveRouteFixture {
 		project := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project.v2:linear:" + p.name, Label: p.name}
 		repo := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:github:" + p.slug, Label: p.slug}
 		issue := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_item:linear:" + p.name + "-1", Label: p.issue}
-		pullRequest := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_item:ghpr:" + p.name + "-1", Label: p.pullRequest}
+		pullRequest := contextfabric.SubjectRef{Kind: contextfabric.SubjectPullRequest, CanonicalID: "pull_request:ghpr:" + p.name + "-1", Label: p.pullRequest}
 		entity(project, contextfabric.AuthorizationScope{ProjectIDs: []string{"project-" + p.name}}, nil, "evidence_route_project_"+p.name)
 		entity(repo, repository, nil, "evidence_route_repository_"+p.name)
 		entity(issue, contextfabric.AuthorizationScope{RepositorySlugs: []string{noRepositoryScope}},
 			map[string]contextfabric.ScalarValue{"type": {String: liveRouteString("issue")}}, "evidence_route_issue_"+p.name)
-		entity(pullRequest, repository,
-			map[string]contextfabric.ScalarValue{"type": {String: liveRouteString("pr")}}, "evidence_route_pull_request_"+p.name)
+		entity(pullRequest, repository, nil, "evidence_route_pull_request_"+p.name)
 		relate(p.name+"_issue_project", contractsv1.ContextFabricRelationshipBelongsToProject, issue, project, contextfabric.AuthorizationScope{RepositorySlugs: []string{noRepositoryScope}})
-		relate(p.name+"_pull_request_issue", contractsv1.ContextFabricRelationshipRelatesTo, pullRequest, issue, repository)
+		relate(p.name+"_issue_pull_request", contractsv1.ContextFabricRelationshipLinksPullRequest, issue, pullRequest, repository)
 		relate(p.name+"_pull_request_repository", contractsv1.ContextFabricRelationshipBelongsToRepository, pullRequest, repo, repository)
 		for d := 0; d < 2; d++ {
 			deployment := contextfabric.SubjectRef{Kind: contextfabric.SubjectDeployment, CanonicalID: fmt.Sprintf("deployment:%s:%d", p.name, d), Label: "production deployment"}
@@ -155,7 +169,7 @@ func TestLiveNamedProjectsServeTheirOwnDeployments(t *testing.T) {
 			}
 			frontier = append(frontier, canonicalIDOf(pullRequest))
 		}
-		if strings.Join(frontier, ",") != "work_item:ghpr:alpha-1" {
+		if strings.Join(frontier, ",") != "pull_request:ghpr:alpha-1" {
 			t.Fatalf("%s, link read: reached %v, want the one linked pull request", windowName, frontier)
 		}
 		wants := [][]string{{"repository:github:acme/billing"}, fixture.deployments["alpha"]}
@@ -246,6 +260,7 @@ func TestLiveTheLinkReadFindsLinksPastTheBudgetAndCountsAnUnlinkedProject(t *tes
 	relate := func(id string, relation contractsv1.ContextFabricRelationshipType, from, to contextfabric.SubjectRef, authorization contextfabric.AuthorizationScope) {
 		relationships.Relationships = append(relationships.Relationships, contextfabric.RelationshipProjection{
 			RelationshipID: "relationship_link_read_" + id, Type: relation, From: from, To: to,
+			Properties: liveLinkProperties(relation, "native"),
 			Derivation: contextfabric.DerivationCanonicalStructured, EpistemicStatus: contextfabric.EpistemicObserved,
 			Authorization: authorization, EvidenceRefIDs: []string{"evidence_link_read_" + id}, ObservedAt: observed.Add(time.Minute), SourceVersion: "v1",
 		})
@@ -286,9 +301,9 @@ func TestLiveTheLinkReadFindsLinksPastTheBudgetAndCountsAnUnlinkedProject(t *tes
 			entity(issue, noRepository, "issue")
 			relate(fmt.Sprintf("%s_%03d_project", name, i), contractsv1.ContextFabricRelationshipBelongsToProject, issue, project, noRepository)
 			if name == "gamma" && i == 29 {
-				pullRequest := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_item:ghpr:ledger-1", Label: "pull request"}
-				entity(pullRequest, repository, "pr")
-				relate("gamma_link", contractsv1.ContextFabricRelationshipRelatesTo, pullRequest, issue, repository)
+				pullRequest := contextfabric.SubjectRef{Kind: contextfabric.SubjectPullRequest, CanonicalID: "pull_request:ghpr:ledger-1", Label: "pull request"}
+				entity(pullRequest, repository, "")
+				relate("gamma_link", contractsv1.ContextFabricRelationshipLinksPullRequest, issue, pullRequest, repository)
 				relate("gamma_pull_request_repository", contractsv1.ContextFabricRelationshipBelongsToRepository, pullRequest, repo, repository)
 			}
 		}

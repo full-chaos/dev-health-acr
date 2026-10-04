@@ -20,6 +20,17 @@ type seededNode struct {
 
 type seededEdge struct {
 	typ, srcKind, srcID, dstKind, dstID string
+	// tier is the stored link_provenance of a LINKS_PULL_REQUEST edge; empty
+	// stores no tier at all.
+	tier string
+}
+
+// seededTierRank is the stored rank of a tier as the projection writes it.
+var seededTierRank = map[string]int64{"native": 3, "explicit_text": 2, "heuristic": 1}
+
+// linkEdge seeds the link of record: LINKS_PULL_REQUEST, issue -> pull request.
+func linkEdge(issueID, pullRequestID, tier string) seededEdge {
+	return seededEdge{"LINKS_PULL_REQUEST", "work_item", issueID, "pull_request", pullRequestID, tier}
 }
 
 // seededGraphConn answers the adapter's two read shapes (a node by key, the
@@ -100,12 +111,12 @@ func seedParentDeployments(parentKind string) parentSeed {
 			switch parentKind {
 			case "team":
 				s.nodes[0].repos = append(s.nodes[0].repos, slug)
-				s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", repoID, "team", parentID})
+				s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", repoID, "team", parentID, ""})
 			}
 			for d := 0; d < 2; d++ {
 				depID := fmt.Sprintf("deployment:%s:%d:%d", host, r, d)
 				s.nodes = append(s.nodes, seededNode{kind: "deployment", id: depID, label: depID, repos: []string{slug}})
-				s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "deployment", depID, "repository", repoID})
+				s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "deployment", depID, "repository", repoID, ""})
 				s.ownedDeployments = append(s.ownedDeployments, depID)
 			}
 		}
@@ -115,7 +126,7 @@ func seedParentDeployments(parentKind string) parentSeed {
 	s.nodes = append(s.nodes,
 		seededNode{kind: "repository", id: foreignRepo, label: "acme/foreign", repos: []string{"acme/foreign"}},
 		seededNode{kind: "deployment", id: s.foreignDeployment, label: s.foreignDeployment, repos: []string{"acme/foreign"}})
-	s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "deployment", s.foreignDeployment, "repository", foreignRepo})
+	s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "deployment", s.foreignDeployment, "repository", foreignRepo, ""})
 	sort.Strings(s.ownedDeployments)
 	return s
 }
@@ -194,10 +205,13 @@ func TestTeamDeploymentMembersFollowTheCallersRepositoryGrant(t *testing.T) {
 }
 
 // seededProjectLinks answers the walk's link read and source count from the
-// seeded topology: the anchor's near-side nodes (joined by the feeding
-// relation in the read's direction, filtered by their stored type) and, for
-// the link read, one row per link relation from such a node to a far-side node
-// of the far side's type, in the read's order, paged by skip and limit.
+// seeded topology, as the Cypher of linkSegmentCypher reads it: the anchor's
+// near-side nodes (joined by the feeding relation in the read's direction,
+// filtered by their stored type) and, for the link read, one row per link
+// edge from such a node to a far-side node, in the DIRECTION the read's
+// pattern names, kept only when the edge's tier is in $tiers, restricted
+// callers' grant clause applied to each end, ordered by the read's ORDER BY
+// (tier rank first when the read says so), paged by skip and limit.
 func seededProjectLinks(byKey map[string]seededNode, edges []seededEdge, cypher string, params map[string]interface{}) []row {
 	anchor, _ := params["anchor"].(string)
 	anchorKind, _ := params["anchorKind"].(string)
@@ -249,21 +263,35 @@ func seededProjectLinks(byKey map[string]seededNode, edges []seededEdge, cypher 
 	type link struct {
 		near, far seededNode
 		rel       string
+		tier      string
 	}
+	linkIn := strings.Contains(cypher, ")<-[rl:")
+	tierFilter := strings.Contains(cypher, "rl."+propPropertyPrefix+linkTierProperty+" IN $tiers")
+	tiers := typeSet("tiers")
 	var links []link
 	for i, e := range edges {
 		if e.typ != linkRel || e.srcKind == "" {
 			continue
 		}
-		for _, pair := range [][2][2]string{{{e.srcKind, e.srcID}, {e.dstKind, e.dstID}}, {{e.dstKind, e.dstID}, {e.srcKind, e.srcID}}} {
-			n, isNear := near[pair[0][1]]
-			far, ok := byKey[pair[1][0]+"|"+pair[1][1]]
-			if isNear && pair[0][0] == midKind && ok && pair[1][0] == endKind && typed("b", endTypes, far) && seededLinkGrantsAdmit(params, n, far) {
-				links = append(links, link{n, far, fmt.Sprintf("rel_%03d", i)})
-			}
+		if tierFilter && !tiers[e.tier] {
+			continue
+		}
+		// The pattern is directed: (m)-[rl]->(b), or (m)<-[rl]-(b).
+		nearEnd, farEnd := [2]string{e.srcKind, e.srcID}, [2]string{e.dstKind, e.dstID}
+		if linkIn {
+			nearEnd, farEnd = farEnd, nearEnd
+		}
+		n, isNear := near[nearEnd[1]]
+		far, ok := byKey[farEnd[0]+"|"+farEnd[1]]
+		if isNear && nearEnd[0] == midKind && ok && farEnd[0] == endKind && typed("b", endTypes, far) && seededLinkGrantsAdmit(cypher, params, n, far, e.tier) {
+			links = append(links, link{n, far, fmt.Sprintf("rel_%03d", i), e.tier})
 		}
 	}
+	byRank := strings.Contains(cypher, "ORDER BY rl."+propPropertyPrefix+linkRankProperty+" DESC")
 	sort.Slice(links, func(a, b int) bool {
+		if byRank && seededTierRank[links[a].tier] != seededTierRank[links[b].tier] {
+			return seededTierRank[links[a].tier] > seededTierRank[links[b].tier]
+		}
 		if links[a].near.id != links[b].near.id {
 			return links[a].near.id < links[b].near.id
 		}
@@ -293,10 +321,12 @@ func seededProjectLinks(byKey map[string]seededNode, edges []seededEdge, cypher 
 	}
 	rows := make([]row, 0, len(links))
 	for _, l := range links {
-		rows = append(rows, row{
-			"m": asNode(l.near), "b": asNode(l.far),
-			"rl": &edge{Properties: map[string]interface{}{propRelationType: linkRel, propRelationshipID: l.rel}},
-		})
+		props := map[string]interface{}{propRelationType: linkRel, propRelationshipID: l.rel}
+		if l.tier != "" {
+			props[propPropertyPrefix+linkTierProperty] = l.tier
+			props[propPropertyPrefix+linkRankProperty] = seededTierRank[l.tier]
+		}
+		rows = append(rows, row{"m": asNode(l.near), "b": asNode(l.far), "rl": &edge{Properties: props}})
 	}
 	return rows
 }
@@ -368,40 +398,69 @@ func seededWalkStep(byKey map[string]seededNode, edges []seededEdge, cypher stri
 	return rows
 }
 
-// seededGrantsAdmit applies the link read's grant clause when the read carries
-// one: the pull request's repositories meet the grants, and the issue's do or
-// the issue has no repository.
-// seededLinkGrantsAdmit applies the restricted link read's grant clause to
-// one link, whichever end is the pull request.
-func seededLinkGrantsAdmit(params map[string]interface{}, near, far seededNode) bool {
-	if near.workItemType == "pr" || near.workItemType == "merge_request" {
-		return seededGrantsAdmit(params, far, near)
-	}
-	return seededGrantsAdmit(params, near, far)
+// grantsAdmitEntry is the Go mirror of the link read's per-entry grant test
+// (treeNodeVar.grantClause): the entry is a raw grant, equals a grant once
+// lower-cased and trimmed, or starts with a granted owner prefix.
+func grantsAdmitEntry(raw, norm, owners []interface{}, entry string) bool {
+	return grantsAdmitEntryBy(raw, norm, owners, entry, true, true)
 }
 
-func seededGrantsAdmit(params map[string]interface{}, issue, pullRequest seededNode) bool {
-	grants, restricted := params["grants"].([]interface{})
-	if !restricted {
+// grantsAdmitEntryBy applies only the arms the read's Cypher carries
+// (useNorm: the lower-cased equality; useOwners: the owner prefix).
+func grantsAdmitEntryBy(raw, norm, owners []interface{}, entry string, useNorm, useOwners bool) bool {
+	in := func(list []interface{}, v string) bool {
+		for _, x := range list {
+			if x == v {
+				return true
+			}
+		}
+		return false
+	}
+	folded := strings.ToLower(strings.TrimSpace(entry))
+	if in(raw, entry) || (useNorm && in(norm, folded)) {
 		return true
 	}
-	meets := func(repos []string) bool {
-		for _, r := range repos {
-			for _, g := range grants {
-				if g == r {
+	for _, o := range owners {
+		if useOwners && strings.HasPrefix(folded, o.(string)) {
+			return true
+		}
+	}
+	return false
+}
+
+// seededLinkGrantsAdmit applies the restricted link read's grant clause to one
+// link when the read carries one, to each end by its kind: the pull request's
+// repositories meet the grants; the issue's do, or the issue has no
+// repository and the link's tier grants authority.
+func seededLinkGrantsAdmit(cypher string, params map[string]interface{}, near, far seededNode, tier string) bool {
+	if _, restricted := params["grantRaw"]; !restricted {
+		return true
+	}
+	raw, _ := params["grantRaw"].([]interface{})
+	norm, _ := params["grantNorm"].([]interface{})
+	owners, _ := params["grantOwners"].([]interface{})
+	authority := map[string]bool{}
+	if list, ok := params["authorityTiers"].([]interface{}); ok {
+		for _, v := range list {
+			authority[v.(string)] = true
+		}
+	}
+	useNorm := strings.Contains(cypher, "toLower(trim(s)) IN $grantNorm")
+	useOwners := strings.Contains(cypher, "toLower(trim(s)) STARTS WITH o")
+	admits := func(n seededNode) bool {
+		for _, r := range n.repos {
+			if grantsAdmitEntryBy(raw, norm, owners, r, useNorm, useOwners) {
+				return true
+			}
+		}
+		if n.kind == "work_item" {
+			for _, r := range n.repos {
+				if r == noRepositoryScope && (authority[tier] || !strings.Contains(cypher, "rl."+propPropertyPrefix+linkTierProperty+" IN $authorityTiers")) {
 					return true
 				}
 			}
 		}
 		return false
 	}
-	issueRepos := issue.repos
-	if len(issueRepos) == 0 {
-		issueRepos = []string{noRepositoryScope}
-	}
-	issueOK := meets(issueRepos)
-	for _, r := range issueRepos {
-		issueOK = issueOK || r == noRepositoryScope
-	}
-	return meets(pullRequest.repos) && issueOK
+	return admits(near) && admits(far)
 }

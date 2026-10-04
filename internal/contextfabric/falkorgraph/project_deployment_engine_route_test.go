@@ -58,22 +58,22 @@ func seedTwoLinkedProjects() routeSeed {
 		slug := "acme/" + name + "-service"
 		repoID := "repository:github:" + slug
 		issueID := "work_item:linear:" + name + "-1"
-		prID := "work_item:ghpr:" + slug + "#1"
+		prID := "pull_request:ghpr:" + slug + "#1"
 		s.nodes = append(s.nodes,
 			seededNode{kind: "project", id: projectID, label: name},
 			seededNode{kind: "repository", id: repoID, label: slug, repos: []string{slug}},
 			seededNode{kind: "work_item", id: issueID, label: issueID, repos: []string{noRepositoryScope}, workItemType: "issue"},
-			seededNode{kind: "work_item", id: prID, label: prID, repos: []string{slug}, workItemType: "pr"})
+			seededNode{kind: "pull_request", id: prID, label: prID, repos: []string{slug}})
 		s.text["project|"+projectID] = name
 		s.edges = append(s.edges,
-			seededEdge{"BELONGS_TO_PROJECT", "work_item", issueID, "project", projectID},
-			seededEdge{"RELATES_TO", "work_item", prID, "work_item", issueID},
-			seededEdge{"BELONGS_TO_REPOSITORY", "work_item", prID, "repository", repoID})
+			seededEdge{"BELONGS_TO_PROJECT", "work_item", issueID, "project", projectID, ""},
+			linkEdge(issueID, prID, "native"),
+			seededEdge{"BELONGS_TO_REPOSITORY", "pull_request", prID, "repository", repoID, ""})
 		for d := 0; d < 2; d++ {
 			depID := fmt.Sprintf("deployment:%s:%d", slug, d)
 			s.nodes = append(s.nodes, seededNode{kind: "deployment", id: depID, label: depID, repos: []string{slug}})
 			s.text["deployment|"+depID] = "deployments production"
-			s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "deployment", depID, "repository", repoID})
+			s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "deployment", depID, "repository", repoID, ""})
 			s.deployments[projectID] = append(s.deployments[projectID], depID)
 		}
 	}
@@ -460,7 +460,7 @@ func TestRestrictedCallerOfANamedProjectGetsTheNeutralReasonThroughTheEngine(t *
 func (s *routeSeed) teamOwningAlpha() {
 	s.nodes = append(s.nodes, seededNode{kind: "team", id: "team:tango", label: "tango", repos: []string{"acme/alpha-service"}})
 	s.text["team|team:tango"] = "tango"
-	s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", "repository:github:acme/alpha-service", "team", "team:tango"})
+	s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", "repository:github:acme/alpha-service", "team", "team:tango", ""})
 }
 
 func TestNamedTeamServesOnlyTheDeploymentsItReachesThroughTheEngine(t *testing.T) {
@@ -524,7 +524,7 @@ func (s *routeSeed) crowdLexicalArm(count int) {
 		depID := fmt.Sprintf("deployment:%s:%02d", slug, d)
 		s.nodes = append(s.nodes, seededNode{kind: "deployment", id: depID, label: depID, repos: []string{slug}})
 		s.text["deployment|"+depID] = "deployments production"
-		s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "deployment", depID, "repository", repoID})
+		s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "deployment", depID, "repository", repoID, ""})
 	}
 }
 

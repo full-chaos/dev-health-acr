@@ -202,7 +202,7 @@ func TestAReusedLargeProjectAnswerKeepsEveryMemberRef(t *testing.T) {
 		depID := fmt.Sprintf("deployment:%s:%d", slug, d)
 		s.nodes = append(s.nodes, seededNode{kind: "deployment", id: depID, label: depID, repos: []string{slug}})
 		s.text["deployment|"+depID] = "release production"
-		s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "deployment", depID, "repository", repoID})
+		s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "deployment", depID, "repository", repoID, ""})
 		s.deployments[routeProjectAlpha] = append(s.deployments[routeProjectAlpha], depID)
 	}
 	store := &routeStore{}

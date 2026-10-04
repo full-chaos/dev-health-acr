@@ -480,7 +480,7 @@ func TestAnOwnershipRoutedDiscoveryStillWalksTheEdgesOfWhatTheQuestionTextMatche
 	s.text["team|team:owner"] = "teams own"
 	s.text["repository|repository:github:acme/bravo-service"] = "teams own"
 	s.nodes = append(s.nodes, seededNode{kind: "repository", id: "repository:github:acme/gamma", label: "acme/gamma", repos: []string{"acme/gamma"}})
-	s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", "repository:github:acme/gamma", "team", "team:owner"})
+	s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", "repository:github:acme/gamma", "team", "team:owner", ""})
 	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: routeOwnedRepository, Label: routeOwnedSlug}
 	request := namedByLabelRequest(contextfabric.SubjectRepository, true)
 	request.Resolution.Committed = []contextfabric.SubjectRef{anchor}

@@ -22,7 +22,7 @@ func busyTeam(workItems, repositories int) (routeSeed, []string) {
 	for i := 0; i < workItems; i++ {
 		id := fmt.Sprintf("work_item:gh:busy-%03d", i)
 		s.nodes = append(s.nodes, seededNode{kind: "work_item", id: id, label: id, repos: []string{"acme/busy"}, workItemType: "issue"})
-		s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "work_item", id, "team", "team:tango"})
+		s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "work_item", id, "team", "team:tango", ""})
 	}
 	var owned []string
 	for r := 0; r <= repositories; r++ {
@@ -30,13 +30,13 @@ func busyTeam(workItems, repositories int) (routeSeed, []string) {
 		repoID := "repository:github:" + slug
 		s.nodes = append(s.nodes, seededNode{kind: "repository", id: repoID, label: slug, repos: []string{slug}})
 		if r < repositories {
-			s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", repoID, "team", "team:tango"})
+			s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", repoID, "team", "team:tango", ""})
 		}
 		for d := 0; d < 2; d++ {
 			depID := fmt.Sprintf("deployment:%s:%d", slug, d)
 			s.nodes = append(s.nodes, seededNode{kind: "deployment", id: depID, label: depID, repos: []string{slug}})
 			s.text["deployment|"+depID] = "deployments production"
-			s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "deployment", depID, "repository", repoID})
+			s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "deployment", depID, "repository", repoID, ""})
 			if r < repositories {
 				owned = append(owned, depID)
 			}
@@ -108,7 +108,7 @@ func TestATeamWhoseRepositoriesHoldNoDeploymentIsNoDeploymentsNotUnlinked(t *tes
 	s.nodes = append(s.nodes,
 		seededNode{kind: "team", id: "team:tango", label: "tango"},
 		seededNode{kind: "repository", id: "repository:github:acme/quiet", label: "acme/quiet", repos: []string{"acme/quiet"}})
-	s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", "repository:github:acme/quiet", "team", "team:tango"})
+	s.edges = append(s.edges, seededEdge{"OWNED_BY_TEAM", "repository", "repository:github:acme/quiet", "team", "team:tango", ""})
 	answer := askAnchorDeployments(t, s, storage.Principal{OrgID: "org-1"}, contextfabric.SubjectTeam, "tango")
 	if len(answer.walkLines) != 1 || answer.walkLines[0]["outcome"] != "no_deployments" {
 		t.Fatalf("walk lines = %v, want one no_deployments line", answer.walkLines)

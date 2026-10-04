@@ -94,18 +94,18 @@ func TestTheDerivedStepsAreTheStepsTheWalksRead(t *testing.T) {
 	}{
 		"project: issues": {project[0].step, walkStep{fromKind: contractsv1.ContextFabricSubjectProject, toKind: contractsv1.ContextFabricSubjectWorkItem,
 			relation: contractsv1.ContextFabricRelationshipBelongsToProject, direction: walkIn, notToTypes: pullRequestWorkItemTypes}},
-		"project: linked pull requests": {project[1].step, walkStep{fromKind: contractsv1.ContextFabricSubjectWorkItem, toKind: contractsv1.ContextFabricSubjectWorkItem,
-			relation: contractsv1.ContextFabricRelationshipRelatesTo, direction: walkEither, toTypes: pullRequestWorkItemTypes}},
-		"project: repositories": {project[2].step, walkStep{fromKind: contractsv1.ContextFabricSubjectWorkItem, toKind: contractsv1.ContextFabricSubjectRepository,
+		"project: linked pull requests": {project[1].step, walkStep{fromKind: contractsv1.ContextFabricSubjectWorkItem, toKind: contractsv1.ContextFabricSubjectPullRequest,
+			relation: contractsv1.ContextFabricRelationshipLinksPullRequest, direction: walkOut}},
+		"project: repositories": {project[2].step, walkStep{fromKind: contractsv1.ContextFabricSubjectPullRequest, toKind: contractsv1.ContextFabricSubjectRepository,
 			relation: contractsv1.ContextFabricRelationshipBelongsToRepository, direction: walkOut}},
 		"project: deployments": {project[3].step, walkStep{fromKind: contractsv1.ContextFabricSubjectRepository, toKind: contractsv1.ContextFabricSubjectDeployment,
 			relation: contractsv1.ContextFabricRelationshipBelongsToRepository, direction: walkIn}},
 		"team: owned repositories": {team[0].step, walkStep{fromKind: contractsv1.ContextFabricSubjectTeam, toKind: contractsv1.ContextFabricSubjectRepository,
 			relation: contractsv1.ContextFabricRelationshipOwnedByTeam, direction: walkIn}},
-		"repository: pull requests": {repository[0].step, walkStep{fromKind: contractsv1.ContextFabricSubjectRepository, toKind: contractsv1.ContextFabricSubjectWorkItem,
-			relation: contractsv1.ContextFabricRelationshipBelongsToRepository, direction: walkIn, toTypes: pullRequestWorkItemTypes}},
-		"repository: linked issues": {repository[1].step, walkStep{fromKind: contractsv1.ContextFabricSubjectWorkItem, toKind: contractsv1.ContextFabricSubjectWorkItem,
-			relation: contractsv1.ContextFabricRelationshipRelatesTo, direction: walkEither, notToTypes: pullRequestWorkItemTypes}},
+		"repository: pull requests": {repository[0].step, walkStep{fromKind: contractsv1.ContextFabricSubjectRepository, toKind: contractsv1.ContextFabricSubjectPullRequest,
+			relation: contractsv1.ContextFabricRelationshipBelongsToRepository, direction: walkIn}},
+		"repository: linked issues": {repository[1].step, walkStep{fromKind: contractsv1.ContextFabricSubjectPullRequest, toKind: contractsv1.ContextFabricSubjectWorkItem,
+			relation: contractsv1.ContextFabricRelationshipLinksPullRequest, direction: walkIn, notToTypes: pullRequestWorkItemTypes}},
 	} {
 		if !reflect.DeepEqual(c.got, c.want) {
 			t.Errorf("%s: step %+v, want %+v", name, c.got, c.want)
@@ -118,9 +118,14 @@ func TestTheDerivedStepsAreTheStepsTheWalksRead(t *testing.T) {
 
 // TestALinkOrderRanksLinksBeforeTheirEndpoints: a link property, once the
 // tree names one, orders the link rows first, highest first, so a cut keeps
-// the higher-ranked links; without one the order is the endpoints'.
+// the higher-ranked links; without one the order is the endpoints'. The link
+// of the tree names the tier rank.
 func TestALinkOrderRanksLinksBeforeTheirEndpoints(t *testing.T) {
 	feed, link := projectLinkHops(t)
+	if link.edge.linkOrder != linkRankProperty {
+		t.Fatalf("link order = %q, want the tier rank %q", link.edge.linkOrder, linkRankProperty)
+	}
+	link.edge.linkOrder = ""
 	plain := linkSegmentCypher(feed, link, temporalFilter{}, false)
 	if !strings.Contains(plain, " ORDER BY m."+propCanonicalID+", b.") {
 		t.Fatalf("link read = %q, want the endpoints' order", plain)
@@ -165,9 +170,9 @@ func TestEachLinkRowIsAuthorizedAtBothEnds(t *testing.T) {
 	inScope := s.repository("acme/in-scope", 1)
 	farOut := s.repository("acme/out-of-scope", 1)
 	scopedOnly := s.repository("acme/scoped-only", 1)
-	s.link("in", "work_item:gh:1", []string{"acme/in-scope"}, "work_item:ghpr:1", "pr", inScope, "acme/in-scope", false)
-	s.link("far", "work_item:linear:ENG-1", nil, "work_item:ghpr:2", "pr", farOut, "acme/out-of-scope", false)
-	s.link("near", "work_item:gh:9", []string{"acme/elsewhere"}, "work_item:ghpr:3", "pr", scopedOnly, "acme/scoped-only", false)
+	s.link("in", "work_item:gh:1", []string{"acme/in-scope"}, "pull_request:ghpr:1", "native", inScope, "acme/in-scope")
+	s.link("far", "work_item:linear:ENG-1", nil, "pull_request:ghpr:2", "native", farOut, "acme/out-of-scope")
+	s.link("near", "work_item:gh:9", []string{"acme/elsewhere"}, "pull_request:ghpr:3", "native", scopedOnly, "acme/scoped-only")
 	scope := contextfabric.RequestedScope{RepositorySlugs: []string{"acme/in-scope", "acme/scoped-only"}}
 	walk := walkTreeWithScope(t, s, contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: projectAnchorID}, scope, 25)
 	if got := walkMemberIDs(walk); strings.Join(got, ",") != "deployment:acme/in-scope:0" {
@@ -186,10 +191,10 @@ func TestALinkReadStopsAtItsPageCapAsTruncation(t *testing.T) {
 	s.nodes = append(s.nodes, seededNode{kind: "project", id: projectAnchorID, label: "payments"})
 	hidden := s.repository("acme/hidden", 1)
 	for i := 0; i < 2*linkSegmentPageCap+1; i++ {
-		s.link("hidden", fmt.Sprintf("work_item:gh:a%03d", i), []string{"acme/hidden"}, fmt.Sprintf("work_item:ghpr:a%03d", i), "pr", hidden, "acme/hidden", false)
+		s.link("hidden", fmt.Sprintf("work_item:gh:a%03d", i), []string{"acme/hidden"}, fmt.Sprintf("pull_request:ghpr:a%03d", i), "native", hidden, "acme/hidden")
 	}
 	visible := s.repository("acme/visible", 1)
-	s.link("visible", "work_item:gh:z", []string{"acme/visible"}, "work_item:ghpr:z", "pr", visible, "acme/visible", false)
+	s.link("visible", "work_item:gh:z", []string{"acme/visible"}, "pull_request:ghpr:z", "native", visible, "acme/visible")
 	walk := walkTreeWithScope(t, s, contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: projectAnchorID},
 		contextfabric.RequestedScope{RepositorySlugs: []string{"acme/visible"}}, 1)
 	if !walk.truncated || len(walk.nodes) != 0 {
@@ -202,7 +207,7 @@ func TestALinkReadStopsAtItsPageCapAsTruncation(t *testing.T) {
 func TestADeploymentOfTwoReachedRepositoriesIsOneMember(t *testing.T) {
 	s := seedParentDeployments("team")
 	shared := "deployment:github:0:0"
-	s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "deployment", shared, "repository", "repository:github:acme/github-repo1"})
+	s.edges = append(s.edges, seededEdge{"BELONGS_TO_REPOSITORY", "deployment", shared, "repository", "repository:github:acme/github-repo1", ""})
 	adapter := newFakeAdapter(t, seededGraphConn(s.nodes, s.edges))
 	walk, err := adapter.anchorDeploymentMembers(context.Background(), "key", "org-1", storage.Principal{OrgID: "org-1"}, contextfabric.RequestedScope{},
 		contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:payments"}, 50, newTemporalFilter(contextfabric.TimeContext{}))
@@ -231,11 +236,11 @@ func TestALinkWhoseFarEndIsTheMemberAdmitsOnlyFarEndsTheCallerMaySee(t *testing.
 		{kind: "work_item", id: "work_item:gh:secret", label: "gh:secret", repos: []string{"acme/secret"}, workItemType: "issue"},
 		{kind: "work_item", id: "work_item:linear:ENG-1", label: "linear:ENG-1", repos: []string{noRepositoryScope}, workItemType: "issue"},
 	} {
-		pr := seededNode{kind: "work_item", id: fmt.Sprintf("work_item:ghpr:%d", i), label: fmt.Sprintf("ghpr:%d", i), repos: []string{"acme/svc"}, workItemType: "pr"}
+		pr := seededNode{kind: "pull_request", id: fmt.Sprintf("pull_request:ghpr:%d", i), label: fmt.Sprintf("ghpr:%d", i), repos: []string{"acme/svc"}}
 		nodes = append(nodes, issue, pr)
 		edges = append(edges,
-			seededEdge{"BELONGS_TO_REPOSITORY", "work_item", pr.id, "repository", repo},
-			seededEdge{"RELATES_TO", "work_item", pr.id, "work_item", issue.id})
+			seededEdge{"BELONGS_TO_REPOSITORY", "pull_request", pr.id, "repository", repo, ""},
+			linkEdge(issue.id, pr.id, "native"))
 	}
 	adapter := newFakeAdapter(t, seededGraphConn(nodes, edges))
 	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"acme/svc", "acme/secret"}}

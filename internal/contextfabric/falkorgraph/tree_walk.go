@@ -16,8 +16,9 @@ import (
 // <> Project. Teams and deployments hang off it. The diagram and the two rules
 // are in docs/design/context-fabric-architecture-diagrams.md §3:
 //
-//   - a link is an actual linked row between an issue and a pull-request work
-//     item, never an issue-key prefix, an external issue key or an issue's own
+//   - a link is an actual linked row between an issue and a pull request (the
+//     LINKS_PULL_REQUEST edge, issue -> pull request, with its provenance tier),
+//     never an issue-key prefix, an external issue key or an issue's own
 //     repository;
 //   - a team is reached through ownership only.
 //
@@ -39,8 +40,9 @@ const (
 )
 
 // treeNode is the graph shape of a position: its subject kind and, for a
-// work item, the stored types it has or does not have. A pull request and an
-// issue are the same node kind; the position is the stored type.
+// work item, the stored types it has or does not have. A pull request is its
+// own node kind (pull_request); an issue is a work item that is not typed as
+// a pull request.
 type treeNode struct {
 	kind            contractsv1.ContextFabricSubjectKind
 	types, notTypes []interface{}
@@ -52,20 +54,85 @@ type treeNode struct {
 
 var treeNodes = map[treePosition]treeNode{
 	treeRepository:  {kind: contractsv1.ContextFabricSubjectRepository},
-	treePullRequest: {kind: contractsv1.ContextFabricSubjectWorkItem, types: pullRequestWorkItemTypes},
+	treePullRequest: {kind: contractsv1.ContextFabricSubjectPullRequest},
 	treeIssue:       {kind: contractsv1.ContextFabricSubjectWorkItem, notTypes: pullRequestWorkItemTypes},
 	treeProject:     {kind: contractsv1.ContextFabricSubjectProject},
 	treeDeployment:  {kind: contractsv1.ContextFabricSubjectDeployment, leaf: true},
 	treeTeam:        {kind: contractsv1.ContextFabricSubjectTeam, leaf: true},
 }
 
+// The link edge properties the projection persists (projection.go
+// linkEdgePropertyNames), under the node property prefix on the stored edge.
+const (
+	linkTierProperty = "link_provenance"
+	linkRankProperty = "link_provenance_rank"
+)
+
+// linkTier is one provenance tier of the issue -> pull request link.
+type linkTier struct {
+	// name is the tier as the projection stores it.
+	name string
+	// grantsAuthority: a link of this tier admits a repository-less issue
+	// through the pull request the caller is granted. A link grants authority
+	// only when native; every tier is a link, and an issue authorized by its
+	// own repository is admitted through any of them.
+	grantsAuthority bool
+}
+
+// linkTiers is the ONE table of the tiers the walk admits, strongest first. A
+// stored edge whose tier is not a row here, or has none, is not a link. To
+// veto a tier, delete its row (and add its row to the veto test); to stop a
+// tier granting authority, clear grantsAuthority.
+var linkTiers = []linkTier{
+	{name: "native", grantsAuthority: true},
+	{name: "explicit_text"},
+	{name: "heuristic"},
+}
+
+// admittedLinkTiers are the tiers the link read admits.
+func admittedLinkTiers() []interface{} {
+	out := make([]interface{}, 0, len(linkTiers))
+	for _, t := range linkTiers {
+		out = append(out, t.name)
+	}
+	return out
+}
+
+// authorityLinkTiers are the admitted tiers whose link admits a
+// repository-less issue.
+func authorityLinkTiers() []interface{} {
+	out := []interface{}{}
+	for _, t := range linkTiers {
+		if t.grantsAuthority {
+			out = append(out, t.name)
+		}
+	}
+	return out
+}
+
+// linkTierOf reads the tier of a stored link edge: its row of the table, or
+// false when the edge has no tier or one the table does not list.
+func linkTierOf(rl *edge) (linkTier, bool) {
+	if rl == nil {
+		return linkTier{}, false
+	}
+	name := propStringValue(rl.Properties[propPropertyPrefix+linkTierProperty])
+	for _, t := range linkTiers {
+		if t.name == name {
+			return t, true
+		}
+	}
+	return linkTier{}, false
+}
+
 // treeEdge is one edge of the tree, as projected: child -relation-> parent.
 type treeEdge struct {
 	child, parent treePosition
 	relation      contractsv1.ContextFabricRelationshipType
-	// link marks the issue <> pull request edge: stored in either direction,
-	// and the hop whose near side holds many nodes with no link at all. The
-	// hop that feeds it from the anchor is read fused with it (linkSegment).
+	// link marks the issue <> pull request edge, directed issue -> pull
+	// request, and the hop whose near side holds many nodes with no link at
+	// all. The hop that feeds it from the anchor is read fused with it
+	// (linkSegment).
 	link bool
 	// ownership edges carry the period they held: they are read under the
 	// question's window or the adapter clock (currentOwnership), and under the
@@ -73,14 +140,15 @@ type treeEdge struct {
 	ownership bool
 	// linkOrder, when set, is the link edge property that orders link rows
 	// before anything else, highest first, so a cut keeps the higher-ranked
-	// links. Empty: links are ordered by their endpoints only.
+	// links (the strongest provenance tier first). Empty: links are ordered
+	// by their endpoints only.
 	linkOrder string
 }
 
 // entityTree is the tree. Every walk is derived from it.
 var entityTree = []treeEdge{
 	{child: treePullRequest, parent: treeRepository, relation: contractsv1.ContextFabricRelationshipBelongsToRepository},
-	{child: treePullRequest, parent: treeIssue, relation: contractsv1.ContextFabricRelationshipRelatesTo, link: true},
+	{child: treeIssue, parent: treePullRequest, relation: contractsv1.ContextFabricRelationshipLinksPullRequest, link: true, linkOrder: linkRankProperty},
 	{child: treeIssue, parent: treeProject, relation: contractsv1.ContextFabricRelationshipBelongsToProject},
 	{child: treeDeployment, parent: treeRepository, relation: contractsv1.ContextFabricRelationshipBelongsToRepository},
 	{child: treeRepository, parent: treeTeam, relation: contractsv1.ContextFabricRelationshipOwnedByTeam, ownership: true},
@@ -100,9 +168,6 @@ func hopOf(e treeEdge, from treePosition) treeHop {
 	to, direction, toChild := e.parent, walkOut, false
 	if from == e.parent {
 		to, direction, toChild = e.child, walkIn, true
-	}
-	if e.link {
-		direction = walkEither
 	}
 	target := treeNodes[to]
 	return treeHop{from: from, to: to, edge: e, toChild: toChild, step: walkStep{
@@ -204,14 +269,23 @@ func (s treeWalkState) authorized(n *node) bool {
 }
 
 // admitted is the work-item rule at a position inside a link read: an issue
-// with a repository of its own is decided by that repository; a
-// repository-less issue is admitted by its link to a pull request the caller
-// is granted (the other end of the same row).
-func (s treeWalkState) admitted(position treePosition, n *node) bool {
+// with a repository of its own is decided by that repository, through a link
+// of any tier. A repository-less issue is admitted by its link to a pull
+// request the caller is granted (the other end of the same row), and for a
+// repository-restricted caller only when that link's tier grants authority
+// (native). An unrestricted caller needs no authority from a link.
+func (s treeWalkState) admitted(position treePosition, n *node, tier linkTier) bool {
 	if position == treeIssue && repositoryLess(n) {
-		return true
+		return tier.grantsAuthority || !s.narrowed()
 	}
 	return s.authorized(n)
+}
+
+// narrowed reports whether the caller sees only some repositories: a
+// repository grant without the wildcard, or a requested repository scope. Only
+// then does a link need to grant authority.
+func (s treeWalkState) narrowed() bool {
+	return needsProjectReach(s.principal) || len(s.scope.RepositorySlugs) > 0
 }
 
 func (s treeWalkState) deny() {
@@ -222,6 +296,16 @@ func (s treeWalkState) deny() {
 // cut bounds a frontier by the collect budget; a cut one is truncation.
 func (s treeWalkState) cut(ids []string) []string {
 	sort.Strings(ids)
+	if s.collectLimit > 0 && len(ids) > s.collectLimit {
+		s.out.truncated = true
+		return ids[:s.collectLimit]
+	}
+	return ids
+}
+
+// cutRanked bounds a frontier the link read already ordered (strongest link
+// tier first): the first ids are kept, not the alphabetically first.
+func (s treeWalkState) cutRanked(ids []string) []string {
 	if s.collectLimit > 0 && len(ids) > s.collectLimit {
 		s.out.truncated = true
 		return ids[:s.collectLimit]
@@ -262,7 +346,7 @@ func (a *Adapter) treeMembers(ctx context.Context, key, orgID string, principal 
 				state.linkMembers(ends, far)
 				return out, nil
 			}
-			frontier, subjects = state.cut(ends), map[string]contextfabric.SubjectRef{}
+			frontier, subjects = state.cutRanked(ends), map[string]contextfabric.SubjectRef{}
 			if len(frontier) == 0 {
 				return out, nil
 			}
@@ -355,7 +439,7 @@ func (s treeWalkState) members(hop treeHop, hits []walkHit, parents map[string]c
 // bounded by the budget. The link edges are not disclosed: the near side of a
 // link is not a member.
 func (s treeWalkState) linkMembers(ends []string, far map[string]*node) {
-	for _, id := range s.cut(ends) {
+	for _, id := range s.cutRanked(ends) {
 		s.out.nodes = append(s.out.nodes, toCandidateNode(far[id]))
 	}
 	sortCandidateNodesBySubjectKey(s.out.nodes)
@@ -399,14 +483,45 @@ func (v treeNodeVar) typeClause() string {
 	return ""
 }
 
+// repositoryGrants is a restricted caller's repository grants, precomputed
+// for the link read so the read's pushdown is a necessary condition of
+// graphrank.ScopeMatch (the per-row decision):
+//   - raw: the trimmed grants, for a raw equality (the fallback when a side
+//     does not normalize as owner/name);
+//   - norm: lower(trim(grant)), for the normalized slug equality;
+//   - owners: "owner/" for each "owner/*" grant, lower-cased, for the owner
+//     wildcard.
+//
+// A "*" grant is not here: it makes the caller unrestricted (needsProjectReach)
+// and the read carries no grant clause.
+type repositoryGrants struct {
+	raw, norm, owners []interface{}
+}
+
+func newRepositoryGrants(scopes []string) repositoryGrants {
+	g := repositoryGrants{raw: []interface{}{}, norm: []interface{}{}, owners: []interface{}{}}
+	for _, scope := range scopes {
+		// A blank grant stays in the lists: ScopeMatch compares it as it
+		// does any other, and the pushdown must not be stricter than it.
+		scope = strings.TrimSpace(scope)
+		g.raw = append(g.raw, scope)
+		g.norm = append(g.norm, strings.ToLower(scope))
+		if owner, ok := strings.CutSuffix(scope, "/*"); ok && owner != "" {
+			g.owners = append(g.owners, strings.ToLower(owner)+"/")
+		}
+	}
+	return g
+}
+
 // grantClause keeps only the nodes a restricted caller's grants can admit: a
 // necessary condition of the rule the walk applies to each row (admitted), so
 // it drops no row the caller could see, and rows the caller cannot see do not
-// fill the pages before the ones it can.
+// fill the pages before the ones it can. An issue with no repository is kept
+// only on a link of a tier that grants authority, as the per-row rule has it.
 func (v treeNodeVar) grantClause() string {
-	clause := fmt.Sprintf("ANY(s IN %s.%s WHERE s IN $grants)", v.name, propAuthzRepos)
+	clause := fmt.Sprintf("ANY(s IN %s.%s WHERE s IN $grantRaw OR toLower(trim(s)) IN $grantNorm OR ANY(o IN $grantOwners WHERE toLower(trim(s)) STARTS WITH o))", v.name, propAuthzRepos)
 	if v.position == treeIssue {
-		clause = fmt.Sprintf("(%s OR $noRepository IN %s.%s)", clause, v.name, propAuthzRepos)
+		clause = fmt.Sprintf("(%s OR ($noRepository IN %s.%s AND rl.%s IN $authorityTiers))", clause, v.name, propAuthzRepos, propPropertyPrefix+linkTierProperty)
 	}
 	return " AND " + clause
 }
@@ -444,7 +559,7 @@ func linkSegmentCypher(feed, link treeHop, temporal temporalFilter, restricted b
 		order = fmt.Sprintf("rl.%s DESC, ", propPropertyPrefix+link.edge.linkOrder)
 	}
 	return linkSegmentMatch(feed) + fmt.Sprintf(hopArrow(link.step.direction, "rl")+"(b:%[2]s {%[3]s:$org, %[4]s:$endKind}) ", labelRelation, labelSubject, propOrgID, propKind) +
-		fmt.Sprintf("WHERE ra.%[1]s = $feedRel AND rl.%[1]s = $linkRel", propRelationType) + mid.typeClause() + end.typeClause() + grants +
+		fmt.Sprintf("WHERE ra.%[1]s = $feedRel AND rl.%[1]s = $linkRel AND rl.%[2]s IN $tiers", propRelationType, propPropertyPrefix+linkTierProperty) + mid.typeClause() + end.typeClause() + grants +
 		temporal.predicate("ra") + temporal.predicate("m") + temporal.predicate("rl") + temporal.predicate("b") +
 		fmt.Sprintf(" RETURN m, b, rl ORDER BY %[2]sm.%[1]s, b.%[1]s, rl.%[3]s SKIP $skip LIMIT $limit", propCanonicalID, order, propRelationshipID)
 }
@@ -463,7 +578,8 @@ func linkSegmentParams(orgID string, anchor contextfabric.SubjectRef, feed, link
 		"org": orgID, "anchor": anchor.CanonicalID, "anchorKind": string(treeNodes[feed.from].kind),
 		"midKind": string(treeNodes[feed.to].kind), "endKind": string(treeNodes[link.to].kind),
 		"feedRel": string(feed.edge.relation), "linkRel": string(link.edge.relation),
-		"skip": skip, "limit": limit,
+		"tiers": admittedLinkTiers(),
+		"skip":  skip, "limit": limit,
 	})
 	for param, position := range map[string]treePosition{"mtypes": feed.to, "btypes": link.to} {
 		n := treeNodes[position]
@@ -479,14 +595,10 @@ func linkSegmentParams(orgID string, anchor contextfabric.SubjectRef, feed, link
 
 // linkSegmentGrants binds a restricted caller's grants to the link read.
 func linkSegmentGrants(params map[string]interface{}, principal storage.Principal) map[string]interface{} {
-	grants := make([]interface{}, 0, len(principal.RepositoryScopes))
-	for _, scope := range principal.RepositoryScopes {
-		if scope = strings.TrimSpace(scope); scope != "" {
-			grants = append(grants, scope)
-		}
-	}
-	params["grants"] = grants
+	grants := newRepositoryGrants(principal.RepositoryScopes)
+	params["grantRaw"], params["grantNorm"], params["grantOwners"] = grants.raw, grants.norm, grants.owners
 	params["noRepository"] = noRepositoryScope
+	params["authorityTiers"] = authorityLinkTiers()
 	return params
 }
 
@@ -514,7 +626,7 @@ func (a *Adapter) linkSources(ctx context.Context, key, orgID string, anchor con
 // linkSegment reads the anchor's hop and the link fused, paged, each row
 // authorized before it counts against the budget, so links the caller cannot
 // see do not crowd out links it can. It returns the far-side nodes of the
-// authorized links, by canonical id.
+// authorized links, by canonical id, in the order of their strongest link.
 func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state treeWalkState, anchor contextfabric.SubjectRef, feed, link treeHop, temporal temporalFilter) ([]string, map[string]*node, error) {
 	out := state.out
 	sources, err := a.linkSources(ctx, key, orgID, anchor, feed, link, temporal)
@@ -531,6 +643,9 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 	cypher := linkSegmentCypher(feed, link, temporal, restricted)
 	seen := map[string]bool{}
 	admitted := map[string]*node{}
+	// ends are the admitted far-side nodes in the read's order: strongest
+	// link tier first, so a cut keeps the higher tiers.
+	var ends []string
 	for page := 0; ; page++ {
 		if page >= linkSegmentPageCap {
 			out.truncated = true
@@ -547,7 +662,9 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 		for _, r := range rows {
 			near, _ := r["m"].(*node)
 			far, _ := r["b"].(*node)
-			if near == nil || far == nil {
+			tier, isLink := linkTierOf(asEdge(r["rl"]))
+			if near == nil || far == nil || !isLink {
+				// No row, or an edge with no tier the table lists: not a link.
 				continue
 			}
 			id := canonicalIDOf(far)
@@ -556,21 +673,20 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 				out.linkTargets++
 			}
 			switch {
-			case !state.admitted(feed.to, near):
+			case !state.admitted(feed.to, near, tier):
 				state.deny()
-			case !state.admitted(link.to, far):
+			case !state.admitted(link.to, far, tier):
 				state.deny()
 			default:
+				if admitted[id] == nil {
+					ends = append(ends, id)
+				}
 				admitted[id] = far
 			}
 		}
 		if len(rows) < pageSize || (state.collectLimit > 0 && len(admitted) > state.collectLimit) {
 			break
 		}
-	}
-	ends := make([]string, 0, len(admitted))
-	for id := range admitted {
-		ends = append(ends, id)
 	}
 	return ends, admitted, nil
 }
@@ -580,4 +696,9 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 // a team through the repositories it owns, a repository directly.
 func (a *Adapter) anchorDeploymentMembers(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, anchor contextfabric.SubjectRef, collectLimit int, temporal temporalFilter) (treeWalk, error) {
 	return a.treeMembers(ctx, key, orgID, principal, scope, anchor, treeDeployment, collectLimit, temporal)
+}
+
+func asEdge(v interface{}) *edge {
+	e, _ := v.(*edge)
+	return e
 }
