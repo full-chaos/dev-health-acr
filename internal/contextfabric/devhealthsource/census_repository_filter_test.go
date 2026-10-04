@@ -91,7 +91,7 @@ func TestCensusRepositoryFilterFallsBackToUnfilteredWhenItCannotBeExact(t *testi
 		"malformed slug":     {contextfabric.SubjectPullRequest, []string{"acme/ok", "not a slug"}},
 		"empty owner prefix": {contextfabric.SubjectPullRequest, []string{"/*"}},
 		"too many":           {contextfabric.SubjectPullRequest, tooMany},
-		"no repository key":  {contextfabric.SubjectWorkItem, []string{"acme/ok"}},
+		"work item wildcard": {contextfabric.SubjectWorkItem, []string{"*"}},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -126,5 +126,32 @@ func TestCensusWithoutAFilterIsUnchanged(t *testing.T) {
 	wantSet := "SELECT concat(p.org_id, ':', toString(p.repo_id), ':', toString(p.number)) FROM git_pull_requests AS p FINAL WHERE p.org_id = {census_org_id:String} AND p.number = {census_handle_pr_number:UInt32} LIMIT 1000"
 	if client.calls[1] != wantSet {
 		t.Fatalf("satisfier statement = %q\nwant %q", client.calls[1], wantSet)
+	}
+}
+
+func TestWorkItemCensusRepositoryFilterIsAppliedInEveryStatement(t *testing.T) {
+	t.Parallel()
+	client, outcome := runFilteredCensus(t, contextfabric.SubjectWorkItem, "CHAOS-77", []string{"ACME/Repo-25", "acme/*"})
+	if !outcome.RepositoryFilterApplied {
+		t.Fatalf("RepositoryFilterApplied = false, want true")
+	}
+	if len(client.calls) != 2 {
+		t.Fatalf("statements = %d, want aggregate and satisfier set", len(client.calls))
+	}
+	for i, statement := range client.calls {
+		if !strings.Contains(statement, "toString(w.repo_id) IN (SELECT toString(id) FROM repos FINAL WHERE org_id = {census_org_id:String}") ||
+			!strings.Contains(statement, "lower(trimBoth(repo)) = {census_repo_0:String}") ||
+			!strings.Contains(statement, "startsWith(lower(trimBoth(repo)), {census_repo_1:String})") {
+			t.Fatalf("statement %d = %q, want the repository filter on w.repo_id inside it", i, statement)
+		}
+	}
+}
+
+func TestWorkItemCensusRepositoryAnchorStaysUnavailable(t *testing.T) {
+	t.Parallel()
+	client := &censusFakeClient{aggregateCount: 1, aggregateReadAt: time.Now().UTC(), rowKeys: []string{"o:r1:CHAOS-77"}}
+	_, err := devhealthsource.NewCensusFunc(client)(context.Background(), "org_1", contextfabric.SubjectWorkItem, "CHAOS-77", true, contextfabric.SubjectRepository, "repository:acme/repo", true)
+	if err == nil {
+		t.Fatalf("a repository anchor on a work item census must stay refused: a repo-less item carries the zero repo id")
 	}
 }

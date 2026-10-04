@@ -264,7 +264,13 @@ import (
 // as the status the service established, with the narrative withheld. A
 // candidate saved under v42 for such a question can hold a no_match and must
 // not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v43"
+//
+// v43 -> v44: the handle census of a work item applies the caller's
+// repository narrowing inside its query, so a ticket key held by more work
+// items than the census cap commits the one work item in the narrowed
+// repositories. A candidate saved under v43 for such a question is a
+// clarification and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v44"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

@@ -92,3 +92,59 @@ func TestCensusRepositoryFilterAgainstRealClickHouse(t *testing.T) {
 		t.Fatalf("satisfier ids = %v, want 2", two.SatisfierCanonicalIDs)
 	}
 }
+
+func TestWorkItemCensusRepositoryFilterAgainstRealClickHouse(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC().Add(-time.Hour)
+	query, direct := orgIsolationClickHouseFixture(t)
+	orgA, orgB := sharedTestOrgID(t)+"-a", sharedTestOrgID(t)+"-b"
+	const repos = 26
+	insertItem := func(org, repoID, key string) {
+		t.Helper()
+		if err := direct.Exec(ctx, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			key, repoID, org, "item", "open", "", "", "jira", "", now, now); err != nil {
+			t.Fatalf("seed work item: %v", err)
+		}
+	}
+	for i := 0; i < repos; i++ {
+		id := o3UUID(fmt.Sprintf("%s-wi-repo-%02d", orgA, i))
+		if err := direct.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, id, orgA, fmt.Sprintf("acme/repo-%02d", i), "github", now); err != nil {
+			t.Fatalf("seed repo: %v", err)
+		}
+		insertItem(orgA, id, "jira:KEY-77")
+	}
+	// A repo-less item (a Linear-style row) is outside every named repository.
+	insertItem(orgA, "00000000-0000-0000-0000-000000000000", "linear:KEY-77")
+	otherRepo := o3UUID(orgB + "-wi-repo")
+	if err := direct.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, otherRepo, orgB, "acme/repo-25", "github", now); err != nil {
+		t.Fatalf("seed other org repo: %v", err)
+	}
+	insertItem(orgB, otherRepo, "jira:KEY-77")
+
+	census := devhealthsource.NewCensusFunc(query)
+	run := func(slugs []string) graphrank.CensusOutcome {
+		t.Helper()
+		outcome, err := census(graphrank.WithCensusRepositoryFilter(ctx, slugs), orgA, contextfabric.SubjectWorkItem, "KEY-77", true, "", "", false)
+		if err != nil {
+			t.Fatalf("census %v: %v", slugs, err)
+		}
+		return outcome
+	}
+	cases := []struct {
+		name    string
+		slugs   []string
+		count   int
+		applied bool
+	}{
+		{"no filter", nil, repos + 1, false},
+		{"one repository, case-folded", []string{"ACME/Repo-25"}, 1, true},
+		{"owner wildcard", []string{"acme/*"}, repos, true},
+		{"unknown repository", []string{"acme/elsewhere"}, 0, true},
+	}
+	for _, tc := range cases {
+		outcome := run(tc.slugs)
+		if outcome.Count != tc.count || outcome.RepositoryFilterApplied != tc.applied || outcome.ClosureMismatch {
+			t.Fatalf("%s: count=%d applied=%v mismatch=%v, want count=%d applied=%v", tc.name, outcome.Count, outcome.RepositoryFilterApplied, outcome.ClosureMismatch, tc.count, tc.applied)
+		}
+	}
+}
