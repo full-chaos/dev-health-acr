@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"regexp"
 	"testing"
 	"time"
 
@@ -374,10 +375,18 @@ func TestEvidenceRouteWarnsOnceOnAnInvalidRow(t *testing.T) {
 	if warn["level"] != "WARN" || warn["entity_type"] != "pull-request" || warn["source_query"] != "pull_requests.v1" || warn["org_id"] != "org_1" {
 		t.Fatalf("warn = %v", warn)
 	}
-	line, _ := json.Marshal(warn)
-	for _, id := range []string{sourceRowGrantedRepoID, "532", hostedTestRepository} {
-		if bytes.Contains(line, []byte(id)) {
-			t.Fatalf("warn line carries id %q: %s", id, line)
+	// The record carries a random request id, which can contain "532" by
+	// chance, so the ids are matched per field as delimited tokens, and the
+	// request id field is the one field not searched.
+	for key, value := range warn {
+		if key == "request_id" {
+			continue
+		}
+		field, _ := json.Marshal(value)
+		for _, id := range []string{sourceRowGrantedRepoID, "532", hostedTestRepository} {
+			if regexp.MustCompile(`(^|[^0-9A-Za-z])` + regexp.QuoteMeta(id) + `($|[^0-9A-Za-z])`).Match(field) {
+				t.Fatalf("warn field %q carries id %q: %s", key, id, field)
+			}
 		}
 	}
 	// A served row, and a plain no-row, warn nothing.
