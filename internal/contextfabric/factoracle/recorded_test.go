@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -16,6 +17,62 @@ import (
 )
 
 const captureDir = "testdata/venue"
+
+// captureSchemaDigest is the SDL digest the recorded capture was taken at.
+const captureSchemaDigest = "sha256:330d0ebf0ea59fce8d0b1bb14887cad8e5b3f6971ad02618afa9844b6fac7a50"
+
+// contractsAtCapture is contractDigest of every served operation under the SDL
+// the capture was taken at. A build that pins another SDL may replay the
+// capture only for the operations whose contract is still the one below; an
+// operation that changed or is new belongs to a root in notRecordedRoots.
+var contractsAtCapture = map[string]string{
+	"acrRepositoryScopes":      "sha256:43fa66efd5d4c5dfc3699253378000be29e86dee1640f22dff19f40a0eb68c6a",
+	"capacityForecast":         "sha256:a4f248d9f964db5d669f8f1e906dec90babe7b4752824318d4b1b92f0f6d3052",
+	"capacityForecasts":        "sha256:c08fb7e162371f005c8a151a2504b88a521e0f5ad855d96087848000821dc7bf",
+	"catalogValues":            "sha256:00ad023c9a2febf03c47ca10f24c66bdcc7916bac2e5ffc688a2a65d8e3d0258",
+	"cognitiveLoad":            "sha256:52ce7277e9e7033d638b213773e41b478f6cd9af0c540655998dad13dabc4dfb",
+	"complexityTimeseries":     "sha256:5795ecd7c05b216647191e6eca4b6b397c4612a21e2225137590930bf1c65569",
+	"compoundingRisk":          "sha256:77ac36ec578a347763cf97ea1946219d43481774b06878514f34c2f166042525",
+	"home":                     "sha256:baf84f2d080ae0816080a4b434ac85686de90d345ab88db28d16ad7fcf9658fc",
+	"hotspots":                 "sha256:ce8c2b910621109693743b85571b3fbc62a133d62c61aae79394b10af2ae7994",
+	"investmentBreakdown":      "sha256:3a14bb9a88a77de7cb694a347bdb08931ff38fdc76c2b86ce84a913e5bfb8f71",
+	"investmentFull":           "sha256:676c5f47d8f1181a80e78eaa2795ef74235cc37a200633fde3ab8903458153b2",
+	"recommendations":          "sha256:2a2a5d0a1c1dcddae195d7c4d7d73517e4113694e6396620222c28a250003ee1",
+	"securityOverview":         "sha256:df174e0fc36768a4385f9a9337e64f4e38f1a782704d8394e2e98253dccee9cb",
+	"throughputForecast":       "sha256:ad5d774fa899197d84842001d2f9fcee48155c5356a27238e1d726e1aff4db51",
+	"workGraphArtifacts":       "sha256:551ed4f4200e13f02a988d6deab6a9ffc41e41a2d2c72c9d66f224b0d5fe86fc",
+	"workGraphEdges":           "sha256:22f4a10da08615255631c5f866313fdeda9c65bd17a6b621f332984e61ce602e",
+	"workGraphFlow":            "sha256:d442757b8633c7f9542f48a92a34ef1dbcfacdd994e68c76ad7a31cce1428cf1",
+	"workItemTeamAttributions": "sha256:e3e1700f64773540a6192f8239068aac3b780a4d5cf37c5252f766bf819dda58",
+}
+
+func requireCaptureContractsUnchanged(t *testing.T, policy *directread.GraphQLPolicy, recorded, pinned string) {
+	t.Helper()
+	if recorded != captureSchemaDigest {
+		t.Fatalf("the capture was recorded against SDL %s, not the %s this test knows it was taken at: it was changed", recorded, captureSchemaDigest)
+	}
+	rootsOf := map[string][]string{}
+	for _, root := range policy.Roots() {
+		for _, name := range root.Operations() {
+			rootsOf[name] = append(rootsOf[name], root.Field)
+		}
+	}
+	changed := 0
+	for _, op := range policy.Catalogue().Operations(directread.CallerUnrestricted) {
+		if contractsAtCapture[op.Name] == contractDigest(op) {
+			continue
+		}
+		changed++
+		for _, root := range rootsOf[op.Name] {
+			if _, listed := notRecordedRoots[root]; !listed {
+				t.Fatalf("the contract of %s changed since the capture (SDL %s, this build pins %s) and root %s is not listed as not recorded: run `make o4-oracle-capture` on the venue", op.Name, recorded, pinned, root)
+			}
+		}
+	}
+	if changed == 0 {
+		t.Fatalf("the build pins SDL %s, not the capture's %s, but no operation contract changed: recapture or the pin is wrong", pinned, recorded)
+	}
+}
 
 // repinEnv makes the recorded-mode test write its outcome as the pinned one
 // (`make o4-oracle-repin`) instead of comparing with it.
@@ -37,7 +94,7 @@ func loadedCapture(t *testing.T) (Manifest, Recording, *Extract) {
 		t.Fatalf("root policy: %v", err)
 	}
 	if got := policy.Catalogue().SchemaDigest(); got != manifest.SchemaDigest {
-		t.Fatalf("the capture was recorded against SDL %s and this build pins %s: run `make o4-oracle-capture` on the venue", manifest.SchemaDigest, got)
+		requireCaptureContractsUnchanged(t, policy, manifest.SchemaDigest, got)
 	}
 	if manifest.FixtureOrg != FixtureOrgID || manifest.OpsBuild == "" {
 		t.Fatalf("the capture names no ops build or another fixture organization")
@@ -80,12 +137,17 @@ func recordedVenueRunReproducesTheVenue(t *testing.T) {
 	manifest, recording, extract := loadedCapture(t)
 	dark := darkOperations(t)
 	manifest = withoutDarkRoots(t, manifest, dark)
+	manifest, skipped := withoutNotRecordedRoots(t, manifest)
 	planes := localPlanes(t, seedStore(t, extract), &recording)
 	oracle := oracleFor(t, manifest, planes, extract)
+	oracle.OnlyRoots = rootsExcept(t, skipped)
 	report := runOracle(t, oracle)
 	t.Logf("\n%s\n%s", report.Table(), report.Details())
 
 	if os.Getenv(repinEnv) != "" {
+		if len(skipped) > 0 {
+			t.Fatalf("a repin would drop the pinned outcome of the roots the capture does not record (%v): recapture on the venue instead", skipped)
+		}
 		if err := Repin(captureDir, report, oracle.Residual); err != nil {
 			t.Fatal(err)
 		}
@@ -104,7 +166,7 @@ func recordedVenueRunReproducesTheVenue(t *testing.T) {
 	var live []string
 	for _, key := range unused {
 		unusedSet[key] = true
-		if !darkKeys[key] {
+		if !darkKeys[key] && !isNotRecordedKey(t, key, skipped) {
 			live = append(live, key)
 		}
 	}
@@ -120,8 +182,8 @@ func recordedVenueRunReproducesTheVenue(t *testing.T) {
 		t.Fatal(err)
 	}
 	policy := oracle.Policy
-	if len(report.Roots) != len(policy.Roots()) || len(manifest.Expect) != len(policy.Roots()) {
-		t.Fatalf("report has %d roots, the capture %d, the policy %d", len(report.Roots), len(manifest.Expect), len(policy.Roots()))
+	if want := len(policy.Roots()) - len(skipped); len(report.Roots) != want || len(manifest.Expect) != want {
+		t.Fatalf("report has %d roots, the capture %d, the policy %d less %d not recorded", len(report.Roots), len(manifest.Expect), len(policy.Roots()), len(skipped))
 	}
 	valueRoots := 0
 	for _, rr := range report.Roots {
@@ -288,5 +350,115 @@ func TestRecordedCaptureKeepsTheDarkOperationAndTheTestExcludesIt(t *testing.T) 
 	}
 	if len(manifest.Expect) != len(filtered.Expect)+len(dark) || len(manifest.ShapeCases) != len(filtered.ShapeCases)+4 {
 		t.Fatalf("the recorded manifest was changed: %d pinned roots, %d shape cases", len(manifest.Expect), len(manifest.ShapeCases))
+	}
+}
+
+// notRecordedRoots are the roots the recorded capture cannot replay: the
+// capture was taken against a registry that had no document for the operation
+// below and a capacityForecast document without the completion distribution.
+// The capture stays as recorded; the recorded run says which roots it did not
+// measure, and recording them again needs the venue to serve both documents
+// (`make o4-oracle-capture`), after which this list must be emptied.
+var notRecordedRoots = map[string]string{
+	"capacityForecast": "capacityCompletionDistribution has no recorded reply and the capacityForecast document selected no completionDistribution at capture time",
+}
+
+// withoutNotRecordedRoots returns the manifest without the shape cases and
+// the pinned outcome of a root the capture does not record, and the sorted
+// names of those roots. The exclusion is checked, not assumed: the root must
+// be allowed by the policy, and one of its generated shapes must have no case
+// in the capture.
+func withoutNotRecordedRoots(t *testing.T, manifest Manifest) (Manifest, []string) {
+	t.Helper()
+	policy := mustPolicy(t)
+	shapes, err := Shapes(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	have := map[string]bool{}
+	for _, c := range manifest.ShapeCases {
+		have[c.ShapeID] = true
+	}
+	var skipped []string
+	for root, why := range notRecordedRoots {
+		if _, allowed := policy.Root(root); !allowed {
+			t.Fatalf("root %s is listed as not recorded (%s) but the policy does not allow it", root, why)
+		}
+		missing := false
+		for _, shape := range shapes {
+			if shape.Root == root && !have[shape.ID()] {
+				missing = true
+			}
+		}
+		if !missing {
+			t.Fatalf("root %s is listed as not recorded, but the capture has a case for every shape of it: remove it from notRecordedRoots", root)
+		}
+		skipped = append(skipped, root)
+		t.Logf("NOT RECORDED: root %s: %s", root, why)
+	}
+	sort.Strings(skipped)
+	cases := make([]ShapeCase, 0, len(manifest.ShapeCases))
+	for _, c := range manifest.ShapeCases {
+		if _, drop := notRecordedRoots[strings.SplitN(c.ShapeID, "/", 2)[0]]; !drop {
+			cases = append(cases, c)
+		}
+	}
+	expect := map[string]RootExpectation{}
+	for root, want := range manifest.Expect {
+		if _, drop := notRecordedRoots[root]; !drop {
+			expect[root] = want
+		}
+	}
+	manifest.ShapeCases, manifest.Expect = cases, expect
+	return manifest, skipped
+}
+
+func rootsExcept(t *testing.T, skipped []string) []string {
+	t.Helper()
+	var only []string
+	for _, root := range mustPolicy(t).Roots() {
+		if !slices.Contains(skipped, root.Field) {
+			only = append(only, root.Field)
+		}
+	}
+	return only
+}
+
+// isNotRecordedKey says whether a recorded reply belongs to a not recorded
+// root: a graphql_query key starts with the root, a run_operation key with
+// run_operation and the operation, which is matched against the operations
+// of the skipped roots.
+func isNotRecordedKey(t *testing.T, key string, skipped []string) bool {
+	t.Helper()
+	parts := strings.Split(strings.SplitN(key, "#", 2)[0], "/")
+	if parts[0] != "run_operation" {
+		return slices.Contains(skipped, parts[0])
+	}
+	policy := mustPolicy(t)
+	for _, root := range skipped {
+		if r, ok := policy.Root(root); ok && len(parts) > 1 && slices.Contains(r.Operations(), parts[1]) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestRecordedRunNamesTheRootsItDoesNotMeasure(t *testing.T) {
+	manifest, recording, _ := loadedCapture(t)
+	filtered, skipped := withoutNotRecordedRoots(t, manifest)
+	if !slices.Equal(skipped, []string{"capacityForecast"}) {
+		t.Fatalf("not recorded roots = %v", skipped)
+	}
+	if len(manifest.Expect) != len(filtered.Expect)+1 || len(manifest.ShapeCases) <= len(filtered.ShapeCases) {
+		t.Fatalf("the recorded manifest was changed or the exclusion dropped nothing: %d pinned roots, %d shape cases", len(manifest.Expect), len(manifest.ShapeCases))
+	}
+	n := 0
+	for key := range recording.Replies {
+		if isNotRecordedKey(t, key, skipped) {
+			n++
+		}
+	}
+	if n == 0 {
+		t.Fatal("the capture holds no reply of a not recorded root: the exclusion measured nothing")
 	}
 }

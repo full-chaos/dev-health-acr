@@ -130,8 +130,8 @@ func TestShapesAreGeneratedFromThePolicyForEveryRoot(t *testing.T) {
 	if len(roots) != len(policy.Roots()) || len(roots) != 13 {
 		t.Fatalf("shapes cover %d roots, the policy allows %d, want 13", len(roots), len(policy.Roots()))
 	}
-	if len(operations) != 15 {
-		t.Fatalf("shapes cover %d operations, want 15 (one per served operation behind an allowed root)", len(operations))
+	if len(operations) != 16 {
+		t.Fatalf("shapes cover %d operations, want 16 (one per served operation behind an allowed root)", len(operations))
 	}
 	for root := range roots {
 		if _, ok := rootPairs[root]; !ok {
@@ -249,7 +249,7 @@ func TestRunStopsWhenAGeneratedShapeHasNoCase(t *testing.T) {
 	if len(cases) == len(manifest.ShapeCases) {
 		t.Fatalf("the capture has no case for %s", dropped)
 	}
-	oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, ShapeCases: cases,
+	oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, ShapeCases: cases, OnlyRoots: []string{"hotspots"},
 		Planes: fakePlanes{graphQL: func(Shape, map[string]any) (json.RawMessage, error) {
 			return json.RawMessage(`{"call":"operation_unavailable"}`), nil
 		}}}

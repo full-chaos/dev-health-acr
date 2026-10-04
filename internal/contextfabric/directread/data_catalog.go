@@ -9,7 +9,7 @@ package directread
 //   - Operations come from the loaded policy artifact only (the same
 //     *Catalogue the runner refuses with), so the catalogue can never list an
 //     operation the runner would refuse as unknown, nor hide one it serves.
-//   - The operation list is the one for the caller's class: 18 operations for
+//   - The operation list is the one for the caller's class: 19 operations for
 //     an unrestricted caller, 2 for a repository-restricted one. Every other
 //     registered document is listed under not_served with its code and
 //     reason, and every refused variable value (the K14-A
@@ -86,24 +86,25 @@ const DataCatalogUntrustedNotice = contractsv1.MCPUntrustedContentNotice
 // purpose text. Every served operation must have one (a test holds the key
 // set equal to the catalogue's served set), at most 200 characters.
 var operationPurposes = map[string]string{
-	"acrRepositoryScopes":      "The organization's repository slugs as the ops query service knows them, for mapping a slug to a repository.",
-	"capacityForecast":         "An on-demand Monte Carlo forecast of when a work scope completes; each call draws a new random seed.",
-	"capacityForecasts":        "Stored capacity forecasts, as a list, with their inputs and percentile dates.",
-	"catalogValues":            "The distinct values of one catalogue dimension (repository, team, theme, subcategory or work type).",
-	"cognitiveLoad":            "A team's cognitive load series over a window.",
-	"complexityTimeseries":     "Code complexity over time per repository or file, for the repositories named.",
-	"compoundingRisk":          "Compounding delivery risk per repository or team per day, with the trend and the component scores.",
-	"hotspots":                 "Files with high change and complexity (hotspots) in a window, per repository.",
-	"investmentBreakdown":      "Investment (work themes and subcategories) as a time series or an org-level breakdown for a window.",
-	"investmentFull":           "Investment over a window: time series, org-level breakdowns and the batch coverage disclosure.",
-	"home":                     "The org-wide home summary: data freshness, metric deltas, tiles, signals, the limiting factor and data confidence.",
-	"recommendations":          "A team's stored recommendations over a lookback window, each with its rationale and evidence rows.",
-	"workItemTeamAttributions": "Raw team attribution facts per work item, with source, confidence, primary flag and evidence text.",
-	"securityOverview":         "Security posture: open alert counts by severity, the trend and 30-day indicators.",
-	"throughputForecast":       "A throughput forecast with its history sufficiency flag.",
-	"workGraphArtifacts":       "Work graph artifacts (issues, pull requests and more) in a window, with a degraded-reason disclosure.",
-	"workGraphEdges":           "Work graph edges between artifacts in a window, with a degraded-reason disclosure.",
-	"workGraphFlow":            "Work graph flow between stages in a window, with a degraded-reason disclosure.",
+	"acrRepositoryScopes":            "The organization's repository slugs as the ops query service knows them, for mapping a slug to a repository.",
+	"capacityCompletionDistribution": "A team's forecast completion distribution only: simulated completion days and item counts, without the dates or the target.",
+	"capacityForecast":               "An on-demand Monte Carlo forecast of when a work scope completes; each call draws a new random seed.",
+	"capacityForecasts":              "Stored capacity forecasts, as a list, with their inputs and percentile dates.",
+	"catalogValues":                  "The distinct values of one catalogue dimension (repository, team, theme, subcategory or work type).",
+	"cognitiveLoad":                  "A team's cognitive load series over a window.",
+	"complexityTimeseries":           "Code complexity over time per repository or file, for the repositories named.",
+	"compoundingRisk":                "Compounding delivery risk per repository or team per day, with the trend and the component scores.",
+	"hotspots":                       "Files with high change and complexity (hotspots) in a window, per repository.",
+	"investmentBreakdown":            "Investment (work themes and subcategories) as a time series or an org-level breakdown for a window.",
+	"investmentFull":                 "Investment over a window: time series, org-level breakdowns and the batch coverage disclosure.",
+	"home":                           "The org-wide home summary: data freshness, metric deltas, tiles, signals, the limiting factor and data confidence.",
+	"recommendations":                "A team's stored recommendations over a lookback window, each with its rationale and evidence rows.",
+	"workItemTeamAttributions":       "Raw team attribution facts per work item, with source, confidence, primary flag and evidence text.",
+	"securityOverview":               "Security posture: open alert counts by severity, the trend and 30-day indicators.",
+	"throughputForecast":             "A throughput forecast with its history sufficiency flag.",
+	"workGraphArtifacts":             "Work graph artifacts (issues, pull requests and more) in a window, with a degraded-reason disclosure.",
+	"workGraphEdges":                 "Work graph edges between artifacts in a window, with a degraded-reason disclosure.",
+	"workGraphFlow":                  "Work graph flow between stages in a window, with a degraded-reason disclosure.",
 }
 
 // OperationPurpose returns the authored purpose of an operation, or "".

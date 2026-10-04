@@ -3247,6 +3247,7 @@
         "presence": "required",
         "closed_vocabulary": [
           "acrRepositoryScopes",
+          "capacityCompletionDistribution",
           "capacityForecast",
           "capacityForecasts",
           "catalogValues",
