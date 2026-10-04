@@ -284,7 +284,13 @@ import (
 // A candidate saved under v47 carries facts in provider order and share values
 // with last-digit noise; its stored input no longer equals the input a fresh
 // read produces, so it must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v48"
+//
+// v48 -> v49: the handle census of a work item applies the caller's
+// repository narrowing inside its query, so a ticket key held by more work
+// items than the census cap commits the one work item in the narrowed
+// repositories. A candidate saved under v48 for such a question is a
+// clarification and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v49"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 )
@@ -26,8 +25,8 @@ func withRepositoryFilter(kind graphrank.CensusKind, predicate CensusPredicate, 
 	if !ok {
 		return predicate, false
 	}
-	column, ok := entry.anchorColumns[contextfabric.SubjectRepository]
-	if !ok || len(slugs) == 0 || len(slugs) > maxCensusRepositoryFilter {
+	column := entry.repositoryColumn
+	if column == "" || len(slugs) == 0 || len(slugs) > maxCensusRepositoryFilter {
 		return predicate, false
 	}
 	var clauses []string
