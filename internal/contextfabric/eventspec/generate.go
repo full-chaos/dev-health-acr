@@ -208,6 +208,8 @@ func goVarName(e Event) string {
 		return "CohortKindFulltext"
 	case ProjectDeploymentWalk.ID:
 		return "ProjectDeploymentWalk"
+	case OwnershipRouting.ID:
+		return "OwnershipRouting"
 	case AnchorBindingTransition.ID:
 		return "AnchorBindingTransition"
 	case MCPHostedContextScope.ID:

@@ -2877,10 +2877,48 @@ var CohortKindFulltext = Event{
 // this one must never drift from.
 var projectDeploymentWalkOutcome = []string{"not_routed", "members", "unlinked", "denied", "truncated", "no_deployments", "read_failed"}
 
-// projectDeploymentWalkAnchorBasis is the closed vocabulary of
-// ProjectDeploymentWalk's "anchor_basis" field -- see
-// falkorgraph.DeploymentAnchorBasisVocabulary.
-var projectDeploymentWalkAnchorBasis = []string{"none", "bound", "sole_commit"}
+// scopedAnchorBasis is the closed vocabulary of the "anchor_basis" field of
+// ProjectDeploymentWalk and OwnershipRouting -- see
+// falkorgraph.AnchorBasisVocabulary.
+var scopedAnchorBasis = []string{"none", "bound", "sole_commit"}
+
+// ownershipRoutingOutcome is the closed vocabulary of OwnershipRouting's
+// "outcome" field -- see falkorgraph.OwnershipRoutingOutcomeVocabulary.
+var ownershipRoutingOutcome = []string{"not_routed", "owners", "no_owner", "read_failed"}
+
+// OwnershipRouting is the Info line of one DiscoverContext call that asks for
+// the team members of a named anchor: whether the ownership read (the teams
+// whose ownership records name the repository) ran, and what it found.
+//
+// outcome=not_routed is a call whose anchor is not a committed repository
+// (anchor_kind says which kind the one committed subject has, or "none"); the
+// read did not run and no read count is written. outcome=read_failed carries
+// the error and no count. Every other outcome finished the read: census is how many teams it returned, owners how many of them own the
+// repository before the caller's authorization, truncated whether it was cut.
+// anchor_basis says how the anchor was chosen: bound (the frame's proven
+// anchor) or sole_commit (the one committed repository).
+//
+// The line carries counts and closed values only, never a subject name or id.
+var OwnershipRouting = Event{
+	ID:                 "contextfabric.ownership_routing",
+	Msg:                "context_fabric: ownership routing",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"org_id"},
+	BoundedAggregation: "at most one line per DiscoverContext call, emitted only when the frame asks for the team members of a named anchor",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: ownershipRoutingOutcome},
+		{Key: "anchor_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"none"}, contextFabricSubjectKindTokens...)},
+		{Key: "anchor_basis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: scopedAnchorBasis},
+		{Key: "committed", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "census", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the ownership read finished (every outcome but not_routed and read_failed)"},
+		{Key: "owners", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the ownership read finished (every outcome but not_routed and read_failed)"},
+		{Key: "truncated", Type: FieldBool, Presence: PresenceConditional, Applicability: "written when the ownership read finished (every outcome but not_routed and read_failed)"},
+		{Key: "error", Type: FieldString, Presence: PresenceConditional, Applicability: "written when outcome=read_failed"},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
 
 // ProjectDeploymentWalk is the Info line of one DiscoverContext call that asks
 // for the deployment members of a named anchor: whether the project walk
@@ -2910,7 +2948,7 @@ var ProjectDeploymentWalk = Event{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: projectDeploymentWalkOutcome},
 		{Key: "anchor_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"none"}, contextFabricSubjectKindTokens...)},
-		{Key: "anchor_basis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: projectDeploymentWalkAnchorBasis},
+		{Key: "anchor_basis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: scopedAnchorBasis},
 		{Key: "committed", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "issues", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the walk finished (every outcome but not_routed and read_failed)"},
 		{Key: "linked_pull_requests", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the walk finished (every outcome but not_routed and read_failed)"},
@@ -2964,6 +3002,7 @@ var All = []Event{
 	ConfirmedNeedLedger,
 	CohortKindFulltext,
 	ProjectDeploymentWalk,
+	OwnershipRouting,
 	AnchorBindingTransition,
 	MCPHostedContextScope,
 	MCPHTTPRequest,

@@ -581,6 +581,12 @@ type GraphTelemetry interface {
 	// anchor's kind, so "the walk was not reached" is a line and not an
 	// absence. Counts and closed values only.
 	RecordProjectDeploymentWalk(ctx context.Context, orgID string, decision ProjectDeploymentWalkDecision)
+	// RecordOwnershipRouting (eventspec.OwnershipRouting) reports ONE
+	// DiscoverContext call that asks for the team members of a named anchor:
+	// whether the ownership read ran and what it found. A call whose anchor
+	// is not a committed repository reports OwnershipRoutingNotRouted with
+	// the anchor's kind. Counts and closed values only.
+	RecordOwnershipRouting(ctx context.Context, orgID string, decision OwnershipRoutingDecision)
 	// RecordNeighborLookupFailed reports ONE neighbour the hop walk reached
 	// through an admitted edge and then could not read back.
 	//
@@ -667,6 +673,8 @@ func (NoopTelemetry) RecordCohortKindCensus(context.Context, string, CohortKindC
 func (NoopTelemetry) RecordCohortKindFulltext(context.Context, string, CohortKindFulltextDecision, contextfabric.SubjectKind, int, bool, int, int, error) {
 }
 func (NoopTelemetry) RecordProjectDeploymentWalk(context.Context, string, ProjectDeploymentWalkDecision) {
+}
+func (NoopTelemetry) RecordOwnershipRouting(context.Context, string, OwnershipRoutingDecision) {
 }
 
 func (NoopTelemetry) RecordNeighborLookupFailed(context.Context, string, string, string, NeighborLookupFailureSite, error) {
@@ -1015,6 +1023,32 @@ func (t SlogTelemetry) RecordProjectDeploymentWalk(ctx context.Context, orgID st
 		args = append(args, "error", contextfabric.SanitizeLogAttr(decision.Err.Error()))
 	}
 	t.logger().Info(eventspec.ProjectDeploymentWalk.Msg, append(args, graphRequestIDLogAttrs(ctx)...)...)
+}
+
+// RecordOwnershipRouting logs at Info. The read counts ride only on an
+// outcome whose ownership read finished, and error only on a failed read.
+func (t SlogTelemetry) RecordOwnershipRouting(ctx context.Context, orgID string, decision OwnershipRoutingDecision) {
+	anchorKind := string(decision.AnchorKind)
+	if anchorKind == "" {
+		anchorKind = "none"
+	}
+	args := []any{
+		"org_id", contextfabric.SanitizeLogAttr(orgID),
+		"outcome", contextfabric.SanitizeLogAttr(string(decision.Outcome)),
+		"anchor_kind", contextfabric.SanitizeLogAttr(anchorKind),
+		"anchor_basis", contextfabric.SanitizeLogAttr(string(decision.AnchorBasis)),
+		"committed", decision.Committed,
+	}
+	if decision.Outcome != OwnershipRoutingNotRouted && decision.Outcome != OwnershipRoutingReadFailed {
+		args = append(args,
+			"census", decision.Census,
+			"owners", decision.Owners,
+			"truncated", decision.Truncated)
+	}
+	if decision.Err != nil {
+		args = append(args, "error", contextfabric.SanitizeLogAttr(decision.Err.Error()))
+	}
+	t.logger().Info(eventspec.OwnershipRouting.Msg, append(args, graphRequestIDLogAttrs(ctx)...)...)
 }
 
 // RecordNeighborLookupFailed logs at Warn: unlike the cohort-kind basis, this

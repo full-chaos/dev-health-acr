@@ -29,6 +29,8 @@ const (
 	// routeReachReason is the inclusion reason of a member the two-hop walk
 	// reached from a named repository or team.
 	routeReachReason = "Graph retrieval reached this deployment from the anchor the question names."
+	// routeOwnershipMessage is the decision line of ownership routing.
+	routeOwnershipMessage = "context_fabric: ownership routing"
 	// routeWalkReason is the inclusion reason of a member the walk reached.
 	routeWalkReason = "Deployment of a repository that a pull request linked to an issue of the named project belongs to."
 )
@@ -88,6 +90,17 @@ func (s routeSeed) conn() *fakeConn {
 				rows = append(rows, row{"id": id, "repos": repos})
 			}
 			return rows, nil
+		case isTeamCensus(params):
+			var rows []row
+			for _, n := range s.nodes {
+				if n.kind != "team" {
+					continue
+				}
+				r := fakeSubjectNodeRow(n.kind, n.id, n.label)
+				r["n"].(*node).Properties[propAuthzRepos] = n.repos
+				rows = append(rows, r)
+			}
+			return rows, nil
 		case params["targets"] != nil:
 			targets, _ := params["targets"].([]interface{})
 			var rows []row
@@ -137,6 +150,13 @@ func (s routeSeed) conn() *fakeConn {
 	}}
 }
 
+// isTeamCensus reports the term-free read of the team kind alone, the read
+// ownership routing makes.
+func isTeamCensus(params map[string]interface{}) bool {
+	kinds, ok := params["kinds"].([]string)
+	return ok && len(kinds) == 1 && kinds[0] == "team"
+}
+
 // wildcardProjects stamps every project node with the "*" authorization the
 // projection writes, which a restricted caller's read replaces by the
 // project's ownership reach.
@@ -157,6 +177,9 @@ type projectDeploymentsInterpreter struct {
 	name string
 	// kind is the declared anchor kind; empty reads as project.
 	kind contextfabric.SubjectKind
+	// member is the member kind the question asks for; empty reads as
+	// deployment.
+	member contextfabric.SubjectKind
 }
 
 func (i projectDeploymentsInterpreter) Interpret(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InterpretedQuestion, contextfabric.QuestionFamilyOutcome, error) {
@@ -164,17 +187,21 @@ func (i projectDeploymentsInterpreter) Interpret(context.Context, storage.Princi
 	if anchorKind == "" {
 		anchorKind = contextfabric.SubjectProject
 	}
+	member := i.member
+	if member == "" {
+		member = contextfabric.SubjectDeployment
+	}
 	frame := contextfabric.DeriveFrameObligations(contextfabric.QuestionFrame{
 		Goals: []contextfabric.InvestigationGoal{contextfabric.GoalAssessState},
 		SubjectExpression: contextfabric.SubjectExpression{
 			Kind:   contextfabric.SubjectExpressionChildrenOfScope,
-			Scoped: &contextfabric.ScopedSetExpression{AnchorTerms: []string{i.name}, MemberKind: contextfabric.SubjectDeployment},
+			Scoped: &contextfabric.ScopedSetExpression{AnchorTerms: []string{i.name}, MemberKind: member},
 		},
 		Temporal: contextfabric.TemporalIntentCurrent,
 		Version:  contextfabric.QuestionFrameVersion,
 	}, nil)
 	return contextfabric.InterpretedQuestion{
-		Shape: contextfabric.ShapeDiscoveredCohort, RequestedJudgment: "deployments",
+		Shape: contextfabric.ShapeDiscoveredCohort, RequestedJudgment: string(member),
 		SubjectTerms:     []string{i.name},
 		TimeContext:      contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		FactRequirements: []contextfabric.FactRequirement{},
@@ -240,11 +267,18 @@ func askAnchorDeployments(t *testing.T, s routeSeed, principal storage.Principal
 // document beside the commit the resolver made and the walk's decision lines.
 func investigateAnchorDeployments(t *testing.T, adapter *Adapter, principal storage.Principal, kind contextfabric.SubjectKind, name, question string) routeAnswer {
 	t.Helper()
+	return investigateAnchorMembers(t, adapter, principal, contextfabric.SubjectDeployment, kind, name, question, routeWalkMessage)
+}
+
+// investigateAnchorMembers is the same drive for any member kind; lineMessage
+// names the decision line it collects.
+func investigateAnchorMembers(t *testing.T, adapter *Adapter, principal storage.Principal, member, kind contextfabric.SubjectKind, name, question, lineMessage string) routeAnswer {
+	t.Helper()
 	var logs bytes.Buffer
 	adapter.config.Telemetry = SlogTelemetry{Logger: slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))}
 	graph := &routeBasisRecorder{Adapter: adapter}
 	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
-		Interpreter: projectDeploymentsInterpreter{name: name, kind: kind},
+		Interpreter: projectDeploymentsInterpreter{name: name, kind: kind, member: member},
 		Graph:       graph,
 		Facts:       emptyFactReader{},
 		// The shipped synthesizer in the mode a hosted client that writes its
@@ -287,7 +321,7 @@ func investigateAnchorDeployments(t *testing.T, adapter *Adapter, principal stor
 	scanner.Buffer(make([]byte, 0, 1<<20), 1<<20)
 	for scanner.Scan() {
 		var line map[string]any
-		if json.Unmarshal(scanner.Bytes(), &line) == nil && line["msg"] == routeWalkMessage {
+		if json.Unmarshal(scanner.Bytes(), &line) == nil && line["msg"] == lineMessage {
 			answer.walkLines = append(answer.walkLines, line)
 		}
 	}

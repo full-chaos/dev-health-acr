@@ -64,18 +64,18 @@ func TestDeploymentCohortAnchorPrefersTheBoundSubjectAndRefusesSeveralUnbound(t 
 
 	bound := projectDeploymentsRequest()
 	bound.Resolution.Committed = []contextfabric.SubjectRef{stray, project}
-	if got, basis := deploymentCohortAnchor(bound); got == nil || *got != project || basis != DeploymentAnchorBound {
+	if got, basis := deploymentCohortAnchor(bound); got == nil || *got != project || basis != AnchorBasisBound {
 		t.Errorf("bound project beside a stray repository: anchor = %v basis = %q, want the bound project", got, basis)
 	}
 
 	unbound := soleCommitRequest(project, contextfabric.CommitBasisStatistical)
 	unbound.Resolution.Committed = []contextfabric.SubjectRef{stray, project}
-	if got, basis := deploymentCohortAnchor(unbound); got != nil || basis != DeploymentAnchorNone {
+	if got, basis := deploymentCohortAnchor(unbound); got != nil || basis != AnchorBasisNone {
 		t.Errorf("two committed subjects, none bound: anchor = %v basis = %q, want none", got, basis)
 	}
 
 	sole := soleCommitRequest(project, contextfabric.CommitBasisStatistical)
-	if got, basis := deploymentCohortAnchor(sole); got == nil || *got != project || basis != DeploymentAnchorSoleCommit {
+	if got, basis := deploymentCohortAnchor(sole); got == nil || *got != project || basis != AnchorBasisSoleCommit {
 		t.Errorf("one statistical commit: anchor = %v basis = %q, want the committed project as the sole commit", got, basis)
 	}
 
@@ -113,7 +113,7 @@ func TestAProjectNamedByItsLabelRoutesTheWalk(t *testing.T) {
 			t.Errorf("basis %q: rationale = %q", basis, result.Cohort.Rationale)
 		}
 		want := ProjectDeploymentWalkDecision{
-			Outcome: ProjectDeploymentWalkMembers, AnchorKind: contextfabric.SubjectProject, AnchorBasis: DeploymentAnchorSoleCommit,
+			Outcome: ProjectDeploymentWalkMembers, AnchorKind: contextfabric.SubjectProject, AnchorBasis: AnchorBasisSoleCommit,
 			Committed: 1, Issues: 3, LinkedPullRequests: 3, Members: len(s.served),
 		}
 		if len(telemetry.projectDeploymentWalks) != 1 {
@@ -156,7 +156,7 @@ func walkOutcomeFixtures() map[ProjectDeploymentWalkOutcome]walkOutcomeFixture {
 		ProjectDeploymentWalkMembers: {
 			principal: open, seed: func() ([]seededNode, []seededEdge) { return projectWithOneIssue(true, 1) }, request: projectDeploymentsRequest,
 			check: func(t *testing.T, d ProjectDeploymentWalkDecision) {
-				if d.Members != 1 || d.Issues != 1 || d.LinkedPullRequests != 1 || d.Truncated || d.AnchorBasis != DeploymentAnchorBound {
+				if d.Members != 1 || d.Issues != 1 || d.LinkedPullRequests != 1 || d.Truncated || d.AnchorBasis != AnchorBasisBound {
 					t.Errorf("members decision = %+v, want 1 member from 1 issue and 1 link, bound, uncut", d)
 				}
 			},
@@ -209,7 +209,7 @@ func walkOutcomeFixtures() map[ProjectDeploymentWalkOutcome]walkOutcomeFixture {
 				return soleCommitRequest(contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:payments", Label: "payments"}, contextfabric.CommitBasisStatistical)
 			},
 			check: func(t *testing.T, d ProjectDeploymentWalkDecision) {
-				if d.AnchorKind != contextfabric.SubjectTeam || d.AnchorBasis != DeploymentAnchorSoleCommit || d.Members != 0 || d.Issues != 0 {
+				if d.AnchorKind != contextfabric.SubjectTeam || d.AnchorBasis != AnchorBasisSoleCommit || d.Members != 0 || d.Issues != 0 {
 					t.Errorf("not_routed decision = %+v, want the team anchor and no walk count", d)
 				}
 			},
@@ -318,7 +318,7 @@ func TestProjectDeploymentWalkClosedVocabulariesMatchEventspec(t *testing.T) {
 	for _, o := range ProjectDeploymentWalkOutcomeVocabulary() {
 		outcomes = append(outcomes, string(o))
 	}
-	for _, b := range DeploymentAnchorBasisVocabulary() {
+	for _, b := range AnchorBasisVocabulary() {
 		bases = append(bases, string(b))
 	}
 	if !reflect.DeepEqual(declared["outcome"], outcomes) {
