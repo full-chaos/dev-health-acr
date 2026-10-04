@@ -4483,20 +4483,21 @@ func (f EvidenceCensusCommitFields) SlogArgs() []any {
 // EvidenceProbeFields is graphrank.evidence_probe's generated typed construction interface
 // (CHAOS-5516): one Go field per Field EvidenceProbe.Fields declares in spec.go.
 type EvidenceProbeFields struct {
-	CensusKind                   string
-	CensusComplete               bool
-	CensusCount                  int
-	CensusReadAtUnix             int
-	CensusProtocol               string
-	CensusClosureMismatch        bool
-	CensusStatementCount         int
-	CensusRowsRead               int
-	CensusHandleApplied          bool
-	CensusAnchorApplied          bool
-	ShadowCallerHintShortCircuit bool
-	RequestID                    string
-	Index                        int
-	Total                        int
+	CensusKind                    string
+	CensusComplete                bool
+	CensusCount                   int
+	CensusReadAtUnix              int
+	CensusProtocol                string
+	CensusClosureMismatch         bool
+	CensusStatementCount          int
+	CensusRowsRead                int
+	CensusHandleApplied           bool
+	CensusAnchorApplied           bool
+	CensusRepositoryFilterApplied bool
+	ShadowCallerHintShortCircuit  bool
+	RequestID                     string
+	Index                         int
+	Total                         int
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every EvidenceProbeFields uniformly, set ONLY by NewEvidenceProbeFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -4510,23 +4511,24 @@ type EvidenceProbeFields struct {
 
 // NewEvidenceProbeFields is the generated constructor for EvidenceProbeFields -- every
 // field EvidenceProbe.Fields declares is a required parameter.
-func NewEvidenceProbeFields(censusKind string, censusComplete bool, censusCount int, censusReadAtUnix int, censusProtocol string, censusClosureMismatch bool, censusStatementCount int, censusRowsRead int, censusHandleApplied bool, censusAnchorApplied bool, shadowCallerHintShortCircuit bool, requestID string, index int, total int) EvidenceProbeFields {
+func NewEvidenceProbeFields(censusKind string, censusComplete bool, censusCount int, censusReadAtUnix int, censusProtocol string, censusClosureMismatch bool, censusStatementCount int, censusRowsRead int, censusHandleApplied bool, censusAnchorApplied bool, censusRepositoryFilterApplied bool, shadowCallerHintShortCircuit bool, requestID string, index int, total int) EvidenceProbeFields {
 	return EvidenceProbeFields{
-		CensusKind:                   censusKind,
-		CensusComplete:               censusComplete,
-		CensusCount:                  censusCount,
-		CensusReadAtUnix:             censusReadAtUnix,
-		CensusProtocol:               censusProtocol,
-		CensusClosureMismatch:        censusClosureMismatch,
-		CensusStatementCount:         censusStatementCount,
-		CensusRowsRead:               censusRowsRead,
-		CensusHandleApplied:          censusHandleApplied,
-		CensusAnchorApplied:          censusAnchorApplied,
-		ShadowCallerHintShortCircuit: shadowCallerHintShortCircuit,
-		RequestID:                    requestID,
-		Index:                        index,
-		Total:                        total,
-		constructed:                  true,
+		CensusKind:                    censusKind,
+		CensusComplete:                censusComplete,
+		CensusCount:                   censusCount,
+		CensusReadAtUnix:              censusReadAtUnix,
+		CensusProtocol:                censusProtocol,
+		CensusClosureMismatch:         censusClosureMismatch,
+		CensusStatementCount:          censusStatementCount,
+		CensusRowsRead:                censusRowsRead,
+		CensusHandleApplied:           censusHandleApplied,
+		CensusAnchorApplied:           censusAnchorApplied,
+		CensusRepositoryFilterApplied: censusRepositoryFilterApplied,
+		ShadowCallerHintShortCircuit:  shadowCallerHintShortCircuit,
+		RequestID:                     requestID,
+		Index:                         index,
+		Total:                         total,
+		constructed:                   true,
 	}
 }
 
@@ -4553,6 +4555,7 @@ func (f EvidenceProbeFields) SlogArgs() []any {
 		"census_rows_read", f.CensusRowsRead,
 		"census_handle_applied", f.CensusHandleApplied,
 		"census_anchor_applied", f.CensusAnchorApplied,
+		"census_repository_filter_applied", f.CensusRepositoryFilterApplied,
 		"shadow_caller_hint_short_circuit", f.ShadowCallerHintShortCircuit,
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 		"stage", "evidence_probe",

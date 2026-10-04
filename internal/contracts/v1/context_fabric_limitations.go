@@ -652,7 +652,20 @@ func IsContextFabricServiceAuthoredLimitation(limitation string) bool {
 		IsContextFabricFactRowTruncationLimitation(limitation) ||
 		IsContextFabricClaimDepthLimitation(limitation) ||
 		IsContextFabricPathDropLimitation(limitation) ||
-		IsContextFabricWorkItemMemberFilterLimitation(limitation)
+		IsContextFabricWorkItemMemberFilterLimitation(limitation) ||
+		IsContextFabricWorkItemCensusRepositoryScopeLimitation(limitation)
+}
+
+// ContextFabricWorkItemCensusRepositoryScopeLimitation is served, in the same
+// words every time, when the caller's repository scope was applied to the
+// work item census: a work item with no repository of its own is outside a
+// named repository, so the census did not search it.
+const ContextFabricWorkItemCensusRepositoryScopeLimitation = "A repository scope was given: work items that have no repository of their own (for example tracker issues linked only through pull requests) were not searched."
+
+// IsContextFabricWorkItemCensusRepositoryScopeLimitation reports whether one
+// limitation is that disclosure; it matches the whole sentence.
+func IsContextFabricWorkItemCensusRepositoryScopeLimitation(limitation string) bool {
+	return limitation == ContextFabricWorkItemCensusRepositoryScopeLimitation
 }
 
 // The work-item member-filter disclosures. A filtered member answer states the
