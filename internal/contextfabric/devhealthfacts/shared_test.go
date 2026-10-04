@@ -447,3 +447,11 @@ func TestQueryVersionMovedPastTheMemberReadWithoutAWindow(t *testing.T) {
 		t.Fatalf("QueryVersion = %q, want it moved past %q -- a stored work-item member refusal saved before the member read took a window must not be served as one", devhealthfacts.QueryVersion, versionBeforeMembersCouldBeWindowed)
 	}
 }
+
+func TestQueryVersionMovedPastTheLexicalDeploymentCohort(t *testing.T) {
+	t.Parallel()
+	const versionBeforeAnchoredDeploymentCohortsHeldToTheirReach = "devhealthfacts.clickhouse.v34"
+	if devhealthfacts.QueryVersion == versionBeforeAnchoredDeploymentCohortsHeldToTheirReach {
+		t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved before a named anchor's deployment cohort was held to the anchor's reach holds deployments the question text matched across the organization and must not be reused", devhealthfacts.QueryVersion, versionBeforeAnchoredDeploymentCohortsHeldToTheirReach)
+	}
+}

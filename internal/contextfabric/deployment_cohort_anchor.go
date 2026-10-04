@@ -28,14 +28,29 @@ func withDerivedScopeAnchorKind(sample FamilySample, committed []SubjectRef) Fam
 	return sample
 }
 
+// DeploymentCohortAnchor returns the committed subject a deployment-members
+// frame is anchored on: the one committed subject, when its kind can anchor a
+// deployment cohort. Zero or several committed subjects name no anchor.
+//
+// The commit basis is not read. The engine admits the frame on this rule and a
+// graph reader chooses the member read on it, so a subject the engine admitted
+// as the anchor is the subject whose reach the reader serves.
+func DeploymentCohortAnchor(committed []SubjectRef) (SubjectRef, bool) {
+	if len(committed) != 1 || !DeploymentCohortAnchorServable(committed[0].Kind) {
+		return SubjectRef{}, false
+	}
+	return committed[0], true
+}
+
 // deploymentCohortAnchorsServable is true only for exactly one committed
 // anchor of a proven kind whose declared anchor kind (derived from the
 // committed subject when empty) equals the committed one.
 func deploymentCohortAnchorsServable(committed []SubjectRef, declaredAnchorKind SubjectKind) bool {
-	if len(committed) != 1 || !DeploymentCohortAnchorServable(committed[0].Kind) {
+	anchor, ok := DeploymentCohortAnchor(committed)
+	if !ok {
 		return false
 	}
-	return declaredAnchorKind == "" || declaredAnchorKind == committed[0].Kind
+	return declaredAnchorKind == "" || declaredAnchorKind == anchor.Kind
 }
 
 // zeroCommitAnchorKindUnservable is true when no subject was committed and

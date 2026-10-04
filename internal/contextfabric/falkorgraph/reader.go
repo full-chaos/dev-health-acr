@@ -653,21 +653,33 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		}
 	}
 
-	// projectDeploymentAnchor is set when the frame asks for the deployment
-	// members of a named project: a project has no repository edge, so its
-	// members come from projectDeploymentMembers, not from the two-hop walk.
-	var projectDeploymentAnchor *contextfabric.SubjectRef
+	// deploymentAnchor is set when the frame asks for the deployment members
+	// of a named anchor. The anchor's own reach is the whole member set: a
+	// deployment another committed subject or a lexical arm returned is not a
+	// member, whatever basis the anchor was committed on.
+	var deploymentAnchor *contextfabric.SubjectRef
+	deploymentAnchorBasis := DeploymentAnchorNone
 	if declaredCohortKindForRouting == contextfabric.SubjectDeployment {
-		for i, subject := range request.Resolution.Committed {
-			if subject.Kind == contextfabric.SubjectProject && frameAnchorBound(request.Frame, subject, request.Resolution, request.Bases) {
-				projectDeploymentAnchor = &request.Resolution.Committed[i]
-				break
-			}
-		}
+		deploymentAnchor, deploymentAnchorBasis = deploymentCohortAnchor(request)
+	}
+	// projectDeploymentAnchor is that anchor when it is a project: a project
+	// has no repository edge, so its members come from
+	// projectDeploymentMembers, not from the two-hop walk.
+	var projectDeploymentAnchor *contextfabric.SubjectRef
+	if deploymentAnchor != nil && deploymentAnchor.Kind == contextfabric.SubjectProject {
+		projectDeploymentAnchor = deploymentAnchor
+	}
+	if declaredCohortKindForRouting == contextfabric.SubjectDeployment && projectDeploymentAnchor == nil && a.config.Telemetry != nil {
+		a.config.Telemetry.RecordProjectDeploymentWalk(ctx, principal.OrgID, ProjectDeploymentWalkDecision{
+			Outcome: ProjectDeploymentWalkNotRouted, AnchorKind: deploymentAnchorKind(deploymentAnchor), AnchorBasis: deploymentAnchorBasis,
+			Committed: len(request.Resolution.Committed),
+		})
 	}
 	projectDeploymentsUnlinked := -1
 	projectDeploymentsDenied := -1
-	projectDeploymentsCutEmpty := false
+	// deploymentAnchorReadCut: the read of the deployment anchor's own reach
+	// (the project walk, or the two-hop walk of a repository or team) was cut.
+	deploymentAnchorReadCut := false
 
 	for _, subject := range request.Resolution.Committed {
 		if ownershipRoutedRepoSlug != "" && subject.Kind == contextfabric.SubjectRepository && subject.Label == ownershipRoutedRepoSlug {
@@ -683,14 +695,22 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			var walk projectDeploymentWalk
 			walk, err = a.projectDeploymentMembers(ctx, key, principal.OrgID, principal, scope, subject, collectLimit, temporal)
 			nodes, edges, filters, walkTruncated = walk.nodes, walk.edges, walk.filters, walk.truncated
+			outcome := projectDeploymentWalkOutcome(walk, needsProjectReach(principal), err)
 			if err == nil && len(walk.nodes) == 0 {
-				projectDeploymentsCutEmpty = walk.truncated
-				switch {
-				case needsProjectReach(principal):
+				switch outcome {
+				case ProjectDeploymentWalkDenied:
 					projectDeploymentsDenied = 0
-				case walk.linkedPullRequests == 0 && !walk.truncated:
+				case ProjectDeploymentWalkUnlinked:
 					projectDeploymentsUnlinked = walk.issues
 				}
+			}
+			if a.config.Telemetry != nil {
+				a.config.Telemetry.RecordProjectDeploymentWalk(ctx, principal.OrgID, ProjectDeploymentWalkDecision{
+					Outcome: outcome, AnchorKind: contextfabric.SubjectProject, AnchorBasis: deploymentAnchorBasis,
+					Committed: len(request.Resolution.Committed),
+					Issues:    walk.issues, LinkedPullRequests: walk.linkedPullRequests, Members: len(walk.nodes), Denied: walk.denied,
+					Truncated: walk.truncated, Err: err,
+				})
 			}
 		} else {
 			nodes, edges, failed, filters, walkTruncated, err = a.hopWalk(ctx, key, principal.OrgID, principal, scope, subject, 2, collectLimit, temporal)
@@ -711,6 +731,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		// resolvedNodes that becomes cohortNodes, so this is an OR across
 		// subjects, never the last one's value.
 		hopWalkTruncated = hopWalkTruncated || walkTruncated
+		if deploymentAnchor != nil && subject == *deploymentAnchor {
+			deploymentAnchorReadCut = walkTruncated
+		}
 		edgeFilters.Authz += filters.Authz
 		edgeFilters.TemporalWindow += filters.TemporalWindow
 		for _, n := range nodes {
@@ -727,7 +750,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			if ownershipRoutedRepoSlug != "" && mustSubject(n).Kind == declaredCohortKindForRouting {
 				continue
 			}
-			if projectDeploymentAnchor != nil && subject != *projectDeploymentAnchor && mustSubject(n).Kind == contextfabric.SubjectDeployment {
+			if deploymentAnchor != nil && subject != *deploymentAnchor && mustSubject(n).Kind == contextfabric.SubjectDeployment {
 				continue
 			}
 			nk := graphrank.SubjectKey(mustSubject(n))
@@ -737,7 +760,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			}
 		}
 		for _, e := range edges {
-			if projectDeploymentAnchor != nil && subject != *projectDeploymentAnchor && (e.From.Kind == contextfabric.SubjectDeployment || e.To.Kind == contextfabric.SubjectDeployment) {
+			if deploymentAnchor != nil && subject != *deploymentAnchor && (e.From.Kind == contextfabric.SubjectDeployment || e.To.Kind == contextfabric.SubjectDeployment) {
 				continue
 			}
 			if !seenEdge[e.UUID] {
@@ -847,7 +870,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		if !ok {
 			continue
 		}
-		if projectDeploymentAnchor != nil && subject.Kind == contextfabric.SubjectDeployment {
+		if deploymentAnchor != nil && subject.Kind == contextfabric.SubjectDeployment {
 			continue
 		}
 		nk := graphrank.SubjectKey(subject)
@@ -869,7 +892,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			if seenEdge[ce.UUID] {
 				continue
 			}
-			if projectDeploymentAnchor != nil && touchesDeployment(ce) {
+			if deploymentAnchor != nil && touchesDeployment(ce) {
 				continue
 			}
 			seenEdge[ce.UUID] = true
@@ -944,7 +967,13 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// question-text match the plain arm already runs, merely not forced to
 	// share its budget with kinds this cohort never asked about.
 	cohortFulltextTruncated := fulltextTruncated
-	if declaredCohortKindForRouting != "" && !censusAdmitted {
+	if deploymentAnchor != nil {
+		// No lexical arm can add a member to an anchored deployment cohort, so
+		// a cut lexical arm is not a loss from it and the kind-scoped arm has
+		// nothing to fetch.
+		cohortFulltextTruncated = false
+	}
+	if declaredCohortKindForRouting != "" && !censusAdmitted && deploymentAnchor == nil {
 		kindTextNodes, kindTruncated, kindErr := a.fulltextSearchNodesForKind(ctx, key, principal.OrgID, request.Request.Question, collectLimit, temporal, declaredCohortKindForRouting)
 		if kindErr != nil && (errors.Is(kindErr, context.Canceled) || errors.Is(kindErr, context.DeadlineExceeded)) {
 			// THE CALLER GIVING UP IS NOT A DEPENDENCY FAILURE THIS ARM CAN
@@ -1011,9 +1040,6 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			for _, n := range kindTextNodes {
 				subject, ok := graphrank.NodeSubject(n)
 				if !ok {
-					continue
-				}
-				if projectDeploymentAnchor != nil && subject.Kind == contextfabric.SubjectDeployment {
 					continue
 				}
 				nk := graphrank.SubjectKey(subject)
@@ -1258,6 +1284,15 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// principal restriction, exactly as it does for every other arm; it is
 	// never widened or replaced for this pairing.
 	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis, cohortPopulation := graphrank.DiscoveredCohort(principal, request, cohortNodes, cohortPoolTruncated, isInternalSubject)
+	if cohort != nil && deploymentAnchor != nil {
+		// Every member was reached from the anchor, so the member says so
+		// instead of the pool's organization-level reason.
+		reason := anchoredDeploymentInclusionReason(deploymentAnchor.Kind)
+		for i := range cohort.Members {
+			cohort.Members[i].InclusionReasons = []string{reason}
+		}
+		cohort.Rationale = anchoredDeploymentCohortRationale
+	}
 	// SEAM 7 (CHAOS-4736): what decided the cohort kind, or what prevented
 	// a cohort. This is the I/O boundary, so the telemetry call lives here
 	// and DiscoveredCohort stays pure -- the same split the authzDropped
@@ -1393,7 +1428,12 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		unbounded = countUnboundedValidity(cohortNodes, orderedResolved)
 	}
 
-	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0 || exactNameTruncated || cohortWhollyDeniedByAuthz || kindCensusTruncated || projectDeploymentsUnlinked >= 0 || projectDeploymentsDenied >= 0 || projectDeploymentsCutEmpty
+	// anchoredCutEmpty: the anchor's read was cut and reached no member, so
+	// members may exist past the cut. A restricted caller served the neutral
+	// denied reason is told nothing more: the project walk counts its cut
+	// before authorization.
+	anchoredCutEmpty := cohort == nil && deploymentAnchorReadCut && projectDeploymentsDenied < 0
+	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0 || exactNameTruncated || cohortWhollyDeniedByAuthz || kindCensusTruncated || projectDeploymentsUnlinked >= 0 || projectDeploymentsDenied >= 0 || anchoredCutEmpty
 	var degradedReasons []string
 	var coverageDetails []contextfabric.CoverageDetail
 	// CHAOS-4690: every degraded reason this reader composes gets a paired
@@ -1475,7 +1515,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		deniedCount := cohortKindScopedAuthzDropped
 		appendGraphDetail(contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization, true, &deniedCount, cohortDeniedReason, "context-fabric:graph")
 	}
-	if projectDeploymentsCutEmpty {
+	if anchoredCutEmpty {
 		cutReason := fmt.Sprintf("kind_census_truncated:%s:%d:%d", contextfabric.SubjectDeployment, 0, 0)
 		degradedReasons = append(degradedReasons, cutReason)
 		cutDeclared, cutServed := 0, 0
@@ -1578,6 +1618,66 @@ func mustSubject(n graphrank.CandidateNode) contextfabric.SubjectRef {
 // own pre-existing behavior.
 func frameAnchorBound(frame *contextfabric.QuestionFrame, subject contextfabric.SubjectRef, resolution contextfabric.SubjectResolution, bases contextfabric.CommitBasisSet) bool {
 	return contextfabric.AnchorBound(frame, "", subject, resolution, bases)
+}
+
+// DeploymentAnchorBasis names how the anchor of a deployment-members frame was
+// chosen from the committed subjects.
+type DeploymentAnchorBasis string
+
+const (
+	// DeploymentAnchorNone: no committed subject is the anchor.
+	DeploymentAnchorNone DeploymentAnchorBasis = "none"
+	// DeploymentAnchorBound: the committed subject is the frame's bound anchor
+	// (contextfabric.AnchorBound).
+	DeploymentAnchorBound DeploymentAnchorBasis = "bound"
+	// DeploymentAnchorSoleCommit: the one committed subject, the rule the
+	// engine admits the frame on (contextfabric.DeploymentCohortAnchor).
+	DeploymentAnchorSoleCommit DeploymentAnchorBasis = "sole_commit"
+)
+
+// deploymentCohortAnchor picks the committed subject a deployment-members
+// frame is anchored on. A subject bound as the frame's anchor wins, which
+// decides a call that carries several committed subjects. Otherwise it is the
+// one committed subject of a kind that can anchor a deployment cohort: the
+// engine admits the frame on that rule whatever the commit basis, and a
+// subject named by its label is committed on a basis that never binds.
+func deploymentCohortAnchor(request contextfabric.GraphDiscoveryRequest) (*contextfabric.SubjectRef, DeploymentAnchorBasis) {
+	committed := request.Resolution.Committed
+	for i, subject := range committed {
+		if contextfabric.DeploymentCohortAnchorServable(subject.Kind) && frameAnchorBound(request.Frame, subject, request.Resolution, request.Bases) {
+			return &committed[i], DeploymentAnchorBound
+		}
+	}
+	if _, ok := contextfabric.DeploymentCohortAnchor(committed); ok {
+		return &committed[0], DeploymentAnchorSoleCommit
+	}
+	return nil, DeploymentAnchorNone
+}
+
+func deploymentAnchorKind(anchor *contextfabric.SubjectRef) contextfabric.SubjectKind {
+	if anchor == nil {
+		return ""
+	}
+	return anchor.Kind
+}
+
+// projectDeploymentInclusionReason is the inclusion reason of a deployment
+// the project walk reached.
+const projectDeploymentInclusionReason = "Deployment of a repository that a pull request linked to an issue of the named project belongs to."
+
+// anchorReachInclusionReason is the inclusion reason of a deployment the
+// two-hop walk reached from a named repository or team.
+const anchorReachInclusionReason = "Graph retrieval reached this deployment from the anchor the question names."
+
+// anchoredDeploymentCohortRationale is the rationale of a deployment cohort
+// held to its anchor's reach.
+const anchoredDeploymentCohortRationale = "Deployments were reached from the anchor the question names in the authorized Context Fabric graph."
+
+func anchoredDeploymentInclusionReason(anchor contextfabric.SubjectKind) string {
+	if anchor == contextfabric.SubjectProject {
+		return projectDeploymentInclusionReason
+	}
+	return anchorReachInclusionReason
 }
 
 // sortCandidateNodesBySubjectKey sorts nodes in place by graphrank.SubjectKey

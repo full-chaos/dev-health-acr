@@ -225,7 +225,13 @@ import (
 // field (created, completed or updated), so a project's members of a period
 // are served. A candidate saved under v33 for such a question is the
 // member-kind refusal and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v34"
+//
+// v34 -> v35: a deployment cohort of a named anchor holds only the deployments
+// reached from the anchor, and a project named by its label is served by the
+// project walk. A candidate saved under v34 for such a question holds
+// deployments the question text matched across the organization and must not
+// be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v35"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
