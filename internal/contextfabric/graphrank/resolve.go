@@ -2963,12 +2963,20 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			// consumed exactly as the ordinary path consumes it: same
 			// predicate, same census, same commit.
 			shadowsHandle := len(request.SubjectHandles) == 0 && committedScopeAnchorShadowsHandle(request.Question, exactResolution.Committed, frame)
-			roundAnchor := confirmedAnchor
-			if shadowsHandle && roundAnchor == nil && len(exactResolution.Committed) == 1 {
-				roundAnchor = &contextfabric.ConfirmedAnchorSelection{Kind: exactResolution.Committed[0].Kind, CanonicalID: exactResolution.Committed[0].CanonicalID}
+			// The hinted anchor reaches the round as the sole claimant of its
+			// own label, the same shape the alias lookup gives the ordinary
+			// path, so the trace reports a unique claimant and never a
+			// redeemed receipt. A real receipt still takes priority.
+			var hintClaimants map[string][]CandidateNode
+			if shadowsHandle && confirmedAnchor == nil && len(exactResolution.Committed) == 1 {
+				anchorSubject := exactResolution.Committed[0]
+				hintClaimants = map[string][]CandidateNode{anchorSubject.Label: {{
+					Name:       anchorSubject.Label,
+					Attributes: map[string]interface{}{"subject_kind": string(anchorSubject.Kind), "canonical_id": anchorSubject.CanonicalID, "label": anchorSubject.Label},
+				}}}
 			}
-			attestation := runShadowEvidenceRoundForResolution(ctx, principal, request, interpreted, exactResolution, nil, false,
-				unscopedVisibilityFor(principal, request) || repositoryNarrowedByUnrestrictedPrincipal(principal, request), deps, confirmedKind, roundAnchor, true)
+			attestation := runShadowEvidenceRoundForResolution(ctx, principal, request, interpreted, exactResolution, hintClaimants, hintClaimants != nil,
+				unscopedVisibilityFor(principal, request) || repositoryNarrowedByUnrestrictedPrincipal(principal, request), deps, confirmedKind, confirmedAnchor, true)
 			hintGate := deps.CommitGatePolicy
 			if hintGate == (CommitGatePolicy{}) {
 				hintGate = DefaultCommitGatePolicy()

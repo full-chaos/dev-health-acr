@@ -3,6 +3,7 @@ package graphrank
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -137,5 +138,78 @@ func TestResolveSubjects_ExactRepositoryHintWithAnAnchorReceiptAndACohortFrameKe
 	}
 	if ids := scopeAnchorCommittedIDs(resolution); len(ids) != 1 || ids[0] != scopeAnchorRepoID {
 		t.Fatalf("committed = %v, want the repository alone: in a cohort question the handle is an example", ids)
+	}
+}
+
+func TestResolveSubjects_ExactRepositoryHintWithConflictingConfirmedAnchorDoesNotCommitForeignPR(t *testing.T) {
+	t.Parallel()
+	deps := hintScopeAnchorBackend("*").deps()
+	tracer := &captureResolutionTracer{}
+	deps.ResolutionTracer = tracer
+	var anchors []string
+	deps.CensusFunc = func(_ context.Context, _ string, kind CensusKind, handleValue string, handleBound bool, anchorKind contextfabric.SubjectKind, anchorID string, anchorBound bool) (CensusOutcome, error) {
+		anchors = append(anchors, anchorID)
+		// The census names the pull request in whichever repository it was asked about.
+		return CensusOutcome{Count: 1, CensusReadAt: time.Now().UTC(), SatisfierCanonicalID: scopeAnchorPRID}, nil
+	}
+	request := testRequest()
+	request.Question = scopeAnchorQuestion
+	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{
+		{Kind: contextfabric.SubjectRepository, ID: scopeAnchorRepoID, Label: scopeAnchorRepo, Source: "workbench"},
+	}
+	foreign := &contextfabric.ConfirmedAnchorSelection{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:other"}
+	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(scopeAnchorRepo, "pull request 747"), deps, nil, foreign, namedScopeAnchorFrame(nil), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range scopeAnchorCommittedIDs(resolution) {
+		if id == scopeAnchorPRID {
+			t.Fatalf("committed = %v (census anchors %v), want the pull request left out: it was attested under a repository other than the hinted one", scopeAnchorCommittedIDs(resolution), anchors)
+		}
+	}
+}
+
+func TestResolveSubjects_ExactRepositoryHintAnchorIsNotReportedAsAReceipt(t *testing.T) {
+	t.Parallel()
+	_, tracer, _ := resolveWithRepositoryHint(t, hintScopeAnchorBackend("*"), storage.Principal{OrgID: "org_1"}, scopeAnchorQuestion, namedScopeAnchorFrame(nil))
+	events := tracer.eventsForStage("evidence_round")
+	if len(events) == 0 {
+		t.Fatal("no evidence_round event")
+	}
+	for _, e := range events {
+		if e.ShadowAnchorReceiptConfirmed {
+			t.Fatalf("event %+v reports the exact hint's anchor as a redeemed receipt", e)
+		}
+	}
+}
+
+func TestResolveSubjects_ExactRepositoryHintWithAMatchingReceiptReportsTheReceipt(t *testing.T) {
+	t.Parallel()
+	deps := hintScopeAnchorBackend("*").deps()
+	tracer := &captureResolutionTracer{}
+	deps.ResolutionTracer = tracer
+	calls := 0
+	deps.CensusFunc = scopeAnchorCensus(&calls)
+	request := testRequest()
+	request.Question = scopeAnchorQuestion
+	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{
+		{Kind: contextfabric.SubjectRepository, ID: scopeAnchorRepoID, Label: scopeAnchorRepo, Source: "workbench"},
+	}
+	receipt := &contextfabric.ConfirmedAnchorSelection{Kind: contextfabric.SubjectRepository, CanonicalID: scopeAnchorRepoID}
+	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(scopeAnchorRepo, "pull request 747"), deps, nil, receipt, namedScopeAnchorFrame(nil), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := scopeAnchorCommittedIDs(resolution); len(ids) != 2 || ids[1] != scopeAnchorPRID {
+		t.Fatalf("committed = %v, want the repository then the pull request", ids)
+	}
+	var receiptEvents int
+	for _, e := range tracer.eventsForStage("evidence_round") {
+		if e.ShadowAnchorReceiptConfirmed {
+			receiptEvents++
+		}
+	}
+	if receiptEvents == 0 {
+		t.Fatal("a real anchor receipt must still be reported as one")
 	}
 }
