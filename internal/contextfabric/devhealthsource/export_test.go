@@ -1,10 +1,12 @@
 package devhealthsource
 
 import (
+	"context"
 	"fmt"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -249,4 +251,43 @@ func IngestCursorForTest(since time.Time, after string) string {
 		panic(err)
 	}
 	return encoded
+}
+
+// IssuePullRequestLinkRowForTest is one scanned row of queryIssuePullRequestLinks
+// as the keyset sees it: its position, its row key, and either the projected
+// edge (RelationshipID, Tier, Rank) or the skip reason it was counted under.
+type IssuePullRequestLinkRowForTest struct {
+	Position       time.Time
+	SortKey        string
+	RelationshipID string
+	From, To       string
+	Tier           string
+	Rank           int64
+	IgnoredReason  string
+}
+
+// IssuePullRequestLinkPageForTest runs queryIssuePullRequestLinks for ONE page
+// from the cursor (since, after) with the given page limit, and returns the
+// page's rows in the order the producer returned them, and whether the
+// producer reports more rows.
+func IssuePullRequestLinkPageForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, since time.Time, after string, limit int) ([]IssuePullRequestLinkRowForTest, bool, error) {
+	candidates, more, err := queryIssuePullRequestLinks(ctx, client, orgID, cursorState{Since: since, After: after}, limit)
+	if err != nil {
+		return nil, false, err
+	}
+	rows := make([]IssuePullRequestLinkRowForTest, 0, len(candidates))
+	for _, c := range candidates {
+		row := IssuePullRequestLinkRowForTest{Position: c.position(), SortKey: c.sortKey, IgnoredReason: c.ignoredType}
+		if r := c.relationship; r != nil {
+			row.RelationshipID, row.From, row.To = r.RelationshipID, r.From.CanonicalID, r.To.CanonicalID
+			if v := r.Properties[IssuePullRequestLinkTierProperty].String; v != nil {
+				row.Tier = *v
+			}
+			if v := r.Properties[IssuePullRequestLinkRankProperty].Integer; v != nil {
+				row.Rank = *v
+			}
+		}
+		rows = append(rows, row)
+	}
+	return rows, more, nil
 }
