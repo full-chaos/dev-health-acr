@@ -254,6 +254,26 @@ type treeWalk struct {
 	// denied counts the links and nodes the caller's authorization hid.
 	// Members unseen for that reason are not an unlinked anchor.
 	denied int
+	// endTiers is, for each admitted far-side node of the link read, the
+	// strongest tier among its admitted link rows (linkSegment). It is
+	// recorded for every link read; memberTiers is its part that matters.
+	endTiers map[string]string
+	// memberTiers is set only when the link ends the path (linkMembers): the
+	// strongest admitted link tier of each member, by canonical id.
+	memberTiers map[string]string
+	// heuristicOnly counts the members whose strongest tier is heuristic.
+	heuristicOnly int
+}
+
+// tierRank is a tier's place in linkTiers: lower is stronger. A tier the
+// table does not list ranks last.
+func tierRank(name string) int {
+	for i, t := range linkTiers {
+		if t.name == name {
+			return i
+		}
+	}
+	return len(linkTiers)
 }
 
 // treeWalkState is the bookkeeping one walk shares between its hops.
@@ -439,8 +459,14 @@ func (s treeWalkState) members(hop treeHop, hits []walkHit, parents map[string]c
 // bounded by the budget. The link edges are not disclosed: the near side of a
 // link is not a member.
 func (s treeWalkState) linkMembers(ends []string, far map[string]*node) {
+	s.out.memberTiers = map[string]string{}
 	for _, id := range s.cutRanked(ends) {
 		s.out.nodes = append(s.out.nodes, toCandidateNode(far[id]))
+		tier := s.out.endTiers[id]
+		s.out.memberTiers[id] = tier
+		if tier == contextfabric.TreeLinkTierHeuristic {
+			s.out.heuristicOnly++
+		}
 	}
 	sortCandidateNodesBySubjectKey(s.out.nodes)
 }
@@ -643,6 +669,7 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 	cypher := linkSegmentCypher(feed, link, temporal, restricted)
 	seen := map[string]bool{}
 	admitted := map[string]*node{}
+	out.endTiers = map[string]string{}
 	// ends are the admitted far-side nodes in the read's order: strongest
 	// link tier first, so a cut keeps the higher tiers.
 	var ends []string
@@ -682,6 +709,11 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 					ends = append(ends, id)
 				}
 				admitted[id] = far
+				// The strongest admitted tier wins; a later, weaker row
+				// never overwrites it.
+				if best, ok := out.endTiers[id]; !ok || tierRank(tier.name) < tierRank(best) {
+					out.endTiers[id] = tier.name
+				}
 			}
 		}
 		if len(rows) < pageSize || (state.collectLimit > 0 && len(admitted) > state.collectLimit) {
