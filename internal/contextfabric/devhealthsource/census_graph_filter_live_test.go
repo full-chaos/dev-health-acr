@@ -79,12 +79,22 @@ func TestHandleCensusGraphFilterOnRealStores(t *testing.T) {
 	seedPR := func(repo int) {
 		t.Helper()
 		if err := direct.Exec(ctx, `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced) VALUES (?, ?, ?, ?, ?, ?)`,
-			o3UUID(orgID+"R"+fmt.Sprint(repo)), orgID, uint32(747), fmt.Sprintf("PR 747 in r%d", repo), "open", now); err != nil {
+			o3UUID(orgID+"R"+fmt.Sprint(repo)), orgID, uint32(747), fmt.Sprintf("pull request 747 in r%d", repo), "open", now); err != nil {
 			t.Fatalf("seed PR: %v", err)
 		}
 	}
 	seedPR(1)
 	seedPR(2)
+	// Filler repositories whose pull request 747 the term search also finds:
+	// more hits than the search returns, so the resolution stalls and the
+	// census runs.
+	for repo := 13; repo < 13+30; repo++ {
+		if err := direct.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
+			o3UUID(orgID+"R"+fmt.Sprint(repo)), orgID, fmt.Sprintf("acme/r%d", repo), "github", now); err != nil {
+			t.Fatalf("seed filler repo: %v", err)
+		}
+		seedPR(repo)
+	}
 	main, err := devhealthsource.NewClickHouseProjectionSource(query)
 	if err != nil {
 		t.Fatal(err)
