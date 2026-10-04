@@ -640,6 +640,10 @@ func answerCompletenessStateToStatus(state contractsv1.ContextFabricAnswerComple
 // the knobs say NOW -- a row saved before either flip was ever turned on
 // must not carry a stale answer forever just because Save already ran once.
 func ApplyServerCompletenessAuthority(result InvestigationResult, enabled bool, symmetricEnabled bool, observation CompletenessAuthorityObservation) InvestigationResult {
+	return restateServedStatusHead(applyServerCompletenessAuthority(result, enabled, symmetricEnabled, observation))
+}
+
+func applyServerCompletenessAuthority(result InvestigationResult, enabled bool, symmetricEnabled bool, observation CompletenessAuthorityObservation) InvestigationResult {
 	if !observation.Derived {
 		return result
 	}

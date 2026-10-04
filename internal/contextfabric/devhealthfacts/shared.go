@@ -314,7 +314,12 @@ import (
 // period is told so, on a current frame as on a period frame. A candidate
 // saved under v53 for such a question holds a refusal or an unfiltered read and
 // must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v54"
+//
+// v54 -> v58: the first sentence of an answer states the status the answer is
+// served with, not the status the model draft carried. A candidate saved under
+// v54 can open with a stronger status than its own served status and must not
+// be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v58"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

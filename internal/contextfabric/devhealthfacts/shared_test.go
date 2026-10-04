@@ -526,3 +526,12 @@ func TestQueryVersionMovedPastTheCopulaStatusMemberTimeRole(t *testing.T) {
 		}
 	}
 }
+
+func TestQueryVersionMovedPastTheDraftStatusAnswerHead(t *testing.T) {
+	t.Parallel()
+	for _, versionBeforeTheServedStatusHead := range []string{"devhealthfacts.clickhouse.v54", "devhealthfacts.clickhouse.v55", "devhealthfacts.clickhouse.v56", "devhealthfacts.clickhouse.v57"} {
+		if devhealthfacts.QueryVersion == versionBeforeTheServedStatusHead {
+			t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved with a head stating the model draft status must not be reused", devhealthfacts.QueryVersion, versionBeforeTheServedStatusHead)
+		}
+	}
+}
