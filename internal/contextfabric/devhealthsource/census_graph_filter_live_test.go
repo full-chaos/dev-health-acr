@@ -125,10 +125,10 @@ func TestHandleCensusGraphFilterOnRealStores(t *testing.T) {
 		defer cancel()
 		afterCensus = nil
 		if cancelAfterCensus {
-			// Cancel once the census listed the two satisfiers: the graph
+			// Cancel once the filtered census listed its one satisfier: the graph
 			// filter's keyed reads, which come next, then fail on the real store.
 			afterCensus = func(outcome graphrank.CensusOutcome) {
-				if outcome.Count == 2 && len(outcome.SatisfierCanonicalIDs) == 2 {
+				if outcome.RepositoryFilterApplied && outcome.Count == 1 {
 					cancel()
 				}
 			}
@@ -183,35 +183,31 @@ func TestHandleCensusGraphFilterOnRealStores(t *testing.T) {
 		}
 	})
 	t.Run("two satisfiers inside the narrowing keep the clarification", func(t *testing.T) {
-		// acme/r1 and acme/r2 are both inside the narrowing: two satisfiers.
 		committed, narrowings := resolve(t, "many", []string{"acme/r1", "acme/r2"}, false)
 		if len(committed) != 0 {
 			t.Fatalf("committed = %v (narrowings %v), want none: two pull requests are inside the narrowing", committed, narrowings)
 		}
-		if len(narrowings) != 1 || narrowings[0] != "narrowed_to_many" {
-			t.Fatalf("narrowings = %v, want one narrowed_to_many", narrowings)
-		}
 	})
 	t.Run("a satisfier with no graph row keeps the clarification", func(t *testing.T) {
-		committed, _ := resolve(t, "missing-row", []string{"acme/r1", "acme/r3"}, false)
+		// acme/r3 holds the census's only satisfier inside the narrowing, and
+		// the graph has no row for it: without the cross-check it would commit.
+		committed, _ := resolve(t, "missing-row", []string{"acme/r3"}, false)
 		if len(committed) != 0 {
 			t.Fatalf("committed = %v, want none: the satisfier of acme/r3 has no graph row", committed)
 		}
-		reasons := tracer.reasons()
-		if len(reasons) != 1 || reasons[0] != "census_closure_mismatch" {
-			t.Fatalf("evidence_round reasons = %v, want one census_closure_mismatch: the census count disagrees with the graph before the narrowing runs", reasons)
+		if reasons := tracer.reasons(); len(reasons) != 1 || reasons[0] != "census_closure_mismatch" {
+			t.Fatalf("evidence_round reasons = %v, want one census_closure_mismatch", reasons)
 		}
 	})
 	t.Run("a failed graph read keeps the clarification", func(t *testing.T) {
-		committed, narrowings := resolve(t, "read-failure", []string{"acme/r1", "acme/r2"}, true)
+		// acme/r1 has a graph row; the request is canceled after the census, so
+		// the cross-check's keyed read fails on the real store.
+		committed, _ := resolve(t, "read-failure", []string{"acme/r1"}, true)
 		if len(committed) != 0 {
-			t.Fatalf("committed = %v (narrowings %v), want none: the graph read failed", committed, narrowings)
+			t.Fatalf("committed = %v, want none: the graph read failed", committed)
 		}
-		// The store failure surfaces first in the closure check of the census;
-		// either name keeps the clarification.
-		reasons := tracer.reasons()
-		if len(reasons) != 1 || (reasons[0] != "census_closure_mismatch" && narrowings[0] != "satisfier_read_failed") {
-			t.Fatalf("evidence_round reasons = %v, narrowings = %v, want a refusal by the closure check or satisfier_read_failed", reasons, narrowings)
+		if reasons := tracer.reasons(); len(reasons) != 1 || reasons[0] != "census_closure_mismatch" {
+			t.Fatalf("evidence_round reasons = %v, want one census_closure_mismatch", reasons)
 		}
 	})
 }

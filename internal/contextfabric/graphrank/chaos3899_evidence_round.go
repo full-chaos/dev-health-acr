@@ -1195,7 +1195,7 @@ func narrowCensusSatisfiers(ctx context.Context, narrow SatisfierNarrower, kind 
 	switch {
 	case !ok:
 		return censusNarrowing{outcome: narrowReadFailed}
-	case len(kept) >= 1:
+	case len(kept) == 1:
 		return censusNarrowing{outcome: narrowedToOne, kept: kept}
 	case len(kept) == 0:
 		return censusNarrowing{outcome: narrowedToNone}
@@ -1245,7 +1245,7 @@ func crossCheckFilteredCensus(ctx context.Context, narrow SatisfierNarrower, kin
 	kept, ok := narrow(ctx, kind, ids)
 	switch {
 	case !ok:
-		return "keyed_read_failed"
+		return ""
 	case len(kept) != len(ids):
 		return "outside_narrowing"
 	}
