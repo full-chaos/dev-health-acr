@@ -354,6 +354,7 @@ type QueryClient interface {
 // HTTPQueryClient is the production QueryClient.
 type HTTPQueryClient struct {
 	endpoint  string
+	path      string
 	userAgent string
 	// readsTypedRefusals: the MCP listener client reads a bounded error
 	// body to recognise the read-budget refusal. Every client reads a
@@ -362,6 +363,9 @@ type HTTPQueryClient struct {
 	timeout            time.Duration
 	client             *http.Client
 }
+
+// QueryPath is the configured query path (never the URL or the base URL).
+func (c *HTTPQueryClient) QueryPath() string { return c.path }
 
 // ErrQueryClientConfig is returned by NewHTTPQueryClient for an unusable
 // base URL or timeout. It never echoes the URL.
@@ -471,6 +475,7 @@ func newHTTPQueryClient(baseURL string, timeout time.Duration, path, userAgent s
 	}
 	return &HTTPQueryClient{
 		endpoint:  u.String(),
+		path:      path,
 		userAgent: userAgent,
 		timeout:   timeout,
 		client: &http.Client{

@@ -2244,6 +2244,7 @@ var OperationRead = Event{
 		{Key: "latency_ms", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "schema_digest", Type: FieldString, Presence: PresenceRequired},
 		{Key: "document_digest", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the operation is a served catalogue operation"},
+		{Key: "query_path", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the query client reports its configured ops query path (ACR_DATA_QUERY_PATH): the path only, never the URL"},
 		{Key: "result", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call is served", ClosedVocabulary: operationReadResults},
 		{Key: "refusal_code", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call is refused", ClosedVocabulary: operationReadRefusalCodes},
 		{Key: "error_class", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call ends upstream_error, upstream_timeout or operation_unavailable, or is refused invalid_request because the query service rejected the variables or document (error_class http_status)", ClosedVocabulary: operationReadErrorClasses},

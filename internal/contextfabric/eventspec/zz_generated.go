@@ -1892,6 +1892,7 @@ type OperationReadFields struct {
 	LatencyMs         int
 	SchemaDigest      string
 	DocumentDigest    string
+	QueryPath         string
 	Result            string
 	RefusalCode       string
 	ErrorClass        string
@@ -1912,7 +1913,7 @@ type OperationReadFields struct {
 
 // NewOperationReadFields is the generated constructor for OperationReadFields -- every
 // field OperationRead.Fields declares is a required parameter.
-func NewOperationReadFields(orgID string, operation string, callerClass string, scopeClass string, decision string, forcedByGrant bool, variablesRejected int, rowsChecked int, rowsForeign int, pathsRemoved int, completeness string, bytes int, latencyMs int, schemaDigest string, documentDigest string, result string, refusalCode string, errorClass string, upstreamStatus int, graphqlCode string, variable string, requestID string) OperationReadFields {
+func NewOperationReadFields(orgID string, operation string, callerClass string, scopeClass string, decision string, forcedByGrant bool, variablesRejected int, rowsChecked int, rowsForeign int, pathsRemoved int, completeness string, bytes int, latencyMs int, schemaDigest string, documentDigest string, queryPath string, result string, refusalCode string, errorClass string, upstreamStatus int, graphqlCode string, variable string, requestID string) OperationReadFields {
 	return OperationReadFields{
 		OrgID:             orgID,
 		Operation:         operation,
@@ -1929,6 +1930,7 @@ func NewOperationReadFields(orgID string, operation string, callerClass string, 
 		LatencyMs:         latencyMs,
 		SchemaDigest:      schemaDigest,
 		DocumentDigest:    documentDigest,
+		QueryPath:         queryPath,
 		Result:            result,
 		RefusalCode:       refusalCode,
 		ErrorClass:        errorClass,
@@ -1968,6 +1970,7 @@ func (f OperationReadFields) SlogArgs() []any {
 		"latency_ms", f.LatencyMs,
 		"schema_digest", contextfabric.SanitizeLogAttr(f.SchemaDigest),
 		"document_digest", contextfabric.SanitizeLogAttr(f.DocumentDigest),
+		"query_path", contextfabric.SanitizeLogAttr(f.QueryPath),
 		"result", contextfabric.SanitizeLogAttr(f.Result),
 		"refusal_code", contextfabric.SanitizeLogAttr(f.RefusalCode),
 		"error_class", contextfabric.SanitizeLogAttr(f.ErrorClass),
