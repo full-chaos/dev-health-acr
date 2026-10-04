@@ -18,6 +18,10 @@ type routeStore struct {
 	mu     sync.Mutex
 	saved  *contextfabric.InvestigationResult
 	offers int
+	// frame and anchorKind, when set, are the reading persisted beside the
+	// stored answer, as the production store keeps it.
+	frame      *contextfabric.QuestionFrame
+	anchorKind contextfabric.SubjectKind
 }
 
 func (s *routeStore) Save(_ context.Context, _ storage.Principal, result contextfabric.InvestigationResult, _ contextfabric.SourceWatermarkSnapshot, _ contextfabric.RebuildEpoch, _ string, _ contextfabric.ReuseRetrievalIdentity, _ contextfabric.ReusePromptVersions, _ contextfabric.ReuseVersionAuthorities, _ int64, _ string, _ contextfabric.SemanticStateWrite) error {
@@ -39,7 +43,12 @@ func (s *routeStore) FindReusable(context.Context, storage.Principal, contextfab
 		return contextfabric.StoredInvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, nil
 	}
 	s.offers++
-	return contextfabric.StoredInvestigationResult{Result: *s.saved, SavedAt: time.Now().UTC()}, true, "", nil
+	stored := contextfabric.StoredInvestigationResult{Result: *s.saved, SavedAt: time.Now().UTC()}
+	if s.frame != nil {
+		stored.SemanticState = &contextfabric.PersistedSemanticState{FramePresent: true, Frame: s.frame, ScopeAnchor: contextfabric.SemanticScopeAnchor{Kind: s.anchorKind}}
+		stored.SemanticStateRead = contextfabric.SemanticStateReadAvailable
+	}
+	return stored, true, "", nil
 }
 
 // TestAReusedProjectAnswerKeepsItsMembers asks the same project question twice

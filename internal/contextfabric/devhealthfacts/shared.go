@@ -301,7 +301,13 @@ import (
 // served with its member-attributed claimed facts cut and one fixed limitation
 // naming the cut, where it was refused. An answer saved under v50 for such a
 // question is a refusal and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v51"
+//
+// v51 -> v53: a count over a repository the question names by its label is
+// stated when the label resolved to exactly one repository (the exact-label
+// commit, an untruncated search and a complete alias lookup). A candidate
+// saved under v51 for such a question withholds the count and must not be
+// reused.
+const QueryVersion = "devhealthfacts.clickhouse.v53"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

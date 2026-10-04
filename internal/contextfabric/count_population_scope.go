@@ -184,6 +184,15 @@ func (s CountPopulationScope) Counts() bool {
 //
 // PURE: reads its arguments and mutates nothing.
 func DecideCountPopulationScope(frame *QuestionFrame, sampleAnchorKind SubjectKind, resolution SubjectResolution, bases CommitBasisSet, memberSource CohortMemberSource) CountPopulationScope {
+	return DecideCountPopulationScopeWithDigests(frame, sampleAnchorKind, resolution, bases, nil, memberSource)
+}
+
+// DecideCountPopulationScopeWithDigests is DecideCountPopulationScope with the
+// commit decision digests of the resolution, which the one extra admission
+// below reads: a repository the question names by its label, when the label
+// resolved to exactly one repository over a complete lookup. A nil set admits
+// nothing extra, so the decision is then exactly the identity-proof one.
+func DecideCountPopulationScopeWithDigests(frame *QuestionFrame, sampleAnchorKind SubjectKind, resolution SubjectResolution, bases CommitBasisSet, digests CommitDecisionDigestSet, memberSource CohortMemberSource) CountPopulationScope {
 	if !ValidCohortMemberSource(memberSource) {
 		memberSource = CohortMemberSourceNotApplicable
 	}
@@ -212,7 +221,7 @@ func DecideCountPopulationScope(frame *QuestionFrame, sampleAnchorKind SubjectKi
 		if subject.Kind == scope.MemberKind {
 			continue
 		}
-		if anchorBound(frame, scope.AnchorKind, subject, resolution, bases) {
+		if anchorBound(frame, scope.AnchorKind, subject, resolution, bases) || labelUniqueAnchor(frame, scope.AnchorKind, subject, resolution, digests) {
 			scope.CommittedAnchors++
 			if scope.AnchorID == "" {
 				scope.AnchorID = subject.CanonicalID
@@ -296,6 +305,50 @@ func anchorBound(frame *QuestionFrame, anchorKind SubjectKind, subject SubjectRe
 		return false
 	}
 	return anchorTermMatched(frame, subject, resolution)
+}
+
+// labelUniqueAnchor reports whether a committed repository is the frame's
+// anchor because the label the question names resolved to exactly that one
+// repository. It admits the one statistical commit whose population claim is
+// complete, and nothing else; anchorBound is not widened, because its other
+// readers carry the anchor as an identity.
+//
+// Every fact comes from the resolution that ran: the commit gate is the exact
+// label tier, the lookup was not truncated and the alias lookup was complete
+// (read off the persisted digest, so reuse decides the same), the subject
+// matched an anchor term, and no other subject that could be the anchor
+// (not of the member kind, and of the reading's anchor kind when one is
+// stated) matched an anchor term, committed or not. A truncated or incomplete
+// lookup cannot rule out a second repository with the label, so it admits
+// nothing. No text is read and no repository is guessed from the question.
+func labelUniqueAnchor(frame *QuestionFrame, anchorKind SubjectKind, subject SubjectRef, resolution SubjectResolution, digests CommitDecisionDigestSet) bool {
+	if frame == nil || frame.SubjectExpression.Kind != SubjectExpressionChildrenOfScope || frame.SubjectExpression.Scoped == nil {
+		return false
+	}
+	if subject.Kind != SubjectRepository || (anchorKind != "" && anchorKind != SubjectRepository) {
+		return false
+	}
+	digest := digests.For(subject)
+	if digest.CommitGate != "exact_index" || digest.IdentityProven || digest.SearchTruncated || !digest.AliasLookupComplete {
+		return false
+	}
+	if !anchorTermMatched(frame, subject, resolution) {
+		return false
+	}
+	memberKind, _ := frame.SubjectExpression.MemberKind()
+	for _, candidate := range resolution.Candidates {
+		other := candidate.Subject
+		if other.Kind == subject.Kind && other.CanonicalID == subject.CanonicalID {
+			continue
+		}
+		if other.Kind == memberKind || (anchorKind != "" && other.Kind != anchorKind) {
+			continue
+		}
+		if anchorTermMatched(frame, other, resolution) {
+			return false
+		}
+	}
+	return true
 }
 
 // anchorTermMatched reports whether one of the subject's own candidates
