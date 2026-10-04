@@ -130,6 +130,44 @@ func TestLiveNamedProjectsServeTheirOwnDeployments(t *testing.T) {
 		t.Fatalf("the lexical arm returned %d deployments for the question, want all 4: the fixture does not offer the foreign deployments the walk must keep out", len(lexical))
 	}
 
+	// Each step read runs on the graph store, in the current view and under
+	// a window, and returns exactly the next frontier. The raw driver error is
+	// printed on a refusal: the adapter's own error never carries it.
+	for windowName, temporal := range walkWindows(time.Now().UTC()) {
+		frontier := []string{"project.v2:linear:alpha"}
+		wants := [][]string{
+			{"work_item:linear:alpha-1"}, {"work_item:ghpr:alpha-1"}, {"repository:github:acme/billing"}, fixture.deployments["alpha"],
+		}
+		for i, s := range walkStepsInOrder() {
+			ids := make([]interface{}, 0, len(frontier))
+			for _, id := range frontier {
+				ids = append(ids, id)
+			}
+			cypher := walkStepCypher(s.step, temporal)
+			rows, err := adapter.api.query(ctx, key, cypher, walkStepParams(orgID, ids, s.step, 26, temporal), true)
+			if err != nil {
+				t.Fatalf("%s, %s: the graph store refused the read: %v\nquery: %s", windowName, s.name, err, cypher)
+			}
+			frontier = frontier[:0]
+			for _, r := range rows {
+				if n, ok := r["b"].(*node); ok && n != nil {
+					frontier = append(frontier, canonicalIDOf(n))
+				}
+			}
+			sort.Strings(frontier)
+			want := append([]string(nil), wants[i]...)
+			sort.Strings(want)
+			if strings.Join(frontier, ",") != strings.Join(want, ",") {
+				t.Fatalf("%s, %s: reached %v, want %v", windowName, s.name, frontier, want)
+			}
+		}
+		walk, err := adapter.projectDeploymentMembers(ctx, key, orgID, principal, contextfabric.RequestedScope{},
+			contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project.v2:linear:alpha", Label: "alpha"}, 25, temporal)
+		if err != nil || len(walk.nodes) != 2 || walk.issues != 1 || walk.linkedPullRequests != 1 || walk.truncated {
+			t.Fatalf("%s: walk = %d members, %d issues, %d links, truncated %v, error %v; want 2 members from 1 issue and 1 link", windowName, len(walk.nodes), walk.issues, walk.linkedPullRequests, walk.truncated, err)
+		}
+	}
+
 	served := map[string][]string{}
 	for _, name := range []string{"alpha", "bravo"} {
 		answer := investigateAnchorDeployments(t, adapter, principal, contextfabric.SubjectProject, name, question(name))
