@@ -580,6 +580,12 @@ const ContextFabricSynthesisInputBoundedLimitation = "Only part of the facts rea
 // its reading. The answer itself stands; what is lost is the stored copy.
 const ContextFabricTerminalNotSavedLimitation = "This answer could not be saved, so it cannot be fetched again by its result id and a follow-up cannot build on it. Ask the question again to continue."
 
+// ContextFabricSingleSubjectCountLimitation is the sentence an answer carries
+// when a count was asked about one named subject: the subject has no members
+// of its own kind, so no member count is stated, and no certified total of the
+// asked measure exists in the facts read.
+const ContextFabricSingleSubjectCountLimitation = "This question asks for a count about one named subject, which has no set of members to count, so no member count was stated. A certified total for the measure asked about was not available in the facts read; any values shown are the stored daily or period values for that subject."
+
 // ContextFabricServiceAuthoredLimitations returns every disclosure this
 // service composes for itself, in no significant order.
 //
@@ -618,6 +624,7 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricSynthesisInputBoundedLimitation,
 		ContextFabricTerminalNotSavedLimitation,
 		ContextFabricBudgetTrimClaimedFactsLimitation,
+		ContextFabricSingleSubjectCountLimitation,
 	}
 }
 

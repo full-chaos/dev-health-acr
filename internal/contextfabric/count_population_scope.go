@@ -57,6 +57,13 @@ const (
 	// kind, and of the reading's anchor kind when one is stated -- and none
 	// is bound. Not counted.
 	CountPopulationScopeAnchorAmbiguous CountPopulationScopeDecision = "anchor_ambiguous"
+	// CountPopulationScopeSingleSubject: the frame reads "members of kind K
+	// under an anchor", and the one subject resolution committed is itself of
+	// kind K and matched the anchor term. A subject has no children of its own
+	// kind, so no member set is the requested population: the question is
+	// about the one named subject. Not counted as a member set, and the answer
+	// says so.
+	CountPopulationScopeSingleSubject CountPopulationScopeDecision = "single_subject"
 	// CountPopulationScopeFrameAbsent: no frame records which population the
 	// question asked for -- on reuse, a stored row whose persisted reading is
 	// absent or unreadable. Not counted: a count whose population cannot be
@@ -72,6 +79,7 @@ func CountPopulationScopeDecisionVocabulary() []string {
 		string(CountPopulationScopeAnchorCommitted),
 		string(CountPopulationScopeAnchorUnresolved),
 		string(CountPopulationScopeAnchorAmbiguous),
+		string(CountPopulationScopeSingleSubject),
 		string(CountPopulationScopeFrameAbsent),
 	}
 }
@@ -245,12 +253,40 @@ func DecideCountPopulationScopeWithDigests(frame *QuestionFrame, sampleAnchorKin
 		scope.Decision = CountPopulationScopeAnchorAmbiguous
 	case scope.CommittedAnchors == 1:
 		scope.Decision = CountPopulationScopeAnchorCommitted
+	case singleNamedSubject(frame, scope, resolution):
+		scope.Decision = CountPopulationScopeSingleSubject
 	case scope.AnchorCandidates > 1:
 		scope.Decision = CountPopulationScopeAnchorAmbiguous
 	default:
 		scope.Decision = CountPopulationScopeAnchorUnresolved
 	}
 	return scope
+}
+
+// singleNamedSubject reports whether a children_of_scope frame whose member
+// kind equals the kind of its only committed subject is really a question
+// about that subject: the subject matched the anchor term, no other candidate
+// matched it (an ambiguous label stays ambiguous), and no other subject was
+// committed. Decided from the frame and the resolution's own record only; no
+// question text is read.
+func singleNamedSubject(frame *QuestionFrame, scope CountPopulationScope, resolution SubjectResolution) bool {
+	if scope.MemberKind == "" || len(resolution.Committed) != 1 || scope.CommittedAnchors != 0 {
+		return false
+	}
+	subject := resolution.Committed[0]
+	if subject.Kind != scope.MemberKind || !anchorTermMatched(frame, subject, resolution) {
+		return false
+	}
+	for _, candidate := range resolution.Candidates {
+		other := candidate.Subject
+		if other.Kind == subject.Kind && other.CanonicalID == subject.CanonicalID {
+			continue
+		}
+		if anchorTermMatched(frame, other, resolution) {
+			return false
+		}
+	}
+	return true
 }
 
 // anchorBound reports whether a committed subject is the frame's anchor, from

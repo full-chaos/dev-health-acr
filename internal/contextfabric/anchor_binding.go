@@ -405,7 +405,7 @@ func AnchorBindingTransitionLineVocabulary(key string) []string {
 	case "served_count_decision":
 		// Only a children_of_scope count is compared, so the organization and
 		// frame-absent decisions never reach the line.
-		return []string{"not_evaluated", string(CountPopulationScopeAnchorCommitted), string(CountPopulationScopeAnchorAmbiguous), string(CountPopulationScopeAnchorUnresolved)}
+		return []string{"not_evaluated", string(CountPopulationScopeAnchorCommitted), string(CountPopulationScopeAnchorAmbiguous), string(CountPopulationScopeAnchorUnresolved), string(CountPopulationScopeSingleSubject)}
 	case "carry_checks":
 		return []string{string(AnchorBindingCarryChecksNotApplicable), string(AnchorBindingCarryChecksNotEvaluated)}
 	default:

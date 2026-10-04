@@ -443,6 +443,7 @@
           "anchor_committed",
           "anchor_ambiguous",
           "anchor_unresolved",
+          "single_subject",
           "undeclared"
         ]
       },
@@ -1280,6 +1281,7 @@
           "anchor_committed",
           "anchor_unresolved",
           "anchor_ambiguous",
+          "single_subject",
           "frame_absent"
         ]
       },
@@ -1561,6 +1563,7 @@
           "anchor_committed",
           "anchor_unresolved",
           "anchor_ambiguous",
+          "single_subject",
           "frame_absent"
         ]
       },
