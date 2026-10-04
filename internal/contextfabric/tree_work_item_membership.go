@@ -15,11 +15,28 @@ import (
 // status, its completion) comes from the canonical facts, read for the walked
 // members (TreeWorkItemFilter), never from a node's projected copy.
 
+// Link tiers of the issue <> pull request link of record, strongest first.
+// The tier that linked a member is named in its inclusion reason; a member
+// linked only by the heuristic tier is never presented as natively linked.
+const (
+	TreeLinkTierNative       = "native"
+	TreeLinkTierExplicitText = "explicit_text"
+	TreeLinkTierHeuristic    = "heuristic"
+)
+
+// TreeWorkItemMember is one walked issue and the strongest tier of the
+// authorized links that reached it.
+type TreeWorkItemMember struct {
+	Subject SubjectRef
+	Tier    string
+}
+
 // TreeWorkItemWalk is one walk of the tree from a named anchor to its issues.
 type TreeWorkItemWalk struct {
 	// Members are the authorized issues, sorted by canonical id, at most the
-	// requested limit.
-	Members []SubjectRef
+	// requested limit. When the walk is cut, the members kept are those of
+	// the strongest links first.
+	Members []TreeWorkItemMember
 	// PullRequests is how many pull requests of the anchor the walk reached
 	// and LinkedIssues how many distinct issues they link, both before
 	// authorization.
