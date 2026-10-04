@@ -142,7 +142,7 @@ func (e *Engine) tryReuseWorkItemTuple(ctx context.Context, principal storage.Pr
 		stripped = workItemTupleObligationsToStrip(state.Frame)
 	}
 	if e.telemetry != nil {
-		e.telemetry.RecordWorkItemTupleAdmission(ctx, principal, WorkItemTupleAdmissionEvent{Admitted: true, StrippedObligations: stripped, MemberFilter: workItemTupleMemberFilterBasis(stored.SemanticState.Frame)})
+		e.telemetry.RecordWorkItemTupleAdmission(ctx, principal, WorkItemTupleAdmissionEvent{Admitted: true, StrippedObligations: stripped, MemberFilter: workItemTupleMemberFilterBasis(stored.SemanticState.Frame), MemberTimeRole: WorkItemMemberTimeRoleNotEvaluated})
 	}
 	return candidate, true, nil
 }

@@ -2478,7 +2478,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			stripped = workItemTupleObligationsToStrip(familyOutcome.Frame)
 		}
 		if e.telemetry != nil {
-			e.telemetry.RecordWorkItemTupleAdmission(ctx, principal, WorkItemTupleAdmissionEvent{Admitted: workItemTuple, StrippedObligations: stripped, MemberFilter: workItemTupleMemberFilterToken(familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext, windowBasis)})
+			e.telemetry.RecordWorkItemTupleAdmission(ctx, principal, WorkItemTupleAdmissionEvent{Admitted: workItemTuple, StrippedObligations: stripped, MemberFilter: workItemTupleMemberFilterToken(familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext, windowBasis), MemberTimeRole: windowBasis.memberTimeRoleLogValue()})
 		}
 	}
 	// requirementFrame is the ONE frame every requirement-coordinate reader

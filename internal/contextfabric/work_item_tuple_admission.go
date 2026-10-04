@@ -375,6 +375,48 @@ type WorkItemTupleAdmissionEvent struct {
 	Admitted            bool
 	StrippedObligations []AnswerObligation
 	MemberFilter        string
+	// MemberTimeRole is what the role binder decided for a committed window:
+	// the bound role, ambiguous, no_verb, or not_evaluated when no window was
+	// committed.
+	MemberTimeRole string
+}
+
+// Member time-role log tokens beside the three roles.
+const (
+	WorkItemMemberTimeRoleNotEvaluated = "not_evaluated"
+)
+
+// WorkItemMemberTimeRoleVocabulary is the closed member_time_role vocabulary.
+func WorkItemMemberTimeRoleVocabulary() []string {
+	vocabulary := []string{WorkItemMemberTimeRoleNotEvaluated, string(MemberTimeRoleNoVerb), string(MemberTimeRoleAmbiguous)}
+	for _, role := range MemberTimeRoleVocabulary() {
+		vocabulary = append(vocabulary, string(role))
+	}
+	return vocabulary
+}
+
+// memberTimeRoleLogValue is the binder decision for the admission line.
+func (basis workItemTupleWindowBasis) memberTimeRoleLogValue() string {
+	switch {
+	case !basis.Committed:
+		return WorkItemMemberTimeRoleNotEvaluated
+	case basis.Role != "":
+		return string(basis.Role)
+	case basis.RoleReason == MemberTimeRoleAmbiguous:
+		return string(MemberTimeRoleAmbiguous)
+	}
+	return string(MemberTimeRoleNoVerb)
+}
+
+// workItemMemberTimeRoleLogValue refuses any token outside the closed
+// vocabulary rather than logging it.
+func workItemMemberTimeRoleLogValue(value string) string {
+	for _, token := range WorkItemMemberTimeRoleVocabulary() {
+		if value == token {
+			return token
+		}
+	}
+	return WorkItemMemberTimeRoleNotEvaluated
 }
 
 // workItemMemberFilterLogValue maps the unset basis to "none" and refuses
@@ -523,9 +565,12 @@ func workItemRoleClarificationReason(gate FrameGate, frame *QuestionFrame, famil
 // promoteCurrentWorkItemFrameToPeriod returns a copy of a current work-item
 // tuple frame as a bounded-window frame when the request committed a window
 // (supplied or stated; a remembered window never commits), the interpreted
-// axis is current and the question binds exactly one time field. Any other frame is not promoted.
+// axis is current and the question binds exactly one time field, or names two
+// for the one period: that question is a period question whose reading must be
+// asked for, never a current read that drops the period. A question with no
+// time-role verb is not promoted.
 func promoteCurrentWorkItemFrameToPeriod(frame *QuestionFrame, timeContext TimeContext, basis workItemTupleWindowBasis) (*QuestionFrame, bool) {
-	if timeContext.Axis != TemporalCurrent || !workItemTupleInScope(frame) || frame.Temporal != TemporalIntentCurrent || !basis.Committed || basis.Role == "" {
+	if timeContext.Axis != TemporalCurrent || !workItemTupleInScope(frame) || frame.Temporal != TemporalIntentCurrent || !basis.Committed || (basis.Role == "" && basis.RoleReason != MemberTimeRoleAmbiguous) {
 		return frame, false
 	}
 	promoted := cloneFrame(*frame)

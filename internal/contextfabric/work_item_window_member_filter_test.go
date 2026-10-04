@@ -267,10 +267,14 @@ func TestWorkItemWindowAndStatusFiltersCompose(t *testing.T) {
 
 func TestWorkItemWindowWithoutOneReadingOffersTheThreeAndReadsNothing(t *testing.T) {
 	defer reportWorkItemMutationPanic(t)
-	for _, question := range []string{
-		"Which work items in Project Alpha are there in the last 30 days?",
-		"Which work items in Project Alpha were created and closed in the last 30 days?",
+	for _, tc := range []struct {
+		question string
+		reason   MemberTimeRoleReason
+	}{
+		{"Which work items in Project Alpha are there in the last 30 days?", MemberTimeRoleNoVerb},
+		{"Which work items in Project Alpha were created and closed in the last 30 days?", MemberTimeRoleAmbiguous},
 	} {
+		question := tc.question
 		run := runTupleFilterCase(t, periodTupleFrame(), WorkItemMembershipCensus{State: WorkItemMembershipCensusExact, PopulationMeasured: true, AuthorizedPopulation: 1}, statedPeriodRequest(question))
 		if run.invokedErr != nil {
 			t.Fatalf("%s: %v", question, run.invokedErr)
@@ -278,11 +282,11 @@ func TestWorkItemWindowWithoutOneReadingOffersTheThreeAndReadsNothing(t *testing
 		if run.reads != 0 || run.factReads != 0 || run.graph.resolveCalls != 0 {
 			t.Fatalf("%s: a clarification performed I/O: membership=%d facts=%d resolve=%d", question, run.reads, run.factReads, run.graph.resolveCalls)
 		}
-		if !limitationsContain(run.result.Limitations, memberTimeRoleClarificationLimitation()) {
+		if !limitationsContain(run.result.Limitations, memberTimeRoleClarificationLimitation(tc.reason)) {
 			t.Fatalf("%s: the three readings are not offered: %v", question, run.result.Limitations)
 		}
 		for _, limitation := range run.result.Limitations {
-			if strings.Contains(limitation, "Project Alpha") || (limitation != memberTimeRoleClarificationLimitation() && strings.Contains(limitation, "30 days")) {
+			if strings.Contains(limitation, "Project Alpha") || (limitation != memberTimeRoleClarificationLimitation(tc.reason) && strings.Contains(limitation, "30 days")) {
 				t.Errorf("%s: question text reached the answer: %q", question, limitation)
 			}
 		}
@@ -294,10 +298,12 @@ func TestWorkItemWindowWithoutOneReadingOffersTheThreeAndReadsNothing(t *testing
 		}
 	}
 	// The sentence names every reading from the closed vocabulary, and nothing else.
-	sentence := memberTimeRoleClarificationLimitation()
-	for _, role := range MemberTimeRoleVocabulary() {
-		if !strings.Contains(sentence, string(role)) {
-			t.Errorf("the clarification does not offer %q: %s", role, sentence)
+	for _, reason := range []MemberTimeRoleReason{MemberTimeRoleNoVerb, MemberTimeRoleAmbiguous} {
+		sentence := memberTimeRoleClarificationLimitation(reason)
+		for _, role := range MemberTimeRoleVocabulary() {
+			if !strings.Contains(sentence, string(role)) {
+				t.Errorf("the clarification does not offer %q: %s", role, sentence)
+			}
 		}
 	}
 }
@@ -332,7 +338,7 @@ func TestWorkItemWindowThatNeedsStatusHistoryStaysRefusedAndNamed(t *testing.T) 
 		if len(run.admissions) == 1 && run.admissions[0].Admitted {
 			t.Errorf("%s: admitted", tc.name)
 		}
-		if tc.name != "active needs history" && limitationsContain(run.result.Limitations, memberTimeRoleClarificationLimitation()) {
+		if tc.name != "active needs history" && limitationsContain(run.result.Limitations, memberTimeRoleClarificationLimitation(MemberTimeRoleNoVerb)) {
 			t.Errorf("%s: a refusal that is not about the verb offered the three readings", tc.name)
 		}
 		want := WorkItemMemberFilterWindowNotServed
@@ -340,7 +346,7 @@ func TestWorkItemWindowThatNeedsStatusHistoryStaysRefusedAndNamed(t *testing.T) 
 			// "active" is not a registry verb, so it is never read as updated_at;
 			// the caller is offered the three readings and chooses one.
 			want = WorkItemMemberFilterWindowRoleUnresolved
-			if !limitationsContain(run.result.Limitations, memberTimeRoleClarificationLimitation()) {
+			if !limitationsContain(run.result.Limitations, memberTimeRoleClarificationLimitation(MemberTimeRoleNoVerb)) {
 				t.Errorf("%s: the readings were not offered", tc.name)
 			}
 		}
@@ -536,7 +542,7 @@ func TestWorkItemInvalidFrameIsNotOfferedTheThreeReadings(t *testing.T) {
 		t.Fatalf("the fixture must be an invalid frame, got %+v", validation.Outcome)
 	}
 	run := runTupleFilterCase(t, frame, WorkItemMembershipCensus{State: WorkItemMembershipCensusExact, PopulationMeasured: true, AuthorizedPopulation: 1}, statedPeriodRequest("Which work items in Project Alpha are there in the last 30 days?"))
-	if limitationsContain(run.result.Limitations, memberTimeRoleClarificationLimitation()) {
+	if limitationsContain(run.result.Limitations, memberTimeRoleClarificationLimitation(MemberTimeRoleNoVerb)) {
 		t.Errorf("an invalid frame received the role clarification: %v", run.result.Limitations)
 	}
 }
@@ -603,7 +609,6 @@ func TestWorkItemCurrentFrameWithCallerWindowAndNoVerbSaysThePeriodWasNotApplied
 	defer reportWorkItemMutationPanic(t)
 	for _, question := range []string{
 		"Which work items in Project Alpha are there?",
-		"Which work items in Project Alpha were created and closed?",
 	} {
 		run := runTupleFilterCase(t, currentWorkItemFrame(), WorkItemMembershipCensus{State: WorkItemMembershipCensusExact, PopulationMeasured: true, AuthorizedPopulation: 1}, callerWindowRequest(question))
 		if run.invokedErr != nil {

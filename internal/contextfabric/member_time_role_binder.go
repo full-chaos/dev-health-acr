@@ -124,6 +124,7 @@ func BindMemberTimeRole(question string, window BoundWindowSpan) MemberTimeRoleO
 	}
 	start, end := clauseBounds(question, window)
 	clause := question[start:end]
+	spanStart := window.SpanStart - start
 	var bound []BoundMemberTimeRole
 	seen := map[MemberTimeRole]bool{}
 	predicate := map[MemberTimeRole]bool{}
@@ -134,7 +135,7 @@ func BindMemberTimeRole(question string, window BoundWindowSpan) MemberTimeRoleO
 			}
 			bound = append(bound, BoundMemberTimeRole{Role: entry.role, Grammar: entry.grammar, SpanStart: start + loc[0], SpanEnd: start + loc[1]})
 			seen[entry.role] = true
-			if !nounPhraseModifier(clause, loc[0], loc[1]) {
+			if !nounPhraseModifier(clause, loc[0], loc[1]) && !stateDescription(clause, loc[0], loc[1], spanStart) {
 				predicate[entry.role] = true
 			}
 		}
@@ -185,6 +186,27 @@ var nounPhraseOpening = regexp.MustCompile(`(?i)(?:^|\b(?:which|what|the|all|any
 // "closed issues in the last 30 days" still binds completed.
 func nounPhraseModifier(clause string, start, end int) bool {
 	return nounPhraseOpening.MatchString(clause[:start]) && workItemNounPhrase.MatchString(clause[end:])
+}
+
+// presentCopulaState matches what stands before a form that states the items'
+// present state: "is" or "are", an optional adverb, then only coordinated
+// forms ("are created and closed").
+var presentCopulaState = regexp.MustCompile(`(?i)\b(?:is|are)\s+(?:(?:now|already|currently|still|all)\s+)?(?:(?:` + memberTimeRoleFormAlternation + `)\s+(?:(?:and|or)\s+)?)*$`)
+
+// leadsIntoWindow matches the text between a form and the window span when the
+// form governs the period: only coordinated forms, a preposition and a
+// determiner ("closed in the last 30 days", "created and closed in the").
+var leadsIntoWindow = regexp.MustCompile(`(?i)^(?:\s+(?:and|or)\s+(?:` + memberTimeRoleFormAlternation + `))*(?:\s+(?:in|within|during|over|for|from|since|across))?(?:\s+(?:the|this|these))?\s*$`)
+
+// stateDescription reports a form after a present copula that does not govern
+// the period: "items that are closed were created in the last 30 days" states
+// the items' status, and the period belongs to "created". A form that leads
+// straight into the period ("are closed in the last 30 days") still governs it.
+func stateDescription(clause string, start, end, spanStart int) bool {
+	if end > spanStart {
+		return false
+	}
+	return presentCopulaState.MatchString(clause[:start]) && !leadsIntoWindow.MatchString(clause[end:spanStart])
 }
 
 func clauseBounds(question string, window BoundWindowSpan) (int, int) {
@@ -243,12 +265,17 @@ func isWordRune(r rune) bool {
 
 // memberTimeRoleClarificationLimitation is the one sentence that offers the
 // three readings of a period over work items. The answer is not guessed: the
-// caller names the reading and asks again.
-func memberTimeRoleClarificationLimitation() string {
+// caller names the reading and asks again. A question that named two readings
+// for the one period is told so; one that named none is told it did not say.
+func memberTimeRoleClarificationLimitation(reason MemberTimeRoleReason) string {
 	roles := MemberTimeRoleVocabulary()
 	names := make([]string, len(roles))
 	for i, role := range roles {
 		names[i] = string(role)
 	}
-	return "A period over work items can mean when they were " + strings.Join(names[:len(names)-1], ", ") + " or " + names[len(names)-1] + "; the question did not say which, so no members are listed. Ask again with one of those verbs, for example 'created in the last 30 days'."
+	finding := "the question did not say which"
+	if reason == MemberTimeRoleAmbiguous {
+		finding = "the question named more than one of them for the same period"
+	}
+	return "A period over work items can mean when they were " + strings.Join(names[:len(names)-1], ", ") + " or " + names[len(names)-1] + "; " + finding + ", so no members are listed. Ask again with one of those verbs, for example 'created in the last 30 days'."
 }
