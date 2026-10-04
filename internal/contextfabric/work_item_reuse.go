@@ -37,7 +37,7 @@ func (e *Engine) tryReuseWorkItemTuple(ctx context.Context, principal storage.Pr
 	if classification.Disposition != WorkItemTupleEligible {
 		return InvestigationResult{}, false, nil
 	}
-	if workItemTupleStatusFilter(stored.SemanticState.Frame) != "" {
+	if workItemTupleStatusFilter(stored.SemanticState.Frame) != "" || workItemTupleIsPeriodFrame(stored.SemanticState.Frame) {
 		event.Decision = "member_filter_not_reusable"
 		return InvestigationResult{}, false, nil
 	}

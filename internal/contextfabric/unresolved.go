@@ -392,6 +392,9 @@ func (e *Engine) terminalResult(
 	refusalBasis := familyOutcome.Gate.RefusalBasis()
 	if familyOutcome.Gate.Refuses() {
 		limitation = refusalLimitation(familyOutcome.Gate, refusalBasis)
+		if familyOutcome.MemberTimeRoleClarification != "" {
+			limitation = memberTimeRoleClarificationLimitation()
+		}
 	}
 	// CHAOS-5660: the declared-kind terminal discloses its own basis on the
 	// same field, and the limitation it already carries is that basis's own

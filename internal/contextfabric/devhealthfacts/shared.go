@@ -220,7 +220,12 @@ import (
 // question commits the census-attested pull request too, where it used to
 // commit the repository alone. A candidate saved under v32 for such a question
 // answers about the repository and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v33"
+//
+// v33 -> v34: the work-item member read takes a window on one bound time
+// field (created, completed or updated), so a project's members of a period
+// are served. A candidate saved under v33 for such a question is the
+// member-kind refusal and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v34"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

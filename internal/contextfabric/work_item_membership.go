@@ -96,6 +96,14 @@ type WorkItemMembershipRequest struct {
 	// filtered population. Empty reads every member.
 	Status string
 
+	// TimeColumn, when non-empty, names the work_items column (created_at,
+	// completed_at or updated_at) the half-open window [TimeStart, TimeEnd)
+	// restricts members on. The predicate runs in the read, beside Status.
+	// A row whose column is null never matches.
+	TimeColumn string
+	TimeStart  time.Time
+	TimeEnd    time.Time
+
 	// S1Instant is the census instant used for the future-boundary counter.
 	// A zero value is filled by the adapter's clock before the statement runs.
 	S1Instant time.Time
