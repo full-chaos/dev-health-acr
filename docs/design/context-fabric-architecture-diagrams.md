@@ -640,6 +640,27 @@ comment was written. The comment is a historical decision record (why the versio
 bumped) and is not wrong about *why*, but its present-tense "today" claim is
 stale and could mislead a reader checking current graph state.
 
+**Repository -> work items (CHAOS-8667).** The members of a repository are the
+issues its pull requests link to: the walk reads them from the graph over
+`LINKS_PULL_REQUEST` (issue -> pull request), names the link tier per member
+(`native`, `explicit_text`, `heuristic`), and counts the heuristic-only ones. A
+link grants authority only when it is `native`: an issue with its own
+repository is admitted by that repository's grant through a link of any tier,
+and a repository-less issue is admitted for a repository-restricted caller
+only through a native link to a pull request the caller is granted. The
+`status` and `completed` member filters read the canonical work-item facts, not
+the graph; `created` and `updated` are refused. Freshness limitation: the links
+come from the last `work_graph_issue_pr` build in ops, so a link made since then
+is not a member yet, and the answer says so. The rule is held by a differential
+oracle, `TestChaos8667RepositoryWorkItemMembersGraphAgreesWithLibraryRule`
+(`devhealthfacts/chaos8667_tree_member_oracle_integration_test.go`): it seeds
+one ClickHouse organization, projects it with the real producer into a real
+FalkorDB, and compares the graph walk with the issues linked to the same
+repository's pull requests and filtered by the dev-health-go
+`readers.WorkItemScopeSQL` relation, per principal. Each designed difference
+(project ownership, the anchor gate, requested scope) is a named exception in
+the test, asserted exactly.
+
 ---
 
 ## 4 — Fact data model
