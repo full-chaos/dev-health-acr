@@ -37,7 +37,7 @@ func newFinalCensusBudgetFixture(t *testing.T, floor, reserve bool) (*freshTuple
 			t.Fatal(err)
 		}
 		f.client.rowsByPhase["s1"] = append(f.client.rowsByPhase["s1"], []any{id, "repo-1", workID, hostedTestRepository, uint8(1), count, count, uint64(0), uint64(0), uint64(0)})
-		f.client.rowsByPhase["status"] = append(f.client.rowsByPhase["status"], []any{workID, "open", "repo-1"})
+		f.client.rowsByPhase["status"] = append(f.client.rowsByPhase["status"], []any{workID, "open", "repo-1", ""})
 		f.client.rowsByPhase["work"] = append(f.client.rowsByPhase["work"], []any{workID, strings.Repeat("Long descriptive title ", 21) + workID, "repo-1"})
 	}
 	info := &bytes.Buffer{}

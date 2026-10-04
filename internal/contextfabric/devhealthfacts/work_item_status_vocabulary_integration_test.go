@@ -2,6 +2,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,11 +72,12 @@ func TestStatusFactVocabularyAgainstRealClickHouse(t *testing.T) {
 				t.Fatalf("%s (%s): fields = %+v, want %q inside the set", item.id, item.provider, fact.Fields, item.status)
 			}
 		}
-		if b := fact.Fields["status_basis"].String; b == nil || *b != "dev_health_normalized" {
-			t.Fatalf("%s: status_basis = %+v", item.id, fact.Fields["status_basis"])
+		wantBasis := map[string]string{"jira": "status_mapping_configuration", "github": "issue_labels_and_state", "gitlab": "issue_labels_and_state", "linear": "workflow_state_type"}[item.provider]
+		if b := fact.Fields["status_basis"].String; b == nil || *b != wantBasis {
+			t.Fatalf("%s (%s): status_basis = %+v, want %q", item.id, item.provider, fact.Fields["status_basis"], wantBasis)
 		}
-		if n := fact.Fields["status_provenance"].String; n == nil || *n == "" {
-			t.Fatalf("%s: status_provenance missing", item.id)
+		if n := fact.Fields["status_provenance"].String; n == nil || !strings.Contains(*n, "The provider of this item is "+item.provider+":") {
+			t.Fatalf("%s: status_provenance does not name provider %s: %v", item.id, item.provider, n)
 		}
 	}
 }

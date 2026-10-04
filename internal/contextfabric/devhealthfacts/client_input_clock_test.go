@@ -217,7 +217,7 @@ func clockTestRules() []stringRule {
 		{match: "SELECT concat(p.provider, ':', p.id), toString(ec.day)", values: []string{"linear:P1", day}},
 		{match: "SELECT concat(p.provider, ':', p.id), wm.team_id", values: []string{"linear:P1", "t1"}},
 		{match: "SELECT concat(p.provider, ':', p.id), toString(wm.day)", values: []string{"linear:P1", day}},
-		{"SELECT w.work_item_id, ifNull(w.status", []string{"item1", "open", "r1"}, nil},
+		{"SELECT w.work_item_id, ifNull(w.status", []string{"item1", "open", "r1", "jira"}, nil},
 		{"SELECT w.work_item_id, isNotNull(w.completed_at", []string{"item1", "r1"}, nil},
 		{"SELECT w.work_item_id, ifNull(w.title", []string{"item1", "a title", "r1"}, nil},
 		{"SELECT concat(p.provider, ':', p.id), count()", []string{"linear:P1"}, []float64{10, 1, 0, 5}},

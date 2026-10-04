@@ -19,7 +19,7 @@ func TestWorkItemProvidersUseCurrentSelectorScopeAndThrowingSettings(t *testing.
 		name contextfabric.FactKind
 		rows [][]any
 	}{
-		{name: contextfabric.FactStatus, rows: [][]any{{"WI-1", "in_progress", "repo-b"}}},
+		{name: contextfabric.FactStatus, rows: [][]any{{"WI-1", "in_progress", "repo-b", ""}}},
 		{name: contextfabric.FactWork, rows: [][]any{{"WI-1", "A scoped title", "repo-b"}}},
 		{name: contextfabric.FactActualCompletion, rows: [][]any{{"WI-1", uint8(1), time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC), "repo-b"}}},
 	}
@@ -195,7 +195,7 @@ func testBindingValueAt(t *testing.T, client *fakeClient, queryIndex int, name s
 func TestStatusProviderHappyPath(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM work_items", rows: [][]any{{"WIDGET-101", "in_progress", "repo-1"}}},
+		{match: "FROM work_items", rows: [][]any{{"WIDGET-101", "in_progress", "repo-1", ""}}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactStatus)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
@@ -249,7 +249,7 @@ func TestStatusProviderQueryErrorReturnsFactReadFailure(t *testing.T) {
 
 func TestStatusProviderOrgScoped(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM work_items", rows: [][]any{{"WIDGET-101", "open", "repo-1"}, {"WIDGET-102", "open", "repo-1"}}}}}
+	client := &fakeClient{tables: []fakeTable{{match: "FROM work_items", rows: [][]any{{"WIDGET-101", "open", "repo-1", ""}, {"WIDGET-102", "open", "repo-1", ""}}}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactStatus)
 	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-9"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -268,7 +268,7 @@ func TestStatusProviderOrgScoped(t *testing.T) {
 
 func TestStatusProviderEmptyStatusIsNull(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM work_items", rows: [][]any{{"WIDGET-101", "", "repo-1"}}}}}
+	client := &fakeClient{tables: []fakeTable{{match: "FROM work_items", rows: [][]any{{"WIDGET-101", "", "repo-1", ""}}}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactStatus)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},

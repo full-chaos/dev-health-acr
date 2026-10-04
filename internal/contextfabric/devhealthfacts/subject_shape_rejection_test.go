@@ -126,7 +126,7 @@ func TestInvestmentProviderReportsSubjectIDShapeRejectionNotNoData(t *testing.T)
 // refusal of the whole read.
 func TestStatusProviderKeepsRealFactsWhileDisclosingAShapeRejectedSibling(t *testing.T) {
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM work_items", rows: [][]any{{"WIDGET-101", "in_progress", "repo-1"}}},
+		{match: "FROM work_items", rows: [][]any{{"WIDGET-101", "in_progress", "repo-1", ""}}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactStatus)
 
