@@ -834,7 +834,7 @@ var Decision = Event{
 	Level:              LevelDebug,
 	Multiplicity:       MultiplicityBoundedManyPerPass,
 	Attribution:        []string{"request_id"},
-	BoundedAggregation: "bounded by the pass's own outcome: one line per committed subject for a \"committed\" pass (self-carried index/total), otherwise exactly one line (index=1/total=1) -- never zero.",
+	BoundedAggregation: "bounded by the pass's own outcome: one line per committed subject for a \"committed\" pass (self-carried index/total), otherwise exactly one line (index=1/total=1) -- never zero. A \"displaced\" line (CHAOS-8408) is an extra index=1/total=1 line naming the candidate the census-attested commit pushed out at the candidate cap.",
 	Fields: []Field{
 		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "pass", Type: FieldInt, Presence: PresenceRequired},
@@ -843,7 +843,7 @@ var Decision = Event{
 		{Key: "total", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired},
 		{Key: "subject_canonical_id", Type: FieldString, Presence: PresenceRequired},
-		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"committed", "ambiguous", "no_commit"}},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"committed", "ambiguous", "no_commit", "displaced"}},
 		{
 			Key: "winning_mechanism", Type: FieldString, Presence: PresenceRequired,
 			// Open vocabulary: a contextfabric.MatchMechanism token, or "".

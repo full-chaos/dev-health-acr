@@ -3861,11 +3861,21 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				// whether the scoped re-decision above did).
 				if !stalledForCensus {
 					pass++
-					appendedCommit := appendCensusAttestedCommit(&resolution, candidatesBySubject[attestedKey], request.Options.MaxSubjectCandidates, commitBases, commitDigests, searchTruncated, aliasIdentityComplete)
+					appendedCommit, displacedCandidate := appendCensusAttestedCommit(&resolution, candidatesBySubject[attestedKey], request.Options.MaxSubjectCandidates, commitBases, commitDigests, searchTruncated, aliasIdentityComplete)
 					if !appendedCommit && deps.ResolutionTracer != nil {
 						deps.ResolutionTracer.Trace(ResolutionTraceEvent{
 							RequestID: request.RequestID, Stage: "decision", Subject: candidatesBySubject[attestedKey].Subject,
 							Outcome: "no_commit", CommitGate: "evidence_census", SearchTruncated: searchTruncated,
+							SearchCandidateLimit: effectiveSearchLimit, PopulationBasis: "none",
+							Pass: pass, Index: 1, Total: 1,
+						})
+					}
+					// CHAOS-8408: the appended pull request took the last
+					// uncommitted slot at the candidate cap; record who left.
+					if appendedCommit && displacedCandidate.CanonicalID != "" && deps.ResolutionTracer != nil {
+						deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+							RequestID: request.RequestID, Stage: "decision", Subject: displacedCandidate,
+							Outcome: "displaced", CommitGate: "evidence_census", SearchTruncated: searchTruncated,
 							SearchCandidateLimit: effectiveSearchLimit, PopulationBasis: "none",
 							Pass: pass, Index: 1, Total: 1,
 						})
@@ -5061,13 +5071,13 @@ func evidenceRoundTrigger(resolution contextfabric.SubjectResolution, callerHint
 // already-committed scope anchor. The basis is statistical, exactly like the
 // stalled evidence_census path, so the commit-affirmation gate still has to
 // see the answer stand on that subject.
-func appendCensusAttestedCommit(resolution *contextfabric.SubjectResolution, candidate contextfabric.SubjectCandidate, maxCandidates int, bases contextfabric.CommitBasisSet, digests contextfabric.CommitDecisionDigestSet, searchTruncated, aliasComplete bool) bool {
+func appendCensusAttestedCommit(resolution *contextfabric.SubjectResolution, candidate contextfabric.SubjectCandidate, maxCandidates int, bases contextfabric.CommitBasisSet, digests contextfabric.CommitDecisionDigestSet, searchTruncated, aliasComplete bool) (appended bool, displaced contextfabric.SubjectRef) {
 	if candidate.Subject.CanonicalID == "" {
-		return false
+		return false, contextfabric.SubjectRef{}
 	}
 	for _, committed := range resolution.Committed {
 		if committed == candidate.Subject {
-			return false
+			return false, contextfabric.SubjectRef{}
 		}
 	}
 	candidate.State = contextfabric.ResolutionCommitted
@@ -5088,8 +5098,9 @@ func appendCensusAttestedCommit(resolution *contextfabric.SubjectResolution, can
 				}
 			}
 			if drop < 0 {
-				return false
+				return false, contextfabric.SubjectRef{}
 			}
+			displaced = resolution.Candidates[drop].Subject
 			resolution.Candidates = append(resolution.Candidates[:drop:drop], resolution.Candidates[drop+1:]...)
 		}
 		resolution.Candidates = append(resolution.Candidates, candidate)
@@ -5100,7 +5111,7 @@ func appendCensusAttestedCommit(resolution *contextfabric.SubjectResolution, can
 		CommitGate: "evidence_census", IdentityProven: contextfabric.CommitBasisStatistical.IdentityProven(),
 		SearchTruncated: searchTruncated, AliasLookupComplete: aliasComplete,
 	})
-	return true
+	return true, displaced
 }
 
 // repositoryNarrowedByUnrestrictedPrincipal is true when the only thing

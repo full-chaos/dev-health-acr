@@ -198,8 +198,12 @@ func TestAppendCensusAttestedCommitHonoursTheCandidateCap(t *testing.T) {
 	}
 	bases := contextfabric.CommitBasisSet{}
 	digests := contextfabric.CommitDecisionDigestSet{}
-	if !appendCensusAttestedCommit(&resolution, contextfabric.SubjectCandidate{Subject: pr}, 2, bases, digests, true, true) {
+	ok, displaced := appendCensusAttestedCommit(&resolution, contextfabric.SubjectCandidate{Subject: pr}, 2, bases, digests, true, true)
+	if !ok {
 		t.Fatal("append = false, want the pull request committed by displacing the uncommitted candidate")
+	}
+	if displaced != other {
+		t.Fatalf("displaced = %v, want %v", displaced, other)
 	}
 	if len(resolution.Candidates) != 2 || len(resolution.Committed) != 2 {
 		t.Fatalf("candidates = %d, committed = %d, want 2 and 2 under a cap of 2", len(resolution.Candidates), len(resolution.Committed))
@@ -211,7 +215,7 @@ func TestAppendCensusAttestedCommitHonoursTheCandidateCap(t *testing.T) {
 		Candidates: []contextfabric.SubjectCandidate{{Subject: repo, State: contextfabric.ResolutionCommitted}},
 		Committed:  []contextfabric.SubjectRef{repo},
 	}
-	if appendCensusAttestedCommit(&full, contextfabric.SubjectCandidate{Subject: pr}, 1, bases, digests, true, true) || len(full.Candidates) != 1 {
+	if okFull, gone := appendCensusAttestedCommit(&full, contextfabric.SubjectCandidate{Subject: pr}, 1, bases, digests, true, true); okFull || gone.CanonicalID != "" || len(full.Candidates) != 1 {
 		t.Fatalf("append over a cap of committed-only candidates must refuse, got %#v", full)
 	}
 }
@@ -289,5 +293,26 @@ func TestResolveSubjects_RestrictedPrincipalNeverRunsTheHandleCensus(t *testing.
 		if id == scopeAnchorPRID {
 			t.Fatalf("committed = %v, want the pull request left out", scopeAnchorCommittedIDs(resolution))
 		}
+	}
+}
+
+func TestResolveSubjects_CandidateDisplacedAtTheCapByTheAttestedCommitIsTraced(t *testing.T) {
+	t.Parallel()
+	backend := scopeAnchorBackend(true, -1)
+	rival := candidateNode(contextfabric.SubjectPullRequest, "pull_request:r-1:12", "PR #12", 0.9, "*")
+	backend.searchResults[scopeAnchorRepo] = append(backend.searchResults[scopeAnchorRepo], rival)
+	resolution, tracer, _ := resolveScopeAnchorQuestionWith(t, backend, scopeAnchorQuestion, namedScopeAnchorFrame(nil), 2)
+	ids := scopeAnchorCommittedIDs(resolution)
+	if len(ids) != 2 || ids[1] != scopeAnchorPRID {
+		t.Fatalf("committed = %v, want the scope anchor then the pull request", ids)
+	}
+	var displaced int
+	for _, e := range tracer.eventsForStage("decision") {
+		if e.Outcome == "displaced" && e.CommitGate == "evidence_census" && e.Subject.CanonicalID == "pull_request:r-1:12" && e.Index == 1 && e.Total == 1 {
+			displaced++
+		}
+	}
+	if displaced != 1 {
+		t.Fatalf("displaced evidence_census decision events for the pushed-out candidate = %d, want 1 (candidates = %#v)", displaced, resolution.Candidates)
 	}
 }
