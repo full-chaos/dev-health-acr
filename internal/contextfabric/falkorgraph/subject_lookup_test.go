@@ -204,3 +204,26 @@ func TestDefaultExactNameKindsAgreeAcrossTheSeam(t *testing.T) {
 		t.Fatal("DefaultExactNameKinds returns the shared slice")
 	}
 }
+
+// The name read pushes the equality into the store query: the term travels as
+// a parameter, the predicate names label, aliases and provider aliases, and
+// the read is bounded by matches, so no window of the kind decides the answer.
+func TestFindSubjectsByExactNamePushesTheEqualityIntoTheQuery(t *testing.T) {
+	var cypher string
+	var params map[string]interface{}
+	fake := &fakeConn{queryFunc: func(_ context.Context, _, c string, p map[string]interface{}, _ bool) ([]row, error) {
+		cypher, params = c, p
+		return nil, nil
+	}}
+	if _, err := newFakeAdapter(t, fake).FindSubjectsByExactName(context.Background(), storage.Principal{OrgID: "org-1"}, lookupBinding, "  Acme/API ", []string{"repository"}); err != nil {
+		t.Fatal(err)
+	}
+	if params["term"] != "Acme/API" || params["termLower"] != "acme/api" {
+		t.Fatalf("params = %v", params)
+	}
+	for _, want := range []string{"$term", "$termLower", "n.label", "n.aliases", "n.provider_aliases", fmt.Sprintf("LIMIT %d", exactNameCandidateQueryLimit+1)} {
+		if !strings.Contains(cypher, want) {
+			t.Fatalf("query lacks %q: %s", want, cypher)
+		}
+	}
+}
