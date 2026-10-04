@@ -30,6 +30,16 @@ func (r *roundTracer) Trace(event graphrank.ResolutionTraceEvent) {
 	r.rounds = append(r.rounds, event)
 }
 
+func (r *roundTracer) reasons() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]string, 0, len(r.rounds))
+	for _, e := range r.rounds {
+		out = append(out, e.ShadowReason)
+	}
+	return out
+}
+
 func (r *roundTracer) narrowings() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -56,7 +66,7 @@ func TestHandleCensusGraphFilterOnRealStores(t *testing.T) {
 	}
 	createProjectMembershipPresenceView(t, ctx, direct)
 	tracer := &roundTracer{}
-	var afterCensus func()
+	var afterCensus func(graphrank.CensusOutcome)
 	census := devhealthsource.NewCensusFunc(query)
 	adapter := chaos7074FalkorAdapterWith(t, ctx, func(c *falkorgraph.Config) {
 		c.ResolutionTracer = tracer
@@ -68,7 +78,7 @@ func TestHandleCensusGraphFilterOnRealStores(t *testing.T) {
 				t.Logf("census kind=%s count=%d ids=%v closureMismatch=%t setClosureMismatch=%t err=%v", kind, outcome.Count, outcome.SatisfierCanonicalIDs, outcome.ClosureMismatch, outcome.SatisfierSetClosureMismatch, err)
 			}
 			if afterCensus != nil {
-				afterCensus()
+				afterCensus(outcome)
 			}
 			return outcome, err
 		}
@@ -115,7 +125,13 @@ func TestHandleCensusGraphFilterOnRealStores(t *testing.T) {
 		defer cancel()
 		afterCensus = nil
 		if cancelAfterCensus {
-			afterCensus = cancel
+			// Cancel once the census listed the two satisfiers: the graph
+			// filter's keyed reads, which come next, then fail on the real store.
+			afterCensus = func(outcome graphrank.CensusOutcome) {
+				if outcome.Count == 2 && len(outcome.SatisfierCanonicalIDs) == 2 {
+					cancel()
+				}
+			}
 		}
 		defer func() { afterCensus = nil }()
 		tracer.mu.Lock()
@@ -174,12 +190,13 @@ func TestHandleCensusGraphFilterOnRealStores(t *testing.T) {
 		}
 	})
 	t.Run("a satisfier with no graph row keeps the clarification", func(t *testing.T) {
-		committed, narrowings := resolve(t, "missing-row", []string{"acme/r1", "acme/r3"}, false)
+		committed, _ := resolve(t, "missing-row", []string{"acme/r1", "acme/r3"}, false)
 		if len(committed) != 0 {
-			t.Fatalf("committed = %v (narrowings %v), want none: the satisfier of acme/r3 has no graph row", committed, narrowings)
+			t.Fatalf("committed = %v, want none: the satisfier of acme/r3 has no graph row", committed)
 		}
-		if len(narrowings) != 1 || narrowings[0] != "satisfier_read_failed" {
-			t.Fatalf("narrowings = %v, want one satisfier_read_failed", narrowings)
+		reasons := tracer.reasons()
+		if len(reasons) != 1 || reasons[0] != "census_closure_mismatch" {
+			t.Fatalf("evidence_round reasons = %v, want one census_closure_mismatch: the census count disagrees with the graph before the narrowing runs", reasons)
 		}
 	})
 	t.Run("a failed graph read keeps the clarification", func(t *testing.T) {
