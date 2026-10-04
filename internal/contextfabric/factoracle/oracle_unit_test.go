@@ -127,11 +127,11 @@ func TestShapesAreGeneratedFromThePolicyForEveryRoot(t *testing.T) {
 			}
 		}
 	}
-	if len(roots) != len(policy.Roots()) || len(roots) != 14 {
-		t.Fatalf("shapes cover %d roots, the policy allows %d, want 14", len(roots), len(policy.Roots()))
+	if len(roots) != len(policy.Roots()) || len(roots) != 13 {
+		t.Fatalf("shapes cover %d roots, the policy allows %d, want 13", len(roots), len(policy.Roots()))
 	}
-	if len(operations) != 16 {
-		t.Fatalf("shapes cover %d operations, want 16 (one per served operation behind an allowed root)", len(operations))
+	if len(operations) != 15 {
+		t.Fatalf("shapes cover %d operations, want 15 (one per served operation behind an allowed root)", len(operations))
 	}
 	for root := range roots {
 		if _, ok := rootPairs[root]; !ok {

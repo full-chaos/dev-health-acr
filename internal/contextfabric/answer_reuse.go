@@ -549,6 +549,11 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 	// CHAOS-7127: a restricted caller's answers are built from gated facts;
 	// its key carries its grant, so no answer is reused across grants. The
 	// same widening runs in saveResult.
+	// A work-item tuple answer is keyed without the request scope: its own
+	// gate re-measures membership and authorization under the scope of the
+	// request that reuses it. Every other answer is keyed by the scope.
+	unscopedAxisKey := GrantScopedTimeAxisKey(principal, timeAxisKey)
+	timeAxisKey = RequestScopeTimeAxisKey(request, timeAxisKey)
 	timeAxisKey = GrantScopedTimeAxisKey(principal, timeAxisKey)
 	if timeAxisKey == "" {
 		// A historical context missing its own required bounds. Fail
@@ -618,6 +623,13 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 		GraphEpoch: binding.Epoch,
 	}
 	stored, ok, missReason, err := e.reuseGate.FindReusable(ctx, principal, key)
+	if (err != nil || !ok) && unscopedAxisKey != "" && unscopedAxisKey != key.TimeAxisKey {
+		tupleKey := key
+		tupleKey.TimeAxisKey = unscopedAxisKey
+		if tupleStored, tupleOK, _, tupleErr := e.reuseGate.FindReusable(ctx, principal, tupleKey); tupleErr == nil && tupleOK && ClassifyWorkItemTuple(tupleStored.Result, tupleStored.SemanticState, tupleStored.SemanticStateRead).Disposition != WorkItemTupleNotApplicable {
+			stored, ok, missReason, err = tupleStored, true, "", nil
+		}
+	}
 	if err != nil || !ok {
 		outcome := AnswerReuseMissNoCandidate
 		if missReason == ReuseMissStaleGraphEpoch {

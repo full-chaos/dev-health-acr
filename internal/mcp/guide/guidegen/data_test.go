@@ -23,7 +23,7 @@ import (
 func TestDataGuideListsNoOperationOrRoot(t *testing.T) {
 	text := embeddedFiles(t)[FileData]
 	in := FromRegistries()
-	if len(in.DataOperations) < 16 || len(in.GraphQLRoots) < 14 {
+	if len(in.DataOperations) < 16 || len(in.GraphQLRoots) < 13 {
 		t.Fatalf("registries hold %d operations and %d roots; the check measured nothing", len(in.DataOperations), len(in.GraphQLRoots))
 	}
 	for _, line := range strings.Split(text, "\n") {

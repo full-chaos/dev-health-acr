@@ -1549,6 +1549,7 @@ var EvidenceProbe = Event{
 		{Key: "census_rows_read", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "census_handle_applied", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "census_anchor_applied", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "census_repository_filter_applied", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "shadow_caller_hint_short_circuit", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"evidence_probe"}},
@@ -2297,7 +2298,7 @@ var (
 	graphqlQueryOperations   = []string{
 		"acrRepositoryScopes", "capacityForecast", "capacityForecasts", "catalogValues", "cognitiveLoad",
 		"complexityTimeseries", "compoundingRisk", "hotspots", "investmentBreakdown", "investmentFull",
-		"securityAlerts", "securityOverview", "throughputForecast", "workGraphArtifacts", "workGraphEdges",
+		"securityOverview", "throughputForecast", "workGraphArtifacts", "workGraphEdges",
 		"workGraphFlow",
 	}
 )

@@ -285,6 +285,12 @@ import (
 // with last-digit noise; its stored input no longer equals the input a fresh
 // read produces, so it must not be reused.
 //
+// v48 -> v49: the handle census of a work item applies the caller's
+// repository narrowing inside its query, so a ticket key held by more work
+// items than the census cap commits the one work item in the narrowed
+// repositories. A candidate saved under v48 for such a question is a
+// clarification and must not be reused.
+//
 // v49 -> v50: every LIMIT read of the fact store orders its rows by a total
 // order (newest first on the time column, then the natural key) before the
 // row limit cuts, so a question with more matching rows than the limit is

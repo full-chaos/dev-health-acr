@@ -190,14 +190,14 @@ func TestChaos7075CatalogSchemaSectionPerCallerClass(t *testing.T) {
 		return out
 	}
 	u := section(unrestricted, h)
-	if u["available"] != true || len(roots(u)) != 14 || !strings.Contains(u["sdl"].(string), "type Query {") {
+	if u["available"] != true || len(roots(u)) != 13 || !strings.Contains(u["sdl"].(string), "type Query {") {
 		t.Fatalf("unrestricted: available=%v roots=%v", u["available"], roots(u))
 	}
 	if strings.Contains(u["sdl"].(string), "busFactor") || strings.Contains(u["sdl"].(string), "topMaintainers") {
 		t.Fatal("the schema view names a refused root or a person field")
 	}
 	r := section(restricted, h)
-	if got := roots(r); !slices.Equal(got, []string{"compoundingRisk", "hotspots", "securityAlerts"}) {
+	if got := roots(r); !slices.Equal(got, []string{"compoundingRisk", "hotspots"}) {
 		t.Fatalf("restricted roots %v", got)
 	}
 	for _, root := range r["roots"].([]any) {

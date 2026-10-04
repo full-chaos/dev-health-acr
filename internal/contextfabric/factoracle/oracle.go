@@ -37,7 +37,6 @@ var rootPairs = map[string]rootPair{
 	"complexityTimeseries": {Mode: ModeShape, Reason: "no acr fact: no fact provider reads repo_complexity_daily or file_complexity_snapshots"},
 	"compoundingRisk":      {Mode: ModeValue, compare: compareHealth},
 	"hotspots":             {Mode: ModeShape, Reason: "no acr fact: no file subject kind and no provider reads file_hotspot_daily"},
-	"securityAlerts":       {Mode: ModeShape, Reason: "no acr fact: no fact kind reads security_alerts"},
 	"securityOverview":     {Mode: ModeShape, Reason: "no acr fact: no fact kind reads security_alerts"},
 	"throughputForecast":   {Mode: ModeValue, compare: compareReadiness},
 	"workGraphArtifacts":   {Mode: ModeShape, Reason: "no acr fact: acr serves graph edges through read_relationships, from other tables than work_graph_edges (lead ruling: shape only)"},
@@ -469,8 +468,6 @@ func (o *Oracle) generatedCases() ([]ShapeCase, error) {
 			sets = append(sets, map[string]any{"filter": map[string]any{"breakout": "REPO", "trendDays": 30}}, map[string]any{"filter": map[string]any{"breakout": "TEAM", "trendDays": 30}})
 		case "hotspots":
 			sets = append(sets, map[string]any{"input": map[string]any{"sinceUtc": dateTime(start), "untilUtc": dateTime(last), "limit": 50}})
-		case "securityAlerts":
-			sets = append(sets, map[string]any{"filters": map[string]any{"since": start, "until": last}, "pagination": map[string]any{"first": 5}})
 		case "securityOverview":
 			sets = append(sets, map[string]any{"filters": map[string]any{"since": start, "until": last}})
 		case "throughputForecast":

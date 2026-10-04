@@ -55,6 +55,34 @@ func RecordSubjectCandidatesAuthzDropped(ctx context.Context, count int) {
 	}
 }
 
+type workItemCensusRepositoryScopeKey struct{}
+
+// WithWorkItemCensusRepositoryScopeRecorder attaches a fresh cell to ctx that
+// RecordWorkItemCensusRepositoryScope sets. Investigate attaches it before any
+// resolution runs; finalizeServed reads it, so every serving path states the
+// scope exclusion beside the answer it composed.
+func WithWorkItemCensusRepositoryScopeRecorder(ctx context.Context) context.Context {
+	if _, ok := ctx.Value(workItemCensusRepositoryScopeKey{}).(*bool); ok {
+		return ctx
+	}
+	return context.WithValue(ctx, workItemCensusRepositoryScopeKey{}, new(bool))
+}
+
+// RecordWorkItemCensusRepositoryScope reports that the work item census ran
+// inside the caller's repository scope. A no-op when ctx carries no recorder.
+func RecordWorkItemCensusRepositoryScope(ctx context.Context) {
+	if cell, ok := ctx.Value(workItemCensusRepositoryScopeKey{}).(*bool); ok {
+		*cell = true
+	}
+}
+
+// WorkItemCensusRepositoryScopeRecorded reports whether the census ran inside
+// the caller's repository scope on this call.
+func WorkItemCensusRepositoryScopeRecorded(ctx context.Context) bool {
+	cell, ok := ctx.Value(workItemCensusRepositoryScopeKey{}).(*bool)
+	return ok && *cell
+}
+
 // ErrNoInvestigationSubjects (CHAOS-3810/CHAOS-3811) classifies the one
 // failure this ticket exists to make impossible: a canonical fact read
 // attempted with neither a discovered subject nor a cohort.
@@ -632,7 +660,7 @@ func (e *Engine) terminalResult(
 		// introduce a difference, and a terminal result saved under a key no
 		// lookup will ever form is a row the clarification loop cannot reach.
 		epochDeltaSample := e.sampleBindingEpochDelta(ctx, principal, binding)
-		if err := e.saveTerminalResult(ctx, principal, BudgetAssertSubjectlessTerminal, &result, plan, e.effectiveResponseBudget(request), watermark, epoch, composeTimeAxisKey(TimeAxisKeyFor(request.TimeContext), windowSaveKeyComponent(windowCanon, effectiveWindow, windowCarried)), binding.Epoch, ancestryParent, semantic); err != nil {
+		if err := e.saveTerminalResult(ctx, principal, BudgetAssertSubjectlessTerminal, &result, plan, e.effectiveResponseBudget(request), watermark, epoch, RequestScopeTimeAxisKey(request, composeTimeAxisKey(TimeAxisKeyFor(request.TimeContext), windowSaveKeyComponent(windowCanon, effectiveWindow, windowCarried))), binding.Epoch, ancestryParent, semantic); err != nil {
 			// CHAOS-3927 P4 (codex round-2 adversarial review fix): a
 			// subjectless terminal can carry confirmed structure exactly
 			// like a synthesized answer can (result.ConfirmedStructure

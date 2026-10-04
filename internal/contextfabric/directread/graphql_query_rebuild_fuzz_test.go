@@ -30,8 +30,8 @@ var nonName = regexp.MustCompile(`[^A-Za-z0-9_]`)
 var rebuildSeeds = []struct{ query, vars string }{
 	{`{ hotspots(input: {sinceUtc: "2026-09-21T00:00:00Z\") { __schema { types { name } } } #", untilUtc: "2026-09-28T00:00:00Z"}) { rows { filePath } } }`, ``},
 	{`query($s: DateTime!) { hotspots(input: {sinceUtc: $s, untilUtc: "2026-09-28T00:00:00Z"}) { rows { filePath } } }`, `{"s":"x\") } mutation { deleteSavedReport(orgId: \"o\", id: \"1\") } #"}`},
-	{`{ securityAlerts(filters: {search: """ ") } mutation { x } """}) { edges { node { alertId } } } }`, ``},
-	{`query($q: String = "} mutation { triggerReport }") { securityAlerts(filters: {search: $q}) { edges { node { alertId } } } }`, ``},
+	{`{ securityOverview(filters: {search: """ ") } mutation { x } """}) { kpis { openTotal } } }`, ``},
+	{`query($q: String = "} mutation { triggerReport }") { securityOverview(filters: {search: $q}) { kpis { openTotal } } }`, ``},
 	{`{ a: catalog(dimension: TEAM) { values { value } } b: catalog(dimension: REPO) { values { count } } }`, ``},
 	{`{ x_y1: catalog(dimension: THEME) { values { value } } }`, ``},
 	{`query($ids: [String!]) { hotspots(input: {sinceUtc: "2026-09-21T00:00:00Z", untilUtc: "2026-09-28T00:00:00Z", repoIds: $ids}) { rows { repoId } } }`, `{"ids":["repository:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]}`},

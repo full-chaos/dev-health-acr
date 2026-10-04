@@ -1726,6 +1726,9 @@ type ResolutionTraceEvent struct {
 	CensusRowsRead        int
 	CensusHandleApplied   bool
 	CensusAnchorApplied   bool
+	// CensusRepositoryFilterApplied: the census applied the caller's repository
+	// narrowing inside its own query, so CensusCount is already inside it.
+	CensusRepositoryFilterApplied bool
 	// GraphExistenceOK/CensusCommitReason (evidence_census_commit stage
 	// ONLY, CHAOS-3896 Slice C, design brief v6 §1.4/§5): the keyed graph
 	// existence read's own outcome for the ONE satisfier a decisive census

@@ -61,6 +61,14 @@ type censusKindRegistryEntry struct {
 	// joined_column_discriminator refusal (BuildCensusDiscriminator), not
 	// a silent join.
 	anchorColumns map[contextfabric.SubjectKind]string
+	// repositoryColumn is the base table's repo_id column the caller's
+	// repository narrowing is joined on (withRepositoryFilter). It is its own
+	// field because it is not an anchor column for every kind: a work item has
+	// no repository anchor (a repo-less item carries the zero repo id), yet
+	// the narrowing still has to apply to it, where a repo-less item is
+	// outside any named repository exactly as workItemAuthorization scopes it.
+	// Empty when the table has no repository column.
+	repositoryColumn string
 	// bridgeCanonicalID is CHAOS-3898 S3's hand-off to 3896 Slices B/C
 	// (design brief v4.1 §6 S3 row; 3896 brief v6 §1.4's precondition): it
 	// computes the GRAPH canonical id a Count==1 RunCensus result's own
@@ -305,6 +313,7 @@ var censusKindRegistryEntries = map[graphrank.CensusKind]censusKindRegistryEntry
 		orgColumn: "p.org_id", identityColumn: "concat(p.org_id, ':', toString(p.repo_id), ':', toString(p.number))",
 		handlePredicate:   pullRequestNumberPredicate,
 		anchorColumns:     map[contextfabric.SubjectKind]string{contextfabric.SubjectRepository: "p.repo_id"},
+		repositoryColumn:  "p.repo_id",
 		bridgeCanonicalID: bridgePullRequestSatisfier,
 	},
 	contextfabric.SubjectWorkItem: {
@@ -357,6 +366,7 @@ var censusKindRegistryEntries = map[graphrank.CensusKind]censusKindRegistryEntry
 		anchorColumns: map[contextfabric.SubjectKind]string{
 			contextfabric.SubjectProject: "w.project_id",
 		},
+		repositoryColumn:  "w.repo_id",
 		bridgeCanonicalID: bridgeWorkItemSatisfier,
 	},
 	contractsv1.ContextFabricSubjectCIRun: {
@@ -369,6 +379,7 @@ var censusKindRegistryEntries = map[graphrank.CensusKind]censusKindRegistryEntry
 		orgColumn: "c.org_id", identityColumn: "concat(c.org_id, ':', toString(c.repo_id), ':', c.run_id)",
 		handlePredicate:   ciRunIDPredicate,
 		anchorColumns:     map[contextfabric.SubjectKind]string{contextfabric.SubjectRepository: "c.repo_id"},
+		repositoryColumn:  "c.repo_id",
 		bridgeCanonicalID: bridgeCIPipelineRunSatisfier,
 	},
 	contractsv1.ContextFabricSubjectPullRequestReview: {
@@ -388,6 +399,7 @@ var censusKindRegistryEntries = map[graphrank.CensusKind]censusKindRegistryEntry
 		orgColumn: "r.org_id", identityColumn: "concat(r.org_id, ':', toString(r.repo_id), ':', toString(r.number), ':', r.review_id)",
 		handlePredicate:   nil,
 		anchorColumns:     map[contextfabric.SubjectKind]string{contextfabric.SubjectRepository: "r.repo_id"},
+		repositoryColumn:  "r.repo_id",
 		bridgeCanonicalID: bridgePullRequestReviewSatisfier,
 	},
 	// devhealthschema:not-a-production-replica registry TAIL -- the same census-kind-to-table
