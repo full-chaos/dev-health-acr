@@ -186,20 +186,20 @@ func TestIssuePullRequestLinkEdgesOnRealStores(t *testing.T) {
 	}
 }
 
-// TestIssuePullRequestLinkProjectsOneEdgePerWorkItemNodeOfTheLinkedIssue pins
-// the lead ruling on an issue with rows in several repositories. The
-// work-item node identity of main is (repo_id, work_item_id): an issue with
-// rows in several repositories has several nodes (queryWorkItems), so a link
-// row, which names its issue by work_item_id alone, projects one edge per
-// node; the older edge producers (dependencies, parent/child) behave the
-// same, and the node identity is a separate ticket. Asserted: exactly one
-// edge per (link row x work-item node of its issue), each carrying its link
-// row's tier, and both ends of every edge resolve to a stored node (no
-// dangling end). Distinct issues in an answer are the walks' job (#896/#899).
+// TestIssuePullRequestLinkFanOutOutsideTheWritersContract pins the link
+// producer's behaviour on a state the ops writers do not produce: one
+// work_item_id under several repo_id rows (a GitHub or GitLab id carries its
+// repository, a Jira or Linear id always the zero repository; a moved issue
+// gets a new id). The work-item node identity is (repo_id, work_item_id), so
+// such an id is several nodes, and the link row, which names its issue by id
+// alone, then gives one edge per node, as the older edge producers
+// (dependencies, parent/child) do. Asserted: exactly one edge per (link row x
+// work-item node), each carrying its link row's tier, and both ends of every
+// edge resolve to a stored node (no dangling end).
 //
 // Needs Docker (ClickHouse and FalkorDB containers). Written to be run by CI
 // or by the lane owner; not run in the authoring sandbox.
-func TestIssuePullRequestLinkProjectsOneEdgePerWorkItemNodeOfTheLinkedIssue(t *testing.T) {
+func TestIssuePullRequestLinkFanOutOutsideTheWritersContract(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
 	for _, statement := range productionSchemaDDL() {
@@ -224,7 +224,8 @@ func TestIssuePullRequestLinkProjectsOneEdgePerWorkItemNodeOfTheLinkedIssue(t *t
 	}
 	exec("repo a", `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, repoA, orgID, "acme/alpha", "github", now)
 	exec("repo b", `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, repoB, orgID, "group/beta", "gitlab", now)
-	// One issue id with rows under two repositories: two work-item nodes.
+	// One issue id with rows under two repositories (outside the writers'
+	// contract): two work-item nodes.
 	issueRepos := []string{zeroRepo, repoA}
 	for _, repo := range issueRepos {
 		exec("work item under "+repo, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, type, status, provider, created_at, updated_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
