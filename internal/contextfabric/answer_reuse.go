@@ -626,7 +626,7 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 	if (err != nil || !ok) && unscopedAxisKey != "" && unscopedAxisKey != key.TimeAxisKey {
 		tupleKey := key
 		tupleKey.TimeAxisKey = unscopedAxisKey
-		if tupleStored, tupleOK, _, tupleErr := e.reuseGate.FindReusable(ctx, principal, tupleKey); tupleErr == nil && tupleOK && workItemTupleSemanticState(tupleStored.SemanticState) {
+		if tupleStored, tupleOK, _, tupleErr := e.reuseGate.FindReusable(ctx, principal, tupleKey); tupleErr == nil && tupleOK && ClassifyWorkItemTuple(tupleStored.Result, tupleStored.SemanticState, tupleStored.SemanticStateRead).Disposition != WorkItemTupleNotApplicable {
 			stored, ok, missReason, err = tupleStored, true, "", nil
 		}
 	}
