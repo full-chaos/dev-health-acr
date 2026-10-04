@@ -247,16 +247,17 @@ type repoThemeTotals struct {
 	repos int64
 }
 
-// mixEffortSignificantDigits is the declared precision of every effort value
-// the investment mix serves (weighted_effort, the shares derived from it and
+// mixEffortSignificantDigits is the declared precision of the shares an
+// investment mix serves as scalar fields (theme_*, theme_quality_bugfix and
 // the prior-window shares). ClickHouse sums Float64 in a thread-dependent
 // order, so the last digits of one persisted aggregate differ between two
 // reads of the same rows; served as-is they make the same question carry two
-// different inputs. Eleven significant digits keeps the value within 5e-12
-// relative of the stored sum (the differential oracle holds a sum to 1e-9),
-// far above the last-digit noise (about 1e-16 relative): a rounding edge is
-// crossed by noise with probability near 1e-5 per value, never by a real
-// change of the data.
+// different inputs. The effort sums themselves (the theme_breakdown table,
+// which the client input does not carry) stay unrounded: the differential
+// oracle pins them to full precision. Eleven significant digits keeps a share
+// within 5e-12 relative of its exact value and far above the last-digit noise
+// (about 1e-16 relative): a rounding edge is crossed by noise with
+// probability near 1e-5 per value, never by a real change of the data.
 const mixEffortSignificantDigits = 11
 
 // roundMixEffort rounds v to mixEffortSignificantDigits significant digits.
@@ -273,11 +274,6 @@ func roundMixEffort(v float64) float64 {
 
 func groupRepoMix(rows []repoMixRow) map[string]*repoThemeTotals {
 	out := map[string]*repoThemeTotals{}
-	defer func() {
-		for _, t := range out {
-			t.roundEffort()
-		}
-	}()
 	for _, r := range rows {
 		t, ok := out[r.RepoID]
 		if !ok {
@@ -293,14 +289,6 @@ func groupRepoMix(rows []repoMixRow) map[string]*repoThemeTotals {
 		t.bugfix += r.Bugfix
 	}
 	return out
-}
-
-// roundEffort applies the declared precision to every effort sum of t.
-func (t *repoThemeTotals) roundEffort() {
-	for theme, v := range t.theme {
-		t.theme[theme] = roundMixEffort(v)
-	}
-	t.bugfix = roundMixEffort(t.bugfix)
 }
 
 func (t *repoThemeTotals) total() float64 {
@@ -362,9 +350,9 @@ func (p *InvestmentProvider) readRepositoryThemeMix(ctx context.Context, orgID s
 		}
 		fields := make(map[string]contextfabric.FactValue, 2*len(canonicalInvestmentThemes)+6)
 		for _, theme := range canonicalInvestmentThemes {
-			fields[contextfabric.FactFieldTheme(theme)] = contextfabric.NumberFactValue(t.theme[theme] / total)
+			fields[contextfabric.FactFieldTheme(theme)] = contextfabric.NumberFactValue(roundMixEffort(t.theme[theme] / total))
 		}
-		fields[contextfabric.FactFieldThemeQualityBugfix] = contextfabric.NumberFactValue(t.bugfix / total)
+		fields[contextfabric.FactFieldThemeQualityBugfix] = contextfabric.NumberFactValue(roundMixEffort(t.bugfix / total))
 		fields["work_unit_count"] = contextfabric.IntegerFactValue(t.workUnits)
 		fields["mix_source"] = contextfabric.StringFactValue(repoMixSource)
 		fields["attribution_basis"] = contextfabric.StringFactValue(repoMixBasis)

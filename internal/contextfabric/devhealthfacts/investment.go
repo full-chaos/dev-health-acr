@@ -252,9 +252,9 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 		currentTotal := m.total()
 		fields := make(map[string]contextfabric.FactValue, 2*len(canonicalInvestmentThemes)+5)
 		for _, theme := range canonicalInvestmentThemes {
-			fields[contextfabric.FactFieldTheme(theme)] = contextfabric.NumberFactValue(m.theme[theme] / currentTotal)
+			fields[contextfabric.FactFieldTheme(theme)] = contextfabric.NumberFactValue(roundMixEffort(m.theme[theme] / currentTotal))
 		}
-		fields[contextfabric.FactFieldThemeQualityBugfix] = contextfabric.NumberFactValue(m.bugfix / currentTotal)
+		fields[contextfabric.FactFieldThemeQualityBugfix] = contextfabric.NumberFactValue(roundMixEffort(m.bugfix / currentTotal))
 		fields["theme_breakdown"] = themeBreakdownTable(m, timeBound.effectiveGrain(grainDaily))
 		fields["owned_repository_count"] = contextfabric.IntegerFactValue(m.repos)
 		fields["mix_source"] = contextfabric.StringFactValue(repoMixSource)
@@ -263,7 +263,7 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 		if priorMix, ok := prior[teamID]; ok && priorMix.total() > 0 {
 			priorTotal := priorMix.total()
 			for _, theme := range canonicalInvestmentThemes {
-				fields[contextfabric.FactFieldPriorTheme(theme)] = contextfabric.NumberFactValue(priorMix.theme[theme] / priorTotal)
+				fields[contextfabric.FactFieldPriorTheme(theme)] = contextfabric.NumberFactValue(roundMixEffort(priorMix.theme[theme] / priorTotal))
 			}
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{

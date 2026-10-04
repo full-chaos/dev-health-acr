@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"testing"
 	"time"
 
@@ -47,7 +48,7 @@ func teamReadinessClient(order []int) *fakeClient {
 // digit in a different order (0.1+0.2+0.3 != 0.3+0.2+0.1), and scales every
 // float by (1+noise): the last-digit difference two ClickHouse sums of the
 // same rows can carry.
-func teamMixClient(order []int, noise float64) *fakeClient {
+func teamMixClient(order []int, noise float64, windows uint8) *fakeClient {
 	repos := []string{"repo-a", "repo-b", "repo-c", "repo-d"}
 	efforts := []float64{0.1, 0.2, 0.3, 0.7}
 	owned := make([][]any, 0, len(repos))
@@ -55,14 +56,27 @@ func teamMixClient(order []int, noise float64) *fakeClient {
 	for index, repo := range repos {
 		owned = append(owned, []any{"CHAOS", repo})
 		scale := efforts[index] * (1 + noise)
-		mix = append(mix, []any{uint8(0), repo, map[string]float64{
-			"feature_delivery": 0.48898883728007437 * scale, "operational": 0.047865254810142 * scale,
-			"maintenance": 0.2304889002988043 * scale, "quality": 0.1388265562681117 * scale, "risk": 0.0936 * scale,
-		}, 0.0864588925764 * scale, uint64(3)})
+		for window := uint8(0); window < windows; window++ {
+			mix = append(mix, []any{window, repo, map[string]float64{
+				"feature_delivery": 0.48898883728007437 * scale * (1 + 0.1*float64(window)), "operational": 0.047865254810142 * scale * (1 - 0.2*float64(window)),
+				"maintenance": 0.2304889002988043 * scale, "quality": 0.1388265562681117 * scale, "risk": 0.0936 * scale * (1 + 0.3*float64(window)),
+			}, 0.0864588925764 * efforts[index] * (1 - 7*noise), uint64(3)})
+		}
+	}
+	mixOrder := make([]int, len(mix))
+	for i := range mixOrder {
+		mixOrder[i] = i
+	}
+	sort.SliceStable(mixOrder, func(a, b int) bool { return order[mixOrder[a]%len(order)] < order[mixOrder[b]%len(order)] })
+	ownedOrder := make([]int, 0, len(owned))
+	for _, index := range order {
+		if index < len(owned) {
+			ownedOrder = append(ownedOrder, index)
+		}
 	}
 	return &fakeClient{tables: []fakeTable{
-		{match: "FROM team_repo_ownership", rows: permuted(owned, order)},
-		{match: "FROM work_unit_investments", rows: permuted(mix, order)},
+		{match: "FROM team_repo_ownership", rows: permuted(owned, ownedOrder)},
+		{match: "FROM work_unit_investments", rows: permuted(mix, mixOrder)},
 	}}
 }
 
@@ -72,7 +86,7 @@ func teamMixClient(order []int, noise float64) *fakeClient {
 func TestTeamFactClientInputIsStableOverRowOrderAndAggregationNoise(t *testing.T) {
 	now := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
 	subject := teamSubject("CHAOS")
-	tc := clockTestCases()[1]
+	orders_tc := clockTestCases()
 	orders := [][]int{{0, 1, 2, 3, 4, 5}, {5, 4, 3, 2, 1, 0}, {2, 0, 5, 1, 4, 3}}
 	cases := []struct {
 		kind contextfabric.FactKind
@@ -80,18 +94,16 @@ func TestTeamFactClientInputIsStableOverRowOrderAndAggregationNoise(t *testing.T
 	}{
 		{contextfabric.FactReadiness, func(order []int, _ float64) *fakeClient { return teamReadinessClient(order) }},
 		{contextfabric.FactInvestment, func(order []int, noise float64) *fakeClient {
-			return teamMixClient(order[:4:4], noise)
+			return teamMixClient(order, noise, 1)
 		}},
 	}
 	for _, c := range cases {
 		var first []byte
 		for index, order := range orders {
 			for _, noise := range []float64{0, 3e-16} {
-				if c.kind == contextfabric.FactInvestment {
-					order = permutedFour(order)
-				}
+				window := 1
 				provider := findProvider(t, devhealthfacts.NewProviders(c.make(order, noise)), c.kind)
-				payload, facts, err := clockTestPayload(t, provider, subject, c.kind, tc, now)
+				payload, facts, err := clockTestPayload(t, provider, subject, c.kind, orders_tc[window], now)
 				if err != nil || facts == 0 {
 					t.Fatalf("%s: facts=%d err=%v", c.kind, facts, err)
 				}
@@ -107,18 +119,6 @@ func TestTeamFactClientInputIsStableOverRowOrderAndAggregationNoise(t *testing.T
 			}
 		}
 	}
-}
-
-// permutedFour maps a six-row order onto the four repository rows of the mix
-// fixture, keeping its relative order.
-func permutedFour(order []int) []int {
-	out := make([]int, 0, 4)
-	for _, index := range order {
-		if index < 4 {
-			out = append(out, index)
-		}
-	}
-	return out
 }
 
 func jsonAny(t *testing.T, raw []byte) any {
@@ -196,6 +196,47 @@ func TestRepositoryMixClientInputIsStableOverAggregationNoise(t *testing.T) {
 			var diffs []string
 			diffJSON("$", jsonAny(t, first), jsonAny(t, payload), &diffs)
 			t.Fatalf("noise %g: client input differs from the noise-free read:\n  %v", noise, diffs)
+		}
+	}
+}
+
+// TestTeamMixPriorWindowSharesAreStableOverRowOrderAndNoise reads the team
+// mix over an explicit range, which also reads the prior window and serves
+// its shares as prior_theme_* fields.
+func TestTeamMixPriorWindowSharesAreStableOverRowOrderAndNoise(t *testing.T) {
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
+	var first []byte
+	for _, order := range [][]int{{0, 1, 2, 3, 4, 5}, {5, 4, 3, 2, 1, 0}} {
+		for _, noise := range []float64{0, 3e-16, -4e-16} {
+			provider := findProvider(t, devhealthfacts.NewProviders(teamMixClient(order, noise, 2)), contextfabric.FactInvestment)
+			result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+				Time: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end},
+				Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{teamSubject("CHAOS")},
+			})
+			if err != nil || len(result.Facts) != 1 {
+				t.Fatalf("facts=%d err=%v", len(result.Facts), err)
+			}
+			if _, ok := result.Facts[0].Fields[contextfabric.FactFieldPriorTheme(contextfabric.ThemeFeatureDelivery)]; !ok {
+				t.Fatalf("the fact carries no prior-window share: %v", result.Facts[0].Fields)
+			}
+			fields := map[string]contextfabric.FactValue{}
+			for name, value := range result.Facts[0].Fields {
+				if value.Table == nil {
+					fields[name] = value
+				}
+			}
+			encoded, err := json.Marshal(fields)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if first == nil {
+				first = encoded
+				continue
+			}
+			if !bytes.Equal(first, encoded) {
+				t.Fatalf("order %v noise %g: scalar fields differ:\n%s\n%s", order, noise, first, encoded)
+			}
 		}
 	}
 }
