@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -89,10 +91,36 @@ type ClientSynthesisAssembly struct {
 	Rules              []string
 	MaxBytes           int
 	Encode             func(orgID string, input SynthesisInput, maxBytes int) ([]byte, error)
+	// ParseDraft turns the raw output a caller wrote into a draft. It makes
+	// no model call. Nil refuses a request that carries a supplied synthesis.
+	ParseDraft func(raw []byte) (SynthesisDraft, error)
 }
 
 func clientSynthesisRequested(request InvestigationRequest) bool {
 	return request.SynthesisMode == SynthesisModeClient
+}
+
+// clientSynthesisWithoutDraft is a client synthesis turn that carries no
+// draft: the one kind of turn whose answer is the fixed client text.
+func clientSynthesisWithoutDraft(request InvestigationRequest) bool {
+	return clientSynthesisRequested(request) && request.SuppliedSynthesis == nil
+}
+
+// suppliedSynthesisAvailability is the form of the availability interface
+// that also names the synthesis contract a supplied synthesis must match.
+type suppliedSynthesisAvailability interface {
+	clientSynthesisAvailability
+	suppliedSynthesisContract() (contractsv1.ContextFabricSynthesisContract, bool)
+}
+
+func (r RuntimeAnswerSynthesizer) suppliedSynthesisContract() (contractsv1.ContextFabricSynthesisContract, bool) {
+	if !r.ClientSynthesisAvailable() || r.ClientSynthesis.ParseDraft == nil {
+		return contractsv1.ContextFabricSynthesisContract{}, false
+	}
+	assembly := r.ClientSynthesis
+	return contractsv1.ContextFabricSynthesisContract{
+		ModelOutputVersion: assembly.ModelOutputVersion, PromptVersion: assembly.PromptVersion, SystemSHA256: assembly.SystemSHA256,
+	}, true
 }
 
 // ClientSynthesisAvailable reports whether the synthesizer can build a
@@ -178,10 +206,13 @@ func (e *Engine) runClientSynthesis(ctx context.Context, principal storage.Princ
 	default:
 		err = ErrClientSynthesisUnavailable
 	}
-	if err == nil && bundle == nil {
+	writeBack := input.Request.SuppliedSynthesis != nil
+	if err == nil && bundle == nil && !writeBack {
 		err = ErrClientSynthesisUnavailable
 	}
-	if err != nil {
+	if err != nil && writeBack {
+		e.recordSuppliedSynthesisRefusal(ctx, principal, input.Request, err)
+	} else if err != nil {
 		event := ClientSynthesisDecisionEvent{MaxBytes: measure.MaxBytes, Bounded: measure.Bounded, FactsRead: measure.FactsRead, FactsGiven: measure.FactsGiven}
 		switch {
 		case errors.Is(err, ErrModelInputTooLarge):
@@ -270,6 +301,12 @@ func (r RuntimeAnswerSynthesizer) composeClientSynthesisMeasured(ctx context.Con
 	if err != nil {
 		return InvestigationResult{}, nil, measure, err
 	}
+	sum := sha256.Sum256(encoded)
+	inputSHA := hex.EncodeToString(sum[:])
+	if supplied := input.Request.SuppliedSynthesis; supplied != nil {
+		result, err := r.composeSuppliedSynthesis(ctx, principal, given, encoded, bounded, inputSHA, supplied)
+		return result, nil, measure, err
+	}
 	draft := clientSynthesisDraft(given)
 	result, err := r.composeSynthesisResult(ctx, principal, given, draft, ModelExecutionReceipt{}, bounded, false)
 	if err != nil {
@@ -278,31 +315,253 @@ func (r RuntimeAnswerSynthesizer) composeClientSynthesisMeasured(ctx context.Con
 	result.Versions.SynthesisVersion = SynthesisVersionNotSynthesized
 	result.Versions.ModelIdentity = unwiredVersion
 	result.Versions.SynthesisSource = SynthesisSourceClient
-	result.Versions.InterpretationVersion = unwiredVersion
-	if stamp, ok := interpretationStampFrom(ctx); ok && stamp.InterpretationVersion != "" {
-		result.Versions.InterpretationVersion = stamp.InterpretationVersion
-	}
+	stampClientInterpretationVersion(ctx, &result.Versions)
 	if draft.Status == InvestigationPartial {
 		result.DirectJudgment = contractsv1.ContextFabricClientSynthesisAnswer
 		result.CurrentState = contractsv1.ContextFabricClientSynthesisAnswer
 		result.DeterministicAnswer = contractsv1.ContextFabricClientSynthesisAnswer
 	}
-	sum := sha256.Sum256(encoded)
-	bundle := &contractsv1.ContextFabricSynthesisInput{
-		Contract: contractsv1.ContextFabricSynthesisContract{
-			ModelOutputVersion: assembly.ModelOutputVersion,
-			PromptVersion:      assembly.PromptVersion,
-			SystemSHA256:       assembly.SystemSHA256,
-		},
-		Input:       encoded,
-		InputSHA256: hex.EncodeToString(sum[:]),
-		Bounded:     bounded,
-		Rules:       append([]string(nil), assembly.Rules...),
-	}
-	if err := bundle.Validate(); err != nil {
-		return InvestigationResult{}, nil, measure, fmt.Errorf("client synthesis input: %w", err)
+	bundle, err := assembly.newInputBundle(encoded, inputSHA, bounded)
+	if err != nil {
+		return InvestigationResult{}, nil, measure, err
 	}
 	return result, bundle, measure, nil
+}
+
+func stampClientInterpretationVersion(ctx context.Context, versions *VersionSet) {
+	versions.InterpretationVersion = unwiredVersion
+	if stamp, ok := interpretationStampFrom(ctx); ok && stamp.InterpretationVersion != "" {
+		versions.InterpretationVersion = stamp.InterpretationVersion
+	}
+}
+
+func (a *ClientSynthesisAssembly) newInputBundle(encoded []byte, inputSHA string, bounded bool) (*contractsv1.ContextFabricSynthesisInput, error) {
+	bundle := &contractsv1.ContextFabricSynthesisInput{
+		Contract: contractsv1.ContextFabricSynthesisContract{
+			ModelOutputVersion: a.ModelOutputVersion,
+			PromptVersion:      a.PromptVersion,
+			SystemSHA256:       a.SystemSHA256,
+		},
+		Input:       encoded,
+		InputSHA256: inputSHA,
+		Bounded:     bounded,
+		Rules:       append([]string(nil), a.Rules...),
+	}
+	if err := bundle.Validate(); err != nil {
+		return nil, fmt.Errorf("client synthesis input: %w", err)
+	}
+	return bundle, nil
+}
+
+// SynthesisInputChanged refuses a supplied synthesis that was written from an
+// input this turn no longer builds. Input is the input to write from now.
+type SynthesisInputChanged struct {
+	Input *contractsv1.ContextFabricSynthesisInput
+}
+
+func (e *SynthesisInputChanged) Error() string {
+	return "supplied synthesis was written from an input that has changed"
+}
+
+// SynthesisContractMismatch refuses a supplied synthesis that was written
+// under a contract this service does not run, or that does not name its
+// input. Current holds only service-owned values.
+type SynthesisContractMismatch struct {
+	Mismatch []string
+	Current  contractsv1.ContextFabricSynthesisContract
+}
+
+func (e *SynthesisContractMismatch) Error() string {
+	return "supplied synthesis contract mismatch: " + strings.Join(e.Mismatch, ",")
+}
+
+// ErrSuppliedInterpretationRequired refuses a supplied synthesis that comes
+// without a supplied interpretation.
+var ErrSuppliedInterpretationRequired = errors.New("a supplied synthesis requires a supplied interpretation")
+
+// groundingEvaluatorVersion is the evaluator version the service's own model
+// path records on a synthesis receipt.
+const (
+	groundingEvaluatorVersion     = "context-fabric-grounding.v1"
+	suppliedSynthesisModelVersion = "n/a"
+)
+
+func declaredSynthesisModel(supplied *contractsv1.ContextFabricSuppliedSynthesis) string {
+	if supplied.ClientModel == "" {
+		return contractsv1.ContextFabricClientModelUndeclared
+	}
+	return supplied.ClientModel
+}
+
+// composeSuppliedSynthesis checks a caller's draft against the input this turn
+// rebuilt and composes the served result from it. It makes no model call.
+func (r RuntimeAnswerSynthesizer) composeSuppliedSynthesis(ctx context.Context, principal storage.Principal, given SynthesisInput, encoded []byte, bounded bool, inputSHA string, supplied *contractsv1.ContextFabricSuppliedSynthesis) (InvestigationResult, error) {
+	assembly := r.ClientSynthesis
+	if assembly.ParseDraft == nil {
+		return InvestigationResult{}, ErrClientSynthesisUnavailable
+	}
+	if inputSHA != supplied.InputSHA256 {
+		bundle, err := assembly.newInputBundle(encoded, inputSHA, bounded)
+		if err != nil {
+			return InvestigationResult{}, err
+		}
+		return InvestigationResult{}, &SynthesisInputChanged{Input: bundle}
+	}
+	at := time.Now().UTC()
+	receipt := ModelExecutionReceipt{
+		Operation: ModelOperationSynthesize,
+		Provider:  contractsv1.ContextFabricClientSuppliedProvider, Model: declaredSynthesisModel(supplied), ModelVersion: suppliedSynthesisModelVersion,
+		PromptVersion: supplied.PromptVersion, SchemaVersion: supplied.ModelOutputVersion, EvaluatorVersion: groundingEvaluatorVersion,
+		StartedAt: at, CompletedAt: at, Attempts: 1,
+		InputDigest:  DigestModelValue(encoded),
+		OutputDigest: DigestModelValue(supplied.Output),
+		RequestID:    given.Request.RequestID,
+	}
+	draft, err := assembly.ParseDraft(supplied.Output)
+	if err != nil {
+		err = asRejectedSuppliedDraft(err)
+	} else {
+		draft, err = r.vetSynthesisDraft(ctx, principal, given, draft)
+	}
+	receipt.Outcome = "success"
+	if err != nil {
+		receipt.Outcome = "invalid_output"
+	}
+	if sinkErr := recordModelReceipt(ctx, principal, r.Sink, receipt); sinkErr != nil {
+		return InvestigationResult{}, errors.Join(err, sinkErr)
+	}
+	if err != nil {
+		return InvestigationResult{}, err
+	}
+	result, err := r.composeSynthesisResult(ctx, principal, given, draft, receipt, bounded, false)
+	if err != nil {
+		return InvestigationResult{}, err
+	}
+	result.Versions.SynthesisSource = SynthesisSourceClient
+	result.Versions.SynthesisVersion = assembly.PromptVersion
+	stampClientInterpretationVersion(ctx, &result.Versions)
+	return result, nil
+}
+
+// asRejectedSuppliedDraft makes a draft the caller's parser refused a
+// rejected draft: it carries the closed reason and the rejection sentinels.
+func asRejectedSuppliedDraft(err error) error {
+	if errors.Is(err, ErrSynthesisRejected) {
+		return err
+	}
+	reason := SynthesisRejectionReasonOf(err)
+	if reason == RejectionReasonUnclassified {
+		reason = RejectionReasonOutputSchemaMismatch
+	}
+	return NewSynthesisRejection(reason, fmt.Errorf("%w: %w: %w", ErrSynthesisRejected, ErrModelOutput, err))
+}
+
+// SuppliedSynthesisOutcome is the closed outcome of one supplied-synthesis decision.
+type SuppliedSynthesisOutcome string
+
+const (
+	SuppliedSynthesisServed                 SuppliedSynthesisOutcome = "served"
+	SuppliedSynthesisContractMismatch       SuppliedSynthesisOutcome = "contract_mismatch"
+	SuppliedSynthesisInterpretationRequired SuppliedSynthesisOutcome = "interpretation_required"
+	SuppliedSynthesisInputChangedOutcome    SuppliedSynthesisOutcome = "input_changed"
+	SuppliedSynthesisRejected               SuppliedSynthesisOutcome = "rejected"
+	SuppliedSynthesisUnavailable            SuppliedSynthesisOutcome = "unavailable"
+)
+
+// SuppliedSynthesisDecisionLogMessage is the msg of the supplied synthesis decision line.
+const SuppliedSynthesisDecisionLogMessage = "context fabric supplied synthesis decision"
+
+// SuppliedSynthesisDecisionEvent is one supplied synthesis decision. Closed
+// labels, field names of the contract and a byte count only: nothing the
+// caller wrote.
+type SuppliedSynthesisDecisionEvent struct {
+	Outcome         SuppliedSynthesisOutcome
+	Mismatch        []string
+	RejectionReason SynthesisRejectionReason
+	ClientModel     string
+	OutputBytes     int
+}
+
+func (e *Engine) recordSuppliedSynthesisDecision(ctx context.Context, principal storage.Principal, event SuppliedSynthesisDecisionEvent) {
+	if e.telemetry != nil {
+		e.telemetry.RecordSuppliedSynthesisDecision(ctx, principal, event)
+	}
+}
+
+func suppliedSynthesisEvent(request InvestigationRequest, outcome SuppliedSynthesisOutcome) SuppliedSynthesisDecisionEvent {
+	supplied := request.SuppliedSynthesis
+	return SuppliedSynthesisDecisionEvent{Outcome: outcome, ClientModel: declaredSynthesisModel(supplied), OutputBytes: len(supplied.Output)}
+}
+
+// recordSuppliedSynthesisRefusal writes the decision line of a write-back
+// that ended without a result. An error outside these two outcomes writes none:
+// the entry gate already refused an unavailable deployment.
+func (e *Engine) recordSuppliedSynthesisRefusal(ctx context.Context, principal storage.Principal, request InvestigationRequest, err error) {
+	var changed *SynthesisInputChanged
+	switch {
+	case errors.As(err, &changed):
+		e.recordSuppliedSynthesisDecision(ctx, principal, suppliedSynthesisEvent(request, SuppliedSynthesisInputChangedOutcome))
+	case errors.Is(err, ErrSynthesisRejected):
+		event := suppliedSynthesisEvent(request, SuppliedSynthesisRejected)
+		event.RejectionReason = SynthesisRejectionReasonOf(err)
+		e.recordSuppliedSynthesisDecision(ctx, principal, event)
+	}
+}
+
+// checkSuppliedSynthesis is the engine's entry gate for a request that
+// carries a supplied synthesis, above every read and every save.
+func (e *Engine) checkSuppliedSynthesis(ctx context.Context, principal storage.Principal, request InvestigationRequest) error {
+	refuse := func(outcome SuppliedSynthesisOutcome, mismatch []string, err error) error {
+		event := suppliedSynthesisEvent(request, outcome)
+		event.Mismatch = mismatch
+		e.recordSuppliedSynthesisDecision(ctx, principal, event)
+		return err
+	}
+	if err := e.checkClientSynthesis(ctx); err != nil {
+		return refuse(SuppliedSynthesisUnavailable, nil, err)
+	}
+	composer, ok := e.synthesizer.(suppliedSynthesisAvailability)
+	if !ok {
+		return refuse(SuppliedSynthesisUnavailable, nil, ErrClientSynthesisUnavailable)
+	}
+	current, ok := composer.suppliedSynthesisContract()
+	if !ok {
+		return refuse(SuppliedSynthesisUnavailable, nil, ErrClientSynthesisUnavailable)
+	}
+	if request.SuppliedInterpretation == nil {
+		return refuse(SuppliedSynthesisInterpretationRequired, nil, ErrSuppliedInterpretationRequired)
+	}
+	supplied := request.SuppliedSynthesis
+	var mismatch []string
+	if supplied.ModelOutputVersion != current.ModelOutputVersion {
+		mismatch = append(mismatch, contractsv1.ContextFabricSynthesisContractFieldModelOutputVersion)
+	}
+	if supplied.PromptVersion != current.PromptVersion {
+		mismatch = append(mismatch, contractsv1.ContextFabricSynthesisContractFieldPromptVersion)
+	}
+	if supplied.SystemSHA256 != current.SystemSHA256 {
+		mismatch = append(mismatch, contractsv1.ContextFabricSynthesisContractFieldSystemSHA256)
+	}
+	if supplied.InputSHA256 == "" {
+		mismatch = append(mismatch, contractsv1.ContextFabricSynthesisContractFieldInputSHA256)
+	}
+	if len(mismatch) > 0 {
+		return refuse(SuppliedSynthesisContractMismatch, mismatch, &SynthesisContractMismatch{Mismatch: mismatch, Current: current})
+	}
+	return nil
+}
+
+// RecordSuppliedSynthesisDecision implements EngineTelemetry.
+func (t SlogEngineTelemetry) RecordSuppliedSynthesisDecision(ctx context.Context, principal storage.Principal, event SuppliedSynthesisDecisionEvent) {
+	args := append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"outcome", SanitizeLogAttr(string(event.Outcome)),
+		"contract_mismatch", SanitizeLogStrings(nonNilStrings(event.Mismatch)),
+		"rejection_reason", SanitizeLogAttr(string(event.RejectionReason)),
+		"client_model", SanitizeLogAttr(event.ClientModel),
+		"output_bytes", event.OutputBytes,
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.Log(ctx, slog.LevelInfo, SuppliedSynthesisDecisionLogMessage, args...)
 }
 
 // RecordClientSynthesisDecision implements EngineTelemetry.

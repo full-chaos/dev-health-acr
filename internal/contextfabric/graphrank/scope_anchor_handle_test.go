@@ -182,6 +182,9 @@ func TestResolveSubjects_CohortFrameBindingAHandleKeepsTheScopeAnchorAlone(t *te
 			t.Fatalf("committed = %v, want the pull request left out: in a cohort question the handle is an example, not the subject", scopeAnchorCommittedIDs(resolution))
 		}
 	}
+	if calls != 0 {
+		t.Fatalf("census calls = %d, want 0: a cohort question must not run the handle census", calls)
+	}
 }
 
 func TestAppendCensusAttestedCommitHonoursTheCandidateCap(t *testing.T) {
@@ -219,11 +222,14 @@ func TestAppendCensusAttestedCommitHonoursTheCandidateCap(t *testing.T) {
 func TestResolveSubjects_NamedRepositoryFrameKeepsTheScopeAnchorAlone(t *testing.T) {
 	t.Parallel()
 	repository := contextfabric.SubjectRepository
-	resolution, _, _ := resolveScopeAnchorQuestionWith(t, scopeAnchorBackend(true, -1),
+	resolution, _, calls := resolveScopeAnchorQuestionWith(t, scopeAnchorBackend(true, -1),
 		"How is full-chaos/dev-health-acr doing over the last 30 days? Use pull request 747 as an example.", namedScopeAnchorFrame(&repository), 0)
 	ids := scopeAnchorCommittedIDs(resolution)
 	if len(ids) != 1 || ids[0] != scopeAnchorRepoID {
 		t.Fatalf("committed = %v, want only the repository: the frame says the repository is the subject", ids)
+	}
+	if calls != 0 {
+		t.Fatalf("census calls = %d, want 0: a frame expecting another kind must not run the handle census", calls)
 	}
 }
 
@@ -289,5 +295,32 @@ func TestResolveSubjects_RestrictedPrincipalNeverRunsTheHandleCensus(t *testing.
 		if id == scopeAnchorPRID {
 			t.Fatalf("committed = %v, want the pull request left out", scopeAnchorCommittedIDs(resolution))
 		}
+	}
+}
+
+func TestResolveSubjects_ScopeAnchorRoundPanicRecoveryTagsTheTrigger(t *testing.T) {
+	t.Parallel()
+	backend := scopeAnchorBackend(true, -1)
+	deps := backend.deps()
+	tracer := &captureResolutionTracer{}
+	deps.ResolutionTracer = tracer
+	deps.CensusFunc = func(context.Context, string, CensusKind, string, bool, contextfabric.SubjectKind, string, bool) (CensusOutcome, error) {
+		panic("simulated CensusFunc panic on the scope-anchor round")
+	}
+	request := testRequest()
+	request.Question = scopeAnchorQuestion
+	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(scopeAnchorRepo, "pull request 747"), deps, nil, nil, namedScopeAnchorFrame(nil), "")
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v, want the panic isolated", err)
+	}
+	if ids := scopeAnchorCommittedIDs(resolution); len(ids) != 1 || ids[0] != scopeAnchorRepoID {
+		t.Fatalf("committed = %v, want the scope anchor alone after a recovered panic", ids)
+	}
+	events := tracer.eventsForStage("evidence_round")
+	if len(events) != 1 || events[0].ShadowReason != string(ReasonProbeError) {
+		t.Fatalf("evidence_round events = %#v, want exactly 1 recovered probe_error event", events)
+	}
+	if events[0].ShadowTrigger != "committed_scope_anchor" {
+		t.Fatalf("recovered event ShadowTrigger = %q, want %q", events[0].ShadowTrigger, "committed_scope_anchor")
 	}
 }

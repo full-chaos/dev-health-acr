@@ -393,8 +393,9 @@ type statedWindowAxisRecord struct {
 }
 
 type recordingTelemetry struct {
-	synthesisModelFailures []SynthesisModelFailureEvent
-	synthesisInputBounds   []SynthesisInputBoundEvent
+	synthesisModelFailures     []SynthesisModelFailureEvent
+	synthesisInputBounds       []SynthesisInputBoundEvent
+	suppliedSynthesisDecisions []SuppliedSynthesisDecisionEvent
 	// clientSynthesisDecisions records every client synthesis decision line.
 	clientSynthesisDecisions []ClientSynthesisDecisionEvent
 	statedWindowAxes         []statedWindowAxisRecord
@@ -1043,6 +1044,10 @@ func (r *recordingTelemetry) RecordSynthesisInputBound(_ context.Context, _ stor
 
 func (r *recordingTelemetry) RecordClientSynthesisDecision(_ context.Context, _ storage.Principal, event ClientSynthesisDecisionEvent) {
 	r.clientSynthesisDecisions = append(r.clientSynthesisDecisions, event)
+}
+
+func (r *recordingTelemetry) RecordSuppliedSynthesisDecision(_ context.Context, _ storage.Principal, event SuppliedSynthesisDecisionEvent) {
+	r.suppliedSynthesisDecisions = append(r.suppliedSynthesisDecisions, event)
 }
 
 func (r *recordingTelemetry) RecordSynthesisModelFailure(_ context.Context, _ storage.Principal, event SynthesisModelFailureEvent) {

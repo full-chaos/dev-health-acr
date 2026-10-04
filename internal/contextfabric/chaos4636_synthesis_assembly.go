@@ -344,6 +344,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	var err error
 	if clientSynthesisRequested(request) {
 		result, pending.ClientSynthesisInput, pending.ClientSynthesisMeasure, err = e.runClientSynthesis(ctx, principal, synthesisInput)
+		pending.SuppliedSynthesisServed = err == nil && request.SuppliedSynthesis != nil
 	} else {
 		result, err = e.synthesizer.Synthesize(ctx, principal, synthesisInput)
 		var modelFailure *SynthesisFailure
@@ -607,7 +608,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		// its answer composition is unaffected.
 		// A turn that asks to write its own answer keeps its fixed answer
 		// text: the status sentence would say coverage was unavailable.
-		if len(narrated) > 0 && !clientSynthesisRequested(request) {
+		if len(narrated) > 0 && !clientSynthesisWithoutDraft(request) {
 			result.DirectJudgment, result.DeterministicAnswer = recomposeCohortAnswerNarrative(result.Status, result.SubjectResolution)
 			narrationEvent.AnswerNarrativeRecomposed = true
 		}
@@ -631,7 +632,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// aware helper: the composer has already truncated to the contract length,
 	// so a blind append turns a valid answer into an invalid one.
 	// A client synthesis result keeps its fixed text; the count stays in the claim.
-	if !clientSynthesisRequested(request) && cardinalityOwedByFrame(params.Frame, e.requirements, cardinality) {
+	if !clientSynthesisWithoutDraft(request) && cardinalityOwedByFrame(params.Frame, e.requirements, cardinality) {
 		result.DeterministicAnswer = appendCardinalitySentence(result.DeterministicAnswer, cardinalityAnswerSentence(cardinality))
 	}
 	// CHAOS-4085: the post-synthesis commit-affirmation gate. Placed HERE
@@ -669,7 +670,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		Facts:      facts,
 	}); len(outcomes) > 0 {
 		pending.CommitAffirmations = outcomes
-		if clientSynthesisRequested(request) {
+		if clientSynthesisWithoutDraft(request) {
 			composed, displaced := appendBoundedLimitations(result.Limitations, []string{contractsv1.ContextFabricClientSynthesisCommitNotAffirmedLimitation})
 			result.Limitations = composed
 			result.LimitationsDisplaced += displaced
@@ -795,6 +796,9 @@ type assemblyTelemetry struct {
 	ClientSynthesisInput   *contractsv1.ContextFabricSynthesisInput
 	ClientSynthesisMeasure clientSynthesisMeasure
 	ClientCommitsRetracted int
+	// SuppliedSynthesisServed marks a pass whose result was composed from a
+	// draft the caller wrote.
+	SuppliedSynthesisServed bool
 }
 
 // emit publishes the held events. The engine calls it EXACTLY ONCE, for the

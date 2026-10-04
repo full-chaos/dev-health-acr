@@ -1047,6 +1047,10 @@ type EngineTelemetry interface {
 	// to write its own answer: refused, input too large, or served. Counts
 	// and a closed outcome only.
 	RecordClientSynthesisDecision(ctx context.Context, principal storage.Principal, event ClientSynthesisDecisionEvent)
+	// RecordSuppliedSynthesisDecision reports what became of a turn that
+	// carried a synthesis the caller wrote. Closed labels, contract field
+	// names and a byte count only; never the caller's text.
+	RecordSuppliedSynthesisDecision(ctx context.Context, principal storage.Principal, event SuppliedSynthesisDecisionEvent)
 	// RecordCohortRanked (CHAOS-4398) reports the outcome of ONE RankCohort
 	// pass: how many members were scored, the deterministic formula
 	// version (prompt-changes-are-behavior-changes discipline applied to
@@ -1515,6 +1519,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// run is refused here, above every exit that serves a result. Several of
 	// those exits end the turn before the interpret step, which checks the
 	// contract again for a turn that reaches it.
+	if request.SuppliedSynthesis != nil {
+		if err := e.checkSuppliedSynthesis(ctx, principal, request); err != nil {
+			continuation = continuation.withReason(ContinuationReasonRequestInvalid)
+			return InvestigationResult{}, stageError(StageSynthesis, err)
+		}
+	}
 	if request.SuppliedInterpretation != nil {
 		if err := e.checkSuppliedInterpretation(ctx, principal, request); err != nil {
 			continuation = continuation.withReason(ContinuationReasonRequestInvalid)
@@ -4093,6 +4103,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// call is shared with terminalResult's own Save call site, not
 		// hand-copied.
 		e.recordStructureConfirmationOutcome(ctx, principal, request, structureCanon)
+	}
+	if pendingTelemetry.SuppliedSynthesisServed {
+		e.recordSuppliedSynthesisDecision(ctx, principal, suppliedSynthesisEvent(request, SuppliedSynthesisServed))
 	}
 	if pendingTelemetry.ClientSynthesisInput != nil {
 		deliverSynthesisInput(ctx, pendingTelemetry.ClientSynthesisInput)
