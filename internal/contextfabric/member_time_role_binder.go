@@ -45,11 +45,45 @@ func (r MemberTimeRole) WorkItemTimeColumn() (string, bool) {
 var memberTimeRoleRegistry = []struct {
 	role    MemberTimeRole
 	grammar string
+	forms   []string
 	pattern *regexp.Regexp
 }{
-	{MemberTimeRoleCreated, "created_forms", regexp.MustCompile(`(?i)\b(?:created|opened|filed|raised|added|new)\b`)},
-	{MemberTimeRoleCompleted, "completed_forms", regexp.MustCompile(`(?i)\b(?:completed|finished|closed|done|resolved|shipped|delivered)\b`)},
-	{MemberTimeRoleUpdated, "updated_forms", regexp.MustCompile(`(?i)\b(?:updated|changed|modified|touched)\b`)},
+	newMemberTimeRoleEntry(MemberTimeRoleCreated, "created_forms", "created", "opened", "filed", "raised", "added", "new"),
+	newMemberTimeRoleEntry(MemberTimeRoleCompleted, "completed_forms", "completed", "finished", "closed", "done", "resolved", "shipped", "delivered"),
+	newMemberTimeRoleEntry(MemberTimeRoleUpdated, "updated_forms", "updated", "changed", "modified", "touched"),
+}
+
+func newMemberTimeRoleEntry(role MemberTimeRole, grammar string, forms ...string) struct {
+	role    MemberTimeRole
+	grammar string
+	forms   []string
+	pattern *regexp.Regexp
+} {
+	return struct {
+		role    MemberTimeRole
+		grammar string
+		forms   []string
+		pattern *regexp.Regexp
+	}{role, grammar, forms, regexp.MustCompile(`(?i)\b(?:` + strings.Join(forms, "|") + `)\b`)}
+}
+
+// MemberTimeRoleFormRow is one role with the column it reads and the verb
+// forms that bind it, for the guide to quote.
+type MemberTimeRoleFormRow struct {
+	Role   MemberTimeRole
+	Column string
+	Forms  []string
+}
+
+// MemberTimeRoleFormRows lists the registry in order: the same entries the
+// binder matches, so a published list cannot drift from the matcher.
+func MemberTimeRoleFormRows() []MemberTimeRoleFormRow {
+	rows := make([]MemberTimeRoleFormRow, 0, len(memberTimeRoleRegistry))
+	for _, entry := range memberTimeRoleRegistry {
+		column, _ := entry.role.WorkItemTimeColumn()
+		rows = append(rows, MemberTimeRoleFormRow{Role: entry.role, Column: column, Forms: append([]string(nil), entry.forms...)})
+	}
+	return rows
 }
 
 // MemberTimeRoleReason is the closed outcome of binding a role.

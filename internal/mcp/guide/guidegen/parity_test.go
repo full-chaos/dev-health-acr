@@ -141,10 +141,10 @@ func TestUnreachableFamiliesAreMarkedNotAnswerable(t *testing.T) {
 	for _, section := range sections[1:] {
 		id := strings.Trim(strings.SplitN(section, "\n", 2)[0], "`")
 		want := slices.Contains(unreachable, contextfabric.QuestionFamily(id))
-		if got := strings.Contains(section, "Not answerable today"); got != want && id != "Other tools" {
+		if got := strings.Contains(section, "Not answerable today"); got != want && id != "Other tools" && id != workItemMemberHeading {
 			t.Errorf("family %s: not-answerable marker = %v, registry unreachable = %v", id, got, want)
 		}
-		if strings.Contains(section, "Tool: `investigate_question`") == want && id != "Other tools" {
+		if strings.Contains(section, "Tool: `investigate_question`") == want && id != "Other tools" && id != workItemMemberHeading {
 			t.Errorf("family %s: tool line disagrees with reachability", id)
 		}
 		seen++
