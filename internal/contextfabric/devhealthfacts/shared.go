@@ -328,12 +328,17 @@ import (
 // stated reason and no member count, where it ended as an unresolved anchor.
 // A candidate saved under v55 for such a question must not be reused.
 //
-// v59 -> v60: a count about one named subject over a period is answered with
+// v59 -> v60: the first sentence of an answer states the status the answer is
+// served with, not the status the model draft carried. A candidate saved under
+// v59 can open with a stronger status than its own served status and must not
+// be reused.
+//
+// v60 -> v62: a count about one named subject over a period is answered with
 // the total of the subject's stored daily rows of every additive daily count
 // column, with the days it rests on, where it was answered with the daily rows
-// and no total. A candidate saved under v59 for such a question must not be
+// and no total. A candidate saved under v60 for such a question must not be
 // reused.
-const QueryVersion = "devhealthfacts.clickhouse.v60"
+const QueryVersion = "devhealthfacts.clickhouse.v62"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

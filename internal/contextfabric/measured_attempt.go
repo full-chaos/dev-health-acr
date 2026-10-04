@@ -462,5 +462,5 @@ func servedMeasurementShape(result InvestigationResult) InvestigationResult {
 	result.Coverage.Details = slices.Clone(result.Coverage.Details)
 	capCoverageEntriesToWriteBound(&result)
 	applyCoverageDisplayLabels(&result)
-	return result
+	return restateServedStatusHead(result)
 }
